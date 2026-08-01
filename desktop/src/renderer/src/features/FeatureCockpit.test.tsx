@@ -470,14 +470,29 @@ describe('FeatureCockpit snapshot rendering', () => {
       setup: { status: 'done', attempt: 1, tasks: [] },
       actions: [
         { id: 'start', enabled: true, disabledReasons: [] },
-        { id: 'discard', enabled: true, disabledReasons: [] },
+        {
+          id: 'discard',
+          enabled: true,
+          disabledReasons: [],
+          impactPreview: {
+            kind: 'child_discard',
+            subject: { id: childId, name: 'Slop removal pass' },
+            categories: [{ key: 'sessions', label: 'Sessions stopped', items: [] }],
+            retained: ['Review configuration retained'],
+          },
+        },
       ],
     });
     const mock = installAgenticoMock({ feature: parent });
     mock.api.getFeature.mockImplementation((id: string) =>
       Promise.resolve(id === childId ? child : parent),
     );
+    mock.api.discardRefactorChild.mockResolvedValue({
+      result: 'refactor child discarded',
+      status: 'completed',
+    });
     renderCockpit(mock);
+    const user = userEvent.setup();
 
     expect(await screen.findByRole('region', { name: 'Refactor pass' })).toBeVisible();
     // The contradictory "choose what comes next" hero never renders next to a live pass.
@@ -485,7 +500,19 @@ describe('FeatureCockpit snapshot rendering', () => {
     expect(screen.queryByText(/Choose what comes next/)).not.toBeInTheDocument();
     const status = screen.getByRole('status', { name: 'Current feature status' });
     expect(status).toHaveTextContent('Refactoring');
-    expect(await screen.findByRole('button', { name: 'Start pass' })).toBeEnabled();
+
+    // The pass verbs live in the action bar like any feature tab.
+    const bar = screen.getByRole('group', { name: 'Feature actions' });
+    await user.click(await within(bar).findByRole('button', { name: 'Start pass' }));
+    expect(mock.api.dispatchFeatureAction).toHaveBeenCalledWith({
+      featureId: childId,
+      action: 'start',
+    });
+
+    await user.click(within(bar).getByRole('button', { name: 'Discard pass…' }));
+    const dialog = await screen.findByRole('dialog', { name: /Discard Slop removal pass/ });
+    await user.click(within(dialog).getByRole('button', { name: 'Discard pass' }));
+    expect(mock.api.discardRefactorChild).toHaveBeenCalledWith({ childId });
   });
 
   it('opens the completed transcript from Run record', async () => {

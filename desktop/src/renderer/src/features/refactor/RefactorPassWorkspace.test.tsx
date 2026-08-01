@@ -1,10 +1,11 @@
-import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import { cleanup, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { FeatureSnapshot, RelationshipChildView } from '../../../../shared/ipc';
 import { featureSnapshot, installAgenticoMock } from '../../test/agenticoMock';
 import { emptyAttentionDrafts } from '../AttentionInbox';
-import { RefactorPassWorkspace } from './RefactorPassWorkspace';
+import { RefactorPassWorkspace, type RefactorPassController } from './RefactorPassWorkspace';
+import { passActions } from './refactorPassModel';
 
 afterEach(cleanup);
 
@@ -64,22 +65,6 @@ function readyChild(overrides: Partial<FeatureSnapshot> = {}): FeatureSnapshot {
   });
 }
 
-function renderWorkspace(parent: FeatureSnapshot, onChanged = vi.fn()) {
-  const onEditPairedReview = vi.fn();
-  render(
-    <RefactorPassWorkspace
-      parent={parent}
-      onChanged={onChanged}
-      onEditPairedReview={onEditPairedReview}
-      attentionItems={[]}
-      refreshAttention={() => Promise.resolve([])}
-      attentionDrafts={emptyAttentionDrafts()}
-      setAttentionDrafts={vi.fn()}
-    />,
-  );
-  return { onChanged, onEditPairedReview };
-}
-
 function parentWith(child: Partial<RelationshipChildView> = {}): FeatureSnapshot {
   return featureSnapshot({
     id: 'parent1234ef5678',
@@ -89,65 +74,96 @@ function parentWith(child: Partial<RelationshipChildView> = {}): FeatureSnapshot
   });
 }
 
-describe('RefactorPassWorkspace', () => {
-  it('shows a state-true custody strip and only the verbs the catalogue enables', async () => {
-    const mock = installAgenticoMock({ feature: readyChild() });
-    const user = userEvent.setup();
-    renderWorkspace(parentWith());
+function controllerFor(
+  parent: FeatureSnapshot,
+  child: FeatureSnapshot | null,
+  overrides: Partial<RefactorPassController> = {},
+): RefactorPassController {
+  return {
+    view: parent.activeChild,
+    childState: child === null ? { phase: 'loading' } : { phase: 'loaded', child },
+    child,
+    actions: child === null ? [] : passActions(child),
+    discardAction: child?.actions.find((action) => action.id === 'discard'),
+    busy: false,
+    notice: null,
+    discardOpen: false,
+    dispatch: vi.fn(() => Promise.resolve()),
+    openDiscard: vi.fn(),
+    closeDiscard: vi.fn(),
+    discard: vi.fn(() => Promise.resolve()),
+    reload: vi.fn(),
+    ...overrides,
+  };
+}
 
-    const custody = await screen.findByRole('list', { name: 'Custody of the work' });
+function renderWorkspace(parent: FeatureSnapshot, pass: RefactorPassController) {
+  const onEditPairedReview = vi.fn();
+  render(
+    <RefactorPassWorkspace
+      parent={parent}
+      pass={pass}
+      onEditPairedReview={onEditPairedReview}
+      attentionItems={[]}
+      refreshAttention={() => Promise.resolve([])}
+      attentionDrafts={emptyAttentionDrafts()}
+      setAttentionDrafts={vi.fn()}
+    />,
+  );
+  return { onEditPairedReview };
+}
+
+describe('RefactorPassWorkspace', () => {
+  it('shows a state-true custody strip and the pass inspector like a feature tab', () => {
+    installAgenticoMock({ feature: readyChild() });
+    const parent = parentWith();
+    renderWorkspace(parent, controllerFor(parent, readyChild()));
+
+    const custody = screen.getByRole('list', { name: 'Custody of the work' });
     expect(within(custody).getByText('Published · locked while the pass runs')).toBeVisible();
     expect(within(custody).getByText('Ready to start')).toBeVisible();
     expect(within(custody).getByText('After final review approval')).toBeVisible();
 
-    expect(await screen.findByRole('button', { name: 'Start pass' })).toBeEnabled();
-    expect(screen.queryByRole('button', { name: 'Stop' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Resume' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Restart' })).not.toBeInTheDocument();
-
-    await user.click(screen.getByRole('button', { name: 'Start pass' }));
-    expect(mock.api.dispatchFeatureAction).toHaveBeenCalledWith({
-      featureId: CHILD_ID,
-      action: 'start',
-    });
+    const inspector = screen.getByRole('complementary', { name: 'Pass inspector' });
+    expect(within(inspector).getByRole('heading', { name: 'Slop removal pass' })).toBeVisible();
+    expect(within(inspector).getByLabelText('Feature pipeline')).toBeInTheDocument();
   });
 
-  it('explains setup instead of rendering a dead Start button', async () => {
-    installAgenticoMock({
-      feature: readyChild({
-        status: 'SettingUpWorktrees',
-        setupComplete: false,
-        setup: { status: 'running', attempt: 1, tasks: [] },
-        actions: [
-          {
-            id: 'start',
-            enabled: false,
-            disabledReasons: [{ code: 'setup_incomplete', message: 'setup' }],
-          },
-          { id: 'discard', enabled: true, disabledReasons: [] },
-        ],
-      }),
+  it('explains setup in the stage instead of rendering dead verbs', () => {
+    installAgenticoMock({ feature: readyChild() });
+    const setupChild = readyChild({
+      status: 'SettingUpWorktrees',
+      setupComplete: false,
+      setup: { status: 'running', attempt: 1, tasks: [] },
+      actions: [
+        {
+          id: 'start',
+          enabled: false,
+          disabledReasons: [{ code: 'setup_incomplete', message: 'setup' }],
+        },
+        { id: 'discard', enabled: true, disabledReasons: [] },
+      ],
     });
-    renderWorkspace(
-      parentWith({ status: 'SettingUpWorktrees', displayState: 'Active — SettingUpWorktrees' }),
-    );
+    const parent = parentWith({
+      status: 'SettingUpWorktrees',
+      displayState: 'Active — SettingUpWorktrees',
+    });
+    const pass = controllerFor(parent, setupChild);
+    renderWorkspace(parent, pass);
 
     expect(
-      await screen.findByText('Preparing worktrees. Start unlocks when setup completes.'),
+      screen.getByText('Preparing worktrees. Start unlocks when setup completes.'),
     ).toBeVisible();
-    expect(screen.queryByRole('button', { name: 'Start pass' })).not.toBeInTheDocument();
+    expect(pass.actions).toEqual([]);
   });
 
-  it('renders the discard impact projection verbatim and dispatches on confirm', async () => {
-    const mock = installAgenticoMock({ feature: readyChild() });
-    mock.api.discardRefactorChild.mockResolvedValue({
-      result: 'refactor child discarded',
-      status: 'completed',
-    });
+  it('renders the discard impact projection verbatim and confirms through the controller', async () => {
+    installAgenticoMock({ feature: readyChild() });
+    const parent = parentWith();
+    const pass = controllerFor(parent, readyChild(), { discardOpen: true });
     const user = userEvent.setup();
-    renderWorkspace(parentWith());
+    renderWorkspace(parent, pass);
 
-    await user.click(await screen.findByRole('button', { name: 'Discard pass…' }));
     const dialog = screen.getByRole('dialog', { name: /Discard Slop removal pass/ });
     expect(within(dialog).getByText('Sessions stopped')).toBeVisible();
     expect(within(dialog).getAllByText('None').length).toBeGreaterThan(0);
@@ -156,49 +172,47 @@ describe('RefactorPassWorkspace', () => {
     expect(within(dialog).getByText(/This cannot be undone/)).toBeVisible();
 
     await user.click(within(dialog).getByRole('button', { name: 'Discard pass' }));
-    expect(mock.api.discardRefactorChild).toHaveBeenCalledWith({ childId: CHILD_ID });
+    expect(pass.discard).toHaveBeenCalled();
   });
 
-  it('fails closed when the discard projection is missing', async () => {
-    installAgenticoMock({
-      feature: readyChild({
-        actions: [
-          { id: 'start', enabled: true, disabledReasons: [] },
-          { id: 'discard', enabled: true, disabledReasons: [] },
-        ],
-      }),
+  it('fails closed when the discard projection is missing', () => {
+    installAgenticoMock({ feature: readyChild() });
+    const bareChild = readyChild({
+      actions: [
+        { id: 'start', enabled: true, disabledReasons: [] },
+        { id: 'discard', enabled: true, disabledReasons: [] },
+      ],
     });
-    const user = userEvent.setup();
-    renderWorkspace(parentWith());
+    const parent = parentWith();
+    renderWorkspace(parent, controllerFor(parent, bareChild, { discardOpen: true }));
 
-    await user.click(await screen.findByRole('button', { name: 'Discard pass…' }));
     const dialog = screen.getByRole('dialog', { name: /Discard Slop removal pass/ });
     expect(within(dialog).getByRole('alert')).toHaveTextContent('Impact projection is unavailable');
     expect(within(dialog).getByRole('button', { name: 'Discard pass' })).toBeDisabled();
   });
 
-  it('reconciles the integration panel and custody strip to the transaction journal', async () => {
-    installAgenticoMock({
-      feature: readyChild({
-        status: 'ReviewPassed',
-        actions: [{ id: 'discard', enabled: true, disabledReasons: [] }],
-        transaction: {
-          phase: 'attention',
-          attention: 'parent tips moved',
-          entries: [
-            {
-              repo: 'repo-a',
-              prepState: 'prepared',
-              applyState: 'failed',
-              conflictFiles: ['main.go'],
-            },
-          ],
-        },
-      }),
+  it('reconciles the integration panel and custody strip to the transaction journal', () => {
+    installAgenticoMock({ feature: readyChild() });
+    const integratingChild = readyChild({
+      status: 'ReviewPassed',
+      actions: [{ id: 'discard', enabled: true, disabledReasons: [] }],
+      transaction: {
+        phase: 'attention',
+        attention: 'parent tips moved',
+        entries: [
+          {
+            repo: 'repo-a',
+            prepState: 'prepared',
+            applyState: 'failed',
+            conflictFiles: ['main.go'],
+          },
+        ],
+      },
     });
-    renderWorkspace(parentWith({ integrationState: 'attention' }));
+    const parent = parentWith({ integrationState: 'attention' });
+    renderWorkspace(parent, controllerFor(parent, integratingChild));
 
-    const integration = await screen.findByRole('region', { name: 'Integration' });
+    const integration = screen.getByRole('region', { name: 'Integration' });
     expect(within(integration).getByRole('alert')).toHaveTextContent('parent tips moved');
     expect(within(integration).getByText('prepared → failed')).toBeVisible();
     expect(within(integration).getByText('Conflicts: main.go')).toBeVisible();
@@ -209,26 +223,25 @@ describe('RefactorPassWorkspace', () => {
   it('keeps settled passes as read-only history with the preserved diff', async () => {
     installAgenticoMock({ feature: readyChild() });
     const user = userEvent.setup();
-    renderWorkspace(
-      featureSnapshot({
-        id: 'parent1234ef5678',
-        name: 'Electron app',
-        status: 'Published',
-        activeChild: childView(),
-        childHistory: [
-          childView({
-            id: 'child0000ef567890',
-            name: 'Earlier pass',
-            displayState: 'Closed — Completed',
-            outcome: 'completed',
-            closedAt: '2026-07-29T10:00:00Z',
-            diffSummary: 'Repository: repo-a\n3 files changed',
-          }),
-        ],
-      }),
-    );
+    const parent = featureSnapshot({
+      id: 'parent1234ef5678',
+      name: 'Electron app',
+      status: 'Published',
+      activeChild: childView(),
+      childHistory: [
+        childView({
+          id: 'child0000ef567890',
+          name: 'Earlier pass',
+          displayState: 'Closed — Completed',
+          outcome: 'completed',
+          closedAt: '2026-07-29T10:00:00Z',
+          diffSummary: 'Repository: repo-a\n3 files changed',
+        }),
+      ],
+    });
+    renderWorkspace(parent, controllerFor(parent, readyChild()));
 
-    await user.click(await screen.findByText('Refactor history'));
+    await user.click(screen.getByText('Refactor history'));
     expect(screen.getByText('Closed — Completed')).toBeVisible();
     await user.click(screen.getByText('Preserved diff (read-only)'));
     expect(screen.getByText(/3 files changed/)).toBeVisible();
@@ -237,24 +250,25 @@ describe('RefactorPassWorkspace', () => {
     expect(within(history as HTMLElement).queryByRole('button')).not.toBeInTheDocument();
   });
 
-  it('routes paired review editing through the parent card', async () => {
+  it('routes paired review editing through the parent inspector card', async () => {
     installAgenticoMock({ feature: readyChild() });
     const user = userEvent.setup();
-    const { onEditPairedReview } = renderWorkspace(parentWith());
+    const parent = parentWith();
+    const { onEditPairedReview } = renderWorkspace(parent, controllerFor(parent, readyChild()));
 
-    const parentCard = await screen.findByRole('region', { name: 'Parent feature' });
+    const parentCard = screen.getByRole('region', { name: 'Parent feature' });
     expect(within(parentCard).getByText(/changes apply to both/i)).toBeVisible();
     await user.click(within(parentCard).getByRole('button', { name: 'Edit paired review' }));
     expect(onEditPairedReview).toHaveBeenCalled();
   });
 
-  it('waits for the child snapshot before offering any verb', async () => {
-    const mock = installAgenticoMock({ feature: readyChild() });
-    mock.api.getFeature.mockReturnValue(new Promise(() => {}));
-    renderWorkspace(parentWith());
+  it('reports loading until the child snapshot arrives', () => {
+    installAgenticoMock({ feature: readyChild() });
+    const parent = parentWith();
+    renderWorkspace(parent, controllerFor(parent, null));
 
     expect(screen.getByText('Loading the pass from the runtime…')).toBeVisible();
-    expect(screen.queryByRole('button', { name: 'Start pass' })).not.toBeInTheDocument();
-    await waitFor(() => expect(mock.api.getFeature).toHaveBeenCalledWith(CHILD_ID));
+    const inspector = screen.getByRole('complementary', { name: 'Pass inspector' });
+    expect(within(inspector).getByText('Active — Created')).toBeVisible();
   });
 });

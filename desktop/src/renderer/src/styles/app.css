@@ -909,16 +909,19 @@ body {
   }
 }
 
-/* Refactor pass: the parent tab while a child feature runs. The custody strip
- * is the signature instrument — three stations mirroring live server state:
- * work leaves the locked parent, runs inside the pass, and merges back. */
-.refactor-pass__main {
-  min-width: 0;
-  min-height: 0;
+/* Refactor pass: the parent tab while a child feature runs. It reads like any
+ * feature tab (stage + inspector); the custody strip above is the one
+ * relationship-specific instrument — three stations mirroring live server
+ * state: work leaves the locked parent, runs inside the pass, merges back. */
+.refactor-pass {
   display: flex;
   flex-direction: column;
-  gap: var(--space-5);
-  padding: clamp(20px, 3.5vw, 44px);
+  gap: var(--space-3);
+  flex: 1;
+  min-height: 0;
+}
+
+.refactor-pass .cockpit__stage {
   overflow: auto;
 }
 
@@ -1028,18 +1031,6 @@ body {
   }
 }
 
-.refactor-pass__header h2 {
-  margin: var(--space-2) 0;
-  color: var(--color-text);
-  font: 700 clamp(26px, 3.4vw, 42px)/1.02 var(--font-display);
-  letter-spacing: 0.01em;
-}
-
-.refactor-pass__header .post-workspace__eyebrow code {
-  font: inherit;
-  color: inherit;
-}
-
 .refactor-pass__state {
   max-width: 720px;
   margin: 0;
@@ -1066,41 +1057,24 @@ body {
   cursor: pointer;
 }
 
-.refactor-pass__actions {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-3);
-  margin-top: var(--space-4);
-}
-
-.refactor-pass__secondary {
+/* Bar-resident discard affordance: quiet next to the primary verb, danger on
+ * intent. */
+.cockpit__discard-pass {
   padding: var(--space-2) var(--space-4);
   border: 1px solid var(--color-hairline);
   border-radius: var(--radius);
   background: transparent;
-  color: var(--color-text);
+  color: var(--color-muted);
   font: 600 13px var(--font-mono);
   cursor: pointer;
 }
 
-.refactor-pass__discard {
-  margin-inline-start: auto;
-  padding: var(--space-2) 0;
-  border: 0;
-  border-bottom: 1px solid transparent;
-  background: transparent;
-  color: var(--color-muted);
-  font: 600 12px var(--font-mono);
-  cursor: pointer;
-}
-
-.refactor-pass__discard:hover:not(:disabled) {
-  border-bottom-color: currentColor;
+.cockpit__discard-pass:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--color-danger) 55%, var(--color-hairline));
   color: var(--color-danger);
 }
 
-.refactor-pass__discard:disabled {
+.cockpit__discard-pass:disabled {
   opacity: 0.5;
   cursor: default;
 }
@@ -1116,12 +1090,6 @@ body {
   padding: var(--space-3) var(--space-4);
   border: 1px solid color-mix(in srgb, var(--color-accent) 55%, var(--color-hairline));
   color: var(--color-accent);
-}
-
-.refactor-pass__surface {
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
 }
 
 .refactor-pass__integration {

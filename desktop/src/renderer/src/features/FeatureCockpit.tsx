@@ -23,7 +23,6 @@ import {
   type FeatureActionRequest,
   type FeatureActionView,
 } from '../../../shared/ipc';
-import { PhaseLadder } from '../components/PhaseLadder';
 import { useModalDismiss } from '../components/useModalDismiss';
 import { useMediaQuery } from '../hooks';
 import { parseIpcError, type WizardError } from '../wizard/ipcError';
@@ -32,8 +31,8 @@ import { ReviewSurface } from './ReviewSurface';
 import { FeatureConfigPanel } from './ConfigEditor';
 import { ArchiveMode } from './ArchiveMode';
 import { RewindJourney } from './RewindJourney';
-import { RepositoryInstrument } from './RepositoryInstrument';
 import { AftercareWorkspace } from './AftercareWorkspace';
+import { InspectorContent } from './CockpitInspector';
 import { CycleWorkspace } from './CycleWorkspace';
 import { ImpactPreviewList } from './ImpactPreviewList';
 import { NeedUserInputModal, type AttentionGate } from './NeedUserInputModal';
@@ -49,7 +48,7 @@ import {
 import { RebaseModal } from './cycles/RebaseModal';
 import { ReviewCommentsModal } from './cycles/ReviewCommentsModal';
 import { RefactorLauncher } from './refactor/RefactorLauncher';
-import { RefactorPassWorkspace } from './refactor/RefactorPassWorkspace';
+import { RefactorPassWorkspace, useRefactorPass } from './refactor/RefactorPassWorkspace';
 import { refactoringStatusChip } from './refactor/refactorPassModel';
 import { useCompletionPreflight } from './completion/useCompletionPreflight';
 import {
@@ -79,7 +78,6 @@ import {
   displayPhaseLabel,
   displayStatusLabel,
   featureBranch,
-  formatDuration,
   isReadyToStart,
   isRunAtRest,
   showsRun,
@@ -113,27 +111,6 @@ export interface FeatureCockpitProps {
 
 const MAX_ITERATIONS_RESTART_DELTA = 10;
 const MAX_PLAN_ITERATIONS_RESTART_DELTA = 2;
-
-function IdentityFacts({ snapshot, branch }: { snapshot: FeatureSnapshot; branch: string | null }) {
-  return (
-    <dl className="cockpit__facts">
-      <div className="cockpit__fact">
-        <dt>Status</dt>
-        <dd aria-label={snapshot.status}>
-          <code data-status={snapshot.status}>{displayStatusLabel(snapshot.status)}</code>
-        </dd>
-      </div>
-      {branch !== null ? (
-        <div className="cockpit__fact">
-          <dt>Branch</dt>
-          <dd>
-            <code>{branch}</code>
-          </dd>
-        </div>
-      ) : null}
-    </dl>
-  );
-}
 
 interface RewindLandingProps {
   outcome: FeatureActionResult;
@@ -199,59 +176,6 @@ function RewindLanding({ outcome, run, onOpenSource, onDismiss }: RewindLandingP
         </div>
       ) : null}
     </section>
-  );
-}
-
-function InspectorContent({
-  snapshot,
-  branch,
-  stale,
-  runMetrics,
-  onOpenPullRequest,
-}: {
-  snapshot: FeatureSnapshot;
-  branch: string | null;
-  stale: boolean;
-  runMetrics: RunMetrics | null;
-  onOpenPullRequest(url: string): void;
-}) {
-  return (
-    <>
-      <header className="cockpit__header">
-        <div className="cockpit__identity">
-          <h2 className="cockpit__title">{snapshot.name}</h2>
-          <IdentityFacts snapshot={snapshot} branch={branch} />
-        </div>
-        {stale ? (
-          <p role="status" className="cockpit__stale">
-            Refreshing from the runtime…
-          </p>
-        ) : null}
-      </header>
-      <PhaseLadder snapshot={snapshot} />
-      {runMetrics !== null ? (
-        <section className="cockpit__run-totals" aria-label="This run">
-          <h3 className="setup-step__title">This run</h3>
-          <dl className="cockpit__facts">
-            <div className="cockpit__fact">
-              <dt>Total elapsed</dt>
-              <dd>
-                <code>{formatDuration(runMetrics.totalSeconds)}</code>
-              </dd>
-            </div>
-            <div className="cockpit__fact">
-              <dt>Total cost</dt>
-              <dd>
-                <code>${runMetrics.totalUsd.toFixed(2)}</code>
-              </dd>
-            </div>
-          </dl>
-        </section>
-      ) : null}
-      {snapshot.repoStatus !== undefined && snapshot.repoStatus.length > 0 ? (
-        <RepositoryInstrument repos={snapshot.repoStatus} onOpenPullRequest={onOpenPullRequest} />
-      ) : null}
-    </>
   );
 }
 
@@ -932,6 +856,14 @@ export function FeatureCockpit({
     void completion.refresh();
     void load({ silent: true });
   }, [completion, load]);
+
+  const onPassChanged = useCallback(() => {
+    void load({ silent: true });
+  }, [load]);
+  const refactorPass = useRefactorPass(
+    state.phase === 'loaded' ? state.snapshot : null,
+    onPassChanged,
+  );
 
   // Fetch on mount; refetch on relevant invalidations; track stream health
   // so the view can show that it is refreshing after a reconnect.
@@ -1637,9 +1569,42 @@ export function FeatureCockpit({
               <CockpitActionBar
                 status={snapshot.status}
                 statusOverride={refactoringStatusChip(snapshot.activeChild)}
-                primaryActions={[]}
+                primaryActions={refactorPass.actions.map((action) => ({
+                  key: `pass-${action.id}`,
+                  label: action.label,
+                  busyLabel: action.label,
+                  variant:
+                    action.id === 'pause-stop'
+                      ? ('stop' as const)
+                      : action.id === 'resume' || action.id === 'retry'
+                        ? ('resume' as const)
+                        : action.id === 'restart'
+                          ? ('restart' as const)
+                          : ('primary' as const),
+                  onClick: () => void refactorPass.dispatch(action.id),
+                  busy: refactorPass.busy,
+                  disabled: refactorPass.busy,
+                }))}
                 menuActions={postMenuActions}
-                extraControls={completionControls}
+                extraControls={
+                  refactorPass.discardAction === undefined ? null : (
+                    <button
+                      type="button"
+                      className="cockpit__discard-pass"
+                      disabled={!refactorPass.discardAction.enabled || refactorPass.busy}
+                      title={
+                        refactorPass.discardAction.enabled
+                          ? undefined
+                          : refactorPass.discardAction.disabledReasons
+                              .map((reason) => reason.message)
+                              .join(' ')
+                      }
+                      onClick={refactorPass.openDiscard}
+                    >
+                      Discard pass…
+                    </button>
+                  )
+                }
                 isNarrow={isNarrow}
                 inspectorButtonRef={inspectorButtonRef}
                 onOpenInspector={() => setInspectorOpen(true)}
@@ -1647,7 +1612,7 @@ export function FeatureCockpit({
               {standaloneAttention}
               <RefactorPassWorkspace
                 parent={snapshot}
-                onChanged={() => void load({ silent: true })}
+                pass={refactorPass}
                 onEditPairedReview={() => setConfigOpen(true)}
                 attentionItems={attentionItems}
                 refreshAttention={refreshAttention}

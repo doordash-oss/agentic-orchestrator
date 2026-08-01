@@ -701,6 +701,7 @@ const REFACTOR_PASS_CHILD_SNAPSHOT: FeatureSnapshot = {
   },
   timing: { totalSeconds: 0 },
   cycle: {},
+  repoStatus: [{ name: 'agentic-orchestrator', publishable: true, freshness: 'in sync' }],
   actions: [
     { id: 'start', enabled: true, disabledReasons: [] },
     {

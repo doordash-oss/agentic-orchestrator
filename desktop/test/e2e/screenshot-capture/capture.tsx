@@ -945,7 +945,7 @@ function CaptureApp() {
   if (scene === 'run-gauge-final-review') {
     return <RunGaugeScene mode="final-review" />;
   }
-  if (scene === 'aftercare') {
+  if (scene === 'aftercare' || scene === 'refactor-pass') {
     return <AftercareScene />;
   }
   if (scene === 'feature-question') {

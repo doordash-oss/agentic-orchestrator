@@ -34,8 +34,8 @@ import { ArchiveMode } from './ArchiveMode';
 import { RewindJourney } from './RewindJourney';
 import { RepositoryInstrument } from './RepositoryInstrument';
 import { AftercareWorkspace } from './AftercareWorkspace';
-import type { AftercareCycleId } from './aftercareModel';
 import { CycleWorkspace } from './CycleWorkspace';
+import { ImpactPreviewList } from './ImpactPreviewList';
 import { NeedUserInputModal, type AttentionGate } from './NeedUserInputModal';
 import {
   cycleIdentity,
@@ -43,12 +43,14 @@ import {
   receiptForCycleEnd,
   resolvePostImplementationMode,
   type AftercareAction,
+  type AftercareCycleId,
   type CycleReceipt,
 } from './postImplementationModel';
 import { RebaseModal } from './cycles/RebaseModal';
 import { ReviewCommentsModal } from './cycles/ReviewCommentsModal';
 import { RefactorLauncher } from './refactor/RefactorLauncher';
-import { RelationshipWorkspace } from './refactor/RelationshipWorkspace';
+import { RefactorPassWorkspace } from './refactor/RefactorPassWorkspace';
+import { refactoringStatusChip } from './refactor/refactorPassModel';
 import { useCompletionPreflight } from './completion/useCompletionPreflight';
 import {
   completionBarModel,
@@ -294,6 +296,7 @@ interface CockpitMenuAction {
  */
 function CockpitActionBar({
   status,
+  statusOverride,
   primaryActions,
   menuActions,
   extraControls,
@@ -302,6 +305,8 @@ function CockpitActionBar({
   onOpenInspector,
 }: {
   status: FeatureSnapshot['status'];
+  /** Replaces the raw status label (e.g. "Refactoring" while a pass runs). */
+  statusOverride?: { label: string; tone: 'info' | 'attention' };
   primaryActions: CockpitPrimaryAction[];
   menuActions: CockpitMenuAction[];
   extraControls?: ReactNode;
@@ -340,7 +345,12 @@ function CockpitActionBar({
   return (
     <div className="cockpit__actions" role="group" aria-label="Feature actions">
       <p className="cockpit__phase-status" role="status" aria-label="Current feature status">
-        <code data-status={status}>{displayStatusLabel(status)}</code>
+        <code
+          data-status={status}
+          {...(statusOverride === undefined ? {} : { 'data-tone': statusOverride.tone })}
+        >
+          {statusOverride?.label ?? displayStatusLabel(status)}
+        </code>
       </p>
       <span className="cockpit__actions-spacer" />
       {primaryActions.map((action) => (
@@ -729,32 +739,7 @@ function DeleteConfirmDialog({
         ) : preview === undefined ? (
           <p>This removes the feature record and any remaining worktrees.</p>
         ) : (
-          <div className="relationship-impact">
-            {preview.categories.map((category) => (
-              <section key={category.key}>
-                <h4>{category.label}</h4>
-                {category.items.length === 0 ? (
-                  <p>None</p>
-                ) : (
-                  <ul>
-                    {category.items.map((item) => (
-                      <li key={item}>{item}</li>
-                    ))}
-                  </ul>
-                )}
-              </section>
-            ))}
-            <h4>Retained</h4>
-            {preview.retained.length === 0 ? (
-              <p>None</p>
-            ) : (
-              <ul>
-                {preview.retained.map((item) => (
-                  <li key={item}>{item}</li>
-                ))}
-              </ul>
-            )}
-          </div>
+          <ImpactPreviewList preview={preview} />
         )}
         <div className="impact-dialog__actions">
           <button type="button" onClick={onClose} disabled={busy} autoFocus>
@@ -1647,35 +1632,56 @@ export function FeatureCockpit({
         aria-label={`Feature ${snapshot.name}`}
       >
         {postImplementationMode.kind === 'aftercare' ? (
-          <>
-            <CockpitActionBar
-              status={snapshot.status}
-              primaryActions={[]}
-              menuActions={postMenuActions}
-              extraControls={completionControls}
-              isNarrow={isNarrow}
-              inspectorButtonRef={inspectorButtonRef}
-              onOpenInspector={() => setInspectorOpen(true)}
-            />
-            <RelationshipWorkspace
-              parent={snapshot}
-              onChanged={() => void load({ silent: true })}
-            />
-            {standaloneAttention}
-            <AftercareWorkspace
-              snapshot={snapshot}
-              run={aftercareRun}
-              receipt={cycleReceipt}
-              onRetry={retry}
-              onReopenCycle={() => setDismissedCycleId(undefined)}
-              onAction={openAftercareAction}
-              onOpenRunRecord={() => setRunRecordOpen(true)}
-              onOpenChanges={() => setChangesOpen(true)}
-              onOpenPullRequest={(url) => {
-                void window.agentico.openExternal({ url });
-              }}
-            />
-          </>
+          snapshot.activeChild !== undefined ? (
+            <>
+              <CockpitActionBar
+                status={snapshot.status}
+                statusOverride={refactoringStatusChip(snapshot.activeChild)}
+                primaryActions={[]}
+                menuActions={postMenuActions}
+                extraControls={completionControls}
+                isNarrow={isNarrow}
+                inspectorButtonRef={inspectorButtonRef}
+                onOpenInspector={() => setInspectorOpen(true)}
+              />
+              {standaloneAttention}
+              <RefactorPassWorkspace
+                parent={snapshot}
+                onChanged={() => void load({ silent: true })}
+                onEditPairedReview={() => setConfigOpen(true)}
+                attentionItems={attentionItems}
+                refreshAttention={refreshAttention}
+                attentionDrafts={attentionDrafts}
+                setAttentionDrafts={setAttentionDrafts}
+              />
+            </>
+          ) : (
+            <>
+              <CockpitActionBar
+                status={snapshot.status}
+                primaryActions={[]}
+                menuActions={postMenuActions}
+                extraControls={completionControls}
+                isNarrow={isNarrow}
+                inspectorButtonRef={inspectorButtonRef}
+                onOpenInspector={() => setInspectorOpen(true)}
+              />
+              {standaloneAttention}
+              <AftercareWorkspace
+                snapshot={snapshot}
+                run={aftercareRun}
+                receipt={cycleReceipt}
+                onRetry={retry}
+                onReopenCycle={() => setDismissedCycleId(undefined)}
+                onAction={openAftercareAction}
+                onOpenRunRecord={() => setRunRecordOpen(true)}
+                onOpenChanges={() => setChangesOpen(true)}
+                onOpenPullRequest={(url) => {
+                  void window.agentico.openExternal({ url });
+                }}
+              />
+            </>
+          )
         ) : (
           <>
             {standaloneAttention}
@@ -1995,8 +2001,6 @@ export function FeatureCockpit({
             inspectorButtonRef={inspectorButtonRef}
             onOpenInspector={() => setInspectorOpen(true)}
           />
-
-          <RelationshipWorkspace parent={snapshot} onChanged={() => void load({ silent: true })} />
 
           {rewindLanding !== null ? (
             <RewindLanding

@@ -667,6 +667,123 @@ const AFTERCARE_FEATURE_SNAPSHOT: FeatureSnapshot = {
   cycle: {},
 };
 
+const REFACTOR_PASS_CHILD_ID = 'f73d148b32f070a2';
+
+/** Ready-to-start refactor child for the refactor-pass workspace scene. */
+const REFACTOR_PASS_CHILD_SNAPSHOT: FeatureSnapshot = {
+  ...AFTERCARE_FEATURE_SNAPSHOT,
+  id: REFACTOR_PASS_CHILD_ID,
+  name: 'Slop removal pass',
+  slug: 'slop-removal-pass',
+  status: 'Created',
+  currentPhase: 'Knowledge Base',
+  pipeline: 'large',
+  description: 'Remove the redundancy the implementation run left behind.',
+  activeRun: 1,
+  parentId: AFTERCARE_FEATURE_SNAPSHOT.id,
+  parentKind: 'refactor',
+  active: true,
+  setupComplete: true,
+  setup: {
+    status: 'done',
+    attempt: 1,
+    tasks: [
+      {
+        key: 'worktree:agentic-orchestrator',
+        kind: 'worktree',
+        label: 'Create worktree',
+        repo: 'agentic-orchestrator',
+        branch: 'feature/slop-removal-pass',
+        status: 'done',
+        attempt: 1,
+      },
+    ],
+  },
+  timing: { totalSeconds: 0 },
+  cycle: {},
+  actions: [
+    { id: 'start', enabled: true, disabledReasons: [] },
+    {
+      id: 'pause-stop',
+      enabled: false,
+      disabledReasons: [{ code: 'not_running', message: 'The pass has not started yet.' }],
+    },
+    {
+      id: 'discard',
+      enabled: true,
+      disabledReasons: [],
+      impactPreview: {
+        kind: 'child_discard',
+        subject: { id: REFACTOR_PASS_CHILD_ID, name: 'Slop removal pass' },
+        categories: [
+          { key: 'sessions', label: 'Sessions stopped', items: [] },
+          {
+            key: 'worktrees',
+            label: 'Disposable worktrees removed',
+            items: ['agentic-orchestrator … slop-removal-pass'],
+          },
+          {
+            key: 'branches',
+            label: 'Ephemeral branches removed',
+            items: ['feature/slop-removal-pass (repo agentic-orchestrator)'],
+          },
+        ],
+        retained: ['Review configuration retained', 'Pass becomes immutable Discarded history'],
+      },
+    },
+  ],
+};
+
+const REFACTOR_PASS_PARENT_SNAPSHOT: FeatureSnapshot = {
+  ...AFTERCARE_FEATURE_SNAPSHOT,
+  actions: AFTERCARE_FEATURE_SNAPSHOT.actions.map((action) => ({
+    ...action,
+    enabled: false,
+    disabledReasons: [
+      {
+        code: 'parent_locked',
+        message: 'parent mutations are locked while a child is active',
+      },
+    ],
+  })),
+  activeChild: {
+    id: REFACTOR_PASS_CHILD_ID,
+    name: 'Slop removal pass',
+    kind: 'refactor',
+    displayToken: `refactor:${REFACTOR_PASS_CHILD_ID}`,
+    displayState: 'Active — Created',
+    pipeline: 'large',
+    status: 'Created',
+    relationshipState: 'active',
+    startedAt: '2026-07-31T22:41:00Z',
+    cost: { totalUsd: 0, byPhase: {} },
+    integrationState: 'pending',
+    attention: [],
+    cleanupWarnings: [],
+  },
+  childHistory: [
+    {
+      id: 'a1b2c3d4e5f60718',
+      name: 'Tighten IPC schemas',
+      kind: 'refactor',
+      displayToken: 'refactor:a1b2c3d4e5f60718',
+      displayState: 'Closed — Completed',
+      pipeline: 'medium',
+      status: 'Done',
+      relationshipState: 'completed',
+      outcome: 'completed',
+      startedAt: '2026-07-27T09:12:00Z',
+      closedAt: '2026-07-27T14:03:00Z',
+      cost: { totalUsd: 12.4, byPhase: {} },
+      integrationState: 'merged',
+      attention: [],
+      cleanupWarnings: [],
+      diffSummary:
+        'Repository: agentic-orchestrator\n 14 files changed, 220 insertions(+), 412 deletions(-)',
+    },
+  ],
+};
+
 const RECOVERY_ITEMS = [
   {
     key: 'feature-alpha:signal-lab',
@@ -1078,6 +1195,13 @@ function makeMockApi(
       if (scene === 'aftercare') {
         return Promise.resolve(AFTERCARE_FEATURE_SNAPSHOT);
       }
+      if (scene === 'refactor-pass') {
+        return Promise.resolve(
+          _featureId === REFACTOR_PASS_CHILD_ID
+            ? REFACTOR_PASS_CHILD_SNAPSHOT
+            : REFACTOR_PASS_PARENT_SNAPSHOT,
+        );
+      }
       if (scene.startsWith('post-cycle-')) {
         const cycle =
           scene === 'post-cycle-rebase'
@@ -1088,38 +1212,25 @@ function makeMockApi(
                 iteration: 1,
                 phase: 'resolve_conflicts',
               }
-            : scene === 'post-cycle-refactor'
+            : scene === 'post-cycle-failed'
               ? {
-                  type: 'refactor',
-                  status: 'running',
-                  count: 1,
-                  iteration: 2,
-                  phase: 'implement_validate',
+                  type: 'rebase',
+                  status: 'failed',
+                  count: 2,
+                  iteration: 1,
+                  phase: 'resolve_conflicts',
                 }
-              : scene === 'post-cycle-failed'
-                ? {
-                    type: 'rebase',
-                    status: 'failed',
-                    count: 2,
-                    iteration: 1,
-                    phase: 'resolve_conflicts',
-                  }
-                : {
-                    type: 'review-comments',
-                    status: scene === 'post-cycle-gate' ? 'need_user_input' : 'running',
-                    count: 1,
-                    iteration: 1,
-                    phase: 'address_validate',
-                  };
+              : {
+                  type: 'review-comments',
+                  status: scene === 'post-cycle-gate' ? 'need_user_input' : 'running',
+                  count: 1,
+                  iteration: 1,
+                  phase: 'address_validate',
+                };
         return Promise.resolve({
           ...AFTERCARE_FEATURE_SNAPSHOT,
           cycle,
-          phaseStatus:
-            cycle.type === 'review-comments'
-              ? 'addressing-review-comments'
-              : cycle.type === 'refactor'
-                ? 'refactoring'
-                : 'rebasing',
+          phaseStatus: cycle.type === 'review-comments' ? 'addressing-review-comments' : 'rebasing',
           actions:
             scene === 'post-cycle-failed'
               ? [{ id: 'retry', enabled: true, disabledReasons: [] }]
@@ -1406,9 +1517,7 @@ function makeMockApi(
         const cycleKey =
           scene === 'post-cycle-rebase' || scene === 'post-cycle-failed'
             ? 'rebase-2'
-            : scene === 'post-cycle-refactor'
-              ? 'refactor-1'
-              : 'review-comments-1';
+            : 'review-comments-1';
         return Promise.resolve({
           ...RUN_DETAIL,
           runNumber,

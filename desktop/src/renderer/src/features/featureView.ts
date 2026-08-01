@@ -68,6 +68,14 @@ const BUCKET_ORDER: Record<DashboardBucket, number> = {
 
 /** Human state and priority derived from server status and catalogue only. */
 export function dashboardState(snapshot: FeatureSnapshot): DashboardState {
+  const child = snapshot.activeChild;
+  if (child !== undefined) {
+    // A parent with an active refactor pass is in progress even though its
+    // stored status stays Published/CodeReady (TUI: "Refactoring").
+    return child.attention.length > 0 || child.integrationState === 'attention'
+      ? { bucket: 'intervention', label: 'Refactoring — needs attention', tone: 'attention' }
+      : { bucket: 'active', label: 'Refactoring', tone: 'active' };
+  }
   if (snapshot.status === 'Failed') {
     return { bucket: 'intervention', label: 'Failed', tone: 'danger' };
   }
@@ -117,6 +125,7 @@ const DASHBOARD_GROUPS: readonly { id: DashboardGroupId; label: string }[] = [
 ];
 
 export function dashboardGroupId(snapshot: FeatureSnapshot): DashboardGroupId {
+  if (snapshot.activeChild !== undefined) return 'in-progress';
   if (snapshot.status === 'Done') return 'done';
   if (snapshot.status === 'Published') return 'published';
   return 'in-progress';

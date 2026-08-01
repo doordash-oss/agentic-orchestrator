@@ -134,10 +134,10 @@ test('lifecycle cycles: resume, retry, restart, rebase, review-comments, refacto
       await expect(refactorModal.getByLabel('Risk')).toBeVisible();
       await expect(refactorModal.getByRole('group', { name: 'Models' })).toBeVisible();
       await refactorModal.getByRole('button', { name: 'Launch child' }).click();
-      const relationship = seededCockpit.getByRole('region', { name: 'Refactor relationship' });
-      await expect(relationship).toBeVisible({ timeout: 30_000 });
-      await expect(relationship.getByLabel('Relationship transfer track')).toContainText(
-        'Parent · Published/locked',
+      const pass = seededCockpit.getByRole('region', { name: 'Refactor pass' });
+      await expect(pass).toBeVisible({ timeout: 30_000 });
+      await expect(pass.getByLabel('Custody of the work')).toContainText(
+        'locked while the pass runs',
       );
       transcript.step('creation-parity wizard launched a separately controlled child relationship');
     } else {

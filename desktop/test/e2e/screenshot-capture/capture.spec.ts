@@ -136,12 +136,22 @@ test('capture all visual evidence screenshots', async ({ page }) => {
 
   await capture(
     page,
-    'post-cycle-refactor',
+    'refactor-pass',
     'dark',
     1440,
     900,
-    'focused-refactor-cycle-with-live-agent-canvas-1440x900',
-    '.cycle-workspace',
+    'active-refactor-pass-custody-strip-ready-to-start-1440x900',
+    '.refactor-pass',
+  );
+
+  await capture(
+    page,
+    'refactor-pass',
+    'light',
+    1440,
+    900,
+    'active-refactor-pass-custody-strip-ready-to-start-1440x900-light',
+    '.refactor-pass',
   );
 
   await capture(

@@ -78,7 +78,7 @@ describe('AftercareWorkspace', () => {
     expect(screen.queryByText('Prepare publish')).not.toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Run record' }));
     await user.click(screen.getByRole('button', { name: 'Changes' }));
-    await user.click(screen.getByRole('button', { name: /Start another focused pass/ }));
+    await user.click(screen.getByRole('button', { name: /Start a refactor pass/ }));
     await user.click(screen.getByRole('button', { name: 'Open pull request' }));
     expect(onOpenRunRecord).toHaveBeenCalledOnce();
     expect(onOpenChanges).toHaveBeenCalledOnce();

@@ -1,0 +1,186 @@
+import { describe, expect, it } from 'vitest';
+import { featureSnapshot } from '../../test/agenticoMock';
+import type { FeatureSnapshot, RelationshipChildView } from '../../../../shared/ipc';
+import {
+  custodyStations,
+  passActions,
+  passState,
+  refactoringStatusChip,
+} from './refactorPassModel';
+
+function childView(overrides: Partial<RelationshipChildView> = {}): RelationshipChildView {
+  return {
+    id: 'child1234ef567890',
+    name: 'Slop removal pass',
+    kind: 'refactor',
+    displayToken: 'refactor:child1234ef567890',
+    displayState: 'Active — Created',
+    pipeline: 'large',
+    status: 'Created',
+    relationshipState: 'active',
+    startedAt: '2026-07-30T10:00:00Z',
+    cost: { totalUsd: 0, byPhase: {} },
+    integrationState: 'pending',
+    attention: [],
+    cleanupWarnings: [],
+    ...overrides,
+  };
+}
+
+const doneSetup: FeatureSnapshot['setup'] = { status: 'done', attempt: 1, tasks: [] };
+
+describe('passState', () => {
+  it('reports setup until the worktrees are ready', () => {
+    const state = passState(
+      featureSnapshot({ status: 'SettingUpWorktrees', setupComplete: false }),
+    );
+    expect(state.id).toBe('setup');
+    expect(state.sentence).toContain('Start unlocks when setup completes');
+  });
+
+  it('reports a failed setup as retryable', () => {
+    const state = passState(
+      featureSnapshot({
+        status: 'Failed',
+        setupComplete: false,
+        setup: { status: 'failed', attempt: 1, tasks: [] },
+      }),
+    );
+    expect(state).toMatchObject({ id: 'setup-failed', tone: 'danger' });
+  });
+
+  it('reports ready when the catalogue enables start', () => {
+    const state = passState(
+      featureSnapshot({
+        status: 'Created',
+        setupComplete: true,
+        setup: doneSetup,
+        actions: [{ id: 'start', enabled: true, disabledReasons: [] }],
+      }),
+    );
+    expect(state).toMatchObject({ id: 'ready', tone: 'quiet' });
+    expect(state.sentence).toContain('inherited repository');
+  });
+
+  it('reports the live phase while the pass runs', () => {
+    const state = passState(
+      featureSnapshot({ status: 'Implementing', setupComplete: true, setup: doneSetup }),
+    );
+    expect(state).toMatchObject({ id: 'working', sentence: 'Implementing.', tone: 'live' });
+  });
+
+  it('routes pauses, input requests, and review gates to attention', () => {
+    const base = { setupComplete: true, setup: doneSetup };
+    expect(passState(featureSnapshot({ ...base, status: 'Interrupted' })).id).toBe('interrupted');
+    expect(passState(featureSnapshot({ ...base, status: 'NeedUserInput' })).id).toBe('input');
+    expect(passState(featureSnapshot({ ...base, status: 'FinalReviewNeedsReview' })).id).toBe(
+      'review',
+    );
+  });
+
+  it('owns the surface during integration, including the attention park', () => {
+    const base = { status: 'ReviewPassed', setupComplete: true, setup: doneSetup };
+    expect(
+      passState(featureSnapshot({ ...base, transaction: { phase: 'applying' } })),
+    ).toMatchObject({ id: 'integrating', tone: 'live' });
+    expect(
+      passState(featureSnapshot({ ...base, transaction: { phase: 'attention' } })),
+    ).toMatchObject({ id: 'integration-attention', tone: 'attention' });
+  });
+});
+
+describe('custodyStations', () => {
+  it('always locks the parent and mirrors the child state on the pass station', () => {
+    const parent = featureSnapshot({ status: 'Published', name: 'Electron app' });
+    const child = featureSnapshot({
+      status: 'Created',
+      setupComplete: true,
+      setup: doneSetup,
+      actions: [{ id: 'start', enabled: true, disabledReasons: [] }],
+    });
+    const [parentStation, passStation, integration] = custodyStations(parent, child, childView());
+    expect(parentStation).toMatchObject({ state: 'locked', title: 'Electron app' });
+    expect(parentStation.detail).toBe('Published · locked while the pass runs');
+    expect(passStation).toMatchObject({ detail: 'Ready to start', state: 'pending' });
+    expect(integration).toMatchObject({ detail: 'After final review approval', state: 'pending' });
+  });
+
+  it('lights the integration station from the transaction journal, not a hardcoded label', () => {
+    const parent = featureSnapshot({ status: 'Published' });
+    const child = featureSnapshot({
+      status: 'ReviewPassed',
+      setupComplete: true,
+      setup: doneSetup,
+      transaction: { phase: 'attention', attention: 'merge conflict in repo-a' },
+    });
+    const [, passStation, integration] = custodyStations(parent, child, childView());
+    expect(passStation.state).toBe('attention');
+    expect(integration).toMatchObject({ detail: 'Needs attention', state: 'attention' });
+  });
+
+  it('falls back to the relationship view while the child snapshot loads', () => {
+    const parent = featureSnapshot({ status: 'Published' });
+    const [, passStation] = custodyStations(parent, null, childView());
+    expect(passStation.detail).toBe('Active — Created');
+  });
+});
+
+describe('passActions', () => {
+  it('renders only catalogue-enabled verbs — never a dead button row', () => {
+    const child = featureSnapshot({
+      status: 'Created',
+      setupComplete: true,
+      setup: doneSetup,
+      actions: [
+        { id: 'start', enabled: true, disabledReasons: [] },
+        { id: 'pause-stop', enabled: false, disabledReasons: [{ code: 'x', message: 'no' }] },
+        { id: 'resume', enabled: false, disabledReasons: [] },
+        { id: 'restart', enabled: false, disabledReasons: [] },
+        { id: 'discard', enabled: true, disabledReasons: [] },
+      ],
+    });
+    expect(passActions(child)).toEqual([{ id: 'start', label: 'Start pass', kind: 'primary' }]);
+  });
+
+  it('offers Stop while running and Resume plus a quiet Restart when paused', () => {
+    const running = featureSnapshot({
+      status: 'Implementing',
+      actions: [{ id: 'pause-stop', enabled: true, disabledReasons: [] }],
+    });
+    expect(passActions(running)).toEqual([{ id: 'pause-stop', label: 'Stop', kind: 'primary' }]);
+
+    const paused = featureSnapshot({
+      status: 'Interrupted',
+      actions: [
+        { id: 'resume', enabled: true, disabledReasons: [] },
+        { id: 'restart', enabled: true, disabledReasons: [] },
+      ],
+    });
+    expect(passActions(paused)).toEqual([
+      { id: 'resume', label: 'Resume', kind: 'primary' },
+      { id: 'restart', label: 'Restart', kind: 'secondary' },
+    ]);
+  });
+
+  it('labels the retry verb after a failed setup', () => {
+    const child = featureSnapshot({
+      status: 'Failed',
+      setup: { status: 'failed', attempt: 1, tasks: [] },
+      actions: [{ id: 'retry', enabled: true, disabledReasons: [] }],
+    });
+    expect(passActions(child)).toEqual([{ id: 'retry', label: 'Retry setup', kind: 'primary' }]);
+  });
+});
+
+describe('refactoringStatusChip', () => {
+  it('mirrors the TUI parent labels', () => {
+    expect(refactoringStatusChip(childView())).toEqual({ label: 'Refactoring', tone: 'info' });
+    expect(
+      refactoringStatusChip(childView({ attention: [{ code: 'x', message: 'conflict' }] })),
+    ).toEqual({ label: 'Refactoring — needs attention', tone: 'attention' });
+    expect(refactoringStatusChip(childView({ integrationState: 'attention' }))).toEqual({
+      label: 'Refactoring — needs attention',
+      tone: 'attention',
+    });
+  });
+});

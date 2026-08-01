@@ -1,5 +1,13 @@
 import type { CycleView, FeatureSnapshot } from '../../../shared/ipc';
-import type { AftercareCycleId } from './aftercareModel';
+
+/** Aftercare launch surfaces: two in-feature repo cycles plus the refactor pass. */
+export type AftercareCycleId = 'rebase' | 'review-comments' | 'refactor';
+
+/**
+ * In-feature post-publish cycles the server reports through `cycle`. A
+ * refactor is never one of these — it runs as a separate child feature.
+ */
+export type RepoCycleId = 'rebase' | 'review-comments';
 
 export type PostImplementationMode =
   | { kind: 'regular' }
@@ -24,7 +32,7 @@ export interface CycleStage {
 }
 
 export interface CyclePresentation {
-  id: AftercareCycleId;
+  id: RepoCycleId;
   count: number;
   stages: CycleStage[];
   headline: string;
@@ -33,7 +41,7 @@ export interface CyclePresentation {
 }
 
 export interface CycleReceipt {
-  id: AftercareCycleId;
+  id: RepoCycleId;
   outcome: 'completed' | 'failed' | 'stopped';
   message: string;
   detail?: string;
@@ -91,7 +99,7 @@ export function receiptForCycleEnd(
   previousCycle: CycleView | undefined,
   snapshot: FeatureSnapshot,
 ): CycleReceipt | undefined {
-  const id = isAftercareCycleId(previousCycle?.type) ? previousCycle.type : undefined;
+  const id = isRepoCycleId(previousCycle?.type) ? previousCycle.type : undefined;
   if (id === undefined) return undefined;
   if (previousCycle?.status === 'failed') {
     return {
@@ -131,7 +139,7 @@ export function aftercareActions(snapshot: FeatureSnapshot): AftercareAction[] {
 
 export function cyclePresentation(snapshot: FeatureSnapshot): CyclePresentation | null {
   const cycle = snapshot.cycle;
-  if (!isAftercareCycleId(cycle?.type)) return null;
+  if (!isRepoCycleId(cycle?.type)) return null;
   const count = cycle?.count ?? 1;
   const phase = normalizedCyclePhase(cycle.type, cycle.phase);
   const definitions = cycleStages(cycle.type);
@@ -192,13 +200,14 @@ function aftercareAction(id: AftercareActionId, repoCount: number): AftercareAct
       return {
         id,
         label: 'Plan refactor',
-        title: 'Start another focused pass',
-        description: 'Describe the improvement, resolve its scope, and run it as a separate cycle.',
+        title: 'Start a refactor pass',
+        description:
+          'Describe the improvement and run it as a separate pass that merges back on approval.',
       };
   }
 }
 
-function cycleStages(id: AftercareCycleId): Array<Omit<CycleStage, 'state'>> {
+function cycleStages(id: RepoCycleId): Array<Omit<CycleStage, 'state'>> {
   switch (id) {
     case 'rebase':
       return [
@@ -213,38 +222,28 @@ function cycleStages(id: AftercareCycleId): Array<Omit<CycleStage, 'state'>> {
         { id: 'address_validate', label: 'Address & validate' },
         { id: 'push_reply', label: 'Push & reply' },
       ];
-    case 'refactor':
-      return [
-        { id: 'plan_refactor', label: 'Plan refactor' },
-        { id: 'implement_validate', label: 'Implement & validate' },
-        { id: 'deliver', label: 'Deliver' },
-      ];
   }
 }
 
-function normalizedCyclePhase(id: AftercareCycleId, phase?: string): string {
+function normalizedCyclePhase(id: RepoCycleId, phase?: string): string {
   if (phase !== undefined && cycleStages(id).some((stage) => stage.id === phase)) return phase;
   switch (id) {
     case 'rebase':
       return 'inspect_rebase';
     case 'review-comments':
       return 'address_validate';
-    case 'refactor':
-      return 'implement_validate';
   }
 }
 
-function isAftercareCycleId(value?: string): value is AftercareCycleId {
-  return value === 'rebase' || value === 'review-comments' || value === 'refactor';
+function isRepoCycleId(value?: string): value is RepoCycleId {
+  return value === 'rebase' || value === 'review-comments';
 }
 
-function cycleName(id: AftercareCycleId): string {
+function cycleName(id: RepoCycleId): string {
   switch (id) {
     case 'rebase':
       return 'Rebase';
     case 'review-comments':
       return 'Review comments';
-    case 'refactor':
-      return 'Refactor';
   }
 }

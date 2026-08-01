@@ -51,7 +51,7 @@ describe('CycleWorkspace', () => {
   it('keeps exact failure context with Retry and Return controls', () => {
     const snapshot = featureSnapshot({
       status: 'Published',
-      cycle: { type: 'refactor', status: 'failed', count: 1, phase: 'implement_validate' },
+      cycle: { type: 'rebase', status: 'failed', count: 1, phase: 'final_review' },
       failure: { type: 'agent', message: 'Validation could not complete.' },
       actions: [
         {

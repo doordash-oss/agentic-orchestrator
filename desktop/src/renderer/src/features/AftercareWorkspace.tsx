@@ -1,5 +1,6 @@
 import type { FeatureSnapshot, RunDetailView } from '../../../shared/ipc';
 import { FeatureFactsRail } from './FeatureFactsRail';
+import { RefactorHistory } from './refactor/RefactorHistory';
 import {
   aftercareActions,
   type AftercareAction,
@@ -106,6 +107,8 @@ export function AftercareWorkspace({
             </ol>
           )}
         </section>
+
+        <RefactorHistory entries={snapshot.childHistory ?? []} />
 
         <nav className="aftercare-workspace__archive" aria-label="Completed run resources">
           <button type="button" onClick={onOpenRunRecord}>

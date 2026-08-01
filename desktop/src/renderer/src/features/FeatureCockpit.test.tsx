@@ -437,9 +437,55 @@ describe('FeatureCockpit snapshot rendering', () => {
     expect(
       within(aftercare).getByRole('button', { name: /Address review feedback/ }),
     ).toBeVisible();
-    expect(
-      within(aftercare).getByRole('button', { name: /Start another focused pass/ }),
-    ).toBeVisible();
+    expect(within(aftercare).getByRole('button', { name: /Start a refactor pass/ })).toBeVisible();
+  });
+
+  it('hands the stage to the refactor pass while a child is active', async () => {
+    const childId = 'child1234ef567890';
+    const parent = featureSnapshot({
+      id: FEATURE_ID,
+      status: 'Published',
+      actions: [],
+      activeChild: {
+        id: childId,
+        name: 'Slop removal pass',
+        kind: 'refactor',
+        displayToken: `refactor:${childId}`,
+        displayState: 'Active — Created',
+        pipeline: 'large',
+        status: 'Created',
+        relationshipState: 'active',
+        startedAt: '2026-07-30T10:00:00Z',
+        cost: { totalUsd: 0, byPhase: {} },
+        integrationState: 'pending',
+        attention: [],
+        cleanupWarnings: [],
+      },
+    });
+    const child = featureSnapshot({
+      id: childId,
+      name: 'Slop removal pass',
+      status: 'Created',
+      setupComplete: true,
+      setup: { status: 'done', attempt: 1, tasks: [] },
+      actions: [
+        { id: 'start', enabled: true, disabledReasons: [] },
+        { id: 'discard', enabled: true, disabledReasons: [] },
+      ],
+    });
+    const mock = installAgenticoMock({ feature: parent });
+    mock.api.getFeature.mockImplementation((id: string) =>
+      Promise.resolve(id === childId ? child : parent),
+    );
+    renderCockpit(mock);
+
+    expect(await screen.findByRole('region', { name: 'Refactor pass' })).toBeVisible();
+    // The contradictory "choose what comes next" hero never renders next to a live pass.
+    expect(screen.queryByRole('region', { name: 'Feature aftercare' })).not.toBeInTheDocument();
+    expect(screen.queryByText(/Choose what comes next/)).not.toBeInTheDocument();
+    const status = screen.getByRole('status', { name: 'Current feature status' });
+    expect(status).toHaveTextContent('Refactoring');
+    expect(await screen.findByRole('button', { name: 'Start pass' })).toBeEnabled();
   });
 
   it('opens the completed transcript from Run record', async () => {

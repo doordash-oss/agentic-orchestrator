@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { featureSnapshot } from '../test/agenticoMock';
 import {
   actionById,
+  dashboardGroupId,
   dashboardState,
   displayFeatureMessage,
   displayModelName,
@@ -92,6 +93,42 @@ describe('intervention-first dashboard ordering', () => {
     expect(
       dashboardState(snapshot('ready', 'UnexpectedStatus', '2026-07-15T08:00:00Z', true)),
     ).toStrictEqual({ bucket: 'startable', label: 'Ready to start', tone: 'ready' });
+  });
+
+  it('surfaces an active refactor pass as Refactoring in the in-progress group', () => {
+    const child = {
+      id: 'child1234ef567890',
+      name: 'Slop removal pass',
+      kind: 'refactor',
+      displayToken: 'refactor:child1234ef567890',
+      displayState: 'Active — Created',
+      pipeline: 'large',
+      status: 'Created',
+      startedAt: '2026-07-30T10:00:00Z',
+      cost: { totalUsd: 0, byPhase: {} },
+      integrationState: 'pending',
+      attention: [],
+      cleanupWarnings: [],
+    };
+    const refactoring = featureSnapshot({ status: 'Published', activeChild: child });
+    expect(dashboardState(refactoring)).toStrictEqual({
+      bucket: 'active',
+      label: 'Refactoring',
+      tone: 'active',
+    });
+    expect(dashboardGroupId(refactoring)).toBe('in-progress');
+    expect(
+      dashboardState(
+        featureSnapshot({
+          status: 'Published',
+          activeChild: { ...child, integrationState: 'attention' },
+        }),
+      ),
+    ).toStrictEqual({
+      bucket: 'intervention',
+      label: 'Refactoring — needs attention',
+      tone: 'attention',
+    });
   });
 
   it('groups dashboard rows into in-progress, published, and done sections', () => {

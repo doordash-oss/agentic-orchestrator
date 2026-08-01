@@ -149,13 +149,21 @@ describe('postImplementationModel', () => {
     expect(
       cyclePresentation(
         featureSnapshot({
-          cycle: { type: 'refactor', status: 'need_user_input', phase: 'plan_refactor' },
+          cycle: { type: 'review-comments', status: 'need_user_input', phase: 'comments_ready' },
         }),
       ),
     ).toMatchObject({
       headline: 'Agent is waiting for your input',
       current: 'Waiting for input',
-      next: 'Implement & validate',
+      next: 'Address & validate',
     });
+  });
+
+  it('never presents a refactor as an in-feature cycle — it runs as a child pass', () => {
+    expect(
+      cyclePresentation(
+        featureSnapshot({ cycle: { type: 'refactor', status: 'running', phase: 'implement' } }),
+      ),
+    ).toBeNull();
   });
 });

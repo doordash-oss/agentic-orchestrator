@@ -944,7 +944,9 @@ function RunningCard({
       : needsYou
         ? 'Needs you'
         : bucket === 'active'
-          ? 'Live'
+          ? label === 'Active'
+            ? 'Live'
+            : label
           : label;
   const elapsed = formatElapsed(feature);
   return (

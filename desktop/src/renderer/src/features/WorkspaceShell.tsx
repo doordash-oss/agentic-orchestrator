@@ -1014,8 +1014,9 @@ function RunningCard({
 /**
  * The TUI's nested `↳ child` row, translated to the card: the active refactor
  * pass with its own live rail. The needle is derived from the pass's status;
- * statuses that don't name a phase (paused, waiting, failed) show no needle
- * rather than an approximate one.
+ * a Created pass shows the rail with no needle and every stop upcoming, and
+ * statuses that don't name a phase (paused, waiting, failed) show no rail
+ * rather than an approximate needle.
  */
 function PassLane({
   child,
@@ -1034,7 +1035,7 @@ function PassLane({
       <div className="run-card__pass-body">
         <p className="run-card__pass-line">
           <b>{child.name}</b>
-          <span>{displayStatusLabel(child.status)}</span>
+          <span>{child.status === 'Created' ? 'Not started' : displayStatusLabel(child.status)}</span>
         </p>
         {index === null ? null : (
           <FlightRail
@@ -1094,7 +1095,8 @@ function FlightRail({
 }) {
   const reducedMotion = usePrefersReducedMotion();
   const denom = Math.max(stages.length - 1, 1);
-  const fillPct = (Math.min(activeIndex, denom) / denom) * 100;
+  // activeIndex -1 = not started: zero fill, every stop upcoming, no needle.
+  const fillPct = (Math.min(Math.max(activeIndex, 0), denom) / denom) * 100;
   return (
     <div
       className="flight-rail"

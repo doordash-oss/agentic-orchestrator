@@ -179,6 +179,64 @@ describe('WorkspaceShell tabs', () => {
     expect(row).not.toHaveTextContent('elapsed');
   });
 
+  it('shows a created-but-unstarted pass as ready to start, not running', async () => {
+    const mock = installAgenticoMock({
+      features: [
+        {
+          id: FEATURE_ID,
+          name: 'Electron app',
+          status: 'Published',
+          currentPhase: 'Publish',
+          repos: ['repo-a'],
+          createdAt: '2026-07-14T10:00:00Z',
+          activeRun: 6,
+          runCount: 6,
+          warnings: [],
+        },
+      ],
+    });
+    mock.api.getFeature.mockResolvedValue(
+      featureSnapshot({
+        name: 'Electron app',
+        status: 'Published',
+        currentPhase: 'Publish',
+        actions: [],
+        activeChild: {
+          id: 'child1234ef567890',
+          name: 'Slop removal pass',
+          kind: 'refactor',
+          displayToken: 'refactor:child1234ef567890',
+          displayState: 'Created',
+          pipeline: 'large',
+          status: 'Created',
+          relationshipState: 'active',
+          startedAt: '2026-07-30T10:00:00Z',
+          cost: { totalUsd: 0, byPhase: {} },
+          integrationState: 'pending',
+          attention: [],
+          cleanupWarnings: [],
+        },
+      }),
+    );
+    render(<WorkspaceShell />);
+
+    const listRegion = await screen.findByRole('region', { name: 'Existing features' });
+    const row = await within(listRegion).findByRole('listitem');
+    // Quiet badge and plain wording — nothing on this card may read as live.
+    expect(row).toHaveTextContent('Pass ready to start');
+    expect(row).not.toHaveTextContent('Refactoring');
+    expect(row).toHaveAttribute('data-state', 'quiet');
+    expect(within(row).getByText('Not started')).toBeVisible();
+    // The pass rail renders with every stop upcoming: no needle, no fill.
+    const passRail = within(row).getByRole('group', {
+      name: 'Pass pipeline for Slop removal pass',
+    });
+    expect(passRail.querySelector('[aria-current="step"]')).toBeNull();
+    for (const stop of passRail.querySelectorAll('.flight-rail__stop')) {
+      expect(stop).toHaveAttribute('data-state', 'upcoming');
+    }
+  });
+
   it('groups Home features by lifecycle state', async () => {
     const inProgress = featureSnapshot({
       id: 'feature-in-progress',

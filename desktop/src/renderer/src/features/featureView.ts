@@ -72,9 +72,18 @@ export function dashboardState(snapshot: FeatureSnapshot): DashboardState {
   if (child !== undefined) {
     // A parent with an active refactor pass is in progress even though its
     // stored status stays Published/CodeReady (TUI: "Refactoring").
-    return child.attention.length > 0 || child.integrationState === 'attention'
-      ? { bucket: 'intervention', label: 'Refactoring — needs attention', tone: 'attention' }
-      : { bucket: 'active', label: 'Refactoring', tone: 'active' };
+    if (child.attention.length > 0 || child.integrationState === 'attention') {
+      return { bucket: 'intervention', label: 'Refactoring — needs attention', tone: 'attention' };
+    }
+    if (child.status === 'Failed') {
+      return { bucket: 'intervention', label: 'Refactoring — pass failed', tone: 'danger' };
+    }
+    // A pass launched without auto-start hasn't run anything yet; a live
+    // "Refactoring" badge would claim work that never began.
+    if (child.status === 'Created') {
+      return { bucket: 'startable', label: 'Pass ready to start', tone: 'ready' };
+    }
+    return { bucket: 'active', label: 'Refactoring', tone: 'active' };
   }
   if (snapshot.status === 'Failed') {
     return { bucket: 'intervention', label: 'Failed', tone: 'danger' };
@@ -246,16 +255,17 @@ const STATUS_PHASE_LABELS: Readonly<Record<string, string>> = {
 
 /**
  * Spine position for a relationship child known only by its status string
- * (the summary view carries no current phase). Returns null when the status
- * does not name a phase (paused, failed, waiting on input) — an approximate
- * needle there would lie.
+ * (the summary view carries no current phase). Returns -1 for a Created pass
+ * that hasn't started — the rail renders with every stop upcoming and no
+ * needle. Returns null when the status does not name a phase (paused, failed,
+ * waiting on input) — an approximate needle there would lie.
  */
 export function childStatusSpineIndex(
   status: string,
   stages: readonly SpineStage[],
 ): number | null {
   if (status === 'SettingUpWorktrees') return 0;
-  if (status === 'Created') return Math.min(1, stages.length - 1);
+  if (status === 'Created') return -1;
   const key = status.endsWith('NeedsReview') ? status.slice(0, -'NeedsReview'.length) : status;
   const label = STATUS_PHASE_LABELS[key];
   if (label === undefined) return null;

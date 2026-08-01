@@ -54,6 +54,10 @@ type DesignUserInput struct {
 	Attachments []string
 	Repos       []prompts.RepoView
 
+	// RefactorPassForkPoint names a refactor child's fork-point commits
+	// ("repo @ sha"). Empty for top-level features.
+	RefactorPassForkPoint string
+
 	MultiRepo            bool
 	ResearchArtifactPath string
 

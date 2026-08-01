@@ -120,6 +120,8 @@ type DesignUserInput struct {
 	Attachments []string
 	Repos       []RepoView
 
+	RefactorPassForkPoint string
+
 	MultiRepo            bool
 	ResearchArtifactPath string
 
@@ -131,6 +133,8 @@ type RoadmapUserInput struct {
 	Name        string
 	Description string
 	Repos       []RepoView
+
+	RefactorPassForkPoint string
 
 	DesignArtifactPath   string
 	ResearchArtifactPath string

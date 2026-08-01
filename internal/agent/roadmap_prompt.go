@@ -15,6 +15,7 @@
 package agent
 
 import (
+	"fmt"
 	"path/filepath"
 	"strings"
 
@@ -111,6 +112,24 @@ func BuildRoadmapPrompt(f *feature.Feature, skillsDir, guidelinesDir, designArti
 	return BuildRoadmapPromptWithResearch(f, skillsDir, guidelinesDir, designArtifactPath, "", qaFilePaths, kbInfos...)
 }
 
+// refactorPassForkPoint names a refactor child's fork-point commits, one
+// "repo @ sha" clause per repository. Empty for top-level features. Planning
+// and design receive it as spec-grounding context: intent language like
+// "current" or "as they are" refers to this state, and the produced artifact
+// must resolve such language into absolute end-state statements.
+func refactorPassForkPoint(f *feature.Feature) string {
+	if f == nil || !f.IsChild() {
+		return ""
+	}
+	var parts []string
+	for _, r := range f.Repos {
+		if sha := f.BaseSHA(r.Name); sha != "" {
+			parts = append(parts, fmt.Sprintf("%s @ %s", r.Name, sha))
+		}
+	}
+	return strings.Join(parts, ", ")
+}
+
 // BuildRoadmapPromptWithResearch constructs the initial roadmap prompt with
 // the approved design artifact plus the research artifact as grounding context.
 func BuildRoadmapPromptWithResearch(f *feature.Feature, skillsDir, guidelinesDir, designArtifactPath, researchArtifactPath string, qaFilePaths []string, kbInfos ...KBInfo) string {
@@ -119,11 +138,12 @@ func BuildRoadmapPromptWithResearch(f *feature.Feature, skillsDir, guidelinesDir
 	_ = kbInfos
 	repos := roadmapFeatureViews(f)
 	return roles.BuildRoadmapPrompt(roles.RoadmapUserInput{
-		Name:                 f.Name,
-		Description:          f.Description,
-		Repos:                repos,
-		DesignArtifactPath:   designArtifactPath,
-		ResearchArtifactPath: researchArtifactPath,
+		Name:                  f.Name,
+		Description:           f.Description,
+		Repos:                 repos,
+		RefactorPassForkPoint: refactorPassForkPoint(f),
+		DesignArtifactPath:    designArtifactPath,
+		ResearchArtifactPath:  researchArtifactPath,
 		VisualReferences: prompts.VisualReferencesInput{
 			Images: append([]string(nil), f.Images...),
 			Label:  "producing the roadmap",

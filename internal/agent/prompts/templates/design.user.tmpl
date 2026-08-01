@@ -9,7 +9,13 @@
 {{- define "design.user" -}}
 # Feature Context
 
-## Feature Request
+{{ if .RefactorPassForkPoint }}## Refactor Pass Context
+
+This feature is a refactor pass forked from its parent feature's delivered state at {{ .RefactorPassForkPoint }}. The workspace already reflects everything the parent delivered, and that state is what the feature description refers to: read relative language in it ("current", "existing", "as they are") against the fork point, not the repository base branch or any earlier state. The description decides the delta — it may change or undo anything the fork point contains.
+
+Because reviewers later judge the assembled result as a whole, the design you produce must resolve any such relative language into absolute statements of the intended end state (what each affected artifact must look like when this pass completes), so no downstream reader has to guess which baseline a phrase refers to. If the description is genuinely ambiguous about the intended end state, ask rather than guess.
+
+{{ end }}## Feature Request
 
 **Name**: {{ .Name }}
 

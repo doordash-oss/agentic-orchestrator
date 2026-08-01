@@ -121,6 +121,7 @@ func (o *Orchestrator) ScanRecovery(ctx context.Context) ([]ports.RecoveryItem, 
 	if err != nil {
 		return nil, fmt.Errorf("scan for recovery: %w", err)
 	}
+	items = o.dropSupervisedSessions(items)
 	o.emitEvent(ports.Event{
 		Type:    ports.RecoveryScanned,
 		Message: fmt.Sprintf("%d items", len(items)),
@@ -129,6 +130,32 @@ func (o *Orchestrator) ScanRecovery(ctx context.Context) ([]ports.RecoveryItem, 
 		o.hooks.OnRecoveryScanned(items)
 	}
 	return items, nil
+}
+
+// dropSupervisedSessions removes scan hits whose PID file belongs to a live
+// session this process still supervises. Those are healthy runs, not orphans;
+// offering resume/kill for them would terminate the run.
+func (o *Orchestrator) dropSupervisedSessions(items []ports.RecoveryItem) []ports.RecoveryItem {
+	if o.deps.Sessions == nil || len(items) == 0 {
+		return items
+	}
+	live := make(map[string]bool)
+	for _, view := range o.deps.Sessions.ActiveSessions() {
+		if view.IsActive() {
+			live[view.ID()] = true
+		}
+	}
+	if len(live) == 0 {
+		return items
+	}
+	kept := make([]ports.RecoveryItem, 0, len(items))
+	for _, item := range items {
+		if item.PIDFile.ManagerID != "" && live[item.PIDFile.ManagerID] {
+			continue
+		}
+		kept = append(kept, item)
+	}
+	return kept
 }
 
 func (o *Orchestrator) emitSetupReconciled(featureID string) {

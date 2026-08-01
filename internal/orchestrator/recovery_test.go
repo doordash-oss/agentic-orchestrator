@@ -219,6 +219,43 @@ func TestScanRecovery_PortError_PropagatesAndDoesNotEmit(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// T4b. ScanRecovery_DropsSessionsThisProcessStillSupervises
+// ---------------------------------------------------------------------------
+
+// A PID file whose manager id matches a live managed session belongs to a
+// healthy run this process is supervising, not an orphan. Offering resume or
+// kill for it would terminate the run, so the scan must drop it.
+func TestScanRecovery_DropsSessionsThisProcessStillSupervises(t *testing.T) {
+	items := fakeRecoveryItems(
+		itemSpec{FeatureID: "feat-a", CurrentPhase: feature.PhaseImplement, ProcessAlive: true},
+		itemSpec{FeatureID: "feat-b", CurrentPhase: feature.PhaseImplement},
+	)
+	items[0].PIDFile.ManagerID = "feat-a-implement"
+	fake := &fakeRecoveryOp{Items: items}
+	sessions := mocks.NewMockSessionManager()
+	sessions.ActiveSessionsFn = func() []session.SessionView {
+		return []session.SessionView{mocks.NewMockSessionView("feat-a-implement", "feat-a")}
+	}
+
+	o := orchestrator.New(orchestrator.Deps{Recovery: fake, Sessions: sessions}, orchestrator.Hooks{})
+
+	got, err := o.ScanRecovery(context.Background())
+	if err != nil {
+		t.Fatalf("ScanRecovery: %v", err)
+	}
+	if len(got) != 1 || got[0].PIDFile.FeatureID != "feat-b" {
+		t.Fatalf("items = %+v, want only feat-b", got)
+	}
+
+	events := drainEvents(o)
+	for _, ev := range events {
+		if ev.Type == ports.RecoveryScanned && ev.Message != "1 items" {
+			t.Errorf("Message = %q, want %q", ev.Message, "1 items")
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
 // T5. ExecuteRecovery_DispatchesThroughPort
 // ---------------------------------------------------------------------------
 

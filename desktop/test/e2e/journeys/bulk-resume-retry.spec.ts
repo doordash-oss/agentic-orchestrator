@@ -119,8 +119,16 @@ test('bulk resume/retry: fresh preview, sequential dispatch, cancellation, and s
 
     const cancelButton = progressSection.getByRole('button', { name: 'Cancel after current' });
     if (await cancelButton.isVisible({ timeout: 3_000 }).catch(() => false)) {
-      await cancelButton.click();
-      transcript.step('clicked Cancel after current — remaining rows should be marked not started');
+      // Best-effort: the queue may complete (detaching the button) mid-click.
+      const clicked = await cancelButton
+        .click({ timeout: 5_000 })
+        .then(() => true)
+        .catch(() => false);
+      transcript.step(
+        clicked
+          ? 'clicked Cancel after current — remaining rows should be marked not started'
+          : 'queue completed before the cancellation click could land',
+      );
     }
 
     await expect(progressSection.locator('.bulk-preview__progress-text')).toContainText(

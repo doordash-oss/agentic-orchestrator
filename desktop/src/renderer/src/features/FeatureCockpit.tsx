@@ -1848,7 +1848,10 @@ export function FeatureCockpit({
             <RefactorLauncher
               featureId={featureId}
               snapshot={snapshot}
-              onDispatched={() => load({ silent: true })}
+              onDispatched={(launch) => {
+                if (launch.autoStart) refactorPass.armAutoStart(launch.childId);
+                void load({ silent: true });
+              }}
               onCancel={() => setCycleModal(null)}
               attentionItems={attentionItems}
               onOpenGate={() => setCycleModal(null)}
@@ -2271,7 +2274,10 @@ export function FeatureCockpit({
               <RefactorLauncher
                 featureId={featureId}
                 snapshot={snapshot}
-                onDispatched={() => load({ silent: true })}
+                onDispatched={(launch) => {
+                  if (launch.autoStart) refactorPass.armAutoStart(launch.childId);
+                  void load({ silent: true });
+                }}
                 onCancel={() => setCycleModal(null)}
                 attentionItems={attentionItems}
                 onOpenGate={() => setCycleModal(null)}

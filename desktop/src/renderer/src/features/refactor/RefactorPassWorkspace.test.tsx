@@ -1,10 +1,14 @@
-import { cleanup, render, screen, within } from '@testing-library/react';
+import { act, cleanup, render, renderHook, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { FeatureSnapshot, RelationshipChildView } from '../../../../shared/ipc';
 import { featureSnapshot, installAgenticoMock } from '../../test/agenticoMock';
 import { emptyAttentionDrafts } from '../AttentionInbox';
-import { RefactorPassWorkspace, type RefactorPassController } from './RefactorPassWorkspace';
+import {
+  RefactorPassWorkspace,
+  useRefactorPass,
+  type RefactorPassController,
+} from './RefactorPassWorkspace';
 import { passActions } from './refactorPassModel';
 
 afterEach(cleanup);
@@ -89,6 +93,7 @@ function controllerFor(
     notice: null,
     discardOpen: false,
     dispatch: vi.fn(() => Promise.resolve()),
+    armAutoStart: vi.fn(),
     openDiscard: vi.fn(),
     closeDiscard: vi.fn(),
     discard: vi.fn(() => Promise.resolve()),
@@ -260,6 +265,45 @@ describe('RefactorPassWorkspace', () => {
     expect(within(parentCard).getByText(/changes apply to both/i)).toBeVisible();
     await user.click(within(parentCard).getByRole('button', { name: 'Edit paired review' }));
     expect(onEditPairedReview).toHaveBeenCalled();
+  });
+
+  it('dispatches an armed auto-start once the child becomes startable', async () => {
+    const mock = installAgenticoMock({ feature: readyChild() });
+    const { result } = renderHook(() => useRefactorPass(parentWith(), vi.fn()));
+
+    act(() => result.current.armAutoStart(CHILD_ID));
+    await waitFor(() =>
+      expect(mock.api.dispatchFeatureAction).toHaveBeenCalledWith({
+        featureId: CHILD_ID,
+        action: 'start',
+      }),
+    );
+    // Fires exactly once even though the snapshot reloads after the dispatch.
+    await waitFor(() => expect(result.current.busy).toBe(false));
+    expect(mock.api.dispatchFeatureAction).toHaveBeenCalledTimes(1);
+  });
+
+  it('holds an armed auto-start while the server still blocks start', async () => {
+    const mock = installAgenticoMock({
+      feature: readyChild({
+        status: 'SettingUpWorktrees',
+        setupComplete: false,
+        setup: { status: 'running', attempt: 1, tasks: [] },
+        actions: [
+          {
+            id: 'start',
+            enabled: false,
+            disabledReasons: [{ code: 'setup_incomplete', message: 'setup' }],
+          },
+          { id: 'discard', enabled: true, disabledReasons: [] },
+        ],
+      }),
+    });
+    const { result } = renderHook(() => useRefactorPass(parentWith(), vi.fn()));
+
+    act(() => result.current.armAutoStart(CHILD_ID));
+    await waitFor(() => expect(result.current.child).not.toBeNull());
+    expect(mock.api.dispatchFeatureAction).not.toHaveBeenCalled();
   });
 
   it('reports loading until the child snapshot arrives', () => {

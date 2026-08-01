@@ -82,8 +82,10 @@ describe('RefactorLauncher', () => {
     expect(screen.getByRole('checkbox', { name: /Manual publish/ })).toBeChecked();
     expect(screen.getByLabelText('Planning model')).toBeVisible();
 
-    await user.click(screen.getByRole('button', { name: 'Launch child' }));
+    expect(screen.getByRole('checkbox', { name: /Start immediately/ })).toBeChecked();
+    await user.click(screen.getByRole('button', { name: 'Launch and start' }));
     await waitFor(() => expect(onDispatched).toHaveBeenCalledOnce());
+    expect(onDispatched).toHaveBeenCalledWith({ childId: 'child1234ef567890', autoStart: true });
     expect(mock.api.launchRefactorChild).toHaveBeenCalledWith({
       parentId: PARENT_ID,
       name: 'Refactor Search revamp',
@@ -173,17 +175,34 @@ describe('RefactorLauncher', () => {
     await user.click(screen.getByRole('button', { name: 'Next: Pipeline' }));
     await user.click(screen.getByRole('button', { name: 'Next: Review' }));
     await user.selectOptions(screen.getByLabelText('Risk'), 'high');
-    await user.click(screen.getByRole('button', { name: 'Launch child' }));
+    await user.click(screen.getByRole('button', { name: 'Launch and start' }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent('1 staged, 2 untracked');
     expect(screen.getByText(/repo-a, repo-b \(inherited\)/)).toBeVisible();
 
-    await user.click(screen.getByRole('button', { name: 'Launch child' }));
+    await user.click(screen.getByRole('button', { name: 'Launch and start' }));
     await waitFor(() => expect(onDispatched).toHaveBeenCalledOnce());
     expect(mock.api.launchRefactorChild).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({ description: 'Extract the query engine', riskLevel: 'high' }),
     );
+  });
+
+  it('launches without auto-start when Start immediately is unchecked', async () => {
+    const { mock, onDispatched, user } = await renderLauncher();
+    mock.api.launchRefactorChild.mockResolvedValue({
+      childId: 'child1234ef567890',
+      parentId: PARENT_ID,
+      result: 'created',
+    });
+
+    await user.click(screen.getByRole('button', { name: 'Next: Pipeline' }));
+    await user.click(screen.getByRole('button', { name: 'Next: Review' }));
+    await user.click(screen.getByRole('checkbox', { name: /Start immediately/ }));
+
+    await user.click(screen.getByRole('button', { name: 'Launch child' }));
+    await waitFor(() => expect(onDispatched).toHaveBeenCalledOnce());
+    expect(onDispatched).toHaveBeenCalledWith({ childId: 'child1234ef567890', autoStart: false });
   });
 
   it('requires a child name before leaving the What step', async () => {

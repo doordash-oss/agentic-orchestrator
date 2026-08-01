@@ -45,7 +45,7 @@ export interface RefactorLauncherProps {
   featureId: string;
   snapshot: FeatureSnapshot;
   onCancel(): void;
-  onDispatched(): void;
+  onDispatched(launch: { childId: string; autoStart: boolean }): void;
   attentionItems?: AttentionItem[];
   onOpenGate?: (featureId: string) => void;
 }
@@ -85,6 +85,7 @@ export function RefactorLauncher({
   const [inquireness, setInquireness] = useState<'none' | 'medium' | 'high'>('medium');
   const [exitCriteria, setExitCriteria] = useState(snapshot.exitCriteria ?? '');
   const [pending, setPending] = useState(false);
+  const [autoStart, setAutoStart] = useState(true);
   const [nameError, setNameError] = useState<string | null>(null);
   const [formError, setFormError] = useState<WizardError | null>(null);
   const catalogue = useModelCatalogue();
@@ -158,7 +159,7 @@ export function RefactorLauncher({
     const gates = applicableGates(pipeline);
     void (async () => {
       try {
-        await window.agentico.launchRefactorChild({
+        const launched = await window.agentico.launchRefactorChild({
           parentId: featureId,
           name: name.trim(),
           ...(description.trim() === '' ? {} : { description }),
@@ -181,7 +182,7 @@ export function RefactorLauncher({
             draftPublish: checkpoints.draftPublish,
           },
         });
-        onDispatched();
+        onDispatched({ childId: launched.childId, autoStart });
         onCancel();
       } catch (err) {
         // Keep every field intact so dirty-parent remediation is a retry, not a restart.
@@ -450,6 +451,17 @@ export function RefactorLauncher({
               ))}
             </fieldset>
           </section>
+          <label className="config-editor__gate creation-autostart">
+            <input
+              type="checkbox"
+              checked={autoStart}
+              onChange={(event) => setAutoStart(event.target.checked)}
+            />
+            <span className="config-editor__gate-text">
+              <b>Start immediately</b>
+              <span>Begin the first phase as soon as the pass&apos;s worktrees are ready.</span>
+            </span>
+          </label>
           <dl className="creation-summary">
             <div>
               <dt>Where</dt>
@@ -505,7 +517,7 @@ export function RefactorLauncher({
             className="create-form__submit"
             disabled={pending}
           >
-            {pending ? 'Launching…' : 'Launch child'}
+            {pending ? 'Launching…' : autoStart ? 'Launch and start' : 'Launch child'}
           </button>
         )}
       </footer>

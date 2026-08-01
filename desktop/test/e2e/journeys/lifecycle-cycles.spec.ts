@@ -133,6 +133,11 @@ test('lifecycle cycles: resume, retry, restart, rebase, review-comments, refacto
       ).toBeVisible();
       await expect(refactorModal.getByLabel('Risk')).toBeVisible();
       await expect(refactorModal.getByRole('group', { name: 'Models' })).toBeVisible();
+      // Auto-start defaults on; the journey opts out so the child stays parked
+      // at Ready-to-start for the assertions below.
+      const autoStartToggle = refactorModal.getByRole('checkbox', { name: /Start immediately/ });
+      await expect(autoStartToggle).toBeChecked();
+      await autoStartToggle.uncheck();
       await refactorModal.getByRole('button', { name: 'Launch child' }).click();
       const pass = seededCockpit.getByRole('region', { name: 'Refactor pass' });
       await expect(pass).toBeVisible({ timeout: 30_000 });

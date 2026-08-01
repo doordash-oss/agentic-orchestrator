@@ -48,6 +48,8 @@ export interface RefactorPassController {
   notice: string | null;
   discardOpen: boolean;
   dispatch(action: PassAction['id']): Promise<void>;
+  /** Launch-time auto-start: dispatch start once this child becomes startable. */
+  armAutoStart(childId: string): void;
   openDiscard(): void;
   closeDiscard(): void;
   discard(): Promise<void>;
@@ -137,6 +139,25 @@ export function useRefactorPass(
     [busy, child, refreshBoth],
   );
 
+  // The server refuses start while child setup is queued or running, so a
+  // launch-time auto-start arms here and fires on the snapshot that first
+  // enables the verb (setup completion arrives through the event stream).
+  const autoStartChildIdRef = useRef<string | null>(null);
+  const armAutoStart = useCallback((id: string) => {
+    autoStartChildIdRef.current = id;
+  }, []);
+  useEffect(() => {
+    const armed = autoStartChildIdRef.current;
+    if (armed === null || busy || child === null || child.id !== armed) return;
+    if (child.closeOutcome !== undefined && child.closeOutcome !== '') {
+      autoStartChildIdRef.current = null;
+      return;
+    }
+    if (!child.actions.some((action) => action.id === 'start' && action.enabled)) return;
+    autoStartChildIdRef.current = null;
+    void dispatch('start');
+  }, [busy, child, dispatch]);
+
   const discard = useCallback(async () => {
     if (child === null || discardAction?.impactPreview === undefined || busy) return;
     setBusy(true);
@@ -163,6 +184,7 @@ export function useRefactorPass(
     notice,
     discardOpen,
     dispatch,
+    armAutoStart,
     openDiscard: useCallback(() => setDiscardOpen(true), []),
     closeDiscard: useCallback(() => setDiscardOpen(false), []),
     discard,

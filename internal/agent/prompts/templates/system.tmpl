@@ -36,13 +36,23 @@ The harness owns the durable completion receipt. Never create, edit, or delete `
 Before declaring completion, ensure every file you changed is inside the output roots. If you changed repository files outside the output roots, revert those changes and document the requirement in your artifact.
 {{ end }}
 
+{{- if .RetryOutcomeAllowed }}
+
 After the artifacts pass preflight, finish your final root response with exactly one of:
 
 `<agentico-outcome>{"status":"success"}</agentico-outcome>`
 
 `<agentico-outcome>{"status":"retry","summary":"brief handoff"}</agentico-outcome>`
 
-Use `retry` only when the role's artifact contract explicitly supports an incomplete iteration state. The tag is the root agent's intent, not the durable receipt: the harness validates artifacts and task liveness before it writes `phase_complete`. Ending a turn without exactly one valid outcome tag and without a formal AskUserQuestion is a protocol violation.
+Use `retry` only for an incomplete iteration recorded in your progress artifact. The tag is the root agent's intent, not the durable receipt: the harness validates artifacts and task liveness before it writes `phase_complete`. Ending a turn without exactly one valid outcome tag and without a formal AskUserQuestion is a protocol violation.
+{{- else }}
+
+After the artifacts pass preflight, finish your final root response with exactly one:
+
+`<agentico-outcome>{"status":"success"}</agentico-outcome>`
+
+`success` means your assignment completed — including when your findings request changes to the work you examined; record those findings in your role's artifacts (for reviewers, the feedback verdict). This role has no iteration state, so `retry` is not a valid outcome and the harness rejects it as a protocol violation. The tag is the root agent's intent, not the durable receipt: the harness validates artifacts and task liveness before it writes `phase_complete`. Ending a turn without exactly one valid outcome tag and without a formal AskUserQuestion is a protocol violation.
+{{- end }}
 {{ if .ArtifactPreflight }}
 
 ## Artifact Preflight

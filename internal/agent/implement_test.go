@@ -1004,6 +1004,40 @@ var errSendFailed = errors.New("stdin closed")
 
 var finishOrViolateNudgeCasePattern = "*" + strings.ReplaceAll(finishOrViolateNudgeFragment, " ", `\ `) + "*"
 
+func TestFormatCommitViolationNudge_CarriesReasonsAndRoleCorrectVerbs(t *testing.T) {
+	violations := []ProtocolViolation{{
+		Artifact: "agentico-outcome",
+		Reason:   "retry is only valid for a role with a structured iteration state",
+	}}
+
+	forbidden := formatCommitViolationNudge(violations, false)
+	if !strings.Contains(forbidden, "retry is only valid for a role with a structured iteration state") {
+		t.Errorf("nudge should carry the rejection reason, got: %s", forbidden)
+	}
+	if strings.Contains(forbidden, `"status":"retry"`) {
+		t.Errorf("nudge for a role without iteration state must not re-offer retry, got: %s", forbidden)
+	}
+	if !strings.Contains(forbidden, `"status":"success"`) {
+		t.Errorf("nudge should offer the success outcome, got: %s", forbidden)
+	}
+	if !strings.Contains(forbidden, "not a valid outcome for your role") {
+		t.Errorf("nudge should explain the role restriction, got: %s", forbidden)
+	}
+
+	allowed := formatCommitViolationNudge(violations, true)
+	if !strings.Contains(allowed, `"status":"retry"`) || !strings.Contains(allowed, `"status":"success"`) {
+		t.Errorf("nudge for an iterating role should offer both outcomes, got: %s", allowed)
+	}
+
+	// Shared fragment keeps the nudge detectors firing (see the finish-or-
+	// violate formatter test below).
+	for _, msg := range []string{forbidden, allowed} {
+		if !strings.Contains(msg, finishOrViolateNudgeFragment) {
+			t.Errorf("nudge should contain %q, got: %s", finishOrViolateNudgeFragment, msg)
+		}
+	}
+}
+
 func TestFormatFinishOrViolateNudge_MentionsMissingArtifacts(t *testing.T) {
 	msg := formatFinishOrViolateNudge([]string{"plan.md", "verification-report.yaml"})
 	if !strings.Contains(msg, "plan.md") || !strings.Contains(msg, "verification-report.yaml") {

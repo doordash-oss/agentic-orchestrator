@@ -413,6 +413,70 @@ func TestRunBoundedHelper_NudgeWritesContractArtifactsThenCompletes(t *testing.T
 	}
 }
 
+// TestRunBoundedHelper_CommitRejectionNudgesRoleCorrectVerbs pins the live
+// failure where a review validator emitted the retry outcome: the parsed
+// outcome classifies as a clean commit turn, so only the commit step can see
+// that retry is invalid for a role without iteration state. The helper must
+// correct the live session with the rejection reason — offering success only —
+// instead of failing the phase, and then complete on the corrected outcome.
+func TestRunBoundedHelper_CommitRejectionNudgesRoleCorrectVerbs(t *testing.T) {
+	phaseDir := t.TempDir()
+	sess := newBoundedNudgeSession(&llm.ResultMessage{Type: testResultMessageType, Subtype: testResultSuccessValue, StopReason: testStopReasonEndTurn})
+
+	sm := mocks.NewMockSessionManager()
+	sm.StartSessionFn = func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*session.SessionOpts) (ports.SessionHandle, error) {
+		return sess, nil
+	}
+	pr := &PhaseRunner{SessionManager: sm, StateDir: t.TempDir()}
+
+	resultCh := make(chan *BoundedHelperResult, 1)
+	go func() {
+		result, _ := pr.runBoundedHelperSession(context.Background(), boundedHelperRunConfig{
+			sessionID:     "helper-commit-rejection",
+			workDir:       t.TempDir(),
+			completionDir: phaseDir,
+			contractPhase: feature.PhaseReview,
+			contractRole:  RoleImplementationReviewQA,
+		})
+		resultCh <- result
+	}()
+
+	// The validator writes its verdict but closes with retry — invalid for a
+	// role without iteration state. Expect a reason-carrying correction that
+	// does not re-offer retry.
+	writeReviewFeedbackFile(t, filepath.Join(phaseDir, "review-feedback.md"), testutil.StructuredReviewFeedback("", "", agentStatusChangesRequested))
+	sess.setRootIntent(llm.CompletionIntent{Found: true, Status: llm.CompletionIntentRetry})
+	sess.statusC <- agentStatusSuccess
+
+	select {
+	case nudge := <-sess.nudges:
+		if !strings.Contains(nudge, "retry is only valid for a role with a structured iteration state") {
+			t.Fatalf("nudge missing the rejection reason: %s", nudge)
+		}
+		if strings.Contains(nudge, `"status":"retry"`) {
+			t.Fatalf("nudge re-offered the invalid retry outcome: %s", nudge)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected a commit-rejection nudge")
+	}
+
+	// The corrected turn keeps the verdict and completes with success.
+	sess.setRootIntent(validSuccessCompletionIntent())
+	sess.statusC <- agentStatusSuccess
+
+	select {
+	case result := <-resultCh:
+		if result.Status != BoundedHelperStatusCompleted {
+			t.Fatalf("Status = %q, want %q", result.Status, BoundedHelperStatusCompleted)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for bounded helper to finalize")
+	}
+	if _, err := ReadCompletionReceipt(phaseDir); os.IsNotExist(err) {
+		t.Fatal("expected a completion receipt after the corrected turn")
+	}
+}
+
 // TestRunBoundedHelper_DoneBranchDoesNotNudge proves the Done() arm never
 // nudges: a session that exits without a root outcome finalizes immediately as
 // a protocol violation.

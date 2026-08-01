@@ -572,6 +572,7 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 						return violations, err
 					},
 					MissingArtifacts:     []string{"progress.md"},
+					RetryOutcomeAllowed:  true,
 					EnableContextHandoff: true,
 					OnContextHandoff: func(snap contextSnapshot) {
 						cfg.Observer.ContextHandoffTriggered(
@@ -1640,14 +1641,46 @@ func decideFinishOrViolate(sess ports.SessionView, disposition llm.TurnDispositi
 	if disposition != llm.TurnProtocolViolation {
 		return false
 	}
+	return sendCompletionNudge(sess, nudges, formatFinishOrViolateNudge(missing))
+}
+
+// sendCompletionNudge delivers one completion-protocol correction to the live
+// session, bounded by the shared finish-or-violate budget.
+func sendCompletionNudge(sess ports.SessionView, nudges *int, message string) bool {
 	if *nudges >= maxFinishOrViolateNudges {
 		return false
 	}
 	*nudges++
-	if err := sess.SendUserMessage(formatFinishOrViolateNudge(missing)); err != nil {
+	if err := sess.SendUserMessage(message); err != nil {
 		return false
 	}
 	return true
+}
+
+// formatCommitViolationNudge builds the correction sent when a parsed root
+// outcome was rejected at commit time. Unlike the missing-outcome nudge it
+// carries the rejection reasons verbatim and offers only the outcome verbs the
+// role may actually use — re-offering "retry" to a role without iteration
+// state would invite the same violation again.
+func formatCommitViolationNudge(violations []ProtocolViolation, retryAllowed bool) string {
+	var reasons strings.Builder
+	for _, violation := range violations {
+		artifact := strings.TrimSpace(violation.Artifact)
+		if artifact == "" {
+			artifact = "agentico-outcome"
+		}
+		fmt.Fprintf(&reasons, "- %s: %s\n", artifact, violation.Reason)
+	}
+	verbs := `<agentico-outcome>{"status":"success"}</agentico-outcome> or <agentico-outcome>{"status":"retry"}</agentico-outcome>`
+	roleNote := ""
+	if !retryAllowed {
+		verbs = `<agentico-outcome>{"status":"success"}</agentico-outcome>`
+		roleNote = ` "retry" is not a valid outcome for your role: record requested changes or findings in your role's artifacts (for reviewers, the feedback verdict), then emit success to complete your assignment.`
+	}
+	return fmt.Sprintf(`Your completion outcome was rejected:
+%s
+Fix only what is listed, rerun the artifact preflight, then emit exactly one %s tag.%s Do not start new work, %s, and use AskUserQuestion only if the task is genuinely blocked on the user.`,
+		strings.TrimRight(reasons.String(), "\n"), verbs, roleNote, finishOrViolateNudgeFragment)
 }
 
 const (
@@ -1711,6 +1744,10 @@ type PhaseOutcomeWaitOptions struct {
 	// writes the harness-owned completion receipt. A nil callback is a
 	// protocol error for a completed autonomous turn.
 	CommitOutcome func(llm.CompletionIntent) ([]ProtocolViolation, error)
+	// RetryOutcomeAllowed mirrors the role's iteration-state capability so a
+	// commit-rejection nudge offers only the outcome verbs the role may use.
+	// Leave false for every role without a progress artifact.
+	RetryOutcomeAllowed bool
 	// EnableContextHandoff arms the context-utilization wind-down nudge.
 	// The handoff message references the implement progress.md schema, so
 	// only Implementation-phase sessions should set this true. Plan,
@@ -1932,7 +1969,9 @@ func WaitForPhaseOutcome(sess ports.SessionView, opts PhaseOutcomeWaitOptions) P
 				_ = sess.Stop()
 				return PhaseOutcomeWaitResult{Status: agentStatusSuccess, Handoff: handoff}, true
 			}
-			if !sessionDone && decideFinishOrViolate(sess, llm.TurnProtocolViolation, &finishOrViolateNudges, protocolViolationArtifacts(violations)) {
+			if !sessionDone &&
+				sendCompletionNudge(sess, &finishOrViolateNudges,
+					formatCommitViolationNudge(violations, opts.RetryOutcomeAllowed)) {
 				return PhaseOutcomeWaitResult{}, false
 			}
 			_ = sess.Stop()

@@ -23,6 +23,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/doordash-oss/agentic-orchestrator/internal/agent/roles"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/observe"
@@ -285,7 +286,17 @@ func (pr *PhaseRunner) runBoundedHelperSessionOnce(ctx context.Context, cfg boun
 
 	// Counts semantic-completion nudges for this invocation.
 	finishOrViolateNudges := 0
+	// Commit violations already delivered as a correction nudge. A nudge
+	// clears the session's parsed intent, so if the process dies before it
+	// can answer, the final report must restore these instead of degrading
+	// to a generic missing-outcome violation.
+	var pendingCommitViolations []ProtocolViolation
 	finish := func(result *BoundedHelperResult, err error) (*BoundedHelperResult, error, bool) {
+		if err != nil && len(pendingCommitViolations) > 0 &&
+			isMissingOutcomeViolationError(err) {
+			result.Status = BoundedHelperStatusProtocolViolation
+			err = newProtocolViolationError(cfg.contractRole, cfg.completionDir, pendingCommitViolations)
+		}
 		retryable := err != nil &&
 			result != nil &&
 			result.Status == BoundedHelperStatusFailed &&
@@ -368,6 +379,18 @@ func (pr *PhaseRunner) runBoundedHelperSessionOnce(ctx context.Context, cfg boun
 				}
 			}
 			result, err := finalizeBoundedHelperResult(cfg.responsePath, sess, label, cfg.requireOutput, cfg.completionDir, cfg.contractPhase, cfg.contractRole)
+			// A parsed outcome the contract rejected (wrong verb for the role,
+			// artifact mismatch) still has a live session to correct: tell it
+			// exactly why the commit was refused instead of failing the phase.
+			if err != nil && isProtocolViolationError(err) &&
+				(disposition == llm.TurnCommitSuccess || disposition == llm.TurnCommitRetry) {
+				violations := protocolViolationsFromError(err)
+				if sendCompletionNudge(sess, &finishOrViolateNudges,
+					formatCommitViolationNudge(violations, boundedHelperRetryAllowed(cfg))) {
+					pendingCommitViolations = violations
+					continue
+				}
+			}
 			return finish(result, err)
 
 		case <-sess.Done():
@@ -377,6 +400,31 @@ func (pr *PhaseRunner) runBoundedHelperSessionOnce(ctx context.Context, cfg boun
 			return finish(result, err)
 		}
 	}
+}
+
+// boundedHelperMissingOutcomeReason is the generic no-outcome violation. It
+// also marks the state a correction nudge leaves behind when the session dies
+// before answering: the parsed intent was cleared by the nudge itself.
+const boundedHelperMissingOutcomeReason = "root helper ended without exactly one valid semantic completion outcome"
+
+// isMissingOutcomeViolationError reports whether err is exactly the generic
+// missing-outcome protocol violation (and carries no more specific finding).
+func isMissingOutcomeViolationError(err error) bool {
+	violations := protocolViolationsFromError(err)
+	return len(violations) == 1 && violations[0].Reason == boundedHelperMissingOutcomeReason
+}
+
+// boundedHelperRetryAllowed reports whether the helper's contract role owns a
+// structured iteration state and may therefore emit the retry outcome.
+func boundedHelperRetryAllowed(cfg boundedHelperRunConfig) bool {
+	if cfg.contractRole == "" {
+		return false
+	}
+	spec, ok := lookupRoleSpec(cfg.contractPhase, cfg.contractRole)
+	if !ok {
+		return false
+	}
+	return roles.RoleSpec(spec).SupportsRetryOutcome()
 }
 
 // isRetryableProviderNetworkFailure recognizes transient provider transport
@@ -494,7 +542,7 @@ func finalizeBoundedHelperResult(responsePath string, sess ports.SessionHandle, 
 		result.Status = BoundedHelperStatusProtocolViolation
 		return result, newProtocolViolationError(contractRole, completionDir, []ProtocolViolation{{
 			Artifact: "agentico-outcome",
-			Reason:   "root helper ended without exactly one valid semantic completion outcome",
+			Reason:   boundedHelperMissingOutcomeReason,
 		}})
 	case llm.TurnAwaitingTasks:
 		result.Status = BoundedHelperStatusProtocolViolation

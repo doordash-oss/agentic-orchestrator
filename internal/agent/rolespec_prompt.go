@@ -19,6 +19,7 @@ import (
 	"path/filepath"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent/prompts"
+	"github.com/doordash-oss/agentic-orchestrator/internal/agent/roles"
 )
 
 // BuildImplementSystemPromptInput carries runtime values for the
@@ -117,6 +118,7 @@ func BuildRoleSystemPrompt(in BuildRoleSystemPromptInput) string {
 		Preflight:            buildPreflightInput(spec.Phase, in.SkillsDir, in.KBInfos, in.GuidelinesDir, in.RequiredSkillNames...),
 		ReadOnlyOutsideRoots: spec.ReadOnlyOutsideRoots,
 		SubagentsAvailable:   !in.SuppressSubagents,
+		RetryOutcomeAllowed:  roles.RoleSpec(spec).SupportsRetryOutcome(),
 		AskingClause:         askingClause,
 	})
 }

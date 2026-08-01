@@ -102,6 +102,19 @@ type RoleSpec struct {
 	ReadOnlyOutsideRoots bool
 }
 
+// SupportsRetryOutcome reports whether this role's artifact contract carries
+// a structured iteration state (a progress artifact). Only such roles may end
+// a turn with the "retry" completion outcome; every other role must complete
+// with "success" and record any findings in its artifacts.
+func (s RoleSpec) SupportsRetryOutcome() bool {
+	for _, artifact := range s.Artifacts {
+		if artifact.Validate == ValidatorProgress {
+			return true
+		}
+	}
+	return false
+}
+
 // CloneRoleSpec returns a copy that callers can inspect without mutating the
 // package-level manifest.
 func CloneRoleSpec(spec RoleSpec) RoleSpec {

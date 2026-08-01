@@ -216,6 +216,48 @@ func TestRoleSystemPromptIncludesArtifactPreflightCommand(t *testing.T) {
 	}
 }
 
+// TestRoleSystemPromptAdvertisesOnlyValidOutcomeVerbs pins the root cause of
+// a live failure: a final-review validator was shown the retry outcome by the
+// shared completion clause, emitted it, and the harness rejected it at commit
+// time. Only roles whose contract carries iteration state may see retry.
+func TestRoleSystemPromptAdvertisesOnlyValidOutcomeVerbs(t *testing.T) {
+	implementPrompt := BuildRoleSystemPrompt(BuildRoleSystemPromptInput{
+		Spec:         ImplementRoleSpec(),
+		IterationDir: "/state/feat-x/run-001/phase-01/implement/iteration-02",
+		SkillsDir:    "/skills",
+	})
+	if !strings.Contains(implementPrompt, `"status":"retry"`) {
+		t.Fatalf("implement prompt lost the retry outcome:\n%s", implementPrompt)
+	}
+
+	qaSpec, ok := lookupRoleSpec(feature.PhaseReview, RoleImplementationReviewQA)
+	if !ok {
+		t.Fatal("missing RoleSpec for the QA review axis")
+	}
+	for _, spec := range []RoleSpec{
+		qaSpec,
+		FinalReviewFixerRoleSpec(),
+	} {
+		got := BuildRoleSystemPrompt(BuildRoleSystemPromptInput{
+			Spec:         spec,
+			IterationDir: "/state/feat-x/runs/run-001/review/iteration-03",
+			SkillsDir:    "/skills",
+		})
+		if strings.Contains(got, `"status":"retry"`) {
+			t.Fatalf("%s prompt still advertises the retry outcome:\n%s", spec.Role, got)
+		}
+		for _, want := range []string{
+			`"status":"success"`,
+			"`retry` is not a valid outcome",
+			"including when your findings request changes",
+		} {
+			if !strings.Contains(got, want) {
+				t.Fatalf("%s prompt missing %q in:\n%s", spec.Role, want, got)
+			}
+		}
+	}
+}
+
 func TestPlanningRoleSpecsDeriveContractPaths(t *testing.T) {
 	base := t.TempDir()
 	roadmapAttemptDir := filepath.Join(base, "roadmap", "attempt-02")

@@ -45,7 +45,7 @@ import (
 // finalStatusReviewPassed is the FinalStatus value shared by every loop
 // result type in this package (FeatureFinalReviewResult, LoopResult,
 // PhaseImplementLoopResult, RebaseLoopResult, ReviewCommentsLoopResult,
-// RefactorFeatureLoopResult, ...) to signal that review approved the work.
+// ...) to signal that review approved the work.
 const finalStatusReviewPassed = "review_passed"
 
 // finalReviewEffortLevel returns the effort level to pass to BuildSessionOpts:

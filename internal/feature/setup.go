@@ -37,20 +37,24 @@ const (
 )
 
 type SetupTask struct {
-	Key              string        `yaml:"key"`
-	Kind             SetupTaskKind `yaml:"kind"`
-	Label            string        `yaml:"label"`
-	Repo             string        `yaml:"repo,omitempty"`
-	Status           SetupStatus   `yaml:"status"`
-	Path             string        `yaml:"path,omitempty"`
-	SourcePath       string        `yaml:"source_path,omitempty"`
-	Branch           string        `yaml:"branch,omitempty"`
-	StartPoint       string        `yaml:"start_point,omitempty"`
-	UseCurrentBranch bool          `yaml:"use_current_branch,omitempty"`
-	Attempt          int           `yaml:"attempt,omitempty"`
-	StartedAt        *time.Time    `yaml:"started_at,omitempty"`
-	EndedAt          *time.Time    `yaml:"ended_at,omitempty"`
-	LastError        string        `yaml:"last_error,omitempty"`
+	Key        string        `yaml:"key"`
+	Kind       SetupTaskKind `yaml:"kind"`
+	Label      string        `yaml:"label"`
+	Repo       string        `yaml:"repo,omitempty"`
+	Status     SetupStatus   `yaml:"status"`
+	Path       string        `yaml:"path,omitempty"`
+	SourcePath string        `yaml:"source_path,omitempty"`
+	Branch     string        `yaml:"branch,omitempty"`
+	StartPoint string        `yaml:"start_point,omitempty"`
+	// ExactSHA records the full commit the worktree must sit at when the
+	// task captures an immutable launch tip (refactor children). Reuse on
+	// retry fails safely when the existing worktree HEAD differs.
+	ExactSHA         string     `yaml:"exact_sha,omitempty"`
+	UseCurrentBranch bool       `yaml:"use_current_branch,omitempty"`
+	Attempt          int        `yaml:"attempt,omitempty"`
+	StartedAt        *time.Time `yaml:"started_at,omitempty"`
+	EndedAt          *time.Time `yaml:"ended_at,omitempty"`
+	LastError        string     `yaml:"last_error,omitempty"`
 }
 
 type SetupState struct {
@@ -67,6 +71,11 @@ type SetupState struct {
 type SetupInitOptions struct {
 	UseCurrentBranch        bool
 	UseCurrentBranchPerRepo map[string]bool
+	// ExactStartPointPerRepo pins a repo's worktree task to an immutable full
+	// commit SHA (keyed by repo name). Used by refactor children so the child
+	// worktree is created at the exact captured parent tip even when base or
+	// parent branches later move.
+	ExactStartPointPerRepo map[string]string
 }
 
 func NewActiveSetupState(repos []FeatureRepo, images, attachments []string, now time.Time, opts ...SetupInitOptions) *SetupState {
@@ -85,6 +94,11 @@ func NewActiveSetupState(repos []FeatureRepo, images, attachments []string, now 
 		if useCurrent {
 			startPoint = ""
 		}
+		exactSHA := opt.ExactStartPointPerRepo[repo.Name]
+		if exactSHA != "" {
+			startPoint = exactSHA
+			useCurrent = false
+		}
 		key := "worktree:" + repo.Name
 		tasks[key] = SetupTask{
 			Key:              key,
@@ -94,6 +108,7 @@ func NewActiveSetupState(repos []FeatureRepo, images, attachments []string, now 
 			Status:           SetupStatusQueued,
 			Branch:           repo.Branch,
 			StartPoint:       startPoint,
+			ExactSHA:         exactSHA,
 			UseCurrentBranch: useCurrent,
 			Attempt:          1,
 		}

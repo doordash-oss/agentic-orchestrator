@@ -24,7 +24,7 @@
 //     feature-level FR session — one Claude session reads the cumulative
 //     diff across every Feature.Repos worktree.
 //
-// Cycle paths (rebase / review-comments / refactor) still consult
+// Cycle paths (rebase / review-comments) still consult
 // some of this package's helpers. They will migrate to their own unified
 // loop functions in slices 4-7.
 package agent
@@ -331,14 +331,14 @@ func findRepo(f *feature.Feature, name string) *feature.FeatureRepo {
 // resolveImplementArtifactDirForRepo returns the per-iteration Implement
 // artifact directory for a feature/repo within the active run. The
 // `<repoName>` segment is preserved so the per-repo cycle paths
-// (rebase / refactor / review-comments) keep their existing layout until
+// (rebase / review-comments) keep their existing layout until
 // slices 4-7 migrate them. The unified phase-implement loop emits artifacts
 // at the phase level (no per-repo subdir) via resolvePhaseArtifactDir.
 func resolveImplementArtifactDirForRepo(f *feature.Feature, runDir, repoName string) string {
 	if cyclePrefix := f.CyclePrefix(); cyclePrefix != "" {
 		return filepath.Join(runDir, cyclePrefix, "implement", repoName)
 	}
-	base := filepath.Join(runDir, f.RefactorPrefix())
+	base := runDir
 	if f.CurrentRoadmapPhase > 0 {
 		return filepath.Join(base, fmt.Sprintf("phase-%02d", f.CurrentRoadmapPhase), "implement", repoName)
 	}

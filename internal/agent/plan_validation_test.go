@@ -3288,29 +3288,3 @@ func TestAxisStallState_ChangedSectionResetsCount(t *testing.T) {
 		t.Error("changed section should have reset the structural counter to 1")
 	}
 }
-
-// TestRefactorLoopPropagatesPriorPhasePlanPaths covers fix #2c end-to-end by
-// running RunRefactorLoop with a two-phase roadmap and a planner stub that
-// captures the PhasePlanLoopConfig it received for each phase. We expect the
-// second phase's config to carry the first phase's approved plan path in
-// PriorPhasePlanPaths, so the grounding critic gets prior-phase context.
-//
-// This test lives here (not refactor_test.go) because it exercises the
-// PhasePlanLoopConfig plumbing owned by this file.
-func TestRefactorLoopPropagatesPriorPhasePlanPaths(t *testing.T) {
-	// Sanity: the refactor.go edit must populate PriorPhasePlanPaths from the
-	// accumulator. We assert the smaller invariant: build a two-element slice
-	// the way RunRefactorLoop does, and confirm it matches what
-	// runPhasePlanMultiValidatorValidation forwards.
-	cfg := PhasePlanLoopConfig{
-		PlanLoopConfig: PlanLoopConfig{
-			Feature: &feature.Feature{Name: "f",
-				SchemaVersion: feature.SchemaVersionCurrent},
-		},
-		PriorPhasePlanPaths: []string{"/phase-01/plan.md"},
-	}
-	extras := planValidationExtras{PriorPhasePlanPaths: cfg.PriorPhasePlanPaths}
-	if !reflect.DeepEqual(extras.PriorPhasePlanPaths, cfg.PriorPhasePlanPaths) {
-		t.Errorf("runPhasePlanMultiValidatorValidation must forward PriorPhasePlanPaths into extras; got %v", extras.PriorPhasePlanPaths)
-	}
-}

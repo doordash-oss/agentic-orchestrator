@@ -25,6 +25,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"gopkg.in/yaml.v3"
 )
 
@@ -61,6 +62,7 @@ type openAPIOperation struct {
 	OperationID string                     `yaml:"operationId"`
 	Security    []map[string][]string      `yaml:"security"`
 	Parameters  []openAPIParameter         `yaml:"parameters"`
+	RequestBody map[string]any             `yaml:"requestBody"`
 	Responses   map[string]openAPIResponse `yaml:"responses"`
 }
 
@@ -164,6 +166,113 @@ func TestOpenAPIDeclaresHardeningSchemas(t *testing.T) {
 		t, spec, "NeedUserInputVerificationBlocker",
 		"item_id", "name", "repo_name", "command", "reason", "capabilities", "remediation",
 	)
+}
+
+// TestRefactorRequestSchemaOmitsRepoSelection pins the refactor contract:
+// repository and base-branch selection are inherited from the parent and must
+// never re-enter the refactor request schema.
+func TestRefactorRequestSchemaOmitsRepoSelection(t *testing.T) {
+	spec := loadOpenAPISpec(t)
+	schema, ok := spec.Components.Schemas["RefactorFeatureRequest"]
+	if !ok {
+		t.Fatal("components.schemas.RefactorFeatureRequest missing")
+	}
+	props := schemaProperties(schema)
+	for _, required := range []string{"name", "description", "images", "attachments", "pipeline", "checkpoints", "effort", "models", "risk_level", "exit_criteria", "inquireness"} {
+		if !props[required] {
+			t.Fatalf("RefactorFeatureRequest missing property %s", required)
+		}
+	}
+	for _, forbidden := range []string{"repos", "repo", "branches", "branch", "base_branch", "use_current_branch", "use_current_branch_per_repo"} {
+		if props[forbidden] {
+			t.Fatalf("RefactorFeatureRequest must not accept repository/branch selection; found %q", forbidden)
+		}
+	}
+}
+
+// apiPathRefactorAction is the served URL of the refactor launch action.
+const apiPathRefactorAction = "/api/v1/features/{feature_id}/actions/refactor"
+
+// TestRefactorOperationBindsTypedSchemas pins the statically documented
+// refactor operation: the request body must reference RefactorFeatureRequest
+// (so oapi-codegen emits the typed Go binding) and the success/typed error
+// responses must be declared.
+func TestRefactorOperationBindsTypedSchemas(t *testing.T) {
+	spec := loadOpenAPISpec(t)
+	op := lookupOpenAPIOperation(t, spec, http.MethodPost, apiPathRefactorAction)
+	if op.OperationID != "refactorFeature" {
+		t.Fatalf("operationId = %q, want refactorFeature", op.OperationID)
+	}
+	schemaRef := nestedYAMLRef(t, op.RequestBody, "content", "application/json", "schema")
+	if schemaRef != "#/components/schemas/RefactorFeatureRequest" {
+		t.Fatalf("refactorFeature requestBody schema = %q, want RefactorFeatureRequest", schemaRef)
+	}
+	resp201 := declaredOpenAPIResponse(t, op, "201")
+	respSchemaRef := nestedYAMLRef(t, responseContentMap(t, resp201), "schema")
+	if respSchemaRef != "#/components/schemas/RefactorFeatureResponse" {
+		t.Fatalf("refactorFeature 201 schema = %q, want RefactorFeatureResponse", respSchemaRef)
+	}
+	declaredOpenAPIResponse(t, op, "404")
+	declaredOpenAPIResponse(t, op, "409")
+}
+
+// TestGeneratedRefactorSurfaceIsTyped pins the generated Go surface: the
+// generated RefactorFeatureRequest carries every contracted field (compile
+// time), the generated action enum includes refactor, and no hand-maintained
+// duplicate redefines the type.
+func TestGeneratedRefactorSurfaceIsTyped(t *testing.T) {
+	if RunFeatureActionParamsActionRefactor != RunFeatureActionParamsAction(actionRefactor) || !RunFeatureActionParamsActionRefactor.Valid() {
+		t.Fatalf("generated action enum must include %q", actionRefactor)
+	}
+	req := RefactorFeatureRequest{
+		Name:         "Rework auth",
+		Description:  "desc",
+		Images:       []string{"img"},
+		Attachments:  []string{"att"},
+		ExitCriteria: "done",
+		Inquireness:  feature.InquirenessMedium,
+	}
+	body, err := json.Marshal(req)
+	if err != nil {
+		t.Fatalf("marshal generated RefactorFeatureRequest: %v", err)
+	}
+	var roundTrip RefactorFeatureRequest
+	if err := json.Unmarshal(body, &roundTrip); err != nil {
+		t.Fatalf("unmarshal generated RefactorFeatureRequest: %v", err)
+	}
+	if roundTrip.Name != req.Name || roundTrip.Description != req.Description || roundTrip.Inquireness != req.Inquireness {
+		t.Fatalf("round trip mismatch: %+v vs %+v", roundTrip, req)
+	}
+}
+
+func nestedYAMLRef(t *testing.T, node map[string]any, keys ...string) string {
+	t.Helper()
+	current := any(node)
+	for _, key := range keys {
+		m, ok := current.(map[string]any)
+		if !ok {
+			t.Fatalf("missing intermediate key %q on the way to schema $ref", key)
+		}
+		current, ok = m[key]
+		if !ok {
+			t.Fatalf("missing key %q on the way to schema $ref", key)
+		}
+	}
+	m, ok := current.(map[string]any)
+	if !ok {
+		t.Fatal("schema node is not an object")
+	}
+	ref, _ := m["$ref"].(string)
+	return ref
+}
+
+func responseContentMap(t *testing.T, resp openAPIResponse) map[string]any {
+	t.Helper()
+	content, ok := resp.Content["application/json"].(map[string]any)
+	if !ok {
+		t.Fatalf("response %q missing application/json content", resp.Description)
+	}
+	return content
 }
 
 func TestOpenAPIRepresentativeResponsesAreDeclared(t *testing.T) {
@@ -345,6 +454,7 @@ func documentedServerRoutes() []documentedRoute {
 		{method: "put", path: "/api/v1/features/{feature_id}/reviews/{review_id}/draft", mutation: true},
 		{method: httpMethodPost, path: "/api/v1/features/{feature_id}/reviews/{review_id}/decision", mutation: true},
 		{method: httpMethodPost, path: "/api/v1/features/{feature_id}/actions/{action}", mutation: true},
+		{method: httpMethodPost, path: "/api/v1/features/{feature_id}/actions/refactor", mutation: true},
 		{method: httpMethodPost, path: "/api/v1/features/{feature_id}/actions/{action}/{subaction}", mutation: true},
 		{method: httpMethodGet, path: "/api/v1/features/{feature_id}/rewind/preview"},
 		{method: httpMethodGet, path: "/api/v1/features/{feature_id}/rebase/preflight"},

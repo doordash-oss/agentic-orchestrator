@@ -36,8 +36,6 @@ type preflightMutationTarget struct {
 	refactorReq            RefactorPreflightRequest
 	startRebaseCalls       []RebaseActionRequest
 	startRebaseErr         error
-	startRefactorCalls     []RefactorActionRequest
-	startRefactorErr       error
 	completionPreflight    CompletionPreflightResponse
 	completionPreflightErr error
 	completionPreflightID  string
@@ -79,13 +77,6 @@ func (t *preflightMutationTarget) StartRebase(featureID string, req RebaseAction
 	return RebaseStartResponse{FeatureID: featureID, CycleType: "rebase", Result: "started"}, nil
 }
 
-func (t *preflightMutationTarget) StartRefactor(featureID string, req RefactorActionRequest) (RefactorStartResponse, error) {
-	t.startRefactorCalls = append(t.startRefactorCalls, req)
-	if t.startRefactorErr != nil {
-		return RefactorStartResponse{FeatureID: featureID, CycleType: "refactor", Result: "failed"}, t.startRefactorErr
-	}
-	return RefactorStartResponse{FeatureID: featureID, CycleType: "refactor", Result: "started"}, nil
-}
 
 func authedGet(handler http.Handler, path string) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(http.MethodGet, path, nil)
@@ -244,23 +235,3 @@ func TestRebaseStartRejectsStalePreflight(t *testing.T) {
 	}
 }
 
-func TestRefactorStartPassesThroughSourceRevision(t *testing.T) {
-	t.Parallel()
-	target := &preflightMutationTarget{}
-	handler := NewHandler(HandlerOptions{
-		Mutations:             target,
-		AuthToken:             testAuthToken,
-		DisableHostValidation: true,
-	})
-	w := postTrustedAuthedJSON(handler, "/api/v1/features/"+fixtureFeatureID+"/actions/refactor", map[string]any{
-		"prompt":          "rename foo to bar",
-		"repo":            "repo-a",
-		"source_revision": "rev-xyz",
-	})
-	if w.Code != http.StatusOK {
-		t.Fatalf("status = %d body=%s; want 200", w.Code, w.Body.String())
-	}
-	if len(target.startRefactorCalls) != 1 || target.startRefactorCalls[0].SourceRevision != "rev-xyz" {
-		t.Fatalf("start calls = %+v; want one carrying source_revision rev-xyz", target.startRefactorCalls)
-	}
-}

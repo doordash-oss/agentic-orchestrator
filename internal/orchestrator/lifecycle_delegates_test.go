@@ -211,12 +211,8 @@ func TestOrchestrator_ExtendFailedPhaseBudget_NotFailedIsNoOp(t *testing.T) {
 func TestOrchestrator_CollectAndClearRepoCycleRestarts_ReadsPlansAndClears(t *testing.T) {
 	tmp := t.TempDir()
 	reviewPath := filepath.Join(tmp, "review-plan.md")
-	refactorPath := filepath.Join(tmp, "refactor-plan.md")
 	if err := os.WriteFile(reviewPath, []byte("review content"), 0o644); err != nil {
 		t.Fatalf("write review plan: %v", err)
-	}
-	if err := os.WriteFile(refactorPath, []byte("# Refactor: repo-b\n\nmove packages around"), 0o644); err != nil {
-		t.Fatalf("write refactor plan: %v", err)
 	}
 
 	f := &feature.Feature{
@@ -224,7 +220,6 @@ func TestOrchestrator_CollectAndClearRepoCycleRestarts_ReadsPlansAndClears(t *te
 		Status: feature.StatusPublished,
 		RepoCycles: map[string]*feature.RepoCycleState{
 			repoName: {Type: feature.CycleReviewComments, PlanPath: reviewPath},
-			"repo-b": {Type: feature.CycleRefactor, PlanPath: refactorPath},
 		},
 	}
 	lc := lifecycleForFeature(f)
@@ -235,64 +230,19 @@ func TestOrchestrator_CollectAndClearRepoCycleRestarts_ReadsPlansAndClears(t *te
 		Store:     fs,
 	}, orchestrator.Hooks{})
 
-	restarts, refactor, err := o.CollectAndClearRepoCycleRestarts("feat-1")
+	restarts, err := o.CollectAndClearRepoCycleRestarts("feat-1")
 	if err != nil {
 		t.Fatalf("CollectAndClearRepoCycleRestarts: %v", err)
 	}
 	assertLifecycleCall(t, lc, "ClearRepoCycles")
 	if len(restarts) != 1 {
-		t.Fatalf("expected 1 non-refactor restart, got %d", len(restarts))
+		t.Fatalf("expected 1 restart, got %d", len(restarts))
 	}
 	if restarts[0].RepoName != repoName || restarts[0].CycleType != feature.CycleReviewComments {
 		t.Errorf("unexpected restart descriptor: %+v", restarts[0])
 	}
 	if restarts[0].PlanContent != "review content" {
 		t.Errorf("restart PlanContent = %q, want %q", restarts[0].PlanContent, "review content")
-	}
-
-	if refactor == nil {
-		t.Fatal("expected refactor restart, got nil")
-	}
-	if refactor.RepoName != "repo-b" {
-		t.Errorf("refactor RepoName = %q, want repo-b", refactor.RepoName)
-	}
-	if refactor.Prompt != "move packages around" {
-		t.Errorf("refactor Prompt = %q, want %q", refactor.Prompt, "move packages around")
-	}
-}
-
-func TestOrchestrator_CollectAndClearRepoCycleRestarts_UsesPersistedRefactorPromptWhenPlanPathMissing(t *testing.T) {
-	f := &feature.Feature{
-		ID:             "feat-1",
-		Status:         feature.StatusInterrupted,
-		RefactorPrompt: "keep restart prompt",
-		RepoCycles: map[string]*feature.RepoCycleState{
-			"repo-b": {Type: feature.CycleRefactor, Status: feature.RepoCycleInterrupted},
-		},
-	}
-	lc := lifecycleForFeature(f)
-	fs := newFeatureStore(f)
-
-	o := orchestrator.New(orchestrator.Deps{
-		Lifecycle: lc,
-		Store:     fs,
-	}, orchestrator.Hooks{})
-
-	restarts, refactor, err := o.CollectAndClearRepoCycleRestarts("feat-1")
-	if err != nil {
-		t.Fatalf("CollectAndClearRepoCycleRestarts: %v", err)
-	}
-	if len(restarts) != 0 {
-		t.Fatalf("expected no non-refactor restarts, got %d", len(restarts))
-	}
-	if refactor == nil {
-		t.Fatal("expected refactor restart, got nil")
-	}
-	if refactor.RepoName != "repo-b" {
-		t.Errorf("refactor RepoName = %q, want repo-b", refactor.RepoName)
-	}
-	if refactor.Prompt != "keep restart prompt" {
-		t.Errorf("refactor Prompt = %q, want %q", refactor.Prompt, "keep restart prompt")
 	}
 }
 
@@ -862,16 +812,6 @@ func TestOrchestrator_ResolveGateReviewContext_PhaseImplement_RoadmapPhase_Retur
 	}
 }
 
-// TestOrchestrator_ResolveGateReviewContext_PhaseImplement_RefactorRoadmapPhase_ReturnsRefactorPhasePlan
-// ---------------------------------------------------------------------------
-// Regression for iteration-13 reviewer finding: when a roadmap feature is
-// inside an active refactor cycle, the per-phase plan lives under
-// <state>/<featureID>/refactor-N/phase-NN/plan/*.md. ResolveGateReviewContext
-// must route through resolvePhaseDirForKey → phasePlanDirForFeature so
-// RefactorPrefix() is honored. This is the "phase/refactor-aware path logic"
-// the reviewer explicitly called out.
-// ---------------------------------------------------------------------------
-
 // TestRestartPhase_PublishedWithRepoCycles_DispatchesRepoCycleRestarts
 // ---------------------------------------------------------------------------
 // Regression test: RestartPhase must continue to route a Published feature
@@ -941,69 +881,6 @@ func TestRestartPhase_PublishedWithFailedFeatureRebase_DispatchesRebaseRetry(t *
 	}
 	if outcome.Action != orchestrator.RestartDispatchRebase {
 		t.Fatalf("Action = %v, want RestartDispatchRebase", outcome.Action)
-	}
-}
-
-func TestOrchestrator_ResolveGateReviewContext_PhaseImplement_RefactorRoadmapPhase_ReturnsRefactorPhasePlan(t *testing.T) {
-	tmp := t.TempDir()
-
-	// Refactor-scoped roadmap phase 3 plan:
-	// <state>/<featureID>/runs/run-001/refactor-1/phase-03/plan/*.md.
-	refactorPhaseDir := filepath.Join(tmp, "feat-1", "runs", "run-001", "refactor-1", "phase-03", "plan")
-	if err := os.MkdirAll(refactorPhaseDir, 0o755); err != nil {
-		t.Fatalf("mkdir refactor-1/phase-03/plan: %v", err)
-	}
-	refactorPlanPath := filepath.Join(refactorPhaseDir, "2026-04-19-phase-03-refactor.md")
-	if err := os.WriteFile(refactorPlanPath, []byte("# Refactor phase 03 plan"), 0o644); err != nil {
-		t.Fatalf("write refactor phase plan: %v", err)
-	}
-
-	// Seed a distractor non-refactor phase-03/plan so a regression that drops
-	// RefactorPrefix() would surface as a wrong path.
-	unscopedPhaseDir := filepath.Join(tmp, "feat-1", "runs", "run-001", "phase-03", "plan")
-	if err := os.MkdirAll(unscopedPhaseDir, 0o755); err != nil {
-		t.Fatalf("mkdir phase-03/plan: %v", err)
-	}
-	unscopedPlanPath := filepath.Join(unscopedPhaseDir, "2026-04-18-phase-03-feature.md")
-	if err := os.WriteFile(unscopedPlanPath, []byte("# Non-refactor phase 03 plan"), 0o644); err != nil {
-		t.Fatalf("write unscoped phase plan: %v", err)
-	}
-
-	f := &feature.Feature{
-		ID:                  "feat-1",
-		Status:              feature.StatusImplementReady,
-		CurrentPhase:        feature.PhaseImplement,
-		TotalRoadmapPhases:  3,
-		CurrentRoadmapPhase: 3,
-		ActiveRun:           1,
-		RunCount:            1,
-		// Refactor fields set so RefactorPrefix() returns "refactor-1".
-		RefactorPrompt: "Restructure the thing",
-		Repos: []feature.FeatureRepo{
-			{Name: repoName, WorktreePath: repoAWorktreePath, Path: repoAPath},
-		},
-	}
-	f.SetRefactorCount(1)
-	if prefix := f.RefactorPrefix(); prefix != "refactor-1" {
-		t.Fatalf("RefactorPrefix() = %q, want refactor-1 (test setup invariant)", prefix)
-	}
-	lc := lifecycleForFeature(f)
-
-	o := orchestrator.New(orchestrator.Deps{
-		Lifecycle: lc,
-		Store:     feature.NewStore(tmp),
-	}, orchestrator.Hooks{})
-
-	ctx, err := o.ResolveGateReviewContext("feat-1", feature.PhaseImplement)
-	if err != nil {
-		t.Fatalf("ResolveGateReviewContext: %v", err)
-	}
-	if ctx.ArtifactPath != refactorPlanPath {
-		t.Errorf("ArtifactPath = %q, want refactor-scoped phase plan %q",
-			ctx.ArtifactPath, refactorPlanPath)
-	}
-	if ctx.ArtifactPath == unscopedPlanPath {
-		t.Error("ArtifactPath resolved to non-refactor phase plan; RefactorPrefix() was ignored")
 	}
 }
 

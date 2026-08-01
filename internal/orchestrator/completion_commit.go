@@ -85,13 +85,16 @@ func (o *Orchestrator) singleShotCompletionContract(
 		if repoName == "" {
 			return "", "", nil, fmt.Errorf("resolving knowledge base completion contract: repo name is missing from session %q", sessionID)
 		}
+		if f.IsChild() {
+			return agent.RoleKnowledgeBaseBuilder, feature.ChildKBWorkspaceDir(baseDir, f.ID, repoName), []string{repoName}, nil
+		}
 		return agent.RoleKnowledgeBaseBuilder, agent.KBStateDir(baseDir, repoName), []string{repoName}, nil
 	case feature.PhaseInquire, feature.PhaseResearch, feature.PhaseDesign:
 		role, ok := artifactPhaseRole(phase)
 		if !ok {
 			return "", "", nil, fmt.Errorf("resolving %s completion contract: role is not registered", phase)
 		}
-		dir := filepath.Join(agent.ActiveRunDir(baseDir, f), f.RefactorPrefix(), phase.DirName())
+		dir := filepath.Join(agent.ActiveRunDir(baseDir, f), phase.DirName())
 		return role, dir, nil, nil
 	default:
 		return "", "", nil, fmt.Errorf("resolving completion contract: phase %s is not single-shot", phase)

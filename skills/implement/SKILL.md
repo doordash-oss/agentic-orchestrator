@@ -20,7 +20,7 @@ Never create or edit `verification-report.yaml` or `phase_complete`. When a test
 
 1. Read the full phase plan.
 2. If `{phase_dir}/progress.md` exists, read it and resume from `### Where I stopped`. Reviewer feedback and the current plan override stale handoff prose.
-3. Read `testing-contract.yaml` if it exists — at `{phase_dir}/../testing-contract.yaml` for roadmap phases, or `{phase_dir}/testing-contract.yaml` for cycle layouts (rebase/refactor/review-comments, where `{phase_dir}` is the cycle root). Note only items with `owner: agent`; final execution of `owner: harness` items is not your responsibility. If the file does not exist, this feature has no per-iteration machine verification: run every command under the plan's `### Automated Verification` yourself each iteration and record the commands and results in your handoff — SUCCESS asserts they pass.
+3. Read `testing-contract.yaml` if it exists — at `{phase_dir}/../testing-contract.yaml` for roadmap phases, or `{phase_dir}/testing-contract.yaml` for cycle layouts (rebase/review-comments, where `{phase_dir}` is the cycle root). Note only items with `owner: agent`; final execution of `owner: harness` items is not your responsibility. If the file does not exist, this feature has no per-iteration machine verification: run every command under the plan's `### Automated Verification` yourself each iteration and record the commands and results in your handoff — SUCCESS asserts they pass.
 4. Confirm every Task `**Repo:** <name>` is mounted. If the plan or repo scope is contradictory, call the formal AskUserQuestion control and continue after the answer.
 5. Build a dependency graph from `Blocked by`, shared files, repo tags, and acceptance criteria.
 

@@ -45,6 +45,9 @@ type OrchestratorParams struct {
 	PermissionStore *permission.Store
 	Lifecycle       fx.Lifecycle
 	StateDir        string `name:"stateDir"`
+	// Cleanliness inspects parent worktrees at refactor-child integration
+	// preflight with the launch-time cleanliness contract.
+	Cleanliness feature.CleanlinessOps
 }
 
 // worktreeManagerParams isolates the stateDir dependency so the
@@ -76,6 +79,25 @@ var Module = fx.Module("orchestrator",
 		func(b *git.BranchAdapter) feature.BranchOps { return b },
 		func(p *git.PublishAdapter) feature.PRCloser { return p },
 		func(wm *git.WorktreeManager) ports.WorktreeOperator { return wm },
+		// Dirty-worktree preflight for refactor-child launches. The adapter
+		// converts git's report into the feature-package view so feature
+		// does not import internal/git.
+		func(wm *git.WorktreeManager) feature.CleanlinessOps {
+			return feature.CleanlinessFunc(func(worktreePath string, maxPerCategory int) (*feature.RepoCleanliness, error) {
+				report, err := wm.InspectCleanliness(worktreePath, maxPerCategory)
+				if report == nil || err != nil {
+					return nil, err
+				}
+				return &feature.RepoCleanliness{
+					Staged:         report.Staged,
+					Unstaged:       report.Unstaged,
+					Untracked:      report.Untracked,
+					StagedTotal:    report.StagedTotal,
+					UnstagedTotal:  report.UnstagedTotal,
+					UntrackedTotal: report.UntrackedTotal,
+				}, nil
+			})
+		},
 	),
 	fx.Provide(func(p OrchestratorParams, wm *git.WorktreeManager) *Orchestrator {
 		// Install the attach-drop metric reporter on the session manager
@@ -100,8 +122,9 @@ var Module = fx.Module("orchestrator",
 			CrossRef:    p.CrossRef,       // *git.CrossRefAdapter satisfies ports.CrossRefOperator
 			Reviewer:    p.Reviewer,       // *git.ReviewCommentAdapter satisfies ports.ReviewCommentOperator
 			Branch:      p.Branch,         // *git.BranchAdapter satisfies ports.BranchOperator
-			Worktrees:   wm,               // *git.WorktreeManager satisfies ports.WorktreeOperator
+			Worktrees:   wm,               // *git.WorktreeManager satisfies ports.WorktreeOperator + the structural child-merge/head-reader capabilities
 			PhaseRunner: p.PhaseRunner,    // concrete *agent.PhaseRunner
+			Cleanliness: p.Cleanliness,    // child-integration preflight reuse of the launch cleanliness contract
 			// Reuse PhaseRunner.CommandRunner so KB freshness checks
 			// (agent.IsKBFresh → GetCurrentCommit) have a real runner to
 			// shell out to git. PhaseRunner constructs an execCommandRunner

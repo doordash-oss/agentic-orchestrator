@@ -51,6 +51,14 @@ type RefreshSnapshot struct {
 	Session       *SessionDetailResponse
 	Transcript    *TranscriptResponse
 	LivePreview   *LivePreviewResponse
+	Relationship  *RelationshipRefreshBundle
+}
+
+type RelationshipRefreshBundle struct {
+	Parent        FeatureDetailResponse
+	Child         *FeatureDetailResponse
+	EvictParentID string
+	EvictChildID  string
 }
 
 const refreshTranscriptLimit = 50
@@ -257,6 +265,8 @@ func (c *Client) FetchRefreshSnapshot(ctx context.Context, signal RefreshSignal)
 		return RefreshSnapshot{}, nil
 	}
 	switch {
+	case resource.Type == resourceTypeRelationship:
+		return c.fetchRelationshipRefreshBundle(ctx, evt, resource)
 	case evt.Kind == sseEventConfigUpdated:
 		cfg, err := c.RuntimeConfig(ctx)
 		return RefreshSnapshot{RuntimeConfig: &cfg}, err
@@ -352,6 +362,58 @@ func (c *Client) FetchRefreshSnapshot(ctx context.Context, signal RefreshSignal)
 		features, err := c.Features(ctx)
 		return RefreshSnapshot{Features: &features}, err
 	}
+}
+
+func (c *Client) fetchRelationshipRefreshBundle(ctx context.Context, evt SSEEventDTO, resource ResourceDTO) (RefreshSnapshot, error) {
+	if resource.ParentID == "" || resource.ChildID == "" || resource.ID == "" {
+		return RefreshSnapshot{}, fmt.Errorf("relationship refresh requires resource id, parent id, and child id")
+	}
+
+	c.relationshipRefreshMu.Lock()
+	currentVersion := c.relationshipVersions[resource.ID]
+	c.relationshipRefreshMu.Unlock()
+	if evt.ResourceVersion > 0 && evt.ResourceVersion <= currentVersion {
+		return RefreshSnapshot{}, nil
+	}
+
+	var snapshot RefreshSnapshot
+	if resource.RelationshipDeleted {
+		features, err := c.Features(ctx)
+		if err != nil {
+			return RefreshSnapshot{}, err
+		}
+		snapshot = RefreshSnapshot{
+			Features: &features,
+			Relationship: &RelationshipRefreshBundle{
+				EvictParentID: resource.ParentID,
+				EvictChildID:  resource.ChildID,
+			},
+		}
+	} else {
+		parent, err := c.FeatureDetail(ctx, resource.ParentID)
+		if err != nil {
+			return RefreshSnapshot{}, err
+		}
+		child, err := c.FeatureDetail(ctx, resource.ChildID)
+		if err != nil {
+			return RefreshSnapshot{}, err
+		}
+		if parent.Feature.ID != resource.ParentID || child.Feature.ID != resource.ChildID {
+			return RefreshSnapshot{}, fmt.Errorf("relationship refresh returned mismatched parent or child identity")
+		}
+		snapshot.Relationship = &RelationshipRefreshBundle{
+			Parent: parent,
+			Child:  &child,
+		}
+	}
+
+	c.relationshipRefreshMu.Lock()
+	defer c.relationshipRefreshMu.Unlock()
+	if evt.ResourceVersion > 0 && evt.ResourceVersion <= c.relationshipVersions[resource.ID] {
+		return RefreshSnapshot{}, nil
+	}
+	c.relationshipVersions[resource.ID] = evt.ResourceVersion
+	return snapshot, nil
 }
 
 // fetchFullSnapshot re-pulls the read-model state the dashboard depends on

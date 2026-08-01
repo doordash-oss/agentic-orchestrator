@@ -352,6 +352,362 @@ func TestStoreListPartialLoad(t *testing.T) {
 	}
 }
 
+func TestStoreRelationshipChildrenReturnsActiveAndOrderedClosedHistory(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: per-test temp dirs isolate persisted relationship state.
+
+	store := NewStore(t.TempDir())
+	parentID := "parent-history"
+	base := time.Date(2026, time.July, 29, 12, 0, 0, 0, time.UTC)
+	children := []*Feature{
+		{
+			ID:      "active",
+			Name:    "active child",
+			Created: base.Add(-5 * time.Hour),
+			Parent:  &ChildRelationship{ParentID: parentID, Kind: ChildKindRefactor},
+		},
+		{
+			ID:      "closed-older",
+			Name:    "older close",
+			Created: base.Add(-time.Hour),
+			Parent: &ChildRelationship{
+				ParentID:     parentID,
+				Kind:         ChildKindRefactor,
+				CloseOutcome: ChildCloseOutcomeDiscarded,
+				ClosedAt:     timePointer(base.Add(-time.Hour)),
+			},
+		},
+		{
+			ID:      "closed-z",
+			Name:    "same timestamps z",
+			Created: base,
+			Parent: &ChildRelationship{
+				ParentID:     parentID,
+				Kind:         ChildKindRefactor,
+				CloseOutcome: ChildCloseOutcomeCompleted,
+				ClosedAt:     timePointer(base),
+			},
+		},
+		{
+			ID:      "closed-a",
+			Name:    "same timestamps a",
+			Created: base,
+			Parent: &ChildRelationship{
+				ParentID:     parentID,
+				Kind:         ChildKindRefactor,
+				CloseOutcome: ChildCloseOutcomeDiscarded,
+				ClosedAt:     timePointer(base),
+			},
+		},
+		{
+			ID:      "closed-created-newer",
+			Name:    "same close newer creation",
+			Created: base.Add(time.Hour),
+			Parent: &ChildRelationship{
+				ParentID:     parentID,
+				Kind:         ChildKindRefactor,
+				CloseOutcome: ChildCloseOutcomeCompleted,
+				ClosedAt:     timePointer(base),
+			},
+		},
+	}
+	for _, child := range children {
+		if err := store.Save(child); err != nil {
+			t.Fatalf("Save(%q): %v", child.ID, err)
+		}
+	}
+
+	got, err := store.RelationshipChildren(parentID)
+	if err != nil {
+		t.Fatalf("RelationshipChildren(%q): %v", parentID, err)
+	}
+	if got.Active == nil || got.Active.ID != "active" {
+		t.Fatalf("RelationshipChildren(%q).Active = %#v, want active", parentID, got.Active)
+	}
+	gotIDs := make([]string, len(got.Closed))
+	for i, child := range got.Closed {
+		gotIDs[i] = child.ID
+	}
+	wantIDs := []string{"closed-created-newer", "closed-a", "closed-z", "closed-older"}
+	if !slices.Equal(gotIDs, wantIDs) {
+		t.Fatalf("RelationshipChildren(%q).Closed IDs = %v, want %v", parentID, gotIDs, wantIDs)
+	}
+}
+
+func TestStoreRelationshipChildrenFailsClosedOnInvalidRecords(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: per-test temp dirs isolate persisted relationship state.
+
+	base := time.Date(2026, time.July, 29, 12, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name     string
+		children []*Feature
+		corrupt  bool
+		wantID   string
+	}{
+		{
+			name: "closed without timestamp",
+			children: []*Feature{{
+				ID:     "missing-close-time",
+				Parent: &ChildRelationship{ParentID: "parent", Kind: ChildKindRefactor, CloseOutcome: ChildCloseOutcomeCompleted},
+			}},
+			wantID: "missing-close-time",
+		},
+		{
+			name: "timestamp without outcome",
+			children: []*Feature{{
+				ID:     "missing-outcome",
+				Parent: &ChildRelationship{ParentID: "parent", Kind: ChildKindRefactor, ClosedAt: &base},
+			}},
+			wantID: "missing-outcome",
+		},
+		{
+			name: "unknown outcome",
+			children: []*Feature{{
+				ID:     "unknown-outcome",
+				Parent: &ChildRelationship{ParentID: "parent", Kind: ChildKindRefactor, CloseOutcome: "merged", ClosedAt: &base},
+			}},
+			wantID: "unknown-outcome",
+		},
+		{
+			name: "multiple active children",
+			children: []*Feature{
+				{ID: "active-a", Parent: &ChildRelationship{ParentID: "parent", Kind: ChildKindRefactor}},
+				{ID: "active-b", Parent: &ChildRelationship{ParentID: "parent", Kind: ChildKindRefactor}},
+			},
+			wantID: "active-b",
+		},
+		{
+			name:    "unreadable candidate",
+			corrupt: true,
+			wantID:  "corrupt-child",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			// parallel-candidate: each case owns an independent temp-backed store.
+
+			store := NewStore(t.TempDir())
+			for _, child := range tt.children {
+				if err := store.Save(child); err != nil {
+					t.Fatalf("Save(%q): %v", child.ID, err)
+				}
+			}
+			if tt.corrupt {
+				dir := filepath.Join(store.BaseDir, tt.wantID)
+				if err := os.MkdirAll(dir, 0o755); err != nil {
+					t.Fatalf("MkdirAll(%q): %v", dir, err)
+				}
+				if err := os.WriteFile(filepath.Join(dir, "feature.yaml"), []byte("[unterminated"), 0o644); err != nil {
+					t.Fatalf("WriteFile(%q): %v", dir, err)
+				}
+			}
+
+			_, err := store.RelationshipChildren("parent")
+			if err == nil {
+				t.Fatal("RelationshipChildren(\"parent\") error = nil, want fail-closed error")
+			}
+			if !strings.Contains(err.Error(), tt.wantID) {
+				t.Fatalf("RelationshipChildren(\"parent\") error = %q, want child ID %q", err, tt.wantID)
+			}
+		})
+	}
+}
+
+func TestStoreCloseChildIsIdempotentAndPreservesInspectionState(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: per-test temp dirs isolate persisted relationship state.
+
+	store := NewStore(t.TempDir())
+	created := time.Date(2026, time.July, 28, 8, 0, 0, 0, time.UTC)
+	firstClose := created.Add(2 * time.Hour)
+	retryClose := firstClose.Add(time.Hour)
+	child := &Feature{
+		ID:          "child-close",
+		Name:        "inspectable child",
+		Created:     created,
+		Status:      StatusFailed,
+		LastError:   "integration needs attention",
+		FailureType: FailureInfrastructure,
+		Pipeline:    PipelineMedium,
+		Artifacts:   map[string]string{"plan": "phase-01/plan.md"},
+		PhaseCosts:  map[string]float64{"implement": 12.5},
+		Repos:       []FeatureRepo{{Name: "repo", WorktreePath: "/tmp/child"}},
+		Parent: &ChildRelationship{
+			ParentID: "parent",
+			Kind:     ChildKindRefactor,
+			Transaction: &TransactionJournal{
+				Phase: TransactionPhaseAttention,
+				Entries: []RepoTransactionEntry{{
+					Repo:           "repo",
+					CleanupWarning: "worktree busy",
+				}},
+			},
+		},
+	}
+	if err := store.Save(child); err != nil {
+		t.Fatalf("Save(%q): %v", child.ID, err)
+	}
+
+	if err := store.CloseChild(child.ID, ChildCloseOutcomeCompleted, firstClose); err != nil {
+		t.Fatalf("CloseChild(first): %v", err)
+	}
+	if err := store.CloseChild(child.ID, ChildCloseOutcomeCompleted, retryClose); err != nil {
+		t.Fatalf("CloseChild(retry): %v", err)
+	}
+	if err := store.CloseChild(child.ID, ChildCloseOutcomeDiscarded, retryClose); !errors.Is(err, ErrChildRelationshipClosed) {
+		t.Fatalf("CloseChild(different outcome) error = %v, want ErrChildRelationshipClosed", err)
+	}
+
+	got, err := store.Load(child.ID)
+	if err != nil {
+		t.Fatalf("Load(%q): %v", child.ID, err)
+	}
+	if got.Parent.CloseOutcome != ChildCloseOutcomeCompleted {
+		t.Fatalf("CloseOutcome = %q, want %q", got.Parent.CloseOutcome, ChildCloseOutcomeCompleted)
+	}
+	if got.Parent.ClosedAt == nil || !got.Parent.ClosedAt.Equal(firstClose) {
+		t.Fatalf("ClosedAt = %v, want original %v", got.Parent.ClosedAt, firstClose)
+	}
+	if got.LastError != child.LastError || got.FailureType != child.FailureType {
+		t.Fatalf("failure context = (%q, %q), want (%q, %q)", got.LastError, got.FailureType, child.LastError, child.FailureType)
+	}
+	if got.Artifacts["plan"] != child.Artifacts["plan"] || got.TotalCost() != child.TotalCost() {
+		t.Fatalf("inspection state artifacts/cost = (%v, %v), want (%v, %v)", got.Artifacts, got.TotalCost(), child.Artifacts, child.TotalCost())
+	}
+	if got.Parent.Transaction == nil || got.Parent.Transaction.Entries[0].CleanupWarning != "worktree busy" {
+		t.Fatalf("integration diagnostics = %#v, want cleanup warning retained", got.Parent.Transaction)
+	}
+}
+
+func TestStoreSetClosedChildDiffSummary(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: per-test temp dirs isolate persisted relationship state.
+
+	store := NewStore(t.TempDir())
+	closedAt := time.Date(2026, time.July, 29, 12, 0, 0, 0, time.UTC)
+	summary := "Repository: repo\ndiff --git a/auth.go b/auth.go\n+session rotation"
+
+	child := &Feature{
+		ID: "child-diff", Name: "diff child", Status: StatusReviewPassed,
+		Repos: []FeatureRepo{{Name: "repo"}},
+		Parent: &ChildRelationship{
+			ParentID: "parent", Kind: ChildKindRefactor,
+			CloseOutcome: ChildCloseOutcomeCompleted, ClosedAt: &closedAt,
+		},
+	}
+	if err := store.Save(child); err != nil {
+		t.Fatalf("Save(%q): %v", child.ID, err)
+	}
+	if err := store.SetClosedChildDiffSummary(child.ID, summary); err != nil {
+		t.Fatalf("SetClosedChildDiffSummary(closed): %v", err)
+	}
+	got, err := store.Load(child.ID)
+	if err != nil {
+		t.Fatalf("Load(%q): %v", child.ID, err)
+	}
+	if got.Parent.DiffSummary != summary {
+		t.Fatalf("DiffSummary = %q, want preserved summary", got.Parent.DiffSummary)
+	}
+
+	// Empty summaries and repeat writes are no-ops.
+	if err := store.SetClosedChildDiffSummary(child.ID, ""); err != nil {
+		t.Fatalf("SetClosedChildDiffSummary(empty): %v", err)
+	}
+	got, _ = store.Load(child.ID)
+	if got.Parent.DiffSummary != summary {
+		t.Fatalf("DiffSummary after empty write = %q, want unchanged", got.Parent.DiffSummary)
+	}
+
+	// An open child and a non-child never receive a summary.
+	openChild := &Feature{
+		ID: "child-open", Name: "open child", Status: StatusImplementing,
+		Repos:  []FeatureRepo{{Name: "repo"}},
+		Parent: &ChildRelationship{ParentID: "parent", Kind: ChildKindRefactor},
+	}
+	if err := store.Save(openChild); err != nil {
+		t.Fatalf("Save(%q): %v", openChild.ID, err)
+	}
+	if err := store.SetClosedChildDiffSummary(openChild.ID, summary); err != nil {
+		t.Fatalf("SetClosedChildDiffSummary(open child): %v", err)
+	}
+	got, _ = store.Load(openChild.ID)
+	if got.Parent.DiffSummary != "" {
+		t.Fatalf("open child DiffSummary = %q, want empty", got.Parent.DiffSummary)
+	}
+
+	plain := &Feature{ID: "plain", Name: "plain", Status: StatusImplementing}
+	if err := store.Save(plain); err != nil {
+		t.Fatalf("Save(%q): %v", plain.ID, err)
+	}
+	if err := store.SetClosedChildDiffSummary(plain.ID, summary); err != nil {
+		t.Fatalf("SetClosedChildDiffSummary(non-child): %v", err)
+	}
+	got, _ = store.Load(plain.ID)
+	if got.Parent != nil {
+		t.Fatalf("non-child Parent = %#v, want nil", got.Parent)
+	}
+}
+
+func TestStoreModifyGuardedRejectsClosedChildBeforeCallbacks(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: per-test temp dirs isolate persisted relationship state.
+
+	store := NewStore(t.TempDir())
+	closedAt := time.Date(2026, time.July, 29, 12, 0, 0, 0, time.UTC)
+	child := &Feature{
+		ID:     "closed-child",
+		Name:   "immutable",
+		Status: StatusDone,
+		Repos:  []FeatureRepo{{Name: "repo", WorktreePath: "/tmp/original"}},
+		Parent: &ChildRelationship{
+			ParentID:     "parent",
+			Kind:         ChildKindRefactor,
+			CloseOutcome: ChildCloseOutcomeCompleted,
+			ClosedAt:     &closedAt,
+		},
+	}
+	if err := store.Save(child); err != nil {
+		t.Fatalf("Save(%q): %v", child.ID, err)
+	}
+
+	guardCalled := false
+	mutationCalled := false
+	err := store.ModifyGuarded(
+		child.ID,
+		func(f *Feature, activeChild *Feature) error {
+			guardCalled = true
+			f.Name = "changed by guard"
+			return nil
+		},
+		func(f *Feature) error {
+			mutationCalled = true
+			f.Status = StatusCreated
+			f.Repos[0].WorktreePath = "/tmp/changed"
+			f.PermissionsQueue = append(f.PermissionsQueue, PermissionRequest{Tool: "changed"})
+			return nil
+		},
+	)
+	if !errors.Is(err, ErrChildRelationshipClosed) {
+		t.Fatalf("ModifyGuarded(%q) error = %v, want ErrChildRelationshipClosed", child.ID, err)
+	}
+	if guardCalled || mutationCalled {
+		t.Fatalf("callbacks called = (guard %v, mutation %v), want both false", guardCalled, mutationCalled)
+	}
+	got, loadErr := store.Load(child.ID)
+	if loadErr != nil {
+		t.Fatalf("Load(%q): %v", child.ID, loadErr)
+	}
+	if got.Name != child.Name || got.Status != child.Status || got.Repos[0].WorktreePath != child.Repos[0].WorktreePath || len(got.PermissionsQueue) != 0 {
+		t.Fatalf("closed child mutated: got %#v, want original %#v", got, child)
+	}
+}
+
+func timePointer(t time.Time) *time.Time {
+	return &t
+}
+
 func TestStoreDelete(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
@@ -1348,5 +1704,123 @@ artifacts: {}
 	}
 	if !strings.Contains(savedStr, "PROJ-123") {
 		t.Errorf("saved feature.yaml lost ticket reference in description field")
+	}
+}
+
+// TestStoreLoadDropsLegacyRefactorKeys verifies that a legacy run.yaml
+// containing refactor_prompt / refactor_count keys (from the removed Refactor
+// post-publish cycle) loads cleanly without activating any cycle, and that a
+// round-trip save does not re-emit the dropped keys.
+func TestStoreLoadDropsLegacyRefactorKeys(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
+	dir := t.TempDir()
+	store := NewStore(dir)
+
+	const featureID = "refactor-legacy-001"
+	featureDir := filepath.Join(dir, featureID)
+	runDir := filepath.Join(featureDir, "runs", "run-001")
+	if err := os.MkdirAll(runDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	featureYAML := fmt.Sprintf(`id: %s
+name: Legacy Refactor
+slug: legacy-refactor
+description: pre-removal state with refactor cycle keys
+created: 2026-01-01T00:00:00Z
+status: Published
+current_phase: 6
+repos:
+  - name: repo-a
+    path: /tmp/a
+    worktree_path: ""
+    branch: ""
+models: {}
+exit_criteria: ""
+inquireness: medium
+permissions_queue: []
+help_queue: []
+active_run: 1
+run_count: 1
+schema_version: %d
+`, featureID, SchemaVersionCurrent)
+	if err := os.WriteFile(filepath.Join(featureDir, "feature.yaml"), []byte(featureYAML), 0o644); err != nil {
+		t.Fatalf("write feature.yaml: %v", err)
+	}
+	runYAML := `run_number: 1
+started_at: 2026-01-01T00:00:00Z
+rebase_count: 0
+refactor_count: 2
+active_cycle_type: refactor
+active_cycle:
+  type: refactor
+  status: running
+  count: 2
+refactor_prompt: extract shared config
+repo_cycles:
+  repo-a:
+    type: refactor
+    status: running
+    count: 1
+  repo-b:
+    type: review-comments
+    status: failed
+    count: 1
+    last_error: boom
+artifacts: {}
+`
+	if err := os.WriteFile(filepath.Join(runDir, "run.yaml"), []byte(runYAML), 0o644); err != nil {
+		t.Fatalf("write run.yaml: %v", err)
+	}
+
+	loaded, err := store.Load(featureID)
+	if err != nil {
+		t.Fatalf("Load() error = %v; want nil (legacy refactor keys must be ignored)", err)
+	}
+	// Legacy Refactor cycle state must be dropped on load: no active cycle
+	// type, no feature-level active cycle, no Refactor repo-cycle entries.
+	if got := string(loaded.ActiveCycleType()); got != "" {
+		t.Errorf("ActiveCycleType() = %q, want empty for dropped refactor cycle", got)
+	}
+	if loaded.ActiveCycle != nil {
+		t.Errorf("ActiveCycle = %+v, want nil for dropped refactor cycle", loaded.ActiveCycle)
+	}
+	if _, ok := loaded.RepoCycles["repo-a"]; ok {
+		t.Errorf("RepoCycles[repo-a] = %+v, want absent (refactor entry must be dropped)", loaded.RepoCycles["repo-a"])
+	}
+	if rc := loaded.RepoCycles["repo-b"]; rc == nil || rc.Type != CycleReviewComments || rc.Status != RepoCycleFailed {
+		t.Errorf("RepoCycles[repo-b] = %+v, want surviving failed review-comments entry preserved", rc)
+	}
+	if loaded.HasActiveRepoCycles() {
+		t.Error("HasActiveRepoCycles() = true, want false for dropped refactor cycle")
+	}
+	// No artifact-cycle prefix may engage for dropped cycle state.
+	if got := loaded.CyclePrefix(); got != "" {
+		t.Errorf("CyclePrefix() = %q, want empty for dropped refactor cycle", got)
+	}
+	loadedRun, err := store.LoadRun(featureID, 1)
+	if err != nil {
+		t.Fatalf("LoadRun: %v", err)
+	}
+	if got := loadedRun.CyclePrefix(); got != "" {
+		t.Errorf("Run.CyclePrefix() = %q, want empty for dropped refactor cycle", got)
+	}
+
+	// Round-trip save and re-read the raw run.yaml: dropped keys and cycle
+	// state must not be re-emitted.
+	if err := store.Save(loaded); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	saved, err := os.ReadFile(filepath.Join(runDir, "run.yaml"))
+	if err != nil {
+		t.Fatalf("ReadFile after Save: %v", err)
+	}
+	savedStr := string(saved)
+	if strings.Contains(savedStr, "refactor") {
+		t.Errorf("saved run.yaml still contains 'refactor'; should not be re-emitted after round-trip:\n%s", savedStr)
+	}
+	if strings.Contains(savedStr, "active_cycle") {
+		t.Errorf("saved run.yaml still contains 'active_cycle'; dropped cycle state should not be re-emitted:\n%s", savedStr)
 	}
 }

@@ -284,7 +284,6 @@ func TestGoldenSnapshotsNoOrphanFiles(t *testing.T) {
 		"phase_plan_user_autonomous":                           true,
 		"phase_plan_user_automated_verification_only":          true,
 		"pr_description_user_full":                             true,
-		"refactor_plan_user":                                   true,
 		"research_from_questions_user":                         true,
 		"roadmap_revision_user":                                true,
 		"roadmap_user_multi_repo":                              true,

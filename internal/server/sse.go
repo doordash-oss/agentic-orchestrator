@@ -500,6 +500,18 @@ func eventDTOFromRuntime(msg interface{}) SSEEventDTO {
 func eventDTOFromDomain(ev ports.Event) SSEEventDTO {
 	kind := sseEventLifecycleUpdated
 	resourceType := entityFeature
+	if relationshipEventType(ev.Type) {
+		resource := ResourceDTO{
+			Type:                resourceTypeRelationship,
+			ID:                  relationshipResourceID(ev.ParentID, ev.ChildID),
+			ParentID:            ev.ParentID,
+			ChildID:             ev.ChildID,
+			RelationshipDeleted: ev.Type == ports.RelationshipCascadeDeleted,
+		}
+		dto := snapshotRequiredEventDTO(sseEventLifecycleUpdated, resource)
+		dto.Summary = safeEventSummary(ev)
+		return dto
+	}
 	switch ev.Type {
 	case ports.FeatureConfigChanged:
 		kind = sseEventConfigUpdated
@@ -543,6 +555,24 @@ func eventDTOFromDomain(ev ports.Event) SSEEventDTO {
 	return dto
 }
 
+func relationshipEventType(eventType ports.EventType) bool {
+	switch eventType {
+	case ports.RelationshipChildCreated,
+		ports.RelationshipIntegrationChanged,
+		ports.RelationshipClosed,
+		ports.RelationshipDiscardProgress,
+		ports.RelationshipCascadeProgress,
+		ports.RelationshipCascadeDeleted:
+		return true
+	default:
+		return false
+	}
+}
+
+func relationshipResourceID(parentID, childID string) string {
+	return parentID + ":" + childID
+}
+
 func snapshotRequiredEventDTO(kind string, resource ResourceDTO) SSEEventDTO {
 	return SSEEventDTO{
 		APIVersion:       APIVersion,
@@ -555,7 +585,7 @@ func snapshotRequiredEventDTO(kind string, resource ResourceDTO) SSEEventDTO {
 }
 
 func resourceKey(resource ResourceDTO) string {
-	return resource.Type + "\x00" + resource.ID + "\x00" + resource.FeatureID + "\x00" + resource.Phase
+	return resource.Type + "\x00" + resource.ID + "\x00" + resource.FeatureID + "\x00" + resource.ParentID + "\x00" + resource.ChildID + "\x00" + resource.Phase
 }
 
 func newEventEpoch() string {
@@ -582,6 +612,18 @@ func safeEventSummary(ev ports.Event) string {
 		return "config changed"
 	case ports.CycleProgress:
 		return "cycle progress"
+	case ports.RelationshipChildCreated:
+		return "relationship child created"
+	case ports.RelationshipIntegrationChanged:
+		return "relationship integration changed"
+	case ports.RelationshipClosed:
+		return "relationship closed"
+	case ports.RelationshipDiscardProgress:
+		return "relationship discard progressed"
+	case ports.RelationshipCascadeProgress:
+		return "relationship cascade progressed"
+	case ports.RelationshipCascadeDeleted:
+		return "relationship cascade deleted"
 	default:
 		return ""
 	}

@@ -20,11 +20,21 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
+	"time"
 )
 
 // PushFunc is the function used by Push. Tests can replace it to avoid real
 // git-push operations (e.g. when corporate hooks block pushes to local repos).
 var PushFunc = defaultPush
+
+const (
+	indexLockRetryWindow       = 5 * time.Second
+	indexLockRetryInitialDelay = 25 * time.Millisecond
+	indexLockRetryMaxDelay     = 250 * time.Millisecond
+)
+
+var worktreeMutationLocks sync.Map
 
 // Push pushes a worktree's branch to origin.
 func Push(worktreePath, branch string) error {
@@ -212,14 +222,16 @@ func HasLocalCommits(worktreePath string) bool {
 // CommitAll stages all changes (including untracked files) and creates a commit.
 // The Agentic signature trailer is automatically appended to the commit message.
 func CommitAll(worktreePath, message string) error {
-	add := exec.Command("git", "-C", worktreePath, "add", "-A")
-	if out, err := add.CombinedOutput(); err != nil {
+	mu := worktreeMutationLock(worktreePath)
+	mu.Lock()
+	defer mu.Unlock()
+
+	if out, err := runGitMutationWithIndexLockRetry(worktreePath, "add", "-A"); err != nil {
 		return fmt.Errorf("staging changes: %s: %w", strings.TrimSpace(string(out)), err)
 	}
 	// Append Agentic signature trailer
 	message = message + "\n\n" + CommitSignatureTrailer
-	commit := exec.Command("git", "-C", worktreePath, "commit", "-m", message)
-	if out, err := commit.CombinedOutput(); err != nil {
+	if out, err := runGitMutationWithIndexLockRetry(worktreePath, "commit", "-m", message); err != nil {
 		return fmt.Errorf("creating commit: %s: %w", strings.TrimSpace(string(out)), err)
 	}
 	return nil
@@ -229,8 +241,11 @@ func CommitAll(worktreePath, message string) error {
 // returns the full HEAD SHA after the operation. A clean worktree is not an
 // error; the existing HEAD SHA is returned.
 func CommitAllAndGetHead(worktreePath, message string) (string, error) {
-	add := exec.Command("git", "-C", worktreePath, "add", "-A")
-	if out, err := add.CombinedOutput(); err != nil {
+	mu := worktreeMutationLock(worktreePath)
+	mu.Lock()
+	defer mu.Unlock()
+
+	if out, err := runGitMutationWithIndexLockRetry(worktreePath, "add", "-A"); err != nil {
 		return "", fmt.Errorf("staging changes: %s: %w", strings.TrimSpace(string(out)), err)
 	}
 	status := exec.Command("git", "-C", worktreePath, "status", "--porcelain")
@@ -242,11 +257,49 @@ func CommitAllAndGetHead(worktreePath, message string) (string, error) {
 		return CurrentHeadSHA(worktreePath)
 	}
 	message = message + "\n\n" + CommitSignatureTrailer
-	commit := exec.Command("git", "-C", worktreePath, "commit", "-m", message)
-	if out, err := commit.CombinedOutput(); err != nil {
+	if out, err := runGitMutationWithIndexLockRetry(worktreePath, "commit", "-m", message); err != nil {
 		return "", fmt.Errorf("creating commit: %s: %w", strings.TrimSpace(string(out)), err)
 	}
 	return CurrentHeadSHA(worktreePath)
+}
+
+func worktreeMutationLock(worktreePath string) *sync.Mutex {
+	key := filepath.Clean(worktreePath)
+	actual, _ := worktreeMutationLocks.LoadOrStore(key, &sync.Mutex{})
+	return actual.(*sync.Mutex)
+}
+
+// runGitMutationWithIndexLockRetry tolerates a short-lived lock held by
+// another Git process. It never removes the lock: a lock that remains beyond
+// the retry window is reported with Git's original diagnostic.
+func runGitMutationWithIndexLockRetry(worktreePath string, args ...string) ([]byte, error) {
+	deadline := time.Now().Add(indexLockRetryWindow)
+	delay := indexLockRetryInitialDelay
+	for {
+		cmdArgs := append([]string{"-C", worktreePath}, args...)
+		out, err := exec.Command("git", cmdArgs...).CombinedOutput()
+		if err == nil || !isIndexLockContention(out) || !time.Now().Before(deadline) {
+			return out, err
+		}
+
+		remaining := time.Until(deadline)
+		if delay > remaining {
+			delay = remaining
+		}
+		time.Sleep(delay)
+		if delay < indexLockRetryMaxDelay {
+			delay *= 2
+			if delay > indexLockRetryMaxDelay {
+				delay = indexLockRetryMaxDelay
+			}
+		}
+	}
+}
+
+func isIndexLockContention(out []byte) bool {
+	msg := strings.ToLower(string(out))
+	return strings.Contains(msg, "index.lock") &&
+		(strings.Contains(msg, "file exists") || strings.Contains(msg, "unable to create"))
 }
 
 // CurrentHeadSHA returns the full SHA of HEAD in the given worktree.

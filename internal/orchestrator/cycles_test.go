@@ -16,17 +16,14 @@ package orchestrator_test
 
 import (
 	"encoding/json"
-	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
-	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/internal/orchestrator"
-	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
 )
 
@@ -268,78 +265,4 @@ func lifecycleCallIndex(lc *mocks.MockFeatureLifecycle, method string) int {
 		}
 	}
 	return -1
-}
-
-func TestStartRefactorCycle_AllowsCodeReadyFeature(t *testing.T) {
-	t.Parallel()
-
-	runtimeDir := t.TempDir()
-	cfg := config.NewDefault()
-	cfg.Repos[repoName] = config.RepoConfig{Path: filepath.Join(runtimeDir, repoName)}
-	store := feature.NewStore(filepath.Join(runtimeDir, "features"))
-	manager := feature.NewManager(store, cfg)
-	f, err := manager.Create("code ready refactor", "desc", []string{repoName}, cfg.Defaults.Models, "", "", nil)
-	if err != nil {
-		t.Fatalf("Create feature: %v", err)
-	}
-	if err := store.Modify(f.ID, func(ff *feature.Feature) error {
-		ff.Status = feature.StatusCodeReady
-		ff.CurrentPhase = feature.PhasePublish
-		ff.ActiveRun = 1
-		ff.RunCount = 1
-		ff.Repos[0].WorktreePath = filepath.Join(runtimeDir, "worktrees", repoName)
-		ff.Repos[0].Branch = "feature/code-ready-refactor"
-		ff.RepoStates = map[string]*feature.RepoState{repoName: {Touched: true}}
-		return nil
-	}); err != nil {
-		t.Fatalf("prepare feature: %v", err)
-	}
-
-	releaseBuildSession := make(chan struct{})
-	pr := &agent.PhaseRunner{
-		StateDir: store.BaseDir,
-		BuildSessionFn: func(opts agent.BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error) {
-			<-releaseBuildSession
-			return nil, nil, nil, errors.New("stop refactor test")
-		},
-	}
-	o := orchestrator.New(orchestrator.Deps{
-		Lifecycle:   manager,
-		Store:       store,
-		PhaseRunner: pr,
-	}, orchestrator.Hooks{})
-	t.Cleanup(func() {
-		close(releaseBuildSession)
-		o.WaitForCycles()
-	})
-
-	const prompt = "simplify service layout"
-	if _, err := o.StartRefactorCycle(f.ID, repoName, prompt); err != nil {
-		t.Fatalf("StartRefactorCycle() error = %v, want nil for CodeReady feature", err)
-	}
-
-	got, err := store.Load(f.ID)
-	if err != nil {
-		t.Fatalf("Load feature: %v", err)
-	}
-	if got.Status != feature.StatusCodeReady {
-		t.Fatalf("Status = %s, want CodeReady", got.Status)
-	}
-	if got.RefactorPrompt != prompt {
-		t.Fatalf("RefactorPrompt = %q, want %q", got.RefactorPrompt, prompt)
-	}
-	if got.RefactorCount() != 1 {
-		t.Fatalf("RefactorCount = %d, want 1", got.RefactorCount())
-	}
-	rc := got.RepoCycles[repoName]
-	if rc == nil || rc.Type != feature.CycleRefactor || rc.Status != feature.RepoCycleRunning {
-		t.Fatalf("RepoCycles[repo-a] = %+v, want running refactor cycle", rc)
-	}
-	promptPath := filepath.Join(store.BaseDir, f.ID, "runs", "run-001", "refactor-1", "refactor-prompt.md")
-	if rc.PlanPath != promptPath {
-		t.Fatalf("RepoCycles[repo-a].PlanPath = %q, want %q", rc.PlanPath, promptPath)
-	}
-	if _, err := os.Stat(promptPath); err != nil {
-		t.Fatalf("refactor prompt artifact was not staged at %s: %v", promptPath, err)
-	}
 }

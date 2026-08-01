@@ -13,9 +13,13 @@
 // limitations under the License.
 
 // Package orchestrator exposes feature-lifecycle operations through a stable
-// boundary instead of allowing clients to call feature.Manager directly. The
+// boundary instead of allowing clients to call feature.Manager directly.
+// The orchestrator is the mutation chokepoint: several delegates
+// intentionally enforce relationship guards and other cross-cutting behavior
+// before delegating to the underlying ports.FeatureLifecycle call. The
 // transitions remain in feature.Manager; the orchestrator owns the call sites
-// so observer emission and cross-cutting concerns share one chokepoint.
+// so observer emission, relationship guards, and cross-cutting concerns share
+// one chokepoint.
 package orchestrator
 
 import (
@@ -127,9 +131,6 @@ func (o *Orchestrator) RecordRoadmapRejection(featureID, feedback string) {
 	}
 
 	roadmapDir := agent.RoadmapDir(baseDir, f)
-	if f.RefactorPrefix() != "" {
-		roadmapDir = fmt.Sprintf("%s/%s/roadmap", agent.ActiveRunDir(baseDir, f), f.RefactorPrefix())
-	}
 
 	latestAttempt := agent.LatestCompletedPlanAttempt(roadmapDir)
 	if latestAttempt <= 0 {
@@ -193,7 +194,7 @@ func (o *Orchestrator) TryCompletePublish(featureID string) (bool, error) {
 // terminal transition. Used by explicit mark-done paths where the feature
 // reached a terminal state without the orchestrator's publish pipeline.
 func (o *Orchestrator) MarkDone(featureID string) error {
-	if err := o.deps.Store.Modify(featureID, func(f *feature.Feature) error {
+	if err := o.guardedModify(featureID, MutationMarkDone, func(f *feature.Feature) error {
 		return f.Transition(feature.StatusDone)
 	}); err != nil {
 		return err
@@ -276,9 +277,14 @@ func (o *Orchestrator) TransitionTo(featureID string, status feature.Status) err
 
 // ClearRepoCycles removes every RepoCycles entry on a feature without firing
 // failure events. It supports cleanup of published features with active cycles
-// without exposing feature.Manager mutators to clients.
+// without exposing feature.Manager mutators to clients. The relationship guard
+// ensures cleanup is never performed on an active child or while a parent has
+// an active child.
 func (o *Orchestrator) ClearRepoCycles(featureID string) error {
-	return o.deps.Lifecycle.ClearRepoCycles(featureID)
+	return o.guardedModify(featureID, MutationCleanup, func(f *feature.Feature) error {
+		f.RepoCycles = nil
+		return nil
+	})
 }
 
 // RetryPhase clears feature-level error/gate state so the unified
@@ -290,6 +296,14 @@ func (o *Orchestrator) ClearRepoCycles(featureID string) error {
 // the plan can't be read (best-effort recovery — the next orchestrator
 // cycle's PhaseScope call will revalidate before launching the loop).
 func (o *Orchestrator) RetryPhase(featureID string) error {
+	o.relationshipMu.RLock()
+	defer o.relationshipMu.RUnlock()
+	if err := o.RelationshipGuard(featureID, MutationRetry); err != nil {
+		return err
+	}
+	if err := o.checkChildExecution(featureID); err != nil {
+		return err
+	}
 	repoNames := o.phaseDeclaredRepos(featureID)
 	return o.deps.Lifecycle.RetryPhase(featureID, repoNames)
 }
@@ -377,6 +391,11 @@ func (o *Orchestrator) UpgradePipeline(featureID string, profile feature.Pipelin
 // RewindToPhase delegates to Lifecycle.RewindToPhase. Returns the effective
 // target phase and warnings computed during the rewind.
 func (o *Orchestrator) RewindToPhase(featureID string, targetPhase feature.Phase) ([]string, feature.Phase, error) {
+	o.relationshipMu.RLock()
+	defer o.relationshipMu.RUnlock()
+	if err := o.RelationshipGuard(featureID, MutationRewind); err != nil {
+		return nil, targetPhase, err
+	}
 	sourceRun := o.currentRunNumber(featureID)
 	warnings, effectiveTarget, err := o.deps.Lifecycle.RewindToPhase(featureID, targetPhase)
 	if err != nil {
@@ -390,6 +409,18 @@ func (o *Orchestrator) RewindToPhase(featureID string, targetPhase feature.Phase
 // RewindWithRequest delegates to Lifecycle.RewindWithRequest for rewind
 // flows that carry additional request fields such as a roadmap phase.
 func (o *Orchestrator) RewindWithRequest(featureID string, request feature.RewindRequest) ([]string, feature.Phase, error) {
+	o.relationshipMu.RLock()
+	defer o.relationshipMu.RUnlock()
+	return o.rewindWithRequestLocked(featureID, request)
+}
+
+// rewindWithRequestLocked is the lock-held rewind entry point. Callers must
+// hold the relationship read lock so the guard check and the rewind execute
+// atomically with any preceding mutations (e.g. pipeline upgrade).
+func (o *Orchestrator) rewindWithRequestLocked(featureID string, request feature.RewindRequest) ([]string, feature.Phase, error) {
+	if err := o.RelationshipGuard(featureID, MutationRewind); err != nil {
+		return nil, 0, err
+	}
 	sourceRun := o.currentRunNumber(featureID)
 	warnings, effectiveTarget, err := o.deps.Lifecycle.RewindWithRequest(featureID, request)
 	if err != nil {
@@ -398,6 +429,27 @@ func (o *Orchestrator) RewindWithRequest(featureID string, request feature.Rewin
 	o.fireFeatureRewoundHook(featureID, request, effectiveTarget, sourceRun)
 	o.emitEventBlocking(ports.Event{Type: ports.FeatureRewound, FeatureID: featureID, Phase: effectiveTarget})
 	return warnings, effectiveTarget, nil
+}
+
+// RewindWithUpgrade performs an optional pipeline upgrade, session stop, and
+// rewind as one atomic relationship-guarded operation. The relationship guard
+// check, pipeline upgrade, session stop, and rewind all execute under the
+// same read lock so a concurrent refactor launch cannot interleave a child
+// creation between the guard check and the mutations. Callers that need a
+// plain rewind (no pipeline upgrade) should use RewindWithRequest.
+func (o *Orchestrator) RewindWithUpgrade(featureID string, request feature.RewindRequest, upgradePipeline feature.PipelineProfile) ([]string, feature.Phase, error) {
+	o.relationshipMu.RLock()
+	defer o.relationshipMu.RUnlock()
+	if err := o.RelationshipGuard(featureID, MutationRewind); err != nil {
+		return nil, 0, err
+	}
+	if upgradePipeline != "" {
+		if err := o.deps.Lifecycle.UpgradePipeline(featureID, upgradePipeline); err != nil {
+			return nil, 0, err
+		}
+	}
+	o.StopFeatureSessions(featureID)
+	return o.rewindWithRequestLocked(featureID, request)
 }
 
 func (o *Orchestrator) currentRunNumber(featureID string) int {
@@ -424,8 +476,15 @@ func (o *Orchestrator) fireFeatureRewoundHook(featureID string, request feature.
 	o.hooks.OnFeatureRewound(featureID, request, effectiveTarget, sourceRun, newRun)
 }
 
-// CleanWorktree delegates to Lifecycle.CleanWorktree for clean-worktree actions.
+// CleanWorktree delegates to Lifecycle.CleanWorktree for clean-worktree
+// actions. The relationship guard ensures cleanup is never performed on an
+// active child or while a parent has an active child.
 func (o *Orchestrator) CleanWorktree(featureID string) error {
+	o.relationshipMu.RLock()
+	defer o.relationshipMu.RUnlock()
+	if err := o.RelationshipGuard(featureID, MutationCleanup); err != nil {
+		return err
+	}
 	return o.deps.Lifecycle.CleanWorktree(featureID)
 }
 
@@ -441,6 +500,11 @@ func (o *Orchestrator) SaveFeatureSummary(featureID, summary string) error {
 // and merges the feature branch into its base branch locally. Errors identify
 // the affected repository so clients can present a useful diagnostic.
 func (o *Orchestrator) MergeFeatureLocal(featureID string) error {
+	o.relationshipMu.RLock()
+	defer o.relationshipMu.RUnlock()
+	if err := o.RelationshipGuard(featureID, MutationMerge); err != nil {
+		return err
+	}
 	f, err := o.deps.Lifecycle.Get(featureID)
 	if err != nil {
 		return fmt.Errorf("load feature: %w", err)
@@ -562,8 +626,8 @@ type UpdateFeatureConfigInput struct {
 	AutomaticReviewMode feature.AutomaticReviewMode
 }
 
-// UpdateFeatureConfig atomically writes the editable config axes. Same
-// idiom as ApplyRefactorPipeline — Store.Modify handles locking + atomic
+// UpdateFeatureConfig atomically writes the editable config axes.
+// Store.Modify handles locking + atomic
 // write. On success, emits ports.Event{Type: FeatureConfigChanged}
 // (non-blocking) and fires hooks.OnFeatureConfigChanged(before, after) so the
 // observer writes a feature.config_changed audit entry.
@@ -579,6 +643,9 @@ type UpdateFeatureConfigInput struct {
 func (o *Orchestrator) UpdateFeatureConfig(featureID string, input UpdateFeatureConfigInput) error {
 	var before, after feature.ConfigSnapshot
 	err := o.deps.Store.Modify(featureID, func(f *feature.Feature) error {
+		if f.IsChild() && !f.IsActiveChild() {
+			return feature.ErrChildRelationshipClosed
+		}
 		before = feature.ConfigSnapshot{
 			Models:              f.Models,
 			Effort:              f.Effort,
@@ -677,22 +744,13 @@ type RepoCycleRestart struct {
 	PlanContent string
 }
 
-// RefactorRestart describes the single refactor cycle that needs to be
-// re-launched after a restart. Refactor cycles are limited to one per feature
-// so at most one instance is returned.
-type RefactorRestart struct {
-	RepoName string
-	Prompt   string
-}
-
 // CollectAndClearRepoCycleRestarts snapshots the feature's RepoCycles map,
 // reads each review-comments cycle's plan file from disk, clears the cycle
-// state, and returns restart descriptors for the caller. At most one refactor
-// cycle is returned because only one refactor runs at a time.
-func (o *Orchestrator) CollectAndClearRepoCycleRestarts(featureID string) ([]RepoCycleRestart, *RefactorRestart, error) {
+// state, and returns restart descriptors for the caller.
+func (o *Orchestrator) CollectAndClearRepoCycleRestarts(featureID string) ([]RepoCycleRestart, error) {
 	f, err := o.deps.Lifecycle.Get(featureID)
 	if err != nil {
-		return nil, nil, fmt.Errorf("load feature: %w", err)
+		return nil, fmt.Errorf("load feature: %w", err)
 	}
 
 	type cycleSnapshot struct {
@@ -706,27 +764,12 @@ func (o *Orchestrator) CollectAndClearRepoCycleRestarts(featureID string) ([]Rep
 	}
 
 	if err := o.deps.Lifecycle.ClearRepoCycles(featureID); err != nil {
-		return nil, nil, fmt.Errorf("clear repo cycles: %w", err)
+		return nil, fmt.Errorf("clear repo cycles: %w", err)
 	}
 
 	var restarts []RepoCycleRestart
-	var refactor *RefactorRestart
 	for _, c := range cycles {
 		switch c.cycleType {
-		case feature.CycleRefactor:
-			if refactor != nil {
-				// Only restart one refactor per feature — one at a time.
-				continue
-			}
-			prompt := f.RefactorPrompt
-			if prompt == "" && c.planPath != "" {
-				data, _ := os.ReadFile(c.planPath)
-				prompt = extractRefactorPromptFromPlan(string(data))
-			}
-			refactor = &RefactorRestart{
-				RepoName: c.repoName,
-				Prompt:   prompt,
-			}
 		case feature.CycleReviewComments:
 			data, _ := os.ReadFile(c.planPath)
 			restarts = append(restarts, RepoCycleRestart{
@@ -737,40 +780,7 @@ func (o *Orchestrator) CollectAndClearRepoCycleRestarts(featureID string) ([]Rep
 		}
 	}
 
-	return restarts, refactor, nil
-}
-
-// extractRefactorPromptFromPlan returns the user prompt stored in a refactor
-// plan file ("# Refactor: <repoName>\n\n<prompt>\n").
-func extractRefactorPromptFromPlan(content string) string {
-	if content == "" {
-		return ""
-	}
-	if idx := indexDoubleNewline(content); idx >= 0 {
-		return trimSpace(content[idx+2:])
-	}
-	return trimSpace(content)
-}
-
-func indexDoubleNewline(s string) int {
-	for i := 0; i+1 < len(s); i++ {
-		if s[i] == '\n' && s[i+1] == '\n' {
-			return i
-		}
-	}
-	return -1
-}
-
-func trimSpace(s string) string {
-	start := 0
-	for start < len(s) && (s[start] == ' ' || s[start] == '\t' || s[start] == '\n' || s[start] == '\r') {
-		start++
-	}
-	end := len(s)
-	for end > start && (s[end-1] == ' ' || s[end-1] == '\t' || s[end-1] == '\n' || s[end-1] == '\r') {
-		end--
-	}
-	return s[start:end]
+	return restarts, nil
 }
 
 // GateReviewContext bundles the artifact path and worktree directory needed to
@@ -871,9 +881,8 @@ func (o *Orchestrator) ResolveGateReviewContext(featureID string, targetPhase fe
 	case feature.PhaseImplement:
 		// Roadmap features at phase 0 → roadmap artifact (initial roadmap review).
 		// Roadmap features at phase N > 0 → per-phase plan artifact
-		// (phase-N-plan key routes through resolvePhaseDirForKey, which is
-		// refactor-aware via RefactorPrefix() and matches resolvePlanPath's
-		// fallback cascade).
+		// (phase-N-plan key routes through resolvePhaseDirForKey and
+		// matches resolvePlanPath's fallback cascade).
 		// Legacy single-repo non-roadmap → generic "plan" artifact.
 		switch {
 		case f.TotalRoadmapPhases > 0 && f.CurrentRoadmapPhase == 0:
@@ -921,8 +930,8 @@ const (
 	// RestartDispatchPhase requires the caller to start Outcome.Phase.
 	RestartDispatchPhase
 
-	// RestartDispatchRepoCycles returns repository and refactor descriptors for
-	// the caller to relaunch.
+	// RestartDispatchRepoCycles returns repository descriptors for the
+	// caller to relaunch.
 	RestartDispatchRepoCycles
 
 	// RestartDispatchRebase resumes a retained feature-level rebase operation.
@@ -935,7 +944,6 @@ type RestartOutcome struct {
 	Action            RestartAction
 	Phase             feature.Phase // meaningful only for RestartDispatchPhase
 	RepoCycleRestarts []RepoCycleRestart
-	RefactorRestart   *RefactorRestart
 }
 
 // RestartPhase is the single orchestrator entrypoint for user-initiated phase
@@ -954,6 +962,14 @@ type RestartOutcome struct {
 // is Plan). Pass 0 to skip the bump; callers supply configured defaults so the
 // orchestrator boundary stays free of config plumbing.
 func (o *Orchestrator) RestartPhase(featureID string, maxIterationsDelta, maxPlanIterationsDelta int) (RestartOutcome, error) {
+	// The relationship guard rejects parent restart while a child is active.
+	// For children, checkChildExecution enforces active relationship and
+	// execution capability before any state changes.
+	o.relationshipMu.RLock()
+	defer o.relationshipMu.RUnlock()
+	if err := o.RelationshipGuard(featureID, MutationRestart); err != nil {
+		return RestartOutcome{}, err
+	}
 	// Refuse if any session for this feature is still active. This catches the
 	// "user spammed 'r' during a stop" case: InterruptFeature is mid-loop,
 	// sessions are still draining, but the feature already shows
@@ -968,6 +984,9 @@ func (o *Orchestrator) RestartPhase(featureID string, maxIterationsDelta, maxPla
 		}
 	}
 
+	if err := o.checkChildExecution(featureID); err != nil {
+		return RestartOutcome{}, err
+	}
 	f, err := o.deps.Lifecycle.Get(featureID)
 	if err != nil {
 		return RestartOutcome{}, fmt.Errorf("load feature: %w", err)
@@ -984,6 +1003,33 @@ func (o *Orchestrator) RestartPhase(featureID string, maxIterationsDelta, maxPla
 			return RestartOutcome{Action: RestartDispatchRebase}, nil
 		}
 	}
+
+	// An active child with resumable integration state replays the integration
+	// boundary — never Plan, Implement, or an already-approved Final Review.
+	// Closed cleanup tails are owned exclusively by automatic reconciliation.
+	if f.IntegrationResumable() {
+		if err := o.runChildIntegrationLocked(featureID); err != nil {
+			return RestartOutcome{}, err
+		}
+		// Reload to check whether conflict resolution invalidated the
+		// final-review approval and routed the child back through Final
+		// Review. When the child code changed during resolution,
+		// invalidateFinalReview clears the journal and sets
+		// StatusReviewPassed + CurrentPhase=PhaseFinalReview. RestartPhase
+		// must dispatch Final Review so the pipeline reruns it without
+		// replaying Plan or Implement.
+		f, err = o.deps.Lifecycle.Get(featureID)
+		if err != nil {
+			return RestartOutcome{}, fmt.Errorf("reload after integration: %w", err)
+		}
+		if f.IsChild() && f.Parent.Transaction == nil &&
+			f.Status == feature.StatusReviewPassed &&
+			f.CurrentPhase == feature.PhaseFinalReview {
+			return RestartOutcome{Action: RestartDispatchPhase, Phase: feature.PhaseFinalReview}, nil
+		}
+		return RestartOutcome{Action: RestartNoOp}, nil
+	}
+
 
 	// Clear failure context on restart; extend iteration caps if exhausted.
 	// ExtendFailedPhaseBudget is a no-op on non-Failed features so this is
@@ -1004,14 +1050,13 @@ func (o *Orchestrator) RestartPhase(featureID string, maxIterationsDelta, maxPla
 				return RestartOutcome{}, fmt.Errorf("restore status for cycle restart: %w", err)
 			}
 		}
-		restarts, refactor, collectErr := o.CollectAndClearRepoCycleRestarts(featureID)
+		restarts, collectErr := o.CollectAndClearRepoCycleRestarts(featureID)
 		if collectErr != nil {
 			return RestartOutcome{}, fmt.Errorf("collect cycles: %w", collectErr)
 		}
 		return RestartOutcome{
 			Action:            RestartDispatchRepoCycles,
 			RepoCycleRestarts: restarts,
-			RefactorRestart:   refactor,
 		}, nil
 	}
 

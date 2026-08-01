@@ -35,6 +35,16 @@ import (
 // sees no orphans and is a no-op. Crash recovery: if the process crashes
 // mid-cleanup, the next startup's cleanup pass reconciles any still-present
 // orphans before scan proceeds.
+//
+// Integration reconciliation runs after discard-intent reconciliation so
+// a child with a durable discard intent is rolled back and closed before
+// ordinary integration can mark the journal applied or publish the parent.
+// It then classifies every transaction journal target ref against its
+// journaled old and candidate SHAs, finishes fully applied transactions,
+// rolls back provable partials, and preserves unclassifiable externally
+// moved state as integration attention. Reconciliation errors follow the
+// existing fail-closed startup ordering so session recovery never acts on
+// an unreconciled transaction.
 func (o *Orchestrator) ScanRecovery(ctx context.Context) ([]ports.RecoveryItem, error) {
 	if o.deps.Recovery == nil {
 		return nil, errors.New("recovery operator not configured")
@@ -48,6 +58,16 @@ func (o *Orchestrator) ScanRecovery(ctx context.Context) ([]ports.RecoveryItem, 
 			return nil, fmt.Errorf("cleanup orphan runs: %w", err)
 		}
 	}
+	// Roll interrupted child creations forward before abandoned-setup
+	// reconciliation: a rebuilt child is left in SettingUpWorktrees with a
+	// running setup intent, which the pass below then marks retryable.
+	if reconciler, ok := o.deps.Store.(interface {
+		ReconcilePendingChildCreations() ([]string, error)
+	}); ok {
+		if _, err := reconciler.ReconcilePendingChildCreations(); err != nil {
+			return nil, fmt.Errorf("reconcile pending child creations: %w", err)
+		}
+	}
 	if reconciler, ok := o.deps.Lifecycle.(interface {
 		ReconcileAbandonedSetups() ([]string, error)
 	}); ok {
@@ -58,6 +78,44 @@ func (o *Orchestrator) ScanRecovery(ctx context.Context) ([]ports.RecoveryItem, 
 		for _, id := range ids {
 			o.emitSetupReconciled(id)
 		}
+	}
+	// Child creation and abandoned setup establish the complete durable
+	// relationship first. Cascade then takes exclusive ownership before
+	// paired config, discard, integration, closure cleanup, or ordinary
+	// session recovery can advance either record.
+	if err := o.ReconcileCascadeDeletes(); err != nil {
+		return nil, fmt.Errorf("reconcile cascade deletes: %w", err)
+	}
+	// Reconcile interrupted paired config updates before integration
+	// transactions so both records converge before any integration work.
+	if reconciler, ok := o.deps.Store.(interface {
+		ReconcilePendingConfigUpdates() ([]string, error)
+	}); ok {
+		if _, err := reconciler.ReconcilePendingConfigUpdates(); err != nil {
+			return nil, fmt.Errorf("reconcile pending config updates: %w", err)
+		}
+	}
+	// Reconcile discard intents before integration transactions so a
+	// child with a durable discard intent is rolled back, closed, and
+	// cleaned up before ordinary integration reconciliation can mark the
+	// journal applied and close the child as completed. Discard must
+	// converge through rollback/closure/cleanup in that order so
+	// integration never observes a child that should already be discarded.
+	if err := o.ReconcileDiscardIntents(); err != nil {
+		return nil, fmt.Errorf("reconcile discard intents: %w", err)
+	}
+	// Reconcile interrupted integration transactions before ordinary session
+	// recovery observes or relaunches sessions.
+	if o.deps.Store != nil {
+		if err := o.ReconcileIntegrationTransactions(); err != nil {
+			return nil, fmt.Errorf("reconcile integration transactions: %w", err)
+		}
+	}
+	// Reconcile pending promotion journals after integration so a merged
+	// child with an unfinished promotion can be recovered before ordinary
+	// session recovery observes or relaunches sessions.
+	if err := o.ReconcilePromotions(); err != nil {
+		return nil, fmt.Errorf("reconcile promotions: %w", err)
 	}
 	items, err := o.deps.Recovery.ScanForRecovery(ctx)
 	if err != nil {
@@ -284,4 +342,196 @@ func recoveryActionString(action ports.RecoveryAction) string {
 	default:
 		return fmt.Sprintf("unknown(%d)", int(action))
 	}
+}
+
+// ReconcileIntegrationTransactions is the idempotent startup reconciliation
+// pass for integration journals. It runs after existing durable record/setup
+// cleanup that materializes valid children and before ordinary session
+// recovery observes or relaunches sessions.
+//
+// For each child feature with a transaction journal, it classifies every
+// target ref against its journaled old and candidate SHAs:
+//   - Prepared-but-unapplied: leave retryable without moving refs.
+//   - All refs already at candidates: finish the durable transition once.
+//   - Provable partial apply: conditionally roll back.
+//   - Partially completed rollback: resume from durable and observed state.
+//   - Any ref matching neither old nor candidate: preserve as attention.
+//
+// Reconciliation errors follow the existing fail-closed startup ordering so
+// session recovery never acts on an unreconciled transaction.
+func (o *Orchestrator) ReconcileIntegrationTransactions() error {
+	features, listErr := o.deps.Store.List()
+	var partialIDs []string
+	if listErr != nil {
+		var ple *feature.PartialLoadError
+		if errors.As(listErr, &ple) {
+			for _, w := range ple.Warnings {
+				partialIDs = append(partialIDs, w.ID)
+			}
+		} else {
+			return fmt.Errorf("list features: %w", listErr)
+		}
+	}
+	var errs []error
+	for _, f := range features {
+		if err := o.reconcileOneIntegration(f); err != nil {
+			errs = append(errs, fmt.Errorf("%s: %w", f.ID, err))
+		}
+	}
+	for _, id := range partialIDs {
+		f, err := o.deps.Store.Load(id)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("%s: load: %w", id, err))
+			continue
+		}
+		if f == nil {
+			continue
+		}
+		if err := o.reconcileOneIntegration(f); err != nil {
+			errs = append(errs, fmt.Errorf("%s: %w", id, err))
+		}
+	}
+	if len(errs) > 0 {
+		return errors.Join(errs...)
+	}
+	return nil
+}
+
+// reconcileOneIntegration reconciles a single feature's integration journal.
+func (o *Orchestrator) reconcileOneIntegration(f *feature.Feature) error {
+	if f == nil || !f.IsChild() {
+		return nil
+	}
+	if owned, err := o.cascadeOwnsRelationship(f.Parent.ParentID); err != nil {
+		return err
+	} else if owned {
+		return nil
+	}
+	// A child with a durable discard intent is owned by the discard
+	// flow. ReconcileDiscardIntents (which runs before this pass in
+	// ScanRecovery) resumes the discard through rollback/closure/cleanup.
+	// Integration reconciliation must not close or publish a child that
+	// has a discard intent — even if the journal is all-at-candidate —
+	// because the discard path converges through a different outcome.
+	if f.IsDiscarding() {
+		return nil
+	}
+	journal := f.Parent.Transaction
+	if journal == nil || journal.Phase == "" {
+		return nil
+	}
+
+	// A preparing journal was interrupted during candidate staging.
+	// Leave it retryable — runTransactionIntegration resumes preparation
+	// on restart by re-preparing from scratch (parent refs are untouched
+	// during preparation).
+	if journal.Phase == feature.TransactionPhasePreparing {
+		return nil
+	}
+
+	// A merged journal with an active child means closure was interrupted
+	// (e.g. a crash after the merged write in the old code path). Finish
+	// the closure so the child is not permanently stranded.
+	if journal.Phase == feature.TransactionPhaseMerged {
+		if f.IsActiveChild() {
+			return o.closeTransactionAfterApply(f.ID, f.Parent.ParentID)
+		}
+		// Already closed — settle the impermanent closure tail.
+		return o.settleChildClosureTail(f.ID, f.Parent.ParentID)
+	}
+
+	cas, ok := o.deps.Worktrees.(refCASOperator)
+	if !ok {
+		return fmt.Errorf("ref CAS operations not configured for reconciliation")
+	}
+
+	parent, err := o.deps.Lifecycle.Get(f.Parent.ParentID)
+	if err != nil {
+		return fmt.Errorf("load parent %s: %w", f.Parent.ParentID, err)
+	}
+	if parent == nil {
+		return fmt.Errorf("parent %s not found", f.Parent.ParentID)
+	}
+
+	// Classify each ref against journaled old and candidate SHAs.
+	allAtCandidate := true
+	anyApplied := false
+	anyUnclassifiable := false
+	anyRolledBack := false
+	for i := range journal.Entries {
+		entry := &journal.Entries[i]
+		parentRepo := featureRepoByName(parent, entry.Repo)
+		if parentRepo == nil {
+			entry.Diagnostics = fmt.Sprintf("parent no longer has repository %s", entry.Repo)
+			anyUnclassifiable = true
+			continue
+		}
+		ref := "refs/heads/" + entry.ParentBranch
+		current, err := cas.RefSHA(parentRepo.Path, ref)
+		if err != nil {
+			entry.Diagnostics = fmt.Sprintf("reading ref %s: %v", ref, err)
+			anyUnclassifiable = true
+			continue
+		}
+		entry.ObservedSHA = current
+		switch {
+		case current == entry.CandidateSHA:
+			entry.ApplyState = feature.RepoApplyApplied
+			anyApplied = true
+		case current == entry.ParentAnchorSHA:
+			// Ref is at the old SHA.
+			switch {
+			case entry.ApplyState == feature.RepoApplyApplied &&
+				journal.Phase == feature.TransactionPhaseRollingBack:
+				// The rollback CAS restored the ref but the state was
+				// not persisted before the crash. Mark it rolled back
+				// and continue the rollback.
+				entry.ApplyState = feature.RepoApplyRolledBack
+				anyRolledBack = true
+			case entry.ApplyState == feature.RepoApplyRolledBack:
+				// The entry was durably marked rolled_back before a
+				// crash interrupted the aggregate phase write. The
+				// rollback must still be completed (or resumed for
+				// remaining applied entries).
+				anyRolledBack = true
+			case entry.ApplyState == feature.RepoApplyApplied:
+				// Was applied but ref moved back — external reset.
+				anyUnclassifiable = true
+				entry.Diagnostics = fmt.Sprintf("ref %s was applied but regressed to old SHA", ref)
+			}
+		default:
+			anyUnclassifiable = true
+			entry.Diagnostics = fmt.Sprintf("ref %s externally moved: old %s candidate %s observed %s",
+				ref, entry.ParentAnchorSHA, entry.CandidateSHA, current)
+		}
+		if entry.ApplyState != feature.RepoApplyApplied {
+			allAtCandidate = false
+		}
+	}
+
+	if anyUnclassifiable {
+		journal.Phase = feature.TransactionPhaseAttention
+		journal.Attention = transactionAttentionSummary(journal)
+		return o.persistTransaction(f.ID, journal)
+	}
+
+	if allAtCandidate && anyApplied {
+		journal.Phase = feature.TransactionPhaseApplied
+		if err := o.persistTransaction(f.ID, journal); err != nil {
+			return fmt.Errorf("recording reconciled applied: %w", err)
+		}
+		return o.closeTransactionAfterApply(f.ID, f.Parent.ParentID)
+	}
+
+	if anyApplied && !allAtCandidate {
+		return o.rollbackTransaction(f, parent, journal, -1)
+	}
+
+	// If some entries were rolled back during a partially completed
+	// rollback, continue the rollback for remaining applied entries.
+	if anyRolledBack && journal.Phase == feature.TransactionPhaseRollingBack {
+		return o.rollbackTransaction(f, parent, journal, -1)
+	}
+
+	return nil
 }

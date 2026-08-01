@@ -24,6 +24,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -51,6 +52,9 @@ type Client struct {
 	// server-side work is unbounded by request size (see LongTimeout).
 	longClient *http.Client
 	token      string
+
+	relationshipRefreshMu sync.Mutex
+	relationshipVersions  map[string]uint64
 }
 
 type APIError struct {
@@ -106,10 +110,11 @@ func NewClient(opts ClientOptions) (*Client, error) {
 	longClient := *httpClient
 	longClient.Timeout = longClientTimeout(opts.LongTimeout)
 	return &Client{
-		baseURL:    baseURL,
-		client:     httpClient,
-		longClient: &longClient,
-		token:      strings.TrimSpace(opts.Token),
+		baseURL:              baseURL,
+		client:               httpClient,
+		longClient:           &longClient,
+		token:                strings.TrimSpace(opts.Token),
+		relationshipVersions: make(map[string]uint64),
 	}, nil
 }
 
@@ -432,6 +437,12 @@ func (c *Client) StartRebase(ctx context.Context, featureID string, req RebaseAc
 	return out, err
 }
 
+func (c *Client) RefactorFeature(ctx context.Context, featureID string, req RefactorFeatureRequest) (RefactorFeatureResponse, error) {
+	var out RefactorFeatureResponse
+	err := c.doJSON(ctx, http.MethodPost, featureActionPath(featureID, actionRefactor), nil, req, &out, true)
+	return out, err
+}
+
 func (c *Client) FetchReviewComments(ctx context.Context, featureID string, req ReviewCommentsFetchRequest) (ReviewCommentsFetchResponse, error) {
 	var out ReviewCommentsFetchResponse
 	err := c.doJSON(ctx, http.MethodPost, featureActionPath(featureID, actionReviewComments)+"/fetch", nil, req, &out, true)
@@ -441,18 +452,6 @@ func (c *Client) FetchReviewComments(ctx context.Context, featureID string, req 
 func (c *Client) StartReviewComments(ctx context.Context, featureID string, req ReviewCommentsActionRequest) (ReviewCommentsStartResponse, error) {
 	var out ReviewCommentsStartResponse
 	err := c.doJSON(ctx, http.MethodPost, featureActionPath(featureID, actionReviewComments), nil, req, &out, true)
-	return out, err
-}
-
-func (c *Client) StartRefactor(ctx context.Context, featureID string, req RefactorActionRequest) (RefactorStartResponse, error) {
-	var out RefactorStartResponse
-	err := c.doJSON(ctx, http.MethodPost, featureActionPath(featureID, actionRefactor), nil, req, &out, true)
-	return out, err
-}
-
-func (c *Client) RestartRefactor(ctx context.Context, featureID string, req RefactorActionRequest) (RefactorRestartResponse, error) {
-	var out RefactorRestartResponse
-	err := c.doJSON(ctx, http.MethodPost, featureActionPath(featureID, actionRefactor)+"/restart", nil, req, &out, true)
 	return out, err
 }
 
@@ -469,6 +468,12 @@ func (c *Client) MarkDoneWithRequest(ctx context.Context, featureID string, req 
 func (c *Client) CleanupFeature(ctx context.Context, featureID string, req CleanupActionRequest) (CleanupFeatureResponse, error) {
 	var out CleanupFeatureResponse
 	err := c.doJSON(ctx, http.MethodPost, featureActionPath(featureID, actionCleanup), nil, req, &out, true)
+	return out, err
+}
+
+func (c *Client) DiscardChild(ctx context.Context, featureID string) (DiscardChildResponse, error) {
+	var out DiscardChildResponse
+	err := c.doJSON(ctx, http.MethodPost, featureActionPath(featureID, actionDiscard), nil, map[string]any{}, &out, true)
 	return out, err
 }
 

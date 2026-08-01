@@ -269,7 +269,7 @@ func RunPhaseImplementLoop(cfg OrchestratorConfig, sm ports.SessionManager) (*Ph
 // For roadmap-phase features the dir is `runs/run-NNN/phase-NN/implement/`.
 // For non-roadmap features it's `runs/run-NNN/implement/`.
 func resolveUnifiedPhaseImplementDir(f *feature.Feature, runDir string) string {
-	base := filepath.Join(runDir, f.RefactorPrefix())
+	base := runDir
 	if f.CurrentRoadmapPhase > 0 {
 		return filepath.Join(base, fmt.Sprintf("phase-%02d", f.CurrentRoadmapPhase), "implement")
 	}

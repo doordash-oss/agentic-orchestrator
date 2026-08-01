@@ -50,7 +50,6 @@ const (
 	ValidatorPlanAttemptMeta           ArtifactValidator = "plan_attempt_meta"
 	ValidatorKnowledgeBaseIndex        ArtifactValidator = "knowledge_base_index"
 	ValidatorPhaseMarkdown             ArtifactValidator = "phase_markdown"
-	ValidatorRefactorPlanMarkdown      ArtifactValidator = "refactor_plan_markdown"
 	ValidatorReviewFeedback            ArtifactValidator = "review_feedback"
 	ValidatorPlanValidatorAxisApproval ArtifactValidator = "plan_validator_axis_approval"
 )

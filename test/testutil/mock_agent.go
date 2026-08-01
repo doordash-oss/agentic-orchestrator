@@ -45,9 +45,12 @@ echo '{"type":"result","subtype":"success","session_id":"mock","total_cost_usd":
 
 // JSONLAssistant returns a shell echo command emitting an assistant text message.
 func JSONLAssistant(text string) string {
-	// Escape single quotes for shell embedding
+	// Escape single quotes for shell embedding, then JSON string metacharacters
+	// (a raw newline inside a JSON string breaks the whole JSONL line).
 	escaped := strings.ReplaceAll(text, `'`, `'\''`)
-	return fmt.Sprintf(`echo '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"%s"}]}}'`, strings.ReplaceAll(escaped, `"`, `\"`))
+	escaped = strings.ReplaceAll(escaped, `"`, `\"`)
+	escaped = strings.ReplaceAll(escaped, "\n", `\n`)
+	return fmt.Sprintf(`echo '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"%s"}]}}'`, escaped)
 }
 
 // JSONLResult returns a shell echo command emitting a result message with embedded text.

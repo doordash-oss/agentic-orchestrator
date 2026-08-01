@@ -142,7 +142,21 @@ func (pr *PhaseRunner) EffortCapabilitiesForModel(model string) []llm.EffortLeve
 // model) falls back to the pipeline level (or low for Utilities) with a
 // runtime warning and does not mutate persisted state.
 func (pr *PhaseRunner) resolveEffortForRole(f *feature.Feature, role llm.PhaseRole, model string) (llm.EffortLevel, llm.EffortSource) {
-	return pr.resolveEffortForRoleWithPipeline(f, role, model, "")
+	field := llm.ConfigFieldForRole(role)
+	configured := config.EffortConfigFieldByName(f.Effort, field)
+	pipelineEffort := f.EffectivePipeline().EffortLevel()
+
+	if role == llm.PhaseChat && (configured == "" || configured == "auto") {
+		return llm.EffortLow, llm.EffortSourceAuto
+	}
+
+	caps := pr.EffortCapabilitiesForModel(model)
+	effectiveEffort, effortSource := llm.ResolveEffortFromString(configured, caps, pipelineEffort)
+	if llm.EffortDrifted(llm.EffortLevel(configured), caps) {
+		pr.logRuntimeWarning(f, "%s effort %q is not supported by model %q; falling back to Auto (%s)",
+			strings.ToLower(field), configured, model, string(pipelineEffort))
+	}
+	return effectiveEffort, effortSource
 }
 
 // SessionRuntimeConfigResolver returns a role-aware resolver that reloads the
@@ -171,46 +185,17 @@ func (pr *PhaseRunner) SessionRuntimeConfigResolver(featureID string) func(llm.P
 	}
 }
 
-// resolveEffortForRoleWithPipeline is the shared resolver for both primary and
-// secondary session launches. When pipelineOverride is a valid PipelineProfile,
-// it supplies the Auto baseline for this launch only — used by refactor
-// requests whose temporary pipeline differs from the feature's configured
-// pipeline. An empty pipelineOverride falls back to f.EffectivePipeline().
-// Explicit role values are always preserved regardless of the Auto baseline.
-func (pr *PhaseRunner) resolveEffortForRoleWithPipeline(f *feature.Feature, role llm.PhaseRole, model string, pipelineOverride feature.PipelineProfile) (llm.EffortLevel, llm.EffortSource) {
-	field := llm.ConfigFieldForRole(role)
-	configured := config.EffortConfigFieldByName(f.Effort, field)
-	pipelineEffort := f.EffectivePipeline().EffortLevel()
-	if pipelineOverride.IsValid() {
-		pipelineEffort = pipelineOverride.EffortLevel()
-	}
-
-	if role == llm.PhaseChat && (configured == "" || configured == "auto") {
-		return llm.EffortLow, llm.EffortSourceAuto
-	}
-
-	caps := pr.EffortCapabilitiesForModel(model)
-	effectiveEffort, effortSource := llm.ResolveEffortFromString(configured, caps, pipelineEffort)
-	if llm.EffortDrifted(llm.EffortLevel(configured), caps) {
-		pr.logRuntimeWarning(f, "%s effort %q is not supported by model %q; falling back to Auto (%s)",
-			strings.ToLower(field), configured, model, string(pipelineEffort))
-	}
-	return effectiveEffort, effortSource
-}
-
 // ResolveSecondaryEffort is the exported entry point for secondary session
 // launches (validators, review helpers, fix agents, cycle workers, utility
 // helpers). It resolves the effective effort and source from the same
 // configured role as the selected model: Planning for planning agents, Review
 // for validators and review axes, Implementation for implementation and fix
-// workers, and Utilities for utility helpers. When pipelineOverride is a
-// valid PipelineProfile, it supplies the Auto baseline for this launch only
-// (used by refactor requests); an empty value falls back to the feature's
-// effective pipeline. Capability drift projects the affected role as Auto,
-// omits unsupported provider arguments, and emits a runtime warning through
-// the standard log channel without mutating persisted state.
-func (pr *PhaseRunner) ResolveSecondaryEffort(f *feature.Feature, role llm.PhaseRole, model string, pipelineOverride feature.PipelineProfile) (llm.EffortLevel, llm.EffortSource) {
-	return pr.resolveEffortForRoleWithPipeline(f, role, model, pipelineOverride)
+// workers, and Utilities for utility helpers. Capability drift projects the
+// affected role as Auto, omits unsupported provider arguments, and emits a
+// runtime warning through the standard log channel without mutating persisted
+// state.
+func (pr *PhaseRunner) ResolveSecondaryEffort(f *feature.Feature, role llm.PhaseRole, model string) (llm.EffortLevel, llm.EffortSource) {
+	return pr.resolveEffortForRole(f, role, model)
 }
 
 // logRuntimeWarning emits a warning through the standard logger channel.
@@ -235,11 +220,11 @@ func (pr *PhaseRunner) buildSessionForFeature(f *feature.Feature) BuildSessionFu
 	}
 }
 
-// resolvePhaseArtifactDir returns the artifact directory for a pipeline phase,
-// accounting for active refactor cycles. Paths route through the active run
-// directory so sealed runs are not overwritten.
+// resolvePhaseArtifactDir returns the artifact directory for a pipeline phase.
+// Paths route through the active run directory so sealed runs are not
+// overwritten.
 func (pr *PhaseRunner) resolvePhaseArtifactDir(f *feature.Feature, phaseName string) string {
-	return filepath.Join(ActiveRunDir(pr.StateDir, f), f.RefactorPrefix(), phaseName)
+	return filepath.Join(ActiveRunDir(pr.StateDir, f), phaseName)
 }
 
 // interactivePhaseConfig holds the values that differ across the async
@@ -410,7 +395,7 @@ func (pr *PhaseRunner) RunResearchFromQuestions(f *feature.Feature, questionsPat
 }
 
 // explorationAgentNames returns the codebase- and web-exploration subagents
-// shared by research and the planning, review, and refactor phases.
+// shared by research and the planning and review phases.
 func explorationAgentNames() []string {
 	return []string{
 		"codebase-locator",
@@ -491,13 +476,56 @@ func (pr *PhaseRunner) RunKnowledgeBase(f *feature.Feature) (string, error) {
 // Session ID format: "<featureID>-kb-<repoName>"
 // Returns (sessionID, error). Returns ("", nil) if KB is already fresh.
 func (pr *PhaseRunner) RunKnowledgeBaseForRepo(f *feature.Feature, repo feature.FeatureRepo) (string, error) {
+	kbDir := KBStateDir(pr.StateDir, repo.Name)
+	return pr.runKBSession(f, repo, kbDir)
+}
+
+// RunChildKnowledgeBaseForRepo starts a KB build for a child's disposable
+// workspace. The workspace is seeded from the parent overlay or canonical KB
+// before the build begins. Uses the child's workspace lock (disjoint from the
+// canonical KB lock) so ordinary feature KB builds never wait on child state.
+func (pr *PhaseRunner) RunChildKnowledgeBaseForRepo(f *feature.Feature, repo feature.FeatureRepo) (string, error) {
+	paths := ResolveChildKBPaths(pr.StateDir, f, repo)
+	kbDir := paths.WorkspaceDir
+
+	// Seed the workspace if it hasn't been seeded yet.
+	if state, _ := feature.LoadWorkspaceState(kbDir); state == nil {
+		if err := SeedChildKBWorkspace(context.Background(), pr.CommandRunner, paths); err != nil {
+			return "", fmt.Errorf("seeding child KB workspace for %s: %w", repo.Name, err)
+		}
+	}
+
+	_ = os.MkdirAll(kbDir, 0o755)
+	for _, cat := range kbStandardCategories {
+		_ = os.MkdirAll(filepath.Join(kbDir, cat), 0o755)
+	}
+
+	// Skip rebuild if the workspace KB is already up-to-date with the child HEAD.
+	if IsWorkspaceFresh(context.Background(), pr.CommandRunner, kbDir, func() string {
+		rp := repo.Path
+		if repo.WorktreePath != "" {
+			rp = repo.WorktreePath
+		}
+		return rp
+	}()) {
+		return "", nil
+	}
+
+	return pr.runKBSession(f, repo, kbDir)
+}
+
+// runKBSession is the shared KB session builder for both canonical and child
+// workspace builds. The kbDir parameter controls where KB files, the lock,
+// and the completion marker live. For canonical builds, kbDir is
+// KBStateDir(stateDir, repoName); for child builds, it is the disposable
+// workspace directory.
+func (pr *PhaseRunner) runKBSession(f *feature.Feature, repo feature.FeatureRepo, kbDir string) (string, error) {
 	// Resolve effective repo path: prefer worktree, fall back to original path.
 	repoPath := repo.Path
 	if repo.WorktreePath != "" {
 		repoPath = repo.WorktreePath
 	}
 
-	kbDir := KBStateDir(pr.StateDir, repo.Name)
 	_ = os.MkdirAll(kbDir, 0o755)
 
 	// Pre-create standard KB category subdirectories so the agent doesn't
@@ -534,11 +562,34 @@ func (pr *PhaseRunner) RunKnowledgeBaseForRepo(f *feature.Feature, repo feature.
 	// Determine full vs incremental build
 	var existingKBPath, lastCommit string
 	state, _ := LoadKBState(kbDir)
-	if state != nil {
+	if state != nil && state.HeadCommit != "" {
 		kbPath := KBPath(kbDir)
 		if _, err := os.Stat(kbPath); err == nil {
 			existingKBPath = kbPath
 			lastCommit = state.HeadCommit
+		}
+	} else {
+		// Child workspaces store ChildKBWorkspaceState (not KBState) in
+		// state.json. LoadKBState parses it into a non-nil KBState with
+		// an empty HeadCommit because the JSON field names differ. Check
+		// the child workspace state to determine incremental mode from
+		// the seed provenance. A workspace seeded from a valid overlay
+		// or canonical baseline already contains a KB built through a
+		// known commit; only the delta from that commit to the child
+		// HEAD needs analysis.
+		wsState, _ := feature.LoadWorkspaceState(kbDir)
+		if wsState != nil && wsState.Source != feature.WorkspaceSourceFull {
+			kbPath := KBPath(kbDir)
+			if _, err := os.Stat(kbPath); err == nil {
+				existingKBPath = kbPath
+				if wsState.AnalyzedCommit != "" {
+					lastCommit = wsState.AnalyzedCommit
+				} else if wsState.Source == feature.WorkspaceSourceOverlay {
+					lastCommit = wsState.ParentHEAD
+				} else if wsState.Source == feature.WorkspaceSourceCanonical {
+					lastCommit = wsState.CanonicalCommit
+				}
+			}
 		}
 	}
 
@@ -1285,8 +1336,7 @@ func installAutoReviewObserver(handler ports.PermissionHandler, observer *observ
 
 // resolveImplementArtifactDir returns the artifact directory for implementation
 // within the feature's active run. When in a roadmap phase, uses phase-scoped
-// directories. Includes refactor prefix when an active refactor cycle is in
-// progress.
+// directories.
 func (pr *PhaseRunner) resolveImplementArtifactDir(f *feature.Feature) string {
 	runDir := ActiveRunDir(pr.StateDir, f)
 	// Cycle prefix takes precedence — when an active cycle is running,
@@ -1295,7 +1345,7 @@ func (pr *PhaseRunner) resolveImplementArtifactDir(f *feature.Feature) string {
 	if prefix := f.CyclePrefix(); prefix != "" {
 		return filepath.Join(runDir, prefix, "implement")
 	}
-	base := filepath.Join(runDir, f.RefactorPrefix())
+	base := runDir
 	if f.CurrentRoadmapPhase > 0 {
 		return filepath.Join(base, fmt.Sprintf("phase-%02d", f.CurrentRoadmapPhase), "implement")
 	}
@@ -1591,7 +1641,7 @@ func (pr *PhaseRunner) BuildSession(opts BuildSessionOpts) (cmd []string, env []
 		DisallowedTools:      opts.DisallowedTools,
 		DangerouslySkipPerms: dangerouslySkipPermissions,
 		AdditionalDirs:       opts.AdditionalDirs,
-		StateDir:             pr.StateDir,
+		StateDir:             providerStateDir(pr.StateDir),
 		AgentsJSON:           agentsJSON,
 		AgentNames:           opts.AgentNames,
 		EffortLevel:          opts.EffortLevel,
@@ -1670,6 +1720,16 @@ func (pr *PhaseRunner) BuildSession(opts BuildSessionOpts) (cmd []string, env []
 	return cmd, env, sessOpts, nil
 }
 
+// providerStateDir keeps provider-owned configuration and session bookkeeping
+// outside the feature store, whose direct children are reserved for feature
+// records. The CLI runtime layout places both directories beneath one parent.
+func providerStateDir(featureStateDir string) string {
+	if featureStateDir == "" {
+		return ""
+	}
+	return filepath.Join(filepath.Dir(featureStateDir), "provider-state")
+}
+
 func appendAgenticoBinEnv(env []string) []string {
 	path := currentAgenticoBinPath()
 	if path == "" {
@@ -1706,7 +1766,7 @@ func (pr *PhaseRunner) AskingClauseForModel(model string) string {
 
 // ModelForRole resolves the effective model for a phase role. If configured is
 // non-empty it is returned as-is; otherwise the catalog default for the role is
-// returned. Exported so external callers (e.g. refactor loop) can perform the
+// returned. Exported so external callers (e.g. cycle loops) can perform the
 // same resolution that PhaseRunner uses internally.
 func (pr *PhaseRunner) ModelForRole(configured string, role llm.PhaseRole) string {
 	return pr.modelForRole(configured, role)

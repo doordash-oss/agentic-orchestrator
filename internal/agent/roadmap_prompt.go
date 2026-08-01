@@ -120,7 +120,7 @@ func BuildRoadmapPromptWithResearch(f *feature.Feature, skillsDir, guidelinesDir
 	repos := roadmapFeatureViews(f)
 	return roles.BuildRoadmapPrompt(roles.RoadmapUserInput{
 		Name:                 f.Name,
-		Description:          f.EffectiveDescription(),
+		Description:          f.Description,
 		Repos:                repos,
 		DesignArtifactPath:   designArtifactPath,
 		ResearchArtifactPath: researchArtifactPath,

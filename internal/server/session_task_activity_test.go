@@ -62,7 +62,7 @@ func TestSessionSummaryDTOExposesProviderNeutralTaskRegistry(t *testing.T) {
 		t.Fatalf("sessionSummaryDTO() running=%d tasks=%+v, want one of two running", got.RunningTaskCount, got.TaskActivities)
 	}
 	if got.TaskActivities[0].TaskID != "task-running" ||
-		got.TaskActivities[0].State != Running ||
+		got.TaskActivities[0].State != TaskActivityStateRunning ||
 		got.TaskActivities[0].LastToolName != "apply_patch" {
 		t.Fatalf("running task DTO = %+v", got.TaskActivities[0])
 	}

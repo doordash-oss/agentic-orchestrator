@@ -19,6 +19,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 )
 
 func (t *preflightMutationTarget) CompletionPreflight(featureID string) (CompletionPreflightResponse, error) {
@@ -70,7 +72,7 @@ func (t *preflightMutationTarget) CleanupFeature(featureID string, req CleanupAc
 
 func (t *preflightMutationTarget) DeleteFeature(featureID string, req GuardedFeatureActionRequest) (DeleteFeatureResponse, error) {
 	t.deleteReq = req
-	return DeleteFeatureResponse{FeatureID: featureID, Result: "deleted"}, nil
+	return DeleteFeatureResponse{FeatureID: featureID, Status: feature.CascadeDeleteCompleted}, nil
 }
 
 func TestCompletionPreflightReturnsEligibleRepos(t *testing.T) {

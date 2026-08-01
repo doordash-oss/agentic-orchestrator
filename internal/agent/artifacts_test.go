@@ -476,48 +476,6 @@ func TestRoadmapDir(t *testing.T) {
 	}
 }
 
-func TestRefactorBaseDir(t *testing.T) {
-	tests := []struct {
-		name      string
-		stateDir  string
-		featureID string
-		n         int
-		want      string
-	}{
-		{
-			name:      "first refactor cycle",
-			stateDir:  "/tmp/state",
-			featureID: "feat-abc",
-			n:         1,
-			want:      filepath.Join("/tmp/state", "feat-abc", "runs", "run-001", "refactor-1"),
-		},
-		{
-			name:      "second refactor cycle",
-			stateDir:  "/tmp/state",
-			featureID: "feat-abc",
-			n:         2,
-			want:      filepath.Join("/tmp/state", "feat-abc", "runs", "run-001", "refactor-2"),
-		},
-		{
-			name:      "different state dir and feature",
-			stateDir:  "/var/data/features",
-			featureID: "xyz-123",
-			n:         5,
-			want:      filepath.Join("/var/data/features", "xyz-123", "runs", "run-001", "refactor-5"),
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			f := &feature.Feature{ID: tt.featureID, ActiveRun: 1}
-			got := RefactorBaseDir(tt.stateDir, f, tt.n)
-			if got != tt.want {
-				t.Errorf("RefactorBaseDir(%q, %q, %d) = %q, want %q",
-					tt.stateDir, tt.featureID, tt.n, got, tt.want)
-			}
-		})
-	}
-}
-
 // TestActiveRunDir verifies ActiveRunDir returns the zero-padded run dir path
 // and falls back to run-001 for an unset ActiveRun (shadow-fields tolerance).
 func TestActiveRunDir(t *testing.T) {

@@ -339,6 +339,14 @@ paths:
     post:
       operationId: runFeatureAction
       summary: Run a named feature action.
+      description: >-
+        Executes the named action. Child-feature execution actions (start,
+        resume, retry, restart) enforce the child capability gate: 409
+        `relationship_closed` for a child whose relationship has settled;
+        automatic reconciliation owns any remaining cleanup tail. A 409
+        `child_execution_blocked`
+        while setup is queued, running, or failed. Capability
+        rejections never invalidate or close the child record.
       parameters:
         - $ref: "#/components/parameters/FeatureID"
         - $ref: "#/components/parameters/FeatureAction"
@@ -348,8 +356,53 @@ paths:
       responses:
         "200":
           $ref: "#/components/responses/ActionResponse"
+        "201":
+          description: Refactor child launched. Only the refactor action returns 201; its typed contract is documented as the refactorFeature operation at /api/v1/features/{feature_id}/actions/refactor.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RefactorFeatureResponse"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/ErrorResponse"
+
+  # Statically documented form of the refactor action. The server routes the
+  # refactor launch through the dynamic /actions/{action} dispatch, so the
+  # served URL is exactly /api/v1/features/{feature_id}/actions/refactor;
+  # this operation pins the typed request/response surface to that URL.
+  /api/v1/features/{feature_id}/actions/refactor:
+    post:
+      operationId: refactorFeature
+      summary: Launch a refactor child feature from the typed wizard brief.
+      description: >-
+        Served at the same URL as `runFeatureAction` with action `refactor`.
+        Failure machine codes: 404 `parent_not_found`; 409 `parent_is_child`,
+        `parent_status_ineligible`, `active_child_exists`, and
+        `parent_worktrees_dirty` (which also carries per-repository
+        diagnostics under `error.target.repos`).
+      parameters:
+        - $ref: "#/components/parameters/FeatureID"
+        - $ref: "#/components/parameters/TrustedMutationHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RefactorFeatureRequest"
+      responses:
+        "201":
+          description: Refactor child launched.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RefactorFeatureResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/ErrorResponse"
+        "409":
+          $ref: "#/components/responses/ErrorResponse"
 
   /api/v1/features/{feature_id}/actions/{action}/{subaction}:
     post:
@@ -926,12 +979,13 @@ components:
           - rebase
           - review-comments
           - review-decision
-          - refactor
           - need-user-input
           - need-user-input-draft
           - mark-done
           - cleanup
           - delete
+          - refactor
+          - discard
     FeatureSubaction:
       name: subaction
       in: path
@@ -1365,6 +1419,20 @@ components:
           type: string
         feature_id:
           type: string
+        parent_id:
+          type: string
+          description: >-
+            Parent feature id for a relationship lifecycle event.
+        child_id:
+          type: string
+          description: >-
+            Direct child feature id for a relationship lifecycle event.
+        relationship_deleted:
+          type: boolean
+          description: >-
+            True only when a completed cascade removed both relationship
+            records. Clients refresh the top-level list and evict both detail
+            snapshots instead of treating their absence as a stream failure.
         phase:
           type: string
     SSEEvent:
@@ -2129,16 +2197,14 @@ components:
               $ref: "#/components/schemas/ReviewCommentsFetchResponse"
             review_comments_start_response:
               $ref: "#/components/schemas/ReviewCommentsStartResponse"
-            refactor_start_response:
-              $ref: "#/components/schemas/RefactorStartResponse"
-            refactor_restart_response:
-              $ref: "#/components/schemas/RefactorRestartResponse"
             mark_done_response:
               $ref: "#/components/schemas/MarkDoneResponse"
             cleanup_feature_response:
               $ref: "#/components/schemas/CleanupFeatureResponse"
             delete_feature_response:
               $ref: "#/components/schemas/DeleteFeatureResponse"
+            discard_child_response:
+              $ref: "#/components/schemas/DiscardChildResponse"
             recovery_action_response:
               $ref: "#/components/schemas/RecoveryActionResponse"
             shutdown_response:
@@ -2224,8 +2290,6 @@ components:
             dispatch:
               type: string
             repo_cycle_count:
-              type: integer
-            refactor_count:
               type: integer
             session_ids:
               type: array
@@ -2470,6 +2534,65 @@ components:
           properties:
             cycle_type:
               type: string
+    RefactorFeatureRequest:
+      # Bound by the refactorFeature operation at
+      # /api/v1/features/{feature_id}/actions/refactor; oapi-codegen emits the
+      # Go binding (internal/server/serverapi.gen.go).
+      type: object
+      required: [name]
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        images:
+          type: array
+          items:
+            type: string
+        attachments:
+          type: array
+          items:
+            type: string
+        pipeline:
+          type: string
+          x-go-type: feature.PipelineProfile
+          x-go-type-import:
+            path: github.com/doordash-oss/agentic-orchestrator/internal/feature
+            name: feature
+        checkpoints:
+          x-go-type: feature.Checkpoints
+          x-go-type-import:
+            path: github.com/doordash-oss/agentic-orchestrator/internal/feature
+            name: feature
+        effort:
+          $ref: "#/components/schemas/EffortConfig"
+        models:
+          $ref: "#/components/schemas/ModelDefaults"
+        risk_level:
+          type: string
+          x-go-type: feature.RiskLevel
+          x-go-type-import:
+            path: github.com/doordash-oss/agentic-orchestrator/internal/feature
+            name: feature
+        exit_criteria:
+          type: string
+        inquireness:
+          type: string
+          enum: [none, medium, high]
+          x-go-type: feature.Inquireness
+          x-go-type-import:
+            path: github.com/doordash-oss/agentic-orchestrator/internal/feature
+            name: feature
+    RefactorFeatureResponse:
+      allOf:
+        - $ref: "#/components/schemas/ActionBaseResponse"
+        - $ref: "#/components/schemas/FeatureActionResult"
+        - type: object
+          required: [parent_id]
+          properties:
+            parent_id:
+              type: string
     ReviewComment:
       type: object
       required: [id]
@@ -2530,24 +2653,6 @@ components:
               type: string
             source:
               type: string
-    RefactorStartResponse:
-      allOf:
-        - $ref: "#/components/schemas/ActionBaseResponse"
-        - $ref: "#/components/schemas/FeatureActionResult"
-        - type: object
-          required: [cycle_type]
-          properties:
-            repo:
-              type: string
-            cycle_type:
-              type: string
-            pipeline:
-              type: string
-            session_id:
-              type: string
-    RefactorRestartResponse:
-      allOf:
-        - $ref: "#/components/schemas/RefactorStartResponse"
     RebasePreflightRepo:
       type: object
       required: [repo, target, publishable, freshness, behind]
@@ -2764,6 +2869,49 @@ components:
             target:
               type: string
     DeleteFeatureResponse:
+      allOf:
+        - $ref: "#/components/schemas/ActionBaseResponse"
+        - type: object
+          required: [feature_id, operation_id, status]
+          properties:
+            feature_id:
+              type: string
+            operation_id:
+              type: string
+            status:
+              type: string
+              enum: [completed, cleanup_pending, attention_required]
+              x-go-type: feature.CascadeDeleteStatus
+              x-go-type-import:
+                path: github.com/doordash-oss/agentic-orchestrator/internal/feature
+                name: feature
+            diagnostics:
+              type: array
+              items:
+                $ref: "#/components/schemas/CascadeDiagnostic"
+    CascadeDiagnostic:
+      x-go-type: feature.CascadeDiagnostic
+      x-go-type-import:
+        path: github.com/doordash-oss/agentic-orchestrator/internal/feature
+        name: feature
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        repo:
+          type: string
+        ref:
+          type: string
+        anchor_sha:
+          type: string
+        candidate_sha:
+          type: string
+        observed_sha:
+          type: string
+    DiscardChildResponse:
       allOf:
         - $ref: "#/components/schemas/ActionBaseResponse"
         - $ref: "#/components/schemas/FeatureActionResult"
@@ -3267,6 +3415,107 @@ components:
           type: integer
         current_phase_status:
           type: string
+    ChildRepoBase:
+      type: object
+      required: [repo, sha]
+      properties:
+        repo:
+          type: string
+        sha:
+          type: string
+        parent_branch:
+          type: string
+    RelationshipAttention:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        repo:
+          type: string
+    RelationshipCleanupWarning:
+      type: object
+      required: [message]
+      properties:
+        message:
+          type: string
+        repo:
+          type: string
+    RelationshipChild:
+      type: object
+      required:
+        - id
+        - name
+        - kind
+        - display_token
+        - display_state
+        - pipeline
+        - status
+        - started_at
+        - cost
+        - integration_state
+        - attention
+        - cleanup_warnings
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        kind:
+          type: string
+        pipeline:
+          type: string
+        display_token:
+          type: string
+          description: Stable, non-positional token suitable for compact UI labels.
+        display_state:
+          type: string
+          description: >-
+            Human-readable relationship state. Closed children use exactly
+            "Closed — Completed" or "Closed — Discarded".
+        status:
+          type: string
+          description: Stored child lifecycle status; closure never rewrites it.
+        setup_status:
+          type: string
+          description: Setup status of the child's active run (queued/running/done/failed).
+        relationship_state:
+          type: string
+          description: >-
+            Stable machine state: setting_up, active, completed, or discarded.
+        outcome:
+          type: string
+          enum: [completed, discarded]
+        started_at:
+          type: string
+          format: date-time
+        closed_at:
+          type: string
+          format: date-time
+          x-go-type-skip-optional-pointer: false
+        cost:
+          $ref: "#/components/schemas/Cost"
+        integration_state:
+          type: string
+        attention:
+          type: array
+          items:
+            $ref: "#/components/schemas/RelationshipAttention"
+        cleanup_warnings:
+          type: array
+          items:
+            $ref: "#/components/schemas/RelationshipCleanupWarning"
+        last_error:
+          type: string
+          description: Setup failure message when the child's setup failed.
+        diff_summary:
+          type: string
+          description: >-
+            Preserved read-only diff summary captured at close time, before
+            the child's disposable worktrees and ephemeral branches were
+            removed. Empty when no diff was preserved.
     FeatureSummary:
       type: object
       required:
@@ -3314,6 +3563,14 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/Warning"
+        active_child:
+          $ref: "#/components/schemas/RelationshipChild"
+          x-go-type-skip-optional-pointer: false
+        child_history:
+          type: array
+          description: Complete closed-child history in authoritative store order.
+          items:
+            $ref: "#/components/schemas/RelationshipChild"
     ModelDefaults:
       x-go-type: config.ModelConfig
       x-go-type-import:
@@ -3653,6 +3910,67 @@ components:
           type: string
         message:
           type: string
+        target:
+          description: >-
+            Optional machine-readable context for the disable reason. The
+            `dirty_parent` reason on the Refactor action carries per-repository
+            dirty-worktree diagnostics under `target.repos` using the same
+            shape as the `parent_worktrees_dirty` mutation error target.
+          type: object
+          additionalProperties: true
+    ActionImpactSubject:
+      type: object
+      required: [id, name]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+    ActionImpactCategory:
+      type: object
+      required: [key, label, items]
+      properties:
+        key:
+          type: string
+        label:
+          type: string
+        items:
+          description: >-
+            Human-readable entries in this impact category; empty when the
+            category has no projected impact (clients render None). Absent
+            impact is an explicitly empty items array rather than an omitted
+            category.
+          type: array
+          items:
+            type: string
+    ActionImpactPreview:
+      type: object
+      required: [kind, subject, categories, retained]
+      properties:
+        kind:
+          type: string
+          enum: [child_discard, parent_cascade_delete]
+        subject:
+          $ref: "#/components/schemas/ActionImpactSubject"
+        categories:
+          description: >-
+            Fixed, always-complete impact breakdown for the kind. Absent
+            categories are explicitly empty entries (an entry with an empty
+            items array) rather than omitted, so the confirmation never
+            implies hidden impact. child_discard uses sessions, worktrees,
+            branches, knowledge; parent_cascade_delete uses children,
+            sessions, worktrees, branches, history, knowledge.
+          type: array
+          items:
+            $ref: "#/components/schemas/ActionImpactCategory"
+        retained:
+          description: >-
+            Statements of what the action deliberately keeps (the paired
+            Review configuration and the immutable closed-child history
+            record for child_discard). Empty for parent_cascade_delete.
+          type: array
+          items:
+            type: string
     Action:
       type: object
       required: [id, enabled, scope, required_inputs]
@@ -3671,6 +3989,9 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/ActionDisabledReason"
+        impact_preview:
+          $ref: "#/components/schemas/ActionImpactPreview"
+          x-go-type-skip-optional-pointer: false
     FeatureDetail:
       allOf:
         - $ref: "#/components/schemas/FeatureSummary"
@@ -3697,6 +4018,23 @@ components:
               type: string
             models:
               $ref: "#/components/schemas/ModelDefaults"
+            effort:
+              $ref: "#/components/schemas/EffortConfig"
+            inquireness:
+              type: string
+              enum: [none, medium, high]
+              x-go-type: feature.Inquireness
+              x-go-type-import:
+                path: github.com/doordash-oss/agentic-orchestrator/internal/feature
+                name: feature
+            risk_level:
+              type: string
+              x-go-type: feature.RiskLevel
+              x-go-type-import:
+                path: github.com/doordash-oss/agentic-orchestrator/internal/feature
+                name: feature
+            exit_criteria:
+              type: string
             automatic_review:
               $ref: "#/components/schemas/AutomaticReviewState"
             active_run_detail:
@@ -3737,6 +4075,122 @@ components:
               type: string
             cache_revalidate:
               type: string
+            parent_id:
+              type: string
+              description: Launch parent id; only set on child features.
+            parent_kind:
+              type: string
+              description: Child relationship kind (e.g. refactor); only set on child features.
+            active:
+              type: boolean
+              description: >-
+                True while a child feature's relationship is open (no close
+                outcome recorded). Only set on child features.
+            bases:
+              type: array
+              description: Exact per-repository parent tips captured at child launch.
+              items:
+                $ref: "#/components/schemas/ChildRepoBase"
+            setup_complete:
+              type: boolean
+              description: >-
+                True when the child's active run setup finished; only set on
+                child features.
+            close_outcome:
+              type: string
+              description: >-
+                Recorded relationship close outcome (e.g. completed); only
+                set on closed child features.
+            closed_at:
+              type: string
+              format: date-time
+              description: Relationship close timestamp; only set on closed child features.
+              x-go-type-skip-optional-pointer: false
+            transaction:
+              $ref: "#/components/schemas/TransactionJournal"
+            relationship:
+              $ref: "#/components/schemas/RelationshipChild"
+              x-go-type-skip-optional-pointer: false
+    ChildDirtyDiagnostics:
+      type: object
+      properties:
+        repo:
+          type: string
+        path:
+          type: string
+        staged:
+          type: array
+          items:
+            type: string
+        unstaged:
+          type: array
+          items:
+            type: string
+        untracked:
+          type: array
+          items:
+            type: string
+        staged_total:
+          type: integer
+        unstaged_total:
+          type: integer
+        untracked_total:
+          type: integer
+    TransactionJournal:
+      type: object
+      description: >-
+        Ordered per-repository transaction journal for multi-repository
+        child-to-parent integration.
+      properties:
+        phase:
+          type: string
+          description: >-
+            Aggregate transaction phase: preparing, prepared, applying,
+            applied, rolling_back, rolled_back, attention, or merged.
+        attention:
+          type: string
+        entries:
+          type: array
+          items:
+            $ref: "#/components/schemas/RepoTransactionEntry"
+    RepoTransactionEntry:
+      type: object
+      properties:
+        repo:
+          type: string
+        parent_branch:
+          type: string
+        parent_anchor_sha:
+          type: string
+        expected_ref_sha:
+          type: string
+        child_head_sha:
+          type: string
+        candidate_sha:
+          type: string
+        merge_head:
+          type: string
+        prep_state:
+          type: string
+        apply_state:
+          type: string
+        observed_sha:
+          type: string
+        conflict_files:
+          type: array
+          items:
+            type: string
+        dirty:
+          type: array
+          description: >-
+            Categorized parent-worktree diagnostics recorded when a dirty
+            preflight blocked preparation for this repository.
+          items:
+            $ref: "#/components/schemas/ChildDirtyDiagnostics"
+        cleanup_warning:
+          type: string
+        diagnostics:
+          type: string
     Usage:
       type: object
       properties:

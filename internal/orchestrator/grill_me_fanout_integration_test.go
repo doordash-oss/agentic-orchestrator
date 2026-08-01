@@ -351,7 +351,7 @@ func TestGrillMeFanout_PrimaryBuilders_EndToEnd(t *testing.T) {
 
 			if tc.assertCollectQA {
 				expected := tc.expectedQAPathFn(tmpStateDir, f)
-				paths := o.collectQAFilePaths(f, f.RefactorPrefix())
+				paths := o.collectQAFilePaths(f)
 				found := false
 				for _, p := range paths {
 					if p == expected {

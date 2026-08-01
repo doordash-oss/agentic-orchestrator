@@ -62,6 +62,7 @@ func Start(ctx context.Context, opts Options) (*RuntimeServer, error) {
 		RequestShutdown:             opts.RequestShutdown,
 		PersistProviderModelCatalog: opts.PersistProviderModelCatalog,
 		InitGitRepository:           opts.InitGitRepository,
+		Cleanliness:                 opts.Cleanliness,
 	})
 	httpServer := &http.Server{
 		Handler: handler.routes(),

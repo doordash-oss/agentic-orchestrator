@@ -63,15 +63,15 @@ func TestSpecPhasePromptsCarryRefactorPassContext(t *testing.T) {
 		if !strings.Contains(prompt, "abc123def456") {
 			t.Fatalf("%s prompt missing the fork-point SHA:\n%s", name, prompt)
 		}
-		if !strings.Contains(prompt, `"as they are"`) {
+		if !strings.Contains(prompt, "prior, current, or existing state") {
 			t.Fatalf("%s prompt missing the relative-language pin:\n%s", name, prompt)
 		}
 		if !strings.Contains(prompt, "absolute statements of the intended end state") {
 			t.Fatalf("%s prompt missing the end-state resolution duty:\n%s", name, prompt)
 		}
-		// The description stays the scope authority: undoing fork-point
+		// The description stays the scope authority: changing fork-point
 		// content on request is legitimate.
-		if !strings.Contains(prompt, "it may change or undo anything the fork point contains") {
+		if !strings.Contains(prompt, "it may change anything the fork point contains") {
 			t.Fatalf("%s prompt lost the description-is-scope-authority clause:\n%s", name, prompt)
 		}
 	}
@@ -120,8 +120,11 @@ func TestSpecConsumerPromptsResolveTheForkPoint(t *testing.T) {
 		if !strings.Contains(prompt, "abc123def456") {
 			t.Fatalf("%s prompt missing the fork-point SHA:\n%s", name, prompt)
 		}
-		if !strings.Contains(prompt, "belong to the parent") {
+		if !strings.Contains(prompt, "fork point") || !strings.Contains(prompt, "parent") {
 			t.Fatalf("%s prompt missing the attribution clause:\n%s", name, prompt)
+		}
+		if !strings.Contains(prompt, "prior, current, or existing state") {
+			t.Fatalf("%s prompt missing the relative-language pin:\n%s", name, prompt)
 		}
 	}
 	// The assembled result is still judged against the base branch.

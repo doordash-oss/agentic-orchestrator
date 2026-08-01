@@ -15,7 +15,7 @@ This is fix iteration {{ .Iteration }}.
 
 {{ if .RefactorPassForkPoint }}## Refactor Pass Fork Point
 
-This feature is a refactor pass forked from its parent feature's delivered state at {{ .RefactorPassForkPoint }}. Hunks that already exist at the fork point belong to the parent's approved work, not to this pass. When the roadmap, plan, or reviewer feedback refers to content being "unchanged", "preserved", or to "the fork point", it means relative to that commit — verify with `git diff <fork-sha>..HEAD`, never against the repository base branch. If feedback asks you to undo content that the fork point already contains and the approved plan does not, the feedback has misattributed the parent's work: do not apply it silently — surface the conflict (AskUserQuestion if needed) instead of reverting the parent's delivered state.
+This feature is a refactor pass forked from its parent feature's delivered state at {{ .RefactorPassForkPoint }}. Anything that already exists at the fork point is the parent's approved work, not this pass's. Wherever the specification or reviewer feedback refers to prior, current, or existing state, resolve that reference against the fork point — this pass's own delta is `git diff <fork-sha>..HEAD` — never against the repository base branch. If feedback attributes fork-point content to this pass and asks you to change it beyond what the approved plan covers, that is misattribution: do not apply it silently — surface the conflict (AskUserQuestion if needed) instead of rewriting the parent's delivered state.
 
 {{ end }}{{ if .ExitCriteria }}**Exit criteria**:
 {{ .ExitCriteria }}

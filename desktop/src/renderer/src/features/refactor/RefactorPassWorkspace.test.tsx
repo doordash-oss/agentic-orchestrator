@@ -167,8 +167,7 @@ describe('RefactorPassWorkspace', () => {
     renderWorkspace(parent, pass);
 
     const dialog = screen.getByRole('dialog', { name: /Discard Slop removal pass/ });
-    expect(within(dialog).getByText('Sessions stopped')).toBeVisible();
-    expect(within(dialog).getAllByText('None').length).toBeGreaterThan(0);
+    expect(within(dialog).getByText(/Sessions stopped: none/)).toBeVisible();
     expect(within(dialog).getByText('repo-a … pass')).toBeVisible();
     expect(within(dialog).getByText('Review configuration retained')).toBeVisible();
     expect(within(dialog).getByText(/This cannot be undone/)).toBeVisible();
@@ -193,7 +192,7 @@ describe('RefactorPassWorkspace', () => {
     expect(within(dialog).getByRole('button', { name: 'Discard pass' })).toBeDisabled();
   });
 
-  it('reconciles the integration panel and custody strip to the transaction journal', () => {
+  it('keeps integration state on the custody strip without a panel or history block', () => {
     installAgenticoMock({ feature: readyChild() });
     const integratingChild = readyChild({
       status: 'ReviewPassed',
@@ -211,25 +210,11 @@ describe('RefactorPassWorkspace', () => {
         ],
       },
     });
-    const parent = parentWith({ integrationState: 'attention' });
-    renderWorkspace(parent, controllerFor(parent, integratingChild));
-
-    const integration = screen.getByRole('region', { name: 'Integration' });
-    expect(within(integration).getByRole('alert')).toHaveTextContent('parent tips moved');
-    expect(within(integration).getByText('prepared → failed')).toBeVisible();
-    expect(within(integration).getByText('Conflicts: main.go')).toBeVisible();
-    const custody = screen.getByRole('list', { name: 'Custody of the work' });
-    expect(within(custody).getByText('Needs attention')).toBeVisible();
-  });
-
-  it('keeps settled passes as read-only history with the preserved diff', async () => {
-    installAgenticoMock({ feature: readyChild() });
-    const user = userEvent.setup();
     const parent = featureSnapshot({
       id: 'parent1234ef5678',
       name: 'Electron app',
       status: 'Published',
-      activeChild: childView(),
+      activeChild: childView({ integrationState: 'attention' }),
       childHistory: [
         childView({
           id: 'child0000ef567890',
@@ -237,19 +222,17 @@ describe('RefactorPassWorkspace', () => {
           displayState: 'Closed — Completed',
           outcome: 'completed',
           closedAt: '2026-07-29T10:00:00Z',
-          diffSummary: 'Repository: repo-a\n3 files changed',
         }),
       ],
     });
-    renderWorkspace(parent, controllerFor(parent, readyChild()));
+    renderWorkspace(parent, controllerFor(parent, integratingChild));
 
-    await user.click(screen.getByText('Refactor history'));
-    expect(screen.getByText('Closed — Completed')).toBeVisible();
-    await user.click(screen.getByText('Preserved diff (read-only)'));
-    expect(screen.getByText(/3 files changed/)).toBeVisible();
-    const history = screen.getByText('Earlier pass').closest('li');
-    expect(history).not.toBeNull();
-    expect(within(history as HTMLElement).queryByRole('button')).not.toBeInTheDocument();
+    const custody = screen.getByRole('list', { name: 'Custody of the work' });
+    expect(within(custody).getByText('Needs attention')).toBeVisible();
+    // Integration detail and settled-pass history live off this tab; the main
+    // column stays reserved for the live run.
+    expect(screen.queryByRole('region', { name: 'Integration' })).not.toBeInTheDocument();
+    expect(screen.queryByText('Refactor history')).not.toBeInTheDocument();
   });
 
   it('explains the lock and pairing on the parent card without duplicating the config verb', () => {

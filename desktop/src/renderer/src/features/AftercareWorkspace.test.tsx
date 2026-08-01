@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { RunDetailView } from '../../../shared/ipc';
@@ -120,5 +120,52 @@ describe('AftercareWorkspace', () => {
     await user.click(screen.getByRole('button', { name: 'Reopen cycle' }));
     expect(onRetry).toHaveBeenCalledOnce();
     expect(onReopenCycle).toHaveBeenCalledOnce();
+  });
+
+  it('keeps settled passes as read-only history with the preserved diff', async () => {
+    const user = userEvent.setup();
+    render(
+      <AftercareWorkspace
+        snapshot={featureSnapshot({
+          status: 'Published',
+          actions: [],
+          childHistory: [
+            {
+              id: 'child0000ef567890',
+              name: 'Earlier pass',
+              kind: 'refactor',
+              displayToken: 'refactor:child0000ef567890',
+              displayState: 'Closed — Completed',
+              pipeline: 'large',
+              status: 'Done',
+              relationshipState: 'closed',
+              startedAt: '2026-07-28T10:00:00Z',
+              closedAt: '2026-07-29T10:00:00Z',
+              outcome: 'completed',
+              cost: { totalUsd: 1.25, byPhase: {} },
+              integrationState: 'merged',
+              attention: [],
+              cleanupWarnings: [],
+              diffSummary: 'Repository: repo-a\n3 files changed',
+            },
+          ],
+        })}
+        run={completedRun}
+        onAction={vi.fn()}
+        onOpenRunRecord={vi.fn()}
+        onOpenChanges={vi.fn()}
+        onOpenPullRequest={vi.fn()}
+        onRetry={vi.fn()}
+        onReopenCycle={vi.fn()}
+      />,
+    );
+
+    await user.click(screen.getByText('Refactor history'));
+    expect(screen.getByText('Closed — Completed')).toBeVisible();
+    await user.click(screen.getByText('Preserved diff (read-only)'));
+    expect(screen.getByText(/3 files changed/)).toBeVisible();
+    const history = screen.getByText('Earlier pass').closest('li');
+    expect(history).not.toBeNull();
+    expect(within(history as HTMLElement).queryByRole('button')).not.toBeInTheDocument();
   });
 });

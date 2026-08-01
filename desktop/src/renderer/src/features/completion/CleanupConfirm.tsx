@@ -61,22 +61,30 @@ export function CleanupConfirm({
       >
         <span className="impact-dialog__eyebrow">Operational impact</span>
         <h3 id="cleanup-dialog-title">Clean worktrees?</h3>
-        <div className="completion-workspace__cleanup-consequences">
-          <div className="completion-workspace__consequence-group">
-            <h4>Removes</h4>
-            <ul>
-              <li>Completed feature worktrees</li>
-            </ul>
+        <div className="impact-dialog__preview">
+          <p className="impact-dialog__lede">
+            This deletes the local working copies left over from completed features. Everything
+            under Kept stays.
+          </p>
+          <div className="impact-dialog__lane impact-dialog__lane--removed">
+            <section>
+              <h4>Removed</h4>
+              <ul>
+                <li>Completed feature worktrees</li>
+              </ul>
+            </section>
           </div>
-          <div className="completion-workspace__consequence-group">
-            <h4>Preserves</h4>
-            <ul>
-              <li>Branches</li>
-              <li>Feature/run history</li>
-              <li>Artifacts</li>
-              <li>PR metadata</li>
-              <li>Repository-cycle records</li>
-            </ul>
+          <div className="impact-dialog__lane impact-dialog__lane--kept">
+            <section>
+              <h4>Kept</h4>
+              <ul>
+                <li>Branches</li>
+                <li>Feature/run history</li>
+                <li>Artifacts</li>
+                <li>PR metadata</li>
+                <li>Repository-cycle records</li>
+              </ul>
+            </section>
           </div>
         </div>
         <div className="impact-dialog__actions">

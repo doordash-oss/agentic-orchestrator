@@ -12,7 +12,6 @@ import {
   type FeatureActionView,
   type FeatureSnapshot,
   type RelationshipChildView,
-  type RelationshipTransactionView,
 } from '../../../../shared/ipc';
 import { parseIpcError } from '../../wizard/ipcError';
 import {
@@ -29,7 +28,6 @@ import { ReviewSurface } from '../ReviewSurface';
 import { ImpactPreviewList } from '../ImpactPreviewList';
 import { InspectorContent } from '../CockpitInspector';
 import { featureBranch, showsRun } from '../featureView';
-import { RefactorHistory } from './RefactorHistory';
 import { custodyStations, passActions, passState, type PassAction } from './refactorPassModel';
 
 type ChildState =
@@ -383,10 +381,6 @@ export function RefactorPassWorkspace({
             </div>
           ) : null}
 
-          {child?.transaction !== undefined ? (
-            <IntegrationPanel transaction={child.transaction} />
-          ) : null}
-
           {view.cleanupWarnings.length > 0 ? (
             <ul className="refactor-pass__warnings">
               {view.cleanupWarnings.map((item) => (
@@ -394,8 +388,6 @@ export function RefactorPassWorkspace({
               ))}
             </ul>
           ) : null}
-
-          <RefactorHistory entries={parent.childHistory ?? []} />
         </main>
 
         <aside className="cockpit__inspector" aria-label="Pass inspector">
@@ -456,35 +448,6 @@ export function RefactorPassWorkspace({
   );
 }
 
-function IntegrationPanel({
-  transaction,
-}: {
-  transaction: RelationshipTransactionView;
-}): React.ReactElement {
-  const phase = transaction.phase ?? 'pending';
-  return (
-    <section className="refactor-pass__integration" aria-label="Integration" data-phase={phase}>
-      <h3>
-        Integration <span className="refactor-pass__integration-phase">{phase}</span>
-      </h3>
-      {transaction.attention !== undefined ? <p role="alert">{transaction.attention}</p> : null}
-      {(transaction.entries ?? []).map((entry, index) => (
-        <div key={entry.repo ?? index} className="refactor-pass__integration-repo">
-          <code>{entry.repo ?? 'Repository'}</code>
-          <span>
-            {entry.prepState ?? 'pending'} → {entry.applyState ?? 'pending'}
-          </span>
-          {(entry.conflictFiles ?? []).length > 0 ? (
-            <p>Conflicts: {entry.conflictFiles?.join(', ')}</p>
-          ) : null}
-          {entry.cleanupWarning !== undefined ? <p>{entry.cleanupWarning}</p> : null}
-          {entry.diagnostics !== undefined ? <p>{entry.diagnostics}</p> : null}
-        </div>
-      ))}
-    </section>
-  );
-}
-
 function DiscardPassDialog({
   passName,
   action,
@@ -529,9 +492,7 @@ function DiscardPassDialog({
         ) : (
           <ImpactPreviewList preview={preview} />
         )}
-        <p className="impact-dialog__note">
-          This cannot be undone. The pass becomes immutable history.
-        </p>
+        <p className="impact-dialog__note">This cannot be undone.</p>
         <div className="impact-dialog__actions">
           <button type="button" onClick={onClose} disabled={busy} autoFocus>
             Keep the pass

@@ -23,7 +23,11 @@ Because reviewers later judge the assembled result as a whole, the design you pr
 
 > {{ blockquote .Description }}
 
-{{ if .Images }}Attached Images:
+{{ if .ExitCriteria }}**Exit criteria** (distill these into the design's `## Acceptance Criteria` section as concrete, observable statements):
+
+> {{ blockquote .ExitCriteria }}
+
+{{ end }}{{ if .Images }}Attached Images:
 {{ range $i, $p := .Images }}- [Image #{{ inc $i }}]: {{ $p }}
 {{ end }}
 {{ end }}{{ if .Attachments }}Attached Files:

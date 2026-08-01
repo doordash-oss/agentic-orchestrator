@@ -5,8 +5,8 @@
 **Description**:
 > Sign in with Google.
 
-**Exit Criteria**:
-> Relevant tests pass.
+**Acceptance**:
+Feature acceptance is defined by the `## Acceptance Criteria` section of the approved design at /state/feat-x/run-1/design/design.md. Judge acceptance against that section, not against any restatement of it.
 
 **Risk Level**: medium
 

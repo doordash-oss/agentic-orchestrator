@@ -90,11 +90,12 @@ func testGuidelines() []GuidelineView {
 }
 
 type InquireUserInput struct {
-	Name        string
-	Description string
-	Images      []string
-	Attachments []string
-	Repos       []RepoView
+	Name         string
+	Description  string
+	ExitCriteria string
+	Images       []string
+	Attachments  []string
+	Repos        []RepoView
 
 	Inquireness GrillMeInquirenessInput
 }
@@ -114,11 +115,12 @@ type KBBuildUserInput struct {
 }
 
 type DesignUserInput struct {
-	Name        string
-	Description string
-	Images      []string
-	Attachments []string
-	Repos       []RepoView
+	Name         string
+	Description  string
+	ExitCriteria string
+	Images       []string
+	Attachments  []string
+	Repos        []RepoView
 
 	RefactorPassForkPoint string
 
@@ -130,9 +132,10 @@ type DesignUserInput struct {
 }
 
 type RoadmapUserInput struct {
-	Name        string
-	Description string
-	Repos       []RepoView
+	Name         string
+	Description  string
+	ExitCriteria string
+	Repos        []RepoView
 
 	RefactorPassForkPoint string
 
@@ -226,6 +229,7 @@ type ReviewUserInput struct {
 	RoadmapPath            string
 	PlanPath               string
 	ExitCriteria           string
+	AcceptanceClause       string
 	VerificationReportPath string
 
 	ContractPath         string
@@ -244,10 +248,11 @@ type ReviewUserInput struct {
 type FinalFixUserInput struct {
 	VisualReferences VisualReferencesInput
 
-	Iteration    int
-	ExitCriteria string
-	Feedback     string
-	FeedbackPath string
+	Iteration        int
+	ExitCriteria     string
+	AcceptanceClause string
+	Feedback         string
+	FeedbackPath     string
 
 	IncludeManualVerificationOutcomes bool
 	Publishable                       bool
@@ -255,10 +260,11 @@ type FinalFixUserInput struct {
 }
 
 type ValidateSpecializedUserInput struct {
-	Name         string
-	Description  string
-	ExitCriteria string
-	RiskLevel    string
+	Name             string
+	Description      string
+	ExitCriteria     string
+	AcceptanceClause string
+	RiskLevel        string
 
 	DomainName string
 	PlanPath   string
@@ -294,10 +300,11 @@ func TestGoldenSnapshots(t *testing.T) {
 			name: "inquire_user_high_with_kb",
 			render: func() string {
 				in := InquireUserInput{
-					Name:        "Add OAuth login",
-					Description: "Users should be able to sign in with Google.\nMust support PKCE.",
-					Images:      []string{"/tmp/login-mock.png"},
-					Attachments: []string{"/tmp/spec.pdf"},
+					Name:         "Add OAuth login",
+					Description:  "Users should be able to sign in with Google.\nMust support PKCE.",
+					ExitCriteria: "Users can sign in with Google end to end.",
+					Images:       []string{"/tmp/login-mock.png"},
+					Attachments:  []string{"/tmp/spec.pdf"},
 					Repos: []RepoView{
 						{Name: "web", Path: "/state/wt/web"},
 						{Name: "api", Path: "/repos/api"},
@@ -337,8 +344,9 @@ func TestGoldenSnapshots(t *testing.T) {
 			name: "design_user_multi_repo",
 			render: func() string {
 				in := DesignUserInput{
-					Name:        "OAuth login",
-					Description: "Sign in with Google.",
+					Name:         "OAuth login",
+					Description:  "Sign in with Google.",
+					ExitCriteria: "Google sign-in works end to end and PKCE is enforced.",
 					Repos: []RepoView{
 						{Name: "web", Path: "/repos/web"},
 						{Name: "api", Path: "/repos/api"},
@@ -378,6 +386,20 @@ func TestGoldenSnapshots(t *testing.T) {
 					Inquireness: GrillMeInquirenessInput{Level: "medium"},
 				}
 				return RoadmapUserPrompt(in)
+			},
+		},
+		{
+			// No design artifact (Medium mode): the raw Feature block
+			// renders, including its Exit criteria distillation guidance.
+			name: "roadmap_user_no_design",
+			render: func() string {
+				return RoadmapUserPrompt(RoadmapUserInput{
+					Name:         "OAuth login",
+					Description:  "Sign in with Google.",
+					ExitCriteria: "Google sign-in works end to end and PKCE is enforced.",
+					Repos:        []RepoView{{Name: "web", Path: "/repos/web"}},
+					Inquireness:  GrillMeInquirenessInput{Level: "medium"},
+				})
 			},
 		},
 		{
@@ -586,7 +608,7 @@ func TestGoldenSnapshots(t *testing.T) {
 					RoadmapPath:                          "/state/feat-x/run-1/roadmap/plan.md",
 					PlanPath:                             "/state/feat-x/run-1/phase-2/plan.md",
 					PhaseType:                            "tdd-fill-in",
-					ExitCriteria:                         "Relevant tests pass.",
+					AcceptanceClause:                     "Feature acceptance is defined by the `## Acceptance Criteria` section of the approved design at /state/feat-x/run-1/design/design.md. Judge acceptance against that section, not against any restatement of it.",
 					PriorImplementationReportPaths:       []string{"/state/feat-x/run-1/phase-1/implement/iteration-02/verification-report.yaml"},
 					PriorImplementationEvidenceRootDirs:  []string{"/state/feat-x/run-1/phase-1/implement/iteration-02"},
 					PriorImplementationEvidenceArtifacts: []string{"/state/feat-x/run-1/phase-1/implement/iteration-02/screenshots/login.png"},
@@ -612,7 +634,7 @@ func TestGoldenSnapshots(t *testing.T) {
 				return FinalFixUserPrompt(FinalFixUserInput{
 					VisualReferences:                  VisualReferencesInput{Images: []string{"/tmp/login.png"}, Label: "applying this fix"},
 					Iteration:                         2,
-					ExitCriteria:                      "Relevant tests pass.",
+					AcceptanceClause:                  "Feature acceptance is defined by the `## Acceptance Criteria` section of the approved design at /state/feat-x/run-1/design/design.md. Judge acceptance against that section, not against any restatement of it.",
 					Feedback:                          "Manual verification bullet 'Inspect login UI' is unattested.",
 					FeedbackPath:                      "/state/feat-x/run-1/review/iteration-2/review-feedback.md",
 					IncludeManualVerificationOutcomes: true,
@@ -637,7 +659,7 @@ func TestGoldenSnapshots(t *testing.T) {
 				return ValidateSpecializedUserPrompt(ValidateSpecializedUserInput{
 					Name:                     "OAuth login",
 					Description:              "Sign in with Google.",
-					ExitCriteria:             "Relevant tests pass.",
+					AcceptanceClause:         "Feature acceptance is defined by the `## Acceptance Criteria` section of the approved design at /state/feat-x/run-1/design/design.md. Judge acceptance against that section, not against any restatement of it.",
 					RiskLevel:                "medium",
 					DomainName:               "grounding",
 					PlanPath:                 "/state/feat-x/run-1/phase-2/plan.md",

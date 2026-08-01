@@ -250,10 +250,11 @@ func runImplementationReviewAxis(cfg ImplementConfig, sm ports.SessionManager, i
 		}
 	}
 	RemoveCompletionReceipt(axisDir)
+	intent := resolvePromptIntent(cfg.Feature)
 	reviewPrompt := BuildImplementationReviewAxisPromptWithOpts(ImplementationReviewAxisPromptOpts{
 		Gate:                   implementationReviewGatePerPhase,
 		AxisLabel:              axis.Name,
-		FeatureDescription:     featureDescriptionForImplementationReview(cfg.Feature),
+		FeatureDescription:     intent.Description,
 		DesignArtifactPath:     designArtifactPathForImplementationReview(cfg.Feature),
 		LiveRunAxis:            axis.ExecutionPosture == implementationReviewPostureLiveRun,
 		RefactorPassForkPoint:  refactorPassForkPoint(cfg.Feature),
@@ -367,13 +368,6 @@ func implementationReviewSessionID(cfg ImplementConfig, axisSlug string, iterati
 		}
 	}
 	return fmt.Sprintf("%s%s-implementation-review-%s-%02d", featureID, phasePart, axisSlug, iteration)
-}
-
-func featureDescriptionForImplementationReview(f *feature.Feature) string {
-	if f == nil {
-		return ""
-	}
-	return f.Description
 }
 
 func designArtifactPathForImplementationReview(f *feature.Feature) string {

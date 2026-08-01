@@ -916,6 +916,11 @@ func (pr *PhaseRunner) RunImplementation(f *feature.Feature, planPath string, kb
 		roadmapPath = ""
 	}
 
+	exitCriteria := f.ExitCriteria
+	if f.CyclePrefix() == "" {
+		exitCriteria = resolvePromptIntent(f).ExitCriteria
+	}
+
 	cfg := ImplementConfig{
 		Feature:                    f,
 		FeatureStore:               pr.FeatureStore,
@@ -925,7 +930,7 @@ func (pr *PhaseRunner) RunImplementation(f *feature.Feature, planPath string, kb
 		MaxIterations:              maxIter,
 		MaxConsecFails:             maxFails,
 		MaxConsecNoProgress:        maxNoProg,
-		ExitCriteria:               f.ExitCriteria,
+		ExitCriteria:               exitCriteria,
 		Model:                      implementationModel,
 		ReviewModel:                reviewModel,
 		ResolveSessionConfig:       pr.SessionRuntimeConfigResolver(f.ID),

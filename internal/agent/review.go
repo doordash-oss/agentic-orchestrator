@@ -97,6 +97,7 @@ type ImplementationReviewAxisPromptOpts struct {
 	DesignArtifactPath string
 	LiveRunAxis        bool
 	ExitCriteria       string
+	AcceptanceClause   string
 	DiffBase           string
 	PreviousFeedback   string
 	// RefactorPassForkPoint resolves the spec's "fork point" references for a
@@ -171,6 +172,7 @@ func BuildImplementationReviewAxisPromptWithOpts(opts ImplementationReviewAxisPr
 			RoadmapPath:                          opts.RoadmapPath,
 			PlanPath:                             opts.PlanPath,
 			ExitCriteria:                         opts.ExitCriteria,
+			AcceptanceClause:                     opts.AcceptanceClause,
 			VerificationReportPath:               opts.VerificationReportPath,
 			ContractPath:                         opts.ContractPath,
 			RequiredVerification:                 required,

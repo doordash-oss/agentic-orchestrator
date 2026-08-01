@@ -33,7 +33,11 @@ Because reviewers later judge the assembled result as a whole, the roadmap you p
 **Description**:
 > {{ blockquote .Description }}
 
-{{ template "visual_references" .VisualReferences }}{{ end }}{{ template "qa_files" .QAFiles }}{{ if .Repos }}## Target Repositories
+{{ if .ExitCriteria }}**Exit criteria** (distill these into the roadmap's `## Overall Exit Criteria` section as concrete, observable statements):
+
+> {{ blockquote .ExitCriteria }}
+
+{{ end }}{{ template "visual_references" .VisualReferences }}{{ end }}{{ template "qa_files" .QAFiles }}{{ if .Repos }}## Target Repositories
 
 This feature targets the repositories below. Treat this list as authoritative; ignore sibling directories that are not listed here.
 {{ range .Repos }}- **{{ .Name }}** ({{ .Path }})

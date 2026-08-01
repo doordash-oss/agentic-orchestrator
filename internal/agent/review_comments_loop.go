@@ -253,7 +253,7 @@ func RunReviewCommentsLoop(cfg ReviewCommentsLoopConfig, sm ports.SessionManager
 	// file lives at the flat artifact dir; the resolutions JSON path is
 	// referenced inside the plan so the agent writes one combined
 	// resolutions file at the cycle root.
-	resolutionsPath := filepath.Join(artifactDir, "review-resolutions.json")
+	resolutionsPath := ReviewCommentsResolutionsPath(artifactDir)
 	planPath := filepath.Join(artifactDir, "review-plan.md")
 	plan := BuildAggregatedReviewCommentsPlan(staged, resolutionsPath)
 	if err := os.WriteFile(planPath, []byte(plan), 0o644); err != nil {
@@ -282,7 +282,7 @@ func RunReviewCommentsLoop(cfg ReviewCommentsLoopConfig, sm ports.SessionManager
 		MaxIterations:              cfg.MaxIterations,
 		MaxConsecFails:             cfg.MaxConsecFails,
 		MaxConsecNoProgress:        cfg.MaxConsecNoProgress,
-		ExitCriteria:               reviewCommentsExitCriteria(resolutionsPath),
+		ExitCriteria:               ReviewCommentsExitCriteria(resolutionsPath),
 		Model:                      cfg.Model,
 		ReviewModel:                cfg.ReviewModel,
 		ResolveSessionConfig:       cfg.ResolveSessionConfig,
@@ -438,9 +438,24 @@ func writeReviewCommentsTestingContract(path string, repos []string) error {
 	return nil
 }
 
-// reviewCommentsExitCriteria returns the cycle's exit criteria. The
-// agent reads this from the implement prompt's `## Exit Criteria` section.
-func reviewCommentsExitCriteria(resolutionsPath string) string {
+// reviewCommentsResolutionsFileName is the resolutions artifact's file
+// name within its cycle's artifact directory.
+const reviewCommentsResolutionsFileName = "review-resolutions.json"
+
+// ReviewCommentsResolutionsPath returns the combined resolutions file
+// path for a review-comments cycle's artifact directory. Exported so
+// restart paths can recompute the same path the live driver used
+// without duplicating the file name literal.
+func ReviewCommentsResolutionsPath(artifactDir string) string {
+	return filepath.Join(artifactDir, reviewCommentsResolutionsFileName)
+}
+
+// ReviewCommentsExitCriteria returns the cycle's exit criteria. The
+// agent reads this from the implement prompt's `## Exit Criteria`
+// section. Exported so restart paths (internal/orchestrator) can reuse
+// the same synthesized criteria instead of falling back to the
+// feature's raw ExitCriteria.
+func ReviewCommentsExitCriteria(resolutionsPath string) string {
 	return "Every aggregated PR review comment is either addressed (with " +
 		"corresponding code changes) or dismissed (with reasoning), captured " +
 		"as one entry per comment in `" + resolutionsPath + "`. " +

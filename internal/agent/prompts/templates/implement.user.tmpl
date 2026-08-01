@@ -9,8 +9,10 @@
 # Implementation Context
 
 **Plan**: {{ .PlanPath }}
+{{- if .ExitCriteria }}
 
 **Exit criteria**: {{ .ExitCriteria }}
+{{- end }}
 {{- if gt .Iteration 1 }}
 
 {{- if or .PlanRevisionFeedback .Feedback .HelpAnswers }}

@@ -605,13 +605,15 @@ func (s *featureFinalReviewLoopState) runFinalReviewAxis(iteration int, iterDir 
 
 	diffBase := featureDefaultDiffBase(cfg.Feature)
 	priorEvidence := priorImplementationEvidenceContextForRun(filepath.Dir(s.artifactDir))
+	intent := resolvePromptIntent(cfg.Feature)
 	prompt := BuildImplementationReviewAxisPromptWithOpts(ImplementationReviewAxisPromptOpts{
 		Gate:                                 implementationReviewGateFinal,
 		AxisLabel:                            axis.Name,
-		FeatureDescription:                   cfg.Feature.Description,
+		FeatureDescription:                   intent.Description,
 		DesignArtifactPath:                   cfg.Feature.DesignArtifactPath(),
 		LiveRunAxis:                          axis.ExecutionPosture == implementationReviewPostureLiveRun,
-		ExitCriteria:                         cfg.Feature.ExitCriteria,
+		ExitCriteria:                         intent.ExitCriteria,
+		AcceptanceClause:                     intent.AcceptanceClause,
 		DiffBase:                             diffBase,
 		RefactorPassForkPoint:                refactorPassForkPoint(cfg.Feature),
 		PreviousFeedback:                     s.previousAggregateFeedback(iteration),
@@ -726,10 +728,12 @@ func (s *featureFinalReviewLoopState) runFix(iteration int, iterDir, feedback st
 	cfg.AskingClause = sessionConfig.AskingClause
 
 	feedbackPath := filepath.Join(iterDir, "review-feedback.md")
+	intent := resolvePromptIntent(cfg.Feature)
 	prompt := BuildFinalFixPrompt(FinalFixPromptOpts{
 		Feedback:              feedback,
 		FeedbackPath:          feedbackPath,
-		ExitCriteria:          cfg.Feature.ExitCriteria,
+		ExitCriteria:          intent.ExitCriteria,
+		AcceptanceClause:      intent.AcceptanceClause,
 		Iteration:             iteration,
 		Publishable:           cfg.Feature.IsPublishable(),
 		DesignArtifactPath:    cfg.Feature.DesignArtifactPath(),

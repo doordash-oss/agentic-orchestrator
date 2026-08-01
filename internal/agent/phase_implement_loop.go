@@ -143,7 +143,7 @@ func RunPhaseImplementLoop(cfg OrchestratorConfig, sm ports.SessionManager) (*Ph
 		MaxIterations:              cfg.MaxIterations,
 		MaxConsecFails:             cfg.MaxConsecFails,
 		MaxConsecNoProgress:        cfg.MaxConsecNoProgress,
-		ExitCriteria:               cfg.Feature.ExitCriteria,
+		ExitCriteria:               resolvePromptIntent(cfg.Feature).ExitCriteria,
 		Model:                      cfg.Model,
 		ReviewModel:                cfg.ReviewModel,
 		ResolveSessionConfig:       cfg.ResolveSessionConfig,

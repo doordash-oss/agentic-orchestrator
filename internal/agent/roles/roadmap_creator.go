@@ -46,9 +46,10 @@ func RoadmapCreatorRoleSpec() RoleSpec {
 
 // RoadmapUserInput is the data passed to roadmap.user.tmpl.
 type RoadmapUserInput struct {
-	Name        string
-	Description string
-	Repos       []prompts.RepoView
+	Name         string
+	Description  string
+	ExitCriteria string
+	Repos        []prompts.RepoView
 
 	// RefactorPassForkPoint names a refactor child's fork-point commits
 	// ("repo @ sha"). Empty for top-level features.

@@ -44,8 +44,8 @@ Evidence roots:
 Evidence artifacts:
 - /state/feat-x/run-1/phase-1/implement/iteration-02/screenshots/login.png
 
-## Exit Criteria
+## Acceptance
 
-Relevant tests pass.
+Feature acceptance is defined by the `## Acceptance Criteria` section of the approved design at /state/feat-x/run-1/design/design.md. Judge acceptance against that section, not against any restatement of it.
 
 Apply the "Review Rules (Without Verification Items)" section from the axis methodology.

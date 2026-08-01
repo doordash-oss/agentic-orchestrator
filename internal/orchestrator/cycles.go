@@ -240,7 +240,7 @@ func (o *Orchestrator) restartRepoCycleImplement(featureID, repoName string, rc 
 		MaxIterations:              f.MaxIterations,
 		MaxConsecFails:             3,
 		MaxConsecNoProgress:        3,
-		ExitCriteria:               f.ExitCriteria,
+		ExitCriteria:               restartRepoCycleExitCriteria(rc.Type, planPath),
 		Model:                      implModel,
 		ReviewModel:                f.Models.Review,
 		ResolveSessionConfig:       pr.SessionRuntimeConfigResolver(featureID),
@@ -282,6 +282,21 @@ func (o *Orchestrator) restartRepoCycleImplement(featureID, repoName string, rc 
 		})
 	}()
 	return "", nil
+}
+
+// restartRepoCycleExitCriteria reuses the same synthesized exit criteria
+// the live cycle driver computed, so a restarted cycle implementer keeps
+// judging against "resolve every aggregated comment" rather than the
+// feature's raw ExitCriteria. planPath is the persisted cycle plan; the
+// resolutions file lives alongside it in the same artifact directory.
+func restartRepoCycleExitCriteria(cycleType feature.RepoCycleType, planPath string) string {
+	switch cycleType {
+	case feature.CycleReviewComments:
+		resolutionsPath := agent.ReviewCommentsResolutionsPath(filepath.Dir(planPath))
+		return agent.ReviewCommentsExitCriteria(resolutionsPath)
+	default:
+		return ""
+	}
 }
 
 // StartCycleFinalReview launches a feature-level Final Review for a

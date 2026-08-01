@@ -216,6 +216,8 @@ workspace_roots:
   - /home/user/projects # Scanned for git repos on startup
 ```
 
+`exit_criteria` seeds the intent-shaping stages: Inquire probes it, and the design distills it into its `## Acceptance Criteria` section (on the medium pipeline, the roadmap distills it into `## Overall Exit Criteria`). Downstream implementers, validators, and reviewers judge against the distilled section — raw exit criteria are inlined only while no distilled artifact exists.
+
 ### Model Overrides
 
 Each feature can override default models during creation via the wizard (step 4). The model editor shows the Inquire phase as **Clarify**, separately from **Research**, so requirement clarification and codebase research can use different models. Models can be specified with explicit provider prefixes (e.g., `claude:opus[1M]`, `codex:gpt-5.4[272K]`, `opencode:anthropic/claude-sonnet-4-5`) or as bare ids resolved against the provider registry. There are three ways a selection reaches OpenCode, and they are distinct:

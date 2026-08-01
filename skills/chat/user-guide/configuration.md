@@ -279,7 +279,7 @@ defaults:
     - No linting errors
 ```
 
-A markdown checklist included in implementation prompts as success criteria. Customize this to match your project's quality standards.
+A markdown checklist seeding the intent-shaping stages: Inquire probes it, and the design distills it into its `## Acceptance Criteria` section (on the Medium pipeline, the roadmap distills it into `## Overall Exit Criteria`). Downstream implementers, validators, and reviewers judge against the distilled section — raw exit criteria are inlined in implementation prompts only while no distilled artifact exists. Customize this to match your project's quality standards.
 
 ## Workspace Roots
 

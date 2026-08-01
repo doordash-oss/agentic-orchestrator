@@ -20,7 +20,7 @@ Builds a per-repository knowledge base covering architecture, conventions, API s
 
 ### Inquire
 
-Clarifies intent and records structured questions and answers. `defaults.inquireness` controls how frequently eligible planning questions are surfaced by the workflow engine.
+Clarifies intent and records structured questions and answers, probing the feature's exit criteria along the way. `defaults.inquireness` controls how frequently eligible planning questions are surfaced by the workflow engine.
 
 ### Research
 
@@ -28,13 +28,13 @@ Investigates relevant code paths, existing patterns, and constraints, then write
 
 ### Design
 
-Compares implementation approaches and records a chosen direction with its trade-offs.
+Compares implementation approaches and records a chosen direction with its trade-offs, distilling the exit criteria into the design's `## Acceptance Criteria` section — the acceptance authority that downstream phases judge against.
 
 ### Plan
 
 Planning has two levels:
 
-1. a strategic roadmap divided into vertical phases; and
+1. a strategic roadmap divided into vertical phases (on design-less pipelines such as Medium, the roadmap distills the exit criteria into its `## Overall Exit Criteria` section); and
 2. a tactical plan for each roadmap phase, with repository ownership and verification requirements.
 
 ### Implement

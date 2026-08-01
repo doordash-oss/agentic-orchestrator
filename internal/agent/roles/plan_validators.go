@@ -96,10 +96,11 @@ func planValidatorRoleSpec(role Role, skillName, axis string) RoleSpec {
 // ValidateSpecializedUserInput is the data passed to
 // validate_specialized.user.tmpl.
 type ValidateSpecializedUserInput struct {
-	Name         string
-	Description  string
-	ExitCriteria string
-	RiskLevel    string
+	Name             string
+	Description      string
+	ExitCriteria     string
+	AcceptanceClause string
+	RiskLevel        string
 
 	DomainName string
 	PlanPath   string

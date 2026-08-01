@@ -46,10 +46,11 @@ func FinalReviewFixerRoleSpec() RoleSpec {
 type FinalFixUserInput struct {
 	VisualReferences prompts.VisualReferencesInput
 
-	Iteration    int
-	ExitCriteria string
-	Feedback     string
-	FeedbackPath string
+	Iteration        int
+	ExitCriteria     string
+	AcceptanceClause string
+	Feedback         string
+	FeedbackPath     string
 
 	IncludeManualVerificationOutcomes bool
 	Publishable                       bool

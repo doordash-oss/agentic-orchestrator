@@ -43,6 +43,7 @@ type ReviewUserInput struct {
 	RoadmapPath            string
 	PlanPath               string
 	ExitCriteria           string
+	AcceptanceClause       string
 	VerificationReportPath string
 
 	ContractPath         string

@@ -1,27 +1,20 @@
-# Feature Context
+# Planning Context
 
-## Feature Request
+## Feature
 
-**Name**: Add OAuth login
+**Name**: OAuth login
 
 **Description**:
+> Sign in with Google.
 
-> Users should be able to sign in with Google.
-> Must support PKCE.
+**Exit criteria** (distill these into the roadmap's `## Overall Exit Criteria` section as concrete, observable statements):
 
-**Exit criteria** (the user's acceptance conditions — probe anything ambiguous, unmeasurable, or contradictory):
+> Google sign-in works end to end and PKCE is enforced.
 
-> Users can sign in with Google end to end.
+## Target Repositories
 
-Attached Images:
-- [Image #1]: /tmp/login-mock.png
-
-Attached Files:
-- [spec.pdf]: /tmp/spec.pdf
-
-Target Repositories:
-- web (/state/wt/web)
-- api (/repos/api)
+This feature targets the repositories below. Treat this list as authoritative; ignore sibling directories that are not listed here.
+- **web** (/repos/web)
 
 ## Ambiguity Resolution [grill-me]
 Interview me relentlessly about every aspect of this plan until we reach a shared understanding. Walk down each branch of the design tree, resolving dependencies between decisions one-by-one. For each question, provide your recommended answer.

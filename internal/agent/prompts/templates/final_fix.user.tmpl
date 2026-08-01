@@ -17,6 +17,9 @@ This is fix iteration {{ .Iteration }}.
 
 This feature is a refactor pass forked from its parent feature's delivered state at {{ .RefactorPassForkPoint }}. Anything that already exists at the fork point is the parent's approved work, not this pass's. Wherever the specification or reviewer feedback refers to prior, current, or existing state, resolve that reference against the fork point — this pass's own delta is `git diff <fork-sha>..HEAD` — never against the repository base branch. If feedback attributes fork-point content to this pass and asks you to change it beyond what the approved plan covers, that is misattribution: do not apply it silently — surface the conflict (AskUserQuestion if needed) instead of rewriting the parent's delivered state.
 
+{{ end }}{{ if .AcceptanceClause }}**Acceptance**:
+{{ .AcceptanceClause }}
+
 {{ end }}{{ if .ExitCriteria }}**Exit criteria**:
 {{ .ExitCriteria }}
 

@@ -77,6 +77,10 @@ Scope guidance:
 
 Read the implementation plan (source of truth) at: {{ .PlanPath }}
 
+{{ end }}{{ if .AcceptanceClause }}## Acceptance
+
+{{ .AcceptanceClause }}
+
 {{ end }}{{ if .ExitCriteria }}## Exit Criteria
 
 {{ .ExitCriteria }}

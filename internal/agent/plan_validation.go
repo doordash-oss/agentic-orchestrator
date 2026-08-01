@@ -1131,10 +1131,13 @@ func buildSpecializedValidationPromptForArtifact(f *feature.Feature, planPath, r
 	_ = skillsDir
 	includePriorPhase := domain.Template == "validate-phase-plan-grounding" && len(extras.PriorPhasePlanPaths) > 0
 
+	intent := resolvePromptIntent(f)
+
 	return roles.BuildValidateSpecializedPrompt(roles.ValidateSpecializedUserInput{
 		Name:                      f.Name,
-		Description:               f.Description,
-		ExitCriteria:              f.ExitCriteria,
+		Description:               intent.Description,
+		ExitCriteria:              intent.ExitCriteria,
+		AcceptanceClause:          intent.AcceptanceClause,
 		RiskLevel:                 string(f.RiskLevel),
 		DomainName:                domain.Name,
 		PlanPath:                  planPath,

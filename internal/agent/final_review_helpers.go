@@ -37,6 +37,7 @@ type FinalFixPromptOpts struct {
 	Feedback           string
 	FeedbackPath       string
 	ExitCriteria       string
+	AcceptanceClause   string
 	Iteration          int
 	Publishable        bool
 	DesignArtifactPath string   // retained for caller compatibility; no longer re-injected
@@ -59,6 +60,7 @@ func BuildFinalFixPrompt(opts FinalFixPromptOpts) string {
 		},
 		Iteration:                         opts.Iteration,
 		ExitCriteria:                      opts.ExitCriteria,
+		AcceptanceClause:                  opts.AcceptanceClause,
 		Feedback:                          opts.Feedback,
 		FeedbackPath:                      opts.FeedbackPath,
 		IncludeManualVerificationOutcomes: feedbackMentionsManualVerification(opts.Feedback),

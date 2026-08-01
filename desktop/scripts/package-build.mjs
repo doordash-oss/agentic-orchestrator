@@ -47,6 +47,12 @@ if (process.platform === 'linux') {
   builderArgs.push(arch === 'arm64' ? '--arm64' : '--x64');
 }
 
+// electron-builder skips macOS signing on pull-request builds unless forced.
+// The dev build only ever applies the ad-hoc identity ('-') from
+// electron-builder.yml — no certificate exists to leak — and verify-package
+// rejects DMGs whose app cannot launch unsigned on arm64.
+process.env.CSC_FOR_PULL_REQUEST ??= 'true';
+
 run(process.execPath, [nodeBin('electron-vite', 'bin/electron-vite.js'), 'build']);
 run(process.execPath, [join(desktopDir, 'scripts', 'prepare-server.mjs')]);
 run(process.execPath, [nodeBin('electron-builder', 'cli.js'), ...builderArgs]);

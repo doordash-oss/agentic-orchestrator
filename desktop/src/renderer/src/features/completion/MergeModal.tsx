@@ -46,8 +46,8 @@ export function MergeModalBody({
   return (
     <div className="completion-workspace__merge">
       <p className="completion-workspace__merge-hint">
-        Merging records per-repository outcomes but does not mark the feature Done. A conflict
-        offers the rebase journey for the affected repository.
+        A successful merge across every repository marks the feature Done. A conflict offers the
+        rebase journey for the affected repository.
       </p>
       {localMergeRepos.length > 0 ? (
         <>

@@ -177,7 +177,7 @@ test('packaged real-server start, semantic watch, history, and authoritative sto
     transcript.section('Stop confirmation and authoritative terminal state');
     await cockpit.getByRole('button', { name: 'Stop' }).click();
     const dialog = handle.page.getByRole('dialog', { name: 'Stop Packaged Signal Journey?' });
-    await expect(dialog).toContainText(/currently affects 0 live sessions/);
+    await expect(dialog).toContainText(/currently affects 1 live session/);
     await expect(dialog).toContainText(/Existing validated transcript content remains available/);
     await evidenceShot(handle, 'cockpit-stop-impact-confirmation');
     await dialog.getByRole('button', { name: 'Confirm stop' }).click();

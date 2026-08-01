@@ -80,12 +80,13 @@ type RelationshipChildren struct {
 	Closed []*Feature
 }
 
-// isLegacyProviderBookkeepingDir identifies provider-owned directories that
-// older Agentico versions wrote beneath the feature store. They are not
-// feature records and must not participate in feature or relationship scans.
+// isLegacyProviderBookkeepingDir identifies runtime-owned directories written
+// beneath the feature store: provider bookkeeping from older Agentico
+// versions plus the server-owned AMA chat session state. They are not feature
+// records and must not participate in feature or relationship scans.
 func isLegacyProviderBookkeepingDir(name string) bool {
 	switch name {
-	case "opencode", "codex-home":
+	case "opencode", "codex-home", "chat":
 		return true
 	default:
 		return false

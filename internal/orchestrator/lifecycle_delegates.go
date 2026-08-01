@@ -497,8 +497,9 @@ func (o *Orchestrator) SaveFeatureSummary(featureID, summary string) error {
 }
 
 // MergeFeatureLocal commits any uncommitted changes in each repo's worktree
-// and merges the feature branch into its base branch locally. Errors identify
-// the affected repository so clients can present a useful diagnostic.
+// and merges the feature branch into its base branch locally, then marks the
+// feature Done. Errors identify the affected repository so clients can
+// present a useful diagnostic.
 func (o *Orchestrator) MergeFeatureLocal(featureID string) error {
 	o.relationshipMu.RLock()
 	defer o.relationshipMu.RUnlock()
@@ -545,7 +546,7 @@ func (o *Orchestrator) MergeFeatureLocal(featureID string) error {
 		}
 	}
 
-	return nil
+	return o.deps.Lifecycle.MarkDone(featureID)
 }
 
 // SetRepoPublished persists a successful per-repo publish without exposing

@@ -39,7 +39,7 @@ test('verified download, Install When Idle, and Restart to Update require explic
   try {
     handle = await launchApp(world, testInfo, {
       traceName: 'distribution-update-consent',
-      env: { AGENTICO_UPDATE_FIXTURE: fixture },
+      env: { AGENTICO_UPDATE_FIXTURE: fixture, AGENTICO_UPDATE_INSTALL_MODE: 'in-app' },
     });
     await expect(handle.page.getByRole('button', { name: 'New feature' })).toBeVisible({
       timeout: 60_000,
@@ -134,7 +134,7 @@ async function assertRestartToUpdateConsent(
   try {
     handle = await launchApp(world, testInfo, {
       traceName: 'distribution-update-restart-consent',
-      env: { AGENTICO_UPDATE_FIXTURE: fixture },
+      env: { AGENTICO_UPDATE_FIXTURE: fixture, AGENTICO_UPDATE_INSTALL_MODE: 'in-app' },
     });
     await expect(handle.page.getByRole('button', { name: 'New feature' })).toBeVisible({
       timeout: 60_000,

@@ -146,7 +146,11 @@ test('lifecycle cycles: resume, retry, restart, rebase, review-comments, refacto
     transcript.step('aftercare cycle actions opened their focused modals');
 
     transcript.section('Restart confirmation');
-    const restartButton = seededCockpit.getByRole('button', { name: 'Restart', exact: true });
+    // Scope to the parent action bar: the child relationship workspace also
+    // renders a "Restart" button that dispatches without a confirmation.
+    const restartButton = seededCockpit
+      .getByRole('group', { name: 'Feature actions' })
+      .getByRole('button', { name: 'Restart', exact: true });
     if (await restartButton.isVisible({ timeout: 5_000 }).catch(() => false)) {
       await expect(restartButton).toBeEnabled({ timeout: 60_000 });
       await restartButton.click();

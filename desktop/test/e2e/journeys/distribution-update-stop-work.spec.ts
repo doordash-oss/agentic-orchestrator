@@ -11,7 +11,13 @@ import {
   type AppHandle,
 } from '../helpers/app';
 import { Transcript } from '../helpers/transcript';
-import { createRepo, createWorld, destroyWorld } from '../helpers/world';
+import {
+  createRepo,
+  createWorld,
+  destroyWorld,
+  waitFor,
+  type JourneyWorld,
+} from '../helpers/world';
 import { updatePackageName, writeSignedUpdateFixture } from '../helpers/update-fixtures';
 
 test('Stop Work and Install Now confirms impact, cancels partial stops, then succeeds after ownership-aware stop', async ({}, testInfo) => {
@@ -35,7 +41,7 @@ test('Stop Work and Install Now confirms impact, cancels partial stops, then suc
   try {
     handle = await launchApp(world, testInfo, {
       traceName: 'distribution-update-stop-work',
-      env: { AGENTICO_UPDATE_FIXTURE: fixture },
+      env: { AGENTICO_UPDATE_FIXTURE: fixture, AGENTICO_UPDATE_INSTALL_MODE: 'in-app' },
     });
     await expect(handle.page.getByRole('button', { name: 'New feature' })).toBeVisible({
       timeout: 60_000,
@@ -92,11 +98,29 @@ test('Stop Work and Install Now confirms impact, cancels partial stops, then suc
       await restoreRelaunchProbe(handle).catch(() => undefined);
       await closeApp(handle);
     }
-    await assertNoLeakedProcesses(world);
+    // The stopped provider stub exits only after reading the interrupt from
+    // its stdin poll loop; allow a bounded grace instead of asserting
+    // immediately after closeApp.
+    await assertNoLeakedProcessesEventually(world);
     destroyWorld(world);
   }
   transcript.write(testInfo);
 });
+
+async function assertNoLeakedProcessesEventually(world: JourneyWorld): Promise<void> {
+  await waitFor(
+    () => {
+      try {
+        assertNoLeakedProcesses(world);
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    `no leaked processes for ${world.root}`,
+    15_000,
+  );
+}
 
 async function forcePartialStop(handle: AppHandle, count: number): Promise<void> {
   await handle.app.evaluate((_, value) => {

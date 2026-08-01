@@ -1126,7 +1126,7 @@ func TestOrchestrator_RestartPhase_ProceedsWhenSessionsInactive(t *testing.T) {
 	}
 }
 
-func TestOrchestrator_MergeFeatureLocal_DoesNotMarkDone(t *testing.T) {
+func TestOrchestrator_MergeFeatureLocal_MarksDone(t *testing.T) {
 	notPublishable := false
 	f := &feature.Feature{
 		ID:     "feat-local-merge",
@@ -1160,10 +1160,7 @@ func TestOrchestrator_MergeFeatureLocal_DoesNotMarkDone(t *testing.T) {
 		t.Fatalf("MergeFeatureLocal: %v", err)
 	}
 
-	refuteLifecycleCall(t, lc, "MarkDone")
-	if f.Status != feature.StatusPublished {
-		t.Fatalf("Status = %s; want unchanged %s", f.Status, feature.StatusPublished)
-	}
+	assertLifecycleCall(t, lc, "MarkDone")
 	if got := len(rebaser.Calls); got != 1 {
 		t.Fatalf("rebaser calls = %d; want 1", got)
 	}

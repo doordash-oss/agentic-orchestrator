@@ -202,9 +202,7 @@ async function featureTabNavigationTarget(handle: AppHandle): Promise<Locator> {
   return menuItem;
 }
 
-test('packaged inbox and cockpit resolve real attention classes from the bundled server', async ({
-  page: _page,
-}, testInfo) => {
+test('packaged inbox and cockpit resolve real attention classes from the bundled server', async ({}, testInfo) => {
   const transcript = new Transcript(
     'attention-resolution',
     'Prompt-class attention resolution via packaged inbox and cockpit',
@@ -603,7 +601,7 @@ test('packaged inbox renders and drafts a real NEED_USER_INPUT gate', async ({},
       'feature-scoped retry choice survived relaunch and dispatched verification from the cockpit',
     );
 
-    transcript.section('Persisted feature gate exposes Resume without a false Stop affordance');
+    transcript.section('Feature-scoped Stop clears the paused gate');
     await handle.page.getByRole('tab', { name: 'Home' }).click();
     await createFeatureViaForm(handle, {
       name: 'Packaged Feature Stop Gate Fixture',
@@ -646,22 +644,30 @@ test('packaged inbox renders and drafts a real NEED_USER_INPUT gate', async ({},
     await stopFeatureTab.click();
     await expect(stopFeatureTab).toHaveAttribute('aria-selected', 'true');
     const stopFeatureCockpit = handle.page.getByLabel('Feature Packaged Feature Stop Gate Fixture');
-    await expect(stopFeatureCockpit.getByRole('button', { name: 'Stop', exact: true })).toHaveCount(
-      0,
-    );
-    await expect(
-      stopFeatureCockpit.getByRole('button', { name: 'Resume', exact: true }),
-    ).toBeEnabled();
-
-    const persistedInbox = await openInbox(handle);
-    await persistedInbox.getByRole('button', { name: /Input gate/ }).click();
-    const persistedGateDialog = handle.page.getByRole('dialog', {
-      name: 'Verification needs your input',
+    const featureStopButton = stopFeatureCockpit.getByRole('button', {
+      name: 'Stop',
+      exact: true,
     });
-    await persistedGateDialog
-      .getByRole('radio', { name: /I've granted access — retry verification/ })
-      .click();
-    await persistedGateDialog.getByRole('button', { name: 'Retry verification' }).click();
+    await expect(featureStopButton).toBeEnabled();
+    await featureStopButton.click();
+    const featureStopDialog = handle.page.getByRole('dialog', {
+      name: 'Stop Packaged Feature Stop Gate Fixture?',
+    });
+    await expect(featureStopDialog).toBeVisible();
+    await featureStopDialog.getByRole('button', { name: 'Confirm stop' }).click();
+    await expect(featureStopDialog).toHaveCount(0);
+
+    await waitFor(
+      async () => {
+        const snapshot = await handle!.page.evaluate(
+          (featureId) => window.agentico.getFeature(featureId),
+          stopFeature.id,
+        );
+        return snapshot.status.toLowerCase() === 'interrupted';
+      },
+      'feature-scoped gate fixture to reach Interrupted after Stop',
+      60_000,
+    );
     await waitForAttentionMissing(handle.page, stopFeature.id, 'gate');
     await waitFor(
       () => !fs.readFileSync(stopRunPath, 'utf8').includes('pending_need_user_input_path:'),
@@ -671,9 +677,14 @@ test('packaged inbox renders and drafts a real NEED_USER_INPUT gate', async ({},
     await handle.page.reload();
     await waitForAttentionMissing(handle.page, stopFeature.id, 'gate');
     await expect(attentionBell(handle.page)).toHaveAccessibleName(/Attention inbox, 0 pending/);
+    const reloadedStoppedFeature = await handle.page.evaluate(
+      (featureId) => window.agentico.getFeature(featureId),
+      stopFeature.id,
+    );
+    expect(reloadedStoppedFeature.status.toLowerCase()).toBe('interrupted');
     expect(fs.readFileSync(stopRunPath, 'utf8')).not.toContain('pending_need_user_input_path:');
     transcript.step(
-      'a persisted gate exposed only valid controls, resumed from its checkpoint, and stayed cleared after reload',
+      'feature Stop persisted Interrupted, cleared its gate pointer, and kept attention empty after reload',
     );
 
     persistAppLogs(handle, 'attention-gate-app-server');

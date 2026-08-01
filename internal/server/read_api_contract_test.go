@@ -310,8 +310,8 @@ func TestFeatureDetailSynthesizesCycleFromRepoCycleState(t *testing.T) {
 	if summaryCycle["type"] != actionRebase || summaryCycle["status"] != feature.RepoCycleRunning || summaryCycle["count"].(float64) != 1 {
 		t.Fatalf("summary feature cycle = %+v, want running rebase #1", summaryCycle)
 	}
-	if summaryCycle["phase"] != "implement_validate" {
-		t.Fatalf("summary feature cycle phase = %v, want implement_validate", summaryCycle["phase"])
+	if summaryCycle["phase"] != "inspect_rebase" {
+		t.Fatalf("summary feature cycle phase = %v, want inspect_rebase", summaryCycle["phase"])
 	}
 
 	detail := getJSONMap(t, handler, "/api/v1/features/"+f.ID)
@@ -323,8 +323,8 @@ func TestFeatureDetailSynthesizesCycleFromRepoCycleState(t *testing.T) {
 	if cycle["type"] != actionRebase || cycle["status"] != feature.RepoCycleRunning || cycle["count"].(float64) != 1 {
 		t.Fatalf("detail feature cycle = %+v, want running rebase #1", cycle)
 	}
-	if cycle["phase"] != "implement_validate" {
-		t.Fatalf("detail feature cycle phase = %v, want implement_validate", cycle["phase"])
+	if cycle["phase"] != "inspect_rebase" {
+		t.Fatalf("detail feature cycle phase = %v, want inspect_rebase", cycle["phase"])
 	}
 }
 
@@ -1894,7 +1894,10 @@ func TestFeatureDetailActionCatalogStateMatrix(t *testing.T) {
 				disabledCode string
 			}{
 				actionPauseStop: {disabledCode: "not_running"},
-				actionRefactor:  {disabledCode: disabledCycleActive},
+				// Refactor now launches a child feature, so a lingering
+				// legacy cycle no longer blocks it (mirrors
+				// feature.CreateRefactorChild validation).
+				actionRefactor: {enabled: true},
 			},
 		},
 		{

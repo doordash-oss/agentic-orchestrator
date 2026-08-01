@@ -41,6 +41,9 @@ type FinalFixPromptOpts struct {
 	Publishable        bool
 	DesignArtifactPath string   // retained for caller compatibility; no longer re-injected
 	Images             []string // user-attached visual references, re-injected per iteration
+	// RefactorPassForkPoint resolves the spec's "fork point" references for a
+	// refactor child ("repo @ sha"). Empty for top-level features.
+	RefactorPassForkPoint string
 }
 
 // BuildFinalFixPrompt constructs the prompt for the fix agent session.
@@ -60,6 +63,7 @@ func BuildFinalFixPrompt(opts FinalFixPromptOpts) string {
 		FeedbackPath:                      opts.FeedbackPath,
 		IncludeManualVerificationOutcomes: feedbackMentionsManualVerification(opts.Feedback),
 		Publishable:                       opts.Publishable,
+		RefactorPassForkPoint:             opts.RefactorPassForkPoint,
 	})
 }
 

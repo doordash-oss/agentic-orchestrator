@@ -31,6 +31,11 @@ Iteration artifacts directory: {{ .IterDir }}
 - Keep this axis read-only: inspect source and artifacts, then write only the required review-feedback.md file.
 
 {{ end -}}
+{{ if .RefactorPassForkPoint }}## Refactor Pass Fork Point
+
+This feature is a refactor pass forked from its parent feature's delivered state at {{ .RefactorPassForkPoint }}. The cumulative diff therefore also contains the parent's approved, already-delivered changes: hunks that already exist at the fork point belong to the parent, not to this pass. When the roadmap or plan says content is "unchanged", "preserved", or refers to "the fork point", it means relative to that commit — verify with `git diff <fork-sha>..HEAD`, never against the repository base branch. Judge the assembled result as a whole, but attribute responsibility correctly: do not report the parent's delivered state as this pass's scope violation.
+
+{{ end -}}
 {{ if .FinalGate }}## Final Review Scope
 
 Review the assembled feature across the cumulative cross-repo diff.

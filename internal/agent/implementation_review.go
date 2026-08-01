@@ -256,6 +256,7 @@ func runImplementationReviewAxis(cfg ImplementConfig, sm ports.SessionManager, i
 		FeatureDescription:     featureDescriptionForImplementationReview(cfg.Feature),
 		DesignArtifactPath:     designArtifactPathForImplementationReview(cfg.Feature),
 		LiveRunAxis:            axis.ExecutionPosture == implementationReviewPostureLiveRun,
+		RefactorPassForkPoint:  refactorPassForkPoint(cfg.Feature),
 		PlanPath:               cfg.PlanPath,
 		ExitCriteria:           cfg.ExitCriteria,
 		ProgressPath:           input.ProgressPath,

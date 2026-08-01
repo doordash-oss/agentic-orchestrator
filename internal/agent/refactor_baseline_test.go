@@ -90,3 +90,55 @@ func TestSpecPhasePromptsCarryRefactorPassContext(t *testing.T) {
 		t.Fatal("top-level design prompt unexpectedly carries the refactor pass context")
 	}
 }
+
+// A live failure: the spec said "unchanged from the fork point", the reviewer
+// had no fork-point value, equated it with main, and filed the parent's
+// delivered work as this pass's violation until the fixer reverted it. Spec
+// consumers therefore receive the fork point as attribution context — while
+// final review keeps judging the assembled result against the base branch.
+func TestSpecConsumerPromptsResolveTheForkPoint(t *testing.T) {
+	forkPoint := "repo-a @ abc123def456"
+
+	review := BuildImplementationReviewAxisPromptWithOpts(ImplementationReviewAxisPromptOpts{
+		Gate:                  implementationReviewGateFinal,
+		AxisLabel:             "QA",
+		DiffBase:              "main",
+		RefactorPassForkPoint: forkPoint,
+		FeedbackPath:          "/state/review-feedback.md",
+	})
+	fix := BuildFinalFixPrompt(FinalFixPromptOpts{
+		Feedback:              "revert the body",
+		FeedbackPath:          "/state/review-feedback.md",
+		Iteration:             2,
+		RefactorPassForkPoint: forkPoint,
+	})
+
+	for name, prompt := range map[string]string{"review": review, "fix": fix} {
+		if !strings.Contains(prompt, "## Refactor Pass Fork Point") {
+			t.Fatalf("%s prompt missing the fork point block:\n%s", name, prompt)
+		}
+		if !strings.Contains(prompt, "abc123def456") {
+			t.Fatalf("%s prompt missing the fork-point SHA:\n%s", name, prompt)
+		}
+		if !strings.Contains(prompt, "belong to the parent") {
+			t.Fatalf("%s prompt missing the attribution clause:\n%s", name, prompt)
+		}
+	}
+	// The assembled result is still judged against the base branch.
+	if !strings.Contains(review, "Cumulative diff base: main") {
+		t.Fatalf("final review lost its cumulative diff base:\n%s", review)
+	}
+	// A misattributing reviewer must be surfaced, not silently obeyed.
+	if !strings.Contains(fix, "do not apply it silently") {
+		t.Fatalf("fix prompt missing the misattribution escape hatch:\n%s", fix)
+	}
+
+	plain := BuildImplementationReviewAxisPromptWithOpts(ImplementationReviewAxisPromptOpts{
+		Gate:         implementationReviewGateFinal,
+		AxisLabel:    "QA",
+		FeedbackPath: "/state/review-feedback.md",
+	})
+	if strings.Contains(plain, "Refactor Pass Fork Point") {
+		t.Fatalf("top-level review prompt unexpectedly carries the fork point block:\n%s", plain)
+	}
+}

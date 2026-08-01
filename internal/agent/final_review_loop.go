@@ -613,6 +613,7 @@ func (s *featureFinalReviewLoopState) runFinalReviewAxis(iteration int, iterDir 
 		LiveRunAxis:                          axis.ExecutionPosture == implementationReviewPostureLiveRun,
 		ExitCriteria:                         cfg.Feature.ExitCriteria,
 		DiffBase:                             diffBase,
+		RefactorPassForkPoint:                refactorPassForkPoint(cfg.Feature),
 		PreviousFeedback:                     s.previousAggregateFeedback(iteration),
 		Iteration:                            iteration,
 		RoadmapPath:                          finalReviewArtifactPath(s.stateDir, cfg.Feature, "roadmap"),
@@ -726,13 +727,14 @@ func (s *featureFinalReviewLoopState) runFix(iteration int, iterDir, feedback st
 
 	feedbackPath := filepath.Join(iterDir, "review-feedback.md")
 	prompt := BuildFinalFixPrompt(FinalFixPromptOpts{
-		Feedback:           feedback,
-		FeedbackPath:       feedbackPath,
-		ExitCriteria:       cfg.Feature.ExitCriteria,
-		Iteration:          iteration,
-		Publishable:        cfg.Feature.IsPublishable(),
-		DesignArtifactPath: cfg.Feature.DesignArtifactPath(),
-		Images:             cfg.Feature.Images,
+		Feedback:              feedback,
+		FeedbackPath:          feedbackPath,
+		ExitCriteria:          cfg.Feature.ExitCriteria,
+		Iteration:             iteration,
+		Publishable:           cfg.Feature.IsPublishable(),
+		DesignArtifactPath:    cfg.Feature.DesignArtifactPath(),
+		Images:                cfg.Feature.Images,
+		RefactorPassForkPoint: refactorPassForkPoint(cfg.Feature),
 	})
 
 	_ = os.WriteFile(filepath.Join(iterDir, "fix-prompt.md"), []byte(prompt), 0o644)

@@ -53,6 +53,9 @@ type FinalFixUserInput struct {
 
 	IncludeManualVerificationOutcomes bool
 	Publishable                       bool
+	// RefactorPassForkPoint resolves the spec's "fork point" references for a
+	// refactor child ("repo @ sha"). Empty for top-level features.
+	RefactorPassForkPoint string
 }
 
 // BuildFinalFixPrompt renders the final-review fix prompt.

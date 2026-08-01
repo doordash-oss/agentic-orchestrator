@@ -214,13 +214,14 @@ type ReviewUserInput struct {
 	IterDir   string
 	AxisLabel string
 
-	GateLabel          string
-	FinalGate          bool
-	LiveRunAxis        bool
-	DiffBase           string
-	FeatureDescription string
-	DesignArtifactPath string
-	PreviousFeedback   string
+	GateLabel             string
+	FinalGate             bool
+	LiveRunAxis           bool
+	DiffBase              string
+	FeatureDescription    string
+	DesignArtifactPath    string
+	PreviousFeedback      string
+	RefactorPassForkPoint string
 
 	RoadmapPath            string
 	PlanPath               string
@@ -250,6 +251,7 @@ type FinalFixUserInput struct {
 
 	IncludeManualVerificationOutcomes bool
 	Publishable                       bool
+	RefactorPassForkPoint             string
 }
 
 type ValidateSpecializedUserInput struct {

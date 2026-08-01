@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { featureSnapshot } from '../test/agenticoMock';
 import {
   actionById,
+  childStatusSpineIndex,
   dashboardGroupId,
   dashboardState,
   displayFeatureMessage,
@@ -129,6 +130,21 @@ describe('intervention-first dashboard ordering', () => {
       label: 'Refactoring — needs attention',
       tone: 'attention',
     });
+  });
+
+  it('places a child on the spine only when its status names a phase', () => {
+    const stages = spineStages('large');
+    expect(childStatusSpineIndex('SettingUpWorktrees', stages)).toBe(0);
+    expect(childStatusSpineIndex('Created', stages)).toBe(1);
+    expect(childStatusSpineIndex('Implementing', stages)).toBe(
+      stages.findIndex((stage) => stage.label === 'Implement'),
+    );
+    expect(childStatusSpineIndex('FinalReviewNeedsReview', stages)).toBe(
+      stages.findIndex((stage) => stage.label === 'Review'),
+    );
+    // Paused/waiting states carry no phase; an approximate needle would lie.
+    expect(childStatusSpineIndex('Interrupted', stages)).toBeNull();
+    expect(childStatusSpineIndex('NeedUserInput', stages)).toBeNull();
   });
 
   it('groups dashboard rows into in-progress, published, and done sections', () => {

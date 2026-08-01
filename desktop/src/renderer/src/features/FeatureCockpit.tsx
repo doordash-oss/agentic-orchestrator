@@ -1613,7 +1613,6 @@ export function FeatureCockpit({
               <RefactorPassWorkspace
                 parent={snapshot}
                 pass={refactorPass}
-                onEditPairedReview={() => setConfigOpen(true)}
                 attentionItems={attentionItems}
                 refreshAttention={refreshAttention}
                 attentionDrafts={attentionDrafts}
@@ -1685,10 +1684,16 @@ export function FeatureCockpit({
 
         {configOpen ? (
           <CockpitModal
-            title="Configuration"
+            title={snapshot.activeChild !== undefined ? 'Paired configuration' : 'Configuration'}
             ariaLabel="Feature configuration"
             onClose={() => setConfigOpen(false)}
           >
+            {snapshot.activeChild !== undefined ? (
+              <p className="config-editor__paired-note">
+                Review changes apply to both <b>{snapshot.name}</b> and{' '}
+                <b>{snapshot.activeChild.name}</b>. Pipeline is preserved per record.
+              </p>
+            ) : null}
             <FeatureConfigPanel featureId={featureId} />
           </CockpitModal>
         ) : null}

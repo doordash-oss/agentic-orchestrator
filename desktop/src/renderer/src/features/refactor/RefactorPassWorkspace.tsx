@@ -195,8 +195,6 @@ export function useRefactorPass(
 export interface RefactorPassWorkspaceProps {
   parent: FeatureSnapshot;
   pass: RefactorPassController;
-  /** Opens the paired review editor (the server applies it to both records). */
-  onEditPairedReview(): void;
   attentionItems: AttentionItem[];
   refreshAttention(): Promise<AttentionItem[]>;
   attentionDrafts: AttentionDrafts;
@@ -213,7 +211,6 @@ export interface RefactorPassWorkspaceProps {
 export function RefactorPassWorkspace({
   parent,
   pass,
-  onEditPairedReview,
   attentionItems,
   refreshAttention,
   attentionDrafts,
@@ -424,12 +421,9 @@ export function RefactorPassWorkspace({
             <p className="feature-facts__eyebrow">Parent</p>
             <strong>{parent.name}</strong>
             <p>
-              Locked while the pass runs. Review settings are paired — changes apply to both
-              records, and each keeps its own pipeline.
+              Locked while the pass runs. Review settings stay editable through Edit configuration…
+              — changes apply to both records, and each keeps its own pipeline.
             </p>
-            <button type="button" onClick={onEditPairedReview}>
-              Edit paired review
-            </button>
           </section>
         </aside>
       </div>

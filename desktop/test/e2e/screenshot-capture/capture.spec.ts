@@ -65,6 +65,16 @@ test('capture all visual evidence screenshots', async ({ page }) => {
 
   await capture(
     page,
+    'home-flight-board',
+    'light',
+    1440,
+    900,
+    'home-flight-board-with-refactoring-pass-lane-1440x900-light',
+    '.run-card__pass',
+  );
+
+  await capture(
+    page,
     'aftercare',
     'dark',
     1440,

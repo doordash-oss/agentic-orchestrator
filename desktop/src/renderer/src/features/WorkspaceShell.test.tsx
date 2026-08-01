@@ -114,6 +114,71 @@ describe('WorkspaceShell tabs', () => {
     expect(mock.api.getFeature).toHaveBeenCalledWith(FEATURE_ID);
   });
 
+  it('shows a refactoring parent as an in-progress card carrying its pass lane', async () => {
+    const mock = installAgenticoMock({
+      features: [
+        {
+          id: FEATURE_ID,
+          name: 'Electron app',
+          status: 'Published',
+          currentPhase: 'Publish',
+          repos: ['repo-a'],
+          createdAt: '2026-07-14T10:00:00Z',
+          activeRun: 6,
+          runCount: 6,
+          warnings: [],
+        },
+      ],
+    });
+    mock.api.getFeature.mockResolvedValue(
+      featureSnapshot({
+        name: 'Electron app',
+        status: 'Published',
+        currentPhase: 'Publish',
+        timing: { totalSeconds: 420_120 },
+        actions: [],
+        activeChild: {
+          id: 'child1234ef567890',
+          name: 'Slop removal pass',
+          kind: 'refactor',
+          displayToken: 'refactor:child1234ef567890',
+          displayState: 'Active — Implementing',
+          pipeline: 'large',
+          status: 'Implementing',
+          relationshipState: 'active',
+          startedAt: '2026-07-30T10:00:00Z',
+          cost: { totalUsd: 4.2, byPhase: {} },
+          integrationState: 'pending',
+          attention: [],
+          cleanupWarnings: [],
+        },
+      }),
+    );
+    render(<WorkspaceShell />);
+
+    const listRegion = await screen.findByRole('region', { name: 'Existing features' });
+    const row = await within(listRegion).findByRole('listitem');
+    // In progress, badged Refactoring, parent shown as locked.
+    expect(row).toHaveTextContent('Refactoring');
+    expect(row).toHaveTextContent('Published · locked');
+    // The pass lane replaces the parent's at-rest rail and carries the pass needle.
+    expect(within(row).getByText('Slop removal pass')).toBeVisible();
+    expect(within(row).getByText('Implementing')).toBeVisible();
+    const passRail = within(row).getByRole('group', {
+      name: 'Pass pipeline for Slop removal pass',
+    });
+    // Nine-stage rails compact their labels; the full name stays on title.
+    expect(within(passRail).getByTitle('Implement').closest('[data-state]')).toHaveAttribute(
+      'data-state',
+      'active',
+    );
+    expect(
+      within(row).queryByRole('group', { name: 'Pipeline for Electron app' }),
+    ).not.toBeInTheDocument();
+    // The parent's lifetime elapsed would read as pass time; it stays off.
+    expect(row).not.toHaveTextContent('elapsed');
+  });
+
   it('groups Home features by lifecycle state', async () => {
     const inProgress = featureSnapshot({
       id: 'feature-in-progress',

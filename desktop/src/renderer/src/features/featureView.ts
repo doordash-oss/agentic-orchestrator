@@ -222,6 +222,47 @@ export function spineActiveIndexForPhase(
   return index >= 0 ? index : 0;
 }
 
+/** Phase a working/reviewing status runs in, for spine placement. */
+const STATUS_PHASE_LABELS: Readonly<Record<string, string>> = {
+  BuildingKB: 'Knowledge Base',
+  Inquiring: 'Inquire',
+  Inquiry: 'Inquire',
+  Researching: 'Research',
+  Research: 'Research',
+  Designing: 'Design',
+  Design: 'Design',
+  Planning: 'Plan',
+  Plan: 'Plan',
+  PlanReady: 'Plan',
+  Roadmap: 'Plan',
+  PhasePlan: 'Plan',
+  Implementing: 'Implement',
+  Implementation: 'Implement',
+  Reviewing: 'Review',
+  FinalReviewing: 'Review',
+  FinalReview: 'Review',
+  ReviewPassed: 'Publish',
+};
+
+/**
+ * Spine position for a relationship child known only by its status string
+ * (the summary view carries no current phase). Returns null when the status
+ * does not name a phase (paused, failed, waiting on input) — an approximate
+ * needle there would lie.
+ */
+export function childStatusSpineIndex(
+  status: string,
+  stages: readonly SpineStage[],
+): number | null {
+  if (status === 'SettingUpWorktrees') return 0;
+  if (status === 'Created') return Math.min(1, stages.length - 1);
+  const key = status.endsWith('NeedsReview') ? status.slice(0, -'NeedsReview'.length) : status;
+  const label = STATUS_PHASE_LABELS[key];
+  if (label === undefined) return null;
+  const index = stages.findIndex((stage) => stage.label === label);
+  return index >= 0 ? index : null;
+}
+
 /**
  * The run finished and the feature is resting (awaiting publish/completion).
  * The server keeps current_phase at the last worked phase in these statuses,

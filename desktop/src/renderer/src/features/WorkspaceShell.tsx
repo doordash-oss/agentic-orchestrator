@@ -27,6 +27,7 @@ import { FeatureCockpit } from './FeatureCockpit';
 import { SettingsPanel } from './SettingsPanel';
 import { emptyAttentionDrafts, type AttentionDrafts } from './AttentionInbox';
 import {
+  childStatusSpineIndex,
   dashboardGroupId,
   dashboardState,
   displayStatusLabel,
@@ -966,21 +967,31 @@ function RunningCard({
           repo <b>{feature.repos.join(', ')}</b>
         </span>
         <span>
-          status <b>{displayStatusLabel(feature.status)}</b>
+          status{' '}
+          <b>
+            {displayStatusLabel(feature.status)}
+            {feature.activeChild !== undefined ? ' · locked' : ''}
+          </b>
         </span>
-        {elapsed !== null ? (
+        {feature.activeChild === undefined && elapsed !== null ? (
           <span>
             elapsed <b>{elapsed}</b>
           </span>
         ) : null}
       </p>
-      <FlightRail
-        stages={stages}
-        activeIndex={activeIndex}
-        atRest={isRunAtRest(feature.status)}
-        tone={railTone}
-        label={`Pipeline for ${feature.name}`}
-      />
+      {feature.activeChild !== undefined ? (
+        // The pass is what is moving; the parent's at-rest rail would read as
+        // a finished run inside the In-progress section.
+        <PassLane child={feature.activeChild} tone={railTone} />
+      ) : (
+        <FlightRail
+          stages={stages}
+          activeIndex={activeIndex}
+          atRest={isRunAtRest(feature.status)}
+          tone={railTone}
+          label={`Pipeline for ${feature.name}`}
+        />
+      )}
       {feature.failure?.message !== undefined ? (
         <p className="run-card__failure">
           <span aria-hidden="true">! </span>
@@ -997,6 +1008,45 @@ function RunningCard({
         </button>
       </div>
     </li>
+  );
+}
+
+/**
+ * The TUI's nested `↳ child` row, translated to the card: the active refactor
+ * pass with its own live rail. The needle is derived from the pass's status;
+ * statuses that don't name a phase (paused, waiting, failed) show no needle
+ * rather than an approximate one.
+ */
+function PassLane({
+  child,
+  tone,
+}: {
+  child: NonNullable<FeatureSnapshot['activeChild']>;
+  tone: 'progress' | 'attention';
+}) {
+  const stages = spineStages(child.pipeline);
+  const index = childStatusSpineIndex(child.status, stages);
+  return (
+    <div className="run-card__pass" data-tone={tone}>
+      <span className="run-card__pass-glyph" aria-hidden="true">
+        ↳
+      </span>
+      <div className="run-card__pass-body">
+        <p className="run-card__pass-line">
+          <b>{child.name}</b>
+          <span>{displayStatusLabel(child.status)}</span>
+        </p>
+        {index === null ? null : (
+          <FlightRail
+            stages={stages}
+            activeIndex={index}
+            atRest={false}
+            tone={tone}
+            label={`Pass pipeline for ${child.name}`}
+          />
+        )}
+      </div>
+    </div>
   );
 }
 

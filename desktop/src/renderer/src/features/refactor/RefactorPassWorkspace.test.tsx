@@ -103,19 +103,16 @@ function controllerFor(
 }
 
 function renderWorkspace(parent: FeatureSnapshot, pass: RefactorPassController) {
-  const onEditPairedReview = vi.fn();
   render(
     <RefactorPassWorkspace
       parent={parent}
       pass={pass}
-      onEditPairedReview={onEditPairedReview}
       attentionItems={[]}
       refreshAttention={() => Promise.resolve([])}
       attentionDrafts={emptyAttentionDrafts()}
       setAttentionDrafts={vi.fn()}
     />,
   );
-  return { onEditPairedReview };
 }
 
 describe('RefactorPassWorkspace', () => {
@@ -255,16 +252,16 @@ describe('RefactorPassWorkspace', () => {
     expect(within(history as HTMLElement).queryByRole('button')).not.toBeInTheDocument();
   });
 
-  it('routes paired review editing through the parent inspector card', async () => {
+  it('explains the lock and pairing on the parent card without duplicating the config verb', () => {
     installAgenticoMock({ feature: readyChild() });
-    const user = userEvent.setup();
     const parent = parentWith();
-    const { onEditPairedReview } = renderWorkspace(parent, controllerFor(parent, readyChild()));
+    renderWorkspace(parent, controllerFor(parent, readyChild()));
 
     const parentCard = screen.getByRole('region', { name: 'Parent feature' });
+    expect(within(parentCard).getByText(/Locked while the pass runs/)).toBeVisible();
     expect(within(parentCard).getByText(/changes apply to both/i)).toBeVisible();
-    await user.click(within(parentCard).getByRole('button', { name: 'Edit paired review' }));
-    expect(onEditPairedReview).toHaveBeenCalled();
+    // Edit configuration… in the action bar menu is the single config entry.
+    expect(within(parentCard).queryByRole('button')).not.toBeInTheDocument();
   });
 
   it('dispatches an armed auto-start once the child becomes startable', async () => {

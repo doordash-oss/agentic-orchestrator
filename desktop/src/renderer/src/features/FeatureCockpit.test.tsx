@@ -513,6 +513,13 @@ describe('FeatureCockpit snapshot rendering', () => {
     const dialog = await screen.findByRole('dialog', { name: /Discard Slop removal pass/ });
     await user.click(within(dialog).getByRole('button', { name: 'Discard pass' }));
     expect(mock.api.discardRefactorChild).toHaveBeenCalledWith({ childId });
+
+    // The one config entry announces the pairing the server applies.
+    await user.click(within(bar).getByLabelText('More actions'));
+    await user.click(screen.getByRole('menuitem', { name: 'Edit configuration…' }));
+    const config = await screen.findByRole('dialog', { name: 'Feature configuration' });
+    expect(within(config).getByRole('heading', { name: 'Paired configuration' })).toBeVisible();
+    expect(within(config).getByText(/Pipeline is preserved per record/)).toBeVisible();
   });
 
   it('opens the completed transcript from Run record', async () => {

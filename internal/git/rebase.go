@@ -251,6 +251,16 @@ func IsBehindRemote(worktreePath, baseBranch string) bool {
 	return count != "0"
 }
 
+// identityFallbackArgs returns -c committer-identity fallbacks when neither
+// the repo nor the environment configures one; an explicit identity wins.
+func identityFallbackArgs(repoPath string) []string {
+	out, err := exec.Command("git", "-C", repoPath, "config", "user.email").Output()
+	if err == nil && strings.TrimSpace(string(out)) != "" {
+		return nil
+	}
+	return []string{"-c", "user.name=Agentico", "-c", "user.email=agentico@localhost"}
+}
+
 // MergeFeatureBranch merges the given feature branch into baseBranch in the repo at repoPath.
 // It checks out baseBranch, performs a --no-ff merge, then checks out the original branch.
 // Returns an error with a conflict hint if the merge fails due to conflicts.
@@ -261,9 +271,12 @@ func MergeFeatureBranch(repoPath, featureBranch, baseBranch string) error {
 		return fmt.Errorf("checkout %s: %s: %w", baseBranch, strings.TrimSpace(string(out)), err)
 	}
 
-	// Merge with --no-ff
-	mergeCmd := exec.Command("git", "-C", repoPath, "merge", "--no-ff", featureBranch, "-m",
+	// Merge with --no-ff. The merge commit needs a committer identity; fall
+	// back to the Agentico identity when the environment has none configured.
+	mergeArgs := append([]string{"-C", repoPath}, identityFallbackArgs(repoPath)...)
+	mergeArgs = append(mergeArgs, "merge", "--no-ff", featureBranch, "-m",
 		fmt.Sprintf("Merge branch '%s'", featureBranch))
+	mergeCmd := exec.Command("git", mergeArgs...)
 	if out, err := mergeCmd.CombinedOutput(); err != nil {
 		// Abort the failed merge
 		abortCmd := exec.Command("git", "-C", repoPath, "merge", "--abort")

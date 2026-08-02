@@ -473,7 +473,7 @@ func AllRepos(cfg *Config) map[string]RepoConfig {
 // ApplyProviderDefaults fills empty model config fields with defaults computed
 // from detected providers in the registry. User-set values are never overwritten.
 // The defaults map is keyed by PhaseRole string values (e.g. "research", "planning").
-// Callers obtain this map via registry.DefaultModels().
+// Startup derives this map from registry.CatalogDefaultModels before applying it here.
 func ApplyProviderDefaults(cfg *Config, defaults map[string]string) {
 	if defaults == nil {
 		return

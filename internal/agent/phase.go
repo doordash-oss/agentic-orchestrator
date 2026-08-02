@@ -1616,7 +1616,7 @@ func (pr *PhaseRunner) BuildSession(opts BuildSessionOpts) (cmd []string, env []
 		commandWritableRoots = subtractRoots(writableRoots, readOnlyContextDirs)
 	}
 
-	agentsJSON, err := AgentsJSONForNames(opts.AgentNames)
+	agentsJSON, err := agentsJSONForNames(opts.AgentNames)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("building selected agents JSON: %w", err)
 	}

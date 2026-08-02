@@ -286,7 +286,6 @@ extended coverage remains available.
 | Isolated integration                 | `go test ./test/integration/... -count=1`         | 323.06s             | Lifecycle, state-machine, and protocol-violation coverage.         |
 | E2E Go (process-launch / API-driven) | `go test ./test/e2e/... -count=1 -race`           | 41.51s              | Server process-launch and API behavior with the race detector.     |
 | Race regression                      | `go test ./... -count=1 -race`                    | 158.82s             | Extended all-package race/regression sweep.                        |
-| Eval                                 | `AGENTIC_EVAL=1 go test ./test/eval/... -count=1` | gated; not measured | Live skill/guideline discovery against real LLM CLIs.              |
 
 `go vet ./...` and `go build ./...` remain required static and build checks.
 The race-enabled all-package sweep is

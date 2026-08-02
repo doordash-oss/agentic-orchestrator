@@ -287,10 +287,10 @@ func RunRebaseLoop(cfg RebaseLoopConfig, sm ports.SessionManager) (*RebaseLoopRe
 		runImpl = cfg.RunImplementFn
 	}
 
-	// Build the inner ImplementConfig. RepoName intentionally LEFT EMPTY:
-	// under the unified flow the main agent owns every behind-subset repo
-	// in the workspace; per-repo Task fan-out is handled by the rebase
-	// skill prompt.
+	// Build the inner ImplementConfig. RepoName intentionally stays empty:
+	// the rebase cycle runs the unified implementation loop on the implement
+	// role's skill, whose main agent owns every behind-subset repo in the
+	// workspace.
 	implCfg := ImplementConfig{
 		Feature:                    cfg.Feature,
 		FeatureStore:               cfg.FeatureStore,
@@ -518,8 +518,9 @@ func rebaseExitCriteria(_ *feature.Feature) string {
 
 // BuildMultiRepoRebasePlan composes the rebase plan markdown for the
 // behind-subset repos. For each repo it inlines a per-repo section
-// derived from BuildRebasePlan; the agent sees one plan document but
-// dispatches per-repo work via the rebase skill prompt.
+// derived from BuildRebasePlan. The rebase cycle runs the unified
+// implementation loop on the implement role's skill, whose main agent
+// owns every behind-subset repo in the workspace.
 func BuildMultiRepoRebasePlan(repos []RebaseRepoTarget) string {
 	if len(repos) == 0 {
 		return "# Rebase Cycle Plan\n\n" +
@@ -555,8 +556,8 @@ func BuildMultiRepoRebasePlan(repos []RebaseRepoTarget) string {
 	for _, r := range sorted {
 		out += fmt.Sprintf("---\n\n## Repo: `%s`\n\n", r.RepoName)
 		out += "**Repo:** " + r.RepoName + "\n\n"
-		// Reuse the per-repo template — the agent dispatches each section
-		// via a Task sub-agent prompt-scoped to that repo's worktree.
+		// Reuse the per-repo template. The unified implementation loop runs
+		// the implement role's skill, and its main agent owns each section.
 		section := BuildRebasePlan(r.RebaseTarget, r.PRURL, r.ConflictFiles)
 		// Strip the duplicate top-level title so the inlined section
 		// reads as a sub-heading under the per-repo section.

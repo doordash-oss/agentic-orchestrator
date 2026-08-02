@@ -11,7 +11,6 @@ match the area they changed.
 | Isolated integration | `go test ./test/integration/... -count=1` | 323.06s | When lifecycle, state-machine, runs layout, or protocol-violation behavior changes. |
 | E2E Go (process-launch / API-driven) | `go test ./test/e2e/... -count=1 -race` | 41.51s | When server process launch, API, or session lifecycle behavior changes. |
 | Race regression | `go test ./... -count=1 -race` | 158.82s | Before merging high-risk or concurrency-sensitive changes. |
-| Eval | `AGENTIC_EVAL=1 go test ./test/eval/... -count=1` | gated; not measured | Only when validating live skill/guideline discovery against real LLM CLIs. |
 
 `go vet ./...` and `go build ./...` remain required static and build checks.
 The race-enabled all-package sweep is

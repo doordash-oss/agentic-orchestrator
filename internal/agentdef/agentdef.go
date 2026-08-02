@@ -20,7 +20,6 @@ import (
 	"fmt"
 	"io/fs"
 	"strings"
-	"sync"
 
 	agentsFS "github.com/doordash-oss/agentic-orchestrator/agents"
 )
@@ -31,28 +30,6 @@ type AgentDef struct {
 	Prompt      string   `json:"prompt"`
 	Tools       []string `json:"tools,omitempty"`
 	Model       string   `json:"model,omitempty"`
-}
-
-var (
-	jsonOnce sync.Once
-	jsonVal  string
-)
-
-// JSON returns the JSON string for the --agents CLI flag, built from
-// all embedded agent markdown files. The result is cached after first call.
-func JSON() string {
-	jsonOnce.Do(func() {
-		defs, err := ParseEmbedded()
-		if err != nil {
-			return
-		}
-		data, err := json.Marshal(defs)
-		if err != nil {
-			return
-		}
-		jsonVal = string(data)
-	})
-	return jsonVal
 }
 
 // ParseEmbedded reads all agent definition markdown files from the embedded
@@ -87,9 +64,9 @@ func ParseEmbedded() (map[string]AgentDef, error) {
 	return defs, nil
 }
 
-// SelectEmbedded returns the selected embedded agent definitions keyed by name.
+// selectEmbedded returns the selected embedded agent definitions keyed by name.
 // Nil or empty input returns an empty map.
-func SelectEmbedded(names []string) (map[string]AgentDef, error) {
+func selectEmbedded(names []string) (map[string]AgentDef, error) {
 	if len(names) == 0 {
 		return map[string]AgentDef{}, nil
 	}
@@ -124,7 +101,7 @@ func JSONForNames(names []string) (string, error) {
 		return "", nil
 	}
 
-	selected, err := SelectEmbedded(names)
+	selected, err := selectEmbedded(names)
 	if err != nil {
 		return "", err
 	}

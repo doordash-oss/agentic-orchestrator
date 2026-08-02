@@ -970,51 +970,6 @@ func TestRebaseExitCriteriaForbidsPush(t *testing.T) {
 	}
 }
 
-func TestRebaseSkillDocumentsStandardImplementHandoff(t *testing.T) {
-	data, err := os.ReadFile(repoRootPath(t, "skills", "rebase", "SKILL.md"))
-	if err != nil {
-		t.Fatalf("read rebase skill: %v", err)
-	}
-	content := string(data)
-	for _, want := range []string{wantProgressPathTemplate} {
-		if !strings.Contains(content, want) {
-			t.Fatalf("skills/rebase/SKILL.md missing %q", want)
-		}
-	}
-	if !strings.Contains(content, "`phase_complete` is harness-owned; never create or edit it") {
-		t.Fatal("skills/rebase/SKILL.md missing harness-owned completion guidance")
-	}
-	if strings.Contains(content, "at the cycle's iteration artifact dir") {
-		t.Fatalf("skills/rebase/SKILL.md still says the handoff is at the iteration artifact dir")
-	}
-}
-
-func TestRebaseSkillForbidsPush(t *testing.T) {
-	data, err := os.ReadFile(repoRootPath(t, "skills", "rebase", "SKILL.md"))
-	if err != nil {
-		t.Fatalf("read rebase skill: %v", err)
-	}
-	content := string(data)
-	for _, forbidden := range []string{
-		"force-push",
-		"force-pushed",
-		"force-with-lease",
-		"git push",
-	} {
-		if strings.Contains(content, forbidden) {
-			t.Fatalf("skills/rebase/SKILL.md still contains push instruction %q", forbidden)
-		}
-	}
-	for _, want := range []string{
-		"Do not push",
-		"The orchestrator runs Final Review and applies publish policy after approval",
-	} {
-		if !strings.Contains(content, want) {
-			t.Fatalf("skills/rebase/SKILL.md missing %q", want)
-		}
-	}
-}
-
 // TestRebasePlanMultiRepoEmpty covers the no-behind-repos degenerate
 // composer call.
 func TestRebasePlanMultiRepoEmpty(t *testing.T) {

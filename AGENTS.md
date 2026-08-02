@@ -40,7 +40,6 @@ area you touched, and always record the tier names in the PR description.
 | Isolated integration                 | `go test ./test/integration/... -count=1`         | 323.06s             | Run when touching lifecycle, state-machine, runs layout, or protocol-violation behavior. |
 | E2E Go (process-launch / API-driven) | `go test ./test/e2e/... -count=1 -race`           | 41.51s              | Run when touching server process launch or session lifecycle.                            |
 | Race regression                      | `go test ./... -count=1 -race`                    | 158.82s             | Run before merging high-risk changes or concurrency-sensitive work.                      |
-| Eval                                 | `AGENTIC_EVAL=1 go test ./test/eval/... -count=1` | gated; not measured | Run only when validating live skill/guideline discovery against real LLM CLIs.           |
 
 Static analysis and build checks still apply:
 

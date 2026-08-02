@@ -514,44 +514,6 @@ func TestRegistry_ResolveModel_ColonInModelSegment(t *testing.T) {
 	}
 }
 
-func TestRegistry_DefaultModels_UsesCatalogDefaults(t *testing.T) {
-	r := llm.NewRegistry()
-	r.Register(&stubCatalogProvider{
-		stubProvider: stubProvider{name: "claude", models: []string{"opus", "sonnet", "haiku"}, hasCLI: true},
-		catalog:      claudeCatalog,
-	})
-	r.Register(&stubCatalogProvider{
-		stubProvider: stubProvider{name: "codex", models: []string{"gpt-5.4", "gpt-5.4-mini"}, hasCLI: true},
-		catalog:      codexCatalog,
-	})
-
-	defaults := r.DefaultModels()
-	if defaults[llm.PhaseInquiry] != "claude:sonnet" {
-		t.Errorf("inquiry: got %q, want %q", defaults[llm.PhaseInquiry], "claude:sonnet")
-	}
-	if defaults[llm.PhaseResearch] != "claude:sonnet" {
-		t.Errorf("research: got %q, want %q", defaults[llm.PhaseResearch], "claude:sonnet")
-	}
-	if defaults[llm.PhasePlanning] != "claude:sonnet" {
-		t.Errorf("planning: got %q, want %q", defaults[llm.PhasePlanning], "claude:sonnet")
-	}
-	if defaults[llm.PhaseImplementation] != "claude:sonnet" {
-		t.Errorf("implementation: got %q, want %q", defaults[llm.PhaseImplementation], "claude:sonnet")
-	}
-	if defaults[llm.PhaseChat] != "claude:sonnet" {
-		t.Errorf("chat: got %q, want %q", defaults[llm.PhaseChat], "claude:sonnet")
-	}
-	// Review no longer carries a hardcoded codex preference. sonnet and gpt-5.4
-	// are both balanced @ 200K, so the provider-neutral tie-break (provider+
-	// model-ID order, "claude" < "codex") selects claude:sonnet.
-	if defaults[llm.PhaseReview] != "claude:sonnet" {
-		t.Errorf("review: got %q, want %q", defaults[llm.PhaseReview], "claude:sonnet")
-	}
-	if defaults[llm.PhaseKBBuild] != "claude:sonnet" {
-		t.Errorf("kb_build: got %q, want %q", defaults[llm.PhaseKBBuild], "claude:sonnet")
-	}
-}
-
 // --- Catalog-based test helpers ---
 
 var claudeCatalog = []llm.ModelInfo{
@@ -564,84 +526,6 @@ var codexCatalog = []llm.ModelInfo{
 	{ID: "codex", DisplayName: "Codex", ContextWindow: 200000, Category: "capable"},
 	{ID: "gpt-5.4", DisplayName: "GPT 5.4", ContextWindow: 200000, Category: "balanced"},
 	{ID: "gpt-5.4-mini", DisplayName: "GPT 5.4 Mini", ContextWindow: 200000, Category: "balanced"},
-}
-
-func TestRegistry_CatalogAllModels(t *testing.T) {
-	t.Run("collects_from_multiple_detected_providers_with_catalogs", func(t *testing.T) {
-		r := llm.NewRegistry()
-		r.Register(&stubCatalogProvider{
-			stubProvider: stubProvider{name: "claude", models: []string{"opus", "sonnet", "haiku"}, hasCLI: true},
-			catalog:      claudeCatalog,
-		})
-		r.Register(&stubCatalogProvider{
-			stubProvider: stubProvider{name: "codex", models: []string{"codex", "gpt-5.4", "gpt-5.4-mini"}, hasCLI: true},
-			catalog:      codexCatalog,
-		})
-
-		all := r.AllModels()
-		if len(all) != 6 {
-			t.Fatalf("expected 6 models, got %d: %v", len(all), all)
-		}
-		ids := make([]string, len(all))
-		for i, m := range all {
-			ids[i] = m.ID
-		}
-		for _, want := range []string{"opus", "sonnet", "haiku", "codex", "gpt-5.4", "gpt-5.4-mini"} {
-			if !slices.Contains(ids, want) {
-				t.Errorf("expected %q in %v", want, ids)
-			}
-		}
-	})
-
-	t.Run("creates_synthetic_for_provider_without_CatalogProvider", func(t *testing.T) {
-		r := llm.NewRegistry()
-		// bare stubProvider does not implement CatalogProvider
-		r.Register(&stubProvider{name: "bare", models: []string{"bare-model-a", "bare-model-b"}, hasCLI: true})
-
-		all := r.AllModels()
-		if len(all) != 2 {
-			t.Fatalf("expected 2 synthetic models, got %d", len(all))
-		}
-		for _, m := range all {
-			if m.Category != "" {
-				t.Errorf("expected empty category for synthetic entry, got %q", m.Category)
-			}
-			if m.ContextWindow != 0 {
-				t.Errorf("expected 0 context window for synthetic entry, got %d", m.ContextWindow)
-			}
-		}
-	})
-
-	t.Run("skips_undetected_providers", func(t *testing.T) {
-		r := llm.NewRegistry()
-		r.Register(&stubCatalogProvider{
-			stubProvider: stubProvider{name: "claude", models: []string{"opus"}, hasCLI: true},
-			catalog:      claudeCatalog,
-		})
-		r.Register(&stubCatalogProvider{
-			stubProvider: stubProvider{name: "codex", models: []string{"codex"}, hasCLI: false},
-			catalog:      codexCatalog,
-		})
-
-		all := r.AllModels()
-		// Only claude is detected
-		if len(all) != len(claudeCatalog) {
-			t.Fatalf("expected %d models (only claude detected), got %d", len(claudeCatalog), len(all))
-		}
-	})
-
-	t.Run("returns_empty_for_no_detected_providers", func(t *testing.T) {
-		r := llm.NewRegistry()
-		r.Register(&stubCatalogProvider{
-			stubProvider: stubProvider{name: "claude", models: []string{"opus"}, hasCLI: false},
-			catalog:      claudeCatalog,
-		})
-
-		all := r.AllModels()
-		if len(all) != 0 {
-			t.Fatalf("expected 0 models, got %d", len(all))
-		}
-	})
 }
 
 func TestRegistry_CatalogModelsForProvider(t *testing.T) {
@@ -742,7 +626,7 @@ func TestRegistry_CatalogMostCapableModel(t *testing.T) {
 		r.Register(&stubProvider{name: "bare", models: []string{"model-a", "model-b"}, hasCLI: true})
 
 		got := r.MostCapableModel("")
-		// Synthetic entries have empty category (rank 0), MostCapableFrom returns first
+		// Synthetic entries have empty category (rank 0), so the first one wins.
 		if got != "model-a" {
 			t.Errorf("expected %q, got %q", "model-a", got)
 		}
@@ -758,113 +642,6 @@ func TestRegistry_CatalogMostCapableModel(t *testing.T) {
 		got := r.MostCapableModel("codex")
 		if got != "codex" {
 			t.Errorf("expected %q, got %q", "codex", got)
-		}
-	})
-}
-
-func TestRegistry_CatalogCheapestModel(t *testing.T) {
-	t.Run("returns_cheapest_across_all_providers", func(t *testing.T) {
-		r := llm.NewRegistry()
-		r.Register(&stubCatalogProvider{
-			stubProvider: stubProvider{name: "claude", models: []string{"opus", "sonnet", "haiku"}, hasCLI: true},
-			catalog:      claudeCatalog,
-		})
-		r.Register(&stubCatalogProvider{
-			stubProvider: stubProvider{name: "codex", models: []string{"codex", "gpt-5.4-mini"}, hasCLI: true},
-			catalog:      codexCatalog,
-		})
-
-		got := r.CheapestModel()
-		if got != "haiku" {
-			t.Errorf("expected %q (only cheap-category model), got %q", "haiku", got)
-		}
-	})
-
-	t.Run("fallback_when_no_category_data", func(t *testing.T) {
-		r := llm.NewRegistry()
-		// Synthetic entries have no category — CheapestFrom returns false
-		r.Register(&stubProvider{name: "bare", models: []string{"model-a", "model-b"}, hasCLI: true})
-
-		got := r.CheapestModel()
-		// Fallback: last available model
-		if got != "model-b" {
-			t.Errorf("expected %q (last available model fallback), got %q", "model-b", got)
-		}
-	})
-}
-
-func TestRegistry_CatalogBalancedModel(t *testing.T) {
-	t.Run("returns_balanced_model", func(t *testing.T) {
-		r := llm.NewRegistry()
-		r.Register(&stubCatalogProvider{
-			stubProvider: stubProvider{name: "claude", models: []string{"opus", "sonnet", "haiku"}, hasCLI: true},
-			catalog:      claudeCatalog,
-		})
-		r.Register(&stubCatalogProvider{
-			stubProvider: stubProvider{name: "codex", models: []string{"codex", "gpt-5.4-mini"}, hasCLI: true},
-			catalog:      codexCatalog,
-		})
-
-		got := r.BalancedModel()
-		if got != "sonnet" {
-			t.Errorf("expected %q (first balanced-category model), got %q", "sonnet", got)
-		}
-	})
-
-	t.Run("fallback_when_no_balanced_category", func(t *testing.T) {
-		r := llm.NewRegistry()
-		// Only capable and cheap — no balanced category
-		capableAndCheap := []llm.ModelInfo{
-			{ID: "top", Category: "capable", ContextWindow: 200000},
-			{ID: "bottom", Category: "cheap", ContextWindow: 100000},
-		}
-		r.Register(&stubCatalogProvider{
-			stubProvider: stubProvider{name: "test", models: []string{"top", "bottom"}, hasCLI: true},
-			catalog:      capableAndCheap,
-		})
-
-		got := r.BalancedModel()
-		// BalancedFrom picks closest to rank 2: cheap is rank 1 (dist 1), capable is rank 3 (dist 1)
-		// Ties go to first encountered, which is capable ("top")
-		if got != "top" {
-			t.Errorf("expected %q (closest to balanced rank), got %q", "top", got)
-		}
-	})
-}
-
-func TestRegistry_CatalogLargestContextModel(t *testing.T) {
-	t.Run("returns_model_with_largest_context_window", func(t *testing.T) {
-		r := llm.NewRegistry()
-		mixedContext := []llm.ModelInfo{
-			{ID: "small", Category: "cheap", ContextWindow: 50000},
-			{ID: "large", Category: "balanced", ContextWindow: 500000},
-			{ID: "medium", Category: "capable", ContextWindow: 200000},
-		}
-		r.Register(&stubCatalogProvider{
-			stubProvider: stubProvider{name: "test", models: []string{"small", "large", "medium"}, hasCLI: true},
-			catalog:      mixedContext,
-		})
-
-		got := r.LargestContextModel()
-		if got != "large" {
-			t.Errorf("expected %q (largest context 500000), got %q", "large", got)
-		}
-	})
-
-	t.Run("handles_equal_context_windows_prefers_more_capable", func(t *testing.T) {
-		r := llm.NewRegistry()
-		sameContext := []llm.ModelInfo{
-			{ID: "balanced-model", Category: "balanced", ContextWindow: 200000},
-			{ID: "capable-model", Category: "capable", ContextWindow: 200000},
-		}
-		r.Register(&stubCatalogProvider{
-			stubProvider: stubProvider{name: "test", models: []string{"balanced-model", "capable-model"}, hasCLI: true},
-			catalog:      sameContext,
-		})
-
-		got := r.LargestContextModel()
-		if got != "capable-model" {
-			t.Errorf("expected %q (higher category rank breaks tie), got %q", "capable-model", got)
 		}
 	})
 }
@@ -1216,10 +993,9 @@ func TestRegistry_AutomaticReviewEligibilityUsesCapabilityAndFullCatalog(t *test
 
 // TestRegistry_ProviderGroup proves an additional provider is surfaced as a
 // normal provider-backed catalog source once ready: its discovered backend ids
-// appear under its provider group in AllModels, ModelsForProvider, and the
+// appear under its provider group in ModelsForProvider and the
 // phase-eligible lists alongside Claude and Codex, filtered by the same
-// category rules; uncategorized entries are excluded; and provider order is
-// preserved.
+// category rules; uncategorized entries are excluded.
 func TestRegistry_ProviderGroup(t *testing.T) {
 	r := llm.NewRegistry()
 	claude := &stubCatalogProvider{
@@ -1255,23 +1031,6 @@ func TestRegistry_ProviderGroup(t *testing.T) {
 		}
 		if got[0].ID != "vendor/sonnet[200K]" {
 			t.Errorf("first gateway model = %q, want suffixed sonnet id", got[0].ID)
-		}
-	})
-
-	t.Run("AllModels includes provider in registration order", func(t *testing.T) {
-		all := r.AllModels()
-		var ids []string
-		for _, m := range all {
-			ids = append(ids, m.ID)
-		}
-		// claude + codex precede gateway (registration order preserved).
-		if !slices.Contains(ids, "vendor/gpt-5") || !slices.Contains(ids, "vendor/sonnet[200K]") {
-			t.Fatalf("AllModels missing gateway entries: %v", ids)
-		}
-		idxCodex := slices.Index(ids, "gpt-5.4")
-		idxGateway := slices.Index(ids, "vendor/gpt-5")
-		if idxCodex < 0 || idxGateway < 0 || idxGateway < idxCodex {
-			t.Errorf("provider order regressed: ids = %v", ids)
 		}
 	})
 

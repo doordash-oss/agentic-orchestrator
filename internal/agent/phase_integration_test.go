@@ -63,9 +63,9 @@ func newResearchFeature(t *testing.T, repoPath string) *feature.Feature {
 }
 
 func TestBuildSession_AgentSelectionSmoke(t *testing.T) {
-	subsetJSON, err := AgentsJSONForNames([]string{"codebase-locator", "web-search-researcher"})
+	subsetJSON, err := agentsJSONForNames([]string{"codebase-locator", "web-search-researcher"})
 	if err != nil {
-		t.Fatalf("AgentsJSONForNames(subset): %v", err)
+		t.Fatalf("agentsJSONForNames(subset): %v", err)
 	}
 	tests := []struct {
 		name           string

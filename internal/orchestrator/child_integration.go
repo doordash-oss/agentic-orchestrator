@@ -126,15 +126,6 @@ func (o *Orchestrator) runChildIntegrationLocked(childID string) error {
 		return fmt.Errorf("%w: parent %s unreadable: %v", ErrChildIntegrationRefused, child.Parent.ParentID, err)
 	}
 
-	// Final KB refresh: revalidate workspace provenance and rebuild against
-	// the final reviewed child HEAD before any parent ref is touched. Only a
-	// complete, validated refresh vector may enter the integration path.
-	if child.EffectivePipeline().HasPhase(feature.PhaseKnowledgeBase) {
-		if err := o.RefreshChildKBWorkspaces(childID); err != nil {
-			return fmt.Errorf("final KB refresh: %w", err)
-		}
-	}
-
 	return o.runTransactionIntegration(childID, child, parent)
 }
 

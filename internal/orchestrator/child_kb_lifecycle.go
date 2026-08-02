@@ -15,7 +15,6 @@
 package orchestrator
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -24,7 +23,6 @@ import (
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
-	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
@@ -49,151 +47,10 @@ func persistPromotionJournal(store promotionStore, journal *feature.PromotionJou
 }
 
 // This file owns the child KB workspace lifecycle beyond the initial KB phase:
-// the final-KB-refresh boundary before integration, and the promotion of
-// successful child knowledge to the stable parent overlay after integration.
+// the promotion of successful child knowledge to the stable parent overlay
+// after integration.
 
-// RefreshChildKBWorkspaces is the final-KB-refresh boundary. It runs after
-// final review approval and before integration candidate preparation. It
-// revalidates overlay and canonical provenance because either may have
-// advanced while the child ran, reseeds safely when necessary, then invokes
-// the KB builder against each final reviewed child HEAD and waits for the
-// session to complete. Only a complete, validated refresh vector may enter
-// the integration path; a refresh failure leaves the child restartable at
-// this boundary with every parent ref unchanged.
-func (o *Orchestrator) RefreshChildKBWorkspaces(childID string) error {
-	child, err := o.deps.Lifecycle.Get(childID)
-	if err != nil {
-		return fmt.Errorf("load child for KB refresh: %w", err)
-	}
-	if !child.IsChild() {
-		return nil
-	}
-
-	baseDir := o.stateDir()
-	if baseDir == "" || o.deps.PhaseRunner == nil {
-		return nil
-	}
-
-	for _, repo := range child.Repos {
-		paths := agent.ResolveChildKBPaths(baseDir, child, repo)
-		repoPath := repo.Path
-		if repo.WorktreePath != "" {
-			repoPath = repo.WorktreePath
-		}
-
-		// Get the current (final reviewed) child HEAD.
-		childCommit, err := agent.GetCurrentCommit(context.Background(), o.deps.CmdRunner, repoPath)
-		if err != nil {
-			return fmt.Errorf("getting child HEAD for KB refresh repo %s: %w", repo.Name, err)
-		}
-
-		// Revalidate provenance before trusting the workspace. The
-		// canonical KB or parent overlay may have advanced while the
-		// child ran, so a workspace that is merely fresh at the child
-		// HEAD could still be built from a stale baseline.
-		state, stateErr := feature.LoadWorkspaceState(paths.WorkspaceDir)
-		if stateErr != nil {
-			return fmt.Errorf("loading workspace state for KB refresh repo %s: %w", repo.Name, stateErr)
-		}
-		needsReseed := false
-		if state == nil {
-			needsReseed = true
-		} else {
-			// Check if the canonical commit is still valid. Any movement
-			// triggers a reseed so the workspace reflects the current
-			// baseline rather than stamping stale knowledge with a
-			// newer commit.
-			canonCommit := agent.CanonicalKBCommit(paths.CanonicalDir)
-			if canonCommit != state.CanonicalCommit && canonCommit != "" {
-				needsReseed = true
-			}
-			// Check if the overlay advanced (if seeded from overlay).
-			if state.Source == feature.WorkspaceSourceOverlay {
-				if overlayProv, _ := feature.LoadOverlayProvenance(paths.OverlayDir); overlayProv != nil {
-					if overlayProv.ParentHEAD != state.ParentHEAD {
-						// Parent overlay moved. Reseed from the new overlay if valid.
-						if canonState, _ := agent.LoadKBState(paths.CanonicalDir); canonState != nil &&
-							canonState.HeadCommit == overlayProv.CanonicalCommit &&
-							agent.IsAncestor(context.Background(), o.deps.CmdRunner, repoPath, overlayProv.ParentHEAD, childCommit) {
-							needsReseed = true
-						}
-					}
-				}
-			}
-		}
-
-		if needsReseed {
-			// Reseed the workspace from the best available source.
-			if err := agent.SeedChildKBWorkspace(context.Background(), o.deps.CmdRunner, paths); err != nil {
-				return fmt.Errorf("reseeding child KB workspace for repo %s: %w", repo.Name, err)
-			}
-		}
-
-		// Check if the (possibly reseeded) workspace is already fresh at
-		// the final reviewed HEAD. This must come after provenance
-		// revalidation so a workspace built from a stale baseline is
-		// never trusted just because the child HEAD didn't change.
-		if !needsReseed && agent.IsWorkspaceFresh(context.Background(), o.deps.CmdRunner, paths.WorkspaceDir, repoPath) {
-			continue
-		}
-
-		// If we reseeded, the workspace is no longer fresh (AnalyzedCommit
-		// was cleared). If we didn't reseed and the workspace isn't fresh,
-		// the child HEAD changed since the last build. Either way, the KB
-		// builder must run.
-
-		// Start the KB builder session against the final reviewed child HEAD.
-		// RunChildKnowledgeBaseForRepo seeds if needed and starts an async
-		// session, returning a non-empty session ID. It returns ("", nil)
-		// when the workspace is already fresh (AnalyzedCommit matches HEAD).
-		sessionID, err := o.deps.PhaseRunner.RunChildKnowledgeBaseForRepo(child, repo)
-		if err != nil {
-			return fmt.Errorf("refreshing child KB for repo %s: %w", repo.Name, err)
-		}
-
-		if sessionID == "" {
-			// Workspace is already fresh — no session was started.
-			continue
-		}
-
-		// Wait for the KB session to complete synchronously. The session
-		// cleanup releases the KB lock. The phase supervisor is not invoked
-		// here, so we must commit the outcome and mark freshness ourselves.
-		var intent llm.CompletionIntent
-		if o.deps.Sessions != nil {
-			sess := o.deps.Sessions.GetSession(sessionID)
-			if sess != nil {
-				sess.Wait()
-				intent = sess.RootCompletionIntent()
-			}
-		}
-
-		// Validate the root outcome and the KB artifacts, then write the
-		// harness-owned completion receipt into the disposable workspace.
-		_, _, violations, err := agent.CommitPhaseOutcome(agent.CompletionCommitInput{
-			Phase:       feature.PhaseKnowledgeBase,
-			Role:        agent.RoleKnowledgeBaseBuilder,
-			ArtifactDir: paths.WorkspaceDir,
-			SessionID:   sessionID,
-			Intent:      intent,
-		})
-		if err != nil {
-			return fmt.Errorf("committing child KB outcome for repo %s: %w", repo.Name, err)
-		}
-		if len(violations) > 0 {
-			return fmt.Errorf("KB refresh session for repo %s did not complete cleanly: %s", repo.Name, violations[0].Reason)
-		}
-
-		// Mark the workspace fresh — only the completion path writes freshness.
-		if err := agent.MarkWorkspaceFresh(context.Background(), o.deps.CmdRunner, paths.WorkspaceDir, repoPath); err != nil {
-			return fmt.Errorf("marking workspace fresh for repo %s: %w", repo.Name, err)
-		}
-	}
-
-	return nil
-}
-
-// PromoteChildKBWorkspaces promotes each refreshed child workspace to the
+// PromoteChildKBWorkspaces promotes each child workspace to the
 // stable parent overlay using atomic same-filesystem replacement. It stamps
 // the resulting parent merge HEAD and canonical commit. The repository set
 // is treated as one logical promotion: the parent overlay remains unavailable

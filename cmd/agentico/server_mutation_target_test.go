@@ -36,7 +36,6 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/permission"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	serverruntime "github.com/doordash-oss/agentic-orchestrator/internal/server"
-	"github.com/doordash-oss/agentic-orchestrator/internal/session"
 	"github.com/doordash-oss/agentic-orchestrator/internal/utilskill"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
 )
@@ -771,8 +770,8 @@ func TestServerMutationTargetStartChatStartsInteractiveUtilitySessionWithoutSuba
 	if !reflect.DeepEqual(build.DisallowedTools, []string{"Task"}) {
 		t.Fatalf("BuildSession DisallowedTools = %v, want only Task disabled for AMA", build.DisallowedTools)
 	}
-	if _, ok := build.PermHandler.(*session.AMAHandler); !ok {
-		t.Fatalf("BuildSession PermHandler = %T, want *session.AMAHandler", build.PermHandler)
+	if _, ok := build.PermHandler.(*permission.AMAHandler); !ok {
+		t.Fatalf("BuildSession PermHandler = %T, want *permission.AMAHandler", build.PermHandler)
 	}
 	for _, want := range []string{
 		"Agentic Orchestrator Expert Assistant",
@@ -2244,7 +2243,7 @@ func TestServerMutationTargetRestartFeatureDispatchesPhaseWork(t *testing.T) {
 }
 
 func TestServerMutationTargetReviewCommentsFetchFiltersAndStartStages(t *testing.T) {
-	target, store, f := newReviewCommentsActionTarget(t)
+	target, store, f, _ := newReviewCommentsActionTarget(t)
 	if err := agent.SaveAddressedIDsForRepo(store.BaseDir, f, testRepoAName, []int{100}); err != nil {
 		t.Fatalf("SaveAddressedIDsForRepo: %v", err)
 	}
@@ -2276,14 +2275,23 @@ func TestServerMutationTargetReviewCommentsFetchFiltersAndStartStages(t *testing
 	}
 }
 
+func TestServerMutationTargetReviewCommentsFetchPropagatesGHError(t *testing.T) {
+	target, _, f, _ := newReviewCommentsActionTarget(t)
+	t.Setenv("GH_MUTATION_FAIL", "1")
+
+	_, err := target.FetchReviewComments(f.ID, serverruntime.ReviewCommentsFetchRequest{Repo: testRepoAName})
+	if err == nil || !strings.Contains(err.Error(), "synthetic gh failure") {
+		t.Fatalf("FetchReviewComments() error = %v; want fake gh failure", err)
+	}
+}
+
 func TestServerMutationTargetReviewCommentsStartStagesConversationAndReviewBodyComments(t *testing.T) {
-	target, store, f := newReviewCommentsActionTarget(t)
-	reviewer := target.reviewer.(*fakeReviewCommentOperator)
+	target, store, f, ghFixture := newReviewCommentsActionTarget(t)
 	issue := reviewComment(301, "conversation feedback")
 	issue.Type = ports.CommentTypeIssue
 	reviewBody := reviewComment(302, "review summary feedback")
 	reviewBody.Type = ports.CommentTypeReviewBody
-	reviewer.comments = []ports.ReviewComment{issue, reviewBody}
+	writeMutationReviewComments(t, ghFixture, []ports.ReviewComment{issue, reviewBody})
 
 	result, err := target.StartReviewComments(f.ID, serverruntime.ReviewCommentsActionRequest{
 		Repo: testRepoAName,
@@ -2309,9 +2317,10 @@ func TestServerMutationTargetReviewCommentsStartStagesConversationAndReviewBodyC
 }
 
 func TestServerMutationTargetReviewCommentsStartUsesProvidedPreviewedComments(t *testing.T) {
-	target, store, f := newReviewCommentsActionTarget(t)
-	reviewer := target.reviewer.(*fakeReviewCommentOperator)
-	reviewer.fetchCalls = 0
+	target, store, f, ghFixture := newReviewCommentsActionTarget(t)
+	if err := os.WriteFile(ghFixture.logPath, nil, 0o644); err != nil {
+		t.Fatalf("clear fake gh log: %v", err)
+	}
 
 	result, err := target.StartReviewComments(f.ID, serverruntime.ReviewCommentsActionRequest{
 		Repo: testRepoAName,
@@ -2330,8 +2339,8 @@ func TestServerMutationTargetReviewCommentsStartUsesProvidedPreviewedComments(t 
 	if err == nil {
 		t.Fatal("StartReviewComments() error = nil; want dispatch error from nil phase runner after staging")
 	}
-	if reviewer.fetchCalls != 0 {
-		t.Fatalf("FetchPRComments calls = %d; want 0 when comments are provided by preview", reviewer.fetchCalls)
+	if got := mutationGHCallCount(t, ghFixture.logPath); got != 0 {
+		t.Fatalf("FetchPRComments calls = %d; want 0 when comments are provided by preview", got)
 	}
 	if result.FeatureID != f.ID || result.Repo != testRepoAName || result.Mode != reviewModeAuto || result.Source != "provided" || result.CommentCount != 1 || result.Result != resultFailed {
 		t.Fatalf("StartReviewComments() result = %+v; want failed provided preview", result)
@@ -2346,14 +2355,13 @@ func TestServerMutationTargetReviewCommentsStartUsesProvidedPreviewedComments(t 
 }
 
 func TestServerMutationTargetReviewCommentsChildCreationWinnerDoesNotStage(t *testing.T) {
-	target, store, parent := newReviewCommentsActionTarget(t)
-	reviewer := target.reviewer.(*fakeReviewCommentOperator)
-	fetchStarted := make(chan struct{}, 1)
-	reviewer.fetchStarted = fetchStarted
+	target, store, parent, _ := newReviewCommentsActionTarget(t)
 
 	resultCh := make(chan error, 1)
+	started := make(chan struct{})
 	if err := target.orch.WithRelationshipWriteLock(func() error {
 		go func() {
+			close(started)
 			_, err := target.StartReviewComments(parent.ID, serverruntime.ReviewCommentsActionRequest{
 				Repo: testRepoAName,
 				Mode: reviewCommentsModeAddressAll,
@@ -2361,10 +2369,7 @@ func TestServerMutationTargetReviewCommentsChildCreationWinnerDoesNotStage(t *te
 			resultCh <- err
 		}()
 
-		select {
-		case <-fetchStarted:
-		case <-time.After(20 * time.Millisecond):
-		}
+		<-started
 
 		child := &feature.Feature{
 			ID:            "review-comments-active-child",
@@ -2540,11 +2545,15 @@ func initMutationGitRepo(t *testing.T, dir string) {
 	}
 }
 
-func newReviewCommentsActionTarget(t *testing.T) (serverMutationTarget, *feature.Store, *feature.Feature) {
+func newReviewCommentsActionTarget(t *testing.T) (serverMutationTarget, *feature.Store, *feature.Feature, mutationGHFixture) {
 	t.Helper()
 	runtimeDir := t.TempDir()
 	cfg := config.NewDefault()
-	cfg.Repos[testRepoAName] = config.RepoConfig{Path: filepath.Join(runtimeDir, testRepoAName)}
+	repoPath := filepath.Join(runtimeDir, testRepoAName)
+	if err := os.MkdirAll(repoPath, 0o755); err != nil {
+		t.Fatalf("mkdir review-comments repo: %v", err)
+	}
+	cfg.Repos[testRepoAName] = config.RepoConfig{Path: repoPath}
 	store := feature.NewStore(filepath.Join(runtimeDir, "features"))
 	manager := feature.NewManager(store, cfg)
 	f, err := manager.Create("review comments via REST", "desc", []string{testRepoAName}, cfg.Defaults.Models, "", "", nil)
@@ -2567,12 +2576,13 @@ func newReviewCommentsActionTarget(t *testing.T) (serverMutationTarget, *feature
 	if err != nil {
 		t.Fatalf("Load prepared feature: %v", err)
 	}
-	reviewer := &fakeReviewCommentOperator{comments: []ports.ReviewComment{
+	ghFixture := installMutationFakeGH(t)
+	writeMutationReviewComments(t, ghFixture, []ports.ReviewComment{
 		reviewComment(100, "already addressed"),
 		reviewComment(101, "please fix"),
-	}}
+	})
 	orch := orchestrator.New(orchestrator.Deps{Lifecycle: manager, Store: store}, orchestrator.Hooks{})
-	return serverMutationTarget{orch: orch, store: store, reviewer: reviewer}, store, loaded
+	return serverMutationTarget{orch: orch, store: store}, store, loaded, ghFixture
 }
 
 func newCleanupActionTarget(t *testing.T) (serverMutationTarget, *feature.Store, *feature.Feature, *fakeWorktreeOperator) {
@@ -2607,43 +2617,92 @@ func newCleanupActionTarget(t *testing.T) (serverMutationTarget, *feature.Store,
 	return serverMutationTarget{orch: orch, store: store}, store, loaded, worktrees
 }
 
-type fakeReviewCommentOperator struct {
-	comments     []ports.ReviewComment
-	fetchCalls   int
-	fetchStarted chan struct{}
+type mutationGHFixture struct {
+	reviewPath  string
+	issuePath   string
+	reviewsPath string
+	logPath     string
 }
 
-func (f *fakeReviewCommentOperator) FetchPRComments(string, string) ([]ports.ReviewComment, error) {
-	f.fetchCalls++
-	if f.fetchStarted != nil {
-		select {
-		case f.fetchStarted <- struct{}{}:
+func installMutationFakeGH(t *testing.T) mutationGHFixture {
+	t.Helper()
+	binDir := t.TempDir()
+	dataDir := t.TempDir()
+	fixture := mutationGHFixture{
+		reviewPath:  filepath.Join(dataDir, "review.json"),
+		issuePath:   filepath.Join(dataDir, "issue.json"),
+		reviewsPath: filepath.Join(dataDir, "reviews.json"),
+		logPath:     filepath.Join(dataDir, "gh.log"),
+	}
+	script := `#!/bin/sh
+printf '%s\n' "$*" >> "$GH_MUTATION_LOG"
+if [ "$GH_MUTATION_FAIL" = "1" ]; then
+  printf '%s\n' 'synthetic gh failure' >&2
+  exit 1
+fi
+case "$3" in
+  repos/acme/repo-a/pulls/12/comments) /bin/cat "$GH_MUTATION_REVIEW" ;;
+  repos/acme/repo-a/issues/12/comments) /bin/cat "$GH_MUTATION_ISSUE" ;;
+  repos/acme/repo-a/pulls/12/reviews) /bin/cat "$GH_MUTATION_REVIEWS" ;;
+  *) printf '%s\n' '[]' ;;
+esac
+`
+	if err := os.WriteFile(filepath.Join(binDir, "gh"), []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake gh: %v", err)
+	}
+	t.Setenv("GH_MUTATION_REVIEW", fixture.reviewPath)
+	t.Setenv("GH_MUTATION_ISSUE", fixture.issuePath)
+	t.Setenv("GH_MUTATION_REVIEWS", fixture.reviewsPath)
+	t.Setenv("GH_MUTATION_LOG", fixture.logPath)
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	return fixture
+}
+
+func writeMutationReviewComments(t *testing.T, fixture mutationGHFixture, comments []ports.ReviewComment) {
+	t.Helper()
+	var inline, issue []ports.ReviewComment
+	var reviews []map[string]any
+	for _, comment := range comments {
+		switch comment.Type {
+		case ports.CommentTypeIssue:
+			issue = append(issue, comment)
+		case ports.CommentTypeReviewBody:
+			reviews = append(reviews, map[string]any{
+				"id": comment.ID, "body": comment.Body, "user": comment.User,
+				"submitted_at": comment.CreatedAt,
+			})
 		default:
+			inline = append(inline, comment)
 		}
 	}
-	out := make([]ports.ReviewComment, len(f.comments))
-	copy(out, f.comments)
-	return out, nil
+	for path, value := range map[string]any{
+		fixture.reviewPath:  inline,
+		fixture.issuePath:   issue,
+		fixture.reviewsPath: reviews,
+	} {
+		data, err := json.Marshal(value)
+		if err != nil {
+			t.Fatalf("marshal fake gh response: %v", err)
+		}
+		if err := os.WriteFile(path, data, 0o644); err != nil {
+			t.Fatalf("write fake gh response: %v", err)
+		}
+	}
 }
 
-func (f *fakeReviewCommentOperator) ReplyToPRComment(string, string, int, string) error {
-	return nil
-}
-
-func (f *fakeReviewCommentOperator) ReplyToIssueComment(string, string, string) error {
-	return nil
-}
-
-func (f *fakeReviewCommentOperator) FetchReviewThreadMap(string, string) (map[int]string, error) {
-	return nil, nil
-}
-
-func (f *fakeReviewCommentOperator) ResolveReviewThread(string, string) error {
-	return nil
-}
-
-func (f *fakeReviewCommentOperator) LatestCommitSHA(string) (string, error) {
-	return "", nil
+func mutationGHCallCount(t *testing.T, logPath string) int {
+	t.Helper()
+	data, err := os.ReadFile(logPath)
+	if errors.Is(err, os.ErrNotExist) {
+		return 0
+	}
+	if err != nil {
+		t.Fatalf("read fake gh log: %v", err)
+	}
+	if strings.TrimSpace(string(data)) == "" {
+		return 0
+	}
+	return len(strings.Split(strings.TrimSpace(string(data)), "\n"))
 }
 
 func reviewComment(id int, body string) ports.ReviewComment {

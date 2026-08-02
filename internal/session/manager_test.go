@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
 func TestSDKEventDelivery(t *testing.T) {
@@ -275,7 +276,7 @@ echo '{"type":"result","subtype":"success","session_id":"s1","total_cost_usd":0}
 	}
 }
 
-func waitForMessageCount(t *testing.T, sess SessionView, want int) {
+func waitForMessageCount(t *testing.T, sess ports.SessionView, want int) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
@@ -714,7 +715,7 @@ func TestStartSessionDoesNotBlockReadersDuringHandshake(t *testing.T) {
 	}
 
 	// ActiveSessions must return promptly while the handshake is in progress.
-	done := make(chan []SessionView, 1)
+	done := make(chan []ports.SessionView, 1)
 	go func() { done <- sm.ActiveSessions() }()
 	select {
 	case sessions := <-done:

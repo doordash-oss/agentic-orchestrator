@@ -17,7 +17,9 @@ package orchestrator_test
 import (
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
@@ -117,6 +119,8 @@ func writeReviewResolutionsJSONForRepo(t *testing.T, stateDir, featureID, repoNa
 // ---------------------------------------------------------------------------
 func TestCompleteRepoCycle_ReviewComments_RepliesToEveryPRFeedbackType(t *testing.T) {
 	stateDir := t.TempDir()
+	repoDir := initRepoCycleGitRepo(t)
+	ghLog := installRepoCycleFakeGH(t)
 	f := &feature.Feature{
 		ID:        "feat-rc-cycle",
 		Slug:      "rc-cycle",
@@ -125,8 +129,8 @@ func TestCompleteRepoCycle_ReviewComments_RepliesToEveryPRFeedbackType(t *testin
 		RunCount:  1,
 		Repos: []feature.FeatureRepo{{
 			Name:         repoName,
-			Path:         repoAPath,
-			WorktreePath: "/tmp/worktrees/repo-a",
+			Path:         repoDir,
+			WorktreePath: repoDir,
 			Branch:       "feature/rc-cycle",
 		}},
 		RepoStates: map[string]*feature.RepoState{
@@ -168,19 +172,12 @@ func TestCompleteRepoCycle_ReviewComments_RepliesToEveryPRFeedbackType(t *testin
 	reb.PullRebaseFn = func(string, string) git.PullRebaseResult {
 		return git.PullRebaseResult{Outcome: git.PullRebaseSuccess}
 	}
-	rev := mocks.NewMockReviewCommentOperator()
-	rev.LatestCommitSHAFn = func(string) (string, error) { return "abc1234", nil }
-	rev.FetchReviewThreadMapFn = func(string, string) (map[int]string, error) {
-		return map[int]string{11: "thread-id-11"}, nil
-	}
-
 	pr := &agent.PhaseRunner{StateDir: stateDir}
 	o := orchestrator.New(orchestrator.Deps{
 		Lifecycle:   lc,
 		Store:       fs,
 		Publisher:   pub,
 		Rebaser:     reb,
-		Reviewer:    rev,
 		PhaseRunner: pr,
 	}, orchestrator.Hooks{})
 
@@ -197,13 +194,14 @@ func TestCompleteRepoCycle_ReviewComments_RepliesToEveryPRFeedbackType(t *testin
 	if got := countPublisherCalls(pub, "Push"); got != 1 {
 		t.Errorf("Push calls = %d, want 1", got)
 	}
-	if got := countReviewerCalls(rev, "ReplyToPRComment"); got != 1 {
+	invocations := readRepoCycleGHInvocations(t, ghLog)
+	if got := countInvocationContaining(invocations, "pulls/7/comments/11/replies"); got != 1 {
 		t.Errorf("ReplyToPRComment calls = %d, want 1", got)
 	}
-	if got := countReviewerCalls(rev, "ReplyToIssueComment"); got != 2 {
+	if got := countInvocationContaining(invocations, "issues/7/comments"); got != 2 {
 		t.Errorf("ReplyToIssueComment calls = %d, want 2", got)
 	}
-	if got := countReviewerCalls(rev, "ResolveReviewThread"); got != 1 {
+	if got := countInvocationContaining(invocations, "resolveReviewThread"); got != 1 {
 		t.Errorf("ResolveReviewThread calls = %d, want 1", got)
 	}
 	if got := countLifecycleCalls(lc, "CompleteRepoCycle"); got != 1 {
@@ -246,14 +244,61 @@ func countRebaseCalls(m *mocks.MockRebaseOperator, method string) int {
 	return n
 }
 
-func countReviewerCalls(m *mocks.MockReviewCommentOperator, method string) int {
-	n := 0
-	for _, c := range m.Calls {
-		if c.Method == method {
-			n++
+func initRepoCycleGitRepo(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	for _, args := range [][]string{
+		{"init", "--initial-branch=main"},
+		{"config", "user.email", "test@example.com"},
+		{"config", "user.name", "Test"},
+		{"commit", "--allow-empty", "-m", "initial"},
+	} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %s: %s: %v", strings.Join(args, " "), strings.TrimSpace(string(out)), err)
 		}
 	}
-	return n
+	return dir
+}
+
+func installRepoCycleFakeGH(t *testing.T) string {
+	t.Helper()
+	binDir := t.TempDir()
+	logPath := filepath.Join(t.TempDir(), "gh.log")
+	script := `#!/bin/sh
+printf '%s\n' "$*" >> "$GH_LOG"
+case "$*" in
+  *resolveReviewThread*) printf '%s\n' '{"data":{"resolveReviewThread":{"thread":{"isResolved":true}}}}' ;;
+  *reviewThreads*) printf '%s\n' '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[{"id":"thread-id-11","isResolved":false,"comments":{"nodes":[{"databaseId":11}]}}]}}}}}' ;;
+  *) printf '%s\n' '{}' ;;
+esac
+`
+	if err := os.WriteFile(filepath.Join(binDir, "gh"), []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake gh: %v", err)
+	}
+	t.Setenv("GH_LOG", logPath)
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	return logPath
+}
+
+func readRepoCycleGHInvocations(t *testing.T, path string) []string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read fake gh log: %v", err)
+	}
+	return strings.Split(strings.TrimSpace(string(data)), "\n")
+}
+
+func countInvocationContaining(invocations []string, needle string) int {
+	count := 0
+	for _, invocation := range invocations {
+		if strings.Contains(invocation, needle) {
+			count++
+		}
+	}
+	return count
 }
 
 // lifecycleCallIndex returns the first index of a method in the lifecycle

@@ -24,7 +24,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
 )
 
-// MockSessionView implements session.SessionView with configurable fields.
+// MockSessionView implements ports.SessionView with configurable fields.
 // All identity and state fields are set via exported struct fields.
 // Interaction methods record their calls for assertion.
 //

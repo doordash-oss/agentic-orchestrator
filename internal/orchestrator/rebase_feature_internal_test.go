@@ -43,6 +43,18 @@ const (
 	repoAPath        = "/tmp/repo-a"
 )
 
+func TestResolveRebaseTargetUsesConcreteGitDefaultBranch(t *testing.T) {
+	repoPath := initGitWorktree(t, "rebase-default")
+	runCompletionGit(t, repoPath, "branch", "-m", "trunk")
+	repo := &feature.FeatureRepo{Name: repoAName, Path: repoPath}
+	f := &feature.Feature{Repos: []feature.FeatureRepo{*repo}}
+
+	got := New(Deps{}, Hooks{}).resolveRebaseTarget(f, repo)
+	if got != "trunk" {
+		t.Fatalf("resolveRebaseTarget() = %q; want concrete git default branch trunk", got)
+	}
+}
+
 func writeRebaseVerificationGate(t *testing.T, stateRoot, featureID, summary string) string {
 	t.Helper()
 	contractPath := filepath.Join(stateRoot, featureID, "testing-contract.yaml")

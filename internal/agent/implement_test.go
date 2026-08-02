@@ -32,6 +32,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/observe"
+	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
 	"gopkg.in/yaml.v3"
@@ -740,7 +741,7 @@ func TestImplementLoopCodexRoutingUnit(t *testing.T) {
 					interactiveCalled = true
 					return []string{"echo", "unused"}, nil, sessOpts, nil
 				},
-				SessionStartFunc: func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*session.SessionOpts) (session.SessionHandle, error) {
+				SessionStartFunc: func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*session.SessionOpts) (ports.SessionHandle, error) {
 					capturedCmd = command
 					if len(opts) > 0 {
 						capturedOpts = opts[0]
@@ -1286,7 +1287,7 @@ func TestRunImplementationLoop_SuccessIgnoresCleanupFailedSessionStatus(t *testi
 		BuildSession: func(BuildSessionOpts) ([]string, []string, *session.SessionOpts, error) {
 			return []string{"mock-agent"}, nil, &session.SessionOpts{}, nil
 		},
-		SessionStartFunc: func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*session.SessionOpts) (session.SessionHandle, error) {
+		SessionStartFunc: func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*session.SessionOpts) (ports.SessionHandle, error) {
 			iterDir := filepath.Join(artifactDir, "iteration-01")
 			testutil.WriteImplementHandoffFiles(t, artifactDir, iterDir, agentStatusSuccess)
 			sess.setRootIntent(validSuccessCompletionIntent())
@@ -1398,7 +1399,7 @@ func TestImplementLoop_CrashResumeRecoversDeadSession(t *testing.T) {
 	}
 
 	var startIDs []string
-	cfg.SessionStartFunc = func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*session.SessionOpts) (session.SessionHandle, error) {
+	cfg.SessionStartFunc = func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*session.SessionOpts) (ports.SessionHandle, error) {
 		startIDs = append(startIDs, id)
 		if len(startIDs) == 1 {
 			// First process dies mid-turn without writing the marker.
@@ -1464,7 +1465,7 @@ func TestImplementLoop_CrashResumeNotAttemptedWithoutCapability(t *testing.T) {
 		buildCalls++
 		return []string{"mock-agent"}, nil, &session.SessionOpts{SupportsSessionResume: false}, nil
 	}
-	cfg.SessionStartFunc = func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*session.SessionOpts) (session.SessionHandle, error) {
+	cfg.SessionStartFunc = func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*session.SessionOpts) (ports.SessionHandle, error) {
 		dead := &crashResumeTestSession{utilityTestSession: newUtilityTestSession(), providerSessionID: "native-123"}
 		dead.statusCh <- agentStatusFailed
 		return dead, nil
@@ -1495,7 +1496,7 @@ func TestImplementLoop_CrashResumeAttemptedOncePerIteration(t *testing.T) {
 		buildCalls++
 		return []string{"mock-agent"}, nil, &session.SessionOpts{SupportsSessionResume: true}, nil
 	}
-	cfg.SessionStartFunc = func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*session.SessionOpts) (session.SessionHandle, error) {
+	cfg.SessionStartFunc = func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*session.SessionOpts) (ports.SessionHandle, error) {
 		// Every process dies; the loop must resume at most once.
 		dead := &crashResumeTestSession{utilityTestSession: newUtilityTestSession(), providerSessionID: "native-123"}
 		dead.statusCh <- agentStatusFailed

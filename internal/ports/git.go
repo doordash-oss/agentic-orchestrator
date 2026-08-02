@@ -29,12 +29,6 @@ type Publisher interface {
 	DiffStat(worktreePath, baseBranch string) (string, error)
 }
 
-// DiffOperator abstracts branch-vs-base diff inspection.
-type DiffOperator interface {
-	BranchDiffPreviews(worktreePath, baseBranch string) ([]DiffPreview, error)
-	SingleFileDiffPreview(worktreePath, baseBranch, relPath string) (*DiffPreview, error)
-}
-
 // RebaseOperator abstracts git rebase and sync operations.
 type RebaseOperator interface {
 	PullRebase(worktreePath, branch string) PullRebaseResult
@@ -52,29 +46,6 @@ type RebaseOperator interface {
 	RebaseInProgress(worktreePath string) (bool, error)
 }
 
-// CrossRefOperator abstracts cross-repo PR body management.
-type CrossRefOperator interface {
-	UpdatePRBody(prURL, newBody string) error
-	GetPRBody(prURL string) (string, error)
-	RetroactivelyUpdateCrossRefs(featureName string,
-		entries []CrossRefEntry, currentRepoName string) []error
-	// BuildCrossReferenceSection and InjectCrossReferenceSection are pure
-	// string helpers that domain code uses to assemble PR bodies. Exposing
-	// them via the port keeps consumers free of the git package.
-	BuildCrossReferenceSection(featureName string, entries []CrossRefEntry) string
-	InjectCrossReferenceSection(body, section string) string
-}
-
-// ReviewCommentOperator abstracts PR comment interaction.
-type ReviewCommentOperator interface {
-	FetchPRComments(repoPath, prURL string) ([]ReviewComment, error)
-	ReplyToPRComment(repoPath, prURL string, commentID int, body string) error
-	ReplyToIssueComment(repoPath, prURL, body string) error
-	FetchReviewThreadMap(repoPath, prURL string) (map[int]string, error)
-	ResolveReviewThread(repoPath, threadNodeID string) error
-	LatestCommitSHA(worktreePath string) (string, error)
-}
-
 // WorktreeOperator abstracts git worktree lifecycle.
 type WorktreeOperator interface {
 	Create(repoPath, featureSlug, repoName, startPoint string) (worktreePath string, err error)
@@ -85,14 +56,4 @@ type WorktreeOperator interface {
 	ResetToBaseLocal(worktreePath, baseBranch string) error
 	ResetToCommit(worktreePath, commitSHA string) error
 	HasUncommittedChanges(repoPath string) (bool, error)
-}
-
-// BranchOperator abstracts branch name and existence checks.
-type BranchOperator interface {
-	BranchName(featureSlug string) string
-	BranchExistsOnRemote(repoPath, branch string) (bool, error)
-	HasOriginRemote(repoPath string) (bool, error)
-	DefaultBranch(repoPath string) (string, error)
-	CurrentBranch(repoPath string) (string, error)
-	CreateBackupBranch(worktreePath, slug string) (string, error)
 }

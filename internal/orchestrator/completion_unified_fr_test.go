@@ -694,6 +694,7 @@ func TestAdvanceAfterFinalReviewScrubsRootArtifactsBeforeCommitAll(t *testing.T)
 }
 
 func TestAdvanceAfterFinalReviewRoadmapFinalScrubsRootArtifactsBeforeCommitAll(t *testing.T) {
+	installRepoCycleFakeGH(t)
 	pub := true
 	candidates := []string{"phase_complete", "progress.md", "verification-report.yaml", "review-feedback.md", "meta.yaml"}
 	repoA := t.TempDir()

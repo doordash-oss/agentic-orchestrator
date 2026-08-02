@@ -154,7 +154,7 @@ func (m *Manager) SetAttachDropReporter(r AttachDropReporter) {
 // existing callers can construct options via session.SessionOpts{...}.
 type SessionOpts = ports.SessionOpts
 
-func (m *Manager) StartSession(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*SessionOpts) (SessionHandle, error) {
+func (m *Manager) StartSession(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*SessionOpts) (ports.SessionHandle, error) {
 	// Refuse new sessions after Shutdown has been called. stoppingCh is set at
 	// construction, so this read needs no lock; it is re-checked under the
 	// registration lock below to close the race with a Shutdown that fires
@@ -546,7 +546,7 @@ func (m *Manager) StopSession(id string) error {
 	return s.Stop()
 }
 
-func (m *Manager) GetSession(id string) SessionView {
+func (m *Manager) GetSession(id string) ports.SessionView {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	s := m.sessions[id]
@@ -556,10 +556,10 @@ func (m *Manager) GetSession(id string) SessionView {
 	return s
 }
 
-func (m *Manager) ActiveSessions() []SessionView {
+func (m *Manager) ActiveSessions() []ports.SessionView {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	var result []SessionView
+	var result []ports.SessionView
 	for _, s := range m.sessions {
 		if s.IsActive() {
 			result = append(result, s)
@@ -570,13 +570,13 @@ func (m *Manager) ActiveSessions() []SessionView {
 
 // RecentSessions returns the most recently started sessions across features,
 // bounded by limit.
-func (m *Manager) RecentSessions(limit int) []SessionView {
+func (m *Manager) RecentSessions(limit int) []ports.SessionView {
 	if limit <= 0 {
 		return nil
 	}
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	result := make([]SessionView, 0, min(limit, len(m.sessions)))
+	result := make([]ports.SessionView, 0, min(limit, len(m.sessions)))
 	for _, s := range m.sessions {
 		result = append(result, s)
 	}
@@ -594,10 +594,10 @@ func (m *Manager) RecentSessions(limit int) []SessionView {
 
 // FeatureSessions returns all sessions (including completed ones) for a feature,
 // sorted with the most recently started session first.
-func (m *Manager) FeatureSessions(featureID string) []SessionView {
+func (m *Manager) FeatureSessions(featureID string) []ports.SessionView {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	var result []SessionView
+	var result []ports.SessionView
 	for _, s := range m.sessions {
 		if s.featureID == featureID {
 			result = append(result, s)
@@ -620,7 +620,7 @@ func (m *Manager) SendInput(sessionID string, data []byte) error {
 	return s.SendInput(data)
 }
 
-func (m *Manager) Attach(sessionID string) (SessionView, error) {
+func (m *Manager) Attach(sessionID string) (ports.SessionView, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	s, ok := m.sessions[sessionID]

@@ -291,7 +291,7 @@ func (fx *kbPromoFixture) phaseRunner(succeed bool) (*agent.PhaseRunner, *mocks.
 	mockSM.StartSessionFn = func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*session.SessionOpts) (ports.SessionHandle, error) {
 		return session.NewSession(id, featureID, phase), nil
 	}
-	mockSM.GetSessionFn = func(id string) session.SessionView {
+	mockSM.GetSessionFn = func(id string) ports.SessionView {
 		view := mocks.NewMockSessionView(id, fx.child.ID)
 		if succeed {
 			view.RootCompletionIntentVal = llm.CompletionIntent{Found: true, Status: llm.CompletionIntentSuccess}

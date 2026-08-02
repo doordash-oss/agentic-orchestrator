@@ -17,6 +17,7 @@ package orchestrator_test
 import (
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -1015,8 +1016,8 @@ func TestOrchestrator_RestartPhase_RejectsWhileSessionsActive(t *testing.T) {
 
 	sm := mocks.NewMockSessionManager()
 	// One session still active for this feature — the case where Stop is mid-flight.
-	sm.FeatureSessionsFn = func(id string) []session.SessionView {
-		return []session.SessionView{mocks.NewMockSessionView("s-1", "feat-busy")}
+	sm.FeatureSessionsFn = func(id string) []ports.SessionView {
+		return []ports.SessionView{mocks.NewMockSessionView("s-1", "feat-busy")}
 	}
 
 	o := orchestrator.New(orchestrator.Deps{
@@ -1056,8 +1057,8 @@ func TestOrchestrator_RestartPhase_AllowsArtifactReviewSession(t *testing.T) {
 
 	sm := mocks.NewMockSessionManager()
 	reviewSess := mocks.NewMockSessionView("feat-review-busy-artifact-review", "feat-review-busy")
-	sm.FeatureSessionsFn = func(id string) []session.SessionView {
-		return []session.SessionView{reviewSess}
+	sm.FeatureSessionsFn = func(id string) []ports.SessionView {
+		return []ports.SessionView{reviewSess}
 	}
 
 	o := orchestrator.New(orchestrator.Deps{
@@ -1104,8 +1105,8 @@ func TestOrchestrator_RestartPhase_ProceedsWhenSessionsInactive(t *testing.T) {
 	deadSession := mocks.NewMockSessionView("s-dead", "feat-failed")
 	deadSession.IsActiveVal = false
 	deadSession.StatusVal = session.SessionFailed
-	sm.FeatureSessionsFn = func(id string) []session.SessionView {
-		return []session.SessionView{deadSession}
+	sm.FeatureSessionsFn = func(id string) []ports.SessionView {
+		return []ports.SessionView{deadSession}
 	}
 
 	o := orchestrator.New(orchestrator.Deps{
@@ -1128,16 +1129,19 @@ func TestOrchestrator_RestartPhase_ProceedsWhenSessionsInactive(t *testing.T) {
 
 func TestOrchestrator_MergeFeatureLocal_MarksDone(t *testing.T) {
 	notPublishable := false
+	repoPath := t.TempDir()
+	if out, err := exec.Command("git", "init", "--initial-branch=trunk", repoPath).CombinedOutput(); err != nil {
+		t.Fatalf("git init: %s: %v", strings.TrimSpace(string(out)), err)
+	}
 	f := &feature.Feature{
 		ID:     "feat-local-merge",
 		Slug:   "local-merge",
 		Status: feature.StatusPublished,
 		Repos: []feature.FeatureRepo{{
 			Name:         "repo-a",
-			Path:         "/repo/a",
+			Path:         repoPath,
 			WorktreePath: "/worktree/a",
 			Branch:       "feature/local-merge",
-			BaseBranch:   "main",
 			Publishable:  &notPublishable,
 		}},
 	}
@@ -1147,7 +1151,11 @@ func TestOrchestrator_MergeFeatureLocal_MarksDone(t *testing.T) {
 	pub.HasUncommittedChangesFn = func(worktreePath string) (bool, error) { return true, nil }
 	pub.CommitAllFn = func(worktreePath, message string) error { return nil }
 	rebaser := mocks.NewMockRebaseOperator()
-	rebaser.MergeFeatureBranchFn = func(repoPath, featureBranch, baseBranch string) error { return nil }
+	var mergedBase string
+	rebaser.MergeFeatureBranchFn = func(repoPath, featureBranch, baseBranch string) error {
+		mergedBase = baseBranch
+		return nil
+	}
 
 	o := orchestrator.New(orchestrator.Deps{
 		Lifecycle: lc,
@@ -1166,6 +1174,9 @@ func TestOrchestrator_MergeFeatureLocal_MarksDone(t *testing.T) {
 	}
 	if rebaser.Calls[0].Method != "MergeFeatureBranch" {
 		t.Fatalf("rebaser call = %s; want MergeFeatureBranch", rebaser.Calls[0].Method)
+	}
+	if mergedBase != "trunk" {
+		t.Fatalf("MergeFeatureBranch base = %q; want concrete git default branch trunk", mergedBase)
 	}
 	if got := len(pub.Calls); got != 2 {
 		t.Fatalf("publisher calls = %d; want HasUncommittedChanges + CommitAll", got)

@@ -24,7 +24,6 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
-	"github.com/doordash-oss/agentic-orchestrator/internal/session"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
 )
 
@@ -89,7 +88,7 @@ func newGateLifecycle(f *feature.Feature) *mocks.MockFeatureLifecycle {
 // realistic input.
 func sessionManagerWithQALog(sessionID string) *mocks.MockSessionManager {
 	sm := mocks.NewMockSessionManager()
-	sm.GetSessionFn = func(id string) session.SessionView {
+	sm.GetSessionFn = func(id string) ports.SessionView {
 		if id != sessionID {
 			return nil
 		}

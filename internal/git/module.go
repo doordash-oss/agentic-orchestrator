@@ -23,10 +23,7 @@ import "go.uber.org/fx"
 var Module = fx.Module("git",
 	fx.Provide(
 		func() *PublishAdapter { return &PublishAdapter{} },
-		func() *DiffAdapter { return &DiffAdapter{} },
 		func() *RebaseAdapter { return &RebaseAdapter{} },
-		func() *CrossRefAdapter { return &CrossRefAdapter{} },
-		func() *ReviewCommentAdapter { return &ReviewCommentAdapter{} },
 		func() *BranchAdapter { return &BranchAdapter{} },
 	),
 )

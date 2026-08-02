@@ -907,7 +907,7 @@ func (s *publishDescriptionSessionHandle) SetOnToolAllowed(fn func(toolName stri
 func (s *publishDescriptionSessionHandle) SetOnFileRead(fn func(read llm.FileReadEvent))  {}
 func (s *publishDescriptionSessionHandle) SetOnSubagentEvent(fn func(msg llm.SDKMessage)) {}
 
-var _ session.SessionHandle = (*publishDescriptionSessionHandle)(nil)
+var _ ports.SessionHandle = (*publishDescriptionSessionHandle)(nil)
 
 func newPublishDescriptionPhaseRunner(t *testing.T, output string, permissionFailure bool) *agent.PhaseRunner {
 	t.Helper()

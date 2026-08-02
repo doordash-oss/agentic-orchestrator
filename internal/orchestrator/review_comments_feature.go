@@ -322,7 +322,7 @@ func (o *Orchestrator) completeReviewCommentsRepoFinalize(featureID, repoName st
 		}
 	}
 	prURL := reviewCommentsPRURL(f, repoName)
-	if prURL == "" || o.deps.Reviewer == nil {
+	if prURL == "" {
 		return nil
 	}
 	if err := o.replyToSavedReviewComments(f, *repo, workDir, prURL, repoName); err != nil {

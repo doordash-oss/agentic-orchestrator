@@ -20,6 +20,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
@@ -30,18 +31,15 @@ import (
 // ---------------------------------------------------------------------------
 
 var _ ports.Publisher = (*git.PublishAdapter)(nil)
-var _ ports.DiffOperator = (*git.DiffAdapter)(nil)
 var _ ports.RebaseOperator = (*git.RebaseAdapter)(nil)
-var _ ports.CrossRefOperator = (*git.CrossRefAdapter)(nil)
-var _ ports.ReviewCommentOperator = (*git.ReviewCommentAdapter)(nil)
-var _ ports.BranchOperator = (*git.BranchAdapter)(nil)
+var _ feature.BranchOps = (*git.BranchAdapter)(nil)
 var _ ports.WorktreeOperator = (*git.WorktreeManager)(nil)
 
 // ---------------------------------------------------------------------------
 // Compile-time interface satisfaction checks — session widening
 // ---------------------------------------------------------------------------
 
-var _ session.SessionHandle = (*session.Session)(nil)
+var _ ports.SessionHandle = (*session.Session)(nil)
 var _ ports.SessionManager = (*session.Manager)(nil)
 
 // ---------------------------------------------------------------------------

@@ -28,6 +28,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm/codex"
+	"github.com/doordash-oss/agentic-orchestrator/internal/permission"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
@@ -262,7 +263,7 @@ func TestHandleControlRequest_AskUserQuestion_NeverAutoApproved(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: pure session routing, no subprocess or shared state.
 	s := NewSession("ask-test", "feat-1", feature.PhaseResearch)
-	s.permHandler = &AutoApproveHandler{}
+	s.permHandler = &permission.AutoApproveHandler{}
 	msg := llm.SDKMessage{ControlRequest: &llm.ControlRequestMessage{
 		RequestID: "ask_1",
 		Request: llm.ControlRequest{
@@ -281,7 +282,7 @@ func TestHandleControlRequest_BashWithAutoApprove(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: pure session routing, no subprocess or shared state.
 	s := NewSession("bash-approve", "feat-1", feature.PhaseImplement)
-	s.permHandler = &AutoApproveHandler{}
+	s.permHandler = &permission.AutoApproveHandler{}
 	msg := llm.SDKMessage{ControlRequest: &llm.ControlRequestMessage{
 		RequestID: "bash_1",
 		Request: llm.ControlRequest{
@@ -298,7 +299,7 @@ func TestHandleControlRequest_BashWithAutoApprove(t *testing.T) {
 // --- AcceptEditsHandler tests ---
 
 func TestAcceptEditsHandler_AutoApproves(t *testing.T) {
-	handler := &AcceptEditsHandler{}
+	handler := &permission.AcceptEditsHandler{}
 	autoApproved := []string{
 		"Read", "Glob", "Grep", "LS", "LSP",
 		"Edit", "Write", "NotebookEdit",
@@ -308,7 +309,7 @@ func TestAcceptEditsHandler_AutoApproves(t *testing.T) {
 	}
 	for _, tool := range autoApproved {
 		t.Run(tool, func(t *testing.T) {
-			decision, err := handler.CanUseTool(ToolPermissionRequest{ToolName: tool})
+			decision, err := handler.CanUseTool(ports.ToolPermissionRequest{ToolName: tool})
 			if err != nil {
 				t.Fatalf("error: %v", err)
 			}
@@ -320,11 +321,11 @@ func TestAcceptEditsHandler_AutoApproves(t *testing.T) {
 }
 
 func TestAcceptEditsHandler_DefersToClient(t *testing.T) {
-	handler := &AcceptEditsHandler{}
+	handler := &permission.AcceptEditsHandler{}
 	deferred := []string{"Bash", "EnterWorktree", "ExitWorktree", "CronCreate", "SomeUnknownTool"}
 	for _, tool := range deferred {
 		t.Run(tool, func(t *testing.T) {
-			decision, err := handler.CanUseTool(ToolPermissionRequest{ToolName: tool})
+			decision, err := handler.CanUseTool(ports.ToolPermissionRequest{ToolName: tool})
 			if err != nil {
 				t.Fatalf("error: %v", err)
 			}
@@ -339,7 +340,7 @@ func TestAcceptEditsHandler_BashDeferredToClientSession(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: pure session routing, no subprocess or shared state.
 	s := NewSession("bash-defer", "feat-1", feature.PhaseImplement)
-	s.permHandler = &AcceptEditsHandler{}
+	s.permHandler = &permission.AcceptEditsHandler{}
 	msg := llm.SDKMessage{ControlRequest: &llm.ControlRequestMessage{
 		RequestID: "bash_1",
 		Request: llm.ControlRequest{
@@ -358,18 +359,18 @@ type lifecycleBlockingPermissionHandler struct {
 	started chan struct{}
 }
 
-func (h lifecycleBlockingPermissionHandler) CanUseTool(req ToolPermissionRequest) (PermissionDecision, error) {
+func (h lifecycleBlockingPermissionHandler) CanUseTool(req ports.ToolPermissionRequest) (ports.PermissionDecision, error) {
 	close(h.started)
 	<-req.Ctx.Done()
-	return PermissionDecision{}, nil
+	return ports.PermissionDecision{}, nil
 }
 
 type trackingDisposablePermissionHandler struct {
 	disposeCalls atomic.Int32
 }
 
-func (*trackingDisposablePermissionHandler) CanUseTool(ToolPermissionRequest) (PermissionDecision, error) {
-	return PermissionDecision{}, nil
+func (*trackingDisposablePermissionHandler) CanUseTool(ports.ToolPermissionRequest) (ports.PermissionDecision, error) {
+	return ports.PermissionDecision{}, nil
 }
 
 func (h *trackingDisposablePermissionHandler) Dispose() {

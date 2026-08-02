@@ -20,6 +20,7 @@ import (
 	"fmt"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
@@ -42,7 +43,7 @@ type HarnessRebaseRepoOutcome struct {
 //  1. The PR's base branch on GitHub (when a PRURL is recorded), via the
 //     RebaseOperator. This is authoritative for published features.
 //  2. repo.BaseBranch from the feature manifest.
-//  3. The repo's default branch (origin/HEAD) via the BranchOperator.
+//  3. The repo's default branch (origin/HEAD).
 //
 // Returns "" only when every fallback fails — callers should treat that as
 // a hard error rather than silently rebasing onto an empty target.
@@ -54,8 +55,8 @@ func (o *Orchestrator) resolveRebaseTarget(f *feature.Feature, repo *feature.Fea
 	if target == "" {
 		target = repo.BaseBranch
 	}
-	if target == "" && o.deps.Branch != nil {
-		target, _ = o.deps.Branch.DefaultBranch(repo.Path)
+	if target == "" {
+		target = git.DefaultBranch(repo.Path)
 	}
 	return target
 }

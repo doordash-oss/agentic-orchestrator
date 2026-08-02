@@ -23,7 +23,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
-	"github.com/doordash-oss/agentic-orchestrator/internal/session"
+	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
 )
 
@@ -41,7 +41,7 @@ func TestPhaseSupervisorSingleShotCompletesOnSessionResultBeforeProcessExit(t *t
 	sess := mocks.NewMockSessionView(inquireSessionID, "feat")
 	sess.PhaseVal = feature.PhaseInquire
 	configureSuccessfulRootTurn(sess)
-	sm.GetSessionFn = func(id string) session.SessionView {
+	sm.GetSessionFn = func(id string) ports.SessionView {
 		if id != inquireSessionID {
 			t.Fatalf("GetSession(%q), want feat-inquire", id)
 		}
@@ -75,7 +75,7 @@ func TestPhaseSupervisorSingleShotDedupe(t *testing.T) {
 	sess := mocks.NewMockSessionView(inquireSessionID, "feat")
 	sess.PhaseVal = feature.PhaseInquire
 	configureSuccessfulRootTurn(sess)
-	sm.GetSessionFn = func(string) session.SessionView { return sess }
+	sm.GetSessionFn = func(string) ports.SessionView { return sess }
 
 	supervisor := newPhaseSupervisor(phaseSupervisorConfig{
 		Completion:    sink,
@@ -107,7 +107,7 @@ func TestPhaseSupervisorSingleShotAllowsReentrantRetryForSameSessionID(t *testin
 	configureSuccessfulRootTurn(retry)
 
 	var getCount atomic.Int32
-	sm.GetSessionFn = func(id string) session.SessionView {
+	sm.GetSessionFn = func(id string) ports.SessionView {
 		if id != inquireSessionID {
 			t.Fatalf("GetSession(%q), want feat-inquire", id)
 		}
@@ -153,7 +153,7 @@ func TestPhaseSupervisorSingleShotFailsWhenSessionExitsWithoutResult(t *testing.
 	sess := mocks.NewMockSessionView("feat-research", "feat")
 	sess.PhaseVal = feature.PhaseResearch
 	sess.ErrorDetailVal = "process exited unexpectedly"
-	sm.GetSessionFn = func(string) session.SessionView { return sess }
+	sm.GetSessionFn = func(string) ports.SessionView { return sess }
 
 	supervisor := newPhaseSupervisor(phaseSupervisorConfig{
 		Completion: sink,
@@ -296,7 +296,7 @@ func TestPhaseSupervisorSingleShotClassifiesDoneResultCost(t *testing.T) {
 	sess := mocks.NewMockSessionView("feat-design", "feat")
 	sess.PhaseVal = feature.PhaseDesign
 	configureSuccessfulRootTurn(sess)
-	sm.GetSessionFn = func(string) session.SessionView { return sess }
+	sm.GetSessionFn = func(string) ports.SessionView { return sess }
 
 	supervisor := newPhaseSupervisor(phaseSupervisorConfig{
 		Completion:    sink,

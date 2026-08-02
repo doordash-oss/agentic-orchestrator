@@ -20,7 +20,6 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/orchestrator"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
-	"github.com/doordash-oss/agentic-orchestrator/internal/session"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
 )
 
@@ -60,11 +59,11 @@ func TestOrchestrator_InterruptFeature(t *testing.T) {
 	fs := newFeatureStore(f)
 
 	sm := mocks.NewMockSessionManager()
-	sessions := []session.SessionView{
+	sessions := []ports.SessionView{
 		mocks.NewMockSessionView("s-1", "feat-int"),
 		mocks.NewMockSessionView("s-2", "feat-int"),
 	}
-	sm.FeatureSessionsFn = func(id string) []session.SessionView { return sessions }
+	sm.FeatureSessionsFn = func(id string) []ports.SessionView { return sessions }
 
 	var hookFeatureID string
 	o := orchestrator.New(orchestrator.Deps{
@@ -288,7 +287,7 @@ func TestOrchestrator_InterruptAllRunning(t *testing.T) {
 	}
 
 	sm := mocks.NewMockSessionManager()
-	sm.FeatureSessionsFn = func(id string) []session.SessionView { return nil }
+	sm.FeatureSessionsFn = func(id string) []ports.SessionView { return nil }
 
 	interrupts := 0
 	o := orchestrator.New(orchestrator.Deps{

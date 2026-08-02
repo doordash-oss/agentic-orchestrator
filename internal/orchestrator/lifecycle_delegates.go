@@ -32,6 +32,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
@@ -525,8 +526,8 @@ func (o *Orchestrator) MergeFeatureLocal(featureID string) error {
 			branch = "feature/" + f.Slug
 		}
 		baseBranch := repo.BaseBranch
-		if baseBranch == "" && o.deps.Branch != nil {
-			baseBranch, _ = o.deps.Branch.DefaultBranch(repo.Path)
+		if baseBranch == "" {
+			baseBranch = git.DefaultBranch(repo.Path)
 		}
 
 		// Commit any uncommitted changes before merging.
@@ -1030,7 +1031,6 @@ func (o *Orchestrator) RestartPhase(featureID string, maxIterationsDelta, maxPla
 		}
 		return RestartOutcome{Action: RestartNoOp}, nil
 	}
-
 
 	// Clear failure context on restart; extend iteration caps if exhausted.
 	// ExtendFailedPhaseBudget is a no-op on non-Failed features so this is

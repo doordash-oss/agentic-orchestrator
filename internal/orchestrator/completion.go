@@ -1572,7 +1572,7 @@ func (o *Orchestrator) RepositoryWorktreePath(featureID, repoName string) (strin
 }
 
 func (o *Orchestrator) repositoryFileListDiff(result RepositoryDiffResult, workDir, baseBranch string) (RepositoryDiffResult, error) {
-	previews, err := o.diffOperator().BranchDiffPreviews(workDir, baseBranch)
+	previews, err := git.BranchDiffPreviews(workDir, baseBranch)
 	if err != nil {
 		result.PartialFailure = safeCompletionTruncate(err.Error(), 200)
 		return result, nil
@@ -1596,7 +1596,7 @@ func (o *Orchestrator) repositoryFileListDiff(result RepositoryDiffResult, workD
 }
 
 func (o *Orchestrator) repositorySingleFileDiff(result RepositoryDiffResult, workDir, baseBranch, filePath string) (RepositoryDiffResult, error) {
-	preview, err := o.diffOperator().SingleFileDiffPreview(workDir, baseBranch, filePath)
+	preview, err := git.SingleFileDiffPreview(workDir, baseBranch, filePath)
 	if err != nil {
 		result.PartialFailure = safeCompletionTruncate(err.Error(), 200)
 		return result, nil
@@ -1616,13 +1616,6 @@ func (o *Orchestrator) repositorySingleFileDiff(result RepositoryDiffResult, wor
 	}
 	result.FileDiff = diff
 	return result, nil
-}
-
-func (o *Orchestrator) diffOperator() ports.DiffOperator {
-	if o != nil && o.deps.Differ != nil {
-		return o.deps.Differ
-	}
-	return &git.DiffAdapter{}
 }
 
 func isBinaryPatch(patch string) bool {

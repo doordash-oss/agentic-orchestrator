@@ -34,7 +34,7 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// stubSessionHandle — minimal session.SessionHandle used by PhaseRunner
+// stubSessionHandle — minimal ports.SessionHandle used by PhaseRunner
 // wiring tests. All mutation methods are no-ops; read methods return zero.
 //
 // The PhaseRunner code that runs after MockSessionManager.StartSession
@@ -146,7 +146,7 @@ func (s *stubSessionHandle) SetOnFileRead(fn func(read llm.FileReadEvent))  {}
 func (s *stubSessionHandle) SetOnSubagentEvent(fn func(msg llm.SDKMessage)) {}
 
 // Compile-time check that stubSessionHandle satisfies SessionHandle.
-var _ session.SessionHandle = (*stubSessionHandle)(nil)
+var _ ports.SessionHandle = (*stubSessionHandle)(nil)
 
 // ---------------------------------------------------------------------------
 // capturingPhaseRunner — helper that constructs a real *agent.PhaseRunner

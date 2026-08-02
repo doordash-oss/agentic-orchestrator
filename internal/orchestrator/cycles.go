@@ -26,6 +26,7 @@ import (
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
@@ -514,9 +515,6 @@ func (o *Orchestrator) replyToSavedReviewComments(
 	repo feature.FeatureRepo,
 	worktreeDir, prURL, repoName string,
 ) error {
-	if o.deps.Reviewer == nil {
-		return errors.New("review-comments completion requires Reviewer adapter")
-	}
 	if prURL == "" {
 		return errors.New("review-comments PR URL is empty")
 	}
@@ -527,7 +525,7 @@ func (o *Orchestrator) replyToSavedReviewComments(
 		return fmt.Errorf("load review comments: %w", loadErr)
 	}
 
-	commitSHA, _ := o.deps.Reviewer.LatestCommitSHA(worktreeDir)
+	commitSHA, _ := git.LatestCommitSHA(worktreeDir)
 	resolutions, resErr := agent.LoadReviewResolutionsForRepo(baseDir, f, repoName)
 
 	resMap := make(map[int]agent.ReviewResolution)
@@ -563,7 +561,7 @@ func (o *Orchestrator) replyToSavedReviewComments(
 		case ports.CommentTypeIssue:
 			body := fmt.Sprintf("Re: [comment](%s#issuecomment-%d) by @%s\n\n%s",
 				prURL, c.ID, c.User.Login, reply)
-			if err := o.deps.Reviewer.ReplyToIssueComment(repo.Path, prURL, body); err != nil {
+			if err := git.ReplyToIssueComment(repo.Path, prURL, body); err != nil {
 				replyErrs = append(replyErrs, fmt.Sprintf("issue comment %d: %v", c.ID, err))
 			} else {
 				addressedIDs = append(addressedIDs, c.ID)
@@ -571,13 +569,13 @@ func (o *Orchestrator) replyToSavedReviewComments(
 		case ports.CommentTypeReviewBody:
 			body := fmt.Sprintf("Re: [review](%s#pullrequestreview-%d) by @%s\n\n%s",
 				prURL, c.ID, c.User.Login, reply)
-			if err := o.deps.Reviewer.ReplyToIssueComment(repo.Path, prURL, body); err != nil {
+			if err := git.ReplyToIssueComment(repo.Path, prURL, body); err != nil {
 				replyErrs = append(replyErrs, fmt.Sprintf("review body %d: %v", c.ID, err))
 			} else {
 				addressedIDs = append(addressedIDs, c.ID)
 			}
 		default:
-			if err := o.deps.Reviewer.ReplyToPRComment(repo.Path, prURL, c.ID, reply); err != nil {
+			if err := git.ReplyToPRComment(repo.Path, prURL, c.ID, reply); err != nil {
 				replyErrs = append(replyErrs, fmt.Sprintf("comment %d: %v", c.ID, err))
 			} else {
 				addressedIDs = append(addressedIDs, c.ID)
@@ -586,14 +584,14 @@ func (o *Orchestrator) replyToSavedReviewComments(
 		}
 	}
 
-	threadMap, threadErr := o.deps.Reviewer.FetchReviewThreadMap(repo.Path, prURL)
+	threadMap, threadErr := git.FetchReviewThreadMap(repo.Path, prURL)
 	if threadErr == nil {
 		for _, c := range data.Comments {
 			if !addressedReviewComments[c.ID] {
 				continue
 			}
 			if threadID, ok := threadMap[c.ID]; ok {
-				_ = o.deps.Reviewer.ResolveReviewThread(repo.Path, threadID)
+				_ = git.ResolveReviewThread(repo.Path, threadID)
 			}
 		}
 	}

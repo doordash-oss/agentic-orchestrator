@@ -178,12 +178,8 @@ type Deps struct {
 	Store       ports.FeatureStore
 	Sessions    ports.SessionManager
 	Publisher   ports.Publisher
-	Differ      ports.DiffOperator
 	Rebaser     ports.RebaseOperator
-	CrossRef    ports.CrossRefOperator
-	Reviewer    ports.ReviewCommentOperator
 	Worktrees   ports.WorktreeOperator
-	Branch      ports.BranchOperator
 	CmdRunner   ports.CommandRunner
 	Recovery    ports.RecoveryOperator
 	PhaseRunner *agent.PhaseRunner // concrete — not behind a port interface

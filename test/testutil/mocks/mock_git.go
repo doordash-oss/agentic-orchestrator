@@ -139,39 +139,6 @@ func (m *MockPublisher) DiffStat(worktreePath, baseBranch string) (string, error
 }
 
 // ---------------------------------------------------------------------------
-// MockDiffOperator implements ports.DiffOperator
-// ---------------------------------------------------------------------------
-
-// MockDiffOperator implements ports.DiffOperator with configurable function
-// overrides and call tracking.
-type MockDiffOperator struct {
-	BranchDiffPreviewsFn    func(worktreePath, baseBranch string) ([]git.DiffPreview, error)
-	SingleFileDiffPreviewFn func(worktreePath, baseBranch, relPath string) (*git.DiffPreview, error)
-
-	DefaultError error
-	Calls        []MockCall
-}
-
-// NewMockDiffOperator returns a MockDiffOperator with zero-value defaults.
-func NewMockDiffOperator() *MockDiffOperator { return &MockDiffOperator{} }
-
-func (m *MockDiffOperator) BranchDiffPreviews(worktreePath, baseBranch string) ([]git.DiffPreview, error) {
-	m.Calls = append(m.Calls, MockCall{Method: "BranchDiffPreviews", Args: []any{worktreePath, baseBranch}})
-	if m.BranchDiffPreviewsFn != nil {
-		return m.BranchDiffPreviewsFn(worktreePath, baseBranch)
-	}
-	return nil, m.DefaultError
-}
-
-func (m *MockDiffOperator) SingleFileDiffPreview(worktreePath, baseBranch, relPath string) (*git.DiffPreview, error) {
-	m.Calls = append(m.Calls, MockCall{Method: "SingleFileDiffPreview", Args: []any{worktreePath, baseBranch, relPath}})
-	if m.SingleFileDiffPreviewFn != nil {
-		return m.SingleFileDiffPreviewFn(worktreePath, baseBranch, relPath)
-	}
-	return nil, m.DefaultError
-}
-
-// ---------------------------------------------------------------------------
 // MockRebaseOperator implements ports.RebaseOperator
 // ---------------------------------------------------------------------------
 
@@ -286,130 +253,6 @@ func (m *MockRebaseOperator) RebaseInProgress(worktreePath string) (bool, error)
 }
 
 // ---------------------------------------------------------------------------
-// MockCrossRefOperator implements ports.CrossRefOperator
-// ---------------------------------------------------------------------------
-
-// MockCrossRefOperator implements ports.CrossRefOperator with configurable
-// function overrides and call tracking.
-type MockCrossRefOperator struct {
-	UpdatePRBodyFn                 func(prURL, newBody string) error
-	GetPRBodyFn                    func(prURL string) (string, error)
-	RetroactivelyUpdateCrossRefsFn func(featureName string, entries []git.CrossRefEntry, currentRepoName string) []error
-
-	DefaultError error
-	Calls        []MockCall
-}
-
-// NewMockCrossRefOperator returns a MockCrossRefOperator with zero-value defaults.
-func NewMockCrossRefOperator() *MockCrossRefOperator { return &MockCrossRefOperator{} }
-
-func (m *MockCrossRefOperator) UpdatePRBody(prURL, newBody string) error {
-	m.Calls = append(m.Calls, MockCall{Method: "UpdatePRBody", Args: []any{prURL, newBody}})
-	if m.UpdatePRBodyFn != nil {
-		return m.UpdatePRBodyFn(prURL, newBody)
-	}
-	return m.DefaultError
-}
-
-func (m *MockCrossRefOperator) GetPRBody(prURL string) (string, error) {
-	m.Calls = append(m.Calls, MockCall{Method: "GetPRBody", Args: []any{prURL}})
-	if m.GetPRBodyFn != nil {
-		return m.GetPRBodyFn(prURL)
-	}
-	return "", m.DefaultError
-}
-
-func (m *MockCrossRefOperator) RetroactivelyUpdateCrossRefs(featureName string, entries []git.CrossRefEntry, currentRepoName string) []error {
-	m.Calls = append(m.Calls, MockCall{Method: "RetroactivelyUpdateCrossRefs", Args: []any{featureName, entries, currentRepoName}})
-	if m.RetroactivelyUpdateCrossRefsFn != nil {
-		return m.RetroactivelyUpdateCrossRefsFn(featureName, entries, currentRepoName)
-	}
-	return nil
-}
-
-// BuildCrossReferenceSection delegates to the git helper so mocks produce
-// the same output as the real adapter by default.
-func (m *MockCrossRefOperator) BuildCrossReferenceSection(featureName string, entries []git.CrossRefEntry) string {
-	m.Calls = append(m.Calls, MockCall{Method: "BuildCrossReferenceSection", Args: []any{featureName, entries}})
-	return git.BuildCrossReferenceSection(featureName, entries)
-}
-
-// InjectCrossReferenceSection delegates to the git helper.
-func (m *MockCrossRefOperator) InjectCrossReferenceSection(body, section string) string {
-	m.Calls = append(m.Calls, MockCall{Method: "InjectCrossReferenceSection", Args: []any{body, section}})
-	return git.InjectCrossReferenceSection(body, section)
-}
-
-// ---------------------------------------------------------------------------
-// MockReviewCommentOperator implements ports.ReviewCommentOperator
-// ---------------------------------------------------------------------------
-
-// MockReviewCommentOperator implements ports.ReviewCommentOperator with
-// configurable function overrides and call tracking.
-type MockReviewCommentOperator struct {
-	FetchPRCommentsFn      func(repoPath, prURL string) ([]git.ReviewComment, error)
-	ReplyToPRCommentFn     func(repoPath, prURL string, commentID int, body string) error
-	ReplyToIssueCommentFn  func(repoPath, prURL string, body string) error
-	FetchReviewThreadMapFn func(repoPath, prURL string) (map[int]string, error)
-	ResolveReviewThreadFn  func(repoPath, threadNodeID string) error
-	LatestCommitSHAFn      func(worktreePath string) (string, error)
-
-	DefaultError error
-	Calls        []MockCall
-}
-
-// NewMockReviewCommentOperator returns a MockReviewCommentOperator with zero-value defaults.
-func NewMockReviewCommentOperator() *MockReviewCommentOperator { return &MockReviewCommentOperator{} }
-
-func (m *MockReviewCommentOperator) FetchPRComments(repoPath, prURL string) ([]git.ReviewComment, error) {
-	m.Calls = append(m.Calls, MockCall{Method: "FetchPRComments", Args: []any{repoPath, prURL}})
-	if m.FetchPRCommentsFn != nil {
-		return m.FetchPRCommentsFn(repoPath, prURL)
-	}
-	return nil, m.DefaultError
-}
-
-func (m *MockReviewCommentOperator) ReplyToPRComment(repoPath, prURL string, commentID int, body string) error {
-	m.Calls = append(m.Calls, MockCall{Method: "ReplyToPRComment", Args: []any{repoPath, prURL, commentID, body}})
-	if m.ReplyToPRCommentFn != nil {
-		return m.ReplyToPRCommentFn(repoPath, prURL, commentID, body)
-	}
-	return m.DefaultError
-}
-
-func (m *MockReviewCommentOperator) ReplyToIssueComment(repoPath, prURL string, body string) error {
-	m.Calls = append(m.Calls, MockCall{Method: "ReplyToIssueComment", Args: []any{repoPath, prURL, body}})
-	if m.ReplyToIssueCommentFn != nil {
-		return m.ReplyToIssueCommentFn(repoPath, prURL, body)
-	}
-	return m.DefaultError
-}
-
-func (m *MockReviewCommentOperator) FetchReviewThreadMap(repoPath, prURL string) (map[int]string, error) {
-	m.Calls = append(m.Calls, MockCall{Method: "FetchReviewThreadMap", Args: []any{repoPath, prURL}})
-	if m.FetchReviewThreadMapFn != nil {
-		return m.FetchReviewThreadMapFn(repoPath, prURL)
-	}
-	return nil, m.DefaultError
-}
-
-func (m *MockReviewCommentOperator) ResolveReviewThread(repoPath, threadNodeID string) error {
-	m.Calls = append(m.Calls, MockCall{Method: "ResolveReviewThread", Args: []any{repoPath, threadNodeID}})
-	if m.ResolveReviewThreadFn != nil {
-		return m.ResolveReviewThreadFn(repoPath, threadNodeID)
-	}
-	return m.DefaultError
-}
-
-func (m *MockReviewCommentOperator) LatestCommitSHA(worktreePath string) (string, error) {
-	m.Calls = append(m.Calls, MockCall{Method: "LatestCommitSHA", Args: []any{worktreePath}})
-	if m.LatestCommitSHAFn != nil {
-		return m.LatestCommitSHAFn(worktreePath)
-	}
-	return "", m.DefaultError
-}
-
-// ---------------------------------------------------------------------------
 // MockWorktreeOperator implements ports.WorktreeOperator
 // ---------------------------------------------------------------------------
 
@@ -506,10 +349,10 @@ func (m *MockWorktreeOperator) HasUncommittedChanges(repoPath string) (bool, err
 }
 
 // ---------------------------------------------------------------------------
-// MockBranchOperator implements ports.BranchOperator
+// MockBranchOperator implements feature.BranchOps
 // ---------------------------------------------------------------------------
 
-// MockBranchOperator implements ports.BranchOperator with configurable function
+// MockBranchOperator implements feature.BranchOps with configurable function
 // overrides and call tracking.
 type MockBranchOperator struct {
 	BranchNameFn           func(featureSlug string) string

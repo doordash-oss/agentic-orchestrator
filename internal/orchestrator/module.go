@@ -35,11 +35,7 @@ type OrchestratorParams struct {
 	FeatureStore    *feature.Store
 	SessionManager  *session.Manager
 	Publisher       *git.PublishAdapter
-	Differ          *git.DiffAdapter
 	Rebaser         *git.RebaseAdapter
-	CrossRef        *git.CrossRefAdapter
-	Reviewer        *git.ReviewCommentAdapter
-	Branch          *git.BranchAdapter
 	PhaseRunner     *agent.PhaseRunner
 	Observer        *observe.Observer
 	PermissionStore *permission.Store
@@ -117,11 +113,7 @@ var Module = fx.Module("orchestrator",
 			Store:       p.FeatureStore,   // implicit satisfaction
 			Sessions:    p.SessionManager, // *session.Manager satisfies ports.SessionManager
 			Publisher:   p.Publisher,      // *git.PublishAdapter satisfies ports.Publisher
-			Differ:      p.Differ,         // *git.DiffAdapter satisfies ports.DiffOperator
 			Rebaser:     p.Rebaser,        // *git.RebaseAdapter satisfies ports.RebaseOperator
-			CrossRef:    p.CrossRef,       // *git.CrossRefAdapter satisfies ports.CrossRefOperator
-			Reviewer:    p.Reviewer,       // *git.ReviewCommentAdapter satisfies ports.ReviewCommentOperator
-			Branch:      p.Branch,         // *git.BranchAdapter satisfies ports.BranchOperator
 			Worktrees:   wm,               // *git.WorktreeManager satisfies ports.WorktreeOperator + the structural child-merge/head-reader capabilities
 			PhaseRunner: p.PhaseRunner,    // concrete *agent.PhaseRunner
 			Cleanliness: p.Cleanliness,    // child-integration preflight reuse of the launch cleanliness contract

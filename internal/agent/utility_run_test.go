@@ -180,7 +180,7 @@ func (s *utilityTestSession) SetOnToolAllowed(fn func(toolName string, input jso
 func (s *utilityTestSession) SetOnFileRead(fn func(read llm.FileReadEvent))  {}
 func (s *utilityTestSession) SetOnSubagentEvent(fn func(msg llm.SDKMessage)) {}
 
-var _ session.SessionHandle = (*utilityTestSession)(nil)
+var _ ports.SessionHandle = (*utilityTestSession)(nil)
 
 type utilityTestPhaseRunner struct {
 	pr           *PhaseRunner

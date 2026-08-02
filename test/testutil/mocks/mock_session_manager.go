@@ -35,10 +35,10 @@ type MockSessionManager struct {
 		command []string, workdir string, env []string,
 		opts ...*session.SessionOpts) (ports.SessionHandle, error)
 	StopSessionFn     func(id string) error
-	GetSessionFn      func(id string) session.SessionView
-	FeatureSessionsFn func(featureID string) []session.SessionView
-	ActiveSessionsFn  func() []session.SessionView
-	RecentSessionsFn  func(limit int) []session.SessionView
+	GetSessionFn      func(id string) ports.SessionView
+	FeatureSessionsFn func(featureID string) []ports.SessionView
+	ActiveSessionsFn  func() []ports.SessionView
+	RecentSessionsFn  func(limit int) []ports.SessionView
 
 	// Default return value for methods without an override
 	DefaultError error
@@ -84,21 +84,21 @@ func (m *MockSessionManager) StopSession(id string) error {
 	return m.DefaultError
 }
 
-func (m *MockSessionManager) GetSession(id string) session.SessionView {
+func (m *MockSessionManager) GetSession(id string) ports.SessionView {
 	if m.GetSessionFn != nil {
 		return m.GetSessionFn(id)
 	}
 	return nil
 }
 
-func (m *MockSessionManager) ActiveSessions() []session.SessionView {
+func (m *MockSessionManager) ActiveSessions() []ports.SessionView {
 	if m.ActiveSessionsFn != nil {
 		return m.ActiveSessionsFn()
 	}
 	return nil
 }
 
-func (m *MockSessionManager) RecentSessions(limit int) []session.SessionView {
+func (m *MockSessionManager) RecentSessions(limit int) []ports.SessionView {
 	m.RecentSessionsCalls = append(m.RecentSessionsCalls, limit)
 	if m.RecentSessionsFn != nil {
 		return m.RecentSessionsFn(limit)
@@ -106,7 +106,7 @@ func (m *MockSessionManager) RecentSessions(limit int) []session.SessionView {
 	return nil
 }
 
-func (m *MockSessionManager) FeatureSessions(featureID string) []session.SessionView {
+func (m *MockSessionManager) FeatureSessions(featureID string) []ports.SessionView {
 	m.FeatureSessionsCalls = append(m.FeatureSessionsCalls, featureID)
 	if m.FeatureSessionsFn != nil {
 		return m.FeatureSessionsFn(featureID)
@@ -118,7 +118,7 @@ func (m *MockSessionManager) SendInput(sessionID string, data []byte) error {
 	return m.DefaultError
 }
 
-func (m *MockSessionManager) Attach(sessionID string) (session.SessionView, error) {
+func (m *MockSessionManager) Attach(sessionID string) (ports.SessionView, error) {
 	return nil, m.DefaultError
 }
 

@@ -15,7 +15,6 @@
 package orchestrator
 
 import (
-	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -24,7 +23,6 @@ import (
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
-	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
 )
 
@@ -228,17 +226,14 @@ func TestRepositoryDiffWithFilePathReturnsContent(t *testing.T) {
 func TestRepositoryDiffWithFilePathReportsDiffErrors(t *testing.T) {
 	t.Parallel()
 	fix := newCompletionFixture(t)
-	differ := mocks.NewMockDiffOperator()
-	differ.SingleFileDiffPreviewFn = func(_, _, _ string) (*git.DiffPreview, error) {
-		return nil, errors.New("bad base revision")
-	}
-	fix.orchestrator.deps.Differ = differ
+	worktree := fix.worktrees["repo-a"]
+	runCompletionGit(t, worktree, "branch", "-m", "feature/x")
 
 	result, err := fix.orchestrator.RepositoryDiff("feat-completion", "repo-a", "README.md")
 	if err != nil {
 		t.Fatalf("RepositoryDiff: %v", err)
 	}
-	if !strings.Contains(result.PartialFailure, "bad base revision") {
+	if !strings.Contains(result.PartialFailure, "main") {
 		t.Fatalf("partial_failure = %q; want propagated diff error", result.PartialFailure)
 	}
 	if result.FileUnavailable {

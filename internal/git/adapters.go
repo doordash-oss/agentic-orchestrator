@@ -61,17 +61,6 @@ func (a *PublishAdapter) DiffStat(worktreePath, baseBranch string) (string, erro
 	return DiffStat(worktreePath, baseBranch)
 }
 
-// DiffAdapter wraps git package-level diff functions behind ports.DiffOperator.
-type DiffAdapter struct{}
-
-func (a *DiffAdapter) BranchDiffPreviews(worktreePath, baseBranch string) ([]DiffPreview, error) {
-	return BranchDiffPreviews(worktreePath, baseBranch)
-}
-
-func (a *DiffAdapter) SingleFileDiffPreview(worktreePath, baseBranch, relPath string) (*DiffPreview, error) {
-	return SingleFileDiffPreview(worktreePath, baseBranch, relPath)
-}
-
 // RebaseAdapter wraps git package-level rebase functions behind ports.RebaseOperator.
 type RebaseAdapter struct{}
 
@@ -119,61 +108,7 @@ func (a *RebaseAdapter) RebaseInProgress(worktreePath string) (bool, error) {
 	return RebaseInProgress(worktreePath), nil
 }
 
-// CrossRefAdapter wraps git package-level cross-reference functions behind ports.CrossRefOperator.
-type CrossRefAdapter struct{}
-
-func (a *CrossRefAdapter) UpdatePRBody(prURL, newBody string) error {
-	return UpdatePRBody(prURL, newBody)
-}
-
-func (a *CrossRefAdapter) GetPRBody(prURL string) (string, error) {
-	return GetPRBody(prURL)
-}
-
-func (a *CrossRefAdapter) RetroactivelyUpdateCrossRefs(featureName string,
-	entries []CrossRefEntry, currentRepoName string) []error {
-	return RetroactivelyUpdateCrossRefs(featureName, entries, currentRepoName)
-}
-
-// BuildCrossReferenceSection delegates to the package helper so domain code
-// can compose PR bodies without importing internal/git.
-func (a *CrossRefAdapter) BuildCrossReferenceSection(featureName string, entries []CrossRefEntry) string {
-	return BuildCrossReferenceSection(featureName, entries)
-}
-
-// InjectCrossReferenceSection delegates to the package helper.
-func (a *CrossRefAdapter) InjectCrossReferenceSection(body, section string) string {
-	return InjectCrossReferenceSection(body, section)
-}
-
-// ReviewCommentAdapter wraps git package-level review functions behind ports.ReviewCommentOperator.
-type ReviewCommentAdapter struct{}
-
-func (a *ReviewCommentAdapter) FetchPRComments(repoPath, prURL string) ([]ReviewComment, error) {
-	return FetchPRComments(repoPath, prURL)
-}
-
-func (a *ReviewCommentAdapter) ReplyToPRComment(repoPath, prURL string, commentID int, body string) error {
-	return ReplyToPRComment(repoPath, prURL, commentID, body)
-}
-
-func (a *ReviewCommentAdapter) ReplyToIssueComment(repoPath, prURL, body string) error {
-	return ReplyToIssueComment(repoPath, prURL, body)
-}
-
-func (a *ReviewCommentAdapter) FetchReviewThreadMap(repoPath, prURL string) (map[int]string, error) {
-	return FetchReviewThreadMap(repoPath, prURL)
-}
-
-func (a *ReviewCommentAdapter) ResolveReviewThread(repoPath, threadNodeID string) error {
-	return ResolveReviewThread(repoPath, threadNodeID)
-}
-
-func (a *ReviewCommentAdapter) LatestCommitSHA(worktreePath string) (string, error) {
-	return LatestCommitSHA(worktreePath)
-}
-
-// BranchAdapter wraps git package-level branch functions behind ports.BranchOperator.
+// BranchAdapter exposes branch operations to feature.BranchOps consumers.
 type BranchAdapter struct{}
 
 func (a *BranchAdapter) BranchName(featureSlug string) string {

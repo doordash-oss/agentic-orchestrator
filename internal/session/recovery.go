@@ -22,43 +22,21 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
-var _ = time.Second // anchor time import; ports.PIDFile exposes time.Time fields
-
-// RecoveryAction and RecoveryItem alias the canonical port types so the
-// session package exposes the same names existing callers use, but the
-// definitions live in ports.
-type (
-	RecoveryAction = ports.RecoveryAction
-	RecoveryItem   = ports.RecoveryItem
-)
-
-// Re-exported recovery action constants. Canonical values live in ports.
-const (
-	RecoveryResume = ports.RecoveryResume
-	RecoveryKill   = ports.RecoveryKill
-	RecoverySkip   = ports.RecoverySkip
-)
-
-// RecoveryActionKey delegates to the canonical helper in ports.
-func RecoveryActionKey(featureID, repoName string) string {
-	return ports.RecoveryActionKey(featureID, repoName)
-}
-
 // ScanForRecovery checks all features for orphaned sessions.
-func ScanForRecovery(featuresDir string, fm *feature.Manager) ([]RecoveryItem, error) {
+func ScanForRecovery(featuresDir string, fm *feature.Manager) ([]ports.RecoveryItem, error) {
 	pidFiles, err := FindPIDFiles(featuresDir)
 	if err != nil {
 		return nil, err
 	}
 
-	var items []RecoveryItem
+	var items []ports.RecoveryItem
 	for _, pf := range pidFiles {
 		alive := isProcessGroupAlive(pf.PID)
 		var f *feature.Feature
 		if fm != nil {
 			f, _ = fm.Get(pf.FeatureID)
 		}
-		items = append(items, RecoveryItem{
+		items = append(items, ports.RecoveryItem{
 			PIDFile:      pf,
 			ProcessAlive: alive,
 			Feature:      f,
@@ -139,15 +117,15 @@ func isProcessGroupAlive(pgid int) bool {
 //	    consistent partial state where the items already processed have
 //	    progressed and the remaining items still match their original PID
 //	    files; the next ScanRecovery pass picks up where this one stopped.
-func ExecuteRecovery(items []RecoveryItem, actions map[string]RecoveryAction, fm *feature.Manager) error {
+func ExecuteRecovery(items []ports.RecoveryItem, actions map[string]ports.RecoveryAction, fm *feature.Manager) error {
 	for _, item := range items {
-		action, ok := actions[RecoveryActionKey(item.PIDFile.FeatureID, item.RepoName)]
+		action, ok := actions[ports.RecoveryActionKey(item.PIDFile.FeatureID, item.RepoName)]
 		if !ok {
-			action = RecoverySkip
+			action = ports.RecoverySkip
 		}
 
 		switch action {
-		case RecoveryKill:
+		case ports.RecoveryKill:
 			if item.ProcessAlive {
 				terminateProcessGroup(item.PIDFile.PID)
 			}
@@ -159,7 +137,7 @@ func ExecuteRecovery(items []RecoveryItem, actions map[string]RecoveryAction, fm
 				_ = fm.Transition(item.Feature.ID, feature.StatusInterrupted)
 			}
 
-		case RecoveryResume:
+		case ports.RecoveryResume:
 			// Kill orphaned process group first if still alive, wait for exit
 			if item.ProcessAlive {
 				terminateProcessGroup(item.PIDFile.PID)
@@ -190,7 +168,7 @@ func ExecuteRecovery(items []RecoveryItem, actions map[string]RecoveryAction, fm
 			// longer writes resume hints.
 			_ = isReviewPhase
 
-		case RecoverySkip:
+		case ports.RecoverySkip:
 			// Clean up PID file if process is dead
 			if !item.ProcessAlive && item.PIDFile.Dir != "" {
 				_ = RemovePIDFile(item.PIDFile.Dir, item.PIDFile.RepoName)

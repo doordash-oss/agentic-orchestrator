@@ -30,6 +30,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm/claude"
+	"github.com/doordash-oss/agentic-orchestrator/internal/permission"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
@@ -1124,7 +1125,7 @@ func TestSessionControlRequest(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: in-process protocol replay with per-test session state.
 	s := NewSession("control-test", "feat-1", feature.PhaseImplement)
-	s.permHandler = &AutoApproveHandler{}
+	s.permHandler = &permission.AutoApproveHandler{}
 	runMockSession(t, s, []llm.SDKMessage{
 		{
 			Type:    "system",
@@ -1794,7 +1795,7 @@ echo '{"type":"result","subtype":"success","session_id":"s1","total_cost_usd":0.
 `), 0o755)
 
 	s := NewSession("deny-test", "feat-1", feature.PhaseResearch)
-	s.permHandler = &DenyAllHandler{}
+	s.permHandler = &permission.DenyAllHandler{}
 	err := s.Start([]string{"bash", script}, dir, nil, nil)
 	if err != nil {
 		t.Fatalf("start: %v", err)

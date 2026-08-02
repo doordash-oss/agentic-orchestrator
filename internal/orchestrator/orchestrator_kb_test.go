@@ -734,8 +734,8 @@ func TestOrchestrator_InterruptFeature_TransitionBeforeStopSession(t *testing.T)
 	fs := newFeatureStore(f)
 
 	sm := mocks.NewMockSessionManager()
-	sm.FeatureSessionsFn = func(id string) []session.SessionView {
-		return []session.SessionView{mocks.NewMockSessionView("s-1", "feat-order")}
+	sm.FeatureSessionsFn = func(id string) []ports.SessionView {
+		return []ports.SessionView{mocks.NewMockSessionView("s-1", "feat-order")}
 	}
 	var statusAtStop feature.Status
 	sm.StopSessionFn = func(id string) error {

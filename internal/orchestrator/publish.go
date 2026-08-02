@@ -23,6 +23,7 @@ import (
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
@@ -285,26 +286,26 @@ func (o *Orchestrator) readPhaseArtifact(f *feature.Feature, phase string) strin
 
 // applyCrossRefs injects the multi-repo cross-reference section into the
 // just-created PR body and retroactively updates earlier PRs. No-op when
-// CrossRef port is nil or there is only one repo in the feature.
+// there is only one repo in the feature.
 func (o *Orchestrator) applyCrossRefs(f *feature.Feature, justPublishedRepo, justPublishedURL string) {
-	if o.deps.CrossRef == nil || len(f.Repos) <= 1 {
+	if len(f.Repos) <= 1 {
 		return
 	}
 	entries := buildCrossRefEntries(f, justPublishedRepo, justPublishedURL)
 	if len(entries) <= 1 {
 		return
 	}
-	section := o.deps.CrossRef.BuildCrossReferenceSection(f.Name, entries)
+	section := git.BuildCrossReferenceSection(f.Name, entries)
 	if section == "" {
 		return
 	}
 	// Update the just-created PR.
-	if currentBody, getErr := o.deps.CrossRef.GetPRBody(justPublishedURL); getErr == nil {
-		updated := o.deps.CrossRef.InjectCrossReferenceSection(currentBody, section)
-		_ = o.deps.CrossRef.UpdatePRBody(justPublishedURL, updated)
+	if currentBody, getErr := git.GetPRBody(justPublishedURL); getErr == nil {
+		updated := git.InjectCrossReferenceSection(currentBody, section)
+		_ = git.UpdatePRBody(justPublishedURL, updated)
 	}
 	// Retroactively update earlier PRs. Errors are advisory.
-	_ = o.deps.CrossRef.RetroactivelyUpdateCrossRefs(f.Name, entries, justPublishedRepo)
+	_ = git.RetroactivelyUpdateCrossRefs(f.Name, entries, justPublishedRepo)
 }
 
 // buildCrossRefEntries builds per-repo CrossRefEntry values for the current

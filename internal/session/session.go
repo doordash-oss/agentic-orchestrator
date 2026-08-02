@@ -130,7 +130,7 @@ type Session struct {
 	cleanupFuncs []func() // functions to call on session exit
 
 	// Permission handling.
-	permHandler                  PermissionHandler
+	permHandler                  ports.PermissionHandler
 	permissionHandlerDisposeOnce sync.Once
 	// pendingControlRequests holds every control_request that has been
 	// surfaced to the desktop app but not yet responded to, in arrival order.
@@ -1375,7 +1375,7 @@ func (s *Session) tryHandleControlRequest(msg llm.SDKMessage) bool {
 	if s.protocol != nil {
 		sessionID = s.protocol.SessionID()
 	}
-	permReq := ToolPermissionRequest{
+	permReq := ports.ToolPermissionRequest{
 		RequestID:        req.RequestID,
 		ToolName:         req.Request.ToolName,
 		Input:            string(req.Request.Input),

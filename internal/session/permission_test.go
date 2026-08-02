@@ -16,11 +16,14 @@ package session
 
 import (
 	"testing"
+
+	"github.com/doordash-oss/agentic-orchestrator/internal/permission"
+	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
 func TestAutoApproveHandler(t *testing.T) {
-	handler := &AutoApproveHandler{}
-	req := ToolPermissionRequest{
+	handler := &permission.AutoApproveHandler{}
+	req := ports.ToolPermissionRequest{
 		RequestID: "req_1",
 		ToolName:  "Bash",
 		Input:     `{"command": "rm -rf /"}`,
@@ -37,8 +40,8 @@ func TestAutoApproveHandler(t *testing.T) {
 }
 
 func TestDenyAllHandler(t *testing.T) {
-	handler := &DenyAllHandler{}
-	req := ToolPermissionRequest{
+	handler := &permission.DenyAllHandler{}
+	req := ports.ToolPermissionRequest{
 		RequestID: "req_1",
 		ToolName:  "Bash",
 		Input:     `{"command": "ls"}`,
@@ -59,14 +62,14 @@ func TestDenyAllHandler(t *testing.T) {
 
 func TestPermissionHandlerInterface(t *testing.T) {
 	// Verify all handlers satisfy the interface.
-	var _ PermissionHandler = &AutoApproveHandler{}
-	var _ PermissionHandler = &DenyAllHandler{}
-	var _ PermissionHandler = &ReadOnlyHandler{}
-	var _ PermissionHandler = &AMAHandler{}
+	var _ ports.PermissionHandler = &permission.AutoApproveHandler{}
+	var _ ports.PermissionHandler = &permission.DenyAllHandler{}
+	var _ ports.PermissionHandler = &permission.ReadOnlyHandler{}
+	var _ ports.PermissionHandler = &permission.AMAHandler{}
 }
 
 func TestReadOnlyHandler(t *testing.T) {
-	handler := &ReadOnlyHandler{}
+	handler := &permission.ReadOnlyHandler{}
 
 	tests := []struct {
 		name    string
@@ -99,7 +102,7 @@ func TestReadOnlyHandler(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			req := ToolPermissionRequest{
+			req := ports.ToolPermissionRequest{
 				RequestID: "req_1",
 				ToolName:  tt.tool,
 				Input:     tt.input,
@@ -116,7 +119,7 @@ func TestReadOnlyHandler(t *testing.T) {
 }
 
 func TestAMAHandler(t *testing.T) {
-	handler := &AMAHandler{}
+	handler := &permission.AMAHandler{}
 
 	tests := []struct {
 		name    string
@@ -137,7 +140,7 @@ func TestAMAHandler(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			decision, err := handler.CanUseTool(ToolPermissionRequest{
+			decision, err := handler.CanUseTool(ports.ToolPermissionRequest{
 				RequestID: "req_1",
 				ToolName:  tt.tool,
 				Input:     tt.input,
@@ -153,10 +156,10 @@ func TestAMAHandler(t *testing.T) {
 }
 
 func TestAutoApproveHandler_MultipleCalls(t *testing.T) {
-	handler := &AutoApproveHandler{}
+	handler := &permission.AutoApproveHandler{}
 	tools := []string{"Bash", "Read", "Write", "Edit", "Glob", "Grep"}
 	for _, tool := range tools {
-		req := ToolPermissionRequest{
+		req := ports.ToolPermissionRequest{
 			RequestID: "req_" + tool,
 			ToolName:  tool,
 		}

@@ -891,7 +891,7 @@ type runtimeBootstrap struct {
 	eventCh         chan interface{}
 	runtime         serverruntime.RuntimeIdentity
 	workspaceDir    string
-	recoveryItems   []session.RecoveryItem
+	recoveryItems   []ports.RecoveryItem
 	recoveryScanOK  bool
 }
 
@@ -924,7 +924,6 @@ type serverMutationTarget struct {
 	phaseRunner     *agent.PhaseRunner
 	permissionCache *permission.Cache
 	workspaceDir    string
-	reviewer        ports.ReviewCommentOperator
 	// dispatchAsync runs server-owned background work (durable feature
 	// setup). Nil means `go fn()`; tests inject a synchronous dispatcher.
 	dispatchAsync func(fn func())
@@ -1470,7 +1469,7 @@ func (t *serverMutationTarget) StartChat(req serverruntime.ChatStartRequest) (se
 		DisallowedTools: []string{"Task"},
 		WorkDir:         workDir,
 		PIDDir:          chatDir,
-		PermHandler:     &session.AMAHandler{},
+		PermHandler:     &permission.AMAHandler{},
 		Phase:           utilskill.PhaseAll,
 		TurnMode:        ports.TurnModeInteractive,
 		EffortLevel:     llm.EffortLow,
@@ -2026,9 +2025,6 @@ func (t *serverMutationTarget) fetchUnaddressedReviewComments(featureID, repoNam
 	if t.store == nil {
 		return nil, errors.New("feature store is not available")
 	}
-	if t.reviewer == nil {
-		return nil, errors.New("review comment adapter is not available")
-	}
 	f, err := t.store.Load(featureID)
 	if err != nil {
 		return nil, err
@@ -2041,7 +2037,7 @@ func (t *serverMutationTarget) fetchUnaddressedReviewComments(featureID, repoNam
 	if prURL == "" {
 		return nil, fmt.Errorf("repo %s has no PR URL", repoName)
 	}
-	comments, err := t.reviewer.FetchPRComments(repo.Path, prURL)
+	comments, err := git.FetchPRComments(repo.Path, prURL)
 	if err != nil {
 		return nil, err
 	}
@@ -2781,7 +2777,7 @@ func bootstrapRuntime(ctx context.Context, configPath, stateDir string, dangerou
 	return boot, nil
 }
 
-func scanStartupRecovery(ctx context.Context, orch *orchestrator.Orchestrator, stderr io.Writer) ([]session.RecoveryItem, bool) {
+func scanStartupRecovery(ctx context.Context, orch *orchestrator.Orchestrator, stderr io.Writer) ([]ports.RecoveryItem, bool) {
 	if orch == nil {
 		return nil, true
 	}
@@ -2790,7 +2786,7 @@ func scanStartupRecovery(ctx context.Context, orch *orchestrator.Orchestrator, s
 		fmt.Fprintf(stderr, "Warning: startup recovery scan: %v\n", err)
 		return nil, false
 	}
-	recoveryItems := make([]session.RecoveryItem, len(items))
+	recoveryItems := make([]ports.RecoveryItem, len(items))
 	copy(recoveryItems, items)
 	return recoveryItems, true
 }
@@ -2893,7 +2889,6 @@ func runServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledPr
 			phaseRunner:     boot.phaseRunner,
 			permissionCache: boot.permissionCache,
 			workspaceDir:    boot.workspaceDir,
-			reviewer:        &git.ReviewCommentAdapter{},
 		},
 		PersistProviderModelCatalog: func(provider llm.LLMProvider, models []llm.ModelInfo) error {
 			return persistRefreshedProviderModelCatalog(boot.runtime.RuntimeDir, provider, models)

@@ -235,16 +235,34 @@ func (h *apiHandler) handleFeatureList(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusInternalServerError, "internal_error", "list features", nil)
 		return
 	}
+	// One relationship pass for the whole list; the per-parent scan re-reads
+	// the entire store and turns the list O(N²) in disk reads.
+	var bulkChildren map[string]*feature.RelationshipChildren
+	if reader, ok := h.store.(BulkRelationshipReader); ok {
+		bulkChildren, err = reader.AllRelationshipChildren()
+		if err != nil {
+			writeAPIError(w, http.StatusInternalServerError, "relationship_read_failed", "read relationship history", nil)
+			return
+		}
+	}
 	summaries := make([]FeatureSummary, 0, len(features))
 	for _, f := range features {
 		if f.IsChild() {
 			continue
 		}
 		summary := summarizeFeature(f)
-		children, relationshipErr := h.relationshipChildrenOf(f.ID, features)
-		if relationshipErr != nil {
-			writeAPIError(w, http.StatusInternalServerError, "relationship_read_failed", "read relationship history", map[string]any{"parent_id": f.ID})
-			return
+		var children *feature.RelationshipChildren
+		if bulkChildren != nil {
+			if children = bulkChildren[f.ID]; children == nil {
+				children = &feature.RelationshipChildren{}
+			}
+		} else {
+			var relationshipErr error
+			children, relationshipErr = h.relationshipChildrenOf(f.ID, features)
+			if relationshipErr != nil {
+				writeAPIError(w, http.StatusInternalServerError, "relationship_read_failed", "read relationship history", map[string]any{"parent_id": f.ID})
+				return
+			}
 		}
 		summary.ActiveChild = relationshipChildDTO(children.Active)
 		summary.ChildHistory = relationshipChildDTOs(children.Closed)

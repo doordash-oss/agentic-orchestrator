@@ -175,6 +175,112 @@ func TestFeatureListDTOShapeAndNoAuthentication(t *testing.T) {
 	}
 }
 
+// relationshipCountingStore counts relationship scans so list-shaped
+// endpoints can prove they resolve every parent's children in one pass
+// instead of rescanning the store per parent.
+type relationshipCountingStore struct {
+	features       []*feature.Feature
+	perParentCalls int
+	bulkCalls      int
+}
+
+func (s *relationshipCountingStore) List() ([]*feature.Feature, error) { return s.features, nil }
+func (s *relationshipCountingStore) Load(id string) (*feature.Feature, error) {
+	for _, f := range s.features {
+		if f.ID == id {
+			return f, nil
+		}
+	}
+	return nil, os.ErrNotExist
+}
+func (s *relationshipCountingStore) LoadRun(string, int) (*feature.Run, error) {
+	return &feature.Run{}, nil
+}
+func (s *relationshipCountingStore) RunDir(string, int) string      { return "" }
+func (s *relationshipCountingStore) ListRuns(string) ([]int, error) { return nil, nil }
+
+func (s *relationshipCountingStore) classify() map[string]*feature.RelationshipChildren {
+	all := map[string]*feature.RelationshipChildren{}
+	for _, f := range s.features {
+		if !f.IsChild() {
+			continue
+		}
+		children := all[f.Parent.ParentID]
+		if children == nil {
+			children = &feature.RelationshipChildren{}
+			all[f.Parent.ParentID] = children
+		}
+		if f.IsActiveChild() {
+			children.Active = f
+		} else {
+			children.Closed = append(children.Closed, f)
+		}
+	}
+	return all
+}
+
+func (s *relationshipCountingStore) RelationshipChildren(parentID string) (*feature.RelationshipChildren, error) {
+	s.perParentCalls++
+	children := s.classify()[parentID]
+	if children == nil {
+		children = &feature.RelationshipChildren{}
+	}
+	return children, nil
+}
+
+func (s *relationshipCountingStore) AllRelationshipChildren() (map[string]*feature.RelationshipChildren, error) {
+	s.bulkCalls++
+	return s.classify(), nil
+}
+
+func TestFeatureListResolvesRelationshipsInOneScan(t *testing.T) {
+	t.Parallel()
+
+	store := &relationshipCountingStore{features: []*feature.Feature{
+		{ID: "parent-1", Name: "Parent One", Status: feature.StatusPublished, CurrentPhase: feature.PhasePublish},
+		{ID: "parent-2", Name: "Parent Two", Status: feature.StatusPublished, CurrentPhase: feature.PhasePublish},
+		{
+			ID:           "child-1",
+			Name:         "Pass",
+			Status:       feature.StatusDesigning,
+			CurrentPhase: feature.PhaseDesign,
+			Parent:       &feature.ChildRelationship{ParentID: "parent-1", Kind: feature.ChildKindRefactor},
+		},
+	}}
+	handler := NewHandler(HandlerOptions{
+		Runtime:               RuntimeIdentity{RuntimeDir: runtimeDirLiteral, StateDir: testRuntimeStateDir, Config: testRuntimeConfigPath},
+		FeatureStore:          store,
+		DisableHostValidation: true,
+	})
+
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/v1/features", nil))
+	resp := w.Result()
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d; want 200", resp.StatusCode)
+	}
+	var body FeatureListResponse
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(body.Features) != 2 {
+		t.Fatalf("features length = %d; want 2 parents", len(body.Features))
+	}
+	var parentOne *FeatureSummary
+	for i := range body.Features {
+		if body.Features[i].ID == "parent-1" {
+			parentOne = &body.Features[i]
+		}
+	}
+	if parentOne == nil || parentOne.ActiveChild == nil || parentOne.ActiveChild.ID != "child-1" {
+		t.Fatalf("parent-1 active child = %+v; want child-1", parentOne)
+	}
+	if store.bulkCalls != 1 || store.perParentCalls != 0 {
+		t.Fatalf("relationship scans: bulk = %d, per-parent = %d; want one bulk scan and no per-parent scans", store.bulkCalls, store.perParentCalls)
+	}
+}
+
 func TestSnapshotResponsesExposeAsOfSequence(t *testing.T) {
 	t.Parallel()
 

@@ -111,6 +111,12 @@ type RelationshipReader interface {
 	RelationshipChildren(parentID string) (*feature.RelationshipChildren, error)
 }
 
+// BulkRelationshipReader resolves every parent's children in one store pass
+// so list-shaped endpoints avoid a per-parent directory rescan.
+type BulkRelationshipReader interface {
+	AllRelationshipChildren() (map[string]*feature.RelationshipChildren, error)
+}
+
 type ErrorDTO = Error
 
 // OwnerDTO is the public process-owner metadata safe to expose through REST and

@@ -434,6 +434,109 @@ func TestStoreRelationshipChildrenReturnsActiveAndOrderedClosedHistory(t *testin
 	}
 }
 
+func TestStoreAllRelationshipChildrenMatchesPerParentScans(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: per-test temp dirs isolate persisted relationship state.
+
+	store := NewStore(t.TempDir())
+	base := time.Date(2026, time.July, 29, 12, 0, 0, 0, time.UTC)
+	records := []*Feature{
+		{ID: "parent-a", Name: "parent a"},
+		{ID: "parent-b", Name: "parent b"},
+		{ID: "childless", Name: "no children"},
+		{
+			ID:      "a-active",
+			Created: base,
+			Parent:  &ChildRelationship{ParentID: "parent-a", Kind: ChildKindRefactor},
+		},
+		{
+			ID:      "a-closed-new",
+			Created: base,
+			Parent: &ChildRelationship{
+				ParentID:     "parent-a",
+				Kind:         ChildKindRefactor,
+				CloseOutcome: ChildCloseOutcomeCompleted,
+				ClosedAt:     timePointer(base.Add(time.Hour)),
+			},
+		},
+		{
+			ID:      "a-closed-old",
+			Created: base,
+			Parent: &ChildRelationship{
+				ParentID:     "parent-a",
+				Kind:         ChildKindRefactor,
+				CloseOutcome: ChildCloseOutcomeDiscarded,
+				ClosedAt:     timePointer(base),
+			},
+		},
+		{
+			ID:      "b-closed",
+			Created: base,
+			Parent: &ChildRelationship{
+				ParentID:     "parent-b",
+				Kind:         ChildKindRefactor,
+				CloseOutcome: ChildCloseOutcomeCompleted,
+				ClosedAt:     timePointer(base),
+			},
+		},
+	}
+	for _, record := range records {
+		if err := store.Save(record); err != nil {
+			t.Fatalf("Save(%q): %v", record.ID, err)
+		}
+	}
+
+	all, err := store.AllRelationshipChildren()
+	if err != nil {
+		t.Fatalf("AllRelationshipChildren(): %v", err)
+	}
+	for _, parentID := range []string{"parent-a", "parent-b"} {
+		perParent, err := store.RelationshipChildren(parentID)
+		if err != nil {
+			t.Fatalf("RelationshipChildren(%q): %v", parentID, err)
+		}
+		bulk := all[parentID]
+		if bulk == nil {
+			t.Fatalf("AllRelationshipChildren()[%q] = nil, want children", parentID)
+		}
+		if (bulk.Active == nil) != (perParent.Active == nil) ||
+			(bulk.Active != nil && bulk.Active.ID != perParent.Active.ID) {
+			t.Fatalf("AllRelationshipChildren()[%q].Active = %#v, want %#v", parentID, bulk.Active, perParent.Active)
+		}
+		bulkIDs := make([]string, len(bulk.Closed))
+		for i, child := range bulk.Closed {
+			bulkIDs[i] = child.ID
+		}
+		wantIDs := make([]string, len(perParent.Closed))
+		for i, child := range perParent.Closed {
+			wantIDs[i] = child.ID
+		}
+		if !slices.Equal(bulkIDs, wantIDs) {
+			t.Fatalf("AllRelationshipChildren()[%q].Closed IDs = %v, want %v", parentID, bulkIDs, wantIDs)
+		}
+	}
+	if _, ok := all["childless"]; ok {
+		t.Fatal(`AllRelationshipChildren()["childless"] present, want absent`)
+	}
+}
+
+func TestStoreAllRelationshipChildrenFailsClosedOnInvalidRecords(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: per-test temp dirs isolate persisted relationship state.
+
+	store := NewStore(t.TempDir())
+	if err := store.Save(&Feature{
+		ID:     "bad-child",
+		Parent: &ChildRelationship{ParentID: "parent", Kind: ChildKindRefactor, CloseOutcome: "merged"},
+	}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	if _, err := store.AllRelationshipChildren(); err == nil || !strings.Contains(err.Error(), "bad-child") {
+		t.Fatalf("AllRelationshipChildren() error = %v, want fail-closed error naming bad-child", err)
+	}
+}
+
 func TestStoreRelationshipChildrenFailsClosedOnInvalidRecords(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: per-test temp dirs isolate persisted relationship state.

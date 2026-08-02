@@ -249,8 +249,13 @@ func (s *Store) relationshipChildrenUnlocked(parentID string) (*RelationshipChil
 	if err != nil {
 		return nil, err
 	}
-	sort.Slice(result.Closed, func(i, j int) bool {
-		left, right := result.Closed[i], result.Closed[j]
+	sortClosedChildren(result.Closed)
+	return result, nil
+}
+
+func sortClosedChildren(closed []*Feature) {
+	sort.Slice(closed, func(i, j int) bool {
+		left, right := closed[i], closed[j]
 		if !left.Parent.ClosedAt.Equal(*right.Parent.ClosedAt) {
 			return left.Parent.ClosedAt.After(*right.Parent.ClosedAt)
 		}
@@ -259,6 +264,57 @@ func (s *Store) relationshipChildrenUnlocked(parentID string) (*RelationshipChil
 		}
 		return left.ID < right.ID
 	})
+}
+
+// AllRelationshipChildren classifies every stored child by its parent in a
+// single directory pass, enforcing the same fail-closed invariants as
+// RelationshipChildren. Parents without children have no map entry.
+func (s *Store) AllRelationshipChildren() (map[string]*RelationshipChildren, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	entries, err := os.ReadDir(s.BaseDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return map[string]*RelationshipChildren{}, nil
+		}
+		return nil, fmt.Errorf("listing features directory: %w", err)
+	}
+	result := map[string]*RelationshipChildren{}
+	for _, entry := range entries {
+		if !entry.IsDir() || isLegacyProviderBookkeepingDir(entry.Name()) {
+			continue
+		}
+		child, err := s.loadUnlocked(entry.Name())
+		if err != nil {
+			return nil, fmt.Errorf("classifying feature record %q during relationship scan: %w", entry.Name(), err)
+		}
+		if child.Parent == nil || child.Parent.ParentID == child.ID {
+			continue
+		}
+		if err := validateChildRelationship(child); err != nil {
+			return nil, err
+		}
+		children := result[child.Parent.ParentID]
+		if children == nil {
+			children = &RelationshipChildren{}
+			result[child.Parent.ParentID] = children
+		}
+		if child.IsActiveChild() {
+			if children.Active != nil {
+				return nil, &ChildRelationshipError{
+					ChildID: child.ID,
+					Reason:  fmt.Sprintf("parent %s has multiple active children %s and %s", child.Parent.ParentID, children.Active.ID, child.ID),
+				}
+			}
+			children.Active = child
+			continue
+		}
+		children.Closed = append(children.Closed, child)
+	}
+	for _, children := range result {
+		sortClosedChildren(children.Closed)
+	}
 	return result, nil
 }
 

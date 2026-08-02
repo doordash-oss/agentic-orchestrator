@@ -29,6 +29,8 @@ import (
 	"strings"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/doordash-oss/agentic-orchestrator/internal/permission"
 )
 
 // maxSandboxGrantsPerItem bounds the grant-and-retry loop for one item.
@@ -119,26 +121,27 @@ func writeSandboxGrantsFile(path string, file sandboxGrantsFile) error {
 
 // protectedHomeComponents are top-level home entries that hold credentials,
 // keys, or harness state. A denied write there is the sandbox doing its job;
-// it gates to the user instead of self-expanding.
+// it gates to the user instead of self-expanding. The orchestrator state
+// parents (permission.StateParentComponents) are protected separately with a
+// worktrees carve-out.
 var protectedHomeComponents = map[string]bool{
-	".agentic-workflow": true,
-	".aws":              true,
-	".azure":            true,
-	".boto":             true,
-	".claude":           true,
-	".claude.json":      true,
-	".codex":            true,
-	".docker":           true,
-	".gemini":           true,
-	".git-credentials":  true,
-	".gitconfig":        true,
-	".gnupg":            true,
-	".kube":             true,
-	".netrc":            true,
-	".npmrc":            true,
-	".oci":              true,
-	".password-store":   true,
-	".ssh":              true,
+	".aws":             true,
+	".azure":           true,
+	".boto":            true,
+	".claude":          true,
+	".claude.json":     true,
+	".codex":           true,
+	".docker":          true,
+	".gemini":          true,
+	".git-credentials": true,
+	".gitconfig":       true,
+	".gnupg":           true,
+	".kube":            true,
+	".netrc":           true,
+	".npmrc":           true,
+	".oci":             true,
+	".password-store":  true,
+	".ssh":             true,
 }
 
 // protectedConfigChildren are ~/.config subtrees that hold credentials.
@@ -163,6 +166,17 @@ var grantableLibraryChildren = map[string]bool{
 
 var grantableTempRoots = []string{"/private/var/tmp", "/var/tmp", "/private/tmp", "/tmp"}
 
+// isStateParentHomeComponent reports whether a first-level home component is
+// an orchestrator state parent, using the guardrail's shared definition.
+func isStateParentHomeComponent(name string) bool {
+	for _, s := range permission.StateParentComponents {
+		if name == s {
+			return true
+		}
+	}
+	return false
+}
+
 // sandboxGrantRootForDeniedPath derives the minimal directory to open for a
 // write the OS denied, or reports the path non-grantable. Grantable roots:
 // non-protected dot-directories under home (per-app for ~/.config and
@@ -179,6 +193,14 @@ func sandboxGrantRootForDeniedPath(home, denied string) (string, bool) {
 		parts := strings.Split(strings.TrimPrefix(denied, home+string(filepath.Separator)), string(filepath.Separator))
 		first := parts[0]
 		switch {
+		case isStateParentHomeComponent(first):
+			// Feature checkouts live under <state parent>/worktrees/<feature>;
+			// grants there are per-feature. Everything else under a state
+			// parent (features/, config, tokens) is protected.
+			if len(parts) >= 3 && parts[1] == "worktrees" {
+				return filepath.Join(home, first, "worktrees", parts[2]), true
+			}
+			return "", false
 		case protectedHomeComponents[first]:
 			return "", false
 		case first == ".config":

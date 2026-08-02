@@ -22,6 +22,7 @@ import (
 	"testing"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"github.com/doordash-oss/agentic-orchestrator/internal/permission"
 )
 
 func TestSandboxGrantRootForDeniedPath(t *testing.T) {
@@ -36,6 +37,12 @@ func TestSandboxGrantRootForDeniedPath(t *testing.T) {
 		{name: "library file too shallow", denied: "/Users/tester/Library/somefile", want: ""},
 		{name: "ssh protected", denied: "/Users/tester/.ssh/known_hosts", want: ""},
 		{name: "agentic state protected", denied: "/Users/tester/.agentic-workflow/features/x", want: ""},
+		{name: "orchestrator state protected", denied: "/Users/tester/.agentic-orchestrator/features/x", want: ""},
+		{name: "orchestrator config protected", denied: "/Users/tester/.agentic-orchestrator/config.yaml", want: ""},
+		{name: "orchestrator worktree grantable", denied: "/Users/tester/.agentic-orchestrator/worktrees/feat-1/repo/file.go", want: "/Users/tester/.agentic-orchestrator/worktrees/feat-1"},
+		{name: "legacy worktree grantable", denied: "/Users/tester/.agentic-workflow/worktrees/feat-1/repo/file.go", want: "/Users/tester/.agentic-workflow/worktrees/feat-1"},
+		{name: "worktrees base too shallow", denied: "/Users/tester/.agentic-orchestrator/worktrees", want: ""},
+		{name: "worktree grant root is idempotent", denied: "/Users/tester/.agentic-orchestrator/worktrees/feat-1", want: "/Users/tester/.agentic-orchestrator/worktrees/feat-1"},
 		{name: "config app", denied: "/Users/tester/.config/Agentico/state.json", want: "/Users/tester/.config/Agentico"},
 		{name: "config gh protected", denied: "/Users/tester/.config/gh/hosts.yml", want: ""},
 		{name: "bazel tmp", denied: "/private/var/tmp/_bazel_tester/abc/def", want: "/private/var/tmp/_bazel_tester"},
@@ -53,6 +60,25 @@ func TestSandboxGrantRootForDeniedPath(t *testing.T) {
 				t.Fatalf("sandboxGrantRootForDeniedPath(%q) = (%q, %v), want %q", tc.denied, got, ok, tc.want)
 			}
 		})
+	}
+}
+
+// TestStateParentProtectionSharedWithGuardrail pins the shared state-parent
+// definition so the sandbox grant policy and the permission guardrail cannot
+// drift on which directories host the worktrees carve-out.
+func TestStateParentProtectionSharedWithGuardrail(t *testing.T) {
+	want := []string{".agentic-workflow", ".agentic-orchestrator"}
+	if !slices.Equal(permission.StateParentComponents, want) {
+		t.Fatalf("permission.StateParentComponents = %v, want %v", permission.StateParentComponents, want)
+	}
+	for _, parent := range want {
+		if got, ok := sandboxGrantRootForDeniedPath("/Users/tester", "/Users/tester/"+parent+"/features/x"); ok {
+			t.Fatalf("state parent %s should be protected, got grant root %q", parent, got)
+		}
+		wantRoot := "/Users/tester/" + parent + "/worktrees/feat-1"
+		if got, ok := sandboxGrantRootForDeniedPath("/Users/tester", wantRoot+"/repo/file.go"); !ok || got != wantRoot {
+			t.Fatalf("worktrees carve-out for %s = (%q, %v), want %q", parent, got, ok, wantRoot)
+		}
 	}
 }
 

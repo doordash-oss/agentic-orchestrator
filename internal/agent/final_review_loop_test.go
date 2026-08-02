@@ -1168,6 +1168,9 @@ func TestRunFeatureFinalReviewLoop_FrontendDesignAxisUsesLiveRunPosture(t *testi
 	requirePermissionDecision(t, designOpts.PermHandler, "Write", `{"file_path":"`+filepath.Join(f.Repos[0].Path, "main.go")+`"}`, "deny")
 }
 
+// writeFinalAxisFeedbackScript writes feedback via tmp+mv: the parallel axis
+// sessions all scan every axis dir, so a plain `cat > "$_fb"` can expose a
+// partially written file to a concurrent writer or the harness's parser.
 func writeFinalAxisFeedbackScript(artDir string, qaRequestsChangesFirstIteration bool) string {
 	qaChanges := "0"
 	if qaRequestsChangesFirstIteration {
@@ -1185,7 +1188,8 @@ func writeFinalAxisFeedbackScript(artDir string, qaRequestsChangesFirstIteration
     _verdict="CHANGES_REQUESTED"
     _findings="- **Critical**: feature fails launched smoke journey"
   fi
-  cat > "$_fb" << REVIEWEOF
+  _tmp="$_fb.tmp.$$"
+  cat > "$_tmp" << REVIEWEOF
 ## Findings
 $_findings
 
@@ -1195,6 +1199,7 @@ $_findings
 ## Verdict
 $_verdict
 REVIEWEOF
+  mv "$_tmp" "$_fb"
 done`, artDir, qaChanges)
 }
 

@@ -167,6 +167,59 @@ func TestGuardrailFastPath_ParserBoundary(t *testing.T) {
 	}
 }
 
+// TestGuardrailFastPath_StateParentWorktreesExemption covers the structural
+// carve-out for feature checkouts hosted inside the orchestrator state parent:
+// a state-parent component immediately followed by "worktrees" is not
+// sensitive, while every other child of the state parent stays protected.
+func TestGuardrailFastPath_StateParentWorktreesExemption(t *testing.T) {
+	root := t.TempDir()
+	for _, parent := range []string{".agentic-orchestrator", ".agentic-workflow"} {
+		for _, dir := range []string{
+			filepath.Join(root, parent, "worktrees", "feat-1", "repo"),
+			filepath.Join(root, parent, "features", "abc"),
+		} {
+			if err := os.MkdirAll(dir, 0o700); err != nil {
+				t.Fatalf("mkdir %s: %v", dir, err)
+			}
+		}
+	}
+
+	type testCase struct {
+		name    string
+		command string
+		want    bool
+	}
+	var tests []testCase
+	for _, parent := range []string{".agentic-orchestrator", ".agentic-workflow"} {
+		repo := filepath.Join(root, parent, "worktrees", "feat-1", "repo")
+		tests = append(tests,
+			testCase{parent + "_cd_worktree_checkout", "cd " + repo + " && go test ./...", true},
+			testCase{parent + "_status_worktree_file", "git status " + filepath.Join(repo, "file.go"), true},
+			testCase{parent + "_config_denied", "git status " + filepath.Join(root, parent, "config.yaml"), false},
+			testCase{parent + "_feature_state_denied", "cd " + filepath.Join(root, parent, "features", "abc") + " && go test ./...", false},
+			testCase{parent + "_auth_token_denied", "git status " + filepath.Join(root, parent, ".agentico-server-token"), false},
+			testCase{parent + "_provider_state_denied", "git status " + filepath.Join(root, parent, "provider-state", "state.json"), false},
+			testCase{parent + "_bare_state_parent_denied", "git status " + filepath.Join(root, parent), false},
+		)
+	}
+	tests = append(tests,
+		// The exemption is specific to the state parents: a worktrees child
+		// does not launder other sensitive components.
+		testCase{"ssh_worktrees_child_denied", "git status " + filepath.Join(root, ".ssh", "worktrees", "x"), false},
+		// Sensitive components deeper inside a checkout stay protected.
+		testCase{"sensitive_inside_checkout_denied", "git status " + filepath.Join(root, ".agentic-orchestrator", "worktrees", "feat-1", "repo", ".env"), false},
+	)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := permission.GuardrailFastPath(tt.command, root, []string{root})
+			if got != tt.want {
+				t.Errorf("GuardrailFastPath(%q) = %v, want %v", tt.command, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestGuardrailFastPath_ProcessDiagnostics(t *testing.T) {
 	t.Parallel()
 

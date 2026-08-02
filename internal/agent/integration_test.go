@@ -462,20 +462,27 @@ echo "iteration $ITER" >> "$PROGRESS_FILE"
 `+testutil.JSONLSuccess+`
 `)
 
+	// The parallel axis sessions each run this script and each write feedback
+	// for every axis dir they see, so feedback writes go through tmp+mv (a
+	// plain `cat >` exposes partial files to concurrent writers and the
+	// harness's parser). The prompt wait is a bounded poll for the harness's
+	// review-prompt.md artifacts, sized generously for -race/loaded hosts.
 	reviewScript := testutil.WriteScript(t, scriptsDir, "review.sh", `
 for _d in "`+artifactDir+`"/iteration-*; do :; done
 `+testutil.JSONLInit+`
+for _try in $(seq 1 500); do
+  _count=$(find "$_d/review" -path '*/review-prompt.md' -type f 2>/dev/null | wc -l | tr -d ' ')
+  [ "${_count:-0}" -ge 3 ] && break
+  sleep 0.02
+done
 if [ "$(basename "$_d")" = "iteration-01" ]; then
-  for _try in $(seq 1 50); do
-    _count=$(find "$_d/review" -path '*/review-prompt.md' -type f 2>/dev/null | wc -l | tr -d ' ')
-    [ "${_count:-0}" -ge 3 ] && break
-    sleep 0.02
-  done
   while IFS= read -r _prompt; do
     _dir=$(dirname "$_prompt")
+    _fb="$_dir/review-feedback.md"
+    [ -f "$_fb" ] && continue
     case "$_dir" in
       *craft)
-        cat > "$_dir/review-feedback.md" <<'REVIEWEOF'
+        cat > "$_fb.tmp.$$" <<'REVIEWEOF'
 ## Findings
 - (none)
 
@@ -485,12 +492,13 @@ if [ "$(basename "$_d")" = "iteration-01" ]; then
 ## Verdict
 APPROVED
 REVIEWEOF
+        mv "$_fb.tmp.$$" "$_fb"
         ;;
       *functionality-evidence)
         continue
         ;;
       *cleanliness)
-        cat > "$_dir/review-feedback.md" <<'REVIEWEOF'
+        cat > "$_fb.tmp.$$" <<'REVIEWEOF'
 ## Findings
 - (none)
 
@@ -500,18 +508,16 @@ REVIEWEOF
 ## Verdict
 APPROVED
 REVIEWEOF
+        mv "$_fb.tmp.$$" "$_fb"
         ;;
     esac
   done < <(find "$_d/review" -path '*/review-prompt.md' -type f | sort)
 else
-  for _try in $(seq 1 50); do
-    _count=$(find "$_d/review" -path '*/review-prompt.md' -type f 2>/dev/null | wc -l | tr -d ' ')
-    [ "${_count:-0}" -ge 3 ] && break
-    sleep 0.02
-  done
   while IFS= read -r _prompt; do
     _dir=$(dirname "$_prompt")
-    cat > "$_dir/review-feedback.md" <<'REVIEWEOF'
+    _fb="$_dir/review-feedback.md"
+    [ -f "$_fb" ] && continue
+    cat > "$_fb.tmp.$$" <<'REVIEWEOF'
 ## Findings
 - (none)
 
@@ -521,6 +527,7 @@ else
 ## Verdict
 APPROVED
 REVIEWEOF
+    mv "$_fb.tmp.$$" "$_fb"
   done < <(find "$_d/review" -path '*/review-prompt.md' -type f | sort)
 fi
 `+testutil.JSONLSuccess+`

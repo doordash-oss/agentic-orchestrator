@@ -354,6 +354,52 @@ func TestClosedChildSurfacesPreservedDiffSummary(t *testing.T) {
 	_ = active
 }
 
+// TestClosedChildDiffSummaryBoundedInResponse proves an oversized persisted
+// diff summary (a pre-fix record holding a raw multi-megabyte diff) can no
+// longer inflate the feature-detail response: the DTO value is capped with a
+// truncation marker.
+func TestClosedChildDiffSummaryBoundedInResponse(t *testing.T) {
+	t.Parallel()
+
+	store, parent := seedReadFeature(t)
+	closedAt := time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC)
+	hugeDiff := "Repository: " + repoNameSelf + "\n" +
+		strings.Repeat("+a persisted raw diff line from before the bound existed\n", (feature.DiffSummaryBudget*4)/57)
+	closed := &feature.Feature{
+		ID: parent.ID + "-closed-huge", Name: "Closed with huge diff", Slug: "closed-huge",
+		Status: feature.StatusReviewPassed, CurrentPhase: feature.PhaseImplement,
+		Created:   time.Date(2026, 7, 26, 9, 0, 0, 0, time.UTC),
+		Repos:     []feature.FeatureRepo{{Name: repoNameSelf}},
+		ActiveRun: 1, RunCount: 1, SchemaVersion: feature.SchemaVersionCurrent,
+		Parent: &feature.ChildRelationship{
+			ParentID: parent.ID, Kind: feature.ChildKindRefactor,
+			CloseOutcome: feature.ChildCloseOutcomeCompleted, ClosedAt: &closedAt,
+			DiffSummary: hugeDiff,
+		},
+	}
+	closed.SetRun(&feature.Run{RunNumber: 1, Setup: &feature.SetupState{Status: feature.SetupStatusDone}})
+	if err := store.Save(closed); err != nil {
+		t.Fatalf("Save(closed) error = %v", err)
+	}
+
+	handler := NewHandler(baseReadHandlerOptions(store))
+	detail := getJSONMap(t, handler, "/api/v1/features/"+parent.ID)[entityFeature].(map[string]any)
+	history := detail["child_history"].([]any)
+	var got string
+	for _, raw := range history {
+		item := raw.(map[string]any)
+		if item["id"] == closed.ID {
+			got = item["diff_summary"].(string)
+		}
+	}
+	if got == "" || len(got) > feature.DiffSummaryBudget {
+		t.Fatalf("diff_summary length = %d, want non-empty and <= %d", len(got), feature.DiffSummaryBudget)
+	}
+	if !strings.HasSuffix(got, " bytes omitted]") {
+		t.Fatalf("diff_summary missing truncation marker, tail = %q", got[len(got)-120:])
+	}
+}
+
 func TestParentDeleteRemainsEnabledDuringActiveRelationship(t *testing.T) {
 	t.Parallel()
 

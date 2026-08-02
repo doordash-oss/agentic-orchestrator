@@ -1549,6 +1549,18 @@ var backgroundTaskPollInterval = 2 * time.Second
 // continuation.
 var backgroundTaskQuietGrace = 15 * time.Second
 
+// backgroundTaskStallGrace is how long live background tasks may stay silent
+// (no stdout, which carries all task activity) after the root outcome is
+// already present before the waiter stops the session — killing runaway
+// monitors with the process group — and commits the outcome. Var for tests.
+var backgroundTaskStallGrace = 10 * time.Minute
+
+// phaseOutcomeReclassifyInterval paces the fallback re-classification tick:
+// a session whose terminal Result status was coalesced away or mis-delivered
+// would otherwise wait forever, since Done never fires for multi-turn
+// keep-alive sessions. Var for tests.
+var phaseOutcomeReclassifyInterval = 45 * time.Second
+
 // liveBackgroundTaskCounter is the optional session capability that reports
 // running background subagents. Provider sessions that do not track them
 // (or test doubles that predate the capability) simply never defer.
@@ -1882,7 +1894,52 @@ func WaitForPhaseOutcome(sess ports.SessionView, opts PhaseOutcomeWaitOptions) P
 	bgTicker := time.NewTicker(backgroundTaskPollInterval)
 	defer bgTicker.Stop()
 
+	// Fallback wake-up: Done never fires for multi-turn keep-alive sessions
+	// and a StatusCh delivery can be lost, so re-derive the status from the
+	// terminal Result. classifiedResult keeps the tick idempotent with the
+	// normal paths — a result handleStatus already saw is never re-classified,
+	// so no commit or nudge is ever duplicated.
+	reclassifyTicker := time.NewTicker(phaseOutcomeReclassifyInterval)
+	defer reclassifyTicker.Stop()
+	var classifiedResult *llm.ResultMessage
+
+	commitIntent := func(intent llm.CompletionIntent, sessionDone bool) (PhaseOutcomeWaitResult, bool) {
+		if opts.CommitOutcome == nil {
+			violations := []ProtocolViolation{{
+				Artifact: "agentico-outcome",
+				Reason:   "harness completion committer is not configured",
+			}}
+			_ = sess.Stop()
+			return PhaseOutcomeWaitResult{
+				Status:             agentStatusProtocolViolation,
+				Handoff:            handoff,
+				ProtocolViolations: violations,
+			}, true
+		}
+		violations, err := opts.CommitOutcome(intent)
+		if err != nil {
+			_ = sess.Stop()
+			return PhaseOutcomeWaitResult{Status: agentStatusFailed, Handoff: handoff, Err: err}, true
+		}
+		if len(violations) == 0 {
+			_ = sess.Stop()
+			return PhaseOutcomeWaitResult{Status: agentStatusSuccess, Handoff: handoff}, true
+		}
+		if !sessionDone &&
+			sendCompletionNudge(sess, &finishOrViolateNudges,
+				formatCommitViolationNudge(violations, opts.RetryOutcomeAllowed)) {
+			return PhaseOutcomeWaitResult{}, false
+		}
+		_ = sess.Stop()
+		return PhaseOutcomeWaitResult{
+			Status:             agentStatusProtocolViolation,
+			Handoff:            handoff,
+			ProtocolViolations: violations,
+		}, true
+	}
+
 	handleStatus := func(status string, sessionDone bool) (PhaseOutcomeWaitResult, bool) {
+		classifiedResult = sess.Cost()
 		if status == agentStatusAPIError {
 			if sessionDone {
 				return PhaseOutcomeWaitResult{Status: agentStatusFailed, Handoff: handoff}, true
@@ -1948,38 +2005,7 @@ func WaitForPhaseOutcome(sess ports.SessionView, opts PhaseOutcomeWaitOptions) P
 		case llm.TurnCommitSuccess, llm.TurnCommitRetry:
 			awaitingBackgroundTasks = false
 			autoResumeAttempts = 0
-			if opts.CommitOutcome == nil {
-				violations := []ProtocolViolation{{
-					Artifact: "agentico-outcome",
-					Reason:   "harness completion committer is not configured",
-				}}
-				_ = sess.Stop()
-				return PhaseOutcomeWaitResult{
-					Status:             agentStatusProtocolViolation,
-					Handoff:            handoff,
-					ProtocolViolations: violations,
-				}, true
-			}
-			violations, err := opts.CommitOutcome(intent)
-			if err != nil {
-				_ = sess.Stop()
-				return PhaseOutcomeWaitResult{Status: agentStatusFailed, Handoff: handoff, Err: err}, true
-			}
-			if len(violations) == 0 {
-				_ = sess.Stop()
-				return PhaseOutcomeWaitResult{Status: agentStatusSuccess, Handoff: handoff}, true
-			}
-			if !sessionDone &&
-				sendCompletionNudge(sess, &finishOrViolateNudges,
-					formatCommitViolationNudge(violations, opts.RetryOutcomeAllowed)) {
-				return PhaseOutcomeWaitResult{}, false
-			}
-			_ = sess.Stop()
-			return PhaseOutcomeWaitResult{
-				Status:             agentStatusProtocolViolation,
-				Handoff:            handoff,
-				ProtocolViolations: violations,
-			}, true
+			return commitIntent(intent, sessionDone)
 
 		case llm.TurnProtocolViolation:
 			awaitingBackgroundTasks = false
@@ -2053,6 +2079,19 @@ func WaitForPhaseOutcome(sess ports.SessionView, opts PhaseOutcomeWaitOptions) P
 				continue
 			}
 			if liveBackgroundTasks(sess) > 0 {
+				// Task ceiling: a present root outcome plus tasks that
+				// produced nothing (all task activity arrives via stdout)
+				// for the stall grace is a runaway monitor, not pending
+				// work. Stop kills the process group, taking the monitors
+				// with it; the outcome is committed as normal.
+				intent := rootCompletionIntent(sess)
+				if intent.Found && !hasPendingRootQuestion(sess) &&
+					time.Since(sess.LastStdoutAt()) >= backgroundTaskStallGrace {
+					_ = sess.Stop()
+					if result, done := commitIntent(intent, true); done {
+						return result
+					}
+				}
 				continue
 			}
 			quiet := time.Since(sess.LastStdoutAt())
@@ -2078,6 +2117,15 @@ func WaitForPhaseOutcome(sess ports.SessionView, opts PhaseOutcomeWaitOptions) P
 					Artifact: "agentico-outcome",
 					Reason:   "delegated tasks completed but the root agent did not resume with a completion outcome",
 				}},
+			}
+
+		case <-reclassifyTicker.C:
+			cost := sess.Cost()
+			if cost == nil || cost == classifiedResult {
+				continue
+			}
+			if result, done := handleStatus(statusFromResult(cost), false); done {
+				return result
 			}
 
 		case <-doneCh:

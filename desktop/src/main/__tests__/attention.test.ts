@@ -36,6 +36,133 @@ describe('AttentionService mutations', () => {
   });
 });
 
+describe('AttentionService waiting sessions', () => {
+  const featuresBody = {
+    api_version: 'v1',
+    features: [
+      {
+        id: 'feature-1',
+        name: 'Knowledge base build',
+        slug: 'knowledge-base-build',
+        status: 'BuildingKB',
+        current_phase: 'Knowledge Base',
+        repos: ['repo-a'],
+        created_at: '2026-07-16T10:00:00Z',
+        active_run: 1,
+        run_count: 1,
+        progress: {},
+      },
+    ],
+  };
+  const sessionsBody = {
+    api_version: 'v1',
+    sessions: [
+      {
+        id: 'kb1234567890abcdef',
+        feature_id: 'feature-1',
+        run_number: 1,
+        phase: 'Knowledge Base',
+        kind: 'phase',
+        status: 'waiting',
+        turn_state: 'waiting_input',
+        started_at: '2026-07-16T10:05:00Z',
+        task_activities: [
+          {
+            task_id: 'task-1',
+            state: 'running',
+            description: 'Indexing repository layout',
+            started_at: '2026-07-16T10:06:00Z',
+            updated_at: '2026-07-16T10:07:00Z',
+          },
+          {
+            task_id: 'task-2',
+            state: 'completed',
+            description: 'Collecting build commands',
+            started_at: '2026-07-16T10:05:30Z',
+            updated_at: '2026-07-16T10:06:30Z',
+          },
+        ],
+        running_task_count: 1,
+        usage: {},
+      },
+    ],
+  };
+
+  function transport(question: string, sessions: unknown): ServerTransport {
+    return {
+      apiRequest: (path) => {
+        if (path === '/api/v1/sessions' && sessions instanceof Error) {
+          return Promise.reject(sessions);
+        }
+        const body =
+          path === '/api/v1/prompts'
+            ? {
+                api_version: 'v1',
+                ask_user_questions: [],
+                help_queue: [
+                  {
+                    feature_id: 'feature-1',
+                    question,
+                    pending: true,
+                    time: '2026-07-16T10:05:00Z',
+                  },
+                ],
+                need_user_inputs: [],
+              }
+            : path === '/api/v1/permissions'
+              ? { api_version: 'v1', requests: [] }
+              : path === '/api/v1/sessions'
+                ? sessions
+                : featuresBody;
+        return Promise.resolve({ status: 200, body });
+      },
+    };
+  }
+
+  it('classifies the synthetic waiting prompt and enriches session provenance', async () => {
+    const service = new AttentionService(transport('Agent has a question', sessionsBody));
+
+    const snapshot = await service.getSnapshot();
+    expect(snapshot.items).toEqual([
+      expect.objectContaining({
+        kind: 'help',
+        featureId: 'feature-1',
+        sessionId: 'kb1234567890abcdef',
+        phase: 'Knowledge Base',
+        waitingKind: 'input',
+        runningTasks: ['Indexing repository layout'],
+      }),
+    ]);
+  });
+
+  it('keeps real help prompts framed as questions while still naming the session', async () => {
+    const service = new AttentionService(transport('Which deploy target?', sessionsBody));
+
+    const snapshot = await service.getSnapshot();
+    expect(snapshot.items).toEqual([
+      expect.objectContaining({
+        kind: 'help',
+        prompt: 'Which deploy target?',
+        sessionId: 'kb1234567890abcdef',
+        phase: 'Knowledge Base',
+        waitingKind: 'question',
+      }),
+    ]);
+  });
+
+  it('still lists waiting help when the sessions endpoint fails', async () => {
+    const service = new AttentionService(
+      transport('Agent has a question', new Error('sessions unavailable')),
+    );
+
+    const snapshot = await service.getSnapshot();
+    expect(snapshot.items).toEqual([
+      expect.objectContaining({ kind: 'help', featureId: 'feature-1', waitingKind: 'input' }),
+    ]);
+    expect(snapshot.items[0]).not.toHaveProperty('sessionId');
+  });
+});
+
 describe('AttentionService review items', () => {
   it('normalizes supported actions and keeps all-unknown actions on generic fallback', async () => {
     const service = new AttentionService({

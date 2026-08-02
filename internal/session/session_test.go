@@ -1560,6 +1560,28 @@ echo '{"type":"result","subtype":"success","session_id":"s2","total_cost_usd":0.
 	}
 }
 
+// TestSession_StatusChCoalescesToLatestResult proves that when two results
+// arrive before the single consumer reads statusCh, the stale status is
+// evicted and the latest one is delivered — never silently dropped.
+func TestSession_StatusChCoalescesToLatestResult(t *testing.T) {
+	t.Parallel()
+	s := NewSession("coalesce-test", "feat-1", feature.PhaseImplement)
+	runSessionWithStdoutLines(t, s, []string{
+		`{"type":"system","subtype":"init","session_id":"s1","model":"test"}`,
+		`{"type":"result","subtype":"error","error":"rate limited"}`,
+		`{"type":"result","subtype":"success","session_id":"s1","total_cost_usd":0.01}`,
+	}, nil)
+
+	select {
+	case status := <-s.statusCh:
+		if status != "SUCCESS" {
+			t.Errorf("statusCh = %q, want latest status SUCCESS", status)
+		}
+	default:
+		t.Error("statusCh empty, expected coalesced SUCCESS")
+	}
+}
+
 func TestSession_SIGTERMEscalation(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")

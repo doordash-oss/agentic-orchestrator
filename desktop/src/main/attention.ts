@@ -2,7 +2,9 @@ import {
   FeatureListResponseSchema,
   PermissionSnapshotResponseSchema,
   PromptSnapshotResponseSchema,
+  SessionListResponseSchema,
   validateWithSchema,
+  type ServerSessionSummary,
 } from '../shared/api/parse';
 import {
   AskUserAnswerRequestSchema,
@@ -39,6 +41,34 @@ const REMEDIES = {
 };
 const fallbackTime = '1970-01-01T00:00:00.000Z';
 
+// Mirrors the server's synthetic help text (internal/server/read_model.go,
+// agentQuestionPrompt): a WaitingHelp session with no readable question.
+const syntheticHelpPrompt = 'Agent has a question';
+
+const WAITING_TURN_STATES = new Set(['waiting_input', 'waiting_question']);
+
+function waitingSessionFor(
+  sessions: readonly ServerSessionSummary[],
+  help: { feature_id: string; session_id?: string },
+): ServerSessionSummary | undefined {
+  return (
+    sessions.find((session) => session.id === help.session_id) ??
+    sessions.find(
+      (session) =>
+        session.feature_id === help.feature_id &&
+        session.turn_state !== undefined &&
+        WAITING_TURN_STATES.has(session.turn_state),
+    )
+  );
+}
+
+function runningTaskDescriptions(session: ServerSessionSummary | undefined): string[] {
+  return (session?.task_activities ?? [])
+    .filter((task) => task.state === 'running')
+    .map((task) => task.description ?? '')
+    .filter((description) => description !== '');
+}
+
 function supportedVerificationActions(actions: string[]): VerificationGateAction[] {
   const supported = new Set<VerificationGateAction>();
   for (const action of actions) {
@@ -53,11 +83,14 @@ export class AttentionService {
   constructor(private readonly transport: ServerTransport) {}
 
   async getSnapshot(): Promise<AttentionSnapshot> {
-    const [promptsRaw, permissionsRaw, featuresRaw] = await Promise.all([
+    const [promptsRaw, permissionsRaw, featuresRaw, sessionsRaw] = await Promise.all([
       this.get('/api/v1/prompts', PromptSnapshotResponseSchema),
       this.get('/api/v1/permissions', PermissionSnapshotResponseSchema),
       this.get('/api/v1/features', FeatureListResponseSchema),
+      // Session provenance is best-effort: the inbox must survive without it.
+      this.get('/api/v1/sessions', SessionListResponseSchema).catch(() => null),
     ]);
+    const sessions = sessionsRaw?.sessions ?? [];
     const featureIDs = new Set(featuresRaw.features.map((feature) => feature.id));
     // Refactor passes never appear as top-level features, but their sessions
     // raise prompts under the child's feature id. Route them to the parent
@@ -141,18 +174,25 @@ export class AttentionService {
         )
         .map((help) => {
           const chat = help.feature_id === CHAT_SESSION_ID;
+          const session = chat ? undefined : waitingSessionFor(sessions, help);
+          const sessionId = chat ? CHAT_SESSION_ID : (help.session_id ?? session?.id);
+          const runningTasks = runningTaskDescriptions(session);
           return {
             kind: 'help' as const,
             id: `${help.feature_id}:${help.session_id ?? ''}`,
             ...(chat ? {} : { featureId: help.feature_id }),
             ...(chat ? {} : parentOf(help.feature_id)),
-            ...(chat
-              ? { sessionId: CHAT_SESSION_ID }
-              : help.session_id === undefined
-                ? {}
-                : { sessionId: help.session_id }),
+            ...(sessionId === undefined ? {} : { sessionId }),
+            ...(session?.phase === undefined ? {} : { phase: session.phase }),
             waitingSince: help.time ?? fallbackTime,
             prompt: help.question,
+            // The synthetic placeholder means no readable question exists:
+            // the session finished its turn and the runtime is coordinating.
+            waitingKind:
+              help.question.trim() === '' || help.question === syntheticHelpPrompt
+                ? ('input' as const)
+                : ('question' as const),
+            ...(runningTasks.length === 0 ? {} : { runningTasks }),
           };
         }),
       ...promptsRaw.need_user_inputs

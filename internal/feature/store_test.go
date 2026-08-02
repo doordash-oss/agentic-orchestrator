@@ -757,6 +757,42 @@ func TestStoreSetClosedChildDiffSummary(t *testing.T) {
 	}
 }
 
+// TestStoreSetClosedChildDiffSummaryBoundsOversizedDiff proves the store
+// never persists a diff summary beyond DiffSummaryBudget, even when handed a
+// raw multi-megabyte diff.
+func TestStoreSetClosedChildDiffSummaryBoundsOversizedDiff(t *testing.T) {
+	t.Parallel()
+
+	store := NewStore(t.TempDir())
+	closedAt := time.Date(2026, time.July, 29, 12, 0, 0, 0, time.UTC)
+	child := &Feature{
+		ID: "child-huge-diff", Name: "huge diff child", Status: StatusReviewPassed, SchemaVersion: SchemaVersionCurrent,
+		Repos: []FeatureRepo{{Name: "repo"}},
+		Parent: &ChildRelationship{
+			ParentID: "parent", Kind: ChildKindRefactor,
+			CloseOutcome: ChildCloseOutcomeCompleted, ClosedAt: &closedAt,
+		},
+	}
+	if err := store.Save(child); err != nil {
+		t.Fatalf("Save(%q): %v", child.ID, err)
+	}
+
+	huge := strings.Repeat("+a raw diff line that repeats forever\n", (DiffSummaryBudget*4)/38)
+	if err := store.SetClosedChildDiffSummary(child.ID, huge); err != nil {
+		t.Fatalf("SetClosedChildDiffSummary(huge): %v", err)
+	}
+	got, err := store.Load(child.ID)
+	if err != nil {
+		t.Fatalf("Load(%q): %v", child.ID, err)
+	}
+	if len(got.Parent.DiffSummary) > DiffSummaryBudget {
+		t.Fatalf("persisted DiffSummary length = %d, want <= %d", len(got.Parent.DiffSummary), DiffSummaryBudget)
+	}
+	if !strings.HasSuffix(got.Parent.DiffSummary, " bytes omitted]") {
+		t.Fatalf("persisted DiffSummary missing truncation marker, tail = %q", got.Parent.DiffSummary[len(got.Parent.DiffSummary)-120:])
+	}
+}
+
 func TestStoreModifyGuardedRejectsClosedChildBeforeCallbacks(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: per-test temp dirs isolate persisted relationship state.
@@ -1942,5 +1978,58 @@ artifacts: {}
 	}
 	if strings.Contains(savedStr, "active_cycle") {
 		t.Errorf("saved run.yaml still contains 'active_cycle'; dropped cycle state should not be re-emitted:\n%s", savedStr)
+	}
+}
+
+func TestStoreRelationshipScansSkipLegacyRecords(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: per-test temp dirs isolate persisted relationship state.
+
+	store := NewStore(t.TempDir())
+	base := time.Date(2026, time.August, 2, 12, 0, 0, 0, time.UTC)
+	for _, f := range []*Feature{
+		{ID: "parent-a", Name: "parent a", SchemaVersion: SchemaVersionCurrent},
+		{
+			ID:            "a-closed",
+			Created:       base,
+			SchemaVersion: SchemaVersionCurrent,
+			Parent: &ChildRelationship{
+				ParentID:     "parent-a",
+				Kind:         ChildKindRefactor,
+				CloseOutcome: ChildCloseOutcomeCompleted,
+				ClosedAt:     timePointer(base.Add(time.Hour)),
+			},
+		},
+	} {
+		if err := store.Save(f); err != nil {
+			t.Fatalf("save %s: %v", f.ID, err)
+		}
+	}
+	// An explicitly legacy-versioned record must degrade to a skip: it
+	// predates child relationships, and one stale record must not take down
+	// every relationship read. (Corrupt records still fail closed.)
+	legacyDir := filepath.Join(store.BaseDir, "legacy-record")
+	if err := os.MkdirAll(legacyDir, 0o755); err != nil {
+		t.Fatalf("mkdir legacy: %v", err)
+	}
+	legacy := "id: legacy-record\nname: legacy\nschema_version: 5\n"
+	if err := os.WriteFile(filepath.Join(legacyDir, "feature.yaml"), []byte(legacy), 0o644); err != nil {
+		t.Fatalf("write legacy: %v", err)
+	}
+
+	all, err := store.AllRelationshipChildren()
+	if err != nil {
+		t.Fatalf("AllRelationshipChildren() error = %v, want legacy record skipped", err)
+	}
+	if all["parent-a"] == nil || len(all["parent-a"].Closed) != 1 {
+		t.Fatalf("AllRelationshipChildren()[parent-a] = %#v, want one closed child", all["parent-a"])
+	}
+
+	perParent, err := store.RelationshipChildren("parent-a")
+	if err != nil {
+		t.Fatalf("RelationshipChildren() error = %v, want legacy record skipped", err)
+	}
+	if len(perParent.Closed) != 1 {
+		t.Fatalf("RelationshipChildren().Closed = %d entries, want 1", len(perParent.Closed))
 	}
 }

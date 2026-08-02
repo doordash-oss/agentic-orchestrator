@@ -10,6 +10,7 @@ import {
   ATTENTION_ALREADY_RESOLVED_NOTICE,
   ATTENTION_SUBMITTED_NOTICE,
   attentionOwnerFeatureId,
+  CHAT_SESSION_ID,
   type AttentionActionResult,
   type AttentionItem,
   type VerificationGateAction,
@@ -559,13 +560,32 @@ export function AttentionDetail({
       </div>
     );
 
-  if (item.kind === 'help')
+  if (item.kind === 'help') {
+    // A harness wait is not a question: the turn ended and the runtime is
+    // coordinating. The reply box stays — a message is a legitimate unblock.
+    const waiting = item.waitingKind === 'input';
     return (
       <div className="attention-detail">
         <AttentionContextMeta item={item} />
-        <p className="attention-detail__summary">{item.prompt}</p>
+        {waiting ? (
+          <>
+            <p className="attention-detail__summary">Agent is waiting</p>
+            <p className="attention-detail__hint">
+              The agent finished its turn; the runtime is coordinating next steps.
+            </p>
+            {item.runningTasks !== undefined && item.runningTasks.length > 0 ? (
+              <ul className="attention-detail__tasks" aria-label="Running background tasks">
+                {item.runningTasks.map((task) => (
+                  <li key={task}>{task}</li>
+                ))}
+              </ul>
+            ) : null}
+          </>
+        ) : (
+          <p className="attention-detail__summary">{item.prompt}</p>
+        )}
         <textarea
-          aria-label="Help reply"
+          aria-label={waiting ? 'Message to the agent' : 'Help reply'}
           value={helpText}
           onChange={(event) =>
             setDrafts((current) => ({
@@ -588,12 +608,13 @@ export function AttentionDetail({
               )
             }
           >
-            Send reply
+            {waiting ? 'Send message' : 'Send reply'}
           </button>
           <AttentionJumpAction item={item} onJump={onJump} />
         </div>
       </div>
     );
+  }
 
   if (item.kind === 'gate') {
     const gateDraft = gateDraftFor(item, drafts.gates[detailKey]);
@@ -752,15 +773,20 @@ export function AttentionDetail({
   throw new Error(`Unhandled attention item: ${JSON.stringify(exhaustive)}`);
 }
 
+/** Provenance for every blocking banner: session, phase, and since-when. */
 function AttentionContextMeta({ item }: { item: AttentionItem }) {
+  if (item.kind === 'recovery') return null;
   const entries: string[] = [];
+  if ('sessionId' in item && item.sessionId !== undefined && item.sessionId !== CHAT_SESSION_ID) {
+    entries.push(`session ${shortSessionId(item.sessionId)}`);
+  }
   if ('phase' in item && item.phase !== undefined) entries.push(item.phase);
   if (item.kind === 'gate') {
     if (item.iteration !== undefined) entries.push(`iteration ${item.iteration}`);
     if (item.repoName !== undefined) entries.push(item.repoName);
     if (item.cycleType !== undefined) entries.push(item.cycleType);
   }
-  if (entries.length === 0) return null;
+  entries.push(formatWaitingSince(item.waitingSince));
   return (
     <div className="attention-detail__meta" aria-label="Attention context">
       {entries.map((entry, index) => (
@@ -812,7 +838,7 @@ function attentionKindLabel(item: AttentionItem): string {
     case 'gate':
       return 'Input gate';
     case 'help':
-      return 'Help request';
+      return item.waitingKind === 'input' ? 'Agent waiting' : 'Help request';
     case 'permission':
       return 'Permission';
     case 'review':
@@ -824,6 +850,10 @@ function attentionKindLabel(item: AttentionItem): string {
       return exhaustive;
     }
   }
+}
+
+function shortSessionId(id: string): string {
+  return id.length > 9 ? `${id.slice(0, 8)}…` : id;
 }
 
 function formatWaitingSince(value: string): string {

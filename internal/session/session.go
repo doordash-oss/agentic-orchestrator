@@ -1197,10 +1197,23 @@ func (s *Session) readMessages(onMessage func(llm.SDKMessage)) {
 					notifiedExternal = true
 				}
 
+				// Coalesce instead of dropping when the size-1 buffer is
+				// full: evict the stale status so the latest always lands.
+				// Safe because this loop is the only producer, so the
+				// retried send cannot fill the freed slot; the read loop
+				// never blocks.
 				status := resultSubtypeToStatus(msg.Result)
-				select {
-				case s.statusCh <- status:
-				default:
+				for {
+					select {
+					case s.statusCh <- status:
+					default:
+						select {
+						case <-s.statusCh:
+						default:
+						}
+						continue
+					}
+					break
 				}
 			}
 

@@ -468,7 +468,9 @@ func relationshipChildDTO(child *feature.Feature) *RelationshipChild {
 	if child.Parent.CloseOutcome != "" {
 		dto.Outcome = RelationshipChildOutcome(child.Parent.CloseOutcome)
 		dto.ClosedAt = child.Parent.ClosedAt
-		dto.DiffSummary = child.Parent.DiffSummary
+		// Re-bound at read time: records persisted before the write-time
+		// bound existed may hold raw multi-megabyte diffs.
+		dto.DiffSummary = feature.BoundDiffSummary(child.Parent.DiffSummary)
 		dto.RelationshipState = child.Parent.CloseOutcome
 		switch child.Parent.CloseOutcome {
 		case feature.ChildCloseOutcomeCompleted:

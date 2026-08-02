@@ -3165,6 +3165,98 @@ func TestWaitForPhaseOutcome_RejectsProviderExitWithLiveDelegatedTasks(t *testin
 	}
 }
 
+func withPhaseOutcomeReclassifyInterval(t *testing.T, d time.Duration) {
+	t.Helper()
+	prev := phaseOutcomeReclassifyInterval
+	phaseOutcomeReclassifyInterval = d
+	t.Cleanup(func() { phaseOutcomeReclassifyInterval = prev })
+}
+
+func withBackgroundTaskStallGrace(t *testing.T, d time.Duration) {
+	t.Helper()
+	prev := backgroundTaskStallGrace
+	backgroundTaskStallGrace = d
+	t.Cleanup(func() { backgroundTaskStallGrace = prev })
+}
+
+// TestWaitForPhaseOutcome_ReclassifyTickRecoversDroppedSuccessStatus proves the
+// fallback tick classifies a terminal success Result whose SUCCESS status was
+// never delivered on StatusCh (and whose Done never fires), instead of parking
+// the phase in WaitingHelp forever.
+func TestWaitForPhaseOutcome_ReclassifyTickRecoversDroppedSuccessStatus(t *testing.T) {
+	withPhaseOutcomeReclassifyInterval(t, 5*time.Millisecond)
+
+	sess := newBgTaskSession()
+	sess.result = newEndedAfterTextResult()
+	sess.setRootIntent(validSuccessCompletionIntent())
+	// No StatusCh send and no Done close: the completion signal was lost.
+
+	var commits atomic.Int32
+	resultCh := make(chan PhaseOutcomeWaitResult, 1)
+	go func() {
+		resultCh <- WaitForPhaseOutcome(sess, PhaseOutcomeWaitOptions{
+			CommitOutcome: func(llm.CompletionIntent) ([]ProtocolViolation, error) {
+				commits.Add(1)
+				return nil, nil
+			},
+		})
+	}()
+
+	select {
+	case result := <-resultCh:
+		if result.Status != agentStatusSuccess || result.Err != nil || len(result.ProtocolViolations) != 0 {
+			t.Fatalf("WaitForPhaseOutcome() = %+v, want success", result)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("WaitForPhaseOutcome() did not recover the dropped SUCCESS status")
+	}
+	if got := commits.Load(); got != 1 {
+		t.Fatalf("commit calls = %d, want 1", got)
+	}
+}
+
+// TestWaitForPhaseOutcome_StopsRunawayTasksAndCommitsPresentOutcome proves that
+// when the root outcome is already present and only never-ending background
+// tasks keep the waiter alive past the stall grace, the waiter stops the
+// session and commits the outcome instead of deferring forever.
+func TestWaitForPhaseOutcome_StopsRunawayTasksAndCommitsPresentOutcome(t *testing.T) {
+	withBackgroundTaskPollInterval(t, 5*time.Millisecond)
+	withBackgroundTaskStallGrace(t, 20*time.Millisecond)
+
+	sess := newBgTaskSession()
+	sess.liveTasks.Store(1)
+	sess.result = newEndedAfterTextResult()
+	sess.setRootIntent(validSuccessCompletionIntent())
+	sess.lastStdoutNs.Store(time.Now().Add(-time.Hour).UnixNano())
+	sess.statusCh <- agentStatusSuccess
+
+	var commits atomic.Int32
+	resultCh := make(chan PhaseOutcomeWaitResult, 1)
+	go func() {
+		resultCh <- WaitForPhaseOutcome(sess, PhaseOutcomeWaitOptions{
+			CommitOutcome: func(llm.CompletionIntent) ([]ProtocolViolation, error) {
+				commits.Add(1)
+				return nil, nil
+			},
+		})
+	}()
+
+	select {
+	case result := <-resultCh:
+		if result.Status != agentStatusSuccess || result.Err != nil || len(result.ProtocolViolations) != 0 {
+			t.Fatalf("WaitForPhaseOutcome() = %+v, want success", result)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("WaitForPhaseOutcome() did not stop runaway background tasks")
+	}
+	if !sess.stopped.Load() {
+		t.Fatal("session was not stopped to kill runaway background tasks")
+	}
+	if got := commits.Load(); got != 1 {
+		t.Fatalf("commit calls = %d, want 1", got)
+	}
+}
+
 func TestRetryReviewFeedbackReminder(t *testing.T) {
 	dir := t.TempDir()
 	if got := retryReviewFeedbackReminder(dir, 0); got != "" {

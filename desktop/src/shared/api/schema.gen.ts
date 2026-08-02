@@ -1704,7 +1704,7 @@ export interface components {
             cleanup_warnings: components["schemas"]["RelationshipCleanupWarning"][];
             /** @description Setup failure message when the child's setup failed. */
             last_error?: string;
-            /** @description Preserved read-only diff summary captured at close time, before the child's disposable worktrees and ephemeral branches were removed. Empty when no diff was preserved. */
+            /** @description Preserved read-only diff summary captured at close time, before the child's disposable worktrees and ephemeral branches were removed. Bounded to 256 KiB: a per-file stat header followed by the diff body, truncated on a line boundary with a marker stating how many bytes were omitted. Empty when no diff was preserved. */
             diff_summary?: string;
         };
         FeatureSummary: {

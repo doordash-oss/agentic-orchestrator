@@ -95,7 +95,7 @@ function previewSummary(item: ActionableAttentionItem): string {
     case 'gate':
       return item.summary === undefined ? '' : ` · ${item.summary}`;
     case 'help':
-      return ' · Help request';
+      return item.waitingKind === 'input' ? ' · Agent is waiting' : ' · Help request';
     case 'review':
       return ` · ${item.reviewKind} review`;
     default: {

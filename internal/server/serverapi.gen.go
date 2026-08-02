@@ -1963,7 +1963,7 @@ type RelationshipChild struct {
 	ClosedAt        *time.Time                   `json:"closed_at,omitempty"`
 	Cost            Cost                         `json:"cost"`
 
-	// DiffSummary Preserved read-only diff summary captured at close time, before the child's disposable worktrees and ephemeral branches were removed. Empty when no diff was preserved.
+	// DiffSummary Preserved read-only diff summary captured at close time, before the child's disposable worktrees and ephemeral branches were removed. Bounded to 256 KiB: a per-file stat header followed by the diff body, truncated on a line boundary with a marker stating how many bytes were omitted. Empty when no diff was preserved.
 	DiffSummary string `json:"diff_summary,omitempty"`
 
 	// DisplayState Human-readable relationship state. Closed children use exactly "Closed — Completed" or "Closed — Discarded".

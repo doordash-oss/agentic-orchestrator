@@ -309,9 +309,18 @@ export function RefactorPassWorkspace({
               </button>
             </p>
           ) : state !== null && state.id !== 'working' ? (
-            <p className="refactor-pass__state" role="status" data-tone={state.tone}>
-              {state.sentence}
-            </p>
+            <>
+              <p className="refactor-pass__state" role="status" data-tone={state.tone}>
+                {state.sentence}
+              </p>
+              {state.problems !== undefined && state.problems.length > 0 ? (
+                <ul className="refactor-pass__warnings" aria-label="Integration diagnostics">
+                  {state.problems.map((problem) => (
+                    <li key={problem}>{problem}</li>
+                  ))}
+                </ul>
+              ) : null}
+            </>
           ) : null}
 
           {notice !== null ? (

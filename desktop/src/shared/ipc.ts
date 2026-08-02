@@ -1502,8 +1502,13 @@ export const AttentionHelpSchema = z.strictObject({
   /** Set when the prompt belongs to a refactor pass: the parent tab owns it. */
   parentFeatureId: FeatureIdSchema.optional(),
   sessionId: AttentionIDSchema.optional(),
+  phase: z.string().max(200).optional(),
   waitingSince: z.string().max(100),
   prompt: AttentionTextSchema,
+  /** 'input': the turn ended with no readable question — a harness wait, not a question. */
+  waitingKind: z.enum(['question', 'input']).optional(),
+  /** Descriptions of the session's still-running background tasks. */
+  runningTasks: z.array(z.string().max(500)).max(100).optional(),
 });
 export const VerificationGateActionSchema = z.enum(['WAIVE', 'RETRY_AFTER_AUTH']);
 export type VerificationGateAction = z.output<typeof VerificationGateActionSchema>;

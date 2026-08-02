@@ -21,6 +21,7 @@ package orchestrator
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -211,6 +212,55 @@ func TestCaptureChildDiffSummaryConcatenatesPerRepo(t *testing.T) {
 	got := o.captureChildDiffSummary(child)
 	if !strings.Contains(got, "Repository: repo-a\n") || !strings.Contains(got, "+one") {
 		t.Fatalf("captureChildDiffSummary = %q, want repo-a diff", got)
+	}
+}
+
+// TestPreserveChildDiffSummaryBoundsHugeDiff proves closure persists a
+// bounded stat-headed summary — never the raw multi-megabyte diff — so a
+// single huge child cannot bloat the feature record.
+func TestPreserveChildDiffSummaryBoundsHugeDiff(t *testing.T) {
+	t.Parallel()
+	repo := testutil.InitGitRepo(t)
+	base := childIntegrationGit(t, repo, "rev-parse", "HEAD")
+	var body strings.Builder
+	for i := 0; body.Len() <= feature.DiffSummaryBudget*4; i++ {
+		fmt.Fprintf(&body, "huge line %08d\n", i)
+	}
+	testutil.CommitFile(t, repo, "huge.txt", body.String(), "huge child change")
+
+	store := feature.NewStore(t.TempDir())
+	closedAt := time.Now()
+	child := &feature.Feature{
+		ID: "child-huge-diff", Name: "huge", Slug: "child-huge-diff",
+		Status: feature.StatusReviewPassed, SchemaVersion: feature.SchemaVersionCurrent,
+		ActiveRun: 1, RunCount: 1,
+		Repos: []feature.FeatureRepo{{Name: "repo-a", Path: repo, WorktreePath: repo}},
+		Parent: &feature.ChildRelationship{
+			ParentID: "parent", Kind: feature.ChildKindRefactor,
+			CloseOutcome: feature.ChildCloseOutcomeCompleted, ClosedAt: &closedAt,
+			Bases: []feature.ChildRepoBase{{Repo: "repo-a", SHA: base, ParentBranch: "main"}},
+		},
+	}
+	if err := store.Save(child); err != nil {
+		t.Fatalf("save child: %v", err)
+	}
+	o := New(Deps{Store: store, Lifecycle: feature.NewManager(store, config.NewDefault())}, Hooks{})
+
+	o.preserveChildDiffSummary(child.ID)
+
+	got, err := store.Load(child.ID)
+	if err != nil {
+		t.Fatalf("reload child: %v", err)
+	}
+	summary := got.Parent.DiffSummary
+	if summary == "" || len(summary) > feature.DiffSummaryBudget {
+		t.Fatalf("persisted summary length = %d, want non-empty and <= %d", len(summary), feature.DiffSummaryBudget)
+	}
+	if !strings.Contains(summary, " huge.txt | ") || !strings.Contains(summary, "file changed") {
+		t.Fatalf("summary missing stat header, head = %q", summary[:200])
+	}
+	if !strings.HasSuffix(summary, " bytes omitted]") {
+		t.Fatalf("summary missing truncation marker, tail = %q", summary[len(summary)-120:])
 	}
 }
 
@@ -1228,5 +1278,40 @@ func TestConcurrentDiscardAndIntegrationAutoPublish(t *testing.T) {
 		if discardErr == nil {
 			t.Fatal("discard should have failed when integration won")
 		}
+	}
+}
+
+// TestRestartPhase_ReviewPassedFinalReviewNilTransaction_DispatchesIntegration
+// pins the crash-recovery route: integration was dispatched but died before
+// creating a durable journal, stranding the child at ReviewPassed@FinalReview
+// with a nil transaction. Restart must replay the integration boundary — not
+// return NoOp and leave the child unrecoverable.
+func TestRestartPhase_ReviewPassedFinalReviewNilTransaction_DispatchesIntegration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("real-git integration test")
+	}
+	fx := newChildIntegrationFixture(t, feature.StatusPublished, true)
+	if fx.child.Parent.Transaction != nil {
+		t.Fatal("fixture precondition: child transaction must be nil")
+	}
+
+	outcome, err := fx.orchestrator().RestartPhase(fx.child.ID, 0, 0)
+	if err != nil {
+		t.Fatalf("RestartPhase() error = %v", err)
+	}
+	if outcome.Action != RestartNoOp {
+		t.Fatalf("RestartPhase() action = %v, want RestartNoOp after completed integration", outcome.Action)
+	}
+
+	parent, child := fx.reload()
+	if child.Parent.CloseOutcome != feature.ChildCloseOutcomeCompleted {
+		t.Fatalf("child close outcome = %q, want completed integration", child.Parent.CloseOutcome)
+	}
+	parents := childIntegrationGit(t, fx.repoDir, "rev-list", "--parents", "-n", "1", "HEAD")
+	if fields := len(strings.Fields(parents)); fields != 3 {
+		t.Fatalf("parent merge commit parents = %q, want two-parent merge", parents)
+	}
+	if parent.Status != feature.StatusCodeReady {
+		t.Fatalf("parent status = %s, want CodeReady", parent.Status)
 	}
 }

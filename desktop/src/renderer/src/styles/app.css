@@ -3038,6 +3038,13 @@ body {
   color: var(--color-muted);
 }
 
+.attention-detail__tasks {
+  margin: 0;
+  padding-left: var(--space-4);
+  color: var(--color-muted);
+  font-size: 12px;
+}
+
 .attention-detail pre {
   max-height: 14rem;
   overflow: auto;

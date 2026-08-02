@@ -88,6 +88,25 @@ const questionsItem: Extract<AttentionItem, { kind: 'questions' }> = {
   ],
 };
 
+const helpQuestionItem: Extract<AttentionItem, { kind: 'help' }> = {
+  kind: 'help',
+  id: 'feature-1:kb1234567890abcdef',
+  featureId: 'feature-1',
+  sessionId: 'kb1234567890abcdef',
+  phase: 'Knowledge Base',
+  waitingSince: '2026-07-15T10:00:00.000Z',
+  prompt: 'Where should the config live?',
+  waitingKind: 'question',
+};
+
+const helpWaitingItem: Extract<AttentionItem, { kind: 'help' }> = {
+  ...helpQuestionItem,
+  id: 'feature-1:kb1234567890abcdef:waiting',
+  prompt: 'Agent has a question',
+  waitingKind: 'input',
+  runningTasks: ['Indexing repository layout', 'Summarizing packages'],
+};
+
 function Harness({ items, onJump }: { items: AttentionItem[]; onJump: ReturnType<typeof vi.fn> }) {
   const [drafts, setDrafts] = useState<AttentionDrafts>(emptyAttentionDrafts);
   return (
@@ -278,6 +297,73 @@ describe('AttentionInbox gate detail', () => {
 
     expect(screen.getByLabelText(/Deployment window/)).toBeVisible();
     expect(screen.getByRole('button', { name: 'Resume' })).toBeVisible();
+  });
+});
+
+describe('AttentionInbox help detail', () => {
+  function HelpDetailHarness({ item }: { item: Extract<AttentionItem, { kind: 'help' }> }) {
+    const [drafts, setDrafts] = useState<AttentionDrafts>(emptyAttentionDrafts);
+    return (
+      <AttentionDetail
+        item={item}
+        busy={false}
+        submit={(action) => void action()}
+        drafts={drafts}
+        setDrafts={setDrafts}
+      />
+    );
+  }
+
+  it('renders a waiting session as harness state, never as a question', async () => {
+    const mock = installAgenticoMock();
+    const user = userEvent.setup();
+    render(<HelpDetailHarness item={helpWaitingItem} />);
+
+    expect(screen.getByText('Agent is waiting')).toBeVisible();
+    expect(
+      screen.getByText('The agent finished its turn; the runtime is coordinating next steps.'),
+    ).toBeVisible();
+    expect(screen.queryByText('Agent has a question')).not.toBeInTheDocument();
+
+    const tasks = screen.getByRole('list', { name: 'Running background tasks' });
+    expect(within(tasks).getByText('Indexing repository layout')).toBeVisible();
+    expect(within(tasks).getByText('Summarizing packages')).toBeVisible();
+
+    const meta = screen.getByLabelText('Attention context');
+    expect(meta).toHaveTextContent('session kb123456…');
+    expect(meta).toHaveTextContent('Knowledge Base');
+    expect(meta).toHaveTextContent(/waiting/);
+
+    await user.type(screen.getByLabelText('Message to the agent'), 'carry on');
+    await user.click(screen.getByRole('button', { name: 'Send message' }));
+    expect(mock.api.sendHelp).toHaveBeenCalledWith({
+      featureId: 'feature-1',
+      sessionId: 'kb1234567890abcdef',
+      message: 'carry on',
+    });
+  });
+
+  it('keeps the question framing when the agent asked something real', () => {
+    installAgenticoMock();
+    render(<HelpDetailHarness item={helpQuestionItem} />);
+
+    expect(screen.getByText('Where should the config live?')).toBeVisible();
+    expect(screen.getByLabelText('Help reply')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Send reply' })).toBeVisible();
+    expect(screen.queryByText('Agent is waiting')).not.toBeInTheDocument();
+    const meta = screen.getByLabelText('Attention context');
+    expect(meta).toHaveTextContent('session kb123456…');
+    expect(meta).toHaveTextContent('Knowledge Base');
+  });
+
+  it('labels waiting sessions distinctly in the inbox rows', async () => {
+    const onJump = vi.fn();
+    render(<Harness items={[helpWaitingItem, helpQuestionItem]} onJump={onJump} />);
+    const user = userEvent.setup();
+
+    await user.click(screen.getByRole('button', { name: /Attention inbox, 2 pending/ }));
+    expect(screen.getByRole('button', { name: /Agent waiting/ })).toBeVisible();
+    expect(screen.getByRole('button', { name: /Help request/ })).toBeVisible();
   });
 });
 

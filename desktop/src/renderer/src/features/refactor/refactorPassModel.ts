@@ -8,6 +8,7 @@ import {
   isPendingReviewStatus,
   type FeatureSnapshot,
   type RelationshipChildView,
+  type RelationshipTransactionView,
 } from '../../../../shared/ipc';
 import { actionById, displayStatusLabel, isReadyToStart } from '../featureView';
 
@@ -20,25 +21,75 @@ export type PassStateId =
   | 'input'
   | 'interrupted'
   | 'failed'
+  | 'final-reviewing'
+  | 'review-passed'
   | 'integrating'
-  | 'integration-attention';
+  | 'integration-attention'
+  | 'closing'
+  | 'merged'
+  | 'closed';
 
 export interface PassState {
   id: PassStateId;
   /** One sentence under the pass name: what is happening and what comes next. */
   sentence: string;
   tone: 'quiet' | 'live' | 'attention' | 'danger';
+  /** Repository-level diagnostics when integration parks (conflicts, dirt). */
+  problems?: string[];
 }
 
-const ACTIVE_TRANSACTION_PHASES = new Set(['preparing', 'prepared', 'applying', 'applied']);
+const ACTIVE_TRANSACTION_PHASES = new Set(['preparing', 'prepared', 'applying']);
+const PARKED_TRANSACTION_PHASES = new Set(['attention', 'rolling_back', 'rolled_back']);
+
+function transactionProblems(transaction: RelationshipTransactionView): string[] {
+  const problems: string[] = [];
+  if (transaction.attention !== undefined && transaction.attention !== '') {
+    problems.push(transaction.attention);
+  }
+  for (const entry of transaction.entries ?? []) {
+    const repo = entry.repo === undefined ? '' : `${entry.repo}: `;
+    if (entry.conflictFiles !== undefined && entry.conflictFiles.length > 0) {
+      problems.push(`${repo}conflicts in ${entry.conflictFiles.join(', ')}`);
+    }
+    if (entry.diagnostics !== undefined && entry.diagnostics !== '') {
+      problems.push(`${repo}${entry.diagnostics}`);
+    }
+    if (entry.cleanupWarning !== undefined && entry.cleanupWarning !== '') {
+      problems.push(`${repo}${entry.cleanupWarning}`);
+    }
+  }
+  return problems;
+}
 
 export function passState(child: FeatureSnapshot): PassState {
-  const transactionPhase = child.transaction?.phase;
-  if (transactionPhase === 'attention') {
+  const transaction = child.transaction;
+  const transactionPhase = transaction?.phase;
+  if (transactionPhase === 'merged' || child.closeOutcome === 'completed') {
+    return {
+      id: 'merged',
+      sentence: 'The pass is merged into the parent and closed.',
+      tone: 'quiet',
+    };
+  }
+  if (child.closeOutcome !== undefined && child.closeOutcome !== '') {
+    return { id: 'closed', sentence: 'The pass is closed without merging.', tone: 'quiet' };
+  }
+  if (transactionPhase !== undefined && PARKED_TRANSACTION_PHASES.has(transactionPhase)) {
     return {
       id: 'integration-attention',
-      sentence: 'Integration needs attention. Review the repository details below.',
+      sentence:
+        transactionPhase === 'attention'
+          ? 'Integration needs attention. Review the repository details below.'
+          : 'Integration was rolled back. Review the repository details below.',
       tone: 'attention',
+      problems: transaction === undefined ? [] : transactionProblems(transaction),
+    };
+  }
+  if (transactionPhase === 'applied') {
+    return {
+      id: 'closing',
+      sentence: 'Merges applied to the parent branches. Closing the pass.',
+      tone: 'live',
     };
   }
   if (transactionPhase !== undefined && ACTIVE_TRANSACTION_PHASES.has(transactionPhase)) {
@@ -86,7 +137,23 @@ export function passState(child: FeatureSnapshot): PassState {
       tone: 'attention',
     };
   }
-  if (isReadyToStart(child)) {
+  if (child.status === 'FinalReviewing') {
+    return {
+      id: 'final-reviewing',
+      sentence: 'Final review is running before the merge back.',
+      tone: 'live',
+    };
+  }
+  if (child.status === 'ReviewPassed') {
+    return {
+      id: 'review-passed',
+      sentence: 'Review passed. Integration into the parent starts next.',
+      tone: 'live',
+    };
+  }
+  // "Ready" exists only before the first run; a pass with any run behind it
+  // must never read as startable again.
+  if (child.status === 'Created' && isReadyToStart(child)) {
     const repoCount = child.repos.length;
     return {
       id: 'ready',
@@ -126,9 +193,17 @@ function passStationDetail(state: PassState, child: FeatureSnapshot): string {
       return 'Paused';
     case 'failed':
       return 'Failed';
+    case 'final-reviewing':
+      return 'Final review';
+    case 'review-passed':
     case 'integrating':
     case 'integration-attention':
+    case 'closing':
       return 'Review passed';
+    case 'merged':
+      return 'Merged';
+    case 'closed':
+      return 'Closed';
     case 'working':
       return displayStatusLabel(child.status);
   }
@@ -136,7 +211,7 @@ function passStationDetail(state: PassState, child: FeatureSnapshot): string {
 
 function integrationStation(child: FeatureSnapshot | null): Omit<CustodyStation, 'id' | 'eyebrow'> {
   const phase = child?.transaction?.phase;
-  if (phase === 'merged') {
+  if (phase === 'merged' || child?.closeOutcome === 'completed') {
     return { title: 'Integration', detail: 'Merged into the parent', state: 'done' };
   }
   if (phase === 'attention') {
@@ -145,7 +220,7 @@ function integrationStation(child: FeatureSnapshot | null): Omit<CustodyStation,
   if (phase === 'rolling_back' || phase === 'rolled_back') {
     return { title: 'Integration', detail: displayPhase(phase), state: 'attention' };
   }
-  if (phase !== undefined && ACTIVE_TRANSACTION_PHASES.has(phase)) {
+  if (phase === 'applied' || (phase !== undefined && ACTIVE_TRANSACTION_PHASES.has(phase))) {
     return { title: 'Integration', detail: displayPhase(phase), state: 'live' };
   }
   return { title: 'Integration', detail: 'After final review approval', state: 'pending' };
@@ -155,6 +230,9 @@ function displayPhase(phase: string): string {
   const normalized = phase.replace(/[_-]+/g, ' ').trim();
   return normalized === '' ? phase : normalized.charAt(0).toUpperCase() + normalized.slice(1);
 }
+
+/** Pass-station work that is behind it: integration onward reads as done. */
+const DONE_PASS_STATES = new Set<PassStateId>(['integrating', 'closing', 'merged', 'closed']);
 
 /**
  * The custody strip: work leaves the locked parent, runs inside the pass, and
@@ -184,10 +262,10 @@ export function custodyStations(
         state === null || child === null ? view.displayState : passStationDetail(state, child),
       state: attention
         ? 'attention'
-        : state === null || state.tone === 'quiet'
-          ? 'pending'
-          : state.id === 'integrating'
-            ? 'done'
+        : state !== null && DONE_PASS_STATES.has(state.id)
+          ? 'done'
+          : state === null || state.tone === 'quiet'
+            ? 'pending'
             : 'live',
     },
     { id: 'integration', eyebrow: 'Merge back', ...integrationStation(child) },
@@ -206,10 +284,13 @@ const PRIMARY_PRIORITY = ['start', 'resume', 'retry', 'pause-stop'] as const;
  * The contextual verbs the pass invites right now: one primary from the
  * catalogue's enabled set, Restart as a quiet secondary when the server also
  * offers it. Verbs the server disabled never render as dead buttons — the
- * state sentence carries the why instead.
+ * state sentence carries the why instead. Start is additionally gated on the
+ * "ready" state so a run beyond setup can never re-offer it.
  */
 export function passActions(child: FeatureSnapshot): PassAction[] {
-  const enabled = (id: PassAction['id']): boolean => actionById(child, id)?.enabled === true;
+  const stateId = passState(child).id;
+  const enabled = (id: PassAction['id']): boolean =>
+    actionById(child, id)?.enabled === true && (id !== 'start' || stateId === 'ready');
   const actions: PassAction[] = [];
   const primary = PRIMARY_PRIORITY.find(enabled);
   if (primary !== undefined) {

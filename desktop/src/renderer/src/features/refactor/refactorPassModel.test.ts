@@ -89,6 +89,99 @@ describe('passState', () => {
   });
 });
 
+describe('passState post-review lifecycle', () => {
+  const base = { setupComplete: true, setup: doneSetup };
+  const startable = [{ id: 'start', enabled: true, disabledReasons: [] }];
+
+  it('reports final review distinctly while it runs', () => {
+    expect(passState(featureSnapshot({ ...base, status: 'FinalReviewing' }))).toMatchObject({
+      id: 'final-reviewing',
+      tone: 'live',
+    });
+  });
+
+  it('never contradicts the sidebar: review passed without a transaction is not startable', () => {
+    const child = featureSnapshot({ ...base, status: 'ReviewPassed', actions: startable });
+    const state = passState(child);
+    expect(state).toMatchObject({ id: 'review-passed', tone: 'live' });
+    expect(state.sentence).not.toContain('Ready to start');
+    expect(passActions(child)).toEqual([]);
+  });
+
+  it('keeps start exclusive to a pass that has not run yet', () => {
+    const child = featureSnapshot({ ...base, status: 'Created', actions: startable });
+    expect(passState(child).id).toBe('ready');
+    expect(passActions(child)).toEqual([{ id: 'start', label: 'Start pass', kind: 'primary' }]);
+  });
+
+  it('surfaces conflict files and diagnostics when the transaction parks', () => {
+    const state = passState(
+      featureSnapshot({
+        ...base,
+        status: 'ReviewPassed',
+        transaction: {
+          phase: 'attention',
+          attention: 'merge conflict in repo-a',
+          entries: [
+            {
+              repo: 'repo-a',
+              conflictFiles: ['internal/api.go', 'cmd/main.go'],
+              diagnostics: 'rebase stopped on internal/api.go',
+            },
+          ],
+        },
+      }),
+    );
+    expect(state).toMatchObject({ id: 'integration-attention', tone: 'attention' });
+    expect(state.problems).toEqual([
+      'merge conflict in repo-a',
+      'repo-a: conflicts in internal/api.go, cmd/main.go',
+      'repo-a: rebase stopped on internal/api.go',
+    ]);
+  });
+
+  it('walks applied, merged, and discarded closures without reverting to ready', () => {
+    const closing = featureSnapshot({
+      ...base,
+      status: 'ReviewPassed',
+      actions: startable,
+      transaction: { phase: 'applied' },
+    });
+    expect(passState(closing)).toMatchObject({ id: 'closing', tone: 'live' });
+    expect(passActions(closing)).toEqual([]);
+
+    const merged = featureSnapshot({
+      ...base,
+      status: 'Done',
+      actions: startable,
+      transaction: { phase: 'merged' },
+    });
+    expect(passState(merged)).toMatchObject({ id: 'merged', tone: 'quiet' });
+    expect(passActions(merged)).toEqual([]);
+
+    expect(
+      passState(featureSnapshot({ ...base, status: 'Done', closeOutcome: 'completed' })).id,
+    ).toBe('merged');
+
+    const discarded = featureSnapshot({
+      ...base,
+      status: 'Done',
+      actions: startable,
+      closeOutcome: 'discarded',
+    });
+    expect(passState(discarded)).toMatchObject({ id: 'closed', tone: 'quiet' });
+    expect(passActions(discarded)).toEqual([]);
+  });
+
+  it('marks the pass and integration stations done once merged', () => {
+    const parent = featureSnapshot({ status: 'Published' });
+    const child = featureSnapshot({ ...base, status: 'Done', transaction: { phase: 'merged' } });
+    const [, passStation, integration] = custodyStations(parent, child, childView());
+    expect(passStation).toMatchObject({ detail: 'Merged', state: 'done' });
+    expect(integration).toMatchObject({ detail: 'Merged into the parent', state: 'done' });
+  });
+});
+
 describe('custodyStations', () => {
   it('always locks the parent and mirrors the child state on the pass station', () => {
     const parent = featureSnapshot({ status: 'Published', name: 'Electron app' });

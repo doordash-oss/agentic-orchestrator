@@ -924,7 +924,12 @@ func (o *Orchestrator) RestartPhase(featureID string, maxIterationsDelta, maxPla
 	// An active child with resumable integration state replays the integration
 	// boundary — never Plan, Implement, or an already-approved Final Review.
 	// Closed cleanup tails are owned exclusively by automatic reconciliation.
-	if f.IntegrationResumable() {
+	// A nil transaction at ReviewPassed@FinalReview means integration was
+	// dispatched but died before its journal became durable; without this
+	// route the status switch below has no arm for it and Restart is a NoOp.
+	integrationCrashedPreJournal := f.IsActiveChild() && f.Parent.Transaction == nil &&
+		f.Status == feature.StatusReviewPassed && f.CurrentPhase == feature.PhaseFinalReview
+	if f.IntegrationResumable() || integrationCrashedPreJournal {
 		if err := o.runChildIntegrationLocked(featureID); err != nil {
 			return RestartOutcome{}, err
 		}

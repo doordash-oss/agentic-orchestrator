@@ -17,6 +17,7 @@ package feature
 import (
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -84,6 +85,12 @@ type RelationshipChildren struct {
 // beneath the feature store: provider bookkeeping from older Agentico
 // versions plus the server-owned AMA chat session state. They are not feature
 // records and must not participate in feature or relationship scans.
+// ErrLegacySchemaVersion marks a record persisted by an older release with an
+// explicit lower schema version. Legacy records predate child relationships,
+// so relationship scans may skip them; every other read path still refuses
+// the record.
+var ErrLegacySchemaVersion = errors.New("legacy feature schema version")
+
 func isLegacyProviderBookkeepingDir(name string) bool {
 	switch name {
 	case "opencode", "codex-home", "chat":
@@ -221,8 +228,9 @@ func (s *Store) CloseChild(childID, outcome string, closedAt time.Time) error {
 }
 
 // SetClosedChildDiffSummary records the best-effort preserved diff summary of
-// a closed child for post-close inspection. It no-ops when the feature is not
-// a closed child (the close write owns ordering) or the summary is unchanged.
+// a closed child for post-close inspection, bounded at DiffSummaryBudget. It
+// no-ops when the feature is not a closed child (the close write owns
+// ordering) or the summary is unchanged.
 func (s *Store) SetClosedChildDiffSummary(childID, summary string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -230,6 +238,7 @@ func (s *Store) SetClosedChildDiffSummary(childID, summary string) error {
 	if summary == "" {
 		return nil
 	}
+	summary = BoundDiffSummary(summary)
 	child, err := s.loadUnlocked(childID)
 	if err != nil {
 		return err
@@ -287,6 +296,12 @@ func (s *Store) AllRelationshipChildren() (map[string]*RelationshipChildren, err
 		}
 		child, err := s.loadUnlocked(entry.Name())
 		if err != nil {
+			if errors.Is(err, ErrLegacySchemaVersion) {
+				// Legacy records predate child relationships; one stale
+				// record must not fail every relationship read.
+				log.Printf("feature store: skipping legacy record %q during relationship scan: %v", entry.Name(), err)
+				continue
+			}
 			return nil, fmt.Errorf("classifying feature record %q during relationship scan: %w", entry.Name(), err)
 		}
 		if child.Parent == nil || child.Parent.ParentID == child.ID {
@@ -337,6 +352,12 @@ func (s *Store) validatedRelationshipChildrenUnlocked(parentID string) (*Relatio
 		}
 		child, err := s.loadUnlocked(entry.Name())
 		if err != nil {
+			if errors.Is(err, ErrLegacySchemaVersion) {
+				// Legacy records predate child relationships; one stale
+				// record must not fail every relationship read.
+				log.Printf("feature store: skipping legacy record %q during relationship scan: %v", entry.Name(), err)
+				continue
+			}
 			return nil, fmt.Errorf("classifying feature record %q during relationship scan: %w", entry.Name(), err)
 		}
 		if child.Parent == nil || child.Parent.ParentID != parentID {
@@ -522,6 +543,9 @@ func (s *Store) loadUnlocked(id string) (*Feature, error) {
 		return nil, fmt.Errorf("parsing feature file: %w", err)
 	}
 	if header.SchemaVersion != SchemaVersionCurrent {
+		if header.SchemaVersion > 0 && header.SchemaVersion < SchemaVersionCurrent {
+			return nil, fmt.Errorf("feature schema version %d, expected %d: %w", header.SchemaVersion, SchemaVersionCurrent, ErrLegacySchemaVersion)
+		}
 		return nil, fmt.Errorf("feature schema version %d, expected %d", header.SchemaVersion, SchemaVersionCurrent)
 	}
 	var f Feature

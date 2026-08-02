@@ -149,7 +149,8 @@ type ChildRelationship struct {
 	Transaction *TransactionJournal `yaml:"transaction,omitempty"`
 	// DiffSummary is the preserved read-only diff captured at close time,
 	// before disposable worktrees and ephemeral branches are removed. It is
-	// empty when no diff was preserved.
+	// bounded at DiffSummaryBudget (oversized diffs are truncated with a
+	// marker) and empty when no diff was preserved.
 	DiffSummary string `yaml:"diff_summary,omitempty" json:"diff_summary,omitempty"`
 	// Bases captures the exact parent tip per repository at launch time.
 	Bases []ChildRepoBase `yaml:"bases,omitempty"`

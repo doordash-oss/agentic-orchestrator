@@ -580,7 +580,9 @@ type closedChildDiffSetter interface {
 }
 
 // preserveChildDiffSummary best-effort captures and records the closed child's
-// per-repository diff before cleanup removes the disposable worktrees. It
+// per-repository diff — stat header plus body bounded at
+// feature.DiffSummaryBudget; the merge commit remains the full record —
+// before cleanup removes the disposable worktrees. It
 // never fails the closure: missing capabilities, empty diffs, or store errors
 // simply leave the recorded summary empty.
 func (o *Orchestrator) preserveChildDiffSummary(childID string) {
@@ -599,7 +601,7 @@ func (o *Orchestrator) preserveChildDiffSummary(childID string) {
 	if summary == "" {
 		return
 	}
-	_ = setter.SetClosedChildDiffSummary(childID, summary)
+	_ = setter.SetClosedChildDiffSummary(childID, feature.ComposeBoundedDiffSummary(summary))
 }
 
 // captureChildDiffSummary computes the child's preserved diff per repository

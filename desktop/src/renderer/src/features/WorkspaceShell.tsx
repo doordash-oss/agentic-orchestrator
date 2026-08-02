@@ -1013,8 +1013,8 @@ function RunningCard({
 }
 
 /**
- * The TUI's nested `↳ child` row, translated to the card: the active refactor
- * pass with its own live rail. The needle is derived from the pass's status;
+ * The nested refactor-pass lane shows the active child with its own live rail.
+ * The needle is derived from the pass's status;
  * a Created pass shows the rail with no needle and every stop upcoming, and
  * statuses that don't name a phase (paused, waiting, failed) show no rail
  * rather than an approximate needle.

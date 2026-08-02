@@ -1806,3 +1806,31 @@ func TestShowProviderStartupNoticesWritesWithoutForcedDelayInTests(t *testing.T)
 		t.Fatalf("startup notice output = %q", got)
 	}
 }
+
+func TestShouldInterruptRunningOnStartup(t *testing.T) {
+	tests := []struct {
+		name               string
+		recoveryScanOK     bool
+		recoveryItemCount  int
+		activeSessionCount int
+		want               bool
+	}{
+		{name: "no recovery work", recoveryScanOK: true, want: true},
+		{name: "orphan needs recovery", recoveryScanOK: true, recoveryItemCount: 1},
+		{name: "live session was restored", recoveryScanOK: true, activeSessionCount: 1},
+		{name: "recovery scan failed"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := shouldInterruptRunningOnStartup(
+				tt.recoveryScanOK,
+				tt.recoveryItemCount,
+				tt.activeSessionCount,
+			)
+			if got != tt.want {
+				t.Fatalf("shouldInterruptRunningOnStartup() = %t, want %t", got, tt.want)
+			}
+		})
+	}
+}

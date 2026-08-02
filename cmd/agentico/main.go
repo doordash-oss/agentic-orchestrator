@@ -2840,7 +2840,11 @@ func runServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledPr
 		}
 	}()
 
-	if boot.recoveryScanOK && len(boot.recoveryItems) == 0 {
+	if shouldInterruptRunningOnStartup(
+		boot.recoveryScanOK,
+		len(boot.recoveryItems),
+		len(boot.sessionManager.ActiveSessions()),
+	) {
 		if err := boot.orchestrator.InterruptAllRunning(); err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: startup sweep: %v\n", err)
 		}
@@ -2930,6 +2934,10 @@ func runServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledPr
 	<-runtimeCtx.Done()
 	shutdownFeatures(boot.orchestrator, boot.sessionManager)
 	return 0
+}
+
+func shouldInterruptRunningOnStartup(recoveryScanOK bool, recoveryItemCount, activeSessionCount int) bool {
+	return recoveryScanOK && recoveryItemCount == 0 && activeSessionCount == 0
 }
 
 func runtimeLaunchPolicy(registry *llm.Registry, dangerouslySkipPerms bool) serverruntime.LaunchPolicy {

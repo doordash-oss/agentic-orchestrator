@@ -173,7 +173,7 @@ describe('passActions', () => {
 });
 
 describe('refactoringStatusChip', () => {
-  it('mirrors the TUI parent labels', () => {
+  it('returns the parent action bar labels', () => {
     expect(refactoringStatusChip(childView())).toEqual({ label: 'Refactoring', tone: 'info' });
     expect(
       refactoringStatusChip(childView({ attention: [{ code: 'x', message: 'conflict' }] })),

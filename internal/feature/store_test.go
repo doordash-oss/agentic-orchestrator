@@ -482,6 +482,7 @@ func TestStoreAllRelationshipChildrenMatchesPerParentScans(t *testing.T) {
 		},
 	}
 	for _, record := range records {
+		record.SchemaVersion = SchemaVersionCurrent
 		if err := store.Save(record); err != nil {
 			t.Fatalf("Save(%q): %v", record.ID, err)
 		}

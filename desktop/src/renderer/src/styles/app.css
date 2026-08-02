@@ -5085,7 +5085,7 @@ body {
   font-weight: 500;
 }
 
-/* Nested refactor pass lane: the TUI's `↳ child` row inside the card. */
+/* Nested refactor pass lane inside the parent card. */
 .run-card__pass {
   display: flex;
   gap: var(--space-2);

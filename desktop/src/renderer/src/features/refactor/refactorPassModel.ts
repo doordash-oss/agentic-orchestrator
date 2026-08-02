@@ -236,7 +236,7 @@ function passActionLabel(id: PassAction['id'], child: FeatureSnapshot): string {
   }
 }
 
-/** The parent action bar chip while a pass is active (TUI: "Refactoring"). */
+/** The parent action bar chip while a refactor pass is active. */
 export function refactoringStatusChip(view: RelationshipChildView): {
   label: string;
   tone: 'info' | 'attention';

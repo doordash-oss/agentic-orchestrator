@@ -545,6 +545,9 @@ type ToolProgressMessage struct {
 	ToolName  string `json:"tool_name,omitempty"`
 	Data      string `json:"data,omitempty"`
 	SessionID string `json:"session_id,omitempty"`
+	// TimeoutMS is the tool invocation's declared execution timeout in
+	// milliseconds, when the provider reports one; 0 means unknown.
+	TimeoutMS int64 `json:"timeout_ms,omitempty"`
 }
 
 // FileReadEvent is a provider-neutral signal that the provider reported a

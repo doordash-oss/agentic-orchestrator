@@ -503,6 +503,37 @@ func TestWatchdogSubagentTimeoutOverridesPendingToolTimeout(t *testing.T) {
 	}
 }
 
+func TestWatchdogDeclaredToolTimeoutExtendsPendingLeash(t *testing.T) {
+	sess := NewSession("watchdog-declared-timeout", "feat-1", feature.PhaseImplement)
+	watchdog := newSessionWatchdog(sess, &ports.SessionWatchdogConfig{
+		PendingToolIdleTimeout:    20 * time.Millisecond,
+		TurnCompletionIdleTimeout: 20 * time.Millisecond,
+		PollInterval:              5 * time.Millisecond,
+	})
+	watchdog.Observe(llm.SDKMessage{ToolProgress: &llm.ToolProgressMessage{
+		ToolUseID: "bash-1", ToolName: "Bash", Data: "in_progress", TimeoutMS: 500,
+	}})
+	// A later update without a declared timeout must not shrink the leash.
+	watchdog.Observe(llm.SDKMessage{ToolProgress: &llm.ToolProgressMessage{
+		ToolUseID: "bash-1", ToolName: "Bash", Data: "in_progress",
+	}})
+
+	watchdog.mu.Lock()
+	watchdog.lastActivityAt = time.Now().Add(-100 * time.Millisecond)
+	watchdog.mu.Unlock()
+	if _, _, stalled := watchdog.toolStall(); stalled {
+		t.Fatal("watchdog stalled a tool inside its declared execution timeout")
+	}
+
+	watchdog.mu.Lock()
+	watchdog.lastActivityAt = time.Now().Add(-time.Second)
+	watchdog.mu.Unlock()
+	snap, timeout, stalled := watchdog.toolStall()
+	if !stalled || timeout != 520*time.Millisecond {
+		t.Fatalf("toolStall() = (%+v, %s, stalled=%v), want stall at declared timeout plus idle grace", snap, timeout, stalled)
+	}
+}
+
 func TestWatchdogParallelSubagentSiblingCompletionKeepsRunning(t *testing.T) {
 	sess := NewSession("watchdog-parallel-subagents", "feat-1", feature.PhaseImplement)
 	watchdog := newSessionWatchdog(sess, &ports.SessionWatchdogConfig{

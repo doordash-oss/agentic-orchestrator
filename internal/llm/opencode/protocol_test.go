@@ -646,6 +646,60 @@ func TestParseLine_ToolProgressKeepsStableID(t *testing.T) {
 	}
 }
 
+func TestParseLine_ToolProgressCarriesDeclaredTimeout(t *testing.T) {
+	p, _, _ := newPostHandshakeProtocol(t)
+	toolProgress := func(msgs []llm.SDKMessage) *llm.ToolProgressMessage {
+		t.Helper()
+		for _, m := range msgs {
+			if m.ToolProgress != nil {
+				return m.ToolProgress
+			}
+		}
+		t.Fatalf("messages %+v carry no tool_progress", msgs)
+		return nil
+	}
+
+	tp := toolProgress(mustParse(t, p, notificationLine(t, "session/update", map[string]any{
+		"sessionId": "ses_x",
+		"update": map[string]any{
+			"sessionUpdate": "tool_call",
+			"toolCallId":    "bash_42",
+			"title":         "bash",
+			"kind":          "execute",
+			"status":        "pending",
+		},
+	})))
+	if tp.TimeoutMS != 0 {
+		t.Fatalf("tool progress timeout = %d, want 0 before rawInput arrives", tp.TimeoutMS)
+	}
+
+	tp = toolProgress(mustParse(t, p, notificationLine(t, "session/update", map[string]any{
+		"sessionId": "ses_x",
+		"update": map[string]any{
+			"sessionUpdate": "tool_call_update",
+			"toolCallId":    "bash_42",
+			"kind":          "execute",
+			"status":        "in_progress",
+			"rawInput": map[string]any{
+				"command": "npm run test:e2e:packaged 2>&1 | tail -20",
+				"timeout": 7200000,
+			},
+		},
+	})))
+	if tp.TimeoutMS != 7200000 {
+		t.Fatalf("tool progress timeout = %d, want 7200000", tp.TimeoutMS)
+	}
+
+	// Later updates without rawInput keep the declared timeout.
+	tp = toolProgress(mustParse(t, p, notificationLine(t, "session/update", map[string]any{
+		"sessionId": "ses_x",
+		"update":    map[string]any{"sessionUpdate": "tool_call_update", "toolCallId": "bash_42", "status": "in_progress"},
+	})))
+	if tp.TimeoutMS != 7200000 {
+		t.Fatalf("tool progress timeout after bare update = %d, want 7200000", tp.TimeoutMS)
+	}
+}
+
 func TestParseLine_OpenCodeTaskUpdateEmitsTaskToolUsePrompt(t *testing.T) {
 	p, _, _ := newPostHandshakeProtocol(t)
 

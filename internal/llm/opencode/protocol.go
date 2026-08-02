@@ -134,6 +134,7 @@ type toolCallState struct {
 	kind                string
 	path                string
 	command             string
+	timeoutMS           int64
 	rawInput            json.RawMessage
 	taskToolUseEmitted  bool
 	taskStartedEmitted  bool
@@ -1058,6 +1059,7 @@ func (p *Protocol) toolProgressFromUpdate(update SessionUpdate) llm.ToolProgress
 		ToolUseID: update.ToolCallID,
 		ToolName:  normalizedProgressToolName(state),
 		Data:      normalizedProgressData(update.Status, state),
+		TimeoutMS: state.timeoutMS,
 	}
 }
 
@@ -1070,6 +1072,9 @@ func mergeToolCallState(state toolCallState, update SessionUpdate) toolCallState
 	}
 	if command := firstStringField(update.RawInput, "", "command", "cmd", "script"); command != "" {
 		state.command = command
+	}
+	if timeoutMS := firstPositiveNumberField(update.RawInput, "timeout"); timeoutMS > 0 {
+		state.timeoutMS = timeoutMS
 	}
 	if len(update.RawInput) > 0 {
 		state.rawInput = update.RawInput

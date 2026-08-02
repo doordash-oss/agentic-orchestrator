@@ -52,6 +52,9 @@ type watchdogTool struct {
 	id       string
 	name     string
 	subagent bool
+	// timeout is the invocation's declared execution timeout, when the
+	// provider reported one; silence up to that long is legitimate.
+	timeout time.Duration
 }
 
 // watchdogToolLifecycle tracks every pending tool of the current turn, not
@@ -91,12 +94,23 @@ func (l watchdogToolLifecycle) anySubagentPending() bool {
 	return false
 }
 
+func (l watchdogToolLifecycle) maxPendingDeclaredTimeout() time.Duration {
+	var longest time.Duration
+	for _, tool := range l.pending {
+		if tool.timeout > longest {
+			longest = tool.timeout
+		}
+	}
+	return longest
+}
+
 // watchdogSnapshot is a point-in-time view handed from the poller to the
 // failure path so both agree on what they are timing.
 type watchdogSnapshot struct {
 	phase    watchdogToolPhase
 	tool     watchdogTool
 	subagent bool
+	declared time.Duration
 	seq      uint64
 }
 
@@ -190,7 +204,7 @@ func (l watchdogToolLifecycle) observe(progress llm.ToolProgressMessage) watchdo
 	name := strings.TrimSpace(progress.ToolName)
 	switch {
 	case isWatchdogPendingToolData(data):
-		return l.armTool(id, name)
+		return l.armTool(id, name, time.Duration(progress.TimeoutMS)*time.Millisecond)
 	case isWatchdogTerminalToolData(data):
 		return l.completeTool(id, name)
 	default:
@@ -198,7 +212,7 @@ func (l watchdogToolLifecycle) observe(progress llm.ToolProgressMessage) watchdo
 	}
 }
 
-func (l watchdogToolLifecycle) armTool(id, name string) watchdogToolLifecycle {
+func (l watchdogToolLifecycle) armTool(id, name string, timeout time.Duration) watchdogToolLifecycle {
 	l.awaitingTurn = false
 	l.turnTool = watchdogTool{}
 	pending := append([]watchdogTool(nil), l.pending...)
@@ -211,10 +225,13 @@ func (l watchdogToolLifecycle) armTool(id, name string) watchdogToolLifecycle {
 			// Providers rename tools to display titles on later updates;
 			// the subagent marker must survive the rename.
 			pending[i].subagent = pending[i].subagent || isWatchdogSubagentToolName(name)
+			if timeout > 0 {
+				pending[i].timeout = timeout
+			}
 			return l
 		}
 	}
-	l.pending = append(pending, watchdogTool{id: id, name: name, subagent: isWatchdogSubagentToolName(name)})
+	l.pending = append(pending, watchdogTool{id: id, name: name, subagent: isWatchdogSubagentToolName(name), timeout: timeout})
 	return l
 }
 
@@ -321,6 +338,7 @@ func (w *sessionWatchdog) toolStall() (watchdogSnapshot, time.Duration, bool) {
 		phase:    w.lifecycle.phase(),
 		tool:     w.lifecycle.displayTool(),
 		subagent: w.lifecycle.anySubagentPending(),
+		declared: w.lifecycle.maxPendingDeclaredTimeout(),
 		seq:      w.seq,
 	}
 	lastActivityAt := w.lastActivityAt
@@ -347,10 +365,19 @@ func (w *sessionWatchdog) timeoutFor(snap watchdogSnapshot) time.Duration {
 	case watchdogToolRunning:
 		// Subagent tasks are opaque: the parent session hears nothing until
 		// they finish, so a pending subagent earns the longer timeout.
+		timeout := w.pendingToolIdleTimeout
 		if snap.subagent && w.subagentToolIdleTimeout > 0 {
-			return w.subagentToolIdleTimeout
+			timeout = w.subagentToolIdleTimeout
 		}
-		return w.pendingToolIdleTimeout
+		// A tool that declared its own execution timeout (e.g. a long test
+		// command) may legitimately stay silent for that long; the provider
+		// then gets the normal idle grace to report a terminal update.
+		if timeout > 0 && snap.declared > 0 {
+			if declared := snap.declared + w.pendingToolIdleTimeout; declared > timeout {
+				timeout = declared
+			}
+		}
+		return timeout
 	case watchdogToolAwaitingTurnResult:
 		return w.turnCompletionIdleTimeout
 	default:

@@ -191,6 +191,20 @@ func inputObject(key, value string) json.RawMessage {
 // firstStringField returns the first non-empty string value among the named keys
 // of a JSON object, falling back to fallback when none are present. It tolerates
 // absent or non-object raw input.
+func firstPositiveNumberField(raw json.RawMessage, keys ...string) int64 {
+	if len(raw) > 0 {
+		var obj map[string]any
+		if err := json.Unmarshal(raw, &obj); err == nil {
+			for _, k := range keys {
+				if v, ok := obj[k].(float64); ok && v > 0 {
+					return int64(v)
+				}
+			}
+		}
+	}
+	return 0
+}
+
 func firstStringField(raw json.RawMessage, fallback string, keys ...string) string {
 	if len(raw) > 0 {
 		var obj map[string]any

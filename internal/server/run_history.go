@@ -77,7 +77,7 @@ func (h *apiHandler) handleRunList(w http.ResponseWriter, r *http.Request, featu
 	for i := len(runNumbers) - 1 - start; i >= 0 && len(pageNumbers) < (end-start); i-- {
 		pageNumbers = append(pageNumbers, runNumbers[i])
 	}
-	runs := make([]RunSummaryDTO, 0, len(pageNumbers))
+	runs := make([]RunSummary, 0, len(pageNumbers))
 	for _, n := range pageNumbers {
 		run, err := h.store.LoadRun(featureID, n)
 		if err != nil {
@@ -131,7 +131,7 @@ func (h *apiHandler) handleRunSessions(w http.ResponseWriter, r *http.Request, f
 		return
 	}
 	sessions := h.allSessions()
-	summaries := make([]SessionSummaryDTO, 0, len(sessions))
+	summaries := make([]SessionSummary, 0, len(sessions))
 	for _, sess := range sessions {
 		if sess == nil || sess.FeatureID() != featureID {
 			continue
@@ -151,15 +151,15 @@ func (h *apiHandler) handleRunSessions(w http.ResponseWriter, r *http.Request, f
 	})
 }
 
-// runSummaryFromRun builds a RunSummaryDTO from run-level fields only. The
+// runSummaryFromRun builds a RunSummary from run-level fields only. The
 // current_phase label is derived from the run's pending review phase (if any)
 // rather than the live feature, so a historical run never borrows the active
 // run's phase.
-func runSummaryFromRun(run *feature.Run) RunSummaryDTO {
+func runSummaryFromRun(run *feature.Run) RunSummary {
 	if run == nil {
-		return RunSummaryDTO{}
+		return RunSummary{}
 	}
-	dto := RunSummaryDTO{
+	dto := RunSummary{
 		RunNumber:       run.RunNumber,
 		StartedAt:       run.StartedAt,
 		SealedAt:        run.SealedAt,
@@ -250,9 +250,9 @@ func runBackupBranchRepos(run *feature.Run) []string {
 	return repos
 }
 
-func runTimingDTO(run *feature.Run) TimingDTO {
+func runTimingDTO(run *feature.Run) Timing {
 	if run == nil {
-		return TimingDTO{}
+		return Timing{}
 	}
 	byPhase := make(map[string]int64, len(run.PhaseTimings))
 	var total int64
@@ -266,12 +266,12 @@ func runTimingDTO(run *feature.Run) TimingDTO {
 		total += activeSeconds - byPhase[run.ActiveTimingKey]
 		byPhase[run.ActiveTimingKey] = activeSeconds
 	}
-	return TimingDTO{TotalSeconds: total, ByPhase: byPhase}
+	return Timing{TotalSeconds: total, ByPhase: byPhase}
 }
 
-func runCostDTO(run *feature.Run) CostDTO {
+func runCostDTO(run *feature.Run) Cost {
 	if run == nil {
-		return CostDTO{}
+		return Cost{}
 	}
 	byPhase := make(map[string]float64, len(run.PhaseCosts))
 	var total float64
@@ -279,13 +279,13 @@ func runCostDTO(run *feature.Run) CostDTO {
 		byPhase[phase] = cost
 		total += cost
 	}
-	return CostDTO{TotalUSD: total, ByPhase: byPhase}
+	return Cost{TotalUSD: total, ByPhase: byPhase}
 }
 
 // runCostWithActiveSessions overlays provider-reported cumulative cost for
 // sessions that are still active in this run. Completed session costs are
 // already in Run.PhaseCosts, so excluding them prevents double counting.
-func (h *apiHandler) runCostWithActiveSessions(featureID string, run *feature.Run) CostDTO {
+func (h *apiHandler) runCostWithActiveSessions(featureID string, run *feature.Run) Cost {
 	cost := runCostDTO(run)
 	if h.sessions == nil || run == nil {
 		return cost

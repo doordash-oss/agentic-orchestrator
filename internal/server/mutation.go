@@ -66,13 +66,13 @@ const (
 	errCodePipelineMismatch               = "pipeline_mismatch"
 )
 
-// resultCreated is the ActionResultDTO.Result value for a newly created
+// resultCreated is the ActionResult.Result value for a newly created
 // feature.
 const resultCreated = "created"
 
 // resultAnswered, resultGenerated, resultRecovered, resultRewound,
 // resultStarted and resultUpdated are further
-// ActionResultDTO/RecoveryActionResponse Result values for
+// ActionResult/RecoveryActionResponse Result values for
 // permission/ask-user answers, generated publish descriptions, and the
 // default results of recovery, rewind, start-cycle and update actions.
 const (
@@ -265,7 +265,7 @@ type ChatStartRequest struct {
 type RuntimeConfigMutationRequest struct {
 	Defaults       RuntimeDefaultsMutation `json:"defaults,omitempty"`
 	WorkspaceRoots *[]string               `json:"workspace_roots,omitempty"`
-	Notifications  *NotificationConfigDTO  `json:"notifications,omitempty"`
+	Notifications  *NotificationConfig     `json:"notifications,omitempty"`
 }
 
 // RuntimeDefaultsMutation is the patch representation of DefaultsConfig.
@@ -408,9 +408,9 @@ type ReviewCommentsFetchRequest struct {
 }
 
 type ReviewCommentsActionRequest struct {
-	Repo     string             `json:"repo"`
-	Mode     string             `json:"mode"`
-	Comments []ReviewCommentDTO `json:"comments,omitempty"`
+	Repo     string          `json:"repo"`
+	Mode     string          `json:"mode"`
+	Comments []ReviewComment `json:"comments,omitempty"`
 }
 
 type CleanupActionRequest struct {
@@ -1327,7 +1327,7 @@ func (h *apiHandler) handleReviewCommentsFetch(w http.ResponseWriter, r *http.Re
 		resp.FeatureID = featureID
 	}
 	if resp.Comments == nil {
-		resp.Comments = []ReviewCommentDTO{}
+		resp.Comments = []ReviewComment{}
 	}
 	writeJSON(w, http.StatusOK, resp)
 }

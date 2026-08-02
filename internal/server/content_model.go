@@ -36,7 +36,7 @@ const (
 	maxTextLimit              = int64(256 * 1024)
 	descriptionReviewArtifact = "description-review"
 
-	// contentCategoryArtifact is the ArtifactDTO.Category value for a plain
+	// contentCategoryArtifact is the Artifact.Category value for a plain
 	// (non-log) artifact.
 	contentCategoryArtifact = "artifact"
 
@@ -69,11 +69,11 @@ func (h *apiHandler) handleArtifactList(w http.ResponseWriter, r *http.Request, 
 		ids = append(ids, id)
 	}
 	sort.Strings(ids)
-	artifacts := make([]ArtifactDTO, 0, len(ids))
+	artifacts := make([]Artifact, 0, len(ids))
 	for _, id := range ids {
 		rel := run.Artifacts[id]
 		phasePath := runRelativeArtifactPath(runDir, rel)
-		dto := ArtifactDTO{ID: id, Type: artifactType(rel), Category: artifactCategory(rel), RunNumber: runNumber, Phase: artifactPhase(phasePath)}
+		dto := Artifact{ID: id, Type: artifactType(rel), Category: artifactCategory(rel), RunNumber: runNumber, Phase: artifactPhase(phasePath)}
 		if path, ok := resolveRunArtifactPath(runDir, rel); ok {
 			dto.Path = path
 			if info, err := os.Stat(path); err == nil && !info.IsDir() {
@@ -126,19 +126,19 @@ func (h *apiHandler) handleArtifactContent(w http.ResponseWriter, r *http.Reques
 	h.writeTextFileSlice(w, r, artifactID, path)
 }
 
-func (h *apiHandler) descriptionReviewArtifactDTO(f *feature.Feature, run *feature.Run, runNumber int) (ArtifactDTO, bool) {
+func (h *apiHandler) descriptionReviewArtifactDTO(f *feature.Feature, run *feature.Run, runNumber int) (Artifact, bool) {
 	if f == nil || run == nil {
-		return ArtifactDTO{}, false
+		return Artifact{}, false
 	}
 	path, ok := h.descriptionReviewArtifactPath(f, run)
 	if !ok {
-		return ArtifactDTO{}, false
+		return Artifact{}, false
 	}
 	info, err := os.Stat(path)
 	if err != nil || info.IsDir() {
-		return ArtifactDTO{}, false
+		return Artifact{}, false
 	}
-	return ArtifactDTO{
+	return Artifact{
 		ID:               descriptionReviewArtifact,
 		Type:             artifactType(path),
 		Category:         contentCategoryArtifact,
@@ -369,14 +369,14 @@ func (h *apiHandler) handleLivePreview(w http.ResponseWriter, r *http.Request, f
 		Activity:   f.Status.String(),
 		Timing:     timingDTO(f),
 		Cost:       costDTO(f),
-		Context:    ContextDTO{Percentage: -1},
+		Context:    Context{Percentage: -1},
 		Transcript: []TranscriptMessage{},
 	}
 	if sess != nil {
 		summary := sessionSummaryDTO(sess)
 		resp.Session = &summary
 		resp.Activity = sess.Status().String()
-		resp.Context = ContextDTO{Percentage: sess.ContextPercentage()}
+		resp.Context = Context{Percentage: sess.ContextPercentage()}
 		for _, req := range sess.PendingControlRequests() {
 			resp.Attention = append(resp.Attention, controlRequestDTO(sess, req))
 		}

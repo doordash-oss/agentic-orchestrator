@@ -370,11 +370,11 @@ func TestFeatureDetailProjectsActiveFeatureRebaseOperation(t *testing.T) {
 	if cycle["phase"] != "inspect_rebase" {
 		t.Fatalf("cycle phase = %v, want inspect_rebase", cycle["phase"])
 	}
-	status := map[string]RepoStatusDTO{}
+	status := map[string]RepoStatus{}
 	for _, raw := range featureBody["repo_status"].([]any) {
 		repo := raw.(map[string]any)
 		name := repo["name"].(string)
-		status[name] = RepoStatusDTO{
+		status[name] = RepoStatus{
 			Name:         name,
 			Freshness:    repo["freshness"].(string),
 			RebaseStatus: repo["rebase_status"].(string),
@@ -1578,7 +1578,7 @@ func TestChildFeatureActionCatalogRestricted(t *testing.T) {
 		actionRebase, actionReviewComments, actionRefactor, actionMarkDone,
 	}
 
-	assertNoDeliveryActions := func(t *testing.T, actions []ActionDTO) {
+	assertNoDeliveryActions := func(t *testing.T, actions []Action) {
 		t.Helper()
 		ids := make([]string, 0, len(actions))
 		for _, a := range actions {
@@ -1592,7 +1592,7 @@ func TestChildFeatureActionCatalogRestricted(t *testing.T) {
 			}
 		}
 	}
-	assertDisabledCode := func(t *testing.T, a ActionDTO, wantCode string) {
+	assertDisabledCode := func(t *testing.T, a Action, wantCode string) {
 		t.Helper()
 		if a.Enabled {
 			t.Fatalf("action %q enabled; want disabled with code %q", a.ID, wantCode)
@@ -3377,7 +3377,7 @@ func actionInputByName(t *testing.T, action map[string]any, name string) map[str
 	return nil
 }
 
-func actionInputDTOByName(t *testing.T, action ActionDTO, name string) ActionInputDTO {
+func actionInputDTOByName(t *testing.T, action Action, name string) ActionInput {
 	t.Helper()
 	for _, input := range action.RequiredInputs {
 		if input.Name == name {
@@ -3385,7 +3385,7 @@ func actionInputDTOByName(t *testing.T, action ActionDTO, name string) ActionInp
 		}
 	}
 	t.Fatalf("action %s missing input %q", action.ID, name)
-	return ActionInputDTO{}
+	return ActionInput{}
 }
 
 func assertActionInputRequired(t *testing.T, action map[string]any, name string, want bool) {
@@ -3416,7 +3416,7 @@ func actionCatalogTestFeature(status feature.Status, checkpoints feature.Checkpo
 	}
 }
 
-func actionDTOByID(t *testing.T, actions []ActionDTO, id string) ActionDTO {
+func actionDTOByID(t *testing.T, actions []Action, id string) Action {
 	t.Helper()
 	for _, action := range actions {
 		if action.ID == id {
@@ -3424,7 +3424,7 @@ func actionDTOByID(t *testing.T, actions []ActionDTO, id string) ActionDTO {
 		}
 	}
 	t.Fatalf("action catalog missing %q", id)
-	return ActionDTO{}
+	return Action{}
 }
 
 func stringFieldFromJSON(t *testing.T, raw any, key string) []string {

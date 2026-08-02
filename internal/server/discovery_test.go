@@ -130,7 +130,7 @@ func TestStartServerBindsLoopbackAndServesHealth(t *testing.T) {
 	if !body.StartedAt.Equal(srv.StartedAt()) {
 		t.Fatalf("health started_at = %s; want server started_at %s", body.StartedAt, srv.StartedAt())
 	}
-	wantOwner := OwnerDTOFromInstanceOwner(owner)
+	wantOwner := OwnerFromInstanceOwner(owner)
 	if body.Owner != wantOwner {
 		t.Fatalf("health owner = %+v; want %+v", body.Owner, wantOwner)
 	}
@@ -173,7 +173,7 @@ func TestPublishDiscoveryWritesOwnerOnlyAtomically(t *testing.T) {
 	rec.PID = os.Getpid()
 	rec.StartedAt = time.Now().UTC()
 	rec.PublishedAt = time.Now().UTC()
-	rec.Owner = OwnerDTOFromInstanceOwner(owner)
+	rec.Owner = OwnerFromInstanceOwner(owner)
 
 	if err := PublishDiscovery(runtimeDir, rec); err != nil {
 		t.Fatalf("PublishDiscovery() error = %v", err)
@@ -402,7 +402,7 @@ func TestPrepareDiscoveryRequiresHealthOwnerToMatchRecord(t *testing.T) {
 	}
 	policy := NewLaunchPolicy([]string{providerCodex}, false)
 	startedAt := time.Date(2026, 6, 14, 8, 0, 0, 0, time.UTC)
-	recordOwner := OwnerDTO{
+	recordOwner := Owner{
 		PID:       1111,
 		PGID:      2222,
 		StartedAt: startedAt,
@@ -426,7 +426,7 @@ func TestPrepareDiscoveryRequiresHealthOwnerToMatchRecord(t *testing.T) {
 			Runtime      RuntimeIdentity `json:"runtime"`
 			LaunchPolicy LaunchPolicy    `json:"launch_policy"`
 			StartedAt    time.Time       `json:"started_at"`
-			Owner        OwnerDTO        `json:"owner"`
+			Owner        Owner           `json:"owner"`
 		}{
 			APIVersion:   APIVersion,
 			Status:       "ok",

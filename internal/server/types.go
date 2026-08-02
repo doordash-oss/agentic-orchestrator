@@ -115,16 +115,10 @@ type BulkRelationshipReader interface {
 	AllRelationshipChildren() (map[string]*feature.RelationshipChildren, error)
 }
 
-type ErrorDTO = Error
-
-// OwnerDTO is the public process-owner metadata safe to expose through REST and
-// discovery records.
-type OwnerDTO = Owner
-
-// OwnerDTOFromInstanceOwner drops local filesystem paths from lock owner
+// OwnerFromInstanceOwner drops local filesystem paths from lock owner
 // metadata before it crosses public API or discovery boundaries.
-func OwnerDTOFromInstanceOwner(owner instancelock.Owner) OwnerDTO {
-	return OwnerDTO{
+func OwnerFromInstanceOwner(owner instancelock.Owner) Owner {
+	return Owner{
 		PID:       owner.PID,
 		PGID:      owner.PGID,
 		StartedAt: owner.StartedAt,
@@ -132,104 +126,10 @@ func OwnerDTOFromInstanceOwner(owner instancelock.Owner) OwnerDTO {
 	}
 }
 
-type WarningDTO = Warning
-
-type FeatureDetailDTO = FeatureDetail
-
-type ActionDTO = Action
-
-type ActionScopeDTO = ActionScope
-
-type ActionInputDTO = ActionInput
-
-type ActionDisabledReasonDTO = ActionDisabledReason
-
-type ActionImpactPreviewDTO = ActionImpactPreview
-
-type ActionImpactCategoryDTO = ActionImpactCategory
-
-type ActionImpactSubjectDTO = ActionImpactSubject
-
-type RunSummaryDTO = RunSummary
-
-type SetupDTO = Setup
-
-type SetupTaskDTO = SetupTask
-
-type RepoStatusDTO = RepoStatus
-
-type CycleDTO = Cycle
-
-type TimingDTO = Timing
-
-type CostDTO = Cost
-
-type ReviewGateDTO = ReviewGate
-
-type FailureDTO = Failure
-
-type NeedInputGateDTO = NeedUserInputGate
-
-type NeedUserInputQuestionDTO = NeedUserInputQuestion
-
-type RecoveryItemDTO = RecoveryItem
-
 type RecoveryActionRequest struct {
 	SnapshotID string            `json:"snapshot_id"`
 	Actions    map[string]string `json:"actions"`
 }
-
-type ConfigRepoDTO = ConfigRepo
-
-type FeatureDefaultsDTO = FeatureDefaults
-
-type NotificationConfigDTO = NotificationConfig
-
-type ObservabilityDTO = Observability
-
-type FeatureConfigDTO = FeatureConfig
-
-type CheckpointsDTO = Checkpoints
-
-type PublishabilityDTO = Publishability
-
-type ModelDTO = Model
-
-type ControlRequestDTO = ControlRequest
-
-type PermissionRememberPreviewDTO = PermissionRememberPreview
-
-type AskUserQuestionDTO = AskUserQuestion
-
-type AskUserOptionDTO = AskUserOption
-
-type HelpQueueDTO = HelpQueue
-
-type ArtifactDTO = Artifact
-
-type ContextDTO = Context
-
-type SessionSummaryDTO = SessionSummary
-
-type SessionDetailDTO = SessionDetail
-
-type CursorDTO = Cursor
-
-type UsageDTO = Usage
-
-type TranscriptMessageDTO = TranscriptMessage
-
-type ToolCallDTO = ToolCall
-
-type TaskDTO = Task
-
-type FileChangeDTO = FileChange
-
-type ReviewCommentDTO = ReviewComment
-
-type SSEEventDTO = SSEEvent
-
-type ResourceDTO = Resource
 
 type DiscoveryRecord struct {
 	SchemaVersion int             `json:"schema_version"`
@@ -244,7 +144,7 @@ type DiscoveryRecord struct {
 	PGID          int             `json:"pgid,omitempty"`
 	StartedAt     time.Time       `json:"started_at"`
 	PublishedAt   time.Time       `json:"published_at"`
-	Owner         OwnerDTO        `json:"owner"`
+	Owner         Owner           `json:"owner"`
 }
 
 type DiscoveryDecision struct {

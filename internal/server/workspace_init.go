@@ -87,7 +87,7 @@ func (h *apiHandler) handleWorkspaceRepositoryInitRoute(w http.ResponseWriter, r
 	repo := h.discoveredWorkspaceRepository(target)
 	repo.Root = root
 	if h.broker != nil {
-		h.broker.publish(snapshotRequiredEventDTO(sseEventConfigUpdated, ResourceDTO{Type: resourceTypeRuntime}))
+		h.broker.publish(snapshotRequiredEventDTO(sseEventConfigUpdated, Resource{Type: resourceTypeRuntime}))
 	}
 	resp := RepositoryInitResponse{Result: "initialized", Repository: repo}
 	writeActionJSON(w, http.StatusCreated, &resp)

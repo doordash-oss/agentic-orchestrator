@@ -141,7 +141,7 @@ func TestAutomaticReviewFreshAllowOwningSessionJourney(t *testing.T) {
 	transcriptStatusIndex, transcriptBashIndex := automaticReviewDTOOrder(t, transcript.Messages, wantStatus)
 
 	records, streamErrors := client.SubscribeSessionOutput(t.Context(), automaticReviewJourneySessionID, server.SessionOutputStreamOptions{})
-	var streamed []server.TranscriptMessageDTO
+	var streamed []server.TranscriptMessage
 	for record := range records {
 		streamed = append(streamed, record.Message)
 	}
@@ -487,7 +487,7 @@ func automaticReviewRawOrder(t *testing.T, messages []llm.SDKMessage, wantStatus
 	return statusIndex, bashIndex
 }
 
-func automaticReviewDTOOrder(t *testing.T, messages []server.TranscriptMessageDTO, wantStatus string) (int, int) {
+func automaticReviewDTOOrder(t *testing.T, messages []server.TranscriptMessage, wantStatus string) (int, int) {
 	t.Helper()
 	statusIndex, bashIndex := -1, -1
 	for _, msg := range messages {

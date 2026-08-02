@@ -148,7 +148,7 @@ const routeSegmentConfig = "config"
 
 // entityFeature is the resource/entity-type name for a feature. It's used as
 // a generic-error-message noun and as the DTO discriminator for "feature"
-// scoped resources (ResourceDTO.Type, ActionScopeDTO.Type, etc).
+// scoped resources (Resource.Type, ActionScope.Type, etc).
 const entityFeature = "feature"
 
 // Resource type discriminators used by SSE refresh routing.
@@ -219,7 +219,7 @@ func (h *apiHandler) handleHealth(w http.ResponseWriter, _ *http.Request) {
 		Runtime:       h.runtime,
 		LaunchPolicy:  h.policy,
 		StartedAt:     h.startedAt,
-		Owner:         OwnerDTOFromInstanceOwner(h.owner),
+		Owner:         OwnerFromInstanceOwner(h.owner),
 		ServerTime:    time.Now().UTC(),
 		Compatibility: NewCompatibilityDeclaration(h.owner.Version),
 	})
@@ -267,7 +267,7 @@ func (h *apiHandler) handleFeatureList(w http.ResponseWriter, r *http.Request) {
 	}
 	revision := revisionForAny(struct {
 		Features []FeatureSummary
-		Warnings []WarningDTO
+		Warnings []Warning
 	}{Features: summaries, Warnings: warnings})
 	h.writeRevisionedJSON(w, r, revision, FeatureListResponse{
 		APIVersion: APIVersion,
@@ -475,7 +475,7 @@ func requireMethod(w http.ResponseWriter, r *http.Request, method string) bool {
 	return false
 }
 
-func listFeatures(lister FeatureLister) ([]*feature.Feature, []WarningDTO, error) {
+func listFeatures(lister FeatureLister) ([]*feature.Feature, []Warning, error) {
 	if lister == nil {
 		return nil, nil, nil
 	}
@@ -487,9 +487,9 @@ func listFeatures(lister FeatureLister) ([]*feature.Feature, []WarningDTO, error
 	if !errors.As(err, &partial) {
 		return nil, nil, err
 	}
-	warnings := make([]WarningDTO, 0, len(partial.Warnings))
+	warnings := make([]Warning, 0, len(partial.Warnings))
 	for _, w := range partial.Warnings {
-		warnings = append(warnings, WarningDTO{
+		warnings = append(warnings, Warning{
 			Code:      "partial_load",
 			FeatureID: w.ID,
 			Message:   "feature could not be loaded",
@@ -697,7 +697,7 @@ func revisionMatches(r *http.Request, revision string) bool {
 func writeAPIError(w http.ResponseWriter, status int, code, message string, target map[string]any) {
 	writeJSON(w, status, ErrorResponse{
 		APIVersion: APIVersion,
-		Error: ErrorDTO{
+		Error: Error{
 			Code:    code,
 			Message: message,
 			Status:  status,

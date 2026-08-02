@@ -32,12 +32,12 @@ type SessionOutputStreamOptions struct {
 }
 
 // SessionOutputRecord is one structured transcript row delivered live over
-// /output/stream — the same TranscriptMessageDTO shape the /transcript REST
+// /output/stream — the same TranscriptMessage shape the /transcript REST
 // endpoint returns, addressed by the same row index.
 type SessionOutputRecord struct {
 	SessionID string
 	Index     int
-	Message   TranscriptMessageDTO
+	Message   TranscriptMessage
 }
 
 // SubscribeSessionOutput tails a single session's transcript over

@@ -49,7 +49,7 @@ const toolUsageFileChangeDetail = "Captured from tool usage."
 
 // transcriptTypeControlRequest, transcriptTypeToolProgress,
 // transcriptTypeTaskStarted, transcriptTypeTaskProgress and
-// transcriptTypeTaskNotification are TranscriptMessageDTO.Type values for
+// transcriptTypeTaskNotification are TranscriptMessage.Type values for
 // redacted system rows.
 const (
 	transcriptTypeControlRequest   = "control_request"
@@ -59,14 +59,14 @@ const (
 	transcriptTypeTaskNotification = "task_notification"
 )
 
-// blockTypeText and blockTypeToolUse are TranscriptMessageDTO.Type values for
+// blockTypeText and blockTypeToolUse are TranscriptMessage.Type values for
 // conversational content blocks.
 const (
 	blockTypeText    = "text"
 	blockTypeToolUse = "tool_use"
 )
 
-// fileChangeOpUpdate is the FileChangeDTO.Operation value for an in-place
+// fileChangeOpUpdate is the FileChange.Operation value for an in-place
 // file update (as opposed to create/delete).
 const fileChangeOpUpdate = "update"
 
@@ -81,7 +81,7 @@ const (
 
 func (h *apiHandler) handleSessionList(w http.ResponseWriter, r *http.Request) {
 	sessions := h.allSessions()
-	summaries := make([]SessionSummaryDTO, 0, len(sessions))
+	summaries := make([]SessionSummary, 0, len(sessions))
 	for _, sess := range sessions {
 		summaries = append(summaries, sessionSummaryDTO(sess))
 	}
@@ -100,7 +100,7 @@ func (h *apiHandler) handleSessionDetail(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	detail := sessionDetailFromSummary(sessionSummaryDTO(sess))
-	detail.TranscriptCursor = CursorDTO{
+	detail.TranscriptCursor = Cursor{
 		Total: sess.MessageLog().Len(),
 		Start: 0,
 		End:   sess.MessageLog().Len(),
@@ -138,7 +138,7 @@ func (h *apiHandler) handleTranscript(w http.ResponseWriter, r *http.Request, se
 	messages := sess.MessageLog().Messages()[offset:end]
 	resp := TranscriptResponse{
 		APIVersion: APIVersion,
-		Cursor:     CursorDTO{Total: total, Start: offset, End: end},
+		Cursor:     Cursor{Total: total, Start: offset, End: end},
 		Messages:   transcriptDTOs(messages, offset, sess.WorkDir()),
 	}
 	revision := revisionForAny(resp)
@@ -147,7 +147,7 @@ func (h *apiHandler) handleTranscript(w http.ResponseWriter, r *http.Request, se
 }
 
 // handleSessionOutputStream tails a session's transcript live over SSE,
-// emitting the same row-indexed TranscriptMessageDTO records /transcript
+// emitting the same row-indexed TranscriptMessage records /transcript
 // returns (see transcriptDTOs) — not raw provider log bytes. This is a
 // deliberate choice, not an accident: an earlier raw-byte-tail design let
 // this endpoint and the client's separate snapshot-refresh reconciliation
@@ -283,7 +283,7 @@ func (h *apiHandler) getSession(sessionID string) ports.SessionView {
 	return h.sessions.GetSession(sessionID)
 }
 
-func sessionSummaryDTO(sess ports.SessionView) SessionSummaryDTO {
+func sessionSummaryDTO(sess ports.SessionView) SessionSummary {
 	accumulatedUsage := sess.AccumulatedUsage()
 	usage := accumulatedUsage
 	if latest := sess.LatestUsage(); latest != nil {
@@ -294,7 +294,7 @@ func sessionSummaryDTO(sess ports.SessionView) SessionSummaryDTO {
 		cost = result.TotalCostUSD
 	}
 	taskActivities, runningTaskCount := sessionTaskActivities(sess)
-	return SessionSummaryDTO{
+	return SessionSummary{
 		ID:               sess.ID(),
 		FeatureID:        sess.FeatureID(),
 		RunNumber:        sessionRunNumber(sess),
@@ -313,7 +313,7 @@ func sessionSummaryDTO(sess ports.SessionView) SessionSummaryDTO {
 		EffortSource:     string(sess.EffortSource()),
 		TaskActivities:   taskActivities,
 		RunningTaskCount: runningTaskCount,
-		Usage: UsageDTO{
+		Usage: Usage{
 			InputTokens:  usage.InputTokens,
 			OutputTokens: usage.OutputTokens,
 			CostUSD:      cost,
@@ -372,8 +372,8 @@ func sessionRunNumber(sess ports.SessionView) int {
 	return 0
 }
 
-func sessionDetailFromSummary(summary SessionSummaryDTO) SessionDetailDTO {
-	return SessionDetailDTO{
+func sessionDetailFromSummary(summary SessionSummary) SessionDetail {
+	return SessionDetail{
 		ID:               summary.ID,
 		FeatureID:        summary.FeatureID,
 		RunNumber:        summary.RunNumber,
@@ -419,17 +419,17 @@ func sessionTurnState(sess ports.SessionView) string {
 	}
 }
 
-func pendingControlDTOs(sess ports.SessionView) []ControlRequestDTO {
+func pendingControlDTOs(sess ports.SessionView) []ControlRequest {
 	pending := sess.PendingControlRequests()
-	out := make([]ControlRequestDTO, 0, len(pending))
+	out := make([]ControlRequest, 0, len(pending))
 	for _, req := range pending {
 		out = append(out, controlRequestDTO(sess, req))
 	}
 	return out
 }
 
-func transcriptDTOs(messages []llm.SDKMessage, start int, workDir ...string) []TranscriptMessageDTO {
-	out := make([]TranscriptMessageDTO, 0, len(messages))
+func transcriptDTOs(messages []llm.SDKMessage, start int, workDir ...string) []TranscriptMessage {
+	out := make([]TranscriptMessage, 0, len(messages))
 	root := ""
 	if len(workDir) > 0 {
 		root = workDir[0]
@@ -442,37 +442,37 @@ func transcriptDTOs(messages []llm.SDKMessage, start int, workDir ...string) []T
 		case msg.User != nil:
 			out = append(out, conversationDTOs(index, roleUser, msg.User.Message.Content, root, msg.LocallyAppended, msg.AutoPicked, msg.AutoPickQuestion, msg.AutoPickConfidence)...)
 		case msg.ControlRequest != nil:
-			out = append(out, TranscriptMessageDTO{Index: index, Role: roleSystem, Type: transcriptTypeControlRequest, Tool: msg.ControlRequest.Request.ToolName, Status: controlRequestStatusPending, Redacted: true})
+			out = append(out, TranscriptMessage{Index: index, Role: roleSystem, Type: transcriptTypeControlRequest, Tool: msg.ControlRequest.Request.ToolName, Status: controlRequestStatusPending, Redacted: true})
 		case msg.Result != nil:
-			out = append(out, TranscriptMessageDTO{Index: index, Role: roleSystem, Type: "result", Status: msg.Result.Subtype, Redacted: true})
+			out = append(out, TranscriptMessage{Index: index, Role: roleSystem, Type: "result", Status: msg.Result.Subtype, Redacted: true})
 		case msg.Status != nil:
-			out = append(out, TranscriptMessageDTO{Index: index, Role: roleSystem, Type: "status", Text: msg.Status.Message})
+			out = append(out, TranscriptMessage{Index: index, Role: roleSystem, Type: "status", Text: msg.Status.Message})
 		case msg.ToolProgress != nil:
 			if rows := fileChangeDTOsFromSDKFileChanges(index, msg.ToolProgress.ToolName, msg.FileChanges, root); len(rows) > 0 {
 				out = append(out, rows...)
 				continue
 			}
-			out = append(out, TranscriptMessageDTO{Index: index, Role: roleSystem, Type: transcriptTypeToolProgress, Tool: msg.ToolProgress.ToolName, Redacted: true, FileChange: fileChangeDTOFromToolProgress(msg.ToolProgress, root)})
+			out = append(out, TranscriptMessage{Index: index, Role: roleSystem, Type: transcriptTypeToolProgress, Tool: msg.ToolProgress.ToolName, Redacted: true, FileChange: fileChangeDTOFromToolProgress(msg.ToolProgress, root)})
 		case msg.TaskStarted != nil:
-			out = append(out, TranscriptMessageDTO{Index: index, Role: roleSystem, Type: transcriptTypeTaskStarted, Redacted: true, Task: taskDTOFromStarted(msg.TaskStarted)})
+			out = append(out, TranscriptMessage{Index: index, Role: roleSystem, Type: transcriptTypeTaskStarted, Redacted: true, Task: taskDTOFromStarted(msg.TaskStarted)})
 		case msg.TaskProgress != nil:
-			out = append(out, TranscriptMessageDTO{Index: index, Role: roleSystem, Type: transcriptTypeTaskProgress, Redacted: true, Task: taskDTOFromProgress(msg.TaskProgress)})
+			out = append(out, TranscriptMessage{Index: index, Role: roleSystem, Type: transcriptTypeTaskProgress, Redacted: true, Task: taskDTOFromProgress(msg.TaskProgress)})
 		case msg.TaskNotification != nil:
-			out = append(out, TranscriptMessageDTO{Index: index, Role: roleSystem, Type: transcriptTypeTaskNotification, Status: msg.TaskNotification.Status, Redacted: true, Task: taskDTOFromNotification(msg.TaskNotification)})
+			out = append(out, TranscriptMessage{Index: index, Role: roleSystem, Type: transcriptTypeTaskNotification, Status: msg.TaskNotification.Status, Redacted: true, Task: taskDTOFromNotification(msg.TaskNotification)})
 		default:
-			out = append(out, TranscriptMessageDTO{Index: index, Role: roleSystem, Type: msg.Type, Redacted: true})
+			out = append(out, TranscriptMessage{Index: index, Role: roleSystem, Type: msg.Type, Redacted: true})
 		}
 	}
 	return out
 }
 
-func conversationDTOs(index int, role string, blocks []llm.ContentBlock, workDir string, locallyAppended bool, autoPicked bool, autoPickQuestion string, autoPickConfidence float64) []TranscriptMessageDTO {
-	var out []TranscriptMessageDTO
+func conversationDTOs(index int, role string, blocks []llm.ContentBlock, workDir string, locallyAppended bool, autoPicked bool, autoPickQuestion string, autoPickConfidence float64) []TranscriptMessage {
+	var out []TranscriptMessage
 	for blockIndex, block := range blocks {
 		switch {
 		case block.IsText():
 			userLocal := role == roleUser && locallyAppended
-			out = append(out, TranscriptMessageDTO{
+			out = append(out, TranscriptMessage{
 				Index:              index,
 				BlockIndex:         blockIndex,
 				Role:               role,
@@ -484,7 +484,7 @@ func conversationDTOs(index int, role string, blocks []llm.ContentBlock, workDir
 				AutoPickConfidence: autoPickConfidence,
 			})
 		case block.IsToolUse():
-			out = append(out, TranscriptMessageDTO{
+			out = append(out, TranscriptMessage{
 				Index:      index,
 				BlockIndex: blockIndex,
 				Role:       role,
@@ -495,13 +495,13 @@ func conversationDTOs(index int, role string, blocks []llm.ContentBlock, workDir
 				ToolCall:   toolCallDTOFromToolUse(block),
 			})
 		case block.IsToolResult():
-			out = append(out, TranscriptMessageDTO{Index: index, BlockIndex: blockIndex, Role: role, Type: "tool_result", Redacted: true})
+			out = append(out, TranscriptMessage{Index: index, BlockIndex: blockIndex, Role: role, Type: "tool_result", Redacted: true})
 		case block.IsThinking():
-			out = append(out, TranscriptMessageDTO{Index: index, BlockIndex: blockIndex, Role: role, Type: "thinking", Redacted: true})
+			out = append(out, TranscriptMessage{Index: index, BlockIndex: blockIndex, Role: role, Type: "thinking", Redacted: true})
 		}
 	}
 	if len(out) == 0 {
-		out = append(out, TranscriptMessageDTO{Index: index, Role: role, Type: "message", Redacted: true})
+		out = append(out, TranscriptMessage{Index: index, Role: role, Type: "message", Redacted: true})
 	}
 	return out
 }
@@ -516,7 +516,7 @@ func safeTranscriptText(text, role string, locallyAppended bool) string {
 	return SafeDisplayText(text, 500)
 }
 
-func toolCallDTOFromToolUse(block llm.ContentBlock) *ToolCallDTO {
+func toolCallDTOFromToolUse(block llm.ContentBlock) *ToolCall {
 	if !block.IsToolUse() {
 		return nil
 	}
@@ -534,17 +534,17 @@ func toolCallDTOFromToolUse(block llm.ContentBlock) *ToolCallDTO {
 	if summary == "" && prompt == "" {
 		return nil
 	}
-	return &ToolCallDTO{
+	return &ToolCall{
 		Summary: SafeDisplayText(summary, 500),
 		Prompt:  safeTranscriptPrompt(prompt),
 	}
 }
 
-func taskDTOFromStarted(msg *llm.TaskStartedMessage) *TaskDTO {
+func taskDTOFromStarted(msg *llm.TaskStartedMessage) *Task {
 	if msg == nil {
 		return nil
 	}
-	return &TaskDTO{
+	return &Task{
 		ID:          SafeDisplayText(msg.TaskID, 200),
 		ToolUseID:   SafeDisplayText(msg.ToolUseID, 200),
 		Description: SafeDisplayText(msg.Description, 500),
@@ -553,11 +553,11 @@ func taskDTOFromStarted(msg *llm.TaskStartedMessage) *TaskDTO {
 	}
 }
 
-func taskDTOFromProgress(msg *llm.TaskProgressMessage) *TaskDTO {
+func taskDTOFromProgress(msg *llm.TaskProgressMessage) *Task {
 	if msg == nil {
 		return nil
 	}
-	return &TaskDTO{
+	return &Task{
 		ID:           SafeDisplayText(msg.TaskID, 200),
 		ToolUseID:    SafeDisplayText(msg.ToolUseID, 200),
 		Description:  SafeDisplayText(msg.Description, 500),
@@ -565,11 +565,11 @@ func taskDTOFromProgress(msg *llm.TaskProgressMessage) *TaskDTO {
 	}
 }
 
-func taskDTOFromNotification(msg *llm.TaskNotificationMessage) *TaskDTO {
+func taskDTOFromNotification(msg *llm.TaskNotificationMessage) *Task {
 	if msg == nil {
 		return nil
 	}
-	return &TaskDTO{
+	return &Task{
 		ID:         SafeDisplayText(msg.TaskID, 200),
 		ToolUseID:  SafeDisplayText(msg.ToolUseID, 200),
 		Status:     SafeDisplayText(msg.Status, 200),
@@ -604,7 +604,7 @@ func truncateTranscriptPrompt(prompt string) string {
 	return strings.TrimSpace(strings.Join(lines, "\n"))
 }
 
-func fileChangeDTOFromToolUse(block llm.ContentBlock, workDir string) *FileChangeDTO {
+func fileChangeDTOFromToolUse(block llm.ContentBlock, workDir string) *FileChange {
 	if !block.IsToolUse() {
 		return nil
 	}
@@ -623,7 +623,7 @@ func fileChangeDTOFromToolUse(block llm.ContentBlock, workDir string) *FileChang
 		if detail == "" {
 			detail = toolUsageFileChangeDetail
 		}
-		return &FileChangeDTO{
+		return &FileChange{
 			Path:      safeTranscriptPath(workDir, path),
 			Operation: op,
 			Detail:    SafeDisplayText(truncateTranscriptFileChangeDetail(detail), 2000),
@@ -633,13 +633,13 @@ func fileChangeDTOFromToolUse(block llm.ContentBlock, workDir string) *FileChang
 		if path == "" {
 			return nil
 		}
-		return &FileChangeDTO{Path: safeTranscriptPath(workDir, path), Operation: "delete", Detail: toolUsageFileChangeDetail}
+		return &FileChange{Path: safeTranscriptPath(workDir, path), Operation: "delete", Detail: toolUsageFileChangeDetail}
 	case "Move", "Rename":
 		newPath := firstTranscriptString(input, "new_path", "destination_path", "to", "path")
 		if newPath == "" {
 			return nil
 		}
-		return &FileChangeDTO{
+		return &FileChange{
 			Path:      safeTranscriptPath(workDir, newPath),
 			OldPath:   safeTranscriptPath(workDir, firstTranscriptString(input, "old_path", "source_path", "from")),
 			Operation: "rename",
@@ -650,7 +650,7 @@ func fileChangeDTOFromToolUse(block llm.ContentBlock, workDir string) *FileChang
 	}
 }
 
-func fileChangeDTOFromToolProgress(progress *llm.ToolProgressMessage, workDir string) *FileChangeDTO {
+func fileChangeDTOFromToolProgress(progress *llm.ToolProgressMessage, workDir string) *FileChange {
 	if progress == nil || (progress.ToolName != toolNameWrite && progress.ToolName != toolNameEdit) {
 		return nil
 	}
@@ -662,20 +662,20 @@ func fileChangeDTOFromToolProgress(progress *llm.ToolProgressMessage, workDir st
 	if detail == "" {
 		detail = "Captured from tool activity."
 	}
-	return &FileChangeDTO{Path: safeTranscriptPath(workDir, path), Operation: fileChangeOpUpdate, Detail: detail}
+	return &FileChange{Path: safeTranscriptPath(workDir, path), Operation: fileChangeOpUpdate, Detail: detail}
 }
 
-func fileChangeDTOsFromSDKFileChanges(index int, toolName string, changes []llm.FileChangeEvent, workDir string) []TranscriptMessageDTO {
+func fileChangeDTOsFromSDKFileChanges(index int, toolName string, changes []llm.FileChangeEvent, workDir string) []TranscriptMessage {
 	if len(changes) == 0 {
 		return nil
 	}
-	rows := make([]TranscriptMessageDTO, 0, len(changes))
+	rows := make([]TranscriptMessage, 0, len(changes))
 	for _, change := range changes {
 		dto := fileChangeDTOFromSDKFileChange(change, workDir)
 		if dto == nil {
 			continue
 		}
-		rows = append(rows, TranscriptMessageDTO{
+		rows = append(rows, TranscriptMessage{
 			Index:      index,
 			Role:       roleSystem,
 			Type:       transcriptTypeToolProgress,
@@ -687,7 +687,7 @@ func fileChangeDTOsFromSDKFileChanges(index int, toolName string, changes []llm.
 	return rows
 }
 
-func fileChangeDTOFromSDKFileChange(change llm.FileChangeEvent, workDir string) *FileChangeDTO {
+func fileChangeDTOFromSDKFileChange(change llm.FileChangeEvent, workDir string) *FileChange {
 	path := strings.TrimSpace(change.Path)
 	if path == "" {
 		return nil
@@ -700,7 +700,7 @@ func fileChangeDTOFromSDKFileChange(change llm.FileChangeEvent, workDir string) 
 	if detail == "" {
 		detail = "Captured from provider file change."
 	}
-	return &FileChangeDTO{
+	return &FileChange{
 		Path:         safeTranscriptPath(workDir, path),
 		OldPath:      safeTranscriptPath(workDir, change.OldPath),
 		Operation:    SafeDisplayText(op, 120),

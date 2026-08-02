@@ -145,7 +145,7 @@ func (h *apiHandler) providerReadinessStatuses(ctx context.Context, force bool) 
 	h.readinessProbedAt = time.Now().UTC()
 	h.registry.RestrictToProviders(ready)
 	if changed && h.broker != nil {
-		h.broker.publish(snapshotRequiredEventDTO(sseEventLifecycleUpdated, ResourceDTO{Type: resourceTypeRuntime}))
+		h.broker.publish(snapshotRequiredEventDTO(sseEventLifecycleUpdated, Resource{Type: resourceTypeRuntime}))
 	}
 	return append([]ProviderReadiness(nil), probes...), h.readinessProbedAt
 }
@@ -193,7 +193,7 @@ func (h *apiHandler) refreshProviderReadiness(ctx context.Context, providerName 
 	}
 	h.registry.RestrictToProviders(ready)
 	if changed && h.broker != nil {
-		h.broker.publish(snapshotRequiredEventDTO(sseEventLifecycleUpdated, ResourceDTO{Type: resourceTypeRuntime}))
+		h.broker.publish(snapshotRequiredEventDTO(sseEventLifecycleUpdated, Resource{Type: resourceTypeRuntime}))
 	}
 	return refreshed, true
 }

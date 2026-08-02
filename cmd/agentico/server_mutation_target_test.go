@@ -2313,7 +2313,7 @@ func TestServerMutationTargetReviewCommentsStartUsesProvidedPreviewedComments(t 
 	result, err := target.StartReviewComments(f.ID, serverruntime.ReviewCommentsActionRequest{
 		Repo: testRepoAName,
 		Mode: reviewModeAuto,
-		Comments: []serverruntime.ReviewCommentDTO{{
+		Comments: []serverruntime.ReviewComment{{
 			ID:        202,
 			Type:      ports.CommentTypeReview,
 			RepoName:  testRepoAName,

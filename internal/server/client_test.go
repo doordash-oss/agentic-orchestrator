@@ -125,7 +125,7 @@ func TestClientRetainedMutationReturnsStructuredAPIError(t *testing.T) {
 		}
 		writeJSON(w, http.StatusConflict, ErrorResponse{
 			APIVersion: APIVersion,
-			Error: ErrorDTO{
+			Error: Error{
 				Code:    errCodeConflict,
 				Message: "feature is busy",
 				Status:  http.StatusConflict,

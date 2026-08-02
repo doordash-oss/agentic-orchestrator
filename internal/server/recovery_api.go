@@ -38,7 +38,7 @@ func (h *apiHandler) handleRecoveryRoute(w http.ResponseWriter, r *http.Request)
 		writeAPIError(w, http.StatusInternalServerError, "internal_error", "scan recovery", nil)
 		return
 	}
-	dtoItems := make([]RecoveryItemDTO, 0, len(items))
+	dtoItems := make([]RecoveryItem, 0, len(items))
 	for _, item := range items {
 		dtoItems = append(dtoItems, recoveryItemDTO(item))
 	}
@@ -164,8 +164,8 @@ const (
 	recoveryActionSkip = "skip"
 )
 
-func recoveryItemDTO(item ports.RecoveryItem) RecoveryItemDTO {
-	dto := RecoveryItemDTO{
+func recoveryItemDTO(item ports.RecoveryItem) RecoveryItem {
+	dto := RecoveryItem{
 		Key:          ports.RecoveryActionKey(item.PIDFile.FeatureID, item.RepoName),
 		FeatureID:    item.PIDFile.FeatureID,
 		RepoName:     item.RepoName,
@@ -198,11 +198,11 @@ func recoveryLogAvailable(item ports.RecoveryItem) bool {
 	return false
 }
 
-func (h *apiHandler) storeRecoverySnapshot(items []ports.RecoveryItem, dtoItems []RecoveryItemDTO) string {
+func (h *apiHandler) storeRecoverySnapshot(items []ports.RecoveryItem, dtoItems []RecoveryItem) string {
 	rawItems := append([]ports.RecoveryItem(nil), items...)
 	snapshotID := revisionForAny(struct {
 		GeneratedAt time.Time
-		Items       []RecoveryItemDTO
+		Items       []RecoveryItem
 	}{
 		GeneratedAt: time.Now().UTC(),
 		Items:       dtoItems,

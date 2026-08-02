@@ -2257,14 +2257,14 @@ func actionConflictError(err error) error {
 	return nil
 }
 
-func reviewCommentDTOs(repoName string, comments []ports.ReviewComment) []serverruntime.ReviewCommentDTO {
-	out := make([]serverruntime.ReviewCommentDTO, 0, len(comments))
+func reviewCommentDTOs(repoName string, comments []ports.ReviewComment) []serverruntime.ReviewComment {
+	out := make([]serverruntime.ReviewComment, 0, len(comments))
 	for _, comment := range comments {
 		dtoRepo := comment.RepoName
 		if dtoRepo == "" {
 			dtoRepo = repoName
 		}
-		out = append(out, serverruntime.ReviewCommentDTO{
+		out = append(out, serverruntime.ReviewComment{
 			ID:        comment.ID,
 			Type:      comment.Type,
 			RepoName:  dtoRepo,
@@ -2280,7 +2280,7 @@ func reviewCommentDTOs(repoName string, comments []ports.ReviewComment) []server
 	return out
 }
 
-func reviewCommentDTOsToPorts(repoName string, comments []serverruntime.ReviewCommentDTO) []ports.ReviewComment {
+func reviewCommentDTOsToPorts(repoName string, comments []serverruntime.ReviewComment) []ports.ReviewComment {
 	out := make([]ports.ReviewComment, 0, len(comments))
 	for _, comment := range comments {
 		dtoRepo := comment.RepoName
@@ -2944,7 +2944,7 @@ func runServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledPr
 		PGID:          boot.owner.PGID,
 		StartedAt:     runtimeServer.StartedAt(),
 		PublishedAt:   now,
-		Owner:         serverruntime.OwnerDTOFromInstanceOwner(boot.owner),
+		Owner:         serverruntime.OwnerFromInstanceOwner(boot.owner),
 	}); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: publishing discovery metadata: %v\n", err)
 		return 1

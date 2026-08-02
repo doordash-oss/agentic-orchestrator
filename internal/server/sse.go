@@ -73,8 +73,8 @@ type eventBroker struct {
 	nextSeq            uint64
 	epoch              string
 	replayLimit        int
-	ring               []SSEEventDTO
-	subs               map[chan SSEEventDTO]*subscriberState
+	ring               []SSEEvent
+	subs               map[chan SSEEvent]*subscriberState
 	resourceVersions   map[string]uint64
 	lastOutputActivity map[string]time.Time
 }
@@ -85,7 +85,7 @@ type eventBrokerOptions struct {
 }
 
 type subscriberState struct {
-	coalesced    map[string]SSEEventDTO
+	coalesced    map[string]SSEEvent
 	resetPending bool
 }
 
@@ -120,17 +120,17 @@ func newEventBrokerWithOptions(opts eventBrokerOptions) *eventBroker {
 	return &eventBroker{
 		epoch:              epoch,
 		replayLimit:        replayLimit,
-		subs:               map[chan SSEEventDTO]*subscriberState{},
+		subs:               map[chan SSEEvent]*subscriberState{},
 		resourceVersions:   map[string]uint64{},
 		lastOutputActivity: map[string]time.Time{},
 	}
 }
 
-func (b *eventBroker) subscribeAfter(after uint64, epoch string) (chan SSEEventDTO, []SSEEventDTO, *SSEEventDTO) {
-	ch := make(chan SSEEventDTO, subscriberFIFOSize)
+func (b *eventBroker) subscribeAfter(after uint64, epoch string) (chan SSEEvent, []SSEEvent, *SSEEvent) {
+	ch := make(chan SSEEvent, subscriberFIFOSize)
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	b.subs[ch] = &subscriberState{coalesced: map[string]SSEEventDTO{}}
+	b.subs[ch] = &subscriberState{coalesced: map[string]SSEEvent{}}
 	if after > 0 && epoch == "" {
 		reset := b.streamResetEventLocked()
 		return ch, nil, &reset
@@ -147,14 +147,14 @@ func (b *eventBroker) subscribeAfter(after uint64, epoch string) (chan SSEEventD
 	return ch, replay, nil
 }
 
-func (b *eventBroker) unsubscribe(ch chan SSEEventDTO) {
+func (b *eventBroker) unsubscribe(ch chan SSEEvent) {
 	b.mu.Lock()
 	delete(b.subs, ch)
 	close(ch)
 	b.mu.Unlock()
 }
 
-func (b *eventBroker) publish(evt SSEEventDTO) {
+func (b *eventBroker) publish(evt SSEEvent) {
 	if evt.Kind == "" {
 		return
 	}
@@ -170,18 +170,18 @@ func (b *eventBroker) publish(evt SSEEventDTO) {
 		case ch <- evt:
 		default:
 			if sub.coalesced == nil {
-				sub.coalesced = map[string]SSEEventDTO{}
+				sub.coalesced = map[string]SSEEvent{}
 			}
 			sub.coalesced[resourceKey(evt.Resource)] = evt
 			if len(sub.coalesced) > maxSubscriberCoalescedEvents {
-				sub.coalesced = map[string]SSEEventDTO{}
+				sub.coalesced = map[string]SSEEvent{}
 				sub.resetPending = true
 			}
 		}
 	}
 }
 
-func (b *eventBroker) shouldPublishEventLocked(evt SSEEventDTO) bool {
+func (b *eventBroker) shouldPublishEventLocked(evt SSEEvent) bool {
 	if evt.Kind != sseEventSessionOutputActivity {
 		return true
 	}
@@ -221,7 +221,7 @@ func (b *eventBroker) pruneOutputActivityLocked(now time.Time) {
 	}
 }
 
-func (b *eventBroker) flushSubscriber(ch chan SSEEventDTO) {
+func (b *eventBroker) flushSubscriber(ch chan SSEEvent) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	sub := b.subs[ch]
@@ -240,7 +240,7 @@ func (b *eventBroker) flushSubscriber(ch chan SSEEventDTO) {
 	if len(sub.coalesced) == 0 {
 		return
 	}
-	events := make([]SSEEventDTO, 0, len(sub.coalesced))
+	events := make([]SSEEvent, 0, len(sub.coalesced))
 	for _, evt := range sub.coalesced {
 		events = append(events, evt)
 	}
@@ -255,7 +255,7 @@ func (b *eventBroker) flushSubscriber(ch chan SSEEventDTO) {
 	}
 }
 
-func (b *eventBroker) assignEnvelopeLocked(evt SSEEventDTO) SSEEventDTO {
+func (b *eventBroker) assignEnvelopeLocked(evt SSEEvent) SSEEvent {
 	b.nextSeq++
 	evt.Seq = b.nextSeq
 	evt.ID = strconv.FormatUint(evt.Seq, 10)
@@ -277,7 +277,7 @@ func (b *eventBroker) assignEnvelopeLocked(evt SSEEventDTO) SSEEventDTO {
 	return evt
 }
 
-func (b *eventBroker) appendReplayLocked(evt SSEEventDTO) {
+func (b *eventBroker) appendReplayLocked(evt SSEEvent) {
 	b.ring = append(b.ring, evt)
 	if len(b.ring) > b.replayLimit {
 		copy(b.ring, b.ring[len(b.ring)-b.replayLimit:])
@@ -285,7 +285,7 @@ func (b *eventBroker) appendReplayLocked(evt SSEEventDTO) {
 	}
 }
 
-func (b *eventBroker) replayAfterLocked(after uint64) ([]SSEEventDTO, bool) {
+func (b *eventBroker) replayAfterLocked(after uint64) ([]SSEEvent, bool) {
 	if len(b.ring) == 0 {
 		return nil, true
 	}
@@ -297,7 +297,7 @@ func (b *eventBroker) replayAfterLocked(after uint64) ([]SSEEventDTO, bool) {
 	if after < oldest-1 {
 		return nil, false
 	}
-	replay := make([]SSEEventDTO, 0, len(b.ring))
+	replay := make([]SSEEvent, 0, len(b.ring))
 	for _, evt := range b.ring {
 		if evt.Seq > after {
 			replay = append(replay, evt)
@@ -324,17 +324,17 @@ func (b *eventBroker) currentEpoch() string {
 	return b.epoch
 }
 
-func (b *eventBroker) streamResetEventLocked() SSEEventDTO {
+func (b *eventBroker) streamResetEventLocked() SSEEvent {
 	seq := b.nextSeq
-	return SSEEventDTO{
+	return SSEEvent{
 		APIVersion:       APIVersion,
 		ID:               strconv.FormatUint(seq, 10),
 		Seq:              seq,
 		Epoch:            b.epoch,
 		Kind:             sseEventStreamReset,
 		At:               time.Now().UTC(),
-		Resource:         ResourceDTO{Type: resourceTypeRuntime},
-		Revision:         revisionForAny(ResourceDTO{Type: resourceTypeRuntime}),
+		Resource:         Resource{Type: resourceTypeRuntime},
+		Revision:         revisionForAny(Resource{Type: resourceTypeRuntime}),
 		SnapshotRequired: true,
 	}
 }
@@ -360,7 +360,7 @@ func (h *apiHandler) handleEvents(w http.ResponseWriter, r *http.Request) {
 		// wire value (after=0) that's indistinguishable from a genuine
 		// "I read as_of_seq=0" cursor — see subscribeAfter/replayAfterLocked,
 		// which now correctly treats after=0 as a real low-water-mark.
-		connected := h.broker.snapshotRequiredEvent(sseEventConnected, ResourceDTO{Type: resourceTypeRuntime})
+		connected := h.broker.snapshotRequiredEvent(sseEventConnected, Resource{Type: resourceTypeRuntime})
 		if err := writeSSE(w, sseEventConnected, connected); err != nil {
 			return
 		}
@@ -395,14 +395,14 @@ func (h *apiHandler) handleEvents(w http.ResponseWriter, r *http.Request) {
 		case now := <-ticker.C:
 			h.broker.flushSubscriber(ch)
 			seq, epoch := h.broker.currentCursor()
-			evt := SSEEventDTO{
+			evt := SSEEvent{
 				APIVersion:       APIVersion,
 				ID:               strconv.FormatUint(seq, 10),
 				Seq:              seq,
 				Epoch:            epoch,
 				Kind:             sseEventHeartbeat,
 				At:               now.UTC(),
-				Resource:         ResourceDTO{Type: resourceTypeRuntime},
+				Resource:         Resource{Type: resourceTypeRuntime},
 				SnapshotRequired: false,
 			}
 			if err := writeSSE(w, sseEventHeartbeat, evt); err != nil {
@@ -439,7 +439,7 @@ func heartbeatInterval(r *http.Request) time.Duration {
 	return time.Duration(ms) * time.Millisecond
 }
 
-func writeSSE(w http.ResponseWriter, event string, data SSEEventDTO) error {
+func writeSSE(w http.ResponseWriter, event string, data SSEEvent) error {
 	payload, err := json.Marshal(data)
 	if err != nil {
 		return err
@@ -455,10 +455,10 @@ func setStreamWriteDeadline(w http.ResponseWriter) {
 	_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(streamWriteTimeout))
 }
 
-func (b *eventBroker) snapshotRequiredEvent(kind string, resource ResourceDTO) SSEEventDTO {
+func (b *eventBroker) snapshotRequiredEvent(kind string, resource Resource) SSEEvent {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return b.assignEnvelopeLocked(SSEEventDTO{
+	return b.assignEnvelopeLocked(SSEEvent{
 		APIVersion:       APIVersion,
 		Kind:             kind,
 		Resource:         resource,
@@ -466,12 +466,12 @@ func (b *eventBroker) snapshotRequiredEvent(kind string, resource ResourceDTO) S
 	})
 }
 
-func eventDTOFromRuntime(msg interface{}) SSEEventDTO {
+func eventDTOFromRuntime(msg interface{}) SSEEvent {
 	switch ev := msg.(type) {
 	case ports.Event:
 		return eventDTOFromDomain(ev)
 	case session.SDKEventMsg:
-		resource := ResourceDTO{Type: resourceTypeSession, ID: ev.SessionID, FeatureID: ev.FeatureID, Phase: ev.Phase.String()}
+		resource := Resource{Type: resourceTypeSession, ID: ev.SessionID, FeatureID: ev.FeatureID, Phase: ev.Phase.String()}
 		if ev.Message.ControlRequest != nil {
 			kind := "permission.updated"
 			if ev.Message.ControlRequest.Request.ToolName == toolNameAskUserQuestion {
@@ -479,7 +479,7 @@ func eventDTOFromRuntime(msg interface{}) SSEEventDTO {
 			}
 			return snapshotRequiredEventDTO(kind, resource)
 		}
-		return SSEEventDTO{
+		return SSEEvent{
 			APIVersion:       APIVersion,
 			Kind:             sseEventSessionOutputActivity,
 			At:               time.Now().UTC(),
@@ -489,19 +489,19 @@ func eventDTOFromRuntime(msg interface{}) SSEEventDTO {
 			RecordCount:      ev.RecordCount,
 		}
 	case session.SessionStartedMsg:
-		return snapshotRequiredEventDTO(sseEventSessionUpdated, ResourceDTO{Type: resourceTypeSession, ID: ev.SessionID, FeatureID: ev.FeatureID, Phase: ev.Phase.String()})
+		return snapshotRequiredEventDTO(sseEventSessionUpdated, Resource{Type: resourceTypeSession, ID: ev.SessionID, FeatureID: ev.FeatureID, Phase: ev.Phase.String()})
 	case session.SessionDoneMsg:
-		return snapshotRequiredEventDTO(sseEventSessionUpdated, ResourceDTO{Type: resourceTypeSession, ID: ev.SessionID, FeatureID: ev.FeatureID, Phase: ev.Phase.String()})
+		return snapshotRequiredEventDTO(sseEventSessionUpdated, Resource{Type: resourceTypeSession, ID: ev.SessionID, FeatureID: ev.FeatureID, Phase: ev.Phase.String()})
 	default:
-		return snapshotRequiredEventDTO(sseEventLifecycleUpdated, ResourceDTO{Type: resourceTypeRuntime})
+		return snapshotRequiredEventDTO(sseEventLifecycleUpdated, Resource{Type: resourceTypeRuntime})
 	}
 }
 
-func eventDTOFromDomain(ev ports.Event) SSEEventDTO {
+func eventDTOFromDomain(ev ports.Event) SSEEvent {
 	kind := sseEventLifecycleUpdated
 	resourceType := entityFeature
 	if relationshipEventType(ev.Type) {
-		resource := ResourceDTO{
+		resource := Resource{
 			Type:                resourceTypeRelationship,
 			ID:                  relationshipResourceID(ev.ParentID, ev.ChildID),
 			ParentID:            ev.ParentID,
@@ -537,10 +537,10 @@ func eventDTOFromDomain(ev ports.Event) SSEEventDTO {
 	if ev.Phase == feature.Phase(0) && phase == feature.PhaseResearch.String() {
 		phase = ""
 	}
-	resource := ResourceDTO{Type: resourceType, FeatureID: ev.FeatureID, Phase: phase}
-	var dto SSEEventDTO
+	resource := Resource{Type: resourceType, FeatureID: ev.FeatureID, Phase: phase}
+	var dto SSEEvent
 	if kind == sseEventSessionOutputActivity {
-		dto = SSEEventDTO{
+		dto = SSEEvent{
 			APIVersion:       APIVersion,
 			Kind:             kind,
 			At:               time.Now().UTC(),
@@ -573,8 +573,8 @@ func relationshipResourceID(parentID, childID string) string {
 	return parentID + ":" + childID
 }
 
-func snapshotRequiredEventDTO(kind string, resource ResourceDTO) SSEEventDTO {
-	return SSEEventDTO{
+func snapshotRequiredEventDTO(kind string, resource Resource) SSEEvent {
+	return SSEEvent{
 		APIVersion:       APIVersion,
 		Kind:             kind,
 		At:               time.Now().UTC(),
@@ -584,7 +584,7 @@ func snapshotRequiredEventDTO(kind string, resource ResourceDTO) SSEEventDTO {
 	}
 }
 
-func resourceKey(resource ResourceDTO) string {
+func resourceKey(resource Resource) string {
 	return resource.Type + "\x00" + resource.ID + "\x00" + resource.FeatureID + "\x00" + resource.ParentID + "\x00" + resource.ChildID + "\x00" + resource.Phase
 }
 

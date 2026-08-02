@@ -291,7 +291,7 @@ func TestSnapshotResponsesExposeAsOfSequence(t *testing.T) {
 		}),
 		DisableHostValidation: true,
 	})
-	handler.broker.publish(SSEEventDTO{Kind: testEventKindFeatureState, Resource: ResourceDTO{Type: entityFeature, ID: fixtureFeatureID}})
+	handler.broker.publish(SSEEvent{Kind: testEventKindFeatureState, Resource: Resource{Type: entityFeature, ID: fixtureFeatureID}})
 
 	w := httptest.NewRecorder()
 	handler.routes().ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/v1/features", nil))

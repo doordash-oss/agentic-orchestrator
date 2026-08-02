@@ -52,7 +52,6 @@ type apiHandler struct {
 	sessions              ports.SessionManager
 	broker                *eventBroker
 	mutations             MutationTarget
-	requestShutdown       func()
 	persistProviderModels func(llm.LLMProvider, []llm.ModelInfo) error
 	disableHostValidation bool
 	initGitRepository     func(path string) error
@@ -106,7 +105,6 @@ func newAPIHandler(opts HandlerOptions) *apiHandler {
 		sessions:              opts.Sessions,
 		broker:                newEventBroker(opts.Events, opts.DomainEvents),
 		mutations:             opts.Mutations,
-		requestShutdown:       opts.RequestShutdown,
 		persistProviderModels: opts.PersistProviderModelCatalog,
 		disableHostValidation: opts.DisableHostValidation,
 		initGitRepository:     opts.InitGitRepository,
@@ -140,7 +138,6 @@ const (
 	apiPathRecovery         = "/api/v1/recovery"
 	apiPathRecoveryActions  = "/api/v1/recovery/actions"
 	apiPathRecoveryLogs     = "/api/v1/recovery/logs"
-	apiPathShutdown         = "/api/v1/shutdown"
 	apiPathEvents           = "/api/v1/events"
 )
 
@@ -180,7 +177,6 @@ var topLevelServerRoutes = []topLevelRoute{
 	{apiPathRecovery, func(h *apiHandler) http.HandlerFunc { return h.handleRecoveryRoute }},
 	{apiPathRecoveryActions, func(h *apiHandler) http.HandlerFunc { return h.handleRecoveryActionRoute }},
 	{apiPathRecoveryLogs, func(h *apiHandler) http.HandlerFunc { return h.handleRecoveryLogRoute }},
-	{apiPathShutdown, func(h *apiHandler) http.HandlerFunc { return h.handleShutdownMutationRoute }},
 	{apiPathEvents, func(h *apiHandler) http.HandlerFunc { return methodHandler(h.handleEvents) }},
 }
 
@@ -301,14 +297,6 @@ func (h *apiHandler) handleFeatureRoutes(w http.ResponseWriter, r *http.Request)
 				return
 			}
 			h.handleRebasePreflight(w, r, featureID)
-			return
-		case "refactor":
-			if r.Method != http.MethodPost {
-				w.Header().Set("Allow", "POST")
-				writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed", nil)
-				return
-			}
-			h.handleRefactorPreflight(w, r, featureID)
 			return
 		case "completion":
 			if r.Method != http.MethodGet {

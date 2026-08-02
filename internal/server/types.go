@@ -51,7 +51,6 @@ type Options struct {
 	Events               <-chan interface{}
 	DomainEvents         <-chan ports.Event
 	Mutations            MutationTarget
-	RequestShutdown      func()
 	// PersistProviderModelCatalog writes a successfully discovered provider
 	// catalog before the server installs it in memory. Nil keeps live refreshes
 	// in memory only.
@@ -86,7 +85,6 @@ type HandlerOptions struct {
 	Events                      <-chan interface{}
 	DomainEvents                <-chan ports.Event
 	Mutations                   MutationTarget
-	RequestShutdown             func()
 	PersistProviderModelCatalog func(llm.LLMProvider, []llm.ModelInfo) error
 	// InitGitRepository overrides the git-init implementation used by the
 	// workspace repository-initialization endpoint. Nil means the default

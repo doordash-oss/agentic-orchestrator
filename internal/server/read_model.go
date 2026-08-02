@@ -101,7 +101,6 @@ const (
 	actionStart          = "start"
 	actionRetry          = "retry"
 	actionReviewComments = "review-comments"
-	actionReviewDecision = "review-decision"
 	actionRewind         = "rewind"
 )
 

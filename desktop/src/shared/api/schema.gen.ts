@@ -200,23 +200,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/features/{feature_id}/refactor/preflight": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Read-only, server-authored refactor scope-resolution preflight — resolves an explicit one-repository or all-repositories choice into the exact repository impact, validates prompt/pipeline bounds, and returns the source revision. No side effects. */
-        post: operations["getRefactorPreflight"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/v1/features/{feature_id}/completion/preflight": {
         parameters: {
             query?: never;
@@ -804,23 +787,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/shutdown": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Request runtime shutdown. */
-        post: operations["shutdownRuntime"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/v1/events": {
         parameters: {
             query?: never;
@@ -1170,7 +1136,6 @@ export interface components {
             feature_start_response?: components["schemas"]["FeatureStartResponse"];
             feature_stop_response?: components["schemas"]["FeatureStopResponse"];
             feature_restart_response?: components["schemas"]["FeatureRestartResponse"];
-            review_decision_response?: components["schemas"]["ReviewDecisionResponse"];
             feature_config_update_response?: components["schemas"]["FeatureConfigUpdateResponse"];
             need_user_input_resume_response?: components["schemas"]["NeedUserInputResumeResponse"];
             need_user_input_draft_response?: components["schemas"]["NeedUserInputDraftResponse"];
@@ -1193,7 +1158,6 @@ export interface components {
             delete_feature_response?: components["schemas"]["DeleteFeatureResponse"];
             discard_child_response?: components["schemas"]["DiscardChildResponse"];
             recovery_action_response?: components["schemas"]["RecoveryActionResponse"];
-            shutdown_response?: components["schemas"]["ShutdownResponse"];
         };
         CreateFeatureResponse: components["schemas"]["ActionBaseResponse"] & components["schemas"]["FeatureActionResult"];
         CreateFeatureMutationRequest: {
@@ -1226,9 +1190,6 @@ export interface components {
             dispatch?: string;
             repo_cycle_count?: number;
             session_ids?: string[];
-        };
-        ReviewDecisionResponse: components["schemas"]["ActionBaseResponse"] & components["schemas"]["FeatureActionResult"] & {
-            decision: string;
         };
         FeatureConfigUpdateResponse: components["schemas"]["ActionBaseResponse"] & components["schemas"]["FeatureActionResult"];
         NeedUserInputResumeResponse: components["schemas"]["ActionBaseResponse"] & components["schemas"]["FeatureActionResult"];
@@ -1379,25 +1340,6 @@ export interface components {
             source_revision: string;
             repos: components["schemas"]["RebasePreflightRepo"][];
         };
-        RefactorPreflightRequest: {
-            /** @description Explicit single repository, or empty to resolve all feature repositories. An empty choice is never treated as implicit all-repository authorization at execution — the desktop must send the resolved scope from this preflight. */
-            repo?: string;
-            prompt: string;
-            pipeline?: string;
-        };
-        RefactorPreflightResponse: components["schemas"]["JSONResponse"] & {
-            feature_id: string;
-            /** @description Authoritative revision of the repository state this preflight observed. Execution rejects a stale preflight before any side effect. */
-            source_revision: string;
-            /** @description Resolved scope — single or all. */
-            scope: string;
-            /** @description Exact resolved repository set the refactor will affect. */
-            repos: string[];
-            prompt: string;
-            pipeline?: string;
-            /** @description Safe, server-authored reasons the refactor cannot proceed, when non-empty. */
-            blockers?: string[];
-        };
         MarkDoneResponse: components["schemas"]["ActionBaseResponse"] & components["schemas"]["FeatureActionResult"];
         CompletionPreflightResponse: components["schemas"]["JSONResponse"] & {
             feature_id: string;
@@ -1488,7 +1430,6 @@ export interface components {
         };
         DiscardChildResponse: components["schemas"]["ActionBaseResponse"] & components["schemas"]["FeatureActionResult"];
         RecoveryActionResponse: components["schemas"]["ActionBaseResponse"] & components["schemas"]["ActionResult"];
-        ShutdownResponse: components["schemas"]["ActionBaseResponse"] & components["schemas"]["ActionResult"];
         ActionResult: {
             result: string;
         };
@@ -2383,17 +2324,6 @@ export interface components {
                 "application/json": components["schemas"]["RebasePreflightResponse"];
             };
         };
-        /** @description Read-only, server-authored refactor scope-resolution preflight. */
-        RefactorPreflightResponse: {
-            headers: {
-                "X-Agentico-Seq": components["headers"]["Sequence"];
-                ETag: components["headers"]["ETag"];
-                [name: string]: unknown;
-            };
-            content: {
-                "application/json": components["schemas"]["RefactorPreflightResponse"];
-            };
-        };
         /** @description Read-only, server-authored completion preflight — eligible repository set, outcomes, blockers, PR URLs, source revision. */
         CompletionPreflightResponse: {
             headers: {
@@ -2506,8 +2436,8 @@ export interface components {
         ReviewID: string;
         LogID: string;
         SessionID: string;
-        FeatureAction: "setup" | "start" | "resume" | "pause-stop" | "restart" | "publish" | "merge" | "rewind" | "retry" | "rebase" | "review-comments" | "review-decision" | "need-user-input" | "need-user-input-draft" | "mark-done" | "cleanup" | "delete" | "refactor" | "discard";
-        FeatureSubaction: "description" | "fetch" | "finish" | "restart";
+        FeatureAction: "setup" | "start" | "resume" | "pause-stop" | "restart" | "publish" | "merge" | "rewind" | "retry" | "rebase" | "review-comments" | "need-user-input" | "need-user-input-draft" | "mark-done" | "cleanup" | "delete" | "refactor" | "discard";
+        FeatureSubaction: "description" | "fetch";
         Offset: number;
         Limit: number;
         /** @description 1-indexed page number for run-history pagination. */
@@ -2802,25 +2732,6 @@ export interface operations {
         requestBody?: never;
         responses: {
             200: components["responses"]["RebasePreflightResponse"];
-            401: components["responses"]["Unauthorized"];
-        };
-    };
-    getRefactorPreflight: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                feature_id: components["parameters"]["FeatureID"];
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["RefactorPreflightRequest"];
-            };
-        };
-        responses: {
-            200: components["responses"]["RefactorPreflightResponse"];
             401: components["responses"]["Unauthorized"];
         };
     };
@@ -3429,22 +3340,6 @@ export interface operations {
         requestBody?: never;
         responses: {
             200: components["responses"]["TextContentResponse"];
-            401: components["responses"]["Unauthorized"];
-        };
-    };
-    shutdownRuntime: {
-        parameters: {
-            query?: never;
-            header: {
-                /** @description CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required. */
-                "X-Agentico-Client": components["parameters"]["TrustedMutationHeader"];
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: components["requestBodies"]["JSONMutation"];
-        responses: {
-            200: components["responses"]["ActionResponse"];
             401: components["responses"]["Unauthorized"];
         };
     };

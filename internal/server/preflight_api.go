@@ -16,9 +16,6 @@ package server
 
 import (
 	"net/http"
-	"strings"
-
-	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 )
 
 // handleRebasePreflight serves GET
@@ -35,48 +32,6 @@ func (h *apiHandler) handleRebasePreflight(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	resp, err := h.mutations.PreflightRebase(featureID)
-	if err != nil {
-		writeStoreError(w, err, featureID)
-		return
-	}
-	if resp.APIVersion == "" {
-		resp.APIVersion = APIVersion
-	}
-	revision := revisionForAny(resp)
-	resp.Meta = h.responseMeta(revision)
-	h.writeRevisionedJSON(w, r, revision, resp)
-}
-
-// handleRefactorPreflight serves POST
-// /api/v1/features/{feature_id}/refactor/preflight — a read-only, server-authored
-// scope-resolution preview for a refactor. It requires an explicit single or
-// all-repository choice (an empty repo resolves to every feature repository),
-// validates prompt and pipeline bounds, returns the exact resolved repository
-// set, blockers, and the authoritative source revision. No side effects; the
-// desktop must send the resolved scope and source revision back at execution.
-func (h *apiHandler) handleRefactorPreflight(w http.ResponseWriter, r *http.Request, featureID string) {
-	if h.mutations == nil {
-		writeAPIError(w, http.StatusServiceUnavailable, "unavailable", "mutation service unavailable", nil)
-		return
-	}
-	var req RefactorPreflightRequest
-	if !decodeMutationJSON(w, r, &req) {
-		return
-	}
-	prompt := strings.TrimSpace(req.Prompt)
-	if prompt == "" {
-		writeAPIError(w, http.StatusBadRequest, "bad_request", "prompt is required", map[string]any{"feature_id": featureID})
-		return
-	}
-	if len(prompt) > MaxActionTextBytes {
-		writeAPIError(w, http.StatusBadRequest, "bad_request", "prompt is too long", map[string]any{"feature_id": featureID})
-		return
-	}
-	if !validateRepoName(w, req.Repo, false) || !validatePipelineProfile(w, feature.PipelineProfile(req.Pipeline)) {
-		return
-	}
-	req.Prompt = prompt
-	resp, err := h.mutations.PreflightRefactor(featureID, req)
 	if err != nil {
 		writeStoreError(w, err, featureID)
 		return

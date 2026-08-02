@@ -656,42 +656,6 @@ func TestClientRewindFeatureUsesLongMutationTimeout(t *testing.T) {
 	}
 }
 
-func TestClientShutdownPostsTrustedMutationAndReturnsResult(t *testing.T) {
-	var sawTrustedHeader bool
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost || r.URL.Path != "/api/v1/shutdown" {
-			t.Fatalf("unexpected request %s %s", r.Method, r.URL.String())
-		}
-		sawTrustedHeader = r.Header.Get("X-Agentico-Client") == trustedClientHeaderValue
-		if got := r.Header.Get("Content-Type"); got != contentTypeJSON {
-			t.Fatalf("Content-Type = %q, want application/json", got)
-		}
-		var req map[string]any
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			t.Fatalf("decode shutdown request: %v", err)
-		}
-		if len(req) != 0 {
-			t.Fatalf("shutdown request = %+v, want empty JSON object", req)
-		}
-		writeJSON(w, http.StatusOK, ShutdownResponse{
-			APIVersion: APIVersion, Result: resultShutdownScheduled,
-		})
-	}))
-	defer srv.Close()
-
-	client, err := NewClient(ClientOptions{BaseURL: srv.URL})
-	if err != nil {
-		t.Fatalf("NewClient() error = %v", err)
-	}
-	shutdown, err := client.Shutdown(context.Background())
-	if err != nil {
-		t.Fatalf("Shutdown() error = %v", err)
-	}
-	if shutdown.Result != resultShutdownScheduled || !sawTrustedHeader {
-		t.Fatalf("Shutdown() = %+v trusted=%v, want shutdown_scheduled trusted result", shutdown, sawTrustedHeader)
-	}
-}
-
 func TestClientReturnsStructuredErrorsMalformedResponsesAndTimeouts(t *testing.T) {
 	t.Run("structured_error", func(t *testing.T) {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -786,9 +750,9 @@ func TestClientSendsBearerTokenOnReadsMutationsAndEvents(t *testing.T) {
 		case routeGetFeatures:
 			sawReadAuth.Store(true)
 			writeJSON(w, http.StatusOK, FeatureListResponse{APIVersion: APIVersion})
-		case "POST /api/v1/shutdown":
+		case "POST /api/v1/features/feat-1/actions/pause-stop":
 			sawMutationAuth.Store(true)
-			writeJSON(w, http.StatusOK, ShutdownResponse{APIVersion: APIVersion, Result: "ok"})
+			writeJSON(w, http.StatusOK, FeatureStopResponse{APIVersion: APIVersion, FeatureID: fixtureFeatureID, Result: "ok"})
 		case "GET /api/v1/events":
 			sawEventAuth.Store(true)
 			w.Header().Set("Content-Type", "text/event-stream")
@@ -806,8 +770,8 @@ func TestClientSendsBearerTokenOnReadsMutationsAndEvents(t *testing.T) {
 	if _, err := client.Features(context.Background()); err != nil {
 		t.Fatalf("Features() error = %v", err)
 	}
-	if _, err := client.Shutdown(context.Background()); err != nil {
-		t.Fatalf("Shutdown() error = %v", err)
+	if _, err := client.StopFeature(context.Background(), fixtureFeatureID); err != nil {
+		t.Fatalf("StopFeature() error = %v", err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	signals, errs := client.SubscribeEvents(ctx, EventSubscriptionOptions{})

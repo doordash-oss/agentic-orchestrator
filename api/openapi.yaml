@@ -261,24 +261,6 @@ paths:
         "401":
           $ref: "#/components/responses/Unauthorized"
 
-  /api/v1/features/{feature_id}/refactor/preflight:
-    post:
-      operationId: getRefactorPreflight
-      summary: Read-only, server-authored refactor scope-resolution preflight — resolves an explicit one-repository or all-repositories choice into the exact repository impact, validates prompt/pipeline bounds, and returns the source revision. No side effects.
-      parameters:
-        - $ref: "#/components/parameters/FeatureID"
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/RefactorPreflightRequest"
-      responses:
-        "200":
-          $ref: "#/components/responses/RefactorPreflightResponse"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-
   /api/v1/features/{feature_id}/completion/preflight:
     get:
       operationId: getCompletionPreflight
@@ -861,20 +843,6 @@ paths:
         "401":
           $ref: "#/components/responses/Unauthorized"
 
-  /api/v1/shutdown:
-    post:
-      operationId: shutdownRuntime
-      summary: Request runtime shutdown.
-      parameters:
-        - $ref: "#/components/parameters/TrustedMutationHeader"
-      requestBody:
-        $ref: "#/components/requestBodies/JSONMutation"
-      responses:
-        "200":
-          $ref: "#/components/responses/ActionResponse"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-
   /api/v1/events:
     get:
       operationId: streamEvents
@@ -978,7 +946,6 @@ components:
           - retry
           - rebase
           - review-comments
-          - review-decision
           - need-user-input
           - need-user-input-draft
           - mark-done
@@ -995,8 +962,6 @@ components:
         enum:
           - description
           - fetch
-          - finish
-          - restart
     Offset:
       name: offset
       in: query
@@ -1252,17 +1217,6 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/RebasePreflightResponse"
-    RefactorPreflightResponse:
-      description: Read-only, server-authored refactor scope-resolution preflight.
-      headers:
-        X-Agentico-Seq:
-          $ref: "#/components/headers/Sequence"
-        ETag:
-          $ref: "#/components/headers/ETag"
-      content:
-        application/json:
-          schema:
-            $ref: "#/components/schemas/RefactorPreflightResponse"
     CompletionPreflightResponse:
       description: Read-only, server-authored completion preflight — eligible repository set, outcomes, blockers, PR URLs, source revision.
       headers:
@@ -2161,8 +2115,6 @@ components:
               $ref: "#/components/schemas/FeatureStopResponse"
             feature_restart_response:
               $ref: "#/components/schemas/FeatureRestartResponse"
-            review_decision_response:
-              $ref: "#/components/schemas/ReviewDecisionResponse"
             feature_config_update_response:
               $ref: "#/components/schemas/FeatureConfigUpdateResponse"
             need_user_input_resume_response:
@@ -2207,8 +2159,6 @@ components:
               $ref: "#/components/schemas/DiscardChildResponse"
             recovery_action_response:
               $ref: "#/components/schemas/RecoveryActionResponse"
-            shutdown_response:
-              $ref: "#/components/schemas/ShutdownResponse"
     CreateFeatureResponse:
       allOf:
         - $ref: "#/components/schemas/ActionBaseResponse"
@@ -2292,15 +2242,6 @@ components:
               x-go-name: SessionIDs
               items:
                 type: string
-    ReviewDecisionResponse:
-      allOf:
-        - $ref: "#/components/schemas/ActionBaseResponse"
-        - $ref: "#/components/schemas/FeatureActionResult"
-        - type: object
-          required: [decision]
-          properties:
-            decision:
-              type: string
     FeatureConfigUpdateResponse:
       allOf:
         - $ref: "#/components/schemas/ActionBaseResponse"
@@ -2688,45 +2629,6 @@ components:
               type: array
               items:
                 $ref: "#/components/schemas/RebasePreflightRepo"
-    RefactorPreflightRequest:
-      type: object
-      required: [prompt]
-      properties:
-        repo:
-          type: string
-          description: Explicit single repository, or empty to resolve all feature repositories. An empty choice is never treated as implicit all-repository authorization at execution — the desktop must send the resolved scope from this preflight.
-        prompt:
-          type: string
-        pipeline:
-          type: string
-    RefactorPreflightResponse:
-      allOf:
-        - $ref: "#/components/schemas/JSONResponse"
-        - type: object
-          required: [feature_id, source_revision, scope, repos, prompt]
-          properties:
-            feature_id:
-              type: string
-            source_revision:
-              type: string
-              description: Authoritative revision of the repository state this preflight observed. Execution rejects a stale preflight before any side effect.
-            scope:
-              type: string
-              description: Resolved scope — single or all.
-            repos:
-              type: array
-              items:
-                type: string
-              description: Exact resolved repository set the refactor will affect.
-            prompt:
-              type: string
-            pipeline:
-              type: string
-            blockers:
-              type: array
-              items:
-                type: string
-              description: Safe, server-authored reasons the refactor cannot proceed, when non-empty.
     MarkDoneResponse:
       allOf:
         - $ref: "#/components/schemas/ActionBaseResponse"
@@ -2912,10 +2814,6 @@ components:
         - $ref: "#/components/schemas/ActionBaseResponse"
         - $ref: "#/components/schemas/FeatureActionResult"
     RecoveryActionResponse:
-      allOf:
-        - $ref: "#/components/schemas/ActionBaseResponse"
-        - $ref: "#/components/schemas/ActionResult"
-    ShutdownResponse:
       allOf:
         - $ref: "#/components/schemas/ActionBaseResponse"
         - $ref: "#/components/schemas/ActionResult"

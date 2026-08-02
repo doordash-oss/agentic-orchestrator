@@ -40,7 +40,7 @@ const (
 	reviewArtifactPrompt = "prompt"
 )
 
-type reviewDecisionFunc func(featureID string, req ReviewDecisionRequest) (ReviewDecisionResponse, error)
+type reviewDecisionFunc func(featureID string, req ReviewDecisionRequest) error
 
 type reviewSessionService struct {
 	store   FeatureReader
@@ -269,7 +269,7 @@ func (s *reviewSessionService) SubmitDecision(featureID, reviewID string, req Re
 		IsRewind:  meta.ReviewMode == reviewModeRewind,
 	}
 	if s.decider != nil {
-		if _, err := s.decider(featureID, decisionReq); err != nil {
+		if err := s.decider(featureID, decisionReq); err != nil {
 			return ReviewSessionDecisionResponse{}, err
 		}
 	}

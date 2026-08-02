@@ -13,7 +13,7 @@
 // limitations under the License.
 
 // Package orchestrator — preflight.go owns side-effect-free, server-authored
-// previews for repository-scoped cycles (rebase, refactor). The desktop never
+// previews for repository-scoped cycles (rebase). The desktop never
 // reconstructs lifecycle or Git rules: it renders the preview, and execution
 // rejects a stale source_revision before any mutation.
 package orchestrator
@@ -23,7 +23,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"strings"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 )
@@ -52,8 +51,6 @@ const (
 	preflightFreshnessBehind     = "behind"
 	preflightFreshnessUpToDate   = "up_to_date"
 	preflightFreshnessUnknown    = "unknown"
-	preflightScopeAll            = "all"
-	preflightScopeSingle         = "single"
 	preflightBlockerNoTarget     = "rebase target not found"
 	preflightBlockerNoRebaser    = "rebase operator not configured"
 	preflightBlockerNoWorktree   = "worktree not available"
@@ -84,7 +81,7 @@ func (o *Orchestrator) RebasePreflight(featureID string) (RebasePreflightResult,
 		}
 		result.Repos = append(result.Repos, repoResult)
 	}
-	result.SourceRevision = preflightRevision(o.collectPreflightFingerprints(f, nil))
+	result.SourceRevision = preflightRevision(o.collectPreflightFingerprints(f))
 	return result, nil
 }
 
@@ -126,63 +123,6 @@ func (o *Orchestrator) repoFreshnessAndBlocker(out HarnessRebaseRepoOutcome) (fr
 	}
 }
 
-// RefactorPreflightResult describes the resolved repository impact of a
-// refactor preflight.
-type RefactorPreflightResult struct {
-	FeatureID      string
-	SourceRevision string
-	Scope          string
-	Repos          []string
-	Prompt         string
-	Pipeline       string
-	Blockers       []string
-}
-
-// RefactorPreflight resolves an explicit single-repository or all-repositories
-// refactor choice into the exact repository impact, validates inputs, and
-// returns a source revision. It never mutates a worktree and never treats an
-// empty repo as implicit all-repository authorization at execution — the
-// desktop must send the resolved scope back.
-func (o *Orchestrator) RefactorPreflight(featureID, repo, prompt, pipeline string) (RefactorPreflightResult, error) {
-	f, err := o.deps.Lifecycle.Get(featureID)
-	if err != nil {
-		return RefactorPreflightResult{}, fmt.Errorf("load feature: %w", err)
-	}
-	result := RefactorPreflightResult{
-		FeatureID: featureID,
-		Prompt:    prompt,
-		Pipeline:  pipeline,
-	}
-	repo = strings.TrimSpace(repo)
-	var fingerprintNames map[string]bool
-	if repo == "" {
-		result.Scope = preflightScopeAll
-		for _, r := range f.Repos {
-			result.Repos = append(result.Repos, r.Name)
-		}
-		if len(result.Repos) == 0 {
-			result.Blockers = append(result.Blockers, "feature has no repositories to refactor")
-		}
-	} else {
-		result.Scope = preflightScopeSingle
-		found := false
-		for _, r := range f.Repos {
-			if r.Name == repo {
-				found = true
-				break
-			}
-		}
-		if !found {
-			result.Blockers = append(result.Blockers, fmt.Sprintf("repo %s is not part of this feature", repo))
-		} else {
-			result.Repos = []string{repo}
-			fingerprintNames = map[string]bool{repo: true}
-		}
-	}
-	result.SourceRevision = preflightRevision(o.collectPreflightFingerprints(f, fingerprintNames))
-	return result, nil
-}
-
 // RebasePreflightSourceRevision recomputes the current rebase preflight source
 // revision for the stale-preflight guard at execution time. A non-empty
 // expected value that differs from the current revision means repository state
@@ -192,36 +132,16 @@ func (o *Orchestrator) RebasePreflightSourceRevision(featureID string) (string, 
 	if err != nil {
 		return "", fmt.Errorf("load feature: %w", err)
 	}
-	return preflightRevision(o.collectPreflightFingerprints(f, nil)), nil
+	return preflightRevision(o.collectPreflightFingerprints(f)), nil
 }
 
-// RefactorPreflightSourceRevision recomputes the current refactor preflight
-// source revision for the resolved repository set, for the stale-preflight
-// guard at execution time.
-func (o *Orchestrator) RefactorPreflightSourceRevision(featureID string, repos []string) (string, error) {
-	f, err := o.deps.Lifecycle.Get(featureID)
-	if err != nil {
-		return "", fmt.Errorf("load feature: %w", err)
-	}
-	want := make(map[string]bool, len(repos))
-	for _, r := range repos {
-		want[r] = true
-	}
-	return preflightRevision(o.collectPreflightFingerprints(f, want)), nil
-}
-
-// collectPreflightFingerprints folds every (or the selected) repository's
-// worktree fingerprint into the stable list the stale-preflight guard hashes.
-// repo.Name is the single name source for both the preview and the
-// execution-time guard, so the two paths cannot drift. A nil names set means
-// all feature repositories; a non-nil set restricts to the resolved subset
-// (used by refactor's single/all scope).
-func (o *Orchestrator) collectPreflightFingerprints(f *feature.Feature, names map[string]bool) []string {
+// collectPreflightFingerprints folds every repository's worktree fingerprint
+// into the stable list the stale-preflight guard hashes. repo.Name is the
+// single name source for both the preview and the execution-time guard, so
+// the two paths cannot drift.
+func (o *Orchestrator) collectPreflightFingerprints(f *feature.Feature) []string {
 	var fingerprints []string
 	for _, repo := range f.Repos {
-		if len(names) > 0 && !names[repo.Name] {
-			continue
-		}
 		if fp := o.rebaseWorktreeFingerprint(repo); fp != "" {
 			fingerprints = append(fingerprints, repo.Name+"\n"+fp)
 		}

@@ -182,6 +182,48 @@ func postAction(t *testing.T, baseURL, featureID, action, body string) {
 	}
 }
 
+// postReviewSessionProceed approves the feature's active review gate through
+// the review-session decision endpoint — the live decision path. It creates
+// (or reopens) the session to read the draft revision the decision must
+// carry, then submits an unmodified proceed.
+func postReviewSessionProceed(t *testing.T, baseURL, featureID string) {
+	t.Helper()
+	created := journeyPostJSON(t, baseURL+"/api/v1/features/"+featureID+"/reviews", `{}`)
+	reviewID, _ := created["review_id"].(string)
+	draftRevision, _ := created["draft_revision"].(string)
+	if reviewID == "" || draftRevision == "" {
+		t.Fatalf("review session create = %v; want review_id and draft_revision", created)
+	}
+	journeyPostJSON(t, baseURL+"/api/v1/features/"+featureID+"/reviews/"+reviewID+"/decision",
+		`{"decision":"proceed","base_revision":"`+draftRevision+`"}`)
+}
+
+// journeyPostJSON posts a trusted JSON mutation and returns the decoded
+// response, failing on non-200.
+func journeyPostJSON(t *testing.T, url, body string) map[string]any {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodPost, url, strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("NewRequest() error = %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Agentico-Client", "local")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST %s: %v", url, err)
+	}
+	defer resp.Body.Close()
+	payload, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("POST %s status = %d; body: %s", url, resp.StatusCode, payload)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(payload, &decoded); err != nil {
+		t.Fatalf("decode %s response: %v (body: %s)", url, err, payload)
+	}
+	return decoded
+}
+
 // waitForJourneyGate polls until the child is parked at the plan-review gate
 // for the given roadmap phase.
 func waitForJourneyGate(t *testing.T, baseURL, childID string, wantRoadmapPhase float64) {
@@ -314,7 +356,11 @@ func waitForParentPublishOutcome(t *testing.T, store *feature.Store, parentID st
 		time.Sleep(100 * time.Millisecond)
 	}
 	parent, _ := store.Load(parentID)
-	t.Fatalf("parent %s publication never settled: %+v", parentID, parent.RepoStates)
+	var repoState feature.RepoState
+	if state := parent.RepoStates["repoA"]; state != nil {
+		repoState = *state
+	}
+	t.Fatalf("parent %s publication never settled: status=%s checkpoints=%+v repoA=%+v", parentID, parent.Status, parent.Checkpoints, repoState)
 }
 
 func journeyFeatureBody(baseURL, featureID string) map[string]any {

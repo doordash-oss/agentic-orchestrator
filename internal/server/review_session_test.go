@@ -333,7 +333,7 @@ func TestReviewSessionServiceSaveDraftSerializesRevisionCheckAndWrite(t *testing
 func TestReviewSessionServiceDecisionCommitsDraftBeforeDelegate(t *testing.T) {
 	store, f, planPath := seedReviewSessionFeature(t, feature.StatusPlanNeedsReview, nil, "plan", "# Plan\n")
 	var delegated bool
-	service := newReviewSessionService(store, func(featureID string, req ReviewDecisionRequest) (ReviewDecisionResponse, error) {
+	service := newReviewSessionService(store, func(featureID string, req ReviewDecisionRequest) error {
 		delegated = true
 		if featureID != f.ID {
 			t.Fatalf("delegate featureID = %q, want %q", featureID, f.ID)
@@ -348,7 +348,7 @@ func TestReviewSessionServiceDecisionCommitsDraftBeforeDelegate(t *testing.T) {
 		if string(data) != "# Edited\n" {
 			t.Fatalf("canonical content before delegate = %q, want edited draft", string(data))
 		}
-		return ReviewDecisionResponse{FeatureID: featureID, Decision: req.Decision, Result: "submitted"}, nil
+		return nil
 	})
 	resp, err := service.Create(f.ID)
 	if err != nil {

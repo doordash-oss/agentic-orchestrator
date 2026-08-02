@@ -1632,7 +1632,7 @@ func TestServerMutationTargetReviewDecisionRewindProceedsFromExistingRewind(t *t
 		store: store,
 	}
 
-	if _, err := target.ReviewDecision(f.ID, serverruntime.ReviewDecisionRequest{
+	if err := target.ReviewDecision(f.ID, serverruntime.ReviewDecisionRequest{
 		Decision: "proceed",
 		Phase:    phaseNamePlan,
 		IsRewind: true,

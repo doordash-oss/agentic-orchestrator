@@ -367,7 +367,6 @@ const (
 	FeatureActionResume             FeatureAction = "resume"
 	FeatureActionRetry              FeatureAction = "retry"
 	FeatureActionReviewComments     FeatureAction = "review-comments"
-	FeatureActionReviewDecision     FeatureAction = "review-decision"
 	FeatureActionRewind             FeatureAction = "rewind"
 	FeatureActionSetup              FeatureAction = "setup"
 	FeatureActionStart              FeatureAction = "start"
@@ -406,8 +405,6 @@ func (e FeatureAction) Valid() bool {
 		return true
 	case FeatureActionReviewComments:
 		return true
-	case FeatureActionReviewDecision:
-		return true
 	case FeatureActionRewind:
 		return true
 	case FeatureActionSetup:
@@ -423,8 +420,6 @@ func (e FeatureAction) Valid() bool {
 const (
 	FeatureSubactionDescription FeatureSubaction = "description"
 	FeatureSubactionFetch       FeatureSubaction = "fetch"
-	FeatureSubactionFinish      FeatureSubaction = "finish"
-	FeatureSubactionRestart     FeatureSubaction = "restart"
 )
 
 // Valid indicates whether the value is a known member of the FeatureSubaction enum.
@@ -433,10 +428,6 @@ func (e FeatureSubaction) Valid() bool {
 	case FeatureSubactionDescription:
 		return true
 	case FeatureSubactionFetch:
-		return true
-	case FeatureSubactionFinish:
-		return true
-	case FeatureSubactionRestart:
 		return true
 	default:
 		return false
@@ -565,7 +556,6 @@ const (
 	RunFeatureActionParamsActionResume             RunFeatureActionParamsAction = "resume"
 	RunFeatureActionParamsActionRetry              RunFeatureActionParamsAction = "retry"
 	RunFeatureActionParamsActionReviewComments     RunFeatureActionParamsAction = "review-comments"
-	RunFeatureActionParamsActionReviewDecision     RunFeatureActionParamsAction = "review-decision"
 	RunFeatureActionParamsActionRewind             RunFeatureActionParamsAction = "rewind"
 	RunFeatureActionParamsActionSetup              RunFeatureActionParamsAction = "setup"
 	RunFeatureActionParamsActionStart              RunFeatureActionParamsAction = "start"
@@ -603,8 +593,6 @@ func (e RunFeatureActionParamsAction) Valid() bool {
 	case RunFeatureActionParamsActionRetry:
 		return true
 	case RunFeatureActionParamsActionReviewComments:
-		return true
-	case RunFeatureActionParamsActionReviewDecision:
 		return true
 	case RunFeatureActionParamsActionRewind:
 		return true
@@ -649,7 +637,6 @@ const (
 	RunFeatureSubactionParamsActionResume             RunFeatureSubactionParamsAction = "resume"
 	RunFeatureSubactionParamsActionRetry              RunFeatureSubactionParamsAction = "retry"
 	RunFeatureSubactionParamsActionReviewComments     RunFeatureSubactionParamsAction = "review-comments"
-	RunFeatureSubactionParamsActionReviewDecision     RunFeatureSubactionParamsAction = "review-decision"
 	RunFeatureSubactionParamsActionRewind             RunFeatureSubactionParamsAction = "rewind"
 	RunFeatureSubactionParamsActionSetup              RunFeatureSubactionParamsAction = "setup"
 	RunFeatureSubactionParamsActionStart              RunFeatureSubactionParamsAction = "start"
@@ -688,8 +675,6 @@ func (e RunFeatureSubactionParamsAction) Valid() bool {
 		return true
 	case RunFeatureSubactionParamsActionReviewComments:
 		return true
-	case RunFeatureSubactionParamsActionReviewDecision:
-		return true
 	case RunFeatureSubactionParamsActionRewind:
 		return true
 	case RunFeatureSubactionParamsActionSetup:
@@ -703,22 +688,16 @@ func (e RunFeatureSubactionParamsAction) Valid() bool {
 
 // Defines values for RunFeatureSubactionParamsSubaction.
 const (
-	Description RunFeatureSubactionParamsSubaction = "description"
-	Fetch       RunFeatureSubactionParamsSubaction = "fetch"
-	Finish      RunFeatureSubactionParamsSubaction = "finish"
-	Restart     RunFeatureSubactionParamsSubaction = "restart"
+	RunFeatureSubactionParamsSubactionDescription RunFeatureSubactionParamsSubaction = "description"
+	RunFeatureSubactionParamsSubactionFetch       RunFeatureSubactionParamsSubaction = "fetch"
 )
 
 // Valid indicates whether the value is a known member of the RunFeatureSubactionParamsSubaction enum.
 func (e RunFeatureSubactionParamsSubaction) Valid() bool {
 	switch e {
-	case Description:
+	case RunFeatureSubactionParamsSubactionDescription:
 		return true
-	case Fetch:
-		return true
-	case Finish:
-		return true
-	case Restart:
+	case RunFeatureSubactionParamsSubactionFetch:
 		return true
 	default:
 		return false
@@ -905,30 +884,15 @@ func (e ExecuteRecoveryActionsParamsXAgenticoClient) Valid() bool {
 	}
 }
 
-// Defines values for ShutdownRuntimeParamsXAgenticoClient.
-const (
-	ShutdownRuntimeParamsXAgenticoClientLocal ShutdownRuntimeParamsXAgenticoClient = "local"
-)
-
-// Valid indicates whether the value is a known member of the ShutdownRuntimeParamsXAgenticoClient enum.
-func (e ShutdownRuntimeParamsXAgenticoClient) Valid() bool {
-	switch e {
-	case ShutdownRuntimeParamsXAgenticoClientLocal:
-		return true
-	default:
-		return false
-	}
-}
-
 // Defines values for InitWorkspaceRepositoryParamsXAgenticoClient.
 const (
-	InitWorkspaceRepositoryParamsXAgenticoClientLocal InitWorkspaceRepositoryParamsXAgenticoClient = "local"
+	Local InitWorkspaceRepositoryParamsXAgenticoClient = "local"
 )
 
 // Valid indicates whether the value is a known member of the InitWorkspaceRepositoryParamsXAgenticoClient enum.
 func (e InitWorkspaceRepositoryParamsXAgenticoClient) Valid() bool {
 	switch e {
-	case InitWorkspaceRepositoryParamsXAgenticoClientLocal:
+	case Local:
 		return true
 	default:
 		return false
@@ -1025,10 +989,8 @@ type ActionResponse struct {
 	RetryFeatureResponse        RetryFeatureResponse        `json:"retry_feature_response,omitempty"`
 	ReviewCommentsFetchResponse ReviewCommentsFetchResponse `json:"review_comments_fetch_response,omitempty"`
 	ReviewCommentsStartResponse ReviewCommentsStartResponse `json:"review_comments_start_response,omitempty"`
-	ReviewDecisionResponse      ReviewDecisionResponse      `json:"review_decision_response,omitempty"`
 	RewindFeatureResponse       RewindFeatureResponse       `json:"rewind_feature_response,omitempty"`
 	RuntimeConfigUpdateResponse RuntimeConfigUpdateResponse `json:"runtime_config_update_response,omitempty"`
-	ShutdownResponse            ShutdownResponse            `json:"shutdown_response,omitempty"`
 }
 
 // ActionResult defines model for ActionResult.
@@ -1987,36 +1949,6 @@ type RefactorFeatureResponse struct {
 	Result     string       `json:"result"`
 }
 
-// RefactorPreflightRequest defines model for RefactorPreflightRequest.
-type RefactorPreflightRequest struct {
-	Pipeline string `json:"pipeline,omitempty"`
-	Prompt   string `json:"prompt"`
-
-	// Repo Explicit single repository, or empty to resolve all feature repositories. An empty choice is never treated as implicit all-repository authorization at execution — the desktop must send the resolved scope from this preflight.
-	Repo string `json:"repo,omitempty"`
-}
-
-// RefactorPreflightResponse defines model for RefactorPreflightResponse.
-type RefactorPreflightResponse struct {
-	APIVersion string `json:"api_version"`
-
-	// Blockers Safe, server-authored reasons the refactor cannot proceed, when non-empty.
-	Blockers  []string     `json:"blockers,omitempty"`
-	FeatureID string       `json:"feature_id"`
-	Meta      ResponseMeta `json:"meta,omitempty"`
-	Pipeline  string       `json:"pipeline,omitempty"`
-	Prompt    string       `json:"prompt"`
-
-	// Repos Exact resolved repository set the refactor will affect.
-	Repos []string `json:"repos"`
-
-	// Scope Resolved scope — single or all.
-	Scope string `json:"scope"`
-
-	// SourceRevision Authoritative revision of the repository state this preflight observed. Execution rejects a stale preflight before any side effect.
-	SourceRevision string `json:"source_revision"`
-}
-
 // RelationshipAttention defines model for RelationshipAttention.
 type RelationshipAttention struct {
 	Code    string `json:"code"`
@@ -2258,15 +2190,6 @@ type ReviewCommentsStartResponse struct {
 	Result       string       `json:"result"`
 	SessionID    string       `json:"session_id,omitempty"`
 	Source       string       `json:"source,omitempty"`
-}
-
-// ReviewDecisionResponse defines model for ReviewDecisionResponse.
-type ReviewDecisionResponse struct {
-	APIVersion string       `json:"api_version"`
-	Decision   string       `json:"decision"`
-	FeatureID  string       `json:"feature_id"`
-	Meta       ResponseMeta `json:"meta,omitempty"`
-	Result     string       `json:"result"`
 }
 
 // ReviewDraftUpdateRequest defines model for ReviewDraftUpdateRequest.
@@ -2670,13 +2593,6 @@ type SetupTask struct {
 	StartedAt        *time.Time `json:"started_at,omitempty"`
 	Status           string     `json:"status"`
 	UseCurrentBranch bool       `json:"use_current_branch,omitempty"`
-}
-
-// ShutdownResponse defines model for ShutdownResponse.
-type ShutdownResponse struct {
-	APIVersion string       `json:"api_version"`
-	Meta       ResponseMeta `json:"meta,omitempty"`
-	Result     string       `json:"result"`
 }
 
 // Task defines model for Task.
@@ -3168,18 +3084,6 @@ type GetSessionTranscriptParams struct {
 	Limit  Limit `form:"limit,omitempty" json:"limit,omitempty"`
 }
 
-// ShutdownRuntimeJSONBody defines parameters for ShutdownRuntime.
-type ShutdownRuntimeJSONBody map[string]interface{}
-
-// ShutdownRuntimeParams defines parameters for ShutdownRuntime.
-type ShutdownRuntimeParams struct {
-	// XAgenticoClient CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required.
-	XAgenticoClient ShutdownRuntimeParamsXAgenticoClient `json:"X-Agentico-Client"`
-}
-
-// ShutdownRuntimeParamsXAgenticoClient defines parameters for ShutdownRuntime.
-type ShutdownRuntimeParamsXAgenticoClient string
-
 // InitWorkspaceRepositoryParams defines parameters for InitWorkspaceRepository.
 type InitWorkspaceRepositoryParams struct {
 	// XAgenticoClient CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required.
@@ -3213,9 +3117,6 @@ type RunFeatureSubactionJSONRequestBody RunFeatureSubactionJSONBody
 // UpdateFeatureConfigJSONRequestBody defines body for UpdateFeatureConfig for application/json ContentType.
 type UpdateFeatureConfigJSONRequestBody UpdateFeatureConfigJSONBody
 
-// GetRefactorPreflightJSONRequestBody defines body for GetRefactorPreflight for application/json ContentType.
-type GetRefactorPreflightJSONRequestBody = RefactorPreflightRequest
-
 // CreateReviewSessionJSONRequestBody defines body for CreateReviewSession for application/json ContentType.
 type CreateReviewSessionJSONRequestBody CreateReviewSessionJSONBody
 
@@ -3248,9 +3149,6 @@ type RefreshReadinessJSONRequestBody RefreshReadinessJSONBody
 
 // ExecuteRecoveryActionsJSONRequestBody defines body for ExecuteRecoveryActions for application/json ContentType.
 type ExecuteRecoveryActionsJSONRequestBody ExecuteRecoveryActionsJSONBody
-
-// ShutdownRuntimeJSONRequestBody defines body for ShutdownRuntime for application/json ContentType.
-type ShutdownRuntimeJSONRequestBody ShutdownRuntimeJSONBody
 
 // InitWorkspaceRepositoryJSONRequestBody defines body for InitWorkspaceRepository for application/json ContentType.
 type InitWorkspaceRepositoryJSONRequestBody = RepositoryInitSchema

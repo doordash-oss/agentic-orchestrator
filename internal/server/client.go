@@ -305,12 +305,6 @@ func (c *Client) RestartFeature(ctx context.Context, featureID string, req Resta
 	return out, err
 }
 
-func (c *Client) ReviewDecision(ctx context.Context, featureID string, req ReviewDecisionRequest) (ReviewDecisionResponse, error) {
-	var out ReviewDecisionResponse
-	err := c.doJSON(ctx, http.MethodPost, featureActionPath(featureID, actionReviewDecision), nil, req, &out, true)
-	return out, err
-}
-
 func (c *Client) CreateReviewSession(ctx context.Context, featureID string) (ReviewSessionResponse, error) {
 	var out ReviewSessionResponse
 	err := c.doJSON(ctx, http.MethodPost, reviewSessionRootPath(featureID), nil, map[string]any{}, &out, true)
@@ -490,12 +484,6 @@ func (c *Client) DeleteFeatureWithRequest(ctx context.Context, featureID string,
 func (c *Client) ExecuteRecovery(ctx context.Context, req RecoveryActionRequest) (RecoveryActionResponse, error) {
 	var out RecoveryActionResponse
 	err := c.doJSON(ctx, http.MethodPost, "/api/v1/recovery/actions", nil, req, &out, true)
-	return out, err
-}
-
-func (c *Client) Shutdown(ctx context.Context) (ShutdownResponse, error) {
-	var out ShutdownResponse
-	err := c.doJSON(ctx, http.MethodPost, "/api/v1/shutdown", nil, map[string]any{}, &out, true)
 	return out, err
 }
 

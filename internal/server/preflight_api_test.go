@@ -30,10 +30,6 @@ type preflightMutationTarget struct {
 	rebasePreflight        RebasePreflightResponse
 	rebasePreflightErr     error
 	rebasePreflightID      string
-	refactorPreflight      RefactorPreflightResponse
-	refactorPreflightErr   error
-	refactorPreflightID    string
-	refactorReq            RefactorPreflightRequest
 	startRebaseCalls       []RebaseActionRequest
 	startRebaseErr         error
 	completionPreflight    CompletionPreflightResponse
@@ -60,15 +56,6 @@ func (t *preflightMutationTarget) PreflightRebase(featureID string) (RebasePrefl
 	return t.rebasePreflight, nil
 }
 
-func (t *preflightMutationTarget) PreflightRefactor(featureID string, req RefactorPreflightRequest) (RefactorPreflightResponse, error) {
-	t.refactorPreflightID = featureID
-	t.refactorReq = req
-	if t.refactorPreflightErr != nil {
-		return RefactorPreflightResponse{}, t.refactorPreflightErr
-	}
-	return t.refactorPreflight, nil
-}
-
 func (t *preflightMutationTarget) StartRebase(featureID string, req RebaseActionRequest) (RebaseStartResponse, error) {
 	t.startRebaseCalls = append(t.startRebaseCalls, req)
 	if t.startRebaseErr != nil {
@@ -76,7 +63,6 @@ func (t *preflightMutationTarget) StartRebase(featureID string, req RebaseAction
 	}
 	return RebaseStartResponse{FeatureID: featureID, CycleType: "rebase", Result: "started"}, nil
 }
-
 
 func authedGet(handler http.Handler, path string) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(http.MethodGet, path, nil)
@@ -163,57 +149,6 @@ func TestRebasePreflightRejectsWrongMethod(t *testing.T) {
 	}
 }
 
-func TestRefactorPreflightResolvesAllScope(t *testing.T) {
-	t.Parallel()
-	target := &preflightMutationTarget{
-		refactorPreflight: RefactorPreflightResponse{
-			FeatureID:      fixtureFeatureID,
-			SourceRevision: "rev-xyz",
-			Scope:          "all",
-			Repos:          []string{"repo-a", "repo-b"},
-			Prompt:         "rename foo to bar",
-		},
-	}
-	handler := NewHandler(HandlerOptions{
-		Mutations:             target,
-		AuthToken:             testAuthToken,
-		DisableHostValidation: true,
-	})
-
-	w := authedPostJSON(handler, "/api/v1/features/"+fixtureFeatureID+"/refactor/preflight", map[string]any{
-		"prompt": "rename foo to bar",
-	})
-	if w.Code != http.StatusOK {
-		t.Fatalf("status = %d body=%s; want 200", w.Code, w.Body.String())
-	}
-	var resp RefactorPreflightResponse
-	if err := json.NewDecoder(w.Result().Body).Decode(&resp); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if resp.Scope != "all" || len(resp.Repos) != 2 {
-		t.Fatalf("scope/repos = %+v; want all with 2 repos", resp)
-	}
-	if target.refactorReq.Prompt != "rename foo to bar" {
-		t.Fatalf("prompt = %q; want forwarded", target.refactorReq.Prompt)
-	}
-}
-
-func TestRefactorPreflightRejectsEmptyPrompt(t *testing.T) {
-	t.Parallel()
-	target := &preflightMutationTarget{}
-	handler := NewHandler(HandlerOptions{
-		Mutations:             target,
-		AuthToken:             testAuthToken,
-		DisableHostValidation: true,
-	})
-	w := authedPostJSON(handler, "/api/v1/features/"+fixtureFeatureID+"/refactor/preflight", map[string]any{
-		"prompt": "   ",
-	})
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d; want 400", w.Code)
-	}
-}
-
 func TestRebaseStartRejectsStalePreflight(t *testing.T) {
 	t.Parallel()
 	target := &preflightMutationTarget{
@@ -234,4 +169,3 @@ func TestRebaseStartRejectsStalePreflight(t *testing.T) {
 		t.Fatalf("start calls = %+v; want one carrying source_revision rev-old", target.startRebaseCalls)
 	}
 }
-

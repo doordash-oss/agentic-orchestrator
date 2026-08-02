@@ -334,8 +334,7 @@ func (t *journeyMutationTarget) StartFeature(featureID string) (server.FeatureSt
 
 // ReviewDecision mirrors the production mapping so the journey resumes
 // configured roadmap and phase-plan gates through the standard flow.
-func (t *journeyMutationTarget) ReviewDecision(featureID string, req server.ReviewDecisionRequest) (server.ReviewDecisionResponse, error) {
-	resp := server.ReviewDecisionResponse{FeatureID: featureID, Decision: req.Decision, Result: "failed"}
+func (t *journeyMutationTarget) ReviewDecision(featureID string, req server.ReviewDecisionRequest) error {
 	decision := orchestrator.ReviewDecision{
 		Decision:    req.Decision,
 		TargetPhase: journeyParsePhase(req.Phase),
@@ -344,11 +343,7 @@ func (t *journeyMutationTarget) ReviewDecision(featureID string, req server.Revi
 		Roadmap:     req.Roadmap,
 		Comment:     req.Comment,
 	}
-	if err := t.orch.HandleReviewDecision(featureID, decision); err != nil {
-		return resp, err
-	}
-	resp.Result = "submitted"
-	return resp, nil
+	return t.orch.HandleReviewDecision(featureID, decision)
 }
 
 // journeyParsePhase mirrors the production phase-name mapping for the small

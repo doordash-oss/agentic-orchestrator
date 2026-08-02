@@ -71,20 +71,18 @@ const (
 const resultCreated = "created"
 
 // resultAnswered, resultGenerated, resultRecovered, resultRewound,
-// resultStarted, resultUpdated and resultShutdownScheduled are further
-// ActionResultDTO/RecoveryActionResponse/ShutdownResponse.Result values for
+// resultStarted and resultUpdated are further
+// ActionResultDTO/RecoveryActionResponse Result values for
 // permission/ask-user answers, generated publish descriptions, and the
-// default results of recovery, rewind, start-cycle, update and shutdown
-// actions.
+// default results of recovery, rewind, start-cycle and update actions.
 const (
-	resultAnswered          = "answered"
-	resultGenerated         = "generated"
-	resultRecovered         = "recovered"
-	resultRewound           = "rewound"
-	resultSetupStarted      = "setup_started"
-	resultStarted           = "started"
-	resultUpdated           = "updated"
-	resultShutdownScheduled = "shutdown_scheduled"
+	resultAnswered     = "answered"
+	resultGenerated    = "generated"
+	resultRecovered    = "recovered"
+	resultRewound      = "rewound"
+	resultSetupStarted = "setup_started"
+	resultStarted      = "started"
+	resultUpdated      = "updated"
 )
 
 // decisionAllowOnce, decisionAllowRemember and decisionDeny are the valid
@@ -127,7 +125,9 @@ type MutationTarget interface {
 	ResumeFeature(featureID string) (FeatureStartResponse, error)
 	StopFeature(featureID string) (FeatureStopResponse, error)
 	RestartFeature(featureID string, req RestartFeatureRequest) (FeatureRestartResponse, error)
-	ReviewDecision(featureID string, req ReviewDecisionRequest) (ReviewDecisionResponse, error)
+	// ReviewDecision applies a review-gate decision; the live caller is the
+	// review-session decision endpoint, which uses the request only.
+	ReviewDecision(featureID string, req ReviewDecisionRequest) error
 	UpdateFeatureConfig(featureID string, req FeatureConfigMutationRequest) (FeatureConfigUpdateResponse, error)
 	ResumeNeedUserInput(featureID string, req NeedUserInputResumeRequest) (NeedUserInputResumeResponse, error)
 	DraftNeedUserInputAnswers(featureID string, req NeedUserInputDraftRequest) (NeedUserInputDraftResponse, error)
@@ -147,7 +147,6 @@ type MutationTarget interface {
 	FetchReviewComments(featureID string, req ReviewCommentsFetchRequest) (ReviewCommentsFetchResponse, error)
 	StartReviewComments(featureID string, req ReviewCommentsActionRequest) (ReviewCommentsStartResponse, error)
 	PreflightRebase(featureID string) (RebasePreflightResponse, error)
-	PreflightRefactor(featureID string, req RefactorPreflightRequest) (RefactorPreflightResponse, error)
 	CompletionPreflight(featureID string) (CompletionPreflightResponse, error)
 	RepositoryDiff(featureID, repoName, filePath string) (RepositoryDiffResponse, error)
 	RepositoryPath(featureID, repoName string) (RepositoryPathResponse, error)
@@ -608,8 +607,6 @@ func mutationRouteMethods(path string) ([]string, bool) {
 		return []string{http.MethodPost}, true
 	case apiPathWorkspaceRepositoriesInit:
 		return []string{http.MethodPost}, true
-	case apiPathShutdown:
-		return []string{http.MethodPost}, true
 	case "/api/v1/prompts/ask-user/answer", "/api/v1/prompts/help/send", "/api/v1/prompts/chat/start", "/api/v1/prompts/chat/end":
 		return []string{http.MethodPost}, true
 	}
@@ -627,9 +624,6 @@ func mutationRouteMethods(path string) ([]string, bool) {
 		if len(parts) == 2 {
 			return []string{http.MethodPost}, true
 		}
-		if len(parts) == 3 && validEntityID(parts[2]) {
-			return []string{http.MethodDelete}, true
-		}
 		if len(parts) == 4 && validEntityID(parts[2]) {
 			switch parts[3] {
 			case "draft":
@@ -643,7 +637,7 @@ func mutationRouteMethods(path string) ([]string, bool) {
 			return nil, false
 		}
 		switch parts[2] {
-		case actionSetup, actionStart, actionPauseStop, actionResume, actionRestart, actionPublish, actionMerge, actionRewind, actionRebase, actionReviewComments, actionReviewDecision, actionRefactor, actionNeedUserInput, actionNeedInputDraft, actionRetry, actionMarkDone, actionCleanup, actionDelete, actionDiscard:
+		case actionSetup, actionStart, actionPauseStop, actionResume, actionRestart, actionPublish, actionMerge, actionRewind, actionRebase, actionReviewComments, actionRefactor, actionNeedUserInput, actionNeedInputDraft, actionRetry, actionMarkDone, actionCleanup, actionDelete, actionDiscard:
 			if len(parts) == 3 {
 				return []string{http.MethodPost}, true
 			}
@@ -874,21 +868,6 @@ func (h *apiHandler) handleFeatureActionRoute(w http.ResponseWriter, r *http.Req
 			return true
 		}
 		h.writeRestartFeature(w, featureID, req)
-	case actionReviewDecision:
-		if subaction != "" {
-			return false
-		}
-		var req ReviewDecisionRequest
-		if !decodeMutationJSON(w, r, &req) {
-			return true
-		}
-		resp, err := h.mutations.ReviewDecision(featureID, req)
-		if err != nil {
-			writeMutationError(w, err)
-			return true
-		}
-		defaultActionFields(&resp, featureID, "submitted")
-		writeActionJSON(w, http.StatusOK, &resp)
 	case actionNeedUserInput:
 		if subaction != "" {
 			return false
@@ -1102,27 +1081,6 @@ func (h *apiHandler) handleRuntimeConfigRoute(w http.ResponseWriter, r *http.Req
 	default:
 		w.Header().Set("Allow", "GET, PATCH, PUT")
 		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed", nil)
-	}
-}
-
-func (h *apiHandler) handleShutdownMutationRoute(w http.ResponseWriter, r *http.Request) {
-	if !requireMethod(w, r, http.MethodPost) {
-		return
-	}
-	if !h.requireTrustedMutation(w, r) {
-		return
-	}
-	var req map[string]any
-	if !decodeMutationJSON(w, r, &req) {
-		return
-	}
-	resp := ShutdownResponse{Result: resultShutdownScheduled}
-	writeActionJSON(w, http.StatusOK, &resp)
-	if flusher, ok := w.(http.Flusher); ok {
-		flusher.Flush()
-	}
-	if h.requestShutdown != nil {
-		go h.requestShutdown()
 	}
 }
 

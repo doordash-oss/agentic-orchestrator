@@ -59,7 +59,6 @@ func Start(ctx context.Context, opts Options) (*RuntimeServer, error) {
 		Events:                      opts.Events,
 		DomainEvents:                opts.DomainEvents,
 		Mutations:                   opts.Mutations,
-		RequestShutdown:             opts.RequestShutdown,
 		PersistProviderModelCatalog: opts.PersistProviderModelCatalog,
 		InitGitRepository:           opts.InitGitRepository,
 		Cleanliness:                 opts.Cleanliness,

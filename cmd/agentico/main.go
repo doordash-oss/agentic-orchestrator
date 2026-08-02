@@ -1165,7 +1165,7 @@ func (t *serverMutationTarget) dispatchRestartOutcome(featureID string, outcome 
 	}
 }
 
-func (t *serverMutationTarget) ReviewDecision(featureID string, req serverruntime.ReviewDecisionRequest) (serverruntime.ReviewDecisionResponse, error) {
+func (t *serverMutationTarget) ReviewDecision(featureID string, req serverruntime.ReviewDecisionRequest) error {
 	decision := orchestrator.ReviewDecision{
 		Decision:    req.Decision,
 		TargetPhase: parseServerPhase(req.Phase),
@@ -1174,10 +1174,7 @@ func (t *serverMutationTarget) ReviewDecision(featureID string, req serverruntim
 		Roadmap:     req.Roadmap,
 		Comment:     req.Comment,
 	}
-	if err := t.orch.HandleReviewDecision(featureID, decision); err != nil {
-		return serverruntime.ReviewDecisionResponse{}, err
-	}
-	return serverruntime.ReviewDecisionResponse{FeatureID: featureID, Decision: req.Decision, Result: "submitted"}, nil
+	return t.orch.HandleReviewDecision(featureID, decision)
 }
 
 func (t *serverMutationTarget) UpdateFeatureConfig(featureID string, req serverruntime.FeatureConfigMutationRequest) (serverruntime.FeatureConfigUpdateResponse, error) {
@@ -1921,26 +1918,6 @@ func (t *serverMutationTarget) PreflightRebase(featureID string) (serverruntime.
 		})
 	}
 	return resp, nil
-}
-
-func (t *serverMutationTarget) PreflightRefactor(featureID string, req serverruntime.RefactorPreflightRequest) (serverruntime.RefactorPreflightResponse, error) {
-	if t.orch == nil {
-		return serverruntime.RefactorPreflightResponse{FeatureID: featureID}, errors.New("orchestrator is not available")
-	}
-	result, err := t.orch.RefactorPreflight(featureID, req.Repo, req.Prompt, req.Pipeline)
-	if err != nil {
-		return serverruntime.RefactorPreflightResponse{FeatureID: featureID}, err
-	}
-	return serverruntime.RefactorPreflightResponse{
-		APIVersion:     serverruntime.APIVersion,
-		FeatureID:      result.FeatureID,
-		SourceRevision: result.SourceRevision,
-		Scope:          result.Scope,
-		Repos:          append([]string(nil), result.Repos...),
-		Prompt:         result.Prompt,
-		Pipeline:       result.Pipeline,
-		Blockers:       append([]string(nil), result.Blockers...),
-	}, nil
 }
 
 func (t *serverMutationTarget) CompletionPreflight(featureID string) (serverruntime.CompletionPreflightResponse, error) {
@@ -2936,7 +2913,6 @@ func runServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledPr
 			workspaceDir:    boot.workspaceDir,
 			reviewer:        &git.ReviewCommentAdapter{},
 		},
-		RequestShutdown: requestShutdown,
 		PersistProviderModelCatalog: func(provider llm.LLMProvider, models []llm.ModelInfo) error {
 			return persistRefreshedProviderModelCatalog(boot.runtime.RuntimeDir, provider, models)
 		},

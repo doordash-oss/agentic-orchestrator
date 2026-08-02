@@ -1429,7 +1429,7 @@ func (o *Orchestrator) CompletionPreflight(featureID string) (CompletionPrefligh
 		result.Repos = append(result.Repos, repoResult)
 	}
 	result.CanMarkDone, result.MarkDoneBlocker = completionCanMarkDone(f)
-	result.SourceRevision = preflightRevision(o.collectPreflightFingerprints(f, nil))
+	result.SourceRevision = preflightRevision(o.collectPreflightFingerprints(f))
 	return result, nil
 }
 
@@ -1441,7 +1441,7 @@ func (o *Orchestrator) CompletionPreflightSourceRevision(featureID string) (stri
 	if err != nil {
 		return "", fmt.Errorf("load feature: %w", err)
 	}
-	return preflightRevision(o.collectPreflightFingerprints(f, nil)), nil
+	return preflightRevision(o.collectPreflightFingerprints(f)), nil
 }
 
 func completionRepoStatus(f *feature.Feature, repo feature.FeatureRepo, state *feature.RepoState, publishable bool, prURL string) string {
@@ -1533,7 +1533,7 @@ func (o *Orchestrator) RepositoryDiff(featureID, repoName, filePath string) (Rep
 	result := RepositoryDiffResult{
 		FeatureID:      featureID,
 		Repo:           repoName,
-		SourceRevision: preflightRevision(o.collectPreflightFingerprints(f, nil)),
+		SourceRevision: preflightRevision(o.collectPreflightFingerprints(f)),
 	}
 	if filePath != "" {
 		return o.repositorySingleFileDiff(result, workDir, repo.BaseBranch, filePath)

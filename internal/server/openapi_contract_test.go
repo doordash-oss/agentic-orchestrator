@@ -412,8 +412,6 @@ func topLevelPatternForPath(path string) string {
 		return apiPathRecoveryActions
 	case path == apiPathRecoveryLogs:
 		return apiPathRecoveryLogs
-	case path == apiPathShutdown:
-		return apiPathShutdown
 	case path == apiPathEvents:
 		return apiPathEvents
 	default:
@@ -458,7 +456,6 @@ func documentedServerRoutes() []documentedRoute {
 		{method: httpMethodPost, path: "/api/v1/features/{feature_id}/actions/{action}/{subaction}", mutation: true},
 		{method: httpMethodGet, path: "/api/v1/features/{feature_id}/rewind/preview"},
 		{method: httpMethodGet, path: "/api/v1/features/{feature_id}/rebase/preflight"},
-		{method: httpMethodPost, path: "/api/v1/features/{feature_id}/refactor/preflight"},
 		{method: httpMethodGet, path: "/api/v1/features/{feature_id}/completion/preflight"},
 		{method: httpMethodGet, path: "/api/v1/features/{feature_id}/repositories/{repo_name}/diff"},
 		{method: httpMethodGet, path: "/api/v1/features/{feature_id}/repositories/{repo_name}/path"},
@@ -491,7 +488,6 @@ func documentedServerRoutes() []documentedRoute {
 		{method: httpMethodGet, path: apiPathRecovery},
 		{method: httpMethodPost, path: apiPathRecoveryActions, mutation: true},
 		{method: httpMethodGet, path: apiPathRecoveryLogs},
-		{method: httpMethodPost, path: apiPathShutdown, mutation: true},
 		{method: httpMethodGet, path: apiPathEvents, sse: true},
 	}
 }

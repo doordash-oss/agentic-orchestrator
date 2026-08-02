@@ -530,6 +530,11 @@ func TestRefactorChildTransactionalMultiRepoStagedConflictRestartAndReviewRenewa
 		t.Fatal("final review was not dispatched")
 	}
 
+	// startFinalReview completes the pass and advanceAfterFinalReview in a
+	// background cycle goroutine; wait for it before asserting the terminal
+	// integration outcome.
+	o.WaitForCycles()
+
 	// The transaction should complete: child is Completed, parent is
 	// CodeReady, and every repo has an explicit merge boundary.
 	parent, child := fx.reload()

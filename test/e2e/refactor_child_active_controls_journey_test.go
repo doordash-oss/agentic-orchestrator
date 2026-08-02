@@ -40,7 +40,7 @@ import (
 // TestRefactorChildActiveControlsJourney exercises the active-child control
 // surface end-to-end through the real API: paired config propagation,
 // relationship-guard enforcement on parent mutations, the restricted child
-// action catalog, review-decision resume through configured gates, and the
+// action catalog, review-session decisions through configured gates, and the
 // running-discard state machine that closes the child with outcome
 // "discarded" while preserving the parent's paired configuration and
 // clearing the active-child projection so a new child can be launched. The
@@ -226,11 +226,6 @@ func TestRefactorChildActiveControlsJourney(t *testing.T) {
 		{"mark-done", `{}`},
 		{"cleanup", `{}`},
 		{"pause-stop", `{}`},
-		// A review-decision on a terminal parent (Published) with an
-		// active child can restart the parent pipeline (CodeReady ->
-		// ImplementReady); it must be rejected with parent_mutation_locked
-		// even via a direct trusted POST that bypasses action discovery.
-		{"review-decision", `{"decision":"proceed","roadmap":true}`},
 	}
 	for _, ca := range conflictActions {
 		status, respBody := postActionStatus(t, srv.URL, parent.ID, ca.action, ca.body)
@@ -310,7 +305,7 @@ func TestRefactorChildActiveControlsJourney(t *testing.T) {
 	// Step 4: Restart/resume — approve the roadmap gate to continue to the
 	// phase-plan review gate.
 	// ------------------------------------------------------------------
-	postAction(t, srv.URL, childID, "review-decision", `{"decision":"proceed","roadmap":true}`)
+	postReviewSessionProceed(t, srv.URL, childID)
 	waitForJourneyGate(t, srv.URL, childID, 1)
 
 	// ------------------------------------------------------------------

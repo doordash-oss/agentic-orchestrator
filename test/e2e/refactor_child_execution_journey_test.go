@@ -44,8 +44,8 @@ import (
 //
 //	Child 2 (auto publish): same lifecycle, after which closure hands
 //	delivery back to the parent's current auto-publish configuration: the
-//	integrated merge is pushed to the bare origin, PR creation fails in
-//	this sandbox, and the parent stays CodeReady with the child Completed —
+//	integrated merge is pushed to the bare origin, PR creation fails at the
+//	external-service seam, and the parent stays CodeReady with the child Completed —
 //	never reopened.
 func TestRefactorChildExecutionAndIntegrationJourney(t *testing.T) {
 	if testing.Short() {
@@ -110,7 +110,7 @@ func TestRefactorChildExecutionAndIntegrationJourney(t *testing.T) {
 		Lifecycle:   mgr,
 		Store:       store,
 		Sessions:    sm,
-		Publisher:   &git.PublishAdapter{},
+		Publisher:   failingPRPublishAdapter{PublishAdapter: &git.PublishAdapter{}},
 		Worktrees:   wm,
 		PhaseRunner: pr,
 		CmdRunner:   pr.CommandRunner,
@@ -216,8 +216,8 @@ func TestRefactorChildExecutionAndIntegrationJourney(t *testing.T) {
 	// ------------------------------------------------------------------
 	// Child 2: auto publish arm. The parent's current Review configuration
 	// (updated atomically with the launch) selects auto-publish this time.
-	// Push succeeds against the bare origin; PR creation fails in this
-	// sandbox, so the parent must stay CodeReady with the child Completed.
+	// Push succeeds against the bare origin; deterministic PR creation failure
+	// keeps the parent CodeReady with the child Completed.
 	// ------------------------------------------------------------------
 	child2ID := runRefactorChildLifecycle(t, store, srv.URL, client, parent.ID, false)
 	// Closure hands delivery back to the parent's auto-publish config; wait
@@ -256,6 +256,17 @@ func TestRefactorChildExecutionAndIntegrationJourney(t *testing.T) {
 	}
 }
 
+// failingPRPublishAdapter keeps the real local Git publish operations while
+// replacing only the external GitHub PR call with the failure this journey
+// exercises.
+type failingPRPublishAdapter struct {
+	*git.PublishAdapter
+}
+
+func (failingPRPublishAdapter) CreatePR(string, string, string, string, string, bool) (string, error) {
+	return "", fmt.Errorf("scripted PR creation failure")
+}
+
 // runRefactorChildLifecycle launches one child through the API and drives it
 // through setup, the two configured review gates, scripted plan sessions,
 // stubbed implement/final-review kernels, and integration, returning the
@@ -290,9 +301,9 @@ func runRefactorChildLifecycle(t *testing.T, store *feature.Store, baseURL strin
 	// Gate 1: roadmap review (roadmap phase count 0), then Gate 2: the
 	// phase-plan review, then the terminal integration completion.
 	waitForJourneyGate(t, baseURL, childID, 0)
-	postAction(t, baseURL, childID, "review-decision", `{"decision":"proceed","roadmap":true}`)
+	postReviewSessionProceed(t, baseURL, childID)
 	waitForJourneyGate(t, baseURL, childID, 1)
-	postAction(t, baseURL, childID, "review-decision", `{"decision":"proceed","phase_plan":true}`)
+	postReviewSessionProceed(t, baseURL, childID)
 	waitForJourneyChildClosed(t, baseURL, store, childID)
 	return childID
 }

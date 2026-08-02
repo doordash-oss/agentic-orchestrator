@@ -1679,62 +1679,11 @@ func TestCheckRequiredProviders_OneDetected(t *testing.T) {
 }
 
 func TestPickRuntimeParent(t *testing.T) {
-	newParent := config.ExpandHome(defaultRuntimeParent)
-	legacyParent := config.ExpandHome(legacyRuntimeParent)
-
-	makeStat := func(present map[string]bool) func(string) (os.FileInfo, error) {
-		return func(p string) (os.FileInfo, error) {
-			if present[p] {
-				return fakeDirInfo{}, nil
-			}
-			return nil, &fs.PathError{Op: "stat", Path: p, Err: fs.ErrNotExist}
-		}
-	}
-
-	tests := []struct {
-		name    string
-		present map[string]bool
-		want    string
-	}{
-		{
-			name:    "fresh install — neither parent exists, prefer new namespace",
-			present: map[string]bool{},
-			want:    newParent,
-		},
-		{
-			name:    "new namespace exists, legacy absent",
-			present: map[string]bool{newParent: true},
-			want:    newParent,
-		},
-		{
-			name:    "legacy parent exists, new absent — recover in place",
-			present: map[string]bool{legacyParent: true},
-			want:    legacyParent,
-		},
-		{
-			name:    "both exist — new namespace wins",
-			present: map[string]bool{newParent: true, legacyParent: true},
-			want:    newParent,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := pickRuntimeParent(makeStat(tt.present))
-			if got != tt.want {
-				t.Errorf("pickRuntimeParent = %q, want %q", got, tt.want)
-			}
-		})
+	want := config.ExpandHome(defaultRuntimeParent)
+	if got := pickRuntimeParent(); got != want {
+		t.Errorf("pickRuntimeParent() = %q, want %q", got, want)
 	}
 }
-
-type fakeDirInfo struct{}
-
-func (fakeDirInfo) Name() string       { return "" }
-func (fakeDirInfo) Size() int64        { return 0 }
-func (fakeDirInfo) Mode() fs.FileMode  { return fs.ModeDir | 0o755 }
-func (fakeDirInfo) ModTime() time.Time { return time.Time{} }
-func (fakeDirInfo) IsDir() bool        { return true }
-func (fakeDirInfo) Sys() any           { return nil }
 
 func TestPrintUsageAdvertisesRenamedDefaults(t *testing.T) {
 	var b bytes.Buffer
@@ -1746,7 +1695,6 @@ func TestPrintUsageAdvertisesRenamedDefaults(t *testing.T) {
 		"agentico server [flags]",
 		"~/.agentic-orchestrator/config.yaml",
 		"~/.agentic-orchestrator/features",
-		"~/.agentic-workflow/", // legacy-recovery callout retained
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("printUsage missing %q\nfull:\n%s", want, out)
@@ -1754,6 +1702,9 @@ func TestPrintUsageAdvertisesRenamedDefaults(t *testing.T) {
 	}
 	if strings.Contains(out, "Commands:") {
 		t.Errorf("printUsage must not introduce a Commands section:\n%s", out)
+	}
+	if strings.Contains(out, ".agentic-workflow") {
+		t.Errorf("printUsage must not describe the removed runtime fallback:\n%s", out)
 	}
 }
 

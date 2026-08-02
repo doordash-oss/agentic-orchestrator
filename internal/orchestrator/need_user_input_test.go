@@ -171,7 +171,8 @@ func TestResumeNeedUserInput_GenericGateResumesWithoutVerificationDecision(t *te
 	)
 	f := &feature.Feature{
 		ID: "feat-generic-gate", Name: "Generic gate", Slug: "generic-gate",
-		Status: feature.StatusNeedUserInput, CurrentPhase: feature.PhaseImplement,
+		SchemaVersion: feature.SchemaVersionCurrent,
+		Status:        feature.StatusNeedUserInput, CurrentPhase: feature.PhaseImplement,
 		PendingNeedUserInputPath: gatePath,
 		Repos:                    []feature.FeatureRepo{{Name: repoName, Path: repoAPath}},
 	}
@@ -208,8 +209,9 @@ func TestResumeNeedUserInputAppliesHarnessWaiverBeforeResume(t *testing.T) {
 	}
 	f := &feature.Feature{
 		ID: "feat-waiver", Name: "Waiver", Slug: "waiver", Status: feature.StatusNeedUserInput,
-		CurrentPhase: feature.PhaseImplement, PendingNeedUserInputPath: gatePath,
-		Repos: []feature.FeatureRepo{{Name: repoName, Path: repoAPath}},
+		SchemaVersion: feature.SchemaVersionCurrent, CurrentPhase: feature.PhaseImplement,
+		PendingNeedUserInputPath: gatePath,
+		Repos:                    []feature.FeatureRepo{{Name: repoName, Path: repoAPath}},
 	}
 	store := feature.NewStore(stateRoot)
 	if err := store.Save(f); err != nil {

@@ -58,12 +58,8 @@ import (
 )
 
 const (
-	// Fresh installs default to the Agentic Orchestrator runtime parent.
+	// Default paths live under the Agentic Orchestrator runtime parent.
 	defaultRuntimeParent = "~/.agentic-orchestrator"
-	// Existing default installs may still live under the legacy parent; we
-	// fall back to it when no explicit paths are provided and the new
-	// parent does not yet exist, so user data remains discoverable.
-	legacyRuntimeParent = "~/.agentic-workflow"
 
 	defaultConfigBasename = "config.yaml"
 	defaultStateBasename  = "features"
@@ -176,28 +172,17 @@ type serverLauncher func(configPath, stateDir string, dangerouslySkipPerms bool,
 type updater func(checkOnly bool, stdout, stderr io.Writer) int
 
 func defaultLaunchOptions() launchOptions {
-	parent := pickRuntimeParent(os.Stat)
+	parent := pickRuntimeParent()
 	return launchOptions{
 		configPath: filepath.Join(parent, defaultConfigBasename),
 		stateDir:   filepath.Join(parent, defaultStateBasename),
 	}
 }
 
-// pickRuntimeParent returns the runtime parent directory used to derive
-// default paths when the user has not passed --config or --state-dir.
-// Fresh installs land under the Agentic Orchestrator namespace. When the
-// new namespace is absent but the legacy default exists, recover by using
-// the legacy parent in place — without copying or moving any user data.
-func pickRuntimeParent(stat func(string) (os.FileInfo, error)) string {
-	newParent := config.ExpandHome(defaultRuntimeParent)
-	legacyParent := config.ExpandHome(legacyRuntimeParent)
-	if _, err := stat(newParent); err == nil {
-		return newParent
-	}
-	if _, err := stat(legacyParent); err == nil {
-		return legacyParent
-	}
-	return newParent
+// pickRuntimeParent returns the current runtime parent used to derive default
+// paths when the user has not passed --config or --state-dir.
+func pickRuntimeParent() string {
+	return config.ExpandHome(defaultRuntimeParent)
 }
 
 func run() {
@@ -481,10 +466,7 @@ Server flags (use with 'agentico server'):
   --check, -n                      With 'update': check for a newer release without installing
 Global flags:
   --help, -h                       Show this help
-  --version, -v                    Show version
-
-When no explicit paths are passed, an existing ~/.agentic-workflow/
-runtime parent is used in place so legacy installs remain discoverable.`)
+  --version, -v                    Show version`)
 }
 
 func runValidateArtifacts(opts validateArtifactsOptions, stdout, stderr io.Writer) int {

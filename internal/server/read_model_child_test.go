@@ -222,16 +222,17 @@ func TestParentProjectionsCarryCompleteRelationshipHistory(t *testing.T) {
 
 	closedAt := time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC)
 	closed := &feature.Feature{
-		ID:           parent.ID + "-closed",
-		Name:         "Completed refactor",
-		Slug:         "completed-refactor",
-		Status:       feature.StatusReviewPassed,
-		CurrentPhase: feature.PhaseImplement,
-		Created:      time.Date(2026, 7, 26, 9, 0, 0, 0, time.UTC),
-		Repos:        []feature.FeatureRepo{{Name: repoNameSelf}},
-		Pipeline:     feature.PipelineMedium,
-		ActiveRun:    1,
-		RunCount:     1,
+		ID:            parent.ID + "-closed",
+		Name:          "Completed refactor",
+		Slug:          "completed-refactor",
+		Status:        feature.StatusReviewPassed,
+		CurrentPhase:  feature.PhaseImplement,
+		Created:       time.Date(2026, 7, 26, 9, 0, 0, 0, time.UTC),
+		Repos:         []feature.FeatureRepo{{Name: repoNameSelf}},
+		Pipeline:      feature.PipelineMedium,
+		ActiveRun:     1,
+		RunCount:      1,
+		SchemaVersion: feature.SchemaVersionCurrent,
 		Parent: &feature.ChildRelationship{
 			ParentID:     parent.ID,
 			Kind:         feature.ChildKindRefactor,
@@ -293,7 +294,7 @@ func TestClosedChildSurfacesPreservedDiffSummary(t *testing.T) {
 		Status: feature.StatusReviewPassed, CurrentPhase: feature.PhaseImplement,
 		Created:   time.Date(2026, 7, 26, 9, 0, 0, 0, time.UTC),
 		Repos:     []feature.FeatureRepo{{Name: repoNameSelf}},
-		ActiveRun: 1, RunCount: 1,
+		ActiveRun: 1, RunCount: 1, SchemaVersion: feature.SchemaVersionCurrent,
 		Parent: &feature.ChildRelationship{
 			ParentID: parent.ID, Kind: feature.ChildKindRefactor,
 			CloseOutcome: feature.ChildCloseOutcomeCompleted, ClosedAt: &closedAt,
@@ -311,7 +312,7 @@ func TestClosedChildSurfacesPreservedDiffSummary(t *testing.T) {
 		Status: feature.StatusReviewPassed, CurrentPhase: feature.PhaseImplement,
 		Created:   time.Date(2026, 7, 25, 9, 0, 0, 0, time.UTC),
 		Repos:     []feature.FeatureRepo{{Name: repoNameSelf}},
-		ActiveRun: 1, RunCount: 1,
+		ActiveRun: 1, RunCount: 1, SchemaVersion: feature.SchemaVersionCurrent,
 		Parent: &feature.ChildRelationship{
 			ParentID: parent.ID, Kind: feature.ChildKindRefactor,
 			CloseOutcome: feature.ChildCloseOutcomeDiscarded, ClosedAt: &olderClosedAt,

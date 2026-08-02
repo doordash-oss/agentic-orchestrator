@@ -16,9 +16,8 @@ import { fileIsExecutable, resolveServerBinary } from './resources';
 import { RuntimeGateway, type GatewayDeps, type SelectedRuntime } from './runtimeGateway';
 import { ManagedServerProcess } from './serverProcess';
 
-/** Mirrors the Go launcher's default runtime parents (cmd/agentico/main.go). */
+/** Mirrors the Go launcher's default runtime parent (cmd/agentico/main.go). */
 const DEFAULT_RUNTIME_PARENT = '~/.agentic-orchestrator';
-const LEGACY_RUNTIME_PARENT = '~/.agentic-workflow';
 const STATE_BASENAME = 'features';
 const CONFIG_BASENAME = 'config.yaml';
 
@@ -118,9 +117,7 @@ export function selectRuntime(selection: string | null, homeDir = os.homedir()):
   if (trimmed !== '') {
     parent = expandHome(trimmed, homeDir);
   } else {
-    const modern = expandHome(DEFAULT_RUNTIME_PARENT, homeDir);
-    const legacy = expandHome(LEGACY_RUNTIME_PARENT, homeDir);
-    parent = exists(modern) ? modern : exists(legacy) ? legacy : modern;
+    parent = expandHome(DEFAULT_RUNTIME_PARENT, homeDir);
   }
   const stateDir = canonicalize(path.join(canonicalize(parent), STATE_BASENAME));
   const runtimeDir = path.dirname(stateDir);
@@ -135,15 +132,6 @@ function expandHome(candidate: string, homeDir: string): string {
     return path.join(homeDir, candidate.slice(2));
   }
   return candidate;
-}
-
-function exists(candidate: string): boolean {
-  try {
-    fs.statSync(candidate);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 function canonicalize(candidate: string): string {

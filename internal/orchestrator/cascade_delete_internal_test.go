@@ -227,9 +227,10 @@ func TestDeleteCascadeRejectsClosedChildWithRelationshipConflict(t *testing.T) {
 	store := feature.NewStore(filepath.Join(t.TempDir(), "features"))
 	closedAt := time.Now()
 	child := &feature.Feature{
-		ID:        "closed-child",
-		ActiveRun: 1,
-		RunCount:  1,
+		ID:            "closed-child",
+		SchemaVersion: feature.SchemaVersionCurrent,
+		ActiveRun:     1,
+		RunCount:      1,
 		Parent: &feature.ChildRelationship{
 			ParentID:     "parent",
 			Kind:         feature.ChildKindRefactor,
@@ -252,14 +253,16 @@ func saveCascadeTestRelationship(t *testing.T) (*feature.Store, *feature.Feature
 	t.Helper()
 	store := feature.NewStore(filepath.Join(t.TempDir(), "features"))
 	parent := &feature.Feature{
-		ID: "parent", Slug: "parent", ActiveRun: 1, RunCount: 1,
+		ID: "parent", Slug: "parent", SchemaVersion: feature.SchemaVersionCurrent,
+		ActiveRun: 1, RunCount: 1,
 		Repos: []feature.FeatureRepo{{
 			Name: "repo-a", Path: "/repos/a", WorktreePath: "/worktrees/parent/a",
 			Branch: "feature/parent",
 		}},
 	}
 	child := &feature.Feature{
-		ID: "child", Slug: "child", ActiveRun: 1, RunCount: 1,
+		ID: "child", Slug: "child", SchemaVersion: feature.SchemaVersionCurrent,
+		ActiveRun: 1, RunCount: 1,
 		Parent: &feature.ChildRelationship{
 			ParentID: parent.ID,
 			Transaction: &feature.TransactionJournal{Entries: []feature.RepoTransactionEntry{{

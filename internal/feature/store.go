@@ -515,6 +515,15 @@ func (s *Store) loadUnlocked(id string) (*Feature, error) {
 	if err != nil {
 		return nil, fmt.Errorf("reading feature file: %w", err)
 	}
+	var header struct {
+		SchemaVersion int `yaml:"schema_version"`
+	}
+	if err := yaml.Unmarshal(data, &header); err != nil {
+		return nil, fmt.Errorf("parsing feature file: %w", err)
+	}
+	if header.SchemaVersion != SchemaVersionCurrent {
+		return nil, fmt.Errorf("feature schema version %d, expected %d", header.SchemaVersion, SchemaVersionCurrent)
+	}
 	var f Feature
 	if err := yaml.Unmarshal(data, &f); err != nil {
 		return nil, fmt.Errorf("parsing feature file: %w", err)
@@ -540,7 +549,6 @@ func (s *Store) loadRunUnlocked(featureID string, runNumber int) (*Run, error) {
 	if err := yaml.Unmarshal(data, &r); err != nil {
 		return nil, fmt.Errorf("parsing run file: %w", err)
 	}
-	normalizeLegacyArtifactAliases(r.Artifacts)
 	dropUnknownCycleState(&r)
 	return &r, nil
 }
@@ -1089,10 +1097,8 @@ func (s *Store) writeFeatureYAMLUnlocked(id string, f *Feature) error {
 	return nil
 }
 
-// parseRunDirName parses "run-NNN" directory names into their numeric run
-// number. Accepts any positive-integer suffix so numeric sort order (not
-// lexicographic) works for run-1000+. Returns (0, false) for unparseable
-// names.
+// parseRunDirName parses canonical run directory names into their numeric run
+// number. Returns (0, false) for names the current writer would not emit.
 func parseRunDirName(name string) (int, bool) {
 	rest, ok := strings.CutPrefix(name, "run-")
 	if !ok || rest == "" {
@@ -1100,6 +1106,9 @@ func parseRunDirName(name string) (int, bool) {
 	}
 	n, err := strconv.Atoi(rest)
 	if err != nil || n <= 0 {
+		return 0, false
+	}
+	if RunDirName(n) != name {
 		return 0, false
 	}
 	return n, true

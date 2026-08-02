@@ -135,13 +135,14 @@ func TestReviewSessionServiceCreateUsesFeatureRootDescriptionReviewForRewindToIn
 	store := feature.NewStore(t.TempDir())
 	target := feature.PhaseInquire
 	f := &feature.Feature{
-		ID:           "feat-rewind-description-review",
-		Name:         "Rewind description review",
-		Status:       feature.StatusPromptNeedsReview,
-		CurrentPhase: feature.PhaseKnowledgeBase,
-		ActiveRun:    1,
-		RunCount:     1,
-		Pipeline:     feature.PipelineMoonshot,
+		ID:            "feat-rewind-description-review",
+		Name:          "Rewind description review",
+		Status:        feature.StatusPromptNeedsReview,
+		CurrentPhase:  feature.PhaseKnowledgeBase,
+		ActiveRun:     1,
+		RunCount:      1,
+		Pipeline:      feature.PipelineMoonshot,
+		SchemaVersion: feature.SchemaVersionCurrent,
 	}
 	f.SetRun(&feature.Run{
 		RunNumber:          1,
@@ -389,6 +390,7 @@ func seedReviewSessionFeature(t *testing.T, status feature.Status, pending *feat
 		RunCount:           1,
 		PendingReviewPhase: pending,
 		Artifacts:          map[string]string{},
+		SchemaVersion:      feature.SchemaVersionCurrent,
 	}
 	runDir := store.RunDir(f.ID, 1)
 	artifactPath := filepath.Join(runDir, artifactID, artifactID+".md")

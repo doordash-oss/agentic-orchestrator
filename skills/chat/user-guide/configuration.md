@@ -8,10 +8,6 @@ Agentic Orchestrator is configured via a YAML file that controls model selection
 - **State directory**: `~/.agentic-orchestrator/features/` (override: `--state-dir <path>`)
 - **Worktrees**: `~/.agentic-orchestrator/worktrees/`
 
-If a legacy `~/.agentic-workflow/` directory already exists, it is reused in
-place as the runtime parent so existing installs keep working. Fresh installs
-default to the new `~/.agentic-orchestrator/` namespace.
-
 The config file is auto-created on first launch with sensible defaults.
 
 ## Model Configuration
@@ -247,7 +243,7 @@ defaults:
 
 When a feature is created, these defaults are projected through the selected pipeline profile (see [Feature Lifecycle — Checkpoints](feature-lifecycle.md#checkpoints)). The Electron creation wizard's Review step edits individual checkpoints per feature before creation; change `config.yaml` only when you want different persistent defaults.
 
-Omitted checkpoint fields in `defaults.checkpoints` or repo `pipeline_gates` default to `true` when the checkpoint is compatible with the selected pipeline. Config saves write all checkpoint fields explicitly. The legacy `plan_review` key is ignored by new config handling; replace it with `roadmap_review` and `phase_plan_review`.
+Omitted checkpoint fields in `defaults.checkpoints` or repo `pipeline_gates` default to `true` when the checkpoint is compatible with the selected pipeline. Config saves write all checkpoint fields explicitly.
 
 The runtime honors `phase_plan_review: true` with `roadmap_review: false`, although the usual configuration keeps Phase Plan Review subordinate to Roadmap Review.
 
@@ -381,7 +377,3 @@ Run `agentico update` to upgrade to the latest stable release, or `agentico upda
   permissions/             # Permission cache (global.json, per-repo JSON)
   agentico.log             # Runtime log output
 ```
-
-Legacy installs that already have `~/.agentic-workflow/` keep using that
-directory in place; the layout above is identical, only the parent name
-differs.

@@ -68,8 +68,8 @@ var Module = fx.Module("orchestrator",
 	// This is wired here (not in feature.Module) so feature does not import git.
 	fx.Provide(
 		func(p worktreeManagerParams) *git.WorktreeManager {
-			// p.StateDir is the features base dir (e.g. ~/.agentic-workflow/features).
-			// Worktrees live alongside it (~/.agentic-workflow/worktrees).
+			// p.StateDir is the features base dir (e.g. ~/.agentic-orchestrator/features).
+			// Worktrees live alongside it (~/.agentic-orchestrator/worktrees).
 			wtBaseDir := filepath.Join(filepath.Dir(p.StateDir), "worktrees")
 			return git.NewWorktreeManager(wtBaseDir)
 		},

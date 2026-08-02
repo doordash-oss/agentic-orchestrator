@@ -73,8 +73,6 @@ Rules are stored as JSON with deny-wins precedence:
 | Global | `~/.agentic-orchestrator/permissions/global.json` | All repositories |
 | Per-repo | `~/.agentic-orchestrator/permissions/<repoName>.json` | One repository |
 
-Legacy installations keep using `~/.agentic-workflow/permissions/` in place.
-
 ```json
 {
   "rules": [

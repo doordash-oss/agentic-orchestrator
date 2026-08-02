@@ -16,7 +16,6 @@ package feature
 
 import (
 	"fmt"
-	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -458,9 +457,7 @@ func (s Status) MarshalYAML() (interface{}, error) {
 	return s.String(), nil
 }
 
-// UnmarshalYAML deserializes Status from a string or integer YAML value.
-// String values are the canonical form; integer values provide backward
-// compatibility with older feature.yaml files.
+// UnmarshalYAML deserializes Status from its canonical string value.
 func (s *Status) UnmarshalYAML(unmarshal func(interface{}) error) error {
 	stringMap := map[string]Status{
 		"Created":             StatusCreated,
@@ -471,7 +468,6 @@ func (s *Status) UnmarshalYAML(unmarshal func(interface{}) error) error {
 		"Implementing":        StatusImplementing,
 		"ReviewPassed":        StatusReviewPassed,
 		"CodeReady":           StatusCodeReady,
-		"PRReady":             StatusCodeReady, // backward compat
 		"Published":           StatusPublished,
 		"Failed":              StatusFailed,
 		"Interrupted":         StatusInterrupted,
@@ -480,9 +476,7 @@ func (s *Status) UnmarshalYAML(unmarshal func(interface{}) error) error {
 		"PlanNeedsReview":     StatusPlanNeedsReview,
 		"Inquiring":           StatusInquiring,
 		"InquireReady":        StatusInquireReady,
-		"BrainstormReady":     StatusDesignReady, // legacy pre-design rename
 		"DesignReady":         StatusDesignReady,
-		"Brainstorming":       StatusDesigning, // legacy pre-design rename
 		"Designing":           StatusDesigning,
 		"PromptNeedsReview":   StatusPromptNeedsReview,
 		"InquiryNeedsReview":  StatusInquiryNeedsReview,
@@ -494,36 +488,16 @@ func (s *Status) UnmarshalYAML(unmarshal func(interface{}) error) error {
 		"SettingUpWorktrees":  StatusSettingUpWorktrees,
 	}
 
-	// Legacy integer mapping. Values 0-11 are unchanged from the original iota.
-	legacyIntMap := map[int]Status{
-		0: StatusCreated, 1: StatusResearching, 2: StatusPlanReady,
-		3: StatusPlanning, 4: StatusImplementReady, 5: StatusImplementing,
-		6: StatusReviewPassed, 7: StatusCodeReady, 8: StatusPublished,
-		9: StatusFailed, 10: StatusInterrupted,
-		12: StatusDone,
-	}
-
-	// Try string first (canonical form for new files)
 	var str string
 	if err := unmarshal(&str); err == nil {
-		// Check if it's a named status string
 		if v, ok := stringMap[str]; ok {
 			*s = v
 			return nil
 		}
-		// Could be a numeric string from YAML — try parsing as int
-		var n int
-		if _, err := fmt.Sscanf(str, "%d", &n); err == nil {
-			if v, ok := legacyIntMap[n]; ok {
-				*s = v
-				return nil
-			}
-			return fmt.Errorf("unknown status integer: %d", n)
-		}
 		return fmt.Errorf("unknown status: %q", str)
 	}
 
-	return fmt.Errorf("cannot unmarshal status: expected string or integer")
+	return fmt.Errorf("cannot unmarshal status: expected string")
 }
 
 // Checkpoints controls which phase transitions pause for human review.
@@ -889,7 +863,6 @@ func (f *Feature) syncShadowsToRun() {
 	if f.run == nil {
 		return
 	}
-	normalizeLegacyArtifactAliases(f.Artifacts)
 	r := f.run
 	r.StartedAt = f.StartedAt
 	r.CurrentIteration = f.CurrentIteration
@@ -938,7 +911,6 @@ func (f *Feature) syncRunToShadows() {
 		return
 	}
 	r := f.run
-	normalizeLegacyArtifactAliases(r.Artifacts)
 	f.StartedAt = r.StartedAt
 	f.CurrentIteration = r.CurrentIteration
 	f.ReviewingGate = r.ReviewingGate
@@ -1002,27 +974,6 @@ func (f *Feature) reconcileTerminalRunFailure() {
 func looksLikeFinalReviewFailure(msg string) bool {
 	msg = strings.ToLower(msg)
 	return strings.Contains(msg, "final_review") || strings.Contains(msg, "final review")
-}
-
-func normalizeLegacyArtifactAliases(artifacts map[string]string) {
-	if artifacts == nil {
-		return
-	}
-	if strings.TrimSpace(artifacts["design"]) != "" {
-		return
-	}
-	legacy := strings.TrimSpace(artifacts["brainstorm"])
-	if legacy == "" {
-		return
-	}
-	artifacts["design"] = legacyDesignArtifactPath(legacy)
-}
-
-func legacyDesignArtifactPath(path string) string {
-	if filepath.IsAbs(path) || strings.ContainsAny(path, `/\`) {
-		return path
-	}
-	return filepath.Join("brainstorm", path)
 }
 
 // validTransitions maps each status to the set of statuses it can transition to.

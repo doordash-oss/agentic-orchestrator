@@ -412,6 +412,7 @@ func TestStoreRelationshipChildrenReturnsActiveAndOrderedClosedHistory(t *testin
 		},
 	}
 	for _, child := range children {
+		child.SchemaVersion = SchemaVersionCurrent
 		if err := store.Save(child); err != nil {
 			t.Fatalf("Save(%q): %v", child.ID, err)
 		}
@@ -593,6 +594,7 @@ func TestStoreRelationshipChildrenFailsClosedOnInvalidRecords(t *testing.T) {
 
 			store := NewStore(t.TempDir())
 			for _, child := range tt.children {
+				child.SchemaVersion = SchemaVersionCurrent
 				if err := store.Save(child); err != nil {
 					t.Fatalf("Save(%q): %v", child.ID, err)
 				}
@@ -627,16 +629,17 @@ func TestStoreCloseChildIsIdempotentAndPreservesInspectionState(t *testing.T) {
 	firstClose := created.Add(2 * time.Hour)
 	retryClose := firstClose.Add(time.Hour)
 	child := &Feature{
-		ID:          "child-close",
-		Name:        "inspectable child",
-		Created:     created,
-		Status:      StatusFailed,
-		LastError:   "integration needs attention",
-		FailureType: FailureInfrastructure,
-		Pipeline:    PipelineMedium,
-		Artifacts:   map[string]string{"plan": "phase-01/plan.md"},
-		PhaseCosts:  map[string]float64{"implement": 12.5},
-		Repos:       []FeatureRepo{{Name: "repo", WorktreePath: "/tmp/child"}},
+		ID:            "child-close",
+		SchemaVersion: SchemaVersionCurrent,
+		Name:          "inspectable child",
+		Created:       created,
+		Status:        StatusFailed,
+		LastError:     "integration needs attention",
+		FailureType:   FailureInfrastructure,
+		Pipeline:      PipelineMedium,
+		Artifacts:     map[string]string{"plan": "phase-01/plan.md"},
+		PhaseCosts:    map[string]float64{"implement": 12.5},
+		Repos:         []FeatureRepo{{Name: "repo", WorktreePath: "/tmp/child"}},
 		Parent: &ChildRelationship{
 			ParentID: "parent",
 			Kind:     ChildKindRefactor,
@@ -693,7 +696,7 @@ func TestStoreSetClosedChildDiffSummary(t *testing.T) {
 	summary := "Repository: repo\ndiff --git a/auth.go b/auth.go\n+session rotation"
 
 	child := &Feature{
-		ID: "child-diff", Name: "diff child", Status: StatusReviewPassed,
+		ID: "child-diff", Name: "diff child", Status: StatusReviewPassed, SchemaVersion: SchemaVersionCurrent,
 		Repos: []FeatureRepo{{Name: "repo"}},
 		Parent: &ChildRelationship{
 			ParentID: "parent", Kind: ChildKindRefactor,
@@ -725,7 +728,7 @@ func TestStoreSetClosedChildDiffSummary(t *testing.T) {
 
 	// An open child and a non-child never receive a summary.
 	openChild := &Feature{
-		ID: "child-open", Name: "open child", Status: StatusImplementing,
+		ID: "child-open", Name: "open child", Status: StatusImplementing, SchemaVersion: SchemaVersionCurrent,
 		Repos:  []FeatureRepo{{Name: "repo"}},
 		Parent: &ChildRelationship{ParentID: "parent", Kind: ChildKindRefactor},
 	}
@@ -740,7 +743,7 @@ func TestStoreSetClosedChildDiffSummary(t *testing.T) {
 		t.Fatalf("open child DiffSummary = %q, want empty", got.Parent.DiffSummary)
 	}
 
-	plain := &Feature{ID: "plain", Name: "plain", Status: StatusImplementing}
+	plain := &Feature{ID: "plain", Name: "plain", Status: StatusImplementing, SchemaVersion: SchemaVersionCurrent}
 	if err := store.Save(plain); err != nil {
 		t.Fatalf("Save(%q): %v", plain.ID, err)
 	}
@@ -760,10 +763,11 @@ func TestStoreModifyGuardedRejectsClosedChildBeforeCallbacks(t *testing.T) {
 	store := NewStore(t.TempDir())
 	closedAt := time.Date(2026, time.July, 29, 12, 0, 0, 0, time.UTC)
 	child := &Feature{
-		ID:     "closed-child",
-		Name:   "immutable",
-		Status: StatusDone,
-		Repos:  []FeatureRepo{{Name: "repo", WorktreePath: "/tmp/original"}},
+		ID:            "closed-child",
+		SchemaVersion: SchemaVersionCurrent,
+		Name:          "immutable",
+		Status:        StatusDone,
+		Repos:         []FeatureRepo{{Name: "repo", WorktreePath: "/tmp/original"}},
 		Parent: &ChildRelationship{
 			ParentID:     "parent",
 			Kind:         ChildKindRefactor,
@@ -1665,25 +1669,26 @@ func TestStoreSetupStateRoundTrip(t *testing.T) {
 	}
 }
 
-func TestStoreLoadMigratesLegacyBrainstormStatusAndArtifact(t *testing.T) {
+func TestStoreLoadRejectsNonCurrentSchemaVersion(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	store := NewStore(dir)
 
-	const featureID = "legacy-brainstorm-001"
+	const featureID = "old-schema-001"
 	featureDir := filepath.Join(dir, featureID)
 	runDir := filepath.Join(featureDir, "runs", "run-001")
 	if err := os.MkdirAll(runDir, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
 
+	oldStatus := "Brain" + "stormReady"
 	featureYAML := fmt.Sprintf(`id: %s
-name: Legacy Brainstorm Feature
-slug: legacy-brainstorm-feature
-description: legacy brainstorm status
+name: Old Schema Feature
+slug: old-schema-feature
+description: old schema
 created: 2026-01-01T00:00:00Z
-status: BrainstormReady
-current_phase: 7
+status: %s
+current_phase: 0
 repos:
   - name: repo-a
     path: /tmp/a
@@ -1693,32 +1698,43 @@ inquireness: medium
 active_run: 1
 run_count: 1
 schema_version: %d
-`, featureID, SchemaVersionCurrent)
+`, featureID, oldStatus, SchemaVersionCurrent-1)
 	if err := os.WriteFile(filepath.Join(featureDir, "feature.yaml"), []byte(featureYAML), 0o644); err != nil {
 		t.Fatalf("write feature.yaml: %v", err)
 	}
 
 	runYAML := `run_number: 1
-artifacts:
-  brainstorm: brainstorm.md
+artifacts: {}
 `
 	if err := os.WriteFile(filepath.Join(runDir, "run.yaml"), []byte(runYAML), 0o644); err != nil {
 		t.Fatalf("write run.yaml: %v", err)
 	}
 
-	loaded, err := store.Load(featureID)
+	_, err := store.Load(featureID)
+	want := fmt.Sprintf("schema version %d, expected %d", SchemaVersionCurrent-1, SchemaVersionCurrent)
+	if err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("Load() error = %v, want containing %q", err, want)
+	}
+}
+
+func TestStoreListRunsAcceptsOnlyCanonicalDirectoryNames(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	store := NewStore(dir)
+	runsDir := filepath.Join(dir, "feature-001", "runs")
+	for _, name := range []string{"run-001", "run-999", "run-1000", "run-1", "run-01", "run-01000", "run-abc"} {
+		if err := os.MkdirAll(filepath.Join(runsDir, name), 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", name, err)
+		}
+	}
+
+	got, err := store.ListRuns("feature-001")
 	if err != nil {
-		t.Fatalf("Load() error = %v; want nil", err)
+		t.Fatalf("ListRuns() error = %v", err)
 	}
-	if loaded.Status != StatusDesignReady {
-		t.Errorf("loaded.Status = %v, want %v", loaded.Status, StatusDesignReady)
-	}
-	wantArtifact := filepath.Join("brainstorm", "brainstorm.md")
-	if got := loaded.Artifacts["design"]; got != wantArtifact {
-		t.Errorf("loaded.Artifacts[design] = %q, want %q", got, wantArtifact)
-	}
-	if got := loaded.Run().Artifacts["design"]; got != wantArtifact {
-		t.Errorf("loaded.Run().Artifacts[design] = %q, want %q", got, wantArtifact)
+	want := []int{1, 999, 1000}
+	if !slices.Equal(got, want) {
+		t.Errorf("ListRuns() = %v, want %v", got, want)
 	}
 }
 

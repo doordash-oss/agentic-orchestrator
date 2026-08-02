@@ -25,6 +25,13 @@ The design follows patterns described in Anthropic's [Building Effective Agents]
 
 ## Quick Start
 
+> [!IMPORTANT]
+> **Breaking change:** Before upgrading an installation whose runtime data lives
+> under `~/.agentic-workflow/`, rename that directory to
+> `~/.agentic-orchestrator/`. Headless installations may instead keep data in a
+> custom location by passing explicit `--config` and `--state-dir` flags. The
+> runtime no longer checks the legacy parent automatically.
+
 Install the desktop package for your platform from [GitHub Releases](https://github.com/doordash-oss/agentic-orchestrator/releases), then open Agentic Orchestrator. The app launches and supervises its matched bundled server.
 
 For a headless server, external-runtime setup, or development, install the `agentico` CLI with Homebrew or a prebuilt binary. Build from source only if you're working on Agentico itself.
@@ -124,7 +131,7 @@ When creating a feature, choose a pipeline depth:
 
 ### Worktree Isolation
 
-Each feature runs in its own git worktree under `~/.agentic-orchestrator/worktrees/` (legacy installs continue to use `~/.agentic-workflow/worktrees/` until you opt in). This means:
+Each feature runs in its own git worktree under `~/.agentic-orchestrator/worktrees/`. This means:
 
 - Multiple features can work on the same repo simultaneously
 - No branch conflicts between concurrent features
@@ -180,7 +187,7 @@ workspace.
 
 ## Configuration
 
-Config lives at `~/.agentic-orchestrator/config.yaml` (auto-created on first launch). If a legacy `~/.agentic-workflow/` directory already exists, it is reused in place so existing installs keep working without a manual copy.
+Config lives at `~/.agentic-orchestrator/config.yaml` and is auto-created on first launch. Override the location for a headless server with explicit `--config` and `--state-dir` flags.
 
 ```yaml
 defaults:

@@ -5,6 +5,14 @@ Local development packages remain unsigned and unpublished; protected CI tag
 runs are the only place Developer ID, notarization, and GPG signing material is
 accepted.
 
+## Pre-upgrade Migration
+
+Before upgrading an installation whose runtime data lives under
+`~/.agentic-workflow/`, rename that directory to `~/.agentic-orchestrator/`.
+Headless installations may instead keep a custom location by passing explicit
+`--config` and `--state-dir` flags. Current releases do not check the legacy
+runtime parent automatically.
+
 ## Update Behavior
 
 - The Electron main process owns update checks, release feed access, staged

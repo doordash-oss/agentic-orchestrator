@@ -1128,7 +1128,7 @@ func TestManagerMarkPublished(t *testing.T) {
 	// non-publishable. Force publishable=true to exercise the empty-URL guard.
 	makePublishable(t, mgr, f.ID)
 
-	// Advance through full lifecycle to PRReady
+	// Advance through full lifecycle to CodeReady.
 	_ = mgr.Transition(f.ID, feature.StatusResearching)
 	_ = mgr.Transition(f.ID, feature.StatusPlanReady)
 	_ = mgr.Transition(f.ID, feature.StatusPlanning)
@@ -1286,7 +1286,7 @@ func TestManagerReturnToPublished(t *testing.T) {
 	mgr := newTestManager(t)
 	f, _ := mgr.Create("Return Published Test", "test", []string{"test-repo"}, mgr.Config.Defaults.Models, "", "", nil)
 
-	// Advance to PRReady
+	// Advance to CodeReady.
 	_ = mgr.Transition(f.ID, feature.StatusResearching)
 	_ = mgr.Transition(f.ID, feature.StatusPlanReady)
 	_ = mgr.Transition(f.ID, feature.StatusPlanning)
@@ -1530,7 +1530,7 @@ func TestManagerFullRebaseCycle(t *testing.T) {
 	_ = mgr.Transition(f.ID, feature.StatusCodeReady)
 	_ = mgr.MarkPublished(f.ID, "https://github.com/test/pr/1")
 
-	// Rebase cycle: Published -> ImplementReady -> Implementing -> ReviewPassed -> PRReady -> Published.
+	// Rebase cycle: Published -> ImplementReady -> Implementing -> ReviewPassed -> CodeReady -> Published.
 	// Manager.StartRebase is no longer available; emulate the transition directly.
 	_ = mgr.Store.Modify(f.ID, func(ff *feature.Feature) error {
 		if err := ff.Transition(feature.StatusImplementReady); err != nil {
@@ -2552,7 +2552,7 @@ func TestCompleteRoadmap(t *testing.T) {
 	}
 	f, _ = mgr.Get(f.ID)
 	if f.Status != feature.StatusCodeReady {
-		t.Errorf("status = %v, want PRReady", f.Status)
+		t.Errorf("status = %v, want CodeReady", f.Status)
 	}
 	if f.CurrentPhase != feature.PhasePublish {
 		t.Errorf("CurrentPhase = %v, want Publish", f.CurrentPhase)
@@ -3260,7 +3260,7 @@ func TestTryCompletePublish_NotAllReady(t *testing.T) {
 	}
 }
 
-func TestTryCompletePublish_FeatureAtPRReady(t *testing.T) {
+func TestTryCompletePublish_FeatureAtCodeReady(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
 	dir := t.TempDir()
@@ -3285,7 +3285,7 @@ func TestTryCompletePublish_FeatureAtPRReady(t *testing.T) {
 		t.Fatalf("TryCompletePublish: %v", err)
 	}
 	if !published {
-		t.Fatal("expected published = true for feature at PRReady")
+		t.Fatal("expected published = true for feature at CodeReady")
 	}
 
 	loaded, _ := store.Load(f.ID)
@@ -4149,8 +4149,8 @@ func assertReviewCommentsCycleIntact(t *testing.T, store *feature.Store, feature
 	}
 }
 
-// advanceToPRReady walks a feature through the full pipeline up to (and including) PRReady.
-func advanceToPRReady(t *testing.T, store *feature.Store, featureID string) {
+// advanceToCodeReady walks a feature through the full pipeline up to and including CodeReady.
+func advanceToCodeReady(t *testing.T, store *feature.Store, featureID string) {
 	t.Helper()
 	transitions := []feature.Status{
 		feature.StatusInquiring,

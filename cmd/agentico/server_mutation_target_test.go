@@ -490,12 +490,13 @@ func TestServerMutationTargetStartFeatureBlocksChildren(t *testing.T) {
 		store := feature.NewStore(filepath.Join(runtimeDir, "features"))
 		manager := feature.NewManager(store, cfg)
 		child := &feature.Feature{
-			ID:        "child-blocked",
-			Slug:      "child-blocked",
-			Status:    feature.StatusCreated,
-			ActiveRun: 1,
-			RunCount:  1,
-			Pipeline:  feature.PipelineMedium,
+			ID:            "child-blocked",
+			Slug:          "child-blocked",
+			Status:        feature.StatusCreated,
+			ActiveRun:     1,
+			RunCount:      1,
+			Pipeline:      feature.PipelineMedium,
+			SchemaVersion: feature.SchemaVersionCurrent,
 			Repos: []feature.FeatureRepo{{
 				Name:       testRepoAName,
 				Path:       filepath.Join(runtimeDir, testRepoAName),
@@ -889,6 +890,7 @@ func TestServerMutationTargetDraftNeedUserInputAnswersUpdatesPendingArtifactByPr
 		Slug:                     "need-input",
 		Status:                   feature.StatusNeedUserInput,
 		PendingNeedUserInputPath: gatePath,
+		SchemaVersion:            feature.SchemaVersionCurrent,
 	}
 	if err := store.Save(f); err != nil {
 		t.Fatalf("Save feature error = %v", err)
@@ -1777,14 +1779,15 @@ func TestServerMutationTargetClosedChildConfigReturnsRelationshipClosed(t *testi
 	cfg := config.NewDefault()
 	closedAt := time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC)
 	child := &feature.Feature{
-		ID:          "closed-child",
-		Name:        "Closed child",
-		Slug:        "closed-child",
-		Status:      feature.StatusDone,
-		Pipeline:    feature.PipelineMedium,
-		Models:      config.ModelConfig{Research: "old-research"},
-		Inquireness: feature.InquirenessMedium,
-		Checkpoints: feature.Checkpoints{RoadmapReview: true},
+		ID:            "closed-child",
+		Name:          "Closed child",
+		Slug:          "closed-child",
+		Status:        feature.StatusDone,
+		Pipeline:      feature.PipelineMedium,
+		Models:        config.ModelConfig{Research: "old-research"},
+		Inquireness:   feature.InquirenessMedium,
+		Checkpoints:   feature.Checkpoints{RoadmapReview: true},
+		SchemaVersion: feature.SchemaVersionCurrent,
 		Parent: &feature.ChildRelationship{
 			ParentID:     "parent",
 			Kind:         feature.ChildKindRefactor,
@@ -2364,10 +2367,11 @@ func TestServerMutationTargetReviewCommentsChildCreationWinnerDoesNotStage(t *te
 		}
 
 		child := &feature.Feature{
-			ID:       "review-comments-active-child",
-			Slug:     "review-comments-active-child",
-			Status:   feature.StatusImplementing,
-			Pipeline: feature.PipelineMedium,
+			ID:            "review-comments-active-child",
+			Slug:          "review-comments-active-child",
+			Status:        feature.StatusImplementing,
+			Pipeline:      feature.PipelineMedium,
+			SchemaVersion: feature.SchemaVersionCurrent,
 			Parent: &feature.ChildRelationship{
 				ParentID: parent.ID,
 				Kind:     feature.ChildKindRefactor,

@@ -39,7 +39,7 @@ The user guide lives alongside this SKILL.md in the same directory. Use relative
 
 For detailed information, consult the user guide topic files (see "User Guide" section above).
 
-**Quick reference**: Agentic Orchestrator drives features through a multi-phase pipeline (KB Build → Inquire → Research → Design → Plan → Implement → Review → Publish). Three pipeline profiles (Medium, Large, Moonshot) control which phases run and how much rigor is applied. Features are isolated in git worktrees. Config lives at `~/.agentic-orchestrator/config.yaml` on fresh installs; existing `~/.agentic-workflow/` parents are reused in place.
+**Quick reference**: Agentic Orchestrator drives features through a multi-phase pipeline (KB Build → Inquire → Research → Design → Plan → Implement → Review → Publish). Three pipeline profiles (Medium, Large, Moonshot) control which phases run and how much rigor is applied. Features are isolated in git worktrees. Config lives at `~/.agentic-orchestrator/config.yaml`.
 
 ## Context
 

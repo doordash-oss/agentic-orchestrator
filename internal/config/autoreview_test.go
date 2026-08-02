@@ -143,9 +143,9 @@ defaults:
 	if cfg.Defaults.Models.AutomaticReview != "haiku[200K]" {
 		t.Errorf("AutomaticReview = %q, want haiku[200K]", cfg.Defaults.Models.AutomaticReview)
 	}
-	// UnmarshalYAML migration still defaults Inquiry from Research.
+	// Top-level config defaults use the configured research model for inquiry.
 	if cfg.Defaults.Models.Inquiry != "sonnet" {
-		t.Errorf("Inquiry = %q, want sonnet (migrated)", cfg.Defaults.Models.Inquiry)
+		t.Errorf("Inquiry = %q, want sonnet", cfg.Defaults.Models.Inquiry)
 	}
 }
 

@@ -16,7 +16,7 @@ package feature
 
 import (
 	"bytes"
-	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -384,81 +384,15 @@ func TestDesignStatusBehavior(t *testing.T) {
 	}
 }
 
-func TestStatusYAMLLegacyInt(t *testing.T) {
+func TestStatusYAMLRejectsNonCanonicalValues(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: pure value, table-driven, or per-test temp-dir assertions with no shared state.
-	// Test that legacy integer format (before SplitParent was added) still works
-	tests := []struct {
-		yaml string
-		want Status
-	}{
-		{"0", StatusCreated},
-		{"1", StatusResearching},
-		{"8", StatusPublished},
-		{"9", StatusFailed},
-		{"12", StatusDone}, // legacy: 12 was Done before SplitParent insertion
-	}
-	for _, tt := range tests {
-		var got Status
-		if err := yaml.Unmarshal([]byte(tt.yaml), &got); err != nil {
-			t.Fatalf("Unmarshal %q: %v", tt.yaml, err)
-		}
-		if got != tt.want {
-			t.Errorf("legacy int %s: got %v, want %v", tt.yaml, got, tt.want)
-		}
-	}
-}
-
-func TestStatusYAMLLegacyBrainstormAliases(t *testing.T) {
-	t.Parallel()
-	tests := []struct {
-		yaml string
-		want Status
-	}{
-		{"BrainstormReady", StatusDesignReady},
-		{"Brainstorming", StatusDesigning},
-	}
-	for _, tt := range tests {
-		t.Run(tt.yaml, func(t *testing.T) {
+	for _, value := range []string{"PR" + "Ready", "Brain" + "stormReady", "Brain" + "storming", "0", "12"} {
+		t.Run(value, func(t *testing.T) {
 			var got Status
-			if err := yaml.Unmarshal([]byte(tt.yaml), &got); err != nil {
-				t.Fatalf("Unmarshal(%q) error = %v", tt.yaml, err)
-			}
-			if got != tt.want {
-				t.Errorf("Unmarshal(%q) = %v, want %v", tt.yaml, got, tt.want)
-			}
-		})
-	}
-}
-
-func TestNormalizeLegacyArtifactAliasesAddsDesignFromBrainstorm(t *testing.T) {
-	t.Parallel()
-	tests := []struct {
-		name string
-		in   map[string]string
-		want string
-	}{
-		{
-			name: "legacy basename uses brainstorm directory",
-			in:   map[string]string{"brainstorm": "brainstorm.md"},
-			want: filepath.Join("brainstorm", "brainstorm.md"),
-		},
-		{
-			name: "absolute legacy path is preserved",
-			in:   map[string]string{"brainstorm": "/tmp/brainstorm.md"},
-			want: "/tmp/brainstorm.md",
-		},
-		{
-			name: "existing design wins",
-			in:   map[string]string{"design": "design.md", "brainstorm": "brainstorm.md"},
-			want: "design.md",
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			normalizeLegacyArtifactAliases(tt.in)
-			if got := tt.in["design"]; got != tt.want {
-				t.Errorf("normalizeLegacyArtifactAliases() design = %q, want %q", got, tt.want)
+			err := yaml.Unmarshal([]byte(value), &got)
+			if err == nil || !strings.Contains(err.Error(), "unknown status") {
+				t.Errorf("Unmarshal(%q) error = %v, want unknown status error", value, err)
 			}
 		})
 	}

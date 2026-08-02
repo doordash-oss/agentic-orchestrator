@@ -1658,6 +1658,7 @@ func TestImplementLoopNoSkipIterationReview(t *testing.T) {
 	_ = os.WriteFile(planPath, []byte("# Plan\nImplement something"), 0o644)
 
 	f := &feature.Feature{
+		SchemaVersion:   feature.SchemaVersionCurrent,
 		ID:              "test-noskip-001",
 		Name:            "Test No Skip Review",
 		Slug:            "test-no-skip-review",

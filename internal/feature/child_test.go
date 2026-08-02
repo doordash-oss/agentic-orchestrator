@@ -72,6 +72,7 @@ func cleanEverywhere() feature.CleanlinessOps {
 
 func saveChildTestParent(t *testing.T, mgr *feature.Manager, f *feature.Feature) {
 	t.Helper()
+	f.SchemaVersion = feature.SchemaVersionCurrent
 	if f.ActiveRun == 0 {
 		f.ActiveRun = 1
 	}
@@ -511,9 +512,10 @@ func TestModifyGuardedSerializesWithCreateChildLocked(t *testing.T) {
 						return nil, nil, fmt.Errorf("parent not eligible: %s", p.Status)
 					}
 					c := &feature.Feature{
-						ID:     "child-guarded",
-						Slug:   "child-guarded",
-						Status: feature.StatusCreated,
+						ID:            "child-guarded",
+						Slug:          "child-guarded",
+						Status:        feature.StatusCreated,
+						SchemaVersion: feature.SchemaVersionCurrent,
 						Parent: &feature.ChildRelationship{
 							ParentID: "parent-guarded",
 							Kind:     feature.ChildKindRefactor,
@@ -742,26 +744,28 @@ func TestReconcilePendingChildCreations(t *testing.T) {
 	store := feature.NewStore(t.TempDir())
 
 	parent := &feature.Feature{
-		ID:           "p-intent",
-		Slug:         "p-intent",
-		Status:       feature.StatusPublished,
-		ActiveRun:    1,
-		RunCount:     1,
-		Checkpoints:  feature.Checkpoints{RoadmapReview: true},
-		Models:       config.ModelConfig{Review: "parent/review-model"},
-		Effort:       config.EffortConfig{Implementation: "high"},
-		RiskLevel:    feature.RiskMedium,
-		ExitCriteria: "submitted exit criteria",
-		Inquireness:  feature.InquirenessMedium,
+		ID:            "p-intent",
+		Slug:          "p-intent",
+		Status:        feature.StatusPublished,
+		ActiveRun:     1,
+		RunCount:      1,
+		Checkpoints:   feature.Checkpoints{RoadmapReview: true},
+		Models:        config.ModelConfig{Review: "parent/review-model"},
+		Effort:        config.EffortConfig{Implementation: "high"},
+		RiskLevel:     feature.RiskMedium,
+		ExitCriteria:  "submitted exit criteria",
+		Inquireness:   feature.InquirenessMedium,
+		SchemaVersion: feature.SchemaVersionCurrent,
 	}
 	intent := &feature.ChildCreationIntent{
 		ChildID: "c-intent",
 		Kind:    feature.ChildKindRefactor,
 		Child: feature.Feature{
-			ID:     "c-intent",
-			Name:   "R",
-			Slug:   "r",
-			Status: feature.StatusSettingUpWorktrees,
+			ID:            "c-intent",
+			Name:          "R",
+			Slug:          "r",
+			Status:        feature.StatusSettingUpWorktrees,
+			SchemaVersion: feature.SchemaVersionCurrent,
 			Repos: []feature.FeatureRepo{
 				{Name: "repo-a", Path: "/src/repo-a", Branch: "feature/r-c", BaseBranch: "main"},
 			},
@@ -842,15 +846,16 @@ func TestReconcilePendingChildCreationsToleratesBrokenParentRunState(t *testing.
 	// active run.yaml must not silently swallow startup recovery: the intent
 	// is still rolled forward and cleared.
 	store := feature.NewStore(t.TempDir())
-	parent := &feature.Feature{ID: "p-norun", Slug: "p-norun", Status: feature.StatusPublished, ActiveRun: 1, RunCount: 1}
+	parent := &feature.Feature{ID: "p-norun", Slug: "p-norun", Status: feature.StatusPublished, ActiveRun: 1, RunCount: 1, SchemaVersion: feature.SchemaVersionCurrent}
 	parent.PendingChild = &feature.ChildCreationIntent{
 		ChildID: "c-norun",
 		Kind:    feature.ChildKindRefactor,
 		Child: feature.Feature{
-			ID:     "c-norun",
-			Name:   "R",
-			Slug:   "r",
-			Status: feature.StatusSettingUpWorktrees,
+			ID:            "c-norun",
+			Name:          "R",
+			Slug:          "r",
+			Status:        feature.StatusSettingUpWorktrees,
+			SchemaVersion: feature.SchemaVersionCurrent,
 			Repos: []feature.FeatureRepo{
 				{Name: "repo-a", Path: "/src/repo-a", Branch: "feature/r-c", BaseBranch: "main"},
 			},

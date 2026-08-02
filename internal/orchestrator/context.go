@@ -67,13 +67,7 @@ func (o *Orchestrator) computeKBInfos(f *feature.Feature) []agent.KBInfo {
 // resolveArtifactPath returns the absolute filesystem path to a phase
 // artifact without reading its content. It reads state from PhaseRunner.
 func (o *Orchestrator) resolveArtifactPath(f *feature.Feature, phase string) string {
-	if path := o.resolveArtifactPathForKey(f, phase); path != "" {
-		return path
-	}
-	if phase == "design" {
-		return o.resolveArtifactPathForKey(f, "brainstorm")
-	}
-	return ""
+	return o.resolveArtifactPathForKey(f, phase)
 }
 
 func (o *Orchestrator) resolveArtifactPathForKey(f *feature.Feature, phase string) string {

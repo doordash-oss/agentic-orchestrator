@@ -28,14 +28,14 @@ func TestBeginCascadeDeletePersistsCompleteStableManifest(t *testing.T) {
 	stateDir := filepath.Join(t.TempDir(), "features")
 	store := NewStore(stateDir)
 	parent := &Feature{
-		ID: "parent", Slug: "parent-slug", ActiveRun: 1, RunCount: 1,
+		ID: "parent", Slug: "parent-slug", ActiveRun: 1, RunCount: 1, SchemaVersion: SchemaVersionCurrent,
 		Repos: []FeatureRepo{{
 			Name: "repo-a", Path: "/repos/a", WorktreePath: "/worktrees/parent/a",
 			Branch: "feature/parent",
 		}},
 	}
 	child := &Feature{
-		ID: "child", Slug: "child-slug", ActiveRun: 1, RunCount: 1,
+		ID: "child", Slug: "child-slug", ActiveRun: 1, RunCount: 1, SchemaVersion: SchemaVersionCurrent,
 		Parent: &ChildRelationship{
 			ParentID: "parent",
 			Transaction: &TransactionJournal{Entries: []RepoTransactionEntry{{
@@ -116,11 +116,12 @@ func TestBeginCascadeDeleteFailsClosedOnInvalidRelationship(t *testing.T) {
 	// parallel-candidate: per-test temp dirs isolate persisted relationship state.
 
 	store := NewStore(t.TempDir())
-	parent := &Feature{ID: "parent", ActiveRun: 1, RunCount: 1}
+	parent := &Feature{ID: "parent", ActiveRun: 1, RunCount: 1, SchemaVersion: SchemaVersionCurrent}
 	child := &Feature{
-		ID:        "invalid-child",
-		ActiveRun: 1,
-		RunCount:  1,
+		ID:            "invalid-child",
+		ActiveRun:     1,
+		RunCount:      1,
+		SchemaVersion: SchemaVersionCurrent,
 		Parent: &ChildRelationship{
 			ParentID:     parent.ID,
 			CloseOutcome: ChildCloseOutcomeCompleted,

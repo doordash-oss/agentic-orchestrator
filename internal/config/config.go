@@ -212,41 +212,6 @@ func AllEffortRoles() []string {
 	return []string{"Inquiry", "Research", "Planning", "Implementation", "Review", "Utilities", "KBBuild"}
 }
 
-// UnmarshalYAML migrates the legacy "chat" YAML key to "utilities".
-// If both keys are present, "utilities" takes precedence.
-func (m *ModelConfig) UnmarshalYAML(value *yaml.Node) error {
-	type aux struct {
-		Inquiry         string `yaml:"inquiry"`
-		Research        string `yaml:"research"`
-		Planning        string `yaml:"planning"`
-		Implementation  string `yaml:"implementation"`
-		Review          string `yaml:"review"`
-		Utilities       string `yaml:"utilities"`
-		Chat            string `yaml:"chat"`
-		KBBuild         string `yaml:"kb_build"`
-		AutomaticReview string `yaml:"automatic_review"`
-	}
-	var a aux
-	if err := value.Decode(&a); err != nil {
-		return err
-	}
-	m.Inquiry = a.Inquiry
-	m.Research = a.Research
-	m.Planning = a.Planning
-	m.Implementation = a.Implementation
-	m.Review = a.Review
-	m.Utilities = a.Utilities
-	m.KBBuild = a.KBBuild
-	m.AutomaticReview = a.AutomaticReview
-	if m.Utilities == "" && a.Chat != "" {
-		m.Utilities = a.Chat
-	}
-	if m.Inquiry == "" {
-		m.Inquiry = m.Research
-	}
-	return nil
-}
-
 // Checkpoints controls which phase transitions pause for human review in the config defaults.
 type Checkpoints struct {
 	InquiryReview   bool `yaml:"inquiry_review" json:"inquiry_review,omitempty"`
@@ -262,7 +227,6 @@ type Checkpoints struct {
 
 // UnmarshalYAML defaults omitted checkpoint fields to true, except DraftPublish
 // which defaults to false (opting into draft is the exception, not the rule).
-// The legacy plan_review key is accepted by the decoder but intentionally ignored.
 func (c *Checkpoints) UnmarshalYAML(value *yaml.Node) error {
 	type checkpointFields struct {
 		InquiryReview   *bool `yaml:"inquiry_review"`

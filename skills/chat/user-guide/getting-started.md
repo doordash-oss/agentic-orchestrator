@@ -43,7 +43,7 @@ The first-launch setup is a gated desktop flow backed by fresh server readiness 
 3. **Workspace** — select **Choose workspace folder…**. The runtime stores the workspace root and discovers repositories beneath it.
 4. **Repository** — select an existing repository. If you choose a plain directory, the app asks for explicit consent before initializing it as a git repository.
 
-When every readiness gate passes, the app opens the **Home** workspace. Fresh installs create runtime data under `~/.agentic-orchestrator/`. If `~/.agentic-workflow/` already exists, Agentico reuses that parent in place.
+When every readiness gate passes, the app opens the **Home** workspace. Agentico creates runtime data under `~/.agentic-orchestrator/`.
 
 ## Create a Feature
 
@@ -103,8 +103,6 @@ Fresh installs use:
   permissions/             # Cached permission rules
   agentico.log             # Runtime log output
 ```
-
-Existing installs with `~/.agentic-workflow/` retain the same layout beneath that parent; no automatic copy or migration runs.
 
 ## Next Steps
 

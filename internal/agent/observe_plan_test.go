@@ -175,18 +175,19 @@ func TestPhasePlanningLoopEmitsEvents(t *testing.T) {
 
 	store := feature.NewStore(stateDir)
 	f := &feature.Feature{
-		ID:           featureID,
-		Name:         "Phase Plan Events Test",
-		Slug:         "phase-plan-events-test",
-		Description:  "Integration test for phase plan observability",
-		Status:       feature.StatusPlanning,
-		CurrentPhase: feature.PhasePlan,
-		ActiveRun:    1,
-		RunCount:     1,
-		TraceID:      "trace-phase-plan-events-001",
-		Repos:        []feature.FeatureRepo{{Name: "test-repo", Path: workDir}},
-		Models:       defaultTestPlanModels(),
-		ExitCriteria: "Relevant tests pass",
+		SchemaVersion: feature.SchemaVersionCurrent,
+		ID:            featureID,
+		Name:          "Phase Plan Events Test",
+		Slug:          "phase-plan-events-test",
+		Description:   "Integration test for phase plan observability",
+		Status:        feature.StatusPlanning,
+		CurrentPhase:  feature.PhasePlan,
+		ActiveRun:     1,
+		RunCount:      1,
+		TraceID:       "trace-phase-plan-events-001",
+		Repos:         []feature.FeatureRepo{{Name: "test-repo", Path: workDir}},
+		Models:        defaultTestPlanModels(),
+		ExitCriteria:  "Relevant tests pass",
 	}
 	_ = store.Save(f)
 

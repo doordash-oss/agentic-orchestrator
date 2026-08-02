@@ -55,7 +55,6 @@ type FeatureLifecycle interface {
 	Create(name, description string, repos []string, models config.ModelConfig,
 		exitCriteria, inquireness string, images []string,
 		opts ...feature.CreateOptions) (*feature.Feature, error)
-	SlugExists(slug string) (string, error)
 	Get(id string) (*feature.Feature, error)
 	List() ([]*feature.Feature, error)
 	Delete(featureID string) error
@@ -84,7 +83,6 @@ type FeatureLifecycle interface {
 
 	// Implement phase
 	StartImplementation(featureID string) error
-	UpdateIteration(featureID string, iteration int) error
 	CompleteImplementation(featureID string) error
 
 	// Publish / completion
@@ -97,10 +95,8 @@ type FeatureLifecycle interface {
 	MarkFinalReviewReady(featureID string) error
 	MarkPublished(featureID, prURL string) error
 	MarkDone(featureID string) error
-	ReturnToPublished(featureID string) error
 
 	// Post-publish cycles
-	StartAddressingReviews(featureID string) error
 	ClearAddressingReviews(featureID string) error
 	StartFeatureRebaseOperation(featureID string) error
 	MarkFeatureRebaseStage(featureID string, stage feature.RebaseStage) error
@@ -115,24 +111,18 @@ type FeatureLifecycle interface {
 	RemoveRepoCycle(featureID, repoName string) error
 	FailRepoCycle(featureID, repoName, errMsg string) error
 	MarkRepoCycleReviewing(featureID, repoName string) error
-	HasActiveRepoCycles(featureID string) (bool, error)
 	ClearRepoCycles(featureID string) error
-	SetRepoCyclePlanPath(featureID, repoName, planPath string) error
 
 	// Roadmap phases
 	AdvanceRoadmapPhase(featureID string) error
 	StartRoadmapPhaseImplementation(featureID string) error
-	CompleteRoadmap(featureID string) error
 	RecordRoadmapPhaseCommitAnchors(featureID string, phase int, anchors map[string]string) error
 
 	// Worktree management
-	RecreateWorktree(featureID string) error
 	CleanWorktree(featureID string) error
-	EnsureWorktree(featureID string) error
 
 	// Failure / restart
 	MarkFailed(featureID, failureType, lastError string) error
-	RestartFromBeginning(featureID string) error
 
 	// Rewind / pipeline
 	RewindToPhase(featureID string, targetPhase feature.Phase) ([]string, feature.Phase, error)

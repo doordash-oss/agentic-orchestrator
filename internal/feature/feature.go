@@ -1156,10 +1156,8 @@ func (f *Feature) EffectivePipeline() PipelineProfile {
 }
 
 // HasActiveRepoCycles reports whether any repo has a running, reviewing, or
-// need-user-input-paused cycle. It matches Manager.HasActiveRepoCycles so
-// callers on a loaded *Feature do not need to round-trip through the store. Paused
-// (need_user_input) cycles count as active because the feature still has
-// outstanding post-publish work waiting on the user.
+// need-user-input-paused cycle. Paused (need_user_input) cycles count as active
+// because the feature still has outstanding post-publish work waiting on the user.
 func (f *Feature) HasActiveRepoCycles() bool {
 	for _, rc := range f.RepoCycles {
 		if rc == nil || !rc.Type.IsValid() {

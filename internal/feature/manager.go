@@ -658,14 +658,6 @@ func (m *Manager) StartImplementation(featureID string) error {
 	})
 }
 
-// UpdateIteration updates the current iteration counter on a feature.
-func (m *Manager) UpdateIteration(featureID string, iteration int) error {
-	return m.Store.Modify(featureID, func(f *Feature) error {
-		f.CurrentIteration = iteration
-		return nil
-	})
-}
-
 // CompleteImplementation transitions a feature to ReviewPassed.
 func (m *Manager) CompleteImplementation(featureID string) error {
 	return m.Transition(featureID, StatusReviewPassed)
@@ -728,53 +720,6 @@ func (m *Manager) MarkPublished(featureID, prURL string) error {
 func (m *Manager) MarkDone(featureID string) error {
 	return m.Store.Modify(featureID, func(f *Feature) error {
 		return f.Transition(StatusDone)
-	})
-}
-
-// ReturnToPublished transitions a CodeReady feature back to Published, preserving the existing PR URL.
-// A publishable feature must already have a PR URL recorded (either at the
-// feature level or on any repo); otherwise the transition is refused so we
-// never promote to Published without a real PR on record.
-//
-// Re-entrancy / crash recovery:
-//
-//	(a) Idempotent on retry. The mutation is gated by f.Transition, which is
-//	    a no-op when the feature is already StatusPublished, and the trailing
-//	    field assignments (CurrentPhase, ActiveCycleType) are
-//	    overwrite-with-the-same-value semantics on a republished feature.
-//	    Re-issuing this call against a feature lacking a PR URL keeps
-//	    returning the same guard error rather than corrupting state.
-//	(b) On crash before Store.Modify returns: the modify wrapper writes
-//	    feature.yaml atomically (rename), so persisted state is either the
-//	    pre-call snapshot or the fully transitioned snapshot — never a
-//	    half-written file. Recovery is the normal startup load.
-func (m *Manager) ReturnToPublished(featureID string) error {
-	return m.Store.Modify(featureID, func(f *Feature) error {
-		if f.IsPublishable() && len(f.PRURLs()) == 0 {
-			return fmt.Errorf("ReturnToPublished: publishable feature %s has no PR URL", featureID)
-		}
-		if err := f.Transition(StatusPublished); err != nil {
-			return err
-		}
-		f.CurrentPhase = PhasePublish
-		f.SetActiveCycleType("")
-		return nil
-	})
-}
-
-// StartAddressingReviews transitions a Published feature back to ImplementReady
-// for addressing PR review comments.
-func (m *Manager) StartAddressingReviews(featureID string) error {
-	return m.Store.Modify(featureID, func(f *Feature) error {
-		if err := f.Transition(StatusImplementReady); err != nil {
-			return err
-		}
-		f.SetAddressingReviews(true)
-		f.SetActiveCycleType(CycleReviewComments)
-		f.CurrentPhase = PhaseImplement
-		// Pre-set timing key — StartImplementation will use this
-		f.ActiveTimingKey = "review-comments"
-		return nil
 	})
 }
 
@@ -1048,26 +993,6 @@ func (m *Manager) MarkRepoCycleReviewing(featureID, repoName string) error {
 	})
 }
 
-// HasActiveRepoCycles returns true if any repo has a running, reviewing, or
-// need-user-input-paused cycle. Paused cycles count as active so post-publish
-// gating reflects outstanding work waiting on user input.
-func (m *Manager) HasActiveRepoCycles(featureID string) (bool, error) {
-	f, err := m.Get(featureID)
-	if err != nil {
-		return false, err
-	}
-	for _, rc := range f.RepoCycles {
-		if rc == nil || !rc.Type.IsValid() {
-			continue
-		}
-		switch rc.Status {
-		case RepoCycleRunning, RepoCycleReviewing, RepoCycleNeedUserInput:
-			return true, nil
-		}
-	}
-	return false, nil
-}
-
 // ClearRepoCycles removes all per-repo cycle state (used by stop-all).
 func (m *Manager) ClearRepoCycles(featureID string) error {
 	return m.Store.Modify(featureID, func(f *Feature) error {
@@ -1082,19 +1007,6 @@ func (m *Manager) ClearRepoCycles(featureID string) error {
 					f.SetActiveCycleType("")
 				}
 			}
-		}
-		return nil
-	})
-}
-
-// SetRepoCyclePlanPath records the plan artifact path for a per-repo cycle.
-func (m *Manager) SetRepoCyclePlanPath(featureID, repoName, planPath string) error {
-	return m.Store.Modify(featureID, func(f *Feature) error {
-		if f.RepoCycles == nil {
-			return fmt.Errorf("no active cycles")
-		}
-		if rc, ok := f.RepoCycles[repoName]; ok {
-			rc.PlanPath = planPath
 		}
 		return nil
 	})
@@ -1149,18 +1061,6 @@ func (m *Manager) StartRoadmapPhaseImplementation(featureID string) error {
 	return m.Transition(featureID, StatusImplementReady)
 }
 
-// CompleteRoadmap marks the final roadmap phase as complete and
-// transitions to StatusCodeReady.
-func (m *Manager) CompleteRoadmap(featureID string) error {
-	return m.Store.Modify(featureID, func(f *Feature) error {
-		if err := f.Transition(StatusCodeReady); err != nil {
-			return err
-		}
-		f.CurrentPhase = PhasePublish
-		return nil
-	})
-}
-
 // RecordRoadmapPhaseCommitAnchors persists per-repo full HEAD SHAs for a
 // completed roadmap phase.
 func (m *Manager) RecordRoadmapPhaseCommitAnchors(featureID string, phase int, anchors map[string]string) error {
@@ -1186,29 +1086,6 @@ func (m *Manager) RecordRoadmapPhaseCommitAnchors(featureID string, phase int, a
 			return nil
 		}
 		r.RoadmapPhaseCommitAnchors[phase] = copied
-		return nil
-	})
-}
-
-// RecreateWorktree re-creates a worktree for a feature from its existing branch.
-func (m *Manager) RecreateWorktree(featureID string) error {
-	if m.Worktrees == nil {
-		return fmt.Errorf("worktree manager not configured")
-	}
-	return m.Store.Modify(featureID, func(f *Feature) error {
-		for i, repo := range f.Repos {
-			if repo.WorktreePath != "" {
-				continue // already has a worktree
-			}
-			if repo.Branch == "" {
-				return fmt.Errorf("repo %s has no branch to recreate from", repo.Name)
-			}
-			wtPath, err := m.Worktrees.Create(repo.Path, repoWorkspaceSlug(f, repo), repo.Name, repo.Branch)
-			if err != nil {
-				return fmt.Errorf("recreating worktree for %s: %w", repo.Name, err)
-			}
-			f.Repos[i].WorktreePath = wtPath
-		}
 		return nil
 	})
 }
@@ -1249,47 +1126,6 @@ func (m *Manager) MarkFailed(featureID, failureType, lastError string) error {
 		f.LastError = lastError
 		return nil
 	})
-}
-
-// RestartFromBeginning resets a feature back to its first pipeline phase by
-// sealing the active run and forking a fresh one. It uses `RewindToPhase` plus
-// a follow-up `ForceKBRebuild = true` mutation so sealed runs are preserved
-// intact under `runs/run-NNN/`.
-//
-// Pipeline first-phase mapping: PipelineMoonshot/Large first phase is
-// PhaseKnowledgeBase, but RewindToPhase rejects that target directly. We
-// rewind to PhaseInquire (the first user-rewindable phase for those
-// profiles) and rely on ForceKBRebuild to trigger KB rebuild on the next
-// run. Medium features rewind to PhasePlan.
-//
-// Callers that used to rely on "silently discard worktree reset errors" now
-// see warnings through `RewindToPhase`'s return; the current single call
-// site discards them, matching prior behaviour in spirit.
-func (m *Manager) RestartFromBeginning(featureID string) error {
-	f, err := m.Store.Load(featureID)
-	if err != nil {
-		return fmt.Errorf("loading feature: %w", err)
-	}
-	rewindTarget := firstRewindablePhase(f.EffectivePipeline())
-	if _, _, err := m.RewindToPhase(featureID, rewindTarget); err != nil {
-		return fmt.Errorf("restarting from beginning: %w", err)
-	}
-	// Preserve legacy `ForceKBRebuild` semantics: a restart always wants KB
-	// to rebuild. The active run is now the freshly-forked one.
-	return m.Store.Modify(featureID, func(f *Feature) error {
-		f.ForceKBRebuild = true
-		return nil
-	})
-}
-
-// firstRewindablePhase maps a pipeline profile to the first phase
-// RewindToPhase will accept as a target. Moonshot/Large: PhaseInquire
-// (KB rebuild happens via ForceKBRebuild on the new run). Medium: PhasePlan.
-func firstRewindablePhase(p PipelineProfile) Phase {
-	if p == PipelineMedium {
-		return PhasePlan
-	}
-	return PhaseInquire
 }
 
 // PhasesFromOnwards returns all phases from targetPhase through PhaseImplement in logical order.
@@ -1808,38 +1644,6 @@ func (m *Manager) Delete(featureID string) error {
 	}
 
 	return m.Store.Delete(featureID)
-}
-
-// EnsureWorktree creates a worktree for a feature if one doesn't exist.
-// Uses the feature's BaseBranch as the start point, which for sequential
-// children points to the predecessor's branch.
-func (m *Manager) EnsureWorktree(featureID string) error {
-	if m.Worktrees == nil {
-		return nil
-	}
-	return m.Store.Modify(featureID, func(f *Feature) error {
-		if len(f.Repos) == 0 {
-			return fmt.Errorf("feature has no repos")
-		}
-		repo := f.Repos[0]
-		if repo.WorktreePath != "" {
-			return nil // already has worktree
-		}
-		startPoint := repo.BaseBranch
-		if startPoint == "" {
-			startPoint = "HEAD"
-		}
-		workspaceSlug := repoWorkspaceSlug(f, repo)
-		wtPath, err := m.Worktrees.Create(repo.Path, workspaceSlug, repo.Name, startPoint)
-		if err != nil {
-			return fmt.Errorf("creating worktree: %w", err)
-		}
-		f.Repos[0].WorktreePath = wtPath
-		if f.Repos[0].Branch == "" {
-			f.Repos[0].Branch = m.branchName(workspaceSlug)
-		}
-		return nil
-	})
 }
 
 func generateID() string {

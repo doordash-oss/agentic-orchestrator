@@ -17,6 +17,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -325,15 +326,18 @@ func TestAGENTSdocumentsTestIsolationRules(t *testing.T) {
 
 func TestVerificationDocsDescribeFastSuiteContract(t *testing.T) {
 	repoRoot := filepath.Join("..", "..")
-	docs := []string{
+	pointerDocs := []string{
 		"AGENTS.md",
 		"CONTRIBUTING.md",
 		"README.md",
+	}
+	canonicalDocs := []string{
 		filepath.Join("docs", "testing-baseline.md"),
 		filepath.Join("skills", "chat", "user-guide", "verification.md"),
 	}
+	docs := append(append([]string{}, pointerDocs...), canonicalDocs...)
 
-	for _, rel := range docs {
+	for _, rel := range canonicalDocs {
 		body, err := os.ReadFile(filepath.Join(repoRoot, rel))
 		if err != nil {
 			t.Fatalf("ReadFile(%s): %v", rel, err)
@@ -343,11 +347,37 @@ func TestVerificationDocsDescribeFastSuiteContract(t *testing.T) {
 			"`make test-fast`",
 			"23s, target <=30s",
 			"E2E Go (process-launch / API-driven)",
+			"Desktop static checks",
+			"Desktop unit/component/security tests",
+			"Desktop packaged E2E",
+			"Desktop release audit",
 		} {
 			if !strings.Contains(text, want) {
-				t.Errorf("%s missing fast-suite contract token %q", rel, want)
+				t.Errorf("%s missing canonical verification-tier token %q", rel, want)
 			}
 		}
+	}
+
+	for _, rel := range pointerDocs {
+		body, err := os.ReadFile(filepath.Join(repoRoot, rel))
+		if err != nil {
+			t.Fatalf("ReadFile(%s): %v", rel, err)
+		}
+		text := string(body)
+		if !strings.Contains(text, "testing-baseline.md") {
+			t.Errorf("%s missing pointer to docs/testing-baseline.md", rel)
+		}
+		if strings.Contains(text, "E2E Go (process-launch / API-driven)") {
+			t.Errorf("%s contains verification-tier list marker", rel)
+		}
+	}
+
+	for _, rel := range docs {
+		body, err := os.ReadFile(filepath.Join(repoRoot, rel))
+		if err != nil {
+			t.Fatalf("ReadFile(%s): %v", rel, err)
+		}
+		text := string(body)
 		for _, banned := range []string{
 			"115s, target <=30s",
 			"29s, target <=30s",
@@ -364,6 +394,35 @@ func TestVerificationDocsDescribeFastSuiteContract(t *testing.T) {
 		} {
 			if strings.Contains(text, banned) {
 				t.Errorf("%s still contains stale fast-suite contract token %q", rel, banned)
+			}
+		}
+	}
+
+	specPattern := regexp.MustCompile(`[A-Za-z0-9_-]+\.spec\.ts`)
+	for _, rel := range docs {
+		body, err := os.ReadFile(filepath.Join(repoRoot, rel))
+		if err != nil {
+			t.Fatalf("ReadFile(%s): %v", rel, err)
+		}
+		for _, spec := range specPattern.FindAllString(string(body), -1) {
+			found := false
+			err := filepath.WalkDir(filepath.Join(repoRoot, "desktop"), func(path string, entry os.DirEntry, err error) error {
+				if err != nil {
+					return err
+				}
+				if entry.IsDir() && entry.Name() == "node_modules" {
+					return filepath.SkipDir
+				}
+				if !entry.IsDir() && entry.Name() == spec {
+					found = true
+				}
+				return nil
+			})
+			if err != nil {
+				t.Fatalf("WalkDir(desktop) for %s: %v", spec, err)
+			}
+			if !found {
+				t.Errorf("%s references missing desktop spec %q", rel, spec)
 			}
 		}
 	}

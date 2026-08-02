@@ -41,16 +41,9 @@ make test-fast      # runs the everyday fast suite
 
 ## Verification
 
-Run the **Fast suite** before every handoff. The extended gates remain available
-by named tier, with current timings captured in [docs/testing-baseline.md](docs/testing-baseline.md).
-
-| Tier | Command | Current wall time | Purpose |
-|------|---------|-------------------|---------|
-| Fast suite | `make test-fast` | 23s, target <=30s | Everyday local confidence check over all packages in short mode. |
-| E2E smoke shell | `bash test/e2e/smoke.sh` | 48.53s | Binary, CLI flags, and embedded skill layout smoke coverage. |
-| Isolated integration | `go test ./test/integration/... -count=1` | 323.06s | Lifecycle, state-machine, and protocol-violation coverage. |
-| E2E Go (process-launch / API-driven) | `go test ./test/e2e/... -count=1 -race` | 41.51s | Server process-launch and API behavior with the race detector. |
-| Race regression | `go test ./... -count=1 -race` | 158.82s | Extended all-package race/regression sweep. |
+Run the **Fast suite** before every handoff. See the canonical
+[verification baseline](docs/testing-baseline.md) for the complete tier list,
+commands, timings, and when-to-run guidance.
 
 `go vet ./...` and `go build ./...` are still required pre-push gates. The
 race-enabled all-package sweep is the **Race regression** tier, not ordinary

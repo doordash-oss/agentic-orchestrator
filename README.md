@@ -276,23 +276,17 @@ npm run check
 npm test
 ```
 
-Verification is split into named tiers so everyday checks stay fast while
-extended coverage remains available.
-
-| Tier                                 | Command                                           | Current wall time   | Purpose                                                            |
-| ------------------------------------ | ------------------------------------------------- | ------------------- | ------------------------------------------------------------------ |
-| Fast suite                           | `make test-fast`                                  | 23s, target <=30s   | Everyday all-package short-mode check before handoff.              |
-| E2E smoke shell                      | `bash test/e2e/smoke.sh`                          | 48.53s              | Builds the binary and checks CLI flags plus embedded skill layout. |
-| Isolated integration                 | `go test ./test/integration/... -count=1`         | 323.06s             | Lifecycle, state-machine, and protocol-violation coverage.         |
-| E2E Go (process-launch / API-driven) | `go test ./test/e2e/... -count=1 -race`           | 41.51s              | Server process-launch and API behavior with the race detector.     |
-| Race regression                      | `go test ./... -count=1 -race`                    | 158.82s             | Extended all-package race/regression sweep.                        |
+See [docs/testing-baseline.md](docs/testing-baseline.md) for the canonical
+verification tier list, commands, timings, and when-to-run guidance. Name the
+tiers run in the PR description, with a short reason for any skipped relevant
+tier.
 
 `go vet ./...` and `go build ./...` remain required static and build checks.
 The race-enabled all-package sweep is
 the **Race regression** tier, not the ordinary unit command. See
-[AGENTS.md](AGENTS.md) and
-[docs/testing-baseline.md](docs/testing-baseline.md) for timing details, and
-see AGENTS.md for the isolated-run pattern for running a second instance without
+[AGENTS.md](AGENTS.md) and the canonical
+[verification baseline](docs/testing-baseline.md) for details, and see AGENTS.md
+for the isolated-run pattern for running a second instance without
 colliding with the first.
 
 ## Contributing

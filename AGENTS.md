@@ -33,13 +33,8 @@ Set `<YEAR>` to the year the file is first authored.
 Run the fast suite before every handoff. Add the extended gates that match the
 area you touched, and always record the tier names in the PR description.
 
-| Tier                                 | Command                                           | Current wall time   | When to run                                                                              |
-| ------------------------------------ | ------------------------------------------------- | ------------------- | ---------------------------------------------------------------------------------------- |
-| Fast suite                           | `make test-fast`                                  | 23s, target <=30s   | Run before every handoff; this is the everyday all-package short-mode check.             |
-| E2E smoke shell                      | `bash test/e2e/smoke.sh`                          | 48.53s              | Run when touching launch behavior, embedded skills, or release packaging.                |
-| Isolated integration                 | `go test ./test/integration/... -count=1`         | 323.06s             | Run when touching lifecycle, state-machine, runs layout, or protocol-violation behavior. |
-| E2E Go (process-launch / API-driven) | `go test ./test/e2e/... -count=1 -race`           | 41.51s              | Run when touching server process launch or session lifecycle.                            |
-| Race regression                      | `go test ./... -count=1 -race`                    | 158.82s             | Run before merging high-risk changes or concurrency-sensitive work.                      |
+See [`docs/testing-baseline.md`](docs/testing-baseline.md) for the canonical
+verification tier list, commands, timings, and when-to-run guidance.
 
 Static analysis and build checks still apply:
 
@@ -79,8 +74,9 @@ changing package-level defaults.
 ## PR verification note
 
 PR descriptions should include a short `Verification` note naming each tier run
-from the table above. Name any intentionally skipped relevant tier with a
-one-sentence reason, for example: `Skipped Race regression: docs-only change`.
+from the canonical verification baseline. Name any intentionally skipped
+relevant tier with a one-sentence reason, for example: `Skipped Race regression:
+docs-only change`.
 
 ## Regenerating golden templates
 

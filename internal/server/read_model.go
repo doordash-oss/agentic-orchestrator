@@ -273,7 +273,7 @@ func appendDisabledReason(actions []Action, reason ActionDisabledReason, exclude
 
 // refactorEntryDisabledReason reports the dirty_parent disabled reason for a
 // refactor-eligible parent whose worktrees carry uncommitted changes. When
-// the cleanliness capability is wired it is the authoritative check — its
+// the worktree capability is wired it is the authoritative check — its
 // staged/unstaged/untracked inspection matches the launch-time preflight —
 // and the reason carries the same structured per-repository diagnostics the
 // parent_worktrees_dirty mutation error returns, so clients can present the
@@ -287,7 +287,7 @@ func (h *apiHandler) refactorEntryDisabledReason(f *feature.Feature) (ActionDisa
 		Code:    "dirty_parent",
 		Message: "parent repositories must be clean before launching a refactor child",
 	}
-	if h.cleanliness != nil {
+	if h.worktrees != nil {
 		if payload := h.dirtyRepoDiagnostics(f.Repos); len(payload) > 0 {
 			reason.Target = map[string]any{"repos": payload}
 			return reason, true
@@ -308,7 +308,7 @@ func (h *apiHandler) refactorEntryDisabledReason(f *feature.Feature) (ActionDisa
 // dirtyRepoDiagnostics converts the dirty parent repositories into the
 // categorized payload shared with the launch-time error mapping.
 func (h *apiHandler) dirtyRepoDiagnostics(repos []feature.FeatureRepo) []map[string]any {
-	if h.cleanliness == nil {
+	if h.worktrees == nil {
 		return nil
 	}
 	dirty := make([]feature.RepoDirtyDiagnostics, 0, len(repos))
@@ -320,7 +320,7 @@ func (h *apiHandler) dirtyRepoDiagnostics(repos []feature.FeatureRepo) []map[str
 		if path == "" {
 			continue
 		}
-		report, err := h.cleanliness.InspectCleanliness(path, feature.DefaultDirtyPathLimit)
+		report, err := h.worktrees.InspectCleanliness(path, feature.DefaultDirtyPathLimit)
 		if err != nil || report == nil || !report.Dirty() {
 			continue
 		}

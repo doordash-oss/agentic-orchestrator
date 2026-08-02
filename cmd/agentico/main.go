@@ -887,7 +887,7 @@ type runtimeBootstrap struct {
 	phaseRunner     *agent.PhaseRunner
 	observer        *observe.Observer
 	permissionCache *permission.Cache
-	cleanliness     feature.CleanlinessOps
+	worktrees       feature.WorktreeOps
 	eventCh         chan interface{}
 	runtime         serverruntime.RuntimeIdentity
 	workspaceDir    string
@@ -2021,7 +2021,7 @@ func (t *serverMutationTarget) FetchReviewComments(featureID string, req serverr
 	}, nil
 }
 
-func (t *serverMutationTarget) fetchUnaddressedReviewComments(featureID, repoName string) ([]ports.ReviewComment, error) {
+func (t *serverMutationTarget) fetchUnaddressedReviewComments(featureID, repoName string) ([]git.ReviewComment, error) {
 	if t.store == nil {
 		return nil, errors.New("feature store is not available")
 	}
@@ -2073,7 +2073,7 @@ func (t *serverMutationTarget) StartReviewComments(featureID string, req serverr
 		feature.CycleReviewComments,
 		"",
 		func() error {
-			comments := reviewCommentDTOsToPorts(req.Repo, req.Comments)
+			comments := reviewCommentDTOsToGit(req.Repo, req.Comments)
 			if len(comments) == 0 {
 				var err error
 				comments, err = t.fetchUnaddressedReviewComments(featureID, req.Repo)
@@ -2235,7 +2235,7 @@ func actionConflictError(err error) error {
 	return nil
 }
 
-func reviewCommentDTOs(repoName string, comments []ports.ReviewComment) []serverruntime.ReviewComment {
+func reviewCommentDTOs(repoName string, comments []git.ReviewComment) []serverruntime.ReviewComment {
 	out := make([]serverruntime.ReviewComment, 0, len(comments))
 	for _, comment := range comments {
 		dtoRepo := comment.RepoName
@@ -2258,14 +2258,14 @@ func reviewCommentDTOs(repoName string, comments []ports.ReviewComment) []server
 	return out
 }
 
-func reviewCommentDTOsToPorts(repoName string, comments []serverruntime.ReviewComment) []ports.ReviewComment {
-	out := make([]ports.ReviewComment, 0, len(comments))
+func reviewCommentDTOsToGit(repoName string, comments []serverruntime.ReviewComment) []git.ReviewComment {
+	out := make([]git.ReviewComment, 0, len(comments))
 	for _, comment := range comments {
 		dtoRepo := comment.RepoName
 		if dtoRepo == "" {
 			dtoRepo = repoName
 		}
-		portComment := ports.ReviewComment{
+		gitComment := git.ReviewComment{
 			ID:        comment.ID,
 			Type:      comment.Type,
 			RepoName:  dtoRepo,
@@ -2276,19 +2276,19 @@ func reviewCommentDTOsToPorts(repoName string, comments []serverruntime.ReviewCo
 			DiffHunk:  comment.DiffHunk,
 			InReplyTo: comment.InReplyTo,
 		}
-		portComment.User.Login = comment.UserLogin
-		out = append(out, portComment)
+		gitComment.User.Login = comment.UserLogin
+		out = append(out, gitComment)
 	}
 	return out
 }
 
-func supportedReviewComments(comments []ports.ReviewComment) []ports.ReviewComment {
+func supportedReviewComments(comments []git.ReviewComment) []git.ReviewComment {
 	filtered := comments[:0]
 	for _, comment := range comments {
 		// Keep this aligned with isSupportedPRFeedback in
 		// internal/orchestrator/review_comments_feature.go.
 		switch comment.Type {
-		case "", ports.CommentTypeReview, ports.CommentTypeIssue, ports.CommentTypeReviewBody:
+		case "", git.CommentTypeReview, git.CommentTypeIssue, git.CommentTypeReviewBody:
 			filtered = append(filtered, comment)
 		}
 	}
@@ -2653,7 +2653,7 @@ func bootstrapRuntime(ctx context.Context, configPath, stateDir string, dangerou
 	var phaseRunner *agent.PhaseRunner
 	var observer *observe.Observer
 	var permissionCache *permission.Cache
-	var cleanliness feature.CleanlinessOps
+	var worktrees feature.WorktreeOps
 	fxApp := fx.New(
 		fx.Supply(
 			fx.Annotate(configPath, fx.ResultTags(`name:"configPath"`)),
@@ -2664,7 +2664,6 @@ func bootstrapRuntime(ctx context.Context, configPath, stateDir string, dangerou
 		),
 		config.Module,
 		feature.Module,
-		git.Module,
 		session.Module,
 		observe.Module,
 		permission.Module,
@@ -2672,7 +2671,7 @@ func bootstrapRuntime(ctx context.Context, configPath, stateDir string, dangerou
 		fx.Options(providerFxModules(enabledProviders)...),
 		agent.Module,
 		orchestrator.Module,
-		fx.Populate(&fm, &sm, &orch, &registry, &cfg, &phaseRunner, &observer, &permissionCache, &cleanliness),
+		fx.Populate(&fm, &sm, &orch, &registry, &cfg, &phaseRunner, &observer, &permissionCache, &worktrees),
 		fx.NopLogger,
 	)
 	boot.fxApp = fxApp
@@ -2768,7 +2767,7 @@ func bootstrapRuntime(ctx context.Context, configPath, stateDir string, dangerou
 	boot.phaseRunner = phaseRunner
 	boot.observer = observer
 	boot.permissionCache = permissionCache
-	boot.cleanliness = cleanliness
+	boot.worktrees = worktrees
 	boot.eventCh = eventCh
 	boot.workspaceDir = workspaceDir
 	boot.recoveryItems = recoveryItems
@@ -2893,7 +2892,7 @@ func runServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledPr
 		PersistProviderModelCatalog: func(provider llm.LLMProvider, models []llm.ModelInfo) error {
 			return persistRefreshedProviderModelCatalog(boot.runtime.RuntimeDir, provider, models)
 		},
-		Cleanliness: boot.cleanliness,
+		Worktrees: boot.worktrees,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: starting server: %v\n", err)

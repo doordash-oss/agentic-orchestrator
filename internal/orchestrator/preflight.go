@@ -25,6 +25,7 @@ import (
 	"fmt"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 )
 
 // RebasePreflightRepoResult is the per-repository slice of a rebase preflight.
@@ -52,7 +53,6 @@ const (
 	preflightFreshnessUpToDate   = "up_to_date"
 	preflightFreshnessUnknown    = "unknown"
 	preflightBlockerNoTarget     = "rebase target not found"
-	preflightBlockerNoRebaser    = "rebase operator not configured"
 	preflightBlockerNoWorktree   = "worktree not available"
 	preflightBlockerRebaseInProg = "rebase already in progress"
 )
@@ -96,26 +96,18 @@ func (o *Orchestrator) repoFreshnessAndBlocker(out HarnessRebaseRepoOutcome) (fr
 		return preflightFreshnessUnknown, preflightBlockerNoWorktree, false
 	case out.RebaseTarget == "":
 		return preflightFreshnessUnknown, preflightBlockerNoTarget, false
-	case o.deps.Rebaser == nil:
-		return preflightFreshnessUnknown, preflightBlockerNoRebaser, false
 	default:
-		if inProg, err := o.deps.Rebaser.RebaseInProgress(out.WorktreePath); err == nil && inProg {
+		if git.RebaseInProgress(out.WorktreePath) {
 			return preflightFreshnessUnknown, preflightBlockerRebaseInProg, false
 		}
 		if out.Publishable {
-			b, err := o.deps.Rebaser.IsBehindRemote(out.WorktreePath, out.RebaseTarget)
-			if err != nil {
-				return preflightFreshnessUnknown, "", false
-			}
+			b := git.IsBehindRemote(out.WorktreePath, out.RebaseTarget)
 			if b {
 				return preflightFreshnessBehind, "", true
 			}
 			return preflightFreshnessUpToDate, "", false
 		}
-		b, err := o.deps.Rebaser.IsBehindLocal(out.WorktreePath, out.RebaseTarget)
-		if err != nil {
-			return preflightFreshnessUnknown, "", false
-		}
+		b := git.IsBehindLocal(out.WorktreePath, out.RebaseTarget)
 		if b {
 			return preflightFreshnessBehind, "", true
 		}

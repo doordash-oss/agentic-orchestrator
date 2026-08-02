@@ -1156,7 +1156,7 @@ func (o *Orchestrator) scrubFinalReviewRootArtifacts(ctx context.Context, workDi
 // succeeded. Commit failures remain advisory for pipeline progress, but failed
 // repos are omitted from the returned anchor map.
 func (o *Orchestrator) commitRoadmapPhase(f *feature.Feature) map[string]string {
-	if len(f.Repos) == 0 || o.deps.Publisher == nil {
+	if len(f.Repos) == 0 {
 		return nil
 	}
 	phaseName := ""
@@ -1182,7 +1182,7 @@ func (o *Orchestrator) commitRoadmapPhase(f *feature.Feature) map[string]string 
 		if repo.WorktreePath == "" {
 			continue
 		}
-		sha, err := o.deps.Publisher.CommitAllAndGetHead(repo.WorktreePath, msg)
+		sha, err := git.CommitAllAndGetHead(repo.WorktreePath, msg)
 		if err != nil || sha == "" {
 			continue
 		}

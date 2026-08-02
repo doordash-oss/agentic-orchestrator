@@ -15,7 +15,10 @@
 package feature
 
 import (
+	"path/filepath"
+
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
+	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"go.uber.org/fx"
 )
 
@@ -26,31 +29,36 @@ type Params struct {
 	Config   *config.Config
 }
 
-// ManagerDeps is the runtime dependency surface the feature manager needs
-// from the adapter layer (git worktrees, branches, PR close). These are
-// wired in the orchestrator's fx module rather than here, so the feature
-// module does not import internal/git directly.
+// ManagerDeps is the runtime dependency surface the feature manager needs.
 type ManagerDeps struct {
 	fx.In
-	Worktrees   WorktreeOps    `optional:"true"`
-	Branches    BranchOps      `optional:"true"`
-	PRs         PRCloser       `optional:"true"`
-	Cleanliness CleanlinessOps `optional:"true"`
+	Worktrees WorktreeOps `optional:"true"`
+	PRs       PRCloser    `optional:"true"`
 }
 
-// Module provides feature Store and Manager via fx. The adapter dependencies
-// (WorktreeOps, BranchOps, PRCloser) are wired externally so the feature
-// module stays free of internal/git.
+// gitPRCloser is the production implementation of the feature-owned PR-close
+// seam.
+type gitPRCloser struct{}
+
+func (gitPRCloser) ClosePR(prURL string) error { return git.ClosePR(prURL) }
+
+var _ WorktreeOps = (*git.WorktreeManager)(nil)
+var _ PRCloser = gitPRCloser{}
+
+// Module provides the feature store, manager, and feature-owned PR closer.
 var Module = fx.Module("feature",
+	fx.Provide(func() PRCloser { return gitPRCloser{} }),
+	fx.Provide(func(p Params) *git.WorktreeManager {
+		return git.NewWorktreeManager(filepath.Join(filepath.Dir(p.StateDir), "worktrees"))
+	}),
+	fx.Provide(func(wm *git.WorktreeManager) WorktreeOps { return wm }),
 	fx.Provide(func(p Params) *Store {
 		return NewStore(p.StateDir)
 	}),
 	fx.Provide(func(p Params, deps ManagerDeps, store *Store) *Manager {
 		mgr := NewManager(store, p.Config)
 		mgr.Worktrees = deps.Worktrees
-		mgr.Branches = deps.Branches
 		mgr.PRs = deps.PRs
-		mgr.Cleanliness = deps.Cleanliness
 		return mgr
 	}),
 )

@@ -22,14 +22,18 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-
-	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
-// DiffPreview aliases the port-native type so callers that already import
-// the git package can keep their type references, while the canonical
-// definition lives in internal/ports.
-type DiffPreview = ports.DiffPreview
+// DiffPreview is a compact, file-scoped preview of a working tree change.
+type DiffPreview struct {
+	Path         string
+	OldPath      string
+	Operation    string // add, update, delete, rename
+	AddedLines   int
+	RemovedLines int
+	Patch        string
+	Fingerprint  string
+}
 
 type statusEntry struct {
 	path      string

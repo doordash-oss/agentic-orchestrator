@@ -26,6 +26,7 @@ import (
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
 )
@@ -137,11 +138,11 @@ func TestReviewCommentsLoop_Integration_3RepoTwoWithComments(t *testing.T) {
 
 	// Build per-repo comment slices. repoA has 2 comments; repoB has
 	// 1 comment; repoC has 0.
-	cA1 := ports.ReviewComment{ID: 100, Path: "src/handler.go", Line: 3, Body: "rename to Handle()", Type: ports.CommentTypeReview}
+	cA1 := git.ReviewComment{ID: 100, Path: "src/handler.go", Line: 3, Body: "rename to Handle()", Type: git.CommentTypeReview}
 	cA1.User.Login = "alice"
-	cA2 := ports.ReviewComment{ID: 101, Body: "Add a doc comment to the package", Type: ports.CommentTypeIssue}
+	cA2 := git.ReviewComment{ID: 101, Body: "Add a doc comment to the package", Type: git.CommentTypeIssue}
 	cA2.User.Login = "alice"
-	cB1 := ports.ReviewComment{ID: 200, Path: "src/handler.go", Line: 3, Body: "version bump", Type: ports.CommentTypeReview}
+	cB1 := git.ReviewComment{ID: 200, Path: "src/handler.go", Line: 3, Body: "version bump", Type: git.CommentTypeReview}
 	cB1.User.Login = "bob"
 
 	stubFn := func(c agent.ImplementConfig, _ ports.SessionManager) (*agent.LoopResult, error) {
@@ -241,13 +242,13 @@ func TestReviewCommentsLoop_Integration_3RepoTwoWithComments(t *testing.T) {
 				RepoName: "repoA",
 				PRURL:    "https://github.com/example/repoA/pull/1",
 				Mode:     "auto",
-				Comments: []ports.ReviewComment{cA1, cA2},
+				Comments: []git.ReviewComment{cA1, cA2},
 			},
 			{
 				RepoName: "repoB",
 				PRURL:    "https://github.com/example/repoB/pull/2",
 				Mode:     "auto",
-				Comments: []ports.ReviewComment{cB1},
+				Comments: []git.ReviewComment{cB1},
 			},
 		},
 		MaxIterations:  3,

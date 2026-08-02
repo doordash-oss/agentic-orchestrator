@@ -275,11 +275,7 @@ func (fx *kbPromoFixture) orchestrator() *orchestrator.Orchestrator {
 	return orchestrator.New(orchestrator.Deps{
 		Lifecycle: fx.mgr,
 		Store:     fx.store,
-		Publisher: &git.PublishAdapter{},
 		Worktrees: fx.wm,
-		Cleanliness: feature.CleanlinessFunc(func(worktreePath string, maxPerCategory int) (*feature.RepoCleanliness, error) {
-			return &feature.RepoCleanliness{}, nil
-		}),
 	}, orchestrator.Hooks{})
 }
 
@@ -319,14 +315,10 @@ func (fx *kbPromoFixture) orchestratorWithPhaseRunner(succeed bool) *orchestrato
 	o := orchestrator.New(orchestrator.Deps{
 		Lifecycle:   fx.mgr,
 		Store:       fx.store,
-		Publisher:   &git.PublishAdapter{},
 		Worktrees:   fx.wm,
 		PhaseRunner: pr,
 		Sessions:    mockSM,
 		CmdRunner:   fx.realRunner(),
-		Cleanliness: feature.CleanlinessFunc(func(worktreePath string, maxPerCategory int) (*feature.RepoCleanliness, error) {
-			return &feature.RepoCleanliness{}, nil
-		}),
 	}, orchestrator.Hooks{})
 	return o
 }

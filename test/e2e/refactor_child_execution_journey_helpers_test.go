@@ -27,7 +27,6 @@ import (
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
-	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
@@ -59,25 +58,6 @@ var journeyPhasePlanText = "# Phase 1 Plan\n\n" +
 	"### Manual Verification\n- [ ] None required: internal test fixture.\n\n" +
 	"### Visual Evidence\n- [ ] None required: no user-facing rendered surface.\n\n" +
 	"### Behavioral Evidence\n- [ ] None required: automated tests provide the artifact.\n"
-
-// journeyCleanliness adapts the git cleanliness report to the feature view,
-// mirroring the production module wiring.
-func journeyCleanliness(wm *git.WorktreeManager) feature.CleanlinessOps {
-	return feature.CleanlinessFunc(func(worktreePath string, maxPerCategory int) (*feature.RepoCleanliness, error) {
-		report, err := wm.InspectCleanliness(worktreePath, maxPerCategory)
-		if report == nil || err != nil {
-			return nil, err
-		}
-		return &feature.RepoCleanliness{
-			Staged:         report.Staged,
-			Unstaged:       report.Unstaged,
-			Untracked:      report.Untracked,
-			StagedTotal:    report.StagedTotal,
-			UnstagedTotal:  report.UnstagedTotal,
-			UntrackedTotal: report.UntrackedTotal,
-		}, nil
-	})
-}
 
 // journeyChildPhaseRunner wires scripted plan sessions plus stubbed
 // implement and final-review kernels so the journey exercises the real

@@ -28,7 +28,6 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
-	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
 // finalStatusLoopError is the agent.LoopResult.FinalStatus sentinel this
@@ -436,26 +435,16 @@ func (o *Orchestrator) CompleteRepoCycle(featureID, repoName string) error {
 	workDir := repoWorkDir(*repo)
 	branch := repoBranch(f, *repo)
 
-	// Publisher/Rebaser may be nil in unit tests that exercise the lifecycle
-	// plumbing without wiring git adapters; skip the commit/rebase/push when
-	// absent so the cycle still completes cleanly.
 	commitAll := func(msg string) {
-		if o.deps.Publisher != nil {
-			_ = o.deps.Publisher.CommitAll(workDir, msg)
-		}
+		_ = git.CommitAll(workDir, msg)
 	}
 	pullRebase := func() {
-		if o.deps.Rebaser != nil {
-			if prr := o.deps.Rebaser.PullRebase(workDir, branch); prr.Outcome != ports.PullRebaseSuccess {
-				_ = prr.Err
-			}
+		if prr := git.PullRebase(workDir, branch); prr.Outcome != git.PullRebaseSuccess {
+			_ = prr.Err
 		}
 	}
 	push := func() error {
-		if o.deps.Publisher == nil {
-			return nil
-		}
-		return o.deps.Publisher.Push(workDir, branch)
+		return o.deps.Remote.Push(workDir, branch)
 	}
 
 	switch cycleType {
@@ -558,7 +547,7 @@ func (o *Orchestrator) replyToSavedReviewComments(
 		}
 
 		switch c.Type {
-		case ports.CommentTypeIssue:
+		case git.CommentTypeIssue:
 			body := fmt.Sprintf("Re: [comment](%s#issuecomment-%d) by @%s\n\n%s",
 				prURL, c.ID, c.User.Login, reply)
 			if err := git.ReplyToIssueComment(repo.Path, prURL, body); err != nil {
@@ -566,7 +555,7 @@ func (o *Orchestrator) replyToSavedReviewComments(
 			} else {
 				addressedIDs = append(addressedIDs, c.ID)
 			}
-		case ports.CommentTypeReviewBody:
+		case git.CommentTypeReviewBody:
 			body := fmt.Sprintf("Re: [review](%s#pullrequestreview-%d) by @%s\n\n%s",
 				prURL, c.ID, c.User.Login, reply)
 			if err := git.ReplyToIssueComment(repo.Path, prURL, body); err != nil {

@@ -43,13 +43,10 @@ import (
 // repository, conflict, or preparation failure leaves every parent ref
 // unchanged and records all affected repositories as attention.
 func (o *Orchestrator) prepareTransactionCandidates(child, parent *feature.Feature) (*feature.TransactionJournal, error) {
-	if o.deps.Publisher == nil {
-		return nil, fmt.Errorf("transaction: publisher not configured")
-	}
 	if o.deps.Worktrees == nil {
 		return nil, fmt.Errorf("transaction: merge candidate creation is not configured")
 	}
-	if o.deps.Cleanliness == nil {
+	if o.deps.Worktrees == nil {
 		return nil, fmt.Errorf("transaction: cleanliness inspection is not configured")
 	}
 
@@ -78,7 +75,7 @@ func (o *Orchestrator) prepareTransactionCandidates(child, parent *feature.Featu
 		}
 
 		// Commit remaining child changes and capture child head.
-		childHead, err := o.deps.Publisher.CommitAllAndGetHead(childWorktree, fmt.Sprintf("Integration commit for refactor child %s repo %s", child.ID, childRepo.Name))
+		childHead, err := git.CommitAllAndGetHead(childWorktree, fmt.Sprintf("Integration commit for refactor child %s repo %s", child.ID, childRepo.Name))
 		if err != nil {
 			return nil, fmt.Errorf("commit child changes for repo %s: %w", childRepo.Name, err)
 		}
@@ -90,7 +87,7 @@ func (o *Orchestrator) prepareTransactionCandidates(child, parent *feature.Featu
 		}
 
 		// Check parent worktree cleanliness.
-		report, err := o.deps.Cleanliness.InspectCleanliness(parentWorktree, feature.DefaultDirtyPathLimit)
+		report, err := o.deps.Worktrees.InspectCleanliness(parentWorktree, feature.DefaultDirtyPathLimit)
 		if err != nil {
 			return nil, fmt.Errorf("inspecting parent worktree %s: %w", childRepo.Name, err)
 		}

@@ -46,7 +46,7 @@ type apiHandler struct {
 	features              FeatureLister
 	store                 FeatureReader
 	freshness             RepoFreshnessProvider
-	cleanliness           feature.CleanlinessOps
+	worktrees             feature.WorktreeOps
 	cfg                   *config.Config
 	registry              *llm.Registry
 	sessions              ports.SessionManager
@@ -99,7 +99,7 @@ func newAPIHandler(opts HandlerOptions) *apiHandler {
 		features:              features,
 		store:                 store,
 		freshness:             opts.Freshness,
-		cleanliness:           opts.Cleanliness,
+		worktrees:             opts.Worktrees,
 		cfg:                   opts.Config,
 		registry:              opts.Registry,
 		sessions:              opts.Sessions,

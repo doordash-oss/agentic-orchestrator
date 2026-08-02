@@ -96,7 +96,6 @@ func TestRefactorChildActiveControlsJourney(t *testing.T) {
 	wm := git.NewWorktreeManager(wtBaseDir)
 	mgr := feature.NewManager(store, config.NewDefault())
 	mgr.Worktrees = wm
-	mgr.Cleanliness = journeyCleanliness(wm)
 
 	serverEvents := make(chan interface{}, 512)
 	stopForwarding := make(chan struct{})
@@ -110,11 +109,9 @@ func TestRefactorChildActiveControlsJourney(t *testing.T) {
 		Lifecycle:   mgr,
 		Store:       store,
 		Sessions:    sm,
-		Publisher:   &git.PublishAdapter{},
 		Worktrees:   wm,
 		PhaseRunner: pr,
 		CmdRunner:   pr.CommandRunner,
-		Cleanliness: journeyCleanliness(wm),
 	}, orchestrator.Hooks{})
 	t.Cleanup(func() {
 		_ = orch.Shutdown()

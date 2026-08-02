@@ -23,7 +23,6 @@ import (
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
-	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
 )
 
 type completionFixture struct {
@@ -66,9 +65,8 @@ func newCompletionFixture(t *testing.T) completionFixture {
 	if err := store.Save(f); err != nil {
 		t.Fatalf("save feature: %v", err)
 	}
-	rebaser := mocks.NewMockRebaseOperator()
 	return completionFixture{
-		orchestrator: New(Deps{Lifecycle: manager, Store: store, Rebaser: rebaser}, Hooks{}),
+		orchestrator: New(Deps{Lifecycle: manager, Store: store}, Hooks{}),
 		worktrees:    worktrees,
 	}
 }

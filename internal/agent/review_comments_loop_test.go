@@ -25,6 +25,7 @@ import (
 	"testing"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
@@ -41,14 +42,14 @@ func newReviewCommentsTestFeature(t *testing.T, stateDir, featureID string, repo
 // makeReviewCommentTarget is a builder for a per-repo target with N
 // synthetic comments.
 func makeReviewCommentTarget(repo string, prURL string, ids ...int) ReviewCommentsRepoTarget {
-	cs := make([]ports.ReviewComment, 0, len(ids))
+	cs := make([]git.ReviewComment, 0, len(ids))
 	for _, id := range ids {
-		c := ports.ReviewComment{
+		c := git.ReviewComment{
 			ID:   id,
 			Path: fmt.Sprintf("%s/file.go", repo),
 			Line: id,
 			Body: fmt.Sprintf("comment %d body in %s", id, repo),
-			Type: ports.CommentTypeReview,
+			Type: git.CommentTypeReview,
 		}
 		c.User.Login = "reviewer"
 		cs = append(cs, c)
@@ -794,16 +795,16 @@ func TestRunReviewCommentsLoop_RepoNamesDeduplicateAndSort(t *testing.T) {
 // section, each comment is tagged with its repo, comment IDs are listed,
 // the combined resolutions path appears.
 func TestBuildAggregatedReviewCommentsPlan_Formatting(t *testing.T) {
-	c1 := ports.ReviewComment{ID: 11, Path: "src/a.go", Line: 5, Body: "needs cleanup", Type: ports.CommentTypeReview}
+	c1 := git.ReviewComment{ID: 11, Path: "src/a.go", Line: 5, Body: "needs cleanup", Type: git.CommentTypeReview}
 	c1.User.Login = "alice"
-	c2 := ports.ReviewComment{ID: 22, Body: "general note", Type: ports.CommentTypeIssue}
+	c2 := git.ReviewComment{ID: 22, Body: "general note", Type: git.CommentTypeIssue}
 	c2.User.Login = "bob"
-	c3 := ports.ReviewComment{ID: 33, Path: "lib/b.go", Line: 9, Body: "rename", Type: ports.CommentTypeReview, DiffHunk: "@@ -1 +1 @@\n-old\n+new"}
+	c3 := git.ReviewComment{ID: 33, Path: "lib/b.go", Line: 9, Body: "rename", Type: git.CommentTypeReview, DiffHunk: "@@ -1 +1 @@\n-old\n+new"}
 	c3.User.Login = "carol"
 
 	plan := BuildAggregatedReviewCommentsPlan([]ReviewCommentsRepoTarget{
-		{RepoName: testRepoNameWeb, PRURL: "https://github.com/o/web/pull/2", Mode: "auto", Comments: []ports.ReviewComment{c1, c2}},
-		{RepoName: testRepoNameAPI, PRURL: "https://github.com/o/api/pull/1", Mode: "auto", Comments: []ports.ReviewComment{c3}},
+		{RepoName: testRepoNameWeb, PRURL: "https://github.com/o/web/pull/2", Mode: "auto", Comments: []git.ReviewComment{c1, c2}},
+		{RepoName: testRepoNameAPI, PRURL: "https://github.com/o/api/pull/1", Mode: "auto", Comments: []git.ReviewComment{c3}},
 	}, "/state/runs/run-001/review-comments-1/review-resolutions.json")
 
 	for _, want := range []string{
@@ -834,15 +835,15 @@ func TestBuildAggregatedReviewCommentsPlan_Formatting(t *testing.T) {
 }
 
 func TestBuildAggregatedReviewCommentsPlanSortsCommentsByCreatedAt(t *testing.T) {
-	late := ports.ReviewComment{ID: 3, Path: "late.go", Line: 30, Body: "late", Type: ports.CommentTypeReview, CreatedAt: "2026-07-07T12:00:00Z"}
-	middle := ports.ReviewComment{ID: 2, Path: "middle.go", Line: 20, Body: "middle", Type: ports.CommentTypeReview, CreatedAt: "2026-07-07T11:00:00Z"}
-	early := ports.ReviewComment{ID: 1, Path: "early.go", Line: 10, Body: "early", Type: ports.CommentTypeReview, CreatedAt: "2026-07-07T10:00:00Z"}
+	late := git.ReviewComment{ID: 3, Path: "late.go", Line: 30, Body: "late", Type: git.CommentTypeReview, CreatedAt: "2026-07-07T12:00:00Z"}
+	middle := git.ReviewComment{ID: 2, Path: "middle.go", Line: 20, Body: "middle", Type: git.CommentTypeReview, CreatedAt: "2026-07-07T11:00:00Z"}
+	early := git.ReviewComment{ID: 1, Path: "early.go", Line: 10, Body: "early", Type: git.CommentTypeReview, CreatedAt: "2026-07-07T10:00:00Z"}
 
 	plan := BuildAggregatedReviewCommentsPlan([]ReviewCommentsRepoTarget{{
 		RepoName: testRepoNameAPI,
 		PRURL:    "https://github.com/o/api/pull/1",
 		Mode:     "auto",
-		Comments: []ports.ReviewComment{late, early, middle},
+		Comments: []git.ReviewComment{late, early, middle},
 	}}, "/state/review-resolutions.json")
 
 	idxEarly := strings.Index(plan, "ID: 1)")

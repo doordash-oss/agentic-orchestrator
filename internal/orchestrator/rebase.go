@@ -21,7 +21,6 @@ import (
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/git"
-	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
 type HarnessRebaseRepoOutcome struct {
@@ -40,8 +39,8 @@ type HarnessRebaseRepoOutcome struct {
 // for the given repo. The order matches the auto-rebase path so conflict
 // recovery and the proactive rebase agree on the target:
 //
-//  1. The PR's base branch on GitHub (when a PRURL is recorded), via the
-//     RebaseOperator. This is authoritative for published features.
+//  1. The PR's base branch on GitHub (when a PRURL is recorded), via RemoteOps.
+//     This is authoritative for published features.
 //  2. repo.BaseBranch from the feature manifest.
 //  3. The repo's default branch (origin/HEAD).
 //
@@ -49,8 +48,8 @@ type HarnessRebaseRepoOutcome struct {
 // a hard error rather than silently rebasing onto an empty target.
 func (o *Orchestrator) resolveRebaseTarget(f *feature.Feature, repo *feature.FeatureRepo) string {
 	target := ""
-	if state, ok := f.RepoStates[repo.Name]; ok && state != nil && state.PRURL != "" && o.deps.Rebaser != nil {
-		target, _ = o.deps.Rebaser.PRBaseBranch(repo.Path, state.PRURL)
+	if state, ok := f.RepoStates[repo.Name]; ok && state != nil && state.PRURL != "" {
+		target = o.deps.Remote.PRBaseBranch(repo.Path, state.PRURL)
 	}
 	if target == "" {
 		target = repo.BaseBranch
@@ -68,58 +67,42 @@ func (o *Orchestrator) runHarnessRebaseRepo(f *feature.Feature, repo feature.Fea
 		out.Err = errors.New("rebase target not found")
 		return out
 	}
-	if o.deps.Rebaser == nil {
-		out.Status = feature.RebaseRepoStatusFailed
-		out.Err = errors.New("rebase operator not configured")
-		return out
-	}
-
 	if out.Publishable {
-		if err := o.deps.Rebaser.Fetch(out.WorktreePath); err != nil {
+		if err := git.Fetch(out.WorktreePath); err != nil {
 			out.Status = feature.RebaseRepoStatusFailed
 			out.Err = fmt.Errorf("fetch failed: %w", err)
 			return out
 		}
 
-		behind, err := o.deps.Rebaser.IsBehindRemote(out.WorktreePath, out.RebaseTarget)
-		if err != nil {
-			out.Status = feature.RebaseRepoStatusFailed
-			out.Err = fmt.Errorf("behind remote check failed: %w", err)
-			return out
-		}
+		behind := git.IsBehindRemote(out.WorktreePath, out.RebaseTarget)
 		if !behind {
 			out.Status = feature.RebaseRepoStatusUpToDate
 			return out
 		}
 
-		return harnessOutcomeFromRebaseResult(out, o.deps.Rebaser.RebaseOnto(out.WorktreePath, "origin/"+out.RebaseTarget))
+		return harnessOutcomeFromRebaseResult(out, git.RebaseOnto(out.WorktreePath, "origin/"+out.RebaseTarget))
 	}
 
-	behind, err := o.deps.Rebaser.IsBehindLocal(out.WorktreePath, out.RebaseTarget)
-	if err != nil {
-		out.Status = feature.RebaseRepoStatusFailed
-		out.Err = fmt.Errorf("behind local check failed: %w", err)
-		return out
-	}
+	behind := git.IsBehindLocal(out.WorktreePath, out.RebaseTarget)
 	if !behind {
 		out.Status = feature.RebaseRepoStatusUpToDate
 		return out
 	}
 
-	return harnessOutcomeFromRebaseResult(out, o.deps.Rebaser.RebaseOnto(out.WorktreePath, out.RebaseTarget))
+	return harnessOutcomeFromRebaseResult(out, git.RebaseOnto(out.WorktreePath, out.RebaseTarget))
 }
 
-func harnessOutcomeFromRebaseResult(out HarnessRebaseRepoOutcome, result ports.RebaseResult) HarnessRebaseRepoOutcome {
+func harnessOutcomeFromRebaseResult(out HarnessRebaseRepoOutcome, result git.RebaseResult) HarnessRebaseRepoOutcome {
 	switch result.Outcome {
-	case ports.RebaseSuccess:
+	case git.RebaseSuccess:
 		out.Status = feature.RebaseRepoStatusChanged
 		out.Changed = true
 		return out
-	case ports.RebaseConflict:
+	case git.RebaseConflict:
 		out.Status = feature.RebaseRepoStatusConflict
 		out.ConflictFiles = append([]string(nil), result.ConflictFiles...)
 		return out
-	case ports.RebaseFailed:
+	case git.RebaseFailed:
 		out.Status = feature.RebaseRepoStatusFailed
 		if result.Err != nil {
 			out.Err = result.Err

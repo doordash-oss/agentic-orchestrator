@@ -15,10 +15,12 @@
 package orchestrator
 
 import (
+	"os/exec"
 	"testing"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
 )
 
@@ -32,16 +34,23 @@ func newPreflightOrchestrator(t *testing.T, behind map[string]bool) *Orchestrato
 	t.Helper()
 	store := feature.NewStore(t.TempDir())
 	manager := feature.NewManager(store, config.NewDefault())
-	rebaser := mocks.NewMockRebaseOperator()
-	rebaser.PRBaseBranchFn = func(_, _ string) (string, error) { return preflightMain, nil }
-	rebaser.RebaseInProgressFn = func(string) (bool, error) { return false, nil }
+	remote := mocks.NewMockRemoteOps()
+	remote.PRBaseBranchFn = func(_, _ string) string { return preflightMain }
 
 	repos := make([]feature.FeatureRepo, 0, 2)
 	repoStates := make(map[string]*feature.RepoState, 2)
-	worktreeToName := make(map[string]string, 2)
 	for _, name := range []string{preflightRepoA, preflightRepoB} {
-		wt := t.TempDir()
-		worktreeToName[wt] = name
+		wt, bare := testutil.InitPublishReadyGitRepo(t)
+		if behind[name] {
+			testutil.CommitFile(t, wt, "remote.txt", name, "advance remote")
+			testutil.SimulatePush(t, wt, bare, preflightMain, preflightMain)
+			cmd := exec.Command("git", "reset", "--hard", "HEAD~1")
+			cmd.Dir = wt
+			cmd.Env = testutil.GitTestEnv()
+			if out, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("reset local repo: %v: %s", err, out)
+			}
+		}
 		repos = append(repos, feature.FeatureRepo{
 			Name:         name,
 			Path:         wt,
@@ -50,19 +59,6 @@ func newPreflightOrchestrator(t *testing.T, behind map[string]bool) *Orchestrato
 			BaseBranch:   preflightMain,
 		})
 		repoStates[name] = &feature.RepoState{Touched: true, PRURL: "https://github.example/" + name + "/pull/1"}
-	}
-	behindFor := func(worktree string) bool {
-		name, ok := worktreeToName[worktree]
-		if !ok {
-			return false
-		}
-		return behind[name]
-	}
-	rebaser.IsBehindRemoteFn = func(worktree string, _ string) (bool, error) {
-		return behindFor(worktree), nil
-	}
-	rebaser.IsBehindLocalFn = func(worktree string, _ string) (bool, error) {
-		return behindFor(worktree), nil
 	}
 	f := &feature.Feature{
 		ID:            "feat-preflight",
@@ -78,7 +74,7 @@ func newPreflightOrchestrator(t *testing.T, behind map[string]bool) *Orchestrato
 	if err := store.Save(f); err != nil {
 		t.Fatalf("save feature: %v", err)
 	}
-	return New(Deps{Lifecycle: manager, Store: store, Rebaser: rebaser}, Hooks{})
+	return New(Deps{Lifecycle: manager, Store: store, Remote: remote}, Hooks{})
 }
 
 func TestRebasePreflightEnumeratesReposAndRevision(t *testing.T) {

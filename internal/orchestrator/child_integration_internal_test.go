@@ -21,7 +21,6 @@ package orchestrator
 
 import (
 	"errors"
-	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -35,7 +34,6 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
-	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
 )
 
 type childIntegrationFixture struct {
@@ -142,18 +140,7 @@ func (fx *childIntegrationFixture) orchestrator() *Orchestrator {
 	return New(Deps{
 		Lifecycle: fx.mgr,
 		Store:     fx.store,
-		Publisher: &git.PublishAdapter{},
 		Worktrees: fx.wm,
-		Cleanliness: feature.CleanlinessFunc(func(worktreePath string, maxPerCategory int) (*feature.RepoCleanliness, error) {
-			report, err := fx.wm.InspectCleanliness(worktreePath, maxPerCategory)
-			if report == nil || err != nil {
-				return nil, err
-			}
-			return &feature.RepoCleanliness{
-				Staged: report.Staged, Unstaged: report.Unstaged, Untracked: report.Untracked,
-				StagedTotal: report.StagedTotal, UnstagedTotal: report.UnstagedTotal, UntrackedTotal: report.UntrackedTotal,
-			}, nil
-		}),
 	}, Hooks{})
 }
 
@@ -197,43 +184,33 @@ func execCommandGit(dir string, args ...string) *exec.Cmd {
 // skips repos whose diff fails or is empty without failing the capture.
 func TestCaptureChildDiffSummaryConcatenatesPerRepo(t *testing.T) {
 	t.Parallel()
-	pub := mocks.NewMockPublisher()
-	pub.DiffSummaryFn = func(path, base string) (string, error) {
-		switch path {
-		case "/wt/repo-a":
-			if base != "base-sha-a" {
-				return "", fmt.Errorf("repo-a diff base = %q, want base-sha-a", base)
-			}
-			return "diff --git a/a b/a\n+one", nil
-		case "/wt/repo-b":
-			return "", errors.New("worktree gone")
-		default:
-			return "", fmt.Errorf("unexpected worktree %q", path)
-		}
+	repoA := testutil.InitGitRepo(t)
+	baseA, err := execCommandGit(repoA, "rev-parse", "HEAD").Output()
+	if err != nil {
+		t.Fatalf("resolve base: %v", err)
 	}
-	o := New(Deps{Publisher: pub, Store: feature.NewStore(t.TempDir())}, Hooks{})
+	testutil.CommitFile(t, repoA, "a", "one\n", "child change")
+	o := New(Deps{Store: feature.NewStore(t.TempDir())}, Hooks{})
 
 	child := &feature.Feature{
 		ID: "child-diff-capture",
 		Repos: []feature.FeatureRepo{
-			{Name: "repo-a", Path: "/repos/repo-a", WorktreePath: "/wt/repo-a"},
-			{Name: "repo-b", Path: "/repos/repo-b", WorktreePath: "/wt/repo-b"},
-			{Name: "repo-c", Path: "/repos/repo-c", WorktreePath: "/wt/repo-c"},
+			{Name: "repo-a", Path: repoA, WorktreePath: repoA},
+			{Name: "repo-b", Path: "/repos/repo-b", WorktreePath: "/worktree/gone"},
 		},
 		Parent: &feature.ChildRelationship{
 			ParentID: "parent",
 			Kind:     feature.ChildKindRefactor,
 			Bases: []feature.ChildRepoBase{
-				{Repo: "repo-a", SHA: "base-sha-a", ParentBranch: "main"},
+				{Repo: "repo-a", SHA: strings.TrimSpace(string(baseA)), ParentBranch: "main"},
 				{Repo: "repo-b", SHA: "base-sha-b", ParentBranch: "main"},
 			},
 		},
 	}
 
 	got := o.captureChildDiffSummary(child)
-	want := "Repository: repo-a\ndiff --git a/a b/a\n+one\n"
-	if got != want {
-		t.Fatalf("captureChildDiffSummary = %q, want %q", got, want)
+	if !strings.Contains(got, "Repository: repo-a\n") || !strings.Contains(got, "+one") {
+		t.Fatalf("captureChildDiffSummary = %q, want repo-a diff", got)
 	}
 }
 

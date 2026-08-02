@@ -27,8 +27,8 @@ import (
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
-	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
 // startFeatureReviewComments launches the unified review-comments cycle.
@@ -159,7 +159,7 @@ func (o *Orchestrator) aggregateReviewCommentTargets(
 		// after a partial cycle does not re-address comments that were
 		// already replied to.
 		addressed, _ := agent.LoadAddressedIDsForRepo(stateDir, f, repo.Name)
-		filtered := make([]ports.ReviewComment, 0, len(data.Comments))
+		filtered := make([]git.ReviewComment, 0, len(data.Comments))
 		for _, c := range data.Comments {
 			if isSupportedPRFeedback(c) && !addressed[c.ID] {
 				filtered = append(filtered, c)
@@ -178,9 +178,9 @@ func (o *Orchestrator) aggregateReviewCommentTargets(
 	return out
 }
 
-func isSupportedPRFeedback(c ports.ReviewComment) bool {
+func isSupportedPRFeedback(c git.ReviewComment) bool {
 	switch c.Type {
-	case "", ports.CommentTypeReview, ports.CommentTypeIssue, ports.CommentTypeReviewBody:
+	case "", git.CommentTypeReview, git.CommentTypeIssue, git.CommentTypeReviewBody:
 		return true
 	default:
 		return false
@@ -310,16 +310,10 @@ func (o *Orchestrator) completeReviewCommentsRepoFinalize(featureID, repoName st
 	workDir := repoWorkDir(*repo)
 	branch := repoBranch(f, *repo)
 
-	if o.deps.Publisher != nil {
-		_ = o.deps.Publisher.CommitAll(workDir, "Address review comments")
-	}
-	if o.deps.Rebaser != nil {
-		_ = o.deps.Rebaser.PullRebase(workDir, branch)
-	}
-	if o.deps.Publisher != nil {
-		if err := o.deps.Publisher.Push(workDir, branch); err != nil {
-			return fmt.Errorf("push: %w", err)
-		}
+	_ = git.CommitAll(workDir, "Address review comments")
+	_ = git.PullRebase(workDir, branch)
+	if err := o.deps.Remote.Push(workDir, branch); err != nil {
+		return fmt.Errorf("push: %w", err)
 	}
 	prURL := reviewCommentsPRURL(f, repoName)
 	if prURL == "" {

@@ -98,20 +98,6 @@ func TestRefactorAPIJourney(t *testing.T) {
 	wm := git.NewWorktreeManager(wtBaseDir)
 	mgr := feature.NewManager(store, config.NewDefault())
 	mgr.Worktrees = wm
-	mgr.Cleanliness = feature.CleanlinessFunc(func(worktreePath string, maxPerCategory int) (*feature.RepoCleanliness, error) {
-		report, err := wm.InspectCleanliness(worktreePath, maxPerCategory)
-		if err != nil {
-			return nil, err
-		}
-		return &feature.RepoCleanliness{
-			Staged:         report.Staged,
-			Unstaged:       report.Unstaged,
-			Untracked:      report.Untracked,
-			StagedTotal:    report.StagedTotal,
-			UnstagedTotal:  report.UnstagedTotal,
-			UntrackedTotal: report.UntrackedTotal,
-		}, nil
-	})
 
 	orch := orchestrator.New(orchestrator.Deps{Lifecycle: mgr, Store: store}, orchestrator.Hooks{})
 	t.Cleanup(func() {

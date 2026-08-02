@@ -25,14 +25,14 @@ import (
 	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
+	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 )
 
 // ErrDuplicateSlug is returned when a feature with the same slug already exists.
 var ErrDuplicateSlug = fmt.Errorf("feature with this slug already exists")
 
-// WorktreeOps is the minimal worktree-management surface the feature
-// manager depends on. Defined locally so the feature package stays free of
-// any adapter-specific git package. Satisfied by *git.WorktreeManager.
+// WorktreeOps is the feature package's single worktree substitution point.
+// Satisfied by *git.WorktreeManager.
 type WorktreeOps interface {
 	Create(repoPath, featureSlug, repoName, startPoint string) (string, error)
 	ExpectedPath(featureSlug, repoName string) string
@@ -45,42 +45,21 @@ type WorktreeOps interface {
 	CurrentBranch(worktreePath string) string
 	RefSHA(repoPath, ref string) (string, error)
 	UpdateRef(repoPath, ref, oldSHA, newSHA string) error
-	CreateMergeCandidate(mainRepo, parentTip, childHead, message string) (*MergeCandidateResult, error)
+	CreateMergeCandidate(mainRepo, parentTip, childHead, message string) (*git.MergeCandidateResult, error)
+	InspectCleanliness(worktreePath string, maxPerCategory int) (*git.CleanlinessReport, error)
 }
 
-// MergeCandidateResult holds the outcome of creating a merge candidate without
-// advancing the parent ref.
-type MergeCandidateResult struct {
-	CandidateSHA  string
-	ConflictFiles []string
-}
-
-// BranchOps captures the branch-level git operations the feature manager
-// uses during feature creation, rewind, and restart. Satisfied by the
-// git.BranchAdapter (structural match on method set).
-type BranchOps interface {
-	DefaultBranch(repoPath string) (string, error)
-	HasOriginRemote(repoPath string) (bool, error)
-	BranchName(featureSlug string) string
-	BranchExistsOnRemote(repoPath, branch string) (bool, error)
-	CurrentBranch(repoPath string) (string, error)
-	CreateBackupBranch(worktreePath, slug string) (string, error)
-}
-
-// PRCloser abstracts the single git/gh operation the feature manager
-// performs against an open pull request (close on rewind). Satisfied by
-// *git.PublishAdapter.
+// PRCloser abstracts the single git/gh operation the feature manager performs
+// against an open pull request (close on rewind).
 type PRCloser interface {
 	ClosePR(prURL string) error
 }
 
 type Manager struct {
-	Store       *Store
-	Config      *config.Config
-	Worktrees   WorktreeOps    // optional; nil skips worktree creation
-	Branches    BranchOps      // optional; nil skips branch lookups during Create/Rewind
-	PRs         PRCloser       // optional; nil skips PR close on rewind
-	Cleanliness CleanlinessOps // required for child launches; nil fails CreateRefactorChild explicitly
+	Store     *Store
+	Config    *config.Config
+	Worktrees WorktreeOps // optional for basic lifecycle; required for child launch/integration safety checks
+	PRs       PRCloser    // optional; nil skips PR close on rewind
 
 	setupMu    sync.Mutex
 	setupLocks map[string]struct{}
@@ -105,31 +84,6 @@ func NewManager(store *Store, cfg *config.Config) *Manager {
 	return &Manager{Store: store, Config: cfg}
 }
 
-// resolveRepoBase resolves a repo's default branch and remote availability
-// via the injected BranchOps. When Branches is nil (test/minimal
-// construction) it falls back to empty base branch and no remote.
-func (m *Manager) resolveRepoBase(repoPath string) (baseBranch string, hasRemote bool, err error) {
-	if m.Branches == nil {
-		return "", false, nil
-	}
-	baseBranch, _ = m.Branches.DefaultBranch(repoPath)
-	hasRemote, _ = m.Branches.HasOriginRemote(repoPath)
-	return baseBranch, hasRemote, nil
-}
-
-// defaultBranchName returns the local branch name derived from a feature
-// slug when no BranchOps is wired in. Kept in sync with git.BranchName.
-func defaultBranchName(slug string) string {
-	return "feature/" + slug
-}
-
-func (m *Manager) branchName(slug string) string {
-	if m.Branches != nil {
-		return m.Branches.BranchName(slug)
-	}
-	return defaultBranchName(slug)
-}
-
 func branchSlug(branch string) string {
 	return strings.TrimPrefix(branch, "feature/")
 }
@@ -149,8 +103,8 @@ func setupWorkspaceSlug(f *Feature, repo FeatureRepo, task SetupTask) (string, s
 		return "", task.Branch
 	}
 	qualified := f.WorkspaceSlug()
-	qualifiedBranch := defaultBranchName(qualified)
-	legacyBranch := defaultBranchName(f.Slug)
+	qualifiedBranch := git.BranchName(qualified)
+	legacyBranch := git.BranchName(f.Slug)
 	if task.Branch == "" || task.Branch == legacyBranch {
 		return qualified, qualifiedBranch
 	}
@@ -248,10 +202,8 @@ func (m *Manager) Create(name, description string, repos []string, models config
 		if strings.TrimSpace(rc.Path) == "" {
 			return nil, fmt.Errorf("repo %q has no path configured; add it under workspace_roots or set repos.%s.path", repoName, repoName)
 		}
-		baseBranch, hasRemote, err := m.resolveRepoBase(rc.Path)
-		if err != nil {
-			return nil, err
-		}
+		baseBranch := git.DefaultBranch(rc.Path)
+		hasRemote := git.HasOriginRemote(rc.Path)
 		publishable := &hasRemote
 		featureRepos = append(featureRepos, FeatureRepo{
 			Name:        repoName,
@@ -263,18 +215,17 @@ func (m *Manager) Create(name, description string, repos []string, models config
 
 	// Ensure the branch name doesn't conflict with an existing upstream branch.
 	// If it does, append a random 4-char hex suffix and recheck (up to 5 attempts).
-	if (opt.QueueSetup || m.Worktrees != nil) && m.Branches != nil {
+	if opt.QueueSetup || m.Worktrees != nil {
 		baseSlug := slug
 		for attempt := 0; attempt < 5; attempt++ {
 			workspaceSlug = WorkspaceSlug(slug, id)
-			branch := m.Branches.BranchName(workspaceSlug)
+			branch := git.BranchName(workspaceSlug)
 			conflict := false
 			for _, fr := range featureRepos {
 				if fr.Publishable != nil && !*fr.Publishable {
 					continue // no remote to check
 				}
-				exists, _ := m.Branches.BranchExistsOnRemote(fr.Path, branch)
-				if exists {
+				if git.BranchExistsOnRemote(fr.Path, branch) {
 					conflict = true
 					break
 				}
@@ -289,7 +240,7 @@ func (m *Manager) Create(name, description string, repos []string, models config
 
 	if opt.QueueSetup || m.Worktrees != nil {
 		for i := range featureRepos {
-			featureRepos[i].Branch = m.branchName(workspaceSlug)
+			featureRepos[i].Branch = git.BranchName(workspaceSlug)
 		}
 	}
 
@@ -1376,12 +1327,12 @@ func (m *Manager) RewindWithRequest(featureID string, request RewindRequest) (wa
 	// Per-repo failures warn but do not abort — rewind continues so the user
 	// can still reach an uncorrupted new run.
 	backupBranches := map[string]string{}
-	if targetPhase.LogicalOrder() <= PhaseImplement.LogicalOrder() && m.Branches != nil {
+	if targetPhase.LogicalOrder() <= PhaseImplement.LogicalOrder() {
 		for _, repo := range f.Repos {
 			if repo.WorktreePath == "" {
 				continue
 			}
-			branchName, err := m.Branches.CreateBackupBranch(repo.WorktreePath, f.Slug)
+			branchName, err := git.CreateBackupBranch(repo.WorktreePath, f.Slug)
 			if err != nil {
 				warns = append(warns, fmt.Sprintf("failed to create backup branch for %s: %v", repo.Name, err))
 				continue

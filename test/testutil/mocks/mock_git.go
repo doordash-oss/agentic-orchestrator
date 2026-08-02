@@ -15,37 +15,23 @@
 package mocks
 
 import (
-	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 )
 
-// ---------------------------------------------------------------------------
-// MockPublisher implements ports.Publisher
-// ---------------------------------------------------------------------------
-
-// MockPublisher implements ports.Publisher with configurable function overrides
-// and call tracking.
-type MockPublisher struct {
-	PushFn                  func(worktreePath, branch string) error
-	CreatePRFn              func(repoPath, branch, title, body, baseBranch string, draft bool) (string, error)
-	ClosePRFn               func(prURL string) error
-	HasUncommittedChangesFn func(worktreePath string) (bool, error)
-	HasLocalCommitsFn       func(worktreePath string) (bool, error)
-	CommitAllFn             func(worktreePath, message string) error
-	CommitAllAndGetHeadFn   func(worktreePath, message string) (string, error)
-	DiffSummaryFn           func(worktreePath, baseBranch string) (string, error)
-	CommitLogFn             func(worktreePath, baseBranch string) (string, error)
-	CommitBodiesFn          func(worktreePath, baseBranch string) (string, error)
-	DiffStatFn              func(worktreePath, baseBranch string) (string, error)
-
-	DefaultError error
-	Calls        []MockCall
+// MockRemoteOps is the small test substitute for orchestrator-owned remote
+// operations.
+type MockRemoteOps struct {
+	PushFn         func(worktreePath, branch string) error
+	ForcePushFn    func(worktreePath, branch string) error
+	CreatePRFn     func(repoPath, branch, title, body, baseBranch string, draft bool) (string, error)
+	PRBaseBranchFn func(repoPath, prURL string) string
+	DefaultError   error
+	Calls          []MockCall
 }
 
-// NewMockPublisher returns a MockPublisher with zero-value defaults.
-func NewMockPublisher() *MockPublisher { return &MockPublisher{} }
+func NewMockRemoteOps() *MockRemoteOps { return &MockRemoteOps{} }
 
-func (m *MockPublisher) Push(worktreePath, branch string) error {
+func (m *MockRemoteOps) Push(worktreePath, branch string) error {
 	m.Calls = append(m.Calls, MockCall{Method: "Push", Args: []any{worktreePath, branch}})
 	if m.PushFn != nil {
 		return m.PushFn(worktreePath, branch)
@@ -53,159 +39,7 @@ func (m *MockPublisher) Push(worktreePath, branch string) error {
 	return m.DefaultError
 }
 
-func (m *MockPublisher) CreatePR(repoPath, branch, title, body, baseBranch string, draft bool) (string, error) {
-	m.Calls = append(m.Calls, MockCall{Method: "CreatePR", Args: []any{repoPath, branch, title, body, baseBranch, draft}})
-	if m.CreatePRFn != nil {
-		return m.CreatePRFn(repoPath, branch, title, body, baseBranch, draft)
-	}
-	return "", m.DefaultError
-}
-
-func (m *MockPublisher) ClosePR(prURL string) error {
-	m.Calls = append(m.Calls, MockCall{Method: "ClosePR", Args: []any{prURL}})
-	if m.ClosePRFn != nil {
-		return m.ClosePRFn(prURL)
-	}
-	return m.DefaultError
-}
-
-func (m *MockPublisher) HasUncommittedChanges(worktreePath string) (bool, error) {
-	m.Calls = append(m.Calls, MockCall{Method: "HasUncommittedChanges", Args: []any{worktreePath}})
-	if m.HasUncommittedChangesFn != nil {
-		return m.HasUncommittedChangesFn(worktreePath)
-	}
-	return false, m.DefaultError
-}
-
-func (m *MockPublisher) HasLocalCommits(worktreePath string) (bool, error) {
-	m.Calls = append(m.Calls, MockCall{Method: "HasLocalCommits", Args: []any{worktreePath}})
-	if m.HasLocalCommitsFn != nil {
-		return m.HasLocalCommitsFn(worktreePath)
-	}
-	return false, m.DefaultError
-}
-
-func (m *MockPublisher) CommitAll(worktreePath, message string) error {
-	m.Calls = append(m.Calls, MockCall{Method: "CommitAll", Args: []any{worktreePath, message}})
-	if m.CommitAllFn != nil {
-		return m.CommitAllFn(worktreePath, message)
-	}
-	return m.DefaultError
-}
-
-func (m *MockPublisher) CommitAllAndGetHead(worktreePath, message string) (string, error) {
-	m.Calls = append(m.Calls, MockCall{Method: "CommitAllAndGetHead", Args: []any{worktreePath, message}})
-	if m.CommitAllAndGetHeadFn != nil {
-		return m.CommitAllAndGetHeadFn(worktreePath, message)
-	}
-	if m.CommitAllFn != nil {
-		if err := m.CommitAllFn(worktreePath, message); err != nil {
-			return "", err
-		}
-		return "0000000000000000000000000000000000000000", nil
-	}
-	return "", m.DefaultError
-}
-
-func (m *MockPublisher) DiffSummary(worktreePath, baseBranch string) (string, error) {
-	m.Calls = append(m.Calls, MockCall{Method: "DiffSummary", Args: []any{worktreePath, baseBranch}})
-	if m.DiffSummaryFn != nil {
-		return m.DiffSummaryFn(worktreePath, baseBranch)
-	}
-	return "", m.DefaultError
-}
-
-func (m *MockPublisher) CommitLog(worktreePath, baseBranch string) (string, error) {
-	m.Calls = append(m.Calls, MockCall{Method: "CommitLog", Args: []any{worktreePath, baseBranch}})
-	if m.CommitLogFn != nil {
-		return m.CommitLogFn(worktreePath, baseBranch)
-	}
-	return "", m.DefaultError
-}
-
-func (m *MockPublisher) CommitBodies(worktreePath, baseBranch string) (string, error) {
-	m.Calls = append(m.Calls, MockCall{Method: "CommitBodies", Args: []any{worktreePath, baseBranch}})
-	if m.CommitBodiesFn != nil {
-		return m.CommitBodiesFn(worktreePath, baseBranch)
-	}
-	return "", m.DefaultError
-}
-
-func (m *MockPublisher) DiffStat(worktreePath, baseBranch string) (string, error) {
-	m.Calls = append(m.Calls, MockCall{Method: "DiffStat", Args: []any{worktreePath, baseBranch}})
-	if m.DiffStatFn != nil {
-		return m.DiffStatFn(worktreePath, baseBranch)
-	}
-	return "", m.DefaultError
-}
-
-// ---------------------------------------------------------------------------
-// MockRebaseOperator implements ports.RebaseOperator
-// ---------------------------------------------------------------------------
-
-// MockRebaseOperator implements ports.RebaseOperator with configurable function
-// overrides and call tracking.
-type MockRebaseOperator struct {
-	PullRebaseFn         func(worktreePath, branch string) git.PullRebaseResult
-	FetchFn              func(worktreePath string) error
-	RebaseOntoFn         func(worktreePath, target string) git.RebaseResult
-	RebaseFn             func(worktreePath, baseBranch string) error
-	RebaseLocalFn        func(worktreePath, baseBranch string) error
-	ForcePushFn          func(worktreePath, branch string) error
-	IsBehindRemoteFn     func(worktreePath, baseBranch string) (bool, error)
-	IsBehindLocalFn      func(worktreePath, baseBranch string) (bool, error)
-	MergeFeatureBranchFn func(repoPath, featureBranch, baseBranch string) error
-	PRBaseBranchFn       func(repoPath, prURL string) (string, error)
-	RebaseInProgressFn   func(worktreePath string) (bool, error)
-
-	DefaultError error
-	Calls        []MockCall
-}
-
-// NewMockRebaseOperator returns a MockRebaseOperator with zero-value defaults.
-func NewMockRebaseOperator() *MockRebaseOperator { return &MockRebaseOperator{} }
-
-func (m *MockRebaseOperator) PullRebase(worktreePath, branch string) git.PullRebaseResult {
-	m.Calls = append(m.Calls, MockCall{Method: "PullRebase", Args: []any{worktreePath, branch}})
-	if m.PullRebaseFn != nil {
-		return m.PullRebaseFn(worktreePath, branch)
-	}
-	return git.PullRebaseResult{}
-}
-
-func (m *MockRebaseOperator) Fetch(worktreePath string) error {
-	m.Calls = append(m.Calls, MockCall{Method: "Fetch", Args: []any{worktreePath}})
-	if m.FetchFn != nil {
-		return m.FetchFn(worktreePath)
-	}
-	return m.DefaultError
-}
-
-func (m *MockRebaseOperator) RebaseOnto(worktreePath, target string) git.RebaseResult {
-	m.Calls = append(m.Calls, MockCall{Method: "RebaseOnto", Args: []any{worktreePath, target}})
-	if m.RebaseOntoFn != nil {
-		return m.RebaseOntoFn(worktreePath, target)
-	}
-	return git.RebaseResult{}
-}
-
-func (m *MockRebaseOperator) Rebase(worktreePath, baseBranch string) error {
-	m.Calls = append(m.Calls, MockCall{Method: "Rebase", Args: []any{worktreePath, baseBranch}})
-	if m.RebaseFn != nil {
-		return m.RebaseFn(worktreePath, baseBranch)
-	}
-	return m.DefaultError
-}
-
-func (m *MockRebaseOperator) RebaseLocal(worktreePath, baseBranch string) error {
-	m.Calls = append(m.Calls, MockCall{Method: "RebaseLocal", Args: []any{worktreePath, baseBranch}})
-	if m.RebaseLocalFn != nil {
-		return m.RebaseLocalFn(worktreePath, baseBranch)
-	}
-	return m.DefaultError
-}
-
-func (m *MockRebaseOperator) ForcePush(worktreePath, branch string) error {
+func (m *MockRemoteOps) ForcePush(worktreePath, branch string) error {
 	m.Calls = append(m.Calls, MockCall{Method: "ForcePush", Args: []any{worktreePath, branch}})
 	if m.ForcePushFn != nil {
 		return m.ForcePushFn(worktreePath, branch)
@@ -213,44 +47,36 @@ func (m *MockRebaseOperator) ForcePush(worktreePath, branch string) error {
 	return m.DefaultError
 }
 
-func (m *MockRebaseOperator) IsBehindRemote(worktreePath, baseBranch string) (bool, error) {
-	m.Calls = append(m.Calls, MockCall{Method: "IsBehindRemote", Args: []any{worktreePath, baseBranch}})
-	if m.IsBehindRemoteFn != nil {
-		return m.IsBehindRemoteFn(worktreePath, baseBranch)
-	}
-	return false, m.DefaultError
-}
-
-func (m *MockRebaseOperator) IsBehindLocal(worktreePath, baseBranch string) (bool, error) {
-	m.Calls = append(m.Calls, MockCall{Method: "IsBehindLocal", Args: []any{worktreePath, baseBranch}})
-	if m.IsBehindLocalFn != nil {
-		return m.IsBehindLocalFn(worktreePath, baseBranch)
-	}
-	return false, m.DefaultError
-}
-
-func (m *MockRebaseOperator) MergeFeatureBranch(repoPath, featureBranch, baseBranch string) error {
-	m.Calls = append(m.Calls, MockCall{Method: "MergeFeatureBranch", Args: []any{repoPath, featureBranch, baseBranch}})
-	if m.MergeFeatureBranchFn != nil {
-		return m.MergeFeatureBranchFn(repoPath, featureBranch, baseBranch)
-	}
-	return m.DefaultError
-}
-
-func (m *MockRebaseOperator) PRBaseBranch(repoPath, prURL string) (string, error) {
-	m.Calls = append(m.Calls, MockCall{Method: "PRBaseBranch", Args: []any{repoPath, prURL}})
-	if m.PRBaseBranchFn != nil {
-		return m.PRBaseBranchFn(repoPath, prURL)
+func (m *MockRemoteOps) CreatePR(repoPath, branch, title, body, baseBranch string, draft bool) (string, error) {
+	m.Calls = append(m.Calls, MockCall{Method: "CreatePR", Args: []any{repoPath, branch, title, body, baseBranch, draft}})
+	if m.CreatePRFn != nil {
+		return m.CreatePRFn(repoPath, branch, title, body, baseBranch, draft)
 	}
 	return "", m.DefaultError
 }
 
-func (m *MockRebaseOperator) RebaseInProgress(worktreePath string) (bool, error) {
-	m.Calls = append(m.Calls, MockCall{Method: "RebaseInProgress", Args: []any{worktreePath}})
-	if m.RebaseInProgressFn != nil {
-		return m.RebaseInProgressFn(worktreePath)
+func (m *MockRemoteOps) PRBaseBranch(repoPath, prURL string) string {
+	m.Calls = append(m.Calls, MockCall{Method: "PRBaseBranch", Args: []any{repoPath, prURL}})
+	if m.PRBaseBranchFn != nil {
+		return m.PRBaseBranchFn(repoPath, prURL)
 	}
-	return false, m.DefaultError
+	return ""
+}
+
+type MockPRCloser struct {
+	ClosePRFn    func(prURL string) error
+	DefaultError error
+	Calls        []MockCall
+}
+
+func NewMockPRCloser() *MockPRCloser { return &MockPRCloser{} }
+
+func (m *MockPRCloser) ClosePR(prURL string) error {
+	m.Calls = append(m.Calls, MockCall{Method: "ClosePR", Args: []any{prURL}})
+	if m.ClosePRFn != nil {
+		return m.ClosePRFn(prURL)
+	}
+	return m.DefaultError
 }
 
 // ---------------------------------------------------------------------------
@@ -271,7 +97,8 @@ type MockWorktreeOps struct {
 	CurrentBranchFn        func(worktreePath string) string
 	RefSHAFn               func(repoPath, ref string) (string, error)
 	UpdateRefFn            func(repoPath, ref, oldSHA, newSHA string) error
-	CreateMergeCandidateFn func(mainRepo, parentTip, childHead, message string) (*feature.MergeCandidateResult, error)
+	CreateMergeCandidateFn func(mainRepo, parentTip, childHead, message string) (*git.MergeCandidateResult, error)
+	InspectCleanlinessFn   func(worktreePath string, maxPerCategory int) (*git.CleanlinessReport, error)
 
 	DefaultError error
 	Calls        []MockCall
@@ -368,7 +195,7 @@ func (m *MockWorktreeOps) UpdateRef(repoPath, ref, oldSHA, newSHA string) error 
 	return m.DefaultError
 }
 
-func (m *MockWorktreeOps) CreateMergeCandidate(mainRepo, parentTip, childHead, message string) (*feature.MergeCandidateResult, error) {
+func (m *MockWorktreeOps) CreateMergeCandidate(mainRepo, parentTip, childHead, message string) (*git.MergeCandidateResult, error) {
 	m.Calls = append(m.Calls, MockCall{Method: "CreateMergeCandidate", Args: []any{mainRepo, parentTip, childHead, message}})
 	if m.CreateMergeCandidateFn != nil {
 		return m.CreateMergeCandidateFn(mainRepo, parentTip, childHead, message)
@@ -376,71 +203,10 @@ func (m *MockWorktreeOps) CreateMergeCandidate(mainRepo, parentTip, childHead, m
 	return nil, m.DefaultError
 }
 
-// ---------------------------------------------------------------------------
-// MockBranchOperator implements feature.BranchOps
-// ---------------------------------------------------------------------------
-
-// MockBranchOperator implements feature.BranchOps with configurable function
-// overrides and call tracking.
-type MockBranchOperator struct {
-	BranchNameFn           func(featureSlug string) string
-	BranchExistsOnRemoteFn func(repoPath, branch string) (bool, error)
-	HasOriginRemoteFn      func(repoPath string) (bool, error)
-	DefaultBranchFn        func(repoPath string) (string, error)
-	CurrentBranchFn        func(repoPath string) (string, error)
-	CreateBackupBranchFn   func(worktreePath, slug string) (string, error)
-
-	DefaultError error
-	Calls        []MockCall
-}
-
-// NewMockBranchOperator returns a MockBranchOperator with zero-value defaults.
-func NewMockBranchOperator() *MockBranchOperator { return &MockBranchOperator{} }
-
-func (m *MockBranchOperator) BranchName(featureSlug string) string {
-	m.Calls = append(m.Calls, MockCall{Method: "BranchName", Args: []any{featureSlug}})
-	if m.BranchNameFn != nil {
-		return m.BranchNameFn(featureSlug)
+func (m *MockWorktreeOps) InspectCleanliness(worktreePath string, maxPerCategory int) (*git.CleanlinessReport, error) {
+	m.Calls = append(m.Calls, MockCall{Method: "InspectCleanliness", Args: []any{worktreePath, maxPerCategory}})
+	if m.InspectCleanlinessFn != nil {
+		return m.InspectCleanlinessFn(worktreePath, maxPerCategory)
 	}
-	return ""
-}
-
-func (m *MockBranchOperator) BranchExistsOnRemote(repoPath, branch string) (bool, error) {
-	m.Calls = append(m.Calls, MockCall{Method: "BranchExistsOnRemote", Args: []any{repoPath, branch}})
-	if m.BranchExistsOnRemoteFn != nil {
-		return m.BranchExistsOnRemoteFn(repoPath, branch)
-	}
-	return false, m.DefaultError
-}
-
-func (m *MockBranchOperator) HasOriginRemote(repoPath string) (bool, error) {
-	m.Calls = append(m.Calls, MockCall{Method: "HasOriginRemote", Args: []any{repoPath}})
-	if m.HasOriginRemoteFn != nil {
-		return m.HasOriginRemoteFn(repoPath)
-	}
-	return false, m.DefaultError
-}
-
-func (m *MockBranchOperator) DefaultBranch(repoPath string) (string, error) {
-	m.Calls = append(m.Calls, MockCall{Method: "DefaultBranch", Args: []any{repoPath}})
-	if m.DefaultBranchFn != nil {
-		return m.DefaultBranchFn(repoPath)
-	}
-	return "", m.DefaultError
-}
-
-func (m *MockBranchOperator) CurrentBranch(repoPath string) (string, error) {
-	m.Calls = append(m.Calls, MockCall{Method: "CurrentBranch", Args: []any{repoPath}})
-	if m.CurrentBranchFn != nil {
-		return m.CurrentBranchFn(repoPath)
-	}
-	return "", m.DefaultError
-}
-
-func (m *MockBranchOperator) CreateBackupBranch(worktreePath, slug string) (string, error) {
-	m.Calls = append(m.Calls, MockCall{Method: "CreateBackupBranch", Args: []any{worktreePath, slug}})
-	if m.CreateBackupBranchFn != nil {
-		return m.CreateBackupBranchFn(worktreePath, slug)
-	}
-	return "", m.DefaultError
+	return &git.CleanlinessReport{}, m.DefaultError
 }

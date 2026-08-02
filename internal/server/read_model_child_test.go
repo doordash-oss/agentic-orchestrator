@@ -22,8 +22,18 @@ import (
 	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
+
+type readModelCleanlinessWorktrees struct {
+	feature.WorktreeOps
+	report *git.CleanlinessReport
+}
+
+func (w *readModelCleanlinessWorktrees) InspectCleanliness(string, int) (*git.CleanlinessReport, error) {
+	return w.report, nil
+}
 
 // seedReadChildFeature persists an active refactor child under parentID with
 // the given durable status/setup state and returns it.
@@ -406,16 +416,16 @@ func TestParentRefactorDirtyReasonCarriesDiagnostics(t *testing.T) {
 	}
 	opts := baseReadHandlerOptions(store)
 	opts.Freshness = StaticFreshnessProvider{repoNameSelf: RepoFreshnessLocalChanges}
-	opts.Cleanliness = feature.CleanlinessFunc(func(worktreePath string, _ int) (*feature.RepoCleanliness, error) {
-		return &feature.RepoCleanliness{
+	opts.Worktrees = &readModelCleanlinessWorktrees{
+		report: &git.CleanlinessReport{
 			Staged:         []string{"staged.txt"},
 			Unstaged:       []string{"unstaged.txt"},
 			Untracked:      []string{"untracked-a.txt", "untracked-b.txt"},
 			StagedTotal:    1,
 			UnstagedTotal:  1,
 			UntrackedTotal: 2,
-		}, nil
-	})
+		},
+	}
 	handler := NewHandler(opts)
 
 	body := getJSONMap(t, handler, "/api/v1/features/"+parent.ID)[entityFeature].(map[string]any)

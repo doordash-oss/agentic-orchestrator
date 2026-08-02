@@ -59,11 +59,11 @@ type Options struct {
 	// workspace repository-initialization endpoint. Nil means the default
 	// git adapter (internal/git.InitRepository).
 	InitGitRepository func(path string) error
-	// Cleanliness inspects parent worktrees so a dirty refactor entry can
+	// Worktrees inspects parent worktrees so a dirty refactor entry can
 	// attach the same structured diagnostics the launch-time error carries.
 	// Nil is tolerated: the dirty_parent disabled reason then ships without
 	// a diagnostics target.
-	Cleanliness feature.CleanlinessOps
+	Worktrees feature.WorktreeOps
 }
 
 type HandlerOptions struct {
@@ -90,7 +90,7 @@ type HandlerOptions struct {
 	// workspace repository-initialization endpoint. Nil means the default
 	// git adapter (internal/git.InitRepository).
 	InitGitRepository func(path string) error
-	Cleanliness       feature.CleanlinessOps
+	Worktrees         feature.WorktreeOps
 }
 
 type FeatureLister interface {

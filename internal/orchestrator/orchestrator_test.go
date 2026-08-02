@@ -27,7 +27,6 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
-	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/observe"
 	"github.com/doordash-oss/agentic-orchestrator/internal/orchestrator"
@@ -46,9 +45,8 @@ import (
 var _ ports.FeatureStore = (*feature.Store)(nil)
 var _ ports.FeatureLifecycle = (*feature.Manager)(nil)
 
-// These methods require session and adapter collaborators.
+// Session lifecycle methods require the concrete session manager.
 var _ ports.SessionManager = (*session.Manager)(nil)
-var _ feature.WorktreeOps = (*git.WorktreeManager)(nil)
 
 // ---------------------------------------------------------------------------
 // TestOrchestrator_CreateFeature
@@ -325,7 +323,6 @@ func TestOrchestrator_FxIntegration(t *testing.T) {
 		),
 		config.Module,
 		feature.Module,
-		git.Module,
 		session.Module,
 		llm.Module,
 		observe.Module,

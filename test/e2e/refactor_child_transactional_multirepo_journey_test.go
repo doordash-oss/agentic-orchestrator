@@ -131,17 +131,7 @@ func (fx *multiRepoE2EFixture) orchestrator() *orchestrator.Orchestrator {
 func (fx *multiRepoE2EFixture) orchestratorWithWorktrees(wt feature.WorktreeOps) *orchestrator.Orchestrator {
 	return orchestrator.New(orchestrator.Deps{
 		Lifecycle: fx.mgr, Store: fx.store,
-		Publisher: &git.PublishAdapter{}, Worktrees: wt,
-		Cleanliness: feature.CleanlinessFunc(func(worktreePath string, maxPerCategory int) (*feature.RepoCleanliness, error) {
-			report, err := fx.wm.InspectCleanliness(worktreePath, maxPerCategory)
-			if report == nil || err != nil {
-				return nil, err
-			}
-			return &feature.RepoCleanliness{
-				Staged: report.Staged, Unstaged: report.Unstaged, Untracked: report.Untracked,
-				StagedTotal: report.StagedTotal, UnstagedTotal: report.UnstagedTotal, UntrackedTotal: report.UntrackedTotal,
-			}, nil
-		}),
+		Worktrees: wt,
 	}, orchestrator.Hooks{})
 }
 
@@ -358,17 +348,7 @@ func (fx *multiRepoE2EFixture) orchestratorWithFailingStoreAndWorktree(failAt in
 	fl := &failingLifecycleWrapper{Manager: mgr, counter: counter}
 	return orchestrator.New(orchestrator.Deps{
 		Lifecycle: fl, Store: fs,
-		Publisher: &git.PublishAdapter{}, Worktrees: wt,
-		Cleanliness: feature.CleanlinessFunc(func(worktreePath string, maxPerCategory int) (*feature.RepoCleanliness, error) {
-			report, err := fx.wm.InspectCleanliness(worktreePath, maxPerCategory)
-			if report == nil || err != nil {
-				return nil, err
-			}
-			return &feature.RepoCleanliness{
-				Staged: report.Staged, Unstaged: report.Unstaged, Untracked: report.Untracked,
-				StagedTotal: report.StagedTotal, UnstagedTotal: report.UnstagedTotal, UntrackedTotal: report.UntrackedTotal,
-			}, nil
-		}),
+		Worktrees: wt,
 	}, orchestrator.Hooks{})
 }
 

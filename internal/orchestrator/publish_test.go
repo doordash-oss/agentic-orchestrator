@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -31,6 +32,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/orchestrator"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
+	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
 )
 
@@ -347,13 +349,17 @@ func TestOrchestrator_Publish_NoRepos_Errors(t *testing.T) {
 // publishRepo commits uncommitted changes, skips pull-rebase when Rebaser nil,
 // pushes, creates PR, records success on Lifecycle. End-to-end via o.Publish.
 func TestOrchestrator_PublishRepo_EndToEnd_NoRebaser(t *testing.T) {
+	repoPath := newPublishReadyBranch(t, "feature/cool-feature")
+	if err := os.WriteFile(filepath.Join(repoPath, "change.txt"), []byte("change\n"), 0o644); err != nil {
+		t.Fatalf("write change: %v", err)
+	}
 	f := &feature.Feature{
 		ID:     "feat-pubrepo",
 		Name:   "cool-feature",
 		Slug:   "cool-feature",
 		Status: feature.StatusReviewPassed,
 		Repos: []feature.FeatureRepo{
-			{Name: "r1", Path: "/tmp/r1", WorktreePath: wtR1Path, BaseBranch: mainBranch},
+			{Name: "r1", Path: repoPath, WorktreePath: repoPath, Branch: "feature/cool-feature", BaseBranch: mainBranch},
 		},
 	}
 	lc := lifecycleForFeature(f)
@@ -361,11 +367,7 @@ func TestOrchestrator_PublishRepo_EndToEnd_NoRebaser(t *testing.T) {
 	lc.TryCompletePublishFn = func(id string) (bool, error) { return true, nil }
 	fs := newFeatureStore(f)
 
-	pub := mocks.NewMockPublisher()
-	pub.HasUncommittedChangesFn = func(path string) (bool, error) { return true, nil }
-	pub.CommitAllFn = func(path, msg string) error { return nil }
-	pub.CommitBodiesFn = func(path, base string) (string, error) { return "commit bodies", nil }
-	pub.DiffStatFn = func(path, base string) (string, error) { return "stat", nil }
+	pub := mocks.NewMockRemoteOps()
 	pub.PushFn = func(path, branch string) error { return nil }
 	pub.CreatePRFn = func(repoPath, branch, title, body, baseBranch string, draft bool) (string, error) {
 		return "https://github.com/org/r1/pull/1", nil
@@ -374,7 +376,7 @@ func TestOrchestrator_PublishRepo_EndToEnd_NoRebaser(t *testing.T) {
 	o := orchestrator.New(orchestrator.Deps{
 		Lifecycle: lc,
 		Store:     fs,
-		Publisher: pub,
+		Remote:    pub,
 	}, orchestrator.Hooks{})
 
 	if err := o.PublishWithOptions("feat-pubrepo", orchestrator.PublishOptions{
@@ -384,14 +386,12 @@ func TestOrchestrator_PublishRepo_EndToEnd_NoRebaser(t *testing.T) {
 		t.Fatalf("Publish: %v", err)
 	}
 
-	// Publisher calls: HasUncommittedChanges, CommitAll, CommitBodies, DiffStat, Push, CreatePR.
-	got := make(map[string]int)
-	for _, c := range pub.Calls {
-		got[c.Method]++
+	if git.HasUncommittedChanges(repoPath) {
+		t.Fatal("publish left local changes uncommitted")
 	}
-	for _, want := range []string{"HasUncommittedChanges", "CommitAll", "CommitBodies", "DiffStat", "Push", "CreatePR"} {
-		if got[want] == 0 {
-			t.Errorf("expected Publisher.%s to be called", want)
+	for _, want := range []string{"Push", "CreatePR"} {
+		if countPublisherCalls(pub, want) != 1 {
+			t.Errorf("expected RemoteOps.%s once", want)
 		}
 	}
 
@@ -401,13 +401,21 @@ func TestOrchestrator_PublishRepo_EndToEnd_NoRebaser(t *testing.T) {
 // publishRepo surfaces a pull-rebase conflict as *PublishConflictError and
 // records SetRepoPublishError on the lifecycle.
 func TestOrchestrator_PublishRepo_PullRebaseConflict_Sentinel(t *testing.T) {
+	repoPath, bare := testutil.InitPublishReadyGitRepo(t)
+	testutil.CreateBranch(t, repoPath, "feature/x")
+	testutil.CommitFile(t, repoPath, "conflict.txt", "local\n", "local change")
+	runPublishGit(t, repoPath, "checkout", mainBranch)
+	testutil.CreateBranch(t, repoPath, "remote-feature")
+	testutil.CommitFile(t, repoPath, "conflict.txt", "remote\n", "remote change")
+	testutil.SimulatePush(t, repoPath, bare, "remote-feature", "feature/x")
+	runPublishGit(t, repoPath, "checkout", "feature/x")
 	f := &feature.Feature{
 		ID:     "feat-pubrepo-conflict",
 		Name:   "x",
 		Slug:   "x",
 		Status: feature.StatusReviewPassed,
 		Repos: []feature.FeatureRepo{
-			{Name: "r1", Path: "/tmp/r1", WorktreePath: wtR1Path, BaseBranch: mainBranch},
+			{Name: "r1", Path: repoPath, WorktreePath: repoPath, Branch: "feature/x", BaseBranch: mainBranch},
 		},
 	}
 	lc := lifecycleForFeature(f)
@@ -415,20 +423,12 @@ func TestOrchestrator_PublishRepo_PullRebaseConflict_Sentinel(t *testing.T) {
 	lc.TryCompletePublishFn = func(id string) (bool, error) { return false, nil }
 	fs := newFeatureStore(f)
 
-	pub := mocks.NewMockPublisher()
-	pub.HasUncommittedChangesFn = func(path string) (bool, error) { return false, nil }
-	pub.DiffSummaryFn = func(path, base string) (string, error) { return "", nil }
-
-	reb := mocks.NewMockRebaseOperator()
-	reb.PullRebaseFn = func(worktreePath, branch string) git.PullRebaseResult {
-		return git.PullRebaseResult{Outcome: git.PullRebaseConflict}
-	}
+	pub := mocks.NewMockRemoteOps()
 
 	o := orchestrator.New(orchestrator.Deps{
 		Lifecycle: lc,
 		Store:     fs,
-		Publisher: pub,
-		Rebaser:   reb,
+		Remote:    pub,
 	}, orchestrator.Hooks{})
 
 	err := o.PublishWithOptions("feat-pubrepo-conflict", orchestrator.PublishOptions{
@@ -477,10 +477,7 @@ func TestOrchestrator_PublishRepo_ManualCodeReadyUsesForcePushWithLease(t *testi
 	lc.TryCompletePublishFn = func(id string) (bool, error) { return true, nil }
 	fs := newFeatureStore(f)
 
-	pub := mocks.NewMockPublisher()
-	pub.HasUncommittedChangesFn = func(path string) (bool, error) { return false, nil }
-	pub.CommitBodiesFn = func(path, base string) (string, error) { return "", nil }
-	pub.DiffStatFn = func(path, base string) (string, error) { return "", nil }
+	pub := mocks.NewMockRemoteOps()
 	pub.PushFn = func(path, branch string) error {
 		t.Fatalf("manual publish after a rebase must not plain-push %s from %s", branch, path)
 		return nil
@@ -489,18 +486,12 @@ func TestOrchestrator_PublishRepo_ManualCodeReadyUsesForcePushWithLease(t *testi
 		return "https://github.com/org/r1/pull/1", nil
 	}
 
-	reb := mocks.NewMockRebaseOperator()
-	reb.PullRebaseFn = func(worktreePath, branch string) git.PullRebaseResult {
-		t.Fatalf("manual publish after a rebase must not pull-rebase onto %s from %s", branch, worktreePath)
-		return git.PullRebaseResult{}
-	}
-	reb.ForcePushFn = func(worktreePath, branch string) error { return nil }
+	pub.ForcePushFn = func(worktreePath, branch string) error { return nil }
 
 	o := orchestrator.New(orchestrator.Deps{
 		Lifecycle: lc,
 		Store:     fs,
-		Publisher: pub,
-		Rebaser:   reb,
+		Remote:    pub,
 	}, orchestrator.Hooks{})
 
 	if err := o.PublishWithOptions("feat-manual-publish-rebased", orchestrator.PublishOptions{
@@ -510,8 +501,8 @@ func TestOrchestrator_PublishRepo_ManualCodeReadyUsesForcePushWithLease(t *testi
 		t.Fatalf("Publish: %v", err)
 	}
 
-	if got := countRebaseCalls(reb, "ForcePush"); got != 1 {
-		t.Fatalf("Rebaser.ForcePush calls = %d, want 1", got)
+	if got := countPublisherCalls(pub, "ForcePush"); got != 1 {
+		t.Fatalf("RemoteOps.ForcePush calls = %d, want 1", got)
 	}
 	if got := countPublisherCalls(pub, "CreatePR"); got != 1 {
 		t.Fatalf("Publisher.CreatePR calls = %d, want 1", got)
@@ -520,6 +511,8 @@ func TestOrchestrator_PublishRepo_ManualCodeReadyUsesForcePushWithLease(t *testi
 }
 
 func TestOrchestrator_PublishRepo_UsesPhaseRunnerDescriptionGeneration(t *testing.T) {
+	repoPath := newPublishReadyBranch(t, "feature/cool-feature")
+	testutil.CommitFile(t, repoPath, "change.txt", "change\n", "publish change")
 	f := &feature.Feature{
 		ID:     "feat-pub-desc",
 		Name:   "cool-feature",
@@ -527,7 +520,7 @@ func TestOrchestrator_PublishRepo_UsesPhaseRunnerDescriptionGeneration(t *testin
 		Status: feature.StatusReviewPassed,
 		Models: config.ModelConfig{Planning: "sonnet"},
 		Repos: []feature.FeatureRepo{
-			{Name: "r1", Path: "/tmp/r1", WorktreePath: wtR1Path, BaseBranch: mainBranch},
+			{Name: "r1", Path: repoPath, WorktreePath: repoPath, Branch: "feature/cool-feature", BaseBranch: mainBranch},
 		},
 	}
 	lc := lifecycleForFeature(f)
@@ -535,10 +528,7 @@ func TestOrchestrator_PublishRepo_UsesPhaseRunnerDescriptionGeneration(t *testin
 	lc.TryCompletePublishFn = func(id string) (bool, error) { return true, nil }
 	fs := newFeatureStore(f)
 
-	pub := mocks.NewMockPublisher()
-	pub.HasUncommittedChangesFn = func(path string) (bool, error) { return false, nil }
-	pub.CommitBodiesFn = func(path, base string) (string, error) { return "commit bodies", nil }
-	pub.DiffStatFn = func(path, base string) (string, error) { return "stat", nil }
+	pub := mocks.NewMockRemoteOps()
 	pub.PushFn = func(path, branch string) error { return nil }
 
 	var gotTitle, gotBody string
@@ -551,7 +541,7 @@ func TestOrchestrator_PublishRepo_UsesPhaseRunnerDescriptionGeneration(t *testin
 	o := orchestrator.New(orchestrator.Deps{
 		Lifecycle:   lc,
 		Store:       fs,
-		Publisher:   pub,
+		Remote:      pub,
 		PhaseRunner: pr,
 	}, orchestrator.Hooks{})
 
@@ -582,10 +572,7 @@ func TestOrchestrator_PublishRepo_FailsAndLogsDescriptionGenerationErrors(t *tes
 	lc.TryCompletePublishFn = func(id string) (bool, error) { return true, nil }
 	fs := newFeatureStore(f)
 
-	pub := mocks.NewMockPublisher()
-	pub.HasUncommittedChangesFn = func(path string) (bool, error) { return false, nil }
-	pub.CommitBodiesFn = func(path, base string) (string, error) { return "commit bodies", nil }
-	pub.DiffStatFn = func(path, base string) (string, error) { return "stat", nil }
+	pub := mocks.NewMockRemoteOps()
 	pub.PushFn = func(path, branch string) error { return nil }
 
 	createPRCalls := 0
@@ -598,7 +585,7 @@ func TestOrchestrator_PublishRepo_FailsAndLogsDescriptionGenerationErrors(t *tes
 	o := orchestrator.New(orchestrator.Deps{
 		Lifecycle:   lc,
 		Store:       fs,
-		Publisher:   pub,
+		Remote:      pub,
 		PhaseRunner: pr,
 	}, orchestrator.Hooks{})
 
@@ -624,6 +611,8 @@ func TestOrchestrator_PublishRepo_FailsAndLogsDescriptionGenerationErrors(t *tes
 }
 
 func TestOrchestrator_GeneratePublishDescriptionDerivesSelectedRepoContext(t *testing.T) {
+	repo1 := newPublishReadyBranch(t, "feature/selected-r1")
+	testutil.CommitFile(t, repo1, "selected.txt", "selected\n", "selected repo change")
 	f := &feature.Feature{
 		ID:          "feat-pub-desc-selected",
 		Name:        "selected-feature",
@@ -632,7 +621,7 @@ func TestOrchestrator_GeneratePublishDescriptionDerivesSelectedRepoContext(t *te
 		Status:      feature.StatusCodeReady,
 		Models:      config.ModelConfig{Planning: "sonnet"},
 		Repos: []feature.FeatureRepo{
-			{Name: "r1", Path: "/tmp/r1", WorktreePath: "/tmp/wt-r1", BaseBranch: mainBranch},
+			{Name: "r1", Path: repo1, WorktreePath: repo1, BaseBranch: mainBranch},
 			{Name: "r2", Path: "/tmp/r2", WorktreePath: "/tmp/wt-r2", BaseBranch: mainBranch},
 		},
 		RepoStates: map[string]*feature.RepoState{
@@ -642,22 +631,10 @@ func TestOrchestrator_GeneratePublishDescriptionDerivesSelectedRepoContext(t *te
 	}
 	lc := lifecycleForFeature(f)
 	fs := newFeatureStore(f)
-	pub := mocks.NewMockPublisher()
-	var commitPaths []string
-	var diffPaths []string
-	pub.CommitBodiesFn = func(path, base string) (string, error) {
-		commitPaths = append(commitPaths, path)
-		return "commit bodies for " + path, nil
-	}
-	pub.DiffStatFn = func(path, base string) (string, error) {
-		diffPaths = append(diffPaths, path)
-		return "diff stat for " + path, nil
-	}
 	pr := newPublishDescriptionPhaseRunner(t, "TITLE: Generated selected title\nBODY:\nGenerated selected body", false)
 	o := orchestrator.New(orchestrator.Deps{
 		Lifecycle:   lc,
 		Store:       fs,
-		Publisher:   pub,
 		PhaseRunner: pr,
 	}, orchestrator.Hooks{})
 
@@ -668,11 +645,8 @@ func TestOrchestrator_GeneratePublishDescriptionDerivesSelectedRepoContext(t *te
 	if title != "Generated selected title" || !strings.Contains(body, "Generated selected body") {
 		t.Fatalf("generated narrative = %q / %q, want phase-runner result", title, body)
 	}
-	if got, want := strings.Join(commitPaths, ","), "/tmp/wt-r1"; got != want {
-		t.Fatalf("CommitBodies paths = %q, want %q", got, want)
-	}
-	if got, want := strings.Join(diffPaths, ","), "/tmp/wt-r1"; got != want {
-		t.Fatalf("DiffStat paths = %q, want %q", got, want)
+	if commits, err := git.CommitBodies(repo1, mainBranch); err != nil || !strings.Contains(commits, "selected repo change") {
+		t.Fatalf("selected commit context = %q, err=%v", commits, err)
 	}
 }
 
@@ -691,14 +665,12 @@ func TestOrchestrator_GeneratePublishDescriptionReturnsGenerationFailure(t *test
 			"r1": {Touched: true},
 		},
 	}
-	pub := mocks.NewMockPublisher()
-	pub.CommitBodiesFn = func(path, base string) (string, error) { return "commit bodies", nil }
-	pub.DiffStatFn = func(path, base string) (string, error) { return "diff stat", nil }
+	pub := mocks.NewMockRemoteOps()
 	pr := newPublishDescriptionPhaseRunner(t, "", true)
 	o := orchestrator.New(orchestrator.Deps{
 		Lifecycle:   lifecycleForFeature(f),
 		Store:       newFeatureStore(f),
-		Publisher:   pub,
+		Remote:      pub,
 		PhaseRunner: pr,
 	}, orchestrator.Hooks{})
 
@@ -719,12 +691,13 @@ func TestOrchestrator_GeneratePublishDescriptionReturnsGenerationFailure(t *test
 // ---------------------------------------------------------------------------
 
 func TestOrchestrator_PublishRepo_DraftPublish_True(t *testing.T) {
+	repoPath := newPublishReadyBranch(t, "feature/draft-feature")
 	f := &feature.Feature{
 		ID:   "feat-draft-true",
 		Name: "draft-feature",
 		Slug: "draft-feature",
 		Repos: []feature.FeatureRepo{
-			{Name: "r1", Path: "/tmp/r1", WorktreePath: wtR1Path, BaseBranch: mainBranch},
+			{Name: "r1", Path: repoPath, WorktreePath: repoPath, Branch: "feature/draft-feature", BaseBranch: mainBranch},
 		},
 		Checkpoints: feature.Checkpoints{DraftPublish: true},
 	}
@@ -733,10 +706,7 @@ func TestOrchestrator_PublishRepo_DraftPublish_True(t *testing.T) {
 	lc.TryCompletePublishFn = func(id string) (bool, error) { return true, nil }
 	fs := newFeatureStore(f)
 
-	pub := mocks.NewMockPublisher()
-	pub.HasUncommittedChangesFn = func(path string) (bool, error) { return false, nil }
-	pub.CommitBodiesFn = func(path, base string) (string, error) { return "", nil }
-	pub.DiffStatFn = func(path, base string) (string, error) { return "", nil }
+	pub := mocks.NewMockRemoteOps()
 	pub.PushFn = func(path, branch string) error { return nil }
 
 	var gotDraft bool
@@ -748,7 +718,7 @@ func TestOrchestrator_PublishRepo_DraftPublish_True(t *testing.T) {
 	o := orchestrator.New(orchestrator.Deps{
 		Lifecycle: lc,
 		Store:     fs,
-		Publisher: pub,
+		Remote:    pub,
 	}, orchestrator.Hooks{})
 
 	if err := o.PublishWithOptions("feat-draft-true", orchestrator.PublishOptions{
@@ -763,12 +733,13 @@ func TestOrchestrator_PublishRepo_DraftPublish_True(t *testing.T) {
 }
 
 func TestOrchestrator_PublishRepo_DraftPublish_False(t *testing.T) {
+	repoPath := newPublishReadyBranch(t, "feature/no-draft-feature")
 	f := &feature.Feature{
 		ID:   "feat-draft-false",
 		Name: "no-draft-feature",
 		Slug: "no-draft-feature",
 		Repos: []feature.FeatureRepo{
-			{Name: "r1", Path: "/tmp/r1", WorktreePath: wtR1Path, BaseBranch: mainBranch},
+			{Name: "r1", Path: repoPath, WorktreePath: repoPath, Branch: "feature/no-draft-feature", BaseBranch: mainBranch},
 		},
 		// DraftPublish defaults to false
 	}
@@ -777,10 +748,7 @@ func TestOrchestrator_PublishRepo_DraftPublish_False(t *testing.T) {
 	lc.TryCompletePublishFn = func(id string) (bool, error) { return true, nil }
 	fs := newFeatureStore(f)
 
-	pub := mocks.NewMockPublisher()
-	pub.HasUncommittedChangesFn = func(path string) (bool, error) { return false, nil }
-	pub.CommitBodiesFn = func(path, base string) (string, error) { return "", nil }
-	pub.DiffStatFn = func(path, base string) (string, error) { return "", nil }
+	pub := mocks.NewMockRemoteOps()
 	pub.PushFn = func(path, branch string) error { return nil }
 
 	var gotDraft bool
@@ -792,7 +760,7 @@ func TestOrchestrator_PublishRepo_DraftPublish_False(t *testing.T) {
 	o := orchestrator.New(orchestrator.Deps{
 		Lifecycle: lc,
 		Store:     fs,
-		Publisher: pub,
+		Remote:    pub,
 	}, orchestrator.Hooks{})
 
 	if err := o.PublishWithOptions("feat-draft-false", orchestrator.PublishOptions{
@@ -816,6 +784,23 @@ type publishDescriptionSessionHandle struct {
 	msgLog      *session.MessageLog
 	result      *llm.ResultMessage
 	lastControl *llm.ControlRequestMessage
+}
+
+func newPublishReadyBranch(t *testing.T, branch string) string {
+	t.Helper()
+	repo, _ := testutil.InitPublishReadyGitRepo(t)
+	testutil.CreateBranch(t, repo, branch)
+	return repo
+}
+
+func runPublishGit(t *testing.T, repo string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = repo
+	cmd.Env = testutil.GitTestEnv()
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %s: %v: %s", strings.Join(args, " "), err, out)
+	}
 }
 
 func newPublishDescriptionSessionHandle() *publishDescriptionSessionHandle {

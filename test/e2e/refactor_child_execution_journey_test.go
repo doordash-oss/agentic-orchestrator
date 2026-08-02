@@ -96,7 +96,6 @@ func TestRefactorChildExecutionAndIntegrationJourney(t *testing.T) {
 	wm := git.NewWorktreeManager(wtBaseDir)
 	mgr := feature.NewManager(store, config.NewDefault())
 	mgr.Worktrees = wm
-	mgr.Cleanliness = journeyCleanliness(wm)
 
 	serverEvents := make(chan interface{}, 512)
 	stopForwarding := make(chan struct{})
@@ -110,11 +109,10 @@ func TestRefactorChildExecutionAndIntegrationJourney(t *testing.T) {
 		Lifecycle:   mgr,
 		Store:       store,
 		Sessions:    sm,
-		Publisher:   failingPRPublishAdapter{PublishAdapter: &git.PublishAdapter{}},
+		Remote:      failingPRRemoteOps{},
 		Worktrees:   wm,
 		PhaseRunner: pr,
 		CmdRunner:   pr.CommandRunner,
-		Cleanliness: journeyCleanliness(wm),
 	}, orchestrator.Hooks{})
 	t.Cleanup(func() {
 		_ = orch.Shutdown()
@@ -242,10 +240,14 @@ func TestRefactorChildExecutionAndIntegrationJourney(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reload parent: %v", err)
 	}
-	originTip := journeyGit(t, repoDir, "ls-remote", "origin", "feature/journey-parent")
-	if !strings.Contains(originTip, child2.Parent.Transaction.Entries[0].MergeHEAD) {
-		t.Fatalf("origin feature/journey-parent = %q, want pushed merge head %s (parent status %s, checkpoints %+v, repo state %+v)",
-			originTip, child2.Parent.Transaction.Entries[0].MergeHEAD, parentState.Status, parentState.Checkpoints, parentState.RepoStates["repoA"])
+	originTipFields := strings.Fields(journeyGit(t, repoDir, "ls-remote", "origin", "feature/journey-parent"))
+	localTip := journeyGit(t, repoDir, "rev-parse", "feature/journey-parent")
+	if len(originTipFields) != 2 || originTipFields[0] != localTip {
+		t.Fatalf("origin feature/journey-parent = %q, want pushed local tip %s (integration merge head %s, parent status %s, checkpoints %+v, repo state %+v)",
+			originTipFields, localTip, child2.Parent.Transaction.Entries[0].MergeHEAD, parentState.Status, parentState.Checkpoints, parentState.RepoStates["repoA"])
+	}
+	if got := journeyGit(t, repoDir, "show", originTipFields[0]+":child-output.txt"); got != "child work" {
+		t.Fatalf("pushed child-output.txt = %q, want integrated child work", got)
 	}
 	parent2, err := store.Load(parent.ID)
 	if err != nil {
@@ -256,15 +258,24 @@ func TestRefactorChildExecutionAndIntegrationJourney(t *testing.T) {
 	}
 }
 
-// failingPRPublishAdapter keeps the real local Git publish operations while
-// replacing only the external GitHub PR call with the failure this journey
-// exercises.
-type failingPRPublishAdapter struct {
-	*git.PublishAdapter
+// failingPRRemoteOps delegates git remote operations while replacing only the
+// external GitHub PR call with the failure this journey exercises.
+type failingPRRemoteOps struct{}
+
+func (failingPRRemoteOps) Push(worktreePath, branch string) error {
+	return git.Push(worktreePath, branch)
 }
 
-func (failingPRPublishAdapter) CreatePR(string, string, string, string, string, bool) (string, error) {
+func (failingPRRemoteOps) ForcePush(worktreePath, branch string) error {
+	return git.ForcePush(worktreePath, branch)
+}
+
+func (failingPRRemoteOps) CreatePR(string, string, string, string, string, bool) (string, error) {
 	return "", fmt.Errorf("scripted PR creation failure")
+}
+
+func (failingPRRemoteOps) PRBaseBranch(repoPath, prURL string) string {
+	return git.PRBaseBranch(repoPath, prURL)
 }
 
 // runRefactorChildLifecycle launches one child through the API and drives it

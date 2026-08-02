@@ -31,7 +31,6 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/agentdef"
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
-	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm/claude"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm/codex"
@@ -61,7 +60,6 @@ func TestAgentModuleWiresPermissionCacheIntoPhaseRunner(t *testing.T) {
 		),
 		config.Module,
 		feature.Module,
-		git.Module,
 		session.Module,
 		llm.Module,
 		observe.Module,

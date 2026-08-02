@@ -20,6 +20,7 @@ import (
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
+	"github.com/doordash-oss/agentic-orchestrator/internal/orchestrator"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
@@ -40,11 +41,10 @@ var _ ports.FeatureLifecycle = (*mocks.MockFeatureLifecycle)(nil)
 // Session ports
 var _ ports.SessionManager = (*mocks.MockSessionManager)(nil)
 
-// Git ports
-var _ ports.Publisher = (*mocks.MockPublisher)(nil)
-var _ ports.RebaseOperator = (*mocks.MockRebaseOperator)(nil)
+// Git seams
+var _ orchestrator.RemoteOps = (*mocks.MockRemoteOps)(nil)
+var _ feature.PRCloser = (*mocks.MockPRCloser)(nil)
 var _ feature.WorktreeOps = (*mocks.MockWorktreeOps)(nil)
-var _ feature.BranchOps = (*mocks.MockBranchOperator)(nil)
 
 // Agent ports
 var _ ports.CommandRunner = (*mocks.MockCommandRunner)(nil)

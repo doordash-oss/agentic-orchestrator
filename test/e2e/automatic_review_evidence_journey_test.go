@@ -56,12 +56,13 @@ func TestAutomaticReviewFreshAllowOwningSessionJourney(t *testing.T) {
 	workDir := t.TempDir()
 	store := feature.NewStore(stateDir)
 	if err := store.Save(&feature.Feature{
-		ID:           automaticReviewJourneyFeatureID,
-		Name:         "Automatic review evidence",
-		Slug:         "automatic-review-evidence",
-		Created:      time.Now(),
-		Status:       feature.StatusImplementing,
-		CurrentPhase: feature.PhaseImplement,
+		ID:            automaticReviewJourneyFeatureID,
+		Name:          "Automatic review evidence",
+		Slug:          "automatic-review-evidence",
+		Created:       time.Now(),
+		Status:        feature.StatusImplementing,
+		CurrentPhase:  feature.PhaseImplement,
+		SchemaVersion: feature.SchemaVersionCurrent,
 	}); err != nil {
 		t.Fatalf("save feature: %v", err)
 	}

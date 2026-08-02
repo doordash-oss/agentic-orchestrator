@@ -23,6 +23,7 @@ import (
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
@@ -279,7 +280,7 @@ func (o *Orchestrator) runTransactionIntegration(childID string, child, parent *
 // can propagate a contextual error instead of silently treating a broken
 // worktree as "unchanged."
 func (o *Orchestrator) commitAndCompareChildHeads(child *feature.Feature, journal *feature.TransactionJournal) (bool, error) {
-	if o.deps.Publisher == nil || journal == nil {
+	if journal == nil {
 		return false, nil
 	}
 	for i := range child.Repos {
@@ -287,7 +288,7 @@ func (o *Orchestrator) commitAndCompareChildHeads(child *feature.Feature, journa
 		if childWorktree == "" {
 			childWorktree = child.Repos[i].Path
 		}
-		currentHead, err := o.deps.Publisher.CommitAllAndGetHead(childWorktree, fmt.Sprintf("Integration commit for refactor child %s repo %s", child.ID, child.Repos[i].Name))
+		currentHead, err := git.CommitAllAndGetHead(childWorktree, fmt.Sprintf("Integration commit for refactor child %s repo %s", child.ID, child.Repos[i].Name))
 		if err != nil {
 			return false, fmt.Errorf("committing child changes for repo %s: %w", child.Repos[i].Name, err)
 		}
@@ -608,9 +609,6 @@ func (o *Orchestrator) preserveChildDiffSummary(childID string) {
 // section per repository. Repos whose diff is empty or fails contribute
 // nothing.
 func (o *Orchestrator) captureChildDiffSummary(child *feature.Feature) string {
-	if o.deps.Publisher == nil {
-		return ""
-	}
 	bases := make(map[string]string, len(child.Parent.Bases))
 	for _, b := range child.Parent.Bases {
 		if b.SHA != "" {
@@ -629,7 +627,7 @@ func (o *Orchestrator) captureChildDiffSummary(child *feature.Feature) string {
 		if worktree == "" {
 			continue
 		}
-		summary, err := o.deps.Publisher.DiffSummary(worktree, bases[repo.Name])
+		summary, err := git.DiffSummary(worktree, bases[repo.Name])
 		if err != nil || strings.TrimSpace(summary) == "" {
 			continue
 		}

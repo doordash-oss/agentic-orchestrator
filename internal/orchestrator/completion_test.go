@@ -25,9 +25,11 @@ import (
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/internal/orchestrator"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
+	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
 )
 
@@ -1849,6 +1851,13 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_RoadmapMidflight_Emi
 }
 
 func TestOrchestrator_HandlePhaseCompletion_Implement_RoadmapRecordsCommitAnchors(t *testing.T) {
+	changedRepo := testutil.InitGitRepo(t)
+	unchangedRepo := testutil.InitGitRepo(t)
+	for _, repo := range []string{changedRepo, unchangedRepo} {
+		if err := os.WriteFile(filepath.Join(repo, "phase.txt"), []byte("complete\n"), 0o644); err != nil {
+			t.Fatalf("write phase change: %v", err)
+		}
+	}
 	roadmapPath := writeTempFile(t, "roadmap.md",
 		"# Roadmap\n\n## Phase 1: Tracer\n### Goal\nFirst phase.\n\n## Phase 2: Fill\n### Goal\nSecond phase.\n")
 	f := &feature.Feature{
@@ -1860,8 +1869,8 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_RoadmapRecordsCommitAnchor
 		RoadmapPhaseType:    "tracer-bullet",
 		Artifacts:           map[string]string{"roadmap": roadmapPath},
 		Repos: []feature.FeatureRepo{
-			{Name: "changed", Path: "/tmp/changed", WorktreePath: "/tmp/wt-changed"},
-			{Name: "unchanged", Path: "/tmp/unchanged", WorktreePath: "/tmp/wt-unchanged"},
+			{Name: "changed", Path: changedRepo, WorktreePath: changedRepo},
+			{Name: "unchanged", Path: unchangedRepo, WorktreePath: unchangedRepo},
 		},
 	}
 	lc := lifecycleForFeature(f)
@@ -1879,21 +1888,9 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_RoadmapRecordsCommitAnchor
 		recordedAnchors = anchors
 		return nil
 	}
-	pub := mocks.NewMockPublisher()
-	pub.CommitAllAndGetHeadFn = func(worktreePath, message string) (string, error) {
-		switch worktreePath {
-		case "/tmp/wt-changed":
-			return "1111111111111111111111111111111111111111", nil
-		case "/tmp/wt-unchanged":
-			return "2222222222222222222222222222222222222222", nil
-		default:
-			t.Fatalf("unexpected worktree path %q", worktreePath)
-		}
-		return "", nil
-	}
 	fs := newFeatureStore(f)
 
-	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs, Publisher: pub}, orchestrator.Hooks{})
+	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{})
 
 	if err := o.HandlePhaseCompletion("feat-roadmap-anchors", orchestrator.PhaseCompletionInput{
 		Phase:           feature.PhaseImplement,
@@ -1906,10 +1903,9 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_RoadmapRecordsCommitAnchor
 	if recordedPhase != 1 {
 		t.Fatalf("recorded phase = %d, want 1", recordedPhase)
 	}
-	want := map[string]string{
-		"changed":   "1111111111111111111111111111111111111111",
-		"unchanged": "2222222222222222222222222222222222222222",
-	}
+	changedSHA, _ := git.CurrentHeadSHA(changedRepo)
+	unchangedSHA, _ := git.CurrentHeadSHA(unchangedRepo)
+	want := map[string]string{"changed": changedSHA, "unchanged": unchangedSHA}
 	for repo, wantSHA := range want {
 		if got := recordedAnchors[repo]; got != wantSHA {
 			t.Errorf("anchor[%s] = %q, want %q", repo, got, wantSHA)
@@ -1918,6 +1914,10 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_RoadmapRecordsCommitAnchor
 }
 
 func TestOrchestrator_HandlePhaseCompletion_Implement_SkipsAnchorOnCommitFailure(t *testing.T) {
+	okRepo := testutil.InitGitRepo(t)
+	if err := os.WriteFile(filepath.Join(okRepo, "phase.txt"), []byte("complete\n"), 0o644); err != nil {
+		t.Fatalf("write phase change: %v", err)
+	}
 	roadmapPath := writeTempFile(t, "roadmap.md",
 		"# Roadmap\n\n## Phase 1: Tracer\n### Goal\nFirst phase.\n\n## Phase 2: Fill\n### Goal\nSecond phase.\n")
 	f := &feature.Feature{
@@ -1929,8 +1929,8 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_SkipsAnchorOnCommitFailure
 		RoadmapPhaseType:    "tracer-bullet",
 		Artifacts:           map[string]string{"roadmap": roadmapPath},
 		Repos: []feature.FeatureRepo{
-			{Name: "ok", Path: "/tmp/ok", WorktreePath: "/tmp/wt-ok"},
-			{Name: "failed", Path: "/tmp/failed", WorktreePath: "/tmp/wt-failed"},
+			{Name: "ok", Path: okRepo, WorktreePath: okRepo},
+			{Name: "failed", Path: "/missing/repo", WorktreePath: "/missing/repo"},
 		},
 	}
 	lc := lifecycleForFeature(f)
@@ -1946,16 +1946,9 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_SkipsAnchorOnCommitFailure
 		recordedAnchors = anchors
 		return nil
 	}
-	pub := mocks.NewMockPublisher()
-	pub.CommitAllAndGetHeadFn = func(worktreePath, message string) (string, error) {
-		if worktreePath == "/tmp/wt-failed" {
-			return "", errors.New("commit failed")
-		}
-		return "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", nil
-	}
 	fs := newFeatureStore(f)
 
-	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs, Publisher: pub}, orchestrator.Hooks{})
+	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{})
 
 	if err := o.HandlePhaseCompletion("feat-roadmap-anchor-failure", orchestrator.PhaseCompletionInput{
 		Phase:           feature.PhaseImplement,
@@ -1964,8 +1957,9 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_SkipsAnchorOnCommitFailure
 		t.Fatalf("HandlePhaseCompletion: %v", err)
 	}
 
-	if got := recordedAnchors["ok"]; got != "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" {
-		t.Errorf("ok anchor = %q", got)
+	wantOK, _ := git.CurrentHeadSHA(okRepo)
+	if got := recordedAnchors["ok"]; got != wantOK {
+		t.Errorf("ok anchor = %q, want %q", got, wantOK)
 	}
 	if _, ok := recordedAnchors["failed"]; ok {
 		t.Fatalf("failed repo received misleading anchor: %#v", recordedAnchors)

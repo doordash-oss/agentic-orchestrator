@@ -46,23 +46,8 @@ func newTestManager(t *testing.T) *feature.Manager {
 		Path: "/tmp/test-repo",
 	}
 	mgr := feature.NewManager(store, cfg)
-	mgr.Branches = newMockBranches(false)
-	mgr.PRs = mocks.NewMockPublisher()
+	mgr.PRs = mocks.NewMockPRCloser()
 	return mgr
-}
-
-func newMockBranches(hasRemote bool) *mocks.MockBranchOperator {
-	branches := mocks.NewMockBranchOperator()
-	branches.DefaultBranchFn = func(repoPath string) (string, error) {
-		return "main", nil
-	}
-	branches.HasOriginRemoteFn = func(repoPath string) (bool, error) {
-		return hasRemote, nil
-	}
-	branches.BranchNameFn = func(featureSlug string) string {
-		return git.BranchName(featureSlug)
-	}
-	return branches
 }
 
 func skipShortFeatureRegression(t *testing.T, reason string) {
@@ -126,8 +111,7 @@ func TestManagerCreateStampsSchemaVersionAndPrePopulatesRun(t *testing.T) {
 		cfg.Repos["repo-a"] = config.RepoConfig{Path: "/tmp/repo-a"}
 		cfg.Repos["repo-b"] = config.RepoConfig{Path: "/tmp/repo-b"}
 		mgr := feature.NewManager(store, cfg)
-		mgr.Branches = newMockBranches(false)
-		mgr.PRs = mocks.NewMockPublisher()
+		mgr.PRs = mocks.NewMockPRCloser()
 
 		f, err := mgr.Create("Multi", "desc", []string{"repo-a", "repo-b"}, mgr.Config.Defaults.Models, "", "", nil)
 		if err != nil {
@@ -243,8 +227,7 @@ func TestManagerCreateWithWorktree(t *testing.T) {
 			return filepath.Join(wtDir, featureSlug, repoName), nil
 		},
 	}
-	mgr.Branches = newMockBranches(false)
-	mgr.PRs = mocks.NewMockPublisher()
+	mgr.PRs = mocks.NewMockPRCloser()
 
 	f, err := mgr.Create("Worktree Feature", "test worktree", []string{"test-repo"}, cfg.Defaults.Models, "", "", nil)
 	if err != nil {
@@ -281,13 +264,12 @@ func TestManagerCreateQueuesActiveSetupWithoutWorktreeSideEffects(t *testing.T) 
 	cfg.Repos["test-repo"] = config.RepoConfig{Path: "/repos/test-repo"}
 
 	mgr := feature.NewManager(store, cfg)
-	mgr.Branches = newMockBranches(false)
 	worktrees := mocks.NewMockWorktreeOps()
 	worktrees.CreateFn = func(repoPath, featureSlug, repoName, startPoint string) (string, error) {
 		return "", fmt.Errorf("worktree side effect should not run while setup is only queued")
 	}
 	mgr.Worktrees = worktrees
-	mgr.PRs = mocks.NewMockPublisher()
+	mgr.PRs = mocks.NewMockPRCloser()
 
 	f, err := mgr.Create("Worktree Feature", "test worktree", []string{"test-repo"}, cfg.Defaults.Models, "", "", nil, feature.CreateOptions{QueueSetup: true})
 	if err != nil {
@@ -331,60 +313,6 @@ func TestManagerCreateQueuesActiveSetupWithoutWorktreeSideEffects(t *testing.T) 
 	}
 }
 
-func TestManagerCreateQueuedSetupDeduplicatesUpstreamBranchBeforeSave(t *testing.T) {
-	t.Parallel()
-	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
-	storeDir := t.TempDir()
-	store := feature.NewStore(storeDir)
-	cfg := config.NewDefault()
-	cfg.Repos["test-repo"] = config.RepoConfig{Path: "/repos/test-repo"}
-
-	mgr := feature.NewManager(store, cfg)
-	branches := newMockBranches(true)
-	conflicted := false
-	branches.BranchExistsOnRemoteFn = func(repoPath, branch string) (bool, error) {
-		if !conflicted && strings.HasPrefix(branch, "feature/upstream-conflict-") {
-			conflicted = true
-			return true, nil
-		}
-		return false, nil
-	}
-	mgr.Branches = branches
-	worktrees := mocks.NewMockWorktreeOps()
-	worktrees.CreateFn = func(repoPath, featureSlug, repoName, startPoint string) (string, error) {
-		return "", fmt.Errorf("worktree side effect should not run while setup is only queued")
-	}
-	mgr.Worktrees = worktrees
-	mgr.PRs = mocks.NewMockPublisher()
-
-	f, err := mgr.Create("Upstream Conflict", "test", []string{"test-repo"}, cfg.Defaults.Models, "", "", nil, feature.CreateOptions{QueueSetup: true})
-	if err != nil {
-		t.Fatalf("create: %v", err)
-	}
-	if f.Slug == "upstream-conflict" {
-		t.Fatal("slug should have been modified to avoid upstream conflict")
-	}
-	if !strings.HasPrefix(f.Slug, "upstream-conflict-") {
-		t.Fatalf("slug = %q, want upstream-conflict-*", f.Slug)
-	}
-	if len(worktrees.Calls) != 0 {
-		t.Fatalf("worktree create calls = %d, want 0", len(worktrees.Calls))
-	}
-
-	persisted, err := store.Load(f.ID)
-	if err != nil {
-		t.Fatalf("load persisted feature: %v", err)
-	}
-	wantBranch := git.BranchName(f.WorkspaceSlug())
-	if persisted.Repos[0].Branch != wantBranch {
-		t.Fatalf("persisted branch = %q, want %q", persisted.Repos[0].Branch, wantBranch)
-	}
-	task := persisted.Run().Setup.Tasks["worktree:test-repo"]
-	if task.Branch != wantBranch {
-		t.Fatalf("setup task branch = %q, want %q", task.Branch, wantBranch)
-	}
-}
-
 func TestManagerRunSetupUsesFeatureIDQualifiedBranchWhenPlainSlugBranchIsCheckedOut(t *testing.T) {
 	repoDir := testutil.InitGitRepo(t)
 	occupiedBranch := "feature/setup-local-conflict"
@@ -399,9 +327,8 @@ func TestManagerRunSetupUsesFeatureIDQualifiedBranchWhenPlainSlugBranchIsChecked
 	cfg := config.NewDefault()
 	cfg.Repos["test-repo"] = config.RepoConfig{Path: repoDir}
 	mgr := feature.NewManager(store, cfg)
-	mgr.Branches = &git.BranchAdapter{}
 	mgr.Worktrees = git.NewWorktreeManager(t.TempDir())
-	mgr.PRs = mocks.NewMockPublisher()
+	mgr.PRs = mocks.NewMockPRCloser()
 
 	f, err := mgr.Create("Setup Local Conflict", "test", []string{"test-repo"}, cfg.Defaults.Models, "", "", nil, feature.CreateOptions{QueueSetup: true})
 	if err != nil {
@@ -436,13 +363,12 @@ func TestManagerRunSetupCompletesQueuedSetupAndCopiesAssets(t *testing.T) {
 	cfg.Repos["repo-a"] = config.RepoConfig{Path: "/repos/repo-a"}
 	cfg.Repos["repo-b"] = config.RepoConfig{Path: "/repos/repo-b"}
 	mgr := feature.NewManager(store, cfg)
-	mgr.Branches = newMockBranches(false)
 	worktrees := mocks.NewMockWorktreeOps()
 	worktrees.CreateFn = func(repoPath, featureSlug, repoName, startPoint string) (string, error) {
 		return filepath.Join(wtDir, featureSlug, repoName), nil
 	}
 	mgr.Worktrees = worktrees
-	mgr.PRs = mocks.NewMockPublisher()
+	mgr.PRs = mocks.NewMockPRCloser()
 
 	tmpDir := t.TempDir()
 	imagePath := filepath.Join(tmpDir, "screenshot.png")
@@ -632,7 +558,6 @@ func TestManagerRetrySetupSkipsDoneTasksAndCompletesOriginalRun(t *testing.T) {
 	cfg.Repos["repo-a"] = config.RepoConfig{Path: "/repos/repo-a"}
 	cfg.Repos["repo-b"] = config.RepoConfig{Path: "/repos/repo-b"}
 	mgr := feature.NewManager(store, cfg)
-	mgr.Branches = newMockBranches(false)
 	worktrees := mocks.NewMockWorktreeOps()
 	failRepoB := true
 	worktrees.CreateFn = func(repoPath, featureSlug, repoName, startPoint string) (string, error) {
@@ -642,7 +567,7 @@ func TestManagerRetrySetupSkipsDoneTasksAndCompletesOriginalRun(t *testing.T) {
 		return filepath.Join(wtDir, featureSlug, repoName), nil
 	}
 	mgr.Worktrees = worktrees
-	mgr.PRs = mocks.NewMockPublisher()
+	mgr.PRs = mocks.NewMockPRCloser()
 
 	f, err := mgr.Create("Setup Retry", "retry missing repo", []string{"repo-a", "repo-b"}, cfg.Defaults.Models, "", "", nil, feature.CreateOptions{QueueSetup: true})
 	if err != nil {
@@ -731,21 +656,14 @@ func TestManagerRetrySetupRefusesDuplicateActiveRunner(t *testing.T) {
 
 func TestManagerRetrySetupFailsOnExpectedWorktreeBranchMismatch(t *testing.T) {
 	mgr := newTestManager(t)
-	conflictPath := filepath.Join(t.TempDir(), "setup-feature", "test-repo")
-	if err := os.MkdirAll(conflictPath, 0o755); err != nil {
-		t.Fatalf("mkdir conflict path: %v", err)
-	}
+	conflictPath := testutil.InitGitRepo(t)
+	testutil.CreateBranch(t, conflictPath, "feature/someone-else")
 	worktrees := mocks.NewMockWorktreeOps()
 	worktrees.CreateFn = func(repoPath, featureSlug, repoName, startPoint string) (string, error) {
 		t.Fatalf("Create called despite persisted path conflict")
 		return "", nil
 	}
 	mgr.Worktrees = worktrees
-	branches := newMockBranches(false)
-	branches.CurrentBranchFn = func(repoPath string) (string, error) {
-		return "feature/someone-else", nil
-	}
-	mgr.Branches = branches
 	f, err := mgr.Create("Setup Branch Mismatch", "conflict", []string{"test-repo"}, mgr.Config.Defaults.Models, "", "", nil, feature.CreateOptions{QueueSetup: true})
 	if err != nil {
 		t.Fatalf("create: %v", err)
@@ -785,9 +703,6 @@ func TestManagerRetrySetupReusesExpectedWorktreeWhenTaskPathWasNotPersisted(t *t
 	mgr := newTestManager(t)
 	expectedBase := t.TempDir()
 	expectedPath := filepath.Join(expectedBase, "setup-crash-window", "test-repo")
-	if err := os.MkdirAll(expectedPath, 0o755); err != nil {
-		t.Fatalf("mkdir expected path: %v", err)
-	}
 	worktrees := mocks.NewMockWorktreeOps()
 	worktrees.ExpectedPathFn = func(featureSlug, repoName string) string {
 		return expectedPath
@@ -798,21 +713,27 @@ func TestManagerRetrySetupReusesExpectedWorktreeWhenTaskPathWasNotPersisted(t *t
 	}
 	mgr.Worktrees = worktrees
 
-	var expectedBranch string
-	branches := newMockBranches(false)
-	branches.CurrentBranchFn = func(repoPath string) (string, error) {
-		if repoPath != expectedPath {
-			t.Fatalf("CurrentBranch path = %q, want %q", repoPath, expectedPath)
-		}
-		return expectedBranch, nil
-	}
-	mgr.Branches = branches
-
 	f, err := mgr.Create("Setup Crash Window", "reattach expected path", []string{"test-repo"}, mgr.Config.Defaults.Models, "", "", nil, feature.CreateOptions{QueueSetup: true})
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	expectedBranch = git.BranchName(f.WorkspaceSlug())
+	expectedBranch := git.BranchName(f.WorkspaceSlug())
+	if err := os.MkdirAll(expectedPath, 0o755); err != nil {
+		t.Fatalf("mkdir expected path: %v", err)
+	}
+	for _, args := range [][]string{
+		{"init", "--initial-branch=" + expectedBranch},
+		{"config", "user.email", "test@example.com"},
+		{"config", "user.name", "Test"},
+		{"commit", "--allow-empty", "-m", "initial"},
+	} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = expectedPath
+		cmd.Env = testutil.GitTestEnv()
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %s: %v: %s", strings.Join(args, " "), err, out)
+		}
+	}
 	if err := mgr.Store.Modify(f.ID, func(ff *feature.Feature) error {
 		setup := ff.Run().Setup
 		setup.Status = feature.SetupStatusFailed
@@ -1481,55 +1402,6 @@ func TestManagerCreateNoAttachments(t *testing.T) {
 	}
 }
 
-func TestManagerCreateDeduplicatesUpstreamBranch(t *testing.T) {
-	t.Parallel()
-	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
-	storeDir := t.TempDir()
-	wtDir := t.TempDir()
-	store := feature.NewStore(storeDir)
-	cfg := config.NewDefault()
-	cfg.Repos["test-repo"] = config.RepoConfig{Path: "/repos/test-repo"}
-
-	mgr := feature.NewManager(store, cfg)
-	mgr.Worktrees = &mocks.MockWorktreeOps{
-		CreateFn: func(repoPath, featureSlug, repoName, startPoint string) (string, error) {
-			return filepath.Join(wtDir, featureSlug, repoName), nil
-		},
-	}
-	branches := newMockBranches(true)
-	conflicted := false
-	branches.BranchExistsOnRemoteFn = func(repoPath, branch string) (bool, error) {
-		if !conflicted && strings.HasPrefix(branch, "feature/upstream-conflict-") {
-			conflicted = true
-			return true, nil
-		}
-		return false, nil
-	}
-	mgr.Branches = branches
-	mgr.PRs = mocks.NewMockPublisher()
-
-	f, err := mgr.Create("Upstream Conflict", "test", []string{"test-repo"}, cfg.Defaults.Models, "", "", nil)
-	if err != nil {
-		t.Fatalf("create: %v", err)
-	}
-
-	if f.Slug == "upstream-conflict" {
-		t.Error("slug should have been modified to avoid upstream conflict")
-	}
-	if !strings.HasPrefix(f.Slug, "upstream-conflict-") {
-		t.Errorf("slug should start with 'upstream-conflict-', got %q", f.Slug)
-	}
-	suffix := strings.TrimPrefix(f.Slug, "upstream-conflict-")
-	if len(suffix) != 4 {
-		t.Errorf("suffix length = %d, want 4 hex chars", len(suffix))
-	}
-
-	expectedBranch := git.BranchName(f.WorkspaceSlug())
-	if f.Repos[0].Branch != expectedBranch {
-		t.Errorf("branch = %q, want %q", f.Repos[0].Branch, expectedBranch)
-	}
-}
-
 func TestManagerCreateNoSuffixWhenNoUpstreamConflict(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
@@ -1545,8 +1417,7 @@ func TestManagerCreateNoSuffixWhenNoUpstreamConflict(t *testing.T) {
 			return filepath.Join(wtDir, featureSlug, repoName), nil
 		},
 	}
-	mgr.Branches = newMockBranches(true)
-	mgr.PRs = mocks.NewMockPublisher()
+	mgr.PRs = mocks.NewMockPRCloser()
 
 	f, err := mgr.Create("No Conflict Feature", "test", []string{"test-repo"}, cfg.Defaults.Models, "", "", nil)
 	if err != nil {
@@ -1870,7 +1741,7 @@ func TestRewindToPhase_PRURLCleared(t *testing.T) {
 	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
 	skipShortFeatureRegression(t, "extended rewind PR-close regression; lower-level PR URL clearing remains covered elsewhere")
 	mgr := newTestManager(t)
-	prs := mocks.NewMockPublisher()
+	prs := mocks.NewMockPRCloser()
 	prs.ClosePRFn = func(prURL string) error {
 		return errors.New("close failed")
 	}
@@ -1922,11 +1793,6 @@ func TestRewindToPhase_BackupBranchWarning(t *testing.T) {
 	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
 	skipShortFeatureRegression(t, "extended rewind backup-branch warning regression")
 	mgr := newTestManager(t)
-	branches := newMockBranches(false)
-	branches.CreateBackupBranchFn = func(worktreePath, slug string) (string, error) {
-		return "", errors.New("backup failed")
-	}
-	mgr.Branches = branches
 	f, err := mgr.Create("Backup Warn", "desc", []string{"test-repo"}, mgr.Config.Defaults.Models, "", "", nil)
 	if err != nil {
 		t.Fatalf("create: %v", err)
@@ -3162,15 +3028,14 @@ func TestRewindToPhase_ClosesPerRepoPRs(t *testing.T) {
 	skipShortFeatureRegression(t, "extended rewind per-repo PR close warning regression")
 	dir := t.TempDir()
 	store := feature.NewStore(dir)
-	prs := mocks.NewMockPublisher()
+	prs := mocks.NewMockPRCloser()
 	prs.ClosePRFn = func(prURL string) error {
 		return errors.New("close failed")
 	}
 	mgr := &feature.Manager{
-		Store:    store,
-		Config:   &config.Config{},
-		Branches: newMockBranches(false),
-		PRs:      prs,
+		Store:  store,
+		Config: &config.Config{},
+		PRs:    prs,
 	}
 
 	f := newMultiRepoFeature(t, mgr, []feature.FeatureRepo{
@@ -4597,12 +4462,12 @@ func TestManagerCreateSetsPublishable(t *testing.T) {
 	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
 	// Repo WITH remote => publishable = true
 	t.Run("with remote", func(t *testing.T) {
+		repoPath, _ := testutil.InitPublishReadyGitRepo(t)
 		storeDir := t.TempDir()
 		store := feature.NewStore(storeDir)
 		cfg := config.NewDefault()
-		cfg.Repos["pub-repo"] = config.RepoConfig{Path: "/repos/pub-repo"}
+		cfg.Repos["pub-repo"] = config.RepoConfig{Path: repoPath}
 		mgr := feature.NewManager(store, cfg)
-		mgr.Branches = newMockBranches(true)
 
 		f, err := mgr.Create("Pub Feature", "test", []string{"pub-repo"}, cfg.Defaults.Models, "", "", nil)
 		if err != nil {
@@ -4621,12 +4486,12 @@ func TestManagerCreateSetsPublishable(t *testing.T) {
 
 	// Repo WITHOUT remote => publishable = false
 	t.Run("without remote", func(t *testing.T) {
+		repoPath := testutil.InitGitRepo(t)
 		storeDir := t.TempDir()
 		store := feature.NewStore(storeDir)
 		cfg := config.NewDefault()
-		cfg.Repos["nopub-repo"] = config.RepoConfig{Path: "/repos/nopub-repo"}
+		cfg.Repos["nopub-repo"] = config.RepoConfig{Path: repoPath}
 		mgr := feature.NewManager(store, cfg)
-		mgr.Branches = newMockBranches(false)
 
 		f, err := mgr.Create("NoPub Feature", "test", []string{"nopub-repo"}, cfg.Defaults.Models, "", "", nil)
 		if err != nil {
@@ -4684,15 +4549,14 @@ func TestRewindToPhase_ClosePRStillCalledForPublished(t *testing.T) {
 	skipShortFeatureRegression(t, "extended rewind PR-close warning regression")
 	dir := t.TempDir()
 	store := feature.NewStore(dir)
-	prs := mocks.NewMockPublisher()
+	prs := mocks.NewMockPRCloser()
 	prs.ClosePRFn = func(prURL string) error {
 		return errors.New("close failed")
 	}
 	mgr := &feature.Manager{
-		Store:    store,
-		Config:   &config.Config{},
-		Branches: newMockBranches(false),
-		PRs:      prs,
+		Store:  store,
+		Config: &config.Config{},
+		PRs:    prs,
 	}
 
 	publishable := true
@@ -4743,8 +4607,6 @@ func TestRewindToPhase_UnpublishedUsesLocalReset(t *testing.T) {
 	mgr := feature.NewManager(store, cfg)
 	wtDir := t.TempDir()
 	mgr.Worktrees = git.NewWorktreeManager(wtDir)
-	mgr.Branches = &git.BranchAdapter{}
-	mgr.PRs = &git.PublishAdapter{}
 
 	publishable := false
 	f, err := mgr.Create("Local Rewind", "test", []string{"local-repo"}, cfg.Defaults.Models, "", "", nil)
@@ -4802,13 +4664,7 @@ func TestManagerCreateSkipsBranchCheckForUnpublishedRepos(t *testing.T) {
 			return filepath.Join(t.TempDir(), featureSlug, repoName), nil
 		},
 	}
-	branches := newMockBranches(false)
-	branches.BranchExistsOnRemoteFn = func(repoPath, branch string) (bool, error) {
-		t.Fatalf("BranchExistsOnRemote(%q, %q) was called for an unpublished repo", repoPath, branch)
-		return false, nil
-	}
-	mgr.Branches = branches
-	mgr.PRs = mocks.NewMockPublisher()
+	mgr.PRs = mocks.NewMockPRCloser()
 
 	f, err := mgr.Create("Local Feature", "test", []string{"local-repo"}, cfg.Defaults.Models, "", "", nil)
 	if err != nil {
@@ -5597,10 +5453,8 @@ func TestRewindWithRequest_RejectsInvalidPartialBeforeSideEffects(t *testing.T) 
 			}); err != nil {
 				t.Fatalf("modify: %v", err)
 			}
-			branches := mocks.NewMockBranchOperator()
-			prs := mocks.NewMockPublisher()
+			prs := mocks.NewMockPRCloser()
 			worktrees := mocks.NewMockWorktreeOps()
-			mgr.Branches = branches
 			mgr.PRs = prs
 			mgr.Worktrees = worktrees
 
@@ -5617,9 +5471,6 @@ func TestRewindWithRequest_RejectsInvalidPartialBeforeSideEffects(t *testing.T) 
 			}
 			if got.Status == feature.StatusInterrupted {
 				t.Fatal("feature was interrupted before validation completed")
-			}
-			if len(branches.Calls) != 0 {
-				t.Fatalf("backup branch side effects ran before validation: %+v", branches.Calls)
 			}
 			if len(prs.Calls) != 0 {
 				t.Fatalf("PR close side effects ran before validation: %+v", prs.Calls)
@@ -5647,7 +5498,6 @@ func TestRewindWithRequest_Phase1PartialUsesBaseResetWithoutAnchor(t *testing.T)
 	}
 	worktrees := mocks.NewMockWorktreeOps()
 	mgr.Worktrees = worktrees
-	mgr.Branches = nil
 	mgr.PRs = nil
 
 	if _, _, err := mgr.RewindWithRequest(f.ID, feature.RewindRequest{
@@ -5679,7 +5529,6 @@ func TestRewindWithRequest_PartialPersistsPendingReviewRoadmapPhase(t *testing.T
 		t.Fatalf("modify: %v", err)
 	}
 	mgr.Worktrees = mocks.NewMockWorktreeOps()
-	mgr.Branches = nil
 	mgr.PRs = nil
 
 	if _, _, err := mgr.RewindWithRequest(f.ID, feature.RewindRequest{
@@ -5788,7 +5637,6 @@ func TestRewindWithRequest_Phase2PartialResetsToAnchorAndCarriesSurvivors(t *tes
 
 	worktrees := mocks.NewMockWorktreeOps()
 	mgr.Worktrees = worktrees
-	mgr.Branches = nil
 	mgr.PRs = nil
 
 	if _, _, err := mgr.RewindWithRequest(f.ID, feature.RewindRequest{
@@ -5953,7 +5801,6 @@ func TestRewindWithRequest_PartialRetainsTargetPhaseFrontend(t *testing.T) {
 		t.Fatalf("modify: %v", err)
 	}
 	mgr.Worktrees = mocks.NewMockWorktreeOps()
-	mgr.Branches = nil
 	mgr.PRs = nil
 
 	if _, _, err := mgr.RewindWithRequest(f.ID, feature.RewindRequest{
@@ -6013,7 +5860,6 @@ func TestRewindWithRequest_PartialRestoresMissingTargetPhaseFrontendFromPlan(t *
 		t.Fatalf("modify: %v", err)
 	}
 	mgr.Worktrees = mocks.NewMockWorktreeOps()
-	mgr.Branches = nil
 	mgr.PRs = nil
 
 	if _, _, err := mgr.RewindWithRequest(f.ID, feature.RewindRequest{
@@ -6047,7 +5893,6 @@ func TestRewindToPhase_FullImplementOmitsSealedRoadmapPhase(t *testing.T) {
 		t.Fatalf("modify: %v", err)
 	}
 	mgr.Worktrees = mocks.NewMockWorktreeOps()
-	mgr.Branches = nil
 	mgr.PRs = nil
 
 	if _, _, err := mgr.RewindToPhase(f.ID, feature.PhaseImplement); err != nil {
@@ -6065,9 +5910,11 @@ func TestRewindToPhase_FullImplementOmitsSealedRoadmapPhase(t *testing.T) {
 func TestRewindWithRequest_PartialUnpublishableSkipsPRCloseAndRecordsBackups(t *testing.T) {
 	mgr := newTestManager(t)
 	unpublishable := false
+	repoA := testutil.InitGitRepo(t)
+	repoB := testutil.InitGitRepo(t)
 	f := newMultiRepoFeature(t, mgr, []feature.FeatureRepo{
-		{Name: "repo-a", Path: "/tmp/repo-a", WorktreePath: "/tmp/wt-a", BaseBranch: "main"},
-		{Name: "repo-b", Path: "/tmp/repo-b", WorktreePath: "/tmp/wt-b", BaseBranch: "main", Publishable: &unpublishable},
+		{Name: "repo-a", Path: repoA, WorktreePath: repoA, BaseBranch: "main"},
+		{Name: "repo-b", Path: repoB, WorktreePath: repoB, BaseBranch: "main", Publishable: &unpublishable},
 	})
 	if err := mgr.Store.Modify(f.ID, func(ff *feature.Feature) error {
 		ff.Status = feature.StatusImplementing
@@ -6090,13 +5937,8 @@ func TestRewindWithRequest_PartialUnpublishableSkipsPRCloseAndRecordsBackups(t *
 		t.Fatalf("modify: %v", err)
 	}
 	worktrees := mocks.NewMockWorktreeOps()
-	branches := mocks.NewMockBranchOperator()
-	branches.CreateBackupBranchFn = func(worktreePath, slug string) (string, error) {
-		return "feature/" + slug + "-pre-rewind-" + filepath.Base(worktreePath), nil
-	}
-	prs := mocks.NewMockPublisher()
+	prs := mocks.NewMockPRCloser()
 	mgr.Worktrees = worktrees
-	mgr.Branches = branches
 	mgr.PRs = prs
 
 	warns, _, err := mgr.RewindWithRequest(f.ID, feature.RewindRequest{
@@ -6126,9 +5968,11 @@ func TestRewindWithRequest_PartialUnpublishableSkipsPRCloseAndRecordsBackups(t *
 
 func TestRewindWithRequest_PartialPublishableClosesPRs(t *testing.T) {
 	mgr := newTestManager(t)
+	repoA := testutil.InitGitRepo(t)
+	repoB := testutil.InitGitRepo(t)
 	f := newMultiRepoFeature(t, mgr, []feature.FeatureRepo{
-		{Name: "repo-a", Path: "/tmp/repo-a", WorktreePath: "/tmp/wt-a", BaseBranch: "main"},
-		{Name: "repo-b", Path: "/tmp/repo-b", WorktreePath: "/tmp/wt-b", BaseBranch: "main"},
+		{Name: "repo-a", Path: repoA, WorktreePath: repoA, BaseBranch: "main"},
+		{Name: "repo-b", Path: repoB, WorktreePath: repoB, BaseBranch: "main"},
 	})
 	if err := mgr.Store.Modify(f.ID, func(ff *feature.Feature) error {
 		ff.Status = feature.StatusImplementing
@@ -6150,8 +5994,7 @@ func TestRewindWithRequest_PartialPublishableClosesPRs(t *testing.T) {
 		t.Fatalf("modify: %v", err)
 	}
 	mgr.Worktrees = mocks.NewMockWorktreeOps()
-	mgr.Branches = nil
-	prs := mocks.NewMockPublisher()
+	prs := mocks.NewMockPRCloser()
 	mgr.PRs = prs
 
 	warns, _, err := mgr.RewindWithRequest(f.ID, feature.RewindRequest{
@@ -6171,9 +6014,10 @@ func TestRewindWithRequest_PartialPublishableClosesPRs(t *testing.T) {
 
 func TestRewindWithRequest_PartialBranchFailureStillSeals(t *testing.T) {
 	mgr := newTestManager(t)
+	repoB := testutil.InitGitRepo(t)
 	f := newMultiRepoFeature(t, mgr, []feature.FeatureRepo{
-		{Name: "repo-a", Path: "/tmp/repo-a", WorktreePath: "/tmp/wt-a", BaseBranch: "main"},
-		{Name: "repo-b", Path: "/tmp/repo-b", WorktreePath: "/tmp/wt-b", BaseBranch: "main"},
+		{Name: "repo-a", Path: "/missing/repo-a", WorktreePath: "/missing/repo-a", BaseBranch: "main"},
+		{Name: "repo-b", Path: repoB, WorktreePath: repoB, BaseBranch: "main"},
 	})
 	if err := mgr.Store.Modify(f.ID, func(ff *feature.Feature) error {
 		ff.Status = feature.StatusImplementing
@@ -6192,14 +6036,6 @@ func TestRewindWithRequest_PartialBranchFailureStillSeals(t *testing.T) {
 		t.Fatalf("modify: %v", err)
 	}
 	mgr.Worktrees = mocks.NewMockWorktreeOps()
-	branches := mocks.NewMockBranchOperator()
-	branches.CreateBackupBranchFn = func(worktreePath, slug string) (string, error) {
-		if worktreePath == "/tmp/wt-a" {
-			return "", errors.New("boom")
-		}
-		return "feature/" + slug + "-repo-b", nil
-	}
-	mgr.Branches = branches
 	mgr.PRs = nil
 
 	warns, _, err := mgr.RewindWithRequest(f.ID, feature.RewindRequest{
@@ -6228,8 +6064,8 @@ func TestRewindWithRequest_PartialBranchFailureStillSeals(t *testing.T) {
 	if len(sealedRun.BackupBranches) != 1 {
 		t.Fatalf("BackupBranches = %#v, want repo-b only", sealedRun.BackupBranches)
 	}
-	if got := sealedRun.BackupBranches["repo-b"]; got != "feature/partial-branch-warning-repo-b" {
-		t.Errorf("BackupBranches[repo-b] = %q, want feature/partial-branch-warning-repo-b", got)
+	if got := sealedRun.BackupBranches["repo-b"]; !strings.HasPrefix(got, "feature/partial-branch-warning-pre-rewind-") {
+		t.Errorf("BackupBranches[repo-b] = %q, want timestamped backup", got)
 	}
 	if _, ok := sealedRun.BackupBranches["repo-a"]; ok {
 		t.Errorf("BackupBranches contains repo-a after failed backup: %#v", sealedRun.BackupBranches)
@@ -6244,9 +6080,11 @@ func TestRewindToPhase_RecordsBackupBranches(t *testing.T) {
 	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
 	skipShortFeatureRegression(t, "extended rewind backup-branch recording regression")
 	mgr := newTestManager(t)
+	repoA := testutil.InitGitRepo(t)
+	repoB := testutil.InitGitRepo(t)
 	f := newMultiRepoFeature(t, mgr, []feature.FeatureRepo{
-		{Name: "repo-a", Path: "/tmp/repo-a", WorktreePath: "/tmp/wt-a", BaseBranch: "main"},
-		{Name: "repo-b", Path: "/tmp/repo-b", WorktreePath: "/tmp/wt-b", BaseBranch: "main"},
+		{Name: "repo-a", Path: repoA, WorktreePath: repoA, BaseBranch: "main"},
+		{Name: "repo-b", Path: repoB, WorktreePath: repoB, BaseBranch: "main"},
 	})
 	if err := mgr.Store.Modify(f.ID, func(ff *feature.Feature) error {
 		ff.Slug = "recording-slug"
@@ -6257,12 +6095,6 @@ func TestRewindToPhase_RecordsBackupBranches(t *testing.T) {
 		t.Fatalf("modify: %v", err)
 	}
 
-	mock := mocks.NewMockBranchOperator()
-	mock.CreateBackupBranchFn = func(worktreePath, slug string) (string, error) {
-		return "feature/" + slug + "-pre-rewind-" + filepath.Base(worktreePath), nil
-	}
-	mgr.Branches = mock
-
 	if _, _, err := mgr.RewindToPhase(f.ID, feature.PhasePlan); err != nil {
 		t.Fatalf("RewindToPhase: %v", err)
 	}
@@ -6271,21 +6103,17 @@ func TestRewindToPhase_RecordsBackupBranches(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadRun(1): %v", err)
 	}
-	want := map[string]string{
-		"repo-a": "feature/recording-slug-pre-rewind-wt-a",
-		"repo-b": "feature/recording-slug-pre-rewind-wt-b",
+	if len(sealedRun.BackupBranches) != 2 {
+		t.Fatalf("BackupBranches len = %d, want 2: %v", len(sealedRun.BackupBranches), sealedRun.BackupBranches)
 	}
-	if len(sealedRun.BackupBranches) != len(want) {
-		t.Fatalf("BackupBranches len = %d, want %d: %v", len(sealedRun.BackupBranches), len(want), sealedRun.BackupBranches)
-	}
-	for k, v := range want {
+	for _, k := range []string{"repo-a", "repo-b"} {
 		got, ok := sealedRun.BackupBranches[k]
 		if !ok {
 			t.Errorf("BackupBranches missing repo %q", k)
 			continue
 		}
-		if got != v {
-			t.Errorf("BackupBranches[%q] = %q, want %q", k, got, v)
+		if !strings.HasPrefix(got, "feature/recording-slug-pre-rewind-") {
+			t.Errorf("BackupBranches[%q] = %q, want timestamped backup", k, got)
 		}
 	}
 }
@@ -6299,9 +6127,10 @@ func TestRewindToPhase_PartialBranchFailureStillSeals(t *testing.T) {
 	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
 	skipShortFeatureRegression(t, "extended rewind partial backup failure regression")
 	mgr := newTestManager(t)
+	repoB := testutil.InitGitRepo(t)
 	f := newMultiRepoFeature(t, mgr, []feature.FeatureRepo{
-		{Name: "repo-a", Path: "/tmp/repo-a", WorktreePath: "/tmp/wt-a", BaseBranch: "main"},
-		{Name: "repo-b", Path: "/tmp/repo-b", WorktreePath: "/tmp/wt-b", BaseBranch: "main"},
+		{Name: "repo-a", Path: "/missing/repo-a", WorktreePath: "/missing/repo-a", BaseBranch: "main"},
+		{Name: "repo-b", Path: repoB, WorktreePath: repoB, BaseBranch: "main"},
 	})
 	if err := mgr.Store.Modify(f.ID, func(ff *feature.Feature) error {
 		ff.Slug = "partial-slug"
@@ -6311,15 +6140,6 @@ func TestRewindToPhase_PartialBranchFailureStillSeals(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("modify: %v", err)
 	}
-
-	mock := mocks.NewMockBranchOperator()
-	mock.CreateBackupBranchFn = func(worktreePath, slug string) (string, error) {
-		if worktreePath == "/tmp/wt-a" {
-			return "", errors.New("boom")
-		}
-		return "feature/" + slug + "-success", nil
-	}
-	mgr.Branches = mock
 
 	warns, _, err := mgr.RewindToPhase(f.ID, feature.PhasePlan)
 	if err != nil {
@@ -6347,8 +6167,8 @@ func TestRewindToPhase_PartialBranchFailureStillSeals(t *testing.T) {
 	if len(sealedRun.BackupBranches) != 1 {
 		t.Fatalf("BackupBranches len = %d, want 1 (repo-b only): %v", len(sealedRun.BackupBranches), sealedRun.BackupBranches)
 	}
-	if got := sealedRun.BackupBranches["repo-b"]; got != "feature/partial-slug-success" {
-		t.Errorf("BackupBranches[repo-b] = %q, want %q", got, "feature/partial-slug-success")
+	if got := sealedRun.BackupBranches["repo-b"]; !strings.HasPrefix(got, "feature/partial-slug-pre-rewind-") {
+		t.Errorf("BackupBranches[repo-b] = %q, want timestamped backup", got)
 	}
 	if _, ok := sealedRun.BackupBranches["repo-a"]; ok {
 		t.Errorf("BackupBranches must NOT contain repo-a (it failed)")
@@ -6710,7 +6530,6 @@ func TestRewindWithRequest_PartialCrashCleanupAllowsRetry(t *testing.T) {
 		t.Fatalf("modify: %v", err)
 	}
 	mgr.Worktrees = mocks.NewMockWorktreeOps()
-	mgr.Branches = nil
 	mgr.PRs = nil
 
 	request := feature.RewindRequest{TargetPhase: feature.PhaseImplement, RoadmapPhase: 2}

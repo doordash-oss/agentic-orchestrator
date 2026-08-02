@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
@@ -61,8 +62,11 @@ func (w *cascadeTestWorktrees) UpdateRef(_ string, ref, oldSHA, newSHA string) e
 	w.refs[ref] = newSHA
 	return nil
 }
-func (*cascadeTestWorktrees) CreateMergeCandidate(string, string, string, string) (*feature.MergeCandidateResult, error) {
+func (*cascadeTestWorktrees) CreateMergeCandidate(string, string, string, string) (*git.MergeCandidateResult, error) {
 	return nil, nil
+}
+func (*cascadeTestWorktrees) InspectCleanliness(string, int) (*git.CleanlinessReport, error) {
+	return &git.CleanlinessReport{}, nil
 }
 
 func TestDeleteCascadePreservesExternallyMovedRefAndRecords(t *testing.T) {

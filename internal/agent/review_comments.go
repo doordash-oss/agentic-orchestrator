@@ -22,12 +22,11 @@ import (
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/git"
-	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
 type ReviewCommentsData struct {
-	Mode     string                `json:"mode"` // "address_all" or "auto"
-	Comments []ports.ReviewComment `json:"comments"`
+	Mode     string              `json:"mode"` // "address_all" or "auto"
+	Comments []git.ReviewComment `json:"comments"`
 }
 
 // ReviewResolution represents the agent's disposition for a single comment.
@@ -54,7 +53,7 @@ func SaveReviewCommentsForRepo(stateDir string, f *feature.Feature, repoName str
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("creating review-comments dir: %w", err)
 	}
-	data.Comments = append([]ports.ReviewComment(nil), data.Comments...)
+	data.Comments = append([]git.ReviewComment(nil), data.Comments...)
 	git.SortReviewCommentsChronologically(data.Comments)
 	b, err := json.MarshalIndent(data, "", "  ")
 	if err != nil {

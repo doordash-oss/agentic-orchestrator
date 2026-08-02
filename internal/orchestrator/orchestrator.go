@@ -177,16 +177,11 @@ type Deps struct {
 	Lifecycle   ports.FeatureLifecycle
 	Store       ports.FeatureStore
 	Sessions    ports.SessionManager
-	Publisher   ports.Publisher
-	Rebaser     ports.RebaseOperator
+	Remote      RemoteOps
 	Worktrees   feature.WorktreeOps
 	CmdRunner   ports.CommandRunner
 	Recovery    ports.RecoveryOperator
 	PhaseRunner *agent.PhaseRunner // concrete — not behind a port interface
-	// Cleanliness inspects parent worktrees at child-integration preflight
-	// with the same staged/unstaged/untracked contract used at launch.
-	// Nil fails integration closed rather than silently skipping the check.
-	Cleanliness feature.CleanlinessOps
 }
 
 // PhaseStartOutcome enumerates the possible results of starting a phase.
@@ -262,7 +257,7 @@ type Orchestrator struct {
 
 	// featureRebaseControls serialize feature-level rebase continuation checks
 	// with Stop/interrupt per feature. The git operations themselves are not
-	// cancellable through the RebaseOperator port, so a stop request waits for
+	// cancellable, so a stop request waits for
 	// the currently claimed rebase/push operation on that feature to return
 	// before it lands in feature state.
 	featureRebaseControls sync.Map
@@ -340,6 +335,9 @@ func (o *Orchestrator) SetRunImplementationFn(fn func(
 
 // New creates an Orchestrator. The eventCh is a bounded buffer (256).
 func New(deps Deps, hooks Hooks) *Orchestrator {
+	if deps.Remote == nil {
+		deps.Remote = gitRemoteOps{}
+	}
 	o := &Orchestrator{
 		deps:    deps,
 		hooks:   hooks,

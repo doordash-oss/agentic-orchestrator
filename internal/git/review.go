@@ -23,19 +23,30 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
-// Comment type constants. Canonical values live in ports.
+// PR comment type constants.
 const (
-	CommentTypeReview     = ports.CommentTypeReview
-	CommentTypeIssue      = ports.CommentTypeIssue
-	CommentTypeReviewBody = ports.CommentTypeReviewBody
+	CommentTypeReview     = "review"
+	CommentTypeIssue      = "issue"
+	CommentTypeReviewBody = "review_body"
 )
 
-// ReviewComment aliases the canonical port type.
-type ReviewComment = ports.ReviewComment
+// ReviewComment is a GitHub PR comment (inline review or issue conversation).
+type ReviewComment struct {
+	ID   int    `json:"id"`
+	Path string `json:"path"`
+	Line int    `json:"line"`
+	Body string `json:"body"`
+	User struct {
+		Login string `json:"login"`
+	} `json:"user"`
+	CreatedAt string `json:"created_at"`
+	DiffHunk  string `json:"diff_hunk"`
+	InReplyTo int    `json:"in_reply_to_id"`
+	Type      string `json:"type"`
+	RepoName  string `json:"repo_name,omitempty"`
+}
 
 // ParsePRURL extracts owner, repo, and PR number from a GitHub PR URL.
 // Expected format: https://github.com/owner/repo/pull/123

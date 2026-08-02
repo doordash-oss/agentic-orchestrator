@@ -20,12 +20,14 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-
-	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 )
 
-// MergeCandidateResult aliases the feature-owned worktree seam result.
-type MergeCandidateResult = feature.MergeCandidateResult
+// MergeCandidateResult holds the outcome of creating a merge candidate without
+// advancing the parent ref.
+type MergeCandidateResult struct {
+	CandidateSHA  string
+	ConflictFiles []string
+}
 
 // CreateMergeCandidate creates an explicit two-parent no-fast-forward merge
 // commit in a temporary detached worktree at parentTip, merging childHead

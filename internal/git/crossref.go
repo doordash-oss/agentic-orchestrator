@@ -19,13 +19,14 @@ import (
 	"os/exec"
 	"path"
 	"strings"
-
-	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
-// CrossRefEntry aliases the canonical port type. Kept for source
-// compatibility with existing git-package callers.
-type CrossRefEntry = ports.CrossRefEntry
+// CrossRefEntry describes one repo's PR status for cross-reference rendering.
+type CrossRefEntry struct {
+	RepoName string
+	Branch   string
+	PRURL    string // empty = pending, "(failed)" = failed repo
+}
 
 // CrossRefSectionHeader is the markdown header for the cross-reference section.
 const CrossRefSectionHeader = "## Related PRs"

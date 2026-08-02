@@ -830,13 +830,9 @@ func TestScanRecovery_CallsCleanupOrphanRunsBeforeScan(t *testing.T) {
 func TestScanRecovery_ReconcilesAbandonedSetupBeforeScan(t *testing.T) {
 	store := feature.NewStore(t.TempDir())
 	cfg := config.NewDefault()
-	cfg.Repos["test-repo"] = config.RepoConfig{Path: "/repos/test-repo"}
+	repoPath := testutil.InitGitRepo(t)
+	cfg.Repos["test-repo"] = config.RepoConfig{Path: repoPath}
 	mgr := feature.NewManager(store, cfg)
-	branches := mocks.NewMockBranchOperator()
-	branches.DefaultBranchFn = func(repoPath string) (string, error) { return mainBranch, nil }
-	branches.HasOriginRemoteFn = func(repoPath string) (bool, error) { return false, nil }
-	branches.BranchNameFn = func(featureSlug string) string { return "feature/" + featureSlug }
-	mgr.Branches = branches
 
 	f, err := mgr.Create("Abandoned Setup", "stale setup", []string{"test-repo"}, cfg.Defaults.Models, "", "", nil, feature.CreateOptions{QueueSetup: true})
 	if err != nil {

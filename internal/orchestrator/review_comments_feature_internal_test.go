@@ -23,7 +23,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
-	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
+	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
 )
 
@@ -55,10 +55,10 @@ func TestAggregateReviewCommentTargetsIncludesEveryPRFeedbackType(t *testing.T) 
 	}
 	if err := agent.SaveReviewCommentsForRepo(stateDir, f, agenticRepoName, agent.ReviewCommentsData{
 		Mode: "auto",
-		Comments: []ports.ReviewComment{
-			{ID: 1, Type: ports.CommentTypeReview, CreatedAt: "2026-07-07T10:00:00Z"},
-			{ID: 2, Type: ports.CommentTypeIssue, CreatedAt: "2026-07-07T11:00:00Z"},
-			{ID: 3, Type: ports.CommentTypeReviewBody, CreatedAt: "2026-07-07T12:00:00Z"},
+		Comments: []git.ReviewComment{
+			{ID: 1, Type: git.CommentTypeReview, CreatedAt: "2026-07-07T10:00:00Z"},
+			{ID: 2, Type: git.CommentTypeIssue, CreatedAt: "2026-07-07T11:00:00Z"},
+			{ID: 3, Type: git.CommentTypeReviewBody, CreatedAt: "2026-07-07T12:00:00Z"},
 		},
 	}); err != nil {
 		t.Fatalf("save review comments: %v", err)
@@ -106,7 +106,7 @@ func TestHandleFeatureReviewCommentsDone_NeedUserInputPausesCycle(t *testing.T) 
 		[]agent.ReviewCommentsRepoTarget{{
 			RepoName: agenticRepoName,
 			PRURL:    agenticPRURL,
-			Comments: []ports.ReviewComment{{ID: 1}},
+			Comments: []git.ReviewComment{{ID: 1}},
 		}},
 		&agent.ReviewCommentsLoopResult{
 			FinalStatus:       "need_user_input",
@@ -151,7 +151,7 @@ func TestHandleFeatureReviewCommentsDone_NeedUserInputPersistenceErrorFailsCycle
 		[]agent.ReviewCommentsRepoTarget{{
 			RepoName: agenticRepoName,
 			PRURL:    agenticPRURL,
-			Comments: []ports.ReviewComment{{ID: 1}},
+			Comments: []git.ReviewComment{{ID: 1}},
 		}},
 		&agent.ReviewCommentsLoopResult{
 			FinalStatus:       "need_user_input",

@@ -26,6 +26,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/internal/orchestrator"
+	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
 )
 
@@ -120,6 +121,9 @@ func writeReviewResolutionsJSONForRepo(t *testing.T, stateDir, featureID, repoNa
 func TestCompleteRepoCycle_ReviewComments_RepliesToEveryPRFeedbackType(t *testing.T) {
 	stateDir := t.TempDir()
 	repoDir := initRepoCycleGitRepo(t)
+	if err := os.WriteFile(filepath.Join(repoDir, "review-fix.txt"), []byte("fixed\n"), 0o644); err != nil {
+		t.Fatalf("write review fix: %v", err)
+	}
 	ghLog := installRepoCycleFakeGH(t)
 	f := &feature.Feature{
 		ID:        "feat-rc-cycle",
@@ -167,17 +171,12 @@ func TestCompleteRepoCycle_ReviewComments_RepliesToEveryPRFeedbackType(t *testin
 		{CommentID: 33, Disposition: "addressed", Description: "Added coverage"},
 	})
 
-	pub := mocks.NewMockPublisher()
-	reb := mocks.NewMockRebaseOperator()
-	reb.PullRebaseFn = func(string, string) git.PullRebaseResult {
-		return git.PullRebaseResult{Outcome: git.PullRebaseSuccess}
-	}
+	pub := mocks.NewMockRemoteOps()
 	pr := &agent.PhaseRunner{StateDir: stateDir}
 	o := orchestrator.New(orchestrator.Deps{
 		Lifecycle:   lc,
 		Store:       fs,
-		Publisher:   pub,
-		Rebaser:     reb,
+		Remote:      pub,
 		PhaseRunner: pr,
 	}, orchestrator.Hooks{})
 
@@ -185,11 +184,11 @@ func TestCompleteRepoCycle_ReviewComments_RepliesToEveryPRFeedbackType(t *testin
 		t.Fatalf("CompleteRepoCycle: %v", err)
 	}
 
-	if got := countPublisherCalls(pub, "CommitAll"); got != 1 {
-		t.Errorf("CommitAll calls = %d, want 1", got)
-	}
-	if got := countRebaseCalls(reb, "PullRebase"); got != 1 {
-		t.Errorf("PullRebase calls = %d, want 1", got)
+	cmd := exec.Command("git", "log", "-1", "--format=%s")
+	cmd.Dir = repoDir
+	cmd.Env = testutil.GitTestEnv()
+	if out, err := cmd.Output(); err != nil || strings.TrimSpace(string(out)) != "Address review comments" {
+		t.Fatalf("latest commit = %q, err=%v", out, err)
 	}
 	if got := countPublisherCalls(pub, "Push"); got != 1 {
 		t.Errorf("Push calls = %d, want 1", got)
@@ -224,17 +223,7 @@ func TestCompleteRepoCycle_ReviewComments_RepliesToEveryPRFeedbackType(t *testin
 // Helpers — mirror MockCall accessors to index/count typed adapter calls.
 // ---------------------------------------------------------------------------
 
-func countPublisherCalls(m *mocks.MockPublisher, method string) int {
-	n := 0
-	for _, c := range m.Calls {
-		if c.Method == method {
-			n++
-		}
-	}
-	return n
-}
-
-func countRebaseCalls(m *mocks.MockRebaseOperator, method string) int {
+func countPublisherCalls(m *mocks.MockRemoteOps, method string) int {
 	n := 0
 	for _, c := range m.Calls {
 		if c.Method == method {
@@ -246,19 +235,8 @@ func countRebaseCalls(m *mocks.MockRebaseOperator, method string) int {
 
 func initRepoCycleGitRepo(t *testing.T) string {
 	t.Helper()
-	dir := t.TempDir()
-	for _, args := range [][]string{
-		{"init", "--initial-branch=main"},
-		{"config", "user.email", "test@example.com"},
-		{"config", "user.name", "Test"},
-		{"commit", "--allow-empty", "-m", "initial"},
-	} {
-		cmd := exec.Command("git", args...)
-		cmd.Dir = dir
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git %s: %s: %v", strings.Join(args, " "), strings.TrimSpace(string(out)), err)
-		}
-	}
+	dir, _ := testutil.InitPublishReadyGitRepo(t)
+	testutil.CreateBranch(t, dir, "feature/rc-cycle")
 	return dir
 }
 

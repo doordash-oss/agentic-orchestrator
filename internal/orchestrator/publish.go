@@ -24,7 +24,6 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/git"
-	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
 // readFileSafe reads a file and returns its contents trimmed of leading/trailing
@@ -37,8 +36,8 @@ func readFileSafe(path string) (string, error) {
 	return strings.TrimSpace(string(data)), nil
 }
 
-// publishRepo publishes a single repo's branch as a PR. It runs synchronously
-// and consumes port interfaces instead of package-level git helpers.
+// publishRepo publishes a single repo's branch as a PR. It runs synchronously,
+// using concrete git helpers locally and RemoteOps for remote operations.
 //
 // The caller is expected to have already verified IsPublishable + AutoPublish
 // conditions (startPublish for manual flows). Per-repo failures call
@@ -52,10 +51,6 @@ func (o *Orchestrator) publishRepo(featureID, repoName string) (string, error) {
 }
 
 func (o *Orchestrator) publishRepoWithOptions(featureID, repoName string, opts PublishOptions) (string, error) {
-	if o.deps.Publisher == nil {
-		return "", fmt.Errorf("publishRepo: Publisher port is nil")
-	}
-
 	f, err := o.deps.Lifecycle.Get(featureID)
 	if err != nil {
 		return "", fmt.Errorf("load feature: %w", err)
@@ -70,9 +65,8 @@ func (o *Orchestrator) publishRepoWithOptions(featureID, repoName string, opts P
 	branch := repoBranch(f, repo)
 
 	// Commit any uncommitted changes.
-	hasChanges, err := o.deps.Publisher.HasUncommittedChanges(workDir)
-	if err == nil && hasChanges {
-		if commitErr := o.deps.Publisher.CommitAll(workDir, f.Name); commitErr != nil {
+	if git.HasUncommittedChanges(workDir) {
+		if commitErr := git.CommitAll(workDir, f.Name); commitErr != nil {
 			_ = o.deps.Lifecycle.SetRepoPublishError(featureID, repoName, commitErr.Error())
 			return "", fmt.Errorf("commit failed: %w", commitErr)
 		}
@@ -104,10 +98,10 @@ func (o *Orchestrator) publishRepoWithOptions(featureID, repoName string, opts P
 	// post-review path and may follow a rebase cycle that rewrote the feature
 	// branch; rebasing that branch back onto origin/<branch> would undo the
 	// intended direction of sync.
-	if !leasePush && o.deps.Rebaser != nil {
-		res := o.deps.Rebaser.PullRebase(workDir, branch)
+	if !leasePush {
+		res := git.PullRebase(workDir, branch)
 		switch res.Outcome {
-		case ports.PullRebaseConflict:
+		case git.PullRebaseConflict:
 			errMsg := fmt.Sprintf("pull-rebase conflict in repo %s", repoName)
 			_ = o.deps.Lifecycle.SetRepoPublishError(featureID, repoName, errMsg)
 			return "", &PublishConflictError{
@@ -115,7 +109,7 @@ func (o *Orchestrator) publishRepoWithOptions(featureID, repoName string, opts P
 				Branch:       branch,
 				RebaseTarget: o.resolveRebaseTarget(f, &repo),
 			}
-		case ports.PullRebaseFailure:
+		case git.PullRebaseFailure:
 			reason := "pull-rebase failed"
 			if res.Err != nil {
 				reason = res.Err.Error()
@@ -127,16 +121,11 @@ func (o *Orchestrator) publishRepoWithOptions(featureID, repoName string, opts P
 
 	// Push branch.
 	if leasePush {
-		if o.deps.Rebaser == nil {
-			err := errors.New("rebase operator not configured for lease push")
-			_ = o.deps.Lifecycle.SetRepoPublishError(featureID, repoName, err.Error())
-			return "", err
-		}
-		if err := o.deps.Rebaser.ForcePush(workDir, branch); err != nil {
+		if err := o.deps.Remote.ForcePush(workDir, branch); err != nil {
 			_ = o.deps.Lifecycle.SetRepoPublishError(featureID, repoName, err.Error())
 			return "", fmt.Errorf("force push failed: %w", err)
 		}
-	} else if err := o.deps.Publisher.Push(workDir, branch); err != nil {
+	} else if err := o.deps.Remote.Push(workDir, branch); err != nil {
 		_ = o.deps.Lifecycle.SetRepoPublishError(featureID, repoName, err.Error())
 		return "", fmt.Errorf("push failed: %w", err)
 	}
@@ -146,7 +135,7 @@ func (o *Orchestrator) publishRepoWithOptions(featureID, repoName string, opts P
 	if repoPath == "" {
 		repoPath = workDir
 	}
-	prURL, err := o.deps.Publisher.CreatePR(repoPath, branch, title, body, repo.BaseBranch, f.Checkpoints.DraftPublish)
+	prURL, err := o.deps.Remote.CreatePR(repoPath, branch, title, body, repo.BaseBranch, f.Checkpoints.DraftPublish)
 	if err != nil {
 		_ = o.deps.Lifecycle.SetRepoPublishError(featureID, repoName, err.Error())
 		return "", fmt.Errorf("PR creation failed: %w", err)
@@ -259,11 +248,11 @@ func (o *Orchestrator) buildPRContext(f *feature.Feature, workDir, baseBranch st
 		FeatureDescription: f.Description,
 		Roadmap:            o.readPhaseArtifact(f, "plan"),
 	}
-	if o.deps.Publisher != nil && workDir != "" {
-		if bodies, err := o.deps.Publisher.CommitBodies(workDir, baseBranch); err == nil {
+	if workDir != "" {
+		if bodies, err := git.CommitBodies(workDir, baseBranch); err == nil {
 			prCtx.CommitBodies = bodies
 		}
-		if stat, err := o.deps.Publisher.DiffStat(workDir, baseBranch); err == nil {
+		if stat, err := git.DiffStat(workDir, baseBranch); err == nil {
 			prCtx.DiffStat = stat
 		}
 	}
@@ -310,8 +299,8 @@ func (o *Orchestrator) applyCrossRefs(f *feature.Feature, justPublishedRepo, jus
 
 // buildCrossRefEntries builds per-repo CrossRefEntry values for the current
 // feature state, substituting the just-published URL for its own repo.
-func buildCrossRefEntries(f *feature.Feature, justPublishedRepo, justPublishedURL string) []ports.CrossRefEntry {
-	var entries []ports.CrossRefEntry
+func buildCrossRefEntries(f *feature.Feature, justPublishedRepo, justPublishedURL string) []git.CrossRefEntry {
+	var entries []git.CrossRefEntry
 	for _, repo := range f.Repos {
 		// Untouched repos contributed no work in any phase — omit them from
 		// cross-reference sections so the just-published PR doesn't link to
@@ -322,7 +311,7 @@ func buildCrossRefEntries(f *feature.Feature, justPublishedRepo, justPublishedUR
 				continue
 			}
 		}
-		entry := ports.CrossRefEntry{
+		entry := git.CrossRefEntry{
 			RepoName: repo.Name,
 			Branch:   repo.Branch,
 		}

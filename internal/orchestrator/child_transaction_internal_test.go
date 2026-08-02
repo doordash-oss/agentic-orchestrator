@@ -157,18 +157,7 @@ func (fx *multiRepoTransactionFixture) orchestrator() *Orchestrator {
 	return New(Deps{
 		Lifecycle: fx.mgr,
 		Store:     fx.store,
-		Publisher: &git.PublishAdapter{},
 		Worktrees: fx.wm,
-		Cleanliness: feature.CleanlinessFunc(func(worktreePath string, maxPerCategory int) (*feature.RepoCleanliness, error) {
-			report, err := fx.wm.InspectCleanliness(worktreePath, maxPerCategory)
-			if report == nil || err != nil {
-				return nil, err
-			}
-			return &feature.RepoCleanliness{
-				Staged: report.Staged, Unstaged: report.Unstaged, Untracked: report.Untracked,
-				StagedTotal: report.StagedTotal, UnstagedTotal: report.UnstagedTotal, UntrackedTotal: report.UntrackedTotal,
-			}, nil
-		}),
 	}, Hooks{})
 }
 
@@ -762,18 +751,7 @@ func TestTransactionApplySyncFailureRollsBackAll(t *testing.T) {
 	applyO := New(Deps{
 		Lifecycle: fx.mgr,
 		Store:     fx.store,
-		Publisher: &git.PublishAdapter{},
 		Worktrees: resetWT,
-		Cleanliness: feature.CleanlinessFunc(func(worktreePath string, maxPerCategory int) (*feature.RepoCleanliness, error) {
-			report, err := fx.wm.InspectCleanliness(worktreePath, maxPerCategory)
-			if report == nil || err != nil {
-				return nil, err
-			}
-			return &feature.RepoCleanliness{
-				Staged: report.Staged, Unstaged: report.Unstaged, Untracked: report.Untracked,
-				StagedTotal: report.StagedTotal, UnstagedTotal: report.UnstagedTotal, UntrackedTotal: report.UntrackedTotal,
-			}, nil
-		}),
 	}, Hooks{})
 
 	if err := applyO.applyTransactionCandidates(child, parent, journal); err != nil {

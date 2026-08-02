@@ -36,50 +36,6 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
-// AdvanceRoadmapPhase advances the current roadmap phase.
-func (o *Orchestrator) AdvanceRoadmapPhase(featureID string) error {
-	return o.deps.Lifecycle.AdvanceRoadmapPhase(featureID)
-}
-
-// StartRoadmapPhaseImplementation transitions the feature to implementing for
-// the current roadmap phase.
-func (o *Orchestrator) StartRoadmapPhaseImplementation(featureID string) error {
-	return o.deps.Lifecycle.StartRoadmapPhaseImplementation(featureID)
-}
-
-// StartPlanning transitions the feature into StatusPlanning.
-func (o *Orchestrator) StartPlanning(featureID string) error {
-	return o.deps.Lifecycle.StartPlanning(featureID)
-}
-
-// CompletePlanning transitions the feature out of StatusPlanning into
-// StatusImplementReady.
-func (o *Orchestrator) CompletePlanning(featureID string) error {
-	return o.deps.Lifecycle.CompletePlanning(featureID)
-}
-
-// CompleteImplementation transitions the feature out of StatusImplementing
-// into StatusReviewPassed.
-func (o *Orchestrator) CompleteImplementation(featureID string) error {
-	return o.deps.Lifecycle.CompleteImplementation(featureID)
-}
-
-// MarkCodeReady transitions the feature into StatusCodeReady.
-func (o *Orchestrator) MarkCodeReady(featureID string) error {
-	return o.deps.Lifecycle.MarkCodeReady(featureID)
-}
-
-// NeedsPlanReview sets the StatusPlanNeedsReview gate.
-func (o *Orchestrator) NeedsPlanReview(featureID string) error {
-	return o.deps.Lifecycle.NeedsPlanReview(featureID)
-}
-
-// ClearAddressingReviews clears the AddressingReviews flag and resets the
-// Review cycle pipeline.
-func (o *Orchestrator) ClearAddressingReviews(featureID string) error {
-	return o.deps.Lifecycle.ClearAddressingReviews(featureID)
-}
-
 // SetTotalRoadmapPhases persists the phase count after the first planning
 // loop writes the roadmap artifact.
 func (o *Orchestrator) SetTotalRoadmapPhases(featureID string, count int) error {
@@ -234,8 +190,8 @@ func (o *Orchestrator) MarkPublished(featureID, prURL string) error {
 	return nil
 }
 
-// CommitRoadmapPhase commits the completed roadmap phase via the Publisher
-// port (git.CommitAll under the hood) across every repo in the feature.
+// CommitRoadmapPhase commits the completed roadmap phase across every repo in
+// the feature.
 // Errors on individual repos are swallowed — this is a best-effort pipeline
 // step whose failure should not block the lifecycle.
 func (o *Orchestrator) CommitRoadmapPhase(featureID string, phase int) error {
@@ -256,16 +212,9 @@ func (o *Orchestrator) CommitRoadmapPhase(featureID string, phase int) error {
 		if repo.WorktreePath == "" {
 			continue
 		}
-		_ = o.deps.Publisher.CommitAll(repo.WorktreePath, commitMsg)
+		_ = git.CommitAll(repo.WorktreePath, commitMsg)
 	}
 	return nil
-}
-
-// RemoveRepoCycle removes a repo cycle entry without firing failure events.
-// Callers use it when a cycle restart is aborted and the stale entry must be
-// cleared before another cycle can be selected.
-func (o *Orchestrator) RemoveRepoCycle(featureID, repoName string) error {
-	return o.deps.Lifecycle.RemoveRepoCycle(featureID, repoName)
 }
 
 // TransitionTo transitions a feature to a caller-selected status while keeping
@@ -307,14 +256,6 @@ func (o *Orchestrator) RetryPhase(featureID string) error {
 	}
 	repoNames := o.phaseDeclaredRepos(featureID)
 	return o.deps.Lifecycle.RetryPhase(featureID, repoNames)
-}
-
-// FailRepoImplementation marks one repo as failed. Phase-atomic failures
-// land via agent.AtomicPhaseStamp(PhaseOutcomeFailed); this delegate
-// survives for cycle-cleanup callers (a single-repo-cycle failure does not
-// fail the whole phase).
-func (o *Orchestrator) FailRepoImplementation(featureID, repoName, errMsg string) error {
-	return o.deps.Lifecycle.FailRepoImplementation(featureID, repoName, errMsg)
 }
 
 func (o *Orchestrator) RecordRebasePreflightFailure(featureID, repoName string, cause error) error {
@@ -382,11 +323,6 @@ func (o *Orchestrator) SetDesignReady(featureID string) error {
 		f.Status = feature.StatusDesignReady
 		return nil
 	})
-}
-
-// UpgradePipeline delegates to Lifecycle.UpgradePipeline for rewind flows.
-func (o *Orchestrator) UpgradePipeline(featureID string, profile feature.PipelineProfile) error {
-	return o.deps.Lifecycle.UpgradePipeline(featureID, profile)
 }
 
 // RewindToPhase delegates to Lifecycle.RewindToPhase. Returns the effective
@@ -531,35 +467,18 @@ func (o *Orchestrator) MergeFeatureLocal(featureID string) error {
 		}
 
 		// Commit any uncommitted changes before merging.
-		if o.deps.Publisher != nil {
-			hasChanges, hcErr := o.deps.Publisher.HasUncommittedChanges(repoPath)
-			if hcErr == nil && hasChanges {
-				if err := o.deps.Publisher.CommitAll(repoPath, "Final changes before merge"); err != nil {
-					return fmt.Errorf("%s: commit failed: %w", repo.Name, err)
-				}
+		if git.HasUncommittedChanges(repoPath) {
+			if err := git.CommitAll(repoPath, "Final changes before merge"); err != nil {
+				return fmt.Errorf("%s: commit failed: %w", repo.Name, err)
 			}
 		}
 
-		if o.deps.Rebaser != nil {
-			if err := o.deps.Rebaser.MergeFeatureBranch(repo.Path, branch, baseBranch); err != nil {
-				return fmt.Errorf("%s: %w", repo.Name, err)
-			}
+		if err := git.MergeFeatureBranch(repo.Path, branch, baseBranch); err != nil {
+			return fmt.Errorf("%s: %w", repo.Name, err)
 		}
 	}
 
 	return o.deps.Lifecycle.MarkDone(featureID)
-}
-
-// SetRepoPublished persists a successful per-repo publish without exposing
-// feature.Manager mutations to clients.
-func (o *Orchestrator) SetRepoPublished(featureID, repoName, prURL string) error {
-	return o.deps.Lifecycle.SetRepoPublished(featureID, repoName, prURL)
-}
-
-// SetRepoPublishError records a per-repo publish failure without changing the
-// repository status or exposing feature.Manager mutations to clients.
-func (o *Orchestrator) SetRepoPublishError(featureID, repoName, errMsg string) error {
-	return o.deps.Lifecycle.SetRepoPublishError(featureID, repoName, errMsg)
 }
 
 // RecordPublishUIFailure marks a single-repo feature failed when the publish
@@ -593,9 +512,6 @@ func (o *Orchestrator) CommitUncommittedForPublish(featureID string) error {
 	if err != nil {
 		return fmt.Errorf("load feature: %w", err)
 	}
-	if o.deps.Publisher == nil {
-		return nil
-	}
 	for i := range f.Repos {
 		repo := &f.Repos[i]
 		workDir := repo.WorktreePath
@@ -605,11 +521,10 @@ func (o *Orchestrator) CommitUncommittedForPublish(featureID string) error {
 		if workDir == "" {
 			continue
 		}
-		hasChanges, hcErr := o.deps.Publisher.HasUncommittedChanges(workDir)
-		if hcErr != nil || !hasChanges {
+		if !git.HasUncommittedChanges(workDir) {
 			continue
 		}
-		_ = o.deps.Publisher.CommitAll(workDir, f.Name)
+		_ = git.CommitAll(workDir, f.Name)
 	}
 	return nil
 }

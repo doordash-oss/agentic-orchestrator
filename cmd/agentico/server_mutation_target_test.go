@@ -31,6 +31,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/orchestrator"
 	"github.com/doordash-oss/agentic-orchestrator/internal/permission"
@@ -2288,10 +2289,10 @@ func TestServerMutationTargetReviewCommentsFetchPropagatesGHError(t *testing.T) 
 func TestServerMutationTargetReviewCommentsStartStagesConversationAndReviewBodyComments(t *testing.T) {
 	target, store, f, ghFixture := newReviewCommentsActionTarget(t)
 	issue := reviewComment(301, "conversation feedback")
-	issue.Type = ports.CommentTypeIssue
+	issue.Type = git.CommentTypeIssue
 	reviewBody := reviewComment(302, "review summary feedback")
-	reviewBody.Type = ports.CommentTypeReviewBody
-	writeMutationReviewComments(t, ghFixture, []ports.ReviewComment{issue, reviewBody})
+	reviewBody.Type = git.CommentTypeReviewBody
+	writeMutationReviewComments(t, ghFixture, []git.ReviewComment{issue, reviewBody})
 
 	result, err := target.StartReviewComments(f.ID, serverruntime.ReviewCommentsActionRequest{
 		Repo: testRepoAName,
@@ -2309,9 +2310,9 @@ func TestServerMutationTargetReviewCommentsStartStagesConversationAndReviewBodyC
 	}
 	if len(staged.Comments) != 2 ||
 		staged.Comments[0].ID != issue.ID ||
-		staged.Comments[0].Type != ports.CommentTypeIssue ||
+		staged.Comments[0].Type != git.CommentTypeIssue ||
 		staged.Comments[1].ID != reviewBody.ID ||
-		staged.Comments[1].Type != ports.CommentTypeReviewBody {
+		staged.Comments[1].Type != git.CommentTypeReviewBody {
 		t.Fatalf("staged review comments = %+v; want issue 301 and review_body 302", staged.Comments)
 	}
 }
@@ -2327,7 +2328,7 @@ func TestServerMutationTargetReviewCommentsStartUsesProvidedPreviewedComments(t 
 		Mode: reviewModeAuto,
 		Comments: []serverruntime.ReviewComment{{
 			ID:        202,
-			Type:      ports.CommentTypeReview,
+			Type:      git.CommentTypeReview,
 			RepoName:  testRepoAName,
 			Path:      "internal/server/read_model.go",
 			Line:      42,
@@ -2579,7 +2580,7 @@ func newReviewCommentsActionTarget(t *testing.T) (serverMutationTarget, *feature
 		t.Fatalf("Load prepared feature: %v", err)
 	}
 	ghFixture := installMutationFakeGH(t)
-	writeMutationReviewComments(t, ghFixture, []ports.ReviewComment{
+	writeMutationReviewComments(t, ghFixture, []git.ReviewComment{
 		reviewComment(100, "already addressed"),
 		reviewComment(101, "please fix"),
 	})
@@ -2660,15 +2661,15 @@ esac
 	return fixture
 }
 
-func writeMutationReviewComments(t *testing.T, fixture mutationGHFixture, comments []ports.ReviewComment) {
+func writeMutationReviewComments(t *testing.T, fixture mutationGHFixture, comments []git.ReviewComment) {
 	t.Helper()
-	var inline, issue []ports.ReviewComment
+	var inline, issue []git.ReviewComment
 	var reviews []map[string]any
 	for _, comment := range comments {
 		switch comment.Type {
-		case ports.CommentTypeIssue:
+		case git.CommentTypeIssue:
 			issue = append(issue, comment)
-		case ports.CommentTypeReviewBody:
+		case git.CommentTypeReviewBody:
 			reviews = append(reviews, map[string]any{
 				"id": comment.ID, "body": comment.Body, "user": comment.User,
 				"submitted_at": comment.CreatedAt,
@@ -2707,14 +2708,14 @@ func mutationGHCallCount(t *testing.T, logPath string) int {
 	return len(strings.Split(strings.TrimSpace(string(data)), "\n"))
 }
 
-func reviewComment(id int, body string) ports.ReviewComment {
-	comment := ports.ReviewComment{
+func reviewComment(id int, body string) git.ReviewComment {
+	comment := git.ReviewComment{
 		ID:        id,
 		Path:      "main.go",
 		Line:      12,
 		Body:      body,
 		CreatedAt: "2026-06-13T12:00:00Z",
-		Type:      ports.CommentTypeReview,
+		Type:      git.CommentTypeReview,
 	}
 	comment.User.Login = testReviewerLogin
 	return comment

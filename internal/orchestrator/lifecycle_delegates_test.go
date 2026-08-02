@@ -26,6 +26,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/orchestrator"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
+	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
 )
 
@@ -1129,9 +1130,20 @@ func TestOrchestrator_RestartPhase_ProceedsWhenSessionsInactive(t *testing.T) {
 
 func TestOrchestrator_MergeFeatureLocal_MarksDone(t *testing.T) {
 	notPublishable := false
-	repoPath := t.TempDir()
-	if out, err := exec.Command("git", "init", "--initial-branch=trunk", repoPath).CombinedOutput(); err != nil {
-		t.Fatalf("git init: %s: %v", strings.TrimSpace(string(out)), err)
+	repoPath := testutil.InitGitRepo(t)
+	rename := exec.Command("git", "branch", "-m", "trunk")
+	rename.Dir = repoPath
+	rename.Env = testutil.GitTestEnv()
+	if out, err := rename.CombinedOutput(); err != nil {
+		t.Fatalf("rename default branch: %s: %v", strings.TrimSpace(string(out)), err)
+	}
+	testutil.CreateBranch(t, repoPath, "feature/local-merge")
+	testutil.CommitFile(t, repoPath, "feature.txt", "merged\n", "feature change")
+	checkout := exec.Command("git", "checkout", "trunk")
+	checkout.Dir = repoPath
+	checkout.Env = testutil.GitTestEnv()
+	if out, err := checkout.CombinedOutput(); err != nil {
+		t.Fatalf("checkout trunk: %s: %v", out, err)
 	}
 	f := &feature.Feature{
 		ID:     "feat-local-merge",
@@ -1140,28 +1152,17 @@ func TestOrchestrator_MergeFeatureLocal_MarksDone(t *testing.T) {
 		Repos: []feature.FeatureRepo{{
 			Name:         "repo-a",
 			Path:         repoPath,
-			WorktreePath: "/worktree/a",
+			WorktreePath: repoPath,
 			Branch:       "feature/local-merge",
 			Publishable:  &notPublishable,
 		}},
 	}
 	lc := lifecycleForFeature(f)
 	fs := newFeatureStore(f)
-	pub := mocks.NewMockPublisher()
-	pub.HasUncommittedChangesFn = func(worktreePath string) (bool, error) { return true, nil }
-	pub.CommitAllFn = func(worktreePath, message string) error { return nil }
-	rebaser := mocks.NewMockRebaseOperator()
-	var mergedBase string
-	rebaser.MergeFeatureBranchFn = func(repoPath, featureBranch, baseBranch string) error {
-		mergedBase = baseBranch
-		return nil
-	}
 
 	o := orchestrator.New(orchestrator.Deps{
 		Lifecycle: lc,
 		Store:     fs,
-		Publisher: pub,
-		Rebaser:   rebaser,
 	}, orchestrator.Hooks{})
 
 	if err := o.MergeFeatureLocal("feat-local-merge"); err != nil {
@@ -1169,17 +1170,11 @@ func TestOrchestrator_MergeFeatureLocal_MarksDone(t *testing.T) {
 	}
 
 	assertLifecycleCall(t, lc, "MarkDone")
-	if got := len(rebaser.Calls); got != 1 {
-		t.Fatalf("rebaser calls = %d; want 1", got)
-	}
-	if rebaser.Calls[0].Method != "MergeFeatureBranch" {
-		t.Fatalf("rebaser call = %s; want MergeFeatureBranch", rebaser.Calls[0].Method)
-	}
-	if mergedBase != "trunk" {
-		t.Fatalf("MergeFeatureBranch base = %q; want concrete git default branch trunk", mergedBase)
-	}
-	if got := len(pub.Calls); got != 2 {
-		t.Fatalf("publisher calls = %d; want HasUncommittedChanges + CommitAll", got)
+	cmd := exec.Command("git", "log", "--format=%s", "-2")
+	cmd.Dir = repoPath
+	cmd.Env = testutil.GitTestEnv()
+	if out, err := cmd.Output(); err != nil || !strings.Contains(string(out), "feature change") {
+		t.Fatalf("merged history = %q, err=%v", out, err)
 	}
 }
 

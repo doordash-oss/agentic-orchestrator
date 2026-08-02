@@ -26,6 +26,7 @@ import (
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
@@ -864,18 +865,6 @@ func (o *Orchestrator) runRebasePublishPolicy(
 // auto-push applies. It handles its own failure bookkeeping; the caller
 // should return immediately when stop is true.
 func (o *Orchestrator) runRebaseAutoPushForcePush(featureID string, changed []HarnessRebaseRepoOutcome) (stop bool) {
-	if o.deps.Rebaser == nil {
-		cause := errors.New("rebase operator not configured for force push")
-		o.failChangedRebaseRepos(featureID, changed, cause)
-		_ = o.failFeatureRebaseCycleIfContinuing(featureID, cause)
-		return true
-	}
-	if o.deps.Publisher == nil {
-		cause := errors.New("publisher not configured for committing rebased repos")
-		o.failChangedRebaseRepos(featureID, changed, cause)
-		_ = o.failFeatureRebaseCycleIfContinuing(featureID, cause)
-		return true
-	}
 	for _, outcome := range changed {
 		if !outcome.Publishable {
 			continue
@@ -884,7 +873,7 @@ func (o *Orchestrator) runRebaseAutoPushForcePush(featureID string, changed []Ha
 			if err := o.commitRebaseOutcomeIfDirty(outcome); err != nil {
 				return err
 			}
-			return o.deps.Rebaser.ForcePush(outcome.WorktreePath, outcome.Branch)
+			return o.deps.Remote.ForcePush(outcome.WorktreePath, outcome.Branch)
 		})
 		switch {
 		case errors.Is(err, errFeatureRebaseStopped):
@@ -900,14 +889,10 @@ func (o *Orchestrator) runRebaseAutoPushForcePush(featureID string, changed []Ha
 }
 
 func (o *Orchestrator) commitRebaseOutcomeIfDirty(outcome HarnessRebaseRepoOutcome) error {
-	hasChanges, err := o.deps.Publisher.HasUncommittedChanges(outcome.WorktreePath)
-	if err != nil {
-		return fmt.Errorf("check uncommitted rebased repo %s: %w", outcome.RepoName, err)
-	}
-	if !hasChanges {
+	if !git.HasUncommittedChanges(outcome.WorktreePath) {
 		return nil
 	}
-	if err := o.deps.Publisher.CommitAll(outcome.WorktreePath, "Resolve rebase changes"); err != nil {
+	if err := git.CommitAll(outcome.WorktreePath, "Resolve rebase changes"); err != nil {
 		return fmt.Errorf("commit rebased repo %s: %w", outcome.RepoName, err)
 	}
 	return nil

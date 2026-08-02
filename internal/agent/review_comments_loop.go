@@ -72,7 +72,7 @@ type ReviewCommentsRepoTarget struct {
 	RepoName string
 	PRURL    string
 	Mode     string // "auto" or "address_all"
-	Comments []ports.ReviewComment
+	Comments []git.ReviewComment
 }
 
 // ReviewCommentsLoopConfig holds configuration for the unified
@@ -479,7 +479,7 @@ func BuildAggregatedReviewCommentsPlan(targets []ReviewCommentsRepoTarget, resol
 	// Sort targets by repo name for deterministic output.
 	sorted := append([]ReviewCommentsRepoTarget(nil), targets...)
 	for i := range sorted {
-		sorted[i].Comments = append([]ports.ReviewComment(nil), sorted[i].Comments...)
+		sorted[i].Comments = append([]git.ReviewComment(nil), sorted[i].Comments...)
 		git.SortReviewCommentsChronologically(sorted[i].Comments)
 	}
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i].RepoName < sorted[j].RepoName })

@@ -20,24 +20,25 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-
-	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
-// PullRebaseOutcome / PullRebaseResult alias the port-native types so the
-// canonical definition lives in ports; git keeps these aliases for source
-// compatibility with existing callers.
-type (
-	PullRebaseOutcome = ports.PullRebaseOutcome
-	PullRebaseResult  = ports.PullRebaseResult
-)
+// PullRebaseOutcome categorises the result of a PullRebase operation.
+type PullRebaseOutcome int
 
-// Re-exported PullRebase outcomes. Canonical constants live in ports.
 const (
-	PullRebaseSuccess  = ports.PullRebaseSuccess
-	PullRebaseConflict = ports.PullRebaseConflict
-	PullRebaseFailure  = ports.PullRebaseFailure
+	// PullRebaseSuccess means the rebase succeeded or was a no-op.
+	PullRebaseSuccess PullRebaseOutcome = iota
+	// PullRebaseConflict means the rebase encountered merge conflicts and was aborted.
+	PullRebaseConflict
+	// PullRebaseFailure means a non-conflict failure occurred.
+	PullRebaseFailure
 )
+
+// PullRebaseResult is the outcome and error from a PullRebase operation.
+type PullRebaseResult struct {
+	Outcome PullRebaseOutcome
+	Err     error
+}
 
 // PullRebase fetches from origin and rebases the current branch onto the
 // remote tracking branch. This syncs local commits on top of any remote
@@ -122,18 +123,24 @@ func Fetch(worktreePath string) error {
 	return nil
 }
 
-// RebaseOutcome / RebaseResult alias the port-native types.
-type (
-	RebaseOutcome = ports.RebaseOutcome
-	RebaseResult  = ports.RebaseResult
+// RebaseOutcome categorises the result of a RebaseOnto operation.
+type RebaseOutcome int
+
+const (
+	// RebaseSuccess means the rebase completed without conflicts.
+	RebaseSuccess RebaseOutcome = iota
+	// RebaseConflict means conflicts remain in the worktree.
+	RebaseConflict
+	// RebaseFailed means a non-conflict failure occurred and the rebase was aborted.
+	RebaseFailed
 )
 
-// Re-exported rebase outcomes. Canonical constants live in ports.
-const (
-	RebaseSuccess  = ports.RebaseSuccess
-	RebaseConflict = ports.RebaseConflict
-	RebaseFailed   = ports.RebaseFailed
-)
+// RebaseResult is the outcome, conflict files, and error from RebaseOnto.
+type RebaseResult struct {
+	Outcome       RebaseOutcome
+	ConflictFiles []string
+	Err           error
+}
 
 // RebaseOnto rebases the current branch onto the given target ref (e.g.
 // "origin/master"). Unlike Rebase, on conflict the rebase is NOT aborted —

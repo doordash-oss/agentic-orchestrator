@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
+	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 )
 
 // ChildKindRefactor identifies a child launched as a refactor of its parent.
@@ -120,39 +121,6 @@ func (e *ParentWorktreesDirtyError) Error() string {
 
 // DefaultDirtyPathLimit bounds each dirty-path category captured at launch.
 const DefaultDirtyPathLimit = 50
-
-// RepoCleanliness is the feature-package view of one repository's worktree
-// cleanliness. Wired from the git adapter via CleanlinessOps.
-type RepoCleanliness struct {
-	Staged         []string
-	Unstaged       []string
-	Untracked      []string
-	StagedTotal    int
-	UnstagedTotal  int
-	UntrackedTotal int
-}
-
-// Dirty reports whether any category carries at least one path.
-func (r *RepoCleanliness) Dirty() bool {
-	if r == nil {
-		return false
-	}
-	return r.StagedTotal > 0 || r.UnstagedTotal > 0 || r.UntrackedTotal > 0
-}
-
-// CleanlinessOps inspects a worktree for staged/unstaged/untracked changes.
-// Satisfied by the git adapter (wired in the orchestrator module).
-type CleanlinessOps interface {
-	InspectCleanliness(worktreePath string, maxPerCategory int) (*RepoCleanliness, error)
-}
-
-// CleanlinessFunc adapts a plain function to CleanlinessOps.
-type CleanlinessFunc func(worktreePath string, maxPerCategory int) (*RepoCleanliness, error)
-
-// InspectCleanliness implements CleanlinessOps.
-func (fn CleanlinessFunc) InspectCleanliness(worktreePath string, maxPerCategory int) (*RepoCleanliness, error) {
-	return fn(worktreePath, maxPerCategory)
-}
 
 // ChildRepoBase is the exact per-repository provenance captured at launch:
 // the full parent HEAD the child worktree must be created at, plus the
@@ -371,7 +339,7 @@ func (m *Manager) preflightRefactorParent(parent *Feature) ([]ChildRepoBase, err
 	// Dirty-worktree inspection is a mandatory safety check for child
 	// launches: a missing adapter must fail the launch explicitly, like
 	// exact-HEAD capture, not silently skip the check.
-	if m.Cleanliness == nil {
+	if m.Worktrees == nil {
 		return nil, fmt.Errorf("cleanliness inspection is not configured")
 	}
 	var bases []ChildRepoBase
@@ -381,7 +349,7 @@ func (m *Manager) preflightRefactorParent(parent *Feature) ([]ChildRepoBase, err
 		if path == "" {
 			path = repo.Path
 		}
-		report, err := m.Cleanliness.InspectCleanliness(path, DefaultDirtyPathLimit)
+		report, err := m.Worktrees.InspectCleanliness(path, DefaultDirtyPathLimit)
 		if err != nil {
 			return nil, fmt.Errorf("inspecting parent worktree %s: %w", repo.Name, err)
 		}
@@ -427,7 +395,7 @@ func (m *Manager) buildRefactorChild(parent *Feature, spec RefactorChildSpec, ba
 	id := generateID()
 	slug := Slugify(spec.Name)
 	workspaceSlug := WorkspaceSlug(slug, id)
-	branch := m.branchName(workspaceSlug)
+	branch := git.BranchName(workspaceSlug)
 
 	childRepos := make([]FeatureRepo, 0, len(parent.Repos))
 	for _, pr := range parent.Repos {

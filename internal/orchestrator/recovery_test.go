@@ -233,8 +233,8 @@ func TestScanRecovery_DropsSessionsThisProcessStillSupervises(t *testing.T) {
 	items[0].PIDFile.ManagerID = "feat-a-implement"
 	fake := &fakeRecoveryOp{Items: items}
 	sessions := mocks.NewMockSessionManager()
-	sessions.ActiveSessionsFn = func() []session.SessionView {
-		return []session.SessionView{mocks.NewMockSessionView("feat-a-implement", "feat-a")}
+	sessions.ActiveSessionsFn = func() []ports.SessionView {
+		return []ports.SessionView{mocks.NewMockSessionView("feat-a-implement", "feat-a")}
 	}
 
 	o := orchestrator.New(orchestrator.Deps{Recovery: fake, Sessions: sessions}, orchestrator.Hooks{})

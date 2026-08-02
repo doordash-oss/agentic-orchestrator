@@ -38,17 +38,24 @@ type childFakeWorktrees struct {
 func (f *childFakeWorktrees) Create(repoPath, featureSlug, repoName, startPoint string) (string, error) {
 	return "", nil
 }
-func (f *childFakeWorktrees) Remove(string, bool) error             { return nil }
-func (f *childFakeWorktrees) ResetToBase(string, string) error      { return nil }
-func (f *childFakeWorktrees) ResetToBaseLocal(string, string) error { return nil }
-func (f *childFakeWorktrees) ResetToCommit(string, string) error    { return nil }
-func (f *childFakeWorktrees) ExpectedPath(slug, repo string) string { return "" }
+func (f *childFakeWorktrees) Remove(string, bool) error              { return nil }
+func (f *childFakeWorktrees) RemoveRef(string, string, string) error { return nil }
+func (f *childFakeWorktrees) ResetToBase(string, string) error       { return nil }
+func (f *childFakeWorktrees) ResetToBaseLocal(string, string) error  { return nil }
+func (f *childFakeWorktrees) ResetToCommit(string, string) error     { return nil }
+func (f *childFakeWorktrees) ExpectedPath(slug, repo string) string  { return "" }
 func (f *childFakeWorktrees) CurrentHeadSHA(p string) (string, error) {
 	sha, ok := f.heads[p]
 	if !ok || sha == "" {
 		return "0000000000000000000000000000000000000000", nil
 	}
 	return sha, nil
+}
+func (f *childFakeWorktrees) CurrentBranch(string) string                    { return "" }
+func (f *childFakeWorktrees) RefSHA(string, string) (string, error)          { return "", nil }
+func (f *childFakeWorktrees) UpdateRef(string, string, string, string) error { return nil }
+func (f *childFakeWorktrees) CreateMergeCandidate(string, string, string, string) (*feature.MergeCandidateResult, error) {
+	return nil, nil
 }
 
 func newChildTestManager(t *testing.T, heads map[string]string, clean feature.CleanlinessOps) *feature.Manager {
@@ -644,13 +651,20 @@ func (f *reuseWorktrees) Create(repoPath, featureSlug, repoName, startPoint stri
 	f.created = true
 	return "", nil
 }
-func (f *reuseWorktrees) Remove(string, bool) error             { return nil }
-func (f *reuseWorktrees) ResetToBase(string, string) error      { return nil }
-func (f *reuseWorktrees) ResetToBaseLocal(string, string) error { return nil }
-func (f *reuseWorktrees) ResetToCommit(string, string) error    { return nil }
-func (f *reuseWorktrees) ExpectedPath(slug, repo string) string { return "" }
+func (f *reuseWorktrees) Remove(string, bool) error              { return nil }
+func (f *reuseWorktrees) RemoveRef(string, string, string) error { return nil }
+func (f *reuseWorktrees) ResetToBase(string, string) error       { return nil }
+func (f *reuseWorktrees) ResetToBaseLocal(string, string) error  { return nil }
+func (f *reuseWorktrees) ResetToCommit(string, string) error     { return nil }
+func (f *reuseWorktrees) ExpectedPath(slug, repo string) string  { return "" }
 func (f *reuseWorktrees) CurrentHeadSHA(p string) (string, error) {
 	return f.heads[p], nil
+}
+func (f *reuseWorktrees) CurrentBranch(string) string                    { return "" }
+func (f *reuseWorktrees) RefSHA(string, string) (string, error)          { return "", nil }
+func (f *reuseWorktrees) UpdateRef(string, string, string, string) error { return nil }
+func (f *reuseWorktrees) CreateMergeCandidate(string, string, string, string) (*feature.MergeCandidateResult, error) {
+	return nil, nil
 }
 
 func TestRunSetupValidatesExactBaseOnReuse(t *testing.T) {

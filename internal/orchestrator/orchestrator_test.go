@@ -48,7 +48,7 @@ var _ ports.FeatureLifecycle = (*feature.Manager)(nil)
 
 // These methods require session and adapter collaborators.
 var _ ports.SessionManager = (*session.Manager)(nil)
-var _ ports.WorktreeOperator = (*git.WorktreeManager)(nil)
+var _ feature.WorktreeOps = (*git.WorktreeManager)(nil)
 
 // ---------------------------------------------------------------------------
 // TestOrchestrator_CreateFeature

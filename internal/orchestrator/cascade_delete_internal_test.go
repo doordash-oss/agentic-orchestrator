@@ -45,16 +45,12 @@ func (w *cascadeTestWorktrees) Remove(string, bool) error {
 func (w *cascadeTestWorktrees) RemoveRef(string, string, string) error {
 	return w.Remove("", true)
 }
-func (*cascadeTestWorktrees) List() ([]ports.WorktreeInfo, error) { return nil, nil }
-func (*cascadeTestWorktrees) DetectStale([]string) ([]ports.WorktreeInfo, error) {
-	return nil, nil
-}
+func (*cascadeTestWorktrees) ExpectedPath(string, string) string    { return "" }
 func (*cascadeTestWorktrees) ResetToBase(string, string) error      { return nil }
 func (*cascadeTestWorktrees) ResetToBaseLocal(string, string) error { return nil }
 func (*cascadeTestWorktrees) ResetToCommit(string, string) error    { return nil }
-func (*cascadeTestWorktrees) HasUncommittedChanges(string) (bool, error) {
-	return false, nil
-}
+func (*cascadeTestWorktrees) CurrentHeadSHA(string) (string, error) { return "", nil }
+func (*cascadeTestWorktrees) CurrentBranch(string) string           { return "" }
 func (w *cascadeTestWorktrees) RefSHA(_ string, ref string) (string, error) {
 	return w.refs[ref], nil
 }
@@ -64,6 +60,9 @@ func (w *cascadeTestWorktrees) UpdateRef(_ string, ref, oldSHA, newSHA string) e
 	}
 	w.refs[ref] = newSHA
 	return nil
+}
+func (*cascadeTestWorktrees) CreateMergeCandidate(string, string, string, string) (*feature.MergeCandidateResult, error) {
+	return nil, nil
 }
 
 func TestDeleteCascadePreservesExternallyMovedRefAndRecords(t *testing.T) {

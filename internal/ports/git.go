@@ -45,15 +45,3 @@ type RebaseOperator interface {
 	// (rebase-merge or rebase-apply directory in the git dir).
 	RebaseInProgress(worktreePath string) (bool, error)
 }
-
-// WorktreeOperator abstracts git worktree lifecycle.
-type WorktreeOperator interface {
-	Create(repoPath, featureSlug, repoName, startPoint string) (worktreePath string, err error)
-	Remove(worktreePath string, deleteBranch bool) error
-	List() ([]WorktreeInfo, error)
-	DetectStale(activeFeatureIDs []string) ([]WorktreeInfo, error)
-	ResetToBase(worktreePath, baseBranch string) error
-	ResetToBaseLocal(worktreePath, baseBranch string) error
-	ResetToCommit(worktreePath, commitSHA string) error
-	HasUncommittedChanges(repoPath string) (bool, error)
-}

@@ -23,7 +23,6 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/internal/observe"
 	"github.com/doordash-oss/agentic-orchestrator/internal/permission"
-	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
 	"go.uber.org/fx"
 )
@@ -60,7 +59,7 @@ type worktreeManagerParams struct {
 // where lifecycle shutdown is registered; keeping it co-located with the
 // provider prevents double-registration in API and CLI wiring.
 var Module = fx.Module("orchestrator",
-	// Expose the git.WorktreeManager as the feature.WorktreeOps / ports.WorktreeOperator.
+	// Expose the git.WorktreeManager as the single feature.WorktreeOps seam.
 	// This is wired here (not in feature.Module) so feature does not import git.
 	fx.Provide(
 		func(p worktreeManagerParams) *git.WorktreeManager {
@@ -74,7 +73,6 @@ var Module = fx.Module("orchestrator",
 		func(wm *git.WorktreeManager) feature.WorktreeOps { return wm },
 		func(b *git.BranchAdapter) feature.BranchOps { return b },
 		func(p *git.PublishAdapter) feature.PRCloser { return p },
-		func(wm *git.WorktreeManager) ports.WorktreeOperator { return wm },
 		// Dirty-worktree preflight for refactor-child launches. The adapter
 		// converts git's report into the feature-package view so feature
 		// does not import internal/git.
@@ -114,7 +112,7 @@ var Module = fx.Module("orchestrator",
 			Sessions:    p.SessionManager, // *session.Manager satisfies ports.SessionManager
 			Publisher:   p.Publisher,      // *git.PublishAdapter satisfies ports.Publisher
 			Rebaser:     p.Rebaser,        // *git.RebaseAdapter satisfies ports.RebaseOperator
-			Worktrees:   wm,               // *git.WorktreeManager satisfies ports.WorktreeOperator + the structural child-merge/head-reader capabilities
+			Worktrees:   wm,               // *git.WorktreeManager satisfies the single feature.WorktreeOps seam
 			PhaseRunner: p.PhaseRunner,    // concrete *agent.PhaseRunner
 			Cleanliness: p.Cleanliness,    // child-integration preflight reuse of the launch cleanliness contract
 			// Reuse PhaseRunner.CommandRunner so KB freshness checks

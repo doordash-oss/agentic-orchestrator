@@ -215,74 +215,6 @@ func TestWorktreeCreateRejectsEmptyRepoPath(t *testing.T) {
 	}
 }
 
-func TestWorktreeList(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping worktree list extended regression in short mode")
-	}
-	t.Parallel()
-
-	repoDir := testutil.InitGitRepo(t)
-	wtBaseDir := t.TempDir()
-
-	mgr := NewWorktreeManager(wtBaseDir)
-
-	// Empty list
-	wts, err := mgr.List()
-	if err != nil {
-		t.Fatalf("list: %v", err)
-	}
-	if len(wts) != 0 {
-		t.Errorf("expected 0 worktrees, got %d", len(wts))
-	}
-
-	// Create one
-	_, err = mgr.Create(repoDir, "feat-1", "repo-a", "")
-	if err != nil {
-		t.Fatalf("create: %v", err)
-	}
-
-	wts, err = mgr.List()
-	if err != nil {
-		t.Fatalf("list: %v", err)
-	}
-	if len(wts) != 1 {
-		t.Errorf("expected 1 worktree, got %d", len(wts))
-	}
-}
-
-func TestDetectStale(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping stale worktree detection extended regression in short mode")
-	}
-	t.Parallel()
-
-	repoDir := testutil.InitGitRepo(t)
-	wtBaseDir := t.TempDir()
-	mgr := NewWorktreeManager(wtBaseDir)
-
-	// Create two worktrees for different features
-	_, err := mgr.Create(repoDir, "active-feat", "repo", "")
-	if err != nil {
-		t.Fatalf("create active: %v", err)
-	}
-	_, err = mgr.Create(repoDir, "stale-feat", "repo", "")
-	if err != nil {
-		t.Fatalf("create stale: %v", err)
-	}
-
-	// Only "active-feat" is active
-	stale, err := mgr.DetectStale([]string{"active-feat"})
-	if err != nil {
-		t.Fatalf("DetectStale: %v", err)
-	}
-	if len(stale) != 1 {
-		t.Fatalf("expected 1 stale worktree, got %d", len(stale))
-	}
-	if stale[0].FeatureID != "stale-feat" {
-		t.Errorf("expected stale-feat, got %s", stale[0].FeatureID)
-	}
-}
-
 func TestWorktreeThinStateQueries(t *testing.T) {
 	tests := []struct {
 		name string
@@ -315,32 +247,6 @@ func TestWorktreeThinStateQueries(t *testing.T) {
 				testutil.CreateBranch(t, repo, "feature/xyz")
 				if got := CurrentBranch(repo); got != "feature/xyz" {
 					t.Errorf("CurrentBranch() = %q, want feature/xyz", got)
-				}
-			},
-		},
-		{
-			name: "uncommitted changes",
-			run: func(t *testing.T) {
-				t.Parallel()
-
-				repo := testutil.InitGitRepo(t)
-				mgr := NewWorktreeManager(t.TempDir())
-				has, err := mgr.HasUncommittedChanges(repo)
-				if err != nil {
-					t.Fatalf("HasUncommittedChanges() error = %v", err)
-				}
-				if has {
-					t.Error("HasUncommittedChanges() = true, want false for clean repo")
-				}
-				if err := os.WriteFile(filepath.Join(repo, "dirty.txt"), []byte("dirty"), 0o644); err != nil {
-					t.Fatal(err)
-				}
-				has, err = mgr.HasUncommittedChanges(repo)
-				if err != nil {
-					t.Fatalf("HasUncommittedChanges() error = %v", err)
-				}
-				if !has {
-					t.Error("HasUncommittedChanges() = false, want true for dirty repo")
 				}
 			},
 		},

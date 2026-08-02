@@ -48,10 +48,6 @@ func (o *Orchestrator) cascadeOwnsRelationship(parentID string) (bool, error) {
 	return false, fmt.Errorf("loading cascade ownership for %s: %w", parentID, err)
 }
 
-type cascadeWorktreeRemover interface {
-	RemoveRef(worktreePath, mainRepo, branch string) error
-}
-
 // ReconcileCascadeDeletes resumes every discoverable durable delete intent.
 // Attention is a convergent outcome, not a startup failure; material journal
 // read/write failures fail recovery closed.
@@ -300,8 +296,7 @@ func (o *Orchestrator) classifyCascadeRefs(
 	if len(intent.Refs) == 0 {
 		return true, nil
 	}
-	cas, ok := o.deps.Worktrees.(refCASOperator)
-	if !ok {
+	if o.deps.Worktrees == nil {
 		intent.Status = feature.CascadeDeleteAttentionRequired
 		intent.Diagnostics = append(intent.Diagnostics, feature.CascadeDiagnostic{
 			Code: "ref_safety_unavailable", Message: "ref safety operations are not configured",
@@ -318,7 +313,7 @@ func (o *Orchestrator) classifyCascadeRefs(
 		ref.Safe = false
 		ref.Restored = false
 		ref.Diagnostic = ""
-		observed, err := cas.RefSHA(ref.RepoPath, ref.Ref)
+		observed, err := o.deps.Worktrees.RefSHA(ref.RepoPath, ref.Ref)
 		ref.ObservedSHA = observed
 		if err != nil {
 			safe = false
@@ -329,8 +324,8 @@ func (o *Orchestrator) classifyCascadeRefs(
 		case ref.AnchorSHA:
 			ref.Safe = true
 		case ref.CandidateSHA:
-			if err := cas.UpdateRef(ref.RepoPath, ref.Ref, ref.CandidateSHA, ref.AnchorSHA); err != nil {
-				latest, _ := cas.RefSHA(ref.RepoPath, ref.Ref)
+			if err := o.deps.Worktrees.UpdateRef(ref.RepoPath, ref.Ref, ref.CandidateSHA, ref.AnchorSHA); err != nil {
+				latest, _ := o.deps.Worktrees.RefSHA(ref.RepoPath, ref.Ref)
 				ref.ObservedSHA = latest
 				safe = false
 				o.addCascadeRefDiagnostic(intent, ref, "ref_restore_failed", err.Error())
@@ -396,18 +391,16 @@ func (o *Orchestrator) cleanupCascadeResources(
 				err = os.RemoveAll(resource.Path)
 			}
 		case feature.CascadeResourceWorktree:
-			if remover, ok := o.deps.Worktrees.(cascadeWorktreeRemover); ok {
-				err = remover.RemoveRef(resource.Path, resource.RepoPath, resource.Branch)
-			} else if o.deps.Worktrees != nil {
-				err = o.deps.Worktrees.Remove(resource.Path, true)
-			} else {
+			if o.deps.Worktrees == nil {
 				err = errors.New("worktree cleanup is not configured")
+			} else {
+				err = o.deps.Worktrees.RemoveRef(resource.Path, resource.RepoPath, resource.Branch)
 			}
 		case feature.CascadeResourceBranch:
-			if remover, ok := o.deps.Worktrees.(cascadeWorktreeRemover); ok {
-				err = remover.RemoveRef(worktreePathForResource(intent, resource), resource.RepoPath, resource.Branch)
+			if o.deps.Worktrees != nil {
+				err = o.deps.Worktrees.RemoveRef(worktreePathForResource(intent, resource), resource.RepoPath, resource.Branch)
 			} else if worktreeResourceDone(intent, resource) {
-				// Standard Remove(path,true) already removed the paired branch.
+				// The paired worktree cleanup already removed the branch.
 			} else {
 				err = errors.New("durable branch cleanup is not configured")
 			}

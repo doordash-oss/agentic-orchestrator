@@ -100,12 +100,3 @@ type ReviewComment struct {
 	Type      string `json:"type"`
 	RepoName  string `json:"repo_name,omitempty"`
 }
-
-// WorktreeInfo describes one discovered worktree.
-type WorktreeInfo struct {
-	Path      string
-	Branch    string
-	FeatureID string
-	RepoName  string
-	RepoPath  string
-}

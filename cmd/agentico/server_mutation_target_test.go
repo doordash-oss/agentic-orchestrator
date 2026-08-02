@@ -1269,7 +1269,7 @@ func TestServerMutationTargetCreateFeatureQueuesSetupWithoutWorktreeSideEffects(
 	}
 	store := feature.NewStore(stateDir)
 	manager := feature.NewManager(store, cfg)
-	worktrees := mocks.NewMockWorktreeOperator()
+	worktrees := mocks.NewMockWorktreeOps()
 	worktrees.CreateFn = func(repoPath, featureSlug, repoName, startPoint string) (string, error) {
 		return "", errors.New("worktree creation should be deferred to setup")
 	}
@@ -1307,7 +1307,7 @@ func TestServerMutationTargetSetupFeatureCompletesToStartableStateWithoutStartin
 	cfg.Repos[testRepoAName] = config.RepoConfig{Path: filepath.Join(runtimeDir, testRepoAName)}
 	store := feature.NewStore(filepath.Join(runtimeDir, "features"))
 	manager := feature.NewManager(store, cfg)
-	worktrees := mocks.NewMockWorktreeOperator()
+	worktrees := mocks.NewMockWorktreeOps()
 	worktrees.CreateFn = func(repoPath, featureSlug, repoName, startPoint string) (string, error) {
 		return filepath.Join(runtimeDir, "worktrees", featureSlug, repoName), nil
 	}
@@ -1367,7 +1367,7 @@ func TestServerMutationTargetSetupFeatureRetriesOnlyUnfinishedWorkWithoutStartin
 	manager := feature.NewManager(store, cfg)
 	failRepoB := true
 	creates := 0
-	worktrees := mocks.NewMockWorktreeOperator()
+	worktrees := mocks.NewMockWorktreeOps()
 	worktrees.CreateFn = func(repoPath, featureSlug, repoName, startPoint string) (string, error) {
 		creates++
 		if repoName == testRepoBName && failRepoB {
@@ -1443,7 +1443,7 @@ func TestServerMutationTargetRetryFeatureRoutesSetupFailureToSetupRetry(t *testi
 	store := feature.NewStore(filepath.Join(runtimeDir, "features"))
 	manager := feature.NewManager(store, cfg)
 	failWorktree := true
-	worktrees := mocks.NewMockWorktreeOperator()
+	worktrees := mocks.NewMockWorktreeOps()
 	worktrees.CreateFn = func(repoPath, featureSlug, repoName, startPoint string) (string, error) {
 		if failWorktree {
 			return "", errors.New("repo checkout missing")
@@ -2431,8 +2431,9 @@ func TestServerMutationTargetCleanupAndDeleteActionsMutateFeatureState(t *testin
 		if result.FeatureID != f.ID || result.Target != cleanupTargetWorktrees || result.Result != resultCleaned {
 			t.Fatalf("CleanupFeature(worktrees) result = %+v; want cleaned worktrees", result)
 		}
-		if len(worktrees.removeCalls) != 1 || worktrees.removeCalls[0].path != testRepoAWorktreePath || worktrees.removeCalls[0].deleteBranch {
-			t.Fatalf("worktree remove calls = %+v; want one non-branch-deleting cleanup", worktrees.removeCalls)
+		calls := mockCallsByMethod(worktrees.Calls, "Remove")
+		if len(calls) != 1 || calls[0].Args[0] != testRepoAWorktreePath || calls[0].Args[1] != false {
+			t.Fatalf("worktree remove calls = %+v; want one non-branch-deleting cleanup", calls)
 		}
 		updated, err := store.Load(f.ID)
 		if err != nil {
@@ -2453,8 +2454,9 @@ func TestServerMutationTargetCleanupAndDeleteActionsMutateFeatureState(t *testin
 		if result.FeatureID != f.ID || result.Status != feature.CascadeDeleteCompleted {
 			t.Fatalf("DeleteFeature() result = %+v; want deleted feature", result)
 		}
-		if len(worktrees.removeCalls) != 1 || worktrees.removeCalls[0].path != testRepoAWorktreePath || !worktrees.removeCalls[0].deleteBranch {
-			t.Fatalf("worktree remove calls = %+v; want one branch-deleting delete", worktrees.removeCalls)
+		calls := mockCallsByMethod(worktrees.Calls, "RemoveRef")
+		if len(calls) != 2 || calls[0].Args[0] != testRepoAWorktreePath || calls[1].Args[0] != testRepoAWorktreePath {
+			t.Fatalf("worktree RemoveRef calls = %+v; want durable worktree and branch cleanup", calls)
 		}
 		if _, err := store.Load(f.ID); err == nil {
 			t.Fatalf("Load deleted feature error = nil; want missing feature")
@@ -2585,14 +2587,14 @@ func newReviewCommentsActionTarget(t *testing.T) (serverMutationTarget, *feature
 	return serverMutationTarget{orch: orch, store: store}, store, loaded, ghFixture
 }
 
-func newCleanupActionTarget(t *testing.T) (serverMutationTarget, *feature.Store, *feature.Feature, *fakeWorktreeOperator) {
+func newCleanupActionTarget(t *testing.T) (serverMutationTarget, *feature.Store, *feature.Feature, *mocks.MockWorktreeOps) {
 	t.Helper()
 	runtimeDir := t.TempDir()
 	cfg := config.NewDefault()
 	cfg.Repos[testRepoAName] = config.RepoConfig{Path: filepath.Join(runtimeDir, testRepoAName)}
 	store := feature.NewStore(filepath.Join(runtimeDir, "features"))
 	manager := feature.NewManager(store, cfg)
-	worktrees := &fakeWorktreeOperator{}
+	worktrees := mocks.NewMockWorktreeOps()
 	manager.Worktrees = worktrees
 	f, err := manager.Create("cleanup via REST", "desc", []string{testRepoAName}, cfg.Defaults.Models, "", "", nil)
 	if err != nil {
@@ -2718,44 +2720,14 @@ func reviewComment(id int, body string) ports.ReviewComment {
 	return comment
 }
 
-type fakeWorktreeOperator struct {
-	removeCalls []fakeWorktreeRemoveCall
-}
-
-type fakeWorktreeRemoveCall struct {
-	path         string
-	deleteBranch bool
-}
-
-func (f *fakeWorktreeOperator) Create(string, string, string, string) (string, error) {
-	return "", nil
-}
-
-func (f *fakeWorktreeOperator) Remove(path string, deleteBranch bool) error {
-	f.removeCalls = append(f.removeCalls, fakeWorktreeRemoveCall{path: path, deleteBranch: deleteBranch})
-	return nil
-}
-
-func (f *fakeWorktreeOperator) List() ([]ports.WorktreeInfo, error) { return nil, nil }
-
-func (f *fakeWorktreeOperator) DetectStale([]string) ([]ports.WorktreeInfo, error) {
-	return nil, nil
-}
-
-func (f *fakeWorktreeOperator) ResetToBase(string, string) error {
-	return nil
-}
-
-func (f *fakeWorktreeOperator) ResetToBaseLocal(string, string) error {
-	return nil
-}
-
-func (f *fakeWorktreeOperator) ResetToCommit(string, string) error {
-	return nil
-}
-
-func (f *fakeWorktreeOperator) HasUncommittedChanges(string) (bool, error) {
-	return false, nil
+func mockCallsByMethod(calls []mocks.MockCall, method string) []mocks.MockCall {
+	var matching []mocks.MockCall
+	for _, call := range calls {
+		if call.Method == method {
+			matching = append(matching, call)
+		}
+	}
+	return matching
 }
 
 func mutationTargetOrchestrator(sessions ports.SessionManager) *orchestrator.Orchestrator {

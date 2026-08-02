@@ -27,7 +27,7 @@ import (
 const setupOnlyRepoA = "repo-a"
 const setupOnlyRepoB = "repo-b"
 
-func newSetupOnlyFixture(t *testing.T) (*feature.Store, *feature.Manager, *mocks.MockWorktreeOperator, string) {
+func newSetupOnlyFixture(t *testing.T) (*feature.Store, *feature.Manager, *mocks.MockWorktreeOps, string) {
 	t.Helper()
 	runtimeDir := t.TempDir()
 	cfg := config.NewDefault()
@@ -35,12 +35,12 @@ func newSetupOnlyFixture(t *testing.T) (*feature.Store, *feature.Manager, *mocks
 	cfg.Repos[setupOnlyRepoB] = config.RepoConfig{Path: filepath.Join(runtimeDir, setupOnlyRepoB)}
 	store := feature.NewStore(filepath.Join(runtimeDir, "features"))
 	manager := feature.NewManager(store, cfg)
-	worktrees := mocks.NewMockWorktreeOperator()
+	worktrees := mocks.NewMockWorktreeOps()
 	manager.Worktrees = worktrees
 	return store, manager, worktrees, runtimeDir
 }
 
-func countWorktreeCreates(worktrees *mocks.MockWorktreeOperator) int {
+func countWorktreeCreates(worktrees *mocks.MockWorktreeOps) int {
 	count := 0
 	for _, call := range worktrees.Calls {
 		if call.Method == "Create" {

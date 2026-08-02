@@ -37,13 +37,6 @@ import (
 // failed push or pull request never reopens the child or undoes the local
 // merge.
 
-// childHeadReader is the exact-HEAD lookup integration requires; it is
-// satisfied by *git.WorktreeManager and asserted structurally so tests can
-// substitute fakes without widening ports.WorktreeOperator.
-type childHeadReader interface {
-	CurrentHeadSHA(worktreePath string) (string, error)
-}
-
 // checkChildExecution is the fail-closed capability gate for child feature
 // execution. Queued, setting-up, and failed-setup children stay reachable
 // only through RunSetup / RetrySetup; setup-complete children must satisfy
@@ -353,8 +346,7 @@ func (o *Orchestrator) closeTransactionAfterApply(childID, parentID string) erro
 	}
 
 	// Confirm every parent ref is at its candidate commit.
-	cas, ok := o.deps.Worktrees.(refCASOperator)
-	if !ok {
+	if o.deps.Worktrees == nil {
 		return fmt.Errorf("transaction: ref CAS operations are not configured")
 	}
 	parent, err := o.deps.Lifecycle.Get(parentID)
@@ -368,7 +360,7 @@ func (o *Orchestrator) closeTransactionAfterApply(childID, parentID string) erro
 			return fmt.Errorf("parent no longer has repository %s during closure", entry.Repo)
 		}
 		ref := "refs/heads/" + entry.ParentBranch
-		current, err := cas.RefSHA(parentRepo.Path, ref)
+		current, err := o.deps.Worktrees.RefSHA(parentRepo.Path, ref)
 		if err != nil {
 			return fmt.Errorf("confirming ref %s during closure: %w", ref, err)
 		}
@@ -534,13 +526,6 @@ func (o *Orchestrator) recordTransactionCleanupWarning(childID, repoName, warnin
 	})
 }
 
-// worktreeRefRemover carries the recorded main-repository and branch
-// identity into cleanup, so a retried removal still reaches the ephemeral
-// branch even after an earlier partial removal deregistered the worktree.
-type worktreeRefRemover interface {
-	RemoveRef(worktreePath, mainRepo, branch string) error
-}
-
 // cleanupChildResourcesPerRepo removes the disposable child worktree and
 // ephemeral branch for every repository independently. Each repo's cleanup
 // is attempted separately; a failure for one repo records a warning without
@@ -560,12 +545,7 @@ func (o *Orchestrator) cleanupChildResourcesPerRepo(child *feature.Feature) map[
 		if repo.WorktreePath == "" {
 			continue
 		}
-		var err error
-		if rr, ok := o.deps.Worktrees.(worktreeRefRemover); ok {
-			err = rr.RemoveRef(repo.WorktreePath, repo.Path, repo.Branch)
-		} else {
-			err = o.deps.Worktrees.Remove(repo.WorktreePath, true)
-		}
+		err := o.deps.Worktrees.RemoveRef(repo.WorktreePath, repo.Path, repo.Branch)
 		if err != nil {
 			warnings[repo.Name] = fmt.Sprintf("removing child worktree %s: %v", repo.WorktreePath, err)
 			continue
@@ -584,14 +564,12 @@ func (o *Orchestrator) cleanupChildResourcesPerRepo(child *feature.Feature) map[
 	return warnings
 }
 
-// childHeadSHA reads the full HEAD of a worktree through the structural
-// head-reader capability; absent capability fails closed.
+// childHeadSHA reads the full HEAD of a worktree through the worktree seam.
 func (o *Orchestrator) childHeadSHA(worktreePath string) (string, error) {
-	reader, ok := o.deps.Worktrees.(childHeadReader)
-	if !ok {
+	if o.deps.Worktrees == nil {
 		return "", fmt.Errorf("child integration: exact head capture is not configured")
 	}
-	return reader.CurrentHeadSHA(worktreePath)
+	return o.deps.Worktrees.CurrentHeadSHA(worktreePath)
 }
 
 // closedChildDiffSetter is the store capability that persists the preserved

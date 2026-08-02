@@ -238,7 +238,7 @@ func TestManagerCreateWithWorktree(t *testing.T) {
 	}
 
 	mgr := feature.NewManager(store, cfg)
-	mgr.Worktrees = &mocks.MockWorktreeOperator{
+	mgr.Worktrees = &mocks.MockWorktreeOps{
 		CreateFn: func(repoPath, featureSlug, repoName, startPoint string) (string, error) {
 			return filepath.Join(wtDir, featureSlug, repoName), nil
 		},
@@ -282,7 +282,7 @@ func TestManagerCreateQueuesActiveSetupWithoutWorktreeSideEffects(t *testing.T) 
 
 	mgr := feature.NewManager(store, cfg)
 	mgr.Branches = newMockBranches(false)
-	worktrees := mocks.NewMockWorktreeOperator()
+	worktrees := mocks.NewMockWorktreeOps()
 	worktrees.CreateFn = func(repoPath, featureSlug, repoName, startPoint string) (string, error) {
 		return "", fmt.Errorf("worktree side effect should not run while setup is only queued")
 	}
@@ -350,7 +350,7 @@ func TestManagerCreateQueuedSetupDeduplicatesUpstreamBranchBeforeSave(t *testing
 		return false, nil
 	}
 	mgr.Branches = branches
-	worktrees := mocks.NewMockWorktreeOperator()
+	worktrees := mocks.NewMockWorktreeOps()
 	worktrees.CreateFn = func(repoPath, featureSlug, repoName, startPoint string) (string, error) {
 		return "", fmt.Errorf("worktree side effect should not run while setup is only queued")
 	}
@@ -437,7 +437,7 @@ func TestManagerRunSetupCompletesQueuedSetupAndCopiesAssets(t *testing.T) {
 	cfg.Repos["repo-b"] = config.RepoConfig{Path: "/repos/repo-b"}
 	mgr := feature.NewManager(store, cfg)
 	mgr.Branches = newMockBranches(false)
-	worktrees := mocks.NewMockWorktreeOperator()
+	worktrees := mocks.NewMockWorktreeOps()
 	worktrees.CreateFn = func(repoPath, featureSlug, repoName, startPoint string) (string, error) {
 		return filepath.Join(wtDir, featureSlug, repoName), nil
 	}
@@ -542,7 +542,7 @@ func TestManagerRunSetupCompletesQueuedSetupAndCopiesAssets(t *testing.T) {
 
 func TestManagerRunSetupFailurePersistsDiagnosticsAndLog(t *testing.T) {
 	mgr := newTestManager(t)
-	worktrees := mocks.NewMockWorktreeOperator()
+	worktrees := mocks.NewMockWorktreeOps()
 	worktrees.CreateFn = func(repoPath, featureSlug, repoName, startPoint string) (string, error) {
 		return "", errors.New("git worktree add failed: branch exists")
 	}
@@ -590,7 +590,7 @@ func TestManagerRunSetupFailurePersistsDiagnosticsAndLog(t *testing.T) {
 func TestManagerRunSetupImageFailurePreservesCompletedWorktree(t *testing.T) {
 	wtDir := t.TempDir()
 	mgr := newTestManager(t)
-	mgr.Worktrees = &mocks.MockWorktreeOperator{
+	mgr.Worktrees = &mocks.MockWorktreeOps{
 		CreateFn: func(repoPath, featureSlug, repoName, startPoint string) (string, error) {
 			return filepath.Join(wtDir, featureSlug, repoName), nil
 		},
@@ -633,7 +633,7 @@ func TestManagerRetrySetupSkipsDoneTasksAndCompletesOriginalRun(t *testing.T) {
 	cfg.Repos["repo-b"] = config.RepoConfig{Path: "/repos/repo-b"}
 	mgr := feature.NewManager(store, cfg)
 	mgr.Branches = newMockBranches(false)
-	worktrees := mocks.NewMockWorktreeOperator()
+	worktrees := mocks.NewMockWorktreeOps()
 	failRepoB := true
 	worktrees.CreateFn = func(repoPath, featureSlug, repoName, startPoint string) (string, error) {
 		if repoName == "repo-b" && failRepoB {
@@ -703,7 +703,7 @@ func TestManagerRetrySetupRefusesDuplicateActiveRunner(t *testing.T) {
 	wtDir := t.TempDir()
 	started := make(chan struct{})
 	release := make(chan struct{})
-	mgr.Worktrees = &mocks.MockWorktreeOperator{
+	mgr.Worktrees = &mocks.MockWorktreeOps{
 		CreateFn: func(repoPath, featureSlug, repoName, startPoint string) (string, error) {
 			close(started)
 			<-release
@@ -735,7 +735,7 @@ func TestManagerRetrySetupFailsOnExpectedWorktreeBranchMismatch(t *testing.T) {
 	if err := os.MkdirAll(conflictPath, 0o755); err != nil {
 		t.Fatalf("mkdir conflict path: %v", err)
 	}
-	worktrees := mocks.NewMockWorktreeOperator()
+	worktrees := mocks.NewMockWorktreeOps()
 	worktrees.CreateFn = func(repoPath, featureSlug, repoName, startPoint string) (string, error) {
 		t.Fatalf("Create called despite persisted path conflict")
 		return "", nil
@@ -788,7 +788,7 @@ func TestManagerRetrySetupReusesExpectedWorktreeWhenTaskPathWasNotPersisted(t *t
 	if err := os.MkdirAll(expectedPath, 0o755); err != nil {
 		t.Fatalf("mkdir expected path: %v", err)
 	}
-	worktrees := mocks.NewMockWorktreeOperator()
+	worktrees := mocks.NewMockWorktreeOps()
 	worktrees.ExpectedPathFn = func(featureSlug, repoName string) string {
 		return expectedPath
 	}
@@ -856,7 +856,7 @@ func TestManagerRetrySetupReusesExpectedWorktreeWhenTaskPathWasNotPersisted(t *t
 func TestManagerDeleteRemovesSetupTaskWorktreePaths(t *testing.T) {
 	mgr := newTestManager(t)
 	removed := make(map[string]bool)
-	mgr.Worktrees = &mocks.MockWorktreeOperator{
+	mgr.Worktrees = &mocks.MockWorktreeOps{
 		RemoveFn: func(worktreePath string, deleteBranch bool) error {
 			if !deleteBranch {
 				t.Fatalf("deleteBranch = false for %s, want true", worktreePath)
@@ -1491,7 +1491,7 @@ func TestManagerCreateDeduplicatesUpstreamBranch(t *testing.T) {
 	cfg.Repos["test-repo"] = config.RepoConfig{Path: "/repos/test-repo"}
 
 	mgr := feature.NewManager(store, cfg)
-	mgr.Worktrees = &mocks.MockWorktreeOperator{
+	mgr.Worktrees = &mocks.MockWorktreeOps{
 		CreateFn: func(repoPath, featureSlug, repoName, startPoint string) (string, error) {
 			return filepath.Join(wtDir, featureSlug, repoName), nil
 		},
@@ -1540,7 +1540,7 @@ func TestManagerCreateNoSuffixWhenNoUpstreamConflict(t *testing.T) {
 	cfg.Repos["test-repo"] = config.RepoConfig{Path: "/repos/test-repo"}
 
 	mgr := feature.NewManager(store, cfg)
-	mgr.Worktrees = &mocks.MockWorktreeOperator{
+	mgr.Worktrees = &mocks.MockWorktreeOps{
 		CreateFn: func(repoPath, featureSlug, repoName, startPoint string) (string, error) {
 			return filepath.Join(wtDir, featureSlug, repoName), nil
 		},
@@ -4797,7 +4797,7 @@ func TestManagerCreateSkipsBranchCheckForUnpublishedRepos(t *testing.T) {
 	cfg := config.NewDefault()
 	cfg.Repos["local-repo"] = config.RepoConfig{Path: "/repos/local-repo"}
 	mgr := feature.NewManager(store, cfg)
-	mgr.Worktrees = &mocks.MockWorktreeOperator{
+	mgr.Worktrees = &mocks.MockWorktreeOps{
 		CreateFn: func(repoPath, featureSlug, repoName, startPoint string) (string, error) {
 			return filepath.Join(t.TempDir(), featureSlug, repoName), nil
 		},
@@ -5599,7 +5599,7 @@ func TestRewindWithRequest_RejectsInvalidPartialBeforeSideEffects(t *testing.T) 
 			}
 			branches := mocks.NewMockBranchOperator()
 			prs := mocks.NewMockPublisher()
-			worktrees := mocks.NewMockWorktreeOperator()
+			worktrees := mocks.NewMockWorktreeOps()
 			mgr.Branches = branches
 			mgr.PRs = prs
 			mgr.Worktrees = worktrees
@@ -5645,7 +5645,7 @@ func TestRewindWithRequest_Phase1PartialUsesBaseResetWithoutAnchor(t *testing.T)
 	}); err != nil {
 		t.Fatalf("modify: %v", err)
 	}
-	worktrees := mocks.NewMockWorktreeOperator()
+	worktrees := mocks.NewMockWorktreeOps()
 	mgr.Worktrees = worktrees
 	mgr.Branches = nil
 	mgr.PRs = nil
@@ -5678,7 +5678,7 @@ func TestRewindWithRequest_PartialPersistsPendingReviewRoadmapPhase(t *testing.T
 	}); err != nil {
 		t.Fatalf("modify: %v", err)
 	}
-	mgr.Worktrees = mocks.NewMockWorktreeOperator()
+	mgr.Worktrees = mocks.NewMockWorktreeOps()
 	mgr.Branches = nil
 	mgr.PRs = nil
 
@@ -5786,7 +5786,7 @@ func TestRewindWithRequest_Phase2PartialResetsToAnchorAndCarriesSurvivors(t *tes
 		}
 	}
 
-	worktrees := mocks.NewMockWorktreeOperator()
+	worktrees := mocks.NewMockWorktreeOps()
 	mgr.Worktrees = worktrees
 	mgr.Branches = nil
 	mgr.PRs = nil
@@ -5952,7 +5952,7 @@ func TestRewindWithRequest_PartialRetainsTargetPhaseFrontend(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("modify: %v", err)
 	}
-	mgr.Worktrees = mocks.NewMockWorktreeOperator()
+	mgr.Worktrees = mocks.NewMockWorktreeOps()
 	mgr.Branches = nil
 	mgr.PRs = nil
 
@@ -6012,7 +6012,7 @@ func TestRewindWithRequest_PartialRestoresMissingTargetPhaseFrontendFromPlan(t *
 	}); err != nil {
 		t.Fatalf("modify: %v", err)
 	}
-	mgr.Worktrees = mocks.NewMockWorktreeOperator()
+	mgr.Worktrees = mocks.NewMockWorktreeOps()
 	mgr.Branches = nil
 	mgr.PRs = nil
 
@@ -6046,7 +6046,7 @@ func TestRewindToPhase_FullImplementOmitsSealedRoadmapPhase(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("modify: %v", err)
 	}
-	mgr.Worktrees = mocks.NewMockWorktreeOperator()
+	mgr.Worktrees = mocks.NewMockWorktreeOps()
 	mgr.Branches = nil
 	mgr.PRs = nil
 
@@ -6089,7 +6089,7 @@ func TestRewindWithRequest_PartialUnpublishableSkipsPRCloseAndRecordsBackups(t *
 	}); err != nil {
 		t.Fatalf("modify: %v", err)
 	}
-	worktrees := mocks.NewMockWorktreeOperator()
+	worktrees := mocks.NewMockWorktreeOps()
 	branches := mocks.NewMockBranchOperator()
 	branches.CreateBackupBranchFn = func(worktreePath, slug string) (string, error) {
 		return "feature/" + slug + "-pre-rewind-" + filepath.Base(worktreePath), nil
@@ -6149,7 +6149,7 @@ func TestRewindWithRequest_PartialPublishableClosesPRs(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("modify: %v", err)
 	}
-	mgr.Worktrees = mocks.NewMockWorktreeOperator()
+	mgr.Worktrees = mocks.NewMockWorktreeOps()
 	mgr.Branches = nil
 	prs := mocks.NewMockPublisher()
 	mgr.PRs = prs
@@ -6191,7 +6191,7 @@ func TestRewindWithRequest_PartialBranchFailureStillSeals(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("modify: %v", err)
 	}
-	mgr.Worktrees = mocks.NewMockWorktreeOperator()
+	mgr.Worktrees = mocks.NewMockWorktreeOps()
 	branches := mocks.NewMockBranchOperator()
 	branches.CreateBackupBranchFn = func(worktreePath, slug string) (string, error) {
 		if worktreePath == "/tmp/wt-a" {
@@ -6709,7 +6709,7 @@ func TestRewindWithRequest_PartialCrashCleanupAllowsRetry(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("modify: %v", err)
 	}
-	mgr.Worktrees = mocks.NewMockWorktreeOperator()
+	mgr.Worktrees = mocks.NewMockWorktreeOps()
 	mgr.Branches = nil
 	mgr.PRs = nil
 

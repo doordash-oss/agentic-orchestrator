@@ -35,10 +35,24 @@ var ErrDuplicateSlug = fmt.Errorf("feature with this slug already exists")
 // any adapter-specific git package. Satisfied by *git.WorktreeManager.
 type WorktreeOps interface {
 	Create(repoPath, featureSlug, repoName, startPoint string) (string, error)
+	ExpectedPath(featureSlug, repoName string) string
 	Remove(worktreePath string, deleteBranch bool) error
+	RemoveRef(worktreePath, mainRepo, branch string) error
 	ResetToBase(worktreePath, baseBranch string) error
 	ResetToBaseLocal(worktreePath, baseBranch string) error
 	ResetToCommit(worktreePath, commitSHA string) error
+	CurrentHeadSHA(worktreePath string) (string, error)
+	CurrentBranch(worktreePath string) string
+	RefSHA(repoPath, ref string) (string, error)
+	UpdateRef(repoPath, ref, oldSHA, newSHA string) error
+	CreateMergeCandidate(mainRepo, parentTip, childHead, message string) (*MergeCandidateResult, error)
+}
+
+// MergeCandidateResult holds the outcome of creating a merge candidate without
+// advancing the parent ref.
+type MergeCandidateResult struct {
+	CandidateSHA  string
+	ConflictFiles []string
 }
 
 // BranchOps captures the branch-level git operations the feature manager

@@ -410,33 +410,12 @@ func (m *Manager) preflightRefactorParent(parent *Feature) ([]ChildRepoBase, err
 	return bases, nil
 }
 
-// HeadSHAReader is the exact-HEAD lookup capability the launch and setup
-// retry paths require: launch captures every parent's exact tip and retry
-// validates worktree reuse against the persisted exact base. It is satisfied
-// by *git.WorktreeManager; wiring that omits it fails the launch or retry
-// loudly instead of silently degrading exact-base guarantees.
-type HeadSHAReader interface {
-	CurrentHeadSHA(worktreePath string) (string, error)
-}
-
-// headSHAReader returns the configured exact-HEAD lookup or an error naming
-// the missing mandatory capability.
-func (m *Manager) headSHAReader() (HeadSHAReader, error) {
-	resolver, ok := m.Worktrees.(HeadSHAReader)
-	if !ok {
-		return nil, fmt.Errorf("exact head capture is not configured")
-	}
-	return resolver, nil
-}
-
-// resolveHeadSHA captures the full HEAD of a worktree through the HeadSHAReader
-// capability.
+// resolveHeadSHA captures the full HEAD of a worktree.
 func (m *Manager) resolveHeadSHA(path string) (string, error) {
-	resolver, err := m.headSHAReader()
-	if err != nil {
-		return "", err
+	if m.Worktrees == nil {
+		return "", fmt.Errorf("exact head capture is not configured")
 	}
-	return resolver.CurrentHeadSHA(path)
+	return m.Worktrees.CurrentHeadSHA(path)
 }
 
 // buildRefactorChild materializes the child aggregate: it inherits every

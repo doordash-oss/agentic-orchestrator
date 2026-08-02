@@ -15,6 +15,7 @@
 package mocks
 
 import (
+	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 )
 
@@ -253,30 +254,33 @@ func (m *MockRebaseOperator) RebaseInProgress(worktreePath string) (bool, error)
 }
 
 // ---------------------------------------------------------------------------
-// MockWorktreeOperator implements ports.WorktreeOperator
+// MockWorktreeOps implements feature.WorktreeOps
 // ---------------------------------------------------------------------------
 
-// MockWorktreeOperator implements ports.WorktreeOperator with configurable
+// MockWorktreeOps implements feature.WorktreeOps with configurable
 // function overrides and call tracking.
-type MockWorktreeOperator struct {
-	CreateFn                func(repoPath, featureSlug, repoName, startPoint string) (string, error)
-	ExpectedPathFn          func(featureSlug, repoName string) string
-	RemoveFn                func(worktreePath string, deleteBranch bool) error
-	ListFn                  func() ([]git.WorktreeInfo, error)
-	DetectStaleFn           func(activeFeatureIDs []string) ([]git.WorktreeInfo, error)
-	ResetToBaseFn           func(worktreePath, baseBranch string) error
-	ResetToBaseLocalFn      func(worktreePath, baseBranch string) error
-	ResetToCommitFn         func(worktreePath, commitSHA string) error
-	HasUncommittedChangesFn func(repoPath string) (bool, error)
+type MockWorktreeOps struct {
+	CreateFn               func(repoPath, featureSlug, repoName, startPoint string) (string, error)
+	ExpectedPathFn         func(featureSlug, repoName string) string
+	RemoveFn               func(worktreePath string, deleteBranch bool) error
+	RemoveRefFn            func(worktreePath, mainRepo, branch string) error
+	ResetToBaseFn          func(worktreePath, baseBranch string) error
+	ResetToBaseLocalFn     func(worktreePath, baseBranch string) error
+	ResetToCommitFn        func(worktreePath, commitSHA string) error
+	CurrentHeadSHAFn       func(worktreePath string) (string, error)
+	CurrentBranchFn        func(worktreePath string) string
+	RefSHAFn               func(repoPath, ref string) (string, error)
+	UpdateRefFn            func(repoPath, ref, oldSHA, newSHA string) error
+	CreateMergeCandidateFn func(mainRepo, parentTip, childHead, message string) (*feature.MergeCandidateResult, error)
 
 	DefaultError error
 	Calls        []MockCall
 }
 
-// NewMockWorktreeOperator returns a MockWorktreeOperator with zero-value defaults.
-func NewMockWorktreeOperator() *MockWorktreeOperator { return &MockWorktreeOperator{} }
+// NewMockWorktreeOps returns a MockWorktreeOps with zero-value defaults.
+func NewMockWorktreeOps() *MockWorktreeOps { return &MockWorktreeOps{} }
 
-func (m *MockWorktreeOperator) Create(repoPath, featureSlug, repoName, startPoint string) (string, error) {
+func (m *MockWorktreeOps) Create(repoPath, featureSlug, repoName, startPoint string) (string, error) {
 	m.Calls = append(m.Calls, MockCall{Method: "Create", Args: []any{repoPath, featureSlug, repoName, startPoint}})
 	if m.CreateFn != nil {
 		return m.CreateFn(repoPath, featureSlug, repoName, startPoint)
@@ -284,7 +288,7 @@ func (m *MockWorktreeOperator) Create(repoPath, featureSlug, repoName, startPoin
 	return "", m.DefaultError
 }
 
-func (m *MockWorktreeOperator) ExpectedPath(featureSlug, repoName string) string {
+func (m *MockWorktreeOps) ExpectedPath(featureSlug, repoName string) string {
 	m.Calls = append(m.Calls, MockCall{Method: "ExpectedPath", Args: []any{featureSlug, repoName}})
 	if m.ExpectedPathFn != nil {
 		return m.ExpectedPathFn(featureSlug, repoName)
@@ -292,7 +296,7 @@ func (m *MockWorktreeOperator) ExpectedPath(featureSlug, repoName string) string
 	return ""
 }
 
-func (m *MockWorktreeOperator) Remove(worktreePath string, deleteBranch bool) error {
+func (m *MockWorktreeOps) Remove(worktreePath string, deleteBranch bool) error {
 	m.Calls = append(m.Calls, MockCall{Method: "Remove", Args: []any{worktreePath, deleteBranch}})
 	if m.RemoveFn != nil {
 		return m.RemoveFn(worktreePath, deleteBranch)
@@ -300,23 +304,15 @@ func (m *MockWorktreeOperator) Remove(worktreePath string, deleteBranch bool) er
 	return m.DefaultError
 }
 
-func (m *MockWorktreeOperator) List() ([]git.WorktreeInfo, error) {
-	m.Calls = append(m.Calls, MockCall{Method: "List", Args: nil})
-	if m.ListFn != nil {
-		return m.ListFn()
+func (m *MockWorktreeOps) RemoveRef(worktreePath, mainRepo, branch string) error {
+	m.Calls = append(m.Calls, MockCall{Method: "RemoveRef", Args: []any{worktreePath, mainRepo, branch}})
+	if m.RemoveRefFn != nil {
+		return m.RemoveRefFn(worktreePath, mainRepo, branch)
 	}
-	return nil, m.DefaultError
+	return m.DefaultError
 }
 
-func (m *MockWorktreeOperator) DetectStale(activeFeatureIDs []string) ([]git.WorktreeInfo, error) {
-	m.Calls = append(m.Calls, MockCall{Method: "DetectStale", Args: []any{activeFeatureIDs}})
-	if m.DetectStaleFn != nil {
-		return m.DetectStaleFn(activeFeatureIDs)
-	}
-	return nil, m.DefaultError
-}
-
-func (m *MockWorktreeOperator) ResetToBase(worktreePath, baseBranch string) error {
+func (m *MockWorktreeOps) ResetToBase(worktreePath, baseBranch string) error {
 	m.Calls = append(m.Calls, MockCall{Method: "ResetToBase", Args: []any{worktreePath, baseBranch}})
 	if m.ResetToBaseFn != nil {
 		return m.ResetToBaseFn(worktreePath, baseBranch)
@@ -324,7 +320,7 @@ func (m *MockWorktreeOperator) ResetToBase(worktreePath, baseBranch string) erro
 	return m.DefaultError
 }
 
-func (m *MockWorktreeOperator) ResetToBaseLocal(worktreePath, baseBranch string) error {
+func (m *MockWorktreeOps) ResetToBaseLocal(worktreePath, baseBranch string) error {
 	m.Calls = append(m.Calls, MockCall{Method: "ResetToBaseLocal", Args: []any{worktreePath, baseBranch}})
 	if m.ResetToBaseLocalFn != nil {
 		return m.ResetToBaseLocalFn(worktreePath, baseBranch)
@@ -332,7 +328,7 @@ func (m *MockWorktreeOperator) ResetToBaseLocal(worktreePath, baseBranch string)
 	return m.DefaultError
 }
 
-func (m *MockWorktreeOperator) ResetToCommit(worktreePath, commitSHA string) error {
+func (m *MockWorktreeOps) ResetToCommit(worktreePath, commitSHA string) error {
 	m.Calls = append(m.Calls, MockCall{Method: "ResetToCommit", Args: []any{worktreePath, commitSHA}})
 	if m.ResetToCommitFn != nil {
 		return m.ResetToCommitFn(worktreePath, commitSHA)
@@ -340,12 +336,44 @@ func (m *MockWorktreeOperator) ResetToCommit(worktreePath, commitSHA string) err
 	return m.DefaultError
 }
 
-func (m *MockWorktreeOperator) HasUncommittedChanges(repoPath string) (bool, error) {
-	m.Calls = append(m.Calls, MockCall{Method: "HasUncommittedChanges", Args: []any{repoPath}})
-	if m.HasUncommittedChangesFn != nil {
-		return m.HasUncommittedChangesFn(repoPath)
+func (m *MockWorktreeOps) CurrentHeadSHA(worktreePath string) (string, error) {
+	m.Calls = append(m.Calls, MockCall{Method: "CurrentHeadSHA", Args: []any{worktreePath}})
+	if m.CurrentHeadSHAFn != nil {
+		return m.CurrentHeadSHAFn(worktreePath)
 	}
-	return false, m.DefaultError
+	return "", m.DefaultError
+}
+
+func (m *MockWorktreeOps) CurrentBranch(worktreePath string) string {
+	m.Calls = append(m.Calls, MockCall{Method: "CurrentBranch", Args: []any{worktreePath}})
+	if m.CurrentBranchFn != nil {
+		return m.CurrentBranchFn(worktreePath)
+	}
+	return ""
+}
+
+func (m *MockWorktreeOps) RefSHA(repoPath, ref string) (string, error) {
+	m.Calls = append(m.Calls, MockCall{Method: "RefSHA", Args: []any{repoPath, ref}})
+	if m.RefSHAFn != nil {
+		return m.RefSHAFn(repoPath, ref)
+	}
+	return "", m.DefaultError
+}
+
+func (m *MockWorktreeOps) UpdateRef(repoPath, ref, oldSHA, newSHA string) error {
+	m.Calls = append(m.Calls, MockCall{Method: "UpdateRef", Args: []any{repoPath, ref, oldSHA, newSHA}})
+	if m.UpdateRefFn != nil {
+		return m.UpdateRefFn(repoPath, ref, oldSHA, newSHA)
+	}
+	return m.DefaultError
+}
+
+func (m *MockWorktreeOps) CreateMergeCandidate(mainRepo, parentTip, childHead, message string) (*feature.MergeCandidateResult, error) {
+	m.Calls = append(m.Calls, MockCall{Method: "CreateMergeCandidate", Args: []any{mainRepo, parentTip, childHead, message}})
+	if m.CreateMergeCandidateFn != nil {
+		return m.CreateMergeCandidateFn(mainRepo, parentTip, childHead, message)
+	}
+	return nil, m.DefaultError
 }
 
 // ---------------------------------------------------------------------------

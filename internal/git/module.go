@@ -18,8 +18,6 @@ import "go.uber.org/fx"
 
 // Module provides git adapter implementations to the fx dependency graph.
 // Each adapter wraps package-level functions behind port interfaces.
-// WorktreeOperator is not provided here — WorktreeManager is constructed
-// inline in feature.Module and belongs to the feature lifecycle.
 var Module = fx.Module("git",
 	fx.Provide(
 		func() *PublishAdapter { return &PublishAdapter{} },

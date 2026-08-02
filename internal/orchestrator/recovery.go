@@ -467,8 +467,7 @@ func (o *Orchestrator) reconcileOneIntegration(f *feature.Feature) error {
 		return o.settleChildClosureTail(f.ID, f.Parent.ParentID)
 	}
 
-	cas, ok := o.deps.Worktrees.(refCASOperator)
-	if !ok {
+	if o.deps.Worktrees == nil {
 		return fmt.Errorf("ref CAS operations not configured for reconciliation")
 	}
 
@@ -494,7 +493,7 @@ func (o *Orchestrator) reconcileOneIntegration(f *feature.Feature) error {
 			continue
 		}
 		ref := "refs/heads/" + entry.ParentBranch
-		current, err := cas.RefSHA(parentRepo.Path, ref)
+		current, err := o.deps.Worktrees.RefSHA(parentRepo.Path, ref)
 		if err != nil {
 			entry.Diagnostics = fmt.Sprintf("reading ref %s: %v", ref, err)
 			anyUnclassifiable = true

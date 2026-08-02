@@ -29,7 +29,6 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/internal/orchestrator"
-	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
 )
 
@@ -129,7 +128,7 @@ func (fx *multiRepoE2EFixture) orchestrator() *orchestrator.Orchestrator {
 	return fx.orchestratorWithWorktrees(fx.wm)
 }
 
-func (fx *multiRepoE2EFixture) orchestratorWithWorktrees(wt ports.WorktreeOperator) *orchestrator.Orchestrator {
+func (fx *multiRepoE2EFixture) orchestratorWithWorktrees(wt feature.WorktreeOps) *orchestrator.Orchestrator {
 	return orchestrator.New(orchestrator.Deps{
 		Lifecycle: fx.mgr, Store: fx.store,
 		Publisher: &git.PublishAdapter{}, Worktrees: wt,
@@ -348,7 +347,7 @@ func (fx *multiRepoE2EFixture) orchestratorWithFailingStore(failAt int32) *orche
 	return fx.orchestratorWithFailingStoreAndWorktree(failAt, fx.wm)
 }
 
-func (fx *multiRepoE2EFixture) orchestratorWithFailingStoreAndWorktree(failAt int32, wt ports.WorktreeOperator) *orchestrator.Orchestrator {
+func (fx *multiRepoE2EFixture) orchestratorWithFailingStoreAndWorktree(failAt int32, wt feature.WorktreeOps) *orchestrator.Orchestrator {
 	counter := &sharedModifyCounter{failAt: failAt}
 	// Create a new Store with the same BaseDir so both the failing and
 	// fresh orchestrators read/write the same feature files.

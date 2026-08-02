@@ -43,7 +43,7 @@ var _ ports.SessionManager = (*mocks.MockSessionManager)(nil)
 // Git ports
 var _ ports.Publisher = (*mocks.MockPublisher)(nil)
 var _ ports.RebaseOperator = (*mocks.MockRebaseOperator)(nil)
-var _ ports.WorktreeOperator = (*mocks.MockWorktreeOperator)(nil)
+var _ feature.WorktreeOps = (*mocks.MockWorktreeOps)(nil)
 var _ feature.BranchOps = (*mocks.MockBranchOperator)(nil)
 
 // Agent ports

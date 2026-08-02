@@ -33,7 +33,7 @@ import (
 var _ ports.Publisher = (*git.PublishAdapter)(nil)
 var _ ports.RebaseOperator = (*git.RebaseAdapter)(nil)
 var _ feature.BranchOps = (*git.BranchAdapter)(nil)
-var _ ports.WorktreeOperator = (*git.WorktreeManager)(nil)
+var _ feature.WorktreeOps = (*git.WorktreeManager)(nil)
 
 // ---------------------------------------------------------------------------
 // Compile-time interface satisfaction checks — session widening

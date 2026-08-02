@@ -30,26 +30,6 @@ import (
 // apply them conditionally with compare-and-swap ref updates, and compensate
 // only changes the transaction can prove it made.
 
-// mergeCandidateCreator creates an explicit two-parent no-fast-forward merge
-// commit in a temporary detached worktree, returning the candidate SHA
-// without advancing any parent ref. Satisfied by *git.WorktreeManager.
-type mergeCandidateCreator interface {
-	CreateMergeCandidate(mainRepo, parentTip, childHead, message string) (*git.MergeCandidateResult, error)
-}
-
-// childBranchReader reports the branch checked out in a worktree; satisfied
-// by *git.WorktreeManager.
-type childBranchReader interface {
-	CurrentBranch(worktreePath string) string
-}
-
-// refCASOperator performs compare-and-swap ref updates and reads. Satisfied
-// by *git.WorktreeManager.
-type refCASOperator interface {
-	RefSHA(repoPath, ref string) (string, error)
-	UpdateRef(repoPath, ref, oldSHA, newSHA string) error
-}
-
 // prepareTransactionCandidates prepares an explicit two-parent no-fast-forward
 // merge candidate for every inherited repository without changing any parent
 // ref or worktree. It commits remaining child changes, validates the parent
@@ -66,8 +46,7 @@ func (o *Orchestrator) prepareTransactionCandidates(child, parent *feature.Featu
 	if o.deps.Publisher == nil {
 		return nil, fmt.Errorf("transaction: publisher not configured")
 	}
-	creator, ok := o.deps.Worktrees.(mergeCandidateCreator)
-	if !ok {
+	if o.deps.Worktrees == nil {
 		return nil, fmt.Errorf("transaction: merge candidate creation is not configured")
 	}
 	if o.deps.Cleanliness == nil {
@@ -171,7 +150,7 @@ func (o *Orchestrator) prepareTransactionCandidates(child, parent *feature.Featu
 			return nil, o.emitTransactionAttention(child, entry.Diagnostics)
 		}
 		message := fmt.Sprintf("Merge refactor child %s into %s (%s)", child.ID, entry.ParentBranch, entry.Repo)
-		result, err := creator.CreateMergeCandidate(parentRepo.Path, entry.ParentAnchorSHA, entry.ChildHeadSHA, message)
+		result, err := o.deps.Worktrees.CreateMergeCandidate(parentRepo.Path, entry.ParentAnchorSHA, entry.ChildHeadSHA, message)
 		if err != nil {
 			var conflictErr *git.MergeCandidateConflictError
 			if errors.As(err, &conflictErr) {
@@ -217,8 +196,7 @@ func (o *Orchestrator) prepareTransactionCandidates(child, parent *feature.Featu
 // transaction's candidate commits. External ref movement is never
 // overwritten: ambiguous states remain intact and become integration attention.
 func (o *Orchestrator) applyTransactionCandidates(child, parent *feature.Feature, journal *feature.TransactionJournal) error {
-	cas, ok := o.deps.Worktrees.(refCASOperator)
-	if !ok {
+	if o.deps.Worktrees == nil {
 		return fmt.Errorf("transaction: ref CAS operations are not configured")
 	}
 	if !journal.AllCandidatesPrepared() {
@@ -251,25 +229,23 @@ func (o *Orchestrator) applyTransactionCandidates(child, parent *feature.Feature
 		}
 
 		// Verify the parent worktree has the recorded branch checked out.
-		if brancher, ok := o.deps.Worktrees.(childBranchReader); ok {
-			parentWorktree := parentRepo.WorktreePath
-			if parentWorktree == "" {
-				parentWorktree = parentRepo.Path
+		parentWorktree := parentRepo.WorktreePath
+		if parentWorktree == "" {
+			parentWorktree = parentRepo.Path
+		}
+		if current := o.deps.Worktrees.CurrentBranch(parentWorktree); current != entry.ParentBranch {
+			diag := fmt.Sprintf("parent worktree %s has branch %q checked out; integration requires the recorded parent branch %q", parentWorktree, current, entry.ParentBranch)
+			if journal.AnyApplied() {
+				entry.Diagnostics = diag
+				entry.ApplyState = feature.RepoApplyAttention
+				return o.rollbackTransaction(child, parent, journal, i)
 			}
-			if current := brancher.CurrentBranch(parentWorktree); current != entry.ParentBranch {
-				diag := fmt.Sprintf("parent worktree %s has branch %q checked out; integration requires the recorded parent branch %q", parentWorktree, current, entry.ParentBranch)
-				if journal.AnyApplied() {
-					entry.Diagnostics = diag
-					entry.ApplyState = feature.RepoApplyAttention
-					return o.rollbackTransaction(child, parent, journal, i)
-				}
-				return o.parkApplyAttention(child, journal, entry, diag)
-			}
+			return o.parkApplyAttention(child, journal, entry, diag)
 		}
 
 		ref := "refs/heads/" + entry.ParentBranch
 		// Read the current ref to detect external movement.
-		currentSHA, err := cas.RefSHA(parentRepo.Path, ref)
+		currentSHA, err := o.deps.Worktrees.RefSHA(parentRepo.Path, ref)
 		if err != nil {
 			diag := fmt.Sprintf("reading ref %s: %v", ref, err)
 			if journal.AnyApplied() {
@@ -293,8 +269,8 @@ func (o *Orchestrator) applyTransactionCandidates(child, parent *feature.Feature
 		}
 
 		// Compare-and-swap ref update.
-		if err := cas.UpdateRef(parentRepo.Path, ref, entry.ExpectedRefSHA, entry.CandidateSHA); err != nil {
-			observed, _ := cas.RefSHA(parentRepo.Path, ref)
+		if err := o.deps.Worktrees.UpdateRef(parentRepo.Path, ref, entry.ExpectedRefSHA, entry.CandidateSHA); err != nil {
+			observed, _ := o.deps.Worktrees.RefSHA(parentRepo.Path, ref)
 			entry.ObservedSHA = observed
 			var casErr *git.RefCASMismatchError
 			if errors.As(err, &casErr) {
@@ -324,7 +300,7 @@ func (o *Orchestrator) applyTransactionCandidates(child, parent *feature.Feature
 		// during preparation, so a hard reset is safe. If this fails, the
 		// ref is already at the candidate and must be rolled back —
 		// including this entry, whose CAS succeeded.
-		parentWorktree := parentRepo.WorktreePath
+		parentWorktree = parentRepo.WorktreePath
 		if parentWorktree == "" {
 			parentWorktree = parentRepo.Path
 		}
@@ -349,8 +325,7 @@ func (o *Orchestrator) applyTransactionCandidates(child, parent *feature.Feature
 // attention diagnostics. The failedIndex is the index of the repo that failed
 // (and is not itself rolled back).
 func (o *Orchestrator) rollbackTransaction(child, parent *feature.Feature, journal *feature.TransactionJournal, failedIndex int) error {
-	cas, ok := o.deps.Worktrees.(refCASOperator)
-	if !ok {
+	if o.deps.Worktrees == nil {
 		return fmt.Errorf("transaction: ref CAS operations are not configured")
 	}
 
@@ -397,7 +372,7 @@ func (o *Orchestrator) rollbackTransaction(child, parent *feature.Feature, journ
 
 		ref := "refs/heads/" + entry.ParentBranch
 		// Read the current ref to check if it still equals the candidate.
-		currentSHA, err := cas.RefSHA(parentRepo.Path, ref)
+		currentSHA, err := o.deps.Worktrees.RefSHA(parentRepo.Path, ref)
 		if err != nil {
 			entry.Diagnostics = fmt.Sprintf("reading ref %s during rollback: %v", ref, err)
 			entry.ApplyState = feature.RepoApplyAttention
@@ -417,8 +392,8 @@ func (o *Orchestrator) rollbackTransaction(child, parent *feature.Feature, journ
 		}
 
 		// Compare-and-swap rollback: restore the ref from candidate to old SHA.
-		if err := cas.UpdateRef(parentRepo.Path, ref, entry.CandidateSHA, entry.ParentAnchorSHA); err != nil {
-			observed, _ := cas.RefSHA(parentRepo.Path, ref)
+		if err := o.deps.Worktrees.UpdateRef(parentRepo.Path, ref, entry.CandidateSHA, entry.ParentAnchorSHA); err != nil {
+			observed, _ := o.deps.Worktrees.RefSHA(parentRepo.Path, ref)
 			entry.ObservedSHA = observed
 			var casErr *git.RefCASMismatchError
 			if errors.As(err, &casErr) {

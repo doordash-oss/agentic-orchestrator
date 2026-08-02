@@ -323,8 +323,7 @@ func (o *Orchestrator) ensureDiscardRefSafety(childID string) (bool, error) {
 
 	// Applying, applied, rolling_back, or attention with some applied refs:
 	// need to roll back provably child-applied refs.
-	cas, ok := o.deps.Worktrees.(refCASOperator)
-	if !ok {
+	if o.deps.Worktrees == nil {
 		return false, fmt.Errorf("ref CAS operations not configured for discard safety")
 	}
 
@@ -358,7 +357,7 @@ func (o *Orchestrator) ensureDiscardRefSafety(childID string) (bool, error) {
 			continue
 		}
 		ref := "refs/heads/" + entry.ParentBranch
-		current, err := cas.RefSHA(parentRepo.Path, ref)
+		current, err := o.deps.Worktrees.RefSHA(parentRepo.Path, ref)
 		if err != nil {
 			entry.Diagnostics = fmt.Sprintf("reading ref %s: %v", ref, err)
 			allSafe = false
@@ -368,7 +367,7 @@ func (o *Orchestrator) ensureDiscardRefSafety(childID string) (bool, error) {
 
 		if current == entry.CandidateSHA {
 			// Ref still at candidate — CAS rollback to anchor.
-			if err := cas.UpdateRef(parentRepo.Path, ref, entry.CandidateSHA, entry.ParentAnchorSHA); err != nil {
+			if err := o.deps.Worktrees.UpdateRef(parentRepo.Path, ref, entry.CandidateSHA, entry.ParentAnchorSHA); err != nil {
 				entry.Diagnostics = fmt.Sprintf("repo %s rollback CAS failed for %s: %v", entry.Repo, ref, err)
 				allSafe = false
 				continue

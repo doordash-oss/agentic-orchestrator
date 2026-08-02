@@ -179,7 +179,7 @@ type Deps struct {
 	Sessions    ports.SessionManager
 	Publisher   ports.Publisher
 	Rebaser     ports.RebaseOperator
-	Worktrees   ports.WorktreeOperator
+	Worktrees   feature.WorktreeOps
 	CmdRunner   ports.CommandRunner
 	Recovery    ports.RecoveryOperator
 	PhaseRunner *agent.PhaseRunner // concrete — not behind a port interface

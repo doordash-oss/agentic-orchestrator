@@ -124,7 +124,7 @@ func TestCompleteRepoCycle_ReviewComments_RepliesToEveryPRFeedbackType(t *testin
 	if err := os.WriteFile(filepath.Join(repoDir, "review-fix.txt"), []byte("fixed\n"), 0o644); err != nil {
 		t.Fatalf("write review fix: %v", err)
 	}
-	ghLog := installRepoCycleFakeGH(t)
+	fakeGH := installRepoCycleFakeGH(t)
 	f := &feature.Feature{
 		ID:        "feat-rc-cycle",
 		Slug:      "rc-cycle",
@@ -193,7 +193,7 @@ func TestCompleteRepoCycle_ReviewComments_RepliesToEveryPRFeedbackType(t *testin
 	if got := countPublisherCalls(pub, "Push"); got != 1 {
 		t.Errorf("Push calls = %d, want 1", got)
 	}
-	invocations := readRepoCycleGHInvocations(t, ghLog)
+	invocations := fakeGH.Invocations(t)
 	if got := countInvocationContaining(invocations, "pulls/7/comments/11/replies"); got != 1 {
 		t.Errorf("ReplyToPRComment calls = %d, want 1", got)
 	}
@@ -240,33 +240,15 @@ func initRepoCycleGitRepo(t *testing.T) string {
 	return dir
 }
 
-func installRepoCycleFakeGH(t *testing.T) string {
+func installRepoCycleFakeGH(t *testing.T) testutil.FakeGH {
 	t.Helper()
-	binDir := t.TempDir()
-	logPath := filepath.Join(t.TempDir(), "gh.log")
-	script := `#!/bin/sh
-printf '%s\n' "$*" >> "$GH_LOG"
+	return testutil.InstallFakeGH(t, testutil.FakeGHConfig{Behavior: `
 case "$*" in
   *resolveReviewThread*) printf '%s\n' '{"data":{"resolveReviewThread":{"thread":{"isResolved":true}}}}' ;;
   *reviewThreads*) printf '%s\n' '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[{"id":"thread-id-11","isResolved":false,"comments":{"nodes":[{"databaseId":11}]}}]}}}}}' ;;
   *) printf '%s\n' '{}' ;;
 esac
-`
-	if err := os.WriteFile(filepath.Join(binDir, "gh"), []byte(script), 0o755); err != nil {
-		t.Fatalf("write fake gh: %v", err)
-	}
-	t.Setenv("GH_LOG", logPath)
-	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
-	return logPath
-}
-
-func readRepoCycleGHInvocations(t *testing.T, path string) []string {
-	t.Helper()
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read fake gh log: %v", err)
-	}
-	return strings.Split(strings.TrimSpace(string(data)), "\n")
+`})
 }
 
 func countInvocationContaining(invocations []string, needle string) int {

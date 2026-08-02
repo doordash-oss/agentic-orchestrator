@@ -1195,6 +1195,10 @@ func TestStartFeatureRebaseHarnessUnpublishableRepoRebasesAgainstLocalTarget(t *
 	repo := fixture.repo("local")
 	runCompletionGit(t, repo.WorktreePath, "checkout", mainBranch)
 	testutil.CommitFile(t, repo.WorktreePath, "local-base.txt", "advance\n", "advance local base")
+	localBaseHead, err := git.CurrentHeadSHA(repo.WorktreePath)
+	if err != nil {
+		t.Fatalf("local base HEAD: %v", err)
+	}
 	runCompletionGit(t, repo.WorktreePath, "checkout", repo.Branch)
 	finalReviewCalls := fixture.setFinalReviewPassed(nil)
 
@@ -1206,9 +1210,12 @@ func TestStartFeatureRebaseHarnessUnpublishableRepoRebasesAgainstLocalTarget(t *
 	if *finalReviewCalls != 1 {
 		t.Fatalf("Final Review calls = %d, want 1", *finalReviewCalls)
 	}
-	loaded := fixture.load()
-	if got := loaded.Repos[0].BaseBranch; got != mainBranch {
-		t.Fatalf("base branch = %q, want main", got)
+	featureHead, err := git.CurrentHeadSHA(repo.WorktreePath)
+	if err != nil {
+		t.Fatalf("feature HEAD after rebase: %v", err)
+	}
+	if featureHead != localBaseHead {
+		t.Fatalf("feature HEAD after rebase = %s, want local base HEAD %s", featureHead, localBaseHead)
 	}
 	if got := countRebaseMockCalls(fixture.publisher.Calls, "ForcePush"); got != 0 {
 		t.Fatalf("ForcePush calls = %d, want 0", got)

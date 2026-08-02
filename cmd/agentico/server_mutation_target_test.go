@@ -38,6 +38,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	serverruntime "github.com/doordash-oss/agentic-orchestrator/internal/server"
 	"github.com/doordash-oss/agentic-orchestrator/internal/utilskill"
+	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
 )
 
@@ -2319,9 +2320,7 @@ func TestServerMutationTargetReviewCommentsStartStagesConversationAndReviewBodyC
 
 func TestServerMutationTargetReviewCommentsStartUsesProvidedPreviewedComments(t *testing.T) {
 	target, store, f, ghFixture := newReviewCommentsActionTarget(t)
-	if err := os.WriteFile(ghFixture.logPath, nil, 0o644); err != nil {
-		t.Fatalf("clear fake gh log: %v", err)
-	}
+	ghFixture.fakeGH.Clear(t)
 
 	result, err := target.StartReviewComments(f.ID, serverruntime.ReviewCommentsActionRequest{
 		Repo: testRepoAName,
@@ -2340,7 +2339,7 @@ func TestServerMutationTargetReviewCommentsStartUsesProvidedPreviewedComments(t 
 	if err == nil {
 		t.Fatal("StartReviewComments() error = nil; want dispatch error from nil phase runner after staging")
 	}
-	if got := mutationGHCallCount(t, ghFixture.logPath); got != 0 {
+	if got := ghFixture.fakeGH.InvocationCount(t); got != 0 {
 		t.Fatalf("FetchPRComments calls = %d; want 0 when comments are provided by preview", got)
 	}
 	if result.FeatureID != f.ID || result.Repo != testRepoAName || result.Mode != reviewModeAuto || result.Source != "provided" || result.CommentCount != 1 || result.Result != resultFailed {
@@ -2624,21 +2623,19 @@ type mutationGHFixture struct {
 	reviewPath  string
 	issuePath   string
 	reviewsPath string
-	logPath     string
+	fakeGH      testutil.FakeGH
 }
 
 func installMutationFakeGH(t *testing.T) mutationGHFixture {
 	t.Helper()
-	binDir := t.TempDir()
 	dataDir := t.TempDir()
 	fixture := mutationGHFixture{
 		reviewPath:  filepath.Join(dataDir, "review.json"),
 		issuePath:   filepath.Join(dataDir, "issue.json"),
 		reviewsPath: filepath.Join(dataDir, "reviews.json"),
-		logPath:     filepath.Join(dataDir, "gh.log"),
 	}
-	script := `#!/bin/sh
-printf '%s\n' "$*" >> "$GH_MUTATION_LOG"
+	fixture.fakeGH = testutil.InstallFakeGH(t, testutil.FakeGHConfig{
+		Behavior: `
 if [ "$GH_MUTATION_FAIL" = "1" ]; then
   printf '%s\n' 'synthetic gh failure' >&2
   exit 1
@@ -2649,15 +2646,13 @@ case "$3" in
   repos/acme/repo-a/pulls/12/reviews) /bin/cat "$GH_MUTATION_REVIEWS" ;;
   *) printf '%s\n' '[]' ;;
 esac
-`
-	if err := os.WriteFile(filepath.Join(binDir, "gh"), []byte(script), 0o755); err != nil {
-		t.Fatalf("write fake gh: %v", err)
-	}
-	t.Setenv("GH_MUTATION_REVIEW", fixture.reviewPath)
-	t.Setenv("GH_MUTATION_ISSUE", fixture.issuePath)
-	t.Setenv("GH_MUTATION_REVIEWS", fixture.reviewsPath)
-	t.Setenv("GH_MUTATION_LOG", fixture.logPath)
-	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+`,
+		Env: map[string]string{
+			"GH_MUTATION_REVIEW":  fixture.reviewPath,
+			"GH_MUTATION_ISSUE":   fixture.issuePath,
+			"GH_MUTATION_REVIEWS": fixture.reviewsPath,
+		},
+	})
 	return fixture
 }
 
@@ -2691,21 +2686,6 @@ func writeMutationReviewComments(t *testing.T, fixture mutationGHFixture, commen
 			t.Fatalf("write fake gh response: %v", err)
 		}
 	}
-}
-
-func mutationGHCallCount(t *testing.T, logPath string) int {
-	t.Helper()
-	data, err := os.ReadFile(logPath)
-	if errors.Is(err, os.ErrNotExist) {
-		return 0
-	}
-	if err != nil {
-		t.Fatalf("read fake gh log: %v", err)
-	}
-	if strings.TrimSpace(string(data)) == "" {
-		return 0
-	}
-	return len(strings.Split(strings.TrimSpace(string(data)), "\n"))
 }
 
 func reviewComment(id int, body string) git.ReviewComment {

@@ -44,10 +44,7 @@ import (
 // unchanged and records all affected repositories as attention.
 func (o *Orchestrator) prepareTransactionCandidates(child, parent *feature.Feature) (*feature.TransactionJournal, error) {
 	if o.deps.Worktrees == nil {
-		return nil, fmt.Errorf("transaction: merge candidate creation is not configured")
-	}
-	if o.deps.Worktrees == nil {
-		return nil, fmt.Errorf("transaction: cleanliness inspection is not configured")
+		return nil, fmt.Errorf("transaction: worktree operations are not configured")
 	}
 
 	journal := &feature.TransactionJournal{

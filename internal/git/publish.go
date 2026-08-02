@@ -207,18 +207,6 @@ func HasUncommittedChanges(worktreePath string) bool {
 	return strings.TrimSpace(string(out)) != ""
 }
 
-// HasLocalCommits returns true if the current branch has commits not yet
-// pushed to its upstream tracking branch. Returns false when no upstream
-// is configured (e.g. branch hasn't been pushed yet).
-func HasLocalCommits(worktreePath string) bool {
-	cmd := exec.Command("git", "-C", worktreePath, "rev-list", "--count", "@{u}..HEAD")
-	out, err := cmd.Output()
-	if err != nil {
-		return false
-	}
-	return strings.TrimSpace(string(out)) != "0"
-}
-
 // CommitAll stages all changes (including untracked files) and creates a commit.
 // The Agentic signature trailer is automatically appended to the commit message.
 func CommitAll(worktreePath, message string) error {
@@ -321,17 +309,6 @@ func ClosePR(prURL string) error {
 		return fmt.Errorf("closing PR: %s: %w", strings.TrimSpace(string(out)), err)
 	}
 	return nil
-}
-
-// CommitLog returns the commit log between the worktree branch and its base branch.
-func CommitLog(worktreePath string, baseBranch ...string) (string, error) {
-	base := resolveBase(worktreePath, baseBranch...)
-	cmd := exec.Command("git", "-C", worktreePath, "log", "--oneline", base+"..HEAD")
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return "", fmt.Errorf("getting commit log: %s: %w", strings.TrimSpace(string(out)), err)
-	}
-	return string(out), nil
 }
 
 // CommitBodies returns the full commit messages (subject + body) between the

@@ -63,14 +63,6 @@ func TestFastPublishCommitRepresentative(t *testing.T) {
 		t.Fatalf("CommitAll() error = %v", err)
 	}
 
-	log, err := CommitLog(repo, "main")
-	if err != nil {
-		t.Fatalf("CommitLog() error = %v", err)
-	}
-	if !strings.Contains(log, message) {
-		t.Errorf("CommitLog() = %q, want message %q", log, message)
-	}
-
 	out, err := exec.Command("git", "-C", repo, "log", "-1", "--format=%B").CombinedOutput()
 	if err != nil {
 		t.Fatalf("git log: %v\n%s", err, out)

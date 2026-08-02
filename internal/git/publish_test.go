@@ -336,14 +336,6 @@ func TestCommitAll(t *testing.T) {
 		t.Fatalf("CommitAll() error = %v", err)
 	}
 
-	log, err := CommitLog(repo, "HEAD~1")
-	if err != nil {
-		t.Fatalf("CommitLog() error = %v", err)
-	}
-	if !strings.Contains(log, message) {
-		t.Errorf("CommitLog() = %q, want message %q", log, message)
-	}
-
 	fullMsg := exec.Command("git", "-C", repo, "log", "-1", "--format=%B")
 	out, err := fullMsg.CombinedOutput()
 	if err != nil {
@@ -451,26 +443,6 @@ func TestCommitAllAndGetHeadRetriesTransientIndexLock(t *testing.T) {
 	}
 }
 
-func TestCommitLog(t *testing.T) {
-	t.Parallel()
-
-	repo := testutil.InitGitRepo(t)
-	testutil.CreateBranch(t, repo, "feature/test")
-	testutil.CommitFile(t, repo, "a.txt", "a\n", "commit A")
-	testutil.CommitFile(t, repo, "b.txt", "b\n", "commit B")
-
-	log, err := CommitLog(repo, "main")
-	if err != nil {
-		t.Fatalf("CommitLog: %v", err)
-	}
-	if !strings.Contains(log, "commit A") {
-		t.Error("expected 'commit A' in log")
-	}
-	if !strings.Contains(log, "commit B") {
-		t.Error("expected 'commit B' in log")
-	}
-}
-
 func TestHasUncommittedChanges(t *testing.T) {
 	t.Parallel()
 
@@ -483,23 +455,6 @@ func TestHasUncommittedChanges(t *testing.T) {
 	}
 	if !HasUncommittedChanges(repo) {
 		t.Error("HasUncommittedChanges() = false, want true for dirty repo")
-	}
-}
-
-func TestHasLocalCommits(t *testing.T) {
-	t.Parallel()
-
-	repo := testutil.InitGitRepo(t)
-	if HasLocalCommits(repo) {
-		t.Error("HasLocalCommits() = true, want false when no upstream is configured")
-	}
-	testutil.InitBareRemote(t, repo)
-	if HasLocalCommits(repo) {
-		t.Error("HasLocalCommits() = true, want false when branch is up to date with upstream")
-	}
-	testutil.CommitFile(t, repo, "local.txt", "local\n", "local only commit")
-	if !HasLocalCommits(repo) {
-		t.Error("HasLocalCommits() = false, want true when local branch is ahead of upstream")
 	}
 }
 

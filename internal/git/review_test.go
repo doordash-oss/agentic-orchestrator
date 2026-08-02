@@ -15,9 +15,9 @@
 package git
 
 import (
-	"os"
-	"path/filepath"
 	"testing"
+
+	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
 )
 
 func TestParsePRURL(t *testing.T) {
@@ -133,9 +133,7 @@ func TestParsePaginatedCommentsWithType(t *testing.T) {
 }
 
 func TestFetchPRCommentsIncludesEveryPRFeedbackSurface(t *testing.T) {
-	binDir := t.TempDir()
-	ghPath := filepath.Join(binDir, "gh")
-	script := `#!/bin/sh
+	testutil.InstallFakeGH(t, testutil.FakeGHConfig{Behavior: `
 case "$3" in
   repos/example/repo/pulls/7/comments)
     printf '%s\n' '[{"id":11,"path":"main.go","line":12,"body":"inline","user":{"login":"alice"},"created_at":"2026-07-07T10:00:00Z"}]'
@@ -151,11 +149,7 @@ case "$3" in
     exit 2
     ;;
 esac
-`
-	if err := os.WriteFile(ghPath, []byte(script), 0o755); err != nil {
-		t.Fatalf("write fake gh: %v", err)
-	}
-	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+`})
 
 	comments, err := FetchPRComments(t.TempDir(), "https://github.com/example/repo/pull/7")
 	if err != nil {

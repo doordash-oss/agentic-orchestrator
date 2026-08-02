@@ -84,19 +84,20 @@ func dispatchSessionOutputBlock(block sseBlock, records chan<- SessionOutputReco
 	if raw == "" {
 		return false, nil
 	}
+	if block.event != "session.output" && block.event != "session.output.done" {
+		return false, fmt.Errorf("unknown session output event %q", block.event)
+	}
 	var chunk SessionOutputChunk
 	if err := json.Unmarshal([]byte(raw), &chunk); err != nil {
 		return false, fmt.Errorf("decode session output payload: %w", err)
 	}
-	if block.event == "session.output.error" {
-		return false, fmt.Errorf("session output stream error at index %d", chunk.Index)
+	if block.event == "session.output.done" {
+		return true, nil
 	}
-	if !chunk.Done {
-		select {
-		case records <- SessionOutputRecord{SessionID: chunk.SessionID, Index: chunk.Index, Message: chunk.Message}:
-		case <-ctx.Done():
-			return true, nil
-		}
+	select {
+	case records <- SessionOutputRecord{SessionID: chunk.SessionID, Index: chunk.Index, Message: chunk.Message}:
+	case <-ctx.Done():
+		return true, nil
 	}
-	return block.event == "session.output.done" || chunk.Done, nil
+	return false, nil
 }

@@ -257,19 +257,12 @@ export class SessionService {
                 index: parsed.index,
                 message: parsed.message,
               }
-            : parsed.type === 'done'
-              ? {
-                  subscriptionId,
-                  type: 'done',
-                  sessionId: parsed.sessionId,
-                  nextIndex: parsed.nextIndex,
-                }
-              : {
-                  subscriptionId,
-                  type: 'error',
-                  sessionId: input.sessionId,
-                  error: parsed.error,
-                };
+            : {
+                subscriptionId,
+                type: 'done',
+                sessionId: parsed.sessionId,
+                nextIndex: parsed.nextIndex,
+              };
         emit(validateWithSchema(event, SessionOutputEventSchema));
         if (parsed.type === 'done') return;
       }
@@ -312,25 +305,14 @@ export class SessionService {
 
 export type ParsedSessionOutput =
   | { type: 'record'; sessionId: string; index: number; message: TranscriptMessage }
-  | { type: 'done'; sessionId: string; nextIndex: number }
-  | { type: 'error'; error: { code: string; message: string; remediation?: string } };
+  | { type: 'done'; sessionId: string; nextIndex: number };
 
 /** Parses one bounded, versioned session-output SSE block. */
 export function parseSessionOutputBlock(block: SseBlock): ParsedSessionOutput {
-  if (!['session.output', 'session.output.done', 'session.output.error'].includes(block.event)) {
+  if (!['session.output', 'session.output.done'].includes(block.event)) {
     throw new SafeErrorException(safeError('E_STREAM_PROTOCOL', 'Unknown session output event.'));
   }
   const chunk = parseServerJson(block.data, SessionOutputChunkSchema, 2 * 1024 * 1024);
-  if (block.event === 'session.output.error') {
-    return {
-      type: 'error',
-      error: safeError(
-        'E_SESSION_OUTPUT',
-        'The runtime reported a session output error.',
-        'Refresh the session transcript, then reconnect the stream.',
-      ),
-    };
-  }
   if (chunk.session_id === undefined || chunk.session_id === '') {
     throw new SafeErrorException(
       safeError('E_STREAM_PROTOCOL', 'Session output omitted its session ID.'),

@@ -274,6 +274,16 @@ describe('SessionService output subscriptions', () => {
 });
 
 describe('parseSessionOutputBlock', () => {
+  it('fails closed on event kinds outside the production protocol', () => {
+    expect(() =>
+      parseSessionOutputBlock({
+        id: '1',
+        event: 'session.output.unknown',
+        data: '{"api_version":"v1","session_id":"session-1","index":1}',
+      }),
+    ).toThrow('Unknown session output event.');
+  });
+
   it('fails closed on version mismatch, pollution, oversized text, and cursor disagreement', () => {
     const base = {
       id: '1',

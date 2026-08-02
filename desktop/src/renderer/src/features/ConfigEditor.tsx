@@ -430,7 +430,7 @@ function ConfigForm({
 
   const setCheckpoint = (key: keyof Checkpoints, on: boolean) => {
     const next = { ...value.checkpoints, [key]: on };
-    // Roadmap review implies phase plan review, matching the TUI's linkage.
+    // Roadmap review implies phase plan review.
     if (key === 'roadmapReview') next.phasePlanReview = on;
     onChange({ ...value, checkpoints: next });
   };

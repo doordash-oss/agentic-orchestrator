@@ -69,7 +69,7 @@ func RendererPath() (string, error) {
 // RenderTerminalPNG converts ANSI-styled terminal text to a PNG at
 // width x height CSS pixels with the shared 12px/16px body style. It is the
 // single headless renderer for every visual-evidence capture in the repo:
-// the autoreview_screenshots-tagged TUI helper delegates to
+// the autoreview_screenshots-tagged helper delegates to
 // RenderTerminalPNGStyled.
 //
 // The 12px font budgets for the widest monospace fallback the headless

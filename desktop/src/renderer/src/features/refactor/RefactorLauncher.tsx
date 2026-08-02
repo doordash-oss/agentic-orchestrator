@@ -2,8 +2,8 @@
  * Refactor child wizard, at parity with feature creation minus the Where
  * step: repositories are inherited from the parent (read-only), and every
  * Review axis — models, effort, checkpoints, risk, inquireness, exit
- * criteria — is seeded from the parent's current configuration, mirroring
- * the TUI's refactor mode. The pipeline stays the child's independent
+ * criteria — is seeded from the parent's current configuration. The
+ * pipeline stays the child's independent
  * choice and never clobbers the seeded axes.
  */
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
@@ -339,7 +339,7 @@ export function RefactorLauncher({
                   name="pipeline"
                   checked={pipeline === profile.id}
                   // The pipeline is the child's independent choice; the
-                  // parent-seeded checkpoints stay authoritative (TUI parity).
+                  // parent-seeded checkpoints stay authoritative.
                   onChange={() => setPipeline(profile.id)}
                 />
                 <b>{profile.title}</b>
@@ -436,7 +436,7 @@ export function RefactorLauncher({
                     onChange={(event) =>
                       setCheckpoints((current) => {
                         const nextState = { ...current, [gate.key]: event.target.checked };
-                        // Roadmap review implies phase plan review (TUI linkage).
+                        // Roadmap review implies phase plan review.
                         if (gate.key === 'roadmapReview')
                           nextState.phasePlanReview = event.target.checked;
                         return nextState;

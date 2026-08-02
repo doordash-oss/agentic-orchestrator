@@ -425,7 +425,7 @@ func TestRefactorChildTransactionalMultiRepoIntegrationSuccess(t *testing.T) {
 //   - one conflicting repository among clean peers,
 //   - newer parent commits arriving before restart,
 //   - code-changing resolution followed by final-review rerun via
-//     RestartPhase → StartFeature (the TUI's actual dispatch boundary),
+//     RestartPhase → StartFeature (the desktop app's dispatch boundary),
 //   - explicit merge boundaries in every repository after re-prepare.
 func TestRefactorChildTransactionalMultiRepoStagedConflictRestartAndReviewRenewal(t *testing.T) {
 	if testing.Short() {
@@ -517,7 +517,7 @@ func TestRefactorChildTransactionalMultiRepoStagedConflictRestartAndReviewRenewa
 	}
 
 	// Dispatch Final Review via StartFeature — the same entry point the
-	// TUI uses for RestartDispatchPhase. invalidateFinalReview set
+	// client uses for RestartDispatchPhase. invalidateFinalReview set
 	// CurrentPhase=PhaseFinalReview, so StartFeature dispatches it.
 	// The mock returns all_passed, then advanceAfterFinalReview calls
 	// RunChildIntegration to re-prepare candidates against the latest

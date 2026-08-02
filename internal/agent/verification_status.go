@@ -23,8 +23,8 @@ import (
 
 // Harness verification progress is its own presentation surface, distinct
 // from the review validators: CurrentPhaseStatus flags the substep and
-// VerificationItems carries ordered per-command states that the TUI renders
-// as a high-level execution log.
+// VerificationItems carries ordered per-command states that the desktop app
+// renders as a high-level execution log.
 
 const verifyingPhaseStatus = "verifying"
 

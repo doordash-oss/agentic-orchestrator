@@ -6,7 +6,7 @@ export type VerificationTone = 'passed' | 'failed' | 'running' | 'pending' | 'ne
  * Maps a harness verification state onto a display tone. Terminal failure
  * states (failed/blocked/inherited_failure) collapse to `failed`; states that
  * neither passed nor ran to a verdict (waived/not_run/pending_human) are
- * `neutral`. Mirrors the TUI live-preview glyph vocabulary.
+ * `neutral`.
  */
 export function verificationTone(state: string): VerificationTone {
   const normalized = state.trim().toLocaleLowerCase();

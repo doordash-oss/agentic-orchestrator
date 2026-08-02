@@ -260,7 +260,7 @@ type Orchestrator struct {
 	cycleWG sync.WaitGroup
 
 	// featureStartControls serialize phase admission per feature. This makes
-	// repeated API/TUI start requests idempotent even when they arrive before
+	// repeated API start requests idempotent even when they arrive before
 	// the first request's state transition is visible to the second.
 	featureStartControls sync.Map
 

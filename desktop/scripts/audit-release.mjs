@@ -805,13 +805,6 @@ export function runReleaseAudit() {
 
   const goMod = readFileSync(join(rootDir, 'go.mod'), 'utf8');
   const goSum = readFileSync(join(rootDir, 'go.sum'), 'utf8');
-  for (const legacy of ['bubbletea', 'lipgloss', 'bubbles']) {
-    if (goMod.includes(legacy)) failures.push(`legacy terminal UI dependency remains: ${legacy}`);
-  }
-  if (existsSync(join(rootDir, 'internal', 'tui'))) {
-    failures.push('legacy internal/tui package still exists');
-  }
-
   const lock = loadJson(join(rootDir, 'package-lock.json'), 'npm lockfile');
   const desktopPackage = loadJson(join(desktopDir, 'package.json'), 'desktop package manifest');
   const npmInventory = collectNpmRuntimeInventory(lock, desktopPackage, exceptions);

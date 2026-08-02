@@ -828,7 +828,7 @@ func runGroundingPreCheck(cfg PlanLoopConfig, attempt int, attemptDir, planArtif
 	}
 	// resolveUnifiedWorkDir sets cfg.WorkDir to the parent of every repo's
 	// worktree (so the Claude session's cwd can see siblings via --add-dir).
-	// Plan-row references like `docs/desktop/parity-matrix.md` are repo-relative, so
+	// Plan-row references like `docs/testing-baseline.md` are repo-relative, so
 	// resolving them against the worktree-parent would mis-locate every row
 	// by one directory. Pass each repo's worktree path explicitly along with
 	// its name; the gate accepts a bare-path row when the file exists under

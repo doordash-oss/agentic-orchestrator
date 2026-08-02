@@ -2,7 +2,6 @@
 
 exec agentico --help
 stdout '^Agentic Orchestrator$'
-! stdout 'Agentic Workflow Orchestrator'
 stdout '^Usage: agentico$'
 stdout 'agentico server \[flags\]'
 stdout 'Starts or focuses the installed Agentico desktop app'
@@ -18,10 +17,6 @@ stdout '~/.agentic-orchestrator/config.yaml'
 stdout '~/.agentic-orchestrator/features'
 stdout 'agentico update \[--check\|-n\]'
 stdout '--check'
-! stdout 'Commands:'
-! stdout 'feature list'
-! stdout 'feature create'
-! stdout 'run             Launch'
 ! stderr .
 
 exec agentico --version

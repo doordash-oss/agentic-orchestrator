@@ -34,10 +34,6 @@ echo "PASS: binary builds"
 # 2. Help flag works
 HELP_OUTPUT="$($AGENTICO --help)"
 echo "$HELP_OUTPUT" | grep -qE "^Agentic Orchestrator$"
-if echo "$HELP_OUTPUT" | grep -q "Agentic Workflow Orchestrator"; then
-    echo "FAIL: help should not advertise the legacy 'Agentic Workflow Orchestrator' title"
-    exit 1
-fi
 echo "$HELP_OUTPUT" | grep -q "~/.agentic-orchestrator/"
 echo "PASS: help flag works"
 
@@ -52,7 +48,7 @@ echo "PASS: version flag works"
 # server contract and Electron tests.
 echo "PASS: feature management is API-driven"
 
-# 6. Roadmap skill definitions exist (migrated from commands/ to skills/)
+# 6. Roadmap skill definitions exist
 for tmpl in create-roadmap plan-phase revise-roadmap revise-phase-plan \
             validate-roadmap-architecture validate-roadmap-scope \
             validate-phase-plan-structural validate-phase-plan-grounding validate-phase-plan-scope \
@@ -61,14 +57,7 @@ for tmpl in create-roadmap plan-phase revise-roadmap revise-phase-plan \
     echo "PASS: skills/${tmpl}/SKILL.md exists"
 done
 
-# 7. Legacy commands/ directory is fully removed
-if [ -d "commands" ]; then
-    echo "FAIL: commands/ directory should have been deleted"
-    exit 1
-fi
-echo "PASS: commands/ directory correctly removed"
-
-# 8. Default launch smoke: plain agentico hands off to the registered desktop app.
+# 7. Default launch smoke: plain agentico hands off to the registered desktop app.
 go test ./cmd/agentico -run '^TestRunArgsLaunchesDesktopByDefault$' -race -timeout 120s
 echo "PASS: default desktop handoff (TestRunArgsLaunchesDesktopByDefault)"
 

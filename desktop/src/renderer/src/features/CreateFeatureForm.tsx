@@ -1,5 +1,5 @@
 /**
- * Four-step creation contract, repository-first like the TUI: Where, What,
+ * Four-step creation contract, repository-first: Where, What,
  * Pipeline, Review. Initial defaults prefill the draft once; later repository
  * discovery must preserve every user-owned choice.
  */
@@ -243,7 +243,7 @@ export function CreateFeatureForm({ onCreated, onDirtyChange }: CreateFeatureFor
         });
         if (autoStart) {
           try {
-            // TUI parity: creation flows straight into setup + orchestration.
+            // Auto-start: creation flows straight into setup + orchestration.
             await window.agentico.dispatchFeatureAction({
               featureId: created.featureId,
               action: 'start',
@@ -624,7 +624,7 @@ export function CreateFeatureForm({ onCreated, onDirtyChange }: CreateFeatureFor
                     onChange={(event) =>
                       setCheckpoints((current) => {
                         const nextState = { ...current, [gate.key]: event.target.checked };
-                        // Roadmap review implies phase plan review (TUI linkage).
+                        // Roadmap review implies phase plan review.
                         if (gate.key === 'roadmapReview')
                           nextState.phasePlanReview = event.target.checked;
                         return nextState;

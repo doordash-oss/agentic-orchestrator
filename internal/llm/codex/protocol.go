@@ -350,7 +350,7 @@ func (p *Protocol) sendInitialize() error {
 		Params: InitializeParams{
 			ClientInfo: ClientInfo{
 				Name:    "agentic",
-				Title:   "Agentic Workflow Orchestrator",
+				Title:   "Agentic Orchestrator",
 				Version: "0.1.0",
 			},
 			Capabilities: Capabilities{

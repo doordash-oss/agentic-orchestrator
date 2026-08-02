@@ -47,7 +47,7 @@ const (
 	routeGetSession1Transcript = "GET /api/v1/sessions/sess-1/transcript"
 	routeGetLivePreview        = "GET /api/v1/features/feat-1/live-preview"
 
-	testFeatureName     = "Client cutover"
+	testFeatureName     = "Client refresh"
 	testRuntimeStateDir = "/runtime/features"
 
 	inquirenessHigh = "high"

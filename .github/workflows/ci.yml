@@ -33,8 +33,8 @@ jobs:
   # build, then construct and inspect the unsigned package for this host
   # (universal DMG on macOS; x64 AppImage + deb on ubuntu-latest x64; arm64
   # AppImage + deb on ubuntu-24.04-arm). Every supported Linux architecture
-  # is built and inspected on a native runner so the parity ledger's
-  # delivered package results cover Linux x64 and arm64 without gaps.
+  # is built and inspected on a native runner so delivered package coverage
+  # spans Linux x64 and arm64 without gaps.
   desktop:
     strategy:
       fail-fast: false

@@ -1339,7 +1339,7 @@ function LivePreviewOverlay({
   );
 }
 
-/** Mirrors the TUI's implement-loop status verb for the active roadmap phase. */
+/** Status verb for the active roadmap phase of the implement loop. */
 export function roadmapStatusLabel(
   currentPhase: string,
   reviewGate: ReviewGateView,

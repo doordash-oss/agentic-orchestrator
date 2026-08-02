@@ -389,7 +389,7 @@ func (t *journeyMutationTarget) DiscardChild(featureID string) (server.DiscardCh
 	return resp, nil
 }
 
-// ScanRecovery mirrors the production mutation target so a TUI cold boot
+// ScanRecovery mirrors the production mutation target so a client cold boot
 // (which always pulls the recovery snapshot) sees the real orphan/session
 // scan rather than the unimplemented embedded interface.
 func (t *journeyMutationTarget) ScanRecovery(ctx context.Context) ([]ports.RecoveryItem, error) {

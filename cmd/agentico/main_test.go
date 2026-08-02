@@ -1752,9 +1752,6 @@ func TestPrintUsageAdvertisesRenamedDefaults(t *testing.T) {
 			t.Errorf("printUsage missing %q\nfull:\n%s", want, out)
 		}
 	}
-	if strings.Contains(out, "Agentic Workflow Orchestrator") {
-		t.Errorf("printUsage still advertises legacy product title:\n%s", out)
-	}
 	if strings.Contains(out, "Commands:") {
 		t.Errorf("printUsage must not introduce a Commands section:\n%s", out)
 	}

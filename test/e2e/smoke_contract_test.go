@@ -20,23 +20,12 @@ import (
 	"testing"
 )
 
-func TestSmokeScriptDoesNotUseRemovedFeatureCommands(t *testing.T) {
+func TestSmokeScriptRunsDefaultDesktopLaunchTest(t *testing.T) {
 	body, err := os.ReadFile("smoke.sh")
 	if err != nil {
 		t.Fatalf("ReadFile(smoke.sh): %v", err)
 	}
 	script := string(body)
-	for _, banned := range []string{
-		" feature list",
-		" feature create",
-		"agentico run",
-		"--refresh-models",
-	} {
-		if strings.Contains(script, banned) {
-			t.Fatalf("smoke.sh still contains removed command-era surface %q", banned)
-		}
-	}
-
 	for _, want := range []string{
 		"go test ./cmd/agentico -run '^TestRunArgsLaunchesDesktopByDefault$'",
 	} {

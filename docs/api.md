@@ -64,7 +64,7 @@ resources, child records, and retained outcomes; every category is present and
 absent impact is an explicitly empty list. Clients render that projection
 verbatim before confirmation instead of reconstructing mutable backend state,
 and resolve an unavailable action against `disabled_reasons` for the typed
-reason rather than substituting generic copy. In the TUI this surfaces as a
+reason rather than substituting generic copy. In the desktop app this surfaces as a
 per-parent "Refactor History" group beneath each parent (collapsed by default,
 expanded per session), read-only closed-child inspection, and focused action
 hints.

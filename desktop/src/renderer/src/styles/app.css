@@ -10925,7 +10925,7 @@ body {
 /* --- Roadmap gauge ---------------------------------------------------------
  * The implement-loop instrument: one segment per roadmap phase, the active
  * segment carrying the same signal pulse as the phase-spine needle. Mirrors
- * the TUI's "Implementing Phase 2/5 (Iteration 3)".
+ * the phase status verb, e.g. "Implementing Phase 2/5 (Iteration 3)".
  */
 
 .roadmap-gauge {

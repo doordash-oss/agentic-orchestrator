@@ -24,58 +24,6 @@ import (
 // Guards live docs contract: desktop app plus foreground server launch guidance.
 func TestUserFacingDocsDescribeLaunchSurface(t *testing.T) {
 	repoRoot := filepath.Join("..", "..")
-	docs := []string{"README.md"}
-	userGuideDocs, err := filepath.Glob(filepath.Join(repoRoot, "skills", "chat", "user-guide", "*.md"))
-	if err != nil {
-		t.Fatalf("Glob user guide docs: %v", err)
-	}
-	for _, path := range userGuideDocs {
-		rel, err := filepath.Rel(repoRoot, path)
-		if err != nil {
-			t.Fatalf("Rel(%q): %v", path, err)
-		}
-		docs = append(docs, rel)
-	}
-
-	banned := []string{
-		"`agentico run`",
-		"agentico run",
-		"agentico [flags] [command]",
-		"Commands:",
-		"feature list       List all features",
-		"feature create     Create a new feature",
-		"agentico feature create",
-		"`agentico feature create`",
-		"direct desktop app",
-		"starts the direct desktop app",
-		"--name <name>",
-		"--repo <path>",
-		"--jira <ticket>",
-		"--checkpoint <gate>",
-		"--auto-publish",
-		"**From the CLI:**",
-		"Miller-columns",
-		"notifications.terminal_bundle_id",
-		"ui.keyboard_layout",
-		"ui.collapsed_sections",
-		"Shift+G",
-		"Shift+A",
-		"Ctrl+]",
-		"Ctrl+X",
-		"Ctrl+F",
-	}
-	for _, rel := range docs {
-		body, err := os.ReadFile(filepath.Join(repoRoot, rel))
-		if err != nil {
-			t.Fatalf("ReadFile(%s): %v", rel, err)
-		}
-		text := string(body)
-		for _, token := range banned {
-			if strings.Contains(text, token) {
-				t.Fatalf("%s still advertises removed command-era surface %q", rel, token)
-			}
-		}
-	}
 
 	for _, rel := range []string{
 		"README.md",

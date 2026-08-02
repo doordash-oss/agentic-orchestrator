@@ -2093,7 +2093,7 @@ func TestRewindToPhase_PRURLCleared(t *testing.T) {
 	_ = mgr.Store.Modify(f.ID, func(f *feature.Feature) error {
 		f.Status = feature.StatusPublished
 		f.CurrentPhase = feature.PhasePublish
-		// Per-repo PR URL is the only source of truth post-cutover.
+		// Per-repo PR URL is the only source of truth.
 		if f.RepoStates == nil {
 			f.RepoStates = map[string]*feature.RepoState{}
 		}
@@ -5008,7 +5008,7 @@ func TestRewindToPhase_ClosePRStillCalledForPublished(t *testing.T) {
 	_ = store.Modify(f.ID, func(feat *feature.Feature) error {
 		feat.Status = feature.StatusPublished
 		feat.CurrentPhase = feature.PhasePublish
-		// Per-repo PR URL is the only source of truth post-cutover.
+		// Per-repo PR URL is the only source of truth.
 		if feat.RepoStates == nil {
 			feat.RepoStates = map[string]*feature.RepoState{}
 		}

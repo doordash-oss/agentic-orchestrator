@@ -507,6 +507,14 @@ func (o *Orchestrator) settleChildClosureTail(childID, parentID string) error {
 			})
 		}
 	}
+	// Parent-scoped event after the tail's last mutation: clients that reload
+	// the parent on the stream's final event must observe settled state,
+	// including read-time gates such as the worktree-cleanliness check.
+	o.emitEvent(ports.Event{
+		Type:      ports.RepoStatusChanged,
+		FeatureID: parentID,
+		Message:   "parent settled after child closure",
+	})
 	return nil
 }
 

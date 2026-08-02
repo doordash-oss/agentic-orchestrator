@@ -591,6 +591,48 @@ func TestChildIntegrationRepeatedCompletionIsIdempotent(t *testing.T) {
 	}
 }
 
+// TestChildIntegrationFinalEventIsParentScoped proves the closure tail emits
+// a parent-scoped event after all of its mutations, so a client that reloads
+// the parent on the stream's last event observes settled state — including
+// read-time gates like the worktree-cleanliness check on the refactor action.
+func TestChildIntegrationFinalEventIsParentScoped(t *testing.T) {
+	if testing.Short() {
+		t.Skip("real-git integration test")
+	}
+	fx := newChildIntegrationFixture(t, feature.StatusPublished, true)
+	o := fx.orchestrator()
+
+	if err := o.RunChildIntegration(fx.child.ID); err != nil {
+		t.Fatalf("runChildIntegration() error = %v", err)
+	}
+
+	var events []ports.Event
+	for {
+		select {
+		case ev := <-o.Events():
+			events = append(events, ev)
+			continue
+		default:
+		}
+		break
+	}
+	closedIdx, lastParentIdx := -1, -1
+	for i, ev := range events {
+		if ev.Type == ports.RelationshipClosed {
+			closedIdx = i
+		}
+		if ev.FeatureID == fx.parent.ID {
+			lastParentIdx = i
+		}
+	}
+	if closedIdx == -1 {
+		t.Fatalf("RelationshipClosed not emitted; events = %+v", events)
+	}
+	if lastParentIdx <= closedIdx {
+		t.Fatalf("no parent-scoped event after RelationshipClosed (closed at %d, last parent event at %d); events = %+v", closedIdx, lastParentIdx, events)
+	}
+}
+
 // failingRemoveWorktrees wraps the real worktree manager and fails Remove,
 // simulating a transient cleanup failure after the merge is durable.
 type failingRemoveWorktrees struct {

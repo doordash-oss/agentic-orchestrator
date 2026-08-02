@@ -321,7 +321,7 @@ func TestCreateFeatureIdempotencyKeyReturnsOriginalResult(t *testing.T) {
 	})
 	body := map[string]any{
 		"name": "one feature", "idempotency_key": "3d7fa9f5-7417-4785-9981-fbfc9988bd8f",
-		"pipeline": "large", "risk_level": "high", "skills": []string{"frontend-design"},
+		"pipeline": "large", "risk_level": "high",
 	}
 	for range 2 {
 		w := postTrustedJSON(handler, apiPathFeatures, body)
@@ -349,11 +349,6 @@ func TestCreateFeatureReportsFieldSpecificCreationLimits(t *testing.T) {
 			name: "idempotency key",
 			body: map[string]any{"name": "feature", "idempotency_key": strings.Repeat("k", 129)},
 			want: "idempotency_key exceeds the 128 character limit",
-		},
-		{
-			name: "skills",
-			body: map[string]any{"name": "feature", "skills": make([]string, 33)},
-			want: "skills exceeds the 32 item limit",
 		},
 	}
 	for _, tt := range tests {

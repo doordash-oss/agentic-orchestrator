@@ -1283,7 +1283,6 @@ type CreateFeatureMutationRequest struct {
 	Pipeline         CreateFeatureMutationRequestPipeline    `json:"pipeline,omitempty"`
 	Repos            []string                                `json:"repos,omitempty"`
 	RiskLevel        CreateFeatureMutationRequestRiskLevel   `json:"risk_level,omitempty"`
-	Skills           []string                                `json:"skills,omitempty"`
 	UseCurrentBranch bool                                    `json:"use_current_branch,omitempty"`
 }
 

@@ -35,7 +35,6 @@ const MaxActionTextBytes = 4000
 
 const (
 	maxCreationIdempotencyKeyLength = 128
-	maxCreationSkills               = 32
 	maxRememberedCreationResults    = 1000
 )
 
@@ -201,7 +200,6 @@ type CreateFeatureRequest struct {
 	Attachments             []string                `json:"attachments,omitempty"`
 	RiskLevel               feature.RiskLevel       `json:"risk_level,omitempty"`
 	Pipeline                feature.PipelineProfile `json:"pipeline,omitempty"`
-	Skills                  []string                `json:"skills,omitempty"`
 	IdempotencyKey          string                  `json:"idempotency_key,omitempty"`
 }
 
@@ -719,10 +717,6 @@ func (h *apiHandler) handleCreateFeatureMutation(w http.ResponseWriter, r *http.
 	}
 	if len(req.IdempotencyKey) > maxCreationIdempotencyKeyLength {
 		writeAPIError(w, http.StatusBadRequest, errCodeBadRequest, fmt.Sprintf("idempotency_key exceeds the %d character limit", maxCreationIdempotencyKeyLength), nil)
-		return
-	}
-	if len(req.Skills) > maxCreationSkills {
-		writeAPIError(w, http.StatusBadRequest, errCodeBadRequest, fmt.Sprintf("skills exceeds the %d item limit", maxCreationSkills), nil)
 		return
 	}
 	if !h.requireTrustedMutation(w, r) {

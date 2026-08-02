@@ -169,7 +169,6 @@ type CreateOptions struct {
 	Attachments             []string // temp attachment file paths
 	RiskLevel               RiskLevel
 	Pipeline                PipelineProfile
-	Skills                  []string
 	QueueSetup              bool
 }
 
@@ -302,7 +301,6 @@ func (m *Manager) Create(name, description string, repos []string, models config
 		Status:        status,
 		CurrentPhase:  opt.Pipeline.FirstPhase(),
 		Pipeline:      opt.Pipeline,
-		Skills:        append([]string(nil), opt.Skills...),
 		Repos:         featureRepos,
 		Models:        models,
 		Effort:        opt.Effort,

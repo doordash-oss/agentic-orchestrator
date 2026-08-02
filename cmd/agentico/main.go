@@ -999,7 +999,6 @@ func (t *serverMutationTarget) CreateFeature(req serverruntime.CreateFeatureRequ
 		QueueSetup:              true,
 		RiskLevel:               req.RiskLevel,
 		Pipeline:                req.Pipeline,
-		Skills:                  req.Skills,
 	})
 	if err != nil {
 		return serverruntime.CreateFeatureResponse{}, err

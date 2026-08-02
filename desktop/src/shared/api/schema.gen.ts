@@ -1212,7 +1212,6 @@ export interface components {
             risk_level?: "low" | "medium" | "high";
             /** @enum {string} */
             pipeline?: "medium" | "large" | "moonshot";
-            skills?: string[];
             idempotency_key?: string;
         };
         /** @description Result of the setup action: durable server-owned setup (fresh run or retry of unfinished tasks) has been dispatched without starting orchestration. Progress is reported through the feature detail setup state and SSE invalidation events; on success the feature reaches a startable pre-orchestration state. */

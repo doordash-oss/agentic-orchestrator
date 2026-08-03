@@ -15,6 +15,7 @@
 package git
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
@@ -50,113 +51,22 @@ func TestParsePRURL(t *testing.T) {
 	}
 }
 
-func TestParsePaginatedComments(t *testing.T) {
-	tests := []struct {
-		name      string
-		input     string
-		wantCount int
-		wantIDs   []int
-		wantErr   bool
-	}{
-		{
-			name:      "single page",
-			input:     `[{"id":1,"path":"a.go"},{"id":2,"path":"b.go"}]`,
-			wantCount: 2,
-			wantIDs:   []int{1, 2},
-		},
-		{
-			name:      "multi page",
-			input:     `[{"id":1,"path":"a.go"},{"id":2,"path":"b.go"}][{"id":3,"path":"c.go"}]`,
-			wantCount: 3,
-			wantIDs:   []int{1, 2, 3},
-		},
-		{
-			name:      "three pages",
-			input:     `[{"id":1}][{"id":2}][{"id":3}]`,
-			wantCount: 3,
-			wantIDs:   []int{1, 2, 3},
-		},
-		{
-			name:      "empty array",
-			input:     `[]`,
-			wantCount: 0,
-		},
-		{
-			name:      "empty input",
-			input:     ``,
-			wantCount: 0,
-		},
-		{
-			name:    "invalid json",
-			input:   `[{"id":1}`,
-			wantErr: true,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			comments, err := parsePaginatedComments([]byte(tt.input))
-			if (err != nil) != tt.wantErr {
-				t.Errorf("parsePaginatedComments() error = %v, wantErr %v", err, tt.wantErr)
-				return
-			}
-			if err != nil {
-				return
-			}
-			if len(comments) != tt.wantCount {
-				t.Errorf("got %d comments, want %d", len(comments), tt.wantCount)
-				return
-			}
-			for i, wantID := range tt.wantIDs {
-				if comments[i].ID != wantID {
-					t.Errorf("comment[%d].ID = %d, want %d", i, comments[i].ID, wantID)
-				}
-			}
-		})
-	}
-}
-
-func TestParsePaginatedCommentsWithType(t *testing.T) {
-	input := `[{"id":1,"path":"a.go","type":"review"},{"id":2,"body":"conversation","type":"issue"}]`
-	comments, err := parsePaginatedComments([]byte(input))
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(comments) != 2 {
-		t.Fatalf("got %d comments, want 2", len(comments))
-	}
-	if comments[0].Type != "review" {
-		t.Errorf("comment[0].Type = %q, want %q", comments[0].Type, "review")
-	}
-	if comments[1].Type != "issue" {
-		t.Errorf("comment[1].Type = %q, want %q", comments[1].Type, "issue")
-	}
-}
-
 func TestFetchPRCommentsIncludesEveryPRFeedbackSurface(t *testing.T) {
-	testutil.InstallFakeGH(t, testutil.FakeGHConfig{Behavior: `
-case "$3" in
-  repos/example/repo/pulls/7/comments)
-    printf '%s\n' '[{"id":11,"path":"main.go","line":12,"body":"inline","user":{"login":"alice"},"created_at":"2026-07-07T10:00:00Z"}]'
-    ;;
-  repos/example/repo/issues/7/comments)
-    printf '%s\n' '[{"id":22,"body":"conversation","user":{"login":"bob"},"created_at":"2026-07-07T11:00:00Z"}]'
-    ;;
-  repos/example/repo/pulls/7/reviews)
-    printf '%s\n' '[{"id":33,"body":"review summary","user":{"login":"carol"},"submitted_at":"2026-07-07T12:00:00Z"}]'
-    ;;
-  *)
-    printf 'unexpected gh arguments: %s\n' "$*" >&2
-    exit 2
-    ;;
-esac
-`})
+	fake := testutil.InstallFakeGitHubAPI(t)
+	fake.HandleJSON("/repos/example/repo/pulls/7/comments", 200,
+		`[{"id":11,"path":"main.go","line":12,"body":"inline","user":{"login":"alice"},"created_at":"2026-07-07T10:00:00Z"},`+
+			`{"id":12,"body":"a reply","user":{"login":"dave"},"created_at":"2026-07-07T10:30:00Z","in_reply_to_id":11}]`)
+	fake.HandleJSON("/repos/example/repo/issues/7/comments", 200,
+		`[{"id":22,"body":"conversation","user":{"login":"bob"},"created_at":"2026-07-07T11:00:00Z"}]`)
+	fake.HandleJSON("/repos/example/repo/pulls/7/reviews", 200,
+		`[{"id":33,"body":"review summary","user":{"login":"carol"},"submitted_at":"2026-07-07T12:00:00Z"}]`)
 
 	comments, err := FetchPRComments(t.TempDir(), "https://github.com/example/repo/pull/7")
 	if err != nil {
 		t.Fatalf("FetchPRComments() error = %v", err)
 	}
 	if len(comments) != 3 {
-		t.Fatalf("FetchPRComments() returned %d comments, want 3: %+v", len(comments), comments)
+		t.Fatalf("FetchPRComments() returned %d comments, want 3 (reply to 11 excluded): %+v", len(comments), comments)
 	}
 	for i, want := range []struct {
 		id          int
@@ -169,6 +79,35 @@ esac
 		if comments[i].ID != want.id || comments[i].Type != want.commentType {
 			t.Fatalf("comments[%d] = %+v, want id=%d type=%s", i, comments[i], want.id, want.commentType)
 		}
+	}
+}
+
+func TestFetchPRCommentsSurfacesAPIErrors(t *testing.T) {
+	fake := testutil.InstallFakeGitHubAPI(t)
+	fake.HandleJSON("/repos/example/repo/pulls/7/comments", 500, `{"message":"synthetic API failure"}`)
+
+	_, err := FetchPRComments(t.TempDir(), "https://github.com/example/repo/pull/7")
+	if err == nil || !strings.Contains(err.Error(), "synthetic API failure") {
+		t.Fatalf("FetchPRComments() error = %v, want it to contain %q", err, "synthetic API failure")
+	}
+}
+
+func TestPRURLHost(t *testing.T) {
+	tests := []struct {
+		name string
+		url  string
+		want string
+	}{
+		{"github.com", "https://github.com/o/r/pull/1", "github.com"},
+		{"enterprise host", "https://ghe.corp.example/o/r/pull/2", "ghe.corp.example"},
+		{"garbage defaults to github.com", "not a url", "github.com"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := prURLHost(tt.url); got != tt.want {
+				t.Errorf("prURLHost(%q) = %q, want %q", tt.url, got, tt.want)
+			}
+		})
 	}
 }
 
@@ -186,65 +125,6 @@ func TestSortReviewCommentsChronologically(t *testing.T) {
 			t.Fatalf("comments[%d].ID = %d, want %d", i, comments[i].ID, wantID)
 		}
 	}
-}
-
-func TestParseReviewThreadMap(t *testing.T) {
-	t.Run("unresolved threads", func(t *testing.T) {
-		input := `{
-  "data": {
-    "repository": {
-      "pullRequest": {
-        "reviewThreads": {
-          "nodes": [
-            {
-              "id": "PRRT_abc",
-              "isResolved": false,
-              "comments": {"nodes": [{"databaseId": 100}]}
-            },
-            {
-              "id": "PRRT_def",
-              "isResolved": true,
-              "comments": {"nodes": [{"databaseId": 200}]}
-            },
-            {
-              "id": "PRRT_ghi",
-              "isResolved": false,
-              "comments": {"nodes": [{"databaseId": 300}]}
-            }
-          ]
-        }
-      }
-    }
-  }
-}`
-		m, err := parseReviewThreadMap([]byte(input))
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if len(m) != 2 {
-			t.Fatalf("expected 2 unresolved threads, got %d", len(m))
-		}
-		if m[100] != "PRRT_abc" {
-			t.Errorf("comment 100 -> %q, want PRRT_abc", m[100])
-		}
-		if _, ok := m[200]; ok {
-			t.Error("resolved comment 200 should be excluded")
-		}
-		if m[300] != "PRRT_ghi" {
-			t.Errorf("comment 300 -> %q, want PRRT_ghi", m[300])
-		}
-	})
-
-	t.Run("empty threads", func(t *testing.T) {
-		input := `{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[]}}}}}`
-		m, err := parseReviewThreadMap([]byte(input))
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if len(m) != 0 {
-			t.Errorf("expected empty map, got %v", m)
-		}
-	})
 }
 
 func TestCommentTypeConstants(t *testing.T) {

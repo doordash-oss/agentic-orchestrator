@@ -15,7 +15,15 @@ export function FeatureFactsRail({
   const branch = featureBranch(snapshot);
   const repository = snapshot.repoStatus?.[0];
   const elapsed = run?.timing?.totalSeconds ?? snapshot.timing?.totalSeconds;
-  const cost = run?.cost?.totalUsd;
+  const aftercarePasses = [
+    ...(snapshot.activeChild === undefined ? [] : [snapshot.activeChild]),
+    ...(snapshot.childHistory ?? []),
+  ];
+  const hasCost = run?.cost !== undefined || aftercarePasses.length > 0;
+  const cost = hasCost
+    ? (run?.cost?.totalUsd ?? 0) +
+      aftercarePasses.reduce((total, pass) => total + pass.cost.totalUsd, 0)
+    : undefined;
   const prUrl = repository?.prUrl;
 
   return (

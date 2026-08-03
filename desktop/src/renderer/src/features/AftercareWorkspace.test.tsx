@@ -46,6 +46,59 @@ describe('AftercareWorkspace', () => {
     expect(screen.queryByText('Do not repeat me')).not.toBeInTheDocument();
   });
 
+  it('includes active and completed aftercare pass costs in the feature total', () => {
+    render(
+      <AftercareWorkspace
+        snapshot={featureSnapshot({
+          status: 'CodeReady',
+          activeChild: {
+            id: 'childactive567890',
+            name: 'Active review feedback pass',
+            kind: 'review-feedback',
+            displayToken: 'review-feedback:childactive567890',
+            displayState: 'Active',
+            pipeline: 'medium',
+            status: 'Implementing',
+            relationshipState: 'active',
+            startedAt: '2026-08-01T10:00:00Z',
+            cost: { totalUsd: 0.32, byPhase: {} },
+            integrationState: 'pending',
+            attention: [],
+            cleanupWarnings: [],
+          },
+          childHistory: [
+            {
+              id: 'childclosed567890',
+              name: 'Completed refactor pass',
+              kind: 'refactor',
+              displayToken: 'refactor:childclosed567890',
+              displayState: 'Closed — Completed',
+              pipeline: 'large',
+              status: 'Done',
+              relationshipState: 'closed',
+              startedAt: '2026-07-28T10:00:00Z',
+              closedAt: '2026-07-29T10:00:00Z',
+              outcome: 'completed',
+              cost: { totalUsd: 1.25, byPhase: {} },
+              integrationState: 'merged',
+              attention: [],
+              cleanupWarnings: [],
+            },
+          ],
+        })}
+        run={completedRun}
+        onAction={vi.fn()}
+        onOpenRunRecord={vi.fn()}
+        onOpenChanges={vi.fn()}
+        onOpenPullRequest={vi.fn()}
+        onRetry={vi.fn()}
+        onReopenCycle={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText('$96.75')).toBeVisible();
+  });
+
   it('omits Publish after publication and routes compact archive actions', async () => {
     const onAction = vi.fn();
     const onOpenRunRecord = vi.fn();

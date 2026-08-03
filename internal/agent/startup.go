@@ -19,6 +19,7 @@ import (
 	"os/exec"
 	"strings"
 
+	"github.com/cli/go-gh/v2/pkg/auth"
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 )
@@ -47,7 +48,6 @@ func CheckRequiredTools() (errors []string, warnings []string) {
 	}
 	tools := []tool{
 		{"git", true, "Install from https://git-scm.com/downloads"},
-		{"gh", false, "Install from https://cli.github.com/ (required for PR publishing)"},
 	}
 	for _, t := range tools {
 		if _, err := exec.LookPath(t.name); err != nil {
@@ -58,6 +58,9 @@ func CheckRequiredTools() (errors []string, warnings []string) {
 				warnings = append(warnings, fmt.Sprintf("Warning: %s", msg))
 			}
 		}
+	}
+	if token, _ := auth.TokenForHost("github.com"); token == "" {
+		warnings = append(warnings, "Warning: no GitHub credentials found. PR publishing and review-comment sync need them. Set GH_TOKEN or install GitHub CLI (https://cli.github.com/) and run 'gh auth login'.")
 	}
 	return errors, warnings
 }

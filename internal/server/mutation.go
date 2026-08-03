@@ -1317,7 +1317,7 @@ func (h *apiHandler) handleReviewCommentsFetch(w http.ResponseWriter, r *http.Re
 	}
 	resp, err := h.mutations.FetchReviewComments(featureID, req)
 	if err != nil {
-		writeAPIError(w, http.StatusBadRequest, "bad_request", "fetch review comments failed", nil)
+		writeAPIError(w, http.StatusBadRequest, "bad_request", "fetch review comments failed: "+err.Error(), nil)
 		return
 	}
 	if resp.APIVersion == "" {

@@ -333,34 +333,34 @@ test('packaged inbox and cockpit resolve real attention classes from the bundled
     transcript.codeBlock('permission remember audit log', audit);
     transcript.step('second matching Bash request was auto-approved and did not become inbox work');
 
-    transcript.section('AskUser bundle drafted in the inbox and resolved from the cockpit');
+    transcript.section('AskUser bundle routed from the inbox and resolved from the cockpit');
     await waitForAttentionItem(handle.page, 'ask-bundle');
     inbox = await openInbox(handle);
-    attentionDetail = await expandInboxItem(handle, inbox, /Questions/);
+    // Feature-scoped questions route to the cockpit, where the prompt and
+    // options render as the agent's conversation turn and the answer is sent
+    // from the composer strip.
+    await expandInboxItem(handle, inbox, /Questions/);
+    const questionPreview = handle.page.getByRole('dialog', { name: 'Live agent preview' });
+    const questionTurn = questionPreview.getByRole('group', { name: 'Agent question' });
     await expect(
-      attentionDetail.getByText('Which verification tracks should be included?'),
+      questionTurn.getByText('Which verification tracks should be included?'),
     ).toBeVisible();
     await expect(
-      attentionDetail.getByText('Exercise renderer and server contracts.').first(),
+      questionTurn.getByText('Exercise renderer and server contracts.').first(),
     ).toBeVisible();
-    await attentionDetail.getByText('Unit tests', { exact: true }).click();
-    await attentionDetail.getByText('Packaged smoke', { exact: true }).click();
-    await attentionDetail
+    await questionTurn.getByText('Unit tests', { exact: true }).click();
+    await questionTurn.getByText('Packaged smoke', { exact: true }).click();
+    await questionTurn
       .getByLabel(/Evidence note free text/)
       .fill('Attach the redacted packaged trace bundle.');
     await evidenceShot(handle, 'attention-askuser-bundle');
-    await closeInbox(handle.page);
-    cockpit = handle.page.getByLabel('Feature Packaged Attention Resolution');
-    const inlineQuestions = cockpit.getByRole('region', { name: 'Agent request' });
-    await expect(
-      inlineQuestions.getByText('Which verification tracks should be included?'),
-    ).toBeVisible();
-    await expect(inlineQuestions.getByRole('checkbox', { name: /Unit tests/ })).toBeChecked();
-    await expect(inlineQuestions.getByRole('checkbox', { name: /Packaged smoke/ })).toBeChecked();
-    await expect(inlineQuestions.getByLabel(/Evidence note free text/)).toHaveValue(
+    await expect(questionTurn.getByRole('checkbox', { name: /Unit tests/ })).toBeChecked();
+    await expect(questionTurn.getByRole('checkbox', { name: /Packaged smoke/ })).toBeChecked();
+    await expect(questionTurn.getByLabel(/Evidence note free text/)).toHaveValue(
       'Attach the redacted packaged trace bundle.',
     );
-    await inlineQuestions.getByRole('button', { name: /^Submit/ }).click();
+    const questionComposer = questionPreview.getByRole('region', { name: 'Agent request' });
+    await questionComposer.getByRole('button', { name: /^Send/ }).click();
     await waitForProviderLog(world, 'response:ask-bundle:');
     const providerLogAfterAsk = readProviderLog(world);
     expect(providerLogAfterAsk).toContain('Unit tests, Packaged smoke');

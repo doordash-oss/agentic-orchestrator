@@ -151,6 +151,30 @@ export function QuestionConversationTurn({
                   </label>
                 );
               })}
+              {single ? null : (
+                <label
+                  className="attention-option attention-option--other"
+                  data-selected={draft.freeText.trim() === '' ? undefined : true}
+                >
+                  <span className="attention-option__number" aria-hidden="true">
+                    {question.options.length + 1}
+                  </span>
+                  <span className="attention-option__copy">
+                    <span className="attention-option__label">Other</span>
+                    <input
+                      className="attention-free-text__input"
+                      aria-label={`${question.header} free text`}
+                      placeholder="Type your own answer here"
+                      value={draft.freeText}
+                      onChange={(event) =>
+                        setQuestionDraft(setDrafts, detailKey, question.key, {
+                          freeText: event.target.value,
+                        })
+                      }
+                    />
+                  </span>
+                </label>
+              )}
             </fieldset>
           );
         })}

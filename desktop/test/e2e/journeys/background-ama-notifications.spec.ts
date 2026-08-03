@@ -196,7 +196,9 @@ test('packaged attention notifications are private, deduplicated, bounded, passi
     await expect(inbox).not.toBeVisible();
 
     const preview = handle.page.getByRole('dialog', { name: 'Live agent preview' });
-    const questions = preview.getByRole('region', { name: 'Agent request' });
+    // The prompt and options render as the agent's conversation turn; the
+    // composer strip in the "Agent request" footer sends the answer.
+    const questions = preview.getByRole('group', { name: 'Agent question' });
     await expect(
       questions.getByText('Which verification tracks should be included?'),
     ).toBeVisible();
@@ -205,7 +207,10 @@ test('packaged attention notifications are private, deduplicated, bounded, passi
     await questions
       .getByLabel(/Evidence note free text/)
       .fill('Keep the routed question on target.');
-    await questions.getByRole('button', { name: /^Submit/ }).click();
+    await preview
+      .getByRole('region', { name: 'Agent request' })
+      .getByRole('button', { name: /^Send/ })
+      .click();
     await waitForAttentionMissing(handle, 'ask-bundle');
 
     persistAppLogs(handle, 'background-notifications-app-server');

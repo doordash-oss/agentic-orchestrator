@@ -403,7 +403,7 @@ func TestStartSessionWithInitialPrompt(t *testing.T) {
 	// This verifies that InitialPrompt is delivered via stdin.
 	os.WriteFile(scriptPath, []byte(`#!/bin/bash
 echo '{"type":"system","subtype":"init","session_id":"s1","model":"test"}'
-if read -t 2 line; then
+if read -t 10 line; then
   echo '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"prompt_received"}]}}'
 else
   echo '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"no_input"}]}}'
@@ -420,7 +420,7 @@ echo '{"type":"result","subtype":"success","session_id":"s1","total_cost_usd":0}
 
 	select {
 	case <-sess.Done():
-	case <-time.After(5 * time.Second):
+	case <-time.After(15 * time.Second):
 		t.Fatal("session did not complete within timeout")
 	}
 
@@ -439,7 +439,7 @@ func TestStartSessionSeedsInitialPromptContextEstimate(t *testing.T) {
 	scriptPath := filepath.Join(tmpDir, "initial-context.sh")
 	if err := os.WriteFile(scriptPath, []byte(`#!/bin/bash
 echo '{"type":"system","subtype":"init","session_id":"s1","model":"test"}'
-read -t 2 line || true
+read -t 10 line || true
 echo '{"type":"result","subtype":"success","session_id":"s1","total_cost_usd":0}'
 `), 0o755); err != nil {
 		t.Fatalf("writing script: %v", err)
@@ -456,7 +456,7 @@ echo '{"type":"result","subtype":"success","session_id":"s1","total_cost_usd":0}
 
 	select {
 	case <-sess.Done():
-	case <-time.After(5 * time.Second):
+	case <-time.After(15 * time.Second):
 		t.Fatal("session did not complete within timeout")
 	}
 

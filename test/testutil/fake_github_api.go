@@ -39,7 +39,7 @@ type FakeGitHubAPI struct {
 
 // InstallFakeGitHubAPI starts the server and routes internal/github
 // clients at it for the duration of the test. Not safe for t.Parallel()
-// (process-global override, like InstallFakeGH's PATH mutation).
+// (process-global override).
 func InstallFakeGitHubAPI(t testing.TB) *FakeGitHubAPI {
 	t.Helper()
 	f := &FakeGitHubAPI{Mux: http.NewServeMux()}

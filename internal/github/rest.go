@@ -124,7 +124,7 @@ func (c *Client) GetPR(owner, repo string, number int) (PRInfo, error) {
 // CreatePRParams describes a pull request to open.
 type CreatePRParams struct {
 	Owner, Repo, Head, Base, Title, Body string
-	Draft                                 bool
+	Draft                                bool
 }
 
 // CreatePR opens a pull request and returns its URL. An empty Base

@@ -170,39 +170,35 @@ func parseReviewCommentCreatedAt(value string) (time.Time, bool) {
 }
 
 // ReplyToPRComment posts a reply to a specific review comment.
-func ReplyToPRComment(repoPath, prURL string, commentID int, body string) error {
+func ReplyToPRComment(_ string, prURL string, commentID int, body string) error {
 	body = InjectPRSignature(body)
 	owner, repo, number, err := ParsePRURL(prURL)
 	if err != nil {
 		return err
 	}
-
-	endpoint := fmt.Sprintf("repos/%s/%s/pulls/%d/comments/%d/replies",
-		owner, repo, number, commentID)
-	cmd := exec.Command("gh", "api", endpoint, "-f", "body="+body)
-	cmd.Dir = repoPath
-	out, err := cmd.CombinedOutput()
+	client, err := githubapi.ForHost(prURLHost(prURL))
 	if err != nil {
-		return fmt.Errorf("replying to comment %d: %s: %w",
-			commentID, strings.TrimSpace(string(out)), err)
+		return err
+	}
+	if err := client.ReplyToReviewComment(owner, repo, number, commentID, body); err != nil {
+		return fmt.Errorf("replying to comment %d: %w", commentID, err)
 	}
 	return nil
 }
 
 // ReplyToIssueComment posts a top-level conversation comment on a PR.
-func ReplyToIssueComment(repoPath, prURL, body string) error {
+func ReplyToIssueComment(_ string, prURL, body string) error {
 	body = InjectPRSignature(body)
 	owner, repo, number, err := ParsePRURL(prURL)
 	if err != nil {
 		return err
 	}
-
-	endpoint := fmt.Sprintf("repos/%s/%s/issues/%d/comments", owner, repo, number)
-	cmd := exec.Command("gh", "api", endpoint, "-f", "body="+body)
-	cmd.Dir = repoPath
-	out, err := cmd.CombinedOutput()
+	client, err := githubapi.ForHost(prURLHost(prURL))
 	if err != nil {
-		return fmt.Errorf("posting issue comment: %s: %w", strings.TrimSpace(string(out)), err)
+		return err
+	}
+	if err := client.CreateIssueComment(owner, repo, number, body); err != nil {
+		return fmt.Errorf("posting issue comment: %w", err)
 	}
 	return nil
 }
@@ -221,21 +217,15 @@ func FetchReviewThreadMap(_ string, prURL string) (map[int]string, error) {
 	return client.ReviewThreadMap(owner, repo, number)
 }
 
-// ResolveReviewThread resolves a single review thread via GraphQL mutation.
-func ResolveReviewThread(repoPath, threadNodeID string) error {
-	query := fmt.Sprintf(`mutation {
-  resolveReviewThread(input: {threadId: %q}) {
-    thread { isResolved }
-  }
-}`, threadNodeID)
-
-	cmd := exec.Command("gh", "api", "graphql", "-f", "query="+query)
-	cmd.Dir = repoPath
-	out, err := cmd.CombinedOutput()
+// ResolveReviewThread resolves a single review thread. Thread node IDs
+// come from FetchReviewThreadMap on the same PR; the API host is assumed
+// to be github.com because no PR URL reaches this call.
+func ResolveReviewThread(_ string, threadNodeID string) error {
+	client, err := githubapi.ForHost("github.com")
 	if err != nil {
-		return fmt.Errorf("resolving review thread: %s: %w", strings.TrimSpace(string(out)), err)
+		return err
 	}
-	return nil
+	return client.ResolveReviewThread(threadNodeID)
 }
 
 // LatestCommitSHA returns the short SHA of HEAD in the given directory.

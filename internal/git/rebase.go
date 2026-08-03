@@ -20,6 +20,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/doordash-oss/agentic-orchestrator/internal/github"
 )
 
 // PullRebaseOutcome categorises the result of a PullRebase operation.
@@ -232,17 +234,22 @@ func defaultForcePush(worktreePath, branch string) error {
 	return nil
 }
 
-// PRBaseBranch returns the base branch of an open PR using the gh CLI.
-// prURL should be a full GitHub PR URL (e.g. https://github.com/owner/repo/pull/42).
-// Returns empty string on any error.
-func PRBaseBranch(repoPath, prURL string) string {
-	cmd := exec.Command("gh", "pr", "view", prURL, "--json", "baseRefName", "--jq", ".baseRefName")
-	cmd.Dir = repoPath
-	out, err := cmd.Output()
+// PRBaseBranch returns the base branch of an open PR via the GitHub API.
+// prURL should be a full GitHub PR URL. Returns empty string on any error.
+func PRBaseBranch(_ string, prURL string) string {
+	owner, repo, number, err := ParsePRURL(prURL)
 	if err != nil {
 		return ""
 	}
-	return strings.TrimSpace(string(out))
+	client, err := github.ForHost(prURLHost(prURL))
+	if err != nil {
+		return ""
+	}
+	info, err := client.GetPR(owner, repo, number)
+	if err != nil {
+		return ""
+	}
+	return info.BaseRef
 }
 
 // IsBehindRemote checks if the local branch is behind the remote base branch.

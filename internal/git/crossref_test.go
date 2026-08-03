@@ -15,8 +15,14 @@
 package git
 
 import (
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
 )
 
 func TestBuildCrossReferenceSection(t *testing.T) {
@@ -290,8 +296,46 @@ func TestExtractCrossReferenceSection(t *testing.T) {
 	}
 }
 
+func TestGetPRBodyAndUpdatePRBodyUseAPI(t *testing.T) {
+	fake := testutil.InstallFakeGitHubAPI(t)
+	var patchedBody string
+	fake.Mux.HandleFunc("/repos/acme/widgets/pulls/7", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.Method {
+		case http.MethodGet:
+			fmt.Fprint(w, `{"body":"original body"}`)
+		case http.MethodPatch:
+			body, _ := io.ReadAll(r.Body)
+			var payload struct {
+				Body string `json:"body"`
+			}
+			_ = json.Unmarshal(body, &payload)
+			patchedBody = payload.Body
+			fmt.Fprint(w, `{}`)
+		default:
+			t.Errorf("unexpected method %s", r.Method)
+		}
+	})
+
+	got, err := GetPRBody("https://github.com/acme/widgets/pull/7")
+	if err != nil {
+		t.Fatalf("GetPRBody() error = %v", err)
+	}
+	if got != "original body" {
+		t.Errorf("GetPRBody() = %q, want %q", got, "original body")
+	}
+
+	if err := UpdatePRBody("https://github.com/acme/widgets/pull/7", "new body"); err != nil {
+		t.Fatalf("UpdatePRBody() error = %v", err)
+	}
+	if patchedBody != "new body" {
+		t.Errorf("PATCH body field = %q, want %q", patchedBody, "new body")
+	}
+}
+
 func TestUpdatePRBody_Error(t *testing.T) {
-	t.Setenv("PATH", t.TempDir())
+	fake := testutil.InstallFakeGitHubAPI(t)
+	fake.HandleJSON("/repos/invalid/nonexistent/pulls/99999", 404, `{"message":"Not Found"}`)
 
 	err := UpdatePRBody("https://github.com/invalid/nonexistent/pull/99999", "body")
 	if err == nil {
@@ -303,7 +347,8 @@ func TestUpdatePRBody_Error(t *testing.T) {
 }
 
 func TestGetPRBody_Error(t *testing.T) {
-	t.Setenv("PATH", t.TempDir())
+	fake := testutil.InstallFakeGitHubAPI(t)
+	fake.HandleJSON("/repos/invalid/nonexistent/pulls/99999", 404, `{"message":"Not Found"}`)
 
 	_, err := GetPRBody("https://github.com/invalid/nonexistent/pull/99999")
 	if err == nil {

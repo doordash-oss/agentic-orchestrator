@@ -15,6 +15,10 @@
 package git
 
 import (
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -24,44 +28,6 @@ import (
 
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
 )
-
-func TestCreatePR_DraftFlag_IncludesArg(t *testing.T) {
-	args := buildCreatePRArgs("feature/x", "title", "body", true)
-	for _, a := range args {
-		if a == "--draft" {
-			return
-		}
-	}
-	t.Errorf("expected --draft in args %v", args)
-}
-
-func TestCreatePR_NoDraftFlag_ExcludesArg(t *testing.T) {
-	args := buildCreatePRArgs("feature/x", "title", "body", false)
-	for _, a := range args {
-		if a == "--draft" {
-			t.Errorf("unexpected --draft in args %v", args)
-		}
-	}
-}
-
-func TestCreatePR_DraftFlag_WithBaseBranch(t *testing.T) {
-	args := buildCreatePRArgs("feature/x", "title", "body", true, "main")
-	hasDraft, hasBase := false, false
-	for _, a := range args {
-		if a == "--draft" {
-			hasDraft = true
-		}
-		if a == "--base" {
-			hasBase = true
-		}
-	}
-	if !hasDraft {
-		t.Errorf("expected --draft in args %v", args)
-	}
-	if !hasBase {
-		t.Errorf("expected --base in args %v", args)
-	}
-}
 
 func TestDiffSummary_MixedChanges(t *testing.T) {
 	t.Parallel()
@@ -458,49 +424,38 @@ func TestHasUncommittedChanges(t *testing.T) {
 	}
 }
 
-func TestExtractExistingPRURL(t *testing.T) {
-	tests := []struct {
-		name   string
-		output string
-		want   string
-	}{
-		{
-			name:   "standard already exists message",
-			output: `a pull request for branch "feature/foo" into branch "master" already exists: https://github.com/org/repo/pull/116`,
-			want:   "https://github.com/org/repo/pull/116",
-		},
-		{
-			name:   "multiline output",
-			output: "some preamble\na pull request for branch \"feature/bar\" into branch \"main\" already exists:\nhttps://github.com/org/repo/pull/42\n",
-			want:   "https://github.com/org/repo/pull/42",
-		},
-		{
-			name:   "no match - different error",
-			output: "could not connect to GitHub",
-			want:   "",
-		},
-		{
-			name:   "already exists but no URL",
-			output: `a pull request already exists but no link`,
-			want:   "",
-		},
-		{
-			name:   "already exists with non-PR URL",
-			output: `something already exists: https://github.com/org/repo/issues/5`,
-			want:   "",
-		},
-		{
-			name:   "empty output",
-			output: "",
-			want:   "",
-		},
+func TestCreatePRUsesOriginRemoteAndDraftFlag(t *testing.T) {
+	repo, _ := testutil.InitPublishReadyGitRepo(t)
+	runGit(t, repo, "remote", "set-url", "origin", "https://github.com/acme/widgets.git")
+
+	fake := testutil.InstallFakeGitHubAPI(t)
+	var gotHead string
+	var gotDraft bool
+	fake.Mux.HandleFunc("/repos/acme/widgets/pulls", func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var payload struct {
+			Head  string `json:"head"`
+			Draft bool   `json:"draft"`
+		}
+		if err := json.Unmarshal(body, &payload); err != nil {
+			t.Fatalf("decoding request body: %v", err)
+		}
+		gotHead, gotDraft = payload.Head, payload.Draft
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"html_url":"https://github.com/acme/widgets/pull/9"}`)
+	})
+
+	prURL, err := CreatePR(repo, "feature/x", "title", "body", true, "main")
+	if err != nil {
+		t.Fatalf("CreatePR() error = %v", err)
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := extractExistingPRURL(tt.output)
-			if got != tt.want {
-				t.Errorf("extractExistingPRURL() = %q, want %q", got, tt.want)
-			}
-		})
+	if prURL != "https://github.com/acme/widgets/pull/9" {
+		t.Errorf("CreatePR() = %q, want the created PR URL", prURL)
+	}
+	if gotHead != "feature/x" {
+		t.Errorf("request head = %q, want feature/x", gotHead)
+	}
+	if !gotDraft {
+		t.Error("request draft = false, want true")
 	}
 }

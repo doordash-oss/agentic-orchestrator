@@ -52,6 +52,31 @@ Electron renderer, main-process, security, and packaged tests live under
 `desktop/` and run through the npm scripts in the root package. Go process-launch
 and server-lifecycle coverage belongs in `test/e2e` with `testing.Short` guards.
 
+## Desktop UI changes must keep the packaged journeys green
+
+The Playwright journeys in `desktop/test/e2e/journeys/` assert on user-visible
+text, ARIA roles, and accessible names. They are the UX contract: any
+intentional change to renderer copy, roles, `aria-label`s, dialog/section
+names, or button labels **will** break them, and unit tests will not catch it.
+
+Before handing off any change under `desktop/src/renderer/` (and any preload
+or IPC surface change):
+
+1. Grep the journeys for every string, label, or role name you changed or
+   removed: `grep -rn '<old string>' desktop/test/e2e/journeys/`.
+2. Update the affected specs alongside the UI change — they are part of the
+   change, not a follow-up.
+3. Run at least the affected specs against the packaged app. You do not need
+   the full suite; a targeted run is cheap after the one-time package build:
+
+   ```bash
+   cd desktop && npm run test:e2e:packaged -- test/e2e/journeys/<spec>.spec.ts -g "<test title>"
+   ```
+
+Skipping this because "the packaged tier runs on CI" is how CI ends up red:
+CI is where these failures are most expensive to diagnose, not a substitute
+for running them.
+
 ## Test isolation and parallelism
 
 Tests are disqualified from `t.Parallel()` when they touch package-level

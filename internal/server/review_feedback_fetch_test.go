@@ -30,7 +30,7 @@ import (
 func TestReviewFeedbackFetchAggregatesGroupsSortsAndFiltersAddressedIDs(t *testing.T) {
 	store, f := seedReviewFeedbackFetchFeature(t)
 	seedReviewFeedbackAddressedIDs(t, store, f.ID, "api", []int{11})
-	testutil.InstallFakeGH(t, testutil.FakeGHConfig{Behavior: reviewFeedbackFetchFakeGHBehavior})
+	installReviewFeedbackFetchFakeAPI(t, false)
 
 	handler := NewHandler(HandlerOptions{Features: store, FeatureStore: store, Mutations: &refactorMutationTarget{}, DisableHostValidation: true})
 	w := postTrustedJSON(handler, reviewFeedbackFetchPath(f.ID), map[string]any{})
@@ -76,12 +76,7 @@ func TestReviewFeedbackFetchAggregatesGroupsSortsAndFiltersAddressedIDs(t *testi
 
 func TestReviewFeedbackFetchFailsAtomicallyAndNamesRepo(t *testing.T) {
 	store, f := seedReviewFeedbackFetchFeature(t)
-	testutil.InstallFakeGH(t, testutil.FakeGHConfig{Behavior: `
-if [ "$3" = "repos/example/web/pulls/2/comments" ]; then
-  printf '%s\n' 'web unavailable' >&2
-  exit 17
-fi
-` + reviewFeedbackFetchFakeGHBehavior})
+	installReviewFeedbackFetchFakeAPI(t, true)
 
 	handler := NewHandler(HandlerOptions{Features: store, FeatureStore: store, Mutations: &refactorMutationTarget{}, DisableHostValidation: true})
 	w := postTrustedJSON(handler, reviewFeedbackFetchPath(f.ID), map[string]any{})
@@ -156,26 +151,25 @@ func seedReviewFeedbackAddressedIDs(t *testing.T, store *feature.Store, parentID
 	}
 }
 
-const reviewFeedbackFetchFakeGHBehavior = `
-case "$3" in
-  repos/example/api/pulls/1/comments)
-    printf '%s\n' '[{"id":11,"path":"old.go","line":7,"body":"addressed inline","user":{"login":"alice"},"created_at":"2026-08-02T09:00:00Z"}]'
-    ;;
-  repos/example/api/issues/1/comments)
-    printf '%s\n' '[{"id":22,"body":"issue feedback","user":{"login":"bob"},"created_at":"2026-08-02T10:00:00Z"}]'
-    ;;
-  repos/example/api/pulls/1/reviews)
-    printf '%s\n' '[{"id":33,"body":"review body","user":{"login":"carol"},"submitted_at":"2026-08-02T11:00:00Z"}]'
-    ;;
-  repos/example/web/pulls/2/comments)
-    printf '%s\n' '[{"id":44,"path":"web.go","line":9,"body":"web inline","user":{"login":"dana"},"created_at":"2026-08-02T08:00:00Z"}]'
-    ;;
-  repos/example/web/issues/2/comments|repos/example/web/pulls/2/reviews)
-    printf '%s\n' '[]'
-    ;;
-  *)
-    printf 'unexpected gh arguments: %s\n' "$*" >&2
-    exit 2
-    ;;
-esac
-`
+// installReviewFeedbackFetchFakeAPI fakes the three PR feedback endpoints
+// for both repos. With failWebInline, web's inline-comment endpoint fails
+// so the aggregate fetch must surface an atomic error naming the repo.
+func installReviewFeedbackFetchFakeAPI(t *testing.T, failWebInline bool) *testutil.FakeGitHubAPI {
+	t.Helper()
+	fake := testutil.InstallFakeGitHubAPI(t)
+	fake.HandleJSON("/repos/example/api/pulls/1/comments", http.StatusOK,
+		`[{"id":11,"path":"old.go","line":7,"body":"addressed inline","user":{"login":"alice"},"created_at":"2026-08-02T09:00:00Z"}]`)
+	fake.HandleJSON("/repos/example/api/issues/1/comments", http.StatusOK,
+		`[{"id":22,"body":"issue feedback","user":{"login":"bob"},"created_at":"2026-08-02T10:00:00Z"}]`)
+	fake.HandleJSON("/repos/example/api/pulls/1/reviews", http.StatusOK,
+		`[{"id":33,"body":"review body","user":{"login":"carol"},"submitted_at":"2026-08-02T11:00:00Z"}]`)
+	if failWebInline {
+		fake.HandleJSON("/repos/example/web/pulls/2/comments", http.StatusBadGateway, `{"message":"web unavailable"}`)
+	} else {
+		fake.HandleJSON("/repos/example/web/pulls/2/comments", http.StatusOK,
+			`[{"id":44,"path":"web.go","line":9,"body":"web inline","user":{"login":"dana"},"created_at":"2026-08-02T08:00:00Z"}]`)
+	}
+	fake.HandleJSON("/repos/example/web/issues/2/comments", http.StatusOK, `[]`)
+	fake.HandleJSON("/repos/example/web/pulls/2/reviews", http.StatusOK, `[]`)
+	return fake
+}

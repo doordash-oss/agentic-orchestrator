@@ -16,6 +16,9 @@ package e2e
 
 import (
 	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -92,7 +95,7 @@ func TestReviewFeedbackChildJourney(t *testing.T) {
 		t.Fatalf("Store.Save(parent) error = %v", err)
 	}
 
-	fakeGH := testutil.InstallFakeGH(t, testutil.FakeGHConfig{Behavior: reviewFeedbackJourneyFakeGHBehavior})
+	fakeAPI := installReviewFeedbackJourneyFakeAPI(t)
 	wm := git.NewWorktreeManager(wtBaseDir)
 	mgr := feature.NewManager(store, config.NewDefault())
 	mgr.Worktrees = wm
@@ -164,7 +167,7 @@ func TestReviewFeedbackChildJourney(t *testing.T) {
 
 	selected := []feature.ReviewFeedbackComment{fetched.Repos[0].Comments[0], fetched.Repos[1].Comments[0]}
 	gate := true
-	fakeGH.Clear(t)
+	tailMark := len(fakeAPI.Requests())
 	launched, err := client.ReviewFeedbackFeature(t.Context(), parent.ID, server.ReviewFeedbackFeatureRequest{
 		Comments: selected,
 		Gate:     &gate,
@@ -282,7 +285,7 @@ func TestReviewFeedbackChildJourney(t *testing.T) {
 	// Assert the integration tail pushed each PR branch, replied to every
 	// selected comment, resolved eligible inline threads, and recorded
 	// the addressed comment IDs.
-	tailInvocations := fakeGH.Invocations(t)
+	tailInvocations := fakeAPI.Requests()[tailMark:]
 	if len(tailInvocations) == 0 {
 		t.Fatalf("no gh invocations after closure; want tail replies, thread maps, and resolutions")
 	}
@@ -353,7 +356,7 @@ func TestReviewFeedbackChildJourney(t *testing.T) {
 	// Second fetch: addressed comments disappear; unselected remain.
 	// repoB had only comment 21 (now addressed) → 0 filtered comments →
 	// the fetch handler skips repos with no comments, so only repoA appears.
-	fakeGH.Clear(t)
+	refetchMark := len(fakeAPI.Requests())
 	refetched, err := client.FetchReviewFeedback(t.Context(), parent.ID)
 	if err != nil {
 		t.Fatalf("second FetchReviewFeedback() error = %v", err)
@@ -367,7 +370,7 @@ func TestReviewFeedbackChildJourney(t *testing.T) {
 	}
 
 	// Unselected comments received no replies in the tail.
-	refetchInvocations := fakeGH.Invocations(t)
+	refetchInvocations := fakeAPI.Requests()[refetchMark:]
 	for _, inv := range refetchInvocations {
 		if strings.Contains(inv, "replies") || strings.Contains(inv, "resolveReviewThread") {
 			t.Errorf("refetch should not trigger replies or resolutions: %s", inv)
@@ -420,52 +423,38 @@ func (t *journeyMutationTarget) ReviewFeedbackFeature(featureID string, req serv
 	return resp, nil
 }
 
-const reviewFeedbackJourneyFakeGHBehavior = `
-endpoint="$2"
-if [ "$2" = "--paginate" ]; then
-  endpoint="$3"
-fi
-case "$endpoint" in
-  repos/example/api/pulls/1/comments)
-    printf '%s\n' '[{"id":11,"path":"api.go","line":8,"body":"inline selected api","diff_hunk":"@@ -7 +7,2 @@","user":{"login":"alice"},"created_at":"2026-08-02T08:00:00Z"}]'
-    ;;
-  repos/example/api/issues/1/comments)
-    if [ "$2" = "--paginate" ]; then
-      printf '%s\n' '[{"id":12,"body":"issue not selected","user":{"login":"bob"},"created_at":"2026-08-02T09:00:00Z"}]'
-    fi
-    ;;
-  repos/example/api/pulls/1/reviews)
-    printf '%s\n' '[{"id":13,"body":"review body not selected","user":{"login":"carol"},"submitted_at":"2026-08-02T10:00:00Z"}]'
-    ;;
-  repos/example/web/pulls/2/comments)
-    printf '%s\n' '[{"id":21,"path":"web.go","line":5,"body":"inline selected web","diff_hunk":"@@ -4 +4,2 @@","user":{"login":"dana"},"created_at":"2026-08-02T08:30:00Z"}]'
-    ;;
-  repos/example/web/issues/2/comments)
-    if [ "$2" = "--paginate" ]; then
-      printf '%s\n' '[]'
-    fi
-    ;;
-  repos/example/web/pulls/2/reviews)
-    printf '%s\n' '[]'
-    ;;
-  repos/example/api/pulls/1/comments/11/replies)
-    # Reply to inline comment 11 — succeed silently.
-    ;;
-  repos/example/web/pulls/2/comments/21/replies)
-    # Reply to inline comment 21 — succeed silently.
-    ;;
-  graphql)
-    if echo "$4" | grep -q "resolveReviewThread"; then
-      : # Thread resolution — succeed silently.
-    elif echo "$4" | grep -q 'name: "api"'; then
-      printf '%s\n' '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[{"id":"thread-11","isResolved":false,"comments":{"nodes":[{"databaseId":11}]}}]}}}}}'
-    elif echo "$4" | grep -q 'name: "web"'; then
-      printf '%s\n' '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[{"id":"thread-21","isResolved":false,"comments":{"nodes":[{"databaseId":21}]}}]}}}}}'
-    fi
-    ;;
-  *)
-    printf 'unexpected gh arguments: %s\n' "$*" >&2
-    exit 2
-    ;;
-esac
-`
+// installReviewFeedbackJourneyFakeAPI fakes the PR feedback endpoints for
+// both parent repos, the in-thread reply endpoints for the selected inline
+// comments, and the GraphQL review-thread map and resolution.
+func installReviewFeedbackJourneyFakeAPI(t *testing.T) *testutil.FakeGitHubAPI {
+	t.Helper()
+	fake := testutil.InstallFakeGitHubAPI(t)
+	fake.HandleJSON("/repos/example/api/pulls/1/comments", http.StatusOK,
+		`[{"id":11,"path":"api.go","line":8,"body":"inline selected api","diff_hunk":"@@ -7 +7,2 @@","user":{"login":"alice"},"created_at":"2026-08-02T08:00:00Z"}]`)
+	fake.HandleJSON("/repos/example/api/issues/1/comments", http.StatusOK,
+		`[{"id":12,"body":"issue not selected","user":{"login":"bob"},"created_at":"2026-08-02T09:00:00Z"}]`)
+	fake.HandleJSON("/repos/example/api/pulls/1/reviews", http.StatusOK,
+		`[{"id":13,"body":"review body not selected","user":{"login":"carol"},"submitted_at":"2026-08-02T10:00:00Z"}]`)
+	fake.HandleJSON("/repos/example/web/pulls/2/comments", http.StatusOK,
+		`[{"id":21,"path":"web.go","line":5,"body":"inline selected web","diff_hunk":"@@ -4 +4,2 @@","user":{"login":"dana"},"created_at":"2026-08-02T08:30:00Z"}]`)
+	fake.HandleJSON("/repos/example/web/issues/2/comments", http.StatusOK, `[]`)
+	fake.HandleJSON("/repos/example/web/pulls/2/reviews", http.StatusOK, `[]`)
+	// Replies to the selected inline comments succeed silently.
+	fake.HandleJSON("/repos/example/api/pulls/1/comments/11/replies", http.StatusCreated, `{}`)
+	fake.HandleJSON("/repos/example/web/pulls/2/comments/21/replies", http.StatusCreated, `{}`)
+	fake.Mux.HandleFunc("/graphql", func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.Contains(string(body), "resolveReviewThread"):
+			fmt.Fprint(w, `{"data":{"resolveReviewThread":{"thread":{"isResolved":true}}}}`)
+		case strings.Contains(string(body), `\"name\":\"api\"`) || strings.Contains(string(body), `"name":"api"`):
+			fmt.Fprint(w, `{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[{"id":"thread-11","isResolved":false,"comments":{"nodes":[{"databaseId":11}]}}]}}}}}`)
+		case strings.Contains(string(body), `\"name\":\"web\"`) || strings.Contains(string(body), `"name":"web"`):
+			fmt.Fprint(w, `{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[{"id":"thread-21","isResolved":false,"comments":{"nodes":[{"databaseId":21}]}}]}}}}}`)
+		default:
+			fmt.Fprint(w, `{"data":{}}`)
+		}
+	})
+	return fake
+}

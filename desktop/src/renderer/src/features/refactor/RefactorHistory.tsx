@@ -1,7 +1,7 @@
 import type { RelationshipChildView } from '../../../../shared/ipc';
 
 /**
- * Settled refactor passes are immutable history: newest first, inspection
+ * Settled passes are immutable history: newest first, inspection
  * only, never a mutation affordance. The preserved diff was captured at close
  * against the launch base, so it stays readable after worktrees are reclaimed.
  */
@@ -14,18 +14,23 @@ export function RefactorHistory({
   return (
     <details className="refactor-history">
       <summary>
-        <span className="refactor-history__summary-label">Refactor history</span>
+        <span className="refactor-history__summary-label">Pass history</span>
         <span className="refactor-history__count">{entries.length}</span>
       </summary>
       <ol className="refactor-history__entries">
         {entries.map((entry) => (
-          <li key={entry.id} data-outcome={entry.outcome ?? 'closed'}>
+          <li key={entry.id} data-outcome={entry.outcome ?? 'closed'} data-kind={entry.kind}>
             <div className="refactor-history__row">
               <span className="refactor-history__glyph" aria-hidden="true">
                 {entry.outcome === 'discarded' ? '✕' : '✓'}
               </span>
               <div className="refactor-history__identity">
-                <strong>{entry.name}</strong>
+                <div className="refactor-history__name-row">
+                  <strong>{entry.name}</strong>
+                  <span className="refactor-history__kind" data-kind={entry.kind}>
+                    {kindLabel(entry.kind)}
+                  </span>
+                </div>
                 <span className="refactor-history__state">{entry.displayState}</span>
               </div>
               <dl className="refactor-history__facts">
@@ -69,6 +74,10 @@ export function RefactorHistory({
       </ol>
     </details>
   );
+}
+
+function kindLabel(kind: string): string {
+  return kind === 'review-feedback' ? 'Review feedback' : 'Refactor';
 }
 
 function historySpan(entry: RelationshipChildView): string {

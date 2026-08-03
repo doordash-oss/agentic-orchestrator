@@ -160,12 +160,122 @@ describe('AftercareWorkspace', () => {
       />,
     );
 
-    await user.click(screen.getByText('Refactor history'));
+    await user.click(screen.getByText('Pass history'));
     expect(screen.getByText('Closed — Completed')).toBeVisible();
     await user.click(screen.getByText('Preserved diff (read-only)'));
     expect(screen.getByText(/3 files changed/)).toBeVisible();
     const history = screen.getByText('Earlier pass').closest('li');
     expect(history).not.toBeNull();
     expect(within(history as HTMLElement).queryByRole('button')).not.toBeInTheDocument();
+  });
+
+  it('shows kind per entry in a mixed-kind pass history', async () => {
+    const user = userEvent.setup();
+    render(
+      <AftercareWorkspace
+        snapshot={featureSnapshot({
+          status: 'Published',
+          actions: [],
+          childHistory: [
+            {
+              id: 'child0000ef567890',
+              name: 'Earlier refactor pass',
+              kind: 'refactor',
+              displayToken: 'refactor:child0000ef567890',
+              displayState: 'Closed — Completed',
+              pipeline: 'large',
+              status: 'Done',
+              relationshipState: 'closed',
+              startedAt: '2026-07-28T10:00:00Z',
+              closedAt: '2026-07-29T10:00:00Z',
+              outcome: 'completed',
+              cost: { totalUsd: 1.25, byPhase: {} },
+              integrationState: 'merged',
+              attention: [],
+              cleanupWarnings: [],
+            },
+            {
+              id: 'child1111ef567890',
+              name: 'Earlier review-feedback pass',
+              kind: 'review-feedback',
+              displayToken: 'review-feedback:child1111ef567890',
+              displayState: 'Closed — Completed',
+              pipeline: 'medium',
+              status: 'Done',
+              relationshipState: 'closed',
+              startedAt: '2026-07-30T10:00:00Z',
+              closedAt: '2026-07-31T10:00:00Z',
+              outcome: 'completed',
+              cost: { totalUsd: 0.5, byPhase: {} },
+              integrationState: 'merged',
+              attention: [],
+              cleanupWarnings: [],
+            },
+          ],
+        })}
+        run={completedRun}
+        onAction={vi.fn()}
+        onOpenRunRecord={vi.fn()}
+        onOpenChanges={vi.fn()}
+        onOpenPullRequest={vi.fn()}
+        onRetry={vi.fn()}
+        onReopenCycle={vi.fn()}
+      />,
+    );
+
+    await user.click(screen.getByText('Pass history'));
+    const refactorEntry = screen.getByText('Earlier refactor pass').closest('li');
+    expect(refactorEntry).not.toBeNull();
+    expect(within(refactorEntry as HTMLElement).getByText('Refactor')).toBeVisible();
+
+    const rfEntry = screen.getByText('Earlier review-feedback pass').closest('li');
+    expect(rfEntry).not.toBeNull();
+    expect(within(rfEntry as HTMLElement).getByText('Review feedback')).toBeVisible();
+  });
+
+  it('surfaces review-feedback tail warnings on a closed entry', async () => {
+    const user = userEvent.setup();
+    render(
+      <AftercareWorkspace
+        snapshot={featureSnapshot({
+          status: 'Published',
+          actions: [],
+          childHistory: [
+            {
+              id: 'child2222ef567890',
+              name: 'Review feedback pass with tail issue',
+              kind: 'review-feedback',
+              displayToken: 'review-feedback:child2222ef567890',
+              displayState: 'Closed — Completed',
+              pipeline: 'medium',
+              status: 'Done',
+              relationshipState: 'closed',
+              startedAt: '2026-07-30T10:00:00Z',
+              closedAt: '2026-07-31T10:00:00Z',
+              outcome: 'completed',
+              cost: { totalUsd: 0.5, byPhase: {} },
+              integrationState: 'merged',
+              attention: [],
+              cleanupWarnings: [
+                {
+                  message: 'review-feedback tail: no PR URL for review-feedback tail',
+                  repo: 'org/repo-a',
+                },
+              ],
+            },
+          ],
+        })}
+        run={completedRun}
+        onAction={vi.fn()}
+        onOpenRunRecord={vi.fn()}
+        onOpenChanges={vi.fn()}
+        onOpenPullRequest={vi.fn()}
+        onRetry={vi.fn()}
+        onReopenCycle={vi.fn()}
+      />,
+    );
+
+    await user.click(screen.getByText('Pass history'));
+    expect(screen.getByText(/review-feedback tail: no PR URL/)).toBeVisible();
   });
 });

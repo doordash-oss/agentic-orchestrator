@@ -256,7 +256,7 @@ export function custodyStations(
     },
     {
       id: 'pass',
-      eyebrow: 'Refactor pass',
+      eyebrow: passKindLabel(view.kind),
       title: view.name,
       detail:
         state === null || child === null ? view.displayState : passStationDetail(state, child),
@@ -317,13 +317,19 @@ function passActionLabel(id: PassAction['id'], child: FeatureSnapshot): string {
   }
 }
 
-/** The parent action bar chip while a refactor pass is active. */
+/** The pass-kind label for region/eyebrow copy, switching on the child kind. */
+export function passKindLabel(kind: string): string {
+  return kind === 'review-feedback' ? 'Review feedback pass' : 'Refactor pass';
+}
+
+/** The active-pass status chip label, switching on the child kind. */
 export function refactoringStatusChip(view: RelationshipChildView): {
   label: string;
   tone: 'info' | 'attention';
 } {
   const attention = view.attention.length > 0 || view.integrationState === 'attention';
+  const active = view.kind === 'review-feedback' ? 'Addressing review feedback' : 'Refactoring';
   return attention
-    ? { label: 'Refactoring — needs attention', tone: 'attention' }
-    : { label: 'Refactoring', tone: 'info' };
+    ? { label: `${active} — needs attention`, tone: 'attention' }
+    : { label: active, tone: 'info' };
 }

@@ -477,6 +477,19 @@ export const ServerNeedUserInputGateDetailSchema = z.object({
 });
 export type ServerNeedUserInputGateDetail = z.output<typeof ServerNeedUserInputGateDetailSchema>;
 
+export const ServerReviewFeedbackCommentSchema = z.object({
+  repo: z.string(),
+  id: z.number().int(),
+  type: z.enum(['review', 'issue', 'review_body']),
+  path: z.string().optional(),
+  line: z.number().int().optional(),
+  author: z.string().optional(),
+  body: z.string().optional(),
+  diff_hunk: z.string().optional(),
+  in_reply_to_id: z.number().int().optional(),
+});
+export type ServerReviewFeedbackComment = z.output<typeof ServerReviewFeedbackCommentSchema>;
+
 export const ServerFeatureDetailSchema = ServerFeatureSummarySchema.extend({
   description: z.string().optional(),
   wait_reason: z.string().optional(),
@@ -549,6 +562,7 @@ export const ServerFeatureDetailSchema = ServerFeatureSummarySchema.extend({
     })
     .optional(),
   relationship: ServerRelationshipChildSchema.optional(),
+  review_feedback: z.array(ServerReviewFeedbackCommentSchema).optional(),
 });
 
 export type ServerFeatureDetail = z.output<typeof ServerFeatureDetailSchema>;
@@ -1021,19 +1035,6 @@ export const RefactorFeatureResponseSchema = z.object({
   result: z.string(),
 });
 export type RefactorFeatureResponse = z.output<typeof RefactorFeatureResponseSchema>;
-
-export const ServerReviewFeedbackCommentSchema = z.object({
-  repo: z.string(),
-  id: z.number().int(),
-  type: z.enum(['review', 'issue', 'review_body']),
-  path: z.string().optional(),
-  line: z.number().int().optional(),
-  author: z.string().optional(),
-  body: z.string().optional(),
-  diff_hunk: z.string().optional(),
-  in_reply_to_id: z.number().int().optional(),
-});
-export type ServerReviewFeedbackComment = z.output<typeof ServerReviewFeedbackCommentSchema>;
 
 export const ReviewFeedbackFetchResponseSchema = z.object({
   api_version: z.string(),

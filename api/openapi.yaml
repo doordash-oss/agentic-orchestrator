@@ -4117,6 +4117,14 @@ components:
             relationship:
               $ref: "#/components/schemas/RelationshipChild"
               x-go-type-skip-optional-pointer: false
+            review_feedback:
+              type: array
+              description: >-
+                Persisted selected comments captured at launch for a
+                review-feedback child; absent for refactor children and
+                parents.
+              items:
+                $ref: "#/components/schemas/ReviewFeedbackComment"
     ChildDirtyDiagnostics:
       type: object
       properties:

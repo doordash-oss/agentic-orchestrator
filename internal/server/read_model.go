@@ -177,6 +177,9 @@ func (h *apiHandler) featureDetailDTO(f *feature.Feature) (FeatureDetail, error)
 		}
 		relationship := relationshipChildDTO(f)
 		detail.Relationship = relationship
+		if len(f.ReviewFeedback) > 0 {
+			detail.ReviewFeedback = append(detail.ReviewFeedback, f.ReviewFeedback...)
+		}
 	} else {
 		children, err := h.relationshipChildrenOf(f.ID, nil)
 		if err != nil {

@@ -12,6 +12,7 @@ import {
   type FeatureActionView,
   type FeatureSnapshot,
   type RelationshipChildView,
+  type ReviewFeedbackCommentView,
 } from '../../../../shared/ipc';
 import { parseIpcError } from '../../wizard/ipcError';
 import {
@@ -28,7 +29,13 @@ import { ReviewSurface } from '../ReviewSurface';
 import { ImpactPreviewList } from '../ImpactPreviewList';
 import { InspectorContent } from '../CockpitInspector';
 import { featureBranch, showsRun } from '../featureView';
-import { custodyStations, passActions, passState, type PassAction } from './refactorPassModel';
+import {
+  custodyStations,
+  passActions,
+  passKindLabel,
+  passState,
+  type PassAction,
+} from './refactorPassModel';
 
 type ChildState =
   | { phase: 'loading' }
@@ -273,8 +280,9 @@ export function RefactorPassWorkspace({
   return (
     <section
       className="refactor-pass"
-      aria-label="Refactor pass"
+      aria-label={passKindLabel(view.kind)}
       data-state={state?.id ?? 'loading'}
+      data-kind={view.kind}
     >
       <ol className="refactor-pass__custody" aria-label="Custody of the work">
         {stations.map((station) => (
@@ -294,6 +302,10 @@ export function RefactorPassWorkspace({
           </li>
         ))}
       </ol>
+
+      {child?.reviewFeedback !== undefined && child.reviewFeedback.length > 0 ? (
+        <SelectedCommentSummary comments={child.reviewFeedback} />
+      ) : null}
 
       <div className="cockpit__content">
         <main className="cockpit__stage">
@@ -517,5 +529,66 @@ function DiscardPassDialog({
         </div>
       </div>
     </div>
+  );
+}
+
+function SelectedCommentSummary({
+  comments,
+}: {
+  comments: ReviewFeedbackCommentView[];
+}): React.ReactElement {
+  const [expanded, setExpanded] = useState(false);
+
+  const repos = new Map<string, ReviewFeedbackCommentView[]>();
+  for (const comment of comments) {
+    const group = repos.get(comment.repo);
+    if (group === undefined) {
+      repos.set(comment.repo, [comment]);
+    } else {
+      group.push(comment);
+    }
+  }
+  const repoCount = repos.size;
+  const commentCount = comments.length;
+
+  return (
+    <details
+      className="refactor-pass__comments"
+      open={expanded}
+      onToggle={(event) => setExpanded(event.currentTarget.open)}
+    >
+      <summary className="refactor-pass__comments-rollup">
+        {commentCount} {commentCount === 1 ? 'comment' : 'comments'} across {repoCount}{' '}
+        {repoCount === 1 ? 'repo' : 'repos'}
+      </summary>
+      {expanded ? (
+        <div className="refactor-pass__comments-groups">
+          {Array.from(repos.entries()).map(([repo, group]) => (
+            <section key={repo} className="refactor-pass__comments-group">
+              <h4 className="refactor-pass__comments-group-title">{repo}</h4>
+              <ul className="refactor-pass__comments-list">
+                {group.map((comment) => (
+                  <li key={`${comment.id}`} className="refactor-pass__comment-row">
+                    <span className="refactor-pass__comment-author">
+                      {comment.author ?? 'unknown'}
+                    </span>
+                    <span className="refactor-pass__comment-type">{comment.type}</span>
+                    {comment.path !== undefined ? (
+                      <span className="refactor-pass__comment-location">
+                        {comment.path}
+                        {comment.line !== undefined ? `:${comment.line}` : ''}
+                      </span>
+                    ) : null}
+                    {comment.body !== undefined ? (
+                      <p className="refactor-pass__comment-body">{comment.body}</p>
+                    ) : null}
+                  </li>
+                ))}
+              </ul>
+            </section>
+          ))}
+        </div>
+      ) : null}
+    </details>
   );
 }

@@ -1466,10 +1466,13 @@ type FeatureDetail struct {
 	Relationship *RelationshipChild `json:"relationship,omitempty"`
 	RepoStatus   []RepoStatus       `json:"repo_status"`
 	Repos        []string           `json:"repos"`
-	ReviewGate   ReviewGate         `json:"review_gate"`
-	Revision     string             `json:"revision"`
-	RiskLevel    feature.RiskLevel  `json:"risk_level,omitempty"`
-	RunCount     int                `json:"run_count"`
+
+	// ReviewFeedback Persisted selected comments captured at launch for a review-feedback child; absent for refactor children and parents.
+	ReviewFeedback []ReviewFeedbackComment `json:"review_feedback,omitempty"`
+	ReviewGate     ReviewGate              `json:"review_gate"`
+	Revision       string                  `json:"revision"`
+	RiskLevel      feature.RiskLevel       `json:"risk_level,omitempty"`
+	RunCount       int                     `json:"run_count"`
 
 	// SetupComplete True when the child's active run setup finished; only set on child features.
 	SetupComplete bool   `json:"setup_complete,omitempty"`

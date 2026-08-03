@@ -1773,7 +1773,7 @@ describe('FeatureCockpit review-feedback aftercare', () => {
       Promise.resolve(id === childId ? child : parent),
     );
     renderCockpit(mock);
-    expect(await screen.findByRole('region', { name: 'Refactor pass' })).toBeVisible();
+    expect(await screen.findByRole('region', { name: 'Review feedback pass' })).toBeVisible();
     expect(screen.queryByRole('region', { name: 'Feature aftercare' })).not.toBeInTheDocument();
   });
 
@@ -1853,6 +1853,6 @@ describe('FeatureCockpit review-feedback aftercare', () => {
       }),
     );
     // The cockpit routes the active child to the pass workspace.
-    expect(await screen.findByRole('region', { name: 'Refactor pass' })).toBeVisible();
+    expect(await screen.findByRole('region', { name: 'Review feedback pass' })).toBeVisible();
   });
 });

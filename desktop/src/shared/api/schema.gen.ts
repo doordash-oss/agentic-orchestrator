@@ -1994,6 +1994,8 @@ export interface components {
             closed_at?: string;
             transaction?: components["schemas"]["TransactionJournal"];
             relationship?: components["schemas"]["RelationshipChild"];
+            /** @description Persisted selected comments captured at launch for a review-feedback child; absent for refactor children and parents. */
+            review_feedback?: components["schemas"]["ReviewFeedbackComment"][];
         };
         ChildDirtyDiagnostics: {
             repo?: string;

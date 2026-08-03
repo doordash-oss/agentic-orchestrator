@@ -236,7 +236,7 @@ describe('RefactorPassWorkspace', () => {
     // Integration detail and settled-pass history live off this tab; the main
     // column stays reserved for the live run.
     expect(screen.queryByRole('region', { name: 'Integration' })).not.toBeInTheDocument();
-    expect(screen.queryByText('Refactor history')).not.toBeInTheDocument();
+    expect(screen.queryByText('Pass history')).not.toBeInTheDocument();
   });
 
   it('explains the lock and pairing on the parent card without duplicating the config verb', () => {
@@ -327,5 +327,79 @@ describe('RefactorPassWorkspace', () => {
     expect(screen.getByText('Loading the pass from the runtime…')).toBeVisible();
     const inspector = screen.getByRole('complementary', { name: 'Pass inspector' });
     expect(within(inspector).getByText('Active — Created')).toBeVisible();
+  });
+
+  it('uses "Refactor pass" region label for a refactor child', () => {
+    installAgenticoMock({ feature: readyChild() });
+    const parent = parentWith({ kind: 'refactor' });
+    renderWorkspace(parent, controllerFor(parent, readyChild()));
+    expect(screen.getByRole('region', { name: 'Refactor pass' })).toBeVisible();
+  });
+
+  it('uses "Review feedback pass" region label for a review-feedback child', () => {
+    installAgenticoMock({ feature: readyChild() });
+    const parent = parentWith({ kind: 'review-feedback' });
+    renderWorkspace(parent, controllerFor(parent, readyChild()));
+    expect(screen.getByRole('region', { name: 'Review feedback pass' })).toBeVisible();
+  });
+
+  it('renders the selected-comment summary collapsed by default for a review-feedback child', () => {
+    installAgenticoMock({ feature: readyChild() });
+    const parent = parentWith({ kind: 'review-feedback' });
+    const child = readyChild({
+      reviewFeedback: [
+        {
+          repo: 'org/repo-a',
+          id: 1,
+          type: 'review',
+          path: 'src/a.go',
+          line: 10,
+          author: 'alice',
+          body: 'fix this',
+        },
+        { repo: 'org/repo-a', id: 2, type: 'issue', author: 'bob', body: 'broken' },
+        { repo: 'org/repo-b', id: 3, type: 'review', author: 'carol', body: 'nit' },
+      ],
+    });
+    renderWorkspace(parent, controllerFor(parent, child));
+
+    expect(screen.getByText('3 comments across 2 repos')).toBeVisible();
+  });
+
+  it('expands the selected-comment summary to repo-grouped rows', async () => {
+    const user = userEvent.setup();
+    installAgenticoMock({ feature: readyChild() });
+    const parent = parentWith({ kind: 'review-feedback' });
+    const child = readyChild({
+      reviewFeedback: [
+        {
+          repo: 'org/repo-a',
+          id: 1,
+          type: 'review',
+          path: 'src/a.go',
+          line: 10,
+          author: 'alice',
+          body: 'fix this',
+        },
+        { repo: 'org/repo-b', id: 2, type: 'issue', author: 'bob', body: 'broken' },
+      ],
+    });
+    renderWorkspace(parent, controllerFor(parent, child));
+
+    const rollup = screen.getByText('2 comments across 2 repos');
+    await user.click(rollup);
+
+    expect(screen.getByText('org/repo-a')).toBeVisible();
+    expect(screen.getByText('org/repo-b')).toBeVisible();
+    expect(screen.getByText('fix this')).toBeVisible();
+    expect(screen.getByText('broken')).toBeVisible();
+    expect(screen.getByText('src/a.go:10')).toBeVisible();
+  });
+
+  it('omits the selected-comment summary for a refactor child', () => {
+    installAgenticoMock({ feature: readyChild() });
+    const parent = parentWith({ kind: 'refactor' });
+    renderWorkspace(parent, controllerFor(parent, readyChild()));
+    expect(screen.queryByText(/comments across/)).not.toBeInTheDocument();
   });
 });

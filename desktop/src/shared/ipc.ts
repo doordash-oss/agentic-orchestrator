@@ -838,6 +838,25 @@ export const AutomaticReviewStateSchema = z.strictObject({
 });
 export type AutomaticReviewState = z.output<typeof AutomaticReviewStateSchema>;
 
+export const ReviewFeedbackCommentViewSchema = z.strictObject({
+  repo: z.string().min(1).max(200),
+  id: z.number().int(),
+  type: z.enum(['review', 'issue', 'review_body']),
+  path: z.string().max(500).optional(),
+  line: z.number().int().optional(),
+  author: z.string().max(200).optional(),
+  body: z
+    .string()
+    .max(64 * 1024)
+    .optional(),
+  diffHunk: z
+    .string()
+    .max(64 * 1024)
+    .optional(),
+  inReplyToId: z.number().int().optional(),
+});
+export type ReviewFeedbackCommentView = z.output<typeof ReviewFeedbackCommentViewSchema>;
+
 export const FeatureSnapshotSchema = z.strictObject({
   id: FeatureIdSchema,
   name: z.string(),
@@ -872,6 +891,8 @@ export const FeatureSnapshotSchema = z.strictObject({
   closedAt: z.string().optional(),
   transaction: RelationshipTransactionViewSchema.optional(),
   relationship: RelationshipChildViewSchema.optional(),
+  /** Persisted selected comments for a review-feedback child; absent otherwise. */
+  reviewFeedback: z.array(ReviewFeedbackCommentViewSchema).optional(),
   /** Per-repository operational status from the server. */
   repoStatus: z.array(RepoStatusViewSchema).optional(),
   /** Active cycle summary from the server. */
@@ -1139,25 +1160,6 @@ export type DiscardRefactorChildResult = z.output<typeof DiscardRefactorChildRes
  * echoes the fetched comment payloads (already redacted) plus the
  * explicit gate value the modal collected.
  */
-export const ReviewFeedbackCommentViewSchema = z.strictObject({
-  repo: z.string().min(1).max(200),
-  id: z.number().int(),
-  type: z.enum(['review', 'issue', 'review_body']),
-  path: z.string().max(500).optional(),
-  line: z.number().int().optional(),
-  author: z.string().max(200).optional(),
-  body: z
-    .string()
-    .max(64 * 1024)
-    .optional(),
-  diffHunk: z
-    .string()
-    .max(64 * 1024)
-    .optional(),
-  inReplyToId: z.number().int().optional(),
-});
-export type ReviewFeedbackCommentView = z.output<typeof ReviewFeedbackCommentViewSchema>;
-
 export const ReviewFeedbackRepoGroupSchema = z.strictObject({
   repo: z.string().min(1).max(200),
   prUrl: z.string().max(2048),

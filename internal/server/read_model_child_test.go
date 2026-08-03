@@ -17,6 +17,7 @@ package server
 import (
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -660,6 +661,97 @@ func TestChildDetailExposesSetupComplete(t *testing.T) {
 	if !ok || setupBody["status"] != string(feature.SetupStatusDone) {
 		t.Fatalf("child detail setup block = %+v, want done durable setup", active["setup"])
 	}
+}
+
+// TestReviewFeedbackChildDetailExposesPersistedComments pins the projection
+// of the persisted selected-comment artifact onto the child's own feature
+// detail read model. The comments must appear in persisted order with all
+// stored fields intact, and the field must be absent for refactor children
+// and parents.
+func TestReviewFeedbackChildDetailExposesPersistedComments(t *testing.T) {
+	t.Parallel()
+
+	comments := []feature.ReviewFeedbackComment{
+		{Repo: "org/repo-a", ID: 101, Type: "review", Path: "src/a.go", Line: 42, Author: "alice", Body: "nit: use context"},
+		{Repo: "org/repo-b", ID: 202, Type: "issue", Author: "bob", Body: "this breaks"},
+	}
+
+	t.Run("review-feedback child carries persisted comments in order", func(t *testing.T) {
+		t.Parallel()
+		store, parent := seedReadFeature(t)
+		child := &feature.Feature{
+			ID: parent.ID + "-rfchild", Name: "Address review feedback", Slug: "review-feedback",
+			Status: feature.StatusSettingUpWorktrees, CurrentPhase: feature.PhaseImplement,
+			Created:       time.Date(2026, 6, 18, 10, 0, 0, 0, time.UTC),
+			Repos:         []feature.FeatureRepo{{Name: repoNameSelf, Branch: "feature/rf"}},
+			ActiveRun:     1,
+			RunCount:      1,
+			SchemaVersion: feature.SchemaVersionCurrent,
+			Parent: &feature.ChildRelationship{
+				ParentID: parent.ID,
+				Kind:     feature.ChildKindReviewFeedback,
+				Bases:    []feature.ChildRepoBase{{Repo: repoNameSelf, SHA: "deadbeef", ParentBranch: "main"}},
+			},
+			ReviewFeedback: comments,
+		}
+		child.SetRun(&feature.Run{RunNumber: 1, Setup: &feature.SetupState{Status: feature.SetupStatusQueued}})
+		if err := store.Save(child); err != nil {
+			t.Fatalf("Save(child) error = %v", err)
+		}
+
+		handler := NewHandler(baseReadHandlerOptions(store))
+		detail := getJSONMap(t, handler, "/api/v1/features/"+child.ID)
+		body := detail[entityFeature].(map[string]any)
+		rawComments, ok := body["review_feedback"]
+		if !ok {
+			t.Fatalf("child detail missing review_feedback: keys=%v", sortedKeys(body))
+		}
+		list, ok := rawComments.([]any)
+		if !ok || len(list) != 2 {
+			t.Fatalf("review_feedback = %#v, want 2-element array", rawComments)
+		}
+		first := list[0].(map[string]any)
+		if first["repo"] != "org/repo-a" || first["id"] != float64(101) || first["type"] != "review" || first["path"] != "src/a.go" {
+			t.Fatalf("first comment = %#v, want repo-a/101/review/src/a.go", first)
+		}
+		second := list[1].(map[string]any)
+		if second["repo"] != "org/repo-b" || second["id"] != float64(202) || second["type"] != "issue" {
+			t.Fatalf("second comment = %#v, want repo-b/202/issue", second)
+		}
+	})
+
+	t.Run("refactor child omits review_feedback", func(t *testing.T) {
+		t.Parallel()
+		store, parent := seedReadFeature(t)
+		refactorChild := seedReadChildFeature(t, store, parent.ID, feature.StatusCreated, feature.SetupStatusDone, "")
+		handler := NewHandler(baseReadHandlerOptions(store))
+		detail := getJSONMap(t, handler, "/api/v1/features/"+refactorChild.ID)
+		body := detail[entityFeature].(map[string]any)
+		if _, exists := body["review_feedback"]; exists {
+			t.Fatalf("refactor child detail must not carry review_feedback")
+		}
+	})
+
+	t.Run("parent omits review_feedback", func(t *testing.T) {
+		t.Parallel()
+		store, _ := seedReadFeature(t)
+		handler := NewHandler(baseReadHandlerOptions(store))
+		parentID := fixtureFeatureIDAlt
+		detail := getJSONMap(t, handler, "/api/v1/features/"+parentID)
+		body := detail[entityFeature].(map[string]any)
+		if _, exists := body["review_feedback"]; exists {
+			t.Fatalf("parent detail must not carry review_feedback")
+		}
+	})
+}
+
+func sortedKeys(m map[string]any) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 func TestEventDTOFromDomainMapsRelationshipResource(t *testing.T) {

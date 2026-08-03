@@ -611,6 +611,21 @@ function toSnapshot(feature: ServerFeatureDetail): FeatureSnapshot {
     ...(feature.relationship === undefined
       ? {}
       : { relationship: toRelationshipChildView(feature.relationship) }),
+    ...(feature.review_feedback === undefined || feature.review_feedback.length === 0
+      ? {}
+      : {
+          reviewFeedback: feature.review_feedback.map((comment) => ({
+            repo: comment.repo,
+            id: comment.id,
+            type: comment.type,
+            ...spreadDefined('path', comment.path),
+            ...spreadDefined('line', comment.line),
+            ...spreadDefined('author', comment.author),
+            ...(comment.body === undefined ? {} : { body: redactText(comment.body) }),
+            ...spreadDefined('diffHunk', comment.diff_hunk),
+            ...spreadDefined('inReplyToId', comment.in_reply_to_id),
+          })),
+        }),
     ...(feature.transaction === undefined
       ? {}
       : {

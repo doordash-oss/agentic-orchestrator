@@ -4,6 +4,7 @@ import type { FeatureSnapshot, RelationshipChildView } from '../../../../shared/
 import {
   custodyStations,
   passActions,
+  passKindLabel,
   passState,
   refactoringStatusChip,
 } from './refactorPassModel';
@@ -275,5 +276,47 @@ describe('refactoringStatusChip', () => {
       label: 'Refactoring — needs attention',
       tone: 'attention',
     });
+  });
+
+  it('switches to review-feedback copy for a review-feedback child', () => {
+    const rf = childView({ kind: 'review-feedback' });
+    expect(refactoringStatusChip(rf)).toEqual({
+      label: 'Addressing review feedback',
+      tone: 'info',
+    });
+    expect(
+      refactoringStatusChip(
+        childView({ kind: 'review-feedback', attention: [{ code: 'x', message: 'conflict' }] }),
+      ),
+    ).toEqual({
+      label: 'Addressing review feedback — needs attention',
+      tone: 'attention',
+    });
+  });
+});
+
+describe('passKindLabel', () => {
+  it('returns "Refactor pass" for refactor children', () => {
+    expect(passKindLabel('refactor')).toBe('Refactor pass');
+  });
+
+  it('returns "Review feedback pass" for review-feedback children', () => {
+    expect(passKindLabel('review-feedback')).toBe('Review feedback pass');
+  });
+});
+
+describe('custodyStations kind-aware eyebrow', () => {
+  it('uses "Refactor pass" eyebrow for refactor children', () => {
+    const parent = featureSnapshot({ status: 'Published' });
+    const child = featureSnapshot({ status: 'Created', setupComplete: true, setup: doneSetup });
+    const [, passStation] = custodyStations(parent, child, childView({ kind: 'refactor' }));
+    expect(passStation.eyebrow).toBe('Refactor pass');
+  });
+
+  it('uses "Review feedback pass" eyebrow for review-feedback children', () => {
+    const parent = featureSnapshot({ status: 'Published' });
+    const child = featureSnapshot({ status: 'Created', setupComplete: true, setup: doneSetup });
+    const [, passStation] = custodyStations(parent, child, childView({ kind: 'review-feedback' }));
+    expect(passStation.eyebrow).toBe('Review feedback pass');
   });
 });

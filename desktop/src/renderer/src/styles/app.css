@@ -3065,6 +3065,40 @@ body {
   gap: var(--space-2);
 }
 
+/* Decision slip: the agent's question reads as a calm consult card —
+ * capped measure, quiet numbered rail, one amber cue for the agent's pick. */
+.attention-detail--questions {
+  max-inline-size: 46rem;
+}
+
+.attention-ask {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.attention-ask__eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--color-text);
+  font-family: var(--font-display);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.attention-ask__eyebrow::before {
+  content: '';
+  inline-size: 7px;
+  block-size: 7px;
+  border-radius: 50%;
+  background: var(--color-accent);
+}
+
 .attention-question {
   min-inline-size: 0;
   margin: 0;
@@ -3072,41 +3106,62 @@ body {
   padding: 0;
 }
 
+.attention-question + .attention-question {
+  margin-top: var(--space-2);
+  border-top: 1px solid var(--color-hairline);
+  padding-top: var(--space-4);
+}
+
 .attention-question legend {
   display: grid;
-  gap: 2px;
+  gap: var(--space-1);
   width: 100%;
   margin-bottom: var(--space-2);
   padding: 0;
 }
 
+.attention-question__progress,
 .attention-question__header {
-  color: var(--color-accent);
   font-family: var(--font-mono);
   font-size: 10px;
   letter-spacing: 0.06em;
   text-transform: uppercase;
 }
 
+.attention-question__progress {
+  color: var(--color-muted);
+}
+
+.attention-question__header {
+  color: var(--color-accent);
+}
+
 .attention-question__prompt {
+  max-inline-size: 62ch;
   color: var(--color-text);
-  font-family: var(--font-display);
-  font-size: 17px;
-  line-height: 1.25;
-  font-weight: 700;
+  font-family: var(--font-body);
+  font-size: 15px;
+  line-height: 1.55;
+  font-weight: 400;
   overflow-wrap: anywhere;
+}
+
+.attention-question__cue {
+  margin: 0;
+  color: var(--color-muted);
+  font-size: 12px;
 }
 
 .attention-question .attention-option {
   position: relative;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: auto minmax(0, 1fr);
   align-items: start;
   gap: var(--space-3);
   min-width: 0;
   border: 1px solid var(--color-hairline);
   border-radius: var(--radius);
-  padding: var(--space-3);
+  padding: var(--space-2) var(--space-3);
   color: var(--color-text);
   background: var(--color-panel);
   cursor: pointer;
@@ -3122,7 +3177,7 @@ body {
 
 .attention-question .attention-option[data-selected] {
   border-color: var(--color-signal);
-  box-shadow: 0 0 0 2px var(--color-signal);
+  box-shadow: 0 0 0 1px var(--color-signal);
   background: color-mix(in srgb, var(--color-signal) 6%, var(--color-panel));
 }
 
@@ -3130,10 +3185,6 @@ body {
 .attention-question .attention-option:has(input[type='checkbox']:focus-visible) {
   outline: var(--focus-ring);
   outline-offset: 2px;
-}
-
-.attention-question .attention-option[data-recommended] {
-  border-left: 3px solid var(--color-accent);
 }
 
 .attention-option__copy {
@@ -3150,14 +3201,18 @@ body {
 }
 
 .attention-option__label {
-  font-family: var(--font-display);
+  font-family: var(--font-body);
   font-weight: 700;
-  font-size: 15px;
-  line-height: 1.2;
+  font-size: 13px;
+  line-height: 1.5;
   overflow-wrap: anywhere;
 }
 
 .attention-option__recommended {
+  align-self: center;
+  border: 1px solid color-mix(in srgb, var(--color-accent) 55%, transparent);
+  border-radius: 999px;
+  padding: 1px 7px;
   color: var(--color-accent);
   font-family: var(--font-mono);
   font-size: 9px;
@@ -3166,42 +3221,44 @@ body {
   text-transform: uppercase;
 }
 
-.attention-option__description,
-.attention-option__confidence {
-  color: var(--color-muted);
-  font-size: 11px;
-}
-
 .attention-option__description {
-  line-height: 1.4;
+  color: var(--color-muted);
+  font-size: 12px;
+  line-height: 1.5;
   overflow-wrap: anywhere;
 }
 
-.attention-option__meta {
-  display: flex;
-  flex-direction: column-reverse;
-  align-items: flex-end;
-  gap: var(--space-1);
-  min-width: 1.5rem;
-}
-
-.attention-option__number,
-.attention-option__confidence {
-  font-family: var(--font-mono);
-}
-
+/* The keycap is both the selection indicator and the shortcut: press the
+ * number to answer, mirroring the TUI. */
 .attention-option__number {
+  display: inline-grid;
+  place-items: center;
+  inline-size: 22px;
+  block-size: 22px;
+  margin-top: 1px;
+  border: 1px solid var(--color-hairline);
+  border-radius: 4px;
   color: var(--color-muted);
-  font-size: 12px;
+  background: var(--color-bg);
+  font-family: var(--font-mono);
+  font-size: 11px;
   font-weight: 600;
 }
 
-.attention-option__confidence {
-  opacity: 0.58;
+.attention-question .attention-option[data-selected] .attention-option__number {
+  border-color: var(--color-signal);
+  color: var(--color-panel);
+  background: var(--color-signal);
 }
 
 .attention-question .attention-option--other {
+  border-style: dashed;
   cursor: text;
+}
+
+.attention-question .attention-option--other[data-selected],
+.attention-question .attention-option--other:focus-within {
+  border-style: solid;
 }
 
 .attention-question .attention-free-text__input {
@@ -3230,6 +3287,12 @@ body {
 .attention-free-text__hint {
   color: var(--color-muted);
   font-size: 11px;
+}
+
+.attention-question
+  .attention-option--other:not(:focus-within, [data-selected])
+  .attention-free-text__hint {
+  display: none;
 }
 
 .attention-detail__actions {
@@ -11405,20 +11468,28 @@ body {
   margin: 0;
 }
 
+/* The agent's ask sits on a quiet panel; amber stays a thin needle rail
+ * instead of washing the whole surface. */
 .live-preview__attention {
-  max-height: min(42vh, 30rem);
+  max-height: min(48vh, 34rem);
   overflow: auto;
-  padding: var(--space-3) var(--space-4) var(--space-4);
-  border-top: 1px solid var(--color-hairline);
-  background: color-mix(in srgb, var(--color-panel) 94%, var(--color-accent));
-}
-
-.live-preview__attention > .cockpit__eyebrow {
-  margin: 0 0 var(--space-2);
+  padding: 0;
+  border-top: 2px solid var(--color-accent);
+  background: var(--color-panel);
 }
 
 .live-preview__attention .attention-detail {
-  padding: 0;
+  padding: var(--space-3) var(--space-4) 0;
+}
+
+/* Submit stays reachable while long questions scroll. */
+.live-preview__attention .attention-detail__actions {
+  position: sticky;
+  bottom: 0;
+  margin: 0 calc(var(--space-4) * -1);
+  border-top: 1px solid var(--color-hairline);
+  padding: var(--space-3) var(--space-4);
+  background: var(--color-panel);
 }
 
 @media (prefers-reduced-motion: reduce) {

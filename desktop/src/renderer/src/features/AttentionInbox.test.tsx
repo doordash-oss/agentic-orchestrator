@@ -382,7 +382,7 @@ describe('AttentionInbox question detail', () => {
     expect(recommendedCard).not.toHaveTextContent('(Recommended)');
     expect(recommendedCard).toHaveAttribute('data-recommended');
     expect(screen.getAllByText('Recommended')).toHaveLength(1);
-    expect(screen.getByText('86%').parentElement).not.toHaveAttribute('aria-hidden');
+    expect(screen.queryByText('86%')).not.toBeInTheDocument();
     expect(screen.getByText('1', { selector: '.attention-option__number' })).toHaveAttribute(
       'aria-hidden',
       'true',
@@ -420,6 +420,41 @@ describe('AttentionInbox question detail', () => {
       sessionId: questionsItem.sessionId,
       answers: { 'Which overall direction should this project take?': 'Focus on speed' },
     });
+
+    await user.click(screen.getByRole('radio', { name: /Build user-facing features/ }));
+    expect(freeText).toHaveValue('');
+    await user.click(screen.getByRole('button', { name: 'Submit' }));
+    expect(mock.api.answerQuestions).toHaveBeenLastCalledWith({
+      requestId: questionsItem.id,
+      sessionId: questionsItem.sessionId,
+      answers: {
+        'Which overall direction should this project take?': 'Build user-facing features',
+      },
+    });
+  });
+
+  it('selects options with number keys and submits with Enter', async () => {
+    const mock = installAgenticoMock();
+    const user = userEvent.setup();
+    render(<QuestionDetailHarness />);
+
+    const first = screen.getByRole('radio', { name: /Harden the review pipeline/ });
+    first.focus();
+    await user.keyboard('2');
+    expect(screen.getByRole('radio', { name: /Build user-facing features/ })).toBeChecked();
+    await user.keyboard('{Enter}');
+    expect(mock.api.answerQuestions).toHaveBeenLastCalledWith({
+      requestId: questionsItem.id,
+      sessionId: questionsItem.sessionId,
+      answers: {
+        'Which overall direction should this project take?': 'Build user-facing features',
+      },
+    });
+
+    const freeText = screen.getByPlaceholderText('Type your own answer here');
+    freeText.focus();
+    await user.keyboard('12 weeks');
+    expect(freeText).toHaveValue('12 weeks');
   });
 
   it('keeps checkbox semantics and omits recommendation tags for multi-select', async () => {

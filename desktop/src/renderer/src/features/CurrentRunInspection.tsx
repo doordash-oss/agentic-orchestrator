@@ -738,7 +738,6 @@ export function CurrentRunInspection({
           ) : null}
           {attentionFooter !== undefined && !fullscreen ? (
             <section className="live-preview__attention" aria-label="Agent request">
-              <p className="cockpit__eyebrow">Your response</p>
               {attentionFooter}
             </section>
           ) : null}
@@ -1328,7 +1327,6 @@ function LivePreviewOverlay({
             ) : null}
             {attentionFooter !== undefined ? (
               <section className="live-preview__attention" aria-label="Agent request">
-                <p className="cockpit__eyebrow">Your response</p>
                 {attentionFooter}
               </section>
             ) : null}

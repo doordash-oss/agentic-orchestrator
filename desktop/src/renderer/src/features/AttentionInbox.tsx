@@ -423,9 +423,25 @@ export function AttentionDetail({
       </div>
     );
 
-  if (item.kind === 'questions')
+  if (item.kind === 'questions') {
+    const complete = item.questions.every(
+      (question) => questionAnswer(questionDraft[question.key]) !== '',
+    );
+    const submitAnswers = () =>
+      submit(() =>
+        window.agentico.answerQuestions({
+          requestId: item.id,
+          ...(item.sessionId === undefined ? {} : { sessionId: item.sessionId }),
+          answers: Object.fromEntries(
+            item.questions.map((question) => [
+              question.key,
+              questionAnswer(questionDraft[question.key]),
+            ]),
+          ),
+        }),
+      );
     return (
-      <div className="attention-detail">
+      <div className="attention-detail attention-detail--questions">
         <AttentionContextMeta item={item} />
         {item.questions.map((question, questionIndex) => {
           const draft = questionDraft[question.key] ?? { selected: [], freeText: '' };
@@ -440,14 +456,55 @@ export function AttentionDetail({
             });
           }
           const freeTextHintId = `${detailKey}:${questionIndex}:free-text-hint`;
+          const chooseOption = (label: string, checked: boolean) =>
+            setQuestionDraft(setDrafts, detailKey, question.key, {
+              selected: question.multiSelect
+                ? checked
+                  ? [...new Set([...draft.selected, label])]
+                  : draft.selected.filter((value) => value !== label)
+                : [label],
+              freeText: '',
+            });
+          const handleKeys = (event: ReactKeyboardEvent<HTMLFieldSetElement>) => {
+            if (event.metaKey || event.ctrlKey || event.altKey) return;
+            const target = event.target as HTMLElement;
+            const typing = target instanceof HTMLInputElement && target.type === 'text';
+            if (event.key === 'Enter') {
+              if (!complete || busy) return;
+              event.preventDefault();
+              submitAnswers();
+              return;
+            }
+            if (typing) return;
+            const digit = Number.parseInt(event.key, 10);
+            if (!Number.isInteger(digit) || digit < 1) return;
+            if (digit <= question.options.length) {
+              event.preventDefault();
+              const option = question.options[digit - 1]!;
+              chooseOption(option.label, !draft.selected.includes(option.label));
+            } else if (digit === question.options.length + 1) {
+              event.preventDefault();
+              event.currentTarget
+                .querySelector<HTMLInputElement>('.attention-free-text__input')
+                ?.focus();
+            }
+          };
           return (
-            <fieldset key={question.key} className="attention-question">
+            <fieldset key={question.key} className="attention-question" onKeyDown={handleKeys}>
               <legend>
+                {item.questions.length > 1 ? (
+                  <span className="attention-question__progress">
+                    Question {questionIndex + 1} of {item.questions.length}
+                  </span>
+                ) : null}
                 <span className="attention-question__header">{question.header}</span>
                 <span className="attention-question__prompt" role="heading" aria-level={3}>
                   {question.key}
                 </span>
               </legend>
+              {question.multiSelect ? (
+                <p className="attention-question__cue">Choose every option that applies.</p>
+              ) : null}
               {question.options.map((option, optionIndex) => {
                 const recommended = optionIndex === recommendedIndex;
                 const selected =
@@ -465,16 +522,11 @@ export function AttentionDetail({
                       name={`${detailKey}:${question.key}`}
                       value={option.label}
                       checked={draft.selected.includes(option.label)}
-                      onChange={(event) =>
-                        setQuestionDraft(setDrafts, detailKey, question.key, {
-                          selected: question.multiSelect
-                            ? event.currentTarget.checked
-                              ? [...new Set([...draft.selected, option.label])]
-                              : draft.selected.filter((value) => value !== option.label)
-                            : [option.label],
-                        })
-                      }
+                      onChange={(event) => chooseOption(option.label, event.currentTarget.checked)}
                     />
+                    <span className="attention-option__number" aria-hidden="true">
+                      {optionIndex + 1}
+                    </span>
                     <span className="attention-option__copy">
                       <span className="attention-option__heading">
                         <span className="attention-option__label">
@@ -488,16 +540,6 @@ export function AttentionDetail({
                         <span className="attention-option__description">{option.description}</span>
                       )}
                     </span>
-                    <span className="attention-option__meta">
-                      {option.confidence === undefined ? null : (
-                        <span className="attention-option__confidence">
-                          {formatConfidence(option.confidence)}
-                        </span>
-                      )}
-                      <span className="attention-option__number" aria-hidden="true">
-                        {optionIndex + 1}
-                      </span>
-                    </span>
                   </label>
                 );
               })}
@@ -505,6 +547,9 @@ export function AttentionDetail({
                 className="attention-option attention-option--other"
                 data-selected={draft.freeText.trim() === '' ? undefined : true}
               >
+                <span className="attention-option__number" aria-hidden="true">
+                  {question.options.length + 1}
+                </span>
                 <span className="attention-option__copy">
                   <span className="attention-option__label">Other</span>
                   <input
@@ -520,12 +565,7 @@ export function AttentionDetail({
                     }
                   />
                   <span id={freeTextHintId} className="attention-free-text__hint">
-                    Replaces selected options.
-                  </span>
-                </span>
-                <span className="attention-option__meta">
-                  <span className="attention-option__number" aria-hidden="true">
-                    {question.options.length + 1}
+                    Typing here replaces your selection.
                   </span>
                 </span>
               </label>
@@ -533,32 +573,18 @@ export function AttentionDetail({
           );
         })}
         <div className="attention-detail__actions">
+          <AttentionJumpAction item={item} onJump={onJump} />
           <button
             className="attention-button attention-button--primary"
-            disabled={
-              busy || item.questions.some((q) => questionAnswer(questionDraft[q.key]) === '')
-            }
-            onClick={() =>
-              submit(() =>
-                window.agentico.answerQuestions({
-                  requestId: item.id,
-                  ...(item.sessionId === undefined ? {} : { sessionId: item.sessionId }),
-                  answers: Object.fromEntries(
-                    item.questions.map((question) => [
-                      question.key,
-                      questionAnswer(questionDraft[question.key]),
-                    ]),
-                  ),
-                }),
-              )
-            }
+            disabled={busy || !complete}
+            onClick={submitAnswers}
           >
             Submit <span aria-hidden="true">↵</span>
           </button>
-          <AttentionJumpAction item={item} onJump={onJump} />
         </div>
       </div>
     );
+  }
 
   if (item.kind === 'help') {
     // A harness wait is not a question: the turn ended and the runtime is
@@ -773,7 +799,8 @@ export function AttentionDetail({
   throw new Error(`Unhandled attention item: ${JSON.stringify(exhaustive)}`);
 }
 
-/** Provenance for every blocking banner: session, phase, and since-when. */
+/** Header for every blocking banner: what the agent needs, plus provenance
+ * (session, phase, and since-when). */
 function AttentionContextMeta({ item }: { item: AttentionItem }) {
   if (item.kind === 'recovery') return null;
   const entries: string[] = [];
@@ -788,12 +815,34 @@ function AttentionContextMeta({ item }: { item: AttentionItem }) {
   }
   entries.push(formatWaitingSince(item.waitingSince));
   return (
-    <div className="attention-detail__meta" aria-label="Attention context">
-      {entries.map((entry, index) => (
-        <span key={`${index}:${entry}`}>{entry}</span>
-      ))}
-    </div>
+    <header className="attention-ask">
+      <span className="attention-ask__eyebrow">{attentionAskLabel(item)}</span>
+      <div className="attention-detail__meta" aria-label="Attention context">
+        {entries.map((entry, index) => (
+          <span key={`${index}:${entry}`}>{entry}</span>
+        ))}
+      </div>
+    </header>
   );
+}
+
+function attentionAskLabel(item: Exclude<AttentionItem, { kind: 'recovery' }>): string {
+  switch (item.kind) {
+    case 'questions':
+      return item.questions.length === 1 ? 'Agent question' : 'Agent questions';
+    case 'permission':
+      return 'Permission request';
+    case 'help':
+      return item.waitingKind === 'input' ? 'Agent waiting' : 'Help request';
+    case 'gate':
+      return 'Input needed';
+    case 'review':
+      return 'Review waiting';
+    default: {
+      const exhaustive: never = item;
+      return exhaustive;
+    }
+  }
 }
 
 function AttentionJumpAction({
@@ -866,10 +915,6 @@ function formatWaitingSince(value: string): string {
   const hours = Math.floor(minutes / 60);
   if (hours < 48) return `waiting ${hours}h`;
   return `waiting ${Math.floor(hours / 24)}d`;
-}
-
-function formatConfidence(confidence: number): string {
-  return `${Math.round(confidence * 100)}%`;
 }
 
 function displayQuestionOptionLabel(label: string): string {

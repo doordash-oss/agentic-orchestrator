@@ -1022,6 +1022,39 @@ export const RefactorFeatureResponseSchema = z.object({
 });
 export type RefactorFeatureResponse = z.output<typeof RefactorFeatureResponseSchema>;
 
+export const ServerReviewFeedbackCommentSchema = z.object({
+  repo: z.string(),
+  id: z.number().int(),
+  type: z.enum(['review', 'issue', 'review_body']),
+  path: z.string().optional(),
+  line: z.number().int().optional(),
+  author: z.string().optional(),
+  body: z.string().optional(),
+  diff_hunk: z.string().optional(),
+  in_reply_to_id: z.number().int().optional(),
+});
+export type ServerReviewFeedbackComment = z.output<typeof ServerReviewFeedbackCommentSchema>;
+
+export const ReviewFeedbackFetchResponseSchema = z.object({
+  api_version: z.string(),
+  repos: z.array(
+    z.object({
+      repo: z.string(),
+      pr_url: z.string(),
+      comments: z.array(ServerReviewFeedbackCommentSchema),
+    }),
+  ),
+});
+export type ReviewFeedbackFetchResponse = z.output<typeof ReviewFeedbackFetchResponseSchema>;
+
+export const ReviewFeedbackFeatureResponseSchema = z.object({
+  api_version: z.string(),
+  feature_id: z.string(),
+  parent_id: z.string(),
+  result: z.string(),
+});
+export type ReviewFeedbackFeatureResponse = z.output<typeof ReviewFeedbackFeatureResponseSchema>;
+
 export const RebasePreflightRepoSchema = z.object({
   repo: z.string(),
   target: z.string(),
@@ -1214,6 +1247,20 @@ void _rebaseStartSubset;
 type RefactorFeatureDTO = components['schemas']['RefactorFeatureResponse'];
 const _refactorFeatureSubset = (value: RefactorFeatureDTO): RefactorFeatureResponse => value;
 void _refactorFeatureSubset;
+type ReviewFeedbackFetchDTO = components['schemas']['ReviewFeedbackFetchResponse'];
+const _reviewFeedbackFetchSubset = (value: ReviewFeedbackFetchDTO): ReviewFeedbackFetchResponse =>
+  value;
+void _reviewFeedbackFetchSubset;
+type ReviewFeedbackCommentDTO = components['schemas']['ReviewFeedbackComment'];
+const _reviewFeedbackCommentSubset = (
+  value: ReviewFeedbackCommentDTO,
+): ServerReviewFeedbackComment => value;
+void _reviewFeedbackCommentSubset;
+type ReviewFeedbackFeatureDTO = components['schemas']['ReviewFeedbackFeatureResponse'];
+const _reviewFeedbackFeatureSubset = (
+  value: ReviewFeedbackFeatureDTO,
+): ReviewFeedbackFeatureResponse => value;
+void _reviewFeedbackFeatureSubset;
 type RebasePreflightDTO = components['schemas']['RebasePreflightResponse'];
 const _rebasePreflightSubset = (value: RebasePreflightDTO): RebasePreflightResponse => value;
 void _rebasePreflightSubset;

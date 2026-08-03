@@ -2,8 +2,8 @@ import { act, cleanup, render, screen, waitFor, within } from '@testing-library/
 import userEvent from '@testing-library/user-event';
 import { useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { AttentionItem } from '../../../shared/ipc';
-import { featureSnapshot, installAgenticoMock } from '../test/agenticoMock';
+import type { AttentionItem, FeatureSnapshot } from '../../../shared/ipc';
+import { featureSnapshot, featureConfigSnapshot, installAgenticoMock } from '../test/agenticoMock';
 import { dispatchMediaChange, matchMediaState } from '../test/setup';
 import { emptyAttentionDrafts } from './AttentionInbox';
 import { FeatureCockpit } from './FeatureCockpit';
@@ -1663,5 +1663,196 @@ describe('FeatureCockpit delete', () => {
     const user = userEvent.setup();
     await user.click(await screen.findByLabelText('More actions'));
     expect(screen.getByRole('menuitem', { name: 'Delete feature' })).toBeDisabled();
+  });
+});
+
+describe('FeatureCockpit review-feedback aftercare', () => {
+  it('offers Address review feedback on the aftercare runway when the catalog enables it', async () => {
+    const mock = installAgenticoMock({
+      feature: featureSnapshot({
+        status: 'Published',
+        actions: [{ id: 'review-feedback', enabled: true, disabledReasons: [] }],
+      }),
+    });
+    renderCockpit(mock);
+    const aftercare = await screen.findByRole('region', { name: 'Feature aftercare' });
+    expect(
+      within(aftercare).getByRole('button', { name: /Address review feedback/ }),
+    ).toBeVisible();
+    // An enabled action lives on the runway, not duplicated in the aftercare overflow.
+    const user = userEvent.setup();
+    await user.click(screen.getByLabelText('More actions'));
+    expect(screen.queryByRole('menuitem', { name: 'Address review feedback' })).toBeNull();
+  });
+
+  it('drops a disabled review-feedback action from the runway and lists it in the overflow with reasons', async () => {
+    const mock = installAgenticoMock({
+      feature: featureSnapshot({
+        status: 'Published',
+        actions: [
+          {
+            id: 'review-feedback',
+            enabled: false,
+            disabledReasons: [
+              { code: 'no_pull_request', message: 'review feedback requires a pull request' },
+            ],
+          },
+        ],
+      }),
+    });
+    renderCockpit(mock);
+    const aftercare = await screen.findByRole('region', { name: 'Feature aftercare' });
+    expect(
+      within(aftercare).queryByRole('button', { name: /Address review feedback/ }),
+    ).not.toBeInTheDocument();
+    const user = userEvent.setup();
+    await user.click(screen.getByLabelText('More actions'));
+    const item = screen.getByRole('menuitem', { name: 'Address review feedback' });
+    expect(item).toBeDisabled();
+    expect(screen.getByText('review feedback requires a pull request')).toBeVisible();
+  });
+
+  it('opens the review-feedback modal from the regular cockpit overflow (second render site)', async () => {
+    const mock = installAgenticoMock({
+      feature: featureSnapshot({
+        status: 'Implementing',
+        actions: [{ id: 'review-feedback', enabled: true, disabledReasons: [] }],
+      }),
+    });
+    mock.api.getFeatureConfig.mockResolvedValue(featureConfigSnapshot({}));
+    mock.api.fetchReviewFeedback.mockResolvedValue({
+      featureId: FEATURE_ID,
+      repos: [
+        {
+          repo: 'repo-a',
+          prUrl: 'https://github.com/org/repo-a/pull/1',
+          comments: [{ repo: 'repo-a', id: 1, type: 'review', body: 'fix' }],
+        },
+      ],
+    });
+    renderCockpit(mock);
+    const user = userEvent.setup();
+    await user.click(await screen.findByLabelText('More actions'));
+    await user.click(screen.getByRole('menuitem', { name: 'Address review feedback' }));
+    expect(await screen.findByRole('dialog', { name: 'Address review feedback' })).toBeVisible();
+    expect(screen.getByText('repo-a')).toBeVisible();
+  });
+
+  it('routes an active review-feedback child to the pass workspace (kind-agnostic)', async () => {
+    const childId = 'child1234ef567890';
+    const parent = featureSnapshot({
+      id: FEATURE_ID,
+      status: 'Published',
+      actions: [],
+      activeChild: {
+        id: childId,
+        name: 'Address feedback',
+        kind: 'review-feedback',
+        displayToken: `review-feedback:${childId}`,
+        displayState: 'Active — Created',
+        pipeline: 'medium',
+        status: 'Created',
+        relationshipState: 'active',
+        startedAt: '2026-07-30T10:00:00Z',
+        cost: { totalUsd: 0, byPhase: {} },
+        integrationState: 'pending',
+        attention: [],
+        cleanupWarnings: [],
+      },
+    });
+    const child = featureSnapshot({
+      id: childId,
+      name: 'Address feedback',
+      status: 'Created',
+      setupComplete: true,
+      setup: { status: 'done', attempt: 1, tasks: [] },
+      actions: [{ id: 'start', enabled: true, disabledReasons: [] }],
+    });
+    const mock = installAgenticoMock({ feature: parent });
+    mock.api.getFeature.mockImplementation((id: string) =>
+      Promise.resolve(id === childId ? child : parent),
+    );
+    renderCockpit(mock);
+    expect(await screen.findByRole('region', { name: 'Refactor pass' })).toBeVisible();
+    expect(screen.queryByRole('region', { name: 'Feature aftercare' })).not.toBeInTheDocument();
+  });
+
+  it('arms auto-start with the returned child id after launching review feedback', async () => {
+    const childId = 'child1234ef567890';
+    const baseParent = featureSnapshot({
+      id: FEATURE_ID,
+      status: 'Published',
+      repos: ['repo-a'],
+      actions: [{ id: 'review-feedback', enabled: true, disabledReasons: [] }],
+    });
+    const parentWithChild: FeatureSnapshot = {
+      ...baseParent,
+      actions: [],
+      activeChild: {
+        id: childId,
+        name: 'Address feedback',
+        kind: 'review-feedback',
+        displayToken: `review-feedback:${childId}`,
+        displayState: 'Active — Created',
+        pipeline: 'medium',
+        status: 'Created',
+        relationshipState: 'active',
+        startedAt: '2026-07-30T10:00:00Z',
+        cost: { totalUsd: 0, byPhase: {} },
+        integrationState: 'pending',
+        attention: [],
+        cleanupWarnings: [],
+      },
+    };
+    const child = featureSnapshot({
+      id: childId,
+      name: 'Address feedback',
+      status: 'Created',
+      setupComplete: true,
+      setup: { status: 'done', attempt: 1, tasks: [] },
+      actions: [{ id: 'start', enabled: true, disabledReasons: [] }],
+    });
+    let currentParent = baseParent;
+    const mock = installAgenticoMock({ feature: baseParent });
+    mock.api.getFeature.mockImplementation((id: string) =>
+      Promise.resolve(id === childId ? child : currentParent),
+    );
+    mock.api.getFeatureConfig.mockResolvedValue(featureConfigSnapshot({}));
+    mock.api.fetchReviewFeedback.mockResolvedValue({
+      featureId: FEATURE_ID,
+      repos: [
+        {
+          repo: 'repo-a',
+          prUrl: 'https://github.com/org/repo-a/pull/1',
+          comments: [{ repo: 'repo-a', id: 1, type: 'review', body: 'fix the query' }],
+        },
+      ],
+    });
+    mock.api.launchReviewFeedbackChild.mockImplementation(async () => {
+      currentParent = parentWithChild;
+      return { childId, parentId: FEATURE_ID, result: 'created' };
+    });
+    renderCockpit(mock);
+    const user = userEvent.setup();
+
+    const aftercare = await screen.findByRole('region', { name: 'Feature aftercare' });
+    await user.click(within(aftercare).getByRole('button', { name: /Address review feedback/ }));
+    expect(await screen.findByRole('dialog', { name: 'Address review feedback' })).toBeVisible();
+    await user.click(await screen.findByRole('button', { name: /^Launch child/ }));
+    await waitFor(() => expect(mock.api.launchReviewFeedbackChild).toHaveBeenCalledOnce());
+    expect(mock.api.launchReviewFeedbackChild).toHaveBeenCalledWith({
+      parentId: FEATURE_ID,
+      comments: [{ repo: 'repo-a', id: 1, type: 'review', body: 'fix the query' }],
+      gate: true,
+    });
+    // The returned child arms auto-start: start fires on the child without a manual click.
+    await waitFor(() =>
+      expect(mock.api.dispatchFeatureAction).toHaveBeenCalledWith({
+        featureId: childId,
+        action: 'start',
+      }),
+    );
+    // The cockpit routes the active child to the pass workspace.
+    expect(await screen.findByRole('region', { name: 'Refactor pass' })).toBeVisible();
   });
 });

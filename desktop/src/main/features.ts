@@ -21,6 +21,8 @@ import {
   RefactorFeatureResponseSchema,
   DiscardChildResponseSchema,
   DeleteFeatureResponseSchema,
+  ReviewFeedbackFetchResponseSchema,
+  ReviewFeedbackFeatureResponseSchema,
   validateWithSchema,
   type ServerFeatureDetail,
   type ServerRelationshipChild,
@@ -36,6 +38,8 @@ import {
   LaunchRefactorChildRequestSchema,
   DiscardRefactorChildRequestSchema,
   DeleteFeatureCascadeRequestSchema,
+  FetchReviewFeedbackRequestSchema,
+  LaunchReviewFeedbackChildRequestSchema,
   type CreateFeatureInput,
   type CreateFeatureResult,
   type CreationDefaults,
@@ -58,6 +62,11 @@ import {
   type DiscardRefactorChildResult,
   type DeleteFeatureCascadeRequest,
   type DeleteFeatureCascadeResult,
+  type FetchReviewFeedbackRequest,
+  type FetchReviewFeedbackResult,
+  type LaunchReviewFeedbackChildRequest,
+  type LaunchReviewFeedbackChildResult,
+  type ReviewFeedbackCommentView,
   type SetupDispatchResult,
   type SetupTaskView,
 } from '../shared/ipc';
@@ -372,6 +381,67 @@ export class FeatureService {
       childId: validateWithSchema(response.feature_id, FeatureIdSchema),
       result: response.result,
       status,
+    };
+  }
+
+  async fetchReviewFeedback(
+    request: FetchReviewFeedbackRequest,
+  ): Promise<FetchReviewFeedbackResult> {
+    const input = validateWithSchema(request, FetchReviewFeedbackRequestSchema);
+    const body = await this.api(
+      `/api/v1/features/${input.featureId}/actions/review-feedback/fetch`,
+      {
+        method: 'POST',
+        body: {},
+      },
+    );
+    const response = validateWithSchema(body, ReviewFeedbackFetchResponseSchema);
+    return {
+      featureId: input.featureId,
+      repos: response.repos.map((group) => ({
+        repo: group.repo,
+        prUrl: group.pr_url,
+        comments: group.comments.map((comment): ReviewFeedbackCommentView => ({
+          repo: comment.repo,
+          id: comment.id,
+          type: comment.type,
+          ...(comment.path === undefined ? {} : { path: comment.path }),
+          ...(comment.line === undefined ? {} : { line: comment.line }),
+          ...(comment.author === undefined ? {} : { author: comment.author }),
+          ...(comment.body === undefined ? {} : { body: redactText(comment.body) }),
+          ...(comment.diff_hunk === undefined ? {} : { diffHunk: redactText(comment.diff_hunk) }),
+          ...(comment.in_reply_to_id === undefined ? {} : { inReplyToId: comment.in_reply_to_id }),
+        })),
+      })),
+    };
+  }
+
+  async launchReviewFeedbackChild(
+    request: LaunchReviewFeedbackChildRequest,
+  ): Promise<LaunchReviewFeedbackChildResult> {
+    const input = validateWithSchema(request, LaunchReviewFeedbackChildRequestSchema);
+    const body = await this.api(`/api/v1/features/${input.parentId}/actions/review-feedback`, {
+      method: 'POST',
+      body: {
+        comments: input.comments.map((comment) => ({
+          repo: comment.repo,
+          id: comment.id,
+          type: comment.type,
+          ...(comment.path === undefined ? {} : { path: comment.path }),
+          ...(comment.line === undefined ? {} : { line: comment.line }),
+          ...(comment.author === undefined ? {} : { author: comment.author }),
+          ...(comment.body === undefined ? {} : { body: comment.body }),
+          ...(comment.diffHunk === undefined ? {} : { diff_hunk: comment.diffHunk }),
+          ...(comment.inReplyToId === undefined ? {} : { in_reply_to_id: comment.inReplyToId }),
+        })),
+        ...(input.gate === undefined ? {} : { gate: input.gate }),
+      },
+    });
+    const response = validateWithSchema(body, ReviewFeedbackFeatureResponseSchema);
+    return {
+      childId: validateWithSchema(response.feature_id, FeatureIdSchema),
+      parentId: validateWithSchema(response.parent_id, FeatureIdSchema),
+      result: response.result,
     };
   }
 

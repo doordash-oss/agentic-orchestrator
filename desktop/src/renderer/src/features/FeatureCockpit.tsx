@@ -42,11 +42,12 @@ import {
   receiptForCycleEnd,
   resolvePostImplementationMode,
   type AftercareAction,
-  type AftercareCycleId,
+  type AftercareModalId,
   type CycleReceipt,
 } from './postImplementationModel';
 import { RebaseModal } from './cycles/RebaseModal';
 import { RefactorLauncher } from './refactor/RefactorLauncher';
+import { ReviewFeedbackLauncher } from './reviewFeedback/ReviewFeedbackLauncher';
 import { RefactorPassWorkspace, useRefactorPass } from './refactor/RefactorPassWorkspace';
 import { refactoringStatusChip } from './refactor/refactorPassModel';
 import { useCompletionPreflight } from './completion/useCompletionPreflight';
@@ -763,7 +764,7 @@ export function FeatureCockpit({
   const [attentionBusy, setAttentionBusy] = useState<string | null>(null);
   const [rewindDialog, setRewindDialog] = useState(false);
   const [rewindSourceRunNumber, setRewindSourceRunNumber] = useState<number | undefined>();
-  const [cycleModal, setCycleModal] = useState<AftercareCycleId | null>(null);
+  const [cycleModal, setCycleModal] = useState<AftercareModalId | null>(null);
   const [completionModal, setCompletionModal] = useState<CompletionVerb | null>(null);
   const [runRecordOpen, setRunRecordOpen] = useState(false);
   const [changesOpen, setChangesOpen] = useState(false);
@@ -1182,6 +1183,7 @@ export function FeatureCockpit({
   const deleteAction = actionById(snapshot, 'delete');
   const rebaseAction = actionById(snapshot, 'rebase');
   const refactorAction = actionById(snapshot, 'refactor');
+  const reviewFeedbackAction = actionById(snapshot, 'review-feedback');
   const hasPendingReview = isPendingReviewStatus(snapshot.status);
   const isArchiveMode =
     selectedRunNumber !== undefined && selectedRunNumber !== null && selectedRunNumber > 0;
@@ -1436,6 +1438,22 @@ export function FeatureCockpit({
       onClick: () => setCycleModal('refactor'),
     });
   }
+  if (reviewFeedbackAction?.enabled === true) {
+    menuActions.push({
+      key: 'review-feedback',
+      label: 'Address review feedback',
+      enabled: true,
+      onClick: () => setCycleModal('review-feedback'),
+    });
+  } else if (reviewFeedbackAction !== undefined) {
+    menuActions.push({
+      key: 'review-feedback',
+      label: 'Address review feedback',
+      enabled: false,
+      reasons: reasonsOf(reviewFeedbackAction),
+      onClick: () => {},
+    });
+  }
   if (rewindAction?.enabled === true) {
     menuActions.push({
       key: 'rewind',
@@ -1519,9 +1537,14 @@ export function FeatureCockpit({
     ) : null;
 
   const postImplementationMode = resolvePostImplementationMode(snapshot, dismissedCycleId);
-  const postMenuActions = menuActions.filter(
-    (action) => !['start', 'stop', 'setup', 'rebase', 'refactor'].includes(action.key),
-  );
+  const postMenuActions = menuActions.filter((action) => {
+    if (['start', 'stop', 'setup', 'rebase', 'refactor'].includes(action.key)) return false;
+    // An enabled review-feedback action is offered on the aftercare runway;
+    // only its disabled form appears in the overflow menu with the catalog's
+    // reasons, matching the refactor precedent.
+    if (action.key === 'review-feedback' && action.enabled) return false;
+    return true;
+  });
   const openAftercareAction = (action: AftercareAction): void => {
     if (action.id === 'publish') {
       openCompletionModal('publish');
@@ -1823,6 +1846,26 @@ export function FeatureCockpit({
             onClose={() => setCycleModal(null)}
           >
             <RefactorLauncher
+              featureId={featureId}
+              snapshot={snapshot}
+              onDispatched={(launch) => {
+                if (launch.autoStart) refactorPass.armAutoStart(launch.childId);
+                void load({ silent: true });
+              }}
+              onCancel={() => setCycleModal(null)}
+              attentionItems={attentionItems}
+              onOpenGate={() => setCycleModal(null)}
+            />
+          </CockpitModal>
+        ) : null}
+
+        {cycleModal === 'review-feedback' ? (
+          <CockpitModal
+            title="Address review feedback"
+            ariaLabel="Address review feedback"
+            onClose={() => setCycleModal(null)}
+          >
+            <ReviewFeedbackLauncher
               featureId={featureId}
               snapshot={snapshot}
               onDispatched={(launch) => {
@@ -2232,6 +2275,26 @@ export function FeatureCockpit({
           {cycleModal === 'refactor' ? (
             <CockpitModal title="Refactor" ariaLabel="Refactor" onClose={() => setCycleModal(null)}>
               <RefactorLauncher
+                featureId={featureId}
+                snapshot={snapshot}
+                onDispatched={(launch) => {
+                  if (launch.autoStart) refactorPass.armAutoStart(launch.childId);
+                  void load({ silent: true });
+                }}
+                onCancel={() => setCycleModal(null)}
+                attentionItems={attentionItems}
+                onOpenGate={() => setCycleModal(null)}
+              />
+            </CockpitModal>
+          ) : null}
+
+          {cycleModal === 'review-feedback' ? (
+            <CockpitModal
+              title="Address review feedback"
+              ariaLabel="Address review feedback"
+              onClose={() => setCycleModal(null)}
+            >
+              <ReviewFeedbackLauncher
                 featureId={featureId}
                 snapshot={snapshot}
                 onDispatched={(launch) => {

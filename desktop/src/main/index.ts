@@ -834,6 +834,8 @@ if (!hasSingleInstanceLock) {
       preflightRebase: (request) => features.preflightRebase(request),
       launchRefactorChild: (request) => features.launchRefactorChild(request),
       discardRefactorChild: (request) => features.discardRefactorChild(request),
+      fetchReviewFeedback: (request) => features.fetchReviewFeedback(request),
+      launchReviewFeedbackChild: (request) => features.launchReviewFeedbackChild(request),
       deleteFeatureCascade: (request) => features.deleteFeatureCascade(request),
       scanRecovery: () => recovery.scan(),
       executeRecovery: (request) => recovery.execute(request),

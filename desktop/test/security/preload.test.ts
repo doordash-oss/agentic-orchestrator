@@ -101,6 +101,8 @@ describe('preload surface', () => {
         'preflightRebase',
         'launchRefactorChild',
         'discardRefactorChild',
+        'fetchReviewFeedback',
+        'launchReviewFeedbackChild',
         'deleteFeatureCascade',
         'scanRecovery',
         'executeRecovery',

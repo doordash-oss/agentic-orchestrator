@@ -1699,6 +1699,17 @@ function makeMockApi(
         status: 'completed' as const,
         diagnostics: [],
       }),
+    fetchReviewFeedback: () =>
+      Promise.resolve({
+        featureId: 'abcd1234ef567890',
+        repos: [],
+      }),
+    launchReviewFeedbackChild: () =>
+      Promise.resolve({
+        childId: 'child1234ef567890',
+        parentId: 'abcd1234ef567890',
+        result: 'created',
+      }),
     scanRecovery: () =>
       Promise.resolve({
         snapshotId: 'recovery-snapshot-001',

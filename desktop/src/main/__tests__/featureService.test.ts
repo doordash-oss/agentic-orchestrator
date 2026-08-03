@@ -896,3 +896,182 @@ describe('FeatureService relationship operations', () => {
     expect(() => FeatureSnapshotSchema.parse(snapshot)).not.toThrow();
   });
 });
+
+describe('FeatureService review-feedback operations', () => {
+  it('maps a fetch to the typed review-feedback fetch endpoint and groups comments by repo', async () => {
+    const { service, calls } = makeService(() => ({
+      status: 200,
+      body: {
+        api_version: 'v1',
+        repos: [
+          {
+            repo: 'repo-a',
+            pr_url: 'https://github.com/org/repo-a/pull/1',
+            comments: [
+              {
+                repo: 'repo-a',
+                id: 41,
+                type: 'review',
+                path: 'src/query.ts',
+                line: 12,
+                author: 'octocat',
+                body: 'Bearer tok-secret leaks here',
+                diff_hunk: 'clone /Users/someone/repo-a',
+                in_reply_to_id: 39,
+              },
+              {
+                repo: 'repo-a',
+                id: 42,
+                type: 'issue',
+                body: 'plain note',
+              },
+            ],
+          },
+          {
+            repo: 'repo-b',
+            pr_url: 'https://github.com/org/repo-b/pull/7',
+            comments: [{ repo: 'repo-b', id: 90, type: 'review_body', author: 'reviewer' }],
+          },
+        ],
+      },
+    }));
+    await expect(service.fetchReviewFeedback({ featureId: 'abcd1234ef567890' })).resolves.toEqual({
+      featureId: 'abcd1234ef567890',
+      repos: [
+        {
+          repo: 'repo-a',
+          prUrl: 'https://github.com/org/repo-a/pull/1',
+          comments: [
+            {
+              repo: 'repo-a',
+              id: 41,
+              type: 'review',
+              path: 'src/query.ts',
+              line: 12,
+              author: 'octocat',
+              body: '[redacted] leaks here',
+              diffHunk: 'clone [path]',
+              inReplyToId: 39,
+            },
+            { repo: 'repo-a', id: 42, type: 'issue', body: 'plain note' },
+          ],
+        },
+        {
+          repo: 'repo-b',
+          prUrl: 'https://github.com/org/repo-b/pull/7',
+          comments: [{ repo: 'repo-b', id: 90, type: 'review_body', author: 'reviewer' }],
+        },
+      ],
+    });
+    expect(calls).toEqual([
+      {
+        path: '/api/v1/features/abcd1234ef567890/actions/review-feedback/fetch',
+        init: { method: 'POST', body: {} },
+      },
+    ]);
+  });
+
+  it('redacts fetched comment bodies and diff hunks before they cross the boundary', async () => {
+    const { service } = makeService(() => ({
+      status: 200,
+      body: {
+        api_version: 'v1',
+        repos: [
+          {
+            repo: 'repo-a',
+            pr_url: 'https://github.com/org/repo-a/pull/1',
+            comments: [
+              {
+                repo: 'repo-a',
+                id: 1,
+                type: 'review',
+                body: 'token=Bearer abc and /Users/secret/path',
+                diff_hunk: 'diff --git a/x /home/hidden',
+              },
+            ],
+          },
+        ],
+      },
+    }));
+    const result = await service.fetchReviewFeedback({ featureId: 'abcd1234ef567890' });
+    const comment = result.repos[0]?.comments[0];
+    expect(comment?.body).not.toContain('Bearer abc');
+    expect(comment?.body).not.toContain('/Users/secret/path');
+    expect(comment?.diffHunk).not.toContain('/home/hidden');
+  });
+
+  it('maps a launch to the typed review-feedback action with selected comments and the gate', async () => {
+    const { service, calls } = makeService(() => ({
+      status: 201,
+      body: {
+        api_version: 'v1',
+        feature_id: 'child1234ef567890',
+        parent_id: 'abcd1234ef567890',
+        result: 'created',
+      },
+    }));
+    const comments = [
+      {
+        repo: 'repo-a',
+        id: 41,
+        type: 'review' as const,
+        path: 'src/query.ts',
+        line: 12,
+        author: 'octocat',
+        body: 'redacted body',
+        diffHunk: 'redacted hunk',
+        inReplyToId: 39,
+      },
+      { repo: 'repo-b', id: 90, type: 'review_body' as const, author: 'reviewer' },
+    ];
+    await expect(
+      service.launchReviewFeedbackChild({ parentId: 'abcd1234ef567890', comments, gate: true }),
+    ).resolves.toEqual({
+      childId: 'child1234ef567890',
+      parentId: 'abcd1234ef567890',
+      result: 'created',
+    });
+    expect(calls).toEqual([
+      {
+        path: '/api/v1/features/abcd1234ef567890/actions/review-feedback',
+        init: {
+          method: 'POST',
+          body: {
+            comments: [
+              {
+                repo: 'repo-a',
+                id: 41,
+                type: 'review',
+                path: 'src/query.ts',
+                line: 12,
+                author: 'octocat',
+                body: 'redacted body',
+                diff_hunk: 'redacted hunk',
+                in_reply_to_id: 39,
+              },
+              { repo: 'repo-b', id: 90, type: 'review_body', author: 'reviewer' },
+            ],
+            gate: true,
+          },
+        },
+      },
+    ]);
+  });
+
+  it('omits the gate field when the modal did not collect one', async () => {
+    const { service, calls } = makeService(() => ({
+      status: 201,
+      body: {
+        api_version: 'v1',
+        feature_id: 'child1234ef567890',
+        parent_id: 'abcd1234ef567890',
+        result: 'created',
+      },
+    }));
+    await service.launchReviewFeedbackChild({
+      parentId: 'abcd1234ef567890',
+      comments: [{ repo: 'repo-a', id: 41, type: 'review' }],
+    });
+    expect(calls[0]?.init?.body).not.toHaveProperty('gate');
+  });
+});

@@ -4,6 +4,12 @@ import type { CycleView, FeatureSnapshot } from '../../../shared/ipc';
 export type AftercareCycleId = 'rebase' | 'refactor';
 
 /**
+ * Aftercare modal ids. Review-feedback runs as a child pass (not a repo
+ * cycle) and is opened from the same modal render sites as the cycles.
+ */
+export type AftercareModalId = AftercareCycleId | 'review-feedback';
+
+/**
  * In-feature post-publish cycles the server reports through `cycle`. A
  * refactor is never one of these — it runs as a separate child feature.
  */
@@ -14,7 +20,7 @@ export type PostImplementationMode =
   | { kind: 'aftercare' }
   | { kind: 'cycle'; cycle: CyclePresentation; failed: boolean };
 
-export type AftercareActionId = 'publish' | AftercareCycleId;
+export type AftercareActionId = 'publish' | 'review-feedback' | AftercareCycleId;
 
 export interface AftercareAction {
   id: AftercareActionId;
@@ -55,7 +61,7 @@ export const OWNING_CYCLE_STATUSES = new Set([
   'failed',
   'interrupted',
 ]);
-const ACTION_ORDER: AftercareActionId[] = ['publish', 'rebase', 'refactor'];
+const ACTION_ORDER: AftercareActionId[] = ['publish', 'rebase', 'refactor', 'review-feedback'];
 
 export function resolvePostImplementationMode(
   snapshot: FeatureSnapshot,
@@ -196,6 +202,14 @@ function aftercareAction(id: AftercareActionId, repoCount: number): AftercareAct
         title: 'Start a refactor pass',
         description:
           'Describe the improvement and run it as a separate pass that merges back on approval.',
+      };
+    case 'review-feedback':
+      return {
+        id,
+        label: 'Address review feedback',
+        title: 'Address review feedback',
+        description:
+          'Launch a child pass to address unaddressed pull-request review comments across the parent repositories.',
       };
   }
 }

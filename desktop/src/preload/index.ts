@@ -52,6 +52,8 @@ import {
   type LaunchRefactorChildRequest,
   type DiscardRefactorChildRequest,
   type DeleteFeatureCascadeRequest,
+  type FetchReviewFeedbackRequest,
+  type LaunchReviewFeedbackChildRequest,
   type RecoveryExecuteRequest,
   type RecoveryLogReadRequest,
   type UpdateInstallNowRequest,
@@ -239,6 +241,10 @@ const api: AgenticoApi = {
     call(IPC_CHANNELS.featuresRefactor, request),
   discardRefactorChild: (request: DiscardRefactorChildRequest) =>
     call(IPC_CHANNELS.featuresRefactorDiscard, request),
+  fetchReviewFeedback: (request: FetchReviewFeedbackRequest) =>
+    call(IPC_CHANNELS.featuresReviewFeedbackFetch, request),
+  launchReviewFeedbackChild: (request: LaunchReviewFeedbackChildRequest) =>
+    call(IPC_CHANNELS.featuresReviewFeedbackLaunch, request),
   deleteFeatureCascade: (request: DeleteFeatureCascadeRequest) =>
     call(IPC_CHANNELS.featuresDeleteCascade, request),
   scanRecovery: () => call(IPC_CHANNELS.recoveryScan),

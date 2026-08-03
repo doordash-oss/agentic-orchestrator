@@ -165,4 +165,45 @@ describe('postImplementationModel', () => {
       ),
     ).toBeNull();
   });
+
+  it('offers review feedback on the aftercare runway when the catalog enables it', () => {
+    const snapshot = featureSnapshot({
+      status: 'Published',
+      actions: [
+        { id: 'review-feedback', enabled: true, disabledReasons: [] },
+        { id: 'refactor', enabled: true, disabledReasons: [] },
+      ],
+    });
+    const actions = aftercareActions(snapshot);
+    expect(actions.map((action) => action.id)).toEqual(['refactor', 'review-feedback']);
+    expect(actions[1]).toMatchObject({
+      id: 'review-feedback',
+      label: 'Address review feedback',
+      title: 'Address review feedback',
+    });
+  });
+
+  it('drops review feedback from the runway when the catalog disables it', () => {
+    const snapshot = featureSnapshot({
+      status: 'Published',
+      actions: [
+        {
+          id: 'review-feedback',
+          enabled: false,
+          disabledReasons: [{ code: 'no_pull_request', message: 'no PR' }],
+        },
+      ],
+    });
+    expect(aftercareActions(snapshot).map((action) => action.id)).not.toContain('review-feedback');
+  });
+
+  it('keeps review feedback out of the repo-cycle taxonomy — it runs as a child pass', () => {
+    expect(
+      cyclePresentation(
+        featureSnapshot({
+          cycle: { type: 'review-feedback', status: 'running', phase: 'implement' },
+        }),
+      ),
+    ).toBeNull();
+  });
 });

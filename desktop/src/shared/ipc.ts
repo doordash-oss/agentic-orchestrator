@@ -34,6 +34,8 @@ export const IPC_CHANNELS = {
   featuresRebasePreflight: 'agentico:features:rebase:preflight',
   featuresRefactor: 'agentico:features:refactor',
   featuresRefactorDiscard: 'agentico:features:refactor:discard',
+  featuresReviewFeedbackFetch: 'agentico:features:review-feedback:fetch',
+  featuresReviewFeedbackLaunch: 'agentico:features:review-feedback:launch',
   featuresDeleteCascade: 'agentico:features:delete:cascade',
   recoveryScan: 'agentico:recovery:scan',
   recoveryExecute: 'agentico:recovery:execute',
@@ -1129,6 +1131,64 @@ export const DiscardRefactorChildResultSchema = z.strictObject({
   status: z.enum(['draining', 'attention', 'retry', 'completed']),
 });
 export type DiscardRefactorChildResult = z.output<typeof DiscardRefactorChildResultSchema>;
+
+/**
+ * Review-feedback fetch/launch contract. The server returns comments
+ * pre-grouped by repository; the main process redacts free text at the
+ * boundary before this shape reaches the renderer. The launch request
+ * echoes the fetched comment payloads (already redacted) plus the
+ * explicit gate value the modal collected.
+ */
+export const ReviewFeedbackCommentViewSchema = z.strictObject({
+  repo: z.string().min(1).max(200),
+  id: z.number().int(),
+  type: z.enum(['review', 'issue', 'review_body']),
+  path: z.string().max(500).optional(),
+  line: z.number().int().optional(),
+  author: z.string().max(200).optional(),
+  body: z
+    .string()
+    .max(64 * 1024)
+    .optional(),
+  diffHunk: z
+    .string()
+    .max(64 * 1024)
+    .optional(),
+  inReplyToId: z.number().int().optional(),
+});
+export type ReviewFeedbackCommentView = z.output<typeof ReviewFeedbackCommentViewSchema>;
+
+export const ReviewFeedbackRepoGroupSchema = z.strictObject({
+  repo: z.string().min(1).max(200),
+  prUrl: z.string().max(2048),
+  comments: z.array(ReviewFeedbackCommentViewSchema).max(2000),
+});
+export type ReviewFeedbackRepoGroup = z.output<typeof ReviewFeedbackRepoGroupSchema>;
+
+export const FetchReviewFeedbackRequestSchema = z.strictObject({ featureId: FeatureIdSchema });
+export type FetchReviewFeedbackRequest = z.output<typeof FetchReviewFeedbackRequestSchema>;
+export const FetchReviewFeedbackResultSchema = z.strictObject({
+  featureId: FeatureIdSchema,
+  repos: z.array(ReviewFeedbackRepoGroupSchema).max(200),
+});
+export type FetchReviewFeedbackResult = z.output<typeof FetchReviewFeedbackResultSchema>;
+
+export const LaunchReviewFeedbackChildRequestSchema = z.strictObject({
+  parentId: FeatureIdSchema,
+  comments: z.array(ReviewFeedbackCommentViewSchema).min(1).max(2000),
+  gate: z.boolean().optional(),
+});
+export type LaunchReviewFeedbackChildRequest = z.output<
+  typeof LaunchReviewFeedbackChildRequestSchema
+>;
+export const LaunchReviewFeedbackChildResultSchema = z.strictObject({
+  childId: FeatureIdSchema,
+  parentId: FeatureIdSchema,
+  result: z.string().max(500),
+});
+export type LaunchReviewFeedbackChildResult = z.output<
+  typeof LaunchReviewFeedbackChildResultSchema
+>;
 
 export const DeleteFeatureCascadeRequestSchema = z.strictObject({ featureId: FeatureIdSchema });
 export type DeleteFeatureCascadeRequest = z.output<typeof DeleteFeatureCascadeRequestSchema>;
@@ -2687,6 +2747,14 @@ export const ipcContracts: Record<IpcChannel, IpcContract> = {
     request: z.tuple([DiscardRefactorChildRequestSchema]),
     response: DiscardRefactorChildResultSchema,
   },
+  [IPC_CHANNELS.featuresReviewFeedbackFetch]: {
+    request: z.tuple([FetchReviewFeedbackRequestSchema]),
+    response: FetchReviewFeedbackResultSchema,
+  },
+  [IPC_CHANNELS.featuresReviewFeedbackLaunch]: {
+    request: z.tuple([LaunchReviewFeedbackChildRequestSchema]),
+    response: LaunchReviewFeedbackChildResultSchema,
+  },
   [IPC_CHANNELS.featuresDeleteCascade]: {
     request: z.tuple([DeleteFeatureCascadeRequestSchema]),
     response: DeleteFeatureCascadeResultSchema,
@@ -2819,6 +2887,10 @@ export interface AgenticoApi {
   preflightRebase(request: RebasePreflightRequest): Promise<RebasePreflightResult>;
   launchRefactorChild(request: LaunchRefactorChildRequest): Promise<LaunchRefactorChildResult>;
   discardRefactorChild(request: DiscardRefactorChildRequest): Promise<DiscardRefactorChildResult>;
+  fetchReviewFeedback(request: FetchReviewFeedbackRequest): Promise<FetchReviewFeedbackResult>;
+  launchReviewFeedbackChild(
+    request: LaunchReviewFeedbackChildRequest,
+  ): Promise<LaunchReviewFeedbackChildResult>;
   deleteFeatureCascade(request: DeleteFeatureCascadeRequest): Promise<DeleteFeatureCascadeResult>;
   scanRecovery(): Promise<RecoverySnapshot>;
   executeRecovery(request: RecoveryExecuteRequest): Promise<RecoveryExecuteResult>;

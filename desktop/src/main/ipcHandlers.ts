@@ -94,6 +94,10 @@ import {
   type DiscardRefactorChildResult,
   type DeleteFeatureCascadeRequest,
   type DeleteFeatureCascadeResult,
+  type FetchReviewFeedbackRequest,
+  type FetchReviewFeedbackResult,
+  type LaunchReviewFeedbackChildRequest,
+  type LaunchReviewFeedbackChildResult,
   type RecoverySnapshot,
   type RecoveryExecuteRequest,
   type RecoveryExecuteResult,
@@ -186,6 +190,10 @@ export interface IpcServices {
   launchRefactorChild(request: LaunchRefactorChildRequest): Promise<LaunchRefactorChildResult>;
   discardRefactorChild(request: DiscardRefactorChildRequest): Promise<DiscardRefactorChildResult>;
   deleteFeatureCascade(request: DeleteFeatureCascadeRequest): Promise<DeleteFeatureCascadeResult>;
+  fetchReviewFeedback(request: FetchReviewFeedbackRequest): Promise<FetchReviewFeedbackResult>;
+  launchReviewFeedbackChild(
+    request: LaunchReviewFeedbackChildRequest,
+  ): Promise<LaunchReviewFeedbackChildResult>;
   scanRecovery(): Promise<RecoverySnapshot>;
   executeRecovery(request: RecoveryExecuteRequest): Promise<RecoveryExecuteResult>;
   readRecoveryLog(request: RecoveryLogReadRequest): Promise<RecoveryLogReadResult>;
@@ -368,6 +376,12 @@ export function registerIpcHandlers(
       services.launchRefactorChild(request),
     [IPC_CHANNELS.featuresRefactorDiscard]: (_event, request: DiscardRefactorChildRequest) =>
       services.discardRefactorChild(request),
+    [IPC_CHANNELS.featuresReviewFeedbackFetch]: (_event, request: FetchReviewFeedbackRequest) =>
+      services.fetchReviewFeedback(request),
+    [IPC_CHANNELS.featuresReviewFeedbackLaunch]: (
+      _event,
+      request: LaunchReviewFeedbackChildRequest,
+    ) => services.launchReviewFeedbackChild(request),
     [IPC_CHANNELS.featuresDeleteCascade]: (_event, request: DeleteFeatureCascadeRequest) =>
       services.deleteFeatureCascade(request),
     [IPC_CHANNELS.recoveryScan]: () => services.scanRecovery(),

@@ -1996,10 +1996,7 @@ func (t *serverMutationTarget) ReviewFeedbackFeature(featureID string, req serve
 	if creator == nil {
 		return resp, errors.New("feature manager is not available")
 	}
-	spec, err := serverruntime.ReviewFeedbackChildSpecFromRequest(req)
-	if err != nil {
-		return resp, err
-	}
+	spec := serverruntime.ReviewFeedbackChildSpecFromRequest(req)
 	var child *feature.Feature
 	if t.orch != nil {
 		if lockErr := t.orch.WithRelationshipWriteLock(func() error {
@@ -2010,9 +2007,10 @@ func (t *serverMutationTarget) ReviewFeedbackFeature(featureID string, req serve
 			return resp, lockErr
 		}
 	} else {
-		child, err = creator.CreateReviewFeedbackChild(featureID, spec)
-		if err != nil {
-			return resp, err
+		var createErr error
+		child, createErr = creator.CreateReviewFeedbackChild(featureID, spec)
+		if createErr != nil {
+			return resp, createErr
 		}
 	}
 	if t.orch != nil {

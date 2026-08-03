@@ -552,7 +552,7 @@ func (o *Orchestrator) reviewFeedbackIntegrationTail(child, parent *feature.Feat
 
 	// The ledger store capability (load + append). Production wiring always
 	// uses *feature.Store; test doubles may not implement it — in that case
-	// the tail records warnings and skips ledger writes.
+	// the nil-ledger path silently skips both the load and the appends.
 	ledger, _ := o.deps.Store.(reviewFeedbackLedger)
 
 	for _, repo := range parent.Repos {

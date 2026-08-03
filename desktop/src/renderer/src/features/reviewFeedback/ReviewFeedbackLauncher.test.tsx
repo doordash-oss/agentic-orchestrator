@@ -170,7 +170,6 @@ describe('ReviewFeedbackLauncher', () => {
     await waitFor(() => expect(onDispatched).toHaveBeenCalledOnce());
     expect(onDispatched).toHaveBeenCalledWith({
       childId: 'child1234ef567890',
-      autoStart: true,
     });
     expect(mock.api.launchReviewFeedbackChild).toHaveBeenCalledWith({
       parentId: PARENT_ID,
@@ -207,5 +206,60 @@ describe('ReviewFeedbackLauncher', () => {
     expect(mock.api.launchReviewFeedbackChild).toHaveBeenCalledWith(
       expect.objectContaining({ gate: false }),
     );
+  });
+
+  it('disables the primary button and shows "Fetching…" during the loading phase', async () => {
+    const mock = installAgenticoMock();
+    mock.api.getFeatureConfig.mockResolvedValue(featureConfigSnapshot({}));
+    // Never resolve the fetch so the component stays in the loading phase.
+    mock.api.fetchReviewFeedback.mockReturnValue(new Promise(() => {}));
+    render(
+      <ReviewFeedbackLauncher
+        featureId={PARENT_ID}
+        snapshot={featureSnapshot()}
+        onCancel={vi.fn()}
+        onDispatched={vi.fn()}
+      />,
+    );
+    const primary = await screen.findByRole('button', { name: 'Fetching…' });
+    expect(primary).toBeDisabled();
+  });
+
+  it('shows an enabled "Close" primary in the empty-fetch state and dismisses on click', async () => {
+    const mock = installAgenticoMock();
+    const onCancel = vi.fn();
+    mock.api.getFeatureConfig.mockResolvedValue(featureConfigSnapshot({}));
+    mock.api.fetchReviewFeedback.mockResolvedValue({ featureId: PARENT_ID, repos: [] });
+    render(
+      <ReviewFeedbackLauncher
+        featureId={PARENT_ID}
+        snapshot={featureSnapshot()}
+        onCancel={onCancel}
+        onDispatched={vi.fn()}
+      />,
+    );
+    const close = await screen.findByRole('button', { name: 'Close' });
+    expect(close).toBeEnabled();
+    await userEvent.click(close);
+    expect(onCancel).toHaveBeenCalledOnce();
+  });
+
+  it('shows an enabled "Close" primary in the error state and dismisses on click', async () => {
+    const mock = installAgenticoMock();
+    const onCancel = vi.fn();
+    mock.api.getFeatureConfig.mockResolvedValue(featureConfigSnapshot({}));
+    mock.api.fetchReviewFeedback.mockRejectedValue(new Error('review_feedback_fetch_failed'));
+    render(
+      <ReviewFeedbackLauncher
+        featureId={PARENT_ID}
+        snapshot={featureSnapshot()}
+        onCancel={onCancel}
+        onDispatched={vi.fn()}
+      />,
+    );
+    const close = await screen.findByRole('button', { name: 'Close' });
+    expect(close).toBeEnabled();
+    await userEvent.click(close);
+    expect(onCancel).toHaveBeenCalledOnce();
   });
 });

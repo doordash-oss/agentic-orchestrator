@@ -14,6 +14,7 @@ import path from 'node:path';
 import { closeApp, createFeatureViaForm, launchApp, type AppHandle } from '../helpers/app';
 import { Transcript } from '../helpers/transcript';
 import {
+  addBareRemote,
   createRepo,
   createWorld,
   destroyWorld,
@@ -95,6 +96,7 @@ test('review-feedback initialization: modal → fetch → deselect → gate → 
     workflowProvider: true,
   });
   const alpha = createRepo(world, 'alpha', { commit: true });
+  addBareRemote(world, alpha);
   transcript.section('World');
   transcript.step(`isolated world at \`${world.root}\``);
   transcript.step(`committed repository: \`${alpha}\``);
@@ -201,7 +203,7 @@ test('review-feedback initialization: modal → fetch → deselect → gate → 
     await expect(modal.getByText('Overall looks good, just a few nits.')).toBeVisible();
     transcript.step('comments fetched from fake-gh and rendered grouped by repo');
 
-    const checkboxes = modal.getByRole('checkbox');
+    const checkboxes = modal.getByLabel('Review feedback by repository').getByRole('checkbox');
     await expect(checkboxes).toHaveCount(4);
     for (let i = 0; i < 4; i++) {
       await expect(checkboxes.nth(i)).toBeChecked();

@@ -2419,12 +2419,20 @@ body {
 @media (max-width: 900px) {
   .post-workspace {
     grid-template-columns: 1fr;
-    overflow: auto;
+    grid-template-rows: auto auto;
+    overflow-y: auto;
   }
 
   .aftercare-workspace__main,
   .cycle-workspace__main {
     overflow: visible;
+  }
+
+  /* In the stacked layout the main row must grow to its content so the
+   * container's overflow-y: auto can scroll. The base min-height: 0 would
+   * otherwise let the row compress and paint under the facts panel. */
+  .aftercare-workspace__main {
+    min-height: auto;
   }
 
   .feature-facts {
@@ -10310,6 +10318,7 @@ body {
 }
 
 .review-feedback-modal__group {
+  flex-shrink: 0;
   border: 1px solid var(--color-hairline);
   border-radius: var(--radius);
   background: var(--color-panel);
@@ -10330,6 +10339,16 @@ body {
   font-size: 13px;
   font-weight: 600;
   color: var(--color-text);
+}
+
+.review-feedback-modal__group-count {
+  margin-left: var(--space-1);
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--color-hairline);
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--color-muted);
 }
 
 .review-feedback-modal__pr-link {
@@ -10359,6 +10378,27 @@ body {
 }
 
 .review-feedback-modal__select-toggle:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.review-feedback-modal__retry {
+  border: 1px solid var(--color-hairline);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--color-accent);
+  font-size: 12px;
+  font-weight: 500;
+  padding: var(--space-1) var(--space-3);
+  cursor: pointer;
+  align-self: flex-start;
+}
+
+.review-feedback-modal__retry:hover:not(:disabled) {
+  border-color: var(--color-accent);
+}
+
+.review-feedback-modal__retry:disabled {
   opacity: 0.5;
   cursor: default;
 }

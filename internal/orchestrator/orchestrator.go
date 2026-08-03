@@ -487,12 +487,6 @@ func (o *Orchestrator) ChildCreated(child *feature.Feature) {
 	})
 }
 
-// RefactorChildCreated is retained for callers compiled against the original
-// refactor-only seam. New launch paths should call ChildCreated.
-func (o *Orchestrator) RefactorChildCreated(child *feature.Feature) {
-	o.ChildCreated(child)
-}
-
 // emitEvent sends an event on the channel. Non-blocking for non-critical events.
 // Also drops events when shutdown has been signalled, so late emitters do not
 // enqueue work consumers will never read.

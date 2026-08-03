@@ -18,7 +18,6 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"strconv"
 )
 
 // ReviewFeedbackOutcomeDispositionAddressed is the disposition for a comment
@@ -89,9 +88,4 @@ func ReviewFeedbackReplyBody(outcome ReviewFeedbackOutcome, ok bool, mergeSHA st
 		return "Addressed in `" + mergeSHA + "` — " + outcome.Explanation
 	}
 	return "Addressed in `" + mergeSHA + "`"
-}
-
-// formatCommentID is a small helper for deterministic ID-to-string conversion.
-func formatCommentID(id int) string {
-	return strconv.Itoa(id)
 }

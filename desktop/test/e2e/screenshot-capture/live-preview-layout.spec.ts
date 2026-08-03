@@ -360,7 +360,7 @@ test('aftercare keeps its runway and compact feature facts legible at rest', asy
     await expect(page.getByRole('complementary', { name: 'Feature facts' })).toBeVisible();
     await expect(page.getByText('Waiting for the agent to respond…')).toHaveCount(0);
     await expect(page.getByRole('button', { name: /Prepare rebase/ })).toBeVisible();
-    await expect(page.getByRole('button', { name: /Check comments/ })).toBeVisible();
+    await expect(page.getByRole('button', { name: /Address review feedback/ })).toBeVisible();
     await expect(page.getByRole('button', { name: /Plan refactor/ })).toBeVisible();
 
     const dimensions = await page.evaluate(() => ({

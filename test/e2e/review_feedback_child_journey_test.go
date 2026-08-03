@@ -32,11 +32,11 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
 )
 
-// TestReviewFeedbackChildTracerJourney proves the backend tracer from a
-// multi-repository published parent through typed fetch and launch, selected
-// feedback planning input, normal Medium execution, transactional integration,
-// and the closed relationship projection.
-func TestReviewFeedbackChildTracerJourney(t *testing.T) {
+// TestReviewFeedbackChildJourney proves the full review-feedback child flow
+// from a multi-repository published parent through typed fetch and launch,
+// selected feedback planning input, normal Medium execution, transactional
+// integration, and the closed relationship projection.
+func TestReviewFeedbackChildJourney(t *testing.T) {
 	if testing.Short() {
 		t.Skip("journey boots real-git setup and scripted provider subprocesses")
 	}
@@ -279,7 +279,9 @@ func TestReviewFeedbackChildTracerJourney(t *testing.T) {
 		t.Errorf("child history item = %+v, want completed review-feedback child %s", historyItem, childID)
 	}
 
-	// Phase 3: assert the real tail pushed, replied, resolved, and recorded.
+	// Assert the integration tail pushed each PR branch, replied to every
+	// selected comment, resolved eligible inline threads, and recorded
+	// the addressed comment IDs.
 	tailInvocations := fakeGH.Invocations(t)
 	if len(tailInvocations) == 0 {
 		t.Fatalf("no gh invocations after closure; want tail replies, thread maps, and resolutions")
@@ -402,10 +404,7 @@ func reviewFeedbackJourneyBareRemote(t *testing.T, repoPath, branch string) stri
 // setup ownership while keeping the e2e server wired to its isolated manager.
 func (t *journeyMutationTarget) ReviewFeedbackFeature(featureID string, req server.ReviewFeedbackFeatureRequest) (server.ReviewFeedbackFeatureResponse, error) {
 	resp := server.ReviewFeedbackFeatureResponse{ParentID: featureID, Result: "failed"}
-	spec, err := server.ReviewFeedbackChildSpecFromRequest(req)
-	if err != nil {
-		return resp, err
-	}
+	spec := server.ReviewFeedbackChildSpecFromRequest(req)
 	var child *feature.Feature
 	if err := t.orch.WithRelationshipWriteLock(func() error {
 		var createErr error

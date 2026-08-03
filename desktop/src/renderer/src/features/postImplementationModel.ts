@@ -214,33 +214,24 @@ function aftercareAction(id: AftercareActionId, repoCount: number): AftercareAct
   }
 }
 
-function cycleStages(id: RepoCycleId): Array<Omit<CycleStage, 'state'>> {
-  switch (id) {
-    case 'rebase':
-      return [
-        { id: 'inspect_rebase', label: 'Inspect & rebase' },
-        { id: 'resolve_conflicts', label: 'Resolve conflicts', conditional: true },
-        { id: 'final_review', label: 'Final review' },
-        { id: 'publish', label: 'Publish' },
-      ];
-  }
+function cycleStages(_id: RepoCycleId): Array<Omit<CycleStage, 'state'>> {
+  return [
+    { id: 'inspect_rebase', label: 'Inspect & rebase' },
+    { id: 'resolve_conflicts', label: 'Resolve conflicts', conditional: true },
+    { id: 'final_review', label: 'Final review' },
+    { id: 'publish', label: 'Publish' },
+  ];
 }
 
 function normalizedCyclePhase(id: RepoCycleId, phase?: string): string {
   if (phase !== undefined && cycleStages(id).some((stage) => stage.id === phase)) return phase;
-  switch (id) {
-    case 'rebase':
-      return 'inspect_rebase';
-  }
+  return 'inspect_rebase';
 }
 
 function isRepoCycleId(value?: string): value is RepoCycleId {
   return value === 'rebase';
 }
 
-function cycleName(id: RepoCycleId): string {
-  switch (id) {
-    case 'rebase':
-      return 'Rebase';
-  }
+function cycleName(_id: RepoCycleId): string {
+  return 'Rebase';
 }

@@ -653,6 +653,7 @@ const AFTERCARE_FEATURE_SNAPSHOT: FeatureSnapshot = {
         { name: 'pipeline', options: ['medium', 'large', 'moonshot'] },
       ],
     },
+    { id: 'review-feedback', enabled: true, disabledReasons: [] },
     {
       id: 'publish',
       enabled: false,

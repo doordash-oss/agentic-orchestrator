@@ -1869,12 +1869,10 @@ export function FeatureCockpit({
               featureId={featureId}
               snapshot={snapshot}
               onDispatched={(launch) => {
-                if (launch.autoStart) refactorPass.armAutoStart(launch.childId);
+                refactorPass.armAutoStart(launch.childId);
                 void load({ silent: true });
               }}
               onCancel={() => setCycleModal(null)}
-              attentionItems={attentionItems}
-              onOpenGate={() => setCycleModal(null)}
             />
           </CockpitModal>
         ) : null}
@@ -2298,12 +2296,10 @@ export function FeatureCockpit({
                 featureId={featureId}
                 snapshot={snapshot}
                 onDispatched={(launch) => {
-                  if (launch.autoStart) refactorPass.armAutoStart(launch.childId);
+                  refactorPass.armAutoStart(launch.childId);
                   void load({ silent: true });
                 }}
                 onCancel={() => setCycleModal(null)}
-                attentionItems={attentionItems}
-                onOpenGate={() => setCycleModal(null)}
               />
             </CockpitModal>
           ) : null}

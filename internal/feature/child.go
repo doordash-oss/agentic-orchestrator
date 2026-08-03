@@ -355,7 +355,12 @@ func (m *Manager) CreateReviewFeedbackChild(parentID string, spec ReviewFeedback
 		child.Parent.Kind = ChildKindReviewFeedback
 		child.ReviewFeedback = append([]ReviewFeedbackComment(nil), spec.Comments...)
 
+		// Exit criteria is machine-generated per review-feedback pass from the
+		// selected comments and must not pair back to the parent, so save and
+		// restore it around applyResolvedReviewConfig.
+		savedExitCriteria := lockedParent.ExitCriteria
 		applyResolvedReviewConfig(lockedParent, child)
+		lockedParent.ExitCriteria = savedExitCriteria
 		intent := &ChildCreationIntent{
 			ChildID:   child.ID,
 			Kind:      ChildKindReviewFeedback,

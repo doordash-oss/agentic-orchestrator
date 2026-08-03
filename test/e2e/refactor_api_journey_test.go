@@ -300,7 +300,7 @@ func (t *journeyMutationTarget) RefactorFeature(featureID string, req server.Ref
 	if err != nil {
 		return resp, err
 	}
-	t.orch.RefactorChildCreated(child)
+	t.orch.ChildCreated(child)
 	// Mirror the production mutation target: asynchronous child setup is
 	// orchestrator-owned so terminal setup errors are recorded and emitted.
 	t.orch.RunSetupAsync(child.ID)

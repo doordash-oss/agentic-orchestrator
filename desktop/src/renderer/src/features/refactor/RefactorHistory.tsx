@@ -1,4 +1,5 @@
 import type { RelationshipChildView } from '../../../../shared/ipc';
+import { CHILD_KIND_LABEL } from './refactorPassModel';
 
 /**
  * Settled passes are immutable history: newest first, inspection
@@ -77,7 +78,7 @@ export function RefactorHistory({
 }
 
 function kindLabel(kind: string): string {
-  return kind === 'review-feedback' ? 'Review feedback' : 'Refactor';
+  return CHILD_KIND_LABEL[kind] ?? 'Refactor';
 }
 
 function historySpan(entry: RelationshipChildView): string {

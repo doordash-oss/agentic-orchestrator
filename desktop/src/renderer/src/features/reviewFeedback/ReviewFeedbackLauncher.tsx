@@ -8,13 +8,13 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type {
-  AttentionItem,
   FeatureSnapshot,
   FetchReviewFeedbackResult,
   ReviewFeedbackCommentView,
 } from '../../../../shared/ipc';
 import { parseIpcError, type WizardError } from '../../wizard/ipcError';
 import { CycleFooter } from '../cycles/cycleShared';
+import { COMMENT_TYPE_LABEL, commentKey } from '../refactor/refactorPassModel';
 
 type FetchState =
   | { phase: 'loading' }
@@ -25,20 +25,8 @@ export interface ReviewFeedbackLauncherProps {
   featureId: string;
   snapshot: FeatureSnapshot;
   onCancel(): void;
-  onDispatched(launch: { childId: string; autoStart: boolean }): void;
-  attentionItems?: AttentionItem[];
-  onOpenGate?: (featureId: string) => void;
+  onDispatched(launch: { childId: string }): void;
 }
-
-function commentKey(comment: ReviewFeedbackCommentView): string {
-  return `${comment.repo}:${comment.id}`;
-}
-
-const TYPE_LABEL: Record<ReviewFeedbackCommentView['type'], string> = {
-  review: 'Review comment',
-  issue: 'Issue',
-  review_body: 'Review body',
-};
 
 export function ReviewFeedbackLauncher({
   featureId,
@@ -136,7 +124,7 @@ export function ReviewFeedbackLauncher({
           comments,
           gate,
         });
-        onDispatched({ childId: launched.childId, autoStart: true });
+        onDispatched({ childId: launched.childId });
         onCancel();
       } catch (err) {
         setFormError(parseIpcError(err));
@@ -145,6 +133,24 @@ export function ReviewFeedbackLauncher({
       }
     })();
   }, [featureId, gate, onCancel, onDispatched, pending, readyResult, selected, selectedCount]);
+
+  // Derive the footer's label, disabled state, and click handler from one
+  // switch over the same inputs so the three expressions cannot drift apart
+  // and present a button whose label promises one action but performs another.
+  const footer = (() => {
+    if (pending) return { label: 'Launching…', disabled: true, onPrimary: submit };
+    switch (fetchState.phase) {
+      case 'loading':
+        return { label: 'Fetching…', disabled: true, onPrimary: () => {} };
+      case 'error':
+        return { label: 'Close', disabled: false, onPrimary: onCancel };
+      case 'ready':
+        if (totalComments === 0) return { label: 'Close', disabled: false, onPrimary: onCancel };
+        if (selectedCount === 0)
+          return { label: 'Select comments to launch', disabled: true, onPrimary: submit };
+        return { label: `Launch child (${selectedCount})`, disabled: false, onPrimary: submit };
+    }
+  })();
 
   return (
     <div className="review-feedback-modal" aria-label="Address review feedback">
@@ -173,7 +179,7 @@ export function ReviewFeedbackLauncher({
           </p>
           <button
             type="button"
-            className="cycle-journey__preflight-retry"
+            className="review-feedback-modal__retry"
             disabled={pending}
             onClick={load}
           >
@@ -195,7 +201,12 @@ export function ReviewFeedbackLauncher({
               return (
                 <section key={group.repo} className="review-feedback-modal__group">
                   <header className="review-feedback-modal__group-header">
-                    <h4 className="review-feedback-modal__group-title">{group.repo}</h4>
+                    <h4 className="review-feedback-modal__group-title">
+                      {group.repo}
+                      <span className="review-feedback-modal__group-count">
+                        {group.comments.length}
+                      </span>
+                    </h4>
                     <a
                       href={group.prUrl}
                       target="_blank"
@@ -233,7 +244,7 @@ export function ReviewFeedbackLauncher({
                             <span className="review-feedback-modal__comment-body">
                               <span className="review-feedback-modal__comment-meta">
                                 <b className="review-feedback-modal__comment-type">
-                                  {TYPE_LABEL[comment.type]}
+                                  {COMMENT_TYPE_LABEL[comment.type]}
                                 </b>
                                 {comment.path !== undefined ? (
                                   <code className="review-feedback-modal__comment-path">
@@ -270,7 +281,7 @@ export function ReviewFeedbackLauncher({
         )
       ) : null}
 
-      {fetchState.phase !== 'error' ? (
+      {fetchState.phase === 'ready' && totalComments > 0 ? (
         <label className="config-editor__gate review-feedback-modal__gate">
           <input
             type="checkbox"
@@ -290,18 +301,10 @@ export function ReviewFeedbackLauncher({
 
       <CycleFooter
         onCancel={onCancel}
-        primaryLabel={
-          pending
-            ? 'Launching…'
-            : fetchState.phase === 'loading'
-              ? 'Fetching…'
-              : selectedCount === 0
-                ? 'Select comments to launch'
-                : `Launch child${selectedCount > 0 ? ` (${selectedCount})` : ''}`
-        }
-        primaryDisabled={pending || fetchState.phase !== 'ready' || selectedCount === 0}
+        primaryLabel={footer.label}
+        primaryDisabled={footer.disabled}
         busy={pending}
-        onPrimary={submit}
+        onPrimary={footer.onPrimary}
       />
     </div>
   );

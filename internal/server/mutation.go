@@ -1360,11 +1360,11 @@ func RefactorChildSpecFromRequest(req RefactorFeatureRequest) (feature.RefactorC
 // verbatim and maps the optional gate presence onto the domain launch spec.
 // Repository and supported-type validation remains authoritative in the
 // feature manager under the child-creation path.
-func ReviewFeedbackChildSpecFromRequest(req ReviewFeedbackFeatureRequest) (feature.ReviewFeedbackChildSpec, error) {
+func ReviewFeedbackChildSpecFromRequest(req ReviewFeedbackFeatureRequest) feature.ReviewFeedbackChildSpec {
 	return feature.ReviewFeedbackChildSpec{
 		Comments:    append([]feature.ReviewFeedbackComment(nil), req.Comments...),
 		GateEnabled: req.Gate,
-	}, nil
+	}
 }
 
 func validateAutomaticReviewMode(w http.ResponseWriter, raw *string) bool {

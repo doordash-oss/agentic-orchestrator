@@ -452,6 +452,19 @@ export function createRepo(world: JourneyWorld, name: string, opts: { commit: bo
 }
 
 /**
+ * Creates a bare remote and adds it as the `origin` remote for the given repo
+ * path, so the feature manager records the repo as publishable. Mirrors the Go
+ * e2e journey's `reviewFeedbackJourneyBareRemote`.
+ */
+export function addBareRemote(world: JourneyWorld, repoPath: string): string {
+  const remote = path.join(world.workspaceRoot, `${path.basename(repoPath)}.git`);
+  fs.mkdirSync(remote, { recursive: true });
+  git(remote, 'init', '--bare');
+  git(repoPath, 'remote', 'add', 'origin', remote);
+  return remote;
+}
+
+/**
  * Creates a plain (non-repo) folder under the workspace root. Left empty:
  * the server's consent-gated init endpoint initializes empty folders or
  * existing repositories only (`directory_not_empty` otherwise).

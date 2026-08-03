@@ -128,6 +128,15 @@ func TestCreateReviewFeedbackChildPersistsSelectedFeedback(t *testing.T) {
 	if reloaded.Description != child.Description {
 		t.Errorf("reloaded.Description differs from created description")
 	}
+
+	reloadedParent, err := mgr.Store.Load(parent.ID)
+	if err != nil {
+		t.Fatalf("Store.Load(%q) error = %v", parent.ID, err)
+	}
+	if reloadedParent.ExitCriteria != parent.ExitCriteria {
+		t.Errorf("reloaded parent ExitCriteria = %q, want %q (parent's original exit criteria must survive review-feedback child creation)",
+			reloadedParent.ExitCriteria, parent.ExitCriteria)
+	}
 }
 
 func TestCreateReviewFeedbackChildResolvesGateOnParentAndChild(t *testing.T) {

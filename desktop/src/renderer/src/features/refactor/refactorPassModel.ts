@@ -9,6 +9,7 @@ import {
   type FeatureSnapshot,
   type RelationshipChildView,
   type RelationshipTransactionView,
+  type ReviewFeedbackCommentView,
 } from '../../../../shared/ipc';
 import { actionById, displayStatusLabel, isReadyToStart } from '../featureView';
 
@@ -332,4 +333,22 @@ export function refactoringStatusChip(view: RelationshipChildView): {
   return attention
     ? { label: `${active} — needs attention`, tone: 'attention' }
     : { label: active, tone: 'info' };
+}
+
+/** Human-readable label for each child kind, used by the closed-pass history. */
+export const CHILD_KIND_LABEL: Record<string, string> = {
+  refactor: 'Refactor',
+  'review-feedback': 'Review feedback',
+};
+
+/** Human-readable label for each review-feedback comment type. */
+export const COMMENT_TYPE_LABEL: Record<ReviewFeedbackCommentView['type'], string> = {
+  review: 'Review comment',
+  issue: 'Issue',
+  review_body: 'Review body',
+};
+
+/** Stable identity key for a review-feedback comment, including type to avoid same-ID collisions across inline-review and issue-comment sequences. */
+export function commentKey(comment: ReviewFeedbackCommentView): string {
+  return `${comment.repo}:${comment.type}:${comment.id}`;
 }

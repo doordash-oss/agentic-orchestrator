@@ -17,6 +17,9 @@ package orchestrator_test
 import (
 	"context"
 	"errors"
+	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -32,6 +35,56 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
 )
+
+const (
+	repoName               = "repo-a"
+	repoAPath              = "/tmp/repo-a"
+	mainBranch             = "main"
+	apiRepoName            = "api"
+	wtR1Path               = "/tmp/wt-r1"
+	agenticRepoName        = "agentic"
+	repoNameB              = "repo-b"
+	repoBPath              = "/tmp/repo-b"
+	repoNameC              = "repo-c"
+	finalStatusInterrupted = "interrupted"
+	reviewStatusPassed     = "review_passed"
+	finalStatusFailed      = "failed"
+	kbStatusCompleted      = "completed"
+	apiRepoWorkPath        = "/tmp/api"
+	repoAWorktreePath      = "/tmp/repo-a-worktree"
+)
+
+func installRepoCycleFakeAPI(t *testing.T) *testutil.FakeGitHubAPI {
+	t.Helper()
+	fake := testutil.InstallFakeGitHubAPI(t)
+	fake.Mux.HandleFunc("/graphql", func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		switch {
+		case strings.Contains(string(body), "resolveReviewThread"):
+			fmt.Fprint(w, `{"data":{"resolveReviewThread":{"thread":{"isResolved":true}}}}`)
+		case strings.Contains(string(body), "reviewThreads"):
+			fmt.Fprint(w, `{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[{"id":"thread-id-11","isResolved":false,"comments":{"nodes":[{"databaseId":11}]}}]}}}}}`)
+		default:
+			fmt.Fprint(w, `{"data":{}}`)
+		}
+	})
+	// Replies and comment posts from the cycle land here.
+	fake.Mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{}`)
+	})
+	return fake
+}
+
+func countPublisherCalls(m *mocks.MockRemoteOps, method string) int {
+	n := 0
+	for _, c := range m.Calls {
+		if c.Method == method {
+			n++
+		}
+	}
+	return n
+}
 
 // ---------------------------------------------------------------------------
 // Category A — KB completion
@@ -1047,7 +1100,6 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_Failed(t *testing.T)
 	}
 	lc := lifecycleForFeature(f)
 	lc.MarkFailedFn = func(id, ft, msg string) error { return nil }
-	lc.ClearAddressingReviewsFn = func(id string) error { return nil }
 	fs := newFeatureStore(f)
 
 	var failureType string
@@ -1278,7 +1330,6 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_Failed_MaxIterations
 	}
 	lc := lifecycleForFeature(f)
 	lc.MarkFailedFn = func(id, ft, msg string) error { return nil }
-	lc.ClearAddressingReviewsFn = func(id string) error { return nil }
 	fs := newFeatureStore(f)
 
 	var failureType string
@@ -1316,7 +1367,6 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_Failed_ProtocolViola
 	}
 	lc := lifecycleForFeature(f)
 	lc.MarkFailedFn = func(id, ft, msg string) error { return nil }
-	lc.ClearAddressingReviewsFn = func(id string) error { return nil }
 	fs := newFeatureStore(f)
 
 	var failureType string
@@ -1352,7 +1402,6 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_Failed_SafetyRail_Pr
 	}
 	lc := lifecycleForFeature(f)
 	lc.MarkFailedFn = func(id, ft, msg string) error { return nil }
-	lc.ClearAddressingReviewsFn = func(id string) error { return nil }
 	fs := newFeatureStore(f)
 
 	var failureType string
@@ -1391,7 +1440,6 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_Failed_NoMaxIteratio
 	}
 	lc := lifecycleForFeature(f)
 	lc.MarkFailedFn = func(id, ft, msg string) error { return nil }
-	lc.ClearAddressingReviewsFn = func(id string) error { return nil }
 	fs := newFeatureStore(f)
 
 	var failureType string

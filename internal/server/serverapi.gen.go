@@ -366,7 +366,6 @@ const (
 	FeatureActionRestart            FeatureAction = "restart"
 	FeatureActionResume             FeatureAction = "resume"
 	FeatureActionRetry              FeatureAction = "retry"
-	FeatureActionReviewComments     FeatureAction = "review-comments"
 	FeatureActionRewind             FeatureAction = "rewind"
 	FeatureActionSetup              FeatureAction = "setup"
 	FeatureActionStart              FeatureAction = "start"
@@ -402,8 +401,6 @@ func (e FeatureAction) Valid() bool {
 	case FeatureActionResume:
 		return true
 	case FeatureActionRetry:
-		return true
-	case FeatureActionReviewComments:
 		return true
 	case FeatureActionRewind:
 		return true
@@ -555,7 +552,6 @@ const (
 	RunFeatureActionParamsActionRestart            RunFeatureActionParamsAction = "restart"
 	RunFeatureActionParamsActionResume             RunFeatureActionParamsAction = "resume"
 	RunFeatureActionParamsActionRetry              RunFeatureActionParamsAction = "retry"
-	RunFeatureActionParamsActionReviewComments     RunFeatureActionParamsAction = "review-comments"
 	RunFeatureActionParamsActionRewind             RunFeatureActionParamsAction = "rewind"
 	RunFeatureActionParamsActionSetup              RunFeatureActionParamsAction = "setup"
 	RunFeatureActionParamsActionStart              RunFeatureActionParamsAction = "start"
@@ -591,8 +587,6 @@ func (e RunFeatureActionParamsAction) Valid() bool {
 	case RunFeatureActionParamsActionResume:
 		return true
 	case RunFeatureActionParamsActionRetry:
-		return true
-	case RunFeatureActionParamsActionReviewComments:
 		return true
 	case RunFeatureActionParamsActionRewind:
 		return true
@@ -636,7 +630,6 @@ const (
 	RunFeatureSubactionParamsActionRestart            RunFeatureSubactionParamsAction = "restart"
 	RunFeatureSubactionParamsActionResume             RunFeatureSubactionParamsAction = "resume"
 	RunFeatureSubactionParamsActionRetry              RunFeatureSubactionParamsAction = "retry"
-	RunFeatureSubactionParamsActionReviewComments     RunFeatureSubactionParamsAction = "review-comments"
 	RunFeatureSubactionParamsActionRewind             RunFeatureSubactionParamsAction = "rewind"
 	RunFeatureSubactionParamsActionSetup              RunFeatureSubactionParamsAction = "setup"
 	RunFeatureSubactionParamsActionStart              RunFeatureSubactionParamsAction = "start"
@@ -672,8 +665,6 @@ func (e RunFeatureSubactionParamsAction) Valid() bool {
 	case RunFeatureSubactionParamsActionResume:
 		return true
 	case RunFeatureSubactionParamsActionRetry:
-		return true
-	case RunFeatureSubactionParamsActionReviewComments:
 		return true
 	case RunFeatureSubactionParamsActionRewind:
 		return true
@@ -987,8 +978,6 @@ type ActionResponse struct {
 	RebaseStartResponse         RebaseStartResponse         `json:"rebase_start_response,omitempty"`
 	RecoveryActionResponse      RecoveryActionResponse      `json:"recovery_action_response,omitempty"`
 	RetryFeatureResponse        RetryFeatureResponse        `json:"retry_feature_response,omitempty"`
-	ReviewCommentsFetchResponse ReviewCommentsFetchResponse `json:"review_comments_fetch_response,omitempty"`
-	ReviewCommentsStartResponse ReviewCommentsStartResponse `json:"review_comments_start_response,omitempty"`
 	RewindFeatureResponse       RewindFeatureResponse       `json:"rewind_feature_response,omitempty"`
 	RuntimeConfigUpdateResponse RuntimeConfigUpdateResponse `json:"runtime_config_update_response,omitempty"`
 }
@@ -2152,44 +2141,6 @@ type RetryFeatureResponse struct {
 	FeatureID  string       `json:"feature_id"`
 	Meta       ResponseMeta `json:"meta,omitempty"`
 	Result     string       `json:"result"`
-}
-
-// ReviewComment defines model for ReviewComment.
-type ReviewComment struct {
-	Body      string `json:"body,omitempty"`
-	CreatedAt string `json:"created_at,omitempty"`
-	DiffHunk  string `json:"diff_hunk,omitempty"`
-	ID        int    `json:"id"`
-	InReplyTo int    `json:"in_reply_to_id,omitempty"`
-	Line      int    `json:"line,omitempty"`
-	Path      string `json:"path,omitempty"`
-	RepoName  string `json:"repo_name,omitempty"`
-	Type      string `json:"type,omitempty"`
-	UserLogin string `json:"user_login,omitempty"`
-}
-
-// ReviewCommentsFetchResponse defines model for ReviewCommentsFetchResponse.
-type ReviewCommentsFetchResponse struct {
-	APIVersion string          `json:"api_version"`
-	Comments   []ReviewComment `json:"comments"`
-	FeatureID  string          `json:"feature_id"`
-	Meta       ResponseMeta    `json:"meta,omitempty"`
-	Mode       string          `json:"mode,omitempty"`
-	Repo       string          `json:"repo"`
-}
-
-// ReviewCommentsStartResponse defines model for ReviewCommentsStartResponse.
-type ReviewCommentsStartResponse struct {
-	APIVersion   string       `json:"api_version"`
-	CommentCount int          `json:"comment_count,omitempty"`
-	CycleType    string       `json:"cycle_type"`
-	FeatureID    string       `json:"feature_id"`
-	Meta         ResponseMeta `json:"meta,omitempty"`
-	Mode         string       `json:"mode"`
-	Repo         string       `json:"repo"`
-	Result       string       `json:"result"`
-	SessionID    string       `json:"session_id,omitempty"`
-	Source       string       `json:"source,omitempty"`
 }
 
 // ReviewDraftUpdateRequest defines model for ReviewDraftUpdateRequest.

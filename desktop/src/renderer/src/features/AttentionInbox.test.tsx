@@ -40,7 +40,7 @@ const gateItem: Extract<AttentionItem, { kind: 'gate' }> = {
   featureId: 'abcd1234ef567890',
   waitingSince: '2026-07-29T00:00:00Z',
   repoName: 'repo-a',
-  cycleType: 'review-comments',
+  cycleType: 'rebase',
   summary: 'Verification could not finish.',
   questions: [{ index: 1, prompt: 'How should Agentico continue?', answer: '' }],
   verification: {
@@ -246,7 +246,7 @@ describe('AttentionInbox gate detail', () => {
       expect(mock.api.saveGateDraft).toHaveBeenCalledWith({
         featureId: gateItem.featureId,
         repoName: 'repo-a',
-        cycleType: 'review-comments',
+        cycleType: 'rebase',
         answers: { '1': 'RETRY_AFTER_AUTH' },
       }),
     );
@@ -256,7 +256,7 @@ describe('AttentionInbox gate detail', () => {
       expect(mock.api.resolveGate).toHaveBeenCalledWith({
         featureId: gateItem.featureId,
         repoName: 'repo-a',
-        cycleType: 'review-comments',
+        cycleType: 'rebase',
       }),
     );
   });
@@ -275,7 +275,7 @@ describe('AttentionInbox gate detail', () => {
       expect(mock.api.saveGateDraft).toHaveBeenCalledWith({
         featureId: gateItem.featureId,
         repoName: 'repo-a',
-        cycleType: 'review-comments',
+        cycleType: 'rebase',
         answers: { '1': 'WAIVE' },
       }),
     );

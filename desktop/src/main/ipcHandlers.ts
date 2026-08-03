@@ -88,10 +88,6 @@ import {
   type RebaseResult,
   type RebasePreflightRequest,
   type RebasePreflightResult,
-  type ReviewCommentsFetchRequest,
-  type ReviewCommentsFetchResult,
-  type ReviewCommentsStartRequest,
-  type ReviewCommentsStartResult,
   type LaunchRefactorChildRequest,
   type LaunchRefactorChildResult,
   type DiscardRefactorChildRequest,
@@ -187,8 +183,6 @@ export interface IpcServices {
   executeRewind(request: RewindExecuteRequest): Promise<FeatureActionResult>;
   startRebase(request: RebaseRequest): Promise<RebaseResult>;
   preflightRebase(request: RebasePreflightRequest): Promise<RebasePreflightResult>;
-  fetchReviewComments(request: ReviewCommentsFetchRequest): Promise<ReviewCommentsFetchResult>;
-  startReviewComments(request: ReviewCommentsStartRequest): Promise<ReviewCommentsStartResult>;
   launchRefactorChild(request: LaunchRefactorChildRequest): Promise<LaunchRefactorChildResult>;
   discardRefactorChild(request: DiscardRefactorChildRequest): Promise<DiscardRefactorChildResult>;
   deleteFeatureCascade(request: DeleteFeatureCascadeRequest): Promise<DeleteFeatureCascadeResult>;
@@ -370,10 +364,6 @@ export function registerIpcHandlers(
       services.startRebase(request),
     [IPC_CHANNELS.featuresRebasePreflight]: (_event, request: RebasePreflightRequest) =>
       services.preflightRebase(request),
-    [IPC_CHANNELS.featuresReviewCommentsFetch]: (_event, request: ReviewCommentsFetchRequest) =>
-      services.fetchReviewComments(request),
-    [IPC_CHANNELS.featuresReviewCommentsStart]: (_event, request: ReviewCommentsStartRequest) =>
-      services.startReviewComments(request),
     [IPC_CHANNELS.featuresRefactor]: (_event, request: LaunchRefactorChildRequest) =>
       services.launchRefactorChild(request),
     [IPC_CHANNELS.featuresRefactorDiscard]: (_event, request: DiscardRefactorChildRequest) =>

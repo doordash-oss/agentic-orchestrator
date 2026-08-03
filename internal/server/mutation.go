@@ -38,10 +38,6 @@ const (
 	maxRememberedCreationResults    = 1000
 )
 
-// reviewCommentsModeAuto is the "auto" value of the review-comments action's
-// mode enum, shared with its option list in read_model.go.
-const reviewCommentsModeAuto = "auto"
-
 // errCodeBadRequest is the API error code for malformed requests.
 const errCodeBadRequest = "bad_request"
 
@@ -144,8 +140,6 @@ type MutationTarget interface {
 	RetryFeature(featureID string) (RetryFeatureResponse, error)
 	StartRebase(featureID string, req RebaseActionRequest) (RebaseStartResponse, error)
 	RefactorFeature(featureID string, req RefactorFeatureRequest) (RefactorFeatureResponse, error)
-	FetchReviewComments(featureID string, req ReviewCommentsFetchRequest) (ReviewCommentsFetchResponse, error)
-	StartReviewComments(featureID string, req ReviewCommentsActionRequest) (ReviewCommentsStartResponse, error)
 	PreflightRebase(featureID string) (RebasePreflightResponse, error)
 	CompletionPreflight(featureID string) (CompletionPreflightResponse, error)
 	RepositoryDiff(featureID, repoName, filePath string) (RepositoryDiffResponse, error)
@@ -226,15 +220,10 @@ type FeatureConfigMutationRequest struct {
 	AutomaticReviewMode *string                 `json:"automatic_review_mode,omitempty"`
 }
 
-type NeedUserInputResumeRequest struct {
-	RepoName  string `json:"repo_name,omitempty"`
-	CycleType string `json:"cycle_type,omitempty"`
-}
+type NeedUserInputResumeRequest struct{}
 
 type NeedUserInputDraftRequest struct {
-	RepoName  string            `json:"repo_name,omitempty"`
-	CycleType string            `json:"cycle_type,omitempty"`
-	Answers   map[string]string `json:"answers"`
+	Answers map[string]string `json:"answers"`
 }
 
 type PermissionAnswerRequest struct {
@@ -401,16 +390,6 @@ type RebaseActionRequest struct {
 	// omitted, the request is treated as unguarded for backward
 	// compatibility with older clients.
 	SourceRevision string `json:"source_revision,omitempty"`
-}
-
-type ReviewCommentsFetchRequest struct {
-	Repo string `json:"repo"`
-}
-
-type ReviewCommentsActionRequest struct {
-	Repo     string          `json:"repo"`
-	Mode     string          `json:"mode"`
-	Comments []ReviewComment `json:"comments,omitempty"`
 }
 
 type CleanupActionRequest struct {
@@ -637,12 +616,11 @@ func mutationRouteMethods(path string) ([]string, bool) {
 			return nil, false
 		}
 		switch parts[2] {
-		case actionSetup, actionStart, actionPauseStop, actionResume, actionRestart, actionPublish, actionMerge, actionRewind, actionRebase, actionReviewComments, actionRefactor, actionNeedUserInput, actionNeedInputDraft, actionRetry, actionMarkDone, actionCleanup, actionDelete, actionDiscard:
+		case actionSetup, actionStart, actionPauseStop, actionResume, actionRestart, actionPublish, actionMerge, actionRewind, actionRebase, actionRefactor, actionNeedUserInput, actionNeedInputDraft, actionRetry, actionMarkDone, actionCleanup, actionDelete, actionDiscard:
 			if len(parts) == 3 {
 				return []string{http.MethodPost}, true
 			}
-			if (parts[2] == actionPublish && parts[3] == phaseNameDescription) ||
-				(parts[2] == actionReviewComments && parts[3] == "fetch") {
+			if parts[2] == actionPublish && parts[3] == phaseNameDescription {
 				return []string{http.MethodPost}, true
 			}
 		}
@@ -1014,8 +992,6 @@ func (h *apiHandler) handleFeatureActionRoute(w http.ResponseWriter, r *http.Req
 			return false
 		}
 		h.handleRefactorFeatureMutationTrusted(w, r, featureID)
-	case actionReviewComments:
-		return h.handleReviewCommentsAction(w, r, featureID, subaction)
 	case actionCleanup:
 		if subaction != "" {
 			return false
@@ -1286,52 +1262,6 @@ func (h *apiHandler) writeRestartFeature(w http.ResponseWriter, featureID string
 	writeActionJSON(w, http.StatusOK, &resp)
 }
 
-func (h *apiHandler) handleReviewCommentsAction(w http.ResponseWriter, r *http.Request, featureID, subaction string) bool {
-	if subaction == "fetch" {
-		h.handleReviewCommentsFetch(w, r, featureID)
-		return true
-	}
-	if subaction != "" {
-		return false
-	}
-	var req ReviewCommentsActionRequest
-	if !decodeMutationJSON(w, r, &req) || !validateRepoName(w, req.Repo, true) || !validateReviewCommentsMode(w, req.Mode) {
-		return true
-	}
-	resp, err := h.mutations.StartReviewComments(featureID, req)
-	if err != nil {
-		writeMutationError(w, err)
-		return true
-	}
-	defaultActionFields(&resp, featureID, resultStarted)
-	writeActionJSON(w, http.StatusOK, &resp)
-	return true
-}
-
-// handleReviewCommentsFetch handles the fetch subaction of review comments.
-// Extracted from handleReviewCommentsAction to keep that dispatcher flat.
-func (h *apiHandler) handleReviewCommentsFetch(w http.ResponseWriter, r *http.Request, featureID string) {
-	var req ReviewCommentsFetchRequest
-	if !decodeMutationJSON(w, r, &req) || !validateRepoName(w, req.Repo, true) {
-		return
-	}
-	resp, err := h.mutations.FetchReviewComments(featureID, req)
-	if err != nil {
-		writeAPIError(w, http.StatusBadRequest, "bad_request", "fetch review comments failed: "+err.Error(), nil)
-		return
-	}
-	if resp.APIVersion == "" {
-		resp.APIVersion = APIVersion
-	}
-	if resp.FeatureID == "" {
-		resp.FeatureID = featureID
-	}
-	if resp.Comments == nil {
-		resp.Comments = []ReviewComment{}
-	}
-	writeJSON(w, http.StatusOK, resp)
-}
-
 func validatePipelineProfile(w http.ResponseWriter, profile feature.PipelineProfile) bool {
 	if profile == "" || profile.IsValid() {
 		return true
@@ -1492,16 +1422,6 @@ func validatePositiveOptionalInt(w http.ResponseWriter, field string, value int)
 	}
 	writeAPIError(w, http.StatusBadRequest, "bad_request", field+" must be positive", nil)
 	return false
-}
-
-func validateReviewCommentsMode(w http.ResponseWriter, mode string) bool {
-	switch strings.ToLower(strings.TrimSpace(mode)) {
-	case reviewCommentsModeAuto, "address_all":
-		return true
-	default:
-		writeAPIError(w, http.StatusBadRequest, "bad_request", "mode must be auto or address_all", nil)
-		return false
-	}
 }
 
 func validateCleanupRequest(w http.ResponseWriter, req CleanupActionRequest) bool {

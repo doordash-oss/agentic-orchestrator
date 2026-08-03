@@ -653,53 +653,6 @@ func (o *Orchestrator) ExtendFailedPhaseBudget(featureID string, maxIterationsDe
 	})
 }
 
-// RepoCycleRestart describes one review-comments repository cycle that a caller
-// must relaunch after a restart.
-type RepoCycleRestart struct {
-	RepoName    string
-	CycleType   feature.RepoCycleType
-	PlanContent string
-}
-
-// CollectAndClearRepoCycleRestarts snapshots the feature's RepoCycles map,
-// reads each review-comments cycle's plan file from disk, clears the cycle
-// state, and returns restart descriptors for the caller.
-func (o *Orchestrator) CollectAndClearRepoCycleRestarts(featureID string) ([]RepoCycleRestart, error) {
-	f, err := o.deps.Lifecycle.Get(featureID)
-	if err != nil {
-		return nil, fmt.Errorf("load feature: %w", err)
-	}
-
-	type cycleSnapshot struct {
-		repoName  string
-		cycleType feature.RepoCycleType
-		planPath  string
-	}
-	var cycles []cycleSnapshot
-	for repoName, rc := range f.RepoCycles {
-		cycles = append(cycles, cycleSnapshot{repoName, rc.Type, rc.PlanPath})
-	}
-
-	if err := o.deps.Lifecycle.ClearRepoCycles(featureID); err != nil {
-		return nil, fmt.Errorf("clear repo cycles: %w", err)
-	}
-
-	var restarts []RepoCycleRestart
-	for _, c := range cycles {
-		switch c.cycleType {
-		case feature.CycleReviewComments:
-			data, _ := os.ReadFile(c.planPath)
-			restarts = append(restarts, RepoCycleRestart{
-				RepoName:    c.repoName,
-				CycleType:   c.cycleType,
-				PlanContent: string(data),
-			})
-		}
-	}
-
-	return restarts, nil
-}
-
 // GateReviewContext bundles the artifact path and worktree directory needed to
 // launch a gate-review session. An empty ArtifactPath means no artifact could
 // be resolved.
@@ -847,10 +800,6 @@ const (
 	// RestartDispatchPhase requires the caller to start Outcome.Phase.
 	RestartDispatchPhase
 
-	// RestartDispatchRepoCycles returns repository descriptors for the
-	// caller to relaunch.
-	RestartDispatchRepoCycles
-
 	// RestartDispatchRebase resumes a retained feature-level rebase operation.
 	RestartDispatchRebase
 )
@@ -858,9 +807,8 @@ const (
 // RestartOutcome describes the follow-up required after RestartPhase applies
 // its state transitions.
 type RestartOutcome struct {
-	Action            RestartAction
-	Phase             feature.Phase // meaningful only for RestartDispatchPhase
-	RepoCycleRestarts []RepoCycleRestart
+	Action RestartAction
+	Phase  feature.Phase // meaningful only for RestartDispatchPhase
 }
 
 // RestartPhase is the single orchestrator entrypoint for user-initiated phase
@@ -868,8 +816,6 @@ type RestartOutcome struct {
 //   - Stops any active sessions (delegates to StopFeatureSessions).
 //   - On Failed features, clears the failure bookkeeping and extends the
 //     iteration budget by caller-supplied deltas.
-//   - On Published features with RepoCycles present, collects and clears the
-//     per-cycle restart descriptors and returns RestartDispatchRepoCycles.
 //   - Otherwise, walks the phase+status decision tree to transition the
 //     feature back to a startable status and returns RestartDispatchPhase with
 //     the phase the caller should relaunch.
@@ -959,27 +905,6 @@ func (o *Orchestrator) RestartPhase(featureID string, maxIterationsDelta, maxPla
 		_ = o.ExtendFailedPhaseBudget(featureID, maxIterationsDelta, maxPlanIterationsDelta)
 	}
 	phase := f.CurrentPhase
-
-	// Published/code-ready features with repo cycles (running, failed, or
-	// interrupted): clear and return per-cycle restart descriptors for the
-	// caller to relaunch. Interrupted post-publish cycles first restore the
-	// feature to the publishable base state so the relaunched cycle is again
-	// treated as active post-publish work rather than a plain phase restart.
-	if (f.Status == feature.StatusPublished || f.Status == feature.StatusCodeReady || f.Status == feature.StatusInterrupted) && len(f.RepoCycles) > 0 {
-		if f.Status == feature.StatusInterrupted {
-			if err := o.restoreStatusForRepoCycleRestart(featureID); err != nil {
-				return RestartOutcome{}, fmt.Errorf("restore status for cycle restart: %w", err)
-			}
-		}
-		restarts, collectErr := o.CollectAndClearRepoCycleRestarts(featureID)
-		if collectErr != nil {
-			return RestartOutcome{}, fmt.Errorf("collect cycles: %w", collectErr)
-		}
-		return RestartOutcome{
-			Action:            RestartDispatchRepoCycles,
-			RepoCycleRestarts: restarts,
-		}, nil
-	}
 
 	if f.Status.IsNeedsReview() {
 		if err := o.deps.Store.Modify(featureID, func(ff *feature.Feature) error {
@@ -1091,22 +1016,6 @@ func isArtifactReviewSession(s ports.SessionView) bool {
 		return false
 	}
 	return strings.HasSuffix(s.ID(), "-artifact-review")
-}
-
-func (o *Orchestrator) restoreStatusForRepoCycleRestart(featureID string) error {
-	return o.deps.Store.Modify(featureID, func(f *feature.Feature) error {
-		if len(f.PRURLs()) > 0 {
-			f.Status = feature.StatusPublished
-		} else {
-			f.Status = feature.StatusCodeReady
-		}
-		f.CurrentPhase = feature.PhasePublish
-		f.ActiveCycle = nil
-		f.SetActiveCycleType("")
-		f.LastError = ""
-		f.FailureType = ""
-		return nil
-	})
 }
 
 // lookupRoadmapPhaseName returns the friendly name of the given roadmap phase

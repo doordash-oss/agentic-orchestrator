@@ -99,8 +99,6 @@ describe('preload surface', () => {
         'revealPath',
         'startRebase',
         'preflightRebase',
-        'fetchReviewComments',
-        'startReviewComments',
         'launchRefactorChild',
         'discardRefactorChild',
         'deleteFeatureCascade',

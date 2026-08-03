@@ -22,7 +22,6 @@ import { RewindJourney } from '../../../src/renderer/src/features/RewindJourney'
 import { RepositoryInstrument } from '../../../src/renderer/src/features/RepositoryInstrument';
 import { CurrentRunInspection } from '../../../src/renderer/src/features/CurrentRunInspection';
 import { RebaseModal } from '../../../src/renderer/src/features/cycles/RebaseModal';
-import { ReviewCommentsModal } from '../../../src/renderer/src/features/cycles/ReviewCommentsModal';
 import { RefactorLauncher } from '../../../src/renderer/src/features/refactor/RefactorLauncher';
 import { BulkPreviewPanel } from '../../../src/renderer/src/features/BulkPreviewPanel';
 import { RecoveryWorkspace } from '../../../src/renderer/src/features/RecoveryWorkspace';
@@ -370,8 +369,8 @@ function PostImplementationScene({ scene }: { scene: string }) {
             featureId: 'abcd1234ef567890',
             waitingSince: '2026-07-25T10:00:00.000Z',
             repoName: 'agentic-orchestrator',
-            cycleType: 'review-comments',
-            summary: 'The agent needs one decision before it can finish the review response.',
+            cycleType: 'rebase',
+            summary: 'The agent needs one decision before it can finish the rebase.',
             questions: [
               {
                 index: 1,
@@ -408,28 +407,7 @@ function PostImplementationScene({ scene }: { scene: string }) {
 
 function CycleModalScene({ scene }: { scene: string }) {
   const snapshot = scene === 'rebase-preflight' ? REBASE_FEATURE_SNAPSHOT : CYCLES_FEATURE_SNAPSHOT;
-  const title =
-    scene === 'rebase-preflight'
-      ? 'Rebase'
-      : scene === 'review-refactor'
-        ? 'Start refactor'
-        : 'Review comments';
-  const gateItems =
-    scene === 'cycle-gate'
-      ? [
-          {
-            kind: 'gate' as const,
-            id: 'cycle-gate-001',
-            featureId: 'abcd1234ef567890',
-            waitingSince: new Date(Date.now() - 120_000).toISOString(),
-            cycleType: 'review-comments',
-            repoName: 'signal-lab',
-            summary: 'Review-comments cycle is paused waiting for answers.',
-            questions: [],
-          },
-        ]
-      : [];
-  const isConstrained = scene === 'cycle-gate';
+  const title = scene === 'rebase-preflight' ? 'Rebase' : 'Start refactor';
   return (
     <div
       className="workspace-shell__content"
@@ -445,7 +423,6 @@ function CycleModalScene({ scene }: { scene: string }) {
         className="cockpit__modal"
         style={{
           padding: '0',
-          flex: isConstrained ? '1 1 auto' : undefined,
           minHeight: 0,
           overflow: 'auto',
         }}
@@ -464,72 +441,16 @@ function CycleModalScene({ scene }: { scene: string }) {
               onCancel={() => {}}
               onDispatched={() => {}}
             />
-          ) : scene === 'review-refactor' ? (
+          ) : (
             <RefactorLauncher
               featureId="abcd1234ef567890"
               snapshot={snapshot}
               onCancel={() => {}}
               onDispatched={() => {}}
             />
-          ) : (
-            <ReviewCommentsModal
-              featureId="abcd1234ef567890"
-              snapshot={snapshot}
-              onCancel={() => {}}
-              onDispatched={() => {}}
-              attentionItems={gateItems}
-              onOpenGate={() => {}}
-            />
           )}
         </div>
       </div>
-      {scene === 'cycle-gate' ? (
-        <div
-          className="recovery-workspace"
-          aria-label="Recovery workspace"
-          style={{
-            marginTop: 'var(--space-3)',
-            padding: 'var(--space-3)',
-            flexShrink: 0,
-          }}
-        >
-          <header className="recovery-workspace__header">
-            <div>
-              <h3 className="recovery-workspace__title">Recovery</h3>
-              <p className="recovery-workspace__summary">1 live · 0 dead · 1 total</p>
-            </div>
-          </header>
-          <div className="recovery-attention" aria-label="Recovery priority attention" role="alert">
-            <span className="recovery-attention__priority" role="status">
-              Recovery priority — 1 live orphan process
-            </span>
-          </div>
-          <ul className="recovery-workspace__queue" aria-label="Recovery items">
-            <li className="recovery-workspace__item" data-alive="true" data-outcome="pending">
-              <header className="recovery-workspace__item-header">
-                <span
-                  className="recovery-workspace__item-process"
-                  data-alive="true"
-                  aria-label="Live process"
-                >
-                  ●
-                </span>
-                <span className="recovery-workspace__item-name">
-                  <button
-                    type="button"
-                    className="recovery-workspace__item-link"
-                    onClick={() => {}}
-                  >
-                    Signal Lab telemetry
-                  </button>
-                </span>
-                <code className="recovery-workspace__item-repo">signal-lab</code>
-                <code className="recovery-workspace__item-phase">implement</code>
-              </header>
-            </li>
-          </ul>
-        </div>
-      ) : null}
     </div>
   );
 }
@@ -954,7 +875,7 @@ function CaptureApp() {
   if (scene.startsWith('post-cycle-')) {
     return <PostImplementationScene scene={scene} />;
   }
-  if (scene === 'rebase-preflight' || scene === 'review-refactor' || scene === 'cycle-gate') {
+  if (scene === 'rebase-preflight' || scene === 'refactor-launch') {
     return <CycleModalScene scene={scene} />;
   }
   if (scene === 'bulk-preview' || scene === 'bulk-queue') {

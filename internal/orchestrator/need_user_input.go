@@ -54,8 +54,6 @@ func (o *Orchestrator) onSingleRepoNeedUserInput(featureID string, result *agent
 		return err
 	}
 
-	_ = o.deps.Lifecycle.ClearAddressingReviews(featureID)
-
 	o.emitEventBlocking(ports.Event{
 		Type:      ports.NeedUserInputRequired,
 		FeatureID: featureID,
@@ -65,33 +63,15 @@ func (o *Orchestrator) onSingleRepoNeedUserInput(featureID string, result *agent
 	return nil
 }
 
-// ResumeNeedUserInput resumes a paused need-user-input gate.
-// Routing:
-//   - non-empty RepoName + matching RepoCycleState[RepoName].Status ==
-//     RepoCycleNeedUserInput → cycle-scoped gate (post-publish).
-//   - otherwise → feature-scoped gate. The desktop app may forward a stale RepoName
-//     from its repo-tab focus context for a phase-implement pause; the
-//     feature-level handler ignores it. Phase-implement NEED_USER_INPUT is
-//     always feature-scoped through Feature.PendingNeedUserInputPath.
-//
-// Feature-scoped resume re-dispatches the entire implement phase;
-// cycle-scoped resume relaunches only the affected paused cycle through its
-// original starter.
+// ResumeNeedUserInput resumes a feature-level phase or rebase need-user-input
+// gate. Phase-implement NEED_USER_INPUT is always feature-scoped through
+// Feature.PendingNeedUserInputPath.
 func (o *Orchestrator) ResumeNeedUserInput(featureID string, d NeedUserInputResume) error {
 	if f, err := o.deps.Lifecycle.Get(featureID); err == nil && f != nil &&
 		f.ActiveCycle != nil &&
 		featureRebaseActiveCycleType(f) == feature.CycleRebase &&
 		f.ActiveCycle.Status == feature.RepoCycleNeedUserInput {
 		return o.resumeRebaseCycleNeedUserInput(featureID, d)
-	}
-	if d.RepoName != "" {
-		f, err := o.deps.Lifecycle.Get(featureID)
-		if err == nil && f != nil {
-			if rc, ok := f.RepoCycles[d.RepoName]; ok && rc != nil &&
-				rc.Status == feature.RepoCycleNeedUserInput {
-				return o.resumeRepoCycleNeedUserInput(featureID, d)
-			}
-		}
 	}
 	return o.resumeFeatureNeedUserInput(featureID, d)
 }
@@ -169,193 +149,6 @@ func (o *Orchestrator) restoreRebaseNeedUserInputGate(featureID, gatePath string
 		f.ActivePhaseStart = nil
 		return nil
 	})
-}
-
-// onRepoCycleNeedUserInput converts a cycle implementation loop result with
-// FinalStatus == "need_user_input" into a paused cycle gate. Persists the
-// gate path / iteration / summary on the affected RepoCycleState, keeps the
-// parent feature in StatusPublished, and emits NeedUserInputRequired.
-func (o *Orchestrator) onRepoCycleNeedUserInput(
-	featureID, repoName string,
-	cycleType feature.RepoCycleType,
-	result *agent.LoopResult,
-) error {
-	if result == nil {
-		return errors.New("nil loop result for cycle gate entry")
-	}
-	summary := strings.TrimSpace(result.LastError)
-	if summary == "" {
-		summary = "post-publish verification requires a user decision"
-	}
-	if err := o.deps.Store.Modify(featureID, func(f *feature.Feature) error {
-		if f.RepoCycles == nil {
-			f.RepoCycles = make(map[string]*feature.RepoCycleState)
-		}
-		rc, ok := f.RepoCycles[repoName]
-		if !ok || rc == nil {
-			rc = &feature.RepoCycleState{Type: cycleType}
-			f.RepoCycles[repoName] = rc
-		} else if cycleType != "" && rc.Type == "" {
-			rc.Type = cycleType
-		}
-		rc.Status = feature.RepoCycleNeedUserInput
-		rc.Iteration = result.Iterations
-		rc.LastError = summary
-		rc.PendingNeedUserInputPath = result.NeedUserInputPath
-		return nil
-	}); err != nil {
-		return err
-	}
-
-	prefix := summary
-	if repoName != "" {
-		prefix = fmt.Sprintf("[%s] %s", repoName, summary)
-	}
-	o.emitEventBlocking(ports.Event{
-		Type:      ports.NeedUserInputRequired,
-		FeatureID: featureID,
-		Phase:     feature.PhaseImplement,
-		Message:   prefix,
-	})
-	return nil
-}
-
-func (o *Orchestrator) recordRepoCycleNeedUserInput(
-	featureID, repoName string,
-	cycleType feature.RepoCycleType,
-	gate *agent.LoopResult,
-) {
-	if err := o.onRepoCycleNeedUserInput(featureID, repoName, cycleType, gate); err != nil {
-		o.failRepoCycleGatePersistence(featureID, repoName,
-			fmt.Errorf("%s: persist need-user-input gate for repo %q: %w", cycleType, repoName, err))
-	}
-}
-
-func (o *Orchestrator) failRepoCycleGatePersistence(featureID, repoName string, cause error) {
-	if cause == nil {
-		return
-	}
-	msg := cause.Error()
-	if err := o.deps.Lifecycle.FailRepoCycle(featureID, repoName, msg); err != nil {
-		o.emitEventBlocking(ports.Event{
-			Type:      ports.PhaseCompleted,
-			FeatureID: featureID,
-			Phase:     feature.PhaseImplement,
-			Error:     fmt.Errorf("%s (also failed to mark repo cycle failed: %w)", msg, err),
-			Message:   msg,
-		})
-	}
-}
-
-// reposSharingGate returns every repo whose RepoCycleState is paused on
-// the given gatePath. The unified review-comments and refactor loops
-// persist the same PendingNeedUserInputPath on every staged repo, so this
-// identifies all participants in a shared multi-repo gate. Repos paused
-// on a different gate or not paused at all are excluded.
-func reposSharingGate(f *feature.Feature, gatePath string) []string {
-	if f == nil || gatePath == "" {
-		return nil
-	}
-	var out []string
-	for _, repo := range f.Repos {
-		rc, ok := f.RepoCycles[repo.Name]
-		if !ok || rc == nil {
-			continue
-		}
-		if rc.Status == feature.RepoCycleNeedUserInput && rc.PendingNeedUserInputPath == gatePath {
-			out = append(out, repo.Name)
-		}
-	}
-	return out
-}
-
-// resumeRepoCycleNeedUserInput handles a cycle-scoped need-user-input resume.
-// A shared multi-repo gate (review-comments / refactor) pauses every
-// participating repo on the same PendingNeedUserInputPath; resume must clear
-// ALL repos sharing that gate and relaunch one aggregate cycle.
-func (o *Orchestrator) resumeRepoCycleNeedUserInput(featureID string, d NeedUserInputResume) error {
-	f, err := o.deps.Lifecycle.Get(featureID)
-	if err != nil {
-		return fmt.Errorf("load feature: %w", err)
-	}
-	rc, ok := f.RepoCycles[d.RepoName]
-	if !ok || rc == nil {
-		return fmt.Errorf("repo %q not found in repo_cycles for feature %s", d.RepoName, featureID)
-	}
-	if rc.Status != feature.RepoCycleNeedUserInput {
-		return fmt.Errorf("cycle on repo %q is not paused (status=%s)", d.RepoName, rc.Status)
-	}
-	gatePath := rc.PendingNeedUserInputPath
-	if gatePath == "" {
-		return fmt.Errorf("no pending need-user-input gate path on cycle for repo %q", d.RepoName)
-	}
-
-	// Collect every repo that shares this gate path. The unified
-	// review-comments and refactor loops persist the same
-	// PendingNeedUserInputPath on every staged repo when the loop pauses,
-	// so this is the set of participants in the shared gate.
-	gateRepos := reposSharingGate(f, gatePath)
-	if len(gateRepos) == 0 {
-		gateRepos = []string{d.RepoName}
-	}
-
-	rec, err := agent.ReadNeedUserInputRecord(gatePath)
-	if err != nil {
-		return fmt.Errorf("read gate artifact: %w", err)
-	}
-	if !rec.AllAnswered() {
-		return errors.New("cannot resume: every question must have a non-empty answer before resume")
-	}
-	if rec.VerificationDecision != nil {
-		if err := o.applyTrustedVerificationDecision(featureID, gatePath, rec); err != nil {
-			return err
-		}
-	}
-	// Clear the paused-gate fields on ALL repos sharing the gate,
-	// preserving Count, PlanPath, and Type so the restart seam
-	// reuses the existing cycle record. Set status back to Running
-	// so HasActiveRepoCycles still treats the cycle as in-flight
-	// while the restart launches.
-	if err := o.deps.Store.Modify(featureID, func(ff *feature.Feature) error {
-		for _, name := range gateRepos {
-			cycle, ok := ff.RepoCycles[name]
-			if !ok || cycle == nil {
-				return fmt.Errorf("repo %q vanished from repo_cycles mid-resume", name)
-			}
-			cycle.Status = feature.RepoCycleRunning
-			cycle.PendingNeedUserInputPath = ""
-			cycle.LastError = ""
-		}
-		if ff.PendingNeedUserInputPath == gatePath {
-			ff.PendingNeedUserInputPath = ""
-		}
-		return nil
-	}); err != nil {
-		return fmt.Errorf("clear cycle gate: %w", err)
-	}
-	// Relaunch one aggregate cycle. restartPausedRepoCycle dispatches
-	// based on the persisted cycle type; for a shared gate the first
-	// gate repo's cycle type is representative (all participants share
-	// the same cycle dispatch).
-	if err := o.restartPausedRepoCycle(featureID, gateRepos[0]); err != nil {
-		// Roll back: restore the paused gate on ALL sharing repos so
-		// the user can retry from the same paused state.
-		if rbErr := o.deps.Store.Modify(featureID, func(ff *feature.Feature) error {
-			for _, name := range gateRepos {
-				cycle, ok := ff.RepoCycles[name]
-				if !ok || cycle == nil {
-					return fmt.Errorf("repo %q vanished during rollback", name)
-				}
-				cycle.Status = feature.RepoCycleNeedUserInput
-				cycle.PendingNeedUserInputPath = gatePath
-			}
-			return nil
-		}); rbErr != nil {
-			return fmt.Errorf("relaunch cycle: %w (rollback to gate also failed: %v)", err, rbErr)
-		}
-		return fmt.Errorf("relaunch cycle: %w", err)
-	}
-	return nil
 }
 
 // resumeFeatureNeedUserInput implements the single-repo / feature-scoped gate

@@ -69,7 +69,7 @@ const (
 
 // Cycle Communication Contract path-template snippets. These describe the
 // well-known artifact paths a cross-repo cycle prompt must reference, and
-// are checked verbatim in both the rebase-loop and review-comments-loop
+// are checked verbatim in the rebase-loop
 // prompt tests.
 const (
 	wantProgressPathTemplate           = "`progress.md`: `{phase_dir}/progress.md`"

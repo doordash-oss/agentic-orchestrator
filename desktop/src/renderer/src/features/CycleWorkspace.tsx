@@ -169,7 +169,5 @@ function cycleLabel(id: CyclePresentation['id']): string {
   switch (id) {
     case 'rebase':
       return 'Rebase';
-    case 'review-comments':
-      return 'Review comments';
   }
 }

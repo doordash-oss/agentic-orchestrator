@@ -653,35 +653,6 @@ func TestResumeRebaseCyclePreservesTimingKey(t *testing.T) {
 	}
 }
 
-func TestResumeReviewCommentsCyclePreservesTimingKey(t *testing.T) {
-	t.Parallel()
-	// parallel-candidate: pure value, table-driven, or per-test temp-dir assertions with no shared state.
-	start := time.Now().Add(-8 * time.Minute)
-	f := &Feature{
-		Status:           StatusImplementing,
-		CurrentPhase:     PhaseImplement,
-		ActiveTimingKey:  "review-comments",
-		ActivePhaseStart: &start,
-	}
-	f.SetAddressingReviews(true)
-
-	// Interrupt during review-comments
-	if err := f.Transition(StatusInterrupted); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if f.ActiveTimingKey != "review-comments" {
-		t.Errorf("expected ActiveTimingKey preserved as 'review-comments', got %q", f.ActiveTimingKey)
-	}
-
-	// Resume: Interrupted → Implementing
-	if err := f.Transition(StatusImplementing); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if f.ActiveTimingKey != "review-comments" {
-		t.Errorf("expected ActiveTimingKey to remain 'review-comments' after resume, got %q", f.ActiveTimingKey)
-	}
-}
-
 func TestIsImplementTimingKey(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: pure value, table-driven, or per-test temp-dir assertions with no shared state.
@@ -692,7 +663,6 @@ func TestIsImplementTimingKey(t *testing.T) {
 		{"implement", true},
 		{"rebase-1", true},
 		{"rebase-10", true},
-		{"review-comments", true},
 		{"research", false},
 		{"plan", false},
 		{"", false},
@@ -1549,7 +1519,6 @@ func TestCyclePrefix(t *testing.T) {
 		{"rebase count 1", CycleRebase, 1, "rebase-1"},
 		{"rebase count 3", CycleRebase, 3, "rebase-3"},
 		{"rebase count 0 fallback", CycleRebase, 0, "rebase"},
-		{"review-comments", CycleReviewComments, 0, "review-comments"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1558,6 +1527,29 @@ func TestCyclePrefix(t *testing.T) {
 			f.SetRebaseCount(tt.rebaseCount)
 			if got := f.CyclePrefix(); got != tt.want {
 				t.Errorf("CyclePrefix() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRepoCycleTypeIsValidAcceptsOnlyRebase(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		cycleType RepoCycleType
+		want      bool
+	}{
+		{name: "rebase", cycleType: CycleRebase, want: true},
+		{name: "unknown", cycleType: RepoCycleType("unknown"), want: false},
+		{name: "empty", cycleType: "", want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := tt.cycleType.IsValid(); got != tt.want {
+				t.Errorf("RepoCycleType(%q).IsValid() = %v, want %v", tt.cycleType, got, tt.want)
 			}
 		})
 	}
@@ -1575,9 +1567,6 @@ func TestRepoCycleDirName(t *testing.T) {
 		{"rebase count 1", CycleRebase, 1, "rebase-1"},
 		{"rebase count 5", CycleRebase, 5, "rebase-5"},
 		{"rebase count 0 fallback", CycleRebase, 0, "rebase"},
-		{"review-comments count 1", CycleReviewComments, 1, "review-comments-1"},
-		{"review-comments count 5", CycleReviewComments, 5, "review-comments-5"},
-		{"review-comments count 0 fallback", CycleReviewComments, 0, "review-comments"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1806,7 +1795,7 @@ func TestFeature_HasActiveRepoCycles(t *testing.T) {
 		},
 		{
 			name:  "single reviewing cycle",
-			repos: map[string]*RepoCycleState{"repo-a": {Type: CycleReviewComments, Status: RepoCycleReviewing}},
+			repos: map[string]*RepoCycleState{"repo-a": {Type: CycleRebase, Status: RepoCycleReviewing}},
 			want:  true,
 		},
 		{
@@ -1828,7 +1817,7 @@ func TestFeature_HasActiveRepoCycles(t *testing.T) {
 			name: "mixed cycles",
 			repos: map[string]*RepoCycleState{
 				"repo-a": {Type: CycleRebase, Status: "done"},
-				"repo-b": {Type: CycleReviewComments, Status: RepoCycleRunning},
+				"repo-b": {Type: CycleRebase, Status: RepoCycleRunning},
 			},
 			want: true,
 		},
@@ -1848,53 +1837,6 @@ func TestFeature_HasActiveRepoCycles(t *testing.T) {
 				t.Errorf("HasActiveRepoCycles() = %v, want %v", got, tt.want)
 			}
 		})
-	}
-}
-
-func TestPendingUserInputCycles_ReturnsPausedCycles(t *testing.T) {
-	t.Parallel()
-	// parallel-candidate: pure value, table-driven, or per-test temp-dir assertions with no shared state.
-	f := &Feature{
-		Status: StatusPublished,
-		RepoCycles: map[string]*RepoCycleState{
-			"repo-a": {
-				Type:                     CycleReviewComments,
-				Status:                   RepoCycleNeedUserInput,
-				Iteration:                2,
-				PendingNeedUserInputPath: "/tmp/review-comments/repo-a/iteration-02/need-user-input.yaml",
-			},
-			"repo-b": {Type: CycleReviewComments, Status: RepoCycleRunning},
-			"repo-c": {
-				Type:                     CycleRebase,
-				Status:                   RepoCycleNeedUserInput,
-				PendingNeedUserInputPath: "/tmp/rebase/repo-c/iteration-01/need-user-input.yaml",
-			},
-			// Missing gate path — must be filtered out.
-			"repo-d": {Type: CycleRebase, Status: RepoCycleNeedUserInput},
-		},
-	}
-
-	got := f.PendingUserInputCycles()
-	if len(got) != 2 {
-		t.Fatalf("PendingUserInputCycles() len = %d, want 2 (got %+v)", len(got), got)
-	}
-	if got[0].RepoName != "repo-a" || got[0].CycleType != CycleReviewComments {
-		t.Fatalf("PendingUserInputCycles()[0] = %+v", got[0])
-	}
-	if got[1].RepoName != "repo-c" || got[1].CycleType != CycleRebase {
-		t.Fatalf("PendingUserInputCycles()[1] = %+v", got[1])
-	}
-}
-
-func TestPendingUserInputCycles_NilOrEmpty(t *testing.T) {
-	t.Parallel()
-	// parallel-candidate: pure value, table-driven, or per-test temp-dir assertions with no shared state.
-	if got := (*Feature)(nil).PendingUserInputCycles(); got != nil {
-		t.Fatalf("nil feature should return nil, got %+v", got)
-	}
-	f := &Feature{Status: StatusPublished}
-	if got := f.PendingUserInputCycles(); got != nil {
-		t.Fatalf("empty cycles should return nil, got %+v", got)
 	}
 }
 

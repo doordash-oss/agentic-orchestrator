@@ -100,7 +100,6 @@ const (
 	actionSetup          = "setup"
 	actionStart          = "start"
 	actionRetry          = "retry"
-	actionReviewComments = "review-comments"
 	actionRewind         = "rewind"
 )
 
@@ -580,11 +579,10 @@ func activeRepoCycleDTO(f *feature.Feature, cycle *feature.RepoCycleState) *Cycl
 		return nil
 	}
 	return &Cycle{
-		Type:      string(cycle.Type),
-		Status:    cycle.Status,
-		Count:     activeCycleCount(f, cycle),
-		Iteration: cycle.Iteration,
-		Phase:     activeCyclePhase(f, cycle.Type),
+		Type:   string(cycle.Type),
+		Status: cycle.Status,
+		Count:  activeCycleCount(f, cycle),
+		Phase:  activeCyclePhase(f, cycle.Type),
 	}
 }
 
@@ -602,8 +600,6 @@ func activeCyclePhase(f *feature.Feature, cycleType feature.RepoCycleType) strin
 			}
 		}
 		return "inspect_rebase"
-	case feature.CycleReviewComments:
-		return "address_validate"
 	default:
 		return ""
 	}
@@ -630,10 +626,6 @@ func activeCycleCount(f *feature.Feature, cycle *feature.RepoCycleState) int {
 	case feature.CycleRebase:
 		if f.RebaseCount() > count {
 			count = f.RebaseCount()
-		}
-	case feature.CycleReviewComments:
-		if f.ReviewCommentsCount() > count {
-			count = f.ReviewCommentsCount()
 		}
 	}
 	if count <= 0 && cycle.Type != "" {
@@ -683,7 +675,6 @@ func actionCatalogDTOsWithChildGuard(f *feature.Feature, hasActiveChild bool) []
 		return dto
 	}
 	featureScope := ActionScope{Type: entityFeature}
-	repoRequired := ActionScope{Type: entityFeature, RepoSelection: "required"}
 
 	if f.IsChild() {
 		return childActionCatalogDTOs(f, status, running, cyclePresent, action, disabledStatusReason)
@@ -699,8 +690,7 @@ func actionCatalogDTOsWithChildGuard(f *feature.Feature, hasActiveChild bool) []
 	canStop := running || status == feature.StatusNeedUserInput || stoppableCycle
 	canResume := status == feature.StatusInterrupted ||
 		status == feature.StatusNeedUserInput ||
-		f.PendingNeedUserInputPath != "" ||
-		len(f.PendingUserInputCycles()) > 0
+		f.PendingNeedUserInputPath != ""
 	canRestart := !running
 	canPublish := f.IsPublishable() && status == feature.StatusCodeReady && f.Checkpoints.AutoPublish()
 	canMerge := !f.IsPublishable() && (status == feature.StatusCodeReady || status == feature.StatusPublished)
@@ -756,10 +746,6 @@ func actionCatalogDTOsWithChildGuard(f *feature.Feature, hasActiveChild bool) []
 			{Name: "upgrade_pipeline", Kind: actionInputKindEnum, Required: false, Options: rewindUpgradePipelineOptions(f)},
 		}, childGuardReason(canRewind, ActionDisabledReason{Code: "no_rewind_targets", Message: "feature has no valid rewind targets"})...),
 		action(actionRebase, canPostPublishCycle, featureScope, nil, childGuardReason(canPostPublishCycle, postPublishCycleDisabledReason(f, actionRebase))...),
-		action(actionReviewComments, canPostPublishCycle && f.IsPublishable(), repoRequired, []ActionInput{
-			{Name: "repo", Kind: actionInputKindString, Required: true},
-			{Name: "mode", Kind: actionInputKindEnum, Required: true, Options: []string{reviewCommentsModeAuto, "address_all"}},
-		}, childGuardReason(canPostPublishCycle && f.IsPublishable(), postPublishCycleDisabledReason(f, actionReviewComments))...),
 		action(actionRefactor, canRefactor, featureScope, nil, childGuardReason(canRefactor, disabledStatusReason(status))...),
 		action(actionRetry, canRetry, featureScope, nil, childGuardReason(canRetry, ActionDisabledReason{Code: "not_failed", Message: "retry is only available for failed features"})...),
 		action(actionMarkDone, canMarkDone, featureScope, nil, childGuardReason(canMarkDone, ActionDisabledReason{Code: "not_complete", Message: "feature is not ready to mark done"})...),
@@ -979,9 +965,6 @@ func postPublishCycleDisabledReason(f *feature.Feature, cycle string) ActionDisa
 	}
 	if f.HasActiveRepoCycles() || f.ActiveCycleType() != "" {
 		return ActionDisabledReason{Code: disabledCycleActive, Message: "another feature cycle is active"}
-	}
-	if cycle == actionReviewComments && !f.IsPublishable() {
-		return ActionDisabledReason{Code: "not_publishable", Message: "review-comment actions require a published PR"}
 	}
 	return disabledStatusReason(f.Status)
 }
@@ -1540,18 +1523,6 @@ func (h *apiHandler) featureQueues() ([]HelpQueue, []NeedUserInputGate, error) {
 				featureID: f.ID,
 				created:   f.Created,
 				gateTime:  gateFileTime(f.PendingNeedUserInputPath),
-			})
-		}
-		for _, cycle := range f.PendingUserInputCycles() {
-			iteration := 0
-			if rc := f.RepoCycles[cycle.RepoName]; rc != nil {
-				iteration = rc.Iteration
-			}
-			gates = append(gates, orderedNeedInputGate{
-				dto:       needUserInputGateDTO(f.ID, entityFeature, cycle.RepoName, cycle.CycleType, iteration, f.InputNotifications, cycle.GatePath),
-				featureID: f.ID,
-				created:   f.Created,
-				gateTime:  gateFileTime(cycle.GatePath),
 			})
 		}
 	}

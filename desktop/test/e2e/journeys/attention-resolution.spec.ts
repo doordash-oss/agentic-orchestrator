@@ -460,12 +460,12 @@ test('packaged inbox resolves an interactive help request from chat', async ({},
     await expect(attentionBell(handle.page)).toHaveAccessibleName(/Attention inbox, 1 pending/);
 
     const inbox = await openInbox(handle);
-    const helpDetail = await expandInboxItem(handle, inbox, /Help request/);
+    const helpDetail = await expandInboxItem(handle, inbox, /Agent waiting/);
     await helpDetail
-      .getByLabel('Help reply')
+      .getByLabel('Message to the agent')
       .fill('Continue with the compact packaged evidence path.');
     await evidenceShot(handle, 'attention-help-reply');
-    await helpDetail.getByRole('button', { name: 'Send reply' }).click();
+    await helpDetail.getByRole('button', { name: 'Send message' }).click();
     await waitForProviderLog(world, 'help-response:');
     await closeInbox(handle.page);
 

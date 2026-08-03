@@ -71,23 +71,6 @@ var finalReviewRootOrchestrationArtifacts = []string{
 	"meta.yaml",
 }
 
-// resolveActiveCycleType consults the explicit ActiveCycleType field first,
-// then falls back to persisted compatibility signals.
-// Only used by completion handlers that route through cycle-aware paths.
-func resolveActiveCycleType(f *feature.Feature) feature.RepoCycleType {
-	if f == nil {
-		return ""
-	}
-	if f.ActiveCycleType() != "" {
-		return f.ActiveCycleType()
-	}
-	switch {
-	case f.AddressingReviews():
-		return feature.CycleReviewComments
-	}
-	return ""
-}
-
 // emitPhaseCompleted emits a PhaseCompleted event and fires the hook. This
 // is the sole emission site for phase completion in completion handlers.
 func (o *Orchestrator) emitPhaseCompleted(featureID string, phase feature.Phase, err error) {
@@ -764,7 +747,6 @@ func (o *Orchestrator) onMultiRepoImplementDone(featureID string, result *agent.
 				summary = "implementation is waiting for user input"
 			}
 		}
-		_ = o.deps.Lifecycle.ClearAddressingReviews(featureID)
 		o.emitEventBlocking(ports.Event{
 			Type:      ports.NeedUserInputRequired,
 			FeatureID: featureID,
@@ -802,7 +784,6 @@ func (o *Orchestrator) onMultiRepoImplementDone(featureID string, result *agent.
 			}
 		}
 		o.emitPhaseCompleted(featureID, feature.PhaseImplement, errors.New(errMsg))
-		_ = o.deps.Lifecycle.ClearAddressingReviews(featureID)
 		return o.markFailedWithEvent(featureID, failureType, errMsg)
 	default:
 		errMsg := fmt.Sprintf("unknown multi-repo FinalStatus %q", result.FinalStatus)

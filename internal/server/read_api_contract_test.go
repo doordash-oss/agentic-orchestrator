@@ -391,10 +391,7 @@ func TestFeatureDetailProjectsActiveFeatureRebaseOperation(t *testing.T) {
 func TestFeatureDetailProjectsFeatureCycleStart(t *testing.T) {
 	t.Parallel()
 
-	for _, cycleType := range []feature.RepoCycleType{
-		feature.CycleReviewComments,
-		feature.CycleRebase,
-	} {
+	for _, cycleType := range []feature.RepoCycleType{feature.CycleRebase} {
 		cycleType := cycleType
 		t.Run(string(cycleType), func(t *testing.T) {
 			t.Parallel()
@@ -701,24 +698,6 @@ func TestNeedUserInputGateDTOsIncludeQuestionnaireAndCycleRouting(t *testing.T) 
 	f.PendingNeedUserInputPath = featureGatePath
 	f.CurrentIteration = 3
 
-	cycleGatePath := filepath.Join(store.RunDir(f.ID, 1), "cycles", repoNameSelf, "iteration-02", "need-user-input.yaml")
-	if err := agent.WriteNeedUserInputRecord(cycleGatePath, agent.NeedUserInputRecord{
-		Summary:   "Resolve review comment policy.",
-		Iteration: 2,
-		Questions: []agent.NeedUserInputQuestion{
-			{Index: 1, Prompt: "Reply now or leave unresolved?", Answer: "Reply now"},
-		},
-	}); err != nil {
-		t.Fatalf("WriteNeedUserInputRecord(cycle gate) error = %v", err)
-	}
-	f.RepoCycles = map[string]*feature.RepoCycleState{
-		repoNameSelf: {
-			Type:                     feature.CycleReviewComments,
-			Status:                   feature.RepoCycleNeedUserInput,
-			Iteration:                2,
-			PendingNeedUserInputPath: cycleGatePath,
-		},
-	}
 	if err := store.Save(f); err != nil {
 		t.Fatalf("Save() error = %v", err)
 	}
@@ -746,28 +725,18 @@ func TestNeedUserInputGateDTOsIncludeQuestionnaireAndCycleRouting(t *testing.T) 
 
 	prompts := getJSONMap(t, handler, apiPathPrompts)
 	gates := prompts["need_user_inputs"].([]any)
-	if len(gates) != 2 {
-		t.Fatalf("need_user_inputs length = %d; want feature and cycle gates", len(gates))
+	if len(gates) != 1 {
+		t.Fatalf("need_user_inputs length = %d; want feature gate", len(gates))
 	}
-	var featureGate, cycleGate map[string]any
+	var featureGate map[string]any
 	for _, raw := range gates {
 		gate := raw.(map[string]any)
 		if gate["scope"] == entityFeature && gate["repo_name"] == nil {
 			featureGate = gate
 		}
-		if gate["repo_name"] == repoNameSelf && gate["cycle_type"] == string(feature.CycleReviewComments) {
-			cycleGate = gate
-		}
 	}
 	if featureGate == nil {
 		t.Fatalf("need_user_inputs = %+v; want feature gate", gates)
-	}
-	if cycleGate == nil {
-		t.Fatalf("need_user_inputs = %+v; want gate with repo/cycle routing", gates)
-	}
-	cycleQuestions := cycleGate["questions"].([]any)
-	if len(cycleQuestions) != 1 || cycleQuestions[0].(map[string]any)["answer"] != "Reply now" {
-		t.Fatalf("cycle gate questions = %+v", cycleQuestions)
 	}
 	for source, gate := range map[string]map[string]any{
 		"detail": detailGate,
@@ -1149,62 +1118,6 @@ func TestPromptSnapshotBoundsNeedUserInputCollectionAcrossManyGates(t *testing.T
 	}
 }
 
-func TestPromptSnapshotRejectsIrreducibleQuestionnaireCollection(t *testing.T) {
-	store, f := seedReadFeature(t)
-	gatePath := filepath.Join(store.RunDir(f.ID, 1), "phase-02", targetPhaseImplement, "need-user-input.yaml")
-	questions := make([]agent.NeedUserInputQuestion, agent.NeedUserInputGateMaxQuestions)
-	for i := range questions {
-		questions[i] = agent.NeedUserInputQuestion{Index: i + 1, Prompt: "x", Answer: "x"}
-	}
-	if err := agent.WriteNeedUserInputRecord(gatePath, agent.NeedUserInputRecord{
-		Questions: questions,
-	}); err != nil {
-		t.Fatalf("WriteNeedUserInputRecord() error = %v", err)
-	}
-	f.RepoCycles = make(map[string]*feature.RepoCycleState, 1000)
-	repoSuffix := strings.Repeat("r", 495)
-	for i := 0; i < 1000; i++ {
-		repoName := fmt.Sprintf("%04d-%s", i, repoSuffix)
-		f.RepoCycles[repoName] = &feature.RepoCycleState{
-			Type:                     feature.CycleReviewComments,
-			Status:                   feature.RepoCycleNeedUserInput,
-			Iteration:                1,
-			PendingNeedUserInputPath: gatePath,
-		}
-	}
-	if err := store.Save(f); err != nil {
-		t.Fatalf("Save() error = %v", err)
-	}
-
-	request := httptest.NewRequest(http.MethodGet, apiPathPrompts, nil)
-	response := httptest.NewRecorder()
-	NewHandler(baseReadHandlerOptions(store)).ServeHTTP(response, request)
-	if response.Code >= 200 && response.Code < 300 {
-		t.Fatalf(
-			"GET %s emitted oversized success: status = %d, bytes = %d",
-			apiPathPrompts,
-			response.Code,
-			response.Body.Len(),
-		)
-	}
-	if response.Code != http.StatusInternalServerError {
-		t.Fatalf("GET %s status = %d, want 500", apiPathPrompts, response.Code)
-	}
-	if response.Body.Len() > 1024 {
-		t.Fatalf("error response bytes = %d, want bounded body", response.Body.Len())
-	}
-	var payload ErrorResponse
-	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
-		t.Fatalf("Unmarshal(error response) error = %v", err)
-	}
-	if payload.Error.Code != "prompt_snapshot_too_large" {
-		t.Fatalf("error code = %q, want prompt_snapshot_too_large", payload.Error.Code)
-	}
-	if payload.Error.Status != http.StatusInternalServerError {
-		t.Fatalf("error status = %d, want 500", payload.Error.Status)
-	}
-}
-
 func TestInterruptedFeatureDoesNotExposeStaleNeedUserInputGate(t *testing.T) {
 	t.Parallel()
 	store, f := seedReadFeature(t)
@@ -1457,13 +1370,6 @@ func TestFeatureDetailActionCatalogStableAndRedacted(t *testing.T) {
 	if err := store.Modify(f.ID, func(ff *feature.Feature) error {
 		ff.Status = feature.StatusPublished
 		ff.CurrentPhase = feature.PhasePublish
-		ff.RepoCycles = map[string]*feature.RepoCycleState{
-			repoNameSelf: {
-				Type:      feature.CycleReviewComments,
-				Status:    feature.RepoCycleFailed,
-				LastError: "private-token leaked in raw prompt payload",
-			},
-		}
 		return nil
 	}); err != nil {
 		t.Fatalf("Modify() error = %v", err)
@@ -1497,7 +1403,6 @@ func TestFeatureDetailActionCatalogStableAndRedacted(t *testing.T) {
 		actionMerge,
 		actionRewind,
 		actionRebase,
-		actionReviewComments,
 		actionRefactor,
 		actionRetry,
 		actionMarkDone,
@@ -1522,10 +1427,6 @@ func TestFeatureDetailActionCatalogStableAndRedacted(t *testing.T) {
 	assertActionInputRequired(t, actionsByID[actionRewind], "upgrade_pipeline", false)
 	assertActionScope(t, actionsByID[actionRebase], "")
 	assertActionInputNames(t, actionsByID[actionRebase])
-	assertActionScope(t, actionsByID[actionReviewComments], "required")
-	assertActionInputNames(t, actionsByID[actionReviewComments], "repo", "mode")
-	assertActionInputRequired(t, actionsByID[actionReviewComments], "repo", true)
-	assertActionInputRequired(t, actionsByID[actionReviewComments], "mode", true)
 	assertActionScope(t, actionsByID[actionCleanup], "")
 	assertActionInputNames(t, actionsByID[actionCleanup], "target")
 	assertActionScope(t, actionsByID[actionDelete], "")
@@ -1575,7 +1476,7 @@ func TestChildFeatureActionCatalogRestricted(t *testing.T) {
 
 	deliveryActions := []string{
 		actionPublish, actionMerge, actionRewind,
-		actionRebase, actionReviewComments, actionRefactor, actionMarkDone,
+		actionRebase, actionRefactor, actionMarkDone,
 	}
 
 	assertNoDeliveryActions := func(t *testing.T, actions []Action) {
@@ -1832,15 +1733,14 @@ func TestFeatureDetailActionCatalogStateMatrix(t *testing.T) {
 		{
 			name: "published active cycle",
 			f: actionCatalogTestFeature(feature.StatusPublished, feature.Checkpoints{}, &publishable, map[string]*feature.RepoCycleState{
-				repoNameSelf: {Type: feature.CycleReviewComments, Status: feature.RepoCycleRunning},
+				repoNameSelf: {Type: feature.CycleRebase, Status: feature.RepoCycleRunning},
 			}),
 			want: map[string]struct {
 				enabled      bool
 				disabledCode string
 			}{
-				actionPauseStop:      {enabled: true},
-				actionRebase:         {disabledCode: disabledCycleActive},
-				actionReviewComments: {disabledCode: disabledCycleActive},
+				actionPauseStop: {enabled: true},
+				actionRebase:    {disabledCode: disabledCycleActive},
 			},
 		},
 		{
@@ -1872,11 +1772,10 @@ func TestFeatureDetailActionCatalogStateMatrix(t *testing.T) {
 				enabled      bool
 				disabledCode string
 			}{
-				actionPauseStop:      {disabledCode: "not_running"},
-				actionRebase:         {enabled: true},
-				actionReviewComments: {enabled: true},
-				actionRefactor:       {enabled: true},
-				actionRetry:          {enabled: true},
+				actionPauseStop: {disabledCode: "not_running"},
+				actionRebase:    {enabled: true},
+				actionRefactor:  {enabled: true},
+				actionRetry:     {enabled: true},
 			},
 		},
 		{

@@ -9858,7 +9858,7 @@ body {
   color: var(--color-danger);
 }
 
-/* ─── Cycle journeys (rebase, review-comments, refactor) ─── */
+/* ─── Cycle journeys (rebase and refactor) ─── */
 
 .cockpit__cycles {
   display: flex;
@@ -10000,69 +10000,6 @@ body {
   cursor: pointer;
 }
 
-.cycle-journey__comments-preview {
-  border: 1px solid var(--color-hairline);
-  border-radius: var(--radius);
-  padding: var(--space-2) var(--space-3);
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-  background: var(--color-bg);
-}
-
-.cycle-journey__comments-count {
-  margin: 0;
-  font-family: var(--font-mono);
-  font-size: 12px;
-  color: var(--color-muted);
-}
-
-.cycle-journey__comments-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-  max-height: 280px;
-  overflow-y: auto;
-}
-
-.cycle-journey__comment {
-  border: 1px solid var(--color-hairline);
-  border-radius: var(--radius);
-  padding: var(--space-2);
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-}
-
-.cycle-journey__comment-file {
-  font-family: var(--font-mono);
-  font-size: 12px;
-  color: var(--color-signal);
-}
-
-.cycle-journey__comment-author {
-  font-size: 12px;
-  color: var(--color-muted);
-  font-weight: 600;
-}
-
-.cycle-journey__comment-body {
-  margin: 0;
-  font-size: 13px;
-  line-height: 1.4;
-  overflow-wrap: anywhere;
-}
-
-.cycle-journey__comments-more {
-  margin: 0;
-  font-size: 12px;
-  color: var(--color-muted);
-  font-style: italic;
-}
-
 .cycle-journey__resolved-repos {
   margin: 0;
   font-size: 12px;
@@ -10184,60 +10121,6 @@ body {
 .cycle-modal__cancel:disabled {
   cursor: default;
   opacity: 0.5;
-}
-
-.cycle-modal__all-clear {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: var(--space-1);
-  padding: var(--space-6) var(--space-4);
-  text-align: center;
-}
-
-.cycle-modal__all-clear > span {
-  color: var(--color-success);
-  font: 600 28px var(--font-display);
-}
-
-.cycle-modal__all-clear h4 {
-  margin: 0;
-  font: 600 21px var(--font-display);
-}
-
-.cycle-modal__all-clear p {
-  margin: 0;
-  color: var(--color-muted);
-  font-size: 13px;
-}
-
-.cycle-journey__comment-heading {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-2);
-}
-
-.cycle-modal__comment-type {
-  border: 1px solid var(--color-hairline);
-  border-radius: var(--radius);
-  padding: 1px var(--space-2);
-  color: var(--color-muted);
-  font: 11px var(--font-mono);
-}
-
-.cycle-modal__comment-type[data-type='review'] {
-  border-color: var(--color-signal);
-  color: var(--color-signal);
-}
-
-.cycle-modal__comment-type[data-type='issue'] {
-  border-color: var(--color-accent);
-  color: var(--color-accent);
-}
-
-.cycle-modal__comment-type[data-type='review_body'] {
-  color: var(--color-muted);
 }
 
 .cycle-modal__blockers,

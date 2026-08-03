@@ -83,7 +83,7 @@ func TestRelationshipGuardParentWithActiveChild(t *testing.T) {
 		t.Fatalf("Start guard: err = %v, want ErrParentMutationLocked", err)
 	}
 
-	// Delivery (rebase, review-comments) should be rejected.
+	// Rebase delivery should be rejected.
 	err = o.RelationshipGuard("guard-parent", orchestrator.MutationDelivery)
 	if !errors.Is(err, feature.ErrParentMutationLocked) {
 		t.Fatalf("Delivery guard: err = %v, want ErrParentMutationLocked", err)
@@ -175,7 +175,7 @@ func TestRelationshipGuardChildRestrictions(t *testing.T) {
 		t.Fatalf("Child Discard: err = %v, want nil", err)
 	}
 
-	// Delivery (rebase, review-comments) is not allowed on a child.
+	// Rebase delivery is not allowed on a child.
 	err = o.RelationshipGuard("guard-child-only", orchestrator.MutationDelivery)
 	if !errors.Is(err, feature.ErrChildMutationRestricted) {
 		t.Fatalf("Child Delivery: err = %v, want ErrChildMutationRestricted", err)

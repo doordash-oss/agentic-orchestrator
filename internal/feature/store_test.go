@@ -1920,7 +1920,7 @@ repo_cycles:
     status: running
     count: 1
   repo-b:
-    type: review-comments
+    type: rebase
     status: failed
     count: 1
     last_error: boom
@@ -1945,8 +1945,8 @@ artifacts: {}
 	if _, ok := loaded.RepoCycles["repo-a"]; ok {
 		t.Errorf("RepoCycles[repo-a] = %+v, want absent (refactor entry must be dropped)", loaded.RepoCycles["repo-a"])
 	}
-	if rc := loaded.RepoCycles["repo-b"]; rc == nil || rc.Type != CycleReviewComments || rc.Status != RepoCycleFailed {
-		t.Errorf("RepoCycles[repo-b] = %+v, want surviving failed review-comments entry preserved", rc)
+	if rc := loaded.RepoCycles["repo-b"]; rc == nil || rc.Type != CycleRebase || rc.Status != RepoCycleFailed {
+		t.Errorf("RepoCycles[repo-b] = %+v, want surviving failed rebase entry preserved", rc)
 	}
 	if loaded.HasActiveRepoCycles() {
 		t.Error("HasActiveRepoCycles() = true, want false for dropped refactor cycle")
@@ -1978,6 +1978,150 @@ artifacts: {}
 	}
 	if strings.Contains(savedStr, "active_cycle") {
 		t.Errorf("saved run.yaml still contains 'active_cycle'; dropped cycle state should not be re-emitted:\n%s", savedStr)
+	}
+}
+
+// TestStoreLoadDropsLegacyReviewCommentsState verifies that a legacy run.yaml
+// containing review-comments cycle state and its retired scalar fields loads
+// cleanly, preserves an unrelated rebase entry, and drops the removed state on
+// the next save.
+func TestStoreLoadDropsLegacyReviewCommentsState(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
+	dir := t.TempDir()
+	store := NewStore(dir)
+
+	const featureID = "review-comments-legacy-001"
+	featureDir := filepath.Join(dir, featureID)
+	runDir := filepath.Join(featureDir, "runs", "run-001")
+	if err := os.MkdirAll(runDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	featureYAML := fmt.Sprintf(`id: %s
+name: Legacy Review Comments
+slug: legacy-review-comments
+description: pre-removal state with review-comments cycle keys
+created: 2026-01-01T00:00:00Z
+status: Published
+current_phase: 6
+repos:
+  - name: repo-active
+    path: /tmp/active
+    worktree_path: ""
+    branch: ""
+  - name: repo-history
+    path: /tmp/history
+    worktree_path: ""
+    branch: ""
+  - name: repo-rebase
+    path: /tmp/rebase
+    worktree_path: ""
+    branch: ""
+models: {}
+exit_criteria: ""
+inquireness: medium
+permissions_queue: []
+help_queue: []
+active_run: 1
+run_count: 1
+schema_version: %d
+`, featureID, SchemaVersionCurrent)
+	if err := os.WriteFile(filepath.Join(featureDir, "feature.yaml"), []byte(featureYAML), 0o644); err != nil {
+		t.Fatalf("write feature.yaml: %v", err)
+	}
+	runYAML := `run_number: 1
+started_at: 2026-01-01T00:00:00Z
+rebase_count: 2
+review_comments_count: 4
+addressing_reviews: true
+active_cycle_type: review-comments
+active_cycle:
+  type: review-comments
+  status: running
+  count: 4
+  plan_path: /tmp/review-comments-plan.md
+repo_cycles:
+  repo-active:
+    type: review-comments
+    status: running
+    count: 4
+    plan_path: /tmp/repo-active-plan.md
+    iteration: 3
+    pending_need_user_input_path: /tmp/repo-active-gate.yaml
+  repo-history:
+    type: review-comments
+    status: failed
+    count: 2
+    plan_path: /tmp/repo-history-plan.md
+    iteration: 1
+    pending_need_user_input_path: /tmp/repo-history-gate.yaml
+    last_error: boom
+  repo-rebase:
+    type: rebase
+    status: failed
+    count: 2
+    last_error: conflict
+artifacts: {}
+`
+	if err := os.WriteFile(filepath.Join(runDir, "run.yaml"), []byte(runYAML), 0o644); err != nil {
+		t.Fatalf("write run.yaml: %v", err)
+	}
+
+	loaded, err := store.Load(featureID)
+	if err != nil {
+		t.Fatalf("Load() error = %v; want nil (legacy review-comments keys must be ignored)", err)
+	}
+	if got := string(loaded.ActiveCycleType()); got != "" {
+		t.Errorf("ActiveCycleType() = %q, want empty for dropped review-comments cycle", got)
+	}
+	if loaded.ActiveCycle != nil {
+		t.Errorf("ActiveCycle = %+v, want nil for dropped review-comments cycle", loaded.ActiveCycle)
+	}
+	for _, repoName := range []string{"repo-active", "repo-history"} {
+		if _, ok := loaded.RepoCycles[repoName]; ok {
+			t.Errorf("RepoCycles[%s] = %+v, want absent (review-comments entry must be dropped)", repoName, loaded.RepoCycles[repoName])
+		}
+	}
+	if rc := loaded.RepoCycles["repo-rebase"]; rc == nil || rc.Type != CycleRebase || rc.Status != RepoCycleFailed || rc.Count != 2 {
+		t.Errorf("RepoCycles[repo-rebase] = %+v, want surviving failed rebase entry preserved", rc)
+	}
+	if loaded.HasActiveRepoCycles() {
+		t.Error("HasActiveRepoCycles() = true, want false after active review-comments state is dropped")
+	}
+	if got := loaded.CyclePrefix(); got != "" {
+		t.Errorf("CyclePrefix() = %q, want empty for dropped review-comments cycle", got)
+	}
+	loadedRun, err := store.LoadRun(featureID, 1)
+	if err != nil {
+		t.Fatalf("LoadRun: %v", err)
+	}
+	if got := loadedRun.CyclePrefix(); got != "" {
+		t.Errorf("Run.CyclePrefix() = %q, want empty for dropped review-comments cycle", got)
+	}
+
+	if err := store.Save(loaded); err != nil {
+		t.Fatalf("Save() error = %v; want nil", err)
+	}
+	saved, err := os.ReadFile(filepath.Join(runDir, "run.yaml"))
+	if err != nil {
+		t.Fatalf("ReadFile after Save: %v", err)
+	}
+	savedStr := string(saved)
+	for _, droppedKey := range []string{
+		"review-comments",
+		"review_comments_count",
+		"addressing_reviews",
+		"plan_path",
+		"iteration",
+		"pending_need_user_input_path",
+	} {
+		if strings.Contains(savedStr, droppedKey) {
+			t.Errorf("saved run.yaml still contains %q; dropped legacy state should not be re-emitted:\n%s", droppedKey, savedStr)
+		}
+	}
+	if !strings.Contains(savedStr, "type: rebase") || !strings.Contains(savedStr, "count: 2") {
+		t.Errorf("saved run.yaml lost surviving rebase cycle entry:\n%s", savedStr)
 	}
 }
 

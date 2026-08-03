@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -32,14 +31,12 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
-	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/orchestrator"
 	"github.com/doordash-oss/agentic-orchestrator/internal/permission"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	serverruntime "github.com/doordash-oss/agentic-orchestrator/internal/server"
 	"github.com/doordash-oss/agentic-orchestrator/internal/utilskill"
-	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
 )
 
@@ -77,8 +74,6 @@ const (
 	testSessionAskID        = "session-ask"
 	testSessionHelpID       = "session-help"
 	testReviewerLogin       = "reviewer"
-
-	reviewCommentsModeAddressAll = "address_all"
 )
 
 func TestServerMutationTargetAnswerPermissionRespondsToPendingControlRequest(t *testing.T) {
@@ -2245,162 +2240,6 @@ func TestServerMutationTargetRestartFeatureDispatchesPhaseWork(t *testing.T) {
 	assertJSONDoesNotContain(t, result, "do-not-leak", planPath)
 }
 
-func TestServerMutationTargetReviewCommentsFetchFiltersAndStartStages(t *testing.T) {
-	target, store, f, _ := newReviewCommentsActionTarget(t)
-	if err := agent.SaveAddressedIDsForRepo(store.BaseDir, f, testRepoAName, []int{100}); err != nil {
-		t.Fatalf("SaveAddressedIDsForRepo: %v", err)
-	}
-
-	resp, err := target.FetchReviewComments(f.ID, serverruntime.ReviewCommentsFetchRequest{Repo: testRepoAName})
-	if err != nil {
-		t.Fatalf("FetchReviewComments() error = %v", err)
-	}
-	if len(resp.Comments) != 1 || resp.Comments[0].ID != 101 || resp.Comments[0].RepoName != testRepoAName {
-		t.Fatalf("FetchReviewComments() comments = %+v; want only unaddressed repo-tagged comment 101", resp.Comments)
-	}
-	if _, err := agent.LoadReviewCommentsForRepo(store.BaseDir, f, testRepoAName); err == nil {
-		t.Fatalf("FetchReviewComments staged comments; want fetch to remain read-only")
-	}
-
-	result, err := target.StartReviewComments(f.ID, serverruntime.ReviewCommentsActionRequest{Repo: testRepoAName, Mode: reviewCommentsModeAddressAll})
-	if err == nil {
-		t.Fatal("StartReviewComments() error = nil; want dispatch error from nil phase runner after staging")
-	}
-	if result.FeatureID != f.ID || result.Repo != testRepoAName || result.Mode != reviewCommentsModeAddressAll || result.CycleType != string(feature.CycleReviewComments) || result.Result != resultFailed {
-		t.Fatalf("StartReviewComments() result = %+v; want failed staged review-comments", result)
-	}
-	staged, err := agent.LoadReviewCommentsForRepo(store.BaseDir, f, testRepoAName)
-	if err != nil {
-		t.Fatalf("LoadReviewCommentsForRepo: %v", err)
-	}
-	if staged.Mode != reviewCommentsModeAddressAll || len(staged.Comments) != 1 || staged.Comments[0].ID != 101 || staged.Comments[0].RepoName != testRepoAName {
-		t.Fatalf("staged review comments = %+v; want address_all with comment 101", staged)
-	}
-}
-
-func TestServerMutationTargetReviewCommentsFetchPropagatesGHError(t *testing.T) {
-	target, _, f, _ := newReviewCommentsActionTarget(t)
-	t.Setenv("GH_MUTATION_FAIL", "1")
-
-	_, err := target.FetchReviewComments(f.ID, serverruntime.ReviewCommentsFetchRequest{Repo: testRepoAName})
-	if err == nil || !strings.Contains(err.Error(), "synthetic gh failure") {
-		t.Fatalf("FetchReviewComments() error = %v; want fake gh failure", err)
-	}
-}
-
-func TestServerMutationTargetReviewCommentsStartStagesConversationAndReviewBodyComments(t *testing.T) {
-	target, store, f, ghFixture := newReviewCommentsActionTarget(t)
-	issue := reviewComment(301, "conversation feedback")
-	issue.Type = git.CommentTypeIssue
-	reviewBody := reviewComment(302, "review summary feedback")
-	reviewBody.Type = git.CommentTypeReviewBody
-	writeMutationReviewComments(t, ghFixture, []git.ReviewComment{issue, reviewBody})
-
-	result, err := target.StartReviewComments(f.ID, serverruntime.ReviewCommentsActionRequest{
-		Repo: testRepoAName,
-		Mode: reviewModeAuto,
-	})
-	if err == nil {
-		t.Fatal("StartReviewComments() error = nil; want dispatch error from nil phase runner after staging")
-	}
-	if result.CommentCount != 2 || result.Result != resultFailed {
-		t.Fatalf("StartReviewComments() result = %+v; want both supported comments staged before dispatch", result)
-	}
-	staged, err := agent.LoadReviewCommentsForRepo(store.BaseDir, f, testRepoAName)
-	if err != nil {
-		t.Fatalf("LoadReviewCommentsForRepo: %v", err)
-	}
-	if len(staged.Comments) != 2 ||
-		staged.Comments[0].ID != issue.ID ||
-		staged.Comments[0].Type != git.CommentTypeIssue ||
-		staged.Comments[1].ID != reviewBody.ID ||
-		staged.Comments[1].Type != git.CommentTypeReviewBody {
-		t.Fatalf("staged review comments = %+v; want issue 301 and review_body 302", staged.Comments)
-	}
-}
-
-func TestServerMutationTargetReviewCommentsStartUsesProvidedPreviewedComments(t *testing.T) {
-	target, store, f, ghFixture := newReviewCommentsActionTarget(t)
-
-	result, err := target.StartReviewComments(f.ID, serverruntime.ReviewCommentsActionRequest{
-		Repo: testRepoAName,
-		Mode: reviewModeAuto,
-		Comments: []serverruntime.ReviewComment{{
-			ID:        202,
-			Type:      git.CommentTypeReview,
-			RepoName:  testRepoAName,
-			Path:      "internal/server/read_model.go",
-			Line:      42,
-			Body:      "use the previewed set",
-			UserLogin: testReviewerLogin,
-			DiffHunk:  "@@ -1 +1 @@\n-old\n+new",
-		}},
-	})
-	if err == nil {
-		t.Fatal("StartReviewComments() error = nil; want dispatch error from nil phase runner after staging")
-	}
-	if got := len(ghFixture.fakeAPI.Requests()); got != 0 {
-		t.Fatalf("FetchPRComments calls = %d; want 0 when comments are provided by preview", got)
-	}
-	if result.FeatureID != f.ID || result.Repo != testRepoAName || result.Mode != reviewModeAuto || result.Source != "provided" || result.CommentCount != 1 || result.Result != resultFailed {
-		t.Fatalf("StartReviewComments() result = %+v; want failed provided preview", result)
-	}
-	staged, err := agent.LoadReviewCommentsForRepo(store.BaseDir, f, testRepoAName)
-	if err != nil {
-		t.Fatalf("LoadReviewCommentsForRepo: %v", err)
-	}
-	if staged.Mode != reviewModeAuto || len(staged.Comments) != 1 || staged.Comments[0].ID != 202 || staged.Comments[0].DiffHunk == "" || staged.Comments[0].User.Login != testReviewerLogin {
-		t.Fatalf("staged review comments = %+v; want provided previewed comment 202", staged)
-	}
-}
-
-func TestServerMutationTargetReviewCommentsChildCreationWinnerDoesNotStage(t *testing.T) {
-	target, store, parent, _ := newReviewCommentsActionTarget(t)
-
-	resultCh := make(chan error, 1)
-	started := make(chan struct{})
-	if err := target.orch.WithRelationshipWriteLock(func() error {
-		go func() {
-			close(started)
-			_, err := target.StartReviewComments(parent.ID, serverruntime.ReviewCommentsActionRequest{
-				Repo: testRepoAName,
-				Mode: reviewCommentsModeAddressAll,
-			})
-			resultCh <- err
-		}()
-
-		<-started
-
-		child := &feature.Feature{
-			ID:            "review-comments-active-child",
-			Slug:          "review-comments-active-child",
-			Status:        feature.StatusImplementing,
-			Pipeline:      feature.PipelineMedium,
-			SchemaVersion: feature.SchemaVersionCurrent,
-			Parent: &feature.ChildRelationship{
-				ParentID: parent.ID,
-				Kind:     feature.ChildKindRefactor,
-			},
-		}
-		return store.Save(child)
-	}); err != nil {
-		t.Fatalf("create active child under relationship lock: %v", err)
-	}
-
-	select {
-	case err := <-resultCh:
-		if !errors.Is(err, feature.ErrParentMutationLocked) {
-			t.Fatalf("StartReviewComments() error = %v; want ErrParentMutationLocked", err)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("StartReviewComments() did not return after child creation completed")
-	}
-
-	if _, err := agent.LoadReviewCommentsForRepo(store.BaseDir, parent, testRepoAName); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("LoadReviewCommentsForRepo() error = %v; want os.ErrNotExist after rejected parent mutation", err)
-	}
-}
-
 func TestServerMutationTargetCleanupAndDeleteActionsMutateFeatureState(t *testing.T) {
 	t.Run("cleanup cycles", func(t *testing.T) {
 		target, store, f, _ := newCleanupActionTarget(t)
@@ -2547,46 +2386,6 @@ func initMutationGitRepo(t *testing.T, dir string) {
 	}
 }
 
-func newReviewCommentsActionTarget(t *testing.T) (serverMutationTarget, *feature.Store, *feature.Feature, mutationGHFixture) {
-	t.Helper()
-	runtimeDir := t.TempDir()
-	cfg := config.NewDefault()
-	repoPath := filepath.Join(runtimeDir, testRepoAName)
-	if err := os.MkdirAll(repoPath, 0o755); err != nil {
-		t.Fatalf("mkdir review-comments repo: %v", err)
-	}
-	cfg.Repos[testRepoAName] = config.RepoConfig{Path: repoPath}
-	store := feature.NewStore(filepath.Join(runtimeDir, "features"))
-	manager := feature.NewManager(store, cfg)
-	f, err := manager.Create("review comments via REST", "desc", []string{testRepoAName}, cfg.Defaults.Models, "", "", nil)
-	if err != nil {
-		t.Fatalf("Create feature: %v", err)
-	}
-	if err := store.Modify(f.ID, func(ff *feature.Feature) error {
-		publishable := true
-		ff.Status = feature.StatusPublished
-		ff.CurrentPhase = feature.PhasePublish
-		for i := range ff.Repos {
-			ff.Repos[i].Publishable = &publishable
-		}
-		ff.RepoStates = map[string]*feature.RepoState{testRepoAName: {Touched: true, PRURL: "https://github.com/acme/repo-a/pull/12"}}
-		return nil
-	}); err != nil {
-		t.Fatalf("prepare feature: %v", err)
-	}
-	loaded, err := store.Load(f.ID)
-	if err != nil {
-		t.Fatalf("Load prepared feature: %v", err)
-	}
-	ghFixture := installMutationFakeAPI(t)
-	writeMutationReviewComments(t, ghFixture, []git.ReviewComment{
-		reviewComment(100, "already addressed"),
-		reviewComment(101, "please fix"),
-	})
-	orch := orchestrator.New(orchestrator.Deps{Lifecycle: manager, Store: store}, orchestrator.Hooks{})
-	return serverMutationTarget{orch: orch, store: store}, store, loaded, ghFixture
-}
-
 func newCleanupActionTarget(t *testing.T) (serverMutationTarget, *feature.Store, *feature.Feature, *mocks.MockWorktreeOps) {
 	t.Helper()
 	runtimeDir := t.TempDir()
@@ -2605,7 +2404,7 @@ func newCleanupActionTarget(t *testing.T) (serverMutationTarget, *feature.Store,
 		ff.CurrentPhase = feature.PhasePublish
 		ff.Repos[0].WorktreePath = testRepoAWorktreePath
 		ff.RepoCycles = map[string]*feature.RepoCycleState{
-			testRepoAName: {Type: feature.CycleReviewComments, Status: feature.RepoCycleFailed},
+			testRepoAName: {Type: feature.CycleRebase, Status: feature.RepoCycleFailed},
 		}
 		return nil
 	}); err != nil {
@@ -2617,90 +2416,6 @@ func newCleanupActionTarget(t *testing.T) (serverMutationTarget, *feature.Store,
 	}
 	orch := orchestrator.New(orchestrator.Deps{Lifecycle: manager, Store: store, Worktrees: worktrees}, orchestrator.Hooks{})
 	return serverMutationTarget{orch: orch, store: store}, store, loaded, worktrees
-}
-
-type mutationGHFixture struct {
-	reviewPath  string
-	issuePath   string
-	reviewsPath string
-	fakeAPI     *testutil.FakeGitHubAPI
-}
-
-func installMutationFakeAPI(t *testing.T) mutationGHFixture {
-	t.Helper()
-	dataDir := t.TempDir()
-	fixture := mutationGHFixture{
-		reviewPath:  filepath.Join(dataDir, "review.json"),
-		issuePath:   filepath.Join(dataDir, "issue.json"),
-		reviewsPath: filepath.Join(dataDir, "reviews.json"),
-	}
-	fake := testutil.InstallFakeGitHubAPI(t)
-	serveFile := func(path string) http.HandlerFunc {
-		return func(w http.ResponseWriter, r *http.Request) {
-			if os.Getenv("GH_MUTATION_FAIL") == "1" {
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusInternalServerError)
-				fmt.Fprint(w, `{"message":"synthetic gh failure"}`)
-				return
-			}
-			data, err := os.ReadFile(path)
-			if err != nil {
-				data = []byte("[]")
-			}
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write(data)
-		}
-	}
-	fake.Mux.HandleFunc("/repos/acme/repo-a/pulls/12/comments", serveFile(fixture.reviewPath))
-	fake.Mux.HandleFunc("/repos/acme/repo-a/issues/12/comments", serveFile(fixture.issuePath))
-	fake.Mux.HandleFunc("/repos/acme/repo-a/pulls/12/reviews", serveFile(fixture.reviewsPath))
-	fixture.fakeAPI = fake
-	return fixture
-}
-
-func writeMutationReviewComments(t *testing.T, fixture mutationGHFixture, comments []git.ReviewComment) {
-	t.Helper()
-	var inline, issue []git.ReviewComment
-	var reviews []map[string]any
-	for _, comment := range comments {
-		switch comment.Type {
-		case git.CommentTypeIssue:
-			issue = append(issue, comment)
-		case git.CommentTypeReviewBody:
-			reviews = append(reviews, map[string]any{
-				"id": comment.ID, "body": comment.Body, "user": comment.User,
-				"submitted_at": comment.CreatedAt,
-			})
-		default:
-			inline = append(inline, comment)
-		}
-	}
-	for path, value := range map[string]any{
-		fixture.reviewPath:  inline,
-		fixture.issuePath:   issue,
-		fixture.reviewsPath: reviews,
-	} {
-		data, err := json.Marshal(value)
-		if err != nil {
-			t.Fatalf("marshal fake gh response: %v", err)
-		}
-		if err := os.WriteFile(path, data, 0o644); err != nil {
-			t.Fatalf("write fake gh response: %v", err)
-		}
-	}
-}
-
-func reviewComment(id int, body string) git.ReviewComment {
-	comment := git.ReviewComment{
-		ID:        id,
-		Path:      "main.go",
-		Line:      12,
-		Body:      body,
-		CreatedAt: "2026-06-13T12:00:00Z",
-		Type:      git.CommentTypeReview,
-	}
-	comment.User.Login = testReviewerLogin
-	return comment
 }
 
 func mockCallsByMethod(calls []mocks.MockCall, method string) []mocks.MockCall {

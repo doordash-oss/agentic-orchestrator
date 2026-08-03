@@ -481,7 +481,7 @@ func defaultTestingContractPolicy(source string) TestingContractItemPolicy {
 // GeneratedFrom.PlanPath for provenance.
 //
 // PlanLess, when true, suppresses plan-source items entirely (used by the
-// rebase and review-comments cycles where there is no phase plan).
+// the rebase cycle where there is no phase plan).
 type MultiRepoContractInput struct {
 	Repos     []string
 	PlanText  string

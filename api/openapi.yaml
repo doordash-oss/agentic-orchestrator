@@ -945,7 +945,6 @@ components:
           - rewind
           - retry
           - rebase
-          - review-comments
           - need-user-input
           - need-user-input-draft
           - mark-done
@@ -2145,10 +2144,6 @@ components:
               $ref: "#/components/schemas/RetryFeatureResponse"
             rebase_start_response:
               $ref: "#/components/schemas/RebaseStartResponse"
-            review_comments_fetch_response:
-              $ref: "#/components/schemas/ReviewCommentsFetchResponse"
-            review_comments_start_response:
-              $ref: "#/components/schemas/ReviewCommentsStartResponse"
             mark_done_response:
               $ref: "#/components/schemas/MarkDoneResponse"
             cleanup_feature_response:
@@ -2529,66 +2524,6 @@ components:
           required: [parent_id]
           properties:
             parent_id:
-              type: string
-    ReviewComment:
-      type: object
-      required: [id]
-      properties:
-        id:
-          type: integer
-        type:
-          type: string
-        repo_name:
-          type: string
-        path:
-          type: string
-        line:
-          type: integer
-        body:
-          type: string
-        user_login:
-          type: string
-        created_at:
-          type: string
-        diff_hunk:
-          type: string
-        in_reply_to_id:
-          type: integer
-          x-go-name: InReplyTo
-    ReviewCommentsFetchResponse:
-      allOf:
-        - $ref: "#/components/schemas/ActionBaseResponse"
-        - type: object
-          required: [feature_id, repo, comments]
-          properties:
-            feature_id:
-              type: string
-            repo:
-              type: string
-            mode:
-              type: string
-            comments:
-              type: array
-              items:
-                $ref: "#/components/schemas/ReviewComment"
-    ReviewCommentsStartResponse:
-      allOf:
-        - $ref: "#/components/schemas/ActionBaseResponse"
-        - $ref: "#/components/schemas/FeatureActionResult"
-        - type: object
-          required: [repo, mode, cycle_type]
-          properties:
-            repo:
-              type: string
-            mode:
-              type: string
-            cycle_type:
-              type: string
-            comment_count:
-              type: integer
-            session_id:
-              type: string
-            source:
               type: string
     RebasePreflightRepo:
       type: object

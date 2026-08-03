@@ -12,10 +12,10 @@ describe('CycleWorkspace', () => {
     const snapshot = featureSnapshot({
       status: 'Published',
       cycle: {
-        type: 'review-comments',
+        type: 'rebase',
         status: 'running',
         count: 2,
-        phase: 'address_validate',
+        phase: 'final_review',
       },
       actions: [{ id: 'pause-stop', enabled: true, disabledReasons: [] }],
     });
@@ -39,13 +39,12 @@ describe('CycleWorkspace', () => {
 
     const spine = screen.getByRole('list', { name: 'Cycle progress' });
     expect(spine).toBeVisible();
-    expect(within(spine).getByText('Address & validate').closest('li')).toHaveAttribute(
+    expect(within(spine).getByText('Final review').closest('li')).toHaveAttribute(
       'aria-current',
       'step',
     );
     expect(screen.getByRole('heading', { name: 'Live agent activity' })).toBeVisible();
     expect(screen.queryByText('Repository progress')).not.toBeInTheDocument();
-    expect(screen.queryByText('Comment worklist')).not.toBeInTheDocument();
   });
 
   it('keeps exact failure context with Retry and Return controls', () => {

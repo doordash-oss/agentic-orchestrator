@@ -425,7 +425,7 @@ func (t *journeyMutationTarget) StopFeature(featureID string) (server.FeatureSto
 // RestartFeature mirrors the production mutation target: RestartPhase
 // computes the restart outcome under the relationship guard, and the
 // returned outcome drives the ordinary resume dispatch (StartFeature for a
-// phase restart, StartRepoCycleImplement for repo cycles).
+// phase restart).
 func (t *journeyMutationTarget) RestartFeature(featureID string, req server.RestartFeatureRequest) (server.FeatureRestartResponse, error) {
 	resp := server.FeatureRestartResponse{FeatureID: featureID, Result: "failed"}
 	outcome, err := t.orch.RestartPhase(featureID, req.MaxIterationsDelta, req.MaxPlanIterationsDelta)
@@ -445,20 +445,6 @@ func (t *journeyMutationTarget) RestartFeature(featureID string, req server.Rest
 		if err := t.orch.StartFeature(featureID); err != nil {
 			resp.Result = "failed"
 			return resp, err
-		}
-		return resp, nil
-	case orchestrator.RestartDispatchRepoCycles:
-		resp.Dispatch = "repo_cycles"
-		resp.RepoCycleCount = len(outcome.RepoCycleRestarts)
-		for _, restart := range outcome.RepoCycleRestarts {
-			sessionID, err := t.orch.StartRepoCycleImplement(featureID, restart.RepoName, restart.CycleType, restart.PlanContent)
-			if sessionID != "" {
-				resp.SessionIDs = append(resp.SessionIDs, sessionID)
-			}
-			if err != nil {
-				resp.Result = "failed"
-				return resp, err
-			}
 		}
 		return resp, nil
 	default:

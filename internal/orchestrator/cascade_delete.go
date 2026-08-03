@@ -274,11 +274,6 @@ func (o *Orchestrator) settleCascadeAttention(intent *feature.CascadeDeleteInten
 			f.PendingNeedUserInputPath = ""
 			f.ReviewingGate = false
 			f.ValidatingPlan = false
-			for _, cycle := range f.Run().RepoCycles {
-				if cycle != nil {
-					cycle.PendingNeedUserInputPath = ""
-				}
-			}
 			return nil
 		})
 		if err != nil {

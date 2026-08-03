@@ -433,21 +433,6 @@ func TestCycleTestingContractPath(t *testing.T) {
 	}
 }
 
-func TestCycleTestingContractPath_PerRepo(t *testing.T) {
-	f := &feature.Feature{
-		ID:        "feat1",
-		ActiveRun: 1,
-		RepoCycles: map[string]*feature.RepoCycleState{
-			testRepoNameWeb: {Type: feature.CycleReviewComments, Count: 3},
-		},
-	}
-	got := CycleTestingContractPath("/tmp/state", f, testRepoNameWeb, feature.CycleReviewComments)
-	want := "/tmp/state/feat1/runs/run-001/review-comments-3/web/testing-contract.yaml"
-	if got != want {
-		t.Errorf("CycleTestingContractPath = %q, want %q", got, want)
-	}
-}
-
 func TestLatestCycleImplementationVerificationReportPath(t *testing.T) {
 	stateDir := t.TempDir()
 	f := &feature.Feature{ID: "feat1", ActiveRun: 1}

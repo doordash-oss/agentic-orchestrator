@@ -2869,15 +2869,6 @@ func TestResolveImplementArtifactDir_CyclePrefix(t *testing.T) {
 			filepath.Join(stateDir, "f1", "runs", "run-001", "rebase-2", "implement"),
 		},
 		{
-			"review-comments cycle active",
-			func() *feature.Feature {
-				f := &feature.Feature{ID: "f1", ActiveRun: 1}
-				f.SetActiveCycleType(feature.CycleReviewComments)
-				return f
-			}(),
-			filepath.Join(stateDir, "f1", "runs", "run-001", "review-comments", "implement"),
-		},
-		{
 			"roadmap phase with cycle skips phase scoping",
 			func() *feature.Feature {
 				f := &feature.Feature{

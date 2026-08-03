@@ -24,7 +24,6 @@ import {
   LocalReviewDraftSaveRequestSchema,
   LocalReviewDraftStoreSchema,
   PublishDescriptionRequestSchema,
-  ReviewCommentViewSchema,
 } from './ipc';
 import { assertNoPrototypePollution } from './sanitize';
 
@@ -50,7 +49,7 @@ describe('operational IPC schemas', () => {
     const target = {
       featureId: 'abcd1234',
       repoName: 'repo-a',
-      cycleType: 'review-comments',
+      cycleType: 'rebase',
     };
 
     expect(GateResumeRequestSchema.parse(target)).toStrictEqual(target);
@@ -604,23 +603,5 @@ describe('recoverable local review draft schemas', () => {
     expect(LocalReviewDraftStoreSchema.safeParse({ schemaVersion: 2, drafts: [] }).success).toBe(
       false,
     );
-  });
-});
-
-describe('ReviewCommentViewSchema', () => {
-  it('preserves the server feedback type used by comment badges', () => {
-    expect(
-      ReviewCommentViewSchema.parse({
-        id: 41,
-        file: 'desktop/src/main/features.ts',
-        author: 'octocat',
-        type: 'issue',
-      }),
-    ).toEqual({
-      id: 41,
-      file: 'desktop/src/main/features.ts',
-      author: 'octocat',
-      type: 'issue',
-    });
   });
 });

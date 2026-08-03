@@ -93,11 +93,6 @@ type Run struct {
 	PlanIteration    int `yaml:"plan_iteration,omitempty"`
 	ReviewIteration  int `yaml:"review_iteration,omitempty"`
 	RebaseCount      int `yaml:"rebase_count,omitempty"`
-	// ReviewCommentsCount is the run-level review-comments cycle counter.
-	// Incremented per RunReviewCommentsLoop invocation. Each invocation gets a
-	// flat artifact dir at runs/run-N/review-comments-N/iteration-NN/ with no
-	// per-repo subdir.
-	ReviewCommentsCount int `yaml:"review_comments_count,omitempty"`
 
 	// Roadmap progress (moved from Feature).
 	CurrentRoadmapPhase int    `yaml:"current_roadmap_phase,omitempty"`
@@ -154,7 +149,6 @@ type Run struct {
 	VerificationItems  []VerificationItemStatus `yaml:"verification_items,omitempty"`
 	ReviewingGate      bool                     `yaml:"reviewing_gate,omitempty"`
 	ReviewFixing       bool                     `yaml:"review_fixing,omitempty"`
-	AddressingReviews  bool                     `yaml:"addressing_reviews,omitempty"`
 	PendingReviewPhase *Phase                   `yaml:"pending_review_phase,omitempty"`
 	// PendingRewindReviewRoadmapPhase is set only while a partial rewind to
 	// Implement is waiting for human review of the selected roadmap phase plan.
@@ -211,8 +205,8 @@ func (r *Run) IsSealed() bool { return r != nil && r.SealedAt != nil }
 
 // AccumulateActiveTime moves elapsed time from ActivePhaseStart into
 // PhaseTimings under the ActiveTimingKey, then clears ActivePhaseStart.
-// ActiveTimingKey is intentionally preserved so cycle keys (rebase-N,
-// review-comments) survive interrupt/fail transitions and are available when
+// ActiveTimingKey is intentionally preserved so rebase cycle keys survive
+// interrupt/fail transitions and are available when
 // the phase is resumed.
 func (r *Run) AccumulateActiveTime() {
 	if r == nil || r.ActivePhaseStart == nil || r.ActiveTimingKey == "" {
@@ -267,8 +261,7 @@ func (r *Run) AnyRoadmapPhaseFrontend() bool {
 }
 
 // CyclePrefix returns the artifact directory prefix for the current
-// post-publish cycle (rebase, or review-comments). Returns empty
-// string when no cycle is active.
+// rebase cycle. Returns empty string when no cycle is active.
 func (r *Run) CyclePrefix() string {
 	if r == nil {
 		return ""
@@ -279,11 +272,6 @@ func (r *Run) CyclePrefix() string {
 			return fmt.Sprintf("rebase-%d", r.RebaseCount)
 		}
 		return "rebase"
-	case CycleReviewComments:
-		if r.ReviewCommentsCount > 0 {
-			return fmt.Sprintf("review-comments-%d", r.ReviewCommentsCount)
-		}
-		return "review-comments"
 	}
 	return ""
 }

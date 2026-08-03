@@ -89,8 +89,6 @@ const (
 
 	chatName = "chat"
 
-	reviewModeAuto = "auto"
-
 	phaseNameInquire     = "inquire"
 	phaseNameImplement   = "implement"
 	phaseNameFinalReview = "final-review"
@@ -1121,23 +1119,6 @@ func (t *serverMutationTarget) dispatchRestartOutcome(featureID string, outcome 
 			resp.Phase = outcome.Phase.String()
 		}
 		return t.orch.StartFeature(featureID)
-	case orchestrator.RestartDispatchRepoCycles:
-		resp.Dispatch = "repo_cycles"
-		resp.RepoCycleCount = len(outcome.RepoCycleRestarts)
-		sessionIDs := make([]string, 0, len(outcome.RepoCycleRestarts)+1)
-		for _, restart := range outcome.RepoCycleRestarts {
-			sessionID, err := t.orch.StartRepoCycleImplement(featureID, restart.RepoName, restart.CycleType, restart.PlanContent)
-			if sessionID != "" {
-				sessionIDs = append(sessionIDs, sessionID)
-			}
-			if err != nil {
-				return err
-			}
-		}
-		if len(sessionIDs) > 0 {
-			resp.SessionIDs = sessionIDs
-		}
-		return nil
 	case orchestrator.RestartDispatchRebase:
 		resp.Dispatch = "rebase"
 		return t.orch.RetryFeatureRebase(featureID)
@@ -1247,17 +1228,14 @@ func (t *serverMutationTarget) UpdateFeatureConfig(featureID string, req serverr
 }
 
 func (t *serverMutationTarget) ResumeNeedUserInput(featureID string, req serverruntime.NeedUserInputResumeRequest) (serverruntime.NeedUserInputResumeResponse, error) {
-	if err := t.orch.ResumeNeedUserInput(featureID, orchestrator.NeedUserInputResume{
-		RepoName:  req.RepoName,
-		CycleType: feature.RepoCycleType(req.CycleType),
-	}); err != nil {
+	if err := t.orch.ResumeNeedUserInput(featureID, orchestrator.NeedUserInputResume{}); err != nil {
 		return serverruntime.NeedUserInputResumeResponse{}, err
 	}
 	return serverruntime.NeedUserInputResumeResponse{FeatureID: featureID, Result: "resumed"}, nil
 }
 
 func (t *serverMutationTarget) DraftNeedUserInputAnswers(featureID string, req serverruntime.NeedUserInputDraftRequest) (serverruntime.NeedUserInputDraftResponse, error) {
-	gatePath, err := t.needUserInputGatePath(featureID, req.RepoName)
+	gatePath, err := t.needUserInputGatePath(featureID)
 	if err != nil {
 		return serverruntime.NeedUserInputDraftResponse{}, err
 	}
@@ -2007,115 +1985,6 @@ func (t *serverMutationTarget) RefactorFeature(featureID string, req serverrunti
 	return resp, nil
 }
 
-func (t *serverMutationTarget) FetchReviewComments(featureID string, req serverruntime.ReviewCommentsFetchRequest) (serverruntime.ReviewCommentsFetchResponse, error) {
-	comments, err := t.fetchUnaddressedReviewComments(featureID, req.Repo)
-	if err != nil {
-		return serverruntime.ReviewCommentsFetchResponse{}, err
-	}
-	return serverruntime.ReviewCommentsFetchResponse{
-		APIVersion: serverruntime.APIVersion,
-		FeatureID:  featureID,
-		Repo:       req.Repo,
-		Mode:       reviewModeAuto,
-		Comments:   reviewCommentDTOs(req.Repo, comments),
-	}, nil
-}
-
-func (t *serverMutationTarget) fetchUnaddressedReviewComments(featureID, repoName string) ([]git.ReviewComment, error) {
-	if t.store == nil {
-		return nil, errors.New("feature store is not available")
-	}
-	f, err := t.store.Load(featureID)
-	if err != nil {
-		return nil, err
-	}
-	repo, ok := findFeatureRepo(f, repoName)
-	if !ok {
-		return nil, fmt.Errorf("repo %s not found", repoName)
-	}
-	prURL := f.PRURLs()[repoName]
-	if prURL == "" {
-		return nil, fmt.Errorf("repo %s has no PR URL", repoName)
-	}
-	comments, err := git.FetchPRComments(repo.Path, prURL)
-	if err != nil {
-		return nil, err
-	}
-	for i := range comments {
-		comments[i].RepoName = repoName
-	}
-	addressed, _ := agent.LoadAddressedIDsForRepo(t.store.BaseDir, f, repoName)
-	if len(addressed) > 0 {
-		filtered := comments[:0]
-		for _, comment := range comments {
-			if !addressed[comment.ID] {
-				filtered = append(filtered, comment)
-			}
-		}
-		comments = filtered
-	}
-	return comments, nil
-}
-
-func (t *serverMutationTarget) StartReviewComments(featureID string, req serverruntime.ReviewCommentsActionRequest) (serverruntime.ReviewCommentsStartResponse, error) {
-	resp := serverruntime.ReviewCommentsStartResponse{
-		FeatureID: featureID,
-		Repo:      req.Repo,
-		Mode:      req.Mode,
-		CycleType: string(feature.CycleReviewComments),
-	}
-	if t.orch == nil {
-		return resp, errors.New("orchestrator is not available")
-	}
-	sessionID, err := t.orch.StartRepoCycleImplementWithPreparation(
-		featureID,
-		req.Repo,
-		feature.CycleReviewComments,
-		"",
-		func() error {
-			comments := reviewCommentDTOsToGit(req.Repo, req.Comments)
-			if len(comments) == 0 {
-				var err error
-				comments, err = t.fetchUnaddressedReviewComments(featureID, req.Repo)
-				if err != nil {
-					resp.Result = resultFailed
-					return err
-				}
-			} else {
-				resp.Source = "provided"
-			}
-			comments = supportedReviewComments(comments)
-			if len(comments) == 0 {
-				resp.Result = "no_comments"
-				return fmt.Errorf("review-comments: no unaddressed comments for repo %s", req.Repo)
-			}
-			git.SortReviewCommentsChronologically(comments)
-			resp.CommentCount = len(comments)
-			f, err := t.store.Load(featureID)
-			if err != nil {
-				resp.Result = resultFailed
-				return err
-			}
-			if err := agent.SaveReviewCommentsForRepo(t.store.BaseDir, f, req.Repo, agent.ReviewCommentsData{Mode: req.Mode, Comments: comments}); err != nil {
-				resp.Result = resultFailed
-				return err
-			}
-			return nil
-		},
-	)
-	if sessionID != "" {
-		resp.SessionID = sessionID
-	}
-	if err != nil {
-		if resp.Result == "" {
-			resp.Result = resultFailed
-		}
-		return resp, err
-	}
-	resp.Result = resultStarted
-	return resp, nil
-}
-
 func (t *serverMutationTarget) MarkDone(featureID string, req serverruntime.GuardedFeatureActionRequest) (serverruntime.MarkDoneResponse, error) {
 	if t.orch == nil {
 		return serverruntime.MarkDoneResponse{FeatureID: featureID}, errors.New("orchestrator is not available")
@@ -2233,66 +2102,6 @@ func actionConflictError(err error) error {
 		}
 	}
 	return nil
-}
-
-func reviewCommentDTOs(repoName string, comments []git.ReviewComment) []serverruntime.ReviewComment {
-	out := make([]serverruntime.ReviewComment, 0, len(comments))
-	for _, comment := range comments {
-		dtoRepo := comment.RepoName
-		if dtoRepo == "" {
-			dtoRepo = repoName
-		}
-		out = append(out, serverruntime.ReviewComment{
-			ID:        comment.ID,
-			Type:      comment.Type,
-			RepoName:  dtoRepo,
-			Path:      comment.Path,
-			Line:      comment.Line,
-			Body:      comment.Body,
-			UserLogin: comment.User.Login,
-			CreatedAt: comment.CreatedAt,
-			DiffHunk:  comment.DiffHunk,
-			InReplyTo: comment.InReplyTo,
-		})
-	}
-	return out
-}
-
-func reviewCommentDTOsToGit(repoName string, comments []serverruntime.ReviewComment) []git.ReviewComment {
-	out := make([]git.ReviewComment, 0, len(comments))
-	for _, comment := range comments {
-		dtoRepo := comment.RepoName
-		if dtoRepo == "" {
-			dtoRepo = repoName
-		}
-		gitComment := git.ReviewComment{
-			ID:        comment.ID,
-			Type:      comment.Type,
-			RepoName:  dtoRepo,
-			Path:      comment.Path,
-			Line:      comment.Line,
-			Body:      comment.Body,
-			CreatedAt: comment.CreatedAt,
-			DiffHunk:  comment.DiffHunk,
-			InReplyTo: comment.InReplyTo,
-		}
-		gitComment.User.Login = comment.UserLogin
-		out = append(out, gitComment)
-	}
-	return out
-}
-
-func supportedReviewComments(comments []git.ReviewComment) []git.ReviewComment {
-	filtered := comments[:0]
-	for _, comment := range comments {
-		// Keep this aligned with isSupportedPRFeedback in
-		// internal/orchestrator/review_comments_feature.go.
-		switch comment.Type {
-		case "", git.CommentTypeReview, git.CommentTypeIssue, git.CommentTypeReviewBody:
-			filtered = append(filtered, comment)
-		}
-	}
-	return filtered
 }
 
 func findFeatureRepo(f *feature.Feature, repoName string) (feature.FeatureRepo, bool) {
@@ -2415,20 +2224,13 @@ func (t *serverMutationTarget) helpSession(req serverruntime.HelpAnswerRequest) 
 	}
 }
 
-func (t *serverMutationTarget) needUserInputGatePath(featureID, repoName string) (string, error) {
+func (t *serverMutationTarget) needUserInputGatePath(featureID string) (string, error) {
 	if t.store == nil {
 		return "", errors.New("feature store is not available")
 	}
 	f, err := t.store.Load(featureID)
 	if err != nil {
 		return "", err
-	}
-	repoName = strings.TrimSpace(repoName)
-	if repoName != "" {
-		if rc := f.RepoCycles[repoName]; rc != nil && rc.Status == feature.RepoCycleNeedUserInput && rc.PendingNeedUserInputPath != "" {
-			return rc.PendingNeedUserInputPath, nil
-		}
-		return "", fmt.Errorf("repo %s is not paused on a need-user-input gate", repoName)
 	}
 	if f.PendingNeedUserInputPath == "" {
 		return "", fmt.Errorf("feature %s is not paused on a need-user-input gate", featureID)

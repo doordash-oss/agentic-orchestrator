@@ -351,18 +351,18 @@ describe('FeatureCockpit snapshot rendering', () => {
       feature: featureSnapshot({
         status: 'Published',
         cycle: {
-          type: 'review-comments',
+          type: 'rebase',
           status: 'running',
           count: 2,
           iteration: 1,
-          phase: 'address_validate',
+          phase: 'final_review',
         },
         actions: [{ id: 'pause-stop', enabled: true, disabledReasons: [] }],
       }),
     });
     renderCockpit(mock);
 
-    expect(await screen.findByRole('region', { name: 'Review comments cycle' })).toBeVisible();
+    expect(await screen.findByRole('region', { name: 'Rebase cycle' })).toBeVisible();
     expect(screen.getByRole('heading', { name: 'Live agent activity' })).toBeVisible();
     expect(screen.queryByRole('region', { name: 'Feature aftercare' })).not.toBeInTheDocument();
     expect(screen.queryByRole('tablist', { name: 'Stage view' })).not.toBeInTheDocument();
@@ -419,12 +419,6 @@ describe('FeatureCockpit snapshot rendering', () => {
         status: 'Published',
         actions: [
           { id: 'rebase', enabled: true, disabledReasons: [] },
-          {
-            id: 'review-comments',
-            enabled: true,
-            disabledReasons: [],
-            inputs: [{ name: 'mode', options: ['auto', 'address_all'] }],
-          },
           { id: 'refactor', enabled: true, disabledReasons: [] },
         ],
       }),
@@ -433,9 +427,6 @@ describe('FeatureCockpit snapshot rendering', () => {
     const aftercare = await screen.findByRole('region', { name: 'Feature aftercare' });
     expect(
       within(aftercare).getByRole('button', { name: /Bring branches up to date/ }),
-    ).toBeVisible();
-    expect(
-      within(aftercare).getByRole('button', { name: /Address review feedback/ }),
     ).toBeVisible();
     expect(within(aftercare).getByRole('button', { name: /Start a refactor pass/ })).toBeVisible();
   });

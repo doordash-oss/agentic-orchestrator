@@ -1151,8 +1151,6 @@ export interface components {
             rewind_feature_response?: components["schemas"]["RewindFeatureResponse"];
             retry_feature_response?: components["schemas"]["RetryFeatureResponse"];
             rebase_start_response?: components["schemas"]["RebaseStartResponse"];
-            review_comments_fetch_response?: components["schemas"]["ReviewCommentsFetchResponse"];
-            review_comments_start_response?: components["schemas"]["ReviewCommentsStartResponse"];
             mark_done_response?: components["schemas"]["MarkDoneResponse"];
             cleanup_feature_response?: components["schemas"]["CleanupFeatureResponse"];
             delete_feature_response?: components["schemas"]["DeleteFeatureResponse"];
@@ -1294,32 +1292,6 @@ export interface components {
         };
         RefactorFeatureResponse: components["schemas"]["ActionBaseResponse"] & components["schemas"]["FeatureActionResult"] & {
             parent_id: string;
-        };
-        ReviewComment: {
-            id: number;
-            type?: string;
-            repo_name?: string;
-            path?: string;
-            line?: number;
-            body?: string;
-            user_login?: string;
-            created_at?: string;
-            diff_hunk?: string;
-            in_reply_to_id?: number;
-        };
-        ReviewCommentsFetchResponse: components["schemas"]["ActionBaseResponse"] & {
-            feature_id: string;
-            repo: string;
-            mode?: string;
-            comments: components["schemas"]["ReviewComment"][];
-        };
-        ReviewCommentsStartResponse: components["schemas"]["ActionBaseResponse"] & components["schemas"]["FeatureActionResult"] & {
-            repo: string;
-            mode: string;
-            cycle_type: string;
-            comment_count?: number;
-            session_id?: string;
-            source?: string;
         };
         RebasePreflightRepo: {
             repo: string;
@@ -2436,7 +2408,7 @@ export interface components {
         ReviewID: string;
         LogID: string;
         SessionID: string;
-        FeatureAction: "setup" | "start" | "resume" | "pause-stop" | "restart" | "publish" | "merge" | "rewind" | "retry" | "rebase" | "review-comments" | "need-user-input" | "need-user-input-draft" | "mark-done" | "cleanup" | "delete" | "refactor" | "discard";
+        FeatureAction: "setup" | "start" | "resume" | "pause-stop" | "restart" | "publish" | "merge" | "rewind" | "retry" | "rebase" | "need-user-input" | "need-user-input-draft" | "mark-done" | "cleanup" | "delete" | "refactor" | "discard";
         FeatureSubaction: "description" | "fetch";
         Offset: number;
         Limit: number;

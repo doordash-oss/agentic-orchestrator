@@ -136,16 +136,6 @@ test('capture all visual evidence screenshots', async ({ page }) => {
 
   await capture(
     page,
-    'post-cycle-review',
-    'dark',
-    1440,
-    900,
-    'focused-review-comments-cycle-with-live-agent-canvas-1440x900',
-    '.cycle-workspace',
-  );
-
-  await capture(
-    page,
     'refactor-pass',
     'dark',
     1440,
@@ -551,7 +541,7 @@ test('capture all visual evidence screenshots', async ({ page }) => {
 
   await capture(
     page,
-    'review-refactor',
+    'refactor-launch',
     'light',
     1440,
     900,
@@ -566,7 +556,7 @@ test('capture all visual evidence screenshots', async ({ page }) => {
 
   await capture(
     page,
-    'review-refactor',
+    'refactor-launch',
     'dark',
     1440,
     900,

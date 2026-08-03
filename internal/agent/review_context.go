@@ -29,19 +29,8 @@ func resolveSingleRepoCycleType(f *feature.Feature) feature.RepoCycleType {
 		return f.ActiveCycleType()
 	}
 
-	switch {
-	case f.AddressingReviews():
-		return feature.CycleReviewComments
-	default:
-		if p := f.Artifacts["plan"]; p != "" {
-			np := filepath.ToSlash(p)
-			switch {
-			case strings.Contains(np, "/rebase"):
-				return feature.CycleRebase
-			case strings.Contains(np, "/review-comments"):
-				return feature.CycleReviewComments
-			}
-		}
+	if p := f.Artifacts["plan"]; p != "" && strings.Contains(filepath.ToSlash(p), "/rebase") {
+		return feature.CycleRebase
 	}
 
 	return ""
@@ -78,10 +67,6 @@ func cycleArtifactDirName(f *feature.Feature, repoName string, cycleType feature
 		case feature.CycleRebase:
 			if f.RebaseCount() > 0 {
 				return feature.RepoCycleDirName(cycleType, f.RebaseCount())
-			}
-		case feature.CycleReviewComments:
-			if f.ReviewCommentsCount() > 0 {
-				return feature.RepoCycleDirName(cycleType, f.ReviewCommentsCount())
 			}
 		}
 		return string(cycleType)

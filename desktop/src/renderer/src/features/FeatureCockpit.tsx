@@ -46,7 +46,6 @@ import {
   type CycleReceipt,
 } from './postImplementationModel';
 import { RebaseModal } from './cycles/RebaseModal';
-import { ReviewCommentsModal } from './cycles/ReviewCommentsModal';
 import { RefactorLauncher } from './refactor/RefactorLauncher';
 import { RefactorPassWorkspace, useRefactorPass } from './refactor/RefactorPassWorkspace';
 import { refactoringStatusChip } from './refactor/refactorPassModel';
@@ -1182,7 +1181,6 @@ export function FeatureCockpit({
   const rewindAction = actionById(snapshot, 'rewind');
   const deleteAction = actionById(snapshot, 'delete');
   const rebaseAction = actionById(snapshot, 'rebase');
-  const reviewCommentsAction = actionById(snapshot, 'review-comments');
   const refactorAction = actionById(snapshot, 'refactor');
   const hasPendingReview = isPendingReviewStatus(snapshot.status);
   const isArchiveMode =
@@ -1430,14 +1428,6 @@ export function FeatureCockpit({
       onClick: () => setCycleModal('rebase'),
     });
   }
-  if (reviewCommentsAction?.enabled === true) {
-    menuActions.push({
-      key: 'review-comments',
-      label: 'Review comments',
-      enabled: true,
-      onClick: () => setCycleModal('review-comments'),
-    });
-  }
   if (refactorAction?.enabled === true) {
     menuActions.push({
       key: 'refactor',
@@ -1530,8 +1520,7 @@ export function FeatureCockpit({
 
   const postImplementationMode = resolvePostImplementationMode(snapshot, dismissedCycleId);
   const postMenuActions = menuActions.filter(
-    (action) =>
-      !['start', 'stop', 'setup', 'rebase', 'review-comments', 'refactor'].includes(action.key),
+    (action) => !['start', 'stop', 'setup', 'rebase', 'refactor'].includes(action.key),
   );
   const openAftercareAction = (action: AftercareAction): void => {
     if (action.id === 'publish') {
@@ -1817,23 +1806,6 @@ export function FeatureCockpit({
         {cycleModal === 'rebase' ? (
           <CockpitModal title="Rebase" ariaLabel="Rebase" onClose={() => setCycleModal(null)}>
             <RebaseModal
-              featureId={featureId}
-              snapshot={snapshot}
-              onDispatched={() => load({ silent: true })}
-              onCancel={() => setCycleModal(null)}
-              attentionItems={attentionItems}
-              onOpenGate={() => setCycleModal(null)}
-            />
-          </CockpitModal>
-        ) : null}
-
-        {cycleModal === 'review-comments' ? (
-          <CockpitModal
-            title="Review comments"
-            ariaLabel="Review comments"
-            onClose={() => setCycleModal(null)}
-          >
-            <ReviewCommentsModal
               featureId={featureId}
               snapshot={snapshot}
               onDispatched={() => load({ silent: true })}
@@ -2247,23 +2219,6 @@ export function FeatureCockpit({
           {cycleModal === 'rebase' ? (
             <CockpitModal title="Rebase" ariaLabel="Rebase" onClose={() => setCycleModal(null)}>
               <RebaseModal
-                featureId={featureId}
-                snapshot={snapshot}
-                onDispatched={() => load({ silent: true })}
-                onCancel={() => setCycleModal(null)}
-                attentionItems={attentionItems}
-                onOpenGate={() => setCycleModal(null)}
-              />
-            </CockpitModal>
-          ) : null}
-
-          {cycleModal === 'review-comments' ? (
-            <CockpitModal
-              title="Review comments"
-              ariaLabel="Review comments"
-              onClose={() => setCycleModal(null)}
-            >
-              <ReviewCommentsModal
                 featureId={featureId}
                 snapshot={snapshot}
                 onDispatched={() => load({ silent: true })}

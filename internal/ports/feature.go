@@ -97,7 +97,6 @@ type FeatureLifecycle interface {
 	MarkDone(featureID string) error
 
 	// Post-publish cycles
-	ClearAddressingReviews(featureID string) error
 	StartFeatureRebaseOperation(featureID string) error
 	MarkFeatureRebaseStage(featureID string, stage feature.RebaseStage) error
 	UpdateFeatureRebaseRepo(featureID, repoName string, status feature.RebaseRepoStatus, progress feature.RebaseRepoProgress) error
@@ -106,11 +105,8 @@ type FeatureLifecycle interface {
 	ClearFeatureRebaseOperation(featureID string) error
 
 	// Per-repo cycles
-	StartRepoCycle(featureID, repoName string, cycleType feature.RepoCycleType) error
-	CompleteRepoCycle(featureID, repoName string) error
 	RemoveRepoCycle(featureID, repoName string) error
 	FailRepoCycle(featureID, repoName, errMsg string) error
-	MarkRepoCycleReviewing(featureID, repoName string) error
 	ClearRepoCycles(featureID string) error
 
 	// Roadmap phases

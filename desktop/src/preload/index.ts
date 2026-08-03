@@ -49,8 +49,6 @@ import {
   type RewindExecuteRequest,
   type RebaseRequest,
   type RebasePreflightRequest,
-  type ReviewCommentsFetchRequest,
-  type ReviewCommentsStartRequest,
   type LaunchRefactorChildRequest,
   type DiscardRefactorChildRequest,
   type DeleteFeatureCascadeRequest,
@@ -237,10 +235,6 @@ const api: AgenticoApi = {
   startRebase: (request: RebaseRequest) => call(IPC_CHANNELS.featuresRebase, request),
   preflightRebase: (request: RebasePreflightRequest) =>
     call(IPC_CHANNELS.featuresRebasePreflight, request),
-  fetchReviewComments: (request: ReviewCommentsFetchRequest) =>
-    call(IPC_CHANNELS.featuresReviewCommentsFetch, request),
-  startReviewComments: (request: ReviewCommentsStartRequest) =>
-    call(IPC_CHANNELS.featuresReviewCommentsStart, request),
   launchRefactorChild: (request: LaunchRefactorChildRequest) =>
     call(IPC_CHANNELS.featuresRefactor, request),
   discardRefactorChild: (request: DiscardRefactorChildRequest) =>

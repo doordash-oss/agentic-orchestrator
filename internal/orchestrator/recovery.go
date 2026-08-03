@@ -252,11 +252,6 @@ func (o *Orchestrator) ExecuteRecovery(
 
 	// Build dedup map for relaunch: a multi-repo feature may have several
 	// items, but we want to re-dispatch its current phase at most once.
-	// For items with a RepoName whose feature has an interrupted
-	// RepoCycleState, route through the cycle restart instead of a generic
-	// feature-phase restart so a repository-scoped recovery never falls
-	// through to startPhase.
-	cycleRepos := make(map[string][]string) // featureID → repos with interrupted cycles
 	resumedFeatures := make(map[string]feature.Phase)
 	var resumedOrder []string
 	for _, item := range items {
@@ -268,29 +263,6 @@ func (o *Orchestrator) ExecuteRecovery(
 		if !ok || action != ports.RecoveryResume {
 			continue
 		}
-		// Check whether this item targets an interrupted cycle. A
-		// RepoCycleNeedUserInput item is deliberately NOT restarted here:
-		// its gate has its own shared-gate-clearing, answer-validating,
-		// single-dispatch machinery in
-		// resumeRepoCycleNeedUserInput, and a per-repo
-		// restartPausedRepoCycle would bypass that gate transition
-		// (clearing the paused state without answers and dispatching once
-		// per repo instead of once per gate). Recovery Resume for a
-		// need-user-input cycle is routed through the existing
-		// questionnaire resume contract, not this relaunch path. Only
-		// RepoCycleInterrupted items — cycles stopped mid-flight with no
-		// gate to clear — restart here.
-		if item.RepoName != "" && hasInterruptedCycle(item.Feature, item.RepoName) {
-			cycleRepos[item.Feature.ID] = append(cycleRepos[item.Feature.ID], item.RepoName)
-		}
-		// A need-user-input cycle must not fall through to a generic
-		// feature-phase restart either: the feature stays Published while
-		// the cycle is paused, and startPhase on a Published feature would
-		// be wrong. The process-level recovery action above already ran;
-		// the user answers the gate separately to resume the cycle.
-		if item.RepoName != "" && hasNeedUserInputCycle(item.Feature, item.RepoName) {
-			continue
-		}
 		if _, exists := resumedFeatures[item.Feature.ID]; !exists {
 			resumedFeatures[item.Feature.ID] = item.Feature.CurrentPhase
 			resumedOrder = append(resumedOrder, item.Feature.ID)
@@ -298,18 +270,6 @@ func (o *Orchestrator) ExecuteRecovery(
 	}
 	var relaunchErrs []error
 	for _, fid := range resumedOrder {
-		if repos, ok := cycleRepos[fid]; ok && len(repos) > 0 {
-			// Restart each paused cycle through its cycle-type-specific
-			// seam. restartPausedRepoCycle reads the persisted
-			// RepoCycleState for type/count/plan and relaunches the
-			// correct loop.
-			for _, repoName := range repos {
-				if err := o.restartPausedRepoCycle(fid, repoName); err != nil {
-					relaunchErrs = append(relaunchErrs, fmt.Errorf("restart cycle %s repo %s: %w", fid, repoName, err))
-				}
-			}
-			continue
-		}
 		phase := resumedFeatures[fid]
 		if _, _, err := o.startPhase(fid, phase); err != nil {
 			relaunchErrs = append(relaunchErrs, fmt.Errorf("relaunch %s phase %s: %w", fid, phase, err))
@@ -319,41 +279,6 @@ func (o *Orchestrator) ExecuteRecovery(
 		return errors.Join(relaunchErrs...)
 	}
 	return nil
-}
-
-// hasInterruptedCycle returns true when the feature has a RepoCycleState for
-// repoName that is interrupted — a cycle stopped mid-flight with no
-// need-user-input gate to clear. Recovery Resume restarts these through the
-// cycle-type-specific seam. A RepoCycleNeedUserInput state is intentionally
-// excluded: those gates have their own shared-gate-clearing, answer-validating
-// single-dispatch path (resumeRepoCycleNeedUserInput), and a per-repo
-// restart here would bypass that transition. Both the gate-resume path and
-// this recovery path now encode "repos sharing a gate are one dispatch"
-// identically — the gate path via reposSharingGate, this path by admitting only
-// gate-less interrupted cycles.
-func hasInterruptedCycle(f *feature.Feature, repoName string) bool {
-	if f == nil || repoName == "" || f.RepoCycles == nil {
-		return false
-	}
-	rc, ok := f.RepoCycles[repoName]
-	if !ok || rc == nil {
-		return false
-	}
-	return rc.Status == feature.RepoCycleInterrupted
-}
-
-// hasNeedUserInputCycle returns true when the feature has a RepoCycleState for
-// repoName that is paused on a need-user-input gate. Recovery does not
-// relaunch these — the gate resume contract resumes them after answers.
-func hasNeedUserInputCycle(f *feature.Feature, repoName string) bool {
-	if f == nil || repoName == "" || f.RepoCycles == nil {
-		return false
-	}
-	rc, ok := f.RepoCycles[repoName]
-	if !ok || rc == nil {
-		return false
-	}
-	return rc.Status == feature.RepoCycleNeedUserInput
 }
 
 // recoveryActionString returns the lowercase action label used for events

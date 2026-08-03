@@ -32,8 +32,6 @@ export const IPC_CHANNELS = {
   featuresDispatchAction: 'agentico:features:dispatch-action',
   featuresRebase: 'agentico:features:rebase',
   featuresRebasePreflight: 'agentico:features:rebase:preflight',
-  featuresReviewCommentsFetch: 'agentico:features:review-comments:fetch',
-  featuresReviewCommentsStart: 'agentico:features:review-comments:start',
   featuresRefactor: 'agentico:features:refactor',
   featuresRefactorDiscard: 'agentico:features:refactor:discard',
   featuresDeleteCascade: 'agentico:features:delete:cascade',
@@ -995,7 +993,7 @@ export const FeatureActionResultSchema = z.strictObject({
 });
 export type FeatureActionResult = z.output<typeof FeatureActionResultSchema>;
 
-// --- Rebase, review-comments, refactor cycle actions ---------------------
+// --- Rebase and refactor cycle actions -----------------------------------
 
 export const RebaseRequestSchema = z.strictObject({
   featureId: FeatureIdSchema,
@@ -1119,50 +1117,6 @@ export const RebaseResultSchema = z.strictObject({
   sessionId: z.string().min(1).max(200).optional(),
 });
 export type RebaseResult = z.output<typeof RebaseResultSchema>;
-
-export const ReviewCommentsFetchRequestSchema = z.strictObject({
-  featureId: FeatureIdSchema,
-  repo: z.string().min(1).max(200),
-});
-export type ReviewCommentsFetchRequest = z.output<typeof ReviewCommentsFetchRequestSchema>;
-
-export const ReviewCommentViewSchema = z.strictObject({
-  id: z.number().int(),
-  file: z.string().max(500).optional(),
-  line: z.number().int().optional(),
-  body: z
-    .string()
-    .max(64 * 1024)
-    .optional(),
-  author: z.string().max(200).optional(),
-  type: z.string().max(50).optional(),
-  threadId: z.string().max(200).optional(),
-});
-export type ReviewCommentView = z.output<typeof ReviewCommentViewSchema>;
-
-export const ReviewCommentsFetchResultSchema = z.strictObject({
-  featureId: FeatureIdSchema,
-  repo: z.string(),
-  comments: z.array(ReviewCommentViewSchema).max(500),
-  revision: z.string().max(512).optional(),
-  modes: z.array(z.string().max(200)).max(20).optional(),
-});
-export type ReviewCommentsFetchResult = z.output<typeof ReviewCommentsFetchResultSchema>;
-
-export const ReviewCommentsStartRequestSchema = z.strictObject({
-  featureId: FeatureIdSchema,
-  repo: z.string().min(1).max(200),
-  mode: z.string().min(1).max(200),
-});
-export type ReviewCommentsStartRequest = z.output<typeof ReviewCommentsStartRequestSchema>;
-
-export const ReviewCommentsStartResultSchema = z.strictObject({
-  featureId: FeatureIdSchema,
-  cycleType: z.string(),
-  result: z.string().max(500),
-  sessionId: z.string().min(1).max(200).optional(),
-});
-export type ReviewCommentsStartResult = z.output<typeof ReviewCommentsStartResultSchema>;
 
 // LaunchRefactorChildRequestSchema lives in the feature-creation section
 // below: it shares the creation wizard's attachment limits and shapes.
@@ -2725,14 +2679,6 @@ export const ipcContracts: Record<IpcChannel, IpcContract> = {
     request: z.tuple([RebasePreflightRequestSchema]),
     response: RebasePreflightResultSchema,
   },
-  [IPC_CHANNELS.featuresReviewCommentsFetch]: {
-    request: z.tuple([ReviewCommentsFetchRequestSchema]),
-    response: ReviewCommentsFetchResultSchema,
-  },
-  [IPC_CHANNELS.featuresReviewCommentsStart]: {
-    request: z.tuple([ReviewCommentsStartRequestSchema]),
-    response: ReviewCommentsStartResultSchema,
-  },
   [IPC_CHANNELS.featuresRefactor]: {
     request: z.tuple([LaunchRefactorChildRequestSchema]),
     response: LaunchRefactorChildResultSchema,
@@ -2871,8 +2817,6 @@ export interface AgenticoApi {
   revealPath(request: RevealPathRequest): Promise<{ ok: boolean }>;
   startRebase(request: RebaseRequest): Promise<RebaseResult>;
   preflightRebase(request: RebasePreflightRequest): Promise<RebasePreflightResult>;
-  fetchReviewComments(request: ReviewCommentsFetchRequest): Promise<ReviewCommentsFetchResult>;
-  startReviewComments(request: ReviewCommentsStartRequest): Promise<ReviewCommentsStartResult>;
   launchRefactorChild(request: LaunchRefactorChildRequest): Promise<LaunchRefactorChildResult>;
   discardRefactorChild(request: DiscardRefactorChildRequest): Promise<DiscardRefactorChildResult>;
   deleteFeatureCascade(request: DeleteFeatureCascadeRequest): Promise<DeleteFeatureCascadeResult>;

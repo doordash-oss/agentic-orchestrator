@@ -18,8 +18,6 @@ import {
   RuntimeConfigCreationSchema,
   RebaseStartResponseSchema,
   RebasePreflightResponseSchema,
-  ReviewCommentsFetchResponseSchema,
-  ReviewCommentsStartResponseSchema,
   RefactorFeatureResponseSchema,
   DiscardChildResponseSchema,
   DeleteFeatureResponseSchema,
@@ -35,8 +33,6 @@ import {
   FeatureSetupStatusSchema,
   RebaseRequestSchema,
   RebasePreflightRequestSchema,
-  ReviewCommentsFetchRequestSchema,
-  ReviewCommentsStartRequestSchema,
   LaunchRefactorChildRequestSchema,
   DiscardRefactorChildRequestSchema,
   DeleteFeatureCascadeRequestSchema,
@@ -62,10 +58,6 @@ import {
   type DiscardRefactorChildResult,
   type DeleteFeatureCascadeRequest,
   type DeleteFeatureCascadeResult,
-  type ReviewCommentsFetchRequest,
-  type ReviewCommentsFetchResult,
-  type ReviewCommentsStartRequest,
-  type ReviewCommentsStartResult,
   type SetupDispatchResult,
   type SetupTaskView,
 } from '../shared/ipc';
@@ -311,59 +303,6 @@ export class FeatureService {
           ? {}
           : { conflictFiles: repo.conflict_files }),
       })),
-    };
-  }
-
-  async fetchReviewComments(
-    request: ReviewCommentsFetchRequest,
-  ): Promise<ReviewCommentsFetchResult> {
-    const input = validateWithSchema(request, ReviewCommentsFetchRequestSchema);
-    const body = await this.api(
-      `/api/v1/features/${input.featureId}/actions/review-comments/fetch`,
-      { method: 'POST', body: { repo: input.repo } },
-    );
-    const response = validateWithSchema(body, ReviewCommentsFetchResponseSchema);
-    return {
-      featureId: validateWithSchema(response.feature_id, FeatureIdSchema),
-      repo: response.repo,
-      comments: (response.comments ?? []).map((comment) => ({
-        id: comment.id,
-        ...(comment.file === undefined && comment.path === undefined
-          ? {}
-          : { file: comment.file ?? comment.path }),
-        ...(comment.line === undefined ? {} : { line: comment.line }),
-        ...(comment.body === undefined ? {} : { body: redactText(comment.body) }),
-        ...(comment.author === undefined && comment.user_login === undefined
-          ? {}
-          : { author: comment.author ?? comment.user_login }),
-        ...(comment.type === undefined || comment.type === '' ? {} : { type: comment.type }),
-        ...(comment.thread_id === undefined || comment.thread_id === ''
-          ? {}
-          : { threadId: comment.thread_id }),
-      })),
-      ...(response.revision === undefined || response.revision === ''
-        ? {}
-        : { revision: response.revision }),
-      ...(response.modes === undefined ? {} : { modes: response.modes }),
-    };
-  }
-
-  async startReviewComments(
-    request: ReviewCommentsStartRequest,
-  ): Promise<ReviewCommentsStartResult> {
-    const input = validateWithSchema(request, ReviewCommentsStartRequestSchema);
-    const body = await this.api(`/api/v1/features/${input.featureId}/actions/review-comments`, {
-      method: 'POST',
-      body: { repo: input.repo, mode: input.mode },
-    });
-    const response = validateWithSchema(body, ReviewCommentsStartResponseSchema);
-    return {
-      featureId: validateWithSchema(response.feature_id, FeatureIdSchema),
-      cycleType: response.cycle_type,
-      result: response.result,
-      ...(response.session_id === undefined || response.session_id === ''
-        ? {}
-        : { sessionId: response.session_id }),
     };
   }
 

@@ -2216,37 +2216,6 @@ func TestPrepareImplementationTestingContractNonMoonshotRoadmapRemovesStaleContr
 	}
 }
 
-func TestPrepareImplementationTestingContractLargeCycleStillWritesContract(t *testing.T) {
-	tmpDir := t.TempDir()
-	stateRoot := filepath.Join(tmpDir, "state")
-	stateDir := filepath.Join(stateRoot, "test-large-cycle")
-	if err := os.MkdirAll(stateDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	f := &feature.Feature{
-		ID: "test-large-cycle", Name: "Large Cycle", Slug: "large-cycle",
-		Pipeline: feature.PipelineLarge,
-	}
-	f.SetActiveCycleType(feature.CycleReviewComments)
-	cfg := ImplementConfig{Feature: f, StateDir: stateDir, CommandRunner: NewExecCommandRunner()}
-	planContent := "### Automated Verification\n- [ ] Check passes: `printf verified`\n"
-
-	path, fingerprint, err := prepareImplementationTestingContract(cfg, planContent)
-	if err != nil {
-		t.Fatalf("prepareImplementationTestingContract: %v", err)
-	}
-	if path == "" || fingerprint == "" {
-		t.Fatalf("expected a cycle contract for large-profile repo cycle, got path=%q fingerprint=%q", path, fingerprint)
-	}
-	wantPath := CycleTestingContractPath(filepath.Dir(cfg.StateDir), f, cfg.RepoName, feature.CycleReviewComments)
-	if path != wantPath {
-		t.Fatalf("path = %q, want cycle contract path %q", path, wantPath)
-	}
-	if _, statErr := os.Stat(path); statErr != nil {
-		t.Fatalf("expected testing-contract.yaml at %s: %v", path, statErr)
-	}
-}
-
 func TestCompileImplementationTestingContractFeatureCycleScopesCommandsToRepos(t *testing.T) {
 	f := &feature.Feature{
 		ID: "test-feature-cycle-contract", Name: "Feature Cycle Contract", Slug: "feature-cycle-contract",

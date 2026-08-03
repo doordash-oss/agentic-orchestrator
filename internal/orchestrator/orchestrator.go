@@ -109,24 +109,9 @@ type PhaseCompletionInput struct {
 }
 
 // NeedUserInputResume identifies the paused need-user-input gate to resume.
-// Scope selection is derived from a combination of fields plus persisted
-// state on the feature (see ResumeNeedUserInput):
-//   - an active paused rebase cycle → rebase-cycle-scoped
-//   - RepoName set + RepoCycleState[RepoName].Status == RepoCycleNeedUserInput
-//     on the persisted feature → cycle-scoped (post-publish)
-//   - otherwise, including an empty or stale RepoName → feature-scoped
-//     (SchemaVersionCurrent = 4 mainline implement)
-type NeedUserInputResume struct {
-	// RepoName, when set, identifies the repo whose gate this resume
-	// targets in a multi-repo run. Empty for single-repo / feature-scoped
-	// gates.
-	RepoName string
-	// CycleType is the post-publish cycle the UI believed it was acting on
-	// when the user pressed Resume. Diagnostic only — restart
-	// dispatch reads the persisted RepoCycleState to decide which launcher
-	// to call.
-	CycleType feature.RepoCycleType
-}
+// NeedUserInputResume selects the persisted feature-level gate. Rebase owns
+// its own feature-level pause/resume state.
+type NeedUserInputResume struct{}
 
 // ReviewDecision describes a user decision from a review gate or menu.
 // Clients collect these through a review flow and hand them to the
@@ -242,9 +227,8 @@ type Orchestrator struct {
 	doneCh   chan struct{}
 	stopOnce sync.Once
 
-	// cycleWG tracks background goroutines launched by per-repo cycle
-	// dispatch (StartRepoCycleImplement, StartCycleFinalReview,
-	// startFeatureReviewComments). Tests that drive these methods against a
+	// cycleWG tracks background goroutines launched by feature-level cycles.
+	// Tests that drive these methods against a
 	// t.TempDir() state directory must call WaitForCycles before the
 	// test returns so the goroutine's writes don't race with TempDir
 	// cleanup.
@@ -416,8 +400,7 @@ func (o *Orchestrator) featureRebaseControl(featureID string) *featureRebaseCont
 }
 
 // WaitForCycles blocks until every background goroutine launched by the
-// per-repo cycle entry points (StartRepoCycleImplement,
-// StartCycleFinalReview) and asynchronous phase continuations has returned. Production
+// feature-level cycle entry points and asynchronous phase continuations have returned. Production
 // callers do not need this — the orchestrator drives cycles to completion
 // via its event loop. It exists for tests whose state directory is a
 // t.TempDir(): without synchronizing on the goroutine, TempDir cleanup
@@ -1454,8 +1437,8 @@ func isSettledFeatureStatus(status feature.Status) bool {
 // InterruptAllRunning iterates all features; running ones are interrupted
 // (stopping sessions, clearing pending flags, transitioning to interrupted)
 // AND additionally have KBStatus cleared to match the startup sweep.
-// Non-running features (Published, CodeReady) with active repo cycles
-// (rebase/review-comments) are interrupted at the feature level so
+// Non-running features (Published, CodeReady) with an active rebase cycle
+// are interrupted at the feature level so
 // the dashboard keeps them in the active bucket. KBStatus is preserved for
 // every post-publish cycle shape. CodeReady is the manual_publish=true shape
 // where a rebase cycle can be in flight while the feature waits for the user
@@ -1544,9 +1527,7 @@ func hasInterruptibleRepoCycles(f *feature.Feature) bool {
 		if rc == nil {
 			continue
 		}
-		switch rc.Type {
-		case feature.CycleRebase, feature.CycleReviewComments:
-		default:
+		if rc.Type != feature.CycleRebase {
 			continue
 		}
 		if isActiveRepoCycleStatus(rc.Status) {
@@ -1567,12 +1548,7 @@ func hasActiveFeatureLevelInterruptibleCycle(f *feature.Feature) bool {
 	if cycleType == "" {
 		cycleType = f.ActiveCycleType()
 	}
-	switch cycleType {
-	case feature.CycleRebase, feature.CycleReviewComments:
-		return true
-	default:
-		return false
-	}
+	return cycleType == feature.CycleRebase
 }
 
 func isActiveRepoCycleStatus(status string) bool {

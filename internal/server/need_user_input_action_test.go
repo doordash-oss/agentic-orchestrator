@@ -42,18 +42,12 @@ func TestNeedUserInputActionResumesTargetWithoutDecision(t *testing.T) {
 		DisableHostValidation: true,
 	})
 
-	w := postTrustedJSON(handler, "/api/v1/features/feat-resume/actions/need-user-input", map[string]any{
-		"repo_name":  "repo-a",
-		"cycle_type": "review-comments",
-	})
+	w := postTrustedJSON(handler, "/api/v1/features/feat-resume/actions/need-user-input", map[string]any{})
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d body=%s; want 200", w.Code, w.Body.String())
 	}
 	if target.featureID != "feat-resume" {
 		t.Fatalf("feature id = %q; want feat-resume", target.featureID)
-	}
-	if target.request.RepoName != "repo-a" || target.request.CycleType != "review-comments" {
-		t.Fatalf("request = %+v; want repo-a review-comments target", target.request)
 	}
 
 	var body map[string]any

@@ -1,13 +1,13 @@
 import type { CycleView, FeatureSnapshot } from '../../../shared/ipc';
 
-/** Aftercare launch surfaces: two in-feature repo cycles plus the refactor pass. */
-export type AftercareCycleId = 'rebase' | 'review-comments' | 'refactor';
+/** Aftercare launch surfaces: the in-feature rebase cycle plus the refactor pass. */
+export type AftercareCycleId = 'rebase' | 'refactor';
 
 /**
  * In-feature post-publish cycles the server reports through `cycle`. A
  * refactor is never one of these — it runs as a separate child feature.
  */
-export type RepoCycleId = 'rebase' | 'review-comments';
+export type RepoCycleId = 'rebase';
 
 export type PostImplementationMode =
   | { kind: 'regular' }
@@ -55,7 +55,7 @@ export const OWNING_CYCLE_STATUSES = new Set([
   'failed',
   'interrupted',
 ]);
-const ACTION_ORDER: AftercareActionId[] = ['publish', 'rebase', 'review-comments', 'refactor'];
+const ACTION_ORDER: AftercareActionId[] = ['publish', 'rebase', 'refactor'];
 
 export function resolvePostImplementationMode(
   snapshot: FeatureSnapshot,
@@ -189,13 +189,6 @@ function aftercareAction(id: AftercareActionId, repoCount: number): AftercareAct
         title: 'Bring branches up to date',
         description: `Inspect and rebase ${scope} against their target branches.`,
       };
-    case 'review-comments':
-      return {
-        id,
-        label: 'Check comments',
-        title: 'Address review feedback',
-        description: 'Fetch open PR feedback and hand it to one focused agent session.',
-      };
     case 'refactor':
       return {
         id,
@@ -216,12 +209,6 @@ function cycleStages(id: RepoCycleId): Array<Omit<CycleStage, 'state'>> {
         { id: 'final_review', label: 'Final review' },
         { id: 'publish', label: 'Publish' },
       ];
-    case 'review-comments':
-      return [
-        { id: 'comments_ready', label: 'Comments ready' },
-        { id: 'address_validate', label: 'Address & validate' },
-        { id: 'push_reply', label: 'Push & reply' },
-      ];
   }
 }
 
@@ -230,20 +217,16 @@ function normalizedCyclePhase(id: RepoCycleId, phase?: string): string {
   switch (id) {
     case 'rebase':
       return 'inspect_rebase';
-    case 'review-comments':
-      return 'address_validate';
   }
 }
 
 function isRepoCycleId(value?: string): value is RepoCycleId {
-  return value === 'rebase' || value === 'review-comments';
+  return value === 'rebase';
 }
 
 function cycleName(id: RepoCycleId): string {
   switch (id) {
     case 'rebase':
       return 'Rebase';
-    case 'review-comments':
-      return 'Review comments';
   }
 }

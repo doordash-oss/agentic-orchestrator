@@ -557,15 +557,6 @@ const CYCLES_FEATURE_SNAPSHOT: FeatureSnapshot = {
     { id: 'rewind', enabled: true, disabledReasons: [] },
     { id: 'rebase', enabled: true, disabledReasons: [] },
     {
-      id: 'review-comments',
-      enabled: true,
-      disabledReasons: [],
-      inputs: [
-        { name: 'repo', options: ['signal-lab', 'orchestrator-core'] },
-        { name: 'mode', options: ['auto', 'address_all'] },
-      ],
-    },
-    {
       id: 'refactor',
       enabled: true,
       disabledReasons: [],
@@ -583,7 +574,7 @@ const CYCLES_FEATURE_SNAPSHOT: FeatureSnapshot = {
       touched: true,
       prUrl: 'https://github.com/example/signal-lab/pull/42',
       freshness: 'in sync',
-      cycleType: 'review-comments',
+      cycleType: 'rebase',
       cycleStatus: 'running',
     },
     {
@@ -594,7 +585,7 @@ const CYCLES_FEATURE_SNAPSHOT: FeatureSnapshot = {
       freshness: 'local changes',
     },
   ],
-  cycle: { type: 'review-comments', status: 'running', count: 2, iteration: 1 },
+  cycle: { type: 'rebase', status: 'running', count: 2, iteration: 1 },
 };
 
 const REBASE_FEATURE_SNAPSHOT: FeatureSnapshot = {
@@ -653,15 +644,6 @@ const AFTERCARE_FEATURE_SNAPSHOT: FeatureSnapshot = {
   actions: [
     { id: 'rebase', enabled: true, disabledReasons: [] },
     {
-      id: 'review-comments',
-      enabled: true,
-      disabledReasons: [],
-      inputs: [
-        { name: 'repo', options: ['agentic-orchestrator'] },
-        { name: 'mode', options: ['auto', 'address_all'] },
-      ],
-    },
-    {
       id: 'refactor',
       enabled: true,
       disabledReasons: [],
@@ -687,7 +669,7 @@ const AFTERCARE_FEATURE_SNAPSHOT: FeatureSnapshot = {
       touched: true,
       prUrl: 'https://github.com/doordash-oss/agentic-orchestrator/pull/107',
       freshness: 'in sync',
-      cycleType: 'review-comments',
+      cycleType: 'rebase',
       cycleStatus: 'completed',
     },
   ],
@@ -1214,7 +1196,7 @@ function makeMockApi(
           ],
         });
       }
-      if (scene === 'repo-instrument' || scene === 'review-refactor' || scene === 'cycle-gate') {
+      if (scene === 'repo-instrument' || scene === 'refactor-launch') {
         return Promise.resolve(CYCLES_FEATURE_SNAPSHOT);
       }
       if (scene === 'rebase-preflight') {
@@ -1231,34 +1213,22 @@ function makeMockApi(
         );
       }
       if (scene.startsWith('post-cycle-')) {
-        const cycle =
-          scene === 'post-cycle-rebase'
-            ? {
-                type: 'rebase',
-                status: 'running',
-                count: 2,
-                iteration: 1,
-                phase: 'resolve_conflicts',
-              }
-            : scene === 'post-cycle-failed'
-              ? {
-                  type: 'rebase',
-                  status: 'failed',
-                  count: 2,
-                  iteration: 1,
-                  phase: 'resolve_conflicts',
-                }
-              : {
-                  type: 'review-comments',
-                  status: scene === 'post-cycle-gate' ? 'need_user_input' : 'running',
-                  count: 1,
-                  iteration: 1,
-                  phase: 'address_validate',
-                };
+        const cycle = {
+          type: 'rebase',
+          status:
+            scene === 'post-cycle-failed'
+              ? 'failed'
+              : scene === 'post-cycle-gate'
+                ? 'need_user_input'
+                : 'running',
+          count: 2,
+          iteration: 1,
+          phase: 'resolve_conflicts',
+        };
         return Promise.resolve({
           ...AFTERCARE_FEATURE_SNAPSHOT,
           cycle,
-          phaseStatus: cycle.type === 'review-comments' ? 'addressing-review-comments' : 'rebasing',
+          phaseStatus: 'rebasing',
           actions:
             scene === 'post-cycle-failed'
               ? [{ id: 'retry', enabled: true, disabledReasons: [] }]
@@ -1542,10 +1512,7 @@ function makeMockApi(
         } as RunDetailView);
       }
       if (scene.startsWith('post-cycle-')) {
-        const cycleKey =
-          scene === 'post-cycle-rebase' || scene === 'post-cycle-failed'
-            ? 'rebase-2'
-            : 'review-comments-1';
+        const cycleKey = 'rebase-2';
         return Promise.resolve({
           ...RUN_DETAIL,
           runNumber,
@@ -1713,35 +1680,6 @@ function makeMockApi(
           },
         ],
       }),
-    fetchReviewComments: () =>
-      Promise.resolve({
-        featureId: 'abcd1234ef567890',
-        repo: 'signal-lab',
-        comments: [
-          {
-            id: 1,
-            file: 'src/main.ts',
-            line: 42,
-            body: 'Consider extracting this logic.',
-            author: 'reviewer',
-          },
-          {
-            id: 2,
-            file: 'src/utils.ts',
-            line: 10,
-            body: 'Add error handling here.',
-            author: 'reviewer',
-          },
-        ],
-        revision: 'a1b2c3d4e5f6',
-        modes: ['auto', 'address_all'],
-      }),
-    startReviewComments: () =>
-      Promise.resolve({
-        featureId: 'abcd1234ef567890',
-        cycleType: 'review-comments',
-        result: 'started',
-      }),
     launchRefactorChild: () =>
       Promise.resolve({
         childId: 'child1234ef567890',
@@ -1773,7 +1711,7 @@ function makeMockApi(
         offset: 0,
         limit: 65536,
         size: 220,
-        text: '[implement] iteration 3 started\n[model] requesting review-comments cycle\n[verification] capability gate requires a decision\n[cycle] review-comments paused on gate\n[recovery] orphan process detected (pid 412)\n[recovery] log excerpt available — Resume or Kill.',
+        text: '[implement] iteration 3 started\n[model] requesting rebase cycle\n[verification] capability gate requires a decision\n[cycle] rebase paused on gate\n[recovery] orphan process detected (pid 412)\n[recovery] log excerpt available — Resume or Kill.',
         truncated: false,
       }),
     bulkPreview: () => Promise.resolve(BULK_PREVIEW_DATA),

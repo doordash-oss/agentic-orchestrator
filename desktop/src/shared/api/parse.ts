@@ -1014,38 +1014,6 @@ export const RebaseStartResponseSchema = z.object({
 });
 export type RebaseStartResponse = z.output<typeof RebaseStartResponseSchema>;
 
-export const ServerReviewCommentSchema = z.object({
-  id: z.number().int(),
-  file: z.string().optional(),
-  path: z.string().optional(),
-  line: z.number().int().optional(),
-  body: z.string().optional(),
-  author: z.string().optional(),
-  user_login: z.string().optional(),
-  type: z.string().optional(),
-  thread_id: z.string().optional(),
-});
-export type ServerReviewComment = z.output<typeof ServerReviewCommentSchema>;
-
-export const ReviewCommentsFetchResponseSchema = z.object({
-  api_version: z.string(),
-  feature_id: z.string(),
-  repo: z.string(),
-  comments: z.array(ServerReviewCommentSchema).optional(),
-  revision: z.string().optional(),
-  modes: z.array(z.string()).optional(),
-});
-export type ReviewCommentsFetchResponse = z.output<typeof ReviewCommentsFetchResponseSchema>;
-
-export const ReviewCommentsStartResponseSchema = z.object({
-  api_version: z.string(),
-  feature_id: z.string(),
-  cycle_type: z.string(),
-  result: z.string(),
-  session_id: z.string().optional(),
-});
-export type ReviewCommentsStartResponse = z.output<typeof ReviewCommentsStartResponseSchema>;
-
 export const RefactorFeatureResponseSchema = z.object({
   api_version: z.string(),
   feature_id: z.string(),
@@ -1243,14 +1211,6 @@ void _recoveryItemSubset;
 type RebaseStartDTO = components['schemas']['RebaseStartResponse'];
 const _rebaseStartSubset = (value: RebaseStartDTO): RebaseStartResponse => value;
 void _rebaseStartSubset;
-type ReviewCommentsFetchDTO = components['schemas']['ReviewCommentsFetchResponse'];
-const _reviewCommentsFetchSubset = (value: ReviewCommentsFetchDTO): ReviewCommentsFetchResponse =>
-  value;
-void _reviewCommentsFetchSubset;
-type ReviewCommentsStartDTO = components['schemas']['ReviewCommentsStartResponse'];
-const _reviewCommentsStartSubset = (value: ReviewCommentsStartDTO): ReviewCommentsStartResponse =>
-  value;
-void _reviewCommentsStartSubset;
 type RefactorFeatureDTO = components['schemas']['RefactorFeatureResponse'];
 const _refactorFeatureSubset = (value: RefactorFeatureDTO): RefactorFeatureResponse => value;
 void _refactorFeatureSubset;

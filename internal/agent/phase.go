@@ -906,7 +906,7 @@ func (pr *PhaseRunner) RunImplementation(f *feature.Feature, planPath string, kb
 	}
 	reviewEffort, reviewEffortSource := pr.resolveEffortForRole(f, llm.PhaseReview, reviewModel)
 
-	// Cycles (rebase, review-comments) operate on the whole branch,
+	// Rebase operates on the whole branch,
 	// not a specific roadmap phase — omit roadmap/phase-type context so the
 	// review prompt stays focused on the cycle's objectives.
 	phaseType := f.RoadmapPhaseType

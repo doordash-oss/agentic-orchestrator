@@ -195,15 +195,14 @@ type RepoState struct {
 type RepoCycleType string
 
 const (
-	CycleRebase         RepoCycleType = "rebase"
-	CycleReviewComments RepoCycleType = "review-comments"
+	CycleRebase RepoCycleType = "rebase"
 )
 
 // IsValid reports whether t names a surviving post-publish cycle type.
 // Persisted records from removed cycle types (e.g. the legacy "refactor"
 // cycle) are not valid and must never activate or resume work.
 func (t RepoCycleType) IsValid() bool {
-	return t == CycleRebase || t == CycleReviewComments
+	return t == CycleRebase
 }
 
 // dropUnknownCycleState strips persisted cycle entries whose type is not a
@@ -240,30 +239,13 @@ const (
 	RepoCycleInterrupted = "interrupted"
 )
 
-// RepoCycleState tracks a post-publish cycle (rebase/review-comments) for a single repo.
+// RepoCycleState tracks a post-publish cycle for a single repo.
 // The feature stays StatusPublished while per-repo cycles run independently.
 type RepoCycleState struct {
 	Type      RepoCycleType `yaml:"type"`
 	Status    string        `yaml:"status"`          // RepoCycle* constants
 	Count     int           `yaml:"count,omitempty"` // Nth rebase for this repo
-	PlanPath  string        `yaml:"plan_path,omitempty"`
 	LastError string        `yaml:"last_error,omitempty"`
-	// Iteration is the iteration number that emitted the active gate. Set
-	// when a cycle pauses on a need-user-input gate; preserved across resume
-	// so the next iteration is N+1 rather than starting over.
-	Iteration int `yaml:"iteration,omitempty"`
-	// PendingNeedUserInputPath is the absolute path of the persisted
-	// `need-user-input.yaml` artifact when this cycle is paused on a
-	// cycle-scoped NEED_USER_INPUT gate. Empty otherwise.
-	PendingNeedUserInputPath string `yaml:"pending_need_user_input_path,omitempty"`
-}
-
-// PendingUserInputCycle is a flat projection of a paused per-repo cycle gate
-// surfaced for desktop app and orchestrator routing. Returned by Feature.PendingUserInputCycles.
-type PendingUserInputCycle struct {
-	RepoName  string
-	CycleType RepoCycleType
-	GatePath  string
 }
 
 // SchemaVersionCurrent is the current durable on-disk schema version stamped
@@ -271,8 +253,7 @@ type PendingUserInputCycle struct {
 // Run.RoadmapPhaseFrontendByPhase.
 const SchemaVersionCurrent = 7
 
-// CycleState tracks the feature-level active post-publish cycle (rebase or
-// review-comments). One cycle is active at a time per
+// CycleState tracks the feature-level active rebase cycle. One cycle is active at a time per
 // feature regardless of how many repos it touches.
 // Run.RepoCycles persists alongside CycleState as the per-repo desktop app rendering
 // surface; the unified cycle loops mirror their per-repo entries there so
@@ -282,9 +263,6 @@ type CycleState struct {
 	Status    string        `yaml:"status"` // RepoCycle* constants
 	Count     int           `yaml:"count,omitempty"`
 	StartedAt time.Time     `yaml:"started_at,omitempty"`
-	// PlanPath is the cycle's plan artifact (review-comments) when
-	// applicable. Empty for plan-less cycles (rebase).
-	PlanPath string `yaml:"plan_path,omitempty"`
 	// LastError is populated when Status == RepoCycleFailed.
 	LastError string `yaml:"last_error,omitempty"`
 	// Iteration is the iteration number that emitted the active gate. Set
@@ -1008,8 +986,8 @@ var validTransitions = map[Status][]Status{
 
 // accumulateActiveTime moves elapsed time from ActivePhaseStart into
 // PhaseTimings under the ActiveTimingKey, then clears ActivePhaseStart.
-// ActiveTimingKey is intentionally preserved so cycle keys (rebase-N,
-// review-comments) survive interrupt/fail transitions and are available when
+// ActiveTimingKey is intentionally preserved so rebase cycle keys survive
+// interrupt/fail transitions and are available when
 // the phase is resumed.
 func (f *Feature) accumulateActiveTime() {
 	if f.ActivePhaseStart == nil || f.ActiveTimingKey == "" {
@@ -1055,20 +1033,6 @@ func (f *Feature) RebaseCount() int { return f.Run().RebaseCount }
 // SetRebaseCount sets the run-level rebase counter.
 func (f *Feature) SetRebaseCount(n int) { f.Run().RebaseCount = n }
 
-// ReviewCommentsCount returns the run-level review-comments cycle counter.
-func (f *Feature) ReviewCommentsCount() int { return f.Run().ReviewCommentsCount }
-
-// SetReviewCommentsCount sets the run-level review-comments cycle counter.
-func (f *Feature) SetReviewCommentsCount(n int) { f.Run().ReviewCommentsCount = n }
-
-// AddressingReviews returns whether the feature is currently addressing PR
-// review comments. Source of truth is the run-level flag; per-repo
-// detection is available via RepoCycles[name].Type == CycleReviewComments.
-func (f *Feature) AddressingReviews() bool { return f.Run().AddressingReviews }
-
-// SetAddressingReviews sets the run-level addressing-reviews flag.
-func (f *Feature) SetAddressingReviews(v bool) { f.Run().AddressingReviews = v }
-
 // SetRoadmapPhaseFrontend records whether a roadmap phase contains frontend
 // work on the active run.
 func (f *Feature) SetRoadmapPhaseFrontend(phase int, frontend bool) {
@@ -1109,8 +1073,7 @@ func (f *Feature) ActiveCycleType() RepoCycleType { return f.Run().ActiveCycleTy
 // SetActiveCycleType sets the feature-level active cycle type.
 func (f *Feature) SetActiveCycleType(t RepoCycleType) { f.Run().ActiveCycleType = t }
 
-// CyclePrefix returns the artifact directory prefix for the current
-// post-publish cycle (rebase, or review-comments).
+// CyclePrefix returns the artifact directory prefix for the current rebase cycle.
 // Returns empty string when no cycle is active.
 func (f *Feature) CyclePrefix() string {
 	switch f.ActiveCycleType() {
@@ -1119,27 +1082,17 @@ func (f *Feature) CyclePrefix() string {
 			return fmt.Sprintf("rebase-%d", f.RebaseCount())
 		}
 		return "rebase"
-	case CycleReviewComments:
-		if f.ReviewCommentsCount() > 0 {
-			return fmt.Sprintf("review-comments-%d", f.ReviewCommentsCount())
-		}
-		return "review-comments"
 	}
 	return ""
 }
 
 // RepoCycleDirName returns the enumerated directory name for a per-repo cycle.
-// e.g., "rebase-1", "review-comments-3", or the unenumerated
-// fallback when count <= 0.
+// e.g., "rebase-1", or the unenumerated fallback when count <= 0.
 func RepoCycleDirName(cycleType RepoCycleType, count int) string {
 	switch cycleType {
 	case CycleRebase:
 		if count > 0 {
 			return fmt.Sprintf("rebase-%d", count)
-		}
-	case CycleReviewComments:
-		if count > 0 {
-			return fmt.Sprintf("review-comments-%d", count)
 		}
 	}
 	return string(cycleType)
@@ -1204,9 +1157,7 @@ func (f *Feature) EffectivePhases() []Phase {
 func isImplementTimingKey(key string) bool {
 	return key == "implement" ||
 		strings.HasPrefix(key, "rebase-") ||
-		strings.HasSuffix(key, "-impl") ||
-		key == "review-comments" ||
-		strings.HasPrefix(key, "review-comments-")
+		strings.HasSuffix(key, "-impl")
 }
 
 // TotalRuntime returns the total active runtime for the feature.
@@ -1295,29 +1246,6 @@ func (f *Feature) Transition(to Status) error {
 		}
 	}
 	return fmt.Errorf("invalid transition from %s to %s", f.Status, to)
-}
-
-// PendingUserInputCycles returns the post-publish per-repo cycles currently
-// paused on a cycle-scoped NEED_USER_INPUT gate, sorted by repo name. A cycle
-// is reported only when its RepoCycleState carries both the paused status and
-// a non-empty gate artifact path.
-func (f *Feature) PendingUserInputCycles() []PendingUserInputCycle {
-	if f == nil || len(f.RepoCycles) == 0 {
-		return nil
-	}
-	var out []PendingUserInputCycle
-	for repoName, rc := range f.RepoCycles {
-		if rc == nil || rc.Status != RepoCycleNeedUserInput || rc.PendingNeedUserInputPath == "" {
-			continue
-		}
-		out = append(out, PendingUserInputCycle{
-			RepoName:  repoName,
-			CycleType: rc.Type,
-			GatePath:  rc.PendingNeedUserInputPath,
-		})
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].RepoName < out[j].RepoName })
-	return out
 }
 
 // AllReposPublished returns true when every repo declared on f.Repos has

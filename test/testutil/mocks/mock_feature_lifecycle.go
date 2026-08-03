@@ -68,7 +68,6 @@ type MockFeatureLifecycle struct {
 
 	// Plan / review hooks.
 	NeedsPlanReviewFn                func(featureID string) error
-	ClearAddressingReviewsFn         func(featureID string) error
 	StartFeatureRebaseOperationFn    func(featureID string) error
 	MarkFeatureRebaseStageFn         func(featureID string, stage feature.RebaseStage) error
 	UpdateFeatureRebaseRepoFn        func(featureID, repoName string, status feature.RebaseRepoStatus, progress feature.RebaseRepoProgress) error
@@ -90,11 +89,6 @@ type MockFeatureLifecycle struct {
 	SetRepoPublishErrorFn  func(featureID, repoName, errMsg string) error
 	TryCompletePublishFn   func(featureID string) (bool, error)
 	InitRepoImplFn         func(featureID string) error
-
-	// Per-repo cycle hook — tests that need to mimic the real
-	// CompleteRepoCycle side-effect (delete RepoCycles[repoName]) install
-	// this. Called after the mock records the invocation.
-	CompleteRepoCycleFn func(featureID, repoName string) error
 
 	// FailRepoCycleFn lets tests mimic the real FailRepoCycle side-effect
 	// (set Status=RepoCycleFailed, clear PendingNeedUserInputPath, clear
@@ -395,14 +389,6 @@ func (m *MockFeatureLifecycle) MarkDone(featureID string) error {
 // Post-publish cycles
 // ---------------------------------------------------------------------------
 
-func (m *MockFeatureLifecycle) ClearAddressingReviews(featureID string) error {
-	m.record("ClearAddressingReviews", featureID)
-	if m.ClearAddressingReviewsFn != nil {
-		return m.ClearAddressingReviewsFn(featureID)
-	}
-	return m.DefaultError
-}
-
 func (m *MockFeatureLifecycle) StartFeatureRebaseOperation(featureID string) error {
 	m.record("StartFeatureRebaseOperation", featureID)
 	if m.StartFeatureRebaseOperationFn != nil {
@@ -455,19 +441,6 @@ func (m *MockFeatureLifecycle) ClearFeatureRebaseOperation(featureID string) err
 // Per-repo cycles
 // ---------------------------------------------------------------------------
 
-func (m *MockFeatureLifecycle) StartRepoCycle(featureID, repoName string, cycleType feature.RepoCycleType) error {
-	m.record("StartRepoCycle", featureID, repoName, cycleType)
-	return m.DefaultError
-}
-
-func (m *MockFeatureLifecycle) CompleteRepoCycle(featureID, repoName string) error {
-	m.record("CompleteRepoCycle", featureID, repoName)
-	if m.CompleteRepoCycleFn != nil {
-		return m.CompleteRepoCycleFn(featureID, repoName)
-	}
-	return m.DefaultError
-}
-
 func (m *MockFeatureLifecycle) RemoveRepoCycle(featureID, repoName string) error {
 	m.record("RemoveRepoCycle", featureID, repoName)
 	return m.DefaultError
@@ -486,11 +459,6 @@ func (m *MockFeatureLifecycle) FailRepoImplementation(featureID, repoName, errMs
 	if m.FailRepoImplementationFn != nil {
 		return m.FailRepoImplementationFn(featureID, repoName, errMsg)
 	}
-	return m.DefaultError
-}
-
-func (m *MockFeatureLifecycle) MarkRepoCycleReviewing(featureID, repoName string) error {
-	m.record("MarkRepoCycleReviewing", featureID, repoName)
 	return m.DefaultError
 }
 

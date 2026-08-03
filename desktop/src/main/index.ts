@@ -832,8 +832,6 @@ if (!hasSingleInstanceLock) {
       executeRewind: (request) => runHistory.executeRewind(request),
       startRebase: (request) => features.startRebase(request),
       preflightRebase: (request) => features.preflightRebase(request),
-      fetchReviewComments: (request) => features.fetchReviewComments(request),
-      startReviewComments: (request) => features.startReviewComments(request),
       launchRefactorChild: (request) => features.launchRefactorChild(request),
       discardRefactorChild: (request) => features.discardRefactorChild(request),
       deleteFeatureCascade: (request) => features.deleteFeatureCascade(request),

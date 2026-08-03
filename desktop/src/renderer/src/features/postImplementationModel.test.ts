@@ -19,11 +19,11 @@ describe('postImplementationModel', () => {
       featureSnapshot({
         status: 'Published',
         cycle: {
-          type: 'review-comments',
+          type: 'rebase',
           status: 'running',
           count: 2,
           iteration: 1,
-          phase: 'address_validate',
+          phase: 'final_review',
         },
       }),
     );
@@ -110,7 +110,7 @@ describe('postImplementationModel', () => {
   it('orders publish before available cycle actions', () => {
     const snapshot = featureSnapshot({
       status: 'CodeReady',
-      actions: ['refactor', 'review-comments', 'publish', 'rebase'].map((id) => ({
+      actions: ['refactor', 'publish', 'rebase'].map((id) => ({
         id,
         enabled: true,
         disabledReasons: [],
@@ -119,7 +119,6 @@ describe('postImplementationModel', () => {
     expect(aftercareActions(snapshot).map((action) => action.id)).toEqual([
       'publish',
       'rebase',
-      'review-comments',
       'refactor',
     ]);
   });
@@ -149,13 +148,13 @@ describe('postImplementationModel', () => {
     expect(
       cyclePresentation(
         featureSnapshot({
-          cycle: { type: 'review-comments', status: 'need_user_input', phase: 'comments_ready' },
+          cycle: { type: 'rebase', status: 'need_user_input', phase: 'inspect_rebase' },
         }),
       ),
     ).toMatchObject({
       headline: 'Agent is waiting for your input',
       current: 'Waiting for input',
-      next: 'Address & validate',
+      next: 'Final review',
     });
   });
 

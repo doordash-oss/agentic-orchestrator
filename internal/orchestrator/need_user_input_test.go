@@ -23,7 +23,6 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/orchestrator"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
-	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
 )
 
 // writeGateArtifact persists a NeedUserInputRecord under iter/need-user-input.yaml
@@ -94,7 +93,6 @@ func TestOrchestrator_HandlePhaseCompletion_NeedUserInput_PausesFeature(t *testi
 		Repos:        []feature.FeatureRepo{{Name: repoName, Path: repoAPath}},
 	}
 	lc := lifecycleForFeature(f)
-	lc.ClearAddressingReviewsFn = func(id string) error { return nil }
 	fs := newFeatureStore(f)
 
 	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{})
@@ -148,8 +146,7 @@ func TestResumeNeedUserInput_StaleRepoNameRoutesToFeatureScope(t *testing.T) {
 	fs := newFeatureStore(f)
 	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{})
 
-	err := o.ResumeNeedUserInput("feat-mr-nui-no-repo",
-		orchestrator.NeedUserInputResume{RepoName: "ghost"})
+	err := o.ResumeNeedUserInput("feat-mr-nui-no-repo", orchestrator.NeedUserInputResume{})
 	if err == nil {
 		t.Fatal("expected error: feature is StatusImplementing, not paused on a gate")
 	}
@@ -265,102 +262,5 @@ func TestResumeNeedUserInputRejectsVerificationGateOutsideFeatureScope(t *testin
 	err := o.ResumeNeedUserInput(featureID, orchestrator.NeedUserInputResume{})
 	if err == nil || !strings.Contains(err.Error(), "gate") || !strings.Contains(err.Error(), "not scoped") {
 		t.Fatalf("ResumeNeedUserInput() error = %v, want off-feature gate rejection", err)
-	}
-}
-
-// sharedGateFeature builds a two-repo feature paused on one shared
-// review-comments NEED_USER_INPUT gate — both repos point at the same
-// gate path — and wires a lifecycle/store pair for resume tests.
-func sharedGateFeature(t *testing.T) (*feature.Feature, *mocks.MockFeatureLifecycle, *featureStore, string, string) {
-	t.Helper()
-	stateRoot := t.TempDir()
-	gatePath := writeHarnessVerificationGate(t, stateRoot, "feat-shared-gate",
-		"Shared verification gate needs a decision.", agent.NeedUserVerificationRetryAfterAuth)
-
-	f := &feature.Feature{
-		ID:     "feat-shared-gate",
-		Status: feature.StatusPublished,
-		Repos: []feature.FeatureRepo{
-			{Name: "repo-a", Path: "/tmp/repo-a"},
-			{Name: "repo-b", Path: "/tmp/repo-b"},
-		},
-		RepoCycles: map[string]*feature.RepoCycleState{
-			"repo-a": {
-				Type:                     feature.CycleReviewComments,
-				Status:                   feature.RepoCycleNeedUserInput,
-				Count:                    1,
-				Iteration:                2,
-				PendingNeedUserInputPath: gatePath,
-			},
-			"repo-b": {
-				Type:                     feature.CycleReviewComments,
-				Status:                   feature.RepoCycleNeedUserInput,
-				Count:                    1,
-				Iteration:                2,
-				PendingNeedUserInputPath: gatePath,
-			},
-		},
-	}
-	lc := lifecycleForFeature(f)
-	fs := newFeatureStore(f)
-	return f, lc, fs, gatePath, stateRoot
-}
-
-// TestResumeNeedUserInput_SharedGateClearsAllRepos verifies
-// that resuming a shared multi-repo gate clears the gate on every repo
-// that shares it. The test instruments Store.Modify to capture whether
-// both repos were transitioned to Running before the restart failure
-// rolls them back.
-func TestResumeNeedUserInput_SharedGateClearsAllRepos(t *testing.T) {
-	f, lc, fs, gatePath, stateRoot := sharedGateFeature(t)
-
-	// Track whether each repo was ever set to Running during the resume
-	// attempt (before rollback).
-	sawRunning := map[string]bool{}
-	origModify := fs.ModifyFn
-	fs.ModifyFn = func(id string, fn func(ff *feature.Feature) error) error {
-		err := origModify(id, fn)
-		for name, rc := range f.RepoCycles {
-			if rc != nil && rc.Status == feature.RepoCycleRunning {
-				sawRunning[name] = true
-			}
-		}
-		return err
-	}
-
-	o := orchestrator.New(orchestrator.Deps{
-		Lifecycle:   lc,
-		Store:       fs,
-		PhaseRunner: &agent.PhaseRunner{StateDir: stateRoot},
-	}, orchestrator.Hooks{})
-
-	err := o.ResumeNeedUserInput("feat-shared-gate",
-		orchestrator.NeedUserInputResume{RepoName: "repo-a"})
-	if err == nil {
-		t.Fatal("expected restart error (no PhaseRunner), got nil")
-	}
-
-	// Both repos must have been cleared to Running during the resume
-	// attempt — proving the shared gate was resolved for all participants.
-	for _, repo := range []string{"repo-a", "repo-b"} {
-		if !sawRunning[repo] {
-			t.Errorf("RepoCycles[%s] was never set to Running during resume; shared gate must clear all participating repos", repo)
-		}
-	}
-
-	// After failed restart + rollback, both repos must be back on the
-	// paused gate.
-	for _, repo := range []string{"repo-a", "repo-b"} {
-		rc := f.RepoCycles[repo]
-		if rc == nil {
-			t.Fatalf("RepoCycles[%s] is nil after rollback", repo)
-		}
-		if rc.Status != feature.RepoCycleNeedUserInput {
-			t.Errorf("RepoCycles[%s].Status = %q, want %q (rollback must restore gate on all sharing repos)",
-				repo, rc.Status, feature.RepoCycleNeedUserInput)
-		}
-		if rc.PendingNeedUserInputPath != gatePath {
-			t.Errorf("RepoCycles[%s].PendingNeedUserInputPath = %q, want %q", repo, rc.PendingNeedUserInputPath, gatePath)
-		}
 	}
 }

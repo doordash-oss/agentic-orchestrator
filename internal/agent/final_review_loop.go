@@ -44,8 +44,8 @@ import (
 
 // finalStatusReviewPassed is the FinalStatus value shared by every loop
 // result type in this package (FeatureFinalReviewResult, LoopResult,
-// PhaseImplementLoopResult, RebaseLoopResult, ReviewCommentsLoopResult,
-// ...) to signal that review approved the work.
+// PhaseImplementLoopResult, RebaseLoopResult, ...) to signal that review
+// approved the work.
 const finalStatusReviewPassed = "review_passed"
 
 // finalReviewEffortLevel returns the effort level to pass to BuildSessionOpts:
@@ -335,7 +335,7 @@ func RunFeatureCycleFinalReviewLoop(cfg OrchestratorConfig, sm ports.SessionMana
 	result, runErr := loopState.run()
 
 	// Post-cycle FR does NOT call AtomicPhaseStamp. The surrounding cycle
-	// (rebase / review-comments) owns the post-FR transitions on success;
+	// rebase owns the post-FR transitions on success;
 	// on failure the cycle entry's FailRepoCycle path handles state cleanup.
 	if runErr != nil {
 		return &FeatureFinalReviewResult{

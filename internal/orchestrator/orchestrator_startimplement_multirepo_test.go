@@ -184,7 +184,6 @@ func TestStartFeature_ImplementPhase_Failed_MarksFeatureFailed(t *testing.T) {
 		return nil
 	}
 	lc.InitRepoImplFn = func(id string) error { return nil }
-	lc.ClearAddressingReviewsFn = func(id string) error { return nil }
 	lc.MarkFailedFn = func(id, failureType, errMsg string) error {
 		f.Status = feature.StatusFailed
 		return nil

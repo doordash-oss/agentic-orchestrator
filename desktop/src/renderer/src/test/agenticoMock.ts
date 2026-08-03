@@ -273,8 +273,6 @@ export interface AgenticoMock {
     revealPath: ReturnType<typeof vi.fn>;
     startRebase: ReturnType<typeof vi.fn>;
     preflightRebase: ReturnType<typeof vi.fn>;
-    fetchReviewComments: ReturnType<typeof vi.fn>;
-    startReviewComments: ReturnType<typeof vi.fn>;
     launchRefactorChild: ReturnType<typeof vi.fn>;
     discardRefactorChild: ReturnType<typeof vi.fn>;
     deleteFeatureCascade: ReturnType<typeof vi.fn>;
@@ -491,8 +489,6 @@ export function installAgenticoMock(
     revealPath: vi.fn(() => Promise.reject(new Error('unused'))),
     startRebase: vi.fn(() => Promise.reject(new Error('unused'))),
     preflightRebase: vi.fn(() => Promise.reject(new Error('unused'))),
-    fetchReviewComments: vi.fn(() => Promise.reject(new Error('unused'))),
-    startReviewComments: vi.fn(() => Promise.reject(new Error('unused'))),
     launchRefactorChild: vi.fn(() => Promise.reject(new Error('unused'))),
     discardRefactorChild: vi.fn(() => Promise.reject(new Error('unused'))),
     deleteFeatureCascade: vi.fn(() => Promise.reject(new Error('unused'))),

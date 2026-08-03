@@ -602,7 +602,7 @@ func (m *Manager) StartImplementation(featureID string) error {
 		}
 		f.CurrentPhase = PhaseImplement
 		f.CurrentIteration = 1
-		// Use existing cycle key (rebase-N, review-comments) if set,
+		// Use the existing rebase cycle key if set,
 		// or default to "implement" (or "phase-N-impl" for roadmap phases).
 		// This preserves cycle keys across interrupt/fail → resume transitions.
 		// Accumulate any in-flight time under the old key before switching.
@@ -685,15 +685,6 @@ func (m *Manager) MarkPublished(featureID, prURL string) error {
 func (m *Manager) MarkDone(featureID string) error {
 	return m.Store.Modify(featureID, func(f *Feature) error {
 		return f.Transition(StatusDone)
-	})
-}
-
-// ClearAddressingReviews clears the review-comments flow flag.
-func (m *Manager) ClearAddressingReviews(featureID string) error {
-	return m.Store.Modify(featureID, func(f *Feature) error {
-		f.SetAddressingReviews(false)
-		f.SetActiveCycleType("")
-		return nil
 	})
 }
 
@@ -880,40 +871,6 @@ func activeNonRebaseCycleType(f *Feature) RepoCycleType {
 
 // StartRepoCycle starts a per-repo post-publish cycle.
 // The feature stays StatusPublished; only the per-repo cycle state is set.
-func (m *Manager) StartRepoCycle(featureID, repoName string, cycleType RepoCycleType) error {
-	return m.Store.Modify(featureID, func(f *Feature) error {
-		if cycleType == CycleRebase {
-			return fmt.Errorf("per-repo rebase cycles are not supported; use StartFeatureRebaseOperation")
-		}
-		if f.RepoCycles == nil {
-			f.RepoCycles = make(map[string]*RepoCycleState)
-		}
-		if existing, ok := f.RepoCycles[repoName]; ok && (existing.Status == RepoCycleRunning || existing.Status == RepoCycleReviewing || existing.Status == RepoCycleNeedUserInput) {
-			return fmt.Errorf("%s is already running a %s cycle", repoName, existing.Type)
-		}
-
-		f.RepoCycles[repoName] = &RepoCycleState{
-			Type:   cycleType,
-			Status: RepoCycleRunning,
-			Count:  1,
-		}
-		return nil
-	})
-}
-
-// CompleteRepoCycle removes the per-repo cycle entry on success.
-func (m *Manager) CompleteRepoCycle(featureID, repoName string) error {
-	return m.Store.Modify(featureID, func(f *Feature) error {
-		delete(f.RepoCycles, repoName)
-		if len(f.RepoCycles) == 0 {
-			f.RepoCycles = nil
-		}
-		return nil
-	})
-}
-
-// RemoveRepoCycle removes a per-repo cycle entry without recording failure.
-// Used when cleaning up stale cycle entries that cannot be restarted.
 func (m *Manager) RemoveRepoCycle(featureID, repoName string) error {
 	return m.Store.Modify(featureID, func(f *Feature) error {
 		delete(f.RepoCycles, repoName)
@@ -937,28 +894,12 @@ func (m *Manager) FailRepoCycle(featureID, repoName, errMsg string) error {
 		}
 		rc.Status = RepoCycleFailed
 		rc.LastError = errMsg
-		rc.PendingNeedUserInputPath = ""
 		return nil
 	})
 }
 
 // MarkRepoCycleReviewing transitions a repo's active cycle to the
 // "reviewing" status, indicating the Final Review is in progress.
-func (m *Manager) MarkRepoCycleReviewing(featureID, repoName string) error {
-	return m.Store.Modify(featureID, func(f *Feature) error {
-		if f.RepoCycles == nil {
-			return fmt.Errorf("no active cycles")
-		}
-		rc, ok := f.RepoCycles[repoName]
-		if !ok {
-			return fmt.Errorf("no active cycle for repo %q", repoName)
-		}
-		rc.Status = RepoCycleReviewing
-		return nil
-	})
-}
-
-// ClearRepoCycles removes all per-repo cycle state (used by stop-all).
 func (m *Manager) ClearRepoCycles(featureID string) error {
 	return m.Store.Modify(featureID, func(f *Feature) error {
 		f.RepoCycles = nil

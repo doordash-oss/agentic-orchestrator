@@ -1,6 +1,7 @@
 package github_test // external test package so it can use testutil
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"testing"
@@ -69,5 +70,99 @@ func TestGetPRMapsBodyBaseAndURL(t *testing.T) {
 	}
 	if info.Body != "pr body" || info.BaseRef != "main" || info.URL != "https://github.com/acme/widgets/pull/7" {
 		t.Fatalf("GetPR() = %+v; want body/base/url mapped", info)
+	}
+}
+
+func TestCreatePRPostsPayloadAndReturnsURL(t *testing.T) {
+	fake := testutil.InstallFakeGitHubAPI(t)
+	fake.Mux.HandleFunc("/repos/acme/widgets/pulls", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Errorf("method = %s; want POST", r.Method)
+		}
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decoding payload: %v", err)
+		}
+		if payload["title"] != "T" || payload["head"] != "feature/x" || payload["base"] != "develop" || payload["draft"] != true {
+			t.Errorf("payload = %v; want title/head/base/draft", payload)
+		}
+		w.WriteHeader(http.StatusCreated)
+		fmt.Fprint(w, `{"html_url":"https://github.com/acme/widgets/pull/9"}`)
+	})
+
+	client, _ := github.ForHost("github.com")
+	url, err := client.CreatePR(github.CreatePRParams{
+		Owner: "acme", Repo: "widgets", Head: "feature/x", Base: "develop",
+		Title: "T", Body: "B", Draft: true,
+	})
+	if err != nil || url != "https://github.com/acme/widgets/pull/9" {
+		t.Fatalf("CreatePR() = %q, %v; want created PR URL", url, err)
+	}
+}
+
+func TestCreatePRResolvesDefaultBranchWhenBaseEmpty(t *testing.T) {
+	fake := testutil.InstallFakeGitHubAPI(t)
+	fake.HandleJSON("/repos/acme/widgets", 200, `{"default_branch":"trunk"}`)
+	fake.Mux.HandleFunc("/repos/acme/widgets/pulls", func(w http.ResponseWriter, r *http.Request) {
+		var payload map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&payload)
+		if payload["base"] != "trunk" {
+			t.Errorf("base = %v; want trunk (repo default)", payload["base"])
+		}
+		w.WriteHeader(http.StatusCreated)
+		fmt.Fprint(w, `{"html_url":"https://github.com/acme/widgets/pull/10"}`)
+	})
+
+	client, _ := github.ForHost("github.com")
+	if _, err := client.CreatePR(github.CreatePRParams{Owner: "acme", Repo: "widgets", Head: "feature/x", Title: "T"}); err != nil {
+		t.Fatalf("CreatePR() error = %v", err)
+	}
+}
+
+func TestCreatePRReturnsExistingURLOn422AlreadyExists(t *testing.T) {
+	fake := testutil.InstallFakeGitHubAPI(t)
+	fake.Mux.HandleFunc("/repos/acme/widgets/pulls", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			w.WriteHeader(http.StatusUnprocessableEntity)
+			fmt.Fprint(w, `{"message":"Validation Failed","errors":[{"message":"A pull request already exists for acme:feature/x."}]}`)
+			return
+		}
+		if r.URL.Query().Get("head") != "acme:feature/x" || r.URL.Query().Get("state") != "open" {
+			t.Errorf("lookup query = %s; want head=acme:feature/x state=open", r.URL.RawQuery)
+		}
+		fmt.Fprint(w, `[{"html_url":"https://github.com/acme/widgets/pull/5"}]`)
+	})
+
+	client, _ := github.ForHost("github.com")
+	url, err := client.CreatePR(github.CreatePRParams{Owner: "acme", Repo: "widgets", Head: "feature/x", Base: "main", Title: "T"})
+	if err != nil || url != "https://github.com/acme/widgets/pull/5" {
+		t.Fatalf("CreatePR() = %q, %v; want existing PR URL on 422", url, err)
+	}
+}
+
+func TestPRWriteEndpoints(t *testing.T) {
+	fake := testutil.InstallFakeGitHubAPI(t)
+	fake.HandleJSON("/repos/acme/widgets/pulls/7", 200, `{}`)
+	fake.HandleJSON("/repos/acme/widgets/pulls/7/comments/11/replies", 201, `{}`)
+	fake.HandleJSON("/repos/acme/widgets/issues/7/comments", 201, `{}`)
+
+	client, _ := github.ForHost("github.com")
+	if err := client.UpdatePRBody("acme", "widgets", 7, "new body"); err != nil {
+		t.Fatalf("UpdatePRBody() error = %v", err)
+	}
+	if err := client.ClosePR("acme", "widgets", 7); err != nil {
+		t.Fatalf("ClosePR() error = %v", err)
+	}
+	if err := client.ReplyToReviewComment("acme", "widgets", 7, 11, "reply"); err != nil {
+		t.Fatalf("ReplyToReviewComment() error = %v", err)
+	}
+	if err := client.CreateIssueComment("acme", "widgets", 7, "comment"); err != nil {
+		t.Fatalf("CreateIssueComment() error = %v", err)
+	}
+	if fake.RequestCount(`PATCH /repos/acme/widgets/pulls/7 {"body":"new body"}`) != 1 {
+		t.Fatalf("requests = %v; want one body PATCH", fake.Requests())
+	}
+	if fake.RequestCount(`{"state":"closed"}`) != 1 {
+		t.Fatalf("requests = %v; want one close PATCH", fake.Requests())
 	}
 }

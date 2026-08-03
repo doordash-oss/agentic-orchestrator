@@ -15,11 +15,16 @@
 package github
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strings"
+
+	"github.com/cli/go-gh/v2/pkg/api"
 )
 
 // PRComment is one inline review comment or issue comment as returned by
@@ -114,4 +119,89 @@ func (c *Client) GetPR(owner, repo string, number int) (PRInfo, error) {
 		return PRInfo{}, err
 	}
 	return PRInfo{Body: raw.Body, BaseRef: raw.Base.Ref, URL: raw.HTMLURL}, nil
+}
+
+// CreatePRParams describes a pull request to open.
+type CreatePRParams struct {
+	Owner, Repo, Head, Base, Title, Body string
+	Draft                                 bool
+}
+
+// CreatePR opens a pull request and returns its URL. An empty Base
+// targets the repository's default branch. If GitHub answers 422 with
+// "already exists", the existing open PR's URL is returned instead
+// (the branch push that preceded the call already updated it).
+func (c *Client) CreatePR(p CreatePRParams) (string, error) {
+	base := p.Base
+	if base == "" {
+		var repoInfo struct {
+			DefaultBranch string `json:"default_branch"`
+		}
+		if err := c.rest.Get(fmt.Sprintf("repos/%s/%s", p.Owner, p.Repo), &repoInfo); err != nil {
+			return "", fmt.Errorf("resolving default branch: %w", err)
+		}
+		base = repoInfo.DefaultBranch
+	}
+	payload, err := json.Marshal(map[string]any{
+		"title": p.Title, "body": p.Body, "head": p.Head, "base": base, "draft": p.Draft,
+	})
+	if err != nil {
+		return "", err
+	}
+	var created struct {
+		HTMLURL string `json:"html_url"`
+	}
+	err = c.rest.Post(fmt.Sprintf("repos/%s/%s/pulls", p.Owner, p.Repo), bytes.NewReader(payload), &created)
+	if err == nil {
+		return created.HTMLURL, nil
+	}
+	var httpErr *api.HTTPError
+	if errors.As(err, &httpErr) && httpErr.StatusCode == http.StatusUnprocessableEntity &&
+		strings.Contains(err.Error(), "already exists") {
+		var open []struct {
+			HTMLURL string `json:"html_url"`
+		}
+		lookup := fmt.Sprintf("repos/%s/%s/pulls?head=%s&state=open",
+			p.Owner, p.Repo, url.QueryEscape(p.Owner+":"+p.Head))
+		if lookupErr := c.rest.Get(lookup, &open); lookupErr == nil && len(open) > 0 {
+			return open[0].HTMLURL, nil
+		}
+	}
+	return "", fmt.Errorf("creating PR: %w", err)
+}
+
+func (c *Client) patchPR(owner, repo string, number int, fields map[string]any) error {
+	payload, err := json.Marshal(fields)
+	if err != nil {
+		return err
+	}
+	return c.rest.Patch(fmt.Sprintf("repos/%s/%s/pulls/%d", owner, repo, number), bytes.NewReader(payload), nil)
+}
+
+// UpdatePRBody replaces a PR's description.
+func (c *Client) UpdatePRBody(owner, repo string, number int, body string) error {
+	return c.patchPR(owner, repo, number, map[string]any{"body": body})
+}
+
+// ClosePR closes a PR without merging.
+func (c *Client) ClosePR(owner, repo string, number int) error {
+	return c.patchPR(owner, repo, number, map[string]any{"state": "closed"})
+}
+
+func (c *Client) postComment(path, body string) error {
+	payload, err := json.Marshal(map[string]any{"body": body})
+	if err != nil {
+		return err
+	}
+	return c.rest.Post(path, bytes.NewReader(payload), nil)
+}
+
+// ReplyToReviewComment replies in-thread to an inline review comment.
+func (c *Client) ReplyToReviewComment(owner, repo string, number, commentID int, body string) error {
+	return c.postComment(fmt.Sprintf("repos/%s/%s/pulls/%d/comments/%d/replies", owner, repo, number, commentID), body)
+}
+
+// CreateIssueComment posts a top-level conversation comment on a PR.
+func (c *Client) CreateIssueComment(owner, repo string, number int, body string) error {
+	return c.postComment(fmt.Sprintf("repos/%s/%s/issues/%d/comments", owner, repo, number), body)
 }

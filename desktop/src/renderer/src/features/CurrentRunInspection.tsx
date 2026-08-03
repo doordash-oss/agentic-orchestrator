@@ -82,6 +82,8 @@ export interface CurrentRunInspectionProps {
   attentionRequestId?: number;
   /** Response controls docked beneath the expanded conversation. */
   attentionFooter?: ReactNode;
+  /** Pending question rendered as the newest turn inside the transcript. */
+  attentionTurn?: ReactNode;
   /** Pending structured question whose raw transcript prose should be hidden. */
   suppressQuestion?: BuildConversationOptions['suppressQuestion'];
   onAttentionPreviewClose?(): void;
@@ -386,6 +388,7 @@ export function CurrentRunInspection({
   shouldStream = true,
   attentionRequestId,
   attentionFooter,
+  attentionTurn,
   suppressQuestion,
   onAttentionPreviewClose,
   onRunMetrics,
@@ -443,7 +446,10 @@ export function CurrentRunInspection({
     suppressQuestion,
   );
   const initialLoading =
-    preview === null && presentedCohort.length === 0 && attentionFooter === undefined;
+    preview === null &&
+    presentedCohort.length === 0 &&
+    attentionFooter === undefined &&
+    attentionTurn === undefined;
   const rebaseOperationInFlight = repoStatus.some((repo) =>
     ['checking', 'rebasing'].includes(repo.rebaseStatus ?? ''),
   );
@@ -661,6 +667,7 @@ export function CurrentRunInspection({
           selectedId={live.selectedId}
           selectSession={live.selectSession}
           waitReason={waitReason}
+          attentionTurn={attentionTurn}
         />
       )}
     </div>
@@ -778,6 +785,7 @@ export function CurrentRunInspection({
           fallbackContextPercentage={selectedSession?.contextPercentage}
           waitReason={waitReason}
           attentionFooter={attentionFooter}
+          attentionTurn={attentionTurn}
           verifying={verifying}
           verificationItems={verificationItems}
           filesSurface={filesSurface}
@@ -1023,12 +1031,14 @@ function TranscriptStage({
   selectedId,
   selectSession,
   waitReason,
+  attentionTurn,
 }: {
   stage: TranscriptStageModel;
   view: PreviewView;
   selectedId: string | null;
   selectSession(id: string): void;
   waitReason?: string;
+  attentionTurn?: ReactNode;
 }): React.ReactElement {
   const emptyState =
     stage.cohort.length === 0 && waitReason !== undefined && waitReason.trim() !== '' ? (
@@ -1057,6 +1067,7 @@ function TranscriptStage({
           idleLabel={IDLE_ACTIVITY_LABEL}
           assistantName={stage.assistantName}
           emptyState={emptyState}
+          trailing={attentionTurn}
         />
       ) : (
         <div className="live-preview__trace">
@@ -1232,6 +1243,7 @@ function LivePreviewOverlay({
   fallbackContextPercentage,
   waitReason,
   attentionFooter,
+  attentionTurn,
   verifying,
   verificationItems,
   filesSurface,
@@ -1251,6 +1263,7 @@ function LivePreviewOverlay({
   fallbackContextPercentage?: number;
   waitReason?: string;
   attentionFooter?: ReactNode;
+  attentionTurn?: ReactNode;
   verifying: boolean;
   verificationItems?: VerificationItemView[];
   filesSurface: ReactNode;
@@ -1304,6 +1317,7 @@ function LivePreviewOverlay({
             selectedId={selectedId}
             selectSession={selectSession}
             waitReason={waitReason}
+            attentionTurn={attentionTurn}
           />
         )}
         {preview !== null || attentionFooter !== undefined ? (

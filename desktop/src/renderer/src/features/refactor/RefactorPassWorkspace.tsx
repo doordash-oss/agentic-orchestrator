@@ -24,6 +24,11 @@ import {
 } from '../AttentionInbox';
 import { useAttentionDraftSaves } from '../useAttentionDraftSaves';
 import { NeedUserInputModal, type AttentionGate } from '../NeedUserInputModal';
+import {
+  QuestionComposer,
+  QuestionConversationTurn,
+  questionAnswersRequest,
+} from '../QuestionTurn';
 import { CurrentRunInspection, type RunMetrics } from '../CurrentRunInspection';
 import { ReviewSurface } from '../ReviewSurface';
 import { ImpactPreviewList } from '../ImpactPreviewList';
@@ -251,6 +256,17 @@ export function RefactorPassWorkspace({
   const gate = passAttentionItems.find((item): item is AttentionGate => item.kind === 'gate');
   const activeGate = gate?.id === dismissedGateId ? undefined : gate;
   const inlineAttention = passAttentionItems.find((item) => item.kind !== 'gate');
+  const questionsAttention = inlineAttention?.kind === 'questions' ? inlineAttention : undefined;
+  const pendingQuestion = questionsAttention?.questions[0];
+  const suppressQuestion =
+    pendingQuestion === undefined
+      ? undefined
+      : {
+          prompt: pendingQuestion.key,
+          optionLabels: pendingQuestion.options.map((option) => option.label),
+        };
+  const showsLiveSurface =
+    child !== null && !isPendingReviewStatus(child.status) && showsRun(child);
 
   const submitAttention = async (
     item: AttentionItem,
@@ -278,6 +294,13 @@ export function RefactorPassWorkspace({
   };
 
   const notice = pass.notice ?? attentionNotice;
+
+  const submitQuestionAnswers = () => {
+    if (questionsAttention === undefined) return;
+    void submitAttention(questionsAttention, () =>
+      window.agentico.answerQuestions(questionAnswersRequest(questionsAttention, attentionDrafts)),
+    );
+  };
 
   return (
     <section
@@ -354,7 +377,9 @@ export function RefactorPassWorkspace({
             </p>
           ))}
 
-          {inlineAttention !== undefined ? (
+          {/* The question joins the live conversation instead of stacking a
+           * form above it; standalone only when there is no live surface. */}
+          {inlineAttention !== undefined && !showsLiveSurface && childState.phase !== 'loading' ? (
             <section className="live-preview__attention" aria-label="Agent request">
               <AttentionDetail
                 key={`${inlineAttention.kind}:${inlineAttention.id}`}
@@ -395,6 +420,44 @@ export function RefactorPassWorkspace({
                 waitReason={child.waitReason}
                 shouldStream={stopEnabled}
                 onRunMetrics={setRunMetrics}
+                suppressQuestion={suppressQuestion}
+                attentionTurn={
+                  questionsAttention === undefined ? undefined : (
+                    <QuestionConversationTurn
+                      key={`${questionsAttention.kind}:${questionsAttention.id}`}
+                      item={questionsAttention}
+                      busy={attentionBusy === questionsAttention.id}
+                      drafts={attentionDrafts}
+                      setDrafts={setAttentionDrafts}
+                      onSubmit={submitQuestionAnswers}
+                    />
+                  )
+                }
+                attentionFooter={
+                  inlineAttention === undefined ? undefined : questionsAttention !== undefined ? (
+                    <QuestionComposer
+                      item={questionsAttention}
+                      busy={attentionBusy === questionsAttention.id}
+                      drafts={attentionDrafts}
+                      setDrafts={setAttentionDrafts}
+                      onSubmit={submitQuestionAnswers}
+                    />
+                  ) : (
+                    <AttentionDetail
+                      key={`${inlineAttention.kind}:${inlineAttention.id}`}
+                      item={inlineAttention}
+                      busy={attentionBusy === inlineAttention.id}
+                      drafts={attentionDrafts}
+                      setDrafts={setAttentionDrafts}
+                      saveDraft={(action, options) =>
+                        saveAttentionDraft(inlineAttention.id, action, options)
+                      }
+                      submit={(action, options) =>
+                        void submitAttention(inlineAttention, action, options)
+                      }
+                    />
+                  )
+                }
               />
             </div>
           ) : state?.id === 'ready' ? (

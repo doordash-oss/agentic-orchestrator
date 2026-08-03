@@ -800,9 +800,11 @@ describe('WorkspaceShell tabs', () => {
     };
     render(<WorkspaceShell attentionItems={[passQuestion]} />);
 
-    const request = await screen.findByRole('region', { name: 'Agent request' });
-    expect(within(request).getByText('Keep the legacy state-dir fallback?')).toBeVisible();
-    expect(within(request).getByText('Remove fallback')).toBeVisible();
+    const turn = await screen.findByRole('group', { name: 'Agent question' });
+    expect(within(turn).getByText('Keep the legacy state-dir fallback?')).toBeVisible();
+    expect(within(turn).getByText('Remove fallback')).toBeVisible();
+    const composer = screen.getByRole('region', { name: 'Agent request' });
+    expect(within(composer).getByRole('button', { name: 'Send' })).toBeDisabled();
   });
 
   it('opens routed attention in the expanded conversation and refreshes after resolution', async () => {

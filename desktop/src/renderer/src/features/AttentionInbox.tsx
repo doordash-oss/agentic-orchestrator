@@ -21,7 +21,7 @@ import {
 } from './NeedUserInputVerificationDecision';
 import { useAttentionDraftSaves } from './useAttentionDraftSaves';
 
-interface QuestionAnswerDraft {
+export interface QuestionAnswerDraft {
   selected: string[];
   freeText: string;
 }
@@ -917,11 +917,11 @@ function formatWaitingSince(value: string): string {
   return `waiting ${Math.floor(hours / 24)}d`;
 }
 
-function displayQuestionOptionLabel(label: string): string {
+export function displayQuestionOptionLabel(label: string): string {
   return label.replace(/\s+\(recommended\)\s*$/i, '').trim();
 }
 
-function setQuestionDraft(
+export function setQuestionDraft(
   setDrafts: Dispatch<SetStateAction<AttentionDrafts>>,
   detailKey: string,
   questionKey: string,
@@ -943,7 +943,7 @@ function setQuestionDraft(
   });
 }
 
-function questionAnswer(draft: QuestionAnswerDraft | undefined): string {
+export function questionAnswer(draft: QuestionAnswerDraft | undefined): string {
   if (draft === undefined) return '';
   return draft.freeText.trim() === '' ? draft.selected.join(', ') : draft.freeText;
 }

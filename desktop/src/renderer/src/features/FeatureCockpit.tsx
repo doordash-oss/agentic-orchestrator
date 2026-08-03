@@ -70,6 +70,7 @@ import {
   runAttentionSubmit,
   type AttentionDrafts,
 } from './AttentionInbox';
+import { QuestionComposer, QuestionConversationTurn, questionAnswersRequest } from './QuestionTurn';
 import { useAttentionDraftSaves } from './useAttentionDraftSaves';
 import type { AttentionItem } from '../../../shared/ipc';
 import {
@@ -1242,8 +1243,9 @@ export function FeatureCockpit({
     routedAttentionItem?.kind === 'gate'
       ? featureAttentionItems.find((item) => item.kind !== 'gate')
       : (routedAttentionItem ?? featureAttentionItems.find((item) => item.kind !== 'gate'));
-  const pendingQuestion =
-    activeAttentionItem?.kind === 'questions' ? activeAttentionItem.questions[0] : undefined;
+  const questionsAttention =
+    activeAttentionItem?.kind === 'questions' ? activeAttentionItem : undefined;
+  const pendingQuestion = questionsAttention?.questions[0];
   const suppressQuestion =
     pendingQuestion === undefined
       ? undefined
@@ -1280,6 +1282,13 @@ export function FeatureCockpit({
     } finally {
       setAttentionBusy(null);
     }
+  };
+
+  const submitQuestionAnswers = () => {
+    if (questionsAttention === undefined) return;
+    void submitAttention(questionsAttention, () =>
+      window.agentico.answerQuestions(questionAnswersRequest(questionsAttention, attentionDrafts)),
+    );
   };
 
   const openHistory = () => {
@@ -2083,8 +2092,29 @@ export function FeatureCockpit({
                       onAttentionPreviewClose={onAttentionPreviewClose}
                       onRunMetrics={setRunMetrics}
                       suppressQuestion={suppressQuestion}
+                      attentionTurn={
+                        questionsAttention === undefined ? undefined : (
+                          <QuestionConversationTurn
+                            key={`${questionsAttention.kind}:${questionsAttention.id}`}
+                            item={questionsAttention}
+                            busy={attentionBusy === questionsAttention.id}
+                            drafts={attentionDrafts}
+                            setDrafts={setAttentionDrafts}
+                            onSubmit={submitQuestionAnswers}
+                          />
+                        )
+                      }
                       attentionFooter={
-                        activeAttentionItem === undefined ? undefined : (
+                        activeAttentionItem === undefined ? undefined : questionsAttention !==
+                          undefined ? (
+                          <QuestionComposer
+                            item={questionsAttention}
+                            busy={attentionBusy === questionsAttention.id}
+                            drafts={attentionDrafts}
+                            setDrafts={setAttentionDrafts}
+                            onSubmit={submitQuestionAnswers}
+                          />
+                        ) : (
                           <AttentionDetail
                             key={`${activeAttentionItem.kind}:${activeAttentionItem.id}`}
                             item={activeAttentionItem}

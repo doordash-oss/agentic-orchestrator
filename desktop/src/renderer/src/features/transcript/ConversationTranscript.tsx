@@ -93,6 +93,8 @@ export interface ConversationTranscriptProps {
   emptyState?: ReactNode;
   /** Status/loading/error rows rendered above the conversation. */
   status?: ReactNode;
+  /** Interactive rows rendered after the newest turn (e.g. a pending question). */
+  trailing?: ReactNode;
   /** Bump to force a scroll to the newest row (e.g. after sending a message). */
   pinToBottomToken?: number;
 }
@@ -234,16 +236,18 @@ export function ConversationTranscript({
   className,
   emptyState,
   status,
+  trailing,
   pinToBottomToken,
 }: ConversationTranscriptProps) {
   const scrollRef = useRef<HTMLElement>(null);
   const stickToBottom = useRef(true);
   const lastItem = items.at(-1);
+  const hasTrailing = trailing !== undefined && trailing !== null;
 
   useEffect(() => {
     const element = scrollRef.current;
     if (element !== null && stickToBottom.current) element.scrollTop = element.scrollHeight;
-  }, [items, waiting]);
+  }, [items, waiting, hasTrailing]);
 
   useEffect(() => {
     if (pinToBottomToken === undefined) return;
@@ -318,6 +322,7 @@ export function ConversationTranscript({
           active
         />
       ) : null}
+      {trailing}
     </section>
   );
 }

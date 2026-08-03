@@ -49,8 +49,26 @@ type rebaseJourneyFixture struct {
 
 // setupRebaseJourneyFixture creates the shared infrastructure for a rebase
 // child journey test with the given number of repos. Each repo is a real git
-// repo with a bare remote. The parent feature is Published with the repos.
+// repo with a bare remote. The parent feature is Published with the repos. The
+// scripted implement kernel merges the persisted rebase target into each
+// behind repo's child worktree so the happy path satisfies the mechanical
+// integration gate.
 func setupRebaseJourneyFixture(t *testing.T, parentID string, repos ...rebaseJourneyRepo) *rebaseJourneyFixture {
+	return setupRebaseJourneyFixtureWithOpts(t, parentID, rebaseJourneyFixtureOptions{mergeRebaseTarget: true}, repos...)
+}
+
+// rebaseJourneyFixtureOptions configures the rebase journey fixture.
+type rebaseJourneyFixtureOptions struct {
+	// mergeRebaseTarget controls the scripted implement kernel. When true the
+	// stub merges the persisted target so the gate passes (happy path). When
+	// false the child branch is left without the target, exercising the gate's
+	// not-ancestor failure.
+	mergeRebaseTarget bool
+}
+
+// setupRebaseJourneyFixtureWithOpts is the configurable core of
+// setupRebaseJourneyFixture.
+func setupRebaseJourneyFixtureWithOpts(t *testing.T, parentID string, opts rebaseJourneyFixtureOptions, repos ...rebaseJourneyRepo) *rebaseJourneyFixture {
 	t.Helper()
 	if testing.Short() {
 		t.Skip("journey boots real-git setup and scripted provider subprocesses")
@@ -110,7 +128,7 @@ func setupRebaseJourneyFixture(t *testing.T, parentID string, repos ...rebaseJou
 
 	sm := session.NewManager(serverEvents)
 	t.Cleanup(sm.Shutdown)
-	pr := journeyChildPhaseRunner(t, sm, store, stateDir)
+	pr := journeyChildPhaseRunnerWithOpts(t, sm, store, stateDir, journeyPhaseRunnerOptions{mergeRebaseTarget: opts.mergeRebaseTarget})
 
 	orch := orchestrator.New(orchestrator.Deps{
 		Lifecycle:   mgr,
@@ -264,6 +282,15 @@ func TestRebaseChildHappyPathJourney(t *testing.T) {
 	}
 	if len(child.Parent.RebaseBehind) != 1 || child.Parent.RebaseBehind[0] != "repoA" {
 		t.Fatalf("rebase behind = %+v, want [repoA]", child.Parent.RebaseBehind)
+	}
+	// Assert the creation-time target SHA was persisted and matches the
+	// target ref as it stood at the creation-time fetch.
+	if target.TargetSHA == "" {
+		t.Fatalf("rebase target TargetSHA = empty; want persisted creation-time SHA")
+	}
+	originMain := journeyGit(t, repo.repoDir, "rev-parse", "origin/main")
+	if target.TargetSHA != originMain {
+		t.Fatalf("rebase target TargetSHA = %q, want origin/main SHA %q", target.TargetSHA, originMain)
 	}
 
 	// Assert fork-point pinning: the child worktree HEAD is at the captured
@@ -667,5 +694,91 @@ func TestRebaseChildTargetPrecedenceDefaultBranch(t *testing.T) {
 	target := child.Parent.RebaseTargets[0]
 	if target.Target != "main" {
 		t.Fatalf("target = %q, want main (default branch fallback)", target.Target)
+	}
+}
+
+// TestRebaseChildGateAncestorFailureJourney verifies the e2e gate failure: a
+// rebase child whose branch does not contain its persisted target commit
+// fails integration with the typed gate attention record, and every parent
+// ref is byte-identical before and after. The scripted implement kernel is
+// configured to NOT merge the target, so the child branch remains behind the
+// creation-time target and the gate's ancestor check fails.
+func TestRebaseChildGateAncestorFailureJourney(t *testing.T) {
+	if testing.Short() {
+		t.Skip("journey boots real-git setup and scripted provider subprocesses")
+	}
+
+	const parentID = "rebase-gate-fail-parent"
+	const branch = "feature/rebase-gate-fail"
+	repo := rebaseJourneyRepoSetup(t, "repoA", branch, true)
+	fx := setupRebaseJourneyFixtureWithOpts(t, parentID, rebaseJourneyFixtureOptions{mergeRebaseTarget: false}, repo)
+
+	// Capture the parent branch ref before the child runs integration.
+	parentRefBefore := journeyGit(t, repo.repoDir, "rev-parse", branch)
+
+	// Launch the rebase child.
+	resp, err := fx.client.RebaseFeature(t.Context(), parentID)
+	if err != nil {
+		t.Fatalf("RebaseFeature() error = %v", err)
+	}
+	childID := resp.FeatureID
+
+	// Assert the persisted creation-time target SHA is non-empty.
+	child, err := fx.store.Load(childID)
+	if err != nil {
+		t.Fatalf("Load(child) error = %v", err)
+	}
+	if len(child.Parent.RebaseTargets) != 1 || child.Parent.RebaseTargets[0].TargetSHA == "" {
+		t.Fatalf("rebase target = %+v, want non-empty creation-time TargetSHA", child.Parent.RebaseTargets)
+	}
+
+	// Drive the child through the pipeline to final review; integration then
+	// runs the gate, which must abort on the not-ancestor violation.
+	waitForJourneySetupComplete(t, fx.srv.URL, childID)
+	postAction(t, fx.srv.URL, childID, "start", `{}`)
+	waitForJourneyGate(t, fx.srv.URL, childID, 0)
+	postReviewSessionProceed(t, fx.srv.URL, childID)
+	waitForJourneyGate(t, fx.srv.URL, childID, 1)
+	postReviewSessionProceed(t, fx.srv.URL, childID)
+
+	// Wait for integration to park at attention (child stays active, not
+	// closed). Poll the child until its transaction is in attention with the
+	// not-ancestor gate code, or timeout.
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		c, err := fx.store.Load(childID)
+		if err != nil {
+			t.Fatalf("Load(child) error = %v", err)
+		}
+		if c.Parent != nil && c.Parent.Transaction != nil &&
+			c.Parent.Transaction.Phase == feature.TransactionPhaseAttention &&
+			len(c.Parent.Transaction.Entries) > 0 &&
+			c.Parent.Transaction.Entries[0].GateCode == feature.GateCodeNotAncestor {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for not-ancestor gate attention; child = %+v", c.Parent)
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+
+	// Every parent ref is byte-identical before and after.
+	if parentRefAfter := journeyGit(t, repo.repoDir, "rev-parse", branch); parentRefAfter != parentRefBefore {
+		t.Fatalf("parent ref changed: before=%s after=%s; gate must not touch parent refs", parentRefBefore, parentRefAfter)
+	}
+
+	// Re-running integration re-evaluates the gate idempotently: it stays
+	// parked at attention with the same code.
+	if err := fx.orch.RunChildIntegration(childID); err != nil {
+		t.Fatalf("RunChildIntegration() re-run error = %v; want nil", err)
+	}
+	childRerun, _ := fx.store.Load(childID)
+	if childRerun.Parent.Transaction == nil ||
+		childRerun.Parent.Transaction.Phase != feature.TransactionPhaseAttention ||
+		childRerun.Parent.Transaction.Entries[0].GateCode != feature.GateCodeNotAncestor {
+		t.Fatalf("re-run gate = %+v; want attention/not-ancestor", childRerun.Parent.Transaction)
+	}
+	if parentRefAfter := journeyGit(t, repo.repoDir, "rev-parse", branch); parentRefAfter != parentRefBefore {
+		t.Fatalf("parent ref changed on re-run: before=%s after=%s", parentRefBefore, parentRefAfter)
 	}
 }

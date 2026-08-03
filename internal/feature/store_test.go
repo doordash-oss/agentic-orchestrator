@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -145,6 +146,77 @@ func TestStoreSaveAndLoadAutomaticReviewMode(t *testing.T) {
 	}
 	if got := NormalizeAutomaticReviewMode(loaded.AutomaticReviewMode); got != AutomaticReviewEnabled {
 		t.Errorf("loaded AutomaticReviewMode = %q, want %q", got, AutomaticReviewEnabled)
+	}
+}
+
+func TestStoreSaveAndLoadRebaseTargetsRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	store := NewStore(dir)
+	now := time.Now().Truncate(time.Second)
+	f := &Feature{
+		ID:            "test-rebase-targets-roundtrip",
+		Name:          "Test Rebase Targets RoundTrip",
+		Slug:          "test-rebase-targets-roundtrip",
+		Status:        StatusCreated,
+		SchemaVersion: SchemaVersionCurrent,
+		Created:       now,
+		Parent: &ChildRelationship{
+			ParentID: "parent-1",
+			Kind:     ChildKindRebase,
+			RebaseTargets: []RebaseRepoTarget{
+				{
+					Repo:        "repoA",
+					Target:      "main",
+					Ref:         "origin/main",
+					Publishable: true,
+					TargetSHA:   "0123456789abcdef0123456789abcdef01234567",
+				},
+				{
+					Repo:        "repoB",
+					Target:      "develop",
+					Ref:         "develop",
+					Publishable: false,
+					TargetSHA:   "fedcba9876543210fedcba9876543210fedcba98",
+				},
+			},
+			RebaseBehind: []string{"repoA", "repoB"},
+		},
+	}
+	if err := store.Save(f); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	loaded, err := store.Load(f.ID)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if loaded.Parent == nil || loaded.Parent.Kind != ChildKindRebase {
+		t.Fatalf("loaded parent kind = %+v, want rebase", loaded.Parent)
+	}
+	if len(loaded.Parent.RebaseTargets) != 2 {
+		t.Fatalf("loaded RebaseTargets = %+v, want 2", loaded.Parent.RebaseTargets)
+	}
+	gotA := loaded.Parent.RebaseTargets[0]
+	if gotA.TargetSHA != "0123456789abcdef0123456789abcdef01234567" {
+		t.Errorf("repoA TargetSHA = %q, want persisted SHA", gotA.TargetSHA)
+	}
+	if gotA.Target != "main" || gotA.Ref != "origin/main" || !gotA.Publishable {
+		t.Errorf("repoA target = %+v, want main/origin/main/publishable", gotA)
+	}
+	gotB := loaded.Parent.RebaseTargets[1]
+	if gotB.TargetSHA != "fedcba9876543210fedcba9876543210fedcba98" {
+		t.Errorf("repoB TargetSHA = %q, want persisted SHA", gotB.TargetSHA)
+	}
+	if !reflect.DeepEqual(loaded.Parent.RebaseBehind, []string{"repoA", "repoB"}) {
+		t.Errorf("loaded RebaseBehind = %+v, want [repoA repoB]", loaded.Parent.RebaseBehind)
+	}
+
+	// Accessor round-trip.
+	tgt, ok := loaded.RebaseTargetForRepo("repoA")
+	if !ok || tgt.TargetSHA != "0123456789abcdef0123456789abcdef01234567" {
+		t.Errorf("RebaseTargetForRepo(repoA) = %+v ok=%v, want persisted SHA", tgt, ok)
 	}
 }
 

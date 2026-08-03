@@ -47,6 +47,22 @@ func (o *Orchestrator) prepareTransactionCandidates(child, parent *feature.Featu
 		return nil, fmt.Errorf("transaction: worktree operations are not configured")
 	}
 
+	// Rebase mechanical integration gate: the single kind-specific pre-prepare
+	// step. For a rebase child, re-verify the git-level exit criteria for
+	// every behind repo against the creation-time persisted targets before
+	// any candidate or ref is touched. Any violation parks the transaction
+	// at attention with typed per-repo diagnostics and leaves every parent
+	// ref byte-identical. Refactor and review-feedback children flow through
+	// unchanged.
+	if child.Parent != nil && child.Parent.Kind == feature.ChildKindRebase {
+		if gate := o.rebaseIntegrationGate(child); gate != nil {
+			if err := o.persistTransaction(child.ID, gate); err != nil {
+				return nil, fmt.Errorf("recording rebase gate attention: %w", err)
+			}
+			return nil, o.emitTransactionAttention(child, gate.Attention)
+		}
+	}
+
 	journal := &feature.TransactionJournal{
 		Phase: feature.TransactionPhasePreparing,
 	}

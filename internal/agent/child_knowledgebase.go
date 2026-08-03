@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
@@ -130,12 +131,15 @@ func HasWorkspaceChanges(ctx context.Context, runner ports.CommandRunner, worksp
 
 // IsAncestor checks whether ancestorCommit is an ancestor of descendantCommit
 // in the given repo path. Returns false on any error.
-func IsAncestor(ctx context.Context, runner ports.CommandRunner, repoPath, ancestorCommit, descendantCommit string) bool {
-	if ancestorCommit == "" || descendantCommit == "" {
-		return false
-	}
-	_, err := runner.Run(ctx, "git", []string{"merge-base", "--is-ancestor", ancestorCommit, descendantCommit}, ports.CommandOpts{Dir: repoPath})
-	return err == nil
+//
+// This is a thin delegating wrapper over the shared git.IsAncestor primitive
+// so child-KB seeding/promotion keeps its context/command-runner call shape
+// while the canonical behavior lives in the git package. The runner is
+// intentionally not used: the shared primitive shells out directly, matching
+// the observable behavior of every existing caller (which pass a real
+// command runner) and of the direct git primitive.
+func IsAncestor(_ context.Context, _ ports.CommandRunner, repoPath, ancestorCommit, descendantCommit string) bool {
+	return git.IsAncestor(repoPath, ancestorCommit, descendantCommit)
 }
 
 // SeedWorkspaceFromOverlay copies a valid parent overlay into the child workspace

@@ -262,6 +262,12 @@ type RebaseRepoTarget struct {
 	// Publishable records whether the repo was publishable at creation,
 	// determining whether behind-ness used the remote-tracking ref.
 	Publishable bool `yaml:"publishable" json:"publishable"`
+	// TargetSHA is the full commit SHA the target ref resolved to at the
+	// creation-time fetch, captured immediately after behind-ness was
+	// computed against the same ref. The mechanical integration gate reads
+	// this SHA (never re-resolving the ref) so a target that moves after
+	// creation does not change what the gate checks.
+	TargetSHA string `yaml:"target_sha,omitempty" json:"target_sha,omitempty"`
 }
 
 // ChildRelationship is the child-owned link back to its launch parent. The

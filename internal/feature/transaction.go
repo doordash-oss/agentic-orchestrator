@@ -116,7 +116,33 @@ type RepoTransactionEntry struct {
 	// Diagnostics is a human-readable summary of the per-repo attention
 	// condition.
 	Diagnostics string `yaml:"diagnostics,omitempty"`
+	// GateCode is the stable, typed failure code recorded by the rebase
+	// mechanical integration gate when it parks a behind repo at attention
+	// before any candidate or ref is touched. Empty for non-gate attention.
+	// See the GateCode* constants.
+	GateCode string `yaml:"gate_code,omitempty"`
 }
+
+// Stable gate-failure codes recorded by the rebase mechanical integration
+// gate. They are distinct, machine-stable reason strings so review tooling
+// can classify a parked rebase child without parsing free-form diagnostics.
+const (
+	// GateCodeNotAncestor: the persisted creation-time target commit is not
+	// an ancestor of the child branch head — the child did not merge the
+	// creation-time target.
+	GateCodeNotAncestor = "rebase_gate_not_ancestor"
+	// GateCodeMergeInProgress: a merge is underway in the child worktree at
+	// gate time (MERGE_HEAD present).
+	GateCodeMergeInProgress = "rebase_gate_merge_in_progress"
+	// GateCodeConflictMarkers: literal conflict markers remain in one or more
+	// tracked files of the child worktree, or the marker scan itself failed
+	// (fail closed).
+	GateCodeConflictMarkers = "rebase_gate_conflict_markers"
+	// GateCodeMissingTargetSHA: a persisted behind-repo target lacks the
+	// creation-time target SHA (e.g. an in-flight child created before the
+	// gate landed). The child must be discarded and relaunched.
+	GateCodeMissingTargetSHA = "rebase_gate_missing_target_sha"
+)
 
 // TransactionJournal is the ordered per-repository transaction record for
 // all child integration. It preserves inherited repository order and durably

@@ -20,6 +20,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -65,6 +66,22 @@ var journeyPhasePlanText = "# Phase 1 Plan\n\n" +
 // stub writes one artifact into the child worktree, which integration must
 // carry into the parent.
 func journeyChildPhaseRunner(t *testing.T, sm *session.Manager, store *feature.Store, stateDir string) *agent.PhaseRunner {
+	return journeyChildPhaseRunnerWithOpts(t, sm, store, stateDir, journeyPhaseRunnerOptions{})
+}
+
+// journeyPhaseRunnerOptions configures the scripted phase runner.
+type journeyPhaseRunnerOptions struct {
+	// mergeRebaseTarget, when true, makes the implement stub merge the
+	// persisted creation-time target ref into each behind repo's child
+	// worktree so the rebase child satisfies the mechanical integration
+	// gate's ancestor check. False leaves the child branch without the
+	// target commit (used to exercise the gate's not-ancestor failure).
+	mergeRebaseTarget bool
+}
+
+// journeyChildPhaseRunnerWithOpts is the configurable core of
+// journeyChildPhaseRunner.
+func journeyChildPhaseRunnerWithOpts(t *testing.T, sm *session.Manager, store *feature.Store, stateDir string, opts journeyPhaseRunnerOptions) *agent.PhaseRunner {
 	t.Helper()
 	scriptsDir := t.TempDir()
 
@@ -120,6 +137,35 @@ func journeyChildPhaseRunner(t *testing.T, sm *session.Manager, store *feature.S
 				return nil, fmt.Errorf("write child output: %w", err)
 			}
 		}
+		// For a rebase child, the implement kernel is expected to merge the
+		// creation-time target into each behind repo's working branch. The
+		// mechanical integration gate re-verifies the result, so the stub
+		// must actually land the merge (cleanly, against a non-conflicting
+		// target) for the happy path to pass the gate. When
+		// mergeRebaseTarget is false the stub leaves the branch without the
+		// target, exercising the gate's not-ancestor failure.
+		if opts.mergeRebaseTarget && c.Feature.Parent != nil && c.Feature.Parent.Kind == feature.ChildKindRebase {
+			behind := make(map[string]bool, len(c.Feature.Parent.RebaseBehind))
+			for _, r := range c.Feature.Parent.RebaseBehind {
+				behind[r] = true
+			}
+			for _, repo := range c.Feature.Repos {
+				if !behind[repo.Name] {
+					continue
+				}
+				wt := repo.WorktreePath
+				if wt == "" {
+					wt = repo.Path
+				}
+				tgt, ok := c.Feature.RebaseTargetForRepo(repo.Name)
+				if !ok || tgt.Ref == "" {
+					return nil, fmt.Errorf("rebase journey stub: no persisted target for %s", repo.Name)
+				}
+				if err := journeyMergeRebaseTarget(t, wt, tgt.Ref); err != nil {
+					return nil, fmt.Errorf("rebase journey stub merge %s: %w", repo.Name, err)
+				}
+			}
+		}
 		return &agent.LoopResult{FinalStatus: "review_passed", Iterations: 1}, nil
 	}
 	pr.RunFinalReviewFn = func(c agent.OrchestratorConfig, _ ports.SessionManager) (*agent.FeatureFinalReviewResult, error) {
@@ -138,6 +184,24 @@ func journeyChildPhaseRunner(t *testing.T, sm *session.Manager, store *feature.S
 		}, nil
 	}
 	return pr
+}
+
+// journeyMergeRebaseTarget merges the persisted target ref into the child
+// worktree's current branch with a no-ff merge commit, using the test git
+// identity. It assumes a non-conflicting target (the journey repos diverge on
+// disjoint files).
+func journeyMergeRebaseTarget(t *testing.T, worktreePath, ref string) error {
+	t.Helper()
+	cmd := exec.Command("git", "-C", worktreePath, "merge", "--no-ff", "-m",
+		"journey stub: merge rebase target "+ref, ref)
+	cmd.Env = append(testutil.GitTestEnv(),
+		"GIT_AUTHOR_NAME=Test", "GIT_AUTHOR_EMAIL=test@test.com",
+		"GIT_COMMITTER_NAME=Test", "GIT_COMMITTER_EMAIL=test@test.com",
+	)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("git merge %s: %v\n%s", ref, err, out)
+	}
+	return nil
 }
 
 // postAction runs one feature action through the raw action route and fails

@@ -87,11 +87,23 @@ func (o *Orchestrator) RebaseChildPreflight(parentID string) (*RebaseChildPrefli
 			}
 		}
 
+		// Capture the target commit SHA as it stood at the creation-time
+		// fetch, resolving the same ref behind-ness was computed against. The
+		// mechanical integration gate reads this SHA (never re-resolving the
+		// ref) so a target that moves after creation does not change what the
+		// gate checks. A resolution failure is a creation-time failure
+		// surfaced through the existing typed target-resolution error path.
+		targetSHA, err := git.ReadRefSHA(worktreePath, ref)
+		if err != nil {
+			return nil, &feature.RebaseTargetResolutionError{Repo: repo.Name, Err: err}
+		}
+
 		targets = append(targets, feature.RebaseRepoTarget{
 			Repo:        repo.Name,
 			Target:      target,
 			Ref:         ref,
 			Publishable: publishable,
+			TargetSHA:   targetSHA,
 		})
 	}
 

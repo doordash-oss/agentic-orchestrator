@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 )
 
 const addressedReviewFeedbackIDsFilename = "addressed-ids.json"
@@ -46,4 +47,64 @@ func (s *Store) LoadAddressedReviewFeedbackIDs(parentID, repoName string) (map[i
 		addressed[id] = true
 	}
 	return addressed, nil
+}
+
+// AppendAddressedReviewFeedbackIDs durably appends the given comment IDs to
+// the parent- and repo-scoped ledger, merging with any existing recorded IDs
+// (deduplicated). The location is created on first write. Appending the same
+// IDs twice is a no-op. The tail appends incrementally per successful reply
+// and recovery may re-append, so this operation must be idempotent.
+func (s *Store) AppendAddressedReviewFeedbackIDs(parentID, repoName string, ids []int) error {
+	dir := filepath.Join(s.BaseDir, parentID, "review-feedback", repoName)
+	path := filepath.Join(dir, addressedReviewFeedbackIDsFilename)
+
+	existing := make(map[int]bool)
+	data, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("read addressed review-feedback IDs for repo %q: %w", repoName, err)
+	}
+	if err == nil {
+		var stored []int
+		if jsonErr := json.Unmarshal(data, &stored); jsonErr != nil {
+			return fmt.Errorf("parse addressed review-feedback IDs for repo %q: %w", repoName, jsonErr)
+		}
+		for _, id := range stored {
+			existing[id] = true
+		}
+	}
+
+	changed := false
+	for _, id := range ids {
+		if id == 0 {
+			continue
+		}
+		if !existing[id] {
+			existing[id] = true
+			changed = true
+		}
+	}
+	if !changed && len(existing) > 0 {
+		return nil
+	}
+	if len(existing) == 0 && len(ids) == 0 {
+		return nil
+	}
+
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("create addressed review-feedback ledger dir for repo %q: %w", repoName, err)
+	}
+
+	all := make([]int, 0, len(existing))
+	for id := range existing {
+		all = append(all, id)
+	}
+	sort.Ints(all)
+	encoded, err := json.Marshal(all)
+	if err != nil {
+		return fmt.Errorf("encode addressed review-feedback IDs for repo %q: %w", repoName, err)
+	}
+	if err := os.WriteFile(path, encoded, 0o644); err != nil {
+		return fmt.Errorf("write addressed review-feedback IDs for repo %q: %w", repoName, err)
+	}
+	return nil
 }

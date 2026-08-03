@@ -270,6 +270,11 @@ func (failingPRRemoteOps) ForcePush(worktreePath, branch string) error {
 	return git.ForcePush(worktreePath, branch)
 }
 
+func (failingPRRemoteOps) PullRebase(worktreePath, branch string) error {
+	res := git.PullRebase(worktreePath, branch)
+	return res.Err
+}
+
 func (failingPRRemoteOps) CreatePR(string, string, string, string, string, bool) (string, error) {
 	return "", fmt.Errorf("scripted PR creation failure")
 }

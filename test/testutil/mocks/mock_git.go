@@ -23,6 +23,7 @@ import (
 type MockRemoteOps struct {
 	PushFn         func(worktreePath, branch string) error
 	ForcePushFn    func(worktreePath, branch string) error
+	PullRebaseFn   func(worktreePath, branch string) error
 	CreatePRFn     func(repoPath, branch, title, body, baseBranch string, draft bool) (string, error)
 	PRBaseBranchFn func(repoPath, prURL string) string
 	DefaultError   error
@@ -43,6 +44,14 @@ func (m *MockRemoteOps) ForcePush(worktreePath, branch string) error {
 	m.Calls = append(m.Calls, MockCall{Method: "ForcePush", Args: []any{worktreePath, branch}})
 	if m.ForcePushFn != nil {
 		return m.ForcePushFn(worktreePath, branch)
+	}
+	return m.DefaultError
+}
+
+func (m *MockRemoteOps) PullRebase(worktreePath, branch string) error {
+	m.Calls = append(m.Calls, MockCall{Method: "PullRebase", Args: []any{worktreePath, branch}})
+	if m.PullRebaseFn != nil {
+		return m.PullRebaseFn(worktreePath, branch)
 	}
 	return m.DefaultError
 }

@@ -70,3 +70,116 @@ func seedAddressedReviewFeedbackIDs(t *testing.T, store *Store, parentID, repoNa
 		t.Fatalf("WriteFile(addressed IDs): %v", err)
 	}
 }
+
+func TestStoreAppendAddressedReviewFeedbackIDsCreatesStoreOnFirstWrite(t *testing.T) {
+	store := NewStore(t.TempDir())
+
+	if err := store.AppendAddressedReviewFeedbackIDs("parent-1", "api", []int{11, 22}); err != nil {
+		t.Fatalf("AppendAddressedReviewFeedbackIDs() error = %v", err)
+	}
+
+	got, err := store.LoadAddressedReviewFeedbackIDs("parent-1", "api")
+	if err != nil {
+		t.Fatalf("LoadAddressedReviewFeedbackIDs() error = %v", err)
+	}
+	if len(got) != 2 || !got[11] || !got[22] {
+		t.Fatalf("after append: got = %v, want IDs 11 and 22", got)
+	}
+}
+
+func TestStoreAppendAddressedReviewFeedbackIDsDeduplicates(t *testing.T) {
+	store := NewStore(t.TempDir())
+
+	if err := store.AppendAddressedReviewFeedbackIDs("parent-1", "api", []int{11, 22}); err != nil {
+		t.Fatalf("first append: %v", err)
+	}
+	if err := store.AppendAddressedReviewFeedbackIDs("parent-1", "api", []int{11, 33}); err != nil {
+		t.Fatalf("second append: %v", err)
+	}
+
+	got, err := store.LoadAddressedReviewFeedbackIDs("parent-1", "api")
+	if err != nil {
+		t.Fatalf("LoadAddressedReviewFeedbackIDs() error = %v", err)
+	}
+	if len(got) != 3 || !got[11] || !got[22] || !got[33] {
+		t.Fatalf("after dedup: got = %v, want IDs 11, 22, 33", got)
+	}
+}
+
+func TestStoreAppendAddressedReviewFeedbackIDsRepeatIsNoop(t *testing.T) {
+	store := NewStore(t.TempDir())
+
+	if err := store.AppendAddressedReviewFeedbackIDs("parent-1", "api", []int{11, 22}); err != nil {
+		t.Fatalf("first append: %v", err)
+	}
+	if err := store.AppendAddressedReviewFeedbackIDs("parent-1", "api", []int{11, 22}); err != nil {
+		t.Fatalf("second append (repeat): %v", err)
+	}
+
+	got, err := store.LoadAddressedReviewFeedbackIDs("parent-1", "api")
+	if err != nil {
+		t.Fatalf("LoadAddressedReviewFeedbackIDs() error = %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("after repeat append: got = %v, want exactly IDs 11 and 22 (no duplicates)", got)
+	}
+}
+
+func TestStoreAppendAddressedReviewFeedbackIDsIsolatedByRepo(t *testing.T) {
+	store := NewStore(t.TempDir())
+
+	if err := store.AppendAddressedReviewFeedbackIDs("parent-1", "api", []int{11}); err != nil {
+		t.Fatalf("append api: %v", err)
+	}
+	if err := store.AppendAddressedReviewFeedbackIDs("parent-1", "web", []int{22}); err != nil {
+		t.Fatalf("append web: %v", err)
+	}
+
+	gotAPI, _ := store.LoadAddressedReviewFeedbackIDs("parent-1", "api")
+	if gotAPI[22] || !gotAPI[11] {
+		t.Fatalf("api ledger = %v, want only ID 11", gotAPI)
+	}
+	gotWeb, _ := store.LoadAddressedReviewFeedbackIDs("parent-1", "web")
+	if gotWeb[11] || !gotWeb[22] {
+		t.Fatalf("web ledger = %v, want only ID 22", gotWeb)
+	}
+}
+
+func TestStoreAppendAddressedReviewFeedbackIDsIsolatedByParent(t *testing.T) {
+	store := NewStore(t.TempDir())
+
+	if err := store.AppendAddressedReviewFeedbackIDs("parent-1", "api", []int{11}); err != nil {
+		t.Fatalf("append parent-1: %v", err)
+	}
+	if err := store.AppendAddressedReviewFeedbackIDs("parent-2", "api", []int{22}); err != nil {
+		t.Fatalf("append parent-2: %v", err)
+	}
+
+	got1, _ := store.LoadAddressedReviewFeedbackIDs("parent-1", "api")
+	if got1[22] || !got1[11] {
+		t.Fatalf("parent-1 api ledger = %v, want only ID 11", got1)
+	}
+	got2, _ := store.LoadAddressedReviewFeedbackIDs("parent-2", "api")
+	if got2[11] || !got2[22] {
+		t.Fatalf("parent-2 api ledger = %v, want only ID 22", got2)
+	}
+}
+
+func TestStoreAppendThenLoadExcludesAddressedIDs(t *testing.T) {
+	store := NewStore(t.TempDir())
+
+	if err := store.AppendAddressedReviewFeedbackIDs("parent-1", "api", []int{11, 33}); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+
+	addressed, err := store.LoadAddressedReviewFeedbackIDs("parent-1", "api")
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if !addressed[11] || !addressed[33] {
+		t.Fatalf("addressed = %v, want 11 and 33", addressed)
+	}
+	if addressed[22] {
+		t.Fatalf("addressed = %v, 22 should not be addressed", addressed)
+	}
+}

@@ -517,6 +517,12 @@ func relationshipChildDTO(child *feature.Feature) *RelationshipChild {
 					Repo:    entry.Repo,
 				})
 			}
+			if entry.TailWarning != "" {
+				dto.CleanupWarnings = append(dto.CleanupWarnings, RelationshipCleanupWarning{
+					Message: SafeDisplayText("review-feedback tail: "+entry.TailWarning, 240),
+					Repo:    entry.Repo,
+				})
+			}
 		}
 	}
 	return dto

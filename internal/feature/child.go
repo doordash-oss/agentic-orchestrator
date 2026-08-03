@@ -36,6 +36,11 @@ const (
 	// ReviewFeedbackChildName is the fixed display and branch-slug seed for
 	// every review-feedback child.
 	ReviewFeedbackChildName = "Address review feedback"
+	// ReviewFeedbackOutcomesFilename is the well-known JSON file inside the
+	// child's active run directory where the agent records one entry per
+	// selected comment (disposition + explanation). The integration tail
+	// reads this artifact best-effort to build per-comment reply bodies.
+	ReviewFeedbackOutcomesFilename = "review-feedback-outcomes.json"
 )
 
 // Typed child-launch failures. The server maps each to a stable machine
@@ -341,10 +346,11 @@ func (m *Manager) CreateReviewFeedbackChild(parentID string, spec ReviewFeedback
 		checkpoints.RoadmapReview = gate
 		checkpoints.PhasePlanReview = gate
 		child := m.buildRefactorChild(lockedParent, RefactorChildSpec{
-			Name:        ReviewFeedbackChildName,
-			Description: reviewFeedbackDescription(lockedParent, spec.Comments),
-			Pipeline:    PipelineMedium,
-			Checkpoints: checkpoints,
+			Name:         ReviewFeedbackChildName,
+			Description:  reviewFeedbackDescription(lockedParent, spec.Comments),
+			Pipeline:     PipelineMedium,
+			Checkpoints:  checkpoints,
+			ExitCriteria: reviewFeedbackExitCriteria(spec.Comments),
 		}, bases, now)
 		child.Parent.Kind = ChildKindReviewFeedback
 		child.ReviewFeedback = append([]ReviewFeedbackComment(nil), spec.Comments...)
@@ -448,6 +454,38 @@ func reviewFeedbackDescription(parent *Feature, comments []ReviewFeedbackComment
 		}
 	}
 	return description.String()
+}
+
+// reviewFeedbackExitCriteria generates deterministic exit criteria for a
+// review-feedback child. Instead of inheriting the parent's exit criteria,
+// the child is instructed to address or dismiss each selected comment with
+// reasoning and to record one entry per selected comment — comment ID,
+// disposition (addressed/dismissed), and a short explanation — in a JSON
+// file at a fixed, well-known path inside the child's active run directory.
+// Generation is byte-stable for the same selection.
+func reviewFeedbackExitCriteria(comments []ReviewFeedbackComment) string {
+	var sb strings.Builder
+	sb.WriteString("This pass addresses selected pull request review feedback.\n")
+	sb.WriteString("\nFor each selected comment listed below, address the feedback in the code or dismiss it with a short written justification. After all comments are handled, record the outcome of each one in a JSON file named `")
+	sb.WriteString(ReviewFeedbackOutcomesFilename)
+	sb.WriteString("` at the root of the active run directory.\n")
+	sb.WriteString("\nThe JSON file must be an array of objects, one per selected comment, each with these fields:\n")
+	sb.WriteString("- `id` (integer): the GitHub comment ID\n")
+	sb.WriteString("- `disposition` (string): `\"addressed\"` if the code was changed to resolve the comment, or `\"dismissed\"` if the comment was intentionally not acted on\n")
+	sb.WriteString("- `explanation` (string): a one-sentence summary of what was done or why it was dismissed\n")
+	sb.WriteString("\nSelected comments to handle:\n")
+	for _, c := range comments {
+		fmt.Fprintf(&sb, "- Comment %d (%s, repo %s)", c.ID, c.Type, c.Repo)
+		if c.Path != "" {
+			fmt.Fprintf(&sb, " in %s", c.Path)
+			if c.Line > 0 {
+				fmt.Fprintf(&sb, ":%d", c.Line)
+			}
+		}
+		sb.WriteString("\n")
+	}
+	sb.WriteString("\nEvery selected comment must have exactly one entry in the outcomes file. The pass is complete when all comments are handled and the outcomes file is written.")
+	return sb.String()
 }
 
 // CreateRefactorChild atomically launches a refactor child under the given

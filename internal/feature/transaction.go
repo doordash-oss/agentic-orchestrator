@@ -108,6 +108,11 @@ type RepoTransactionEntry struct {
 	// CleanupWarning records a non-fatal worktree/branch cleanup failure
 	// for this repository.
 	CleanupWarning string `yaml:"cleanup_warning,omitempty"`
+	// TailWarning records a non-fatal review-feedback integration tail
+	// failure for this repository (push, reply, or thread-resolution
+	// failure). It is projected into the existing warnings list with a
+	// distinguishing prefix; no API schema change.
+	TailWarning string `yaml:"tail_warning,omitempty"`
 	// Diagnostics is a human-readable summary of the per-repo attention
 	// condition.
 	Diagnostics string `yaml:"diagnostics,omitempty"`
@@ -125,6 +130,12 @@ type TransactionJournal struct {
 	// Attention is a human-readable summary of the blocking condition when
 	// the transaction is parked at attention.
 	Attention string `yaml:"attention,omitempty"`
+	// TailSettled is the durable marker that the review-feedback integration
+	// tail has finished attempting all steps. The startup reconciler skips
+	// settled tails entirely so historical children trigger no pushes, no
+	// gh invocations, and no journal churn on later startups. Refactor
+	// children never set this marker.
+	TailSettled bool `yaml:"tail_settled,omitempty"`
 }
 
 // AllCandidatesPrepared reports whether every per-repo entry has a durable

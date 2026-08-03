@@ -423,6 +423,15 @@ func (o *Orchestrator) settleChildClosureTail(childID, parentID string) error {
 		return fmt.Errorf("reload child: %w", err)
 	}
 
+	// A settled review-feedback tail is fully complete — shared cleanup work
+	// and the review-feedback tail both finished. Skip entirely so historical
+	// children trigger no pushes, no gh invocations, and no journal churn on
+	// later startups.
+	if child.Parent.Kind == feature.ChildKindReviewFeedback &&
+		child.Parent.Transaction != nil && child.Parent.Transaction.TailSettled {
+		return nil
+	}
+
 	// Preserve the child's diff before any cleanup removes the disposable
 	// worktrees. Best-effort: capture failures never block the closure tail.
 	o.preserveChildDiffSummary(childID)
@@ -499,7 +508,7 @@ func (o *Orchestrator) settleChildClosureTail(childID, parentID string) error {
 		return fmt.Errorf("reload parent: %w", err)
 	}
 	if child.Parent.Kind == feature.ChildKindReviewFeedback {
-		return o.reviewFeedbackIntegrationTail(parent)
+		return o.reviewFeedbackIntegrationTail(child, parent)
 	}
 	if parent.IsPublishable() && parent.Checkpoints.AutoPublish() {
 		if err := o.publishWithOptionsLocked(parentID, PublishOptions{}); err != nil {
@@ -521,16 +530,160 @@ func (o *Orchestrator) settleChildClosureTail(childID, parentID string) error {
 	return nil
 }
 
-// reviewFeedbackIntegrationTail is the named Phase 2 seam for the
-// review-feedback PR tail. The shared transaction has already merged and
-// closed the child; this temporary implementation only restores the parent
-// to Published. It deliberately does not inspect publish checkpoints or
-// invoke any remote GitHub operation. Phase 3 replaces this body with the
-// real reply, resolve, push, and addressed-ID workflow.
-func (o *Orchestrator) reviewFeedbackIntegrationTail(parent *feature.Feature) error {
+// reviewFeedbackIntegrationTail is the real ending for a review-feedback
+// child after the shared transactional merge has closed the child. For each
+// repo that had selected comments it pull-rebases and pushes the parent
+// branch to the existing PR, replies to every selected comment with
+// type-appropriate routing, resolves inline review threads whose reply
+// succeeded, and records the addressed comment IDs. Repos without selected
+// comments are not pushed. Failures are terminal warnings: the tail
+// attempts every step once, records per-repo failures in the new
+// TailWarning journal field, and marks itself settled regardless. The
+// parent ends Published whether or not any step failed.
+func (o *Orchestrator) reviewFeedbackIntegrationTail(child, parent *feature.Feature) error {
+	// Group selected comments by repo, preserving the parent repo order.
+	commentsByRepo := make(map[string][]feature.ReviewFeedbackComment)
+	for _, c := range child.ReviewFeedback {
+		commentsByRepo[c.Repo] = append(commentsByRepo[c.Repo], c)
+	}
+
+	// Load the outcomes artifact (tolerant: missing/malformed → empty map).
+	outcomes := feature.LoadReviewFeedbackOutcomes(o.stateDir(), child)
+
+	// The ledger store capability (load + append). Production wiring always
+	// uses *feature.Store; test doubles may not implement it — in that case
+	// the tail records warnings and skips ledger writes.
+	ledger, _ := o.deps.Store.(reviewFeedbackLedger)
+
+	for _, repo := range parent.Repos {
+		comments := commentsByRepo[repo.Name]
+		if len(comments) == 0 {
+			continue
+		}
+
+		// Get the merge SHA for this repo from the transaction journal.
+		mergeSHA := ""
+		if child.Parent.Transaction != nil {
+			if entry := child.Parent.Transaction.EntryByRepo(repo.Name); entry != nil {
+				mergeSHA = entry.MergeHEAD
+			}
+		}
+
+		// Get the PR URL from the parent's repo state.
+		repoState := parent.RepoStates[repo.Name]
+		if repoState == nil || repoState.PRURL == "" {
+			o.recordTransactionTailWarning(child.ID, repo.Name, "no PR URL for review-feedback tail")
+			continue
+		}
+
+		worktree := repo.WorktreePath
+		if worktree == "" {
+			worktree = repo.Path
+		}
+		if worktree == "" {
+			o.recordTransactionTailWarning(child.ID, repo.Name, "parent repo has no worktree path")
+			continue
+		}
+		branch := repo.Branch
+
+		// Pull-rebase and push the parent branch to the existing PR remote.
+		if o.deps.Remote == nil {
+			o.recordTransactionTailWarning(child.ID, repo.Name, "remote operations not configured")
+			continue
+		}
+		if err := o.deps.Remote.PullRebase(worktree, branch); err != nil {
+			o.recordTransactionTailWarning(child.ID, repo.Name, fmt.Sprintf("pull-rebase failed: %v", err))
+			continue
+		}
+		if err := o.deps.Remote.Push(worktree, branch); err != nil {
+			o.recordTransactionTailWarning(child.ID, repo.Name, fmt.Sprintf("push failed: %v", err))
+			continue
+		}
+
+		// Load addressed ledger for recovery dedup.
+		var addressed map[int]bool
+		if ledger != nil {
+			addr, err := ledger.LoadAddressedReviewFeedbackIDs(parent.ID, repo.Name)
+			if err != nil {
+				o.recordTransactionTailWarning(child.ID, repo.Name, fmt.Sprintf("load addressed IDs: %v", err))
+				addressed = make(map[int]bool)
+			} else {
+				addressed = addr
+			}
+		} else {
+			addressed = make(map[int]bool)
+		}
+
+		// Reply to each selected comment.
+		replied := make(map[int]bool)
+		for _, comment := range comments {
+			if addressed[comment.ID] {
+				replied[comment.ID] = true
+				continue
+			}
+			outcome, ok := outcomes[comment.ID]
+			body := feature.ReviewFeedbackReplyBody(outcome, ok, mergeSHA)
+			var replyErr error
+			switch comment.Type {
+			case git.CommentTypeReview:
+				replyErr = git.ReplyToPRComment(worktree, repoState.PRURL, comment.ID, body)
+			case git.CommentTypeIssue, git.CommentTypeReviewBody:
+				replyErr = git.ReplyToIssueComment(worktree, repoState.PRURL, body)
+			default:
+				replyErr = fmt.Errorf("unsupported comment type %q", comment.Type)
+			}
+			if replyErr != nil {
+				o.recordTransactionTailWarning(child.ID, repo.Name, fmt.Sprintf("reply to comment %d: %v", comment.ID, replyErr))
+				continue
+			}
+			replied[comment.ID] = true
+			// Append to the addressed ledger immediately so a resumed tail
+			// skips already-replied comments.
+			if ledger != nil {
+				if err := ledger.AppendAddressedReviewFeedbackIDs(parent.ID, repo.Name, []int{comment.ID}); err != nil {
+					o.recordTransactionTailWarning(child.ID, repo.Name, fmt.Sprintf("record addressed ID %d: %v", comment.ID, err))
+				}
+			}
+		}
+
+		// Fetch the unresolved-thread map and resolve inline threads whose
+		// replies succeeded.
+		threadMap, err := git.FetchReviewThreadMap(worktree, repoState.PRURL)
+		if err != nil {
+			o.recordTransactionTailWarning(child.ID, repo.Name, fmt.Sprintf("fetch thread map: %v", err))
+			continue
+		}
+		for _, comment := range comments {
+			if !replied[comment.ID] || comment.Type != git.CommentTypeReview {
+				continue
+			}
+			threadNodeID, ok := threadMap[comment.ID]
+			if !ok {
+				continue
+			}
+			if err := git.ResolveReviewThread(worktree, threadNodeID); err != nil {
+				o.recordTransactionTailWarning(child.ID, repo.Name, fmt.Sprintf("resolve thread for comment %d: %v", comment.ID, err))
+			}
+		}
+	}
+
+	// The parent ends Published whether or not any step failed.
 	if err := o.deps.Lifecycle.MarkPublished(parent.ID, parent.FirstRepoPRURL()); err != nil {
 		return fmt.Errorf("returning review-feedback parent to published: %w", err)
 	}
+
+	// Persist the durable tail-settled marker regardless of warnings. The
+	// warning is terminal, and unrecorded comment IDs resurfacing in the
+	// next fetch is the retry path.
+	if err := o.deps.Store.Modify(child.ID, func(f *feature.Feature) error {
+		if f.Parent.Transaction != nil {
+			f.Parent.Transaction.TailSettled = true
+		}
+		return nil
+	}); err != nil {
+		return fmt.Errorf("persist tail-settled marker: %w", err)
+	}
+
 	return nil
 }
 
@@ -549,6 +702,41 @@ func (o *Orchestrator) recordTransactionCleanupWarning(childID, repoName, warnin
 		}
 		return nil
 	})
+}
+
+// reviewFeedbackLedger is the store capability for reading and writing the
+// durable addressed-ID ledger. Production wiring always uses *feature.Store.
+type reviewFeedbackLedger interface {
+	LoadAddressedReviewFeedbackIDs(parentID, repoName string) (map[int]bool, error)
+	AppendAddressedReviewFeedbackIDs(parentID, repoName string, ids []int) error
+}
+
+// recordTransactionTailWarning durably records a review-feedback integration
+// tail failure for a repo on the transaction journal's TailWarning field.
+// The warning is terminal — it never blocks the remaining comments or repos
+// and the tail still settles.
+func (o *Orchestrator) recordTransactionTailWarning(childID, repoName, warning string) {
+	if err := o.deps.Store.Modify(childID, func(f *feature.Feature) error {
+		if f.Parent.Transaction != nil {
+			for i := range f.Parent.Transaction.Entries {
+				if f.Parent.Transaction.Entries[i].Repo == repoName {
+					existing := f.Parent.Transaction.Entries[i].TailWarning
+					if existing != "" {
+						existing += "; "
+					}
+					f.Parent.Transaction.Entries[i].TailWarning = existing + warning
+					return nil
+				}
+			}
+		}
+		return nil
+	}); err != nil {
+		o.emitEvent(ports.Event{
+			Type:      ports.RepoStatusChanged,
+			FeatureID: childID,
+			Message:   fmt.Sprintf("failed to record tail warning for %s: %v", repoName, err),
+		})
+	}
 }
 
 // cleanupChildResourcesPerRepo removes the disposable child worktree and

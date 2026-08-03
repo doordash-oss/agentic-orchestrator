@@ -21,6 +21,7 @@ import "github.com/doordash-oss/agentic-orchestrator/internal/git"
 type RemoteOps interface {
 	Push(worktreePath, branch string) error
 	ForcePush(worktreePath, branch string) error
+	PullRebase(worktreePath, branch string) error
 	CreatePR(repoPath, branch, title, body, baseBranch string, draft bool) (string, error)
 	PRBaseBranch(repoPath, prURL string) string
 }
@@ -33,6 +34,11 @@ func (gitRemoteOps) Push(worktreePath, branch string) error {
 
 func (gitRemoteOps) ForcePush(worktreePath, branch string) error {
 	return git.ForcePush(worktreePath, branch)
+}
+
+func (gitRemoteOps) PullRebase(worktreePath, branch string) error {
+	res := git.PullRebase(worktreePath, branch)
+	return res.Err
 }
 
 func (gitRemoteOps) CreatePR(repoPath, branch, title, body, baseBranch string, draft bool) (string, error) {

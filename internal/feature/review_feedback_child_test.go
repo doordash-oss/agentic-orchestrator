@@ -78,8 +78,17 @@ func TestCreateReviewFeedbackChildPersistsSelectedFeedback(t *testing.T) {
 		t.Errorf("child.Pipeline = %q, want %q", child.Pipeline, feature.PipelineMedium)
 	}
 	if child.Models != parent.Models || child.Effort != parent.Effort || child.RiskLevel != parent.RiskLevel ||
-		child.ExitCriteria != parent.ExitCriteria || child.Inquireness != parent.Inquireness {
+		child.Inquireness != parent.Inquireness {
 		t.Errorf("child inherited config = models:%+v effort:%+v risk:%q exit:%q inquireness:%q", child.Models, child.Effort, child.RiskLevel, child.ExitCriteria, child.Inquireness)
+	}
+	if child.ExitCriteria == parent.ExitCriteria {
+		t.Errorf("child ExitCriteria inherited parent's; want deterministic review-feedback outcomes contract")
+	}
+	if !strings.Contains(child.ExitCriteria, feature.ReviewFeedbackOutcomesFilename) {
+		t.Errorf("child ExitCriteria = %q, want outcomes file path %q", child.ExitCriteria, feature.ReviewFeedbackOutcomesFilename)
+	}
+	if !strings.Contains(child.ExitCriteria, "Comment 101") || !strings.Contains(child.ExitCriteria, "Comment 202") {
+		t.Errorf("child ExitCriteria = %q, want selected comment IDs 101 and 202", child.ExitCriteria)
 	}
 	if child.Checkpoints.RoadmapReview || child.Checkpoints.PhasePlanReview {
 		t.Errorf("child review gates = %+v, want roadmap and phase-plan disabled", child.Checkpoints)

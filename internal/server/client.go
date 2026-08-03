@@ -125,6 +125,18 @@ func (c *Client) RefactorFeature(ctx context.Context, featureID string, req Refa
 	return out, err
 }
 
+func (c *Client) ReviewFeedbackFeature(ctx context.Context, featureID string, req ReviewFeedbackFeatureRequest) (ReviewFeedbackFeatureResponse, error) {
+	var out ReviewFeedbackFeatureResponse
+	err := c.doJSON(ctx, http.MethodPost, featureActionPath(featureID, actionReviewFeedback), nil, req, &out, true)
+	return out, err
+}
+
+func (c *Client) FetchReviewFeedback(ctx context.Context, featureID string) (ReviewFeedbackFetchResponse, error) {
+	var out ReviewFeedbackFetchResponse
+	err := c.doJSON(ctx, http.MethodPost, reviewFeedbackFetchPath(featureID), nil, ReviewFeedbackFetchRequest{}, &out, true)
+	return out, err
+}
+
 func (c *Client) getJSON(ctx context.Context, path string, query url.Values, out any) error {
 	return c.doJSON(ctx, http.MethodGet, path, query, nil, out, false)
 }

@@ -34,29 +34,35 @@ func drainOrchestratorEvent(t *testing.T, o *Orchestrator) ports.Event {
 	}
 }
 
-// TestRefactorChildCreatedEmitsCorrelatedEvent pins the child-creation emit
+// TestChildCreatedEmitsCorrelatedEvent pins the child-creation emit
 // point: the SSE-facing event carries the child id as FeatureID and the
 // launch parent and child as one relationship identity.
-func TestRefactorChildCreatedEmitsCorrelatedEvent(t *testing.T) {
+func TestChildCreatedEmitsCorrelatedEvent(t *testing.T) {
 	t.Parallel()
-	child := &feature.Feature{
-		ID:     "child-1",
-		Status: feature.StatusSettingUpWorktrees,
-		Parent: &feature.ChildRelationship{ParentID: "parent-1", Kind: feature.ChildKindRefactor},
-	}
-	lc := mocks.NewMockFeatureLifecycle()
-	lc.GetFn = func(id string) (*feature.Feature, error) { return child, nil }
-	o := New(Deps{Lifecycle: lc}, Hooks{})
+	for _, kind := range []string{feature.ChildKindRefactor, feature.ChildKindReviewFeedback} {
+		kind := kind
+		t.Run(kind, func(t *testing.T) {
+			child := &feature.Feature{
+				ID:     "child-1",
+				Status: feature.StatusSettingUpWorktrees,
+				Parent: &feature.ChildRelationship{ParentID: "parent-1", Kind: kind},
+			}
+			lc := mocks.NewMockFeatureLifecycle()
+			lc.GetFn = func(id string) (*feature.Feature, error) { return child, nil }
+			o := New(Deps{Lifecycle: lc}, Hooks{})
 
-	o.RefactorChildCreated(child)
-	ev := drainOrchestratorEvent(t, o)
-	if ev.Type != ports.RelationshipChildCreated || ev.FeatureID != child.ID || ev.ParentID != "parent-1" || ev.ChildID != child.ID || ev.Feature != child {
-		t.Fatalf("event = %+v, want relationship-created event for child correlated to parent", ev)
+			o.ChildCreated(child)
+			ev := drainOrchestratorEvent(t, o)
+			if ev.Type != ports.RelationshipChildCreated || ev.FeatureID != child.ID || ev.ParentID != "parent-1" || ev.ChildID != child.ID || ev.Feature != child {
+				t.Fatalf("event = %+v, want relationship-created event for child correlated to parent", ev)
+			}
+		})
 	}
 
 	// Nil and top-level features must not emit anything.
-	o.RefactorChildCreated(nil)
-	o.RefactorChildCreated(&feature.Feature{ID: "top-level"})
+	o := New(Deps{Lifecycle: mocks.NewMockFeatureLifecycle()}, Hooks{})
+	o.ChildCreated(nil)
+	o.ChildCreated(&feature.Feature{ID: "top-level"})
 	select {
 	case stray := <-o.Events():
 		t.Fatalf("unexpected event for non-child input: %+v", stray)

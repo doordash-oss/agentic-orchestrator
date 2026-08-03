@@ -37,8 +37,10 @@ func TestClientExportsOnlyJourneyUsedMethods(t *testing.T) {
 	t.Parallel()
 
 	want := []string{
+		"FetchReviewFeedback",
 		"LivePreview",
 		"RefactorFeature",
+		"ReviewFeedbackFeature",
 		"SubscribeSessionOutput",
 		"Transcript",
 		"UpdateFeatureConfig",
@@ -50,6 +52,46 @@ func TestClientExportsOnlyJourneyUsedMethods(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("exported Client methods = %v, want %v", got, want)
+	}
+}
+
+func TestClientFetchReviewFeedbackReturnsTypedGroups(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/api/v1/features/feat-1/actions/review-feedback/fetch" {
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.String())
+		}
+		var req map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode fetch request: %v", err)
+		}
+		if len(req) != 0 {
+			t.Fatalf("FetchReviewFeedback() request = %v, want empty object", req)
+		}
+		writeJSON(w, http.StatusOK, ReviewFeedbackFetchResponse{
+			APIVersion: APIVersion,
+			Repos: []ReviewFeedbackRepoComments{{
+				Repo:  "api",
+				PrURL: "https://github.com/example/api/pull/1",
+				Comments: []feature.ReviewFeedbackComment{{
+					Repo: "api", ID: 11, Type: "issue", Body: "please adjust",
+				}},
+			}},
+		})
+	}))
+	t.Cleanup(srv.Close)
+	client, err := NewClient(ClientOptions{BaseURL: srv.URL})
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+
+	result, err := client.FetchReviewFeedback(context.Background(), fixtureFeatureID)
+	if err != nil {
+		t.Fatalf("FetchReviewFeedback() error = %v", err)
+	}
+	if len(result.Repos) != 1 || result.Repos[0].Repo != "api" || len(result.Repos[0].Comments) != 1 || result.Repos[0].Comments[0].ID != 11 {
+		t.Fatalf("FetchReviewFeedback() = %+v, want typed api group with comment 11", result)
 	}
 }
 
@@ -188,6 +230,47 @@ func TestClientRefactorFeatureReturnsTypedResult(t *testing.T) {
 	}
 	if result.FeatureID != "child-1" || result.ParentID != fixtureFeatureID {
 		t.Fatalf("RefactorFeature() = %+v, want child-1 of feat-1", result)
+	}
+}
+
+func TestClientReviewFeedbackFeatureReturnsTypedResult(t *testing.T) {
+	t.Parallel()
+
+	gate := false
+	comments := []feature.ReviewFeedbackComment{{Repo: "api", ID: 17, Type: "review", Body: "handle this"}}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/api/v1/features/feat-1/actions/review-feedback" {
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.String())
+		}
+		var req ReviewFeedbackFeatureRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode review-feedback request: %v", err)
+		}
+		if req.Gate == nil || *req.Gate || !reflect.DeepEqual(req.Comments, comments) {
+			t.Fatalf("ReviewFeedbackFeature() request = %+v, want full comments and explicit false gate", req)
+		}
+		writeJSON(w, http.StatusCreated, ReviewFeedbackFeatureResponse{
+			APIVersion: APIVersion,
+			FeatureID:  "child-1",
+			ParentID:   fixtureFeatureID,
+			Result:     resultCreated,
+		})
+	}))
+	t.Cleanup(srv.Close)
+	client, err := NewClient(ClientOptions{BaseURL: srv.URL})
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+
+	result, err := client.ReviewFeedbackFeature(context.Background(), fixtureFeatureID, ReviewFeedbackFeatureRequest{
+		Comments: comments,
+		Gate:     &gate,
+	})
+	if err != nil {
+		t.Fatalf("ReviewFeedbackFeature() error = %v", err)
+	}
+	if result.FeatureID != "child-1" || result.ParentID != fixtureFeatureID {
+		t.Fatalf("ReviewFeedbackFeature() = %+v, want child-1 of feat-1", result)
 	}
 }
 

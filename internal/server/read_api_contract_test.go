@@ -1403,6 +1403,7 @@ func TestFeatureDetailActionCatalogStableAndRedacted(t *testing.T) {
 		actionMerge,
 		actionRewind,
 		actionRebase,
+		actionReviewFeedback,
 		actionRefactor,
 		actionRetry,
 		actionMarkDone,
@@ -1427,6 +1428,8 @@ func TestFeatureDetailActionCatalogStableAndRedacted(t *testing.T) {
 	assertActionInputRequired(t, actionsByID[actionRewind], "upgrade_pipeline", false)
 	assertActionScope(t, actionsByID[actionRebase], "")
 	assertActionInputNames(t, actionsByID[actionRebase])
+	assertActionScope(t, actionsByID[actionReviewFeedback], "")
+	assertActionInputNames(t, actionsByID[actionReviewFeedback])
 	assertActionScope(t, actionsByID[actionCleanup], "")
 	assertActionInputNames(t, actionsByID[actionCleanup], "target")
 	assertActionScope(t, actionsByID[actionDelete], "")

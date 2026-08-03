@@ -654,6 +654,86 @@ func TestRefactorActionRequiresName(t *testing.T) {
 	}
 }
 
+func TestReviewFeedbackActionLaunchesFromSubmittedPayload(t *testing.T) {
+	t.Parallel()
+
+	target := &reviewFeedbackMutationTarget{resp: ReviewFeedbackFeatureResponse{
+		ParentID:  "parent-1",
+		FeatureID: "child-1",
+		Result:    resultCreated,
+	}}
+	handler := NewHandler(HandlerOptions{Mutations: target, DisableHostValidation: true})
+	body := `{"comments":[{"repo":"api","id":17,"type":"review","path":"handler.go","line":42,"author":"alice","body":"handle this","diff_hunk":"@@ -41 +41,2 @@","in_reply_to_id":9}],"gate":false}`
+	req := httptest.NewRequest(http.MethodPost, apiPathReviewFeedbackAction, bytes.NewBufferString(body))
+	req.URL.Path = "/api/v1/features/parent-1/actions/review-feedback"
+	req.Header.Set("Content-Type", contentTypeJSON)
+	req.Header.Set("X-Agentico-Client", trustedClientHeaderValue)
+	w := httptest.NewRecorder()
+
+	handler.ServeHTTP(w, req)
+
+	resp := w.Result()
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("status = %d; want 201", resp.StatusCode)
+	}
+	if len(target.received) != 1 {
+		t.Fatalf("received requests = %d; want 1", len(target.received))
+	}
+	got := target.received[0]
+	if got.Gate == nil || *got.Gate || len(got.Comments) != 1 {
+		t.Fatalf("request = %+v; want one comment and explicit false gate", got)
+	}
+	want := feature.ReviewFeedbackComment{
+		Repo: "api", ID: 17, Type: "review", Path: "handler.go", Line: 42,
+		Author: "alice", Body: "handle this", DiffHunk: "@@ -41 +41,2 @@", InReplyTo: 9,
+	}
+	if got.Comments[0] != want {
+		t.Fatalf("comment = %+v; want %+v", got.Comments[0], want)
+	}
+}
+
+func TestReviewFeedbackActionTypedValidationErrorCodes(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		err      error
+		wantCode string
+	}{
+		{name: "empty selection", err: feature.ErrReviewFeedbackEmptySelection, wantCode: "review_feedback_empty_selection"},
+		{name: "unsupported comment", err: feature.ErrReviewFeedbackUnsupportedCommentType, wantCode: "review_feedback_unsupported_comment_type"},
+		{name: "unknown repository", err: feature.ErrReviewFeedbackUnknownRepo, wantCode: "review_feedback_unknown_repo"},
+		{name: "repository without pull request", err: feature.ErrReviewFeedbackRepoHasNoPR, wantCode: "review_feedback_repo_has_no_pull_request"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			target := &reviewFeedbackMutationTarget{err: tt.err}
+			handler := NewHandler(HandlerOptions{Mutations: target, DisableHostValidation: true})
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/features/parent-1/actions/review-feedback", bytes.NewBufferString(`{"comments":[{"repo":"api","id":17,"type":"review"}]}`))
+			req.Header.Set("Content-Type", contentTypeJSON)
+			req.Header.Set("X-Agentico-Client", trustedClientHeaderValue)
+			w := httptest.NewRecorder()
+
+			handler.ServeHTTP(w, req)
+
+			resp := w.Result()
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusBadRequest {
+				t.Fatalf("status = %d; want 400", resp.StatusCode)
+			}
+			var body ErrorResponse
+			if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+				t.Fatalf("decode response: %v", err)
+			}
+			if body.Error.Code != tt.wantCode {
+				t.Fatalf("error code = %q; want %q", body.Error.Code, tt.wantCode)
+			}
+		})
+	}
+}
+
 // TestRefactorActionTypedErrorCodes pins the stable machine codes of every
 // typed child-launch failure and of the child execution gate.
 func TestRefactorActionTypedErrorCodes(t *testing.T) {
@@ -882,6 +962,18 @@ type refactorMutationTarget struct {
 	received []RefactorFeatureRequest
 	resp     RefactorFeatureResponse
 	err      error
+}
+
+type reviewFeedbackMutationTarget struct {
+	MutationTarget
+	received []ReviewFeedbackFeatureRequest
+	resp     ReviewFeedbackFeatureResponse
+	err      error
+}
+
+func (t *reviewFeedbackMutationTarget) ReviewFeedbackFeature(_ string, req ReviewFeedbackFeatureRequest) (ReviewFeedbackFeatureResponse, error) {
+	t.received = append(t.received, req)
+	return t.resp, t.err
 }
 
 func (t *refactorMutationTarget) RefactorFeature(featureID string, req RefactorFeatureRequest) (RefactorFeatureResponse, error) {

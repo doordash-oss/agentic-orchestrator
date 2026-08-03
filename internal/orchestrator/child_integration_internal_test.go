@@ -788,6 +788,57 @@ func TestChildIntegrationAutoPublishFailureKeepsCodeReady(t *testing.T) {
 	}
 }
 
+// TestReviewFeedbackIntegrationTailReturnsParentPublished proves the
+// review-feedback closure tail never enters the ordinary publish path, even
+// when the parent's checkpoints would otherwise enable auto-publish.
+func TestReviewFeedbackIntegrationTailReturnsParentPublished(t *testing.T) {
+	if testing.Short() {
+		t.Skip("real-git integration test")
+	}
+	fx := newChildIntegrationFixture(t, feature.StatusPublished, false)
+	if err := fx.store.Modify(fx.parent.ID, func(f *feature.Feature) error {
+		f.RepoStates["repoA"].PRURL = "https://example.test/org/repo/pull/1"
+		return nil
+	}); err != nil {
+		t.Fatalf("seed parent PR URL: %v", err)
+	}
+	if err := fx.store.Modify(fx.child.ID, func(f *feature.Feature) error {
+		f.Parent.Kind = feature.ChildKindReviewFeedback
+		return nil
+	}); err != nil {
+		t.Fatalf("set child kind: %v", err)
+	}
+
+	publishStarts := 0
+	o := New(Deps{
+		Lifecycle: fx.mgr,
+		Store:     fx.store,
+		Worktrees: fx.wm,
+	}, Hooks{OnPublishStarted: func(string) { publishStarts++ }})
+	publishCalls := 0
+	o.publishRepoFn = func(featureID, repoName string) (string, error) {
+		publishCalls++
+		return "", errors.New("review-feedback tail must not publish")
+	}
+
+	if err := o.RunChildIntegration(fx.child.ID); err != nil {
+		t.Fatalf("RunChildIntegration() error = %v", err)
+	}
+	parent, child := fx.reload()
+	if publishCalls != 0 {
+		t.Fatalf("publish calls = %d, want 0", publishCalls)
+	}
+	if publishStarts != 0 {
+		t.Fatalf("publish starts = %d, want 0", publishStarts)
+	}
+	if parent.Status != feature.StatusPublished {
+		t.Fatalf("parent status = %s, want Published", parent.Status)
+	}
+	if child.Parent.CloseOutcome != feature.ChildCloseOutcomeCompleted {
+		t.Fatalf("child close outcome = %q, want completed", child.Parent.CloseOutcome)
+	}
+}
+
 // TestAdvanceAfterFinalReviewRoutesChildToIntegration pins the terminal
 // handoff: a child with a successful final review enters integration instead
 // of MarkCodeReady or any delivery path.

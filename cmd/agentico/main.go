@@ -911,17 +911,18 @@ func (b *runtimeBootstrap) Close(ctx context.Context) error {
 }
 
 type serverMutationTarget struct {
-	mu              sync.Mutex
-	orch            *orchestrator.Orchestrator
-	rebaseStarter   featureRebaseStarter
-	childCreator    featureRefactorChildCreator
-	cfg             *config.Config
-	configPath      string
-	store           *feature.Store
-	sessions        ports.SessionManager
-	phaseRunner     *agent.PhaseRunner
-	permissionCache *permission.Cache
-	workspaceDir    string
+	mu                    sync.Mutex
+	orch                  *orchestrator.Orchestrator
+	rebaseStarter         featureRebaseStarter
+	childCreator          featureRefactorChildCreator
+	reviewFeedbackCreator featureReviewFeedbackChildCreator
+	cfg                   *config.Config
+	configPath            string
+	store                 *feature.Store
+	sessions              ports.SessionManager
+	phaseRunner           *agent.PhaseRunner
+	permissionCache       *permission.Cache
+	workspaceDir          string
 	// dispatchAsync runs server-owned background work (durable feature
 	// setup). Nil means `go fn()`; tests inject a synchronous dispatcher.
 	dispatchAsync func(fn func())
@@ -935,6 +936,10 @@ type featureRebaseStarter interface {
 // refactor action needs to atomically create and persist a refactor child.
 type featureRefactorChildCreator interface {
 	CreateRefactorChild(parentID string, spec feature.RefactorChildSpec) (*feature.Feature, error)
+}
+
+type featureReviewFeedbackChildCreator interface {
+	CreateReviewFeedbackChild(parentID string, spec feature.ReviewFeedbackChildSpec) (*feature.Feature, error)
 }
 
 type gitFreshnessProvider struct{}
@@ -1977,7 +1982,41 @@ func (t *serverMutationTarget) RefactorFeature(featureID string, req serverrunti
 	// in-process lock. The orchestrator parks setup-complete children at
 	// Created without starting the pipeline.
 	if t.orch != nil {
-		t.orch.RefactorChildCreated(child)
+		t.orch.ChildCreated(child)
+		t.orch.RunSetupAsync(child.ID)
+	}
+	resp.FeatureID = child.ID
+	resp.Result = resultCreated
+	return resp, nil
+}
+
+func (t *serverMutationTarget) ReviewFeedbackFeature(featureID string, req serverruntime.ReviewFeedbackFeatureRequest) (serverruntime.ReviewFeedbackFeatureResponse, error) {
+	resp := serverruntime.ReviewFeedbackFeatureResponse{ParentID: featureID, Result: resultFailed}
+	creator := t.reviewFeedbackCreator
+	if creator == nil {
+		return resp, errors.New("feature manager is not available")
+	}
+	spec, err := serverruntime.ReviewFeedbackChildSpecFromRequest(req)
+	if err != nil {
+		return resp, err
+	}
+	var child *feature.Feature
+	if t.orch != nil {
+		if lockErr := t.orch.WithRelationshipWriteLock(func() error {
+			var createErr error
+			child, createErr = creator.CreateReviewFeedbackChild(featureID, spec)
+			return createErr
+		}); lockErr != nil {
+			return resp, lockErr
+		}
+	} else {
+		child, err = creator.CreateReviewFeedbackChild(featureID, spec)
+		if err != nil {
+			return resp, err
+		}
+	}
+	if t.orch != nil {
+		t.orch.ChildCreated(child)
 		t.orch.RunSetupAsync(child.ID)
 	}
 	resp.FeatureID = child.ID
@@ -2684,16 +2723,17 @@ func runServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledPr
 		Events:       boot.eventCh,
 		DomainEvents: boot.orchestrator.Events(),
 		Mutations: &serverMutationTarget{
-			orch:            boot.orchestrator,
-			rebaseStarter:   boot.orchestrator,
-			childCreator:    boot.featureManager,
-			cfg:             boot.cfg,
-			configPath:      boot.runtime.Config,
-			store:           boot.featureManager.Store,
-			sessions:        boot.sessionManager,
-			phaseRunner:     boot.phaseRunner,
-			permissionCache: boot.permissionCache,
-			workspaceDir:    boot.workspaceDir,
+			orch:                  boot.orchestrator,
+			rebaseStarter:         boot.orchestrator,
+			childCreator:          boot.featureManager,
+			reviewFeedbackCreator: boot.featureManager,
+			cfg:                   boot.cfg,
+			configPath:            boot.runtime.Config,
+			store:                 boot.featureManager.Store,
+			sessions:              boot.sessionManager,
+			phaseRunner:           boot.phaseRunner,
+			permissionCache:       boot.permissionCache,
+			workspaceDir:          boot.workspaceDir,
 		},
 		PersistProviderModelCatalog: func(provider llm.LLMProvider, models []llm.ModelInfo) error {
 			return persistRefreshedProviderModelCatalog(boot.runtime.RuntimeDir, provider, models)

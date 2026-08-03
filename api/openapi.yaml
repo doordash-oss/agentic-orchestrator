@@ -339,11 +339,14 @@ paths:
         "200":
           $ref: "#/components/responses/ActionResponse"
         "201":
-          description: Refactor child launched. Only the refactor action returns 201; its typed contract is documented as the refactorFeature operation at /api/v1/features/{feature_id}/actions/refactor.
+          description: >-
+            Child launched. The typed contracts are documented by the static
+            refactorFeature and reviewFeedbackFeature operations at their exact
+            action URLs.
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/RefactorFeatureResponse"
+                $ref: "#/components/schemas/ChildFeatureResponse"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "409":
@@ -384,6 +387,86 @@ paths:
         "404":
           $ref: "#/components/responses/ErrorResponse"
         "409":
+          $ref: "#/components/responses/ErrorResponse"
+
+  # Statically documented form of the review-feedback launch action. The
+  # server routes it through the dynamic /actions/{action} dispatcher, so the
+  # served URL is exactly the generic dispatch URL with action review-feedback.
+  /api/v1/features/{feature_id}/actions/review-feedback:
+    post:
+      operationId: reviewFeedbackFeature
+      summary: Launch a child feature for selected pull-request feedback.
+      description: >-
+        Accepts the complete selected comment payloads returned by
+        fetchReviewFeedback plus an optional coupled roadmap/phase-plan gate.
+        The server does not re-fetch GitHub. Failure machine codes include 400
+        `review_feedback_empty_selection`,
+        `review_feedback_unsupported_comment_type`,
+        `review_feedback_unknown_repo`, and
+        `review_feedback_repo_has_no_pull_request`; 404 `parent_not_found`; and
+        409 `parent_is_child`, `parent_status_ineligible`,
+        `active_child_exists`, and `parent_worktrees_dirty`.
+      parameters:
+        - $ref: "#/components/parameters/FeatureID"
+        - $ref: "#/components/parameters/TrustedMutationHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReviewFeedbackFeatureRequest"
+      responses:
+        "201":
+          description: Review-feedback child launched and setup queued.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReviewFeedbackFeatureResponse"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/ErrorResponse"
+        "409":
+          $ref: "#/components/responses/ErrorResponse"
+
+  # Statically documented form of the review-feedback fetch subaction. The
+  # server routes it through the dynamic action/subaction dispatcher, so the
+  # served URL remains exactly the generic dispatch URL below.
+  /api/v1/features/{feature_id}/actions/review-feedback/fetch:
+    post:
+      operationId: fetchReviewFeedback
+      summary: Fetch unaddressed pull-request feedback across every parent repository.
+      description: >-
+        Aggregates every repository carrying a PR URL, silently skips parent
+        repositories without one, and returns comments grouped in parent repo
+        order and chronologically within each group. The request deliberately
+        has no repository or mode selector. Any single-repository GitHub
+        failure fails the operation atomically with that repository identified.
+      parameters:
+        - $ref: "#/components/parameters/FeatureID"
+        - $ref: "#/components/parameters/TrustedMutationHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReviewFeedbackFetchRequest"
+      responses:
+        "200":
+          description: Unaddressed review feedback grouped by repository.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReviewFeedbackFetchResponse"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/ErrorResponse"
+        "502":
           $ref: "#/components/responses/ErrorResponse"
 
   /api/v1/features/{feature_id}/actions/{action}/{subaction}:
@@ -951,6 +1034,7 @@ components:
           - cleanup
           - delete
           - refactor
+          - review-feedback
           - discard
     FeatureSubaction:
       name: subaction
@@ -2517,6 +2601,97 @@ components:
             path: github.com/doordash-oss/agentic-orchestrator/internal/feature
             name: feature
     RefactorFeatureResponse:
+      allOf:
+        - $ref: "#/components/schemas/ActionBaseResponse"
+        - $ref: "#/components/schemas/FeatureActionResult"
+        - type: object
+          required: [parent_id]
+          properties:
+            parent_id:
+              type: string
+    ChildFeatureResponse:
+      description: Common child reference returned by typed child-launch actions.
+      allOf:
+        - $ref: "#/components/schemas/ActionBaseResponse"
+        - $ref: "#/components/schemas/FeatureActionResult"
+        - type: object
+          required: [parent_id]
+          properties:
+            parent_id:
+              type: string
+    ReviewFeedbackFetchRequest:
+      type: object
+      additionalProperties: false
+      description: >-
+        Intentionally empty: review feedback is always fetched across every
+        parent repository with a PR URL and has no mode selector.
+    ReviewFeedbackComment:
+      x-go-type: feature.ReviewFeedbackComment
+      x-go-type-import:
+        path: github.com/doordash-oss/agentic-orchestrator/internal/feature
+        name: feature
+      type: object
+      required: [repo, id, type]
+      properties:
+        repo:
+          type: string
+        id:
+          type: integer
+        type:
+          type: string
+          enum: [review, issue, review_body]
+        path:
+          type: string
+        line:
+          type: integer
+        author:
+          type: string
+        body:
+          type: string
+        diff_hunk:
+          type: string
+        in_reply_to_id:
+          type: integer
+    ReviewFeedbackRepoComments:
+      type: object
+      required: [repo, pr_url, comments]
+      additionalProperties: false
+      properties:
+        repo:
+          type: string
+        pr_url:
+          type: string
+        comments:
+          type: array
+          items:
+            $ref: "#/components/schemas/ReviewFeedbackComment"
+    ReviewFeedbackFetchResponse:
+      allOf:
+        - $ref: "#/components/schemas/JSONResponse"
+        - type: object
+          required: [repos]
+          properties:
+            repos:
+              type: array
+              items:
+                $ref: "#/components/schemas/ReviewFeedbackRepoComments"
+    ReviewFeedbackFeatureRequest:
+      type: object
+      required: [comments]
+      additionalProperties: false
+      properties:
+        comments:
+          type: array
+          items:
+            $ref: "#/components/schemas/ReviewFeedbackComment"
+        gate:
+          type: boolean
+          x-go-type-skip-optional-pointer: false
+          description: >-
+            When present, sets both Roadmap review and Phase plan review on
+            the parent and child. When omitted, inherits the parent's Roadmap
+            review value.
+    ReviewFeedbackFeatureResponse:
       allOf:
         - $ref: "#/components/schemas/ActionBaseResponse"
         - $ref: "#/components/schemas/FeatureActionResult"

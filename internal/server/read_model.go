@@ -236,6 +236,7 @@ func (h *apiHandler) featureDetailDTO(f *feature.Feature) (FeatureDetail, error)
 	if !f.IsChild() && detail.ActiveChild == nil {
 		if reason, dirty := h.refactorEntryDisabledReason(f); dirty {
 			disableAction(detail.Actions, actionRefactor, reason)
+			disableAction(detail.Actions, actionReviewFeedback, reason)
 		}
 	}
 	detail.Cycle = activeCycleDTO(f)
@@ -284,7 +285,7 @@ func (h *apiHandler) refactorEntryDisabledReason(f *feature.Feature) (ActionDisa
 	}
 	reason := ActionDisabledReason{
 		Code:    "dirty_parent",
-		Message: "parent repositories must be clean before launching a refactor child",
+		Message: "parent repositories must be clean before launching a child",
 	}
 	if h.worktrees != nil {
 		if payload := h.dirtyRepoDiagnostics(f.Repos); len(payload) > 0 {
@@ -696,6 +697,7 @@ func actionCatalogDTOsWithChildGuard(f *feature.Feature, hasActiveChild bool) []
 	canMerge := !f.IsPublishable() && (status == feature.StatusCodeReady || status == feature.StatusPublished)
 	canRewind := !running && (len(feature.RewindChoicesForFeature(f)) > 0 || hasRewindUpgradeTarget(f))
 	canPostPublishCycle := publishedOrManualReady && !cyclePresent
+	canReviewFeedback := canPostPublishCycle && f.IsPublishable() && featureHasPullRequest(f)
 	canRetry := status == feature.StatusFailed ||
 		(f.ActiveCycle != nil && f.ActiveCycle.Status == feature.RepoCycleFailed)
 	canMarkDone := publishedOrManualReady
@@ -718,6 +720,7 @@ func actionCatalogDTOsWithChildGuard(f *feature.Feature, hasActiveChild bool) []
 		canMerge = false
 		canRewind = false
 		canPostPublishCycle = false
+		canReviewFeedback = false
 		canRetry = false
 		canMarkDone = false
 		canCleanup = false
@@ -746,6 +749,7 @@ func actionCatalogDTOsWithChildGuard(f *feature.Feature, hasActiveChild bool) []
 			{Name: "upgrade_pipeline", Kind: actionInputKindEnum, Required: false, Options: rewindUpgradePipelineOptions(f)},
 		}, childGuardReason(canRewind, ActionDisabledReason{Code: "no_rewind_targets", Message: "feature has no valid rewind targets"})...),
 		action(actionRebase, canPostPublishCycle, featureScope, nil, childGuardReason(canPostPublishCycle, postPublishCycleDisabledReason(f, actionRebase))...),
+		action(actionReviewFeedback, canReviewFeedback, featureScope, nil, childGuardReason(canReviewFeedback, reviewFeedbackDisabledReason(f))...),
 		action(actionRefactor, canRefactor, featureScope, nil, childGuardReason(canRefactor, disabledStatusReason(status))...),
 		action(actionRetry, canRetry, featureScope, nil, childGuardReason(canRetry, ActionDisabledReason{Code: "not_failed", Message: "retry is only available for failed features"})...),
 		action(actionMarkDone, canMarkDone, featureScope, nil, childGuardReason(canMarkDone, ActionDisabledReason{Code: "not_complete", Message: "feature is not ready to mark done"})...),
@@ -967,6 +971,39 @@ func postPublishCycleDisabledReason(f *feature.Feature, cycle string) ActionDisa
 		return ActionDisabledReason{Code: disabledCycleActive, Message: "another feature cycle is active"}
 	}
 	return disabledStatusReason(f.Status)
+}
+
+func reviewFeedbackDisabledReason(f *feature.Feature) ActionDisabledReason {
+	if f == nil {
+		return disabledStatusReason(feature.StatusCreated)
+	}
+	if f.HasActiveRepoCycles() || f.ActiveCycleType() != "" {
+		return ActionDisabledReason{Code: disabledCycleActive, Message: "another feature cycle is active"}
+	}
+	publishedOrManualReady := f.Status == feature.StatusPublished ||
+		(f.Status == feature.StatusCodeReady && !f.Checkpoints.AutoPublish())
+	if !publishedOrManualReady {
+		return disabledStatusReason(f.Status)
+	}
+	if !f.IsPublishable() {
+		return ActionDisabledReason{Code: "not_publishable", Message: "review feedback requires a publishable parent"}
+	}
+	if !featureHasPullRequest(f) {
+		return ActionDisabledReason{Code: "no_pull_request", Message: "review feedback requires at least one repository with a pull request"}
+	}
+	return disabledStatusReason(f.Status)
+}
+
+func featureHasPullRequest(f *feature.Feature) bool {
+	if f == nil {
+		return false
+	}
+	for _, state := range f.RepoStates {
+		if state != nil && strings.TrimSpace(state.PRURL) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func rewindPhaseOptions(f *feature.Feature) []string {

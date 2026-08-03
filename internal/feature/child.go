@@ -19,18 +19,40 @@ import (
 	"fmt"
 	"os"
 	"reflect"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 )
 
-// ChildKindRefactor identifies a child launched as a refactor of its parent.
-const ChildKindRefactor = "refactor"
+const (
+	// ChildKindRefactor identifies a child launched as a refactor of its parent.
+	ChildKindRefactor = "refactor"
+	// ChildKindReviewFeedback identifies a child launched to address selected
+	// pull request review feedback on its parent.
+	ChildKindReviewFeedback = "review-feedback"
+	// ReviewFeedbackChildName is the fixed display and branch-slug seed for
+	// every review-feedback child.
+	ReviewFeedbackChildName = "Address review feedback"
+)
 
-// Typed refactor-launch failures. The server maps each to a stable machine
+// Typed child-launch failures. The server maps each to a stable machine
 // code; callers should match with errors.Is / errors.As.
 var (
+	// ErrReviewFeedbackEmptySelection rejects a review-feedback child launch
+	// that has no selected comments.
+	ErrReviewFeedbackEmptySelection = errors.New("review feedback selection is empty")
+	// ErrReviewFeedbackUnsupportedCommentType rejects a selected comment whose
+	// GitHub comment type cannot be routed by the integration tail.
+	ErrReviewFeedbackUnsupportedCommentType = errors.New("review feedback comment type is unsupported")
+	// ErrReviewFeedbackUnknownRepo rejects a comment tagged with a repository
+	// outside the parent feature.
+	ErrReviewFeedbackUnknownRepo = errors.New("review feedback repository does not belong to parent")
+	// ErrReviewFeedbackRepoHasNoPR rejects a comment whose parent repository
+	// does not have a pull request to receive the eventual integration tail.
+	ErrReviewFeedbackRepoHasNoPR = errors.New("review feedback repository has no pull request")
 	// ErrRefactorParentNotFound: the requested parent feature does not exist.
 	ErrRefactorParentNotFound = errors.New("refactor parent feature not found")
 	// ErrRefactorParentIsChild: children are one level deep; a child cannot
@@ -256,6 +278,178 @@ type RefactorChildSpec struct {
 	Inquireness Inquireness
 }
 
+// ReviewFeedbackComment is the complete selected GitHub comment payload that
+// a review-feedback child needs for planning and later reply routing.
+type ReviewFeedbackComment struct {
+	Repo      string `yaml:"repo" json:"repo"`
+	ID        int    `yaml:"id" json:"id"`
+	Type      string `yaml:"type" json:"type"`
+	Path      string `yaml:"path,omitempty" json:"path,omitempty"`
+	Line      int    `yaml:"line,omitempty" json:"line,omitempty"`
+	Author    string `yaml:"author,omitempty" json:"author,omitempty"`
+	Body      string `yaml:"body,omitempty" json:"body,omitempty"`
+	DiffHunk  string `yaml:"diff_hunk,omitempty" json:"diff_hunk,omitempty"`
+	InReplyTo int    `yaml:"in_reply_to_id,omitempty" json:"in_reply_to_id,omitempty"`
+}
+
+// ReviewFeedbackChildSpec carries the only launch-time choices supported by
+// review-feedback children: the selected comment payloads and the coupled
+// roadmap/phase-plan gate. A nil gate inherits the parent's Roadmap gate.
+type ReviewFeedbackChildSpec struct {
+	Comments    []ReviewFeedbackComment
+	GateEnabled *bool
+}
+
+// CreateReviewFeedbackChild atomically launches a fixed-Medium child for the
+// selected pull request comments. Validation that depends only on the spec is
+// completed before loading or writing any feature state.
+func (m *Manager) CreateReviewFeedbackChild(parentID string, spec ReviewFeedbackChildSpec) (*Feature, error) {
+	if err := validateReviewFeedbackSpec(spec); err != nil {
+		return nil, err
+	}
+	parent, err := m.Store.Load(parentID)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, fmt.Errorf("%w: %s", ErrRefactorParentNotFound, parentID)
+		}
+		return nil, fmt.Errorf("loading parent feature: %w", err)
+	}
+	if err := validateRefactorParent(parent, nil); err != nil {
+		return nil, err
+	}
+	if err := validateReviewFeedbackCommentRepos(parent, spec.Comments); err != nil {
+		return nil, err
+	}
+	bases, err := m.preflightRefactorParent(parent)
+	if err != nil {
+		return nil, err
+	}
+
+	now := time.Now()
+	child, err := m.Store.CreateChildLocked(parentID, func(lockedParent *Feature, activeChild *Feature) (*Feature, *ChildCreationIntent, error) {
+		if err := validateRefactorParent(lockedParent, activeChild); err != nil {
+			return nil, nil, err
+		}
+		if err := validateReviewFeedbackCommentRepos(lockedParent, spec.Comments); err != nil {
+			return nil, nil, err
+		}
+		gate := lockedParent.Checkpoints.RoadmapReview
+		if spec.GateEnabled != nil {
+			gate = *spec.GateEnabled
+		}
+		checkpoints := lockedParent.Checkpoints
+		checkpoints.RoadmapReview = gate
+		checkpoints.PhasePlanReview = gate
+		child := m.buildRefactorChild(lockedParent, RefactorChildSpec{
+			Name:        ReviewFeedbackChildName,
+			Description: reviewFeedbackDescription(lockedParent, spec.Comments),
+			Pipeline:    PipelineMedium,
+			Checkpoints: checkpoints,
+		}, bases, now)
+		child.Parent.Kind = ChildKindReviewFeedback
+		child.ReviewFeedback = append([]ReviewFeedbackComment(nil), spec.Comments...)
+
+		applyResolvedReviewConfig(lockedParent, child)
+		intent := &ChildCreationIntent{
+			ChildID:   child.ID,
+			Kind:      ChildKindReviewFeedback,
+			CreatedAt: now,
+			Child:     *child,
+			Setup:     child.Run().Setup,
+		}
+		return child, intent, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return child, nil
+}
+
+func validateReviewFeedbackSpec(spec ReviewFeedbackChildSpec) error {
+	if len(spec.Comments) == 0 {
+		return ErrReviewFeedbackEmptySelection
+	}
+	for _, comment := range spec.Comments {
+		switch comment.Type {
+		case git.CommentTypeReview, git.CommentTypeIssue, git.CommentTypeReviewBody:
+		default:
+			return fmt.Errorf("%w: comment %d has type %q", ErrReviewFeedbackUnsupportedCommentType, comment.ID, comment.Type)
+		}
+	}
+	return nil
+}
+
+func validateReviewFeedbackCommentRepos(parent *Feature, comments []ReviewFeedbackComment) error {
+	parentRepos := make(map[string]struct{}, len(parent.Repos))
+	for _, repo := range parent.Repos {
+		parentRepos[repo.Name] = struct{}{}
+	}
+	for _, comment := range comments {
+		if _, ok := parentRepos[comment.Repo]; !ok {
+			return fmt.Errorf("%w: %q", ErrReviewFeedbackUnknownRepo, comment.Repo)
+		}
+		state := parent.RepoStates[comment.Repo]
+		if state == nil || strings.TrimSpace(state.PRURL) == "" {
+			return fmt.Errorf("%w: %q", ErrReviewFeedbackRepoHasNoPR, comment.Repo)
+		}
+	}
+	return nil
+}
+
+func reviewFeedbackDescription(parent *Feature, comments []ReviewFeedbackComment) string {
+	prURLs := make(map[string]string, len(parent.RepoStates))
+	for repo, state := range parent.RepoStates {
+		if state != nil {
+			prURLs[repo] = state.PRURL
+		}
+	}
+	commentsByRepo := make(map[string][]ReviewFeedbackComment)
+	repoOrder := make([]string, 0)
+	for _, comment := range comments {
+		if _, ok := commentsByRepo[comment.Repo]; !ok {
+			repoOrder = append(repoOrder, comment.Repo)
+		}
+		commentsByRepo[comment.Repo] = append(commentsByRepo[comment.Repo], comment)
+	}
+
+	var description strings.Builder
+	description.WriteString("This pass addresses selected pull request review feedback.\n")
+	for _, repo := range repoOrder {
+		description.WriteString("\n## Repository: ")
+		description.WriteString(repo)
+		description.WriteString("\n\nPull request: ")
+		description.WriteString(prURLs[repo])
+		description.WriteString("\n")
+		for _, comment := range commentsByRepo[repo] {
+			description.WriteString("\n### Comment ")
+			description.WriteString(strconv.Itoa(comment.ID))
+			description.WriteString(" (")
+			description.WriteString(comment.Type)
+			description.WriteString(")\n")
+			if comment.Path != "" {
+				description.WriteString("\nFile: ")
+				description.WriteString(comment.Path)
+				if comment.Line > 0 {
+					description.WriteString(":")
+					description.WriteString(strconv.Itoa(comment.Line))
+				}
+				description.WriteString("\n")
+			}
+			description.WriteString("\nAuthor: ")
+			description.WriteString(comment.Author)
+			description.WriteString("\n\nBody:\n")
+			description.WriteString(comment.Body)
+			description.WriteString("\n")
+			if comment.DiffHunk != "" {
+				description.WriteString("\nDiff hunk:\n```diff\n")
+				description.WriteString(comment.DiffHunk)
+				description.WriteString("\n```\n")
+			}
+		}
+	}
+	return description.String()
+}
+
 // CreateRefactorChild atomically launches a refactor child under the given
 // parent. The parent must be a top-level Published or CodeReady feature with
 // no active child and clean worktrees in every repository; one dirty
@@ -297,12 +491,7 @@ func (m *Manager) CreateRefactorChild(parentID string, spec RefactorChildSpec) (
 		// settings from leaving the two records inconsistent, while
 		// inheriting fields rewrite an identical value. Only the pipeline
 		// identity stays child-specific; the parent's pipeline is untouched.
-		lockedParent.Checkpoints = child.Checkpoints
-		lockedParent.Models = child.Models
-		lockedParent.Effort = child.Effort
-		lockedParent.RiskLevel = child.RiskLevel
-		lockedParent.ExitCriteria = child.ExitCriteria
-		lockedParent.Inquireness = child.Inquireness
+		applyResolvedReviewConfig(lockedParent, child)
 		intent := &ChildCreationIntent{
 			ChildID:   child.ID,
 			Kind:      ChildKindRefactor,
@@ -316,6 +505,18 @@ func (m *Manager) CreateRefactorChild(parentID string, spec RefactorChildSpec) (
 		return nil, err
 	}
 	return child, nil
+}
+
+// applyResolvedReviewConfig preserves the paired-config invariant at child
+// creation: every shared review axis is committed to both records under the
+// store's creation lock, while the child-specific pipeline remains separate.
+func applyResolvedReviewConfig(parent, child *Feature) {
+	parent.Checkpoints = child.Checkpoints
+	parent.Models = child.Models
+	parent.Effort = child.Effort
+	parent.RiskLevel = child.RiskLevel
+	parent.ExitCriteria = child.ExitCriteria
+	parent.Inquireness = child.Inquireness
 }
 
 // validateRefactorParent enforces the launch rules against the parent. When

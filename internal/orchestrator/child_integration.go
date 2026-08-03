@@ -491,12 +491,15 @@ func (o *Orchestrator) settleChildClosureTail(childID, parentID string) error {
 		FeatureID: childID,
 		ParentID:  parentID,
 		ChildID:   childID,
-		Message:   "refactor child integrated and closed",
+		Message:   child.Parent.Kind + " child integrated and closed",
 	})
 
 	parent, err := o.deps.Lifecycle.Get(parentID)
 	if err != nil {
 		return fmt.Errorf("reload parent: %w", err)
+	}
+	if child.Parent.Kind == feature.ChildKindReviewFeedback {
+		return o.reviewFeedbackIntegrationTail(parent)
 	}
 	if parent.IsPublishable() && parent.Checkpoints.AutoPublish() {
 		if err := o.publishWithOptionsLocked(parentID, PublishOptions{}); err != nil {
@@ -515,6 +518,19 @@ func (o *Orchestrator) settleChildClosureTail(childID, parentID string) error {
 		FeatureID: parentID,
 		Message:   "parent settled after child closure",
 	})
+	return nil
+}
+
+// reviewFeedbackIntegrationTail is the named Phase 2 seam for the
+// review-feedback PR tail. The shared transaction has already merged and
+// closed the child; this temporary implementation only restores the parent
+// to Published. It deliberately does not inspect publish checkpoints or
+// invoke any remote GitHub operation. Phase 3 replaces this body with the
+// real reply, resolve, push, and addressed-ID workflow.
+func (o *Orchestrator) reviewFeedbackIntegrationTail(parent *feature.Feature) error {
+	if err := o.deps.Lifecycle.MarkPublished(parent.ID, parent.FirstRepoPRURL()); err != nil {
+		return fmt.Errorf("returning review-feedback parent to published: %w", err)
+	}
 	return nil
 }
 

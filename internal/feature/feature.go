@@ -681,6 +681,10 @@ type Feature struct {
 	// lookup and active-child classification are derived by scanning stored
 	// feature records — the parent never persists a child pointer or list.
 	Parent *ChildRelationship `yaml:"parent,omitempty"`
+	// ReviewFeedback preserves the selected GitHub comment payloads for a
+	// review-feedback child. The deterministic description is planning input;
+	// this structured copy is the integration tail's durable routing input.
+	ReviewFeedback []ReviewFeedbackComment `yaml:"review_feedback,omitempty"`
 	// PendingChild is the durable intent for an in-flight child creation on
 	// this (parent) feature. Present only between the atomic intent commit
 	// and child materialization; startup reconciliation rolls an interrupted

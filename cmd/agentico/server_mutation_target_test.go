@@ -645,6 +645,60 @@ func (f *fakeRefactorChildCreator) CreateRefactorChild(parentID string, spec fea
 	return f.child, f.err
 }
 
+func TestServerMutationTargetReviewFeedbackFeaturePreservesPayloadAndGatePresence(t *testing.T) {
+	t.Parallel()
+
+	explicitFalse := false
+	tests := []struct {
+		name string
+		gate *bool
+	}{
+		{name: "omitted gate inherits", gate: nil},
+		{name: "explicit false overrides", gate: &explicitFalse},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			creator := &fakeReviewFeedbackChildCreator{child: &feature.Feature{ID: "child-review"}}
+			target := serverMutationTarget{reviewFeedbackCreator: creator}
+			comments := []feature.ReviewFeedbackComment{{
+				Repo: "api", ID: 17, Type: "review", Path: "handler.go", Line: 42,
+				Author: "alice", Body: "handle this", DiffHunk: "@@ -41 +41,2 @@", InReplyTo: 9,
+			}}
+
+			resp, err := target.ReviewFeedbackFeature("parent-1", serverruntime.ReviewFeedbackFeatureRequest{
+				Comments: comments,
+				Gate:     tt.gate,
+			})
+			if err != nil {
+				t.Fatalf("ReviewFeedbackFeature() error = %v", err)
+			}
+			if resp.FeatureID != "child-review" || resp.ParentID != "parent-1" || resp.Result != resultCreated {
+				t.Fatalf("ReviewFeedbackFeature() = %+v; want created child reference", resp)
+			}
+			if creator.parentID != "parent-1" || !reflect.DeepEqual(creator.spec.Comments, comments) {
+				t.Fatalf("CreateReviewFeedbackChild args = parent:%q comments:%+v", creator.parentID, creator.spec.Comments)
+			}
+			if creator.spec.GateEnabled != tt.gate {
+				t.Fatalf("gate pointer = %p; want %p", creator.spec.GateEnabled, tt.gate)
+			}
+		})
+	}
+}
+
+type fakeReviewFeedbackChildCreator struct {
+	parentID string
+	spec     feature.ReviewFeedbackChildSpec
+	child    *feature.Feature
+	err      error
+}
+
+func (f *fakeReviewFeedbackChildCreator) CreateReviewFeedbackChild(parentID string, spec feature.ReviewFeedbackChildSpec) (*feature.Feature, error) {
+	f.parentID = parentID
+	f.spec = spec
+	return f.child, f.err
+}
+
 func TestServerMutationTargetSendHelpSendsUserMessageToAddressedActiveSession(t *testing.T) {
 	sess := &mutationTargetSessionView{
 		id:        testSessionHelpID,

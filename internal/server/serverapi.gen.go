@@ -366,6 +366,7 @@ const (
 	FeatureActionRestart            FeatureAction = "restart"
 	FeatureActionResume             FeatureAction = "resume"
 	FeatureActionRetry              FeatureAction = "retry"
+	FeatureActionReviewFeedback     FeatureAction = "review-feedback"
 	FeatureActionRewind             FeatureAction = "rewind"
 	FeatureActionSetup              FeatureAction = "setup"
 	FeatureActionStart              FeatureAction = "start"
@@ -401,6 +402,8 @@ func (e FeatureAction) Valid() bool {
 	case FeatureActionResume:
 		return true
 	case FeatureActionRetry:
+		return true
+	case FeatureActionReviewFeedback:
 		return true
 	case FeatureActionRewind:
 		return true
@@ -521,6 +524,36 @@ func (e RefactorFeatureParamsXAgenticoClient) Valid() bool {
 	}
 }
 
+// Defines values for ReviewFeedbackFeatureParamsXAgenticoClient.
+const (
+	ReviewFeedbackFeatureParamsXAgenticoClientLocal ReviewFeedbackFeatureParamsXAgenticoClient = "local"
+)
+
+// Valid indicates whether the value is a known member of the ReviewFeedbackFeatureParamsXAgenticoClient enum.
+func (e ReviewFeedbackFeatureParamsXAgenticoClient) Valid() bool {
+	switch e {
+	case ReviewFeedbackFeatureParamsXAgenticoClientLocal:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for FetchReviewFeedbackParamsXAgenticoClient.
+const (
+	FetchReviewFeedbackParamsXAgenticoClientLocal FetchReviewFeedbackParamsXAgenticoClient = "local"
+)
+
+// Valid indicates whether the value is a known member of the FetchReviewFeedbackParamsXAgenticoClient enum.
+func (e FetchReviewFeedbackParamsXAgenticoClient) Valid() bool {
+	switch e {
+	case FetchReviewFeedbackParamsXAgenticoClientLocal:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for RunFeatureActionParamsXAgenticoClient.
 const (
 	RunFeatureActionParamsXAgenticoClientLocal RunFeatureActionParamsXAgenticoClient = "local"
@@ -552,6 +585,7 @@ const (
 	RunFeatureActionParamsActionRestart            RunFeatureActionParamsAction = "restart"
 	RunFeatureActionParamsActionResume             RunFeatureActionParamsAction = "resume"
 	RunFeatureActionParamsActionRetry              RunFeatureActionParamsAction = "retry"
+	RunFeatureActionParamsActionReviewFeedback     RunFeatureActionParamsAction = "review-feedback"
 	RunFeatureActionParamsActionRewind             RunFeatureActionParamsAction = "rewind"
 	RunFeatureActionParamsActionSetup              RunFeatureActionParamsAction = "setup"
 	RunFeatureActionParamsActionStart              RunFeatureActionParamsAction = "start"
@@ -587,6 +621,8 @@ func (e RunFeatureActionParamsAction) Valid() bool {
 	case RunFeatureActionParamsActionResume:
 		return true
 	case RunFeatureActionParamsActionRetry:
+		return true
+	case RunFeatureActionParamsActionReviewFeedback:
 		return true
 	case RunFeatureActionParamsActionRewind:
 		return true
@@ -630,6 +666,7 @@ const (
 	RunFeatureSubactionParamsActionRestart            RunFeatureSubactionParamsAction = "restart"
 	RunFeatureSubactionParamsActionResume             RunFeatureSubactionParamsAction = "resume"
 	RunFeatureSubactionParamsActionRetry              RunFeatureSubactionParamsAction = "retry"
+	RunFeatureSubactionParamsActionReviewFeedback     RunFeatureSubactionParamsAction = "review-feedback"
 	RunFeatureSubactionParamsActionRewind             RunFeatureSubactionParamsAction = "rewind"
 	RunFeatureSubactionParamsActionSetup              RunFeatureSubactionParamsAction = "setup"
 	RunFeatureSubactionParamsActionStart              RunFeatureSubactionParamsAction = "start"
@@ -665,6 +702,8 @@ func (e RunFeatureSubactionParamsAction) Valid() bool {
 	case RunFeatureSubactionParamsActionResume:
 		return true
 	case RunFeatureSubactionParamsActionRetry:
+		return true
+	case RunFeatureSubactionParamsActionReviewFeedback:
 		return true
 	case RunFeatureSubactionParamsActionRewind:
 		return true
@@ -1101,6 +1140,15 @@ type ChildDirtyDiagnostics struct {
 	UnstagedTotal  int      `json:"unstaged_total,omitempty"`
 	Untracked      []string `json:"untracked,omitempty"`
 	UntrackedTotal int      `json:"untracked_total,omitempty"`
+}
+
+// ChildFeatureResponse defines model for ChildFeatureResponse.
+type ChildFeatureResponse struct {
+	APIVersion string       `json:"api_version"`
+	FeatureID  string       `json:"feature_id"`
+	Meta       ResponseMeta `json:"meta,omitempty"`
+	ParentID   string       `json:"parent_id"`
+	Result     string       `json:"result"`
 }
 
 // ChildRepoBase defines model for ChildRepoBase.
@@ -2172,6 +2220,43 @@ type ReviewDraftValidationResponse struct {
 	Valid      bool                           `json:"valid"`
 }
 
+// ReviewFeedbackComment defines model for ReviewFeedbackComment.
+type ReviewFeedbackComment = feature.ReviewFeedbackComment
+
+// ReviewFeedbackFeatureRequest defines model for ReviewFeedbackFeatureRequest.
+type ReviewFeedbackFeatureRequest struct {
+	Comments []ReviewFeedbackComment `json:"comments"`
+
+	// Gate When present, sets both Roadmap review and Phase plan review on the parent and child. When omitted, inherits the parent's Roadmap review value.
+	Gate *bool `json:"gate,omitempty"`
+}
+
+// ReviewFeedbackFeatureResponse defines model for ReviewFeedbackFeatureResponse.
+type ReviewFeedbackFeatureResponse struct {
+	APIVersion string       `json:"api_version"`
+	FeatureID  string       `json:"feature_id"`
+	Meta       ResponseMeta `json:"meta,omitempty"`
+	ParentID   string       `json:"parent_id"`
+	Result     string       `json:"result"`
+}
+
+// ReviewFeedbackFetchRequest Intentionally empty: review feedback is always fetched across every parent repository with a PR URL and has no mode selector.
+type ReviewFeedbackFetchRequest = map[string]interface{}
+
+// ReviewFeedbackFetchResponse defines model for ReviewFeedbackFetchResponse.
+type ReviewFeedbackFetchResponse struct {
+	APIVersion string                       `json:"api_version"`
+	Meta       ResponseMeta                 `json:"meta,omitempty"`
+	Repos      []ReviewFeedbackRepoComments `json:"repos"`
+}
+
+// ReviewFeedbackRepoComments defines model for ReviewFeedbackRepoComments.
+type ReviewFeedbackRepoComments struct {
+	Comments []ReviewFeedbackComment `json:"comments"`
+	PrURL    string                  `json:"pr_url"`
+	Repo     string                  `json:"repo"`
+}
+
 // ReviewGate defines model for ReviewGate.
 type ReviewGate struct {
 	ReviewFixing      bool              `json:"review_fixing"`
@@ -2808,6 +2893,24 @@ type RefactorFeatureParams struct {
 // RefactorFeatureParamsXAgenticoClient defines parameters for RefactorFeature.
 type RefactorFeatureParamsXAgenticoClient string
 
+// ReviewFeedbackFeatureParams defines parameters for ReviewFeedbackFeature.
+type ReviewFeedbackFeatureParams struct {
+	// XAgenticoClient CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required.
+	XAgenticoClient ReviewFeedbackFeatureParamsXAgenticoClient `json:"X-Agentico-Client"`
+}
+
+// ReviewFeedbackFeatureParamsXAgenticoClient defines parameters for ReviewFeedbackFeature.
+type ReviewFeedbackFeatureParamsXAgenticoClient string
+
+// FetchReviewFeedbackParams defines parameters for FetchReviewFeedback.
+type FetchReviewFeedbackParams struct {
+	// XAgenticoClient CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required.
+	XAgenticoClient FetchReviewFeedbackParamsXAgenticoClient `json:"X-Agentico-Client"`
+}
+
+// FetchReviewFeedbackParamsXAgenticoClient defines parameters for FetchReviewFeedback.
+type FetchReviewFeedbackParamsXAgenticoClient string
+
 // RunFeatureActionJSONBody defines parameters for RunFeatureAction.
 type RunFeatureActionJSONBody map[string]interface{}
 
@@ -3058,6 +3161,12 @@ type CreateFeatureJSONRequestBody = CreateFeatureMutationRequest
 
 // RefactorFeatureJSONRequestBody defines body for RefactorFeature for application/json ContentType.
 type RefactorFeatureJSONRequestBody = RefactorFeatureRequest
+
+// ReviewFeedbackFeatureJSONRequestBody defines body for ReviewFeedbackFeature for application/json ContentType.
+type ReviewFeedbackFeatureJSONRequestBody = ReviewFeedbackFeatureRequest
+
+// FetchReviewFeedbackJSONRequestBody defines body for FetchReviewFeedback for application/json ContentType.
+type FetchReviewFeedbackJSONRequestBody = ReviewFeedbackFetchRequest
 
 // RunFeatureActionJSONRequestBody defines body for RunFeatureAction for application/json ContentType.
 type RunFeatureActionJSONRequestBody RunFeatureActionJSONBody

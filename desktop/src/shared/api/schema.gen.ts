@@ -294,6 +294,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/features/{feature_id}/actions/review-feedback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Launch a child feature for selected pull-request feedback.
+         * @description Accepts the complete selected comment payloads returned by fetchReviewFeedback plus an optional coupled roadmap/phase-plan gate. The server does not re-fetch GitHub. Failure machine codes include 400 `review_feedback_empty_selection`, `review_feedback_unsupported_comment_type`, `review_feedback_unknown_repo`, and `review_feedback_repo_has_no_pull_request`; 404 `parent_not_found`; and 409 `parent_is_child`, `parent_status_ineligible`, `active_child_exists`, and `parent_worktrees_dirty`.
+         */
+        post: operations["reviewFeedbackFeature"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/features/{feature_id}/actions/review-feedback/fetch": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Fetch unaddressed pull-request feedback across every parent repository.
+         * @description Aggregates every repository carrying a PR URL, silently skips parent repositories without one, and returns comments grouped in parent repo order and chronologically within each group. The request deliberately has no repository or mode selector. Any single-repository GitHub failure fails the operation atomically with that repository identified.
+         */
+        post: operations["fetchReviewFeedback"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/features/{feature_id}/actions/{action}/{subaction}": {
         parameters: {
             query?: never;
@@ -1291,6 +1331,40 @@ export interface components {
             inquireness?: "none" | "medium" | "high";
         };
         RefactorFeatureResponse: components["schemas"]["ActionBaseResponse"] & components["schemas"]["FeatureActionResult"] & {
+            parent_id: string;
+        };
+        /** @description Common child reference returned by typed child-launch actions. */
+        ChildFeatureResponse: components["schemas"]["ActionBaseResponse"] & components["schemas"]["FeatureActionResult"] & {
+            parent_id: string;
+        };
+        /** @description Intentionally empty: review feedback is always fetched across every parent repository with a PR URL and has no mode selector. */
+        ReviewFeedbackFetchRequest: Record<string, never>;
+        ReviewFeedbackComment: {
+            repo: string;
+            id: number;
+            /** @enum {string} */
+            type: "review" | "issue" | "review_body";
+            path?: string;
+            line?: number;
+            author?: string;
+            body?: string;
+            diff_hunk?: string;
+            in_reply_to_id?: number;
+        };
+        ReviewFeedbackRepoComments: {
+            repo: string;
+            pr_url: string;
+            comments: components["schemas"]["ReviewFeedbackComment"][];
+        };
+        ReviewFeedbackFetchResponse: components["schemas"]["JSONResponse"] & {
+            repos: components["schemas"]["ReviewFeedbackRepoComments"][];
+        };
+        ReviewFeedbackFeatureRequest: {
+            comments: components["schemas"]["ReviewFeedbackComment"][];
+            /** @description When present, sets both Roadmap review and Phase plan review on the parent and child. When omitted, inherits the parent's Roadmap review value. */
+            gate?: boolean;
+        };
+        ReviewFeedbackFeatureResponse: components["schemas"]["ActionBaseResponse"] & components["schemas"]["FeatureActionResult"] & {
             parent_id: string;
         };
         RebasePreflightRepo: {
@@ -2408,7 +2482,7 @@ export interface components {
         ReviewID: string;
         LogID: string;
         SessionID: string;
-        FeatureAction: "setup" | "start" | "resume" | "pause-stop" | "restart" | "publish" | "merge" | "rewind" | "retry" | "rebase" | "need-user-input" | "need-user-input-draft" | "mark-done" | "cleanup" | "delete" | "refactor" | "discard";
+        FeatureAction: "setup" | "start" | "resume" | "pause-stop" | "restart" | "publish" | "merge" | "rewind" | "retry" | "rebase" | "need-user-input" | "need-user-input-draft" | "mark-done" | "cleanup" | "delete" | "refactor" | "review-feedback" | "discard";
         FeatureSubaction: "description" | "fetch";
         Offset: number;
         Limit: number;
@@ -2773,13 +2847,13 @@ export interface operations {
         requestBody: components["requestBodies"]["JSONMutation"];
         responses: {
             200: components["responses"]["ActionResponse"];
-            /** @description Refactor child launched. Only the refactor action returns 201; its typed contract is documented as the refactorFeature operation at /api/v1/features/{feature_id}/actions/refactor. */
+            /** @description Child launched. The typed contracts are documented by the static refactorFeature and reviewFeedbackFeature operations at their exact action URLs. */
             201: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["RefactorFeatureResponse"];
+                    "application/json": components["schemas"]["ChildFeatureResponse"];
                 };
             };
             401: components["responses"]["Unauthorized"];
@@ -2816,6 +2890,72 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             404: components["responses"]["ErrorResponse"];
             409: components["responses"]["ErrorResponse"];
+        };
+    };
+    reviewFeedbackFeature: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required. */
+                "X-Agentico-Client": components["parameters"]["TrustedMutationHeader"];
+            };
+            path: {
+                feature_id: components["parameters"]["FeatureID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReviewFeedbackFeatureRequest"];
+            };
+        };
+        responses: {
+            /** @description Review-feedback child launched and setup queued. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReviewFeedbackFeatureResponse"];
+                };
+            };
+            400: components["responses"]["ErrorResponse"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["ErrorResponse"];
+            409: components["responses"]["ErrorResponse"];
+        };
+    };
+    fetchReviewFeedback: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required. */
+                "X-Agentico-Client": components["parameters"]["TrustedMutationHeader"];
+            };
+            path: {
+                feature_id: components["parameters"]["FeatureID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReviewFeedbackFetchRequest"];
+            };
+        };
+        responses: {
+            /** @description Unaddressed review feedback grouped by repository. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReviewFeedbackFetchResponse"];
+                };
+            };
+            400: components["responses"]["ErrorResponse"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["ErrorResponse"];
+            502: components["responses"]["ErrorResponse"];
         };
     };
     runFeatureSubaction: {

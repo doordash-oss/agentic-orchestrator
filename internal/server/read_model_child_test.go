@@ -536,6 +536,91 @@ func TestParentRefactorDirtyReasonWithoutCleanlinessOmitsTarget(t *testing.T) {
 	t.Fatal("refactor action missing")
 }
 
+func TestReviewFeedbackActionCatalogEligibility(t *testing.T) {
+	t.Parallel()
+	publishable := true
+	base := actionCatalogTestFeature(feature.StatusPublished, feature.Checkpoints{}, &publishable, nil)
+	base.RepoStates = map[string]*feature.RepoState{
+		repoNameSelf: {PRURL: "https://github.example/org/repo/pull/17"},
+	}
+
+	tests := []struct {
+		name             string
+		feature          *feature.Feature
+		hasActiveChild   bool
+		wantEnabled      bool
+		wantDisabledCode string
+	}{
+		{name: "published parent with pull request", feature: base, wantEnabled: true},
+		{
+			name: "no pull request",
+			feature: func() *feature.Feature {
+				copy := *base
+				copy.RepoStates = map[string]*feature.RepoState{repoNameSelf: {}}
+				return &copy
+			}(),
+			wantDisabledCode: "no_pull_request",
+		},
+		{
+			name:             "active child",
+			feature:          base,
+			hasActiveChild:   true,
+			wantDisabledCode: "active_child_present",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			action := actionDTOByID(t, actionCatalogDTOsWithChildGuard(tt.feature, tt.hasActiveChild), actionReviewFeedback)
+			if action.Enabled != tt.wantEnabled {
+				t.Fatalf("review-feedback enabled = %v; want %v", action.Enabled, tt.wantEnabled)
+			}
+			if tt.wantEnabled {
+				if len(action.RequiredInputs) != 0 || action.Scope.Type != entityFeature || action.Scope.RepoSelection != "" {
+					t.Fatalf("review-feedback metadata = %+v; want feature scope with no catalog inputs", action)
+				}
+				return
+			}
+			if len(action.DisabledReasons) == 0 || action.DisabledReasons[0].Code != tt.wantDisabledCode {
+				t.Fatalf("review-feedback disabled reasons = %+v; want %q first", action.DisabledReasons, tt.wantDisabledCode)
+			}
+		})
+	}
+}
+
+func TestParentReviewFeedbackDirtyReasonCarriesDiagnostics(t *testing.T) {
+	t.Parallel()
+
+	store, parent := seedReadFeature(t)
+	parent.Status = feature.StatusPublished
+	if err := store.Save(parent); err != nil {
+		t.Fatalf("Save(parent) error = %v", err)
+	}
+	opts := baseReadHandlerOptions(store)
+	opts.Worktrees = &readModelCleanlinessWorktrees{report: &git.CleanlinessReport{
+		Unstaged:      []string{"review.go"},
+		UnstagedTotal: 1,
+	}}
+	handler := NewHandler(opts)
+
+	body := getJSONMap(t, handler, "/api/v1/features/"+parent.ID)[entityFeature].(map[string]any)
+	for _, raw := range body["actions"].([]any) {
+		action := raw.(map[string]any)
+		if action["id"] != actionReviewFeedback {
+			continue
+		}
+		if action["enabled"] != false {
+			t.Fatalf("review-feedback enabled = %v; want dirty-parent rejection", action["enabled"])
+		}
+		reasons := action["disabled_reasons"].([]any)
+		if len(reasons) == 0 || reasons[0].(map[string]any)["code"] != "dirty_parent" {
+			t.Fatalf("review-feedback disabled reasons = %+v; want dirty_parent", reasons)
+		}
+		return
+	}
+	t.Fatal("review-feedback action missing")
+}
+
 func assertRelationshipProjection(t *testing.T, raw any, wantID, wantOutcome, wantDisplayPrefix string) {
 	t.Helper()
 	projection, ok := raw.(map[string]any)

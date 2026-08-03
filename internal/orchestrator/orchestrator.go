@@ -471,10 +471,10 @@ func (o *Orchestrator) CreateFeature(
 	return f, nil
 }
 
-// RefactorChildCreated emits the relationship-created event for a durable refactor
-// child. Child creation goes through feature.Manager.CreateRefactorChild (not
-// Orchestrator.CreateFeature), so the mutation target reports the launch here.
-func (o *Orchestrator) RefactorChildCreated(child *feature.Feature) {
+// ChildCreated emits the relationship-created event for any durable child.
+// Child creation goes through the feature manager rather than
+// Orchestrator.CreateFeature, so mutation targets report the launch here.
+func (o *Orchestrator) ChildCreated(child *feature.Feature) {
 	if child == nil || !child.IsChild() {
 		return
 	}
@@ -485,6 +485,12 @@ func (o *Orchestrator) RefactorChildCreated(child *feature.Feature) {
 		ChildID:   child.ID,
 		Feature:   child,
 	})
+}
+
+// RefactorChildCreated is retained for callers compiled against the original
+// refactor-only seam. New launch paths should call ChildCreated.
+func (o *Orchestrator) RefactorChildCreated(child *feature.Feature) {
+	o.ChildCreated(child)
 }
 
 // emitEvent sends an event on the channel. Non-blocking for non-critical events.

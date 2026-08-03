@@ -38,3 +38,36 @@ func TestListPRReviewCommentsFollowsLinkPagination(t *testing.T) {
 		t.Fatalf("comments = %+v; want ids 1,2 across two pages", comments)
 	}
 }
+
+func TestListIssueCommentsAndReviews(t *testing.T) {
+	fake := testutil.InstallFakeGitHubAPI(t)
+	fake.HandleJSON("/repos/acme/widgets/issues/7/comments", 200,
+		`[{"id":22,"body":"conversation","user":{"login":"bob"},"created_at":"2026-07-07T11:00:00Z"}]`)
+	fake.HandleJSON("/repos/acme/widgets/pulls/7/reviews", 200,
+		`[{"id":33,"body":"review summary","user":{"login":"carol"},"submitted_at":"2026-07-07T12:00:00Z"}]`)
+
+	client, _ := github.ForHost("github.com")
+	issue, err := client.ListIssueComments("acme", "widgets", 7)
+	if err != nil || len(issue) != 1 || issue[0].ID != 22 || issue[0].User.Login != "bob" {
+		t.Fatalf("ListIssueComments() = %+v, %v; want one comment id 22 by bob", issue, err)
+	}
+	reviews, err := client.ListPRReviews("acme", "widgets", 7)
+	if err != nil || len(reviews) != 1 || reviews[0].ID != 33 || reviews[0].SubmittedAt != "2026-07-07T12:00:00Z" {
+		t.Fatalf("ListPRReviews() = %+v, %v; want one review id 33", reviews, err)
+	}
+}
+
+func TestGetPRMapsBodyBaseAndURL(t *testing.T) {
+	fake := testutil.InstallFakeGitHubAPI(t)
+	fake.HandleJSON("/repos/acme/widgets/pulls/7", 200,
+		`{"body":"pr body","base":{"ref":"main"},"html_url":"https://github.com/acme/widgets/pull/7"}`)
+
+	client, _ := github.ForHost("github.com")
+	info, err := client.GetPR("acme", "widgets", 7)
+	if err != nil {
+		t.Fatalf("GetPR() error = %v", err)
+	}
+	if info.Body != "pr body" || info.BaseRef != "main" || info.URL != "https://github.com/acme/widgets/pull/7" {
+		t.Fatalf("GetPR() = %+v; want body/base/url mapped", info)
+	}
+}

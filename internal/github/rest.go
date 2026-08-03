@@ -73,3 +73,45 @@ func getPaginated[T any](c *Client, path string) ([]T, error) {
 	}
 	return all, nil
 }
+
+// PRReview is a submitted PR review (its top-level body, not inline comments).
+type PRReview struct {
+	ID   int    `json:"id"`
+	Body string `json:"body"`
+	User struct {
+		Login string `json:"login"`
+	} `json:"user"`
+	SubmittedAt string `json:"submitted_at"`
+}
+
+// ListIssueComments returns all conversation comments on a PR.
+func (c *Client) ListIssueComments(owner, repo string, number int) ([]PRComment, error) {
+	return getPaginated[PRComment](c, fmt.Sprintf("repos/%s/%s/issues/%d/comments", owner, repo, number))
+}
+
+// ListPRReviews returns all submitted reviews on a PR.
+func (c *Client) ListPRReviews(owner, repo string, number int) ([]PRReview, error) {
+	return getPaginated[PRReview](c, fmt.Sprintf("repos/%s/%s/pulls/%d/reviews", owner, repo, number))
+}
+
+// PRInfo is the subset of pull-request details the orchestrator consumes.
+type PRInfo struct {
+	Body    string
+	BaseRef string
+	URL     string
+}
+
+// GetPR returns body, base branch, and canonical URL of a PR.
+func (c *Client) GetPR(owner, repo string, number int) (PRInfo, error) {
+	var raw struct {
+		Body string `json:"body"`
+		Base struct {
+			Ref string `json:"ref"`
+		} `json:"base"`
+		HTMLURL string `json:"html_url"`
+	}
+	if err := c.rest.Get(fmt.Sprintf("repos/%s/%s/pulls/%d", owner, repo, number), &raw); err != nil {
+		return PRInfo{}, err
+	}
+	return PRInfo{Body: raw.Body, BaseRef: raw.Base.Ref, URL: raw.HTMLURL}, nil
+}

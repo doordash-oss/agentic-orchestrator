@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -2320,7 +2321,6 @@ func TestServerMutationTargetReviewCommentsStartStagesConversationAndReviewBodyC
 
 func TestServerMutationTargetReviewCommentsStartUsesProvidedPreviewedComments(t *testing.T) {
 	target, store, f, ghFixture := newReviewCommentsActionTarget(t)
-	ghFixture.fakeGH.Clear(t)
 
 	result, err := target.StartReviewComments(f.ID, serverruntime.ReviewCommentsActionRequest{
 		Repo: testRepoAName,
@@ -2339,7 +2339,7 @@ func TestServerMutationTargetReviewCommentsStartUsesProvidedPreviewedComments(t 
 	if err == nil {
 		t.Fatal("StartReviewComments() error = nil; want dispatch error from nil phase runner after staging")
 	}
-	if got := ghFixture.fakeGH.InvocationCount(t); got != 0 {
+	if got := len(ghFixture.fakeAPI.Requests()); got != 0 {
 		t.Fatalf("FetchPRComments calls = %d; want 0 when comments are provided by preview", got)
 	}
 	if result.FeatureID != f.ID || result.Repo != testRepoAName || result.Mode != reviewModeAuto || result.Source != "provided" || result.CommentCount != 1 || result.Result != resultFailed {
@@ -2578,7 +2578,7 @@ func newReviewCommentsActionTarget(t *testing.T) (serverMutationTarget, *feature
 	if err != nil {
 		t.Fatalf("Load prepared feature: %v", err)
 	}
-	ghFixture := installMutationFakeGH(t)
+	ghFixture := installMutationFakeAPI(t)
 	writeMutationReviewComments(t, ghFixture, []git.ReviewComment{
 		reviewComment(100, "already addressed"),
 		reviewComment(101, "please fix"),
@@ -2623,10 +2623,10 @@ type mutationGHFixture struct {
 	reviewPath  string
 	issuePath   string
 	reviewsPath string
-	fakeGH      testutil.FakeGH
+	fakeAPI     *testutil.FakeGitHubAPI
 }
 
-func installMutationFakeGH(t *testing.T) mutationGHFixture {
+func installMutationFakeAPI(t *testing.T) mutationGHFixture {
 	t.Helper()
 	dataDir := t.TempDir()
 	fixture := mutationGHFixture{
@@ -2634,25 +2634,27 @@ func installMutationFakeGH(t *testing.T) mutationGHFixture {
 		issuePath:   filepath.Join(dataDir, "issue.json"),
 		reviewsPath: filepath.Join(dataDir, "reviews.json"),
 	}
-	fixture.fakeGH = testutil.InstallFakeGH(t, testutil.FakeGHConfig{
-		Behavior: `
-if [ "$GH_MUTATION_FAIL" = "1" ]; then
-  printf '%s\n' 'synthetic gh failure' >&2
-  exit 1
-fi
-case "$3" in
-  repos/acme/repo-a/pulls/12/comments) /bin/cat "$GH_MUTATION_REVIEW" ;;
-  repos/acme/repo-a/issues/12/comments) /bin/cat "$GH_MUTATION_ISSUE" ;;
-  repos/acme/repo-a/pulls/12/reviews) /bin/cat "$GH_MUTATION_REVIEWS" ;;
-  *) printf '%s\n' '[]' ;;
-esac
-`,
-		Env: map[string]string{
-			"GH_MUTATION_REVIEW":  fixture.reviewPath,
-			"GH_MUTATION_ISSUE":   fixture.issuePath,
-			"GH_MUTATION_REVIEWS": fixture.reviewsPath,
-		},
-	})
+	fake := testutil.InstallFakeGitHubAPI(t)
+	serveFile := func(path string) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			if os.Getenv("GH_MUTATION_FAIL") == "1" {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusInternalServerError)
+				fmt.Fprint(w, `{"message":"synthetic gh failure"}`)
+				return
+			}
+			data, err := os.ReadFile(path)
+			if err != nil {
+				data = []byte("[]")
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write(data)
+		}
+	}
+	fake.Mux.HandleFunc("/repos/acme/repo-a/pulls/12/comments", serveFile(fixture.reviewPath))
+	fake.Mux.HandleFunc("/repos/acme/repo-a/issues/12/comments", serveFile(fixture.issuePath))
+	fake.Mux.HandleFunc("/repos/acme/repo-a/pulls/12/reviews", serveFile(fixture.reviewsPath))
+	fixture.fakeAPI = fake
 	return fixture
 }
 

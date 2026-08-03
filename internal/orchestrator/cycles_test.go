@@ -16,6 +16,9 @@ package orchestrator_test
 
 import (
 	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -124,7 +127,7 @@ func TestCompleteRepoCycle_ReviewComments_RepliesToEveryPRFeedbackType(t *testin
 	if err := os.WriteFile(filepath.Join(repoDir, "review-fix.txt"), []byte("fixed\n"), 0o644); err != nil {
 		t.Fatalf("write review fix: %v", err)
 	}
-	fakeGH := installRepoCycleFakeGH(t)
+	fake := installRepoCycleFakeAPI(t)
 	f := &feature.Feature{
 		ID:        "feat-rc-cycle",
 		Slug:      "rc-cycle",
@@ -193,7 +196,7 @@ func TestCompleteRepoCycle_ReviewComments_RepliesToEveryPRFeedbackType(t *testin
 	if got := countPublisherCalls(pub, "Push"); got != 1 {
 		t.Errorf("Push calls = %d, want 1", got)
 	}
-	invocations := fakeGH.Invocations(t)
+	invocations := fake.Requests()
 	if got := countInvocationContaining(invocations, "pulls/7/comments/11/replies"); got != 1 {
 		t.Errorf("ReplyToPRComment calls = %d, want 1", got)
 	}
@@ -240,15 +243,26 @@ func initRepoCycleGitRepo(t *testing.T) string {
 	return dir
 }
 
-func installRepoCycleFakeGH(t *testing.T) testutil.FakeGH {
+func installRepoCycleFakeAPI(t *testing.T) *testutil.FakeGitHubAPI {
 	t.Helper()
-	return testutil.InstallFakeGH(t, testutil.FakeGHConfig{Behavior: `
-case "$*" in
-  *resolveReviewThread*) printf '%s\n' '{"data":{"resolveReviewThread":{"thread":{"isResolved":true}}}}' ;;
-  *reviewThreads*) printf '%s\n' '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[{"id":"thread-id-11","isResolved":false,"comments":{"nodes":[{"databaseId":11}]}}]}}}}}' ;;
-  *) printf '%s\n' '{}' ;;
-esac
-`})
+	fake := testutil.InstallFakeGitHubAPI(t)
+	fake.Mux.HandleFunc("/graphql", func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		switch {
+		case strings.Contains(string(body), "resolveReviewThread"):
+			fmt.Fprint(w, `{"data":{"resolveReviewThread":{"thread":{"isResolved":true}}}}`)
+		case strings.Contains(string(body), "reviewThreads"):
+			fmt.Fprint(w, `{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[{"id":"thread-id-11","isResolved":false,"comments":{"nodes":[{"databaseId":11}]}}]}}}}}`)
+		default:
+			fmt.Fprint(w, `{"data":{}}`)
+		}
+	})
+	// Replies and comment posts from the cycle land here.
+	fake.Mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{}`)
+	})
+	return fake
 }
 
 func countInvocationContaining(invocations []string, needle string) int {

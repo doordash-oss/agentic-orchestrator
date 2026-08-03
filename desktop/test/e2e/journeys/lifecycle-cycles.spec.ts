@@ -96,6 +96,26 @@ test('lifecycle cycles: resume, retry, restart, rebase, refactor child', async (
     transcript.step('rebase modal lists affected repositories, targets, and freshness');
     await rebaseModal.getByRole('button', { name: 'Close' }).click();
 
+    transcript.section('Restart confirmation');
+    // Restart must be confirmed before a refactor child exists: the child
+    // guard disables the parent-level restart while a pass is active, and the
+    // pass's own bar-level "Restart" dispatches without a confirmation. The
+    // parent feature restart lives in the overflow menu.
+    const actionsGroup = seededCockpit.getByRole('group', { name: 'Feature actions' });
+    await actionsGroup.getByLabel('More actions').click();
+    const restartButton = actionsGroup.getByRole('menuitem', { name: 'Restart', exact: true });
+    await expect(restartButton).toBeVisible({ timeout: 10_000 });
+    await expect(restartButton).toBeEnabled({ timeout: 60_000 });
+    await restartButton.click();
+    const restartDialog = handle.page.locator('.impact-dialog', { hasText: 'Restart' });
+    await expect(restartDialog).toBeVisible({ timeout: 10_000 });
+    await expect(restartDialog.locator('h3')).toContainText('Restart');
+    await restartDialog.getByRole('button', { name: 'Cancel' }).click();
+    await expect(restartDialog).not.toBeVisible({ timeout: 5_000 });
+    transcript.step(
+      'restart opens an impact confirmation naming the feature and phase; cancel makes no mutation',
+    );
+
     const planRefactor = aftercare.getByRole('button', { name: /Plan refactor/ });
     if (await planRefactor.isVisible({ timeout: 3_000 }).catch(() => false)) {
       await planRefactor.click();
@@ -128,29 +148,6 @@ test('lifecycle cycles: resume, retry, restart, rebase, refactor child', async (
       transcript.step('refactor action not visible — server does not enable it for this state');
     }
     transcript.step('aftercare actions opened their focused rebase and refactor flows');
-
-    transcript.section('Restart confirmation');
-    // Scope to the parent action bar: the child relationship workspace also
-    // renders a "Restart" button that dispatches without a confirmation.
-    const restartButton = seededCockpit
-      .getByRole('group', { name: 'Feature actions' })
-      .getByRole('button', { name: 'Restart', exact: true });
-    if (await restartButton.isVisible({ timeout: 5_000 }).catch(() => false)) {
-      await expect(restartButton).toBeEnabled({ timeout: 60_000 });
-      await restartButton.click();
-      const restartDialog = handle.page.locator('.impact-dialog', { hasText: 'Restart' });
-      await expect(restartDialog).toBeVisible({ timeout: 10_000 });
-      const dialogTitle = restartDialog.locator('h3');
-      await expect(dialogTitle).toContainText('Restart');
-      const cancelButton = restartDialog.getByRole('button', { name: 'Cancel' });
-      await cancelButton.click();
-      await expect(restartDialog).not.toBeVisible({ timeout: 5_000 });
-      transcript.step(
-        'restart opens an impact confirmation naming the feature and phase; cancel makes no mutation',
-      );
-    } else {
-      transcript.step('restart not visible — feature state does not offer restart');
-    }
   } finally {
     if (handle !== null) {
       await closeApp(handle);

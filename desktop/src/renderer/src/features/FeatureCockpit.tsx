@@ -1790,6 +1790,15 @@ export function FeatureCockpit({
           />
         ) : null}
 
+        {restartDialog ? (
+          <RestartConfirmDialog
+            snapshot={snapshot}
+            busy={busy}
+            onClose={() => setRestartDialog(false)}
+            onConfirm={confirmRestart}
+          />
+        ) : null}
+
         {rewindDialog ? (
           <RewindJourney
             featureId={featureId}

@@ -340,7 +340,9 @@ test('packaged inbox and cockpit resolve real attention classes from the bundled
     await expect(
       attentionDetail.getByText('Which verification tracks should be included?'),
     ).toBeVisible();
-    await expect(attentionDetail.getByText('50%').first()).toBeVisible();
+    await expect(
+      attentionDetail.getByText('Exercise renderer and server contracts.').first(),
+    ).toBeVisible();
     await attentionDetail.getByText('Unit tests', { exact: true }).click();
     await attentionDetail.getByText('Packaged smoke', { exact: true }).click();
     await attentionDetail

@@ -916,6 +916,7 @@ type serverMutationTarget struct {
 	rebaseStarter         featureRebaseStarter
 	childCreator          featureRefactorChildCreator
 	reviewFeedbackCreator featureReviewFeedbackChildCreator
+	rebaseChildCreator    featureRebaseChildCreator
 	cfg                   *config.Config
 	configPath            string
 	store                 *feature.Store
@@ -940,6 +941,10 @@ type featureRefactorChildCreator interface {
 
 type featureReviewFeedbackChildCreator interface {
 	CreateReviewFeedbackChild(parentID string, spec feature.ReviewFeedbackChildSpec) (*feature.Feature, error)
+}
+
+type featureRebaseChildCreator interface {
+	CreateRebaseChild(parentID string, spec feature.RebaseChildSpec) (*feature.Feature, error)
 }
 
 // freshnessCacheTTL bounds how long a worktree freshness probe is reused.
@@ -2055,6 +2060,39 @@ func (t *serverMutationTarget) ReviewFeedbackFeature(featureID string, req serve
 	return resp, nil
 }
 
+func (t *serverMutationTarget) RebaseFeature(featureID string, _ serverruntime.RebaseFeatureRequest) (serverruntime.RebaseFeatureResponse, error) {
+	resp := serverruntime.RebaseFeatureResponse{ParentID: featureID, Result: resultFailed}
+	creator := t.rebaseChildCreator
+	if creator == nil {
+		return resp, errors.New("feature manager is not available")
+	}
+	if t.orch == nil {
+		return resp, errors.New("orchestrator is not available")
+	}
+	preflight, err := t.orch.RebaseChildPreflight(featureID)
+	if err != nil {
+		return resp, err
+	}
+	spec := feature.RebaseChildSpec{
+		Bases:   preflight.Bases,
+		Targets: preflight.Targets,
+		Behind:  preflight.Behind,
+	}
+	var child *feature.Feature
+	if wErr := t.orch.WithRelationshipWriteLock(func() error {
+		var cErr error
+		child, cErr = creator.CreateRebaseChild(featureID, spec)
+		return cErr
+	}); wErr != nil {
+		return resp, wErr
+	}
+	t.orch.ChildCreated(child)
+	t.orch.RunSetupAsync(child.ID)
+	resp.FeatureID = child.ID
+	resp.Result = resultCreated
+	return resp, nil
+}
+
 func (t *serverMutationTarget) MarkDone(featureID string, req serverruntime.GuardedFeatureActionRequest) (serverruntime.MarkDoneResponse, error) {
 	if t.orch == nil {
 		return serverruntime.MarkDoneResponse{FeatureID: featureID}, errors.New("orchestrator is not available")
@@ -2758,6 +2796,7 @@ func runServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledPr
 			rebaseStarter:         boot.orchestrator,
 			childCreator:          boot.featureManager,
 			reviewFeedbackCreator: boot.featureManager,
+			rebaseChildCreator:    boot.featureManager,
 			cfg:                   boot.cfg,
 			configPath:            boot.runtime.Config,
 			store:                 boot.featureManager.Store,

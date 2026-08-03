@@ -33,9 +33,15 @@ const (
 	// ChildKindReviewFeedback identifies a child launched to address selected
 	// pull request review feedback on its parent.
 	ChildKindReviewFeedback = "review-feedback"
+	// ChildKindRebase identifies a child launched to merge-base reconcile
+	// behind parent repositories against their resolved targets.
+	ChildKindRebase = "rebase"
 	// ReviewFeedbackChildName is the fixed display and branch-slug seed for
 	// every review-feedback child.
 	ReviewFeedbackChildName = "Address review feedback"
+	// RebaseChildName is the fixed display and branch-slug seed for every
+	// rebase child.
+	RebaseChildName = "Rebase feature branches"
 	// ReviewFeedbackOutcomesFilename is the well-known JSON file inside the
 	// child's active run directory where the agent records one entry per
 	// selected comment (disposition + explanation). The integration tail
@@ -87,6 +93,16 @@ var (
 	// a child is active. A complete recoverable cascade operation is
 	// required before parent deletion can be allowed.
 	ErrCascadeDeleteNotAvailable = errors.New("cascade delete is not available while a child is active")
+	// ErrRebaseTargetResolution: a repository's merge target could not be
+	// resolved at rebase child creation. The failing repo is named in the
+	// typed error.
+	ErrRebaseTargetResolution = errors.New("rebase target resolution failed")
+	// ErrRebaseFetchFailed: a repository's remote fetch failed at rebase
+	// child creation. The failing repo is named in the typed error.
+	ErrRebaseFetchFailed = errors.New("rebase fetch failed")
+	// ErrRebaseAlreadyUpToDate: every repository is already up to date with
+	// its resolved target, so no rebase child is needed.
+	ErrRebaseAlreadyUpToDate = errors.New("rebase feature is already up to date")
 )
 
 // ChildRelationshipError identifies the child record that violates a
@@ -149,6 +165,82 @@ func (e *ParentWorktreesDirtyError) Error() string {
 // DefaultDirtyPathLimit bounds each dirty-path category captured at launch.
 const DefaultDirtyPathLimit = 50
 
+// RebaseTargetResolutionError names the repository whose merge target could
+// not be resolved at rebase child creation.
+type RebaseTargetResolutionError struct {
+	Repo string
+	Err  error
+}
+
+func (e *RebaseTargetResolutionError) Error() string {
+	if e.Err != nil {
+		return fmt.Sprintf("rebase target resolution failed for repo %s: %v", e.Repo, e.Err)
+	}
+	return fmt.Sprintf("rebase target resolution failed for repo %s", e.Repo)
+}
+
+func (e *RebaseTargetResolutionError) Unwrap() error {
+	if e.Err != nil {
+		return e.Err
+	}
+	return ErrRebaseTargetResolution
+}
+
+// Is supports errors.Is matching against ErrRebaseTargetResolution.
+func (e *RebaseTargetResolutionError) Is(target error) bool {
+	return target == ErrRebaseTargetResolution
+}
+
+// RebaseFetchError names the repository whose remote fetch failed at rebase
+// child creation.
+type RebaseFetchError struct {
+	Repo string
+	Err  error
+}
+
+func (e *RebaseFetchError) Error() string {
+	if e.Err != nil {
+		return fmt.Sprintf("fetch failed for repo %s: %v", e.Repo, e.Err)
+	}
+	return fmt.Sprintf("fetch failed for repo %s", e.Repo)
+}
+
+func (e *RebaseFetchError) Unwrap() error {
+	if e.Err != nil {
+		return e.Err
+	}
+	return ErrRebaseFetchFailed
+}
+
+// Is supports errors.Is matching against ErrRebaseFetchFailed.
+func (e *RebaseFetchError) Is(target error) bool {
+	return target == ErrRebaseFetchFailed
+}
+
+// RebaseAlreadyUpToDateError reports that every repository is already up to
+// date with its resolved target. Targets carries the per-repo resolved
+// targets so the message can name each one.
+type RebaseAlreadyUpToDateError struct {
+	Targets []RebaseRepoTarget
+}
+
+func (e *RebaseAlreadyUpToDateError) Error() string {
+	pairs := make([]string, 0, len(e.Targets))
+	for _, t := range e.Targets {
+		pairs = append(pairs, fmt.Sprintf("%s@%s", t.Repo, t.Target))
+	}
+	return fmt.Sprintf("feature is already up to date with all targets: %s", strings.Join(pairs, ", "))
+}
+
+func (e *RebaseAlreadyUpToDateError) Unwrap() error {
+	return ErrRebaseAlreadyUpToDate
+}
+
+// Is supports errors.Is matching against ErrRebaseAlreadyUpToDate.
+func (e *RebaseAlreadyUpToDateError) Is(target error) bool {
+	return target == ErrRebaseAlreadyUpToDate
+}
+
 // ChildRepoBase is the exact per-repository provenance captured at launch:
 // the full parent HEAD the child worktree must be created at, plus the
 // parent branch that tip belonged to.
@@ -156,6 +248,20 @@ type ChildRepoBase struct {
 	Repo         string `yaml:"repo"`
 	SHA          string `yaml:"sha"`
 	ParentBranch string `yaml:"parent_branch,omitempty" `
+}
+
+// RebaseRepoTarget records the resolved merge target for a repository at
+// rebase child creation time. The child never re-resolves or fetches; it
+// reads the creation-time decision from the persisted relationship.
+type RebaseRepoTarget struct {
+	Repo   string `yaml:"repo" json:"repo"`
+	Target string `yaml:"target" json:"target"`
+	// Ref is the tracking ref used for the behind check: "origin/<target>"
+	// for publishable repos, or "<target>" for local-only repos.
+	Ref string `yaml:"ref,omitempty" json:"ref,omitempty"`
+	// Publishable records whether the repo was publishable at creation,
+	// determining whether behind-ness used the remote-tracking ref.
+	Publishable bool `yaml:"publishable" json:"publishable"`
 }
 
 // ChildRelationship is the child-owned link back to its launch parent. The
@@ -181,6 +287,13 @@ type ChildRelationship struct {
 	DiffSummary string `yaml:"diff_summary,omitempty" json:"diff_summary,omitempty"`
 	// Bases captures the exact parent tip per repository at launch time.
 	Bases []ChildRepoBase `yaml:"bases,omitempty"`
+	// RebaseTargets captures the resolved per-repo merge targets at rebase
+	// child creation time. Only set for rebase children.
+	RebaseTargets []RebaseRepoTarget `yaml:"rebase_targets,omitempty" json:"rebase_targets,omitempty"`
+	// RebaseBehind captures the set of repositories that were behind their
+	// resolved target at rebase child creation time. Only set for rebase
+	// children.
+	RebaseBehind []string `yaml:"rebase_behind,omitempty" json:"rebase_behind,omitempty"`
 }
 
 // IsChild reports whether the feature was launched as a child of another.
@@ -234,6 +347,34 @@ func (f *Feature) BaseSHA(repoName string) string {
 		}
 	}
 	return ""
+}
+
+// RebaseTargetForRepo returns the persisted resolved target for the named
+// repository on a rebase child, or the zero value if not found.
+func (f *Feature) RebaseTargetForRepo(repoName string) (RebaseRepoTarget, bool) {
+	if f == nil || f.Parent == nil {
+		return RebaseRepoTarget{}, false
+	}
+	for _, t := range f.Parent.RebaseTargets {
+		if t.Repo == repoName {
+			return t, true
+		}
+	}
+	return RebaseRepoTarget{}, false
+}
+
+// IsRebaseBehindRepo reports whether the named repository was behind its
+// resolved target at rebase child creation time.
+func (f *Feature) IsRebaseBehindRepo(repoName string) bool {
+	if f == nil || f.Parent == nil {
+		return false
+	}
+	for _, r := range f.Parent.RebaseBehind {
+		if r == repoName {
+			return true
+		}
+	}
+	return false
 }
 
 // ChildCreationIntent is the durable record of an in-flight child creation.
@@ -305,6 +446,19 @@ type ReviewFeedbackChildSpec struct {
 	GateEnabled *bool
 }
 
+// RebaseChildSpec carries the creation-time resolved per-repo targets and
+// behind set produced by the orchestrator preflight. The feature manager
+// persists them on the child relationship so integration and future phases
+// read the creation-time decision rather than re-resolving.
+type RebaseChildSpec struct {
+	// Bases are the captured parent tip SHAs per repo (fork-point pinning).
+	Bases []ChildRepoBase
+	// Targets are the resolved per-repo merge targets.
+	Targets []RebaseRepoTarget
+	// Behind is the set of repo names that were behind their resolved target.
+	Behind []string
+}
+
 // CreateReviewFeedbackChild atomically launches a fixed-Medium child for the
 // selected pull request comments. Validation that depends only on the spec is
 // completed before loading or writing any feature state.
@@ -319,7 +473,7 @@ func (m *Manager) CreateReviewFeedbackChild(parentID string, spec ReviewFeedback
 		}
 		return nil, fmt.Errorf("loading parent feature: %w", err)
 	}
-	if err := validateRefactorParent(parent, nil); err != nil {
+	if err := ValidateRefactorParent(parent, nil); err != nil {
 		return nil, err
 	}
 	if err := validateReviewFeedbackCommentRepos(parent, spec.Comments); err != nil {
@@ -332,7 +486,7 @@ func (m *Manager) CreateReviewFeedbackChild(parentID string, spec ReviewFeedback
 
 	now := time.Now()
 	child, err := m.Store.CreateChildLocked(parentID, func(lockedParent *Feature, activeChild *Feature) (*Feature, *ChildCreationIntent, error) {
-		if err := validateRefactorParent(lockedParent, activeChild); err != nil {
+		if err := ValidateRefactorParent(lockedParent, activeChild); err != nil {
 			return nil, nil, err
 		}
 		if err := validateReviewFeedbackCommentRepos(lockedParent, spec.Comments); err != nil {
@@ -374,6 +528,152 @@ func (m *Manager) CreateReviewFeedbackChild(parentID string, spec ReviewFeedback
 		return nil, err
 	}
 	return child, nil
+}
+
+// CreateRebaseChild atomically launches a fixed-Medium child that
+// merge-reconciles behind parent repositories against their resolved targets.
+// The orchestrator preflight resolves targets, fetches, and computes
+// behind-ness before calling this method; the spec carries the results so
+// the child relationship persists the creation-time decision. The parent
+// must be a top-level Published or CodeReady feature with no active child
+// and clean worktrees.
+func (m *Manager) CreateRebaseChild(parentID string, spec RebaseChildSpec) (*Feature, error) {
+	if len(spec.Behind) == 0 {
+		return nil, &RebaseAlreadyUpToDateError{Targets: spec.Targets}
+	}
+	parent, err := m.Store.Load(parentID)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, fmt.Errorf("%w: %s", ErrRefactorParentNotFound, parentID)
+		}
+		return nil, fmt.Errorf("loading parent feature: %w", err)
+	}
+	if err := ValidateRefactorParent(parent, nil); err != nil {
+		return nil, err
+	}
+
+	bases := spec.Bases
+	if len(bases) == 0 {
+		bases, err = m.preflightRefactorParent(parent)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	now := time.Now()
+	child, err := m.Store.CreateChildLocked(parentID, func(lockedParent *Feature, activeChild *Feature) (*Feature, *ChildCreationIntent, error) {
+		if err := ValidateRefactorParent(lockedParent, activeChild); err != nil {
+			return nil, nil, err
+		}
+		child := m.buildRefactorChild(lockedParent, RefactorChildSpec{
+			Name:         RebaseChildName,
+			Description:  rebaseDescription(lockedParent, spec.Targets, spec.Behind),
+			Pipeline:     PipelineMedium,
+			Checkpoints:  lockedParent.Checkpoints,
+			ExitCriteria: rebaseExitCriteria(spec.Targets, spec.Behind),
+		}, bases, now)
+		child.Parent.Kind = ChildKindRebase
+		child.Parent.RebaseTargets = append([]RebaseRepoTarget(nil), spec.Targets...)
+		child.Parent.RebaseBehind = append([]string(nil), spec.Behind...)
+
+		savedExitCriteria := lockedParent.ExitCriteria
+		applyResolvedReviewConfig(lockedParent, child)
+		lockedParent.ExitCriteria = savedExitCriteria
+		intent := &ChildCreationIntent{
+			ChildID:   child.ID,
+			Kind:      ChildKindRebase,
+			CreatedAt: now,
+			Child:     *child,
+			Setup:     child.Run().Setup,
+		}
+		return child, intent, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return child, nil
+}
+
+// rebaseDescription generates the deterministic, machine-authored description
+// for a rebase child. It names each behind repo with its exact persisted
+// resolved target ref, instructs the pipeline to merge (never rebase) the
+// target into the working branch, adapt the feature's code to the base's new
+// APIs where they collide, keep trivial clean merges minimal, leave
+// up-to-date repos untouched, and never push to any remote.
+func rebaseDescription(parent *Feature, targets []RebaseRepoTarget, behind []string) string {
+	behindSet := make(map[string]bool, len(behind))
+	for _, r := range behind {
+		behindSet[r] = true
+	}
+	targetByRepo := make(map[string]RebaseRepoTarget, len(targets))
+	for _, t := range targets {
+		targetByRepo[t.Repo] = t
+	}
+
+	var sb strings.Builder
+	sb.WriteString("This pass merge-reconciles the feature's branches against their resolved base targets.\n")
+	sb.WriteString("\n## Instructions\n\n")
+	sb.WriteString("- For each behind repository listed below, merge the resolved target into the repository's working branch using `git merge` (never rebase, no history rewrite).\n")
+	sb.WriteString("- Adapt the feature's code to the base's new APIs where they collide with the feature's changes.\n")
+	sb.WriteString("- Keep trivial clean merges minimal: do not opportunistically refactor or reformat code that merges cleanly.\n")
+	sb.WriteString("- Leave up-to-date repositories completely untouched. Do not merge, rebase, or modify them in any way.\n")
+	sb.WriteString("- Never push to any remote. All work is local; integration lands through the parent merge transaction.\n")
+	sb.WriteString("- Do not fetch from any remote. The target refs were fetched at creation time and are already available in the shared object store.\n")
+
+	for _, repo := range parent.Repos {
+		if !behindSet[repo.Name] {
+			continue
+		}
+		t := targetByRepo[repo.Name]
+		sb.WriteString("\n## Repository: ")
+		sb.WriteString(repo.Name)
+		sb.WriteString("\n\nResolved target ref: ")
+		sb.WriteString(t.Ref)
+		sb.WriteString(" (branch: ")
+		sb.WriteString(t.Target)
+		sb.WriteString(")\n\n")
+		sb.WriteString("Merge `")
+		sb.WriteString(t.Ref)
+		sb.WriteString("` into the working branch `")
+		sb.WriteString(repo.Branch)
+		sb.WriteString("`. Resolve any conflicts by adapting the feature's code to the base's new APIs. Keep the merge commit (do not squash).\n")
+	}
+	return sb.String()
+}
+
+// rebaseExitCriteria generates deterministic exit criteria for a rebase child.
+// It states the per-behind-repo git-level completion facts the final review
+// can check semantically, plus the invariants that up-to-date repos are
+// unchanged and nothing was pushed.
+func rebaseExitCriteria(targets []RebaseRepoTarget, behind []string) string {
+	behindSet := make(map[string]bool, len(behind))
+	for _, r := range behind {
+		behindSet[r] = true
+	}
+	targetByRepo := make(map[string]RebaseRepoTarget, len(targets))
+	for _, t := range targets {
+		targetByRepo[t.Repo] = t
+	}
+
+	var sb strings.Builder
+	sb.WriteString("This pass is complete when all of the following git-level completion facts hold for every behind repository:\n")
+	for _, r := range behind {
+		t := targetByRepo[r]
+		sb.WriteString("\n### Repository: ")
+		sb.WriteString(r)
+		sb.WriteString("\n\n- The resolved target commit (`")
+		sb.WriteString(t.Ref)
+		sb.WriteString("`) is an ancestor of the working-branch head (`git merge-base --is-ancestor ")
+		sb.WriteString(t.Ref)
+		sb.WriteString(" HEAD` succeeds).\n")
+		sb.WriteString("- No merge is in progress (no `rebase-merge` or `rebase-apply` directory, no `MERGE_HEAD`).\n")
+		sb.WriteString("- No conflict markers remain in any tracked file (`git diff --name-only --diff-filter=U` is empty).\n")
+		sb.WriteString("- The worktree is clean (`git status --porcelain` is empty).\n")
+	}
+	sb.WriteString("\n## Invariants\n\n")
+	sb.WriteString("- Up-to-date repositories (not listed above) are completely unchanged: their worktree HEAD, branch, and content are byte-identical to the creation-time fork point.\n")
+	sb.WriteString("- Nothing was pushed to any remote at any stage. All work is local.\n")
+	return sb.String()
 }
 
 func validateReviewFeedbackSpec(spec ReviewFeedbackChildSpec) error {
@@ -507,7 +807,7 @@ func (m *Manager) CreateRefactorChild(parentID string, spec RefactorChildSpec) (
 		}
 		return nil, fmt.Errorf("loading parent feature: %w", err)
 	}
-	if err := validateRefactorParent(parent, nil); err != nil {
+	if err := ValidateRefactorParent(parent, nil); err != nil {
 		return nil, err
 	}
 
@@ -521,7 +821,7 @@ func (m *Manager) CreateRefactorChild(parentID string, spec RefactorChildSpec) (
 
 	now := time.Now()
 	child, err := m.Store.CreateChildLocked(parentID, func(lockedParent *Feature, activeChild *Feature) (*Feature, *ChildCreationIntent, error) {
-		if err := validateRefactorParent(lockedParent, activeChild); err != nil {
+		if err := ValidateRefactorParent(lockedParent, activeChild); err != nil {
 			return nil, nil, err
 		}
 		child := m.buildRefactorChild(lockedParent, spec, bases, now)
@@ -562,9 +862,9 @@ func applyResolvedReviewConfig(parent, child *Feature) {
 	parent.Inquireness = child.Inquireness
 }
 
-// validateRefactorParent enforces the launch rules against the parent. When
+// ValidateRefactorParent enforces the launch rules against the parent. When
 // activeChild is non-nil the caller already knows an active child exists.
-func validateRefactorParent(parent *Feature, activeChild *Feature) error {
+func ValidateRefactorParent(parent *Feature, activeChild *Feature) error {
 	if parent.IsChild() {
 		return fmt.Errorf("%w: %s", ErrRefactorParentIsChild, parent.ID)
 	}

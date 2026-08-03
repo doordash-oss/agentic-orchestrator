@@ -309,6 +309,35 @@ func (t *journeyMutationTarget) RefactorFeature(featureID string, req server.Ref
 	return resp, nil
 }
 
+// RebaseFeature mirrors the production rebase child launch: orchestrator
+// preflight resolves targets and computes behind-ness, then the child is
+// created under the relationship write lock with the persisted results.
+func (t *journeyMutationTarget) RebaseFeature(featureID string, _ server.RebaseFeatureRequest) (server.RebaseFeatureResponse, error) {
+	resp := server.RebaseFeatureResponse{ParentID: featureID, Result: "failed"}
+	preflight, err := t.orch.RebaseChildPreflight(featureID)
+	if err != nil {
+		return resp, err
+	}
+	spec := feature.RebaseChildSpec{
+		Bases:   preflight.Bases,
+		Targets: preflight.Targets,
+		Behind:  preflight.Behind,
+	}
+	var child *feature.Feature
+	if err := t.orch.WithRelationshipWriteLock(func() error {
+		var createErr error
+		child, createErr = t.mgr.CreateRebaseChild(featureID, spec)
+		return createErr
+	}); err != nil {
+		return resp, err
+	}
+	t.orch.ChildCreated(child)
+	t.orch.RunSetupAsync(child.ID)
+	resp.FeatureID = child.ID
+	resp.Result = "created"
+	return resp, nil
+}
+
 func (t *journeyMutationTarget) StartFeature(featureID string) (server.FeatureStartResponse, error) {
 	resp := server.FeatureStartResponse{FeatureID: featureID, Result: "failed"}
 	if err := t.orch.StartFeature(featureID); err != nil {

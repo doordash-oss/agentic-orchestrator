@@ -241,6 +241,7 @@ func (h *apiHandler) featureDetailDTO(f *feature.Feature) (FeatureDetail, error)
 		if reason, dirty := h.refactorEntryDisabledReason(f); dirty {
 			disableAction(detail.Actions, actionRefactor, reason)
 			disableAction(detail.Actions, actionReviewFeedback, reason)
+			disableAction(detail.Actions, actionRebase, reason)
 		}
 	}
 	detail.Cycle = activeCycleDTO(f)

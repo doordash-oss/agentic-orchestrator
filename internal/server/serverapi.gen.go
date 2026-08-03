@@ -509,6 +509,21 @@ func (e CreateFeatureParamsXAgenticoClient) Valid() bool {
 	}
 }
 
+// Defines values for RebaseFeatureParamsXAgenticoClient.
+const (
+	RebaseFeatureParamsXAgenticoClientLocal RebaseFeatureParamsXAgenticoClient = "local"
+)
+
+// Valid indicates whether the value is a known member of the RebaseFeatureParamsXAgenticoClient enum.
+func (e RebaseFeatureParamsXAgenticoClient) Valid() bool {
+	switch e {
+	case RebaseFeatureParamsXAgenticoClientLocal:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for RefactorFeatureParamsXAgenticoClient.
 const (
 	RefactorFeatureParamsXAgenticoClientLocal RefactorFeatureParamsXAgenticoClient = "local"
@@ -916,13 +931,13 @@ func (e ExecuteRecoveryActionsParamsXAgenticoClient) Valid() bool {
 
 // Defines values for InitWorkspaceRepositoryParamsXAgenticoClient.
 const (
-	Local InitWorkspaceRepositoryParamsXAgenticoClient = "local"
+	InitWorkspaceRepositoryParamsXAgenticoClientLocal InitWorkspaceRepositoryParamsXAgenticoClient = "local"
 )
 
 // Valid indicates whether the value is a known member of the InitWorkspaceRepositoryParamsXAgenticoClient enum.
 func (e InitWorkspaceRepositoryParamsXAgenticoClient) Valid() bool {
 	switch e {
-	case Local:
+	case InitWorkspaceRepositoryParamsXAgenticoClientLocal:
 		return true
 	default:
 		return false
@@ -1893,6 +1908,18 @@ type ReadinessResponse struct {
 	// Ready Mandatory readiness — true when at least one provider is usable, models are available, and the configuration is valid. Feature creation is gated on this value.
 	Ready     bool               `json:"ready"`
 	Workspace WorkspaceReadiness `json:"workspace"`
+}
+
+// RebaseFeatureRequest Zero-input request. Any JSON body (including the legacy source_revision payload) is accepted and ignored; the rebase child launch takes no user input.
+type RebaseFeatureRequest map[string]interface{}
+
+// RebaseFeatureResponse defines model for RebaseFeatureResponse.
+type RebaseFeatureResponse struct {
+	APIVersion string       `json:"api_version"`
+	FeatureID  string       `json:"feature_id"`
+	Meta       ResponseMeta `json:"meta,omitempty"`
+	ParentID   string       `json:"parent_id"`
+	Result     string       `json:"result"`
 }
 
 // RebasePreflightRepo defines model for RebasePreflightRepo.
@@ -2887,6 +2914,15 @@ type CreateFeatureParams struct {
 // CreateFeatureParamsXAgenticoClient defines parameters for CreateFeature.
 type CreateFeatureParamsXAgenticoClient string
 
+// RebaseFeatureParams defines parameters for RebaseFeature.
+type RebaseFeatureParams struct {
+	// XAgenticoClient CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required.
+	XAgenticoClient RebaseFeatureParamsXAgenticoClient `json:"X-Agentico-Client"`
+}
+
+// RebaseFeatureParamsXAgenticoClient defines parameters for RebaseFeature.
+type RebaseFeatureParamsXAgenticoClient string
+
 // RefactorFeatureParams defines parameters for RefactorFeature.
 type RefactorFeatureParams struct {
 	// XAgenticoClient CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required.
@@ -3161,6 +3197,9 @@ type PutRuntimeConfigJSONRequestBody PutRuntimeConfigJSONBody
 
 // CreateFeatureJSONRequestBody defines body for CreateFeature for application/json ContentType.
 type CreateFeatureJSONRequestBody = CreateFeatureMutationRequest
+
+// RebaseFeatureJSONRequestBody defines body for RebaseFeature for application/json ContentType.
+type RebaseFeatureJSONRequestBody = RebaseFeatureRequest
 
 // RefactorFeatureJSONRequestBody defines body for RefactorFeature for application/json ContentType.
 type RefactorFeatureJSONRequestBody = RefactorFeatureRequest

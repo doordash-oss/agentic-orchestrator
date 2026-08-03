@@ -143,7 +143,7 @@ func (o *Orchestrator) prepareTransactionCandidates(child, parent *feature.Featu
 			}
 			return nil, o.emitTransactionAttention(child, entry.Diagnostics)
 		}
-		message := fmt.Sprintf("Merge refactor child %s into %s (%s)", child.ID, entry.ParentBranch, entry.Repo)
+		message := fmt.Sprintf("Merge %s child %s into %s (%s)", child.Parent.Kind, child.ID, entry.ParentBranch, entry.Repo)
 		result, err := o.deps.Worktrees.CreateMergeCandidate(parentRepo.Path, entry.ParentAnchorSHA, entry.ChildHeadSHA, message)
 		if err != nil {
 			var conflictErr *git.MergeCandidateConflictError

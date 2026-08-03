@@ -39,6 +39,7 @@ func TestClientExportsOnlyJourneyUsedMethods(t *testing.T) {
 	want := []string{
 		"FetchReviewFeedback",
 		"LivePreview",
+		"RebaseFeature",
 		"RefactorFeature",
 		"ReviewFeedbackFeature",
 		"SubscribeSessionOutput",

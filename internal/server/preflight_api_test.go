@@ -32,6 +32,8 @@ type preflightMutationTarget struct {
 	rebasePreflightID      string
 	startRebaseCalls       []RebaseActionRequest
 	startRebaseErr         error
+	rebaseFeatureID        string
+	rebaseFeatureErr       error
 	completionPreflight    CompletionPreflightResponse
 	completionPreflightErr error
 	completionPreflightID  string
@@ -62,6 +64,14 @@ func (t *preflightMutationTarget) StartRebase(featureID string, req RebaseAction
 		return RebaseStartResponse{FeatureID: featureID, CycleType: "rebase", Result: "failed"}, t.startRebaseErr
 	}
 	return RebaseStartResponse{FeatureID: featureID, CycleType: "rebase", Result: "started"}, nil
+}
+
+func (t *preflightMutationTarget) RebaseFeature(featureID string, _ RebaseFeatureRequest) (RebaseFeatureResponse, error) {
+	t.rebaseFeatureID = featureID
+	if t.rebaseFeatureErr != nil {
+		return RebaseFeatureResponse{ParentID: featureID, Result: "failed"}, t.rebaseFeatureErr
+	}
+	return RebaseFeatureResponse{FeatureID: "rebase-child", ParentID: featureID, Result: "created"}, nil
 }
 
 func authedGet(handler http.Handler, path string) *httptest.ResponseRecorder {
@@ -149,11 +159,9 @@ func TestRebasePreflightRejectsWrongMethod(t *testing.T) {
 	}
 }
 
-func TestRebaseStartRejectsStalePreflight(t *testing.T) {
+func TestRebaseActionAcceptsLegacyBody(t *testing.T) {
 	t.Parallel()
-	target := &preflightMutationTarget{
-		startRebaseErr: &ActionConflictError{Message: "stale rebase preflight"},
-	}
+	target := &preflightMutationTarget{}
 	handler := NewHandler(HandlerOptions{
 		Mutations:             target,
 		AuthToken:             testAuthToken,
@@ -162,10 +170,14 @@ func TestRebaseStartRejectsStalePreflight(t *testing.T) {
 	w := postTrustedAuthedJSON(handler, "/api/v1/features/"+fixtureFeatureID+"/actions/rebase", map[string]any{
 		"source_revision": "rev-old",
 	})
-	if w.Code != http.StatusConflict {
-		t.Fatalf("status = %d body=%s; want 409", w.Code, w.Body.String())
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status = %d body=%s; want 201", w.Code, w.Body.String())
 	}
-	if len(target.startRebaseCalls) != 1 || target.startRebaseCalls[0].SourceRevision != "rev-old" {
-		t.Fatalf("start calls = %+v; want one carrying source_revision rev-old", target.startRebaseCalls)
+	if target.rebaseFeatureID != fixtureFeatureID {
+		t.Fatalf("RebaseFeature called with %q; want %s", target.rebaseFeatureID, fixtureFeatureID)
+	}
+	// The legacy source_revision body must be accepted and ignored.
+	if len(target.startRebaseCalls) != 0 {
+		t.Fatalf("StartRebase called %d times; want 0 (action flipped to RebaseFeature)", len(target.startRebaseCalls))
 	}
 }

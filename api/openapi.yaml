@@ -469,6 +469,55 @@ paths:
         "502":
           $ref: "#/components/responses/ErrorResponse"
 
+  # Statically documented form of the rebase child launch action. The server
+  # routes the rebase launch through the dynamic /actions/{action} dispatch,
+  # so the served URL is exactly /api/v1/features/{feature_id}/actions/rebase;
+  # this operation pins the typed request/response surface to that URL. The
+  # request is zero-input: any JSON body (including the legacy
+  # source_revision payload) is accepted and ignored.
+  /api/v1/features/{feature_id}/actions/rebase:
+    post:
+      operationId: rebaseFeature
+      summary: Launch a rebase child feature that merge-reconciles behind repositories.
+      description: >-
+        Zero-input child launch: the handler accepts and ignores any JSON body,
+        including the legacy source_revision payload. The orchestrator resolves
+        each repository's merge target (PR base branch, recorded base branch,
+        or repository default branch), fetches, and computes behind-ness. If
+        every repository is up to date, returns the typed
+        rebase_already_up_to_date error naming each resolved target. If any
+        repository fails target resolution or fetch, the whole action fails
+        atomically with a distinct stable code naming the failing repo; no
+        child and no relationship event are created. On success a rebase child
+        of kind "rebase" is created with a pinned medium pipeline, fork-point-
+        pinned worktrees, and persisted resolved targets and behind set.
+        Failure machine codes: 404 parent_not_found; 409 parent_is_child,
+        parent_status_ineligible, active_child_exists, parent_worktrees_dirty,
+        rebase_target_resolution_failed, rebase_fetch_failed, and
+        rebase_already_up_to_date.
+      parameters:
+        - $ref: "#/components/parameters/FeatureID"
+        - $ref: "#/components/parameters/TrustedMutationHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RebaseFeatureRequest"
+      responses:
+        "201":
+          description: Rebase child launched and setup queued.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RebaseFeatureResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/ErrorResponse"
+        "409":
+          $ref: "#/components/responses/ErrorResponse"
+
   /api/v1/features/{feature_id}/actions/{action}/{subaction}:
     post:
       operationId: runFeatureSubaction
@@ -2692,6 +2741,22 @@ components:
             the parent and child. When omitted, inherits the parent's Roadmap
             review value.
     ReviewFeedbackFeatureResponse:
+      allOf:
+        - $ref: "#/components/schemas/ActionBaseResponse"
+        - $ref: "#/components/schemas/FeatureActionResult"
+        - type: object
+          required: [parent_id]
+          properties:
+            parent_id:
+              type: string
+    RebaseFeatureRequest:
+      type: object
+      additionalProperties: true
+      description: >-
+        Zero-input request. Any JSON body (including the legacy
+        source_revision payload) is accepted and ignored; the rebase child
+        launch takes no user input.
+    RebaseFeatureResponse:
       allOf:
         - $ref: "#/components/schemas/ActionBaseResponse"
         - $ref: "#/components/schemas/FeatureActionResult"

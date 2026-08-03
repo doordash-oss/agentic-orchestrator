@@ -334,6 +334,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/features/{feature_id}/actions/rebase": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Launch a rebase child feature that merge-reconciles behind repositories.
+         * @description Zero-input child launch: the handler accepts and ignores any JSON body, including the legacy source_revision payload. The orchestrator resolves each repository's merge target (PR base branch, recorded base branch, or repository default branch), fetches, and computes behind-ness. If every repository is up to date, returns the typed rebase_already_up_to_date error naming each resolved target. If any repository fails target resolution or fetch, the whole action fails atomically with a distinct stable code naming the failing repo; no child and no relationship event are created. On success a rebase child of kind "rebase" is created with a pinned medium pipeline, fork-point- pinned worktrees, and persisted resolved targets and behind set. Failure machine codes: 404 parent_not_found; 409 parent_is_child, parent_status_ineligible, active_child_exists, parent_worktrees_dirty, rebase_target_resolution_failed, rebase_fetch_failed, and rebase_already_up_to_date.
+         */
+        post: operations["rebaseFeature"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/features/{feature_id}/actions/{action}/{subaction}": {
         parameters: {
             query?: never;
@@ -1365,6 +1385,13 @@ export interface components {
             gate?: boolean;
         };
         ReviewFeedbackFeatureResponse: components["schemas"]["ActionBaseResponse"] & components["schemas"]["FeatureActionResult"] & {
+            parent_id: string;
+        };
+        /** @description Zero-input request. Any JSON body (including the legacy source_revision payload) is accepted and ignored; the rebase child launch takes no user input. */
+        RebaseFeatureRequest: {
+            [key: string]: unknown;
+        };
+        RebaseFeatureResponse: components["schemas"]["ActionBaseResponse"] & components["schemas"]["FeatureActionResult"] & {
             parent_id: string;
         };
         RebasePreflightRepo: {
@@ -2958,6 +2985,38 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             404: components["responses"]["ErrorResponse"];
             502: components["responses"]["ErrorResponse"];
+        };
+    };
+    rebaseFeature: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required. */
+                "X-Agentico-Client": components["parameters"]["TrustedMutationHeader"];
+            };
+            path: {
+                feature_id: components["parameters"]["FeatureID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RebaseFeatureRequest"];
+            };
+        };
+        responses: {
+            /** @description Rebase child launched and setup queued. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RebaseFeatureResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["ErrorResponse"];
+            409: components["responses"]["ErrorResponse"];
         };
     };
     runFeatureSubaction: {

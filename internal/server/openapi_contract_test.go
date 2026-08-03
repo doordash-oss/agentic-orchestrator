@@ -513,6 +513,7 @@ func documentedServerRoutes() []documentedRoute {
 		{method: httpMethodPost, path: "/api/v1/features/{feature_id}/reviews/{review_id}/decision", mutation: true},
 		{method: httpMethodPost, path: "/api/v1/features/{feature_id}/actions/{action}", mutation: true},
 		{method: httpMethodPost, path: "/api/v1/features/{feature_id}/actions/refactor", mutation: true},
+		{method: httpMethodPost, path: "/api/v1/features/{feature_id}/actions/rebase", mutation: true},
 		{method: httpMethodPost, path: apiPathReviewFeedbackAction, mutation: true},
 		{method: httpMethodPost, path: apiPathReviewFeedbackFetch, mutation: true},
 		{method: httpMethodPost, path: "/api/v1/features/{feature_id}/actions/{action}/{subaction}", mutation: true},

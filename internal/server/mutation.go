@@ -64,6 +64,9 @@ const (
 	errCodeChildMutationRestricted        = "child_mutation_restricted"
 	errCodeCascadeDeleteNotAvailable      = "cascade_delete_not_available"
 	errCodePipelineMismatch               = "pipeline_mismatch"
+	errCodeRebaseTargetResolution         = "rebase_target_resolution_failed"
+	errCodeRebaseFetchFailed              = "rebase_fetch_failed"
+	errCodeRebaseAlreadyUpToDate          = "rebase_already_up_to_date"
 )
 
 // resultCreated is the ActionResult.Result value for a newly created
@@ -143,6 +146,7 @@ type MutationTarget interface {
 	RewindFeature(featureID string, req RewindFeatureRequest) (RewindFeatureResponse, error)
 	RetryFeature(featureID string) (RetryFeatureResponse, error)
 	StartRebase(featureID string, req RebaseActionRequest) (RebaseStartResponse, error)
+	RebaseFeature(featureID string, req RebaseFeatureRequest) (RebaseFeatureResponse, error)
 	RefactorFeature(featureID string, req RefactorFeatureRequest) (RefactorFeatureResponse, error)
 	ReviewFeedbackFeature(featureID string, req ReviewFeedbackFeatureRequest) (ReviewFeedbackFeatureResponse, error)
 	PreflightRebase(featureID string) (RebasePreflightResponse, error)
@@ -509,6 +513,40 @@ func writeChildLaunchError(w http.ResponseWriter, err error) bool {
 		writeAPIError(w, http.StatusConflict, errCodeChildExecutionBlocked, err.Error(), nil)
 	case errors.Is(err, feature.ErrChildExecutionClosed):
 		writeAPIError(w, http.StatusConflict, errCodeChildRelationshipClosed, err.Error(), nil)
+	case errors.Is(err, feature.ErrRebaseTargetResolution):
+		var targetErr *feature.RebaseTargetResolutionError
+		repo := ""
+		if errors.As(err, &targetErr) {
+			repo = targetErr.Repo
+		}
+		writeAPIError(w, http.StatusConflict, errCodeRebaseTargetResolution, err.Error(), map[string]any{
+			"repo": repo,
+		})
+	case errors.Is(err, feature.ErrRebaseFetchFailed):
+		var fetchErr *feature.RebaseFetchError
+		repo := ""
+		if errors.As(err, &fetchErr) {
+			repo = fetchErr.Repo
+		}
+		writeAPIError(w, http.StatusConflict, errCodeRebaseFetchFailed, err.Error(), map[string]any{
+			"repo": repo,
+		})
+	case errors.Is(err, feature.ErrRebaseAlreadyUpToDate):
+		var upToDate *feature.RebaseAlreadyUpToDateError
+		targets := []map[string]any{}
+		if errors.As(err, &upToDate) {
+			for _, t := range upToDate.Targets {
+				targets = append(targets, map[string]any{
+					"repo":        t.Repo,
+					"target":      t.Target,
+					"ref":         t.Ref,
+					"publishable": t.Publishable,
+				})
+			}
+		}
+		writeAPIError(w, http.StatusConflict, errCodeRebaseAlreadyUpToDate, err.Error(), map[string]any{
+			"targets": targets,
+		})
 	default:
 		return false
 	}
@@ -992,17 +1030,17 @@ func (h *apiHandler) handleFeatureActionRoute(w http.ResponseWriter, r *http.Req
 		if subaction != "" {
 			return false
 		}
-		var req RebaseActionRequest
+		var req map[string]any
 		if !decodeMutationJSON(w, r, &req) {
 			return true
 		}
-		resp, err := h.mutations.StartRebase(featureID, req)
+		resp, err := h.mutations.RebaseFeature(featureID, RebaseFeatureRequest{})
 		if err != nil {
 			writeMutationError(w, err)
 			return true
 		}
-		defaultActionFields(&resp, featureID, resultStarted)
-		writeActionJSON(w, http.StatusOK, &resp)
+		defaultActionFields(&resp, "", resultCreated)
+		writeActionJSON(w, http.StatusCreated, &resp)
 	case actionRefactor:
 		if subaction != "" {
 			return false
@@ -1365,6 +1403,14 @@ func ReviewFeedbackChildSpecFromRequest(req ReviewFeedbackFeatureRequest) featur
 		Comments:    append([]feature.ReviewFeedbackComment(nil), req.Comments...),
 		GateEnabled: req.Gate,
 	}
+}
+
+// RebaseChildSpecFromRequest is the zero-input mapper for rebase child
+// launches. The rebase action takes no user input; the orchestrator preflight
+// resolves targets and computes behind-ness before child creation. The mapper
+// exists for structural consistency with the other child-launch actions.
+func RebaseChildSpecFromRequest(_ RebaseFeatureRequest) feature.RebaseChildSpec {
+	return feature.RebaseChildSpec{}
 }
 
 func validateAutomaticReviewMode(w http.ResponseWriter, raw *string) bool {

@@ -123,10 +123,12 @@ func TestCreatePRReturnsExistingURLOn422AlreadyExists(t *testing.T) {
 	fake := testutil.InstallFakeGitHubAPI(t)
 	fake.Mux.HandleFunc("/repos/acme/widgets/pulls", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost {
+			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusUnprocessableEntity)
 			fmt.Fprint(w, `{"message":"Validation Failed","errors":[{"message":"A pull request already exists for acme:feature/x."}]}`)
 			return
 		}
+		w.Header().Set("Content-Type", "application/json")
 		if r.URL.Query().Get("head") != "acme:feature/x" || r.URL.Query().Get("state") != "open" {
 			t.Errorf("lookup query = %s; want head=acme:feature/x state=open", r.URL.RawQuery)
 		}

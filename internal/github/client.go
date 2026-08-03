@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"os"
 	"sync"
 
 	"github.com/cli/go-gh/v2/pkg/api"
@@ -83,6 +84,13 @@ func (t rewriteTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	return http.DefaultTransport.RoundTrip(req)
 }
 
+// EnvGitHubAPIBase is the environment variable that, when set, routes
+// every GitHub API request to the given base URL with a dummy token,
+// bypassing credential resolution. This is the seam packaged e2e
+// journeys use to serve fixture responses from a local HTTP server
+// without needing real gh credentials or a gh binary on PATH.
+const EnvGitHubAPIBase = "AGENTICO_GITHUB_API_BASE"
+
 // ForHost returns a client for the given GitHub host ("" means
 // github.com). Clients are cached per host.
 func ForHost(host string) (*Client, error) {
@@ -100,6 +108,20 @@ func ForHost(host string) (*Client, error) {
 	mu.Unlock()
 	if ok {
 		return cached, nil
+	}
+	if base := os.Getenv(EnvGitHubAPIBase); base != "" {
+		target, err := url.Parse(base)
+		if err != nil {
+			return nil, fmt.Errorf("%s: bad URL %q: %w", EnvGitHubAPIBase, base, err)
+		}
+		client, err := newClient(host, "e2e-test-token", rewriteTransport{target: target})
+		if err != nil {
+			return nil, err
+		}
+		mu.Lock()
+		cache[host] = client
+		mu.Unlock()
+		return client, nil
 	}
 	token, _ := auth.TokenForHost(host)
 	if token == "" {

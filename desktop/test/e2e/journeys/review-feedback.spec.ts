@@ -1,16 +1,18 @@
 /**
  * Review-feedback initialization journey: aftercare → modal → fetch from
- * fake gh → deselect one → gate toggle → confirm → kind-aware pass workspace
- * with auto-start attempted, all against the packaged app and bundled server.
+ * a local GitHub API fixture → deselect one → gate toggle → confirm →
+ * kind-aware pass workspace with auto-start attempted, all against the
+ * packaged app and bundled server.
  *
  * The feature is seeded to Published with a pr_url so the server enables the
- * "Address review feedback" aftercare action. A fake-gh helper on the app's
- * PATH serves deterministic comment fixtures so no real GitHub network is
- * touched.
+ * "Address review feedback" aftercare action. A local HTTP server serves
+ * deterministic comment fixtures at the GitHub REST API paths, and the
+ * bundled server is pointed at it via AGENTICO_GITHUB_API_BASE so no real
+ * GitHub network is touched and no gh credentials are needed.
  */
 import { expect, test, type TestInfo } from '@playwright/test';
+import http from 'node:http';
 import fs from 'node:fs';
-import path from 'node:path';
 import { closeApp, createFeatureViaForm, launchApp, type AppHandle } from '../helpers/app';
 import { Transcript } from '../helpers/transcript';
 import {
@@ -27,12 +29,11 @@ import { activeRunYamlPath, clearRunFailures } from '../helpers/completionFixtur
 import { replaceTopLevelBlock } from '../helpers/yaml';
 
 /**
- * Writes a fake-gh shell script that serves deterministic review-feedback
- * comment fixtures for the fetch endpoint. The server calls
- * `gh api --paginate <endpoint>` with the endpoint as the 3rd argument.
+ * Starts a local HTTP server that serves deterministic review-feedback
+ * comment fixtures at the GitHub REST API paths the fetch handler calls.
+ * Returns the server URL to pass as AGENTICO_GITHUB_API_BASE.
  */
-function writeFakeGh(stubDir: string, owner: string, repo: string, prNumber: number): string {
-  const ghPath = path.join(stubDir, 'gh');
+function startFakeGitHubAPI(owner: string, repo: string, prNumber: number): Promise<http.Server> {
   const reviewComments = JSON.stringify([
     {
       id: 101,
@@ -67,25 +68,34 @@ function writeFakeGh(stubDir: string, owner: string, repo: string, prNumber: num
       submitted_at: '2026-08-02T11:00:00Z',
     },
   ]);
-  const script = `#!/bin/sh
-case "$3" in
-  repos/${owner}/${repo}/pulls/${prNumber}/comments)
-    printf '%s\\n' '${reviewComments}'
-    ;;
-  repos/${owner}/${repo}/issues/${prNumber}/comments)
-    printf '%s\\n' '${issueComments}'
-    ;;
-  repos/${owner}/${repo}/pulls/${prNumber}/reviews)
-    printf '%s\\n' '${reviews}'
-    ;;
-  *)
-    printf 'unexpected gh arguments: %s\\n' "$*" >&2
-    exit 2
-    ;;
-esac
-`;
-  fs.writeFileSync(ghPath, script, { mode: 0o755 });
-  return ghPath;
+  const routes: Record<string, string> = {
+    [`/repos/${owner}/${repo}/pulls/${prNumber}/comments`]: reviewComments,
+    [`/repos/${owner}/${repo}/issues/${prNumber}/comments`]: issueComments,
+    [`/repos/${owner}/${repo}/pulls/${prNumber}/reviews`]: reviews,
+  };
+  const server = http.createServer((req, res) => {
+    const urlPath = req.url ?? '';
+    const key = urlPath.split('?')[0]!;
+    const body = routes[key];
+    if (body !== undefined) {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(body);
+      return;
+    }
+    res.writeHead(404, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ message: `unexpected path: ${key}` }));
+  });
+  return new Promise((resolve) => {
+    server.listen(0, '127.0.0.1', () => resolve(server));
+  });
+}
+
+function serverBaseUrl(server: http.Server): string {
+  const addr = server.address();
+  if (addr === null || typeof addr === 'string') {
+    throw new Error('fake GitHub API server is not listening on an inet addr');
+  }
+  return `http://127.0.0.1:${addr.port}`;
 }
 
 test('review-feedback initialization: modal → fetch → deselect → gate → confirm → kind-aware workspace', async ({}, testInfo: TestInfo) => {
@@ -107,6 +117,7 @@ test('review-feedback initialization: modal → fetch → deselect → gate → 
   const prURL = `https://github.com/${ghOwner}/${ghRepo}/pull/${ghPrNumber}`;
 
   let handle: AppHandle | null = null;
+  let fakeGitHub: http.Server | null = null;
   try {
     transcript.section('Launch');
     handle = await launchApp(world, testInfo, { traceName: 'review-feedback' });
@@ -129,7 +140,7 @@ test('review-feedback initialization: modal → fetch → deselect → gate → 
     const featureId = features[0]!.id;
     transcript.json('feature id', featureId);
 
-    transcript.section('Quit, seed Published + pr_url, write fake-gh, relaunch');
+    transcript.section('Quit, seed Published + pr_url, start fake GitHub API, relaunch');
     const discovery = readDiscovery(world);
     await closeApp(handle);
     handle = null;
@@ -156,14 +167,14 @@ test('review-feedback initialization: modal → fetch → deselect → gate → 
     fs.writeFileSync(runPath, runYaml);
     transcript.step(`seeded pr_url ${prURL} in repo_states`);
 
-    writeFakeGh(world.stubDir, ghOwner, ghRepo, ghPrNumber);
-    transcript.step('fake-gh written to stub directory');
+    fakeGitHub = await startFakeGitHubAPI(ghOwner, ghRepo, ghPrNumber);
+    const apiBase = serverBaseUrl(fakeGitHub);
+    transcript.step(`fake GitHub API listening at \`${apiBase}\``);
 
-    const stubDir = world.stubDir;
     handle = await launchApp(world, testInfo, {
       traceName: 'review-feedback-seeded',
       env: {
-        PATH: `${stubDir}:/usr/bin:/bin:/usr/sbin:/sbin`,
+        AGENTICO_GITHUB_API_BASE: apiBase,
       },
     });
     const homeTab = handle.page.getByRole('tab', { name: 'Home' });
@@ -172,7 +183,7 @@ test('review-feedback initialization: modal → fetch → deselect → gate → 
     await expect(handle.page.getByRole('button', { name: 'New feature' })).toBeVisible({
       timeout: 10_000,
     });
-    transcript.step('relaunched with fake-gh on PATH');
+    transcript.step('relaunched with fake GitHub API via AGENTICO_GITHUB_API_BASE');
 
     transcript.section('Open feature cockpit and launch review feedback');
     const featureTab = handle.page.getByRole('tab', { name: featureName });
@@ -201,7 +212,7 @@ test('review-feedback initialization: modal → fetch → deselect → gate → 
     await expect(modal.getByText('This function could be simplified.')).toBeVisible();
     await expect(modal.getByText('Has this been tested with large inputs?')).toBeVisible();
     await expect(modal.getByText('Overall looks good, just a few nits.')).toBeVisible();
-    transcript.step('comments fetched from fake-gh and rendered grouped by repo');
+    transcript.step('comments fetched from fake GitHub API and rendered grouped by repo');
 
     const checkboxes = modal.getByLabel('Review feedback by repository').getByRole('checkbox');
     await expect(checkboxes).toHaveCount(4);
@@ -236,6 +247,7 @@ test('review-feedback initialization: modal → fetch → deselect → gate → 
     if (handle !== null) {
       await closeApp(handle);
     }
+    fakeGitHub?.close();
     destroyWorld(world);
   }
   transcript.write(testInfo);

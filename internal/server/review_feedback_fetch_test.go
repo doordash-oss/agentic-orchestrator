@@ -154,7 +154,7 @@ func seedReviewFeedbackAddressedIDs(t *testing.T, store *feature.Store, parentID
 // installReviewFeedbackFetchFakeAPI fakes the three PR feedback endpoints
 // for both repos. With failWebInline, web's inline-comment endpoint fails
 // so the aggregate fetch must surface an atomic error naming the repo.
-func installReviewFeedbackFetchFakeAPI(t *testing.T, failWebInline bool) *testutil.FakeGitHubAPI {
+func installReviewFeedbackFetchFakeAPI(t *testing.T, failWebInline bool) {
 	t.Helper()
 	fake := testutil.InstallFakeGitHubAPI(t)
 	fake.HandleJSON("/repos/example/api/pulls/1/comments", http.StatusOK,
@@ -171,5 +171,4 @@ func installReviewFeedbackFetchFakeAPI(t *testing.T, failWebInline bool) *testut
 	}
 	fake.HandleJSON("/repos/example/web/issues/2/comments", http.StatusOK, `[]`)
 	fake.HandleJSON("/repos/example/web/pulls/2/reviews", http.StatusOK, `[]`)
-	return fake
 }

@@ -285,15 +285,15 @@ func TestReviewFeedbackChildJourney(t *testing.T) {
 	// Assert the integration tail pushed each PR branch, replied to every
 	// selected comment, resolved eligible inline threads, and recorded
 	// the addressed comment IDs.
-	tailInvocations := fakeAPI.Requests()[tailMark:]
-	if len(tailInvocations) == 0 {
-		t.Fatalf("no gh invocations after closure; want tail replies, thread maps, and resolutions")
+	tailRequests := fakeAPI.Requests()[tailMark:]
+	if len(tailRequests) == 0 {
+		t.Fatalf("no GitHub API requests after closure; want tail replies, thread maps, and resolutions")
 	}
 	// Selected comments are both inline (CommentTypeReview) → direct thread replies.
 	replyA := 0
 	replyB := 0
 	graphqlCount := 0
-	for _, inv := range tailInvocations {
+	for _, inv := range tailRequests {
 		if strings.Contains(inv, "repos/example/api/pulls/1/comments/11/replies") {
 			replyA++
 		}
@@ -305,17 +305,17 @@ func TestReviewFeedbackChildJourney(t *testing.T) {
 		}
 	}
 	if replyA != 1 {
-		t.Errorf("reply to comment 11 = %d invocations, want 1", replyA)
+		t.Errorf("reply to comment 11 = %d requests, want 1", replyA)
 	}
 	if replyB != 1 {
-		t.Errorf("reply to comment 21 = %d invocations, want 1", replyB)
+		t.Errorf("reply to comment 21 = %d requests, want 1", replyB)
 	}
 	// 2 thread-map fetches + 2 thread resolutions = 4 graphql calls.
 	if graphqlCount != 4 {
-		t.Errorf("graphql invocations = %d, want 4 (2 thread maps + 2 resolutions)", graphqlCount)
+		t.Errorf("graphql requests = %d, want 4 (2 thread maps + 2 resolutions)", graphqlCount)
 	}
 	// Unselected comments (12, 13) must receive no replies.
-	for _, inv := range tailInvocations {
+	for _, inv := range tailRequests {
 		if strings.Contains(inv, "comments/12/replies") || strings.Contains(inv, "comments/13/replies") {
 			t.Errorf("unselected comment received a reply: %s", inv)
 		}
@@ -370,8 +370,8 @@ func TestReviewFeedbackChildJourney(t *testing.T) {
 	}
 
 	// Unselected comments received no replies in the tail.
-	refetchInvocations := fakeAPI.Requests()[refetchMark:]
-	for _, inv := range refetchInvocations {
+	refetchRequests := fakeAPI.Requests()[refetchMark:]
+	for _, inv := range refetchRequests {
 		if strings.Contains(inv, "replies") || strings.Contains(inv, "resolveReviewThread") {
 			t.Errorf("refetch should not trigger replies or resolutions: %s", inv)
 		}

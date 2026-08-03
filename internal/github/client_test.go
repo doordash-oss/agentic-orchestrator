@@ -84,3 +84,19 @@ func TestOverrideForTestBypassesCacheAndRestores(t *testing.T) {
 		t.Fatal("after restore, credential resolution should apply again")
 	}
 }
+
+func TestForHostEnvAPIBaseBypassesCredentialsAndCaches(t *testing.T) {
+	isolateAuthEnv(t)
+	t.Setenv(EnvGitHubAPIBase, "http://127.0.0.1:1")
+	c1, err := ForHost("github.com")
+	if err != nil {
+		t.Fatalf("ForHost() with env override error = %v", err)
+	}
+	c2, err := ForHost("github.com")
+	if err != nil {
+		t.Fatalf("ForHost() second call error = %v", err)
+	}
+	if c1 != c2 {
+		t.Fatal("env-override clients should be cached per host")
+	}
+}

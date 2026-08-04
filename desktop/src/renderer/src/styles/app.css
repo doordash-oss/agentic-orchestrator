@@ -1607,6 +1607,7 @@ body {
   max-width: 640px;
   color: var(--color-muted);
   font-size: 15px;
+  font-weight: 400;
   line-height: 1.5;
 }
 

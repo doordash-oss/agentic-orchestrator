@@ -49,9 +49,9 @@ export function AftercareWorkspace({
             {`Aftercare · ${displayStatusLabel(snapshot.status)}`}
           </p>
           <span className="aftercare-workspace__constraint">One at a time</span>
-          <p className="aftercare-workspace__lede" id="aftercare-actions-title">
+          <h2 className="aftercare-workspace__lede" id="aftercare-actions-title">
             {copy.lede}
-          </p>
+          </h2>
         </header>
 
         <section className="aftercare-workspace__runway" aria-labelledby="aftercare-actions-title">

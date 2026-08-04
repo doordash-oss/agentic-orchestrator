@@ -318,7 +318,7 @@ describe('FeatureCockpit snapshot rendering', () => {
     expect(screen.queryByRole('tablist', { name: 'Stage view' })).not.toBeInTheDocument();
     expect(screen.queryByLabelText('Feature pipeline')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Run record' })).toBeVisible();
-    expect(screen.getByText(lede)).toBeVisible();
+    expect(screen.getByRole('heading', { name: lede })).toBeVisible();
     await waitFor(() =>
       expect(mock.api.getRun).toHaveBeenCalledWith({ featureId: FEATURE_ID, runNumber: 8 }),
     );
@@ -940,7 +940,7 @@ describe('FeatureCockpit convergence', () => {
     expect(await screen.findByRole('region', { name: 'Feature aftercare' })).toBeVisible();
     expect(screen.queryByRole('tablist', { name: 'Stage view' })).not.toBeInTheDocument();
     expect(
-      screen.getByText('Choose one focused action, or leave the feature at rest.'),
+      screen.getByRole('heading', { name: 'Choose one focused action, or leave the feature at rest.' }),
     ).toBeVisible();
   });
 

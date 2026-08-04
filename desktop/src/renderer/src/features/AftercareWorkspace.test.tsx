@@ -36,7 +36,7 @@ describe('AftercareWorkspace', () => {
     );
 
     expect(
-      screen.getByText('Choose one focused action, or leave the run at rest.'),
+      screen.getByRole('heading', { name: 'Choose one focused action, or leave the run at rest.' }),
     ).toBeVisible();
     expect(screen.getAllByRole('button').map((button) => button.textContent)).toContainEqual(
       expect.stringContaining('Prepare publish'),
@@ -353,5 +353,20 @@ describe('AftercareWorkspace', () => {
 
     expect(screen.getByText('Aftercare · Published')).toBeVisible();
     expect(screen.queryByText('Aftercare · Ready')).not.toBeInTheDocument();
+  });
+
+  it('reflects Done in the eyebrow', () => {
+    render(
+      <AftercareWorkspace
+        snapshot={featureSnapshot({ status: 'Done', activeRun: 8, actions: [] })}
+        run={completedRun}
+        onAction={vi.fn()}
+        onOpenRunRecord={vi.fn()}
+        onOpenChanges={vi.fn()}
+        onOpenPullRequest={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText('Aftercare · Done')).toBeVisible();
   });
 });

@@ -295,10 +295,10 @@ describe('FeatureCockpit snapshot rendering', () => {
   });
 
   it.each([
-    ['CodeReady', 'Implementation complete.'],
-    ['Published', 'Published. Choose what comes next.'],
-    ['Done', 'Work complete.'],
-  ])('defaults %s features to Aftercare while retaining Run record', async (status, heading) => {
+    ['CodeReady', 'Choose one focused action, or leave the run at rest.'],
+    ['Published', 'Choose one focused action, or leave the feature at rest.'],
+    ['Done', 'The record stays available whenever another focused pass is useful.'],
+  ])('defaults %s features to Aftercare while retaining Run record', async (status, lede) => {
     const mock = installAgenticoMock({
       feature: featureSnapshot({
         status,
@@ -318,7 +318,7 @@ describe('FeatureCockpit snapshot rendering', () => {
     expect(screen.queryByRole('tablist', { name: 'Stage view' })).not.toBeInTheDocument();
     expect(screen.queryByLabelText('Feature pipeline')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Run record' })).toBeVisible();
-    expect(screen.getByRole('heading', { name: heading })).toBeVisible();
+    expect(screen.getByText(lede)).toBeVisible();
     await waitFor(() =>
       expect(mock.api.getRun).toHaveBeenCalledWith({ featureId: FEATURE_ID, runNumber: 8 }),
     );
@@ -940,7 +940,7 @@ describe('FeatureCockpit convergence', () => {
     expect(await screen.findByRole('region', { name: 'Feature aftercare' })).toBeVisible();
     expect(screen.queryByRole('tablist', { name: 'Stage view' })).not.toBeInTheDocument();
     expect(
-      screen.getByRole('heading', { name: 'Published. Choose what comes next.' }),
+      screen.getByText('Choose one focused action, or leave the feature at rest.'),
     ).toBeVisible();
   });
 

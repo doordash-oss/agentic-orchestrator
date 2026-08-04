@@ -285,7 +285,7 @@ func (h *apiHandler) refactorEntryDisabledReason(f *feature.Feature) (ActionDisa
 	}
 	reason := ActionDisabledReason{
 		Code:    "dirty_parent",
-		Message: "parent repositories must be clean before launching a child",
+		Message: "worktree has uncommitted changes",
 	}
 	if h.worktrees != nil {
 		if payload := h.dirtyRepoDiagnostics(f.Repos); len(payload) > 0 {

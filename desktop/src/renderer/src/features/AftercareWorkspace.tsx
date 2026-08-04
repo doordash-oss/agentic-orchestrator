@@ -1,4 +1,5 @@
 import type { FeatureSnapshot, RunDetailView } from '../../../shared/ipc';
+import { displayStatusLabel } from './featureView';
 import { FeatureFactsRail } from './FeatureFactsRail';
 import { RefactorHistory } from './refactor/RefactorHistory';
 import { aftercareActions, type AftercareAction } from './postImplementationModel';
@@ -44,19 +45,16 @@ export function AftercareWorkspace({
     <section className="post-workspace aftercare-workspace" aria-label="Feature aftercare">
       <main className="aftercare-workspace__main">
         <header className="aftercare-workspace__header">
-          <p className="post-workspace__eyebrow">Aftercare · Ready</p>
-          <h2>{copy.heading}</h2>
-          <p>{copy.description}</p>
+          <p className="post-workspace__eyebrow">
+            {`Aftercare · ${displayStatusLabel(snapshot.status)}`}
+          </p>
+          <span className="aftercare-workspace__constraint">One at a time</span>
+          <p className="aftercare-workspace__lede" id="aftercare-actions-title">
+            {copy.lede}
+          </p>
         </header>
 
         <section className="aftercare-workspace__runway" aria-labelledby="aftercare-actions-title">
-          <div className="aftercare-workspace__section-heading">
-            <div>
-              <p className="post-workspace__eyebrow">Available next steps</p>
-              <h3 id="aftercare-actions-title">Choose one focused action</h3>
-            </div>
-            <span>One at a time</span>
-          </div>
           {actionError === null ? null : (
             <div role="alert" className="create-form__error aftercare-workspace__action-error">
               <span className="create-form__error-code">{actionError.error.code}</span>
@@ -88,16 +86,16 @@ export function AftercareWorkspace({
                         <strong>{action.title}</strong>
                         <small>{action.description}</small>
                       </span>
-                      <span className="aftercare-workspace__action-label">
-                        {blocked ? (
-                          action.disabledReason
-                        ) : (
-                          <>
-                            {busy ? busyAction?.label : action.label}{' '}
-                            <span aria-hidden="true">{busy ? '…' : '↗'}</span>
-                          </>
-                        )}
-                      </span>
+                      {blocked ? (
+                        <span className="aftercare-workspace__action-blocked">
+                          {action.disabledReason}
+                        </span>
+                      ) : (
+                        <span className="aftercare-workspace__action-label">
+                          {busy ? busyAction?.label : action.label}{' '}
+                          <span aria-hidden="true">{busy ? '…' : '↗'}</span>
+                        </span>
+                      )}
                     </button>
                   </li>
                 );
@@ -134,27 +132,15 @@ function aftercareActionErrorMessage(actionError: AftercareActionError): string 
   return `${actionError.action} was rejected — ${actionError.error.message}`;
 }
 
-function aftercareCopy(status: string): { heading: string; description: string } {
+function aftercareCopy(status: string): { lede: string } {
   switch (status) {
     case 'CodeReady':
-      return {
-        heading: 'Implementation complete.',
-        description: 'Publish the feature, start a focused pass, or leave the run at rest.',
-      };
+      return { lede: 'Choose one focused action, or leave the run at rest.' };
     case 'Published':
-      return {
-        heading: 'Published. Choose what comes next.',
-        description: 'Start a focused pass, or leave the feature at rest.',
-      };
+      return { lede: 'Choose one focused action, or leave the feature at rest.' };
     case 'Done':
-      return {
-        heading: 'Work complete.',
-        description: 'The record remains available whenever another focused pass is useful.',
-      };
+      return { lede: 'The record stays available whenever another focused pass is useful.' };
     default:
-      return {
-        heading: 'Ready for what comes next.',
-        description: 'Choose one focused action, or leave the feature at rest.',
-      };
+      return { lede: 'Choose one focused action, or leave the feature at rest.' };
   }
 }

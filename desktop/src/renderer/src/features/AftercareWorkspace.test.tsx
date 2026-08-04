@@ -35,7 +35,9 @@ describe('AftercareWorkspace', () => {
       />,
     );
 
-    expect(screen.getByRole('heading', { name: 'Implementation complete.' })).toBeVisible();
+    expect(
+      screen.getByText('Choose one focused action, or leave the run at rest.'),
+    ).toBeVisible();
     expect(screen.getAllByRole('button').map((button) => button.textContent)).toContainEqual(
       expect.stringContaining('Prepare publish'),
     );
@@ -318,7 +320,7 @@ describe('AftercareWorkspace', () => {
             {
               id: 'refactor',
               enabled: false,
-              disabledReasons: [{ code: 'dirty_parent', message: 'parent repositories must be clean before launching a child' }],
+              disabledReasons: [{ code: 'dirty_parent', message: 'worktree has uncommitted changes' }],
             },
           ],
         })}
@@ -331,6 +333,25 @@ describe('AftercareWorkspace', () => {
     );
     const card = screen.getByRole('button', { name: /Start a refactor pass/ });
     expect(card).toBeDisabled();
-    expect(card).toHaveTextContent('parent repositories must be clean before launching a child');
+    expect(card).toHaveTextContent('worktree has uncommitted changes');
+    const reason = card.querySelector('.aftercare-workspace__action-blocked');
+    expect(reason).not.toBeNull();
+    expect(card.querySelector('.aftercare-workspace__action-label')).toBeNull();
+  });
+
+  it('reflects the real status in the eyebrow instead of a hardcoded label', () => {
+    render(
+      <AftercareWorkspace
+        snapshot={featureSnapshot({ status: 'Published', activeRun: 8, actions: [] })}
+        run={completedRun}
+        onAction={vi.fn()}
+        onOpenRunRecord={vi.fn()}
+        onOpenChanges={vi.fn()}
+        onOpenPullRequest={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText('Aftercare · Published')).toBeVisible();
+    expect(screen.queryByText('Aftercare · Ready')).not.toBeInTheDocument();
   });
 });

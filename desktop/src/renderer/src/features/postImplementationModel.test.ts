@@ -71,16 +71,14 @@ describe('postImplementationModel', () => {
             id: 'refactor',
             enabled: false,
             disabledReasons: [
-              { code: 'dirty_parent', message: 'parent repositories must be clean before launching a child' },
+              { code: 'dirty_parent', message: 'worktree has uncommitted changes' },
             ],
           },
         ],
       }),
     );
     expect(actions.map((action) => action.id)).toEqual(['refactor']);
-    expect(actions[0]!.disabledReason).toBe(
-      'parent repositories must be clean before launching a child',
-    );
+    expect(actions[0]!.disabledReason).toBe('worktree has uncommitted changes');
   });
 
   it('omits a disabled publish action rather than showing a blocked card', () => {

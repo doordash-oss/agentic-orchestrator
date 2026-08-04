@@ -7936,6 +7936,31 @@ body {
   text-transform: uppercase;
 }
 
+.completion-workspace__pending-repos {
+  display: grid;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+.completion-workspace__pending-repos h4 {
+  margin: 0;
+  color: var(--color-muted);
+  font: 700 11px var(--font-mono);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.completion-workspace__pending-detail {
+  color: var(--color-muted);
+  font: 12px var(--font-mono);
+}
+
+.completion-workspace__pending-note {
+  margin: 0;
+  color: var(--color-warning, var(--color-muted));
+  font: 12px var(--font-body);
+}
+
 .completion-workspace__field {
   display: grid;
   gap: var(--space-1);

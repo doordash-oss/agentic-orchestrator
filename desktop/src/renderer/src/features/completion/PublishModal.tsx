@@ -9,6 +9,7 @@ import {
   type ActionResult,
   type CompletionAction,
 } from './completionShared';
+import { UNPUBLISHED_CHANGES, pendingDeliveryDetail } from './pendingDelivery';
 
 export interface PublishModalProps {
   featureId: string;
@@ -35,7 +36,12 @@ export function PublishModalBody({
   onDispatched,
 }: PublishModalProps): React.ReactElement {
   const [publishRepos, setPublishRepos] = useState<Set<string>>(
-    () => new Set(preflight.repos.filter(isEligibleForPublish).map((r) => r.repo)),
+    () =>
+      new Set(
+        preflight.repos
+          .filter((r) => isEligibleForPublish(r) || r.status === UNPUBLISHED_CHANGES)
+          .map((r) => r.repo),
+      ),
   );
   const [publishTitle, setPublishTitle] = useState('');
   const [publishBody, setPublishBody] = useState('');
@@ -55,29 +61,6 @@ export function PublishModalBody({
     });
   }, []);
 
-  const handlePublish = useCallback(async () => {
-    if (publishRepos.size === 0 || !publishTitle.trim()) return;
-    await publishAction.run(
-      () =>
-        dispatchAction(featureId, 'publish', {
-          source_revision: preflight.sourceRevision,
-          repos: Array.from(publishRepos),
-          title: publishTitle.trim(),
-          ...(publishBody.trim() === '' ? {} : { body: publishBody }),
-        }).then((r) => r.result),
-      async () => onDispatched(),
-    );
-  }, [
-    featureId,
-    preflight,
-    publishRepos,
-    publishTitle,
-    publishBody,
-    dispatchAction,
-    onDispatched,
-    publishAction,
-  ]);
-
   const handleGeneratePublishDescription = useCallback(async () => {
     setGeneratingDescription(true);
     setPublishGenResult(null);
@@ -94,6 +77,11 @@ export function PublishModalBody({
 
   const eligibleRepos = useMemo(() => preflight.repos.filter(isEligibleForPublish), [preflight]);
 
+  const unpublishedRepos = useMemo(
+    () => preflight.repos.filter((r) => r.status === UNPUBLISHED_CHANGES),
+    [preflight],
+  );
+
   const publishedRepos = useMemo(
     () => preflight.repos.filter((r) => r.status === 'already_published'),
     [preflight],
@@ -104,12 +92,41 @@ export function PublishModalBody({
     [preflight],
   );
 
+  const titleRequired = useMemo(
+    () => eligibleRepos.some((r) => publishRepos.has(r.repo)),
+    [eligibleRepos, publishRepos],
+  );
   const hasSourceRevision = preflight.sourceRevision.trim() !== '';
   const canPublish =
     hasSourceRevision &&
     publishRepos.size > 0 &&
-    publishTitle.trim().length > 0 &&
+    (!titleRequired || publishTitle.trim().length > 0) &&
     !publishAction.busy;
+
+  const handlePublish = useCallback(async () => {
+    const title = publishTitle.trim();
+    if (publishRepos.size === 0 || (titleRequired && title === '')) return;
+    await publishAction.run(
+      () =>
+        dispatchAction(featureId, 'publish', {
+          source_revision: preflight.sourceRevision,
+          repos: Array.from(publishRepos),
+          ...(title === '' ? {} : { title }),
+          ...(publishBody.trim() === '' ? {} : { body: publishBody }),
+        }).then((r) => r.result),
+      async () => onDispatched(),
+    );
+  }, [
+    featureId,
+    preflight,
+    publishRepos,
+    publishTitle,
+    publishBody,
+    titleRequired,
+    dispatchAction,
+    onDispatched,
+    publishAction,
+  ]);
 
   return (
     <div className="completion-workspace__publish">
@@ -143,10 +160,42 @@ export function PublishModalBody({
             ) : null}
           </div>
         ))}
-        {eligibleRepos.length === 0 && (
+        {eligibleRepos.length === 0 && unpublishedRepos.length === 0 && (
           <p className="completion-workspace__publish-empty">
             No eligible repositories to publish.
           </p>
+        )}
+        {unpublishedRepos.length > 0 && (
+          <div className="completion-workspace__pending-repos">
+            <h4>Unpublished changes</h4>
+            {unpublishedRepos.map((repo) => (
+              <div key={repo.repo} className="completion-workspace__publish-repo">
+                <label className="completion-workspace__publish-repo-check">
+                  <input
+                    type="checkbox"
+                    aria-label={repo.repo}
+                    checked={publishRepos.has(repo.repo)}
+                    onChange={() => togglePublishRepo(repo.repo)}
+                  />
+                  <span className="completion-workspace__publish-repo-name">{repo.repo}</span>
+                </label>
+                <span className="completion-workspace__pending-detail">
+                  {pendingDeliveryDetail({
+                    commits: repo.pendingCommits ?? 0,
+                    dirty: repo.pendingDirty ?? false,
+                  })}
+                </span>
+                {repo.pushMode === 'rewrite' ? (
+                  <p className="completion-workspace__pending-note">
+                    Force-updates the pull-request branch.
+                  </p>
+                ) : null}
+                {repo.prUrl !== undefined ? (
+                  <PrLinkButton url={repo.prUrl} openExternal={openExternal} />
+                ) : null}
+              </div>
+            ))}
+          </div>
         )}
         {publishedRepos.length > 0 && (
           <div className="completion-workspace__published-repos">
@@ -214,7 +263,7 @@ export function PublishModalBody({
         disabled={!canPublish}
         onClick={() => void handlePublish()}
       >
-        {publishAction.busy ? 'Publishing…' : 'Publish'}
+        {publishAction.busy ? 'Publishing…' : titleRequired ? 'Publish' : 'Publish updates'}
       </button>
       <ResultBox result={publishAction.result} />
       {publishGenResult !== null && publishAction.result === null ? (

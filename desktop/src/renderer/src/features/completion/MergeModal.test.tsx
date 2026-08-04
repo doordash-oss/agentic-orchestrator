@@ -50,4 +50,33 @@ describe('MergeModalBody', () => {
     render(<MergeModalBody {...props({ preflight: { ...preflight, repos: [] } })} />);
     expect(screen.getByText(/No local repositories to merge/)).toBeInTheDocument();
   });
+
+  it('reports unmerged commits and labels the action as an update', () => {
+    render(
+      <MergeModalBody
+        featureId="abcd1234ef567890"
+        preflight={{
+          featureId: 'abcd1234ef567890',
+          sourceRevision: 'rev-1',
+          canMarkDone: false,
+          repos: [
+            {
+              repo: 'core',
+              publishable: false,
+              touched: true,
+              status: 'unmerged_changes',
+              pendingCommits: 2,
+              baseBranch: 'main',
+              branch: 'feature/x',
+            },
+          ],
+        }}
+        dispatchAction={vi.fn()}
+        onDispatched={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText('2 commits not in main')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Merge updates' })).toBeInTheDocument();
+  });
 });

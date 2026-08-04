@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { PublishModalBody } from './PublishModal';
 import type { CompletionPreflightResult } from '../../../../shared/ipc';
 
@@ -53,5 +54,80 @@ describe('PublishModalBody', () => {
     await waitFor(() =>
       expect((screen.getByLabelText('PR title') as HTMLInputElement).value).toBe('T'),
     );
+  });
+
+  it('preselects repositories with undelivered work and publishes without a title', async () => {
+    const dispatchAction = vi.fn().mockResolvedValue({ result: 'published' });
+    render(
+      <PublishModalBody
+        featureId="abcd1234ef567890"
+        preflight={{
+          featureId: 'abcd1234ef567890',
+          sourceRevision: 'rev-1',
+          canMarkDone: true,
+          repos: [
+            {
+              repo: 'api',
+              publishable: true,
+              touched: true,
+              status: 'unpublished_changes',
+              pendingCommits: 3,
+              pendingDirty: true,
+              pushMode: 'rewrite',
+              prUrl: 'https://example/pull/1',
+            },
+          ],
+        }}
+        dispatchAction={dispatchAction}
+        generatePublishDescription={vi.fn()}
+        openExternal={vi.fn()}
+        onDispatched={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole('heading', { name: 'Unpublished changes' })).toBeInTheDocument();
+    expect(screen.getByText('3 commits · uncommitted changes')).toBeInTheDocument();
+    expect(screen.getByText('Force-updates the pull-request branch.')).toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: 'api' })).toBeChecked();
+
+    const submit = screen.getByRole('button', { name: 'Publish updates' });
+    expect(submit).toBeEnabled();
+    await userEvent.click(submit);
+
+    expect(dispatchAction).toHaveBeenCalledWith('abcd1234ef567890', 'publish', {
+      source_revision: 'rev-1',
+      repos: ['api'],
+    });
+  });
+
+  it('still requires a title when a selected repository has no pull request', async () => {
+    render(
+      <PublishModalBody
+        featureId="abcd1234ef567890"
+        preflight={{
+          featureId: 'abcd1234ef567890',
+          sourceRevision: 'rev-1',
+          canMarkDone: true,
+          repos: [
+            { repo: 'web', publishable: true, touched: true, status: 'eligible' },
+            {
+              repo: 'api',
+              publishable: true,
+              touched: true,
+              status: 'unpublished_changes',
+              pendingCommits: 1,
+            },
+          ],
+        }}
+        dispatchAction={vi.fn()}
+        generatePublishDescription={vi.fn()}
+        openExternal={vi.fn()}
+        onDispatched={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole('button', { name: 'Publish' })).toBeDisabled();
+    await userEvent.type(screen.getByLabelText('PR title'), 'Ship it');
+    expect(screen.getByRole('button', { name: 'Publish' })).toBeEnabled();
   });
 });

@@ -6,6 +6,7 @@ import {
   STATUS_LABELS,
   type CompletionAction,
 } from './completionShared';
+import { UNMERGED_CHANGES } from './pendingDelivery';
 
 export interface MergeModalProps {
   featureId: string;
@@ -28,6 +29,11 @@ export function MergeModalBody({
 
   const localMergeRepos = useMemo(
     () => preflight.repos.filter((r) => !r.publishable && r.touched),
+    [preflight],
+  );
+
+  const hasUnmerged = useMemo(
+    () => preflight.repos.some((r) => r.status === UNMERGED_CHANGES),
     [preflight],
   );
 
@@ -81,6 +87,16 @@ export function MergeModalBody({
                       <dd>{repo.freshness}</dd>
                     </div>
                   )}
+                  {repo.pendingCommits !== undefined && repo.pendingCommits > 0 && (
+                    <div className="completion-workspace__merge-meta-item">
+                      <dt>Unmerged</dt>
+                      <dd>
+                        {`${repo.pendingCommits} commit${repo.pendingCommits === 1 ? '' : 's'} not in ${
+                          repo.baseBranch ?? 'the base branch'
+                        }`}
+                      </dd>
+                    </div>
+                  )}
                   {repo.blocker !== undefined && (
                     <div className="completion-workspace__merge-meta-item">
                       <dt>Blocker</dt>
@@ -97,7 +113,7 @@ export function MergeModalBody({
             disabled={mergeAction.busy}
             onClick={() => void handleMerge()}
           >
-            {mergeAction.busy ? 'Merging…' : 'Merge'}
+            {mergeAction.busy ? 'Merging…' : hasUnmerged ? 'Merge updates' : 'Merge'}
           </button>
         </>
       ) : (

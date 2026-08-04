@@ -4,12 +4,14 @@ import { displayStatusLabel, featureBranch, formatDuration } from './featureView
 export interface FeatureFactsRailProps {
   snapshot: FeatureSnapshot;
   run: RunDetailView | null;
+  pendingFact?: { label: string; value: string };
   onOpenPullRequest(url: string): void;
 }
 
 export function FeatureFactsRail({
   snapshot,
   run,
+  pendingFact,
   onOpenPullRequest,
 }: FeatureFactsRailProps): React.ReactElement {
   const branch = featureBranch(snapshot);
@@ -53,6 +55,9 @@ export function FeatureFactsRail({
               </button>
             </dd>
           </div>
+        )}
+        {pendingFact === undefined ? null : (
+          <Fact label={pendingFact.label} value={pendingFact.value} />
         )}
         <Fact
           label="Freshness"

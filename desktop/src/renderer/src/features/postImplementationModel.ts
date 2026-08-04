@@ -1,7 +1,18 @@
 import type { FeatureSnapshot } from '../../../shared/ipc';
+import {
+  pendingDeliveryDetail,
+  pendingDeliveryTotals,
+  type PendingDelivery,
+} from './completion/pendingDelivery';
 
-/** Aftercare launch surfaces: the rebase pass and the refactor pass. */
-export type AftercareActionId = 'publish' | 'rebase' | 'refactor' | 'review-feedback';
+/** Aftercare launch surfaces: delivery of pending work, then the passes. */
+export type AftercareActionId =
+  | 'publish'
+  | 'publish-updates'
+  | 'merge-updates'
+  | 'rebase'
+  | 'refactor'
+  | 'review-feedback';
 
 /** Aftercare modal ids for launcher modals (refactor, review-feedback). */
 export type AftercareModalId = 'refactor' | 'review-feedback';
@@ -17,21 +28,55 @@ export interface AftercareAction {
 }
 
 const AFTERCARE_STATUSES = new Set(['CodeReady', 'Published', 'Done']);
-const ACTION_ORDER: AftercareActionId[] = ['publish', 'rebase', 'refactor', 'review-feedback'];
+// The catalog ids only — undelivered-work ids are preflight-derived and never enter this list.
+type CatalogActionId = 'publish' | 'rebase' | 'refactor' | 'review-feedback';
+const ACTION_ORDER: CatalogActionId[] = ['publish', 'rebase', 'refactor', 'review-feedback'];
 
 export function resolvePostImplementationMode(snapshot: FeatureSnapshot): PostImplementationMode {
   return AFTERCARE_STATUSES.has(snapshot.status) ? { kind: 'aftercare' } : { kind: 'regular' };
 }
 
-export function aftercareActions(snapshot: FeatureSnapshot): AftercareAction[] {
-  return ACTION_ORDER.flatMap((id) => {
+export function aftercareActions(
+  snapshot: FeatureSnapshot,
+  pending?: PendingDelivery,
+): AftercareAction[] {
+  const catalog = ACTION_ORDER.flatMap((id) => {
     const action = snapshot.actions.find((candidate) => candidate.id === id);
     if (action?.enabled !== true) return [];
     return [aftercareAction(id)];
   });
+  return [...pendingDeliveryActions(pending), ...catalog];
 }
 
-function aftercareAction(id: AftercareActionId): AftercareAction {
+// Undelivered work is preflight-derived, not a catalog action: the action
+// catalog stays a pure feature-state projection.
+function pendingDeliveryActions(pending?: PendingDelivery): AftercareAction[] {
+  if (pending === undefined) return [];
+  const out: AftercareAction[] = [];
+  if (pending.publishRepos.length > 0) {
+    out.push({
+      id: 'publish-updates',
+      label: 'Publish updates',
+      title: 'Publish new commits',
+      description: `Not on the pull-request branch yet: ${pendingDeliveryDetail(
+        pendingDeliveryTotals(pending.publishRepos),
+      )}.`,
+    });
+  }
+  if (pending.mergeRepos.length > 0) {
+    out.push({
+      id: 'merge-updates',
+      label: 'Merge updates',
+      title: 'Merge new commits',
+      description: `Not in the base branch yet: ${pendingDeliveryDetail(
+        pendingDeliveryTotals(pending.mergeRepos),
+      )}.`,
+    });
+  }
+  return out;
+}
+
+function aftercareAction(id: CatalogActionId): AftercareAction {
   switch (id) {
     case 'publish':
       return {

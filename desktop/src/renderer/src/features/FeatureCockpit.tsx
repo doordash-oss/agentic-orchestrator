@@ -8,6 +8,7 @@
 import {
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type Dispatch,
@@ -44,6 +45,7 @@ import { ReviewFeedbackLauncher } from './reviewFeedback/ReviewFeedbackLauncher'
 import { RefactorPassWorkspace, useRefactorPass } from './refactor/RefactorPassWorkspace';
 import { refactoringStatusChip } from './refactor/refactorPassModel';
 import { useCompletionPreflight } from './completion/useCompletionPreflight';
+import { pendingDeliverySummary } from './completion/pendingDelivery';
 import {
   completionBarModel,
   type CompletionVerb,
@@ -862,6 +864,10 @@ export function FeatureCockpit({
     [],
   );
   const completion = useCompletionPreflight(featureId, completionEnabled, preflightCompletion);
+  const pendingDelivery = useMemo(
+    () => pendingDeliverySummary(completion.preflight),
+    [completion.preflight],
+  );
   const dispatchCompletion = useCallback(
     (id: string, action: CompletionAction, body?: Record<string, unknown>) =>
       window.agentico.dispatchFeatureAction({
@@ -1615,8 +1621,12 @@ export function FeatureCockpit({
     return true;
   });
   const openAftercareAction = (action: AftercareAction): void => {
-    if (action.id === 'publish') {
+    if (action.id === 'publish' || action.id === 'publish-updates') {
       openCompletionModal('publish');
+      return;
+    }
+    if (action.id === 'merge-updates') {
+      openCompletionModal('merge');
       return;
     }
     if (action.id === 'rebase') {
@@ -1721,6 +1731,7 @@ export function FeatureCockpit({
                 snapshot={snapshot}
                 run={aftercareRun}
                 actionError={actionError}
+                pending={pendingDelivery}
                 busyAction={
                   rebaseLaunchBusy ? { id: 'rebase', label: 'Starting rebase pass…' } : undefined
                 }

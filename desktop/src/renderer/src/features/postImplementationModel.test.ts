@@ -59,4 +59,38 @@ describe('postImplementationModel', () => {
     });
     expect(aftercareActions(snapshot).map((action) => action.id)).not.toContain('review-feedback');
   });
+
+  it('leads the runway with undelivered publish work', () => {
+    const actions = aftercareActions(
+      featureSnapshot({
+        status: 'CodeReady',
+        actions: [{ id: 'refactor', enabled: true, disabledReasons: [] }],
+      }),
+      { publishRepos: [{ repo: 'api', commits: 3, dirty: false }], mergeRepos: [] },
+    );
+    expect(actions.map((action) => action.id)).toEqual(['publish-updates', 'refactor']);
+    expect(actions[0]!.title).toBe('Publish new commits');
+    expect(actions[0]!.label).toBe('Publish updates');
+    expect(actions[0]!.description).toBe('Not on the pull-request branch yet: 3 commits.');
+  });
+
+  it('offers undelivered merge work', () => {
+    const actions = aftercareActions(featureSnapshot({ status: 'Done', actions: [] }), {
+      publishRepos: [],
+      mergeRepos: [{ repo: 'core', commits: 1, dirty: true }],
+    });
+    expect(actions.map((action) => action.id)).toEqual(['merge-updates']);
+    expect(actions[0]!.title).toBe('Merge new commits');
+    expect(actions[0]!.description).toBe(
+      'Not in the base branch yet: 1 commit · uncommitted changes.',
+    );
+  });
+
+  it('omits undelivered cards when nothing is pending', () => {
+    const actions = aftercareActions(featureSnapshot({ status: 'Published', actions: [] }), {
+      publishRepos: [],
+      mergeRepos: [],
+    });
+    expect(actions).toEqual([]);
+  });
 });

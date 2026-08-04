@@ -2,10 +2,12 @@ import type { FeatureSnapshot, RunDetailView } from '../../../shared/ipc';
 import { FeatureFactsRail } from './FeatureFactsRail';
 import { RefactorHistory } from './refactor/RefactorHistory';
 import { aftercareActions, type AftercareAction } from './postImplementationModel';
+import { pendingDeliveryFact, type PendingDelivery } from './completion/pendingDelivery';
 
 export interface AftercareWorkspaceProps {
   snapshot: FeatureSnapshot;
   run: RunDetailView | null;
+  pending?: PendingDelivery;
   actionError?: AftercareActionError | null;
   /** Action currently dispatching a one-click launch; its card renders busy. */
   busyAction?: { id: AftercareAction['id']; label: string };
@@ -26,6 +28,7 @@ interface AftercareActionError {
 export function AftercareWorkspace({
   snapshot,
   run,
+  pending = undefined,
   actionError = null,
   busyAction,
   onAction,
@@ -33,7 +36,8 @@ export function AftercareWorkspace({
   onOpenChanges,
   onOpenPullRequest,
 }: AftercareWorkspaceProps): React.ReactElement {
-  const actions = aftercareActions(snapshot);
+  const actions = aftercareActions(snapshot, pending);
+  const pendingFact = pending === undefined ? null : pendingDeliveryFact(pending);
   const copy = aftercareCopy(snapshot.status);
 
   return (
@@ -105,7 +109,12 @@ export function AftercareWorkspace({
           </button>
         </nav>
       </main>
-      <FeatureFactsRail snapshot={snapshot} run={run} onOpenPullRequest={onOpenPullRequest} />
+      <FeatureFactsRail
+        snapshot={snapshot}
+        run={run}
+        {...(pendingFact === null ? {} : { pendingFact })}
+        onOpenPullRequest={onOpenPullRequest}
+      />
     </section>
   );
 }

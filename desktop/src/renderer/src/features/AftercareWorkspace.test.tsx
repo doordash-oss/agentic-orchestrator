@@ -285,4 +285,23 @@ describe('AftercareWorkspace', () => {
     await user.click(screen.getByText('Pass history'));
     expect(screen.getByText(/review-feedback tail: no PR URL/)).toBeVisible();
   });
+
+  it('surfaces undelivered work on the runway and in the facts rail', () => {
+    render(
+      <AftercareWorkspace
+        snapshot={featureSnapshot({ status: 'CodeReady', activeRun: 8, actions: [] })}
+        run={completedRun}
+        pending={{ publishRepos: [{ repo: 'api', commits: 3, dirty: false }], mergeRepos: [] }}
+        onAction={vi.fn()}
+        onOpenRunRecord={vi.fn()}
+        onOpenChanges={vi.fn()}
+        onOpenPullRequest={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole('button', { name: /Publish new commits/ })).toBeVisible();
+    const facts = screen.getByRole('complementary', { name: 'Feature facts' });
+    expect(facts).toHaveTextContent('Unpublished');
+    expect(facts).toHaveTextContent('3 commits');
+  });
 });

@@ -200,17 +200,6 @@ func (o *Orchestrator) collectQAFilePaths(f *feature.Feature) []string {
 func (o *Orchestrator) resolvePlanPath(f *feature.Feature) string {
 	baseDir := o.stateDir()
 
-	// Cycle plan — when a post-publish cycle is active, look in the cycle dir
-	// only; do NOT fall through to roadmap/stored artifacts which belong to
-	// normal implementation.
-	if cyclePrefix := f.CyclePrefix(); cyclePrefix != "" {
-		if baseDir == "" {
-			return ""
-		}
-		cycleDir := filepath.Join(agent.ActiveRunDir(baseDir, f), cyclePrefix)
-		return globCyclePlan(cycleDir)
-	}
-
 	// Stored artifact: absolute first, then run-relative fallback. Carried
 	// values are normalized to run-relative form such as `phase-01/plan/plan.md`
 	// for a roadmap pipeline.
@@ -242,15 +231,6 @@ func (o *Orchestrator) resolvePlanPath(f *feature.Feature) string {
 
 	// Globbed plan artifact
 	return o.resolveArtifactPath(f, "plan")
-}
-
-// globCyclePlan finds the cycle plan file in a cycle directory.
-func globCyclePlan(cycleDir string) string {
-	matches, _ := filepath.Glob(filepath.Join(cycleDir, "*-plan.md"))
-	if len(matches) > 0 {
-		return matches[0]
-	}
-	return ""
 }
 
 // writeQAFile extracts the session's QALog and writes it into phaseDir as

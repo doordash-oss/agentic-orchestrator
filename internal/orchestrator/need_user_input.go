@@ -13,9 +13,7 @@
 // limitations under the License.
 
 // Package orchestrator — need_user_input.go owns the need-user-input gate
-// lifecycle for feature-scoped (single-repo), repo-scoped (multi-repo), and
-// cycle-scoped (post-publish) flows. Cycle-scoped pauses keep the parent
-// feature in StatusPublished and only mutate the affected RepoCycleState.
+// lifecycle for feature-scoped (single-repo) flows.
 package orchestrator
 
 import (
@@ -23,7 +21,6 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
@@ -63,92 +60,11 @@ func (o *Orchestrator) onSingleRepoNeedUserInput(featureID string, result *agent
 	return nil
 }
 
-// ResumeNeedUserInput resumes a feature-level phase or rebase need-user-input
-// gate. Phase-implement NEED_USER_INPUT is always feature-scoped through
+// ResumeNeedUserInput resumes a feature-level phase need-user-input gate.
+// Phase-implement NEED_USER_INPUT is always feature-scoped through
 // Feature.PendingNeedUserInputPath.
 func (o *Orchestrator) ResumeNeedUserInput(featureID string, d NeedUserInputResume) error {
-	if f, err := o.deps.Lifecycle.Get(featureID); err == nil && f != nil &&
-		f.ActiveCycle != nil &&
-		featureRebaseActiveCycleType(f) == feature.CycleRebase &&
-		f.ActiveCycle.Status == feature.RepoCycleNeedUserInput {
-		return o.resumeRebaseCycleNeedUserInput(featureID, d)
-	}
 	return o.resumeFeatureNeedUserInput(featureID, d)
-}
-
-func (o *Orchestrator) resumeRebaseCycleNeedUserInput(featureID string, d NeedUserInputResume) error {
-	f, err := o.deps.Lifecycle.Get(featureID)
-	if err != nil {
-		return fmt.Errorf("load feature: %w", err)
-	}
-	if f.ActiveCycle == nil || featureRebaseActiveCycleType(f) != feature.CycleRebase ||
-		f.ActiveCycle.Status != feature.RepoCycleNeedUserInput || f.RebaseOperation == nil {
-		return fmt.Errorf("feature %s has no paused rebase cycle", featureID)
-	}
-	gatePath := f.ActiveCycle.PendingNeedUserInputPath
-	if gatePath == "" {
-		return errors.New("no pending need-user-input gate path on rebase cycle")
-	}
-
-	rec, err := agent.ReadNeedUserInputRecord(gatePath)
-	if err != nil {
-		return fmt.Errorf("read gate artifact: %w", err)
-	}
-	if !rec.AllAnswered() {
-		return errors.New("cannot resume: every question must have a non-empty answer before resume")
-	}
-	if rec.VerificationDecision != nil {
-		if err := o.applyTrustedVerificationDecision(featureID, gatePath, rec); err != nil {
-			return err
-		}
-	}
-	outcomes := featureRebaseOutcomesFromOperation(o, f)
-	conflicted := harnessRebaseOutcomesWithStatus(outcomes, feature.RebaseRepoStatusConflict)
-	targets := rebaseTargetsFromHarnessOutcomes(f.PRURLs(), conflicted)
-	if _, err := o.rebaseLoopConfigForFeature(f, targets, true); err != nil {
-		return fmt.Errorf("relaunch rebase cycle: %w", err)
-	}
-	now := time.Now()
-	if err := o.deps.Store.Modify(featureID, func(ff *feature.Feature) error {
-		if ff.ActiveCycle == nil || featureRebaseActiveCycleType(ff) != feature.CycleRebase {
-			return errors.New("rebase cycle vanished during resume")
-		}
-		ff.ActiveCycle.Status = feature.RepoCycleRunning
-		ff.ActiveCycle.PendingNeedUserInputPath = ""
-		ff.ActiveCycle.LastError = ""
-		ff.ActiveTimingKey = fmt.Sprintf("rebase-%d", ff.ActiveCycle.Count)
-		ff.ActivePhaseStart = &now
-		return nil
-	}); err != nil {
-		return fmt.Errorf("clear rebase gate: %w", err)
-	}
-	o.clearFeatureRebaseStopRequest(featureID)
-	o.emitEvent(ports.Event{Type: ports.CycleProgress, FeatureID: featureID})
-	o.cycleWG.Go(func() {
-		current, loadErr := o.deps.Lifecycle.Get(featureID)
-		if loadErr != nil || current == nil || current.RebaseOperation == nil {
-			_ = o.restoreRebaseNeedUserInputGate(featureID, gatePath, f.ActiveCycle.Iteration, f.ActiveCycle.LastError)
-			return
-		}
-		currentOutcomes := featureRebaseOutcomesFromOperation(o, current)
-		currentConflicted := harnessRebaseOutcomesWithStatus(currentOutcomes, feature.RebaseRepoStatusConflict)
-		o.startCoordinatedSmartRebase(featureID, currentOutcomes, currentConflicted, true)
-	})
-	return nil
-}
-
-func (o *Orchestrator) restoreRebaseNeedUserInputGate(featureID, gatePath string, iteration int, summary string) error {
-	return o.deps.Store.Modify(featureID, func(f *feature.Feature) error {
-		if f.ActiveCycle == nil || featureRebaseActiveCycleType(f) != feature.CycleRebase {
-			return errors.New("rebase cycle vanished during gate rollback")
-		}
-		f.ActiveCycle.Status = feature.RepoCycleNeedUserInput
-		f.ActiveCycle.PendingNeedUserInputPath = gatePath
-		f.ActiveCycle.Iteration = iteration
-		f.ActiveCycle.LastError = summary
-		f.ActivePhaseStart = nil
-		return nil
-	})
 }
 
 // resumeFeatureNeedUserInput implements the single-repo / feature-scoped gate

@@ -2858,30 +2858,6 @@ func TestResolveImplementArtifactDir_CyclePrefix(t *testing.T) {
 			&feature.Feature{ID: "f1", ActiveRun: 1},
 			filepath.Join(stateDir, "f1", "runs", "run-001", "implement"),
 		},
-		{
-			"rebase cycle active",
-			func() *feature.Feature {
-				f := &feature.Feature{ID: "f1", ActiveRun: 1}
-				f.SetActiveCycleType(feature.CycleRebase)
-				f.SetRebaseCount(2)
-				return f
-			}(),
-			filepath.Join(stateDir, "f1", "runs", "run-001", "rebase-2", "implement"),
-		},
-		{
-			"roadmap phase with cycle skips phase scoping",
-			func() *feature.Feature {
-				f := &feature.Feature{
-					ID:                  "f1",
-					ActiveRun:           1,
-					CurrentRoadmapPhase: 2,
-				}
-				f.SetActiveCycleType(feature.CycleRebase)
-				f.SetRebaseCount(1)
-				return f
-			}(),
-			filepath.Join(stateDir, "f1", "runs", "run-001", "rebase-1", "implement"),
-		},
 	}
 
 	for _, tt := range tests {

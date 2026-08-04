@@ -22,7 +22,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
@@ -34,19 +33,6 @@ import (
 var ErrNotImplemented = errors.New("not implemented")
 
 const eventChBuffer = 256
-
-type featureRebaseControl struct {
-	mu       sync.Mutex
-	cond     *sync.Cond
-	stopping bool
-	active   int
-}
-
-func newFeatureRebaseControl() *featureRebaseControl {
-	c := &featureRebaseControl{}
-	c.cond = sync.NewCond(&c.mu)
-	return c
-}
 
 // Hooks contains optional callbacks fired at lifecycle points.
 // Nil hooks are silently skipped.
@@ -239,13 +225,6 @@ type Orchestrator struct {
 	// the first request's state transition is visible to the second.
 	featureStartControls sync.Map
 
-	// featureRebaseControls serialize feature-level rebase continuation checks
-	// with Stop/interrupt per feature. The git operations themselves are not
-	// cancellable, so a stop request waits for
-	// the currently claimed rebase/push operation on that feature to return
-	// before it lands in feature state.
-	featureRebaseControls sync.Map
-
 	// publishFn is a test hook. When nil the orchestrator calls o.Publish.
 	// Tests can override this to intercept publish dispatch without touching
 	// the publish implementation.
@@ -296,11 +275,6 @@ type Orchestrator struct {
 		planPath string,
 		kbInfos ...agent.KBInfo,
 	) (chan *agent.LoopResult, error)
-
-	// runRebaseLoopFn is a test seam over agent.RunRebaseLoop. The default
-	// launches the production unified rebase loop; tests override it to
-	// verify rebase gate routing without booting agent sessions.
-	runRebaseLoopFn func(agent.RebaseLoopConfig, ports.SessionManager) (*agent.RebaseLoopResult, error)
 
 	// worktreeFingerprintFn is a test seam for detecting whether a mounted
 	// smart-rebase context repo changed during the agent loop.
@@ -372,7 +346,6 @@ func New(deps Deps, hooks Hooks) *Orchestrator {
 		}
 		return o.deps.PhaseRunner.RunFeatureCycleFinalReview(f)
 	}
-	o.runRebaseLoopFn = agent.RunRebaseLoop
 	o.worktreeFingerprintFn = gitWorktreeFingerprint
 	return o
 }
@@ -384,20 +357,6 @@ func (o *Orchestrator) Events() <-chan ports.Event { return o.eventCh }
 // Consumers should select on Done alongside Events() to terminate receive
 // loops cleanly. The channel is never sent to — only closed.
 func (o *Orchestrator) Done() <-chan struct{} { return o.doneCh }
-
-func (o *Orchestrator) featureRebaseControl(featureID string) *featureRebaseControl {
-	if v, ok := o.featureRebaseControls.Load(featureID); ok {
-		if control, ok := v.(*featureRebaseControl); ok {
-			return control
-		}
-	}
-	control := newFeatureRebaseControl()
-	actual, _ := o.featureRebaseControls.LoadOrStore(featureID, control)
-	if stored, ok := actual.(*featureRebaseControl); ok {
-		return stored
-	}
-	return control
-}
 
 // WaitForCycles blocks until every background goroutine launched by the
 // feature-level cycle entry points and asynchronous phase continuations have returned. Production
@@ -1353,29 +1312,12 @@ func (o *Orchestrator) featureStartControl(featureID string) *sync.Mutex {
 // Otherwise the stopped session's last assistant text would surface
 // as failure_type=session_crash and beat FeatureInterrupted to emission.
 func (o *Orchestrator) InterruptFeature(featureID string) error {
-	rebaseControl := o.featureRebaseControl(featureID)
-	rebaseControl.mu.Lock()
-	rebaseControl.stopping = true
-	for rebaseControl.active > 0 {
-		rebaseControl.cond.Wait()
-	}
-	rebaseControl.mu.Unlock()
-
 	featureInterrupted := false
 	f, getErr := o.deps.Lifecycle.Get(featureID)
 	switch {
-	case getErr == nil &&
-		((f.Status == feature.StatusPublished || f.Status == feature.StatusCodeReady) ||
-			f.RebaseOperation != nil) &&
-		hasActiveRepoCycles(f):
-		interruptFeature := hasInterruptibleRepoCycles(f)
-		if err := o.interruptActiveRepoCycles(featureID, interruptFeature); err != nil {
-			return fmt.Errorf("interrupt active repo cycles: %w", err)
-		}
-		featureInterrupted = interruptFeature
 	case getErr == nil && isSettledFeatureStatus(f.Status):
 		// Stop is idempotent when work completed after the caller's activity
-		// check, or when legacy state retains an inactive cycle marker.
+		// check.
 	default:
 		// Transition to interrupted FIRST so racing completion handlers
 		// (onKBCompleted, onPhaseCompletedDefault, …) observe the terminal
@@ -1482,16 +1424,6 @@ func (o *Orchestrator) InterruptAllRunning() error {
 			}); err != nil {
 				errs = append(errs, fmt.Errorf("clear KBStatus for %s: %w", f.ID, err))
 			}
-		case (f.Status == feature.StatusPublished || f.Status == feature.StatusCodeReady) && hasActiveRepoCycles(f):
-			if hasInterruptibleRepoCycles(f) {
-				if err := o.InterruptFeature(f.ID); err != nil {
-					errs = append(errs, fmt.Errorf("interrupt repo cycles for %s: %w", f.ID, err))
-				}
-				continue
-			}
-			if err := o.interruptActiveRepoCycles(f.ID, false); err != nil {
-				errs = append(errs, fmt.Errorf("mark interrupted cycles for %s: %w", f.ID, err))
-			}
 		}
 	}
 
@@ -1499,116 +1431,6 @@ func (o *Orchestrator) InterruptAllRunning() error {
 		return errors.Join(errs...)
 	}
 	return nil
-}
-
-// hasActiveRepoCycles returns true if the feature has any running, reviewing,
-// or input-paused post-publish cycle. Legacy cycles live in RepoCycles;
-// feature-level cycles live in ActiveCycle.
-func hasActiveRepoCycles(f *feature.Feature) bool {
-	if f == nil {
-		return false
-	}
-	if f.ActiveCycle != nil && isActiveRepoCycleStatus(f.ActiveCycle.Status) {
-		return true
-	}
-	for _, rc := range f.RepoCycles {
-		if rc != nil && isActiveRepoCycleStatus(rc.Status) {
-			return true
-		}
-	}
-	return false
-}
-
-func hasInterruptibleRepoCycles(f *feature.Feature) bool {
-	if hasActiveFeatureLevelInterruptibleCycle(f) {
-		return true
-	}
-	for _, rc := range f.RepoCycles {
-		if rc == nil {
-			continue
-		}
-		if rc.Type != feature.CycleRebase {
-			continue
-		}
-		if isActiveRepoCycleStatus(rc.Status) {
-			return true
-		}
-	}
-	return false
-}
-
-func hasActiveFeatureLevelInterruptibleCycle(f *feature.Feature) bool {
-	if f == nil || f.ActiveCycle == nil {
-		return false
-	}
-	if !isActiveRepoCycleStatus(f.ActiveCycle.Status) {
-		return false
-	}
-	cycleType := f.ActiveCycle.Type
-	if cycleType == "" {
-		cycleType = f.ActiveCycleType()
-	}
-	return cycleType == feature.CycleRebase
-}
-
-func isActiveRepoCycleStatus(status string) bool {
-	switch status {
-	case feature.RepoCycleRunning, feature.RepoCycleReviewing, feature.RepoCycleNeedUserInput:
-		return true
-	default:
-		return false
-	}
-}
-
-func (o *Orchestrator) interruptActiveRepoCycles(featureID string, interruptFeature bool) error {
-	return o.deps.Store.Modify(featureID, func(ff *feature.Feature) error {
-		bankActiveFeatureRebaseTiming(ff)
-		for _, rc := range ff.RepoCycles {
-			if rc == nil {
-				continue
-			}
-			if isActiveRepoCycleStatus(rc.Status) {
-				rc.Status = feature.RepoCycleInterrupted
-				rc.LastError = ""
-			}
-		}
-		if ff.ActiveCycle != nil && isActiveRepoCycleStatus(ff.ActiveCycle.Status) {
-			ff.ActiveCycle.Status = feature.RepoCycleInterrupted
-			ff.ActiveCycle.LastError = ""
-		}
-		if interruptFeature {
-			ff.Status = feature.StatusInterrupted
-			ff.CurrentPhase = feature.PhasePublish
-			ff.LastError = ""
-			ff.FailureType = ""
-		}
-		for i := range ff.HelpQueue {
-			if ff.HelpQueue[i].Pending {
-				ff.HelpQueue[i].Pending = false
-			}
-		}
-		for i := range ff.PermissionsQueue {
-			if ff.PermissionsQueue[i].Pending {
-				ff.PermissionsQueue[i].Pending = false
-			}
-		}
-		return nil
-	})
-}
-
-func bankActiveFeatureRebaseTiming(f *feature.Feature) {
-	if f == nil || f.ActiveCycle == nil ||
-		featureRebaseActiveCycleType(f) != feature.CycleRebase ||
-		f.ActivePhaseStart == nil ||
-		!strings.HasPrefix(f.ActiveTimingKey, "rebase-") {
-		return
-	}
-	elapsed := time.Since(*f.ActivePhaseStart)
-	if f.PhaseTimings == nil {
-		f.PhaseTimings = make(map[string]time.Duration)
-	}
-	f.PhaseTimings[f.ActiveTimingKey] += elapsed
-	f.ActivePhaseStart = nil
 }
 
 // HandlePhaseCompletion dispatches a phase-completion result to the

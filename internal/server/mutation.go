@@ -145,11 +145,9 @@ type MutationTarget interface {
 	MergeFeature(featureID string, req GuardedFeatureActionRequest) (MergeFeatureResponse, error)
 	RewindFeature(featureID string, req RewindFeatureRequest) (RewindFeatureResponse, error)
 	RetryFeature(featureID string) (RetryFeatureResponse, error)
-	StartRebase(featureID string, req RebaseActionRequest) (RebaseStartResponse, error)
 	RebaseFeature(featureID string, req RebaseFeatureRequest) (RebaseFeatureResponse, error)
 	RefactorFeature(featureID string, req RefactorFeatureRequest) (RefactorFeatureResponse, error)
 	ReviewFeedbackFeature(featureID string, req ReviewFeedbackFeatureRequest) (ReviewFeedbackFeatureResponse, error)
-	PreflightRebase(featureID string) (RebasePreflightResponse, error)
 	CompletionPreflight(featureID string) (CompletionPreflightResponse, error)
 	RepositoryDiff(featureID, repoName, filePath string) (RepositoryDiffResponse, error)
 	RepositoryPath(featureID, repoName string) (RepositoryPathResponse, error)
@@ -390,15 +388,6 @@ type RewindFeatureRequest struct {
 	// backward compatibility with older clients.
 	SourceRunNumber int    `json:"source_run_number,omitempty"`
 	SourceRevision  string `json:"source_revision,omitempty"`
-}
-
-type RebaseActionRequest struct {
-	// SourceRevision carries the rebase preflight's authoritative source
-	// revision. When set, execution rejects a stale preflight (repository
-	// state advanced since the preview) before any side effect. When
-	// omitted, the request is treated as unguarded for backward
-	// compatibility with older clients.
-	SourceRevision string `json:"source_revision,omitempty"`
 }
 
 type CleanupActionRequest struct {

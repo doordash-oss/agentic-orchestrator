@@ -704,33 +704,6 @@ func TestOrchestrator_ResolveGateReviewContext_PhaseImplement_RoadmapPhase_Retur
 	}
 }
 
-func TestRestartPhase_PublishedWithFailedFeatureRebase_DispatchesRebaseRetry(t *testing.T) {
-	f := &feature.Feature{
-		ID:           "feat-failed-rebase",
-		Status:       feature.StatusPublished,
-		CurrentPhase: feature.PhasePublish,
-		ActiveCycle: &feature.CycleState{
-			Type:   feature.CycleRebase,
-			Status: feature.RepoCycleFailed,
-			Count:  2,
-		},
-		RebaseOperation: &feature.RebaseOperationState{Stage: feature.RebaseStageFinalReview},
-	}
-	f.SetActiveCycleType(feature.CycleRebase)
-	o := orchestrator.New(orchestrator.Deps{
-		Lifecycle: lifecycleForFeature(f),
-		Store:     newFeatureStore(f),
-	}, orchestrator.Hooks{})
-
-	outcome, err := o.RestartPhase(f.ID, 0, 0)
-	if err != nil {
-		t.Fatalf("RestartPhase: %v", err)
-	}
-	if outcome.Action != orchestrator.RestartDispatchRebase {
-		t.Fatalf("Action = %v, want RestartDispatchRebase", outcome.Action)
-	}
-}
-
 func TestOrchestrator_ResolveRewindReviewContext_PartialImplementReturnsPendingPhasePlan(t *testing.T) {
 	tmp := t.TempDir()
 	phasePlanDir := filepath.Join(tmp, "feat-partial", "runs", "run-002", "phase-02", "plan")

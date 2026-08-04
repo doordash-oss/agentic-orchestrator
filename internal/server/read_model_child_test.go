@@ -540,7 +540,7 @@ func TestParentRefactorDirtyReasonWithoutCleanlinessOmitsTarget(t *testing.T) {
 func TestReviewFeedbackActionCatalogEligibility(t *testing.T) {
 	t.Parallel()
 	publishable := true
-	base := actionCatalogTestFeature(feature.StatusPublished, feature.Checkpoints{}, &publishable, nil)
+	base := actionCatalogTestFeature(feature.StatusPublished, feature.Checkpoints{}, &publishable)
 	base.RepoStates = map[string]*feature.RepoState{
 		repoNameSelf: {PRURL: "https://github.example/org/repo/pull/17"},
 	}

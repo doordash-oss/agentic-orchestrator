@@ -332,9 +332,6 @@ func findRepo(f *feature.Feature, name string) *feature.FeatureRepo {
 // phase-implement loop emits artifacts
 // at the phase level (no per-repo subdir) via resolvePhaseArtifactDir.
 func resolveImplementArtifactDirForRepo(f *feature.Feature, runDir, repoName string) string {
-	if cyclePrefix := f.CyclePrefix(); cyclePrefix != "" {
-		return filepath.Join(runDir, cyclePrefix, "implement", repoName)
-	}
 	base := runDir
 	if f.CurrentRoadmapPhase > 0 {
 		return filepath.Join(base, fmt.Sprintf("phase-%02d", f.CurrentRoadmapPhase), "implement", repoName)

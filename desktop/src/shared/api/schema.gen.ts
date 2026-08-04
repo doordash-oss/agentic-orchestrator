@@ -183,23 +183,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/features/{feature_id}/rebase/preflight": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Read-only, server-authored rebase preflight — every affected repository, target branch, freshness, blocker, and source revision execution will use. No side effects; rejects stale, ineligible, or cross-feature execution before repository mutation. */
-        get: operations["getRebasePreflight"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/v1/features/{feature_id}/completion/preflight": {
         parameters: {
             query?: never;
@@ -1210,7 +1193,6 @@ export interface components {
             merge_feature_response?: components["schemas"]["MergeFeatureResponse"];
             rewind_feature_response?: components["schemas"]["RewindFeatureResponse"];
             retry_feature_response?: components["schemas"]["RetryFeatureResponse"];
-            rebase_start_response?: components["schemas"]["RebaseStartResponse"];
             mark_done_response?: components["schemas"]["MarkDoneResponse"];
             cleanup_feature_response?: components["schemas"]["CleanupFeatureResponse"];
             delete_feature_response?: components["schemas"]["DeleteFeatureResponse"];
@@ -1333,9 +1315,6 @@ export interface components {
             reset_kind: "anchor" | "base" | "base-local" | "none";
         };
         RetryFeatureResponse: components["schemas"]["ActionBaseResponse"] & components["schemas"]["FeatureActionResult"];
-        RebaseStartResponse: components["schemas"]["ActionBaseResponse"] & components["schemas"]["FeatureActionResult"] & {
-            cycle_type: string;
-        };
         RefactorFeatureRequest: {
             name: string;
             description?: string;
@@ -1393,25 +1372,6 @@ export interface components {
         };
         RebaseFeatureResponse: components["schemas"]["ActionBaseResponse"] & components["schemas"]["FeatureActionResult"] & {
             parent_id: string;
-        };
-        RebasePreflightRepo: {
-            repo: string;
-            /** @description Base ref a rebase will target for this repository. */
-            target: string;
-            publishable: boolean;
-            /** @description Server-authored freshness state (up_to_date, behind, unknown). */
-            freshness: string;
-            /** @description Whether the repository is behind its rebase target. */
-            behind: boolean;
-            /** @description Safe, server-authored reason a rebase cannot proceed for this repository, when non-empty. */
-            blocker?: string;
-            conflict_files?: string[];
-        };
-        RebasePreflightResponse: components["schemas"]["JSONResponse"] & {
-            feature_id: string;
-            /** @description Authoritative revision of the repository state this preflight observed. Execution rejects a stale preflight before any side effect. */
-            source_revision: string;
-            repos: components["schemas"]["RebasePreflightRepo"][];
         };
         MarkDoneResponse: components["schemas"]["ActionBaseResponse"] & components["schemas"]["FeatureActionResult"];
         CompletionPreflightResponse: components["schemas"]["JSONResponse"] & {
@@ -2388,17 +2348,6 @@ export interface components {
                 "application/json": components["schemas"]["RecoverySnapshotResponse"];
             };
         };
-        /** @description Read-only, server-authored rebase preflight. */
-        RebasePreflightResponse: {
-            headers: {
-                "X-Agentico-Seq": components["headers"]["Sequence"];
-                ETag: components["headers"]["ETag"];
-                [name: string]: unknown;
-            };
-            content: {
-                "application/json": components["schemas"]["RebasePreflightResponse"];
-            };
-        };
         /** @description Read-only, server-authored completion preflight — eligible repository set, outcomes, blockers, PR URLs, source revision. */
         CompletionPreflightResponse: {
             headers: {
@@ -2792,21 +2741,6 @@ export interface operations {
         requestBody?: never;
         responses: {
             200: components["responses"]["RewindPreviewResponse"];
-            401: components["responses"]["Unauthorized"];
-        };
-    };
-    getRebasePreflight: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                feature_id: components["parameters"]["FeatureID"];
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            200: components["responses"]["RebasePreflightResponse"];
             401: components["responses"]["Unauthorized"];
         };
     };

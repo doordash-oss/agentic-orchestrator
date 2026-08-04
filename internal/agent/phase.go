@@ -911,15 +911,8 @@ func (pr *PhaseRunner) RunImplementation(f *feature.Feature, planPath string, kb
 	// review prompt stays focused on the cycle's objectives.
 	phaseType := f.RoadmapPhaseType
 	roadmapPath := f.Artifacts["roadmap"]
-	if f.CyclePrefix() != "" {
-		phaseType = ""
-		roadmapPath = ""
-	}
 
-	exitCriteria := f.ExitCriteria
-	if f.CyclePrefix() == "" {
-		exitCriteria = resolvePromptIntent(f).ExitCriteria
-	}
+	exitCriteria := resolvePromptIntent(f).ExitCriteria
 
 	cfg := ImplementConfig{
 		Feature:                    f,
@@ -1344,12 +1337,6 @@ func installAutoReviewObserver(handler ports.PermissionHandler, observer *observ
 // directories.
 func (pr *PhaseRunner) resolveImplementArtifactDir(f *feature.Feature) string {
 	runDir := ActiveRunDir(pr.StateDir, f)
-	// Cycle prefix takes precedence — when an active cycle is running,
-	// artifacts go into the cycle subtree (e.g. rebase-1/).
-	// Cycles operate on the whole branch, so roadmap phase scoping is skipped.
-	if prefix := f.CyclePrefix(); prefix != "" {
-		return filepath.Join(runDir, prefix, "implement")
-	}
 	base := runDir
 	if f.CurrentRoadmapPhase > 0 {
 		return filepath.Join(base, fmt.Sprintf("phase-%02d", f.CurrentRoadmapPhase), "implement")

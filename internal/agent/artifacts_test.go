@@ -423,35 +423,6 @@ func TestPhaseTestingContractPath(t *testing.T) {
 	}
 }
 
-func TestCycleTestingContractPath(t *testing.T) {
-	f := &feature.Feature{ID: "feat1", ActiveRun: 1}
-	f.SetRebaseCount(2)
-	got := CycleTestingContractPath("/tmp/state", f, "", feature.CycleRebase)
-	want := "/tmp/state/feat1/runs/run-001/rebase-2/testing-contract.yaml"
-	if got != want {
-		t.Errorf("CycleTestingContractPath = %q, want %q", got, want)
-	}
-}
-
-func TestLatestCycleImplementationVerificationReportPath(t *testing.T) {
-	stateDir := t.TempDir()
-	f := &feature.Feature{ID: "feat1", ActiveRun: 1}
-	f.SetRebaseCount(1)
-	iterDir := filepath.Join(stateDir, "feat1", "runs", "run-001", "rebase-1", "implement", "iteration-02")
-	if err := os.MkdirAll(iterDir, 0o755); err != nil {
-		t.Fatalf("MkdirAll(iterDir): %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(iterDir, "meta.yaml"), []byte("iteration: 2\n"), 0o644); err != nil {
-		t.Fatalf("WriteFile(meta.yaml): %v", err)
-	}
-
-	got := LatestCycleImplementationVerificationReportPath(stateDir, f, "", feature.CycleRebase)
-	want := filepath.Join(iterDir, "verification-report.yaml")
-	if got != want {
-		t.Errorf("LatestCycleImplementationVerificationReportPath = %q, want %q", got, want)
-	}
-}
-
 func TestRoadmapDir(t *testing.T) {
 	f := &feature.Feature{ID: "feat1", ActiveRun: 1}
 	got := RoadmapDir("/tmp/state", f)

@@ -92,7 +92,6 @@ type Run struct {
 	CurrentIteration int `yaml:"current_iteration,omitempty"`
 	PlanIteration    int `yaml:"plan_iteration,omitempty"`
 	ReviewIteration  int `yaml:"review_iteration,omitempty"`
-	RebaseCount      int `yaml:"rebase_count,omitempty"`
 
 	// Roadmap progress (moved from Feature).
 	CurrentRoadmapPhase int    `yaml:"current_roadmap_phase,omitempty"`
@@ -107,31 +106,14 @@ type Run struct {
 	// marked as frontend work. Missing phases default to false.
 	RoadmapPhaseFrontendByPhase map[int]bool `yaml:"roadmap_phase_frontend,omitempty"`
 
-	// Cycle state (moved from Feature).
-	// ActiveCycleType is the feature-level cycle type marker. Kept alongside
-	// ActiveCycle for the desktop app's per-repo rendering surface (RepoCycles map
-	// below) which still consults the legacy field.
-	ActiveCycleType RepoCycleType `yaml:"active_cycle_type,omitempty"`
-	// ActiveCycle is the feature-level active post-publish cycle under
-	// SchemaVersionCurrent = 4.
-	ActiveCycle *CycleState `yaml:"active_cycle,omitempty"`
-
 	// Artifacts (moved from Feature) — entries are run-relative paths.
 	Artifacts map[string]string `yaml:"artifacts,omitempty"`
 
 	// Multi-repo state (moved from Feature). Under SchemaVersionCurrent = 5
 	// per-repo orchestration signal lives in RepoStates (Touched, PRURL,
 	// LastError); the unified phase-implement loop owns mid-flight state at
-	// the feature level (Run.CurrentPhaseStatus). RepoCycles is the per-repo
-	// cycle rendering surface read by the desktop app; the unified cycle loops mirror
-	// their per-repo entries here so existing desktop app badges keep working.
-	RepoCycles map[string]*RepoCycleState `yaml:"repo_cycles,omitempty"`
-	RepoStates map[string]*RepoState      `yaml:"repo_states,omitempty"`
-	// RebaseOperation tracks transient feature-level rebase progress while a
-	// harness, smart rebase, or rebase-triggered Final Review is active. It is
-	// cleared on successful/no-op settlement and retained only when actionable
-	// failure/conflict state remains useful to render.
-	RebaseOperation *RebaseOperationState `yaml:"rebase_operation,omitempty"`
+	// the feature level (Run.CurrentPhaseStatus).
+	RepoStates map[string]*RepoState `yaml:"repo_states,omitempty"`
 
 	// CurrentPhaseStatus is the mid-flight phase-implement status for the
 	// unified flow ("implementing", "reviewing", "verifying", or "" when not
@@ -258,22 +240,6 @@ func (r *Run) AnyRoadmapPhaseFrontend() bool {
 		}
 	}
 	return false
-}
-
-// CyclePrefix returns the artifact directory prefix for the current
-// rebase cycle. Returns empty string when no cycle is active.
-func (r *Run) CyclePrefix() string {
-	if r == nil {
-		return ""
-	}
-	switch r.ActiveCycleType {
-	case CycleRebase:
-		if r.RebaseCount > 0 {
-			return fmt.Sprintf("rebase-%d", r.RebaseCount)
-		}
-		return "rebase"
-	}
-	return ""
 }
 
 // TotalRuntime returns the total active runtime for the run.

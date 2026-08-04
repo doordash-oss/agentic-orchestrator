@@ -518,7 +518,6 @@ func documentedServerRoutes() []documentedRoute {
 		{method: httpMethodPost, path: apiPathReviewFeedbackFetch, mutation: true},
 		{method: httpMethodPost, path: "/api/v1/features/{feature_id}/actions/{action}/{subaction}", mutation: true},
 		{method: httpMethodGet, path: "/api/v1/features/{feature_id}/rewind/preview"},
-		{method: httpMethodGet, path: "/api/v1/features/{feature_id}/rebase/preflight"},
 		{method: httpMethodGet, path: "/api/v1/features/{feature_id}/completion/preflight"},
 		{method: httpMethodGet, path: "/api/v1/features/{feature_id}/repositories/{repo_name}/diff"},
 		{method: httpMethodGet, path: "/api/v1/features/{feature_id}/repositories/{repo_name}/path"},

@@ -2216,25 +2216,6 @@ func TestPrepareImplementationTestingContractNonMoonshotRoadmapRemovesStaleContr
 	}
 }
 
-func TestCompileImplementationTestingContractFeatureCycleScopesCommandsToRepos(t *testing.T) {
-	f := &feature.Feature{
-		ID: "test-feature-cycle-contract", Name: "Feature Cycle Contract", Slug: "feature-cycle-contract",
-		Repos: []feature.FeatureRepo{{Name: testRepoNameAPI}, {Name: testRepoNameWeb}},
-	}
-	f.SetActiveCycleType(feature.CycleRebase)
-	plan := BuildMultiRepoRebasePlan([]RebaseRepoTarget{{
-		RepoName: testRepoNameAPI, RebaseTarget: defaultTestBranch,
-	}})
-
-	contract := compileImplementationTestingContract(ImplementConfig{Feature: f}, plan)
-	if len(contract.Items) != 1 {
-		t.Fatalf("contract items = %+v, want one repo-scoped rebase check", contract.Items)
-	}
-	if contract.Items[0].Repo != testRepoNameAPI {
-		t.Fatalf("contract item repo = %q, want %q", contract.Items[0].Repo, testRepoNameAPI)
-	}
-}
-
 func TestImplementLoop_WritesTestingContractForRoadmapPhase(t *testing.T) {
 	tmpDir := t.TempDir()
 	workDir := filepath.Join(tmpDir, "work")

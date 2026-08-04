@@ -249,18 +249,6 @@ paths:
         "401":
           $ref: "#/components/responses/Unauthorized"
 
-  /api/v1/features/{feature_id}/rebase/preflight:
-    get:
-      operationId: getRebasePreflight
-      summary: Read-only, server-authored rebase preflight — every affected repository, target branch, freshness, blocker, and source revision execution will use. No side effects; rejects stale, ineligible, or cross-feature execution before repository mutation.
-      parameters:
-        - $ref: "#/components/parameters/FeatureID"
-      responses:
-        "200":
-          $ref: "#/components/responses/RebasePreflightResponse"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-
   /api/v1/features/{feature_id}/completion/preflight:
     get:
       operationId: getCompletionPreflight
@@ -1338,17 +1326,6 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/RecoverySnapshotResponse"
-    RebasePreflightResponse:
-      description: Read-only, server-authored rebase preflight.
-      headers:
-        X-Agentico-Seq:
-          $ref: "#/components/headers/Sequence"
-        ETag:
-          $ref: "#/components/headers/ETag"
-      content:
-        application/json:
-          schema:
-            $ref: "#/components/schemas/RebasePreflightResponse"
     CompletionPreflightResponse:
       description: Read-only, server-authored completion preflight — eligible repository set, outcomes, blockers, PR URLs, source revision.
       headers:
@@ -2275,8 +2252,6 @@ components:
               $ref: "#/components/schemas/RewindFeatureResponse"
             retry_feature_response:
               $ref: "#/components/schemas/RetryFeatureResponse"
-            rebase_start_response:
-              $ref: "#/components/schemas/RebaseStartResponse"
             mark_done_response:
               $ref: "#/components/schemas/MarkDoneResponse"
             cleanup_feature_response:
@@ -2590,15 +2565,6 @@ components:
       allOf:
         - $ref: "#/components/schemas/ActionBaseResponse"
         - $ref: "#/components/schemas/FeatureActionResult"
-    RebaseStartResponse:
-      allOf:
-        - $ref: "#/components/schemas/ActionBaseResponse"
-        - $ref: "#/components/schemas/FeatureActionResult"
-        - type: object
-          required: [cycle_type]
-          properties:
-            cycle_type:
-              type: string
     RefactorFeatureRequest:
       # Bound by the refactorFeature operation at
       # /api/v1/features/{feature_id}/actions/refactor; oapi-codegen emits the
@@ -2765,45 +2731,6 @@ components:
           properties:
             parent_id:
               type: string
-    RebasePreflightRepo:
-      type: object
-      required: [repo, target, publishable, freshness, behind]
-      properties:
-        repo:
-          type: string
-        target:
-          type: string
-          description: Base ref a rebase will target for this repository.
-        publishable:
-          type: boolean
-        freshness:
-          type: string
-          description: Server-authored freshness state (up_to_date, behind, unknown).
-        behind:
-          type: boolean
-          description: Whether the repository is behind its rebase target.
-        blocker:
-          type: string
-          description: Safe, server-authored reason a rebase cannot proceed for this repository, when non-empty.
-        conflict_files:
-          type: array
-          items:
-            type: string
-    RebasePreflightResponse:
-      allOf:
-        - $ref: "#/components/schemas/JSONResponse"
-        - type: object
-          required: [feature_id, source_revision, repos]
-          properties:
-            feature_id:
-              type: string
-            source_revision:
-              type: string
-              description: Authoritative revision of the repository state this preflight observed. Execution rejects a stale preflight before any side effect.
-            repos:
-              type: array
-              items:
-                $ref: "#/components/schemas/RebasePreflightRepo"
     MarkDoneResponse:
       allOf:
         - $ref: "#/components/schemas/ActionBaseResponse"

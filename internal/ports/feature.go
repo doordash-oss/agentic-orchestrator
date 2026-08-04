@@ -96,18 +96,9 @@ type FeatureLifecycle interface {
 	MarkPublished(featureID, prURL string) error
 	MarkDone(featureID string) error
 
-	// Post-publish cycles
-	StartFeatureRebaseOperation(featureID string) error
-	MarkFeatureRebaseStage(featureID string, stage feature.RebaseStage) error
-	UpdateFeatureRebaseRepo(featureID, repoName string, status feature.RebaseRepoStatus, progress feature.RebaseRepoProgress) error
-	FailFeatureRebaseCycle(featureID, errMsg string) error
-	MarkFeatureRebaseNeedUserInput(featureID, gatePath string, iteration int, summary string) error
-	ClearFeatureRebaseOperation(featureID string) error
-
 	// Per-repo cycles
 	RemoveRepoCycle(featureID, repoName string) error
 	FailRepoCycle(featureID, repoName, errMsg string) error
-	ClearRepoCycles(featureID string) error
 
 	// Roadmap phases
 	AdvanceRoadmapPhase(featureID string) error

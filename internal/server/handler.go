@@ -290,14 +290,6 @@ func (h *apiHandler) handleFeatureRoutes(w http.ResponseWriter, r *http.Request)
 	}
 	if len(parts) == 3 && parts[2] == "preflight" {
 		switch parts[1] {
-		case "rebase":
-			if r.Method != http.MethodGet {
-				w.Header().Set("Allow", "GET")
-				writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed", nil)
-				return
-			}
-			h.handleRebasePreflight(w, r, featureID)
-			return
 		case "completion":
 			if r.Method != http.MethodGet {
 				w.Header().Set("Allow", "GET")

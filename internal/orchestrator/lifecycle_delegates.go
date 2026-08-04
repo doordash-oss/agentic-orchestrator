@@ -225,18 +225,6 @@ func (o *Orchestrator) TransitionTo(featureID string, status feature.Status) err
 	})
 }
 
-// ClearRepoCycles removes every RepoCycles entry on a feature without firing
-// failure events. It supports cleanup of published features with active cycles
-// without exposing feature.Manager mutators to clients. The relationship guard
-// ensures cleanup is never performed on an active child or while a parent has
-// an active child.
-func (o *Orchestrator) ClearRepoCycles(featureID string) error {
-	return o.guardedModify(featureID, MutationCleanup, func(f *feature.Feature) error {
-		f.RepoCycles = nil
-		return nil
-	})
-}
-
 // RetryPhase clears feature-level error/gate state so the unified
 // phase-implement loop can re-run the active phase from iteration 1.
 // Per-repo Touched flags are monotonic and intentionally preserved.
@@ -256,24 +244,6 @@ func (o *Orchestrator) RetryPhase(featureID string) error {
 	}
 	repoNames := o.phaseDeclaredRepos(featureID)
 	return o.deps.Lifecycle.RetryPhase(featureID, repoNames)
-}
-
-func (o *Orchestrator) RecordRebasePreflightFailure(featureID, repoName string, cause error) error {
-	if cause == nil {
-		return nil
-	}
-	msg := "rebase preflight: " + cause.Error()
-	if err := o.deps.Lifecycle.FailRepoImplementation(featureID, repoName, msg); err != nil {
-		return fmt.Errorf("record rebase preflight failure: %w", err)
-	}
-	o.emitEvent(ports.Event{
-		Type:      ports.RepoStatusChanged,
-		FeatureID: featureID,
-		RepoName:  repoName,
-		Message:   msg,
-		Error:     cause,
-	})
-	return nil
 }
 
 // phaseDeclaredRepos returns the phase-declared repo subset by running
@@ -799,9 +769,6 @@ const (
 
 	// RestartDispatchPhase requires the caller to start Outcome.Phase.
 	RestartDispatchPhase
-
-	// RestartDispatchRebase resumes a retained feature-level rebase operation.
-	RestartDispatchRebase
 )
 
 // RestartOutcome describes the follow-up required after RestartPhase applies
@@ -858,14 +825,6 @@ func (o *Orchestrator) RestartPhase(featureID string, maxIterationsDelta, maxPla
 	// Stop any active sessions before mutating state so orphaned agents do not
 	// race subsequent Store.Modify writes.
 	o.StopFeatureSessions(featureID)
-
-	if f.RebaseOperation != nil && f.ActiveCycle != nil &&
-		featureRebaseActiveCycleType(f) == feature.CycleRebase {
-		switch f.ActiveCycle.Status {
-		case feature.RepoCycleFailed, feature.RepoCycleInterrupted:
-			return RestartOutcome{Action: RestartDispatchRebase}, nil
-		}
-	}
 
 	// An active child with resumable integration state replays the integration
 	// boundary — never Plan, Implement, or an already-approved Final Review.

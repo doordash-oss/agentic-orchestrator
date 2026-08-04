@@ -913,7 +913,6 @@ func (b *runtimeBootstrap) Close(ctx context.Context) error {
 type serverMutationTarget struct {
 	mu                    sync.Mutex
 	orch                  *orchestrator.Orchestrator
-	rebaseStarter         featureRebaseStarter
 	childCreator          featureRefactorChildCreator
 	reviewFeedbackCreator featureReviewFeedbackChildCreator
 	rebaseChildCreator    featureRebaseChildCreator
@@ -927,10 +926,6 @@ type serverMutationTarget struct {
 	// dispatchAsync runs server-owned background work (durable feature
 	// setup). Nil means `go fn()`; tests inject a synchronous dispatcher.
 	dispatchAsync func(fn func())
-}
-
-type featureRebaseStarter interface {
-	StartFeatureRebase(featureID string) error
 }
 
 // featureRefactorChildCreator is the narrow feature.Manager surface the
@@ -1096,27 +1091,6 @@ func (t *serverMutationTarget) ResumeFeature(featureID string) (serverruntime.Fe
 	if t.orch == nil {
 		return serverruntime.FeatureStartResponse{}, errors.New("orchestrator is not available")
 	}
-	if t.store != nil {
-		f, err := t.store.Load(featureID)
-		if err != nil {
-			return serverruntime.FeatureStartResponse{}, err
-		}
-		if f.Status == feature.StatusInterrupted &&
-			f.ActiveCycle != nil &&
-			(f.ActiveCycle.Type == feature.CycleRebase || f.ActiveCycleType() == feature.CycleRebase) &&
-			f.ActiveCycle.Status == feature.RepoCycleInterrupted {
-			if err := t.orch.ResumeFeatureRebase(featureID); err != nil {
-				return serverruntime.FeatureStartResponse{}, err
-			}
-			return serverruntime.FeatureStartResponse{FeatureID: featureID, Result: resultStarted}, nil
-		}
-		if f.Status == feature.StatusInterrupted && len(f.RepoCycles) > 0 {
-			if _, err := t.RestartFeature(featureID, serverruntime.RestartFeatureRequest{}); err != nil {
-				return serverruntime.FeatureStartResponse{}, err
-			}
-			return serverruntime.FeatureStartResponse{FeatureID: featureID, Result: resultStarted}, nil
-		}
-	}
 	return t.StartFeature(featureID)
 }
 
@@ -1162,9 +1136,6 @@ func (t *serverMutationTarget) dispatchRestartOutcome(featureID string, outcome 
 			resp.Phase = outcome.Phase.String()
 		}
 		return t.orch.StartFeature(featureID)
-	case orchestrator.RestartDispatchRebase:
-		resp.Dispatch = "rebase"
-		return t.orch.RetryFeatureRebase(featureID)
 	default:
 		return fmt.Errorf("unknown restart action %d", outcome.Action)
 	}
@@ -1859,69 +1830,6 @@ func isFailedSetupFeature(f *feature.Feature) bool {
 		setup.Status == feature.SetupStatusFailed
 }
 
-func (t *serverMutationTarget) StartRebase(featureID string, req serverruntime.RebaseActionRequest) (serverruntime.RebaseStartResponse, error) {
-	resp := serverruntime.RebaseStartResponse{
-		FeatureID: featureID,
-		CycleType: string(feature.CycleRebase),
-	}
-	starter := t.rebaseStarter
-	if starter == nil {
-		starter = t.orch
-	}
-	if starter == nil {
-		return resp, errors.New("orchestrator is not available")
-	}
-	if req.SourceRevision != "" {
-		if t.orch != nil {
-			current, err := t.orch.RebasePreflightSourceRevision(featureID)
-			if err != nil {
-				return resp, err
-			}
-			if current != req.SourceRevision {
-				resp.Result = resultFailed
-				return resp, &serverruntime.ActionConflictError{
-					Err:     orchestrator.ErrStalePreflight,
-					Message: "stale rebase preflight",
-					Target:  map[string]any{"reason": "stale_preflight"},
-				}
-			}
-		}
-	}
-	if err := starter.StartFeatureRebase(featureID); err != nil {
-		resp.Result = resultFailed
-		return resp, err
-	}
-	resp.Result = resultStarted
-	return resp, nil
-}
-
-func (t *serverMutationTarget) PreflightRebase(featureID string) (serverruntime.RebasePreflightResponse, error) {
-	if t.orch == nil {
-		return serverruntime.RebasePreflightResponse{FeatureID: featureID}, errors.New("orchestrator is not available")
-	}
-	result, err := t.orch.RebasePreflight(featureID)
-	if err != nil {
-		return serverruntime.RebasePreflightResponse{FeatureID: featureID}, err
-	}
-	resp := serverruntime.RebasePreflightResponse{
-		APIVersion:     serverruntime.APIVersion,
-		FeatureID:      result.FeatureID,
-		SourceRevision: result.SourceRevision,
-	}
-	for _, r := range result.Repos {
-		resp.Repos = append(resp.Repos, serverruntime.RebasePreflightRepo{
-			Repo:          r.Repo,
-			Target:        r.Target,
-			Publishable:   r.Publishable,
-			Freshness:     r.Freshness,
-			Behind:        r.Behind,
-			Blocker:       r.Blocker,
-			ConflictFiles: append([]string(nil), r.ConflictFiles...),
-		})
-	}
-	return resp, nil
-}
-
 func (t *serverMutationTarget) CompletionPreflight(featureID string) (serverruntime.CompletionPreflightResponse, error) {
 	if t.orch == nil {
 		return serverruntime.CompletionPreflightResponse{FeatureID: featureID}, errors.New("orchestrator is not available")
@@ -2125,12 +2033,7 @@ func (t *serverMutationTarget) CleanupFeature(featureID string, req serverruntim
 			resp.Result = resultFailed
 			return resp, err
 		}
-	case cleanupTargetCycles:
-		if err := t.orch.ClearRepoCycles(featureID); err != nil {
-			resp.Result = resultFailed
-			return resp, err
-		}
-	case "failed-cycles", "completed-cycles":
+	case "failed-cycles", "completed-cycles", cleanupTargetCycles:
 		resp.Result = "unsupported"
 		return resp, fmt.Errorf("cleanup target %q is not supported by the orchestrator adapter", target)
 	default:
@@ -2199,7 +2102,7 @@ func actionConflictError(err error) error {
 	if errors.As(err, &publishConflict) {
 		return &serverruntime.ActionConflictError{
 			Err:     err,
-			Message: "publish conflict",
+			Message: "publish conflict — resolve using the Rebase aftercare action",
 			Target: map[string]any{
 				resultConflict:   phaseNamePublish,
 				repoConflictKey:  publishConflict.RepoName,
@@ -2793,7 +2696,6 @@ func runServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledPr
 		DomainEvents: boot.orchestrator.Events(),
 		Mutations: &serverMutationTarget{
 			orch:                  boot.orchestrator,
-			rebaseStarter:         boot.orchestrator,
 			childCreator:          boot.featureManager,
 			reviewFeedbackCreator: boot.featureManager,
 			rebaseChildCreator:    boot.featureManager,

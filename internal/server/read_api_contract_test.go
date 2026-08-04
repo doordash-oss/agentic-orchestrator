@@ -274,191 +274,6 @@ func TestFeatureDetailIncludesSanitizedKBWaitReason(t *testing.T) {
 	}
 }
 
-func TestFeatureDetailSynthesizesCycleFromRepoCycleState(t *testing.T) {
-	t.Parallel()
-
-	store, f := seedReadFeature(t)
-	if err := store.Modify(f.ID, func(ff *feature.Feature) error {
-		ff.Status = feature.StatusCodeReady
-		ff.CurrentPhase = feature.PhasePublish
-		ff.SetRebaseCount(1)
-		ff.ActiveCycle = nil
-		ff.SetActiveCycleType("")
-		ff.RepoCycles = map[string]*feature.RepoCycleState{
-			repoNameSelf: {Type: feature.CycleRebase, Status: feature.RepoCycleRunning},
-		}
-		return nil
-	}); err != nil {
-		t.Fatalf("Modify() error = %v", err)
-	}
-	handler := NewHandler(HandlerOptions{
-		Runtime:               RuntimeIdentity{RuntimeDir: filepath.Dir(store.BaseDir), StateDir: store.BaseDir, Config: filepath.Join(filepath.Dir(store.BaseDir), "config.yaml")},
-		Features:              store,
-		DisableHostValidation: true,
-	})
-
-	list := getJSONMap(t, handler, apiPathFeatures)
-	summaries := list["features"].([]any)
-	if len(summaries) != 1 {
-		t.Fatalf("list features len = %d, want 1", len(summaries))
-	}
-	summaryDTO := summaries[0].(map[string]any)
-	summaryCycle, ok := summaryDTO["cycle"].(map[string]any)
-	if !ok {
-		t.Fatalf("summary feature cycle missing in %+v", summaryDTO)
-	}
-	if summaryCycle["type"] != actionRebase || summaryCycle["status"] != feature.RepoCycleRunning || summaryCycle["count"].(float64) != 1 {
-		t.Fatalf("summary feature cycle = %+v, want running rebase #1", summaryCycle)
-	}
-	if summaryCycle["phase"] != "inspect_rebase" {
-		t.Fatalf("summary feature cycle phase = %v, want inspect_rebase", summaryCycle["phase"])
-	}
-
-	detail := getJSONMap(t, handler, "/api/v1/features/"+f.ID)
-	featureDTO := detail[entityFeature].(map[string]any)
-	cycle, ok := featureDTO["cycle"].(map[string]any)
-	if !ok {
-		t.Fatalf("detail feature cycle missing in %+v", featureDTO)
-	}
-	if cycle["type"] != actionRebase || cycle["status"] != feature.RepoCycleRunning || cycle["count"].(float64) != 1 {
-		t.Fatalf("detail feature cycle = %+v, want running rebase #1", cycle)
-	}
-	if cycle["phase"] != "inspect_rebase" {
-		t.Fatalf("detail feature cycle phase = %v, want inspect_rebase", cycle["phase"])
-	}
-}
-
-func TestActiveRepoCycleStatusRetainsFailedCycleContext(t *testing.T) {
-	t.Parallel()
-
-	if !isActiveRepoCycleStatus(feature.RepoCycleFailed) {
-		t.Fatal("failed repository cycle was hidden from the feature read model")
-	}
-}
-
-func TestFeatureDetailProjectsActiveFeatureRebaseOperation(t *testing.T) {
-	store, f := seedReadFeature(t)
-	f.ID = "feat-rebase"
-	f.Status = feature.StatusCodeReady
-	f.Repos = []feature.FeatureRepo{{Name: repoNameAPI}, {Name: repoNameWeb}}
-	f.ActiveCycle = &feature.CycleState{Type: feature.CycleRebase, Status: feature.RepoCycleRunning, Count: 2}
-	f.SetActiveCycleType(feature.CycleRebase)
-	f.RebaseOperation = &feature.RebaseOperationState{
-		Stage: feature.RebaseStageHarness,
-		Repos: map[string]*feature.RebaseRepoProgress{
-			repoNameAPI: {Status: feature.RebaseRepoStatusRebasing, RebaseTarget: "main"},
-			repoNameWeb: {Status: feature.RebaseRepoStatusUpToDate, RebaseTarget: "main"},
-		},
-	}
-	if err := store.Save(f); err != nil {
-		t.Fatalf("save feature: %v", err)
-	}
-	opts := baseReadHandlerOptions(store)
-	opts.FeatureStore = store
-	opts.Freshness = StaticFreshnessProvider(map[string]RepoFreshness{
-		repoNameAPI: RepoFreshnessLocalChanges,
-		repoNameWeb: RepoFreshnessInSync,
-	})
-	handler := NewHandler(opts)
-
-	body := getJSONMap(t, handler, "/api/v1/features/feat-rebase")
-	featureBody := body[entityFeature].(map[string]any)
-	cycle := featureBody["cycle"].(map[string]any)
-	if cycle["type"] != actionRebase || cycle["status"] != feature.RepoCycleRunning {
-		t.Fatalf("cycle = %+v, want active rebase", cycle)
-	}
-	if cycle["phase"] != "inspect_rebase" {
-		t.Fatalf("cycle phase = %v, want inspect_rebase", cycle["phase"])
-	}
-	status := map[string]RepoStatus{}
-	for _, raw := range featureBody["repo_status"].([]any) {
-		repo := raw.(map[string]any)
-		name := repo["name"].(string)
-		status[name] = RepoStatus{
-			Name:         name,
-			Freshness:    repo["freshness"].(string),
-			RebaseStatus: repo["rebase_status"].(string),
-		}
-	}
-	if status[repoNameAPI].RebaseStatus != "rebasing" || status[repoNameAPI].Freshness != "local changes" {
-		t.Fatalf("api status = %+v", status[repoNameAPI])
-	}
-	if status[repoNameWeb].RebaseStatus != "up_to_date" || status[repoNameWeb].Freshness != "in sync" {
-		t.Fatalf("web status = %+v", status[repoNameWeb])
-	}
-}
-
-func TestFeatureDetailProjectsFeatureCycleStart(t *testing.T) {
-	t.Parallel()
-
-	for _, cycleType := range []feature.RepoCycleType{feature.CycleRebase} {
-		cycleType := cycleType
-		t.Run(string(cycleType), func(t *testing.T) {
-			t.Parallel()
-
-			store, f := seedReadFeature(t)
-			startedAt := time.Date(2026, time.July, 26, 12, 34, 56, 0, time.UTC)
-			f.ID = "feat-" + string(cycleType)
-			f.Status = feature.StatusPublished
-			f.ActiveCycle = &feature.CycleState{
-				Type:      cycleType,
-				Status:    feature.RepoCycleInterrupted,
-				Count:     3,
-				StartedAt: startedAt,
-			}
-			f.SetActiveCycleType(cycleType)
-			if err := store.Save(f); err != nil {
-				t.Fatalf("save feature: %v", err)
-			}
-			handler := NewHandler(baseReadHandlerOptions(store))
-
-			body := getJSONMap(t, handler, "/api/v1/features/"+f.ID)
-			featureBody := body[entityFeature].(map[string]any)
-			cycle := featureBody["cycle"].(map[string]any)
-			if got := cycle["started_at"]; got != startedAt.Format(time.RFC3339) {
-				t.Fatalf("cycle started_at = %v, want %s", got, startedAt.Format(time.RFC3339))
-			}
-		})
-	}
-}
-
-func TestFeatureDetailProjectsFailedRebasePublishContext(t *testing.T) {
-	t.Parallel()
-
-	store, f := seedReadFeature(t)
-	startedAt := time.Date(2026, time.July, 26, 12, 34, 56, 0, time.UTC)
-	f.ID = "feat-rebase-failed"
-	f.Status = feature.StatusPublished
-	f.ActiveCycle = &feature.CycleState{
-		Type:      feature.CycleRebase,
-		Status:    feature.RepoCycleFailed,
-		Count:     3,
-		LastError: "force push rejected by the remote",
-	}
-	f.SetActiveCycleType(feature.CycleRebase)
-	f.RebaseOperation = &feature.RebaseOperationState{
-		Stage:     feature.RebaseStagePublish,
-		StartedAt: startedAt,
-	}
-	if err := store.Save(f); err != nil {
-		t.Fatalf("save feature: %v", err)
-	}
-	handler := NewHandler(baseReadHandlerOptions(store))
-
-	body := getJSONMap(t, handler, "/api/v1/features/"+f.ID)
-	featureBody := body[entityFeature].(map[string]any)
-	cycle := featureBody["cycle"].(map[string]any)
-	if cycle["phase"] != "publish" {
-		t.Fatalf("cycle phase = %v, want publish", cycle["phase"])
-	}
-	if cycle["last_error"] != "force push rejected by the remote" {
-		t.Fatalf("cycle last_error = %v", cycle["last_error"])
-	}
-	if cycle["started_at"] != startedAt.Format(time.RFC3339) {
-		t.Fatalf("cycle started_at = %v, want %s", cycle["started_at"], startedAt.Format(time.RFC3339))
-	}
-}
-
 func TestTranscriptDTOsAssignBlockIndexToConversationRows(t *testing.T) {
 	t.Parallel()
 
@@ -1508,7 +1323,7 @@ func TestChildFeatureActionCatalogRestricted(t *testing.T) {
 
 	t.Run("setup complete child", func(t *testing.T) {
 		t.Parallel()
-		f := actionCatalogTestFeature(feature.StatusCreated, feature.Checkpoints{}, &publishable, nil)
+		f := actionCatalogTestFeature(feature.StatusCreated, feature.Checkpoints{}, &publishable)
 		f.Pipeline = feature.PipelineMedium
 		f.Parent = &feature.ChildRelationship{ParentID: "parent-1", Kind: feature.ChildKindRefactor}
 
@@ -1529,7 +1344,7 @@ func TestChildFeatureActionCatalogRestricted(t *testing.T) {
 
 	t.Run("queued child reports setup_incomplete", func(t *testing.T) {
 		t.Parallel()
-		f := actionCatalogTestFeature(feature.StatusSettingUpWorktrees, feature.Checkpoints{}, &publishable, nil)
+		f := actionCatalogTestFeature(feature.StatusSettingUpWorktrees, feature.Checkpoints{}, &publishable)
 		f.Pipeline = feature.PipelineMedium
 		f.Parent = &feature.ChildRelationship{ParentID: "parent-1", Kind: feature.ChildKindRefactor}
 
@@ -1542,7 +1357,7 @@ func TestChildFeatureActionCatalogRestricted(t *testing.T) {
 
 	t.Run("large child is eligible to execute", func(t *testing.T) {
 		t.Parallel()
-		f := actionCatalogTestFeature(feature.StatusCreated, feature.Checkpoints{}, &publishable, nil)
+		f := actionCatalogTestFeature(feature.StatusCreated, feature.Checkpoints{}, &publishable)
 		f.Pipeline = feature.PipelineLarge
 		f.Parent = &feature.ChildRelationship{ParentID: "parent-1", Kind: feature.ChildKindRefactor}
 
@@ -1559,7 +1374,7 @@ func TestChildFeatureActionCatalogRestricted(t *testing.T) {
 
 	t.Run("multi-repo child no longer restricted by repo count", func(t *testing.T) {
 		t.Parallel()
-		f := actionCatalogTestFeature(feature.StatusCreated, feature.Checkpoints{}, &publishable, nil)
+		f := actionCatalogTestFeature(feature.StatusCreated, feature.Checkpoints{}, &publishable)
 		f.Pipeline = feature.PipelineMedium
 		f.Repos = append(f.Repos, feature.FeatureRepo{Name: "repoB", Publishable: &publishable})
 		f.Parent = &feature.ChildRelationship{ParentID: "parent-1", Kind: feature.ChildKindRefactor}
@@ -1576,7 +1391,7 @@ func TestChildFeatureActionCatalogRestricted(t *testing.T) {
 
 	t.Run("settled closed child refuses execution", func(t *testing.T) {
 		t.Parallel()
-		f := actionCatalogTestFeature(feature.StatusReviewPassed, feature.Checkpoints{}, &publishable, nil)
+		f := actionCatalogTestFeature(feature.StatusReviewPassed, feature.Checkpoints{}, &publishable)
 		f.Pipeline = feature.PipelineMedium
 		closed := time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
 		f.Parent = &feature.ChildRelationship{
@@ -1604,7 +1419,7 @@ func TestChildFeatureActionCatalogRestricted(t *testing.T) {
 
 	t.Run("closed child cleanup tail remains automatic", func(t *testing.T) {
 		t.Parallel()
-		f := actionCatalogTestFeature(feature.StatusReviewPassed, feature.Checkpoints{}, &publishable, nil)
+		f := actionCatalogTestFeature(feature.StatusReviewPassed, feature.Checkpoints{}, &publishable)
 		f.Pipeline = feature.PipelineMedium
 		closed := time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
 		f.Parent = &feature.ChildRelationship{
@@ -1633,7 +1448,7 @@ func TestChildFeatureActionCatalogRestricted(t *testing.T) {
 
 	t.Run("failed setup child offers retry", func(t *testing.T) {
 		t.Parallel()
-		f := actionCatalogTestFeature(feature.StatusFailed, feature.Checkpoints{}, &publishable, nil)
+		f := actionCatalogTestFeature(feature.StatusFailed, feature.Checkpoints{}, &publishable)
 		f.Parent = &feature.ChildRelationship{ParentID: "parent-1", Kind: feature.ChildKindRefactor}
 		// SetRun syncs run->shadows, so install the run before stamping
 		// shadow fields like FailureType.
@@ -1663,7 +1478,7 @@ func TestFeatureDetailActionCatalogStateMatrix(t *testing.T) {
 	}{
 		{
 			name: "publishable code ready",
-			f:    actionCatalogTestFeature(feature.StatusCodeReady, feature.Checkpoints{}, &publishable, nil),
+			f:    actionCatalogTestFeature(feature.StatusCodeReady, feature.Checkpoints{}, &publishable),
 			want: map[string]struct {
 				enabled      bool
 				disabledCode string
@@ -1675,7 +1490,7 @@ func TestFeatureDetailActionCatalogStateMatrix(t *testing.T) {
 		},
 		{
 			name: "manual publish code ready",
-			f:    actionCatalogTestFeature(feature.StatusCodeReady, feature.Checkpoints{ManualPublish: true}, &publishable, nil),
+			f:    actionCatalogTestFeature(feature.StatusCodeReady, feature.Checkpoints{ManualPublish: true}, &publishable),
 			want: map[string]struct {
 				enabled      bool
 				disabledCode string
@@ -1687,7 +1502,7 @@ func TestFeatureDetailActionCatalogStateMatrix(t *testing.T) {
 		},
 		{
 			name: "local only code ready",
-			f:    actionCatalogTestFeature(feature.StatusCodeReady, feature.Checkpoints{}, &localOnly, nil),
+			f:    actionCatalogTestFeature(feature.StatusCodeReady, feature.Checkpoints{}, &localOnly),
 			want: map[string]struct {
 				enabled      bool
 				disabledCode string
@@ -1698,7 +1513,7 @@ func TestFeatureDetailActionCatalogStateMatrix(t *testing.T) {
 		},
 		{
 			name: "local only created",
-			f:    actionCatalogTestFeature(feature.StatusCreated, feature.Checkpoints{}, &localOnly, nil),
+			f:    actionCatalogTestFeature(feature.StatusCreated, feature.Checkpoints{}, &localOnly),
 			want: map[string]struct {
 				enabled      bool
 				disabledCode string
@@ -1709,7 +1524,7 @@ func TestFeatureDetailActionCatalogStateMatrix(t *testing.T) {
 		{
 			name: "medium created cannot rewind just because upgrade targets exist",
 			f: func() *feature.Feature {
-				f := actionCatalogTestFeature(feature.StatusCreated, feature.Checkpoints{}, &publishable, nil)
+				f := actionCatalogTestFeature(feature.StatusCreated, feature.Checkpoints{}, &publishable)
 				f.Pipeline = feature.PipelineMedium
 				return f
 			}(),
@@ -1722,7 +1537,7 @@ func TestFeatureDetailActionCatalogStateMatrix(t *testing.T) {
 		},
 		{
 			name: "published",
-			f:    actionCatalogTestFeature(feature.StatusPublished, feature.Checkpoints{}, &publishable, nil),
+			f:    actionCatalogTestFeature(feature.StatusPublished, feature.Checkpoints{}, &publishable),
 			want: map[string]struct {
 				enabled      bool
 				disabledCode string
@@ -1734,78 +1549,9 @@ func TestFeatureDetailActionCatalogStateMatrix(t *testing.T) {
 			},
 		},
 		{
-			name: "published active cycle",
-			f: actionCatalogTestFeature(feature.StatusPublished, feature.Checkpoints{}, &publishable, map[string]*feature.RepoCycleState{
-				repoNameSelf: {Type: feature.CycleRebase, Status: feature.RepoCycleRunning},
-			}),
-			want: map[string]struct {
-				enabled      bool
-				disabledCode string
-			}{
-				actionPauseStop: {enabled: true},
-				actionRebase:    {disabledCode: disabledCycleActive},
-			},
-		},
-		{
-			name: "published active feature cycle",
-			f: func() *feature.Feature {
-				f := actionCatalogTestFeature(feature.StatusPublished, feature.Checkpoints{}, &publishable, nil)
-				f.SetActiveCycleType(feature.CycleRebase)
-				f.ActiveCycle = &feature.CycleState{Type: feature.CycleRebase, Status: feature.RepoCycleRunning}
-				return f
-			}(),
-			want: map[string]struct {
-				enabled      bool
-				disabledCode string
-			}{
-				actionPauseStop: {enabled: true},
-				actionRebase:    {disabledCode: disabledCycleActive},
-			},
-		},
-		{
-			name: "published failed feature rebase",
-			f: func() *feature.Feature {
-				f := actionCatalogTestFeature(feature.StatusPublished, feature.Checkpoints{}, &publishable, nil)
-				f.SetActiveCycleType(feature.CycleRebase)
-				f.ActiveCycle = &feature.CycleState{Type: feature.CycleRebase, Status: feature.RepoCycleFailed}
-				f.RebaseOperation = &feature.RebaseOperationState{Stage: feature.RebaseStageFinalReview}
-				return f
-			}(),
-			want: map[string]struct {
-				enabled      bool
-				disabledCode string
-			}{
-				actionPauseStop: {disabledCode: "not_running"},
-				actionRebase:    {enabled: true},
-				actionRefactor:  {enabled: true},
-				actionRetry:     {enabled: true},
-			},
-		},
-		{
-			name: "published interrupted legacy cycle",
-			f: func() *feature.Feature {
-				f := actionCatalogTestFeature(feature.StatusPublished, feature.Checkpoints{}, &publishable, map[string]*feature.RepoCycleState{
-					repoNameSelf: {Type: "tweak", Status: feature.RepoCycleInterrupted},
-				})
-				f.SetActiveCycleType("tweak")
-				f.ActiveCycle = &feature.CycleState{Type: "tweak", Status: feature.RepoCycleInterrupted}
-				return f
-			}(),
-			want: map[string]struct {
-				enabled      bool
-				disabledCode string
-			}{
-				actionPauseStop: {disabledCode: "not_running"},
-				// Refactor now launches a child feature, so a lingering
-				// legacy cycle no longer blocks it (mirrors
-				// feature.CreateRefactorChild validation).
-				actionRefactor: {enabled: true},
-			},
-		},
-		{
 			name: "feature gate can stop",
 			f: func() *feature.Feature {
-				f := actionCatalogTestFeature(feature.StatusNeedUserInput, feature.Checkpoints{}, &publishable, nil)
+				f := actionCatalogTestFeature(feature.StatusNeedUserInput, feature.Checkpoints{}, &publishable)
 				f.PendingNeedUserInputPath = "/tmp/need-user-input.yaml"
 				return f
 			}(),
@@ -1819,19 +1565,19 @@ func TestFeatureDetailActionCatalogStateMatrix(t *testing.T) {
 		},
 		{
 			name: "running cleanup disabled",
-			f:    actionCatalogTestFeature(feature.StatusImplementing, feature.Checkpoints{}, &publishable, nil),
+			f:    actionCatalogTestFeature(feature.StatusImplementing, feature.Checkpoints{}, &publishable),
 			want: map[string]struct {
 				enabled      bool
 				disabledCode string
 			}{
-				actionCleanup: {disabledCode: feature.RepoCycleRunning},
+				actionCleanup: {disabledCode: "running"},
 				actionDelete:  {enabled: true},
 			},
 		},
 		{
 			name: "medium plan review can still open rewind upgrade",
 			f: func() *feature.Feature {
-				f := actionCatalogTestFeature(feature.StatusPlanNeedsReview, feature.Checkpoints{}, &publishable, nil)
+				f := actionCatalogTestFeature(feature.StatusPlanNeedsReview, feature.Checkpoints{}, &publishable)
 				f.Pipeline = feature.PipelineMedium
 				return f
 			}(),
@@ -1869,7 +1615,7 @@ func TestFeatureDetailActionCatalogStateMatrix(t *testing.T) {
 func TestFeatureDetailActionCatalogMediumPlanReviewAdvertisesPlanAndUpgradeTargets(t *testing.T) {
 	t.Parallel()
 	publishable := true
-	f := actionCatalogTestFeature(feature.StatusPlanNeedsReview, feature.Checkpoints{}, &publishable, nil)
+	f := actionCatalogTestFeature(feature.StatusPlanNeedsReview, feature.Checkpoints{}, &publishable)
 	f.Pipeline = feature.PipelineMedium
 
 	rewind := actionDTOByID(t, actionCatalogDTOs(f), actionRewind)
@@ -1889,7 +1635,7 @@ func TestFeatureDetailActionCatalogMediumPlanReviewAdvertisesPlanAndUpgradeTarge
 func TestFeatureDetailActionCatalogDesignReviewExcludesUnstartedPlan(t *testing.T) {
 	t.Parallel()
 	publishable := true
-	f := actionCatalogTestFeature(feature.StatusDesignNeedsReview, feature.Checkpoints{}, &publishable, nil)
+	f := actionCatalogTestFeature(feature.StatusDesignNeedsReview, feature.Checkpoints{}, &publishable)
 	f.CurrentPhase = feature.PhaseDesign
 	f.Pipeline = feature.PipelineMoonshot
 
@@ -3305,7 +3051,7 @@ func stringValue(v any) string {
 	return ""
 }
 
-func actionCatalogTestFeature(status feature.Status, checkpoints feature.Checkpoints, publishable *bool, cycles map[string]*feature.RepoCycleState) *feature.Feature {
+func actionCatalogTestFeature(status feature.Status, checkpoints feature.Checkpoints, publishable *bool) *feature.Feature {
 	return &feature.Feature{
 		ID:          "feat-actions",
 		Status:      status,
@@ -3314,7 +3060,6 @@ func actionCatalogTestFeature(status feature.Status, checkpoints feature.Checkpo
 			Name:        repoNameSelf,
 			Publishable: publishable,
 		}},
-		RepoCycles: cycles,
 	}
 }
 

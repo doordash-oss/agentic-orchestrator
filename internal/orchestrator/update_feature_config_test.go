@@ -206,18 +206,6 @@ func TestUpdateFeatureConfig_NonQuiescentWritesAllThreeAxes(t *testing.T) {
 		{"research-needs-review", func(f *feature.Feature) {
 			f.Status = feature.StatusResearchNeedsReview
 		}},
-		{"active-repo-cycle-running", func(f *feature.Feature) {
-			f.Status = feature.StatusPublished
-			f.RepoCycles = map[string]*feature.RepoCycleState{
-				repoName: {Status: feature.RepoCycleRunning},
-			}
-		}},
-		{"active-repo-cycle-reviewing", func(f *feature.Feature) {
-			f.Status = feature.StatusPublished
-			f.RepoCycles = map[string]*feature.RepoCycleState{
-				repoName: {Status: feature.RepoCycleReviewing},
-			}
-		}},
 	}
 
 	for _, tc := range cases {

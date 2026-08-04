@@ -79,7 +79,7 @@ func PhaseTestingContractPath(stateDir string, f *feature.Feature, phase int) st
 	return filepath.Join(PhaseTestingContractDir(stateDir, f, phase), "testing-contract.yaml")
 }
 
-func cycleArtifactRoot(stateDir string, f *feature.Feature, repoName string, cycleType feature.RepoCycleType) string {
+func cycleArtifactRoot(stateDir string, f *feature.Feature, repoName string, cycleType string) string {
 	root := filepath.Join(ActiveRunDir(stateDir, f), cycleArtifactDirName(f, repoName, cycleType))
 	if repoName != "" {
 		root = filepath.Join(root, repoName)
@@ -89,13 +89,13 @@ func cycleArtifactRoot(stateDir string, f *feature.Feature, repoName string, cyc
 
 // CycleTestingContractPath returns the absolute path to a cycle-scoped
 // compiled testing contract artifact.
-func CycleTestingContractPath(stateDir string, f *feature.Feature, repoName string, cycleType feature.RepoCycleType) string {
+func CycleTestingContractPath(stateDir string, f *feature.Feature, repoName string, cycleType string) string {
 	return filepath.Join(cycleArtifactRoot(stateDir, f, repoName, cycleType), "testing-contract.yaml")
 }
 
 // LatestCycleImplementationVerificationReportPath returns the most recent
 // implementation verification report under a cycle-scoped implement root.
-func LatestCycleImplementationVerificationReportPath(stateDir string, f *feature.Feature, repoName string, cycleType feature.RepoCycleType) string {
+func LatestCycleImplementationVerificationReportPath(stateDir string, f *feature.Feature, repoName string, cycleType string) string {
 	implementDir := filepath.Join(cycleArtifactRoot(stateDir, f, repoName, cycleType), "implement")
 	iteration := NewArtifactManager(implementDir).LatestIteration()
 	if iteration == 0 {

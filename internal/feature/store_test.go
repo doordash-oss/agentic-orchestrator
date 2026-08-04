@@ -2006,33 +2006,9 @@ artifacts: {}
 	if err != nil {
 		t.Fatalf("Load() error = %v; want nil (legacy refactor keys must be ignored)", err)
 	}
-	// Legacy Refactor cycle state must be dropped on load: no active cycle
-	// type, no feature-level active cycle, no Refactor repo-cycle entries.
-	if got := string(loaded.ActiveCycleType()); got != "" {
-		t.Errorf("ActiveCycleType() = %q, want empty for dropped refactor cycle", got)
-	}
-	if loaded.ActiveCycle != nil {
-		t.Errorf("ActiveCycle = %+v, want nil for dropped refactor cycle", loaded.ActiveCycle)
-	}
-	if _, ok := loaded.RepoCycles["repo-a"]; ok {
-		t.Errorf("RepoCycles[repo-a] = %+v, want absent (refactor entry must be dropped)", loaded.RepoCycles["repo-a"])
-	}
-	if rc := loaded.RepoCycles["repo-b"]; rc == nil || rc.Type != CycleRebase || rc.Status != RepoCycleFailed {
-		t.Errorf("RepoCycles[repo-b] = %+v, want surviving failed rebase entry preserved", rc)
-	}
+	// Legacy cycle state must be dropped on load.
 	if loaded.HasActiveRepoCycles() {
 		t.Error("HasActiveRepoCycles() = true, want false for dropped refactor cycle")
-	}
-	// No artifact-cycle prefix may engage for dropped cycle state.
-	if got := loaded.CyclePrefix(); got != "" {
-		t.Errorf("CyclePrefix() = %q, want empty for dropped refactor cycle", got)
-	}
-	loadedRun, err := store.LoadRun(featureID, 1)
-	if err != nil {
-		t.Fatalf("LoadRun: %v", err)
-	}
-	if got := loadedRun.CyclePrefix(); got != "" {
-		t.Errorf("Run.CyclePrefix() = %q, want empty for dropped refactor cycle", got)
 	}
 
 	// Round-trip save and re-read the raw run.yaml: dropped keys and cycle
@@ -2144,32 +2120,8 @@ artifacts: {}
 	if err != nil {
 		t.Fatalf("Load() error = %v; want nil (legacy review-comments keys must be ignored)", err)
 	}
-	if got := string(loaded.ActiveCycleType()); got != "" {
-		t.Errorf("ActiveCycleType() = %q, want empty for dropped review-comments cycle", got)
-	}
-	if loaded.ActiveCycle != nil {
-		t.Errorf("ActiveCycle = %+v, want nil for dropped review-comments cycle", loaded.ActiveCycle)
-	}
-	for _, repoName := range []string{"repo-active", "repo-history"} {
-		if _, ok := loaded.RepoCycles[repoName]; ok {
-			t.Errorf("RepoCycles[%s] = %+v, want absent (review-comments entry must be dropped)", repoName, loaded.RepoCycles[repoName])
-		}
-	}
-	if rc := loaded.RepoCycles["repo-rebase"]; rc == nil || rc.Type != CycleRebase || rc.Status != RepoCycleFailed || rc.Count != 2 {
-		t.Errorf("RepoCycles[repo-rebase] = %+v, want surviving failed rebase entry preserved", rc)
-	}
 	if loaded.HasActiveRepoCycles() {
 		t.Error("HasActiveRepoCycles() = true, want false after active review-comments state is dropped")
-	}
-	if got := loaded.CyclePrefix(); got != "" {
-		t.Errorf("CyclePrefix() = %q, want empty for dropped review-comments cycle", got)
-	}
-	loadedRun, err := store.LoadRun(featureID, 1)
-	if err != nil {
-		t.Fatalf("LoadRun: %v", err)
-	}
-	if got := loadedRun.CyclePrefix(); got != "" {
-		t.Errorf("Run.CyclePrefix() = %q, want empty for dropped review-comments cycle", got)
 	}
 
 	if err := store.Save(loaded); err != nil {
@@ -2187,13 +2139,105 @@ artifacts: {}
 		"plan_path",
 		"iteration",
 		"pending_need_user_input_path",
+		"active_cycle",
+		"repo_cycles",
 	} {
 		if strings.Contains(savedStr, droppedKey) {
 			t.Errorf("saved run.yaml still contains %q; dropped legacy state should not be re-emitted:\n%s", droppedKey, savedStr)
 		}
 	}
-	if !strings.Contains(savedStr, "type: rebase") || !strings.Contains(savedStr, "count: 2") {
-		t.Errorf("saved run.yaml lost surviving rebase cycle entry:\n%s", savedStr)
+}
+
+// TestStoreLoadDropsLegacyRebaseCycleState verifies that a legacy run.yaml
+// containing all the removed rebase cycle fields loads cleanly and that a
+// round-trip save does not re-emit any of the dropped keys.
+func TestStoreLoadDropsLegacyRebaseCycleState(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
+	dir := t.TempDir()
+	store := NewStore(dir)
+
+	const featureID = "rebase-legacy-001"
+	featureDir := filepath.Join(dir, featureID)
+	runDir := filepath.Join(featureDir, "runs", "run-001")
+	if err := os.MkdirAll(runDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	featureYAML := fmt.Sprintf(`id: %s
+name: Legacy Rebase
+slug: legacy-rebase
+description: pre-removal state with rebase cycle keys
+created: 2026-01-01T00:00:00Z
+status: Published
+current_phase: 6
+repos:
+  - name: repo-a
+    path: /tmp/a
+    worktree_path: ""
+    branch: ""
+models: {}
+exit_criteria: ""
+inquireness: medium
+permissions_queue: []
+help_queue: []
+active_run: 1
+run_count: 1
+schema_version: %d
+`, featureID, SchemaVersionCurrent)
+	if err := os.WriteFile(filepath.Join(featureDir, "feature.yaml"), []byte(featureYAML), 0o644); err != nil {
+		t.Fatalf("write feature.yaml: %v", err)
+	}
+	runYAML := `run_number: 1
+started_at: 2026-01-01T00:00:00Z
+rebase_count: 2
+active_cycle_type: rebase
+active_cycle:
+  type: rebase
+  status: running
+  count: 1
+  iteration: 1
+repo_cycles:
+  repo-a:
+    type: rebase
+    status: running
+    count: 1
+    iteration: 1
+rebase_operation:
+  stage: harness
+  repos: {}
+artifacts: {}
+`
+	if err := os.WriteFile(filepath.Join(runDir, "run.yaml"), []byte(runYAML), 0o644); err != nil {
+		t.Fatalf("write run.yaml: %v", err)
+	}
+
+	loaded, err := store.Load(featureID)
+	if err != nil {
+		t.Fatalf("Load() error = %v; want nil (legacy rebase cycle keys must be ignored)", err)
+	}
+	if loaded.HasActiveRepoCycles() {
+		t.Error("HasActiveRepoCycles() = true, want false for dropped rebase cycle")
+	}
+
+	if err := store.Save(loaded); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	saved, err := os.ReadFile(filepath.Join(runDir, "run.yaml"))
+	if err != nil {
+		t.Fatalf("ReadFile after Save: %v", err)
+	}
+	savedStr := string(saved)
+	for _, droppedKey := range []string{
+		"rebase_count",
+		"active_cycle_type",
+		"active_cycle",
+		"repo_cycles",
+		"rebase_operation",
+	} {
+		if strings.Contains(savedStr, droppedKey) {
+			t.Errorf("saved run.yaml still contains %q; dropped legacy rebase state should not be re-emitted:\n%s", droppedKey, savedStr)
+		}
 	}
 }
 

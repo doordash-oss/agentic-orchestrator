@@ -314,9 +314,6 @@ func RunFeatureCycleFinalReviewLoop(cfg OrchestratorConfig, sm ports.SessionMana
 	// programming error for the post-cycle entry, but kept safe for tests).
 	runDir := ActiveRunDir(cfg.StateDir, cfg.Feature)
 	artifactDir := filepath.Join(runDir, feature.PhaseReview.DirName())
-	if prefix := cfg.Feature.CyclePrefix(); prefix != "" {
-		artifactDir = filepath.Join(runDir, prefix, feature.PhaseReview.DirName())
-	}
 
 	// Mark mid-flight phase status at the feature level so observers can
 	// surface "final reviewing" without per-repo lying.

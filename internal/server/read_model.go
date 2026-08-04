@@ -65,10 +65,6 @@ const (
 	actionInputKindString = "string"
 )
 
-// disabledCycleActive is the ActionDisabledReason.Code used when a
-// post-publish action is blocked by another active feature cycle.
-const disabledCycleActive = "cycle_active"
-
 // disabledNotLocalOnly is the ActionDisabledReason.Code used when merge
 // is requested on a feature that is not local-only.
 const disabledNotLocalOnly = "not_local_only"
@@ -558,106 +554,7 @@ func relationshipChildDTOs(children []*feature.Feature) []RelationshipChild {
 }
 
 func activeCycleDTO(f *feature.Feature) *Cycle {
-	if f == nil {
-		return nil
-	}
-	if f.ActiveCycle != nil && f.ActiveCycle.Type.IsValid() {
-		dto := &Cycle{
-			Type:      string(f.ActiveCycle.Type),
-			Status:    f.ActiveCycle.Status,
-			Count:     f.ActiveCycle.Count,
-			Iteration: f.ActiveCycle.Iteration,
-			Phase:     activeCyclePhase(f, f.ActiveCycle.Type),
-			LastError: SafeDisplayText(f.ActiveCycle.LastError, 240),
-		}
-		if !f.ActiveCycle.StartedAt.IsZero() {
-			startedAt := f.ActiveCycle.StartedAt
-			dto.StartedAt = &startedAt
-		} else if f.RebaseOperation != nil && !f.RebaseOperation.StartedAt.IsZero() {
-			startedAt := f.RebaseOperation.StartedAt
-			dto.StartedAt = &startedAt
-		}
-		return dto
-	}
-	for _, repo := range f.Repos {
-		if dto := activeRepoCycleDTO(f, f.RepoCycles[repo.Name]); dto != nil {
-			return dto
-		}
-	}
-	if len(f.RepoCycles) == 0 {
-		return nil
-	}
-	names := make([]string, 0, len(f.RepoCycles))
-	for repoName := range f.RepoCycles {
-		names = append(names, repoName)
-	}
-	sort.Strings(names)
-	for _, repoName := range names {
-		if dto := activeRepoCycleDTO(f, f.RepoCycles[repoName]); dto != nil {
-			return dto
-		}
-	}
 	return nil
-}
-
-func activeRepoCycleDTO(f *feature.Feature, cycle *feature.RepoCycleState) *Cycle {
-	if cycle == nil || !cycle.Type.IsValid() || !isActiveRepoCycleStatus(cycle.Status) {
-		return nil
-	}
-	return &Cycle{
-		Type:   string(cycle.Type),
-		Status: cycle.Status,
-		Count:  activeCycleCount(f, cycle),
-		Phase:  activeCyclePhase(f, cycle.Type),
-	}
-}
-
-func activeCyclePhase(f *feature.Feature, cycleType feature.RepoCycleType) string {
-	switch cycleType {
-	case feature.CycleRebase:
-		if f != nil && f.RebaseOperation != nil {
-			switch f.RebaseOperation.Stage {
-			case feature.RebaseStageSmartRebase:
-				return "resolve_conflicts"
-			case feature.RebaseStageFinalReview:
-				return "final_review"
-			case feature.RebaseStagePublish:
-				return "publish"
-			}
-		}
-		return "inspect_rebase"
-	default:
-		return ""
-	}
-}
-
-func isActiveRepoCycleStatus(status string) bool {
-	switch status {
-	case feature.RepoCycleRunning,
-		feature.RepoCycleReviewing,
-		feature.RepoCycleNeedUserInput,
-		feature.RepoCycleFailed:
-		return true
-	default:
-		return false
-	}
-}
-
-func activeCycleCount(f *feature.Feature, cycle *feature.RepoCycleState) int {
-	if f == nil || cycle == nil {
-		return 0
-	}
-	count := cycle.Count
-	switch cycle.Type {
-	case feature.CycleRebase:
-		if f.RebaseCount() > count {
-			count = f.RebaseCount()
-		}
-	}
-	if count <= 0 && cycle.Type != "" {
-		return 1
-	}
-	return count
 }
 
 func actionCatalogDTOs(f *feature.Feature) []Action {
@@ -678,7 +575,7 @@ func actionCatalogDTOsWithChildGuard(f *feature.Feature, hasActiveChild bool) []
 	status := f.Status
 	running := status.IsRunning()
 	cyclePresent := hasOwningCycle(f)
-	stoppableCycle := f.HasActiveRepoCycles() || hasActiveFeatureCycle(f)
+	stoppableCycle := false
 	publishedOrManualReady := status == feature.StatusPublished ||
 		(status == feature.StatusCodeReady && !f.Checkpoints.AutoPublish())
 
@@ -723,8 +620,7 @@ func actionCatalogDTOsWithChildGuard(f *feature.Feature, hasActiveChild bool) []
 	canRewind := !running && (len(feature.RewindChoicesForFeature(f)) > 0 || hasRewindUpgradeTarget(f))
 	canPostPublishCycle := publishedOrManualReady && !cyclePresent
 	canReviewFeedback := canPostPublishCycle && f.IsPublishable() && featureHasPullRequest(f)
-	canRetry := status == feature.StatusFailed ||
-		(f.ActiveCycle != nil && f.ActiveCycle.Status == feature.RepoCycleFailed)
+	canRetry := status == feature.StatusFailed
 	canMarkDone := publishedOrManualReady
 	canCleanup := !running
 	canDelete := true
@@ -765,7 +661,7 @@ func actionCatalogDTOsWithChildGuard(f *feature.Feature, hasActiveChild bool) []
 		action(actionStart, canStart, featureScope, nil, childGuardReason(canStart, disabledStatusReason(status))...),
 		action(actionPauseStop, canStop, featureScope, nil, childGuardReason(canStop, ActionDisabledReason{Code: "not_running", Message: "feature has no active work to pause or stop"})...),
 		action(actionResume, canResume, featureScope, nil, childGuardReason(canResume, ActionDisabledReason{Code: "not_paused", Message: "feature has no paused session or input gate"})...),
-		action(actionRestart, canRestart, featureScope, nil, childGuardReason(canRestart, ActionDisabledReason{Code: feature.RepoCycleRunning, Message: "feature must stop before restart"})...),
+		action(actionRestart, canRestart, featureScope, nil, childGuardReason(canRestart, ActionDisabledReason{Code: "running", Message: "feature must stop before restart"})...),
 		action(actionPublish, canPublish, featureScope, nil, childGuardReason(canPublish, publishDisabledReason(f))...),
 		action(actionMerge, canMerge, featureScope, nil, childGuardReason(canMerge, mergeDisabledReason(f))...),
 		action(actionRewind, canRewind, featureScope, []ActionInput{
@@ -780,7 +676,7 @@ func actionCatalogDTOsWithChildGuard(f *feature.Feature, hasActiveChild bool) []
 		action(actionMarkDone, canMarkDone, featureScope, nil, childGuardReason(canMarkDone, ActionDisabledReason{Code: "not_complete", Message: "feature is not ready to mark done"})...),
 		action(actionCleanup, canCleanup, featureScope, []ActionInput{
 			{Name: "target", Kind: actionInputKindEnum, Required: false, Options: []string{"worktrees", "cycles"}},
-		}, childGuardReason(canCleanup, ActionDisabledReason{Code: feature.RepoCycleRunning, Message: "cleanup is disabled while work is running"})...),
+		}, childGuardReason(canCleanup, ActionDisabledReason{Code: "running", Message: "cleanup is disabled while work is running"})...),
 		action(actionDelete, canDelete, featureScope, nil),
 	}
 }
@@ -873,7 +769,7 @@ func childActionCatalogDTOs(f *feature.Feature, status feature.Status, running, 
 		return fallback
 	}
 	runnable := blockErr == nil
-	restartStopped := ActionDisabledReason{Code: feature.RepoCycleRunning, Message: "feature must stop before restart"}
+	restartStopped := ActionDisabledReason{Code: "running", Message: "feature must stop before restart"}
 	restartReason := blockedReason(restartStopped)
 	stopped := !running && !activeCycle
 	canStart := runnable && stopped && (status == feature.StatusCreated ||
@@ -904,35 +800,10 @@ func childActionCatalogDTOs(f *feature.Feature, status feature.Status, running, 
 }
 
 func hasActiveFeatureCycle(f *feature.Feature) bool {
-	if f == nil || f.ActiveCycle == nil {
-		return false
-	}
-	switch f.ActiveCycle.Status {
-	case feature.RepoCycleRunning, feature.RepoCycleReviewing, feature.RepoCycleNeedUserInput:
-		return true
-	default:
-		return false
-	}
+	return false
 }
 
 func hasOwningCycle(f *feature.Feature) bool {
-	if f == nil {
-		return false
-	}
-	if hasActiveFeatureCycle(f) ||
-		(f.ActiveCycle != nil && f.ActiveCycle.Status == feature.RepoCycleInterrupted) {
-		return true
-	}
-	for _, cycle := range f.RepoCycles {
-		if cycle == nil {
-			continue
-		}
-		switch cycle.Status {
-		case feature.RepoCycleRunning, feature.RepoCycleReviewing,
-			feature.RepoCycleNeedUserInput, feature.RepoCycleInterrupted:
-			return true
-		}
-	}
 	return false
 }
 
@@ -992,18 +863,12 @@ func postPublishCycleDisabledReason(f *feature.Feature, cycle string) ActionDisa
 	if f == nil {
 		return disabledStatusReason(feature.StatusCreated)
 	}
-	if f.HasActiveRepoCycles() || f.ActiveCycleType() != "" {
-		return ActionDisabledReason{Code: disabledCycleActive, Message: "another feature cycle is active"}
-	}
 	return disabledStatusReason(f.Status)
 }
 
 func reviewFeedbackDisabledReason(f *feature.Feature) ActionDisabledReason {
 	if f == nil {
 		return disabledStatusReason(feature.StatusCreated)
-	}
-	if f.HasActiveRepoCycles() || f.ActiveCycleType() != "" {
-		return ActionDisabledReason{Code: disabledCycleActive, Message: "another feature cycle is active"}
 	}
 	publishedOrManualReady := f.Status == feature.StatusPublished ||
 		(f.Status == feature.StatusCodeReady && !f.Checkpoints.AutoPublish())
@@ -1179,7 +1044,6 @@ func (h *apiHandler) repoStatusDTOs(f *feature.Feature) []RepoStatus {
 	out := make([]RepoStatus, 0, len(f.Repos))
 	for _, repo := range f.Repos {
 		state := f.RepoStates[repo.Name]
-		cycle := f.RepoCycles[repo.Name]
 		dto := RepoStatus{
 			Name:        repo.Name,
 			Publishable: repo.Publishable == nil || *repo.Publishable,
@@ -1191,21 +1055,6 @@ func (h *apiHandler) repoStatusDTOs(f *feature.Feature) []RepoStatus {
 		}
 		if freshness != nil {
 			dto.Freshness = string(freshness[repo.Name])
-		}
-		if cycle != nil {
-			dto.CycleType = string(cycle.Type)
-			dto.CycleStatus = cycle.Status
-		}
-		if f.RebaseOperation != nil {
-			progress := f.RebaseOperation.Repos[repo.Name]
-			if progress != nil {
-				dto.RebaseStatus = string(progress.Status)
-				dto.RebaseTarget = SafeDisplayText(progress.RebaseTarget, 128)
-				dto.ConflictFiles = append([]string(nil), progress.ConflictFiles...)
-				if dto.LastError == "" {
-					dto.LastError = SafeDisplayText(progress.LastError, 200)
-				}
-			}
 		}
 		out = append(out, dto)
 	}
@@ -1651,13 +1500,13 @@ func sessionHasPendingAskUserControl(sess ports.SessionView) bool {
 	return false
 }
 
-func needUserInputGateDTO(featureID, scope, repoName string, cycleType feature.RepoCycleType, iteration int, inputNotifications feature.InputNotificationsMode, gatePath string) NeedUserInputGate {
+func needUserInputGateDTO(featureID, scope, repoName string, cycleType string, iteration int, inputNotifications feature.InputNotificationsMode, gatePath string) NeedUserInputGate {
 	dto := NeedUserInputGate{
 		FeatureID:          featureID,
 		Open:               true,
 		Scope:              scope,
 		RepoName:           repoName,
-		CycleType:          string(cycleType),
+		CycleType:          cycleType,
 		InputNotifications: string(feature.NormalizeInputNotificationsMode(inputNotifications)),
 		Iteration:          iteration,
 		WaitingSince:       gateFileTime(gatePath),

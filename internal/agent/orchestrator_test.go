@@ -198,22 +198,7 @@ func TestResolveImplementArtifactDirForRepo(t *testing.T) {
 			},
 			runDir: "/run/r-002",
 			repo:   "svc",
-			want:   "/run/r-002/phase-03/implement/svc",
-		},
-		{
-			name: "single repo with rebase cycle",
-			feature: func() *feature.Feature {
-				f := &feature.Feature{
-					SchemaVersion: feature.SchemaVersionCurrent,
-					Repos:         []feature.FeatureRepo{{Name: "svc"}},
-				}
-				f.SetActiveCycleType(feature.CycleRebase)
-				f.SetRebaseCount(2)
-				return f
-			}(),
-			runDir: "/run/r-003",
-			repo:   "svc",
-			want:   "/run/r-003/rebase-2/implement/svc",
+		want:   "/run/r-002/phase-03/implement/svc",
 		},
 	}
 	for _, tt := range tests {

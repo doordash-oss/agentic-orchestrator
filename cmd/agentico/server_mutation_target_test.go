@@ -446,32 +446,6 @@ func TestServerMutationTargetAnswerAskUserNormalizesTruncatedQuestionKey(t *test
 	}
 }
 
-func TestServerMutationTargetStartRebaseStartsFeatureRebasePromptly(t *testing.T) {
-	starter := &fakeFeatureRebaseStarter{}
-	target := serverMutationTarget{rebaseStarter: starter}
-
-	resp, err := target.StartRebase("feat-rebase", serverruntime.RebaseActionRequest{})
-	if err != nil {
-		t.Fatalf("StartRebase error = %v", err)
-	}
-	if resp.FeatureID != "feat-rebase" || resp.Result != resultStarted || resp.CycleType != string(feature.CycleRebase) {
-		t.Fatalf("StartRebase response = %+v, want started feature rebase", resp)
-	}
-	if got := strings.Join(starter.featureIDs, ","); got != "feat-rebase" {
-		t.Fatalf("StartFeatureRebase calls = %q, want feat-rebase", got)
-	}
-}
-
-type fakeFeatureRebaseStarter struct {
-	featureIDs []string
-	err        error
-}
-
-func (f *fakeFeatureRebaseStarter) StartFeatureRebase(featureID string) error {
-	f.featureIDs = append(f.featureIDs, featureID)
-	return f.err
-}
-
 // TestServerMutationTargetStartFeatureBlocksChildren exercises the start /
 // resume backend path (serverMutationTarget.StartFeature fronts both routes)
 // end-to-end through the real orchestrator and store: a child whose setup is
@@ -2295,25 +2269,6 @@ func TestServerMutationTargetRestartFeatureDispatchesPhaseWork(t *testing.T) {
 }
 
 func TestServerMutationTargetCleanupAndDeleteActionsMutateFeatureState(t *testing.T) {
-	t.Run("cleanup cycles", func(t *testing.T) {
-		target, store, f, _ := newCleanupActionTarget(t)
-
-		result, err := target.CleanupFeature(f.ID, serverruntime.CleanupActionRequest{Target: cleanupTargetCycles})
-		if err != nil {
-			t.Fatalf("CleanupFeature(cycles) error = %v", err)
-		}
-		if result.FeatureID != f.ID || result.Target != cleanupTargetCycles || result.Result != resultCleaned {
-			t.Fatalf("CleanupFeature(cycles) result = %+v; want cleaned cycles", result)
-		}
-		updated, err := store.Load(f.ID)
-		if err != nil {
-			t.Fatalf("Load feature after cleanup: %v", err)
-		}
-		if len(updated.RepoCycles) != 0 {
-			t.Fatalf("RepoCycles after cleanup = %+v; want cleared", updated.RepoCycles)
-		}
-	})
-
 	t.Run("cleanup worktrees", func(t *testing.T) {
 		target, store, f, worktrees := newCleanupActionTarget(t)
 
@@ -2457,9 +2412,6 @@ func newCleanupActionTarget(t *testing.T) (serverMutationTarget, *feature.Store,
 		ff.Status = feature.StatusPublished
 		ff.CurrentPhase = feature.PhasePublish
 		ff.Repos[0].WorktreePath = testRepoAWorktreePath
-		ff.RepoCycles = map[string]*feature.RepoCycleState{
-			testRepoAName: {Type: feature.CycleRebase, Status: feature.RepoCycleFailed},
-		}
 		return nil
 	}); err != nil {
 		t.Fatalf("prepare feature: %v", err)

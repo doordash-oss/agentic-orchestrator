@@ -115,7 +115,7 @@ func TestActionCatalogSetupAndStartLifecycle(t *testing.T) {
 	t.Parallel()
 	publishable := true
 
-	settingUp := actionCatalogTestFeature(feature.StatusSettingUpWorktrees, feature.Checkpoints{}, &publishable, nil)
+	settingUp := actionCatalogTestFeature(feature.StatusSettingUpWorktrees, feature.Checkpoints{}, &publishable)
 	settingUp.Run().Setup = &feature.SetupState{Status: feature.SetupStatusRunning}
 	actions := actionCatalogDTOs(settingUp)
 	if got := actionDTOByID(t, actions, actionSetup); !got.Enabled {
@@ -125,7 +125,7 @@ func TestActionCatalogSetupAndStartLifecycle(t *testing.T) {
 		t.Fatalf("start action = %+v; want disabled while setup is pending", got)
 	}
 
-	failedSetup := actionCatalogTestFeature(feature.StatusFailed, feature.Checkpoints{}, &publishable, nil)
+	failedSetup := actionCatalogTestFeature(feature.StatusFailed, feature.Checkpoints{}, &publishable)
 	failedSetup.FailureType = feature.FailureWorktreeSetup
 	failedSetup.Run().Setup = &feature.SetupState{Status: feature.SetupStatusFailed}
 	actions = actionCatalogDTOs(failedSetup)
@@ -135,7 +135,7 @@ func TestActionCatalogSetupAndStartLifecycle(t *testing.T) {
 
 	// After successful setup the feature is Created: Start is enabled and
 	// setup no longer applies.
-	created := actionCatalogTestFeature(feature.StatusCreated, feature.Checkpoints{}, &publishable, nil)
+	created := actionCatalogTestFeature(feature.StatusCreated, feature.Checkpoints{}, &publishable)
 	actions = actionCatalogDTOs(created)
 	if got := actionDTOByID(t, actions, actionStart); !got.Enabled {
 		t.Fatalf("start action = %+v; want enabled once setup completed", got)

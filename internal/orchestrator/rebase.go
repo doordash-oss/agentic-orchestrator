@@ -12,20 +12,27 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package orchestrator — rebase.go owns feature-level rebase helpers.
+// Package orchestrator — rebase.go owns shared rebase helpers used by the
+// rebase-child creation path, publish-conflict metadata, and completion
+// preflight freshness checks.
 package orchestrator
 
 import (
 	"errors"
 	"fmt"
+	"os/exec"
+	"strings"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 )
 
+// HarnessRebaseRepoOutcome captures the resolved rebase target and worktree
+// identity for a single repository. The freshness/blocker helpers shared by
+// completion preflight consume it; the legacy harness rebase that populated the
+// status/conflict fields has been removed.
 type HarnessRebaseRepoOutcome struct {
 	RepoName      string
-	Status        feature.RebaseRepoStatus
 	RebaseTarget  string
 	ConflictFiles []string
 	Changed       bool
@@ -60,59 +67,62 @@ func (o *Orchestrator) resolveRebaseTarget(f *feature.Feature, repo *feature.Fea
 	return target
 }
 
-func (o *Orchestrator) runHarnessRebaseRepo(f *feature.Feature, repo feature.FeatureRepo) HarnessRebaseRepoOutcome {
-	out := o.harnessRebaseOutcomeForRepo(f, repo)
-	if out.RebaseTarget == "" {
-		out.Status = feature.RebaseRepoStatusFailed
-		out.Err = errors.New("rebase target not found")
-		return out
+// repoWorkDir returns repo's worktree path, falling back to its base path.
+func repoWorkDir(repo feature.FeatureRepo) string {
+	if repo.WorktreePath != "" {
+		return repo.WorktreePath
 	}
-	if out.Publishable {
-		if err := git.Fetch(out.WorktreePath); err != nil {
-			out.Status = feature.RebaseRepoStatusFailed
-			out.Err = fmt.Errorf("fetch failed: %w", err)
-			return out
-		}
-
-		behind := git.IsBehindRemote(out.WorktreePath, out.RebaseTarget)
-		if !behind {
-			out.Status = feature.RebaseRepoStatusUpToDate
-			return out
-		}
-
-		return harnessOutcomeFromRebaseResult(out, git.RebaseOnto(out.WorktreePath, "origin/"+out.RebaseTarget))
-	}
-
-	behind := git.IsBehindLocal(out.WorktreePath, out.RebaseTarget)
-	if !behind {
-		out.Status = feature.RebaseRepoStatusUpToDate
-		return out
-	}
-
-	return harnessOutcomeFromRebaseResult(out, git.RebaseOnto(out.WorktreePath, out.RebaseTarget))
+	return repo.Path
 }
 
-func harnessOutcomeFromRebaseResult(out HarnessRebaseRepoOutcome, result git.RebaseResult) HarnessRebaseRepoOutcome {
-	switch result.Outcome {
-	case git.RebaseSuccess:
-		out.Status = feature.RebaseRepoStatusChanged
-		out.Changed = true
-		return out
-	case git.RebaseConflict:
-		out.Status = feature.RebaseRepoStatusConflict
-		out.ConflictFiles = append([]string(nil), result.ConflictFiles...)
-		return out
-	case git.RebaseFailed:
-		out.Status = feature.RebaseRepoStatusFailed
-		if result.Err != nil {
-			out.Err = result.Err
-		} else {
-			out.Err = errors.New("rebase failed")
-		}
-		return out
-	default:
-		out.Status = feature.RebaseRepoStatusFailed
-		out.Err = fmt.Errorf("unknown rebase outcome %d", result.Outcome)
-		return out
+// repoBranch returns repo's branch, falling back to "feature/<slug>".
+func repoBranch(f *feature.Feature, repo feature.FeatureRepo) string {
+	if repo.Branch != "" {
+		return repo.Branch
 	}
+	return "feature/" + f.Slug
+}
+
+// harnessRebaseOutcomeForRepo builds the per-repo outcome carrying the resolved
+// rebase target and worktree identity. Completion preflight and the legacy
+// rebase preflight share it for freshness/blocker decisions.
+func (o *Orchestrator) harnessRebaseOutcomeForRepo(f *feature.Feature, repo feature.FeatureRepo) HarnessRebaseRepoOutcome {
+	return HarnessRebaseRepoOutcome{
+		RepoName:     repo.Name,
+		RebaseTarget: o.resolveRebaseTarget(f, &repo),
+		Publishable:  repo.Publishable == nil || *repo.Publishable,
+		WorktreePath: repoWorkDir(repo),
+		Branch:       repoBranch(f, repo),
+	}
+}
+
+func (o *Orchestrator) rebaseWorktreeFingerprint(repo feature.FeatureRepo) string {
+	fn := o.worktreeFingerprintFn
+	if fn == nil {
+		fn = gitWorktreeFingerprint
+	}
+	fingerprint, err := fn(repoWorkDir(repo))
+	if err != nil {
+		return "error:" + err.Error()
+	}
+	return fingerprint
+}
+
+func gitWorktreeFingerprint(worktreePath string) (string, error) {
+	if strings.TrimSpace(worktreePath) == "" {
+		return "", errors.New("empty worktree path")
+	}
+	head, err := exec.Command("git", "-C", worktreePath, "rev-parse", "HEAD").CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("rev-parse HEAD: %s: %w", strings.TrimSpace(string(head)), err)
+	}
+	status, err := exec.Command("git", "-C", worktreePath, "status", "--porcelain=v1").CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("git status: %s: %w", strings.TrimSpace(string(status)), err)
+	}
+	diff, err := exec.Command("git", "-C", worktreePath, "diff", "--binary", "HEAD", "--").CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("git diff: %s: %w", strings.TrimSpace(string(diff)), err)
+	}
+	return strings.TrimSpace(string(head)) + "\n" + string(status) + "\n" + string(diff), nil
 }

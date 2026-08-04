@@ -1029,7 +1029,6 @@ type ActionResponse struct {
 	PermissionAnswerResponse    PermissionAnswerResponse    `json:"permission_answer_response,omitempty"`
 	PublishDescriptionResponse  PublishDescriptionResponse  `json:"publish_description_response,omitempty"`
 	PublishFeatureResponse      PublishFeatureResponse      `json:"publish_feature_response,omitempty"`
-	RebaseStartResponse         RebaseStartResponse         `json:"rebase_start_response,omitempty"`
 	RecoveryActionResponse      RecoveryActionResponse      `json:"recovery_action_response,omitempty"`
 	RetryFeatureResponse        RetryFeatureResponse        `json:"retry_feature_response,omitempty"`
 	RewindFeatureResponse       RewindFeatureResponse       `json:"rewind_feature_response,omitempty"`
@@ -1919,44 +1918,6 @@ type RebaseFeatureResponse struct {
 	FeatureID  string       `json:"feature_id"`
 	Meta       ResponseMeta `json:"meta,omitempty"`
 	ParentID   string       `json:"parent_id"`
-	Result     string       `json:"result"`
-}
-
-// RebasePreflightRepo defines model for RebasePreflightRepo.
-type RebasePreflightRepo struct {
-	// Behind Whether the repository is behind its rebase target.
-	Behind bool `json:"behind"`
-
-	// Blocker Safe, server-authored reason a rebase cannot proceed for this repository, when non-empty.
-	Blocker       string   `json:"blocker,omitempty"`
-	ConflictFiles []string `json:"conflict_files,omitempty"`
-
-	// Freshness Server-authored freshness state (up_to_date, behind, unknown).
-	Freshness   string `json:"freshness"`
-	Publishable bool   `json:"publishable"`
-	Repo        string `json:"repo"`
-
-	// Target Base ref a rebase will target for this repository.
-	Target string `json:"target"`
-}
-
-// RebasePreflightResponse defines model for RebasePreflightResponse.
-type RebasePreflightResponse struct {
-	APIVersion string                `json:"api_version"`
-	FeatureID  string                `json:"feature_id"`
-	Meta       ResponseMeta          `json:"meta,omitempty"`
-	Repos      []RebasePreflightRepo `json:"repos"`
-
-	// SourceRevision Authoritative revision of the repository state this preflight observed. Execution rejects a stale preflight before any side effect.
-	SourceRevision string `json:"source_revision"`
-}
-
-// RebaseStartResponse defines model for RebaseStartResponse.
-type RebaseStartResponse struct {
-	APIVersion string       `json:"api_version"`
-	CycleType  string       `json:"cycle_type"`
-	FeatureID  string       `json:"feature_id"`
-	Meta       ResponseMeta `json:"meta,omitempty"`
 	Result     string       `json:"result"`
 }
 

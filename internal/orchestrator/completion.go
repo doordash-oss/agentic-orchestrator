@@ -1185,18 +1185,6 @@ func (o *Orchestrator) recordRoadmapPhaseCommitAnchors(featureID string, phase i
 	return nil
 }
 
-// hasActiveRepoCycle returns true when any per-repo cycle state has a
-// non-empty cycle Type. Per-repo cycles are driven by f.RepoCycles and must
-// route through their own completion handlers.
-func hasActiveRepoCycle(f *feature.Feature) bool {
-	for _, c := range f.RepoCycles {
-		if c != nil && c.Type != "" {
-			return true
-		}
-	}
-	return false
-}
-
 // reposNeedFinalReview returns true when at least one repo was touched by
 // the implement pass and is not yet published — i.e. it is staged for the
 // deferred end-of-feature Final Review. Repos with a non-empty PRURL have

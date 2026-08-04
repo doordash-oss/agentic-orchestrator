@@ -626,7 +626,6 @@ func TestResumeRebaseCyclePreservesTimingKey(t *testing.T) {
 		ActiveTimingKey:  "rebase-1",
 		ActivePhaseStart: &start,
 	}
-	f.SetRebaseCount(1)
 
 	// Interrupt accumulates time but preserves ActiveTimingKey
 	if err := f.Transition(StatusInterrupted); err != nil {
@@ -1506,77 +1505,6 @@ func TestTouchedRepos(t *testing.T) {
 	}
 }
 
-func TestCyclePrefix(t *testing.T) {
-	t.Parallel()
-	// parallel-candidate: pure value, table-driven, or per-test temp-dir assertions with no shared state.
-	tests := []struct {
-		name            string
-		activeCycleType RepoCycleType
-		rebaseCount     int
-		want            string
-	}{
-		{"no cycle", "", 0, ""},
-		{"rebase count 1", CycleRebase, 1, "rebase-1"},
-		{"rebase count 3", CycleRebase, 3, "rebase-3"},
-		{"rebase count 0 fallback", CycleRebase, 0, "rebase"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			f := &Feature{}
-			f.SetActiveCycleType(tt.activeCycleType)
-			f.SetRebaseCount(tt.rebaseCount)
-			if got := f.CyclePrefix(); got != tt.want {
-				t.Errorf("CyclePrefix() = %q, want %q", got, tt.want)
-			}
-		})
-	}
-}
-
-func TestRepoCycleTypeIsValidAcceptsOnlyRebase(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name      string
-		cycleType RepoCycleType
-		want      bool
-	}{
-		{name: "rebase", cycleType: CycleRebase, want: true},
-		{name: "unknown", cycleType: RepoCycleType("unknown"), want: false},
-		{name: "empty", cycleType: "", want: false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			if got := tt.cycleType.IsValid(); got != tt.want {
-				t.Errorf("RepoCycleType(%q).IsValid() = %v, want %v", tt.cycleType, got, tt.want)
-			}
-		})
-	}
-}
-
-func TestRepoCycleDirName(t *testing.T) {
-	t.Parallel()
-	// parallel-candidate: pure value, table-driven, or per-test temp-dir assertions with no shared state.
-	tests := []struct {
-		name      string
-		cycleType RepoCycleType
-		count     int
-		want      string
-	}{
-		{"rebase count 1", CycleRebase, 1, "rebase-1"},
-		{"rebase count 5", CycleRebase, 5, "rebase-5"},
-		{"rebase count 0 fallback", CycleRebase, 0, "rebase"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := RepoCycleDirName(tt.cycleType, tt.count); got != tt.want {
-				t.Errorf("RepoCycleDirName(%q, %d) = %q, want %q", tt.cycleType, tt.count, got, tt.want)
-			}
-		})
-	}
-}
-
 func TestEffectivePipeline(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: pure value, table-driven, or per-test temp-dir assertions with no shared state.
@@ -1773,68 +1701,6 @@ func TestEffectivePhases(t *testing.T) {
 				if !found {
 					t.Errorf("EffectivePhases() missing expected phase %v", bp)
 				}
-			}
-		})
-	}
-}
-
-func TestFeature_HasActiveRepoCycles(t *testing.T) {
-	t.Parallel()
-	// parallel-candidate: pure value, table-driven, or per-test temp-dir assertions with no shared state.
-	tests := []struct {
-		name  string
-		repos map[string]*RepoCycleState
-		want  bool
-	}{
-		{"nil repo cycles", nil, false},
-		{"empty repo cycles", map[string]*RepoCycleState{}, false},
-		{
-			name:  "single running cycle",
-			repos: map[string]*RepoCycleState{"repo-a": {Type: CycleRebase, Status: RepoCycleRunning}},
-			want:  true,
-		},
-		{
-			name:  "single reviewing cycle",
-			repos: map[string]*RepoCycleState{"repo-a": {Type: CycleRebase, Status: RepoCycleReviewing}},
-			want:  true,
-		},
-		{
-			name:  "paused need-user-input cycle is active",
-			repos: map[string]*RepoCycleState{"repo-a": {Type: CycleRebase, Status: RepoCycleNeedUserInput}},
-			want:  true,
-		},
-		{
-			name:  "single done cycle",
-			repos: map[string]*RepoCycleState{"repo-a": {Type: CycleRebase, Status: "done"}},
-			want:  false,
-		},
-		{
-			name:  "unknown cycle type running is not active",
-			repos: map[string]*RepoCycleState{"repo-a": {Type: "refactor", Status: RepoCycleRunning}},
-			want:  false,
-		},
-		{
-			name: "mixed cycles",
-			repos: map[string]*RepoCycleState{
-				"repo-a": {Type: CycleRebase, Status: "done"},
-				"repo-b": {Type: CycleRebase, Status: RepoCycleRunning},
-			},
-			want: true,
-		},
-		{
-			name: "nil entry is skipped",
-			repos: map[string]*RepoCycleState{
-				"repo-a": nil,
-				"repo-b": {Type: CycleRebase, Status: "done"},
-			},
-			want: false,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			f := &Feature{RepoCycles: tt.repos}
-			if got := f.HasActiveRepoCycles(); got != tt.want {
-				t.Errorf("HasActiveRepoCycles() = %v, want %v", got, tt.want)
 			}
 		})
 	}

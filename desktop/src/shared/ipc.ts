@@ -1033,6 +1033,8 @@ export const CompletionPreflightRepoSchema = z.strictObject({
   pendingCommits: z.number().int().min(0).max(100000).optional(),
   pendingDirty: z.boolean().optional(),
   pushMode: z.enum(['fast_forward', 'rewrite']).optional(),
+  pendingDirtyFiles: z.array(z.string().max(512)).max(200).optional(),
+  pendingDirtyFileTotal: z.number().int().min(0).max(100000).optional(),
 });
 export type CompletionPreflightRepo = z.output<typeof CompletionPreflightRepoSchema>;
 

@@ -25,6 +25,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
@@ -300,8 +301,8 @@ func (h *apiHandler) refactorEntryDisabledReason(f *feature.Feature) (ActionDisa
 	if h.freshness == nil {
 		return ActionDisabledReason{}, false
 	}
-	for _, repo := range f.Repos {
-		if h.freshness.Freshness(f, repo) == RepoFreshnessLocalChanges {
+	for _, freshness := range h.probeRepoFreshness(f) {
+		if freshness == RepoFreshnessLocalChanges {
 			return reason, true
 		}
 	}
@@ -314,8 +315,11 @@ func (h *apiHandler) dirtyRepoDiagnostics(repos []feature.FeatureRepo) []map[str
 	if h.worktrees == nil {
 		return nil
 	}
-	dirty := make([]feature.RepoDirtyDiagnostics, 0, len(repos))
-	for _, repo := range repos {
+	// Inspections shell out to git per repo; run them concurrently and keep
+	// the declared repo order for the payload.
+	reports := make([]*feature.RepoDirtyDiagnostics, len(repos))
+	var wg sync.WaitGroup
+	for i, repo := range repos {
 		path := repo.WorktreePath
 		if path == "" {
 			path = repo.Path
@@ -323,20 +327,31 @@ func (h *apiHandler) dirtyRepoDiagnostics(repos []feature.FeatureRepo) []map[str
 		if path == "" {
 			continue
 		}
-		report, err := h.worktrees.InspectCleanliness(path, feature.DefaultDirtyPathLimit)
-		if err != nil || report == nil || !report.Dirty() {
-			continue
+		wg.Add(1)
+		go func(i int, name, path string) {
+			defer wg.Done()
+			report, err := h.worktrees.InspectCleanliness(path, feature.DefaultDirtyPathLimit)
+			if err != nil || report == nil || !report.Dirty() {
+				return
+			}
+			reports[i] = &feature.RepoDirtyDiagnostics{
+				Repo:           name,
+				Path:           path,
+				Staged:         report.Staged,
+				Unstaged:       report.Unstaged,
+				Untracked:      report.Untracked,
+				StagedTotal:    report.StagedTotal,
+				UnstagedTotal:  report.UnstagedTotal,
+				UntrackedTotal: report.UntrackedTotal,
+			}
+		}(i, repo.Name, path)
+	}
+	wg.Wait()
+	dirty := make([]feature.RepoDirtyDiagnostics, 0, len(repos))
+	for _, report := range reports {
+		if report != nil {
+			dirty = append(dirty, *report)
 		}
-		dirty = append(dirty, feature.RepoDirtyDiagnostics{
-			Repo:           repo.Name,
-			Path:           path,
-			Staged:         report.Staged,
-			Unstaged:       report.Unstaged,
-			Untracked:      report.Untracked,
-			StagedTotal:    report.StagedTotal,
-			UnstagedTotal:  report.UnstagedTotal,
-			UntrackedTotal: report.UntrackedTotal,
-		})
 	}
 	if len(dirty) == 0 {
 		return nil
@@ -1131,10 +1146,35 @@ func setupTaskDTO(task feature.SetupTask) SetupTask {
 	}
 }
 
+// probeRepoFreshness collects freshness for every repo concurrently. Each
+// probe shells out to git and scans the working tree, so serial execution
+// costs the sum of per-repo scans on the read path.
+func (h *apiHandler) probeRepoFreshness(f *feature.Feature) map[string]RepoFreshness {
+	if h.freshness == nil || len(f.Repos) == 0 {
+		return nil
+	}
+	results := make([]RepoFreshness, len(f.Repos))
+	var wg sync.WaitGroup
+	for i, repo := range f.Repos {
+		wg.Add(1)
+		go func(i int, repo feature.FeatureRepo) {
+			defer wg.Done()
+			results[i] = h.freshness.Freshness(f, repo)
+		}(i, repo)
+	}
+	wg.Wait()
+	out := make(map[string]RepoFreshness, len(f.Repos))
+	for i, repo := range f.Repos {
+		out[repo.Name] = results[i]
+	}
+	return out
+}
+
 func (h *apiHandler) repoStatusDTOs(f *feature.Feature) []RepoStatus {
 	if f == nil {
 		return nil
 	}
+	freshness := h.probeRepoFreshness(f)
 	out := make([]RepoStatus, 0, len(f.Repos))
 	for _, repo := range f.Repos {
 		state := f.RepoStates[repo.Name]
@@ -1148,8 +1188,8 @@ func (h *apiHandler) repoStatusDTOs(f *feature.Feature) []RepoStatus {
 			dto.PRURL = state.PRURL
 			dto.LastError = SafeDisplayText(state.LastError, 200)
 		}
-		if h.freshness != nil {
-			dto.Freshness = string(h.freshness.Freshness(f, repo))
+		if freshness != nil {
+			dto.Freshness = string(freshness[repo.Name])
 		}
 		if cycle != nil {
 			dto.CycleType = string(cycle.Type)

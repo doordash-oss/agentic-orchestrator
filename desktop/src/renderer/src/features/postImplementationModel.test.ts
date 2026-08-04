@@ -46,7 +46,7 @@ describe('postImplementationModel', () => {
     });
   });
 
-  it('drops review feedback from the runway when the catalog disables it', () => {
+  it('keeps a disabled review feedback on the runway carrying its reason', () => {
     const snapshot = featureSnapshot({
       status: 'Published',
       actions: [
@@ -57,7 +57,42 @@ describe('postImplementationModel', () => {
         },
       ],
     });
-    expect(aftercareActions(snapshot).map((action) => action.id)).not.toContain('review-feedback');
+    const actions = aftercareActions(snapshot);
+    expect(actions.map((action) => action.id)).toEqual(['review-feedback']);
+    expect(actions[0]!.disabledReason).toBe('no PR');
+  });
+
+  it('keeps a blocked pass on the runway with its reason', () => {
+    const actions = aftercareActions(
+      featureSnapshot({
+        status: 'CodeReady',
+        actions: [
+          {
+            id: 'refactor',
+            enabled: false,
+            disabledReasons: [
+              { code: 'dirty_parent', message: 'parent repositories must be clean before launching a child' },
+            ],
+          },
+        ],
+      }),
+    );
+    expect(actions.map((action) => action.id)).toEqual(['refactor']);
+    expect(actions[0]!.disabledReason).toBe(
+      'parent repositories must be clean before launching a child',
+    );
+  });
+
+  it('omits a disabled publish action rather than showing a blocked card', () => {
+    const actions = aftercareActions(
+      featureSnapshot({
+        status: 'CodeReady',
+        actions: [
+          { id: 'publish', enabled: false, disabledReasons: [{ code: 'manual_publish_required', message: 'waiting' }] },
+        ],
+      }),
+    );
+    expect(actions).toEqual([]);
   });
 
   it('leads the runway with undelivered publish work', () => {

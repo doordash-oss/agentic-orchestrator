@@ -1616,11 +1616,11 @@ export function FeatureCockpit({
 
   const postImplementationMode = resolvePostImplementationMode(snapshot);
   const postMenuActions = menuActions.filter((action) => {
-    if (['start', 'stop', 'setup', 'rebase', 'refactor'].includes(action.key)) return false;
-    // An enabled review-feedback action is offered on the aftercare runway;
-    // only its disabled form appears in the overflow menu with the catalog's
-    // reasons, matching the refactor precedent.
-    if (action.key === 'review-feedback' && action.enabled) return false;
+    // Passes live on the aftercare runway in both their enabled and blocked
+    // forms; the overflow menu would only duplicate them.
+    if (['start', 'stop', 'setup', 'rebase', 'refactor', 'review-feedback'].includes(action.key)) {
+      return false;
+    }
     return true;
   });
   const openAftercareAction = (action: AftercareAction): void => {

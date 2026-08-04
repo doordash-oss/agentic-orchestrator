@@ -304,4 +304,30 @@ describe('AftercareWorkspace', () => {
     expect(facts).toHaveTextContent('Unpublished');
     expect(facts).toHaveTextContent('3 commits');
   });
+
+  it('shows a blocked pass with its reason and no launch affordance', () => {
+    render(
+      <AftercareWorkspace
+        snapshot={featureSnapshot({
+          status: 'CodeReady',
+          activeRun: 8,
+          actions: [
+            {
+              id: 'refactor',
+              enabled: false,
+              disabledReasons: [{ code: 'dirty_parent', message: 'parent repositories must be clean before launching a child' }],
+            },
+          ],
+        })}
+        run={completedRun}
+        onAction={vi.fn()}
+        onOpenRunRecord={vi.fn()}
+        onOpenChanges={vi.fn()}
+        onOpenPullRequest={vi.fn()}
+      />,
+    );
+    const card = screen.getByRole('button', { name: /Start a refactor pass/ });
+    expect(card).toBeDisabled();
+    expect(card).toHaveTextContent('parent repositories must be clean before launching a child');
+  });
 });

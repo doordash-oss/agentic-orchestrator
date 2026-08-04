@@ -71,12 +71,14 @@ export function AftercareWorkspace({
             <ol className="aftercare-workspace__actions">
               {actions.map((action, index) => {
                 const busy = busyAction?.id === action.id;
+                const blocked = action.disabledReason !== undefined;
                 return (
                   <li key={action.id}>
                     <button
                       type="button"
-                      disabled={busy}
+                      disabled={busy || blocked}
                       aria-busy={busy || undefined}
+                      data-blocked={blocked || undefined}
                       onClick={() => onAction(action)}
                     >
                       <span className="aftercare-workspace__action-index" aria-hidden="true">
@@ -87,8 +89,14 @@ export function AftercareWorkspace({
                         <small>{action.description}</small>
                       </span>
                       <span className="aftercare-workspace__action-label">
-                        {busy ? busyAction?.label : action.label}{' '}
-                        <span aria-hidden="true">{busy ? '…' : '↗'}</span>
+                        {blocked ? (
+                          action.disabledReason
+                        ) : (
+                          <>
+                            {busy ? busyAction?.label : action.label}{' '}
+                            <span aria-hidden="true">{busy ? '…' : '↗'}</span>
+                          </>
+                        )}
                       </span>
                     </button>
                   </li>

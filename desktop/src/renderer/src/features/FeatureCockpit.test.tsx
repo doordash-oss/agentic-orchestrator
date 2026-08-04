@@ -1803,7 +1803,7 @@ describe('FeatureCockpit review-feedback aftercare', () => {
     expect(screen.queryByRole('menuitem', { name: 'Address review feedback' })).toBeNull();
   });
 
-  it('drops a disabled review-feedback action from the runway and lists it in the overflow with reasons', async () => {
+  it('keeps a blocked review-feedback action on the runway with its reason and out of the overflow', async () => {
     const mock = installAgenticoMock({
       feature: featureSnapshot({
         status: 'Published',
@@ -1820,14 +1820,12 @@ describe('FeatureCockpit review-feedback aftercare', () => {
     });
     renderCockpit(mock);
     const aftercare = await screen.findByRole('region', { name: 'Feature aftercare' });
-    expect(
-      within(aftercare).queryByRole('button', { name: /Address review feedback/ }),
-    ).not.toBeInTheDocument();
+    const card = within(aftercare).getByRole('button', { name: /Address review feedback/ });
+    expect(card).toBeDisabled();
+    expect(card).toHaveTextContent('review feedback requires a pull request');
     const user = userEvent.setup();
     await user.click(screen.getByLabelText('More actions'));
-    const item = screen.getByRole('menuitem', { name: 'Address review feedback' });
-    expect(item).toBeDisabled();
-    expect(screen.getByText('review feedback requires a pull request')).toBeVisible();
+    expect(screen.queryByRole('menuitem', { name: 'Address review feedback' })).toBeNull();
   });
 
   it('opens the review-feedback modal from the regular cockpit overflow (second render site)', async () => {

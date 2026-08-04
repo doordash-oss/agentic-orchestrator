@@ -31,6 +31,9 @@ const AFTERCARE_STATUSES = new Set(['CodeReady', 'Published', 'Done']);
 // The catalog ids only — undelivered-work ids are preflight-derived and never enter this list.
 type CatalogActionId = 'publish' | 'rebase' | 'refactor' | 'review-feedback';
 const ACTION_ORDER: CatalogActionId[] = ['publish', 'rebase', 'refactor', 'review-feedback'];
+// publish is excluded: the completion bar already offers it, and manual-publish
+// features report it disabled constantly, so a blocked card would be noise.
+const PASS_ACTION_IDS: CatalogActionId[] = ['rebase', 'refactor', 'review-feedback'];
 
 export function resolvePostImplementationMode(snapshot: FeatureSnapshot): PostImplementationMode {
   return AFTERCARE_STATUSES.has(snapshot.status) ? { kind: 'aftercare' } : { kind: 'regular' };
@@ -42,8 +45,14 @@ export function aftercareActions(
 ): AftercareAction[] {
   const catalog = ACTION_ORDER.flatMap((id) => {
     const action = snapshot.actions.find((candidate) => candidate.id === id);
-    if (action?.enabled !== true) return [];
-    return [aftercareAction(id)];
+    if (action === undefined) return [];
+    if (action.enabled) return [aftercareAction(id)];
+    // A blocked pass stays on the runway carrying its reason; silently
+    // dropping it is how the surface used to hide available work.
+    if (!PASS_ACTION_IDS.includes(id)) return [];
+    const reason = action.disabledReasons[0]?.message;
+    if (reason === undefined) return [];
+    return [{ ...aftercareAction(id), disabledReason: reason }];
   });
   return [...pendingDeliveryActions(pending), ...catalog];
 }

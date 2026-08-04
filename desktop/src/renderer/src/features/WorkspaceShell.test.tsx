@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useCallback, useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -23,6 +23,7 @@ vi.mock('monaco-editor', () => ({
 afterEach(cleanup);
 
 const FEATURE_ID = 'abcd1234ef567890';
+const SECOND_FEATURE_ID = '1234abcd5678ef90';
 
 const permissionAttention: AttentionItem = {
   kind: 'permission',
@@ -431,6 +432,61 @@ describe('WorkspaceShell tabs', () => {
     expect(await screen.findByRole('heading', { name: 'Search revamp' })).toBeInTheDocument();
   });
 
+  it('unmounts and unsubscribes a cockpit when its tab closes', async () => {
+    const mock = installAgenticoMock({ settings: settingsWithTab(), features: [] });
+    render(<WorkspaceShell />);
+    await screen.findByRole('heading', { name: 'Search revamp' });
+    const listenersBeforeClose = mock.appEventListenerCount();
+    await userEvent.click(screen.getByRole('button', { name: 'Close Search revamp tab' }));
+    await waitFor(() => expect(document.getElementById(`panel-${FEATURE_ID}`)).toBeNull());
+    expect(mock.appEventListenerCount()).toBe(listenersBeforeClose - 1);
+    const callsAfterClose = mock.api.getFeature.mock.calls.length;
+    mock.emitAppEvent({ type: 'invalidated', kind: 'feature.updated', featureId: FEATURE_ID });
+    expect(mock.api.getFeature).toHaveBeenCalledTimes(callsAfterClose);
+  });
+
+  it('persists concurrent authoritative tab names without losing either update', async () => {
+    const settings: Settings = {
+      ...defaultSettings(),
+      tabs: {
+        open: [
+          { featureId: FEATURE_ID, titleHint: 'First draft' },
+          { featureId: SECOND_FEATURE_ID, titleHint: 'Second draft' },
+        ],
+        activeFeatureId: FEATURE_ID,
+      },
+    };
+    const mock = installAgenticoMock({ settings, features: [] });
+    let resolveFirst!: (value: ReturnType<typeof featureSnapshot>) => void;
+    let resolveSecond!: (value: ReturnType<typeof featureSnapshot>) => void;
+    mock.api.getFeature.mockImplementation(
+      (id: string) =>
+        new Promise((resolve) => {
+          if (id === FEATURE_ID) resolveFirst = resolve;
+          else resolveSecond = resolve;
+        }),
+    );
+    render(<WorkspaceShell />);
+    await waitFor(() => expect(mock.api.getFeature).toHaveBeenCalledTimes(2));
+    await act(async () =>
+      resolveSecond(featureSnapshot({ id: SECOND_FEATURE_ID, name: 'Authoritative second' })),
+    );
+    await act(async () =>
+      resolveFirst(featureSnapshot({ id: FEATURE_ID, name: 'Authoritative first' })),
+    );
+    await waitFor(() =>
+      expect(mock.api.updateSettings).toHaveBeenCalledWith({
+        tabs: {
+          open: [
+            { featureId: FEATURE_ID, titleHint: 'Authoritative first' },
+            { featureId: SECOND_FEATURE_ID, titleHint: 'Authoritative second' },
+          ],
+          activeFeatureId: FEATURE_ID,
+        },
+      }),
+    );
+  });
+
   it('shows a no-longer-exists state for a restored tab whose feature vanished', async () => {
     const mock = installAgenticoMock({ settings: settingsWithTab() });
     mock.api.getFeature.mockRejectedValue(new Error('not_found: feature not found'));
@@ -700,6 +756,22 @@ describe('WorkspaceShell tabs', () => {
 
     await user.click(liveTab);
     expect(liveTab).toHaveAttribute('aria-selected', 'true');
+
+    const featurePanel = document.getElementById(`panel-${FEATURE_ID}`);
+    expect(featurePanel).not.toBeNull();
+    expect(featurePanel).not.toHaveAttribute('hidden');
+    await user.click(screen.getByRole('tab', { name: 'Home' }));
+    expect(featurePanel).toHaveAttribute('hidden');
+    expect(screen.queryByRole('tablist', { name: 'Stage view' })).not.toBeInTheDocument();
+    const callsAfterHomeRefresh = mock.api.getFeature.mock.calls.length;
+    await user.click(screen.getByRole('tab', { name: 'Search revamp' }));
+    expect(featurePanel).not.toHaveAttribute('hidden');
+    expect(await screen.findByRole('tab', { name: /Live activity/ })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
+    expect(mock.api.getFeature).toHaveBeenCalledTimes(callsAfterHomeRefresh);
+    expect(screen.queryByText(/Loading Search revamp from the runtime/)).not.toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: 'Jump to review' }));
     await waitFor(() => expect(documentTab).toHaveAttribute('aria-selected', 'true'));

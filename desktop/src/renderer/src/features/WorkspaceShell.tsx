@@ -219,22 +219,23 @@ export function WorkspaceShell({
     [closeFeature, loadList],
   );
 
-  const renameTab = useCallback(
-    (featureId: string, titleHint: string) => {
-      const base = tabs ?? defaultTabsPrefs();
+  const renameTab = useCallback((featureId: string, titleHint: string) => {
+    setTabs((current) => {
+      const base = current ?? defaultTabsPrefs();
       const tab = base.open.find((entry) => entry.featureId === featureId);
       if (tab === undefined || tab.titleHint === titleHint) {
-        return;
+        return current;
       }
-      persist({
+      const next = {
         open: base.open.map((entry) =>
           entry.featureId === featureId ? { ...entry, titleHint } : entry,
         ),
         activeFeatureId: base.activeFeatureId,
-      });
-    },
-    [persist, tabs],
-  );
+      };
+      window.agentico.updateSettings({ tabs: next }).catch(() => {});
+      return next;
+    });
+  }, []);
 
   const attentionByFeature = useMemo(() => {
     const counts = new Map<string, number>();
@@ -498,108 +499,115 @@ export function WorkspaceShell({
         />
       </div>
 
-      {active === null ? (
-        <div
-          id="panel-home"
-          role="tabpanel"
-          aria-labelledby="tab-home"
-          className={`tab-panel${view === 'create' ? ' tab-panel--create' : ''}`}
-        >
-          {view === 'create' ? (
-            <CreationFlow
-              guard={creationGuard}
-              onCreated={({ featureId, name }) => {
-                creationGuard.reset();
-                openFeature(featureId, name);
-                loadList();
-                setView('home');
-              }}
-            />
-          ) : (
-            <>
-              <header className="home-surface__header">
-                <div>
-                  <p className="home-surface__eyebrow">Agentico · Supervised runs</p>
-                  <h1>Feature queue</h1>
-                  <HomeReadout state={list} />
-                </div>
-                {list.phase !== 'loaded' || list.features.length > 0 ? (
-                  <button
-                    ref={newFeatureButtonRef}
-                    type="button"
-                    className="create-form__submit"
-                    onClick={() => setView('create')}
-                  >
-                    New feature
-                  </button>
-                ) : null}
-              </header>
-              <FeatureList
-                state={list}
-                openTabIds={tabs.open.map((tab) => tab.featureId)}
-                attentionByFeature={attentionByFeature}
-                onOpen={openFeature}
-                onRetry={loadList}
-                onCreate={() => setView('create')}
-                createButtonRef={newFeatureButtonRef}
-              />
-              <RecoveryWorkspace
-                onNavigateToFeature={(featureId) => openFeature(featureId, featureLabel(featureId))}
-              />
-              <BulkPreviewPanel autoPreviewKey={bulkPreviewRequest} />
-            </>
-          )}
-        </div>
-      ) : active === SETTINGS_TAB_ID ? (
-        <div
-          id="panel-settings"
-          role="tabpanel"
-          aria-labelledby="tab-settings"
-          className="tab-panel"
-        >
-          <SettingsPanel
-            routeRequest={routeRequest?.event.target === 'settings' ? routeRequest : null}
-          />
-        </div>
-      ) : (
-        <div
-          id={`panel-${active}`}
-          role="tabpanel"
-          aria-labelledby={`tab-${active}`}
-          className="tab-panel tab-panel--cockpit"
-        >
-          <FeatureCockpit
-            key={active}
-            featureId={active}
-            titleHint={tabs.open.find((tab) => tab.featureId === active)?.titleHint ?? active}
-            onClose={() => closeFeature(active)}
-            onDeleted={handleFeatureDeleted}
-            onLoadedName={(name) => renameTab(active, name)}
-            attentionItems={attentionItems.filter(
-              (item) => item.kind !== 'recovery' && attentionOwnerFeatureId(item) === active,
-            )}
-            refreshAttention={refreshAttention}
-            attentionDrafts={activeAttentionDrafts}
-            setAttentionDrafts={updateAttentionDrafts}
-            attentionPreviewRequest={
-              attentionPreviewRequest?.featureId === active ? attentionPreviewRequest : null
-            }
-            onAttentionPreviewClose={closeAttentionPreview}
-            selectedRunNumber={
-              tabs.open.find((tab) => tab.featureId === active)?.selectedRunNumber ?? null
-            }
-            onSelectRun={(runNumber) => {
-              const next = {
-                ...tabs,
-                open: tabs.open.map((tab) =>
-                  tab.featureId === active ? { ...tab, selectedRunNumber: runNumber } : tab,
-                ),
-              };
-              persist(next);
+      <div
+        id="panel-home"
+        role="tabpanel"
+        aria-labelledby="tab-home"
+        className={`tab-panel${view === 'create' ? ' tab-panel--create' : ''}`}
+        hidden={active !== null}
+      >
+        {view === 'create' ? (
+          <CreationFlow
+            guard={creationGuard}
+            onCreated={({ featureId, name }) => {
+              creationGuard.reset();
+              openFeature(featureId, name);
+              loadList();
+              setView('home');
             }}
           />
-        </div>
-      )}
+        ) : (
+          <>
+            <header className="home-surface__header">
+              <div>
+                <p className="home-surface__eyebrow">Agentico · Supervised runs</p>
+                <h1>Feature queue</h1>
+                <HomeReadout state={list} />
+              </div>
+              {list.phase !== 'loaded' || list.features.length > 0 ? (
+                <button
+                  ref={newFeatureButtonRef}
+                  type="button"
+                  className="create-form__submit"
+                  onClick={() => setView('create')}
+                >
+                  New feature
+                </button>
+              ) : null}
+            </header>
+            <FeatureList
+              state={list}
+              openTabIds={tabs.open.map((tab) => tab.featureId)}
+              attentionByFeature={attentionByFeature}
+              onOpen={openFeature}
+              onRetry={loadList}
+              onCreate={() => setView('create')}
+              createButtonRef={newFeatureButtonRef}
+            />
+            <RecoveryWorkspace
+              onNavigateToFeature={(featureId) => openFeature(featureId, featureLabel(featureId))}
+            />
+            <BulkPreviewPanel autoPreviewKey={bulkPreviewRequest} />
+          </>
+        )}
+      </div>
+      <div
+        id="panel-settings"
+        role="tabpanel"
+        aria-labelledby="tab-settings"
+        className="tab-panel"
+        hidden={!isSettingsActive}
+      >
+        <SettingsPanel
+          routeRequest={routeRequest?.event.target === 'settings' ? routeRequest : null}
+        />
+      </div>
+      {tabs.open.map((tab) => {
+        const isActive = active === tab.featureId;
+        return (
+          <div
+            key={tab.featureId}
+            id={`panel-${tab.featureId}`}
+            role="tabpanel"
+            aria-labelledby={`tab-${tab.featureId}`}
+            className="tab-panel tab-panel--cockpit"
+            hidden={!isActive}
+          >
+            <FeatureCockpit
+              active={isActive}
+              featureId={tab.featureId}
+              titleHint={tab.titleHint || tab.featureId}
+              onClose={() => closeFeature(tab.featureId)}
+              onDeleted={handleFeatureDeleted}
+              onLoadedName={(name) => renameTab(tab.featureId, name)}
+              attentionItems={attentionItems.filter(
+                (item) =>
+                  item.kind !== 'recovery' && attentionOwnerFeatureId(item) === tab.featureId,
+              )}
+              refreshAttention={refreshAttention}
+              attentionDrafts={activeAttentionDrafts}
+              setAttentionDrafts={updateAttentionDrafts}
+              attentionPreviewRequest={
+                attentionPreviewRequest?.featureId === tab.featureId
+                  ? attentionPreviewRequest
+                  : null
+              }
+              onAttentionPreviewClose={closeAttentionPreview}
+              selectedRunNumber={tab.selectedRunNumber ?? null}
+              onSelectRun={(runNumber) => {
+                persist({
+                  ...tabs,
+                  open: tabs.open.map((entry) =>
+                    entry.featureId === tab.featureId
+                      ? { ...entry, selectedRunNumber: runNumber }
+                      : entry,
+                  ),
+                });
+              }}
+            />
+          </div>
+        );
+      })}
     </section>
   );
 }

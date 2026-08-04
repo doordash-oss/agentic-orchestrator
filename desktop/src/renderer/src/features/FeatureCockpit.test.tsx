@@ -24,7 +24,10 @@ vi.mock('monaco-editor', () => ({
   },
 }));
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.useRealTimers();
+});
 
 const FEATURE_ID = 'abcd1234ef567890';
 
@@ -53,10 +56,10 @@ const helpAttention: AttentionItem = {
   prompt: 'Feature waiting for implementation guidance.',
 };
 
-function renderCockpit(mock = installAgenticoMock()) {
+function renderCockpit(mock = installAgenticoMock(), active = true) {
   const onClose = vi.fn();
   const onLoadedName = vi.fn();
-  render(
+  const view = render(
     <FeatureCockpit
       featureId={FEATURE_ID}
       titleHint="Search revamp"
@@ -66,9 +69,29 @@ function renderCockpit(mock = installAgenticoMock()) {
       refreshAttention={() => Promise.resolve([])}
       attentionDrafts={emptyAttentionDrafts()}
       setAttentionDrafts={vi.fn()}
+      active={active}
     />,
   );
-  return { mock, onClose, onLoadedName };
+  return {
+    mock,
+    onClose,
+    onLoadedName,
+    setActive(next: boolean) {
+      view.rerender(
+        <FeatureCockpit
+          featureId={FEATURE_ID}
+          titleHint="Search revamp"
+          onClose={onClose}
+          onLoadedName={onLoadedName}
+          attentionItems={[]}
+          refreshAttention={() => Promise.resolve([])}
+          attentionDrafts={emptyAttentionDrafts()}
+          setAttentionDrafts={vi.fn()}
+          active={next}
+        />,
+      );
+    },
+  };
 }
 
 describe('FeatureCockpit snapshot rendering', () => {
@@ -936,28 +959,69 @@ describe('FeatureCockpit convergence', () => {
     await waitFor(() => expect(mock.api.getFeature.mock.calls.length).toBe(base + 2));
   });
 
-  it('ignores an older snapshot that resolves after a newer invalidation', async () => {
+  it('delays and coalesces invalidations while inactive, then flushes on activation', async () => {
     const mock = installAgenticoMock();
-    let resolveOlder!: (snapshot: ReturnType<typeof featureSnapshot>) => void;
-    let resolveNewer!: (snapshot: ReturnType<typeof featureSnapshot>) => void;
+    const view = renderCockpit(mock, false);
+    await screen.findByRole('heading', { name: 'Search revamp' });
+    vi.useFakeTimers();
+    const base = mock.api.getFeature.mock.calls.length;
+    mock.emitAppEvent({ type: 'invalidated', kind: 'feature.updated', featureId: FEATURE_ID });
+    mock.emitAppEvent({ type: 'invalidated', kind: 'feature.updated', featureId: FEATURE_ID });
+    expect(mock.api.getFeature).toHaveBeenCalledTimes(base);
+    await vi.advanceTimersByTimeAsync(4_999);
+    expect(mock.api.getFeature).toHaveBeenCalledTimes(base);
+    await act(async () => view.setActive(true));
+    expect(mock.api.getFeature).toHaveBeenCalledTimes(base + 1);
+  });
+
+  it('keeps the loaded snapshot visible when a silent refresh fails', async () => {
+    const mock = installAgenticoMock();
+    renderCockpit(mock, true);
+    expect(await screen.findByRole('heading', { name: 'Search revamp' })).toBeVisible();
+    mock.api.getFeature.mockRejectedValueOnce(new Error('unavailable: runtime busy'));
+    mock.emitAppEvent({ type: 'invalidated', kind: 'feature.updated', featureId: FEATURE_ID });
+    expect(await screen.findByText('Refreshing from the runtime…')).toBeVisible();
+    expect(screen.getByRole('heading', { name: 'Search revamp' })).toBeVisible();
+    expect(screen.queryByText(/Loading Search revamp from the runtime/)).not.toBeInTheDocument();
+  });
+
+  it('shows the missing state when a silent refresh reports not_found', async () => {
+    const mock = installAgenticoMock();
+    renderCockpit(mock, true);
+    await screen.findByRole('heading', { name: 'Search revamp' });
+    mock.api.getFeature.mockRejectedValueOnce(new Error('not_found: feature not found'));
+    mock.emitAppEvent({ type: 'invalidated', kind: 'feature.updated', featureId: FEATURE_ID });
+    expect(await screen.findByText('This feature no longer exists on the server.')).toBeVisible();
+  });
+
+  it('runs a trailing refresh when invalidated during a current refresh', async () => {
+    const mock = installAgenticoMock();
+    let resolveFirstRefresh!: (snapshot: ReturnType<typeof featureSnapshot>) => void;
+    let resolveTrailingRefresh!: (snapshot: ReturnType<typeof featureSnapshot>) => void;
     mock.api.getFeature
       .mockResolvedValueOnce(featureSnapshot())
       .mockImplementationOnce(
-        () => new Promise((resolve) => (resolveOlder = resolve as typeof resolveOlder)),
+        () =>
+          new Promise(
+            (resolve) => (resolveFirstRefresh = resolve as typeof resolveFirstRefresh),
+          ),
       )
       .mockImplementationOnce(
-        () => new Promise((resolve) => (resolveNewer = resolve as typeof resolveNewer)),
+        () =>
+          new Promise(
+            (resolve) => (resolveTrailingRefresh = resolve as typeof resolveTrailingRefresh),
+          ),
       );
     renderCockpit(mock);
     await screen.findByRole('heading', { name: 'Search revamp' });
 
     mock.emitAppEvent({ type: 'invalidated', kind: 'feature.updated', featureId: FEATURE_ID });
     mock.emitAppEvent({ type: 'invalidated', kind: 'feature.updated', featureId: FEATURE_ID });
+    await waitFor(() => expect(mock.api.getFeature).toHaveBeenCalledTimes(2));
+    await act(async () => resolveFirstRefresh(featureSnapshot({ name: 'First refresh' })));
     await waitFor(() => expect(mock.api.getFeature).toHaveBeenCalledTimes(3));
-    await act(async () => resolveNewer(featureSnapshot({ name: 'Newest snapshot' })));
+    await act(async () => resolveTrailingRefresh(featureSnapshot({ name: 'Newest snapshot' })));
     expect(await screen.findByRole('heading', { name: 'Newest snapshot' })).toBeInTheDocument();
-    await act(async () => resolveOlder(featureSnapshot({ name: 'Stale snapshot' })));
-    expect(screen.queryByRole('heading', { name: 'Stale snapshot' })).not.toBeInTheDocument();
   });
 
   it('keeps a failed run transcript available for inspection', async () => {

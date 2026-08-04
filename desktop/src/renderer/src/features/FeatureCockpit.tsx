@@ -76,6 +76,10 @@ import {
   isRunAtRest,
   showsRun,
 } from './featureView';
+import {
+  createFeatureRefreshScheduler,
+  type FeatureRefreshScheduler,
+} from './featureRefreshScheduler';
 
 type CockpitState =
   | { phase: 'loading' }
@@ -85,6 +89,8 @@ type CockpitState =
 
 export interface FeatureCockpitProps {
   featureId: string;
+  /** Whether this cockpit is the active workspace panel. */
+  active?: boolean;
   /** Local presentation hint shown until the authoritative name loads. */
   titleHint: string;
   onClose(): void;
@@ -741,9 +747,12 @@ export function FeatureCockpit({
   onAttentionPreviewClose,
   selectedRunNumber,
   onSelectRun,
+  active = true,
 }: FeatureCockpitProps) {
   const [state, setState] = useState<CockpitState>({ phase: 'loading' });
-  const [stale, setStale] = useState(false);
+  const [streamStale, setStreamStale] = useState(false);
+  const [refreshFailed, setRefreshFailed] = useState(false);
+  const stale = streamStale || refreshFailed;
   const [busy, setBusy] = useState(false);
   const [announcement, setAnnouncement] = useState('');
   const [actionError, setActionError] = useState<{
@@ -776,6 +785,9 @@ export function FeatureCockpit({
   const isNarrow = useMediaQuery('(max-width: 900px)');
   const actionInFlightRef = useRef(false);
   const loadRequestRef = useRef(0);
+  const schedulerRef = useRef<FeatureRefreshScheduler | null>(null);
+  const selectedRunNumberRef = useRef(selectedRunNumber);
+  selectedRunNumberRef.current = selectedRunNumber;
   const stopButtonRef = useRef<HTMLButtonElement>(null);
   const inspectorButtonRef = useRef<HTMLButtonElement>(null);
   const onLoadedNameRef = useRef(onLoadedName);
@@ -803,12 +815,14 @@ export function FeatureCockpit({
     (options: { silent?: boolean } = {}) => {
       const request = ++loadRequestRef.current;
       if (options.silent !== true) {
+        setRefreshFailed(false);
         setState({ phase: 'loading' });
       }
       return window.agentico
         .getFeature(featureId)
         .then((snapshot) => {
           if (request !== loadRequestRef.current) return;
+          setRefreshFailed(false);
           setState({ phase: 'loaded', snapshot });
           onLoadedNameRef.current(snapshot.name);
         })
@@ -816,7 +830,10 @@ export function FeatureCockpit({
           if (request !== loadRequestRef.current) return;
           const parsed = parseIpcError(err);
           if (parsed.code === 'not_found') {
+            setRefreshFailed(false);
             setState({ phase: 'missing' });
+          } else if (options.silent === true) {
+            setRefreshFailed(true);
           } else {
             setState({ phase: 'error', error: parsed });
           }
@@ -896,9 +913,18 @@ export function FeatureCockpit({
   // so the view can show that it is refreshing after a reconnect.
   useEffect(() => {
     load();
+    const scheduler = createFeatureRefreshScheduler(() => load({ silent: true }), {
+      active,
+      visible: document.visibilityState === 'visible',
+    });
+    schedulerRef.current = scheduler;
+    const onVisibilityChange = () => {
+      scheduler.setVisible(document.visibilityState === 'visible');
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
     const unsubscribe = window.agentico.onAppEvent((event) => {
       if (event.type === 'status') {
-        setStale(event.stream !== 'live');
+        setStreamStale(event.stream !== 'live');
         return;
       }
       if (event.relationshipDeleted === true && event.parentId === featureId) {
@@ -913,23 +939,30 @@ export function FeatureCockpit({
         event.parentId === featureId;
       if (relevant) {
         if (
-          selectedRunNumber !== undefined &&
-          selectedRunNumber !== null &&
-          selectedRunNumber > 0
+          selectedRunNumberRef.current !== undefined &&
+          selectedRunNumberRef.current !== null &&
+          selectedRunNumberRef.current > 0
         ) {
           setCurrentRunBadges((badges) => ({
             ...badges,
             changed: true,
           }));
         }
-        load({ silent: true });
+        scheduler.invalidate();
       }
     });
     return () => {
+      scheduler.dispose();
+      schedulerRef.current = null;
+      document.removeEventListener('visibilitychange', onVisibilityChange);
       loadRequestRef.current += 1;
       unsubscribe();
     };
-  }, [featureId, load, selectedRunNumber]);
+  }, [featureId, load]);
+
+  useEffect(() => {
+    schedulerRef.current?.setActive(active);
+  }, [active]);
 
   useEffect(() => {
     if (state.phase !== 'loaded' || !isRunAtRest(state.snapshot.status)) {

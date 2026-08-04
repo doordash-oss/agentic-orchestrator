@@ -43,7 +43,7 @@ import (
 // The gate checks, for each persisted behind repo:
 //   - the persisted creation-time target SHA is an ancestor of the child branch
 //     head (the child merged the creation-time target);
-//   - no merge is in progress in the child worktree;
+//   - no merge or rebase sequencer is in progress in the child worktree;
 //   - no tracked file carries literal conflict markers.
 //
 // A persisted behind-repo target missing its creation-time SHA fails closed
@@ -122,13 +122,13 @@ func (o *Orchestrator) evalRebaseGateRepo(child *feature.Feature, repoName strin
 		return entry, true
 	}
 
-	// 2. No merge in progress in the child worktree.
-	if git.MergeInProgress(childWorktree) {
+	// 2. No merge or rebase sequencer in progress in the child worktree.
+	if git.MergeInProgress(childWorktree) || git.RebaseInProgress(childWorktree) {
 		entry := feature.RepoTransactionEntry{
 			Repo:        repoName,
 			PrepState:   feature.RepoPrepFailed,
 			GateCode:    feature.GateCodeMergeInProgress,
-			Diagnostics: "rebase gate: a merge is in progress in the child worktree (MERGE_HEAD present)",
+			Diagnostics: "rebase gate: a merge or rebase sequencer is in progress in the child worktree (MERGE_HEAD, rebase-merge, or rebase-apply present)",
 		}
 		return entry, true
 	}

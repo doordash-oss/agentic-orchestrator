@@ -362,6 +362,59 @@ func TestRebaseGate_MergeInProgressFailure(t *testing.T) {
 	}
 }
 
+// TestRebaseGate_RebaseInProgressFailure verifies a child worktree stopped in
+// an interactive rebase aborts with the typed sequencer-in-progress attention
+// record and refs untouched even when the worktree is otherwise clean.
+func TestRebaseGate_RebaseInProgressFailure(t *testing.T) {
+	fx := newRebaseGateFixture(t, true) // merge target so ancestor check passes
+	before := fx.parentRefSHA(0)
+	childWT := fx.repos[0].childWT
+
+	testutil.CommitFile(t, childWT, "paused-rebase.txt", "pending\n", "pending rebase edit")
+
+	editor := filepath.Join(t.TempDir(), "sequence-editor.sh")
+	script := "#!/bin/sh\nperl -0pi -e 's/^pick /edit /m' \"$1\"\n"
+	if err := os.WriteFile(editor, []byte(script), 0o755); err != nil {
+		t.Fatalf("write sequence editor: %v", err)
+	}
+	cmd := exec.Command("git", "-C", childWT, "rebase", "-i", "HEAD~1")
+	cmd.Env = append(testutil.GitTestEnv(),
+		"GIT_SEQUENCE_EDITOR="+editor,
+		"GIT_AUTHOR_NAME=Test", "GIT_AUTHOR_EMAIL=test@test.com",
+		"GIT_COMMITTER_NAME=Test", "GIT_COMMITTER_EMAIL=test@test.com",
+	)
+	out, err := cmd.CombinedOutput()
+	if !git.RebaseInProgress(childWT) {
+		t.Fatalf("setup invariant: rebase-merge/rebase-apply not present after interactive rebase: err=%v\n%s", err, out)
+	}
+	if git.MergeInProgress(childWT) {
+		t.Fatalf("setup invariant: MERGE_HEAD present; want a rebase-only sequencer state")
+	}
+	if status := childIntegrationGit(t, childWT, "status", "--porcelain"); status != "" {
+		t.Fatalf("setup invariant: child worktree status = %q, want clean stopped-rebase worktree", status)
+	}
+
+	o := fx.orchestrator()
+	if err := o.RunChildIntegration(fx.childID); err != nil {
+		t.Fatalf("RunChildIntegration() error = %v; want nil", err)
+	}
+
+	_, child := fx.reload()
+	journal := child.Parent.Transaction
+	if journal == nil || journal.Phase != feature.TransactionPhaseAttention {
+		t.Fatalf("transaction = %+v, want attention", journal)
+	}
+	if journal.Entries[0].GateCode != feature.GateCodeMergeInProgress {
+		t.Errorf("gate code = %q, want %q", journal.Entries[0].GateCode, feature.GateCodeMergeInProgress)
+	}
+	if !strings.Contains(journal.Entries[0].Diagnostics, "rebase") {
+		t.Errorf("diagnostics = %q, want rebase sequencer detail", journal.Entries[0].Diagnostics)
+	}
+	if after := fx.parentRefSHA(0); after != before {
+		t.Errorf("parent ref changed: before=%s after=%s", before, after)
+	}
+}
+
 // TestRebaseGate_MissingTargetSHAFailsClosed verifies a behind-repo target
 // without a persisted creation-time SHA fails closed with its own typed
 // diagnostic.

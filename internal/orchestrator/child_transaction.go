@@ -302,6 +302,11 @@ func (o *Orchestrator) applyTransactionCandidates(child, parent *feature.Feature
 		if passThroughCandidate(entry) {
 			if err := o.deps.Worktrees.ResetToCommit(parentWorktree, entry.CandidateSHA); err != nil {
 				diag := fmt.Sprintf("syncing parent worktree for pass-through repo %s: %v", entry.Repo, err)
+				if journal.AnyApplied() {
+					entry.Diagnostics = diag
+					entry.ApplyState = feature.RepoApplyAttention
+					return o.rollbackTransaction(child, parent, journal, i)
+				}
 				return o.parkApplyAttention(child, journal, entry, diag)
 			}
 			entry.ApplyState = feature.RepoApplyApplied

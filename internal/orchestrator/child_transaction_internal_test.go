@@ -775,3 +775,79 @@ func TestTransactionApplySyncFailureRollsBackAll(t *testing.T) {
 		}
 	}
 }
+
+// TestTransactionPassThroughSyncFailureRollsBackApplied proves that a
+// worktree-sync failure on an up-to-date pass-through rebase repo still
+// compensates the earlier applied refs. Without the fix, the pass-through
+// sync failure parked at attention without rolling back the behind repo's
+// applied ref, leaving the parent partially integrated.
+func TestTransactionPassThroughSyncFailureRollsBackApplied(t *testing.T) {
+	if testing.Short() {
+		t.Skip("real-git integration test")
+	}
+	fx := newMultiRepoTransactionFixture(t, 2)
+
+	// Recreate the child as a rebase child where repoA was behind its target
+	// at creation and repoB was already up to date (pass-through). Reset
+	// repoB's child branch to the parent anchor so the pass-through
+	// ancestor invariant holds.
+	txGit(t, fx.childWTs[1], "reset", "--hard", fx.parentSHA[1])
+	child, _ := fx.store.Load(fx.child.ID)
+	child.Parent.Kind = feature.ChildKindRebase
+	child.Parent.RebaseBehind = []string{"repoA"}
+	child.Parent.RebaseTargets = []feature.RebaseRepoTarget{{
+		Repo: "repoA", Target: "feature/parent", Ref: "feature/parent",
+		TargetSHA: fx.parentSHA[0],
+	}}
+	if err := fx.store.Save(child); err != nil {
+		t.Fatalf("save child: %v", err)
+	}
+	parent, child := fx.reload()
+
+	o := fx.orchestrator()
+	journal, err := o.prepareTransactionCandidates(child, parent)
+	if err != nil {
+		t.Fatalf("prepareTransactionCandidates() error = %v", err)
+	}
+	if journal == nil {
+		t.Fatal("journal is nil")
+	}
+	if got := journal.Entries[1].CandidateSHA; got != journal.Entries[1].ParentAnchorSHA {
+		t.Fatalf("repo 1: CandidateSHA = %s, want pass-through anchor %s", got, journal.Entries[1].ParentAnchorSHA)
+	}
+	oldSHAs := make([]string, len(journal.Entries))
+	for i := range journal.Entries {
+		oldSHAs[i] = journal.Entries[i].ParentAnchorSHA
+	}
+
+	// Apply with a worktree manager that fails ResetToCommit for repoB's
+	// pass-through sync. RepoA applies fully first, so the transaction must
+	// roll back repoA's ref instead of parking at attention.
+	resetWT := &failingResetWorktrees{
+		WorktreeManager: fx.wm,
+		failRepoDir:     fx.repoDirs[1],
+	}
+	applyO := New(Deps{
+		Lifecycle: fx.mgr,
+		Store:     fx.store,
+		Worktrees: resetWT,
+	}, Hooks{})
+
+	if err := applyO.applyTransactionCandidates(child, parent, journal); err != nil {
+		t.Fatalf("applyTransactionCandidates() error = %v, want nil with attention", err)
+	}
+
+	// Both refs must be unchanged: repoA rolled back, repoB never moved.
+	for i := range fx.repoDirs {
+		got := fx.refSHA(i, "refs/heads/feature/parent")
+		if got != oldSHAs[i] {
+			t.Fatalf("repo %d: ref = %s after rollback, want old SHA %s (pass-through sync failure must roll back earlier applied refs)", i, got, oldSHAs[i])
+		}
+	}
+
+	// RepoA's worktree must be restored to the rolled-back ref.
+	wtHead := txGit(t, fx.repoDirs[0], "rev-parse", "HEAD")
+	if wtHead != oldSHAs[0] {
+		t.Fatalf("repo 0: worktree HEAD = %s, want old SHA %s after rollback", wtHead, oldSHAs[0])
+	}
+}

@@ -131,8 +131,9 @@ const (
 	// an ancestor of the child branch head — the child did not merge the
 	// creation-time target.
 	GateCodeNotAncestor = "rebase_gate_not_ancestor"
-	// GateCodeMergeInProgress: a merge is underway in the child worktree at
-	// gate time (MERGE_HEAD present).
+	// GateCodeMergeInProgress: a merge or rebase sequencer is underway in
+	// the child worktree at gate time (MERGE_HEAD, rebase-merge, or
+	// rebase-apply present).
 	GateCodeMergeInProgress = "rebase_gate_merge_in_progress"
 	// GateCodeConflictMarkers: literal conflict markers remain in one or more
 	// tracked files of the child worktree, or the marker scan itself failed

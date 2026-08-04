@@ -912,11 +912,22 @@ export function FeatureCockpit({
   // Fetch on mount; refetch on relevant invalidations; track stream health
   // so the view can show that it is refreshing after a reconnect.
   useEffect(() => {
-    load();
-    const scheduler = createFeatureRefreshScheduler(() => load({ silent: true }), {
-      active,
-      visible: document.visibilityState === 'visible',
-    });
+    let initialLoad = true;
+    // Start the initial request through the scheduler, too, so an invalidation
+    // arriving before it resolves remains a queued trailing refresh.
+    const scheduler = createFeatureRefreshScheduler(
+      () => {
+        const options = initialLoad ? undefined : { silent: true };
+        initialLoad = false;
+        return load(options);
+      },
+      {
+        // Initial loading is independent of panel activity and window visibility.
+        // The actual values are applied immediately after its first flush starts.
+        active: true,
+        visible: true,
+      },
+    );
     schedulerRef.current = scheduler;
     const onVisibilityChange = () => {
       scheduler.setVisible(document.visibilityState === 'visible');
@@ -951,6 +962,9 @@ export function FeatureCockpit({
         scheduler.invalidate();
       }
     });
+    scheduler.invalidate();
+    scheduler.setActive(active);
+    scheduler.setVisible(document.visibilityState === 'visible');
     return () => {
       scheduler.dispose();
       schedulerRef.current = null;

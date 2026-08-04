@@ -994,6 +994,26 @@ describe('FeatureCockpit convergence', () => {
     expect(await screen.findByText('This feature no longer exists on the server.')).toBeVisible();
   });
 
+  it('does not compete with an unresolved initial load after an invalidation', async () => {
+    const mock = installAgenticoMock();
+    let resolveInitial!: (snapshot: ReturnType<typeof featureSnapshot>) => void;
+    mock.api.getFeature
+      .mockImplementationOnce(
+        () => new Promise((resolve) => (resolveInitial = resolve as typeof resolveInitial)),
+      )
+      .mockRejectedValueOnce(new Error('unavailable: runtime busy'));
+    renderCockpit(mock);
+    await waitFor(() => expect(mock.api.getFeature).toHaveBeenCalledTimes(1));
+
+    mock.emitAppEvent({ type: 'invalidated', kind: 'feature.updated', featureId: FEATURE_ID });
+    expect(mock.api.getFeature).toHaveBeenCalledTimes(1);
+
+    await act(async () => resolveInitial(featureSnapshot()));
+    expect(await screen.findByText('Refreshing from the runtime…')).toBeVisible();
+    expect(await screen.findByRole('heading', { name: 'Search revamp' })).toBeVisible();
+    expect(screen.queryByText(/Loading Search revamp from the runtime/)).not.toBeInTheDocument();
+  });
+
   it('runs a trailing refresh when invalidated during a current refresh', async () => {
     const mock = installAgenticoMock();
     let resolveFirstRefresh!: (snapshot: ReturnType<typeof featureSnapshot>) => void;
@@ -1002,9 +1022,7 @@ describe('FeatureCockpit convergence', () => {
       .mockResolvedValueOnce(featureSnapshot())
       .mockImplementationOnce(
         () =>
-          new Promise(
-            (resolve) => (resolveFirstRefresh = resolve as typeof resolveFirstRefresh),
-          ),
+          new Promise((resolve) => (resolveFirstRefresh = resolve as typeof resolveFirstRefresh)),
       )
       .mockImplementationOnce(
         () =>

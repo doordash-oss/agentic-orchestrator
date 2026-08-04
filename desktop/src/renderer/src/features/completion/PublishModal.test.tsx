@@ -90,7 +90,15 @@ describe('PublishModalBody', () => {
     expect(screen.getByText('Force-updates the pull-request branch.')).toBeInTheDocument();
     expect(screen.getByRole('checkbox', { name: 'api' })).toBeChecked();
 
+    // pendingDirty is true with no enumerated files (nil Worktrees or an
+    // InspectCleanliness error upstream) — publish still requires explicit
+    // confirmation rather than silently sweeping up unknown files.
+    expect(
+      screen.getByText('Could not list the files this publish would commit.'),
+    ).toBeInTheDocument();
     const submit = screen.getByRole('button', { name: 'Publish updates' });
+    expect(submit).toBeDisabled();
+    await userEvent.click(screen.getByRole('checkbox', { name: 'Commit uncommitted files' }));
     expect(submit).toBeEnabled();
     await userEvent.click(submit);
 
@@ -239,5 +247,95 @@ describe('PublishModalBody', () => {
     );
 
     expect(screen.getByText('+3 more')).toBeInTheDocument();
+  });
+
+  it('shows a fallback notice and still requires confirmation when the preflight could not enumerate', async () => {
+    render(
+      <PublishModalBody
+        featureId="abcd1234ef567890"
+        preflight={{
+          featureId: 'abcd1234ef567890',
+          sourceRevision: 'rev-1',
+          canMarkDone: true,
+          repos: [
+            {
+              repo: 'api',
+              publishable: true,
+              touched: true,
+              status: 'unpublished_changes',
+              pendingDirty: true,
+            },
+          ],
+        }}
+        dispatchAction={vi.fn()}
+        generatePublishDescription={vi.fn()}
+        openExternal={vi.fn()}
+        onDispatched={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.getByText('Could not list the files this publish would commit.'),
+    ).toBeInTheDocument();
+    const submit = screen.getByRole('button', { name: 'Publish updates' });
+    expect(submit).toBeDisabled();
+    await userEvent.click(screen.getByRole('checkbox', { name: 'Commit uncommitted files' }));
+    expect(submit).toBeEnabled();
+  });
+
+  it('invalidates the confirmation when the dirty selection changes', async () => {
+    const dispatchAction = vi.fn().mockResolvedValue({ result: 'published' });
+    render(
+      <PublishModalBody
+        featureId="abcd1234ef567890"
+        preflight={{
+          featureId: 'abcd1234ef567890',
+          sourceRevision: 'rev-1',
+          canMarkDone: true,
+          repos: [
+            {
+              repo: 'api',
+              publishable: true,
+              touched: true,
+              status: 'unpublished_changes',
+              pendingDirty: true,
+              pendingDirtyFiles: ['a.ts'],
+              pendingDirtyFileTotal: 1,
+            },
+            {
+              repo: 'core',
+              publishable: true,
+              touched: true,
+              status: 'unpublished_changes',
+              pendingDirty: true,
+              pendingDirtyFiles: ['b.ts', 'c.ts', 'd.ts'],
+              pendingDirtyFileTotal: 3,
+            },
+          ],
+        }}
+        dispatchAction={dispatchAction}
+        generatePublishDescription={vi.fn()}
+        openExternal={vi.fn()}
+        onDispatched={vi.fn()}
+      />,
+    );
+
+    const submit = screen.getByRole('button', { name: 'Publish updates' });
+    const confirm = screen.getByRole('checkbox', { name: 'Commit uncommitted files' });
+    const coreCheckbox = screen.getByRole('checkbox', { name: 'core' });
+
+    // Both dirty repos start selected. Deselect one, so only "api" (1 file)
+    // remains dirty-selected.
+    await userEvent.click(coreCheckbox);
+    expect(submit).toBeDisabled();
+
+    // Confirm against that smaller set.
+    await userEvent.click(confirm);
+    expect(submit).toBeEnabled();
+
+    // Re-select "core" (3 files) — the confirmed set was only ever "api",
+    // so the tick must not carry over to authorize the larger set.
+    await userEvent.click(coreCheckbox);
+    expect(submit).toBeDisabled();
   });
 });

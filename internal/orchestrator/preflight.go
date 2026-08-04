@@ -133,8 +133,13 @@ func (o *Orchestrator) applyPendingDelivery(f *feature.Feature, repo feature.Fea
 	// zero-valued and PendingDirty alone carries the signal.
 	if work.Dirty && o.deps.Worktrees != nil {
 		if report, err := o.deps.Worktrees.InspectCleanliness(repoWorkDir(repo), feature.DefaultDirtyPathLimit); err == nil && report != nil {
-			result.PendingDirtyFiles = append(append(append([]string{}, report.Staged...), report.Unstaged...), report.Untracked...)
-			result.PendingDirtyFileTotal = report.StagedTotal + report.UnstagedTotal + report.UntrackedTotal
+			all := append(append(append([]string{}, report.Staged...), report.Unstaged...), report.Untracked...)
+			// A path staged and further modified (MM) is reported by both
+			// categories; dedupe so it is neither listed nor counted twice.
+			deduped := dedupePreservingOrder(all)
+			result.PendingDirtyFiles = deduped
+			total := report.StagedTotal + report.UnstagedTotal + report.UntrackedTotal
+			result.PendingDirtyFileTotal = total - (len(all) - len(deduped))
 		}
 	}
 	if result.Publishable && result.PRURL != "" {
@@ -157,4 +162,20 @@ func (o *Orchestrator) applyPendingDelivery(f *feature.Feature, repo feature.Fea
 		}
 	}
 	return result
+}
+
+// dedupePreservingOrder drops repeated entries, keeping each one's first
+// occurrence position — used because a staged-and-further-modified (MM) path
+// is reported by both the staged and unstaged categories.
+func dedupePreservingOrder(paths []string) []string {
+	seen := make(map[string]bool, len(paths))
+	out := make([]string, 0, len(paths))
+	for _, p := range paths {
+		if seen[p] {
+			continue
+		}
+		seen[p] = true
+		out = append(out, p)
+	}
+	return out
 }

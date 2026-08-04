@@ -8001,6 +8001,12 @@ body {
   font: 12px var(--font-body);
 }
 
+.completion-workspace__dirty-unknown {
+  margin: 0;
+  color: var(--color-warning, var(--color-muted));
+  font: 12px var(--font-body);
+}
+
 .completion-workspace__dirty-confirm {
   display: flex;
   align-items: center;

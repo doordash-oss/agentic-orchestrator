@@ -476,6 +476,39 @@ func TestCompletionPreflightListsDirtyFiles(t *testing.T) {
 	}
 }
 
+func TestCompletionPreflightDedupesStagedAndFurtherModifiedFile(t *testing.T) {
+	t.Parallel()
+	repo := pendingDeliveryRepo(t, true)
+	path := filepath.Join(repo.WorktreePath, "both.txt")
+	if err := os.WriteFile(path, []byte("committed"), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+	runCompletionGit(t, repo.WorktreePath, "add", "both.txt")
+	runCompletionGit(t, repo.WorktreePath, "commit", "-m", "add both.txt")
+	// Stage a modification, then modify again without staging: git status
+	// reports this single path as "MM" — staged AND unstaged.
+	if err := os.WriteFile(path, []byte("staged change"), 0o644); err != nil {
+		t.Fatalf("stage modification: %v", err)
+	}
+	runCompletionGit(t, repo.WorktreePath, "add", "both.txt")
+	if err := os.WriteFile(path, []byte("further unstaged change"), 0o644); err != nil {
+		t.Fatalf("unstaged modification: %v", err)
+	}
+	o := newPendingDeliveryOrchestratorWithWorktrees(t, feature.StatusCodeReady, repo,
+		&feature.RepoState{Touched: true, PRURL: "https://github.example/repo-a/pull/1"})
+
+	got := onlyPendingRepo(t, o)
+	if !got.PendingDirty {
+		t.Fatal("pending dirty = false; want true")
+	}
+	if got.PendingDirtyFileTotal != 1 {
+		t.Errorf("pending dirty file total = %d; want 1 (deduped)", got.PendingDirtyFileTotal)
+	}
+	if len(got.PendingDirtyFiles) != 1 || got.PendingDirtyFiles[0] != "both.txt" {
+		t.Errorf("pending dirty files = %v; want [both.txt] exactly once", got.PendingDirtyFiles)
+	}
+}
+
 func TestCompletionPreflightWithoutWorktreesLeavesDirtyFilesUnset(t *testing.T) {
 	t.Parallel()
 	repo := pendingDeliveryRepo(t, true)

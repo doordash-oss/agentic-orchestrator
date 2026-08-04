@@ -50,12 +50,19 @@ test('packaged real-server start, semantic watch, history, and authoritative sto
     });
     await evidenceShot(handle, 'cockpit-ready-light-wide');
 
+    const retainedCockpit = await cockpit.elementHandle();
+    expect(retainedCockpit).not.toBeNull();
     await handle.page.getByRole('tab', { name: 'Home' }).click();
+    expect(await retainedCockpit!.evaluate((node) => node.isConnected)).toBe(true);
+    await expect(cockpit).toBeHidden();
     const featureList = handle.page.getByRole('region', { name: 'Existing features' });
     await expect(featureList).toContainText('Packaged Signal Journey');
     await featureList.scrollIntoViewIfNeeded();
     await evidenceShot(handle, 'cockpit-intervention-dashboard-light-wide');
     await handle.page.getByRole('tab', { name: 'Packaged Signal Journey' }).click();
+    expect(await retainedCockpit!.evaluate((node) => node.isConnected)).toBe(true);
+    await expect(cockpit).toBeVisible();
+    await expect(cockpit.getByText(/Loading .* from the runtime/)).toHaveCount(0);
 
     transcript.section('Start through the UI exactly once');
     const start = cockpit.getByRole('button', { name: 'Start', exact: true });

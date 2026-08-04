@@ -331,5 +331,6 @@ test('aftercare reports unpublished commits and offers to publish them', async (
   await expect(facts).toContainText('Unpublished');
   await expect(facts).toContainText('3 commits');
 
-  await expect(page.getByRole('button', { name: 'Publish updates' }).first()).toBeVisible();
+  const actions = page.getByRole('group', { name: 'Feature actions' });
+  await expect(actions.getByRole('button', { name: 'Publish updates', exact: true })).toBeVisible();
 });

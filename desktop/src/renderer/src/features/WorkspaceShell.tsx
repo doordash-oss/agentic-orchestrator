@@ -77,6 +77,8 @@ export function WorkspaceShell({
 }) {
   // null while the local tab prefs are being restored.
   const [tabs, setTabs] = useState<TabsPrefs | null>(null);
+  const tabsStateRef = useRef<TabsPrefs | null>(null);
+  const tabsPersistenceRef = useRef<Promise<void>>(Promise.resolve());
   const [list, setList] = useState<ListState>({ phase: 'loading' });
   const [localAttentionDrafts, setLocalAttentionDrafts] = useState(emptyAttentionDrafts);
   const activeAttentionDrafts = attentionDrafts ?? localAttentionDrafts;
@@ -94,6 +96,7 @@ export function WorkspaceShell({
   const homeActiveRef = useRef(false);
   const [view, setView] = useState<'home' | 'create'>('home');
   const [bulkPreviewRequest, setBulkPreviewRequest] = useState<number | null>(null);
+  const [settingsActivated, setSettingsActivated] = useState(false);
 
   // Restore ONLY identity/presentation state locally; corrupt or missing
   // settings fall back to an empty tab strip.
@@ -103,18 +106,27 @@ export function WorkspaceShell({
       .getSettings()
       .then((settings) => {
         if (alive) {
+          tabsStateRef.current = settings.tabs;
           setTabs(settings.tabs);
         }
       })
       .catch(() => {
         if (alive) {
-          setTabs(defaultTabsPrefs());
+          const fallback = defaultTabsPrefs();
+          tabsStateRef.current = fallback;
+          setTabs(fallback);
         }
       });
     return () => {
       alive = false;
     };
   }, []);
+
+  useEffect(() => {
+    if (tabs?.activeFeatureId === SETTINGS_TAB_ID) {
+      setSettingsActivated(true);
+    }
+  }, [tabs?.activeFeatureId]);
 
   const loadList = useCallback(() => {
     const request = ++listRequestRef.current;
@@ -174,10 +186,16 @@ export function WorkspaceShell({
 
   /** Persist failures never block the UI — tabs are presentation only. */
   const persist = useCallback((next: TabsPrefs) => {
+    tabsStateRef.current = next;
     setTabs(next);
-    window.agentico.updateSettings({ tabs: next }).catch(() => {
-      // The server-side feature state is unaffected; ignore.
-    });
+    const write = () =>
+      window.agentico
+        .updateSettings({ tabs: next })
+        .then(() => undefined)
+        .catch(() => {
+          // The server-side feature state is unaffected; keep later writes moving.
+        });
+    tabsPersistenceRef.current = tabsPersistenceRef.current.then(write, write);
   }, []);
 
   const openFeature = useCallback(
@@ -219,23 +237,22 @@ export function WorkspaceShell({
     [closeFeature, loadList],
   );
 
-  const renameTab = useCallback((featureId: string, titleHint: string) => {
-    setTabs((current) => {
-      const base = current ?? defaultTabsPrefs();
+  const renameTab = useCallback(
+    (featureId: string, titleHint: string) => {
+      const base = tabsStateRef.current ?? defaultTabsPrefs();
       const tab = base.open.find((entry) => entry.featureId === featureId);
       if (tab === undefined || tab.titleHint === titleHint) {
-        return current;
+        return;
       }
-      const next = {
+      persist({
         open: base.open.map((entry) =>
           entry.featureId === featureId ? { ...entry, titleHint } : entry,
         ),
         activeFeatureId: base.activeFeatureId,
-      };
-      window.agentico.updateSettings({ tabs: next }).catch(() => {});
-      return next;
-    });
-  }, []);
+      });
+    },
+    [persist],
+  );
 
   const attentionByFeature = useMemo(() => {
     const counts = new Map<string, number>();
@@ -299,27 +316,26 @@ export function WorkspaceShell({
     onAttentionJumpHandled();
   }, [attentionJump, featureLabel, onAttentionJumpHandled, openFeature, persist, tabs]);
 
-  const completeCreationExit = useCallback((destination: CreationDestination) => {
-    setTabs((current) => {
-      const base = current ?? defaultTabsPrefs();
+  const completeCreationExit = useCallback(
+    (destination: CreationDestination) => {
+      const base = tabsStateRef.current ?? defaultTabsPrefs();
       const activeFeatureId =
         destination.kind === 'home'
           ? null
           : destination.kind === 'settings'
             ? SETTINGS_TAB_ID
             : destination.featureId;
-      const next = {
+      persist({
         ...base,
         activeFeatureId,
-      };
-      window.agentico.updateSettings({ tabs: next }).catch(() => {});
-      return next;
-    });
-    setView('home');
-    if (destination.kind === 'home') {
-      requestAnimationFrame(() => newFeatureButtonRef.current?.focus());
-    }
-  }, []);
+      });
+      setView('home');
+      if (destination.kind === 'home') {
+        requestAnimationFrame(() => newFeatureButtonRef.current?.focus());
+      }
+    },
+    [persist],
+  );
   const creationGuard = useCreationGuard(completeCreationExit);
 
   const showHome = useCallback(() => {
@@ -558,9 +574,11 @@ export function WorkspaceShell({
         className="tab-panel"
         hidden={!isSettingsActive}
       >
-        <SettingsPanel
-          routeRequest={routeRequest?.event.target === 'settings' ? routeRequest : null}
-        />
+        {settingsActivated || isSettingsActive ? (
+          <SettingsPanel
+            routeRequest={routeRequest?.event.target === 'settings' ? routeRequest : null}
+          />
+        ) : null}
       </div>
       {tabs.open.map((tab) => {
         const isActive = active === tab.featureId;

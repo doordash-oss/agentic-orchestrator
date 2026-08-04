@@ -2,7 +2,12 @@ import { act, cleanup, render, screen, waitFor, within } from '@testing-library/
 import userEvent from '@testing-library/user-event';
 import { useCallback, useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { defaultSettings, type AttentionItem, type Settings } from '../../../shared/ipc';
+import {
+  defaultSettings,
+  type AttentionItem,
+  type Settings,
+  type TabsPrefs,
+} from '../../../shared/ipc';
 import { featureSnapshot, installAgenticoMock } from '../test/agenticoMock';
 import { WorkspaceShell } from './WorkspaceShell';
 
@@ -75,6 +80,28 @@ describe('WorkspaceShell tabs', () => {
     expect(screen.queryByRole('form', { name: /create a feature/i })).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: 'New feature' }));
     expect(await screen.findByRole('form', { name: /create a feature/i })).toBeInTheDocument();
+  });
+
+  it('mounts Settings only after its first activation and retains it afterward', async () => {
+    const mock = installAgenticoMock();
+    render(<WorkspaceShell />);
+    const user = userEvent.setup();
+
+    await screen.findByRole('tab', { name: 'Home' });
+    expect(mock.api.getReadiness).not.toHaveBeenCalled();
+    expect(mock.api.getUpdates).not.toHaveBeenCalled();
+    expect(mock.api.getDiagnostics).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole('tab', { name: 'Settings' }));
+    await waitFor(() => expect(mock.api.getReadiness).toHaveBeenCalledTimes(1));
+    expect(mock.api.getUpdates).toHaveBeenCalledTimes(1);
+    expect(mock.api.getDiagnostics).toHaveBeenCalledTimes(1);
+
+    await user.click(screen.getByRole('tab', { name: 'Home' }));
+    await user.click(screen.getByRole('tab', { name: 'Settings' }));
+    expect(mock.api.getReadiness).toHaveBeenCalledTimes(1);
+    expect(mock.api.getUpdates).toHaveBeenCalledTimes(1);
+    expect(mock.api.getDiagnostics).toHaveBeenCalledTimes(1);
   });
 
   it('hydrates and renders intervention-first rows with operational detail and safe failure text', async () => {
@@ -457,6 +484,24 @@ describe('WorkspaceShell tabs', () => {
       },
     };
     const mock = installAgenticoMock({ settings, features: [] });
+    let persistedTabs = settings.tabs;
+    const pendingWrites: Array<{ tabs: TabsPrefs; resolve: () => void }> = [];
+    mock.api.updateSettings.mockImplementation(
+      ({ tabs }) =>
+        new Promise<void>((resolve) => {
+          if (tabs === undefined) {
+            resolve();
+            return;
+          }
+          pendingWrites.push({
+            tabs,
+            resolve: () => {
+              persistedTabs = tabs;
+              resolve();
+            },
+          });
+        }),
+    );
     let resolveFirst!: (value: ReturnType<typeof featureSnapshot>) => void;
     let resolveSecond!: (value: ReturnType<typeof featureSnapshot>) => void;
     mock.api.getFeature.mockImplementation(
@@ -471,20 +516,26 @@ describe('WorkspaceShell tabs', () => {
     await act(async () =>
       resolveSecond(featureSnapshot({ id: SECOND_FEATURE_ID, name: 'Authoritative second' })),
     );
+    await waitFor(() => expect(pendingWrites).toHaveLength(1));
     await act(async () =>
       resolveFirst(featureSnapshot({ id: FEATURE_ID, name: 'Authoritative first' })),
     );
-    await waitFor(() =>
-      expect(mock.api.updateSettings).toHaveBeenCalledWith({
-        tabs: {
-          open: [
-            { featureId: FEATURE_ID, titleHint: 'Authoritative first' },
-            { featureId: SECOND_FEATURE_ID, titleHint: 'Authoritative second' },
-          ],
-          activeFeatureId: FEATURE_ID,
-        },
-      }),
-    );
+    expect(pendingWrites).toHaveLength(1);
+
+    const firstWrite = pendingWrites[0];
+    if (firstWrite === undefined) throw new Error('first tab write was not queued');
+    await act(async () => firstWrite.resolve());
+    await waitFor(() => expect(pendingWrites).toHaveLength(2));
+    const secondWrite = pendingWrites[1];
+    if (secondWrite === undefined) throw new Error('second tab write was not queued');
+    await act(async () => secondWrite.resolve());
+    expect(persistedTabs).toEqual({
+      open: [
+        { featureId: FEATURE_ID, titleHint: 'Authoritative first' },
+        { featureId: SECOND_FEATURE_ID, titleHint: 'Authoritative second' },
+      ],
+      activeFeatureId: FEATURE_ID,
+    });
   });
 
   it('shows a no-longer-exists state for a restored tab whose feature vanished', async () => {

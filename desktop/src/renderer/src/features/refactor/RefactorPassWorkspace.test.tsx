@@ -290,6 +290,33 @@ describe('RefactorPassWorkspace', () => {
     expect(mock.api.dispatchFeatureAction).not.toHaveBeenCalled();
   });
 
+  it('pauses hidden pass invalidations and refreshes without dropping state on activation', async () => {
+    const mock = installAgenticoMock({ feature: readyChild() });
+    const parent = parentWith();
+    const onChanged = vi.fn();
+    const { result, rerender } = renderHook(
+      ({ active }) => useRefactorPass(parent, onChanged, active),
+      { initialProps: { active: true } },
+    );
+    await waitFor(() => expect(result.current.child?.id).toBe(CHILD_ID));
+
+    rerender({ active: false });
+    const hiddenCalls = mock.api.getFeature.mock.calls.length;
+    act(() =>
+      mock.emitAppEvent({
+        type: 'invalidated',
+        kind: 'feature.updated',
+        featureId: CHILD_ID,
+      }),
+    );
+    expect(mock.api.getFeature).toHaveBeenCalledTimes(hiddenCalls);
+    expect(result.current.child?.id).toBe(CHILD_ID);
+
+    rerender({ active: true });
+    expect(result.current.child?.id).toBe(CHILD_ID);
+    await waitFor(() => expect(mock.api.getFeature).toHaveBeenCalledTimes(hiddenCalls + 1));
+  });
+
   it("surfaces the pass session's pending question inline and answerable", () => {
     installAgenticoMock({ feature: readyChild() });
     const parent = parentWith({

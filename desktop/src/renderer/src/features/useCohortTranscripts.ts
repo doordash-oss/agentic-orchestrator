@@ -34,6 +34,7 @@ export function useCohortTranscripts(
   shouldStream: boolean,
   currentIteration?: number,
   currentReviewAxes?: readonly string[],
+  active = true,
 ): CohortTranscripts {
   const [runSessions, setRunSessions] = useState<SessionSummary[]>([]);
   const [membership, setMembership] = useState(EMPTY_COHORT);
@@ -46,6 +47,7 @@ export function useCohortTranscripts(
   // Discover the run's sessions, then re-discover on relevant invalidations
   // and, while streaming, on a foreground polling interval.
   useEffect(() => {
+    if (!active) return;
     let disposed = false;
     const discover = (): void => {
       void window.agentico
@@ -65,9 +67,10 @@ export function useCohortTranscripts(
       disposed = true;
       if (interval !== undefined) clearInterval(interval);
     };
-  }, [featureId, runNumber, generation, shouldStream]);
+  }, [active, featureId, runNumber, generation, shouldStream]);
 
   useEffect(() => {
+    if (!active) return;
     return window.agentico.onAppEvent((event) => {
       if (event.type === 'status') return;
       if (
@@ -78,7 +81,7 @@ export function useCohortTranscripts(
         refresh();
       }
     });
-  }, [featureId, refresh]);
+  }, [active, featureId, refresh]);
 
   // Fold the discovered sessions into a stable, retention-aware cohort.
   useEffect(() => {
@@ -127,6 +130,7 @@ export function useCohortTranscripts(
   );
 
   useEffect(() => {
+    if (!active) return;
     let disposed = false;
     const subscriptions: string[] = [];
     const members = membership.sessionIds;
@@ -173,7 +177,7 @@ export function useCohortTranscripts(
       unsubscribe();
       for (const id of subscriptions) void window.agentico.cancelSessionOutput(id);
     };
-  }, [featureId, runNumber, cohortKey, activeKey, shouldStream, generation]);
+  }, [active, featureId, runNumber, cohortKey, activeKey, shouldStream, generation]);
 
   const selectSession = useCallback((id: string) => setSelectedId(id), []);
 

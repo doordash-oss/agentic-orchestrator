@@ -974,6 +974,76 @@ describe('FeatureCockpit convergence', () => {
     expect(mock.api.getFeature).toHaveBeenCalledTimes(base + 1);
   });
 
+  it('propagates document visibility to pause and restore live child work', async () => {
+    vi.useFakeTimers();
+    let visible = true;
+    const visibilitySpy = vi
+      .spyOn(document, 'visibilityState', 'get')
+      .mockImplementation(() => (visible ? 'visible' : 'hidden'));
+    const hiddenSpy = vi.spyOn(document, 'hidden', 'get').mockImplementation(() => !visible);
+    try {
+      const activeSnapshot = featureSnapshot({
+        status: 'Researching',
+        currentPhase: 'Research',
+        setup: { status: 'done', attempt: 1, tasks: [] },
+        actions: [{ id: 'pause-stop', enabled: true, disabledReasons: [] }],
+      });
+      const mock = installAgenticoMock({
+        feature: activeSnapshot,
+        sessions: [
+          {
+            id: 'research-session',
+            featureId: FEATURE_ID,
+            runNumber: 1,
+            phase: 'Research',
+            kind: 'phase',
+            status: 'running',
+            startedAt: '2026-08-04T10:00:00.000Z',
+            taskActivities: [],
+            runningTaskCount: 0,
+            usage: {},
+          },
+        ],
+      });
+      mock.api.getRun.mockResolvedValue({ runNumber: 1, artifactCount: 0 });
+      renderCockpit(mock);
+      await vi.waitFor(() => expect(mock.api.openSessionOutput).toHaveBeenCalledTimes(1));
+
+      visible = false;
+      act(() => document.dispatchEvent(new Event('visibilitychange')));
+      await vi.waitFor(() => expect(mock.api.cancelSessionOutput).toHaveBeenCalledTimes(1));
+      expect(mock.sessionOutputListenerCount()).toBe(0);
+      const hiddenCalls = {
+        run: mock.api.getRun.mock.calls.length,
+        preview: mock.api.getLivePreview.mock.calls.length,
+        sessions: mock.api.listRunSessions.mock.calls.length,
+        output: mock.api.openSessionOutput.mock.calls.length,
+      };
+
+      act(() => mock.emitAppEvent({ type: 'invalidated', kind: 'session.updated' }));
+      await act(() => vi.advanceTimersByTimeAsync(6_000));
+      expect(mock.api.getRun).toHaveBeenCalledTimes(hiddenCalls.run);
+      expect(mock.api.getLivePreview).toHaveBeenCalledTimes(hiddenCalls.preview);
+      expect(mock.api.listRunSessions).toHaveBeenCalledTimes(hiddenCalls.sessions);
+      expect(mock.api.openSessionOutput).toHaveBeenCalledTimes(hiddenCalls.output);
+
+      visible = true;
+      act(() => document.dispatchEvent(new Event('visibilitychange')));
+      await vi.waitFor(() =>
+        expect(mock.api.getLivePreview).toHaveBeenCalledTimes(hiddenCalls.preview + 1),
+      );
+      await vi.waitFor(() =>
+        expect(mock.api.listRunSessions).toHaveBeenCalledTimes(hiddenCalls.sessions + 1),
+      );
+      await vi.waitFor(() =>
+        expect(mock.api.openSessionOutput).toHaveBeenCalledTimes(hiddenCalls.output + 1),
+      );
+    } finally {
+      visibilitySpy.mockRestore();
+      hiddenSpy.mockRestore();
+    }
+  });
+
   it('keeps the loaded snapshot visible when a silent refresh fails', async () => {
     const mock = installAgenticoMock();
     renderCockpit(mock, true);
@@ -1040,6 +1110,58 @@ describe('FeatureCockpit convergence', () => {
     await waitFor(() => expect(mock.api.getFeature).toHaveBeenCalledTimes(3));
     await act(async () => resolveTrailingRefresh(featureSnapshot({ name: 'Newest snapshot' })));
     expect(await screen.findByRole('heading', { name: 'Newest snapshot' })).toBeInTheDocument();
+  });
+
+  it('serializes an action refresh with invalidations and converges through one trailing refresh', async () => {
+    const ready = featureSnapshot({
+      status: 'Created',
+      setup: { status: 'done', attempt: 1, tasks: [] },
+      actions: [{ id: 'start', enabled: true, disabledReasons: [] }],
+    });
+    const converged = featureSnapshot({
+      name: 'Converged snapshot',
+      status: 'Planning',
+      currentPhase: 'Plan',
+      setup: { status: 'done', attempt: 1, tasks: [] },
+      actions: [],
+    });
+    let resolveActionRefresh!: (snapshot: FeatureSnapshot) => void;
+    let resolveTrailingRefresh!: (snapshot: FeatureSnapshot) => void;
+    const mock = installAgenticoMock({ feature: ready });
+    mock.api.getFeature
+      .mockResolvedValueOnce(ready)
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => (resolveActionRefresh = resolve as typeof resolveActionRefresh)),
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise(
+            (resolve) => (resolveTrailingRefresh = resolve as typeof resolveTrailingRefresh),
+          ),
+      );
+    mock.api.dispatchFeatureAction.mockResolvedValue({
+      featureId: FEATURE_ID,
+      action: 'start',
+      result: 'started',
+      sessionIds: [],
+    });
+    renderCockpit(mock);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Start' }));
+    await waitFor(() => expect(mock.api.getFeature).toHaveBeenCalledTimes(2));
+
+    act(() => {
+      mock.emitAppEvent({ type: 'invalidated', kind: 'feature.updated', featureId: FEATURE_ID });
+      mock.emitAppEvent({ type: 'invalidated', kind: 'feature.updated', featureId: FEATURE_ID });
+    });
+    expect(mock.api.getFeature).toHaveBeenCalledTimes(2);
+
+    await act(async () => resolveActionRefresh(ready));
+    await waitFor(() => expect(mock.api.getFeature).toHaveBeenCalledTimes(3));
+    await act(async () => resolveTrailingRefresh(converged));
+    expect(await screen.findByRole('heading', { name: 'Converged snapshot' })).toBeInTheDocument();
+    expect(mock.api.getFeature).toHaveBeenCalledTimes(3);
   });
 
   it('keeps a failed run transcript available for inspection', async () => {

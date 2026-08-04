@@ -782,6 +782,10 @@ export function FeatureCockpit({
     run: RunDetailView | null;
   } | null>(null);
   const [currentRunBadges, setCurrentRunBadges] = useState({ changed: false, attention: false });
+  const [documentVisible, setDocumentVisible] = useState(
+    () => document.visibilityState === 'visible',
+  );
+  const retainedEffectsActive = active && documentVisible;
   const isNarrow = useMediaQuery('(max-width: 900px)');
   const actionInFlightRef = useRef(false);
   const loadRequestRef = useRef(0);
@@ -811,7 +815,7 @@ export function FeatureCockpit({
     }
   }, [attentionPreviewRequest]);
 
-  const load = useCallback(
+  const runFeatureRefresh = useCallback(
     (options: { silent?: boolean } = {}) => {
       const request = ++loadRequestRef.current;
       if (options.silent !== true) {
@@ -842,6 +846,12 @@ export function FeatureCockpit({
     [featureId],
   );
 
+  const refreshFeature = useCallback(
+    (options: { silent?: boolean } = {}) =>
+      schedulerRef.current?.refresh(options) ?? Promise.resolve(),
+    [],
+  );
+
   const completionEnabled =
     state.phase === 'loaded' &&
     (['publish', 'merge', 'mark-done', 'cleanup'] as const).some(
@@ -863,15 +873,16 @@ export function FeatureCockpit({
   );
   const onCompletionDispatched = useCallback(() => {
     void completion.refresh();
-    void load({ silent: true });
-  }, [completion, load]);
+    void refreshFeature({ silent: true });
+  }, [completion, refreshFeature]);
 
   const onPassChanged = useCallback(() => {
-    void load({ silent: true });
-  }, [load]);
+    void refreshFeature({ silent: true });
+  }, [refreshFeature]);
   const refactorPass = useRefactorPass(
     state.phase === 'loaded' ? state.snapshot : null,
     onPassChanged,
+    retainedEffectsActive,
   );
 
   /**
@@ -896,41 +907,33 @@ export function FeatureCockpit({
       .then((launch) => {
         refactorPass.armAutoStart(launch.childId);
         setAnnouncement('Rebase pass launched. Refreshing authoritative state…');
-        void load({ silent: true });
+        void refreshFeature({ silent: true });
       })
       .catch((err: unknown) => {
         setActionError({ action: 'Rebase', error: parseIpcError(err) });
         setAnnouncement('');
-        void load({ silent: true });
+        void refreshFeature({ silent: true });
       })
       .finally(() => {
         actionInFlightRef.current = false;
         setRebaseLaunchBusy(false);
       });
-  }, [featureId, load, refactorPass, rebaseLaunchBusy]);
+  }, [featureId, refreshFeature, refactorPass, rebaseLaunchBusy]);
 
   // Fetch on mount; refetch on relevant invalidations; track stream health
   // so the view can show that it is refreshing after a reconnect.
   useEffect(() => {
-    let initialLoad = true;
-    // Start the initial request through the scheduler, too, so an invalidation
-    // arriving before it resolves remains a queued trailing refresh.
-    const scheduler = createFeatureRefreshScheduler(
-      () => {
-        const options = initialLoad ? undefined : { silent: true };
-        initialLoad = false;
-        return load(options);
-      },
-      {
-        // Initial loading is independent of panel activity and window visibility.
-        // The actual values are applied immediately after its first flush starts.
-        active: true,
-        visible: true,
-      },
-    );
+    const scheduler = createFeatureRefreshScheduler(runFeatureRefresh, {
+      // Initial loading is independent of panel activity and window visibility.
+      // The actual values are applied immediately after its first request starts.
+      active: true,
+      visible: true,
+    });
     schedulerRef.current = scheduler;
     const onVisibilityChange = () => {
-      scheduler.setVisible(document.visibilityState === 'visible');
+      const visible = document.visibilityState === 'visible';
+      setDocumentVisible(visible);
+      scheduler.setVisible(visible);
     };
     document.addEventListener('visibilitychange', onVisibilityChange);
     const unsubscribe = window.agentico.onAppEvent((event) => {
@@ -962,9 +965,9 @@ export function FeatureCockpit({
         scheduler.invalidate();
       }
     });
-    scheduler.invalidate();
+    void scheduler.refresh();
     scheduler.setActive(active);
-    scheduler.setVisible(document.visibilityState === 'visible');
+    onVisibilityChange();
     return () => {
       scheduler.dispose();
       schedulerRef.current = null;
@@ -972,7 +975,7 @@ export function FeatureCockpit({
       loadRequestRef.current += 1;
       unsubscribe();
     };
-  }, [featureId, load]);
+  }, [featureId, runFeatureRefresh]);
 
   useEffect(() => {
     schedulerRef.current?.setActive(active);
@@ -1030,18 +1033,18 @@ export function FeatureCockpit({
       .dispatchFeatureSetup(featureId)
       .then(() => {
         setAnnouncement('Setup dispatched. Progress updates below.');
-        return load({ silent: true });
+        return refreshFeature({ silent: true });
       })
       .catch((err: unknown) => {
         const parsed = parseIpcError(err);
         setAnnouncement(`Retry failed — ${parsed.message}`);
-        return load({ silent: true });
+        return refreshFeature({ silent: true });
       })
       .finally(() => {
         actionInFlightRef.current = false;
         setBusy(false);
       });
-  }, [featureId, load]);
+  }, [featureId, refreshFeature]);
 
   const dispatchLifecycleAction = useCallback(
     (
@@ -1059,19 +1062,19 @@ export function FeatureCockpit({
         .dispatchFeatureAction(request)
         .then(() => {
           setAnnouncement(acceptedAnnouncement);
-          return load({ silent: true });
+          return refreshFeature({ silent: true });
         })
         .catch((err: unknown) => {
           setActionError({ action: errorLabel, error: parseIpcError(err) });
           setAnnouncement('');
-          return load({ silent: true });
+          return refreshFeature({ silent: true });
         })
         .finally(() => {
           actionInFlightRef.current = false;
           setBusy(false);
         });
     },
-    [load],
+    [refreshFeature],
   );
 
   const start = useCallback(
@@ -1153,18 +1156,18 @@ export function FeatureCockpit({
             ? 'Deletion is draining cleanup; this workspace remains open.'
             : 'Deletion requires attention; review the server diagnostics and retry.',
         );
-        return load({ silent: true });
+        return refreshFeature({ silent: true });
       })
       .catch((err: unknown) => {
         setActionError({ action: 'Delete', error: parseIpcError(err) });
         setAnnouncement('');
-        return load({ silent: true });
+        return refreshFeature({ silent: true });
       })
       .finally(() => {
         actionInFlightRef.current = false;
         setBusy(false);
       });
-  }, [featureId, load, onClose, onDeleted]);
+  }, [featureId, onClose, onDeleted, refreshFeature]);
 
   const closeStopDialog = useCallback(() => {
     setStopDialog(false);
@@ -1176,7 +1179,7 @@ export function FeatureCockpit({
     notifyError: (error) => setAnnouncement(attentionErrorMessage(error)),
     onAlreadyResolved: async () => {
       await refreshAttention();
-      await load({ silent: true });
+      await refreshFeature({ silent: true });
     },
   });
 
@@ -1221,7 +1224,7 @@ export function FeatureCockpit({
           <span className="create-form__error-code">{state.error.code}</span>
           <p className="create-form__error-message">{state.error.message}</p>
         </div>
-        <button type="button" className="setup-wizard__action" onClick={() => load()}>
+        <button type="button" className="setup-wizard__action" onClick={() => refreshFeature()}>
           Try again
         </button>
       </section>
@@ -1273,13 +1276,13 @@ export function FeatureCockpit({
       .dispatchFeatureAction({ featureId, action: 'pause-stop' })
       .then(() => {
         setAnnouncement('Stop accepted. Refreshing authoritative state…');
-        return load({ silent: true });
+        return refreshFeature({ silent: true });
       })
       .then(() => closeStopDialog())
       .catch((error: unknown) => {
         setActionError({ action: 'Stop', error: parseIpcError(error) });
         setStopDialog(false);
-        return load({ silent: true });
+        return refreshFeature({ silent: true });
       })
       .finally(() => {
         actionInFlightRef.current = false;
@@ -1328,7 +1331,7 @@ export function FeatureCockpit({
         action,
         async () => {
           const latest = await refreshAttention();
-          await load({ silent: true });
+          await refreshFeature({ silent: true });
           return latest;
         },
         options,
@@ -1695,6 +1698,7 @@ export function FeatureCockpit({
               <RefactorPassWorkspace
                 parent={snapshot}
                 pass={refactorPass}
+                active={retainedEffectsActive}
                 attentionItems={attentionItems}
                 refreshAttention={refreshAttention}
                 attentionDrafts={attentionDrafts}
@@ -1772,7 +1776,7 @@ export function FeatureCockpit({
             onResolved={async () => {
               setDismissedGateId(activeGate.id);
               await refreshAttention();
-              await load({ silent: true });
+              await refreshFeature({ silent: true });
               onAttentionPreviewClose?.();
             }}
           />
@@ -1788,6 +1792,7 @@ export function FeatureCockpit({
             <CurrentRunInspection
               featureId={featureId}
               runNumber={snapshot.activeRun}
+              active={retainedEffectsActive}
               currentPhase={snapshot.currentPhase}
               featureStatus={snapshot.status}
               currentRoadmapPhase={snapshot.currentRoadmapPhase}
@@ -1879,7 +1884,7 @@ export function FeatureCockpit({
               } else {
                 setRewindLanding({ outcome: result, run: null });
               }
-              void load({ silent: true });
+              void refreshFeature({ silent: true });
             }}
           />
         ) : null}
@@ -1895,7 +1900,7 @@ export function FeatureCockpit({
               snapshot={snapshot}
               onDispatched={(launch) => {
                 if (launch.autoStart) refactorPass.armAutoStart(launch.childId);
-                void load({ silent: true });
+                void refreshFeature({ silent: true });
               }}
               onCancel={() => setLauncherModal(null)}
             />
@@ -1913,7 +1918,7 @@ export function FeatureCockpit({
               snapshot={snapshot}
               onDispatched={(launch) => {
                 refactorPass.armAutoStart(launch.childId);
-                void load({ silent: true });
+                void refreshFeature({ silent: true });
               }}
               onCancel={() => setLauncherModal(null)}
             />
@@ -2003,6 +2008,7 @@ export function FeatureCockpit({
             featureId={featureId}
             selectedRunNumber={selectedRunNumber!}
             currentRunNumber={snapshot.activeRun}
+            active={retainedEffectsActive}
             pipeline={snapshot.pipeline}
             currentRunBadges={currentRunBadges}
             onReturnToCurrent={() => {
@@ -2084,7 +2090,7 @@ export function FeatureCockpit({
                   <div className="cockpit__surface cockpit__surface--document">
                     <ReviewSurface
                       featureId={featureId}
-                      onResolved={() => load({ silent: true })}
+                      onResolved={() => refreshFeature({ silent: true })}
                     />
                   </div>
                 ) : null}
@@ -2094,6 +2100,7 @@ export function FeatureCockpit({
                     <CurrentRunInspection
                       featureId={featureId}
                       runNumber={snapshot.activeRun}
+                      active={retainedEffectsActive}
                       currentPhase={snapshot.currentPhase}
                       featureStatus={snapshot.status}
                       currentRoadmapPhase={snapshot.currentRoadmapPhase}
@@ -2246,7 +2253,7 @@ export function FeatureCockpit({
               onResolved={async () => {
                 setDismissedGateId(activeGate.id);
                 await refreshAttention();
-                await load({ silent: true });
+                await refreshFeature({ silent: true });
                 onAttentionPreviewClose?.();
               }}
             />
@@ -2312,7 +2319,7 @@ export function FeatureCockpit({
                 } else {
                   setRewindLanding({ outcome: result, run: null });
                 }
-                void load({ silent: true });
+                void refreshFeature({ silent: true });
               }}
             />
           ) : null}
@@ -2328,7 +2335,7 @@ export function FeatureCockpit({
                 snapshot={snapshot}
                 onDispatched={(launch) => {
                   if (launch.autoStart) refactorPass.armAutoStart(launch.childId);
-                  void load({ silent: true });
+                  void refreshFeature({ silent: true });
                 }}
                 onCancel={() => setLauncherModal(null)}
               />
@@ -2346,7 +2353,7 @@ export function FeatureCockpit({
                 snapshot={snapshot}
                 onDispatched={(launch) => {
                   refactorPass.armAutoStart(launch.childId);
-                  void load({ silent: true });
+                  void refreshFeature({ silent: true });
                 }}
                 onCancel={() => setLauncherModal(null)}
               />

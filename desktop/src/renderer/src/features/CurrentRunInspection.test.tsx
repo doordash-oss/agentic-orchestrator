@@ -612,6 +612,79 @@ describe('CurrentRunInspection', () => {
     expect(screen.getByText('$0.60')).toBeVisible();
   });
 
+  it('pauses hidden live work and refreshes and resubscribes when activated', async () => {
+    vi.useFakeTimers();
+    const mock = installAgenticoMock();
+    mock.api.getLivePreview.mockResolvedValue({
+      featureId: 'abcd1234ef567890',
+      activity: 'Running research',
+      contextPercentage: 12,
+      totalSeconds: 600,
+      totalUsd: 9.04,
+      transcript: [],
+    });
+    mock.api.getRun.mockResolvedValue({
+      runNumber: 8,
+      artifactCount: 0,
+      timing: { totalSeconds: 600, byPhase: { Research: 60 } },
+      cost: { totalUsd: 9.04, byPhase: { Research: 0.5 } },
+    });
+    mock.api.listRunArtifacts.mockResolvedValue({ artifacts: [] });
+    mock.api.listRunSessions.mockResolvedValue({
+      runNumber: 8,
+      sessions: [validator({ id: 'researcher', label: 'Researcher', phase: 'Research' })],
+    });
+    mock.api.getSessionTranscript.mockResolvedValue({
+      sessionId: 'researcher',
+      cursor: { total: 0, start: 0, end: 0 },
+      messages: [],
+    });
+
+    const inspection = (active: boolean) => (
+      <CurrentRunInspection
+        featureId="abcd1234ef567890"
+        runNumber={8}
+        currentPhase="Research"
+        featureStatus="Researching"
+        reviewGate={REVIEW_GATE}
+        shouldStream
+        active={active}
+      />
+    );
+    const view = render(inspection(true));
+
+    await vi.waitFor(() => expect(mock.api.openSessionOutput).toHaveBeenCalledTimes(1));
+    view.rerender(inspection(false));
+    await vi.waitFor(() => expect(mock.api.cancelSessionOutput).toHaveBeenCalledTimes(1));
+    expect(mock.sessionOutputListenerCount()).toBe(0);
+
+    const pausedCalls = {
+      run: mock.api.getRun.mock.calls.length,
+      preview: mock.api.getLivePreview.mock.calls.length,
+      sessions: mock.api.listRunSessions.mock.calls.length,
+      transcript: mock.api.getSessionTranscript.mock.calls.length,
+      output: mock.api.openSessionOutput.mock.calls.length,
+    };
+    act(() => mock.emitAppEvent({ type: 'invalidated', kind: 'session.updated' }));
+    await act(() => vi.advanceTimersByTimeAsync(6_000));
+    expect(mock.api.getRun).toHaveBeenCalledTimes(pausedCalls.run);
+    expect(mock.api.getLivePreview).toHaveBeenCalledTimes(pausedCalls.preview);
+    expect(mock.api.listRunSessions).toHaveBeenCalledTimes(pausedCalls.sessions);
+    expect(mock.api.getSessionTranscript).toHaveBeenCalledTimes(pausedCalls.transcript);
+    expect(mock.api.openSessionOutput).toHaveBeenCalledTimes(pausedCalls.output);
+
+    view.rerender(inspection(true));
+    await vi.waitFor(() =>
+      expect(mock.api.getLivePreview).toHaveBeenCalledTimes(pausedCalls.preview + 1),
+    );
+    await vi.waitFor(() =>
+      expect(mock.api.listRunSessions).toHaveBeenCalledTimes(pausedCalls.sessions + 1),
+    );
+    await vi.waitFor(() =>
+      expect(mock.api.openSessionOutput).toHaveBeenCalledTimes(pausedCalls.output + 1),
+    );
+  });
+
   it('renders required inspection data before optional model metadata resolves', async () => {
     const mock = installAgenticoMock();
     const canonicalModel = 'portkey/@fireworks/accounts/fireworks/models/glm-5p2[1.04M]';

@@ -60,6 +60,8 @@ type PreviewView = 'conversation' | 'trace' | 'files';
 export interface CurrentRunInspectionProps {
   featureId: string;
   runNumber: number;
+  /** Whether retained work for this inspection may fetch or subscribe. */
+  active?: boolean;
   currentPhase: string;
   /** Server feature status; distinguishes a resting run from an active one. */
   featureStatus?: string;
@@ -371,6 +373,7 @@ function LogChannelGroup({
 export function CurrentRunInspection({
   featureId,
   runNumber,
+  active = true,
   currentPhase,
   featureStatus,
   currentRoadmapPhase,
@@ -422,6 +425,7 @@ export function CurrentRunInspection({
     shouldStream,
     currentIteration,
     currentReviewAxes,
+    active,
   );
   const presentedCohort = live.cohort;
   const selectedSession =
@@ -455,6 +459,7 @@ export function CurrentRunInspection({
   }, [attentionRequestId]);
 
   useEffect(() => {
+    if (!active) return;
     const request = ++catalogueRequestRef.current;
     void window.agentico
       .getModelCatalogue()
@@ -465,7 +470,7 @@ export function CurrentRunInspection({
     return () => {
       catalogueRequestRef.current += 1;
     };
-  }, []);
+  }, [active]);
 
   const refresh = useCallback(async () => {
     const request = ++requestRef.current;
@@ -510,14 +515,15 @@ export function CurrentRunInspection({
   useEffect(() => () => onRunMetrics?.(null), [onRunMetrics]);
 
   useEffect(() => {
+    if (!active) return;
     void refresh();
     return () => {
       requestRef.current += 1;
     };
-  }, [refresh, metricPhase, metricRoadmapPhase]);
+  }, [active, refresh, metricPhase, metricRoadmapPhase]);
 
   useEffect(() => {
-    if (!shouldStream || presentation === 'record' || runNumber < 1) return;
+    if (!active || !shouldStream || presentation === 'record' || runNumber < 1) return;
     let disposed = false;
     let inFlight = false;
     const poll = async (): Promise<void> => {
@@ -546,7 +552,7 @@ export function CurrentRunInspection({
       disposed = true;
       clearInterval(interval);
     };
-  }, [featureId, onRunMetrics, presentation, runNumber, shouldStream]);
+  }, [active, featureId, onRunMetrics, presentation, runNumber, shouldStream]);
 
   // Switching runs must not leak the previous run's opened file into the new one.
   useEffect(() => {

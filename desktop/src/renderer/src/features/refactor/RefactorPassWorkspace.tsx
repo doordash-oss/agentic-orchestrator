@@ -77,6 +77,7 @@ export interface RefactorPassController {
 export function useRefactorPass(
   parent: FeatureSnapshot | null,
   onChanged: () => void,
+  active = true,
 ): RefactorPassController {
   const view = parent?.activeChild;
   const parentId = parent?.id;
@@ -86,6 +87,7 @@ export function useRefactorPass(
   const [notice, setNotice] = useState<string | null>(null);
   const [discardOpen, setDiscardOpen] = useState(false);
   const loadRequestRef = useRef(0);
+  const childIdRef = useRef<string | undefined>(undefined);
 
   const loadChild = useCallback(() => {
     if (childId === undefined) return;
@@ -103,15 +105,22 @@ export function useRefactorPass(
   }, [childId]);
 
   useEffect(() => {
-    setChildState({ phase: 'loading' });
+    if (childIdRef.current !== childId) {
+      childIdRef.current = childId;
+      setChildState({ phase: 'loading' });
+    }
+    if (!active) {
+      loadRequestRef.current += 1;
+      return;
+    }
     loadChild();
     return () => {
       loadRequestRef.current += 1;
     };
-  }, [loadChild]);
+  }, [active, childId, loadChild]);
 
   useEffect(() => {
-    if (childId === undefined) return;
+    if (!active || childId === undefined) return;
     return window.agentico.onAppEvent((event) => {
       if (event.type !== 'invalidated') return;
       if (
@@ -124,7 +133,7 @@ export function useRefactorPass(
         loadChild();
       }
     });
-  }, [loadChild, childId, parentId]);
+  }, [active, loadChild, childId, parentId]);
 
   const refreshBoth = useCallback(() => {
     loadChild();
@@ -160,7 +169,7 @@ export function useRefactorPass(
   }, []);
   useEffect(() => {
     const armed = autoStartChildIdRef.current;
-    if (armed === null || busy || child === null || child.id !== armed) return;
+    if (!active || armed === null || busy || child === null || child.id !== armed) return;
     if (child.closeOutcome !== undefined && child.closeOutcome !== '') {
       autoStartChildIdRef.current = null;
       return;
@@ -168,7 +177,7 @@ export function useRefactorPass(
     if (!child.actions.some((action) => action.id === 'start' && action.enabled)) return;
     autoStartChildIdRef.current = null;
     void dispatch('start');
-  }, [busy, child, dispatch]);
+  }, [active, busy, child, dispatch]);
 
   const discard = useCallback(async () => {
     if (child === null || discardAction?.impactPreview === undefined || busy) return;
@@ -207,6 +216,8 @@ export function useRefactorPass(
 export interface RefactorPassWorkspaceProps {
   parent: FeatureSnapshot;
   pass: RefactorPassController;
+  /** Whether retained live pass effects may fetch or subscribe. */
+  active?: boolean;
   attentionItems: AttentionItem[];
   refreshAttention(): Promise<AttentionItem[]>;
   attentionDrafts: AttentionDrafts;
@@ -223,6 +234,7 @@ export interface RefactorPassWorkspaceProps {
 export function RefactorPassWorkspace({
   parent,
   pass,
+  active = true,
   attentionItems,
   refreshAttention,
   attentionDrafts,
@@ -409,6 +421,7 @@ export function RefactorPassWorkspace({
               <CurrentRunInspection
                 featureId={child.id}
                 runNumber={child.activeRun}
+                active={active}
                 currentPhase={child.currentPhase}
                 featureStatus={child.status}
                 currentRoadmapPhase={child.currentRoadmapPhase}

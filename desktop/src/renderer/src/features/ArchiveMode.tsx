@@ -30,6 +30,8 @@ export interface ArchiveModeProps {
   featureId: string;
   selectedRunNumber: number;
   currentRunNumber: number;
+  /** Whether this retained archive may perform authoritative refresh work. */
+  active?: boolean;
   pipeline?: string;
   /** Non-disruptive notices from the live current run while history stays pinned. */
   currentRunBadges?: { changed: boolean; attention: boolean };
@@ -59,6 +61,7 @@ export function ArchiveMode(props: ArchiveModeProps) {
     featureId,
     selectedRunNumber,
     currentRunNumber,
+    active = true,
     pipeline,
     currentRunBadges = { changed: false, attention: false },
     onReturnToCurrent,
@@ -81,6 +84,7 @@ export function ArchiveMode(props: ArchiveModeProps) {
   const [artifactLoadError, setArtifactLoadError] = useState<WizardError | null>(null);
   const [sessionLoadError, setSessionLoadError] = useState<WizardError | null>(null);
   const loadRef = useRef(0);
+  const selectionRef = useRef<string | null>(null);
 
   const load = useCallback(
     async (runNumber: number, page = 1) => {
@@ -125,9 +129,20 @@ export function ArchiveMode(props: ArchiveModeProps) {
   );
 
   useEffect(() => {
-    setState({ phase: 'loading' });
+    const selection = `${featureId}:${selectedRunNumber}`;
+    if (selectionRef.current !== selection) {
+      selectionRef.current = selection;
+      setState({ phase: 'loading' });
+    }
+    if (!active) {
+      loadRef.current += 1;
+      return;
+    }
     void load(selectedRunNumber);
-  }, [selectedRunNumber, load]);
+    return () => {
+      loadRef.current += 1;
+    };
+  }, [active, featureId, selectedRunNumber, load]);
 
   // Load artifacts + sessions for the selected run
   useEffect(() => {
@@ -169,6 +184,7 @@ export function ArchiveMode(props: ArchiveModeProps) {
 
   // App-event invalidation: refetch run list but stay pinned
   useEffect(() => {
+    if (!active) return;
     const unsub = window.agentico.onAppEvent((event) => {
       if (
         event.type === 'invalidated' &&
@@ -178,7 +194,7 @@ export function ArchiveMode(props: ArchiveModeProps) {
       }
     });
     return unsub;
-  }, [featureId, selectedRunNumber, load]);
+  }, [active, featureId, selectedRunNumber, load]);
 
   const handleArtifactSelect = useCallback(
     async (artifactId: string) => {

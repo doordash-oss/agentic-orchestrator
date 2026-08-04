@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MergeModalBody } from './MergeModal';
+import { STATUS_LABELS } from './completionShared';
 import type { CompletionPreflightResult } from '../../../../shared/ipc';
 
 const preflight: CompletionPreflightResult = {
@@ -78,5 +79,13 @@ describe('MergeModalBody', () => {
 
     expect(screen.getByText('2 commits not in main')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Merge updates' })).toBeInTheDocument();
+    // The status chip must read as prose, never as the wire token.
+    expect(screen.getByText('Unmerged changes')).toBeInTheDocument();
+    expect(screen.queryByText('unmerged_changes')).not.toBeInTheDocument();
+  });
+
+  it('labels every undelivered-work status without falling back to the token', () => {
+    expect(STATUS_LABELS.unpublished_changes).toBe('Unpublished changes');
+    expect(STATUS_LABELS.unmerged_changes).toBe('Unmerged changes');
   });
 });

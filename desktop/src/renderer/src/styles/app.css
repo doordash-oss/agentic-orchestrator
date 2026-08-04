@@ -7164,7 +7164,11 @@ body {
 }
 
 .completion-workspace__repo-status[data-status='eligible'],
+.completion-workspace__repo-status[data-status='unpublished_changes'],
+.completion-workspace__repo-status[data-status='unmerged_changes'],
 .completion-workspace__merge-repo span[data-status='eligible'],
+.completion-workspace__merge-repo span[data-status='unpublished_changes'],
+.completion-workspace__merge-repo span[data-status='unmerged_changes'],
 .completion-workspace__file-op[data-op='add'] {
   border-color: var(--color-success);
   color: var(--color-success);

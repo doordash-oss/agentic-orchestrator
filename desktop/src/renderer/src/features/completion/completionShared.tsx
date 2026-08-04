@@ -13,6 +13,8 @@ export const STATUS_LABELS: Record<string, string> = {
   ineligible: 'Local only',
   untouched: 'No changes',
   blocked: 'Blocked',
+  unpublished_changes: 'Unpublished changes',
+  unmerged_changes: 'Unmerged changes',
 };
 
 export function isEligibleForPublish(repo: {

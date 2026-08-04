@@ -71,6 +71,11 @@ export class CompletionService {
         ...(repo.last_error ? { lastError: repo.last_error } : {}),
         ...(repo.base_branch ? { baseBranch: repo.base_branch } : {}),
         ...(repo.branch ? { branch: repo.branch } : {}),
+        ...(repo.pending_commits === undefined ? {} : { pendingCommits: repo.pending_commits }),
+        ...(repo.pending_dirty === undefined ? {} : { pendingDirty: repo.pending_dirty }),
+        ...(repo.push_mode === 'fast_forward' || repo.push_mode === 'rewrite'
+          ? { pushMode: repo.push_mode }
+          : {}),
       })),
     };
   }

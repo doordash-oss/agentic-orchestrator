@@ -2766,7 +2766,7 @@ components:
           type: boolean
         status:
           type: string
-          description: Server-authored completion status — eligible, already_published, completed, ineligible, untouched, or blocked.
+          description: Server-authored completion status — eligible, already_published, unpublished_changes, completed, unmerged_changes, ineligible, untouched, or blocked.
         pr_url:
           type: string
           description: Current PR URL when the repository has been published.
@@ -2787,6 +2787,15 @@ components:
           type: string
           maxLength: 128
           description: Server-authored feature branch for this repository.
+        pending_commits:
+          type: integer
+          description: Commits on this repository's branch that have not reached its delivery destination — the remote pull-request branch, or the base branch for a local-only repository.
+        pending_dirty:
+          type: boolean
+          description: Whether the worktree carries uncommitted changes that have not been delivered.
+        push_mode:
+          type: string
+          description: How a republish reaches an existing pull-request branch — fast_forward or rewrite. rewrite means the remote branch carries commits the local branch does not, so the push replaces remote history under a lease.
     RepositoryDiffResponse:
       allOf:
         - $ref: "#/components/schemas/JSONResponse"

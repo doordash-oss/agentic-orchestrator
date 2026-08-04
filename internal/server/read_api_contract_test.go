@@ -3469,3 +3469,33 @@ func (l fakeMessageLog) ToolUseBlocks() []llm.ContentBlock {
 	}
 	return blocks
 }
+
+func TestCompletionPreflightRepoCarriesPendingDeliveryFields(t *testing.T) {
+	repo := CompletionPreflightRepo{
+		Repo:           "repo-a",
+		Publishable:    true,
+		Touched:        true,
+		Status:         "unpublished_changes",
+		PrURL:          "https://github.example/repo-a/pull/1",
+		PendingCommits: 3,
+		PendingDirty:   true,
+		PushMode:       "rewrite",
+	}
+	data, err := json.Marshal(repo)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if decoded["pending_commits"] != float64(3) {
+		t.Errorf("pending_commits = %v; want 3", decoded["pending_commits"])
+	}
+	if decoded["pending_dirty"] != true {
+		t.Errorf("pending_dirty = %v; want true", decoded["pending_dirty"])
+	}
+	if decoded["push_mode"] != "rewrite" {
+		t.Errorf("push_mode = %v; want rewrite", decoded["push_mode"])
+	}
+}

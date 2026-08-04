@@ -1066,6 +1066,9 @@ export const CompletionPreflightRepoSchema = z.object({
   last_error: z.string().optional(),
   base_branch: z.string().optional(),
   branch: z.string().optional(),
+  pending_commits: z.number().optional(),
+  pending_dirty: z.boolean().optional(),
+  push_mode: z.string().optional(),
 });
 export type CompletionPreflightRepo = z.output<typeof CompletionPreflightRepoSchema>;
 

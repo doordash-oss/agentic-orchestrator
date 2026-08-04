@@ -1030,6 +1030,9 @@ export const CompletionPreflightRepoSchema = z.strictObject({
   lastError: z.string().max(500).optional(),
   baseBranch: z.string().max(128).optional(),
   branch: z.string().max(128).optional(),
+  pendingCommits: z.number().int().min(0).max(100000).optional(),
+  pendingDirty: z.boolean().optional(),
+  pushMode: z.enum(['fast_forward', 'rewrite']).optional(),
 });
 export type CompletionPreflightRepo = z.output<typeof CompletionPreflightRepoSchema>;
 

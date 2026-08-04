@@ -1846,16 +1846,19 @@ func (t *serverMutationTarget) CompletionPreflight(featureID string) (serverrunt
 	}
 	for _, r := range result.Repos {
 		resp.Repos = append(resp.Repos, serverruntime.CompletionPreflightRepo{
-			Repo:        r.Repo,
-			Publishable: r.Publishable,
-			Touched:     r.Touched,
-			Status:      r.Status,
-			PrURL:       r.PRURL,
-			Blocker:     r.Blocker,
-			Freshness:   r.Freshness,
-			LastError:   r.LastError,
-			BaseBranch:  r.BaseBranch,
-			Branch:      r.Branch,
+			Repo:           r.Repo,
+			Publishable:    r.Publishable,
+			Touched:        r.Touched,
+			Status:         r.Status,
+			PrURL:          r.PRURL,
+			Blocker:        r.Blocker,
+			Freshness:      r.Freshness,
+			LastError:      r.LastError,
+			BaseBranch:     r.BaseBranch,
+			Branch:         r.Branch,
+			PendingCommits: r.PendingCommits,
+			PendingDirty:   r.PendingDirty,
+			PushMode:       r.PushMode,
 		})
 	}
 	return resp, nil

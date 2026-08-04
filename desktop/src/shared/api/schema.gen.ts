@@ -1387,7 +1387,7 @@ export interface components {
             repo: string;
             publishable: boolean;
             touched: boolean;
-            /** @description Server-authored completion status — eligible, already_published, completed, ineligible, untouched, or blocked. */
+            /** @description Server-authored completion status — eligible, already_published, unpublished_changes, completed, unmerged_changes, ineligible, untouched, or blocked. */
             status: string;
             /** @description Current PR URL when the repository has been published. */
             pr_url?: string;
@@ -1401,6 +1401,12 @@ export interface components {
             base_branch?: string;
             /** @description Server-authored feature branch for this repository. */
             branch?: string;
+            /** @description Commits on this repository's branch that have not reached its delivery destination — the remote pull-request branch, or the base branch for a local-only repository. */
+            pending_commits?: number;
+            /** @description Whether the worktree carries uncommitted changes that have not been delivered. */
+            pending_dirty?: boolean;
+            /** @description How a republish reaches an existing pull-request branch — fast_forward or rewrite. rewrite means the remote branch carries commits the local branch does not, so the push replaces remote history under a lease. */
+            push_mode?: string;
         };
         RepositoryDiffResponse: components["schemas"]["JSONResponse"] & {
             feature_id: string;

@@ -1215,12 +1215,21 @@ type CompletionPreflightRepo struct {
 	// LastError Safe, bounded last error text.
 	LastError string `json:"last_error,omitempty"`
 
+	// PendingCommits Commits on this repository's branch that have not reached its delivery destination — the remote pull-request branch, or the base branch for a local-only repository.
+	PendingCommits int `json:"pending_commits,omitempty"`
+
+	// PendingDirty Whether the worktree carries uncommitted changes that have not been delivered.
+	PendingDirty bool `json:"pending_dirty,omitempty"`
+
 	// PrURL Current PR URL when the repository has been published.
 	PrURL       string `json:"pr_url,omitempty"`
 	Publishable bool   `json:"publishable"`
-	Repo        string `json:"repo"`
 
-	// Status Server-authored completion status — eligible, already_published, completed, ineligible, untouched, or blocked.
+	// PushMode How a republish reaches an existing pull-request branch — fast_forward or rewrite. rewrite means the remote branch carries commits the local branch does not, so the push replaces remote history under a lease.
+	PushMode string `json:"push_mode,omitempty"`
+	Repo     string `json:"repo"`
+
+	// Status Server-authored completion status — eligible, already_published, unpublished_changes, completed, unmerged_changes, ineligible, untouched, or blocked.
 	Status  string `json:"status"`
 	Touched bool   `json:"touched"`
 }

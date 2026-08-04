@@ -853,6 +853,7 @@ function CaptureApp() {
   if (
     scene === 'aftercare' ||
     scene === 'aftercare-rebase-up-to-date' ||
+    scene === 'aftercare-unpublished' ||
     scene === 'refactor-pass'
   ) {
     return <AftercareScene />;

@@ -316,3 +316,20 @@ test('aftercare already-up-to-date notice reserves runway space', async ({ page 
   expect(rebaseBox!.y + rebaseBox!.height).toBeLessThanOrEqual(reviewFeedbackBox!.y);
   expect(reviewFeedbackBox!.y + reviewFeedbackBox!.height).toBeLessThanOrEqual(900);
 });
+
+test('aftercare reports unpublished commits and offers to publish them', async ({ page }) => {
+  await page.goto('http://localhost:9871/?scene=aftercare-unpublished&theme=dark');
+
+  const aftercare = page.getByRole('region', { name: 'Feature aftercare' });
+  await expect(aftercare).toBeVisible();
+
+  const publishUpdates = aftercare.getByRole('button', { name: /Publish new commits/ });
+  await expect(publishUpdates).toBeVisible();
+  await expect(publishUpdates).toContainText('Not on the pull-request branch yet: 3 commits.');
+
+  const facts = page.getByRole('complementary', { name: 'Feature facts' });
+  await expect(facts).toContainText('Unpublished');
+  await expect(facts).toContainText('3 commits');
+
+  await expect(page.getByRole('button', { name: 'Publish updates' }).first()).toBeVisible();
+});

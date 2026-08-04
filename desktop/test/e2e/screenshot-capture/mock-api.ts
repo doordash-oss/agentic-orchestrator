@@ -1145,7 +1145,11 @@ function makeMockApi(
       if (scene === 'repo-instrument' || scene === 'refactor-launch') {
         return Promise.resolve(CYCLES_FEATURE_SNAPSHOT);
       }
-      if (scene === 'aftercare' || scene === 'aftercare-rebase-up-to-date') {
+      if (
+        scene === 'aftercare' ||
+        scene === 'aftercare-rebase-up-to-date' ||
+        scene === 'aftercare-unpublished'
+      ) {
         return Promise.resolve(AFTERCARE_FEATURE_SNAPSHOT);
       }
       if (scene === 'refactor-pass') {
@@ -1419,7 +1423,11 @@ function makeMockApi(
       } as RunListResult);
     },
     getRun: ({ runNumber }) => {
-      if (scene === 'aftercare' || scene === 'aftercare-rebase-up-to-date') {
+      if (
+        scene === 'aftercare' ||
+        scene === 'aftercare-rebase-up-to-date' ||
+        scene === 'aftercare-unpublished'
+      ) {
         return Promise.resolve({
           ...RUN_DETAIL,
           runNumber,
@@ -1657,6 +1665,28 @@ function makeMockApi(
     preflightCompletion: () => {
       const isPublishScene = scene === 'completion-publish';
       const isDeleteScene = scene === 'completion-delete';
+      if (scene === 'aftercare-unpublished') {
+        return Promise.resolve({
+          featureId: 'abcd1234ef567890',
+          sourceRevision: 'rev-aftercare-mock',
+          canMarkDone: true,
+          repos: [
+            {
+              repo: 'agentic-orchestrator',
+              publishable: true,
+              touched: true,
+              status: 'unpublished_changes',
+              prUrl: 'https://github.com/doordash-oss/agentic-orchestrator/pull/107',
+              baseBranch: 'main',
+              branch: 'feature/configure-per-phase-effort-level',
+              freshness: 'up_to_date',
+              pendingCommits: 3,
+              pendingDirty: false,
+              pushMode: 'fast_forward',
+            },
+          ],
+        });
+      }
       if (scene === 'aftercare' || scene === 'aftercare-rebase-up-to-date') {
         return Promise.resolve({
           featureId: 'abcd1234ef567890',

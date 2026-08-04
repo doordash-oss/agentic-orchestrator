@@ -668,12 +668,6 @@ function toSnapshot(feature: ServerFeatureDetail): FeatureSnapshot {
             ...(repo.last_error === undefined || repo.last_error === ''
               ? {}
               : { lastError: redactText(repo.last_error) }),
-            ...(repo.cycle_type === undefined || repo.cycle_type === ''
-              ? {}
-              : { cycleType: repo.cycle_type }),
-            ...(repo.cycle_status === undefined || repo.cycle_status === ''
-              ? {}
-              : { cycleStatus: repo.cycle_status }),
             ...(repo.rebase_status === undefined || repo.rebase_status === ''
               ? {}
               : { rebaseStatus: repo.rebase_status }),
@@ -684,25 +678,6 @@ function toSnapshot(feature: ServerFeatureDetail): FeatureSnapshot {
               ? {}
               : { conflictFiles: repo.conflict_files }),
           })),
-        }),
-    ...(feature.cycle === undefined
-      ? {}
-      : {
-          cycle: {
-            type: feature.cycle.type,
-            status: feature.cycle.status,
-            ...(feature.cycle.count === undefined ? {} : { count: feature.cycle.count }),
-            ...(feature.cycle.iteration === undefined
-              ? {}
-              : { iteration: feature.cycle.iteration }),
-            ...(feature.cycle.phase === undefined ? {} : { phase: feature.cycle.phase }),
-            ...(feature.cycle.last_error === undefined || feature.cycle.last_error === ''
-              ? {}
-              : { lastError: redactText(feature.cycle.last_error) }),
-            ...(feature.cycle.started_at === undefined
-              ? {}
-              : { startedAt: feature.cycle.started_at }),
-          },
         }),
     reviewGate: {
       reviewingGate: feature.review_gate.reviewing_gate,

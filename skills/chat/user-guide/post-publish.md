@@ -6,30 +6,28 @@ Do not use retired terminal shortcuts to start these actions. Each post-publish 
 
 ## Rebase
 
-Rebase updates a feature branch against its base branch. For a publishable repository, the runtime fetches remote refs, determines the target, rebases, and updates the remote branch. A local-only repository uses its local base branch and does not push.
+The Rebase card in the aftercare workspace launches a rebase child pipeline with one click — no modal, no preflight. The child pipeline merges each behind repo's resolved target branch into the feature branch (merge, not rebase — no history rewriting). Integration lands on the parent's feature branch as a revertable merge commit through the existing child-integration transaction. After integration, the parent auto-publishes if configured, otherwise drops to `CodeReady`.
 
-If conflicts occur, the runtime can build a conflict plan and run an implementation session to resolve it before continuing. Multi-repository features track this cycle per repository.
+If nothing is behind, creation shows an "already up to date" notice instead of spawning a child. On a failed local merge in the completion workspace, a text hint (no button) points to the Rebase card in the feature's aftercare workspace.
 
-**Desktop control:** the completion workspace exposes a Rebase handoff for code-ready and published features.
+**Desktop control:** the aftercare workspace exposes a Rebase card for code-ready and published features.
 
-## Review Comments
+## Review Feedback
 
-The review-comments cycle fetches unresolved pull-request feedback through `gh`, filters comments already handled in prior iterations, creates a resolution plan, runs an implementation session, updates the branch, replies with outcomes, and attempts to resolve inline threads.
+The review-feedback child pass is a child feature that fetches unresolved pull-request feedback, addresses each comment, replies with outcomes, and resolves inline threads. Like the rebase child, it runs as a self-contained feature with its own pipeline and integrates back into the parent on completion.
 
-If a required worktree was previously removed, the runtime can recreate it from durable feature state before the cycle.
-
-**Desktop control:** the completion workspace exposes a review-comments inbox with a resolve flow.
+**Desktop control:** the aftercare workspace exposes a Review-feedback card for features with open PR feedback.
 
 ## Refactor
 
-A refactor cycle accepts a new objective and sends an existing feature back through an appropriate planning and implementation path:
+The refactor child pass creates a child feature with a new objective, sending the work back through an appropriate planning and implementation pipeline:
 
 - Medium starts from planning.
 - Large and Moonshot include the earlier inquiry, research, and design work.
 
-The runtime retains the feature's repository identity and publish state while tracking the refactor cycle per repository.
+The child feature retains the parent's repository identity and publish state, and integrates back into the parent on completion.
 
-**Desktop control:** the completion workspace exposes a refactor prompt with an optional pipeline selector and submit control.
+**Desktop control:** the aftercare workspace exposes a Refactor card with an objective prompt and pipeline selector.
 
 ## Merge
 
@@ -51,4 +49,4 @@ Worktree cleanup removes an isolated feature worktree after it is no longer need
 
 ## What the App Surfaces
 
-For a feature that has reached a terminal or post-implementation state, the Electron app shows its authoritative row on Home and opens its feature tab. Current-run transcript content remains available when the runtime exposes it. The completion workspace delivers publish, rebase, merge, refactor, review-comments, Done, worktree cleanup, and delete controls, plus an artifact browser, a diff viewer, and a pull-request review surface.
+For a feature that has reached a terminal or post-implementation state, the Electron app shows its authoritative row on Home and opens its feature tab. Current-run transcript content remains available when the runtime exposes it. The aftercare workspace delivers Rebase, Refactor, and Review-feedback cards, plus publish, merge, Done, worktree cleanup, and delete controls, an artifact browser, a diff viewer, and a pull-request review surface.

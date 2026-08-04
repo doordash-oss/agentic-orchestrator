@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
 import type {
   LivePreviewView,
-  CycleView,
   ModelCatalogue,
   ReviewGateView,
   RunArtifactsListResult,
@@ -47,7 +46,6 @@ import {
 import { renderSanitizedMarkdown } from './sanitizedMarkdown';
 import { CloseIcon, MaximizeIcon, MinimizeIcon } from '../components/icons';
 import { useModalDismiss } from '../components/useModalDismiss';
-import { RebaseOperationsStage } from './RebaseOperationsStage';
 
 const IDLE_ACTIVITY_LABEL = 'Thinking through the next step';
 const LIVE_METRICS_REFRESH_MS = 1000;
@@ -89,9 +87,8 @@ export interface CurrentRunInspectionProps {
   onAttentionPreviewClose?(): void;
   /** Reports this run's totals up so the inspector sidebar can show them. */
   onRunMetrics?(metrics: RunMetrics | null): void;
-  /** Cycle work supplies its own phase spine and uses this surface as a live canvas. */
-  presentation?: 'regular' | 'cycle' | 'record';
-  cycle?: CycleView;
+  /** Record view supplies its own header label and hides live controls. */
+  presentation?: 'regular' | 'record';
   repoStatus?: RepoStatusView[];
 }
 
@@ -393,8 +390,7 @@ export function CurrentRunInspection({
   onAttentionPreviewClose,
   onRunMetrics,
   presentation = 'regular',
-  cycle,
-  repoStatus = [],
+  repoStatus: _repoStatus = [],
 }: CurrentRunInspectionProps): React.ReactElement {
   const [preview, setPreview] = useState<LivePreviewView | null>(null);
   const [runDetail, setRunDetail] = useState<RunDetailView | null>(null);
@@ -430,14 +426,11 @@ export function CurrentRunInspection({
     currentIteration,
     currentReviewAxes,
   );
-  const presentedCohort =
-    presentation === 'cycle'
-      ? focusCurrentCycleSession(live.cohort, live.selectedId, cycle)
-      : live.cohort;
+  const presentedCohort = live.cohort;
   const selectedSession =
     presentedCohort.find((session) => session.id === live.selectedId) ?? presentedCohort[0] ?? null;
-  const metricPhase = cycleTimingKey(presentation, cycle, currentPhase);
-  const metricRoadmapPhase = presentation === 'cycle' ? undefined : currentRoadmapPhase;
+  const metricPhase = currentPhase;
+  const metricRoadmapPhase = currentRoadmapPhase;
   const stage = useTranscriptStage(
     presentedCohort,
     live.transcripts,
@@ -450,14 +443,6 @@ export function CurrentRunInspection({
     presentedCohort.length === 0 &&
     attentionFooter === undefined &&
     attentionTurn === undefined;
-  const rebaseOperationInFlight = repoStatus.some((repo) =>
-    ['checking', 'rebasing'].includes(repo.rebaseStatus ?? ''),
-  );
-  const showRebaseOperations =
-    presentation === 'cycle' &&
-    cycle?.type === 'rebase' &&
-    presentedCohort.length === 0 &&
-    (cycle.phase === 'inspect_rebase' || rebaseOperationInFlight);
   // The review gate wins over a stale "verifying" marker: while an axis review
   // is active there is no harness contract running to display.
   const verifying = isVerifyingPhase(phaseStatus, verificationItems) && !reviewGate.reviewingGate;
@@ -616,26 +601,8 @@ export function CurrentRunInspection({
   const livePreviewFrame = (
     <div className="live-preview__frame">
       <div className="live-preview__bar">
-        {presentation === 'cycle' ? (
-          <h3 className="live-preview__title">
-            {showRebaseOperations ? 'Harness activity' : 'Live agent activity'}
-          </h3>
-        ) : (
-          <p className="cockpit__eyebrow">Live agent activity</p>
-        )}
+        <p className="cockpit__eyebrow">Live agent activity</p>
         <div className="live-preview__bar-controls">
-          {presentation === 'cycle' ? (
-            <button
-              type="button"
-              className="live-preview__refresh"
-              onClick={() => {
-                void refresh();
-                live.refresh();
-              }}
-            >
-              Refresh
-            </button>
-          ) : null}
           <ViewToggle view={view} onChange={setView} />
           <button
             type="button"
@@ -648,13 +615,7 @@ export function CurrentRunInspection({
           </button>
         </div>
       </div>
-      {showRebaseOperations ? (
-        <RebaseOperationsStage repos={repoStatus} />
-      ) : presentation === 'cycle' && presentedCohort.length === 0 ? (
-        <p className="setup-step__empty">
-          Starting the {cycleStageAgentLabel(cycle?.phase)} agent session…
-        </p>
-      ) : initialLoading ? (
+      {initialLoading ? (
         <p className="setup-step__empty">Loading current run inspection…</p>
       ) : view === 'files' ? (
         filesSurface
@@ -679,39 +640,35 @@ export function CurrentRunInspection({
       aria-label="Current run inspection"
       data-presentation={presentation}
     >
-      {presentation === 'cycle' ? null : (
-        <header className="current-inspection__header">
-          <div>
-            <p className="cockpit__eyebrow">
-              {presentation === 'record' ? 'Sealed run' : 'Mutable current run'}
-            </p>
-            <h3 className="setup-step__title">
-              {presentation === 'record' ? 'Activity and artifacts' : 'Live preview and files'}
-            </h3>
-          </div>
-          <button
-            type="button"
-            onClick={() => {
-              void refresh();
-              live.refresh();
-            }}
-          >
-            Refresh
-          </button>
-        </header>
-      )}
+      <header className="current-inspection__header">
+        <div>
+          <p className="cockpit__eyebrow">
+            {presentation === 'record' ? 'Sealed run' : 'Mutable current run'}
+          </p>
+          <h3 className="setup-step__title">
+            {presentation === 'record' ? 'Activity and artifacts' : 'Live preview and files'}
+          </h3>
+        </div>
+        <button
+          type="button"
+          onClick={() => {
+            void refresh();
+            live.refresh();
+          }}
+        >
+          Refresh
+        </button>
+      </header>
 
-      {presentation !== 'cycle' ? (
-        <RoadmapGauge
-          currentPhase={currentPhase}
-          featureStatus={featureStatus}
-          currentRoadmapPhase={currentRoadmapPhase}
-          totalRoadmapPhases={totalRoadmapPhases}
-          currentIteration={currentIteration}
-          phaseStatus={phaseStatus}
-          reviewGate={reviewGate}
-        />
-      ) : null}
+      <RoadmapGauge
+        currentPhase={currentPhase}
+        featureStatus={featureStatus}
+        currentRoadmapPhase={currentRoadmapPhase}
+        totalRoadmapPhases={totalRoadmapPhases}
+        currentIteration={currentIteration}
+        phaseStatus={phaseStatus}
+        reviewGate={reviewGate}
+      />
 
       {error !== null ? (
         <p role="alert" className="form-field__error">
@@ -721,7 +678,7 @@ export function CurrentRunInspection({
 
       {initialLoading && presentation === 'record' ? (
         <RunRecordSkeleton />
-      ) : initialLoading && presentation !== 'cycle' ? (
+      ) : initialLoading ? (
         <p className="setup-step__empty">Loading current run inspection…</p>
       ) : (
         <div className="current-inspection__preview">
@@ -761,7 +718,6 @@ export function CurrentRunInspection({
                 gate={reviewGate}
                 currentPhase={currentPhase}
                 currentRoadmapPhase={currentRoadmapPhase}
-                cyclePhase={cycle?.phase}
               />
             )
           ) : null}
@@ -819,57 +775,6 @@ function RunRecordSkeleton(): React.ReactElement {
       </div>
     </div>
   );
-}
-
-function focusCurrentCycleSession(
-  cohort: readonly SessionSummary[],
-  selectedId: string | null,
-  cycle?: CycleView,
-): SessionSummary[] {
-  const cycleStartedAt = cycle?.startedAt === undefined ? Number.NaN : Date.parse(cycle.startedAt);
-  const eligible = Number.isNaN(cycleStartedAt)
-    ? cohort
-    : cohort.filter((session) => Date.parse(session.startedAt) >= cycleStartedAt);
-  const selected = eligible.find((session) => session.id === selectedId);
-  const preserveTerminalSession = cycle?.status === 'failed' || cycle?.status === 'interrupted';
-  if (
-    selected !== undefined &&
-    (preserveTerminalSession || !isTerminalSessionStatus(selected.status))
-  ) {
-    return [selected];
-  }
-
-  const active = eligible.find((session) => !isTerminalSessionStatus(session.status));
-  if (active !== undefined) return [active];
-  if (preserveTerminalSession) {
-    const terminal = eligible.find((session) => isTerminalSessionStatus(session.status));
-    if (terminal !== undefined) return [terminal];
-  }
-  return [];
-}
-
-function cycleTimingKey(
-  presentation: CurrentRunInspectionProps['presentation'],
-  cycle: CycleView | undefined,
-  fallback: string,
-): string {
-  const type = cycle?.type?.trim();
-  if (presentation !== 'cycle' || type === undefined || type === '') return fallback;
-  const count = cycle?.count;
-  return count !== undefined && count > 0 ? `${type}-${count}` : type;
-}
-
-function cycleStageAgentLabel(phase?: string): string {
-  switch (phase) {
-    case 'resolve_conflicts':
-      return 'conflict resolution';
-    case 'final_review':
-      return 'final review';
-    case 'publish':
-      return 'publish';
-    default:
-      return 'cycle';
-  }
 }
 
 function RenderedArtifact({ text, ariaLabel }: { text: string; ariaLabel: string }) {
@@ -1533,22 +1438,15 @@ function ReviewGateSummary({
   gate,
   currentPhase,
   currentRoadmapPhase,
-  cyclePhase,
 }: {
   gate: ReviewGateView;
   currentPhase: string;
   currentRoadmapPhase?: number;
-  cyclePhase?: string;
 }): React.ReactElement | null {
   const statuses = orderedReviewStatuses(gate.validatorStatuses);
   if (!gate.reviewingGate && !gate.validatingPlan && statuses.length === 0) return null;
 
-  const target = reviewGateTarget(
-    gate.reviewingGate,
-    currentPhase,
-    currentRoadmapPhase,
-    cyclePhase,
-  );
+  const target = reviewGateTarget(gate.reviewingGate, currentPhase, currentRoadmapPhase);
   const counts = statuses.reduce(
     (result, [, status]) => {
       result[reviewStatusTone(status)] += 1;
@@ -1591,11 +1489,8 @@ function reviewGateTarget(
   reviewingGate: boolean,
   currentPhase: string,
   currentRoadmapPhase?: number,
-  cyclePhase?: string,
 ): string {
   if (reviewingGate) {
-    if (cyclePhase === 'resolve_conflicts') return 'Reviewing conflict resolution';
-    if (cyclePhase === 'final_review') return 'Final review';
     return currentPhase.trim().toLocaleLowerCase() === 'implement'
       ? 'Reviewing implementation'
       : 'Final review';

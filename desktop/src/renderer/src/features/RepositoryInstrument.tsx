@@ -1,8 +1,8 @@
 /**
  * Repository instrument panel: compact per-repository operational status
  * rendered from the server-authored feature detail. Shows publishability,
- * PR, freshness, active cycle/count/status, target branch, conflicts, and
- * safe failure details. Used as the cockpit inspector's operational context.
+ * PR, freshness, rebase status, target branch, conflicts, and safe failure
+ * details. Used as the cockpit inspector's operational context.
  */
 import type { RepoStatusView } from '../../../shared/ipc';
 
@@ -13,15 +13,7 @@ const FRESHNESS_LABELS: Record<string, string> = {
   unknown: 'Unknown',
 };
 
-const CYCLE_STATUS_LABELS: Record<string, string> = {
-  running: 'Running',
-  reviewing: 'Reviewing',
-  need_user_input: 'Needs input',
-  failed: 'Failed',
-  completed: 'Completed',
-};
-
-export const REBASE_STATUS_LABELS: Record<string, string> = {
+const REBASE_STATUS_LABELS: Record<string, string> = {
   checking: 'Checking',
   rebasing: 'Rebasing',
   up_to_date: 'Up to date',
@@ -77,23 +69,6 @@ export function RepositoryInstrument({ repos, onOpenPullRequest }: RepositoryIns
                     >
                       {repo.prUrl}
                     </button>
-                  </dd>
-                </div>
-              ) : null}
-              {repo.cycleType !== undefined ? (
-                <div className="repo-instrument__fact" data-cycle={repo.cycleType}>
-                  <dt>Cycle</dt>
-                  <dd>
-                    <code>{repo.cycleType}</code>
-                    {repo.cycleStatus !== undefined ? (
-                      <span
-                        className="repo-instrument__cycle-status"
-                        data-status={repo.cycleStatus}
-                      >
-                        {' '}
-                        {CYCLE_STATUS_LABELS[repo.cycleStatus] ?? repo.cycleStatus}
-                      </span>
-                    ) : null}
                   </dd>
                 </div>
               ) : null}

@@ -52,7 +52,6 @@ function detailBody(overrides: Record<string, unknown> = {}): Record<string, unk
       current_phase: 'Plan',
       pipeline: 'medium',
       description: 'Improve search.',
-      cycle: {},
       active_run: 1,
       run_count: 1,
       repos: ['repo-a'],
@@ -494,33 +493,6 @@ describe('FeatureService.getFeature', () => {
     });
   });
 
-  it('maps the authoritative active cycle phase', async () => {
-    const { service } = makeService(() => ({
-      status: 200,
-      body: detailBody({
-        cycle: {
-          type: 'rebase',
-          status: 'running',
-          count: 2,
-          iteration: 1,
-          phase: 'resolve_conflicts',
-          started_at: '2026-07-26T16:16:00.123456789-07:00',
-        },
-      }),
-    }));
-
-    await expect(service.getFeature('abcd1234ef567890')).resolves.toMatchObject({
-      cycle: {
-        type: 'rebase',
-        status: 'running',
-        count: 2,
-        iteration: 1,
-        phase: 'resolve_conflicts',
-        startedAt: '2026-07-26T16:16:00.123456789-07:00',
-      },
-    });
-  });
-
   it('falls back to feature progress when the active run detail omits roadmap fields', async () => {
     const body = detailBody({
       status: 'Implementing',
@@ -656,7 +628,6 @@ describe('FeatureService.listFeatures', () => {
             slug: 'search-revamp',
             status: 'Created',
             current_phase: 'Plan',
-            cycle: {},
             active_run: 1,
             run_count: 1,
             repos: ['repo-a'],

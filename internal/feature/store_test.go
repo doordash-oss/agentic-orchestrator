@@ -2007,9 +2007,6 @@ artifacts: {}
 		t.Fatalf("Load() error = %v; want nil (legacy refactor keys must be ignored)", err)
 	}
 	// Legacy cycle state must be dropped on load.
-	if loaded.HasActiveRepoCycles() {
-		t.Error("HasActiveRepoCycles() = true, want false for dropped refactor cycle")
-	}
 
 	// Round-trip save and re-read the raw run.yaml: dropped keys and cycle
 	// state must not be re-emitted.
@@ -2120,9 +2117,6 @@ artifacts: {}
 	if err != nil {
 		t.Fatalf("Load() error = %v; want nil (legacy review-comments keys must be ignored)", err)
 	}
-	if loaded.HasActiveRepoCycles() {
-		t.Error("HasActiveRepoCycles() = true, want false after active review-comments state is dropped")
-	}
 
 	if err := store.Save(loaded); err != nil {
 		t.Fatalf("Save() error = %v; want nil", err)
@@ -2215,9 +2209,6 @@ artifacts: {}
 	loaded, err := store.Load(featureID)
 	if err != nil {
 		t.Fatalf("Load() error = %v; want nil (legacy rebase cycle keys must be ignored)", err)
-	}
-	if loaded.HasActiveRepoCycles() {
-		t.Error("HasActiveRepoCycles() = true, want false for dropped rebase cycle")
 	}
 
 	if err := store.Save(loaded); err != nil {

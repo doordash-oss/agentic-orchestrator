@@ -1,10 +1,11 @@
 /**
  * Packaged local-merge-rebase completion journey: performs an actual
- * conflicted local merge in a fixture repository, hands the affected
- * repository to the existing in-app rebase journey, returns to a fresh
- * completion preflight, retries merge to authoritative atomic completion,
- * cleans the completed worktrees, and verifies the ordinary-feature delete
- * confirmation removes the durable record.
+ * conflicted local merge in a fixture repository, reads the aftercare
+ * rebase hint in the merge modal, launches the rebase pass from the
+ * aftercare Rebase card, returns to a fresh completion preflight, retries
+ * merge to authoritative atomic completion, cleans the completed worktrees,
+ * and verifies the ordinary-feature delete confirmation removes the durable
+ * record.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -141,13 +142,25 @@ test('packaged local-merge-rebase completion: conflict, rebase, retry, done, cle
     await expect(mergeModal.locator('.completion-workspace__result--failure')).toBeVisible();
     transcript.step('merge failed with conflict as expected');
 
-    transcript.section('Hand off to rebase child for the conflicted repository');
-    const rebaseLink = mergeModal.getByRole('button', { name: /Hand off to rebase/i });
-    await expect(rebaseLink).toBeVisible({ timeout: 10_000 });
-    await rebaseLink.click();
-    transcript.step('clicked "Hand off to rebase" — merge modal closes, rebase child launches');
+    transcript.section('Read rebase hint and launch rebase pass from aftercare');
+    await expect(
+      mergeModal.getByText(/Open the Rebase card in the feature's aftercare workspace/),
+    ).toBeVisible({ timeout: 10_000 });
+    transcript.step('aftercare rebase hint appears as plain text with no launch button');
+    await expect(mergeModal.getByRole('button', { name: /Hand off to rebase/i })).not.toBeVisible();
 
+    await mergeModal.getByRole('button', { name: 'Close' }).click();
     await expect(mergeModal).not.toBeVisible({ timeout: 10_000 });
+
+    const aftercare = handle.page.getByRole('region', { name: 'Feature aftercare' });
+    await expect(aftercare).toBeVisible({ timeout: 30_000 });
+    const rebaseCard = aftercare.getByRole('button', { name: /Start rebase pass/ });
+    await expect(rebaseCard).toBeVisible({ timeout: 10_000 });
+    await rebaseCard.click();
+    transcript.step(
+      'clicked "Start rebase pass" on the aftercare Rebase card — rebase child launches',
+    );
+
     const rebasePass = handle.page.getByRole('region', { name: 'Rebase pass' });
     await expect(rebasePass).toBeVisible({ timeout: 60_000 });
     transcript.step('rebase pass workspace visible with kind-aware labeling, no modal');
@@ -177,8 +190,8 @@ test('packaged local-merge-rebase completion: conflict, rebase, retry, done, cle
     }
 
     transcript.section('Reopen merge modal and retry merge to success');
-    // Re-enter the feature after the cycle's persisted terminal state. This mirrors a user
-    // returning from the cycle workspace and ensures the retry is driven by a fresh snapshot.
+    // Re-enter the feature after the rebase pass's persisted terminal state. This mirrors a user
+    // returning from the pass workspace and ensures the retry is driven by a fresh snapshot.
     await handle.page.getByRole('tab', { name: 'Home' }).click();
     const refreshedCockpit = await openCompletion(handle, featureName);
     await refreshedCockpit.getByRole('button', { name: 'Merge', exact: true }).click();

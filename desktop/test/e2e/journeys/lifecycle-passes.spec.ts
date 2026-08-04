@@ -1,9 +1,9 @@
 /**
- * Lifecycle cycles journey: resume, retry, restart, guarded rebase, child
+ * Lifecycle passes journey: resume, retry, restart, guarded rebase, child
  * refactor launch, and repository NEED_USER_INPUT journey against the
  * packaged app and real bundled server.
  *
- * The feature is seeded to Published status so the server enables cycle
+ * The feature is seeded to Published status so the server enables pass
  * actions (rebase and refactor) which are only available
  * for published or manual-ready features.
  */
@@ -20,9 +20,9 @@ import {
 } from '../helpers/world';
 import { setFeatureStatus } from '../helpers/seed';
 
-test('lifecycle cycles: resume, retry, restart, rebase, refactor child', async ({}, testInfo: TestInfo) => {
-  const transcript = new Transcript('lifecycle-cycles', 'Lifecycle cycles journey');
-  const world = createWorld('lifecycle-cycles', {
+test('lifecycle passes: resume, retry, restart, rebase, refactor child', async ({}, testInfo: TestInfo) => {
+  const transcript = new Transcript('lifecycle-passes', 'Lifecycle passes journey');
+  const world = createWorld('lifecycle-passes', {
     auth: { loggedIn: true, authMethod: 'oauth', email: 'e2e@example.invalid' },
     presetWorkspaceRoot: true,
   });
@@ -35,7 +35,7 @@ test('lifecycle cycles: resume, retry, restart, rebase, refactor child', async (
   let handle: AppHandle | null = null;
   try {
     transcript.section('Launch');
-    handle = await launchApp(world, testInfo, { traceName: 'lifecycle-cycles' });
+    handle = await launchApp(world, testInfo, { traceName: 'lifecycle-passes' });
     await expect(handle.page.getByRole('button', { name: 'New feature' })).toBeVisible({
       timeout: 60_000,
     });
@@ -45,7 +45,7 @@ test('lifecycle cycles: resume, retry, restart, rebase, refactor child', async (
     const featureName = `LifecycleJourney${Math.random().toString(16).slice(2, 8)}`;
     const cockpit = await createFeatureViaForm(handle, {
       name: featureName,
-      description: 'lifecycle cycles journey',
+      description: 'lifecycle passes journey',
       repoPatterns: [/alpha/, /beta/],
     });
     await expect(cockpit).toBeVisible({ timeout: 30_000 });
@@ -68,9 +68,9 @@ test('lifecycle cycles: resume, retry, restart, rebase, refactor child', async (
     }
 
     setFeatureStatus(world.stateDir, featureId, 'Published');
-    transcript.step('seeded feature to Published status so cycle actions are enabled');
+    transcript.step('seeded feature to Published status so pass actions are enabled');
 
-    handle = await launchApp(world, testInfo, { traceName: 'lifecycle-cycles-seeded' });
+    handle = await launchApp(world, testInfo, { traceName: 'lifecycle-passes-seeded' });
     const homeTab = handle.page.getByRole('tab', { name: 'Home' });
     await expect(homeTab).toBeVisible({ timeout: 60_000 });
     await homeTab.click();
@@ -79,7 +79,7 @@ test('lifecycle cycles: resume, retry, restart, rebase, refactor child', async (
     });
     transcript.step('relaunched against seeded Published state');
 
-    transcript.section('Open feature cockpit and aftercare cycle actions');
+    transcript.section('Open feature cockpit and aftercare pass actions');
     const featureTab = handle.page.getByRole('tab', { name: featureName });
     await featureTab.click();
     const seededCockpit = handle.page.getByLabel(`Feature ${featureName}`);

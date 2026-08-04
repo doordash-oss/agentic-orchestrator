@@ -16,7 +16,6 @@ export interface MergeModalProps {
     body?: Record<string, unknown>,
   ) => Promise<{ result: string; [k: string]: unknown }>;
   onDispatched: () => void;
-  onHandoffToRebase?: () => void;
 }
 
 export function MergeModalBody({
@@ -24,7 +23,6 @@ export function MergeModalBody({
   preflight,
   dispatchAction,
   onDispatched,
-  onHandoffToRebase,
 }: MergeModalProps): React.ReactElement {
   const mergeAction = useCompletionAction();
 
@@ -46,8 +44,8 @@ export function MergeModalBody({
   return (
     <div className="completion-workspace__merge">
       <p className="completion-workspace__merge-hint">
-        A successful merge across every repository marks the feature Done. A conflict offers the
-        rebase journey for the affected repository.
+        A successful merge across every repository marks the feature Done. A conflict can be
+        resolved with a rebase pass.
       </p>
       {localMergeRepos.length > 0 ? (
         <>
@@ -108,20 +106,11 @@ export function MergeModalBody({
         </div>
       )}
       <ResultBox result={mergeAction.result} />
-      {mergeAction.result !== null && !mergeAction.result.ok && onHandoffToRebase !== undefined ? (
-        <div className="completion-workspace__merge-handoff">
-          <p className="completion-workspace__merge-handoff-hint">
-            A conflict or behind-base outcome can be resolved through the rebase journey. Hand off,
-            then return here to retry the merge.
-          </p>
-          <button
-            type="button"
-            className="completion-workspace__secondary-action completion-workspace__merge-handoff-action"
-            onClick={() => onHandoffToRebase()}
-          >
-            Hand off to rebase
-          </button>
-        </div>
+      {mergeAction.result !== null && !mergeAction.result.ok ? (
+        <p className="completion-workspace__merge-handoff-hint">
+          A conflict or behind-base outcome can be resolved with a rebase pass. Open the Rebase card
+          in the feature's aftercare workspace, then return here to retry the merge.
+        </p>
       ) : null}
     </div>
   );

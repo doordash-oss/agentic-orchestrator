@@ -1,4 +1,4 @@
-import type { AttentionItem, FeatureSnapshot } from '../../../../shared/ipc';
+import type { AttentionItem, FeatureSnapshot } from '../../../shared/ipc';
 
 export type CyclePhase = 'idle' | 'loading' | 'ready' | 'dispatching' | 'error';
 
@@ -17,7 +17,7 @@ export function humanizeFreshness(freshness: string): string {
 
 export function CycleGateNotice({
   featureId,
-  snapshot,
+  snapshot: _snapshot,
   attentionItems = [],
   onOpenGate,
 }: {
@@ -30,7 +30,7 @@ export function CycleGateNotice({
     (item): item is Extract<AttentionItem, { kind: 'gate' }> =>
       item.kind === 'gate' && item.cycleType !== undefined,
   );
-  if (cycleGateItems.length === 0 && snapshot.cycle?.status !== 'need_user_input') return null;
+  if (cycleGateItems.length === 0) return null;
 
   return (
     <div className="cycle-journey__gate" role="alert">

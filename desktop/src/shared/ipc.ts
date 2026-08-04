@@ -791,25 +791,11 @@ export const RepoStatusViewSchema = z.strictObject({
   prUrl: z.string().optional(),
   freshness: z.string().optional(),
   lastError: z.string().optional(),
-  cycleType: z.string().optional(),
-  cycleStatus: z.string().optional(),
   rebaseStatus: z.string().optional(),
   rebaseTarget: z.string().optional(),
   conflictFiles: z.array(z.string()).max(200).optional(),
 });
 export type RepoStatusView = z.output<typeof RepoStatusViewSchema>;
-
-/** Active cycle summary from the server feature detail. */
-export const CycleViewSchema = z.strictObject({
-  type: z.string().optional(),
-  status: z.string().optional(),
-  count: z.number().int().nonnegative().optional(),
-  iteration: z.number().int().nonnegative().optional(),
-  phase: z.string().optional(),
-  lastError: z.string().optional(),
-  startedAt: z.string().datetime({ offset: true }).optional(),
-});
-export type CycleView = z.output<typeof CycleViewSchema>;
 
 /** Active plan or implementation/final-review gate state. */
 export const ReviewGateViewSchema = z.strictObject({
@@ -894,8 +880,6 @@ export const FeatureSnapshotSchema = z.strictObject({
   reviewFeedback: z.array(ReviewFeedbackCommentViewSchema).optional(),
   /** Per-repository operational status from the server. */
   repoStatus: z.array(RepoStatusViewSchema).optional(),
-  /** Active cycle summary from the server. */
-  cycle: CycleViewSchema.optional(),
   /** Active plan or implementation/final-review gate from the server. */
   reviewGate: ReviewGateViewSchema,
   /** Effective Automatic Bash review state and the scope that selected it. */

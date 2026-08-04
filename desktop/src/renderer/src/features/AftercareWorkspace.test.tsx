@@ -32,8 +32,6 @@ describe('AftercareWorkspace', () => {
         onOpenRunRecord={vi.fn()}
         onOpenChanges={vi.fn()}
         onOpenPullRequest={vi.fn()}
-        onRetry={vi.fn()}
-        onReopenCycle={vi.fn()}
       />,
     );
 
@@ -91,8 +89,6 @@ describe('AftercareWorkspace', () => {
         onOpenRunRecord={vi.fn()}
         onOpenChanges={vi.fn()}
         onOpenPullRequest={vi.fn()}
-        onRetry={vi.fn()}
-        onReopenCycle={vi.fn()}
       />,
     );
 
@@ -123,8 +119,6 @@ describe('AftercareWorkspace', () => {
         onOpenRunRecord={onOpenRunRecord}
         onOpenChanges={onOpenChanges}
         onOpenPullRequest={onOpenPullRequest}
-        onRetry={vi.fn()}
-        onReopenCycle={vi.fn()}
       />,
     );
 
@@ -139,40 +133,6 @@ describe('AftercareWorkspace', () => {
     expect(onOpenPullRequest).toHaveBeenCalledWith(
       'https://github.com/doordash-oss/agentic-orchestrator/pull/107',
     );
-  });
-
-  it('renders an actionable failed cycle receipt', async () => {
-    const user = userEvent.setup();
-    const onRetry = vi.fn();
-    const onReopenCycle = vi.fn();
-    render(
-      <AftercareWorkspace
-        snapshot={featureSnapshot({
-          status: 'Published',
-          actions: [{ id: 'retry', enabled: true, disabledReasons: [] }],
-        })}
-        run={completedRun}
-        receipt={{
-          id: 'rebase',
-          outcome: 'failed',
-          message: 'Rebase cycle needs attention.',
-          detail: 'Force push rejected.',
-        }}
-        onAction={vi.fn()}
-        onOpenRunRecord={vi.fn()}
-        onOpenChanges={vi.fn()}
-        onOpenPullRequest={vi.fn()}
-        onRetry={onRetry}
-        onReopenCycle={onReopenCycle}
-      />,
-    );
-
-    expect(screen.getByRole('alert')).toHaveAttribute('data-outcome', 'failed');
-    expect(screen.getByRole('alert')).toHaveTextContent('Force push rejected.');
-    await user.click(screen.getByRole('button', { name: 'Retry cycle' }));
-    await user.click(screen.getByRole('button', { name: 'Reopen cycle' }));
-    expect(onRetry).toHaveBeenCalledOnce();
-    expect(onReopenCycle).toHaveBeenCalledOnce();
   });
 
   it('keeps settled passes as read-only history with the preserved diff', async () => {
@@ -208,8 +168,6 @@ describe('AftercareWorkspace', () => {
         onOpenRunRecord={vi.fn()}
         onOpenChanges={vi.fn()}
         onOpenPullRequest={vi.fn()}
-        onRetry={vi.fn()}
-        onReopenCycle={vi.fn()}
       />,
     );
 
@@ -271,8 +229,6 @@ describe('AftercareWorkspace', () => {
         onOpenRunRecord={vi.fn()}
         onOpenChanges={vi.fn()}
         onOpenPullRequest={vi.fn()}
-        onRetry={vi.fn()}
-        onReopenCycle={vi.fn()}
       />,
     );
 
@@ -323,8 +279,6 @@ describe('AftercareWorkspace', () => {
         onOpenRunRecord={vi.fn()}
         onOpenChanges={vi.fn()}
         onOpenPullRequest={vi.fn()}
-        onRetry={vi.fn()}
-        onReopenCycle={vi.fn()}
       />,
     );
 

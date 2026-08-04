@@ -17,7 +17,6 @@ import {
 } from 'react';
 import {
   isPendingReviewStatus,
-  type CycleView,
   type FeatureSnapshot,
   type RunDetailView,
   type FeatureActionRequest,
@@ -33,17 +32,12 @@ import { ArchiveMode } from './ArchiveMode';
 import { RewindJourney } from './RewindJourney';
 import { AftercareWorkspace } from './AftercareWorkspace';
 import { InspectorContent } from './CockpitInspector';
-import { CycleWorkspace } from './CycleWorkspace';
 import { ImpactPreviewList } from './ImpactPreviewList';
 import { NeedUserInputModal, type AttentionGate } from './NeedUserInputModal';
 import {
-  cycleIdentity,
-  ownsPostImplementationStage,
-  receiptForCycleEnd,
   resolvePostImplementationMode,
   type AftercareAction,
   type AftercareModalId,
-  type CycleReceipt,
 } from './postImplementationModel';
 import { RefactorLauncher } from './refactor/RefactorLauncher';
 import { ReviewFeedbackLauncher } from './reviewFeedback/ReviewFeedbackLauncher';
@@ -765,12 +759,10 @@ export function FeatureCockpit({
   const [attentionBusy, setAttentionBusy] = useState<string | null>(null);
   const [rewindDialog, setRewindDialog] = useState(false);
   const [rewindSourceRunNumber, setRewindSourceRunNumber] = useState<number | undefined>();
-  const [cycleModal, setCycleModal] = useState<AftercareModalId | null>(null);
+  const [launcherModal, setCycleModal] = useState<AftercareModalId | null>(null);
   const [completionModal, setCompletionModal] = useState<CompletionVerb | null>(null);
   const [runRecordOpen, setRunRecordOpen] = useState(false);
   const [changesOpen, setChangesOpen] = useState(false);
-  const [dismissedCycleId, setDismissedCycleId] = useState<string | undefined>();
-  const [cycleReceipt, setCycleReceipt] = useState<CycleReceipt | undefined>();
   const [dismissedGateId, setDismissedGateId] = useState<string | undefined>();
   const [configOpen, setConfigOpen] = useState(false);
   const [runMetrics, setRunMetrics] = useState<RunMetrics | null>(null);
@@ -784,7 +776,6 @@ export function FeatureCockpit({
   const isNarrow = useMediaQuery('(max-width: 900px)');
   const actionInFlightRef = useRef(false);
   const loadRequestRef = useRef(0);
-  const previousCycleRef = useRef<{ featureId: string; cycle?: CycleView } | null>(null);
   const stopButtonRef = useRef<HTMLButtonElement>(null);
   const inspectorButtonRef = useRef<HTMLButtonElement>(null);
   const onLoadedNameRef = useRef(onLoadedName);
@@ -867,13 +858,13 @@ export function FeatureCockpit({
   );
 
   /**
-   * One-click rebase child launch, shared by the aftercare card, the cockpit
-   * overflow entry, and MergeModal's "Hand off to rebase" button. Zero-input,
-   * single-flight with the lifecycle actions: the triggering control shows a
-   * busy state while the call is in flight, success arms auto-start and
-   * silently reloads the parent so the cockpit's activeChild-driven branch
-   * flips into the pass workspace, and typed failures render inline through
-   * the persistent action-error alert near the aftercare surface.
+   * One-click rebase child launch, shared by the aftercare card and the cockpit
+   * overflow entry. Zero-input, single-flight with the lifecycle actions: the
+   * triggering control shows a busy state while the call is in flight, success
+   * arms auto-start and silently reloads the parent so the cockpit's
+   * activeChild-driven branch flips into the pass workspace, and typed
+   * failures render inline through the persistent action-error alert near the
+   * aftercare surface.
    */
   const launchRebase = useCallback(() => {
     if (actionInFlightRef.current || rebaseLaunchBusy) return;
@@ -939,22 +930,6 @@ export function FeatureCockpit({
       unsubscribe();
     };
   }, [featureId, load, selectedRunNumber]);
-
-  useEffect(() => {
-    if (state.phase !== 'loaded') return;
-    const previous =
-      previousCycleRef.current?.featureId === featureId
-        ? previousCycleRef.current.cycle
-        : undefined;
-    const current = state.snapshot.cycle;
-    if (ownsPostImplementationStage(previous) && !ownsPostImplementationStage(current)) {
-      setCycleReceipt(receiptForCycleEnd(previous, state.snapshot));
-    }
-    previousCycleRef.current = {
-      featureId,
-      ...(current === undefined ? {} : { cycle: current }),
-    };
-  }, [featureId, state]);
 
   useEffect(() => {
     if (state.phase !== 'loaded' || !isRunAtRest(state.snapshot.status)) {
@@ -1580,7 +1555,7 @@ export function FeatureCockpit({
       )
     ) : null;
 
-  const postImplementationMode = resolvePostImplementationMode(snapshot, dismissedCycleId);
+  const postImplementationMode = resolvePostImplementationMode(snapshot);
   const postMenuActions = menuActions.filter((action) => {
     if (['start', 'stop', 'setup', 'rebase', 'refactor'].includes(action.key)) return false;
     // An enabled review-feedback action is offered on the aftercare runway;
@@ -1694,12 +1669,9 @@ export function FeatureCockpit({
               <AftercareWorkspace
                 snapshot={snapshot}
                 run={aftercareRun}
-                receipt={cycleReceipt}
                 busyAction={
                   rebaseLaunchBusy ? { id: 'rebase', label: 'Starting rebase pass…' } : undefined
                 }
-                onRetry={retry}
-                onReopenCycle={() => setDismissedCycleId(undefined)}
                 onAction={openAftercareAction}
                 onOpenRunRecord={() => setRunRecordOpen(true)}
                 onOpenChanges={() => setChangesOpen(true)}
@@ -1709,29 +1681,7 @@ export function FeatureCockpit({
               />
             </>
           )
-        ) : (
-          <>
-            {standaloneAttention}
-            <CycleWorkspace
-              snapshot={snapshot}
-              run={aftercareRun}
-              presentation={postImplementationMode.cycle}
-              onRunMetrics={setRunMetrics}
-              onStop={() => void openStopDialog()}
-              onResume={resume}
-              onRetry={retry}
-              onReturnToAftercare={() => {
-                setCycleReceipt(receiptForCycleEnd(snapshot.cycle, snapshot));
-                setDismissedCycleId(cycleIdentity(snapshot) ?? undefined);
-              }}
-              onOpenConfig={() => setConfigOpen(true)}
-              onOpenRunRecord={() => setRunRecordOpen(true)}
-              onOpenPullRequest={(url) => {
-                void window.agentico.openExternal({ url });
-              }}
-            />
-          </>
-        )}
+        ) : null}
 
         {actionError === null ? null : (
           <div role="alert" className="create-form__error">
@@ -1886,7 +1836,7 @@ export function FeatureCockpit({
           />
         ) : null}
 
-        {cycleModal === 'refactor' ? (
+        {launcherModal === 'refactor' ? (
           <CockpitModal
             title="Start refactor"
             ariaLabel="Start refactor"
@@ -1906,7 +1856,7 @@ export function FeatureCockpit({
           </CockpitModal>
         ) : null}
 
-        {cycleModal === 'review-feedback' ? (
+        {launcherModal === 'review-feedback' ? (
           <CockpitModal
             title="Address review feedback"
             ariaLabel="Address review feedback"
@@ -1954,7 +1904,6 @@ export function FeatureCockpit({
               preflight={completion.preflight}
               dispatchAction={dispatchCompletion}
               onDispatched={onCompletionDispatched}
-              onHandoffToRebase={() => launchRebase()}
             />
           </CockpitModal>
         ) : null}
@@ -2322,7 +2271,7 @@ export function FeatureCockpit({
             />
           ) : null}
 
-          {cycleModal === 'refactor' ? (
+          {launcherModal === 'refactor' ? (
             <CockpitModal title="Refactor" ariaLabel="Refactor" onClose={() => setCycleModal(null)}>
               <RefactorLauncher
                 featureId={featureId}
@@ -2338,7 +2287,7 @@ export function FeatureCockpit({
             </CockpitModal>
           ) : null}
 
-          {cycleModal === 'review-feedback' ? (
+          {launcherModal === 'review-feedback' ? (
             <CockpitModal
               title="Address review feedback"
               ariaLabel="Address review feedback"
@@ -2386,7 +2335,6 @@ export function FeatureCockpit({
                 preflight={completion.preflight}
                 dispatchAction={dispatchCompletion}
                 onDispatched={onCompletionDispatched}
-                onHandoffToRebase={() => launchRebase()}
               />
             </CockpitModal>
           ) : null}

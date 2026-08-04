@@ -459,52 +459,6 @@ describe('FeatureCockpit snapshot rendering', () => {
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 
-  it('gives a running maintenance cycle exclusive ownership of the stage', async () => {
-    const mock = installAgenticoMock({
-      feature: featureSnapshot({
-        status: 'Published',
-        cycle: {
-          type: 'rebase',
-          status: 'running',
-          count: 2,
-          iteration: 1,
-          phase: 'final_review',
-        },
-        actions: [{ id: 'pause-stop', enabled: true, disabledReasons: [] }],
-      }),
-    });
-    renderCockpit(mock);
-
-    expect(await screen.findByRole('region', { name: 'Rebase cycle' })).toBeVisible();
-    expect(screen.getByRole('heading', { name: 'Live agent activity' })).toBeVisible();
-    expect(screen.queryByRole('region', { name: 'Feature aftercare' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('tablist', { name: 'Stage view' })).not.toBeInTheDocument();
-    expect(screen.queryByLabelText('Feature pipeline')).not.toBeInTheDocument();
-  });
-
-  it('keeps feature configuration available while a maintenance cycle owns the stage', async () => {
-    const user = userEvent.setup();
-    const mock = installAgenticoMock({
-      feature: featureSnapshot({
-        status: 'Published',
-        cycle: {
-          type: 'rebase',
-          status: 'running',
-          count: 4,
-          iteration: 1,
-          phase: 'resolve_conflicts',
-        },
-        actions: [{ id: 'pause-stop', enabled: true, disabledReasons: [] }],
-      }),
-    });
-    renderCockpit(mock);
-
-    const cycle = await screen.findByRole('region', { name: 'Rebase cycle' });
-    await user.click(within(cycle).getByRole('button', { name: 'Edit configuration…' }));
-
-    expect(await screen.findByRole('dialog', { name: 'Feature configuration' })).toBeVisible();
-  });
-
   it('offers Publish from CodeReady without repeating the feature title in Aftercare', async () => {
     const mock = installAgenticoMock({
       feature: featureSnapshot({
@@ -697,35 +651,6 @@ describe('FeatureCockpit snapshot rendering', () => {
 
     expect(mock.api.openExternal).toHaveBeenCalledWith({
       url: 'https://github.com/doordash-oss/agentic-orchestrator/pull/109',
-    });
-  });
-
-  it('keeps a stopped rebase in its focused workspace and resumes the cycle', async () => {
-    const mock = installAgenticoMock({
-      feature: featureSnapshot({
-        status: 'Interrupted',
-        currentPhase: 'Publish',
-        cycle: {
-          type: 'rebase',
-          status: 'interrupted',
-          count: 1,
-          phase: 'resolve_conflicts',
-        },
-        actions: [{ id: 'resume', enabled: true, disabledReasons: [] }],
-      }),
-    });
-    renderCockpit(mock);
-    const user = userEvent.setup();
-
-    const cycle = await screen.findByRole('region', { name: 'Rebase cycle' });
-    expect(within(cycle).getByRole('heading', { name: 'Rebase cycle paused' })).toBeVisible();
-    expect(screen.queryByRole('group', { name: 'Feature pipeline' })).not.toBeInTheDocument();
-
-    await user.click(within(cycle).getByRole('button', { name: 'Resume cycle' }));
-
-    expect(mock.api.dispatchFeatureAction).toHaveBeenCalledWith({
-      featureId: FEATURE_ID,
-      action: 'resume',
     });
   });
 
@@ -993,89 +918,6 @@ describe('FeatureCockpit convergence', () => {
     expect(
       screen.getByRole('heading', { name: 'Published. Choose what comes next.' }),
     ).toBeVisible();
-  });
-
-  it('shows a completed receipt when a running rebase returns to rest', async () => {
-    const running = featureSnapshot({
-      status: 'Published',
-      cycle: {
-        type: 'rebase',
-        status: 'running',
-        count: 2,
-        phase: 'publish',
-        startedAt: '2026-07-26T10:00:00Z',
-      },
-      actions: [{ id: 'pause-stop', enabled: true, disabledReasons: [] }],
-    });
-    const atRest = featureSnapshot({
-      status: 'Published',
-      actions: [{ id: 'rebase', enabled: true, disabledReasons: [] }],
-    });
-    const mock = installAgenticoMock({ feature: running });
-    mock.api.getFeature.mockResolvedValueOnce(running).mockResolvedValue(atRest);
-    renderCockpit(mock);
-
-    await screen.findByRole('region', { name: 'Rebase cycle' });
-    mock.emitAppEvent({ type: 'invalidated', kind: 'feature.updated', featureId: FEATURE_ID });
-
-    expect(await screen.findByRole('region', { name: 'Feature aftercare' })).toBeVisible();
-    expect(await screen.findByText('Rebase cycle complete.')).toBeVisible();
-  });
-
-  it('keeps an interrupted rebase in cycle ownership without a completion receipt', async () => {
-    const running = featureSnapshot({
-      status: 'Published',
-      cycle: { type: 'rebase', status: 'running', count: 1, phase: 'final_review' },
-      actions: [{ id: 'pause-stop', enabled: true, disabledReasons: [] }],
-    });
-    const interrupted = featureSnapshot({
-      status: 'Interrupted',
-      cycle: { type: 'rebase', status: 'interrupted', count: 1, phase: 'final_review' },
-      actions: [{ id: 'resume', enabled: true, disabledReasons: [] }],
-    });
-    const mock = installAgenticoMock({ feature: running });
-    mock.api.getFeature.mockResolvedValueOnce(running).mockResolvedValue(interrupted);
-    renderCockpit(mock);
-    const user = userEvent.setup();
-
-    await screen.findByRole('region', { name: 'Rebase cycle' });
-    mock.emitAppEvent({ type: 'invalidated', kind: 'feature.updated', featureId: FEATURE_ID });
-
-    expect(await screen.findByRole('heading', { name: 'Rebase cycle paused' })).toBeVisible();
-    expect(screen.queryByText('Rebase cycle complete.')).not.toBeInTheDocument();
-    expect(screen.queryByRole('region', { name: 'Feature aftercare' })).not.toBeInTheDocument();
-
-    await user.click(screen.getByRole('button', { name: 'Return to Aftercare' }));
-    expect(await screen.findByRole('region', { name: 'Feature aftercare' })).toBeVisible();
-    expect(screen.getByText('Cycle stopped · No completion action was dispatched.')).toBeVisible();
-  });
-
-  it('turns a dismissed failed cycle into an actionable Aftercare receipt', async () => {
-    const failed = featureSnapshot({
-      status: 'Published',
-      cycle: {
-        type: 'rebase',
-        status: 'failed',
-        count: 4,
-        phase: 'publish',
-        lastError: 'Remote rejected the force push.',
-      },
-      actions: [{ id: 'retry', enabled: true, disabledReasons: [] }],
-    });
-    renderCockpit(installAgenticoMock({ feature: failed }));
-    const user = userEvent.setup();
-
-    await user.click(
-      within(await screen.findByRole('region', { name: 'Rebase cycle' })).getByRole('button', {
-        name: 'Return to Aftercare',
-      }),
-    );
-
-    const receipt = await screen.findByRole('alert');
-    expect(receipt).toHaveTextContent('Rebase cycle needs attention.');
-    expect(receipt).toHaveTextContent('Remote rejected the force push.');
-    expect(within(receipt).getByRole('button', { name: 'Retry cycle' })).toBeEnabled();
-    expect(within(receipt).getByRole('button', { name: 'Reopen cycle' })).toBeVisible();
   });
 
   it('refetches on invalidations for this feature and on resync, ignoring others', async () => {
@@ -1626,49 +1468,6 @@ describe('FeatureCockpit Stop', () => {
     );
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     await waitFor(() => expect(mock.api.getFeature.mock.calls.length).toBeGreaterThan(callsBefore));
-  });
-});
-
-describe('FeatureCockpit cycle gates', () => {
-  it('opens the floating NeedUserInput modal for a feature-level rebase gate', async () => {
-    const cycleGate: AttentionItem = {
-      ...gateAttention,
-      id: `${FEATURE_ID}::rebase`,
-      scope: 'cycle',
-      cycleType: 'rebase',
-      summary: 'Choose how to resolve the rebase conflict.',
-    };
-    const mock = installAgenticoMock({
-      feature: featureSnapshot({
-        status: 'Published',
-        cycle: {
-          type: 'rebase',
-          status: 'need_user_input',
-          count: 2,
-          iteration: 3,
-          phase: 'resolve_conflicts',
-        },
-        actions: [],
-      }),
-    });
-    const drafts = emptyAttentionDrafts();
-    const setDrafts = vi.fn();
-    render(
-      <FeatureCockpit
-        featureId={FEATURE_ID}
-        titleHint="Search revamp"
-        onClose={vi.fn()}
-        onLoadedName={vi.fn()}
-        attentionItems={[cycleGate]}
-        refreshAttention={() => Promise.resolve([cycleGate])}
-        attentionDrafts={drafts}
-        setAttentionDrafts={setDrafts}
-      />,
-    );
-
-    const modal = await screen.findByRole('dialog', { name: 'Agent needs your input' });
-    expect(modal).toHaveTextContent('Choose how to resolve the rebase conflict.');
-    expect(mock.api.getFeature).toHaveBeenCalledWith(FEATURE_ID);
   });
 });
 

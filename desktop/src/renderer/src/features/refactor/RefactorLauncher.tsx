@@ -32,7 +32,7 @@ import {
   type CheckpointState,
   type Pipeline,
 } from '../runContract';
-import { CycleGateNotice } from '../cycles/cycleShared';
+import { CycleGateNotice } from '../launcherShared';
 
 type SeedState =
   | { phase: 'loading' }

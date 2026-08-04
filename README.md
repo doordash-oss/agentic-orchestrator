@@ -115,7 +115,7 @@ The lifecycle is profile-dependent and checkpoint-driven. Medium starts at plann
 
 **Final Review** — Runs once after the last roadmap phase, across every touched repo that has not already been published. The phase contains its own review/fix loop. Passing Final Review moves the feature to `CodeReady`; exhausting the loop or violating the phase contract fails the feature.
 
-**Publishing** — If auto-publish is enabled, Agentic Orchestrator commits, rebases, pushes, creates PRs, and injects cross-repo PR links automatically. If manual publish is enabled, the desktop app pauses at `CodeReady` so you can review the diff and PR description first.
+**Publishing** — If auto-publish is enabled, Agentic Orchestrator commits, pushes, creates PRs, and injects cross-repo PR links automatically. If manual publish is enabled, the desktop app pauses at `CodeReady` so you can review the diff and PR description first.
 
 ### Pipeline Profiles
 
@@ -145,7 +145,7 @@ Every feature targets one or more repositories with the same lifecycle and state
 - Runs implementation per-repo (sequentially or in parallel based on dependencies)
 - Cross-references PRs across repos automatically
 
-When a feature targets a single repo, the per-repo Repo Progress panel, the cycle-selector modal, and the cross-reference PR table collapse — the rest of the lifecycle is identical.
+When a feature targets a single repo, the per-repo Repo Progress panel and the cross-reference PR table collapse — the rest of the lifecycle is identical.
 
 ### Knowledge Base
 

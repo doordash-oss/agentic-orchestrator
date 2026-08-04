@@ -1228,7 +1228,6 @@ export interface components {
         FeatureRestartResponse: components["schemas"]["ActionBaseResponse"] & components["schemas"]["FeatureActionResult"] & {
             phase?: string;
             dispatch?: string;
-            repo_cycle_count?: number;
             session_ids?: string[];
         };
         FeatureConfigUpdateResponse: components["schemas"]["ActionBaseResponse"] & components["schemas"]["FeatureActionResult"];
@@ -1671,16 +1670,6 @@ export interface components {
             feature_id?: string;
             message: string;
         };
-        Cycle: {
-            type?: string;
-            status?: string;
-            count?: number;
-            iteration?: number;
-            phase?: string;
-            last_error?: string;
-            /** Format: date-time */
-            started_at?: string;
-        };
         Checkpoints: {
             inquiry_review: boolean;
             research_review: boolean;
@@ -1746,7 +1735,6 @@ export interface components {
             slug: string;
             status: string;
             current_phase: string;
-            cycle?: components["schemas"]["Cycle"];
             active_run: number;
             run_count: number;
             repos: string[];
@@ -1843,8 +1831,6 @@ export interface components {
             pr_url?: string;
             last_error?: string;
             publishable: boolean;
-            cycle_type?: string;
-            cycle_status?: string;
         };
         RunSummary: {
             run_number: number;
@@ -1893,7 +1879,6 @@ export interface components {
         ActionScope: {
             type: string;
             repo_selection?: string;
-            cycle_type?: string;
         };
         ActionInput: {
             name: string;
@@ -1952,7 +1937,6 @@ export interface components {
             active_run_detail?: components["schemas"]["RunSummary"];
             historical_runs: components["schemas"]["RunSummary"][];
             repo_status: components["schemas"]["RepoStatus"][];
-            cycle?: components["schemas"]["Cycle"];
             timing: components["schemas"]["Timing"];
             cost: components["schemas"]["Cost"];
             review_gate: components["schemas"]["ReviewGate"];

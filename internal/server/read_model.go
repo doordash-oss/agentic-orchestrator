@@ -240,7 +240,6 @@ func (h *apiHandler) featureDetailDTO(f *feature.Feature) (FeatureDetail, error)
 			disableAction(detail.Actions, actionRebase, reason)
 		}
 	}
-	detail.Cycle = activeCycleDTO(f)
 	if f.HasTerminalFailure() {
 		detail.Failure = &Failure{
 			Type:    f.FailureType,
@@ -374,7 +373,6 @@ func featureDetailFromSummary(summary FeatureSummary) FeatureDetail {
 		Slug:         summary.Slug,
 		Status:       summary.Status,
 		CurrentPhase: summary.CurrentPhase,
-		Cycle:        summary.Cycle,
 		ActiveRun:    summary.ActiveRun,
 		RunCount:     summary.RunCount,
 		Repos:        summary.Repos,
@@ -553,10 +551,6 @@ func relationshipChildDTOs(children []*feature.Feature) []RelationshipChild {
 	return out
 }
 
-func activeCycleDTO(f *feature.Feature) *Cycle {
-	return nil
-}
-
 func actionCatalogDTOs(f *feature.Feature) []Action {
 	return actionCatalogDTOsWithChildGuard(f, false)
 }
@@ -574,8 +568,6 @@ func actionCatalogDTOsWithChildGuard(f *feature.Feature, hasActiveChild bool) []
 	}
 	status := f.Status
 	running := status.IsRunning()
-	cyclePresent := hasOwningCycle(f)
-	stoppableCycle := false
 	publishedOrManualReady := status == feature.StatusPublished ||
 		(status == feature.StatusCodeReady && !f.Checkpoints.AutoPublish())
 
@@ -600,17 +592,17 @@ func actionCatalogDTOsWithChildGuard(f *feature.Feature, hasActiveChild bool) []
 	featureScope := ActionScope{Type: entityFeature}
 
 	if f.IsChild() {
-		return childActionCatalogDTOs(f, status, running, cyclePresent, action, disabledStatusReason)
+		return childActionCatalogDTOs(f, status, running, action, disabledStatusReason)
 	}
 
 	canSetup := setupActionEligible(f)
-	canStart := !running && !cyclePresent && (status == feature.StatusCreated ||
+	canStart := !running && (status == feature.StatusCreated ||
 		status == feature.StatusInquireReady ||
 		status == feature.StatusPlanReady ||
 		status == feature.StatusDesignReady ||
 		status == feature.StatusImplementReady ||
 		status == feature.StatusReviewPassed)
-	canStop := running || status == feature.StatusNeedUserInput || stoppableCycle
+	canStop := running || status == feature.StatusNeedUserInput
 	canResume := status == feature.StatusInterrupted ||
 		status == feature.StatusNeedUserInput ||
 		f.PendingNeedUserInputPath != ""
@@ -618,8 +610,8 @@ func actionCatalogDTOsWithChildGuard(f *feature.Feature, hasActiveChild bool) []
 	canPublish := f.IsPublishable() && status == feature.StatusCodeReady && f.Checkpoints.AutoPublish()
 	canMerge := !f.IsPublishable() && (status == feature.StatusCodeReady || status == feature.StatusPublished)
 	canRewind := !running && (len(feature.RewindChoicesForFeature(f)) > 0 || hasRewindUpgradeTarget(f))
-	canPostPublishCycle := publishedOrManualReady && !cyclePresent
-	canReviewFeedback := canPostPublishCycle && f.IsPublishable() && featureHasPullRequest(f)
+	canPostPublishPass := publishedOrManualReady
+	canReviewFeedback := canPostPublishPass && f.IsPublishable() && featureHasPullRequest(f)
 	canRetry := status == feature.StatusFailed
 	canMarkDone := publishedOrManualReady
 	canCleanup := !running
@@ -640,7 +632,7 @@ func actionCatalogDTOsWithChildGuard(f *feature.Feature, hasActiveChild bool) []
 		canPublish = false
 		canMerge = false
 		canRewind = false
-		canPostPublishCycle = false
+		canPostPublishPass = false
 		canReviewFeedback = false
 		canRetry = false
 		canMarkDone = false
@@ -669,7 +661,7 @@ func actionCatalogDTOsWithChildGuard(f *feature.Feature, hasActiveChild bool) []
 			{Name: "roadmap_phase", Kind: "integer", Required: false},
 			{Name: "upgrade_pipeline", Kind: actionInputKindEnum, Required: false, Options: rewindUpgradePipelineOptions(f)},
 		}, childGuardReason(canRewind, ActionDisabledReason{Code: "no_rewind_targets", Message: "feature has no valid rewind targets"})...),
-		action(actionRebase, canPostPublishCycle, featureScope, nil, childGuardReason(canPostPublishCycle, postPublishCycleDisabledReason(f, actionRebase))...),
+		action(actionRebase, canPostPublishPass, featureScope, nil, childGuardReason(canPostPublishPass, postPublishPassDisabledReason(f, actionRebase))...),
 		action(actionReviewFeedback, canReviewFeedback, featureScope, nil, childGuardReason(canReviewFeedback, reviewFeedbackDisabledReason(f))...),
 		action(actionRefactor, canRefactor, featureScope, nil, childGuardReason(canRefactor, disabledStatusReason(status))...),
 		action(actionRetry, canRetry, featureScope, nil, childGuardReason(canRetry, ActionDisabledReason{Code: "not_failed", Message: "retry is only available for failed features"})...),
@@ -737,12 +729,12 @@ func childCapabilityDisabledReason(err error) ActionDisabledReason {
 // childActionCatalogDTOs builds the restricted child catalog: ordinary
 // start/resume/restart execution entries gated by the same capability check
 // the mutations enforce, plus setup-retry and discard. Child delivery actions
-// (publish, merge, rewind, refactor, mark-done, post-publish cycles) are never
+// (publish, merge, rewind, refactor, mark-done, post-publish passes) are never
 // offered: a child's work reaches the parent only through integration. Child
 // cleanup and single-record delete are also unavailable while the relationship
 // is active; the authoritative RelationshipGuard enforces the same policy at
 // the mutation layer.
-func childActionCatalogDTOs(f *feature.Feature, status feature.Status, running, activeCycle bool,
+func childActionCatalogDTOs(f *feature.Feature, status feature.Status, running bool,
 	action func(string, bool, ActionScope, []ActionInput, ...ActionDisabledReason) Action,
 	disabledStatusReason func(feature.Status) ActionDisabledReason) []Action {
 
@@ -771,12 +763,12 @@ func childActionCatalogDTOs(f *feature.Feature, status feature.Status, running, 
 	runnable := blockErr == nil
 	restartStopped := ActionDisabledReason{Code: "running", Message: "feature must stop before restart"}
 	restartReason := blockedReason(restartStopped)
-	stopped := !running && !activeCycle
+	stopped := !running
 	canStart := runnable && stopped && (status == feature.StatusCreated ||
 		status == feature.StatusPlanReady ||
 		status == feature.StatusImplementReady ||
 		status == feature.StatusReviewPassed)
-	canStop := runnable && (running || activeCycle)
+	canStop := runnable && running
 	canResume := runnable && (status == feature.StatusInterrupted ||
 		status == feature.StatusNeedUserInput ||
 		f.PendingNeedUserInputPath != "")
@@ -797,14 +789,6 @@ func childActionCatalogDTOs(f *feature.Feature, status feature.Status, running, 
 		// requests converge on the same idempotent outcome.
 		action(actionDiscard, f.IsActiveChild(), featureScope, nil, ActionDisabledReason{Code: "not_active", Message: "discard is only available for active children"}),
 	}
-}
-
-func hasActiveFeatureCycle(f *feature.Feature) bool {
-	return false
-}
-
-func hasOwningCycle(f *feature.Feature) bool {
-	return false
 }
 
 // setupActionEligible reports whether the setup action applies: either the
@@ -859,7 +843,7 @@ func mergeDisabledReason(f *feature.Feature) ActionDisabledReason {
 	return disabledStatusReason(f.Status)
 }
 
-func postPublishCycleDisabledReason(f *feature.Feature, cycle string) ActionDisabledReason {
+func postPublishPassDisabledReason(f *feature.Feature, cycle string) ActionDisabledReason {
 	if f == nil {
 		return disabledStatusReason(feature.StatusCreated)
 	}

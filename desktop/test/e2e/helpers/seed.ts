@@ -1,7 +1,7 @@
 /**
  * Shared test helpers for seeding feature state on disk while the bundled
  * server is stopped. Extracted from journey specs to eliminate the
- * triplicated setFeatureStatus copies that drifted across lifecycle-cycles,
+ * triplicated setFeatureStatus copies that drifted across lifecycle-passes,
  * bulk-resume-retry, and recovery-orphans specs. persistAppLogs and
  * evidenceDir live in ./app and are re-exported here so journey specs keep a
  * single import surface without duplicating evidence-writing logic.

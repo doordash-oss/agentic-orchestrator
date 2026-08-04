@@ -2338,8 +2338,6 @@ components:
               type: string
             dispatch:
               type: string
-            repo_cycle_count:
-              type: integer
             session_ids:
               type: array
               x-go-name: SessionIDs
@@ -3356,25 +3354,6 @@ components:
           type: string
         message:
           type: string
-    Cycle:
-      type: object
-      properties:
-        type:
-          type: string
-        status:
-          type: string
-        count:
-          type: integer
-        iteration:
-          type: integer
-        phase:
-          type: string
-        last_error:
-          type: string
-        started_at:
-          type: string
-          format: date-time
-          x-go-type-skip-optional-pointer: false
     Checkpoints:
       type: object
       required:
@@ -3539,9 +3518,6 @@ components:
           type: string
         current_phase:
           type: string
-        cycle:
-          $ref: "#/components/schemas/Cycle"
-          x-go-type-skip-optional-pointer: false
         active_run:
           type: integer
         run_count:
@@ -3761,10 +3737,6 @@ components:
           type: string
         publishable:
           type: boolean
-        cycle_type:
-          type: string
-        cycle_status:
-          type: string
     RunSummary:
       type: object
       required: [run_number, artifact_count]
@@ -3881,8 +3853,6 @@ components:
         type:
           type: string
         repo_selection:
-          type: string
-        cycle_type:
           type: string
     ActionInput:
       type: object
@@ -4046,9 +4016,6 @@ components:
               type: array
               items:
                 $ref: "#/components/schemas/RepoStatus"
-            cycle:
-              $ref: "#/components/schemas/Cycle"
-              x-go-type-skip-optional-pointer: false
             timing:
               $ref: "#/components/schemas/Timing"
             cost:

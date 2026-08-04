@@ -437,24 +437,11 @@ export const ServerRepoStatusSchema = z.object({
   pr_url: z.string().optional(),
   freshness: z.string().optional(),
   last_error: z.string().optional(),
-  cycle_type: z.string().optional(),
-  cycle_status: z.string().optional(),
   rebase_status: z.string().optional(),
   rebase_target: z.string().optional(),
   conflict_files: z.array(z.string()).optional(),
 });
 export type ServerRepoStatus = z.output<typeof ServerRepoStatusSchema>;
-
-export const ServerCycleSchema = z.object({
-  type: z.string().optional(),
-  status: z.string().optional(),
-  count: z.number().int().nonnegative().optional(),
-  iteration: z.number().int().nonnegative().optional(),
-  phase: z.string().optional(),
-  last_error: z.string().optional(),
-  started_at: z.string().datetime({ offset: true }).optional(),
-});
-export type ServerCycle = z.output<typeof ServerCycleSchema>;
 
 export const ServerNeedUserInputGateDetailSchema = z.object({
   feature_id: z.string().optional(),
@@ -512,7 +499,6 @@ export const ServerFeatureDetailSchema = ServerFeatureSummarySchema.extend({
     source: z.enum(['global', 'feature']),
   }),
   repo_status: z.array(ServerRepoStatusSchema).optional(),
-  cycle: ServerCycleSchema.optional(),
   review_gate: z.object({
     reviewing_gate: z.boolean(),
     review_fixing: z.boolean(),
@@ -1246,9 +1232,6 @@ void _reviewFeedbackFeatureSubset;
 type RepoStatusDTO = components['schemas']['RepoStatus'];
 const _repoStatusSubset = (value: RepoStatusDTO): ServerRepoStatus => value;
 void _repoStatusSubset;
-type CycleDTO = components['schemas']['Cycle'];
-const _cycleSubset = (value: CycleDTO): ServerCycle => value;
-void _cycleSubset;
 type NeedUserInputGateDTO = components['schemas']['NeedUserInputGate'];
 const _needUserInputGateSubset = (value: NeedUserInputGateDTO): ServerNeedUserInputGateDetail =>
   value;

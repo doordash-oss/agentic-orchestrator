@@ -973,14 +973,6 @@ func (f *Feature) EffectivePipeline() PipelineProfile {
 	return f.Pipeline
 }
 
-// HasActiveRepoCycles reports whether any repo has a running, reviewing, or
-// need-user-input-paused cycle. With the legacy rebase cycle removed, this
-// always returns false. Kept as a stub for cross-package callers until they
-// are updated.
-func (f *Feature) HasActiveRepoCycles() bool {
-	return false
-}
-
 // IsPublishable returns true when ALL repos have an origin remote.
 // A nil Publishable pointer (pre-existing features) is treated as publishable
 // for backward compatibility.

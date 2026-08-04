@@ -24,7 +24,6 @@ function props(over?: Partial<Parameters<typeof MergeModalBody>[0]>) {
     preflight,
     dispatchAction: vi.fn(() => Promise.resolve({ result: 'merged' })),
     onDispatched: vi.fn(),
-    onHandoffToRebase: vi.fn(),
     ...over,
   };
 }
@@ -39,14 +38,12 @@ describe('MergeModalBody', () => {
     );
   });
 
-  it('offers rebase handoff after a failed merge', async () => {
+  it('shows the aftercare rebase hint after a failed merge with no launch button', async () => {
     const dispatchAction = vi.fn(() => Promise.reject(new Error('conflict')));
-    const onHandoffToRebase = vi.fn();
-    render(<MergeModalBody {...props({ dispatchAction, onHandoffToRebase })} />);
+    render(<MergeModalBody {...props({ dispatchAction })} />);
     fireEvent.click(screen.getByRole('button', { name: 'Merge' }));
-    const handoff = await screen.findByRole('button', { name: 'Hand off to rebase' });
-    fireEvent.click(handoff);
-    expect(onHandoffToRebase).toHaveBeenCalled();
+    await screen.findByText(/Open the Rebase card in the feature's aftercare workspace/);
+    expect(screen.queryByRole('button', { name: /Hand off to rebase/i })).not.toBeInTheDocument();
   });
 
   it('shows the empty state when nothing is mergeable', () => {

@@ -13,7 +13,7 @@ import type {
   ReviewFeedbackCommentView,
 } from '../../../../shared/ipc';
 import { parseIpcError, type WizardError } from '../../wizard/ipcError';
-import { CycleFooter } from '../cycles/cycleShared';
+import { CycleFooter } from '../launcherShared';
 import { COMMENT_TYPE_LABEL, commentKey } from '../refactor/refactorPassModel';
 
 type FetchState =

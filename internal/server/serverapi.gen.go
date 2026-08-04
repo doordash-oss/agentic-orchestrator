@@ -1042,7 +1042,6 @@ type ActionResult struct {
 
 // ActionScope defines model for ActionScope.
 type ActionScope struct {
-	CycleType     string `json:"cycle_type,omitempty"`
 	RepoSelection string `json:"repo_selection,omitempty"`
 	Type          string `json:"type"`
 }
@@ -1323,17 +1322,6 @@ type Cursor struct {
 	Total int `json:"total"`
 }
 
-// Cycle defines model for Cycle.
-type Cycle struct {
-	Count     int        `json:"count,omitempty"`
-	Iteration int        `json:"iteration,omitempty"`
-	LastError string     `json:"last_error,omitempty"`
-	Phase     string     `json:"phase,omitempty"`
-	StartedAt *time.Time `json:"started_at,omitempty"`
-	Status    string     `json:"status,omitempty"`
-	Type      string     `json:"type,omitempty"`
-}
-
 // DeleteFeatureResponse defines model for DeleteFeatureResponse.
 type DeleteFeatureResponse struct {
 	APIVersion  string                      `json:"api_version"`
@@ -1458,7 +1446,6 @@ type FeatureDetail struct {
 	Cost           Cost                `json:"cost"`
 	CreatedAt      time.Time           `json:"created_at"`
 	CurrentPhase   string              `json:"current_phase"`
-	Cycle          *Cycle              `json:"cycle,omitempty"`
 	Description    string              `json:"description,omitempty"`
 	Effort         EffortConfig        `json:"effort,omitempty"`
 	ExitCriteria   string              `json:"exit_criteria,omitempty"`
@@ -1527,14 +1514,13 @@ type FeatureProgress struct {
 
 // FeatureRestartResponse defines model for FeatureRestartResponse.
 type FeatureRestartResponse struct {
-	APIVersion     string       `json:"api_version"`
-	Dispatch       string       `json:"dispatch,omitempty"`
-	FeatureID      string       `json:"feature_id"`
-	Meta           ResponseMeta `json:"meta,omitempty"`
-	Phase          string       `json:"phase,omitempty"`
-	RepoCycleCount int          `json:"repo_cycle_count,omitempty"`
-	Result         string       `json:"result"`
-	SessionIDs     []string     `json:"session_ids,omitempty"`
+	APIVersion string       `json:"api_version"`
+	Dispatch   string       `json:"dispatch,omitempty"`
+	FeatureID  string       `json:"feature_id"`
+	Meta       ResponseMeta `json:"meta,omitempty"`
+	Phase      string       `json:"phase,omitempty"`
+	Result     string       `json:"result"`
+	SessionIDs []string     `json:"session_ids,omitempty"`
 }
 
 // FeatureSetupResponse defines model for FeatureSetupResponse.
@@ -1573,7 +1559,6 @@ type FeatureSummary struct {
 	ChildHistory []RelationshipChild `json:"child_history,omitempty"`
 	CreatedAt    time.Time           `json:"created_at"`
 	CurrentPhase string              `json:"current_phase"`
-	Cycle        *Cycle              `json:"cycle,omitempty"`
 	ID           string              `json:"id"`
 	Name         string              `json:"name"`
 	Progress     FeatureProgress     `json:"progress"`
@@ -2032,8 +2017,6 @@ type RelationshipCleanupWarning struct {
 // RepoStatus defines model for RepoStatus.
 type RepoStatus struct {
 	ConflictFiles []string `json:"conflict_files,omitempty"`
-	CycleStatus   string   `json:"cycle_status,omitempty"`
-	CycleType     string   `json:"cycle_type,omitempty"`
 	Freshness     string   `json:"freshness,omitempty"`
 	LastError     string   `json:"last_error,omitempty"`
 	Name          string   `json:"name"`

@@ -504,7 +504,6 @@ func summarizeFeature(f *feature.Feature) FeatureSummary {
 		Slug:         f.Slug,
 		Status:       f.Status.String(),
 		CurrentPhase: f.CurrentPhase.String(),
-		Cycle:        activeCycleDTO(f),
 		ActiveRun:    f.ActiveRun,
 		RunCount:     f.RunCount,
 		Repos:        repos,

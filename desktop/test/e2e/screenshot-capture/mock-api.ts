@@ -574,8 +574,6 @@ const CYCLES_FEATURE_SNAPSHOT: FeatureSnapshot = {
       touched: true,
       prUrl: 'https://github.com/example/signal-lab/pull/42',
       freshness: 'in sync',
-      cycleType: 'rebase',
-      cycleStatus: 'running',
     },
     {
       name: 'orchestrator-core',
@@ -585,7 +583,6 @@ const CYCLES_FEATURE_SNAPSHOT: FeatureSnapshot = {
       freshness: 'local changes',
     },
   ],
-  cycle: { type: 'rebase', status: 'running', count: 2, iteration: 1 },
 };
 
 const REBASE_FEATURE_SNAPSHOT: FeatureSnapshot = {
@@ -607,7 +604,6 @@ const REBASE_FEATURE_SNAPSHOT: FeatureSnapshot = {
       rebaseTarget: 'origin/main',
     },
   ],
-  cycle: { type: 'rebase', status: 'running', count: 1 },
 };
 
 const AFTERCARE_FEATURE_SNAPSHOT: FeatureSnapshot = {
@@ -670,11 +666,8 @@ const AFTERCARE_FEATURE_SNAPSHOT: FeatureSnapshot = {
       touched: true,
       prUrl: 'https://github.com/doordash-oss/agentic-orchestrator/pull/107',
       freshness: 'in sync',
-      cycleType: 'rebase',
-      cycleStatus: 'completed',
     },
   ],
-  cycle: {},
 };
 
 const REFACTOR_PASS_CHILD_ID = 'f73d148b32f070a2';
@@ -710,7 +703,6 @@ const REFACTOR_PASS_CHILD_SNAPSHOT: FeatureSnapshot = {
     ],
   },
   timing: { totalSeconds: 0 },
-  cycle: {},
   repoStatus: [{ name: 'agentic-orchestrator', publishable: true, freshness: 'in sync' }],
   actions: [
     { id: 'start', enabled: true, disabledReasons: [] },
@@ -1214,21 +1206,8 @@ function makeMockApi(
         );
       }
       if (scene.startsWith('post-cycle-')) {
-        const cycle = {
-          type: 'rebase',
-          status:
-            scene === 'post-cycle-failed'
-              ? 'failed'
-              : scene === 'post-cycle-gate'
-                ? 'need_user_input'
-                : 'running',
-          count: 2,
-          iteration: 1,
-          phase: 'resolve_conflicts',
-        };
         return Promise.resolve({
           ...AFTERCARE_FEATURE_SNAPSHOT,
-          cycle,
           phaseStatus: 'rebasing',
           actions:
             scene === 'post-cycle-failed'

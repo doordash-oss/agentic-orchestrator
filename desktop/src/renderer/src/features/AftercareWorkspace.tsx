@@ -1,20 +1,13 @@
 import type { FeatureSnapshot, RunDetailView } from '../../../shared/ipc';
 import { FeatureFactsRail } from './FeatureFactsRail';
 import { RefactorHistory } from './refactor/RefactorHistory';
-import {
-  aftercareActions,
-  type AftercareAction,
-  type CycleReceipt,
-} from './postImplementationModel';
+import { aftercareActions, type AftercareAction } from './postImplementationModel';
 
 export interface AftercareWorkspaceProps {
   snapshot: FeatureSnapshot;
   run: RunDetailView | null;
-  receipt?: CycleReceipt;
   /** Action currently dispatching a one-click launch; its card renders busy. */
   busyAction?: { id: AftercareAction['id']; label: string };
-  onRetry(): void;
-  onReopenCycle(): void;
   onAction(action: AftercareAction): void;
   onOpenRunRecord(): void;
   onOpenChanges(): void;
@@ -24,10 +17,7 @@ export interface AftercareWorkspaceProps {
 export function AftercareWorkspace({
   snapshot,
   run,
-  receipt,
   busyAction,
-  onRetry,
-  onReopenCycle,
   onAction,
   onOpenRunRecord,
   onOpenChanges,
@@ -44,40 +34,6 @@ export function AftercareWorkspace({
           <h2>{copy.heading}</h2>
           <p>{copy.description}</p>
         </header>
-
-        {receipt === undefined ? null : (
-          <section
-            className="aftercare-workspace__receipt"
-            data-outcome={receipt.outcome}
-            role={receipt.outcome === 'failed' ? 'alert' : 'status'}
-          >
-            <span aria-hidden="true">
-              {receipt.outcome === 'failed' ? '✕' : receipt.outcome === 'stopped' ? '■' : '✓'}
-            </span>
-            <div>
-              <strong>{receipt.message}</strong>
-              {receipt.detail === undefined ? null : <small>{receipt.detail}</small>}
-              {receipt.outcome === 'failed' ? (
-                <div className="aftercare-workspace__receipt-actions">
-                  <button
-                    type="button"
-                    disabled={
-                      snapshot.actions.find((action) => action.id === 'retry')?.enabled !== true
-                    }
-                    onClick={onRetry}
-                  >
-                    Retry cycle
-                  </button>
-                  <button type="button" onClick={onReopenCycle}>
-                    Reopen cycle
-                  </button>
-                </div>
-              ) : (
-                <small>The feature is back at rest.</small>
-              )}
-            </div>
-          </section>
-        )}
 
         <section className="aftercare-workspace__runway" aria-labelledby="aftercare-actions-title">
           <div className="aftercare-workspace__section-heading">
@@ -141,12 +97,12 @@ function aftercareCopy(status: string): { heading: string; description: string }
     case 'CodeReady':
       return {
         heading: 'Implementation complete.',
-        description: 'Publish the feature, start a maintenance cycle, or leave the run at rest.',
+        description: 'Publish the feature, start a focused pass, or leave the run at rest.',
       };
     case 'Published':
       return {
         heading: 'Published. Choose what comes next.',
-        description: 'Start a focused maintenance cycle, or leave the feature at rest.',
+        description: 'Start a focused pass, or leave the feature at rest.',
       };
     case 'Done':
       return {

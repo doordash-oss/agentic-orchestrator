@@ -48,3 +48,32 @@ func TestForcePush_RejectsWhenRemoteMovedWithoutFetch(t *testing.T) {
 		t.Fatal("ForcePush() = nil, want an error: the remote moved and this clone never fetched")
 	}
 }
+
+// A fetch anywhere in the repository refreshes the remote-tracking ref, which
+// leaves --force-with-lease comparing the remote against itself. ForcePush must
+// still refuse, because --force-if-includes requires the remote tip to have
+// been in this clone's reflog.
+func TestForcePush_RejectsWhenFetchRefreshedTheLease(t *testing.T) {
+	t.Parallel()
+
+	repo, bare := testutil.InitPublishReadyGitRepo(t)
+	testutil.CreateBranch(t, repo, "feature/lease-fetched")
+	testutil.CommitFile(t, repo, "first.txt", "first\n", "first commit")
+	testutil.SimulatePush(t, repo, bare, "feature/lease-fetched", "feature/lease-fetched")
+
+	other := cloneFreshnessRepo(t, bare)
+	runFreshnessGit(t, other, "checkout", "feature/lease-fetched")
+	testutil.CommitFile(t, other, "other.txt", "other\n", "other's commit")
+	testutil.SimulatePush(t, other, bare, "feature/lease-fetched", "feature/lease-fetched")
+
+	// The fetch that defeats a bare lease: origin/feature/lease-fetched now
+	// names the other clone's commit, which this clone never had locally.
+	runFreshnessGit(t, repo, "fetch", "origin")
+
+	runFreshnessGit(t, repo, "reset", "--hard", "HEAD~1")
+	testutil.CommitFile(t, repo, "rewritten.txt", "rewritten\n", "rewritten commit")
+
+	if err := ForcePush(repo, "feature/lease-fetched"); err == nil {
+		t.Fatal("ForcePush() = nil, want an error: the fetched remote tip was never in this clone")
+	}
+}

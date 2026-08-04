@@ -225,8 +225,16 @@ func ForcePush(worktreePath, branch string) error {
 	return ForcePushFunc(worktreePath, branch)
 }
 
+// defaultForcePush needs both guards and neither is redundant.
+// --force-with-lease alone derives its expectation from the remote-tracking
+// ref, so any unrelated `git fetch origin` refreshes that ref and makes the
+// lease compare the remote against itself. --force-if-includes additionally
+// requires the remote-tracking tip to be reachable from the local branch's
+// reflog, which only holds when this clone actually had that commit — so it
+// rejects exactly the case where the remote carries work we never saw.
 func defaultForcePush(worktreePath, branch string) error {
-	cmd := exec.Command("git", "-C", worktreePath, "push", "--force-with-lease", "-u", "origin", branch)
+	cmd := exec.Command("git", "-C", worktreePath,
+		"push", "--force-with-lease", "--force-if-includes", "-u", "origin", branch)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("force pushing branch: %s: %w", strings.TrimSpace(string(out)), err)

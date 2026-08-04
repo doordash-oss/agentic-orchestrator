@@ -1090,11 +1090,31 @@ func TestOrchestrator_Republish_PushFailureRecorded(t *testing.T) {
 	assertLifecycleCall(t, lc, "SetRepoPublishError")
 }
 
+// leaseTestRemoteOps keeps the push path genuinely unmocked — git.ForcePush is
+// the code under test — while answering the PR-state lookup locally so the
+// test never reaches the network.
+type leaseTestRemoteOps struct{}
+
+func (leaseTestRemoteOps) Push(path, branch string) error      { return git.Push(path, branch) }
+func (leaseTestRemoteOps) ForcePush(path, branch string) error { return git.ForcePush(path, branch) }
+func (leaseTestRemoteOps) PullRebase(path, branch string) error {
+	return git.PullRebase(path, branch).Err
+}
+func (leaseTestRemoteOps) CreatePR(string, string, string, string, string, bool) (string, error) {
+	return "", errors.New("CreatePR is not used by this test")
+}
+func (leaseTestRemoteOps) PRBaseBranch(string, string) string { return "" }
+func (leaseTestRemoteOps) PRState(string, string) (string, error) {
+	return "", errors.New("state lookup unavailable in test")
+}
+
 // A caller-side fetch before the lease push would refresh the stale tracking
 // ref to the true remote tip right before --force-with-lease compares
 // against it, making the lease pass and silently discard the second clone's
-// commit. This test leaves Deps.Remote unset so orchestrator.New wires in
-// the real gitRemoteOps, driving an unmocked push through pushRepublish.
+// commit. This test uses leaseTestRemoteOps, which delegates pushes to the
+// real git package, driving an unmocked push through pushRepublish while
+// answering the PR-state lookup locally so the test never reaches the
+// network.
 func TestOrchestrator_Republish_LeaseRejectsWhenRemoteMovedUnfetched(t *testing.T) {
 	branch := "feature/republish-lease"
 	repoPath := newRepublishRepo(t, branch)
@@ -1120,7 +1140,7 @@ func TestOrchestrator_Republish_LeaseRejectsWhenRemoteMovedUnfetched(t *testing.
 	lc.TryCompletePublishFn = func(id string) (bool, error) { return false, nil }
 	fs := newFeatureStore(f)
 
-	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{})
+	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs, Remote: leaseTestRemoteOps{}}, orchestrator.Hooks{})
 
 	err := o.PublishWithOptions("feat-republish-lease", orchestrator.PublishOptions{
 		Repos: []string{"r1"},

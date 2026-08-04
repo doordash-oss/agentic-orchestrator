@@ -854,11 +854,14 @@ export function FeatureCockpit({
     [],
   );
 
+  // Aftercare widens the gate deliberately: undelivered work has to stay
+  // detectable in terminal states, where every completion verb can be disabled.
   const completionEnabled =
     state.phase === 'loaded' &&
-    (['publish', 'merge', 'mark-done', 'cleanup'] as const).some(
+    ((['publish', 'merge', 'mark-done', 'cleanup'] as const).some(
       (id) => actionById(state.snapshot, id)?.enabled === true,
-    );
+    ) ||
+      resolvePostImplementationMode(state.snapshot).kind === 'aftercare');
   const preflightCompletion = useCallback(
     (id: string) => window.agentico.preflightCompletion({ featureId: id }),
     [],

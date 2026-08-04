@@ -23,6 +23,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -963,6 +964,88 @@ func TestManagerReconcileAbandonedSetupsMarksFailed(t *testing.T) {
 	if task.Status != feature.SetupStatusFailed || task.Path == "" || task.Branch == "" {
 		t.Fatalf("task = %+v, want failed task preserving path and branch", task)
 	}
+}
+
+func TestManagerReconcileAbandonedSetupsSkipsFreshQueuedSetup(t *testing.T) {
+	mgr := newTestManager(t)
+	f, err := mgr.Create("Setup Queued", "fresh setup", []string{"test-repo"}, mgr.Config.Defaults.Models, "", "", nil, feature.CreateOptions{QueueSetup: true})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	reconciled, err := mgr.ReconcileAbandonedSetups()
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if len(reconciled) != 0 {
+		t.Fatalf("reconciled = %v, want none for setup with no runner evidence", reconciled)
+	}
+	loaded, err := mgr.Get(f.ID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	setup := loaded.Run().Setup
+	if loaded.Status != feature.StatusSettingUpWorktrees || setup == nil || setup.Status != feature.SetupStatusRunning {
+		t.Fatalf("feature/setup = %s/%+v, want queued setup still active", loaded.Status, setup)
+	}
+	task := setup.Tasks["worktree:test-repo"]
+	if task.Status != feature.SetupStatusQueued {
+		t.Fatalf("task status = %s, want queued", task.Status)
+	}
+}
+
+func TestManagerReconcileAbandonedSetupsSkipsLiveSetupRunner(t *testing.T) {
+	mgr := newTestManager(t)
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseRunner := func() {
+		releaseOnce.Do(func() { close(release) })
+	}
+	worktrees := mocks.NewMockWorktreeOperator()
+	worktrees.CreateFn = func(repoPath, featureSlug, repoName, startPoint string) (string, error) {
+		close(started)
+		<-release
+		return filepath.Join(t.TempDir(), featureSlug, repoName), nil
+	}
+	mgr.Worktrees = worktrees
+	f, err := mgr.Create("Setup Live", "active setup", []string{"test-repo"}, mgr.Config.Defaults.Models, "", "", nil, feature.CreateOptions{QueueSetup: true})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- mgr.RunSetup(f.ID) }()
+	<-started
+	completed := false
+	t.Cleanup(func() {
+		if !completed {
+			releaseRunner()
+			<-done
+		}
+	})
+
+	reconciled, err := mgr.ReconcileAbandonedSetups()
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if len(reconciled) != 0 {
+		t.Fatalf("reconciled = %v, want none while setup runner is live", reconciled)
+	}
+	loaded, err := mgr.Get(f.ID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	setup := loaded.Run().Setup
+	if loaded.Status != feature.StatusSettingUpWorktrees || setup == nil || setup.Status != feature.SetupStatusRunning {
+		t.Fatalf("feature/setup = %s/%+v, want live setup still active", loaded.Status, setup)
+	}
+
+	releaseRunner()
+	if err := <-done; err != nil {
+		t.Fatalf("run setup: %v", err)
+	}
+	completed = true
 }
 
 func TestManagerCreateWithoutWorktree(t *testing.T) {

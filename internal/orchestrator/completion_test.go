@@ -1802,6 +1802,135 @@ func TestOrchestrator_HandlePhaseCompletion_Plan_PhasePlanApproved_PhasePlanGate
 	}
 }
 
+func TestOrchestrator_HandlePhaseCompletion_Plan_RevivesFailedPhasePlanRetry(t *testing.T) {
+	f := &feature.Feature{
+		ID:                  "feat-phase-plan-retry",
+		Status:              feature.StatusFailed,
+		CurrentPhase:        feature.PhasePlan,
+		Pipeline:            feature.PipelineLarge,
+		CurrentRoadmapPhase: 1,
+		TotalRoadmapPhases:  2,
+		FailureType:         feature.FailureInfrastructure,
+		LastError:           "phase plan session did not complete",
+		Checkpoints:         feature.Checkpoints{PhasePlanReview: true},
+	}
+	lc := lifecycleForFeature(f)
+	lc.NeedsPlanReviewFn = func(id string) error {
+		if f.Status != feature.StatusPlanning {
+			t.Fatalf("NeedsPlanReview called from status %s, want Planning", f.Status)
+		}
+		f.Status = feature.StatusPlanNeedsReview
+		return nil
+	}
+	fs := newFeatureStore(f)
+
+	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{})
+	if err := o.HandlePhaseCompletion(f.ID, orchestrator.PhaseCompletionInput{
+		Phase:      feature.PhasePlan,
+		PlanResult: &agent.PlanLoopResult{FinalStatus: "approved"},
+	}); err != nil {
+		t.Fatalf("HandlePhaseCompletion: %v", err)
+	}
+
+	assertLifecycleCall(t, lc, "NeedsPlanReview")
+	if f.Status != feature.StatusPlanNeedsReview {
+		t.Fatalf("Status = %s, want PlanNeedsReview", f.Status)
+	}
+	if f.FailureType != "" || f.LastError != "" {
+		t.Fatalf("failure fields = %q/%q, want cleared", f.FailureType, f.LastError)
+	}
+}
+
+func TestOrchestrator_HandlePhaseCompletion_Plan_DuplicateReviewGateIsIdempotent(t *testing.T) {
+	f := &feature.Feature{
+		ID:                  "feat-phase-plan-duplicate-review",
+		Status:              feature.StatusPlanNeedsReview,
+		CurrentPhase:        feature.PhasePlan,
+		Pipeline:            feature.PipelineLarge,
+		CurrentRoadmapPhase: 1,
+		TotalRoadmapPhases:  2,
+		Checkpoints:         feature.Checkpoints{PhasePlanReview: true},
+	}
+	lc := lifecycleForFeature(f)
+	lc.NeedsPlanReviewFn = func(id string) error {
+		t.Fatal("NeedsPlanReview should not be called for an existing PlanNeedsReview gate")
+		return nil
+	}
+	fs := newFeatureStore(f)
+
+	var reviewPhase feature.Phase
+	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{
+		OnReviewRequired: func(id string, p feature.Phase) { reviewPhase = p },
+	})
+	if err := o.HandlePhaseCompletion(f.ID, orchestrator.PhaseCompletionInput{
+		Phase:      feature.PhasePlan,
+		PlanResult: &agent.PlanLoopResult{FinalStatus: "approved"},
+	}); err != nil {
+		t.Fatalf("HandlePhaseCompletion: %v", err)
+	}
+
+	if f.Status != feature.StatusPlanNeedsReview {
+		t.Fatalf("Status = %s, want PlanNeedsReview", f.Status)
+	}
+	if reviewPhase != feature.PhasePlan {
+		t.Fatalf("OnReviewRequired phase = %v, want PhasePlan", reviewPhase)
+	}
+	events := drainEvents(o)
+	if !hasEventType(events, ports.ReviewRequired) {
+		t.Error("expected ReviewRequired event")
+	}
+}
+
+func TestOrchestrator_HandlePhaseCompletion_Plan_PromotesRevisedPhasePlanArtifact(t *testing.T) {
+	tmpStateDir := t.TempDir()
+	f := &feature.Feature{
+		ID:                  "feat-phase-plan-promote",
+		Status:              feature.StatusPlanning,
+		CurrentPhase:        feature.PhasePlan,
+		Pipeline:            feature.PipelineLarge,
+		CurrentRoadmapPhase: 2,
+		TotalRoadmapPhases:  2,
+		ActiveRun:           1,
+		RunCount:            1,
+		Checkpoints:         feature.Checkpoints{PhasePlanReview: true},
+	}
+	phasePlanDir := agent.PhasePlanDir(tmpStateDir, f, 2)
+	if err := os.MkdirAll(filepath.Join(phasePlanDir, "attempt-02"), 0o755); err != nil {
+		t.Fatalf("mkdir attempt: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(phasePlanDir, "phase-plan.md"), []byte("old pedregal plan"), 0o644); err != nil {
+		t.Fatalf("write old plan: %v", err)
+	}
+	revised := []byte("revised nucleus-only plan")
+	if err := os.WriteFile(filepath.Join(phasePlanDir, "attempt-02", "phase-plan.md"), revised, 0o644); err != nil {
+		t.Fatalf("write revised plan: %v", err)
+	}
+
+	lc := lifecycleForFeature(f)
+	lc.NeedsPlanReviewFn = func(id string) error {
+		f.Status = feature.StatusPlanNeedsReview
+		return nil
+	}
+	fs := newFeatureStore(f)
+	pr := &agent.PhaseRunner{StateDir: tmpStateDir}
+
+	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs, PhaseRunner: pr}, orchestrator.Hooks{})
+	if err := o.HandlePhaseCompletion(f.ID, orchestrator.PhaseCompletionInput{
+		Phase:      feature.PhasePlan,
+		PlanResult: &agent.PlanLoopResult{FinalStatus: "approved", Iterations: 2},
+	}); err != nil {
+		t.Fatalf("HandlePhaseCompletion: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(phasePlanDir, "phase-plan.md"))
+	if err != nil {
+		t.Fatalf("read canonical phase plan: %v", err)
+	}
+	if string(data) != string(revised) {
+		t.Fatalf("canonical phase plan = %q, want revised %q", data, revised)
+	}
+}
+
 // Plan needs_human_review always raises a review gate, even when
 // planning review gates are disabled. The validator's escalation is an
 // exception path — failing the feature would discard a working plan

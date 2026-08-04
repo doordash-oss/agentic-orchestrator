@@ -18,6 +18,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
@@ -218,6 +219,43 @@ func TestOrchestrator_HandleReviewDecision_Proceed_Roadmap(t *testing.T) {
 	})
 
 	assertLifecycleCall(t, lc, "AdvanceRoadmapPhase")
+}
+
+func TestOrchestrator_HandleReviewDecision_Proceed_PlanNeedsReviewInfersRoadmap(t *testing.T) {
+	tmpStateDir := t.TempDir()
+	roadmapPath := filepath.Join(tmpStateDir, "feat-rd-rm-infer", "runs", "run-001", "roadmap", "roadmap.md")
+	if err := os.MkdirAll(filepath.Dir(roadmapPath), 0o755); err != nil {
+		t.Fatalf("mkdir roadmap dir: %v", err)
+	}
+	if err := os.WriteFile(roadmapPath, []byte("# Roadmap\n\n## Phase 1: First phase\n\nDo the first thing.\n"), 0o644); err != nil {
+		t.Fatalf("write roadmap: %v", err)
+	}
+	planGate := feature.PhasePlan
+	f := &feature.Feature{
+		ID:                 "feat-rd-rm-infer",
+		Status:             feature.StatusPlanNeedsReview,
+		Pipeline:           feature.PipelineMedium,
+		PendingReviewPhase: &planGate,
+		ActiveRun:          1,
+		RunCount:           1,
+		Artifacts:          map[string]string{"roadmap": roadmapPath},
+		SchemaVersion:      feature.SchemaVersionCurrent,
+	}
+	lc := lifecycleForFeature(f)
+	lc.AdvanceRoadmapPhaseFn = func(id string) error {
+		f.Status = feature.StatusPlanning
+		f.CurrentRoadmapPhase = 1
+		return nil
+	}
+	fs := newFeatureStore(f)
+
+	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{})
+	_ = o.HandleReviewDecision("feat-rd-rm-infer", orchestrator.ReviewDecision{
+		Decision: "proceed",
+	})
+
+	assertLifecycleCall(t, lc, "AdvanceRoadmapPhase")
+	refuteLifecycleCall(t, lc, "StartResearch")
 }
 
 // Proceed with TargetPhase=PhaseImplement + TotalRoadmapPhases>0, CurrentRoadmapPhase=0
@@ -482,6 +520,56 @@ func TestOrchestrator_HandleReviewDecision_Iterate_PhasePlan_InvalidatesApproved
 
 	if got := agent.LatestCompletedPlanAttempt(phasePlanDir); got != 0 {
 		t.Errorf("LatestCompletedPlanAttempt = %d after iterate; want 0 (approved phase-plan attempt should be invalidated)", got)
+	}
+}
+
+func TestOrchestrator_HandleReviewDecision_Iterate_InferredPhasePlan_WritesReviewerFeedback(t *testing.T) {
+	tmpStateDir := t.TempDir()
+	featureID := "feat-rd-iter-pp-feedback"
+	phasePlanDir := agent.PhasePlanDir(tmpStateDir, &feature.Feature{ID: featureID, ActiveRun: 1}, 2)
+
+	if err := agent.WritePlanAttemptMeta(phasePlanDir, agent.PlanAttemptMeta{
+		Attempt:      1,
+		AgentStatus:  "SUCCESS",
+		ReviewStatus: "APPROVED",
+	}); err != nil {
+		t.Fatalf("seed approved meta: %v", err)
+	}
+
+	planGate := feature.PhasePlan
+	f := &feature.Feature{
+		ID:                  featureID,
+		Status:              feature.StatusPlanNeedsReview,
+		Pipeline:            feature.PipelineLarge,
+		PendingReviewPhase:  &planGate,
+		MaxPlanIterations:   5,
+		CurrentRoadmapPhase: 2,
+		TotalRoadmapPhases:  2,
+		ActiveRun:           1,
+		RunCount:            1,
+	}
+	lc := lifecycleForFeature(f)
+	lc.StartPlanningFn = func(id string) error { f.Status = feature.StatusPlanning; return nil }
+	fs := newFeatureStore(f)
+
+	pr := &agent.PhaseRunner{StateDir: tmpStateDir}
+
+	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs, PhaseRunner: pr}, orchestrator.Hooks{})
+	feedback := "Remove every pedregal task from this phase plan."
+	_ = o.HandleReviewDecision(featureID, orchestrator.ReviewDecision{
+		Decision: "iterate",
+		Comment:  feedback,
+	})
+
+	data, err := os.ReadFile(filepath.Join(phasePlanDir, "attempt-01", "validation-feedback.md"))
+	if err != nil {
+		t.Fatalf("read validation feedback: %v", err)
+	}
+	if got := string(data); !strings.Contains(got, feedback) {
+		t.Fatalf("validation feedback = %q, want reviewer comment %q", got, feedback)
+	}
+	if got := agent.LatestCompletedPlanAttempt(phasePlanDir); got != 0 {
+		t.Errorf("LatestCompletedPlanAttempt = %d after iterate; want 0", got)
 	}
 }
 

@@ -873,6 +873,43 @@ func TestScanRecovery_ReconcilesAbandonedSetupBeforeScan(t *testing.T) {
 	}
 }
 
+func TestScanRecovery_PreservesFreshQueuedSetup(t *testing.T) {
+	store := feature.NewStore(t.TempDir())
+	cfg := config.NewDefault()
+	cfg.Repos["test-repo"] = config.RepoConfig{Path: "/repos/test-repo"}
+	mgr := feature.NewManager(store, cfg)
+	branches := mocks.NewMockBranchOperator()
+	branches.DefaultBranchFn = func(repoPath string) (string, error) { return mainBranch, nil }
+	branches.HasOriginRemoteFn = func(repoPath string) (bool, error) { return false, nil }
+	branches.BranchNameFn = func(featureSlug string) string { return "feature/" + featureSlug }
+	mgr.Branches = branches
+
+	f, err := mgr.Create("Fresh Queued Setup", "not abandoned", []string{"test-repo"}, cfg.Defaults.Models, "", "", nil, feature.CreateOptions{QueueSetup: true})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	fake := &fakeRecoveryOp{ScanFn: func(ctx context.Context) ([]ports.RecoveryItem, error) {
+		return nil, nil
+	}}
+
+	o := orchestrator.New(orchestrator.Deps{Store: store, Lifecycle: mgr, Recovery: fake}, orchestrator.Hooks{})
+	if _, err := o.ScanRecovery(context.Background()); err != nil {
+		t.Fatalf("ScanRecovery: %v", err)
+	}
+	loaded, err := store.Load(f.ID)
+	if err != nil {
+		t.Fatalf("load feature: %v", err)
+	}
+	setup := loaded.Run().Setup
+	if loaded.Status != feature.StatusSettingUpWorktrees || loaded.FailureType != "" || setup == nil || setup.Status != feature.SetupStatusRunning {
+		t.Fatalf("feature/setup = %s/%s/%+v, want fresh setup preserved", loaded.Status, loaded.FailureType, setup)
+	}
+	task := setup.Tasks["worktree:test-repo"]
+	if task.Status != feature.SetupStatusQueued {
+		t.Fatalf("setup task status = %s, want queued", task.Status)
+	}
+}
+
 // TestScanRecovery_CleanupError_SuppressesScan asserts that when cleanup
 // returns an error for any feature, ScanRecovery propagates the error and
 // does NOT call ScanForRecovery. This encodes the "recovery decisions always

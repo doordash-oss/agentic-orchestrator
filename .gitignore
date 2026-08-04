@@ -6,6 +6,8 @@ bin/
 *.so
 *.dylib
 dist/
+web/dist/
+web/node_modules/
 
 # Test
 *.test

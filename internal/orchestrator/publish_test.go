@@ -1081,5 +1081,11 @@ func TestOrchestrator_Republish_PushFailureRecorded(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected an error from the failing push, got nil")
 	}
+	if !strings.Contains(err.Error(), "remote rejected") {
+		t.Errorf("error = %q; want it to mention the injected failure", err.Error())
+	}
+	if got := countPublisherCalls(pub, "Push"); got != 1 {
+		t.Errorf("Push calls = %d; want 1", got)
+	}
 	assertLifecycleCall(t, lc, "SetRepoPublishError")
 }

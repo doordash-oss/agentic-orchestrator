@@ -183,9 +183,11 @@ func (o *Orchestrator) republishRepo(f *feature.Feature, repo feature.FeatureRep
 }
 
 // pushRepublish fast-forwards when the remote branch is an ancestor of HEAD.
-// Otherwise the branch was rewritten locally and needs a lease push; the
-// best-effort fetch first makes the lease compare against the true remote tip
-// instead of a stale tracking ref.
+// Otherwise the branch was rewritten locally and needs a lease push. We never
+// fetch first: --force-with-lease derives its expectation from the
+// remote-tracking ref, so refreshing that ref right before the push would
+// make the lease compare the remote against itself and silently overwrite
+// commits this clone never saw.
 func (o *Orchestrator) pushRepublish(workDir, branch string) error {
 	if git.IsAncestor(workDir, "origin/"+branch, "HEAD") {
 		if err := o.deps.Remote.Push(workDir, branch); err != nil {
@@ -193,7 +195,6 @@ func (o *Orchestrator) pushRepublish(workDir, branch string) error {
 		}
 		return nil
 	}
-	_ = git.Fetch(workDir)
 	if err := o.deps.Remote.ForcePush(workDir, branch); err != nil {
 		return fmt.Errorf("force push failed: %w", err)
 	}

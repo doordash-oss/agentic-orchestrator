@@ -126,16 +126,6 @@ test('capture all visual evidence screenshots', async ({ page }) => {
 
   await capture(
     page,
-    'post-cycle-rebase',
-    'dark',
-    1440,
-    900,
-    'focused-rebase-cycle-with-authoritative-spine-and-live-agent-canvas-1440x900',
-    '.cycle-workspace',
-  );
-
-  await capture(
-    page,
     'refactor-pass',
     'dark',
     1440,
@@ -165,16 +155,6 @@ test('capture all visual evidence screenshots', async ({ page }) => {
     async (capturePage) => {
       await capturePage.waitForTimeout(250);
     },
-  );
-
-  await capture(
-    page,
-    'post-cycle-failed',
-    'dark',
-    1440,
-    900,
-    'failed-cycle-with-preserved-context-retry-and-return-actions-1440x900',
-    '.cycle-workspace__failure',
   );
 
   await capture(

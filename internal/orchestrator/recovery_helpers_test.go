@@ -82,7 +82,6 @@ type itemSpec struct {
 	RepoName     string
 	ProcessAlive bool
 	CurrentPhase feature.Phase
-	CycleType    string
 	Status       feature.Status
 	NoFeature    bool // when true, Feature field is left nil
 	Pipeline     feature.PipelineProfile

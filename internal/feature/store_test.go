@@ -2006,8 +2006,6 @@ artifacts: {}
 	if err != nil {
 		t.Fatalf("Load() error = %v; want nil (legacy refactor keys must be ignored)", err)
 	}
-	// Legacy cycle state must be dropped on load.
-
 	// Round-trip save and re-read the raw run.yaml: dropped keys and cycle
 	// state must not be re-emitted.
 	if err := store.Save(loaded); err != nil {

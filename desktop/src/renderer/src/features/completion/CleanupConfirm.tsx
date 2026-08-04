@@ -82,7 +82,6 @@ export function CleanupConfirm({
                 <li>Feature/run history</li>
                 <li>Artifacts</li>
                 <li>PR metadata</li>
-                <li>Repository-cycle records</li>
               </ul>
             </section>
           </div>

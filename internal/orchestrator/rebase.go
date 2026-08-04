@@ -27,19 +27,13 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 )
 
-// HarnessRebaseRepoOutcome captures the resolved rebase target and worktree
+// RebaseRepoFreshnessInput captures the resolved rebase target and worktree
 // identity for a single repository. The freshness/blocker helpers shared by
-// completion preflight consume it; the legacy harness rebase that populated the
-// status/conflict fields has been removed.
-type HarnessRebaseRepoOutcome struct {
-	RepoName      string
-	RebaseTarget  string
-	ConflictFiles []string
-	Changed       bool
-	Err           error
-	Publishable   bool
-	WorktreePath  string
-	Branch        string
+// completion preflight consume it.
+type RebaseRepoFreshnessInput struct {
+	RebaseTarget string
+	Publishable  bool
+	WorktreePath string
 }
 
 // resolveRebaseTarget picks the base ref a follow-up rebase should target
@@ -83,16 +77,13 @@ func repoBranch(f *feature.Feature, repo feature.FeatureRepo) string {
 	return "feature/" + f.Slug
 }
 
-// harnessRebaseOutcomeForRepo builds the per-repo outcome carrying the resolved
-// rebase target and worktree identity. Completion preflight and the legacy
-// rebase preflight share it for freshness/blocker decisions.
-func (o *Orchestrator) harnessRebaseOutcomeForRepo(f *feature.Feature, repo feature.FeatureRepo) HarnessRebaseRepoOutcome {
-	return HarnessRebaseRepoOutcome{
-		RepoName:     repo.Name,
+// rebaseFreshnessInputForRepo builds the per-repo input carrying the resolved
+// rebase target and worktree identity for freshness/blocker decisions.
+func (o *Orchestrator) rebaseFreshnessInputForRepo(f *feature.Feature, repo feature.FeatureRepo) RebaseRepoFreshnessInput {
+	return RebaseRepoFreshnessInput{
 		RebaseTarget: o.resolveRebaseTarget(f, &repo),
 		Publishable:  repo.Publishable == nil || *repo.Publishable,
 		WorktreePath: repoWorkDir(repo),
-		Branch:       repoBranch(f, repo),
 	}
 }
 

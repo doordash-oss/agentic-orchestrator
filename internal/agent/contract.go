@@ -205,8 +205,9 @@ func validateImplementerAgentOwnedEvidencePreflight(iterDir string) ([]ProtocolV
 
 func implementerTestingContractPathCandidates(iterDir string) []string {
 	// Roadmap phase iterations live at <phase>/implement/iteration-N with the
-	// contract at <phase>/testing-contract.yaml. Cycle iterations use the same
-	// phase-dir progress layout and keep the contract beside progress.md.
+	// contract at <phase>/testing-contract.yaml. Implementation iterations
+	// use the same phase-dir progress layout and keep the contract beside
+	// progress.md.
 	parent := filepath.Dir(iterDir)
 	phaseDir := filepath.Dir(parent)
 	candidates := []string{}

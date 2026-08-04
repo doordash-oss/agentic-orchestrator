@@ -6,6 +6,7 @@ import { aftercareActions, type AftercareAction } from './postImplementationMode
 export interface AftercareWorkspaceProps {
   snapshot: FeatureSnapshot;
   run: RunDetailView | null;
+  actionError?: AftercareActionError | null;
   /** Action currently dispatching a one-click launch; its card renders busy. */
   busyAction?: { id: AftercareAction['id']; label: string };
   onAction(action: AftercareAction): void;
@@ -14,9 +15,18 @@ export interface AftercareWorkspaceProps {
   onOpenPullRequest(url: string): void;
 }
 
+interface AftercareActionError {
+  action: string;
+  error: {
+    code: string;
+    message: string;
+  };
+}
+
 export function AftercareWorkspace({
   snapshot,
   run,
+  actionError = null,
   busyAction,
   onAction,
   onOpenRunRecord,
@@ -43,6 +53,14 @@ export function AftercareWorkspace({
             </div>
             <span>One at a time</span>
           </div>
+          {actionError === null ? null : (
+            <div role="alert" className="create-form__error aftercare-workspace__action-error">
+              <span className="create-form__error-code">{actionError.error.code}</span>
+              <p className="create-form__error-message">
+                {aftercareActionErrorMessage(actionError)}
+              </p>
+            </div>
+          )}
           {actions.length === 0 ? (
             <p className="aftercare-workspace__empty">No action is needed right now.</p>
           ) : (
@@ -90,6 +108,13 @@ export function AftercareWorkspace({
       <FeatureFactsRail snapshot={snapshot} run={run} onOpenPullRequest={onOpenPullRequest} />
     </section>
   );
+}
+
+function aftercareActionErrorMessage(actionError: AftercareActionError): string {
+  if (actionError.error.code === 'rebase_already_up_to_date') {
+    return `Already up to date: ${actionError.error.message}`;
+  }
+  return `${actionError.action} was rejected — ${actionError.error.message}`;
 }
 
 function aftercareCopy(status: string): { heading: string; description: string } {

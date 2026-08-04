@@ -186,8 +186,7 @@ func (pr *PhaseRunner) SessionRuntimeConfigResolver(featureID string) func(llm.P
 }
 
 // ResolveSecondaryEffort is the exported entry point for secondary session
-// launches (validators, review helpers, fix agents, cycle workers, utility
-// helpers). It resolves the effective effort and source from the same
+// launches (validators, review helpers, fix agents, utility helpers). It resolves the effective effort and source from the same
 // configured role as the selected model: Planning for planning agents, Review
 // for validators and review axes, Implementation for implementation and fix
 // workers, and Utilities for utility helpers. Capability drift projects the
@@ -906,9 +905,6 @@ func (pr *PhaseRunner) RunImplementation(f *feature.Feature, planPath string, kb
 	}
 	reviewEffort, reviewEffortSource := pr.resolveEffortForRole(f, llm.PhaseReview, reviewModel)
 
-	// Rebase operates on the whole branch,
-	// not a specific roadmap phase — omit roadmap/phase-type context so the
-	// review prompt stays focused on the cycle's objectives.
 	phaseType := f.RoadmapPhaseType
 	roadmapPath := f.Artifacts["roadmap"]
 
@@ -960,77 +956,6 @@ func (pr *PhaseRunner) RunImplementation(f *feature.Feature, planPath string, kb
 		}
 	}()
 
-	return resultCh, nil
-}
-
-// RunFeatureCycleFinalReview spawns the unified feature-level Final Review
-// loop for a post-publish cycle. Cwd at the active run dir; --add-dir for every
-// Feature.Repos worktree. The reviewer reads the cumulative diff across
-// all repos. Unlike the engine FR, the post-cycle FR does NOT atomic-stamp
-// per-repo state on completion — the surrounding cycle owns the post-FR
-// transitions. Returns a channel that receives the FR result.
-func (pr *PhaseRunner) RunFeatureCycleFinalReview(
-	f *feature.Feature,
-) (chan *FeatureFinalReviewResult, error) {
-	if f == nil {
-		return nil, fmt.Errorf("nil feature")
-	}
-	if len(f.Repos) == 0 {
-		return nil, fmt.Errorf("feature %s has no repos", f.ID)
-	}
-
-	maxIter, maxFails, maxNoProg := pr.resolveLoopLimits(f)
-	implementationModel := pr.modelForRole(f.Models.Implementation, llm.PhaseImplementation)
-	reviewModel := pr.modelForRole(f.Models.Review, llm.PhaseReview)
-	cycleReviewEffort, cycleReviewEffortSource := pr.resolveEffortForRole(f, llm.PhaseReview, reviewModel)
-	cycleImplEffort, cycleImplEffortSource := pr.resolveEffortForRole(f, llm.PhaseImplementation, implementationModel)
-
-	cfg := OrchestratorConfig{
-		Feature:                    f,
-		FeatureStore:               pr.FeatureStore,
-		StateDir:                   pr.StateDir,
-		Config:                     pr.Config,
-		Model:                      implementationModel,
-		ReviewModel:                reviewModel,
-		ResolveSessionConfig:       pr.SessionRuntimeConfigResolver(f.ID),
-		MaxIterations:              maxIter,
-		MaxConsecFails:             maxFails,
-		MaxConsecNoProgress:        maxNoProg,
-		DangerouslySkipPermissions: pr.DangerouslySkipPermissions,
-		PermissionCache:            pr.PermissionCache,
-		CommandRunner:              pr.CommandRunner,
-		BuildSession:               pr.buildSessionForFeature(f),
-		AskingClause:               pr.askingQuestionsClauseForModel(implementationModel),
-		EffortLevel:                f.EffectivePipeline().EffortLevel(),
-		EffectiveEffort:            cycleReviewEffort,
-		EffortSource:               cycleReviewEffortSource,
-		ImplEffectiveEffort:        cycleImplEffort,
-		ImplEffortSource:           cycleImplEffortSource,
-		ReviewEffectiveEffort:      cycleReviewEffort,
-		ReviewEffortSource:         cycleReviewEffortSource,
-		SkillsDir:                  pr.SkillsDir,
-		GuidelinesDir:              pr.GuidelinesDir,
-		Observer:                   pr.Observer,
-		OnVerificationProgress:     pr.OnVerificationProgress,
-		RunFinalReviewFn:           pr.RunFinalReviewFn,
-	}
-
-	resultCh := make(chan *FeatureFinalReviewResult, 1)
-	go func() {
-		runFn := RunFeatureCycleFinalReviewLoop
-		if cfg.RunFinalReviewFn != nil {
-			runFn = cfg.RunFinalReviewFn
-		}
-		result, err := runFn(cfg, pr.SessionManager)
-		if err != nil {
-			if result == nil {
-				result = &FeatureFinalReviewResult{}
-			}
-			result.FinalStatus = "failed"
-			result.LastError = err.Error()
-		}
-		resultCh <- result
-	}()
 	return resultCh, nil
 }
 
@@ -1758,8 +1683,8 @@ func (pr *PhaseRunner) AskingClauseForModel(model string) string {
 
 // ModelForRole resolves the effective model for a phase role. If configured is
 // non-empty it is returned as-is; otherwise the catalog default for the role is
-// returned. Exported so external callers (e.g. cycle loops) can perform the
-// same resolution that PhaseRunner uses internally.
+// returned. Exported so external callers can perform the same resolution that
+// PhaseRunner uses internally.
 func (pr *PhaseRunner) ModelForRole(configured string, role llm.PhaseRole) string {
 	return pr.modelForRole(configured, role)
 }

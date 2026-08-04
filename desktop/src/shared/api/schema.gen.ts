@@ -1792,7 +1792,6 @@ export interface components {
             open: boolean;
             scope?: string;
             repo_name?: string;
-            cycle_type?: string;
             input_notifications?: string;
             iteration?: number;
             summary?: string;

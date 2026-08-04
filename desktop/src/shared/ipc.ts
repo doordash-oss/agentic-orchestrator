@@ -1501,7 +1501,6 @@ export const AttentionGateSchema = z.strictObject({
   waitingSince: z.string().max(100),
   scope: z.string().max(100).optional(),
   repoName: z.string().max(500).optional(),
-  cycleType: z.string().max(200).optional(),
   iteration: z.number().int().nonnegative().optional(),
   summary: AttentionTextSchema.optional(),
   questions: z
@@ -1603,7 +1602,6 @@ export type HelpAnswerRequest = z.output<typeof HelpAnswerRequestSchema>;
 export const GateTargetSchema = z.strictObject({
   featureId: FeatureIdSchema,
   repoName: z.string().max(500).optional(),
-  cycleType: z.string().max(200).optional(),
 });
 export const GateDraftRequestSchema = GateTargetSchema.extend({
   answers: z

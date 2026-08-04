@@ -759,7 +759,7 @@ export function FeatureCockpit({
   const [attentionBusy, setAttentionBusy] = useState<string | null>(null);
   const [rewindDialog, setRewindDialog] = useState(false);
   const [rewindSourceRunNumber, setRewindSourceRunNumber] = useState<number | undefined>();
-  const [launcherModal, setCycleModal] = useState<AftercareModalId | null>(null);
+  const [launcherModal, setLauncherModal] = useState<AftercareModalId | null>(null);
   const [completionModal, setCompletionModal] = useState<CompletionVerb | null>(null);
   const [runRecordOpen, setRunRecordOpen] = useState(false);
   const [changesOpen, setChangesOpen] = useState(false);
@@ -872,7 +872,7 @@ export function FeatureCockpit({
     setRebaseLaunchBusy(true);
     setActionError(null);
     setCompletionModal(null);
-    setCycleModal(null);
+    setLauncherModal(null);
     setAnnouncement('Starting rebase pass…');
     window.agentico
       .launchRebaseChild({ featureId })
@@ -1454,7 +1454,7 @@ export function FeatureCockpit({
       key: 'refactor',
       label: 'Refactor',
       enabled: true,
-      onClick: () => setCycleModal('refactor'),
+      onClick: () => setLauncherModal('refactor'),
     });
   }
   if (reviewFeedbackAction?.enabled === true) {
@@ -1462,7 +1462,7 @@ export function FeatureCockpit({
       key: 'review-feedback',
       label: 'Address review feedback',
       enabled: true,
-      onClick: () => setCycleModal('review-feedback'),
+      onClick: () => setLauncherModal('review-feedback'),
     });
   } else if (reviewFeedbackAction !== undefined) {
     menuActions.push({
@@ -1573,7 +1573,7 @@ export function FeatureCockpit({
       launchRebase();
       return;
     }
-    setCycleModal(action.id);
+    setLauncherModal(action.id);
   };
   const standaloneAttention =
     activeAttentionItem === undefined ? null : (
@@ -1669,6 +1669,7 @@ export function FeatureCockpit({
               <AftercareWorkspace
                 snapshot={snapshot}
                 run={aftercareRun}
+                actionError={actionError}
                 busyAction={
                   rebaseLaunchBusy ? { id: 'rebase', label: 'Starting rebase pass…' } : undefined
                 }
@@ -1683,7 +1684,7 @@ export function FeatureCockpit({
           )
         ) : null}
 
-        {actionError === null ? null : (
+        {actionError === null || snapshot.activeChild === undefined ? null : (
           <div role="alert" className="create-form__error">
             <span className="create-form__error-code">{actionError.error.code}</span>
             <p className="create-form__error-message">
@@ -1840,7 +1841,7 @@ export function FeatureCockpit({
           <CockpitModal
             title="Start refactor"
             ariaLabel="Start refactor"
-            onClose={() => setCycleModal(null)}
+            onClose={() => setLauncherModal(null)}
           >
             <RefactorLauncher
               featureId={featureId}
@@ -1849,9 +1850,7 @@ export function FeatureCockpit({
                 if (launch.autoStart) refactorPass.armAutoStart(launch.childId);
                 void load({ silent: true });
               }}
-              onCancel={() => setCycleModal(null)}
-              attentionItems={attentionItems}
-              onOpenGate={() => setCycleModal(null)}
+              onCancel={() => setLauncherModal(null)}
             />
           </CockpitModal>
         ) : null}
@@ -1860,7 +1859,7 @@ export function FeatureCockpit({
           <CockpitModal
             title="Address review feedback"
             ariaLabel="Address review feedback"
-            onClose={() => setCycleModal(null)}
+            onClose={() => setLauncherModal(null)}
           >
             <ReviewFeedbackLauncher
               featureId={featureId}
@@ -1869,7 +1868,7 @@ export function FeatureCockpit({
                 refactorPass.armAutoStart(launch.childId);
                 void load({ silent: true });
               }}
-              onCancel={() => setCycleModal(null)}
+              onCancel={() => setLauncherModal(null)}
             />
           </CockpitModal>
         ) : null}
@@ -2272,7 +2271,11 @@ export function FeatureCockpit({
           ) : null}
 
           {launcherModal === 'refactor' ? (
-            <CockpitModal title="Refactor" ariaLabel="Refactor" onClose={() => setCycleModal(null)}>
+            <CockpitModal
+              title="Refactor"
+              ariaLabel="Refactor"
+              onClose={() => setLauncherModal(null)}
+            >
               <RefactorLauncher
                 featureId={featureId}
                 snapshot={snapshot}
@@ -2280,9 +2283,7 @@ export function FeatureCockpit({
                   if (launch.autoStart) refactorPass.armAutoStart(launch.childId);
                   void load({ silent: true });
                 }}
-                onCancel={() => setCycleModal(null)}
-                attentionItems={attentionItems}
-                onOpenGate={() => setCycleModal(null)}
+                onCancel={() => setLauncherModal(null)}
               />
             </CockpitModal>
           ) : null}
@@ -2291,7 +2292,7 @@ export function FeatureCockpit({
             <CockpitModal
               title="Address review feedback"
               ariaLabel="Address review feedback"
-              onClose={() => setCycleModal(null)}
+              onClose={() => setLauncherModal(null)}
             >
               <ReviewFeedbackLauncher
                 featureId={featureId}
@@ -2300,7 +2301,7 @@ export function FeatureCockpit({
                   refactorPass.armAutoStart(launch.childId);
                   void load({ silent: true });
                 }}
-                onCancel={() => setCycleModal(null)}
+                onCancel={() => setLauncherModal(null)}
               />
             </CockpitModal>
           ) : null}

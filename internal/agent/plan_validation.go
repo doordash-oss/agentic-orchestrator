@@ -461,8 +461,7 @@ type PlanLoopConfig struct {
 	PermissionCache *permission.Cache
 
 	// RepoName is the repo scope for permission caching. Empty means global
-	// scope. When set (e.g. from a cycle loop), planning sessions will
-	// scope permission rules to this repo.
+	// scope. When set, planning sessions will scope permission rules to this repo.
 	RepoName string
 
 	// BuildSession creates CLI command args, env vars, and session opts

@@ -2292,6 +2292,25 @@ func TestServerMutationTargetCleanupAndDeleteActionsMutateFeatureState(t *testin
 		}
 	})
 
+	t.Run("cleanup cycles target is unknown", func(t *testing.T) {
+		target, _, f, worktrees := newCleanupActionTarget(t)
+		worktrees.Calls = nil
+
+		result, err := target.CleanupFeature(f.ID, serverruntime.CleanupActionRequest{Target: "cycles"})
+		if err == nil {
+			t.Fatalf("CleanupFeature(cycles) error = nil; want unknown target error")
+		}
+		if result.FeatureID != f.ID || result.Target != "cycles" || result.Result != resultFailed {
+			t.Fatalf("CleanupFeature(cycles) result = %+v; want failed cycles", result)
+		}
+		if !strings.Contains(err.Error(), "unknown cleanup target") {
+			t.Fatalf("CleanupFeature(cycles) error = %v; want unknown cleanup target", err)
+		}
+		if len(worktrees.Calls) != 0 {
+			t.Fatalf("worktree calls = %+v; want none for unknown target", worktrees.Calls)
+		}
+	})
+
 	t.Run("delete", func(t *testing.T) {
 		target, store, f, worktrees := newCleanupActionTarget(t)
 

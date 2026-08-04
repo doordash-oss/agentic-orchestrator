@@ -84,13 +84,13 @@ type RepoTransactionEntry struct {
 	// ChildHeadSHA is the full child HEAD after committing every remaining
 	// child change; recorded before any parent branch is touched.
 	ChildHeadSHA string `yaml:"child_head_sha"`
-	// CandidateSHA is the full SHA of the explicit two-parent no-fast-forward
-	// merge commit staged for this repository without advancing the parent
-	// ref. Empty until preparation is durable.
+	// CandidateSHA is the full SHA staged for this repository without
+	// advancing the parent ref. Usually this is an explicit two-parent
+	// no-fast-forward merge commit; for a rebase pass-through repo that was
+	// already up to date at launch, this can equal ParentAnchorSHA.
 	CandidateSHA string `yaml:"candidate_sha,omitempty"`
-	// MergeHEAD is the full SHA of the merge commit once the parent ref is
-	// confirmed at the candidate. For a successful apply, this equals
-	// CandidateSHA.
+	// MergeHEAD is the full SHA confirmed on the parent ref after apply. For
+	// a successful apply, this equals CandidateSHA.
 	MergeHEAD string `yaml:"merge_head,omitempty"`
 	// PrepState records whether the candidate is pending, prepared, or failed.
 	PrepState RepoPrepState `yaml:"prep_state,omitempty"`
@@ -165,7 +165,7 @@ type TransactionJournal struct {
 }
 
 // AllCandidatesPrepared reports whether every per-repo entry has a durable
-// candidate commit (PrepState == prepared and CandidateSHA non-empty).
+// candidate SHA (PrepState == prepared and CandidateSHA non-empty).
 func (t *TransactionJournal) AllCandidatesPrepared() bool {
 	if t == nil || len(t.Entries) == 0 {
 		return false

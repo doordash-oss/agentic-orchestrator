@@ -374,7 +374,7 @@ describe('AttentionService review items', () => {
       expect.arrayContaining([
         'ask-runtime',
         `${CHAT_SESSION_ID}:`,
-        'feature-1::',
+        'feature-1:',
         'feature-1:session-2',
         'perm-active',
         'perm-runtime',
@@ -394,7 +394,7 @@ describe('AttentionService review items', () => {
         }),
         expect.objectContaining({
           kind: 'gate',
-          id: 'feature-1::',
+          id: 'feature-1:',
           questions: [{ index: 1, prompt: 'active gate', answer: '' }],
           verification: {
             blockers: [
@@ -487,7 +487,7 @@ describe('AttentionService review items', () => {
     const snapshot = await service.getSnapshot();
     expect(snapshot.items.map((item) => item.id).sort()).toEqual([
       'ask-pass',
-      'child-1::',
+      'child-1:',
       'child-1:child-1-fix-01',
     ]);
     // Prompts keep the child's featureId (the session owner) and carry the

@@ -3634,8 +3634,6 @@ components:
           type: string
         repo_name:
           type: string
-        cycle_type:
-          type: string
         input_notifications:
           type: string
         iteration:

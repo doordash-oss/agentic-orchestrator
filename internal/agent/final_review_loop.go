@@ -21,9 +21,8 @@
 // The loop intentionally does NOT carry RepoName: cwd is the feature state
 // dir, --add-dir mounts every Feature.Repos worktree, and the latest
 // harness-generated verification evidence is available as review context.
-// Cycle-specific divergence vs phase implement (review-first, fix-second
-// instead of fix-first, review-second) is expressed in the loop body, not
-// by parameterising the phase-implement kernel.
+// The review-first, fix-second iteration order is expressed in the loop
+// body, not by parameterising the phase-implement kernel.
 package agent
 
 import (
@@ -32,7 +31,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
@@ -44,8 +42,7 @@ import (
 
 // finalStatusReviewPassed is the FinalStatus value shared by every loop
 // result type in this package (FeatureFinalReviewResult, LoopResult,
-// PhaseImplementLoopResult, RebaseLoopResult, ...) to signal that review
-// approved the work.
+// PhaseImplementLoopResult, ...) to signal that review approved the work.
 const finalStatusReviewPassed = "review_passed"
 
 // finalReviewEffortLevel returns the effort level to pass to BuildSessionOpts:
@@ -146,9 +143,9 @@ type FeatureFinalReviewResult struct {
 //
 // Iteration order is INVERTED relative to phase implement: review runs
 // FIRST inside the iteration, and the fix agent runs SECOND when the
-// reviewer requests changes. This is the cycle-specific divergence the
-// PRD names; it lives in this loop function rather than as a kernel
-// parameter so the control flow stays legible.
+// reviewer requests changes. This inverted order lives in this loop
+// function rather than as a kernel parameter so the control flow stays
+// legible.
 //
 // FR atomicity guarantee: AtomicPhaseStamp commits the outcome in one
 // FeatureStore.Modify write at the end of the loop. Either every staged
@@ -257,95 +254,6 @@ func RunFeatureFinalReviewLoop(cfg OrchestratorConfig, sm ports.SessionManager) 
 		result.Repos = stagedRepos
 		return result, nil
 	}
-}
-
-// RunFeatureCycleFinalReviewLoop runs one feature-level Final Review session
-// per iteration for a post-publish cycle. Unlike RunFeatureFinalReviewLoop,
-// this entry:
-//
-//   - Reviews every Feature.Repos worktree (the feature's full repo set)
-//     rather than the touched-only staged subset, because post-publish
-//     cycles operate on already-shipped repos.
-//   - Skips the AtomicPhaseStamp on success/failure: post-publish repo
-//     state is unchanged by the FR's verdict; the surrounding cycle owns
-//     the post-FR transitions.
-//   - Resolves the cycle artifact dir under f.CyclePrefix() so artifacts
-//     live at runs/run-N/<cycle>-N/review/iteration-NN/.
-//
-// The iteration loop body (review FIRST, fix SECOND on CHANGES_REQUESTED,
-// --add-dir to every Feature.Repos worktree) is identical to
-// RunFeatureFinalReviewLoop. This entry exists purely to elide the
-// atomic-stamp wrapper for post-publish cycles.
-//
-// Cumulative-diff review semantics align with the unification principle:
-// the post-cycle FR reviews every Feature.Repos cumulative diff, not just
-// the repos the cycle modified. If the cycle only touched one repo, this
-// is the degenerate len(Feature.Repos) == 1 case.
-func RunFeatureCycleFinalReviewLoop(cfg OrchestratorConfig, sm ports.SessionManager) (*FeatureFinalReviewResult, error) {
-	if cfg.Feature == nil {
-		return nil, fmt.Errorf("feature cycle final review loop: feature is nil")
-	}
-	if cfg.FeatureStore == nil {
-		return nil, fmt.Errorf("feature cycle final review loop: feature store is nil")
-	}
-
-	// Every Feature.Repos is in scope. The feature is post-publish; per-repo
-	// state (Touched + PRURL) is preserved regardless of FR outcome.
-	repos := make([]string, 0, len(cfg.Feature.Repos))
-	for _, r := range cfg.Feature.Repos {
-		repos = append(repos, r.Name)
-	}
-	sort.Strings(repos)
-	if len(repos) == 0 {
-		// Degenerate "no repos" case — nothing to review.
-		return &FeatureFinalReviewResult{FinalStatus: finalStatusReviewPassed}, nil
-	}
-
-	// Build the cross-repo workspace. Cwd at the active run dir, with
-	// --add-dir for every Feature.Repos worktree (and the active run).
-	stateDir := filepath.Join(cfg.StateDir, cfg.Feature.ID)
-	workspace, err := BuildWorkspace(cfg.Feature, stateDir)
-	if err != nil {
-		return nil, fmt.Errorf("feature cycle final review loop: workspace setup: %w", err)
-	}
-
-	// Cycle artifact dir: feature-level under runs/run-NNN/<cycle>-N/review/.
-	// Falls back to runs/run-NNN/review/ when no active cycle is set (a
-	// programming error for the post-cycle entry, but kept safe for tests).
-	runDir := ActiveRunDir(cfg.StateDir, cfg.Feature)
-	artifactDir := filepath.Join(runDir, feature.PhaseReview.DirName())
-
-	// Mark mid-flight phase status at the feature level so observers can
-	// surface "final reviewing" without per-repo lying.
-	setCurrentPhaseStatus(cfg.FeatureStore, cfg.Feature.ID, "final_reviewing")
-	defer setCurrentPhaseStatus(cfg.FeatureStore, cfg.Feature.ID, "")
-
-	loopState := &featureFinalReviewLoopState{
-		cfg:         cfg,
-		sm:          sm,
-		workspace:   workspace,
-		stateDir:    stateDir,
-		artifactDir: artifactDir,
-		stagedRepos: repos,
-	}
-
-	result, runErr := loopState.run()
-
-	// Post-cycle FR does NOT call AtomicPhaseStamp. The surrounding cycle
-	// rebase owns the post-FR transitions on success;
-	// on failure the cycle entry's FailRepoCycle path handles state cleanup.
-	if runErr != nil {
-		return &FeatureFinalReviewResult{
-			FinalStatus: "failed",
-			LastError:   runErr.Error(),
-			Repos:       repos,
-			Iterations:  result.Iterations,
-		}, runErr
-	}
-	if result != nil {
-		result.Repos = repos
-	}
-	return result, nil
 }
 
 // featureFinalReviewLoopState carries the per-call state for the FR

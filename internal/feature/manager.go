@@ -688,22 +688,6 @@ func (m *Manager) MarkDone(featureID string) error {
 	})
 }
 
-// StartRepoCycle starts a per-repo post-publish cycle.
-// The feature stays StatusPublished; only the per-repo cycle state is set.
-func (m *Manager) RemoveRepoCycle(featureID, repoName string) error {
-	return m.Store.Modify(featureID, func(f *Feature) error {
-		return nil
-	})
-}
-
-// FailRepoCycle marks a per-repo cycle as failed and clears any paused
-// gate state so a terminal cycle failure cannot leave dangling gate pointers.
-func (m *Manager) FailRepoCycle(featureID, repoName, errMsg string) error {
-	return m.Store.Modify(featureID, func(f *Feature) error {
-		return nil
-	})
-}
-
 // AdvanceRoadmapPhase increments the current roadmap phase and transitions
 // the feature back to StatusPlanning for the next phase's plan creation.
 // Called by desktop app when a phase's implementation review passes and more phases remain.

@@ -161,27 +161,21 @@ test('rebase pass: behind feature → card click → pass workspace → completi
           (id: string) => window.agentico.getFeature(id),
           featureId,
         );
-        return feature.activeChild === undefined || feature.activeChild.status === 'Failed';
+        return feature.activeChild === undefined;
       },
-      `feature ${featureId} rebase child terminal state`,
+      `feature ${featureId} rebase child to complete (Failed is not accepted)`,
       180_000,
     );
     const finalSnapshot = await handle.page.evaluate(
       (id: string) => window.agentico.getFeature(id),
       featureId,
     );
-    if (finalSnapshot.activeChild === undefined) {
-      const hasRebase = (finalSnapshot.childHistory ?? []).some((child) => child.kind === 'rebase');
-      transcript.step(
-        hasRebase
-          ? 'rebase child completed; parent returned to aftercare with rebase pass in history'
-          : 'rebase child closed; parent returned to aftercare',
-      );
-    } else {
-      transcript.step(
-        'rebase child reached terminal state (Failed); parent remains with active child',
-      );
-    }
+    expect(finalSnapshot.activeChild).toBeUndefined();
+    const hasRebase = (finalSnapshot.childHistory ?? []).some((child) => child.kind === 'rebase');
+    expect(hasRebase, 'rebase pass should appear in child history after completion').toBe(true);
+    transcript.step(
+      'rebase child completed; parent returned to aftercare with rebase pass in history',
+    );
     transcript.json('final feature status', finalSnapshot.status);
   } finally {
     if (handle !== null) {

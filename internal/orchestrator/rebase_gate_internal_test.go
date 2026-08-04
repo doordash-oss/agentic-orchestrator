@@ -36,14 +36,14 @@ import (
 
 // rebaseGateRepo is one repository in a rebase gate fixture.
 type rebaseGateRepo struct {
-	name       string
-	repoDir    string
-	branch     string // parent (feature) branch checked out at repoDir
-	childWT    string // disposable child worktree path
+	name        string
+	repoDir     string
+	branch      string // parent (feature) branch checked out at repoDir
+	childWT     string // disposable child worktree path
 	childBranch string
-	baseBranch string
-	parentBase string // captured parent tip SHA (fork point)
-	mainTip    string // the target branch tip to persist as TargetSHA
+	baseBranch  string
+	parentBase  string // captured parent tip SHA (fork point)
+	mainTip     string // the target branch tip to persist as TargetSHA
 }
 
 // rebaseGateFixture builds real-git parent/child pairs for rebase gate tests.
@@ -51,15 +51,15 @@ type rebaseGateRepo struct {
 // branch pinned at the parent tip. The persisted RebaseTargets/RebaseBehind
 // are set explicitly by each test via setRebaseTargets.
 type rebaseGateFixture struct {
-	t         *testing.T
-	repos     []rebaseGateRepo
-	store     *feature.Store
-	mgr       *feature.Manager
-	wm        *git.WorktreeManager
-	parent    *feature.Feature
-	child     *feature.Feature
-	parentID  string
-	childID   string
+	t        *testing.T
+	repos    []rebaseGateRepo
+	store    *feature.Store
+	mgr      *feature.Manager
+	wm       *git.WorktreeManager
+	parent   *feature.Feature
+	child    *feature.Feature
+	parentID string
+	childID  string
 }
 
 // newRebaseGateFixture creates a single-repo rebase gate fixture whose child
@@ -94,7 +94,6 @@ func newRebaseGateFixtureN(t *testing.T, mergeTarget bool, n int) *rebaseGateFix
 	for i := 0; i < n; i++ {
 		repoName := "repoA"
 		if n > 1 {
-			repoName = string([]byte{byte('A' + i)})
 			repoName = "repo" + string([]byte{byte('A' + i)})
 		}
 		repoDir := testutil.InitGitRepo(t)
@@ -151,7 +150,7 @@ func newRebaseGateFixtureN(t *testing.T, mergeTarget bool, n int) *rebaseGateFix
 		Status: feature.StatusPublished, CurrentPhase: feature.PhasePublish,
 		Created: time.Now(), ActiveRun: 1, RunCount: 1,
 		Repos: parentRepos, RepoStates: map[string]*feature.RepoState{},
-		Checkpoints:    feature.Checkpoints{ManualPublish: true},
+		Checkpoints:   feature.Checkpoints{ManualPublish: true},
 		SchemaVersion: feature.SchemaVersionCurrent,
 	}
 	child := &feature.Feature{
@@ -430,12 +429,14 @@ func TestRebaseGate_TargetMovedStillPasses(t *testing.T) {
 // persisted behind set) are not gated: a multi-repo child with one behind repo
 // still lands when only that repo satisfies the criteria.
 func TestRebaseGate_OnlyBehindReposGated(t *testing.T) {
-	fx := newRebaseGateFixtureN(t, true, 2) // both repos merge target
+	fx := newRebaseGateFixtureN(t, true, 2)
 	// repoA is behind (gated); repoB is up-to-date (not in behind set).
 	fx.setRebaseTargets(
 		[]feature.RebaseRepoTarget{fx.child.Parent.RebaseTargets[0]},
 		[]string{fx.repos[0].name},
 	)
+	childIntegrationGit(t, fx.repos[1].childWT, "reset", "--hard", fx.repos[1].parentBase)
+	repoBHeadBefore := fx.parentRefSHA(1)
 
 	o := fx.orchestrator()
 	if err := o.RunChildIntegration(fx.childID); err != nil {
@@ -446,12 +447,19 @@ func TestRebaseGate_OnlyBehindReposGated(t *testing.T) {
 	if child.Parent.Transaction == nil || child.Parent.Transaction.Phase != feature.TransactionPhaseMerged {
 		t.Fatalf("transaction phase = %+v, want merged", child.Parent.Transaction)
 	}
-	// Both repos should have landed a two-parent merge commit.
-	for i := range fx.repos {
-		parents := childIntegrationGit(t, fx.repos[i].repoDir, "rev-list", "--parents", "-n", "1", "HEAD")
-		if fields := len(strings.Fields(parents)); fields != 3 {
-			t.Errorf("repo %s merge parents = %q, want two-parent merge commit", fx.repos[i].name, parents)
-		}
+	repoAParents := childIntegrationGit(t, fx.repos[0].repoDir, "rev-list", "--parents", "-n", "1", "HEAD")
+	if fields := len(strings.Fields(repoAParents)); fields != 3 {
+		t.Errorf("repoA merge parents = %q, want two-parent merge commit", repoAParents)
+	}
+	if repoBHeadAfter := fx.parentRefSHA(1); repoBHeadAfter != repoBHeadBefore {
+		t.Errorf("repoB ref changed: before=%s after=%s", repoBHeadBefore, repoBHeadAfter)
+	}
+	entry := child.Parent.Transaction.EntryByRepo(fx.repos[1].name)
+	if entry == nil {
+		t.Fatalf("repoB transaction entry missing: %+v", child.Parent.Transaction)
+	}
+	if entry.CandidateSHA != repoBHeadBefore || entry.MergeHEAD != repoBHeadBefore {
+		t.Errorf("repoB transaction candidate=%s merge_head=%s, want pass-through SHA %s", entry.CandidateSHA, entry.MergeHEAD, repoBHeadBefore)
 	}
 }
 

@@ -64,6 +64,9 @@ type rebaseJourneyFixtureOptions struct {
 	// false the child branch is left without the target, exercising the gate's
 	// not-ancestor failure.
 	mergeRebaseTarget bool
+	// remote overrides the default failingPRRemoteOps. When nil,
+	// failingPRRemoteOps{} is used.
+	remote orchestrator.RemoteOps
 }
 
 // setupRebaseJourneyFixtureWithOpts is the configurable core of
@@ -130,11 +133,16 @@ func setupRebaseJourneyFixtureWithOpts(t *testing.T, parentID string, opts rebas
 	t.Cleanup(sm.Shutdown)
 	pr := journeyChildPhaseRunnerWithOpts(t, sm, store, stateDir, journeyPhaseRunnerOptions{mergeRebaseTarget: opts.mergeRebaseTarget})
 
+	var remote orchestrator.RemoteOps = failingPRRemoteOps{}
+	if opts.remote != nil {
+		remote = opts.remote
+	}
+
 	orch := orchestrator.New(orchestrator.Deps{
 		Lifecycle:   mgr,
 		Store:       store,
 		Sessions:    sm,
-		Remote:      failingPRRemoteOps{},
+		Remote:      remote,
 		Worktrees:   wm,
 		PhaseRunner: pr,
 		CmdRunner:   pr.CommandRunner,
@@ -177,19 +185,19 @@ func setupRebaseJourneyFixtureWithOpts(t *testing.T, parentID string, opts rebas
 		orch:     orch,
 		srv:      srv,
 		client:   client,
-		repoDir:   repos[0].repoDir,
+		repoDir:  repos[0].repoDir,
 		parentID: parentID,
 	}
 }
 
 type rebaseJourneyRepo struct {
-	name       string
-	repoDir    string
-	branch     string
-	baseBranch string
+	name        string
+	repoDir     string
+	branch      string
+	baseBranch  string
 	publishable bool
-	touched    bool
-	prURL      string
+	touched     bool
+	prURL       string
 }
 
 // rebaseJourneyRepoSetup creates a real git repo with a bare remote, a
@@ -218,12 +226,12 @@ func rebaseJourneyRepoSetup(t *testing.T, name, branch string, advanceBase bool)
 	}
 
 	return rebaseJourneyRepo{
-		name:       name,
-		repoDir:    repoDir,
-		branch:     branch,
-		baseBranch: "main",
+		name:        name,
+		repoDir:     repoDir,
+		branch:      branch,
+		baseBranch:  "main",
 		publishable: publishable,
-		touched:    true,
+		touched:     true,
 	}
 }
 
@@ -471,7 +479,7 @@ func TestRebaseChildActionCatalogEligibility(t *testing.T) {
 
 	const parentID = "rebase-catalog-parent"
 	const branch = "feature/rebase-catalog"
-	repo := rebaseJourneyRepoSetup(t, "repoA", branch, false)
+	repo := rebaseJourneyRepoSetup(t, "repoA", branch, true)
 	fx := setupRebaseJourneyFixture(t, parentID, repo)
 
 	// Published parent: rebase should be offered.
@@ -495,13 +503,6 @@ func TestRebaseChildActionCatalogEligibility(t *testing.T) {
 	// Launch a rebase child to make the parent have an active child.
 	_, err := fx.client.RebaseFeature(t.Context(), parentID)
 	if err != nil {
-		// If the feature is up to date, the rebase action returns an error.
-		// That's fine — we need a behind feature for this test. Let's skip
-		// if the error is "already up to date" since the catalog test only
-		// needs to verify the disabled state.
-		if strings.Contains(err.Error(), "already up to date") {
-			t.Skip("feature is up to date; catalog eligibility for active-child requires a behind feature")
-		}
 		t.Fatalf("RebaseFeature() error = %v", err)
 	}
 
@@ -509,26 +510,31 @@ func TestRebaseChildActionCatalogEligibility(t *testing.T) {
 	// the active-child reason.
 	detail = getJourneyJSON(t, fx.srv.URL+"/api/v1/features/"+parentID)["feature"].(map[string]any)
 	actions, _ = detail["actions"].([]any)
+	disabledRebaseAction := map[string]any(nil)
 	for _, a := range actions {
 		act, _ := a.(map[string]any)
 		if act["id"] == "rebase" {
-			if enabled, _ := act["enabled"].(bool); enabled {
-				t.Fatalf("rebase action should be disabled while a child is active")
-			}
-			reasons, _ := act["disabled_reasons"].([]any)
-			found := false
-			for _, r := range reasons {
-				reason, _ := r.(map[string]any)
-				if reason["code"] == "active_child_present" {
-					found = true
-					break
-				}
-			}
-			if !found {
-				t.Fatalf("rebase action disabled reasons = %+v; want active_child_present", reasons)
-			}
+			disabledRebaseAction = act
 			break
 		}
+	}
+	if disabledRebaseAction == nil {
+		t.Fatalf("rebase action not found in catalog after launching child")
+	}
+	if enabled, _ := disabledRebaseAction["enabled"].(bool); enabled {
+		t.Fatalf("rebase action should be disabled while a child is active")
+	}
+	reasons, _ := disabledRebaseAction["disabled_reasons"].([]any)
+	found := false
+	for _, r := range reasons {
+		reason, _ := r.(map[string]any)
+		if reason["code"] == "active_child_present" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("rebase action disabled reasons = %+v; want active_child_present", reasons)
 	}
 }
 
@@ -546,9 +552,9 @@ func TestRebaseChildMultiRepoJourney(t *testing.T) {
 	repoB := rebaseJourneyRepoSetup(t, "repoB", branch, false)
 	fx := setupRebaseJourneyFixture(t, parentID, repoA, repoB)
 
-	// Capture repoB's HEAD before launch (up-to-date repo).
-	repoBHEADBefore := journeyGit(t, repoB.repoDir, "rev-parse", "HEAD")
+	// Capture repoB's content before launch (up-to-date repo).
 	repoBContentBefore, _ := os.ReadFile(filepath.Join(repoB.repoDir, "base.txt"))
+	repoBHeadBefore := journeyGit(t, repoB.repoDir, "rev-parse", "HEAD")
 
 	// Post the rebase action.
 	resp, err := fx.client.RebaseFeature(t.Context(), parentID)
@@ -575,27 +581,41 @@ func TestRebaseChildMultiRepoJourney(t *testing.T) {
 	postReviewSessionProceed(t, fx.srv.URL, childID)
 	waitForJourneyChildClosed(t, fx.srv.URL, fx.store, childID)
 
-	// Assert both repos have two-parent merge commits.
-	for _, repo := range []struct{ name, dir string }{{"repoA", repoA.repoDir}, {"repoB", repoB.repoDir}} {
-		parents := journeyGit(t, repo.dir, "rev-list", "--parents", "-n", "1", "HEAD")
-		if fields := len(strings.Fields(parents)); fields != 3 {
-			t.Fatalf("%s merge parents = %q, want explicit two-parent merge commit", repo.name, parents)
-		}
+	// The behind repo lands through an explicit two-parent merge commit.
+	repoAParents := journeyGit(t, repoA.repoDir, "rev-list", "--parents", "-n", "1", "HEAD")
+	if fields := len(strings.Fields(repoAParents)); fields != 3 {
+		t.Fatalf("repoA merge parents = %q, want explicit two-parent merge commit", repoAParents)
+	}
+
+	// The up-to-date repo is a pass-through: no merge commit and no ref move.
+	repoBHeadAfter := journeyGit(t, repoB.repoDir, "rev-parse", "HEAD")
+	if repoBHeadAfter != repoBHeadBefore {
+		t.Fatalf("repoB HEAD changed: before=%s after=%s", repoBHeadBefore, repoBHeadAfter)
+	}
+	repoBParents := journeyGit(t, repoB.repoDir, "rev-list", "--parents", "-n", "1", "HEAD")
+	if fields := len(strings.Fields(repoBParents)); fields == 3 {
+		t.Fatalf("repoB merge parents = %q, want no new merge commit for up-to-date repo", repoBParents)
 	}
 
 	// Assert the up-to-date repo (repoB) is byte-identical to its pre-launch state.
-	repoBHEADAfter := journeyGit(t, repoB.repoDir, "rev-parse", "HEAD")
-	if repoBHEADAfter != repoBHEADBefore {
-		// The merge commit changes the HEAD but the content should be identical.
-		// Check the content is the same.
-	}
 	repoBContentAfter, _ := os.ReadFile(filepath.Join(repoB.repoDir, "base.txt"))
 	if string(repoBContentBefore) != string(repoBContentAfter) {
 		t.Fatalf("repoB base.txt changed: before=%q after=%q", repoBContentBefore, repoBContentAfter)
 	}
-	// repoB should have the child output too (integration lands across both).
-	if _, err := os.Stat(filepath.Join(repoB.repoDir, "child-output.txt")); err != nil {
-		t.Fatalf("repoB missing child-output.txt after integration: %v", err)
+	if _, err := os.Stat(filepath.Join(repoB.repoDir, "child-output.txt")); !os.IsNotExist(err) {
+		t.Fatalf("repoB child-output.txt exists or stat failed with non-not-exist error: %v", err)
+	}
+
+	child, err = fx.store.Load(childID)
+	if err != nil {
+		t.Fatalf("Load(child after close) error = %v", err)
+	}
+	entry := child.Parent.Transaction.EntryByRepo("repoB")
+	if entry == nil {
+		t.Fatalf("repoB transaction entry missing: %+v", child.Parent.Transaction)
+	}
+	if entry.CandidateSHA != repoBHeadBefore || entry.MergeHEAD != repoBHeadBefore {
+		t.Fatalf("repoB transaction candidate=%s merge_head=%s, want pass-through SHA %s", entry.CandidateSHA, entry.MergeHEAD, repoBHeadBefore)
 	}
 }
 
@@ -674,12 +694,12 @@ func TestRebaseChildTargetPrecedenceDefaultBranch(t *testing.T) {
 
 	publishable := true
 	repo := rebaseJourneyRepo{
-		name:       "repoA",
-		repoDir:    repoDir,
-		branch:     branch,
-		baseBranch: "", // No recorded base branch — should fall back to default (main).
+		name:        "repoA",
+		repoDir:     repoDir,
+		branch:      branch,
+		baseBranch:  "", // No recorded base branch — should fall back to default (main).
 		publishable: publishable,
-		touched:    true,
+		touched:     true,
 	}
 	fx := setupRebaseJourneyFixture(t, parentID, repo)
 
@@ -780,5 +800,79 @@ func TestRebaseChildGateAncestorFailureJourney(t *testing.T) {
 	}
 	if parentRefAfter := journeyGit(t, repo.repoDir, "rev-parse", branch); parentRefAfter != parentRefBefore {
 		t.Fatalf("parent ref changed on re-run: before=%s after=%s", parentRefBefore, parentRefAfter)
+	}
+}
+
+// prBaseBranchRemoteOps wraps failingPRRemoteOps but returns a fixed PR base
+// branch, simulating a GitHub PR whose base is a non-default branch.
+type prBaseBranchRemoteOps struct {
+	failingPRRemoteOps
+	baseBranch string
+}
+
+func (o prBaseBranchRemoteOps) PRBaseBranch(repoPath, prURL string) string {
+	return o.baseBranch
+}
+
+// TestRebaseChildPRBaseBranchPrecedenceJourney verifies the PR-base-branch
+// leg of target precedence: when a repo has a recorded PR URL and the fake
+// GitHub API returns a PR base branch, the rebase child resolves its target
+// to that branch rather than the recorded base branch or the repo default.
+func TestRebaseChildPRBaseBranchPrecedenceJourney(t *testing.T) {
+	if testing.Short() {
+		t.Skip("journey boots real-git setup and scripted provider subprocesses")
+	}
+
+	const parentID = "rebase-pr-precedence-parent"
+	const branch = "feature/rebase-pr-precedence"
+
+	// Set up a behind repo with an advanced main branch.
+	repo := rebaseJourneyRepoSetup(t, "repoA", branch, true)
+
+	// Create a separate "pr-base" branch on the remote and advance it so
+	// it's a resolvable target distinct from "main".
+	prBase := "pr-base"
+	journeyGit(t, repo.repoDir, "checkout", "-b", prBase)
+	writeJourneyFile(t, repo.repoDir, "pr-base-change.txt", "pr-base advancement\n")
+	journeyGit(t, repo.repoDir, "add", "pr-base-change.txt")
+	journeyGit(t, repo.repoDir, "commit", "-m", "pr-base advancement")
+	// Push the pr-base branch to the bare remote so origin/pr-base exists.
+	journeyGit(t, repo.repoDir, "push", "origin", prBase)
+	// Return to the feature branch.
+	journeyGit(t, repo.repoDir, "checkout", branch)
+
+	// Set the PR URL so resolveRebaseTarget queries the fake GitHub API.
+	repo.prURL = "https://github.com/example/repoA/pull/1"
+
+	fx := setupRebaseJourneyFixtureWithOpts(t, parentID, rebaseJourneyFixtureOptions{
+		mergeRebaseTarget: true,
+		remote:            prBaseBranchRemoteOps{baseBranch: prBase},
+	}, repo)
+
+	// Launch the rebase action.
+	resp, err := fx.client.RebaseFeature(t.Context(), parentID)
+	if err != nil {
+		t.Fatalf("RebaseFeature() error = %v", err)
+	}
+	childID := resp.FeatureID
+
+	// Assert the persisted target resolved to the PR base branch, not
+	// "main" (the recorded base branch / default branch).
+	child, err := fx.store.Load(childID)
+	if err != nil {
+		t.Fatalf("Load(child) error = %v", err)
+	}
+	if len(child.Parent.RebaseTargets) != 1 {
+		t.Fatalf("rebase targets = %+v, want 1", child.Parent.RebaseTargets)
+	}
+	target := child.Parent.RebaseTargets[0]
+	if target.Repo != "repoA" {
+		t.Fatalf("rebase target repo = %q, want repoA", target.Repo)
+	}
+	if target.Target != prBase {
+		t.Fatalf("rebase target = %q, want %q (PR base branch)", target.Target, prBase)
+	}
+	if len(child.Parent.RebaseBehind) != 1 || child.Parent.RebaseBehind[0] != "repoA" {
+		t.Fatalf("rebase behind = %+v, want [repoA]", child.Parent.RebaseBehind)
 	}
 }

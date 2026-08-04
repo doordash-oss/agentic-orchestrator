@@ -207,6 +207,33 @@ func TestCompletionActionsPassThroughSourceRevision(t *testing.T) {
 	}
 }
 
+func TestCleanupActionRejectsCycleTarget(t *testing.T) {
+	t.Parallel()
+	target := &preflightMutationTarget{}
+	handler := NewHandler(HandlerOptions{
+		Mutations:             target,
+		AuthToken:             testAuthToken,
+		DisableHostValidation: true,
+	})
+
+	w := postTrustedAuthedJSON(handler, "/api/v1/features/"+fixtureFeatureID+"/actions/"+actionCleanup, map[string]any{
+		"target": "cycles",
+	})
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d body=%s; want 400", w.Code, w.Body.String())
+	}
+	if target.cleanupReq.Target != "" {
+		t.Fatalf("cleanup request reached mutation target = %+v; want validation rejection", target.cleanupReq)
+	}
+	var resp ErrorResponse
+	if err := json.NewDecoder(w.Result().Body).Decode(&resp); err != nil {
+		t.Fatalf("decode error response: %v", err)
+	}
+	if resp.Error.Code != "bad_request" || resp.Error.Message != "cleanup target is invalid" {
+		t.Fatalf("error = %+v; want bad_request cleanup target is invalid", resp.Error)
+	}
+}
+
 func TestPublishDescriptionPassesOnlySelectedRepos(t *testing.T) {
 	t.Parallel()
 	target := &preflightMutationTarget{}

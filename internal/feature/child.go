@@ -673,7 +673,7 @@ func rebaseExitCriteria(targets []RebaseRepoTarget, behind []string) string {
 		sb.WriteString(t.Ref)
 		sb.WriteString(" HEAD` succeeds).\n")
 		sb.WriteString("- No merge is in progress (no `rebase-merge` or `rebase-apply` directory, no `MERGE_HEAD`).\n")
-		sb.WriteString("- No conflict markers remain in any tracked file (`git diff --name-only --diff-filter=U` is empty).\n")
+		sb.WriteString("- No conflict markers remain in any tracked file (content scan for literal `<<<<<<<`, `=======`, `>>>>>>>` sequences is empty).\n")
 		sb.WriteString("- The worktree is clean (`git status --porcelain` is empty).\n")
 	}
 	sb.WriteString("\n## Invariants\n\n")

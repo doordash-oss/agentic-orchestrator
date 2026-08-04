@@ -415,8 +415,9 @@ describe('FeatureCockpit snapshot rendering', () => {
     await user.click(within(aftercare).getByRole('button', { name: /Start rebase pass/ }));
 
     // The typed failure renders inline near the aftercare cards with code + message.
-    const alert = await screen.findByRole('alert');
+    const alert = await within(aftercare).findByRole('alert');
     expect(alert).toHaveTextContent('rebase_already_up_to_date');
+    expect(alert).toHaveTextContent('Already up to date');
     expect(alert).toHaveTextContent(/already up to date with its target branch/);
     // No pass workspace is mounted; the cockpit stays in aftercare.
     expect(screen.queryByRole('region', { name: 'Rebase pass' })).not.toBeInTheDocument();
@@ -449,7 +450,7 @@ describe('FeatureCockpit snapshot rendering', () => {
     const aftercare = await screen.findByRole('region', { name: 'Feature aftercare' });
     await user.click(within(aftercare).getByRole('button', { name: /Start rebase pass/ }));
 
-    const alert = await screen.findByRole('alert');
+    const alert = await within(aftercare).findByRole('alert');
     expect(alert).toHaveTextContent('rebase_target_resolution_failed');
     expect(alert).toHaveTextContent(/Could not resolve a target branch/);
 
@@ -1566,7 +1567,7 @@ describe('FeatureCockpit delete', () => {
             id: 'delete',
             enabled: false,
             disabledReasons: [
-              { code: 'repo_cycle_running', message: 'delete is disabled while work is running' },
+              { code: 'running', message: 'delete is disabled while work is running' },
             ],
           },
         ],

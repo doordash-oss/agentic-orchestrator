@@ -8,7 +8,6 @@ import type {
   RunLogView,
   RunTextContent,
   SessionSummary,
-  RepoStatusView,
   TranscriptMessage,
   VerificationItemView,
 } from '../../../shared/ipc';
@@ -89,7 +88,6 @@ export interface CurrentRunInspectionProps {
   onRunMetrics?(metrics: RunMetrics | null): void;
   /** Record view supplies its own header label and hides live controls. */
   presentation?: 'regular' | 'record';
-  repoStatus?: RepoStatusView[];
 }
 
 /** This run's cumulative totals, surfaced to the inspector sidebar. */
@@ -390,7 +388,6 @@ export function CurrentRunInspection({
   onAttentionPreviewClose,
   onRunMetrics,
   presentation = 'regular',
-  repoStatus: _repoStatus = [],
 }: CurrentRunInspectionProps): React.ReactElement {
   const [preview, setPreview] = useState<LivePreviewView | null>(null);
   const [runDetail, setRunDetail] = useState<RunDetailView | null>(null);

@@ -144,7 +144,7 @@ test('packaged local-merge-rebase completion: conflict, rebase, retry, done, cle
 
     transcript.section('Read rebase hint and launch rebase pass from aftercare');
     await expect(
-      mergeModal.getByText(/Open the Rebase card in the feature's aftercare workspace/),
+      mergeModal.getByText(/Use Start rebase pass in the feature's aftercare workspace/),
     ).toBeVisible({ timeout: 10_000 });
     transcript.step('aftercare rebase hint appears as plain text with no launch button');
     await expect(mergeModal.getByRole('button', { name: /Hand off to rebase/i })).not.toBeVisible();
@@ -183,10 +183,12 @@ test('packaged local-merge-rebase completion: conflict, rebase, retry, done, cle
     );
 
     if (!rebaseSucceeded) {
-      transcript.step('skipping merge retry — rebase child did not complete');
       persistAppLogs(handle, 'local-merge-rebase-completion-app-server');
       transcript.write(testInfo);
-      return;
+      expect(
+        rebaseSucceeded,
+        'rebase child ended Failed — merge retry/Done/cleanup/delete flow cannot be exercised',
+      ).toBe(true);
     }
 
     transcript.section('Reopen merge modal and retry merge to success');

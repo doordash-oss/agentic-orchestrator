@@ -28,8 +28,7 @@ import (
 // design's `## Acceptance Criteria` section, or — when the pipeline
 // produced no such design — the roadmap's `## Overall Exit Criteria`
 // section. Raw intent flows whenever neither artifact qualifies (missing,
-// unreadable, or lacking the section). Cycle loops synthesize their own
-// criteria and do not use this resolver.
+// unreadable, or lacking the section).
 type promptIntent struct {
 	Description      string
 	ExitCriteria     string

@@ -118,9 +118,7 @@ func RunPhaseImplementLoop(cfg OrchestratorConfig, sm ports.SessionManager) (*Ph
 	}
 
 	// Phase-iteration artifact dir is the phase-implement root with no
-	// per-repo subdir under the unified schema. Cycle paths still set
-	// CyclePrefix and continue to use resolveImplementArtifactDirForRepo;
-	// those paths will migrate to their own unified loops in slices 3-7.
+	// per-repo subdir under the unified schema.
 	runDir := ActiveRunDir(cfg.StateDir, cfg.Feature)
 	artifactDir := resolveUnifiedPhaseImplementDir(cfg.Feature, runDir)
 

@@ -83,9 +83,9 @@ func (o *Orchestrator) evalRebaseGateRepo(child *feature.Feature, repoName strin
 	target, ok := child.RebaseTargetForRepo(repoName)
 	if !ok || target.TargetSHA == "" {
 		entry := feature.RepoTransactionEntry{
-			Repo:     repoName,
+			Repo:      repoName,
 			PrepState: feature.RepoPrepFailed,
-			GateCode: feature.GateCodeMissingTargetSHA,
+			GateCode:  feature.GateCodeMissingTargetSHA,
 			Diagnostics: "rebase gate: creation-time target SHA is missing for repo " +
 				repoName + "; the child must be discarded and relaunched",
 		}
@@ -147,11 +147,11 @@ func (o *Orchestrator) evalRebaseGateRepo(child *feature.Feature, repoName strin
 	}
 	if len(files) > 0 {
 		entry := feature.RepoTransactionEntry{
-			Repo:         repoName,
-			PrepState:    feature.RepoPrepFailed,
-			GateCode:     feature.GateCodeConflictMarkers,
+			Repo:          repoName,
+			PrepState:     feature.RepoPrepFailed,
+			GateCode:      feature.GateCodeConflictMarkers,
 			ConflictFiles: append([]string(nil), files...),
-			Diagnostics:  fmt.Sprintf("rebase gate: conflict markers remain in tracked files: %v", files),
+			Diagnostics:   fmt.Sprintf("rebase gate: conflict markers remain in tracked files: %v", files),
 		}
 		return entry, true
 	}

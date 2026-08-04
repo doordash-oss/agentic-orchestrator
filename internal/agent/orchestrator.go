@@ -23,13 +23,9 @@
 //   - RunMultiRepoFinalReview invokes RunFeatureFinalReviewLoop, the unified
 //     feature-level FR session — one Claude session reads the cumulative
 //     diff across every Feature.Repos worktree.
-//
-// The rebase cycle still consults some of this package's helpers.
 package agent
 
 import (
-	"fmt"
-	"path/filepath"
 	"sort"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
@@ -160,7 +156,7 @@ type OrchestratorResult struct {
 	FinalStatus  string            // "all_passed" | "awaiting_final_review" | "failed" | "need_user_input" | "plan_revision_required" | "interrupted"
 	RepoStatuses map[string]string // per-repo inner loop FinalStatus (e.g., "max_iterations")
 	FailedRepos  []string
-	// PausedRepos lists repos that ended this cycle paused on a need-user-input
+	// PausedRepos lists repos that ended this run paused on a need-user-input
 	// gate. Under the unified flow the gate is feature-scoped, so PausedRepos
 	// carries the phase-declared repo subset when FinalStatus == "need_user_input".
 	PausedRepos []string
@@ -324,17 +320,4 @@ func findRepo(f *feature.Feature, name string) *feature.FeatureRepo {
 		}
 	}
 	return nil
-}
-
-// resolveImplementArtifactDirForRepo returns the per-iteration Implement
-// artifact directory for a feature/repo within the active run. The
-// `<repoName>` segment is preserved for rebase artifacts. The unified
-// phase-implement loop emits artifacts
-// at the phase level (no per-repo subdir) via resolvePhaseArtifactDir.
-func resolveImplementArtifactDirForRepo(f *feature.Feature, runDir, repoName string) string {
-	base := runDir
-	if f.CurrentRoadmapPhase > 0 {
-		return filepath.Join(base, fmt.Sprintf("phase-%02d", f.CurrentRoadmapPhase), "implement", repoName)
-	}
-	return filepath.Join(base, "implement", repoName)
 }

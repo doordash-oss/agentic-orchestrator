@@ -41,7 +41,7 @@ const (
 // It inspects only local remote-tracking refs and never mutates a worktree. It
 // returns the freshness label, a non-empty blocker when the repo cannot be
 // safely operated on, and the behind flag.
-func (o *Orchestrator) repoFreshnessAndBlocker(out HarnessRebaseRepoOutcome) (freshness, blocker string, behind bool) {
+func (o *Orchestrator) repoFreshnessAndBlocker(out RebaseRepoFreshnessInput) (freshness, blocker string, behind bool) {
 	switch {
 	case out.WorktreePath == "":
 		return preflightFreshnessUnknown, preflightBlockerNoWorktree, false

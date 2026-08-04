@@ -49,7 +49,6 @@ describe('operational IPC schemas', () => {
     const target = {
       featureId: 'abcd1234',
       repoName: 'repo-a',
-      cycleType: 'rebase',
     };
 
     expect(GateResumeRequestSchema.parse(target)).toStrictEqual(target);

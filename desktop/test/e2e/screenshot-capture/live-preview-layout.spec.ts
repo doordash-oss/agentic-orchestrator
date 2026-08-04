@@ -257,92 +257,6 @@ test('transcript accepts wheel and focused keyboard scrolling', async ({ page })
   await expect.poll(() => transcript.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
 });
 
-test('cycle chrome stays visible while the live transcript owns overflow', async ({ page }) => {
-  await page.setViewportSize({ width: 1440, height: 900 });
-  await page.goto('http://localhost:9871/?scene=post-cycle-rebase&theme=dark');
-
-  const cycle = page.getByRole('region', { name: 'Rebase cycle' });
-  const header = cycle.locator('.cycle-workspace__header');
-  const transcript = page.getByRole('region', { name: 'Live agent transcript' });
-  const footer = cycle.locator('.current-inspection__metrics');
-  await expect(header).toBeVisible();
-  await expect(transcript).toBeVisible();
-  await expect(footer).toBeVisible();
-
-  const layout = await page.evaluate(() => {
-    const requireElement = (selector: string): HTMLElement => {
-      const element = document.querySelector(selector);
-      if (!(element instanceof HTMLElement)) throw new Error(`${selector} missing`);
-      return element;
-    };
-    const main = requireElement('.cycle-workspace__main');
-    const headerElement = requireElement('.cycle-workspace__header');
-    const transcriptElement = requireElement('.conversation__scroll');
-    const footerElement = requireElement('.current-inspection__metrics');
-    const mainRect = main.getBoundingClientRect();
-    const headerRect = headerElement.getBoundingClientRect();
-    const footerRect = footerElement.getBoundingClientRect();
-    transcriptElement.style.scrollBehavior = 'auto';
-    transcriptElement.scrollTop = transcriptElement.scrollHeight;
-    return {
-      mainClientHeight: main.clientHeight,
-      mainScrollHeight: main.scrollHeight,
-      headerTop: headerRect.top,
-      mainTop: mainRect.top,
-      footerBottom: footerRect.bottom,
-      mainBottom: mainRect.bottom,
-      transcriptClientHeight: transcriptElement.clientHeight,
-      transcriptScrollHeight: transcriptElement.scrollHeight,
-      transcriptScrollTop: transcriptElement.scrollTop,
-    };
-  });
-
-  expect(layout.mainScrollHeight).toBeLessThanOrEqual(layout.mainClientHeight);
-  expect(layout.headerTop).toBeGreaterThanOrEqual(layout.mainTop);
-  expect(layout.footerBottom).toBeLessThanOrEqual(layout.mainBottom);
-  expect(layout.transcriptScrollHeight).toBeGreaterThan(layout.transcriptClientHeight);
-  expect(layout.transcriptScrollTop).toBeGreaterThan(0);
-});
-
-test('narrow cycle windows keep the cycle main bounded above the facts rail', async ({ page }) => {
-  await page.setViewportSize({ width: 760, height: 600 });
-  await page.goto('http://localhost:9871/?scene=post-cycle-rebase&theme=dark');
-  await expect(page.getByRole('region', { name: 'Live agent transcript' })).toBeVisible();
-
-  const layout = await page.evaluate(() => {
-    const requireElement = (selector: string): HTMLElement => {
-      const element = document.querySelector(selector);
-      if (!(element instanceof HTMLElement)) throw new Error(`${selector} missing`);
-      return element;
-    };
-    const cycle = requireElement('.cycle-workspace');
-    const main = requireElement('.cycle-workspace__main');
-    const header = requireElement('.cycle-workspace__header');
-    const transcript = requireElement('.conversation__scroll');
-    const footer = requireElement('.current-inspection__metrics');
-    const mainRect = main.getBoundingClientRect();
-    transcript.style.scrollBehavior = 'auto';
-    transcript.scrollTop = transcript.scrollHeight;
-    return {
-      cycleClientHeight: cycle.clientHeight,
-      cycleScrollHeight: cycle.scrollHeight,
-      mainClientHeight: main.clientHeight,
-      mainScrollHeight: main.scrollHeight,
-      headerTop: header.getBoundingClientRect().top,
-      mainTop: mainRect.top,
-      footerBottom: footer.getBoundingClientRect().bottom,
-      mainBottom: mainRect.bottom,
-      transcriptScrollTop: transcript.scrollTop,
-    };
-  });
-
-  expect(layout.cycleScrollHeight).toBeLessThanOrEqual(layout.cycleClientHeight);
-  expect(layout.mainScrollHeight).toBeLessThanOrEqual(layout.mainClientHeight);
-  expect(layout.headerTop).toBeGreaterThanOrEqual(layout.mainTop);
-  expect(layout.footerBottom).toBeLessThanOrEqual(layout.mainBottom);
-  expect(layout.transcriptScrollTop).toBeGreaterThan(0);
-});
-
 test('aftercare keeps its runway and compact feature facts legible at rest', async ({ page }) => {
   for (const viewport of [
     { width: 1440, height: 900 },
@@ -359,7 +273,7 @@ test('aftercare keeps its runway and compact feature facts legible at rest', asy
     await expect(page.getByRole('heading', { name: 'Choose one focused action' })).toBeVisible();
     await expect(page.getByRole('complementary', { name: 'Feature facts' })).toBeVisible();
     await expect(page.getByText('Waiting for the agent to respond…')).toHaveCount(0);
-    await expect(page.getByRole('button', { name: /Prepare rebase/ })).toBeVisible();
+    await expect(page.getByRole('button', { name: /Start rebase pass/ })).toBeVisible();
     await expect(page.getByRole('button', { name: /Address review feedback/ })).toBeVisible();
     await expect(page.getByRole('button', { name: /Plan refactor/ })).toBeVisible();
 
@@ -371,4 +285,34 @@ test('aftercare keeps its runway and compact feature facts legible at rest', asy
     expect(dimensions.documentWidth).toBeLessThanOrEqual(dimensions.viewportWidth);
     expect(dimensions.deskWidth).toBeGreaterThan(0);
   }
+});
+
+test('aftercare already-up-to-date notice reserves runway space', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto('http://localhost:9871/?scene=aftercare-rebase-up-to-date&theme=dark');
+
+  const aftercare = page.getByRole('region', { name: 'Feature aftercare' });
+  await expect(aftercare).toBeVisible();
+
+  const startRebase = aftercare.getByRole('button', { name: /Start rebase pass/ });
+  await expect(startRebase).toBeVisible();
+  await startRebase.click();
+
+  const alert = aftercare.getByRole('alert');
+  await expect(alert).toBeVisible({ timeout: 10_000 });
+  await expect(alert).toContainText('rebase_already_up_to_date');
+
+  const reviewFeedback = aftercare.getByRole('button', { name: /Address review feedback/ });
+  await expect(reviewFeedback).toBeVisible();
+
+  const alertBox = await alert.boundingBox();
+  const rebaseBox = await startRebase.boundingBox();
+  const reviewFeedbackBox = await reviewFeedback.boundingBox();
+  expect(alertBox).not.toBeNull();
+  expect(rebaseBox).not.toBeNull();
+  expect(reviewFeedbackBox).not.toBeNull();
+
+  expect(alertBox!.y + alertBox!.height).toBeLessThanOrEqual(rebaseBox!.y);
+  expect(rebaseBox!.y + rebaseBox!.height).toBeLessThanOrEqual(reviewFeedbackBox!.y);
+  expect(reviewFeedbackBox!.y + reviewFeedbackBox!.height).toBeLessThanOrEqual(900);
 });

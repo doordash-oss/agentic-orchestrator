@@ -361,9 +361,7 @@ func implementationReviewSessionID(cfg ImplementConfig, axisSlug string, iterati
 	phasePart := ""
 	if cfg.Feature != nil {
 		featureID = cfg.Feature.ID
-		if cfg.SessionIDPrefix != "" {
-			phasePart = "-" + cfg.SessionIDPrefix
-		} else if cfg.Feature.CurrentRoadmapPhase > 0 {
+		if cfg.Feature.CurrentRoadmapPhase > 0 {
 			phasePart = fmt.Sprintf("-phase-%02d", cfg.Feature.CurrentRoadmapPhase)
 		}
 	}

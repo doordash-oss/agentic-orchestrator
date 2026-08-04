@@ -161,56 +161,6 @@ func TestOrchestratorUsesResolvedConfig(t *testing.T) {
 	}
 }
 
-func TestResolveImplementArtifactDirForRepo(t *testing.T) {
-	tests := []struct {
-		name    string
-		feature *feature.Feature
-		runDir  string
-		repo    string
-		want    string
-	}{
-		{
-			name: "single repo plain",
-			feature: &feature.Feature{
-				SchemaVersion: feature.SchemaVersionCurrent,
-				Repos:         []feature.FeatureRepo{{Name: "svc"}},
-			},
-			runDir: "/run/r-001",
-			repo:   "svc",
-			want:   "/run/r-001/implement/svc",
-		},
-		{
-			name: "multi repo plain",
-			feature: &feature.Feature{
-				SchemaVersion: feature.SchemaVersionCurrent,
-				Repos:         []feature.FeatureRepo{{Name: "a"}, {Name: "b"}},
-			},
-			runDir: "/run/r-001",
-			repo:   "a",
-			want:   "/run/r-001/implement/a",
-		},
-		{
-			name: "single repo with roadmap phase",
-			feature: &feature.Feature{
-				SchemaVersion:       feature.SchemaVersionCurrent,
-				Repos:               []feature.FeatureRepo{{Name: "svc"}},
-				CurrentRoadmapPhase: 3,
-			},
-			runDir: "/run/r-002",
-			repo:   "svc",
-		want:   "/run/r-002/phase-03/implement/svc",
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := resolveImplementArtifactDirForRepo(tt.feature, tt.runDir, tt.repo)
-			if got != tt.want {
-				t.Errorf("resolveImplementArtifactDirForRepo() = %q, want %q", got, tt.want)
-			}
-		})
-	}
-}
-
 func TestImplementConfig_PhaseTypeAndRoadmapPath(t *testing.T) {
 	f := &feature.Feature{
 		RoadmapPhaseType: "tdd-fill-in",

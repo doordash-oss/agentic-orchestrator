@@ -97,7 +97,6 @@ const (
 	phaseNameReview      = "review"
 	phaseNamePublish     = "publish"
 
-	cleanupTargetCycles    = "cycles"
 	cleanupTargetWorktrees = "worktrees"
 
 	providerNameClaude   = "claude"
@@ -2033,9 +2032,6 @@ func (t *serverMutationTarget) CleanupFeature(featureID string, req serverruntim
 			resp.Result = resultFailed
 			return resp, err
 		}
-	case "failed-cycles", "completed-cycles", cleanupTargetCycles:
-		resp.Result = "unsupported"
-		return resp, fmt.Errorf("cleanup target %q is not supported by the orchestrator adapter", target)
 	default:
 		resp.Result = resultFailed
 		return resp, fmt.Errorf("unknown cleanup target %q", req.Target)

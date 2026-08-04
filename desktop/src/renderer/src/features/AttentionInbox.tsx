@@ -736,7 +736,6 @@ export function AttentionDetail({
                 return window.agentico.resolveGate({
                   featureId: item.featureId,
                   ...(item.repoName === undefined ? {} : { repoName: item.repoName }),
-                  ...(item.cycleType === undefined ? {} : { cycleType: item.cycleType }),
                 });
               })
             }
@@ -811,7 +810,6 @@ function AttentionContextMeta({ item }: { item: AttentionItem }) {
   if (item.kind === 'gate') {
     if (item.iteration !== undefined) entries.push(`iteration ${item.iteration}`);
     if (item.repoName !== undefined) entries.push(item.repoName);
-    if (item.cycleType !== undefined) entries.push(item.cycleType);
   }
   entries.push(formatWaitingSince(item.waitingSince));
   return (
@@ -972,7 +970,6 @@ function saveGateDraftForItem(
   return window.agentico.saveGateDraft({
     featureId: item.featureId,
     ...(item.repoName === undefined ? {} : { repoName: item.repoName }),
-    ...(item.cycleType === undefined ? {} : { cycleType: item.cycleType }),
     answers: gateAnswersForSubmit(item, draft),
   });
 }

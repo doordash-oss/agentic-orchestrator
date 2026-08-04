@@ -662,20 +662,20 @@ type Feature struct {
 	// in a single FeatureStore.Modify call; orchestration readers consume it
 	// via Feature.AllReposPublished / Feature.TouchedRepos. Persisted on
 	// Run.RepoStates.
-	RepoStates map[string]*RepoState `yaml:"-"`
-	LastError                       string                     `yaml:"-"`
-	FailureType                     string                     `yaml:"-"`
-	KBWaitMessage                   string                     `yaml:"-"`
-	ForceKBRebuild                  bool                       `yaml:"-"`
-	KBStatus                        map[string]string          `yaml:"-"`
-	PhaseTimings                    map[string]time.Duration   `yaml:"-"`
-	ActivePhaseStart                *time.Time                 `yaml:"-"`
-	ActiveTimingKey                 string                     `yaml:"-"`
-	PhaseCosts                      map[string]float64         `yaml:"-"`
-	SessionCosts                    []SessionCostRecord        `yaml:"-"`
-	PendingReviewPhase              *Phase                     `yaml:"-"`
-	PendingRewindReviewRoadmapPhase *int                       `yaml:"-"`
-	IsRewind                        bool                       `yaml:"-"`
+	RepoStates                      map[string]*RepoState    `yaml:"-"`
+	LastError                       string                   `yaml:"-"`
+	FailureType                     string                   `yaml:"-"`
+	KBWaitMessage                   string                   `yaml:"-"`
+	ForceKBRebuild                  bool                     `yaml:"-"`
+	KBStatus                        map[string]string        `yaml:"-"`
+	PhaseTimings                    map[string]time.Duration `yaml:"-"`
+	ActivePhaseStart                *time.Time               `yaml:"-"`
+	ActiveTimingKey                 string                   `yaml:"-"`
+	PhaseCosts                      map[string]float64       `yaml:"-"`
+	SessionCosts                    []SessionCostRecord      `yaml:"-"`
+	PendingReviewPhase              *Phase                   `yaml:"-"`
+	PendingRewindReviewRoadmapPhase *int                     `yaml:"-"`
+	IsRewind                        bool                     `yaml:"-"`
 	// CurrentPhaseStatus tracks the mid-flight phase implement status for the
 	// unified phase-implement loop ("implementing", "reviewing", or "" when
 	// not in a phase). Replaces the per-repo mid-flight presentation tokens

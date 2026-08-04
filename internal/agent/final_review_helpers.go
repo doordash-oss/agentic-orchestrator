@@ -13,13 +13,10 @@
 // limitations under the License.
 
 // Package agent — final_review_helpers.go owns the shared helpers used by
-// the unified feature-level Final Review loop (final_review_loop.go) and
-// the post-cycle Final Review entry (also in final_review_loop.go for
-// the post-publish rebase cycle).
+// the unified feature-level Final Review loop (final_review_loop.go).
 //
 // The prompt builders and prior-implementation-evidence resolver stay here
-// because both the feature-level Final Review and the feature-level
-// post-cycle Final Review share them.
+// because the feature-level Final Review loop is the single consumer.
 package agent
 
 import (

@@ -108,8 +108,8 @@ export function MergeModalBody({
       <ResultBox result={mergeAction.result} />
       {mergeAction.result !== null && !mergeAction.result.ok ? (
         <p className="completion-workspace__merge-handoff-hint">
-          A conflict or behind-base outcome can be resolved with a rebase pass. Open the Rebase card
-          in the feature's aftercare workspace, then return here to retry the merge.
+          A conflict or behind-base outcome can be resolved with a rebase pass. Use Start rebase
+          pass in the feature's aftercare workspace, then return here to retry the merge.
         </p>
       ) : null}
     </div>

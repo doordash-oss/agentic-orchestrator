@@ -1511,7 +1511,7 @@ func validatePositiveOptionalInt(w http.ResponseWriter, field string, value int)
 
 func validateCleanupRequest(w http.ResponseWriter, req CleanupActionRequest) bool {
 	switch strings.ToLower(strings.TrimSpace(req.Target)) {
-	case "", "worktrees", "cycles":
+	case "", "worktrees":
 		return true
 	default:
 		writeAPIError(w, http.StatusBadRequest, "bad_request", "cleanup target is invalid", nil)

@@ -53,9 +53,6 @@ type ImplementConfig struct {
 	ArtifactDir          string // base dir for iteration artifacts
 	StateDir             string // feature state directory for PID files
 	RunDir               string // active run directory granted to the agent; empty derives from Feature.ActiveRun
-	// SessionIDPrefix namespaces cycle sessions beneath the feature ID. For
-	// example "rebase-2" yields "<featureID>-rebase-2-impl-01".
-	SessionIDPrefix string
 
 	// AdditionalDirs are extra directories to pass as --add-dir flags to the
 	// claude CLI, giving the agent file-system access beyond WorkDir and StateDir.
@@ -162,8 +159,7 @@ type ImplementConfig struct {
 	// the per-iteration review gate on SUCCESS and immediately return
 	// "review_passed". Medium and Large profiles set this to true in the
 	// single-repo path, relying on the Final Review for quality gating.
-	// Moonshot, multi-repo orchestration, and repo-scoped cycles keep
-	// per-iteration review enabled.
+	// Multi-repo orchestration keeps per-iteration review enabled.
 	SkipIterationReview bool
 }
 
@@ -503,9 +499,7 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			sessOpts.StderrPath = filepath.Join(iterDir, "stderr.log")
 
 			// Start session in interactive mode
-			if cfg.SessionIDPrefix != "" {
-				sessionID = fmt.Sprintf("%s-%s-impl", cfg.Feature.ID, cfg.SessionIDPrefix)
-			} else if cfg.Feature.CurrentRoadmapPhase > 0 {
+			if cfg.Feature.CurrentRoadmapPhase > 0 {
 				sessionID = fmt.Sprintf("%s-phase-%02d-impl", cfg.Feature.ID, cfg.Feature.CurrentRoadmapPhase)
 			} else {
 				sessionID = cfg.Feature.ID + "-impl"
@@ -1396,14 +1390,10 @@ func resolveImplementationContractPath(stateDir string, f *feature.Feature, repo
 	if f == nil {
 		return "", false
 	}
-	cycleType := resolveCycleTypeForRepo(f, repoName)
-	if cycleType == "" {
-		if f.CurrentRoadmapPhase > 0 {
-			return PhaseTestingContractPath(stateDir, f, f.CurrentRoadmapPhase), true
-		}
-		return "", false
+	if f.CurrentRoadmapPhase > 0 {
+		return PhaseTestingContractPath(stateDir, f, f.CurrentRoadmapPhase), true
 	}
-	return CycleTestingContractPath(stateDir, f, repoName, cycleType), true
+	return "", false
 }
 
 func prepareImplementationTestingContract(cfg ImplementConfig, planContent string) (string, string, error) {
@@ -1411,13 +1401,11 @@ func prepareImplementationTestingContract(cfg ImplementConfig, planContent strin
 	if !ok {
 		return "", "", nil
 	}
-	if resolveCycleTypeForRepo(cfg.Feature, cfg.RepoName) == "" &&
-		!cfg.Feature.EffectivePipeline().ShouldRunImplementationHarness() {
+	if !cfg.Feature.EffectivePipeline().ShouldRunImplementationHarness() {
 		// Medium/Large roadmap phases run no per-iteration harness; the
 		// plan's automated verification is the implementer's to run and is
-		// re-exercised live at Final Review. Cycle contracts keep the
-		// harness for every profile. Remove any stale contract left by a
-		// prior run/profile so the implementer's presence check sees none.
+		// re-exercised live at Final Review. Remove any stale contract left
+		// by a prior run/profile so the implementer's presence check sees none.
 		if err := os.Remove(contractPath); err != nil && !os.IsNotExist(err) {
 			return "", "", fmt.Errorf("removing stale testing contract: %w", err)
 		}
@@ -1462,7 +1450,7 @@ func verificationScopePlanRevisionFeedback(violations []ProtocolViolation) strin
 
 func compileImplementationTestingContract(cfg ImplementConfig, planContent string) TestingContract {
 	if cfg.Feature != nil && cfg.RepoName == "" &&
-		(cfg.Feature.CurrentRoadmapPhase > 0 || resolveCycleTypeForRepo(cfg.Feature, "") != "") {
+		cfg.Feature.CurrentRoadmapPhase > 0 {
 		repos := phaseReposForImplementationContract(cfg.Feature, cfg.PlanPath)
 		return CompileTestingContractMultiRepo(MultiRepoContractInput{
 			Repos:     repos,

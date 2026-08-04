@@ -1695,7 +1695,6 @@ type NeedUserInputDraftResponse struct {
 
 // NeedUserInputGate defines model for NeedUserInputGate.
 type NeedUserInputGate struct {
-	CycleType          string                     `json:"cycle_type,omitempty"`
 	FeatureID          string                     `json:"feature_id,omitempty"`
 	InputNotifications string                     `json:"input_notifications,omitempty"`
 	Iteration          int                        `json:"iteration,omitempty"`

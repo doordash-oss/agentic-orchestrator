@@ -479,20 +479,16 @@ func defaultTestingContractPolicy(source string) TestingContractItemPolicy {
 // PlanText is the phase plan markdown (parsed for per-Task tags + per-Task
 // Automated Verification sections). PlanPath is recorded in
 // GeneratedFrom.PlanPath for provenance.
-//
-// PlanLess, when true, suppresses plan-source items entirely (used by the
-// the rebase cycle where there is no phase plan).
 type MultiRepoContractInput struct {
 	Repos     []string
 	PlanText  string
 	PlanPath  string
 	PhaseType string
-	PlanLess  bool
 	// CrossRepoSteps are verification commands authored by the planner under a
-	// top-level "Cross-Repo Verification" heading. When PlanLess is false the
-	// compiler also parses that heading from PlanText and merges the results
-	// here (callers may still pass steps explicitly for tests). Emitted as
-	// `cross-repo` items separately from per-Task commands. May be nil.
+	// top-level "Cross-Repo Verification" heading. The compiler also parses
+	// that heading from PlanText and merges the results here (callers may
+	// still pass steps explicitly for tests). Emitted as `cross-repo` items
+	// separately from per-Task commands. May be nil.
 	CrossRepoSteps []VerificationStep
 }
 
@@ -502,7 +498,7 @@ type MultiRepoContractInput struct {
 // Emission order:
 //  1. Plan-source rows: top-level multi-repo commands use their explicit
 //     `[repo: <name>]` scope; single-repo commands inherit the sole repo.
-//     Per-task commands inherit their Task repo. Skipped when PlanLess.
+//     Per-task commands inherit their Task repo.
 //  2. Manual, visual, and behavioral rows: phase-level evidence is tagged to
 //     the lone repo or `repo: cross-repo` for multi-repo phases.
 //
@@ -609,14 +605,30 @@ func CompileTestingContractMultiRepo(in MultiRepoContractInput) TestingContract 
 		contract.Items = append(contract.Items, item)
 	}
 
-	// 1) Plan-source rows. Skipped when PlanLess.
-	if !in.PlanLess {
-		// Top-level commands are explicitly repo-scoped in multi-repo plans.
-		// A single-repo plan may omit the scope and inherit its sole repo.
-		preTasks, perTaskBodies := splitPlanForVerification(in.PlanText)
-		topSteps := ParsePlanVerification(preTasks)
-		for _, step := range topSteps {
+	// 1) Plan-source rows.
+	// Top-level commands are explicitly repo-scoped in multi-repo plans.
+	// A single-repo plan may omit the scope and inherit its sole repo.
+	preTasks, perTaskBodies := splitPlanForVerification(in.PlanText)
+	topSteps := ParsePlanVerification(preTasks)
+	for _, step := range topSteps {
+		repo := canonicalDeclaredRepo(repos, strings.TrimSpace(step.Repo))
+		if repo == "" && len(repos) == 1 {
+			repo = repos[0]
+		}
+		if repo != "" {
+			addItem(testingContractPlanSource, repo, step)
+		}
+	}
+
+	// 2) Per-Task Automated Verification blocks. Each Task with a `**Repo:** <name>`
+	// tag contributes commands tagged to that repo only.
+	for _, tb := range perTaskBodies {
+		steps := ParsePlanVerification(tb.body)
+		for _, step := range steps {
 			repo := canonicalDeclaredRepo(repos, strings.TrimSpace(step.Repo))
+			if repo == "" {
+				repo = canonicalDeclaredRepo(repos, strings.TrimSpace(tb.repo))
+			}
 			if repo == "" && len(repos) == 1 {
 				repo = repos[0]
 			}
@@ -624,33 +636,13 @@ func CompileTestingContractMultiRepo(in MultiRepoContractInput) TestingContract 
 				addItem(testingContractPlanSource, repo, step)
 			}
 		}
-
-		// Per-Task Automated Verification blocks. Each Task with a `**Repo:** <name>`
-		// tag contributes commands tagged to that repo only.
-		for _, tb := range perTaskBodies {
-			steps := ParsePlanVerification(tb.body)
-			for _, step := range steps {
-				repo := canonicalDeclaredRepo(repos, strings.TrimSpace(step.Repo))
-				if repo == "" {
-					repo = canonicalDeclaredRepo(repos, strings.TrimSpace(tb.repo))
-				}
-				if repo == "" && len(repos) == 1 {
-					repo = repos[0]
-				}
-				if repo != "" {
-					addItem(testingContractPlanSource, repo, step)
-				}
-			}
-		}
 	}
 
 	// 3) Cross-repo rows: explicit CrossRepoSteps (tests / callers) plus
 	// planner-authored "Cross-Repo Verification" sections parsed from the
-	// plan when PlanLess is false. Dedup via addItem keeps overlaps unique.
+	// plan. Dedup via addItem keeps overlaps unique.
 	crossRepoSteps := append([]VerificationStep(nil), in.CrossRepoSteps...)
-	if !in.PlanLess {
-		crossRepoSteps = append(crossRepoSteps, ParseCrossRepoVerification(in.PlanText)...)
-	}
+	crossRepoSteps = append(crossRepoSteps, ParseCrossRepoVerification(in.PlanText)...)
 	for _, step := range crossRepoSteps {
 		addItem(testingContractCrossRepoSource, TestingContractCrossRepoTag, step)
 	}
@@ -658,7 +650,7 @@ func CompileTestingContractMultiRepo(in MultiRepoContractInput) TestingContract 
 	// 4) Manual, visual, and behavioral rows. These describe phase-level
 	// observations/artifacts, so multi-repo phases carry them as cross-repo
 	// items instead of duplicating the same requirement for every repo.
-	if !in.PlanLess {
+	{
 		phaseRepo := ""
 		switch {
 		case len(repos) > 1:

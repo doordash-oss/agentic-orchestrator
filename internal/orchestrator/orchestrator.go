@@ -213,8 +213,8 @@ type Orchestrator struct {
 	doneCh   chan struct{}
 	stopOnce sync.Once
 
-	// cycleWG tracks background goroutines launched by feature-level cycles.
-	// Tests that drive these methods against a
+	// cycleWG tracks background goroutines launched by asynchronous phase
+	// continuations. Tests that drive these methods against a
 	// t.TempDir() state directory must call WaitForCycles before the
 	// test returns so the goroutine's writes don't race with TempDir
 	// cleanup.
@@ -260,13 +260,6 @@ type Orchestrator struct {
 		kbInfos ...agent.KBInfo,
 	) (chan *agent.OrchestratorResult, error)
 
-	// runFeatureCycleFinalReviewFn is the cycle-scoped Final Review seam.
-	// Unlike the engine Final Review, this preserves regular feature/repo
-	// state and writes artifacts below the active cycle prefix.
-	runFeatureCycleFinalReviewFn func(
-		f *feature.Feature,
-	) (chan *agent.FeatureFinalReviewResult, error)
-
 	// runImplementationFn is a test seam over PhaseRunner.RunImplementation
 	// (single-repo implementation loop). Tests override this via
 	// SetRunImplementationFn to inject fake channel-returning engines.
@@ -277,7 +270,7 @@ type Orchestrator struct {
 	) (chan *agent.LoopResult, error)
 
 	// worktreeFingerprintFn is a test seam for detecting whether a mounted
-	// smart-rebase context repo changed during the agent loop.
+	// context repo changed during the agent loop.
 	worktreeFingerprintFn func(worktreePath string) (string, error)
 }
 
@@ -338,14 +331,6 @@ func New(deps Deps, hooks Hooks) *Orchestrator {
 		}
 		return o.deps.PhaseRunner.RunMultiRepoFinalReview(f, kbInfos...)
 	}
-	o.runFeatureCycleFinalReviewFn = func(
-		f *feature.Feature,
-	) (chan *agent.FeatureFinalReviewResult, error) {
-		if o.deps.PhaseRunner == nil {
-			return nil, errors.New("phase runner not configured")
-		}
-		return o.deps.PhaseRunner.RunFeatureCycleFinalReview(f)
-	}
 	o.worktreeFingerprintFn = gitWorktreeFingerprint
 	return o
 }
@@ -358,9 +343,9 @@ func (o *Orchestrator) Events() <-chan ports.Event { return o.eventCh }
 // loops cleanly. The channel is never sent to — only closed.
 func (o *Orchestrator) Done() <-chan struct{} { return o.doneCh }
 
-// WaitForCycles blocks until every background goroutine launched by the
-// feature-level cycle entry points and asynchronous phase continuations have returned. Production
-// callers do not need this — the orchestrator drives cycles to completion
+// WaitForCycles blocks until every background goroutine launched by
+// asynchronous phase continuations has returned. Production
+// callers do not need this — the orchestrator drives phases to completion
 // via its event loop. It exists for tests whose state directory is a
 // t.TempDir(): without synchronizing on the goroutine, TempDir cleanup
 // can race with in-flight writes from the implementation loop.
@@ -398,14 +383,6 @@ func (o *Orchestrator) SetRunMultiRepoFinalReviewFn(fn func(
 	kbInfos ...agent.KBInfo,
 ) (chan *agent.OrchestratorResult, error)) {
 	o.runMultiRepoFinalReviewFn = fn
-}
-
-// SetRunFeatureCycleFinalReviewFn installs the feature-cycle Final Review
-// seam used by post-implementation cycle tests.
-func (o *Orchestrator) SetRunFeatureCycleFinalReviewFn(fn func(
-	f *feature.Feature,
-) (chan *agent.FeatureFinalReviewResult, error)) {
-	o.runFeatureCycleFinalReviewFn = fn
 }
 
 // CreateFeature delegates to FeatureLifecycle.Create, fires the
@@ -1303,7 +1280,7 @@ func (o *Orchestrator) featureStartControl(featureID string) *sync.Mutex {
 
 // InterruptFeature stops all sessions for a feature and clears pending help,
 // permission, and feature-scoped input gate state. Normal phase work and
-// post-publish repo cycles transition the feature to StatusInterrupted.
+// post-publish rebase children transition the feature to StatusInterrupted.
 // Does NOT clear KBStatus — preserve per-repo KB tracking for resume.
 //
 // Ordering matters: the Interrupted transition is committed BEFORE sessions
@@ -1379,11 +1356,11 @@ func isSettledFeatureStatus(status feature.Status) bool {
 // InterruptAllRunning iterates all features; running ones are interrupted
 // (stopping sessions, clearing pending flags, transitioning to interrupted)
 // AND additionally have KBStatus cleared to match the startup sweep.
-// Non-running features (Published, CodeReady) with an active rebase cycle
+// Non-running features (Published, CodeReady) with an active rebase child
 // are interrupted at the feature level so
 // the dashboard keeps them in the active bucket. KBStatus is preserved for
-// every post-publish cycle shape. CodeReady is the manual_publish=true shape
-// where a rebase cycle can be in flight while the feature waits for the user
+// every post-publish rebase child shape. CodeReady is the manual_publish=true shape
+// where a rebase child can be in flight while the feature waits for the user
 // to publish.
 func (o *Orchestrator) InterruptAllRunning() error {
 	features, listErr := o.deps.Store.List()
@@ -1435,10 +1412,6 @@ func (o *Orchestrator) InterruptAllRunning() error {
 
 // HandlePhaseCompletion dispatches a phase-completion result to the
 // appropriate per-phase handler.
-//
-// Active-cycle handling: completion handlers observing f.ActiveCycleType != ""
-// take the cycle-active early-return path — minimum mutation, emit
-// PhaseCompleted, return. Cycle-specific handlers own cycle coordination.
 func (o *Orchestrator) HandlePhaseCompletion(featureID string, input PhaseCompletionInput) error {
 	// Fence late completion callbacks from mutating a child whose
 	// relationship is closed (discarded or completed) or whose discard

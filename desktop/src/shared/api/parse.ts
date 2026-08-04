@@ -239,7 +239,6 @@ export const ServerNeedUserInputGateSchema = z.object({
   open: z.boolean(),
   scope: z.string().max(100).optional(),
   repo_name: z.string().max(500).optional(),
-  cycle_type: z.string().max(200).optional(),
   iteration: z.number().int().nonnegative().optional(),
   summary: AttentionTextSchema.optional(),
   questions: z
@@ -448,7 +447,6 @@ export const ServerNeedUserInputGateDetailSchema = z.object({
   open: z.boolean(),
   scope: z.string().optional(),
   repo_name: z.string().optional(),
-  cycle_type: z.string().optional(),
   iteration: z.number().int().nonnegative().optional(),
   summary: z.string().optional(),
   questions: z

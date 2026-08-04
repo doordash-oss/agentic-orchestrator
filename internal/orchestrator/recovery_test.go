@@ -1043,11 +1043,11 @@ func containsString(sl []string, v string) bool {
 // T10. TestExecuteRecovery_Resume_NeedUserInputCycle_DoesNotRelaunch
 //
 // When a recovery item carries a RepoName and the feature has a
-// RepoCycleNeedUserInput state for that repo, Resume must NOT relaunch the
-// cycle (that would bypass the gate's answer-validating, shared-gate-clearing
+// pending need-user-input gate for that repo, Resume must NOT relaunch the
+// phase (that would bypass the gate's answer-validating, shared-gate-clearing
 // single dispatch) and must NOT fall through to a generic feature-phase
 // restart via startPhase. The process-level recovery action runs; the user
-// answers the gate separately to resume the cycle.
+// answers the gate separately to resume.
 func TestExecuteRecovery_Resume_NoCycle_FallsThroughToPhase(t *testing.T) {
 	planPath := writeTempFile(t, "plan.md", "# plan")
 	f := &feature.Feature{

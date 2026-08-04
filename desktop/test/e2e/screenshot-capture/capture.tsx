@@ -363,7 +363,6 @@ function PostImplementationScene({ scene }: { scene: string }) {
             featureId: 'abcd1234ef567890',
             waitingSince: '2026-07-25T10:00:00.000Z',
             repoName: 'agentic-orchestrator',
-            cycleType: 'rebase',
             summary: 'The agent needs one decision before it can finish the rebase.',
             questions: [
               {
@@ -851,7 +850,11 @@ function CaptureApp() {
   if (scene === 'run-gauge-final-review') {
     return <RunGaugeScene mode="final-review" />;
   }
-  if (scene === 'aftercare' || scene === 'refactor-pass') {
+  if (
+    scene === 'aftercare' ||
+    scene === 'aftercare-rebase-up-to-date' ||
+    scene === 'refactor-pass'
+  ) {
     return <AftercareScene />;
   }
   if (scene === 'feature-question') {

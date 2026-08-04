@@ -89,20 +89,17 @@ test('lifecycle passes: resume, retry, restart, rebase, refactor child', async (
     await expect(aftercare).toBeVisible({ timeout: 15_000 });
 
     const startRebase = aftercare.getByRole('button', { name: /Start rebase pass/ });
-    if (await startRebase.isVisible({ timeout: 3_000 }).catch(() => false)) {
-      await startRebase.click();
-      await expect(handle.page.getByRole('dialog', { name: 'Rebase' })).not.toBeVisible({
-        timeout: 5_000,
-      });
-      const rebaseError = seededCockpit.getByRole('alert').filter({ hasText: /rebase/ });
-      await expect(rebaseError).toBeVisible({ timeout: 30_000 });
-      await expect(aftercare).toBeVisible({ timeout: 5_000 });
-      transcript.step(
-        'rebase card dispatched a direct launch with no modal; up-to-date notice rendered inline',
-      );
-    } else {
-      transcript.step('rebase card not visible — server does not enable it for this state');
-    }
+    await expect(startRebase).toBeVisible({ timeout: 10_000 });
+    await startRebase.click();
+    await expect(handle.page.getByRole('dialog', { name: 'Rebase' })).not.toBeVisible({
+      timeout: 5_000,
+    });
+    const rebaseError = seededCockpit.getByRole('alert').filter({ hasText: /rebase/ });
+    await expect(rebaseError).toBeVisible({ timeout: 30_000 });
+    await expect(aftercare).toBeVisible({ timeout: 5_000 });
+    transcript.step(
+      'rebase card dispatched a direct launch with no modal; up-to-date notice rendered inline',
+    );
 
     transcript.section('Restart confirmation');
     // Restart must be confirmed before a refactor child exists: the child

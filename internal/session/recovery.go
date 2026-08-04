@@ -106,7 +106,7 @@ func isProcessGroupAlive(pgid int) bool {
 //	(a) Idempotent on retry. Each per-item branch is a no-op when re-applied:
 //	    terminateProcessGroup is gated on item.ProcessAlive (rechecked via
 //	    isProcessGroupAlive); RemovePIDFile tolerates a missing file;
-//	    fm.Transition / fm.FailRepoCycle short-circuit when the target state
+//	    fm.Transition short-circuits when the target state
 //	    is already set; and the resume-metadata Store.Modify writes
 //	    overwrite-with-the-same-value (SessionID + RepoName) so a re-run
 //	    against the same RecoveryItem set converges.

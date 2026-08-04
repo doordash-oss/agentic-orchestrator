@@ -304,6 +304,8 @@ func recoveryActionString(action ports.RecoveryAction) string {
 // For each child feature with a transaction journal, it classifies every
 // target ref against its journaled old and candidate SHAs:
 //   - Prepared-but-unapplied: leave retryable without moving refs.
+//   - Rebase pass-through candidate: confirm only when the no-op entry was
+//     durably applied; otherwise leave retryable.
 //   - All refs already at candidates: finish the durable transition once.
 //   - Provable partial apply: conditionally roll back.
 //   - Partially completed rollback: resume from durable and observed state.
@@ -425,6 +427,17 @@ func (o *Orchestrator) reconcileOneIntegration(f *feature.Feature) error {
 			continue
 		}
 		entry.ObservedSHA = current
+		if passThroughCandidate(entry) {
+			if current != entry.ParentAnchorSHA {
+				anyUnclassifiable = true
+				entry.Diagnostics = fmt.Sprintf("ref %s externally moved: pass-through anchor %s observed %s",
+					ref, entry.ParentAnchorSHA, current)
+			}
+			if entry.ApplyState != feature.RepoApplyApplied {
+				allAtCandidate = false
+			}
+			continue
+		}
 		switch {
 		case current == entry.CandidateSHA:
 			entry.ApplyState = feature.RepoApplyApplied

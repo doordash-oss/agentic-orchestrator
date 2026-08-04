@@ -42,7 +42,7 @@ describe('MergeModalBody', () => {
     const dispatchAction = vi.fn(() => Promise.reject(new Error('conflict')));
     render(<MergeModalBody {...props({ dispatchAction })} />);
     fireEvent.click(screen.getByRole('button', { name: 'Merge' }));
-    await screen.findByText(/Open the Rebase card in the feature's aftercare workspace/);
+    await screen.findByText(/Use Start rebase pass in the feature's aftercare workspace/);
     expect(screen.queryByRole('button', { name: /Hand off to rebase/i })).not.toBeInTheDocument();
   });
 

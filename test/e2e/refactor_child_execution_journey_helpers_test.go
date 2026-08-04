@@ -129,6 +129,11 @@ func journeyChildPhaseRunnerWithOpts(t *testing.T, sm *session.Manager, store *f
 		// Stand in for the implement kernel: leave one real change in the
 		// child worktree for the integration boundary to commit and merge.
 		for _, repo := range c.Feature.Repos {
+			if c.Feature.Parent != nil &&
+				c.Feature.Parent.Kind == feature.ChildKindRebase &&
+				!c.Feature.IsRebaseBehindRepo(repo.Name) {
+				continue
+			}
 			wt := repo.WorktreePath
 			if wt == "" {
 				wt = repo.Path

@@ -26,8 +26,8 @@ import (
 
 const phaseSupervisorStatusSuccess = "SUCCESS"
 
-// Shared FinalStatus values reported by agent implementation/rebase/review
-// loops (agent.OrchestratorResult, agent.RebaseLoopResult, etc.).
+// Shared FinalStatus values reported by agent implementation/review
+// loops (agent.OrchestratorResult, agent.LoopResult, etc.).
 const (
 	reviewStatusPassed              = "review_passed"
 	finalStatusAllPassed            = "all_passed"

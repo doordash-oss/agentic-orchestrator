@@ -199,13 +199,12 @@ export class AttentionService {
         .filter((gate) => gate.open && hasRequiredListedFeature(gate.feature_id))
         .map((gate) => ({
           kind: 'gate' as const,
-          id: `${gate.feature_id}:${gate.repo_name ?? ''}:${gate.cycle_type ?? ''}`,
+          id: `${gate.feature_id}:${gate.repo_name ?? ''}`,
           featureId: gate.feature_id!,
           ...parentOf(gate.feature_id),
           waitingSince: gate.waiting_since ?? fallbackTime,
           ...(gate.scope === undefined ? {} : { scope: gate.scope }),
           ...(gate.repo_name === undefined ? {} : { repoName: gate.repo_name }),
-          ...(gate.cycle_type === undefined ? {} : { cycleType: gate.cycle_type }),
           ...(gate.iteration === undefined ? {} : { iteration: gate.iteration }),
           ...(gate.summary === undefined ? {} : { summary: gate.summary }),
           ...(gate.verification === undefined
@@ -295,7 +294,6 @@ export class AttentionService {
     const input = validateWithSchema(request, GateDraftRequestSchema);
     return this.mutate(`/api/v1/features/${input.featureId}/actions/need-user-input-draft`, {
       ...(input.repoName === undefined ? {} : { repo_name: input.repoName }),
-      ...(input.cycleType === undefined ? {} : { cycle_type: input.cycleType }),
       answers: input.answers,
     });
   }
@@ -303,7 +301,6 @@ export class AttentionService {
     const input = validateWithSchema(request, GateResumeRequestSchema);
     return this.mutate(`/api/v1/features/${input.featureId}/actions/need-user-input`, {
       ...(input.repoName === undefined ? {} : { repo_name: input.repoName }),
-      ...(input.cycleType === undefined ? {} : { cycle_type: input.cycleType }),
     });
   }
 

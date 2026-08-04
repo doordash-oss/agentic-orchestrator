@@ -54,7 +54,7 @@ const (
 	repoAWorktreePath      = "/tmp/repo-a-worktree"
 )
 
-func installRepoCycleFakeAPI(t *testing.T) *testutil.FakeGitHubAPI {
+func installFakeGitHubAPI(t *testing.T) *testutil.FakeGitHubAPI {
 	t.Helper()
 	fake := testutil.InstallFakeGitHubAPI(t)
 	fake.Mux.HandleFunc("/graphql", func(w http.ResponseWriter, r *http.Request) {

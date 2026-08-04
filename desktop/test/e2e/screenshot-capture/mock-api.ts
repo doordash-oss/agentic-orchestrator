@@ -272,32 +272,6 @@ const SESSIONS: SessionSummary[] = [
   },
 ];
 
-const CYCLE_SESSION: SessionSummary = {
-  id: 'rebase-2-impl-01',
-  featureId: 'abcd1234ef567890',
-  runNumber: 8,
-  phase: 'Rebase',
-  kind: 'implement',
-  label: 'Implement',
-  provider: 'claude',
-  model: 'claude-sonnet-5',
-  status: 'running',
-  startedAt: '2026-07-25T14:20:00Z',
-  contextPercentage: 42,
-  taskActivities: [
-    {
-      taskId: 'task-rebase-verification',
-      description: 'Verify rebased implementation',
-      state: 'running',
-      lastToolName: 'Bash',
-      startedAt: '2026-07-25T14:21:00Z',
-      updatedAt: '2026-07-25T14:22:00Z',
-    },
-  ],
-  runningTaskCount: 1,
-  usage: { inputTokens: 45000, outputTokens: 12000, costUsd: 1.2 },
-};
-
 const CHAT_SESSION: SessionSummary = {
   id: CHAT_SESSION_ID,
   featureId: CHAT_SESSION_ID,
@@ -581,27 +555,6 @@ const CYCLES_FEATURE_SNAPSHOT: FeatureSnapshot = {
       touched: false,
       prUrl: 'https://github.com/example/orchestrator-core/pull/18',
       freshness: 'local changes',
-    },
-  ],
-};
-
-const REBASE_FEATURE_SNAPSHOT: FeatureSnapshot = {
-  ...CYCLES_FEATURE_SNAPSHOT,
-  repoStatus: [
-    {
-      name: 'signal-lab',
-      publishable: true,
-      freshness: 'local changes',
-      rebaseStatus: 'pending',
-      rebaseTarget: 'origin/main',
-      conflictFiles: ['src/telemetry/signal.go', 'src/telemetry/collector.go'],
-    },
-    {
-      name: 'orchestrator-core',
-      publishable: true,
-      freshness: 'in sync',
-      rebaseStatus: 'completed',
-      rebaseTarget: 'origin/main',
     },
   ],
 };
@@ -1192,10 +1145,7 @@ function makeMockApi(
       if (scene === 'repo-instrument' || scene === 'refactor-launch') {
         return Promise.resolve(CYCLES_FEATURE_SNAPSHOT);
       }
-      if (scene === 'rebase-preflight') {
-        return Promise.resolve(REBASE_FEATURE_SNAPSHOT);
-      }
-      if (scene === 'aftercare') {
+      if (scene === 'aftercare' || scene === 'aftercare-rebase-up-to-date') {
         return Promise.resolve(AFTERCARE_FEATURE_SNAPSHOT);
       }
       if (scene === 'refactor-pass') {
@@ -1204,19 +1154,6 @@ function makeMockApi(
             ? REFACTOR_PASS_CHILD_SNAPSHOT
             : REFACTOR_PASS_PARENT_SNAPSHOT,
         );
-      }
-      if (scene.startsWith('post-cycle-')) {
-        return Promise.resolve({
-          ...AFTERCARE_FEATURE_SNAPSHOT,
-          phaseStatus: 'rebasing',
-          actions:
-            scene === 'post-cycle-failed'
-              ? [{ id: 'retry', enabled: true, disabledReasons: [] }]
-              : [{ id: 'pause-stop', enabled: true, disabledReasons: [] }],
-          ...(scene === 'post-cycle-failed'
-            ? { failure: { type: 'rebase_conflict', message: 'The rebase worker stopped safely.' } }
-            : {}),
-        } as FeatureSnapshot);
       }
       if (scene === 'bulk-preview' || scene === 'bulk-queue') {
         const id = _featureId;
@@ -1482,22 +1419,13 @@ function makeMockApi(
       } as RunListResult);
     },
     getRun: ({ runNumber }) => {
-      if (scene === 'aftercare') {
+      if (scene === 'aftercare' || scene === 'aftercare-rebase-up-to-date') {
         return Promise.resolve({
           ...RUN_DETAIL,
           runNumber,
           artifactCount: 5,
           timing: { totalSeconds: 14700, byPhase: RUN_DETAIL.timing?.byPhase ?? {} },
           cost: { totalUsd: 95.18, byPhase: RUN_DETAIL.cost?.byPhase ?? {} },
-        } as RunDetailView);
-      }
-      if (scene.startsWith('post-cycle-')) {
-        const cycleKey = 'rebase-2';
-        return Promise.resolve({
-          ...RUN_DETAIL,
-          runNumber,
-          timing: { totalSeconds: 15132, byPhase: { [cycleKey]: 732 } },
-          cost: { totalUsd: 14.66, byPhase: { [cycleKey]: 9.84 } },
         } as RunDetailView);
       }
       const summary = SEALED_RUNS.find((r) => r.runNumber === runNumber);
@@ -1515,7 +1443,7 @@ function makeMockApi(
     listRunSessions: ({ runNumber }) =>
       Promise.resolve({
         runNumber,
-        sessions: scene.startsWith('post-cycle-') ? [CYCLE_SESSION] : SESSIONS,
+        sessions: SESSIONS,
       } as RunSessionsListResult),
     getLivePreview: (featureId) =>
       Promise.resolve({
@@ -1632,12 +1560,20 @@ function makeMockApi(
       new Promise((resolve) => {
         setTimeout(() => resolve(REWIND_RESULT), 500);
       }),
-    launchRebaseChild: () =>
-      Promise.resolve({
+    launchRebaseChild: () => {
+      if (scene === 'aftercare-rebase-up-to-date') {
+        return Promise.reject(
+          new Error(
+            'rebase_already_up_to_date: Every repository is already up to date with its target branch. Nothing to merge.',
+          ),
+        );
+      }
+      return Promise.resolve({
         childId: 'child1234ef567890',
         parentId: 'abcd1234ef567890',
         result: 'created',
-      }),
+      });
+    },
     launchRefactorChild: () =>
       Promise.resolve({
         childId: 'child1234ef567890',
@@ -1721,7 +1657,7 @@ function makeMockApi(
     preflightCompletion: () => {
       const isPublishScene = scene === 'completion-publish';
       const isDeleteScene = scene === 'completion-delete';
-      if (scene === 'aftercare') {
+      if (scene === 'aftercare' || scene === 'aftercare-rebase-up-to-date') {
         return Promise.resolve({
           featureId: 'abcd1234ef567890',
           sourceRevision: 'rev-aftercare-mock',
@@ -2030,7 +1966,6 @@ export {
   SESSIONS,
   FEATURE_SNAPSHOT,
   CYCLES_FEATURE_SNAPSHOT,
-  REBASE_FEATURE_SNAPSHOT,
   AFTERCARE_FEATURE_SNAPSHOT,
   REWIND_PREVIEW,
   REWIND_RESULT,

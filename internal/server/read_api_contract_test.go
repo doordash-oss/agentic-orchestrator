@@ -630,7 +630,7 @@ func TestNeedUserInputGateDTOBoundsLegacyVerificationContext(t *testing.T) {
 		t.Fatalf("WriteNeedUserInputRecord() error = %v", err)
 	}
 
-	dto := needUserInputGateDTO("feature-1", entityFeature, "", "", 1, "", gatePath)
+	dto := needUserInputGateDTO("feature-1", entityFeature, "", 1, "", gatePath)
 	if dto.Verification == nil {
 		t.Fatal("verification = nil, want bounded verification context")
 	}
@@ -1247,6 +1247,7 @@ func TestFeatureDetailActionCatalogStableAndRedacted(t *testing.T) {
 	assertActionInputNames(t, actionsByID[actionReviewFeedback])
 	assertActionScope(t, actionsByID[actionCleanup], "")
 	assertActionInputNames(t, actionsByID[actionCleanup], "target")
+	assertActionInputOptions(t, actionsByID[actionCleanup], "target", "worktrees")
 	assertActionScope(t, actionsByID[actionDelete], "")
 	// The seeded parent is Published, so the refactor child-launch action is
 	// offered with feature scope and no required inputs.
@@ -3041,6 +3042,22 @@ func assertActionInputRequired(t *testing.T, action map[string]any, name string,
 	input := actionInputByName(t, action, name)
 	if got := input["required"]; got != want {
 		t.Fatalf("action %s input %s required = %v; want %v", action["id"], name, got, want)
+	}
+}
+
+func assertActionInputOptions(t *testing.T, action map[string]any, name string, want ...string) {
+	t.Helper()
+	input := actionInputByName(t, action, name)
+	rawOptions, ok := input["options"].([]any)
+	if !ok {
+		t.Fatalf("action %s input %s options missing or wrong type in %+v", action["id"], name, input)
+	}
+	got := make([]string, 0, len(rawOptions))
+	for _, rawOption := range rawOptions {
+		got = append(got, rawOption.(string))
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("action %s input %s options = %v; want %v", action["id"], name, got, want)
 	}
 }
 

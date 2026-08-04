@@ -95,7 +95,7 @@ func (o *Orchestrator) publishRepoWithOptions(featureID, repoName string, opts P
 	leasePush := publishRequiresLeasePush(f)
 
 	// Pull-rebase before a regular push. CodeReady publish is the explicit
-	// post-review path and may follow a rebase cycle that rewrote the feature
+	// post-review path and may follow a rebase child pass that rewrote the feature
 	// branch; rebasing that branch back onto origin/<branch> would undo the
 	// intended direction of sync.
 	if !leasePush {

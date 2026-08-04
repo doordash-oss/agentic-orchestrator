@@ -2845,7 +2845,7 @@ func TestBuildSession_SkillsInjection_Codex_EmptySkillsDir(t *testing.T) {
 	}
 }
 
-func TestResolveImplementArtifactDir_CyclePrefix(t *testing.T) {
+func TestResolveImplementArtifactDir_NoPrefix(t *testing.T) {
 	stateDir := t.TempDir()
 
 	tests := []struct {
@@ -2854,7 +2854,7 @@ func TestResolveImplementArtifactDir_CyclePrefix(t *testing.T) {
 		wantDir string
 	}{
 		{
-			"no cycle",
+			"no roadmap phase",
 			&feature.Feature{ID: "f1", ActiveRun: 1},
 			filepath.Join(stateDir, "f1", "runs", "run-001", "implement"),
 		},

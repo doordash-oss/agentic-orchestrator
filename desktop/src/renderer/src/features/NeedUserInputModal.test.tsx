@@ -15,7 +15,6 @@ const gate: Extract<AttentionItem, { kind: 'gate' }> = {
   featureId: 'abcd1234ef567890',
   waitingSince: '2026-07-25T00:00:00Z',
   repoName: 'repo-a',
-  cycleType: 'rebase',
   summary: 'Clarify the delivery window.',
   questions: [{ index: 1, prompt: 'Deployment window?', answer: '' }],
 };
@@ -78,7 +77,6 @@ describe('NeedUserInputModal', () => {
       expect(mock.api.saveGateDraft).toHaveBeenCalledWith({
         featureId: gate.featureId,
         repoName: 'repo-a',
-        cycleType: 'rebase',
         answers: { '1': 'After verification passes.' },
       }),
     );
@@ -86,7 +84,7 @@ describe('NeedUserInputModal', () => {
     expect(onAnswerLater).toHaveBeenCalledOnce();
   });
 
-  it('requires every answer and resumes the exact cycle gate', async () => {
+  it('requires every answer and resumes the exact need-user-input gate', async () => {
     const mock = installAgenticoMock();
     mock.api.saveGateDraft.mockResolvedValue({ result: 'saved' });
     mock.api.resolveGate.mockResolvedValue({ result: 'resumed' });
@@ -102,13 +100,12 @@ describe('NeedUserInputModal', () => {
       expect(mock.api.resolveGate).toHaveBeenCalledWith({
         featureId: gate.featureId,
         repoName: 'repo-a',
-        cycleType: 'rebase',
       }),
     );
     expect(onResolved).toHaveBeenCalledOnce();
   });
 
-  it('persists the newly selected retry action and resumes the exact cycle gate', async () => {
+  it('persists the newly selected retry action and resumes the exact need-user-input gate', async () => {
     const mock = installAgenticoMock();
     mock.api.saveGateDraft.mockResolvedValue({ result: 'saved' });
     mock.api.resolveGate.mockResolvedValue({ result: 'resumed' });
@@ -126,7 +123,6 @@ describe('NeedUserInputModal', () => {
       expect(mock.api.saveGateDraft).toHaveBeenCalledWith({
         featureId: verificationGate.featureId,
         repoName: 'repo-a',
-        cycleType: 'rebase',
         answers: { '1': 'RETRY_AFTER_AUTH' },
       }),
     );
@@ -137,7 +133,6 @@ describe('NeedUserInputModal', () => {
       expect(mock.api.resolveGate).toHaveBeenCalledWith({
         featureId: verificationGate.featureId,
         repoName: 'repo-a',
-        cycleType: 'rebase',
       }),
     );
     expect(onResolved).toHaveBeenCalledOnce();
@@ -184,7 +179,6 @@ describe('NeedUserInputModal', () => {
       expect(mock.api.saveGateDraft).toHaveBeenLastCalledWith({
         featureId: verificationGate.featureId,
         repoName: 'repo-a',
-        cycleType: 'rebase',
         answers: { '1': 'WAIVE' },
       });
     });

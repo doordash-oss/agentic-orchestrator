@@ -15,7 +15,6 @@ const FRESHNESS_LABELS: Record<string, string> = {
 
 const REBASE_STATUS_LABELS: Record<string, string> = {
   checking: 'Checking',
-  rebasing: 'Rebasing',
   up_to_date: 'Up to date',
   changed: 'Changed',
   pending: 'Pending',

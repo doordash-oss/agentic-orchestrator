@@ -119,43 +119,6 @@ func TestBuildWorkspace_EmptyStateDir(t *testing.T) {
 	}
 }
 
-func TestWorkspaceForRepos_FiltersSubset(t *testing.T) {
-	stateDir := t.TempDir()
-	feat := &feature.Feature{
-		Repos: []feature.FeatureRepo{
-			{Name: testRepoNameAPI, Path: "/r/api"},
-			{Name: testRepoNameWeb, Path: "/r/web"},
-			{Name: testRepoNameInfra, Path: "/r/infra"},
-		},
-	}
-	ws, err := WorkspaceForRepos(feat, stateDir, []string{testRepoNameWeb, testRepoNameAPI})
-	if err != nil {
-		t.Fatal(err)
-	}
-	abs := func(p string) string { a, _ := filepath.Abs(p); return a }
-	want := []string{filepath.Join(stateDir, "runs", "run-001"), abs("/r/api"), abs("/r/web")}
-	if !reflect.DeepEqual(ws.AdditionalDirs, want) {
-		t.Errorf("AdditionalDirs = %v, want %v", ws.AdditionalDirs, want)
-	}
-	if _, ok := ws.RepoPaths[testRepoNameInfra]; ok {
-		t.Errorf("expected infra to be filtered out")
-	}
-}
-
-func TestWorkspaceForRepos_EmptyMeansAll(t *testing.T) {
-	stateDir := t.TempDir()
-	feat := &feature.Feature{
-		Repos: []feature.FeatureRepo{{Name: testRepoNameAPI, Path: "/r/api"}},
-	}
-	ws, err := WorkspaceForRepos(feat, stateDir, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(ws.RepoPaths) != 1 {
-		t.Errorf("expected all repos when filter is empty")
-	}
-}
-
 func TestBuildWorkspace_RepoMissingBothPathFields(t *testing.T) {
 	stateDir := t.TempDir()
 	feat := &feature.Feature{

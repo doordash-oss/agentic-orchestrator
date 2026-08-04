@@ -63,7 +63,6 @@ export function NeedUserInputModal({
           await window.agentico.saveGateDraft({
             featureId: currentItem.featureId,
             ...(currentItem.repoName === undefined ? {} : { repoName: currentItem.repoName }),
-            ...(currentItem.cycleType === undefined ? {} : { cycleType: currentItem.cycleType }),
             answers: Object.fromEntries(
               currentItem.questions.map((question) => [
                 String(question.index),
@@ -94,7 +93,6 @@ export function NeedUserInputModal({
       await window.agentico.resolveGate({
         featureId: item.featureId,
         ...(item.repoName === undefined ? {} : { repoName: item.repoName }),
-        ...(item.cycleType === undefined ? {} : { cycleType: item.cycleType }),
       });
       await onResolved();
     } catch (cause) {

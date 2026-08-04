@@ -247,7 +247,7 @@ func (h *apiHandler) featureDetailDTO(f *feature.Feature) (FeatureDetail, error)
 		}
 	}
 	if f.Status == feature.StatusNeedUserInput && f.PendingNeedUserInputPath != "" {
-		gate := needUserInputGateDTO(f.ID, entityFeature, "", "", f.CurrentIteration, f.InputNotifications, f.PendingNeedUserInputPath)
+		gate := needUserInputGateDTO(f.ID, entityFeature, "", f.CurrentIteration, f.InputNotifications, f.PendingNeedUserInputPath)
 		detail.NeedUserInput = &gate
 	}
 	detail.Warnings = append(detail.Warnings, effortDriftWarnings(f, h.registry)...)
@@ -661,13 +661,13 @@ func actionCatalogDTOsWithChildGuard(f *feature.Feature, hasActiveChild bool) []
 			{Name: "roadmap_phase", Kind: "integer", Required: false},
 			{Name: "upgrade_pipeline", Kind: actionInputKindEnum, Required: false, Options: rewindUpgradePipelineOptions(f)},
 		}, childGuardReason(canRewind, ActionDisabledReason{Code: "no_rewind_targets", Message: "feature has no valid rewind targets"})...),
-		action(actionRebase, canPostPublishPass, featureScope, nil, childGuardReason(canPostPublishPass, postPublishPassDisabledReason(f, actionRebase))...),
+		action(actionRebase, canPostPublishPass, featureScope, nil, childGuardReason(canPostPublishPass, postPublishPassDisabledReason(f))...),
 		action(actionReviewFeedback, canReviewFeedback, featureScope, nil, childGuardReason(canReviewFeedback, reviewFeedbackDisabledReason(f))...),
 		action(actionRefactor, canRefactor, featureScope, nil, childGuardReason(canRefactor, disabledStatusReason(status))...),
 		action(actionRetry, canRetry, featureScope, nil, childGuardReason(canRetry, ActionDisabledReason{Code: "not_failed", Message: "retry is only available for failed features"})...),
 		action(actionMarkDone, canMarkDone, featureScope, nil, childGuardReason(canMarkDone, ActionDisabledReason{Code: "not_complete", Message: "feature is not ready to mark done"})...),
 		action(actionCleanup, canCleanup, featureScope, []ActionInput{
-			{Name: "target", Kind: actionInputKindEnum, Required: false, Options: []string{"worktrees", "cycles"}},
+			{Name: "target", Kind: actionInputKindEnum, Required: false, Options: []string{"worktrees"}},
 		}, childGuardReason(canCleanup, ActionDisabledReason{Code: "running", Message: "cleanup is disabled while work is running"})...),
 		action(actionDelete, canDelete, featureScope, nil),
 	}
@@ -843,7 +843,7 @@ func mergeDisabledReason(f *feature.Feature) ActionDisabledReason {
 	return disabledStatusReason(f.Status)
 }
 
-func postPublishPassDisabledReason(f *feature.Feature, cycle string) ActionDisabledReason {
+func postPublishPassDisabledReason(f *feature.Feature) ActionDisabledReason {
 	if f == nil {
 		return disabledStatusReason(feature.StatusCreated)
 	}
@@ -1439,7 +1439,7 @@ func (h *apiHandler) featureQueues() ([]HelpQueue, []NeedUserInputGate, error) {
 		}
 		if f.Status == feature.StatusNeedUserInput && f.PendingNeedUserInputPath != "" {
 			gates = append(gates, orderedNeedInputGate{
-				dto:       needUserInputGateDTO(f.ID, entityFeature, "", "", f.CurrentIteration, f.InputNotifications, f.PendingNeedUserInputPath),
+				dto:       needUserInputGateDTO(f.ID, entityFeature, "", f.CurrentIteration, f.InputNotifications, f.PendingNeedUserInputPath),
 				featureID: f.ID,
 				created:   f.Created,
 				gateTime:  gateFileTime(f.PendingNeedUserInputPath),
@@ -1484,13 +1484,12 @@ func sessionHasPendingAskUserControl(sess ports.SessionView) bool {
 	return false
 }
 
-func needUserInputGateDTO(featureID, scope, repoName string, cycleType string, iteration int, inputNotifications feature.InputNotificationsMode, gatePath string) NeedUserInputGate {
+func needUserInputGateDTO(featureID, scope, repoName string, iteration int, inputNotifications feature.InputNotificationsMode, gatePath string) NeedUserInputGate {
 	dto := NeedUserInputGate{
 		FeatureID:          featureID,
 		Open:               true,
 		Scope:              scope,
 		RepoName:           repoName,
-		CycleType:          cycleType,
 		InputNotifications: string(feature.NormalizeInputNotificationsMode(inputNotifications)),
 		Iteration:          iteration,
 		WaitingSince:       gateFileTime(gatePath),

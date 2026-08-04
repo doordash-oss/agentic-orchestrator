@@ -96,10 +96,6 @@ type FeatureLifecycle interface {
 	MarkPublished(featureID, prURL string) error
 	MarkDone(featureID string) error
 
-	// Per-repo cycles
-	RemoveRepoCycle(featureID, repoName string) error
-	FailRepoCycle(featureID, repoName, errMsg string) error
-
 	// Roadmap phases
 	AdvanceRoadmapPhase(featureID string) error
 	StartRoadmapPhaseImplementation(featureID string) error

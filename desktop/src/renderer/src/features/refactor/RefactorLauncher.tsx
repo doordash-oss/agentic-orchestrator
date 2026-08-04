@@ -8,7 +8,6 @@
  */
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
 import type {
-  AttentionItem,
   EffortLevel,
   FeatureConfigSnapshot,
   FeatureSnapshot,
@@ -32,8 +31,6 @@ import {
   type CheckpointState,
   type Pipeline,
 } from '../runContract';
-import { CycleGateNotice } from '../launcherShared';
-
 type SeedState =
   | { phase: 'loading' }
   | { phase: 'error'; error: WizardError }
@@ -46,8 +43,6 @@ export interface RefactorLauncherProps {
   snapshot: FeatureSnapshot;
   onCancel(): void;
   onDispatched(launch: { childId: string; autoStart: boolean }): void;
-  attentionItems?: AttentionItem[];
-  onOpenGate?: (featureId: string) => void;
 }
 
 export function RefactorLauncher({
@@ -55,8 +50,6 @@ export function RefactorLauncher({
   snapshot,
   onCancel,
   onDispatched,
-  attentionItems,
-  onOpenGate,
 }: RefactorLauncherProps): React.ReactElement {
   const [seed, setSeed] = useState<SeedState>({ phase: 'loading' });
   const [stepIndex, setStepIndex] = useState(0);
@@ -225,12 +218,6 @@ export function RefactorLauncher({
       noValidate
       onSubmit={submit}
     >
-      <CycleGateNotice
-        featureId={featureId}
-        snapshot={snapshot}
-        attentionItems={attentionItems}
-        onOpenGate={onOpenGate}
-      />
       <section className="refactor-wizard__inherited" aria-label="Inherited repositories">
         <p className="home-surface__eyebrow">Where · Inherited from {snapshot.name}</p>
         <ul className="refactor-wizard__repos">

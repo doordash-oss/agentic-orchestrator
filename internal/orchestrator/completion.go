@@ -670,8 +670,8 @@ func (o *Orchestrator) onPlanNeedsReview(featureID string) error {
 // Multi-repo aggregate results flow through MultiRepoResult; the single-repo
 // NEED_USER_INPUT pause flow still arrives as a single-repo LoopResult so the
 // orchestrator can transition the feature into StatusNeedUserInput before the
-// multi-repo aggregator collapses the cycle. Single-repo cycle completions
-// arrive via per-repo cycle FR result channels, never through HandlePhaseCompletion.
+// multi-repo aggregator collapses the result. Single-repo completions arrive
+// via per-repo Final Review result channels, never through HandlePhaseCompletion.
 func (o *Orchestrator) onImplementCompleted(featureID string, input PhaseCompletionInput) error {
 	if input.MultiRepoResult != nil {
 		return o.onMultiRepoImplementDone(featureID, input.MultiRepoResult)
@@ -1389,7 +1389,7 @@ func (o *Orchestrator) CompletionPreflight(featureID string) (CompletionPrefligh
 			repoResult.PRURL = prURLs[repo.Name]
 		}
 		repoResult.Status = completionRepoStatus(f, repo, state, publishable, repoResult.PRURL)
-		freshness, blocker, _ := o.repoFreshnessAndBlocker(o.harnessRebaseOutcomeForRepo(f, repo))
+		freshness, blocker, _ := o.repoFreshnessAndBlocker(o.rebaseFreshnessInputForRepo(f, repo))
 		repoResult.Freshness = freshness
 		repoResult.Blocker = blocker
 		if repoResult.Blocker != "" {

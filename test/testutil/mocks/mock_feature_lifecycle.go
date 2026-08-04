@@ -67,7 +67,7 @@ type MockFeatureLifecycle struct {
 	AllKBsCompletedFn     func(featureID string) (bool, error)
 
 	// Plan / review hooks.
-	NeedsPlanReviewFn                func(featureID string) error
+	NeedsPlanReviewFn func(featureID string) error
 
 	// Roadmap hooks.
 	AdvanceRoadmapPhaseFn             func(featureID string) error
@@ -83,12 +83,6 @@ type MockFeatureLifecycle struct {
 	SetRepoPublishErrorFn  func(featureID, repoName, errMsg string) error
 	TryCompletePublishFn   func(featureID string) (bool, error)
 	InitRepoImplFn         func(featureID string) error
-
-	// FailRepoCycleFn lets tests mimic the real FailRepoCycle side-effect
-	// (set Status=RepoCycleFailed, clear PendingNeedUserInputPath, clear
-	// RefactorPrompt for refactor cycles). Called after the mock records
-	// the invocation.
-	FailRepoCycleFn func(featureID, repoName, errMsg string) error
 
 	// FailRepoImplementationFn lets tests intercept the per-repo
 	// implementation failure path. The plan parameter was dropped in
@@ -380,22 +374,6 @@ func (m *MockFeatureLifecycle) MarkDone(featureID string) error {
 }
 
 // ---------------------------------------------------------------------------
-// Per-repo cycles
-// ---------------------------------------------------------------------------
-
-func (m *MockFeatureLifecycle) RemoveRepoCycle(featureID, repoName string) error {
-	m.record("RemoveRepoCycle", featureID, repoName)
-	return m.DefaultError
-}
-
-func (m *MockFeatureLifecycle) FailRepoCycle(featureID, repoName, errMsg string) error {
-	m.record("FailRepoCycle", featureID, repoName, errMsg)
-	if m.FailRepoCycleFn != nil {
-		return m.FailRepoCycleFn(featureID, repoName, errMsg)
-	}
-	return m.DefaultError
-}
-
 func (m *MockFeatureLifecycle) FailRepoImplementation(featureID, repoName, errMsg string) error {
 	m.record("FailRepoImplementation", featureID, repoName, errMsg)
 	if m.FailRepoImplementationFn != nil {

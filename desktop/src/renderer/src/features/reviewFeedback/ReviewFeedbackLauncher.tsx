@@ -13,7 +13,7 @@ import type {
   ReviewFeedbackCommentView,
 } from '../../../../shared/ipc';
 import { parseIpcError, type WizardError } from '../../wizard/ipcError';
-import { CycleFooter } from '../launcherShared';
+import { LauncherFooter } from '../launcherShared';
 import { COMMENT_TYPE_LABEL, commentKey } from '../refactor/refactorPassModel';
 
 type FetchState =
@@ -299,7 +299,7 @@ export function ReviewFeedbackLauncher({
         </label>
       ) : null}
 
-      <CycleFooter
+      <LauncherFooter
         onCancel={onCancel}
         primaryLabel={footer.label}
         primaryDisabled={footer.disabled}

@@ -143,9 +143,10 @@ func (o *Orchestrator) prepareTransactionCandidates(child, parent *feature.Featu
 		return nil, o.emitTransactionAttention(child, "parent worktrees have uncommitted changes")
 	}
 
-	// Stage merge candidates for every repository without advancing any
-	// parent ref. Each candidate is an explicit two-parent no-ff merge commit
-	// created in a temporary detached worktree.
+	// Stage candidates for every repository without advancing any parent ref.
+	// Most candidates are explicit two-parent no-ff merge commits created in a
+	// temporary detached worktree. A rebase repo that was already up to date at
+	// child creation is a pass-through candidate whose SHA is the parent anchor.
 	for i := range journal.Entries {
 		entry := &journal.Entries[i]
 		parentRepo := featureRepoByName(parent, entry.Repo)
@@ -159,6 +160,25 @@ func (o *Orchestrator) prepareTransactionCandidates(child, parent *feature.Featu
 			}
 			return nil, o.emitTransactionAttention(child, entry.Diagnostics)
 		}
+		if rebasePassThroughRepo(child, entry.Repo) {
+			if !git.IsAncestor(parentRepo.Path, entry.ChildHeadSHA, entry.ParentAnchorSHA) {
+				entry.PrepState = feature.RepoPrepFailed
+				entry.Diagnostics = fmt.Sprintf("rebase child modified up-to-date repo %s; only repos behind at launch may change", entry.Repo)
+				journal.Phase = feature.TransactionPhaseAttention
+				journal.Attention = entry.Diagnostics
+				if err := o.persistTransaction(child.ID, journal); err != nil {
+					return nil, fmt.Errorf("recording pass-through prep failure: %w", err)
+				}
+				return nil, o.emitTransactionAttention(child, entry.Diagnostics)
+			}
+			entry.CandidateSHA = entry.ParentAnchorSHA
+			entry.PrepState = feature.RepoPrepPrepared
+			if err := o.persistTransaction(child.ID, journal); err != nil {
+				return nil, fmt.Errorf("recording pass-through candidate for repo %s: %w", entry.Repo, err)
+			}
+			continue
+		}
+
 		message := fmt.Sprintf("Merge %s child %s into %s (%s)", child.Parent.Kind, child.ID, entry.ParentBranch, entry.Repo)
 		result, err := o.deps.Worktrees.CreateMergeCandidate(parentRepo.Path, entry.ParentAnchorSHA, entry.ChildHeadSHA, message)
 		if err != nil {
@@ -201,10 +221,11 @@ func (o *Orchestrator) prepareTransactionCandidates(child, parent *feature.Featu
 
 // applyTransactionCandidates applies the fully prepared candidate vector with
 // compare-and-swap ref updates against each recorded expected parent tip. It
-// durably tracks progress after every repository. If a later update fails,
-// it compensates earlier updates only when their refs still equal the
-// transaction's candidate commits. External ref movement is never
-// overwritten: ambiguous states remain intact and become integration attention.
+// durably tracks progress after every repository. Rebase pass-through
+// candidates are confirmed without moving refs. If a later update fails, it
+// compensates earlier updates only when their refs still equal the
+// transaction's candidate commits. External ref movement is never overwritten:
+// ambiguous states remain intact and become integration attention.
 func (o *Orchestrator) applyTransactionCandidates(child, parent *feature.Feature, journal *feature.TransactionJournal) error {
 	if o.deps.Worktrees == nil {
 		return fmt.Errorf("transaction: ref CAS operations are not configured")
@@ -276,6 +297,20 @@ func (o *Orchestrator) applyTransactionCandidates(child, parent *feature.Feature
 				return o.rollbackTransaction(child, parent, journal, i)
 			}
 			return o.parkApplyAttention(child, journal, entry, diag)
+		}
+
+		if passThroughCandidate(entry) {
+			if err := o.deps.Worktrees.ResetToCommit(parentWorktree, entry.CandidateSHA); err != nil {
+				diag := fmt.Sprintf("syncing parent worktree for pass-through repo %s: %v", entry.Repo, err)
+				return o.parkApplyAttention(child, journal, entry, diag)
+			}
+			entry.ApplyState = feature.RepoApplyApplied
+			entry.MergeHEAD = entry.CandidateSHA
+			entry.ObservedSHA = entry.CandidateSHA
+			if err := o.persistTransaction(child.ID, journal); err != nil {
+				return fmt.Errorf("recording pass-through apply progress for repo %s: %w", entry.Repo, err)
+			}
+			continue
 		}
 
 		// Compare-and-swap ref update.
@@ -369,6 +404,15 @@ func (o *Orchestrator) rollbackTransaction(child, parent *feature.Feature, journ
 			continue
 		}
 		if entry.ApplyState != feature.RepoApplyApplied {
+			continue
+		}
+
+		if passThroughCandidate(entry) {
+			entry.ApplyState = feature.RepoApplyRolledBack
+			entry.ObservedSHA = entry.ParentAnchorSHA
+			if err := o.persistTransaction(child.ID, journal); err != nil {
+				return fmt.Errorf("recording pass-through rollback progress for repo %s: %w", entry.Repo, err)
+			}
 			continue
 		}
 
@@ -466,6 +510,19 @@ func (o *Orchestrator) rollbackTransaction(child, parent *feature.Feature, journ
 		return fmt.Errorf("recording rolled-back transaction: %w", err)
 	}
 	return o.emitTransactionAttention(child, "transaction rolled back after apply failure")
+}
+
+func rebasePassThroughRepo(child *feature.Feature, repoName string) bool {
+	return child != nil &&
+		child.Parent != nil &&
+		child.Parent.Kind == feature.ChildKindRebase &&
+		!child.IsRebaseBehindRepo(repoName)
+}
+
+func passThroughCandidate(entry *feature.RepoTransactionEntry) bool {
+	return entry != nil &&
+		entry.CandidateSHA != "" &&
+		entry.CandidateSHA == entry.ParentAnchorSHA
 }
 
 // parkApplyAttention records a no-rollback apply failure: sets the per-repo

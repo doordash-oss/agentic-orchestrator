@@ -166,6 +166,9 @@ func (o *Orchestrator) publishRepoWithOptions(featureID, repoName string, opts P
 func (o *Orchestrator) republishRepo(f *feature.Feature, repo feature.FeatureRepo, prURL string) (string, error) {
 	workDir := repoWorkDir(repo)
 	branch := repoBranch(f, repo)
+	if err := o.assertPRAcceptsUpdates(f, repo, prURL); err != nil {
+		return "", err
+	}
 	if git.HasUncommittedChanges(workDir) {
 		if err := git.CommitAll(workDir, f.Name); err != nil {
 			_ = o.deps.Lifecycle.SetRepoPublishError(f.ID, repo.Name, err.Error())
@@ -180,6 +183,30 @@ func (o *Orchestrator) republishRepo(f *feature.Feature, repo feature.FeatureRep
 		return prURL, fmt.Errorf("set repo published: %w", err)
 	}
 	return prURL, nil
+}
+
+// assertPRAcceptsUpdates refuses a republish whose pull request is no longer
+// open. Pushing to a merged or closed PR's branch delivers commits nowhere
+// reviewable — GitHub does not reopen a merged PR — while the feature would
+// still be recorded as Published. This is the only network read in the
+// republish path; CompletionPreflight cannot make it, so it cannot tell an
+// unpublished-changes repository from a dead one.
+//
+// An indeterminate answer proceeds: a transient API or auth failure must not
+// block a legitimate republish.
+func (o *Orchestrator) assertPRAcceptsUpdates(f *feature.Feature, repo feature.FeatureRepo, prURL string) error {
+	repoPath := repo.Path
+	if repoPath == "" {
+		repoPath = repoWorkDir(repo)
+	}
+	state, err := o.deps.Remote.PRState(repoPath, prURL)
+	if err != nil || state == "" || state == git.PRStateOpen {
+		return nil
+	}
+	reason := fmt.Sprintf(
+		"pull request %s is %s; new commits cannot be delivered to it", prURL, state)
+	_ = o.deps.Lifecycle.SetRepoPublishError(f.ID, repo.Name, reason)
+	return errors.New(reason)
 }
 
 // pushRepublish fast-forwards when the remote branch is an ancestor of HEAD.

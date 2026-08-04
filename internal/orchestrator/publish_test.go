@@ -1145,3 +1145,69 @@ func runPublishGitOutput(t *testing.T, repo string, args ...string) string {
 	}
 	return strings.TrimSpace(string(out))
 }
+
+// A merged pull request whose branch was deleted still leaves PRURL recorded
+// and a stale origin/<branch> resolvable, so the republish would plain-push a
+// branch with no pull request behind it and report success. Refuse instead.
+func TestOrchestrator_Republish_RefusesWhenPRNoLongerOpen(t *testing.T) {
+	for _, state := range []string{"merged", "closed"} {
+		t.Run(state, func(t *testing.T) {
+			repoPath := newRepublishRepo(t, "feature/republish-"+state)
+			testutil.CommitFile(t, repoPath, "later.txt", "later\n", "later pass")
+			f := republishFeature("feat-republish-"+state, repoPath, "feature/republish-"+state)
+			lc := lifecycleForFeature(f)
+			lc.SetRepoPublishErrorFn = func(id, repo, msg string) error { return nil }
+			lc.TryCompletePublishFn = func(id string) (bool, error) { return false, nil }
+			fs := newFeatureStore(f)
+
+			pub := mocks.NewMockRemoteOps()
+			pub.PRStateFn = func(repoPath, prURL string) (string, error) { return state, nil }
+
+			o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs, Remote: pub}, orchestrator.Hooks{})
+
+			err := o.PublishWithOptions("feat-republish-"+state, orchestrator.PublishOptions{
+				Repos: []string{"r1"},
+			})
+			if err == nil {
+				t.Fatal("PublishWithOptions() = nil, want an error: the pull request is not open")
+			}
+			if !strings.Contains(err.Error(), state) {
+				t.Errorf("error = %q; want it to name the pull-request state %q", err.Error(), state)
+			}
+			for _, method := range []string{"Push", "ForcePush", "CreatePR"} {
+				if got := countPublisherCalls(pub, method); got != 0 {
+					t.Errorf("%s calls = %d; want 0 — nothing may be pushed", method, got)
+				}
+			}
+			assertLifecycleCall(t, lc, "SetRepoPublishError")
+		})
+	}
+}
+
+// An unavailable state lookup must not block a legitimate republish.
+func TestOrchestrator_Republish_ProceedsWhenPRStateIndeterminate(t *testing.T) {
+	repoPath := newRepublishRepo(t, "feature/republish-unknown")
+	testutil.CommitFile(t, repoPath, "later.txt", "later\n", "later pass")
+	f := republishFeature("feat-republish-unknown", repoPath, "feature/republish-unknown")
+	lc := lifecycleForFeature(f)
+	lc.SetRepoPublishedFn = func(id, repo, url string) error { return nil }
+	lc.TryCompletePublishFn = func(id string) (bool, error) { return false, nil }
+	fs := newFeatureStore(f)
+
+	pub := mocks.NewMockRemoteOps()
+	pub.PushFn = func(path, branch string) error { return nil }
+	pub.PRStateFn = func(repoPath, prURL string) (string, error) {
+		return "", errors.New("api unreachable")
+	}
+
+	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs, Remote: pub}, orchestrator.Hooks{})
+
+	if err := o.PublishWithOptions("feat-republish-unknown", orchestrator.PublishOptions{
+		Repos: []string{"r1"},
+	}); err != nil {
+		t.Fatalf("PublishWithOptions: %v", err)
+	}
+	if got := countPublisherCalls(pub, "Push"); got != 1 {
+		t.Errorf("Push calls = %d; want 1", got)
+	}
+}

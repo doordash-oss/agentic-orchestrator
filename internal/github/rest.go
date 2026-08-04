@@ -104,21 +104,34 @@ type PRInfo struct {
 	Body    string
 	BaseRef string
 	URL     string
+	// State is GitHub's "open" or "closed". A merged PR reports "closed", so
+	// Merged is what distinguishes the two terminal outcomes.
+	State  string
+	Merged bool
 }
 
-// GetPR returns body, base branch, and canonical URL of a PR.
+// GetPR returns body, base branch, canonical URL, and open/closed/merged
+// state of a PR.
 func (c *Client) GetPR(owner, repo string, number int) (PRInfo, error) {
 	var raw struct {
 		Body string `json:"body"`
 		Base struct {
 			Ref string `json:"ref"`
 		} `json:"base"`
-		HTMLURL string `json:"html_url"`
+		HTMLURL  string  `json:"html_url"`
+		State    string  `json:"state"`
+		MergedAt *string `json:"merged_at"`
 	}
 	if err := c.rest.Get(fmt.Sprintf("repos/%s/%s/pulls/%d", owner, repo, number), &raw); err != nil {
 		return PRInfo{}, err
 	}
-	return PRInfo{Body: raw.Body, BaseRef: raw.Base.Ref, URL: raw.HTMLURL}, nil
+	return PRInfo{
+		Body:    raw.Body,
+		BaseRef: raw.Base.Ref,
+		URL:     raw.HTMLURL,
+		State:   raw.State,
+		Merged:  raw.MergedAt != nil && *raw.MergedAt != "",
+	}, nil
 }
 
 // CreatePRParams describes a pull request to open.

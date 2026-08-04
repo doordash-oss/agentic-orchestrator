@@ -26,6 +26,7 @@ type MockRemoteOps struct {
 	PullRebaseFn   func(worktreePath, branch string) error
 	CreatePRFn     func(repoPath, branch, title, body, baseBranch string, draft bool) (string, error)
 	PRBaseBranchFn func(repoPath, prURL string) string
+	PRStateFn      func(repoPath, prURL string) (string, error)
 	DefaultError   error
 	Calls          []MockCall
 }
@@ -70,6 +71,16 @@ func (m *MockRemoteOps) PRBaseBranch(repoPath, prURL string) string {
 		return m.PRBaseBranchFn(repoPath, prURL)
 	}
 	return ""
+}
+
+// PRState defaults to the indeterminate answer, so tests that do not care
+// about pull-request state behave as if the lookup were unavailable.
+func (m *MockRemoteOps) PRState(repoPath, prURL string) (string, error) {
+	m.Calls = append(m.Calls, MockCall{Method: "PRState", Args: []any{repoPath, prURL}})
+	if m.PRStateFn != nil {
+		return m.PRStateFn(repoPath, prURL)
+	}
+	return "", m.DefaultError
 }
 
 type MockPRCloser struct {

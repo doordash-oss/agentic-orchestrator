@@ -24,6 +24,7 @@ type RemoteOps interface {
 	PullRebase(worktreePath, branch string) error
 	CreatePR(repoPath, branch, title, body, baseBranch string, draft bool) (string, error)
 	PRBaseBranch(repoPath, prURL string) string
+	PRState(repoPath, prURL string) (string, error)
 }
 
 type gitRemoteOps struct{}
@@ -47,4 +48,8 @@ func (gitRemoteOps) CreatePR(repoPath, branch, title, body, baseBranch string, d
 
 func (gitRemoteOps) PRBaseBranch(repoPath, prURL string) string {
 	return git.PRBaseBranch(repoPath, prURL)
+}
+
+func (gitRemoteOps) PRState(repoPath, prURL string) (string, error) {
+	return git.PRState(repoPath, prURL)
 }

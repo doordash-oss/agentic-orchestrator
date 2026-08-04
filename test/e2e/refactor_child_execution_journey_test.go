@@ -283,6 +283,10 @@ func (failingPRRemoteOps) PRBaseBranch(repoPath, prURL string) string {
 	return git.PRBaseBranch(repoPath, prURL)
 }
 
+func (failingPRRemoteOps) PRState(repoPath, prURL string) (string, error) {
+	return git.PRState(repoPath, prURL)
+}
+
 // runRefactorChildLifecycle launches one child through the API and drives it
 // through setup, the two configured review gates, scripted plan sessions,
 // stubbed implement/final-review kernels, and integration, returning the

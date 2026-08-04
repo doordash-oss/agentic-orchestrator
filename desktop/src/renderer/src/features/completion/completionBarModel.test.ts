@@ -81,4 +81,46 @@ describe('completionBarModel', () => {
       { verb: 'cleanup', label: 'Clean up', state: 'available', primary: true },
     ]);
   });
+
+  it('publish is available with the updates label when a published repo has undelivered work', () => {
+    const model = completionBarModel(
+      pf({
+        repos: [
+          { repo: 'a', publishable: true, touched: true, status: 'unpublished_changes', pendingCommits: 3 },
+        ],
+      }),
+      ALL,
+    );
+    const publish = model.find((m) => m.verb === 'publish')!;
+    expect(publish.state).toBe('available');
+    expect(publish.label).toBe('Publish updates');
+    expect(publish.primary).toBe(true);
+  });
+
+  it('first-publish eligibility outranks the updates label', () => {
+    const model = completionBarModel(
+      pf({
+        repos: [
+          { repo: 'a', publishable: true, touched: true, status: 'eligible' },
+          { repo: 'b', publishable: true, touched: true, status: 'unpublished_changes', pendingCommits: 1 },
+        ],
+      }),
+      ALL,
+    );
+    expect(model.find((m) => m.verb === 'publish')!.label).toBe('Publish');
+  });
+
+  it('merge is available with the updates label when a finished local repo has undelivered work', () => {
+    const model = completionBarModel(
+      pf({
+        repos: [
+          { repo: 'a', publishable: false, touched: true, status: 'unmerged_changes', pendingCommits: 2 },
+        ],
+      }),
+      ALL,
+    );
+    const merge = model.find((m) => m.verb === 'merge')!;
+    expect(merge.state).toBe('available');
+    expect(merge.label).toBe('Merge updates');
+  });
 });

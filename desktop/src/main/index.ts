@@ -70,6 +70,7 @@ import { AttentionNotificationCoordinator, electronNotificationSink } from './no
 import { NativeCommandController, type NativeCommandSnapshot } from './nativeCommands';
 import { DiagnosticsService } from './diagnostics';
 import {
+  FIXTURE_RELEASE_PUBLIC_KEY,
   UpdateCoordinator,
   createUpdateFixtureFetch,
   detectCanInstallInApp,
@@ -616,7 +617,10 @@ if (!hasSingleInstanceLock) {
       diagnostics,
       ...(process.env.AGENTICO_UPDATE_FIXTURE === undefined
         ? {}
-        : { fetch: createUpdateFixtureFetch(process.env.AGENTICO_UPDATE_FIXTURE) }),
+        : {
+            fetch: createUpdateFixtureFetch(process.env.AGENTICO_UPDATE_FIXTURE),
+            releasePublicKey: FIXTURE_RELEASE_PUBLIC_KEY,
+          }),
       onStateChanged: () => broadcastAppEvent({ type: 'invalidated', kind: 'updates.changed' }),
       detectActiveWork: async () => {
         const active = await detectActiveWork();

@@ -127,7 +127,11 @@ function main() {
   chmodSync(binaryPath, 0o755);
 
   const identity = createBuildIdentity({
-    desktop_version: JSON.parse(readFileSync(join(desktopDir, 'package.json'), 'utf8')).version,
+    // Release builds stamp the tag version through package-build.mjs so the
+    // identity file matches the version the packaged app reports.
+    desktop_version:
+      process.env.AGENTICO_DESKTOP_VERSION ??
+      JSON.parse(readFileSync(join(desktopDir, 'package.json'), 'utf8')).version,
     api_version: parseOpenApiInfoVersion(
       readFileSync(join(repoRoot, 'api', 'openapi.yaml'), 'utf8'),
     ),

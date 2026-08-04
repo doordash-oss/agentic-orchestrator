@@ -30,14 +30,20 @@ The design follows patterns described in Anthropic's [Building Effective Agents]
 > custom location by passing explicit `--config` and `--state-dir` flags. The
 > runtime no longer checks the legacy parent automatically.
 
-Install the desktop package for your platform from [GitHub Releases](https://github.com/doordash-oss/agentic-orchestrator/releases), then open Agentic Orchestrator. The app launches and supervises its matched bundled server.
+Install the desktop app with Homebrew (macOS):
+
+```bash
+brew install --cask doordash-oss/agentic-orchestrator/agentico-desktop
+```
+
+or install the desktop package for your platform from [GitHub Releases](https://github.com/doordash-oss/agentic-orchestrator/releases), then open Agentic Orchestrator. The app launches and supervises its matched bundled server. Releases are not yet Developer ID-signed or notarized: the cask clears macOS quarantine after install, but a DMG downloaded with a browser needs `xattr -dr com.apple.quarantine /Applications/Agentico.app` before first launch. On Linux, install the AppImage or deb from the release.
 
 For a headless server, external-runtime setup, or development, install the `agentico` CLI with Homebrew or a prebuilt binary. Build from source only if you're working on Agentico itself.
 
-**Homebrew** (recommended — macOS/Linux):
+**Homebrew** (recommended — macOS; on Linux use the prebuilt binary, Homebrew casks are macOS-only):
 
 ```bash
-brew install doordash-oss/agentic-orchestrator/agentico
+brew install --cask doordash-oss/agentic-orchestrator/agentico
 ```
 
 **Prebuilt binary** — no Homebrew or Go (macOS/Linux, amd64/arm64):

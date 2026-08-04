@@ -314,12 +314,16 @@ func TestIsHomebrewBinary(t *testing.T) {
 		{"/opt/homebrew/Cellar/agentico/0.141.0/bin/agentico", true},            // Apple Silicon
 		{"/usr/local/Cellar/agentico/1.2.3/bin/agentico", true},                 // Intel
 		{"/home/linuxbrew/.linuxbrew/Cellar/agentico/1.0.0/bin/agentico", true}, // Linuxbrew
+		// Resolved Caskroom paths (cask binary stanza pours).
+		{"/opt/homebrew/Caskroom/agentico/0.149.0/agentico", true}, // Apple Silicon
+		{"/usr/local/Caskroom/agentico/0.149.0/agentico", true},    // Intel
 		// Non-Homebrew locations.
 		{"/Users/me/.local/bin/agentico", false},
 		{"/usr/local/bin/agentico", false}, // a brew bin symlink dir, not the resolved Cellar target
 		{"/opt/homebrew/bin/agentico", false},
 		{"/home/user/go/bin/agentico", false},
-		{"/CellarSomething/agentico", false}, // substring without the surrounding separators must not match
+		{"/CellarSomething/agentico", false},   // substring without the surrounding separators must not match
+		{"/CaskroomSomething/agentico", false}, // same for the Caskroom segment
 		{"", false},
 	}
 	for _, tt := range tests {

@@ -17,10 +17,31 @@ import { fileURLToPath } from 'node:url';
 import { flipFuses, FuseVersion } from '@electron/fuses';
 import { PRODUCTION_FUSE_POLICY } from './lib/fuse-policy.mjs';
 import { unpackedExecutablePath } from './lib/package-layout.mjs';
+import { desktopVersionFromExactTag } from './lib/release-version.mjs';
 
 const desktopDir = dirname(dirname(fileURLToPath(import.meta.url)));
 const require = createRequire(import.meta.url);
 const unpackedOnly = process.argv.slice(2).includes('--unpacked');
+
+// A package built exactly on a clean release tag carries that tag's version —
+// the same tag identity the Go server gets via git describe — so the packaged
+// app.getVersion() can be compared against the GitHub Releases feed. Any other
+// build (untagged HEAD, dirty tree) keeps the static development version from
+// package.json. AGENTICO_DESKTOP_VERSION hands the same value to
+// prepare-server.mjs for build-identity.json's desktop_version.
+function releaseTagVersion() {
+  const gitOptions = { cwd: desktopDir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] };
+  try {
+    if (execFileSync('git', ['status', '--porcelain'], gitOptions).trim() !== '') {
+      return null;
+    }
+    return desktopVersionFromExactTag(
+      execFileSync('git', ['describe', '--tags', '--exact-match'], gitOptions),
+    );
+  } catch {
+    return null;
+  }
+}
 
 function run(command, args) {
   console.log(`package-build: ${command} ${args.join(' ')}`);
@@ -36,6 +57,12 @@ function nodeBin(pkg, relBin) {
 // installed version explicitly so packaging always matches the dev runtime.
 const electronVersion = require('electron/package.json').version;
 const builderArgs = ['--publish', 'never', `--config.electronVersion=${electronVersion}`];
+const stampedVersion = releaseTagVersion();
+if (stampedVersion !== null) {
+  builderArgs.push(`--config.extraMetadata.version=${stampedVersion}`);
+  process.env.AGENTICO_DESKTOP_VERSION = stampedVersion;
+  console.log(`package-build: stamping desktop version ${stampedVersion} from the release tag`);
+}
 if (unpackedOnly) {
   builderArgs.push('--dir');
   if (process.platform === 'darwin') {

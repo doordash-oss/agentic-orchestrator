@@ -9,7 +9,7 @@ LDFLAGS := -s -w -X github.com/doordash-oss/agentic-orchestrator/internal/buildi
 APP_NAME        := Agentico.app
 APP_INSTALL_DIR ?= /Applications
 
-.PHONY: build install install-cli install-desktop install-system uninstall clean lint generate-openapi test-fast jaeger jaeger-stop jaeger-status
+.PHONY: build install install-cli install-desktop install-system uninstall clean lint generate-openapi test-fast release jaeger jaeger-stop jaeger-status
 
 build:
 	rm -f $(BIN_DIR)/$(BINARY)
@@ -55,6 +55,21 @@ install-desktop:
 	  *) \
 	    echo "Desktop install unsupported on this platform." ;; \
 	esac
+
+# Cut a release from a clean checkout of a vX.Y.Z tag, run locally by the
+# release operator (no CI credentials involved):
+#   1. package the desktop DMG (stamped with the tag version),
+#   2. goreleaser: CLI archives + GitHub release + signed checksums covering
+#      the DMG + the agentico CLI cask in the tap,
+#   3. publish the agentico-desktop cask for the DMG to the tap.
+# Extra goreleaser flags (e.g. --release-notes) go in GORELEASER_FLAGS.
+release:
+	@[ -z "$$(git status --porcelain)" ] || { echo "release: working tree is dirty"; exit 1; }
+	@git describe --tags --exact-match >/dev/null 2>&1 || { echo "release: HEAD is not on a release tag"; exit 1; }
+	@[ -d node_modules ] || npm ci
+	npm run package:build --workspace desktop
+	goreleaser release --clean $(GORELEASER_FLAGS)
+	node desktop/scripts/publish-desktop-cask.mjs
 
 install-system: build
 	cp $(BIN_DIR)/$(BINARY) $(INSTALL_DIR)/$(BINARY)

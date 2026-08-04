@@ -29,7 +29,18 @@ const TRUSTED_DOWNLOAD_HOSTS = new Set([
   'objects.githubusercontent.com',
   'github-releases.githubusercontent.com',
 ]);
-const DEFAULT_RELEASE_PUBLIC_KEY = `-----BEGIN PUBLIC KEY-----
+// Trust root for signed release metadata. The matching private key lives only
+// with the release operator (see desktop/scripts/release-sign.mjs); it is
+// never committed or handed to CI. Rotating it means shipping a release whose
+// app embeds the new public key.
+const RELEASE_PUBLIC_KEY = `-----BEGIN PUBLIC KEY-----
+MCowBQYDK2VwAyEAhuVYcgW0zOV+M0/dJ/b+KjDBUijMv3ieZCwJB7RIhdU=
+-----END PUBLIC KEY-----`;
+
+// Public half of the committed test fixture key (test/e2e/helpers/
+// update-fixtures.ts). Only trusted when AGENTICO_UPDATE_FIXTURE routes the
+// feed to a local fixture — never for real GitHub Releases traffic.
+export const FIXTURE_RELEASE_PUBLIC_KEY = `-----BEGIN PUBLIC KEY-----
 MCowBQYDK2VwAyEAmhM+TNlJSPzGSFwd/DakW3G6MzxCpouletrsW4WAezE=
 -----END PUBLIC KEY-----`;
 
@@ -120,7 +131,7 @@ export class UpdateCoordinator {
     this.arch = options.arch ?? process.arch;
     this.packageFormat =
       options.packageFormat ?? detectPackageFormat(this.platform, {}, process.execPath);
-    this.releasePublicKey = options.releasePublicKey ?? DEFAULT_RELEASE_PUBLIC_KEY;
+    this.releasePublicKey = options.releasePublicKey ?? RELEASE_PUBLIC_KEY;
     this.canInstallInApp = options.canInstallInApp ?? this.packageFormat !== 'deb';
     this.state = {
       status: 'idle',

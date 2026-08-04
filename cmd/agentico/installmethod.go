@@ -179,15 +179,18 @@ func sameDir(binaryDir, goBinDir string) bool {
 }
 
 // isHomebrewBinary reports whether the symlink-resolved binary path sits inside a
-// Homebrew Cellar (<prefix>/Cellar/...). The "/Cellar/" segment is prefix-agnostic,
-// covering /opt/homebrew, /usr/local, and Linuxbrew. Symlink resolution happens in
-// the caller, so this stays pure and table-testable.
+// Homebrew Cellar (<prefix>/Cellar/..., formula pours) or Caskroom
+// (<prefix>/Caskroom/..., cask binary stanzas — how the tap ships the CLI since
+// the formula→cask migration). Both segments are prefix-agnostic, covering
+// /opt/homebrew, /usr/local, and Linuxbrew. Symlink resolution happens in the
+// caller, so this stays pure and table-testable.
 func isHomebrewBinary(resolvedBinaryPath string) bool {
 	if resolvedBinaryPath == "" {
 		return false
 	}
 	sep := string(os.PathSeparator)
-	return strings.Contains(resolvedBinaryPath, sep+"Cellar"+sep)
+	return strings.Contains(resolvedBinaryPath, sep+"Cellar"+sep) ||
+		strings.Contains(resolvedBinaryPath, sep+"Caskroom"+sep)
 }
 
 // installInputs are the five signals classifyInstallMethod consumes for the

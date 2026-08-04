@@ -51,6 +51,10 @@ mac:
   target:
     - target: dmg
       arch: universal
+  # The in-app updater selects macOS assets by /mac|darwin/ + .dmg and the
+  # release URL stays version-agnostic (the tag carries the version), so the
+  # artifact name is fixed: Agentico-mac-universal.dmg.
+  artifactName: ${productName}-mac-${arch}.${ext}
   category: public.app-category.developer-tools
   hardenedRuntime: true
   # Development build: use an ad-hoc signature instead of looking up a
@@ -74,3 +78,7 @@ linux:
 # (@agentico/desktop) and cannot be written; use the Debian convention.
 deb:
   artifactName: agentico_${version}_${arch}.${ext}
+# The in-app updater selects AppImage assets by arch token, which the default
+# name (productName-version.AppImage) lacks.
+appImage:
+  artifactName: ${productName}-${arch}.${ext}

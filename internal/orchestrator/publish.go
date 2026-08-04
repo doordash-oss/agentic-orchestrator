@@ -64,6 +64,13 @@ func (o *Orchestrator) publishRepoWithOptions(featureID, repoName string, opts P
 	workDir := repoWorkDir(repo)
 	branch := repoBranch(f, repo)
 
+	// A repository that already has a pull request is re-pushed, never
+	// re-described: CreatePR cannot update an existing PR's body, so
+	// generating one would spend an agent call on discarded text.
+	if state := f.RepoStates[repoName]; state != nil && state.PRURL != "" {
+		return o.republishRepo(f, repo, state.PRURL)
+	}
+
 	// Commit any uncommitted changes.
 	if git.HasUncommittedChanges(workDir) {
 		if commitErr := git.CommitAll(workDir, f.Name); commitErr != nil {
@@ -152,6 +159,45 @@ func (o *Orchestrator) publishRepoWithOptions(featureID, repoName string, opts P
 	}
 
 	return prURL, nil
+}
+
+// republishRepo pushes new local work to a repository that already has a pull
+// request and re-records the existing URL.
+func (o *Orchestrator) republishRepo(f *feature.Feature, repo feature.FeatureRepo, prURL string) (string, error) {
+	workDir := repoWorkDir(repo)
+	branch := repoBranch(f, repo)
+	if git.HasUncommittedChanges(workDir) {
+		if err := git.CommitAll(workDir, f.Name); err != nil {
+			_ = o.deps.Lifecycle.SetRepoPublishError(f.ID, repo.Name, err.Error())
+			return "", fmt.Errorf("commit failed: %w", err)
+		}
+	}
+	if err := o.pushRepublish(workDir, branch); err != nil {
+		_ = o.deps.Lifecycle.SetRepoPublishError(f.ID, repo.Name, err.Error())
+		return "", err
+	}
+	if err := o.deps.Lifecycle.SetRepoPublished(f.ID, repo.Name, prURL); err != nil {
+		return prURL, fmt.Errorf("set repo published: %w", err)
+	}
+	return prURL, nil
+}
+
+// pushRepublish fast-forwards when the remote branch is an ancestor of HEAD.
+// Otherwise the branch was rewritten locally and needs a lease push; the
+// best-effort fetch first makes the lease compare against the true remote tip
+// instead of a stale tracking ref.
+func (o *Orchestrator) pushRepublish(workDir, branch string) error {
+	if git.IsAncestor(workDir, "origin/"+branch, "HEAD") {
+		if err := o.deps.Remote.Push(workDir, branch); err != nil {
+			return fmt.Errorf("push failed: %w", err)
+		}
+		return nil
+	}
+	_ = git.Fetch(workDir)
+	if err := o.deps.Remote.ForcePush(workDir, branch); err != nil {
+		return fmt.Errorf("force push failed: %w", err)
+	}
+	return nil
 }
 
 func publishRequiresLeasePush(f *feature.Feature) bool {

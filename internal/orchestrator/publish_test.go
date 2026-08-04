@@ -934,3 +934,152 @@ func newPublishDescriptionPhaseRunner(t *testing.T, output string, permissionFai
 	}
 	return pr
 }
+
+// newRepublishRepo returns a worktree whose branch is already on its bare
+// origin, so origin/<branch> resolves and a republish has something to compare.
+func newRepublishRepo(t *testing.T, branch string) string {
+	t.Helper()
+	repo, bare := testutil.InitPublishReadyGitRepo(t)
+	testutil.CreateBranch(t, repo, branch)
+	testutil.CommitFile(t, repo, "first.txt", "first\n", "first commit")
+	testutil.SimulatePush(t, repo, bare, branch, branch)
+	return repo
+}
+
+func republishFeature(id, repoPath, branch string) *feature.Feature {
+	return &feature.Feature{
+		ID:           id,
+		Name:         "republish",
+		Slug:         "republish",
+		Status:       feature.StatusCodeReady,
+		CurrentPhase: feature.PhasePublish,
+		Checkpoints:  feature.Checkpoints{ManualPublish: true},
+		Repos: []feature.FeatureRepo{
+			{Name: "r1", Path: repoPath, WorktreePath: repoPath, Branch: branch, BaseBranch: mainBranch},
+		},
+		RepoStates: map[string]*feature.RepoState{
+			"r1": {Touched: true, PRURL: "https://github.com/org/r1/pull/1"},
+		},
+	}
+}
+
+// A repository whose remote branch is an ancestor of HEAD is fast-forwarded.
+// No PR is created and no description is generated — with a nil PhaseRunner,
+// any attempt to generate one would fail the publish.
+func TestOrchestrator_Republish_FastForwardPushesWithoutCreatePR(t *testing.T) {
+	repoPath := newRepublishRepo(t, "feature/republish")
+	testutil.CommitFile(t, repoPath, "later.txt", "later\n", "later pass")
+	f := republishFeature("feat-republish-ff", repoPath, "feature/republish")
+	lc := lifecycleForFeature(f)
+	lc.SetRepoPublishedFn = func(id, repo, url string) error { return nil }
+	lc.TryCompletePublishFn = func(id string) (bool, error) { return false, nil }
+	fs := newFeatureStore(f)
+
+	pub := mocks.NewMockRemoteOps()
+	pub.PushFn = func(path, branch string) error { return nil }
+
+	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs, Remote: pub}, orchestrator.Hooks{})
+
+	if err := o.PublishWithOptions("feat-republish-ff", orchestrator.PublishOptions{
+		Repos: []string{"r1"},
+	}); err != nil {
+		t.Fatalf("PublishWithOptions: %v", err)
+	}
+
+	if got := countPublisherCalls(pub, "Push"); got != 1 {
+		t.Errorf("Push calls = %d; want 1", got)
+	}
+	for _, method := range []string{"ForcePush", "CreatePR"} {
+		if got := countPublisherCalls(pub, method); got != 0 {
+			t.Errorf("%s calls = %d; want 0", method, got)
+		}
+	}
+	call := assertLifecycleCall(t, lc, "SetRepoPublished")
+	if call == nil {
+		t.FailNow()
+	}
+}
+
+// A locally rewritten branch cannot fast-forward, so the republish uses a
+// lease push instead of clobbering blindly.
+func TestOrchestrator_Republish_RewriteUsesLeasePush(t *testing.T) {
+	repoPath := newRepublishRepo(t, "feature/republish-rewrite")
+	runPublishGit(t, repoPath, "reset", "--hard", "HEAD~1")
+	testutil.CommitFile(t, repoPath, "rewritten.txt", "rewritten\n", "rewritten pass")
+	f := republishFeature("feat-republish-rw", repoPath, "feature/republish-rewrite")
+	lc := lifecycleForFeature(f)
+	lc.SetRepoPublishedFn = func(id, repo, url string) error { return nil }
+	lc.TryCompletePublishFn = func(id string) (bool, error) { return false, nil }
+	fs := newFeatureStore(f)
+
+	pub := mocks.NewMockRemoteOps()
+	pub.ForcePushFn = func(path, branch string) error { return nil }
+
+	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs, Remote: pub}, orchestrator.Hooks{})
+
+	if err := o.PublishWithOptions("feat-republish-rw", orchestrator.PublishOptions{
+		Repos: []string{"r1"},
+	}); err != nil {
+		t.Fatalf("PublishWithOptions: %v", err)
+	}
+
+	if got := countPublisherCalls(pub, "ForcePush"); got != 1 {
+		t.Errorf("ForcePush calls = %d; want 1", got)
+	}
+	for _, method := range []string{"Push", "CreatePR"} {
+		if got := countPublisherCalls(pub, method); got != 0 {
+			t.Errorf("%s calls = %d; want 0", method, got)
+		}
+	}
+}
+
+// Uncommitted work is committed before the republish pushes.
+func TestOrchestrator_Republish_CommitsUncommittedChanges(t *testing.T) {
+	repoPath := newRepublishRepo(t, "feature/republish-dirty")
+	if err := os.WriteFile(filepath.Join(repoPath, "dirty.txt"), []byte("dirty\n"), 0o644); err != nil {
+		t.Fatalf("write dirty file: %v", err)
+	}
+	f := republishFeature("feat-republish-dirty", repoPath, "feature/republish-dirty")
+	lc := lifecycleForFeature(f)
+	lc.SetRepoPublishedFn = func(id, repo, url string) error { return nil }
+	lc.TryCompletePublishFn = func(id string) (bool, error) { return false, nil }
+	fs := newFeatureStore(f)
+
+	pub := mocks.NewMockRemoteOps()
+	pub.PushFn = func(path, branch string) error { return nil }
+
+	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs, Remote: pub}, orchestrator.Hooks{})
+
+	if err := o.PublishWithOptions("feat-republish-dirty", orchestrator.PublishOptions{
+		Repos: []string{"r1"},
+	}); err != nil {
+		t.Fatalf("PublishWithOptions: %v", err)
+	}
+	if git.HasUncommittedChanges(repoPath) {
+		t.Error("republish left local changes uncommitted")
+	}
+}
+
+// A push failure is recorded on the repository and surfaced to the caller.
+func TestOrchestrator_Republish_PushFailureRecorded(t *testing.T) {
+	repoPath := newRepublishRepo(t, "feature/republish-fail")
+	testutil.CommitFile(t, repoPath, "later.txt", "later\n", "later pass")
+	f := republishFeature("feat-republish-fail", repoPath, "feature/republish-fail")
+	lc := lifecycleForFeature(f)
+	lc.SetRepoPublishErrorFn = func(id, repo, msg string) error { return nil }
+	lc.TryCompletePublishFn = func(id string) (bool, error) { return false, nil }
+	fs := newFeatureStore(f)
+
+	pub := mocks.NewMockRemoteOps()
+	pub.PushFn = func(path, branch string) error { return errors.New("remote rejected") }
+
+	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs, Remote: pub}, orchestrator.Hooks{})
+
+	err := o.PublishWithOptions("feat-republish-fail", orchestrator.PublishOptions{
+		Repos: []string{"r1"},
+	})
+	if err == nil {
+		t.Fatal("expected an error from the failing push, got nil")
+	}
+	assertLifecycleCall(t, lc, "SetRepoPublishError")
+}

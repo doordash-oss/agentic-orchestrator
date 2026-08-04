@@ -21,6 +21,8 @@ describe('CompletionService.preflightCompletion', () => {
                   pending_commits: 3,
                   pending_dirty: true,
                   push_mode: 'rewrite',
+                  pending_dirty_files: ['a.go', 'b.go'],
+                  pending_dirty_file_total: 5,
                 },
               ],
             },
@@ -35,6 +37,8 @@ describe('CompletionService.preflightCompletion', () => {
       pendingCommits: 3,
       pendingDirty: true,
       pushMode: 'rewrite',
+      pendingDirtyFiles: ['a.go', 'b.go'],
+      pendingDirtyFileTotal: 5,
     });
   });
 });

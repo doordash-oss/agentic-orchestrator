@@ -16,6 +16,8 @@ export interface PendingDeliveryRepo {
   pushMode?: 'fast_forward' | 'rewrite';
   baseBranch?: string;
   prUrl?: string;
+  dirtyFiles: string[];
+  dirtyFileTotal: number;
 }
 
 export interface PendingDelivery {
@@ -70,5 +72,7 @@ function pendingRepo(repo: CompletionPreflightRepo): PendingDeliveryRepo {
     ...(repo.pushMode === undefined ? {} : { pushMode: repo.pushMode }),
     ...(repo.baseBranch === undefined ? {} : { baseBranch: repo.baseBranch }),
     ...(repo.prUrl === undefined ? {} : { prUrl: repo.prUrl }),
+    dirtyFiles: repo.pendingDirtyFiles ?? [],
+    dirtyFileTotal: repo.pendingDirtyFileTotal ?? 0,
   };
 }

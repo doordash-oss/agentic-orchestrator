@@ -130,4 +130,114 @@ describe('PublishModalBody', () => {
     await userEvent.type(screen.getByLabelText('PR title'), 'Ship it');
     expect(screen.getByRole('button', { name: 'Publish' })).toBeEnabled();
   });
+
+  it('lists dirty files and gates publish on the confirmation checkbox', async () => {
+    const dispatchAction = vi.fn().mockResolvedValue({ result: 'published' });
+    render(
+      <PublishModalBody
+        featureId="abcd1234ef567890"
+        preflight={{
+          featureId: 'abcd1234ef567890',
+          sourceRevision: 'rev-1',
+          canMarkDone: true,
+          repos: [
+            {
+              repo: 'api',
+              publishable: true,
+              touched: true,
+              status: 'unpublished_changes',
+              pendingCommits: 3,
+              pendingDirty: true,
+              pushMode: 'rewrite',
+              prUrl: 'https://example/pull/1',
+              pendingDirtyFiles: ['src/a.ts', 'src/b.ts'],
+              pendingDirtyFileTotal: 2,
+            },
+          ],
+        }}
+        dispatchAction={dispatchAction}
+        generatePublishDescription={vi.fn()}
+        openExternal={vi.fn()}
+        onDispatched={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText('src/a.ts')).toBeInTheDocument();
+    expect(screen.getByText('src/b.ts')).toBeInTheDocument();
+    expect(
+      screen.getByText('api — 2 uncommitted files will be committed and pushed:'),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/more$/)).not.toBeInTheDocument();
+
+    const submit = screen.getByRole('button', { name: 'Publish updates' });
+    expect(submit).toBeDisabled();
+
+    await userEvent.click(screen.getByRole('checkbox', { name: 'Commit uncommitted files' }));
+    expect(submit).toBeEnabled();
+
+    await userEvent.click(submit);
+    expect(dispatchAction).toHaveBeenCalledWith('abcd1234ef567890', 'publish', {
+      source_revision: 'rev-1',
+      repos: ['api'],
+    });
+  });
+
+  it('renders no dirty notice and needs no confirmation for a clean repo', () => {
+    render(
+      <PublishModalBody
+        featureId="abcd1234ef567890"
+        preflight={{
+          featureId: 'abcd1234ef567890',
+          sourceRevision: 'rev-1',
+          canMarkDone: true,
+          repos: [
+            {
+              repo: 'api',
+              publishable: true,
+              touched: true,
+              status: 'unpublished_changes',
+              pendingCommits: 3,
+            },
+          ],
+        }}
+        dispatchAction={vi.fn()}
+        generatePublishDescription={vi.fn()}
+        openExternal={vi.fn()}
+        onDispatched={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByText('Uncommitted changes')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Publish updates' })).toBeEnabled();
+  });
+
+  it('renders a +N more line when the dirty file sample is truncated', () => {
+    render(
+      <PublishModalBody
+        featureId="abcd1234ef567890"
+        preflight={{
+          featureId: 'abcd1234ef567890',
+          sourceRevision: 'rev-1',
+          canMarkDone: true,
+          repos: [
+            {
+              repo: 'api',
+              publishable: true,
+              touched: true,
+              status: 'unpublished_changes',
+              pendingDirty: true,
+              pendingDirtyFiles: ['src/a.ts', 'src/b.ts'],
+              pendingDirtyFileTotal: 5,
+            },
+          ],
+        }}
+        dispatchAction={vi.fn()}
+        generatePublishDescription={vi.fn()}
+        openExternal={vi.fn()}
+        onDispatched={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText('+3 more')).toBeInTheDocument();
+  });
 });

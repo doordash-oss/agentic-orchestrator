@@ -1350,6 +1350,11 @@ type CompletionRepoResult struct {
 	PendingCommits int
 	PendingDirty   bool
 	PushMode       string
+	// PendingDirtyFiles is a bounded sample of the uncommitted paths a
+	// publish would commit; PendingDirtyFileTotal is the true count, which
+	// can exceed the sample length.
+	PendingDirtyFiles     []string
+	PendingDirtyFileTotal int
 }
 
 // repoPublishable reports whether repo is publishable. A nil Publishable

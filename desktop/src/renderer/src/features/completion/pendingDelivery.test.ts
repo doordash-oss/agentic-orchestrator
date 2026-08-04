@@ -36,9 +36,46 @@ describe('pendingDeliverySummary', () => {
       ]),
     );
     expect(pending.publishRepos).toEqual([
-      { repo: 'api', commits: 3, dirty: false, pushMode: 'rewrite', prUrl: 'https://example/pull/1' },
+      {
+        repo: 'api',
+        commits: 3,
+        dirty: false,
+        pushMode: 'rewrite',
+        prUrl: 'https://example/pull/1',
+        dirtyFiles: [],
+        dirtyFileTotal: 0,
+      },
     ]);
-    expect(pending.mergeRepos).toEqual([{ repo: 'core', commits: 1, dirty: false, baseBranch: 'main' }]);
+    expect(pending.mergeRepos).toEqual([
+      { repo: 'core', commits: 1, dirty: false, baseBranch: 'main', dirtyFiles: [], dirtyFileTotal: 0 },
+    ]);
+  });
+
+  it('defaults dirtyFiles and dirtyFileTotal when the server omits them', () => {
+    const pending = pendingDeliverySummary(
+      pf([
+        { repo: 'api', publishable: true, touched: true, status: 'unpublished_changes' },
+      ]),
+    );
+    expect(pending.publishRepos[0]!.dirtyFiles).toEqual([]);
+    expect(pending.publishRepos[0]!.dirtyFileTotal).toBe(0);
+  });
+
+  it('carries the dirty file sample and true total from the preflight', () => {
+    const pending = pendingDeliverySummary(
+      pf([
+        {
+          repo: 'api',
+          publishable: true,
+          touched: true,
+          status: 'unpublished_changes',
+          pendingDirtyFiles: ['a.go', 'b.go'],
+          pendingDirtyFileTotal: 5,
+        },
+      ]),
+    );
+    expect(pending.publishRepos[0]!.dirtyFiles).toEqual(['a.go', 'b.go']);
+    expect(pending.publishRepos[0]!.dirtyFileTotal).toBe(5);
   });
 
   it('is empty for a null preflight', () => {
@@ -62,8 +99,8 @@ describe('pendingDeliveryTotals', () => {
   it('sums commits and ors dirtiness', () => {
     expect(
       pendingDeliveryTotals([
-        { repo: 'a', commits: 2, dirty: false },
-        { repo: 'b', commits: 1, dirty: true },
+        { repo: 'a', commits: 2, dirty: false, dirtyFiles: [], dirtyFileTotal: 0 },
+        { repo: 'b', commits: 1, dirty: true, dirtyFiles: [], dirtyFileTotal: 0 },
       ]),
     ).toEqual({ commits: 3, dirty: true });
   });
@@ -73,15 +110,18 @@ describe('pendingDeliveryFact', () => {
   it('labels unpublished work and prefers it over unmerged', () => {
     expect(
       pendingDeliveryFact({
-        publishRepos: [{ repo: 'a', commits: 3, dirty: false }],
-        mergeRepos: [{ repo: 'b', commits: 1, dirty: false }],
+        publishRepos: [{ repo: 'a', commits: 3, dirty: false, dirtyFiles: [], dirtyFileTotal: 0 }],
+        mergeRepos: [{ repo: 'b', commits: 1, dirty: false, dirtyFiles: [], dirtyFileTotal: 0 }],
       }),
     ).toEqual({ label: 'Unpublished', value: '3 commits' });
   });
 
   it('labels unmerged work when nothing is unpublished', () => {
     expect(
-      pendingDeliveryFact({ publishRepos: [], mergeRepos: [{ repo: 'b', commits: 1, dirty: true }] }),
+      pendingDeliveryFact({
+        publishRepos: [],
+        mergeRepos: [{ repo: 'b', commits: 1, dirty: true, dirtyFiles: [], dirtyFileTotal: 0 }],
+      }),
     ).toEqual({ label: 'Unmerged', value: '1 commit · uncommitted changes' });
   });
 

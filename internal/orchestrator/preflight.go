@@ -128,6 +128,15 @@ func (o *Orchestrator) applyPendingDelivery(f *feature.Feature, repo feature.Fea
 	}
 	result.PendingCommits = work.Commits
 	result.PendingDirty = work.Dirty
+	// A preflight that cannot enumerate must not claim there are no files:
+	// when Worktrees is unset or InspectCleanliness errors, both fields stay
+	// zero-valued and PendingDirty alone carries the signal.
+	if work.Dirty && o.deps.Worktrees != nil {
+		if report, err := o.deps.Worktrees.InspectCleanliness(repoWorkDir(repo), feature.DefaultDirtyPathLimit); err == nil && report != nil {
+			result.PendingDirtyFiles = append(append(append([]string{}, report.Staged...), report.Unstaged...), report.Untracked...)
+			result.PendingDirtyFileTotal = report.StagedTotal + report.UnstagedTotal + report.UntrackedTotal
+		}
+	}
 	if result.Publishable && result.PRURL != "" {
 		result.PushMode = completionPushModeFastForward
 		if work.DestinationAhead > 0 {

@@ -291,7 +291,10 @@ describe('AftercareWorkspace', () => {
       <AftercareWorkspace
         snapshot={featureSnapshot({ status: 'CodeReady', activeRun: 8, actions: [] })}
         run={completedRun}
-        pending={{ publishRepos: [{ repo: 'api', commits: 3, dirty: false }], mergeRepos: [] }}
+        pending={{
+          publishRepos: [{ repo: 'api', commits: 3, dirty: false, dirtyFiles: [], dirtyFileTotal: 0 }],
+          mergeRepos: [],
+        }}
         onAction={vi.fn()}
         onOpenRunRecord={vi.fn()}
         onOpenChanges={vi.fn()}

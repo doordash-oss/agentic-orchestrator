@@ -1221,6 +1221,12 @@ type CompletionPreflightRepo struct {
 	// PendingDirty Whether the worktree carries uncommitted changes that have not been delivered.
 	PendingDirty bool `json:"pending_dirty,omitempty"`
 
+	// PendingDirtyFileTotal True count of uncommitted paths, which can exceed the listed sample.
+	PendingDirtyFileTotal int `json:"pending_dirty_file_total,omitempty"`
+
+	// PendingDirtyFiles Bounded list of uncommitted paths a publish would commit. May be shorter than pending_dirty_file_total.
+	PendingDirtyFiles []string `json:"pending_dirty_files,omitempty"`
+
 	// PrURL Current PR URL when the repository has been published.
 	PrURL       string `json:"pr_url,omitempty"`
 	Publishable bool   `json:"publishable"`

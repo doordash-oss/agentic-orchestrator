@@ -23,6 +23,7 @@ import (
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 )
 
 type completionFixture struct {
@@ -317,6 +318,30 @@ func newPendingDeliveryOrchestrator(t *testing.T, status feature.Status, repo fe
 	return New(Deps{Lifecycle: manager, Store: store}, Hooks{})
 }
 
+// newPendingDeliveryOrchestratorWithWorktrees is newPendingDeliveryOrchestrator
+// plus a real WorktreeOps dep, so applyPendingDelivery can enumerate dirty
+// files via InspectCleanliness.
+func newPendingDeliveryOrchestratorWithWorktrees(t *testing.T, status feature.Status, repo feature.FeatureRepo, state *feature.RepoState) *Orchestrator {
+	t.Helper()
+	store := feature.NewStore(t.TempDir())
+	manager := feature.NewManager(store, config.NewDefault())
+	f := &feature.Feature{
+		ID:            "feat-pending",
+		Name:          "Pending",
+		Slug:          "pending",
+		Status:        status,
+		SchemaVersion: feature.SchemaVersionCurrent,
+		ActiveRun:     1,
+		RunCount:      1,
+		Repos:         []feature.FeatureRepo{repo},
+		RepoStates:    map[string]*feature.RepoState{repo.Name: state},
+	}
+	if err := store.Save(f); err != nil {
+		t.Fatalf("save feature: %v", err)
+	}
+	return New(Deps{Lifecycle: manager, Store: store, Worktrees: git.NewWorktreeManager(t.TempDir())}, Hooks{})
+}
+
 func pendingDeliveryRepo(t *testing.T, publishable bool) feature.FeatureRepo {
 	t.Helper()
 	wt := pendingDeliveryWorktree(t)
@@ -413,6 +438,59 @@ func TestCompletionPreflightReportsUnmergedChanges(t *testing.T) {
 	}
 	if got.PushMode != "" {
 		t.Errorf("push mode = %q; want empty for a local-only repository", got.PushMode)
+	}
+}
+
+func TestCompletionPreflightListsDirtyFiles(t *testing.T) {
+	t.Parallel()
+	repo := pendingDeliveryRepo(t, true)
+	if err := os.WriteFile(filepath.Join(repo.WorktreePath, "tracked.txt"), []byte("committed"), 0o644); err != nil {
+		t.Fatalf("write tracked file: %v", err)
+	}
+	runCompletionGit(t, repo.WorktreePath, "add", "tracked.txt")
+	runCompletionGit(t, repo.WorktreePath, "commit", "-m", "add tracked file")
+	if err := os.WriteFile(filepath.Join(repo.WorktreePath, "tracked.txt"), []byte("modified"), 0o644); err != nil {
+		t.Fatalf("modify tracked file: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repo.WorktreePath, "untracked.txt"), []byte("new file"), 0o644); err != nil {
+		t.Fatalf("write untracked file: %v", err)
+	}
+	o := newPendingDeliveryOrchestratorWithWorktrees(t, feature.StatusCodeReady, repo,
+		&feature.RepoState{Touched: true, PRURL: "https://github.example/repo-a/pull/1"})
+
+	got := onlyPendingRepo(t, o)
+	if !got.PendingDirty {
+		t.Fatal("pending dirty = false; want true")
+	}
+	if got.PendingDirtyFileTotal != 2 {
+		t.Errorf("pending dirty file total = %d; want 2", got.PendingDirtyFileTotal)
+	}
+	want := map[string]bool{"tracked.txt": true, "untracked.txt": true}
+	if len(got.PendingDirtyFiles) != 2 {
+		t.Fatalf("pending dirty files = %v; want 2 entries", got.PendingDirtyFiles)
+	}
+	for _, name := range got.PendingDirtyFiles {
+		if !want[name] {
+			t.Errorf("unexpected dirty file %q", name)
+		}
+	}
+}
+
+func TestCompletionPreflightWithoutWorktreesLeavesDirtyFilesUnset(t *testing.T) {
+	t.Parallel()
+	repo := pendingDeliveryRepo(t, true)
+	if err := os.WriteFile(filepath.Join(repo.WorktreePath, "README.md"), []byte("tracked change"), 0o644); err != nil {
+		t.Fatalf("write tracked file: %v", err)
+	}
+	o := newPendingDeliveryOrchestrator(t, feature.StatusCodeReady, repo,
+		&feature.RepoState{Touched: true, PRURL: "https://github.example/repo-a/pull/1"})
+
+	got := onlyPendingRepo(t, o)
+	if !got.PendingDirty {
+		t.Fatal("pending dirty = false; want true")
+	}
+	if got.PendingDirtyFiles != nil || got.PendingDirtyFileTotal != 0 {
+		t.Errorf("dirty files leaked without Worktrees dep: files=%v total=%d", got.PendingDirtyFiles, got.PendingDirtyFileTotal)
 	}
 }
 

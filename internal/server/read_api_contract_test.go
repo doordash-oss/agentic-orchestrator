@@ -3472,14 +3472,16 @@ func (l fakeMessageLog) ToolUseBlocks() []llm.ContentBlock {
 
 func TestCompletionPreflightRepoCarriesPendingDeliveryFields(t *testing.T) {
 	repo := CompletionPreflightRepo{
-		Repo:           "repo-a",
-		Publishable:    true,
-		Touched:        true,
-		Status:         "unpublished_changes",
-		PrURL:          "https://github.example/repo-a/pull/1",
-		PendingCommits: 3,
-		PendingDirty:   true,
-		PushMode:       "rewrite",
+		Repo:                  "repo-a",
+		Publishable:           true,
+		Touched:               true,
+		Status:                "unpublished_changes",
+		PrURL:                 "https://github.example/repo-a/pull/1",
+		PendingCommits:        3,
+		PendingDirty:          true,
+		PushMode:              "rewrite",
+		PendingDirtyFiles:     []string{"a.go", "b.go"},
+		PendingDirtyFileTotal: 2,
 	}
 	data, err := json.Marshal(repo)
 	if err != nil {
@@ -3497,5 +3499,12 @@ func TestCompletionPreflightRepoCarriesPendingDeliveryFields(t *testing.T) {
 	}
 	if decoded["push_mode"] != "rewrite" {
 		t.Errorf("push_mode = %v; want rewrite", decoded["push_mode"])
+	}
+	files, _ := decoded["pending_dirty_files"].([]any)
+	if len(files) != 2 || files[0] != "a.go" || files[1] != "b.go" {
+		t.Errorf("pending_dirty_files = %v; want [a.go b.go]", decoded["pending_dirty_files"])
+	}
+	if decoded["pending_dirty_file_total"] != float64(2) {
+		t.Errorf("pending_dirty_file_total = %v; want 2", decoded["pending_dirty_file_total"])
 	}
 }

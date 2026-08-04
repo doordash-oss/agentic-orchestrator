@@ -76,6 +76,12 @@ export class CompletionService {
         ...(repo.push_mode === 'fast_forward' || repo.push_mode === 'rewrite'
           ? { pushMode: repo.push_mode }
           : {}),
+        ...(repo.pending_dirty_files === undefined
+          ? {}
+          : { pendingDirtyFiles: repo.pending_dirty_files }),
+        ...(repo.pending_dirty_file_total === undefined
+          ? {}
+          : { pendingDirtyFileTotal: repo.pending_dirty_file_total }),
       })),
     };
   }

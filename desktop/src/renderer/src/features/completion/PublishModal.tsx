@@ -96,16 +96,28 @@ export function PublishModalBody({
     () => eligibleRepos.some((r) => publishRepos.has(r.repo)),
     [eligibleRepos, publishRepos],
   );
+
+  const dirtySelected = useMemo(
+    () =>
+      preflight.repos.filter(
+        (r) => publishRepos.has(r.repo) && (r.pendingDirtyFileTotal ?? 0) > 0,
+      ),
+    [preflight, publishRepos],
+  );
+  const [commitConfirmed, setCommitConfirmed] = useState(false);
+
   const hasSourceRevision = preflight.sourceRevision.trim() !== '';
   const canPublish =
     hasSourceRevision &&
     publishRepos.size > 0 &&
     (!titleRequired || publishTitle.trim().length > 0) &&
+    (dirtySelected.length === 0 || commitConfirmed) &&
     !publishAction.busy;
 
   const handlePublish = useCallback(async () => {
     const title = publishTitle.trim();
     if (publishRepos.size === 0 || (titleRequired && title === '')) return;
+    if (dirtySelected.length > 0 && !commitConfirmed) return;
     await publishAction.run(
       () =>
         dispatchAction(featureId, 'publish', {
@@ -123,6 +135,8 @@ export function PublishModalBody({
     publishTitle,
     publishBody,
     titleRequired,
+    dirtySelected,
+    commitConfirmed,
     dispatchAction,
     onDispatched,
     publishAction,
@@ -257,6 +271,41 @@ export function PublishModalBody({
           rows={6}
         />
       </label>
+      {dirtySelected.length > 0 ? (
+        <div className="completion-workspace__dirty-notice">
+          <h4>Uncommitted changes</h4>
+          {dirtySelected.map((repo) => (
+            <div key={repo.repo} className="completion-workspace__dirty-repo">
+              <p className="completion-workspace__dirty-repo-name">
+                {`${repo.repo} — ${repo.pendingDirtyFileTotal} uncommitted ${
+                  repo.pendingDirtyFileTotal === 1 ? 'file' : 'files'
+                } will be committed and pushed:`}
+              </p>
+              <ul className="completion-workspace__dirty-files">
+                {(repo.pendingDirtyFiles ?? []).map((path) => (
+                  <li key={path}>
+                    <code>{path}</code>
+                  </li>
+                ))}
+              </ul>
+              {(repo.pendingDirtyFiles ?? []).length < (repo.pendingDirtyFileTotal ?? 0) ? (
+                <p className="completion-workspace__dirty-more">
+                  {`+${(repo.pendingDirtyFileTotal ?? 0) - (repo.pendingDirtyFiles ?? []).length} more`}
+                </p>
+              ) : null}
+            </div>
+          ))}
+          <label className="completion-workspace__dirty-confirm">
+            <input
+              type="checkbox"
+              aria-label="Commit uncommitted files"
+              checked={commitConfirmed}
+              onChange={() => setCommitConfirmed((prev) => !prev)}
+            />
+            <span>Commit these files as part of this publish</span>
+          </label>
+        </div>
+      ) : null}
       <button
         type="button"
         className="completion-workspace__action"

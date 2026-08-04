@@ -101,7 +101,10 @@ describe('postImplementationModel', () => {
         status: 'CodeReady',
         actions: [{ id: 'refactor', enabled: true, disabledReasons: [] }],
       }),
-      { publishRepos: [{ repo: 'api', commits: 3, dirty: false }], mergeRepos: [] },
+      {
+        publishRepos: [{ repo: 'api', commits: 3, dirty: false, dirtyFiles: [], dirtyFileTotal: 0 }],
+        mergeRepos: [],
+      },
     );
     expect(actions.map((action) => action.id)).toEqual(['publish-updates', 'refactor']);
     expect(actions[0]!.title).toBe('Publish new commits');
@@ -112,7 +115,7 @@ describe('postImplementationModel', () => {
   it('offers undelivered merge work', () => {
     const actions = aftercareActions(featureSnapshot({ status: 'Done', actions: [] }), {
       publishRepos: [],
-      mergeRepos: [{ repo: 'core', commits: 1, dirty: true }],
+      mergeRepos: [{ repo: 'core', commits: 1, dirty: true, dirtyFiles: [], dirtyFileTotal: 0 }],
     });
     expect(actions.map((action) => action.id)).toEqual(['merge-updates']);
     expect(actions[0]!.title).toBe('Merge new commits');

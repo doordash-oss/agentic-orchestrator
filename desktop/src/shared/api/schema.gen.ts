@@ -1407,6 +1407,10 @@ export interface components {
             pending_dirty?: boolean;
             /** @description How a republish reaches an existing pull-request branch — fast_forward or rewrite. rewrite means the remote branch carries commits the local branch does not, so the push replaces remote history under a lease. */
             push_mode?: string;
+            /** @description Bounded list of uncommitted paths a publish would commit. May be shorter than pending_dirty_file_total. */
+            pending_dirty_files?: string[];
+            /** @description True count of uncommitted paths, which can exceed the listed sample. */
+            pending_dirty_file_total?: number;
         };
         RepositoryDiffResponse: components["schemas"]["JSONResponse"] & {
             feature_id: string;

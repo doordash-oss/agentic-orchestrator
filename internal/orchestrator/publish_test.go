@@ -1089,3 +1089,59 @@ func TestOrchestrator_Republish_PushFailureRecorded(t *testing.T) {
 	}
 	assertLifecycleCall(t, lc, "SetRepoPublishError")
 }
+
+// A caller-side fetch before the lease push would refresh the stale tracking
+// ref to the true remote tip right before --force-with-lease compares
+// against it, making the lease pass and silently discard the second clone's
+// commit. This test leaves Deps.Remote unset so orchestrator.New wires in
+// the real gitRemoteOps, driving an unmocked push through pushRepublish.
+func TestOrchestrator_Republish_LeaseRejectsWhenRemoteMovedUnfetched(t *testing.T) {
+	branch := "feature/republish-lease"
+	repoPath := newRepublishRepo(t, branch)
+	bareRemote := runPublishGitOutput(t, repoPath, "remote", "get-url", "origin")
+
+	// A second clone pushes a commit this repo never fetches.
+	clonePath := t.TempDir()
+	runPublishGit(t, "", "clone", bareRemote, clonePath)
+	runPublishGit(t, clonePath, "config", "user.email", "test@test.com")
+	runPublishGit(t, clonePath, "config", "user.name", "Test")
+	runPublishGit(t, clonePath, "checkout", branch)
+	testutil.CommitFile(t, clonePath, "other.txt", "other\n", "other's commit")
+	runPublishGit(t, clonePath, "push", "origin", branch)
+
+	// Rewrite the branch locally without fetching, so the stale
+	// origin/<branch> tracking ref is not an ancestor of HEAD.
+	runPublishGit(t, repoPath, "reset", "--hard", "HEAD~1")
+	testutil.CommitFile(t, repoPath, "rewritten.txt", "rewritten\n", "rewritten pass")
+
+	f := republishFeature("feat-republish-lease", repoPath, branch)
+	lc := lifecycleForFeature(f)
+	lc.SetRepoPublishErrorFn = func(id, repo, msg string) error { return nil }
+	lc.TryCompletePublishFn = func(id string) (bool, error) { return false, nil }
+	fs := newFeatureStore(f)
+
+	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{})
+
+	err := o.PublishWithOptions("feat-republish-lease", orchestrator.PublishOptions{
+		Repos: []string{"r1"},
+	})
+	if err == nil {
+		t.Fatal("PublishWithOptions() = nil, want an error: the remote moved and this repo never fetched")
+	}
+	assertLifecycleCall(t, lc, "SetRepoPublishError")
+}
+
+// runPublishGitOutput runs a git command in repo and returns trimmed stdout.
+func runPublishGitOutput(t *testing.T, repo string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	if repo != "" {
+		cmd.Dir = repo
+	}
+	cmd.Env = testutil.GitTestEnv()
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("git %s: %v", strings.Join(args, " "), err)
+	}
+	return strings.TrimSpace(string(out))
+}

@@ -1024,3 +1024,56 @@ func TestOrchestrator_MarkDone_IsExplicitCompletionAction(t *testing.T) {
 		t.Fatal("OnFeatureSummaryNeeded was not called")
 	}
 }
+
+// A feature already Done can merge later work without attempting a second
+// MarkDone: StatusDone has no outgoing transitions, so the call would fail.
+func TestOrchestrator_MergeFeatureLocal_AtDoneSkipsMarkDone(t *testing.T) {
+	notPublishable := false
+	repoPath := testutil.InitGitRepo(t)
+	rename := exec.Command("git", "branch", "-m", "trunk")
+	rename.Dir = repoPath
+	rename.Env = testutil.GitTestEnv()
+	if out, err := rename.CombinedOutput(); err != nil {
+		t.Fatalf("rename default branch: %s: %v", strings.TrimSpace(string(out)), err)
+	}
+	testutil.CreateBranch(t, repoPath, "feature/late-merge")
+	testutil.CommitFile(t, repoPath, "late.txt", "late\n", "late change")
+	checkout := exec.Command("git", "checkout", "trunk")
+	checkout.Dir = repoPath
+	checkout.Env = testutil.GitTestEnv()
+	if out, err := checkout.CombinedOutput(); err != nil {
+		t.Fatalf("checkout trunk: %s: %v", out, err)
+	}
+	f := &feature.Feature{
+		ID:     "feat-late-merge",
+		Slug:   "late-merge",
+		Status: feature.StatusDone,
+		Repos: []feature.FeatureRepo{{
+			Name:         "repo-a",
+			Path:         repoPath,
+			WorktreePath: repoPath,
+			Branch:       "feature/late-merge",
+			Publishable:  &notPublishable,
+		}},
+	}
+	lc := lifecycleForFeature(f)
+	fs := newFeatureStore(f)
+
+	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{})
+
+	if err := o.MergeFeatureLocal("feat-late-merge"); err != nil {
+		t.Fatalf("MergeFeatureLocal: %v", err)
+	}
+
+	for _, c := range lc.Calls {
+		if c.Method == "MarkDone" {
+			t.Error("MarkDone was called on an already-Done feature")
+		}
+	}
+	log := exec.Command("git", "log", "--format=%s", "-2")
+	log.Dir = repoPath
+	log.Env = testutil.GitTestEnv()
+	if out, err := log.Output(); err != nil || !strings.Contains(string(out), "late change") {
+		t.Fatalf("merged history = %q, err = %v", out, err)
+	}
+}

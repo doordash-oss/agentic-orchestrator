@@ -19,8 +19,9 @@ function Harness({ initial }: { initial: ReadinessSnapshot }) {
   return <SetupWizard snapshot={snapshot} onSnapshot={setSnapshot} />;
 }
 
-const workspaceStep = () => readySnapshot({ workspaceRoots: [], repositories: [] });
-const repositoryStep = () => readySnapshot({ repositories: [] });
+/** Providers satisfied, models still outstanding. */
+const modelsStep = () =>
+  unreadySnapshot({ providers: [{ name: 'claude', installed: true, ready: true }] });
 
 describe('SetupWizard provider step', () => {
   it('renders server-reported executable, version, and authentication state per provider', async () => {
@@ -55,13 +56,13 @@ describe('SetupWizard provider step', () => {
 
   it('"Check again" refreshes from the server and advances to the derived step', async () => {
     const mock = installAgenticoMock();
-    mock.api.refreshReadiness.mockResolvedValue(workspaceStep());
+    mock.api.refreshReadiness.mockResolvedValue(modelsStep());
     render(<Harness initial={unreadySnapshot()} />);
 
     await userEvent.click(screen.getByRole('button', { name: /check again/i }));
     expect(mock.api.refreshReadiness).toHaveBeenCalledTimes(1);
     await waitFor(() =>
-      expect(screen.getByRole('heading', { name: /choose a workspace/i })).toBeInTheDocument(),
+      expect(screen.getByRole('heading', { name: /model availability/i })).toBeInTheDocument(),
     );
   });
 
@@ -85,151 +86,6 @@ describe('SetupWizard provider step', () => {
     render(<Harness initial={unreadySnapshot({ providers: [] })} />);
     expect(screen.getByText(/reported no providers/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /check again/i })).toBeEnabled();
-  });
-});
-
-describe('SetupWizard workspace step', () => {
-  it('adds the picked folder through the server mutation and renders fresh discovery', async () => {
-    const mock = installAgenticoMock();
-    mock.api.pickWorkspaceDirectory.mockResolvedValue({ path: '/work/space' });
-    mock.api.addWorkspaceRoot.mockResolvedValue(repositoryStep());
-    render(<Harness initial={workspaceStep()} />);
-
-    expect(screen.getByText(/no workspace folder is configured yet/i)).toBeInTheDocument();
-    await userEvent.click(screen.getByRole('button', { name: /choose workspace folder/i }));
-    expect(mock.api.pickWorkspaceDirectory).toHaveBeenCalledTimes(1);
-    expect(mock.api.addWorkspaceRoot).toHaveBeenCalledWith('/work/space');
-    await waitFor(() =>
-      expect(screen.getByRole('heading', { name: /pick a repository/i })).toBeInTheDocument(),
-    );
-  });
-
-  it('keeps the step actionable when the native picker is cancelled', async () => {
-    const mock = installAgenticoMock();
-    mock.api.pickWorkspaceDirectory.mockResolvedValue({ path: null });
-    render(<Harness initial={workspaceStep()} />);
-
-    await userEvent.click(screen.getByRole('button', { name: /choose workspace folder/i }));
-    await waitFor(() =>
-      expect(screen.getByRole('status')).toHaveTextContent(/folder selection cancelled/i),
-    );
-    expect(mock.api.addWorkspaceRoot).not.toHaveBeenCalled();
-    expect(screen.getByRole('button', { name: /choose workspace folder/i })).toBeEnabled();
-  });
-
-  it('shows configured-but-invalid roots with the server issue text', () => {
-    installAgenticoMock();
-    render(
-      <Harness
-        initial={readySnapshot({
-          workspaceRoots: [
-            {
-              path: '/gone',
-              valid: false,
-              issue: {
-                code: 'invalid_workspace_root',
-                message: 'The directory does not exist.',
-              },
-            },
-          ],
-          repositories: [],
-        })}
-      />,
-    );
-    expect(screen.getByText('/gone')).toBeInTheDocument();
-    expect(screen.getByText(/does not exist/i)).toBeInTheDocument();
-    expect(screen.getByText(/invalid/i)).toBeInTheDocument();
-  });
-});
-
-describe('SetupWizard repository step', () => {
-  it('presents the explicit initialization consequence before any consent', async () => {
-    const mock = installAgenticoMock();
-    mock.api.pickWorkspaceDirectory.mockResolvedValue({ path: '/work/space/plain' });
-    render(<Harness initial={repositoryStep()} />);
-
-    await userEvent.click(screen.getByRole('button', { name: /choose repository folder/i }));
-    const dialog = await screen.findByRole('dialog', { name: /initialize a new repository/i });
-    expect(dialog).toHaveTextContent(/git init/);
-    expect(dialog).toHaveTextContent('/work/space/plain');
-    expect(dialog).toHaveTextContent(/folder must be empty/i);
-    expect(dialog).toHaveTextContent(/initial empty commit/i);
-    expect(mock.api.initRepository).not.toHaveBeenCalled();
-  });
-
-  it('cancelling consent initializes nothing and keeps the folder choice editable', async () => {
-    const mock = installAgenticoMock();
-    mock.api.pickWorkspaceDirectory.mockResolvedValue({ path: '/work/space/plain' });
-    render(<Harness initial={repositoryStep()} />);
-
-    await userEvent.click(screen.getByRole('button', { name: /choose repository folder/i }));
-    await screen.findByRole('dialog');
-    await userEvent.click(screen.getByRole('button', { name: /^cancel$/i }));
-
-    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
-    expect(mock.api.initRepository).not.toHaveBeenCalled();
-    // The choice stays recoverable: re-open consent or discard.
-    expect(screen.getByText('/work/space/plain')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /initialize this folder/i })).toBeEnabled();
-    await userEvent.click(screen.getByRole('button', { name: /discard choice/i }));
-    expect(screen.queryByText('/work/space/plain')).not.toBeInTheDocument();
-  });
-
-  it('consent dialog is keyboard-dismissable: focus starts on Cancel and Escape cancels', async () => {
-    const mock = installAgenticoMock();
-    mock.api.pickWorkspaceDirectory.mockResolvedValue({ path: '/work/space/plain' });
-    const user = userEvent.setup();
-    render(<Harness initial={repositoryStep()} />);
-
-    await user.click(screen.getByRole('button', { name: /choose repository folder/i }));
-    await screen.findByRole('dialog');
-    expect(screen.getByRole('button', { name: /^cancel$/i })).toHaveFocus();
-
-    await user.keyboard('{Escape}');
-    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
-    expect(mock.api.initRepository).not.toHaveBeenCalled();
-    expect(screen.getByText('/work/space/plain')).toBeInTheDocument();
-  });
-
-  it('a failed initialization shows the safe server reason and keeps the choice', async () => {
-    const mock = installAgenticoMock();
-    mock.api.pickWorkspaceDirectory.mockResolvedValue({ path: '/work/space/full' });
-    mock.api.initRepository.mockRejectedValue(
-      new Error(
-        'directory_not_empty: the directory contains files. Choose an empty folder, a new folder name, or an existing git repository instead.',
-      ),
-    );
-    render(<Harness initial={repositoryStep()} />);
-
-    await userEvent.click(screen.getByRole('button', { name: /choose repository folder/i }));
-    await screen.findByRole('dialog');
-    await userEvent.click(screen.getByRole('button', { name: /initialize repository/i }));
-
-    const alert = await screen.findByRole('alert');
-    expect(alert).toHaveTextContent('directory_not_empty');
-    expect(alert).toHaveTextContent(/choose an empty folder/i);
-    expect(alert).toHaveFocus();
-    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
-    expect(screen.getByText('/work/space/full')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /initialize this folder/i })).toBeEnabled();
-  });
-
-  it('recognizes an already-valid repository pick without initializing anything', async () => {
-    const mock = installAgenticoMock();
-    mock.api.pickWorkspaceDirectory.mockResolvedValue({ path: '/work/space/repo-a' });
-    render(
-      <Harness
-        initial={readySnapshot({
-          ready: false,
-          repositories: [{ name: 'repo-a', path: '/work/space/repo-a', valid: false }],
-        })}
-      />,
-    );
-    // repo invalid → repository step; picking a *valid* repo path elsewhere is
-    // covered by discovery — here the repo is invalid so consent is offered.
-    await userEvent.click(screen.getByRole('button', { name: /choose repository folder/i }));
-    expect(await screen.findByRole('dialog')).toBeInTheDocument();
-    expect(mock.api.initRepository).not.toHaveBeenCalled();
   });
 });
 
@@ -299,7 +155,7 @@ describe('SetupWizard cross-cutting a11y and presentation', () => {
     expect(screen.queryByText(/provider clis installed on this machine/i)).not.toBeInTheDocument();
     await waitFor(() =>
       expect(mock.api.updateSettings).toHaveBeenCalledWith({
-        wizard: { collapsedHelp: true, lastRepositoryPathHint: null },
+        wizard: { collapsedHelp: true },
       }),
     );
   });

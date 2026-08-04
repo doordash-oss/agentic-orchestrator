@@ -38,7 +38,7 @@ test('four-step creation covers scoped files, initialization, review, setup, and
     const app = handle;
     await app.app.evaluate(
       ({ dialog }, answers) => {
-        const directories = [answers.additionalRoot, answers.emptyRepository];
+        const directories = [answers.emptyRepository];
         dialog.showOpenDialog = (async (...args: unknown[]) => {
           const options = args.at(-1) as { title?: string };
           const selected = options.title?.includes('images')
@@ -53,7 +53,7 @@ test('four-step creation covers scoped files, initialization, review, setup, and
           };
         }) as typeof dialog.showOpenDialog;
       },
-      { image, attachment, additionalRoot, emptyRepository },
+      { image, attachment, emptyRepository },
     );
 
     await expect(app.page.getByRole('button', { name: 'New feature' })).toBeVisible();
@@ -74,17 +74,18 @@ test('four-step creation covers scoped files, initialization, review, setup, and
     await app.page.getByRole('button', { name: 'New feature' }).click();
     await app.page.getByRole('checkbox', { name: /creation-lab/ }).check();
     await app.page.getByRole('button', { name: 'Browse for folder' }).click();
-    await app.page.getByRole('button', { name: 'Add workspace root' }).click();
-    await expect(app.page.getByRole('heading', { name: 'Choose repositories' })).toBeVisible();
-    await app.page.getByRole('button', { name: 'Browse for folder' }).click();
-    await app.page.getByRole('checkbox', { name: /Initialize this empty folder/ }).check();
+    await app.page.getByRole('button', { name: 'Use this folder' }).click();
+    await expect(app.page.getByText(/holds no git repository yet/i)).toBeVisible();
     await setTheme(app, 'dark');
     await evidenceShot(app, SHOTS.where);
-    await app.page.getByRole('button', { name: 'Initialize and rediscover' }).click();
-    await expect(app.page.getByRole('checkbox', { name: /initialized-lab/ })).toBeVisible();
-    await app.page.getByRole('checkbox', { name: /initialized-lab/ }).check();
+    await app.page.getByRole('button', { name: /Initialize it as a repository/ }).click();
+    const consent = app.page.getByRole('dialog', { name: 'Initialize a new repository?' });
+    await expect(consent).toContainText(emptyRepository);
+    await consent.getByRole('button', { name: 'Initialize repository' }).click();
+    // A single unambiguous discovery selects itself.
+    await expect(app.page.getByRole('checkbox', { name: /initialized-lab/ })).toBeChecked();
     transcript.step(
-      'Where added a root, consented to server-owned initialization, and observed rediscovery',
+      'Where adopted a folder as a root, consented to server-owned initialization, and observed the rediscovered repository select itself',
     );
 
     await app.page.getByRole('button', { name: 'Next: What' }).click();

@@ -3800,32 +3800,10 @@ body {
   font-size: 12px;
 }
 
-.setup-step__pending {
-  border: 1px dashed var(--color-hairline);
-  border-radius: var(--radius);
-  padding: var(--space-3);
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-}
-
-.setup-step__pending-label {
-  margin: 0;
-  font-size: 13px;
-  color: var(--color-muted);
-}
-
-.setup-step__pending-actions {
-  display: flex;
-  gap: var(--space-2);
-  flex-wrap: wrap;
-}
-
 /* --- Provider rows ---------------------------------------------------------------------- */
 
 .provider-list,
-.model-list,
-.path-list {
+.model-list {
   list-style: none;
   margin: 0;
   padding: 0;
@@ -3924,45 +3902,10 @@ body {
   border-color: var(--color-signal);
 }
 
-/* --- Model + path lists --------------------------------------------------------------------- */
+/* --- Model list --------------------------------------------------------------------- */
 
 .model-list__item {
   font-family: var(--font-mono);
-  font-size: 12px;
-}
-
-.path-list__item {
-  display: flex;
-  align-items: baseline;
-  gap: var(--space-2);
-  flex-wrap: wrap;
-}
-
-.path-list__state {
-  font-family: var(--font-mono);
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--color-danger);
-  white-space: nowrap;
-}
-
-.path-list__state[data-valid='true'] {
-  color: var(--color-success);
-}
-
-.path-list__name {
-  font-weight: 700;
-}
-
-.path-list__path {
-  font-family: var(--font-mono);
-  font-size: 12px;
-  overflow-wrap: anywhere;
-}
-
-.path-list__issue {
-  color: var(--color-muted);
   font-size: 12px;
 }
 
@@ -4052,12 +3995,6 @@ body {
   .provider-row__facts {
     flex-direction: column;
     gap: var(--space-2);
-  }
-
-  .path-list__item {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: var(--space-1);
   }
 
   .consent-dialog {
@@ -4762,9 +4699,13 @@ body {
   white-space: nowrap;
   color: var(--color-muted);
 }
-.repo-option--empty {
+.repo-option--empty,
+.repo-options__empty {
   padding: 0.6rem 0;
   color: var(--color-muted);
+}
+.repo-options__empty {
+  margin: 0;
 }
 /* Contract knobs (Risk / Inquireness / Exit criteria) share one quiet panel;
    the two selects sit side by side and collapse to one column when narrow. */
@@ -4858,6 +4799,18 @@ body {
   display: block;
   margin: 0.75rem 0;
   overflow-wrap: anywhere;
+}
+/* The only way forward in an empty workspace, so it reads as the main event. */
+.directory-browser[data-primary='true'] {
+  border-color: var(--color-accent);
+}
+.directory-browser__notice:empty {
+  display: none;
+}
+.directory-browser__notice {
+  margin: 0.75rem 0 0;
+  color: var(--color-muted);
+  font-size: 13px;
 }
 .creation-summary {
   display: grid;

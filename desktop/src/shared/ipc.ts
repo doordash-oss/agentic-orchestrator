@@ -2056,19 +2056,19 @@ export const WindowBoundsSchema = z.strictObject({
 });
 
 /**
- * Wizard presentation preferences ONLY: a path *hint* for preselecting the
- * repository picker and collapsed-help state. Wizard progress is never
- * stored locally — completed gates always derive from the server snapshot.
+ * Wizard presentation preferences ONLY: collapsed-help state. Wizard progress
+ * is never stored locally — completed gates always derive from the server
+ * snapshot. Unknown keys are stripped rather than rejected so a settings file
+ * written by an older version keeps its unrelated preferences.
  */
-export const WizardPrefsSchema = z.strictObject({
+export const WizardPrefsSchema = z.object({
   collapsedHelp: z.boolean(),
-  lastRepositoryPathHint: z.string().max(4096).nullable(),
 });
 
 export type WizardPrefs = z.output<typeof WizardPrefsSchema>;
 
 export function defaultWizardPrefs(): WizardPrefs {
-  return { collapsedHelp: false, lastRepositoryPathHint: null };
+  return { collapsedHelp: false };
 }
 
 /**

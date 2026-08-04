@@ -119,7 +119,7 @@ describe('SettingsStore', () => {
       runtime: { selection: null },
       window: { bounds: { x: 1, y: 2, width: 800, height: 600 } },
       theme: 'dark',
-      wizard: { collapsedHelp: false, lastRepositoryPathHint: null },
+      wizard: { collapsedHelp: false },
       ama: { drawer: 'compact' },
       notifications: { previewEnabled: false },
       tabs: { open: [], activeFeatureId: null },
@@ -160,11 +160,8 @@ describe('SettingsStore', () => {
 
   it('persists wizard presentation prefs and loads pre-wizard files with defaults', () => {
     const store = makeStore();
-    store.update({ wizard: { collapsedHelp: true, lastRepositoryPathHint: '/work/repo' } });
-    expect(makeStore().get().wizard).toEqual({
-      collapsedHelp: true,
-      lastRepositoryPathHint: '/work/repo',
-    });
+    store.update({ wizard: { collapsedHelp: true } });
+    expect(makeStore().get().wizard).toEqual({ collapsedHelp: true });
 
     // A document written before the wizard section existed still loads.
     fs.writeFileSync(
@@ -178,9 +175,26 @@ describe('SettingsStore', () => {
     );
     const upgraded = makeStore();
     expect(upgraded.get().theme).toBe('dark');
-    expect(upgraded.get().wizard).toEqual({ collapsedHelp: false, lastRepositoryPathHint: null });
+    expect(upgraded.get().wizard).toEqual({ collapsedHelp: false });
     expect(upgraded.get().ama).toEqual({ drawer: 'compact' });
     expect(upgraded.get().notifications).toEqual({ previewEnabled: false });
+  });
+
+  it('drops a retired wizard pref without discarding the rest of the file', () => {
+    fs.writeFileSync(
+      settingsPath(),
+      JSON.stringify({
+        schemaVersion: 1,
+        runtime: { selection: null },
+        window: {},
+        theme: 'dark',
+        wizard: { collapsedHelp: true, lastRepositoryPathHint: '/work/repo' },
+      }),
+    );
+    const store = makeStore();
+    expect(store.get().wizard).toEqual({ collapsedHelp: true });
+    expect(store.get().theme).toBe('dark');
+    expect(fs.existsSync(`${settingsPath()}.bak-1`)).toBe(false);
   });
 
   it('never throws while loading a corrupt file', () => {

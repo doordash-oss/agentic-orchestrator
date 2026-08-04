@@ -71,7 +71,7 @@ headless automation. Use `agentico update` to open desktop Settings >
 Updates when the app is registered, or to print non-mutating headless update
 guidance.
 
-On first desktop launch, Agentic Orchestrator walks you through selecting workspace directories and checking provider readiness. After that, the app opens the operational dashboard.
+On first desktop launch, Agentic Orchestrator checks provider readiness — the only setup gate. With a provider installed and authenticated, the app opens the operational dashboard immediately; otherwise it shows what is missing and the command to fix it. Repositories are not configured up front: the Where step of feature creation adopts a folder as a workspace root, or initializes an empty one as a repository with your explicit consent.
 
 ## Prerequisites
 

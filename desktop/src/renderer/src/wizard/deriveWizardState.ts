@@ -7,14 +7,14 @@
  */
 import type { ReadinessIssue, ReadinessIssueCode, ReadinessSnapshot } from '../../../shared/ipc';
 
-export const WIZARD_STEPS = ['providers', 'models', 'workspace', 'repository', 'ready'] as const;
+export const WIZARD_STEPS = ['providers', 'models', 'ready'] as const;
 
 export type WizardStepId = (typeof WIZARD_STEPS)[number];
 
 /** The mandatory gates, in wizard order. */
 export type WizardGateId = Exclude<WizardStepId, 'ready'>;
 
-const GATE_ORDER: readonly WizardGateId[] = ['providers', 'models', 'workspace', 'repository'];
+const GATE_ORDER: readonly WizardGateId[] = ['providers', 'models'];
 
 /** Which flattened issue codes belong to which step's blocker list. */
 const ISSUE_STEP: Record<ReadinessIssueCode, WizardStepId | null> = {
@@ -22,9 +22,11 @@ const ISSUE_STEP: Record<ReadinessIssueCode, WizardStepId | null> = {
   unsupported_version: 'providers',
   unauthenticated: 'providers',
   models_unavailable: 'models',
-  invalid_workspace_root: 'workspace',
-  invalid_repository: 'repository',
-  // Cross-cutting: reported via configurationIssue, not a step blocker.
+  // Workspace shape is not a setup gate: repositories are chosen (and added)
+  // where the work is defined, and their issues are reported there and in
+  // Settings. Configuration is cross-cutting, reported via configurationIssue.
+  invalid_workspace_root: null,
+  invalid_repository: null,
   invalid_configuration: null,
 };
 
@@ -46,8 +48,6 @@ export function deriveWizardState(snapshot: ReadinessSnapshot): WizardState {
   const gates: Record<WizardGateId, boolean> = {
     providers: snapshot.providers.some((provider) => provider.ready),
     models: snapshot.models.available,
-    workspace: snapshot.workspaceRoots.some((root) => root.valid),
-    repository: snapshot.repositories.some((repository) => repository.valid),
   };
 
   const firstBlocked = GATE_ORDER.find((gate) => !gates[gate]);
@@ -61,9 +61,8 @@ export function deriveWizardState(snapshot: ReadinessSnapshot): WizardState {
         message: 'The runtime configuration is unusable.',
       });
 
-  // Completion is server-authoritative: the snapshot's own ready flag must
-  // agree (it covers providers, models, and configuration), plus the
-  // workspace/repository gates the desktop wizard is responsible for.
+  // Completion is server-authoritative: the snapshot's own ready flag decides,
+  // and the per-gate projection only explains which part of it is outstanding.
   const complete =
     snapshot.ready && configurationIssue === null && GATE_ORDER.every((gate) => gates[gate]);
 

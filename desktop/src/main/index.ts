@@ -69,6 +69,7 @@ import {
 import { AttentionNotificationCoordinator, electronNotificationSink } from './notifications';
 import { NativeCommandController, type NativeCommandSnapshot } from './nativeCommands';
 import { DiagnosticsService } from './diagnostics';
+import { applyLoginShellPath } from './shellEnv';
 import {
   FIXTURE_RELEASE_PUBLIC_KEY,
   UpdateCoordinator,
@@ -89,6 +90,13 @@ import {
   type StopWorkResult,
   type UnresolvedWorkItem,
 } from './quitCoordinator';
+
+// GUI launches (Spotlight/Finder/Dock/`open`) inherit launchd's minimal PATH,
+// which hides provider CLIs from the bundled server's discovery. Start the
+// login-shell PATH resolution immediately so it runs concurrently with
+// Electron's own startup; whenReady awaits the result before wiring the
+// gateway, ahead of the first server spawn.
+const loginShellPathOutcome = applyLoginShellPath({ env: process.env });
 
 // Packaged-E2E isolation hook: relocate the app-local data directory
 // (settings.json) only when the target provably lives inside the OS temp
@@ -224,13 +232,18 @@ const hasSingleInstanceLock = app.requestSingleInstanceLock();
 if (!hasSingleInstanceLock) {
   app.quit();
 } else {
-  void app.whenReady().then(() => {
+  void app.whenReady().then(async () => {
     installRendererProtocol(
       session.defaultSession.protocol,
       path.join(import.meta.dirname, '../renderer'),
       (fileUrl) => net.fetch(fileUrl),
     );
     installSecurityPolicies({ app, session: session.defaultSession, appOrigins });
+
+    // The gateway (and therefore the server's inherited PATH) must not exist
+    // before the login-shell merge lands; the resolution itself started at
+    // module load and is time-bounded.
+    const shellPath = await loginShellPathOutcome;
 
     const settings = new SettingsStore(app.getPath('userData'));
     const localDrafts = new LocalDraftStore(app.getPath('userData'));
@@ -248,6 +261,20 @@ if (!hasSingleInstanceLock) {
       readServerLines: () => logBuffer.snapshot(),
     });
     diagnostics.record('electron', 'info', 'Agentico desktop process started.');
+    if (shellPath.applied) {
+      diagnostics.record(
+        'electron',
+        'info',
+        `Merged ${shellPath.added.length} login-shell PATH entries for provider discovery.`,
+      );
+    } else {
+      diagnostics.record(
+        'electron',
+        'info',
+        'Login-shell PATH not merged; provider discovery uses the launch PATH.',
+        shellPath.reason,
+      );
+    }
 
     const theme = new ThemeController(
       nativeTheme,

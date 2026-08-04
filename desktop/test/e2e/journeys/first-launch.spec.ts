@@ -4,9 +4,10 @@
  *
  * clean state → connection shell (app-owned launch) → wizard blocks creation
  * (provider unauthenticated) → external remediation (stub flips to
- * authenticated) → Check again → workspace root via the mocked native picker
- * → non-repo folder → initialization consent → repo discovered → create
- * feature → ordered setup tasks → Ready to start with nothing started.
+ * authenticated) → Check again → Home → creation's Where step adopts a
+ * non-repo folder via the mocked native picker → initialization consent →
+ * repo discovered and selected → create feature → ordered setup tasks →
+ * Ready to start with nothing started.
  *
  * Native-picker mocking: dialog.showOpenDialog is replaced inside the
  * running main process via Playwright's ElectronApplication.evaluate — the
@@ -49,7 +50,7 @@ const RUN_NAME = `first-launch-${
   process.env['AGENTICO_E2E_VARIANT'] ?? (process.platform === 'darwin' ? 'macos' : 'linux')
 }`;
 
-test('first launch: wizard-gated creation reaches Ready to start', async ({}, testInfo) => {
+test('first launch: provider-gated creation reaches Ready to start', async ({}, testInfo) => {
   const transcript = new Transcript(
     RUN_NAME,
     'Journey 1 — first launch creation (packaged app, real bundled server)',
@@ -127,46 +128,55 @@ test('first launch: wizard-gated creation reaches Ready to start', async ({}, te
     transcript.step(
       'flipped the stub auth-state file to authenticated (stands in for the user completing `claude auth login` in their own terminal)',
     );
-    await handle.page.getByRole('button', { name: /Check again/ }).click();
-    await expect(handle.page.getByRole('heading', { name: 'Choose a workspace' })).toBeVisible();
-    transcript.step('readiness refresh passed providers + models gates; workspace step active');
-
-    transcript.section('Workspace root via mocked native picker');
-    await mockDirectoryPicker(handle, world.workspaceRoot);
-    await handle.page.getByRole('button', { name: 'Choose workspace folder…' }).click();
-    await expect(handle.page.getByRole('heading', { name: 'Pick a repository' })).toBeVisible();
-    transcript.step(`workspace root \`${world.workspaceRoot}\` accepted and persisted server-side`);
-
-    transcript.section('Non-repo folder → initialization consent → repo discovered');
-    await mockDirectoryPicker(handle, demoApp);
-    await handle.page.getByRole('button', { name: 'Choose repository folder…' }).click();
-    const consent = handle.page.getByRole('dialog', { name: 'Initialize a new repository?' });
-    await expect(consent).toBeVisible();
-    await expect(consent).toContainText(demoApp);
-    await evidenceShot(handle, 'repo-init-consent-light');
-    // The modal scrim blocks the theme switcher, so cancel (the folder choice
-    // is kept), flip the theme, and reopen the same consent dialog.
-    await consent.getByRole('button', { name: 'Cancel' }).click();
-    await setTheme(handle, 'dark');
-    await handle.page.getByRole('button', { name: 'Initialize this folder…' }).click();
-    await expect(consent).toBeVisible();
-    await evidenceShot(handle, 'repo-init-consent-dark');
-    await consent.getByRole('button', { name: 'Initialize repository' }).click();
-    await expect(handle.page.getByRole('button', { name: 'New feature' })).toBeVisible({
+    const app = handle;
+    await app.page.getByRole('button', { name: /Check again/ }).click();
+    await expect(app.page.getByRole('button', { name: 'New feature' })).toBeVisible({
       timeout: 30_000,
     });
-    await setTheme(handle, 'light');
     transcript.step(
-      'consented; server initialized the repository (git init + initial empty commit), rediscovered the workspace, and every wizard gate passed → Home with an explicit New feature entry point',
+      'the only readiness gates are provider and model availability: one refresh satisfied both and setup handed straight to Home — no workspace or repository step in between',
     );
+
+    transcript.section('Where: adopt a folder, consent to initialization, select the repository');
+    await mockDirectoryPicker(app, demoApp);
+    const consent = app.page.getByRole('dialog', { name: 'Initialize a new repository?' });
 
     transcript.section('Create the feature (name/description/repo/branch)');
     transcript.section('Ordered setup tasks → Ready to start');
-    const cockpit = await createFeatureViaForm(handle, {
+    const cockpit = await createFeatureViaForm(app, {
       name: 'Tracer Bullet',
       description: 'First packaged end-to-end feature creation.',
       repoPatterns: [/demo-app/],
       waitForReady: true,
+      beforeRepoSelect: async () => {
+        // A clean install has no repositories, so Where leads with the picker.
+        await expect(
+          app.page.getByRole('heading', { name: 'Add your first repository' }),
+        ).toBeVisible();
+        await app.page.getByRole('button', { name: 'Browse for folder' }).click();
+        await app.page.getByRole('button', { name: 'Use this folder' }).click();
+        await expect(app.page.getByText(/holds no git repository yet/i)).toBeVisible();
+        await app.page.getByRole('button', { name: /Initialize it as a repository/ }).click();
+        await expect(consent).toBeVisible();
+        await expect(consent).toContainText(demoApp);
+        await evidenceShot(app, 'repo-init-consent-light');
+        // The modal scrim blocks the theme switcher, so cancel (the folder
+        // choice is kept), flip the theme, and reopen the same consent dialog.
+        await consent.getByRole('button', { name: 'Cancel' }).click();
+        await setTheme(app, 'dark');
+        await app.page.getByRole('button', { name: /Initialize it as a repository/ }).click();
+        await expect(consent).toBeVisible();
+        await evidenceShot(app, 'repo-init-consent-dark');
+        await consent.getByRole('button', { name: 'Initialize repository' }).click();
+        // One unambiguous discovery selects itself, so Where is already valid.
+        await expect(app.page.getByRole('checkbox', { name: /demo-app/ })).toBeChecked({
+          timeout: 30_000,
+        });
+        await setTheme(app, 'light');
+        transcript.step(
+          'consented; the server initialized the repository (git init + initial empty commit), rediscovered the workspace, and the single discovery selected itself',
+        );
+      },
     });
     await expect(cockpit.getByText('Ready to start')).toBeVisible();
     await expect(cockpit.getByRole('button', { name: 'Start', exact: true })).toBeVisible();

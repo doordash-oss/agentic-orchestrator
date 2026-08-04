@@ -50,6 +50,105 @@ describe('CreateFeatureForm repository-first contract', () => {
     expect(screen.getByText('Enter a feature name.')).toBeVisible();
   });
 
+  it('leads an empty workspace with the folder picker instead of a filter miss', async () => {
+    const mock = installAgenticoMock({ defaults: creationDefaults({ repositories: [] }) });
+    await renderForm(mock);
+
+    expect(screen.getByRole('heading', { name: 'Add your first repository' })).toBeVisible();
+    expect(screen.getByText(/an empty folder to start something new/i)).toBeVisible();
+    expect(screen.queryByLabelText('Search repositories')).toBeNull();
+    expect(screen.queryByText(/No repositories match/)).toBeNull();
+  });
+
+  it('adopts a folder that is itself a repository and selects it', async () => {
+    const mock = installAgenticoMock({ defaults: creationDefaults({ repositories: [] }) });
+    mock.api.pickWorkspaceDirectory.mockResolvedValue({ path: '/work/solo' });
+    mock.api.addWorkspaceRoot.mockResolvedValue(
+      readySnapshot({
+        workspaceRoots: [{ path: '/work/solo', valid: true }],
+        repositories: [{ name: 'solo', path: '/work/solo', valid: true }],
+      }),
+    );
+    const { user } = await renderForm(mock);
+
+    await user.click(screen.getByRole('button', { name: 'Browse for folder' }));
+    await user.click(screen.getByRole('button', { name: 'Use this folder' }));
+
+    expect(mock.api.addWorkspaceRoot).toHaveBeenCalledWith('/work/solo');
+    expect(mock.api.initRepository).not.toHaveBeenCalled();
+    expect(await screen.findByRole('checkbox', { name: /solo/ })).toBeChecked();
+    await user.click(screen.getByRole('button', { name: 'Next: What' }));
+    expect(screen.getByRole('heading', { name: 'Define the work' })).toBeVisible();
+  });
+
+  it('offers consented initialization for a folder that holds no repository', async () => {
+    const mock = installAgenticoMock({ defaults: creationDefaults({ repositories: [] }) });
+    mock.api.pickWorkspaceDirectory.mockResolvedValue({ path: '/work/space/fresh' });
+    mock.api.addWorkspaceRoot.mockResolvedValue(
+      readySnapshot({ workspaceRoots: [{ path: '/work/space/fresh', valid: true }] }),
+    );
+    mock.api.initRepository.mockResolvedValue(
+      readySnapshot({
+        workspaceRoots: [{ path: '/work/space/fresh', valid: true }],
+        repositories: [{ name: 'fresh', path: '/work/space/fresh', valid: true }],
+      }),
+    );
+    mock.api.removeWorkspaceRoot.mockResolvedValue(
+      readySnapshot({
+        workspaceRoots: [{ path: '/work/space/fresh', valid: true }],
+        repositories: [{ name: 'fresh', path: '/work/space/fresh', valid: true }],
+      }),
+    );
+    const { user } = await renderForm(mock);
+
+    await user.click(screen.getByRole('button', { name: 'Browse for folder' }));
+    await user.click(screen.getByRole('button', { name: 'Use this folder' }));
+    expect(await screen.findByText(/holds no git repository yet/i)).toBeVisible();
+    expect(mock.api.initRepository).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole('button', { name: /Initialize it as a repository/ }));
+    const dialog = await screen.findByRole('dialog', { name: /initialize a new repository/i });
+    expect(dialog).toHaveTextContent('/work/space/fresh');
+    await user.click(screen.getByRole('button', { name: 'Initialize repository' }));
+
+    // The parent is configured only for the call the server requires it for,
+    // leaving the folder itself as the only root behind.
+    expect(mock.api.addWorkspaceRoot).toHaveBeenCalledWith('/work/space');
+    expect(mock.api.initRepository).toHaveBeenCalledWith({
+      path: '/work/space/fresh',
+      consent: true,
+    });
+    expect(mock.api.removeWorkspaceRoot).toHaveBeenCalledWith('/work/space');
+    expect(await screen.findByRole('checkbox', { name: /fresh/ })).toBeChecked();
+  });
+
+  it('rolls the transient parent root back when initialization fails', async () => {
+    const mock = installAgenticoMock({ defaults: creationDefaults({ repositories: [] }) });
+    mock.api.pickWorkspaceDirectory.mockResolvedValue({ path: '/work/space/full' });
+    mock.api.addWorkspaceRoot.mockResolvedValue(
+      readySnapshot({ workspaceRoots: [{ path: '/work/space/full', valid: true }] }),
+    );
+    mock.api.initRepository.mockRejectedValue(
+      new Error(
+        'directory_not_empty: the directory contains files. Choose an empty folder, a new folder name, or an existing git repository instead.',
+      ),
+    );
+    const { user } = await renderForm(mock);
+
+    await user.click(screen.getByRole('button', { name: 'Browse for folder' }));
+    await user.click(screen.getByRole('button', { name: 'Use this folder' }));
+    await user.click(screen.getByRole('button', { name: /Initialize it as a repository/ }));
+    await user.click(screen.getByRole('button', { name: 'Initialize repository' }));
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('directory_not_empty');
+    expect(alert).toHaveTextContent(/choose an empty folder/i);
+    expect(mock.api.removeWorkspaceRoot).toHaveBeenCalledWith('/work/space');
+    // The choice stays recoverable without reopening the picker.
+    expect(screen.getByText('/work/space/full')).toBeVisible();
+    expect(screen.getByRole('button', { name: /Initialize it as a repository/ })).toBeEnabled();
+  });
+
   it('rediscovering repositories preserves the current step and chosen run contract', async () => {
     const mock = installAgenticoMock();
     mock.api.pickWorkspaceDirectory.mockResolvedValue({ path: '/work/new-root' });
@@ -74,7 +173,7 @@ describe('CreateFeatureForm repository-first contract', () => {
     await user.click(screen.getByRole('button', { name: 'Back' }));
     await user.click(screen.getByRole('radio', { name: 'Current branch' }));
     await user.click(screen.getByRole('button', { name: 'Browse for folder' }));
-    await user.click(screen.getByRole('button', { name: 'Add workspace root' }));
+    await user.click(screen.getByRole('button', { name: 'Use this folder' }));
 
     expect(await screen.findByRole('checkbox', { name: /repo-new/ })).toBeVisible();
     expect(screen.getByRole('heading', { name: 'Choose repositories' })).toBeVisible();

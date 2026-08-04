@@ -71,41 +71,37 @@ describe('ReadinessGate gating', () => {
     expect(screen.queryByRole('button', { name: /create|new feature/i })).not.toBeInTheDocument();
   });
 
-  it('yields the main view when the final gate is satisfied through consented init', async () => {
-    const repositoryStep = readySnapshot({ repositories: [] });
-    const mock = installAgenticoMock({ readiness: repositoryStep });
-    mock.api.pickWorkspaceDirectory.mockResolvedValue({ path: '/work/space/new-repo' });
-    mock.api.initRepository.mockResolvedValue(
-      readySnapshot({
-        repositories: [{ name: 'new-repo', path: '/work/space/new-repo', valid: true }],
-      }),
-    );
+  it('yields the main view when a recheck satisfies the provider gate', async () => {
+    const mock = installAgenticoMock({ readiness: unreadySnapshot() });
+    mock.api.refreshReadiness.mockResolvedValue(readySnapshot());
     render(<ReadinessGate />);
 
     await waitFor(() =>
-      expect(screen.getByRole('heading', { name: /pick a repository/i })).toBeInTheDocument(),
+      expect(screen.getByRole('heading', { name: /set up agentico/i })).toBeInTheDocument(),
     );
-    await userEvent.click(screen.getByRole('button', { name: /choose repository folder/i }));
-    await waitFor(() => expect(screen.getByRole('dialog')).toBeInTheDocument());
-    await userEvent.click(screen.getByRole('button', { name: /initialize repository/i }));
+    await userEvent.click(screen.getByRole('button', { name: /check again/i }));
 
     expect(await screen.findByRole('tab', { name: 'Home' })).toBeInTheDocument();
-    expect(mock.api.initRepository).toHaveBeenCalledWith({
-      path: '/work/space/new-repo',
-      consent: true,
-    });
+    expect(screen.queryByLabelText(/first-launch setup/i)).not.toBeInTheDocument();
+  });
+
+  it('does not gate on an empty workspace: repositories are chosen during creation', async () => {
+    installAgenticoMock({ readiness: readySnapshot({ workspaceRoots: [], repositories: [] }) });
+    render(<ReadinessGate />);
+
+    expect(await screen.findByRole('tab', { name: 'Home' })).toBeInTheDocument();
     expect(screen.queryByLabelText(/first-launch setup/i)).not.toBeInTheDocument();
   });
 
   it('re-derives the step from the authoritative snapshot on every mount (resume)', async () => {
-    // A restart after providers were fixed externally resumes at workspace,
-    // not at the first step and not at an inferred local position.
+    // A restart after the CLI was installed externally resumes at models, not
+    // at the first step and not at an inferred local position.
     installAgenticoMock({
-      readiness: readySnapshot({ workspaceRoots: [], repositories: [] }),
+      readiness: unreadySnapshot({ providers: [{ name: 'claude', installed: true, ready: true }] }),
     });
     render(<ReadinessGate />);
     await waitFor(() =>
-      expect(screen.getByRole('heading', { name: /choose a workspace/i })).toBeInTheDocument(),
+      expect(screen.getByRole('heading', { name: /model availability/i })).toBeInTheDocument(),
     );
   });
 });

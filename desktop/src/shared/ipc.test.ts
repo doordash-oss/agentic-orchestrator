@@ -454,7 +454,7 @@ describe('SettingsSchema', () => {
       runtime: { selection: 'claude' },
       window: { bounds: { x: 10, y: 20, width: 800, height: 600 } },
       theme: 'dark',
-      wizard: { collapsedHelp: true, lastRepositoryPathHint: '/work/repo' },
+      wizard: { collapsedHelp: true },
       ama: { drawer: 'expanded' },
       notifications: { previewEnabled: true },
       tabs: { open: [{ featureId: 'abcd1234', titleHint: 'Search' }], activeFeatureId: null },

@@ -8,7 +8,9 @@ import {
   type CreationDefaults,
   type EffortLevel,
   type RepositoryFileRef,
+  type RepositoryState,
 } from '../../../shared/ipc';
+import { ConsentDialog } from '../components/wizard/ConsentDialog';
 import { parseIpcError, type WizardError } from '../wizard/ipcError';
 import {
   GATE_FIELDS,
@@ -69,6 +71,32 @@ function defaultEffortByKey(defaults: CreationDefaults): Partial<Record<PhaseKey
   return result;
 }
 
+function withoutTrailingSeparators(folder: string): string {
+  return folder.replace(/[\\/]+$/, '');
+}
+
+/** Null when the folder has no usable parent to configure as a root. */
+function parentDirectory(folder: string): string | null {
+  const trimmed = withoutTrailingSeparators(folder);
+  const cut = Math.max(trimmed.lastIndexOf('/'), trimmed.lastIndexOf('\\'));
+  return cut <= 0 ? null : trimmed.slice(0, cut);
+}
+
+/** Usable repositories at or below a folder, per the authoritative snapshot. */
+function repositoriesWithin(
+  repositories: readonly RepositoryState[],
+  folder: string,
+): readonly RepositoryState[] {
+  const prefix = withoutTrailingSeparators(folder);
+  return repositories.filter((repository) => {
+    const path = withoutTrailingSeparators(repository.path);
+    return (
+      repository.valid &&
+      (path === prefix || path.startsWith(`${prefix}/`) || path.startsWith(`${prefix}\\`))
+    );
+  });
+}
+
 export interface CreateFeatureFormProps {
   onCreated(created: { featureId: string; name: string }): void;
   onDirtyChange?(dirty: boolean): void;
@@ -93,9 +121,13 @@ export function CreateFeatureForm({ onCreated, onDirtyChange }: CreateFeatureFor
   const [attachments, setAttachments] = useState<readonly string[]>([]);
   const [repositoryFiles, setRepositoryFiles] = useState<readonly RepositoryFileRef[]>([]);
   const [autoStart, setAutoStart] = useState(true);
-  const [directoryCandidate, setDirectoryCandidate] = useState<string | null>(null);
-  const [initializeConsent, setInitializeConsent] = useState(false);
-  const [workspacePending, setWorkspacePending] = useState(false);
+  const [folderCandidate, setFolderCandidate] = useState<string | null>(null);
+  /** Set once a candidate is a configured root that holds no repository. */
+  const [folderHoldsNoRepository, setFolderHoldsNoRepository] = useState(false);
+  const [folderNotice, setFolderNotice] = useState('');
+  const [workspaceRoots, setWorkspaceRoots] = useState<readonly string[]>([]);
+  const [consentOpen, setConsentOpen] = useState(false);
+  const [folderPending, setFolderPending] = useState(false);
   const [pending, setPending] = useState(false);
   const [nameError, setNameError] = useState<string | null>(null);
   const [repoError, setRepoError] = useState<string | null>(null);
@@ -141,34 +173,125 @@ export function CreateFeatureForm({ onCreated, onDirtyChange }: CreateFeatureFor
     try {
       const picked = await window.agentico.pickWorkspaceDirectory();
       if (picked.path !== null) {
-        setDirectoryCandidate(picked.path);
-        setInitializeConsent(false);
+        setFolderCandidate(picked.path);
+        setFolderHoldsNoRepository(false);
+        setFolderNotice('');
       }
     } catch (err) {
       setFormError(parseIpcError(err));
     }
   };
 
-  const applyDirectory = async (action: 'add-root' | 'initialize'): Promise<void> => {
-    if (directoryCandidate === null || (action === 'initialize' && !initializeConsent)) return;
-    setWorkspacePending(true);
+  /** Adopts a snapshot's workspace view and selects whatever it discovered. */
+  const adoptSnapshot = (snapshot: {
+    repositories: readonly RepositoryState[];
+    workspaceRoots: readonly { path: string }[];
+  }): readonly RepositoryState[] => {
+    setState((current) =>
+      current.phase === 'loaded'
+        ? {
+            phase: 'loaded',
+            defaults: { ...current.defaults, repositories: [...snapshot.repositories] },
+          }
+        : current,
+    );
+    setWorkspaceRoots(snapshot.workspaceRoots.map((root) => root.path));
+    return snapshot.repositories;
+  };
+
+  /** An unambiguous discovery selects itself; several stay for the user. */
+  const selectDiscovered = (discovered: readonly RepositoryState[]): void => {
+    const only = discovered.length === 1 ? discovered[0] : undefined;
+    if (only === undefined) return;
+    setRepoKeys((current) => (current.includes(only.name) ? current : [...current, only.name]));
+    setRepoError(null);
+  };
+
+  /**
+   * One verb for any folder: adding it as a workspace root covers both an
+   * existing repository (discovery registers a root that is one) and a folder
+   * that holds several. Only when it yields none does initialization become
+   * the remaining option.
+   */
+  const useFolder = async (): Promise<void> => {
+    const folder = folderCandidate;
+    if (folder === null) return;
+    setFolderPending(true);
+    setFormError(null);
     try {
-      const snapshot =
-        action === 'add-root'
-          ? await window.agentico.addWorkspaceRoot(directoryCandidate)
-          : await window.agentico.initRepository({ path: directoryCandidate, consent: true });
-      setState((current) =>
-        current.phase === 'loaded'
-          ? {
-              phase: 'loaded',
-              defaults: { ...current.defaults, repositories: snapshot.repositories },
-            }
-          : current,
+      const discovered = repositoriesWithin(
+        adoptSnapshot(await window.agentico.addWorkspaceRoot(folder)),
+        folder,
+      );
+      if (discovered.length === 0) {
+        setFolderHoldsNoRepository(true);
+        setFolderNotice(
+          'Added as a workspace root, but it holds no git repository yet. ' +
+            'Initialize it, or browse for a different folder.',
+        );
+        return;
+      }
+      selectDiscovered(discovered);
+      setFolderCandidate(null);
+      setFolderNotice(
+        discovered.length === 1
+          ? `Added ${discovered[0]?.name} and selected it.`
+          : `Added a workspace root holding ${discovered.length} repositories.`,
       );
     } catch (err) {
       setFormError(parseIpcError(err));
     } finally {
-      setWorkspacePending(false);
+      setFolderPending(false);
+    }
+  };
+
+  /**
+   * Server-owned `git init`. The server only initializes a folder strictly
+   * inside a configured root, so the parent is configured for the call and
+   * dropped again afterwards — the folder itself stays the root, and once it
+   * is a repository discovery registers it without the parent's siblings.
+   */
+  const initializeFolder = async (): Promise<void> => {
+    const folder = folderCandidate;
+    if (folder === null) return;
+    const parent = parentDirectory(folder);
+    if (parent === null) {
+      setConsentOpen(false);
+      setFormError({
+        code: 'E_INVALID_PATH',
+        message: 'Choose a folder inside another directory to initialize it as a repository.',
+      });
+      return;
+    }
+    const parentAlreadyRoot = workspaceRoots.includes(parent);
+    setFolderPending(true);
+    setFormError(null);
+    try {
+      if (!parentAlreadyRoot) await window.agentico.addWorkspaceRoot(parent);
+      let snapshot = await window.agentico.initRepository({ path: folder, consent: true });
+      if (!parentAlreadyRoot) {
+        snapshot = await window.agentico.removeWorkspaceRoot(parent).catch(() => snapshot);
+      }
+      const initialized = repositoriesWithin(adoptSnapshot(snapshot), folder);
+      selectDiscovered(initialized);
+      setFolderCandidate(null);
+      setFolderHoldsNoRepository(false);
+      setFolderNotice(
+        initialized.length === 0
+          ? 'Initialized the folder; the runtime has not discovered it yet.'
+          : `Initialized ${initialized[0]?.name} and selected it.`,
+      );
+    } catch (err) {
+      setFormError(parseIpcError(err));
+      if (!parentAlreadyRoot) {
+        await window.agentico
+          .removeWorkspaceRoot(parent)
+          .then(adoptSnapshot)
+          .catch(() => undefined);
+      }
+    } finally {
+      setConsentOpen(false);
+      setFolderPending(false);
     }
   };
 
@@ -349,23 +472,33 @@ export function CreateFeatureForm({ onCreated, onDirtyChange }: CreateFeatureFor
         <section className="creation-wizard__panel" aria-labelledby="creation-where">
           <p className="home-surface__eyebrow">01 / Where</p>
           <h2 id="creation-where">Choose repositories</h2>
-          <label className="form-field">
-            <span className="form-field__label">Search repositories</span>
-            <input
-              className="form-field__input"
-              type="search"
-              value={repoQuery}
-              placeholder="Filter by name or path"
-              onChange={(event) => setRepoQuery(event.target.value)}
-            />
-          </label>
+          {repositories.length > 0 ? (
+            <label className="form-field">
+              <span className="form-field__label">Search repositories</span>
+              <input
+                className="form-field__input"
+                type="search"
+                value={repoQuery}
+                placeholder="Filter by name or path"
+                onChange={(event) => setRepoQuery(event.target.value)}
+              />
+            </label>
+          ) : null}
           <fieldset
             ref={repoGroupRef}
             tabIndex={-1}
             className="form-field form-field--group"
             aria-invalid={repoError !== null}
           >
-            <legend className="form-field__label">Fresh workspace discovery</legend>
+            <legend className="form-field__label">
+              {repositories.length === 0 ? 'No repositories yet' : 'Fresh workspace discovery'}
+            </legend>
+            {repositories.length === 0 ? (
+              <p className="repo-options__empty">
+                Point Agentico at a folder below: an existing repository, a folder that holds
+                several, or an empty folder to start something new.
+              </p>
+            ) : null}
             <ul className="repo-options">
               {filteredRepositories.map((repo) => (
                 <li key={repo.name} className="repo-option" data-valid={repo.valid}>
@@ -395,7 +528,7 @@ export function CreateFeatureForm({ onCreated, onDirtyChange }: CreateFeatureFor
                   ) : null}
                 </li>
               ))}
-              {filteredRepositories.length === 0 ? (
+              {repositories.length > 0 && filteredRepositories.length === 0 ? (
                 <li className="repo-option repo-option--empty">
                   No repositories match “{repoQuery.trim()}”.
                 </li>
@@ -403,39 +536,41 @@ export function CreateFeatureForm({ onCreated, onDirtyChange }: CreateFeatureFor
             </ul>
             {repoError ? <p className="form-field__error">{repoError}</p> : null}
           </fieldset>
-          <section className="directory-browser" aria-label="Add or initialize a repository">
+          <section
+            className="directory-browser"
+            aria-label="Add a repository to the workspace"
+            {...(repositories.length === 0 ? { 'data-primary': 'true' } : {})}
+          >
             <div>
-              <h3>Bring in another folder</h3>
-              <button type="button" onClick={() => void browseDirectory()}>
+              <h3>
+                {repositories.length === 0
+                  ? 'Add your first repository'
+                  : 'Bring in another folder'}
+              </h3>
+              <button type="button" disabled={folderPending} onClick={() => void browseDirectory()}>
                 Browse for folder
               </button>
             </div>
-            {directoryCandidate !== null ? (
+            <p className="directory-browser__notice" role="status" aria-live="polite">
+              {folderNotice}
+            </p>
+            {folderCandidate !== null ? (
               <>
-                <code>{directoryCandidate}</code>
+                <code>{folderCandidate}</code>
                 <div className="directory-browser__actions">
-                  <button
-                    type="button"
-                    disabled={workspacePending}
-                    onClick={() => void applyDirectory('add-root')}
-                  >
-                    Add workspace root
-                  </button>
-                  <label>
-                    <input
-                      type="checkbox"
-                      checked={initializeConsent}
-                      onChange={(event) => setInitializeConsent(event.target.checked)}
-                    />
-                    Initialize this empty folder as a Git repository
-                  </label>
-                  <button
-                    type="button"
-                    disabled={!initializeConsent || workspacePending}
-                    onClick={() => void applyDirectory('initialize')}
-                  >
-                    Initialize and rediscover
-                  </button>
+                  {folderHoldsNoRepository ? (
+                    <button
+                      type="button"
+                      disabled={folderPending}
+                      onClick={() => setConsentOpen(true)}
+                    >
+                      Initialize it as a repository…
+                    </button>
+                  ) : (
+                    <button type="button" disabled={folderPending} onClick={() => void useFolder()}>
+                      {folderPending ? 'Adding…' : 'Use this folder'}
+                    </button>
+                  )}
                 </div>
               </>
             ) : (
@@ -707,6 +842,15 @@ export function CreateFeatureForm({ onCreated, onDirtyChange }: CreateFeatureFor
           </button>
         )}
       </footer>
+
+      {consentOpen && folderCandidate !== null ? (
+        <ConsentDialog
+          path={folderCandidate}
+          busy={folderPending}
+          onConfirm={() => void initializeFolder()}
+          onCancel={() => setConsentOpen(false)}
+        />
+      ) : null}
     </form>
   );
 }

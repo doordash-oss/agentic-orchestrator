@@ -41,6 +41,8 @@ export interface CreateFeatureOptions {
   description?: string;
   repoPatterns: RegExp[];
   waitForReady?: boolean;
+  /** Runs on the opened Where step, before any repository is selected. */
+  beforeRepoSelect?(): void | Promise<void>;
   beforeSubmit?(): void | Promise<void>;
 }
 
@@ -52,11 +54,13 @@ export async function createFeatureViaForm(
     description = '',
     repoPatterns,
     waitForReady = false,
+    beforeRepoSelect,
     beforeSubmit,
   }: CreateFeatureOptions,
 ): Promise<Locator> {
   await handle.page.getByRole('button', { name: 'New feature' }).click();
   await expect(handle.page.getByRole('form', { name: 'Create a feature' })).toBeVisible();
+  await beforeRepoSelect?.();
   for (const repoPattern of repoPatterns) {
     await handle.page.getByRole('checkbox', { name: repoPattern }).check();
   }

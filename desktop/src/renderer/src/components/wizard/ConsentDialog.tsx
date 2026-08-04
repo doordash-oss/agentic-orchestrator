@@ -10,7 +10,7 @@ export interface ConsentDialogProps {
 
 /**
  * Explicit consequence + consent step for server-owned `git init`. Cancel
- * always keeps the chosen folder editable in the repository step behind it.
+ * always keeps the chosen folder editable in the surface behind it.
  */
 export function ConsentDialog({ path, busy, onConfirm, onCancel }: ConsentDialogProps) {
   const cancelRef = useRef<HTMLButtonElement | null>(null);

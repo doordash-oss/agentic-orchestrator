@@ -10,12 +10,7 @@ describe('deriveWizardState', () => {
     expect(state.activeStep).toBe('providers');
     expect(state.activeIndex).toBe(0);
     expect(state.complete).toBe(false);
-    expect(state.gates).toEqual({
-      providers: false,
-      models: false,
-      workspace: false,
-      repository: false,
-    });
+    expect(state.gates).toEqual({ providers: false, models: false });
   });
 
   it('is complete only when every mandatory gate is satisfied', () => {
@@ -49,14 +44,13 @@ describe('deriveWizardState', () => {
     expect(state.activeStep).toBe('providers');
   });
 
-  it('advances to workspace when providers and models pass but no valid root exists', () => {
-    const snapshot = readySnapshot({ workspaceRoots: [], repositories: [] });
-    const state = deriveWizardState(snapshot);
-    expect(state.activeStep).toBe('workspace');
-    expect(state.complete).toBe(false);
+  it('an empty workspace is complete: repositories are chosen where work is defined', () => {
+    const state = deriveWizardState(readySnapshot({ workspaceRoots: [], repositories: [] }));
+    expect(state.complete).toBe(true);
+    expect(state.activeStep).toBe('ready');
   });
 
-  it('a configured-but-invalid root does not satisfy the workspace gate', () => {
+  it('never blocks on workspace or repository issues', () => {
     const snapshot = readySnapshot({
       workspaceRoots: [
         {
@@ -65,15 +59,6 @@ describe('deriveWizardState', () => {
           issue: { code: 'invalid_workspace_root', message: 'missing directory' },
         },
       ],
-      repositories: [],
-    });
-    const state = deriveWizardState(snapshot);
-    expect(state.gates.workspace).toBe(false);
-    expect(state.activeStep).toBe('workspace');
-  });
-
-  it('advances to repository when a valid root exists but no valid repository', () => {
-    const snapshot = readySnapshot({
       repositories: [
         {
           name: 'broken',
@@ -82,12 +67,14 @@ describe('deriveWizardState', () => {
           issue: { code: 'invalid_repository', message: 'not a git repository' },
         },
       ],
+      issues: [
+        { code: 'invalid_workspace_root', message: 'missing directory' },
+        { code: 'invalid_repository', message: 'not a git repository' },
+      ],
     });
     const state = deriveWizardState(snapshot);
-    expect(state.gates.workspace).toBe(true);
-    expect(state.gates.repository).toBe(false);
-    expect(state.activeStep).toBe('repository');
-    expect(state.complete).toBe(false);
+    expect(state.complete).toBe(true);
+    expect(state.blockers).toEqual([]);
   });
 
   it('never trusts local state: a server-unready snapshot is never complete', () => {
@@ -129,9 +116,11 @@ describe('deriveWizardState', () => {
   });
 
   it('marks earlier steps done and later steps upcoming for the spine', () => {
-    const snapshot = readySnapshot({ workspaceRoots: [], repositories: [] });
+    const snapshot = unreadySnapshot({
+      providers: [{ name: 'claude', installed: true, ready: true }],
+    });
     const state = deriveWizardState(snapshot);
-    expect(state.activeIndex).toBe(WIZARD_STEPS.indexOf('workspace'));
+    expect(state.activeIndex).toBe(WIZARD_STEPS.indexOf('models'));
   });
 
   it('is a pure projection: identical snapshots produce identical states', () => {

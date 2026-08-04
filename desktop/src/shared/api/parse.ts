@@ -1020,13 +1020,13 @@ export const RecoveryActionResponseSchema = z.object({
 });
 export type RecoveryActionResponse = z.output<typeof RecoveryActionResponseSchema>;
 
-export const RebaseStartResponseSchema = z.object({
+export const RebaseFeatureResponseSchema = z.object({
   api_version: z.string(),
   feature_id: z.string(),
-  cycle_type: z.string(),
+  parent_id: z.string(),
   result: z.string(),
 });
-export type RebaseStartResponse = z.output<typeof RebaseStartResponseSchema>;
+export type RebaseFeatureResponse = z.output<typeof RebaseFeatureResponseSchema>;
 
 export const RefactorFeatureResponseSchema = z.object({
   api_version: z.string(),
@@ -1055,25 +1055,6 @@ export const ReviewFeedbackFeatureResponseSchema = z.object({
   result: z.string(),
 });
 export type ReviewFeedbackFeatureResponse = z.output<typeof ReviewFeedbackFeatureResponseSchema>;
-
-export const RebasePreflightRepoSchema = z.object({
-  repo: z.string(),
-  target: z.string(),
-  publishable: z.boolean(),
-  freshness: z.string(),
-  behind: z.boolean(),
-  blocker: z.string().optional(),
-  conflict_files: z.array(z.string()).optional(),
-});
-export type RebasePreflightRepo = z.output<typeof RebasePreflightRepoSchema>;
-
-export const RebasePreflightResponseSchema = z.object({
-  api_version: z.string(),
-  feature_id: z.string(),
-  source_revision: z.string(),
-  repos: z.array(RebasePreflightRepoSchema),
-});
-export type RebasePreflightResponse = z.output<typeof RebasePreflightResponseSchema>;
 
 export const DiscardChildResponseSchema = z.object({
   api_version: z.string(),
@@ -1242,9 +1223,9 @@ void _recoverySnapshotSubset;
 type RecoveryItemDTO = components['schemas']['RecoveryItem'];
 const _recoveryItemSubset = (value: RecoveryItemDTO): ServerRecoveryItem => value;
 void _recoveryItemSubset;
-type RebaseStartDTO = components['schemas']['RebaseStartResponse'];
-const _rebaseStartSubset = (value: RebaseStartDTO): RebaseStartResponse => value;
-void _rebaseStartSubset;
+type RebaseFeatureDTO = components['schemas']['RebaseFeatureResponse'];
+const _rebaseFeatureSubset = (value: RebaseFeatureDTO): RebaseFeatureResponse => value;
+void _rebaseFeatureSubset;
 type RefactorFeatureDTO = components['schemas']['RefactorFeatureResponse'];
 const _refactorFeatureSubset = (value: RefactorFeatureDTO): RefactorFeatureResponse => value;
 void _refactorFeatureSubset;
@@ -1262,9 +1243,6 @@ const _reviewFeedbackFeatureSubset = (
   value: ReviewFeedbackFeatureDTO,
 ): ReviewFeedbackFeatureResponse => value;
 void _reviewFeedbackFeatureSubset;
-type RebasePreflightDTO = components['schemas']['RebasePreflightResponse'];
-const _rebasePreflightSubset = (value: RebasePreflightDTO): RebasePreflightResponse => value;
-void _rebasePreflightSubset;
 type RepoStatusDTO = components['schemas']['RepoStatus'];
 const _repoStatusSubset = (value: RepoStatusDTO): ServerRepoStatus => value;
 void _repoStatusSubset;

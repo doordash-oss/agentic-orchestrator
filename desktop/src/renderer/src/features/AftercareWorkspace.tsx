@@ -11,6 +11,8 @@ export interface AftercareWorkspaceProps {
   snapshot: FeatureSnapshot;
   run: RunDetailView | null;
   receipt?: CycleReceipt;
+  /** Action currently dispatching a one-click launch; its card renders busy. */
+  busyAction?: { id: AftercareAction['id']; label: string };
   onRetry(): void;
   onReopenCycle(): void;
   onAction(action: AftercareAction): void;
@@ -23,6 +25,7 @@ export function AftercareWorkspace({
   snapshot,
   run,
   receipt,
+  busyAction,
   onRetry,
   onReopenCycle,
   onAction,
@@ -88,22 +91,31 @@ export function AftercareWorkspace({
             <p className="aftercare-workspace__empty">No action is needed right now.</p>
           ) : (
             <ol className="aftercare-workspace__actions">
-              {actions.map((action, index) => (
-                <li key={action.id}>
-                  <button type="button" onClick={() => onAction(action)}>
-                    <span className="aftercare-workspace__action-index" aria-hidden="true">
-                      {String(index + 1).padStart(2, '0')}
-                    </span>
-                    <span className="aftercare-workspace__action-copy">
-                      <strong>{action.title}</strong>
-                      <small>{action.description}</small>
-                    </span>
-                    <span className="aftercare-workspace__action-label">
-                      {action.label} <span aria-hidden="true">↗</span>
-                    </span>
-                  </button>
-                </li>
-              ))}
+              {actions.map((action, index) => {
+                const busy = busyAction?.id === action.id;
+                return (
+                  <li key={action.id}>
+                    <button
+                      type="button"
+                      disabled={busy}
+                      aria-busy={busy || undefined}
+                      onClick={() => onAction(action)}
+                    >
+                      <span className="aftercare-workspace__action-index" aria-hidden="true">
+                        {String(index + 1).padStart(2, '0')}
+                      </span>
+                      <span className="aftercare-workspace__action-copy">
+                        <strong>{action.title}</strong>
+                        <small>{action.description}</small>
+                      </span>
+                      <span className="aftercare-workspace__action-label">
+                        {busy ? busyAction?.label : action.label}{' '}
+                        <span aria-hidden="true">{busy ? '…' : '↗'}</span>
+                      </span>
+                    </button>
+                  </li>
+                );
+              })}
             </ol>
           )}
         </section>

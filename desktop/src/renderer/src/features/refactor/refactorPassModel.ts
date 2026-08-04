@@ -318,27 +318,49 @@ function passActionLabel(id: PassAction['id'], child: FeatureSnapshot): string {
   }
 }
 
-/** The pass-kind label for region/eyebrow copy, switching on the child kind. */
+/**
+ * The pass-kind label for region/eyebrow copy, switching on the child kind.
+ * Unknown kinds fall back to a neutral "Pass" rather than impersonating the
+ * refactor pass, so a missing mapping is visible instead of silently wrong.
+ */
 export function passKindLabel(kind: string): string {
-  return kind === 'review-feedback' ? 'Review feedback pass' : 'Refactor pass';
+  if (kind === 'review-feedback') return 'Review feedback pass';
+  if (kind === 'rebase') return 'Rebase pass';
+  if (kind === 'refactor') return 'Refactor pass';
+  return 'Pass';
 }
 
-/** The active-pass status chip label, switching on the child kind. */
+/**
+ * The active-pass status chip label, switching on the child kind. Unknown kinds
+ * fall back to a neutral "Working" rather than impersonating "Refactoring".
+ */
 export function refactoringStatusChip(view: RelationshipChildView): {
   label: string;
   tone: 'info' | 'attention';
 } {
   const attention = view.attention.length > 0 || view.integrationState === 'attention';
-  const active = view.kind === 'review-feedback' ? 'Addressing review feedback' : 'Refactoring';
+  const active = passActiveVerb(view.kind);
   return attention
     ? { label: `${active} — needs attention`, tone: 'attention' }
     : { label: active, tone: 'info' };
 }
 
-/** Human-readable label for each child kind, used by the closed-pass history. */
+function passActiveVerb(kind: string): string {
+  if (kind === 'review-feedback') return 'Addressing review feedback';
+  if (kind === 'rebase') return 'Rebasing';
+  if (kind === 'refactor') return 'Refactoring';
+  return 'Working';
+}
+
+/**
+ * Human-readable label for each child kind, used by the closed-pass history.
+ * Unknown kinds fall back to a neutral "Pass" rather than impersonating
+ * "Refactor".
+ */
 export const CHILD_KIND_LABEL: Record<string, string> = {
   refactor: 'Refactor',
   'review-feedback': 'Review feedback',
+  rebase: 'Rebase',
 };
 
 /** Human-readable label for each review-feedback comment type. */

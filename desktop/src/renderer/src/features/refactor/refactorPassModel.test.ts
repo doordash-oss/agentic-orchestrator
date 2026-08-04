@@ -293,6 +293,25 @@ describe('refactoringStatusChip', () => {
       tone: 'attention',
     });
   });
+
+  it('switches to rebase copy for a rebase child', () => {
+    expect(refactoringStatusChip(childView({ kind: 'rebase' }))).toEqual({
+      label: 'Rebasing',
+      tone: 'info',
+    });
+    expect(
+      refactoringStatusChip(
+        childView({ kind: 'rebase', attention: [{ code: 'x', message: 'conflict' }] }),
+      ),
+    ).toEqual({ label: 'Rebasing — needs attention', tone: 'attention' });
+  });
+
+  it('falls back to a neutral verb for an unknown kind', () => {
+    expect(refactoringStatusChip(childView({ kind: 'mystery' }))).toEqual({
+      label: 'Working',
+      tone: 'info',
+    });
+  });
 });
 
 describe('passKindLabel', () => {
@@ -302,6 +321,14 @@ describe('passKindLabel', () => {
 
   it('returns "Review feedback pass" for review-feedback children', () => {
     expect(passKindLabel('review-feedback')).toBe('Review feedback pass');
+  });
+
+  it('returns "Rebase pass" for rebase children', () => {
+    expect(passKindLabel('rebase')).toBe('Rebase pass');
+  });
+
+  it('falls back to a neutral "Pass" for an unknown kind', () => {
+    expect(passKindLabel('mystery')).toBe('Pass');
   });
 });
 
@@ -318,5 +345,12 @@ describe('custodyStations kind-aware eyebrow', () => {
     const child = featureSnapshot({ status: 'Created', setupComplete: true, setup: doneSetup });
     const [, passStation] = custodyStations(parent, child, childView({ kind: 'review-feedback' }));
     expect(passStation.eyebrow).toBe('Review feedback pass');
+  });
+
+  it('uses "Rebase pass" eyebrow for rebase children', () => {
+    const parent = featureSnapshot({ status: 'Published' });
+    const child = featureSnapshot({ status: 'Created', setupComplete: true, setup: doneSetup });
+    const [, passStation] = custodyStations(parent, child, childView({ kind: 'rebase' }));
+    expect(passStation.eyebrow).toBe('Rebase pass');
   });
 });

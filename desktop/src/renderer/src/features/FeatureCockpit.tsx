@@ -45,7 +45,6 @@ import {
   type AftercareModalId,
   type CycleReceipt,
 } from './postImplementationModel';
-import { RebaseModal } from './cycles/RebaseModal';
 import { RefactorLauncher } from './refactor/RefactorLauncher';
 import { ReviewFeedbackLauncher } from './reviewFeedback/ReviewFeedbackLauncher';
 import { RefactorPassWorkspace, useRefactorPass } from './refactor/RefactorPassWorkspace';
@@ -754,9 +753,10 @@ export function FeatureCockpit({
   const [busy, setBusy] = useState(false);
   const [announcement, setAnnouncement] = useState('');
   const [actionError, setActionError] = useState<{
-    action: 'Start' | 'Stop' | 'Resume' | 'Retry' | 'Restart' | 'Delete';
+    action: 'Start' | 'Stop' | 'Resume' | 'Retry' | 'Restart' | 'Delete' | 'Rebase';
     error: WizardError;
   } | null>(null);
+  const [rebaseLaunchBusy, setRebaseLaunchBusy] = useState(false);
   const [stopDialog, setStopDialog] = useState(false);
   const [restartDialog, setRestartDialog] = useState(false);
   const [deleteDialog, setDeleteDialog] = useState(false);
@@ -865,6 +865,41 @@ export function FeatureCockpit({
     state.phase === 'loaded' ? state.snapshot : null,
     onPassChanged,
   );
+
+  /**
+   * One-click rebase child launch, shared by the aftercare card, the cockpit
+   * overflow entry, and MergeModal's "Hand off to rebase" button. Zero-input,
+   * single-flight with the lifecycle actions: the triggering control shows a
+   * busy state while the call is in flight, success arms auto-start and
+   * silently reloads the parent so the cockpit's activeChild-driven branch
+   * flips into the pass workspace, and typed failures render inline through
+   * the persistent action-error alert near the aftercare surface.
+   */
+  const launchRebase = useCallback(() => {
+    if (actionInFlightRef.current || rebaseLaunchBusy) return;
+    actionInFlightRef.current = true;
+    setRebaseLaunchBusy(true);
+    setActionError(null);
+    setCompletionModal(null);
+    setCycleModal(null);
+    setAnnouncement('Starting rebase pass…');
+    window.agentico
+      .launchRebaseChild({ featureId })
+      .then((launch) => {
+        refactorPass.armAutoStart(launch.childId);
+        setAnnouncement('Rebase pass launched. Refreshing authoritative state…');
+        void load({ silent: true });
+      })
+      .catch((err: unknown) => {
+        setActionError({ action: 'Rebase', error: parseIpcError(err) });
+        setAnnouncement('');
+        void load({ silent: true });
+      })
+      .finally(() => {
+        actionInFlightRef.current = false;
+        setRebaseLaunchBusy(false);
+      });
+  }, [featureId, load, refactorPass, rebaseLaunchBusy]);
 
   // Fetch on mount; refetch on relevant invalidations; track stream health
   // so the view can show that it is refreshing after a reconnect.
@@ -1434,9 +1469,9 @@ export function FeatureCockpit({
   if (rebaseAction?.enabled === true) {
     menuActions.push({
       key: 'rebase',
-      label: 'Rebase',
-      enabled: true,
-      onClick: () => setCycleModal('rebase'),
+      label: rebaseLaunchBusy ? 'Rebasing…' : 'Rebase',
+      enabled: !rebaseLaunchBusy,
+      onClick: () => launchRebase(),
     });
   }
   if (refactorAction?.enabled === true) {
@@ -1559,6 +1594,10 @@ export function FeatureCockpit({
       openCompletionModal('publish');
       return;
     }
+    if (action.id === 'rebase') {
+      launchRebase();
+      return;
+    }
     setCycleModal(action.id);
   };
   const standaloneAttention =
@@ -1656,6 +1695,9 @@ export function FeatureCockpit({
                 snapshot={snapshot}
                 run={aftercareRun}
                 receipt={cycleReceipt}
+                busyAction={
+                  rebaseLaunchBusy ? { id: 'rebase', label: 'Starting rebase pass…' } : undefined
+                }
                 onRetry={retry}
                 onReopenCycle={() => setDismissedCycleId(undefined)}
                 onAction={openAftercareAction}
@@ -1844,19 +1886,6 @@ export function FeatureCockpit({
           />
         ) : null}
 
-        {cycleModal === 'rebase' ? (
-          <CockpitModal title="Rebase" ariaLabel="Rebase" onClose={() => setCycleModal(null)}>
-            <RebaseModal
-              featureId={featureId}
-              snapshot={snapshot}
-              onDispatched={() => load({ silent: true })}
-              onCancel={() => setCycleModal(null)}
-              attentionItems={attentionItems}
-              onOpenGate={() => setCycleModal(null)}
-            />
-          </CockpitModal>
-        ) : null}
-
         {cycleModal === 'refactor' ? (
           <CockpitModal
             title="Start refactor"
@@ -1925,10 +1954,7 @@ export function FeatureCockpit({
               preflight={completion.preflight}
               dispatchAction={dispatchCompletion}
               onDispatched={onCompletionDispatched}
-              onHandoffToRebase={() => {
-                setCompletionModal(null);
-                setCycleModal('rebase');
-              }}
+              onHandoffToRebase={() => launchRebase()}
             />
           </CockpitModal>
         ) : null}
@@ -2296,19 +2322,6 @@ export function FeatureCockpit({
             />
           ) : null}
 
-          {cycleModal === 'rebase' ? (
-            <CockpitModal title="Rebase" ariaLabel="Rebase" onClose={() => setCycleModal(null)}>
-              <RebaseModal
-                featureId={featureId}
-                snapshot={snapshot}
-                onDispatched={() => load({ silent: true })}
-                onCancel={() => setCycleModal(null)}
-                attentionItems={attentionItems}
-                onOpenGate={() => setCycleModal(null)}
-              />
-            </CockpitModal>
-          ) : null}
-
           {cycleModal === 'refactor' ? (
             <CockpitModal title="Refactor" ariaLabel="Refactor" onClose={() => setCycleModal(null)}>
               <RefactorLauncher
@@ -2373,10 +2386,7 @@ export function FeatureCockpit({
                 preflight={completion.preflight}
                 dispatchAction={dispatchCompletion}
                 onDispatched={onCompletionDispatched}
-                onHandoffToRebase={() => {
-                  setCompletionModal(null);
-                  setCycleModal('rebase');
-                }}
+                onHandoffToRebase={() => launchRebase()}
               />
             </CockpitModal>
           ) : null}

@@ -1653,33 +1653,11 @@ function makeMockApi(
       new Promise((resolve) => {
         setTimeout(() => resolve(REWIND_RESULT), 500);
       }),
-    startRebase: () =>
+    launchRebaseChild: () =>
       Promise.resolve({
-        featureId: 'abcd1234ef567890',
-        cycleType: 'rebase',
-        result: 'started',
-      }),
-    preflightRebase: () =>
-      Promise.resolve({
-        featureId: 'abcd1234ef567890',
-        sourceRevision: 'rebase-rev-001',
-        repos: [
-          {
-            repo: 'signal-lab',
-            target: 'main',
-            publishable: true,
-            freshness: 'behind',
-            behind: true,
-          },
-          {
-            repo: 'telemetry-sdk',
-            target: 'main',
-            publishable: true,
-            freshness: 'up_to_date',
-            behind: false,
-            blocker: '',
-          },
-        ],
+        childId: 'child1234ef567890',
+        parentId: 'abcd1234ef567890',
+        result: 'created',
       }),
     launchRefactorChild: () =>
       Promise.resolve({

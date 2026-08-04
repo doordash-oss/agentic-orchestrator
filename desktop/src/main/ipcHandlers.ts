@@ -84,10 +84,8 @@ import {
   type RewindPreviewRequest,
   type RewindPreviewView,
   type RewindExecuteRequest,
-  type RebaseRequest,
-  type RebaseResult,
-  type RebasePreflightRequest,
-  type RebasePreflightResult,
+  type LaunchRebaseChildRequest,
+  type LaunchRebaseChildResult,
   type LaunchRefactorChildRequest,
   type LaunchRefactorChildResult,
   type DiscardRefactorChildRequest,
@@ -185,8 +183,7 @@ export interface IpcServices {
   getRunLogContent(request: RunLogContentRequest): Promise<RunTextContent>;
   getRewindPreview(request: RewindPreviewRequest): Promise<RewindPreviewView>;
   executeRewind(request: RewindExecuteRequest): Promise<FeatureActionResult>;
-  startRebase(request: RebaseRequest): Promise<RebaseResult>;
-  preflightRebase(request: RebasePreflightRequest): Promise<RebasePreflightResult>;
+  launchRebaseChild(request: LaunchRebaseChildRequest): Promise<LaunchRebaseChildResult>;
   launchRefactorChild(request: LaunchRefactorChildRequest): Promise<LaunchRefactorChildResult>;
   discardRefactorChild(request: DiscardRefactorChildRequest): Promise<DiscardRefactorChildResult>;
   deleteFeatureCascade(request: DeleteFeatureCascadeRequest): Promise<DeleteFeatureCascadeResult>;
@@ -368,10 +365,8 @@ export function registerIpcHandlers(
       services.getRewindPreview(request),
     [IPC_CHANNELS.rewindExecute]: (_event, request: RewindExecuteRequest) =>
       services.executeRewind(request),
-    [IPC_CHANNELS.featuresRebase]: (_event, request: RebaseRequest) =>
-      services.startRebase(request),
-    [IPC_CHANNELS.featuresRebasePreflight]: (_event, request: RebasePreflightRequest) =>
-      services.preflightRebase(request),
+    [IPC_CHANNELS.featuresRebase]: (_event, request: LaunchRebaseChildRequest) =>
+      services.launchRebaseChild(request),
     [IPC_CHANNELS.featuresRefactor]: (_event, request: LaunchRefactorChildRequest) =>
       services.launchRefactorChild(request),
     [IPC_CHANNELS.featuresRefactorDiscard]: (_event, request: DiscardRefactorChildRequest) =>

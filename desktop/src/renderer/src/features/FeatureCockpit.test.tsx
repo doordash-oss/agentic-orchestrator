@@ -325,25 +325,138 @@ describe('FeatureCockpit snapshot rendering', () => {
     expect(within(request).getByLabelText('Help reply')).toBeVisible();
   });
 
-  it('opens the dedicated Rebase dialog from the Aftercare runway', async () => {
-    const mock = installAgenticoMock({
-      feature: featureSnapshot({
-        status: 'Published',
-        actions: [{ id: 'rebase', enabled: true, disabledReasons: [] }],
-      }),
+  it('launches the rebase child directly from the Aftercare runway with no modal', async () => {
+    const childId = 'rebase1234ef567890';
+    const baseParent = featureSnapshot({
+      id: FEATURE_ID,
+      status: 'Published',
+      actions: [{ id: 'rebase', enabled: true, disabledReasons: [] }],
     });
-    mock.api.preflightRebase.mockResolvedValue({
-      featureId: FEATURE_ID,
-      sourceRevision: 'rebase-revision',
-      repos: [],
+    const parentWithChild = featureSnapshot({
+      id: FEATURE_ID,
+      status: 'Published',
+      actions: [],
+      activeChild: {
+        id: childId,
+        name: 'Rebase pass',
+        kind: 'rebase',
+        displayToken: `rebase:${childId}`,
+        displayState: 'Active — Created',
+        pipeline: 'medium',
+        status: 'Created',
+        relationshipState: 'active',
+        startedAt: '2026-07-30T10:00:00Z',
+        cost: { totalUsd: 0, byPhase: {} },
+        integrationState: 'pending',
+        attention: [],
+        cleanupWarnings: [],
+      },
+    });
+    const child = featureSnapshot({
+      id: childId,
+      name: 'Rebase pass',
+      status: 'Created',
+      setupComplete: true,
+      setup: { status: 'done', attempt: 1, tasks: [] },
+      actions: [{ id: 'start', enabled: true, disabledReasons: [] }],
+    });
+    let currentParent = baseParent;
+    const mock = installAgenticoMock({ feature: baseParent });
+    mock.api.getFeature.mockImplementation((id: string) =>
+      Promise.resolve(id === childId ? child : currentParent),
+    );
+    mock.api.launchRebaseChild.mockImplementation(async () => {
+      currentParent = parentWithChild;
+      return { childId, parentId: FEATURE_ID, result: 'created' };
     });
     renderCockpit(mock);
     const user = userEvent.setup();
 
-    await user.click(await screen.findByRole('button', { name: /Prepare rebase/ }));
+    const aftercare = await screen.findByRole('region', { name: 'Feature aftercare' });
+    // The card reads the new "Start rebase pass" label and reworded description.
+    const card = within(aftercare).getByRole('button', { name: /Start rebase pass/ });
+    expect(card).toBeVisible();
+    expect(card).toHaveTextContent(/merges each behind repository/);
+    await user.click(card);
 
-    expect(await screen.findByRole('dialog', { name: 'Rebase' })).toBeVisible();
-    expect(screen.queryByRole('dialog', { name: 'Repository cycles' })).not.toBeInTheDocument();
+    // Exactly one zero-input launch call; no dialog is mounted at any point.
+    await waitFor(() => expect(mock.api.launchRebaseChild).toHaveBeenCalledOnce());
+    expect(mock.api.launchRebaseChild).toHaveBeenCalledWith({ featureId: FEATURE_ID });
+    expect(screen.queryByRole('dialog', { name: 'Rebase' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('dialog', { name: 'Rebase preflight' })).not.toBeInTheDocument();
+
+    // The returned child arms auto-start; the cockpit flips into the pass workspace.
+    await waitFor(() =>
+      expect(mock.api.dispatchFeatureAction).toHaveBeenCalledWith({
+        featureId: childId,
+        action: 'start',
+      }),
+    );
+    expect(await screen.findByRole('region', { name: 'Rebase pass' })).toBeVisible();
+  });
+
+  it('renders the inline already-up-to-date notice on the aftercare surface and keeps the card available', async () => {
+    const mock = installAgenticoMock({
+      feature: featureSnapshot({
+        id: FEATURE_ID,
+        status: 'Published',
+        actions: [{ id: 'rebase', enabled: true, disabledReasons: [] }],
+      }),
+    });
+    mock.api.launchRebaseChild.mockRejectedValue(
+      new Error(
+        'rebase_already_up_to_date: Every repository is already up to date with its target branch. Nothing to merge.',
+      ),
+    );
+    renderCockpit(mock);
+    const user = userEvent.setup();
+
+    const aftercare = await screen.findByRole('region', { name: 'Feature aftercare' });
+    await user.click(within(aftercare).getByRole('button', { name: /Start rebase pass/ }));
+
+    // The typed failure renders inline near the aftercare cards with code + message.
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('rebase_already_up_to_date');
+    expect(alert).toHaveTextContent(/already up to date with its target branch/);
+    // No pass workspace is mounted; the cockpit stays in aftercare.
+    expect(screen.queryByRole('region', { name: 'Rebase pass' })).not.toBeInTheDocument();
+    // The card remains available for another attempt.
+    expect(within(aftercare).getByRole('button', { name: /Start rebase pass/ })).toBeEnabled();
+  });
+
+  it('renders an inline typed failure for a target-resolution error and clears it on the next attempt', async () => {
+    const mock = installAgenticoMock({
+      feature: featureSnapshot({
+        id: FEATURE_ID,
+        status: 'Published',
+        actions: [{ id: 'rebase', enabled: true, disabledReasons: [] }],
+      }),
+    });
+    mock.api.launchRebaseChild
+      .mockRejectedValueOnce(
+        new Error(
+          'rebase_target_resolution_failed: Could not resolve a target branch for repo-a. Check the repository default branch.',
+        ),
+      )
+      .mockResolvedValueOnce({
+        childId: 'rebase1234ef567890',
+        parentId: FEATURE_ID,
+        result: 'created',
+      });
+    renderCockpit(mock);
+    const user = userEvent.setup();
+
+    const aftercare = await screen.findByRole('region', { name: 'Feature aftercare' });
+    await user.click(within(aftercare).getByRole('button', { name: /Start rebase pass/ }));
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('rebase_target_resolution_failed');
+    expect(alert).toHaveTextContent(/Could not resolve a target branch/);
+
+    // A new launch attempt clears the previous error.
+    await user.click(within(aftercare).getByRole('button', { name: /Start rebase pass/ }));
+    await waitFor(() => expect(mock.api.launchRebaseChild).toHaveBeenCalledTimes(2));
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 
   it('gives a running maintenance cycle exclusive ownership of the stage', async () => {
@@ -428,6 +541,7 @@ describe('FeatureCockpit snapshot rendering', () => {
     expect(
       within(aftercare).getByRole('button', { name: /Bring branches up to date/ }),
     ).toBeVisible();
+    expect(within(aftercare).getByText('Start rebase pass')).toBeVisible();
     expect(within(aftercare).getByRole('button', { name: /Start a refactor pass/ })).toBeVisible();
   });
 

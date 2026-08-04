@@ -78,7 +78,7 @@ export function RefactorHistory({
 }
 
 function kindLabel(kind: string): string {
-  return CHILD_KIND_LABEL[kind] ?? 'Refactor';
+  return CHILD_KIND_LABEL[kind] ?? 'Pass';
 }
 
 function historySpan(entry: RelationshipChildView): string {

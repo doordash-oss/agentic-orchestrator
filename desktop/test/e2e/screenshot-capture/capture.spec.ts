@@ -521,26 +521,6 @@ test('capture all visual evidence screenshots', async ({ page }) => {
 
   await capture(
     page,
-    'rebase-preflight',
-    'light',
-    1440,
-    900,
-    'guarded-rebase-preflight-with-repository-targets-freshness-blockers-and-impact-c-1440x900',
-    '.cycle-modal[data-phase]',
-  );
-
-  await capture(
-    page,
-    'rebase-preflight',
-    'dark',
-    1440,
-    900,
-    'guarded-rebase-preflight-with-repository-targets-freshness-blockers-and-impact-c-1440x900-28539a80',
-    '.cycle-modal[data-phase]',
-  );
-
-  await capture(
-    page,
     'refactor-launch',
     'light',
     1440,

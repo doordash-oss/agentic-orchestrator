@@ -139,7 +139,7 @@ export function aftercareActions(snapshot: FeatureSnapshot): AftercareAction[] {
   return ACTION_ORDER.flatMap((id) => {
     const action = snapshot.actions.find((candidate) => candidate.id === id);
     if (action?.enabled !== true) return [];
-    return [aftercareAction(id, snapshot.repos.length)];
+    return [aftercareAction(id)];
   });
 }
 
@@ -178,8 +178,7 @@ export function cyclePresentation(snapshot: FeatureSnapshot): CyclePresentation 
   };
 }
 
-function aftercareAction(id: AftercareActionId, repoCount: number): AftercareAction {
-  const scope = `${repoCount} ${repoCount === 1 ? 'repository' : 'repositories'}`;
+function aftercareAction(id: AftercareActionId): AftercareAction {
   switch (id) {
     case 'publish':
       return {
@@ -191,9 +190,10 @@ function aftercareAction(id: AftercareActionId, repoCount: number): AftercareAct
     case 'rebase':
       return {
         id,
-        label: 'Prepare rebase',
+        label: 'Start rebase pass',
         title: 'Bring branches up to date',
-        description: `Inspect and rebase ${scope} against their target branches.`,
+        description:
+          'Starts a pass immediately that merges each behind repository’s target branch into the feature. No setup needed.',
       };
     case 'refactor':
       return {

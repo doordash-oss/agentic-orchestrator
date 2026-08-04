@@ -31,7 +31,6 @@ export const IPC_CHANNELS = {
   featuresSetup: 'agentico:features:setup',
   featuresDispatchAction: 'agentico:features:dispatch-action',
   featuresRebase: 'agentico:features:rebase',
-  featuresRebasePreflight: 'agentico:features:rebase:preflight',
   featuresRefactor: 'agentico:features:refactor',
   featuresRefactorDiscard: 'agentico:features:refactor:discard',
   featuresReviewFeedbackFetch: 'agentico:features:review-feedback:fetch',
@@ -1018,34 +1017,16 @@ export type FeatureActionResult = z.output<typeof FeatureActionResultSchema>;
 
 // --- Rebase and refactor cycle actions -----------------------------------
 
-export const RebaseRequestSchema = z.strictObject({
+/**
+ * The rebase child-launch contract: zero-input, mirroring the refactor and
+ * review-feedback launches. The server accepts and ignores any body; the
+ * child id, parent id, and action result come back exactly like the other
+ * child kinds.
+ */
+export const LaunchRebaseChildRequestSchema = z.strictObject({
   featureId: FeatureIdSchema,
-  sourceRevision: z.string().max(512).optional(),
 });
-export type RebaseRequest = z.output<typeof RebaseRequestSchema>;
-
-export const RebasePreflightRequestSchema = z.strictObject({
-  featureId: FeatureIdSchema,
-});
-export type RebasePreflightRequest = z.output<typeof RebasePreflightRequestSchema>;
-
-export const RebasePreflightRepoSchema = z.strictObject({
-  repo: z.string(),
-  target: z.string(),
-  publishable: z.boolean(),
-  freshness: z.string(),
-  behind: z.boolean(),
-  blocker: z.string().optional(),
-  conflictFiles: z.array(z.string()).optional(),
-});
-export type RebasePreflightRepo = z.output<typeof RebasePreflightRepoSchema>;
-
-export const RebasePreflightResultSchema = z.strictObject({
-  featureId: FeatureIdSchema,
-  sourceRevision: z.string(),
-  repos: z.array(RebasePreflightRepoSchema).max(200),
-});
-export type RebasePreflightResult = z.output<typeof RebasePreflightResultSchema>;
+export type LaunchRebaseChildRequest = z.output<typeof LaunchRebaseChildRequestSchema>;
 
 // --- Completion preflight + repository diff ------------------------------
 
@@ -1133,13 +1114,12 @@ export const RevealPathRequestSchema = z.strictObject({
 });
 export type RevealPathRequest = z.output<typeof RevealPathRequestSchema>;
 
-export const RebaseResultSchema = z.strictObject({
-  featureId: FeatureIdSchema,
-  cycleType: z.string(),
+export const LaunchRebaseChildResultSchema = z.strictObject({
+  childId: FeatureIdSchema,
+  parentId: FeatureIdSchema,
   result: z.string().max(500),
-  sessionId: z.string().min(1).max(200).optional(),
 });
-export type RebaseResult = z.output<typeof RebaseResultSchema>;
+export type LaunchRebaseChildResult = z.output<typeof LaunchRebaseChildResultSchema>;
 
 // LaunchRefactorChildRequestSchema lives in the feature-creation section
 // below: it shares the creation wizard's attachment limits and shapes.
@@ -2734,12 +2714,8 @@ export const ipcContracts: Record<IpcChannel, IpcContract> = {
     response: z.strictObject({ ok: z.boolean() }),
   },
   [IPC_CHANNELS.featuresRebase]: {
-    request: z.tuple([RebaseRequestSchema]),
-    response: RebaseResultSchema,
-  },
-  [IPC_CHANNELS.featuresRebasePreflight]: {
-    request: z.tuple([RebasePreflightRequestSchema]),
-    response: RebasePreflightResultSchema,
+    request: z.tuple([LaunchRebaseChildRequestSchema]),
+    response: LaunchRebaseChildResultSchema,
   },
   [IPC_CHANNELS.featuresRefactor]: {
     request: z.tuple([LaunchRefactorChildRequestSchema]),
@@ -2885,8 +2861,7 @@ export interface AgenticoApi {
   generatePublishDescription(request: PublishDescriptionRequest): Promise<PublishDescriptionResult>;
   openExternal(request: OpenExternalRequest): Promise<{ ok: boolean }>;
   revealPath(request: RevealPathRequest): Promise<{ ok: boolean }>;
-  startRebase(request: RebaseRequest): Promise<RebaseResult>;
-  preflightRebase(request: RebasePreflightRequest): Promise<RebasePreflightResult>;
+  launchRebaseChild(request: LaunchRebaseChildRequest): Promise<LaunchRebaseChildResult>;
   launchRefactorChild(request: LaunchRefactorChildRequest): Promise<LaunchRefactorChildResult>;
   discardRefactorChild(request: DiscardRefactorChildRequest): Promise<DiscardRefactorChildResult>;
   fetchReviewFeedback(request: FetchReviewFeedbackRequest): Promise<FetchReviewFeedbackResult>;

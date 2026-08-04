@@ -47,8 +47,7 @@ import {
   type RunLogContentRequest,
   type RewindPreviewRequest,
   type RewindExecuteRequest,
-  type RebaseRequest,
-  type RebasePreflightRequest,
+  type LaunchRebaseChildRequest,
   type LaunchRefactorChildRequest,
   type DiscardRefactorChildRequest,
   type DeleteFeatureCascadeRequest,
@@ -234,9 +233,8 @@ const api: AgenticoApi = {
     call(IPC_CHANNELS.publishDescription, request),
   openExternal: (request: OpenExternalRequest) => call(IPC_CHANNELS.openExternal, request),
   revealPath: (request: RevealPathRequest) => call(IPC_CHANNELS.revealPath, request),
-  startRebase: (request: RebaseRequest) => call(IPC_CHANNELS.featuresRebase, request),
-  preflightRebase: (request: RebasePreflightRequest) =>
-    call(IPC_CHANNELS.featuresRebasePreflight, request),
+  launchRebaseChild: (request: LaunchRebaseChildRequest) =>
+    call(IPC_CHANNELS.featuresRebase, request),
   launchRefactorChild: (request: LaunchRefactorChildRequest) =>
     call(IPC_CHANNELS.featuresRefactor, request),
   discardRefactorChild: (request: DiscardRefactorChildRequest) =>

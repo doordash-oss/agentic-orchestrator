@@ -11,17 +11,11 @@ import '@fontsource/ibm-plex-mono/500.css';
 import '../../../src/renderer/src/styles/tokens.css';
 import '../../../src/renderer/src/styles/app.css';
 
-import {
-  installMockApi,
-  CYCLES_FEATURE_SNAPSHOT,
-  REBASE_FEATURE_SNAPSHOT,
-  FEATURE_QUESTION_ITEM,
-} from './mock-api';
+import { installMockApi, CYCLES_FEATURE_SNAPSHOT, FEATURE_QUESTION_ITEM } from './mock-api';
 import { ArchiveMode } from '../../../src/renderer/src/features/ArchiveMode';
 import { RewindJourney } from '../../../src/renderer/src/features/RewindJourney';
 import { RepositoryInstrument } from '../../../src/renderer/src/features/RepositoryInstrument';
 import { CurrentRunInspection } from '../../../src/renderer/src/features/CurrentRunInspection';
-import { RebaseModal } from '../../../src/renderer/src/features/cycles/RebaseModal';
 import { RefactorLauncher } from '../../../src/renderer/src/features/refactor/RefactorLauncher';
 import { BulkPreviewPanel } from '../../../src/renderer/src/features/BulkPreviewPanel';
 import { RecoveryWorkspace } from '../../../src/renderer/src/features/RecoveryWorkspace';
@@ -405,9 +399,9 @@ function PostImplementationScene({ scene }: { scene: string }) {
   );
 }
 
-function CycleModalScene({ scene }: { scene: string }) {
-  const snapshot = scene === 'rebase-preflight' ? REBASE_FEATURE_SNAPSHOT : CYCLES_FEATURE_SNAPSHOT;
-  const title = scene === 'rebase-preflight' ? 'Rebase' : 'Start refactor';
+function CycleModalScene() {
+  const snapshot = CYCLES_FEATURE_SNAPSHOT;
+  const title = 'Start refactor';
   return (
     <div
       className="workspace-shell__content"
@@ -434,21 +428,12 @@ function CycleModalScene({ scene }: { scene: string }) {
           </button>
         </header>
         <div className="cockpit__modal-body">
-          {scene === 'rebase-preflight' ? (
-            <RebaseModal
-              featureId="abcd1234ef567890"
-              snapshot={snapshot}
-              onCancel={() => {}}
-              onDispatched={() => {}}
-            />
-          ) : (
-            <RefactorLauncher
-              featureId="abcd1234ef567890"
-              snapshot={snapshot}
-              onCancel={() => {}}
-              onDispatched={() => {}}
-            />
-          )}
+          <RefactorLauncher
+            featureId="abcd1234ef567890"
+            snapshot={snapshot}
+            onCancel={() => {}}
+            onDispatched={() => {}}
+          />
         </div>
       </div>
     </div>
@@ -875,8 +860,8 @@ function CaptureApp() {
   if (scene.startsWith('post-cycle-')) {
     return <PostImplementationScene scene={scene} />;
   }
-  if (scene === 'rebase-preflight' || scene === 'refactor-launch') {
-    return <CycleModalScene scene={scene} />;
+  if (scene === 'refactor-launch') {
+    return <CycleModalScene />;
   }
   if (scene === 'bulk-preview' || scene === 'bulk-queue') {
     return <BulkPreviewScene />;

@@ -16,8 +16,7 @@ import {
   FeatureListResponseSchema,
   PublishDescriptionResponseSchema,
   RuntimeConfigCreationSchema,
-  RebaseStartResponseSchema,
-  RebasePreflightResponseSchema,
+  RebaseFeatureResponseSchema,
   RefactorFeatureResponseSchema,
   DiscardChildResponseSchema,
   DeleteFeatureResponseSchema,
@@ -34,8 +33,7 @@ import {
   FeatureActionRequestSchema,
   FeatureIdSchema,
   FeatureSetupStatusSchema,
-  RebaseRequestSchema,
-  RebasePreflightRequestSchema,
+  LaunchRebaseChildRequestSchema,
   LaunchRefactorChildRequestSchema,
   DiscardRefactorChildRequestSchema,
   DeleteFeatureCascadeRequestSchema,
@@ -53,10 +51,8 @@ import {
   type FeatureSummaryView,
   type ReadinessSnapshot,
   type RepositoryFileRef,
-  type RebaseRequest,
-  type RebasePreflightRequest,
-  type RebasePreflightResult,
-  type RebaseResult,
+  type LaunchRebaseChildRequest,
+  type LaunchRebaseChildResult,
   type LaunchRefactorChildRequest,
   type LaunchRefactorChildResult,
   type DiscardRefactorChildRequest,
@@ -277,42 +273,21 @@ export class FeatureService {
     return toSnapshot(response.feature);
   }
 
-  async startRebase(request: RebaseRequest): Promise<RebaseResult> {
-    const input = validateWithSchema(request, RebaseRequestSchema);
+  async launchRebaseChild(request: LaunchRebaseChildRequest): Promise<LaunchRebaseChildResult> {
+    const input = validateWithSchema(request, LaunchRebaseChildRequestSchema);
+    // Zero-input child launch: the server accepts and ignores any body, so
+    // nothing is sent beyond the feature id in the path. The response carries
+    // the new child id, the parent id, and the action result — the same shape
+    // the refactor and review-feedback launches return.
     const body = await this.api(`/api/v1/features/${input.featureId}/actions/rebase`, {
       method: 'POST',
-      body: {
-        ...(input.sourceRevision === undefined || input.sourceRevision === ''
-          ? {}
-          : { source_revision: input.sourceRevision }),
-      },
+      body: {},
     });
-    const response = validateWithSchema(body, RebaseStartResponseSchema);
+    const response = validateWithSchema(body, RebaseFeatureResponseSchema);
     return {
-      featureId: validateWithSchema(response.feature_id, FeatureIdSchema),
-      cycleType: response.cycle_type,
+      childId: validateWithSchema(response.feature_id, FeatureIdSchema),
+      parentId: validateWithSchema(response.parent_id, FeatureIdSchema),
       result: response.result,
-    };
-  }
-
-  async preflightRebase(request: RebasePreflightRequest): Promise<RebasePreflightResult> {
-    const input = validateWithSchema(request, RebasePreflightRequestSchema);
-    const body = await this.api(`/api/v1/features/${input.featureId}/rebase/preflight`);
-    const response = validateWithSchema(body, RebasePreflightResponseSchema);
-    return {
-      featureId: validateWithSchema(response.feature_id, FeatureIdSchema),
-      sourceRevision: response.source_revision,
-      repos: (response.repos ?? []).map((repo) => ({
-        repo: repo.repo,
-        target: repo.target,
-        publishable: repo.publishable,
-        freshness: repo.freshness,
-        behind: repo.behind,
-        ...(repo.blocker === undefined || repo.blocker === '' ? {} : { blocker: repo.blocker }),
-        ...(repo.conflict_files === undefined || repo.conflict_files.length === 0
-          ? {}
-          : { conflictFiles: repo.conflict_files }),
-      })),
     };
   }
 

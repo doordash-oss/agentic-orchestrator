@@ -1319,26 +1319,37 @@ func (o *Orchestrator) markFinalReviewFailedWithEvent(featureID, failureType, er
 // Completion repo status values enumerate the server-authored completion
 // status per repo.
 const (
-	completionStatusEligible         = "eligible"
-	completionStatusAlreadyPublished = "already_published"
-	completionStatusCompleted        = "completed"
-	completionStatusIneligible       = "ineligible"
-	completionStatusUntouched        = "untouched"
-	completionStatusBlocked          = "blocked"
+	completionStatusEligible           = "eligible"
+	completionStatusAlreadyPublished   = "already_published"
+	completionStatusCompleted          = "completed"
+	completionStatusIneligible         = "ineligible"
+	completionStatusUntouched          = "untouched"
+	completionStatusBlocked            = "blocked"
+	completionStatusUnpublishedChanges = "unpublished_changes"
+	completionStatusUnmergedChanges    = "unmerged_changes"
+)
+
+// Push modes describe how a republish reaches an existing pull-request branch.
+const (
+	completionPushModeFastForward = "fast_forward"
+	completionPushModeRewrite     = "rewrite"
 )
 
 // CompletionRepoResult is the per-repository slice of a completion preflight.
 type CompletionRepoResult struct {
-	Repo        string
-	Publishable bool
-	Touched     bool
-	Status      string
-	PRURL       string
-	Blocker     string
-	Freshness   string
-	LastError   string
-	BaseBranch  string
-	Branch      string
+	Repo           string
+	Publishable    bool
+	Touched        bool
+	Status         string
+	PRURL          string
+	Blocker        string
+	Freshness      string
+	LastError      string
+	BaseBranch     string
+	Branch         string
+	PendingCommits int
+	PendingDirty   bool
+	PushMode       string
 }
 
 // repoPublishable reports whether repo is publishable. A nil Publishable
@@ -1389,6 +1400,7 @@ func (o *Orchestrator) CompletionPreflight(featureID string) (CompletionPrefligh
 			repoResult.PRURL = prURLs[repo.Name]
 		}
 		repoResult.Status = completionRepoStatus(f, repo, state, publishable, repoResult.PRURL)
+		repoResult = o.applyPendingDelivery(f, repo, repoResult)
 		freshness, blocker, _ := o.repoFreshnessAndBlocker(o.rebaseFreshnessInputForRepo(f, repo))
 		repoResult.Freshness = freshness
 		repoResult.Blocker = blocker

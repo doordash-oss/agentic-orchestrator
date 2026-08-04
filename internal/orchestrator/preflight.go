@@ -103,3 +103,49 @@ func revisionHash(parts []string) string {
 // ErrStalePreflight is returned by cycle start paths when the carried source
 // revision no longer matches the authoritative repository state.
 var ErrStalePreflight = errors.New("preflight is stale: repository state changed since the preview, refresh and try again")
+
+// completionDestinationRef is the ref a repository's work is delivered to: the
+// remote branch behind its pull request, or the local base branch a merge
+// targets.
+func completionDestinationRef(f *feature.Feature, repo feature.FeatureRepo, publishable bool) string {
+	if !publishable {
+		return repo.BaseBranch
+	}
+	if branch := repoBranch(f, repo); branch != "" {
+		return "origin/" + branch
+	}
+	return ""
+}
+
+// applyPendingDelivery folds undelivered-work measurements into a repository's
+// preflight result and distinguishes a stale pull request or base branch from a
+// delivered one. An unresolvable destination leaves the result untouched.
+func (o *Orchestrator) applyPendingDelivery(f *feature.Feature, repo feature.FeatureRepo, result CompletionRepoResult) CompletionRepoResult {
+	dest := completionDestinationRef(f, repo, result.Publishable)
+	work, ok := git.PendingAgainst(repoWorkDir(repo), dest)
+	if !ok {
+		return result
+	}
+	result.PendingCommits = work.Commits
+	result.PendingDirty = work.Dirty
+	if result.Publishable && result.PRURL != "" {
+		result.PushMode = completionPushModeFastForward
+		if work.DestinationAhead > 0 {
+			result.PushMode = completionPushModeRewrite
+		}
+	}
+	if !work.Pending() {
+		return result
+	}
+	switch result.Status {
+	case completionStatusAlreadyPublished:
+		result.Status = completionStatusUnpublishedChanges
+	case completionStatusCompleted:
+		if result.Publishable {
+			result.Status = completionStatusUnpublishedChanges
+		} else {
+			result.Status = completionStatusUnmergedChanges
+		}
+	}
+	return result
+}

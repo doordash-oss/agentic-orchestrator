@@ -274,3 +274,163 @@ func TestRepositoryDiffGitBinaryPatchIsBinary(t *testing.T) {
 		t.Fatal("isBinaryPatch = false; want true for GIT binary patch")
 	}
 }
+
+// pendingDeliveryWorktree returns a worktree checked out on feature/x whose
+// origin/feature/x tracking ref exists, so a destination ref resolves.
+func pendingDeliveryWorktree(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	bare := filepath.Join(t.TempDir(), "remote.git")
+	runCompletionGit(t, "", "init", "--bare", "--initial-branch=main", bare)
+	for _, args := range [][]string{
+		{"init", "--initial-branch=main"},
+		{"config", "user.email", "test@example.com"},
+		{"config", "user.name", "Test"},
+		{"commit", "--allow-empty", "-m", "initial"},
+		{"checkout", "-b", "feature/x"},
+		{"remote", "add", "origin", bare},
+		{"push", "-u", "origin", "feature/x"},
+	} {
+		runCompletionGit(t, dir, args...)
+	}
+	return dir
+}
+
+func newPendingDeliveryOrchestrator(t *testing.T, status feature.Status, repo feature.FeatureRepo, state *feature.RepoState) *Orchestrator {
+	t.Helper()
+	store := feature.NewStore(t.TempDir())
+	manager := feature.NewManager(store, config.NewDefault())
+	f := &feature.Feature{
+		ID:            "feat-pending",
+		Name:          "Pending",
+		Slug:          "pending",
+		Status:        status,
+		SchemaVersion: feature.SchemaVersionCurrent,
+		ActiveRun:     1,
+		RunCount:      1,
+		Repos:         []feature.FeatureRepo{repo},
+		RepoStates:    map[string]*feature.RepoState{repo.Name: state},
+	}
+	if err := store.Save(f); err != nil {
+		t.Fatalf("save feature: %v", err)
+	}
+	return New(Deps{Lifecycle: manager, Store: store}, Hooks{})
+}
+
+func pendingDeliveryRepo(t *testing.T, publishable bool) feature.FeatureRepo {
+	t.Helper()
+	wt := pendingDeliveryWorktree(t)
+	return feature.FeatureRepo{
+		Name:         "repo-a",
+		Path:         wt,
+		WorktreePath: wt,
+		Branch:       "feature/x",
+		BaseBranch:   "main",
+		Publishable:  boolPtr(publishable),
+	}
+}
+
+func onlyPendingRepo(t *testing.T, o *Orchestrator) CompletionRepoResult {
+	t.Helper()
+	result, err := o.CompletionPreflight("feat-pending")
+	if err != nil {
+		t.Fatalf("CompletionPreflight: %v", err)
+	}
+	if len(result.Repos) != 1 {
+		t.Fatalf("repos len = %d; want 1", len(result.Repos))
+	}
+	return result.Repos[0]
+}
+
+func TestCompletionPreflightReportsUnpublishedChanges(t *testing.T) {
+	t.Parallel()
+	repo := pendingDeliveryRepo(t, true)
+	runCompletionGit(t, repo.WorktreePath, "commit", "--allow-empty", "-m", "later pass")
+	o := newPendingDeliveryOrchestrator(t, feature.StatusCodeReady, repo,
+		&feature.RepoState{Touched: true, PRURL: "https://github.example/repo-a/pull/1"})
+
+	got := onlyPendingRepo(t, o)
+	if got.Status != completionStatusUnpublishedChanges {
+		t.Errorf("status = %q; want %q", got.Status, completionStatusUnpublishedChanges)
+	}
+	if got.PendingCommits != 1 {
+		t.Errorf("pending commits = %d; want 1", got.PendingCommits)
+	}
+	if got.PendingDirty {
+		t.Error("pending dirty = true; want false")
+	}
+	if got.PushMode != completionPushModeFastForward {
+		t.Errorf("push mode = %q; want %q", got.PushMode, completionPushModeFastForward)
+	}
+}
+
+func TestCompletionPreflightKeepsAlreadyPublishedWhenDelivered(t *testing.T) {
+	t.Parallel()
+	repo := pendingDeliveryRepo(t, true)
+	o := newPendingDeliveryOrchestrator(t, feature.StatusCodeReady, repo,
+		&feature.RepoState{Touched: true, PRURL: "https://github.example/repo-a/pull/1"})
+
+	got := onlyPendingRepo(t, o)
+	if got.Status != completionStatusAlreadyPublished {
+		t.Errorf("status = %q; want %q", got.Status, completionStatusAlreadyPublished)
+	}
+	if got.PendingCommits != 0 {
+		t.Errorf("pending commits = %d; want 0", got.PendingCommits)
+	}
+}
+
+func TestCompletionPreflightReportsRewritePushMode(t *testing.T) {
+	t.Parallel()
+	repo := pendingDeliveryRepo(t, true)
+	runCompletionGit(t, repo.WorktreePath, "commit", "--allow-empty", "-m", "pushed later")
+	runCompletionGit(t, repo.WorktreePath, "push", "origin", "feature/x")
+	runCompletionGit(t, repo.WorktreePath, "reset", "--hard", "HEAD~1")
+	runCompletionGit(t, repo.WorktreePath, "commit", "--allow-empty", "-m", "rewritten")
+	o := newPendingDeliveryOrchestrator(t, feature.StatusCodeReady, repo,
+		&feature.RepoState{Touched: true, PRURL: "https://github.example/repo-a/pull/1"})
+
+	got := onlyPendingRepo(t, o)
+	if got.Status != completionStatusUnpublishedChanges {
+		t.Errorf("status = %q; want %q", got.Status, completionStatusUnpublishedChanges)
+	}
+	if got.PushMode != completionPushModeRewrite {
+		t.Errorf("push mode = %q; want %q", got.PushMode, completionPushModeRewrite)
+	}
+}
+
+func TestCompletionPreflightReportsUnmergedChanges(t *testing.T) {
+	t.Parallel()
+	repo := pendingDeliveryRepo(t, false)
+	runCompletionGit(t, repo.WorktreePath, "commit", "--allow-empty", "-m", "later pass")
+	o := newPendingDeliveryOrchestrator(t, feature.StatusDone, repo, &feature.RepoState{Touched: true})
+
+	got := onlyPendingRepo(t, o)
+	if got.Status != completionStatusUnmergedChanges {
+		t.Errorf("status = %q; want %q", got.Status, completionStatusUnmergedChanges)
+	}
+	if got.PendingCommits != 1 {
+		t.Errorf("pending commits = %d; want 1", got.PendingCommits)
+	}
+	if got.PushMode != "" {
+		t.Errorf("push mode = %q; want empty for a local-only repository", got.PushMode)
+	}
+}
+
+func TestCompletionPreflightUnresolvedDestinationKeepsStatus(t *testing.T) {
+	t.Parallel()
+	wt := initGitWorktree(t, "no-remote")
+	repo := feature.FeatureRepo{
+		Name: "repo-a", Path: wt, WorktreePath: wt,
+		Branch: "feature/x", BaseBranch: "main", Publishable: boolPtr(true),
+	}
+	o := newPendingDeliveryOrchestrator(t, feature.StatusCodeReady, repo,
+		&feature.RepoState{Touched: true, PRURL: "https://github.example/repo-a/pull/1"})
+
+	got := onlyPendingRepo(t, o)
+	if got.Status != completionStatusAlreadyPublished {
+		t.Errorf("status = %q; want %q", got.Status, completionStatusAlreadyPublished)
+	}
+	if got.PendingCommits != 0 || got.PendingDirty || got.PushMode != "" {
+		t.Errorf("pending fields set without a resolvable destination: %+v", got)
+	}
+}

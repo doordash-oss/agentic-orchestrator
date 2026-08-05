@@ -81,6 +81,9 @@ async function call<T>(channel: string, ...args: unknown[]): Promise<T> {
 }
 
 const api: AgenticoApi = {
+  // Preload retains a limited `process` even when sandboxed; reading it here
+  // avoids an IPC round trip before first paint.
+  platform: process.platform,
   getConnectionStatus: () => call(IPC_CHANNELS.connectionGetStatus),
   retryConnection: () => call(IPC_CHANNELS.connectionRetry),
   restartConnection: () => call(IPC_CHANNELS.connectionRestart),

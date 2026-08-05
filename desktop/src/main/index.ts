@@ -17,10 +17,12 @@ import {
   protocol,
   session,
   shell,
+  systemPreferences,
   type Event as ElectronEvent,
   type MessageBoxReturnValue,
 } from 'electron';
 import { createRuntimeGateway } from './gateway/wiring';
+import { AccentController, type AccentColorSource } from './accent';
 import {
   resolveTestOutputFile,
   resolveTestPackagedResourcesDir,
@@ -163,10 +165,22 @@ protocol.registerSchemesAsPrivileged([
   },
 ]);
 
+// Bench `--content` token (src/renderer/src/styles/tokens.css), mirrored here
+// so first paint never flashes: the window must show the right background
+// before the renderer's own CSS has a chance to load.
+const BENCH_CONTENT_BACKGROUND = { dark: '#1c1e22', light: '#ffffff' } as const;
+
+function firstPaintBackground(): string {
+  return nativeTheme.shouldUseDarkColors
+    ? BENCH_CONTENT_BACKGROUND.dark
+    : BENCH_CONTENT_BACKGROUND.light;
+}
+
 function createMainWindow(
   settings: SettingsStore,
   gateway: RuntimeGateway,
   onClose: (event: ElectronEvent, window: BrowserWindow) => void,
+  getCurrentAccent: () => string | null,
 ): BrowserWindow {
   const bounds = settings.get().window.bounds;
   const window = new BrowserWindow({
@@ -180,12 +194,44 @@ function createMainWindow(
       ? { enableLargerThanScreen: true }
       : {}),
     show: false,
-    backgroundColor: nativeTheme.shouldUseDarkColors ? '#16181D' : '#F5F6F7',
+    backgroundColor: firstPaintBackground(),
+    // macOS gets the Bench chrome: an inset hidden title bar with the
+    // traffic lights repositioned over the header, sidebar vibrancy, and the
+    // visual-effect state forced active (the mock's deliberate deviation
+    // from the default inactive-window material drop) so the header
+    // material always renders at full strength. Every other platform keeps
+    // the native frame untouched.
+    ...(process.platform === 'darwin'
+      ? {
+          titleBarStyle: 'hiddenInset',
+          trafficLightPosition: { x: 18, y: 20 },
+          vibrancy: 'sidebar',
+          visualEffectState: 'active',
+        }
+      : {}),
     webPreferences: mainWindowWebPreferences(
       path.join(import.meta.dirname, '../preload/index.cjs'),
     ),
   });
   trusted.webContentsId = window.webContents.id;
+
+  const onNativeThemeUpdated = (): void => {
+    if (!window.isDestroyed()) {
+      window.setBackgroundColor(firstPaintBackground());
+    }
+  };
+  nativeTheme.on('updated', onNativeThemeUpdated);
+  window.on('closed', () => nativeTheme.off('updated', onNativeThemeUpdated));
+
+  // Delivers the already-known accent so the renderer's mirror never races
+  // the main-process subscription: a fresh load always gets the current
+  // value even though it missed any change published before now.
+  window.webContents.on('did-finish-load', () => {
+    const color = getCurrentAccent();
+    if (color !== null && !window.isDestroyed()) {
+      window.webContents.send(IPC_EVENTS.appEvent, { type: 'accent', color });
+    }
+  });
 
   window.on('ready-to-show', () => {
     window.show();
@@ -394,9 +440,22 @@ if (!hasSingleInstanceLock) {
       }
     };
 
+    // macOS-only dynamic accent: the renderer mirrors this onto a root
+    // custom property, but no legacy surface reads it yet. Off macOS, and
+    // on any read failure, this never publishes and the static
+    // per-appearance blue tokens hold.
+    const accent = new AccentController(
+      process.platform,
+      systemPreferences as unknown as AccentColorSource,
+      (color) => broadcastAppEvent({ type: 'accent', color }),
+    );
+    accent.start();
+
     const showMainWindow = (): BrowserWindow => {
       if (mainWindow === null || mainWindow.isDestroyed()) {
-        mainWindow = createMainWindow(settings, gateway, handleWindowClose);
+        mainWindow = createMainWindow(settings, gateway, handleWindowClose, () =>
+          accent.getCurrent(),
+        );
         const created = mainWindow;
         created.webContents.on('render-process-gone', (_event, details) => {
           diagnostics.recordCrash({
@@ -481,6 +540,7 @@ if (!hasSingleInstanceLock) {
         runtimeOwnership: () => gateway.getState().ownership,
         shutdown: async () => {
           stopStreams();
+          accent.stop();
           await gateway.shutdown();
         },
         quitApplication: () => {

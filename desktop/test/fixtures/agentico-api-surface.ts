@@ -72,6 +72,7 @@ export const EXPECTED_API_SURFACE: readonly string[] = [
   'openSessionOutput',
   'pickCreationFiles',
   'pickWorkspaceDirectory',
+  'platform',
   'preflightCompletion',
   'readClipboardImage',
   'readRecoveryLog',

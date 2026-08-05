@@ -19,7 +19,7 @@ import {
   emptyAttentionDrafts,
   type AttentionDrafts,
 } from './features/AttentionInbox';
-import { useConnectionState, useTheme } from './hooks';
+import { useConnectionState, useSystemAccentMirror, useTheme } from './hooks';
 
 const THEME_OPTIONS: readonly { value: ThemePreference; label: string }[] = [
   { value: 'light', label: 'Light' },
@@ -29,6 +29,7 @@ const THEME_OPTIONS: readonly { value: ThemePreference; label: string }[] = [
 
 export default function App() {
   const { preference, setPreference } = useTheme();
+  useSystemAccentMirror();
   const connection = useConnectionState();
   const runtimeReady = connection.status === 'ready';
   const [serverAttentionItems, setServerAttentionItems] = useState<AttentionItem[]>([]);
@@ -114,6 +115,7 @@ export default function App() {
         void refreshAttention();
         return;
       }
+      if (event.type !== 'invalidated') return;
       if (event.kind === 'resync') {
         void refreshAttention();
         void refreshRecovery();

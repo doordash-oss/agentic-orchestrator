@@ -13,6 +13,10 @@ import '@fontsource/ibm-plex-mono/500.css';
 import './styles/tokens.css';
 import './styles/app.css';
 
+// Set before first paint so platform-conditional CSS (Bench material,
+// traffic-light drag region) never flashes the wrong variant.
+document.documentElement.dataset['platform'] = window.agentico.platform;
+
 const container = document.getElementById('root');
 if (container === null) {
   throw new Error('Renderer bootstrap failed: #root missing.');

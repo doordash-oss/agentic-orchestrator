@@ -317,6 +317,7 @@ export function installAgenticoMock(
     attention?: { items: AttentionItem[] };
     updates?: UpdateState;
     diagnostics?: DiagnosticsSnapshot;
+    platform?: string;
   } = {},
 ): AgenticoMock {
   const connection: ConnectionState = overrides.connection ?? {
@@ -340,6 +341,7 @@ export function installAgenticoMock(
   const diagnostics = overrides.diagnostics ?? defaultDiagnostics();
 
   const api = {
+    platform: overrides.platform ?? 'darwin',
     getConnectionStatus: vi.fn(() => Promise.resolve(connection)),
     retryConnection: vi.fn(() => Promise.resolve(connection)),
     restartConnection: vi.fn(() => Promise.resolve(connection)),

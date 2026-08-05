@@ -950,6 +950,7 @@ export function FeatureCockpit({
         setStreamStale(event.stream !== 'live');
         return;
       }
+      if (event.type !== 'invalidated') return;
       if (event.relationshipDeleted === true && event.parentId === featureId) {
         if (onDeletedRef.current !== undefined) onDeletedRef.current(featureId);
         else onCloseRef.current();

@@ -482,6 +482,11 @@ export const AppEventSchema = z.discriminatedUnion('type', [
     type: z.literal('status'),
     stream: z.enum(['connecting', 'live', 'stale']),
   }),
+  z.strictObject({
+    type: z.literal('accent'),
+    /** Normalized `#rrggbb`; the system accent color (macOS only). */
+    color: z.string().regex(/^#[0-9a-f]{6}$/),
+  }),
 ]);
 
 export type AppEvent = z.output<typeof AppEventSchema>;
@@ -2777,6 +2782,13 @@ export const ipcContracts: Record<IpcChannel, IpcContract> = {
 // --- The narrow window API the preload exposes -------------------------------
 
 export interface AgenticoApi {
+  /**
+   * The desktop OS the main process is running on (Node's `process.platform`,
+   * mirrored synchronously — no IPC round trip). Drives the macOS-only chrome
+   * accommodations (vibrancy material, traffic-light padding/drag region);
+   * every other platform is treated as the native-frame fallback.
+   */
+  readonly platform: string;
   getConnectionStatus(): Promise<ConnectionState>;
   retryConnection(): Promise<ConnectionState>;
   restartConnection(): Promise<ConnectionState>;

@@ -1085,6 +1085,7 @@ function makeMockApi(
   };
 
   return {
+    platform: 'darwin',
     getConnectionStatus: () => Promise.resolve(CONNECTION_STATE),
     retryConnection: () => Promise.resolve(CONNECTION_STATE),
     restartConnection: () => Promise.resolve(CONNECTION_STATE),

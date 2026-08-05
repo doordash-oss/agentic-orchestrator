@@ -57,3 +57,86 @@
    * recedes behind a do-and-dismiss task. Trays never use it. */
   --color-scrim: rgb(5 7 10 / 55%);
 }
+
+/*
+ * Bench token set, from the Bench mock. Coexists with the legacy tokens
+ * above under different, unprefixed property names — nothing here is
+ * consumed by an existing surface yet; legacy tokens and consumers stay
+ * byte-identical until they migrate.
+ *
+ * --material/--material-edge are the macOS vibrancy-backed values by
+ * default; `[data-platform='linux']` — set on <html> from the
+ * preload-exposed `window.agentico.platform`, the renderer's only
+ * platform-awareness signal — overrides them to their flattened opaque
+ * equivalents, since there is no vibrancy layer behind the window to show
+ * through off macOS.
+ */
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --material: rgb(38 41 48 / 72%);
+  --material-edge: rgb(255 255 255 / 8%);
+  --content: #1c1e22;
+  --raised: #22252a;
+  --hairline: #32363c;
+  --text: #e9ebef;
+  --muted: #8e949e;
+  --faint: #62676f;
+  --accent: #3d7dff; /* static fallback; overridden dynamically on macOS */
+  --attention: #e8a33d;
+  --ok: #4fb477;
+  --bad: #e5665c;
+  --shadow: 0 22px 70px rgb(0 0 0 / 55%), 0 0 0 0.5px rgb(255 255 255 / 9%);
+  --sheet-shadow: 0 30px 80px rgb(0 0 0 / 62%);
+}
+:root[data-platform='linux'][data-theme='dark'] {
+  --material: rgb(38 41 48);
+  --material-edge: rgb(46 48 52);
+}
+
+:root[data-theme='light'] {
+  color-scheme: light;
+  --material: rgb(246 246 248 / 76%);
+  --material-edge: rgb(0 0 0 / 7%);
+  --content: #ffffff;
+  --raised: #f6f6f8;
+  --hairline: #dedfe3;
+  --text: #1b1d21;
+  --muted: #6b7078;
+  --faint: #9aa0a8;
+  --accent: #0a63ec;
+  --attention: #a86300;
+  --ok: #1e7a4a;
+  --bad: #c0392f;
+  --shadow: 0 22px 70px rgb(20 26 40 / 28%), 0 0 0 0.5px rgb(0 0 0 / 10%);
+  --sheet-shadow: 0 30px 80px rgb(20 26 40 / 34%);
+}
+:root[data-platform='linux'][data-theme='light'] {
+  --material: rgb(246 246 248);
+  --material-edge: rgb(237 237 237);
+}
+
+:root {
+  /* Radius primitives: controls, grouped lists/cards, windows/sheets —
+   * concentric so a control nested in a card nested in a sheet reads as one
+   * continuous corner. */
+  --bench-radius-control: 6px;
+  --bench-radius-card: 8px;
+  --bench-radius-window: 11px;
+
+  /* Hairline width: 0.5px is the true retina hairline, but it can vanish on
+   * some HiDPI configurations when unqualified — gate it on a min-resolution
+   * query and fall back to a full pixel everywhere else. */
+  --bench-hairline-width: 1px;
+
+  /* Chromium ignores the `ui-*` generic keywords, so the named system faces
+   * carry the intent and Georgia/Menlo are the accepted non-Apple fallback. */
+  --bench-font-text: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
+  --bench-font-serif: ui-serif, 'New York', Georgia, serif;
+  --bench-font-mono: ui-monospace, 'SF Mono', Menlo, monospace;
+}
+
+@media (min-resolution: 2dppx) {
+  :root {
+    --bench-hairline-width: 0.5px;
+  }
+}

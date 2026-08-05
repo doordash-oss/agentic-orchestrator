@@ -137,3 +137,22 @@ export function useTheme(): ThemeState {
 
   return { preference: info.preference, resolved: info.resolved, setPreference };
 }
+
+/**
+ * Mirrors the dynamic macOS system accent onto the root `--accent` custom
+ * property, overriding the Bench static fallback the moment a value
+ * arrives. Off macOS, and on any main-process read failure, no `accent`
+ * event is ever published, so the static per-appearance blue holds —
+ * there is nothing to unset here.
+ */
+export function useSystemAccentMirror(): void {
+  useEffect(
+    () =>
+      window.agentico.onAppEvent((event) => {
+        if (event.type === 'accent') {
+          document.documentElement.style.setProperty('--accent', event.color);
+        }
+      }),
+    [],
+  );
+}

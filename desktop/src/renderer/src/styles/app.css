@@ -35,14 +35,46 @@ body {
   min-height: 0;
 }
 
+/*
+ * The header is real window chrome now: a minimal, throwaway Bench
+ * "material bridge" — deleted along with this header once the real shell
+ * replaces it. The translucent background lets macOS window vibrancy show
+ * through with real pixels; `--material`/`--hairline` already resolve to
+ * their opaque/solid Linux equivalents (tokens.css), so this rule needs no
+ * platform branching. The hard hairline edge is deliberate — no gradient or
+ * shadow fill. `flex-wrap` lets the trailing controls (runtime status,
+ * attention bell, theme switcher) drop to a second row instead of running
+ * off-canvas once the darwin traffic-light padding and control widths
+ * exceed the 400px minimum window width.
+ */
 .global-bar {
   min-height: 48px;
   display: flex;
   align-items: center;
-  gap: var(--space-4);
-  padding: 0 var(--space-4);
-  border-bottom: 1px solid var(--color-hairline);
-  background: var(--color-panel);
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-4);
+  padding: var(--space-2) var(--space-4);
+  border-bottom: var(--bench-hairline-width) solid var(--hairline);
+  background: var(--material);
+}
+
+/*
+ * macOS only: the header becomes the traffic-light-clearing drag region.
+ * Leading padding keeps every control clear of the inset lights (18/20 +
+ * ~54px cluster width) down to the 400px minimum width; the drag region
+ * itself excludes every interactive child so the gaps between them (brand
+ * mark, runtime status text) stay draggable while every control stays
+ * clickable. Linux keeps the native frame: no padding, no drag region.
+ */
+:root[data-platform='darwin'] .global-bar {
+  padding-left: 80px;
+  -webkit-app-region: drag;
+  -webkit-user-select: none;
+}
+:root[data-platform='darwin'] .global-bar button,
+:root[data-platform='darwin'] .global-bar input,
+:root[data-platform='darwin'] .global-bar [role='radiogroup'] {
+  -webkit-app-region: no-drag;
 }
 
 .global-bar__brand {

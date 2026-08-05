@@ -56,10 +56,16 @@ export function pendingDeliveryFact(
   pending: PendingDelivery,
 ): { label: string; value: string } | null {
   if (pending.publishRepos.length > 0) {
-    return { label: 'Unpublished', value: pendingDeliveryDetail(pendingDeliveryTotals(pending.publishRepos)) };
+    return {
+      label: 'Unpublished',
+      value: pendingDeliveryDetail(pendingDeliveryTotals(pending.publishRepos)),
+    };
   }
   if (pending.mergeRepos.length > 0) {
-    return { label: 'Unmerged', value: pendingDeliveryDetail(pendingDeliveryTotals(pending.mergeRepos)) };
+    return {
+      label: 'Unmerged',
+      value: pendingDeliveryDetail(pendingDeliveryTotals(pending.mergeRepos)),
+    };
   }
   return null;
 }

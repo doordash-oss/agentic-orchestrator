@@ -47,15 +47,20 @@ describe('pendingDeliverySummary', () => {
       },
     ]);
     expect(pending.mergeRepos).toEqual([
-      { repo: 'core', commits: 1, dirty: false, baseBranch: 'main', dirtyFiles: [], dirtyFileTotal: 0 },
+      {
+        repo: 'core',
+        commits: 1,
+        dirty: false,
+        baseBranch: 'main',
+        dirtyFiles: [],
+        dirtyFileTotal: 0,
+      },
     ]);
   });
 
   it('defaults dirtyFiles and dirtyFileTotal when the server omits them', () => {
     const pending = pendingDeliverySummary(
-      pf([
-        { repo: 'api', publishable: true, touched: true, status: 'unpublished_changes' },
-      ]),
+      pf([{ repo: 'api', publishable: true, touched: true, status: 'unpublished_changes' }]),
     );
     expect(pending.publishRepos[0]!.dirtyFiles).toEqual([]);
     expect(pending.publishRepos[0]!.dirtyFileTotal).toBe(0);
@@ -89,7 +94,9 @@ describe('pendingDeliveryDetail', () => {
   it('pluralises commits and names uncommitted work', () => {
     expect(pendingDeliveryDetail({ commits: 1, dirty: false })).toBe('1 commit');
     expect(pendingDeliveryDetail({ commits: 3, dirty: false })).toBe('3 commits');
-    expect(pendingDeliveryDetail({ commits: 3, dirty: true })).toBe('3 commits · uncommitted changes');
+    expect(pendingDeliveryDetail({ commits: 3, dirty: true })).toBe(
+      '3 commits · uncommitted changes',
+    );
     expect(pendingDeliveryDetail({ commits: 0, dirty: true })).toBe('uncommitted changes');
     expect(pendingDeliveryDetail({ commits: 0, dirty: false })).toBe('');
   });

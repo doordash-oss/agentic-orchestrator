@@ -7,12 +7,7 @@ import {
 
 /** Aftercare launch surfaces: delivery of pending work, then the passes. */
 export type AftercareActionId =
-  | 'publish'
-  | 'publish-updates'
-  | 'merge-updates'
-  | 'rebase'
-  | 'refactor'
-  | 'review-feedback';
+  'publish' | 'publish-updates' | 'merge-updates' | 'rebase' | 'refactor' | 'review-feedback';
 
 /** Aftercare modal ids for launcher modals (refactor, review-feedback). */
 export type AftercareModalId = 'refactor' | 'review-feedback';

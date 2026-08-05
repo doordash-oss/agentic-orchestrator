@@ -294,7 +294,9 @@ describe('AftercareWorkspace', () => {
         snapshot={featureSnapshot({ status: 'CodeReady', activeRun: 8, actions: [] })}
         run={completedRun}
         pending={{
-          publishRepos: [{ repo: 'api', commits: 3, dirty: false, dirtyFiles: [], dirtyFileTotal: 0 }],
+          publishRepos: [
+            { repo: 'api', commits: 3, dirty: false, dirtyFiles: [], dirtyFileTotal: 0 },
+          ],
           mergeRepos: [],
         }}
         onAction={vi.fn()}
@@ -320,7 +322,9 @@ describe('AftercareWorkspace', () => {
             {
               id: 'refactor',
               enabled: false,
-              disabledReasons: [{ code: 'dirty_parent', message: 'worktree has uncommitted changes' }],
+              disabledReasons: [
+                { code: 'dirty_parent', message: 'worktree has uncommitted changes' },
+              ],
             },
           ],
         })}

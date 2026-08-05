@@ -86,7 +86,13 @@ describe('completionBarModel', () => {
     const model = completionBarModel(
       pf({
         repos: [
-          { repo: 'a', publishable: true, touched: true, status: 'unpublished_changes', pendingCommits: 3 },
+          {
+            repo: 'a',
+            publishable: true,
+            touched: true,
+            status: 'unpublished_changes',
+            pendingCommits: 3,
+          },
         ],
       }),
       ALL,
@@ -102,7 +108,13 @@ describe('completionBarModel', () => {
       pf({
         repos: [
           { repo: 'a', publishable: true, touched: true, status: 'eligible' },
-          { repo: 'b', publishable: true, touched: true, status: 'unpublished_changes', pendingCommits: 1 },
+          {
+            repo: 'b',
+            publishable: true,
+            touched: true,
+            status: 'unpublished_changes',
+            pendingCommits: 1,
+          },
         ],
       }),
       ALL,
@@ -114,7 +126,13 @@ describe('completionBarModel', () => {
     const model = completionBarModel(
       pf({
         repos: [
-          { repo: 'a', publishable: false, touched: true, status: 'unmerged_changes', pendingCommits: 2 },
+          {
+            repo: 'a',
+            publishable: false,
+            touched: true,
+            status: 'unmerged_changes',
+            pendingCommits: 2,
+          },
         ],
       }),
       ALL,

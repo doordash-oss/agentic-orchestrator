@@ -940,7 +940,9 @@ describe('FeatureCockpit convergence', () => {
     expect(await screen.findByRole('region', { name: 'Feature aftercare' })).toBeVisible();
     expect(screen.queryByRole('tablist', { name: 'Stage view' })).not.toBeInTheDocument();
     expect(
-      screen.getByRole('heading', { name: 'Choose one focused action, or leave the feature at rest.' }),
+      screen.getByRole('heading', {
+        name: 'Choose one focused action, or leave the feature at rest.',
+      }),
     ).toBeVisible();
   });
 

@@ -86,7 +86,11 @@ describe('postImplementationModel', () => {
       featureSnapshot({
         status: 'CodeReady',
         actions: [
-          { id: 'publish', enabled: false, disabledReasons: [{ code: 'manual_publish_required', message: 'waiting' }] },
+          {
+            id: 'publish',
+            enabled: false,
+            disabledReasons: [{ code: 'manual_publish_required', message: 'waiting' }],
+          },
         ],
       }),
     );
@@ -100,7 +104,9 @@ describe('postImplementationModel', () => {
         actions: [{ id: 'refactor', enabled: true, disabledReasons: [] }],
       }),
       {
-        publishRepos: [{ repo: 'api', commits: 3, dirty: false, dirtyFiles: [], dirtyFileTotal: 0 }],
+        publishRepos: [
+          { repo: 'api', commits: 3, dirty: false, dirtyFiles: [], dirtyFileTotal: 0 },
+        ],
         mergeRepos: [],
       },
     );

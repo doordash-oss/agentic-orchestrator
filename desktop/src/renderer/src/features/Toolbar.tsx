@@ -37,7 +37,9 @@ export interface ToolbarProps {
   /** Hidden entirely on Overview, per the mock. */
   showTrailing: boolean;
   attention?: ToolbarAttentionProps;
-  /** The cockpit-owned ⋯ overflow menu portals into this node once mounted. */
+  /** The cockpit-owned status chip, primary verbs, and completion controls portal into this node once mounted. */
+  actionsSlotRef?(node: HTMLDivElement | null): void;
+  /** The cockpit-owned overflow menu portals into this node once mounted. */
   overflowSlotRef?(node: HTMLDivElement | null): void;
   /** The cockpit-owned inspector-toggle button portals into this node once mounted. */
   inspectorSlotRef?(node: HTMLDivElement | null): void;
@@ -54,6 +56,7 @@ export function Toolbar({
   subline,
   showTrailing,
   attention,
+  actionsSlotRef,
   overflowSlotRef,
   inspectorSlotRef,
   showNewFeature = false,
@@ -86,6 +89,7 @@ export function Toolbar({
         ) : null}
         {showTrailing ? (
           <>
+            <div className="toolbar__actions-slot" ref={actionsSlotRef} />
             <div className="toolbar__overflow-slot" ref={overflowSlotRef} />
             <div className="toolbar__inspector-slot" ref={inspectorSlotRef} />
           </>

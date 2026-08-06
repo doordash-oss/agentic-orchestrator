@@ -1254,7 +1254,7 @@ export const BulkPreviewSchema = z.strictObject({
 });
 export type BulkPreview = z.output<typeof BulkPreviewSchema>;
 
-// --- Run history (GET /runs, GET /runs/{n}, GET /runs/{n}/sessions) ---------
+// --- Run listing (GET /runs, GET /runs/{n}, GET /runs/{n}/sessions) ---------
 
 export const RunSummaryViewSchema = z.strictObject({
   runNumber: z.number().int().nonnegative(),

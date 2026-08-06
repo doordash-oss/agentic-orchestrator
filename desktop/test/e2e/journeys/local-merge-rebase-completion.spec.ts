@@ -97,7 +97,7 @@ test('packaged local-merge-rebase completion: conflict, rebase, retry, done, cle
     transcript.section('Relaunch and open feature cockpit');
     handle = await launchApp(world, testInfo, { traceName: 'local-merge-rebase-completion' });
     const cockpit = await openCompletion(handle, featureName);
-    await expect(cockpit.getByRole('button', { name: 'Merge', exact: true })).toBeVisible({
+    await expect(handle.page.getByRole('button', { name: 'Merge', exact: true })).toBeVisible({
       timeout: 30_000,
     });
 
@@ -128,7 +128,7 @@ test('packaged local-merge-rebase completion: conflict, rebase, retry, done, cle
     await expect(changesModal).toBeHidden();
 
     transcript.section('Attempt local merge and observe conflict');
-    await cockpit.getByRole('button', { name: 'Merge', exact: true }).click();
+    await handle.page.getByRole('button', { name: 'Merge', exact: true }).click();
     const mergeModal = handle.page.getByRole('dialog', { name: 'Merge local repositories' });
     await expect(mergeModal.locator('.completion-workspace__merge')).toBeVisible();
     await expect(mergeModal.getByText('local-core')).toBeVisible();
@@ -195,8 +195,8 @@ test('packaged local-merge-rebase completion: conflict, rebase, retry, done, cle
     // Re-enter the feature after the rebase pass's persisted terminal state. This mirrors a user
     // returning from the pass workspace and ensures the retry is driven by a fresh snapshot.
     await handle.page.getByRole('option', { name: 'Overview' }).click();
-    const refreshedCockpit = await openCompletion(handle, featureName);
-    await refreshedCockpit.getByRole('button', { name: 'Merge', exact: true }).click();
+    await openCompletion(handle, featureName);
+    await handle.page.getByRole('button', { name: 'Merge', exact: true }).click();
     const retryMerge = mergeModal.getByRole('button', { name: 'Merge', exact: true });
     await expect(retryMerge).toBeEnabled({ timeout: 15_000 });
     await retryMerge.click();
@@ -210,12 +210,12 @@ test('packaged local-merge-rebase completion: conflict, rebase, retry, done, cle
     transcript.section('Observe atomic completion after local merge');
     await waitForFeatureStatus(handle.page, featureId, 'Done');
     await expect(
-      refreshedCockpit.getByRole('button', { name: 'Mark done', exact: true }),
+      handle.page.getByRole('button', { name: 'Mark done', exact: true }),
     ).toBeDisabled();
     transcript.step('successful local merge atomically reached authoritative Done');
 
     transcript.section('Clean completed worktrees');
-    await refreshedCockpit.getByRole('button', { name: 'Clean up', exact: true }).click();
+    await handle.page.getByRole('button', { name: 'Clean up', exact: true }).click();
     const cleanupDialog = handle.page.getByRole('dialog', { name: 'Clean worktrees?' });
     await expect(cleanupDialog.getByText(/Branches/i)).toBeVisible();
     await expect(cleanupDialog.getByText(/Feature\/run history/i)).toBeVisible();

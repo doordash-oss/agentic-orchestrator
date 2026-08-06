@@ -126,7 +126,12 @@ export async function launchApp(
   appProcess.stderr?.on('data', (chunk: Buffer) => logs.push(chunk.toString()));
   await app.context().tracing.start({ screenshots: true, snapshots: true });
   const page = await app.firstWindow({ timeout: 30_000 });
-  await page.bringToFront();
+  // OS-level activation steals focus from whoever is using the machine and no
+  // journey needs it: CDP input and assertions work without it. Opt back in
+  // for one-off debugging with AGENTICO_E2E_ACTIVATE=1.
+  if (process.env['AGENTICO_E2E_ACTIVATE'] === '1') {
+    await page.bringToFront();
+  }
   return {
     app,
     appProcess,

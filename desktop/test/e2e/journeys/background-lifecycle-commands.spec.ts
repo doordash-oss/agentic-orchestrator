@@ -80,7 +80,7 @@ test('packaged command palette, native menu routes, and active close policy stay
     const nonTargetFeatureId = await currentFeatureId(handle, 'Palette Non Target');
     await handle.page.getByRole('option', { name: 'Overview' }).click();
 
-    const cockpit = await createFeatureViaForm(handle, {
+    await createFeatureViaForm(handle, {
       name: 'Background Command Lifecycle',
       description: 'Fixture-backed active work for close coordinator coverage.',
       repoPatterns: [/command-lab/],
@@ -91,7 +91,9 @@ test('packaged command palette, native menu routes, and active close policy stay
     await assertZoomMenu(handle);
     await assertSecondInstanceFocusesExistingWindow(handle, initialDiscovery!.pid);
 
-    await expect(cockpit.getByRole('button', { name: 'Stop' })).toBeEnabled({ timeout: 60_000 });
+    await expect(handle.page.getByRole('button', { name: 'Stop' })).toBeEnabled({
+      timeout: 60_000,
+    });
 
     const closeResult = await triggerQuitDecision(handle, [0], 'window-close');
     expect(closeResult.visible).toBe(false);
@@ -184,14 +186,16 @@ test('packaged close policy exposes partial-stop Retry controls', async ({}, tes
     await expect(handle.page.getByRole('button', { name: 'New feature' })).toBeVisible({
       timeout: 60_000,
     });
-    const cockpit = await createFeatureViaForm(handle, {
+    await createFeatureViaForm(handle, {
       name: 'Partial Stop Retry',
       description: 'Fixture-backed active work for retrying a failed close stop.',
       repoPatterns: [/retry-lab/],
       waitForReady: true,
     });
-    await cockpit.getByRole('button', { name: 'Start', exact: true }).click();
-    await expect(cockpit.getByRole('button', { name: 'Stop' })).toBeEnabled({ timeout: 60_000 });
+    await handle.page.getByRole('button', { name: 'Start', exact: true }).click();
+    await expect(handle.page.getByRole('button', { name: 'Stop' })).toBeEnabled({
+      timeout: 60_000,
+    });
     await forceNextStopFailure(handle, 1);
 
     const result = await triggerQuitDecision(handle, [1, 1, 0], 'window-close');
@@ -225,14 +229,16 @@ test('packaged close policy exposes highest-risk Quit Anyway controls', async ({
     await expect(handle.page.getByRole('button', { name: 'New feature' })).toBeVisible({
       timeout: 60_000,
     });
-    const cockpit = await createFeatureViaForm(handle, {
+    await createFeatureViaForm(handle, {
       name: 'Partial Stop Quit Anyway',
       description: 'Fixture-backed active work for the highest-risk quit path.',
       repoPatterns: [/quit-anyway-lab/],
       waitForReady: true,
     });
-    await cockpit.getByRole('button', { name: 'Start', exact: true }).click();
-    await expect(cockpit.getByRole('button', { name: 'Stop' })).toBeEnabled({ timeout: 60_000 });
+    await handle.page.getByRole('button', { name: 'Start', exact: true }).click();
+    await expect(handle.page.getByRole('button', { name: 'Stop' })).toBeEnabled({
+      timeout: 60_000,
+    });
     await forceNextStopFailure(handle, 1);
 
     const result = await triggerQuitDecision(handle, [1, 1, 0], 'native-quit');

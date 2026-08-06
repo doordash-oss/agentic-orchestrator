@@ -136,6 +136,7 @@ export function WorkspaceShell({
     : isConnectionErrorState(connection)
       ? 'error'
       : 'progress';
+  const [actionsSlot, setActionsSlot] = useState<HTMLDivElement | null>(null);
   const [overflowSlot, setOverflowSlot] = useState<HTMLDivElement | null>(null);
   // The cockpit owns its inspector's open/closed state itself, so it resets
   // for free on every feature switch via the `key={featureId}` remount
@@ -690,6 +691,7 @@ export function WorkspaceShell({
                 ? { id: routeRequest.id, attentionId: routeRequest.event.attentionId }
                 : null,
           }}
+          actionsSlotRef={setActionsSlot}
           overflowSlotRef={setOverflowSlot}
           inspectorSlotRef={setInspectorSlot}
         />
@@ -746,6 +748,7 @@ export function WorkspaceShell({
                 const featureId = selection.featureId;
                 setSelectedRuns((current) => ({ ...current, [featureId]: runNumber }));
               }}
+              actionsHost={actionsSlot}
               overflowMenuHost={overflowSlot}
               inspectorToggleHost={inspectorSlot}
             />

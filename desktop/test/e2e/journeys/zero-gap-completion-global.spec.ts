@@ -70,8 +70,8 @@ test('zero-gap completion and global parity: diff, irreversible impact, AMA, rec
     const cockpit = handle.page.getByLabel(`Feature ${featureName}`);
     await expect(cockpit).toBeVisible({ timeout: 30_000 });
 
-    // Completion verbs live directly in the cockpit action bar at CodeReady.
-    const publishVerb = cockpit.getByRole('button', { name: 'Publish', exact: true });
+    // Completion verbs live in the toolbar's trailing actions zone at CodeReady.
+    const publishVerb = handle.page.getByRole('button', { name: 'Publish', exact: true });
     await expect(publishVerb).toBeVisible({ timeout: 30_000 });
     await publishVerb.click();
     const publishModal = handle.page.getByRole('dialog', { name: 'Publish reviewed changes' });
@@ -91,13 +91,13 @@ test('zero-gap completion and global parity: diff, irreversible impact, AMA, rec
 
     // Merge and Clean up each open their own floating modal from the bar; the
     // Mark done verb is reachable as a bar control alongside them.
-    await cockpit.getByRole('button', { name: 'Merge', exact: true }).click();
+    await handle.page.getByRole('button', { name: 'Merge', exact: true }).click();
     const mergeModal = handle.page.getByRole('dialog', { name: 'Merge local repositories' });
     await expect(mergeModal).toBeVisible({ timeout: 15_000 });
     await mergeModal.getByRole('button', { name: 'Close' }).click();
     await expect(mergeModal).toHaveCount(0);
 
-    await cockpit.getByRole('button', { name: 'Clean up', exact: true }).click();
+    await handle.page.getByRole('button', { name: 'Clean up', exact: true }).click();
     const cleanupDialog = handle.page.getByRole('dialog', { name: 'Clean worktrees?' });
     await expect(cleanupDialog).toBeVisible({ timeout: 15_000 });
     await expect(cleanupDialog.getByRole('button', { name: 'Clean worktrees' })).toBeVisible();

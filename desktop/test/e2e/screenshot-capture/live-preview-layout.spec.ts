@@ -46,10 +46,10 @@ async function measureLayout(
   await page.goto(`http://localhost:9871/?scene=${scene}&theme=dark`);
   await expect(page.locator('.phase-rail')).toBeVisible();
   if (scene === 'run-gauge-verifying') {
-    await expect(page.locator('.live-preview__verification-log > *')).toHaveCount(3);
+    await expect(page.getByText('Verification: 1 of 3 checks passing')).toBeVisible();
   } else {
     await expect(page.locator('.conversation__scroll > *')).toHaveCount(5);
-    await expect(page.locator('.live-preview__roster [role="tab"]')).toHaveCount(3);
+    await expect(page.locator('.live-preview__strip [role="tab"]')).toHaveCount(3);
   }
   return page.evaluate(
     async ({ measuredScene, measuredHeight }) => {
@@ -81,7 +81,6 @@ async function measureLayout(
 
       const surface = requireElement('.cockpit__surface--live', 'live surface');
       const inspection = requireElement('.current-inspection', 'current inspection');
-      const inspectionHeader = requireElement('.current-inspection__header', 'inspection header');
       // The rail lives above the stage (sibling of `.cockpit__content`), not
       // inside the live surface or `.current-inspection` — it now owns phase
       // and trio display for every run-facing view, not just the live one.
@@ -89,7 +88,7 @@ async function measureLayout(
       const previewContainer = requireElement('.current-inspection__preview', 'preview container');
       const preview = requireElement('.live-preview__frame', 'live preview');
       const transcript = document.querySelector('.conversation__scroll');
-      const roster = document.querySelector('.live-preview__roster');
+      const roster = document.querySelector('.live-preview__strip');
       const activity = document.querySelector('.current-inspection__activity');
       const reviewSummaryElement = document.querySelector('.review-gate');
       const surfaceRect = surface.getBoundingClientRect();
@@ -98,7 +97,6 @@ async function measureLayout(
           ? toSection('review summary', reviewSummaryElement)
           : null;
       const sections = [
-        toSection('inspection header', inspectionHeader),
         toSection('live frame', preview),
         ...(activity instanceof HTMLElement ? [toSection('activity', activity)] : []),
         ...(reviewSummary === null ? [] : [reviewSummary]),
@@ -190,22 +188,11 @@ test('all collapsed live phases fit ordinary surfaces and summaries reduce previ
     expect(verifying[index]!.reviewSummary).toBeNull();
   }
   expect(active[0]!.reviewSummary).toBeNull();
-  expect(active[0]!.sections.map(({ name }) => name)).toEqual([
-    'inspection header',
-    'live frame',
-    'activity',
-  ]);
-  expect(reviewing[0]!.sections.map(({ name }) => name)).toEqual([
-    'inspection header',
-    'live frame',
-    'activity',
-  ]);
+  expect(active[0]!.sections.map(({ name }) => name)).toEqual(['live frame', 'activity']);
+  expect(reviewing[0]!.sections.map(({ name }) => name)).toEqual(['live frame', 'activity']);
   // While verifying, the activity line is suppressed too — the harness
   // contract's per-command log is the whole story.
-  expect(verifying[0]!.sections.map(({ name }) => name)).toEqual([
-    'inspection header',
-    'live frame',
-  ]);
+  expect(verifying[0]!.sections.map(({ name }) => name)).toEqual(['live frame']);
 });
 
 test('surface owns scrolling only below the complete-panel floor', async ({ page }) => {
@@ -221,8 +208,9 @@ test('expanded artifact content floats without changing the live surface scroll 
   page,
 }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
-  await page.goto('http://localhost:9871/?scene=run-gauge&theme=dark');
-  await page.getByRole('button', { name: 'Files' }).click();
+  // Files is a top-level stage segment now, not reachable via a button
+  // inside this scene's live surface — go straight to the files scene.
+  await page.goto('http://localhost:9871/?scene=run-gauge-files&theme=dark');
   await page
     .getByRole('button', { name: /Open artifact/ })
     .first()

@@ -139,11 +139,11 @@ test('packaged planning review saves, reconciles, iterates, and approves deliber
     await handle.page.getByRole('button', { name: 'Approve' }).click();
     await waitForFeatureStatus(handle.page, followUpFeatureId, 'Implementing');
     transcript.step('fresh authoritative snapshot cleared the review and resumed implementation');
-    const followUpCockpit = handle.page.getByLabel('Feature Follow-up planning review');
-    await expect(followUpCockpit.getByRole('button', { name: 'Stop' })).toBeEnabled({
+    await expect(handle.page.getByLabel('Feature Follow-up planning review')).toBeVisible();
+    await expect(handle.page.getByRole('button', { name: 'Stop' })).toBeEnabled({
       timeout: 60_000,
     });
-    await followUpCockpit.getByRole('button', { name: 'Stop' }).click();
+    await handle.page.getByRole('button', { name: 'Stop' }).click();
     const stopDialog = handle.page.getByRole('dialog', { name: 'Stop Follow-up planning review?' });
     await expect(stopDialog).toContainText(/currently affects \d+ live sessions?/);
     await stopDialog.getByRole('button', { name: 'Confirm stop' }).click();

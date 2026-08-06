@@ -222,9 +222,19 @@ describe('CurrentRunInspection', () => {
     expect(await screen.findByRole('tablist', { name: 'Live agents' })).toBeVisible();
     expect(screen.queryByLabelText('Review gate')).not.toBeInTheDocument();
     expect(screen.queryByLabelText('Review axes')).not.toBeInTheDocument();
-    // Files live behind their own preview tab; nothing is openable until it opens.
-    expect(screen.queryByRole('button', { name: /^Open artifact / })).not.toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: 'Files' }));
+
+    // Files is a separate top-level cockpit segment now, rendered by a
+    // second instance in 'files' mode.
+    rerender(
+      <CurrentRunInspection
+        featureId="abcd1234ef567890"
+        runNumber={2}
+        currentPhase="Implement"
+        currentIteration={2}
+        reviewGate={REVIEW_GATE}
+        mode="files"
+      />,
+    );
 
     expect(
       screen
@@ -269,12 +279,13 @@ describe('CurrentRunInspection', () => {
         runNumber={2}
         currentPhase="Implement"
         reviewGate={REVIEW_GATE}
+        mode="files"
       />,
     );
     // Switching runs clears the opened file so the prior run's content can't leak.
     expect(screen.queryByLabelText('Current run log content')).not.toBeInTheDocument();
     expect(screen.queryByLabelText('Current run artifact content')).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Files' })).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'Run files' })).toBeInTheDocument();
   });
 
   it('groups bounded logs into channels and drills into a channel on demand', async () => {
@@ -320,10 +331,11 @@ describe('CurrentRunInspection', () => {
         runNumber={8}
         currentPhase="Implement"
         reviewGate={REVIEW_GATE}
+        mode="files"
       />,
     );
 
-    await user.click(await screen.findByRole('button', { name: 'Files' }));
+    await screen.findByRole('region', { name: 'Run files' });
     // The dominant channel sorts first; individual files stay collapsed while
     // more than one channel exists, so nothing is directly openable yet.
     const channelToggle = screen.getByRole('button', {
@@ -772,9 +784,10 @@ describe('CurrentRunInspection', () => {
     );
 
     const tablist = await screen.findByRole('tablist', { name: 'Live agents' });
-    expect(tablist).toHaveAttribute('aria-orientation', 'vertical');
-    expect(screen.getByText('Implementer')).toBeInTheDocument();
-    expect(screen.getByText('Review panel')).toBeInTheDocument();
+    expect(tablist).toHaveAttribute('aria-orientation', 'horizontal');
+    // The section grouping is a non-visual wrapper now — no visible group title.
+    expect(screen.queryByText('Implementer')).not.toBeInTheDocument();
+    expect(screen.queryByText('Review panel')).not.toBeInTheDocument();
 
     // Implementer sorts ahead of the review panel and selects first as the
     // first active agent in cohort order.
@@ -787,7 +800,7 @@ describe('CurrentRunInspection', () => {
     expect(await screen.findByText('Implementer transcript.')).toBeVisible();
 
     tabs[0]!.focus();
-    await user.keyboard('{ArrowDown}');
+    await user.keyboard('{ArrowRight}');
     expect(await screen.findByText('Security review underway.')).toBeVisible();
     expect(screen.getByRole('tab', { name: /Security/ })).toHaveFocus();
     await user.keyboard('{End}');
@@ -854,13 +867,13 @@ describe('CurrentRunInspection', () => {
     );
 
     const created = await screen.findByRole('article', { name: 'Created src/new-panel.tsx' });
-    expect(created).toHaveTextContent('Createdsrc/new-panel.tsx+3');
+    expect(created).toHaveTextContent('src/new-panel.tsxcreated+3');
     expect(screen.getByRole('region', { name: 'Diff for src/new-panel.tsx' })).toHaveTextContent(
       'export function NewPanel()',
     );
 
     const updated = screen.getByRole('article', { name: 'Updated src/app.tsx' });
-    expect(updated).toHaveTextContent('Updatedsrc/app.tsx+1−1');
+    expect(updated).toHaveTextContent('src/app.tsxupdated+1−1');
     expect(screen.getByRole('region', { name: 'Diff for src/app.tsx' })).toHaveTextContent(
       'return <OldPanel />;',
     );
@@ -991,7 +1004,7 @@ describe('CurrentRunInspection', () => {
     expect(inspector).toHaveTextContent('"index": 0');
   });
 
-  it('shows a harness verification surface instead of the transcript while verifying', async () => {
+  it('renders a verification summary tick inline in the stream, not a separate surface', async () => {
     const user = userEvent.setup();
     const mock = installAgenticoMock();
     mock.api.getLivePreview.mockResolvedValue({
@@ -1015,7 +1028,7 @@ describe('CurrentRunInspection', () => {
           index: 0,
           role: 'assistant',
           type: 'text',
-          text: 'Stale implementation transcript.',
+          text: 'Implementation transcript.',
         },
       ],
     });
@@ -1037,31 +1050,22 @@ describe('CurrentRunInspection', () => {
       />,
     );
 
-    const progress = await screen.findByLabelText('Verification progress');
-    expect(progress).toHaveTextContent('go test ./...');
-    expect(progress).toHaveTextContent('npm run build');
+    // A single current-state summary tick renders at the end of the stream —
+    // the separate verification stage and its per-command log are gone; the
+    // transcript itself keeps rendering alongside it.
+    expect(await screen.findByText('Verification: 1 of 4 checks passing')).toBeVisible();
+    expect(screen.queryByLabelText('Verification progress')).not.toBeInTheDocument();
     expect(screen.queryByLabelText('Verification commands')).not.toBeInTheDocument();
     expect(
       screen.queryByRole('heading', { name: 'Verifying implementation · 2/4' }),
     ).not.toBeInTheDocument();
-
-    // The transcript is replaced by the verification log; the review gate hides.
-    expect(
-      screen.getByText(
-        'Verification in progress — no agent session to watch; see the live preview.',
-      ),
-    ).toBeVisible();
+    expect(await screen.findByText('Implementation transcript.')).toBeVisible();
     expect(screen.queryByLabelText('Review axes')).not.toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: 'Expand live preview to full screen' }));
     const overlay = await screen.findByRole('dialog', { name: 'Live agent preview' });
-    expect(overlay).toHaveTextContent('Verification in progress');
-    expect(overlay).toHaveTextContent('go test ./...');
-    expect(overlay).toHaveTextContent('npm run build');
-    expect(overlay).toHaveTextContent('lint');
-    expect(overlay).toHaveTextContent('e2e smoke');
-    expect(overlay).not.toHaveTextContent('Stale implementation transcript.');
-    expect(overlay).not.toHaveTextContent('Running implementation');
+    expect(overlay).toHaveTextContent('Verification: 1 of 4 checks passing');
+    expect(overlay).toHaveTextContent('Implementation transcript.');
   });
 
   it('keeps live reviewer tabs when an active gate coincides with a stale verifying marker', async () => {

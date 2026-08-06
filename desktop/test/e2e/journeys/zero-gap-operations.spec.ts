@@ -39,7 +39,7 @@ test('zero-gap operations: dismissible watch, live inspection, bounded files, an
       waitForReady: true,
     });
 
-    await cockpit.getByRole('button', { name: 'Start', exact: true }).click();
+    await handle.page.getByRole('button', { name: 'Start', exact: true }).click();
     await waitFor(
       () => providerInvocationCount(world.providerInvocationLog) === 1,
       'one authoritative provider invocation',
@@ -92,7 +92,7 @@ test('zero-gap operations: dismissible watch, live inspection, bounded files, an
 
     const inspection = cockpit.getByRole('region', { name: 'Current run inspection' });
     await expect(inspection).toBeVisible({ timeout: 60_000 });
-    await inspection.getByRole('button', { name: 'Refresh' }).click();
+    await inspection.getByRole('button', { name: 'Refresh current run inspection' }).click();
     // The fixture can finish between the Start response and this assertion;
     // the current-run contract remains inspectable in either live or freshly
     // completed state, while Context proves the authoritative preview loaded.
@@ -103,9 +103,11 @@ test('zero-gap operations: dismissible watch, live inspection, bounded files, an
     });
     // The phase log exists for the whole active run. A provider session log is
     // phase-dependent and may not exist yet while the first phase is starting.
-    await inspection.getByRole('button', { name: 'Files' }).click();
-    await expect(inspection.getByRole('region', { name: 'Run artifacts' })).toBeVisible();
-    await expect(inspection.getByRole('region', { name: 'Bounded logs' })).toBeVisible();
+    // Files is a top-level stage-bar segment now, not a control inside the
+    // "Current run inspection" region.
+    await cockpit.getByRole('tab', { name: 'Files' }).click();
+    await expect(cockpit.getByRole('region', { name: 'Run artifacts' })).toBeVisible();
+    await expect(cockpit.getByRole('region', { name: 'Bounded logs' })).toBeVisible();
 
     await contractEvidenceShot(
       handle,
@@ -115,7 +117,8 @@ test('zero-gap operations: dismissible watch, live inspection, bounded files, an
       'light',
     );
 
-    await inspection.getByRole('button', { name: 'Conversation' }).click();
+    // Back to Live — the Files segment has no conversation of its own.
+    await cockpit.getByRole('tab', { name: 'Live' }).click();
     const timeline = cockpit.getByRole('region', { name: 'Live agent transcript' });
     await expect(timeline.getByText(/Backfill ready|Live semantic update/).first()).toBeVisible({
       timeout: 60_000,
@@ -162,7 +165,7 @@ test('zero-gap operations: dismissible watch, live inspection, bounded files, an
     expect(providerInvocationCount(world.providerInvocationLog)).toBe(1);
 
     await handle.page.getByRole('option', { name: featureName }).click();
-    await reopened.getByRole('button', { name: 'Stop', exact: true }).click();
+    await handle.page.getByRole('button', { name: 'Stop', exact: true }).click();
     const stopDialog = handle.page.getByRole('dialog', { name: `Stop ${featureName}?` });
     await expect(stopDialog).toContainText(/live session/);
     await stopDialog.getByRole('button', { name: 'Confirm stop' }).click();

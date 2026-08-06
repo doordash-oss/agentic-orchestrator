@@ -737,7 +737,22 @@ describe('WorkspaceShell toolbar', () => {
     // The menu portals into the toolbar's overflow slot, not the cockpit.
     expect(summary.closest('.toolbar__overflow-slot')).not.toBeNull();
     await userEvent.click(summary);
-    expect(screen.getByRole('menu')).toBeInTheDocument();
+    expect(within(summary.closest('details')!).getByRole('menu')).toBeInTheDocument();
+  });
+
+  it('portals the cockpit status chip into the toolbar actions slot, not the cockpit content flow', async () => {
+    installAgenticoMock({
+      settings: settingsWithActive(FEATURE_ID),
+      features: [summaryOf(featureSnapshot({ id: FEATURE_ID, name: 'Search revamp' }))],
+      feature: featureSnapshot({ id: FEATURE_ID, name: 'Search revamp' }),
+    });
+    render(<WorkspaceShell />);
+
+    await screen.findByText('Search revamp', { selector: '.toolbar__title-name' });
+    const chip = screen.getByRole('status', { name: 'Current feature status' });
+    // The action row portals into the toolbar's actions slot; it must never
+    // land in the cockpit's own content flow.
+    expect(chip.closest('.toolbar__actions-slot')).not.toBeNull();
   });
 
   it('wires the toolbar inspector toggle into the wide-layout split-view pane, hides it on Overview, and resets it across a feature switch', async () => {

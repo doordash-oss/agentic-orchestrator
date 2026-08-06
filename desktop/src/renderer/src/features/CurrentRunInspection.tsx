@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import type {
   LivePreviewView,
   ReviewGateView,
@@ -21,9 +22,14 @@ import {
   verificationCounts,
   verificationSymbol,
   verificationTone,
+  type VerificationTone,
 } from './verificationModel';
 import { stripUnsafeAnsi } from './timelineModel';
-import { buildConversation, type BuildConversationOptions } from './transcript/conversation';
+import {
+  buildConversation,
+  type BuildConversationOptions,
+  type ConversationItem,
+} from './transcript/conversation';
 import { ConversationTranscript } from './transcript/ConversationTranscript';
 import { HistoricalTimeline } from './RunTimeline';
 import { useCohortTranscripts } from './useCohortTranscripts';
@@ -46,6 +52,13 @@ function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+/**
+ * The Live surface's own small toggle: the conversation, or the raw
+ * per-session signal trace. Files is a top-level cockpit segment now, not a
+ * view here — except in the record presentation (the aftercare "Run
+ * record" modal, standalone with no stage bar of its own), which keeps its
+ * original three-way toggle unchanged; Phase 6 owns that surface.
+ */
 type PreviewView = 'conversation' | 'trace' | 'files';
 
 export interface CurrentRunInspectionProps {
@@ -78,6 +91,18 @@ export interface CurrentRunInspectionProps {
   onRunMetrics?(metrics: RunMetrics | null): void;
   /** Record view supplies its own header label and hides live controls. */
   presentation?: 'regular' | 'record';
+  /**
+   * Which top-level cockpit segment this instance renders: the conversation
+   * column with its trace toggle, or just the run's files (artifacts and
+   * logs, with their open-file overlay). Defaults to 'live'.
+   */
+  mode?: 'live' | 'files';
+  /**
+   * Host node for the restyled full-screen expand icon, supplied by the
+   * stage-bar row's trailing side. Falls back to rendering inline in the
+   * Live surface's own bar when absent (record presentation, tests).
+   */
+  expandHost?: HTMLElement | null;
 }
 
 /** This run's cumulative totals, surfaced to the inspector sidebar and rail. */
@@ -390,6 +415,8 @@ export function CurrentRunInspection({
   onAttentionPreviewClose,
   onRunMetrics,
   presentation = 'regular',
+  mode = 'live',
+  expandHost = null,
 }: CurrentRunInspectionProps): React.ReactElement {
   const [preview, setPreview] = useState<LivePreviewView | null>(null);
   const [artifacts, setArtifacts] = useState<RunArtifactsListResult['artifacts']>([]);
@@ -443,6 +470,62 @@ export function CurrentRunInspection({
   // The review gate wins over a stale "verifying" marker: while an axis review
   // is active there is no harness contract running to display.
   const verifying = isVerifyingPhase(phaseStatus, verificationItems) && !reviewGate.reviewingGate;
+
+  // Verification results as events in the stream: the first observation
+  // (hydration, reload, or the static record presentation) renders one
+  // current-state summary tick; every check-state transition witnessed
+  // after that appends its own tick, in arrival order at the stream's
+  // current end. No invented positions or times.
+  const [verificationTicks, setVerificationTicks] = useState<ConversationItem[]>([]);
+  const observedVerificationRef = useRef<Map<string, string> | null>(null);
+  const verificationTickSeqRef = useRef(0);
+  useEffect(() => {
+    if (verificationItems === undefined) return;
+    const observed = observedVerificationRef.current;
+    if (observed === null) {
+      const counts = verificationCounts(verificationItems);
+      const passed = counts.done - counts.failed;
+      const aggregateTone: VerificationTone =
+        counts.failed > 0
+          ? 'failed'
+          : counts.done < counts.total
+            ? 'running'
+            : counts.total > 0
+              ? 'passed'
+              : 'neutral';
+      verificationTickSeqRef.current += 1;
+      setVerificationTicks([
+        {
+          kind: 'verification-tick',
+          key: `verify-summary-${verificationTickSeqRef.current}`,
+          name: `Verification: ${passed} of ${counts.total} checks passing`,
+          tone: aggregateTone,
+          symbol: verificationSymbol(aggregateTone),
+        },
+      ]);
+      observedVerificationRef.current = new Map(
+        verificationItems.map((item) => [item.name, item.state]),
+      );
+      return;
+    }
+    const transitions = verificationItems.filter((item) => observed.get(item.name) !== item.state);
+    if (transitions.length === 0) return;
+    const newTicks: ConversationItem[] = transitions.map((item) => {
+      verificationTickSeqRef.current += 1;
+      return {
+        kind: 'verification-tick',
+        key: `verify-tick-${verificationTickSeqRef.current}`,
+        name: item.name,
+        tone: verificationTone(item.state),
+        symbol: verificationSymbol(item.state),
+      };
+    });
+    setVerificationTicks((current) => [...current, ...newTicks]);
+    observedVerificationRef.current = new Map(
+      verificationItems.map((item) => [item.name, item.state]),
+    );
+  }, [verificationItems]);
+
   const closeFullscreen = useCallback(() => {
     setFullscreen(false);
     onAttentionPreviewClose?.();
@@ -587,29 +670,59 @@ export function CurrentRunInspection({
     />
   );
 
+  if (mode === 'files') {
+    return (
+      <section className="current-inspection current-inspection--files" aria-label="Run files">
+        {error !== null ? (
+          <p role="alert" className="form-field__error">
+            {error}
+          </p>
+        ) : null}
+        {initialLoading ? <p className="setup-step__empty">Loading run files…</p> : filesSurface}
+        {content !== null ? (
+          <FileOverlay content={content} onClose={() => setContent(null)} />
+        ) : null}
+      </section>
+    );
+  }
+
+  const expandButton = (
+    <button
+      type="button"
+      className="live-preview__icon-button"
+      aria-label="Expand live preview to full screen"
+      title="Full screen"
+      onClick={() => setFullscreen(true)}
+    >
+      <MaximizeIcon />
+    </button>
+  );
+
   const livePreviewFrame = (
     <div className="live-preview__frame">
       <div className="live-preview__bar">
-        <p className="cockpit__eyebrow">Live agent activity</p>
+        <p className="cockpit__caption">Live activity</p>
         <div className="live-preview__bar-controls">
-          <ViewToggle view={view} onChange={setView} />
+          <ViewToggle view={view} onChange={setView} showFiles={presentation === 'record'} />
           <button
             type="button"
             className="live-preview__icon-button"
-            aria-label="Expand live preview to full screen"
-            title="Full screen"
-            onClick={() => setFullscreen(true)}
+            aria-label="Refresh current run inspection"
+            title="Refresh"
+            onClick={() => {
+              void refresh();
+              live.refresh();
+            }}
           >
-            <MaximizeIcon />
+            <span aria-hidden="true">↻</span>
           </button>
+          {expandHost === null ? expandButton : null}
         </div>
       </div>
       {initialLoading ? (
         <p className="setup-step__empty">Loading current run inspection…</p>
       ) : view === 'files' ? (
         filesSurface
-      ) : verifying && verificationItems !== undefined ? (
-        <VerificationStage items={verificationItems} />
       ) : (
         <TranscriptStage
           stage={stage}
@@ -618,6 +731,7 @@ export function CurrentRunInspection({
           selectSession={live.selectSession}
           waitReason={waitReason}
           attentionTurn={attentionTurn}
+          verificationTicks={verificationTicks}
         />
       )}
     </div>
@@ -629,26 +743,6 @@ export function CurrentRunInspection({
       aria-label="Current run inspection"
       data-presentation={presentation}
     >
-      <header className="current-inspection__header">
-        <div>
-          <p className="cockpit__eyebrow">
-            {presentation === 'record' ? 'Sealed run' : 'Mutable current run'}
-          </p>
-          <h3 className="setup-step__title">
-            {presentation === 'record' ? 'Activity and artifacts' : 'Live preview and files'}
-          </h3>
-        </div>
-        <button
-          type="button"
-          onClick={() => {
-            void refresh();
-            live.refresh();
-          }}
-        >
-          Refresh
-        </button>
-      </header>
-
       {error !== null ? (
         <p role="alert" className="form-field__error">
           {error}
@@ -673,21 +767,13 @@ export function CurrentRunInspection({
         </div>
       )}
 
-      {initialLoading && presentation === 'record' ? null : (
-        <>
-          {presentation === 'record' ? (
-            verifying && verificationItems !== undefined ? (
-              <VerificationSummary items={verificationItems} />
-            ) : (
-              <ReviewGateSummary
-                gate={reviewGate}
-                currentPhase={currentPhase}
-                currentRoadmapPhase={currentRoadmapPhase}
-              />
-            )
-          ) : null}
-        </>
-      )}
+      {presentation === 'record' && !initialLoading ? (
+        <ReviewGateSummary
+          gate={reviewGate}
+          currentPhase={currentPhase}
+          currentRoadmapPhase={currentRoadmapPhase}
+        />
+      ) : null}
 
       {fullscreen ? (
         <LivePreviewOverlay
@@ -702,12 +788,14 @@ export function CurrentRunInspection({
           attentionFooter={attentionFooter}
           attentionTurn={attentionTurn}
           verifying={verifying}
-          verificationItems={verificationItems}
+          verificationTicks={verificationTicks}
+          showFiles={presentation === 'record'}
           filesSurface={filesSurface}
         />
       ) : null}
 
       {content !== null ? <FileOverlay content={content} onClose={() => setContent(null)} /> : null}
+      {expandHost !== null ? createPortal(expandButton, expandHost) : null}
     </section>
   );
 }
@@ -775,7 +863,7 @@ function FileOverlay({
       >
         <header className="live-preview__overlay-header">
           <div>
-            <p className="cockpit__eyebrow">{isArtifact ? 'Run artifact' : 'Run log'}</p>
+            <p className="cockpit__caption">{isArtifact ? 'Run artifact' : 'Run log'}</p>
             <h2>{content.label}</h2>
             {content.kind === 'log' && content.value.offset > 0 ? (
               <p className="current-inspection__overlay-note">Latest 64 KB</p>
@@ -855,9 +943,12 @@ function useTranscriptStage(
 function ViewToggle({
   view,
   onChange,
+  showFiles = false,
 }: {
   view: PreviewView;
   onChange(next: PreviewView): void;
+  /** Record presentation only — it has no top-level Files segment of its own. */
+  showFiles?: boolean;
 }): React.ReactElement {
   return (
     <div className="live-preview__views" role="group" aria-label="Preview view">
@@ -877,14 +968,16 @@ function ViewToggle({
       >
         Signal trace
       </button>
-      <button
-        type="button"
-        className="live-preview__view"
-        aria-pressed={view === 'files'}
-        onClick={() => onChange('files')}
-      >
-        Files
-      </button>
+      {showFiles ? (
+        <button
+          type="button"
+          className="live-preview__view"
+          aria-pressed={view === 'files'}
+          onClick={() => onChange('files')}
+        >
+          Files
+        </button>
+      ) : null}
     </div>
   );
 }
@@ -896,6 +989,7 @@ function TranscriptStage({
   selectSession,
   waitReason,
   attentionTurn,
+  verificationTicks,
 }: {
   stage: TranscriptStageModel;
   view: PreviewView;
@@ -903,6 +997,8 @@ function TranscriptStage({
   selectSession(id: string): void;
   waitReason?: string;
   attentionTurn?: ReactNode;
+  /** Verification tick events, appended at the stream's current end. */
+  verificationTicks?: ConversationItem[];
 }): React.ReactElement {
   const emptyState =
     stage.cohort.length === 0 && waitReason !== undefined && waitReason.trim() !== '' ? (
@@ -912,10 +1008,14 @@ function TranscriptStage({
     );
 
   const withRoster = stage.cohort.length > 1;
+  const items =
+    verificationTicks !== undefined && verificationTicks.length > 0
+      ? [...stage.items, ...verificationTicks]
+      : stage.items;
   return (
     <div className={withRoster ? 'live-preview live-preview--cohort' : 'live-preview'}>
       {withRoster ? (
-        <CohortRoster
+        <CohortStrip
           cohort={stage.cohort}
           labels={stage.labels}
           selectedId={selectedId}
@@ -926,7 +1026,7 @@ function TranscriptStage({
         <ConversationTranscript
           className="live-preview__transcript"
           ariaLabel="Live agent transcript"
-          items={stage.items}
+          items={items}
           waiting={stage.waiting}
           idleLabel={IDLE_ACTIVITY_LABEL}
           assistantName={stage.assistantName}
@@ -943,11 +1043,13 @@ function TranscriptStage({
 }
 
 /**
- * Grouped agent roster beside the transcript: the implementer, then the
- * review panel in its durable axis order. One leading mark per row — a
- * pulsing pip while running, ✓/✕ once terminal.
+ * Horizontal cohort strip above the transcript: the implementer, then the
+ * review panel in its durable axis order, plus a right-pinned tally that
+ * never scrolls away. One leading mark per tab — a pulsing pip while
+ * running, a check once complete, a triangle (with a red label) once
+ * failed. The section grouping stays a non-visual wrapper only.
  */
-function CohortRoster({
+function CohortStrip({
   cohort,
   labels,
   selectedId,
@@ -959,9 +1061,21 @@ function CohortRoster({
   selectSession(id: string): void;
 }): React.ReactElement {
   const sections = useMemo(() => cohortSections(cohort), [cohort]);
+  const tally = useMemo(() => {
+    let running = 0;
+    let done = 0;
+    let failed = 0;
+    for (const session of cohort) {
+      const status = cohortTabStatus(session);
+      if (status === 'running') running += 1;
+      else if (status === 'failed') failed += 1;
+      else done += 1;
+    }
+    return { running, done, failed };
+  }, [cohort]);
 
   const onKeyDown = (event: React.KeyboardEvent<HTMLDivElement>): void => {
-    if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
     const tabs = Array.from(
       event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="tab"]'),
     );
@@ -972,7 +1086,7 @@ function CohortRoster({
         ? 0
         : event.key === 'End'
           ? tabs.length - 1
-          : event.key === 'ArrowDown'
+          : event.key === 'ArrowRight'
             ? (current + 1) % tabs.length
             : (Math.max(current, 0) - 1 + tabs.length) % tabs.length;
     event.preventDefault();
@@ -984,50 +1098,55 @@ function CohortRoster({
   };
 
   return (
-    <div
-      className="live-preview__roster"
-      role="tablist"
-      aria-label="Live agents"
-      aria-orientation="vertical"
-      onKeyDown={onKeyDown}
-    >
-      {sections.map((section) => (
-        <div key={section.key} className="live-preview__roster-group" role="presentation">
-          <p className="live-preview__roster-title" aria-hidden="true">
-            {section.title}
-          </p>
-          {section.sessions.map((session) => {
-            const status = cohortTabStatus(session);
-            const label = labels.get(session.id) ?? session.id;
-            return (
-              <button
-                key={session.id}
-                type="button"
-                role="tab"
-                aria-selected={session.id === selectedId}
-                aria-label={`${label} — ${status}`}
-                tabIndex={session.id === selectedId ? 0 : -1}
-                className="live-preview__agent"
-                data-status={status}
-                data-session-id={session.id}
-                title={`${label} — ${status}`}
-                onClick={() => selectSession(session.id)}
-              >
-                <span className="live-preview__agent-state" aria-hidden="true">
-                  {status === 'running' ? (
-                    <span className="live-preview__agent-pip" />
-                  ) : status === 'completed' ? (
-                    '✓'
-                  ) : (
-                    '✕'
-                  )}
-                </span>
-                <span className="live-preview__agent-name">{label}</span>
-              </button>
-            );
-          })}
-        </div>
-      ))}
+    <div className="live-preview__strip-row">
+      <div
+        className="live-preview__strip"
+        role="tablist"
+        aria-label="Live agents"
+        aria-orientation="horizontal"
+        onKeyDown={onKeyDown}
+      >
+        {sections.map((section) => (
+          <div key={section.key} className="live-preview__strip-group" role="presentation">
+            {section.sessions.map((session) => {
+              const status = cohortTabStatus(session);
+              const label = labels.get(session.id) ?? session.id;
+              return (
+                <button
+                  key={session.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={session.id === selectedId}
+                  aria-label={`${label} — ${status}`}
+                  tabIndex={session.id === selectedId ? 0 : -1}
+                  className="live-preview__agent"
+                  data-status={status}
+                  data-session-id={session.id}
+                  title={`${label} — ${status}`}
+                  onClick={() => selectSession(session.id)}
+                >
+                  <span className="live-preview__agent-state" aria-hidden="true">
+                    {status === 'running' ? (
+                      <span className="live-preview__agent-pip" />
+                    ) : status === 'completed' ? (
+                      '✓'
+                    ) : (
+                      '▲'
+                    )}
+                  </span>
+                  <span className="live-preview__agent-name">{label}</span>
+                </button>
+              );
+            })}
+          </div>
+        ))}
+      </div>
+      <p className="live-preview__strip-tally">
+        {tally.running} running · {tally.done} done
+        {tally.failed > 0 ? (
+          <span className="live-preview__strip-tally-issues"> · {tally.failed} found issues</span>
+        ) : null}
+      </p>
     </div>
   );
 }
@@ -1044,7 +1163,8 @@ function LivePreviewOverlay({
   attentionFooter,
   attentionTurn,
   verifying,
-  verificationItems,
+  verificationTicks,
+  showFiles = false,
   filesSurface,
 }: {
   onClose(): void;
@@ -1058,8 +1178,9 @@ function LivePreviewOverlay({
   attentionFooter?: ReactNode;
   attentionTurn?: ReactNode;
   verifying: boolean;
-  verificationItems?: VerificationItemView[];
-  filesSurface: ReactNode;
+  verificationTicks?: ConversationItem[];
+  showFiles?: boolean;
+  filesSurface?: ReactNode;
 }): React.ReactElement {
   const dialogRef = useRef<HTMLDivElement>(null);
   useModalDismiss(dialogRef, onClose);
@@ -1076,9 +1197,9 @@ function LivePreviewOverlay({
         onMouseDown={(event) => event.stopPropagation()}
       >
         <header className="live-preview__overlay-header">
-          <p className="cockpit__eyebrow">Live agent activity</p>
+          <p className="cockpit__caption">Live activity</p>
           <div className="live-preview__overlay-controls">
-            <ViewToggle view={view} onChange={onChangeView} />
+            <ViewToggle view={view} onChange={onChangeView} showFiles={showFiles} />
             <button
               type="button"
               className="live-preview__icon-button"
@@ -1101,8 +1222,6 @@ function LivePreviewOverlay({
         </header>
         {view === 'files' ? (
           filesSurface
-        ) : verifying && verificationItems !== undefined ? (
-          <VerificationStage items={verificationItems} />
         ) : (
           <TranscriptStage
             stage={stage}
@@ -1111,6 +1230,7 @@ function LivePreviewOverlay({
             selectSession={selectSession}
             waitReason={waitReason}
             attentionTurn={attentionTurn}
+            verificationTicks={verificationTicks}
           />
         )}
         {preview !== null || attentionFooter !== undefined ? (
@@ -1129,72 +1249,6 @@ function LivePreviewOverlay({
         ) : null}
       </div>
     </div>
-  );
-}
-
-/**
- * Replaces the live transcript while the harness runs the testing contract:
- * there is no agent session to watch, so a stale prior-session transcript
- * would masquerade as live. Renders a per-command execution log instead.
- */
-function VerificationStage({
-  items,
-}: {
-  items: readonly VerificationItemView[];
-}): React.ReactElement {
-  return (
-    <div className="live-preview">
-      <div className="live-preview__verification" aria-label="Verification progress">
-        <p className="setup-step__empty">
-          Verification in progress — no agent session to watch; see the live preview.
-        </p>
-        <ul className="live-preview__verification-log">
-          {items.map((item, index) => (
-            <li key={`${item.name}-${index}`} data-status={verificationTone(item.state)}>
-              <span aria-hidden="true">{verificationSymbol(item.state)}</span>
-              <span className="live-preview__verification-name">{item.name}</span>
-            </li>
-          ))}
-        </ul>
-      </div>
-    </div>
-  );
-}
-
-/** Overview counts and per-command status for an active harness contract. */
-function VerificationSummary({
-  items,
-}: {
-  items: readonly VerificationItemView[];
-}): React.ReactElement {
-  const counts = verificationCounts(items);
-  return (
-    <section className="review-gate" aria-label="Verification">
-      <div className="review-gate__heading">
-        <div>
-          <span className="review-gate__eyebrow">Verification</span>
-          <h4>
-            Verifying implementation · {counts.done}/{counts.total}
-          </h4>
-        </div>
-      </div>
-      <ul className="review-gate__axes" aria-label="Verification commands">
-        {items.map((item, index) => (
-          <li
-            key={`${item.name}-${index}`}
-            data-status={verificationTone(item.state)}
-            title={`${item.name}: ${item.state}`}
-          >
-            <span>{item.name}</span>
-            <span aria-hidden="true">{verificationSymbol(item.state)}</span>
-          </li>
-        ))}
-      </ul>
-      <p className="review-gate__counts">
-        {counts.done}/{counts.total} complete
-        {counts.failed > 0 ? ` · ✕${counts.failed}` : ''}
-      </p>
-    </section>
   );
 }
 

@@ -52,14 +52,16 @@ test('Stop Work and Install Now confirms impact, cancels partial stops, then suc
       status: 'ready',
       signatureStatus: 'verified',
     });
-    const cockpit = await createFeatureViaForm(handle, {
+    await createFeatureViaForm(handle, {
       name: 'Update Stop Work',
       description: 'Durable workflow for update stop-and-install coverage.',
       repoPatterns: [/alpha/],
       waitForReady: true,
     });
-    await cockpit.getByRole('button', { name: 'Start', exact: true }).click();
-    await expect(cockpit.getByRole('button', { name: 'Stop' })).toBeEnabled({ timeout: 60_000 });
+    await handle.page.getByRole('button', { name: 'Start', exact: true }).click();
+    await expect(handle.page.getByRole('button', { name: 'Stop' })).toBeEnabled({
+      timeout: 60_000,
+    });
     const activeReady = await handle.page.evaluate(() => window.agentico.checkForUpdates());
     expect(activeReady.activeWorkSummary).toMatch(/1 workflow/);
     transcript.json('active workflow before Stop Work and Install Now', activeReady);

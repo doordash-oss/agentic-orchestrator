@@ -57,12 +57,12 @@ test('overview: headline, Answer on a waiting row, and Open on a resting row', a
 
     transcript.section('A feature with a pending prompt renders an Answer row that jumps to it');
     await handle.page.getByRole('option', { name: 'Overview' }).click();
-    const cockpit = await createFeatureViaForm(handle, {
+    await createFeatureViaForm(handle, {
       name: 'Evidence Waiting Fixture',
       repoPatterns: [/overview-lab/],
       waitForReady: true,
     });
-    await cockpit.getByRole('button', { name: 'Start', exact: true }).click();
+    await handle.page.getByRole('button', { name: 'Start', exact: true }).click();
     await waitForAttentionItem(handle.page, 'perm-allow-once');
 
     await handle.page.getByRole('option', { name: 'Overview' }).click();

@@ -151,7 +151,7 @@ test('rebase pass: behind feature → card click → pass workspace → completi
     await expect(pass).toBeVisible({ timeout: 60_000 });
     transcript.step('rebase pass workspace visible with kind-aware labeling, no modal');
 
-    await expect(seededCockpit.getByText('Rebasing')).toBeVisible({ timeout: 30_000 });
+    await expect(handle.page.getByText('Rebasing')).toBeVisible({ timeout: 30_000 });
     transcript.step('status chip reads "Rebasing" while the pass is active');
 
     transcript.section('Wait for the rebase pass to reach a terminal state');

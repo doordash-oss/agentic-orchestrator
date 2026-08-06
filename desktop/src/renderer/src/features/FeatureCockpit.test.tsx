@@ -8,8 +8,8 @@ import { dispatchMediaChange, matchMediaState } from '../test/setup';
 import { emptyAttentionDrafts } from './AttentionInbox';
 import { FeatureCockpit } from './FeatureCockpit';
 
-// The review surface (Document stage) instantiates Monaco, which needs no real
-// editor in jsdom; the stub keeps the stage-tab test light.
+// The Review doc surface instantiates Monaco, which needs no real editor in
+// jsdom; the stub keeps the segmented-control tests light.
 vi.mock('monaco-editor', () => ({
   editor: {
     create: vi.fn(() => ({
@@ -133,7 +133,7 @@ describe('FeatureCockpit snapshot rendering', () => {
     expect(within(header!).queryByText('Repository')).not.toBeInTheDocument();
   });
 
-  it('keeps rewind and run history in the overflow menu', async () => {
+  it('keeps rewind in the overflow menu', async () => {
     const mock = installAgenticoMock({
       feature: featureSnapshot({
         actions: [{ id: 'rewind', enabled: true, disabledReasons: [] }],
@@ -156,7 +156,10 @@ describe('FeatureCockpit snapshot rendering', () => {
     const actions = await screen.findByRole('group', { name: 'Feature actions' });
     await userEvent.click(within(actions).getByLabelText('More actions'));
     expect(within(actions).getByRole('menuitem', { name: 'Rewind feature' })).toBeVisible();
-    expect(within(actions).getByRole('menuitem', { name: 'View run history' })).toBeVisible();
+    // The run/iteration popup is the sole run switcher now — no history menu item.
+    expect(
+      within(actions).queryByRole('menuitem', { name: 'View run history' }),
+    ).not.toBeInTheDocument();
     await userEvent.click(within(actions).getByRole('menuitem', { name: 'Rewind feature' }));
     expect(await screen.findByRole('dialog', { name: /Rewind/ })).toBeVisible();
     expect(mock.api.getFeature).toHaveBeenCalledWith(FEATURE_ID);
@@ -215,7 +218,7 @@ describe('FeatureCockpit snapshot rendering', () => {
     expect(mock.api.preflightCompletion).toHaveBeenCalledWith({ featureId: FEATURE_ID });
   });
 
-  it('hides completion affordances while completion actions are present but disabled', async () => {
+  it('disables the Changes segment while completion actions are present but disabled', async () => {
     const mock = installAgenticoMock({
       feature: featureSnapshot({
         status: 'Running',
@@ -235,11 +238,43 @@ describe('FeatureCockpit snapshot rendering', () => {
 
     await screen.findByRole('region', { name: 'Feature Search revamp' });
 
-    expect(screen.queryByRole('tab', { name: 'Changes' })).not.toBeInTheDocument();
+    // Fixed segments never hide — the unavailable one renders disabled.
+    expect(screen.getByRole('tab', { name: 'Changes' })).toBeDisabled();
     expect(screen.queryByRole('button', { name: 'Publish' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Merge' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Clean up' })).not.toBeInTheDocument();
     expect(mock.api.preflightCompletion).not.toHaveBeenCalled();
+  });
+
+  it('relocates the full-screen expand icon to the stage-bar row, not the Live surface bar', async () => {
+    const mock = installAgenticoMock({
+      feature: featureSnapshot({
+        status: 'Running',
+        actions: [
+          { id: 'stop', enabled: true, disabledReasons: [] },
+          { id: 'publish', enabled: false, disabledReasons: [{ code: 'run_active', message: '' }] },
+          { id: 'merge', enabled: false, disabledReasons: [{ code: 'run_active', message: '' }] },
+          {
+            id: 'mark-done',
+            enabled: false,
+            disabledReasons: [{ code: 'run_active', message: '' }],
+          },
+          { id: 'cleanup', enabled: false, disabledReasons: [{ code: 'run_active', message: '' }] },
+        ],
+      }),
+    });
+    renderCockpit(mock);
+    const user = userEvent.setup();
+
+    await screen.findByRole('region', { name: 'Feature Search revamp' });
+    const expandButton = await screen.findByRole('button', {
+      name: 'Expand live preview to full screen',
+    });
+    expect(expandButton.closest('.cockpit__stage-bar-trailing')).not.toBeNull();
+    expect(expandButton.closest('.live-preview__bar')).toBeNull();
+
+    await user.click(expandButton);
+    expect(await screen.findByRole('dialog', { name: 'Live agent preview' })).toBeVisible();
   });
 
   it('opens configuration from the overflow menu', async () => {
@@ -253,7 +288,7 @@ describe('FeatureCockpit snapshot rendering', () => {
     ).toBeInTheDocument();
   });
 
-  it('offers Document and Live activity stage tabs during a pending review', async () => {
+  it('offers the fixed Review doc and Live segments during a pending review', async () => {
     const mock = installAgenticoMock({
       feature: featureSnapshot({
         status: 'ResearchNeedsReview',
@@ -284,9 +319,13 @@ describe('FeatureCockpit snapshot rendering', () => {
     const user = userEvent.setup();
 
     const tablist = await screen.findByRole('tablist', { name: 'Stage view' });
-    const documentTab = within(tablist).getByRole('tab', { name: 'Document' });
-    const liveTab = within(tablist).getByRole('tab', { name: /Live activity/ });
-    expect(within(tablist).queryByRole('tab', { name: 'Aftercare' })).not.toBeInTheDocument();
+    const documentTab = within(tablist).getByRole('tab', { name: 'Review doc' });
+    const liveTab = within(tablist).getByRole('tab', { name: 'Live' });
+    // The four segments are fixed and never hidden; Changes has no surface
+    // to show yet, so it renders present-but-disabled. Files shares Live's
+    // availability, so it stays enabled even though Live isn't selected.
+    expect(within(tablist).getByRole('tab', { name: 'Changes' })).toBeDisabled();
+    expect(within(tablist).getByRole('tab', { name: 'Files' })).toBeEnabled();
     expect(documentTab).toHaveAttribute('aria-selected', 'true');
     expect(screen.getByRole('region', { name: 'Review editor' })).toBeInTheDocument();
 
@@ -984,7 +1023,7 @@ describe('FeatureCockpit convergence', () => {
     renderCockpit(mock);
     const user = userEvent.setup();
 
-    const liveTab = await screen.findByRole('tab', { name: 'Live activity' });
+    const liveTab = await screen.findByRole('tab', { name: 'Live' });
     await user.click(liveTab);
     expect(liveTab).toHaveAttribute('aria-selected', 'true');
 
@@ -2032,5 +2071,112 @@ describe('FeatureCockpit review-feedback aftercare', () => {
     );
     // The cockpit routes the active child to the pass workspace.
     expect(await screen.findByRole('region', { name: 'Review feedback pass' })).toBeVisible();
+  });
+});
+
+describe('FeatureCockpit run switcher popup', () => {
+  function runSummary(runNumber: number) {
+    return { runNumber, artifactCount: 0, sealedAt: `2026-07-${10 + runNumber}T10:00:00Z` };
+  }
+
+  function renderWithSwitcher() {
+    render(
+      <FeatureCockpit
+        featureId={FEATURE_ID}
+        titleHint="Search revamp"
+        onClose={vi.fn()}
+        onLoadedName={vi.fn()}
+        attentionItems={[]}
+        refreshAttention={() => Promise.resolve([])}
+        attentionDrafts={emptyAttentionDrafts()}
+        setAttentionDrafts={vi.fn()}
+        onSelectRun={vi.fn()}
+      />,
+    );
+  }
+
+  async function openSwitcher() {
+    const user = userEvent.setup();
+    const summary = await screen.findByText('Plan', { selector: '.cockpit__run-switcher-summary' });
+    await user.click(summary);
+    return { user, menu: await screen.findByRole('menu', { name: 'Switch run' }) };
+  }
+
+  it('appends older sealed runs on Load older and drops the control at the last page', async () => {
+    const mock = installAgenticoMock();
+    mock.api.listRuns.mockImplementation(({ page }: { page: number }) =>
+      Promise.resolve(
+        page === 1
+          ? { runs: [runSummary(9), runSummary(8)], page: 1, pageSize: 8, total: 3, totalPages: 2 }
+          : { runs: [runSummary(7)], page: 2, pageSize: 8, total: 3, totalPages: 2 },
+      ),
+    );
+    renderWithSwitcher();
+
+    const { user, menu } = await openSwitcher();
+    expect((await within(menu).findAllByRole('menuitem')).map((item) => item.textContent)).toEqual([
+      'Plan · current',
+      'Run 9 · sealed',
+      'Run 8 · sealed',
+    ]);
+
+    await user.click(within(menu).getByRole('button', { name: 'Load older' }));
+
+    await waitFor(() =>
+      expect(
+        within(menu)
+          .getAllByRole('menuitem')
+          .map((item) => item.textContent),
+      ).toEqual(['Plan · current', 'Run 9 · sealed', 'Run 8 · sealed', 'Run 7 · sealed']),
+    );
+    // Last page reached: the affordance retires rather than requesting page 3.
+    expect(within(menu).queryByRole('button', { name: 'Load older' })).not.toBeInTheDocument();
+    expect(mock.api.listRuns).toHaveBeenCalledTimes(2);
+    expect(mock.api.listRuns).toHaveBeenLastCalledWith({
+      featureId: FEATURE_ID,
+      page: 2,
+      pageSize: 8,
+    });
+  });
+
+  it('resets to the first page when the menu is reopened', async () => {
+    const mock = installAgenticoMock();
+    mock.api.listRuns.mockImplementation(({ page }: { page: number }) =>
+      Promise.resolve(
+        page === 1
+          ? { runs: [runSummary(9)], page: 1, pageSize: 8, total: 2, totalPages: 2 }
+          : { runs: [runSummary(8)], page: 2, pageSize: 8, total: 2, totalPages: 2 },
+      ),
+    );
+    renderWithSwitcher();
+
+    const { user, menu } = await openSwitcher();
+    await user.click(within(menu).getByRole('button', { name: 'Load older' }));
+    await waitFor(() => expect(within(menu).getAllByRole('menuitem')).toHaveLength(3));
+
+    const summary = screen.getByText('Plan', { selector: '.cockpit__run-switcher-summary' });
+    await user.click(summary);
+    await user.click(summary);
+
+    await waitFor(() =>
+      expect(
+        within(menu)
+          .getAllByRole('menuitem')
+          .map((item) => item.textContent),
+      ).toEqual(['Plan · current', 'Run 9 · sealed']),
+    );
+    expect(within(menu).getByRole('button', { name: 'Load older' })).toBeInTheDocument();
+  });
+
+  it('reports a failed run-history read inside the menu without losing the current run', async () => {
+    const mock = installAgenticoMock();
+    mock.api.listRuns.mockRejectedValue(new Error('history unavailable'));
+    renderWithSwitcher();
+
+    const { menu } = await openSwitcher();
+    expect(
+      await within(menu).findByText(/Could not load run history — history unavailable/),
+    ).toBeVisible();
+    expect(within(menu).getByRole('menuitem', { name: 'Plan · current' })).toBeVisible();
   });
 });

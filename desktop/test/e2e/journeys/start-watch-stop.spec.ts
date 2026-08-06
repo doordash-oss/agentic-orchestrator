@@ -68,7 +68,7 @@ test('packaged real-server start, semantic watch, history, and authoritative sto
     await expect(cockpit.getByText(/Loading .* from the runtime/)).toHaveCount(0);
 
     transcript.section('Start through the UI exactly once');
-    const start = cockpit.getByRole('button', { name: 'Start', exact: true });
+    const start = handle.page.getByRole('button', { name: 'Start', exact: true });
     await expect(start).toBeEnabled();
     await start.click();
     await expect(cockpit.getByText(/Start accepted|Starting from/)).toBeVisible();
@@ -102,14 +102,14 @@ test('packaged real-server start, semantic watch, history, and authoritative sto
       'the authoritative transcript to contain the final live semantic update',
       60_000,
     );
-    await cockpit.getByRole('button', { name: 'Refresh' }).click();
+    await cockpit.getByRole('button', { name: 'Refresh current run inspection' }).click();
     const timeline = cockpit.getByRole('region', { name: 'Live agent transcript' });
     await expect(timeline).toBeVisible({ timeout: 60_000 });
     await expect(timeline.getByText(/Backfill ready|Live semantic update/).first()).toBeVisible({
       timeout: 60_000,
     });
     await expect(cockpit.getByRole('region', { name: 'Current run inspection' })).toContainText(
-      /Live agent activity|Receiving live output/,
+      /Live activity|Receiving live output/,
     );
     const backfill = await handle.page.evaluate(
       (sessionId) => window.agentico.getSessionTranscript({ sessionId, limit: 500 }),
@@ -153,7 +153,7 @@ test('packaged real-server start, semantic watch, history, and authoritative sto
     await evidenceShot(handle, 'cockpit-live-reconnect-reset-in-progress');
     const afterReset = await waitForNewServer(world, beforeReset.pid);
     await expect(cockpit).toBeVisible({ timeout: 60_000 });
-    await expect(cockpit.getByRole('button', { name: 'Stop', exact: true })).toBeEnabled();
+    await expect(handle.page.getByRole('button', { name: 'Stop', exact: true })).toBeEnabled();
     expect(afterReset.pid).not.toBe(beforeReset.pid);
     expect(providerInvocationCount(world.providerInvocationLog)).toBe(1);
     transcript.json('live reconnect and epoch resnapshot', {
@@ -171,8 +171,8 @@ test('packaged real-server start, semantic watch, history, and authoritative sto
     transcript.section('Responsive cockpit retains timeline, raw containment, and Stop');
     await setWindowSize(handle, 760, 900);
     await setTheme(handle, 'dark');
-    await expect(cockpit.getByRole('button', { name: 'Stop' })).toBeEnabled();
-    await expect(cockpit.getByLabel('Current feature status')).toBeVisible();
+    await expect(handle.page.getByRole('button', { name: 'Stop' })).toBeEnabled();
+    await expect(handle.page.getByLabel('Current feature status')).toBeVisible();
     await cockpit.getByRole('button', { name: 'Inspector' }).click();
     const inspector = handle.page.getByRole('dialog', { name: 'Feature inspector' });
     await expect(inspector).toBeVisible();
@@ -181,11 +181,11 @@ test('packaged real-server start, semantic watch, history, and authoritative sto
     await expect(inspector).toHaveCount(0);
     await evidenceShot(handle, 'cockpit-live-dark-narrow');
     await setTheme(handle, 'light');
-    await expect(cockpit.getByRole('button', { name: 'Stop' })).toBeEnabled();
+    await expect(handle.page.getByRole('button', { name: 'Stop' })).toBeEnabled();
     await evidenceShot(handle, 'cockpit-live-light-narrow');
 
     transcript.section('Stop confirmation and authoritative terminal state');
-    await cockpit.getByRole('button', { name: 'Stop' }).click();
+    await handle.page.getByRole('button', { name: 'Stop' }).click();
     const dialog = handle.page.getByRole('dialog', { name: 'Stop Packaged Signal Journey?' });
     await expect(dialog).toContainText(/currently affects 1 live session/);
     await expect(dialog).toContainText(/Existing validated transcript content remains available/);
@@ -212,7 +212,9 @@ test('packaged real-server start, semantic watch, history, and authoritative sto
     );
     transcript.json('authoritative feature snapshot after Stop', authoritative);
     expect(['running', 'starting', 'stopping']).not.toContain(authoritative.status.toLowerCase());
-    await expect(cockpit.getByText(authoritative.status, { exact: true }).first()).toBeVisible();
+    await expect(
+      handle.page.getByText(authoritative.status, { exact: true }).first(),
+    ).toBeVisible();
 
     await handle.page.getByRole('option', { name: 'Overview' }).click();
     await expect(handle.page.getByRole('region', { name: 'Existing features' })).toContainText(

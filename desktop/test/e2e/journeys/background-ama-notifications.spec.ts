@@ -129,14 +129,14 @@ test('packaged attention notifications are private, deduplicated, bounded, passi
     // hook before any attention item can arrive.
     await ensureMainWindowFocus(handle);
 
-    const cockpit = await createFeatureViaForm(handle, {
+    await createFeatureViaForm(handle, {
       name: 'Background Notification Questions',
       description: 'Fixture-backed attention for notification and question routing.',
       repoPatterns: [/notify-lab/],
       waitForReady: true,
     });
     await ensureMainWindowFocus(handle);
-    await cockpit.getByRole('button', { name: 'Start', exact: true }).click();
+    await handle.page.getByRole('button', { name: 'Start', exact: true }).click();
     await waitForAttentionItem(handle, 'perm-allow-once');
     expect(await capturedNotifications(handle)).toHaveLength(0);
 

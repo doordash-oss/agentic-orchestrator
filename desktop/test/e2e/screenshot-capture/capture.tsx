@@ -99,11 +99,9 @@ function ArchiveScene({ scene }: { scene: string }) {
         <ArchiveMode
           featureId="abcd1234ef567890"
           selectedRunNumber={selectedRun}
-          currentRunNumber={8}
           pipeline="large"
           currentRunBadges={{ changed: badge === 'changed', attention: false }}
           onReturnToCurrent={() => setSelectedRun(0)}
-          onSelectRun={(n) => setSelectedRun(n)}
         />
       </div>
     </div>
@@ -197,7 +195,7 @@ function RepoInstrumentScene() {
           tone={spineTone(snapshot)}
           label="Feature pipeline"
         />
-        <div className="cockpit__actions" role="group" aria-label="Feature actions">
+        <div className="toolbar__cockpit-actions" role="group" aria-label="Feature actions">
           <button type="button" className="cockpit__stop">
             Stop
           </button>
@@ -257,7 +255,14 @@ function RepoInstrumentScene() {
 type RunGaugeMode =
   'active' | 'reviewing' | 'verifying' | 'rest' | 'final-review' | 'held-question' | 'paused';
 
-function RunGaugeScene({ mode = 'active' }: { mode?: RunGaugeMode }) {
+function RunGaugeScene({
+  mode = 'active',
+  filesView = false,
+}: {
+  mode?: RunGaugeMode;
+  /** Renders the promoted top-level Files segment instead of the conversation column. */
+  filesView?: boolean;
+}) {
   const atRest = mode === 'rest';
   const finalReview = mode === 'final-review';
   const reviewing = mode === 'reviewing';
@@ -332,7 +337,7 @@ function RunGaugeScene({ mode = 'active' }: { mode?: RunGaugeMode }) {
         <div className="content-column">
           <header className="toolbar" aria-hidden="true" />
           <div className="cockpit" aria-label="Feature cockpit">
-            <div className="cockpit__actions" role="group" aria-label="Feature actions">
+            <div className="toolbar__cockpit-actions" role="group" aria-label="Feature actions">
               <p
                 className="cockpit__phase-status"
                 role="status"
@@ -340,7 +345,7 @@ function RunGaugeScene({ mode = 'active' }: { mode?: RunGaugeMode }) {
               >
                 <code data-status="Implementing">Implementing</code>
               </p>
-              <span className="cockpit__actions-spacer" />
+              <span style={{ flex: 1 }} />
               <button type="button" className="cockpit__stop">
                 Stop
               </button>
@@ -389,9 +394,480 @@ function RunGaugeScene({ mode = 'active' }: { mode?: RunGaugeMode }) {
                         : undefined
                     }
                     shouldStream={false}
+                    mode={filesView ? 'files' : 'live'}
                   />
                 </div>
                 <div className="cockpit__stage-status" />
+              </main>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+type CockpitRedesignVariant = 'live' | 'review12' | 'popup' | 'sealed' | 'verification';
+
+const REVIEW12_AXES: { name: string; status: 'running' | 'completed' | 'failed' }[] = [
+  { name: 'Architecture', status: 'completed' },
+  { name: 'Structural', status: 'completed' },
+  { name: 'Grounding', status: 'completed' },
+  { name: 'Security', status: 'failed' },
+  { name: 'Performance', status: 'running' },
+  { name: 'Testing', status: 'completed' },
+  { name: 'Scope', status: 'running' },
+  { name: 'Craft', status: 'completed' },
+  { name: 'Evidence', status: 'running' },
+  { name: 'Coverage', status: 'running' },
+  { name: 'Docs', status: 'completed' },
+  { name: 'Perf budget', status: 'completed' },
+];
+
+/**
+ * The redesigned cockpit's stage bar, cohort strip, and reading column:
+ * hand-assembled with the real classes from app.css (the same pattern
+ * RunGaugeScene/ArchiveScene use), since a full
+ * IPC-mocked FeatureCockpit mount can't easily reach a 12-axis cohort or an
+ * open run-switcher menu deterministically. Every class below is the actual
+ * class the redesigned components render.
+ */
+function CockpitRedesignScene({ variant }: { variant: CockpitRedesignVariant }) {
+  const railSnapshot = {
+    ...CYCLES_FEATURE_SNAPSHOT,
+    currentPhase: variant === 'review12' ? 'Review' : 'Implement',
+    status: 'Implementing',
+    currentRoadmapPhase: variant === 'review12' ? 6 : 5,
+    currentIteration: 3,
+    phaseStatus: variant === 'review12' ? 'reviewing' : 'implementing',
+    reviewGate: {
+      reviewingGate: false,
+      reviewFixing: false,
+      validatingPlan: false,
+      validatorStatuses: {},
+    },
+  };
+  const railHold = classifyHold(railSnapshot.status, []);
+  const members =
+    variant === 'review12'
+      ? REVIEW12_AXES
+      : [
+          { name: 'agentic-orchestrator', status: 'running' as const },
+          { name: 'taulu', status: 'running' as const },
+          { name: 'dev-console', status: 'completed' as const },
+          { name: 'Plan', status: 'completed' as const },
+          { name: 'skills-marketplace', status: 'running' as const },
+          { name: 'devcontainer-images', status: 'completed' as const },
+          { name: 'agent-gateway', status: 'completed' as const },
+        ];
+  const running = members.filter((m) => m.status === 'running').length;
+  const done = members.filter((m) => m.status === 'completed').length;
+  const failed = members.filter((m) => m.status === 'failed').length;
+  const selectedName = variant === 'review12' ? 'Security' : 'agentic-orchestrator';
+
+  const stageBar = (
+    <div className="cockpit__stage-bar">
+      <div className="cockpit__segmented" role="tablist" aria-label="Stage view">
+        <button
+          type="button"
+          role="tab"
+          aria-selected="true"
+          className="cockpit__segment"
+          data-active="true"
+          disabled={variant === 'sealed'}
+        >
+          Live
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected="false"
+          className="cockpit__segment"
+          disabled={variant === 'sealed'}
+        >
+          Changes
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected="false"
+          className="cockpit__segment"
+          disabled
+        >
+          Review doc
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected="false"
+          className="cockpit__segment"
+          disabled={variant === 'sealed'}
+        >
+          Files
+        </button>
+      </div>
+      <div className="cockpit__stage-bar-trailing">
+        <details className="cockpit__run-switcher" open={variant === 'popup'}>
+          <summary className="cockpit__run-switcher-summary">
+            {variant === 'sealed' ? 'Run 6 · sealed' : 'Implement #3'}{' '}
+            <span aria-hidden="true">▾</span>
+          </summary>
+          {variant === 'popup' ? (
+            <div className="cockpit__run-switcher-menu" role="menu">
+              <button
+                type="button"
+                role="menuitem"
+                className="cockpit__run-switcher-item"
+                aria-current="true"
+              >
+                Implement #3 · current
+              </button>
+              <button type="button" role="menuitem" className="cockpit__run-switcher-item">
+                Run 6 · sealed
+              </button>
+              <button type="button" role="menuitem" className="cockpit__run-switcher-item">
+                Run 5 · sealed
+              </button>
+              <button type="button" role="menuitem" className="cockpit__run-switcher-item">
+                Run 4 · sealed
+              </button>
+              <button type="button" role="menuitem" className="cockpit__run-switcher-item">
+                Run 3 · sealed
+              </button>
+              <button type="button" role="menuitem" className="cockpit__run-switcher-item">
+                Run 2 · sealed
+              </button>
+              <button type="button" role="menuitem" className="cockpit__run-switcher-item">
+                Run 1 · sealed
+              </button>
+              <button type="button" className="cockpit__run-switcher-more">
+                Load older
+              </button>
+            </div>
+          ) : null}
+        </details>
+      </div>
+    </div>
+  );
+
+  const cohortStrip = (
+    <div className="live-preview__strip-row">
+      <div
+        className="live-preview__strip"
+        role="tablist"
+        aria-label="Live agents"
+        aria-orientation="horizontal"
+      >
+        <div className="live-preview__strip-group" role="presentation">
+          {members.map((m) => (
+            <button
+              key={m.name}
+              type="button"
+              role="tab"
+              aria-selected={m.name === selectedName}
+              className="live-preview__agent"
+              data-status={m.status}
+              title={`${m.name} — ${m.status}`}
+            >
+              <span className="live-preview__agent-state" aria-hidden="true">
+                {m.status === 'running' ? (
+                  <span className="live-preview__agent-pip" />
+                ) : m.status === 'completed' ? (
+                  '✓'
+                ) : (
+                  '▲'
+                )}
+              </span>
+              <span className="live-preview__agent-name">{m.name}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+      <p className="live-preview__strip-tally">
+        {running} running · {done} done
+        {failed > 0 ? (
+          <span className="live-preview__strip-tally-issues"> · {failed} found issues</span>
+        ) : null}
+      </p>
+    </div>
+  );
+
+  const readingColumn = (
+    <section
+      className="conversation__scroll live-preview__transcript"
+      aria-label="Live agent transcript"
+    >
+      <article className="conversation__message" data-role="assistant">
+        <span className="conversation__message-role">agentic-orchestrator</span>
+        <p>
+          Wiring the streamed preview into the cockpit so file changes surface as diffs instead of
+          arriving on a poll.
+        </p>
+      </article>
+      <article className="conversation__file-change" aria-label="Updated src/renderer/app.tsx">
+        <header className="conversation__file-change-header">
+          <span className="conversation__file-change-path">src/renderer/app.tsx</span>
+          <span className="conversation__file-change-status">updated</span>
+          <span
+            className="conversation__file-change-stats"
+            aria-label="2 lines added, 1 line removed"
+          >
+            <span data-kind="added">+2</span>
+            <span data-kind="removed">−1</span>
+          </span>
+        </header>
+        <div
+          className="conversation__diff"
+          role="region"
+          aria-label="Diff for src/renderer/app.tsx"
+        >
+          <div className="conversation__diff-line" data-kind="removed">
+            <span className="conversation__diff-marker" aria-hidden="true">
+              −
+            </span>
+            <code>const preview = usePolledPreview(featureId);</code>
+          </div>
+          <div className="conversation__diff-line" data-kind="added">
+            <span className="conversation__diff-marker" aria-hidden="true">
+              +
+            </span>
+            <code>const preview = useStreamedPreview(featureId);</code>
+          </div>
+          <div className="conversation__diff-line" data-kind="added">
+            <span className="conversation__diff-marker" aria-hidden="true">
+              +
+            </span>
+            <code>const transcript = preview?.transcript ?? [];</code>
+          </div>
+        </div>
+      </article>
+      <article className="conversation__message" data-role="assistant">
+        <span className="conversation__message-role">agentic-orchestrator</span>
+        <p>Created the stream hook so the preview subscribes once and stops polling.</p>
+      </article>
+      {variant === 'verification' ? (
+        <>
+          <p className="conversation__verification-tick" data-tone="passed">
+            <span aria-hidden="true">✓</span> npm run typecheck
+          </p>
+          <p className="conversation__verification-tick" data-tone="running">
+            <span aria-hidden="true">⟳</span> npm run build
+          </p>
+          <p className="conversation__verification-tick" data-tone="running">
+            <span aria-hidden="true">⟳</span> Verification: 1 of 3 checks passing
+          </p>
+        </>
+      ) : (
+        <p className="conversation__verification-tick" data-tone="running">
+          <span aria-hidden="true">⟳</span> Verification: 6 of 8 checks passing
+        </p>
+      )}
+      {variant === 'review12' ? (
+        <article className="conversation__message" data-role="assistant">
+          <span className="conversation__message-role">Security</span>
+          <p>
+            Reviewed the streamed preview subscription and the two call sites it replaces. One issue
+            worth blocking on.
+          </p>
+        </article>
+      ) : null}
+    </section>
+  );
+
+  return (
+    <div className="app-frame" style={{ height: '100vh' }}>
+      <div className="workspace">
+        <div className="sidebar" aria-hidden="true" />
+        <div className="content-column">
+          <header className="toolbar">
+            <div className="toolbar__leading">
+              <button type="button" className="toolbar__sidebar-toggle" aria-label="Hide sidebar">
+                <span aria-hidden="true">▥</span>
+              </button>
+            </div>
+            <div className="toolbar__title">
+              <p className="toolbar__title-name">translate README to Italian</p>
+              <p className="toolbar__title-subline">
+                agentic-orchestrator · feature/translate-readme-it
+              </p>
+            </div>
+            <div className="toolbar__trailing">
+              <div className="toolbar__cockpit-actions" role="group" aria-label="Feature actions">
+                <p
+                  className="cockpit__phase-status"
+                  role="status"
+                  aria-label="Current feature status"
+                >
+                  <code data-status="Implementing">Implementing</code>
+                </p>
+                {variant !== 'sealed' ? (
+                  <button type="button" className="cockpit__stop">
+                    Stop
+                  </button>
+                ) : null}
+              </div>
+              <div className="toolbar__overflow-slot">
+                <details className="cockpit__overflow">
+                  <summary className="cockpit__overflow-summary" aria-label="More actions">
+                    <span aria-hidden="true">⋯</span>
+                  </summary>
+                  <div className="cockpit__overflow-menu" role="menu">
+                    <div className="cockpit__overflow-item" data-variant="default">
+                      <button type="button" role="menuitem">
+                        Edit configuration…
+                      </button>
+                    </div>
+                    <div className="cockpit__overflow-item" data-variant="danger">
+                      <button type="button" role="menuitem">
+                        Delete
+                      </button>
+                    </div>
+                  </div>
+                </details>
+              </div>
+              <div className="toolbar__inspector-slot">
+                <button
+                  type="button"
+                  className="toolbar__inspector-toggle"
+                  aria-label="Toggle inspector"
+                  aria-pressed="false"
+                >
+                  <span aria-hidden="true">▤</span>
+                </button>
+              </div>
+            </div>
+          </header>
+          <div className="cockpit" aria-label="Feature cockpit">
+            <PhaseRail
+              segments={railSegments(railSnapshot, railHold)}
+              trio={railTrio({
+                totalSeconds: 10500,
+                totalUsd: 3.08,
+                contextPercentage: 42,
+                hold: railHold,
+              })}
+              hold={railHold}
+              tone="progress"
+            />
+            <div className="cockpit__content">
+              <main className="cockpit__stage">
+                {stageBar}
+                {variant === 'sealed' ? (
+                  <div className="cockpit__archive">
+                    <div className="archive-mode__band" role="status">
+                      <span className="archive-mode__band-label">Sealed run · Read only</span>
+                      <span className="archive-mode__run-meta">Run 6 · sealed 2026-08-04</span>
+                    </div>
+                    <div className="cockpit__content archive-mode__content">
+                      <main className="archive-mode__main">
+                        <dl className="archive-mode__facts">
+                          <div className="archive-mode__fact">
+                            <dt>Phase</dt>
+                            <dd>Implement</dd>
+                          </div>
+                          <div className="archive-mode__fact">
+                            <dt>Iteration</dt>
+                            <dd>2</dd>
+                          </div>
+                          <div className="archive-mode__fact">
+                            <dt>Duration</dt>
+                            <dd>1h 24m</dd>
+                          </div>
+                          <div className="archive-mode__fact">
+                            <dt>Cost</dt>
+                            <dd>$2.86</dd>
+                          </div>
+                        </dl>
+                        <div className="archive-mode__artifacts">
+                          <h3 className="archive-mode__section-title">Artifacts</h3>
+                          <ul className="archive-mode__artifact-list">
+                            <li className="archive-mode__artifact-item">
+                              <button type="button" className="archive-mode__artifact-button">
+                                phase-plan.md · Implement · 4.1 KB
+                              </button>
+                            </li>
+                            <li className="archive-mode__artifact-item">
+                              <button type="button" className="archive-mode__artifact-button">
+                                review-notes.md · Implement · 1.8 KB
+                              </button>
+                            </li>
+                          </ul>
+                        </div>
+                        <div className="archive-mode__logs">
+                          <h3 className="archive-mode__section-title">Bounded logs</h3>
+                          <ul
+                            className="archive-mode__artifact-list"
+                            aria-label="Available historical logs"
+                          >
+                            <li className="archive-mode__artifact-item">
+                              <button type="button" className="archive-mode__artifact-button">
+                                phase.log · 12.3 KB
+                              </button>
+                            </li>
+                          </ul>
+                        </div>
+                        <div className="archive-mode__sessions">
+                          <h3 className="archive-mode__section-title">Historical timeline</h3>
+                          <ul className="archive-mode__session-list">
+                            <li className="archive-mode__session-item">
+                              <button type="button" className="archive-mode__session-button">
+                                <span className="archive-mode__session-id">
+                                  agentic-orchestrator
+                                </span>
+                              </button>
+                            </li>
+                          </ul>
+                        </div>
+                      </main>
+                      <aside
+                        className="cockpit__inspector archive-mode__inspector"
+                        aria-label="Feature inspector"
+                      >
+                        <h3 className="archive-mode__section-title">Historical context</h3>
+                        <dl className="archive-mode__inspector-facts">
+                          <div className="archive-mode__fact">
+                            <dt>Repository</dt>
+                            <dd>agentic-orchestrator</dd>
+                          </div>
+                        </dl>
+                      </aside>
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    {cohortStrip}
+                    <div className="cockpit__surface cockpit__surface--live">
+                      <div className="live-preview__frame">
+                        <div className="live-preview__bar">
+                          <p className="cockpit__caption">Live activity</p>
+                          <div className="live-preview__bar-controls">
+                            <div
+                              className="live-preview__views"
+                              role="group"
+                              aria-label="Preview view"
+                            >
+                              <button
+                                type="button"
+                                className="live-preview__view"
+                                aria-pressed="true"
+                              >
+                                Conversation
+                              </button>
+                              <button
+                                type="button"
+                                className="live-preview__view"
+                                aria-pressed="false"
+                              >
+                                Signal trace
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                        {readingColumn}
+                      </div>
+                    </div>
+                  </>
+                )}
               </main>
             </div>
           </div>
@@ -731,7 +1207,7 @@ function BackgroundScene({ scene }: { scene: string }): React.ReactElement {
               New feature
             </button>
           </header>
-          <section className="cockpit__actions" role="group" aria-label="Feature actions">
+          <section className="toolbar__cockpit-actions" role="group" aria-label="Feature actions">
             <button type="button" className="cockpit__stop">
               Stop
             </button>
@@ -934,6 +1410,24 @@ function CaptureApp() {
   }
   if (scene === 'run-gauge-paused') {
     return <RunGaugeScene mode="paused" />;
+  }
+  if (scene === 'run-gauge-files') {
+    return <RunGaugeScene filesView />;
+  }
+  if (scene === 'cockpit-redesign-live') {
+    return <CockpitRedesignScene variant="live" />;
+  }
+  if (scene === 'cockpit-redesign-review12') {
+    return <CockpitRedesignScene variant="review12" />;
+  }
+  if (scene === 'cockpit-redesign-popup') {
+    return <CockpitRedesignScene variant="popup" />;
+  }
+  if (scene === 'cockpit-redesign-sealed') {
+    return <CockpitRedesignScene variant="sealed" />;
+  }
+  if (scene === 'cockpit-redesign-verification') {
+    return <CockpitRedesignScene variant="verification" />;
   }
   if (scene === 'connection-shell') {
     return <ConnectionShellScene />;

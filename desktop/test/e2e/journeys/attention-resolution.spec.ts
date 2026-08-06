@@ -81,7 +81,7 @@ test('packaged spatial shell keeps tab navigation, draft cancellation, and narro
     ]);
     await setWindowSize(handle, 1440, 900);
     await setTheme(handle, 'light');
-    await cockpit.getByRole('button', { name: 'Start', exact: true }).click();
+    await handle.page.getByRole('button', { name: 'Start', exact: true }).click();
     await waitForAttentionItem(handle.page, 'perm-allow-once');
     await captureVisualMatrix(handle, [
       [1440, 900, 'visual_19d981d14d86', 'visual_5fb6b6a2bc0b'],
@@ -249,7 +249,7 @@ test('packaged inbox and cockpit resolve real attention classes from the bundled
       handle.page,
       'Packaged Attention Resolution',
     );
-    await cockpit.getByRole('button', { name: 'Start', exact: true }).click();
+    await handle.page.getByRole('button', { name: 'Start', exact: true }).click();
 
     transcript.section('Global inbox badge and allow-once resolution');
     await waitForAttentionItem(handle.page, 'perm-allow-once');
@@ -656,8 +656,10 @@ test('packaged inbox renders and drafts a real NEED_USER_INPUT gate', async ({},
     });
     await stopFeatureOption.click();
     await expect(stopFeatureOption).toHaveAttribute('aria-selected', 'true');
-    const stopFeatureCockpit = handle.page.getByLabel('Feature Packaged Feature Stop Gate Fixture');
-    const featureStopButton = stopFeatureCockpit.getByRole('button', {
+    await expect(
+      handle.page.getByLabel('Feature Packaged Feature Stop Gate Fixture'),
+    ).toBeVisible();
+    const featureStopButton = handle.page.getByRole('button', {
       name: 'Stop',
       exact: true,
     });

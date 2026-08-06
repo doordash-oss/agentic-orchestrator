@@ -132,7 +132,7 @@ test('capture all visual evidence screenshots', async ({ page }) => {
     async (p) => {
       await p.getByRole('button', { name: 'Run record' }).click();
       await expect(p.getByRole('dialog', { name: 'Run record' })).toBeVisible();
-      await expect(p.getByRole('heading', { name: 'Activity and artifacts' })).toBeVisible({
+      await expect(p.getByRole('group', { name: 'Preview view' })).toBeVisible({
         timeout: 15_000,
       });
       await p.getByRole('button', { name: 'Files' }).click();

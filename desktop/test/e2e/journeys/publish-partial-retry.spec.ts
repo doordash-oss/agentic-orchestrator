@@ -94,7 +94,7 @@ test('packaged publish partial retry: push succeeds, PR creation fails, retry sc
     transcript.section('Relaunch and open feature cockpit');
     handle = await launchApp(world, testInfo, { traceName: 'publish-partial-retry' });
     const cockpit = await openCompletion(handle, featureName);
-    await expect(cockpit.getByRole('button', { name: 'Publish', exact: true })).toBeVisible({
+    await expect(handle.page.getByRole('button', { name: 'Publish', exact: true })).toBeVisible({
       timeout: 30_000,
     });
 
@@ -125,7 +125,7 @@ test('packaged publish partial retry: push succeeds, PR creation fails, retry sc
     await changesModal.getByRole('button', { name: 'Close' }).click();
 
     transcript.section('Open publish modal and generate PR narrative');
-    await cockpit.getByRole('button', { name: 'Publish', exact: true }).click();
+    await handle.page.getByRole('button', { name: 'Publish', exact: true }).click();
     const publishModal = handle.page.getByRole('dialog', { name: 'Publish reviewed changes' });
     await expect(publishModal.locator('.completion-workspace__publish')).toBeVisible();
     // publish-api is pre-seeded as already published — only publish-web is in the publish set.
@@ -156,7 +156,7 @@ test('packaged publish partial retry: push succeeds, PR creation fails, retry sc
     // Reopen the publish modal so it re-derives scope from the post-publish preflight.
     await publishModal.getByRole('button', { name: 'Close' }).click();
     await expect(publishModal).toHaveCount(0);
-    await cockpit.getByRole('button', { name: 'Publish', exact: true }).click();
+    await handle.page.getByRole('button', { name: 'Publish', exact: true }).click();
     await expect(publishModal.locator('.completion-workspace__publish')).toBeVisible();
     // publish-api was pre-seeded as already published — it must NOT appear in the retry checkbox set.
     await expect(publishModal.getByRole('checkbox', { name: 'publish-api' })).toHaveCount(0);

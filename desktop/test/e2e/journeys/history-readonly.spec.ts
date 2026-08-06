@@ -55,10 +55,9 @@ test('history: paginated sealed runs, restored archive selection, immutable insp
     await handle.page.getByRole('option', { name: 'History Journey' }).click();
     const cockpit = handle.page.getByLabel('Feature History Journey');
 
-    transcript.section('Open run history via the History button');
-    await handle.page.locator('summary[aria-label="More actions"]').click();
-    let historyButton = handle.page.getByRole('menuitem', { name: 'View run history' });
-    await expect(historyButton).toBeVisible();
+    transcript.section('Open run history via the run/iteration popup');
+    const runSwitcher = handle.page.locator('.cockpit__run-switcher-summary');
+    await expect(runSwitcher).toBeVisible();
     const seededRuns = await handle.page.evaluate(
       (id) => window.agentico.listRuns({ featureId: id, page: 1, pageSize: 20 }),
       featureId,
@@ -67,26 +66,27 @@ test('history: paginated sealed runs, restored archive selection, immutable insp
     expect(seededRuns.runs.some((run) => run.runNumber === 6 && run.sealedAt !== undefined)).toBe(
       true,
     );
-    await historyButton.click();
+    await runSwitcher.click();
+    await handle.page.getByRole('menuitem', { name: 'Run 6 · sealed' }).click();
 
     transcript.section('Verify archive mode renders the read-only band');
     await expect(handle.page.locator('.archive-mode__band')).toContainText('Sealed run');
     await expect(handle.page.locator('.archive-mode__band')).toContainText('Read only');
 
-    transcript.section('Verify the run selector is present');
-    await expect(handle.page.locator('.archive-mode__select')).toBeVisible();
+    transcript.section('Verify the run/iteration popup lists every seeded sealed run');
+    await runSwitcher.click();
+    for (let runNumber = 1; runNumber <= 6; runNumber += 1) {
+      await expect(
+        handle.page.getByRole('menuitem', { name: `Run ${runNumber} · sealed` }),
+      ).toBeVisible();
+    }
 
-    transcript.section('Page through older sealed history without losing read-only mode');
-    await expect(handle.page.getByLabel('Sealed run pages')).toContainText('Page 1 of 2');
-    await handle.page.getByRole('button', { name: 'Older' }).click();
-    await expect(handle.page.getByLabel('Sealed run pages')).toContainText('Page 2 of 2');
-    await handle.page.locator('.archive-mode__select').selectOption('1');
+    transcript.section('Switch between sealed runs without losing read-only mode');
+    await handle.page.getByRole('menuitem', { name: 'Run 1 · sealed' }).click();
     await expect(handle.page.locator('.archive-mode__band')).toContainText('Run 1');
-    await expect(handle.page.getByLabel('Sealed run pages')).toContainText('Page 2 of 2');
     await handle.page.getByRole('button', { name: /Return to current/ }).click();
-    await handle.page.locator('summary[aria-label="More actions"]').click();
-    historyButton = handle.page.getByRole('menuitem', { name: 'View run history' });
-    await historyButton.click();
+    await runSwitcher.click();
+    await handle.page.getByRole('menuitem', { name: 'Run 6 · sealed' }).click();
     await expect(handle.page.locator('.archive-mode__band')).toContainText('Run 6');
 
     transcript.section('Inspect a run-authentic artifact and bounded historical log');
@@ -108,8 +108,8 @@ test('history: paginated sealed runs, restored archive selection, immutable insp
     await expect(handle.page.locator('.archive-mode__band')).toContainText('Sealed run');
 
     transcript.section('Verify no mutation controls are mounted in archive mode');
-    await expect(cockpit.getByRole('button', { name: 'Start', exact: true })).not.toBeVisible();
-    await expect(cockpit.getByRole('button', { name: 'Stop' })).not.toBeVisible();
+    await expect(handle.page.getByRole('button', { name: 'Start', exact: true })).not.toBeVisible();
+    await expect(handle.page.getByRole('button', { name: 'Stop' })).not.toBeVisible();
     await expect(cockpit.getByRole('button', { name: 'Rewind' })).not.toBeVisible();
 
     transcript.section('Verify the return-to-current control is visible');
@@ -151,9 +151,8 @@ test('history: paginated sealed runs, restored archive selection, immutable insp
     });
 
     transcript.section('Capture constrained-layout archive screenshots at 760x900');
-    await handle.page.locator('summary[aria-label="More actions"]').click();
-    historyButton = handle.page.getByRole('menuitem', { name: 'View run history' });
-    await historyButton.click();
+    await runSwitcher.click();
+    await handle.page.getByRole('menuitem', { name: 'Run 6 · sealed' }).click();
     await setWindowSize(handle, 760, 900);
     await setTheme(handle, 'light');
     await evidenceShot(

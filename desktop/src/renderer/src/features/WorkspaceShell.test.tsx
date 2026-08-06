@@ -107,6 +107,64 @@ describe('WorkspaceShell sidebar', () => {
     expect(screen.queryByRole('group', { name: 'At rest' })).not.toBeInTheDocument();
   });
 
+  it.each([
+    {
+      label: 'bare phase when neither roadmap nor iteration data is present',
+      currentRoadmapPhase: undefined,
+      totalRoadmapPhases: undefined,
+      currentIteration: undefined,
+      expected: 'Implement',
+    },
+    {
+      label: 'phase and iteration when there is no roadmap',
+      currentRoadmapPhase: undefined,
+      totalRoadmapPhases: undefined,
+      currentIteration: 3,
+      expected: 'Implement · iteration 3',
+    },
+    {
+      label: 'phase and roadmap phase-of-total when there is no iteration',
+      currentRoadmapPhase: 2,
+      totalRoadmapPhases: 5,
+      currentIteration: undefined,
+      expected: 'Implement · phase 2/5',
+    },
+    {
+      label: 'phase, roadmap phase-of-total, and iteration when all are present',
+      currentRoadmapPhase: 2,
+      totalRoadmapPhases: 5,
+      currentIteration: 3,
+      expected: 'Implement · phase 2/5 · iteration 3',
+    },
+  ])(
+    'renders identical running sub-line copy in the sidebar and Overview: $label',
+    async ({ currentRoadmapPhase, totalRoadmapPhases, currentIteration, expected }) => {
+      const running = featureSnapshot({
+        id: FEATURE_ID,
+        name: 'Mid-flight feature',
+        status: 'Implementing',
+        currentPhase: 'Implement',
+        currentRoadmapPhase,
+        totalRoadmapPhases,
+        currentIteration,
+        setup: { status: 'done', attempt: 1, tasks: [] },
+        actions: [],
+      });
+      const mock = installAgenticoMock({ features: [summaryOf(running)] });
+      mock.api.getFeature.mockResolvedValue(running);
+      render(<WorkspaceShell />);
+
+      const sidebarRow = (
+        await screen.findByRole('option', { name: /Mid-flight feature/ })
+      ).closest('[role="option"]')!;
+      expect(sidebarRow.querySelector('.sidebar__row-subline')?.textContent).toBe(expected);
+
+      const lanes = await screen.findByRole('region', { name: 'Existing features' });
+      const overviewRow = within(lanes).getByText('Mid-flight feature').closest('li')!;
+      expect(overviewRow.querySelector('.overview-row__state')?.textContent).toBe(expected);
+    },
+  );
+
   it('shows Answer on a waiting-lane row and Open on every other lane row', async () => {
     const waiting = featureSnapshot({
       id: 'waiting1ef567890a',

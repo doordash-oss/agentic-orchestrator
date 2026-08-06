@@ -1,7 +1,7 @@
 import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { ModelCatalogue, SessionSummary } from '../../../shared/ipc';
+import type { SessionSummary } from '../../../shared/ipc';
 import { installAgenticoMock } from '../test/agenticoMock';
 import { CurrentRunInspection } from './CurrentRunInspection';
 
@@ -89,7 +89,6 @@ describe('CurrentRunInspection', () => {
         featureId="abcd1234ef567890"
         runNumber={8}
         currentPhase="Publish"
-        featureStatus="Published"
         reviewGate={REVIEW_GATE}
         presentation="record"
         shouldStream={false}
@@ -220,7 +219,6 @@ describe('CurrentRunInspection', () => {
     );
 
     expect(await screen.findByText('Running implementation')).toBeVisible();
-    expect(screen.getByText('42%')).toBeVisible();
     expect(await screen.findByRole('tablist', { name: 'Live agents' })).toBeVisible();
     expect(screen.queryByLabelText('Review gate')).not.toBeInTheDocument();
     expect(screen.queryByLabelText('Review axes')).not.toBeInTheDocument();
@@ -347,103 +345,20 @@ describe('CurrentRunInspection', () => {
     ]);
   });
 
-  it('shows the roadmap gauge with phase, total, and iteration during implementation', async () => {
+  // Phase/roadmap chrome (the old roadmap gauge) and the per-phase telemetry
+  // block (model, phase elapsed/cost) are now owned by the PhaseRail row
+  // above the cockpit, not by this component — see PhaseRailRow.test.tsx and
+  // phaseRail.test.ts. What remains here is the run-totals lift the rail
+  // consumes via `onRunMetrics`.
+
+  it('reports run totals, including the live context percentage, up via onRunMetrics', async () => {
     const mock = installAgenticoMock();
-    mock.api.getLivePreview.mockResolvedValue({
-      featureId: 'abcd1234ef567890',
-      activity: 'Running implementation',
-      contextPercentage: 42,
-      totalSeconds: 73,
-      totalUsd: 0.12,
-      transcript: [],
-    });
-    mock.api.listRunArtifacts.mockResolvedValue({ artifacts: [] });
-    mock.api.listRunSessions.mockResolvedValue({ runNumber: 8, sessions: [] });
-
-    render(
-      <CurrentRunInspection
-        featureId="abcd1234ef567890"
-        runNumber={8}
-        currentPhase="Implement"
-        currentRoadmapPhase={2}
-        totalRoadmapPhases={5}
-        currentIteration={3}
-        phaseStatus="implementing"
-        reviewGate={REVIEW_GATE}
-      />,
-    );
-
-    const gauge = await screen.findByRole('region', {
-      name: 'Roadmap progress: phase 2 of 5 — Implementing · Iteration 3',
-    });
-    expect(gauge).toHaveTextContent('Phase 2 of 5');
-    expect(gauge).toHaveTextContent('Implementing · Iteration 3');
-    const segments = gauge.querySelectorAll('.roadmap-gauge__segment');
-    expect(segments).toHaveLength(5);
-    expect(segments[0]).toHaveAttribute('data-state', 'done');
-    expect(segments[1]).toHaveAttribute('data-state', 'active');
-    expect(segments[2]).toHaveAttribute('data-state', 'upcoming');
-  });
-
-  it('labels the roadmap gauge as reviewing while the implementation gate runs', async () => {
-    const mock = installAgenticoMock();
-    mock.api.getLivePreview.mockResolvedValue({
-      featureId: 'abcd1234ef567890',
-      activity: 'Running implementation',
-      contextPercentage: 42,
-      totalSeconds: 73,
-      totalUsd: 0.12,
-      transcript: [],
-    });
-    mock.api.listRunArtifacts.mockResolvedValue({ artifacts: [] });
-    mock.api.listRunSessions.mockResolvedValue({ runNumber: 8, sessions: [] });
-
-    render(
-      <CurrentRunInspection
-        featureId="abcd1234ef567890"
-        runNumber={8}
-        currentPhase="Implement"
-        currentRoadmapPhase={4}
-        totalRoadmapPhases={4}
-        currentIteration={2}
-        phaseStatus="reviewing"
-        reviewGate={REVIEW_GATE}
-      />,
-    );
-
-    const gauge = await screen.findByRole('region', { name: /Roadmap progress/ });
-    expect(gauge).toHaveTextContent('Phase 4 of 4');
-    expect(gauge).toHaveTextContent('Reviewing · Iteration 2');
-  });
-
-  it('shows current-phase elapsed/cost with the model, and reports run totals up', async () => {
-    const mock = installAgenticoMock();
-    const canonicalModel = 'portkey/@fireworks/accounts/fireworks/models/glm-5p2[1.04M]';
-    mock.api.getModelCatalogue.mockResolvedValue({
-      providerOrder: ['opencode'],
-      providerModels: {
-        opencode: [{ id: canonicalModel, displayName: 'GLM 5.2 (1.04M)' }],
-      },
-      phaseDefaults: {},
-      phaseProviderModels: {},
-    });
     mock.api.getLivePreview.mockResolvedValue({
       featureId: 'abcd1234ef567890',
       activity: 'Running implementation',
       contextPercentage: 21,
       totalSeconds: 3844,
       totalUsd: 21.62,
-      session: {
-        id: 'sess-impl',
-        featureId: 'abcd1234ef567890',
-        runNumber: 8,
-        phase: 'Implement',
-        kind: 'implement',
-        status: 'running',
-        startedAt: '2026-07-23T10:00:00Z',
-        model: canonicalModel,
-        usage: {},
-      },
       transcript: [],
     });
     mock.api.getRun.mockResolvedValue({
@@ -462,58 +377,56 @@ describe('CurrentRunInspection', () => {
         runNumber={8}
         currentPhase="Implement"
         currentRoadmapPhase={5}
-        featureStatus="Implementing"
         reviewGate={REVIEW_GATE}
         onRunMetrics={onRunMetrics}
       />,
     );
 
-    // Current phase: 760s and $12.40, not the run totals (3844s / $21.62).
-    expect(await screen.findByText('12m 40s')).toBeInTheDocument();
-    expect(screen.getByText('$12.40')).toBeInTheDocument();
-    expect(screen.getByText('GLM 5.2 (1.04M)')).toHaveAttribute('title', canonicalModel);
-    expect(screen.queryByText(canonicalModel)).not.toBeInTheDocument();
+    // Run totals (3844s / $21.62), not the per-phase breakdown — that
+    // breakdown no longer surfaces anywhere on the live cockpit.
     await waitFor(() =>
-      expect(onRunMetrics).toHaveBeenCalledWith({ totalSeconds: 3844, totalUsd: 21.62 }),
+      expect(onRunMetrics).toHaveBeenCalledWith({
+        totalSeconds: 3844,
+        totalUsd: 21.62,
+        contextPercentage: 21,
+      }),
     );
   });
 
-  it('keeps phase cost unavailable until the server reports persisted or running cost', async () => {
+  it('omits the context percentage when neither the preview nor its session reports one', async () => {
     const mock = installAgenticoMock();
     mock.api.getLivePreview.mockResolvedValue({
       featureId: 'abcd1234ef567890',
       activity: 'Running research',
-      contextPercentage: 7,
+      contextPercentage: -1,
       totalSeconds: 600,
       totalUsd: 9.04,
       transcript: [],
     });
-    mock.api.getRun.mockResolvedValue({
-      runNumber: 8,
-      artifactCount: 0,
-      timing: { totalSeconds: 600, byPhase: { Inquire: 585, Research: 15 } },
-      cost: { totalUsd: 9.04, byPhase: { Inquire: 9.04 } },
-    });
     mock.api.listRunArtifacts.mockResolvedValue({ artifacts: [] });
     mock.api.listRunSessions.mockResolvedValue({ runNumber: 8, sessions: [] });
 
+    const onRunMetrics = vi.fn();
     render(
       <CurrentRunInspection
         featureId="abcd1234ef567890"
         runNumber={8}
         currentPhase="Research"
-        featureStatus="Researching"
         reviewGate={REVIEW_GATE}
+        onRunMetrics={onRunMetrics}
       />,
     );
 
-    expect(await screen.findByText('15s')).toBeVisible();
-    const metrics = screen.getByText('Phase cost').closest('div');
-    expect(metrics).toHaveTextContent('—');
-    expect(metrics).not.toHaveTextContent('$0.00');
+    await waitFor(() =>
+      expect(onRunMetrics).toHaveBeenCalledWith({
+        totalSeconds: 600,
+        totalUsd: 9.04,
+        contextPercentage: undefined,
+      }),
+    );
   });
 
-  it('refreshes run metrics when the active phase changes', async () => {
+  it('refetches run totals when the active phase changes', async () => {
     const mock = installAgenticoMock();
     mock.api.getLivePreview.mockResolvedValue({
       featureId: 'abcd1234ef567890',
@@ -539,33 +452,41 @@ describe('CurrentRunInspection', () => {
     mock.api.listRunArtifacts.mockResolvedValue({ artifacts: [] });
     mock.api.listRunSessions.mockResolvedValue({ runNumber: 8, sessions: [] });
 
+    const onRunMetrics = vi.fn();
     const view = render(
       <CurrentRunInspection
         featureId="abcd1234ef567890"
         runNumber={8}
         currentPhase="Research"
-        featureStatus="Researching"
         reviewGate={REVIEW_GATE}
+        onRunMetrics={onRunMetrics}
       />,
     );
-    expect(await screen.findByText('$0.50')).toBeVisible();
+    await waitFor(() =>
+      expect(onRunMetrics).toHaveBeenCalledWith(
+        expect.objectContaining({ totalSeconds: 600, totalUsd: 9.04 }),
+      ),
+    );
 
     view.rerender(
       <CurrentRunInspection
         featureId="abcd1234ef567890"
         runNumber={8}
         currentPhase="Design"
-        featureStatus="Designing"
         reviewGate={REVIEW_GATE}
+        onRunMetrics={onRunMetrics}
       />,
     );
 
     await waitFor(() => expect(mock.api.getRun).toHaveBeenCalledTimes(2));
-    expect(screen.getByText('15s')).toBeVisible();
-    expect(screen.getByText('$0.50')).toBeVisible();
+    await waitFor(() =>
+      expect(onRunMetrics).toHaveBeenCalledWith(
+        expect.objectContaining({ totalSeconds: 615, totalUsd: 9.54 }),
+      ),
+    );
   });
 
-  it('polls active run metrics while the session is streaming', async () => {
+  it('polls run totals while the session is streaming', async () => {
     vi.useFakeTimers();
     const mock = installAgenticoMock();
     mock.api.getLivePreview.mockResolvedValue({
@@ -592,24 +513,27 @@ describe('CurrentRunInspection', () => {
     mock.api.listRunArtifacts.mockResolvedValue({ artifacts: [] });
     mock.api.listRunSessions.mockResolvedValue({ runNumber: 8, sessions: [] });
 
+    const onRunMetrics = vi.fn();
     render(
       <CurrentRunInspection
         featureId="abcd1234ef567890"
         runNumber={8}
         currentPhase="Research"
-        featureStatus="Researching"
         reviewGate={REVIEW_GATE}
+        onRunMetrics={onRunMetrics}
       />,
     );
     await act(async () => Promise.resolve());
-    expect(screen.getByText('1m 00s')).toBeVisible();
-    expect(screen.getByText('$0.50')).toBeVisible();
+    expect(onRunMetrics).toHaveBeenCalledWith(
+      expect.objectContaining({ totalSeconds: 600, totalUsd: 9.04 }),
+    );
 
     await act(() => vi.advanceTimersByTimeAsync(1000));
 
     expect(mock.api.getRun).toHaveBeenCalledTimes(2);
-    expect(screen.getByText('1m 01s')).toBeVisible();
-    expect(screen.getByText('$0.60')).toBeVisible();
+    expect(onRunMetrics).toHaveBeenCalledWith(
+      expect.objectContaining({ totalSeconds: 601, totalUsd: 9.14 }),
+    );
   });
 
   it('pauses hidden live work and refreshes and resubscribes when activated', async () => {
@@ -645,7 +569,6 @@ describe('CurrentRunInspection', () => {
         featureId="abcd1234ef567890"
         runNumber={8}
         currentPhase="Research"
-        featureStatus="Researching"
         reviewGate={REVIEW_GATE}
         shouldStream
         active={active}
@@ -685,160 +608,35 @@ describe('CurrentRunInspection', () => {
     );
   });
 
-  it('renders required inspection data before optional model metadata resolves', async () => {
-    const mock = installAgenticoMock();
-    const canonicalModel = 'portkey/@fireworks/accounts/fireworks/models/glm-5p2[1.04M]';
-    let resolveCatalogue: ((catalogue: ModelCatalogue) => void) | undefined;
-    mock.api.getModelCatalogue.mockReturnValue(
-      new Promise<ModelCatalogue>((resolve) => {
-        resolveCatalogue = resolve;
-      }),
-    );
-    mock.api.getLivePreview.mockResolvedValue({
-      featureId: 'abcd1234ef567890',
-      activity: 'Running implementation',
-      contextPercentage: 21,
-      totalSeconds: 3844,
-      totalUsd: 21.62,
-      session: {
-        id: 'sess-impl',
-        featureId: 'abcd1234ef567890',
-        runNumber: 8,
-        phase: 'Implement',
-        kind: 'implement',
-        status: 'running',
-        startedAt: '2026-07-23T10:00:00Z',
-        model: canonicalModel,
-        usage: {},
-      },
-      transcript: [],
-    });
-    mock.api.getRun.mockResolvedValue({
-      runNumber: 8,
-      artifactCount: 0,
-      timing: { totalSeconds: 3844, byPhase: { 'phase-5-impl': 760 } },
-      cost: { totalUsd: 21.62, byPhase: { 'phase-5-impl': 12.4 } },
-    });
-    mock.api.listRunArtifacts.mockResolvedValue({ artifacts: [] });
-    mock.api.listRunSessions.mockResolvedValue({ runNumber: 8, sessions: [] });
-
-    render(
-      <CurrentRunInspection
-        featureId="abcd1234ef567890"
-        runNumber={8}
-        currentPhase="Implement"
-        currentRoadmapPhase={5}
-        featureStatus="Implementing"
-        reviewGate={REVIEW_GATE}
-      />,
-    );
-
-    expect(await screen.findByText('Running implementation')).toBeVisible();
-    expect(screen.getByText('12m 40s')).toBeVisible();
-    expect(screen.getByText('$12.40')).toBeVisible();
-    expect(screen.getByText('glm-5p2[1.04M]')).toHaveAttribute('title', canonicalModel);
-    expect(screen.getByRole('button', { name: 'Files' })).toBeVisible();
-
-    await act(async () => {
-      resolveCatalogue?.({
-        providerOrder: ['opencode'],
-        providerModels: {
-          opencode: [{ id: canonicalModel, displayName: 'GLM 5.2 (1.04M)' }],
-        },
-        phaseDefaults: {},
-        phaseProviderModels: {},
-      });
-    });
-
-    expect(await screen.findByText('GLM 5.2 (1.04M)')).toHaveAttribute('title', canonicalModel);
-    expect(screen.queryByText('glm-5p2[1.04M]')).not.toBeInTheDocument();
-  });
-
-  it('sets final review apart from the last implementation phase', async () => {
+  it('clears the reported run totals when the live surface goes away', async () => {
     const mock = installAgenticoMock();
     mock.api.getLivePreview.mockResolvedValue({
       featureId: 'abcd1234ef567890',
-      activity: 'Final reviewing',
-      contextPercentage: 3,
-      totalSeconds: 4811,
-      totalUsd: 7.87,
-      transcript: [],
-    });
-    mock.api.listRunArtifacts.mockResolvedValue({ artifacts: [] });
-    mock.api.listRunSessions.mockResolvedValue({ runNumber: 6, sessions: [] });
-
-    render(
-      <CurrentRunInspection
-        featureId="abcd1234ef567890"
-        runNumber={6}
-        currentPhase="Final Review"
-        featureStatus="FinalReviewing"
-        currentRoadmapPhase={2}
-        totalRoadmapPhases={2}
-        reviewGate={REVIEW_GATE}
-      />,
-    );
-
-    const gauge = await screen.findByRole('region', {
-      name: /Roadmap progress: final review/,
-    });
-    expect(gauge).toHaveTextContent('Final review');
-    expect(gauge).not.toHaveTextContent('Phase 2 of 2');
-    // Both roadmap phases are done; final review is its own separated marker.
-    const phaseSegments = gauge.querySelectorAll(
-      '.roadmap-gauge__segment:not(.roadmap-gauge__segment--final)',
-    );
-    expect(phaseSegments).toHaveLength(2);
-    for (const segment of phaseSegments) {
-      expect(segment).toHaveAttribute('data-state', 'done');
-    }
-    const finalSegment = gauge.querySelector('.roadmap-gauge__segment--final');
-    expect(finalSegment).not.toBeNull();
-    expect(finalSegment).toHaveAttribute('data-state', 'active');
-  });
-
-  it('settles the roadmap gauge once the run rests at Code ready', async () => {
-    const mock = installAgenticoMock();
-    mock.api.getLivePreview.mockResolvedValue({
-      featureId: 'abcd1234ef567890',
-      activity: 'CodeReady',
-      contextPercentage: -1,
-      totalSeconds: 0,
-      totalUsd: 0,
+      activity: 'Running research',
+      contextPercentage: 12,
+      totalSeconds: 600,
+      totalUsd: 9.04,
       transcript: [],
     });
     mock.api.listRunArtifacts.mockResolvedValue({ artifacts: [] });
     mock.api.listRunSessions.mockResolvedValue({ runNumber: 8, sessions: [] });
 
-    render(
+    const onRunMetrics = vi.fn();
+    const view = render(
       <CurrentRunInspection
         featureId="abcd1234ef567890"
         runNumber={8}
-        currentPhase="Final Review"
-        featureStatus="CodeReady"
-        currentRoadmapPhase={12}
-        totalRoadmapPhases={12}
+        currentPhase="Research"
         reviewGate={REVIEW_GATE}
+        onRunMetrics={onRunMetrics}
       />,
     );
+    await waitFor(() =>
+      expect(onRunMetrics).toHaveBeenCalledWith(expect.objectContaining({ totalSeconds: 600 })),
+    );
 
-    const gauge = await screen.findByRole('region', {
-      name: 'Roadmap progress: phase 12 of 12 — Code ready',
-    });
-    expect(gauge).toHaveTextContent('Code ready');
-    expect(gauge).not.toHaveTextContent('Final Review');
-    const segments = gauge.querySelectorAll('.roadmap-gauge__segment');
-    expect(segments).toHaveLength(12);
-    for (const segment of segments) {
-      expect(segment).toHaveAttribute('data-state', 'done');
-    }
-    expect(gauge.querySelector('.roadmap-gauge__status')).toHaveAttribute('data-tone', 'rest');
-  });
-
-  it('hides the roadmap gauge before the roadmap exists', async () => {
-    renderCohort();
-    await screen.findByText('Security review underway.');
-    expect(screen.queryByRole('region', { name: /Roadmap progress/ })).not.toBeInTheDocument();
+    view.unmount();
+    expect(onRunMetrics).toHaveBeenLastCalledWith(null);
   });
 
   it('renders one tab per cohort agent and switches transcripts in isolation', async () => {
@@ -1228,7 +1026,6 @@ describe('CurrentRunInspection', () => {
         runNumber={8}
         currentPhase="Implement"
         currentRoadmapPhase={2}
-        totalRoadmapPhases={5}
         phaseStatus="verifying"
         reviewGate={REVIEW_GATE}
         verificationItems={[
@@ -1248,8 +1045,6 @@ describe('CurrentRunInspection', () => {
       screen.queryByRole('heading', { name: 'Verifying implementation · 2/4' }),
     ).not.toBeInTheDocument();
 
-    // The stale context reading is suppressed while verifying.
-    expect(screen.queryByText('42%')).not.toBeInTheDocument();
     // The transcript is replaced by the verification log; the review gate hides.
     expect(
       screen.getByText(
@@ -1257,12 +1052,6 @@ describe('CurrentRunInspection', () => {
       ),
     ).toBeVisible();
     expect(screen.queryByLabelText('Review axes')).not.toBeInTheDocument();
-    // The roadmap gauge reflects verification too.
-    expect(
-      screen.getByRole('region', {
-        name: 'Roadmap progress: phase 2 of 5 — Verifying implementation',
-      }),
-    ).toBeVisible();
 
     await user.click(screen.getByRole('button', { name: 'Expand live preview to full screen' }));
     const overlay = await screen.findByRole('dialog', { name: 'Live agent preview' });
@@ -1273,7 +1062,6 @@ describe('CurrentRunInspection', () => {
     expect(overlay).toHaveTextContent('e2e smoke');
     expect(overlay).not.toHaveTextContent('Stale implementation transcript.');
     expect(overlay).not.toHaveTextContent('Running implementation');
-    expect(overlay).not.toHaveTextContent('42%');
   });
 
   it('keeps live reviewer tabs when an active gate coincides with a stale verifying marker', async () => {

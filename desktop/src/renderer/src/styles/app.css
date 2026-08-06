@@ -3399,190 +3399,6 @@ body {
   margin-left: auto;
 }
 
-/* --- Phase spine ----------------------------------------------------------- */
-
-.phase-spine__rail {
-  list-style: none;
-  margin: 0;
-  padding: var(--space-3) 0 0;
-  display: flex;
-  gap: var(--space-2);
-  border-top: 1px solid var(--color-hairline);
-}
-
-.phase-spine__stage {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: var(--space-2);
-}
-
-.phase-spine__tick {
-  position: relative;
-  display: block;
-  width: 2px;
-  height: 14px;
-  background: var(--color-hairline);
-}
-
-.phase-spine__stage[data-state='done'] .phase-spine__tick {
-  background: var(--color-success);
-}
-
-.phase-spine__stage[data-state='active'] .phase-spine__tick {
-  background: transparent;
-}
-
-/* The needle: signal marks the current stage; amber stays reserved for attention. */
-.phase-spine__needle {
-  position: absolute;
-  inset: -4px -1px;
-  background: var(--color-signal);
-  border-radius: 1px;
-}
-
-.phase-spine__stage[data-tone='error'] .phase-spine__needle {
-  background: var(--color-danger);
-}
-
-@keyframes needle-pulse {
-  0%,
-  100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0.55;
-  }
-}
-
-.phase-spine__needle--pulse {
-  animation: needle-pulse 1.6s ease-in-out infinite;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .phase-spine__needle--pulse {
-    animation: none;
-  }
-}
-
-/*
- * Phase labels: the display face, rendered in full. Labels wrap at word
- * boundaries rather than truncating; they only compact at narrow widths.
- */
-.phase-spine__label {
-  font-family: var(--font-display);
-  font-weight: 500;
-  font-size: 12px;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--color-muted);
-  text-align: center;
-  max-width: 100%;
-  overflow-wrap: normal;
-  word-break: normal;
-  hyphens: none;
-}
-
-.phase-spine__label-text--compact {
-  display: none;
-}
-
-.phase-spine__stage[data-state='active'] .phase-spine__label {
-  color: var(--color-text);
-}
-
-/* --- Feature inspector phase ladder ---------------------------------------- */
-
-.phase-ladder {
-  display: grid;
-  gap: var(--space-3);
-  min-width: 0;
-  border-top: 1px solid var(--color-hairline);
-  padding-top: var(--space-3);
-}
-
-.phase-ladder__steps {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.phase-ladder__step {
-  display: grid;
-  grid-template-columns: 1rem minmax(0, auto) minmax(0, 1fr);
-  align-items: baseline;
-  gap: var(--space-2);
-  min-width: 0;
-  color: var(--color-muted);
-}
-
-.phase-ladder__pip {
-  color: var(--color-muted);
-  font-family: var(--font-mono);
-  font-size: 11px;
-  line-height: 1;
-  text-align: center;
-}
-
-.phase-ladder__step[data-state='done'] .phase-ladder__pip {
-  color: var(--color-success);
-}
-
-.phase-ladder__step[data-state='active'] .phase-ladder__pip {
-  color: var(--color-accent);
-  animation: phase-ladder-pulse 1.8s ease-in-out infinite;
-}
-
-.phase-ladder[data-tone='error'] .phase-ladder__step[data-state='active'] .phase-ladder__pip {
-  color: var(--color-danger);
-}
-
-.phase-ladder__label {
-  font-family: var(--font-display);
-  font-size: 13px;
-  font-weight: 500;
-  letter-spacing: 0.02em;
-  overflow-wrap: anywhere;
-}
-
-.phase-ladder__step[data-state='active'] .phase-ladder__label {
-  color: var(--color-text);
-  font-weight: 700;
-}
-
-.phase-ladder__status {
-  min-width: 0;
-  color: var(--color-accent);
-  font-family: var(--font-mono);
-  font-size: 10px;
-  overflow-wrap: anywhere;
-}
-
-.phase-ladder[data-tone='error'] .phase-ladder__status {
-  color: var(--color-danger);
-}
-
-@keyframes phase-ladder-pulse {
-  0%,
-  100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0.52;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .phase-ladder__step[data-state='active'] .phase-ladder__pip {
-    animation: none;
-  }
-}
-
 /* --- Status line ------------------------------------------------------------ */
 
 .shell-card__status {
@@ -3723,22 +3539,6 @@ body {
 }
 
 /* --- Responsive: narrow (400px) up to wide ---------------------------------------- */
-
-@media (max-width: 900px) {
-  .phase-spine__label {
-    white-space: nowrap;
-    font-size: 10px;
-    letter-spacing: 0.04em;
-  }
-
-  .phase-spine__label-text--full {
-    display: none;
-  }
-
-  .phase-spine__label-text--compact {
-    display: inline;
-  }
-}
 
 @media (max-width: 480px) {
   .shell-card {
@@ -5196,16 +4996,21 @@ body {
   gap: 6px;
   color: var(--muted);
   font: 11px var(--bench-font-text);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 .overview-row__state[data-tone='attention'] {
   color: var(--attention);
 }
 
+.overview-row__state-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .overview-row__state-dot {
+  flex: none;
   width: 6px;
   height: 6px;
   border-radius: 50%;
@@ -9043,12 +8848,6 @@ body {
   opacity: 0.6;
 }
 
-/* Sealed runs read as quiet on the phase spine: a muted tick, not the
- * progress/success or error tones used for live runs. */
-.phase-spine__stage[data-tone='sealed'] .phase-spine__tick {
-  background: color-mix(in srgb, var(--color-muted) 50%, var(--color-hairline));
-}
-
 @media (max-width: 900px) {
   .archive-mode__selector {
     width: 100%;
@@ -10647,166 +10446,147 @@ body {
   color: var(--color-signal);
 }
 
-.current-inspection__metrics {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-4);
-  margin: 0;
-}
-
-.current-inspection__metrics div {
-  display: grid;
-  gap: 2px;
-}
-
-.current-inspection__metrics dt {
-  color: var(--color-muted);
-  font-size: 11px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.current-inspection__metrics dd {
-  margin: 0;
-  font-family: var(--font-mono);
-}
-
-/* Phase cost carries the model that produced it, set off as a quiet tag. */
-.current-inspection__cost {
-  display: flex;
-  align-items: baseline;
-  gap: var(--space-2);
-  flex-wrap: wrap;
-}
-
-.current-inspection__model {
-  padding: 1px 6px;
-  border: 1px solid var(--color-hairline);
-  border-radius: 999px;
-  color: var(--color-muted);
-  font-size: 11px;
-  max-width: 22ch;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/* --- Roadmap gauge ---------------------------------------------------------
- * The implement-loop instrument: one segment per roadmap phase, the active
- * segment carrying the same signal pulse as the phase-spine needle. Mirrors
- * the phase status verb, e.g. "Implementing Phase 2/5 (Iteration 3)".
+/* --- Phase rail -------------------------------------------------------------
+ * One quiet row under the toolbar: an equal-width segment track (never sized
+ * by elapsed time — geometry and weight, not just color, separate completed
+ * from current from upcoming) plus the right-aligned mono Elapsed/Cost/
+ * Context trio. Uses the Bench token set deliberately (see tokens.css) —
+ * this is a new surface, not a legacy-token consumer. A hairline, not a
+ * fill, separates the row from the content below.
  */
 
-.roadmap-gauge {
+.phase-rail {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: var(--space-4);
-  padding: var(--space-2) var(--space-3);
-  border: 1px solid var(--color-hairline);
-  border-radius: var(--radius);
-  background: var(--color-bg);
+  padding: 10px var(--space-5);
+  border-bottom: var(--bench-hairline-width) solid var(--hairline);
+  background: transparent;
 }
 
-.roadmap-gauge__reading {
-  display: grid;
-  gap: 2px;
-  flex: none;
-}
-
-.roadmap-gauge__eyebrow {
-  color: var(--color-muted);
-  font-family: var(--font-mono);
-  font-size: 10px;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-}
-
-.roadmap-gauge__phase {
-  font: 600 18px var(--font-display);
-  letter-spacing: 0.02em;
-  text-transform: uppercase;
-  line-height: 1.1;
-}
-
-.roadmap-gauge__of {
-  color: var(--color-muted);
-  font-weight: 500;
-}
-
-.roadmap-gauge__track {
+.phase-rail__track {
   display: flex;
   flex: 1;
-  gap: var(--space-1);
+  min-width: 0;
+  gap: 3px;
   margin: 0;
   padding: 0;
   list-style: none;
-  min-width: 80px;
 }
 
-.roadmap-gauge__segment {
-  flex: 1;
-  height: 6px;
-  border-radius: 3px;
-  background: var(--color-hairline);
-}
-
-.roadmap-gauge__segment[data-state='done'] {
-  background: var(--color-success);
-}
-
-.roadmap-gauge__segment[data-state='active'] {
-  background: var(--color-signal);
-  animation: needle-pulse 1.6s ease-in-out infinite;
-}
-
-/* Final review sits apart from the phase run: a short marker set off by a gap
- * and a leading divider, so it never reads as one more implementation phase. */
-.roadmap-gauge__segment--final {
-  flex: 0 0 28px;
-  margin-left: var(--space-3);
+.phase-rail__segment {
   position: relative;
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
 }
 
-.roadmap-gauge__segment--final::before {
-  content: '';
+.phase-rail__bar {
+  width: 100%;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--hairline);
+}
+
+.phase-rail__segment[data-state='completed'] .phase-rail__bar {
+  background: var(--ok);
+}
+
+.phase-rail__segment[data-state='current'] .phase-rail__bar {
+  background: var(--accent);
+}
+
+.phase-rail__segment[data-state='current'][data-tone='error'] .phase-rail__bar {
+  background: var(--bad);
+}
+
+/* Archive mode's sealed rail: quiet/at-rest, consistent with the read-only
+ * band below it — a muted ok tint stands in for the live run's bright one,
+ * and it never pulses (the rail has no pulse animation to begin with). */
+.phase-rail__segment[data-tone='sealed'][data-state='completed'] .phase-rail__bar {
+  background: color-mix(in srgb, var(--ok) 45%, var(--faint));
+}
+
+/* Upcoming reads thinner, not just dimmer — geometry carries the state even
+ * in grayscale or for a color-blind reader. */
+.phase-rail__segment[data-state='upcoming'] .phase-rail__bar {
+  height: 2px;
+  background: var(--faint);
+}
+
+/* While held, the current segment's bar and label take the attention color
+ * regardless of the base current/error tint. */
+.phase-rail__segment[data-held='true'] .phase-rail__bar {
+  background: var(--attention);
+}
+
+.phase-rail__label {
+  max-width: 100%;
+  overflow: hidden;
+  font-family: var(--bench-font-text);
+  font-size: 10.5px;
+  line-height: 1;
+  font-weight: 400;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+}
+
+.phase-rail__segment[data-state='current'] .phase-rail__label {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.phase-rail__segment[data-held='true'] .phase-rail__label {
+  color: var(--attention);
+}
+
+/* The single 7px attention dot, centered above the current segment's bar. */
+.phase-rail__dot {
   position: absolute;
-  left: calc(-1 * var(--space-2));
-  top: 50%;
-  transform: translateY(-50%);
-  width: 1px;
-  height: 12px;
-  background: var(--color-hairline);
+  top: -9px;
+  left: 50%;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--attention);
+  transform: translateX(-50%);
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .roadmap-gauge__segment[data-state='active'] {
-    animation: none;
-  }
-}
-
-.roadmap-gauge__status {
-  margin: 0;
+.phase-rail__trio {
+  display: flex;
   flex: none;
-  color: var(--color-signal);
-  font-family: var(--font-mono);
+  gap: var(--space-5);
+  margin: 0;
+}
+
+.phase-rail__trio-entry {
+  display: grid;
+  gap: 2px;
+  text-align: right;
+}
+
+.phase-rail__trio-entry dt {
+  font-family: var(--bench-font-text);
+  font-size: 10px;
+  color: var(--muted);
+}
+
+.phase-rail__trio-entry dd {
+  margin: 0;
+  font-family: var(--bench-font-mono);
   font-size: 12px;
+  color: var(--text);
 }
 
-/* A finished run reads settled: success green, nothing pulsing. */
-.roadmap-gauge__status[data-tone='rest'] {
-  color: var(--color-success);
-}
-
-@media (max-width: 640px) {
-  .roadmap-gauge {
-    flex-wrap: wrap;
-    gap: var(--space-2) var(--space-4);
-  }
-
-  .roadmap-gauge__track {
-    order: 3;
-    flex-basis: 100%;
-  }
+/* The Waiting/Paused substitution takes the attention color in both slots. */
+.phase-rail__trio-entry[data-attention='true'] dt,
+.phase-rail__trio-entry[data-attention='true'] dd {
+  color: var(--attention);
 }
 
 /* --- Live agent preview --------------------------------------------------- */
@@ -11320,10 +11100,9 @@ body {
 .current-inspection[data-presentation='record'] {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  grid-template-rows: auto minmax(0, 1fr) auto;
   grid-template-areas:
     'header'
-    'roadmap'
     'preview'
     'gate';
   gap: 0;
@@ -11341,14 +11120,6 @@ body {
   grid-area: header;
   padding: var(--space-4) var(--space-5);
   border-bottom: 1px solid var(--color-hairline);
-}
-
-.current-inspection[data-presentation='record'] > .roadmap-gauge {
-  grid-area: roadmap;
-  margin: 0;
-  border: 0;
-  border-bottom: 1px solid var(--color-hairline);
-  border-radius: 0;
 }
 
 .current-inspection[data-presentation='record'] > .current-inspection__preview {

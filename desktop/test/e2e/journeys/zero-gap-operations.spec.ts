@@ -96,7 +96,11 @@ test('zero-gap operations: dismissible watch, live inspection, bounded files, an
     // The fixture can finish between the Start response and this assertion;
     // the current-run contract remains inspectable in either live or freshly
     // completed state, while Context proves the authoritative preview loaded.
-    await expect(inspection.getByText(/Context/)).toBeVisible({ timeout: 60_000 });
+    // Context now lives in the phase rail above the stage area, not inside
+    // the "Current run inspection" region itself.
+    await expect(cockpit.locator('.phase-rail__trio').getByText(/Context/)).toBeVisible({
+      timeout: 60_000,
+    });
     // The phase log exists for the whole active run. A provider session log is
     // phase-dependent and may not exist yet while the first phase is starting.
     await inspection.getByRole('button', { name: 'Files' }).click();

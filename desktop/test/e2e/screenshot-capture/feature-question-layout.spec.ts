@@ -7,8 +7,8 @@ for (const theme of ['light', 'dark'] as const) {
     await page.setViewportSize({ width: 1440, height: 900 });
     await page.goto(`http://localhost:9871/?scene=feature-question&theme=${theme}`);
 
-    await expect(page.getByRole('group', { name: 'Feature pipeline' })).toBeVisible();
-    await expect(page.locator('.phase-ladder__step')).toHaveCount(9);
+    await expect(page.getByRole('group', { name: 'Run phases' })).toBeVisible();
+    await expect(page.locator('.phase-rail__segment')).toHaveCount(9);
 
     // The question is the agent's next turn inside the live transcript.
     const turn = page.getByRole('group', { name: 'Agent question' });

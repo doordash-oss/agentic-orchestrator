@@ -50,6 +50,7 @@ import {
   displayStatusLabel,
   isRunAtRest,
   orderDashboardFeatures,
+  runningPhaseSubline,
   spineActiveIndex,
   spineStages,
 } from './featureView';
@@ -1055,11 +1056,12 @@ function laneSubline(
   }
   if (lane === 'running') {
     if (feature.activeChild !== undefined) return feature.activeChild.name;
-    const phase = feature.currentPhase;
-    if (phase === undefined || phase === '') return undefined;
-    return feature.currentIteration !== undefined
-      ? `${phase} · ${feature.currentIteration}`
-      : phase;
+    return runningPhaseSubline(
+      feature.currentPhase,
+      feature.currentRoadmapPhase,
+      feature.totalRoadmapPhases,
+      feature.currentIteration,
+    );
   }
   if (lane === 'at-rest') {
     return displayStatusLabel(feature.status);
@@ -1264,7 +1266,9 @@ function OverviewRow({
         <span className="overview-row__state-col">
           <span className="overview-row__state" data-tone={tone}>
             <span className="overview-row__state-dot" data-tone={tone} aria-hidden="true" />
-            {overviewRowStateText(lane, feature, attentionKinds)}
+            <span className="overview-row__state-text">
+              {overviewRowStateText(lane, feature, attentionKinds)}
+            </span>
           </span>
           {pip === null ? null : (
             <PipRail

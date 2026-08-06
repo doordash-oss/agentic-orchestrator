@@ -423,9 +423,7 @@ export function RefactorPassWorkspace({
                 runNumber={child.activeRun}
                 active={active}
                 currentPhase={child.currentPhase}
-                featureStatus={child.status}
                 currentRoadmapPhase={child.currentRoadmapPhase}
-                totalRoadmapPhases={child.totalRoadmapPhases}
                 currentIteration={child.currentIteration}
                 phaseStatus={child.phaseStatus}
                 reviewGate={child.reviewGate}

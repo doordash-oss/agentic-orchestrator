@@ -132,7 +132,7 @@ describe('ConnectionShell', () => {
     expect(region).toHaveAttribute('aria-live', 'polite');
   });
 
-  it('renders the phase spine with the current stage active', async () => {
+  it('renders the lifecycle rail track with the current stage active', async () => {
     const mock = installAgenticoMock();
     render(<ConnectionShell />);
     await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent(/resolving/i));
@@ -146,8 +146,12 @@ describe('ConnectionShell', () => {
         }),
       );
     });
-    const items = screen.getAllByRole('listitem');
+    const track = screen.getByRole('group', { name: 'Connection lifecycle' });
+    const items = track.querySelectorAll('.phase-rail__segment');
+    expect(items).toHaveLength(6);
     expect(items[4]).toHaveAttribute('aria-current', 'step');
+    expect(items[4]).toHaveAttribute('aria-label', 'Auth, current');
+    expect(items[0]).toHaveAttribute('data-state', 'completed');
   });
 
   it('presents incompatible servers with guidance and no way to stop them', async () => {

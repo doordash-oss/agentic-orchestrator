@@ -3,7 +3,7 @@
  * inputs are the strict renderer-facing views; nothing here talks to the
  * preload API or stores state.
  */
-import type { FeatureSnapshot, FeatureSetupView, ModelCatalogue } from '../../../shared/ipc';
+import type { FeatureSnapshot, FeatureSetupView } from '../../../shared/ipc';
 
 export type DashboardBucket = 'intervention' | 'active' | 'startable' | 'inactive';
 export type DashboardTone = 'danger' | 'attention' | 'active' | 'ready' | 'quiet';
@@ -264,64 +264,6 @@ export function formatDuration(totalSeconds: number): string {
   return `${hours}h ${minutes.toString().padStart(2, '0')}m`;
 }
 
-/**
- * Reads a per-phase metric (duration seconds or USD) for the named phase from a
- * run's `by_phase` map. Prefers an active roadmap accounting key when supplied,
- * then matches the phase key exactly or case-insensitively, and finally maps
- * "Final Review" to the "Review" phase it is recorded under. Returns undefined
- * when the phase has no recorded value.
- */
-export function phaseMetric(
-  byPhase: Readonly<Record<string, number>> | undefined,
-  phase: string,
-  roadmapPhase?: number,
-): number | undefined {
-  if (byPhase === undefined) return undefined;
-  const target = phase.trim().toLocaleLowerCase();
-  if (roadmapPhase !== undefined && roadmapPhase > 0) {
-    const suffix =
-      target === 'plan' || target === 'planning'
-        ? 'plan'
-        : ['implement', 'implementation', 'review'].includes(target)
-          ? 'impl'
-          : null;
-    if (suffix !== null) {
-      const roadmapKey = `phase-${roadmapPhase}-${suffix}`;
-      if (roadmapKey in byPhase) return byPhase[roadmapKey];
-    }
-  }
-  if (phase in byPhase) return byPhase[phase];
-  for (const [key, value] of Object.entries(byPhase)) {
-    if (key.trim().toLocaleLowerCase() === target) return value;
-  }
-  if (target === 'final review') return phaseMetric(byPhase, 'Review');
-  return undefined;
-}
-
-export function displayModelName(model: string, catalogue: ModelCatalogue | null): string {
-  for (const [provider, models] of Object.entries(catalogue?.providerModels ?? {})) {
-    const match = models.find((entry) => model === entry.id || model === `${provider}:${entry.id}`);
-    if (match?.displayName !== undefined && match.displayName !== '') return match.displayName;
-  }
-
-  let canonical = model;
-  for (const provider of Object.keys(catalogue?.providerModels ?? {})) {
-    const prefix = `${provider}:`;
-    if (model.startsWith(prefix)) {
-      canonical = model.slice(prefix.length);
-      break;
-    }
-  }
-  if (canonical === model) {
-    const providerSeparator = model.indexOf(':');
-    const firstPathSeparator = model.indexOf('/');
-    if (providerSeparator > 0 && firstPathSeparator > providerSeparator) {
-      canonical = model.slice(providerSeparator + 1);
-    }
-  }
-  return canonical.split('/').filter(Boolean).at(-1) ?? canonical;
-}
-
 /** Elapsed time for the queue card; null when there is no run time to show yet. */
 export function formatElapsed(snapshot: FeatureSnapshot): string | null {
   const total = snapshot.timing?.totalSeconds ?? 0;
@@ -339,6 +281,30 @@ export function setupProgress(setup: FeatureSetupView): SetupProgress {
     done: setup.tasks.filter((task) => task.status === 'done').length,
     total: setup.tasks.length,
   };
+}
+
+/**
+ * The running-lane phase/iteration copy shared by the sidebar and Overview
+ * rows: `<Phase> · phase N/M · iteration K`, with any part the snapshot
+ * carries no data for omitted rather than rendered as a placeholder (no
+ * "undefined", no "phase ?/?"). Returns undefined when there is no phase
+ * name to show at all.
+ */
+export function runningPhaseSubline(
+  phase: string | undefined,
+  currentRoadmapPhase: number | undefined,
+  totalRoadmapPhases: number | undefined,
+  currentIteration: number | undefined,
+): string | undefined {
+  if (phase === undefined || phase === '') return undefined;
+  const parts = [phase];
+  if (currentRoadmapPhase !== undefined && totalRoadmapPhases !== undefined) {
+    parts.push(`phase ${currentRoadmapPhase}/${totalRoadmapPhases}`);
+  }
+  if (currentIteration !== undefined) {
+    parts.push(`iteration ${currentIteration}`);
+  }
+  return parts.join(' · ');
 }
 
 export function actionById(

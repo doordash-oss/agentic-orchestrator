@@ -32,6 +32,8 @@ interface LayoutMeasurements {
   surfaceBottom: number;
   inspectionMinHeight: number;
   reviewSummary: LayoutSection | null;
+  /** The rail sits above the stage — its own row, not one of `sections`. */
+  phaseRail: LayoutSection;
   sections: LayoutSection[];
 }
 
@@ -42,7 +44,7 @@ async function measureLayout(
 ): Promise<LayoutMeasurements> {
   await page.setViewportSize({ width: 1440, height });
   await page.goto(`http://localhost:9871/?scene=${scene}&theme=dark`);
-  await expect(page.locator('.current-inspection__metrics')).toBeVisible();
+  await expect(page.locator('.phase-rail')).toBeVisible();
   if (scene === 'run-gauge-verifying') {
     await expect(page.locator('.live-preview__verification-log > *')).toHaveCount(3);
   } else {
@@ -80,13 +82,15 @@ async function measureLayout(
       const surface = requireElement('.cockpit__surface--live', 'live surface');
       const inspection = requireElement('.current-inspection', 'current inspection');
       const inspectionHeader = requireElement('.current-inspection__header', 'inspection header');
-      const roadmap = requireElement('.roadmap-gauge', 'roadmap gauge');
+      // The rail lives above the stage (sibling of `.cockpit__content`), not
+      // inside the live surface or `.current-inspection` — it now owns phase
+      // and trio display for every run-facing view, not just the live one.
+      const phaseRailElement = requireElement('.phase-rail', 'phase rail');
       const previewContainer = requireElement('.current-inspection__preview', 'preview container');
       const preview = requireElement('.live-preview__frame', 'live preview');
       const transcript = document.querySelector('.conversation__scroll');
       const roster = document.querySelector('.live-preview__roster');
       const activity = document.querySelector('.current-inspection__activity');
-      const metrics = requireElement('.current-inspection__metrics', 'metrics');
       const reviewSummaryElement = document.querySelector('.review-gate');
       const surfaceRect = surface.getBoundingClientRect();
       const reviewSummary =
@@ -95,10 +99,8 @@ async function measureLayout(
           : null;
       const sections = [
         toSection('inspection header', inspectionHeader),
-        toSection('roadmap gauge', roadmap),
         toSection('live frame', preview),
         ...(activity instanceof HTMLElement ? [toSection('activity', activity)] : []),
-        toSection('metrics', metrics),
         ...(reviewSummary === null ? [] : [reviewSummary]),
       ];
       return {
@@ -116,6 +118,7 @@ async function measureLayout(
         surfaceBottom: surfaceRect.bottom,
         inspectionMinHeight: Number.parseFloat(getComputedStyle(inspection).minHeight),
         reviewSummary,
+        phaseRail: toSection('phase rail', phaseRailElement),
         sections,
       };
     },
@@ -172,6 +175,9 @@ test('all collapsed live phases fit ordinary surfaces and summaries reduce previ
       expect(layout.inspectionMinHeight).toBe(320);
       expect(layout.surfaceScrollHeight).toBeLessThanOrEqual(layout.surfaceClientHeight);
       expectOrderedSections(layout, true);
+      // The rail sits above the toolbar-adjacent stage, never inside the live
+      // surface it used to own phase/metrics chrome for.
+      expect(layout.phaseRail.bottom).toBeLessThanOrEqual(layout.surfaceTop);
     }
   }
 
@@ -186,23 +192,19 @@ test('all collapsed live phases fit ordinary surfaces and summaries reduce previ
   expect(active[0]!.reviewSummary).toBeNull();
   expect(active[0]!.sections.map(({ name }) => name)).toEqual([
     'inspection header',
-    'roadmap gauge',
     'live frame',
     'activity',
-    'metrics',
   ]);
   expect(reviewing[0]!.sections.map(({ name }) => name)).toEqual([
     'inspection header',
-    'roadmap gauge',
     'live frame',
     'activity',
-    'metrics',
   ]);
+  // While verifying, the activity line is suppressed too — the harness
+  // contract's per-command log is the whole story.
   expect(verifying[0]!.sections.map(({ name }) => name)).toEqual([
     'inspection header',
-    'roadmap gauge',
     'live frame',
-    'metrics',
   ]);
 });
 
@@ -269,6 +271,9 @@ test('aftercare keeps its runway and compact feature facts legible at rest', asy
     await expect(desk).toBeVisible();
     await expect(page.getByRole('tablist', { name: 'Stage view' })).toHaveCount(0);
     await expect(page.getByLabel('Feature pipeline')).toHaveCount(0);
+    // The rail is a run-facing instrument — aftercare has no active run to
+    // show, so it renders none of the rail's DOM either.
+    await expect(page.locator('.phase-rail')).toHaveCount(0);
     await expect(page.getByRole('button', { name: 'Run record' })).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Choose one focused action' })).toBeVisible();
     await expect(page.getByRole('complementary', { name: 'Feature facts' })).toBeVisible();

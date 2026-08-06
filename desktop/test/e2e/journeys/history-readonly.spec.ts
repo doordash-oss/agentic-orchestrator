@@ -120,14 +120,14 @@ test('history: paginated sealed runs, restored archive selection, immutable insp
     await setTheme(handle, 'light');
     await evidenceShot(
       handle,
-      'sealed-run-archive-mode-with-selector-read-only-band-muted-phase-spine-and-histo-1440x900',
+      'sealed-run-archive-mode-with-selector-read-only-band-muted-phase-rail-and-histo-1440x900',
     );
 
     transcript.section('Capture dark-theme archive screenshot at 1440x900');
     await setTheme(handle, 'dark');
     await evidenceShot(
       handle,
-      'sealed-run-archive-mode-with-selector-read-only-band-muted-phase-spine-and-histo-1440x900-6658c389',
+      'sealed-run-archive-mode-with-selector-read-only-band-muted-phase-rail-and-histo-1440x900-6658c389',
     );
 
     transcript.section('Capture light-theme pinned-history screenshot at 1440x900');

@@ -115,13 +115,13 @@ describe('SetupWizard cross-cutting a11y and presentation', () => {
     expect(region).toHaveAttribute('aria-live', 'polite');
   });
 
-  it('honors prefers-reduced-motion by not pulsing the spine needle', () => {
-    matchMediaState.reducedMotion = true;
+  it('renders the setup progress rail track with the current step marked', () => {
     installAgenticoMock();
     render(<Harness initial={unreadySnapshot()} />);
-    const needle = document.querySelector('.phase-spine__needle');
-    expect(needle).not.toBeNull();
-    expect(needle!.className).not.toContain('pulse');
+    const track = screen.getByRole('group', { name: 'Setup progress' });
+    const current = track.querySelector('[aria-current="step"]');
+    expect(current).not.toBeNull();
+    expect(current).toHaveClass('phase-rail__segment');
   });
 
   it('adapts to narrow windows via the viewport hook', async () => {

@@ -18,6 +18,7 @@ import {
 } from 'react';
 import { createPortal } from 'react-dom';
 import {
+  attentionOwnerFeatureId,
   isPendingReviewStatus,
   type FeatureSnapshot,
   type RunDetailView,
@@ -28,6 +29,8 @@ import { useModalDismiss } from '../components/useModalDismiss';
 import { useMediaQuery } from '../hooks';
 import { parseIpcError, type WizardError } from '../wizard/ipcError';
 import { CurrentRunInspection, type RunMetrics } from './CurrentRunInspection';
+import { classifyHold, railSegments, railTrio } from './phaseRail';
+import { PhaseRail } from './PhaseRailRow';
 import { ReviewSurface } from './ReviewSurface';
 import { FeatureConfigPanel } from './ConfigEditor';
 import { ArchiveMode } from './ArchiveMode';
@@ -1324,6 +1327,22 @@ export function FeatureCockpit({
   const isArchiveMode =
     selectedRunNumber !== undefined && selectedRunNumber !== null && selectedRunNumber > 0;
 
+  // The rail's hold looks at every open item this feature owns (including a
+  // refactor pass's routed items), not the review-filtered list the question/
+  // gate modals use — a paused *NeedsReview checkpoint still needs its review
+  // item's `waitingSince` for the Paused Nm duration.
+  const railOpenAttentionItems = attentionItems.filter(
+    (item) => attentionOwnerFeatureId(item) === featureId,
+  );
+  const railHold = classifyHold(snapshot.status, railOpenAttentionItems);
+  const railSegmentsList = railSegments(snapshot, railHold);
+  const railTrioEntries = railTrio({
+    totalSeconds: runMetrics?.totalSeconds,
+    totalUsd: runMetrics?.totalUsd,
+    contextPercentage: runMetrics?.contextPercentage,
+    hold: railHold,
+  });
+
   const openStopDialog = async () => {
     setActionError(null);
     try {
@@ -1882,9 +1901,7 @@ export function FeatureCockpit({
               runNumber={snapshot.activeRun}
               active={retainedEffectsActive}
               currentPhase={snapshot.currentPhase}
-              featureStatus={snapshot.status}
               currentRoadmapPhase={snapshot.currentRoadmapPhase}
-              totalRoadmapPhases={snapshot.totalRoadmapPhases}
               currentIteration={snapshot.currentIteration}
               phaseStatus={snapshot.phaseStatus}
               reviewGate={snapshot.reviewGate}
@@ -2125,6 +2142,13 @@ export function FeatureCockpit({
             overflowMenuHost={overflowMenuHost}
           />
 
+          <PhaseRail
+            segments={railSegmentsList}
+            trio={railTrioEntries}
+            hold={railHold}
+            tone={snapshot.status === 'Failed' ? 'error' : 'progress'}
+          />
+
           {rewindLanding !== null ? (
             <RewindLanding
               outcome={rewindLanding.outcome}
@@ -2200,9 +2224,7 @@ export function FeatureCockpit({
                       runNumber={snapshot.activeRun}
                       active={retainedEffectsActive}
                       currentPhase={snapshot.currentPhase}
-                      featureStatus={snapshot.status}
                       currentRoadmapPhase={snapshot.currentRoadmapPhase}
-                      totalRoadmapPhases={snapshot.totalRoadmapPhases}
                       currentIteration={snapshot.currentIteration}
                       phaseStatus={snapshot.phaseStatus}
                       reviewGate={snapshot.reviewGate}

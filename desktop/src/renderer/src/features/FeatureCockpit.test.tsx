@@ -133,18 +133,6 @@ describe('FeatureCockpit snapshot rendering', () => {
     expect(within(header!).queryByText('Repository')).not.toBeInTheDocument();
   });
 
-  it('shows the feature pipeline ladder with Setup active during setup', async () => {
-    renderCockpit();
-    await openInspector();
-    await screen.findByRole('region', { name: 'Feature Search revamp' });
-    const ladder = screen.getByRole('group', { name: 'Feature pipeline' });
-    const active = within(ladder)
-      .getAllByRole('listitem')
-      .find((item) => item.getAttribute('aria-current') === 'step');
-    expect(active).toHaveTextContent('Setup');
-    expect(document.querySelector('.phase-spine')).not.toBeInTheDocument();
-  });
-
   it('keeps rewind and run history in the overflow menu', async () => {
     const mock = installAgenticoMock({
       feature: featureSnapshot({
@@ -331,7 +319,6 @@ describe('FeatureCockpit snapshot rendering', () => {
 
     expect(await screen.findByRole('region', { name: 'Feature aftercare' })).toBeVisible();
     expect(screen.queryByRole('tablist', { name: 'Stage view' })).not.toBeInTheDocument();
-    expect(screen.queryByLabelText('Feature pipeline')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Run record' })).toBeVisible();
     expect(screen.getByRole('heading', { name: lede })).toBeVisible();
     await waitFor(() =>
@@ -816,10 +803,6 @@ describe('FeatureCockpit failure and retry', () => {
 
     expect(screen.getByText('Setup failed in repo-a.')).toBeInTheDocument();
     expect(screen.queryByRole('region', { name: 'Durable setup' })).not.toBeInTheDocument();
-    expect(screen.getByRole('group', { name: 'Feature pipeline' })).toHaveAttribute(
-      'data-tone',
-      'error',
-    );
   });
 
   it('retries via the server-authorized setup action on the SAME feature', async () => {

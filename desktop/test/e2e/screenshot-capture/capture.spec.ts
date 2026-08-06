@@ -365,7 +365,7 @@ test('capture all visual evidence screenshots', async ({ page }) => {
     'light',
     1440,
     900,
-    'sealed-run-archive-mode-with-selector-read-only-band-muted-phase-spine-and-histo-1440x900',
+    'sealed-run-archive-mode-with-selector-read-only-band-muted-phase-rail-and-histo-1440x900',
     '.archive-mode__band',
   );
 
@@ -375,7 +375,7 @@ test('capture all visual evidence screenshots', async ({ page }) => {
     'dark',
     1440,
     900,
-    'sealed-run-archive-mode-with-selector-read-only-band-muted-phase-spine-and-histo-1440x900-6658c389',
+    'sealed-run-archive-mode-with-selector-read-only-band-muted-phase-rail-and-histo-1440x900-6658c389',
     '.archive-mode__band',
   );
 
@@ -651,6 +651,164 @@ test('capture all visual evidence screenshots', async ({ page }) => {
       await expect(killButton).toBeVisible({ timeout: 5_000 });
       await killButton.click();
       await expect(p.locator('.impact-dialog__backdrop')).toBeVisible({ timeout: 5_000 });
+    },
+  );
+});
+
+test('phase rail visual evidence screenshots', async ({ page }) => {
+  test.setTimeout(120_000);
+
+  await capture(
+    page,
+    'run-gauge',
+    'dark',
+    1440,
+    900,
+    'live-run-cockpit-full-profile-rail-nine-segments-completed-current-upcoming-stat-1440x900',
+    '.phase-rail__trio',
+    async (p) => {
+      // Full-profile pipeline: Setup + the 8 large-pipeline phases.
+      await expect(p.locator('.phase-rail__segment')).toHaveCount(9);
+      await expect(p.locator('.phase-rail__segment[data-state="completed"]')).not.toHaveCount(0);
+      await expect(p.locator('.phase-rail__segment[data-state="current"]')).toHaveCount(1);
+      await expect(p.locator('.phase-rail__segment[data-state="upcoming"]')).not.toHaveCount(0);
+      await expect(
+        p.locator('.phase-rail__trio').getByText('Elapsed', { exact: true }),
+      ).toBeVisible();
+      await expect(p.locator('.phase-rail__trio').getByText('Cost', { exact: true })).toBeVisible();
+      await expect(
+        p.locator('.phase-rail__trio').getByText('Context', { exact: true }),
+      ).toBeVisible();
+    },
+  );
+
+  await capture(
+    page,
+    'run-gauge',
+    'light',
+    1440,
+    900,
+    'live-run-cockpit-same-state-light-theme-1440x900',
+    '.phase-rail__trio',
+    async (p) => {
+      await expect(p.locator('.phase-rail__segment')).toHaveCount(9);
+      await expect(
+        p.locator('.phase-rail__trio').getByText('Elapsed', { exact: true }),
+      ).toBeVisible();
+      await expect(p.locator('.phase-rail__trio').getByText('Cost', { exact: true })).toBeVisible();
+      await expect(
+        p.locator('.phase-rail__trio').getByText('Context', { exact: true }),
+      ).toBeVisible();
+    },
+  );
+
+  await capture(
+    page,
+    'run-gauge-held-question',
+    'dark',
+    1440,
+    900,
+    'held-on-a-question-current-segment-attention-colored-7px-dot-above-it-trio-readi-1440x900',
+    '.phase-rail__dot',
+    async (p) => {
+      // The run is still active (status stays in ACTIVE_STATUSES) while an
+      // open question holds the current segment.
+      await expect(p.locator('.phase-rail__segment[data-held="true"]')).toHaveCount(1);
+      await expect(p.locator('.phase-rail__dot')).toHaveAttribute(
+        'title',
+        /Held \d+m for your answer/,
+      );
+      const waitingEntry = p.locator('.phase-rail__trio-entry[data-attention="true"]');
+      await expect(waitingEntry.locator('dt')).toHaveText('Waiting');
+      await expect(waitingEntry.locator('dd')).toHaveText(/^\d+m$/);
+    },
+  );
+
+  await capture(
+    page,
+    'run-gauge-paused',
+    'dark',
+    1440,
+    900,
+    'paused-on-a-need_user_input-gate-trio-reading-paused-nm-dark-theme-1440x900',
+    '.phase-rail__trio-entry[data-attention="true"]',
+    async (p) => {
+      const pausedEntry = p.locator('.phase-rail__trio-entry[data-attention="true"]');
+      await expect(pausedEntry.locator('dt')).toHaveText('Paused');
+      await expect(pausedEntry.locator('dd')).toHaveText(/^\d+m$/);
+    },
+  );
+
+  await capture(
+    page,
+    'archive',
+    'dark',
+    1440,
+    900,
+    'archive-mode-sealed-run-rail-at-rest-with-elapsed-cost-and-no-context-read-only-1440x900',
+    '.archive-mode__band',
+    async (p) => {
+      // Sealed run: rail at rest, no current/held segment, Elapsed/Cost but
+      // no Context in the trio.
+      await expect(p.locator('.phase-rail__segment[data-state="current"]')).toHaveCount(0);
+      await expect(p.locator('.phase-rail__dot')).toHaveCount(0);
+      await expect(
+        p.locator('.phase-rail__trio').getByText('Elapsed', { exact: true }),
+      ).toBeVisible();
+      await expect(p.locator('.phase-rail__trio').getByText('Cost', { exact: true })).toBeVisible();
+      await expect(
+        p.locator('.phase-rail__trio').getByText('Context', { exact: true }),
+      ).toHaveCount(0);
+    },
+  );
+
+  await capture(
+    page,
+    'connection-shell',
+    'dark',
+    1440,
+    900,
+    'connection-shell-six-stage-segment-track-mid-connect-dark-theme-1440x900',
+    '.phase-rail__track',
+    async (p) => {
+      await expect(p.locator('.phase-rail__segment')).toHaveCount(6);
+      await expect(p.locator('.phase-rail__segment[data-state="current"]')).toHaveCount(1);
+      await expect(p.getByText('Connect', { exact: true })).toBeVisible();
+    },
+  );
+
+  await capture(
+    page,
+    'setup-wizard',
+    'dark',
+    1440,
+    900,
+    'setup-wizard-step-indicator-rendered-by-the-shared-segment-track-variable-step-c-1440x900',
+    '.phase-rail__track',
+    async (p) => {
+      const segments = p.locator('.phase-rail__segment');
+      await expect(segments).toHaveCount(3);
+      await expect(segments.nth(0)).toHaveAttribute('data-state', 'completed');
+      await expect(segments.nth(1)).toHaveAttribute('data-state', 'current');
+      await expect(segments.nth(2)).toHaveAttribute('data-state', 'upcoming');
+      await expect(p.getByText('Models', { exact: true })).toBeVisible();
+    },
+  );
+
+  await capture(
+    page,
+    'overview-lanes',
+    'dark',
+    1440,
+    900,
+    'sidebar-running-row-sub-line-showing-phase-n-m-iteration-k-beside-the-pip-row-da-1440x900',
+    '#sidebar-row-readme-italian-1 .sidebar__row-subline',
+    async (p) => {
+      const row = p.locator('#sidebar-row-readme-italian-1');
+      await expect(row.locator('.sidebar__row-subline')).toHaveText(
+        'Implement · phase 3/5 · iteration 2',
+      );
+      await expect(row.locator('.pip-rail')).toBeVisible();
     },
   );
 });

@@ -132,7 +132,6 @@ describe('RefactorPassWorkspace', () => {
 
     const inspector = screen.getByRole('complementary', { name: 'Pass inspector' });
     expect(within(inspector).getByRole('heading', { name: 'Slop removal pass' })).toBeVisible();
-    expect(within(inspector).getByLabelText('Feature pipeline')).toBeInTheDocument();
   });
 
   it('explains setup in the stage instead of rendering dead verbs', () => {

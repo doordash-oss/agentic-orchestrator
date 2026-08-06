@@ -5,7 +5,8 @@ import {
   type ConnectionStage,
   type ConnectionState,
 } from '../../../shared/ipc';
-import { PhaseSpine } from './PhaseSpine';
+import { PhaseRailTrack } from '../features/PhaseRailRow';
+import { stepSegments } from '../features/phaseRail';
 
 const STAGE_LABELS: Record<ConnectionStage, string> = {
   'resolve-runtime': 'Resolve',
@@ -109,9 +110,9 @@ export function ConnectionShell() {
         ) : null}
       </header>
 
-      <PhaseSpine
-        stages={SPINE_STAGES}
-        activeIndex={activeIndex}
+      <PhaseRailTrack
+        segments={stepSegments(SPINE_STAGES, activeIndex)}
+        label="Connection lifecycle"
         tone={failure !== null ? 'error' : 'progress'}
       />
 

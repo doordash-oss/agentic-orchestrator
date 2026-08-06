@@ -27,6 +27,9 @@ import type { CompletionAction } from '../../../src/renderer/src/features/comple
 import { SettingsPanel } from '../../../src/renderer/src/features/SettingsPanel';
 import { WorkspaceShell } from '../../../src/renderer/src/features/WorkspaceShell';
 import { FeatureCockpit } from '../../../src/renderer/src/features/FeatureCockpit';
+import { ConnectionShell } from '../../../src/renderer/src/components/ConnectionShell';
+import { SetupWizard } from '../../../src/renderer/src/components/wizard/SetupWizard';
+import type { ReadinessSnapshot } from '../../../src/shared/ipc';
 import { UpdateNotice } from '../../../src/renderer/src/components/UpdateNotice';
 import { AmaDock } from '../../../src/renderer/src/components/AmaDock';
 import { CommandPalette } from '../../../src/renderer/src/components/CommandPalette';
@@ -35,12 +38,9 @@ import {
   AttentionInbox,
   emptyAttentionDrafts,
 } from '../../../src/renderer/src/features/AttentionInbox';
-import { PhaseSpine } from '../../../src/renderer/src/components/PhaseSpine';
-import {
-  spineStages,
-  spineActiveIndex,
-  spineTone,
-} from '../../../src/renderer/src/features/featureView';
+import { spineTone } from '../../../src/renderer/src/features/featureView';
+import { classifyHold, railSegments, railTrio } from '../../../src/renderer/src/features/phaseRail';
+import { PhaseRail, PhaseRailTrack } from '../../../src/renderer/src/features/PhaseRailRow';
 import type {
   AgenticoApi,
   AppRouteEvent,
@@ -126,9 +126,61 @@ function RewindScene() {
   );
 }
 
+/** The connection shell mounted the way it appears before the workspace
+ * exists: a centered card over the app background, no workspace chrome. */
+function ConnectionShellScene() {
+  return (
+    <div
+      style={{
+        position: 'fixed',
+        inset: 0,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        background: 'var(--bg-elevation-1, #1a1a1a)',
+      }}
+    >
+      <ConnectionShell />
+    </div>
+  );
+}
+
+/** Providers satisfied, models still outstanding: the wizard's step track
+ * reads completed (Providers) / current (Models) / upcoming (Ready). */
+const SETUP_WIZARD_MODELS_STEP: ReadinessSnapshot = {
+  ready: false,
+  providers: [{ name: 'claude', installed: true, version: '2.1.0', ready: true }],
+  models: {
+    available: false,
+    issue: { code: 'models_unavailable', message: 'No models are configured yet.' },
+  },
+  configuration: { valid: true },
+  workspaceRoots: [{ path: '/work/space', valid: true }],
+  repositories: [{ name: 'repo-a', path: '/work/space/repo-a', valid: true }],
+  issues: [{ code: 'models_unavailable', message: 'No models are configured yet.' }],
+};
+
+/** The setup wizard mounted the way it appears before the workspace exists:
+ * a centered card over the app background, no workspace chrome. */
+function SetupWizardScene() {
+  return (
+    <div
+      style={{
+        position: 'fixed',
+        inset: 0,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        background: 'var(--bg-elevation-1, #1a1a1a)',
+      }}
+    >
+      <SetupWizard snapshot={SETUP_WIZARD_MODELS_STEP} onSnapshot={() => {}} />
+    </div>
+  );
+}
+
 function RepoInstrumentScene() {
   const snapshot = CYCLES_FEATURE_SNAPSHOT;
-  const stages = spineStages(snapshot.pipeline);
   return (
     <div
       className="workspace-shell__content"
@@ -140,9 +192,8 @@ function RepoInstrumentScene() {
       }}
     >
       <div className="cockpit" aria-label="Feature cockpit" style={{ flex: 1, overflow: 'auto' }}>
-        <PhaseSpine
-          stages={stages}
-          activeIndex={spineActiveIndex(snapshot, stages)}
+        <PhaseRailTrack
+          segments={railSegments(snapshot, null)}
           tone={spineTone(snapshot)}
           label="Feature pipeline"
         />
@@ -203,14 +254,77 @@ function RepoInstrumentScene() {
   );
 }
 
-type RunGaugeMode = 'active' | 'reviewing' | 'verifying' | 'rest' | 'final-review';
+type RunGaugeMode =
+  'active' | 'reviewing' | 'verifying' | 'rest' | 'final-review' | 'held-question' | 'paused';
 
 function RunGaugeScene({ mode = 'active' }: { mode?: RunGaugeMode }) {
   const atRest = mode === 'rest';
   const finalReview = mode === 'final-review';
   const reviewing = mode === 'reviewing';
   const verifying = mode === 'verifying';
-  const stages = spineStages('large');
+  const heldQuestion = mode === 'held-question';
+  const paused = mode === 'paused';
+  // Paused (NeedUserInput) reads like the at-rest/final-review renders for
+  // the iteration/phaseStatus fields below: the run isn't mid-iteration
+  // work right now, it's parked waiting on a person.
+  const restLike = atRest || finalReview || paused;
+  const currentPhase = atRest || finalReview ? 'Final Review' : 'Implement';
+  const status = atRest
+    ? 'CodeReady'
+    : finalReview
+      ? 'FinalReviewing'
+      : paused
+        ? 'NeedUserInput'
+        : 'Implementing';
+  const railSnapshot = {
+    ...CYCLES_FEATURE_SNAPSHOT,
+    currentPhase,
+    status,
+    currentRoadmapPhase: atRest ? 12 : 2,
+    totalRoadmapPhases: atRest ? 12 : finalReview ? 2 : 5,
+    ...(restLike
+      ? {}
+      : {
+          currentIteration: 3,
+          phaseStatus: reviewing ? 'reviewing' : verifying ? 'verifying' : 'implementing',
+        }),
+    reviewGate: {
+      reviewingGate: reviewing,
+      reviewFixing: false,
+      validatingPlan: false,
+      validatorStatuses: (reviewing
+        ? {
+            Craft: 'APPROVED',
+            'Functionality/Evidence': 'running',
+            Cleanliness: 'APPROVED',
+            Design: 'running',
+          }
+        : {}) as Record<string, string>,
+    },
+  };
+  // Held-question: the run is still executing (an active status) with an
+  // open question — classifyHold reads this as `waiting`. Paused: the
+  // status itself (NeedUserInput) is the hold — classifyHold reads this as
+  // `paused` regardless of the open item's kind, but a waitingSince is
+  // still needed for the trio to show a duration rather than an empty value.
+  const openAttentionItems: AttentionItem[] = heldQuestion
+    ? [
+        {
+          ...FEATURE_QUESTION_ITEM,
+          id: 'rail-held-question',
+          waitingSince: new Date(Date.now() - 12 * 60_000).toISOString(),
+        },
+      ]
+    : paused
+      ? [
+          {
+            ...FEATURE_QUESTION_ITEM,
+            id: 'rail-paused-need-input',
+            waitingSince: new Date(Date.now() - 47 * 60_000).toISOString(),
+          },
+        ]
+      : [];
+  const railHold = classifyHold(railSnapshot.status, openAttentionItems);
   return (
     <div className="app-frame">
       <div className="workspace">
@@ -218,12 +332,6 @@ function RunGaugeScene({ mode = 'active' }: { mode?: RunGaugeMode }) {
         <div className="content-column">
           <header className="toolbar" aria-hidden="true" />
           <div className="cockpit" aria-label="Feature cockpit">
-            <PhaseSpine
-              stages={stages}
-              activeIndex={spineActiveIndex(CYCLES_FEATURE_SNAPSHOT, stages)}
-              tone={spineTone(CYCLES_FEATURE_SNAPSHOT)}
-              label="Feature pipeline"
-            />
             <div className="cockpit__actions" role="group" aria-label="Feature actions">
               <p
                 className="cockpit__phase-status"
@@ -242,19 +350,25 @@ function RunGaugeScene({ mode = 'active' }: { mode?: RunGaugeMode }) {
                 </summary>
               </details>
             </div>
+            <PhaseRail
+              segments={railSegments(railSnapshot, railHold)}
+              trio={railTrio({
+                totalSeconds: atRest ? 0 : 8880,
+                totalUsd: atRest ? 0 : 12.4,
+                contextPercentage: atRest ? undefined : 42,
+                hold: railHold,
+              })}
+              hold={railHold}
+            />
             <div className="cockpit__content">
               <main className="cockpit__stage">
                 <div className="cockpit__surface cockpit__surface--live">
                   <CurrentRunInspection
                     featureId="abcd1234ef567890"
                     runNumber={8}
-                    currentPhase={atRest || finalReview ? 'Final Review' : 'Implement'}
-                    featureStatus={
-                      atRest ? 'CodeReady' : finalReview ? 'FinalReviewing' : 'Implementing'
-                    }
+                    currentPhase={currentPhase}
                     currentRoadmapPhase={atRest ? 12 : 2}
-                    totalRoadmapPhases={atRest ? 12 : finalReview ? 2 : 5}
-                    {...(atRest || finalReview
+                    {...(restLike
                       ? {}
                       : {
                           currentIteration: 3,
@@ -264,19 +378,7 @@ function RunGaugeScene({ mode = 'active' }: { mode?: RunGaugeMode }) {
                               ? 'verifying'
                               : 'implementing',
                         })}
-                    reviewGate={{
-                      reviewingGate: reviewing,
-                      reviewFixing: false,
-                      validatingPlan: false,
-                      validatorStatuses: reviewing
-                        ? {
-                            Craft: 'APPROVED',
-                            'Functionality/Evidence': 'running',
-                            Cleanliness: 'APPROVED',
-                            Design: 'running',
-                          }
-                        : {},
-                    }}
+                    reviewGate={railSnapshot.reviewGate}
                     verificationItems={
                       verifying
                         ? [
@@ -826,6 +928,18 @@ function CaptureApp() {
   }
   if (scene === 'run-gauge-final-review') {
     return <RunGaugeScene mode="final-review" />;
+  }
+  if (scene === 'run-gauge-held-question') {
+    return <RunGaugeScene mode="held-question" />;
+  }
+  if (scene === 'run-gauge-paused') {
+    return <RunGaugeScene mode="paused" />;
+  }
+  if (scene === 'connection-shell') {
+    return <ConnectionShellScene />;
+  }
+  if (scene === 'setup-wizard') {
+    return <SetupWizardScene />;
   }
   if (
     scene === 'aftercare' ||

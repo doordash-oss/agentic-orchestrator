@@ -19,6 +19,7 @@ import {
   hasStructuredVerificationDecision,
   NeedUserInputVerificationDecision,
 } from './NeedUserInputVerificationDecision';
+import { formatWaitingDuration } from './phaseRail';
 import { useAttentionDraftSaves } from './useAttentionDraftSaves';
 
 export interface QuestionAnswerDraft {
@@ -912,16 +913,10 @@ function shortSessionId(id: string): string {
   return id.length > 9 ? `${id.slice(0, 8)}…` : id;
 }
 
+/** Delegates to the rail's shared duration formatter, keeping one source of truth. */
 function formatWaitingSince(value: string): string {
-  const since = Date.parse(value);
-  if (!Number.isFinite(since)) return 'waiting time unknown';
-  const elapsedMs = Math.max(Date.now() - since, 0);
-  const minutes = Math.floor(elapsedMs / 60_000);
-  if (minutes < 1) return 'waiting <1m';
-  if (minutes < 60) return `waiting ${minutes}m`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 48) return `waiting ${hours}h`;
-  return `waiting ${Math.floor(hours / 24)}d`;
+  const duration = formatWaitingDuration(value);
+  return duration === null ? 'waiting time unknown' : `waiting ${duration}`;
 }
 
 export function displayQuestionOptionLabel(label: string): string {

@@ -5,17 +5,16 @@ import {
   childStatusSpineIndex,
   dashboardState,
   displayFeatureMessage,
-  displayModelName,
   displayPhaseLabel,
   displayStatusLabel,
   featureBranch,
   fieldForCreationError,
   formatDuration,
   formatElapsed,
-  phaseMetric,
   isReadyToStart,
   isRunAtRest,
   orderDashboardFeatures,
+  runningPhaseSubline,
   setupProgress,
   spineActiveIndex,
   spineActiveIndexForPhase,
@@ -178,66 +177,6 @@ describe('formatDuration', () => {
   });
 });
 
-describe('phaseMetric', () => {
-  it('reads the active roadmap implementation and planning accounting keys', () => {
-    expect(phaseMetric({ 'phase-5-impl': 760 }, 'Implement', 5)).toBe(760);
-    expect(phaseMetric({ 'phase-5-impl': 12.4 }, 'Review', 5)).toBe(12.4);
-    expect(phaseMetric({ 'phase-5-plan': 95 }, 'Plan', 5)).toBe(95);
-  });
-
-  it('retains phase-name and final-review fallbacks', () => {
-    expect(phaseMetric({ Implement: 120, Plan: 30 }, 'Implement')).toBe(120);
-    expect(phaseMetric({ implement: 120 }, 'Implement')).toBe(120);
-    expect(phaseMetric({ Review: 45 }, 'Final Review')).toBe(45);
-    expect(phaseMetric({ Plan: 5 }, 'Implement')).toBeUndefined();
-    expect(phaseMetric(undefined, 'Implement', 2)).toBeUndefined();
-  });
-});
-
-describe('displayModelName', () => {
-  const catalogue = {
-    providerOrder: ['opencode'],
-    providerModels: {
-      opencode: [
-        {
-          id: 'portkey/@fireworks/accounts/fireworks/models/glm-5p2[1.04M]',
-          displayName: 'GLM 5.2 (1.04M)',
-        },
-      ],
-    },
-    phaseDefaults: {},
-    phaseProviderModels: {},
-  };
-
-  it('uses catalogue display metadata for bare and provider-qualified ids', () => {
-    const model = 'portkey/@fireworks/accounts/fireworks/models/glm-5p2[1.04M]';
-    expect(displayModelName(model, catalogue)).toBe('GLM 5.2 (1.04M)');
-    expect(displayModelName(`opencode:${model}`, catalogue)).toBe('GLM 5.2 (1.04M)');
-  });
-
-  it('preserves colon tags in bare model ids when display metadata is unavailable', () => {
-    expect(
-      displayModelName('portkey/@fireworks/accounts/fireworks/models/glm-5p2[1.04M]', null),
-    ).toBe('glm-5p2[1.04M]');
-    expect(displayModelName('ollama/llama3.1:8b', null)).toBe('llama3.1:8b');
-    expect(displayModelName('claude-sonnet-5', null)).toBe('claude-sonnet-5');
-  });
-
-  it('strips a provider prefix without stripping the canonical colon tag', () => {
-    const taggedCatalogue = {
-      providerOrder: ['opencode'],
-      providerModels: {
-        opencode: [{ id: 'ollama/llama3.1:8b', displayName: 'Llama 3.1 8B' }],
-      },
-      phaseDefaults: {},
-      phaseProviderModels: {},
-    };
-
-    expect(displayModelName('opencode:ollama/llama3.1:8b', taggedCatalogue)).toBe('Llama 3.1 8B');
-    expect(displayModelName('opencode:ollama/llama3.1:8b', null)).toBe('llama3.1:8b');
-  });
-});
-
 describe('formatElapsed', () => {
   it('formats run time and hides it when there is none', () => {
     expect(formatElapsed(featureSnapshot({ timing: { totalSeconds: 760 } }))).toBe('12m 40s');
@@ -391,6 +330,36 @@ describe('isRunAtRest', () => {
     ]) {
       expect(isRunAtRest(status)).toBe(false);
     }
+  });
+});
+
+describe('runningPhaseSubline', () => {
+  it('renders the bare phase when there is no roadmap or iteration data', () => {
+    expect(runningPhaseSubline('Implement', undefined, undefined, undefined)).toBe('Implement');
+  });
+
+  it('appends the iteration when there is no roadmap', () => {
+    expect(runningPhaseSubline('Implement', undefined, undefined, 3)).toBe(
+      'Implement · iteration 3',
+    );
+  });
+
+  it('appends the roadmap phase-of-total when there is no iteration', () => {
+    expect(runningPhaseSubline('Implement', 2, 5, undefined)).toBe('Implement · phase 2/5');
+  });
+
+  it('appends both the roadmap phase-of-total and the iteration when both are present', () => {
+    expect(runningPhaseSubline('Implement', 2, 5, 3)).toBe('Implement · phase 2/5 · iteration 3');
+  });
+
+  it('never renders a placeholder for a missing phase', () => {
+    expect(runningPhaseSubline(undefined, 2, 5, 3)).toBeUndefined();
+    expect(runningPhaseSubline('', 2, 5, 3)).toBeUndefined();
+  });
+
+  it('omits the roadmap fragment unless both phase-of-total numbers are present', () => {
+    expect(runningPhaseSubline('Implement', 2, undefined, undefined)).toBe('Implement');
+    expect(runningPhaseSubline('Implement', undefined, 5, undefined)).toBe('Implement');
   });
 });
 

@@ -11,7 +11,8 @@ import type { ProviderReadiness, ReadinessSnapshot } from '../../../../shared/ip
 import { useNarrowViewport } from '../../hooks';
 import { deriveWizardState, type WizardStepId } from '../../wizard/deriveWizardState';
 import { parseIpcError, type WizardError } from '../../wizard/ipcError';
-import { PhaseSpine } from '../PhaseSpine';
+import { PhaseRailTrack } from '../../features/PhaseRailRow';
+import { stepSegments } from '../../features/phaseRail';
 
 const STEP_LABELS: Record<WizardStepId, string> = {
   providers: 'Providers',
@@ -101,8 +102,6 @@ export function SetupWizard({ snapshot, onSnapshot }: SetupWizardProps) {
     });
   }, [persistCollapsedHelp]);
 
-  const stages = derived.steps.map((id) => ({ id, label: STEP_LABELS[id] }));
-
   return (
     <section
       className="shell-card setup-wizard"
@@ -121,9 +120,11 @@ export function SetupWizard({ snapshot, onSnapshot }: SetupWizardProps) {
         </button>
       </header>
 
-      <PhaseSpine
-        stages={stages}
-        activeIndex={derived.activeIndex}
+      <PhaseRailTrack
+        segments={stepSegments(
+          derived.steps.map((id) => ({ id, label: STEP_LABELS[id] })),
+          derived.activeIndex,
+        )}
         tone={derived.configurationIssue !== null ? 'error' : 'progress'}
         label="Setup progress"
       />

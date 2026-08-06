@@ -1,10 +1,10 @@
 /**
  * Archive mode: a persistent, read-only cockpit view for a sealed run.
- * Renders a run selector, a "Sealed run · Read only" band, a muted phase
- * spine, historical artifacts/logs/timeline scoped to the selected run,
- * and a "Return to current run" control. No mutation controls are mounted.
- * Current-run invalidations produce non-disruptive badges while history
- * stays pinned.
+ * Renders a run selector, a "Sealed run · Read only" band, a sealed-tone
+ * phase rail, historical artifacts/logs/timeline scoped to the selected
+ * run, and a "Return to current run" control. No mutation controls are
+ * mounted. Current-run invalidations produce non-disruptive badges while
+ * history stays pinned.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
@@ -17,7 +17,8 @@ import {
   type SessionTranscript,
 } from '../../../shared/ipc';
 import { parseIpcError, type WizardError } from '../wizard/ipcError';
-import { PhaseSpine } from '../components/PhaseSpine';
+import { PhaseRail } from './PhaseRailRow';
+import { archiveRailSegments, railTrio } from './phaseRail';
 import {
   displayPhaseLabel,
   formatDuration,
@@ -269,6 +270,15 @@ export function ArchiveMode(props: ArchiveModeProps) {
   const activeIndex = detail?.currentPhase
     ? spineActiveIndexForPhase(detail.currentPhase, stages)
     : 0;
+  // Trio from the sealed run's totals only — Context is omitted (never
+  // "unavailable", just never asked for) and there is never a hold in
+  // archive mode, regardless of the status the run carried when sealed.
+  const railTrioEntries = railTrio({
+    totalSeconds: detail?.timing?.totalSeconds,
+    totalUsd: detail?.cost?.totalUsd,
+    contextPercentage: undefined,
+    hold: null,
+  });
 
   return (
     <>
@@ -338,9 +348,10 @@ export function ArchiveMode(props: ArchiveModeProps) {
         )}
       </div>
 
-      <PhaseSpine
-        stages={stages}
-        activeIndex={activeIndex}
+      <PhaseRail
+        segments={archiveRailSegments(stages, activeIndex)}
+        trio={railTrioEntries}
+        hold={null}
         tone="sealed"
         label="Historical pipeline"
       />

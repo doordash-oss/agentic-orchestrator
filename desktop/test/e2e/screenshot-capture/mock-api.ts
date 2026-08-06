@@ -408,16 +408,24 @@ const OVERVIEW_LANE_FEATURES: FeatureSnapshot[] = [
       cleanupWarnings: [],
     },
   },
-  overviewLaneSnapshot(
-    'readme-italian-1',
-    'translate README to Italian',
-    'Implementing',
-    'Implement',
-    ['agentic-orchestrator'],
-    '2026-07-23T08:30:00Z',
-    760,
-    'large',
-  ),
+  {
+    // Carries both a roadmap phase-of-total and an iteration number so the
+    // sidebar's running-row sub-line reads "Implement · phase N/M ·
+    // iteration K" beside the pip row (see the sidebar screenshot capture).
+    ...overviewLaneSnapshot(
+      'readme-italian-1',
+      'translate README to Italian',
+      'Implementing',
+      'Implement',
+      ['agentic-orchestrator'],
+      '2026-07-23T08:30:00Z',
+      760,
+      'large',
+    ),
+    currentRoadmapPhase: 3,
+    totalRoadmapPhases: 5,
+    currentIteration: 2,
+  },
   overviewLaneSnapshot(
     'taulu-ttl-1',
     'Taulu TTL compaction',
@@ -886,6 +894,15 @@ const CONNECTION_STATE: ConnectionState = {
   ownership: 'app-owned',
 };
 
+/** Mid-connect state for the connection-shell capture: two of the six
+ * lifecycle stages (Resolve, Discover) are behind it, `connect` is current. */
+const CONNECTION_STATE_MID_CONNECT: ConnectionState = {
+  status: 'attaching',
+  stage: 'connect',
+  detail: 'Attaching to the resolved runtime…',
+  ownership: 'none',
+};
+
 const AMA_TRANSCRIPT: SessionTranscript = {
   sessionId: CHAT_SESSION_ID,
   cursor: { total: 4, start: 0, end: 4 },
@@ -1084,7 +1101,10 @@ function makeMockApi(
 
   return {
     platform: 'darwin',
-    getConnectionStatus: () => Promise.resolve(CONNECTION_STATE),
+    getConnectionStatus: () =>
+      Promise.resolve(
+        scene === 'connection-shell' ? CONNECTION_STATE_MID_CONNECT : CONNECTION_STATE,
+      ),
     retryConnection: () => Promise.resolve(CONNECTION_STATE),
     restartConnection: () => Promise.resolve(CONNECTION_STATE),
     onConnectionChanged: (listener) => {

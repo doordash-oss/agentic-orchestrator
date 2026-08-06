@@ -2051,7 +2051,7 @@ export type ThemeInfo = z.output<typeof ThemeInfoSchema>;
 // Never store features, runs, configuration, credentials, or any
 // server-domain snapshot here.
 
-export const SETTINGS_SCHEMA_VERSION = 1;
+export const SETTINGS_SCHEMA_VERSION = 2;
 
 export const WindowBoundsSchema = z.strictObject({
   x: z.number().int(),
@@ -2105,34 +2105,21 @@ export function defaultNotificationPrefs(): NotificationPrefs {
 }
 
 /**
- * Open feature tabs: strictly identity plus presentation. The title is a
- * *hint* used only until the authoritative feature loads; feature state,
- * setup progress, and any other server-domain data are never stored here.
+ * Shell presentation preferences ONLY: which feature is active and whether
+ * the sidebar is collapsed. The active id is strictly identity — feature
+ * state, setup progress, and any other server-domain data are never stored
+ * here. v1's settings-tab sentinel ('__settings__') is mapped to null by the
+ * migration in settings.ts and must never be stored in this field.
  */
-export const FeatureTabSchema = z.strictObject({
-  featureId: FeatureIdSchema,
-  titleHint: z.string().max(200),
-  /** Selected sealed run for archive mode; null/absent means current run. */
-  selectedRunNumber: z.number().int().nonnegative().nullable().optional(),
-});
-
-export type FeatureTab = z.output<typeof FeatureTabSchema>;
-
-export const TabsPrefsSchema = z.strictObject({
-  /** Open feature tabs in display order. */
-  open: z.array(FeatureTabSchema).max(50),
-  /**
-   * Active tab; null means the Home tab. The sentinel '__settings__'
-   * represents the Settings tab — it passes the feature-id regex but is
-   * not a real feature id.
-   */
+export const ShellPrefsSchema = z.strictObject({
   activeFeatureId: FeatureIdSchema.nullable(),
+  sidebarCollapsed: z.boolean(),
 });
 
-export type TabsPrefs = z.output<typeof TabsPrefsSchema>;
+export type ShellPrefs = z.output<typeof ShellPrefsSchema>;
 
-export function defaultTabsPrefs(): TabsPrefs {
-  return { open: [], activeFeatureId: null };
+export function defaultShellPrefs(): ShellPrefs {
+  return { activeFeatureId: null, sidebarCollapsed: false };
 }
 
 export const SettingsSchema = z.strictObject({
@@ -2148,7 +2135,7 @@ export const SettingsSchema = z.strictObject({
   wizard: WizardPrefsSchema.default(defaultWizardPrefs()),
   ama: AmaPrefsSchema.default(defaultAmaPrefs()),
   notifications: NotificationPrefsSchema.default(defaultNotificationPrefs()),
-  tabs: TabsPrefsSchema.default(defaultTabsPrefs()),
+  shell: ShellPrefsSchema.default(defaultShellPrefs()),
 });
 
 export type Settings = z.output<typeof SettingsSchema>;
@@ -2160,7 +2147,7 @@ export const SettingsPatchSchema = z.strictObject({
   wizard: WizardPrefsSchema.optional(),
   ama: AmaPrefsSchema.optional(),
   notifications: NotificationPrefsSchema.optional(),
-  tabs: TabsPrefsSchema.optional(),
+  shell: ShellPrefsSchema.optional(),
 });
 
 export type SettingsPatch = z.output<typeof SettingsPatchSchema>;
@@ -2174,7 +2161,7 @@ export function defaultSettings(): Settings {
     wizard: defaultWizardPrefs(),
     ama: defaultAmaPrefs(),
     notifications: defaultNotificationPrefs(),
-    tabs: defaultTabsPrefs(),
+    shell: defaultShellPrefs(),
   };
 }
 

@@ -194,7 +194,7 @@ test('packaged local-merge-rebase completion: conflict, rebase, retry, done, cle
     transcript.section('Reopen merge modal and retry merge to success');
     // Re-enter the feature after the rebase pass's persisted terminal state. This mirrors a user
     // returning from the pass workspace and ensures the retry is driven by a fresh snapshot.
-    await handle.page.getByRole('tab', { name: 'Home' }).click();
+    await handle.page.getByRole('option', { name: 'Overview' }).click();
     const refreshedCockpit = await openCompletion(handle, featureName);
     await refreshedCockpit.getByRole('button', { name: 'Merge', exact: true }).click();
     const retryMerge = mergeModal.getByRole('button', { name: 'Merge', exact: true });
@@ -233,7 +233,7 @@ test('packaged local-merge-rebase completion: conflict, rebase, retry, done, cle
     transcript.section('Delete feature through the cockpit overflow');
     // Deletion moved out of completion into the cockpit overflow menu; the confirm
     // dialog is named after the feature and gates only on the explicit confirm button.
-    await refreshedCockpit.getByLabel('More actions').click();
+    await handle.page.getByLabel('More actions').click();
     await handle.page.getByRole('menuitem', { name: 'Delete feature' }).click();
     const deleteDialog = handle.page.getByRole('dialog', { name: /Delete .+\?/ });
     await expect(deleteDialog).toBeVisible({ timeout: 15_000 });
@@ -241,11 +241,11 @@ test('packaged local-merge-rebase completion: conflict, rebase, retry, done, cle
     await expect(deleteButton).toBeEnabled();
     await deleteButton.click();
     await waitForFeatureMissing(handle, featureId);
-    await expect(handle.page.getByRole('tab', { name: 'Home' })).toHaveAttribute(
+    await expect(handle.page.getByRole('option', { name: 'Overview' })).toHaveAttribute(
       'aria-selected',
       'true',
     );
-    await expect(handle.page.getByRole('tab', { name: featureName })).toHaveCount(0);
+    await expect(handle.page.getByRole('option', { name: featureName })).toHaveCount(0);
     transcript.step(
       'delete confirmed through the overflow menu and removed server-side feature state',
     );
@@ -260,10 +260,10 @@ test('packaged local-merge-rebase completion: conflict, rebase, retry, done, cle
 });
 
 async function openCompletion(handle: AppHandle, featureName: string): Promise<Locator> {
-  await expect(handle.page.getByRole('tab', { name: featureName })).toBeVisible({
+  await expect(handle.page.getByRole('option', { name: featureName })).toBeVisible({
     timeout: 60_000,
   });
-  await handle.page.getByRole('tab', { name: featureName }).click();
+  await handle.page.getByRole('option', { name: featureName }).click();
   const cockpit = handle.page.getByLabel(`Feature ${featureName}`);
   await expect(cockpit).toBeVisible({ timeout: 30_000 });
   return cockpit;

@@ -14,13 +14,7 @@ describe('CommandPalette', () => {
     const mock = installAgenticoMock({
       settings: {
         ...defaultSettings(),
-        tabs: {
-          open: [
-            { featureId: staleFeatureId, titleHint: 'Stale tab' },
-            { featureId: activeFeatureId, titleHint: 'Active tab' },
-          ],
-          activeFeatureId: staleFeatureId,
-        },
+        shell: { activeFeatureId: staleFeatureId, sidebarCollapsed: false },
       },
     });
     mock.api.getFeature.mockImplementation((featureId: string) =>
@@ -40,9 +34,9 @@ describe('CommandPalette', () => {
 
     render(
       <>
-        <button id={`tab-${activeFeatureId}`} role="tab" aria-selected="true">
-          Active tab
-        </button>
+        <div id={`sidebar-row-${activeFeatureId}`} role="option" aria-selected="true">
+          Active row
+        </div>
         <CommandPalette
           ready
           routeRequest={{ id: 1, event: { target: 'palette' } }}

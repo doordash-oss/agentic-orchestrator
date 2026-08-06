@@ -317,22 +317,56 @@ export async function setWindowSize(
   await handle.page.waitForTimeout(250);
 }
 
-/** Switches the theme through the app's own radiogroup and waits for CSS. */
+/**
+ * Flips the resolved theme via the same IPC channel the real Settings ▸
+ * Appearance radiogroup uses, and waits for the CSS to settle.
+ *
+ * Earlier this drove the actual Settings UI (open via the sidebar's
+ * "Settings" button, click the radio, close via "Back"). That UI is a
+ * temporary, unpersisted content-pane view layered over whatever the caller
+ * was looking at, and opening it while a feature-creation draft is open
+ * either abandons the draft (if untouched) or surfaces a "Discard feature
+ * draft?" confirmation instead of Settings (once any field is filled) —
+ * both of which broke the many callers that just want a themed screenshot
+ * mid-flow, not to exercise the switcher itself.
+ *
+ * Going straight through `setThemePreference` sidesteps all of that (and the
+ * ~700px sidebar auto-collapse hiding the Settings button) without touching
+ * whatever view is on screen. But `useTheme()` (renderer/src/hooks.ts) only
+ * mirrors a change onto `<html data-theme>` when its own `setPreference`
+ * runs, or via the `agentico-theme-sync` window CustomEvent it dispatches
+ * for sibling instances — calling the IPC method directly never reaches
+ * either path, so the mounted hook never re-renders. Dispatching that same
+ * sync event ourselves with the IPC response is what the real switcher does
+ * internally, just triggered from test code instead of another `useTheme()`
+ * instance. The real Settings ▸ Appearance radiogroup is still exercised
+ * directly by `window-chrome.spec.ts`, which is the one place that cares
+ * about the UI mechanism itself.
+ */
 export async function setTheme(handle: AppHandle, theme: 'light' | 'dark'): Promise<void> {
-  // click (not check): the radio is React-controlled and only flips after
-  // the theme IPC round-trip, which check() would misread as a failure.
-  const radio = handle.page
-    .locator('.theme-switcher')
-    .getByRole('radio', { name: theme === 'dark' ? 'Dark' : 'Light' });
-  // Evidence can intentionally capture the open inbox, which covers the
-  // theme picker. Invoke the real DOM control directly so React receives its
-  // change event without altering the captured inbox state.
-  await radio.evaluate((input: HTMLInputElement) => input.click());
+  await handle.page.evaluate(async (preference) => {
+    const info = await window.agentico.setThemePreference(preference);
+    window.dispatchEvent(new CustomEvent('agentico-theme-sync', { detail: info }));
+  }, theme);
   await expect(handle.page.locator(`html[data-theme="${theme}"]`)).toBeAttached();
   await handle.page.waitForTimeout(150); // let colors settle before screenshots
 }
 
 /** Captures the same named moment in both themes (light last, restoring it). */
+/**
+ * Opens the settings content-pane view via the native "Settings" menu item
+ * (⌘,'s own dispatch path: native menu → routeRequest target 'settings'),
+ * rather than the sidebar footer — the sidebar has no Settings button; it
+ * carries only the runtime status and the AMA hint per the Bench mock.
+ */
+export async function openSettings(handle: AppHandle): Promise<void> {
+  await handle.app.evaluate(({ BrowserWindow, Menu }) => {
+    const item = Menu.getApplicationMenu()?.getMenuItemById('global.settings');
+    if (item == null) throw new Error('menu item global.settings missing');
+    item.click(undefined, BrowserWindow.getAllWindows()[0], undefined);
+  });
+}
+
 export async function evidenceShotBothThemes(handle: AppHandle, baseName: string): Promise<void> {
   await setTheme(handle, 'dark');
   await evidenceShot(handle, `${baseName}-dark`);

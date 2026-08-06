@@ -47,7 +47,8 @@ export function displayFeatureMessage(message: string): string {
   );
 }
 
-const ACTIVE_STATUSES = new Set([
+/** Top-level statuses that represent actively executing phase work. */
+export const ACTIVE_STATUSES = new Set([
   'SettingUpWorktrees',
   'BuildingKB',
   'Inquiring',

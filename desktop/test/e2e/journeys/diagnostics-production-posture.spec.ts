@@ -6,6 +6,7 @@ import {
   assertNoLeakedProcesses,
   closeApp,
   launchApp,
+  openSettings,
   persistAppLogs,
   type AppHandle,
 } from '../helpers/app';
@@ -78,7 +79,7 @@ test('packaged diagnostics stay local, bounded, redacted, and clearable without 
     expect(JSON.stringify(before)).not.toContain('diagnosticsRoot');
     transcript.json('diagnostics before clear', before);
 
-    await handle.page.getByRole('tab', { name: 'Settings' }).click();
+    await openSettings(handle);
     await expect(handle.page.getByRole('heading', { name: 'Diagnostics' })).toBeVisible();
     await expect(handle.page.getByRole('button', { name: 'Reveal Folder' })).toBeVisible();
     await handle.page.getByRole('button', { name: 'Clear Diagnostics' }).click();

@@ -36,84 +36,140 @@ body {
 }
 
 /*
- * The header is real window chrome now: a minimal, throwaway Bench
- * "material bridge" — deleted along with this header once the real shell
- * replaces it. The translucent background lets macOS window vibrancy show
- * through with real pixels; `--material`/`--hairline` already resolve to
- * their opaque/solid Linux equivalents (tokens.css), so this rule needs no
- * platform branching. The hard hairline edge is deliberate — no gradient or
- * shadow fill. `flex-wrap` lets the trailing controls (runtime status,
- * attention bell, theme switcher) drop to a second row instead of running
- * off-canvas once the darwin traffic-light padding and control widths
- * exceed the 400px minimum window width.
+ * The 52px translucent toolbar spans the content side of the shell only —
+ * never the sidebar. A hard scroll-edge hairline (not a gradient/shadow)
+ * separates it from the scrollable content below, using the same
+ * Bench material/hairline tokens as the sidebar.
  */
-.global-bar {
-  min-height: 48px;
+.toolbar {
+  min-height: 52px;
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
-  gap: var(--space-2) var(--space-4);
-  padding: var(--space-2) var(--space-4);
+  gap: var(--space-3);
+  padding: 0 var(--space-4);
   border-bottom: var(--bench-hairline-width) solid var(--hairline);
   background: var(--material);
 }
 
 /*
- * macOS only: the header becomes the traffic-light-clearing drag region.
- * Leading padding keeps every control clear of the inset lights (18/20 +
- * ~54px cluster width) down to the 400px minimum width; the drag region
- * itself excludes every interactive child so the gaps between them (brand
- * mark, runtime status text) stay draggable while every control stays
- * clickable. Linux keeps the native frame: no padding, no drag region.
+ * macOS only: the toolbar (and the sidebar's own header strip, below) is a
+ * traffic-light-clearing drag region, same pattern as the header this
+ * replaces. When the sidebar is visible it already sits under the lights at
+ * x=0, so the toolbar (which starts to its right) needs no left padding;
+ * once the sidebar collapses the toolbar spans the full width and picks up
+ * the same clearance the sidebar header carried. Interactive children always
+ * opt out of the drag region so they stay clickable.
  */
-:root[data-platform='darwin'] .global-bar {
-  padding-left: 80px;
+:root[data-platform='darwin'] .toolbar {
   -webkit-app-region: drag;
   -webkit-user-select: none;
 }
-:root[data-platform='darwin'] .global-bar button,
-:root[data-platform='darwin'] .global-bar input,
-:root[data-platform='darwin'] .global-bar [role='radiogroup'] {
+:root[data-platform='darwin'] .workspace[data-sidebar-collapsed='true'] .toolbar {
+  padding-left: 80px;
+}
+:root[data-platform='darwin'] .toolbar button,
+:root[data-platform='darwin'] .toolbar input {
   -webkit-app-region: no-drag;
 }
 
-.global-bar__brand {
-  display: inline-flex;
+.toolbar__leading {
+  flex: 0 0 auto;
+  display: flex;
   align-items: center;
-  gap: var(--space-2);
-  font-family: var(--font-display);
-  font-size: 21px;
-  font-weight: 600;
-  letter-spacing: 0.03em;
 }
-.global-bar__brand h1 {
-  margin: 0;
-  font: inherit;
-}
-.global-bar__mark {
+
+.toolbar__sidebar-toggle {
   display: grid;
   place-items: center;
-  width: 22px;
-  height: 22px;
-  background: var(--color-signal);
-  color: var(--color-bg);
-  font-family: var(--font-mono);
-  font-size: 12px;
+  width: 28px;
+  height: 28px;
+  background: transparent;
+  border: none;
+  border-radius: var(--bench-radius-control);
+  color: var(--muted);
+  cursor: pointer;
 }
-.global-bar__runtime {
-  margin: 0 auto 0 0;
-  color: var(--color-muted);
-  font-family: var(--font-mono);
-  font-size: 11px;
+
+.toolbar__sidebar-toggle:hover {
+  background: var(--raised);
+  color: var(--text);
 }
-.global-bar__runtime[data-tone='ready'] span {
-  color: var(--color-success);
+
+.toolbar__title {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
 }
-.global-bar__runtime[data-tone='progress'] span {
-  color: var(--color-accent);
+
+.toolbar__title-name {
+  margin: 0;
+  font: 500 17px var(--bench-font-serif);
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.global-bar__runtime[data-tone='error'] span {
-  color: var(--color-danger);
+
+.toolbar__title-subline {
+  margin: 0;
+  font: 11px var(--bench-font-mono);
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.toolbar__trailing {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.toolbar__trailing .attention-bell {
+  margin-left: 0;
+}
+
+.toolbar__overflow-slot,
+.toolbar__inspector-slot {
+  display: contents;
+}
+
+/* The cockpit portals its wide-layout inspector-toggle button into
+ * .toolbar__inspector-slot; this class styles it wherever it
+ * renders, portaled or inline. */
+.toolbar__inspector-toggle {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  background: transparent;
+  border: none;
+  border-radius: var(--bench-radius-control);
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.toolbar__inspector-toggle:hover {
+  background: var(--raised);
+  color: var(--text);
+}
+
+.toolbar__inspector-toggle[aria-pressed='true'] {
+  background: var(--raised);
+  color: var(--accent);
+}
+
+/* The content column: the toolbar, the passive update notice, and the
+ * scrollable content pane, stacked — everything to the right of the sidebar. */
+.content-column {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 .update-notice {
@@ -3652,25 +3708,6 @@ body {
   border-color: var(--color-signal);
 }
 
-/* --- Theme switcher -------------------------------------------------------------- */
-
-.theme-switcher {
-  display: flex;
-  gap: var(--space-3);
-  align-items: center;
-  border: 1px solid var(--color-hairline);
-  border-radius: var(--radius);
-  padding: var(--space-1) var(--space-2);
-  background: transparent;
-}
-
-.theme-switcher__option {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-1);
-  font-size: 13px;
-}
-
 .sr-only {
   position: absolute;
   width: 1px;
@@ -4209,164 +4246,281 @@ body {
   accent-color: var(--color-signal);
 }
 
-/* --- Workspace tabs ---------------------------------------------------------- */
+/* --- Workspace: Bench sidebar + content pane --------------------------------- */
 
 .workspace {
   width: 100%;
   min-height: 0;
   flex: 1;
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-columns: 260px minmax(0, 1fr);
   background: var(--color-bg);
 }
 
-.tab-strip__rail {
-  display: flex;
-  min-width: 0;
-  height: 45px;
-  border-bottom: 1px solid var(--color-hairline);
-  background: var(--color-panel);
-}
-.tab-strip {
-  display: flex;
-  align-items: center;
-  gap: var(--space-1);
-  min-width: 0;
-  overflow-x: auto;
-  overflow-y: hidden;
-  padding: 0 var(--space-3);
-  scrollbar-width: thin;
-  scrollbar-color: color-mix(in srgb, var(--color-muted) 42%, transparent) transparent;
-  flex: 1;
+/* Collapsing the sidebar (the toolbar's leading toggle) hands its column to
+ * the content side entirely — the toolbar then spans the full width and
+ * picks up the traffic-light clearance the sidebar header carried (above). */
+.workspace[data-sidebar-collapsed='true'] {
+  grid-template-columns: minmax(0, 1fr);
 }
 
-.tab-strip::-webkit-scrollbar {
-  height: 4px;
-}
-
-.tab-strip::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.tab-strip::-webkit-scrollbar-thumb {
-  background: color-mix(in srgb, var(--color-muted) 42%, transparent);
-  border-radius: 99px;
-}
-
-.tab-strip__entry {
-  display: inline-flex;
-  align-items: center;
-  flex: 0 0 auto;
-}
-
-.tab-strip__tab {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  font-family: var(--font-body);
-  font-weight: 700;
-  font-size: 13px;
-  color: var(--color-muted);
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: var(--radius) var(--radius) 0 0;
-  padding: var(--space-2) var(--space-3);
-  cursor: pointer;
-  max-width: 220px;
-  white-space: nowrap;
-}
-
-.tab-strip__overflow-wrap {
-  position: relative;
-  flex: 0 0 auto;
-  padding: var(--space-1) var(--space-3);
-  border-left: 1px solid var(--color-hairline);
-}
-.tab-strip__overflow {
-  height: 31px;
-  color: var(--color-text);
-  background: transparent;
-  border: 1px solid var(--color-hairline);
-  border-radius: var(--radius);
-  font: 500 11px var(--font-mono);
-  cursor: pointer;
-}
-.tab-strip__menu {
-  position: absolute;
-  right: var(--space-3);
-  top: 40px;
-  z-index: 30;
-  min-width: 240px;
-  max-height: min(400px, 70vh);
-  overflow: auto;
-  padding: var(--space-1);
-  background: var(--color-panel);
-  border: 1px solid var(--color-hairline);
-  box-shadow: 0 12px 30px color-mix(in srgb, var(--color-bg) 75%, transparent);
-}
-.tab-strip__menu button {
-  width: 100%;
-  border: 0;
-  background: transparent;
-  color: var(--color-text);
-  padding: var(--space-2);
-  text-align: left;
-  font: 13px var(--font-body);
-  cursor: pointer;
-}
-.tab-strip__menu button:hover {
-  background: color-mix(in srgb, var(--color-signal) 12%, transparent);
-}
-
-.tab-strip__tab > span:first-child {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-/* Active navigation: a quiet signal edge marks the selected tab. */
-.tab-strip__tab[aria-selected='true'] {
-  color: var(--color-text);
-  border-color: var(--color-hairline);
-  border-bottom-color: var(--color-panel);
-  margin-bottom: -1px;
-  box-shadow: inset 0 2px 0 var(--color-signal);
-}
-
-.tab-strip__close {
-  background: transparent;
-  border: 0;
-  color: var(--color-muted);
-  font-size: 11px;
-  cursor: pointer;
-  padding: var(--space-1);
-  border-radius: var(--radius);
-}
-
-.tab-strip__close:hover {
-  color: var(--color-danger);
-}
-
-.tab-panel {
+/* The translucent Bench source list: a pinned Overview row above five
+ * disclosable lane sections. Uses the Bench material/hairline token set,
+ * not the legacy --color-* tokens the rest of the shell still runs on. */
+.sidebar {
   display: flex;
   flex-direction: column;
   min-height: 0;
-  overflow: auto;
-  padding: clamp(20px, 3vw, 44px);
-  gap: var(--space-5);
+  min-width: 0;
+  background: var(--material);
+  border-right: var(--bench-hairline-width) solid var(--material-edge);
 }
 
-.tab-panel[hidden] {
+.sidebar[data-collapsed='true'] {
   display: none;
 }
 
-/* The creation wizard's sticky action bar pins at bottom: 0 of its scroll
- * container's content box. A bottom padding on the scroll container would
- * leave a strip below the bar where panel content keeps painting and clips at
- * the pane edge, so the create-view panel drops that bottom padding; the
- * wizard's own panel padding-bottom still clears the bar at scroll-bottom. */
-.tab-panel--create {
-  padding-bottom: 0;
+/* An empty drag strip the same height as the toolbar, so the top of the
+ * window — sidebar included — stays one continuous draggable band with the
+ * traffic lights cleared, exactly as the deleted global header was. */
+.sidebar__header {
+  flex: 0 0 auto;
+  min-height: 52px;
+  border-bottom: var(--bench-hairline-width) solid var(--hairline);
+}
+
+:root[data-platform='darwin'] .sidebar__header {
+  -webkit-app-region: drag;
+  -webkit-user-select: none;
+}
+
+.sidebar__list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--space-2);
+}
+
+.sidebar__footer {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-top: var(--bench-hairline-width) solid var(--material-edge);
+  color: var(--muted);
+  font: 11px var(--bench-font-text);
+}
+
+.sidebar__runtime {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.sidebar__footer[data-tone='ready'] .sidebar__runtime span {
+  color: var(--ok);
+}
+
+.sidebar__footer[data-tone='progress'] .sidebar__runtime span {
+  color: var(--accent);
+}
+
+.sidebar__footer[data-tone='error'] .sidebar__runtime span {
+  color: var(--bad);
+}
+
+.sidebar__ama {
+  margin-left: auto;
+  padding: 0;
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  font: 11px var(--bench-font-text);
+  cursor: pointer;
+}
+
+.sidebar__ama:hover {
+  color: var(--text);
+}
+
+.sidebar__lane {
+  margin-top: var(--space-2);
+}
+
+.sidebar__lane-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  cursor: pointer;
+  list-style: none;
+  color: var(--faint);
+  font: 600 11px/1.4 var(--bench-font-text);
+}
+
+.sidebar__lane-summary::-webkit-details-marker {
+  display: none;
+}
+
+.sidebar__lane-count {
+  font: 600 11px/1.4 var(--bench-font-text);
+  color: var(--faint);
+}
+
+.sidebar__lane-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.sidebar__row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--bench-radius-control);
+  cursor: pointer;
+  min-width: 0;
+}
+
+.sidebar__row:hover {
+  background: var(--raised);
+}
+
+.sidebar__row[aria-selected='true'] {
+  background: var(--accent);
+}
+
+.sidebar__row[aria-selected='true'] .sidebar__row-name {
+  color: #fff;
+}
+
+.sidebar__row[aria-selected='true'] .sidebar__row-subline {
+  color: rgb(255 255 255 / 78%);
+}
+
+.sidebar__row[aria-selected='true'] .sidebar__row-glyph {
+  background: rgb(255 255 255 / 78%);
+}
+
+.sidebar__row[aria-selected='true'] .pip-rail__pip {
+  background: rgb(255 255 255 / 82%);
+}
+
+.sidebar__row[aria-selected='true'] .pip-rail__pip[data-state='upcoming'] {
+  background: rgb(255 255 255 / 30%);
+}
+
+.sidebar__row-glyph {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--faint);
+}
+
+.sidebar__row-glyph[data-tone='attention'] {
+  background: var(--attention);
+}
+
+.sidebar__row-glyph[data-tone='progress'] {
+  background: var(--accent);
+}
+
+.sidebar__row-glyph[data-tone='ok'] {
+  background: var(--ok);
+}
+
+.sidebar__row-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.sidebar__row-name {
+  font: 500 13px var(--bench-font-text);
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar__row-subline {
+  font: 11px var(--bench-font-mono);
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Row-scale progress pip strip: a compact stand-in for FlightRail, sized
+ * for a sidebar row rather than a card or cockpit header. */
+.pip-rail {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.pip-rail__pip {
+  width: 6px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--hairline);
+}
+
+.pip-rail__pip[data-state='done'] {
+  background: var(--faint);
+}
+
+.pip-rail[data-tone='progress'] .pip-rail__pip[data-state='active'] {
+  background: var(--accent);
+}
+
+.pip-rail[data-tone='attention'] .pip-rail__pip[data-state='active'] {
+  background: var(--attention);
+}
+
+.content-pane {
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: auto;
+  padding: clamp(20px, 3vw, 44px);
+  gap: var(--space-5);
+  background: var(--color-bg);
+}
+
+/* The feature cockpit is a fixed instrument frame that scrolls internally,
+ * so the wheel always lands on the one surface that owns the center stage. */
+.content-pane--flush {
+  overflow: hidden;
+  gap: 0;
+  padding: clamp(12px, 2vw, 28px);
+}
+
+.content-pane__settings {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-height: 0;
+}
+
+.content-pane__settings-header {
+  flex: 0 0 auto;
+}
+
+.home-surface {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  min-height: 0;
 }
 
 .home-surface__header {
@@ -5626,14 +5780,6 @@ body {
   }
 }
 
-/* The feature tab is a fixed instrument frame: the panel itself never scrolls,
- * so the wheel always lands on the one surface that owns the center stage. */
-.tab-panel--cockpit {
-  overflow: hidden;
-  gap: 0;
-  padding: clamp(12px, 2vw, 28px);
-}
-
 .cockpit {
   display: flex;
   flex-direction: column;
@@ -5642,12 +5788,19 @@ body {
   height: 100%;
 }
 
+/* Closed by default: a single content column until the wide-layout
+ * inspector toggle opens the trailing split-view pane, which adds the second
+ * track rather than reserving space for it up front. */
 .cockpit__content {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(260px, 320px);
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--space-4);
   min-height: 0;
   flex: 1;
+}
+
+.cockpit__content--inspector-open {
+  grid-template-columns: minmax(0, 1fr) minmax(260px, 320px);
 }
 
 /* The stage carries exactly one surface at a time; that surface owns the only
@@ -6483,7 +6636,8 @@ body {
 }
 
 @media (max-width: 900px) {
-  .cockpit__content {
+  .cockpit__content,
+  .cockpit__content--inspector-open {
     grid-template-columns: 1fr;
   }
   .run-timeline__layout {

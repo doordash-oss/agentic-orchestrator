@@ -44,6 +44,13 @@ export interface AttentionInboxProps {
   setDrafts: Dispatch<SetStateAction<AttentionDrafts>>;
   onJump(featureId: string, attentionId?: string): void;
   openRequest?: { id: number; attentionId?: string } | null;
+  /**
+   * Removes the bell trigger from layout and the accessibility tree via the
+   * `hidden` attribute (Overview, per the mock — the toolbar shows it only
+   * once a feature is selected) while keeping the drawer, the ⌘⇧A binding,
+   * and route-driven opening fully live.
+   */
+  hideTrigger?: boolean;
 }
 
 export interface AttentionSubmitOptions {
@@ -94,6 +101,7 @@ export function AttentionInbox({
   setDrafts,
   onJump,
   openRequest = null,
+  hideTrigger = false,
 }: AttentionInboxProps) {
   const [open, setOpen] = useState(false);
   const [expanded, setExpanded] = useState<string | null>(null);
@@ -209,6 +217,7 @@ export function AttentionInbox({
         ref={bell}
         type="button"
         className="attention-bell"
+        hidden={hideTrigger}
         data-empty={actionableCount === 0}
         aria-label={`Attention inbox, ${actionableCount} pending`}
         aria-expanded={open}

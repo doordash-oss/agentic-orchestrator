@@ -180,10 +180,10 @@ test('packaged publish partial retry: push succeeds, PR creation fails, retry sc
 });
 
 async function openCompletion(handle: AppHandle, featureName: string): Promise<Locator> {
-  await expect(handle.page.getByRole('tab', { name: featureName })).toBeVisible({
+  await expect(handle.page.getByRole('option', { name: featureName })).toBeVisible({
     timeout: 60_000,
   });
-  await handle.page.getByRole('tab', { name: featureName }).click();
+  await handle.page.getByRole('option', { name: featureName }).click();
   const cockpit = handle.page.getByLabel(`Feature ${featureName}`);
   await expect(cockpit).toBeVisible({ timeout: 30_000 });
   return cockpit;

@@ -63,10 +63,10 @@ test('zero-gap completion and global parity: diff, irreversible impact, AMA, rec
     seedCompletion(world, feature!.id);
 
     handle = await launchApp(world, testInfo, { traceName: 'zero-gap-completion-global' });
-    await expect(handle.page.getByRole('tab', { name: featureName })).toBeVisible({
+    await expect(handle.page.getByRole('option', { name: featureName })).toBeVisible({
       timeout: 60_000,
     });
-    await handle.page.getByRole('tab', { name: featureName }).click();
+    await handle.page.getByRole('option', { name: featureName }).click();
     const cockpit = handle.page.getByLabel(`Feature ${featureName}`);
     await expect(cockpit).toBeVisible({ timeout: 30_000 });
 
@@ -125,7 +125,7 @@ test('zero-gap completion and global parity: diff, irreversible impact, AMA, rec
       timeout: 60_000,
     });
 
-    await handle.page.getByRole('tab', { name: 'Home' }).click();
+    await handle.page.getByRole('option', { name: 'Overview' }).click();
     const recovery = handle.page.getByRole('region', { name: 'Recovery workspace' });
     await expect(recovery).toBeVisible();
     await expect(recovery.getByRole('button', { name: 'Skip' })).toHaveCount(0);

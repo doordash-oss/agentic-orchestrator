@@ -71,17 +71,17 @@ test('lifecycle passes: resume, retry, restart, rebase, refactor child', async (
     transcript.step('seeded feature to Published status so pass actions are enabled');
 
     handle = await launchApp(world, testInfo, { traceName: 'lifecycle-passes-seeded' });
-    const homeTab = handle.page.getByRole('tab', { name: 'Home' });
-    await expect(homeTab).toBeVisible({ timeout: 60_000 });
-    await homeTab.click();
+    const overviewOption = handle.page.getByRole('option', { name: 'Overview' });
+    await expect(overviewOption).toBeVisible({ timeout: 60_000 });
+    await overviewOption.click();
     await expect(handle.page.getByRole('button', { name: 'New feature' })).toBeVisible({
       timeout: 10_000,
     });
     transcript.step('relaunched against seeded Published state');
 
     transcript.section('Open feature cockpit and aftercare pass actions');
-    const featureTab = handle.page.getByRole('tab', { name: featureName });
-    await featureTab.click();
+    const featureOption = handle.page.getByRole('option', { name: featureName });
+    await featureOption.click();
     const seededCockpit = handle.page.getByLabel(`Feature ${featureName}`);
     await expect(seededCockpit).toBeVisible({ timeout: 30_000 });
 
@@ -106,9 +106,8 @@ test('lifecycle passes: resume, retry, restart, rebase, refactor child', async (
     // guard disables the parent-level restart while a pass is active, and the
     // pass's own bar-level "Restart" dispatches without a confirmation. The
     // parent feature restart lives in the overflow menu.
-    const actionsGroup = seededCockpit.getByRole('group', { name: 'Feature actions' });
-    await actionsGroup.getByLabel('More actions').click();
-    const restartButton = actionsGroup.getByRole('menuitem', { name: 'Restart', exact: true });
+    await handle.page.getByLabel('More actions').click();
+    const restartButton = handle.page.getByRole('menuitem', { name: 'Restart', exact: true });
     await expect(restartButton).toBeVisible({ timeout: 10_000 });
     await expect(restartButton).toBeEnabled({ timeout: 60_000 });
     await restartButton.click();

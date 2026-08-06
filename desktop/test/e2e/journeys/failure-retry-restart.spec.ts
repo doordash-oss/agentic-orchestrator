@@ -128,7 +128,7 @@ test('partial setup failure, retry on the same feature, restart persistence', as
 
     transcript.section('Journey 2 — relaunch against the same state dir');
     handle = await launchApp(world, testInfo, { traceName: 'failure-retry-restart-relaunch' });
-    // The persisted tab (identity + title hint only) restores; the feature
+    // The persisted shell selection (identity only) restores; the feature
     // itself is reloaded from the server, not from any local cache.
     const restoredCockpit = handle.page.getByLabel('Feature Two Repo Feature');
     await expect(restoredCockpit).toBeVisible({ timeout: 60_000 });
@@ -144,11 +144,10 @@ test('partial setup failure, retry on the same feature, restart persistence', as
     expect(restored.setup?.status).toBe('done');
     expect(restored.setup?.attempt).toBe(2);
     const settings = await handle.page.evaluate(() => window.agentico.getSettings());
-    expect(settings.tabs.open.map((tab) => tab.featureId)).toEqual([featureId]);
-    expect(settings.tabs.activeFeatureId).toBe(featureId);
-    transcript.json('restored tab prefs (identity + presentation only)', settings.tabs);
+    expect(settings.shell.activeFeatureId).toBe(featureId);
+    transcript.json('restored shell prefs (identity only)', settings.shell);
     transcript.step(
-      'relaunch restored the feature tab and reloaded the authoritative Ready-to-start state from the server',
+      'relaunch restored the selected feature and reloaded the authoritative Ready-to-start state from the server',
     );
 
     // Still nothing started after failure, retry, and restart.

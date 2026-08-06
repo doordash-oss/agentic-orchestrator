@@ -50,17 +50,20 @@ test('packaged real-server start, semantic watch, history, and authoritative sto
     });
     await evidenceShot(handle, 'cockpit-ready-light-wide');
 
+    // The sidebar mounts exactly one cockpit at a time: switching away
+    // unmounts it (unlike the old tab strip, which kept every tab's panel
+    // mounted-but-hidden), so a retained handle to this instance is expected
+    // to disconnect on navigation rather than persist across it.
     const retainedCockpit = await cockpit.elementHandle();
     expect(retainedCockpit).not.toBeNull();
-    await handle.page.getByRole('tab', { name: 'Home' }).click();
-    expect(await retainedCockpit!.evaluate((node) => node.isConnected)).toBe(true);
+    await handle.page.getByRole('option', { name: 'Overview' }).click();
+    await expect.poll(() => retainedCockpit!.evaluate((node) => node.isConnected)).toBe(false);
     await expect(cockpit).toBeHidden();
     const featureList = handle.page.getByRole('region', { name: 'Existing features' });
     await expect(featureList).toContainText('Packaged Signal Journey');
     await featureList.scrollIntoViewIfNeeded();
     await evidenceShot(handle, 'cockpit-intervention-dashboard-light-wide');
-    await handle.page.getByRole('tab', { name: 'Packaged Signal Journey' }).click();
-    expect(await retainedCockpit!.evaluate((node) => node.isConnected)).toBe(true);
+    await handle.page.getByRole('option', { name: 'Packaged Signal Journey' }).click();
     await expect(cockpit).toBeVisible();
     await expect(cockpit.getByText(/Loading .* from the runtime/)).toHaveCount(0);
 
@@ -211,7 +214,7 @@ test('packaged real-server start, semantic watch, history, and authoritative sto
     expect(['running', 'starting', 'stopping']).not.toContain(authoritative.status.toLowerCase());
     await expect(cockpit.getByText(authoritative.status, { exact: true }).first()).toBeVisible();
 
-    await handle.page.getByRole('tab', { name: 'Home' }).click();
+    await handle.page.getByRole('option', { name: 'Overview' }).click();
     await expect(handle.page.getByRole('region', { name: 'Existing features' })).toContainText(
       'Packaged Signal Journey',
     );

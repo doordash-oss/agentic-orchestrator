@@ -16,6 +16,7 @@ import {
   type RefObject,
   type SetStateAction,
 } from 'react';
+import { createPortal } from 'react-dom';
 import {
   isPendingReviewStatus,
   type FeatureSnapshot,
@@ -109,6 +110,20 @@ export interface FeatureCockpitProps {
   selectedRunNumber?: number | null;
   /** Persist a new selected run number (or null to return to current). */
   onSelectRun?(runNumber: number | null): void;
+  /**
+   * Toolbar-owned DOM node the cockpit's ⋯ overflow menu portals into. When
+   * absent (e.g. this cockpit rendered standalone in a test), the menu
+   * renders inline exactly as before.
+   */
+  overflowMenuHost?: HTMLElement | null;
+  /**
+   * Toolbar-owned DOM node the cockpit's wide-layout inspector-toggle button
+   * portals into. Only mounted while `!isNarrow`; at narrow widths
+   * nothing portals here and the cockpit's own in-content "Inspector" button
+   * opens the drawer instead. When absent (e.g. standalone in a test), the
+   * toggle renders inline exactly like the overflow menu does.
+   */
+  inspectorToggleHost?: HTMLElement | null;
 }
 
 const MAX_ITERATIONS_RESTART_DELTA = 10;
@@ -229,6 +244,10 @@ function CockpitActionBar({
   isNarrow,
   inspectorButtonRef,
   onOpenInspector,
+  inspectorOpen,
+  onToggleInspector,
+  inspectorToggleHost,
+  overflowMenuHost,
 }: {
   status: FeatureSnapshot['status'];
   /** Replaces the raw status label (e.g. "Refactoring" while a pass runs). */
@@ -238,7 +257,14 @@ function CockpitActionBar({
   extraControls?: ReactNode;
   isNarrow: boolean;
   inspectorButtonRef: RefObject<HTMLButtonElement | null>;
+  /** Narrow-only: opens the slide-over drawer (it has its own close affordances). */
   onOpenInspector(): void;
+  /** Whether the wide-layout trailing split-view pane is currently open. */
+  inspectorOpen: boolean;
+  /** Wide-only: flips the trailing split-view pane open/closed. */
+  onToggleInspector(): void;
+  inspectorToggleHost?: HTMLElement | null;
+  overflowMenuHost?: HTMLElement | null;
 }) {
   const menuRef = useRef<HTMLDetailsElement>(null);
   const closeMenu = () => {
@@ -293,42 +319,54 @@ function CockpitActionBar({
         </button>
       ))}
       {extraControls}
-      {menuActions.length > 0 ? (
-        <details ref={menuRef} className="cockpit__overflow">
-          <summary className="cockpit__overflow-summary" aria-label="More actions">
-            <span aria-hidden="true">⋯</span>
-          </summary>
-          <div className="cockpit__overflow-menu" role="menu">
-            {menuActions.map((action) => (
-              <div
-                key={action.key}
-                className="cockpit__overflow-item"
-                data-variant={action.variant ?? 'default'}
-              >
-                <button
-                  type="button"
-                  role="menuitem"
-                  disabled={!action.enabled}
-                  onClick={() => {
-                    closeMenu();
-                    action.onClick();
-                  }}
-                  {...(action.ariaLabel !== undefined ? { 'aria-label': action.ariaLabel } : {})}
-                >
-                  {action.label}
-                </button>
-                {!action.enabled && action.reasons !== undefined && action.reasons.length > 0 ? (
-                  <ul className="cockpit__overflow-reasons">
-                    {action.reasons.map((reason) => (
-                      <li key={reason}>{reason}</li>
-                    ))}
-                  </ul>
-                ) : null}
-              </div>
-            ))}
-          </div>
-        </details>
-      ) : null}
+      {menuActions.length > 0
+        ? (() => {
+            const menu = (
+              <details ref={menuRef} className="cockpit__overflow">
+                <summary className="cockpit__overflow-summary" aria-label="More actions">
+                  <span aria-hidden="true">⋯</span>
+                </summary>
+                <div className="cockpit__overflow-menu" role="menu">
+                  {menuActions.map((action) => (
+                    <div
+                      key={action.key}
+                      className="cockpit__overflow-item"
+                      data-variant={action.variant ?? 'default'}
+                    >
+                      <button
+                        type="button"
+                        role="menuitem"
+                        disabled={!action.enabled}
+                        onClick={() => {
+                          closeMenu();
+                          action.onClick();
+                        }}
+                        {...(action.ariaLabel !== undefined
+                          ? { 'aria-label': action.ariaLabel }
+                          : {})}
+                      >
+                        {action.label}
+                      </button>
+                      {!action.enabled &&
+                      action.reasons !== undefined &&
+                      action.reasons.length > 0 ? (
+                        <ul className="cockpit__overflow-reasons">
+                          {action.reasons.map((reason) => (
+                            <li key={reason}>{reason}</li>
+                          ))}
+                        </ul>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+              </details>
+            );
+            // The toolbar owns a slot the ⋯ menu portals into once mounted;
+            // a cockpit rendered without that host (e.g. standalone in a
+            // test) keeps the menu inline exactly as before.
+            return overflowMenuHost != null ? createPortal(menu, overflowMenuHost) : menu;
+          })()
+        : null}
       {isNarrow ? (
         <button
           ref={inspectorButtonRef}
@@ -339,7 +377,27 @@ function CockpitActionBar({
         >
           Inspector
         </button>
-      ) : null}
+      ) : (
+        (() => {
+          // The trailing split-view pane's toggle lives in the toolbar
+          // chrome, not the cockpit's own action bar — it portals into the
+          // toolbar-owned slot the same way the ⋯ overflow menu does, and
+          // renders inline when no host is mounted (e.g. a standalone test).
+          const toggle = (
+            <button
+              ref={inspectorButtonRef}
+              type="button"
+              className="toolbar__inspector-toggle"
+              aria-label="Toggle inspector"
+              aria-pressed={inspectorOpen}
+              onClick={onToggleInspector}
+            >
+              <span aria-hidden="true">▤</span>
+            </button>
+          );
+          return inspectorToggleHost != null ? createPortal(toggle, inspectorToggleHost) : toggle;
+        })()
+      )}
     </div>
   );
 }
@@ -750,6 +808,8 @@ export function FeatureCockpit({
   selectedRunNumber,
   onSelectRun,
   active = true,
+  overflowMenuHost = null,
+  inspectorToggleHost = null,
 }: FeatureCockpitProps) {
   const [state, setState] = useState<CockpitState>({ phase: 'loading' });
   const [streamStale, setStreamStale] = useState(false);
@@ -1196,6 +1256,11 @@ export function FeatureCockpit({
   const closeInspector = useCallback(() => {
     setInspectorOpen(false);
     requestAnimationFrame(() => inspectorButtonRef.current?.focus());
+  }, []);
+
+  /** Wide layout only: flips the trailing split-view pane open/closed. */
+  const toggleInspector = useCallback(() => {
+    setInspectorOpen((current) => !current);
   }, []);
 
   useEffect(() => {
@@ -1707,6 +1772,10 @@ export function FeatureCockpit({
                 isNarrow={isNarrow}
                 inspectorButtonRef={inspectorButtonRef}
                 onOpenInspector={() => setInspectorOpen(true)}
+                inspectorOpen={inspectorOpen}
+                onToggleInspector={toggleInspector}
+                inspectorToggleHost={inspectorToggleHost}
+                overflowMenuHost={overflowMenuHost}
               />
               {standaloneAttention}
               <RefactorPassWorkspace
@@ -1729,6 +1798,10 @@ export function FeatureCockpit({
                 isNarrow={isNarrow}
                 inspectorButtonRef={inspectorButtonRef}
                 onOpenInspector={() => setInspectorOpen(true)}
+                inspectorOpen={inspectorOpen}
+                onToggleInspector={toggleInspector}
+                inspectorToggleHost={inspectorToggleHost}
+                overflowMenuHost={overflowMenuHost}
               />
               {standaloneAttention}
               <AftercareWorkspace
@@ -2046,6 +2119,10 @@ export function FeatureCockpit({
             isNarrow={isNarrow}
             inspectorButtonRef={inspectorButtonRef}
             onOpenInspector={() => setInspectorOpen(true)}
+            inspectorOpen={inspectorOpen}
+            onToggleInspector={toggleInspector}
+            inspectorToggleHost={inspectorToggleHost}
+            overflowMenuHost={overflowMenuHost}
           />
 
           {rewindLanding !== null ? (
@@ -2070,7 +2147,13 @@ export function FeatureCockpit({
             />
           ) : null}
 
-          <div className="cockpit__content">
+          <div
+            className={
+              !isNarrow && inspectorOpen
+                ? 'cockpit__content cockpit__content--inspector-open'
+                : 'cockpit__content'
+            }
+          >
             <main className="cockpit__stage">
               <>
                 {resolvedSurface !== 'live' ? standaloneAttention : null}
@@ -2230,7 +2313,7 @@ export function FeatureCockpit({
                 </div>
               </>
             </main>
-            {!isNarrow ? (
+            {!isNarrow && inspectorOpen ? (
               <aside className="cockpit__inspector" aria-label="Feature inspector">
                 <InspectorContent
                   snapshot={snapshot}

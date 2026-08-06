@@ -3,6 +3,7 @@ import {
   assertNoLeakedProcesses,
   closeApp,
   launchApp,
+  openSettings,
   persistAppLogs,
   type AppHandle,
 } from '../helpers/app';
@@ -56,7 +57,7 @@ async function runFallbackCase(
     expect(state.packageFormat).toBe(format);
     transcript.json(name, state);
 
-    await handle.page.getByRole('tab', { name: 'Settings' }).click();
+    await openSettings(handle);
     await expect(handle.page.getByRole('heading', { name: 'Updates' })).toBeVisible();
     if (format === 'deb') {
       await expect(handle.page.getByText(/package manager/)).toBeVisible();

@@ -55,15 +55,16 @@ test('packaged command palette, native menu routes, and active close policy stay
     const palette = handle.page.getByRole('dialog', { name: 'Command palette' });
     await palette.getByLabel('Search commands').fill('settings');
     await handle.page.keyboard.press('Enter');
-    await expect(handle.page.getByRole('tab', { name: 'Settings' })).toHaveAttribute(
-      'aria-selected',
-      'true',
-    );
+    // Settings has no tab/option role of its own — its content-pane view is
+    // identified by the Back button in its header.
+    await expect(handle.page.getByRole('button', { name: 'Back', exact: true })).toBeVisible();
 
     await openPalette(handle);
-    await palette.getByLabel('Search commands').fill('home');
+    // The palette searches command labels, not ids: `global.home` is now
+    // labeled "Overview", so it's found by that text.
+    await palette.getByLabel('Search commands').fill('overview');
     await handle.page.keyboard.press('Enter');
-    await expect(handle.page.getByRole('tab', { name: 'Home' })).toHaveAttribute(
+    await expect(handle.page.getByRole('option', { name: 'Overview' })).toHaveAttribute(
       'aria-selected',
       'true',
     );
@@ -77,7 +78,7 @@ test('packaged command palette, native menu routes, and active close policy stay
       waitForReady: true,
     });
     const nonTargetFeatureId = await currentFeatureId(handle, 'Palette Non Target');
-    await handle.page.getByRole('tab', { name: 'Home' }).click();
+    await handle.page.getByRole('option', { name: 'Overview' }).click();
 
     const cockpit = await createFeatureViaForm(handle, {
       name: 'Background Command Lifecycle',

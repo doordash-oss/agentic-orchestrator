@@ -121,17 +121,17 @@ test('rebase pass: behind feature → card click → pass workspace → completi
     transcript.step('advanced local main so the feature is behind its target');
 
     handle = await launchApp(world, testInfo, { traceName: 'rebase-pass-seeded' });
-    const homeTab = handle.page.getByRole('tab', { name: 'Home' });
-    await expect(homeTab).toBeVisible({ timeout: 60_000 });
-    await homeTab.click();
+    const overviewOption = handle.page.getByRole('option', { name: 'Overview' });
+    await expect(overviewOption).toBeVisible({ timeout: 60_000 });
+    await overviewOption.click();
     await expect(handle.page.getByRole('button', { name: 'New feature' })).toBeVisible({
       timeout: 10_000,
     });
     transcript.step('relaunched against seeded Published state with behind repo');
 
     transcript.section('Open feature cockpit and click "Start rebase pass"');
-    const featureTab = handle.page.getByRole('tab', { name: featureName });
-    await featureTab.click();
+    const featureOption = handle.page.getByRole('option', { name: featureName });
+    await featureOption.click();
     const seededCockpit = handle.page.getByLabel(`Feature ${featureName}`);
     await expect(seededCockpit).toBeVisible({ timeout: 30_000 });
 
@@ -237,17 +237,17 @@ test('rebase pass up-to-date: card click renders inline notice, stays in afterca
     transcript.step('seeded feature to Published status (repo is up to date)');
 
     handle = await launchApp(world, testInfo, { traceName: 'rebase-pass-uptodate-seeded' });
-    const homeTab = handle.page.getByRole('tab', { name: 'Home' });
-    await expect(homeTab).toBeVisible({ timeout: 60_000 });
-    await homeTab.click();
+    const overviewOption = handle.page.getByRole('option', { name: 'Overview' });
+    await expect(overviewOption).toBeVisible({ timeout: 60_000 });
+    await overviewOption.click();
     await expect(handle.page.getByRole('button', { name: 'New feature' })).toBeVisible({
       timeout: 10_000,
     });
     transcript.step('relaunched against seeded Published state (up to date)');
 
     transcript.section('Open feature cockpit and click "Start rebase pass"');
-    const featureTab = handle.page.getByRole('tab', { name: featureName });
-    await featureTab.click();
+    const featureOption = handle.page.getByRole('option', { name: featureName });
+    await featureOption.click();
     const seededCockpit = handle.page.getByLabel(`Feature ${featureName}`);
     await expect(seededCockpit).toBeVisible({ timeout: 30_000 });
 

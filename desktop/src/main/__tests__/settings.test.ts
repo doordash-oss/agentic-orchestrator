@@ -115,45 +115,37 @@ describe('SettingsStore', () => {
     store.update({ window: { bounds: { x: 1, y: 2, width: 800, height: 600 } } });
     const reloaded = makeStore();
     expect(reloaded.get()).toEqual({
-      schemaVersion: 1,
+      schemaVersion: 2,
       runtime: { selection: null },
       window: { bounds: { x: 1, y: 2, width: 800, height: 600 } },
       theme: 'dark',
       wizard: { collapsedHelp: false },
       ama: { drawer: 'compact' },
       notifications: { previewEnabled: false },
-      tabs: { open: [], activeFeatureId: null },
+      shell: { activeFeatureId: null, sidebarCollapsed: false },
     });
   });
 
-  it('persists tab identity/presentation prefs and restores them on reload', () => {
+  it('persists shell presentation prefs and restores them on reload', () => {
     const store = makeStore();
     store.update({
-      tabs: {
-        open: [{ featureId: 'abcd1234ef567890', titleHint: 'Search revamp' }],
-        activeFeatureId: 'abcd1234ef567890',
-      },
+      shell: { activeFeatureId: 'abcd1234ef567890', sidebarCollapsed: true },
     });
-    expect(makeStore().get().tabs).toEqual({
-      open: [{ featureId: 'abcd1234ef567890', titleHint: 'Search revamp' }],
+    expect(makeStore().get().shell).toEqual({
       activeFeatureId: 'abcd1234ef567890',
+      sidebarCollapsed: true,
     });
   });
 
-  it('rejects tab entries carrying server-domain state beyond identity/presentation', () => {
+  it('rejects shell patches carrying unknown fields', () => {
     const store = makeStore();
     expect(() =>
       store.update({
-        tabs: {
-          open: [
-            {
-              featureId: 'abcd1234ef567890',
-              titleHint: 'Search',
-              status: 'Created',
-            } as never,
-          ],
+        shell: {
           activeFeatureId: null,
-        },
+          sidebarCollapsed: false,
+          status: 'Created',
+        } as never,
       }),
     ).toThrow(SafeErrorException);
   });
@@ -200,5 +192,112 @@ describe('SettingsStore', () => {
   it('never throws while loading a corrupt file', () => {
     fs.writeFileSync(settingsPath(), 'corrupt');
     expect(() => makeStore().get()).not.toThrow();
+  });
+
+  describe('schema v1 -> v2 migration', () => {
+    function v1Fixture(overrides: Record<string, unknown> = {}) {
+      return {
+        schemaVersion: 1,
+        runtime: { selection: 'claude' },
+        window: { bounds: { x: 10, y: 20, width: 1024, height: 768 } },
+        theme: 'dark',
+        wizard: { collapsedHelp: true },
+        ama: { drawer: 'expanded' },
+        notifications: { previewEnabled: true },
+        tabs: {
+          open: [
+            { featureId: 'abcd1234ef567890', titleHint: 'Search revamp' },
+            {
+              featureId: 'ffee0011aa223344',
+              titleHint: 'Archived run',
+              selectedRunNumber: 7,
+            },
+          ],
+          activeFeatureId: 'ffee0011aa223344',
+        },
+        ...overrides,
+      };
+    }
+
+    it('upgrades a realistic v1 document without resetting to defaults', () => {
+      fs.writeFileSync(settingsPath(), JSON.stringify(v1Fixture()));
+      const store = makeStore();
+
+      expect(store.get()).toEqual({
+        schemaVersion: 2,
+        runtime: { selection: 'claude' },
+        window: { bounds: { x: 10, y: 20, width: 1024, height: 768 } },
+        theme: 'dark',
+        wizard: { collapsedHelp: true },
+        ama: { drawer: 'expanded' },
+        notifications: { previewEnabled: true },
+        shell: { activeFeatureId: 'ffee0011aa223344', sidebarCollapsed: false },
+      });
+      expect(warnings).toEqual([]);
+      expect(fs.existsSync(`${settingsPath()}.bak-1`)).toBe(false);
+
+      const onDisk = JSON.parse(fs.readFileSync(settingsPath(), 'utf8'));
+      expect(onDisk.schemaVersion).toBe(2);
+      expect(onDisk.shell).toEqual({
+        activeFeatureId: 'ffee0011aa223344',
+        sidebarCollapsed: false,
+      });
+      expect(onDisk.tabs).toBeUndefined();
+    });
+
+    it('maps the settings-tab sentinel active id to null', () => {
+      fs.writeFileSync(
+        settingsPath(),
+        JSON.stringify(
+          v1Fixture({
+            tabs: {
+              open: [{ featureId: 'abcd1234ef567890', titleHint: 'Search revamp' }],
+              activeFeatureId: '__settings__',
+            },
+          }),
+        ),
+      );
+      const store = makeStore();
+      expect(store.get().shell).toEqual({ activeFeatureId: null, sidebarCollapsed: false });
+    });
+
+    it('still resets to defaults for a corrupt v1-shaped document', () => {
+      fs.writeFileSync(
+        settingsPath(),
+        JSON.stringify({
+          schemaVersion: 1,
+          runtime: { selection: null },
+          window: {},
+          theme: 'not-a-real-theme',
+        }),
+      );
+      const store = makeStore();
+      expect(store.get()).toEqual(defaultSettings());
+      expect(fs.existsSync(`${settingsPath()}.bak-1`)).toBe(true);
+    });
+
+    it('still resets to defaults for an unrecognized version (not 1 or 2)', () => {
+      fs.writeFileSync(settingsPath(), JSON.stringify(v1Fixture({ schemaVersion: 99 })));
+      const store = makeStore();
+      expect(store.get()).toEqual(defaultSettings());
+      expect(fs.existsSync(`${settingsPath()}.bak-1`)).toBe(true);
+    });
+
+    it('still resets to defaults for a version-2-shaped but invalid document', () => {
+      fs.writeFileSync(
+        settingsPath(),
+        JSON.stringify({ ...defaultSettings(), shell: { activeFeatureId: null } }),
+      );
+      const store = makeStore();
+      expect(store.get()).toEqual(defaultSettings());
+      expect(fs.existsSync(`${settingsPath()}.bak-1`)).toBe(true);
+    });
+
+    it('round-trips a shell update through the existing update() API', () => {
+      const store = makeStore();
+      store.update({ shell: { sidebarCollapsed: true, activeFeatureId: 'some-id' } });
+      const reloaded = makeStore();
+      expect(reloaded.get().shell).toEqual({ sidebarCollapsed: true, activeFeatureId: 'some-id' });
+    });
   });
 });

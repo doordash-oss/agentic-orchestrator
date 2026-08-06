@@ -6,7 +6,12 @@
  * fresh on every reconnect, so resume always starts from the server truth.
  */
 import { useCallback, useEffect, useState, type Dispatch, type SetStateAction } from 'react';
-import type { AttentionItem, ReadinessSnapshot, RoutedRequest } from '../../../shared/ipc';
+import type {
+  AttentionItem,
+  ReadinessSnapshot,
+  RoutedRequest,
+  UpdateState,
+} from '../../../shared/ipc';
 import { WorkspaceShell } from '../features/WorkspaceShell';
 import type { AttentionDrafts } from '../features/AttentionInbox';
 import { deriveWizardState } from '../wizard/deriveWizardState';
@@ -25,7 +30,15 @@ export function ReadinessGate({
   refreshAttention = async () => [],
   attentionJump = null,
   onAttentionJumpHandled = () => {},
+  onAttentionJump = () => {},
   routeRequest = null,
+  updateState = null,
+  updateDismissedVersion = null,
+  schedulingUpdate = false,
+  onDismissUpdate = () => {},
+  onOpenUpdatesSettings = () => {},
+  onInstallUpdateWhenIdle = async () => {},
+  onOpenAma = () => {},
 }: {
   attentionDrafts?: AttentionDrafts;
   setAttentionDrafts?: Dispatch<SetStateAction<AttentionDrafts>>;
@@ -37,7 +50,16 @@ export function ReadinessGate({
     attentionId?: string;
   } | null;
   onAttentionJumpHandled?: () => void;
+  /** Owned by App: routes a bell/inbox jump into the shell's selection. */
+  onAttentionJump?(featureId: string, attentionId?: string): void;
   routeRequest?: RoutedRequest | null;
+  updateState?: UpdateState | null;
+  updateDismissedVersion?: string | null;
+  schedulingUpdate?: boolean;
+  onDismissUpdate?(version: string): void;
+  onOpenUpdatesSettings?(): void;
+  onInstallUpdateWhenIdle?(): Promise<void>;
+  onOpenAma?(): void;
 }) {
   const [state, setState] = useState<GateState>({ phase: 'loading' });
 
@@ -92,7 +114,15 @@ export function ReadinessGate({
         setAttentionDrafts={setAttentionDrafts}
         attentionJump={attentionJump}
         onAttentionJumpHandled={onAttentionJumpHandled}
+        onAttentionJump={onAttentionJump}
         routeRequest={routeRequest}
+        updateState={updateState}
+        updateDismissedVersion={updateDismissedVersion}
+        schedulingUpdate={schedulingUpdate}
+        onDismissUpdate={onDismissUpdate}
+        onOpenUpdatesSettings={onOpenUpdatesSettings}
+        onInstallUpdateWhenIdle={onInstallUpdateWhenIdle}
+        onOpenAma={onOpenAma}
       />
     );
   }

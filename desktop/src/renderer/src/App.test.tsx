@@ -55,18 +55,30 @@ describe('App theming', () => {
   });
 
   it('switches to the light theme when the user selects it', async () => {
-    const mock = installAgenticoMock({ theme: { preference: 'system', resolved: 'dark' } });
+    // The switcher now lives in Settings ▸ Appearance (moved off the deleted
+    // global header), reachable only once the shell is up.
+    const mock = installAgenticoMock({
+      connection: connection({ status: 'ready', stage: 'ready', ownership: 'external' }),
+      readiness: readySnapshot(),
+      theme: { preference: 'system', resolved: 'dark' },
+    });
     render(<App />);
     await waitFor(() => expect(document.documentElement.dataset['theme']).toBe('dark'));
 
-    await userEvent.click(screen.getByRole('radio', { name: /light/i }));
+    act(() => mock.emitRouteRequest({ target: 'settings' }));
+    await userEvent.click(await screen.findByRole('radio', { name: /light/i }));
     expect(mock.api.setThemePreference).toHaveBeenCalledWith('light');
     await waitFor(() => expect(document.documentElement.dataset['theme']).toBe('light'));
   });
 
   it('offers light, dark, and system choices in an accessible radiogroup', async () => {
-    installAgenticoMock();
+    const mock = installAgenticoMock({
+      connection: connection({ status: 'ready', stage: 'ready', ownership: 'external' }),
+      readiness: readySnapshot(),
+    });
     render(<App />);
+    await screen.findByRole('option', { name: 'Overview' });
+    act(() => mock.emitRouteRequest({ target: 'settings' }));
     const group = await screen.findByRole('radiogroup', { name: /theme/i });
     expect(group).toBeInTheDocument();
     for (const name of [/light/i, /dark/i, /system/i]) {
@@ -110,7 +122,10 @@ describe('App readiness gating', () => {
 
     await waitFor(() => expect(mock.api.getAttention).toHaveBeenCalledTimes(1));
     expect(mock.api.scanRecovery).toHaveBeenCalledTimes(1);
-    expect(mock.api.listFeatures).toHaveBeenCalledTimes(1);
+    // listFeatures is now fetched by the Overview surface inside the shell
+    // (App no longer does its own feature-name lookup), which mounts once the
+    // separate readiness fetch resolves — a second async hop after attention.
+    await waitFor(() => expect(mock.api.listFeatures).toHaveBeenCalledTimes(1));
   });
 
   it('uses the authoritative feature name in the global inbox', async () => {
@@ -129,7 +144,13 @@ describe('App readiness gating', () => {
     installAgenticoMock({
       connection: connection({ status: 'ready', stage: 'ready', ownership: 'external' }),
       readiness: readySnapshot(),
-      settings: { ...defaultSettings(), tabs: { open: [], activeFeatureId: null } },
+      settings: {
+        ...defaultSettings(),
+        // The bell is only shown in the toolbar once a feature is selected
+        // (it is hidden entirely on Overview), so this test starts on
+        // the feature it wants to jump from.
+        shell: { activeFeatureId: featureId, sidebarCollapsed: false },
+      },
       features: [
         {
           id: featureId,
@@ -147,7 +168,7 @@ describe('App readiness gating', () => {
     });
     render(<App />);
 
-    await screen.findByRole('tab', { name: 'Home' });
+    await screen.findByRole('option', { name: 'Overview' });
     await userEvent.click(
       await screen.findByRole('button', { name: /Attention inbox, 1 pending/ }),
     );
@@ -166,7 +187,7 @@ describe('App readiness gating', () => {
       readiness: readySnapshot(),
     });
     render(<App />);
-    await screen.findByRole('tab', { name: 'Home' });
+    await screen.findByRole('option', { name: 'Overview' });
 
     act(() => mock.emitRouteRequest({ target: 'attention' }));
     const inbox = await screen.findByRole('complementary', { name: 'Attention inbox' });
@@ -195,7 +216,7 @@ describe('App readiness gating', () => {
       readiness: readySnapshot(),
     });
     render(<App />);
-    await screen.findByRole('tab', { name: 'Home' });
+    await screen.findByRole('option', { name: 'Overview' });
     const before = mock.api.getAttention.mock.calls.length;
 
     act(() => {
@@ -212,7 +233,7 @@ describe('App readiness gating', () => {
       updates: defaultUpdateState({ status: 'current' }),
     });
     render(<App />);
-    await screen.findByRole('tab', { name: 'Home' });
+    await screen.findByRole('option', { name: 'Overview' });
     expect(screen.queryByLabelText('Update available')).not.toBeInTheDocument();
 
     mock.api.getUpdates.mockResolvedValueOnce(
@@ -237,7 +258,7 @@ describe('App readiness gating', () => {
 
   it('renders DEB update guidance as a copyable package-manager command without install controls', async () => {
     const user = userEvent.setup();
-    installAgenticoMock({
+    const mock = installAgenticoMock({
       connection: connection({ status: 'ready', stage: 'ready', ownership: 'external' }),
       readiness: readySnapshot(),
       updates: defaultUpdateState({
@@ -256,8 +277,9 @@ describe('App readiness gating', () => {
     });
     render(<App />);
 
-    await user.click(await screen.findByRole('tab', { name: 'Settings' }));
-    const updates = screen.getByRole('region', { name: 'Updates' });
+    await screen.findByRole('option', { name: 'Overview' });
+    act(() => mock.emitRouteRequest({ target: 'settings' }));
+    const updates = await screen.findByRole('region', { name: 'Updates' });
     expect(within(updates).getByText('sudo apt install ./agentico_0.2.0_amd64.deb')).toBeVisible();
     expect(screen.queryByRole('button', { name: 'Restart to Update' })).not.toBeInTheDocument();
     expect(
@@ -278,8 +300,7 @@ describe('App readiness gating', () => {
   });
 
   it('preserves direct restart in Settings when a verified update is idle', async () => {
-    const user = userEvent.setup();
-    installAgenticoMock({
+    const mock = installAgenticoMock({
       connection: connection({ status: 'ready', stage: 'ready', ownership: 'external' }),
       readiness: readySnapshot(),
       updates: defaultUpdateState({
@@ -292,16 +313,16 @@ describe('App readiness gating', () => {
     });
     render(<App />);
 
-    await user.click(await screen.findByRole('tab', { name: 'Settings' }));
-    const updates = screen.getByRole('region', { name: 'Updates' });
+    await screen.findByRole('option', { name: 'Overview' });
+    act(() => mock.emitRouteRequest({ target: 'settings' }));
+    const updates = await screen.findByRole('region', { name: 'Updates' });
     expect(within(updates).getByRole('button', { name: 'Restart to Update' })).toBeVisible();
     expect(within(updates).queryByRole('button', { name: 'Install When Idle' })).toBeNull();
     expect(within(updates).queryByRole('button', { name: 'Stop Work and Install Now' })).toBeNull();
   });
 
   it('shows non-interrupting and explicit stop-work update controls only when work is active', async () => {
-    const user = userEvent.setup();
-    installAgenticoMock({
+    const mock = installAgenticoMock({
       connection: connection({ status: 'ready', stage: 'ready', ownership: 'external' }),
       readiness: readySnapshot(),
       updates: defaultUpdateState({
@@ -315,8 +336,9 @@ describe('App readiness gating', () => {
     });
     render(<App />);
 
-    await user.click(await screen.findByRole('tab', { name: 'Settings' }));
-    const updates = screen.getByRole('region', { name: 'Updates' });
+    await screen.findByRole('option', { name: 'Overview' });
+    act(() => mock.emitRouteRequest({ target: 'settings' }));
+    const updates = await screen.findByRole('region', { name: 'Updates' });
     expect(within(updates).getByText('1 workflow and AMA session are active.')).toBeVisible();
     expect(within(updates).getByRole('button', { name: 'Install When Idle' })).toBeVisible();
     expect(
@@ -340,17 +362,18 @@ describe('App readiness gating', () => {
     });
     render(<App />);
 
-    await user.click(await screen.findByRole('tab', { name: 'Settings' }));
+    await screen.findByRole('option', { name: 'Overview' });
+    act(() => mock.emitRouteRequest({ target: 'settings' }));
     await user.click(await screen.findByRole('radio', { name: /High/ }));
 
-    expect(screen.getByRole('tabpanel', { name: 'Settings' })).toBeVisible();
+    expect(screen.getByRole('region', { name: 'Settings and readiness' })).toBeVisible();
     expect(screen.getByRole('region', { name: 'Workspace defaults' })).toBeVisible();
     expect(screen.getByRole('button', { name: 'Save changes' })).toBeEnabled();
   });
 
   it('keeps keyboard focus inside the stop-work install confirmation and restores the trigger', async () => {
     const user = userEvent.setup();
-    installAgenticoMock({
+    const mock = installAgenticoMock({
       connection: connection({ status: 'ready', stage: 'ready', ownership: 'external' }),
       readiness: readySnapshot(),
       updates: defaultUpdateState({
@@ -364,8 +387,9 @@ describe('App readiness gating', () => {
     });
     render(<App />);
 
-    await user.click(await screen.findByRole('tab', { name: 'Settings' }));
-    const trigger = screen.getByRole('button', { name: 'Stop Work and Install Now' });
+    await screen.findByRole('option', { name: 'Overview' });
+    act(() => mock.emitRouteRequest({ target: 'settings' }));
+    const trigger = await screen.findByRole('button', { name: 'Stop Work and Install Now' });
     await user.click(trigger);
     const dialog = screen.getByRole('dialog', { name: 'Install update confirmation' });
     const cancel = within(dialog).getByRole('button', { name: 'Cancel' });
@@ -388,14 +412,15 @@ describe('App readiness gating', () => {
 
   it('keeps keyboard focus inside Clear Diagnostics confirmation and restores the trigger', async () => {
     const user = userEvent.setup();
-    installAgenticoMock({
+    const mock = installAgenticoMock({
       connection: connection({ status: 'ready', stage: 'ready', ownership: 'external' }),
       readiness: readySnapshot(),
     });
     render(<App />);
 
-    await user.click(await screen.findByRole('tab', { name: 'Settings' }));
-    const trigger = screen.getByRole('button', { name: 'Clear Diagnostics' });
+    await screen.findByRole('option', { name: 'Overview' });
+    act(() => mock.emitRouteRequest({ target: 'settings' }));
+    const trigger = await screen.findByRole('button', { name: 'Clear Diagnostics' });
     await user.click(trigger);
     const dialog = screen.getByRole('dialog', { name: 'Clear diagnostics confirmation' });
     expect(within(dialog).getByRole('heading', { name: 'Clear Diagnostics?' })).toBeVisible();
@@ -415,8 +440,10 @@ describe('App readiness gating', () => {
   it('shows the connection shell — never the wizard — before the gateway is ready', async () => {
     const mock = installAgenticoMock();
     render(<App />);
+    // The global brand header is gone; only the connection shell's own
+    // "Agentico" heading remains before the gateway is ready.
     await waitFor(() =>
-      expect(screen.getAllByRole('heading', { name: /^agentico$/i })).toHaveLength(2),
+      expect(screen.getAllByRole('heading', { name: /^agentico$/i })).toHaveLength(1),
     );
     expect(screen.queryByLabelText(/first-launch setup/i)).not.toBeInTheDocument();
     expect(mock.api.getReadiness).not.toHaveBeenCalled();
@@ -441,7 +468,7 @@ describe('App readiness gating', () => {
       readiness: readySnapshot(),
     });
     render(<App />);
-    expect(await screen.findByRole('tab', { name: 'Home' })).toBeInTheDocument();
+    expect(await screen.findByRole('option', { name: 'Overview' })).toBeInTheDocument();
     expect(screen.queryByLabelText(/first-launch setup/i)).not.toBeInTheDocument();
   });
 

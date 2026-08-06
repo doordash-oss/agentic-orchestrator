@@ -18,6 +18,7 @@ import {
   evidenceShot,
   launchApp,
   mockDirectoryPicker,
+  openSettings,
   persistAppLogs,
   setTheme,
   setWindowSize,
@@ -58,7 +59,7 @@ test('configuration, workspace, and restart journey against the packaged app', a
     transcript.step('app launched and reached the ready workspace');
 
     transcript.section('Create a feature');
-    const cockpit = await createFeatureViaForm(handle, {
+    await createFeatureViaForm(handle, {
       name: 'Config Journey',
       description: 'Exercise configuration editing in the cockpit.',
       repoPatterns: [/alpha/],
@@ -67,8 +68,8 @@ test('configuration, workspace, and restart journey against the packaged app', a
     transcript.step('feature created and setup complete');
 
     transcript.section('Structured feature configuration in the cockpit');
-    await cockpit.locator('summary[aria-label="More actions"]').click();
-    const configToggle = cockpit.getByRole('menuitem', { name: 'Edit configuration…' });
+    await handle.page.locator('summary[aria-label="More actions"]').click();
+    const configToggle = handle.page.getByRole('menuitem', { name: 'Edit configuration…' });
     await expect(configToggle).toBeVisible();
     await configToggle.click();
 
@@ -136,7 +137,7 @@ test('configuration, workspace, and restart journey against the packaged app', a
     await configDialog.getByRole('button', { name: 'Close' }).click();
 
     transcript.section('Workspace defaults in Settings');
-    await handle.page.getByRole('tab', { name: 'Settings' }).click();
+    await openSettings(handle);
     await expect(handle.page.getByRole('heading', { name: 'Settings' })).toBeVisible({
       timeout: 15_000,
     });

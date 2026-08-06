@@ -132,11 +132,14 @@ test('zero-gap operations: dismissible watch, live inspection, bounded files, an
       60_000,
     );
 
-    await handle.page.getByRole('button', { name: `Close ${featureName} tab` }).click();
-    await expect(handle.page.getByRole('tab', { name: featureName })).toHaveCount(0);
+    // The sidebar has no "close tab" affordance — every feature always has a
+    // row. Navigating to Overview unmounts the cockpit (resetting transient
+    // view state) without removing the feature from the sidebar; reopening
+    // via the Overview feature list's "Open" button is the equivalent of the
+    // old reopen-a-closed-tab path.
+    await handle.page.getByRole('option', { name: 'Overview' }).click();
     expect(providerInvocationCount(world.providerInvocationLog)).toBe(1);
 
-    await handle.page.getByRole('tab', { name: 'Home' }).click();
     const list = handle.page.getByRole('region', { name: 'Existing features' });
     const row = list.locator('li').filter({ hasText: featureName });
     await row.getByRole('button', { name: 'Open' }).click();
@@ -146,7 +149,7 @@ test('zero-gap operations: dismissible watch, live inspection, bounded files, an
     });
     await expect(reopened.getByRole('region', { name: 'Live agent transcript' })).toBeVisible();
 
-    await handle.page.getByRole('tab', { name: 'Home' }).click();
+    await handle.page.getByRole('option', { name: 'Overview' }).click();
     const bulk = handle.page.getByRole('region', { name: 'Bulk resume and retry' });
     await bulk.getByRole('button', { name: 'Fresh preview' }).click();
     await expect(bulk.getByText(/No features are eligible/)).toBeVisible({
@@ -154,7 +157,7 @@ test('zero-gap operations: dismissible watch, live inspection, bounded files, an
     });
     expect(providerInvocationCount(world.providerInvocationLog)).toBe(1);
 
-    await handle.page.getByRole('tab', { name: featureName }).click();
+    await handle.page.getByRole('option', { name: featureName }).click();
     await reopened.getByRole('button', { name: 'Stop', exact: true }).click();
     const stopDialog = handle.page.getByRole('dialog', { name: `Stop ${featureName}?` });
     await expect(stopDialog).toContainText(/live session/);

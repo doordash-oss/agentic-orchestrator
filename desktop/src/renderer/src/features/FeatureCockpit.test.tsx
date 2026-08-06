@@ -94,23 +94,37 @@ function renderCockpit(mock = installAgenticoMock(), active = true) {
   };
 }
 
+/**
+ * Wide layout: the inspector's trailing split-view pane starts closed (Task
+ * 5). Tests that assert on its content (identity facts, pipeline ladder,
+ * durable setup, repository PR link, run totals) open it explicitly via the
+ * same toggle the toolbar's slot portals in real usage — rendered inline here
+ * since `renderCockpit` supplies no `inspectorToggleHost`.
+ */
+async function openInspector() {
+  const user = userEvent.setup();
+  await user.click(await screen.findByRole('button', { name: 'Toggle inspector' }));
+}
+
 describe('FeatureCockpit snapshot rendering', () => {
   it('always reloads the feature from the server and reports its name', async () => {
     const { mock, onLoadedName } = renderCockpit();
-    await screen.findByRole('heading', { name: 'Search revamp' });
+    await screen.findByRole('region', { name: 'Feature Search revamp' });
     expect(mock.api.getFeature).toHaveBeenCalledWith(FEATURE_ID);
     expect(onLoadedName).toHaveBeenCalledWith('Search revamp');
   });
 
   it('omits durable setup from the inspector', async () => {
     renderCockpit();
-    await screen.findByRole('heading', { name: 'Search revamp' });
+    await openInspector();
+    await screen.findByRole('region', { name: 'Feature Search revamp' });
     expect(screen.queryByRole('region', { name: 'Durable setup' })).not.toBeInTheDocument();
   });
 
   it('renders only status and branch in the mono header facts', async () => {
     renderCockpit();
-    await screen.findByRole('heading', { name: 'Search revamp' });
+    await openInspector();
+    await screen.findByRole('region', { name: 'Feature Search revamp' });
     const header = screen.getByText('Status').closest('dl');
     expect(header).not.toBeNull();
     expect(within(header!).getByLabelText('SettingUpWorktrees')).toBeInTheDocument();
@@ -121,7 +135,8 @@ describe('FeatureCockpit snapshot rendering', () => {
 
   it('shows the feature pipeline ladder with Setup active during setup', async () => {
     renderCockpit();
-    await screen.findByRole('heading', { name: 'Search revamp' });
+    await openInspector();
+    await screen.findByRole('region', { name: 'Feature Search revamp' });
     const ladder = screen.getByRole('group', { name: 'Feature pipeline' });
     const active = within(ladder)
       .getAllByRole('listitem')
@@ -230,7 +245,7 @@ describe('FeatureCockpit snapshot rendering', () => {
     });
     renderCockpit(mock);
 
-    await screen.findByRole('heading', { name: 'Search revamp' });
+    await screen.findByRole('region', { name: 'Feature Search revamp' });
 
     expect(screen.queryByRole('tab', { name: 'Changes' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Publish' })).not.toBeInTheDocument();
@@ -242,7 +257,7 @@ describe('FeatureCockpit snapshot rendering', () => {
   it('opens configuration from the overflow menu', async () => {
     renderCockpit();
     const user = userEvent.setup();
-    await screen.findByRole('heading', { name: 'Search revamp' });
+    await screen.findByRole('region', { name: 'Feature Search revamp' });
     await user.click(screen.getByLabelText('More actions'));
     await user.click(screen.getByRole('menuitem', { name: 'Edit configuration…' }));
     expect(
@@ -669,6 +684,7 @@ describe('FeatureCockpit snapshot rendering', () => {
     });
     mock.api.openExternal.mockResolvedValue({ ok: true });
     renderCockpit(mock);
+    await openInspector();
     const user = userEvent.setup();
 
     await user.click(await screen.findByRole('button', { name: 'Open pull request' }));
@@ -692,6 +708,59 @@ describe('FeatureCockpit snapshot rendering', () => {
     expect(screen.queryByRole('dialog', { name: 'Feature inspector' })).not.toBeInTheDocument();
     await waitFor(() => expect(toggle).toHaveFocus());
     dispatchMediaChange('(max-width: 900px)', false);
+  });
+});
+
+describe('FeatureCockpit wide-layout inspector', () => {
+  it('starts closed by default and opens/closes as a trailing split-view pane', async () => {
+    renderCockpit();
+    await screen.findByRole('region', { name: 'Feature Search revamp' });
+
+    // Closed on first view: no split-view pane, and the content column has
+    // not opened its second track.
+    expect(screen.queryByRole('heading', { name: 'Search revamp' })).not.toBeInTheDocument();
+    expect(document.querySelector('.cockpit__content--inspector-open')).toBeNull();
+    const toggle = screen.getByRole('button', { name: 'Toggle inspector' });
+    expect(toggle).toHaveAttribute('aria-pressed', 'false');
+
+    const user = userEvent.setup();
+    await user.click(toggle);
+
+    // Toggling on renders the pane and flips the container's modifier class.
+    expect(await screen.findByRole('heading', { name: 'Search revamp' })).toBeVisible();
+    expect(document.querySelector('.cockpit__content--inspector-open')).not.toBeNull();
+    expect(toggle).toHaveAttribute('aria-pressed', 'true');
+
+    await user.click(toggle);
+
+    // Toggling again closes it.
+    expect(screen.queryByRole('heading', { name: 'Search revamp' })).not.toBeInTheDocument();
+    expect(document.querySelector('.cockpit__content--inspector-open')).toBeNull();
+    expect(toggle).toHaveAttribute('aria-pressed', 'false');
+  });
+
+  it('portals the toggle into a toolbar-owned host when one is supplied', async () => {
+    installAgenticoMock();
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    render(
+      <FeatureCockpit
+        featureId={FEATURE_ID}
+        titleHint="Search revamp"
+        onClose={vi.fn()}
+        onLoadedName={vi.fn()}
+        attentionItems={[]}
+        refreshAttention={() => Promise.resolve([])}
+        attentionDrafts={emptyAttentionDrafts()}
+        setAttentionDrafts={vi.fn()}
+        inspectorToggleHost={host}
+      />,
+    );
+    await screen.findByRole('region', { name: 'Feature Search revamp' });
+
+    const toggle = await screen.findByRole('button', { name: 'Toggle inspector' });
+    expect(host.contains(toggle)).toBe(true);
+    host.remove();
   });
 });
 
@@ -742,7 +811,8 @@ describe('FeatureCockpit failure and retry', () => {
     const mock = installAgenticoMock();
     mock.api.getFeature.mockResolvedValue(failedSnapshot());
     renderCockpit(mock);
-    await screen.findByRole('heading', { name: 'Search revamp' });
+    await openInspector();
+    await screen.findByRole('region', { name: 'Feature Search revamp' });
 
     expect(screen.getByText('Setup failed in repo-a.')).toBeInTheDocument();
     expect(screen.queryByRole('region', { name: 'Durable setup' })).not.toBeInTheDocument();
@@ -757,7 +827,7 @@ describe('FeatureCockpit failure and retry', () => {
     mock.api.getFeature.mockResolvedValue(failedSnapshot());
     renderCockpit(mock);
     const user = userEvent.setup();
-    await screen.findByRole('heading', { name: 'Search revamp' });
+    await screen.findByRole('region', { name: 'Feature Search revamp' });
 
     const retry = screen.getByRole('button', { name: 'Retry setup' });
     expect(retry).toBeEnabled();
@@ -775,7 +845,7 @@ describe('FeatureCockpit failure and retry', () => {
     mock.api.getFeature.mockResolvedValue(failedSnapshot());
     renderCockpit(mock);
     const user = userEvent.setup();
-    await screen.findByRole('heading', { name: 'Search revamp' });
+    await screen.findByRole('region', { name: 'Feature Search revamp' });
     // An unavailable verb lives in the overflow menu, greyed, carrying its reason.
     await user.click(screen.getByLabelText('More actions'));
     expect(screen.getByRole('menuitem', { name: 'Start' })).toBeDisabled();
@@ -829,7 +899,7 @@ describe('FeatureCockpit ready-to-start', () => {
     ).dispatchFeatureAction = vi.fn(() => new Promise(() => {}));
     renderCockpit(mock);
     const user = userEvent.setup();
-    await screen.findByRole('heading', { name: 'Search revamp' });
+    await screen.findByRole('region', { name: 'Feature Search revamp' });
 
     await waitFor(() => expect(mock.api.preflightCompletion).toHaveBeenCalled());
     await waitFor(() => expect(screen.getByText('Ready to start')).toBeInTheDocument());
@@ -857,7 +927,7 @@ describe('FeatureCockpit ready-to-start', () => {
     );
     renderCockpit(mock);
     const user = userEvent.setup();
-    await screen.findByRole('heading', { name: 'Search revamp' });
+    await screen.findByRole('region', { name: 'Feature Search revamp' });
     const callsBefore = mock.api.getFeature.mock.calls.length;
 
     await user.click(screen.getByRole('button', { name: 'Start' }));
@@ -948,7 +1018,7 @@ describe('FeatureCockpit convergence', () => {
 
   it('refetches on invalidations for this feature and on resync, ignoring others', async () => {
     const { mock } = renderCockpit();
-    await screen.findByRole('heading', { name: 'Search revamp' });
+    await screen.findByRole('region', { name: 'Feature Search revamp' });
     const base = mock.api.getFeature.mock.calls.length;
 
     mock.emitAppEvent({ type: 'invalidated', kind: 'feature.updated', featureId: 'other-id' });
@@ -964,7 +1034,7 @@ describe('FeatureCockpit convergence', () => {
   it('delays and coalesces invalidations while inactive, then flushes on activation', async () => {
     const mock = installAgenticoMock();
     const view = renderCockpit(mock, false);
-    await screen.findByRole('heading', { name: 'Search revamp' });
+    await screen.findByRole('region', { name: 'Feature Search revamp' });
     vi.useFakeTimers();
     const base = mock.api.getFeature.mock.calls.length;
     mock.emitAppEvent({ type: 'invalidated', kind: 'feature.updated', featureId: FEATURE_ID });
@@ -1049,18 +1119,19 @@ describe('FeatureCockpit convergence', () => {
   it('keeps the loaded snapshot visible when a silent refresh fails', async () => {
     const mock = installAgenticoMock();
     renderCockpit(mock, true);
-    expect(await screen.findByRole('heading', { name: 'Search revamp' })).toBeVisible();
+    expect(await screen.findByRole('region', { name: 'Feature Search revamp' })).toBeVisible();
+    await openInspector();
     mock.api.getFeature.mockRejectedValueOnce(new Error('unavailable: runtime busy'));
     mock.emitAppEvent({ type: 'invalidated', kind: 'feature.updated', featureId: FEATURE_ID });
     expect(await screen.findByText('Refreshing from the runtime…')).toBeVisible();
-    expect(screen.getByRole('heading', { name: 'Search revamp' })).toBeVisible();
+    expect(screen.getByRole('region', { name: 'Feature Search revamp' })).toBeVisible();
     expect(screen.queryByText(/Loading Search revamp from the runtime/)).not.toBeInTheDocument();
   });
 
   it('shows the missing state when a silent refresh reports not_found', async () => {
     const mock = installAgenticoMock();
     renderCockpit(mock, true);
-    await screen.findByRole('heading', { name: 'Search revamp' });
+    await screen.findByRole('region', { name: 'Feature Search revamp' });
     mock.api.getFeature.mockRejectedValueOnce(new Error('not_found: feature not found'));
     mock.emitAppEvent({ type: 'invalidated', kind: 'feature.updated', featureId: FEATURE_ID });
     expect(await screen.findByText('This feature no longer exists on the server.')).toBeVisible();
@@ -1081,8 +1152,9 @@ describe('FeatureCockpit convergence', () => {
     expect(mock.api.getFeature).toHaveBeenCalledTimes(1);
 
     await act(async () => resolveInitial(featureSnapshot()));
+    await openInspector();
     expect(await screen.findByText('Refreshing from the runtime…')).toBeVisible();
-    expect(await screen.findByRole('heading', { name: 'Search revamp' })).toBeVisible();
+    expect(await screen.findByRole('region', { name: 'Feature Search revamp' })).toBeVisible();
     expect(screen.queryByText(/Loading Search revamp from the runtime/)).not.toBeInTheDocument();
   });
 
@@ -1103,7 +1175,7 @@ describe('FeatureCockpit convergence', () => {
           ),
       );
     renderCockpit(mock);
-    await screen.findByRole('heading', { name: 'Search revamp' });
+    await screen.findByRole('region', { name: 'Feature Search revamp' });
 
     mock.emitAppEvent({ type: 'invalidated', kind: 'feature.updated', featureId: FEATURE_ID });
     mock.emitAppEvent({ type: 'invalidated', kind: 'feature.updated', featureId: FEATURE_ID });
@@ -1111,7 +1183,9 @@ describe('FeatureCockpit convergence', () => {
     await act(async () => resolveFirstRefresh(featureSnapshot({ name: 'First refresh' })));
     await waitFor(() => expect(mock.api.getFeature).toHaveBeenCalledTimes(3));
     await act(async () => resolveTrailingRefresh(featureSnapshot({ name: 'Newest snapshot' })));
-    expect(await screen.findByRole('heading', { name: 'Newest snapshot' })).toBeInTheDocument();
+    expect(
+      await screen.findByRole('region', { name: 'Feature Newest snapshot' }),
+    ).toBeInTheDocument();
   });
 
   it('serializes an action refresh with invalidations and converges through one trailing refresh', async () => {
@@ -1162,7 +1236,9 @@ describe('FeatureCockpit convergence', () => {
     await act(async () => resolveActionRefresh(ready));
     await waitFor(() => expect(mock.api.getFeature).toHaveBeenCalledTimes(3));
     await act(async () => resolveTrailingRefresh(converged));
-    expect(await screen.findByRole('heading', { name: 'Converged snapshot' })).toBeInTheDocument();
+    expect(
+      await screen.findByRole('region', { name: 'Feature Converged snapshot' }),
+    ).toBeInTheDocument();
     expect(mock.api.getFeature).toHaveBeenCalledTimes(3);
   });
 
@@ -1202,7 +1278,8 @@ describe('FeatureCockpit convergence', () => {
 
   it('shows a refreshing indicator while the event stream is stale', async () => {
     const { mock } = renderCockpit();
-    await screen.findByRole('heading', { name: 'Search revamp' });
+    await screen.findByRole('region', { name: 'Feature Search revamp' });
+    await openInspector();
 
     mock.emitAppEvent({ type: 'status', stream: 'stale' });
     expect(await screen.findByText('Refreshing from the runtime…')).toBeInTheDocument();

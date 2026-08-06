@@ -49,7 +49,11 @@ export const COMMAND_CATALOGUE: readonly CommandDescriptor[] = [
   },
   {
     id: 'global.home',
-    label: 'Home',
+    // Renamed from "Home" now that the Bench sidebar's pinned row (and every
+    // other surface pointing at it) calls this destination Overview; the id
+    // and route target are untouched so every existing dispatch path (menu,
+    // palette, ⌘1) keeps working unchanged.
+    label: 'Overview',
     group: 'navigation',
     accelerator: 'CommandOrControl+1',
     target: 'home',

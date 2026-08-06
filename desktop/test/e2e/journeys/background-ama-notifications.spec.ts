@@ -153,11 +153,15 @@ test('packaged attention notifications are private, deduplicated, bounded, passi
     await activateNotification(handle, 0);
     const inbox = handle.page.getByRole('complementary', { name: 'Attention inbox' });
     await expect(inbox).not.toBeVisible();
+    // Notification click only focuses the window (main/notifications.ts just
+    // calls show(), no routing) — it stays on the feature's own cockpit, not
+    // Overview. The sidebar's waiting-lane sub-line is this shell's per-row
+    // equivalent of the old tab-strip's "Blocking input for X: N pending"
+    // badge, worded per WorkspaceShell.tsx's laneSubline (permission-kind
+    // attention -> "Approve N request(s)").
     await expect(
-      handle.page.getByRole('status', {
-        name: 'Blocking input for Background Notification Questions: 1 pending',
-      }),
-    ).toBeVisible();
+      handle.page.getByRole('option', { name: /Background Notification Questions/ }),
+    ).toContainText('Approve 1 request');
 
     await answerPermission(handle, 'perm-stale', 'deny');
     await waitForAttentionItem(handle, 'perm-deny');

@@ -61,7 +61,7 @@ test('verified download, Install When Idle, and Restart to Update require explic
     await expect(updatesPanel).toContainText('0.2.0');
     await expect(updatesPanel).toContainText('verified');
     await expect(handle.page.getByRole('button', { name: 'Release notes' })).toBeVisible();
-    await handle.page.getByRole('tab', { name: 'Home' }).click();
+    await handle.page.getByRole('option', { name: 'Overview' }).click();
     await expect(handle.page.getByRole('button', { name: 'New feature' })).toBeVisible();
 
     await setForcedActiveWork(handle, true);

@@ -1061,27 +1061,15 @@ function makeMockApi(
   let currentSettings: Settings = {
     ...defaultSettings(),
     theme: requestedTheme,
-    tabs:
-      scene === 'home-flight-board'
-        ? { open: [], activeFeatureId: null }
-        : {
-            open: [
-              {
-                featureId: 'abcd1234ef567890',
-                titleHint: 'History and Rewind',
-                selectedRunNumber:
-                  scene.startsWith('archive') ||
-                  scene.startsWith('pinned') ||
-                  scene.startsWith('constrained')
-                    ? 7
-                    : null,
-              },
-            ],
-            activeFeatureId:
-              scene === 'update-passive-active' || scene === 'update-constrained'
-                ? null
-                : 'abcd1234ef567890',
-          },
+    shell: {
+      activeFeatureId:
+        scene === 'home-flight-board' ||
+        scene === 'update-passive-active' ||
+        scene === 'update-constrained'
+          ? null
+          : 'abcd1234ef567890',
+      sidebarCollapsed: false,
+    },
   };
 
   return {

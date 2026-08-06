@@ -49,15 +49,15 @@ test('history: paginated sealed runs, restored archive selection, immutable insp
     handle = null;
     seedRunHistory(world, featureId);
     handle = await launchApp(world, testInfo, { traceName: 'history-readonly-seeded' });
-    await expect(handle.page.getByRole('tab', { name: 'History Journey' })).toBeVisible({
+    await expect(handle.page.getByRole('option', { name: 'History Journey' })).toBeVisible({
       timeout: 60_000,
     });
-    await handle.page.getByRole('tab', { name: 'History Journey' }).click();
+    await handle.page.getByRole('option', { name: 'History Journey' }).click();
     const cockpit = handle.page.getByLabel('Feature History Journey');
 
     transcript.section('Open run history via the History button');
-    await cockpit.locator('summary[aria-label="More actions"]').click();
-    let historyButton = cockpit.getByRole('menuitem', { name: 'View run history' });
+    await handle.page.locator('summary[aria-label="More actions"]').click();
+    let historyButton = handle.page.getByRole('menuitem', { name: 'View run history' });
     await expect(historyButton).toBeVisible();
     const seededRuns = await handle.page.evaluate(
       (id) => window.agentico.listRuns({ featureId: id, page: 1, pageSize: 20 }),
@@ -84,8 +84,8 @@ test('history: paginated sealed runs, restored archive selection, immutable insp
     await expect(handle.page.locator('.archive-mode__band')).toContainText('Run 1');
     await expect(handle.page.getByLabel('Sealed run pages')).toContainText('Page 2 of 2');
     await handle.page.getByRole('button', { name: /Return to current/ }).click();
-    await cockpit.locator('summary[aria-label="More actions"]').click();
-    historyButton = cockpit.getByRole('menuitem', { name: 'View run history' });
+    await handle.page.locator('summary[aria-label="More actions"]').click();
+    historyButton = handle.page.getByRole('menuitem', { name: 'View run history' });
     await historyButton.click();
     await expect(handle.page.locator('.archive-mode__band')).toContainText('Run 6');
 
@@ -151,8 +151,8 @@ test('history: paginated sealed runs, restored archive selection, immutable insp
     });
 
     transcript.section('Capture constrained-layout archive screenshots at 760x900');
-    await cockpit.locator('summary[aria-label="More actions"]').click();
-    historyButton = cockpit.getByRole('menuitem', { name: 'View run history' });
+    await handle.page.locator('summary[aria-label="More actions"]').click();
+    historyButton = handle.page.getByRole('menuitem', { name: 'View run history' });
     await historyButton.click();
     await setWindowSize(handle, 760, 900);
     await setTheme(handle, 'light');
@@ -166,17 +166,24 @@ test('history: paginated sealed runs, restored archive selection, immutable insp
       'archive-selector-and-return-to-current-control-in-constrained-layout-dark-theme-760x900',
     );
 
-    transcript.section('Verify relaunch restores the selected run');
+    // The archive-run selection is session state, not persisted: the plan
+    // explicitly drops per-tab archive-run selections along with the tab
+    // strip itself ("archive-run choice becomes session state until Phase
+    // 5's run popup"). A relaunch must land back on the current run's own
+    // surface, not resurrect the archived selection from before restart.
+    transcript.section('Verify relaunch resets to the current run, not the archived selection');
     await closeApp(handle);
     handle = null;
     handle = await launchApp(world, testInfo, { traceName: 'history-readonly-relaunch' });
-    await expect(handle.page.getByRole('tab', { name: 'History Journey' })).toBeVisible({
+    await expect(handle.page.getByRole('option', { name: 'History Journey' })).toBeVisible({
       timeout: 60_000,
     });
-    await handle.page.getByRole('tab', { name: 'History Journey' }).click();
-    await expect(handle.page.locator('.archive-mode__band')).toContainText('Sealed run', {
+    await handle.page.getByRole('option', { name: 'History Journey' }).click();
+    const relaunchedCockpit = handle.page.getByLabel('Feature History Journey');
+    await expect(relaunchedCockpit.getByText('Code ready', { exact: true }).first()).toBeVisible({
       timeout: 15_000,
     });
+    await expect(handle.page.locator('.archive-mode__band')).toHaveCount(0);
 
     transcript.section('Journey complete');
   } finally {

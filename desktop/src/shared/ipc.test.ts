@@ -18,7 +18,7 @@ import {
   isActiveChatSession,
   isTerminalChatStatus,
   defaultSettings,
-  defaultTabsPrefs,
+  defaultShellPrefs,
   defaultWizardPrefs,
   ipcContracts,
   LocalReviewDraftSaveRequestSchema,
@@ -443,28 +443,28 @@ describe('SettingsSchema', () => {
   });
 
   it('rejects unsupported schema versions', () => {
-    expect(SettingsSchema.safeParse({ ...defaultSettings(), schemaVersion: 2 }).success).toBe(
+    expect(SettingsSchema.safeParse({ ...defaultSettings(), schemaVersion: 3 }).success).toBe(
       false,
     );
   });
 
   it('accepts a full settings document with window bounds and theme', () => {
     const doc = {
-      schemaVersion: 1,
+      schemaVersion: 2,
       runtime: { selection: 'claude' },
       window: { bounds: { x: 10, y: 20, width: 800, height: 600 } },
       theme: 'dark',
       wizard: { collapsedHelp: true },
       ama: { drawer: 'expanded' },
       notifications: { previewEnabled: true },
-      tabs: { open: [{ featureId: 'abcd1234', titleHint: 'Search' }], activeFeatureId: null },
+      shell: { activeFeatureId: 'abcd1234ef567890', sidebarCollapsed: true },
     };
     expect(SettingsSchema.parse(doc)).toEqual(doc);
   });
 
   it('fills wizard presentation prefs with defaults for pre-wizard documents', () => {
     const doc = {
-      schemaVersion: 1,
+      schemaVersion: 2,
       runtime: { selection: null },
       window: {},
       theme: 'system',
@@ -474,7 +474,7 @@ describe('SettingsSchema', () => {
       wizard: defaultWizardPrefs(),
       ama: { drawer: 'compact' },
       notifications: { previewEnabled: false },
-      tabs: defaultTabsPrefs(),
+      shell: defaultShellPrefs(),
     });
   });
 });

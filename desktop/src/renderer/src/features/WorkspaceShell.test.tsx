@@ -1,14 +1,9 @@
-import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { useCallback, useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import {
-  defaultSettings,
-  type AttentionItem,
-  type Settings,
-  type TabsPrefs,
-} from '../../../shared/ipc';
+import { defaultSettings, type Settings } from '../../../shared/ipc';
 import { featureSnapshot, installAgenticoMock } from '../test/agenticoMock';
+import { dispatchMediaChange, matchMediaState } from '../test/setup';
 import { WorkspaceShell } from './WorkspaceShell';
 
 vi.mock('monaco-editor', () => ({
@@ -25,53 +20,42 @@ vi.mock('monaco-editor', () => ({
   },
 }));
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  matchMediaState.narrowShell = false;
+});
 
 const FEATURE_ID = 'abcd1234ef567890';
 const SECOND_FEATURE_ID = '1234abcd5678ef90';
 
-const permissionAttention: AttentionItem = {
-  kind: 'permission',
-  id: 'perm-1',
-  featureId: FEATURE_ID,
-  sessionId: 'session-1',
-  phase: 'Implement',
-  toolName: 'Bash',
-  summary: 'printf attention',
-  input: { command: 'printf attention' },
-  waitingSince: '2026-07-15T10:00:00.000Z',
-};
-
-function settingsWithTab(): Settings {
+function settingsWithActive(featureId: string | null = FEATURE_ID): Settings {
   return {
     ...defaultSettings(),
-    tabs: {
-      open: [{ featureId: FEATURE_ID, titleHint: 'Search revamp' }],
-      activeFeatureId: FEATURE_ID,
-    },
+    shell: { activeFeatureId: featureId, sidebarCollapsed: false },
   };
 }
 
-describe('WorkspaceShell tabs', () => {
-  it('keeps Home focused on the authoritative feature list and enters creation deliberately', async () => {
-    installAgenticoMock({
-      features: [
-        {
-          id: FEATURE_ID,
-          name: 'Search revamp',
-          status: 'Created',
-          currentPhase: 'Plan',
-          repos: ['repo-a'],
-          createdAt: '2026-07-14T10:00:00Z',
-          activeRun: 1,
-          runCount: 1,
-          warnings: [],
-        },
-      ],
-    });
+function summaryOf(feature: ReturnType<typeof featureSnapshot>) {
+  return {
+    id: feature.id,
+    name: feature.name,
+    status: feature.status,
+    currentPhase: feature.currentPhase,
+    repos: feature.repos,
+    createdAt: feature.createdAt,
+    activeRun: feature.activeRun,
+    runCount: 1,
+    warnings: [],
+  };
+}
+
+describe('WorkspaceShell sidebar', () => {
+  it('keeps Overview selected on first render and enters creation deliberately', async () => {
+    const feature = featureSnapshot({ id: FEATURE_ID, name: 'Search revamp', status: 'Created' });
+    installAgenticoMock({ features: [summaryOf(feature)] });
     render(<WorkspaceShell />);
 
-    expect(await screen.findByRole('tab', { name: 'Home' })).toHaveAttribute(
+    expect(await screen.findByRole('option', { name: 'Overview' })).toHaveAttribute(
       'aria-selected',
       'true',
     );
@@ -82,285 +66,212 @@ describe('WorkspaceShell tabs', () => {
     expect(await screen.findByRole('form', { name: /create a feature/i })).toBeInTheDocument();
   });
 
-  it('mounts Settings only after its first activation and retains it afterward', async () => {
-    const mock = installAgenticoMock();
+  it('groups features into lane sections with correct counts and hides empty lanes', async () => {
+    const waiting = featureSnapshot({
+      id: 'waiting1ef567890a',
+      name: 'Needs a decision',
+      status: 'Failed',
+      actions: [],
+    });
+    const running = featureSnapshot({
+      id: 'running1ef567890a',
+      name: 'Mid-flight feature',
+      status: 'Implementing',
+      setup: { status: 'done', attempt: 1, tasks: [] },
+      actions: [],
+    });
+    const published = featureSnapshot({
+      id: 'publish1ef567890a',
+      name: 'Shipped feature',
+      status: 'Published',
+      setup: { status: 'done', attempt: 1, tasks: [] },
+      actions: [],
+    });
+    const snapshots = [waiting, running, published];
+    const mock = installAgenticoMock({ features: snapshots.map(summaryOf) });
+    mock.api.getFeature.mockImplementation((featureId: string) =>
+      Promise.resolve(snapshots.find((snapshot) => snapshot.id === featureId) ?? snapshots[0]!),
+    );
+    render(<WorkspaceShell />);
+
+    await screen.findByRole('option', { name: 'Overview' });
+    // Populated lanes render with their count and members.
+    const waitingGroup = await screen.findByRole('group', { name: 'Waiting on you' });
+    expect(within(waitingGroup).getByText('Needs a decision')).toBeInTheDocument();
+    const runningGroup = screen.getByRole('group', { name: 'Running' });
+    expect(within(runningGroup).getByText('Mid-flight feature')).toBeInTheDocument();
+    const publishedGroup = screen.getByRole('group', { name: 'Published' });
+    expect(within(publishedGroup).getByText('Shipped feature')).toBeInTheDocument();
+    // Lanes with no members never render a section.
+    expect(screen.queryByRole('group', { name: 'Done' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('group', { name: 'At rest' })).not.toBeInTheDocument();
+  });
+
+  it('selects a feature by pointer click, mounting exactly one cockpit at a time', async () => {
+    const feature = featureSnapshot({
+      id: FEATURE_ID,
+      name: 'Search revamp',
+      status: 'Implementing',
+      setup: { status: 'done', attempt: 1, tasks: [] },
+      actions: [],
+    });
+    const mock = installAgenticoMock({ features: [summaryOf(feature)] });
+    mock.api.getFeature.mockResolvedValue(feature);
     render(<WorkspaceShell />);
     const user = userEvent.setup();
 
-    await screen.findByRole('tab', { name: 'Home' });
-    expect(mock.api.getReadiness).not.toHaveBeenCalled();
-    expect(mock.api.getUpdates).not.toHaveBeenCalled();
-    expect(mock.api.getDiagnostics).not.toHaveBeenCalled();
+    const row = await screen.findByRole('option', { name: /Search revamp/ });
+    await user.click(row);
 
-    await user.click(screen.getByRole('tab', { name: 'Settings' }));
-    await waitFor(() => expect(mock.api.getReadiness).toHaveBeenCalledTimes(1));
-    expect(mock.api.getUpdates).toHaveBeenCalledTimes(1);
-    expect(mock.api.getDiagnostics).toHaveBeenCalledTimes(1);
-
-    await user.click(screen.getByRole('tab', { name: 'Home' }));
-    await user.click(screen.getByRole('tab', { name: 'Settings' }));
-    expect(mock.api.getReadiness).toHaveBeenCalledTimes(1);
-    expect(mock.api.getUpdates).toHaveBeenCalledTimes(1);
-    expect(mock.api.getDiagnostics).toHaveBeenCalledTimes(1);
-  });
-
-  it('hydrates and renders intervention-first rows with operational detail and safe failure text', async () => {
-    const mock = installAgenticoMock({
-      features: [
-        {
-          id: FEATURE_ID,
-          name: 'Search revamp',
-          status: 'Created',
-          currentPhase: 'Plan',
-          repos: ['repo-a'],
-          createdAt: '2026-07-14T10:00:00Z',
-          activeRun: 1,
-          runCount: 1,
-          warnings: [],
-        },
-      ],
-    });
-    mock.api.getFeature.mockResolvedValue(
-      featureSnapshot({
-        status: 'Failed',
-        currentPhase: 'Implement',
-        failure: { type: 'agent_exit', message: 'Provider exited before completion.' },
-        actions: [],
-      }),
+    expect(row).toHaveAttribute('aria-selected', 'true');
+    expect(await screen.findByLabelText('Feature Search revamp')).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: 'Overview' })).toHaveAttribute(
+      'aria-selected',
+      'false',
     );
-    render(<WorkspaceShell />);
+    expect(screen.queryByRole('region', { name: 'Existing features' })).not.toBeInTheDocument();
 
-    const listRegion = await screen.findByRole('region', { name: 'Existing features' });
-    const row = await within(listRegion).findByRole('listitem');
-    expect(row).toHaveTextContent('Search revamp');
-    expect(row).toHaveTextContent('repo-a');
-    expect(row).toHaveTextContent('Failed');
-    expect(row).toHaveTextContent('Implement');
-    // A failed run is a parked intervention state: amber treatment, named badge.
-    expect(row).toHaveAttribute('data-state', 'attention');
-    expect(row).toHaveTextContent('Provider exited before completion.');
-    expect(mock.api.getFeature).toHaveBeenCalledWith(FEATURE_ID);
+    // Selecting Overview again unmounts the cockpit.
+    await user.click(screen.getByRole('option', { name: 'Overview' }));
+    expect(screen.queryByLabelText('Feature Search revamp')).not.toBeInTheDocument();
+    expect(await screen.findByRole('region', { name: 'Existing features' })).toBeInTheDocument();
   });
 
-  it('shows a refactoring parent as an in-progress card carrying its pass lane', async () => {
-    const mock = installAgenticoMock({
-      features: [
-        {
-          id: FEATURE_ID,
-          name: 'Electron app',
-          status: 'Published',
-          currentPhase: 'Publish',
-          repos: ['repo-a'],
-          createdAt: '2026-07-14T10:00:00Z',
-          activeRun: 6,
-          runCount: 6,
-          warnings: [],
-        },
-      ],
-    });
-    mock.api.getFeature.mockResolvedValue(
-      featureSnapshot({
-        name: 'Electron app',
-        status: 'Published',
-        currentPhase: 'Publish',
-        timing: { totalSeconds: 420_120 },
-        actions: [],
-        activeChild: {
-          id: 'child1234ef567890',
-          name: 'Slop removal pass',
-          kind: 'refactor',
-          displayToken: 'refactor:child1234ef567890',
-          displayState: 'Active — Implementing',
-          pipeline: 'large',
-          status: 'Implementing',
-          relationshipState: 'active',
-          startedAt: '2026-07-30T10:00:00Z',
-          cost: { totalUsd: 4.2, byPhase: {} },
-          integrationState: 'pending',
-          attention: [],
-          cleanupWarnings: [],
-        },
-      }),
-    );
-    render(<WorkspaceShell />);
-
-    const listRegion = await screen.findByRole('region', { name: 'Existing features' });
-    const row = await within(listRegion).findByRole('listitem');
-    // In progress, badged Refactoring, parent shown as locked.
-    expect(row).toHaveTextContent('Refactoring');
-    expect(row).toHaveTextContent('Published · locked');
-    // The pass lane replaces the parent's at-rest rail and carries the pass needle.
-    expect(within(row).getByText('Slop removal pass')).toBeVisible();
-    expect(within(row).getByText('Implementing')).toBeVisible();
-    const passRail = within(row).getByRole('group', {
-      name: 'Pass pipeline for Slop removal pass',
-    });
-    // Nine-stage rails compact their labels; the full name stays on title.
-    expect(within(passRail).getByTitle('Implement').closest('[data-state]')).toHaveAttribute(
-      'data-state',
-      'active',
-    );
-    expect(
-      within(row).queryByRole('group', { name: 'Pipeline for Electron app' }),
-    ).not.toBeInTheDocument();
-    // The parent's lifetime elapsed would read as pass time; it stays off.
-    expect(row).not.toHaveTextContent('elapsed');
-  });
-
-  it('shows a created-but-unstarted pass as ready to start, not running', async () => {
-    const mock = installAgenticoMock({
-      features: [
-        {
-          id: FEATURE_ID,
-          name: 'Electron app',
-          status: 'Published',
-          currentPhase: 'Publish',
-          repos: ['repo-a'],
-          createdAt: '2026-07-14T10:00:00Z',
-          activeRun: 6,
-          runCount: 6,
-          warnings: [],
-        },
-      ],
-    });
-    mock.api.getFeature.mockResolvedValue(
-      featureSnapshot({
-        name: 'Electron app',
-        status: 'Published',
-        currentPhase: 'Publish',
-        actions: [],
-        activeChild: {
-          id: 'child1234ef567890',
-          name: 'Slop removal pass',
-          kind: 'refactor',
-          displayToken: 'refactor:child1234ef567890',
-          displayState: 'Created',
-          pipeline: 'large',
-          status: 'Created',
-          relationshipState: 'active',
-          startedAt: '2026-07-30T10:00:00Z',
-          cost: { totalUsd: 0, byPhase: {} },
-          integrationState: 'pending',
-          attention: [],
-          cleanupWarnings: [],
-        },
-      }),
-    );
-    render(<WorkspaceShell />);
-
-    const listRegion = await screen.findByRole('region', { name: 'Existing features' });
-    const row = await within(listRegion).findByRole('listitem');
-    // Quiet badge and plain wording — nothing on this card may read as live.
-    expect(row).toHaveTextContent('Pass ready to start');
-    expect(row).not.toHaveTextContent('Refactoring');
-    expect(row).toHaveAttribute('data-state', 'quiet');
-    expect(within(row).getByText('Not started')).toBeVisible();
-    // The pass rail renders with every stop upcoming: no needle, no fill.
-    const passRail = within(row).getByRole('group', {
-      name: 'Pass pipeline for Slop removal pass',
-    });
-    expect(passRail.querySelector('[aria-current="step"]')).toBeNull();
-    for (const stop of passRail.querySelectorAll('.flight-rail__stop')) {
-      expect(stop).toHaveAttribute('data-state', 'upcoming');
-    }
-  });
-
-  it('groups Home features by lifecycle state', async () => {
-    const inProgress = featureSnapshot({
-      id: 'feature-in-progress',
-      name: 'Electron app',
-      status: 'CodeReady',
-      currentPhase: 'Final Review',
-      createdAt: '2026-07-16T10:00:00Z',
-      setup: { status: 'done', attempt: 1, tasks: [] },
-    });
-    const published = featureSnapshot({
-      id: 'feature-published',
-      name: 'Review automation',
-      status: 'Published',
-      currentPhase: 'Publish',
-      createdAt: '2026-07-15T10:00:00Z',
-      setup: { status: 'done', attempt: 1, tasks: [] },
-    });
-    const done = featureSnapshot({
-      id: 'feature-done',
-      name: 'MCP server',
-      status: 'Done',
-      currentPhase: 'Publish',
-      createdAt: '2026-07-14T10:00:00Z',
-      setup: { status: 'done', attempt: 1, tasks: [] },
-    });
-    const snapshots = [inProgress, published, done];
-    const mock = installAgenticoMock({
-      features: snapshots.map((feature) => ({
-        id: feature.id,
-        name: feature.name,
-        status: feature.status,
-        currentPhase: feature.currentPhase,
-        repos: feature.repos,
-        createdAt: feature.createdAt,
-        activeRun: feature.activeRun,
-        runCount: 1,
-        warnings: [],
-      })),
-    });
-    mock.api.getFeature.mockImplementation((featureId: string) => {
-      const snapshot = snapshots.find((feature) => feature.id === featureId);
-      return snapshot === undefined
-        ? Promise.reject(new Error('not_found: feature not found'))
-        : Promise.resolve(snapshot);
-    });
-
-    render(<WorkspaceShell />);
-
-    const inProgressGroup = await screen.findByRole('region', { name: 'In progress' });
-    const publishedGroup = screen.getByRole('region', { name: 'Published' });
-    const doneGroup = screen.getByRole('region', { name: 'Done' });
-
-    expect(within(inProgressGroup).getByText('Electron app')).toBeInTheDocument();
-    expect(within(inProgressGroup).queryByText('Review automation')).not.toBeInTheDocument();
-    expect(within(publishedGroup).getByText('Review automation')).toBeInTheDocument();
-    expect(within(doneGroup).getByText('MCP server')).toBeInTheDocument();
-  });
-
-  it('refetches the Home queue when the window regains focus', async () => {
-    const present = featureSnapshot({
+  it('keeps exactly one row selected with a roving tabindex across Overview and lane rows', async () => {
+    const feature = featureSnapshot({
       id: FEATURE_ID,
-      name: 'translate README to Italian',
-      status: 'Interrupted',
-      currentPhase: 'Publish',
+      name: 'Search revamp',
+      status: 'Implementing',
+      setup: { status: 'done', attempt: 1, tasks: [] },
+      actions: [],
+    });
+    const mock = installAgenticoMock({ features: [summaryOf(feature)] });
+    mock.api.getFeature.mockResolvedValue(feature);
+    render(<WorkspaceShell />);
+
+    const overviewRow = await screen.findByRole('option', { name: 'Overview' });
+    const featureRow = await screen.findByRole('option', { name: /Search revamp/ });
+    expect(overviewRow).toHaveAttribute('tabindex', '0');
+    expect(featureRow).toHaveAttribute('tabindex', '-1');
+
+    await userEvent.click(featureRow);
+    expect(overviewRow).toHaveAttribute('tabindex', '-1');
+    expect(featureRow).toHaveAttribute('tabindex', '0');
+
+    const selected = screen
+      .getAllByRole('option')
+      .filter((row) => row.getAttribute('aria-selected') === 'true');
+    expect(selected).toHaveLength(1);
+  });
+
+  it('restores the previously active feature from shell.activeFeatureId and persists a new selection', async () => {
+    const mock = installAgenticoMock({
+      settings: settingsWithActive(FEATURE_ID),
+      features: [summaryOf(featureSnapshot({ id: FEATURE_ID, name: 'Search revamp' }))],
+      feature: featureSnapshot({ id: FEATURE_ID, name: 'Search revamp' }),
+    });
+    render(<WorkspaceShell />);
+
+    expect(
+      await screen.findByRole('region', { name: 'Feature Search revamp' }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: /Search revamp/ })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
+
+    await userEvent.click(screen.getByRole('option', { name: 'Overview' }));
+    await waitFor(() =>
+      expect(mock.api.updateSettings).toHaveBeenCalledWith({
+        shell: { activeFeatureId: null, sidebarCollapsed: false },
+      }),
+    );
+  });
+
+  it('collapses the Done lane by default while other lanes start expanded', async () => {
+    const done = featureSnapshot({
+      id: FEATURE_ID,
+      name: 'Finished feature',
+      status: 'Done',
       setup: { status: 'done', attempt: 1, tasks: [] },
     });
-    const mock = installAgenticoMock({
-      features: [
+    const waiting = featureSnapshot({
+      id: SECOND_FEATURE_ID,
+      name: 'Blocked feature',
+      status: 'Failed',
+      setup: { status: 'done', attempt: 1, tasks: [] },
+      actions: [],
+    });
+    const snapshots = [done, waiting];
+    const mock = installAgenticoMock({ features: snapshots.map(summaryOf) });
+    mock.api.getFeature.mockImplementation((featureId: string) =>
+      Promise.resolve(snapshots.find((snapshot) => snapshot.id === featureId) ?? snapshots[0]!),
+    );
+    render(<WorkspaceShell />);
+
+    const doneGroup = await screen.findByRole('group', { name: 'Done' });
+    const doneDetails = doneGroup.closest('details');
+    expect(doneDetails).not.toBeNull();
+    expect(doneDetails).not.toHaveAttribute('open');
+
+    const waitingGroup = screen.getByRole('group', { name: 'Waiting on you' });
+    const waitingDetails = waitingGroup.closest('details');
+    expect(waitingDetails).toHaveAttribute('open');
+  });
+
+  it('removes a deleted feature from the sidebar and returns to Overview', async () => {
+    const feature = featureSnapshot({
+      id: FEATURE_ID,
+      name: 'Search revamp',
+      status: 'Created',
+      actions: [
         {
-          id: present.id,
-          name: present.name,
-          status: present.status,
-          currentPhase: present.currentPhase,
-          repos: present.repos,
-          createdAt: present.createdAt,
-          activeRun: present.activeRun,
-          runCount: 1,
-          warnings: [],
+          id: 'delete',
+          enabled: true,
+          disabledReasons: [],
+          impactPreview: {
+            kind: 'parent_cascade_delete',
+            subject: { id: FEATURE_ID, name: 'Search revamp' },
+            categories: [{ key: 'children', label: 'Children', items: [] }],
+            retained: [],
+          },
         },
       ],
     });
-    mock.api.getFeature.mockResolvedValue(present);
-
+    const mock = installAgenticoMock({
+      settings: settingsWithActive(FEATURE_ID),
+      features: [summaryOf(feature)],
+      feature,
+    });
+    mock.api.deleteFeatureCascade.mockResolvedValue({
+      featureId: FEATURE_ID,
+      operationId: 'delete-1',
+      status: 'completed',
+      diagnostics: [],
+    });
     render(<WorkspaceShell />);
-    expect(await screen.findByText('translate README to Italian')).toBeInTheDocument();
+    const user = userEvent.setup();
 
-    // Deleted out of band: the next list fetch no longer returns it.
-    mock.api.listFeatures.mockResolvedValue([]);
-    window.dispatchEvent(new Event('focus'));
+    expect(
+      await screen.findByRole('region', { name: 'Feature Search revamp' }),
+    ).toBeInTheDocument();
+    mock.api.listFeatures.mockResolvedValueOnce([]);
+    await user.click(await screen.findByLabelText('More actions'));
+    await user.click(screen.getByRole('menuitem', { name: 'Delete feature' }));
+    const dialog = await screen.findByRole('dialog', { name: /Delete Search revamp/ });
+    await user.click(within(dialog).getByRole('button', { name: 'Delete feature' }));
 
     await waitFor(() =>
-      expect(screen.queryByText('translate README to Italian')).not.toBeInTheDocument(),
+      expect(mock.api.deleteFeatureCascade).toHaveBeenCalledWith({ featureId: FEATURE_ID }),
     );
+    expect(await screen.findByRole('option', { name: 'Overview' })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
+    expect(screen.queryByRole('option', { name: /Search revamp/ })).not.toBeInTheDocument();
   });
 
-  it('opens a persistent tab after creation and stores only identity/presentation', async () => {
+  it('opens a feature after creation from the Overview surface', async () => {
     const mock = installAgenticoMock();
     render(<WorkspaceShell />);
     const user = userEvent.setup();
@@ -374,370 +285,73 @@ describe('WorkspaceShell tabs', () => {
     await user.click(screen.getByRole('button', { name: 'Next: Review' }));
     await user.click(screen.getByRole('button', { name: 'Create and start' }));
 
-    const tab = await screen.findByRole('tab', { name: 'Search revamp' });
-    expect(tab).toHaveAttribute('aria-selected', 'true');
-    expect(mock.api.updateSettings).toHaveBeenCalledWith({
-      tabs: {
-        open: [{ featureId: FEATURE_ID, titleHint: 'Search revamp' }],
-        activeFeatureId: FEATURE_ID,
-      },
-    });
-    // The cockpit itself always loads from the server.
-    await waitFor(() => expect(mock.api.getFeature).toHaveBeenCalledWith(FEATURE_ID));
+    expect(
+      await screen.findByRole('region', { name: 'Feature Search revamp' }),
+    ).toBeInTheDocument();
+    await waitFor(() =>
+      expect(mock.api.updateSettings).toHaveBeenCalledWith({
+        shell: { activeFeatureId: FEATURE_ID, sidebarCollapsed: false },
+      }),
+    );
+    expect(mock.api.getFeature).toHaveBeenCalledWith(FEATURE_ID);
   });
 
-  it('asks before discarding entered creation details', async () => {
+  it('asks before discarding entered creation details when leaving via Overview', async () => {
     installAgenticoMock();
     render(<WorkspaceShell />);
     const user = userEvent.setup();
 
-    await user.click(await screen.findByRole('tab', { name: 'Home' }));
     await user.click(await screen.findByRole('button', { name: 'New feature' }));
     await user.click(await screen.findByRole('checkbox', { name: /repo-a/ }));
     await user.click(screen.getByRole('button', { name: 'Next: What' }));
     await user.type(screen.getByLabelText('Name'), 'Unsaved feature');
-    await user.click(screen.getByRole('button', { name: 'Back to Home' }));
+    await user.click(screen.getByRole('button', { name: 'Back to Overview' }));
 
     expect(await screen.findByRole('dialog', { name: 'Discard feature draft' })).toBeVisible();
     await user.click(screen.getByRole('button', { name: 'Keep editing' }));
     expect(screen.getByDisplayValue('Unsaved feature')).toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: 'Back to Home' }));
+    await user.click(screen.getByRole('button', { name: 'Back to Overview' }));
     await user.click(screen.getByRole('button', { name: 'Discard draft' }));
     const newFeature = await screen.findByRole('button', { name: 'New feature' });
     await waitFor(() => expect(newFeature).toHaveFocus());
   });
 
-  it('guards tab navigation before discarding a dirty creation draft', async () => {
-    installAgenticoMock({ settings: settingsWithTab() });
+  it('guards sidebar row navigation before discarding a dirty creation draft', async () => {
+    installAgenticoMock({
+      settings: settingsWithActive(null),
+      features: [summaryOf(featureSnapshot({ id: FEATURE_ID, name: 'Search revamp' }))],
+      feature: featureSnapshot({ id: FEATURE_ID, name: 'Search revamp' }),
+    });
     render(<WorkspaceShell />);
     const user = userEvent.setup();
 
-    await user.click(await screen.findByRole('tab', { name: 'Home' }));
     await user.click(await screen.findByRole('button', { name: 'New feature' }));
     await user.click(await screen.findByRole('checkbox', { name: /repo-a/ }));
     await user.click(screen.getByRole('button', { name: 'Next: What' }));
     await user.type(screen.getByLabelText('Name'), 'Unsaved feature');
-    await user.click(screen.getByRole('tab', { name: 'Search revamp' }));
+    await user.click(await screen.findByRole('option', { name: /Search revamp/ }));
 
     expect(await screen.findByRole('dialog', { name: 'Discard feature draft' })).toBeVisible();
     await user.click(screen.getByRole('button', { name: 'Discard draft' }));
-    expect(await screen.findByRole('heading', { name: 'Search revamp' })).toBeVisible();
+    expect(await screen.findByRole('region', { name: 'Feature Search revamp' })).toBeVisible();
   });
 
-  it('leaves an untouched creation form silently when the server defaults to the current branch', async () => {
-    const mock = installAgenticoMock();
-    mock.api.getCreationDefaults.mockResolvedValue({
-      repositories: [],
-      defaults: {
-        pipeline: 'medium',
-        inquireness: 'medium',
-        models: [],
-        effort: [],
-        useCurrentBranch: true,
-      },
-    });
-    render(<WorkspaceShell />);
-    const user = userEvent.setup();
-
-    await user.click(await screen.findByRole('button', { name: 'New feature' }));
-    await screen.findByRole('form', { name: /create a feature/i });
-    await user.click(screen.getByRole('button', { name: 'Back to Home' }));
-
-    expect(screen.queryByRole('dialog', { name: 'Discard feature draft' })).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'New feature' })).toBeVisible();
-  });
-
-  it('restores tabs from local settings on restart and refetches from the server', async () => {
-    const mock = installAgenticoMock({ settings: settingsWithTab() });
+  it('renders the Overview recovery workspace and bulk preview panel alongside the queue', async () => {
+    installAgenticoMock();
     render(<WorkspaceShell />);
 
-    expect(await screen.findByRole('tab', { name: 'Search revamp' })).toHaveAttribute(
-      'aria-selected',
-      'true',
-    );
-    await waitFor(() => expect(mock.api.getFeature).toHaveBeenCalledWith(FEATURE_ID));
-    expect(await screen.findByRole('heading', { name: 'Search revamp' })).toBeInTheDocument();
-  });
-
-  it('unmounts and unsubscribes a cockpit when its tab closes', async () => {
-    const mock = installAgenticoMock({ settings: settingsWithTab(), features: [] });
-    render(<WorkspaceShell />);
-    await screen.findByRole('heading', { name: 'Search revamp' });
-    const listenersBeforeClose = mock.appEventListenerCount();
-    await userEvent.click(screen.getByRole('button', { name: 'Close Search revamp tab' }));
-    await waitFor(() => expect(document.getElementById(`panel-${FEATURE_ID}`)).toBeNull());
-    expect(mock.appEventListenerCount()).toBe(listenersBeforeClose - 1);
-    const callsAfterClose = mock.api.getFeature.mock.calls.length;
-    mock.emitAppEvent({ type: 'invalidated', kind: 'feature.updated', featureId: FEATURE_ID });
-    expect(mock.api.getFeature).toHaveBeenCalledTimes(callsAfterClose);
-  });
-
-  it('persists concurrent authoritative tab names without losing either update', async () => {
-    const settings: Settings = {
-      ...defaultSettings(),
-      tabs: {
-        open: [
-          { featureId: FEATURE_ID, titleHint: 'First draft' },
-          { featureId: SECOND_FEATURE_ID, titleHint: 'Second draft' },
-        ],
-        activeFeatureId: FEATURE_ID,
-      },
-    };
-    const mock = installAgenticoMock({ settings, features: [] });
-    let persistedTabs = settings.tabs;
-    const pendingWrites: Array<{ tabs: TabsPrefs; resolve: () => void }> = [];
-    mock.api.updateSettings.mockImplementation(
-      ({ tabs }) =>
-        new Promise<void>((resolve) => {
-          if (tabs === undefined) {
-            resolve();
-            return;
-          }
-          pendingWrites.push({
-            tabs,
-            resolve: () => {
-              persistedTabs = tabs;
-              resolve();
-            },
-          });
-        }),
-    );
-    let resolveFirst!: (value: ReturnType<typeof featureSnapshot>) => void;
-    let resolveSecond!: (value: ReturnType<typeof featureSnapshot>) => void;
-    mock.api.getFeature.mockImplementation(
-      (id: string) =>
-        new Promise((resolve) => {
-          if (id === FEATURE_ID) resolveFirst = resolve;
-          else resolveSecond = resolve;
-        }),
-    );
-    render(<WorkspaceShell />);
-    await waitFor(() => expect(mock.api.getFeature).toHaveBeenCalledTimes(2));
-    await act(async () =>
-      resolveSecond(featureSnapshot({ id: SECOND_FEATURE_ID, name: 'Authoritative second' })),
-    );
-    await waitFor(() => expect(pendingWrites).toHaveLength(1));
-    await act(async () =>
-      resolveFirst(featureSnapshot({ id: FEATURE_ID, name: 'Authoritative first' })),
-    );
-    expect(pendingWrites).toHaveLength(1);
-
-    const firstWrite = pendingWrites[0];
-    if (firstWrite === undefined) throw new Error('first tab write was not queued');
-    await act(async () => firstWrite.resolve());
-    await waitFor(() => expect(pendingWrites).toHaveLength(2));
-    const secondWrite = pendingWrites[1];
-    if (secondWrite === undefined) throw new Error('second tab write was not queued');
-    await act(async () => secondWrite.resolve());
-    expect(persistedTabs).toEqual({
-      open: [
-        { featureId: FEATURE_ID, titleHint: 'Authoritative first' },
-        { featureId: SECOND_FEATURE_ID, titleHint: 'Authoritative second' },
-      ],
-      activeFeatureId: FEATURE_ID,
-    });
-  });
-
-  it('shows a no-longer-exists state for a restored tab whose feature vanished', async () => {
-    const mock = installAgenticoMock({ settings: settingsWithTab() });
-    mock.api.getFeature.mockRejectedValue(new Error('not_found: feature not found'));
-    render(<WorkspaceShell />);
-    const user = userEvent.setup();
-
-    expect(
-      await screen.findByText('This feature no longer exists on the server.'),
-    ).toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: 'Close tab' }));
-    await waitFor(() =>
-      expect(screen.queryByRole('tab', { name: 'Search revamp' })).not.toBeInTheDocument(),
-    );
-    expect(mock.api.updateSettings).toHaveBeenLastCalledWith({
-      tabs: { open: [], activeFeatureId: null },
-    });
-    // Back on Home without crashing.
-    expect(screen.getByRole('tab', { name: 'Home' })).toHaveAttribute('aria-selected', 'true');
-  });
-
-  it('opens an existing server feature from the Home list', async () => {
-    const mock = installAgenticoMock({
-      features: [
-        {
-          id: FEATURE_ID,
-          name: 'Search revamp',
-          status: 'Created',
-          currentPhase: 'Plan',
-          repos: ['repo-a'],
-          createdAt: '2026-07-14T10:00:00Z',
-          activeRun: 1,
-          runCount: 1,
-          warnings: [],
-        },
-      ],
-    });
-    render(<WorkspaceShell />);
-    const user = userEvent.setup();
-    const listRegion = await screen.findByRole('region', { name: 'Existing features' });
-    await user.click(within(listRegion).getByRole('button', { name: 'Open' }));
-
-    expect(await screen.findByRole('tab', { name: 'Search revamp' })).toHaveAttribute(
-      'aria-selected',
-      'true',
-    );
-    await waitFor(() => expect(mock.api.getFeature).toHaveBeenCalledWith(FEATURE_ID));
-  });
-
-  it('removes a deleted feature from Home after the cockpit delete succeeds', async () => {
-    const mock = installAgenticoMock({
-      features: [
-        {
-          id: FEATURE_ID,
-          name: 'Search revamp',
-          status: 'Created',
-          currentPhase: 'Plan',
-          repos: ['repo-a'],
-          createdAt: '2026-07-14T10:00:00Z',
-          activeRun: 1,
-          runCount: 1,
-          warnings: [],
-        },
-      ],
-      feature: featureSnapshot({
-        id: FEATURE_ID,
-        name: 'Search revamp',
-        status: 'Created',
-        actions: [
-          {
-            id: 'delete',
-            enabled: true,
-            disabledReasons: [],
-            impactPreview: {
-              kind: 'parent_cascade_delete',
-              subject: { id: FEATURE_ID, name: 'Search revamp' },
-              categories: [{ key: 'children', label: 'Children', items: [] }],
-              retained: [],
-            },
-          },
-        ],
-      }),
-    });
-    mock.api.deleteFeatureCascade.mockResolvedValue({
-      featureId: FEATURE_ID,
-      operationId: 'delete-1',
-      status: 'completed',
-      diagnostics: [],
-    });
-    render(<WorkspaceShell />);
-    const user = userEvent.setup();
-
-    const listRegion = await screen.findByRole('region', { name: 'Existing features' });
-    await user.click(within(listRegion).getByRole('button', { name: 'Open' }));
-    expect(await screen.findByRole('tab', { name: 'Search revamp' })).toHaveAttribute(
-      'aria-selected',
-      'true',
-    );
-
-    mock.api.listFeatures.mockResolvedValueOnce([]);
-    await user.click(await screen.findByLabelText('More actions'));
-    await user.click(screen.getByRole('menuitem', { name: 'Delete feature' }));
-    const dialog = await screen.findByRole('dialog', { name: /Delete Search revamp/ });
-    await user.click(within(dialog).getByRole('button', { name: 'Delete feature' }));
-
-    await waitFor(() =>
-      expect(mock.api.deleteFeatureCascade).toHaveBeenCalledWith({ featureId: FEATURE_ID }),
-    );
-    expect(await screen.findByRole('tab', { name: 'Home' })).toHaveAttribute(
-      'aria-selected',
-      'true',
-    );
-    await waitFor(() => expect(mock.api.listFeatures.mock.calls.length).toBeGreaterThan(1));
-    expect(
-      within(await screen.findByRole('region', { name: 'Existing features' })).queryByText(
-        'Search revamp',
-      ),
-    ).toBeNull();
-  });
-
-  it('refetches the feature list on feature invalidations and resync', async () => {
-    const mock = installAgenticoMock();
-    render(<WorkspaceShell />);
-    await screen.findByRole('region', { name: 'Existing features' });
-    const base = mock.api.listFeatures.mock.calls.length;
-
-    mock.emitAppEvent({ type: 'invalidated', kind: 'feature.updated', featureId: FEATURE_ID });
-    await waitFor(() => expect(mock.api.listFeatures.mock.calls.length).toBe(base + 1));
-
-    mock.emitAppEvent({ type: 'invalidated', kind: 'resync' });
-    await waitFor(() => expect(mock.api.listFeatures.mock.calls.length).toBe(base + 2));
-
-    mock.emitAppEvent({ type: 'invalidated', kind: 'session.updated' });
-    expect(mock.api.listFeatures.mock.calls.length).toBe(base + 2);
-  });
-
-  it('refetches the feature list when returning Home without an invalidation', async () => {
-    const published = featureSnapshot({
-      id: FEATURE_ID,
-      name: 'Search revamp',
-      status: 'Published',
-      currentPhase: 'Publish',
-      setup: { status: 'done', attempt: 1, tasks: [] },
-    });
-    const done = {
-      ...published,
-      status: 'Done' as const,
-    };
-    let current = published;
-    const mock = installAgenticoMock({
-      settings: settingsWithTab(),
-      features: [
-        {
-          id: FEATURE_ID,
-          name: 'Search revamp',
-          status: 'Published',
-          currentPhase: 'Publish',
-          repos: ['repo-a'],
-          createdAt: '2026-07-14T10:00:00Z',
-          activeRun: 1,
-          runCount: 1,
-          warnings: [],
-        },
-      ],
-    });
-    mock.api.getFeature.mockImplementation(() => Promise.resolve(current));
-    render(<WorkspaceShell />);
-
-    await screen.findByRole('region', { name: 'Feature aftercare' });
-    await waitFor(() => expect(mock.api.listFeatures).toHaveBeenCalledTimes(1));
-    current = done;
-
-    await userEvent.click(screen.getByRole('tab', { name: 'Home' }));
-
-    const doneGroup = await screen.findByRole('region', { name: 'Done' });
-    expect(within(doneGroup).getByText('Search revamp')).toBeInTheDocument();
-    expect(mock.api.listFeatures).toHaveBeenCalledTimes(2);
-  });
-
-  it('supports keyboard navigation across the tab strip', async () => {
-    installAgenticoMock({ settings: settingsWithTab() });
-    render(<WorkspaceShell />);
-    const user = userEvent.setup();
-
-    const home = await screen.findByRole('tab', { name: 'Home' });
-    const settingsTab = screen.getByRole('tab', { name: 'Settings' });
-    const featureTab = screen.getByRole('tab', { name: 'Search revamp' });
-    featureTab.focus();
-    await user.keyboard('{ArrowLeft}');
-    expect(settingsTab).toHaveFocus();
-    await user.keyboard('{ArrowLeft}');
-    expect(home).toHaveFocus();
-    await user.keyboard('{ArrowRight}');
-    expect(settingsTab).toHaveFocus();
-    await user.keyboard('{ArrowRight}');
-    expect(featureTab).toHaveFocus();
+    expect(await screen.findByRole('region', { name: 'Existing features' })).toBeInTheDocument();
+    expect(screen.getByLabelText('Recovery workspace')).toBeInTheDocument();
+    expect(screen.getByLabelText('Bulk resume and retry')).toBeInTheDocument();
   });
 
   it('opens a feature from the typed global attention jump request', async () => {
     const onAttentionJumpHandled = vi.fn();
-    installAgenticoMock();
+    installAgenticoMock({
+      settings: settingsWithActive(null),
+      features: [summaryOf(featureSnapshot({ id: FEATURE_ID, name: 'Search revamp' }))],
+      feature: featureSnapshot({ id: FEATURE_ID, name: 'Search revamp' }),
+    });
     render(
       <WorkspaceShell
         attentionJump={{ requestId: 1, featureId: FEATURE_ID }}
@@ -745,237 +359,466 @@ describe('WorkspaceShell tabs', () => {
       />,
     );
 
-    expect(await screen.findByRole('tab', { name: 'Search revamp' })).toHaveAttribute(
+    expect(await screen.findByRole('option', { name: /Search revamp/ })).toHaveAttribute(
       'aria-selected',
       'true',
     );
     expect(onAttentionJumpHandled).toHaveBeenCalledTimes(1);
   });
 
-  it('returns an open review feature from Live activity to its Document surface', async () => {
+  it('deselects every sidebar row while Settings is open, and restores the prior feature on a neutral close', async () => {
     const mock = installAgenticoMock({
-      settings: settingsWithTab(),
-      feature: featureSnapshot({
-        status: 'ResearchNeedsReview',
-        currentPhase: 'Research',
-        setup: { status: 'done', attempt: 1, tasks: [] },
-        actions: [],
-      }),
+      settings: settingsWithActive(FEATURE_ID),
+      features: [summaryOf(featureSnapshot({ id: FEATURE_ID, name: 'Search revamp' }))],
+      feature: featureSnapshot({ id: FEATURE_ID, name: 'Search revamp' }),
     });
-    vi.mocked(mock.api.openReview).mockResolvedValue({
-      featureId: FEATURE_ID,
-      reviewId: 'phase-research',
-      reviewMode: 'phase_plan',
-      targetPhase: 'Research',
-      runNumber: 1,
-      artifactId: 'research.md',
-      text: '# Research',
-      draftRevision: 'r1',
-      sourceRevision: 's1',
-      canIterate: false,
-    });
-    vi.mocked(mock.api.validateReview).mockResolvedValue({
-      applicable: true,
-      valid: true,
-      revision: 'r1',
-      findings: [],
-    });
-
-    function ReviewJumpHarness() {
-      const [attentionJump, setAttentionJump] = useState<{
-        requestId: number;
-        featureId: string;
-      } | null>(null);
-      return (
-        <>
-          <button
-            type="button"
-            onClick={() => setAttentionJump({ requestId: 1, featureId: FEATURE_ID })}
-          >
-            Jump to review
-          </button>
-          <WorkspaceShell attentionJump={attentionJump} />
-        </>
-      );
-    }
-
-    render(<ReviewJumpHarness />);
+    const { rerender } = render(<WorkspaceShell />);
     const user = userEvent.setup();
-    const stageTabs = await screen.findByRole('tablist', { name: 'Stage view' });
-    const documentTab = within(stageTabs).getByRole('tab', { name: 'Document' });
-    const liveTab = within(stageTabs).getByRole('tab', { name: /Live activity/ });
 
-    await user.click(liveTab);
-    expect(liveTab).toHaveAttribute('aria-selected', 'true');
+    const featureRow = await screen.findByRole('option', { name: /Search revamp/ });
+    expect(featureRow).toHaveAttribute('aria-selected', 'true');
 
-    const featurePanel = document.getElementById(`panel-${FEATURE_ID}`);
-    expect(featurePanel).not.toBeNull();
-    expect(featurePanel).not.toHaveAttribute('hidden');
-    await user.click(screen.getByRole('tab', { name: 'Home' }));
-    expect(featurePanel).toHaveAttribute('hidden');
-    expect(screen.queryByRole('tablist', { name: 'Stage view' })).not.toBeInTheDocument();
-    const callsAfterHomeRefresh = mock.api.getFeature.mock.calls.length;
-    await user.click(screen.getByRole('tab', { name: 'Search revamp' }));
-    expect(featurePanel).not.toHaveAttribute('hidden');
-    expect(await screen.findByRole('tab', { name: /Live activity/ })).toHaveAttribute(
+    // Settings is reached the same way ⌘, does it: a routeRequest targeting
+    // 'settings', dispatched by App.tsx from the native menu accelerator.
+    rerender(<WorkspaceShell routeRequest={{ id: 1, event: { target: 'settings' } }} />);
+    expect(await screen.findByRole('heading', { name: 'Settings' })).toBeInTheDocument();
+    // Nothing in the sidebar reads as selected while Settings is open.
+    for (const option of screen.getAllByRole('option')) {
+      expect(option).toHaveAttribute('aria-selected', 'false');
+    }
+    // The underlying persisted selection was never touched.
+    expect(mock.api.updateSettings).not.toHaveBeenCalled();
+
+    // A neutral close (the panel's own Back control) restores the feature
+    // that was open before Settings — not Overview.
+    await user.click(screen.getByRole('button', { name: 'Back' }));
+    expect(screen.queryByRole('heading', { name: 'Settings' })).not.toBeInTheDocument();
+    expect(
+      await screen.findByRole('region', { name: 'Feature Search revamp' }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: /Search revamp/ })).toHaveAttribute(
       'aria-selected',
       'true',
     );
-    expect(mock.api.getFeature).toHaveBeenCalledTimes(callsAfterHomeRefresh);
-    expect(screen.queryByText(/Loading Search revamp from the runtime/)).not.toBeInTheDocument();
-
-    await user.click(screen.getByRole('button', { name: 'Jump to review' }));
-    await waitFor(() => expect(documentTab).toHaveAttribute('aria-selected', 'true'));
   });
 
-  it('shows matching attention badges on open tabs and dashboard rows', async () => {
-    installAgenticoMock({
-      settings: {
-        ...defaultSettings(),
-        tabs: {
-          open: [{ featureId: FEATURE_ID, titleHint: 'Search revamp' }],
-          activeFeatureId: null,
-        },
-      },
-      features: [
-        {
-          id: FEATURE_ID,
-          name: 'Search revamp',
-          status: 'Implementing',
-          currentPhase: 'Implement',
-          repos: ['repo-a'],
-          createdAt: '2026-07-14T10:00:00Z',
-          activeRun: 1,
-          runCount: 1,
-          warnings: [],
-        },
-      ],
-      feature: featureSnapshot({
-        status: 'Implementing',
-        currentPhase: 'Implement',
-        setup: { status: 'done', attempt: 1, tasks: [] },
-        actions: [],
-      }),
-      attention: { items: [permissionAttention] },
-    });
-    render(<WorkspaceShell attentionItems={[permissionAttention]} />);
-
-    await screen.findByRole('region', { name: 'Existing features' });
-
-    expect(
-      screen.getAllByRole('status', { name: 'Blocking input for Search revamp: 1 pending' }),
-    ).toHaveLength(2);
-  });
-
-  it("routes a refactor pass's question into the parent tab's pass workspace", async () => {
-    const childId = 'child1234ef567890';
-    const parent = featureSnapshot({
-      name: 'Electron app',
-      status: 'Published',
-      currentPhase: 'Publish',
-      setup: { status: 'done', attempt: 1, tasks: [] },
-      actions: [],
-      activeChild: {
-        id: childId,
-        name: 'Slop removal pass',
-        kind: 'refactor',
-        displayToken: `refactor:${childId}`,
-        displayState: 'Active — Designing',
-        pipeline: 'large',
-        status: 'Designing',
-        relationshipState: 'active',
-        startedAt: '2026-07-30T10:00:00Z',
-        cost: { totalUsd: 4.2, byPhase: {} },
-        integrationState: 'pending',
-        attention: [],
-        cleanupWarnings: [],
-      },
-    });
-    const child = featureSnapshot({
-      id: childId,
-      name: 'Slop removal pass',
-      status: 'Designing',
-      currentPhase: 'Design',
-      setup: { status: 'done', attempt: 1, tasks: [] },
-      actions: [],
-    });
-    const mock = installAgenticoMock({ settings: settingsWithTab(), feature: parent });
-    mock.api.getFeature.mockImplementation((id: string) =>
-      Promise.resolve(id === childId ? child : parent),
-    );
-    // The pass session owns the question, so it carries the child's feature id;
-    // only parentFeatureId points at the open tab.
-    const passQuestion: AttentionItem = {
-      kind: 'questions',
-      id: 'ask-pass',
-      featureId: childId,
-      parentFeatureId: FEATURE_ID,
-      sessionId: `${childId}-design`,
-      waitingSince: '2026-08-01T10:00:00.000Z',
-      questions: [
-        {
-          key: 'Keep the legacy state-dir fallback?',
-          header: 'Legacy dir',
-          multiSelect: false,
-          options: [{ label: 'Remove fallback' }, { label: 'Keep fallback' }],
-        },
-      ],
-    };
-    render(<WorkspaceShell attentionItems={[passQuestion]} />);
-
-    const turn = await screen.findByRole('group', { name: 'Agent question' });
-    expect(within(turn).getByText('Keep the legacy state-dir fallback?')).toBeVisible();
-    expect(within(turn).getByText('Remove fallback')).toBeVisible();
-    const composer = screen.getByRole('region', { name: 'Agent request' });
-    expect(within(composer).getByRole('button', { name: 'Send' })).toBeDisabled();
-  });
-
-  it('opens routed attention in the expanded conversation and refreshes after resolution', async () => {
+  it('returns to Overview when ⌘1 (routed as target "home") fires while Settings is open over a selected feature', async () => {
     const mock = installAgenticoMock({
-      settings: settingsWithTab(),
-      feature: featureSnapshot({
-        status: 'Implementing',
-        currentPhase: 'Implement',
-        setup: { status: 'done', attempt: 1, tasks: [] },
-        actions: [],
+      settings: settingsWithActive(FEATURE_ID),
+      features: [summaryOf(featureSnapshot({ id: FEATURE_ID, name: 'Search revamp' }))],
+      feature: featureSnapshot({ id: FEATURE_ID, name: 'Search revamp' }),
+    });
+    const { rerender } = render(<WorkspaceShell />);
+
+    await screen.findByRole('region', { name: 'Feature Search revamp' });
+    rerender(<WorkspaceShell routeRequest={{ id: 1, event: { target: 'settings' } }} />);
+    await screen.findByRole('heading', { name: 'Settings' });
+
+    // ⌘1 is dispatched by App.tsx as a routeRequest targeting 'home'.
+    rerender(<WorkspaceShell routeRequest={{ id: 2, event: { target: 'home' } }} />);
+
+    expect(screen.queryByRole('heading', { name: 'Settings' })).not.toBeInTheDocument();
+    expect(await screen.findByRole('option', { name: 'Overview' })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
+    await waitFor(() =>
+      expect(mock.api.updateSettings).toHaveBeenCalledWith({
+        shell: { activeFeatureId: null, sidebarCollapsed: false },
       }),
+    );
+  });
+
+  it('selecting a different sidebar row while Settings is open leaves Settings and opens that row', async () => {
+    const secondFeature = featureSnapshot({ id: SECOND_FEATURE_ID, name: 'Second feature' });
+    const mock = installAgenticoMock({
+      settings: settingsWithActive(FEATURE_ID),
+      features: [
+        summaryOf(featureSnapshot({ id: FEATURE_ID, name: 'Search revamp' })),
+        summaryOf(secondFeature),
+      ],
     });
-    let currentAttention: AttentionItem[] = [permissionAttention];
-    mock.api.getAttention.mockImplementation(() => Promise.resolve({ items: currentAttention }));
-    mock.api.answerPermission.mockImplementation(() => {
-      currentAttention = [];
-      return Promise.resolve({ result: 'submitted' });
-    });
-    function RoutedWorkspace() {
-      const [attentionItems, setAttentionItems] = useState<AttentionItem[]>([permissionAttention]);
-      const refreshAttention = useCallback(async () => {
-        const snapshot = await window.agentico.getAttention();
-        setAttentionItems(snapshot.items);
-        return snapshot.items;
-      }, []);
-      return (
-        <WorkspaceShell
-          attentionItems={attentionItems}
-          refreshAttention={refreshAttention}
-          attentionJump={{ requestId: 7, featureId: FEATURE_ID, attentionId: 'perm-1' }}
-        />
-      );
-    }
-    render(<RoutedWorkspace />);
+    mock.api.getFeature.mockImplementation((featureId: string) =>
+      Promise.resolve(
+        featureId === SECOND_FEATURE_ID
+          ? secondFeature
+          : featureSnapshot({ id: FEATURE_ID, name: 'Search revamp' }),
+      ),
+    );
+    const { rerender } = render(<WorkspaceShell />);
     const user = userEvent.setup();
 
-    const preview = await screen.findByRole('dialog', { name: 'Live agent preview' });
-    expect(within(preview).getByRole('region', { name: 'Live agent transcript' })).toBeVisible();
-    const request = within(preview).getByRole('region', { name: 'Agent request' });
-    await user.click(within(request).getByRole('button', { name: 'Deny' }));
+    await screen.findByRole('region', { name: 'Feature Search revamp' });
+    rerender(<WorkspaceShell routeRequest={{ id: 1, event: { target: 'settings' } }} />);
+    await screen.findByRole('heading', { name: 'Settings' });
 
-    expect(mock.api.answerPermission).toHaveBeenCalledWith({
-      requestId: 'perm-1',
-      sessionId: 'session-1',
-      decision: 'deny',
-    });
+    await user.click(await screen.findByRole('option', { name: /Second feature/ }));
+    expect(screen.queryByRole('heading', { name: 'Settings' })).not.toBeInTheDocument();
     expect(
-      within(preview).queryByRole('region', { name: 'Agent request' }),
-    ).not.toBeInTheDocument();
+      await screen.findByRole('region', { name: 'Feature Second feature' }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: /Second feature/ })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
+    await waitFor(() =>
+      expect(mock.api.updateSettings).toHaveBeenCalledWith({
+        shell: { activeFeatureId: SECOND_FEATURE_ID, sidebarCollapsed: false },
+      }),
+    );
+  });
+
+  it('opening Settings from Overview and closing it via Back returns to Overview', async () => {
+    installAgenticoMock({ settings: settingsWithActive(null), features: [] });
+    const { rerender } = render(<WorkspaceShell />);
+    const user = userEvent.setup();
+
+    await screen.findByRole('option', { name: 'Overview' });
+    rerender(<WorkspaceShell routeRequest={{ id: 1, event: { target: 'settings' } }} />);
+    await screen.findByRole('heading', { name: 'Settings' });
+    for (const option of screen.getAllByRole('option')) {
+      expect(option).toHaveAttribute('aria-selected', 'false');
+    }
+
+    await user.click(screen.getByRole('button', { name: 'Back' }));
+    expect(screen.queryByRole('heading', { name: 'Settings' })).not.toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Overview' })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
+  });
+
+  it('unmounts and unsubscribes a cockpit when Overview is selected', async () => {
+    const mock = installAgenticoMock({
+      settings: settingsWithActive(FEATURE_ID),
+      features: [],
+      feature: featureSnapshot({ id: FEATURE_ID, name: 'Search revamp' }),
+    });
+    render(<WorkspaceShell />);
+    await screen.findByRole('region', { name: 'Feature Search revamp' });
+    const listenersBeforeClose = mock.appEventListenerCount();
+    await userEvent.click(screen.getByRole('option', { name: 'Overview' }));
+    await waitFor(() =>
+      expect(
+        screen.queryByRole('region', { name: 'Feature Search revamp' }),
+      ).not.toBeInTheDocument(),
+    );
+    expect(mock.appEventListenerCount()).toBeLessThan(listenersBeforeClose);
+  });
+});
+
+describe('WorkspaceShell toolbar', () => {
+  it('toggles and persists shell.sidebarCollapsed from the sidebar-toggle button', async () => {
+    const mock = installAgenticoMock({ settings: settingsWithActive(null), features: [] });
+    render(<WorkspaceShell />);
+
+    const toggle = await screen.findByRole('button', { name: 'Hide sidebar' });
+    expect(screen.getByRole('navigation', { name: 'Feature sidebar' })).toHaveAttribute(
+      'data-collapsed',
+      'false',
+    );
+
+    await userEvent.click(toggle);
+    await waitFor(() =>
+      expect(mock.api.updateSettings).toHaveBeenCalledWith({
+        shell: { activeFeatureId: null, sidebarCollapsed: true },
+      }),
+    );
+    expect(await screen.findByRole('button', { name: 'Show sidebar' })).toBeInTheDocument();
+    expect(screen.getByRole('navigation', { name: 'Feature sidebar' })).toHaveAttribute(
+      'data-collapsed',
+      'true',
+    );
+  });
+
+  it('routes the sidebar footer AMA hint through onOpenAma', async () => {
+    installAgenticoMock({ settings: settingsWithActive(null), features: [] });
+    const onOpenAma = vi.fn();
+    render(<WorkspaceShell onOpenAma={onOpenAma} />);
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Ask ⌘⇧M' }));
+    expect(onOpenAma).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows "Overview" with no sub-line and hides the attention bell on the Overview surface', async () => {
+    installAgenticoMock({ settings: settingsWithActive(null), features: [] });
+    render(<WorkspaceShell />);
+
+    expect(
+      await screen.findByText('Overview', { selector: '.toolbar__title-name' }),
+    ).toBeInTheDocument();
+    expect(document.querySelector('.toolbar__title-subline')).toBeNull();
+    expect(screen.queryByLabelText(/Attention inbox, \d+ pending/)).not.toBeVisible();
+  });
+
+  it('titles the toolbar with the feature name and a repo · branch sub-line, and shows the bell', async () => {
+    installAgenticoMock({
+      settings: settingsWithActive(FEATURE_ID),
+      features: [summaryOf(featureSnapshot({ id: FEATURE_ID, name: 'Search revamp' }))],
+      feature: featureSnapshot({ id: FEATURE_ID, name: 'Search revamp' }),
+    });
+    render(<WorkspaceShell />);
+
+    expect(
+      await screen.findByText('Search revamp', { selector: '.toolbar__title-name' }),
+    ).toBeInTheDocument();
+    expect(screen.getByText('repo-a · feature/search-revamp')).toBeInTheDocument();
+    expect(screen.getByLabelText(/Attention inbox, \d+ pending/)).toBeVisible();
+  });
+
+  it('adds a +N suffix to the sub-line when a feature spans more than one repository', async () => {
+    const feature = featureSnapshot({
+      id: FEATURE_ID,
+      name: 'Search revamp',
+      repos: ['repo-a', 'repo-b', 'repo-c'],
+    });
+    installAgenticoMock({
+      settings: settingsWithActive(FEATURE_ID),
+      features: [summaryOf(feature)],
+      feature,
+    });
+    render(<WorkspaceShell />);
+
+    expect(await screen.findByText('repo-a · feature/search-revamp +2')).toBeInTheDocument();
+  });
+
+  it('still exposes the cockpit ⋯ overflow menu once it is relocated into the toolbar', async () => {
+    installAgenticoMock({
+      settings: settingsWithActive(FEATURE_ID),
+      features: [summaryOf(featureSnapshot({ id: FEATURE_ID, name: 'Search revamp' }))],
+      feature: featureSnapshot({ id: FEATURE_ID, name: 'Search revamp' }),
+    });
+    render(<WorkspaceShell />);
+
+    await screen.findByText('Search revamp', { selector: '.toolbar__title-name' });
+    const summary = screen.getByLabelText('More actions');
+    // The menu portals into the toolbar's overflow slot, not the cockpit.
+    expect(summary.closest('.toolbar__overflow-slot')).not.toBeNull();
+    await userEvent.click(summary);
+    expect(screen.getByRole('menu')).toBeInTheDocument();
+  });
+
+  it('wires the toolbar inspector toggle into the wide-layout split-view pane, hides it on Overview, and resets it across a feature switch', async () => {
+    const secondFeature = featureSnapshot({ id: SECOND_FEATURE_ID, name: 'Second feature' });
+    const mock = installAgenticoMock({
+      settings: settingsWithActive(FEATURE_ID),
+      features: [
+        summaryOf(featureSnapshot({ id: FEATURE_ID, name: 'Search revamp' })),
+        summaryOf(secondFeature),
+      ],
+    });
+    mock.api.getFeature.mockImplementation((featureId: string) =>
+      Promise.resolve(
+        featureId === SECOND_FEATURE_ID
+          ? secondFeature
+          : featureSnapshot({ id: FEATURE_ID, name: 'Search revamp' }),
+      ),
+    );
+    render(<WorkspaceShell />);
+    const user = userEvent.setup();
+
+    await screen.findByRole('region', { name: 'Feature Search revamp' });
+    const toggle = screen.getByRole('button', { name: 'Toggle inspector' });
+    // The toggle is chrome-owned: it portals into the toolbar's slot, not the
+    // cockpit's own markup.
+    expect(toggle.closest('.toolbar__inspector-slot')).not.toBeNull();
+    expect(toggle).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.queryByRole('heading', { name: 'Search revamp' })).not.toBeInTheDocument();
+
+    await user.click(toggle);
+    expect(await screen.findByRole('heading', { name: 'Search revamp' })).toBeVisible();
+    expect(toggle).toHaveAttribute('aria-pressed', 'true');
+
+    // Switching the selected feature unmounts and remounts the cockpit
+    // (`key={featureId}`), so the session-only inspector state resets to
+    // closed with no dedicated reset logic.
+    await user.click(await screen.findByRole('option', { name: /Second feature/ }));
+    await screen.findByRole('region', { name: 'Feature Second feature' });
+    expect(screen.queryByRole('heading', { name: 'Second feature' })).not.toBeInTheDocument();
+    const toggleForSecond = screen.getByRole('button', { name: 'Toggle inspector' });
+    expect(toggleForSecond).toHaveAttribute('aria-pressed', 'false');
+
+    // Absent entirely on Overview, where no feature is selected.
+    await user.click(screen.getByRole('option', { name: 'Overview' }));
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: 'Toggle inspector' })).not.toBeInTheDocument(),
+    );
+  });
+});
+
+/** One waiting-lane feature (a lane expanded by default) plus one done-lane
+ * feature (collapsed by default) — enough to exercise both "visible rows
+ * only" (Arrow/Home/End) and "every row regardless of disclosure" (⌘2-9). */
+function waitingAndDoneFixture() {
+  const waiting = featureSnapshot({
+    id: FEATURE_ID,
+    name: 'Needs a decision',
+    status: 'Failed',
+    actions: [],
+  });
+  const done = featureSnapshot({
+    id: SECOND_FEATURE_ID,
+    name: 'Finished feature',
+    status: 'Done',
+    setup: { status: 'done', attempt: 1, tasks: [] },
+  });
+  return [waiting, done] as const;
+}
+
+function installWaitingAndDoneMock() {
+  const [waiting, done] = waitingAndDoneFixture();
+  const mock = installAgenticoMock({ features: [waiting, done].map(summaryOf) });
+  mock.api.getFeature.mockImplementation((featureId: string) =>
+    Promise.resolve([waiting, done].find((feature) => feature.id === featureId) ?? waiting),
+  );
+  return mock;
+}
+
+describe('WorkspaceShell keyboard shortcuts', () => {
+  it('moves focus and selection together through visible rows with Arrow/Home/End, skipping the collapsed Done row', async () => {
+    installWaitingAndDoneMock();
+    render(<WorkspaceShell />);
+
+    const overviewRow = await screen.findByRole('option', { name: 'Overview' });
+    const waitingRow = await screen.findByRole('option', { name: /Needs a decision/ });
+    // The Done lane starts collapsed; its <details> stays in the DOM (⌘2-9
+    // can still reach it below) but is not `open`.
+    const doneGroup = screen.getByRole('group', { name: 'Done' });
+    expect(doneGroup.closest('details')).not.toHaveAttribute('open');
+
+    overviewRow.focus();
+    await userEvent.keyboard('{ArrowDown}');
+    expect(waitingRow).toHaveFocus();
+    expect(waitingRow).toHaveAttribute('aria-selected', 'true');
+    expect(overviewRow).toHaveAttribute('aria-selected', 'false');
+
+    // Only two visible rows exist; ArrowDown from the last one wraps to Overview.
+    await userEvent.keyboard('{ArrowDown}');
+    expect(overviewRow).toHaveFocus();
+    expect(overviewRow).toHaveAttribute('aria-selected', 'true');
+
+    await userEvent.keyboard('{End}');
+    expect(waitingRow).toHaveFocus();
+    expect(waitingRow).toHaveAttribute('aria-selected', 'true');
+
+    await userEvent.keyboard('{Home}');
+    expect(overviewRow).toHaveFocus();
+    expect(overviewRow).toHaveAttribute('aria-selected', 'true');
+  });
+
+  it('selects a feature by absolute sidebar position with ⌘2-9, including one inside a collapsed lane', async () => {
+    installWaitingAndDoneMock();
+    render(<WorkspaceShell />);
+    await screen.findByRole('option', { name: 'Overview' });
+
+    // ⌘2 → the 1st feature in absolute order (the waiting lane sorts first).
+    fireEvent.keyDown(window, { key: '2', metaKey: true });
+    expect(await screen.findByRole('option', { name: /Needs a decision/ })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
+
+    // ⌘3 → the 2nd feature, which sits inside the still-collapsed Done lane.
+    fireEvent.keyDown(window, { key: '3', metaKey: true });
+    expect(await screen.findByRole('option', { name: /Finished feature/ })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
+  });
+
+  it('bails on ⌘2-9 and ⌘⌃S when a text input is focused, letting the keystroke through untouched', async () => {
+    const mock = installWaitingAndDoneMock();
+    render(<WorkspaceShell />);
+    await screen.findByRole('option', { name: 'Overview' });
+
+    const input = document.createElement('input');
+    document.body.appendChild(input);
+    input.focus();
+    try {
+      fireEvent.keyDown(input, { key: '2', metaKey: true });
+      expect(screen.getByRole('option', { name: /Needs a decision/ })).toHaveAttribute(
+        'aria-selected',
+        'false',
+      );
+
+      fireEvent.keyDown(input, { key: 's', metaKey: true, ctrlKey: true });
+      expect(mock.api.updateSettings).not.toHaveBeenCalled();
+    } finally {
+      input.remove();
+    }
+  });
+
+  it('toggles and persists shell.sidebarCollapsed from ⌘⌃S through the same path as the toolbar button', async () => {
+    const mock = installAgenticoMock({ settings: settingsWithActive(null), features: [] });
+    render(<WorkspaceShell />);
+    await screen.findByRole('option', { name: 'Overview' });
+    expect(screen.getByRole('navigation', { name: 'Feature sidebar' })).toHaveAttribute(
+      'data-collapsed',
+      'false',
+    );
+
+    fireEvent.keyDown(window, { key: 's', metaKey: true, ctrlKey: true });
+    await waitFor(() =>
+      expect(mock.api.updateSettings).toHaveBeenCalledWith({
+        shell: { activeFeatureId: null, sidebarCollapsed: true },
+      }),
+    );
+    expect(screen.getByRole('navigation', { name: 'Feature sidebar' })).toHaveAttribute(
+      'data-collapsed',
+      'true',
+    );
+  });
+});
+
+describe('WorkspaceShell auto-collapse at narrow viewports', () => {
+  it('auto-collapses visually below ~700px without ever calling updateSettings, and re-expands above it', async () => {
+    const mock = installAgenticoMock({ settings: settingsWithActive(null), features: [] });
+    render(<WorkspaceShell />);
+    await screen.findByRole('option', { name: 'Overview' });
+    expect(screen.getByRole('navigation', { name: 'Feature sidebar' })).toHaveAttribute(
+      'data-collapsed',
+      'false',
+    );
+    mock.api.updateSettings.mockClear();
+
+    matchMediaState.narrowShell = true;
+    dispatchMediaChange('(max-width: 700px)', true);
+    await waitFor(() =>
+      expect(screen.getByRole('navigation', { name: 'Feature sidebar' })).toHaveAttribute(
+        'data-collapsed',
+        'true',
+      ),
+    );
+    expect(mock.api.updateSettings).not.toHaveBeenCalled();
+
+    matchMediaState.narrowShell = false;
+    dispatchMediaChange('(max-width: 700px)', false);
+    await waitFor(() =>
+      expect(screen.getByRole('navigation', { name: 'Feature sidebar' })).toHaveAttribute(
+        'data-collapsed',
+        'false',
+      ),
+    );
+    expect(mock.api.updateSettings).not.toHaveBeenCalled();
+  });
+
+  it('stays collapsed at any width once the user has explicitly collapsed the sidebar', async () => {
+    installAgenticoMock({
+      settings: { ...defaultSettings(), shell: { activeFeatureId: null, sidebarCollapsed: true } },
+      features: [],
+    });
+    render(<WorkspaceShell />);
+    await screen.findByRole('option', { name: 'Overview' });
+    expect(screen.getByRole('navigation', { name: 'Feature sidebar' })).toHaveAttribute(
+      'data-collapsed',
+      'true',
+    );
+
+    matchMediaState.narrowShell = false;
+    dispatchMediaChange('(max-width: 700px)', false);
+    expect(screen.getByRole('navigation', { name: 'Feature sidebar' })).toHaveAttribute(
+      'data-collapsed',
+      'true',
+    );
   });
 });

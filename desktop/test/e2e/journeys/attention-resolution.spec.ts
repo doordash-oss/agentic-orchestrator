@@ -92,45 +92,50 @@ test('packaged spatial shell keeps tab navigation, draft cancellation, and narro
       [760, 900, 'visual_7c45b5b3218b', 'visual_990b09a8e40c'],
     ]);
 
-    transcript.section('Overflowing feature tabs remain directly navigable');
+    transcript.section('Every sidebar feature remains directly navigable with no overflow menu');
     const overflowNames = Array.from({ length: 12 }, (_, index) => `Spatial overflow ${index + 1}`);
     await handle.page.evaluate(async (names) => {
       for (const name of names) {
         await window.agentico.createFeature({
           name,
-          description: 'Created through the packaged IPC contract for tab overflow coverage.',
+          description: 'Created through the packaged IPC contract for sidebar-list coverage.',
           repoKeys: ['spatial-shell-lab'],
           useCurrentBranch: false,
         });
       }
     }, overflowNames);
-    await handle.page.getByRole('tab', { name: 'Home' }).click();
+    await handle.page.getByRole('option', { name: 'Overview' }).click();
     for (const name of overflowNames) {
       const row = handle.page
         .getByRole('listitem')
         .filter({ has: handle.page.getByRole('heading', { name, exact: true }) });
       await expect(row).toBeVisible({ timeout: 30_000 });
       await row.getByRole('button', { name: 'Open' }).click();
-      await handle.page.getByRole('tab', { name: 'Home' }).click();
+      await handle.page.getByRole('option', { name: 'Overview' }).click();
     }
     await setWindowSize(handle, 760, 900);
     await setWindowSize(handle, 1440, 900);
     await setTheme(handle, 'light');
-    let tabTarget = await featureTabNavigationTarget(handle);
+    // The sidebar is one scrolling list with no overflow affordance: every
+    // feature, including the one furthest down the list, stays reachable by
+    // its own option role with nothing beyond Playwright's own auto-scroll.
+    for (const name of overflowNames) {
+      await expect(
+        handle.page.getByRole('option', { name: sidebarRowNamePattern(name) }),
+      ).toBeVisible();
+    }
     await evidenceShot(handle, 'visual_43fa4c4627eb');
     await setTheme(handle, 'dark');
-    tabTarget = await featureTabNavigationTarget(handle);
     await evidenceShot(handle, 'visual_262f46c3198f');
     await setTheme(handle, 'light');
-    tabTarget = await featureTabNavigationTarget(handle);
-    await tabTarget.click();
-    await expect(handle.page.getByRole('tab', { name: 'Spatial overflow 12' })).toHaveAttribute(
-      'aria-selected',
-      'true',
-    );
+    const lastOverflowOption = handle.page.getByRole('option', {
+      name: sidebarRowNamePattern('Spatial overflow 12'),
+    });
+    await lastOverflowOption.click();
+    await expect(lastOverflowOption).toHaveAttribute('aria-selected', 'true');
 
     transcript.section('Dirty focused creation requires deliberate cancellation');
-    await handle.page.getByRole('tab', { name: 'Home' }).click();
+    await handle.page.getByRole('option', { name: 'Overview' }).click();
     await captureVisualMatrix(handle, [
       [1440, 900, 'visual_5b3f80a793ab', 'visual_51f1a4efb671'],
       [1728, 1117, 'visual_6f63b933d14e', 'visual_790ad17a43d8'],
@@ -142,14 +147,14 @@ test('packaged spatial shell keeps tab navigation, draft cancellation, and narro
     await handle.page.getByRole('checkbox', { name: /spatial-shell-lab/ }).check();
     await handle.page.getByRole('button', { name: 'Next: What' }).click();
     await handle.page.locator('#feature-name').fill('Discarded spatial shell draft');
-    await handle.page.getByRole('button', { name: 'Back to Home' }).click();
+    await handle.page.getByRole('button', { name: 'Back to Overview' }).click();
     const discard = handle.page.getByRole('dialog', { name: 'Discard feature draft' });
     await expect(discard).toBeVisible();
     await discard.getByRole('button', { name: 'Discard draft' }).click();
     await expect(handle.page.getByRole('button', { name: 'New feature' })).toBeFocused();
 
     transcript.section('Narrow cockpit resolves blocking attention with inspector access');
-    await handle.page.getByRole('tab', { name: 'Spatial Shell Attention Fixture' }).click();
+    await handle.page.getByRole('option', { name: 'Spatial Shell Attention Fixture' }).click();
     await expect(cockpit.getByRole('button', { name: 'Inspector' })).toBeVisible();
     await cockpit.getByRole('button', { name: 'Inspector' }).click();
     const inspector = handle.page.getByRole('dialog', { name: 'Feature inspector' });
@@ -192,14 +197,19 @@ async function captureVisualMatrix(handle: AppHandle, cells: readonly VisualCell
   }
 }
 
-async function featureTabNavigationTarget(handle: AppHandle): Promise<Locator> {
-  const visibleTab = handle.page.getByRole('tab', { name: 'Spatial overflow 12' });
-  if (await visibleTab.isVisible()) return visibleTab;
-  await handle.page.getByRole('button', { name: /Tabs/ }).click();
-  const menu = handle.page.getByRole('menu', { name: 'Open features' });
-  const menuItem = menu.getByRole('menuitem', { name: 'Spatial overflow 12' });
-  await expect(menuItem).toBeVisible();
-  return menuItem;
+/**
+ * Anchors a sidebar row's expected accessible name at the start and requires
+ * either the end of the name or whitespace right after it, so a numbered
+ * feature name (e.g. "Spatial overflow 1") can't accidentally match a row
+ * whose name merely starts with it (e.g. "Spatial overflow 12") once a lane
+ * sub-line is appended to the row's accessible name.
+ */
+function sidebarRowNamePattern(name: string): RegExp {
+  return new RegExp(`^${escapeRegExp(name)}(?:$|\\s)`);
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 test('packaged inbox and cockpit resolve real attention classes from the bundled server', async ({}, testInfo) => {
@@ -236,14 +246,19 @@ test('packaged inbox and cockpit resolve real attention classes from the bundled
     transcript.section('Global inbox badge and allow-once resolution');
     await waitForAttentionItem(handle.page, 'perm-allow-once');
     await expect(attentionBell(handle.page)).toHaveAccessibleName(/Attention inbox, 1 pending/);
-    await handle.page.getByRole('tab', { name: 'Home' }).click();
+    await handle.page.getByRole('option', { name: 'Overview' }).click();
+    // The old tab strip rendered every open tab's own badge alongside the
+    // Home dashboard's, so the same status text appeared twice at once. The
+    // sidebar has no such second, always-rendered surface — the equivalent
+    // signal is the row's own sub-line (different text), so only the
+    // Overview run-card's badge matches this exact status text now.
     await expect(
       handle.page.getByRole('status', {
         name: 'Blocking input for Packaged Attention Resolution: 1 pending',
       }),
-    ).toHaveCount(2);
+    ).toHaveCount(1);
     await evidenceShot(handle, 'attention-badges-dashboard-tab-light-wide');
-    await handle.page.getByRole('tab', { name: /Packaged Attention Resolution/ }).click();
+    await handle.page.getByRole('option', { name: /Packaged Attention Resolution/ }).click();
     let inbox = await openInbox(handle);
     let attentionDetail = await expandInboxItem(handle, inbox, /Permission/);
     await expect(attentionDetail.getByText(/Bash .*printf allow-once/).first()).toBeVisible();
@@ -297,8 +312,8 @@ test('packaged inbox and cockpit resolve real attention classes from the bundled
     transcript.section('Inline cockpit resolution for feature-scoped attention');
     await waitForAttentionItem(handle.page, 'perm-deny');
     await closeInbox(handle.page);
-    await handle.page.getByRole('tab', { name: 'Home' }).click();
-    await handle.page.getByRole('tab', { name: /Packaged Attention Resolution/ }).click();
+    await handle.page.getByRole('option', { name: 'Overview' }).click();
+    await handle.page.getByRole('option', { name: /Packaged Attention Resolution/ }).click();
     cockpit = handle.page.getByLabel('Feature Packaged Attention Resolution');
     const inlineAttention = cockpit.getByRole('region', { name: 'Agent request' });
     await expect(inlineAttention).toBeVisible({ timeout: 30_000 });
@@ -382,14 +397,12 @@ test('packaged inbox and cockpit resolve real attention classes from the bundled
     });
 
     handle = await launchApp(world, testInfo, { traceName: 'attention-feature-help-seeded' });
-    await expect(
-      handle.page.getByRole('banner').getByRole('heading', { name: 'Agentico' }),
-    ).toBeVisible({
+    await expect(handle.page.getByRole('navigation', { name: 'Feature sidebar' })).toBeVisible({
       timeout: 60_000,
     });
     await waitForServerPromptText(world, 'Which cockpit help path should continue?');
     const featureHelpItem = await waitForAttentionKind(handle.page, 'help');
-    await handle.page.getByRole('tab', { name: /Packaged Attention Resolution/ }).click();
+    await handle.page.getByRole('option', { name: /Packaged Attention Resolution/ }).click();
     cockpit = handle.page.getByLabel('Feature Packaged Attention Resolution');
     const inlineHelp = cockpit.getByRole('region', { name: 'Agent request' });
     await expect(inlineHelp.getByText('Which cockpit help path should continue?')).toBeVisible();
@@ -454,9 +467,7 @@ test('packaged inbox resolves an interactive help request from chat', async ({},
       );
     }
     await handle.page.reload();
-    await expect(
-      handle.page.getByRole('banner').getByRole('heading', { name: 'Agentico' }),
-    ).toBeVisible({
+    await expect(handle.page.getByRole('navigation', { name: 'Feature sidebar' })).toBeVisible({
       timeout: 60_000,
     });
     await expect(attentionBell(handle.page)).toHaveAccessibleName(/Attention inbox, 1 pending/);
@@ -517,9 +528,7 @@ test('packaged inbox renders and drafts a real NEED_USER_INPUT gate', async ({},
     await assertNoLeakedProcessesEventually(world);
 
     handle = await launchApp(world, testInfo, { traceName: 'attention-gate-seeded' });
-    await expect(
-      handle.page.getByRole('banner').getByRole('heading', { name: 'Agentico' }),
-    ).toBeVisible({
+    await expect(handle.page.getByRole('navigation', { name: 'Feature sidebar' })).toBeVisible({
       timeout: 60_000,
     });
     await waitForAttentionGate(handle.page, feature.id);
@@ -543,7 +552,7 @@ test('packaged inbox renders and drafts a real NEED_USER_INPUT gate', async ({},
     ).toBeDisabled();
     await initialGateDialog.getByRole('button', { name: 'Answer later' }).click();
     await expect(initialGateDialog).toHaveCount(0);
-    await handle.page.getByRole('tab', { name: 'Home' }).click();
+    await handle.page.getByRole('option', { name: 'Overview' }).click();
 
     const inbox = await openInbox(handle);
     await inbox.getByRole('button', { name: /Input gate/ }).click();
@@ -576,9 +585,7 @@ test('packaged inbox renders and drafts a real NEED_USER_INPUT gate', async ({},
     await assertNoLeakedProcessesEventually(world);
 
     handle = await launchApp(world, testInfo, { traceName: 'attention-gate-relaunch' });
-    await expect(
-      handle.page.getByRole('banner').getByRole('heading', { name: 'Agentico' }),
-    ).toBeVisible({
+    await expect(handle.page.getByRole('navigation', { name: 'Feature sidebar' })).toBeVisible({
       timeout: 60_000,
     });
     await waitForAttentionGate(handle.page, feature.id);
@@ -604,7 +611,7 @@ test('packaged inbox renders and drafts a real NEED_USER_INPUT gate', async ({},
     );
 
     transcript.section('Feature-scoped Stop clears the paused gate');
-    await handle.page.getByRole('tab', { name: 'Home' }).click();
+    await handle.page.getByRole('option', { name: 'Overview' }).click();
     await createFeatureViaForm(handle, {
       name: 'Packaged Feature Stop Gate Fixture',
       description: 'Seeded feature-scoped NEED_USER_INPUT gate stopped through the cockpit.',
@@ -626,9 +633,7 @@ test('packaged inbox renders and drafts a real NEED_USER_INPUT gate', async ({},
     });
 
     handle = await launchApp(world, testInfo, { traceName: 'attention-feature-stop-gate' });
-    await expect(
-      handle.page.getByRole('banner').getByRole('heading', { name: 'Agentico' }),
-    ).toBeVisible({
+    await expect(handle.page.getByRole('navigation', { name: 'Feature sidebar' })).toBeVisible({
       timeout: 60_000,
     });
     await waitForAttentionGate(handle.page, stopFeature.id);
@@ -640,11 +645,11 @@ test('packaged inbox renders and drafts a real NEED_USER_INPUT gate', async ({},
     await featureStopGateDialog.getByRole('button', { name: 'Answer later' }).click();
     await expect(featureStopGateDialog).toHaveCount(0);
 
-    const stopFeatureTab = handle.page.getByRole('tab', {
+    const stopFeatureOption = handle.page.getByRole('option', {
       name: 'Packaged Feature Stop Gate Fixture',
     });
-    await stopFeatureTab.click();
-    await expect(stopFeatureTab).toHaveAttribute('aria-selected', 'true');
+    await stopFeatureOption.click();
+    await expect(stopFeatureOption).toHaveAttribute('aria-selected', 'true');
     const stopFeatureCockpit = handle.page.getByLabel('Feature Packaged Feature Stop Gate Fixture');
     const featureStopButton = stopFeatureCockpit.getByRole('button', {
       name: 'Stop',

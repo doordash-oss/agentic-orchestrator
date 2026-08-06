@@ -9,6 +9,7 @@ import {
   closeApp,
   evidenceShot,
   launchApp,
+  openSettings,
   persistAppLogs,
   type AppHandle,
 } from '../helpers/app';
@@ -38,7 +39,7 @@ test('changing Settings workspace inquireness keeps the packaged renderer alive'
       timeout: 60_000,
     });
 
-    await handle.page.getByRole('tab', { name: 'Settings' }).click();
+    await openSettings(handle);
     await expect(handle.page.getByRole('heading', { name: 'Settings' })).toBeVisible({
       timeout: 15_000,
     });

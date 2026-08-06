@@ -177,17 +177,17 @@ test('review-feedback initialization: modal → fetch → deselect → gate → 
         AGENTICO_GITHUB_API_BASE: apiBase,
       },
     });
-    const homeTab = handle.page.getByRole('tab', { name: 'Home' });
-    await expect(homeTab).toBeVisible({ timeout: 60_000 });
-    await homeTab.click();
+    const overviewOption = handle.page.getByRole('option', { name: 'Overview' });
+    await expect(overviewOption).toBeVisible({ timeout: 60_000 });
+    await overviewOption.click();
     await expect(handle.page.getByRole('button', { name: 'New feature' })).toBeVisible({
       timeout: 10_000,
     });
     transcript.step('relaunched with fake GitHub API via AGENTICO_GITHUB_API_BASE');
 
     transcript.section('Open feature cockpit and launch review feedback');
-    const featureTab = handle.page.getByRole('tab', { name: featureName });
-    await featureTab.click();
+    const featureOption = handle.page.getByRole('option', { name: featureName });
+    await featureOption.click();
     const seededCockpit = handle.page.getByLabel(`Feature ${featureName}`);
     await expect(seededCockpit).toBeVisible({ timeout: 30_000 });
 

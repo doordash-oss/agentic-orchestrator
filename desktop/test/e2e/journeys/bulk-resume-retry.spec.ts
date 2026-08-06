@@ -52,8 +52,8 @@ test('bulk resume/retry: fresh preview, sequential dispatch, cancellation, and s
         repoPatterns: [/alpha/],
       });
       transcript.step(`created feature \`${name}\` through the form`);
-      const homeTab = handle.page.getByRole('tab', { name: 'Home' });
-      await homeTab.click();
+      const overviewOption = handle.page.getByRole('option', { name: 'Overview' });
+      await overviewOption.click();
       await expect(handle.page.getByRole('button', { name: 'New feature' })).toBeVisible({
         timeout: 10_000,
       });

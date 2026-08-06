@@ -27,7 +27,7 @@ import type { CompletionAction } from '../../../src/renderer/src/features/comple
 import { SettingsPanel } from '../../../src/renderer/src/features/SettingsPanel';
 import { WorkspaceShell } from '../../../src/renderer/src/features/WorkspaceShell';
 import { FeatureCockpit } from '../../../src/renderer/src/features/FeatureCockpit';
-import { UpdateNotice } from '../../../src/renderer/src/App';
+import { UpdateNotice } from '../../../src/renderer/src/components/UpdateNotice';
 import { AmaDock } from '../../../src/renderer/src/components/AmaDock';
 import { CommandPalette } from '../../../src/renderer/src/components/CommandPalette';
 import { MonacoBuffer } from '../../../src/renderer/src/components/monaco';
@@ -213,10 +213,10 @@ function RunGaugeScene({ mode = 'active' }: { mode?: RunGaugeMode }) {
   const stages = spineStages('large');
   return (
     <div className="app-frame">
-      <header className="global-bar" aria-hidden="true" />
       <div className="workspace">
-        <div className="tab-strip__rail" aria-hidden="true" />
-        <div className="tab-panel tab-panel--cockpit">
+        <div className="sidebar" aria-hidden="true" />
+        <div className="content-column">
+          <header className="toolbar" aria-hidden="true" />
           <div className="cockpit" aria-label="Feature cockpit">
             <PhaseSpine
               stages={stages}
@@ -303,12 +303,10 @@ function AftercareScene() {
   const [drafts, setDrafts] = React.useState(emptyAttentionDrafts);
   return (
     <div className="app-frame">
-      <header className="global-bar" aria-hidden="true">
-        <span className="global-bar__brand">Agentico</span>
-      </header>
       <div className="workspace">
-        <div className="tab-strip__rail" aria-hidden="true" />
-        <div className="tab-panel tab-panel--cockpit">
+        <div className="sidebar" aria-hidden="true" />
+        <div className="content-column">
+          <header className="toolbar" aria-hidden="true" />
           <FeatureCockpit
             featureId="abcd1234ef567890"
             titleHint="Configure per-phase effort level"
@@ -330,12 +328,10 @@ function FeatureQuestionScene(): React.ReactElement {
   const attentionItems: AttentionItem[] = [FEATURE_QUESTION_ITEM];
   return (
     <div className="app-frame">
-      <header className="global-bar" aria-hidden="true">
-        <span className="global-bar__brand">Agentico</span>
-      </header>
       <div className="workspace">
-        <div className="tab-strip__rail" aria-hidden="true" />
-        <div className="tab-panel tab-panel--cockpit">
+        <div className="sidebar" aria-hidden="true" />
+        <div className="content-column">
+          <header className="toolbar" aria-hidden="true" />
           <FeatureCockpit
             featureId="abcd1234ef567890"
             titleHint="History and Rewind"
@@ -376,12 +372,10 @@ function PostImplementationScene({ scene }: { scene: string }) {
       : [];
   return (
     <div className="app-frame">
-      <header className="global-bar" aria-hidden="true">
-        <span className="global-bar__brand">Agentico</span>
-      </header>
       <div className="workspace">
-        <div className="tab-strip__rail" aria-hidden="true" />
-        <div className="tab-panel tab-panel--cockpit">
+        <div className="sidebar" aria-hidden="true" />
+        <div className="content-column">
+          <header className="toolbar" aria-hidden="true" />
           <FeatureCockpit
             featureId="abcd1234ef567890"
             titleHint="Configure per-phase effort level"
@@ -484,7 +478,7 @@ function RecoveryScene({ scene }: { scene: string }) {
         padding: 'var(--space-4)',
       }}
     >
-      <div className="global-bar" style={{ marginBottom: 'var(--space-3)' }}>
+      <div className="toolbar__trailing" style={{ marginBottom: 'var(--space-3)' }}>
         <AttentionInbox
           items={attentionItems}
           refresh={async () => attentionItems}
@@ -604,25 +598,21 @@ function BackgroundScene({ scene }: { scene: string }): React.ReactElement {
 
   return (
     <div className="app-frame" style={{ height: '100vh' }}>
-      <header className="global-bar">
-        <div className="global-bar__brand">
-          <span className="global-bar__mark" aria-hidden="true">
-            A
-          </span>
-          <h1>Agentico</h1>
+      <header className="toolbar">
+        <div className="toolbar__title">
+          <p className="toolbar__title-name">History and Rewind</p>
         </div>
-        <p className="global-bar__runtime" role="status" data-tone="ready">
-          <span aria-hidden="true">●</span> Runtime ready
-        </p>
-        <AttentionInbox
-          items={attentionItems}
-          refresh={refreshAttention}
-          featureLabel={() => 'History and Rewind'}
-          drafts={drafts}
-          setDrafts={setDrafts}
-          onJump={() => {}}
-          openRequest={scene === 'background-ama-compact' ? { id: 1 } : null}
-        />
+        <div className="toolbar__trailing">
+          <AttentionInbox
+            items={attentionItems}
+            refresh={refreshAttention}
+            featureLabel={() => 'History and Rewind'}
+            drafts={drafts}
+            setDrafts={setDrafts}
+            onJump={() => {}}
+            openRequest={scene === 'background-ama-compact' ? { id: 1 } : null}
+          />
+        </div>
       </header>
       {scene === 'background-ama-compact' ? (
         <div className="tab-panel" style={{ flex: 1, minHeight: 0 }}>
@@ -705,16 +695,10 @@ function UpdateAppScene(): React.ReactElement {
   }, []);
   return (
     <div className="app-frame" style={{ height: '100vh' }}>
-      <header className="global-bar">
-        <div className="global-bar__brand">
-          <span className="global-bar__mark" aria-hidden="true">
-            A
-          </span>
-          <h1>Agentico</h1>
+      <header className="toolbar">
+        <div className="toolbar__title">
+          <p className="toolbar__title-name">Agentico</p>
         </div>
-        <p className="global-bar__runtime" role="status" data-tone="ready">
-          <span aria-hidden="true">●</span> Runtime ready
-        </p>
       </header>
       <UpdateNotice
         update={update}
@@ -743,16 +727,10 @@ function UpdateAppScene(): React.ReactElement {
 function SettingsUpdateScene({ scene }: { scene: string }): React.ReactElement {
   return (
     <div className="app-frame" style={{ height: '100vh' }}>
-      <header className="global-bar">
-        <div className="global-bar__brand">
-          <span className="global-bar__mark" aria-hidden="true">
-            A
-          </span>
-          <h1>Agentico</h1>
+      <header className="toolbar">
+        <div className="toolbar__title">
+          <p className="toolbar__title-name">Agentico</p>
         </div>
-        <p className="global-bar__runtime" role="status" data-tone="ready">
-          <span aria-hidden="true">●</span> Runtime ready
-        </p>
       </header>
       <div className="tab-panel" style={{ flex: 1, minHeight: 0 }}>
         <SettingsPanel
@@ -785,16 +763,10 @@ function HomeFlightBoardScene(): React.ReactElement {
   ];
   return (
     <div className="app-frame" style={{ height: '100vh' }}>
-      <header className="global-bar">
-        <div className="global-bar__brand">
-          <span className="global-bar__mark" aria-hidden="true">
-            A
-          </span>
-          <h1>Agentico</h1>
+      <header className="toolbar">
+        <div className="toolbar__title">
+          <p className="toolbar__title-name">Agentico</p>
         </div>
-        <p className="global-bar__runtime" role="status" data-tone="ready">
-          <span aria-hidden="true">●</span> Runtime ready
-        </p>
       </header>
       <WorkspaceShell
         attentionItems={attentionItems}

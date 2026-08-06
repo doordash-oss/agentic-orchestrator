@@ -24,7 +24,6 @@ interface PaletteEntry {
   run(): Promise<void> | void;
 }
 
-const SETTINGS_TAB_ID = '__settings__';
 type PaletteFeatureAction = Extract<
   FeatureOperationalAction,
   'start' | 'pause-stop' | 'resume' | 'retry' | 'restart'
@@ -111,9 +110,9 @@ export function CommandPalette({
     window.agentico
       .getSettings()
       .then((settings) => {
-        const activeId = selectedFeatureId ?? settings.tabs.activeFeatureId;
-        if (alive) setActiveFeatureId(activeId === SETTINGS_TAB_ID ? null : activeId);
-        if (activeId === null || activeId === SETTINGS_TAB_ID) return null;
+        const activeId = selectedFeatureId ?? settings.shell.activeFeatureId;
+        if (alive) setActiveFeatureId(activeId);
+        if (activeId === null) return null;
         return window.agentico.getFeature(activeId);
       })
       .then((feature) => {
@@ -347,7 +346,15 @@ function grouped(entries: PaletteEntry[]): Array<[CommandGroup, PaletteEntry[]]>
   return groups;
 }
 
-function isEditingShortcutTarget(target: EventTarget | null): boolean {
+/**
+ * True when a global shortcut's keydown target is a place the user is
+ * actively typing (a native text input, a contenteditable region, Monaco, or
+ * any `role="textbox"`) — every renderer-level shortcut that isn't already
+ * scoped to a specific focused control (⌘K here; ⌘2-9 and ⌘⌃S in
+ * WorkspaceShell) checks this before acting, so typing a digit or letter
+ * never gets hijacked mid-sentence.
+ */
+export function isEditingShortcutTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) {
     return false;
   }
@@ -361,14 +368,17 @@ function isEditingShortcutTarget(target: EventTarget | null): boolean {
   return target.closest('.monaco-editor, [role="textbox"]') !== null;
 }
 
+/** Reads the currently selected sidebar row directly from its DOM markup —
+ * the fastest read of "what's on screen right now", ahead of any settings
+ * round trip. The Overview row is not a feature id and reports as none
+ * selected. */
 function selectedFeatureIdFromDom(): string | null {
-  const selected = document.querySelector('[role="tab"][aria-selected="true"][id^="tab-"]');
+  const selected = document.querySelector(
+    '[role="option"][aria-selected="true"][id^="sidebar-row-"]',
+  );
   if (!(selected instanceof HTMLElement)) {
     return null;
   }
-  const id = selected.id.slice('tab-'.length);
-  if (id === '' || id === 'home' || id === 'settings') {
-    return null;
-  }
-  return id;
+  const id = selected.id.slice('sidebar-row-'.length);
+  return id === '' ? null : id;
 }

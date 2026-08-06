@@ -21,6 +21,7 @@ import {
   closeApp,
   evidenceShot,
   launchApp,
+  openSettings,
   persistAppLogs,
   type AppHandle,
 } from '../helpers/app';
@@ -122,7 +123,10 @@ test('packaged security posture: no token in the renderer, locked-down window, c
     transcript.step('bearer token appears nowhere in the DOM, localStorage, or sessionStorage');
 
     transcript.section('settings.json: owner-only, presentation-only');
-    // Force a persisted settings write through the app's own surface.
+    // Force a persisted settings write through the app's own surface. The
+    // theme radiogroup lives in Settings ▸ Appearance now, not an
+    // always-visible header, so open it first.
+    await openSettings(handle);
     await handle.page
       .getByRole('radiogroup', { name: 'Theme' })
       .getByRole('radio', { name: 'Dark' })
@@ -140,7 +144,7 @@ test('packaged security posture: no token in the renderer, locked-down window, c
       'notifications',
       'runtime',
       'schemaVersion',
-      'tabs',
+      'shell',
       'theme',
       'window',
       'wizard',

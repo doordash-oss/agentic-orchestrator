@@ -106,11 +106,22 @@ test('packaged spatial shell keeps tab navigation, draft cancellation, and narro
     }, overflowNames);
     await handle.page.getByRole('option', { name: 'Overview' }).click();
     for (const name of overflowNames) {
-      const row = handle.page
-        .getByRole('listitem')
-        .filter({ has: handle.page.getByRole('heading', { name, exact: true }) });
+      const row = handle.page.getByRole('listitem').filter({
+        has: handle.page.locator('.overview-row__name', { hasText: sidebarRowNamePattern(name) }),
+      });
       await expect(row).toBeVisible({ timeout: 30_000 });
-      await row.getByRole('button', { name: 'Open' }).click();
+      // This section's actual claim is reachability — every bulk-created
+      // feature stays one click away with no overflow affordance — not a
+      // specific lane. A just-created feature can occasionally pick up a
+      // pending attention item of its own (e.g. a review checkpoint) and
+      // land in Waiting rather than At rest; either labeled action reaches
+      // the feature (Answer opens the cockpit plainly when there is no
+      // concrete pending item to jump to), so asserting a specific label
+      // here would test lane classification rather than this section's
+      // actual claim.
+      const actionButton = row.locator('.overview-row__action');
+      await expect(actionButton).toBeVisible({ timeout: 30_000 });
+      await actionButton.click();
       await handle.page.getByRole('option', { name: 'Overview' }).click();
     }
     await setWindowSize(handle, 760, 900);
@@ -250,12 +261,10 @@ test('packaged inbox and cockpit resolve real attention classes from the bundled
     // The old tab strip rendered every open tab's own badge alongside the
     // Home dashboard's, so the same status text appeared twice at once. The
     // sidebar has no such second, always-rendered surface — the equivalent
-    // signal is the row's own sub-line (different text), so only the
-    // Overview run-card's badge matches this exact status text now.
+    // signal is the Overview waiting-lane row's own state-cell text, which
+    // now carries the pending-approval summary instead of a separate badge.
     await expect(
-      handle.page.getByRole('status', {
-        name: 'Blocking input for Packaged Attention Resolution: 1 pending',
-      }),
+      handle.page.locator('.overview-row__state', { hasText: 'Approve 1 request' }),
     ).toHaveCount(1);
     await evidenceShot(handle, 'attention-badges-dashboard-tab-light-wide');
     await handle.page.getByRole('option', { name: /Packaged Attention Resolution/ }).click();

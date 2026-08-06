@@ -620,12 +620,12 @@ function BackgroundScene({ scene }: { scene: string }): React.ReactElement {
         </div>
       ) : (
         <div className="tab-panel" style={{ flex: 1, minHeight: 0 }}>
-          <header className="home-surface__header">
+          <header className="overview-surface__header">
             <div>
-              <p className="home-surface__eyebrow">Background supervision</p>
+              <p className="eyebrow-label">Background supervision</p>
               <h1>History and Rewind</h1>
             </div>
-            <button type="button" className="create-form__submit">
+            <button type="button" className="toolbar__new-feature">
               New feature
             </button>
           </header>
@@ -747,20 +747,22 @@ function SettingsUpdateScene({ scene }: { scene: string }): React.ReactElement {
   );
 }
 
-function HomeFlightBoardScene(): React.ReactElement {
-  const attentionItems: AttentionItem[] = [
-    {
-      kind: 'permission',
-      id: 'perm-updater',
-      featureId: 'updater-auto-1',
-      sessionId: 'sess-updater',
-      phase: 'Review',
-      toolName: 'Bash',
-      summary: 'Approve the plan before implementation continues.',
-      input: { command: 'apply plan' },
-      waitingSince: '2026-07-23T09:05:00Z',
-    },
-  ];
+function OverviewLanesScene({ empty = false }: { empty?: boolean }): React.ReactElement {
+  const attentionItems: AttentionItem[] = empty
+    ? []
+    : [
+        {
+          kind: 'permission',
+          id: 'perm-updater',
+          featureId: 'updater-auto-1',
+          sessionId: 'sess-updater',
+          phase: 'Review',
+          toolName: 'Bash',
+          summary: 'Approve the plan before implementation continues.',
+          input: { command: 'apply plan' },
+          waitingSince: '2026-07-23T09:05:00Z',
+        },
+      ];
   return (
     <div className="app-frame" style={{ height: '100vh' }}>
       <header className="toolbar">
@@ -779,8 +781,11 @@ function HomeFlightBoardScene(): React.ReactElement {
 function CaptureApp() {
   const scene = getScene();
 
-  if (scene === 'home-flight-board') {
-    return <HomeFlightBoardScene />;
+  if (scene === 'overview-lanes') {
+    return <OverviewLanesScene />;
+  }
+  if (scene === 'overview-empty') {
+    return <OverviewLanesScene empty />;
   }
 
   if (scene === 'update-passive-active' || scene === 'update-constrained') {

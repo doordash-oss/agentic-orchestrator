@@ -151,16 +151,16 @@ test('Bench shell evidence: five-lane sidebar, themes, inspector, collapse, mini
       timeout: 15_000,
     });
 
-    // 3. Overview selected/active, dark theme, stub Home content.
+    // 3. Overview selected/active, dark theme, the Bench lane lists.
     await handle.page.getByRole('option', { name: 'Overview' }).click();
-    await expect(handle.page.locator('.home-surface')).toBeVisible();
+    await expect(handle.page.locator('.overview-surface')).toBeVisible();
     await expect(handle.page.getByRole('option', { name: 'Overview' })).toHaveAttribute(
       'aria-selected',
       'true',
     );
     await contractEvidenceShot(
       handle,
-      'overview-selected-pinned-row-active-stub-home-content-in-the-pane-dark-theme-1440x900',
+      'overview-selected-pinned-row-active-lane-lists-in-the-pane-dark-theme-1440x900',
       1440,
       900,
       'dark',
@@ -192,7 +192,7 @@ test('Bench shell evidence: five-lane sidebar, themes, inspector, collapse, mini
     // same toggle button, whose element handle can go stale across the
     // theme/window-size churn above.
     await handle.page.getByRole('option', { name: 'Overview' }).click();
-    await expect(handle.page.locator('.home-surface')).toBeVisible();
+    await expect(handle.page.locator('.overview-surface')).toBeVisible();
     await selectedRow.click();
     await expect(handle.page.getByLabel('Feature Evidence Selected')).toBeVisible({
       timeout: 15_000,

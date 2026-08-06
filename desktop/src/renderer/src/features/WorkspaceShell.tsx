@@ -21,9 +21,7 @@ import {
   useMemo,
   useRef,
   useState,
-  type CSSProperties,
   type Dispatch,
-  type RefObject,
   type SetStateAction,
 } from 'react';
 import type {
@@ -49,22 +47,22 @@ import { emptyAttentionDrafts, type AttentionDrafts } from './AttentionInbox';
 import { Toolbar } from './Toolbar';
 import {
   childStatusSpineIndex,
-  dashboardGroupId,
-  dashboardState,
   displayStatusLabel,
-  formatElapsed,
-  groupDashboardFeatures,
   isRunAtRest,
   orderDashboardFeatures,
-  railStageLabel,
   spineActiveIndex,
   spineStages,
-  type SpineStage,
 } from './featureView';
-import { LANES, classifyFeaturesByLane, laneLabel, type Lane } from './laneClassification';
+import {
+  LANES,
+  classifyFeaturesByLaneWithAttention,
+  laneLabel,
+  type Lane,
+} from './laneClassification';
+import { overviewHeadline, overviewSubline } from './overviewSummary';
 import { BulkPreviewPanel } from './BulkPreviewPanel';
 import { RecoveryWorkspace } from './RecoveryWorkspace';
-import { useConnectionState, useMediaQuery, usePrefersReducedMotion } from '../hooks';
+import { useConnectionState, useMediaQuery } from '../hooks';
 
 type ListState =
   | { phase: 'loading' }
@@ -519,10 +517,7 @@ export function WorkspaceShell({
   };
 
   const features = list.phase === 'loaded' ? list.features : [];
-  const laneGroups = reclassifyWithPendingAttention(
-    classifyFeaturesByLane(features),
-    attentionByFeature,
-  );
+  const laneGroups = classifyFeaturesByLaneWithAttention(features, attentionByFeature);
   const counts = Object.fromEntries(LANES.map((lane) => [lane, laneGroups[lane].length])) as Record<
     Lane,
     number
@@ -550,6 +545,7 @@ export function WorkspaceShell({
       ? features.find((feature) => feature.id === selection.featureId)
       : undefined;
   const showTrailingToolbar = !settingsOpen && selection.kind === 'feature';
+  const showNewFeatureButton = !settingsOpen && selection.kind === 'overview' && view !== 'create';
   const toolbarTitle = settingsOpen
     ? 'Settings'
     : selection.kind === 'feature'
@@ -678,6 +674,9 @@ export function WorkspaceShell({
           title={toolbarTitle}
           subline={toolbarSubline}
           showTrailing={showTrailingToolbar}
+          showNewFeature={showNewFeatureButton}
+          onNewFeature={() => setView('create')}
+          newFeatureButtonRef={newFeatureButtonRef}
           attention={{
             items: attentionItems,
             refresh: refreshAttention,
@@ -759,32 +758,38 @@ export function WorkspaceShell({
               }}
             />
           ) : (
-            <div className="home-surface">
-              <header className="home-surface__header">
-                <div>
-                  <p className="home-surface__eyebrow">Agentico · Supervised runs</p>
-                  <h1>Feature queue</h1>
-                  <HomeReadout state={list} />
-                </div>
-                {list.phase !== 'loaded' || list.features.length > 0 ? (
+            <div className="overview-surface">
+              <header className="overview-surface__header">
+                <h1 className="overview-surface__headline">
+                  {overviewHeadline(counts, features.length)}
+                </h1>
+                <p className="overview-surface__subline">
+                  {overviewSubline(laneGroups, attentionItems, features.length)}
+                </p>
+                {features.length === 0 ? (
                   <button
-                    ref={newFeatureButtonRef}
                     type="button"
-                    className="create-form__submit"
+                    className="overview-surface__cta"
                     onClick={() => setView('create')}
                   >
-                    New feature
+                    Create a feature
                   </button>
                 ) : null}
               </header>
-              <FeatureList
+              <OverviewLanes
                 state={list}
-                selectedFeatureId={activeFeatureId}
-                attentionByFeature={attentionByFeature}
+                laneGroups={laneGroups}
+                attentionItems={attentionItems}
+                attentionKindsByFeature={attentionKindsByFeature}
                 onOpen={(featureId) => selectFeature(featureId)}
+                onAnswer={(featureId, attentionId) => {
+                  if (attentionId === undefined) {
+                    selectFeature(featureId);
+                  } else {
+                    onAttentionJump(featureId, attentionId);
+                  }
+                }}
                 onRetry={loadList}
-                onCreate={() => setView('create')}
-                createButtonRef={newFeatureButtonRef}
               />
               <RecoveryWorkspace onNavigateToFeature={(featureId) => selectFeature(featureId)} />
               <BulkPreviewPanel autoPreviewKey={bulkPreviewRequest} />
@@ -794,43 +799,6 @@ export function WorkspaceShell({
       </div>
     </section>
   );
-}
-
-/**
- * `classifyLane` only sees a feature's own snapshot, which has no top-level
- * "pending attention" field for a standalone feature — the schema only
- * represents attention on an active child relationship
- * (`activeChild.attention`). A feature's own directly-owned attention item
- * (no child pass involved, e.g. a permission prompt or question) is tracked
- * separately in the app-wide attention list, which is exactly what
- * `attentionByFeature` carries. The plan requires "any feature with a
- * pending attention count classifies as Waiting on you regardless of
- * status," so re-bucket with that list here rather than teach the pure
- * classifier about component-level state it was never given.
- */
-function reclassifyWithPendingAttention(
-  laneGroups: Record<Lane, FeatureSnapshot[]>,
-  attentionByFeature: Map<string, number>,
-): Record<Lane, FeatureSnapshot[]> {
-  if (attentionByFeature.size === 0) return laneGroups;
-  const next: Record<Lane, FeatureSnapshot[]> = {
-    waiting: [...laneGroups.waiting],
-    running: [],
-    published: [],
-    done: [],
-    'at-rest': [],
-  };
-  for (const lane of LANES) {
-    if (lane === 'waiting') continue;
-    for (const feature of laneGroups[lane]) {
-      if ((attentionByFeature.get(feature.id) ?? 0) > 0) {
-        next.waiting.push(feature);
-      } else {
-        next[lane].push(feature);
-      }
-    }
-  }
-  return next;
 }
 
 /**
@@ -1100,58 +1068,104 @@ function laneSubline(
   return undefined;
 }
 
-interface FeatureListProps {
+interface OverviewLanesProps {
   state: ListState;
-  selectedFeatureId: string | null;
-  attentionByFeature: ReadonlyMap<string, number>;
+  laneGroups: Record<Lane, FeatureSnapshot[]>;
+  attentionItems: readonly AttentionItem[];
+  attentionKindsByFeature: ReadonlyMap<string, Record<AttentionItem['kind'], number>>;
   onOpen(featureId: string): void;
+  onAnswer(featureId: string, attentionId?: string): void;
   onRetry(): void;
-  onCreate(): void;
-  createButtonRef: RefObject<HTMLButtonElement | null>;
 }
 
-/** The masthead run tally: active, waiting-on-you, and shipped counts. */
-function HomeReadout({ state }: { state: ListState }) {
-  if (state.phase !== 'loaded' || state.features.length === 0) return null;
-  let running = 0;
-  let waiting = 0;
-  let shipped = 0;
-  for (const feature of state.features) {
-    const group = dashboardGroupId(feature);
-    if (group === 'published' || group === 'done') {
-      shipped += 1;
-      continue;
-    }
-    const { bucket } = dashboardState(feature);
-    if (bucket === 'active') running += 1;
-    else if (bucket === 'intervention') waiting += 1;
-  }
-  return (
-    <p className="home-surface__readout">
-      <b>{running}</b> running<span aria-hidden="true"> · </span>
-      <b>{waiting}</b> waiting on you<span aria-hidden="true"> · </span>
-      <b>{shipped}</b> shipped
-    </p>
+/** The first non-recovery attention item this feature owns, if any. */
+function firstAttentionItemFor(
+  featureId: string,
+  attentionItems: readonly AttentionItem[],
+): AttentionItem | undefined {
+  return attentionItems.find(
+    (item) => item.kind !== 'recovery' && attentionOwnerFeatureId(item) === featureId,
   );
 }
 
-function FeatureList({
+/** The row's mono sub-line: the repo list, extended with the active pass name. */
+function overviewRowSubline(feature: FeatureSnapshot): string {
+  const repos = feature.repos.join(', ');
+  const childName = feature.activeChild?.name;
+  return childName !== undefined && childName !== '' ? `${repos} · ${childName}` : repos;
+}
+
+/** The lane-scoped fallback text for a lane whose sub-line cascade
+ * (`laneSubline`) has nothing to report — e.g. a running row with no
+ * active child and no current phase. */
+const OVERVIEW_ROW_STATE_FALLBACK: Readonly<Record<Lane, string>> = {
+  waiting: '',
+  running: 'Running',
+  'at-rest': '',
+  published: 'Shipped',
+  done: 'Done',
+};
+
+/** The row's state-cell text, one per lane per the mock: never invents a fact
+ * the snapshot doesn't carry. Reuses the sidebar's own `laneSubline`
+ * cascade so the two never drift apart, falling back only where the
+ * sidebar's undefined sub-line (no sub-line shown there) needs Overview
+ * copy instead. */
+function overviewRowStateText(
+  lane: Lane,
+  feature: FeatureSnapshot,
+  attentionKinds: Record<AttentionItem['kind'], number> | undefined,
+): string {
+  return laneSubline(lane, feature, attentionKinds) ?? OVERVIEW_ROW_STATE_FALLBACK[lane];
+}
+
+/** The row-scale pip rail: sidebar's `pipRailFor` for waiting/running rows,
+ * an all-done rail for the resting lanes (at-rest/published/done). Returns
+ * null for a waiting/running row whose status names no phase the rail can
+ * place a needle on — mirroring the sidebar's `SidebarFeatureRow`, which
+ * renders no pip at all in that case rather than inventing a fully-filled,
+ * done-looking rail for a row that hasn't finished anything. */
+function overviewRowPip(
+  lane: Lane,
+  feature: FeatureSnapshot,
+): {
+  stageCount: number;
+  activeIndex: number;
+  atRest: boolean;
+  tone: 'progress' | 'attention';
+} | null {
+  if (lane === 'waiting' || lane === 'running') {
+    const info = pipRailFor(feature);
+    return info === null ? null : { ...info, tone: lane === 'waiting' ? 'attention' : 'progress' };
+  }
+  const stages = spineStages(feature.activeChild?.pipeline ?? feature.pipeline);
+  return {
+    stageCount: stages.length,
+    activeIndex: stages.length - 1,
+    atRest: true,
+    tone: 'progress',
+  };
+}
+
+/** Every non-empty lane rendered as its own grouped inset list, in sidebar order. */
+function OverviewLanes({
   state,
-  selectedFeatureId,
-  attentionByFeature,
+  laneGroups,
+  attentionItems,
+  attentionKindsByFeature,
   onOpen,
+  onAnswer,
   onRetry,
-  onCreate,
-  createButtonRef,
-}: FeatureListProps) {
+}: OverviewLanesProps) {
+  const totalFeatures = LANES.reduce((sum, lane) => sum + laneGroups[lane].length, 0);
   return (
-    <section className="feature-list" aria-label="Existing features">
+    <section className="overview-lanes" aria-label="Existing features">
       {state.phase === 'loading' ? (
         <p role="status" className="setup-step__empty">
           Loading features…
         </p>
       ) : state.phase === 'error' ? (
-        <div className="feature-list__error">
+        <div className="overview-lanes__error">
           <p className="form-field__error">
             {state.error.code}: {state.error.message}
           </p>
@@ -1159,301 +1173,117 @@ function FeatureList({
             Try again
           </button>
         </div>
-      ) : state.features.length === 0 ? (
-        <div className="feature-list__empty">
-          <p className="home-surface__eyebrow">Runtime ready · workspace clear</p>
-          <h3>Turn a goal into a supervised run.</h3>
-          <p>
-            Define the work, choose its repositories, set the pipeline, then review the exact run
-            contract before anything is created.
-          </p>
-          <button
-            ref={createButtonRef}
-            type="button"
-            className="setup-wizard__action"
-            onClick={onCreate}
-          >
-            New feature
-          </button>
-        </div>
-      ) : (
-        <div className="feature-list__groups">
-          {groupDashboardFeatures(state.features).map((group) => (
-            <section
-              key={group.id}
-              className="feature-list__group"
-              aria-labelledby={`feature-list-group-${group.id}`}
-            >
-              <div className="feature-list__group-head" data-kind={group.id}>
-                <h3 id={`feature-list-group-${group.id}`} className="feature-list__group-title">
-                  {group.label}
-                </h3>
-                <span className="feature-list__group-count" aria-hidden="true">
-                  {group.id === 'in-progress'
-                    ? `· ${group.features.length}`
-                    : `× ${group.features.length}`}
-                </span>
-              </div>
-              {group.id === 'in-progress' ? (
-                <ul className="run-grid">
-                  {group.features.map((feature) => (
-                    <RunningCard
-                      key={feature.id}
-                      feature={feature}
-                      isOpen={selectedFeatureId === feature.id}
-                      attentionCount={attentionByFeature.get(feature.id) ?? 0}
-                      onOpen={onOpen}
-                    />
-                  ))}
-                </ul>
-              ) : (
-                <ul className="queue-rows">
-                  {group.features.map((feature) => (
-                    <QueueRow
-                      key={feature.id}
-                      feature={feature}
-                      isOpen={selectedFeatureId === feature.id}
-                      onOpen={onOpen}
-                    />
-                  ))}
-                </ul>
-              )}
-            </section>
-          ))}
+      ) : totalFeatures === 0 ? null : (
+        <div className="overview-lanes__groups">
+          {LANES.map((lane) =>
+            laneGroups[lane].length === 0 ? null : (
+              <OverviewLaneSection
+                key={lane}
+                lane={lane}
+                features={laneGroups[lane]}
+                attentionItems={attentionItems}
+                attentionKindsByFeature={attentionKindsByFeature}
+                onOpen={onOpen}
+                onAnswer={onAnswer}
+              />
+            ),
+          )}
         </div>
       )}
     </section>
   );
 }
 
-interface RunRowProps {
-  feature: FeatureSnapshot;
-  isOpen: boolean;
-  onOpen(featureId: string): void;
-}
-
-/** A feature still in flight: full phase rail, live/needs-you badge, one action. */
-function RunningCard({
-  feature,
-  isOpen,
-  attentionCount,
+function OverviewLaneSection({
+  lane,
+  features,
+  attentionItems,
+  attentionKindsByFeature,
   onOpen,
-}: RunRowProps & { attentionCount: number }) {
-  const stages = spineStages(feature.pipeline);
-  const activeIndex = spineActiveIndex(feature, stages);
-  const { bucket, label } = dashboardState(feature);
-  const needsYou = attentionCount > 0 || bucket === 'intervention';
-  const railTone = needsYou ? 'attention' : 'progress';
-  // Amber when a run wants you, blue pulse while it's genuinely working, quiet
-  // otherwise — so a resting "Code ready" run never reads as live.
-  const badgeState = needsYou ? 'attention' : bucket === 'active' ? 'live' : 'quiet';
-  // Name the specific reason a parked run needs you (Interrupted / Failed /
-  // Review needed / Input needed); a live run with a pending prompt just says
-  // "Needs you"; otherwise Live or the resting state.
-  const badge =
-    bucket === 'intervention'
-      ? label
-      : needsYou
-        ? 'Needs you'
-        : bucket === 'active'
-          ? label === 'Active'
-            ? 'Live'
-            : label
-          : label;
-  const elapsed = formatElapsed(feature);
-  return (
-    <li className="run-card" data-state={badgeState}>
-      <div className="run-card__head">
-        <h4 className="run-card__title">{feature.name}</h4>
-        <span className="run-card__badges">
-          <AttentionBadge count={attentionCount} label={`Blocking input for ${feature.name}`} />
-          <span className="run-card__badge">
-            <span className="run-card__dot" aria-hidden="true" />
-            {badge}
-          </span>
-        </span>
-      </div>
-      <p className="run-card__meta">
-        <span>
-          repo <b>{feature.repos.join(', ')}</b>
-        </span>
-        <span>
-          status{' '}
-          <b>
-            {displayStatusLabel(feature.status)}
-            {feature.activeChild !== undefined ? ' · locked' : ''}
-          </b>
-        </span>
-        {feature.activeChild === undefined && elapsed !== null ? (
-          <span>
-            elapsed <b>{elapsed}</b>
-          </span>
-        ) : null}
-      </p>
-      {feature.activeChild !== undefined ? (
-        // The pass is what is moving; the parent's at-rest rail would read as
-        // a finished run inside the In-progress section.
-        <PassLane child={feature.activeChild} tone={railTone} />
-      ) : (
-        <FlightRail
-          stages={stages}
-          activeIndex={activeIndex}
-          atRest={isRunAtRest(feature.status)}
-          tone={railTone}
-          label={`Pipeline for ${feature.name}`}
-        />
-      )}
-      {feature.failure?.message !== undefined ? (
-        <p className="run-card__failure">
-          <span aria-hidden="true">! </span>
-          {feature.failure.message}
-        </p>
-      ) : null}
-      <div className="run-card__actions">
-        <button type="button" className="run-card__action" onClick={() => onOpen(feature.id)}>
-          {isOpen ? 'Show' : 'Open'}
-        </button>
-      </div>
-    </li>
-  );
-}
-
-/**
- * The nested refactor-pass lane shows the active child with its own live rail.
- * The needle is derived from the pass's status;
- * a Created pass shows the rail with no needle and every stop upcoming, and
- * statuses that don't name a phase (paused, waiting, failed) show no rail
- * rather than an approximate needle.
- */
-function PassLane({
-  child,
-  tone,
+  onAnswer,
 }: {
-  child: NonNullable<FeatureSnapshot['activeChild']>;
-  tone: 'progress' | 'attention';
+  lane: Lane;
+  features: FeatureSnapshot[];
+  attentionItems: readonly AttentionItem[];
+  attentionKindsByFeature: ReadonlyMap<string, Record<AttentionItem['kind'], number>>;
+  onOpen(featureId: string): void;
+  onAnswer(featureId: string, attentionId?: string): void;
 }) {
-  const stages = spineStages(child.pipeline);
-  const index = childStatusSpineIndex(child.status, stages);
   return (
-    <div className="run-card__pass" data-tone={tone}>
-      <span className="run-card__pass-glyph" aria-hidden="true">
-        ↳
-      </span>
-      <div className="run-card__pass-body">
-        <p className="run-card__pass-line">
-          <b>{child.name}</b>
-          <span>
-            {child.status === 'Created' ? 'Not started' : displayStatusLabel(child.status)}
-          </span>
-        </p>
-        {index === null ? null : (
-          <FlightRail
-            stages={stages}
-            activeIndex={index}
-            atRest={false}
-            tone={tone}
-            label={`Pass pipeline for ${child.name}`}
-          />
-        )}
+    <section className="overview-lane" aria-labelledby={`overview-lane-${lane}`}>
+      <div className="overview-lane__head">
+        <h2 id={`overview-lane-${lane}`} className="overview-lane__title">
+          {laneLabel(lane)}
+        </h2>
+        <span className="overview-lane__count" aria-hidden="true">
+          {features.length}
+        </span>
       </div>
-    </div>
+      <div className="overview-lane__group">
+        <ul className="overview-lane__rows">
+          {features.map((feature) => (
+            <OverviewRow
+              key={feature.id}
+              lane={lane}
+              feature={feature}
+              attentionKinds={attentionKindsByFeature.get(feature.id)}
+              onOpen={() => onOpen(feature.id)}
+              onAnswer={() =>
+                onAnswer(feature.id, firstAttentionItemFor(feature.id, attentionItems)?.id)
+              }
+            />
+          ))}
+        </ul>
+      </div>
+    </section>
   );
 }
 
-/** A shipped feature: compact row with an all-done rail and one action. */
-function QueueRow({ feature, isOpen, onOpen }: RunRowProps) {
-  const stages = spineStages(feature.pipeline);
-  const stateLabel = dashboardGroupId(feature) === 'done' ? 'Done' : 'Shipped';
+function OverviewRow({
+  lane,
+  feature,
+  attentionKinds,
+  onOpen,
+  onAnswer,
+}: {
+  lane: Lane;
+  feature: FeatureSnapshot;
+  attentionKinds: Record<AttentionItem['kind'], number> | undefined;
+  onOpen(): void;
+  onAnswer(): void;
+}) {
+  const pip = overviewRowPip(lane, feature);
+  const tone = LANE_GLYPH_TONE[lane];
   return (
-    <li className="queue-row">
-      <span className="queue-row__name">{feature.name}</span>
-      <span className="queue-row__repo">{feature.repos.join(', ')}</span>
-      <span className="queue-row__rail" aria-hidden="true">
-        {stages.map((stage) => (
-          <i key={stage.id} className="queue-row__pip" />
-        ))}
-      </span>
-      <span className="queue-row__state">{stateLabel}</span>
-      <button type="button" className="queue-row__action" onClick={() => onOpen(feature.id)}>
-        {isOpen ? 'Show' : 'Open'}
+    <li className="overview-row" data-lane={lane}>
+      <button type="button" className="overview-row__hit" onClick={onOpen}>
+        <span className="overview-row__body">
+          <span className="overview-row__name">{feature.name}</span>
+          <span className="overview-row__subline">{overviewRowSubline(feature)}</span>
+        </span>
+        <span className="overview-row__state-col">
+          <span className="overview-row__state" data-tone={tone}>
+            <span className="overview-row__state-dot" data-tone={tone} aria-hidden="true" />
+            {overviewRowStateText(lane, feature, attentionKinds)}
+          </span>
+          {pip === null ? null : (
+            <PipRail
+              stageCount={pip.stageCount}
+              activeIndex={pip.activeIndex}
+              atRest={pip.atRest}
+              tone={pip.tone}
+              label={`${feature.name} progress`}
+            />
+          )}
+        </span>
+      </button>
+      <button
+        type="button"
+        className="overview-row__action"
+        onClick={lane === 'waiting' ? onAnswer : onOpen}
+      >
+        {lane === 'waiting' ? 'Answer' : 'Open'}
       </button>
     </li>
-  );
-}
-
-/**
- * The signature: a horizontal pipeline rail with a filled track to the active
- * stop, a pulsing needle on the current stage, and condensed stage labels.
- */
-function FlightRail({
-  stages,
-  activeIndex,
-  atRest,
-  tone,
-  label,
-}: {
-  stages: readonly SpineStage[];
-  activeIndex: number;
-  atRest: boolean;
-  tone: 'progress' | 'attention';
-  label: string;
-}) {
-  const reducedMotion = usePrefersReducedMotion();
-  const denom = Math.max(stages.length - 1, 1);
-  // activeIndex -1 = not started: zero fill, every stop upcoming, no needle.
-  const fillPct = (Math.min(Math.max(activeIndex, 0), denom) / denom) * 100;
-  return (
-    <div
-      className="flight-rail"
-      data-tone={tone}
-      role="group"
-      aria-label={label}
-      style={{ '--stops': stages.length } as CSSProperties}
-    >
-      <div className="flight-rail__track">
-        <span className="flight-rail__fill" style={{ width: `${fillPct}%` }} />
-      </div>
-      <div className="flight-rail__stops">
-        {stages.map((stage, index) => {
-          const state =
-            index < activeIndex || (atRest && index === activeIndex)
-              ? 'done'
-              : index === activeIndex
-                ? 'active'
-                : 'upcoming';
-          const isActive = state === 'active';
-          return (
-            <span
-              key={stage.id}
-              className="flight-rail__stop"
-              data-state={state}
-              data-tone={tone}
-              {...(isActive ? { 'aria-current': 'step' as const } : {})}
-            >
-              <span
-                className={
-                  isActive && !reducedMotion
-                    ? 'flight-rail__stop-dot flight-rail__stop-dot--pulse'
-                    : 'flight-rail__stop-dot'
-                }
-                aria-hidden="true"
-              />
-              <span className="flight-rail__stop-label" title={stage.label}>
-                {railStageLabel(stage.label, stages.length)}
-              </span>
-            </span>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-function AttentionBadge({ count, label }: { count: number; label: string }) {
-  if (count === 0) return null;
-  return (
-    <span className="attention-badge" role="status" aria-label={`${label}: ${count} pending`}>
-      {count}
-    </span>
   );
 }

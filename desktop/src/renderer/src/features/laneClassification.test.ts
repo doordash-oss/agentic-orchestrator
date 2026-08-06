@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { featureSnapshot } from '../test/agenticoMock';
 import type { FeatureSnapshot, RelationshipChildView } from '../../../shared/ipc';
-import { classifyFeaturesByLane, classifyLane, laneCounts, type Lane } from './laneClassification';
+import {
+  classifyFeaturesByLane,
+  classifyFeaturesByLaneWithAttention,
+  classifyLane,
+  laneCounts,
+  type Lane,
+} from './laneClassification';
 
 function snapshot(status: string, overrides: Partial<FeatureSnapshot> = {}): FeatureSnapshot {
   return featureSnapshot({
@@ -181,6 +187,27 @@ describe('laneCounts', () => {
       done: 2,
       'at-rest': 1,
     });
+  });
+});
+
+describe('classifyFeaturesByLaneWithAttention', () => {
+  it('re-buckets a feature with a pending attention count into waiting regardless of its own lane', () => {
+    const running = snapshot('Implementing', { id: 'running-1' });
+    const rested = snapshot('CodeReady', { id: 'rested-1' });
+    const attentionByFeature = new Map([['running-1', 1]]);
+
+    const grouped = classifyFeaturesByLaneWithAttention([running, rested], attentionByFeature);
+
+    expect(grouped.waiting.map((f) => f.id)).toStrictEqual(['running-1']);
+    expect(grouped.running).toStrictEqual([]);
+    expect(grouped['at-rest'].map((f) => f.id)).toStrictEqual(['rested-1']);
+  });
+
+  it('returns the base classification untouched when nothing has pending attention', () => {
+    const running = snapshot('Implementing', { id: 'running-1' });
+    const base = classifyFeaturesByLane([running]);
+    const grouped = classifyFeaturesByLaneWithAttention([running], new Map());
+    expect(grouped).toStrictEqual(base);
   });
 });
 

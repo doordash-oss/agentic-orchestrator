@@ -15,7 +15,7 @@
  * as the header it replaces: the bar itself is draggable, every interactive
  * child opts out via `-webkit-app-region: no-drag` (app.css).
  */
-import type { Dispatch, SetStateAction } from 'react';
+import type { Dispatch, RefObject, SetStateAction } from 'react';
 import type { AttentionItem } from '../../../shared/ipc';
 import { AttentionInbox, type AttentionDrafts } from './AttentionInbox';
 
@@ -41,6 +41,10 @@ export interface ToolbarProps {
   overflowSlotRef?(node: HTMLDivElement | null): void;
   /** The cockpit-owned inspector-toggle button portals into this node once mounted. */
   inspectorSlotRef?(node: HTMLDivElement | null): void;
+  /** Overview's sole "New feature" entry point — shown only when Overview is selected. */
+  showNewFeature?: boolean;
+  onNewFeature?(): void;
+  newFeatureButtonRef?: RefObject<HTMLButtonElement | null>;
 }
 
 export function Toolbar({
@@ -52,6 +56,9 @@ export function Toolbar({
   attention,
   overflowSlotRef,
   inspectorSlotRef,
+  showNewFeature = false,
+  onNewFeature,
+  newFeatureButtonRef,
 }: ToolbarProps) {
   return (
     <header className="toolbar" aria-label="Workspace toolbar">
@@ -82,6 +89,16 @@ export function Toolbar({
             <div className="toolbar__overflow-slot" ref={overflowSlotRef} />
             <div className="toolbar__inspector-slot" ref={inspectorSlotRef} />
           </>
+        ) : null}
+        {showNewFeature ? (
+          <button
+            ref={newFeatureButtonRef}
+            type="button"
+            className="toolbar__new-feature"
+            onClick={onNewFeature}
+          >
+            New feature
+          </button>
         ) : null}
       </div>
     </header>

@@ -3,7 +3,6 @@ import { featureSnapshot } from '../test/agenticoMock';
 import {
   actionById,
   childStatusSpineIndex,
-  dashboardGroupId,
   dashboardState,
   displayFeatureMessage,
   displayModelName,
@@ -14,7 +13,6 @@ import {
   formatDuration,
   formatElapsed,
   phaseMetric,
-  groupDashboardFeatures,
   isReadyToStart,
   isRunAtRest,
   orderDashboardFeatures,
@@ -117,7 +115,6 @@ describe('intervention-first dashboard ordering', () => {
       label: 'Refactoring',
       tone: 'active',
     });
-    expect(dashboardGroupId(refactoring)).toBe('in-progress');
     expect(
       dashboardState(
         featureSnapshot({
@@ -166,27 +163,6 @@ describe('intervention-first dashboard ordering', () => {
     // Paused/waiting states carry no phase; an approximate needle would lie.
     expect(childStatusSpineIndex('Interrupted', stages)).toBeNull();
     expect(childStatusSpineIndex('NeedUserInput', stages)).toBeNull();
-  });
-
-  it('groups dashboard rows into in-progress, published, and done sections', () => {
-    const features = [
-      snapshot('published', 'Published', '2026-07-15T08:00:00Z'),
-      snapshot('failed', 'Failed', '2026-07-14T08:00:00Z'),
-      snapshot('done', 'Done', '2026-07-13T08:00:00Z'),
-      snapshot('ready', 'CodeReady', '2026-07-12T08:00:00Z'),
-    ];
-
-    expect(
-      groupDashboardFeatures(features).map((group) => ({
-        id: group.id,
-        label: group.label,
-        featureIds: group.features.map((feature) => feature.id),
-      })),
-    ).toStrictEqual([
-      { id: 'in-progress', label: 'In progress', featureIds: ['failed', 'ready'] },
-      { id: 'published', label: 'Published', featureIds: ['published'] },
-      { id: 'done', label: 'Done', featureIds: ['done'] },
-    ]);
   });
 });
 

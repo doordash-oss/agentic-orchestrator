@@ -107,6 +107,80 @@ describe('WorkspaceShell sidebar', () => {
     expect(screen.queryByRole('group', { name: 'At rest' })).not.toBeInTheDocument();
   });
 
+  it('shows Answer on a waiting-lane row and Open on every other lane row', async () => {
+    const waiting = featureSnapshot({
+      id: 'waiting1ef567890a',
+      name: 'Needs a decision',
+      status: 'Failed',
+      actions: [],
+    });
+    const running = featureSnapshot({
+      id: 'running1ef567890a',
+      name: 'Mid-flight feature',
+      status: 'Implementing',
+      setup: { status: 'done', attempt: 1, tasks: [] },
+      actions: [],
+    });
+    const snapshots = [waiting, running];
+    const mock = installAgenticoMock({ features: snapshots.map(summaryOf) });
+    mock.api.getFeature.mockImplementation((featureId: string) =>
+      Promise.resolve(snapshots.find((snapshot) => snapshot.id === featureId) ?? snapshots[0]!),
+    );
+    render(<WorkspaceShell />);
+
+    const lanes = await screen.findByRole('region', { name: 'Existing features' });
+    const waitingRow = within(lanes).getByText('Needs a decision').closest('li')!;
+    expect(within(waitingRow).getByRole('button', { name: 'Answer' })).toBeInTheDocument();
+
+    const runningRow = within(lanes).getByText('Mid-flight feature').closest('li')!;
+    expect(within(runningRow).getByRole('button', { name: 'Open' })).toBeInTheDocument();
+  });
+
+  it('opens the feature when clicking an Open row, and jumps via onAttentionJump when Answer has a pending item', async () => {
+    const onAttentionJump = vi.fn();
+    const waiting = featureSnapshot({
+      id: FEATURE_ID,
+      name: 'Needs a decision',
+      status: 'Failed',
+      actions: [],
+    });
+    const rested = featureSnapshot({
+      id: SECOND_FEATURE_ID,
+      name: 'Resting feature',
+      status: 'CodeReady',
+      setup: { status: 'done', attempt: 1, tasks: [] },
+      actions: [],
+    });
+    const snapshots = [waiting, rested];
+    const mock = installAgenticoMock({ features: snapshots.map(summaryOf) });
+    mock.api.getFeature.mockImplementation((featureId: string) =>
+      Promise.resolve(snapshots.find((snapshot) => snapshot.id === featureId) ?? snapshots[0]!),
+    );
+    const attentionItems = [
+      {
+        kind: 'help' as const,
+        id: 'attn-1',
+        featureId: FEATURE_ID,
+        waitingSince: '2026-08-05T10:00:00Z',
+        prompt: 'need input',
+      },
+    ];
+    render(<WorkspaceShell attentionItems={attentionItems} onAttentionJump={onAttentionJump} />);
+
+    const lanes = await screen.findByRole('region', { name: 'Existing features' });
+    const restingRow = within(lanes).getByText('Resting feature').closest('li')!;
+    await userEvent.click(within(restingRow).getByRole('button', { name: 'Open' }));
+    expect(
+      await screen.findByRole('region', { name: 'Feature Resting feature' }),
+    ).toBeInTheDocument();
+
+    await userEvent.click(await screen.findByRole('option', { name: 'Overview' }));
+    const lanesAgain = await screen.findByRole('region', { name: 'Existing features' });
+    const waitingRow = within(lanesAgain).getByText('Needs a decision').closest('li')!;
+    await userEvent.click(within(waitingRow).getByRole('button', { name: 'Answer' }));
+    expect(onAttentionJump).toHaveBeenCalledWith(FEATURE_ID, 'attn-1');
+  });
+
   it('selects a feature by pointer click, mounting exactly one cockpit at a time', async () => {
     const feature = featureSnapshot({
       id: FEATURE_ID,
@@ -294,6 +368,16 @@ describe('WorkspaceShell sidebar', () => {
       }),
     );
     expect(mock.api.getFeature).toHaveBeenCalledWith(FEATURE_ID);
+  });
+
+  it('shows an in-flow create call-to-action on the empty Overview and opens creation from it', async () => {
+    installAgenticoMock();
+    render(<WorkspaceShell />);
+    const user = userEvent.setup();
+
+    await screen.findByText('Turn a goal into a supervised run.');
+    await user.click(await screen.findByRole('button', { name: 'Create a feature' }));
+    await screen.findByRole('form', { name: /create a feature/i });
   });
 
   it('asks before discarding entered creation details when leaving via Overview', async () => {

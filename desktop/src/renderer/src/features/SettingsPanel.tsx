@@ -395,7 +395,7 @@ export function SettingsPanel({ routeRequest = null }: { routeRequest?: RoutedRe
     <section className="settings-panel" aria-label="Settings and readiness">
       <header className="settings-panel__header">
         <div>
-          <p className="home-surface__eyebrow">Runtime configuration and readiness</p>
+          <p className="eyebrow-label">Runtime configuration and readiness</p>
           <h1>Settings</h1>
         </div>
       </header>

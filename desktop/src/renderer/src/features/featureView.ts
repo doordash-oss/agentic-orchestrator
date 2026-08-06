@@ -7,18 +7,11 @@ import type { FeatureSnapshot, FeatureSetupView, ModelCatalogue } from '../../..
 
 export type DashboardBucket = 'intervention' | 'active' | 'startable' | 'inactive';
 export type DashboardTone = 'danger' | 'attention' | 'active' | 'ready' | 'quiet';
-export type DashboardGroupId = 'in-progress' | 'published' | 'done';
 
 export interface DashboardState {
   bucket: DashboardBucket;
   label: string;
   tone: DashboardTone;
-}
-
-export interface DashboardGroup {
-  id: DashboardGroupId;
-  label: string;
-  features: FeatureSnapshot[];
 }
 
 const STATUS_LABELS: Readonly<Record<string, string>> = {
@@ -128,44 +121,9 @@ export function orderDashboardFeatures(features: readonly FeatureSnapshot[]): Fe
     .map(({ feature }) => feature);
 }
 
-const DASHBOARD_GROUPS: readonly { id: DashboardGroupId; label: string }[] = [
-  { id: 'in-progress', label: 'In progress' },
-  { id: 'published', label: 'Published' },
-  { id: 'done', label: 'Done' },
-];
-
-export function dashboardGroupId(snapshot: FeatureSnapshot): DashboardGroupId {
-  if (snapshot.activeChild !== undefined) return 'in-progress';
-  if (snapshot.status === 'Done') return 'done';
-  if (snapshot.status === 'Published') return 'published';
-  return 'in-progress';
-}
-
-/** Groups already-ordered dashboard features into the home screen sections. */
-export function groupDashboardFeatures(features: readonly FeatureSnapshot[]): DashboardGroup[] {
-  return DASHBOARD_GROUPS.map((group) => ({
-    ...group,
-    features: features.filter((feature) => dashboardGroupId(feature) === group.id),
-  })).filter((group) => group.features.length > 0);
-}
-
 export interface SpineStage {
   id: string;
   label: string;
-}
-
-/**
- * Rail labels stay full when a pipeline has few stages, but the full profile
- * (nine stages) can't fit spelled-out labels in a card, so they compact:
- * multi-word labels to initials, single words to their opening letters.
- */
-export function railStageLabel(label: string, totalStages: number): string {
-  if (totalStages <= 5) return label;
-  const words = label.trim().split(/\s+/);
-  if (words.length > 1) {
-    return words.map((word) => word.charAt(0)).join('');
-  }
-  return label.length <= 4 ? label : label.slice(0, 3);
 }
 
 /** Phase order per pipeline profile (internal/feature/pipeline.go). */

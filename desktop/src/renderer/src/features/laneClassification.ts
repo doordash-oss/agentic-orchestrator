@@ -118,7 +118,7 @@ export type LaneCounts = Record<Lane, number>;
 /**
  * Per-lane counts, derived from the same classification as the groupings.
  * This is the raw per-snapshot classification only — it does not apply the
- * sidebar's `reclassifyWithPendingAttention` post-pass, so a consumer that
+ * `classifyFeaturesByLaneWithAttention` post-pass below, so a consumer that
  * needs counts consistent with the rendered sidebar (e.g. an Overview that
  * also surfaces pending-attention features under "Waiting on you") must
  * apply that same re-bucketing rather than reading these counts directly.
@@ -129,4 +129,42 @@ export function laneCounts(snapshots: readonly FeatureSnapshot[]): LaneCounts {
     counts[classifyLane(snapshot)] += 1;
   }
   return counts;
+}
+
+/**
+ * `classifyLane` only sees a feature's own snapshot, which has no top-level
+ * "pending attention" field for a standalone feature — the schema only
+ * represents attention on an active child relationship
+ * (`activeChild.attention`). A feature's own directly-owned attention item
+ * (no child pass involved, e.g. a permission prompt or question) is tracked
+ * separately in the app-wide attention list, which this function's second
+ * argument carries. Any feature with a pending attention count classifies as
+ * "Waiting on you" regardless of its status-derived lane, so re-bucket with
+ * that list here rather than teach the pure classifier about component-level
+ * state it was never given.
+ */
+export function classifyFeaturesByLaneWithAttention(
+  snapshots: readonly FeatureSnapshot[],
+  attentionByFeature: ReadonlyMap<string, number>,
+): LaneGroups {
+  const laneGroups = classifyFeaturesByLane(snapshots);
+  if (attentionByFeature.size === 0) return laneGroups;
+  const next: LaneGroups = {
+    waiting: [...laneGroups.waiting],
+    running: [],
+    published: [],
+    done: [],
+    'at-rest': [],
+  };
+  for (const lane of LANES) {
+    if (lane === 'waiting') continue;
+    for (const feature of laneGroups[lane]) {
+      if ((attentionByFeature.get(feature.id) ?? 0) > 0) {
+        next.waiting.push(feature);
+      } else {
+        next[lane].push(feature);
+      }
+    }
+  }
+  return next;
 }

@@ -65,12 +65,32 @@ test('capture all visual evidence screenshots', async ({ page }) => {
 
   await capture(
     page,
-    'home-flight-board',
+    'overview-lanes',
     'light',
     1440,
     900,
-    'home-flight-board-with-refactoring-pass-lane-1440x900-light',
-    '.run-card__pass',
+    'overview-with-lane-grouped-features-and-refactoring-pass-1440x900-light',
+    '.overview-lanes__groups',
+  );
+
+  await capture(
+    page,
+    'overview-lanes',
+    'dark',
+    1440,
+    900,
+    'running-lane-row-live-implementing-feature-rendered-by-the-mock-data-screenshot-1440x900',
+    '#overview-lane-running',
+  );
+
+  await capture(
+    page,
+    'overview-empty',
+    'dark',
+    1440,
+    900,
+    'overview-empty-workspace-mock-harness-1440x900-dark',
+    '.overview-surface__cta',
   );
 
   await capture(

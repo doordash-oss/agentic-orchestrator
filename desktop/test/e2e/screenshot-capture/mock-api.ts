@@ -337,9 +337,9 @@ const FEATURE_SNAPSHOT: FeatureSnapshot = {
   ],
 };
 
-/** Fixtures for the Home flight-board capture: three in-flight runs and a
+/** Fixtures for the Overview lanes capture: three in-flight runs and a
  * shipped ledger, exercising live, needs-you, and published treatments. */
-function flightSnapshot(
+function overviewLaneSnapshot(
   id: string,
   name: string,
   status: string,
@@ -371,8 +371,8 @@ function flightSnapshot(
   };
 }
 
-const FLIGHT_BOARD_FEATURES: FeatureSnapshot[] = [
-  flightSnapshot(
+const OVERVIEW_LANE_FEATURES: FeatureSnapshot[] = [
+  overviewLaneSnapshot(
     'updater-auto-1',
     'electron App auto-updater',
     'NeedUserInput',
@@ -382,7 +382,7 @@ const FLIGHT_BOARD_FEATURES: FeatureSnapshot[] = [
     2462,
   ),
   {
-    ...flightSnapshot(
+    ...overviewLaneSnapshot(
       'refactoring-parent-1',
       'Configure per-phase effort level',
       'Published',
@@ -408,7 +408,7 @@ const FLIGHT_BOARD_FEATURES: FeatureSnapshot[] = [
       cleanupWarnings: [],
     },
   },
-  flightSnapshot(
+  overviewLaneSnapshot(
     'readme-italian-1',
     'translate README to Italian',
     'Implementing',
@@ -418,7 +418,7 @@ const FLIGHT_BOARD_FEATURES: FeatureSnapshot[] = [
     760,
     'large',
   ),
-  flightSnapshot(
+  overviewLaneSnapshot(
     'taulu-ttl-1',
     'Taulu TTL compaction',
     'CodeReady',
@@ -427,7 +427,7 @@ const FLIGHT_BOARD_FEATURES: FeatureSnapshot[] = [
     '2026-07-23T08:00:00Z',
     5940,
   ),
-  flightSnapshot(
+  overviewLaneSnapshot(
     'pub-electron-app',
     'electron APP for agentic Orchestrator',
     'Published',
@@ -436,7 +436,7 @@ const FLIGHT_BOARD_FEATURES: FeatureSnapshot[] = [
     '2026-07-22T10:00:00Z',
     5220,
   ),
-  flightSnapshot(
+  overviewLaneSnapshot(
     'pub-taulu-mv',
     'Taulu materialized views',
     'Published',
@@ -445,7 +445,7 @@ const FLIGHT_BOARD_FEATURES: FeatureSnapshot[] = [
     '2026-07-21T10:00:00Z',
     3180,
   ),
-  flightSnapshot(
+  overviewLaneSnapshot(
     'pub-smart-zone',
     'The Smart Zone',
     'Published',
@@ -454,7 +454,7 @@ const FLIGHT_BOARD_FEATURES: FeatureSnapshot[] = [
     '2026-07-20T10:00:00Z',
     1890,
   ),
-  flightSnapshot(
+  overviewLaneSnapshot(
     'pub-prod-fallback',
     'Prod tenant fallback on READ',
     'Published',
@@ -463,7 +463,7 @@ const FLIGHT_BOARD_FEATURES: FeatureSnapshot[] = [
     '2026-07-19T10:00:00Z',
     4410,
   ),
-  flightSnapshot(
+  overviewLaneSnapshot(
     'pub-static-shard',
     'Taulu Static Sharding',
     'Published',
@@ -472,9 +472,18 @@ const FLIGHT_BOARD_FEATURES: FeatureSnapshot[] = [
     '2026-07-18T10:00:00Z',
     2020,
   ),
+  overviewLaneSnapshot(
+    'done-signal-lab-onboarding',
+    'Signal Lab onboarding checklist',
+    'Done',
+    'Publish',
+    ['signal-lab'],
+    '2026-07-15T10:00:00Z',
+    9600,
+  ),
 ];
 
-const FLIGHT_BOARD_SUMMARY: FeatureSummaryView[] = FLIGHT_BOARD_FEATURES.map((feature) => ({
+const OVERVIEW_LANE_SUMMARY: FeatureSummaryView[] = OVERVIEW_LANE_FEATURES.map((feature) => ({
   id: feature.id,
   name: feature.name,
   status: feature.status,
@@ -486,8 +495,8 @@ const FLIGHT_BOARD_SUMMARY: FeatureSummaryView[] = FLIGHT_BOARD_FEATURES.map((fe
   warnings: [],
 }));
 
-const FLIGHT_BOARD_SNAPSHOTS: Record<string, FeatureSnapshot> = Object.fromEntries(
-  FLIGHT_BOARD_FEATURES.map((feature) => [feature.id, feature]),
+const OVERVIEW_LANE_SNAPSHOTS: Record<string, FeatureSnapshot> = Object.fromEntries(
+  OVERVIEW_LANE_FEATURES.map((feature) => [feature.id, feature]),
 );
 
 const CYCLES_FEATURE_SNAPSHOT: FeatureSnapshot = {
@@ -1063,7 +1072,8 @@ function makeMockApi(
     theme: requestedTheme,
     shell: {
       activeFeatureId:
-        scene === 'home-flight-board' ||
+        scene === 'overview-lanes' ||
+        scene === 'overview-empty' ||
         scene === 'update-passive-active' ||
         scene === 'update-constrained'
           ? null
@@ -1104,10 +1114,16 @@ function makeMockApi(
     initRepository: () => Promise.resolve(READY_SNAPSHOT),
     listRepositories: () => Promise.resolve(READY_SNAPSHOT.repositories),
     listFeatures: () =>
-      Promise.resolve(scene === 'home-flight-board' ? FLIGHT_BOARD_SUMMARY : FEATURE_SUMMARY),
+      Promise.resolve(
+        scene === 'overview-lanes'
+          ? OVERVIEW_LANE_SUMMARY
+          : scene === 'overview-empty'
+            ? []
+            : FEATURE_SUMMARY,
+      ),
     getFeature: (_featureId: string) => {
-      if (scene === 'home-flight-board') {
-        const snapshot = FLIGHT_BOARD_SNAPSHOTS[_featureId];
+      if (scene === 'overview-lanes') {
+        const snapshot = OVERVIEW_LANE_SNAPSHOTS[_featureId];
         if (snapshot !== undefined) {
           return Promise.resolve(snapshot);
         }

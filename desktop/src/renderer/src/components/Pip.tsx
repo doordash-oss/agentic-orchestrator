@@ -1,6 +1,6 @@
 /**
  * The Bench sidebar's row-scale progress indicator: a strip of equal-width
- * pips standing in for FlightRail/PhaseLadder's fuller stage rail, sized for
+ * pips standing in for the cockpit's fuller stage rail, sized for
  * a single sidebar row rather than a card or cockpit header. It carries no
  * label per stop — a row is compact enough that only the fill position
  * (done/active/upcoming) reads at a glance.

@@ -470,7 +470,7 @@ export function CreateFeatureForm({ onCreated, onDirtyChange }: CreateFeatureFor
 
       {currentStep === 'Where' ? (
         <section className="creation-wizard__panel" aria-labelledby="creation-where">
-          <p className="home-surface__eyebrow">01 / Where</p>
+          <p className="eyebrow-label">01 / Where</p>
           <h2 id="creation-where">Choose repositories</h2>
           {repositories.length > 0 ? (
             <label className="form-field">
@@ -603,7 +603,7 @@ export function CreateFeatureForm({ onCreated, onDirtyChange }: CreateFeatureFor
 
       {currentStep === 'What' ? (
         <section className="creation-wizard__panel" aria-labelledby="creation-what">
-          <p className="home-surface__eyebrow">02 / What</p>
+          <p className="eyebrow-label">02 / What</p>
           <h2 id="creation-what">Define the work</h2>
           <label className="form-field">
             <span className="form-field__label">Name</span>
@@ -646,7 +646,7 @@ export function CreateFeatureForm({ onCreated, onDirtyChange }: CreateFeatureFor
 
       {currentStep === 'Pipeline' ? (
         <section className="creation-wizard__panel" aria-labelledby="creation-pipeline">
-          <p className="home-surface__eyebrow">03 / Pipeline</p>
+          <p className="eyebrow-label">03 / Pipeline</p>
           <h2 id="creation-pipeline">Set the depth</h2>
           <div className="pipeline-grid">
             {PIPELINES.map((profile) => (
@@ -675,7 +675,7 @@ export function CreateFeatureForm({ onCreated, onDirtyChange }: CreateFeatureFor
 
       {currentStep === 'Review' ? (
         <section className="creation-wizard__panel" aria-labelledby="creation-review">
-          <p className="home-surface__eyebrow">04 / Review</p>
+          <p className="eyebrow-label">04 / Review</p>
           <h2 id="creation-review">Review the run contract</h2>
           <div className="review-knobs">
             <div className="review-controls">

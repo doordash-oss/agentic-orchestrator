@@ -1455,9 +1455,58 @@ function OverviewLanesScene({ empty = false }: { empty?: boolean }): React.React
   );
 }
 
+/**
+ * The creation sheet inside the real shell: the same WorkspaceShell the app
+ * mounts, so the sheet descends from a real toolbar over a live, dimmed
+ * Overview instead of hand-built chrome. The scene opens it through the real
+ * "New feature" entry point; the evidence spec drives the steps from there.
+ */
+function CreationSheetScene(): React.ReactElement {
+  const attentionItems: AttentionItem[] = [
+    {
+      kind: 'permission',
+      id: 'perm-updater',
+      featureId: 'updater-auto-1',
+      sessionId: 'sess-updater',
+      phase: 'Review',
+      toolName: 'Bash',
+      summary: 'Approve the plan before implementation continues.',
+      input: { command: 'apply plan' },
+      waitingSince: '2026-07-23T09:05:00Z',
+    },
+  ];
+  const [opened, setOpened] = React.useState(false);
+  React.useEffect(() => {
+    if (opened) return;
+    const timer = window.setInterval(() => {
+      const trigger = Array.from(document.querySelectorAll('button')).find(
+        (button) => button.textContent === 'New feature',
+      );
+      if (trigger !== undefined) {
+        trigger.click();
+        setOpened(true);
+      }
+    }, 50);
+    return () => window.clearInterval(timer);
+  }, [opened]);
+  // No stand-in title bar here: the shell's own toolbar has to be the window's
+  // top row so the sheet descends onto it exactly as it does in the app.
+  return (
+    <div className="app-frame" style={{ height: '100vh' }}>
+      <WorkspaceShell
+        attentionItems={attentionItems}
+        refreshAttention={async () => attentionItems}
+      />
+    </div>
+  );
+}
+
 function CaptureApp() {
   const scene = getScene();
 
+  if (scene.startsWith('creation-sheet')) {
+    return <CreationSheetScene />;
+  }
   if (scene === 'overview-lanes') {
     return <OverviewLanesScene />;
   }

@@ -8,30 +8,31 @@ afterEach(cleanup);
 
 async function renderForm(mock = installAgenticoMock()) {
   const onCreated = vi.fn();
-  render(<CreateFeatureForm onCreated={onCreated} />);
-  await screen.findByRole('button', { name: 'Next: What' });
-  return { mock, onCreated, user: userEvent.setup() };
+  const onClose = vi.fn();
+  render(<CreateFeatureForm onCreated={onCreated} onClose={onClose} />);
+  await screen.findByRole('button', { name: 'Next: Describe' });
+  return { mock, onCreated, onClose, user: userEvent.setup() };
 }
 
-async function reachWhat(user: ReturnType<typeof userEvent.setup>) {
+async function reachDescribe(user: ReturnType<typeof userEvent.setup>) {
   await user.click(screen.getByRole('checkbox', { name: /repo-a/ }));
-  await user.click(screen.getByRole('button', { name: 'Next: What' }));
+  await user.click(screen.getByRole('button', { name: 'Next: Describe' }));
 }
 
-async function reachReview(user: ReturnType<typeof userEvent.setup>) {
-  await reachWhat(user);
+async function reachContract(user: ReturnType<typeof userEvent.setup>) {
+  await reachDescribe(user);
   await user.type(screen.getByLabelText('Name'), 'Search revamp');
-  await user.click(screen.getByRole('button', { name: 'Next: Pipeline' }));
+  await user.click(screen.getByRole('button', { name: 'Next: Depth' }));
   await user.click(screen.getByRole('radio', { name: /Large/ }));
-  await user.click(screen.getByRole('button', { name: 'Next: Review' }));
+  await user.click(screen.getByRole('button', { name: 'Next: Contract' }));
 }
 
-describe('CreateFeatureForm repository-first contract', () => {
-  it('starts on Where, requires a repository, and searches the discovered list', async () => {
+describe('the creation sheet across its four steps', () => {
+  it('starts on Repositories, requires a repository, and searches the discovered list', async () => {
     const { mock, user } = await renderForm();
     expect(screen.getByRole('heading', { name: 'Choose repositories' })).toBeVisible();
 
-    await user.click(screen.getByRole('button', { name: 'Next: What' }));
+    await user.click(screen.getByRole('button', { name: 'Next: Describe' }));
     expect(screen.getByText('Select at least one repository.')).toBeVisible();
     expect(mock.api.createFeature).not.toHaveBeenCalled();
 
@@ -43,9 +44,9 @@ describe('CreateFeatureForm repository-first contract', () => {
     expect(screen.getByText(/No repositories match/)).toBeVisible();
     await user.clear(screen.getByLabelText('Search repositories'));
 
-    await reachWhat(user);
+    await reachDescribe(user);
     expect(screen.getByRole('heading', { name: 'Define the work' })).toBeVisible();
-    await user.click(screen.getByRole('button', { name: 'Next: Pipeline' }));
+    await user.click(screen.getByRole('button', { name: 'Next: Depth' }));
     expect(document.getElementById('feature-name')).toHaveFocus();
     expect(screen.getByText('Enter a feature name.')).toBeVisible();
   });
@@ -77,7 +78,7 @@ describe('CreateFeatureForm repository-first contract', () => {
     expect(mock.api.addWorkspaceRoot).toHaveBeenCalledWith('/work/solo');
     expect(mock.api.initRepository).not.toHaveBeenCalled();
     expect(await screen.findByRole('checkbox', { name: /solo/ })).toBeChecked();
-    await user.click(screen.getByRole('button', { name: 'Next: What' }));
+    await user.click(screen.getByRole('button', { name: 'Next: Describe' }));
     expect(screen.getByRole('heading', { name: 'Define the work' })).toBeVisible();
   });
 
@@ -162,11 +163,11 @@ describe('CreateFeatureForm repository-first contract', () => {
     );
     const { user } = await renderForm(mock);
 
-    await reachWhat(user);
+    await reachDescribe(user);
     await user.type(screen.getByLabelText('Name'), 'Preserved draft');
-    await user.click(screen.getByRole('button', { name: 'Next: Pipeline' }));
+    await user.click(screen.getByRole('button', { name: 'Next: Depth' }));
     await user.click(screen.getByRole('radio', { name: /Moonshot/ }));
-    await user.click(screen.getByRole('button', { name: 'Next: Review' }));
+    await user.click(screen.getByRole('button', { name: 'Next: Contract' }));
     await user.selectOptions(screen.getByLabelText('Inquireness'), 'high');
     await user.click(screen.getByRole('button', { name: 'Back' }));
     await user.click(screen.getByRole('button', { name: 'Back' }));
@@ -178,11 +179,11 @@ describe('CreateFeatureForm repository-first contract', () => {
     expect(await screen.findByRole('checkbox', { name: /repo-new/ })).toBeVisible();
     expect(screen.getByRole('heading', { name: 'Choose repositories' })).toBeVisible();
     expect(screen.getByRole('radio', { name: 'Current branch' })).toBeChecked();
-    await user.click(screen.getByRole('button', { name: 'Next: What' }));
+    await user.click(screen.getByRole('button', { name: 'Next: Describe' }));
     expect(screen.getByLabelText('Name')).toHaveValue('Preserved draft');
-    await user.click(screen.getByRole('button', { name: 'Next: Pipeline' }));
+    await user.click(screen.getByRole('button', { name: 'Next: Depth' }));
     expect(screen.getByRole('radio', { name: /Moonshot/ })).toBeChecked();
-    await user.click(screen.getByRole('button', { name: 'Next: Review' }));
+    await user.click(screen.getByRole('button', { name: 'Next: Contract' }));
     expect(screen.getByLabelText('Inquireness')).toHaveValue('high');
   });
 
@@ -194,7 +195,7 @@ describe('CreateFeatureForm repository-first contract', () => {
       }),
     );
     const { user } = await renderForm(mock);
-    await reachWhat(user);
+    await reachDescribe(user);
 
     await user.click(screen.getByRole('button', { name: 'Attach files or photos' }));
     await user.click(screen.getByRole('menuitem', { name: 'Add photos' }));
@@ -216,7 +217,7 @@ describe('CreateFeatureForm repository-first contract', () => {
       paths: kind === 'image' ? ['/safe/pasted.png'] : ['/safe/notes.pdf'],
     }));
     const { user } = await renderForm(mock);
-    await reachWhat(user);
+    await reachDescribe(user);
 
     fireEvent.paste(screen.getByLabelText('Description'), {
       clipboardData: {
@@ -240,7 +241,7 @@ describe('CreateFeatureForm repository-first contract', () => {
     const mock = installAgenticoMock();
     mock.api.readClipboardImage.mockResolvedValue({ paths: ['/tmp/clipboard-image.png'] });
     const { user } = await renderForm(mock);
-    await reachWhat(user);
+    await reachDescribe(user);
 
     fireEvent.paste(screen.getByLabelText('Description'), {
       clipboardData: {
@@ -264,7 +265,7 @@ describe('CreateFeatureForm repository-first contract', () => {
       }),
     );
     const { user } = await renderForm(mock);
-    await reachWhat(user);
+    await reachDescribe(user);
 
     await user.type(screen.getByLabelText('Description'), 'Refactor @cre');
     const option = await screen.findByRole('option', { name: /repo-a.*src\/creation\.ts/ });
@@ -282,7 +283,7 @@ describe('CreateFeatureForm repository-first contract', () => {
     await user.click(screen.getByRole('button', { name: 'Back' }));
     await user.click(screen.getByRole('checkbox', { name: /repo-a/ }));
     await user.click(screen.getByRole('checkbox', { name: /repo-a/ }));
-    await user.click(screen.getByRole('button', { name: 'Next: What' }));
+    await user.click(screen.getByRole('button', { name: 'Next: Describe' }));
     expect(
       screen.queryByRole('button', { name: 'Remove reference repo-a/src/creation.ts' }),
     ).toBeNull();
@@ -303,7 +304,7 @@ describe('CreateFeatureForm repository-first contract', () => {
       phaseProviderModels: { planning: { claude: ['claude-opus', 'claude-sonnet-4-5'] } },
     });
     const { onCreated, user } = await renderForm(mock);
-    await reachReview(user);
+    await reachContract(user);
 
     const planningPicker = await screen.findByLabelText('Planning model');
     await user.selectOptions(planningPicker, 'claude-opus');
@@ -323,7 +324,7 @@ describe('CreateFeatureForm repository-first contract', () => {
     const mock = installAgenticoMock();
     mock.api.getCreationDefaults.mockResolvedValue(creationDefaults());
     const { onCreated, user } = await renderForm(mock);
-    await reachReview(user);
+    await reachContract(user);
 
     // Large profile: inquiry gate is applicable and on by default; turn it off
     // and turn manual publish on.
@@ -351,10 +352,10 @@ describe('CreateFeatureForm repository-first contract', () => {
 
   it('hides gates the medium pipeline does not support', async () => {
     const { user } = await renderForm();
-    await reachWhat(user);
+    await reachDescribe(user);
     await user.type(screen.getByLabelText('Name'), 'Medium scope');
-    await user.click(screen.getByRole('button', { name: 'Next: Pipeline' }));
-    await user.click(screen.getByRole('button', { name: 'Next: Review' }));
+    await user.click(screen.getByRole('button', { name: 'Next: Depth' }));
+    await user.click(screen.getByRole('button', { name: 'Next: Contract' }));
 
     expect(screen.queryByRole('checkbox', { name: /Inquiry review/ })).toBeNull();
     expect(screen.getByRole('checkbox', { name: /Phase plan review/ })).toBeChecked();
@@ -362,10 +363,10 @@ describe('CreateFeatureForm repository-first contract', () => {
 
   it('shows only the model rows the chosen pipeline runs', async () => {
     const { user } = await renderForm();
-    await reachWhat(user);
+    await reachDescribe(user);
     await user.type(screen.getByLabelText('Name'), 'Scoped models');
-    await user.click(screen.getByRole('button', { name: 'Next: Pipeline' }));
-    await user.click(screen.getByRole('button', { name: 'Next: Review' }));
+    await user.click(screen.getByRole('button', { name: 'Next: Depth' }));
+    await user.click(screen.getByRole('button', { name: 'Next: Contract' }));
 
     // Medium runs planning, implementation, and review only.
     expect(screen.getByLabelText('Planning model')).toBeVisible();
@@ -376,7 +377,7 @@ describe('CreateFeatureForm repository-first contract', () => {
 
     await user.click(screen.getByRole('button', { name: 'Back' }));
     await user.click(screen.getByRole('radio', { name: /Large/ }));
-    await user.click(screen.getByRole('button', { name: 'Next: Review' }));
+    await user.click(screen.getByRole('button', { name: 'Next: Contract' }));
     expect(screen.getByLabelText('Clarify model')).toBeVisible();
     expect(screen.getByLabelText('KB Build model')).toBeVisible();
     // Utilities and the automatic reviewer stay workspace-scoped.
@@ -402,13 +403,13 @@ describe('CreateFeatureForm repository-first contract', () => {
     );
     mock.api.pickCreationFiles.mockResolvedValueOnce({ paths: ['/safe/screen.png'] });
     const { onCreated, user } = await renderForm(mock);
-    await reachWhat(user);
+    await reachDescribe(user);
     await user.click(screen.getByRole('button', { name: 'Attach files or photos' }));
     await user.click(screen.getByRole('menuitem', { name: 'Add photos' }));
     await user.type(screen.getByLabelText('Name'), 'Search revamp');
-    await user.click(screen.getByRole('button', { name: 'Next: Pipeline' }));
+    await user.click(screen.getByRole('button', { name: 'Next: Depth' }));
     await user.click(screen.getByRole('radio', { name: /Large/ }));
-    await user.click(screen.getByRole('button', { name: 'Next: Review' }));
+    await user.click(screen.getByRole('button', { name: 'Next: Contract' }));
     await user.selectOptions(screen.getByLabelText('Risk'), 'high');
     await user.click(screen.getByRole('button', { name: 'Create and start' }));
 
@@ -442,10 +443,10 @@ describe('CreateFeatureForm repository-first contract', () => {
   it('only queues setup when Start immediately is opted out', async () => {
     const mock = installAgenticoMock();
     const { onCreated, user } = await renderForm(mock);
-    await reachReview(user);
+    await reachContract(user);
 
     await user.click(screen.getByRole('checkbox', { name: /Start immediately/ }));
-    await user.click(screen.getByRole('button', { name: 'Create feature' }));
+    await user.click(screen.getByRole('button', { name: 'Create' }));
 
     await waitFor(() => expect(onCreated).toHaveBeenCalledTimes(1));
     expect(mock.api.dispatchFeatureSetup).toHaveBeenCalledWith('abcd1234ef567890');
@@ -457,10 +458,137 @@ describe('CreateFeatureForm repository-first contract', () => {
     mock.api.getCreationDefaults.mockResolvedValue(creationDefaults());
     mock.api.createFeature.mockRejectedValueOnce(new Error('conflict: try again'));
     const { user } = await renderForm(mock);
-    await reachReview(user);
+    await reachContract(user);
     await user.click(screen.getByRole('button', { name: 'Create and start' }));
     expect(await screen.findByRole('alert')).toHaveTextContent('conflict');
     expect(screen.getByRole('button', { name: 'Create and start' })).toBeEnabled();
     expect(mock.api.dispatchFeatureAction).not.toHaveBeenCalled();
+  });
+
+  it('names the four steps, keeps completed steps reachable, and disables the ones ahead', async () => {
+    const { user } = await renderForm();
+    const rail = screen.getByRole('navigation', { name: 'Creation steps' });
+
+    expect(Array.from(rail.querySelectorAll('button')).map((button) => button.textContent)).toEqual(
+      ['Repositories', 'Describe', 'Depth', 'Contract'],
+    );
+    expect(rail.querySelector('[aria-current="step"]')).toHaveTextContent('Repositories');
+    expect(screen.getByRole('button', { name: 'Describe' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Depth' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Contract' })).toBeDisabled();
+
+    await reachDescribe(user);
+    expect(rail.querySelector('[aria-current="step"]')).toHaveTextContent('Describe');
+    expect(screen.getByRole('button', { name: /Repositories/ })).toBeEnabled();
+    // Jumping back to a completed step keeps every entered choice.
+    await user.click(screen.getByRole('button', { name: /Repositories/ }));
+    expect(screen.getByRole('heading', { name: 'Choose repositories' })).toBeVisible();
+    expect(screen.getByRole('checkbox', { name: /repo-a/ })).toBeChecked();
+  });
+
+  it('forces phase plan review on with roadmap review and releases it again', async () => {
+    const { user } = await renderForm();
+    await reachContract(user);
+
+    const roadmap = screen.getByRole('checkbox', { name: /Roadmap review/ });
+    const phasePlan = screen.getByRole('checkbox', { name: /Phase plan review/ });
+    expect(roadmap).toBeChecked();
+    expect(phasePlan).toBeChecked();
+
+    await user.click(roadmap);
+    expect(phasePlan).not.toBeChecked();
+    await user.click(roadmap);
+    expect(phasePlan).toBeChecked();
+  });
+
+  it('resets checkpoints to the profile defaults whenever a depth card is selected', async () => {
+    const { user } = await renderForm();
+    await reachContract(user);
+
+    await user.click(screen.getByRole('checkbox', { name: /Inquiry review/ }));
+    expect(screen.getByRole('checkbox', { name: /Inquiry review/ })).not.toBeChecked();
+
+    // Selecting a depth card from the Contract step's own cards restores that
+    // profile's checkpoint set rather than keeping the edited one.
+    await user.click(screen.getByRole('radio', { name: /Moonshot/ }));
+    expect(screen.getByRole('checkbox', { name: /Inquiry review/ })).toBeChecked();
+    expect(screen.getByRole('checkbox', { name: /Manual publish/ })).toBeChecked();
+    await user.click(screen.getByRole('radio', { name: /Large/ }));
+    expect(screen.getByRole('checkbox', { name: /Manual publish/ })).not.toBeChecked();
+    expect(screen.getByRole('checkbox', { name: /Inquiry review/ })).toBeChecked();
+  });
+
+  it('shows the live checkpoint and repository summary only on the Contract step', async () => {
+    const { user } = await renderForm();
+    await reachDescribe(user);
+    expect(screen.queryByText(/checkpoints ·/)).toBeNull();
+
+    await user.type(screen.getByLabelText('Name'), 'Summary draft');
+    await user.click(screen.getByRole('button', { name: 'Next: Depth' }));
+    await user.click(screen.getByRole('radio', { name: /Large/ }));
+    await user.click(screen.getByRole('button', { name: 'Next: Contract' }));
+
+    expect(screen.getByText('3 checkpoints · 1 repository')).toBeVisible();
+    await user.click(screen.getByRole('checkbox', { name: /Inquiry review/ }));
+    expect(screen.getByText('2 checkpoints · 1 repository')).toBeVisible();
+  });
+
+  it('routes an authoritative name error back to the Describe step and focuses the field', async () => {
+    const mock = installAgenticoMock();
+    mock.api.createFeature.mockRejectedValueOnce(
+      new Error('bad_request: a feature with that name already exists'),
+    );
+    const { user } = await renderForm(mock);
+    await reachContract(user);
+    await user.click(screen.getByRole('button', { name: 'Create and start' }));
+
+    expect(await screen.findByRole('heading', { name: 'Define the work' })).toBeVisible();
+    expect(screen.getByText(/a feature with that name already exists/)).toBeVisible();
+    expect(document.getElementById('feature-name')).toHaveFocus();
+  });
+
+  it('submits draftPublish untouched with no control offering it', async () => {
+    const mock = installAgenticoMock();
+    const { onCreated, user } = await renderForm(mock);
+    await reachContract(user);
+
+    expect(screen.queryByRole('checkbox', { name: /draft/i })).toBeNull();
+    await user.click(screen.getByRole('button', { name: 'Create and start' }));
+
+    await waitFor(() => expect(onCreated).toHaveBeenCalledTimes(1));
+    expect(mock.api.createFeature).toHaveBeenCalledWith(
+      expect.objectContaining({ checkpoints: expect.objectContaining({ draftPublish: false }) }),
+    );
+  });
+
+  it('cancels a clean sheet immediately and confirms a dirty one', async () => {
+    const { onClose, user } = await renderForm();
+
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(onClose).toHaveBeenCalledTimes(1);
+
+    await user.click(screen.getByRole('checkbox', { name: /repo-a/ }));
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(await screen.findByRole('dialog', { name: 'Discard feature draft' })).toBeVisible();
+    expect(onClose).toHaveBeenCalledTimes(1);
+
+    await user.click(screen.getByRole('button', { name: 'Keep editing' }));
+    expect(screen.getByRole('checkbox', { name: /repo-a/ })).toBeChecked();
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    await user.click(screen.getByRole('button', { name: 'Discard draft' }));
+    expect(onClose).toHaveBeenCalledTimes(2);
+  });
+
+  it('routes Escape to the Cancel path and leaves it to the innermost dialog', async () => {
+    const { onClose, user } = await renderForm();
+    await user.click(screen.getByRole('checkbox', { name: /repo-a/ }));
+
+    await user.keyboard('{Escape}');
+    expect(await screen.findByRole('dialog', { name: 'Discard feature draft' })).toBeVisible();
+
+    // The discard dialog owns Escape while it is open: the sheet stays.
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('dialog', { name: 'Discard feature draft' })).toBeNull();
+    expect(onClose).not.toHaveBeenCalled();
   });
 });

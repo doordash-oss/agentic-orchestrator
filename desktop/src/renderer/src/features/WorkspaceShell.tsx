@@ -1,10 +1,13 @@
 /**
  * The readiness-gated main surface: a translucent Bench sidebar — a pinned
  * Overview row plus five lane-grouped sections of every feature — with
- * exactly one content pane mounted at a time. Feature creation is a
- * focused, secondary flow reached from Overview; Settings is a temporary,
- * unpersisted content-pane view (a stub a later phase retires with a real
- * Settings window) reached only through the existing ⌘,/palette/menu/tray
+ * exactly one content pane mounted at a time. Feature creation descends over
+ * that pane as a window-modal sheet reached from Overview — the pane beneath
+ * stays mounted and navigable, so ⌘-digit shortcuts, routed navigation, and
+ * attention deep-links change what is underneath without touching the draft.
+ * Settings is a temporary, unpersisted content-pane view (a stub a later
+ * phase retires with a real Settings window) reached only through the
+ * existing ⌘,/palette/menu/tray
  * entry points. Settings is a third, orthogonal state layered on top of the
  * persisted selection rather than a value that selection can hold: opening
  * it deselects every sidebar row without touching `shell.activeFeatureId`,
@@ -74,9 +77,6 @@ type Selection = { kind: 'overview' } | { kind: 'feature'; featureId: string };
 
 /** A single addressable sidebar row, in the order ⌘2-9 count by. */
 type SidebarRowEntry = { kind: 'overview' } | { kind: 'feature'; featureId: string };
-
-type CreationDestination =
-  { kind: 'overview' } | { kind: 'settings' } | { kind: 'feature'; featureId: string };
 
 export function WorkspaceShell({
   attentionItems = [],
@@ -159,7 +159,7 @@ export function WorkspaceShell({
   const handledRouteRequest = useRef<number | null>(null);
   const listRequestRef = useRef(0);
   const overviewActiveRef = useRef(false);
-  const [view, setView] = useState<'overview' | 'create'>('overview');
+  const [creationOpen, setCreationOpen] = useState(false);
   const [bulkPreviewRequest, setBulkPreviewRequest] = useState<number | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [selectedRuns, setSelectedRuns] = useState<Record<string, number | null>>({});
@@ -309,7 +309,6 @@ export function WorkspaceShell({
       const base = shellStateRef.current ?? defaultShellPrefs();
       persist({ ...base, activeFeatureId: featureId });
       setSettingsOpen(false);
-      setView('overview');
     },
     [persist],
   );
@@ -329,13 +328,11 @@ export function WorkspaceShell({
     const base = shellStateRef.current ?? defaultShellPrefs();
     persist({ ...base, activeFeatureId: null });
     setSettingsOpen(false);
-    setView('overview');
     loadList();
   }, [loadList, persist]);
 
   const openSettings = useCallback(() => {
     setSettingsOpen(true);
-    setView('overview');
   }, []);
 
   /**
@@ -414,7 +411,6 @@ export function WorkspaceShell({
     if (attentionJump.featureId === '__recovery__') {
       persist({ ...(shellStateRef.current ?? shell), activeFeatureId: null });
       setSettingsOpen(false);
-      setView('overview');
     } else {
       selectFeature(attentionJump.featureId);
       setAttentionPreviewRequest({
@@ -428,53 +424,23 @@ export function WorkspaceShell({
     onAttentionJumpHandled();
   }, [attentionJump, onAttentionJumpHandled, persist, selectFeature, shell]);
 
-  const completeCreationExit = useCallback(
-    (destination: CreationDestination) => {
-      if (destination.kind === 'settings') {
-        setView('overview');
-        openSettings();
-        return;
-      }
-      const base = shellStateRef.current ?? defaultShellPrefs();
-      const activeFeatureId = destination.kind === 'overview' ? null : destination.featureId;
-      persist({ ...base, activeFeatureId });
-      setSettingsOpen(false);
-      setView('overview');
-      if (destination.kind === 'overview') {
-        requestAnimationFrame(() => newFeatureButtonRef.current?.focus());
-      }
-    },
-    [openSettings, persist],
-  );
-  const creationGuard = useCreationGuard(completeCreationExit);
-
   const closeAttentionPreview = useCallback(() => setAttentionPreviewRequest(null), []);
 
   useEffect(() => {
     if (shell === null || routeRequest === null) return;
     if (handledRouteRequest.current === routeRequest.id) return;
     handledRouteRequest.current = routeRequest.id;
+    // Routed navigation acts on the pane beneath an open creation sheet: it
+    // never closes the sheet or touches the draft.
     if (routeRequest.event.target === 'home') {
-      if (view === 'create') {
-        creationGuard.leave({ kind: 'overview' });
-      } else {
-        selectOverview();
-      }
+      selectOverview();
     } else if (routeRequest.event.target === 'settings') {
-      if (view === 'create') {
-        creationGuard.leave({ kind: 'settings' });
-      } else {
-        openSettings();
-      }
+      openSettings();
     } else if (routeRequest.event.target === 'bulk') {
       setBulkPreviewRequest(routeRequest.id);
-      if (view === 'create') {
-        creationGuard.leave({ kind: 'overview' });
-      } else {
-        selectOverview();
-      }
+      selectOverview();
     }
-  }, [creationGuard, openSettings, routeRequest, selectOverview, shell, view]);
+  }, [openSettings, routeRequest, selectOverview, shell]);
 
   if (shell === null) {
     return (
@@ -496,23 +462,7 @@ export function WorkspaceShell({
       ? { kind: 'feature', featureId: activeFeatureId }
       : { kind: 'overview' };
   // Read by the focus/visibility refresh so it only refetches when Overview is shown.
-  overviewActiveRef.current = selection.kind === 'overview' && view !== 'create' && !settingsOpen;
-
-  const navigateOverview = () => {
-    if (view === 'create') {
-      creationGuard.leave({ kind: 'overview' });
-      return;
-    }
-    selectOverview();
-  };
-
-  const navigateFeature = (featureId: string) => {
-    if (view === 'create') {
-      creationGuard.leave({ kind: 'feature', featureId });
-      return;
-    }
-    selectFeature(featureId);
-  };
+  overviewActiveRef.current = selection.kind === 'overview' && !creationOpen && !settingsOpen;
 
   const toggleLane = (lane: Lane, expanded: boolean) => {
     setExpandedLanes((current) => ({ ...current, [lane]: expanded }));
@@ -547,7 +497,8 @@ export function WorkspaceShell({
       ? features.find((feature) => feature.id === selection.featureId)
       : undefined;
   const showTrailingToolbar = !settingsOpen && selection.kind === 'feature';
-  const showNewFeatureButton = !settingsOpen && selection.kind === 'overview' && view !== 'create';
+  // Stays mounted under the creation sheet so closing it restores focus here.
+  const showNewFeatureButton = !settingsOpen && selection.kind === 'overview';
   const toolbarTitle = settingsOpen
     ? 'Settings'
     : selection.kind === 'feature'
@@ -558,7 +509,7 @@ export function WorkspaceShell({
 
   // Keep the global ⌘2-9/⌘⌃S listener's stale-closure guard current every
   // render — see the ref's declaration above for why it isn't itself a hook.
-  shortcutRef.current = { allRows, navigateFeature, toggleSidebar };
+  shortcutRef.current = { allRows, navigateFeature: selectFeature, toggleSidebar };
 
   /**
    * Roving tabindex: ArrowUp/ArrowDown/Home/End move focus AND selection
@@ -592,9 +543,9 @@ export function WorkspaceShell({
     event.preventDefault();
     target.focus();
     if (target.id === 'sidebar-overview') {
-      navigateOverview();
+      selectOverview();
     } else {
-      navigateFeature(target.id.slice('sidebar-row-'.length));
+      selectFeature(target.id.slice('sidebar-row-'.length));
     }
   };
 
@@ -620,7 +571,7 @@ export function WorkspaceShell({
             id="sidebar-overview"
             label="Overview"
             selected={!settingsOpen && selection.kind === 'overview'}
-            onSelect={navigateOverview}
+            onSelect={selectOverview}
           />
           {LANES.map((lane) => {
             const laneFeatures = laneGroups[lane];
@@ -650,7 +601,7 @@ export function WorkspaceShell({
                         selection.kind === 'feature' &&
                         selection.featureId === feature.id
                       }
-                      onSelect={() => navigateFeature(feature.id)}
+                      onSelect={() => selectFeature(feature.id)}
                     />
                   ))}
                 </div>
@@ -677,7 +628,7 @@ export function WorkspaceShell({
           subline={toolbarSubline}
           showTrailing={showTrailingToolbar}
           showNewFeature={showNewFeatureButton}
-          onNewFeature={() => setView('create')}
+          onNewFeature={() => setCreationOpen(true)}
           newFeatureButtonRef={newFeatureButtonRef}
           attention={{
             items: attentionItems,
@@ -752,15 +703,6 @@ export function WorkspaceShell({
               overflowMenuHost={overflowSlot}
               inspectorToggleHost={inspectorSlot}
             />
-          ) : view === 'create' ? (
-            <CreationFlow
-              guard={creationGuard}
-              onCreated={({ featureId }) => {
-                creationGuard.reset();
-                loadList();
-                selectFeature(featureId);
-              }}
-            />
           ) : (
             <div className="overview-surface">
               <header className="overview-surface__header">
@@ -774,7 +716,7 @@ export function WorkspaceShell({
                   <button
                     type="button"
                     className="overview-surface__cta"
-                    onClick={() => setView('create')}
+                    onClick={() => setCreationOpen(true)}
                   >
                     Create a feature
                   </button>
@@ -801,6 +743,17 @@ export function WorkspaceShell({
           )}
         </div>
       </div>
+
+      {creationOpen ? (
+        <CreateFeatureForm
+          onClose={() => setCreationOpen(false)}
+          onCreated={({ featureId }) => {
+            setCreationOpen(false);
+            loadList();
+            selectFeature(featureId);
+          }}
+        />
+      ) : null}
     </section>
   );
 }
@@ -819,94 +772,6 @@ function repoBranchSubline(feature: FeatureSnapshot | undefined): string | undef
   const branch = feature.setup?.tasks.find((task) => task.repo === firstRepo)?.branch;
   const base = branch !== undefined && branch !== '' ? `${firstRepo} · ${branch}` : firstRepo;
   return restRepos.length > 0 ? `${base} +${restRepos.length}` : base;
-}
-
-interface CreationGuard {
-  leave(destination?: CreationDestination): void;
-  reset(): void;
-  onDirtyChange(dirty: boolean): void;
-  discardOpen: boolean;
-  keepEditing(): void;
-  discard(): void;
-}
-
-function useCreationGuard(onExit: (destination: CreationDestination) => void): CreationGuard {
-  const [dirty, setDirty] = useState(false);
-  const [discardOpen, setDiscardOpen] = useState(false);
-  const [pendingDestination, setPendingDestination] = useState<CreationDestination | null>(null);
-
-  const reset = useCallback(() => {
-    setDirty(false);
-    setDiscardOpen(false);
-    setPendingDestination(null);
-  }, []);
-  const leave = useCallback(
-    (destination: CreationDestination = { kind: 'overview' }) => {
-      if (dirty) {
-        setPendingDestination(destination);
-        setDiscardOpen(true);
-        return;
-      }
-      reset();
-      onExit(destination);
-    },
-    [dirty, onExit, reset],
-  );
-  const discard = useCallback(() => {
-    const destination = pendingDestination ?? { kind: 'overview' };
-    reset();
-    onExit(destination);
-  }, [onExit, pendingDestination, reset]);
-
-  return {
-    leave,
-    reset,
-    onDirtyChange: setDirty,
-    discardOpen,
-    keepEditing: () => setDiscardOpen(false),
-    discard,
-  };
-}
-
-function CreationFlow({
-  guard,
-  onCreated,
-}: {
-  guard: CreationGuard;
-  onCreated(created: { featureId: string; name: string }): void;
-}) {
-  return (
-    <section className="creation-flow" aria-label="New feature flow">
-      <header className="creation-flow__header">
-        <button type="button" className="setup-wizard__action" onClick={() => guard.leave()}>
-          Back to Overview
-        </button>
-        <p>Feature definition</p>
-      </header>
-      <CreateFeatureForm onDirtyChange={guard.onDirtyChange} onCreated={onCreated} />
-      {guard.discardOpen ? (
-        <div className="impact-dialog__backdrop">
-          <div
-            className="impact-dialog"
-            role="dialog"
-            aria-modal="true"
-            aria-label="Discard feature draft"
-          >
-            <h2>Discard this feature draft?</h2>
-            <p>Your entered feature details have not been created.</p>
-            <div className="impact-dialog__actions">
-              <button type="button" onClick={guard.keepEditing}>
-                Keep editing
-              </button>
-              <button type="button" className="cockpit__stop" onClick={guard.discard}>
-                Discard draft
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
-    </section>
-  );
 }
 
 /** A single row in the Bench sidebar's listbox: Overview or a lane member. */

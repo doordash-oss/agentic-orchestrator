@@ -41,7 +41,7 @@ export interface CreateFeatureOptions {
   description?: string;
   repoPatterns: RegExp[];
   waitForReady?: boolean;
-  /** Runs on the opened Where step, before any repository is selected. */
+  /** Runs on the opened Repositories step, before any repository is selected. */
   beforeRepoSelect?(): void | Promise<void>;
   beforeSubmit?(): void | Promise<void>;
 }
@@ -64,22 +64,22 @@ export async function createFeatureViaForm(
   for (const repoPattern of repoPatterns) {
     await handle.page.getByRole('checkbox', { name: repoPattern }).check();
   }
-  await handle.page.getByRole('button', { name: 'Next: What' }).click();
+  await handle.page.getByRole('button', { name: 'Next: Describe' }).click();
   await handle.page.locator('#feature-name').fill(name);
   if (description !== '') await handle.page.locator('#feature-description').fill(description);
-  await handle.page.getByRole('button', { name: 'Next: Pipeline' }).click();
-  await handle.page.getByRole('button', { name: 'Next: Review' }).click();
+  await handle.page.getByRole('button', { name: 'Next: Depth' }).click();
+  await handle.page.getByRole('button', { name: 'Next: Contract' }).click();
   // Journeys own lifecycle explicitly: opt out of the default auto-start so
   // the cockpit lands in the deterministic pre-start state.
   await handle.page.getByRole('checkbox', { name: /Start immediately/ }).uncheck();
   await beforeSubmit?.();
   const cockpit = handle.page.getByLabel(`Feature ${name}`);
-  // Creation immediately replaces the wizard with a cockpit. Some Electron
+  // Creation immediately closes the sheet and mounts a cockpit. Some Electron
   // builds keep Playwright's click action pending after that intentional
   // detach, so bound the dispatch and use the authoritative cockpit as the
   // success condition.
   await handle.page
-    .getByRole('button', { name: 'Create feature' })
+    .getByRole('button', { name: 'Create', exact: true })
     .click({ timeout: 2_000 })
     .catch(() => undefined);
   await expect(cockpit).toBeVisible({ timeout: 30_000 });

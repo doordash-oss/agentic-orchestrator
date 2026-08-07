@@ -411,10 +411,10 @@ describe('WorkspaceShell sidebar', () => {
     await screen.findByRole('form', { name: /create a feature/i });
 
     await user.click(screen.getByRole('checkbox', { name: /repo-a/ }));
-    await user.click(screen.getByRole('button', { name: 'Next: What' }));
+    await user.click(screen.getByRole('button', { name: 'Next: Describe' }));
     await user.type(screen.getByLabelText('Name'), 'Search revamp');
-    await user.click(screen.getByRole('button', { name: 'Next: Pipeline' }));
-    await user.click(screen.getByRole('button', { name: 'Next: Review' }));
+    await user.click(screen.getByRole('button', { name: 'Next: Depth' }));
+    await user.click(screen.getByRole('button', { name: 'Next: Contract' }));
     await user.click(screen.getByRole('button', { name: 'Create and start' }));
 
     expect(
@@ -438,27 +438,28 @@ describe('WorkspaceShell sidebar', () => {
     await screen.findByRole('form', { name: /create a feature/i });
   });
 
-  it('asks before discarding entered creation details when leaving via Overview', async () => {
+  it('cancels a dirty creation sheet only after confirmation, restoring focus to New feature', async () => {
     installAgenticoMock();
     render(<WorkspaceShell />);
     const user = userEvent.setup();
 
     await user.click(await screen.findByRole('button', { name: 'New feature' }));
     await user.click(await screen.findByRole('checkbox', { name: /repo-a/ }));
-    await user.click(screen.getByRole('button', { name: 'Next: What' }));
+    await user.click(screen.getByRole('button', { name: 'Next: Describe' }));
     await user.type(screen.getByLabelText('Name'), 'Unsaved feature');
-    await user.click(screen.getByRole('button', { name: 'Back to Overview' }));
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
 
     expect(await screen.findByRole('dialog', { name: 'Discard feature draft' })).toBeVisible();
     await user.click(screen.getByRole('button', { name: 'Keep editing' }));
     expect(screen.getByDisplayValue('Unsaved feature')).toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: 'Back to Overview' }));
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
     await user.click(screen.getByRole('button', { name: 'Discard draft' }));
+    expect(screen.queryByRole('form', { name: /create a feature/i })).not.toBeInTheDocument();
     const newFeature = await screen.findByRole('button', { name: 'New feature' });
     await waitFor(() => expect(newFeature).toHaveFocus());
   });
 
-  it('guards sidebar row navigation before discarding a dirty creation draft', async () => {
+  it('keeps the sheet open and the draft intact while navigation acts on the pane beneath', async () => {
     installAgenticoMock({
       settings: settingsWithActive(null),
       features: [summaryOf(featureSnapshot({ id: FEATURE_ID, name: 'Search revamp' }))],
@@ -469,13 +470,33 @@ describe('WorkspaceShell sidebar', () => {
 
     await user.click(await screen.findByRole('button', { name: 'New feature' }));
     await user.click(await screen.findByRole('checkbox', { name: /repo-a/ }));
-    await user.click(screen.getByRole('button', { name: 'Next: What' }));
+    await user.click(screen.getByRole('button', { name: 'Next: Describe' }));
     await user.type(screen.getByLabelText('Name'), 'Unsaved feature');
-    await user.click(await screen.findByRole('option', { name: /Search revamp/ }));
 
-    expect(await screen.findByRole('dialog', { name: 'Discard feature draft' })).toBeVisible();
-    await user.click(screen.getByRole('button', { name: 'Discard draft' }));
+    // A sidebar row selects the feature beneath the scrim; no discard prompt,
+    // no closed sheet, no lost draft.
+    await user.click(await screen.findByRole('option', { name: /Search revamp/ }));
     expect(await screen.findByRole('region', { name: 'Feature Search revamp' })).toBeVisible();
+    expect(screen.queryByRole('dialog', { name: 'Discard feature draft' })).not.toBeInTheDocument();
+    expect(screen.getByRole('form', { name: /create a feature/i })).toBeInTheDocument();
+    expect(screen.getByDisplayValue('Unsaved feature')).toBeInTheDocument();
+  });
+
+  it('routes menu navigation beneath an open creation sheet without touching the draft', async () => {
+    installAgenticoMock();
+    const { rerender } = render(<WorkspaceShell />);
+    const user = userEvent.setup();
+
+    await user.click(await screen.findByRole('button', { name: 'New feature' }));
+    await user.click(await screen.findByRole('checkbox', { name: /repo-a/ }));
+    await user.click(screen.getByRole('button', { name: 'Next: Describe' }));
+    await user.type(screen.getByLabelText('Name'), 'Unsaved feature');
+
+    rerender(<WorkspaceShell routeRequest={{ id: 7, event: { target: 'settings' } }} />);
+
+    expect(await screen.findByRole('heading', { name: 'Settings' })).toBeInTheDocument();
+    expect(screen.getByRole('form', { name: /create a feature/i })).toBeInTheDocument();
+    expect(screen.getByDisplayValue('Unsaved feature')).toBeInTheDocument();
   });
 
   it('renders the Overview recovery workspace and bulk preview panel alongside the queue', async () => {

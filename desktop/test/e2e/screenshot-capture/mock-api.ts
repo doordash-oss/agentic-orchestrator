@@ -1189,7 +1189,8 @@ function makeMockApi(
         scene === 'overview-lanes' ||
         scene === 'overview-empty' ||
         scene === 'update-passive-active' ||
-        scene === 'update-constrained'
+        scene === 'update-constrained' ||
+        scene.startsWith('creation-sheet')
           ? null
           : 'abcd1234ef567890',
       sidebarCollapsed: false,
@@ -1232,14 +1233,14 @@ function makeMockApi(
     listRepositories: () => Promise.resolve(READY_SNAPSHOT.repositories),
     listFeatures: () =>
       Promise.resolve(
-        scene === 'overview-lanes'
+        scene === 'overview-lanes' || scene.startsWith('creation-sheet')
           ? OVERVIEW_LANE_SUMMARY
           : scene === 'overview-empty'
             ? []
             : FEATURE_SUMMARY,
       ),
     getFeature: (_featureId: string) => {
-      if (scene === 'overview-lanes') {
+      if (scene === 'overview-lanes' || scene.startsWith('creation-sheet')) {
         const snapshot = OVERVIEW_LANE_SNAPSHOTS[_featureId];
         if (snapshot !== undefined) {
           return Promise.resolve(snapshot);
@@ -1473,13 +1474,24 @@ function makeMockApi(
           useCurrentBranch: false,
         },
       } as CreationDefaults),
-    pickCreationFiles: () => Promise.resolve({ paths: [] }),
+    // The creation-sheet scenes need real-looking attachment chips; every
+    // other scene keeps the picker inert.
+    pickCreationFiles: (kind) =>
+      Promise.resolve({
+        paths: scene.startsWith('creation-sheet')
+          ? kind === 'image'
+            ? ['/work/space/brief/reference-layout.png']
+            : ['/work/space/brief/acceptance-notes.md']
+          : [],
+      }),
     readClipboardImage: () => Promise.resolve({ paths: [] }),
     importDroppedCreationFiles: () => ({ paths: [] }),
     searchCreationFiles: (request) =>
       Promise.resolve({
         requestId: request.requestId,
-        files: [],
+        files: scene.startsWith('creation-sheet')
+          ? [{ repoKey: 'signal-lab', path: 'docs/style-guide.md' }]
+          : [],
         truncated: false,
         cancelled: false,
       }),

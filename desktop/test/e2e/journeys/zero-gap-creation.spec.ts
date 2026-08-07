@@ -8,15 +8,15 @@ import { createRepo, createWorld, destroyWorld } from '../helpers/world';
 const SHOTS = {
   home: 'ready-runtime-home-with-branded-welcome-visible-global-commands-and-no-terminal-1440x900',
   help: 'ready-runtime-home-with-shortcut-help-overlay-and-visible-keyboard-focus-dark-th-760x900',
-  what: 'creation-what-step-with-image-and-file-previews-plus-repository-scoped-fuzzy-pic-1440x900',
-  where:
-    'creation-where-step-with-repository-browser-eligibility-detail-and-initializatio-1440x900',
-  pipeline:
-    'creation-pipeline-step-with-profile-cards-and-effective-gate-summary-light-theme-1440x900',
-  review: 'creation-review-step-with-models-checkpoints-exit-criteria-and-complete-s-1440x900',
+  describe:
+    'creation-describe-step-with-image-and-file-previews-plus-repository-scoped-fuzzy-1440x900',
+  repositories:
+    'creation-repositories-step-with-repository-browser-eligibility-detail-and-initia-1440x900',
+  depth: 'creation-depth-step-with-profile-cards-and-effective-gate-summary-light-theme-1440x900',
+  contract: 'creation-contract-step-with-models-checkpoints-exit-criteria-and-complete-1440x900',
 } as const;
 
-test('four-step creation covers scoped files, initialization, review, setup, and retry-safe identity', async ({}, testInfo) => {
+test('the creation sheet covers scoped files, initialization, the contract, setup, and retry-safe identity', async ({}, testInfo) => {
   const world = createWorld('zero-gap-creation', {
     auth: { loggedIn: true, authMethod: 'oauth', email: 'e2e@example.invalid' },
     presetWorkspaceRoot: true,
@@ -77,7 +77,7 @@ test('four-step creation covers scoped files, initialization, review, setup, and
     await app.page.getByRole('button', { name: 'Use this folder' }).click();
     await expect(app.page.getByText(/holds no git repository yet/i)).toBeVisible();
     await setTheme(app, 'dark');
-    await evidenceShot(app, SHOTS.where);
+    await evidenceShot(app, SHOTS.repositories);
     await app.page.getByRole('button', { name: /Initialize it as a repository/ }).click();
     const consent = app.page.getByRole('dialog', { name: 'Initialize a new repository?' });
     await expect(consent).toContainText(emptyRepository);
@@ -85,10 +85,10 @@ test('four-step creation covers scoped files, initialization, review, setup, and
     // A single unambiguous discovery selects itself.
     await expect(app.page.getByRole('checkbox', { name: /initialized-lab/ })).toBeChecked();
     transcript.step(
-      'Where adopted a folder as a root, consented to server-owned initialization, and observed the rediscovered repository select itself',
+      'Repositories adopted a folder as a root, consented to server-owned initialization, and observed the rediscovered repository select itself',
     );
 
-    await app.page.getByRole('button', { name: 'Next: What' }).click();
+    await app.page.getByRole('button', { name: 'Next: Describe' }).click();
     await app.page.locator('#feature-name').fill('Zero gap creation');
     await app.page
       .locator('#feature-description')
@@ -104,16 +104,16 @@ test('four-step creation covers scoped files, initialization, review, setup, and
     await app.page.getByRole('button', { name: 'Attach files or photos' }).click();
     await app.page.getByRole('menuitem', { name: 'Add files' }).click();
     await setTheme(app, 'light');
-    await evidenceShot(app, SHOTS.what);
+    await evidenceShot(app, SHOTS.describe);
     transcript.step(
-      'What preserved ordered native-picked inputs and an @-mentioned repository file',
+      'Describe preserved ordered native-picked inputs and an @-mentioned repository file',
     );
 
-    await app.page.getByRole('button', { name: 'Next: Pipeline' }).click();
+    await app.page.getByRole('button', { name: 'Next: Depth' }).click();
     await app.page.getByRole('radio', { name: /Large/ }).check();
     await setTheme(app, 'light');
-    await evidenceShot(app, SHOTS.pipeline);
-    await app.page.getByRole('button', { name: 'Next: Review' }).click();
+    await evidenceShot(app, SHOTS.depth);
+    await app.page.getByRole('button', { name: 'Next: Contract' }).click();
     await app.page.getByLabel('Risk').selectOption('high');
     await app.page.getByLabel('Inquireness').selectOption('high');
     await app.page
@@ -122,19 +122,15 @@ test('four-step creation covers scoped files, initialization, review, setup, and
       .getByRole('textbox')
       .fill('All focused checks pass.');
     await setTheme(app, 'dark');
+    // The sheet body is the scroll container, so the long Contract step is
+    // captured from its own top instead of a zoomed-out whole page.
     await app.page.evaluate(() => {
-      const wizard = document.querySelector('.creation-wizard');
-      if (wizard instanceof HTMLElement) wizard.style.zoom = '0.72';
-      const panel = document.querySelector('.tab-panel');
-      if (panel instanceof HTMLElement) panel.scrollTop = 0;
+      const body = document.querySelector('.creation-sheet__body');
+      if (body instanceof HTMLElement) body.scrollTop = 0;
     });
-    await evidenceShot(app, SHOTS.review);
-    await app.page.evaluate(() => {
-      const wizard = document.querySelector('.creation-wizard');
-      if (wizard instanceof HTMLElement) wizard.style.zoom = '1';
-    });
+    await evidenceShot(app, SHOTS.contract);
     await app.page.getByRole('checkbox', { name: /Start immediately/ }).uncheck();
-    await app.page.getByRole('button', { name: 'Create feature' }).click();
+    await app.page.getByRole('button', { name: 'Create', exact: true }).click();
 
     const cockpit = app.page.getByLabel('Feature Zero gap creation');
     await expect(cockpit).toBeVisible({ timeout: 30_000 });

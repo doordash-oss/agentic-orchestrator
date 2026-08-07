@@ -61,15 +61,15 @@ test('packaged spatial shell keeps tab navigation, draft cancellation, and narro
     await setWindowSize(handle, 1440, 900);
     await setTheme(handle, 'light');
     await handle.page.getByRole('checkbox', { name: /spatial-shell-lab/ }).check();
-    await handle.page.getByRole('button', { name: 'Next: What' }).click();
+    await handle.page.getByRole('button', { name: 'Next: Describe' }).click();
     await handle.page.locator('#feature-name').fill('Spatial Shell Attention Fixture');
     await handle.page
       .locator('#feature-description')
       .fill('A real packaged feature used to exercise the spatial shell journey.');
-    await handle.page.getByRole('button', { name: 'Next: Pipeline' }).click();
-    await handle.page.getByRole('button', { name: 'Next: Review' }).click();
+    await handle.page.getByRole('button', { name: 'Next: Depth' }).click();
+    await handle.page.getByRole('button', { name: 'Next: Contract' }).click();
     await handle.page.getByRole('checkbox', { name: /Start immediately/ }).uncheck();
-    await handle.page.getByRole('button', { name: 'Create feature' }).click();
+    await handle.page.getByRole('button', { name: 'Create', exact: true }).click();
 
     const cockpit = handle.page.getByLabel('Feature Spatial Shell Attention Fixture');
     await expect(cockpit).toBeVisible({ timeout: 30_000 });
@@ -142,7 +142,7 @@ test('packaged spatial shell keeps tab navigation, draft cancellation, and narro
     await lastOverflowOption.click();
     await expect(lastOverflowOption).toHaveAttribute('aria-selected', 'true');
 
-    transcript.section('Dirty focused creation requires deliberate cancellation');
+    transcript.section('Dirty creation sheet requires deliberate cancellation');
     await handle.page.getByRole('option', { name: 'Overview' }).click();
     await captureVisualMatrix(handle, [
       [1440, 900, 'visual_5b3f80a793ab', 'visual_51f1a4efb671'],
@@ -153,9 +153,9 @@ test('packaged spatial shell keeps tab navigation, draft cancellation, and narro
     await setTheme(handle, 'light');
     await handle.page.getByRole('button', { name: 'New feature' }).click();
     await handle.page.getByRole('checkbox', { name: /spatial-shell-lab/ }).check();
-    await handle.page.getByRole('button', { name: 'Next: What' }).click();
+    await handle.page.getByRole('button', { name: 'Next: Describe' }).click();
     await handle.page.locator('#feature-name').fill('Discarded spatial shell draft');
-    await handle.page.getByRole('button', { name: 'Back to Overview' }).click();
+    await handle.page.getByRole('button', { name: 'Cancel' }).click();
     const discard = handle.page.getByRole('dialog', { name: 'Discard feature draft' });
     await expect(discard).toBeVisible();
     await discard.getByRole('button', { name: 'Discard draft' }).click();

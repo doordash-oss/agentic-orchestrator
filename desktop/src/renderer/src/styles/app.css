@@ -2198,6 +2198,607 @@ body {
   outline-offset: 2px;
 }
 
+/* ─── The creation sheet ──────────────────────────────────────────────────
+ * The four-step creation contract inside the generic sheet: wider than a
+ * gate sheet (it carries a wizard, not one question), wider still on
+ * Contract, where model rows and checkpoint lists need the room. The step
+ * rail is the sheet's own top edge — each segment underlines itself, green
+ * once behind you and accent while current — so the wizard's position reads
+ * off the window's chrome instead of a separate spine inside the body.
+ */
+.creation-sheet {
+  width: min(680px, calc(100% - var(--space-6)));
+  max-height: min(88vh, 900px);
+}
+
+.creation-sheet[data-width='wide'] {
+  width: min(780px, calc(100% - var(--space-6)));
+  height: min(88vh, 900px);
+}
+
+.creation-sheet__rail {
+  flex: none;
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+  border-bottom: 2px solid var(--hairline);
+  background: var(--content);
+}
+
+.creation-sheet__rail-step {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  /* The segment's own underline sits on the rail's rule, not below it. */
+  margin-bottom: -2px;
+  padding: var(--space-3) var(--space-4);
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--faint);
+  font: 13px var(--bench-font-text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.creation-sheet__rail-step:disabled {
+  cursor: default;
+}
+
+.creation-sheet__rail-step[data-state='done'] {
+  color: var(--muted);
+  border-bottom-color: color-mix(in srgb, var(--ok) 72%, transparent);
+}
+
+.creation-sheet__rail-step[data-state='done']:hover {
+  color: var(--text);
+}
+
+.creation-sheet__rail-step[data-state='current'] {
+  color: var(--text);
+  font-weight: 600;
+  border-bottom-color: var(--accent);
+}
+
+.creation-sheet__rail-step:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.creation-sheet__rail-check {
+  flex: none;
+  color: var(--ok);
+  font-size: 11px;
+}
+
+.creation-sheet__rail-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.creation-sheet__form {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.creation-sheet__body,
+.creation-sheet__step {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.creation-sheet__heading {
+  margin: 0;
+  color: var(--text);
+  font: 400 21px var(--bench-font-serif);
+  letter-spacing: -0.01em;
+}
+
+/* Fields --------------------------------------------------------------- */
+
+.creation-sheet__field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.creation-sheet__field-label {
+  color: var(--text);
+  font: 500 12px var(--bench-font-text);
+}
+
+.creation-sheet__input,
+.creation-sheet__select {
+  border: var(--bench-hairline-width) solid var(--hairline);
+  border-radius: var(--bench-radius-control);
+  padding: 7px var(--space-3);
+  background: var(--raised);
+  color: var(--text);
+  font: 13px var(--bench-font-text);
+}
+
+.creation-sheet__input--multiline {
+  resize: vertical;
+  min-height: 72px;
+}
+
+.creation-sheet__input:focus-visible,
+.creation-sheet__select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+  border-color: var(--accent);
+}
+
+.creation-sheet__input[aria-invalid='true'] {
+  border-color: var(--bad);
+}
+
+.creation-sheet__field-error {
+  margin: 0;
+  color: var(--bad);
+  font: 12px var(--bench-font-text);
+}
+
+.creation-sheet__button {
+  border: var(--bench-hairline-width) solid var(--hairline);
+  border-radius: var(--bench-radius-control);
+  padding: 5px var(--space-3);
+  background: var(--content);
+  color: var(--text);
+  font: 600 12px var(--bench-font-text);
+  cursor: pointer;
+}
+
+.creation-sheet__button:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.creation-sheet__button:disabled {
+  color: var(--faint);
+  cursor: default;
+}
+
+.creation-sheet__button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Grouped inset lists, the Bench shape shared with Overview and Aftercare:
+ * a quiet label above a hairlined card whose rows are hairline-separated. */
+
+.creation-sheet__group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.creation-sheet__group:focus-visible {
+  outline: none;
+}
+
+.creation-sheet__group-label {
+  padding: 0 var(--space-1);
+  color: var(--muted);
+  font: 12px var(--bench-font-text);
+}
+
+.creation-sheet__group-desc {
+  margin: 0;
+  padding: 0 var(--space-1);
+  color: var(--faint);
+  font: 12px var(--bench-font-text);
+}
+
+.creation-sheet__rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  border: var(--bench-hairline-width) solid var(--hairline);
+  border-radius: var(--bench-radius-card);
+  background: var(--raised);
+  overflow: hidden;
+}
+
+.creation-sheet__rows > * + * {
+  border-top: var(--bench-hairline-width) solid var(--hairline);
+}
+
+.creation-sheet__row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  cursor: pointer;
+}
+
+.creation-sheet__row:hover {
+  background: var(--content);
+}
+
+.creation-sheet__row--choice {
+  align-items: center;
+}
+
+.creation-sheet__row-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.creation-sheet__row-name {
+  color: var(--text);
+  font: 500 13px var(--bench-font-text);
+}
+
+.creation-sheet__row-hint {
+  color: var(--muted);
+  font: 12px var(--bench-font-text);
+}
+
+.creation-sheet__row-path {
+  color: var(--faint);
+  font: 11px var(--bench-font-mono);
+  overflow-wrap: anywhere;
+}
+
+.creation-sheet__row-issue {
+  color: var(--bad);
+  font: 12px var(--bench-font-text);
+}
+
+.creation-sheet__row[data-valid='false'] .creation-sheet__row-name {
+  color: var(--muted);
+}
+
+.creation-sheet__row-control {
+  flex: none;
+  margin: 1px 0 0;
+  accent-color: var(--accent);
+}
+
+.creation-sheet__row--choice input {
+  flex: none;
+  accent-color: var(--accent);
+}
+
+.creation-sheet__row-empty {
+  padding: var(--space-3);
+  color: var(--muted);
+  font: 13px var(--bench-font-text);
+}
+
+/* Each phase's model and effort read as one row of the grouped list: the
+ * phase name and its hint lead, the two selects sit trailing. */
+.creation-sheet__rows--models .config-editor__phase-console {
+  padding: var(--space-2) var(--space-3);
+  border-left: 0;
+  background: none;
+}
+
+.creation-sheet__rows--models .config-editor__row {
+  grid-template-columns: minmax(0, 1fr) max-content;
+  grid-template-areas:
+    'label control'
+    'hint control';
+  column-gap: var(--space-3);
+  row-gap: 0;
+  align-items: center;
+  padding: 4px 0;
+  border-top: 0;
+}
+
+.creation-sheet__rows--models .config-editor__row + .config-editor__row {
+  border-top: var(--bench-hairline-width) solid color-mix(in srgb, var(--hairline) 55%, transparent);
+}
+
+.creation-sheet__rows--models .config-editor__row-label {
+  color: var(--text);
+  font: 500 13px var(--bench-font-text);
+  letter-spacing: normal;
+  text-transform: none;
+}
+
+.creation-sheet__rows--models .config-editor__row-hint {
+  color: var(--muted);
+  font: 12px var(--bench-font-text);
+}
+
+/* The effort sub-row is a peer of the model row here, not a sub-heading. */
+.creation-sheet__rows--models .config-editor__effort-row .config-editor__row-label {
+  color: var(--muted);
+  font: 500 12px var(--bench-font-text);
+  letter-spacing: normal;
+  text-transform: none;
+}
+
+.creation-sheet__rows--models .config-editor__select {
+  margin: 0;
+  border: var(--bench-hairline-width) solid var(--hairline);
+  border-radius: var(--bench-radius-control);
+  padding: 4px var(--space-2);
+  background: var(--content);
+  color: var(--text);
+  font: 12px var(--bench-font-text);
+}
+
+.creation-sheet__rows--models .config-editor__effort-select {
+  font: 12px var(--bench-font-mono);
+}
+
+.creation-sheet__rows--models .config-editor__select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+
+/* Depth profiles ------------------------------------------------------- */
+
+.creation-sheet__profiles {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-2);
+}
+
+.creation-sheet__profile {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: var(--bench-hairline-width) solid var(--hairline);
+  border-radius: var(--bench-radius-card);
+  background: var(--raised);
+  cursor: pointer;
+}
+
+.creation-sheet__profiles[data-variant='full'] .creation-sheet__profile {
+  min-height: 116px;
+}
+
+.creation-sheet__profile[data-selected='true'] {
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+  background: color-mix(in srgb, var(--accent) 7%, var(--raised));
+}
+
+.creation-sheet__profile input {
+  flex: none;
+  margin: 2px 0 0;
+  accent-color: var(--accent);
+}
+
+.creation-sheet__profile-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.creation-sheet__profile-title {
+  color: var(--text);
+  font: 600 13px var(--bench-font-text);
+}
+
+.creation-sheet__profile-note {
+  color: var(--muted);
+  font: 12px var(--bench-font-text);
+}
+
+.creation-sheet__profile-gates {
+  margin-top: 2px;
+  color: var(--faint);
+  font: 11px/1.45 var(--bench-font-text);
+}
+
+/* Bringing a folder into the workspace --------------------------------- */
+
+.creation-sheet__browser {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: var(--bench-hairline-width) solid var(--hairline);
+  border-radius: var(--bench-radius-card);
+  background: var(--raised);
+}
+
+/* The only way forward in an empty workspace, so it reads as the main event. */
+.creation-sheet__browser[data-primary='true'] {
+  border-color: var(--accent);
+}
+
+.creation-sheet__browser-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.creation-sheet__browser-title {
+  margin: 0;
+  color: var(--text);
+  font: 600 13px var(--bench-font-text);
+}
+
+.creation-sheet__browser-notice:empty {
+  display: none;
+}
+
+.creation-sheet__browser-notice,
+.creation-sheet__browser-hint {
+  margin: 0;
+  color: var(--muted);
+  font: 12px var(--bench-font-text);
+}
+
+.creation-sheet__browser-path {
+  color: var(--text);
+  font: 11px var(--bench-font-mono);
+  overflow-wrap: anywhere;
+}
+
+.creation-sheet__browser-actions {
+  display: flex;
+  gap: var(--space-2);
+}
+
+/* Contract knobs and the closing recap --------------------------------- */
+
+.creation-sheet__knobs {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.creation-sheet__knob-pair {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: var(--space-3);
+}
+
+.creation-sheet__summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: var(--space-3);
+  margin: 0;
+  padding: var(--space-3);
+  border: var(--bench-hairline-width) solid var(--hairline);
+  border-radius: var(--bench-radius-card);
+  background: var(--raised);
+}
+
+.creation-sheet__summary > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.creation-sheet__summary dt {
+  color: var(--muted);
+  font: 11px var(--bench-font-text);
+}
+
+.creation-sheet__summary dd {
+  margin: 0;
+  color: var(--text);
+  font: 12px var(--bench-font-text);
+  overflow-wrap: anywhere;
+}
+
+/* Loading, failure, and the footer's trailing pair --------------------- */
+
+.creation-sheet__status {
+  margin: 0;
+  color: var(--muted);
+  font: 13px var(--bench-font-text);
+}
+
+.creation-sheet__retry {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-3);
+}
+
+.creation-sheet__alert {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--space-3);
+  border: var(--bench-hairline-width) solid var(--bad);
+  border-radius: var(--bench-radius-card);
+  background: color-mix(in srgb, var(--bad) 10%, transparent);
+}
+
+.creation-sheet__alert b {
+  color: var(--bad);
+  font: 600 11px var(--bench-font-mono);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.creation-sheet__alert p {
+  margin: 0;
+  color: var(--text);
+  font: 13px var(--bench-font-text);
+}
+
+.creation-sheet__alert:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.creation-sheet__footer-trailing {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.creation-sheet__footer-trailing .sheet__footer-primary {
+  margin-left: 0;
+}
+
+/* The shared composer, in Bench dress inside the sheet. */
+.creation-sheet .composer .form-field__label {
+  color: var(--text);
+  font: 500 12px var(--bench-font-text);
+}
+
+.creation-sheet .composer .form-field__input {
+  border: var(--bench-hairline-width) solid var(--hairline);
+  border-radius: var(--bench-radius-control);
+  padding: var(--space-3);
+  background: var(--raised);
+  color: var(--text);
+  font: 13px var(--bench-font-text);
+}
+
+.creation-sheet .composer__hint {
+  color: var(--muted);
+  font: 12px var(--bench-font-text);
+}
+
+.creation-sheet .composer__chip {
+  border-color: var(--hairline);
+  background: var(--content);
+  color: var(--text);
+}
+
+/* Both nested dialogs scope themselves to the sheet: the sheet's own
+ * transform already makes it their containing block, and confining them
+ * there keeps the confirmation reading as part of this task rather than a
+ * second window-wide interruption. */
+.creation-sheet .impact-dialog__backdrop,
+.creation-sheet .consent-dialog__scrim {
+  position: absolute;
+}
+
+@media (max-width: 760px) {
+  .creation-sheet__profiles {
+    grid-template-columns: 1fr;
+  }
+
+  .creation-sheet__profiles[data-variant='full'] .creation-sheet__profile {
+    min-height: 0;
+  }
+}
+
 /* ─── The cycle gate, in the sheet ───────────────────────────────────────── */
 .need-input-sheet__header {
   display: grid;
@@ -4306,16 +4907,6 @@ body {
   min-width: 0;
 }
 
-.form-field--group {
-  border: 1px solid var(--color-hairline);
-  border-radius: var(--radius);
-  padding: var(--space-3) var(--space-4) var(--space-4);
-}
-
-.form-field--group > legend {
-  padding: 0 var(--space-1);
-}
-
 .form-field__label {
   font-family: var(--font-body);
   font-weight: 700;
@@ -4356,50 +4947,6 @@ body {
   margin: 0;
   color: var(--color-danger);
   font-size: 12px;
-}
-
-.repo-options {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-}
-
-.repo-option {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-}
-
-.repo-option__label {
-  display: flex;
-  align-items: baseline;
-  gap: var(--space-2);
-  flex-wrap: wrap;
-}
-
-.repo-option[data-valid='false'] .repo-option__name {
-  color: var(--color-muted);
-}
-
-.repo-option__name {
-  font-weight: 700;
-  font-size: 13px;
-}
-
-.repo-option__path {
-  font-family: var(--font-mono);
-  font-size: 11px;
-  color: var(--color-muted);
-  word-break: break-all;
-}
-
-.repo-option__issue {
-  color: var(--color-danger);
-  font-size: 12px;
-  padding-left: var(--space-5);
 }
 
 /* Primary intervention: the one filled signal control in the form. */
@@ -4746,26 +5293,6 @@ body {
 .overview-surface__cta:hover {
   opacity: 0.9;
 }
-.creation-flow {
-  width: min(880px, 100%);
-  margin: 0 auto;
-}
-.creation-flow__header {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  border-bottom: 1px solid var(--color-hairline);
-  margin-bottom: var(--space-5);
-  padding-bottom: var(--space-3);
-}
-.creation-flow__header p {
-  margin: 0;
-  color: var(--color-muted);
-  font: 11px var(--font-mono);
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-}
-
 .creation-wizard {
   max-width: 72rem;
   margin: 0 auto;
@@ -5081,14 +5608,6 @@ body {
   white-space: nowrap;
   color: var(--color-muted);
 }
-.repo-option--empty,
-.repo-options__empty {
-  padding: 0.6rem 0;
-  color: var(--color-muted);
-}
-.repo-options__empty {
-  margin: 0;
-}
 /* Contract knobs (Risk / Inquireness / Exit criteria) share one quiet panel;
    the two selects sit side by side and collapse to one column when narrow. */
 .review-knobs {
@@ -5159,41 +5678,6 @@ body {
   margin-top: var(--space-1);
 }
 
-.directory-browser {
-  margin-top: 1rem;
-  padding: 1rem;
-  border: 1px solid var(--color-hairline);
-  border-radius: var(--radius);
-  background: var(--color-panel);
-}
-.directory-browser > div:first-child,
-.directory-browser__actions {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.75rem;
-  flex-wrap: wrap;
-}
-.directory-browser h3 {
-  margin: 0;
-}
-.directory-browser code {
-  display: block;
-  margin: 0.75rem 0;
-  overflow-wrap: anywhere;
-}
-/* The only way forward in an empty workspace, so it reads as the main event. */
-.directory-browser[data-primary='true'] {
-  border-color: var(--color-accent);
-}
-.directory-browser__notice:empty {
-  display: none;
-}
-.directory-browser__notice {
-  margin: 0.75rem 0 0;
-  color: var(--color-muted);
-  font-size: 13px;
-}
 .creation-summary {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));

@@ -2095,6 +2095,7 @@ export function FeatureCockpit({
             busy={attentionBusy === activeGate.id}
             drafts={attentionDrafts}
             setDrafts={setAttentionDrafts}
+            phase={snapshot.currentPhase}
             onAnswerLater={() => {
               setDismissedGateId(activeGate.id);
               onAttentionPreviewClose?.();
@@ -2581,6 +2582,7 @@ export function FeatureCockpit({
               busy={attentionBusy === activeGate.id}
               drafts={attentionDrafts}
               setDrafts={setAttentionDrafts}
+              phase={snapshot.currentPhase}
               onAnswerLater={() => {
                 setDismissedGateId(activeGate.id);
                 onAttentionPreviewClose?.();

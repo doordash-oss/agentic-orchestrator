@@ -2065,128 +2065,229 @@ body {
   outline-offset: 2px;
 }
 
-.need-input-modal__backdrop {
+/* ─── The sheet family ────────────────────────────────────────────────────
+ * The generic window-modal sheet: the scrim covers the entire window,
+ * sidebar included, and the sheet descends from the window's top edge —
+ * top-centred, bottom-rounded only, so it reads as something attached to
+ * the title bar rather than a panel floating in the middle of the screen.
+ * Shared by every do-and-dismiss task that belongs to a window.
+ */
+.sheet-scrim {
   position: fixed;
   z-index: 80;
   inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: var(--space-5);
   background: var(--color-scrim);
 }
 
-.need-input-modal {
-  width: min(680px, 100%);
+.sheet {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  width: min(600px, calc(100% - var(--space-6)));
+  max-height: min(84vh, 860px);
+  border: var(--bench-hairline-width) solid var(--material-edge);
+  border-top: 0;
+  border-radius: 0 0 var(--bench-radius-window) var(--bench-radius-window);
+  background: var(--content);
+  box-shadow: var(--sheet-shadow);
+  overflow: hidden;
+  animation: sheet-descend 160ms ease-out;
 }
 
-.need-input-modal__header,
-.need-input-modal__questions,
-.need-input-modal__hint,
-.need-input-modal > .form-field__error,
-.need-input-modal__footer {
-  padding-inline: clamp(22px, 4vw, 42px);
+/* The sheet overlays the toolbar, which is a window drag region on macOS —
+ * without this, dragging inside the sheet would move the window. */
+:root[data-platform='darwin'] .sheet {
+  -webkit-app-region: no-drag;
 }
 
-.need-input-modal__header {
-  padding-top: clamp(24px, 4vw, 38px);
-  padding-bottom: var(--space-4);
-  border-bottom: 1px solid var(--color-hairline);
+.sheet:focus-visible {
+  outline: none;
 }
 
-.need-input-modal__header h2 {
-  margin: var(--space-2) 0;
-  font: 700 clamp(28px, 4vw, 40px) var(--font-display);
+@keyframes sheet-descend {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -10px);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
 }
 
-.need-input-modal__header > p:last-child {
-  margin: 0;
-  color: var(--color-muted);
+@media (prefers-reduced-motion: reduce) {
+  .sheet {
+    animation: none;
+  }
+
+  .sheet * {
+    scroll-behavior: auto;
+  }
 }
 
-.need-input-modal__questions {
+.sheet__body {
   min-height: 0;
   overflow: auto;
+  padding: var(--space-5);
+}
+
+/* One footer strip: the escape hatch leads, its reassurance sits beside it,
+ * and the committing verb is pinned trailing. */
+.sheet__footer {
+  flex: none;
   display: flex;
-  flex-direction: column;
-  gap: var(--space-4);
-  padding-top: var(--space-5);
-  padding-bottom: var(--space-5);
+  align-items: center;
+  gap: var(--space-3);
+  border-top: var(--bench-hairline-width) solid var(--hairline);
+  padding: var(--space-3) var(--space-4);
+  background: var(--raised);
 }
 
-.need-input-modal__question {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
+.sheet__footer-note {
+  color: var(--muted);
+  font: 12px var(--bench-font-text);
 }
 
-.need-input-modal__question > span {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-}
-
-.need-input-modal__question small {
-  color: var(--color-muted);
-  font: 10px var(--font-mono);
-  text-transform: uppercase;
-}
-
-.need-input-modal__question strong {
-  font-size: 15px;
-}
-
-.need-input-modal__question textarea {
-  min-height: 112px;
-  resize: vertical;
-  padding: var(--space-3);
-  border: 1px solid var(--color-hairline);
-  border-radius: var(--radius);
-  background: var(--color-bg);
-  color: var(--color-text);
-  font: 15px/1.45 var(--font-body);
-}
-
-.need-input-modal__hint {
-  margin: 0 0 var(--space-3);
-  color: var(--color-muted);
-  font-size: 13px;
-}
-
-.need-input-modal__footer {
-  display: flex;
-  justify-content: flex-end;
-  gap: var(--space-2);
-  padding-top: var(--space-3);
-  padding-bottom: var(--space-4);
-  border-top: 1px solid var(--color-hairline);
-}
-
-.need-input-modal__footer button {
-  padding: var(--space-2) var(--space-4);
-  border: 1px solid var(--color-hairline);
-  border-radius: var(--radius);
-  background: transparent;
-  color: var(--color-text);
-  font: 700 16px var(--font-display);
+.sheet__footer-secondary {
+  border: var(--bench-hairline-width) solid var(--hairline);
+  border-radius: var(--bench-radius-control);
+  padding: 5px var(--space-3);
+  background: var(--content);
+  color: var(--text);
+  font: 600 12px var(--bench-font-text);
   cursor: pointer;
 }
 
-.need-input-modal__footer .need-input-modal__primary {
-  border-color: var(--color-signal);
-  background: var(--color-signal);
-  color: var(--color-bg);
+.sheet__footer-secondary:hover {
+  background: var(--raised);
 }
 
-.need-input-modal__footer .need-input-modal__primary[data-tone='warning'] {
-  border-color: var(--color-danger);
-  background: color-mix(in srgb, var(--color-danger) 10%, var(--color-panel));
-  color: var(--color-danger);
+.sheet__footer-primary {
+  margin-left: auto;
+  border: 0;
+  border-radius: var(--bench-radius-control);
+  padding: 5px var(--space-3);
+  background: var(--accent);
+  color: #fff;
+  font: 600 12px var(--bench-font-text);
+  cursor: pointer;
 }
 
-.need-input-modal__footer button:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
+.sheet__footer-primary:hover:not(:disabled) {
+  opacity: 0.9;
+}
+
+.sheet__footer-primary[data-tone='warning'] {
+  border: var(--bench-hairline-width) solid var(--bad);
+  background: color-mix(in srgb, var(--bad) 14%, transparent);
+  color: var(--bad);
+}
+
+.sheet__footer-primary:disabled {
+  background: transparent;
+  color: var(--faint);
+  cursor: default;
+}
+
+.sheet__footer-secondary:focus-visible,
+.sheet__footer-primary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* ─── The cycle gate, in the sheet ───────────────────────────────────────── */
+.need-input-sheet__header {
+  display: grid;
+  gap: var(--space-2);
+  margin-bottom: var(--space-5);
+}
+
+.need-input-sheet__eyebrow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  color: var(--attention);
+  font: 600 11px var(--bench-font-mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.need-input-sheet__title {
+  margin: 0;
+  color: var(--text);
+  font: 500 22px/1.25 var(--bench-font-serif);
+}
+
+.need-input-sheet__lede,
+.need-input-sheet__summary {
+  margin: 0;
+  color: var(--muted);
+  font: 13px/1.5 var(--bench-font-text);
+}
+
+.need-input-sheet__questions {
+  display: grid;
+  gap: var(--space-5);
+  min-width: 0;
+}
+
+.need-input-sheet__question {
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.need-input-sheet__question > span {
+  display: grid;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.need-input-sheet__question small {
+  color: var(--muted);
+  font: 11px var(--bench-font-mono);
+}
+
+.need-input-sheet__question strong {
+  color: var(--text);
+  font: 400 14px/1.5 var(--bench-font-serif);
+  overflow-wrap: anywhere;
+}
+
+.need-input-sheet__question textarea {
+  min-height: 76px;
+  resize: vertical;
+  border: var(--bench-hairline-width) solid var(--hairline);
+  border-radius: var(--bench-radius-control);
+  padding: var(--space-3);
+  background: var(--raised);
+  color: var(--text);
+  font: 13px/1.5 var(--bench-font-text);
+}
+
+.need-input-sheet__question textarea::placeholder {
+  color: var(--faint);
+}
+
+.need-input-sheet__question textarea:focus-visible {
+  border-color: var(--accent);
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* The hint is the reason Resume agent is inert, so it carries attention. */
+.need-input-sheet__hint {
+  margin: var(--space-4) 0 0;
+  color: var(--attention);
+  font: 12px var(--bench-font-text);
+}
+
+.need-input-sheet .form-field__error {
+  margin: var(--space-3) 0 0;
 }
 
 .need-input-verification {
@@ -2413,8 +2514,7 @@ body {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .post-workspace *,
-  .need-input-modal * {
+  .post-workspace * {
     scroll-behavior: auto;
   }
 }
@@ -3360,18 +3460,38 @@ body {
   cursor: default;
 }
 
-/* Conversation turn: the pending question is the agent's next message in the
- * live transcript; the chosen answer previews as your drafted reply. */
+/* ─── The question turn ───────────────────────────────────────────────────
+ * The pending question is the agent's next message in the reading column,
+ * and the one place the attention color enters the content layer: an
+ * attention-tinted ground inside an attention-mixed hairline. Everything
+ * else in the transcript stays quiet, so this block *is* the moment.
+ *
+ * Every selector below is scoped under .question-turn: the attention
+ * drawer mounts the same .attention-option markup and must keep its own
+ * appearance until it restyles in its own phase.
+ */
 .question-turn {
-  align-self: flex-start;
-  width: min(60ch, 92%);
+  align-self: stretch;
+  width: 100%;
   display: grid;
   gap: var(--space-3);
-  border: 1px solid color-mix(in srgb, var(--color-accent) 35%, var(--color-hairline));
-  border-left: 3px solid var(--color-accent);
-  border-radius: 10px;
-  background: color-mix(in srgb, var(--color-accent) 3%, var(--color-panel));
-  padding: var(--space-3);
+  border: var(--bench-hairline-width) solid
+    color-mix(in srgb, var(--attention) 42%, var(--hairline));
+  border-radius: var(--bench-radius-card);
+  background: color-mix(in srgb, var(--attention) 7%, var(--content));
+  padding: var(--space-4);
+}
+
+.question-turn .attention-question legend {
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+
+.question-turn .attention-question + .attention-question {
+  margin-top: var(--space-2);
+  border-top: var(--bench-hairline-width) solid
+    color-mix(in srgb, var(--attention) 24%, var(--hairline));
+  padding-top: var(--space-4);
 }
 
 .question-turn__head {
@@ -3382,62 +3502,156 @@ body {
   flex-wrap: wrap;
 }
 
+/* The topic alone, in the attention color — the label names the decision
+ * rather than narrating that a decision exists. */
 .question-turn__topic {
-  color: var(--color-accent);
-  font-family: var(--font-mono);
-  font-size: 10px;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
+  color: var(--attention);
+  font: 600 13px var(--bench-font-text);
 }
 
 .question-turn__meta {
-  color: var(--color-muted);
-  font-family: var(--font-mono);
-  font-size: 10px;
+  color: var(--muted);
+  font: 11px var(--bench-font-mono);
 }
 
 .question-turn__prompt {
-  color: var(--color-text);
-  font-family: var(--font-body);
-  font-size: 14px;
-  line-height: 1.55;
-  font-weight: 400;
+  color: var(--text);
+  font: 400 15px/1.5 var(--bench-font-serif);
   overflow-wrap: anywhere;
 }
 
 .question-turn__cue {
   margin: 0;
-  color: var(--color-muted);
-  font-size: 12px;
+  color: var(--muted);
+  font: 12px var(--bench-font-text);
 }
 
-.question-turn .attention-option {
+/* Options are numbered rows, not cards: the keycap is the shortcut and the
+ * selection indicator at once, and the chosen row fills with the system
+ * accent so the answer reads at a glance. */
+.question-turn .attention-question .attention-option {
+  border: 0;
+  border-radius: var(--bench-radius-control);
   padding: var(--space-2);
+  gap: var(--space-3);
+  background: transparent;
+  box-shadow: none;
+  color: var(--text);
+}
+
+/* Mixed from --text, not --attention: an amber tint on the block's already
+ * attention-tinted ground is imperceptible in dark mode. */
+.question-turn .attention-question .attention-option:hover {
+  border-color: transparent;
+  background: color-mix(in srgb, var(--text) 9%, transparent);
+}
+
+.question-turn .attention-question .attention-option[data-selected] {
+  border-color: transparent;
+  box-shadow: none;
+  background: var(--accent);
+  color: #fff;
+}
+
+.question-turn .attention-option__label {
+  font: 600 13px/1.45 var(--bench-font-text);
 }
 
 .question-turn .attention-option__description {
-  font-size: 11.5px;
+  color: var(--muted);
+  font: 12px/1.45 var(--bench-font-text);
 }
 
+.question-turn .attention-option[data-selected] .attention-option__description {
+  color: rgb(255 255 255 / 82%);
+}
+
+/* A translucent overlay rather than --raised: the keycap has to stay legible
+ * against the turn's attention-tinted ground, which --raised sits flush with
+ * in dark mode. */
+.question-turn .attention-option__number {
+  inline-size: 18px;
+  block-size: 18px;
+  margin-top: 2px;
+  border: 0;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--text) 11%, transparent);
+  color: var(--muted);
+  font: 600 10px var(--bench-font-mono);
+}
+
+.question-turn .attention-question .attention-option[data-selected] .attention-option__number {
+  border-color: transparent;
+  background: rgb(255 255 255 / 24%);
+  color: #fff;
+}
+
+.question-turn .attention-option__recommended {
+  border: 0;
+  border-radius: 4px;
+  padding: 2px 6px;
+  background: color-mix(in srgb, var(--text) 11%, transparent);
+  color: var(--muted);
+  font: 600 10px var(--bench-font-text);
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.question-turn .attention-option[data-selected] .attention-option__recommended {
+  background: rgb(255 255 255 / 24%);
+  color: #fff;
+}
+
+.question-turn .attention-question .attention-option--other {
+  border: var(--bench-hairline-width) dashed var(--hairline);
+}
+
+.question-turn .attention-question .attention-option--other[data-selected],
+.question-turn .attention-question .attention-option--other:focus-within {
+  border-style: solid;
+  border-color: var(--accent);
+  background: transparent;
+  color: var(--text);
+}
+
+.question-turn .attention-question .attention-free-text__input {
+  border: var(--bench-hairline-width) solid var(--hairline);
+  border-radius: var(--bench-radius-control);
+  background: var(--raised);
+  color: var(--text);
+  font: 13px var(--bench-font-text);
+}
+
+.question-turn .attention-question .attention-free-text__input:focus-visible {
+  border-color: var(--accent);
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* The drafted reply is a rule, not a bubble: it is your text, still yours. */
 .question-turn__reply {
-  align-self: flex-end;
+  align-self: stretch;
   display: grid;
   gap: 2px;
-  max-width: min(78%, 760px);
-  border: 1px solid color-mix(in srgb, var(--color-signal) 40%, var(--color-hairline));
-  border-radius: 14px 14px 4px 14px;
-  background: color-mix(in srgb, var(--color-signal) 8%, var(--color-panel));
-  padding: var(--space-2) var(--space-3);
-  font-size: 13px;
+  max-width: 100%;
+  border: 0;
+  border-left: 2px solid var(--accent);
+  border-radius: 0;
+  background: transparent;
+  padding: 2px 0 2px var(--space-3);
   overflow-wrap: anywhere;
 }
 
 .question-turn__reply-who {
-  color: var(--color-muted);
-  font-family: var(--font-mono);
-  font-size: 9px;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
+  color: var(--muted);
+  font: 12px var(--bench-font-text);
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.question-turn__reply strong {
+  color: var(--text);
+  font: 600 13px/1.45 var(--bench-font-text);
 }
 
 /* The composer (and any docked response controls) keeps its height — the
@@ -3450,57 +3664,70 @@ body {
   flex: none;
 }
 
-/* Composer strip under the live activity: the section supplies the amber
- * needle rail; the strip is one calm row. */
+/* The question keeps the attention color inside the turn, so the strip that
+ * carries the answer is a plain raised row behind a hairline. */
+.live-preview__attention:has(> .question-composer) {
+  border-top: 0;
+  background: transparent;
+}
+
 .question-composer {
   display: flex;
   align-items: center;
   gap: var(--space-3);
-  padding: var(--space-2) var(--space-4);
+  border-top: var(--bench-hairline-width) solid var(--hairline);
+  padding: var(--space-2) var(--space-3);
+  background: var(--raised);
 }
 
 .question-composer__who {
   flex: none;
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  color: var(--color-text);
-  font-family: var(--font-display);
-  font-size: 12px;
-  font-weight: 600;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-}
-
-.question-composer__who::before {
-  content: '';
-  inline-size: 7px;
-  block-size: 7px;
-  border-radius: 50%;
-  background: var(--color-accent);
+  /* Plain text, not attention: the topic label above is the one amber anchor. */
+  color: var(--text);
+  font: 500 13px var(--bench-font-text);
+  letter-spacing: 0;
+  text-transform: none;
 }
 
 .question-composer__input {
   flex: 1;
   min-width: 0;
-  border: 1px solid var(--color-hairline);
-  border-radius: var(--radius);
-  padding: var(--space-2) var(--space-3);
-  color: var(--color-text);
-  background: var(--color-bg);
-  font: 13px var(--font-body);
+  border: 0;
+  border-radius: var(--bench-radius-control);
+  padding: 6px 0;
+  color: var(--text);
+  background: transparent;
+  font: 13px var(--bench-font-text);
+}
+
+.question-composer__input::placeholder {
+  color: var(--muted);
 }
 
 .question-composer__input:focus-visible {
-  border-color: var(--color-signal);
-  outline: var(--focus-ring);
-  outline-offset: 1px;
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 .question-composer__hint {
   flex: 1;
-  color: var(--color-muted);
-  font-size: 12px;
+  color: var(--muted);
+  font: 12px var(--bench-font-text);
+}
+
+.question-composer .attention-button--primary {
+  flex: none;
+  border: 0;
+  border-radius: var(--bench-radius-control);
+  padding: 6px var(--space-3);
+  background: var(--accent);
+  color: #fff;
+  font: 600 12px var(--bench-font-text);
+}
+
+.question-composer .attention-button--primary:disabled {
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+  color: var(--faint);
 }
 
 .attention-detail textarea {

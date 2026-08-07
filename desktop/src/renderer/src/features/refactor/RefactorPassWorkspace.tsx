@@ -523,6 +523,7 @@ export function RefactorPassWorkspace({
           busy={attentionBusy === activeGate.id}
           drafts={attentionDrafts}
           setDrafts={setAttentionDrafts}
+          phase={child?.currentPhase}
           onAnswerLater={() => setDismissedGateId(activeGate.id)}
           onResolved={async () => {
             setDismissedGateId(activeGate.id);

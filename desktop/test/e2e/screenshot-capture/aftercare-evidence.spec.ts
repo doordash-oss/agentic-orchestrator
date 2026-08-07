@@ -1,37 +1,8 @@
-import { expect, test, type Page } from '@playwright/test';
-import path from 'node:path';
-import fs from 'node:fs';
-
-const EVIDENCE_DIR = process.env['AGENTICO_EVIDENCE_DIR'] ?? '';
-
-function evidencePath(name: string): string {
-  return path.join(EVIDENCE_DIR, 'screenshots', `${name}.png`);
-}
-
-async function capture(
-  page: Page,
-  scene: string,
-  theme: 'light' | 'dark',
-  width: number,
-  height: number,
-  fileName: string,
-  waitFor: string,
-  preScreenshot?: (page: Page) => Promise<void>,
-): Promise<void> {
-  await page.setViewportSize({ width, height });
-  await page.goto(`http://localhost:9871/?scene=${scene}&theme=${theme}`);
-  await page.evaluate((t) => {
-    document.documentElement.dataset['theme'] = t;
-  }, theme);
-  await expect(page.locator(waitFor).first()).toBeVisible({ timeout: 15_000 });
-  if (preScreenshot) await preScreenshot(page);
-  const target = evidencePath(fileName);
-  fs.mkdirSync(path.dirname(target), { recursive: true });
-  await page.screenshot({ path: target, fullPage: false });
-}
+import { expect, test } from '@playwright/test';
+import { capture, skipWithoutEvidenceDir } from './evidence-capture';
 
 test('aftercare visual evidence', async ({ page }) => {
-  test.skip(EVIDENCE_DIR === '', 'AGENTICO_EVIDENCE_DIR not set');
+  skipWithoutEvidenceDir();
 
   // Published with a pull request, a reachable diff, and carried check states.
   for (const theme of ['dark', 'light'] as const) {

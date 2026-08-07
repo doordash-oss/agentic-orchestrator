@@ -170,8 +170,8 @@ test('capture all visual evidence screenshots', async ({ page }) => {
     'dark',
     1440,
     900,
-    'cycle-need-user-input-floating-free-text-modal-1440x900',
-    '.need-input-modal',
+    'cycle-need-user-input-sheet-free-text-1440x900',
+    '.need-input-sheet',
     async (capturePage) => {
       await capturePage.waitForTimeout(250);
     },

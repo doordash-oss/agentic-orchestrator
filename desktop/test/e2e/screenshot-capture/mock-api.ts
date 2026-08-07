@@ -1070,6 +1070,57 @@ export const FEATURE_QUESTION_ITEM = {
 } satisfies AttentionSnapshot['items'][number];
 const FEATURE_QUESTION = FEATURE_QUESTION_ITEM.questions[0]!;
 
+/**
+ * The compact ask the Bench mock shows: three short options with real
+ * descriptions. `FEATURE_QUESTION_ITEM` above is deliberately extreme (a
+ * paragraph-length prompt and four paragraph-length options) and exists to
+ * prove the layout survives overflow; this one is what the surface looks like
+ * in ordinary use, so design evidence is judged against it.
+ */
+export const FEATURE_QUESTION_BENCH_ITEM = {
+  kind: 'questions',
+  id: 'ask-existing-translation',
+  featureId: 'abcd1234ef567890',
+  sessionId: 'sess-impl-03',
+  phase: 'Implement',
+  waitingSince: new Date(Date.now() - 6 * 60_000).toISOString(),
+  questions: [
+    {
+      key: 'There is already an Italian README at docs/it/README.md. What should happen to it?',
+      header: 'Existing translation',
+      multiSelect: false,
+      options: [
+        {
+          label: 'Replace it with the new translation',
+          description: 'Overwrites the file and keeps its path, so existing links stay valid.',
+          confidence: 0.88,
+        },
+        {
+          label: 'Keep both and cross-link them',
+          description:
+            'Leaves the old file in place and adds a banner at the top of each pointing to the other.',
+          confidence: 0.54,
+        },
+        {
+          label: 'Archive it as README.legacy.md',
+          description:
+            'Preserves the previous translation for reference without shadowing the new one.',
+          confidence: 0.41,
+        },
+      ],
+    },
+  ],
+} satisfies AttentionSnapshot['items'][number];
+const FEATURE_QUESTION_BENCH = FEATURE_QUESTION_BENCH_ITEM.questions[0]!;
+
+/**
+ * The raw question text the transcript carries, so the turn's suppression
+ * matches whichever question the scene actually has pending.
+ */
+function sceneQuestion(scene: string): typeof FEATURE_QUESTION | typeof FEATURE_QUESTION_BENCH {
+  return scene === 'feature-question-bench' ? FEATURE_QUESTION_BENCH : FEATURE_QUESTION;
+}
+
 function backgroundAttentionItems(scene: string): AttentionSnapshot['items'] {
   if (scene === 'background-ama-compact') {
     return [
@@ -1216,6 +1267,15 @@ function makeMockApi(
       if (scene === 'repo-instrument' || scene === 'refactor-launch') {
         return Promise.resolve(CYCLES_FEATURE_SNAPSHOT);
       }
+      // The two hold surfaces get run statuses that make the rail agree with
+      // what the surface says: a question pending on a still-running phase
+      // reads `Waiting Nm`, a gate reads `Paused Nm`.
+      if (scene === 'feature-question-bench') {
+        return Promise.resolve({ ...FEATURE_SNAPSHOT, status: 'Implementing' });
+      }
+      if (scene === 'gate-sheet-plain' || scene === 'gate-sheet-verification') {
+        return Promise.resolve({ ...FEATURE_SNAPSHOT, status: 'NeedUserInput' });
+      }
       if (scene === 'aftercare-verified' || scene === 'aftercare-inspector') {
         return Promise.resolve(AFTERCARE_VERIFIED_SNAPSHOT);
       }
@@ -1360,7 +1420,7 @@ function makeMockApi(
       Promise.resolve(
         sessionId === CHAT_SESSION_ID
           ? AMA_TRANSCRIPT
-          : scene === 'feature-question'
+          : scene.startsWith('feature-question')
             ? ({
                 sessionId,
                 cursor: {
@@ -1375,9 +1435,9 @@ function makeMockApi(
                     role: 'assistant',
                     type: 'text',
                     text: [
-                      FEATURE_QUESTION.key,
+                      sceneQuestion(scene).key,
                       '',
-                      ...FEATURE_QUESTION.options.map(
+                      ...sceneQuestion(scene).options.map(
                         (option, index) =>
                           `${index + 1}. ${option.label}${index === 0 && !/\(Recommended\)$/i.test(option.label) ? ' (Recommended)' : ''} [confidence: ${option.confidence?.toFixed(2)}]`,
                       ),

@@ -18,6 +18,10 @@ for (const theme of ['light', 'dark'] as const) {
     ).toBeVisible();
     await expect(turn.getByText('Recommended')).toBeVisible();
     await expect(turn.getByText(/\(Recommended\)/)).toHaveCount(0);
+    // The topic label is the question header alone, in the attention color,
+    // with the mono phase/waiting note beside it.
+    await expect(turn.locator('.question-turn__topic')).toHaveText('Project direction');
+    await expect(turn.locator('.question-turn__meta')).toHaveText('Design · waiting on you');
 
     const cards = turn.locator('.attention-option');
     await expect(cards).toHaveCount(4);
@@ -42,10 +46,20 @@ for (const theme of ['light', 'dark'] as const) {
 
     const selectedOption = turn.getByRole('radio', { name: /Build user-facing features/ });
     const selectedCard = selectedOption.locator('..');
+    const unselectedGround = await selectedCard.evaluate(
+      (card) => getComputedStyle(card).backgroundColor,
+    );
     await selectedCard.click();
     await expect(selectedOption).toBeChecked();
-    expect(await selectedCard.evaluate((card) => getComputedStyle(card).boxShadow)).not.toBe(
-      'none',
+    // Selection fills the row with the system accent: the row itself is the
+    // indicator, so it has to change ground rather than gain a ring.
+    const selectedGround = await selectedCard.evaluate(
+      (card) => getComputedStyle(card).backgroundColor,
+    );
+    expect(selectedGround).not.toBe(unselectedGround);
+    expect(selectedGround).not.toBe('rgba(0, 0, 0, 0)');
+    expect(await selectedCard.evaluate((card) => getComputedStyle(card).color)).toBe(
+      'rgb(255, 255, 255)',
     );
 
     // The choice previews as your drafted reply and arms Send.

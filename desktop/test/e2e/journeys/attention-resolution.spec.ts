@@ -356,6 +356,21 @@ test('packaged inbox and cockpit resolve real attention classes from the bundled
 
     transcript.section('AskUser bundle routed from the inbox and resolved from the cockpit');
     await waitForAttentionItem(handle.page, 'ask-bundle');
+
+    // While the question is pending on a still-executing run, the rail
+    // substitutes the attention-colored Waiting readout for the plain trio —
+    // the same hold the cockpit's own surfaces key on.
+    await handle.page.getByRole('option', { name: /Packaged Attention Resolution/ }).click();
+    cockpit = handle.page.getByLabel('Feature Packaged Attention Resolution');
+    const questionRail = cockpit.locator('.phase-rail');
+    await expect(questionRail).toBeVisible({ timeout: 30_000 });
+    const waitingEntry = questionRail.locator('.phase-rail__trio-entry[data-attention="true"]');
+    await expect(waitingEntry).toHaveCount(1, { timeout: 30_000 });
+    await expect(waitingEntry.locator('dt')).toHaveText('Waiting');
+    await expect(waitingEntry.locator('dd')).toHaveText(/^(<1m|\d+[mhd])$/);
+    await evidenceShot(handle, 'attention-question-rail-waiting');
+    transcript.step('the rail read the attention-colored Waiting hold while the question waited');
+
     inbox = await openInbox(handle);
     // Feature-scoped questions route to the cockpit, where the prompt and
     // options render as the agent's conversation turn and the answer is sent

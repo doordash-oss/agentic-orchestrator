@@ -11,7 +11,12 @@ import '@fontsource/ibm-plex-mono/500.css';
 import '../../../src/renderer/src/styles/tokens.css';
 import '../../../src/renderer/src/styles/app.css';
 
-import { installMockApi, CYCLES_FEATURE_SNAPSHOT, FEATURE_QUESTION_ITEM } from './mock-api';
+import {
+  installMockApi,
+  CYCLES_FEATURE_SNAPSHOT,
+  FEATURE_QUESTION_ITEM,
+  FEATURE_QUESTION_BENCH_ITEM,
+} from './mock-api';
 import { ArchiveMode } from '../../../src/renderer/src/features/ArchiveMode';
 import { RewindJourney } from '../../../src/renderer/src/features/RewindJourney';
 import { RepositoryInstrument } from '../../../src/renderer/src/features/RepositoryInstrument';
@@ -930,9 +935,11 @@ function AftercareScene() {
   );
 }
 
-function FeatureQuestionScene(): React.ReactElement {
+function FeatureQuestionScene({ scene }: { scene: string }): React.ReactElement {
   const [drafts, setDrafts] = React.useState(emptyAttentionDrafts);
-  const attentionItems: AttentionItem[] = [FEATURE_QUESTION_ITEM];
+  const attentionItems: AttentionItem[] = [
+    scene === 'feature-question-bench' ? FEATURE_QUESTION_BENCH_ITEM : FEATURE_QUESTION_ITEM,
+  ];
   return (
     <div className="app-frame">
       <div className="workspace">
@@ -955,28 +962,91 @@ function FeatureQuestionScene(): React.ReactElement {
   );
 }
 
+/**
+ * The gate sheet's two branches. The plain branch carries two questions, a
+ * known phase/iteration/stop time (so the dynamic lede renders in full), and
+ * one drafted answer; the verification branch carries real blockers so the
+ * structured decision renders.
+ */
+function gateSceneItems(scene: string): AttentionItem[] {
+  if (scene === 'post-cycle-gate') {
+    return [
+      {
+        kind: 'gate',
+        id: 'post-cycle-gate',
+        featureId: 'abcd1234ef567890',
+        waitingSince: '2026-07-25T10:00:00.000Z',
+        repoName: 'agentic-orchestrator',
+        summary: 'The agent needs one decision before it can finish the rebase.',
+        questions: [
+          {
+            index: 1,
+            prompt: 'Which compatibility behavior should remain explicit?',
+            answer: '',
+          },
+        ],
+      },
+    ];
+  }
+  if (scene === 'gate-sheet-plain') {
+    return [
+      {
+        kind: 'gate',
+        id: 'gate-sheet-plain',
+        featureId: 'abcd1234ef567890',
+        waitingSince: new Date(Date.now() - 11 * 60_000).toISOString(),
+        repoName: 'agentic-orchestrator',
+        iteration: 3,
+        questions: [
+          {
+            index: 1,
+            prompt:
+              'The style guide requires the formal register (Lei), but three code comments quote informal user copy verbatim. Translate those quotes, or leave them as written?',
+            answer: 'Leave the quoted copy in English and add a translator note above each one.',
+          },
+          {
+            index: 2,
+            prompt:
+              'There is no established Italian term for "slop removal pass". What wording should be used consistently?',
+            answer: '',
+          },
+        ],
+      },
+    ];
+  }
+  if (scene === 'gate-sheet-verification') {
+    return [
+      {
+        kind: 'gate',
+        id: 'gate-sheet-verification',
+        featureId: 'abcd1234ef567890',
+        waitingSince: new Date(Date.now() - 24 * 60_000).toISOString(),
+        repoName: 'agentic-orchestrator',
+        iteration: 3,
+        questions: [{ index: 1, prompt: 'How should Agentico continue?', answer: '' }],
+        verification: {
+          blockers: [
+            {
+              itemId: 'deploy-smoke',
+              name: 'Deployment smoke test',
+              repoName: 'agentic-orchestrator',
+              command: 'make deploy-smoke',
+              reason: 'missing declared capability "Okta session"',
+              capabilities: ['Okta session'],
+              remediation: 'Make an Okta session available, then retry verification.',
+            },
+          ],
+          allowedActions: ['RETRY_AFTER_AUTH', 'WAIVE'],
+        },
+      },
+    ];
+  }
+  return [];
+}
+
 function PostImplementationScene({ scene }: { scene: string }) {
   const [drafts, setDrafts] = React.useState(emptyAttentionDrafts);
-  const gateItems: AttentionItem[] =
-    scene === 'post-cycle-gate'
-      ? [
-          {
-            kind: 'gate',
-            id: 'post-cycle-gate',
-            featureId: 'abcd1234ef567890',
-            waitingSince: '2026-07-25T10:00:00.000Z',
-            repoName: 'agentic-orchestrator',
-            summary: 'The agent needs one decision before it can finish the rebase.',
-            questions: [
-              {
-                index: 1,
-                prompt: 'Which compatibility behavior should remain explicit?',
-                answer: '',
-              },
-            ],
-          },
-        ]
-      : [];
+  const gateItems = React.useMemo(() => gateSceneItems(scene), [scene]);
   return (
     <div className="app-frame">
       <div className="workspace">
@@ -1467,10 +1537,10 @@ function CaptureApp() {
   if (scene.startsWith('aftercare') || scene === 'refactor-pass') {
     return <AftercareScene />;
   }
-  if (scene === 'feature-question') {
-    return <FeatureQuestionScene />;
+  if (scene === 'feature-question' || scene === 'feature-question-bench') {
+    return <FeatureQuestionScene scene={scene} />;
   }
-  if (scene.startsWith('post-cycle-')) {
+  if (scene.startsWith('post-cycle-') || scene.startsWith('gate-sheet-')) {
     return <PostImplementationScene scene={scene} />;
   }
   if (scene === 'refactor-launch') {

@@ -97,9 +97,7 @@ export function QuestionConversationTurn({
             <fieldset key={question.key} className="attention-question" onKeyDown={handleKeys}>
               <legend>
                 <span className="question-turn__head">
-                  <span className="question-turn__topic">
-                    {question.header} · the agent needs your call
-                  </span>
+                  <span className="question-turn__topic">{question.header}</span>
                   {questionIndex === 0 ? (
                     <span className="question-turn__meta">
                       {item.phase !== undefined ? `${item.phase} · ` : ''}

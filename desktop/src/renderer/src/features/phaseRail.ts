@@ -184,6 +184,32 @@ function oldestWaitingSince(items: readonly AttentionItem[]): string | undefined
 
 // --- Waiting-duration formatter ---------------------------------------------
 
+/** One bucket of elapsed time: exactly one field is set. */
+export type ElapsedBucket =
+  | { unit: 'sub-minute' }
+  | { unit: 'minutes'; value: number }
+  | { unit: 'hours'; value: number }
+  | { unit: 'days'; value: number };
+
+/**
+ * Parse-and-bucket, shared so every surface that reports "how long has this
+ * been waiting" agrees on which unit a given hold falls into — only the
+ * wording differs (`4h` on the rail, `4 hours ago` in the gate sheet's lede).
+ * Returns null for a missing or unparseable timestamp; callers decide how to
+ * word "no duration known" for their surface.
+ */
+export function bucketElapsedSince(value: string | undefined): ElapsedBucket | null {
+  if (value === undefined) return null;
+  const since = Date.parse(value);
+  if (!Number.isFinite(since)) return null;
+  const minutes = Math.floor(Math.max(Date.now() - since, 0) / 60_000);
+  if (minutes < 1) return { unit: 'sub-minute' };
+  if (minutes < 60) return { unit: 'minutes', value: minutes };
+  const hours = Math.floor(minutes / 60);
+  if (hours < 48) return { unit: 'hours', value: hours };
+  return { unit: 'days', value: Math.floor(hours / 24) };
+}
+
 /**
  * The shared `Nm`/`Nh`/`Nd` shape, promoted out of the attention inbox so
  * both it and the rail render identical durations from one source. Returns
@@ -191,16 +217,18 @@ function oldestWaitingSince(items: readonly AttentionItem[]): string | undefined
  * "no duration known" for their surface.
  */
 export function formatWaitingDuration(value: string | undefined): string | null {
-  if (value === undefined) return null;
-  const since = Date.parse(value);
-  if (!Number.isFinite(since)) return null;
-  const elapsedMs = Math.max(Date.now() - since, 0);
-  const minutes = Math.floor(elapsedMs / 60_000);
-  if (minutes < 1) return '<1m';
-  if (minutes < 60) return `${minutes}m`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 48) return `${hours}h`;
-  return `${Math.floor(hours / 24)}d`;
+  const bucket = bucketElapsedSince(value);
+  if (bucket === null) return null;
+  switch (bucket.unit) {
+    case 'sub-minute':
+      return '<1m';
+    case 'minutes':
+      return `${bucket.value}m`;
+    case 'hours':
+      return `${bucket.value}h`;
+    case 'days':
+      return `${bucket.value}d`;
+  }
 }
 
 // --- Trio assembly ------------------------------------------------------------

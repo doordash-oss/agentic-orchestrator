@@ -1459,7 +1459,7 @@ describe('FeatureCockpit convergence', () => {
     render(<Harness />);
     const user = userEvent.setup();
 
-    const request = await screen.findByRole('dialog', { name: 'Agent needs your input' });
+    const request = await screen.findByRole('dialog', { name: 'Answer one question to resume' });
     await user.type(
       within(request).getByLabelText(/Which deployment window should implementation use/),
       'After packaged attention evidence passes.',
@@ -1475,7 +1475,7 @@ describe('FeatureCockpit convergence', () => {
     expect(mock.api.resolveGate).not.toHaveBeenCalled();
     await waitFor(() =>
       expect(
-        screen.queryByRole('dialog', { name: 'Agent needs your input' }),
+        screen.queryByRole('dialog', { name: 'Answer one question to resume' }),
       ).not.toBeInTheDocument(),
     );
   });
@@ -1644,18 +1644,18 @@ describe('FeatureCockpit convergence', () => {
     render(<Harness />);
     const user = userEvent.setup();
 
-    const request = await screen.findByRole('dialog', { name: 'Agent needs your input' });
+    const request = await screen.findByRole('dialog', { name: 'Answer one question to resume' });
     await user.click(within(request).getByRole('button', { name: 'Answer later' }));
     expect(
-      screen.queryByRole('dialog', { name: 'Agent needs your input' }),
+      screen.queryByRole('dialog', { name: 'Answer one question to resume' }),
     ).not.toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: 'Advance attention' }));
 
     expect(
-      within(await screen.findByRole('dialog', { name: 'Agent needs your input' })).getByLabelText(
-        /Which follow-up deployment window should implementation use/,
-      ),
+      within(
+        await screen.findByRole('dialog', { name: 'Answer one question to resume' }),
+      ).getByLabelText(/Which follow-up deployment window should implementation use/),
     ).toBeVisible();
   });
 

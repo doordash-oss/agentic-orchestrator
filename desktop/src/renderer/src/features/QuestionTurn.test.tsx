@@ -75,6 +75,11 @@ describe('QuestionConversationTurn', () => {
       within(turn).getByText('Which overall direction should this project take?'),
     ).toBeVisible();
     expect(within(turn).getByText('Recommended')).toBeVisible();
+    // The topic label is the question header alone; the mono note beside it
+    // carries the phase and what the agent is waiting for.
+    expect(within(turn).getByText('Project direction')).toBeVisible();
+    expect(within(turn).getByText('Inquire · waiting on you')).toBeVisible();
+    expect(screen.queryByText(/needs your call/)).not.toBeInTheDocument();
     expect(screen.queryByText(/not sent yet/)).not.toBeInTheDocument();
 
     await user.click(within(turn).getByRole('radio', { name: /Harden the review pipeline/ }));

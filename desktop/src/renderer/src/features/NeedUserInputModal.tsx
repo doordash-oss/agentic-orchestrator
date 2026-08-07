@@ -7,23 +7,107 @@ import {
   NeedUserInputVerificationDecision,
 } from './NeedUserInputVerificationDecision';
 import { parseIpcError } from '../wizard/ipcError';
+import { bucketElapsedSince } from './phaseRail';
 
 export type AttentionGate = Extract<AttentionItem, { kind: 'gate' }>;
+
+/**
+ * Spelled-out counts read as a sentence rather than a form field, which is
+ * what the title is. The gate caps its questions well inside this range;
+ * numerals are the honest fallback past it rather than a wrong word.
+ */
+const SPELLED_COUNTS = [
+  'zero',
+  'one',
+  'two',
+  'three',
+  'four',
+  'five',
+  'six',
+  'seven',
+  'eight',
+  'nine',
+  'ten',
+  'eleven',
+  'twelve',
+];
+
+/** "Answer two questions to resume" — the ask and the outcome in one line. */
+export function gateSheetTitle(questionCount: number): string {
+  if (questionCount === 0) return 'Resume the paused agent';
+  const count = SPELLED_COUNTS[questionCount] ?? String(questionCount);
+  return `Answer ${count} question${questionCount === 1 ? '' : 's'} to resume`;
+}
+
+/**
+ * The lede's first sentence, built only from facts actually present: the
+ * phase comes from the cockpit's snapshot, the iteration and stop time from
+ * the gate item. Any of them can be missing, so the sentence drops whole
+ * rather than naming a placeholder.
+ */
+export function gateStoppedSentence(inputs: {
+  phase?: string;
+  iteration?: number;
+  waitingSince?: string;
+}): string | undefined {
+  const since = formatStoppedAgo(inputs.waitingSince);
+  if (since === undefined) return undefined;
+  const subject = gateStoppedSubject(inputs.phase, inputs.iteration);
+  if (subject === undefined) return undefined;
+  return `${subject} stopped ${since}.`;
+}
+
+function gateStoppedSubject(phase: string | undefined, iteration: number | undefined) {
+  if (phase !== undefined && iteration !== undefined) return `${phase} #${iteration}`;
+  if (phase !== undefined) return phase;
+  if (iteration !== undefined) return `Iteration ${iteration}`;
+  return undefined;
+}
+
+/** The rail's buckets in prose, so `4h` there and `4 hours ago` here agree. */
+function formatStoppedAgo(waitingSince: string | undefined): string | undefined {
+  const bucket = bucketElapsedSince(waitingSince);
+  if (bucket === null) return undefined;
+  switch (bucket.unit) {
+    case 'sub-minute':
+      return 'moments ago';
+    case 'minutes':
+      return plural(bucket.value, 'minute');
+    case 'hours':
+      return plural(bucket.value, 'hour');
+    case 'days':
+      return plural(bucket.value, 'day');
+  }
+}
+
+function plural(value: number, unit: string): string {
+  return `${value} ${unit}${value === 1 ? '' : 's'} ago`;
+}
 
 export interface NeedUserInputModalProps {
   item: AttentionGate;
   busy: boolean;
   drafts: AttentionDrafts;
   setDrafts: Dispatch<SetStateAction<AttentionDrafts>>;
+  /** The run's current phase, for the lede. Absent when it isn't known. */
+  phase?: string;
   onAnswerLater(): void;
   onResolved(): Promise<void>;
 }
 
+/**
+ * The cycle gate as a window-modal sheet: the scrim covers the whole window
+ * and the sheet descends from its top edge, so the hold reads as something
+ * the window is waiting on rather than an app-blocking dialog. Answering
+ * later is always available and always saves, which is what the footer's
+ * `Saved as you type` note is there to make believable.
+ */
 export function NeedUserInputModal({
   item,
   busy,
   drafts,
   setDrafts,
+  phase,
   onAnswerLater,
   onResolved,
 }: NeedUserInputModalProps): React.ReactElement {
@@ -53,6 +137,14 @@ export function NeedUserInputModal({
   const complete = structuredVerification
     ? selectedVerificationAction === 'RETRY_AFTER_AUTH' || selectedVerificationAction === 'WAIVE'
     : item.questions.every((question) => (draft[question.index] ?? '').trim() !== '');
+  // A snapshot can carry an empty phase before the run names one; that is a
+  // missing fact, not a phase called "".
+  const gatePhase = phase === undefined || phase.trim() === '' ? undefined : phase;
+  const stopped = gateStoppedSentence({
+    ...(gatePhase === undefined ? {} : { phase: gatePhase }),
+    ...(item.iteration === undefined ? {} : { iteration: item.iteration }),
+    waitingSince: item.waitingSince,
+  });
 
   const saveDraft = useCallback(
     (currentItem = itemRef.current, currentDraft = draftRef.current): Promise<void> => {
@@ -103,99 +195,114 @@ export function NeedUserInputModal({
   };
 
   return (
-    <div className="cockpit__modal-backdrop need-input-modal__backdrop" onMouseDown={answerLater}>
+    <div className="sheet-scrim" onMouseDown={answerLater}>
       <div
         ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby={`${detailKey}-title`}
-        className="cockpit__modal need-input-modal"
+        className="sheet need-input-sheet"
         tabIndex={-1}
         onMouseDown={(event) => event.stopPropagation()}
       >
-        <header className="need-input-modal__header">
-          <p className="post-workspace__eyebrow">Agent paused · Input required</p>
-          <h2 id={`${detailKey}-title`}>
-            {structuredVerification ? 'Verification needs your input' : 'Agent needs your input'}
-          </h2>
-          <p>
-            {structuredVerification
-              ? `${item.verification!.blockers.length} required check(s) could not run.`
-              : (item.summary ??
-                'Answer the questions below, then resume the agent from the same checkpoint.')}
-          </p>
-        </header>
+        <div className="sheet__body">
+          <header className="need-input-sheet__header">
+            <p className="need-input-sheet__eyebrow">
+              <span aria-hidden="true">{'⚠'}</span> Agent paused · Input required
+            </p>
+            <h2 id={`${detailKey}-title`} className="need-input-sheet__title">
+              {structuredVerification
+                ? 'Verification needs your input'
+                : gateSheetTitle(item.questions.length)}
+            </h2>
+            {structuredVerification ? (
+              <p className="need-input-sheet__lede">
+                {item.verification!.blockers.length} required check(s) could not run.
+              </p>
+            ) : (
+              <p className="need-input-sheet__lede">
+                {stopped === undefined ? null : `${stopped} `}
+                It resumes from the same checkpoint — nothing is re-run.
+              </p>
+            )}
+            {!structuredVerification && item.summary !== undefined ? (
+              <p className="need-input-sheet__summary">{item.summary}</p>
+            ) : null}
+          </header>
 
-        <div className="need-input-modal__questions">
-          {structuredVerification && verificationQuestion !== undefined ? (
-            <NeedUserInputVerificationDecision
-              item={item}
-              selectedAction={selectedVerificationAction}
-              idPrefix={detailKey}
-              onSelect={(action) => {
-                const nextDraft = {
-                  ...draft,
-                  [verificationQuestion.index]: action,
-                };
-                draftRef.current = nextDraft;
-                setDrafts((current) => ({
-                  ...current,
-                  gates: {
-                    ...current.gates,
-                    [detailKey]: nextDraft,
-                  },
-                }));
-                void saveDraft(item, nextDraft).catch(() => undefined);
-              }}
-            />
-          ) : (
-            item.questions.map((question) => (
-              <label key={question.index} className="need-input-modal__question">
-                <span>
-                  <small>Question {question.index}</small>
-                  <strong>{question.prompt}</strong>
-                </span>
-                <textarea
-                  autoFocus={question.index === item.questions[0]?.index}
-                  value={draft[question.index] ?? ''}
-                  onChange={(event) => {
-                    const value = event.target.value;
-                    setDrafts((current) => ({
-                      ...current,
-                      gates: {
-                        ...current.gates,
-                        [detailKey]: {
-                          ...draft,
-                          [question.index]: value,
+          <div className="need-input-sheet__questions">
+            {structuredVerification && verificationQuestion !== undefined ? (
+              <NeedUserInputVerificationDecision
+                item={item}
+                selectedAction={selectedVerificationAction}
+                idPrefix={detailKey}
+                onSelect={(action) => {
+                  const nextDraft = {
+                    ...draft,
+                    [verificationQuestion.index]: action,
+                  };
+                  draftRef.current = nextDraft;
+                  setDrafts((current) => ({
+                    ...current,
+                    gates: {
+                      ...current.gates,
+                      [detailKey]: nextDraft,
+                    },
+                  }));
+                  void saveDraft(item, nextDraft).catch(() => undefined);
+                }}
+              />
+            ) : (
+              item.questions.map((question) => (
+                <label key={question.index} className="need-input-sheet__question">
+                  <span>
+                    <small>Question {question.index}</small>
+                    <strong>{question.prompt}</strong>
+                  </span>
+                  <textarea
+                    autoFocus={question.index === item.questions[0]?.index}
+                    placeholder="Type your answer"
+                    value={draft[question.index] ?? ''}
+                    onChange={(event) => {
+                      const value = event.target.value;
+                      setDrafts((current) => ({
+                        ...current,
+                        gates: {
+                          ...current.gates,
+                          [detailKey]: {
+                            ...draft,
+                            [question.index]: value,
+                          },
                         },
-                      },
-                    }));
-                  }}
-                  onBlur={() => void saveDraft().catch(() => undefined)}
-                />
-              </label>
-            ))
+                      }));
+                    }}
+                    onBlur={() => void saveDraft().catch(() => undefined)}
+                  />
+                </label>
+              ))
+            )}
+          </div>
+
+          {!structuredVerification && !complete ? (
+            <p id={`${detailKey}-hint`} className="need-input-sheet__hint">
+              Answer every question before resuming.
+            </p>
+          ) : null}
+          {error === null ? null : (
+            <p role="alert" className="form-field__error">
+              {error}
+            </p>
           )}
         </div>
 
-        {!structuredVerification && !complete ? (
-          <p id={`${detailKey}-hint`} className="need-input-modal__hint">
-            Answer every question before resuming.
-          </p>
-        ) : null}
-        {error === null ? null : (
-          <p role="alert" className="form-field__error">
-            {error}
-          </p>
-        )}
-
-        <footer className="need-input-modal__footer">
-          <button type="button" className="need-input-modal__later" onClick={answerLater}>
+        <footer className="sheet__footer">
+          <button type="button" className="sheet__footer-secondary" onClick={answerLater}>
             Answer later
           </button>
+          <span className="sheet__footer-note">Saved as you type</span>
           <button
             type="button"
-            className="need-input-modal__primary"
+            className="sheet__footer-primary"
             data-tone={
               structuredVerification && selectedVerificationAction === 'WAIVE'
                 ? 'warning'

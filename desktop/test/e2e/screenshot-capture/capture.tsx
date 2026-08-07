@@ -36,7 +36,7 @@ import { ConnectionShell } from '../../../src/renderer/src/components/Connection
 import { SetupWizard } from '../../../src/renderer/src/components/wizard/SetupWizard';
 import type { ReadinessSnapshot } from '../../../src/shared/ipc';
 import { UpdateNotice } from '../../../src/renderer/src/components/UpdateNotice';
-import { AmaDock } from '../../../src/renderer/src/components/AmaDock';
+import { AmaPanel } from '../../../src/renderer/src/components/AmaPanel';
 import { CommandPalette } from '../../../src/renderer/src/components/CommandPalette';
 import { MonacoBuffer } from '../../../src/renderer/src/components/monaco';
 import {
@@ -1252,12 +1252,8 @@ function CompletionScene({ scene }: { scene: string }): React.ReactElement {
 function BackgroundScene({ scene }: { scene: string }): React.ReactElement {
   const [drafts, setDrafts] = React.useState(emptyAttentionDrafts());
   const [attentionItems, setAttentionItems] = React.useState<AttentionItem[]>([]);
-  const amaRoute =
-    scene === 'background-ama-expanded' || scene === 'background-ama-constrained'
-      ? { id: 1, event: { target: 'ama' as const } }
-      : null;
   const paletteRoute =
-    scene === 'background-command-palette' || scene === 'background-ama-constrained'
+    scene === 'background-command-palette'
       ? { id: 2, event: { target: 'palette' as const } }
       : null;
 
@@ -1287,15 +1283,11 @@ function BackgroundScene({ scene }: { scene: string }): React.ReactElement {
             drafts={drafts}
             setDrafts={setDrafts}
             onJump={() => {}}
-            openRequest={scene === 'background-ama-compact' ? { id: 1 } : null}
+            openRequest={null}
           />
         </div>
       </header>
-      {scene === 'background-ama-compact' ? (
-        <div className="tab-panel" style={{ flex: 1, minHeight: 0 }}>
-          <SettingsPanel />
-        </div>
-      ) : (
+      {
         <div className="tab-panel" style={{ flex: 1, minHeight: 0 }}>
           <header className="overview-surface__header">
             <div>
@@ -1322,14 +1314,7 @@ function BackgroundScene({ scene }: { scene: string }): React.ReactElement {
           </section>
           {scene === 'background-close-dialog' ? <CloseDialogScene /> : null}
         </div>
-      )}
-      <AmaDock
-        attentionItems={attentionItems}
-        refreshAttention={refreshAttention}
-        attentionDrafts={drafts}
-        setAttentionDrafts={setDrafts}
-        routeRequest={amaRoute}
-      />
+      }
       <CommandPalette ready={true} routeRequest={paletteRoute} onRoute={route} />
     </div>
   );
@@ -1501,11 +1486,57 @@ function CreationSheetScene(): React.ReactElement {
   );
 }
 
+/**
+ * The floating AMA panel inside the real shell: the same WorkspaceShell the app
+ * mounts (so the panel floats over a live cockpit and the sidebar footer shows
+ * its own active-session state) plus the real AmaPanel, opened from the
+ * persisted preference exactly as the app opens it. The evidence spec drives
+ * the attachment, confirmation, drag, resize, and expand states from here.
+ */
+function AmaPanelScene(): React.ReactElement {
+  const [drafts, setDrafts] = React.useState(emptyAttentionDrafts());
+  const [attentionItems, setAttentionItems] = React.useState<AttentionItem[]>([]);
+  const [amaSessionActive, setAmaSessionActive] = React.useState(false);
+
+  React.useEffect(() => {
+    void window.agentico.getAttention().then((snapshot) => setAttentionItems(snapshot.items));
+  }, []);
+
+  const refreshAttention = React.useCallback(async () => {
+    const snapshot = await window.agentico.getAttention();
+    setAttentionItems(snapshot.items);
+    return snapshot.items;
+  }, []);
+
+  return (
+    <div className="app-frame" style={{ height: '100vh' }}>
+      <WorkspaceShell
+        attentionItems={attentionItems}
+        refreshAttention={refreshAttention}
+        attentionDrafts={drafts}
+        setAttentionDrafts={setDrafts}
+        amaSessionActive={amaSessionActive}
+      />
+      <AmaPanel
+        attentionItems={attentionItems}
+        refreshAttention={refreshAttention}
+        attentionDrafts={drafts}
+        setAttentionDrafts={setDrafts}
+        routeRequest={null}
+        onSessionActiveChange={setAmaSessionActive}
+      />
+    </div>
+  );
+}
+
 function CaptureApp() {
   const scene = getScene();
 
   if (scene.startsWith('creation-sheet')) {
     return <CreationSheetScene />;
+  }
+  if (scene === 'ama-panel') {
+    return <AmaPanelScene />;
   }
   if (scene === 'overview-lanes') {
     return <OverviewLanesScene />;

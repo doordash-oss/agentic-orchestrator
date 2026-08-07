@@ -94,6 +94,7 @@ export function WorkspaceShell({
   onOpenUpdatesSettings = () => {},
   onInstallUpdateWhenIdle = async () => {},
   onOpenAma = () => {},
+  amaSessionActive = false,
 }: {
   attentionItems?: AttentionItem[];
   refreshAttention?: () => Promise<AttentionItem[]>;
@@ -116,6 +117,8 @@ export function WorkspaceShell({
   onInstallUpdateWhenIdle?(): Promise<void>;
   /** Owned by App: dispatches the same routeRequest the ⌘⇧M accelerator does. */
   onOpenAma?(): void;
+  /** True while the singleton AMA chat session is running. */
+  amaSessionActive?: boolean;
 }) {
   // null while the local shell prefs are being restored.
   const [shell, setShell] = useState<ShellPrefs | null>(null);
@@ -136,6 +139,11 @@ export function WorkspaceShell({
     : isConnectionErrorState(connection)
       ? 'error'
       : 'progress';
+  // A connection problem always wins the footer row: an active assistant must
+  // never mask a runtime that needs attention.
+  const showAmaActive = runtimeReady && amaSessionActive;
+  const footerLabel = showAmaActive ? 'Ask Agentico is active' : runtimeLabel;
+  const footerTone = showAmaActive ? 'ama' : runtimeTone;
   const [actionsSlot, setActionsSlot] = useState<HTMLDivElement | null>(null);
   const [overflowSlot, setOverflowSlot] = useState<HTMLDivElement | null>(null);
   // The cockpit owns its inspector's open/closed state itself, so it resets
@@ -609,13 +617,12 @@ export function WorkspaceShell({
             );
           })}
         </div>
-        <div className="sidebar__footer" data-tone={runtimeTone}>
+        <div className="sidebar__footer" data-tone={footerTone}>
           <span className="sidebar__runtime" role="status">
-            <span aria-hidden="true">●</span> {runtimeLabel}
+            <span aria-hidden="true">●</span> {footerLabel}
           </span>
-          {/* ⌥Space is Phase 9's shortcut; ⌘⇧M is what actually opens AMA today. */}
           <button type="button" className="sidebar__ama" onClick={onOpenAma}>
-            Ask ⌘⇧M
+            Ask ⌥Space
           </button>
         </div>
       </nav>

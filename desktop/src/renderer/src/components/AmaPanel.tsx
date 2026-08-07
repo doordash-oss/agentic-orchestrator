@@ -7,13 +7,16 @@ import {
   type Dispatch,
   type ClipboardEvent,
   type FormEvent,
+  type PointerEvent as ReactPointerEvent,
   type SetStateAction,
 } from 'react';
 import {
   ATTENTION_ALREADY_RESOLVED_NOTICE,
   CHAT_SESSION_ID,
   CREATION_IMAGE_LIMIT,
+  defaultAmaGeometry,
   isTerminalChatStatus,
+  type AmaGeometry,
   type AttentionItem,
   type RoutedRequest,
   type SessionDetail,
@@ -33,32 +36,63 @@ import {
 import { useAttentionDraftSaves } from '../features/useAttentionDraftSaves';
 import { buildConversation, reconcileMessages } from '../features/transcript/conversation';
 import { ConversationTranscript } from '../features/transcript/ConversationTranscript';
-import { CloseIcon, MaximizeIcon } from './icons';
+import {
+  clampAmaGeometry,
+  dragAmaGeometry,
+  resizeAmaGeometry,
+  RESIZE_EDGES,
+  type ResizeEdge,
+} from './amaGeometry';
+import { CloseIcon, MaximizeIcon, MinimizeIcon } from './icons';
 import { useModalDismiss } from './useModalDismiss';
 
-type DrawerMode = 'compact' | 'expanded';
 type TranscriptState =
   | { phase: 'idle'; messages: TranscriptMessage[]; cursor: TranscriptCursor }
   | { phase: 'loading'; messages: TranscriptMessage[]; cursor: TranscriptCursor }
   | { phase: 'ready'; messages: TranscriptMessage[]; cursor: TranscriptCursor }
   | { phase: 'error'; message: string; messages: TranscriptMessage[]; cursor: TranscriptCursor };
 
+/** A live drag or resize: the pointer and geometry the gesture started from. */
+interface Gesture {
+  pointerId: number;
+  kind: 'move' | ResizeEdge;
+  startX: number;
+  startY: number;
+  start: AmaGeometry;
+}
+
 const EMPTY_CURSOR: TranscriptCursor = { total: 0, start: 0, end: 0 };
 
-export function AmaDock({
+function viewport(): { width: number; height: number } {
+  return { width: window.innerWidth, height: window.innerHeight };
+}
+
+/**
+ * The floating Ask Agentico panel: a draggable, resizable panel inside the
+ * main window, closed by default and persisted through the AMA settings
+ * sub-schema (`drawer` carries closed/open, `geometry` the placement) over the
+ * existing settings round trip. ⌥Space toggles it from anywhere in the window;
+ * every routed `ama` request opens, expands, and focuses the composer.
+ */
+export function AmaPanel({
   attentionItems,
   refreshAttention,
   attentionDrafts,
   setAttentionDrafts,
   routeRequest,
+  onSessionActiveChange,
 }: {
   attentionItems: AttentionItem[];
   refreshAttention(): Promise<AttentionItem[]>;
   attentionDrafts?: AttentionDrafts;
   setAttentionDrafts?: Dispatch<SetStateAction<AttentionDrafts>>;
   routeRequest: RoutedRequest | null;
+  /** Lets the shell's sidebar footer show the active-session state. */
+  onSessionActiveChange?(active: boolean): void;
 }) {
-  const [drawer, setDrawer] = useState<DrawerMode>('compact');
+  const [open, setOpen] = useState(false);
+  const [geometry, setGeometry] = useState<AmaGeometry>(defaultAmaGeometry());
+  const [gesture, setGesture] = useState<Gesture | null>(null);
   const [maximized, setMaximized] = useState(false);
   const [session, setSession] = useState<SessionDetail | null>(null);
   const [transcript, setTranscript] = useState<TranscriptState>({
@@ -75,12 +109,19 @@ export function AmaDock({
   const [attentionBusy, setAttentionBusy] = useState<string | null>(null);
   const [localDrafts, setLocalDrafts] = useState(emptyAttentionDrafts);
   const [pinToBottom, setPinToBottom] = useState(0);
+  const [focusToken, setFocusToken] = useState(0);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const confirmEndRef = useRef<HTMLButtonElement>(null);
   const modalRef = useRef<HTMLElement>(null);
   const maximizeRef = useRef<HTMLButtonElement>(null);
   const subscriptionId = useRef<string | null>(null);
   const subscriptionGeneration = useRef(0);
+  // The panel always persists both AMA fields together: the settings patch
+  // replaces the whole `ama` object, so sending one field would reset the other.
+  const openRef = useRef(open);
+  const geometryRef = useRef(geometry);
+  openRef.current = open;
+  geometryRef.current = geometry;
   const activeDrafts = attentionDrafts ?? localDrafts;
   const updateDrafts = setAttentionDrafts ?? setLocalDrafts;
 
@@ -110,10 +151,28 @@ export function AmaDock({
       lastConversationItem?.kind === 'message' &&
       lastConversationItem.role === 'user');
 
-  const persistDrawer = useCallback((next: DrawerMode) => {
-    setDrawer(next);
-    window.agentico.updateSettings({ ama: { drawer: next } }).catch(() => undefined);
+  useEffect(() => {
+    onSessionActiveChange?.(sessionActive);
+  }, [onSessionActiveChange, sessionActive]);
+
+  const persistPrefs = useCallback((next: { open?: boolean; geometry?: AmaGeometry }): void => {
+    const nextOpen = next.open ?? openRef.current;
+    const nextGeometry = next.geometry ?? geometryRef.current;
+    window.agentico
+      .updateSettings({
+        ama: { drawer: nextOpen ? 'expanded' : 'compact', geometry: nextGeometry },
+      })
+      .catch(() => undefined);
   }, []);
+
+  const setOpenPersisted = useCallback(
+    (next: boolean): void => {
+      setOpen(next);
+      if (!next) setMaximized(false);
+      persistPrefs({ open: next });
+    },
+    [persistPrefs],
+  );
 
   const closeMaximized = useCallback(() => setMaximized(false), []);
   useModalDismiss(modalRef, closeMaximized, maximized);
@@ -180,7 +239,9 @@ export function AmaDock({
     window.agentico
       .getSettings()
       .then((settings) => {
-        if (alive) setDrawer(settings.ama.drawer);
+        if (!alive) return;
+        setOpen(settings.ama.drawer === 'expanded');
+        setGeometry(clampAmaGeometry(settings.ama.geometry, viewport()));
       })
       .catch(() => undefined);
     void refreshSession();
@@ -189,14 +250,45 @@ export function AmaDock({
     };
   }, [refreshSession]);
 
+  // The panel is always fully inside the window, including when the window is
+  // resized around it — down to the window minimum, where it shrinks to fit.
+  useEffect(() => {
+    const onResize = (): void => setGeometry((current) => clampAmaGeometry(current, viewport()));
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+
+  // ⌥Space toggles the panel from anywhere in the window, including from a
+  // focused text field: the default is prevented so macOS never inserts the
+  // non-breaking space the chord would otherwise type.
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (!event.altKey || event.metaKey || event.ctrlKey) return;
+      // macOS reports ⌥Space as a non-breaking space, not ' '.
+      if (event.code !== 'Space' && event.key !== ' ' && event.key !== '\u00A0') return;
+      event.preventDefault();
+      setOpenPersisted(!openRef.current);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [setOpenPersisted]);
+
+  // Every routed `ama` request opens, expands, and focuses the composer; a
+  // route never closes an open panel. The composer only exists once the panel
+  // is open, so the focus is a separate effect gated on both.
   useEffect(() => {
     if (routeRequest?.event.target !== 'ama') return;
-    persistDrawer('expanded');
-    requestAnimationFrame(() => inputRef.current?.focus());
-  }, [persistDrawer, routeRequest]);
+    setOpenPersisted(true);
+    setFocusToken((token) => token + 1);
+  }, [routeRequest, setOpenPersisted]);
 
   useEffect(() => {
-    if (drawer !== 'expanded') return;
+    if (focusToken === 0 || !open) return;
+    inputRef.current?.focus();
+  }, [focusToken, open]);
+
+  useEffect(() => {
+    if (!open) return;
     let cancelled = false;
     void refreshSession();
     void loadTranscript().then(async (from) => {
@@ -212,7 +304,7 @@ export function AmaDock({
       cancelled = true;
       closeOutputSubscription();
     };
-  }, [closeOutputSubscription, drawer, loadTranscript, refreshSession, replaceOutputSubscription]);
+  }, [closeOutputSubscription, loadTranscript, open, refreshSession, replaceOutputSubscription]);
 
   useEffect(
     () =>
@@ -256,6 +348,44 @@ export function AmaDock({
     [loadTranscript, refreshSession],
   );
 
+  // Drag and resize run off window-level pointer listeners so a gesture keeps
+  // tracking when the pointer leaves the panel, and persist once on release.
+  useEffect(() => {
+    if (gesture === null) return;
+    const onMove = (event: PointerEvent): void => {
+      const delta = { x: event.clientX - gesture.startX, y: event.clientY - gesture.startY };
+      setGeometry(
+        gesture.kind === 'move'
+          ? dragAmaGeometry(gesture.start, delta, viewport())
+          : resizeAmaGeometry(gesture.start, gesture.kind, delta, viewport()),
+      );
+    };
+    const onEnd = (): void => {
+      setGesture(null);
+      persistPrefs({ geometry: geometryRef.current });
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onEnd);
+    window.addEventListener('pointercancel', onEnd);
+    return () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onEnd);
+      window.removeEventListener('pointercancel', onEnd);
+    };
+  }, [gesture, persistPrefs]);
+
+  const beginGesture = (event: ReactPointerEvent, kind: Gesture['kind']): void => {
+    if (maximized || event.button !== 0) return;
+    event.preventDefault();
+    setGesture({
+      pointerId: event.pointerId,
+      kind,
+      startX: event.clientX,
+      startY: event.clientY,
+      start: geometryRef.current,
+    });
+  };
+
   const submit = async (event: FormEvent): Promise<void> => {
     event.preventDefault();
     const text = message.trim();
@@ -267,7 +397,7 @@ export function AmaDock({
     setPinToBottom((value) => value + 1);
     setBusy(true);
     setNotice('');
-    persistDrawer('expanded');
+    setOpenPersisted(true);
     try {
       await window.agentico.startChat({ message: text, images: [...submittedImages] });
       await refreshSession();
@@ -367,32 +497,44 @@ export function AmaDock({
     },
   });
 
+  if (!open) return null;
+
   return (
     <div
-      className="ama-dock__modal-layer"
+      className="ama-panel__modal-layer"
       data-open={maximized}
       onMouseDown={maximized ? closeMaximized : undefined}
     >
       <aside
         ref={modalRef}
-        className="ama-dock"
-        data-mode={maximized ? 'expanded' : drawer}
+        className="ama-panel"
+        data-maximized={maximized}
+        data-dragging={gesture !== null}
+        style={
+          maximized
+            ? undefined
+            : {
+                right: `${geometry.right}px`,
+                bottom: `${geometry.bottom}px`,
+                width: `${geometry.width}px`,
+                height: `${geometry.height}px`,
+              }
+        }
         aria-label={maximized ? 'Expanded AMA' : 'Ask Agentico'}
         role={maximized ? 'dialog' : undefined}
         aria-modal={maximized ? true : undefined}
         tabIndex={maximized ? -1 : undefined}
         onMouseDown={maximized ? (event) => event.stopPropagation() : undefined}
       >
-        <header className="ama-dock__header">
-          <button
-            type="button"
-            className="ama-dock__toggle"
-            aria-expanded={drawer === 'expanded'}
-            onClick={() => persistDrawer(drawer === 'expanded' ? 'compact' : 'expanded')}
-          >
-            AMA
-          </button>
-          <p className="ama-dock__status">
+        <header
+          className="ama-panel__header"
+          onPointerDown={(event) => {
+            if ((event.target as HTMLElement).closest('button') !== null) return;
+            beginGesture(event, 'move');
+          }}
+        >
+          <p className="ama-panel__title">Ask Agentico</p>
+          <p className="ama-panel__status">
             {sessionActive
               ? 'Active'
               : transcript.messages.length > 0
@@ -403,34 +545,28 @@ export function AmaDock({
           <button
             ref={maximizeRef}
             type="button"
-            className="ama-dock__icon-button"
+            className="ama-panel__icon-button"
             aria-label={maximized ? 'Close expanded AMA' : 'Expand AMA'}
             title={maximized ? 'Close expanded AMA' : 'Expand AMA'}
             onClick={() => setMaximized((current) => !current)}
           >
-            {maximized ? <CloseIcon /> : <MaximizeIcon />}
+            {maximized ? <MinimizeIcon /> : <MaximizeIcon />}
           </button>
-          {sessionActive ? (
-            <button
-              type="button"
-              className="ama-dock__end"
-              disabled={busy}
-              aria-expanded={confirmingEnd}
-              onClick={askToEndChat}
-            >
-              End AMA
-            </button>
-          ) : null}
+          <button
+            type="button"
+            className="ama-panel__icon-button"
+            aria-label="Close Ask Agentico"
+            title="Close Ask Agentico"
+            onClick={() => setOpenPersisted(false)}
+          >
+            <CloseIcon />
+          </button>
         </header>
-        <div
-          className="ama-dock__drawer"
-          data-has-attention={amaAttentionItems.length > 0}
-          hidden={drawer !== 'expanded' && !maximized}
-        >
+        <div className="ama-panel__body" data-has-attention={amaAttentionItems.length > 0}>
           {amaAttentionItems.length > 0 ? (
-            <section className="ama-dock__attention" aria-label="AMA questions">
+            <section className="ama-panel__attention" aria-label="AMA questions">
               {amaAttentionItems.map((item) => (
-                <div key={`${item.kind}:${item.id}`} className="ama-dock__attention-item">
+                <div key={`${item.kind}:${item.id}`} className="ama-panel__attention-item">
                   <AttentionDetail
                     item={item}
                     busy={attentionBusy === item.id}
@@ -444,7 +580,7 @@ export function AmaDock({
             </section>
           ) : null}
           <ConversationTranscript
-            className="ama-dock__transcript"
+            className="ama-panel__transcript"
             ariaLabel="AMA transcript"
             items={conversation}
             waiting={waitingForAssistant}
@@ -457,7 +593,7 @@ export function AmaDock({
               </>
             }
             emptyState={
-              <div className="ama-dock__empty">
+              <div className="ama-panel__empty">
                 <strong>Ask anything about this workspace.</strong>
                 <span>
                   I can inspect the project, explain what is happening, and help you decide what to
@@ -468,24 +604,20 @@ export function AmaDock({
           />
         </div>
         {notice !== '' ? (
-          <p className="ama-dock__notice" role="status" aria-live="polite">
+          <p className="ama-panel__notice" role="status" aria-live="polite">
             {notice}
           </p>
         ) : null}
         {confirmingEnd ? (
-          <div
-            className="bulk-preview__confirm ama-dock__confirm"
-            role="group"
-            aria-label="End AMA confirmation"
-          >
-            <p className="bulk-preview__confirm-text">
+          <div className="ama-panel__confirm" role="group" aria-label="End session confirmation">
+            <p className="ama-panel__confirm-text">
               End the active AMA session. The transcript stays read-only until a new AMA replaces
               it.
             </p>
-            <div className="ama-dock__confirm-actions">
+            <div className="ama-panel__confirm-actions">
               <button
                 type="button"
-                className="ama-dock__toggle"
+                className="ama-panel__secondary"
                 disabled={busy}
                 onClick={() => setConfirmingEnd(false)}
               >
@@ -494,20 +626,21 @@ export function AmaDock({
               <button
                 ref={confirmEndRef}
                 type="button"
-                className="bulk-preview__run"
+                className="ama-panel__danger"
                 disabled={busy}
                 onClick={() => void endChat()}
               >
-                End AMA
+                End session
               </button>
             </div>
           </div>
         ) : null}
-        <form className="ama-dock__composer" onSubmit={(event) => void submit(event)}>
+        <form className="ama-panel__composer" onSubmit={(event) => void submit(event)}>
           {images.length > 0 ? (
-            <ol className="composer__chips ama-dock__attachments" aria-label="Attached images">
+            <ol className="ama-panel__attachments" aria-label="Attached images">
               {images.map((image) => (
-                <li key={image} className="composer__chip" data-kind="image">
+                <li key={image} className="ama-panel__attachment" data-kind="image">
+                  <span aria-hidden="true" className="ama-panel__attachment-glyph" />
                   <span>{basename(image)}</span>
                   <button
                     type="button"
@@ -534,10 +667,39 @@ export function AmaDock({
             placeholder="Ask about this workspace"
             rows={1}
           />
-          <button type="submit" disabled={busy || message.trim() === ''}>
-            Send
-          </button>
+          <div className="ama-panel__composer-actions">
+            {sessionActive ? (
+              <button
+                type="button"
+                className="ama-panel__danger"
+                disabled={busy}
+                aria-expanded={confirmingEnd}
+                onClick={askToEndChat}
+              >
+                End session
+              </button>
+            ) : null}
+            <button
+              type="submit"
+              className="ama-panel__send"
+              disabled={busy || message.trim() === ''}
+            >
+              Send
+              <span aria-hidden="true"> ↵</span>
+            </button>
+          </div>
         </form>
+        {maximized
+          ? null
+          : RESIZE_EDGES.map((edge) => (
+              <span
+                key={edge}
+                className="ama-panel__grip"
+                data-edge={edge}
+                aria-hidden="true"
+                onPointerDown={(event) => beginGesture(event, edge)}
+              />
+            ))}
       </aside>
     </div>
   );

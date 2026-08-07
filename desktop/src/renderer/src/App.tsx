@@ -1,6 +1,6 @@
 import type { AppRouteEvent, AttentionItem, RoutedRequest, UpdateState } from '../../shared/ipc';
 import { ConnectionShell } from './components/ConnectionShell';
-import { AmaDock } from './components/AmaDock';
+import { AmaPanel } from './components/AmaPanel';
 import { CommandPalette } from './components/CommandPalette';
 import { HelpOverlay } from './components/HelpOverlay';
 import { ReadinessGate } from './components/ReadinessGate';
@@ -26,6 +26,9 @@ export default function App() {
   } | null>(null);
   const [routeRequest, setRouteRequest] = useState<RoutedRequest | null>(null);
   const [updateState, setUpdateState] = useState<UpdateState | null>(null);
+  // Owned here so the sidebar footer can show the mock's active-session state
+  // while the panel itself owns the singleton chat session.
+  const [amaSessionActive, setAmaSessionActive] = useState(false);
   const [updateDismissedVersion, setUpdateDismissedVersion] = useState<string | null>(null);
   const [schedulingUpdate, setSchedulingUpdate] = useState(false);
   const routeSequence = useRef(0);
@@ -146,6 +149,7 @@ export default function App() {
               requestRoute({ target: 'settings', settingsSection: 'updates' })
             }
             onOpenAma={() => requestRoute({ target: 'ama' })}
+            amaSessionActive={amaSessionActive}
             onInstallUpdateWhenIdle={async () => {
               try {
                 setSchedulingUpdate(true);
@@ -155,12 +159,13 @@ export default function App() {
               }
             }}
           />
-          <AmaDock
+          <AmaPanel
             attentionItems={attentionItems}
             refreshAttention={refreshAttention}
             attentionDrafts={attentionDrafts}
             setAttentionDrafts={setAttentionDrafts}
             routeRequest={routeRequest}
+            onSessionActiveChange={setAmaSessionActive}
           />
         </>
       ) : (

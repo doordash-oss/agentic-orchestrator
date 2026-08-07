@@ -396,207 +396,428 @@ body {
   color: var(--color-signal);
 }
 
-/* --- AMA dock -------------------------------------------------------------- */
-
-.ama-dock__modal-layer {
+/* --- The floating Ask Agentico panel ---------------------------------------
+ * A panel inside the main window, not a bar docked to its bottom edge: the
+ * sidebar's vibrant material, a window-radius corner, the material-edge
+ * hairline ring, and the deep panel shadow. It floats above the content layer
+ * and below every popover-dialog, sheet, and the command palette. Dragging
+ * lives on the header, resizing on the eight grips; both write the geometry
+ * the panel restores on the next launch.
+ *
+ * Platform note: `backdrop-filter` over native window vibrancy has documented
+ * double-render bugs on macOS. If that artifact shows up on real hardware, the
+ * fallback is an opaque `--raised` background with the blur dropped — a
+ * visual-only change, made here and nowhere else.
+ */
+.ama-panel__modal-layer {
   display: contents;
 }
 
-.ama-dock__modal-layer[data-open='true'] {
+.ama-panel__modal-layer[data-open='true'] {
   position: fixed;
   inset: 0;
   z-index: 60;
   display: grid;
   place-items: center;
-  padding: clamp(var(--space-3), 4vw, var(--space-6));
-  background: rgb(5 9 8 / 74%);
+  padding: clamp(var(--space-4), 4vw, var(--space-6));
+  background: var(--color-scrim);
 }
 
-.ama-dock__modal-layer[data-open='true'] .ama-dock {
-  width: min(88rem, 100%);
-  height: min(88vh, 980px);
+.ama-panel {
+  position: fixed;
+  z-index: 35;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  border-radius: var(--bench-radius-window);
+  background: var(--material);
+  backdrop-filter: blur(46px) saturate(170%);
+  box-shadow:
+    0 0 0 var(--bench-hairline-width) var(--material-edge),
+    var(--shadow);
+  color: var(--text);
+  font: 13px var(--bench-font-text);
+}
+
+/* The panel can float over the toolbar, which is a window drag region on
+ * macOS — without this, dragging its header would move the window. */
+:root[data-platform='darwin'] .ama-panel {
+  -webkit-app-region: no-drag;
+}
+
+/* Expanded: the same panel as a whole-window presentation on the raised
+ * surface, where the material has nothing behind it to sample. */
+.ama-panel[data-maximized='true'] {
+  position: relative;
+  inset: auto;
+  width: min(1180px, 100%);
+  height: min(88vh, 920px);
   max-height: 100%;
-  border: 1px solid var(--color-hairline);
-  border-radius: var(--radius);
-  box-shadow: 0 24px 70px rgb(0 0 0 / 40%);
+  background: var(--content);
+  backdrop-filter: none;
+  box-shadow:
+    0 0 0 var(--bench-hairline-width) var(--material-edge),
+    var(--sheet-shadow);
 }
 
-.ama-dock__modal-layer[data-open='true'] .ama-dock:focus-visible {
+.ama-panel[data-maximized='true']:focus-visible {
   outline: none;
 }
 
-.ama-dock {
-  flex: 0 0 auto;
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  grid-template-rows: auto auto;
-  align-items: center;
-  gap: var(--space-2);
-  border-top: 1px solid var(--color-hairline);
-  background: var(--color-panel);
-  padding: var(--space-2) var(--space-4);
-}
-
-.ama-dock[data-mode='expanded'] {
-  grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: auto minmax(0, 1fr) auto auto auto;
-  align-items: stretch;
-  height: min(48vh, 520px);
-  max-height: calc(100vh - 72px);
-  overflow: hidden;
-}
-
-.ama-dock__header {
-  grid-column: 1 / -1;
+.ama-panel__header {
+  flex: none;
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  min-width: 0;
+  min-height: 34px;
+  /* 12px of clearance on both sides keeps the header's own buttons clear of
+     the 10px corner resize grips below. */
+  padding: 0 var(--space-3);
+  border-bottom: var(--bench-hairline-width) solid var(--material-edge);
+  user-select: none;
 }
 
-.ama-dock__toggle,
-.ama-dock__end,
-.ama-dock__composer button {
-  min-height: 32px;
-  border: 1px solid var(--color-hairline);
-  border-radius: var(--radius);
-  background: transparent;
-  color: var(--color-text);
-  font: 700 12px var(--font-mono);
-  cursor: pointer;
+.ama-panel:not([data-maximized='true']) .ama-panel__header {
+  cursor: grab;
 }
 
-.ama-dock__icon-button {
-  display: inline-grid;
-  min-width: 32px;
-  min-height: 32px;
-  place-items: center;
-  border: 1px solid var(--color-hairline);
-  border-radius: var(--radius);
-  background: transparent;
-  color: var(--color-text);
-  cursor: pointer;
+.ama-panel[data-dragging='true']:not([data-maximized='true']) .ama-panel__header {
+  cursor: grabbing;
 }
 
-.ama-dock__toggle[aria-expanded='true'] {
-  border-color: var(--color-signal);
-  background: color-mix(in srgb, var(--color-signal) 10%, transparent);
+.ama-panel__title {
+  flex: none;
+  margin: 0;
+  color: var(--text);
+  font: 600 12.5px var(--bench-font-text);
 }
 
-.ama-dock__status {
+.ama-panel__status {
+  flex: 1 1 auto;
   min-width: 0;
   margin: 0;
-  color: var(--color-muted);
-  font: 12px var(--font-mono);
+  color: var(--faint);
+  font: 11px var(--bench-font-mono);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.ama-dock__end {
-  color: var(--color-danger);
-}
-
-.ama-dock__composer {
-  grid-column: 1 / -1;
+.ama-panel__icon-button {
+  flex: none;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: var(--bench-radius-control);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.ama-panel__icon-button:hover {
+  background: var(--raised);
+  color: var(--text);
+}
+
+.ama-panel__icon-button svg {
+  width: 13px;
+  height: 13px;
+}
+
+.ama-panel__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* A pending AMA question stacks above the transcript rather than beside it —
+ * the panel is 404px wide, not a full-width drawer. */
+.ama-panel__attention {
+  flex: 0 1 auto;
+  min-height: 0;
+  max-height: 55%;
+  overflow: auto;
+  padding: var(--space-2) var(--space-3);
+  border-bottom: var(--bench-hairline-width) solid var(--material-edge);
+}
+
+.ama-panel__attention-item + .ama-panel__attention-item {
+  margin-top: var(--space-2);
+  padding-top: var(--space-2);
+  border-top: var(--bench-hairline-width) solid var(--hairline);
+}
+
+.ama-panel .ama-panel__transcript {
+  flex: 1 1 auto;
+  min-height: 0;
+  gap: var(--space-3);
+  padding: var(--space-3);
+}
+
+/* Expanded, the panel is a reading surface: generous side margins and a
+ * capped measure, so a whole-window transcript never runs 1100px per line. */
+.ama-panel[data-maximized='true'] .ama-panel__transcript {
+  padding: var(--space-5) clamp(var(--space-5), 6vw, 96px);
+}
+
+.ama-panel[data-maximized='true'] .conversation__message {
+  max-width: 78ch;
+}
+
+/* Your turns carry the 2px accent left rule; Agentico's stay plain, so the
+ * dialogue scans without bubbles. */
+.ama-panel .conversation__message[data-role='user'] {
+  border-left: 2px solid var(--accent);
+  padding-left: 10px;
+}
+
+.ama-panel .conversation__message-role {
+  color: var(--faint);
+  font: 600 11px var(--bench-font-text);
+}
+
+.ama-panel .conversation__message p {
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.ama-panel__notice {
+  flex: none;
+  min-width: 0;
+  margin: 0;
+  padding: 0 var(--space-3) var(--space-2);
+  color: var(--muted);
+  font: 11px var(--bench-font-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ama-panel__confirm {
+  flex: none;
+  display: grid;
   gap: var(--space-2);
+  margin: 0 var(--space-3) var(--space-2);
+  border: var(--bench-hairline-width) solid var(--bad);
+  border-radius: var(--bench-radius-card);
+  padding: var(--space-2) var(--space-3);
+  background: color-mix(in srgb, var(--bad) 10%, transparent);
+}
+
+.ama-panel__confirm-text {
+  margin: 0;
+  color: var(--text);
+  font: 12px var(--bench-font-text);
+}
+
+.ama-panel__confirm-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+.ama-panel__composer {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border-top: var(--bench-hairline-width) solid var(--material-edge);
+}
+
+.ama-panel__composer textarea {
   width: 100%;
+  min-height: 32px;
+  max-height: 120px;
+  resize: none;
+  border: var(--bench-hairline-width) solid var(--hairline);
+  border-radius: var(--bench-radius-control);
+  background: var(--content);
+  color: var(--text);
+  padding: 7px var(--space-2);
+  font: 12.5px var(--bench-font-text);
 }
 
-.ama-dock__attachments {
-  grid-column: 1 / -1;
+.ama-panel__composer textarea::placeholder {
+  color: var(--faint);
 }
 
-.ama-dock__composer textarea {
-  width: 100%;
-  min-height: 36px;
-  max-height: 96px;
-  resize: vertical;
-  border: 1px solid var(--color-hairline);
-  border-radius: 12px;
-  background: var(--color-bg);
-  color: var(--color-text);
-  padding: var(--space-2);
-  font: 13px var(--font-body);
+/* End session sits with the composer, per the mock: the destructive verb
+ * belongs to the session you are typing into, not to the panel's chrome. */
+.ama-panel__composer-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
 }
 
-.ama-dock__composer button {
-  min-width: 70px;
-  background: var(--color-signal);
-  color: var(--color-bg);
+.ama-panel__secondary {
+  border: var(--bench-hairline-width) solid var(--hairline);
+  border-radius: var(--bench-radius-control);
+  padding: 4px var(--space-2);
+  background: var(--content);
+  color: var(--text);
+  font: 600 11.5px var(--bench-font-text);
+  cursor: pointer;
 }
 
-.ama-dock__composer button:disabled,
-.ama-dock__end:disabled,
-.ama-dock__icon-button:disabled {
+.ama-panel__secondary:hover:not(:disabled) {
+  background: var(--raised);
+}
+
+.ama-panel__danger {
+  border: var(--bench-hairline-width) solid var(--bad);
+  border-radius: var(--bench-radius-control);
+  padding: 4px var(--space-2);
+  background: color-mix(in srgb, var(--bad) 10%, transparent);
+  color: var(--bad);
+  font: 600 11.5px var(--bench-font-text);
+  cursor: pointer;
+}
+
+.ama-panel__danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--bad) 18%, transparent);
+}
+
+.ama-panel__send {
+  margin-left: auto;
+  border: 0;
+  border-radius: var(--bench-radius-control);
+  padding: 4px var(--space-3);
+  background: var(--accent);
+  color: #fff;
+  font: 600 11.5px var(--bench-font-text);
+  cursor: pointer;
+}
+
+.ama-panel__send:hover:not(:disabled) {
+  opacity: 0.9;
+}
+
+.ama-panel__send:disabled,
+.ama-panel__secondary:disabled,
+.ama-panel__danger:disabled,
+.ama-panel__icon-button:disabled {
   opacity: 0.45;
   cursor: default;
 }
 
-.ama-dock__notice {
-  grid-column: 1 / -1;
-  margin: 0;
-  color: var(--color-muted);
-  font-size: 12px;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.ama-dock__confirm {
-  grid-column: 1 / -1;
-}
-
-.ama-dock__confirm-actions {
+.ama-panel__attachments {
   display: flex;
-  align-items: center;
-  gap: var(--space-2);
   flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
 }
 
-.ama-dock__drawer {
-  grid-column: 1 / -1;
-  min-height: 0;
-  align-self: stretch;
-  display: grid;
-  grid-template-columns: minmax(260px, 0.42fr) minmax(0, 1fr);
-  gap: var(--space-3);
-  overflow: hidden;
+.ama-panel__attachment {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border-radius: 4px;
+  padding: 3px 6px;
+  background: var(--raised);
+  color: var(--muted);
+  font: 11px var(--bench-font-mono);
 }
 
-.ama-dock__drawer[hidden] {
-  display: none;
+.ama-panel__attachment-glyph {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  background: var(--accent);
 }
 
-.ama-dock__drawer[data-has-attention='false'] {
-  grid-template-columns: minmax(0, 1fr);
+.ama-panel__attachment button {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--faint);
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
 }
 
-.ama-dock__attention,
-.ama-dock__transcript {
-  min-height: 0;
-  height: 100%;
-  overflow: auto;
-  border: 1px solid var(--color-hairline);
-  border-radius: 12px;
-  background: var(--color-bg);
+.ama-panel__attachment button:hover {
+  color: var(--text);
 }
 
-.ama-dock__attention {
-  padding: var(--space-2);
+/* Resize from every edge and corner, like a real macOS panel. The grips sit
+ * just inside the edge — the panel clips its own overflow, so a straddling
+ * target would lose half its hit area to the clip. */
+.ama-panel__grip {
+  position: absolute;
+  z-index: 1;
 }
 
-.ama-dock__attention:empty {
-  display: none;
+.ama-panel__grip[data-edge='n'],
+.ama-panel__grip[data-edge='s'] {
+  left: 10px;
+  right: 10px;
+  height: 5px;
+  cursor: ns-resize;
 }
 
-.ama-dock__attention-item + .ama-dock__attention-item {
-  margin-top: var(--space-2);
-  padding-top: var(--space-2);
-  border-top: 1px solid var(--color-hairline);
+.ama-panel__grip[data-edge='e'],
+.ama-panel__grip[data-edge='w'] {
+  top: 10px;
+  bottom: 10px;
+  width: 5px;
+  cursor: ew-resize;
+}
+
+.ama-panel__grip[data-edge='n'] {
+  top: 0;
+}
+
+.ama-panel__grip[data-edge='s'] {
+  bottom: 0;
+}
+
+.ama-panel__grip[data-edge='e'] {
+  right: 0;
+}
+
+.ama-panel__grip[data-edge='w'] {
+  left: 0;
+}
+
+.ama-panel__grip[data-edge='ne'],
+.ama-panel__grip[data-edge='nw'],
+.ama-panel__grip[data-edge='se'],
+.ama-panel__grip[data-edge='sw'] {
+  width: 10px;
+  height: 10px;
+}
+
+.ama-panel__grip[data-edge='ne'] {
+  top: 0;
+  right: 0;
+  cursor: nesw-resize;
+}
+
+.ama-panel__grip[data-edge='nw'] {
+  top: 0;
+  left: 0;
+  cursor: nwse-resize;
+}
+
+.ama-panel__grip[data-edge='se'] {
+  bottom: 0;
+  right: 0;
+  cursor: nwse-resize;
+}
+
+.ama-panel__grip[data-edge='sw'] {
+  bottom: 0;
+  left: 0;
+  cursor: nesw-resize;
 }
 
 /* Shared conversational transcript (AMA + current-run live preview). */
@@ -688,7 +909,7 @@ body {
   color: var(--color-signal);
 }
 
-.ama-dock__empty {
+.ama-panel__empty {
   display: flex;
   flex: 1;
   flex-direction: column;
@@ -697,17 +918,18 @@ body {
   gap: var(--space-1);
   min-height: 120px;
   margin: 0;
-  color: var(--color-muted);
+  color: var(--muted);
+  font: 12px var(--bench-font-text);
   text-align: center;
 }
 
-.ama-dock__empty strong {
-  color: var(--color-text);
-  font-size: 15px;
+.ama-panel__empty strong {
+  color: var(--text);
+  font: 500 14px var(--bench-font-serif);
 }
 
-.ama-dock__empty span {
-  max-width: 520px;
+.ama-panel__empty span {
+  max-width: 300px;
   line-height: 1.45;
 }
 
@@ -1021,12 +1243,6 @@ body {
   .conversation__activity[data-active='true'] .conversation__thinking > span {
     animation: none;
     opacity: 0.8;
-  }
-}
-
-@media (max-width: 720px) {
-  .ama-dock__drawer {
-    grid-template-columns: 1fr;
   }
 }
 
@@ -5055,6 +5271,17 @@ body {
 
 .sidebar__footer[data-tone='error'] .sidebar__runtime span {
   color: var(--bad);
+}
+
+/* The assistant's own footer state, per the mock: an accent dot beside
+   "Ask Agentico is active". Any non-ready runtime tone replaces it, so a
+   connection problem is never masked by a running chat. */
+.sidebar__footer[data-tone='ama'] .sidebar__runtime span {
+  color: var(--accent);
+}
+
+.sidebar__footer[data-tone='ama'] .sidebar__runtime {
+  color: var(--text);
 }
 
 .sidebar__ama {

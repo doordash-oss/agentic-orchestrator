@@ -2076,18 +2076,56 @@ export function defaultWizardPrefs(): WizardPrefs {
   return { collapsedHelp: false };
 }
 
+/** The floating AMA panel's default footprint and its inset from the corner. */
+export const AMA_PANEL_DEFAULT_WIDTH = 404;
+export const AMA_PANEL_DEFAULT_HEIGHT = 560;
+export const AMA_PANEL_DEFAULT_INSET = 20;
+/** Header + one turn + composer: the smallest panel that is still usable. */
+export const AMA_PANEL_MIN_WIDTH = 320;
+export const AMA_PANEL_MIN_HEIGHT = 240;
+
+/**
+ * The floating AMA panel's placement, stored as offsets from the main
+ * window's bottom-right corner plus its size, so the panel keeps its distance
+ * to that corner as the window resizes. Values are bounded but not
+ * window-relative here: the renderer clamps them into the current window on
+ * restore, so a document written on a larger display degrades to a visible
+ * panel instead of resetting the preference.
+ */
+export const AmaGeometrySchema = z.strictObject({
+  right: z.number().int().min(0).max(100000),
+  bottom: z.number().int().min(0).max(100000),
+  width: z.number().int().min(1).max(100000),
+  height: z.number().int().min(1).max(100000),
+});
+
+export type AmaGeometry = z.output<typeof AmaGeometrySchema>;
+
+export function defaultAmaGeometry(): AmaGeometry {
+  return {
+    right: AMA_PANEL_DEFAULT_INSET,
+    bottom: AMA_PANEL_DEFAULT_INSET,
+    width: AMA_PANEL_DEFAULT_WIDTH,
+    height: AMA_PANEL_DEFAULT_HEIGHT,
+  };
+}
+
 /**
  * AMA presentation preferences ONLY. Transcript rows and chat archive live on
- * the server; the app stores only whether the drawer is compact or expanded.
+ * the server; the app stores only whether the panel is closed (`compact`) or
+ * open (`expanded`) and where the user left it. `geometry` is defaulted, so a
+ * settings document written before the floating panel existed loads without
+ * resetting any preference.
  */
 export const AmaPrefsSchema = z.strictObject({
   drawer: z.enum(['compact', 'expanded']),
+  geometry: AmaGeometrySchema.default(defaultAmaGeometry()),
 });
 
 export type AmaPrefs = z.output<typeof AmaPrefsSchema>;
 
 export function defaultAmaPrefs(): AmaPrefs {
-  return { drawer: 'compact' };
+  return { drawer: 'compact', geometry: defaultAmaGeometry() };
 }
 
 /**

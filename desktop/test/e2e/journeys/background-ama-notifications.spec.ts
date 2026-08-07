@@ -15,7 +15,7 @@ import {
   waitFor,
 } from '../helpers/world';
 
-test('packaged AMA dock streams singleton chat, restores drawer state, and retains ended transcripts', async ({}, testInfo) => {
+test('packaged AMA panel floats, toggles, drags, persists, and ends the session', async ({}, testInfo) => {
   const world = createWorld('background-ama-notifications', {
     auth: { loggedIn: true, authMethod: 'oauth', email: 'e2e@example.invalid' },
     presetWorkspaceRoot: true,
@@ -30,15 +30,32 @@ test('packaged AMA dock streams singleton chat, restores drawer state, and retai
       timeout: 60_000,
     });
 
-    const dock = handle.page.getByRole('complementary', { name: 'Ask Agentico' });
-    await expect(dock).toBeVisible();
-    await expect(dock).toHaveAttribute('data-mode', 'compact');
-    await dock
-      .getByRole('textbox', { name: 'Ask Agentico' })
-      .fill('Summarize the current workspace state.');
-    await dock.getByRole('button', { name: 'Send' }).click();
-    await expect(dock).toHaveAttribute('data-mode', 'expanded');
-    await expect(dock.getByLabel('AMA transcript')).toContainText(/Backfill ready|Live semantic/, {
+    // Closed by default, with no docked remnant anywhere in the frame.
+    const panel = handle.page.getByRole('complementary', { name: 'Ask Agentico' });
+    await expect(panel).toHaveCount(0);
+    await expect(handle.page.locator('.ama-panel')).toHaveCount(0);
+
+    // ⌘⇧M (the native menu item the accelerator drives): open, focus composer.
+    await clickNativeMenu(handle, 'global.ama');
+    await expect(panel).toBeVisible();
+    const composer = panel.getByRole('textbox', { name: 'Ask Agentico' });
+    await expect(composer).toBeFocused();
+    // A second route never closes an open panel.
+    await clickNativeMenu(handle, 'global.ama');
+    await expect(panel).toBeVisible();
+
+    // ⌥Space toggles from a focused composer and types no character.
+    await composer.fill('Draft that survives the toggle');
+    await composer.click();
+    await handle.page.keyboard.press('Alt+Space');
+    await expect(panel).toHaveCount(0);
+    await handle.page.keyboard.press('Alt+Space');
+    await expect(panel).toBeVisible();
+    await expect(composer).toHaveValue('Draft that survives the toggle');
+
+    await composer.fill('Summarize the current workspace state.');
+    await panel.getByRole('button', { name: 'Send' }).click();
+    await expect(panel.getByLabel('AMA transcript')).toContainText(/Backfill ready|Live semantic/, {
       timeout: 60_000,
     });
     const startedChat = await handle.page.evaluate(() => window.agentico.getSession('__chat__'));
@@ -63,29 +80,27 @@ test('packaged AMA dock streams singleton chat, restores drawer state, and retai
     const settings = await handle.page.evaluate(() => window.agentico.getSettings());
     expect(settings.notifications.previewEnabled).toBe(false);
     expect(settings.ama.drawer).toBe('expanded');
+    expect(settings.ama.geometry).toEqual({ right: 20, bottom: 20, width: 404, height: 560 });
 
-    await dock.getByRole('button', { name: 'AMA', exact: true }).click();
-    await expect(dock).toHaveAttribute('data-mode', 'compact');
-    await handle.page.reload();
-    await expect(handle.page.getByRole('button', { name: 'New feature' })).toBeVisible({
-      timeout: 60_000,
-    });
-    const restoredDock = handle.page.getByRole('complementary', { name: 'Ask Agentico' });
-    await expect(restoredDock).toHaveAttribute('data-mode', 'compact');
-    await restoredDock.getByRole('button', { name: 'AMA', exact: true }).click();
-    await expect(restoredDock).toHaveAttribute('data-mode', 'expanded');
-    await expect(restoredDock.getByLabel('AMA transcript')).toContainText(
-      /Backfill ready|Live semantic/,
-    );
+    // Drag by the header, then resize from the leading edge.
+    await dragBy(handle, '.ama-panel__header', -120, -80);
+    await dragBy(handle, '.ama-panel__grip[data-edge="w"]', -60, 0);
+    const moved = (await handle.page.evaluate(() => window.agentico.getSettings())).ama.geometry;
+    expect(moved.right).toBeGreaterThan(20);
+    expect(moved.bottom).toBeGreaterThan(20);
+    expect(moved.width).toBeGreaterThan(404);
+    const movedBox = await panel.boundingBox();
+    expect(Math.round(movedBox?.width ?? 0)).toBe(moved.width);
 
-    const end = restoredDock.getByRole('button', { name: 'End AMA', exact: true });
+    // End session, from the composer actions row, behind its confirmation.
+    const end = panel.getByRole('button', { name: 'End session', exact: true });
     await expect(end).toBeVisible();
     await end.click();
-    const endConfirm = restoredDock.getByRole('group', { name: 'End AMA confirmation' });
+    const endConfirm = panel.getByRole('group', { name: 'End session confirmation' });
     await expect(endConfirm).toContainText('transcript stays read-only');
-    await endConfirm.getByRole('button', { name: 'End AMA', exact: true }).click();
-    await expect(restoredDock).toContainText('AMA ended.');
-    await expect(restoredDock).toContainText('Read-only transcript');
+    await endConfirm.getByRole('button', { name: 'End session', exact: true }).click();
+    await expect(panel).toContainText('AMA ended.');
+    await expect(panel).toContainText('Read-only transcript');
     const endedChat = await handle.page.evaluate(() => window.agentico.getSession('__chat__'));
     expect(endedChat.status.toLowerCase()).toMatch(/ended|stopped|complete|done|cancel/);
     const endedTranscript = await handle.page.evaluate(() =>
@@ -96,7 +111,34 @@ test('packaged AMA dock streams singleton chat, restores drawer state, and retai
       firstTranscript.messages[0]?.text ?? '',
     );
 
+    // Geometry and the open state survive a real relaunch. The chat session
+    // itself does not: this world's server is app-owned, so quitting reaps it
+    // — the panel's own restored state is what this step asserts.
     persistAppLogs(handle, 'background-ama-notifications-app-server');
+    await closeApp(handle);
+    handle = await launchApp(world, testInfo, {
+      traceName: 'background-ama-notifications-relaunch',
+    });
+    await expect(handle.page.getByRole('button', { name: 'New feature' })).toBeVisible({
+      timeout: 60_000,
+    });
+    const restored = handle.page.getByRole('complementary', { name: 'Ask Agentico' });
+    await expect(restored).toBeVisible();
+    const restoredGeometry = (await handle.page.evaluate(() => window.agentico.getSettings())).ama
+      .geometry;
+    expect(restoredGeometry).toEqual(moved);
+    const restoredBox = await restored.boundingBox();
+    expect(Math.round(restoredBox?.width ?? 0)).toBe(moved.width);
+    expect(Math.round(restoredBox?.height ?? 0)).toBe(moved.height);
+
+    // ✕ closes the panel outright and persists that state with the geometry.
+    await restored.getByRole('button', { name: 'Close Ask Agentico' }).click();
+    await expect(restored).toHaveCount(0);
+    const closed = await handle.page.evaluate(() => window.agentico.getSettings());
+    expect(closed.ama.drawer).toBe('compact');
+    expect(closed.ama.geometry).toEqual(moved);
+
+    persistAppLogs(handle, 'background-ama-notifications-relaunch-app-server');
   } finally {
     if (handle !== null) {
       await handle.page.evaluate(() => window.agentico.endChat()).catch(() => {});
@@ -106,6 +148,27 @@ test('packaged AMA dock streams singleton chat, restores drawer state, and retai
     destroyWorld(world);
   }
 });
+
+/** Clicks a native menu item by id, the same dispatch path its accelerator uses. */
+async function clickNativeMenu(handle: AppHandle, id: string): Promise<void> {
+  await handle.app.evaluate(({ BrowserWindow, Menu }, itemId) => {
+    const item = Menu.getApplicationMenu()?.getMenuItemById(itemId);
+    if (item == null) throw new Error(`menu item ${itemId} missing`);
+    item.click(undefined, BrowserWindow.getAllWindows()[0], undefined);
+  }, id);
+}
+
+/** A real pointer drag across `selector`, from its centre by (dx, dy). */
+async function dragBy(handle: AppHandle, selector: string, dx: number, dy: number): Promise<void> {
+  const box = await handle.page.locator(selector).boundingBox();
+  if (box === null) throw new Error(`${selector} has no box to drag`);
+  const fromX = box.x + box.width / 2;
+  const fromY = box.y + box.height / 2;
+  await handle.page.mouse.move(fromX, fromY);
+  await handle.page.mouse.down();
+  await handle.page.mouse.move(fromX + dx, fromY + dy, { steps: 8 });
+  await handle.page.mouse.up();
+}
 
 test('packaged attention notifications are private, deduplicated, bounded, passive, and do not steal focus', async ({}, testInfo) => {
   const world = createWorld('background-ama-notifications-attention', {

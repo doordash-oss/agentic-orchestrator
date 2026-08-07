@@ -17,6 +17,8 @@ import {
   SessionOutputEventSchema,
   isActiveChatSession,
   isTerminalChatStatus,
+  defaultAmaGeometry,
+  defaultAmaPrefs,
   defaultSettings,
   defaultShellPrefs,
   defaultWizardPrefs,
@@ -455,7 +457,7 @@ describe('SettingsSchema', () => {
       window: { bounds: { x: 10, y: 20, width: 800, height: 600 } },
       theme: 'dark',
       wizard: { collapsedHelp: true },
-      ama: { drawer: 'expanded' },
+      ama: { drawer: 'expanded', geometry: { right: 40, bottom: 60, width: 480, height: 620 } },
       notifications: { previewEnabled: true },
       shell: { activeFeatureId: 'abcd1234ef567890', sidebarCollapsed: true },
     };
@@ -472,7 +474,7 @@ describe('SettingsSchema', () => {
     expect(SettingsSchema.parse(doc)).toEqual({
       ...doc,
       wizard: defaultWizardPrefs(),
-      ama: { drawer: 'compact' },
+      ama: defaultAmaPrefs(),
       notifications: { previewEnabled: false },
       shell: defaultShellPrefs(),
     });
@@ -486,7 +488,7 @@ describe('SettingsPatchSchema', () => {
       runtime: { selection: null },
     });
     expect(SettingsPatchSchema.parse({ ama: { drawer: 'expanded' } })).toEqual({
-      ama: { drawer: 'expanded' },
+      ama: { drawer: 'expanded', geometry: defaultAmaGeometry() },
     });
     expect(SettingsPatchSchema.parse({ notifications: { previewEnabled: true } })).toEqual({
       notifications: { previewEnabled: true },

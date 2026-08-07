@@ -189,31 +189,6 @@ test('capture all visual evidence screenshots', async ({ page }) => {
 
   await capture(
     page,
-    'background-ama-expanded',
-    'dark',
-    1440,
-    900,
-    'expanded-bottom-docked-ama-streaming-transcript-with-an-inline-question-and-glob-1440x900',
-    '.ama-dock[data-mode="expanded"]',
-  );
-
-  await capture(
-    page,
-    'background-ama-compact',
-    'light',
-    1440,
-    900,
-    'persistent-compact-ama-composer-with-background-attention-inbox-and-preview-pref-1440x900',
-    '.settings-panel__toggle',
-    async (p) => {
-      const previewToggle = p.locator('.settings-panel__toggle');
-      await previewToggle.scrollIntoViewIfNeeded();
-      await expect(previewToggle).toBeInViewport({ timeout: 5_000 });
-    },
-  );
-
-  await capture(
-    page,
     'background-command-palette',
     'dark',
     1728,
@@ -230,16 +205,6 @@ test('capture all visual evidence screenshots', async ({ page }) => {
     900,
     'active-workflow-plus-ama-close-dialog-with-keep-running-stop-work-and-quit-and-c-1440x900',
     '.impact-dialog',
-  );
-
-  await capture(
-    page,
-    'background-ama-constrained',
-    'dark',
-    760,
-    900,
-    'constrained-workspace-with-compact-ama-question-badge-expanded-exact-question-ta-760x900',
-    '.command-palette',
   );
 
   await capture(

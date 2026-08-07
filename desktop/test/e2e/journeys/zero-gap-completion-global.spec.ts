@@ -123,12 +123,16 @@ test('zero-gap completion and global parity: diff, irreversible impact, AMA, rec
     await handle.page.keyboard.press('Escape');
     await expect(palette).toHaveCount(0);
 
-    const dock = handle.page.getByRole('complementary', { name: 'Ask Agentico' });
-    await dock.getByRole('textbox', { name: 'Ask Agentico' }).fill('Summarize completion state.');
-    await dock.getByRole('button', { name: 'Send' }).click();
-    await expect(dock.getByLabel('AMA transcript')).toContainText(/Backfill ready|Live semantic/, {
+    await handle.page.keyboard.press('Alt+Space');
+    const ama = handle.page.getByRole('complementary', { name: 'Ask Agentico' });
+    await expect(ama).toBeVisible();
+    await ama.getByRole('textbox', { name: 'Ask Agentico' }).fill('Summarize completion state.');
+    await ama.getByRole('button', { name: 'Send' }).click();
+    await expect(ama.getByLabel('AMA transcript')).toContainText(/Backfill ready|Live semantic/, {
       timeout: 60_000,
     });
+    await handle.page.keyboard.press('Alt+Space');
+    await expect(ama).toHaveCount(0);
 
     await handle.page.getByRole('option', { name: 'Overview' }).click();
     const recovery = handle.page.getByRole('region', { name: 'Recovery workspace' });
@@ -141,7 +145,7 @@ test('zero-gap completion and global parity: diff, irreversible impact, AMA, rec
     });
     await contractEvidenceShot(
       handle,
-      'global-attention-ama-dock-recovery-entry-and-bulk-action-status-remain-reachable-760x900',
+      'global-attention-ama-panel-recovery-entry-and-bulk-action-status-remain-reachable-760x900',
       760,
       900,
       'light',

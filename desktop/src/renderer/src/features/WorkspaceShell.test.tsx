@@ -694,12 +694,50 @@ describe('WorkspaceShell toolbar', () => {
     );
   });
 
+  it('shows the active-session footer state only while the runtime is healthy', async () => {
+    installAgenticoMock({
+      settings: settingsWithActive(null),
+      features: [],
+      connection: {
+        status: 'ready',
+        stage: 'ready',
+        detail: 'Connected to the app-owned runtime.',
+        ownership: 'app-owned',
+      },
+    });
+    const { rerender } = render(<WorkspaceShell amaSessionActive />);
+
+    expect(await screen.findByText('Ask Agentico is active')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Ask ⌥Space' })).toBeVisible();
+
+    rerender(<WorkspaceShell amaSessionActive={false} />);
+    expect(await screen.findByText('Runtime ready')).toBeVisible();
+  });
+
+  it('lets a runtime problem win the footer row over an active session', async () => {
+    installAgenticoMock({
+      settings: settingsWithActive(null),
+      features: [],
+      connection: {
+        status: 'error',
+        stage: 'connect',
+        detail: 'The runtime is unreachable.',
+        ownership: 'none',
+        error: { code: 'E_CONNECT', message: 'The runtime is unreachable.' },
+      },
+    });
+    render(<WorkspaceShell amaSessionActive />);
+
+    expect(await screen.findByText('Runtime needs attention')).toBeVisible();
+    expect(screen.queryByText('Ask Agentico is active')).not.toBeInTheDocument();
+  });
+
   it('routes the sidebar footer AMA hint through onOpenAma', async () => {
     installAgenticoMock({ settings: settingsWithActive(null), features: [] });
     const onOpenAma = vi.fn();
     render(<WorkspaceShell onOpenAma={onOpenAma} />);
 
-    await userEvent.click(await screen.findByRole('button', { name: 'Ask ⌘⇧M' }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Ask ⌥Space' }));
     expect(onOpenAma).toHaveBeenCalledTimes(1);
   });
 

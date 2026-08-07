@@ -39,6 +39,7 @@ export function ReadinessGate({
   onOpenUpdatesSettings = () => {},
   onInstallUpdateWhenIdle = async () => {},
   onOpenAma = () => {},
+  amaSessionActive = false,
 }: {
   attentionDrafts?: AttentionDrafts;
   setAttentionDrafts?: Dispatch<SetStateAction<AttentionDrafts>>;
@@ -60,6 +61,7 @@ export function ReadinessGate({
   onOpenUpdatesSettings?(): void;
   onInstallUpdateWhenIdle?(): Promise<void>;
   onOpenAma?(): void;
+  amaSessionActive?: boolean;
 }) {
   const [state, setState] = useState<GateState>({ phase: 'loading' });
 
@@ -123,6 +125,7 @@ export function ReadinessGate({
         onOpenUpdatesSettings={onOpenUpdatesSettings}
         onInstallUpdateWhenIdle={onInstallUpdateWhenIdle}
         onOpenAma={onOpenAma}
+        amaSessionActive={amaSessionActive}
       />
     );
   }

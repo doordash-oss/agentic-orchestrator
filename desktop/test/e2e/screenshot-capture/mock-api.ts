@@ -31,7 +31,7 @@ import type {
   UpdateState,
   DiagnosticsSnapshot,
 } from '../../../src/shared/ipc';
-import { CHAT_SESSION_ID, defaultSettings } from '../../../src/shared/ipc';
+import { CHAT_SESSION_ID, defaultAmaPrefs, defaultSettings } from '../../../src/shared/ipc';
 
 const DEMO_FEATURE_CONFIG = {
   models: { planning: 'demo:planner' },
@@ -949,6 +949,9 @@ const CONNECTION_STATE_MID_CONNECT: ConnectionState = {
   ownership: 'none',
 };
 
+/** The image the AMA panel scene attaches, matching the mock's chip. */
+const AMA_ATTACHMENT_PATH = '/Users/you/Desktop/cockpit-poll.png';
+
 const AMA_TRANSCRIPT: SessionTranscript = {
   sessionId: CHAT_SESSION_ID,
   cursor: { total: 4, start: 0, end: 4 },
@@ -957,25 +960,25 @@ const AMA_TRANSCRIPT: SessionTranscript = {
       index: 0,
       role: 'user',
       type: 'text',
-      text: 'How should I finish the background supervision phase?',
+      text: 'Which features still touch the old polled preview?',
     },
     {
       index: 1,
       role: 'assistant',
       type: 'text',
-      text: 'Start with the singleton AMA dock, then verify notifications, close policy, and native command parity.',
+      text: 'Two, both in agentic-orchestrator: ArchiveMode.tsx reads usePolledPreview for sealed runs, and RefactorPassWorkspace.tsx uses the same hook for live passes. The run you have open is replacing the shared hook, so both will need the new subscription. Neither is in its plan.',
     },
     {
       index: 2,
-      role: 'assistant',
+      role: 'user',
       type: 'text',
-      text: 'Streaming update 042: the transcript is bounded, deduplicated by row index, and still readable after the session ends.',
+      text: "Add that to the current run's plan?",
     },
     {
       index: 3,
       role: 'assistant',
       type: 'text',
-      text: 'Next question is waiting inline without stealing focus from the command palette or attention inbox.',
+      text: "I can't change a plan mid-phase. Two routes: answer the next phase-plan checkpoint with these two files, or start a refactor pass after publish.",
     },
   ],
 };
@@ -1025,6 +1028,11 @@ const RUN_SESSION_TRANSCRIPT: SessionTranscript['messages'] = [
 
 function isBackgroundScene(scene: string): boolean {
   return scene.startsWith('background-');
+}
+
+/** Scenes that need the singleton AMA chat session to exist. */
+function hasChatSession(scene: string): boolean {
+  return isBackgroundScene(scene) || scene === 'ama-panel';
 }
 
 export const FEATURE_QUESTION_ITEM = {
@@ -1184,6 +1192,9 @@ function makeMockApi(
   let currentSettings: Settings = {
     ...defaultSettings(),
     theme: requestedTheme,
+    // The AMA scenes open the panel from the persisted preference, exactly as
+    // the app does, rather than routing it open from the scene.
+    ama: { ...defaultAmaPrefs(), drawer: scene === 'ama-panel' ? 'expanded' : 'compact' },
     shell: {
       activeFeatureId:
         scene === 'overview-lanes' ||
@@ -1403,9 +1414,9 @@ function makeMockApi(
     startChat: () => Promise.resolve({ sessionId: '__chat__', result: 'started' }),
     endChat: () => Promise.resolve({ sessionId: '__chat__', result: 'ended' }),
     listSessions: () =>
-      Promise.resolve(isBackgroundScene(scene) ? [CHAT_SESSION, ...SESSIONS] : SESSIONS),
+      Promise.resolve(hasChatSession(scene) ? [CHAT_SESSION, ...SESSIONS] : SESSIONS),
     getSession: (sessionId) => {
-      const summary = (isBackgroundScene(scene) ? [CHAT_SESSION, ...SESSIONS] : SESSIONS).find(
+      const summary = (hasChatSession(scene) ? [CHAT_SESSION, ...SESSIONS] : SESSIONS).find(
         (s) => s.id === sessionId,
       );
       if (!summary) return Promise.reject(new Error('not_found: session not found'));
@@ -1484,8 +1495,11 @@ function makeMockApi(
             : ['/work/space/brief/acceptance-notes.md']
           : [],
       }),
-    readClipboardImage: () => Promise.resolve({ paths: [] }),
-    importDroppedCreationFiles: () => ({ paths: [] }),
+    readClipboardImage: () =>
+      Promise.resolve({ paths: scene === 'ama-panel' ? [AMA_ATTACHMENT_PATH] : [] }),
+    importDroppedCreationFiles: () => ({
+      paths: scene === 'ama-panel' ? [AMA_ATTACHMENT_PATH] : [],
+    }),
     searchCreationFiles: (request) =>
       Promise.resolve({
         requestId: request.requestId,

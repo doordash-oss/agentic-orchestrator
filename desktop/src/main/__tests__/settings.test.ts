@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { SettingsStore } from '../settings';
-import { defaultSettings } from '../../shared/ipc';
+import { defaultAmaGeometry, defaultAmaPrefs, defaultSettings } from '../../shared/ipc';
 import { SafeErrorException } from '../../shared/errors';
 
 let dir: string;
@@ -120,10 +120,56 @@ describe('SettingsStore', () => {
       window: { bounds: { x: 1, y: 2, width: 800, height: 600 } },
       theme: 'dark',
       wizard: { collapsedHelp: false },
-      ama: { drawer: 'compact' },
+      ama: defaultAmaPrefs(),
       notifications: { previewEnabled: false },
       shell: { activeFeatureId: null, sidebarCollapsed: false },
     });
+  });
+
+  it('persists the AMA panel geometry and open state across a reload', () => {
+    const store = makeStore();
+    store.update({
+      ama: { drawer: 'expanded', geometry: { right: 96, bottom: 48, width: 520, height: 400 } },
+    });
+    expect(makeStore().get().ama).toEqual({
+      drawer: 'expanded',
+      geometry: { right: 96, bottom: 48, width: 520, height: 400 },
+    });
+  });
+
+  it('loads a v2 document written before the panel geometry existed without resetting', () => {
+    fs.writeFileSync(
+      settingsPath(),
+      JSON.stringify({
+        schemaVersion: 2,
+        runtime: { selection: 'claude' },
+        window: {},
+        theme: 'dark',
+        wizard: { collapsedHelp: true },
+        ama: { drawer: 'expanded' },
+        notifications: { previewEnabled: true },
+        shell: { activeFeatureId: 'abcd1234ef567890', sidebarCollapsed: true },
+      }),
+    );
+    const store = makeStore();
+
+    expect(store.get().ama).toEqual({ drawer: 'expanded', geometry: defaultAmaGeometry() });
+    expect(store.get().theme).toBe('dark');
+    expect(store.get().shell).toEqual({
+      activeFeatureId: 'abcd1234ef567890',
+      sidebarCollapsed: true,
+    });
+    expect(warnings).toEqual([]);
+    expect(fs.existsSync(`${settingsPath()}.bak-1`)).toBe(false);
+  });
+
+  it('rejects an AMA patch carrying unknown fields', () => {
+    const store = makeStore();
+    expect(() =>
+      store.update({
+        ama: { drawer: 'expanded', geometry: defaultAmaGeometry(), docked: true } as never,
+      }),
+    ).toThrow(SafeErrorException);
   });
 
   it('persists shell presentation prefs and restores them on reload', () => {
@@ -168,7 +214,7 @@ describe('SettingsStore', () => {
     const upgraded = makeStore();
     expect(upgraded.get().theme).toBe('dark');
     expect(upgraded.get().wizard).toEqual({ collapsedHelp: false });
-    expect(upgraded.get().ama).toEqual({ drawer: 'compact' });
+    expect(upgraded.get().ama).toEqual(defaultAmaPrefs());
     expect(upgraded.get().notifications).toEqual({ previewEnabled: false });
   });
 
@@ -229,7 +275,7 @@ describe('SettingsStore', () => {
         window: { bounds: { x: 10, y: 20, width: 1024, height: 768 } },
         theme: 'dark',
         wizard: { collapsedHelp: true },
-        ama: { drawer: 'expanded' },
+        ama: { drawer: 'expanded', geometry: defaultAmaGeometry() },
         notifications: { previewEnabled: true },
         shell: { activeFeatureId: 'ffee0011aa223344', sidebarCollapsed: false },
       });

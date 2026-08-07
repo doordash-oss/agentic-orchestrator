@@ -45,10 +45,7 @@ test('packaged command palette, native menu routes, and active close policy stay
     await assertTrayState(handle);
 
     await clickNativeMenu(handle, 'global.ama');
-    await expect(handle.page.getByRole('complementary', { name: 'Ask Agentico' })).toHaveAttribute(
-      'data-mode',
-      'expanded',
-    );
+    await expect(handle.page.getByRole('complementary', { name: 'Ask Agentico' })).toBeVisible();
     await assertEditorShortcutSuppression(handle);
 
     await openPalette(handle);

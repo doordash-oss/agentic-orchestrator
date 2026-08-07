@@ -1,19 +1,29 @@
 import type { FeatureSnapshot, RunDetailView } from '../../../shared/ipc';
 import { displayStatusLabel, featureBranch, formatDuration } from './featureView';
+import { sentenceCase } from './aftercareReceipt';
 
-export interface FeatureFactsRailProps {
+export interface AftercareFactsProps {
   snapshot: FeatureSnapshot;
   run: RunDetailView | null;
   pendingFact?: { label: string; value: string };
+  /** Rendered above the facts; omitted where the presentation already has a header. */
+  title?: string;
   onOpenPullRequest(url: string): void;
 }
 
-export function FeatureFactsRail({
+/**
+ * The aftercare inspector pane's content: the facts the always-open rail used
+ * to hold, computed exactly as before, now behind the toolbar's inspector
+ * toggle (trailing pane when wide, drawer when narrow) so the reading column
+ * owns the full width by default.
+ */
+export function AftercareFacts({
   snapshot,
   run,
   pendingFact,
+  title,
   onOpenPullRequest,
-}: FeatureFactsRailProps): React.ReactElement {
+}: AftercareFactsProps): React.ReactElement {
   const branch = featureBranch(snapshot);
   const repository = snapshot.repoStatus?.[0];
   const elapsed = run?.timing?.totalSeconds ?? snapshot.timing?.totalSeconds;
@@ -29,9 +39,9 @@ export function FeatureFactsRail({
   const prUrl = repository?.prUrl;
 
   return (
-    <aside className="feature-facts" aria-label="Feature facts">
-      <p className="feature-facts__eyebrow">Feature facts</p>
-      <dl className="feature-facts__list">
+    <section className="aftercare-facts" aria-label="Feature facts">
+      {title === undefined ? null : <h3 className="aftercare-facts__title">{title}</h3>}
+      <dl className="aftercare-facts__list">
         <Fact label="Status" value={displayStatusLabel(snapshot.status)} />
         <Fact
           label={snapshot.repos.length === 1 ? 'Repository' : 'Repositories'}
@@ -43,12 +53,12 @@ export function FeatureFactsRail({
         <Fact label="Elapsed" value={elapsed === undefined ? '—' : formatDuration(elapsed)} mono />
         <Fact label="Cost" value={cost === undefined ? '—' : `$${cost.toFixed(2)}`} mono />
         {prUrl === undefined ? null : (
-          <div className="feature-facts__fact">
+          <div className="aftercare-facts__fact">
             <dt>Pull request</dt>
             <dd>
               <button
                 type="button"
-                className="feature-facts__link"
+                className="aftercare-facts__link"
                 onClick={() => onOpenPullRequest(prUrl)}
               >
                 Open pull request <span aria-hidden="true">↗</span>
@@ -66,7 +76,7 @@ export function FeatureFactsRail({
           }
         />
       </dl>
-    </aside>
+    </section>
   );
 }
 
@@ -80,14 +90,9 @@ function Fact({
   mono?: boolean;
 }): React.ReactElement {
   return (
-    <div className="feature-facts__fact">
+    <div className="aftercare-facts__fact">
       <dt>{label}</dt>
       <dd>{mono ? <code>{value}</code> : value}</dd>
     </div>
   );
-}
-
-function sentenceCase(value: string): string {
-  const normalized = value.replace(/[_-]+/g, ' ').trim();
-  return normalized === '' ? value : normalized.charAt(0).toUpperCase() + normalized.slice(1);
 }

@@ -6,6 +6,7 @@
  * files are read here.
  */
 import {
+  Fragment,
   useCallback,
   useEffect,
   useMemo,
@@ -38,6 +39,8 @@ import { FeatureConfigPanel } from './ConfigEditor';
 import { ArchiveMode } from './ArchiveMode';
 import { RewindJourney } from './RewindJourney';
 import { AftercareWorkspace } from './AftercareWorkspace';
+import { AftercareFacts } from './AftercareFacts';
+import { useAftercareEvidence } from './useAftercareEvidence';
 import { InspectorContent } from './CockpitInspector';
 import { ImpactPreviewList } from './ImpactPreviewList';
 import { NeedUserInputModal, type AttentionGate } from './NeedUserInputModal';
@@ -51,7 +54,7 @@ import { ReviewFeedbackLauncher } from './reviewFeedback/ReviewFeedbackLauncher'
 import { RefactorPassWorkspace, useRefactorPass } from './refactor/RefactorPassWorkspace';
 import { refactoringStatusChip } from './refactor/refactorPassModel';
 import { useCompletionPreflight } from './completion/useCompletionPreflight';
-import { pendingDeliverySummary } from './completion/pendingDelivery';
+import { pendingDeliveryFact, pendingDeliverySummary } from './completion/pendingDelivery';
 import {
   completionBarModel,
   type CompletionVerb,
@@ -140,6 +143,10 @@ export interface FeatureCockpitProps {
 
 const MAX_ITERATIONS_RESTART_DELTA = 10;
 const MAX_PLAN_ITERATIONS_RESTART_DELTA = 2;
+
+function isArchiveRunSelected(runNumber: number | null | undefined): boolean {
+  return runNumber !== undefined && runNumber !== null && runNumber > 0;
+}
 
 interface RewindLandingProps {
   outcome: FeatureActionResult;
@@ -550,7 +557,7 @@ function CompletionWrapUpMenu({
       <summary className="cockpit__wrapup-summary" aria-label="Wrap up">
         Wrap up <span aria-hidden="true">▾</span>
       </summary>
-      <div className="cockpit__wrapup-menu" role="menu">
+      <div className="cockpit__wrapup-menu" role="menu" aria-label="Wrap up">
         {verbs.map((v) => (
           <div key={v.verb} className="cockpit__wrapup-item">
             <button
@@ -574,21 +581,12 @@ function CompletionWrapUpMenu({
   );
 }
 
-function InspectorDrawer({
-  snapshot,
-  branch,
-  stale,
-  runMetrics,
-  onOpenPullRequest,
-  onClose,
-}: {
-  snapshot: FeatureSnapshot;
-  branch: string | null;
-  stale: boolean;
-  runMetrics: RunMetrics | null;
-  onOpenPullRequest(url: string): void;
-  onClose(): void;
-}) {
+/**
+ * The narrow-width inspector presentation, shared by every surface that has an
+ * inspector: the drawer owns dismissal and focus, the caller supplies whichever
+ * facts its surface inspects.
+ */
+function InspectorDrawer({ onClose, children }: { onClose(): void; children: ReactNode }) {
   const drawerRef = useRef<HTMLElement>(null);
   useEffect(() => {
     drawerRef.current
@@ -623,13 +621,7 @@ function InspectorDrawer({
             Close inspector
           </button>
         </header>
-        <InspectorContent
-          snapshot={snapshot}
-          branch={branch}
-          stale={stale}
-          runMetrics={runMetrics}
-          onOpenPullRequest={onOpenPullRequest}
-        />
+        {children}
       </aside>
     </div>
   );
@@ -1141,11 +1133,7 @@ export function FeatureCockpit({
         event.resourceId === featureId ||
         event.parentId === featureId;
       if (relevant) {
-        if (
-          selectedRunNumberRef.current !== undefined &&
-          selectedRunNumberRef.current !== null &&
-          selectedRunNumberRef.current > 0
-        ) {
+        if (isArchiveRunSelected(selectedRunNumberRef.current)) {
           setCurrentRunBadges((badges) => ({
             ...badges,
             changed: true,
@@ -1388,6 +1376,23 @@ export function FeatureCockpit({
     }
   }, [isNarrow]);
 
+  // The aftercare receipt's on-demand facts. Gated on the surface actually
+  // being aftercare so no other view pays for the fetches, and keyed on the
+  // repository names inside the hook so the polling refresh cannot restart
+  // them.
+  const aftercareSurface =
+    state.phase === 'loaded' &&
+    !isArchiveRunSelected(selectedRunNumber) &&
+    resolvePostImplementationMode(state.snapshot).kind === 'aftercare' &&
+    state.snapshot.activeChild === undefined;
+  const aftercareEvidence = useAftercareEvidence(
+    featureId,
+    state.phase === 'loaded' ? state.snapshot.repos : [],
+    state.phase === 'loaded' &&
+      (state.snapshot.repoStatus ?? []).some((repo) => repo.prUrl !== undefined),
+    aftercareSurface,
+  );
+
   if (state.phase === 'loading') {
     return (
       <section className="cockpit" aria-label={`Feature ${titleHint}`}>
@@ -1440,8 +1445,7 @@ export function FeatureCockpit({
   const refactorAction = actionById(snapshot, 'refactor');
   const reviewFeedbackAction = actionById(snapshot, 'review-feedback');
   const hasPendingReview = isPendingReviewStatus(snapshot.status);
-  const isArchiveMode =
-    selectedRunNumber !== undefined && selectedRunNumber !== null && selectedRunNumber > 0;
+  const isArchiveMode = isArchiveRunSelected(selectedRunNumber);
 
   // The rail's hold looks at every open item this feature owns (including a
   // refactor pass's routed items), not the review-filtered list the question/
@@ -1819,26 +1823,28 @@ export function FeatureCockpit({
     setCompletionModal(null);
     void completion.refresh().then(() => setCompletionModal(verb));
   };
-  const completionControls =
-    completionEnabled && barVerbs.length > 0 ? (
-      isNarrow ? (
-        <CompletionWrapUpMenu verbs={barVerbs} onSelect={openCompletionModal} />
-      ) : (
-        <>
-          {barVerbs.map((v) =>
-            v.state === 'done' ? (
+  const renderCompletionControls = (
+    verbs: CompletionVerbModel[],
+    options: { showBlocker?: boolean } = {},
+  ): ReactNode =>
+    verbs.length === 0 ? null : isNarrow ? (
+      <CompletionWrapUpMenu verbs={verbs} onSelect={openCompletionModal} />
+    ) : (
+      <>
+        {verbs.map((v) =>
+          v.state === 'done' ? (
+            <button
+              key={v.verb}
+              type="button"
+              className="cockpit__completion-chip"
+              onClick={() => openCompletionModal(v.verb)}
+              aria-label={`${v.label} — reopen`}
+            >
+              {v.label} ✓
+            </button>
+          ) : (
+            <Fragment key={v.verb}>
               <button
-                key={v.verb}
-                type="button"
-                className="cockpit__completion-chip"
-                onClick={() => openCompletionModal(v.verb)}
-                aria-label={`${v.label} — reopen`}
-              >
-                {v.label} ✓
-              </button>
-            ) : (
-              <button
-                key={v.verb}
                 type="button"
                 className={
                   v.primary ? 'cockpit__completion-button' : 'cockpit__completion-secondary'
@@ -1849,11 +1855,26 @@ export function FeatureCockpit({
               >
                 {v.label}
               </button>
-            ),
-          )}
-        </>
-      )
-    ) : null;
+              {options.showBlocker === true && v.state === 'blocked' && v.blocker !== undefined ? (
+                <span className="cockpit__completion-blocker" title={v.blocker}>
+                  {v.blocker}
+                </span>
+              ) : null}
+            </Fragment>
+          ),
+        )}
+      </>
+    );
+  const completionControls = completionEnabled ? renderCompletionControls(barVerbs) : null;
+  // Aftercare's toolbar owns wrap-up only: delivery (Publish/Merge) lives on
+  // the runway, so the trailing zone reduces to Clean up plus a prominent
+  // Mark done — the verb that actually closes the feature out.
+  const aftercareVerbs = barVerbs
+    .filter((v) => v.verb === 'cleanup' || v.verb === 'mark-done')
+    .map((v) => ({ ...v, primary: v.verb === 'mark-done' }));
+  const aftercareCompletionControls = completionEnabled
+    ? renderCompletionControls(aftercareVerbs, { showBlocker: true })
+    : null;
 
   const postImplementationMode = resolvePostImplementationMode(snapshot);
   const postMenuActions = menuActions.filter((action) => {
@@ -1869,7 +1890,7 @@ export function FeatureCockpit({
       openCompletionModal('publish');
       return;
     }
-    if (action.id === 'merge-updates') {
+    if (action.id === 'merge' || action.id === 'merge-updates') {
       openCompletionModal('merge');
       return;
     }
@@ -1879,6 +1900,20 @@ export function FeatureCockpit({
     }
     setLauncherModal(action.id);
   };
+  // One facts element for both aftercare inspector presentations: the trailing
+  // pane when wide, the drawer when narrow.
+  const aftercarePendingFact = pendingDeliveryFact(pendingDelivery);
+  const aftercareFactsFor = (presentation: 'pane' | 'drawer') => (
+    <AftercareFacts
+      snapshot={snapshot}
+      run={aftercareRun}
+      {...(aftercarePendingFact === null ? {} : { pendingFact: aftercarePendingFact })}
+      {...(presentation === 'pane' ? { title: 'Feature' } : {})}
+      onOpenPullRequest={(url) => {
+        void window.agentico.openExternal({ url });
+      }}
+    />
+  );
   const standaloneAttention =
     activeAttentionItem === undefined ? null : (
       <section className="live-preview__attention" aria-label="Agent request">
@@ -1970,7 +2005,7 @@ export function FeatureCockpit({
                 status={snapshot.status}
                 primaryActions={[]}
                 menuActions={postMenuActions}
-                extraControls={completionControls}
+                extraControls={aftercareCompletionControls}
                 isNarrow={isNarrow}
                 inspectorButtonRef={inspectorButtonRef}
                 onOpenInspector={() => setInspectorOpen(true)}
@@ -1986,21 +2021,42 @@ export function FeatureCockpit({
                 </div>
               )}
               {standaloneAttention}
-              <AftercareWorkspace
-                snapshot={snapshot}
-                run={aftercareRun}
-                actionError={actionError}
-                pending={pendingDelivery}
-                busyAction={
-                  rebaseLaunchBusy ? { id: 'rebase', label: 'Starting rebase pass…' } : undefined
+              {isNarrow && inspectorOpen ? (
+                <InspectorDrawer onClose={closeInspector}>
+                  {aftercareFactsFor('drawer')}
+                </InspectorDrawer>
+              ) : null}
+              <div
+                className={
+                  !isNarrow && inspectorOpen
+                    ? 'cockpit__content cockpit__content--inspector-open'
+                    : 'cockpit__content'
                 }
-                onAction={openAftercareAction}
-                onOpenRunRecord={() => setRunRecordOpen(true)}
-                onOpenChanges={() => setChangesOpen(true)}
-                onOpenPullRequest={(url) => {
-                  void window.agentico.openExternal({ url });
-                }}
-              />
+              >
+                <AftercareWorkspace
+                  snapshot={snapshot}
+                  run={aftercareRun}
+                  actionError={actionError}
+                  pending={pendingDelivery}
+                  preflight={completion.preflight}
+                  evidence={aftercareEvidence}
+                  busyAction={
+                    rebaseLaunchBusy ? { id: 'rebase', label: 'Starting rebase pass' } : undefined
+                  }
+                  onAction={openAftercareAction}
+                  onOpenRunRecord={() => setRunRecordOpen(true)}
+                  onOpenChanges={() => setChangesOpen(true)}
+                  onOpenConfiguration={() => setConfigOpen(true)}
+                  onOpenPullRequest={(url) => {
+                    void window.agentico.openExternal({ url });
+                  }}
+                />
+                {!isNarrow && inspectorOpen ? (
+                  <aside className="cockpit__inspector" aria-label="Feature inspector">
+                    {aftercareFactsFor('pane')}
+                  </aside>
+                ) : null}
+              </div>
             </>
           )
         ) : null}
@@ -2319,16 +2375,17 @@ export function FeatureCockpit({
           ) : null}
 
           {isNarrow && inspectorOpen ? (
-            <InspectorDrawer
-              snapshot={snapshot}
-              branch={branch}
-              stale={stale}
-              runMetrics={runMetrics}
-              onOpenPullRequest={(url) => {
-                void window.agentico.openExternal({ url });
-              }}
-              onClose={closeInspector}
-            />
+            <InspectorDrawer onClose={closeInspector}>
+              <InspectorContent
+                snapshot={snapshot}
+                branch={branch}
+                stale={stale}
+                runMetrics={runMetrics}
+                onOpenPullRequest={(url) => {
+                  void window.agentico.openExternal({ url });
+                }}
+              />
+            </InspectorDrawer>
           ) : null}
 
           <div

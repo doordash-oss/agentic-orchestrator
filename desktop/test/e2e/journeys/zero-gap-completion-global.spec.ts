@@ -70,8 +70,11 @@ test('zero-gap completion and global parity: diff, irreversible impact, AMA, rec
     const cockpit = handle.page.getByLabel(`Feature ${featureName}`);
     await expect(cockpit).toBeVisible({ timeout: 30_000 });
 
-    // Completion verbs live in the toolbar's trailing actions zone at CodeReady.
-    const publishVerb = handle.page.getByRole('button', { name: 'Publish', exact: true });
+    // Delivery lives on the aftercare runway; the toolbar keeps wrap-up only.
+    const aftercare = handle.page.getByRole('region', { name: 'Feature aftercare' });
+    await expect(aftercare).toBeVisible({ timeout: 30_000 });
+    await expect(handle.page.getByRole('button', { name: 'Publish', exact: true })).toHaveCount(0);
+    const publishVerb = aftercare.getByRole('button', { name: /Publish this feature/ });
     await expect(publishVerb).toBeVisible({ timeout: 30_000 });
     await publishVerb.click();
     const publishModal = handle.page.getByRole('dialog', { name: 'Publish reviewed changes' });
@@ -80,8 +83,9 @@ test('zero-gap completion and global parity: diff, irreversible impact, AMA, rec
     await publishModal.getByRole('button', { name: 'Close' }).click();
     await expect(publishModal).toHaveCount(0);
 
-    // Aftercare opens read-only repository + diff inspection in a workspace dialog.
-    await cockpit.getByRole('button', { name: 'Changes', exact: true }).click();
+    // Aftercare opens read-only repository + diff inspection in a workspace dialog,
+    // from the What-shipped receipt's Changes row.
+    await cockpit.getByRole('button', { name: 'View changes', exact: true }).click();
     const changesModal = handle.page.getByRole('dialog', { name: 'Feature changes' });
     const changes = changesModal.getByRole('region', { name: 'Changes' });
     await expect(changes).toBeVisible({ timeout: 15_000 });
@@ -89,9 +93,10 @@ test('zero-gap completion and global parity: diff, irreversible impact, AMA, rec
     await expect(changes.getByText('Inspecting')).toBeVisible();
     await changesModal.getByRole('button', { name: 'Close' }).click();
 
-    // Merge and Clean up each open their own floating modal from the bar; the
-    // Mark done verb is reachable as a bar control alongside them.
-    await handle.page.getByRole('button', { name: 'Merge', exact: true }).click();
+    // Merge opens its floating modal from the runway's delivery row; Clean up
+    // and Mark done remain the toolbar's wrap-up controls.
+    await expect(handle.page.getByRole('button', { name: 'Merge', exact: true })).toHaveCount(0);
+    await aftercare.getByRole('button', { name: /Merge this feature/ }).click();
     const mergeModal = handle.page.getByRole('dialog', { name: 'Merge local repositories' });
     await expect(mergeModal).toBeVisible({ timeout: 15_000 });
     await mergeModal.getByRole('button', { name: 'Close' }).click();

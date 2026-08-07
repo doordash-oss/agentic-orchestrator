@@ -247,7 +247,7 @@ test('transcript accepts wheel and focused keyboard scrolling', async ({ page })
   await expect.poll(() => transcript.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
 });
 
-test('aftercare keeps its runway and compact feature facts legible at rest', async ({ page }) => {
+test('aftercare keeps its runway and receipt legible at rest', async ({ page }) => {
   for (const viewport of [
     { width: 1440, height: 900 },
     { width: 760, height: 900 },
@@ -262,9 +262,12 @@ test('aftercare keeps its runway and compact feature facts legible at rest', asy
     // The rail is a run-facing instrument — aftercare has no active run to
     // show, so it renders none of the rail's DOM either.
     await expect(page.locator('.phase-rail')).toHaveCount(0);
-    await expect(page.getByRole('button', { name: 'Run record' })).toBeVisible();
-    await expect(page.getByRole('heading', { name: 'Choose one focused action' })).toBeVisible();
-    await expect(page.getByRole('complementary', { name: 'Feature facts' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'View run record' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'The work is in service' })).toBeVisible();
+    // The facts rail is gone: the receipt is the surface's own content, and the
+    // facts live behind the toolbar's inspector toggle.
+    await expect(page.getByRole('region', { name: 'What shipped' })).toBeVisible();
+    await expect(page.getByRole('region', { name: 'Feature facts' })).toHaveCount(0);
     await expect(page.getByText('Waiting for the agent to respond…')).toHaveCount(0);
     await expect(page.getByRole('button', { name: /Start rebase pass/ })).toBeVisible();
     await expect(page.getByRole('button', { name: /Address review feedback/ })).toBeVisible();
@@ -320,10 +323,9 @@ test('aftercare reports unpublished commits and offers to publish them', async (
   await expect(publishUpdates).toBeVisible();
   await expect(publishUpdates).toContainText('Not on the pull-request branch yet: 3 commits.');
 
-  const facts = page.getByRole('complementary', { name: 'Feature facts' });
-  await expect(facts).toContainText('Unpublished');
-  await expect(facts).toContainText('3 commits');
-
-  const actions = page.getByRole('group', { name: 'Feature actions' });
-  await expect(actions.getByRole('button', { name: 'Publish updates', exact: true })).toBeVisible();
+  // Delivery lives on the runway only; the toolbar keeps wrap-up verbs. The
+  // verbs portal into the toolbar's own slot, so they are queried page-wide.
+  await expect(page.getByRole('button', { name: 'Publish updates', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Mark done', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Clean up', exact: true })).toBeVisible();
 });

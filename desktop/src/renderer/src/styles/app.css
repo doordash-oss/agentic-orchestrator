@@ -1671,8 +1671,12 @@ body {
   }
 }
 
-/* Post-implementation has one owner at a time. The main surface scrolls while
- * the narrow facts rail remains a quiet, fixed reference. */
+/* ─── Aftercare (post-implementation) ─────────────────────────────────────
+ * A reading column, not an instrument panel: a headline stating the
+ * situation, one grouped inset list of unordered follow-ups, and the "What
+ * shipped" receipt. The facts that used to sit in an always-open rail now
+ * live in the toolbar's inspector pane, so the column owns the full width by
+ * default. */
 .cockpit--post-implementation {
   gap: var(--space-2);
 }
@@ -1680,11 +1684,8 @@ body {
 .post-workspace {
   min-height: 0;
   flex: 1;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(238px, 292px);
-  border: 1px solid var(--color-hairline);
-  background: color-mix(in srgb, var(--color-panel) 48%, var(--color-bg));
-  overflow: hidden;
+  min-width: 0;
+  overflow: auto;
 }
 
 .post-workspace__eyebrow,
@@ -1697,219 +1698,371 @@ body {
 }
 
 .aftercare-workspace__main {
-  min-width: 0;
-  min-height: 0;
-  overflow: auto;
-}
-
-.aftercare-workspace__main {
   display: flex;
   flex-direction: column;
-  padding: clamp(20px, 2.5vw, 32px) clamp(28px, 5vw, 64px);
+  gap: var(--space-5);
+  width: min(1080px, 100%);
+  margin: 0 auto;
+  padding: clamp(20px, 2.5vw, 32px) clamp(20px, 3vw, 40px) clamp(32px, 5vw, 56px);
 }
 
 .aftercare-workspace__header {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  align-items: baseline;
-  gap: var(--space-2) var(--space-4);
-  max-width: 980px;
-  padding-bottom: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: 0 var(--space-1);
 }
 
-.aftercare-workspace__constraint {
-  color: var(--color-muted);
-  font: 12px var(--font-mono);
-}
-
-.aftercare-workspace__lede {
-  grid-column: 1 / -1;
+.aftercare-workspace__headline {
   margin: 0;
-  max-width: 640px;
-  color: var(--color-muted);
-  font-size: 15px;
-  font-weight: 400;
-  line-height: 1.5;
+  font: 500 26px var(--bench-font-serif);
+  color: var(--text);
+}
+
+.aftercare-workspace__subline {
+  margin: 0;
+  max-width: 62ch;
+  color: var(--muted);
+  font: 13px var(--bench-font-text);
 }
 
 .aftercare-workspace__runway {
-  margin-top: 0;
-}
-
-.aftercare-workspace__actions {
-  margin: 0;
-  padding: 0;
-  list-style: none;
-  border-top: 1px solid var(--color-hairline);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
 }
 
 .aftercare-workspace__action-error {
-  margin-bottom: var(--space-4);
+  margin: 0;
 }
 
-.aftercare-workspace__actions li {
-  border-bottom: 1px solid var(--color-hairline);
+/* The grouped inset list, shared shape with Overview's lanes and the
+ * receipt below: a hairlined card whose rows are separated by hairlines. */
+.aftercare-workspace__group,
+.aftercare-shipped__group {
+  border: var(--bench-hairline-width) solid var(--hairline);
+  border-radius: var(--bench-radius-card);
+  background: var(--raised);
+  padding: var(--space-2);
 }
 
-.aftercare-workspace__actions button {
+.aftercare-workspace__rows,
+.aftercare-shipped__rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.aftercare-workspace__row {
+  border-top: var(--bench-hairline-width) solid var(--hairline);
+}
+
+.aftercare-workspace__row:first-child {
+  border-top: none;
+}
+
+.aftercare-workspace__row-hit {
   width: 100%;
   display: grid;
-  grid-template-columns: 42px minmax(0, 1fr) max-content;
-  align-items: center;
-  gap: var(--space-4);
-  min-height: 92px;
-  padding: var(--space-4) var(--space-3);
-  border: 0;
+  grid-template-columns: 20px minmax(0, 1fr) max-content;
+  align-items: start;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border: none;
+  border-radius: var(--bench-radius-control);
   background: transparent;
-  color: var(--color-text);
+  color: var(--text);
   text-align: left;
   cursor: pointer;
 }
 
-.aftercare-workspace__actions button:hover {
-  background: color-mix(in srgb, var(--color-signal) 8%, transparent);
+.aftercare-workspace__row-hit:hover {
+  background: var(--content);
 }
 
-.aftercare-workspace__actions button:focus-visible,
-.aftercare-workspace__archive button:focus-visible,
-.need-input-modal button:focus-visible,
-.need-input-modal textarea:focus-visible {
+.aftercare-workspace__row-hit:focus-visible {
   outline: var(--focus-ring);
   outline-offset: -2px;
 }
 
-.aftercare-workspace__action-index {
-  color: var(--color-muted);
-  font: 12px var(--font-mono);
+.aftercare-workspace__symbol {
+  margin-top: 2px;
+  color: var(--muted);
 }
 
-.aftercare-workspace__action-copy {
+.aftercare-workspace__row-body {
   display: flex;
   flex-direction: column;
-  gap: var(--space-1);
+  gap: 2px;
+  min-width: 0;
 }
 
-.aftercare-workspace__action-copy strong {
-  font: 700 21px var(--font-display);
+.aftercare-workspace__row-title {
+  font: 600 13px var(--bench-font-text);
+  color: var(--text);
 }
 
-.aftercare-workspace__action-copy small {
-  color: var(--color-muted);
-  font-size: 14px;
+.aftercare-workspace__row-desc {
+  max-width: 58ch;
+  color: var(--muted);
+  font: 12px/1.45 var(--bench-font-text);
 }
 
+/* The trailing label reads as the row's verb; the row itself is the control,
+ * so this is a pill, not a nested button. */
 .aftercare-workspace__action-label {
-  color: var(--color-signal);
-  font: 600 12px var(--font-mono);
+  align-self: center;
+  padding: 5px var(--space-3);
+  border: var(--bench-hairline-width) solid var(--hairline);
+  border-radius: var(--bench-radius-control);
+  color: var(--text);
+  font: 600 12px var(--bench-font-text);
+  white-space: nowrap;
+}
+
+.aftercare-workspace__row-hit:hover .aftercare-workspace__action-label {
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 .aftercare-workspace__action-blocked {
-  color: var(--color-muted);
-  font: 12px var(--font-mono);
+  align-self: center;
+  max-width: 24ch;
+  color: var(--muted);
+  font: 11px/1.4 var(--bench-font-text);
   text-align: right;
 }
 
-.aftercare-workspace__actions button[data-blocked] {
+.aftercare-workspace__row-hit[data-blocked] {
   cursor: not-allowed;
 }
 
-.aftercare-workspace__actions button[data-blocked]:hover {
+.aftercare-workspace__row-hit[data-blocked]:hover {
   background: transparent;
 }
 
-.aftercare-workspace__actions button[data-blocked] .aftercare-workspace__action-index,
-.aftercare-workspace__actions button[data-blocked] .aftercare-workspace__action-copy strong {
-  color: var(--color-muted);
+.aftercare-workspace__row-hit[data-blocked] .aftercare-workspace__row-title,
+.aftercare-workspace__row-hit[data-blocked] .aftercare-workspace__symbol {
+  color: var(--muted);
 }
 
 .aftercare-workspace__empty {
   margin: 0;
-  padding: var(--space-5) 0;
-  border-top: 1px solid var(--color-hairline);
-  border-bottom: 1px solid var(--color-hairline);
-  color: var(--color-muted);
+  padding: var(--space-4) var(--space-3);
+  border: var(--bench-hairline-width) solid var(--hairline);
+  border-radius: var(--bench-radius-card);
+  background: var(--raised);
+  color: var(--muted);
+  font: 13px var(--bench-font-text);
 }
 
-.aftercare-workspace__archive {
-  display: flex;
-  gap: var(--space-4);
-  margin-top: auto;
-  padding-top: clamp(30px, 5vw, 56px);
-}
+/* --- What shipped -------------------------------------------------------- */
 
-.aftercare-workspace__archive button {
-  padding: 0;
-  border: 0;
-  border-bottom: 1px solid currentColor;
-  background: transparent;
-  color: var(--color-muted);
-  font: 12px var(--font-mono);
-  cursor: pointer;
-}
-
-.feature-facts {
-  min-width: 0;
-  overflow: auto;
-  padding: clamp(24px, 3vw, 36px) var(--space-5);
-  border-left: 1px solid var(--color-hairline);
-  background: color-mix(in srgb, var(--color-bg) 68%, var(--color-panel));
-}
-
-.feature-facts__list {
+.aftercare-shipped {
   display: flex;
   flex-direction: column;
-  gap: var(--space-5);
-  margin: var(--space-5) 0 0;
+  gap: var(--space-2);
 }
 
-.feature-facts__fact {
+.aftercare-shipped__title {
+  margin: 0;
+  padding: 0 var(--space-1);
+  font: 600 15px var(--bench-font-text);
+  color: var(--text);
+}
+
+.aftercare-shipped__row {
+  display: grid;
+  grid-template-columns: 110px minmax(0, 1fr) max-content;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-top: var(--bench-hairline-width) solid var(--hairline);
+}
+
+.aftercare-shipped__row:first-child {
+  border-top: none;
+}
+
+.aftercare-shipped__label {
+  color: var(--muted);
+  font: 12px var(--bench-font-text);
+}
+
+.aftercare-shipped__fact {
+  grid-column: 2 / 4;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) max-content;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+  min-width: 0;
+  color: var(--text);
+  font: 13px var(--bench-font-text);
+}
+
+.aftercare-shipped__fact-body {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
   min-width: 0;
 }
 
-.feature-facts__fact dt {
-  margin-bottom: var(--space-1);
-  color: var(--color-muted);
-  font: 11px var(--font-mono);
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+.aftercare-shipped__number,
+.aftercare-shipped__added,
+.aftercare-shipped__removed {
+  font: 12px var(--bench-font-mono);
 }
 
-.feature-facts__fact dd {
+.aftercare-shipped__added {
+  color: var(--ok);
+}
+
+.aftercare-shipped__removed {
+  color: var(--bad);
+}
+
+.aftercare-shipped__meta,
+.aftercare-shipped__placeholder {
+  color: var(--muted);
+  font: 12px var(--bench-font-text);
+}
+
+.aftercare-shipped__meta {
+  font-family: var(--bench-font-mono);
+}
+
+/* The single sanctioned proportional-width element on the surface: the
+ * additions-to-deletions ratio of the aggregated diff. */
+.aftercare-shipped__bar {
+  display: flex;
+  width: clamp(64px, 12vw, 120px);
+  height: 3px;
+  border-radius: 2px;
+  overflow: hidden;
+  background: var(--hairline);
+}
+
+.aftercare-shipped__bar-added {
+  background: var(--ok);
+}
+
+.aftercare-shipped__bar-removed {
+  background: var(--bad);
+}
+
+/* The pip row is the shared phase-rail track at rest; it needs no labels or
+ * trio here, only the completed geometry. */
+.aftercare-shipped__pips {
+  display: block;
+  width: clamp(80px, 14vw, 150px);
+}
+
+.aftercare-shipped__pips .phase-rail__track {
+  padding: 0;
+}
+
+.aftercare-shipped__pips .phase-rail__label {
+  display: none;
+}
+
+.aftercare-shipped__action {
+  padding: 5px var(--space-3);
+  border: var(--bench-hairline-width) solid var(--hairline);
+  border-radius: var(--bench-radius-control);
+  background: transparent;
+  color: var(--text);
+  font: 600 12px var(--bench-font-text);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.aftercare-shipped__action:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* --- The inspector pane's feature facts ---------------------------------- */
+
+.cockpit__inspector .aftercare-facts {
+  padding: var(--space-1) var(--space-4) var(--space-4) 0;
+}
+
+.aftercare-facts {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.aftercare-facts__title {
   margin: 0;
+  font: 600 15px var(--bench-font-text);
+  color: var(--text);
+}
+
+.aftercare-facts__list {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  border: var(--bench-hairline-width) solid var(--hairline);
+  border-radius: var(--bench-radius-card);
+  background: var(--raised);
+  overflow: hidden;
+}
+
+.aftercare-facts__fact {
+  display: grid;
+  grid-template-columns: 84px minmax(0, 1fr);
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-top: var(--bench-hairline-width) solid var(--hairline);
+  min-width: 0;
+}
+
+.aftercare-facts__fact:first-child {
+  border-top: none;
+}
+
+.aftercare-facts__fact dt {
+  color: var(--muted);
+  font: 12px var(--bench-font-text);
+}
+
+.aftercare-facts__fact dd {
+  margin: 0;
+  min-width: 0;
   overflow-wrap: anywhere;
-  color: var(--color-text);
-  font-weight: 700;
+  color: var(--text);
+  font: 12px var(--bench-font-text);
 }
 
-.feature-facts__fact code,
-.feature-facts__fact a {
+.aftercare-facts__fact code {
   color: inherit;
-  font: 13px/1.45 var(--font-mono);
+  font: 12px/1.5 var(--bench-font-mono);
 }
 
-.feature-facts__fact a {
-  color: var(--color-signal);
-}
-
-.feature-facts__link {
+.aftercare-facts__link {
   border: 0;
   padding: 0;
   background: transparent;
-  color: var(--color-signal);
-  font: 13px/1.45 var(--font-mono);
+  color: var(--accent);
+  font: 12px var(--bench-font-text);
   cursor: pointer;
   text-align: left;
+}
+
+.aftercare-facts__link:hover {
   text-decoration: underline;
   text-underline-offset: 0.2em;
 }
 
-.feature-facts__link:hover {
-  color: var(--color-text);
-}
-
-.feature-facts__link:focus-visible {
+.aftercare-facts__link:focus-visible {
   outline: var(--focus-ring);
-  outline-offset: 0.2rem;
+  outline-offset: 2px;
 }
 
 .need-input-modal__backdrop {
@@ -2232,48 +2385,30 @@ body {
   }
 }
 
-@media (max-width: 900px) {
-  .post-workspace {
-    grid-template-columns: 1fr;
-    grid-template-rows: auto auto;
-    overflow-y: auto;
-  }
-
-  .aftercare-workspace__main {
-    overflow: visible;
-  }
-
-  /* In the stacked layout the main row must grow to its content so the
-   * container's overflow-y: auto can scroll. The base min-height: 0 would
-   * otherwise let the row compress and paint under the facts panel. */
-  .aftercare-workspace__main {
-    min-height: auto;
-  }
-
-  .feature-facts {
-    overflow: visible;
-    border-top: 1px solid var(--color-hairline);
-    border-left: 0;
-  }
-
-  .feature-facts__list {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-}
-
 @media (max-width: 620px) {
   .aftercare-workspace__main {
-    padding: var(--space-5);
+    padding: var(--space-4);
   }
 
-  .aftercare-workspace__actions button {
-    grid-template-columns: 30px minmax(0, 1fr);
+  /* At this width the trailing verb wraps under the copy rather than
+   * squeezing the description into a column of single words. */
+  .aftercare-workspace__row-hit {
+    grid-template-columns: 20px minmax(0, 1fr);
   }
 
   .aftercare-workspace__action-label,
   .aftercare-workspace__action-blocked {
     grid-column: 2;
+    justify-self: start;
+    text-align: left;
+  }
+
+  .aftercare-shipped__row {
+    grid-template-columns: minmax(0, 1fr) max-content;
+  }
+
+  .aftercare-shipped__label {
+    grid-column: 1 / -1;
   }
 }
 
@@ -7882,6 +8017,24 @@ body {
 
 .cockpit__completion-button:hover {
   background: color-mix(in srgb, var(--color-success) 10%, transparent);
+}
+
+/* Blocked stays prominent — it is still the verb the surface is pointing at —
+ * but reads unavailable, with the preflight's reason spelled out beside it. */
+.cockpit__completion-button:disabled {
+  border-color: var(--hairline);
+  background: transparent;
+  color: var(--muted);
+  cursor: not-allowed;
+}
+
+.cockpit__completion-blocker {
+  max-width: min(34ch, 26vw);
+  overflow: hidden;
+  color: var(--muted);
+  font: 11px var(--bench-font-text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .cockpit__completion-secondary {

@@ -97,12 +97,15 @@ test('packaged local-merge-rebase completion: conflict, rebase, retry, done, cle
     transcript.section('Relaunch and open feature cockpit');
     handle = await launchApp(world, testInfo, { traceName: 'local-merge-rebase-completion' });
     const cockpit = await openCompletion(handle, featureName);
-    await expect(handle.page.getByRole('button', { name: 'Merge', exact: true })).toBeVisible({
+    // Merge is offered only from the aftercare runway; the toolbar no longer carries delivery verbs.
+    const aftercareRunway = handle.page.getByRole('region', { name: 'Feature aftercare' });
+    await expect(aftercareRunway.getByRole('button', { name: /Merge this feature/ })).toBeVisible({
       timeout: 30_000,
     });
+    await expect(handle.page.getByRole('button', { name: 'Merge', exact: true })).toHaveCount(0);
 
     transcript.section('Inspect repository scope and diff');
-    await cockpit.getByRole('button', { name: 'Changes', exact: true }).click();
+    await cockpit.getByRole('button', { name: 'View changes', exact: true }).click();
     const changesModal = handle.page.getByRole('dialog', { name: 'Feature changes' });
     const changes = changesModal.getByRole('region', { name: 'Changes' });
     await expect(changes).toBeVisible({ timeout: 15_000 });
@@ -128,7 +131,7 @@ test('packaged local-merge-rebase completion: conflict, rebase, retry, done, cle
     await expect(changesModal).toBeHidden();
 
     transcript.section('Attempt local merge and observe conflict');
-    await handle.page.getByRole('button', { name: 'Merge', exact: true }).click();
+    await aftercareRunway.getByRole('button', { name: /Merge this feature/ }).click();
     const mergeModal = handle.page.getByRole('dialog', { name: 'Merge local repositories' });
     await expect(mergeModal.locator('.completion-workspace__merge')).toBeVisible();
     await expect(mergeModal.getByText('local-core')).toBeVisible();
@@ -196,7 +199,7 @@ test('packaged local-merge-rebase completion: conflict, rebase, retry, done, cle
     // returning from the pass workspace and ensures the retry is driven by a fresh snapshot.
     await handle.page.getByRole('option', { name: 'Overview' }).click();
     await openCompletion(handle, featureName);
-    await handle.page.getByRole('button', { name: 'Merge', exact: true }).click();
+    await aftercareRunway.getByRole('button', { name: /Merge this feature/ }).click();
     const retryMerge = mergeModal.getByRole('button', { name: 'Merge', exact: true });
     await expect(retryMerge).toBeEnabled({ timeout: 15_000 });
     await retryMerge.click();

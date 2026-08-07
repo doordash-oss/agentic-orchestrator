@@ -112,7 +112,7 @@ test('capture all visual evidence screenshots', async ({ page }) => {
     'aftercare-change-manifest-with-repository-switchboard-file-index-and-split-diff-1440x900',
     '.aftercare-workspace',
     async (p) => {
-      await p.getByRole('button', { name: 'Changes' }).click();
+      await p.getByRole('button', { name: 'View changes' }).click();
       await expect(p.getByRole('dialog', { name: 'Feature changes' })).toBeVisible();
       await expect(p.getByText('New description with completion workspace support.')).toBeVisible({
         timeout: 15_000,
@@ -130,7 +130,7 @@ test('capture all visual evidence screenshots', async ({ page }) => {
     'wide-run-record-desk-with-live-activity-artifact-ledger-and-bounded-content-1440x900',
     '.aftercare-workspace',
     async (p) => {
-      await p.getByRole('button', { name: 'Run record' }).click();
+      await p.getByRole('button', { name: 'View run record' }).click();
       await expect(p.getByRole('dialog', { name: 'Run record' })).toBeVisible();
       await expect(p.getByRole('group', { name: 'Preview view' })).toBeVisible({
         timeout: 15_000,

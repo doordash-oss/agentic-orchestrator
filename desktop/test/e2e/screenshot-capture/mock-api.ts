@@ -640,6 +640,52 @@ const AFTERCARE_FEATURE_SNAPSHOT: FeatureSnapshot = {
   ],
 };
 
+/**
+ * Published aftercare with the verification items still carried. The server
+ * clears them the moment harness verification finishes, so this fixture
+ * exercises the carried-items branch of the receipt's Verification row; the
+ * `aftercare-bare` fixture below exercises the (commoner) cleared case.
+ */
+const AFTERCARE_VERIFIED_SNAPSHOT: FeatureSnapshot = {
+  ...AFTERCARE_FEATURE_SNAPSHOT,
+  verificationItems: [
+    { name: 'lint', state: 'passed' },
+    { name: 'typecheck', state: 'passed' },
+    { name: 'unit', state: 'passed' },
+    { name: 'e2e', state: 'passed' },
+  ],
+};
+
+/** Published with nothing to show: no pull request, no reachable diff. */
+const AFTERCARE_BARE_SNAPSHOT: FeatureSnapshot = {
+  ...AFTERCARE_FEATURE_SNAPSHOT,
+  name: 'Taulu TTL compaction',
+  slug: 'taulu-ttl-compaction',
+  repos: ['taulu'],
+  repoStatus: [{ name: 'taulu', publishable: false, touched: true, freshness: 'local only' }],
+};
+
+/** Code-ready with undelivered commits and Mark done blocked by the preflight. */
+const AFTERCARE_CODEREADY_SNAPSHOT: FeatureSnapshot = {
+  ...AFTERCARE_FEATURE_SNAPSHOT,
+  status: 'CodeReady',
+  currentPhase: 'Review',
+  actions: [
+    { id: 'rebase', enabled: true, disabledReasons: [] },
+    { id: 'refactor', enabled: true, disabledReasons: [] },
+    { id: 'review-feedback', enabled: true, disabledReasons: [] },
+    // The pull request already exists, so publishing again is the delivery of
+    // the new commits — the runway's `Publish new commits` row.
+    {
+      id: 'publish',
+      enabled: false,
+      disabledReasons: [{ code: 'already_published', message: 'Already published.' }],
+    },
+    { id: 'cleanup', enabled: true, disabledReasons: [] },
+    { id: 'mark-done', enabled: true, disabledReasons: [] },
+  ],
+};
+
 const REFACTOR_PASS_CHILD_ID = 'f73d148b32f070a2';
 
 /** Ready-to-start refactor child for the refactor-pass workspace scene. */
@@ -1170,11 +1216,16 @@ function makeMockApi(
       if (scene === 'repo-instrument' || scene === 'refactor-launch') {
         return Promise.resolve(CYCLES_FEATURE_SNAPSHOT);
       }
-      if (
-        scene === 'aftercare' ||
-        scene === 'aftercare-rebase-up-to-date' ||
-        scene === 'aftercare-unpublished'
-      ) {
+      if (scene === 'aftercare-verified' || scene === 'aftercare-inspector') {
+        return Promise.resolve(AFTERCARE_VERIFIED_SNAPSHOT);
+      }
+      if (scene === 'aftercare-bare') {
+        return Promise.resolve(AFTERCARE_BARE_SNAPSHOT);
+      }
+      if (scene === 'aftercare-codeready') {
+        return Promise.resolve(AFTERCARE_CODEREADY_SNAPSHOT);
+      }
+      if (scene.startsWith('aftercare')) {
         return Promise.resolve(AFTERCARE_FEATURE_SNAPSHOT);
       }
       if (scene === 'refactor-pass') {
@@ -1448,11 +1499,7 @@ function makeMockApi(
       } as RunListResult);
     },
     getRun: ({ runNumber }) => {
-      if (
-        scene === 'aftercare' ||
-        scene === 'aftercare-rebase-up-to-date' ||
-        scene === 'aftercare-unpublished'
-      ) {
+      if (scene.startsWith('aftercare')) {
         return Promise.resolve({
           ...RUN_DETAIL,
           runNumber,
@@ -1629,7 +1676,18 @@ function makeMockApi(
     fetchReviewFeedback: () =>
       Promise.resolve({
         featureId: 'abcd1234ef567890',
-        repos: [],
+        repos: scene.startsWith('aftercare')
+          ? [
+              {
+                repo: 'agentic-orchestrator',
+                prUrl: 'https://github.com/doordash-oss/agentic-orchestrator/pull/107',
+                comments: [
+                  { repo: 'agentic-orchestrator', id: 1, type: 'review' as const },
+                  { repo: 'agentic-orchestrator', id: 2, type: 'issue' as const },
+                ],
+              },
+            ]
+          : [],
       }),
     launchReviewFeedbackChild: () =>
       Promise.resolve({
@@ -1712,7 +1770,43 @@ function makeMockApi(
           ],
         });
       }
-      if (scene === 'aftercare' || scene === 'aftercare-rebase-up-to-date') {
+      if (scene === 'aftercare-codeready') {
+        return Promise.resolve({
+          featureId: 'abcd1234ef567890',
+          sourceRevision: 'rev-aftercare-mock',
+          canMarkDone: false,
+          markDoneBlocker: 'agentic-orchestrator has 3 commits that are not published yet',
+          repos: [
+            {
+              repo: 'agentic-orchestrator',
+              publishable: true,
+              touched: true,
+              status: 'unpublished_changes',
+              prUrl: 'https://github.com/doordash-oss/agentic-orchestrator/pull/107',
+              baseBranch: 'main',
+              branch: 'feature/configure-per-phase-effort-level',
+              freshness: 'up_to_date',
+              pendingCommits: 3,
+              pendingDirty: false,
+              pushMode: 'fast_forward',
+            },
+          ],
+        });
+      }
+      if (scene === 'aftercare-bare') {
+        return Promise.resolve({
+          featureId: 'abcd1234ef567890',
+          sourceRevision: 'rev-aftercare-mock',
+          canMarkDone: true,
+          repos: [{ repo: 'taulu', publishable: false, touched: true, status: 'completed' }],
+        });
+      }
+      if (
+        scene === 'aftercare' ||
+        scene === 'aftercare-verified' ||
+        scene === 'aftercare-inspector' ||
+        scene === 'aftercare-rebase-up-to-date'
+      ) {
         return Promise.resolve({
           featureId: 'abcd1234ef567890',
           sourceRevision: 'rev-aftercare-mock',
@@ -1827,6 +1921,10 @@ function makeMockApi(
     },
     getRepositoryDiff: (_req: { featureId: string; repo: string; filePath?: string }) => {
       const repo = _req.repo;
+      // Worktrees reclaimed: the aftercare receipt must omit its Changes row.
+      if (scene === 'aftercare-bare') {
+        return Promise.reject(new Error('no_worktree: the feature worktrees have been cleaned'));
+      }
       const filePath = _req.filePath;
       const sampleDiff = `diff --git a/README.md b/README.md
 index 5c32b6a..8a9b3c1 100644

@@ -877,23 +877,52 @@ function CockpitRedesignScene({ variant }: { variant: CockpitRedesignVariant }) 
   );
 }
 
+/**
+ * Aftercare renders under a real toolbar: the trailing zone owns the state
+ * chip, the wrap-up verbs, the ⋯ menu, and the inspector toggle, so the scene
+ * mounts the same three portal hosts the shell provides.
+ */
 function AftercareScene() {
   const [drafts, setDrafts] = React.useState(emptyAttentionDrafts);
+  const [actionsSlot, setActionsSlot] = React.useState<HTMLDivElement | null>(null);
+  const [overflowSlot, setOverflowSlot] = React.useState<HTMLDivElement | null>(null);
+  const [inspectorSlot, setInspectorSlot] = React.useState<HTMLDivElement | null>(null);
+  const [title, setTitle] = React.useState('Configure per-phase effort level');
   return (
     <div className="app-frame">
       <div className="workspace">
         <div className="sidebar" aria-hidden="true" />
         <div className="content-column">
-          <header className="toolbar" aria-hidden="true" />
+          <header className="toolbar" aria-label="Workspace toolbar">
+            <div className="toolbar__leading">
+              <button type="button" className="toolbar__sidebar-toggle" aria-label="Hide sidebar">
+                <span aria-hidden="true">▥</span>
+              </button>
+            </div>
+            <div className="toolbar__title">
+              <p className="toolbar__title-name">{title}</p>
+              <p className="toolbar__title-subline">
+                agentic-orchestrator · feature/configure-per-phase-effort-level
+              </p>
+            </div>
+            <div className="toolbar__trailing">
+              <div className="toolbar__actions-slot" ref={setActionsSlot} />
+              <div className="toolbar__overflow-slot" ref={setOverflowSlot} />
+              <div className="toolbar__inspector-slot" ref={setInspectorSlot} />
+            </div>
+          </header>
           <FeatureCockpit
             featureId="abcd1234ef567890"
             titleHint="Configure per-phase effort level"
             onClose={() => undefined}
-            onLoadedName={() => undefined}
+            onLoadedName={setTitle}
             attentionItems={[]}
             refreshAttention={() => Promise.resolve([])}
             attentionDrafts={drafts}
             setAttentionDrafts={setDrafts}
+            actionsHost={actionsSlot}
+            overflowMenuHost={overflowSlot}
+            inspectorToggleHost={inspectorSlot}
           />
         </div>
       </div>
@@ -1435,12 +1464,7 @@ function CaptureApp() {
   if (scene === 'setup-wizard') {
     return <SetupWizardScene />;
   }
-  if (
-    scene === 'aftercare' ||
-    scene === 'aftercare-rebase-up-to-date' ||
-    scene === 'aftercare-unpublished' ||
-    scene === 'refactor-pass'
-  ) {
+  if (scene.startsWith('aftercare') || scene === 'refactor-pass') {
     return <AftercareScene />;
   }
   if (scene === 'feature-question') {

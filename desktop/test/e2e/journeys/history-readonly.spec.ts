@@ -146,9 +146,11 @@ test('history: paginated sealed runs, restored archive selection, immutable insp
 
     transcript.section('Return to current run');
     await handle.page.getByRole('button', { name: /Return to current/ }).click();
-    await expect(cockpit.getByText('Code ready', { exact: true }).first()).toBeVisible({
-      timeout: 10_000,
-    });
+    await expect(cockpit.getByRole('heading', { name: 'The work is ready to go out' })).toBeVisible(
+      {
+        timeout: 10_000,
+      },
+    );
 
     transcript.section('Capture constrained-layout archive screenshots at 760x900');
     await runSwitcher.click();
@@ -179,9 +181,9 @@ test('history: paginated sealed runs, restored archive selection, immutable insp
     });
     await handle.page.getByRole('option', { name: 'History Journey' }).click();
     const relaunchedCockpit = handle.page.getByLabel('Feature History Journey');
-    await expect(relaunchedCockpit.getByText('Code ready', { exact: true }).first()).toBeVisible({
-      timeout: 15_000,
-    });
+    await expect(
+      relaunchedCockpit.getByRole('heading', { name: 'The work is ready to go out' }),
+    ).toBeVisible({ timeout: 15_000 });
     await expect(handle.page.locator('.archive-mode__band')).toHaveCount(0);
 
     transcript.section('Journey complete');

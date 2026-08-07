@@ -94,12 +94,14 @@ test('packaged publish partial retry: push succeeds, PR creation fails, retry sc
     transcript.section('Relaunch and open feature cockpit');
     handle = await launchApp(world, testInfo, { traceName: 'publish-partial-retry' });
     const cockpit = await openCompletion(handle, featureName);
-    await expect(handle.page.getByRole('button', { name: 'Publish', exact: true })).toBeVisible({
-      timeout: 30_000,
-    });
+    // Publish is offered only from the aftercare runway; the toolbar no longer carries delivery verbs.
+    const aftercareRunway = handle.page.getByRole('region', { name: 'Feature aftercare' });
+    const publishRow = aftercareRunway.getByRole('button', { name: /Publish this feature/ });
+    await expect(publishRow).toBeVisible({ timeout: 30_000 });
+    await expect(handle.page.getByRole('button', { name: 'Publish', exact: true })).toHaveCount(0);
 
     transcript.section('Inspect repository scope and diffs');
-    await cockpit.getByRole('button', { name: 'Changes', exact: true }).click();
+    await cockpit.getByRole('button', { name: 'View changes', exact: true }).click();
     const changesModal = handle.page.getByRole('dialog', { name: 'Feature changes' });
     const changes = changesModal.getByRole('region', { name: 'Changes' });
     await expect(changes).toBeVisible({ timeout: 15_000 });
@@ -125,7 +127,7 @@ test('packaged publish partial retry: push succeeds, PR creation fails, retry sc
     await changesModal.getByRole('button', { name: 'Close' }).click();
 
     transcript.section('Open publish modal and generate PR narrative');
-    await handle.page.getByRole('button', { name: 'Publish', exact: true }).click();
+    await publishRow.click();
     const publishModal = handle.page.getByRole('dialog', { name: 'Publish reviewed changes' });
     await expect(publishModal.locator('.completion-workspace__publish')).toBeVisible();
     // publish-api is pre-seeded as already published — only publish-web is in the publish set.
@@ -156,7 +158,9 @@ test('packaged publish partial retry: push succeeds, PR creation fails, retry sc
     // Reopen the publish modal so it re-derives scope from the post-publish preflight.
     await publishModal.getByRole('button', { name: 'Close' }).click();
     await expect(publishModal).toHaveCount(0);
-    await handle.page.getByRole('button', { name: 'Publish', exact: true }).click();
+    await aftercareRunway
+      .getByRole('button', { name: /Publish (this feature|new commits)/ })
+      .click();
     await expect(publishModal.locator('.completion-workspace__publish')).toBeVisible();
     // publish-api was pre-seeded as already published — it must NOT appear in the retry checkbox set.
     await expect(publishModal.getByRole('checkbox', { name: 'publish-api' })).toHaveCount(0);

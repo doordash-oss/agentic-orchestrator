@@ -57,7 +57,7 @@ function formatBytes(bytes: number): string {
  * per-session signal trace. Files is a top-level cockpit segment now, not a
  * view here — except in the record presentation (the aftercare "Run
  * record" modal, standalone with no stage bar of its own), which keeps its
- * original three-way toggle unchanged; Phase 6 owns that surface.
+ * original three-way toggle unchanged.
  */
 type PreviewView = 'conversation' | 'trace' | 'files';
 

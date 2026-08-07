@@ -1579,6 +1579,17 @@ export function attentionOwnerFeatureId(item: AttentionItem): string | undefined
   if ('parentFeatureId' in item && item.parentFeatureId !== undefined) return item.parentFeatureId;
   return item.featureId;
 }
+/**
+ * The one badge rule, shared by every surface that counts blocking input: the
+ * toolbar bell, and the main process's tray icon and "Attention (N)" label.
+ * Recovery is contextual priority rather than a request awaiting an answer, so
+ * it never contributes to a count — keeping this in one place is what stops the
+ * three badges from drifting apart.
+ */
+export function actionableAttentionCount(items: readonly AttentionItem[]): number {
+  return items.filter((item) => item.kind !== 'recovery').length;
+}
+
 export const AttentionSnapshotSchema = z.strictObject({
   items: z.array(AttentionItemSchema).max(4000),
 });

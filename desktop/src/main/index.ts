@@ -52,13 +52,13 @@ import { SetupService } from './setup';
 import { CreationFilesService } from './creationFiles';
 import { ThemeController } from './theme';
 import {
+  actionableAttentionCount,
   CHAT_SESSION_ID,
   CREATION_IMAGE_FORMATS,
   IPC_EVENTS,
   isActiveChatSession,
   type AppEvent,
   type AppRouteEvent,
-  type AttentionSnapshot,
   type FeatureSnapshot,
 } from '../shared/ipc';
 import { toSafeError } from '../shared/errors';
@@ -755,7 +755,7 @@ if (!hasSingleInstanceLock) {
           featureLabel: (featureId) => featureLabels.get(featureId) ?? 'Untitled feature',
         });
         nativeCommands?.update({
-          attentionCount: actionableAttentionCount(snapshot),
+          attentionCount: actionableAttentionCount(snapshot.items),
           amaActive: sessionList.some(isActiveChatSession),
         });
         publishNativeCommandTestState(nativeCommands);
@@ -973,10 +973,6 @@ app.on('window-all-closed', () => {
 
 function stoppableFeature(snapshot: FeatureSnapshot): boolean {
   return snapshot.actions.some((action) => action.id === 'pause-stop' && action.enabled);
-}
-
-function actionableAttentionCount(snapshot: AttentionSnapshot): number {
-  return snapshot.items.filter((item) => item.kind !== 'recovery').length;
 }
 
 function publishNativeCommandTestState(nativeCommands: NativeCommandController | null): void {

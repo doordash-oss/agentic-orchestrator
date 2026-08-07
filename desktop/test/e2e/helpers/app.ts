@@ -274,13 +274,47 @@ function copyTraceToEvidence(tracePath: string, name: string): void {
  */
 export async function evidenceShot(handle: AppHandle, name: string): Promise<void> {
   const local = handle.testInfo.outputPath(`${name}.png`);
-  await handle.page.screenshot({ path: local });
+  // Playwright's screenshot pipeline can stall indefinitely on a packaged
+  // Electron window when the suite shares a machine with other heavy work: it
+  // reports "fonts loaded" and then never returns, which used to fail a random
+  // journey per full run. A stalled capture is not a product failure, so fall
+  // back to the main process's own compositor capture — same real window, a
+  // different code path — and only fail if that cannot produce bytes either.
+  await captureWindow(handle, local);
   const dir = evidenceDir();
   if (dir !== null) {
     const target = path.join(dir, 'screenshots');
     fs.mkdirSync(target, { recursive: true });
     fs.copyFileSync(local, path.join(target, `${name}.png`));
   }
+}
+
+/**
+ * The pre-fallback budget has to be small enough that a whole journey's worth
+ * of stalls still fits the 240s test timeout: the heaviest journey takes ten
+ * evidence shots, so anything above ~20s each can blow the test budget even
+ * though every capture eventually succeeds. A healthy Playwright capture of
+ * this window lands in well under a second, and `capturePage()` is accepted as
+ * equivalent evidence — so spend as little as possible waiting on the stall.
+ */
+const PLAYWRIGHT_SHOT_BUDGET_MS = 5_000;
+
+async function captureWindow(handle: AppHandle, target: string): Promise<void> {
+  try {
+    await handle.page.screenshot({ path: target, timeout: PLAYWRIGHT_SHOT_BUDGET_MS });
+    return;
+  } catch {
+    // Fall through to the main-process capture below.
+  }
+  const encoded = await handle.app.evaluate(async ({ BrowserWindow }) => {
+    const window = BrowserWindow.getAllWindows()[0];
+    if (window === undefined) throw new Error('main window missing');
+    const image = await window.webContents.capturePage();
+    return image.toPNG().toString('base64');
+  });
+  const bytes = Buffer.from(encoded, 'base64');
+  if (bytes.byteLength === 0) throw new Error(`capturePage produced no bytes for ${target}`);
+  fs.writeFileSync(target, bytes);
 }
 
 /**

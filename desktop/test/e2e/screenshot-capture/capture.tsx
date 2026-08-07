@@ -35,7 +35,6 @@ import { FeatureCockpit } from '../../../src/renderer/src/features/FeatureCockpi
 import { ConnectionShell } from '../../../src/renderer/src/components/ConnectionShell';
 import { SetupWizard } from '../../../src/renderer/src/components/wizard/SetupWizard';
 import type { ReadinessSnapshot } from '../../../src/shared/ipc';
-import { UpdateNotice } from '../../../src/renderer/src/components/UpdateNotice';
 import { AmaPanel } from '../../../src/renderer/src/components/AmaPanel';
 import { CommandPalette } from '../../../src/renderer/src/components/CommandPalette';
 import { MonacoBuffer } from '../../../src/renderer/src/components/monaco';
@@ -1347,32 +1346,43 @@ function CloseDialogScene(): React.ReactElement {
   );
 }
 
+/**
+ * The update notice inside the real shell: nothing here is hand-built. The same
+ * WorkspaceShell the app mounts renders the toolbar, the always-visible
+ * attention bell, the transient update trigger, the sidebar footer dot, and the
+ * real UpdatePopover — all of it driven by the mock API's update state, so the
+ * scene proves the notice occupies no flow space. The popover never opens on
+ * its own; the specs click the trigger, exactly as a user does.
+ *
+ * The scene data (Overview selection, the active-work summary that unlocks
+ * Install When Idle) lives in mock-api, keyed by scene id.
+ */
 function UpdateAppScene(): React.ReactElement {
   const [update, setUpdate] = React.useState<Awaited<ReturnType<AgenticoApi['getUpdates']>> | null>(
     null,
   );
+  const [dismissedVersion, setDismissedVersion] = React.useState<string | null>(null);
   const [showSettings, setShowSettings] = React.useState(false);
+  // This scene photographs the bell beside the update trigger, so it has to feed
+  // the shell the same attention snapshot the app would — otherwise the badge
+  // reads zero next to a populated "Waiting on you" lane.
+  const [attentionItems, setAttentionItems] = React.useState<AttentionItem[]>([]);
   React.useEffect(() => {
     void window.agentico.getUpdates().then(setUpdate);
+    void window.agentico.getAttention().then((snapshot) => setAttentionItems(snapshot.items));
   }, []);
   return (
     <div className="app-frame" style={{ height: '100vh' }}>
-      <header className="toolbar">
-        <div className="toolbar__title">
-          <p className="toolbar__title-name">Agentico</p>
-        </div>
-      </header>
-      <UpdateNotice
-        update={update}
-        dismissedVersion={null}
-        scheduling={false}
-        onDismiss={() => {}}
-        onOpenSettings={() => setShowSettings(true)}
-        onInstallWhenIdle={async () => {
+      <WorkspaceShell
+        attentionItems={attentionItems}
+        updateState={update}
+        updateDismissedVersion={dismissedVersion}
+        schedulingUpdate={false}
+        onDismissUpdate={setDismissedVersion}
+        onOpenUpdatesSettings={() => setShowSettings(true)}
+        onInstallUpdateWhenIdle={async () => {
           setUpdate(await window.agentico.installUpdateWhenIdle());
         }}
-      />
-      <WorkspaceShell
         routeRequest={
           showSettings
             ? {
@@ -1381,6 +1391,41 @@ function UpdateAppScene(): React.ReactElement {
               }
             : null
         }
+      />
+    </div>
+  );
+}
+
+/**
+ * The attention popover inside the real shell: the same WorkspaceShell the app
+ * mounts, so the real bell sits in a real toolbar — badge and all — over a real
+ * feature cockpit, and the surface it opens is the real AttentionInbox popover.
+ * The mixed snapshot (an ownerless verification gate plus feature-owned
+ * permission and review items) comes from the mock API. The scene does not open
+ * the popover: the evidence spec clicks the bell, mirroring how the
+ * creation-sheet and ama-panel scenes leave the interaction to the spec.
+ */
+function AttentionPopoverScene(): React.ReactElement {
+  const [drafts, setDrafts] = React.useState(emptyAttentionDrafts());
+  const [attentionItems, setAttentionItems] = React.useState<AttentionItem[]>([]);
+
+  React.useEffect(() => {
+    void window.agentico.getAttention().then((snapshot) => setAttentionItems(snapshot.items));
+  }, []);
+
+  const refreshAttention = React.useCallback(async () => {
+    const snapshot = await window.agentico.getAttention();
+    setAttentionItems(snapshot.items);
+    return snapshot.items;
+  }, []);
+
+  return (
+    <div className="app-frame" style={{ height: '100vh' }}>
+      <WorkspaceShell
+        attentionItems={attentionItems}
+        refreshAttention={refreshAttention}
+        attentionDrafts={drafts}
+        setAttentionDrafts={setDrafts}
       />
     </div>
   );
@@ -1545,7 +1590,10 @@ function CaptureApp() {
     return <OverviewLanesScene empty />;
   }
 
-  if (scene === 'update-passive-active' || scene === 'update-constrained') {
+  if (scene === 'attention-popover') {
+    return <AttentionPopoverScene />;
+  }
+  if (scene === 'update-popover') {
     return <UpdateAppScene />;
   }
   if (

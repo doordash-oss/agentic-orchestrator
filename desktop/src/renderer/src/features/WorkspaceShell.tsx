@@ -45,7 +45,7 @@ import { CreateFeatureForm } from './CreateFeatureForm';
 import { FeatureCockpit } from './FeatureCockpit';
 import { SettingsPanel } from './SettingsPanel';
 import { PipRail } from '../components/Pip';
-import { UpdateNotice } from '../components/UpdateNotice';
+import { updateNoticePending } from '../components/UpdatePopover';
 import { emptyAttentionDrafts, type AttentionDrafts } from './AttentionInbox';
 import { Toolbar } from './Toolbar';
 import {
@@ -144,6 +144,9 @@ export function WorkspaceShell({
   const showAmaActive = runtimeReady && amaSessionActive;
   const footerLabel = showAmaActive ? 'Ask Agentico is active' : runtimeLabel;
   const footerTone = showAmaActive ? 'ama' : runtimeTone;
+  // The footer dot and the toolbar update button share one predicate, so they
+  // appear and disappear together.
+  const updatePending = updateNoticePending(updateState, updateDismissedVersion);
   const [actionsSlot, setActionsSlot] = useState<HTMLDivElement | null>(null);
   const [overflowSlot, setOverflowSlot] = useState<HTMLDivElement | null>(null);
   // The cockpit owns its inspector's open/closed state itself, so it resets
@@ -621,6 +624,12 @@ export function WorkspaceShell({
           <span className="sidebar__runtime" role="status">
             <span aria-hidden="true">●</span> {footerLabel}
           </span>
+          {/* Indicator only, never a target: the toolbar button stays the one
+           * way into the update popover, and the footer keeps exactly one
+           * interactive element. */}
+          {updatePending ? (
+            <span className="sidebar__update-dot" role="img" aria-label="Update available" />
+          ) : null}
           <button type="button" className="sidebar__ama" onClick={onOpenAma}>
             Ask ⌥Space
           </button>
@@ -649,17 +658,17 @@ export function WorkspaceShell({
                 ? { id: routeRequest.id, attentionId: routeRequest.event.attentionId }
                 : null,
           }}
+          update={{
+            update: updateState,
+            dismissedVersion: updateDismissedVersion,
+            scheduling: schedulingUpdate,
+            onDismiss: onDismissUpdate,
+            onOpenSettings: onOpenUpdatesSettings,
+            onInstallWhenIdle: onInstallUpdateWhenIdle,
+          }}
           actionsSlotRef={setActionsSlot}
           overflowSlotRef={setOverflowSlot}
           inspectorSlotRef={setInspectorSlot}
-        />
-        <UpdateNotice
-          update={updateState}
-          dismissedVersion={updateDismissedVersion}
-          scheduling={schedulingUpdate}
-          onDismiss={onDismissUpdate}
-          onOpenSettings={onOpenUpdatesSettings}
-          onInstallWhenIdle={onInstallUpdateWhenIdle}
         />
         <div
           className={

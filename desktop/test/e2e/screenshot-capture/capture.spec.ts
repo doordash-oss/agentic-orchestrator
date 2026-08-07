@@ -207,26 +207,8 @@ test('capture all visual evidence screenshots', async ({ page }) => {
     '.impact-dialog',
   );
 
-  await capture(
-    page,
-    'update-passive-active',
-    'dark',
-    1440,
-    900,
-    'passive-verified-update-notice-with-active-workflow-and-non-interrupting-install-1440x900',
-    '.update-notice',
-    async (p) => {
-      await p.getByRole('tab', { name: 'History and Rewind' }).click();
-      await expect(p.getByRole('group', { name: 'Feature actions' })).toBeVisible({
-        timeout: 15_000,
-      });
-      await expect(p.getByLabel('Current feature status')).toBeVisible({ timeout: 15_000 });
-      await expect(p.getByRole('button', { name: 'Install When Idle' })).toBeVisible({
-        timeout: 5_000,
-      });
-    },
-  );
-
+  // The two banner-era update captures are gone with the banner: the transient
+  // popover that replaced it is evidenced by attention-update-popover-evidence.
   await capture(
     page,
     'settings-updates-ready',
@@ -304,23 +286,6 @@ test('capture all visual evidence screenshots', async ({ page }) => {
       await expect(p.locator('.settings-panel__diagnostic').first()).toBeInViewport({
         timeout: 5_000,
       });
-    },
-  );
-
-  await capture(
-    page,
-    'update-constrained',
-    'light',
-    760,
-    900,
-    'constrained-workspace-with-passive-update-notice-and-reachable-updates-status-li-760x900',
-    '.update-notice',
-    async (p) => {
-      await p.getByRole('button', { name: 'Updates' }).click();
-      await expect(p.locator('.settings-panel__section--updates')).toBeVisible({
-        timeout: 10_000,
-      });
-      await scrollSettingsSectionIntoCapture(p, 'Updates');
     },
   );
 
@@ -579,7 +544,7 @@ test('capture all visual evidence screenshots', async ({ page }) => {
       // Open the attention inbox so the recovery-priority item is visible
       // alongside other attention classes, sorted first.
       await p.locator('.attention-bell').click();
-      await expect(p.locator('.attention-inbox')).toBeVisible({ timeout: 5_000 });
+      await expect(p.locator('.attention-popover')).toBeVisible({ timeout: 5_000 });
     },
   );
 
@@ -595,7 +560,7 @@ test('capture all visual evidence screenshots', async ({ page }) => {
       await expect(p.locator('.recovery-workspace__queue')).toBeVisible({ timeout: 15_000 });
       await expect(p.locator('.recovery-attention')).toBeVisible({ timeout: 5_000 });
       await p.locator('.attention-bell').click();
-      await expect(p.locator('.attention-inbox')).toBeVisible({ timeout: 5_000 });
+      await expect(p.locator('.attention-popover')).toBeVisible({ timeout: 5_000 });
     },
   );
 

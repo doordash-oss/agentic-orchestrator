@@ -454,12 +454,16 @@ async function boundedTranscriptAppendRender(browser) {
 async function repeatedTabAndSessionChanges(browser) {
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
   try {
-    await page.goto(`${rendererOrigin}/?scene=update-passive-active&theme=light`);
-    await page.getByRole('tab', { name: 'Settings' }).waitFor({ state: 'visible' });
+    // The Home/Settings tab pair this workload used to toggle no longer exists;
+    // the cockpit's stage segmented control is the shell's surviving tablist, so
+    // the workload now measures the same thing — a repeated view swap while the
+    // session and update polls keep running — against Live/Changes.
+    await page.goto(`${rendererOrigin}/?scene=cockpit-redesign-live&theme=light`);
+    await page.getByRole('tab', { name: 'Changes' }).waitFor({ state: 'visible' });
     const samples = [];
     for (let i = 0; i < 12; i += 1) {
       const started = performance.now();
-      await page.getByRole('tab', { name: i % 2 === 0 ? 'Settings' : 'Home' }).click();
+      await page.getByRole('tab', { name: i % 2 === 0 ? 'Changes' : 'Live' }).click();
       await page.evaluate(async () => {
         await window.agentico.listSessions();
         await window.agentico.getUpdates();
@@ -638,7 +642,10 @@ async function main() {
     checks.push(await sample('first-monaco-lazy-load', () => firstMonacoLazyLoad(browser)));
     checks.push(
       await sample('authoritative-dashboard-render', () =>
-        renderScene(browser, 'update-passive-active', '.home-surface__header'),
+        // The scene and header selector this workload used to render are both
+        // gone with the old home surface; `overview-lanes` is the same
+        // authoritative dashboard render on the surface that replaced it.
+        renderScene(browser, 'overview-lanes', '.overview-surface__header'),
       ),
     );
     checks.push(

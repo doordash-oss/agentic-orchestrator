@@ -1,7 +1,13 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { defaultSettings, type Settings } from '../../../shared/ipc';
+import {
+  actionableAttentionCount,
+  defaultSettings,
+  type AttentionItem,
+  type Settings,
+  type UpdateState,
+} from '../../../shared/ipc';
 import { featureSnapshot, installAgenticoMock } from '../test/agenticoMock';
 import { dispatchMediaChange, matchMediaState } from '../test/setup';
 import { WorkspaceShell } from './WorkspaceShell';
@@ -741,7 +747,7 @@ describe('WorkspaceShell toolbar', () => {
     expect(onOpenAma).toHaveBeenCalledTimes(1);
   });
 
-  it('shows "Overview" with no sub-line and hides the attention bell on the Overview surface', async () => {
+  it('shows "Overview" with no sub-line and keeps the attention bell on the Overview surface', async () => {
     installAgenticoMock({ settings: settingsWithActive(null), features: [] });
     render(<WorkspaceShell />);
 
@@ -749,7 +755,17 @@ describe('WorkspaceShell toolbar', () => {
       await screen.findByText('Overview', { selector: '.toolbar__title-name' }),
     ).toBeInTheDocument();
     expect(document.querySelector('.toolbar__title-subline')).toBeNull();
-    expect(screen.queryByLabelText(/Attention inbox, \d+ pending/)).not.toBeVisible();
+    expect(screen.getByLabelText(/Attention inbox, \d+ pending/)).toBeVisible();
+  });
+
+  it('keeps the bell reachable on the Settings view, where the cockpit slots are gone', async () => {
+    installAgenticoMock({ settings: settingsWithActive(null), features: [] });
+    render(<WorkspaceShell routeRequest={{ id: 1, event: { target: 'settings' } }} />);
+
+    expect(
+      await screen.findByText('Settings', { selector: '.toolbar__title-name' }),
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText(/Attention inbox, \d+ pending/)).toBeVisible();
   });
 
   it('titles the toolbar with the feature name and a repo · branch sub-line, and shows the bell', async () => {
@@ -1036,5 +1052,138 @@ describe('WorkspaceShell auto-collapse at narrow viewports', () => {
       'data-collapsed',
       'true',
     );
+  });
+});
+
+describe('WorkspaceShell ambient notices', () => {
+  const readyUpdate: UpdateState = {
+    status: 'ready',
+    currentVersion: '0.1.0',
+    targetVersion: '0.2.0',
+    packageFormat: 'macos',
+    signatureStatus: 'verified',
+    message: 'A verified update is downloaded and ready to install.',
+  };
+
+  /** The toolbar and the content pane, and provably nothing between them. */
+  function contentColumnChildren(): string[] {
+    const column = document.querySelector('.content-column')!;
+    return Array.from(column.children).map((child) => child.className.split(' ')[0]!);
+  }
+
+  it('shows the footer dot and the toolbar trigger together, and drops both on dismissal', async () => {
+    installAgenticoMock({ settings: settingsWithActive(null), features: [] });
+    const view = render(<WorkspaceShell updateState={readyUpdate} />);
+    const user = userEvent.setup();
+
+    await screen.findByText('Overview', { selector: '.toolbar__title-name' });
+    expect(screen.getByRole('img', { name: 'Update available' })).toBeVisible();
+    const trigger = screen.getByRole('button', { name: 'Show available update' });
+
+    await user.click(trigger);
+    const popover = screen.getByRole('region', { name: 'Available update' });
+    expect(popover).toHaveTextContent('Agentico 0.2.0 is available');
+
+    // The footer dot is ambient, never a control.
+    const footer = document.querySelector('.sidebar__footer')!;
+    expect(within(footer as HTMLElement).getAllByRole('button')).toHaveLength(1);
+
+    view.rerender(<WorkspaceShell updateState={readyUpdate} updateDismissedVersion="0.2.0" />);
+    expect(screen.queryByRole('button', { name: 'Show available update' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('img', { name: 'Update available' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('region', { name: 'Available update' })).not.toBeInTheDocument();
+  });
+
+  it('never puts a notice in the flow: the layout is identical before, after, and while open', async () => {
+    installAgenticoMock({ settings: settingsWithActive(null), features: [] });
+    const view = render(<WorkspaceShell updateState={null} />);
+    const user = userEvent.setup();
+
+    await screen.findByText('Overview', { selector: '.toolbar__title-name' });
+    const baseline = contentColumnChildren();
+    expect(baseline).toEqual(['toolbar', 'content-pane']);
+
+    view.rerender(<WorkspaceShell updateState={readyUpdate} />);
+    expect(contentColumnChildren()).toEqual(baseline);
+
+    await user.click(screen.getByRole('button', { name: 'Show available update' }));
+    expect(screen.getByRole('region', { name: 'Available update' })).toBeVisible();
+    expect(contentColumnChildren()).toEqual(baseline);
+
+    await user.click(screen.getByRole('button', { name: /Attention inbox, \d+ pending/ }));
+    expect(screen.getByRole('complementary', { name: 'Attention inbox' })).toBeVisible();
+    expect(contentColumnChildren()).toEqual(baseline);
+  });
+
+  it('agrees across the bell badge, the sidebar rows and lane count, and the tray count', async () => {
+    const questioned = featureSnapshot({
+      id: FEATURE_ID,
+      name: 'Needs answers',
+      status: 'Failed',
+      actions: [],
+    });
+    const gated = featureSnapshot({
+      id: SECOND_FEATURE_ID,
+      name: 'Needs a gate',
+      status: 'Failed',
+      actions: [],
+    });
+    const snapshots = [questioned, gated];
+    const mock = installAgenticoMock({
+      settings: settingsWithActive(null),
+      features: snapshots.map(summaryOf),
+    });
+    mock.api.getFeature.mockImplementation((featureId: string) =>
+      Promise.resolve(snapshots.find((snapshot) => snapshot.id === featureId) ?? snapshots[0]!),
+    );
+    const attentionItems: AttentionItem[] = [
+      {
+        kind: 'questions',
+        id: 'q-1',
+        featureId: FEATURE_ID,
+        waitingSince: '2026-08-05T10:00:00Z',
+        questions: [{ key: 'Which?', header: 'Direction', multiSelect: false, options: [] }],
+      },
+      {
+        kind: 'questions',
+        id: 'q-2',
+        featureId: FEATURE_ID,
+        waitingSince: '2026-08-05T10:01:00Z',
+        questions: [{ key: 'Which again?', header: 'Direction', multiSelect: false, options: [] }],
+      },
+      {
+        kind: 'gate',
+        id: 'gate-1',
+        featureId: SECOND_FEATURE_ID,
+        waitingSince: '2026-08-05T10:02:00Z',
+        questions: [{ index: 1, prompt: 'Window?', answer: '' }],
+      },
+      {
+        kind: 'recovery',
+        id: 'recovery-scan',
+        waitingSince: '2026-08-05T10:03:00Z',
+        liveCount: 1,
+        deadCount: 0,
+      },
+    ];
+    const view = render(<WorkspaceShell attentionItems={attentionItems} />);
+
+    // The bell and the tray read the same rule: recovery is excluded.
+    expect(await screen.findByRole('button', { name: 'Attention inbox, 3 pending' })).toBeVisible();
+    expect(actionableAttentionCount(attentionItems)).toBe(3);
+
+    const sidebar = screen.getByRole('navigation', { name: 'Feature sidebar' });
+    const waitingLane = within(sidebar).getByRole('group', { name: 'Waiting on you' });
+    expect(within(waitingLane).getAllByRole('option')).toHaveLength(2);
+    expect(within(sidebar).getByText('Answer 2 questions')).toBeVisible();
+    expect(within(sidebar).getByText('Resolve 1 gate')).toBeVisible();
+
+    // Everything clears together once the items resolve.
+    view.rerender(<WorkspaceShell attentionItems={[]} />);
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Attention inbox, 0 pending' })).toBeVisible(),
+    );
+    expect(actionableAttentionCount([])).toBe(0);
+    expect(within(sidebar).queryByText('Answer 2 questions')).not.toBeInTheDocument();
   });
 });

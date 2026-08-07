@@ -1179,6 +1179,93 @@ function backgroundAttentionItems(scene: string): AttentionSnapshot['items'] {
   ];
 }
 
+/**
+ * The mixed inbox the `attention-popover` scene shows, so the bell carries a
+ * real count and the popover list holds several distinct kinds at once:
+ *
+ * - an ownerless verification gate, which is the only kind that expands inline
+ *   inside the popover (owned items jump to their feature instead). It carries
+ *   the structured verification branch — blockers plus exactly the WAIVE /
+ *   RETRY_AFTER_AUTH pair against a single question — so the expanded row shows
+ *   the decision radios rather than a free-text answer box.
+ * - a feature-owned permission and a feature-owned review, so the list is
+ *   genuinely mixed rather than three copies of one row.
+ *
+ * The gate deliberately has no `featureId`: that is what "ownerless" means to
+ * `attentionOwnerFeatureId`, and the schema's required `featureId` is why the
+ * literal is cast rather than annotated.
+ */
+const ATTENTION_POPOVER_ITEMS: AttentionSnapshot['items'] = [
+  {
+    kind: 'gate',
+    id: 'verification-gate-signal-lab',
+    waitingSince: new Date(Date.now() - 9 * 60_000).toISOString(),
+    scope: 'repo',
+    repoName: 'signal-lab',
+    iteration: 3,
+    // One blocker, tersely worded: the decision radios are the point of this
+    // evidence, and the popover is only 34rem tall before it scrolls.
+    summary: 'Verification stopped: a check needs credentials this run does not hold.',
+    questions: [{ index: 1, prompt: 'How should Agentico continue?', answer: '' }],
+    verification: {
+      blockers: [
+        {
+          itemId: 'deploy-smoke',
+          name: 'Deployment smoke test',
+          repoName: 'signal-lab',
+          command: 'npm run smoke -- --stage=canary',
+          reason: 'The canary deploy token expired.',
+          capabilities: ['network', 'deploy-token'],
+          remediation: 'Refresh the token, then retry.',
+        },
+      ],
+      allowedActions: ['RETRY_AFTER_AUTH', 'WAIVE'],
+    },
+  } as AttentionSnapshot['items'][number],
+  {
+    kind: 'permission',
+    id: 'perm-rewrite-preview',
+    featureId: 'abcd1234ef567890',
+    sessionId: 'sess-impl-03',
+    phase: 'Implement',
+    toolName: 'Bash',
+    summary: 'Run the bounded verification command for the rewind preview.',
+    input: { command: 'npm run check -- --scope=rewind' },
+    waitingSince: new Date(Date.now() - 4 * 60_000).toISOString(),
+  },
+  {
+    kind: 'review',
+    id: 'review-craft-run-8',
+    featureId: 'abcd1234ef567890',
+    waitingSince: new Date(Date.now() - 2 * 60_000).toISOString(),
+    reviewKind: 'Craft',
+    phase: 'Review',
+  },
+];
+
+/**
+ * The `update-popover` scene's inbox. That capture is about the update popover
+ * and the footer dot, but it also shows the bell beside the Overview "Waiting on
+ * you" lane, and those two read from different sources — the lane from the
+ * feature summaries, the badge from this snapshot. One gate owned by the lane's
+ * single waiting feature (`updater-auto-1`, whose display state is
+ * NeedUserInput) keeps the two agreeing at 1 rather than photographing a zero
+ * badge beside a populated lane.
+ */
+const UPDATE_POPOVER_ITEMS: AttentionSnapshot['items'] = [
+  {
+    kind: 'gate',
+    id: 'gate-updater-auto-1',
+    featureId: 'updater-auto-1',
+    waitingSince: new Date(Date.now() - 6 * 60_000).toISOString(),
+    scope: 'repo',
+    repoName: 'agentic-orchestrator',
+    iteration: 1,
+    summary: 'The updater needs a signing identity before it can publish.',
+    questions: [{ index: 1, prompt: 'Which signing identity should it use?', answer: '' }],
+  },
+];
+
 function makeMockApi(
   scene: string,
   listeners: Set<(event: AppEvent) => void>,
@@ -1199,8 +1286,9 @@ function makeMockApi(
       activeFeatureId:
         scene === 'overview-lanes' ||
         scene === 'overview-empty' ||
-        scene === 'update-passive-active' ||
-        scene === 'update-constrained' ||
+        // The update popover is evidenced over Overview; the attention popover
+        // is evidenced over a real feature cockpit, so it keeps the default.
+        scene === 'update-popover' ||
         scene.startsWith('creation-sheet')
           ? null
           : 'abcd1234ef567890',
@@ -1244,14 +1332,20 @@ function makeMockApi(
     listRepositories: () => Promise.resolve(READY_SNAPSHOT.repositories),
     listFeatures: () =>
       Promise.resolve(
-        scene === 'overview-lanes' || scene.startsWith('creation-sheet')
+        scene === 'overview-lanes' ||
+          scene === 'update-popover' ||
+          scene.startsWith('creation-sheet')
           ? OVERVIEW_LANE_SUMMARY
           : scene === 'overview-empty'
             ? []
             : FEATURE_SUMMARY,
       ),
     getFeature: (_featureId: string) => {
-      if (scene === 'overview-lanes' || scene.startsWith('creation-sheet')) {
+      if (
+        scene === 'overview-lanes' ||
+        scene === 'update-popover' ||
+        scene.startsWith('creation-sheet')
+      ) {
         const snapshot = OVERVIEW_LANE_SNAPSHOTS[_featureId];
         if (snapshot !== undefined) {
           return Promise.resolve(snapshot);
@@ -1394,17 +1488,21 @@ function makeMockApi(
       Promise.resolve({
         items: isBackgroundScene(scene)
           ? backgroundAttentionItems(scene)
-          : scene === 'recovery' || scene === 'recovery-constrained'
-            ? ([
-                {
-                  kind: 'recovery' as const,
-                  id: 'recovery-scan',
-                  waitingSince: new Date(Date.now() - 120_000).toISOString(),
-                  liveCount: 1,
-                  deadCount: 1,
-                },
-              ] as AttentionSnapshot['items'])
-            : ([] as AttentionSnapshot['items']),
+          : scene === 'attention-popover'
+            ? ATTENTION_POPOVER_ITEMS
+            : scene === 'update-popover'
+              ? UPDATE_POPOVER_ITEMS
+              : scene === 'recovery' || scene === 'recovery-constrained'
+                ? ([
+                    {
+                      kind: 'recovery' as const,
+                      id: 'recovery-scan',
+                      waitingSince: new Date(Date.now() - 120_000).toISOString(),
+                      liveCount: 1,
+                      deadCount: 1,
+                    },
+                  ] as AttentionSnapshot['items'])
+                : ([] as AttentionSnapshot['items']),
       } as AttentionSnapshot),
     answerPermission: () => Promise.resolve({ result: 'submitted' } as AttentionActionResult),
     answerQuestions: () => Promise.resolve({ result: 'submitted' } as AttentionActionResult),
@@ -2092,7 +2190,9 @@ function updateStateForScene(scene: string): UpdateState {
       ],
     };
   }
-  if (scene === 'update-passive-active' || scene === 'settings-install-now-confirm') {
+  // `update-popover` needs the active-work summary: it is what makes the popover
+  // offer Install When Idle, so all three actions are visible at once.
+  if (scene === 'update-popover' || scene === 'settings-install-now-confirm') {
     return {
       ...readyUpdateState(),
       activeWorkSummary: '1 workflow and AMA session are active.',

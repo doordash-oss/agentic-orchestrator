@@ -128,10 +128,6 @@ body {
   gap: var(--space-2);
 }
 
-.toolbar__trailing .attention-bell {
-  margin-left: 0;
-}
-
 .toolbar__actions-slot,
 .toolbar__overflow-slot,
 .toolbar__inspector-slot {
@@ -189,8 +185,10 @@ body {
   opacity: 0.9;
 }
 
-/* The content column: the toolbar, the passive update notice, and the
- * scrollable content pane, stacked — everything to the right of the sidebar. */
+/* The content column: the toolbar and the scrollable content pane, stacked —
+ * everything to the right of the sidebar. Nothing sits between the two: both
+ * ambient notices hang off the toolbar as popovers, so no notice can shift the
+ * content down when it appears. */
 .content-column {
   flex: 1;
   min-width: 0;
@@ -199,38 +197,136 @@ body {
   flex-direction: column;
 }
 
-.update-notice {
+/* ─── Toolbar popovers ────────────────────────────────────────────────────
+ * The transient surfaces the attention bell and the update button open:
+ * anchored under their trigger, on the raised material with the hairline ring
+ * and the panel shadow — the macOS popover presentation. No scrim, no focus
+ * trap, no close button; an outside pointer, Escape, or a second click on the
+ * trigger dismisses them, and only one is ever open.
+ */
+.toolbar-popover-anchor {
+  position: relative;
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
-  justify-content: space-between;
+}
+
+.toolbar-popover {
+  position: absolute;
+  top: calc(100% + var(--space-2));
+  right: 0;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
   gap: var(--space-3);
-  padding: var(--space-2) var(--space-4);
-  border-bottom: 1px solid var(--color-hairline);
-  background: color-mix(in srgb, var(--color-success) 10%, var(--color-panel));
+  padding: var(--space-3);
+  border-radius: var(--bench-radius-window);
+  background: var(--raised);
+  box-shadow:
+    0 0 0 var(--bench-hairline-width) var(--material-edge),
+    var(--shadow);
+  color: var(--text);
+  font: 13px var(--bench-font-text);
 }
 
-.update-notice > div:first-child {
+/* The popover hangs off the toolbar, which is a window drag region on macOS —
+ * without this, dragging inside it would move the window. */
+:root[data-platform='darwin'] .toolbar-popover {
+  -webkit-app-region: no-drag;
+}
+
+.toolbar-popover:focus-visible {
+  outline: none;
+}
+
+/* The transient update trigger: present only while an undismissed update is
+ * pending, carrying the same small dot the sidebar footer shows. */
+.update-trigger {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: var(--bench-radius-control);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.update-trigger:hover,
+.update-trigger[aria-expanded='true'] {
+  background: var(--raised);
+  color: var(--text);
+}
+
+.update-trigger__dot {
+  position: absolute;
+  top: 1px;
+  right: 1px;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--accent);
+}
+
+.update-popover {
+  width: min(22rem, calc(100vw - var(--space-4) * 2));
+  gap: var(--space-2);
+}
+
+.update-popover__headline {
+  margin: 0;
+  font: 600 13px var(--bench-font-text);
+  color: var(--text);
+}
+
+.update-popover__message,
+.update-popover__active-work {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.update-popover__actions {
   display: flex;
   flex-wrap: wrap;
-  align-items: baseline;
   gap: var(--space-2);
-  min-width: 0;
+  margin-top: var(--space-1);
 }
 
-.update-notice strong {
-  font: 700 0.875rem/1.3 var(--font-body);
+.update-popover__action {
+  padding: 4px var(--space-3);
+  border: none;
+  border-radius: var(--bench-radius-control);
+  background: var(--content);
+  box-shadow: 0 0 0 var(--bench-hairline-width) var(--hairline);
+  color: var(--text);
+  font: 500 12px var(--bench-font-text);
+  cursor: pointer;
 }
 
-.update-notice span {
-  color: var(--color-muted);
-  font: 400 0.8125rem/1.3 var(--font-body);
+.update-popover__action:hover:not(:disabled) {
+  background: var(--raised);
 }
 
-.update-notice__actions {
-  display: flex;
-  flex: 0 0 auto;
-  flex-wrap: wrap;
-  gap: var(--space-2);
+.update-popover__action--primary {
+  background: var(--accent);
+  box-shadow: none;
+  color: #fff;
+}
+
+.update-popover__action--primary:hover:not(:disabled) {
+  opacity: 0.9;
+}
+
+.update-popover__action:disabled {
+  color: var(--faint);
+  cursor: default;
+}
+
+.update-popover__action--primary:disabled {
+  background: var(--raised);
 }
 
 /* --- Command palette ------------------------------------------------------- */
@@ -3800,152 +3896,144 @@ body {
   padding-bottom: var(--space-4);
 }
 
+/* The permanent toolbar bell: a quiet icon button whose only color is the
+ * amber count, and which shows no badge at all at zero. */
 .attention-bell {
-  margin-left: auto;
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  min-height: 2.2rem;
-  padding: 0 var(--space-3);
-  border: 1px solid var(--color-accent);
-  border-radius: var(--radius);
-  background: color-mix(in srgb, var(--color-accent) 10%, var(--color-panel));
-  color: var(--color-text);
-  font: inherit;
-  font-family: var(--font-mono);
-  font-weight: 700;
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: var(--bench-radius-control);
+  background: transparent;
+  color: var(--muted);
   cursor: pointer;
 }
 
-.attention-bell[data-empty='true'] {
-  border-color: var(--color-hairline);
-  background: transparent;
-  color: var(--color-muted);
+.attention-bell:hover,
+.attention-bell[aria-expanded='true'] {
+  background: var(--raised);
+  color: var(--text);
 }
 
-.attention-bell__label {
-  font-size: 0.85rem;
-  letter-spacing: 0.02em;
+.attention-bell[data-empty='false'] {
+  color: var(--attention);
 }
 
+/* The count rides the bell's shoulder rather than sitting beside it, so the
+ * trailing group's rhythm does not change as the number grows. */
 .attention-bell__count {
-  display: inline-grid;
+  position: absolute;
+  top: -2px;
+  right: -3px;
+  display: grid;
   place-items: center;
-  min-width: 1.35rem;
-  height: 1.35rem;
-  padding: 0 var(--space-1);
+  min-width: 15px;
+  height: 15px;
+  padding: 0 3px;
   border-radius: 999px;
-  color: var(--color-bg);
-  background: var(--color-accent);
+  background: var(--attention);
+  color: var(--content);
+  font: 600 10px/1 var(--bench-font-text);
   font-variant-numeric: tabular-nums;
-  font-size: 0.8rem;
 }
 
-.attention-bell__count[data-empty='true'] {
-  color: var(--color-muted);
-  background: transparent;
-  border: 1px solid var(--color-hairline);
+/* The inbox popover: a scrollable triage list at reading width, tall enough for
+ * an expanded item without ever becoming a full-height panel. */
+.attention-popover {
+  width: min(30rem, calc(100vw - var(--space-4) * 2));
+  max-height: min(34rem, calc(100vh - 84px));
+  overflow-y: auto;
+  gap: var(--space-2);
 }
 
-/* Consult-alongside tray: no scrim, hairline edge and a soft shadow — the
- * amber attention accent lives in the eyebrow, not a welded border. */
-.attention-inbox {
-  position: fixed;
-  z-index: 20;
-  top: 0;
-  right: 0;
-  width: min(32rem, 92vw);
-  height: 100vh;
-  overflow: auto;
-  padding: var(--space-5);
-  background: var(--color-panel);
-  color: var(--color-text);
-  border-left: 1px solid var(--color-hairline);
-  box-shadow: -16px 0 40px rgb(5 7 10 / 22%);
-}
-
-.attention-inbox__header {
+.attention-popover__header {
   display: flex;
-  align-items: flex-start;
+  align-items: baseline;
   justify-content: space-between;
-  gap: 1rem;
-  padding-bottom: var(--space-4);
-  border-bottom: 1px solid var(--color-hairline);
+  gap: var(--space-3);
 }
 
-.attention-inbox__header h2 {
-  margin: var(--space-1) 0 0;
-  font-family: var(--font-display);
-  font-size: 22px;
-}
-
-.attention-inbox__eyebrow {
+.attention-popover__header h2 {
   margin: 0;
-  color: var(--color-accent);
-  font-family: var(--font-mono);
-  font-size: 10px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  font: 600 13px var(--bench-font-text);
+  color: var(--text);
+}
+
+.attention-popover__count {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font: 11px var(--bench-font-mono);
+  font-variant-numeric: tabular-nums;
 }
 
 .attention-status,
-.attention-inbox__empty {
-  margin: var(--space-3) 0 0;
-  border: 1px solid var(--color-hairline);
-  border-radius: var(--radius);
+.attention-popover__empty {
+  margin: 0;
+  border-radius: var(--bench-radius-control);
   padding: var(--space-2) var(--space-3);
-  color: var(--color-muted);
+  background: var(--content);
+  color: var(--muted);
   font-size: 12px;
 }
 
-.attention-inbox__list {
+.attention-popover__list {
   padding: 0;
-  margin: var(--space-4) 0 0;
+  margin: 0;
   list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
 }
 
-.attention-inbox__row {
-  margin: 0 0 var(--space-2);
-  border: 1px solid var(--color-hairline);
-  border-radius: var(--radius);
-  background: color-mix(in srgb, var(--color-bg) 28%, var(--color-panel));
+.attention-popover__row {
+  border-radius: var(--bench-radius-card);
+  background: var(--content);
+  box-shadow: 0 0 0 var(--bench-hairline-width) var(--hairline);
 }
 
-.attention-inbox__item {
+.attention-popover__item {
   width: 100%;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: var(--space-3);
-  padding: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border: 0;
+  border-radius: var(--bench-radius-card);
   text-align: left;
   background: transparent;
   color: inherit;
-  border: 0;
+  font: inherit;
   cursor: pointer;
 }
 
-.attention-inbox__item-main {
+.attention-popover__item:hover {
+  background: var(--raised);
+}
+
+.attention-popover__item-main {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 1px;
 }
 
-.attention-inbox__kind {
-  font-weight: 700;
+.attention-popover__kind {
+  font-weight: 600;
   font-size: 13px;
 }
 
-.attention-inbox__feature,
-.attention-inbox__waiting {
-  color: var(--color-muted);
+.attention-popover__feature,
+.attention-popover__waiting {
+  color: var(--muted);
   font-size: 11px;
 }
 
-.attention-inbox__waiting {
+.attention-popover__waiting {
   flex: 0 0 auto;
-  font-family: var(--font-mono);
+  font-family: var(--bench-font-mono);
 }
 
 .attention-detail {
@@ -5282,6 +5370,16 @@ body {
 
 .sidebar__footer[data-tone='ama'] .sidebar__runtime {
   color: var(--text);
+}
+
+/* Ambient only: the update popover's presence, echoed on the status row. It is
+ * deliberately not a control — the toolbar button is the single trigger. */
+.sidebar__update-dot {
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--accent);
 }
 
 .sidebar__ama {

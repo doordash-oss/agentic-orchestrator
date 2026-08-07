@@ -66,7 +66,11 @@ test('Stop Work and Install Now confirms impact, cancels partial stops, then suc
     expect(activeReady.activeWorkSummary).toMatch(/1 workflow/);
     transcript.json('active workflow before Stop Work and Install Now', activeReady);
 
-    await handle.page.getByRole('button', { name: 'Updates' }).click();
+    const updatePopover = handle.page.getByRole('region', { name: 'Available update' });
+    await handle.page.getByRole('button', { name: 'Show available update' }).click();
+    await updatePopover.getByRole('button', { name: 'Updates' }).click();
+    await handle.page.keyboard.press('Escape');
+    await expect(updatePopover).toHaveCount(0);
     await handle.page.getByRole('button', { name: 'Stop Work and Install Now' }).click();
     const dialog = handle.page.getByRole('dialog', { name: 'Install update confirmation' });
     await expect(dialog).toContainText(/Workflows and AMA may be interrupted/);

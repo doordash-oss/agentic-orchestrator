@@ -180,7 +180,7 @@ describe('App readiness gating', () => {
     ).not.toBeInTheDocument();
   });
 
-  it('does not replay a handled attention route after the inbox is closed', async () => {
+  it('does not replay a handled attention route after the popover is dismissed', async () => {
     const user = userEvent.setup();
     const mock = installAgenticoMock({
       connection: connection({ status: 'ready', stage: 'ready', ownership: 'external' }),
@@ -190,8 +190,8 @@ describe('App readiness gating', () => {
     await screen.findByRole('option', { name: 'Overview' });
 
     act(() => mock.emitRouteRequest({ target: 'attention' }));
-    const inbox = await screen.findByRole('complementary', { name: 'Attention inbox' });
-    await user.click(within(inbox).getByRole('button', { name: 'Close inbox' }));
+    await screen.findByRole('complementary', { name: 'Attention inbox' });
+    await user.keyboard('{Escape}');
     expect(
       screen.queryByRole('complementary', { name: 'Attention inbox' }),
     ).not.toBeInTheDocument();

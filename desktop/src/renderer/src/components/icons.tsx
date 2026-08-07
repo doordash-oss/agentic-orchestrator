@@ -46,6 +46,27 @@ export function MinimizeIcon(props: SVGProps<SVGSVGElement>) {
   );
 }
 
+/** The toolbar attention trigger, shaped after SF Symbols' `bell`. */
+export function BellIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Icon {...props}>
+      <path d="M18 8a6 6 0 0 0-12 0c0 4.5-1.5 6-2 6.5h16c-.5-.5-2-2-2-6.5" />
+      <path d="M10.3 18.5a2 2 0 0 0 3.4 0" />
+    </Icon>
+  );
+}
+
+/** The transient toolbar update trigger, shaped after SF Symbols' `arrow.down.circle`. */
+export function UpdateIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Icon {...props}>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 7.5v9" />
+      <path d="m8.5 13 3.5 3.5 3.5-3.5" />
+    </Icon>
+  );
+}
+
 export function CloseIcon(props: SVGProps<SVGSVGElement>) {
   return (
     <Icon {...props}>

@@ -55,12 +55,31 @@ test('verified download, Install When Idle, and Restart to Update require explic
     expect(fs.readFileSync(stagedPackage, 'utf8')).toBe('verified package bytes');
     transcript.json('ready after automatic verified download', state);
 
-    await expect(handle.page.getByLabel('Update available')).toBeVisible({ timeout: 10_000 });
-    await handle.page.getByRole('button', { name: 'Updates' }).click();
+    const updateTrigger = handle.page.getByRole('button', { name: 'Show available update' });
+    const updatePopover = handle.page.getByRole('region', { name: 'Available update' });
+    await expect(updateTrigger).toBeVisible({ timeout: 10_000 });
+
+    // The pending update announces itself ambiently: a non-interactive dot on
+    // the sidebar footer status row, and nothing at all in the content flow.
+    await expect(handle.page.getByRole('img', { name: 'Update available' })).toBeVisible();
+    expect(await contentColumnChildren(handle)).toEqual(['toolbar', 'content-pane']);
+
+    await updateTrigger.click();
+    await expect(updatePopover).toBeVisible();
+    await expect(
+      updatePopover.getByRole('heading', { name: 'Agentico 0.2.0 is available' }),
+    ).toBeVisible();
+    expect(await contentColumnChildren(handle)).toEqual(['toolbar', 'content-pane']);
+    transcript.step('pending update surfaced as a toolbar popover and a sidebar footer dot only');
+
+    await updatePopover.getByRole('button', { name: 'Updates' }).click();
     const updatesPanel = handle.page.getByRole('region', { name: 'Updates' });
     await expect(updatesPanel).toContainText('0.2.0');
     await expect(updatesPanel).toContainText('verified');
-    await expect(handle.page.getByRole('button', { name: 'Release notes' })).toBeVisible();
+    await expect(updatesPanel.getByRole('button', { name: 'Release notes' })).toBeVisible();
+    await handle.page.keyboard.press('Escape');
+    await expect(updatePopover).toHaveCount(0);
+    await expect(updateTrigger).toBeFocused();
     await handle.page.getByRole('option', { name: 'Overview' }).click();
     await expect(handle.page.getByRole('button', { name: 'New feature' })).toBeVisible();
 
@@ -69,7 +88,11 @@ test('verified download, Install When Idle, and Restart to Update require explic
     expect(activeReady.activeWorkSummary).toMatch(/1 workflow/);
     transcript.json('forced active workflow before Install When Idle', activeReady);
 
-    await handle.page.getByRole('button', { name: 'Updates' }).click();
+    await updateTrigger.click();
+    await expect(updatePopover).toContainText(/1 workflow/);
+    await updatePopover.getByRole('button', { name: 'Updates' }).click();
+    await handle.page.keyboard.press('Escape');
+    await expect(updatePopover).toHaveCount(0);
     await handle.page.getByRole('button', { name: 'Stop Work and Install Now' }).click();
     await handle.page
       .getByRole('dialog', { name: 'Install update confirmation' })
@@ -80,14 +103,14 @@ test('verified download, Install When Idle, and Restart to Update require explic
     ).toHaveCount(0);
     transcript.step('Stop Work and Install Now confirmation canceled without restart');
 
-    await handle.page
-      .getByLabel('Update available')
-      .getByRole('button', { name: 'Install When Idle' })
-      .click();
-    await expect(handle.page.getByLabel('Update available')).toContainText(
-      'scheduled for the next idle window',
-      { timeout: 10_000 },
-    );
+    await updateTrigger.click();
+    await updatePopover.getByRole('button', { name: 'Install When Idle' }).click();
+    // The popover survives update-state refreshes, so the scheduled message
+    // lands in the same surface that took the consent.
+    await expect(updatePopover).toContainText('scheduled for the next idle window', {
+      timeout: 10_000,
+    });
+    await expect(updatePopover.getByRole('button', { name: 'Scheduled for Idle' })).toBeDisabled();
     const scheduled = await handle.page.evaluate(() => window.agentico.getUpdates());
     expect(scheduled.status).toBe('scheduled');
     expect(scheduled.activeWorkSummary).toMatch(/1 workflow/);
@@ -141,8 +164,15 @@ async function assertRestartToUpdateConsent(
     });
     const state = await handle.page.evaluate(() => window.agentico.checkForUpdates());
     expect(state.status).toBe('ready');
-    await expect(handle.page.getByLabel('Update available')).toBeVisible({ timeout: 10_000 });
-    await handle.page.getByRole('button', { name: 'Updates' }).click();
+    const updateTrigger = handle.page.getByRole('button', { name: 'Show available update' });
+    await expect(updateTrigger).toBeVisible({ timeout: 10_000 });
+    await updateTrigger.click();
+    await handle.page
+      .getByRole('region', { name: 'Available update' })
+      .getByRole('button', { name: 'Updates' })
+      .click();
+    await handle.page.keyboard.press('Escape');
+    await expect(handle.page.getByRole('region', { name: 'Available update' })).toHaveCount(0);
     await installRelaunchProbe(handle);
     await handle.page.getByRole('button', { name: 'Restart to Update' }).click();
     await expect.poll(() => relaunchCount(handle!), { timeout: 10_000 }).toBeGreaterThanOrEqual(1);
@@ -158,6 +188,19 @@ async function assertRestartToUpdateConsent(
     await assertNoLeakedProcesses(world);
     destroyWorld(world);
   }
+}
+
+/**
+ * The first-token class names of `.content-column`'s direct children. An update
+ * notice must never take flow space, so this stays `['toolbar', 'content-pane']`
+ * whether or not an update is pending and whether or not its popover is open.
+ */
+async function contentColumnChildren(handle: AppHandle): Promise<string[]> {
+  return await handle.page.evaluate(() =>
+    Array.from(document.querySelector('.content-column')!.children).map(
+      (child) => child.className.split(' ')[0]!,
+    ),
+  );
 }
 
 async function setForcedActiveWork(handle: AppHandle, active: boolean): Promise<void> {

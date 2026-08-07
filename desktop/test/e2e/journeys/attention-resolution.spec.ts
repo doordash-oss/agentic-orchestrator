@@ -748,7 +748,7 @@ async function closeInbox(page: Page): Promise<void> {
     }
     return;
   }
-  await inbox.getByRole('button', { name: 'Close inbox' }).click();
+  await page.keyboard.press('Escape');
   await expect(inbox).toHaveCount(0);
 }
 

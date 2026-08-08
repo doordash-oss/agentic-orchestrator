@@ -33,6 +33,8 @@ import {
   type ReadinessSnapshot,
   type RepositoryState,
   type Settings,
+  type SettingsOpenRequest,
+  type SettingsOpenResult,
   type SettingsPatch,
   type SetupDispatchResult,
   type ThemeInfo,
@@ -123,6 +125,7 @@ export interface IpcServices {
   restartConnection(): Promise<ConnectionState> | ConnectionState;
   getSettings(): Settings;
   updateSettings(patch: SettingsPatch): Settings;
+  openSettingsWindow(request: SettingsOpenRequest): SettingsOpenResult;
   getTheme(): ThemeInfo;
   setTheme(preference: ThemePreference): ThemeInfo;
   getReadiness(): Promise<ReadinessSnapshot>;
@@ -261,6 +264,8 @@ export function registerIpcHandlers(
     [IPC_CHANNELS.connectionRestart]: () => services.restartConnection(),
     [IPC_CHANNELS.settingsGet]: () => services.getSettings(),
     [IPC_CHANNELS.settingsUpdate]: (_event, patch: SettingsPatch) => services.updateSettings(patch),
+    [IPC_CHANNELS.windowOpenSettings]: (_event, request: SettingsOpenRequest) =>
+      services.openSettingsWindow(request),
     [IPC_CHANNELS.themeGet]: () => services.getTheme(),
     [IPC_CHANNELS.themeSet]: (_event, preference: ThemePreference) => services.setTheme(preference),
     [IPC_CHANNELS.readinessGet]: () => services.getReadiness(),

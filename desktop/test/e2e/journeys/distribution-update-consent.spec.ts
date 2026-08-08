@@ -4,6 +4,8 @@ import { expect, test } from '@playwright/test';
 import type { TestInfo } from '@playwright/test';
 import {
   assertNoLeakedProcesses,
+  awaitSettingsWindow,
+  closeSettings,
   closeApp,
   installRelaunchProbe,
   launchApp,
@@ -72,15 +74,18 @@ test('verified download, Install When Idle, and Restart to Update require explic
     expect(await contentColumnChildren(handle)).toEqual(['toolbar', 'content-pane']);
     transcript.step('pending update surfaced as a toolbar popover and a sidebar footer dot only');
 
+    // The popover's Updates action asks the main process for the Settings
+    // window, which lands on the Updates pane; the main window keeps whatever
+    // it was showing.
     await updatePopover.getByRole('button', { name: 'Updates' }).click();
-    const updatesPanel = handle.page.getByRole('region', { name: 'Updates' });
+    let settings = await awaitSettingsWindow(handle);
+    const updatesPanel = settings.getByRole('region', { name: 'Updates' });
     await expect(updatesPanel).toContainText('0.2.0');
     await expect(updatesPanel).toContainText('verified');
     await expect(updatesPanel.getByRole('button', { name: 'Release notes' })).toBeVisible();
     await handle.page.keyboard.press('Escape');
     await expect(updatePopover).toHaveCount(0);
     await expect(updateTrigger).toBeFocused();
-    await handle.page.getByRole('option', { name: 'Overview' }).click();
     await expect(handle.page.getByRole('button', { name: 'New feature' })).toBeVisible();
 
     await setForcedActiveWork(handle, true);
@@ -91,16 +96,16 @@ test('verified download, Install When Idle, and Restart to Update require explic
     await updateTrigger.click();
     await expect(updatePopover).toContainText(/1 workflow/);
     await updatePopover.getByRole('button', { name: 'Updates' }).click();
+    settings = await awaitSettingsWindow(handle);
     await handle.page.keyboard.press('Escape');
     await expect(updatePopover).toHaveCount(0);
-    await handle.page.getByRole('button', { name: 'Stop Work and Install Now' }).click();
-    await handle.page
-      .getByRole('dialog', { name: 'Install update confirmation' })
-      .getByRole('button', { name: 'Cancel' })
-      .click();
-    await expect(
-      handle.page.getByRole('dialog', { name: 'Install update confirmation' }),
-    ).toHaveCount(0);
+    await settings.getByRole('button', { name: 'Stop Work and Install Now' }).click();
+    const cancelDialog = settings.getByRole('dialog', { name: 'Install update confirmation' });
+    await cancelDialog.getByRole('button', { name: 'Cancel' }).click();
+    await expect(cancelDialog).toHaveCount(0);
+    // The rest of this journey measures the main window's own popover, so
+    // leave no Settings window standing over it.
+    await closeSettings(handle);
     transcript.step('Stop Work and Install Now confirmation canceled without restart');
 
     await updateTrigger.click();
@@ -171,10 +176,11 @@ async function assertRestartToUpdateConsent(
       .getByRole('region', { name: 'Available update' })
       .getByRole('button', { name: 'Updates' })
       .click();
+    const settings = await awaitSettingsWindow(handle);
     await handle.page.keyboard.press('Escape');
     await expect(handle.page.getByRole('region', { name: 'Available update' })).toHaveCount(0);
     await installRelaunchProbe(handle);
-    await handle.page.getByRole('button', { name: 'Restart to Update' }).click();
+    await settings.getByRole('button', { name: 'Restart to Update' }).click();
     await expect.poll(() => relaunchCount(handle!), { timeout: 10_000 }).toBeGreaterThanOrEqual(1);
     const installing = await handle.page.evaluate(() => window.agentico.getUpdates());
     expect(installing.status).toBe('installing');

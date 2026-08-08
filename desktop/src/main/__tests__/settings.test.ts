@@ -3,7 +3,12 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { SettingsStore } from '../settings';
-import { defaultAmaGeometry, defaultAmaPrefs, defaultSettings } from '../../shared/ipc';
+import {
+  defaultAmaGeometry,
+  defaultAmaPrefs,
+  defaultSettings,
+  defaultSettingsWindowPrefs,
+} from '../../shared/ipc';
 import { SafeErrorException } from '../../shared/errors';
 
 let dir: string;
@@ -123,6 +128,7 @@ describe('SettingsStore', () => {
       ama: defaultAmaPrefs(),
       notifications: { previewEnabled: false },
       shell: { activeFeatureId: null, sidebarCollapsed: false },
+      settingsWindow: defaultSettingsWindowPrefs(),
     });
   });
 
@@ -161,6 +167,72 @@ describe('SettingsStore', () => {
     });
     expect(warnings).toEqual([]);
     expect(fs.existsSync(`${settingsPath()}.bak-1`)).toBe(false);
+  });
+
+  it('loads a v2 document written before the Settings window without resetting', () => {
+    fs.writeFileSync(
+      settingsPath(),
+      JSON.stringify({
+        schemaVersion: 2,
+        runtime: { selection: 'claude' },
+        window: { bounds: { x: 10, y: 20, width: 1024, height: 768 } },
+        theme: 'dark',
+        wizard: { collapsedHelp: true },
+        ama: { drawer: 'expanded', geometry: { right: 96, bottom: 48, width: 520, height: 400 } },
+        notifications: { previewEnabled: true },
+        shell: { activeFeatureId: 'abcd1234ef567890', sidebarCollapsed: true },
+      }),
+    );
+    const store = makeStore();
+
+    expect(store.get().settingsWindow).toEqual(defaultSettingsWindowPrefs());
+    expect(store.get().settingsWindow.pane).toBe('workspace-roots');
+    // No other preference is reset by the additive field.
+    expect(store.get()).toEqual({
+      schemaVersion: 2,
+      runtime: { selection: 'claude' },
+      window: { bounds: { x: 10, y: 20, width: 1024, height: 768 } },
+      theme: 'dark',
+      wizard: { collapsedHelp: true },
+      ama: { drawer: 'expanded', geometry: { right: 96, bottom: 48, width: 520, height: 400 } },
+      notifications: { previewEnabled: true },
+      shell: { activeFeatureId: 'abcd1234ef567890', sidebarCollapsed: true },
+      settingsWindow: defaultSettingsWindowPrefs(),
+    });
+    expect(warnings).toEqual([]);
+    expect(fs.existsSync(`${settingsPath()}.bak-1`)).toBe(false);
+  });
+
+  it('persists the Settings window bounds and pane across a reload', () => {
+    const store = makeStore();
+    store.update({
+      settingsWindow: { bounds: { x: 40, y: 60, width: 900, height: 640 }, pane: 'diagnostics' },
+    });
+    expect(makeStore().get().settingsWindow).toEqual({
+      bounds: { x: 40, y: 60, width: 900, height: 640 },
+      pane: 'diagnostics',
+    });
+  });
+
+  it('merges a Settings window patch without dropping other settings', () => {
+    const store = makeStore();
+    store.update({ theme: 'dark', shell: { activeFeatureId: null, sidebarCollapsed: true } });
+    store.update({ settingsWindow: { pane: 'appearance' } });
+    const reloaded = makeStore();
+    expect(reloaded.get().settingsWindow).toEqual({ pane: 'appearance' });
+    expect(reloaded.get().theme).toBe('dark');
+    expect(reloaded.get().shell).toEqual({ activeFeatureId: null, sidebarCollapsed: true });
+  });
+
+  it('rejects a Settings window patch with an unknown pane or extra fields', () => {
+    const store = makeStore();
+    expect(() => store.update({ settingsWindow: { pane: 'nope' } as never })).toThrow(
+      SafeErrorException,
+    );
+    expect(() =>
+      store.update({ settingsWindow: { pane: 'appearance', maximized: true } as never }),
+    ).toThrow(SafeErrorException);
+    expect(fs.existsSync(settingsPath())).toBe(false);
   });
 
   it('rejects an AMA patch carrying unknown fields', () => {
@@ -278,6 +350,7 @@ describe('SettingsStore', () => {
         ama: { drawer: 'expanded', geometry: defaultAmaGeometry() },
         notifications: { previewEnabled: true },
         shell: { activeFeatureId: 'ffee0011aa223344', sidebarCollapsed: false },
+        settingsWindow: defaultSettingsWindowPrefs(),
       });
       expect(warnings).toEqual([]);
       expect(fs.existsSync(`${settingsPath()}.bak-1`)).toBe(false);

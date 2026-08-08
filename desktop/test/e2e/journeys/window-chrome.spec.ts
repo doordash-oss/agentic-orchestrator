@@ -17,7 +17,8 @@
  *
  * The always-on global header (brand mark + inline theme switcher) is
  * replaced by a per-content-side toolbar; the brand mark is gone and the
- * theme switcher now lives in Settings ▸ Appearance, so the traffic-light
+ * theme switcher now lives in the Settings window's Appearance pane (opened
+ * and closed here through the native menu), so the traffic-light
  * clearance and drag-region checks below target the sidebar header (visible
  * at every width until the ~700px auto-collapse breakpoint) and the toolbar
  * itself (which only needs its own left clearance once the sidebar is
@@ -27,10 +28,12 @@ import { expect, test } from '@playwright/test';
 import {
   assertNoLeakedProcesses,
   closeApp,
+  closeSettings,
   contractEvidenceShot,
   launchApp,
   openSettings,
   persistAppLogs,
+  selectSettingsPane,
   setTheme,
   setWindowSize,
   type AppHandle,
@@ -112,16 +115,32 @@ test('window chrome: first paint, drag region, header controls, appearance toggl
     await handle.page.getByRole('button', { name: 'Show sidebar' }).click();
     await expect(sidebarToggle).toBeVisible();
 
-    transcript.section('The appearance switcher lives in Settings and stays reachable');
+    transcript.section('The appearance switcher lives in the Settings window and stays reachable');
+    const settings = await openSettings(handle);
+    await selectSettingsPane(settings, 'Appearance');
+    const themeGroup = settings.locator('.settings-panel__theme');
     for (const label of ['Light', 'Dark', 'System'] as const) {
-      await openSettings(handle);
-      const radio = handle.page
-        .locator('.settings-panel__theme')
-        .getByRole('radio', { name: label });
+      const radio = themeGroup.getByRole('radio', { name: label });
       await expect(radio).toBeVisible();
       await expect(radio).toBeEnabled();
-      await handle.page.getByRole('button', { name: 'Back', exact: true }).click();
     }
+
+    transcript.section('A theme picked in the Settings window restyles the main window live');
+    // The real radiogroup, not the setTheme helper: this is the one place that
+    // proves the main process's cross-window theme broadcast: the preference is
+    // changed in the Settings window, and the main window — a different
+    // renderer with its own useTheme() instance, unreachable from the first
+    // window's own sync event — must follow it.
+    for (const theme of ['dark', 'light'] as const) {
+      await themeGroup.getByRole('radio', { name: theme === 'dark' ? 'Dark' : 'Light' }).click();
+      await expect(settings.locator(`html[data-theme="${theme}"]`)).toBeAttached();
+      await expect(handle.page.locator(`html[data-theme="${theme}"]`)).toBeAttached();
+      transcript.step(`"${theme}" chosen in Settings ▸ Appearance reached both windows`);
+    }
+
+    // The main window's own chrome is what the rest of this journey measures,
+    // so leave no second window standing over it.
+    await closeSettings(handle);
 
     transcript.section('Every toolbar control stays inside the viewport at the 400px minimum');
     await setWindowSize(handle, 400, 480);

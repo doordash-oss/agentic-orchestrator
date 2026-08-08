@@ -16,7 +16,7 @@ import {
 } from '../../src/shared/ipc';
 
 const trusted: TrustedSender = {
-  webContentsId: 1,
+  webContentsIds: new Set([1]),
   allowedOrigins: new Set(['file://']),
 };
 
@@ -101,6 +101,7 @@ function makeServices(overrides: Partial<IpcServices> = {}): IpcServices {
     })),
     getSettings: vi.fn(() => defaultSettings()),
     updateSettings: vi.fn(() => defaultSettings()),
+    openSettingsWindow: vi.fn(() => ({ opened: true })),
     getTheme: vi.fn(() => ({ preference: 'system' as const, resolved: 'dark' as const })),
     setTheme: vi.fn((preference) => ({ preference, resolved: 'dark' as const })),
     getReadiness: vi.fn(() => Promise.reject(new Error('unused'))),

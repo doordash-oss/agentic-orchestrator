@@ -5557,20 +5557,9 @@ body {
   padding: clamp(12px, 2vw, 28px);
 }
 
-.content-pane__settings {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-  min-height: 0;
-}
-
-.content-pane__settings-header {
-  flex: 0 0 auto;
-}
-
 /* Shared eyebrow label voice, reused across the creation wizard, the
- * refactor launcher, Settings, and the help overlay — not owned by any one
- * surface, so it keeps this namespace-neutral name. */
+ * refactor launcher, and the help overlay — not owned by any one surface, so
+ * it keeps this namespace-neutral name. */
 .eyebrow-label {
   margin: 0 0 var(--space-2);
   color: var(--color-muted);
@@ -9296,6 +9285,141 @@ body {
   justify-content: flex-end;
 }
 
+/* --- The Settings window -------------------------------------------------
+ * Two columns and nothing else: a source list on the same sidebar material
+ * the main window's feature list uses, and one opaque content pane. The
+ * accent-filled selected row is the only saturated thing in the window —
+ * everything around it stays quiet so the row reads as the current place at
+ * a glance, the way a System Settings source list does.
+ *
+ * On macOS the list carries the top drag strip that clears the inset traffic
+ * lights and the pane is inset to match; elsewhere the native frame owns the
+ * top of the window and neither inset applies.
+ */
+.settings-window {
+  height: 100%;
+  display: grid;
+  grid-template-columns: 208px minmax(0, 1fr);
+  background: var(--content);
+}
+
+.settings-window__restoring {
+  grid-column: 1 / -1;
+  place-self: center;
+  margin: 0;
+  color: var(--muted);
+  font: 13px var(--bench-font-text);
+}
+
+.settings-window__nav {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  background: var(--material);
+  border-right: var(--bench-hairline-width) solid var(--material-edge);
+}
+
+.settings-window__nav-header {
+  display: none;
+}
+
+:root[data-platform='darwin'] .settings-window__nav-header {
+  display: block;
+  flex: 0 0 auto;
+  min-height: 44px;
+  -webkit-app-region: drag;
+  -webkit-user-select: none;
+}
+
+.settings-window__nav-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--space-2) 10px var(--space-4);
+}
+
+.settings-window__pane-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 8px;
+  border-radius: var(--bench-radius-control);
+  color: var(--text);
+  font: 13px/1.35 var(--bench-font-text);
+  cursor: pointer;
+  user-select: none;
+}
+
+.settings-window__pane-row:hover:not([data-selected='true']) {
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+}
+
+/* The one saturated surface in the window. White label and glyph, so the
+ * selected row keeps its contrast against every accent the OS can hand us. */
+.settings-window__pane-row[data-selected='true'] {
+  background: var(--accent);
+  color: #fff;
+}
+
+.settings-window__pane-glyph {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  color: var(--muted);
+}
+
+.settings-window__pane-row[data-selected='true'] .settings-window__pane-glyph {
+  color: inherit;
+}
+
+.settings-window__pane-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-window__pane {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--content);
+}
+
+:root[data-platform='darwin'] .settings-window__pane {
+  padding-top: 44px;
+}
+
+/* The pane IS the card here, so a section inside the Settings window drops
+ * the card chrome it needs when several sections stack on one scroller. The
+ * section's own controls and copy are untouched. */
+.settings-window .settings-panel {
+  padding: 0 var(--space-5) var(--space-5);
+}
+
+.settings-window .settings-panel__section {
+  padding: 0;
+  border: none;
+  background: transparent;
+  gap: var(--space-3);
+}
+
+.settings-window .settings-panel__section-title {
+  font: 500 20px/1.2 var(--bench-font-serif);
+  color: var(--text);
+}
+
+.settings-window .settings-panel__section-desc {
+  color: var(--muted);
+  font: 13px/1.45 var(--bench-font-text);
+}
+
 /* --- Settings panel --- */
 
 .settings-panel {
@@ -9305,19 +9429,6 @@ body {
   overflow-y: auto;
   padding: var(--space-4);
   gap: var(--space-4);
-}
-
-.settings-panel__header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-
-.settings-panel__header h1 {
-  margin: 0;
-  font-family: var(--font-display);
-  font-size: 1.5rem;
-  font-weight: 600;
 }
 
 .settings-panel__error {

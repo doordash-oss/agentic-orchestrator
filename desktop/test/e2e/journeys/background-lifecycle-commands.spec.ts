@@ -2,7 +2,9 @@ import { expect, test } from '@playwright/test';
 import { spawn, type ChildProcess } from 'node:child_process';
 import {
   assertNoLeakedProcesses,
+  awaitSettingsWindow,
   closeApp,
+  closeSettings,
   createFeatureViaForm,
   launchApp,
   persistAppLogs,
@@ -52,9 +54,12 @@ test('packaged command palette, native menu routes, and active close policy stay
     const palette = handle.page.getByRole('dialog', { name: 'Command palette' });
     await palette.getByLabel('Search commands').fill('settings');
     await handle.page.keyboard.press('Enter');
-    // Settings has no tab/option role of its own — its content-pane view is
-    // identified by the Back button in its header.
-    await expect(handle.page.getByRole('button', { name: 'Back', exact: true })).toBeVisible();
+    // Settings is its own window: the palette entry raises it rather than
+    // routing the main window anywhere. Put it away again so the lifecycle
+    // assertions below are about the main window alone.
+    const settings = await awaitSettingsWindow(handle);
+    await expect(settings.getByRole('listbox', { name: 'Settings panes' })).toBeVisible();
+    await closeSettings(handle);
 
     await openPalette(handle);
     // The palette searches command labels, not ids: `global.home` is now

@@ -26,8 +26,10 @@ import {
   type CreationFileSearchRequest,
   type FeatureActionRequest,
   type InitRepositoryRequest,
+  type SettingsOpenRequest,
   type SettingsPatch,
   type ThemePreference,
+  windowPurposeFromArgv,
   type SessionOutputOpenRequest,
   type SessionOutputOpenResult,
   type SessionOutputEvent,
@@ -84,6 +86,10 @@ const api: AgenticoApi = {
   // Preload retains a limited `process` even when sandboxed; reading it here
   // avoids an IPC round trip before first paint.
   platform: process.platform,
+  // The sandboxed `process` shim carries `argv`, which is where
+  // `webPreferences.additionalArguments` lands — so the window's purpose is
+  // known synchronously and the entry point picks a root before first paint.
+  windowPurpose: windowPurposeFromArgv(process.argv),
   getConnectionStatus: () => call(IPC_CHANNELS.connectionGetStatus),
   retryConnection: () => call(IPC_CHANNELS.connectionRetry),
   restartConnection: () => call(IPC_CHANNELS.connectionRestart),
@@ -123,6 +129,8 @@ const api: AgenticoApi = {
   },
   getSettings: () => call(IPC_CHANNELS.settingsGet),
   updateSettings: (patch: SettingsPatch) => call(IPC_CHANNELS.settingsUpdate, patch),
+  openSettingsWindow: (request: SettingsOpenRequest) =>
+    call(IPC_CHANNELS.windowOpenSettings, request),
   getThemePreference: () => call(IPC_CHANNELS.themeGet),
   setThemePreference: (preference: ThemePreference) => call(IPC_CHANNELS.themeSet, preference),
   getReadiness: () => call(IPC_CHANNELS.readinessGet),

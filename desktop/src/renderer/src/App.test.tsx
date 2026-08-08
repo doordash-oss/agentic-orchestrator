@@ -6,7 +6,6 @@ import {
   defaultSettings,
   type AttentionItem,
   type ConnectionState,
-  type WorkspaceDefaults,
 } from '../../shared/ipc';
 import App from './App';
 import { defaultUpdateState, installAgenticoMock, readySnapshot } from './test/agenticoMock';
@@ -23,24 +22,6 @@ function connection(overrides: Record<string, unknown>): ConnectionState {
   });
 }
 
-const WORKSPACE_DEFAULTS: WorkspaceDefaults = {
-  models: {},
-  effort: {},
-  inquireness: 'medium',
-  checkpoints: {
-    inquiryReview: false,
-    researchReview: false,
-    designReview: false,
-    roadmapReview: true,
-    phasePlanReview: true,
-    manualPublish: true,
-    draftPublish: false,
-  },
-  pipeline: 'large',
-  muteFeatureInput: false,
-  automaticReviewEnabled: false,
-};
-
 beforeEach(() => {
   matchMediaState.darkScheme = true;
   matchMediaState.reducedMotion = false;
@@ -54,36 +35,16 @@ describe('App theming', () => {
     await waitFor(() => expect(document.documentElement.dataset['theme']).toBe('dark'));
   });
 
-  it('switches to the light theme when the user selects it', async () => {
-    // The switcher now lives in Settings ▸ Appearance (moved off the deleted
-    // global header), reachable only once the shell is up.
-    const mock = installAgenticoMock({
-      connection: connection({ status: 'ready', stage: 'ready', ownership: 'external' }),
-      readiness: readySnapshot(),
-      theme: { preference: 'system', resolved: 'dark' },
-    });
+  it('applies the main process theme broadcast published by the Settings window', async () => {
+    // The switcher itself lives in the Settings window's Appearance pane; the
+    // main window learns about the change only through this broadcast.
+    const mock = installAgenticoMock({ theme: { preference: 'system', resolved: 'dark' } });
     render(<App />);
     await waitFor(() => expect(document.documentElement.dataset['theme']).toBe('dark'));
 
-    act(() => mock.emitRouteRequest({ target: 'settings' }));
-    await userEvent.click(await screen.findByRole('radio', { name: /light/i }));
-    expect(mock.api.setThemePreference).toHaveBeenCalledWith('light');
-    await waitFor(() => expect(document.documentElement.dataset['theme']).toBe('light'));
-  });
+    act(() => mock.emitAppEvent({ type: 'theme', preference: 'light', resolved: 'light' }));
 
-  it('offers light, dark, and system choices in an accessible radiogroup', async () => {
-    const mock = installAgenticoMock({
-      connection: connection({ status: 'ready', stage: 'ready', ownership: 'external' }),
-      readiness: readySnapshot(),
-    });
-    render(<App />);
-    await screen.findByRole('option', { name: 'Overview' });
-    act(() => mock.emitRouteRequest({ target: 'settings' }));
-    const group = await screen.findByRole('radiogroup', { name: /theme/i });
-    expect(group).toBeInTheDocument();
-    for (const name of [/light/i, /dark/i, /system/i]) {
-      expect(screen.getByRole('radio', { name })).toBeInTheDocument();
-    }
+    await waitFor(() => expect(document.documentElement.dataset['theme']).toBe('light'));
   });
 
   it('follows OS appearance changes while the preference is system', async () => {
@@ -256,187 +217,6 @@ describe('App readiness gating', () => {
     expect(await screen.findByLabelText('Update available')).toBeVisible();
   });
 
-  it('renders DEB update guidance as a copyable package-manager command without install controls', async () => {
-    const user = userEvent.setup();
-    const mock = installAgenticoMock({
-      connection: connection({ status: 'ready', stage: 'ready', ownership: 'external' }),
-      readiness: readySnapshot(),
-      updates: defaultUpdateState({
-        status: 'available',
-        targetVersion: '0.2.0',
-        packageFormat: 'deb',
-        signatureStatus: 'verified',
-        releaseNotesUrl: 'https://github.com/doordash-oss/agentic-orchestrator/releases/tag/v0.2.0',
-        message: 'A verified DEB update is available.',
-        guidance: [
-          'DEB installs are updated by the package manager, not by in-app replacement.',
-          'Download the signed DEB and checksum from the GitHub release.',
-          'Install with: sudo apt install ./agentico_0.2.0_amd64.deb',
-        ],
-      }),
-    });
-    render(<App />);
-
-    await screen.findByRole('option', { name: 'Overview' });
-    act(() => mock.emitRouteRequest({ target: 'settings' }));
-    const updates = await screen.findByRole('region', { name: 'Updates' });
-    expect(within(updates).getByText('sudo apt install ./agentico_0.2.0_amd64.deb')).toBeVisible();
-    expect(screen.queryByRole('button', { name: 'Restart to Update' })).not.toBeInTheDocument();
-    expect(
-      screen.queryByRole('button', { name: 'Stop Work and Install Now' }),
-    ).not.toBeInTheDocument();
-
-    await user.click(
-      within(updates).getByRole('button', { name: 'Copy the package-manager command' }),
-    );
-    await waitFor(() =>
-      expect(within(updates).getByRole('status')).toHaveTextContent(
-        'Copied the package-manager command.',
-      ),
-    );
-    await expect(window.navigator.clipboard.readText()).resolves.toBe(
-      'sudo apt install ./agentico_0.2.0_amd64.deb',
-    );
-  });
-
-  it('preserves direct restart in Settings when a verified update is idle', async () => {
-    const mock = installAgenticoMock({
-      connection: connection({ status: 'ready', stage: 'ready', ownership: 'external' }),
-      readiness: readySnapshot(),
-      updates: defaultUpdateState({
-        status: 'ready',
-        targetVersion: '0.2.0',
-        packageFormat: 'macos',
-        signatureStatus: 'verified',
-        message: 'A verified update is downloaded and ready to install.',
-      }),
-    });
-    render(<App />);
-
-    await screen.findByRole('option', { name: 'Overview' });
-    act(() => mock.emitRouteRequest({ target: 'settings' }));
-    const updates = await screen.findByRole('region', { name: 'Updates' });
-    expect(within(updates).getByRole('button', { name: 'Restart to Update' })).toBeVisible();
-    expect(within(updates).queryByRole('button', { name: 'Install When Idle' })).toBeNull();
-    expect(within(updates).queryByRole('button', { name: 'Stop Work and Install Now' })).toBeNull();
-  });
-
-  it('shows non-interrupting and explicit stop-work update controls only when work is active', async () => {
-    const mock = installAgenticoMock({
-      connection: connection({ status: 'ready', stage: 'ready', ownership: 'external' }),
-      readiness: readySnapshot(),
-      updates: defaultUpdateState({
-        status: 'ready',
-        targetVersion: '0.2.0',
-        packageFormat: 'macos',
-        signatureStatus: 'verified',
-        message: 'A verified update is downloaded and ready to install.',
-        activeWorkSummary: '1 workflow and AMA session are active.',
-      }),
-    });
-    render(<App />);
-
-    await screen.findByRole('option', { name: 'Overview' });
-    act(() => mock.emitRouteRequest({ target: 'settings' }));
-    const updates = await screen.findByRole('region', { name: 'Updates' });
-    expect(within(updates).getByText('1 workflow and AMA session are active.')).toBeVisible();
-    expect(within(updates).getByRole('button', { name: 'Install When Idle' })).toBeVisible();
-    expect(
-      within(updates).getByRole('button', { name: 'Stop Work and Install Now' }),
-    ).toBeVisible();
-    expect(within(updates).queryByRole('button', { name: 'Restart to Update' })).toBeNull();
-  });
-
-  it('keeps Settings rendered when the workspace inquireness default changes', async () => {
-    const user = userEvent.setup();
-    const mock = installAgenticoMock({
-      connection: connection({ status: 'ready', stage: 'ready', ownership: 'external' }),
-      readiness: readySnapshot(),
-    });
-    mock.api.getWorkspaceDefaults.mockResolvedValue(WORKSPACE_DEFAULTS);
-    mock.api.getModelCatalogue.mockResolvedValue({
-      providerOrder: [],
-      providerModels: {},
-      phaseDefaults: {},
-      phaseProviderModels: {},
-    });
-    render(<App />);
-
-    await screen.findByRole('option', { name: 'Overview' });
-    act(() => mock.emitRouteRequest({ target: 'settings' }));
-    await user.click(await screen.findByRole('radio', { name: /High/ }));
-
-    expect(screen.getByRole('region', { name: 'Settings and readiness' })).toBeVisible();
-    expect(screen.getByRole('region', { name: 'Workspace defaults' })).toBeVisible();
-    expect(screen.getByRole('button', { name: 'Save changes' })).toBeEnabled();
-  });
-
-  it('keeps keyboard focus inside the stop-work install confirmation and restores the trigger', async () => {
-    const user = userEvent.setup();
-    const mock = installAgenticoMock({
-      connection: connection({ status: 'ready', stage: 'ready', ownership: 'external' }),
-      readiness: readySnapshot(),
-      updates: defaultUpdateState({
-        status: 'ready',
-        targetVersion: '0.2.0',
-        packageFormat: 'macos',
-        signatureStatus: 'verified',
-        message: 'A verified update is downloaded and ready to install.',
-        activeWorkSummary: '1 workflow and AMA session are active.',
-      }),
-    });
-    render(<App />);
-
-    await screen.findByRole('option', { name: 'Overview' });
-    act(() => mock.emitRouteRequest({ target: 'settings' }));
-    const trigger = await screen.findByRole('button', { name: 'Stop Work and Install Now' });
-    await user.click(trigger);
-    const dialog = screen.getByRole('dialog', { name: 'Install update confirmation' });
-    const cancel = within(dialog).getByRole('button', { name: 'Cancel' });
-    const confirm = within(dialog).getByRole('button', { name: 'Stop Work and Install Now' });
-    await waitFor(() => expect(cancel).toHaveFocus());
-
-    await user.tab();
-    expect(confirm).toHaveFocus();
-    await user.tab();
-    expect(cancel).toHaveFocus();
-    await user.tab({ shift: true });
-    expect(confirm).toHaveFocus();
-
-    await user.keyboard('{Escape}');
-    await waitFor(() =>
-      expect(screen.queryByRole('dialog', { name: 'Install update confirmation' })).toBeNull(),
-    );
-    expect(trigger).toHaveFocus();
-  });
-
-  it('keeps keyboard focus inside Clear Diagnostics confirmation and restores the trigger', async () => {
-    const user = userEvent.setup();
-    const mock = installAgenticoMock({
-      connection: connection({ status: 'ready', stage: 'ready', ownership: 'external' }),
-      readiness: readySnapshot(),
-    });
-    render(<App />);
-
-    await screen.findByRole('option', { name: 'Overview' });
-    act(() => mock.emitRouteRequest({ target: 'settings' }));
-    const trigger = await screen.findByRole('button', { name: 'Clear Diagnostics' });
-    await user.click(trigger);
-    const dialog = screen.getByRole('dialog', { name: 'Clear diagnostics confirmation' });
-    expect(within(dialog).getByRole('heading', { name: 'Clear Diagnostics?' })).toBeVisible();
-    const cancel = within(dialog).getByRole('button', { name: 'Cancel' });
-    const confirm = within(dialog).getByRole('button', { name: 'Clear Diagnostics' });
-    await waitFor(() => expect(cancel).toHaveFocus());
-
-    await user.tab({ shift: true });
-    expect(confirm).toHaveFocus();
-    await user.keyboard('{Escape}');
-    await waitFor(() =>
-      expect(screen.queryByRole('dialog', { name: 'Clear diagnostics confirmation' })).toBeNull(),
-    );
-    expect(trigger).toHaveFocus();
-  });
-
   it('shows the connection shell — never the wizard — before the gateway is ready', async () => {
     const mock = installAgenticoMock();
     render(<App />);
@@ -506,5 +286,100 @@ describe('App readiness gating', () => {
     await waitFor(() =>
       expect(screen.getByRole('heading', { name: /set up agentico/i })).toBeInTheDocument(),
     );
+  });
+});
+
+describe('App settings-window routing', () => {
+  /** Every settings entry point is a request to raise the separate window. */
+  const readyMock = () =>
+    installAgenticoMock({
+      connection: connection({ status: 'ready', stage: 'ready', ownership: 'external' }),
+      readiness: readySnapshot(),
+    });
+
+  it('asks the main process to open the Settings window instead of rendering a panel', async () => {
+    const mock = readyMock();
+    render(<App />);
+    await screen.findByRole('option', { name: 'Overview' });
+
+    act(() => mock.emitRouteRequest({ target: 'settings' }));
+
+    await waitFor(() => expect(mock.api.openSettingsWindow).toHaveBeenCalledWith({}));
+    // Nothing settings-shaped ever mounts in the main window.
+    expect(
+      screen.queryByRole('region', { name: 'Settings and readiness' }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByRole('radiogroup', { name: /theme/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Overview' })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
+  });
+
+  it('forwards a deep-linked settings section as the window request payload', async () => {
+    const mock = readyMock();
+    render(<App />);
+    await screen.findByRole('option', { name: 'Overview' });
+
+    act(() => mock.emitRouteRequest({ target: 'settings', settingsSection: 'updates' }));
+
+    await waitFor(() =>
+      expect(mock.api.openSettingsWindow).toHaveBeenCalledWith({ section: 'updates' }),
+    );
+    expect(screen.queryByRole('region', { name: 'Updates' })).not.toBeInTheDocument();
+  });
+
+  it('keeps the surface untouched when the window fails to open', async () => {
+    const mock = readyMock();
+    mock.api.openSettingsWindow.mockRejectedValueOnce(new Error('E_WINDOW: refused'));
+    render(<App />);
+    await screen.findByRole('option', { name: 'Overview' });
+
+    act(() => mock.emitRouteRequest({ target: 'settings' }));
+
+    await waitFor(() => expect(mock.api.openSettingsWindow).toHaveBeenCalledWith({}));
+    expect(screen.getByRole('option', { name: 'Overview' })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
+  });
+
+  it("reaches the window from the update popover's Updates action", async () => {
+    const user = userEvent.setup();
+    const mock = installAgenticoMock({
+      connection: connection({ status: 'ready', stage: 'ready', ownership: 'external' }),
+      readiness: readySnapshot(),
+      updates: defaultUpdateState({
+        status: 'ready',
+        targetVersion: '0.2.0',
+        packageFormat: 'macos',
+        signatureStatus: 'verified',
+        message: 'A verified update is downloaded and ready to install.',
+      }),
+    });
+    render(<App />);
+    await screen.findByRole('option', { name: 'Overview' });
+
+    await user.click(await screen.findByRole('button', { name: 'Show available update' }));
+    const popover = screen.getByRole('region', { name: 'Available update' });
+    await user.click(within(popover).getByRole('button', { name: 'Updates' }));
+
+    await waitFor(() =>
+      expect(mock.api.openSettingsWindow).toHaveBeenCalledWith({ section: 'updates' }),
+    );
+  });
+
+  it("reaches the window from the command palette's Settings entry", async () => {
+    const user = userEvent.setup();
+    const mock = readyMock();
+    render(<App />);
+    await screen.findByRole('option', { name: 'Overview' });
+
+    act(() => mock.emitRouteRequest({ target: 'palette' }));
+    const palette = await screen.findByRole('dialog', { name: 'Command palette' });
+    await user.click(within(palette).getByRole('option', { name: /^Settings/ }));
+
+    await waitFor(() => expect(mock.api.openSettingsWindow).toHaveBeenCalledWith({}));
+    expect(screen.queryByRole('dialog', { name: 'Command palette' })).not.toBeInTheDocument();
   });
 });

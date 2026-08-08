@@ -27,6 +27,7 @@ import {
   defaultAmaPrefs,
   defaultNotificationPrefs,
   defaultSettings,
+  defaultSettingsWindowPrefs,
   defaultWizardPrefs,
   type Settings,
   type SettingsPatch,
@@ -80,7 +81,9 @@ type SettingsV1 = z.output<typeof SettingsSchemaV1>;
  * Upgrades a validated v1 document to v2 in place: `tabs.open` (and any
  * per-tab `selectedRunNumber`) is dropped entirely, and `tabs.activeFeatureId`
  * becomes `shell.activeFeatureId` — mapped to `null` when it was the
- * Settings-tab sentinel. Every other field is carried over byte-for-byte.
+ * Settings-tab sentinel. Every other field is carried over byte-for-byte;
+ * fields introduced after v2 (the Settings window's own bounds and pane) take
+ * their defaults, exactly as they do for an untouched v2 document.
  */
 function migrateSettingsV1ToV2(v1: SettingsV1): Settings {
   const activeFeatureId =
@@ -94,6 +97,7 @@ function migrateSettingsV1ToV2(v1: SettingsV1): Settings {
     ama: v1.ama,
     notifications: v1.notifications,
     shell: { activeFeatureId, sidebarCollapsed: false },
+    settingsWindow: defaultSettingsWindowPrefs(),
   };
 }
 
@@ -140,6 +144,9 @@ export class SettingsStore {
         ? { notifications: parsed.data.notifications }
         : {}),
       ...(parsed.data.shell !== undefined ? { shell: parsed.data.shell } : {}),
+      ...(parsed.data.settingsWindow !== undefined
+        ? { settingsWindow: parsed.data.settingsWindow }
+        : {}),
       schemaVersion: this.settings.schemaVersion,
     };
     this.persist(next);

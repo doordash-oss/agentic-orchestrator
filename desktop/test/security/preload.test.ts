@@ -34,6 +34,37 @@ describe('preload surface', () => {
     }
   });
 
+  it('exposes the window purpose as a validated enum value, defaulting to the main window', async () => {
+    const api = exposeInMainWorld.mock.calls[0]![1] as Record<string, unknown>;
+    // Vitest's own argv carries no purpose flag, so the default applies.
+    expect(api['windowPurpose']).toBe('main');
+
+    // Only the recognized purposes survive; anything else falls back to 'main'.
+    const argv = process.argv;
+    for (const [argument, expected] of [
+      ['--agentico-window-purpose=settings', 'settings'],
+      ['--agentico-window-purpose=devtools', 'main'],
+    ] as const) {
+      process.argv = [...argv, argument];
+      vi.resetModules();
+      await import('../../src/preload/index');
+      const reloaded = exposeInMainWorld.mock.calls.at(-1)![1] as Record<string, unknown>;
+      expect(reloaded['windowPurpose']).toBe(expected);
+    }
+    process.argv = argv;
+  });
+
+  it('opens the settings window over its own fixed channel with no window handle in scope', async () => {
+    const api = exposeInMainWorld.mock.calls[0]![1] as {
+      openSettingsWindow(request: { section?: string }): Promise<unknown>;
+    };
+    invoke.mockResolvedValueOnce({ ok: true, value: { opened: true } });
+
+    await expect(api.openSettingsWindow({ section: 'updates' })).resolves.toEqual({ opened: true });
+
+    expect(invoke).toHaveBeenCalledWith('agentico:window:open-settings', { section: 'updates' });
+  });
+
   it('maps only explicit dropped image File objects through the narrow webUtils seam', () => {
     const api = exposeInMainWorld.mock.calls[0]![1] as {
       importDroppedCreationFiles(kind: 'image', files: File[]): { paths: string[] };

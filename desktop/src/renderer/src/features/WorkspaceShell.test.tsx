@@ -498,9 +498,13 @@ describe('WorkspaceShell sidebar', () => {
     await user.click(screen.getByRole('button', { name: 'Next: Describe' }));
     await user.type(screen.getByLabelText('Name'), 'Unsaved feature');
 
-    rerender(<WorkspaceShell routeRequest={{ id: 7, event: { target: 'settings' } }} />);
+    // A menu route (⌘⇧A here) is dispatched by App.tsx as a routeRequest; it
+    // acts on the chrome beneath the scrim and never disturbs the draft.
+    rerender(<WorkspaceShell routeRequest={{ id: 7, event: { target: 'attention' } }} />);
 
-    expect(await screen.findByRole('heading', { name: 'Settings' })).toBeInTheDocument();
+    expect(
+      await screen.findByRole('complementary', { name: 'Attention inbox' }),
+    ).toBeInTheDocument();
     expect(screen.getByRole('form', { name: /create a feature/i })).toBeInTheDocument();
     expect(screen.getByDisplayValue('Unsaved feature')).toBeInTheDocument();
   });
@@ -535,43 +539,7 @@ describe('WorkspaceShell sidebar', () => {
     expect(onAttentionJumpHandled).toHaveBeenCalledTimes(1);
   });
 
-  it('deselects every sidebar row while Settings is open, and restores the prior feature on a neutral close', async () => {
-    const mock = installAgenticoMock({
-      settings: settingsWithActive(FEATURE_ID),
-      features: [summaryOf(featureSnapshot({ id: FEATURE_ID, name: 'Search revamp' }))],
-      feature: featureSnapshot({ id: FEATURE_ID, name: 'Search revamp' }),
-    });
-    const { rerender } = render(<WorkspaceShell />);
-    const user = userEvent.setup();
-
-    const featureRow = await screen.findByRole('option', { name: /Search revamp/ });
-    expect(featureRow).toHaveAttribute('aria-selected', 'true');
-
-    // Settings is reached the same way ⌘, does it: a routeRequest targeting
-    // 'settings', dispatched by App.tsx from the native menu accelerator.
-    rerender(<WorkspaceShell routeRequest={{ id: 1, event: { target: 'settings' } }} />);
-    expect(await screen.findByRole('heading', { name: 'Settings' })).toBeInTheDocument();
-    // Nothing in the sidebar reads as selected while Settings is open.
-    for (const option of screen.getAllByRole('option')) {
-      expect(option).toHaveAttribute('aria-selected', 'false');
-    }
-    // The underlying persisted selection was never touched.
-    expect(mock.api.updateSettings).not.toHaveBeenCalled();
-
-    // A neutral close (the panel's own Back control) restores the feature
-    // that was open before Settings — not Overview.
-    await user.click(screen.getByRole('button', { name: 'Back' }));
-    expect(screen.queryByRole('heading', { name: 'Settings' })).not.toBeInTheDocument();
-    expect(
-      await screen.findByRole('region', { name: 'Feature Search revamp' }),
-    ).toBeInTheDocument();
-    expect(screen.getByRole('option', { name: /Search revamp/ })).toHaveAttribute(
-      'aria-selected',
-      'true',
-    );
-  });
-
-  it('returns to Overview when ⌘1 (routed as target "home") fires while Settings is open over a selected feature', async () => {
+  it('returns to Overview when ⌘1 (routed as target "home") fires over a selected feature', async () => {
     const mock = installAgenticoMock({
       settings: settingsWithActive(FEATURE_ID),
       features: [summaryOf(featureSnapshot({ id: FEATURE_ID, name: 'Search revamp' }))],
@@ -580,17 +548,15 @@ describe('WorkspaceShell sidebar', () => {
     const { rerender } = render(<WorkspaceShell />);
 
     await screen.findByRole('region', { name: 'Feature Search revamp' });
-    rerender(<WorkspaceShell routeRequest={{ id: 1, event: { target: 'settings' } }} />);
-    await screen.findByRole('heading', { name: 'Settings' });
 
     // ⌘1 is dispatched by App.tsx as a routeRequest targeting 'home'.
     rerender(<WorkspaceShell routeRequest={{ id: 2, event: { target: 'home' } }} />);
 
-    expect(screen.queryByRole('heading', { name: 'Settings' })).not.toBeInTheDocument();
     expect(await screen.findByRole('option', { name: 'Overview' })).toHaveAttribute(
       'aria-selected',
       'true',
     );
+    expect(screen.queryByRole('region', { name: 'Feature Search revamp' })).not.toBeInTheDocument();
     await waitFor(() =>
       expect(mock.api.updateSettings).toHaveBeenCalledWith({
         shell: { activeFeatureId: null, sidebarCollapsed: false },
@@ -598,7 +564,7 @@ describe('WorkspaceShell sidebar', () => {
     );
   });
 
-  it('selecting a different sidebar row while Settings is open leaves Settings and opens that row', async () => {
+  it('selecting a different sidebar row opens that row and persists it', async () => {
     const secondFeature = featureSnapshot({ id: SECOND_FEATURE_ID, name: 'Second feature' });
     const mock = installAgenticoMock({
       settings: settingsWithActive(FEATURE_ID),
@@ -614,15 +580,12 @@ describe('WorkspaceShell sidebar', () => {
           : featureSnapshot({ id: FEATURE_ID, name: 'Search revamp' }),
       ),
     );
-    const { rerender } = render(<WorkspaceShell />);
+    render(<WorkspaceShell />);
     const user = userEvent.setup();
 
     await screen.findByRole('region', { name: 'Feature Search revamp' });
-    rerender(<WorkspaceShell routeRequest={{ id: 1, event: { target: 'settings' } }} />);
-    await screen.findByRole('heading', { name: 'Settings' });
 
     await user.click(await screen.findByRole('option', { name: /Second feature/ }));
-    expect(screen.queryByRole('heading', { name: 'Settings' })).not.toBeInTheDocument();
     expect(
       await screen.findByRole('region', { name: 'Feature Second feature' }),
     ).toBeInTheDocument();
@@ -637,24 +600,34 @@ describe('WorkspaceShell sidebar', () => {
     );
   });
 
-  it('opening Settings from Overview and closing it via Back returns to Overview', async () => {
-    installAgenticoMock({ settings: settingsWithActive(null), features: [] });
+  it('ignores a settings route request entirely: Settings is another window now', async () => {
+    const mock = installAgenticoMock({
+      settings: settingsWithActive(FEATURE_ID),
+      features: [summaryOf(featureSnapshot({ id: FEATURE_ID, name: 'Search revamp' }))],
+      feature: featureSnapshot({ id: FEATURE_ID, name: 'Search revamp' }),
+    });
     const { rerender } = render(<WorkspaceShell />);
-    const user = userEvent.setup();
 
-    await screen.findByRole('option', { name: 'Overview' });
+    await screen.findByRole('region', { name: 'Feature Search revamp' });
+    const featureRow = screen.getByRole('option', { name: /Search revamp/ });
+    expect(featureRow).toHaveAttribute('aria-selected', 'true');
+
     rerender(<WorkspaceShell routeRequest={{ id: 1, event: { target: 'settings' } }} />);
-    await screen.findByRole('heading', { name: 'Settings' });
-    for (const option of screen.getAllByRole('option')) {
-      expect(option).toHaveAttribute('aria-selected', 'false');
-    }
 
-    await user.click(screen.getByRole('button', { name: 'Back' }));
-    expect(screen.queryByRole('heading', { name: 'Settings' })).not.toBeInTheDocument();
-    expect(screen.getByRole('option', { name: 'Overview' })).toHaveAttribute(
+    // Nothing in the shell reacts: no settings surface, no selection change,
+    // no persisted write. App.tsx raises the Settings window instead.
+    expect(
+      screen.queryByRole('region', { name: 'Settings and readiness' }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Back' })).not.toBeInTheDocument();
+    expect(
+      await screen.findByRole('region', { name: 'Feature Search revamp' }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: /Search revamp/ })).toHaveAttribute(
       'aria-selected',
       'true',
     );
+    expect(mock.api.updateSettings).not.toHaveBeenCalled();
   });
 
   it('unmounts and unsubscribes a cockpit when Overview is selected', async () => {
@@ -758,13 +731,16 @@ describe('WorkspaceShell toolbar', () => {
     expect(screen.getByLabelText(/Attention inbox, \d+ pending/)).toBeVisible();
   });
 
-  it('keeps the bell reachable on the Settings view, where the cockpit slots are gone', async () => {
+  it('keeps the toolbar title on Overview when a settings route arrives', async () => {
     installAgenticoMock({ settings: settingsWithActive(null), features: [] });
     render(<WorkspaceShell routeRequest={{ id: 1, event: { target: 'settings' } }} />);
 
+    // The toolbar has no "Settings" title any more: the shell never presents
+    // Settings, so the Overview title and the bell both stay put.
     expect(
-      await screen.findByText('Settings', { selector: '.toolbar__title-name' }),
+      await screen.findByText('Overview', { selector: '.toolbar__title-name' }),
     ).toBeInTheDocument();
+    expect(screen.queryByText('Settings', { selector: '.toolbar__title-name' })).toBeNull();
     expect(screen.getByLabelText(/Attention inbox, \d+ pending/)).toBeVisible();
   });
 

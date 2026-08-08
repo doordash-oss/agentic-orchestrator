@@ -15,6 +15,7 @@ export const IPC_CHANNELS = {
   connectionRestart: 'agentico:connection:restart',
   settingsGet: 'agentico:settings:get',
   settingsUpdate: 'agentico:settings:update',
+  windowOpenSettings: 'agentico:window:open-settings',
   themeGet: 'agentico:theme:get',
   themeSet: 'agentico:theme:set',
   readinessGet: 'agentico:readiness:get',
@@ -98,6 +99,32 @@ export const IPC_CHANNELS = {
 } as const;
 
 export type IpcChannel = (typeof IPC_CHANNELS)[keyof typeof IPC_CHANNELS];
+
+/**
+ * The two window kinds the app ever opens. The main process keys its window
+ * registry by this value and hands it to each renderer as a constructor
+ * argument; no other window is detachable.
+ */
+export const WINDOW_PURPOSES = ['main', 'settings'] as const;
+
+export const WindowPurposeSchema = z.enum(WINDOW_PURPOSES);
+export type WindowPurpose = z.output<typeof WindowPurposeSchema>;
+
+/**
+ * The renderer-argument flag carrying the window purpose across the sandbox
+ * boundary (`webPreferences.additionalArguments` → preload `process.argv`).
+ */
+export const WINDOW_PURPOSE_ARGUMENT_PREFIX = '--agentico-window-purpose=';
+
+/** Reads the purpose out of a renderer's argv, defaulting to the main window. */
+export function windowPurposeFromArgv(argv: readonly string[]): WindowPurpose {
+  const flag = argv.find((argument) => argument.startsWith(WINDOW_PURPOSE_ARGUMENT_PREFIX));
+  if (flag === undefined) {
+    return 'main';
+  }
+  const parsed = WindowPurposeSchema.safeParse(flag.slice(WINDOW_PURPOSE_ARGUMENT_PREFIX.length));
+  return parsed.success ? parsed.data : 'main';
+}
 
 /** Main-to-renderer push events (webContents.send). */
 export const IPC_EVENTS = {
@@ -454,6 +481,20 @@ export const ReadinessSnapshotSchema = z.strictObject({
 
 export type ReadinessSnapshot = z.output<typeof ReadinessSnapshotSchema>;
 
+// --- Theme ------------------------------------------------------------------
+// Declared ahead of the pushed app-event union so the cross-window theme
+// broadcast reuses exactly the shape the theme channels return.
+
+export const ThemePreferenceSchema = z.enum(['light', 'dark', 'system']);
+export type ThemePreference = z.output<typeof ThemePreferenceSchema>;
+
+export const ThemeInfoSchema = z.strictObject({
+  preference: ThemePreferenceSchema,
+  resolved: z.enum(['light', 'dark']),
+});
+
+export type ThemeInfo = z.output<typeof ThemeInfoSchema>;
+
 // --- Server event invalidations (pushed main → renderer) --------------------
 // Carries ONLY invalidation metadata and stream health — never domain
 // payloads, summaries, or credentials. Strict schemas fail closed on any
@@ -487,15 +528,33 @@ export const AppEventSchema = z.discriminatedUnion('type', [
     /** Normalized `#rrggbb`; the system accent color (macOS only). */
     color: z.string().regex(/^#[0-9a-f]{6}$/),
   }),
+  /**
+   * The resolved theme after any window changed the preference. A
+   * same-document CustomEvent cannot reach a second window, so the main
+   * process re-broadcasts every theme mutation here and every window's
+   * `useTheme()` follows it.
+   */
+  z.strictObject({
+    type: z.literal('theme'),
+    preference: ThemePreferenceSchema,
+    resolved: z.enum(['light', 'dark']),
+  }),
 ]);
 
 export type AppEvent = z.output<typeof AppEventSchema>;
+
+/**
+ * The deep-linkable Settings destinations. Every value is also a Settings
+ * pane id (`SETTINGS_PANES`), so a section name selects a pane directly.
+ */
+export const SettingsSectionSchema = z.enum(['updates', 'diagnostics']);
+export type SettingsSection = z.output<typeof SettingsSectionSchema>;
 
 export const AppRouteEventSchema = z.strictObject({
   target: z.enum(['palette', 'help', 'home', 'settings', 'attention', 'ama', 'bulk']),
   attentionId: z.string().min(1).max(500).optional(),
   featureId: z.string().min(1).max(200).optional(),
-  settingsSection: z.enum(['updates', 'diagnostics']).optional(),
+  settingsSection: SettingsSectionSchema.optional(),
 });
 
 export type AppRouteEvent = z.output<typeof AppRouteEventSchema>;
@@ -2046,18 +2105,6 @@ export const CreationFileSearchResultSchema = z.strictObject({
 });
 export type CreationFileSearchResult = z.output<typeof CreationFileSearchResultSchema>;
 
-// --- Theme ------------------------------------------------------------------
-
-export const ThemePreferenceSchema = z.enum(['light', 'dark', 'system']);
-export type ThemePreference = z.output<typeof ThemePreferenceSchema>;
-
-export const ThemeInfoSchema = z.strictObject({
-  preference: ThemePreferenceSchema,
-  resolved: z.enum(['light', 'dark']),
-});
-
-export type ThemeInfo = z.output<typeof ThemeInfoSchema>;
-
 // --- Settings (app-local presentation/runtime-selection data ONLY) ---------
 // Never store features, runs, configuration, credentials, or any
 // server-domain snapshot here.
@@ -2171,6 +2218,66 @@ export function defaultShellPrefs(): ShellPrefs {
   return { activeFeatureId: null, sidebarCollapsed: false };
 }
 
+/**
+ * The Settings window's own pane order — today's eight sections, unchanged.
+ * The ids are stable storage values (`settingsWindow.pane`), so renaming a
+ * pane's label never invalidates a persisted preference.
+ */
+export const SETTINGS_PANES = [
+  'workspace-roots',
+  'providers',
+  'appearance',
+  'updates',
+  'notifications',
+  'diagnostics',
+  'advanced',
+  'workspace-defaults',
+] as const;
+
+export const SettingsPaneIdSchema = z.enum(SETTINGS_PANES);
+export type SettingsPaneId = z.output<typeof SettingsPaneIdSchema>;
+
+/** The Settings window's default footprint and the smallest usable one. */
+export const SETTINGS_WINDOW_DEFAULT_WIDTH = 900;
+export const SETTINGS_WINDOW_DEFAULT_HEIGHT = 640;
+export const SETTINGS_WINDOW_MIN_WIDTH = 680;
+export const SETTINGS_WINDOW_MIN_HEIGHT = 460;
+
+/**
+ * Settings-window presentation preferences ONLY: where the window was left
+ * and which pane was last viewed. Additive and defaulted, so a settings
+ * document written before the Settings window existed loads with these
+ * defaults and no other preference is reset.
+ */
+export const SettingsWindowPrefsSchema = z.strictObject({
+  bounds: WindowBoundsSchema.optional(),
+  pane: SettingsPaneIdSchema,
+});
+
+export type SettingsWindowPrefs = z.output<typeof SettingsWindowPrefsSchema>;
+
+export function defaultSettingsWindowPrefs(): SettingsWindowPrefs {
+  return { pane: 'workspace-roots' };
+}
+
+/**
+ * A renderer asking the main process to raise the Settings window. Only the
+ * two renderer-origin entry points need this (the command palette's Settings
+ * entry and the update popover's Updates action); the menu, tray, deep-link,
+ * and second-instance paths already dispatch inside the main process.
+ * Omitting `section` opens whichever pane was last viewed.
+ */
+export const SettingsOpenRequestSchema = z.strictObject({
+  section: SettingsSectionSchema.optional(),
+});
+
+export type SettingsOpenRequest = z.output<typeof SettingsOpenRequestSchema>;
+
+/** `opened: false` when the runtime is not ready yet, matching ⌘,'s gating. */
+export const SettingsOpenResultSchema = z.strictObject({ opened: z.boolean() });
+
+export type SettingsOpenResult = z.output<typeof SettingsOpenResultSchema>;
+
 export const SettingsSchema = z.strictObject({
   schemaVersion: z.literal(SETTINGS_SCHEMA_VERSION),
   runtime: z.strictObject({
@@ -2185,6 +2292,7 @@ export const SettingsSchema = z.strictObject({
   ama: AmaPrefsSchema.default(defaultAmaPrefs()),
   notifications: NotificationPrefsSchema.default(defaultNotificationPrefs()),
   shell: ShellPrefsSchema.default(defaultShellPrefs()),
+  settingsWindow: SettingsWindowPrefsSchema.default(defaultSettingsWindowPrefs()),
 });
 
 export type Settings = z.output<typeof SettingsSchema>;
@@ -2197,6 +2305,7 @@ export const SettingsPatchSchema = z.strictObject({
   ama: AmaPrefsSchema.optional(),
   notifications: NotificationPrefsSchema.optional(),
   shell: ShellPrefsSchema.optional(),
+  settingsWindow: SettingsWindowPrefsSchema.optional(),
 });
 
 export type SettingsPatch = z.output<typeof SettingsPatchSchema>;
@@ -2211,6 +2320,7 @@ export function defaultSettings(): Settings {
     ama: defaultAmaPrefs(),
     notifications: defaultNotificationPrefs(),
     shell: defaultShellPrefs(),
+    settingsWindow: defaultSettingsWindowPrefs(),
   };
 }
 
@@ -2495,6 +2605,10 @@ export const ipcContracts: Record<IpcChannel, IpcContract> = {
   [IPC_CHANNELS.settingsUpdate]: {
     request: z.tuple([SettingsPatchSchema]),
     response: SettingsSchema,
+  },
+  [IPC_CHANNELS.windowOpenSettings]: {
+    request: z.tuple([SettingsOpenRequestSchema]),
+    response: SettingsOpenResultSchema,
   },
   [IPC_CHANNELS.themeGet]: {
     request: z.tuple([]),
@@ -2825,6 +2939,12 @@ export interface AgenticoApi {
    * every other platform is treated as the native-frame fallback.
    */
   readonly platform: string;
+  /**
+   * Which root this window is: the main workspace or the Settings window.
+   * Supplied as a constructor argument when the window is created and read
+   * synchronously here, so the entry point picks a root before first paint.
+   */
+  readonly windowPurpose: WindowPurpose;
   getConnectionStatus(): Promise<ConnectionState>;
   retryConnection(): Promise<ConnectionState>;
   restartConnection(): Promise<ConnectionState>;
@@ -2832,6 +2952,7 @@ export interface AgenticoApi {
   onRouteRequest(listener: (event: AppRouteEvent) => void): () => void;
   getSettings(): Promise<Settings>;
   updateSettings(patch: SettingsPatch): Promise<Settings>;
+  openSettingsWindow(request: SettingsOpenRequest): Promise<SettingsOpenResult>;
   getThemePreference(): Promise<ThemeInfo>;
   setThemePreference(preference: ThemePreference): Promise<ThemeInfo>;
   getReadiness(): Promise<ReadinessSnapshot>;

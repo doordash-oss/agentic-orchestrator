@@ -66,13 +66,17 @@ export class NativeCommandController {
     };
   }
 
+  /**
+   * Every menu and tray navigation goes straight to the injected dispatcher:
+   * raising the right window is that dispatcher's job now, because a
+   * settings-targeted route must raise the Settings window rather than the
+   * main one.
+   */
   private route(target: AppRouteEvent['target']): void {
-    this.deps.showWindow();
     this.deps.route({ target });
   }
 
   private routeEvent(event: AppRouteEvent): void {
-    this.deps.showWindow();
     this.deps.route(event);
   }
 
@@ -118,6 +122,14 @@ export class NativeCommandController {
 
     return Menu.buildFromTemplate([
       appMenu,
+      // The standard File position, immediately after the app menu. `close`
+      // is the platform role, so ⌘W always closes whichever window is
+      // focused — the Settings window closes outright, the main window goes
+      // through its own close handler and the quit decision behind it.
+      {
+        label: 'File',
+        submenu: [{ role: 'close', label: 'Close Window' }],
+      },
       {
         label: 'Navigate',
         submenu: [

@@ -31,7 +31,13 @@ import type {
   UpdateState,
   DiagnosticsSnapshot,
 } from '../../../src/shared/ipc';
-import { CHAT_SESSION_ID, defaultAmaPrefs, defaultSettings } from '../../../src/shared/ipc';
+import {
+  CHAT_SESSION_ID,
+  defaultAmaPrefs,
+  defaultSettings,
+  defaultSettingsWindowPrefs,
+  type SettingsPaneId,
+} from '../../../src/shared/ipc';
 
 const DEMO_FEATURE_CONFIG = {
   models: { planning: 'demo:planner' },
@@ -1282,6 +1288,9 @@ function makeMockApi(
     // The AMA scenes open the panel from the persisted preference, exactly as
     // the app does, rather than routing it open from the scene.
     ama: { ...defaultAmaPrefs(), drawer: scene === 'ama-panel' ? 'expanded' : 'compact' },
+    // The settings scenes open on their pane through the same persisted
+    // preference the app restores on open, rather than being routed there.
+    settingsWindow: { ...defaultSettingsWindowPrefs(), pane: settingsScenePane(scene) },
     shell: {
       activeFeatureId:
         scene === 'overview-lanes' ||
@@ -1298,6 +1307,9 @@ function makeMockApi(
 
   return {
     platform: 'darwin',
+    // Every settings scene mounts the Settings window root; the other scenes
+    // mount the main app root, exactly as the real entry point chooses.
+    windowPurpose: scene.startsWith('settings-') ? 'settings' : 'main',
     getConnectionStatus: () =>
       Promise.resolve(
         scene === 'connection-shell' ? CONNECTION_STATE_MID_CONNECT : CONNECTION_STATE,
@@ -1317,6 +1329,7 @@ function makeMockApi(
       currentSettings = { ...currentSettings, ...patch };
       return Promise.resolve(currentSettings);
     },
+    openSettingsWindow: () => Promise.resolve({ opened: true }),
     getThemePreference: () => Promise.resolve(theme),
     setThemePreference: (preference) => {
       theme = { preference, resolved: preference === 'system' ? theme.resolved : preference };
@@ -2169,6 +2182,19 @@ index 5c32b6a..8a9b3c1 100644
       return () => appEventListeners.delete(listener);
     },
   };
+}
+
+/**
+ * The pane each settings scene opens on. Every scene whose id names a pane
+ * uses it directly; the update-flavoured scenes (`settings-updates-ready`,
+ * `settings-updates-deb`, `settings-install-now-confirm`) all photograph the
+ * Updates pane with different update states.
+ */
+function settingsScenePane(scene: string): SettingsPaneId {
+  if (scene === 'settings-diagnostics') return 'diagnostics';
+  if (scene === 'settings-appearance') return 'appearance';
+  if (scene === 'settings-workspace-roots') return 'workspace-roots';
+  return 'updates';
 }
 
 function updateStateForScene(scene: string): UpdateState {

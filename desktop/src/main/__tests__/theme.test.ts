@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { ThemeController, type NativeThemeLike } from '../theme';
-import type { ThemePreference } from '../../shared/ipc';
+import { AppEventSchema, type ThemePreference } from '../../shared/ipc';
 
 function makeNativeTheme(dark: boolean): NativeThemeLike & { themeSource: string } {
   return {
@@ -38,5 +38,29 @@ describe('ThemeController', () => {
     controller.applyStored();
     expect(nativeTheme.themeSource).toBe('dark');
     expect(controller.getInfo()).toEqual({ preference: 'dark', resolved: 'dark' });
+  });
+
+  it('returns a payload that is exactly the cross-window theme fan-out event', () => {
+    // The main process spreads setPreference's return into the 'theme' push
+    // event so a theme picked in one window restyles the others. The fan-out
+    // loop itself lives in a main-process closure; this pins the payload.
+    const nativeTheme = makeNativeTheme(true);
+    let stored: ThemePreference = 'system';
+    const controller = new ThemeController(
+      nativeTheme,
+      () => stored,
+      (p) => {
+        stored = p;
+      },
+    );
+
+    for (const preference of ['light', 'dark', 'system'] as const) {
+      const info = controller.setPreference(preference);
+      expect(AppEventSchema.parse({ type: 'theme', ...info })).toEqual({
+        type: 'theme',
+        preference: info.preference,
+        resolved: info.resolved,
+      });
+    }
   });
 });

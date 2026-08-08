@@ -69,9 +69,11 @@ export interface ThemeState {
 /**
  * Owns the light/dark/system theme: loads the persisted preference from main,
  * follows OS appearance while on `system`, and mirrors the resolved theme
- * onto <html data-theme> for the CSS custom properties. Multiple instances
- * sync through a custom window event so a theme change from any surface
- * (header switcher or Settings panel) updates all of them.
+ * onto <html data-theme> for the CSS custom properties. Instances in the same
+ * document sync through a custom window event; instances in another window
+ * follow the main process's `theme` app-event broadcast, since a
+ * same-document event cannot cross a window boundary. Both paths carry the
+ * same resolved ThemeInfo, so applying either is idempotent.
  */
 const THEME_SYNC_EVENT = 'agentico-theme-sync';
 
@@ -112,10 +114,17 @@ export function useTheme(): ThemeState {
     };
     window.addEventListener(THEME_SYNC_EVENT, onSync);
 
+    const unsubscribe = window.agentico.onAppEvent((event) => {
+      if (event.type === 'theme') {
+        setInfo({ preference: event.preference, resolved: event.resolved });
+      }
+    });
+
     return () => {
       alive = false;
       query.removeEventListener('change', onChange);
       window.removeEventListener(THEME_SYNC_EVENT, onSync);
+      unsubscribe();
     };
   }, []);
 

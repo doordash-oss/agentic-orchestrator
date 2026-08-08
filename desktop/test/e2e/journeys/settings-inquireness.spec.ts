@@ -2,6 +2,10 @@
  * Packaged Electron regression: changing workspace-default inquireness in
  * Settings must not blank the renderer. This exercises the shipped app bundle,
  * real bundled Go server, real IPC bridge, and real persisted runtime config.
+ *
+ * The editor lives in the Settings window's "Workspace defaults" pane, so the
+ * renderer under scrutiny here is that window's — with the main window's
+ * liveness asserted alongside it, since both share the origin and the bridge.
  */
 import { expect, test } from '@playwright/test';
 import {
@@ -11,6 +15,7 @@ import {
   launchApp,
   openSettings,
   persistAppLogs,
+  selectSettingsPane,
   type AppHandle,
 } from '../helpers/app';
 import { createRepo, createWorld, destroyWorld } from '../helpers/world';
@@ -39,27 +44,31 @@ test('changing Settings workspace inquireness keeps the packaged renderer alive'
       timeout: 60_000,
     });
 
-    await openSettings(handle);
-    await expect(handle.page.getByRole('heading', { name: 'Settings' })).toBeVisible({
-      timeout: 15_000,
+    const settings = await openSettings(handle);
+    settings.on('pageerror', (error) =>
+      rendererErrors.push(`settings pageerror: ${error.message}`),
+    );
+    settings.on('console', (message) => {
+      if (message.type() === 'error') rendererErrors.push(`settings console: ${message.text()}`);
     });
+    await selectSettingsPane(settings, 'Workspace defaults');
 
-    const defaultsEditor = handle.page.locator('[aria-label="Workspace defaults editor"]');
+    const defaultsEditor = settings.locator('[aria-label="Workspace defaults editor"]');
     await defaultsEditor.scrollIntoViewIfNeeded();
     await expect(defaultsEditor).toBeVisible({ timeout: 15_000 });
-    const before = await handle.page.evaluate(() => window.agentico.getWorkspaceDefaults());
+    const before = await settings.evaluate(() => window.agentico.getWorkspaceDefaults());
     const target = before.inquireness === 'high' ? 'none' : 'high';
     const targetLabel = target === 'high' ? /High/ : /None/;
     const targetText = target === 'high' ? 'High' : 'None';
 
     await defaultsEditor.locator('.config-editor__segment', { hasText: targetText }).click();
 
-    await expect(handle.page.getByRole('heading', { name: 'Settings' })).toBeVisible();
+    await expect(settings.getByRole('heading', { name: 'Workspace defaults' })).toBeVisible();
     await expect(defaultsEditor).toBeVisible();
     // Focusing the segment's hidden radio must not scroll the document: the
-    // shell is 100vh, so any document scroll paints a blank window while
-    // DOM-level visibility assertions still pass.
-    expect(await handle.page.evaluate(() => document.scrollingElement?.scrollTop ?? 0)).toBe(0);
+    // Settings window is 100vh, so any document scroll paints a blank window
+    // while DOM-level visibility assertions still pass.
+    expect(await settings.evaluate(() => document.scrollingElement?.scrollTop ?? 0)).toBe(0);
     await expect(defaultsEditor.getByRole('radio', { name: targetLabel })).toBeChecked();
     const save = defaultsEditor.getByRole('button', { name: 'Save changes' });
     await expect(save).toBeEnabled();
@@ -68,12 +77,12 @@ test('changing Settings workspace inquireness keeps the packaged renderer alive'
       timeout: 15_000,
     });
 
-    const workspaceDefaults = await handle.page.evaluate(() =>
-      window.agentico.getWorkspaceDefaults(),
-    );
+    const workspaceDefaults = await settings.evaluate(() => window.agentico.getWorkspaceDefaults());
     expect(workspaceDefaults.inquireness).toBe(target);
+    // The main window must be as alive as the Settings window it spawned.
+    await expect(handle.page.getByRole('button', { name: 'New feature' })).toBeVisible();
     expect(rendererErrors).toEqual([]);
-    await evidenceShot(handle, `${RUN_NAME}-workspace-inquireness-high`);
+    await evidenceShot(handle, `${RUN_NAME}-workspace-inquireness-high`, settings);
   } finally {
     if (handle !== null) {
       persistAppLogs(handle, RUN_NAME);

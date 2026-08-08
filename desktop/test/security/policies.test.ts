@@ -17,6 +17,11 @@ import {
   resolveWithinRoot,
   windowOpenPolicy,
 } from '../../src/main/security';
+import {
+  WINDOW_PURPOSES,
+  WINDOW_PURPOSE_ARGUMENT_PREFIX,
+  windowPurposeFromArgv,
+} from '../../src/shared/ipc';
 
 describe('mainWindowWebPreferences', () => {
   it('locks down the renderer: sandbox, context isolation, no node integration', () => {
@@ -28,6 +33,25 @@ describe('mainWindowWebPreferences', () => {
     expect(prefs.allowRunningInsecureContent).toBe(false);
     expect(prefs.experimentalFeatures).toBe(false);
     expect(prefs.preload).toBe('/app/out/preload/index.cjs');
+  });
+
+  // Every window (main and settings) is built from this one preference set;
+  // purpose travels only as an extra process argument, so a second window can
+  // never be created with a weaker posture than the first.
+  it('hands every window purpose the same hardened prefs, differing only in the purpose argument', () => {
+    const hardened = mainWindowWebPreferences('/app/out/preload/index.cjs');
+
+    for (const purpose of WINDOW_PURPOSES) {
+      const prefs = {
+        ...mainWindowWebPreferences('/app/out/preload/index.cjs'),
+        additionalArguments: [`${WINDOW_PURPOSE_ARGUMENT_PREFIX}${purpose}`],
+      };
+      const { additionalArguments, ...posture } = prefs;
+      expect(posture).toEqual(hardened);
+      expect(windowPurposeFromArgv(additionalArguments)).toBe(purpose);
+      // The window-open denial is global, so it covers the second window too.
+      expect(windowOpenPolicy()).toEqual({ action: 'deny' });
+    }
   });
 });
 

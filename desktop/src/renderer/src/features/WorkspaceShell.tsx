@@ -5,15 +5,9 @@
  * that pane as a window-modal sheet reached from Overview — the pane beneath
  * stays mounted and navigable, so ⌘-digit shortcuts, routed navigation, and
  * attention deep-links change what is underneath without touching the draft.
- * Settings is a temporary, unpersisted content-pane view (a stub a later
- * phase retires with a real Settings window) reached only through the
- * existing ⌘,/palette/menu/tray
- * entry points. Settings is a third, orthogonal state layered on top of the
- * persisted selection rather than a value that selection can hold: opening
- * it deselects every sidebar row without touching `shell.activeFeatureId`,
- * so closing it via a neutral affordance (the panel's own Back control)
- * simply reveals whatever was already selected underneath — only an
- * explicit choice (⌘1, or clicking a row) changes that selection.
+ * Settings is not a state of this shell at all: it lives in its own window,
+ * so every settings entry path is handled in the main process and nothing
+ * here has a settings special case.
  * Local settings store ONLY the active feature id and sidebar collapse
  * state; every feature itself is always reloaded from the server, so
  * existing state survives app restarts without any local domain cache.
@@ -43,7 +37,6 @@ import { parseIpcError, type WizardError } from '../wizard/ipcError';
 import { isEditingShortcutTarget } from '../components/CommandPalette';
 import { CreateFeatureForm } from './CreateFeatureForm';
 import { FeatureCockpit } from './FeatureCockpit';
-import { SettingsPanel } from './SettingsPanel';
 import { PipRail } from '../components/Pip';
 import { updateNoticePending } from '../components/UpdatePopover';
 import { emptyAttentionDrafts, type AttentionDrafts } from './AttentionInbox';
@@ -172,7 +165,6 @@ export function WorkspaceShell({
   const overviewActiveRef = useRef(false);
   const [creationOpen, setCreationOpen] = useState(false);
   const [bulkPreviewRequest, setBulkPreviewRequest] = useState<number | null>(null);
-  const [settingsOpen, setSettingsOpen] = useState(false);
   const [selectedRuns, setSelectedRuns] = useState<Record<string, number | null>>({});
   const [expandedLanes, setExpandedLanes] = useState<Record<Lane, boolean>>({
     waiting: true,
@@ -319,7 +311,6 @@ export function WorkspaceShell({
     (featureId: string) => {
       const base = shellStateRef.current ?? defaultShellPrefs();
       persist({ ...base, activeFeatureId: featureId });
-      setSettingsOpen(false);
     },
     [persist],
   );
@@ -338,24 +329,8 @@ export function WorkspaceShell({
   const selectOverview = useCallback(() => {
     const base = shellStateRef.current ?? defaultShellPrefs();
     persist({ ...base, activeFeatureId: null });
-    setSettingsOpen(false);
     loadList();
   }, [loadList, persist]);
-
-  const openSettings = useCallback(() => {
-    setSettingsOpen(true);
-  }, []);
-
-  /**
-   * The neutral "leave Settings" affordance: unlike `selectOverview`, this
-   * never touches `shell.activeFeatureId`, so whichever row was selected
-   * before Settings opened (including none, for Overview) is exactly what
-   * reappears — the fix for Settings previously hardcoding a return to
-   * Overview regardless of what was open beforehand.
-   */
-  const closeSettings = useCallback(() => {
-    setSettingsOpen(false);
-  }, []);
 
   const handleFeatureDeleted = useCallback(
     (featureId: string) => {
@@ -421,7 +396,6 @@ export function WorkspaceShell({
     handledAttentionJump.current = attentionJump.requestId;
     if (attentionJump.featureId === '__recovery__') {
       persist({ ...(shellStateRef.current ?? shell), activeFeatureId: null });
-      setSettingsOpen(false);
     } else {
       selectFeature(attentionJump.featureId);
       setAttentionPreviewRequest({
@@ -445,13 +419,11 @@ export function WorkspaceShell({
     // never closes the sheet or touches the draft.
     if (routeRequest.event.target === 'home') {
       selectOverview();
-    } else if (routeRequest.event.target === 'settings') {
-      openSettings();
     } else if (routeRequest.event.target === 'bulk') {
       setBulkPreviewRequest(routeRequest.id);
       selectOverview();
     }
-  }, [openSettings, routeRequest, selectOverview, shell]);
+  }, [routeRequest, selectOverview, shell]);
 
   if (shell === null) {
     return (
@@ -473,7 +445,7 @@ export function WorkspaceShell({
       ? { kind: 'feature', featureId: activeFeatureId }
       : { kind: 'overview' };
   // Read by the focus/visibility refresh so it only refetches when Overview is shown.
-  overviewActiveRef.current = selection.kind === 'overview' && !creationOpen && !settingsOpen;
+  overviewActiveRef.current = selection.kind === 'overview' && !creationOpen;
 
   const toggleLane = (lane: Lane, expanded: boolean) => {
     setExpandedLanes((current) => ({ ...current, [lane]: expanded }));
@@ -507,16 +479,13 @@ export function WorkspaceShell({
     selection.kind === 'feature'
       ? features.find((feature) => feature.id === selection.featureId)
       : undefined;
-  const showTrailingToolbar = !settingsOpen && selection.kind === 'feature';
+  const showTrailingToolbar = selection.kind === 'feature';
   // Stays mounted under the creation sheet so closing it restores focus here.
-  const showNewFeatureButton = !settingsOpen && selection.kind === 'overview';
-  const toolbarTitle = settingsOpen
-    ? 'Settings'
-    : selection.kind === 'feature'
-      ? featureLabel(selection.featureId)
-      : 'Overview';
+  const showNewFeatureButton = selection.kind === 'overview';
+  const toolbarTitle =
+    selection.kind === 'feature' ? featureLabel(selection.featureId) : 'Overview';
   const toolbarSubline =
-    !settingsOpen && selection.kind === 'feature' ? repoBranchSubline(selectedFeature) : undefined;
+    selection.kind === 'feature' ? repoBranchSubline(selectedFeature) : undefined;
 
   // Keep the global ⌘2-9/⌘⌃S listener's stale-closure guard current every
   // render — see the ref's declaration above for why it isn't itself a hook.
@@ -581,7 +550,7 @@ export function WorkspaceShell({
           <SidebarRow
             id="sidebar-overview"
             label="Overview"
-            selected={!settingsOpen && selection.kind === 'overview'}
+            selected={selection.kind === 'overview'}
             onSelect={selectOverview}
           />
           {LANES.map((lane) => {
@@ -607,11 +576,7 @@ export function WorkspaceShell({
                       lane={lane}
                       feature={feature}
                       attentionKinds={attentionKindsByFeature.get(feature.id)}
-                      selected={
-                        !settingsOpen &&
-                        selection.kind === 'feature' &&
-                        selection.featureId === feature.id
-                      }
+                      selected={selection.kind === 'feature' && selection.featureId === feature.id}
                       onSelect={() => selectFeature(feature.id)}
                     />
                   ))}
@@ -672,23 +637,10 @@ export function WorkspaceShell({
         />
         <div
           className={
-            !settingsOpen && selection.kind === 'feature'
-              ? 'content-pane content-pane--flush'
-              : 'content-pane'
+            selection.kind === 'feature' ? 'content-pane content-pane--flush' : 'content-pane'
           }
         >
-          {settingsOpen ? (
-            <div className="content-pane__settings">
-              <header className="content-pane__settings-header">
-                <button type="button" className="setup-wizard__action" onClick={closeSettings}>
-                  Back
-                </button>
-              </header>
-              <SettingsPanel
-                routeRequest={routeRequest?.event.target === 'settings' ? routeRequest : null}
-              />
-            </div>
-          ) : selection.kind === 'feature' ? (
+          {selection.kind === 'feature' ? (
             <FeatureCockpit
               key={selection.featureId}
               active

@@ -57,10 +57,18 @@ import {
   CREATION_IMAGE_FORMATS,
   IPC_EVENTS,
   isActiveChatSession,
+  SETTINGS_WINDOW_DEFAULT_HEIGHT,
+  SETTINGS_WINDOW_DEFAULT_WIDTH,
+  SETTINGS_WINDOW_MIN_HEIGHT,
+  SETTINGS_WINDOW_MIN_WIDTH,
+  WINDOW_PURPOSE_ARGUMENT_PREFIX,
   type AppEvent,
   type AppRouteEvent,
   type FeatureSnapshot,
+  type SettingsSection,
+  type WindowPurpose,
 } from '../shared/ipc';
+import { WindowRegistry, routeSettingsPane, routeWindowPurpose } from './windowRegistry';
 import { toSafeError } from '../shared/errors';
 import {
   RENDERER_ENTRY_URL,
@@ -148,9 +156,16 @@ if (devRendererUrl !== undefined) {
   }
 }
 
-/** Updated whenever the main window is (re)created; -1 trusts nothing. */
-const trusted: TrustedSender & { webContentsId: number } = {
-  webContentsId: -1,
+/**
+ * The window registry owns the trust membership; this object hands it to
+ * every IPC handler by reference, so a window joining or leaving is visible
+ * to the per-call guard without re-registering anything. Until the registry
+ * exists (and after every window closes) the set is empty and nothing is
+ * trusted.
+ */
+const trustedWindowIds = new Set<number>();
+const trusted: TrustedSender = {
+  webContentsIds: trustedWindowIds,
   allowedOrigins: appOrigins,
 };
 
@@ -174,6 +189,53 @@ function firstPaintBackground(): string {
   return nativeTheme.shouldUseDarkColors
     ? BENCH_CONTENT_BACKGROUND.dark
     : BENCH_CONTENT_BACKGROUND.light;
+}
+
+/**
+ * The webPreferences every window shares, plus the one thing that differs:
+ * the constructor-supplied purpose the sandboxed preload reads out of
+ * `process.argv` to pick its renderer root. The hardened preferences, the
+ * CSP, the origin allowlist, and the window-open denial are identical for
+ * both window kinds — the second window changes nothing about the posture.
+ */
+function windowWebPreferences(purpose: WindowPurpose) {
+  return {
+    ...mainWindowWebPreferences(path.join(import.meta.dirname, '../preload/index.cjs')),
+    additionalArguments: [`${WINDOW_PURPOSE_ARGUMENT_PREFIX}${purpose}`],
+  };
+}
+
+/** Repaints the window background so a theme change never flashes the old one. */
+function followThemeBackground(window: BrowserWindow): void {
+  const onNativeThemeUpdated = (): void => {
+    if (!window.isDestroyed()) {
+      window.setBackgroundColor(firstPaintBackground());
+    }
+  };
+  nativeTheme.on('updated', onNativeThemeUpdated);
+  window.on('closed', () => nativeTheme.off('updated', onNativeThemeUpdated));
+}
+
+/**
+ * Delivers the already-known accent on every load so the renderer's mirror
+ * never races the main-process subscription: a fresh load gets the current
+ * value even though it missed any change published before now.
+ */
+function replayAccentOnLoad(window: BrowserWindow, getCurrentAccent: () => string | null): void {
+  window.webContents.on('did-finish-load', () => {
+    const color = getCurrentAccent();
+    if (color !== null && !window.isDestroyed()) {
+      window.webContents.send(IPC_EVENTS.appEvent, { type: 'accent', color });
+    }
+  });
+}
+
+function loadRenderer(window: BrowserWindow): void {
+  if (devRendererUrl !== undefined) {
+    void window.loadURL(devRendererUrl);
+  } else {
+    void window.loadURL(RENDERER_ENTRY_URL);
+  }
 }
 
 function createMainWindow(
@@ -209,29 +271,11 @@ function createMainWindow(
           visualEffectState: 'active',
         }
       : {}),
-    webPreferences: mainWindowWebPreferences(
-      path.join(import.meta.dirname, '../preload/index.cjs'),
-    ),
+    webPreferences: windowWebPreferences('main'),
   });
-  trusted.webContentsId = window.webContents.id;
 
-  const onNativeThemeUpdated = (): void => {
-    if (!window.isDestroyed()) {
-      window.setBackgroundColor(firstPaintBackground());
-    }
-  };
-  nativeTheme.on('updated', onNativeThemeUpdated);
-  window.on('closed', () => nativeTheme.off('updated', onNativeThemeUpdated));
-
-  // Delivers the already-known accent so the renderer's mirror never races
-  // the main-process subscription: a fresh load always gets the current
-  // value even though it missed any change published before now.
-  window.webContents.on('did-finish-load', () => {
-    const color = getCurrentAccent();
-    if (color !== null && !window.isDestroyed()) {
-      window.webContents.send(IPC_EVENTS.appEvent, { type: 'accent', color });
-    }
-  });
+  followThemeBackground(window);
+  replayAccentOnLoad(window, getCurrentAccent);
 
   window.on('ready-to-show', () => {
     window.show();
@@ -255,22 +299,66 @@ function createMainWindow(
     onClose(event, window);
   });
 
-  window.on('closed', () => {
-    trusted.webContentsId = -1;
+  loadRenderer(window);
+  return window;
+}
+
+/**
+ * The Settings window: a resizable, bounds-persisting utility window whose
+ * pane list wears the same sidebar vibrancy as the main window's source
+ * list. Minimize and zoom are dimmed (it is neither minimizable,
+ * maximizable, nor full-screenable, matching System Settings); close stays
+ * live and closes only this window — the quit-decision flow belongs to the
+ * main window alone. It is never auto-reopened at launch.
+ */
+function createSettingsWindow(
+  settings: SettingsStore,
+  getCurrentAccent: () => string | null,
+): BrowserWindow {
+  const bounds = settings.get().settingsWindow.bounds;
+  const window = new BrowserWindow({
+    title: 'Settings',
+    width: bounds?.width ?? SETTINGS_WINDOW_DEFAULT_WIDTH,
+    height: bounds?.height ?? SETTINGS_WINDOW_DEFAULT_HEIGHT,
+    ...(bounds !== undefined ? { x: bounds.x, y: bounds.y } : {}),
+    minWidth: SETTINGS_WINDOW_MIN_WIDTH,
+    minHeight: SETTINGS_WINDOW_MIN_HEIGHT,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    show: false,
+    backgroundColor: firstPaintBackground(),
+    ...(process.platform === 'darwin'
+      ? {
+          titleBarStyle: 'hiddenInset',
+          // Centred in the pane list's 44px drag strip (a 12px cluster).
+          trafficLightPosition: { x: 18, y: 16 },
+          vibrancy: 'sidebar',
+          visualEffectState: 'active',
+        }
+      : {}),
+    webPreferences: windowWebPreferences('settings'),
   });
 
-  const unsubscribe = gateway.subscribe((state) => {
-    if (!window.isDestroyed()) {
-      window.webContents.send(IPC_EVENTS.connectionChanged, state);
+  followThemeBackground(window);
+  replayAccentOnLoad(window, getCurrentAccent);
+
+  window.on('ready-to-show', () => window.show());
+
+  // Closing Settings saves its geometry and nothing else: it never enters the
+  // quit-decision flow and never disturbs the main window or the app.
+  window.on('close', () => {
+    const { x, y, width, height } = window.getBounds();
+    try {
+      settings.update({
+        settingsWindow: { ...settings.get().settingsWindow, bounds: { x, y, width, height } },
+      });
+    } catch {
+      // Geometry is a preference; never block closing on persisting it.
     }
   });
-  window.on('closed', unsubscribe);
 
-  if (devRendererUrl !== undefined) {
-    void window.loadURL(devRendererUrl);
-  } else {
-    void window.loadURL(RENDERER_ENTRY_URL);
-  }
+  loadRenderer(window);
   return window;
 }
 
@@ -419,24 +507,111 @@ if (!hasSingleInstanceLock) {
     const configService = new ConfigService(gateway);
     const attention = new AttentionService(gateway);
     const runHistory = new RunHistoryService(gateway);
-    let mainWindow: BrowserWindow | null = null;
     let nativeCommands: NativeCommandController | null = null;
     let featureLabels = new Map<string, string>();
     let mainWindowAttentionFocused = false;
     let stopStreams = (): void => {};
 
-    const route = (event: AppRouteEvent): void => {
-      const window = mainWindow;
-      if (window !== null && !window.isDestroyed()) {
-        window.webContents.send(IPC_EVENTS.routeRequested, event);
-      }
+    /**
+     * The registry is the only thing that creates a window: every entry path
+     * (⌘,, the menu, the tray, a deep link, a second instance, a renderer
+     * ask) goes through `openOrFocus`, so a purpose can never end up with two
+     * windows. Registration also joins the trust set, and `closed` evicts.
+     */
+    const windows = new WindowRegistry<BrowserWindow>(
+      {
+        create: (purpose) => {
+          const created =
+            purpose === 'settings'
+              ? createSettingsWindow(settings, () => accent.getCurrent())
+              : createMainWindow(settings, gateway, handleWindowClose, () => accent.getCurrent());
+          // Eviction is registered at creation so it is impossible to open a
+          // window that outlives its own trust-set membership.
+          created.on('closed', () => windows.evict(created));
+          return created;
+        },
+        focus: (window) => {
+          if (window.isMinimized()) {
+            window.restore();
+          }
+          window.show();
+          app.focus({ steal: true });
+          window.focus();
+        },
+        webContentsId: (window) => window.webContents.id,
+      },
+      trustedWindowIds,
+    );
+
+    const mainWindowOrNull = (): BrowserWindow | null => {
+      const window = windows.peek('main');
+      return window !== null && !window.isDestroyed() ? window : null;
     };
 
+    // Connection state is fanned out to every open window rather than wired
+    // per-window at creation, so the Settings window's panes see the same
+    // runtime state the main window does.
+    gateway.subscribe((state) => {
+      for (const window of windows.all()) {
+        if (!window.isDestroyed()) {
+          window.webContents.send(IPC_EVENTS.connectionChanged, state);
+        }
+      }
+    });
+
     const broadcastAppEvent = (event: AppEvent): void => {
-      for (const window of BrowserWindow.getAllWindows()) {
+      for (const window of windows.all()) {
         if (!window.isDestroyed()) {
           window.webContents.send(IPC_EVENTS.appEvent, event);
         }
+      }
+    };
+
+    /**
+     * Raises the Settings window on `pane`, gated on runtime readiness
+     * exactly as the in-shell surface was: before the connection is ready
+     * every settings route is a no-op. A drop after the window is open leaves
+     * it open — the panes' own degraded states handle it.
+     *
+     * The pane is persisted before the window is raised so a cold open reads
+     * it back as its initial pane, and pushed as a route event so an already
+     * open window switches; both paths land on the same pane.
+     */
+    const openSettingsWindow = (pane: SettingsSection | null): boolean => {
+      if (gateway.getState().status !== 'ready') {
+        return false;
+      }
+      if (pane !== null) {
+        try {
+          settings.update({ settingsWindow: { ...settings.get().settingsWindow, pane } });
+        } catch {
+          // A pane preference is never worth failing the open for.
+        }
+      }
+      const alreadyOpen = windows.peek('settings') !== null;
+      const window = windows.openOrFocus('settings');
+      if (alreadyOpen && pane !== null && !window.isDestroyed()) {
+        window.webContents.send(IPC_EVENTS.routeRequested, {
+          target: 'settings',
+          settingsSection: pane,
+        });
+      }
+      return true;
+    };
+
+    /**
+     * Window-aware dispatch: settings-targeted routes are delivered by
+     * raising the Settings window (a hidden main window stays hidden);
+     * everything else shows the main window and delivers there.
+     */
+    const route = (event: AppRouteEvent): void => {
+      if (routeWindowPurpose(event) === 'settings') {
+        openSettingsWindow(routeSettingsPane(event));
+        return;
+      }
+      const window = showMainWindow();
+      if (!window.isDestroyed()) {
+        window.webContents.send(IPC_EVENTS.routeRequested, event);
       }
     };
 
@@ -452,59 +627,43 @@ if (!hasSingleInstanceLock) {
     accent.start();
 
     const showMainWindow = (): BrowserWindow => {
-      if (mainWindow === null || mainWindow.isDestroyed()) {
-        mainWindow = createMainWindow(settings, gateway, handleWindowClose, () =>
-          accent.getCurrent(),
-        );
-        const created = mainWindow;
-        created.webContents.on('render-process-gone', (_event, details) => {
+      const existed = windows.peek('main') !== null;
+      const window = windows.openOrFocus('main');
+      if (!existed) {
+        window.webContents.on('render-process-gone', (_event, details) => {
           diagnostics.recordCrash({
             processRole: 'renderer',
             category: details.reason,
             context: `exitCode=${details.exitCode}`,
           });
         });
-        created.on('closed', () => {
-          if (mainWindow === created) {
-            mainWindow = null;
-            mainWindowAttentionFocused = false;
-            publishMainWindowFocusTestState(mainWindowAttentionFocused);
-          }
+        window.on('closed', () => {
+          mainWindowAttentionFocused = false;
+          publishMainWindowFocusTestState(mainWindowAttentionFocused);
         });
-        created.on('focus', () => {
+        window.on('focus', () => {
           mainWindowAttentionFocused = true;
           publishMainWindowFocusTestState(mainWindowAttentionFocused);
         });
-        created.on('blur', () => {
+        window.on('blur', () => {
           mainWindowAttentionFocused = false;
           publishMainWindowFocusTestState(mainWindowAttentionFocused);
         });
-        created.on('hide', () => {
+        window.on('hide', () => {
           mainWindowAttentionFocused = false;
           publishMainWindowFocusTestState(mainWindowAttentionFocused);
         });
       }
-      if (mainWindow.isMinimized()) {
-        mainWindow.restore();
-      }
-      mainWindow.show();
-      app.focus({ steal: true });
-      mainWindow.focus();
       mainWindowAttentionFocused = true;
       publishMainWindowFocusTestState(mainWindowAttentionFocused);
-      return mainWindow;
+      return window;
     };
 
     const notifications = new AttentionNotificationCoordinator({
       sink: electronNotificationSink,
       shouldNotify: () => {
-        const window = mainWindow;
-        return (
-          window === null ||
-          window.isDestroyed() ||
-          !window.isVisible() ||
-          !mainWindowAttentionFocused
-        );
+        const window = mainWindowOrNull();
+        return window === null || !window.isVisible() || !mainWindowAttentionFocused;
       },
       show: () => {
         showMainWindow();
@@ -531,7 +690,7 @@ if (!hasSingleInstanceLock) {
           if (parent !== null && !parent.isDestroyed()) {
             parent.hide();
           } else {
-            mainWindow?.hide();
+            mainWindowOrNull()?.hide();
           }
         },
         focusMainWindow: () => {
@@ -565,21 +724,24 @@ if (!hasSingleInstanceLock) {
     nativeCommands.install();
     publishNativeCommandTestState(nativeCommands);
 
-    app.on('second-instance', (_event, argv) => {
-      showMainWindow();
-      const requestedRoute = routeFromArgv(argv);
-      if (requestedRoute !== null) {
-        route(requestedRoute);
+    // A settings-targeted relaunch or deep link raises only the Settings
+    // window — a hidden main window stays hidden. Anything else (including an
+    // argv with no route at all) shows the main window as before.
+    const dispatchExternalRoute = (requestedRoute: AppRouteEvent | null): void => {
+      if (requestedRoute === null) {
+        showMainWindow();
+        return;
       }
+      route(requestedRoute);
+    };
+
+    app.on('second-instance', (_event, argv) => {
+      dispatchExternalRoute(routeFromArgv(argv));
     });
 
     app.on('open-url', (event, url) => {
       event.preventDefault();
-      showMainWindow();
-      const requestedRoute = routeFromUrl(url);
-      if (requestedRoute !== null) {
-        route(requestedRoute);
-      }
+      dispatchExternalRoute(routeFromUrl(url));
     });
 
     async function detectActiveWork(): Promise<ActiveWorkCheck> {
@@ -831,8 +993,18 @@ if (!hasSingleInstanceLock) {
         void refreshBackgroundState();
         return next;
       },
+      openSettingsWindow: (request) => ({
+        opened: openSettingsWindow(request.section ?? null),
+      }),
       getTheme: () => theme.getInfo(),
-      setTheme: (preference) => theme.setPreference(preference),
+      setTheme: (preference) => {
+        const info = theme.setPreference(preference);
+        // The renderer's own sync event cannot cross a window boundary, so
+        // the resolved theme is fanned out here: a theme picked in Settings
+        // restyles the main window live, and vice versa.
+        broadcastAppEvent({ type: 'theme', ...info });
+        return info;
+      },
       getReadiness: () => setup.getReadiness(),
       refreshReadiness: () => setup.refreshReadiness(),
       pickWorkspaceDirectory: () => setup.pickWorkspaceDirectory(),

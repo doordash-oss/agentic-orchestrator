@@ -29,7 +29,7 @@ import { PublishModalBody } from '../../../src/renderer/src/features/completion/
 import { CleanupConfirm } from '../../../src/renderer/src/features/completion/CleanupConfirm';
 import { useCompletionPreflight } from '../../../src/renderer/src/features/completion/useCompletionPreflight';
 import type { CompletionAction } from '../../../src/renderer/src/features/completion/completionShared';
-import { SettingsPanel } from '../../../src/renderer/src/features/SettingsPanel';
+import SettingsWindow from '../../../src/renderer/src/SettingsWindow';
 import { WorkspaceShell } from '../../../src/renderer/src/features/WorkspaceShell';
 import { FeatureCockpit } from '../../../src/renderer/src/features/FeatureCockpit';
 import { ConnectionShell } from '../../../src/renderer/src/components/ConnectionShell';
@@ -1362,7 +1362,6 @@ function UpdateAppScene(): React.ReactElement {
     null,
   );
   const [dismissedVersion, setDismissedVersion] = React.useState<string | null>(null);
-  const [showSettings, setShowSettings] = React.useState(false);
   // This scene photographs the bell beside the update trigger, so it has to feed
   // the shell the same attention snapshot the app would — otherwise the badge
   // reads zero next to a populated "Waiting on you" lane.
@@ -1379,18 +1378,9 @@ function UpdateAppScene(): React.ReactElement {
         updateDismissedVersion={dismissedVersion}
         schedulingUpdate={false}
         onDismissUpdate={setDismissedVersion}
-        onOpenUpdatesSettings={() => setShowSettings(true)}
         onInstallUpdateWhenIdle={async () => {
           setUpdate(await window.agentico.installUpdateWhenIdle());
         }}
-        routeRequest={
-          showSettings
-            ? {
-                id: 1,
-                event: { target: 'settings', settingsSection: 'updates' },
-              }
-            : null
-        }
       />
     </div>
   );
@@ -1431,27 +1421,14 @@ function AttentionPopoverScene(): React.ReactElement {
   );
 }
 
-function SettingsUpdateScene({ scene }: { scene: string }): React.ReactElement {
-  return (
-    <div className="app-frame" style={{ height: '100vh' }}>
-      <header className="toolbar">
-        <div className="toolbar__title">
-          <p className="toolbar__title-name">Agentico</p>
-        </div>
-      </header>
-      <div className="tab-panel" style={{ flex: 1, minHeight: 0 }}>
-        <SettingsPanel
-          routeRequest={{
-            id: 1,
-            event: {
-              target: 'settings',
-              settingsSection: scene === 'settings-diagnostics' ? 'diagnostics' : 'updates',
-            },
-          }}
-        />
-      </div>
-    </div>
-  );
+/**
+ * The real Settings window root — pane list plus the selected pane, nothing
+ * hand-built. Which pane opens comes from the mock's persisted
+ * `settingsWindow.pane`, keyed by scene id, exactly as the app restores the
+ * last-viewed pane on open.
+ */
+function SettingsWindowScene(): React.ReactElement {
+  return <SettingsWindow />;
 }
 
 function OverviewLanesScene({ empty = false }: { empty?: boolean }): React.ReactElement {
@@ -1596,13 +1573,8 @@ function CaptureApp() {
   if (scene === 'update-popover') {
     return <UpdateAppScene />;
   }
-  if (
-    scene === 'settings-updates-ready' ||
-    scene === 'settings-updates-deb' ||
-    scene === 'settings-install-now-confirm' ||
-    scene === 'settings-diagnostics'
-  ) {
-    return <SettingsUpdateScene scene={scene} />;
+  if (scene.startsWith('settings-')) {
+    return <SettingsWindowScene />;
   }
 
   if (scene === 'archive' || scene === 'pinned' || scene === 'constrained') {

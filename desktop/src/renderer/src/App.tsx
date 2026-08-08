@@ -11,8 +11,8 @@ import { useConnectionState, useSystemAccentMirror, useTheme } from './hooks';
 export default function App() {
   // Called purely for its side effect (mirroring the resolved theme onto
   // <html data-theme>, following OS changes); the switcher itself now lives
-  // in Settings ▸ Appearance, which owns its own useTheme() instance and
-  // stays in sync through the hook's cross-instance sync event.
+  // in the Settings window's Appearance pane, whose own useTheme() instance
+  // reaches this one through the main process's theme broadcast.
   useTheme();
   useSystemAccentMirror();
   const connection = useConnectionState();
@@ -33,7 +33,23 @@ export default function App() {
   const [schedulingUpdate, setSchedulingUpdate] = useState(false);
   const routeSequence = useRef(0);
 
+  /**
+   * Settings lives in its own window, so a settings route is an ask to the
+   * main process rather than shell state; every other target stays a local
+   * route request the mounted shell handles.
+   */
   const requestRoute = useCallback((event: AppRouteEvent) => {
+    if (event.target === 'settings') {
+      void window.agentico
+        .openSettingsWindow(
+          event.settingsSection === undefined ? {} : { section: event.settingsSection },
+        )
+        .catch(() => {
+          // The window is a destination, not a mutation: a failed open never
+          // needs to disturb the surface the user is looking at.
+        });
+      return;
+    }
     routeSequence.current += 1;
     setRouteRequest({ id: routeSequence.current, event });
   }, []);

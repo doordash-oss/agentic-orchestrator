@@ -1,6 +1,7 @@
 import { expect, test } from '@playwright/test';
 import {
   assertNoLeakedProcesses,
+  awaitSettingsWindow,
   closeApp,
   createFeatureViaForm,
   installRelaunchProbe,
@@ -66,20 +67,23 @@ test('Stop Work and Install Now confirms impact, cancels partial stops, then suc
     expect(activeReady.activeWorkSummary).toMatch(/1 workflow/);
     transcript.json('active workflow before Stop Work and Install Now', activeReady);
 
+    // The popover's Updates action opens the Settings window on the Updates
+    // pane, which is where the install controls live now.
     const updatePopover = handle.page.getByRole('region', { name: 'Available update' });
     await handle.page.getByRole('button', { name: 'Show available update' }).click();
     await updatePopover.getByRole('button', { name: 'Updates' }).click();
+    const settings = await awaitSettingsWindow(handle);
     await handle.page.keyboard.press('Escape');
     await expect(updatePopover).toHaveCount(0);
-    await handle.page.getByRole('button', { name: 'Stop Work and Install Now' }).click();
-    const dialog = handle.page.getByRole('dialog', { name: 'Install update confirmation' });
+    await settings.getByRole('button', { name: 'Stop Work and Install Now' }).click();
+    const dialog = settings.getByRole('dialog', { name: 'Install update confirmation' });
     await expect(dialog).toContainText(/Workflows and AMA may be interrupted/);
     transcript.step('Stop Work and Install Now showed explicit workflow and AMA impact');
 
     await forcePartialStop(handle, 1);
     await dialog.getByRole('button', { name: 'Stop Work and Install Now' }).click();
     await expect(
-      handle.page.getByLabel('Updates').getByText(/forced one unresolved stop outcome/i),
+      settings.getByLabel('Updates').getByText(/forced one unresolved stop outcome/i),
     ).toBeVisible({ timeout: 15_000 });
     const failed = await handle.page.evaluate(() => window.agentico.getUpdates());
     expect(failed.status).toBe('ready');
@@ -87,8 +91,8 @@ test('Stop Work and Install Now confirms impact, cancels partial stops, then suc
     transcript.json('partial stop cancellation state', failed);
 
     await installRelaunchProbe(handle);
-    await handle.page.getByRole('button', { name: 'Stop Work and Install Now' }).click();
-    await handle.page
+    await settings.getByRole('button', { name: 'Stop Work and Install Now' }).click();
+    await settings
       .getByRole('dialog', { name: 'Install update confirmation' })
       .getByRole('button', { name: 'Stop Work and Install Now' })
       .click();

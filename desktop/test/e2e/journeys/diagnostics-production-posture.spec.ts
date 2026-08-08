@@ -6,8 +6,10 @@ import {
   assertNoLeakedProcesses,
   closeApp,
   launchApp,
+  closeSettings,
   openSettings,
   persistAppLogs,
+  selectSettingsPane,
   type AppHandle,
 } from '../helpers/app';
 import {
@@ -79,14 +81,14 @@ test('packaged diagnostics stay local, bounded, redacted, and clearable without 
     expect(JSON.stringify(before)).not.toContain('diagnosticsRoot');
     transcript.json('diagnostics before clear', before);
 
-    await openSettings(handle);
-    await expect(handle.page.getByRole('heading', { name: 'Diagnostics' })).toBeVisible();
-    await expect(handle.page.getByRole('button', { name: 'Reveal Folder' })).toBeVisible();
-    await handle.page.getByRole('button', { name: 'Clear Diagnostics' }).click();
+    const settings = await openSettings(handle);
+    await selectSettingsPane(settings, 'Diagnostics');
+    await expect(settings.getByRole('button', { name: 'Reveal Folder' })).toBeVisible();
+    await settings.getByRole('button', { name: 'Clear Diagnostics' }).click();
     await expect(
-      handle.page.getByRole('dialog', { name: 'Clear diagnostics confirmation' }),
+      settings.getByRole('dialog', { name: 'Clear diagnostics confirmation' }),
     ).toBeVisible();
-    await handle.page
+    await settings
       .getByRole('dialog', { name: 'Clear diagnostics confirmation' })
       .getByRole('button', { name: 'Clear Diagnostics' })
       .click();
@@ -98,6 +100,9 @@ test('packaged diagnostics stay local, bounded, redacted, and clearable without 
     expect(fs.existsSync(world.stateDir)).toBe(true);
     transcript.step('Clear Diagnostics removed local diagnostics only; runtime state survived');
 
+    // The bounded stress numbers below are the main window's, so put the
+    // Settings window away first.
+    await closeSettings(handle);
     const stress = await measureBoundedStress(handle);
     expect(stress.tabSwitchMedianMs).toBeLessThanOrEqual(120);
     expect(stress.updateRefreshMedianMs).toBeLessThanOrEqual(120);

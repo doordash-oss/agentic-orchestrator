@@ -134,14 +134,12 @@ func TestFeatureListBoundsChildHistory(t *testing.T) {
 }
 
 // TestRefactorEntryBlockedWhenCleanlinessIndeterminate pins the fail-closed
-// gate: a cleanliness probe that times out (or otherwise yields no report)
-// must never pass as a clean worktree, since these actions rewrite the
-// parent's worktrees.
+// gate: a cleanliness probe that yields no readable report must never pass as a
+// clean worktree, since these actions rewrite the parent's worktrees.
 func TestRefactorEntryBlockedWhenCleanlinessIndeterminate(t *testing.T) {
 	t.Parallel()
 
 	for name, worktrees := range map[string]*readModelCleanlinessWorktrees{
-		"timeout":     {err: git.ErrProbeTimeout},
 		"nil report":  {},
 		"probe error": {err: fmt.Errorf("git exploded")},
 	} {
@@ -170,6 +168,33 @@ func TestRefactorEntryBlockedWhenCleanlinessIndeterminate(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestRefactorEntryNotBlockedWhenCleanlinessProbeTimesOut pins the other half of
+// the rule: a probe that only ran out of time carries no evidence about the
+// worktree, so it must not disable the action. A repo slower than the bound
+// would otherwise be blocked on every attempt with retrying futile; launch-time
+// inspection re-checks against the uncached authority before acting.
+func TestRefactorEntryNotBlockedWhenCleanlinessProbeTimesOut(t *testing.T) {
+	t.Parallel()
+
+	store, parent := seedReadFeature(t)
+	parent.Status = feature.StatusPublished
+	if err := store.Save(parent); err != nil {
+		t.Fatalf("Save(parent) error = %v", err)
+	}
+	opts := baseReadHandlerOptions(store)
+	opts.Worktrees = &readModelCleanlinessWorktrees{err: fmt.Errorf("probing: %w", git.ErrProbeTimeout)}
+	handler := NewHandler(opts)
+
+	body := getJSONMap(t, handler, "/api/v1/features/"+parent.ID)[entityFeature].(map[string]any)
+	for _, id := range []string{actionRefactor, actionReviewFeedback, actionRebase} {
+		action := actionJSONByID(t, body, id)
+		if action["enabled"] != true {
+			t.Fatalf("%s enabled = %v, want enabled despite a timed-out probe; reasons = %+v",
+				id, action["enabled"], action["disabled_reasons"])
+		}
 	}
 }
 

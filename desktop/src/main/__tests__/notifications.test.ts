@@ -61,7 +61,7 @@ describe('AttentionNotificationCoordinator', () => {
           featureId: 'feature-1',
           waitingSince: '2026-07-22T12:00:00.000Z',
           prompt: 'Agent has a question',
-          waitingKind: 'input',
+          waitingKind: 'coordinating',
         },
         {
           kind: 'help',

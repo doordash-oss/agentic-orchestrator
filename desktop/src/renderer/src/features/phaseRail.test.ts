@@ -107,18 +107,18 @@ describe('classifyHold', () => {
   });
 
   it('a synthetic help item never holds an active run', () => {
-    expect(classifyHold('Implementing', [helpItem({ waitingKind: 'input' })])).toBeNull();
+    expect(classifyHold('Implementing', [helpItem({ waitingKind: 'coordinating' })])).toBeNull();
   });
 
   it('a synthetic help item never feeds the oldest-waiting timestamp', () => {
     const hold = classifyHold('Implementing', [
       permissionItem(),
-      helpItem({ waitingKind: 'input', waitingSince: '2026-08-06T10:00:00.000Z' }),
+      helpItem({ waitingKind: 'coordinating', waitingSince: '2026-08-06T10:00:00.000Z' }),
     ]);
     expect(hold).toEqual({ kind: 'waiting', waitingSince: '2026-08-06T11:55:00.000Z' });
     expect(
       classifyHold('NeedUserInput', [
-        helpItem({ waitingKind: 'input', waitingSince: '2026-08-06T10:00:00.000Z' }),
+        helpItem({ waitingKind: 'coordinating', waitingSince: '2026-08-06T10:00:00.000Z' }),
       ]),
     ).toEqual({ kind: 'paused' });
   });

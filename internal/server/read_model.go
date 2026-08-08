@@ -31,6 +31,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/permission"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
@@ -57,11 +58,13 @@ const (
 // AskUserQuestion control request has no readable question of its own.
 const agentQuestionPrompt = "Agent has a question"
 
-// HelpQueue.Kind values: a real help request awaiting an answer vs a
-// synthetic entry for an interactive session idling between turns.
+// HelpQueue.Kind values. "question" and "input" both await the user; only
+// "coordinating" is a byproduct of a phase session parking between turns, which
+// no human needs to answer.
 const (
-	helpKindQuestion = "question"
-	helpKindInput    = "input"
+	helpKindQuestion     = "question"
+	helpKindInput        = "input"
+	helpKindCoordinating = "coordinating"
 )
 
 // actionInputKindEnum and actionInputKindString are ActionInput.Kind
@@ -341,8 +344,10 @@ func unknownWorktreeStateReason(repos []string) ActionDisabledReason {
 
 // dirtyRepoDiagnostics converts the dirty parent repositories into the
 // categorized payload shared with the launch-time error mapping. The second
-// return names repositories whose cleanliness could not be determined, which
-// callers must treat as not clean.
+// return names repositories whose worktree could not be read at all, which
+// callers must treat as not clean. A probe that only exceeded its bound is
+// omitted from both: it carries no evidence either way, and blocking on it
+// would permanently disable actions on a repo slower than the bound.
 func (h *apiHandler) dirtyRepoDiagnostics(repos []feature.FeatureRepo) ([]map[string]any, []string) {
 	if h.cleanliness == nil {
 		return nil, nil
@@ -365,7 +370,14 @@ func (h *apiHandler) dirtyRepoDiagnostics(repos []feature.FeatureRepo) ([]map[st
 			defer wg.Done()
 			report, err := h.cleanliness.InspectCleanliness(path, feature.DefaultDirtyPathLimit)
 			if err != nil || report == nil {
-				unknown[i] = name
+				// A probe that merely ran out of time says nothing about the
+				// worktree — a repo slower than the bound would be blocked on
+				// every attempt, with retrying futile. Only an unreadable
+				// worktree is treated as unverifiable; launch-time inspection
+				// re-checks against the uncached authority either way.
+				if !errors.Is(err, git.ErrProbeTimeout) {
+					unknown[i] = name
+				}
 				return
 			}
 			if !report.Dirty() {
@@ -1562,11 +1574,18 @@ func (h *apiHandler) featureQueues() ([]HelpQueue, []NeedUserInputGate, error) {
 			if sess == nil || sess.Status() != ports.SessionWaitingHelp || sessionHasPendingAskUserControl(sess) {
 				continue
 			}
+			// A chat session waiting between turns is waiting on the user —
+			// the inbox is its only reply surface. A phase session in the same
+			// state is mid-coordination and needs no human.
+			kind := helpKindCoordinating
+			if sess.Kind() == ports.KindChat {
+				kind = helpKindInput
+			}
 			help = append(help, orderedHelpQueue{
 				dto: HelpQueue{
 					FeatureID: sess.FeatureID(),
 					Question:  agentQuestionPrompt,
-					Kind:      helpKindInput,
+					Kind:      kind,
 					Pending:   true,
 					Time:      sess.WaitingSince(),
 				},

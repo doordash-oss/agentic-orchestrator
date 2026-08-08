@@ -29,7 +29,7 @@ import (
 )
 
 // stubGit puts a `git` script on PATH whose body is the given shell snippet,
-// and shortens ProbeTimeout so timeout paths are cheap to exercise.
+// and shortens both probe bounds so timeout paths are cheap to exercise.
 func stubGit(t *testing.T, body string) {
 	t.Helper()
 	binDir := t.TempDir()
@@ -37,11 +37,15 @@ func stubGit(t *testing.T, body string) {
 		t.Fatalf("write git stub: %v", err)
 	}
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
-	prev := ProbeTimeout
+	prev, prevCleanliness := ProbeTimeout, CleanlinessProbeTimeout
 	// Generous enough to absorb the first exec of a freshly written script
 	// (a few hundred ms on macOS) while still far below the hangs it bounds.
 	ProbeTimeout = time.Second
-	t.Cleanup(func() { ProbeTimeout = prev })
+	CleanlinessProbeTimeout = time.Second
+	t.Cleanup(func() {
+		ProbeTimeout = prev
+		CleanlinessProbeTimeout = prevCleanliness
+	})
 }
 
 // hangingGitAfter returns a stub body that hangs on the given git subcommand and
@@ -149,5 +153,22 @@ func TestRunProbeFastPathReturnsOutput(t *testing.T) {
 	}
 	if got := strings.TrimSpace(string(out)); got != "main" {
 		t.Errorf("runProbe() = %q, want %q", got, "main")
+	}
+}
+
+// TestCleanlinessProbeTimeoutExceedsCheapProbeBound guards the bound that
+// stranded a real repository: `status --untracked-files=all` walks every
+// untracked directory and took over 4s on a multi-gigabyte worktree, so a bound
+// shared with the cheap probes made the scan time out on every attempt. The
+// cleanliness bound must stay well clear of that observed runtime.
+func TestCleanlinessProbeTimeoutExceedsCheapProbeBound(t *testing.T) {
+	const observedSlowScan = 5 * time.Second
+	if CleanlinessProbeTimeout <= observedSlowScan {
+		t.Fatalf("CleanlinessProbeTimeout = %v; want headroom over the %v observed on a large worktree",
+			CleanlinessProbeTimeout, observedSlowScan)
+	}
+	if CleanlinessProbeTimeout <= ProbeTimeout {
+		t.Fatalf("CleanlinessProbeTimeout = %v; want more than the cheap-probe bound %v",
+			CleanlinessProbeTimeout, ProbeTimeout)
 	}
 }

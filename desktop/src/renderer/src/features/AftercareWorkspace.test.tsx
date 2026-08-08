@@ -189,7 +189,7 @@ describe('AftercareWorkspace runway', () => {
     const row = screen.getByRole('button', { name: /Start a refactor pass/ });
     expect(row).toBeDisabled();
     expect(row).toHaveTextContent(
-      'Could not verify whether the repository worktrees are clean — try again.',
+      'Could not read the repository worktrees — check that they still exist and are a valid checkout.',
     );
   });
 

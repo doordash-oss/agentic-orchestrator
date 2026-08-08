@@ -102,7 +102,7 @@ const helpWaitingItem: Extract<AttentionItem, { kind: 'help' }> = {
   ...helpQuestionItem,
   id: 'feature-1:kb1234567890abcdef:waiting',
   prompt: 'Agent has a question',
-  waitingKind: 'input',
+  waitingKind: 'coordinating',
   runningTasks: ['Indexing repository layout', 'Summarizing packages'],
 };
 
@@ -596,6 +596,16 @@ describe('AttentionInbox help detail', () => {
 
     await user.click(screen.getByRole('button', { name: /Attention inbox, 0 pending/ }));
     expect(screen.getByText('No blocking input is waiting.')).toBeVisible();
+  });
+
+  // A chat session's wait is the user's turn and the inbox is the only place to
+  // answer it — only phase coordination is filtered out.
+  it('keeps a chat session waiting on the user in the rows and the badge', async () => {
+    render(<Harness items={[{ ...helpWaitingItem, waitingKind: 'input' }]} onJump={vi.fn()} />);
+    const user = userEvent.setup();
+
+    await user.click(screen.getByRole('button', { name: /Attention inbox, 1 pending/ }));
+    expect(screen.getByRole('button', { name: /Agent waiting/ })).toBeVisible();
   });
 });
 

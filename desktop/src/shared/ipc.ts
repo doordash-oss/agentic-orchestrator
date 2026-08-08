@@ -1579,8 +1579,12 @@ export const AttentionHelpSchema = z.strictObject({
   phase: z.string().max(200).optional(),
   waitingSince: z.string().max(100),
   prompt: AttentionTextSchema,
-  /** 'input': the turn ended with no readable question — a harness wait, not a question. */
-  waitingKind: z.enum(['question', 'input']).optional(),
+  /**
+   * 'input': the turn ended with no readable question and the user's message is
+   * what continues it (chat). 'coordinating': a phase session parked between
+   * turns — a harness wait no human answers.
+   */
+  waitingKind: z.enum(['question', 'input', 'coordinating']).optional(),
   /** Descriptions of the session's still-running background tasks. */
   runningTasks: z.array(z.string().max(500)).max(100).optional(),
 });
@@ -1664,12 +1668,13 @@ export function attentionOwnerFeatureId(item: AttentionItem): string | undefined
   return item.featureId;
 }
 /**
- * A synthetic help item: an interactive session idling between turns
- * (waitingKind 'input'). Inline run-view status, not blocking input — it
- * never badges, notifies, or holds the phase rail.
+ * A synthetic help item: a phase session idling between turns
+ * (waitingKind 'coordinating'). Inline run-view status, not blocking input — it
+ * never badges, notifies, or holds the phase rail. A chat session's wait
+ * ('input') is excluded: the inbox is the only place to answer it.
  */
 export function isSyntheticHelpItem(item: AttentionItem): boolean {
-  return item.kind === 'help' && item.waitingKind === 'input';
+  return item.kind === 'help' && item.waitingKind === 'coordinating';
 }
 
 /**

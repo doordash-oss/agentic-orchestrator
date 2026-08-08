@@ -23,11 +23,18 @@ import (
 	"time"
 )
 
-// ProbeTimeout bounds every read-only git probe subprocess (freshness and
-// cleanliness status/rev-parse/rev-list) so a hung git — cold cache on a huge
-// worktree, network filesystem, index.lock contention — degrades to an
-// indeterminate answer instead of stalling the caller. Overridable in tests.
+// ProbeTimeout bounds the cheap read-only git probes (freshness
+// status/rev-parse/rev-list) so a hung git — cold cache on a huge worktree,
+// network filesystem, index.lock contention — degrades to an indeterminate
+// answer instead of stalling the caller. Overridable in tests.
 var ProbeTimeout = 3 * time.Second
+
+// CleanlinessProbeTimeout bounds `status --untracked-files=all`, which walks
+// every untracked directory and so routinely runs several times longer than the
+// cheap probes on a multi-gigabyte worktree. It needs its own headroom: a bound
+// below the honest runtime turns a slow-but-healthy repo into a permanently
+// indeterminate one, which fails closed and strands the actions it gates.
+var CleanlinessProbeTimeout = 20 * time.Second
 
 // ErrProbeTimeout reports that a git probe exceeded ProbeTimeout. Callers must
 // treat it as indeterminate, never as a clean or in-sync worktree.
@@ -37,7 +44,12 @@ var ErrProbeTimeout = errors.New("git probe timed out")
 // whether the bound was hit. The whole process group is killed on timeout so a
 // git that spawned helpers cannot outlive the probe.
 func runProbe(args ...string) (out []byte, timedOut bool, err error) {
-	ctx, cancel := context.WithTimeout(context.Background(), ProbeTimeout)
+	return runProbeBounded(ProbeTimeout, args...)
+}
+
+// runProbeBounded is runProbe with an explicit bound.
+func runProbeBounded(timeout time.Duration, args ...string) (out []byte, timedOut bool, err error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}

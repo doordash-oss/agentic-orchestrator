@@ -608,7 +608,7 @@ export function AttentionDetail({
   if (item.kind === 'help') {
     // A harness wait is not a question: the turn ended and the runtime is
     // coordinating. The reply box stays — a message is a legitimate unblock.
-    const waiting = item.waitingKind === 'input';
+    const waiting = item.waitingKind === 'input' || item.waitingKind === 'coordinating';
     return (
       <div className="attention-detail">
         <AttentionContextMeta item={item} />
@@ -850,7 +850,7 @@ function attentionAskLabel(item: Exclude<AttentionItem, { kind: 'recovery' }>): 
     case 'permission':
       return 'Permission request';
     case 'help':
-      return item.waitingKind === 'input' ? 'Agent waiting' : 'Help request';
+      return item.waitingKind === 'question' ? 'Help request' : 'Agent waiting';
     case 'gate':
       return 'Input needed';
     case 'review':
@@ -904,7 +904,7 @@ function attentionKindLabel(item: AttentionItem): string {
     case 'gate':
       return 'Input gate';
     case 'help':
-      return item.waitingKind === 'input' ? 'Agent waiting' : 'Help request';
+      return item.waitingKind === 'question' ? 'Help request' : 'Agent waiting';
     case 'permission':
       return 'Permission';
     case 'review':

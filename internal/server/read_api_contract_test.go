@@ -1836,8 +1836,8 @@ func TestPromptSnapshotIncludesWaitingHelpSessionWithoutControlRequest(t *testin
 		t.Fatalf("prompt help_queue = %v; want %v for WaitingHelp session without control request", got, want)
 	}
 	entry := prompts["help_queue"].([]any)[0].(map[string]any)
-	if got := entry["kind"]; got != helpKindInput {
-		t.Fatalf("synthetic help_queue kind = %v; want %q", got, helpKindInput)
+	if got := entry["kind"]; got != helpKindCoordinating {
+		t.Fatalf("synthetic help_queue kind = %v; want %q", got, helpKindCoordinating)
 	}
 	entryTime, err := time.Parse(time.RFC3339Nano, entry["time"].(string))
 	if err != nil {
@@ -3549,5 +3549,31 @@ func TestCompletionPreflightRepoCarriesPendingDeliveryFields(t *testing.T) {
 	}
 	if decoded["pending_dirty_file_total"] != float64(2) {
 		t.Errorf("pending_dirty_file_total = %v; want 2", decoded["pending_dirty_file_total"])
+	}
+}
+
+// A chat session parked between turns is waiting on the user, and the attention
+// inbox is the only place to answer it — so it must not be marked as the
+// coordinating byproduct that clients filter out.
+func TestPromptSnapshotMarksChatWaitAsAwaitingInput(t *testing.T) {
+	t.Parallel()
+	store, f := seedReadFeature(t)
+	sessions := fakeSessionManager{views: []ports.SessionView{
+		&fakeSessionView{
+			id:        "sess-chat-waiting",
+			featureID: f.ID,
+			kind:      ports.KindChat,
+			status:    ports.SessionWaitingHelp,
+			startedAt: time.Date(2026, 6, 13, 12, 3, 0, 0, time.UTC),
+		},
+	}}
+	opts := baseReadHandlerOptions(store)
+	opts.Sessions = sessions
+	handler := NewHandler(opts)
+
+	prompts := getJSONMap(t, handler, apiPathPrompts)
+	entry := prompts["help_queue"].([]any)[0].(map[string]any)
+	if got := entry["kind"]; got != helpKindInput {
+		t.Fatalf("chat help_queue kind = %v; want %q", got, helpKindInput)
 	}
 }

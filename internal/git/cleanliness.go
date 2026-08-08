@@ -55,8 +55,8 @@ func (r *CleanlinessReport) Dirty() bool {
 // bounded lists therefore reflect affected paths, not directory entries. Each
 // category list is bounded to maxPerCategory entries (<= 0 applies
 // DefaultCleanlinessPathLimit) while totals keep the true counts. A probe that
-// exceeds ProbeTimeout yields a nil report and an ErrProbeTimeout error, never
-// a clean one.
+// exceeds CleanlinessProbeTimeout yields a nil report and an ErrProbeTimeout
+// error, never a clean one.
 func (w *WorktreeManager) InspectCleanliness(worktreePath string, maxPerCategory int) (*CleanlinessReport, error) {
 	if strings.TrimSpace(worktreePath) == "" {
 		return nil, fmt.Errorf("worktree path is required")
@@ -64,7 +64,7 @@ func (w *WorktreeManager) InspectCleanliness(worktreePath string, maxPerCategory
 	if maxPerCategory <= 0 {
 		maxPerCategory = DefaultCleanlinessPathLimit
 	}
-	out, timedOut, err := runProbe("-C", worktreePath, "status", "--porcelain", "--untracked-files=all")
+	out, timedOut, err := runProbeBounded(CleanlinessProbeTimeout, "-C", worktreePath, "status", "--porcelain", "--untracked-files=all")
 	if timedOut {
 		return nil, fmt.Errorf("checking git status in %s: %w", worktreePath, ErrProbeTimeout)
 	}

@@ -3144,7 +3144,9 @@ components:
         pending:
           type: boolean
         # "question": a real help request awaiting an answer.
-        # "input": synthetic — an interactive session idling between turns.
+        # "input": a chat session awaiting the user's next message.
+        # "coordinating": synthetic — a phase session idling between turns,
+        # which no human needs to answer.
         kind:
           type: string
         time:

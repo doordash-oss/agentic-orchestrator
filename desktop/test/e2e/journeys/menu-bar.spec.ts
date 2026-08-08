@@ -172,6 +172,8 @@ test('the application menu bar drives New Feature, the View toggles, and the Fea
     expect(initial.view.map((item) => item.label)).toEqual([
       'Hide Sidebar',
       'Show Inspector',
+      'Reload',
+      'Force Reload',
       'Zoom In',
       'Zoom Out',
       'Actual Size',

@@ -130,7 +130,7 @@ describe('AttentionService waiting sessions', () => {
         featureId: 'feature-1',
         sessionId: 'kb1234567890abcdef',
         phase: 'Knowledge Base',
-        waitingKind: 'input',
+        waitingKind: 'coordinating',
         runningTasks: ['Indexing repository layout'],
       }),
     ]);
@@ -138,9 +138,14 @@ describe('AttentionService waiting sessions', () => {
 
   it('trusts the wire kind over prompt text when the server sends one', async () => {
     const synthetic = new AttentionService(
-      transport('Coordinating next steps', sessionsBody, 'input'),
+      transport('Coordinating next steps', sessionsBody, 'coordinating'),
     );
     expect((await synthetic.getSnapshot()).items).toEqual([
+      expect.objectContaining({ kind: 'help', waitingKind: 'coordinating' }),
+    ]);
+
+    const chat = new AttentionService(transport('Coordinating next steps', sessionsBody, 'input'));
+    expect((await chat.getSnapshot()).items).toEqual([
       expect.objectContaining({ kind: 'help', waitingKind: 'input' }),
     ]);
 
@@ -174,7 +179,11 @@ describe('AttentionService waiting sessions', () => {
 
     const snapshot = await service.getSnapshot();
     expect(snapshot.items).toEqual([
-      expect.objectContaining({ kind: 'help', featureId: 'feature-1', waitingKind: 'input' }),
+      expect.objectContaining({
+        kind: 'help',
+        featureId: 'feature-1',
+        waitingKind: 'coordinating',
+      }),
     ]);
     expect(snapshot.items[0]).not.toHaveProperty('sessionId');
   });

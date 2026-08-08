@@ -31,12 +31,12 @@ export interface AftercareAction {
 /**
  * Renderer copy for disabled-reason codes whose server message states a
  * machine fact instead of the reader's next move. `worktree_state_unknown` is
- * a failed-closed probe, not a dirty worktree: the state is unverified, and
- * retrying is what resolves it.
+ * an unreadable worktree, not a dirty one — a probe that merely ran out of time
+ * no longer disables anything, so retrying is not the remedy here.
  */
 const DISABLED_REASON_COPY: Record<string, string> = {
   worktree_state_unknown:
-    'Could not verify whether the repository worktrees are clean — try again.',
+    'Could not read the repository worktrees — check that they still exist and are a valid checkout.',
 };
 
 export function disabledReasonCopy(reason: { code: string; message: string }): string {

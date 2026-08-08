@@ -100,7 +100,7 @@ describe('postImplementationModel', () => {
       }),
     );
     expect(actions[0]!.disabledReason).toBe(
-      'Could not verify whether the repository worktrees are clean — try again.',
+      'Could not read the repository worktrees — check that they still exist and are a valid checkout.',
     );
   });
 

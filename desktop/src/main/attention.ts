@@ -45,11 +45,20 @@ const fallbackTime = '1970-01-01T00:00:00.000Z';
 // help text (internal/server/read_model.go, agentQuestionPrompt).
 const syntheticHelpPrompt = 'Agent has a question';
 
-function helpWaitingKind(help: { kind?: string; question: string }): 'question' | 'input' {
-  if (help.kind === 'input' || help.kind === 'question') return help.kind;
-  return help.question.trim() === '' || help.question === syntheticHelpPrompt
-    ? 'input'
-    : 'question';
+function helpWaitingKind(help: {
+  kind?: string;
+  question: string;
+  feature_id: string;
+}): 'question' | 'input' | 'coordinating' {
+  if (help.kind === 'input' || help.kind === 'question' || help.kind === 'coordinating') {
+    return help.kind;
+  }
+  // Legacy servers send only the placeholder prose. A chat session is always
+  // awaiting the user; anything else in that state is phase coordination.
+  if (help.question.trim() === '' || help.question === syntheticHelpPrompt) {
+    return help.feature_id === CHAT_SESSION_ID ? 'input' : 'coordinating';
+  }
+  return 'question';
 }
 
 const WAITING_TURN_STATES = new Set(['waiting_input', 'waiting_question']);
@@ -193,8 +202,6 @@ export class AttentionService {
             ...(session?.phase === undefined ? {} : { phase: session.phase }),
             waitingSince: help.time ?? fallbackTime,
             prompt: help.question,
-            // 'input': the session finished its turn and the runtime is
-            // coordinating — inline status, not a question.
             waitingKind: helpWaitingKind(help),
             ...(runningTasks.length === 0 ? {} : { runningTasks }),
           };

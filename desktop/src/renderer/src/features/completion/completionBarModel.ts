@@ -1,5 +1,5 @@
 import { isEligibleForPublish } from './completionShared';
-import { UNMERGED_CHANGES, UNPUBLISHED_CHANGES } from './pendingDelivery';
+import { isInitialMerge, UNMERGED_CHANGES, UNPUBLISHED_CHANGES } from './pendingDelivery';
 import type { CompletionPreflightResult } from '../../../../shared/ipc';
 
 export type CompletionVerb = 'publish' | 'merge' | 'mark-done' | 'cleanup';
@@ -33,12 +33,9 @@ export function completionBarModel(
   const published = repos.filter((r) => r.status === 'already_published');
   const unpublished = repos.filter((r) => r.status === UNPUBLISHED_CHANGES);
   const unmerged = repos.filter((r) => r.status === UNMERGED_CHANGES);
-  // Excluding UNMERGED_CHANGES is load-bearing: it derives from `completed`,
-  // so without the subtraction it lands here and the "Merge updates" label
-  // below is unreachable.
-  const localMerge = repos.filter(
-    (r) => !r.publishable && r.touched && r.status !== 'completed' && r.status !== UNMERGED_CHANGES,
-  );
+  // One classification for the first local merge, shared with the aftercare
+  // runway's initial-merge delivery row (see `isInitialMerge`).
+  const localMerge = repos.filter(isInitialMerge);
   const merged = repos.filter((r) => !r.publishable && r.touched && r.status === 'completed');
 
   const draft = (verb: CompletionVerb): Draft => {

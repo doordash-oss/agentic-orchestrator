@@ -4,6 +4,7 @@
  * aftercare runway render. Git truth stays on the server; nothing here derives
  * repository state.
  */
+import { isEligibleForPublish } from './completionShared';
 import type { CompletionPreflightRepo, CompletionPreflightResult } from '../../../../shared/ipc';
 
 export const UNPUBLISHED_CHANGES = 'unpublished_changes';
@@ -23,6 +24,10 @@ export interface PendingDeliveryRepo {
 export interface PendingDelivery {
   publishRepos: PendingDeliveryRepo[];
   mergeRepos: PendingDeliveryRepo[];
+  /** Local repositories whose work has never been merged into their base branch. */
+  initialMergeRepos: PendingDeliveryRepo[];
+  /** Repositories the preflight reports ready for a first publication. */
+  publishEligibleRepos: PendingDeliveryRepo[];
 }
 
 export function pendingDeliverySummary(
@@ -32,7 +37,24 @@ export function pendingDeliverySummary(
   return {
     publishRepos: repos.filter((r) => r.status === UNPUBLISHED_CHANGES).map(pendingRepo),
     mergeRepos: repos.filter((r) => r.status === UNMERGED_CHANGES).map(pendingRepo),
+    initialMergeRepos: repos.filter(isInitialMerge).map(pendingRepo),
+    publishEligibleRepos: repos.filter(isEligibleForPublish).map(pendingRepo),
   };
+}
+
+/**
+ * A local (non-publishable) repository carrying work that has never landed in
+ * its base branch. Excluding UNMERGED_CHANGES is load-bearing: that status
+ * derives from `completed`, so without the subtraction an already-merged
+ * repository with new commits would read as a first merge.
+ */
+export function isInitialMerge(repo: CompletionPreflightRepo): boolean {
+  return (
+    !repo.publishable &&
+    repo.touched &&
+    repo.status !== 'completed' &&
+    repo.status !== UNMERGED_CHANGES
+  );
 }
 
 export function pendingDeliveryDetail(work: { commits: number; dirty: boolean }): string {

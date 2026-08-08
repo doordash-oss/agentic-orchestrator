@@ -15,6 +15,7 @@ export const IPC_CHANNELS = {
   connectionRestart: 'agentico:connection:restart',
   settingsGet: 'agentico:settings:get',
   settingsUpdate: 'agentico:settings:update',
+  windowOpenSettings: 'agentico:window:open-settings',
   themeGet: 'agentico:theme:get',
   themeSet: 'agentico:theme:set',
   readinessGet: 'agentico:readiness:get',
@@ -95,9 +96,36 @@ export const IPC_CHANNELS = {
   publishDescription: 'agentico:completion:publish-description',
   openExternal: 'agentico:open:external',
   revealPath: 'agentico:open:reveal',
+  uiStatePublish: 'agentico:ui-state:publish',
 } as const;
 
 export type IpcChannel = (typeof IPC_CHANNELS)[keyof typeof IPC_CHANNELS];
+
+/**
+ * The two window kinds the app ever opens. The main process keys its window
+ * registry by this value and hands it to each renderer as a constructor
+ * argument; no other window is detachable.
+ */
+export const WINDOW_PURPOSES = ['main', 'settings'] as const;
+
+export const WindowPurposeSchema = z.enum(WINDOW_PURPOSES);
+export type WindowPurpose = z.output<typeof WindowPurposeSchema>;
+
+/**
+ * The renderer-argument flag carrying the window purpose across the sandbox
+ * boundary (`webPreferences.additionalArguments` → preload `process.argv`).
+ */
+export const WINDOW_PURPOSE_ARGUMENT_PREFIX = '--agentico-window-purpose=';
+
+/** Reads the purpose out of a renderer's argv, defaulting to the main window. */
+export function windowPurposeFromArgv(argv: readonly string[]): WindowPurpose {
+  const flag = argv.find((argument) => argument.startsWith(WINDOW_PURPOSE_ARGUMENT_PREFIX));
+  if (flag === undefined) {
+    return 'main';
+  }
+  const parsed = WindowPurposeSchema.safeParse(flag.slice(WINDOW_PURPOSE_ARGUMENT_PREFIX.length));
+  return parsed.success ? parsed.data : 'main';
+}
 
 /** Main-to-renderer push events (webContents.send). */
 export const IPC_EVENTS = {
@@ -454,6 +482,20 @@ export const ReadinessSnapshotSchema = z.strictObject({
 
 export type ReadinessSnapshot = z.output<typeof ReadinessSnapshotSchema>;
 
+// --- Theme ------------------------------------------------------------------
+// Declared ahead of the pushed app-event union so the cross-window theme
+// broadcast reuses exactly the shape the theme channels return.
+
+export const ThemePreferenceSchema = z.enum(['light', 'dark', 'system']);
+export type ThemePreference = z.output<typeof ThemePreferenceSchema>;
+
+export const ThemeInfoSchema = z.strictObject({
+  preference: ThemePreferenceSchema,
+  resolved: z.enum(['light', 'dark']),
+});
+
+export type ThemeInfo = z.output<typeof ThemeInfoSchema>;
+
 // --- Server event invalidations (pushed main → renderer) --------------------
 // Carries ONLY invalidation metadata and stream health — never domain
 // payloads, summaries, or credentials. Strict schemas fail closed on any
@@ -482,15 +524,54 @@ export const AppEventSchema = z.discriminatedUnion('type', [
     type: z.literal('status'),
     stream: z.enum(['connecting', 'live', 'stale']),
   }),
+  z.strictObject({
+    type: z.literal('accent'),
+    /** Normalized `#rrggbb`; the system accent color (macOS only). */
+    color: z.string().regex(/^#[0-9a-f]{6}$/),
+  }),
+  /**
+   * The resolved theme after any window changed the preference. A
+   * same-document CustomEvent cannot reach a second window, so the main
+   * process re-broadcasts every theme mutation here and every window's
+   * `useTheme()` follows it.
+   */
+  z.strictObject({
+    type: z.literal('theme'),
+    preference: ThemePreferenceSchema,
+    resolved: z.enum(['light', 'dark']),
+  }),
 ]);
 
 export type AppEvent = z.output<typeof AppEventSchema>;
 
+/**
+ * The deep-linkable Settings destinations. Every value is also a Settings
+ * pane id (`SETTINGS_PANES`), so a section name selects a pane directly.
+ */
+export const SettingsSectionSchema = z.enum(['updates', 'diagnostics']);
+export type SettingsSection = z.output<typeof SettingsSectionSchema>;
+
 export const AppRouteEventSchema = z.strictObject({
-  target: z.enum(['palette', 'help', 'home', 'settings', 'attention', 'ama', 'bulk']),
+  target: z.enum([
+    'palette',
+    'help',
+    'home',
+    'settings',
+    'attention',
+    'ama',
+    'bulk',
+    'new-feature',
+    'toggle-sidebar',
+    'toggle-inspector',
+    // Carries a feature command's identity — never a feature id, so a menu
+    // click that raced a selection change cannot act on a stale target.
+    'feature-command',
+  ]),
   attentionId: z.string().min(1).max(500).optional(),
   featureId: z.string().min(1).max(200).optional(),
-  settingsSection: z.enum(['updates', 'diagnostics']).optional(),
+  settingsSection: SettingsSectionSchema.optional(),
+  /** The `feature.*` command id a 'feature-command' route asks the renderer to run. */
+  command: z.string().min(1).max(64).optional(),
 });
 
 export type AppRouteEvent = z.output<typeof AppRouteEventSchema>;
@@ -1249,7 +1330,7 @@ export const BulkPreviewSchema = z.strictObject({
 });
 export type BulkPreview = z.output<typeof BulkPreviewSchema>;
 
-// --- Run history (GET /runs, GET /runs/{n}, GET /runs/{n}/sessions) ---------
+// --- Run listing (GET /runs, GET /runs/{n}, GET /runs/{n}/sessions) ---------
 
 export const RunSummaryViewSchema = z.strictObject({
   runNumber: z.number().int().nonnegative(),
@@ -1574,6 +1655,17 @@ export function attentionOwnerFeatureId(item: AttentionItem): string | undefined
   if ('parentFeatureId' in item && item.parentFeatureId !== undefined) return item.parentFeatureId;
   return item.featureId;
 }
+/**
+ * The one badge rule, shared by every surface that counts blocking input: the
+ * toolbar bell, and the main process's tray icon and "Attention (N)" label.
+ * Recovery is contextual priority rather than a request awaiting an answer, so
+ * it never contributes to a count — keeping this in one place is what stops the
+ * three badges from drifting apart.
+ */
+export function actionableAttentionCount(items: readonly AttentionItem[]): number {
+  return items.filter((item) => item.kind !== 'recovery').length;
+}
+
 export const AttentionSnapshotSchema = z.strictObject({
   items: z.array(AttentionItemSchema).max(4000),
 });
@@ -2030,23 +2122,11 @@ export const CreationFileSearchResultSchema = z.strictObject({
 });
 export type CreationFileSearchResult = z.output<typeof CreationFileSearchResultSchema>;
 
-// --- Theme ------------------------------------------------------------------
-
-export const ThemePreferenceSchema = z.enum(['light', 'dark', 'system']);
-export type ThemePreference = z.output<typeof ThemePreferenceSchema>;
-
-export const ThemeInfoSchema = z.strictObject({
-  preference: ThemePreferenceSchema,
-  resolved: z.enum(['light', 'dark']),
-});
-
-export type ThemeInfo = z.output<typeof ThemeInfoSchema>;
-
 // --- Settings (app-local presentation/runtime-selection data ONLY) ---------
 // Never store features, runs, configuration, credentials, or any
 // server-domain snapshot here.
 
-export const SETTINGS_SCHEMA_VERSION = 1;
+export const SETTINGS_SCHEMA_VERSION = 2;
 
 export const WindowBoundsSchema = z.strictObject({
   x: z.number().int(),
@@ -2071,18 +2151,56 @@ export function defaultWizardPrefs(): WizardPrefs {
   return { collapsedHelp: false };
 }
 
+/** The floating AMA panel's default footprint and its inset from the corner. */
+export const AMA_PANEL_DEFAULT_WIDTH = 404;
+export const AMA_PANEL_DEFAULT_HEIGHT = 560;
+export const AMA_PANEL_DEFAULT_INSET = 20;
+/** Header + one turn + composer: the smallest panel that is still usable. */
+export const AMA_PANEL_MIN_WIDTH = 320;
+export const AMA_PANEL_MIN_HEIGHT = 240;
+
+/**
+ * The floating AMA panel's placement, stored as offsets from the main
+ * window's bottom-right corner plus its size, so the panel keeps its distance
+ * to that corner as the window resizes. Values are bounded but not
+ * window-relative here: the renderer clamps them into the current window on
+ * restore, so a document written on a larger display degrades to a visible
+ * panel instead of resetting the preference.
+ */
+export const AmaGeometrySchema = z.strictObject({
+  right: z.number().int().min(0).max(100000),
+  bottom: z.number().int().min(0).max(100000),
+  width: z.number().int().min(1).max(100000),
+  height: z.number().int().min(1).max(100000),
+});
+
+export type AmaGeometry = z.output<typeof AmaGeometrySchema>;
+
+export function defaultAmaGeometry(): AmaGeometry {
+  return {
+    right: AMA_PANEL_DEFAULT_INSET,
+    bottom: AMA_PANEL_DEFAULT_INSET,
+    width: AMA_PANEL_DEFAULT_WIDTH,
+    height: AMA_PANEL_DEFAULT_HEIGHT,
+  };
+}
+
 /**
  * AMA presentation preferences ONLY. Transcript rows and chat archive live on
- * the server; the app stores only whether the drawer is compact or expanded.
+ * the server; the app stores only whether the panel is closed (`compact`) or
+ * open (`expanded`) and where the user left it. `geometry` is defaulted, so a
+ * settings document written before the floating panel existed loads without
+ * resetting any preference.
  */
 export const AmaPrefsSchema = z.strictObject({
   drawer: z.enum(['compact', 'expanded']),
+  geometry: AmaGeometrySchema.default(defaultAmaGeometry()),
 });
 
 export type AmaPrefs = z.output<typeof AmaPrefsSchema>;
 
 export function defaultAmaPrefs(): AmaPrefs {
-  return { drawer: 'compact' };
+  return { drawer: 'compact', geometry: defaultAmaGeometry() };
 }
 
 /**
@@ -2100,35 +2218,145 @@ export function defaultNotificationPrefs(): NotificationPrefs {
 }
 
 /**
- * Open feature tabs: strictly identity plus presentation. The title is a
- * *hint* used only until the authoritative feature loads; feature state,
- * setup progress, and any other server-domain data are never stored here.
+ * Shell presentation preferences ONLY: which feature is active and whether
+ * the sidebar is collapsed. The active id is strictly identity — feature
+ * state, setup progress, and any other server-domain data are never stored
+ * here. v1's settings-tab sentinel ('__settings__') is mapped to null by the
+ * migration in settings.ts and must never be stored in this field.
  */
-export const FeatureTabSchema = z.strictObject({
-  featureId: FeatureIdSchema,
-  titleHint: z.string().max(200),
-  /** Selected sealed run for archive mode; null/absent means current run. */
-  selectedRunNumber: z.number().int().nonnegative().nullable().optional(),
-});
-
-export type FeatureTab = z.output<typeof FeatureTabSchema>;
-
-export const TabsPrefsSchema = z.strictObject({
-  /** Open feature tabs in display order. */
-  open: z.array(FeatureTabSchema).max(50),
-  /**
-   * Active tab; null means the Home tab. The sentinel '__settings__'
-   * represents the Settings tab — it passes the feature-id regex but is
-   * not a real feature id.
-   */
+export const ShellPrefsSchema = z.strictObject({
   activeFeatureId: FeatureIdSchema.nullable(),
+  sidebarCollapsed: z.boolean(),
 });
 
-export type TabsPrefs = z.output<typeof TabsPrefsSchema>;
+export type ShellPrefs = z.output<typeof ShellPrefsSchema>;
 
-export function defaultTabsPrefs(): TabsPrefs {
-  return { open: [], activeFeatureId: null };
+export function defaultShellPrefs(): ShellPrefs {
+  return { activeFeatureId: null, sidebarCollapsed: false };
 }
+
+// --- The main window's coarse UI-state push ---------------------------------
+/**
+ * A compact summary of everything the native menu bar needs from the main
+ * window's renderer and cannot know on its own: what is selected, which
+ * per-feature commands the live action catalogue enables, whether the runtime
+ * is ready, and the sidebar and inspector states behind the View menu's
+ * Show/Hide labels.
+ *
+ * Pushed on change only — selection, enablement, a toggle, a readiness
+ * transition — never per poll or per frame. It is deliberately identity- and
+ * presentation-only: no feature names, statuses, or other server-domain data
+ * cross this channel.
+ */
+export const MainWindowUiStateSchema = z.strictObject({
+  activeFeatureId: FeatureIdSchema.nullable(),
+  runtimeReady: z.boolean(),
+  sidebarCollapsed: z.boolean(),
+  inspectorOpen: z.boolean(),
+  /** False with Overview selected: there is no inspector to show or hide. */
+  inspectorAvailable: z.boolean(),
+  /** `feature.*` command id → enabled, from the same catalogue the palette reads. */
+  featureCommands: z.record(z.string().min(1).max(64), z.boolean()),
+});
+
+export type MainWindowUiState = z.output<typeof MainWindowUiStateSchema>;
+
+/**
+ * Whether two summaries describe the same menu. Both sides use it: the
+ * renderer to drop an unchanged push, the native-command controller to drop an
+ * unchanged rebuild — so nothing churns per poll or per frame.
+ */
+export function sameMainWindowUiState(a: MainWindowUiState, b: MainWindowUiState): boolean {
+  if (
+    a.activeFeatureId !== b.activeFeatureId ||
+    a.runtimeReady !== b.runtimeReady ||
+    a.sidebarCollapsed !== b.sidebarCollapsed ||
+    a.inspectorOpen !== b.inspectorOpen ||
+    a.inspectorAvailable !== b.inspectorAvailable
+  ) {
+    return false;
+  }
+  const keys = new Set([...Object.keys(a.featureCommands), ...Object.keys(b.featureCommands)]);
+  for (const key of keys) {
+    if (a.featureCommands[key] !== b.featureCommands[key]) return false;
+  }
+  return true;
+}
+
+/**
+ * The everything-disabled default the native-command controller holds until
+ * the first push, and returns to whenever the main window closes.
+ */
+export function disabledMainWindowUiState(): MainWindowUiState {
+  return {
+    activeFeatureId: null,
+    runtimeReady: false,
+    sidebarCollapsed: false,
+    inspectorOpen: false,
+    inspectorAvailable: false,
+    featureCommands: {},
+  };
+}
+
+/**
+ * The Settings window's own pane order — today's eight sections, unchanged.
+ * The ids are stable storage values (`settingsWindow.pane`), so renaming a
+ * pane's label never invalidates a persisted preference.
+ */
+export const SETTINGS_PANES = [
+  'workspace-roots',
+  'providers',
+  'appearance',
+  'updates',
+  'notifications',
+  'diagnostics',
+  'advanced',
+  'workspace-defaults',
+] as const;
+
+export const SettingsPaneIdSchema = z.enum(SETTINGS_PANES);
+export type SettingsPaneId = z.output<typeof SettingsPaneIdSchema>;
+
+/** The Settings window's default footprint and the smallest usable one. */
+export const SETTINGS_WINDOW_DEFAULT_WIDTH = 900;
+export const SETTINGS_WINDOW_DEFAULT_HEIGHT = 640;
+export const SETTINGS_WINDOW_MIN_WIDTH = 680;
+export const SETTINGS_WINDOW_MIN_HEIGHT = 460;
+
+/**
+ * Settings-window presentation preferences ONLY: where the window was left
+ * and which pane was last viewed. Additive and defaulted, so a settings
+ * document written before the Settings window existed loads with these
+ * defaults and no other preference is reset.
+ */
+export const SettingsWindowPrefsSchema = z.strictObject({
+  bounds: WindowBoundsSchema.optional(),
+  pane: SettingsPaneIdSchema,
+});
+
+export type SettingsWindowPrefs = z.output<typeof SettingsWindowPrefsSchema>;
+
+export function defaultSettingsWindowPrefs(): SettingsWindowPrefs {
+  return { pane: 'workspace-roots' };
+}
+
+/**
+ * A renderer asking the main process to raise the Settings window. Only the
+ * two renderer-origin entry points need this (the command palette's Settings
+ * entry and the update popover's Updates action); the menu, tray, deep-link,
+ * and second-instance paths already dispatch inside the main process.
+ * Omitting `section` opens whichever pane was last viewed.
+ */
+export const SettingsOpenRequestSchema = z.strictObject({
+  section: SettingsSectionSchema.optional(),
+});
+
+export type SettingsOpenRequest = z.output<typeof SettingsOpenRequestSchema>;
+
+/** `opened: false` when the runtime is not ready yet, matching ⌘,'s gating. */
+export const SettingsOpenResultSchema = z.strictObject({ opened: z.boolean() });
+
+export type SettingsOpenResult = z.output<typeof SettingsOpenResultSchema>;
 
 export const SettingsSchema = z.strictObject({
   schemaVersion: z.literal(SETTINGS_SCHEMA_VERSION),
@@ -2143,7 +2371,8 @@ export const SettingsSchema = z.strictObject({
   wizard: WizardPrefsSchema.default(defaultWizardPrefs()),
   ama: AmaPrefsSchema.default(defaultAmaPrefs()),
   notifications: NotificationPrefsSchema.default(defaultNotificationPrefs()),
-  tabs: TabsPrefsSchema.default(defaultTabsPrefs()),
+  shell: ShellPrefsSchema.default(defaultShellPrefs()),
+  settingsWindow: SettingsWindowPrefsSchema.default(defaultSettingsWindowPrefs()),
 });
 
 export type Settings = z.output<typeof SettingsSchema>;
@@ -2155,7 +2384,8 @@ export const SettingsPatchSchema = z.strictObject({
   wizard: WizardPrefsSchema.optional(),
   ama: AmaPrefsSchema.optional(),
   notifications: NotificationPrefsSchema.optional(),
-  tabs: TabsPrefsSchema.optional(),
+  shell: ShellPrefsSchema.optional(),
+  settingsWindow: SettingsWindowPrefsSchema.optional(),
 });
 
 export type SettingsPatch = z.output<typeof SettingsPatchSchema>;
@@ -2169,7 +2399,8 @@ export function defaultSettings(): Settings {
     wizard: defaultWizardPrefs(),
     ama: defaultAmaPrefs(),
     notifications: defaultNotificationPrefs(),
-    tabs: defaultTabsPrefs(),
+    shell: defaultShellPrefs(),
+    settingsWindow: defaultSettingsWindowPrefs(),
   };
 }
 
@@ -2455,6 +2686,10 @@ export const ipcContracts: Record<IpcChannel, IpcContract> = {
     request: z.tuple([SettingsPatchSchema]),
     response: SettingsSchema,
   },
+  [IPC_CHANNELS.windowOpenSettings]: {
+    request: z.tuple([SettingsOpenRequestSchema]),
+    response: SettingsOpenResultSchema,
+  },
   [IPC_CHANNELS.themeGet]: {
     request: z.tuple([]),
     response: ThemeInfoSchema,
@@ -2700,6 +2935,10 @@ export const ipcContracts: Record<IpcChannel, IpcContract> = {
     request: z.tuple([RevealPathRequestSchema]),
     response: z.strictObject({ ok: z.boolean() }),
   },
+  [IPC_CHANNELS.uiStatePublish]: {
+    request: z.tuple([MainWindowUiStateSchema]),
+    response: z.strictObject({ accepted: z.boolean() }),
+  },
   [IPC_CHANNELS.featuresRebase]: {
     request: z.tuple([LaunchRebaseChildRequestSchema]),
     response: LaunchRebaseChildResultSchema,
@@ -2777,6 +3016,19 @@ export const ipcContracts: Record<IpcChannel, IpcContract> = {
 // --- The narrow window API the preload exposes -------------------------------
 
 export interface AgenticoApi {
+  /**
+   * The desktop OS the main process is running on (Node's `process.platform`,
+   * mirrored synchronously — no IPC round trip). Drives the macOS-only chrome
+   * accommodations (vibrancy material, traffic-light padding/drag region);
+   * every other platform is treated as the native-frame fallback.
+   */
+  readonly platform: string;
+  /**
+   * Which root this window is: the main workspace or the Settings window.
+   * Supplied as a constructor argument when the window is created and read
+   * synchronously here, so the entry point picks a root before first paint.
+   */
+  readonly windowPurpose: WindowPurpose;
   getConnectionStatus(): Promise<ConnectionState>;
   retryConnection(): Promise<ConnectionState>;
   restartConnection(): Promise<ConnectionState>;
@@ -2784,6 +3036,7 @@ export interface AgenticoApi {
   onRouteRequest(listener: (event: AppRouteEvent) => void): () => void;
   getSettings(): Promise<Settings>;
   updateSettings(patch: SettingsPatch): Promise<Settings>;
+  openSettingsWindow(request: SettingsOpenRequest): Promise<SettingsOpenResult>;
   getThemePreference(): Promise<ThemeInfo>;
   setThemePreference(preference: ThemePreference): Promise<ThemeInfo>;
   getReadiness(): Promise<ReadinessSnapshot>;
@@ -2848,6 +3101,11 @@ export interface AgenticoApi {
   generatePublishDescription(request: PublishDescriptionRequest): Promise<PublishDescriptionResult>;
   openExternal(request: OpenExternalRequest): Promise<{ ok: boolean }>;
   revealPath(request: RevealPathRequest): Promise<{ ok: boolean }>;
+  /**
+   * One-way, fire-and-forget from the main window's renderer: the native menu
+   * bar's enablement and Show/Hide labels. The renderer never reads the ack.
+   */
+  publishUiState(state: MainWindowUiState): Promise<{ accepted: boolean }>;
   launchRebaseChild(request: LaunchRebaseChildRequest): Promise<LaunchRebaseChildResult>;
   launchRefactorChild(request: LaunchRefactorChildRequest): Promise<LaunchRefactorChildResult>;
   discardRefactorChild(request: DiscardRefactorChildRequest): Promise<DiscardRefactorChildResult>;

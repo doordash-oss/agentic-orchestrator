@@ -17,10 +17,18 @@ import {
   SessionOutputEventSchema,
   isActiveChatSession,
   isTerminalChatStatus,
+  defaultAmaGeometry,
+  defaultAmaPrefs,
   defaultSettings,
-  defaultTabsPrefs,
+  defaultSettingsWindowPrefs,
+  defaultShellPrefs,
   defaultWizardPrefs,
   ipcContracts,
+  AppEventSchema,
+  SETTINGS_PANES,
+  SettingsOpenRequestSchema,
+  WINDOW_PURPOSE_ARGUMENT_PREFIX,
+  windowPurposeFromArgv,
   LocalReviewDraftSaveRequestSchema,
   LocalReviewDraftStoreSchema,
   PublishDescriptionRequestSchema,
@@ -443,28 +451,32 @@ describe('SettingsSchema', () => {
   });
 
   it('rejects unsupported schema versions', () => {
-    expect(SettingsSchema.safeParse({ ...defaultSettings(), schemaVersion: 2 }).success).toBe(
+    expect(SettingsSchema.safeParse({ ...defaultSettings(), schemaVersion: 3 }).success).toBe(
       false,
     );
   });
 
   it('accepts a full settings document with window bounds and theme', () => {
     const doc = {
-      schemaVersion: 1,
+      schemaVersion: 2,
       runtime: { selection: 'claude' },
       window: { bounds: { x: 10, y: 20, width: 800, height: 600 } },
       theme: 'dark',
       wizard: { collapsedHelp: true },
-      ama: { drawer: 'expanded' },
+      ama: { drawer: 'expanded', geometry: { right: 40, bottom: 60, width: 480, height: 620 } },
       notifications: { previewEnabled: true },
-      tabs: { open: [{ featureId: 'abcd1234', titleHint: 'Search' }], activeFeatureId: null },
+      shell: { activeFeatureId: 'abcd1234ef567890', sidebarCollapsed: true },
+      settingsWindow: {
+        bounds: { x: 40, y: 60, width: 900, height: 640 },
+        pane: 'diagnostics',
+      },
     };
     expect(SettingsSchema.parse(doc)).toEqual(doc);
   });
 
   it('fills wizard presentation prefs with defaults for pre-wizard documents', () => {
     const doc = {
-      schemaVersion: 1,
+      schemaVersion: 2,
       runtime: { selection: null },
       window: {},
       theme: 'system',
@@ -472,10 +484,43 @@ describe('SettingsSchema', () => {
     expect(SettingsSchema.parse(doc)).toEqual({
       ...doc,
       wizard: defaultWizardPrefs(),
-      ama: { drawer: 'compact' },
+      ama: defaultAmaPrefs(),
       notifications: { previewEnabled: false },
-      tabs: defaultTabsPrefs(),
+      shell: defaultShellPrefs(),
+      settingsWindow: defaultSettingsWindowPrefs(),
     });
+  });
+
+  it('fills the Settings window prefs with defaults for pre-Settings-window documents', () => {
+    const doc = {
+      schemaVersion: 2,
+      runtime: { selection: 'claude' },
+      window: {},
+      theme: 'dark',
+      wizard: { collapsedHelp: true },
+      ama: defaultAmaPrefs(),
+      notifications: { previewEnabled: true },
+      shell: defaultShellPrefs(),
+    };
+    expect(SettingsSchema.parse(doc)).toEqual({
+      ...doc,
+      settingsWindow: { pane: 'workspace-roots' },
+    });
+  });
+
+  it('rejects a Settings window pane outside the pane catalogue', () => {
+    for (const pane of ['nope', 'Updates', '']) {
+      expect(
+        SettingsSchema.safeParse({ ...defaultSettings(), settingsWindow: { pane } }).success,
+        pane,
+      ).toBe(false);
+    }
+    for (const pane of SETTINGS_PANES) {
+      expect(
+        SettingsSchema.safeParse({ ...defaultSettings(), settingsWindow: { pane } }).success,
+        pane,
+      ).toBe(true);
+    }
   });
 });
 
@@ -486,16 +531,70 @@ describe('SettingsPatchSchema', () => {
       runtime: { selection: null },
     });
     expect(SettingsPatchSchema.parse({ ama: { drawer: 'expanded' } })).toEqual({
-      ama: { drawer: 'expanded' },
+      ama: { drawer: 'expanded', geometry: defaultAmaGeometry() },
     });
     expect(SettingsPatchSchema.parse({ notifications: { previewEnabled: true } })).toEqual({
       notifications: { previewEnabled: true },
     });
   });
 
+  it('accepts a Settings window patch and rejects an unknown pane', () => {
+    expect(SettingsPatchSchema.parse({ settingsWindow: { pane: 'appearance' } })).toEqual({
+      settingsWindow: { pane: 'appearance' },
+    });
+    expect(
+      SettingsPatchSchema.parse({
+        settingsWindow: { bounds: { x: 1, y: 2, width: 900, height: 640 }, pane: 'updates' },
+      }),
+    ).toEqual({
+      settingsWindow: { bounds: { x: 1, y: 2, width: 900, height: 640 }, pane: 'updates' },
+    });
+    expect(SettingsPatchSchema.safeParse({ settingsWindow: { pane: 'nope' } }).success).toBe(false);
+    expect(SettingsPatchSchema.safeParse({ settingsWindow: {} }).success).toBe(false);
+  });
+
   it('rejects schemaVersion tampering and unknown keys', () => {
     expect(SettingsPatchSchema.safeParse({ schemaVersion: 9 }).success).toBe(false);
     expect(SettingsPatchSchema.safeParse({ apiToken: 'x' }).success).toBe(false);
+  });
+});
+
+describe('window purposes', () => {
+  it('reads the purpose out of a renderer argv, defaulting to the main window', () => {
+    expect(windowPurposeFromArgv([`${WINDOW_PURPOSE_ARGUMENT_PREFIX}settings`])).toBe('settings');
+    expect(windowPurposeFromArgv([`${WINDOW_PURPOSE_ARGUMENT_PREFIX}main`])).toBe('main');
+    expect(windowPurposeFromArgv([])).toBe('main');
+    expect(windowPurposeFromArgv(['--other-flag=settings'])).toBe('main');
+    // An unrecognized purpose never escalates past the main window.
+    expect(windowPurposeFromArgv([`${WINDOW_PURPOSE_ARGUMENT_PREFIX}devtools`])).toBe('main');
+    expect(windowPurposeFromArgv([`${WINDOW_PURPOSE_ARGUMENT_PREFIX}`])).toBe('main');
+  });
+
+  it('bounds the renderer-origin Settings open request to deep-linkable sections', () => {
+    expect(SettingsOpenRequestSchema.parse({})).toEqual({});
+    expect(SettingsOpenRequestSchema.parse({ section: 'updates' })).toEqual({ section: 'updates' });
+    expect(SettingsOpenRequestSchema.parse({ section: 'diagnostics' })).toEqual({
+      section: 'diagnostics',
+    });
+    // Not every pane is deep-linkable, and nothing else rides along.
+    expect(SettingsOpenRequestSchema.safeParse({ section: 'advanced' }).success).toBe(false);
+    expect(SettingsOpenRequestSchema.safeParse({ section: 'updates', pane: 'x' }).success).toBe(
+      false,
+    );
+  });
+
+  it('carries the cross-window theme fan-out as a strict push event', () => {
+    expect(AppEventSchema.parse({ type: 'theme', preference: 'system', resolved: 'dark' })).toEqual(
+      {
+        type: 'theme',
+        preference: 'system',
+        resolved: 'dark',
+      },
+    );
+    expect(
+      AppEventSchema.safeParse({ type: 'theme', preference: 'dark', resolved: 'system' }).success,
+    ).toBe(false);
+    expect(AppEventSchema.safeParse({ type: 'theme', preference: 'dark' }).success).toBe(false);
   });
 });
 

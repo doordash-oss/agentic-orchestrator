@@ -192,11 +192,11 @@ export function FileChangeCard({ change }: { change: FileChange }): React.ReactE
   return (
     <article className="conversation__file-change" aria-label={`${label} ${change.path}`}>
       <header className="conversation__file-change-header">
-        <span className="conversation__file-change-status">{label}</span>
         <span className="conversation__file-change-path" title={change.path}>
           {change.oldPath ? `${change.oldPath} → ` : null}
           {change.path}
         </span>
+        <span className="conversation__file-change-status">{label.toLocaleLowerCase()}</span>
         {added > 0 || removed > 0 ? (
           <span
             className="conversation__file-change-stats"
@@ -298,6 +298,10 @@ export function ConversationTranscript({
           <FileChangeCard key={item.key} change={item.change} />
         ) : item.kind === 'subagents' ? (
           <SubagentGroupCard key={item.key} agents={item.agents} />
+        ) : item.kind === 'verification-tick' ? (
+          <p key={item.key} className="conversation__verification-tick" data-tone={item.tone}>
+            <span aria-hidden="true">{item.symbol}</span> {item.name}
+          </p>
         ) : (
           <ActivityIndicator
             key={item.key}

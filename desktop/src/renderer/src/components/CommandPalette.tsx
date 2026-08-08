@@ -1,18 +1,19 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import {
   COMMAND_CATALOGUE,
+  FEATURE_COMMANDS,
+  NO_ACTIVE_FEATURE_REASON,
   commandById,
   displayAccelerator,
+  featureCommandState,
   type CommandDescriptor,
   type CommandGroup,
   type CommandId,
+  type FeatureActionLike,
+  type FeatureCommandId,
 } from '../../../shared/commands';
-import type {
-  AppRouteEvent,
-  FeatureOperationalAction,
-  FeatureSnapshot,
-  RoutedRequest,
-} from '../../../shared/ipc';
+import { activeFeatureCommandTarget, runFeatureCommand } from '../features/featureCommands';
+import type { AppRouteEvent, RoutedRequest } from '../../../shared/ipc';
 
 interface PaletteEntry {
   id: CommandId;
@@ -24,22 +25,11 @@ interface PaletteEntry {
   run(): Promise<void> | void;
 }
 
-const SETTINGS_TAB_ID = '__settings__';
-type PaletteFeatureAction = Extract<
-  FeatureOperationalAction,
-  'start' | 'pause-stop' | 'resume' | 'retry' | 'restart'
->;
-const FEATURE_ACTIONS = new Set<PaletteFeatureAction>([
-  'start',
-  'pause-stop',
-  'resume',
-  'retry',
-  'restart',
-]);
-
 const GROUP_LABELS: Record<CommandGroup, string> = {
   window: 'Window',
+  file: 'File',
   navigation: 'Navigation',
+  view: 'View',
   attention: 'Attention',
   assistant: 'Assistant',
   feature: 'Feature',
@@ -59,10 +49,12 @@ export function CommandPalette({
   const [query, setQuery] = useState('');
   const [busy, setBusy] = useState(false);
   const [activeFeatureId, setActiveFeatureId] = useState<string | null>(null);
-  const [activeFeature, setActiveFeature] = useState<FeatureSnapshot | null>(null);
+  // The selected feature's live action catalogue, or null while it is unknown.
+  const [activeActions, setActiveActions] = useState<readonly FeatureActionLike[] | null>(null);
   const [activeIndex, setActiveIndex] = useState(0);
   const dialogRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const selectedRef = useRef<HTMLButtonElement | null>(null);
   const returnFocus = useRef<HTMLElement | null>(null);
 
   const close = useCallback(() => {
@@ -106,21 +98,28 @@ export function CommandPalette({
     requestAnimationFrame(() => inputRef.current?.focus());
     let alive = true;
     const selectedFeatureId = selectedFeatureIdFromDom();
-    setActiveFeatureId(selectedFeatureId);
-    setActiveFeature(null);
+    // The mounted cockpit already holds the authoritative catalogue for what is
+    // selected, and holds it synchronously — so the Feature group is correct on
+    // the very frame the palette opens instead of after a settings-plus-snapshot
+    // round trip. The async read below still runs, both to resolve a selection
+    // the DOM cannot see and to cover a selection with no cockpit mounted.
+    const mounted = activeFeatureCommandTarget();
+    const seededId = selectedFeatureId ?? mounted?.featureId ?? null;
+    setActiveFeatureId(seededId);
+    setActiveActions(mounted !== null && mounted.featureId === seededId ? mounted.actions : null);
     window.agentico
       .getSettings()
       .then((settings) => {
-        const activeId = selectedFeatureId ?? settings.tabs.activeFeatureId;
-        if (alive) setActiveFeatureId(activeId === SETTINGS_TAB_ID ? null : activeId);
-        if (activeId === null || activeId === SETTINGS_TAB_ID) return null;
+        const activeId = selectedFeatureId ?? settings.shell.activeFeatureId;
+        if (alive) setActiveFeatureId(activeId);
+        if (activeId === null) return null;
         return window.agentico.getFeature(activeId);
       })
       .then((feature) => {
-        if (alive) setActiveFeature(feature);
+        if (alive) setActiveActions(feature === null ? null : feature.actions);
       })
       .catch(() => {
-        if (alive) setActiveFeature(null);
+        if (alive) setActiveActions(null);
       });
     return () => {
       alive = false;
@@ -128,8 +127,8 @@ export function CommandPalette({
   }, [open]);
 
   const entries = useMemo(
-    () => buildEntries({ ready, activeFeatureId, activeFeature, onRoute, close }),
-    [activeFeatureId, activeFeature, close, onRoute, ready],
+    () => buildEntries({ ready, activeFeatureId, activeActions, onRoute, close }),
+    [activeFeatureId, activeActions, close, onRoute, ready],
   );
 
   const filtered = useMemo(() => {
@@ -146,10 +145,17 @@ export function CommandPalette({
     setActiveIndex(0);
   }, [query, open]);
 
-  if (!open) return null;
-
-  const selectable = filtered.filter((entry) => entry.disabled !== true);
+  const selectable = useMemo(() => filtered.filter((entry) => entry.disabled !== true), [filtered]);
   const activeEntry = selectable[Math.min(activeIndex, Math.max(selectable.length - 1, 0))];
+
+  // The highlighted row is the only keyboard-focus signifier the palette has —
+  // focus itself stays in the search input — so it has to follow the arrow keys
+  // into view. The list overflows well before the catalogue ends.
+  useEffect(() => {
+    selectedRef.current?.scrollIntoView?.({ block: 'nearest' });
+  }, [activeEntry?.id]);
+
+  if (!open) return null;
 
   const runEntry = async (entry: PaletteEntry): Promise<void> => {
     if (entry.disabled === true || busy) return;
@@ -213,6 +219,7 @@ export function CommandPalette({
                   return (
                     <button
                       key={entry.id}
+                      ref={selected ? selectedRef : undefined}
                       type="button"
                       role="option"
                       aria-selected={selected}
@@ -248,25 +255,24 @@ export function CommandPalette({
 
 function buildEntries({
   ready,
-  activeFeature,
+  activeActions,
   activeFeatureId,
   onRoute,
   close,
 }: {
   ready: boolean;
-  activeFeature: FeatureSnapshot | null;
+  activeActions: readonly FeatureActionLike[] | null;
   activeFeatureId: string | null;
   onRoute(event: AppRouteEvent): void;
   close(): void;
 }): PaletteEntry[] {
-  const globalEntries = COMMAND_CATALOGUE.filter((command) => !command.id.startsWith('feature.'))
-    .filter((command) => command.id !== 'global.palette')
-    .filter((command) => command.target !== undefined)
-    .map((command) => globalEntry(command, ready, onRoute, close));
+  const globalEntries = COMMAND_CATALOGUE.filter(
+    (command) => command.group !== 'feature' && command.paletteVisible === true,
+  ).map((command) => globalEntry(command, { ready, activeFeatureId }, onRoute, close));
 
-  const featureEntries = COMMAND_CATALOGUE.filter((command) =>
-    command.id.startsWith('feature.'),
-  ).map((command) => featureEntry(command, activeFeatureId, activeFeature, close));
+  const featureEntries = FEATURE_COMMANDS.map((command) =>
+    featureEntry(command, activeFeatureId, activeActions, close),
+  );
 
   return [globalPaletteEntry(close), ...globalEntries, ...featureEntries];
 }
@@ -281,7 +287,7 @@ function globalPaletteEntry(close: () => void): PaletteEntry {
 
 function globalEntry(
   command: CommandDescriptor,
-  ready: boolean,
+  context: { ready: boolean; activeFeatureId: string | null },
   onRoute: (event: AppRouteEvent) => void,
   close: () => void,
 ): PaletteEntry {
@@ -289,12 +295,20 @@ function globalEntry(
   if (target === undefined) {
     throw new Error(`Global command ${command.id} has no route target.`);
   }
+  // Settings is its own window and stays reachable while the runtime is down;
+  // the inspector additionally needs a feature to inspect.
   const needsRuntime = target !== 'settings';
-  const disabled = needsRuntime && !ready;
+  const needsSelection = command.id === 'global.toggle-inspector';
+  const disabled =
+    (needsRuntime && !context.ready) || (needsSelection && context.activeFeatureId === null);
   return {
     ...command,
     disabled,
-    disabledReason: disabled ? 'Runtime is not ready.' : undefined,
+    disabledReason: !disabled
+      ? undefined
+      : needsRuntime && !context.ready
+        ? 'Runtime is not ready.'
+        : NO_ACTIVE_FEATURE_REASON,
     run: () => {
       onRoute({ target });
       close();
@@ -302,36 +316,32 @@ function globalEntry(
   };
 }
 
+/**
+ * A feature entry: enablement straight from the shared catalogue rule (so the
+ * palette and the Feature menu can never disagree), dispatch straight through
+ * the shared funnel (so Stop, Restart, and Delete get the cockpit's
+ * confirmations rather than the raw action they used to fire).
+ */
 function featureEntry(
   command: CommandDescriptor,
   activeFeatureId: string | null,
-  activeFeature: FeatureSnapshot | null,
+  activeActions: readonly FeatureActionLike[] | null,
   close: () => void,
 ): PaletteEntry {
-  const action = command.id.replace('feature.', '') as FeatureOperationalAction;
-  const catalogueAction = activeFeature?.actions.find((entry) => entry.id === action);
-  const disabledReason =
-    activeFeature === null && activeFeatureId === null
-      ? 'No active feature tab.'
-      : (catalogueAction?.disabledReasons[0]?.message ??
-        (catalogueAction?.enabled === true ? undefined : 'Action is not available.'));
-  const disabled =
-    activeFeature === null ? activeFeatureId === null : catalogueAction?.enabled !== true;
+  const id = command.id as FeatureCommandId;
+  const state = featureCommandState(id, activeActions, {
+    hasSelection: activeFeatureId !== null,
+  });
   return {
     ...command,
-    disabled,
-    disabledReason: activeFeature === null && activeFeatureId !== null ? undefined : disabledReason,
-    run: async () => {
-      const featureId = activeFeature?.id ?? activeFeatureId;
-      if (featureId === null || !isPaletteFeatureAction(action)) return;
-      await window.agentico.dispatchFeatureAction({ featureId, action });
+    disabled: !state.enabled,
+    ...(state.reason === undefined ? {} : { disabledReason: state.reason }),
+    run: () => {
+      if (activeFeatureId === null) return;
+      runFeatureCommand(id, { featureId: activeFeatureId });
       close();
     },
   };
-}
-
-function isPaletteFeatureAction(action: FeatureOperationalAction): action is PaletteFeatureAction {
-  return FEATURE_ACTIONS.has(action as PaletteFeatureAction);
 }
 
 function grouped(entries: PaletteEntry[]): Array<[CommandGroup, PaletteEntry[]]> {
@@ -347,7 +357,15 @@ function grouped(entries: PaletteEntry[]): Array<[CommandGroup, PaletteEntry[]]>
   return groups;
 }
 
-function isEditingShortcutTarget(target: EventTarget | null): boolean {
+/**
+ * True when a global shortcut's keydown target is a place the user is
+ * actively typing (a native text input, a contenteditable region, Monaco, or
+ * any `role="textbox"`) — every renderer-level shortcut that isn't already
+ * scoped to a specific focused control (⌘K here; ⌘2-9 and ⌘⌃S in
+ * WorkspaceShell) checks this before acting, so typing a digit or letter
+ * never gets hijacked mid-sentence.
+ */
+export function isEditingShortcutTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) {
     return false;
   }
@@ -361,14 +379,17 @@ function isEditingShortcutTarget(target: EventTarget | null): boolean {
   return target.closest('.monaco-editor, [role="textbox"]') !== null;
 }
 
+/** Reads the currently selected sidebar row directly from its DOM markup —
+ * the fastest read of "what's on screen right now", ahead of any settings
+ * round trip. The Overview row is not a feature id and reports as none
+ * selected. */
 function selectedFeatureIdFromDom(): string | null {
-  const selected = document.querySelector('[role="tab"][aria-selected="true"][id^="tab-"]');
+  const selected = document.querySelector(
+    '[role="option"][aria-selected="true"][id^="sidebar-row-"]',
+  );
   if (!(selected instanceof HTMLElement)) {
     return null;
   }
-  const id = selected.id.slice('tab-'.length);
-  if (id === '' || id === 'home' || id === 'settings') {
-    return null;
-  }
-  return id;
+  const id = selected.id.slice('sidebar-row-'.length);
+  return id === '' ? null : id;
 }

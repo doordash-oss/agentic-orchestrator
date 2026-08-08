@@ -23,7 +23,7 @@ interface LayoutMeasurements {
   previewHeight: number;
   previewContainerHeight: number;
   previewGridTemplateRows: string;
-  frameGridRow: string;
+  columnGridRow: string;
   transcript: ScrollMeasurements | null;
   roster: ScrollMeasurements | null;
   surfaceClientHeight: number;
@@ -32,6 +32,8 @@ interface LayoutMeasurements {
   surfaceBottom: number;
   inspectionMinHeight: number;
   reviewSummary: LayoutSection | null;
+  /** The rail sits above the stage — its own row, not one of `sections`. */
+  phaseRail: LayoutSection;
   sections: LayoutSection[];
 }
 
@@ -42,12 +44,12 @@ async function measureLayout(
 ): Promise<LayoutMeasurements> {
   await page.setViewportSize({ width: 1440, height });
   await page.goto(`http://localhost:9871/?scene=${scene}&theme=dark`);
-  await expect(page.locator('.current-inspection__metrics')).toBeVisible();
+  await expect(page.locator('.phase-rail')).toBeVisible();
   if (scene === 'run-gauge-verifying') {
-    await expect(page.locator('.live-preview__verification-log > *')).toHaveCount(3);
+    await expect(page.getByText('Verification: 1 of 3 checks passing')).toBeVisible();
   } else {
     await expect(page.locator('.conversation__scroll > *')).toHaveCount(5);
-    await expect(page.locator('.live-preview__roster [role="tab"]')).toHaveCount(3);
+    await expect(page.locator('.live-preview__strip [role="tab"]')).toHaveCount(3);
   }
   return page.evaluate(
     async ({ measuredScene, measuredHeight }) => {
@@ -79,14 +81,17 @@ async function measureLayout(
 
       const surface = requireElement('.cockpit__surface--live', 'live surface');
       const inspection = requireElement('.current-inspection', 'current inspection');
-      const inspectionHeader = requireElement('.current-inspection__header', 'inspection header');
-      const roadmap = requireElement('.roadmap-gauge', 'roadmap gauge');
+      // The rail lives above the stage (sibling of `.cockpit__content`), not
+      // inside the live surface or `.current-inspection` — it now owns phase
+      // and trio display for every run-facing view, not just the live one.
+      const phaseRailElement = requireElement('.phase-rail', 'phase rail');
       const previewContainer = requireElement('.current-inspection__preview', 'preview container');
-      const preview = requireElement('.live-preview__frame', 'live preview');
+      // There is no framed panel any more: the reading column itself is the
+      // measured region, sitting directly in the content pane.
+      const preview = requireElement('.live-preview__transcript', 'live reading column');
       const transcript = document.querySelector('.conversation__scroll');
-      const roster = document.querySelector('.live-preview__roster');
+      const roster = document.querySelector('.live-preview__strip');
       const activity = document.querySelector('.current-inspection__activity');
-      const metrics = requireElement('.current-inspection__metrics', 'metrics');
       const reviewSummaryElement = document.querySelector('.review-gate');
       const surfaceRect = surface.getBoundingClientRect();
       const reviewSummary =
@@ -94,11 +99,8 @@ async function measureLayout(
           ? toSection('review summary', reviewSummaryElement)
           : null;
       const sections = [
-        toSection('inspection header', inspectionHeader),
-        toSection('roadmap gauge', roadmap),
-        toSection('live frame', preview),
+        toSection('live column', preview),
         ...(activity instanceof HTMLElement ? [toSection('activity', activity)] : []),
-        toSection('metrics', metrics),
         ...(reviewSummary === null ? [] : [reviewSummary]),
       ];
       return {
@@ -107,7 +109,7 @@ async function measureLayout(
         previewHeight: preview.getBoundingClientRect().height,
         previewContainerHeight: previewContainer.getBoundingClientRect().height,
         previewGridTemplateRows: getComputedStyle(previewContainer).gridTemplateRows,
-        frameGridRow: getComputedStyle(preview).gridRow,
+        columnGridRow: getComputedStyle(preview).gridRow,
         transcript: transcript instanceof HTMLElement ? measureScroll(transcript) : null,
         roster: roster instanceof HTMLElement ? measureScroll(roster) : null,
         surfaceClientHeight: surface.clientHeight,
@@ -116,6 +118,7 @@ async function measureLayout(
         surfaceBottom: surfaceRect.bottom,
         inspectionMinHeight: Number.parseFloat(getComputedStyle(inspection).minHeight),
         reviewSummary,
+        phaseRail: toSection('phase rail', phaseRailElement),
         sections,
       };
     },
@@ -125,7 +128,7 @@ async function measureLayout(
 
 function expectOrderedSections(layout: LayoutMeasurements, contained: boolean): void {
   for (const [index, section] of layout.sections.entries()) {
-    const context = `${layout.scene} at ${layout.viewportHeight}px (container=${layout.previewContainerHeight.toFixed(1)}, rows=${layout.previewGridTemplateRows}, frame-row=${layout.frameGridRow}): ${layout.sections
+    const context = `${layout.scene} at ${layout.viewportHeight}px (container=${layout.previewContainerHeight.toFixed(1)}, rows=${layout.previewGridTemplateRows}, column-row=${layout.columnGridRow}): ${layout.sections
       .map(
         ({ name, top, bottom, left, right }) =>
           `${name}=(${left.toFixed(1)},${top.toFixed(1)})-(${right.toFixed(1)},${bottom.toFixed(1)})`,
@@ -163,7 +166,7 @@ test('all collapsed live phases fit ordinary surfaces and summaries reduce previ
     const context = `${scene}: ${layouts
       .map(
         (layout) =>
-          `${layout.viewportHeight}px frame=${layout.previewHeight.toFixed(1)} container=${layout.previewContainerHeight.toFixed(1)} rows=${layout.previewGridTemplateRows} frame-row=${layout.frameGridRow}`,
+          `${layout.viewportHeight}px column=${layout.previewHeight.toFixed(1)} container=${layout.previewContainerHeight.toFixed(1)} rows=${layout.previewGridTemplateRows} column-row=${layout.columnGridRow}`,
       )
       .join(', ')}`;
     expect(layouts[2]!.previewHeight, context).toBeGreaterThan(layouts[1]!.previewHeight + 200);
@@ -172,6 +175,9 @@ test('all collapsed live phases fit ordinary surfaces and summaries reduce previ
       expect(layout.inspectionMinHeight).toBe(320);
       expect(layout.surfaceScrollHeight).toBeLessThanOrEqual(layout.surfaceClientHeight);
       expectOrderedSections(layout, true);
+      // The rail sits above the toolbar-adjacent stage, never inside the live
+      // surface it used to own phase/metrics chrome for.
+      expect(layout.phaseRail.bottom).toBeLessThanOrEqual(layout.surfaceTop);
     }
   }
 
@@ -184,26 +190,11 @@ test('all collapsed live phases fit ordinary surfaces and summaries reduce previ
     expect(verifying[index]!.reviewSummary).toBeNull();
   }
   expect(active[0]!.reviewSummary).toBeNull();
-  expect(active[0]!.sections.map(({ name }) => name)).toEqual([
-    'inspection header',
-    'roadmap gauge',
-    'live frame',
-    'activity',
-    'metrics',
-  ]);
-  expect(reviewing[0]!.sections.map(({ name }) => name)).toEqual([
-    'inspection header',
-    'roadmap gauge',
-    'live frame',
-    'activity',
-    'metrics',
-  ]);
-  expect(verifying[0]!.sections.map(({ name }) => name)).toEqual([
-    'inspection header',
-    'roadmap gauge',
-    'live frame',
-    'metrics',
-  ]);
+  expect(active[0]!.sections.map(({ name }) => name)).toEqual(['live column', 'activity']);
+  expect(reviewing[0]!.sections.map(({ name }) => name)).toEqual(['live column', 'activity']);
+  // While verifying, the activity line is suppressed too — the harness
+  // contract's per-command log is the whole story.
+  expect(verifying[0]!.sections.map(({ name }) => name)).toEqual(['live column']);
 });
 
 test('surface owns scrolling only below the complete-panel floor', async ({ page }) => {
@@ -219,8 +210,9 @@ test('expanded artifact content floats without changing the live surface scroll 
   page,
 }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
-  await page.goto('http://localhost:9871/?scene=run-gauge&theme=dark');
-  await page.getByRole('button', { name: 'Files' }).click();
+  // Files is a top-level stage segment now, not reachable via a button
+  // inside this scene's live surface — go straight to the files scene.
+  await page.goto('http://localhost:9871/?scene=run-gauge-files&theme=dark');
   await page
     .getByRole('button', { name: /Open artifact/ })
     .first()
@@ -257,7 +249,7 @@ test('transcript accepts wheel and focused keyboard scrolling', async ({ page })
   await expect.poll(() => transcript.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
 });
 
-test('aftercare keeps its runway and compact feature facts legible at rest', async ({ page }) => {
+test('aftercare keeps its runway and receipt legible at rest', async ({ page }) => {
   for (const viewport of [
     { width: 1440, height: 900 },
     { width: 760, height: 900 },
@@ -269,9 +261,15 @@ test('aftercare keeps its runway and compact feature facts legible at rest', asy
     await expect(desk).toBeVisible();
     await expect(page.getByRole('tablist', { name: 'Stage view' })).toHaveCount(0);
     await expect(page.getByLabel('Feature pipeline')).toHaveCount(0);
-    await expect(page.getByRole('button', { name: 'Run record' })).toBeVisible();
-    await expect(page.getByRole('heading', { name: 'Choose one focused action' })).toBeVisible();
-    await expect(page.getByRole('complementary', { name: 'Feature facts' })).toBeVisible();
+    // The rail is a run-facing instrument — aftercare has no active run to
+    // show, so it renders none of the rail's DOM either.
+    await expect(page.locator('.phase-rail')).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'View run record' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'The work is in service' })).toBeVisible();
+    // The facts rail is gone: the receipt is the surface's own content, and the
+    // facts live behind the toolbar's inspector toggle.
+    await expect(page.getByRole('region', { name: 'What shipped' })).toBeVisible();
+    await expect(page.getByRole('region', { name: 'Feature facts' })).toHaveCount(0);
     await expect(page.getByText('Waiting for the agent to respond…')).toHaveCount(0);
     await expect(page.getByRole('button', { name: /Start rebase pass/ })).toBeVisible();
     await expect(page.getByRole('button', { name: /Address review feedback/ })).toBeVisible();
@@ -327,10 +325,9 @@ test('aftercare reports unpublished commits and offers to publish them', async (
   await expect(publishUpdates).toBeVisible();
   await expect(publishUpdates).toContainText('Not on the pull-request branch yet: 3 commits.');
 
-  const facts = page.getByRole('complementary', { name: 'Feature facts' });
-  await expect(facts).toContainText('Unpublished');
-  await expect(facts).toContainText('3 commits');
-
-  const actions = page.getByRole('group', { name: 'Feature actions' });
-  await expect(actions.getByRole('button', { name: 'Publish updates', exact: true })).toBeVisible();
+  // Delivery lives on the runway only; the toolbar keeps wrap-up verbs. The
+  // verbs portal into the toolbar's own slot, so they are queried page-wide.
+  await expect(page.getByRole('button', { name: 'Publish updates', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Mark done', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Clean up', exact: true })).toBeVisible();
 });

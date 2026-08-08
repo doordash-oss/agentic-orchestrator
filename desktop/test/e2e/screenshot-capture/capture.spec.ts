@@ -1,76 +1,78 @@
 import { expect, test, type Page } from '@playwright/test';
-import path from 'node:path';
-import fs from 'node:fs';
+import { capture, skipWithoutEvidenceDir } from './evidence-capture';
 
-const EVIDENCE_DIR = process.env['AGENTICO_EVIDENCE_DIR'] ?? '';
-
-function evidencePath(name: string): string {
-  if (EVIDENCE_DIR === '') {
-    throw new Error('AGENTICO_EVIDENCE_DIR must be set');
-  }
-  return path.join(EVIDENCE_DIR, 'screenshots', `${name}.png`);
-}
-
-function ensureDir(filePath: string): void {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-}
-
-async function capture(
-  page: Page,
-  scene: string,
-  theme: 'light' | 'dark',
-  width: number,
-  height: number,
-  fileName: string,
-  waitFor: string,
-  preScreenshot?: (page: Page) => Promise<void>,
-): Promise<void> {
-  await page.setViewportSize({ width, height });
-  await page.goto(`http://localhost:9871/?scene=${scene}&theme=${theme}`);
-  await page.evaluate((t) => {
-    document.documentElement.dataset['theme'] = t;
-  }, theme);
-  await expect(page.locator(waitFor)).toBeVisible({ timeout: 15_000 });
-  if (preScreenshot) {
-    await preScreenshot(page);
-  }
-  const target = evidencePath(fileName);
-  ensureDir(target);
-  await page.screenshot({ path: target, fullPage: false });
-}
-
-async function scrollSettingsSectionIntoCapture(
-  page: Page,
-  name: 'Updates' | 'Diagnostics',
-): Promise<void> {
-  await page.addStyleTag({ content: '* { scroll-behavior: auto !important; }' });
-  const target = page.getByRole('region', { name });
-  await expect(target).toBeVisible({ timeout: 10_000 });
-  await target.evaluate((element) => {
-    const scroller = element.closest('.tab-panel');
-    if (scroller instanceof HTMLElement) {
-      const scrollerRect = scroller.getBoundingClientRect();
-      const targetRect = element.getBoundingClientRect();
-      scroller.scrollTop += targetRect.top - scrollerRect.top - 16;
-      return;
+/**
+ * Scrolls the palette's list so a named group starts at the top — the palette
+ * holds more commands than 900px shows, and each capture is about a specific
+ * group.
+ */
+async function scrollPaletteGroupToTop(page: Page, group: string): Promise<void> {
+  await expect(page.locator(`.command-palette__group[aria-label="${group}"]`)).toBeVisible();
+  await page.evaluate((name) => {
+    const list = document.querySelector('.command-palette__list');
+    const section = document.querySelector(`.command-palette__group[aria-label="${name}"]`);
+    if (list instanceof HTMLElement && section instanceof HTMLElement) {
+      list.scrollTop = section.offsetTop - list.offsetTop;
     }
-    element.scrollIntoView({ block: 'start', inline: 'nearest' });
-  });
-  await expect(target.getByRole('heading', { name })).toBeInViewport({ timeout: 5_000 });
-  await expect(target).toBeInViewport({ timeout: 5_000 });
+  }, group);
+}
+
+/**
+ * Scrolls a group to the top and points at one of its entries, so the frame
+ * shows the palette's selection affordance where a person put it rather than
+ * wherever the list happened to open.
+ */
+async function scrollPaletteGroupAndPointAt(
+  page: Page,
+  group: string,
+  entry: RegExp,
+): Promise<void> {
+  await scrollPaletteGroupToTop(page, group);
+  await page.getByRole('option', { name: entry }).hover();
+}
+
+/**
+ * A settings scene is already showing exactly one pane — the window's own
+ * source-list selection is what puts it there — so all a capture has to
+ * confirm is that the expected pane is the selected row and the rendered one.
+ */
+async function expectSettingsPane(page: Page, label: string, region: string): Promise<void> {
+  await expect(page.locator('.settings-window__pane-row[data-selected="true"]')).toHaveText(label);
+  await expect(page.getByRole('region', { name: region })).toBeVisible({ timeout: 10_000 });
 }
 
 test('capture all visual evidence screenshots', async ({ page }) => {
+  skipWithoutEvidenceDir();
   test.setTimeout(180_000);
 
   await capture(
     page,
-    'home-flight-board',
+    'overview-lanes',
     'light',
     1440,
     900,
-    'home-flight-board-with-refactoring-pass-lane-1440x900-light',
-    '.run-card__pass',
+    'overview-with-lane-grouped-features-and-refactoring-pass-1440x900-light',
+    '.overview-lanes__groups',
+  );
+
+  await capture(
+    page,
+    'overview-lanes',
+    'dark',
+    1440,
+    900,
+    'running-lane-row-live-implementing-feature-rendered-by-the-mock-data-screenshot-1440x900',
+    '#overview-lane-running',
+  );
+
+  await capture(
+    page,
+    'overview-empty',
+    'dark',
+    1440,
+    900,
+    'overview-empty-workspace-mock-harness-1440x900-dark',
+    '.overview-surface__cta',
   );
 
   await capture(
@@ -92,7 +94,7 @@ test('capture all visual evidence screenshots', async ({ page }) => {
     'aftercare-change-manifest-with-repository-switchboard-file-index-and-split-diff-1440x900',
     '.aftercare-workspace',
     async (p) => {
-      await p.getByRole('button', { name: 'Changes' }).click();
+      await p.getByRole('button', { name: 'View changes' }).click();
       await expect(p.getByRole('dialog', { name: 'Feature changes' })).toBeVisible();
       await expect(p.getByText('New description with completion workspace support.')).toBeVisible({
         timeout: 15_000,
@@ -110,9 +112,9 @@ test('capture all visual evidence screenshots', async ({ page }) => {
     'wide-run-record-desk-with-live-activity-artifact-ledger-and-bounded-content-1440x900',
     '.aftercare-workspace',
     async (p) => {
-      await p.getByRole('button', { name: 'Run record' }).click();
+      await p.getByRole('button', { name: 'View run record' }).click();
       await expect(p.getByRole('dialog', { name: 'Run record' })).toBeVisible();
-      await expect(p.getByRole('heading', { name: 'Activity and artifacts' })).toBeVisible({
+      await expect(p.getByRole('group', { name: 'Preview view' })).toBeVisible({
         timeout: 15_000,
       });
       await p.getByRole('button', { name: 'Files' }).click();
@@ -150,8 +152,8 @@ test('capture all visual evidence screenshots', async ({ page }) => {
     'dark',
     1440,
     900,
-    'cycle-need-user-input-floating-free-text-modal-1440x900',
-    '.need-input-modal',
+    'cycle-need-user-input-sheet-free-text-1440x900',
+    '.need-input-sheet',
     async (capturePage) => {
       await capturePage.waitForTimeout(250);
     },
@@ -169,37 +171,39 @@ test('capture all visual evidence screenshots', async ({ page }) => {
 
   await capture(
     page,
-    'background-ama-expanded',
-    'dark',
-    1440,
-    900,
-    'expanded-bottom-docked-ama-streaming-transcript-with-an-inline-question-and-glob-1440x900',
-    '.ama-dock[data-mode="expanded"]',
-  );
-
-  await capture(
-    page,
-    'background-ama-compact',
-    'light',
-    1440,
-    900,
-    'persistent-compact-ama-composer-with-background-attention-inbox-and-preview-pref-1440x900',
-    '.settings-panel__toggle',
-    async (p) => {
-      const previewToggle = p.locator('.settings-panel__toggle');
-      await previewToggle.scrollIntoViewIfNeeded();
-      await expect(previewToggle).toBeInViewport({ timeout: 5_000 });
-    },
-  );
-
-  await capture(
-    page,
     'background-command-palette',
     'dark',
     1728,
     1117,
     'current-feature-command-palette-showing-enabled-actions-and-authoritative-disabl-1728x1117',
     '.command-palette',
+  );
+
+  // The two command-palette captures: the fifteen-command Feature group over a
+  // selected feature, and the same group disabled on Overview beside the global
+  // entries. The palette list scrolls at this size, so each capture brings its
+  // subject group to the top of the list first — the same scroll a person does
+  // with the arrow keys.
+  await capture(
+    page,
+    'command-palette-feature',
+    'dark',
+    1440,
+    900,
+    'command-palette-with-a-feature-selected-full-fifteen-command-feature-group-with-1440x900',
+    '.command-palette',
+    (target) => scrollPaletteGroupAndPointAt(target, 'Feature', /^Restart/),
+  );
+
+  await capture(
+    page,
+    'command-palette-overview',
+    'light',
+    1440,
+    900,
+    'command-palette-with-overview-selected-feature-group-disabled-with-the-no-active-1440x900',
+    '.command-palette',
+    (target) => scrollPaletteGroupAndPointAt(target, 'File', /^New Feature/),
   );
 
   await capture(
@@ -212,36 +216,8 @@ test('capture all visual evidence screenshots', async ({ page }) => {
     '.impact-dialog',
   );
 
-  await capture(
-    page,
-    'background-ama-constrained',
-    'dark',
-    760,
-    900,
-    'constrained-workspace-with-compact-ama-question-badge-expanded-exact-question-ta-760x900',
-    '.command-palette',
-  );
-
-  await capture(
-    page,
-    'update-passive-active',
-    'dark',
-    1440,
-    900,
-    'passive-verified-update-notice-with-active-workflow-and-non-interrupting-install-1440x900',
-    '.update-notice',
-    async (p) => {
-      await p.getByRole('tab', { name: 'History and Rewind' }).click();
-      await expect(p.getByRole('group', { name: 'Feature actions' })).toBeVisible({
-        timeout: 15_000,
-      });
-      await expect(p.getByLabel('Current feature status')).toBeVisible({ timeout: 15_000 });
-      await expect(p.getByRole('button', { name: 'Install When Idle' })).toBeVisible({
-        timeout: 5_000,
-      });
-    },
-  );
-
+  // The two banner-era update captures are gone with the banner: the transient
+  // popover that replaced it is evidenced by attention-update-popover-evidence.
   await capture(
     page,
     'settings-updates-ready',
@@ -251,8 +227,7 @@ test('capture all visual evidence screenshots', async ({ page }) => {
     'settings-updates-panel-with-downloaded-version-signature-state-release-note-link-1440x900',
     '.settings-panel__section--updates',
     async (p) => {
-      await scrollSettingsSectionIntoCapture(p, 'Updates');
-      await p.getByRole('button', { name: 'Restart to Update' }).scrollIntoViewIfNeeded();
+      await expectSettingsPane(p, 'Updates', 'Updates');
       await expect(p.getByRole('button', { name: 'Restart to Update' })).toBeInViewport({
         timeout: 5_000,
       });
@@ -268,11 +243,8 @@ test('capture all visual evidence screenshots', async ({ page }) => {
     'settings-updates-panel-for-a-deb-install-with-verified-package-manager-guidance-1440x900',
     '.settings-panel__section--updates',
     async (p) => {
-      await scrollSettingsSectionIntoCapture(p, 'Updates');
+      await expectSettingsPane(p, 'Updates', 'Updates');
       await expect(p.getByText(/package manager/)).toBeVisible({ timeout: 5_000 });
-      await p
-        .getByRole('button', { name: 'Copy the package-manager command' })
-        .scrollIntoViewIfNeeded();
       await expect(
         p.getByRole('button', { name: 'Copy the package-manager command' }),
       ).toBeInViewport({
@@ -292,7 +264,7 @@ test('capture all visual evidence screenshots', async ({ page }) => {
     'stop-work-and-install-now-impact-confirmation-showing-workflow-and-ama-consequen-1440x900',
     '.settings-panel__section--updates',
     async (p) => {
-      await scrollSettingsSectionIntoCapture(p, 'Updates');
+      await expectSettingsPane(p, 'Updates', 'Updates');
       await p.getByRole('button', { name: 'Stop Work and Install Now' }).click();
       await expect(p.getByRole('dialog', { name: 'Install update confirmation' })).toBeVisible({
         timeout: 5_000,
@@ -309,7 +281,7 @@ test('capture all visual evidence screenshots', async ({ page }) => {
     'settings-diagnostics-panel-with-bounded-redacted-entries-retention-summary-revea-1440x900',
     '.settings-panel__section--diagnostics',
     async (p) => {
-      await scrollSettingsSectionIntoCapture(p, 'Diagnostics');
+      await expectSettingsPane(p, 'Diagnostics', 'Diagnostics');
       await expect(p.getByRole('button', { name: 'Reveal Folder' })).toBeInViewport({
         timeout: 5_000,
       });
@@ -324,28 +296,11 @@ test('capture all visual evidence screenshots', async ({ page }) => {
 
   await capture(
     page,
-    'update-constrained',
-    'light',
-    760,
-    900,
-    'constrained-workspace-with-passive-update-notice-and-reachable-updates-status-li-760x900',
-    '.update-notice',
-    async (p) => {
-      await p.getByRole('button', { name: 'Updates' }).click();
-      await expect(p.locator('.settings-panel__section--updates')).toBeVisible({
-        timeout: 10_000,
-      });
-      await scrollSettingsSectionIntoCapture(p, 'Updates');
-    },
-  );
-
-  await capture(
-    page,
     'archive',
     'light',
     1440,
     900,
-    'sealed-run-archive-mode-with-selector-read-only-band-muted-phase-spine-and-histo-1440x900',
+    'sealed-run-archive-mode-with-selector-read-only-band-muted-phase-rail-and-histo-1440x900',
     '.archive-mode__band',
   );
 
@@ -355,7 +310,7 @@ test('capture all visual evidence screenshots', async ({ page }) => {
     'dark',
     1440,
     900,
-    'sealed-run-archive-mode-with-selector-read-only-band-muted-phase-spine-and-histo-1440x900-6658c389',
+    'sealed-run-archive-mode-with-selector-read-only-band-muted-phase-rail-and-histo-1440x900-6658c389',
     '.archive-mode__band',
   );
 
@@ -594,7 +549,7 @@ test('capture all visual evidence screenshots', async ({ page }) => {
       // Open the attention inbox so the recovery-priority item is visible
       // alongside other attention classes, sorted first.
       await p.locator('.attention-bell').click();
-      await expect(p.locator('.attention-inbox')).toBeVisible({ timeout: 5_000 });
+      await expect(p.locator('.attention-popover')).toBeVisible({ timeout: 5_000 });
     },
   );
 
@@ -610,7 +565,7 @@ test('capture all visual evidence screenshots', async ({ page }) => {
       await expect(p.locator('.recovery-workspace__queue')).toBeVisible({ timeout: 15_000 });
       await expect(p.locator('.recovery-attention')).toBeVisible({ timeout: 5_000 });
       await p.locator('.attention-bell').click();
-      await expect(p.locator('.attention-inbox')).toBeVisible({ timeout: 5_000 });
+      await expect(p.locator('.attention-popover')).toBeVisible({ timeout: 5_000 });
     },
   );
 
@@ -635,7 +590,167 @@ test('capture all visual evidence screenshots', async ({ page }) => {
   );
 });
 
+test('phase rail visual evidence screenshots', async ({ page }) => {
+  skipWithoutEvidenceDir();
+  test.setTimeout(120_000);
+
+  await capture(
+    page,
+    'run-gauge',
+    'dark',
+    1440,
+    900,
+    'live-run-cockpit-full-profile-rail-nine-segments-completed-current-upcoming-stat-1440x900',
+    '.phase-rail__trio',
+    async (p) => {
+      // Full-profile pipeline: Setup + the 8 large-pipeline phases.
+      await expect(p.locator('.phase-rail__segment')).toHaveCount(9);
+      await expect(p.locator('.phase-rail__segment[data-state="completed"]')).not.toHaveCount(0);
+      await expect(p.locator('.phase-rail__segment[data-state="current"]')).toHaveCount(1);
+      await expect(p.locator('.phase-rail__segment[data-state="upcoming"]')).not.toHaveCount(0);
+      await expect(
+        p.locator('.phase-rail__trio').getByText('Elapsed', { exact: true }),
+      ).toBeVisible();
+      await expect(p.locator('.phase-rail__trio').getByText('Cost', { exact: true })).toBeVisible();
+      await expect(
+        p.locator('.phase-rail__trio').getByText('Context', { exact: true }),
+      ).toBeVisible();
+    },
+  );
+
+  await capture(
+    page,
+    'run-gauge',
+    'light',
+    1440,
+    900,
+    'live-run-cockpit-same-state-light-theme-1440x900',
+    '.phase-rail__trio',
+    async (p) => {
+      await expect(p.locator('.phase-rail__segment')).toHaveCount(9);
+      await expect(
+        p.locator('.phase-rail__trio').getByText('Elapsed', { exact: true }),
+      ).toBeVisible();
+      await expect(p.locator('.phase-rail__trio').getByText('Cost', { exact: true })).toBeVisible();
+      await expect(
+        p.locator('.phase-rail__trio').getByText('Context', { exact: true }),
+      ).toBeVisible();
+    },
+  );
+
+  await capture(
+    page,
+    'run-gauge-held-question',
+    'dark',
+    1440,
+    900,
+    'held-on-a-question-current-segment-attention-colored-7px-dot-above-it-trio-readi-1440x900',
+    '.phase-rail__dot',
+    async (p) => {
+      // The run is still active (status stays in ACTIVE_STATUSES) while an
+      // open question holds the current segment.
+      await expect(p.locator('.phase-rail__segment[data-held="true"]')).toHaveCount(1);
+      await expect(p.locator('.phase-rail__dot')).toHaveAttribute(
+        'title',
+        /Held \d+m for your answer/,
+      );
+      const waitingEntry = p.locator('.phase-rail__trio-entry[data-attention="true"]');
+      await expect(waitingEntry.locator('dt')).toHaveText('Waiting');
+      await expect(waitingEntry.locator('dd')).toHaveText(/^\d+m$/);
+    },
+  );
+
+  await capture(
+    page,
+    'run-gauge-paused',
+    'dark',
+    1440,
+    900,
+    'paused-on-a-need_user_input-gate-trio-reading-paused-nm-dark-theme-1440x900',
+    '.phase-rail__trio-entry[data-attention="true"]',
+    async (p) => {
+      const pausedEntry = p.locator('.phase-rail__trio-entry[data-attention="true"]');
+      await expect(pausedEntry.locator('dt')).toHaveText('Paused');
+      await expect(pausedEntry.locator('dd')).toHaveText(/^\d+m$/);
+    },
+  );
+
+  await capture(
+    page,
+    'archive',
+    'dark',
+    1440,
+    900,
+    'archive-mode-sealed-run-rail-at-rest-with-elapsed-cost-and-no-context-read-only-1440x900',
+    '.archive-mode__band',
+    async (p) => {
+      // Sealed run: rail at rest, no current/held segment, Elapsed/Cost but
+      // no Context in the trio.
+      await expect(p.locator('.phase-rail__segment[data-state="current"]')).toHaveCount(0);
+      await expect(p.locator('.phase-rail__dot')).toHaveCount(0);
+      await expect(
+        p.locator('.phase-rail__trio').getByText('Elapsed', { exact: true }),
+      ).toBeVisible();
+      await expect(p.locator('.phase-rail__trio').getByText('Cost', { exact: true })).toBeVisible();
+      await expect(
+        p.locator('.phase-rail__trio').getByText('Context', { exact: true }),
+      ).toHaveCount(0);
+    },
+  );
+
+  await capture(
+    page,
+    'connection-shell',
+    'dark',
+    1440,
+    900,
+    'connection-shell-six-stage-segment-track-mid-connect-dark-theme-1440x900',
+    '.phase-rail__track',
+    async (p) => {
+      await expect(p.locator('.phase-rail__segment')).toHaveCount(6);
+      await expect(p.locator('.phase-rail__segment[data-state="current"]')).toHaveCount(1);
+      await expect(p.getByText('Connect', { exact: true })).toBeVisible();
+    },
+  );
+
+  await capture(
+    page,
+    'setup-wizard',
+    'dark',
+    1440,
+    900,
+    'setup-wizard-step-indicator-rendered-by-the-shared-segment-track-variable-step-c-1440x900',
+    '.phase-rail__track',
+    async (p) => {
+      const segments = p.locator('.phase-rail__segment');
+      await expect(segments).toHaveCount(3);
+      await expect(segments.nth(0)).toHaveAttribute('data-state', 'completed');
+      await expect(segments.nth(1)).toHaveAttribute('data-state', 'current');
+      await expect(segments.nth(2)).toHaveAttribute('data-state', 'upcoming');
+      await expect(p.getByText('Models', { exact: true })).toBeVisible();
+    },
+  );
+
+  await capture(
+    page,
+    'overview-lanes',
+    'dark',
+    1440,
+    900,
+    'sidebar-running-row-sub-line-showing-phase-n-m-iteration-k-beside-the-pip-row-da-1440x900',
+    '#sidebar-row-readme-italian-1 .sidebar__row-subline',
+    async (p) => {
+      const row = p.locator('#sidebar-row-readme-italian-1');
+      await expect(row.locator('.sidebar__row-subline')).toHaveText(
+        'Implement · phase 3/5 · iteration 2',
+      );
+      await expect(row.locator('.pip-rail')).toBeVisible();
+    },
+  );
+});
+
 test('completion workspace screenshots', async ({ page }) => {
+  skipWithoutEvidenceDir();
   await capture(
     page,
     'completion-inspect',
@@ -695,6 +810,7 @@ test('completion workspace screenshots', async ({ page }) => {
 });
 
 test('constrained completion workspace screenshot', async ({ page }) => {
+  skipWithoutEvidenceDir();
   await capture(
     page,
     'completion-constrained',

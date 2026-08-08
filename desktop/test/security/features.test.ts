@@ -2,7 +2,7 @@
  * Security posture of the feature-creation IPC surface: spoofed senders are
  * rejected on every new op, creation input and feature ids are validated at
  * the schema layer before any service runs, responses that violate their
- * strict schemas fail closed, and the local tabs settings section can never
+ * strict schemas fail closed, and the local shell settings section can never
  * store server-domain state beyond identity/presentation.
  */
 import { describe, expect, it, vi } from 'vitest';
@@ -16,7 +16,7 @@ import {
 } from '../../src/shared/ipc';
 
 const trusted: TrustedSender = {
-  webContentsId: 1,
+  webContentsIds: new Set([1]),
   allowedOrigins: new Set(['file://']),
 };
 
@@ -101,6 +101,7 @@ function makeServices(overrides: Partial<IpcServices> = {}): IpcServices {
     })),
     getSettings: vi.fn(() => defaultSettings()),
     updateSettings: vi.fn(() => defaultSettings()),
+    openSettingsWindow: vi.fn(() => ({ opened: true })),
     getTheme: vi.fn(() => ({ preference: 'system' as const, resolved: 'dark' as const })),
     setTheme: vi.fn((preference) => ({ preference, resolved: 'dark' as const })),
     getReadiness: vi.fn(() => Promise.reject(new Error('unused'))),
@@ -182,6 +183,7 @@ function makeServices(overrides: Partial<IpcServices> = {}): IpcServices {
     generatePublishDescription: vi.fn(() => Promise.reject(new Error('unused'))),
     openExternal: vi.fn(() => Promise.reject(new Error('unused'))),
     revealPath: vi.fn(() => Promise.reject(new Error('unused'))),
+    publishUiState: vi.fn(() => ({ accepted: true })),
     ...overrides,
     pickCreationFiles: overrides.pickCreationFiles ?? vi.fn(() => Promise.resolve({ paths: [] })),
     readClipboardImage: overrides.readClipboardImage ?? vi.fn(() => Promise.resolve({ paths: [] })),
@@ -326,33 +328,28 @@ describe('feature IPC security', () => {
     expect(services.createFeature).not.toHaveBeenCalled();
   });
 
-  it('rejects a tabs settings patch carrying feature/domain state', async () => {
+  it('rejects a shell settings patch carrying feature/domain state', async () => {
     const { handlers, services } = register();
     const update = handlers.get(IPC_CHANNELS.settingsUpdate)!;
-    for (const tabs of [
-      // Domain fields on a tab entry beyond identity/presentation.
-      {
-        open: [{ featureId: 'abcd1234', titleHint: 'x', status: 'Created' }],
-        activeFeatureId: null,
-      },
-      // Snapshot-shaped storage.
-      { open: [{ featureId: 'abcd1234', titleHint: 'x' }], activeFeatureId: null, snapshot: {} },
+    for (const shell of [
+      // Domain fields beyond identity/presentation.
+      { activeFeatureId: null, sidebarCollapsed: false, status: 'Created' },
       // Identity that is not a confined feature id.
-      { open: [{ featureId: '../etc', titleHint: 'x' }], activeFeatureId: null },
+      { activeFeatureId: '../etc', sidebarCollapsed: false },
     ]) {
-      const result = (await update(goodEvent, { tabs })) as Envelope;
+      const result = (await update(goodEvent, { shell })) as Envelope;
       expect(result.ok).toBe(false);
       expect(result.error?.code).toBe('E_SCHEMA_MISMATCH');
     }
     expect(services.updateSettings).not.toHaveBeenCalled();
   });
 
-  it('accepts a tabs patch limited to identity and presentation', async () => {
+  it('accepts a shell patch limited to identity and presentation', async () => {
     const { handlers } = register();
     const result = (await handlers.get(IPC_CHANNELS.settingsUpdate)!(goodEvent, {
-      tabs: {
-        open: [{ featureId: 'abcd1234ef567890', titleHint: 'Search revamp' }],
+      shell: {
         activeFeatureId: 'abcd1234ef567890',
+        sidebarCollapsed: false,
       },
     })) as Envelope;
     expect(result.ok).toBe(true);

@@ -106,8 +106,8 @@ test('packaged review recovers unsaved drafts and keeps hostile markdown inert',
 });
 
 async function openReview(handle: AppHandle, name: string): Promise<void> {
-  await expect(handle.page.getByRole('tab', { name })).toBeVisible({ timeout: 60_000 });
-  await handle.page.getByRole('tab', { name }).click();
+  await expect(handle.page.getByRole('option', { name })).toBeVisible({ timeout: 60_000 });
+  await handle.page.getByRole('option', { name }).click();
   await expect(handle.page.getByLabel('Review editor')).toBeVisible({ timeout: 30_000 });
   await expect(handle.page.getByRole('button', { name: 'Preview' })).toBeVisible({
     timeout: 30_000,

@@ -30,9 +30,6 @@
     "release:verify": "node scripts/release-verify.mjs"
   },
   "devDependencies": {
-    "@fontsource/atkinson-hyperlegible": "^5.2.8",
-    "@fontsource/barlow-condensed": "^5.2.8",
-    "@fontsource/ibm-plex-mono": "^5.2.7",
     "@playwright/test": "^1.61.1",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",

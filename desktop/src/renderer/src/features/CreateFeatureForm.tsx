@@ -1,7 +1,10 @@
 /**
- * Four-step creation contract, repository-first: Where, What,
- * Pipeline, Review. Initial defaults prefill the draft once; later repository
- * discovery must preserve every user-owned choice.
+ * The creation sheet: a window-modal, title-bar-attached sheet carrying the
+ * four-step creation contract — Repositories, Describe, Depth, Contract.
+ * Cancel and Escape are the only exits (with today's discard confirmation for
+ * a dirty draft); the workspace stays mounted and navigable beneath the
+ * scrim. Initial defaults prefill the draft once; later repository discovery
+ * must preserve every user-owned choice.
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import {
@@ -11,6 +14,7 @@ import {
   type RepositoryState,
 } from '../../../shared/ipc';
 import { ConsentDialog } from '../components/wizard/ConsentDialog';
+import { useModalDismiss } from '../components/useModalDismiss';
 import { parseIpcError, type WizardError } from '../wizard/ipcError';
 import {
   GATE_FIELDS,
@@ -37,7 +41,7 @@ type DefaultsState =
   | { phase: 'error'; error: WizardError }
   | { phase: 'loaded'; defaults: CreationDefaults };
 
-const STEPS = ['Where', 'What', 'Pipeline', 'Review'] as const;
+const STEPS = ['Repositories', 'Describe', 'Depth', 'Contract'] as const;
 type Step = (typeof STEPS)[number];
 
 /** CreationDefaults phase labels → catalogue phase keys. */
@@ -97,12 +101,17 @@ function repositoriesWithin(
   });
 }
 
-export interface CreateFeatureFormProps {
-  onCreated(created: { featureId: string; name: string }): void;
-  onDirtyChange?(dirty: boolean): void;
+function plural(count: number, one: string, many: string): string {
+  return `${count} ${count === 1 ? one : many}`;
 }
 
-export function CreateFeatureForm({ onCreated, onDirtyChange }: CreateFeatureFormProps) {
+export interface CreateFeatureFormProps {
+  onCreated(created: { featureId: string; name: string }): void;
+  /** Cancel/Escape after any confirmation: the sheet closes, draft discarded. */
+  onClose(): void;
+}
+
+export function CreateFeatureForm({ onCreated, onClose }: CreateFeatureFormProps) {
   const [state, setState] = useState<DefaultsState>({ phase: 'loading' });
   const [stepIndex, setStepIndex] = useState(0);
   const [name, setName] = useState('');
@@ -127,6 +136,7 @@ export function CreateFeatureForm({ onCreated, onDirtyChange }: CreateFeatureFor
   const [folderNotice, setFolderNotice] = useState('');
   const [workspaceRoots, setWorkspaceRoots] = useState<readonly string[]>([]);
   const [consentOpen, setConsentOpen] = useState(false);
+  const [discardOpen, setDiscardOpen] = useState(false);
   const [folderPending, setFolderPending] = useState(false);
   const [pending, setPending] = useState(false);
   const [nameError, setNameError] = useState<string | null>(null);
@@ -134,19 +144,30 @@ export function CreateFeatureForm({ onCreated, onDirtyChange }: CreateFeatureFor
   const [formError, setFormError] = useState<WizardError | null>(null);
   const catalogue = useModelCatalogue();
   const creationKey = useRef(crypto.randomUUID());
+  const sheetRef = useRef<HTMLDivElement | null>(null);
   const nameRef = useRef<HTMLInputElement | null>(null);
   const repoGroupRef = useRef<HTMLFieldSetElement | null>(null);
   const formErrorRef = useRef<HTMLDivElement | null>(null);
 
-  useEffect(() => {
-    onDirtyChange?.(
-      name.trim() !== '' ||
-        description !== '' ||
-        repoKeys.length > 0 ||
-        images.length > 0 ||
-        attachments.length > 0,
-    );
-  }, [attachments.length, description, images.length, name, onDirtyChange, repoKeys.length]);
+  /** Unsaved work worth confirming before it is thrown away. */
+  const dirty =
+    name.trim() !== '' ||
+    description !== '' ||
+    repoKeys.length > 0 ||
+    images.length > 0 ||
+    attachments.length > 0;
+
+  const requestCancel = useCallback(() => {
+    if (dirty) {
+      setDiscardOpen(true);
+      return;
+    }
+    onClose();
+  }, [dirty, onClose]);
+
+  // Escape routes to the same Cancel path; the hook's nested-dialog bail
+  // leaves Escape to the consent and discard dialogs while either is open.
+  useModalDismiss(sheetRef, requestCancel);
 
   const loadInitialDefaults = useCallback(() => {
     setState({ phase: 'loading' });
@@ -165,9 +186,18 @@ export function CreateFeatureForm({ onCreated, onDirtyChange }: CreateFeatureFor
   }, []);
 
   useEffect(loadInitialDefaults, [loadInitialDefaults]);
+  // Field errors are announced by moving focus to the control that must
+  // change — from an effect, so a submit-time error that first has to jump
+  // back to an earlier step focuses the field once that step has rendered.
   useEffect(() => {
     if (formError !== null) formErrorRef.current?.focus();
   }, [formError]);
+  useEffect(() => {
+    if (nameError !== null) nameRef.current?.focus();
+  }, [nameError]);
+  useEffect(() => {
+    if (repoError !== null) repoGroupRef.current?.focus();
+  }, [repoError]);
 
   const browseDirectory = async (): Promise<void> => {
     try {
@@ -300,12 +330,10 @@ export function CreateFeatureForm({ onCreated, onDirtyChange }: CreateFeatureFor
     setRepoError(null);
     if (index === 0 && repoKeys.length === 0) {
       setRepoError('Select at least one repository.');
-      repoGroupRef.current?.focus();
       return false;
     }
     if (index === 1 && name.trim() === '') {
       setNameError('Enter a feature name.');
-      nameRef.current?.focus();
       return false;
     }
     return true;
@@ -336,7 +364,7 @@ export function CreateFeatureForm({ onCreated, onDirtyChange }: CreateFeatureFor
       const chosenEffort = effortChoices[field.key];
       if (chosenEffort !== undefined) effort[modelConfigKey(field.key)] = chosenEffort;
     }
-    const gates = applicableGates(pipeline);
+    const submittedGates = applicableGates(pipeline);
     void (async () => {
       try {
         const created = await window.agentico.createFeature({
@@ -354,12 +382,12 @@ export function CreateFeatureForm({ onCreated, onDirtyChange }: CreateFeatureFor
           models,
           effort,
           checkpoints: {
-            inquiryReview: gates.has('inquiryReview') && checkpoints.inquiryReview,
-            researchReview: gates.has('researchReview') && checkpoints.researchReview,
-            designReview: gates.has('designReview') && checkpoints.designReview,
-            roadmapReview: gates.has('roadmapReview') && checkpoints.roadmapReview,
-            phasePlanReview: gates.has('phasePlanReview') && checkpoints.phasePlanReview,
-            manualPublish: gates.has('manualPublish') && checkpoints.manualPublish,
+            inquiryReview: submittedGates.has('inquiryReview') && checkpoints.inquiryReview,
+            researchReview: submittedGates.has('researchReview') && checkpoints.researchReview,
+            designReview: submittedGates.has('designReview') && checkpoints.designReview,
+            roadmapReview: submittedGates.has('roadmapReview') && checkpoints.roadmapReview,
+            phasePlanReview: submittedGates.has('phasePlanReview') && checkpoints.phasePlanReview,
+            manualPublish: submittedGates.has('manualPublish') && checkpoints.manualPublish,
             draftPublish: checkpoints.draftPublish,
           },
           idempotencyKey: creationKey.current,
@@ -388,11 +416,9 @@ export function CreateFeatureForm({ onCreated, onDirtyChange }: CreateFeatureFor
         if (field === 'name') {
           setStepIndex(1);
           setNameError(parsed.message);
-          nameRef.current?.focus();
         } else if (field === 'repos') {
           setStepIndex(0);
           setRepoError(parsed.message);
-          repoGroupRef.current?.focus();
         } else setFormError(parsed);
       } finally {
         setPending(false);
@@ -400,7 +426,8 @@ export function CreateFeatureForm({ onCreated, onDirtyChange }: CreateFeatureFor
     })();
   };
 
-  const repositories = state.phase === 'loaded' ? state.defaults.repositories : [];
+  const loadedDefaults = state.phase === 'loaded' ? state.defaults : null;
+  const repositories = loadedDefaults?.repositories ?? [];
   const filteredRepositories = useMemo(() => {
     const query = repoQuery.trim().toLowerCase();
     if (query === '') return repositories;
@@ -409,449 +436,598 @@ export function CreateFeatureForm({ onCreated, onDirtyChange }: CreateFeatureFor
     );
   }, [repoQuery, repositories]);
 
-  if (state.phase === 'loading')
-    return (
-      <section className="create-form" aria-label="Create a feature">
-        <p role="status">Loading creation defaults from the runtime…</p>
-      </section>
-    );
-  if (state.phase === 'error')
-    return (
-      <section className="create-form" aria-label="Create a feature">
-        <div role="alert" className="create-form__error">
-          <b>{state.error.code}</b>
-          <p>{state.error.message}</p>
-        </div>
-        <button type="button" onClick={loadInitialDefaults}>
-          Try again
-        </button>
-      </section>
-    );
-
   const currentStep = STEPS[stepIndex] as Step;
   const gates = applicableGates(pipeline);
   const visibleGates = GATE_FIELDS.filter((gate) => gates.has(gate.key));
-  const defaults = defaultModelsByKey(state.defaults);
-  const effortDefaults = defaultEffortByKey(state.defaults);
+  const modelDefaults = loadedDefaults === null ? {} : defaultModelsByKey(loadedDefaults);
+  const effortDefaults = loadedDefaults === null ? {} : defaultEffortByKey(loadedDefaults);
+  const checkedCheckpoints = visibleGates.filter((gate) => checkpoints[gate.key]).length;
+
+  /** The three depth profiles; compact on Contract, where depth is confirmed. */
+  const depthProfiles = (variant: 'full' | 'compact') => (
+    <div className="creation-sheet__profiles" data-variant={variant}>
+      {PIPELINES.map((profile) => (
+        <label
+          key={profile.id}
+          className="creation-sheet__profile"
+          data-selected={pipeline === profile.id}
+        >
+          <input
+            type="radio"
+            name="pipeline"
+            checked={pipeline === profile.id}
+            onChange={() => {
+              setPipeline(profile.id);
+              setCheckpoints(checkpointsForPipeline(profile.id));
+            }}
+          />
+          <span className="creation-sheet__profile-body">
+            <b className="creation-sheet__profile-title">{profile.title}</b>
+            <span className="creation-sheet__profile-note">{profile.note}</span>
+            {variant === 'full' ? (
+              <small className="creation-sheet__profile-gates">
+                {checkpointSummary(profile.id, profile.checkpoints)}
+              </small>
+            ) : null}
+          </span>
+        </label>
+      ))}
+    </div>
+  );
 
   return (
-    <form
-      className="create-form creation-wizard"
-      aria-label="Create a feature"
-      noValidate
-      onSubmit={submit}
-    >
-      <nav className="creation-wizard__spine" aria-label="Creation steps">
-        {STEPS.map((step, index) => {
-          const state = index < stepIndex ? 'done' : index === stepIndex ? 'current' : 'upcoming';
-          return (
-            <button
-              key={step}
-              type="button"
-              data-state={state}
-              aria-current={index === stepIndex ? 'step' : undefined}
-              disabled={index > stepIndex}
-              onClick={() => setStepIndex(index)}
-            >
-              <span className="creation-wizard__step-marker" aria-hidden="true">
-                {state === 'done' ? '✓' : index + 1}
-              </span>
-              <span className="creation-wizard__step-label">{step}</span>
-            </button>
-          );
-        })}
-      </nav>
-      {formError !== null ? (
-        <div ref={formErrorRef} tabIndex={-1} role="alert" className="create-form__error">
-          <b>{formError.code}</b>
-          <p>{formError.message}</p>
-        </div>
-      ) : null}
-
-      {currentStep === 'Where' ? (
-        <section className="creation-wizard__panel" aria-labelledby="creation-where">
-          <p className="home-surface__eyebrow">01 / Where</p>
-          <h2 id="creation-where">Choose repositories</h2>
-          {repositories.length > 0 ? (
-            <label className="form-field">
-              <span className="form-field__label">Search repositories</span>
-              <input
-                className="form-field__input"
-                type="search"
-                value={repoQuery}
-                placeholder="Filter by name or path"
-                onChange={(event) => setRepoQuery(event.target.value)}
-              />
-            </label>
-          ) : null}
-          <fieldset
-            ref={repoGroupRef}
-            tabIndex={-1}
-            className="form-field form-field--group"
-            aria-invalid={repoError !== null}
-          >
-            <legend className="form-field__label">
-              {repositories.length === 0 ? 'No repositories yet' : 'Fresh workspace discovery'}
-            </legend>
-            {repositories.length === 0 ? (
-              <p className="repo-options__empty">
-                Point Agentico at a folder below: an existing repository, a folder that holds
-                several, or an empty folder to start something new.
-              </p>
-            ) : null}
-            <ul className="repo-options">
-              {filteredRepositories.map((repo) => (
-                <li key={repo.name} className="repo-option" data-valid={repo.valid}>
-                  <label className="repo-option__label">
-                    <input
-                      type="checkbox"
-                      checked={repoKeys.includes(repo.name)}
-                      disabled={!repo.valid || pending}
-                      onChange={() => {
-                        const nextRepoKeys = repoKeys.includes(repo.name)
-                          ? repoKeys.filter((item) => item !== repo.name)
-                          : [...repoKeys, repo.name];
-                        setRepoKeys(nextRepoKeys);
-                        setRepositoryFiles((files) =>
-                          files.filter((file) => nextRepoKeys.includes(file.repoKey)),
-                        );
-                        setRepoError(null);
-                      }}
-                    />
-                    <b>{repo.name}</b>
-                    <code>{repo.path}</code>
-                  </label>
-                  {!repo.valid ? (
-                    <span className="repo-option__issue">
-                      {repo.issue?.message ?? 'Unavailable'}
+    <div className="sheet-scrim creation-sheet__scrim">
+      <div
+        ref={sheetRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label="New feature"
+        className="sheet creation-sheet"
+        data-width={currentStep === 'Contract' ? 'wide' : 'default'}
+        tabIndex={-1}
+      >
+        {loadedDefaults === null ? null : (
+          <nav className="creation-sheet__rail" aria-label="Creation steps">
+            {STEPS.map((step, index) => {
+              const railState =
+                index < stepIndex ? 'done' : index === stepIndex ? 'current' : 'upcoming';
+              return (
+                <button
+                  key={step}
+                  type="button"
+                  className="creation-sheet__rail-step"
+                  data-state={railState}
+                  aria-current={index === stepIndex ? 'step' : undefined}
+                  disabled={index > stepIndex}
+                  onClick={() => setStepIndex(index)}
+                >
+                  {railState === 'done' ? (
+                    <span className="creation-sheet__rail-check" aria-hidden="true">
+                      ✓
                     </span>
                   ) : null}
-                </li>
-              ))}
-              {repositories.length > 0 && filteredRepositories.length === 0 ? (
-                <li className="repo-option repo-option--empty">
-                  No repositories match “{repoQuery.trim()}”.
-                </li>
-              ) : null}
-            </ul>
-            {repoError ? <p className="form-field__error">{repoError}</p> : null}
-          </fieldset>
-          <section
-            className="directory-browser"
-            aria-label="Add a repository to the workspace"
-            {...(repositories.length === 0 ? { 'data-primary': 'true' } : {})}
-          >
-            <div>
-              <h3>
-                {repositories.length === 0
-                  ? 'Add your first repository'
-                  : 'Bring in another folder'}
-              </h3>
-              <button type="button" disabled={folderPending} onClick={() => void browseDirectory()}>
-                Browse for folder
-              </button>
-            </div>
-            <p className="directory-browser__notice" role="status" aria-live="polite">
-              {folderNotice}
-            </p>
-            {folderCandidate !== null ? (
-              <>
-                <code>{folderCandidate}</code>
-                <div className="directory-browser__actions">
-                  {folderHoldsNoRepository ? (
-                    <button
-                      type="button"
-                      disabled={folderPending}
-                      onClick={() => setConsentOpen(true)}
-                    >
-                      Initialize it as a repository…
-                    </button>
-                  ) : (
-                    <button type="button" disabled={folderPending} onClick={() => void useFolder()}>
-                      {folderPending ? 'Adding…' : 'Use this folder'}
-                    </button>
-                  )}
-                </div>
-              </>
-            ) : (
-              <p>Choose deliberately; no folder is changed until you confirm an action.</p>
-            )}
-          </section>
-          <fieldset className="form-field form-field--group">
-            <legend className="form-field__label">Branch</legend>
-            <label>
-              <input
-                type="radio"
-                name="branch"
-                checked={!useCurrentBranch}
-                onChange={() => setUseCurrentBranch(false)}
-              />{' '}
-              New feature branch
-            </label>
-            <label>
-              <input
-                type="radio"
-                name="branch"
-                checked={useCurrentBranch}
-                onChange={() => setUseCurrentBranch(true)}
-              />{' '}
-              Current branch
-            </label>
-          </fieldset>
-        </section>
-      ) : null}
+                  <span className="creation-sheet__rail-label">{step}</span>
+                </button>
+              );
+            })}
+          </nav>
+        )}
 
-      {currentStep === 'What' ? (
-        <section className="creation-wizard__panel" aria-labelledby="creation-what">
-          <p className="home-surface__eyebrow">02 / What</p>
-          <h2 id="creation-what">Define the work</h2>
-          <label className="form-field">
-            <span className="form-field__label">Name</span>
-            <input
-              ref={nameRef}
-              id="feature-name"
-              className="form-field__input"
-              value={name}
-              maxLength={200}
-              aria-invalid={nameError !== null}
-              aria-describedby={nameError ? 'feature-name-error' : undefined}
-              onChange={(event) => {
-                setName(event.target.value);
-                setNameError(null);
-              }}
-            />
-            {nameError ? (
-              <span id="feature-name-error" className="form-field__error">
-                {nameError}
+        <form
+          className="creation-sheet__form"
+          aria-label="Create a feature"
+          noValidate
+          onSubmit={submit}
+        >
+          <div className="sheet__body creation-sheet__body">
+            {state.phase === 'loading' ? (
+              <p role="status" className="creation-sheet__status">
+                Loading creation defaults from the runtime…
+              </p>
+            ) : state.phase === 'error' ? (
+              <div className="creation-sheet__retry">
+                <div role="alert" className="creation-sheet__alert">
+                  <b>{state.error.code}</b>
+                  <p>{state.error.message}</p>
+                </div>
+                <button
+                  type="button"
+                  className="creation-sheet__button"
+                  onClick={loadInitialDefaults}
+                >
+                  Try again
+                </button>
+              </div>
+            ) : (
+              <>
+                {formError !== null ? (
+                  <div
+                    ref={formErrorRef}
+                    tabIndex={-1}
+                    role="alert"
+                    className="creation-sheet__alert"
+                  >
+                    <b>{formError.code}</b>
+                    <p>{formError.message}</p>
+                  </div>
+                ) : null}
+
+                {currentStep === 'Repositories' ? (
+                  <section className="creation-sheet__step" aria-labelledby="creation-repositories">
+                    <h2 id="creation-repositories" className="creation-sheet__heading">
+                      Choose repositories
+                    </h2>
+                    {repositories.length > 0 ? (
+                      <label className="creation-sheet__field">
+                        <span className="creation-sheet__field-label">Search repositories</span>
+                        <input
+                          className="creation-sheet__input"
+                          type="search"
+                          value={repoQuery}
+                          placeholder="Filter by name or path"
+                          onChange={(event) => setRepoQuery(event.target.value)}
+                        />
+                      </label>
+                    ) : null}
+                    <fieldset
+                      ref={repoGroupRef}
+                      tabIndex={-1}
+                      className="creation-sheet__group"
+                      aria-invalid={repoError !== null}
+                    >
+                      <legend className="creation-sheet__group-label">
+                        {repositories.length === 0
+                          ? 'No repositories yet'
+                          : 'Fresh workspace discovery'}
+                      </legend>
+                      {repositories.length === 0 ? (
+                        <p className="creation-sheet__group-desc">
+                          Point Agentico at a folder below: an existing repository, a folder that
+                          holds several, or an empty folder to start something new.
+                        </p>
+                      ) : (
+                        <ul className="creation-sheet__rows">
+                          {filteredRepositories.map((repo) => (
+                            <li key={repo.name} className="creation-sheet__row-item">
+                              <label className="creation-sheet__row" data-valid={repo.valid}>
+                                <span className="creation-sheet__row-body">
+                                  <b className="creation-sheet__row-name">{repo.name}</b>
+                                  <code className="creation-sheet__row-path">{repo.path}</code>
+                                  {!repo.valid ? (
+                                    <span className="creation-sheet__row-issue">
+                                      {repo.issue?.message ?? 'Unavailable'}
+                                    </span>
+                                  ) : null}
+                                </span>
+                                <input
+                                  className="creation-sheet__row-control"
+                                  type="checkbox"
+                                  checked={repoKeys.includes(repo.name)}
+                                  disabled={!repo.valid || pending}
+                                  onChange={() => {
+                                    const nextRepoKeys = repoKeys.includes(repo.name)
+                                      ? repoKeys.filter((item) => item !== repo.name)
+                                      : [...repoKeys, repo.name];
+                                    setRepoKeys(nextRepoKeys);
+                                    setRepositoryFiles((files) =>
+                                      files.filter((file) => nextRepoKeys.includes(file.repoKey)),
+                                    );
+                                    setRepoError(null);
+                                  }}
+                                />
+                              </label>
+                            </li>
+                          ))}
+                          {filteredRepositories.length === 0 ? (
+                            <li className="creation-sheet__row-item creation-sheet__row-empty">
+                              No repositories match “{repoQuery.trim()}”.
+                            </li>
+                          ) : null}
+                        </ul>
+                      )}
+                      {repoError ? (
+                        <p className="creation-sheet__field-error">{repoError}</p>
+                      ) : null}
+                    </fieldset>
+                    <section
+                      className="creation-sheet__browser"
+                      aria-label="Add a repository to the workspace"
+                      {...(repositories.length === 0 ? { 'data-primary': 'true' } : {})}
+                    >
+                      <div className="creation-sheet__browser-head">
+                        <h3 className="creation-sheet__browser-title">
+                          {repositories.length === 0
+                            ? 'Add your first repository'
+                            : 'Bring in another folder'}
+                        </h3>
+                        <button
+                          type="button"
+                          className="creation-sheet__button"
+                          disabled={folderPending}
+                          onClick={() => void browseDirectory()}
+                        >
+                          Browse for folder
+                        </button>
+                      </div>
+                      <p
+                        className="creation-sheet__browser-notice"
+                        role="status"
+                        aria-live="polite"
+                      >
+                        {folderNotice}
+                      </p>
+                      {folderCandidate !== null ? (
+                        <>
+                          <code className="creation-sheet__browser-path">{folderCandidate}</code>
+                          <div className="creation-sheet__browser-actions">
+                            {folderHoldsNoRepository ? (
+                              <button
+                                type="button"
+                                className="creation-sheet__button"
+                                disabled={folderPending}
+                                onClick={() => setConsentOpen(true)}
+                              >
+                                Initialize it as a repository…
+                              </button>
+                            ) : (
+                              <button
+                                type="button"
+                                className="creation-sheet__button"
+                                disabled={folderPending}
+                                onClick={() => void useFolder()}
+                              >
+                                {folderPending ? 'Adding…' : 'Use this folder'}
+                              </button>
+                            )}
+                          </div>
+                        </>
+                      ) : (
+                        <p className="creation-sheet__browser-hint">
+                          Choose deliberately; no folder is changed until you confirm an action.
+                        </p>
+                      )}
+                    </section>
+                    <fieldset className="creation-sheet__group">
+                      <legend className="creation-sheet__group-label">Branch</legend>
+                      <div className="creation-sheet__rows">
+                        <label className="creation-sheet__row creation-sheet__row--choice">
+                          <input
+                            type="radio"
+                            name="branch"
+                            checked={!useCurrentBranch}
+                            onChange={() => setUseCurrentBranch(false)}
+                          />
+                          <span className="creation-sheet__row-name">New feature branch</span>
+                        </label>
+                        <label className="creation-sheet__row creation-sheet__row--choice">
+                          <input
+                            type="radio"
+                            name="branch"
+                            checked={useCurrentBranch}
+                            onChange={() => setUseCurrentBranch(true)}
+                          />
+                          <span className="creation-sheet__row-name">Current branch</span>
+                        </label>
+                      </div>
+                    </fieldset>
+                  </section>
+                ) : null}
+
+                {currentStep === 'Describe' ? (
+                  <section className="creation-sheet__step" aria-labelledby="creation-describe">
+                    <h2 id="creation-describe" className="creation-sheet__heading">
+                      Define the work
+                    </h2>
+                    <DescriptionComposer
+                      id="feature-description"
+                      label="Description"
+                      placeholder="Describe the work. Type @ to reference files in the selected repositories; paste or drop images and files to attach them."
+                      value={description}
+                      repoKeys={repoKeys}
+                      images={images}
+                      attachments={attachments}
+                      repositoryFiles={repositoryFiles}
+                      onValueChange={setDescription}
+                      onImagesChange={setImages}
+                      onAttachmentsChange={setAttachments}
+                      onRepositoryFilesChange={setRepositoryFiles}
+                      onError={setFormError}
+                    />
+                    <label className="creation-sheet__field">
+                      <span className="creation-sheet__field-label">Name</span>
+                      <input
+                        ref={nameRef}
+                        id="feature-name"
+                        className="creation-sheet__input"
+                        value={name}
+                        maxLength={200}
+                        aria-invalid={nameError !== null}
+                        aria-describedby={nameError ? 'feature-name-error' : undefined}
+                        onChange={(event) => {
+                          setName(event.target.value);
+                          setNameError(null);
+                        }}
+                      />
+                      {nameError ? (
+                        <span id="feature-name-error" className="creation-sheet__field-error">
+                          {nameError}
+                        </span>
+                      ) : null}
+                    </label>
+                  </section>
+                ) : null}
+
+                {currentStep === 'Depth' ? (
+                  <section className="creation-sheet__step" aria-labelledby="creation-depth">
+                    <h2 id="creation-depth" className="creation-sheet__heading">
+                      Set the depth
+                    </h2>
+                    {depthProfiles('full')}
+                  </section>
+                ) : null}
+
+                {currentStep === 'Contract' ? (
+                  <section className="creation-sheet__step" aria-labelledby="creation-contract">
+                    <h2 id="creation-contract" className="creation-sheet__heading">
+                      Review the run contract
+                    </h2>
+                    {/* The chosen depth stays adjustable while the contract it
+                        shapes is confirmed, as in the mock's Contract screen. */}
+                    {depthProfiles('compact')}
+                    <fieldset className="creation-sheet__group">
+                      <legend className="creation-sheet__group-label">
+                        Where the run stops for you
+                      </legend>
+                      <p className="creation-sheet__group-desc">
+                        Checkpoints pause the pipeline for your review before continuing. The{' '}
+                        {pipeline} pipeline supports the checkpoints below.
+                      </p>
+                      <div className="creation-sheet__rows">
+                        {visibleGates.map((gate) => (
+                          <label key={gate.key} className="creation-sheet__row">
+                            <span className="creation-sheet__row-body">
+                              <b className="creation-sheet__row-name">{gate.label}</b>
+                              <span className="creation-sheet__row-hint">{gate.hint}</span>
+                            </span>
+                            <input
+                              className="creation-sheet__row-control"
+                              type="checkbox"
+                              checked={checkpoints[gate.key]}
+                              onChange={(event) =>
+                                setCheckpoints((current) => {
+                                  const nextState = {
+                                    ...current,
+                                    [gate.key]: event.target.checked,
+                                  };
+                                  // Roadmap review implies phase plan review.
+                                  if (gate.key === 'roadmapReview')
+                                    nextState.phasePlanReview = event.target.checked;
+                                  return nextState;
+                                })
+                              }
+                            />
+                          </label>
+                        ))}
+                      </div>
+                    </fieldset>
+                    <fieldset className="creation-sheet__group">
+                      <legend className="creation-sheet__group-label">Models</legend>
+                      <p className="creation-sheet__group-desc">
+                        Only models available from provider discovery can be selected. Default uses
+                        the workspace model for that phase.
+                      </p>
+                      <div className="creation-sheet__rows creation-sheet__rows--models">
+                        {applicablePhaseFields(pipeline, false).map((field) => (
+                          <ModelEffortRow
+                            key={field.key}
+                            field={field}
+                            modelValue={modelChoices[field.key] ?? ''}
+                            defaultModel={modelDefaults[field.key] ?? ''}
+                            effortValue={effortChoices[field.key]}
+                            defaultEffort={effortDefaults[field.key]}
+                            catalogue={catalogue}
+                            pipeline={pipeline}
+                            onModelChange={(model, resetEffort) => {
+                              setModelChoices((choices) => ({ ...choices, [field.key]: model }));
+                              if (resetEffort !== undefined) {
+                                setEffortChoices((choices) => ({
+                                  ...choices,
+                                  [field.key]: resetEffort,
+                                }));
+                              }
+                            }}
+                            onEffortChange={(effort) =>
+                              setEffortChoices((choices) => ({ ...choices, [field.key]: effort }))
+                            }
+                          />
+                        ))}
+                      </div>
+                    </fieldset>
+                    <div className="creation-sheet__knobs">
+                      <div className="creation-sheet__knob-pair">
+                        <label className="creation-sheet__field">
+                          <span className="creation-sheet__field-label">Risk</span>
+                          <select
+                            className="creation-sheet__select"
+                            value={riskLevel}
+                            onChange={(e) => setRiskLevel(e.target.value as typeof riskLevel)}
+                          >
+                            <option value="low">Low</option>
+                            <option value="medium">Medium</option>
+                            <option value="high">High</option>
+                          </select>
+                        </label>
+                        <label className="creation-sheet__field">
+                          <span className="creation-sheet__field-label">Inquireness</span>
+                          <select
+                            className="creation-sheet__select"
+                            value={inquireness}
+                            onChange={(e) => setInquireness(e.target.value as typeof inquireness)}
+                          >
+                            <option value="none">None</option>
+                            <option value="medium">Medium</option>
+                            <option value="high">High</option>
+                          </select>
+                        </label>
+                      </div>
+                      <label className="creation-sheet__field">
+                        <span className="creation-sheet__field-label">Exit criteria</span>
+                        <textarea
+                          className="creation-sheet__input creation-sheet__input--multiline"
+                          value={exitCriteria}
+                          maxLength={4000}
+                          rows={3}
+                          placeholder="What must be true for this run to be considered done?"
+                          onChange={(event) => setExitCriteria(event.target.value)}
+                        />
+                      </label>
+                    </div>
+                    <div className="creation-sheet__rows creation-sheet__rows--standalone">
+                      <label className="creation-sheet__row">
+                        <span className="creation-sheet__row-body">
+                          <b className="creation-sheet__row-name">Start immediately</b>
+                          <span className="creation-sheet__row-hint">
+                            Run setup and begin the first phase as soon as the feature is created.
+                          </span>
+                        </span>
+                        <input
+                          className="creation-sheet__row-control"
+                          type="checkbox"
+                          checked={autoStart}
+                          onChange={(event) => setAutoStart(event.target.checked)}
+                        />
+                      </label>
+                    </div>
+                    <dl className="creation-sheet__summary">
+                      <div>
+                        <dt>Repositories</dt>
+                        <dd>{repoKeys.join(', ')}</dd>
+                      </div>
+                      <div>
+                        <dt>Describe</dt>
+                        <dd>{name}</dd>
+                      </div>
+                      <div>
+                        <dt>Depth</dt>
+                        <dd>{pipeline}</dd>
+                      </div>
+                      <div>
+                        <dt>Contract</dt>
+                        <dd>
+                          {riskLevel} risk · {checkpointSummary(pipeline, checkpoints)}
+                        </dd>
+                      </div>
+                    </dl>
+                  </section>
+                ) : null}
+              </>
+            )}
+          </div>
+
+          <footer className="sheet__footer creation-sheet__footer">
+            <button type="button" className="sheet__footer-secondary" onClick={requestCancel}>
+              Cancel
+            </button>
+            {currentStep === 'Contract' && loadedDefaults !== null ? (
+              <span className="sheet__footer-note">
+                {plural(checkedCheckpoints, 'checkpoint', 'checkpoints')} ·{' '}
+                {plural(repoKeys.length, 'repository', 'repositories')}
               </span>
             ) : null}
-          </label>
-          <DescriptionComposer
-            id="feature-description"
-            label="Description"
-            placeholder="Describe the work. Type @ to reference files in the selected repositories; paste or drop images and files to attach them."
-            value={description}
-            repoKeys={repoKeys}
-            images={images}
-            attachments={attachments}
-            repositoryFiles={repositoryFiles}
-            onValueChange={setDescription}
-            onImagesChange={setImages}
-            onAttachmentsChange={setAttachments}
-            onRepositoryFilesChange={setRepositoryFiles}
-            onError={setFormError}
+            {loadedDefaults === null ? null : (
+              <div className="creation-sheet__footer-trailing">
+                {stepIndex > 0 ? (
+                  <button
+                    type="button"
+                    className="sheet__footer-secondary"
+                    onClick={() => setStepIndex((current) => current - 1)}
+                  >
+                    Back
+                  </button>
+                ) : null}
+                {stepIndex < 3 ? (
+                  <button
+                    key="next-step"
+                    type="button"
+                    className="sheet__footer-primary"
+                    onClick={(event) => {
+                      // React can reuse this DOM node as the submit button when
+                      // the click advances to Contract. Cancel the original
+                      // button's browser default before that type transition.
+                      event.preventDefault();
+                      next();
+                    }}
+                  >
+                    Next: {STEPS[stepIndex + 1]}
+                  </button>
+                ) : (
+                  <button
+                    key="create-feature"
+                    type="submit"
+                    className="sheet__footer-primary"
+                    disabled={pending}
+                  >
+                    {pending ? 'Creating…' : autoStart ? 'Create and start' : 'Create'}
+                  </button>
+                )}
+              </div>
+            )}
+          </footer>
+        </form>
+
+        {discardOpen ? (
+          <DiscardDialog onKeepEditing={() => setDiscardOpen(false)} onDiscard={onClose} />
+        ) : null}
+
+        {consentOpen && folderCandidate !== null ? (
+          <ConsentDialog
+            path={folderCandidate}
+            busy={folderPending}
+            onConfirm={() => void initializeFolder()}
+            onCancel={() => setConsentOpen(false)}
           />
-        </section>
-      ) : null}
+        ) : null}
+      </div>
+    </div>
+  );
+}
 
-      {currentStep === 'Pipeline' ? (
-        <section className="creation-wizard__panel" aria-labelledby="creation-pipeline">
-          <p className="home-surface__eyebrow">03 / Pipeline</p>
-          <h2 id="creation-pipeline">Set the depth</h2>
-          <div className="pipeline-grid">
-            {PIPELINES.map((profile) => (
-              <label
-                key={profile.id}
-                className="pipeline-card"
-                data-selected={pipeline === profile.id}
-              >
-                <input
-                  type="radio"
-                  name="pipeline"
-                  checked={pipeline === profile.id}
-                  onChange={() => {
-                    setPipeline(profile.id);
-                    setCheckpoints(checkpointsForPipeline(profile.id));
-                  }}
-                />
-                <b>{profile.title}</b>
-                <span>{profile.note}</span>
-                <small>{checkpointSummary(profile.id, profile.checkpoints)}</small>
-              </label>
-            ))}
-          </div>
-        </section>
-      ) : null}
-
-      {currentStep === 'Review' ? (
-        <section className="creation-wizard__panel" aria-labelledby="creation-review">
-          <p className="home-surface__eyebrow">04 / Review</p>
-          <h2 id="creation-review">Review the run contract</h2>
-          <div className="review-knobs">
-            <div className="review-controls">
-              <label>
-                Risk
-                <select
-                  value={riskLevel}
-                  onChange={(e) => setRiskLevel(e.target.value as typeof riskLevel)}
-                >
-                  <option value="low">Low</option>
-                  <option value="medium">Medium</option>
-                  <option value="high">High</option>
-                </select>
-              </label>
-              <label>
-                Inquireness
-                <select
-                  value={inquireness}
-                  onChange={(e) => setInquireness(e.target.value as typeof inquireness)}
-                >
-                  <option value="none">None</option>
-                  <option value="medium">Medium</option>
-                  <option value="high">High</option>
-                </select>
-              </label>
-            </div>
-            <label className="form-field">
-              <span className="form-field__label">Exit criteria</span>
-              <textarea
-                value={exitCriteria}
-                maxLength={4000}
-                rows={3}
-                placeholder="What must be true for this run to be considered done?"
-                onChange={(event) => setExitCriteria(event.target.value)}
-              />
-            </label>
-          </div>
-          <section className="review-contract" aria-label="Models and checkpoints">
-            <fieldset className="config-editor__group">
-              <legend className="config-editor__group-title">Models</legend>
-              <p className="config-editor__group-desc">
-                Only models available from provider discovery can be selected. Default uses the
-                workspace model for that phase.
-              </p>
-              {applicablePhaseFields(pipeline, false).map((field) => (
-                <ModelEffortRow
-                  key={field.key}
-                  field={field}
-                  modelValue={modelChoices[field.key] ?? ''}
-                  defaultModel={defaults[field.key] ?? ''}
-                  effortValue={effortChoices[field.key]}
-                  defaultEffort={effortDefaults[field.key]}
-                  catalogue={catalogue}
-                  pipeline={pipeline}
-                  onModelChange={(model, resetEffort) => {
-                    setModelChoices((choices) => ({ ...choices, [field.key]: model }));
-                    if (resetEffort !== undefined) {
-                      setEffortChoices((choices) => ({
-                        ...choices,
-                        [field.key]: resetEffort,
-                      }));
-                    }
-                  }}
-                  onEffortChange={(effort) =>
-                    setEffortChoices((choices) => ({ ...choices, [field.key]: effort }))
-                  }
-                />
-              ))}
-            </fieldset>
-            <fieldset className="config-editor__group">
-              <legend className="config-editor__group-title">Review checkpoints</legend>
-              <p className="config-editor__group-desc">
-                Checkpoints pause the pipeline for your review before continuing. The {pipeline}{' '}
-                pipeline supports the checkpoints below.
-              </p>
-              {visibleGates.map((gate) => (
-                <label key={gate.key} className="config-editor__gate">
-                  <input
-                    type="checkbox"
-                    checked={checkpoints[gate.key]}
-                    onChange={(event) =>
-                      setCheckpoints((current) => {
-                        const nextState = { ...current, [gate.key]: event.target.checked };
-                        // Roadmap review implies phase plan review.
-                        if (gate.key === 'roadmapReview')
-                          nextState.phasePlanReview = event.target.checked;
-                        return nextState;
-                      })
-                    }
-                  />
-                  <span className="config-editor__gate-text">
-                    <b>{gate.label}</b>
-                    <span>{gate.hint}</span>
-                  </span>
-                </label>
-              ))}
-            </fieldset>
-          </section>
-          <label className="config-editor__gate creation-autostart">
-            <input
-              type="checkbox"
-              checked={autoStart}
-              onChange={(event) => setAutoStart(event.target.checked)}
-            />
-            <span className="config-editor__gate-text">
-              <b>Start immediately</b>
-              <span>Run setup and begin the first phase as soon as the feature is created.</span>
-            </span>
-          </label>
-          <dl className="creation-summary">
-            <div>
-              <dt>Where</dt>
-              <dd>{repoKeys.join(', ')}</dd>
-            </div>
-            <div>
-              <dt>What</dt>
-              <dd>{name}</dd>
-            </div>
-            <div>
-              <dt>Pipeline</dt>
-              <dd>{pipeline}</dd>
-            </div>
-            <div>
-              <dt>Review</dt>
-              <dd>
-                {riskLevel} risk · {checkpointSummary(pipeline, checkpoints)}
-              </dd>
-            </div>
-          </dl>
-        </section>
-      ) : null}
-
-      <footer className="creation-wizard__actions">
-        {stepIndex > 0 ? (
-          <button type="button" onClick={() => setStepIndex((current) => current - 1)}>
-            Back
+/**
+ * The unsaved-work confirmation, rendered as the innermost dialog inside the
+ * sheet so the shared modal-dismiss hook hands Escape to it while it is open.
+ * Focus lands on the safe action first.
+ */
+function DiscardDialog({ onKeepEditing, onDiscard }: { onKeepEditing(): void; onDiscard(): void }) {
+  const keepRef = useRef<HTMLButtonElement | null>(null);
+  useEffect(() => {
+    keepRef.current?.focus();
+  }, []);
+  return (
+    <div className="impact-dialog__backdrop">
+      <div
+        className="impact-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Discard feature draft"
+        onKeyDown={(event) => {
+          if (event.key === 'Escape') {
+            event.stopPropagation();
+            onKeepEditing();
+          }
+        }}
+      >
+        <h2>Discard this feature draft?</h2>
+        <p>Your entered feature details have not been created.</p>
+        <div className="impact-dialog__actions">
+          <button type="button" ref={keepRef} onClick={onKeepEditing}>
+            Keep editing
           </button>
-        ) : (
-          <span />
-        )}
-        {stepIndex < 3 ? (
-          <button
-            key="next-step"
-            type="button"
-            className="create-form__submit"
-            onClick={(event) => {
-              // React can reuse this DOM node as the submit button when the
-              // click advances to Review. Cancel the original button's
-              // browser default before that type transition occurs.
-              event.preventDefault();
-              next();
-            }}
-          >
-            Next: {STEPS[stepIndex + 1]}
+          <button type="button" className="cockpit__stop" onClick={onDiscard}>
+            Discard draft
           </button>
-        ) : (
-          <button
-            key="create-feature"
-            type="submit"
-            className="create-form__submit"
-            disabled={pending}
-          >
-            {pending ? 'Creating…' : autoStart ? 'Create and start' : 'Create feature'}
-          </button>
-        )}
-      </footer>
-
-      {consentOpen && folderCandidate !== null ? (
-        <ConsentDialog
-          path={folderCandidate}
-          busy={folderPending}
-          onConfirm={() => void initializeFolder()}
-          onCancel={() => setConsentOpen(false)}
-        />
-      ) : null}
-    </form>
+        </div>
+      </div>
+    </div>
   );
 }
 

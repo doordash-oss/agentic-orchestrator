@@ -72,7 +72,7 @@ export function useCohortTranscripts(
   useEffect(() => {
     if (!active) return;
     return window.agentico.onAppEvent((event) => {
-      if (event.type === 'status') return;
+      if (event.type !== 'invalidated') return;
       if (
         event.kind === 'resync' ||
         (event.kind === 'session.updated' &&

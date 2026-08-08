@@ -5,6 +5,12 @@
  * configuration, skills, and guidelines.  When a provider or root is
  * degraded, inspection and editing remain reachable while affected actions
  * show server-supplied disabled reasons.
+ *
+ * The Settings window renders exactly one pane at a time, so this component
+ * takes the selected pane and shows only that section. Every section's own
+ * markup, controls, and behaviour are unchanged; the data fetching and
+ * app-event subscriptions stay at the top so switching panes never re-runs
+ * them.
  */
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { useConnectionState, useTheme } from '../hooks';
@@ -13,9 +19,9 @@ import { WorkspaceDefaultsPanel } from './ConfigEditor';
 import type {
   ReadinessSnapshot,
   RepositoryState,
-  RoutedRequest,
   SessionSummary,
   Settings,
+  SettingsPaneId,
   ModelCatalogue,
   DiagnosticsSnapshot,
   UpdateState,
@@ -34,7 +40,7 @@ function normalizePath(p: string | null | undefined): string | null {
   return p.replace(/\/+$/, '');
 }
 
-export function SettingsPanel({ routeRequest = null }: { routeRequest?: RoutedRequest | null }) {
+export function SettingsPanel({ pane = 'workspace-roots' }: { pane?: SettingsPaneId }) {
   const connection = useConnectionState();
   const [readiness, setReadiness] = useState<ReadinessSnapshot | null>(null);
   const [repos, setRepos] = useState<RepositoryState[]>([]);
@@ -59,8 +65,6 @@ export function SettingsPanel({ routeRequest = null }: { routeRequest?: RoutedRe
   const [updateCopyNotice, setUpdateCopyNotice] = useState<string | null>(null);
   const [diagnostics, setDiagnostics] = useState<DiagnosticsSnapshot | null>(null);
   const [clearingDiagnostics, setClearingDiagnostics] = useState(false);
-  const updatesRef = useRef<HTMLElement | null>(null);
-  const diagnosticsRef = useRef<HTMLElement | null>(null);
   const installNowTriggerRef = useRef<HTMLButtonElement | null>(null);
   const clearDiagnosticsTriggerRef = useRef<HTMLButtonElement | null>(null);
 
@@ -121,17 +125,6 @@ export function SettingsPanel({ routeRequest = null }: { routeRequest?: RoutedRe
     });
     return unsub;
   }, [refresh, refreshDiagnostics, refreshUpdates]);
-
-  useEffect(() => {
-    if (routeRequest?.event.target !== 'settings') return;
-    const target =
-      routeRequest.event.settingsSection === 'diagnostics' ? diagnosticsRef : updatesRef;
-    if (routeRequest.event.settingsSection !== undefined) {
-      requestAnimationFrame(() =>
-        target.current?.scrollIntoView({ block: 'start', behavior: 'auto' }),
-      );
-    }
-  }, [routeRequest]);
 
   // Idle-poll: when a restart is pending and the runtime becomes idle,
   // present the Restart Now / Later prompt once per pending path.
@@ -393,13 +386,6 @@ export function SettingsPanel({ routeRequest = null }: { routeRequest?: RoutedRe
 
   return (
     <section className="settings-panel" aria-label="Settings and readiness">
-      <header className="settings-panel__header">
-        <div>
-          <p className="home-surface__eyebrow">Runtime configuration and readiness</p>
-          <h1>Settings</h1>
-        </div>
-      </header>
-
       {error && (
         <div className="settings-panel__error" role="alert">
           <p className="form-field__error">{error}</p>
@@ -409,387 +395,404 @@ export function SettingsPanel({ routeRequest = null }: { routeRequest?: RoutedRe
         </div>
       )}
 
-      <section className="settings-panel__section" aria-label="Workspace roots">
-        <h2 className="settings-panel__section-title">Workspace roots</h2>
-        <p className="settings-panel__section-desc">
-          Repositories are discovered from these directories. Adding a root refreshes discovery
-          without affecting existing features.
-        </p>
-        <ul className="settings-panel__roots">
-          {workspaceRoots.length === 0 ? (
-            <li className="settings-panel__root-empty">No workspace roots configured.</li>
-          ) : (
-            workspaceRoots.map((root, index) => {
-              const count = repos.filter(
-                (r) => r.path === root.path || r.path.startsWith(root.path + '/'),
-              ).length;
-              return (
-                <li
-                  key={root.path}
-                  className={`settings-panel__root ${root.valid ? '' : 'is-invalid'}`}
-                >
-                  <code>{root.path}</code>
-                  {!root.valid && root.issue && (
-                    <span className="settings-panel__root-issue">{root.issue.message}</span>
-                  )}
-                  <span className="settings-panel__root-count">
-                    {count} {count === 1 ? 'repo' : 'repos'}
-                  </span>
-                  <div className="settings-panel__root-actions">
-                    <button
-                      type="button"
-                      className="settings-panel__root-btn"
-                      onClick={() => void handleMoveRoot(root.path, 'up')}
-                      disabled={reordering || index === 0}
-                      aria-label={`Move ${root.path} up`}
-                    >
-                      ↑
-                    </button>
-                    <button
-                      type="button"
-                      className="settings-panel__root-btn"
-                      onClick={() => void handleMoveRoot(root.path, 'down')}
-                      disabled={reordering || index === workspaceRoots.length - 1}
-                      aria-label={`Move ${root.path} down`}
-                    >
-                      ↓
-                    </button>
-                    <button
-                      type="button"
-                      className="settings-panel__root-btn settings-panel__root-btn--danger"
-                      onClick={() => void handleRemoveRoot(root.path)}
-                      disabled={removingRoot === root.path || reordering}
-                      aria-label={`Remove ${root.path}`}
-                    >
-                      {removingRoot === root.path ? '…' : 'Remove'}
-                    </button>
-                  </div>
-                </li>
-              );
-            })
-          )}
-        </ul>
-        <button
-          type="button"
-          className="setup-wizard__action"
-          onClick={() => void handleAddRoot()}
-          disabled={addingRoot || refreshingProviders.size > 0}
-        >
-          {addingRoot ? 'Adding…' : 'Add workspace root'}
-        </button>
-      </section>
-
-      <section className="settings-panel__section" aria-label="Provider readiness">
-        <h2 className="settings-panel__section-title">Providers</h2>
-        <p className="settings-panel__section-desc">
-          Provider readiness determines which workflow actions are available. Recheck a provider to
-          refresh its readiness and available models.
-        </p>
-        {providers.length === 0 ? (
-          <p className="settings-panel__provider-empty">No providers registered.</p>
-        ) : (
-          <ul className="settings-panel__providers">
-            {providers.map((p) => (
-              <li
-                key={p.name}
-                className={`settings-panel__provider ${p.ready ? '' : 'is-degraded'}`}
-                data-ready={p.ready}
-              >
-                <div className="settings-panel__provider-header">
-                  <span className="settings-panel__provider-name">{p.name}</span>
-                  <span
-                    className={`settings-panel__provider-status ${p.ready ? 'is-ready' : 'is-degraded'}`}
+      {pane === 'workspace-roots' && (
+        <section className="settings-panel__section" aria-label="Workspace roots">
+          <h2 className="settings-panel__section-title">Workspace roots</h2>
+          <p className="settings-panel__section-desc">
+            Repositories are discovered from these directories. Adding a root refreshes discovery
+            without affecting existing features.
+          </p>
+          <ul className="settings-panel__roots">
+            {workspaceRoots.length === 0 ? (
+              <li className="settings-panel__root-empty">No workspace roots configured.</li>
+            ) : (
+              workspaceRoots.map((root, index) => {
+                const count = repos.filter(
+                  (r) => r.path === root.path || r.path.startsWith(root.path + '/'),
+                ).length;
+                return (
+                  <li
+                    key={root.path}
+                    className={`settings-panel__root ${root.valid ? '' : 'is-invalid'}`}
                   >
-                    {p.ready ? 'Ready' : 'Not ready'}
-                  </span>
-                </div>
-                {!p.ready && p.issue && (
-                  <p className="settings-panel__provider-cause">
-                    {p.issue.message}
-                    {p.issue.remedy && (
-                      <span className="settings-panel__provider-remedy"> — {p.issue.remedy}</span>
+                    <code>{root.path}</code>
+                    {!root.valid && root.issue && (
+                      <span className="settings-panel__root-issue">{root.issue.message}</span>
                     )}
-                  </p>
-                )}
-                {p.installed && p.version && (
-                  <p className="settings-panel__provider-version">v{p.version}</p>
-                )}
-                <button
-                  type="button"
-                  className="setup-wizard__action"
-                  onClick={() => void handleRecheckProvider(p.name)}
-                  disabled={refreshingProviders.has(p.name)}
-                >
-                  {refreshingProviders.has(p.name) ? 'Rechecking…' : 'Recheck'}
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
-
-      <section className="settings-panel__section" aria-label="Appearance">
-        <h2 className="settings-panel__section-title">Appearance</h2>
-        <p className="settings-panel__section-desc">
-          Theme applies immediately and persists across restarts. System follows your OS appearance.
-        </p>
-        <div className="settings-panel__theme" role="radiogroup" aria-label="Appearance theme">
-          {(['system', 'light', 'dark'] as const).map((pref) => (
-            <label key={pref} className="settings-panel__theme-option">
-              <input
-                type="radio"
-                name="settings-theme"
-                value={pref}
-                checked={themePref === pref}
-                onChange={() => void handleThemeChange(pref)}
-              />
-              <span>{pref.charAt(0).toUpperCase() + pref.slice(1)}</span>
-            </label>
-          ))}
-        </div>
-      </section>
-
-      <section
-        ref={updatesRef}
-        className="settings-panel__section settings-panel__section--updates"
-        aria-label="Updates"
-      >
-        <div className="settings-panel__section-head">
-          <div>
-            <h2 className="settings-panel__section-title">Updates</h2>
-            <p className="settings-panel__section-desc">
-              Stable releases are checked from GitHub Releases. Installing requires an explicit
-              action.
-            </p>
-          </div>
-          <span className="settings-panel__status-pill" data-tone={updateTone(updateState)}>
-            {updateState === null ? 'Unknown' : updateStatusLabel(updateState)}
-          </span>
-        </div>
-        <div className="settings-panel__update-grid">
-          <span>Current</span>
-          <strong>{updateState?.currentVersion ?? 'Unknown'}</strong>
-          <span>Target</span>
-          <strong>{updateState?.targetVersion ?? 'None'}</strong>
-          <span>Package</span>
-          <strong>{updateState?.packageFormat ?? 'unknown'}</strong>
-          <span>Signature</span>
-          <strong>{updateState?.signatureStatus ?? 'unknown'}</strong>
-        </div>
-        <p className="settings-panel__section-desc">
-          {updateState?.message ?? 'Update state has not loaded yet.'}
-        </p>
-        {updateState?.activeWorkSummary && (
-          <p className="settings-panel__update-work">{updateState.activeWorkSummary}</p>
-        )}
-        {updateState?.guidance && (
-          <ul className="settings-panel__guidance">
-            {updateState.guidance.map((line) => {
-              const command = packageManagerCommandFromGuidance(line);
-              return (
-                <li key={line}>
-                  {command === null ? (
-                    line
-                  ) : (
-                    <span className="settings-panel__copyable-command">
-                      <span>{command.label}</span>
-                      <code>{command.value}</code>
+                    <span className="settings-panel__root-count">
+                      {count} {count === 1 ? 'repo' : 'repos'}
+                    </span>
+                    <div className="settings-panel__root-actions">
                       <button
                         type="button"
-                        className="settings-panel__copy-command"
-                        aria-label="Copy the package-manager command"
-                        onClick={() => handleCopyUpdateCommand(command.value)}
+                        className="settings-panel__root-btn"
+                        onClick={() => void handleMoveRoot(root.path, 'up')}
+                        disabled={reordering || index === 0}
+                        aria-label={`Move ${root.path} up`}
                       >
-                        Copy
+                        ↑
                       </button>
-                    </span>
-                  )}
-                </li>
-              );
-            })}
+                      <button
+                        type="button"
+                        className="settings-panel__root-btn"
+                        onClick={() => void handleMoveRoot(root.path, 'down')}
+                        disabled={reordering || index === workspaceRoots.length - 1}
+                        aria-label={`Move ${root.path} down`}
+                      >
+                        ↓
+                      </button>
+                      <button
+                        type="button"
+                        className="settings-panel__root-btn settings-panel__root-btn--danger"
+                        onClick={() => void handleRemoveRoot(root.path)}
+                        disabled={removingRoot === root.path || reordering}
+                        aria-label={`Remove ${root.path}`}
+                      >
+                        {removingRoot === root.path ? '…' : 'Remove'}
+                      </button>
+                    </div>
+                  </li>
+                );
+              })
+            )}
           </ul>
-        )}
-        {updateCopyNotice && (
-          <p className="settings-panel__copy-notice" role="status">
-            {updateCopyNotice}
-          </p>
-        )}
-        <div className="settings-panel__button-row">
           <button
             type="button"
             className="setup-wizard__action"
-            onClick={() => void handleCheckUpdates()}
-            disabled={checkingUpdates}
+            onClick={() => void handleAddRoot()}
+            disabled={addingRoot || refreshingProviders.size > 0}
           >
-            {checkingUpdates ? 'Checking…' : 'Check for updates'}
+            {addingRoot ? 'Adding…' : 'Add workspace root'}
           </button>
-          {updateState?.releaseNotesUrl && (
+        </section>
+      )}
+
+      {pane === 'providers' && (
+        <section className="settings-panel__section" aria-label="Provider readiness">
+          <h2 className="settings-panel__section-title">Providers</h2>
+          <p className="settings-panel__section-desc">
+            Provider readiness determines which workflow actions are available. Recheck a provider
+            to refresh its readiness and available models.
+          </p>
+          {providers.length === 0 ? (
+            <p className="settings-panel__provider-empty">No providers registered.</p>
+          ) : (
+            <ul className="settings-panel__providers">
+              {providers.map((p) => (
+                <li
+                  key={p.name}
+                  className={`settings-panel__provider ${p.ready ? '' : 'is-degraded'}`}
+                  data-ready={p.ready}
+                >
+                  <div className="settings-panel__provider-header">
+                    <span className="settings-panel__provider-name">{p.name}</span>
+                    <span
+                      className={`settings-panel__provider-status ${p.ready ? 'is-ready' : 'is-degraded'}`}
+                    >
+                      {p.ready ? 'Ready' : 'Not ready'}
+                    </span>
+                  </div>
+                  {!p.ready && p.issue && (
+                    <p className="settings-panel__provider-cause">
+                      {p.issue.message}
+                      {p.issue.remedy && (
+                        <span className="settings-panel__provider-remedy"> — {p.issue.remedy}</span>
+                      )}
+                    </p>
+                  )}
+                  {p.installed && p.version && (
+                    <p className="settings-panel__provider-version">v{p.version}</p>
+                  )}
+                  <button
+                    type="button"
+                    className="setup-wizard__action"
+                    onClick={() => void handleRecheckProvider(p.name)}
+                    disabled={refreshingProviders.has(p.name)}
+                  >
+                    {refreshingProviders.has(p.name) ? 'Rechecking…' : 'Recheck'}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+      )}
+
+      {pane === 'appearance' && (
+        <section className="settings-panel__section" aria-label="Appearance">
+          <h2 className="settings-panel__section-title">Appearance</h2>
+          <p className="settings-panel__section-desc">
+            Theme applies immediately and persists across restarts. System follows your OS
+            appearance.
+          </p>
+          <div className="settings-panel__theme" role="radiogroup" aria-label="Appearance theme">
+            {(['system', 'light', 'dark'] as const).map((pref) => (
+              <label key={pref} className="settings-panel__theme-option">
+                <input
+                  type="radio"
+                  name="settings-theme"
+                  value={pref}
+                  checked={themePref === pref}
+                  onChange={() => void handleThemeChange(pref)}
+                />
+                <span>{pref.charAt(0).toUpperCase() + pref.slice(1)}</span>
+              </label>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {pane === 'updates' && (
+        <section
+          className="settings-panel__section settings-panel__section--updates"
+          aria-label="Updates"
+        >
+          <div className="settings-panel__section-head">
+            <div>
+              <h2 className="settings-panel__section-title">Updates</h2>
+              <p className="settings-panel__section-desc">
+                Stable releases are checked from GitHub Releases. Installing requires an explicit
+                action.
+              </p>
+            </div>
+            <span className="settings-panel__status-pill" data-tone={updateTone(updateState)}>
+              {updateState === null ? 'Unknown' : updateStatusLabel(updateState)}
+            </span>
+          </div>
+          <div className="settings-panel__update-grid">
+            <span>Current</span>
+            <strong>{updateState?.currentVersion ?? 'Unknown'}</strong>
+            <span>Target</span>
+            <strong>{updateState?.targetVersion ?? 'None'}</strong>
+            <span>Package</span>
+            <strong>{updateState?.packageFormat ?? 'unknown'}</strong>
+            <span>Signature</span>
+            <strong>{updateState?.signatureStatus ?? 'unknown'}</strong>
+          </div>
+          <p className="settings-panel__section-desc">
+            {updateState?.message ?? 'Update state has not loaded yet.'}
+          </p>
+          {updateState?.activeWorkSummary && (
+            <p className="settings-panel__update-work">{updateState.activeWorkSummary}</p>
+          )}
+          {updateState?.guidance && (
+            <ul className="settings-panel__guidance">
+              {updateState.guidance.map((line) => {
+                const command = packageManagerCommandFromGuidance(line);
+                return (
+                  <li key={line}>
+                    {command === null ? (
+                      line
+                    ) : (
+                      <span className="settings-panel__copyable-command">
+                        <span>{command.label}</span>
+                        <code>{command.value}</code>
+                        <button
+                          type="button"
+                          className="settings-panel__copy-command"
+                          aria-label="Copy the package-manager command"
+                          onClick={() => handleCopyUpdateCommand(command.value)}
+                        >
+                          Copy
+                        </button>
+                      </span>
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+          {updateCopyNotice && (
+            <p className="settings-panel__copy-notice" role="status">
+              {updateCopyNotice}
+            </p>
+          )}
+          <div className="settings-panel__button-row">
             <button
               type="button"
               className="setup-wizard__action"
-              onClick={() => void handleOpenReleaseNotes()}
+              onClick={() => void handleCheckUpdates()}
+              disabled={checkingUpdates}
             >
-              Release notes
+              {checkingUpdates ? 'Checking…' : 'Check for updates'}
             </button>
-          )}
-          {updateCanInstallInApp && updateHasActiveWork && (
-            <>
+            {updateState?.releaseNotesUrl && (
               <button
                 type="button"
                 className="setup-wizard__action"
-                onClick={() => void handleInstallWhenIdle()}
-                disabled={schedulingUpdate || installingUpdate || updateIsScheduled}
+                onClick={() => void handleOpenReleaseNotes()}
               >
-                {installWhenIdleLabel({
-                  scheduling: schedulingUpdate,
-                  scheduled: updateIsScheduled,
-                })}
+                Release notes
               </button>
+            )}
+            {updateCanInstallInApp && updateHasActiveWork && (
+              <>
+                <button
+                  type="button"
+                  className="setup-wizard__action"
+                  onClick={() => void handleInstallWhenIdle()}
+                  disabled={schedulingUpdate || installingUpdate || updateIsScheduled}
+                >
+                  {installWhenIdleLabel({
+                    scheduling: schedulingUpdate,
+                    scheduled: updateIsScheduled,
+                  })}
+                </button>
+                <button
+                  type="button"
+                  className="settings-panel__root-btn settings-panel__root-btn--danger"
+                  ref={installNowTriggerRef}
+                  onClick={() => setShowInstallNowPrompt(true)}
+                  disabled={installingUpdate}
+                >
+                  Stop Work and Install Now
+                </button>
+              </>
+            )}
+            {updateCanInstallInApp && !updateHasActiveWork && (
               <button
                 type="button"
-                className="settings-panel__root-btn settings-panel__root-btn--danger"
-                ref={installNowTriggerRef}
-                onClick={() => setShowInstallNowPrompt(true)}
+                className="setup-wizard__action setup-wizard__action--primary"
+                onClick={() => void handleRestartToUpdate()}
                 disabled={installingUpdate}
               >
-                Stop Work and Install Now
+                {installingUpdate ? 'Installing…' : 'Restart to Update'}
               </button>
-            </>
-          )}
-          {updateCanInstallInApp && !updateHasActiveWork && (
+            )}
+          </div>
+        </section>
+      )}
+
+      {pane === 'notifications' && (
+        <section className="settings-panel__section" aria-label="Notifications">
+          <h2 className="settings-panel__section-title">Notifications</h2>
+          <label className="settings-panel__toggle">
+            <input
+              type="checkbox"
+              checked={settings?.notifications.previewEnabled ?? false}
+              onChange={(event) =>
+                void handleNotificationPreviewChange(event.currentTarget.checked)
+              }
+            />
+            <span>
+              <strong>Show attention previews</strong>
+              <span>
+                Off keeps native notifications generic. On includes feature name, attention type,
+                and a bounded summary.
+              </span>
+            </span>
+          </label>
+        </section>
+      )}
+
+      {pane === 'diagnostics' && (
+        <section
+          className="settings-panel__section settings-panel__section--diagnostics"
+          aria-label="Diagnostics"
+        >
+          <div className="settings-panel__section-head">
+            <div>
+              <h2 className="settings-panel__section-title">Diagnostics</h2>
+              <p className="settings-panel__section-desc">
+                Local redacted records are retained for seven days with fixed size and crash-count
+                limits.
+              </p>
+            </div>
+            <span className="settings-panel__status-pill" data-tone="neutral">
+              {diagnostics?.retention.entryCount ?? 0} entries
+            </span>
+          </div>
+          <div className="settings-panel__diagnostic-summary">
+            <span>{diagnostics?.retention.maxAgeDays ?? 7} days</span>
+            <span>{formatBytes(diagnostics?.retention.currentBytes ?? 0)} used</span>
+            <span>{diagnostics?.retention.crashCount ?? 0} crashes</span>
+          </div>
+          <div className="settings-panel__button-row">
             <button
               type="button"
-              className="setup-wizard__action setup-wizard__action--primary"
-              onClick={() => void handleRestartToUpdate()}
-              disabled={installingUpdate}
+              className="setup-wizard__action"
+              onClick={() => void handleRevealDiagnostics()}
             >
-              {installingUpdate ? 'Installing…' : 'Restart to Update'}
+              Reveal Folder
             </button>
-          )}
-        </div>
-      </section>
-
-      <section className="settings-panel__section" aria-label="Notifications">
-        <h2 className="settings-panel__section-title">Notifications</h2>
-        <label className="settings-panel__toggle">
-          <input
-            type="checkbox"
-            checked={settings?.notifications.previewEnabled ?? false}
-            onChange={(event) => void handleNotificationPreviewChange(event.currentTarget.checked)}
-          />
-          <span>
-            <strong>Show attention previews</strong>
-            <span>
-              Off keeps native notifications generic. On includes feature name, attention type, and
-              a bounded summary.
-            </span>
-          </span>
-        </label>
-      </section>
-
-      <section
-        ref={diagnosticsRef}
-        className="settings-panel__section settings-panel__section--diagnostics"
-        aria-label="Diagnostics"
-      >
-        <div className="settings-panel__section-head">
-          <div>
-            <h2 className="settings-panel__section-title">Diagnostics</h2>
-            <p className="settings-panel__section-desc">
-              Local redacted records are retained for seven days with fixed size and crash-count
-              limits.
-            </p>
+            <button
+              type="button"
+              className="settings-panel__root-btn settings-panel__root-btn--danger"
+              ref={clearDiagnosticsTriggerRef}
+              onClick={() => setShowClearDiagnosticsPrompt(true)}
+              disabled={clearingDiagnostics}
+            >
+              {clearingDiagnostics ? 'Clearing…' : 'Clear Diagnostics'}
+            </button>
           </div>
-          <span className="settings-panel__status-pill" data-tone="neutral">
-            {diagnostics?.retention.entryCount ?? 0} entries
-          </span>
-        </div>
-        <div className="settings-panel__diagnostic-summary">
-          <span>{diagnostics?.retention.maxAgeDays ?? 7} days</span>
-          <span>{formatBytes(diagnostics?.retention.currentBytes ?? 0)} used</span>
-          <span>{diagnostics?.retention.crashCount ?? 0} crashes</span>
-        </div>
-        <div className="settings-panel__button-row">
+          <ul className="settings-panel__diagnostics">
+            {(diagnostics?.entries ?? []).slice(0, 6).map((entry) => (
+              <li key={entry.id} className="settings-panel__diagnostic" data-level={entry.level}>
+                <span>{entry.source}</span>
+                <strong>{entry.message}</strong>
+                {entry.detail && <p>{entry.detail}</p>}
+              </li>
+            ))}
+            {(diagnostics?.entries ?? []).length === 0 && (
+              <li className="settings-panel__provider-empty">No diagnostics recorded.</li>
+            )}
+          </ul>
+        </section>
+      )}
+
+      {pane === 'advanced' && (
+        <section className="settings-panel__section" aria-label="Advanced runtime path">
+          <h2 className="settings-panel__section-title">Advanced</h2>
+          <p className="settings-panel__section-desc">
+            The runtime path selects where Agentico stores its state and configuration. A change
+            persists immediately but takes effect only after restarting the runtime.
+          </p>
+          <div className="settings-panel__runtime-path">
+            <span className="settings-panel__runtime-path-label">Connected runtime:</span>
+            <code>{connectedPath ?? 'Default (auto-detected)'}</code>
+          </div>
+          {configuredPath !== null && configuredPath !== connectedPath && (
+            <div className="settings-panel__runtime-path">
+              <span className="settings-panel__runtime-path-label">Pending change to:</span>
+              <code>{configuredPath}</code>
+            </div>
+          )}
           <button
             type="button"
             className="setup-wizard__action"
-            onClick={() => void handleRevealDiagnostics()}
+            onClick={() => void handlePickRuntimePath()}
+            disabled={pickingPath || restarting}
           >
-            Reveal Folder
+            {pickingPath ? 'Choosing…' : 'Change runtime path'}
           </button>
-          <button
-            type="button"
-            className="settings-panel__root-btn settings-panel__root-btn--danger"
-            ref={clearDiagnosticsTriggerRef}
-            onClick={() => setShowClearDiagnosticsPrompt(true)}
-            disabled={clearingDiagnostics}
-          >
-            {clearingDiagnostics ? 'Clearing…' : 'Clear Diagnostics'}
-          </button>
-        </div>
-        <ul className="settings-panel__diagnostics">
-          {(diagnostics?.entries ?? []).slice(0, 6).map((entry) => (
-            <li key={entry.id} className="settings-panel__diagnostic" data-level={entry.level}>
-              <span>{entry.source}</span>
-              <strong>{entry.message}</strong>
-              {entry.detail && <p>{entry.detail}</p>}
-            </li>
-          ))}
-          {(diagnostics?.entries ?? []).length === 0 && (
-            <li className="settings-panel__provider-empty">No diagnostics recorded.</li>
+          {hasPendingRestart && (
+            <div className="restart-pending__banner" role="status">
+              <span>
+                A runtime path change is pending. It will take effect after the next restart.
+              </span>
+              <button
+                type="button"
+                className="setup-wizard__action setup-wizard__action--primary"
+                onClick={() => void handleRestartNow()}
+                disabled={restarting}
+              >
+                {restarting ? 'Restarting…' : 'Restart Now'}
+              </button>
+            </div>
           )}
-        </ul>
-      </section>
+        </section>
+      )}
 
-      <section className="settings-panel__section" aria-label="Advanced runtime path">
-        <h2 className="settings-panel__section-title">Advanced</h2>
-        <p className="settings-panel__section-desc">
-          The runtime path selects where Agentico stores its state and configuration. A change
-          persists immediately but takes effect only after restarting the runtime.
-        </p>
-        <div className="settings-panel__runtime-path">
-          <span className="settings-panel__runtime-path-label">Connected runtime:</span>
-          <code>{connectedPath ?? 'Default (auto-detected)'}</code>
-        </div>
-        {configuredPath !== null && configuredPath !== connectedPath && (
-          <div className="settings-panel__runtime-path">
-            <span className="settings-panel__runtime-path-label">Pending change to:</span>
-            <code>{configuredPath}</code>
-          </div>
-        )}
-        <button
-          type="button"
-          className="setup-wizard__action"
-          onClick={() => void handlePickRuntimePath()}
-          disabled={pickingPath || restarting}
-        >
-          {pickingPath ? 'Choosing…' : 'Change runtime path'}
-        </button>
-        {hasPendingRestart && (
-          <div className="restart-pending__banner" role="status">
-            <span>
-              A runtime path change is pending. It will take effect after the next restart.
-            </span>
-            <button
-              type="button"
-              className="setup-wizard__action setup-wizard__action--primary"
-              onClick={() => void handleRestartNow()}
-              disabled={restarting}
-            >
-              {restarting ? 'Restarting…' : 'Restart Now'}
-            </button>
-          </div>
-        )}
-      </section>
-
-      <section className="settings-panel__section" aria-label="Workspace defaults">
-        <h2 className="settings-panel__section-title">Workspace defaults</h2>
-        <p className="settings-panel__section-desc">
-          Default models per phase, inquireness, and gates for new work. Features can override each
-          setting in their own configuration.
-        </p>
-        <WorkspaceDefaultsPanel catalogue={modelCatalogue} />
-      </section>
+      {pane === 'workspace-defaults' && (
+        <section className="settings-panel__section" aria-label="Workspace defaults">
+          <h2 className="settings-panel__section-title">Workspace defaults</h2>
+          <p className="settings-panel__section-desc">
+            Default models per phase, inquireness, and gates for new work. Features can override
+            each setting in their own configuration.
+          </p>
+          <WorkspaceDefaultsPanel catalogue={modelCatalogue} />
+        </section>
+      )}
 
       {showPrompt && hasPendingRestart && !restarting && (
         <SettingsConfirmationDialog ariaLabel="Restart prompt" onCancel={handleLater}>

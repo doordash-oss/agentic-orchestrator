@@ -4,21 +4,28 @@
  *
  * create feature → edit feature config in the cockpit through the structured
  * form (model per phase, inquireness, gates) → save through the server →
- * verify persistence → Settings tab → workspace defaults form with the
- * Utilities model → workspace-root management → provider remediation rows →
+ * verify persistence → open the Settings window → workspace defaults form with
+ * the Utilities model → workspace-root management → provider remediation rows →
  * degraded state → advanced path change → restart-pending → idle prompt →
- * Later → Restart Now.
+ * Later → Restart Now → close Settings and quit.
+ *
+ * Everything from "Workspace defaults" on drives the Settings window's own
+ * page, one pane at a time, because that window renders exactly one pane.
  */
 import { execFileSync } from 'node:child_process';
+import fs from 'node:fs';
 import { expect, test } from '@playwright/test';
 import {
   assertNoLeakedProcesses,
   closeApp,
+  closeSettings,
   createFeatureViaForm,
   evidenceShot,
   launchApp,
   mockDirectoryPicker,
+  openSettings,
   persistAppLogs,
+  selectSettingsPane,
   setTheme,
   setWindowSize,
   type AppHandle,
@@ -58,7 +65,7 @@ test('configuration, workspace, and restart journey against the packaged app', a
     transcript.step('app launched and reached the ready workspace');
 
     transcript.section('Create a feature');
-    const cockpit = await createFeatureViaForm(handle, {
+    await createFeatureViaForm(handle, {
       name: 'Config Journey',
       description: 'Exercise configuration editing in the cockpit.',
       repoPatterns: [/alpha/],
@@ -67,8 +74,8 @@ test('configuration, workspace, and restart journey against the packaged app', a
     transcript.step('feature created and setup complete');
 
     transcript.section('Structured feature configuration in the cockpit');
-    await cockpit.locator('summary[aria-label="More actions"]').click();
-    const configToggle = cockpit.getByRole('menuitem', { name: 'Edit configuration…' });
+    await handle.page.locator('summary[aria-label="More actions"]').click();
+    const configToggle = handle.page.getByRole('menuitem', { name: 'Edit configuration…' });
     await expect(configToggle).toBeVisible();
     await configToggle.click();
 
@@ -135,13 +142,11 @@ test('configuration, workspace, and restart journey against the packaged app', a
     const configDialog = handle.page.getByRole('dialog', { name: 'Feature configuration' });
     await configDialog.getByRole('button', { name: 'Close' }).click();
 
-    transcript.section('Workspace defaults in Settings');
-    await handle.page.getByRole('tab', { name: 'Settings' }).click();
-    await expect(handle.page.getByRole('heading', { name: 'Settings' })).toBeVisible({
-      timeout: 15_000,
-    });
+    transcript.section('Workspace defaults in the Settings window');
+    const settings = await openSettings(handle);
+    await selectSettingsPane(settings, 'Workspace defaults');
 
-    const defaultsEditor = handle.page.locator('[aria-label="Workspace defaults editor"]');
+    const defaultsEditor = settings.locator('[aria-label="Workspace defaults editor"]');
     await defaultsEditor.scrollIntoViewIfNeeded();
     await expect(defaultsEditor).toBeVisible({ timeout: 15_000 });
     await expect(defaultsEditor.getByLabel('Utilities model')).toBeVisible();
@@ -153,39 +158,37 @@ test('configuration, workspace, and restart journey against the packaged app', a
     await defaultsSave.click();
     await expect(defaultsEditor.getByRole('status')).toContainText('Saved', { timeout: 15_000 });
 
-    const workspaceDefaults = await handle.page.evaluate(() =>
-      window.agentico.getWorkspaceDefaults(),
-    );
+    const workspaceDefaults = await settings.evaluate(() => window.agentico.getWorkspaceDefaults());
     expect(workspaceDefaults.inquireness).toBe('none');
     transcript.step('workspace default inquireness saved and re-read as none');
 
-    await evidenceShot(handle, 'workspace-defaults-structured-form-saved-l-1440x900');
+    await evidenceShot(handle, 'workspace-defaults-structured-form-saved-l-1440x900', settings);
     await setTheme(handle, 'dark');
-    await evidenceShot(handle, 'workspace-defaults-structured-form-saved-d-1440x900');
+    await evidenceShot(handle, 'workspace-defaults-structured-form-saved-d-1440x900', settings);
     await setTheme(handle, 'light');
 
     transcript.section('Workspace-root management');
-    await expect(handle.page.getByRole('heading', { name: 'Workspace roots' })).toBeVisible();
-    const rootList = handle.page.locator('.settings-panel__roots');
+    await selectSettingsPane(settings, 'Workspace roots');
+    const rootList = settings.locator('.settings-panel__roots');
     await expect(rootList).toContainText(world.workspaceRoot);
-    transcript.step('existing workspace root visible in the settings panel');
+    transcript.step('existing workspace root visible in the Workspace roots pane');
 
     createPlainFolder(world, 'extra-dir');
     await mockDirectoryPicker(handle, `${world.workspaceRoot}/extra-dir`);
-    await handle.page.getByRole('button', { name: 'Add workspace root' }).click();
+    await settings.getByRole('button', { name: 'Add workspace root' }).click();
     await expect(rootList).toContainText('extra-dir', { timeout: 15_000 });
     transcript.step('workspace root added through the native picker');
 
     transcript.section('Provider remediation rows');
-    await expect(handle.page.getByRole('heading', { name: 'Providers' })).toBeVisible();
-    const providerList = handle.page.locator('.settings-panel__providers');
+    await selectSettingsPane(settings, 'Providers');
+    const providerList = settings.locator('.settings-panel__providers');
     await expect(providerList).toContainText('claude');
-    const claudeRow = handle.page.locator('.settings-panel__provider', { hasText: 'claude' });
+    const claudeRow = settings.locator('.settings-panel__provider', { hasText: 'claude' });
     await expect(claudeRow.locator('.settings-panel__provider-status')).toContainText('Ready');
     transcript.step('provider rows visible with readiness status');
 
     transcript.section('Degraded remediation surface');
-    const degradedProviders = handle.page.locator(
+    const degradedProviders = settings.locator(
       '.settings-panel__provider .settings-panel__provider-status.is-degraded',
     );
     const degradedCount = await degradedProviders.count();
@@ -193,7 +196,7 @@ test('configuration, workspace, and restart journey against the packaged app', a
     expect(degradedCount).toBeGreaterThan(0);
     const firstDegraded = degradedProviders.first();
     await expect(firstDegraded).toContainText('Not ready');
-    const degradedCause = await handle.page
+    const degradedCause = await settings
       .locator('.settings-panel__provider.is-degraded .settings-panel__provider-cause')
       .first()
       .textContent();
@@ -201,7 +204,8 @@ test('configuration, workspace, and restart journey against the packaged app', a
     transcript.step('degraded provider shows Not ready with cause and remedy');
 
     transcript.section('Appearance settings');
-    const themeGroup = handle.page.locator('.settings-panel__theme');
+    await selectSettingsPane(settings, 'Appearance');
+    const themeGroup = settings.locator('.settings-panel__theme');
     await expect(themeGroup).toBeVisible();
     await expect(themeGroup.getByRole('radio', { name: 'Dark' })).toBeVisible();
     await expect(themeGroup.getByRole('radio', { name: 'Light' })).toBeVisible();
@@ -210,35 +214,41 @@ test('configuration, workspace, and restart journey against the packaged app', a
 
     transcript.section('Restart-pending flow: advanced runtime path change');
     await setWindowSize(handle, 1440, 900);
-    await expect(handle.page.getByRole('heading', { name: 'Advanced' })).toBeVisible({
-      timeout: 10_000,
-    });
-    const advancedSection = handle.page.locator('section[aria-label="Advanced runtime path"]');
+    await selectSettingsPane(settings, 'Advanced');
+    const advancedSection = settings.locator('section[aria-label="Advanced runtime path"]');
     await expect(advancedSection).toBeVisible();
 
     createPlainFolder(world, 'alt-runtime');
-    await mockDirectoryPicker(handle, `${world.workspaceRoot}/alt-runtime`);
+    // The picked path is canonicalized here on purpose. The gateway reports
+    // `connectedRuntimeDir` through realpath (wiring.ts selectRuntime) while
+    // the stored `runtime.selection` keeps whatever the picker returned, and
+    // Settings compares the two as plain strings — so on macOS, where the
+    // journey's world lives under the symlinked /var → /private/var temp root,
+    // an uncanonicalized pick would leave "restart pending" stuck forever no
+    // matter how well the restart worked. A real picker on a real /Users path
+    // returns the canonical path, which is what this reproduces.
+    await mockDirectoryPicker(handle, fs.realpathSync(`${world.workspaceRoot}/alt-runtime`));
     await advancedSection.getByRole('button', { name: 'Change runtime path' }).click();
-    await expect(handle.page.locator('.restart-pending__banner')).toBeVisible({
+    await expect(settings.locator('.restart-pending__banner')).toBeVisible({
       timeout: 10_000,
     });
     transcript.step('runtime path changed; restart-pending banner visible');
 
-    await expect(handle.page.locator('.restart-prompt__backdrop')).toBeVisible({
+    await expect(settings.locator('.restart-prompt__backdrop')).toBeVisible({
       timeout: 15_000,
     });
     transcript.step('idle detected; restart prompt dialog appeared');
 
-    await handle.page
+    await settings
       .locator('.restart-prompt__actions')
       .getByRole('button', { name: 'Later' })
       .click();
-    await expect(handle.page.locator('.restart-prompt__backdrop')).not.toBeVisible();
+    await expect(settings.locator('.restart-prompt__backdrop')).not.toBeVisible();
     transcript.step('chose Later; prompt dismissed, pending reminder preserved');
 
     transcript.section('Restart Now: deliberate activation');
-    await expect(handle.page.locator('.restart-pending__banner')).toBeVisible();
-    const restartNowBtn = handle.page
+    await expect(settings.locator('.restart-pending__banner')).toBeVisible();
+    const restartNowBtn = settings
       .locator('.restart-pending__banner')
       .getByRole('button', { name: 'Restart Now' });
     await expect(restartNowBtn).toBeVisible({ timeout: 5_000 });
@@ -247,7 +257,7 @@ test('configuration, workspace, and restart journey against the packaged app', a
 
     await waitFor(
       () =>
-        handle!.page
+        settings
           .locator('.restart-pending__banner')
           .isHidden()
           .then((v) => v)
@@ -255,7 +265,7 @@ test('configuration, workspace, and restart journey against the packaged app', a
       'restart-pending banner to clear after restart',
       60_000,
     );
-    await expect(handle.page.locator('.restart-pending__banner')).not.toBeVisible();
+    await expect(settings.locator('.restart-pending__banner')).not.toBeVisible();
     transcript.step('restart-pending banner cleared after deliberate activation');
 
     // Verify the connected runtime path actually changed to the selected path.
@@ -273,11 +283,24 @@ test('configuration, workspace, and restart journey against the packaged app', a
     transcript.step('captured constrained layout');
 
     transcript.section('No filesystem lifecycle controls');
-    const pageText = await handle.page.locator('body').innerText();
-    expect(pageText).not.toMatch(/create\s+new\s+(file|resource)/i);
-    expect(pageText).not.toMatch(/delete\s+(file|resource)/i);
-    expect(pageText).not.toMatch(/rename\s+(file|resource)/i);
-    transcript.step('verified no create/rename/delete controls exist in the UI');
+    for (const page of [handle.page, settings]) {
+      const pageText = await page.locator('body').innerText();
+      expect(pageText).not.toMatch(/create\s+new\s+(file|resource)/i);
+      expect(pageText).not.toMatch(/delete\s+(file|resource)/i);
+      expect(pageText).not.toMatch(/rename\s+(file|resource)/i);
+    }
+    transcript.step('verified no create/rename/delete controls exist in either window');
+
+    // Settings closes on its own (⌘W), leaving the app and its main window up;
+    // the quit below is the main window's business alone.
+    await closeSettings(handle);
+    // Whatever the main window is showing after the runtime moved to an empty
+    // runtime directory, it is still the one window and the app is still up.
+    expect(handle.app.windows()).toHaveLength(1);
+    expect(handle.appProcess.exitCode).toBeNull();
+    transcript.step(
+      'Settings closed through File ▸ Close Window; the app and its window stayed up',
+    );
 
     const logText = persistAppLogs(handle, 'config-workspace-app');
     const discovery = readDiscovery(world);

@@ -179,8 +179,8 @@ test('first launch: provider-gated creation reaches Ready to start', async ({}, 
       },
     });
     await expect(cockpit.getByText('Ready to start')).toBeVisible();
-    await expect(cockpit.getByRole('button', { name: 'Start', exact: true })).toBeVisible();
-    await expect(cockpit.getByRole('button', { name: 'Start', exact: true })).toBeEnabled();
+    await expect(handle.page.getByRole('button', { name: 'Start', exact: true })).toBeVisible();
+    await expect(handle.page.getByRole('button', { name: 'Start', exact: true })).toBeEnabled();
     await expect(cockpit.getByText("Starting isn't available in this version yet.")).toHaveCount(0);
     await evidenceShotBothThemes(handle, 'ready-to-start');
 

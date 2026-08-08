@@ -1,4 +1,5 @@
 import {
+  useCallback,
   useEffect,
   useRef,
   useState,
@@ -7,6 +8,7 @@ import {
   type SetStateAction,
 } from 'react';
 import {
+  actionableAttentionCount,
   ATTENTION_ALREADY_RESOLVED_NOTICE,
   ATTENTION_SUBMITTED_NOTICE,
   attentionOwnerFeatureId,
@@ -15,10 +17,13 @@ import {
   type AttentionItem,
   type VerificationGateAction,
 } from '../../../shared/ipc';
+import { BellIcon } from '../components/icons';
+import { ToolbarPopover, ToolbarPopoverAnchor } from '../components/ToolbarPopover';
 import {
   hasStructuredVerificationDecision,
   NeedUserInputVerificationDecision,
 } from './NeedUserInputVerificationDecision';
+import { formatWaitingDuration } from './phaseRail';
 import { useAttentionDraftSaves } from './useAttentionDraftSaves';
 
 export interface QuestionAnswerDraft {
@@ -44,6 +49,13 @@ export interface AttentionInboxProps {
   setDrafts: Dispatch<SetStateAction<AttentionDrafts>>;
   onJump(featureId: string, attentionId?: string): void;
   openRequest?: { id: number; attentionId?: string } | null;
+  /**
+   * Lifts the popover's open state to the toolbar, which enforces the
+   * one-popover-at-a-time rule against the update popover. Omit both to let
+   * the inbox own its own state (harness scenes and focused tests).
+   */
+  open?: boolean;
+  onOpenChange?(open: boolean): void;
 }
 
 export interface AttentionSubmitOptions {
@@ -84,8 +96,11 @@ export function attentionErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : 'Could not submit this response.';
 }
 
-/** Global, snapshot-only blocking-input inbox. Draft text stays in renderer
- * session state until submitted; server-owned gate drafts are persisted on blur. */
+/**
+ * Global, snapshot-only blocking-input inbox, presented as a transient popover
+ * anchored under the toolbar bell. Draft text stays in renderer session state
+ * until submitted; server-owned gate drafts are persisted on blur.
+ */
 export function AttentionInbox({
   items,
   refresh,
@@ -94,8 +109,18 @@ export function AttentionInbox({
   setDrafts,
   onJump,
   openRequest = null,
+  open: controlledOpen,
+  onOpenChange,
 }: AttentionInboxProps) {
-  const [open, setOpen] = useState(false);
+  const [uncontrolledOpen, setUncontrolledOpen] = useState(false);
+  const open = controlledOpen ?? uncontrolledOpen;
+  const setOpen = useCallback(
+    (next: boolean) => {
+      setUncontrolledOpen(next);
+      onOpenChange?.(next);
+    },
+    [onOpenChange],
+  );
   const [expanded, setExpanded] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [notice, setNotice] = useState('');
@@ -121,7 +146,7 @@ export function AttentionInbox({
       );
       setPendingFocus(openRequest.attentionId);
     }
-  }, [items, openRequest]);
+  }, [items, openRequest, setOpen]);
 
   useEffect(() => {
     if (!open) return;
@@ -144,20 +169,19 @@ export function AttentionInbox({
     setPendingFocus(hasActiveModalDialog() ? null : (next?.id ?? null));
   }, [busy, expanded, items, open]);
 
+  // ⌘⇧A is the bell click's keyboard twin: it toggles, and closing returns
+  // focus to the bell. Escape and the outside pointer live in ToolbarPopover.
   useEffect(() => {
     const key = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.shiftKey && event.key.toLowerCase() === 'a') {
         event.preventDefault();
-        setOpen(true);
-      }
-      if (event.key === 'Escape' && open) {
-        setOpen(false);
-        bell.current?.focus();
+        setOpen(!open);
+        if (open) bell.current?.focus();
       }
     };
     window.addEventListener('keydown', key);
     return () => window.removeEventListener('keydown', key);
-  }, [open]);
+  }, [open, setOpen]);
 
   const submit = async (
     id: string,
@@ -201,10 +225,10 @@ export function AttentionInbox({
     itemButtons.current.get(next.id)?.focus();
   };
 
-  const actionableCount = items.filter((i) => i.kind !== 'recovery').length;
+  const actionableCount = actionableAttentionCount(items);
 
   return (
-    <>
+    <ToolbarPopoverAnchor>
       <button
         ref={bell}
         type="button"
@@ -212,123 +236,112 @@ export function AttentionInbox({
         data-empty={actionableCount === 0}
         aria-label={`Attention inbox, ${actionableCount} pending`}
         aria-expanded={open}
-        aria-controls="attention-inbox"
-        onClick={() => setOpen(true)}
+        aria-controls="attention-popover"
+        onClick={() => {
+          setOpen(!open);
+          if (open) bell.current?.focus();
+        }}
       >
-        <span className="attention-bell__label" aria-hidden="true">
-          Attention
-        </span>
-        <span
-          className="attention-bell__count"
-          aria-hidden="true"
-          data-empty={actionableCount === 0}
-        >
-          {actionableCount}
-        </span>
+        <BellIcon />
+        {/* Quiet at zero: no badge at all, rather than a badge reading "0". */}
+        {actionableCount > 0 ? (
+          <span className="attention-bell__count" aria-hidden="true">
+            {actionableCount}
+          </span>
+        ) : null}
       </button>
       {notice !== '' && !open ? (
         <p className="sr-only" role="status">
           {notice}
         </p>
       ) : null}
-      {open ? (
-        <aside
-          id="attention-inbox"
-          className="attention-inbox"
-          aria-label="Attention inbox"
-          tabIndex={-1}
-        >
-          <header className="attention-inbox__header">
-            <div>
-              <p className="attention-inbox__eyebrow">Blocking input</p>
-              <h2>Attention inbox</h2>
-            </div>
-            <button
-              type="button"
-              className="attention-button"
-              onClick={() => {
-                setOpen(false);
-                bell.current?.focus();
-              }}
-            >
-              Close inbox
-            </button>
-          </header>
-          {notice !== '' ? (
-            <p className="attention-status" role="status" aria-live="polite">
-              {notice}
-            </p>
-          ) : null}
-          {items.length === 0 ? (
-            <p className="attention-inbox__empty" role="status">
-              No blocking input is waiting.
-            </p>
-          ) : (
-            <ul className="attention-inbox__list">
-              {items.map((item) => (
-                <li key={`${item.kind}:${item.id}`} className="attention-inbox__row">
-                  <button
-                    ref={(node) => {
-                      if (node === null) itemButtons.current.delete(item.id);
-                      else itemButtons.current.set(item.id, node);
-                    }}
-                    type="button"
-                    className="attention-inbox__item"
-                    aria-expanded={
-                      item.kind !== 'recovery' && item.featureId === undefined
-                        ? expanded === item.id
-                        : undefined
+      <ToolbarPopover
+        open={open}
+        as="aside"
+        id="attention-popover"
+        className="attention-popover"
+        label="Attention inbox"
+        anchorRef={bell}
+        onDismiss={() => setOpen(false)}
+      >
+        <header className="attention-popover__header">
+          <h2>Attention inbox</h2>
+          <span className="attention-popover__count">{actionableCount} waiting</span>
+        </header>
+        {notice !== '' ? (
+          <p className="attention-status" role="status" aria-live="polite">
+            {notice}
+          </p>
+        ) : null}
+        {items.length === 0 ? (
+          <p className="attention-popover__empty" role="status">
+            No blocking input is waiting.
+          </p>
+        ) : (
+          <ul className="attention-popover__list">
+            {items.map((item) => (
+              <li key={`${item.kind}:${item.id}`} className="attention-popover__row">
+                <button
+                  ref={(node) => {
+                    if (node === null) itemButtons.current.delete(item.id);
+                    else itemButtons.current.set(item.id, node);
+                  }}
+                  type="button"
+                  className="attention-popover__item"
+                  aria-expanded={
+                    item.kind !== 'recovery' && item.featureId === undefined
+                      ? expanded === item.id
+                      : undefined
+                  }
+                  onClick={() => {
+                    if (item.kind === 'recovery') {
+                      setOpen(false);
+                      onJump('__recovery__');
+                      return;
                     }
-                    onClick={() => {
-                      if (item.kind === 'recovery') {
-                        setOpen(false);
-                        onJump('__recovery__');
-                        return;
-                      }
-                      const ownerFeatureId = attentionOwnerFeatureId(item);
-                      if (ownerFeatureId !== undefined) {
-                        setOpen(false);
-                        onJump(ownerFeatureId, item.kind === 'review' ? undefined : item.id);
-                        return;
-                      }
-                      setExpanded(expanded === item.id ? null : item.id);
+                    const ownerFeatureId = attentionOwnerFeatureId(item);
+                    if (ownerFeatureId !== undefined) {
+                      setOpen(false);
+                      onJump(ownerFeatureId, item.kind === 'review' ? undefined : item.id);
+                      return;
+                    }
+                    setExpanded(expanded === item.id ? null : item.id);
+                  }}
+                  onKeyDown={(event) => handleItemKeyDown(event, item.id, focusRelativeItem)}
+                >
+                  <span className="attention-popover__item-main">
+                    <span className="attention-popover__kind">{attentionKindLabel(item)}</span>
+                    <span className="attention-popover__feature">
+                      {item.kind === 'recovery'
+                        ? 'Recovery workspace'
+                        : featureLabel(attentionOwnerFeatureId(item))}
+                    </span>
+                  </span>
+                  <span className="attention-popover__waiting">
+                    {formatWaitingSince(item.waitingSince)}
+                  </span>
+                </button>
+                {expanded === item.id ? (
+                  <AttentionDetail
+                    item={item}
+                    busy={busy === item.id}
+                    submit={(action, options) => submit(item.id, action, options)}
+                    saveDraft={(action, options) => saveDraft(item.id, action, options)}
+                    onJump={(featureId) => {
+                      setExpanded(null);
+                      setOpen(false);
+                      onJump?.(featureId);
                     }}
-                    onKeyDown={(event) => handleItemKeyDown(event, item.id, focusRelativeItem)}
-                  >
-                    <span className="attention-inbox__item-main">
-                      <span className="attention-inbox__kind">{attentionKindLabel(item)}</span>
-                      <span className="attention-inbox__feature">
-                        {item.kind === 'recovery'
-                          ? 'Recovery workspace'
-                          : featureLabel(attentionOwnerFeatureId(item))}
-                      </span>
-                    </span>
-                    <span className="attention-inbox__waiting">
-                      {formatWaitingSince(item.waitingSince)}
-                    </span>
-                  </button>
-                  {expanded === item.id ? (
-                    <AttentionDetail
-                      item={item}
-                      busy={busy === item.id}
-                      submit={(action, options) => submit(item.id, action, options)}
-                      saveDraft={(action, options) => saveDraft(item.id, action, options)}
-                      onJump={(featureId) => {
-                        setExpanded(null);
-                        setOpen(false);
-                        onJump?.(featureId);
-                      }}
-                      drafts={drafts}
-                      setDrafts={setDrafts}
-                    />
-                  ) : null}
-                </li>
-              ))}
-            </ul>
-          )}
-        </aside>
-      ) : null}
-    </>
+                    drafts={drafts}
+                    setDrafts={setDrafts}
+                  />
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        )}
+      </ToolbarPopover>
+    </ToolbarPopoverAnchor>
   );
 }
 
@@ -903,16 +916,10 @@ function shortSessionId(id: string): string {
   return id.length > 9 ? `${id.slice(0, 8)}…` : id;
 }
 
+/** Delegates to the rail's shared duration formatter, keeping one source of truth. */
 function formatWaitingSince(value: string): string {
-  const since = Date.parse(value);
-  if (!Number.isFinite(since)) return 'waiting time unknown';
-  const elapsedMs = Math.max(Date.now() - since, 0);
-  const minutes = Math.floor(elapsedMs / 60_000);
-  if (minutes < 1) return 'waiting <1m';
-  if (minutes < 60) return `waiting ${minutes}m`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 48) return `waiting ${hours}h`;
-  return `waiting ${Math.floor(hours / 24)}d`;
+  const duration = formatWaitingDuration(value);
+  return duration === null ? 'waiting time unknown' : `waiting ${duration}`;
 }
 
 export function displayQuestionOptionLabel(label: string): string {

@@ -1,4 +1,5 @@
 import type { SessionTaskActivity, TranscriptMessage } from '../../../../shared/ipc';
+import type { VerificationTone } from '../verificationModel';
 
 /** Upper bound on retained rows; keeps the live preview and AMA memory-safe. */
 export const MAX_TRANSCRIPT_MESSAGES = 200;
@@ -34,7 +35,14 @@ export type ConversationItem =
       change: NonNullable<TranscriptMessage['fileChange']>;
     }
   | { kind: 'activity'; key: string; labels: string[] }
-  | { kind: 'subagents'; key: string; agents: SubagentActivity[] };
+  | { kind: 'subagents'; key: string; agents: SubagentActivity[] }
+  | {
+      kind: 'verification-tick';
+      key: string;
+      name: string;
+      tone: VerificationTone;
+      symbol: string;
+    };
 
 /** Stable identity for a row, unique across multi-block responses. */
 export function messageKey(entry: Pick<TranscriptMessage, 'index' | 'blockIndex'>): string {

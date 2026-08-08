@@ -101,9 +101,9 @@ test('recovery orphans: priority attention, live/dead context, batch actions, an
     transcript.step('seeded 1 live orphan (alpha) and 1 dead orphan (beta) PID file');
 
     handle = await launchApp(world, testInfo, { traceName: 'recovery-orphans-seeded' });
-    const homeTab = handle.page.getByRole('tab', { name: 'Home' });
-    await expect(homeTab).toBeVisible({ timeout: 60_000 });
-    await homeTab.click();
+    const overviewOption = handle.page.getByRole('option', { name: 'Overview' });
+    await expect(overviewOption).toBeVisible({ timeout: 60_000 });
+    await overviewOption.click();
     await expect(handle.page.getByRole('button', { name: 'New feature' })).toBeVisible({
       timeout: 10_000,
     });

@@ -42,7 +42,7 @@ export function HelpOverlay({ routeRequest }: { routeRequest: RoutedRequest | nu
       >
         <header>
           <div>
-            <p className="home-surface__eyebrow">Command catalogue</p>
+            <p className="eyebrow-label">Command catalogue</p>
             <h2>Keyboard shortcuts</h2>
           </div>
           <button ref={closeRef} type="button" onClick={close}>

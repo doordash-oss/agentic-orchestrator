@@ -49,16 +49,15 @@ test('history: paginated sealed runs, restored archive selection, immutable insp
     handle = null;
     seedRunHistory(world, featureId);
     handle = await launchApp(world, testInfo, { traceName: 'history-readonly-seeded' });
-    await expect(handle.page.getByRole('tab', { name: 'History Journey' })).toBeVisible({
+    await expect(handle.page.getByRole('option', { name: 'History Journey' })).toBeVisible({
       timeout: 60_000,
     });
-    await handle.page.getByRole('tab', { name: 'History Journey' }).click();
+    await handle.page.getByRole('option', { name: 'History Journey' }).click();
     const cockpit = handle.page.getByLabel('Feature History Journey');
 
-    transcript.section('Open run history via the History button');
-    await cockpit.locator('summary[aria-label="More actions"]').click();
-    let historyButton = cockpit.getByRole('menuitem', { name: 'View run history' });
-    await expect(historyButton).toBeVisible();
+    transcript.section('Open run history via the run/iteration popup');
+    const runSwitcher = handle.page.locator('.cockpit__run-switcher-summary');
+    await expect(runSwitcher).toBeVisible();
     const seededRuns = await handle.page.evaluate(
       (id) => window.agentico.listRuns({ featureId: id, page: 1, pageSize: 20 }),
       featureId,
@@ -67,26 +66,27 @@ test('history: paginated sealed runs, restored archive selection, immutable insp
     expect(seededRuns.runs.some((run) => run.runNumber === 6 && run.sealedAt !== undefined)).toBe(
       true,
     );
-    await historyButton.click();
+    await runSwitcher.click();
+    await handle.page.getByRole('menuitem', { name: 'Run 6 · sealed' }).click();
 
     transcript.section('Verify archive mode renders the read-only band');
     await expect(handle.page.locator('.archive-mode__band')).toContainText('Sealed run');
     await expect(handle.page.locator('.archive-mode__band')).toContainText('Read only');
 
-    transcript.section('Verify the run selector is present');
-    await expect(handle.page.locator('.archive-mode__select')).toBeVisible();
+    transcript.section('Verify the run/iteration popup lists every seeded sealed run');
+    await runSwitcher.click();
+    for (let runNumber = 1; runNumber <= 6; runNumber += 1) {
+      await expect(
+        handle.page.getByRole('menuitem', { name: `Run ${runNumber} · sealed` }),
+      ).toBeVisible();
+    }
 
-    transcript.section('Page through older sealed history without losing read-only mode');
-    await expect(handle.page.getByLabel('Sealed run pages')).toContainText('Page 1 of 2');
-    await handle.page.getByRole('button', { name: 'Older' }).click();
-    await expect(handle.page.getByLabel('Sealed run pages')).toContainText('Page 2 of 2');
-    await handle.page.locator('.archive-mode__select').selectOption('1');
+    transcript.section('Switch between sealed runs without losing read-only mode');
+    await handle.page.getByRole('menuitem', { name: 'Run 1 · sealed' }).click();
     await expect(handle.page.locator('.archive-mode__band')).toContainText('Run 1');
-    await expect(handle.page.getByLabel('Sealed run pages')).toContainText('Page 2 of 2');
     await handle.page.getByRole('button', { name: /Return to current/ }).click();
-    await cockpit.locator('summary[aria-label="More actions"]').click();
-    historyButton = cockpit.getByRole('menuitem', { name: 'View run history' });
-    await historyButton.click();
+    await runSwitcher.click();
+    await handle.page.getByRole('menuitem', { name: 'Run 6 · sealed' }).click();
     await expect(handle.page.locator('.archive-mode__band')).toContainText('Run 6');
 
     transcript.section('Inspect a run-authentic artifact and bounded historical log');
@@ -108,8 +108,8 @@ test('history: paginated sealed runs, restored archive selection, immutable insp
     await expect(handle.page.locator('.archive-mode__band')).toContainText('Sealed run');
 
     transcript.section('Verify no mutation controls are mounted in archive mode');
-    await expect(cockpit.getByRole('button', { name: 'Start', exact: true })).not.toBeVisible();
-    await expect(cockpit.getByRole('button', { name: 'Stop' })).not.toBeVisible();
+    await expect(handle.page.getByRole('button', { name: 'Start', exact: true })).not.toBeVisible();
+    await expect(handle.page.getByRole('button', { name: 'Stop' })).not.toBeVisible();
     await expect(cockpit.getByRole('button', { name: 'Rewind' })).not.toBeVisible();
 
     transcript.section('Verify the return-to-current control is visible');
@@ -120,14 +120,14 @@ test('history: paginated sealed runs, restored archive selection, immutable insp
     await setTheme(handle, 'light');
     await evidenceShot(
       handle,
-      'sealed-run-archive-mode-with-selector-read-only-band-muted-phase-spine-and-histo-1440x900',
+      'sealed-run-archive-mode-with-selector-read-only-band-muted-phase-rail-and-histo-1440x900',
     );
 
     transcript.section('Capture dark-theme archive screenshot at 1440x900');
     await setTheme(handle, 'dark');
     await evidenceShot(
       handle,
-      'sealed-run-archive-mode-with-selector-read-only-band-muted-phase-spine-and-histo-1440x900-6658c389',
+      'sealed-run-archive-mode-with-selector-read-only-band-muted-phase-rail-and-histo-1440x900-6658c389',
     );
 
     transcript.section('Capture light-theme pinned-history screenshot at 1440x900');
@@ -146,14 +146,15 @@ test('history: paginated sealed runs, restored archive selection, immutable insp
 
     transcript.section('Return to current run');
     await handle.page.getByRole('button', { name: /Return to current/ }).click();
-    await expect(cockpit.getByText('Code ready', { exact: true }).first()).toBeVisible({
-      timeout: 10_000,
-    });
+    await expect(cockpit.getByRole('heading', { name: 'The work is ready to go out' })).toBeVisible(
+      {
+        timeout: 10_000,
+      },
+    );
 
     transcript.section('Capture constrained-layout archive screenshots at 760x900');
-    await cockpit.locator('summary[aria-label="More actions"]').click();
-    historyButton = cockpit.getByRole('menuitem', { name: 'View run history' });
-    await historyButton.click();
+    await runSwitcher.click();
+    await handle.page.getByRole('menuitem', { name: 'Run 6 · sealed' }).click();
     await setWindowSize(handle, 760, 900);
     await setTheme(handle, 'light');
     await evidenceShot(
@@ -166,17 +167,24 @@ test('history: paginated sealed runs, restored archive selection, immutable insp
       'archive-selector-and-return-to-current-control-in-constrained-layout-dark-theme-760x900',
     );
 
-    transcript.section('Verify relaunch restores the selected run');
+    // The archive-run selection is session state, not persisted: the plan
+    // explicitly drops per-tab archive-run selections along with the tab
+    // strip itself ("archive-run choice becomes session state until Phase
+    // 5's run popup"). A relaunch must land back on the current run's own
+    // surface, not resurrect the archived selection from before restart.
+    transcript.section('Verify relaunch resets to the current run, not the archived selection');
     await closeApp(handle);
     handle = null;
     handle = await launchApp(world, testInfo, { traceName: 'history-readonly-relaunch' });
-    await expect(handle.page.getByRole('tab', { name: 'History Journey' })).toBeVisible({
+    await expect(handle.page.getByRole('option', { name: 'History Journey' })).toBeVisible({
       timeout: 60_000,
     });
-    await handle.page.getByRole('tab', { name: 'History Journey' }).click();
-    await expect(handle.page.locator('.archive-mode__band')).toContainText('Sealed run', {
-      timeout: 15_000,
-    });
+    await handle.page.getByRole('option', { name: 'History Journey' }).click();
+    const relaunchedCockpit = handle.page.getByLabel('Feature History Journey');
+    await expect(
+      relaunchedCockpit.getByRole('heading', { name: 'The work is ready to go out' }),
+    ).toBeVisible({ timeout: 15_000 });
+    await expect(handle.page.locator('.archive-mode__band')).toHaveCount(0);
 
     transcript.section('Journey complete');
   } finally {

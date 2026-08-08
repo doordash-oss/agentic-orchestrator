@@ -3,7 +3,9 @@ import {
   assertNoLeakedProcesses,
   closeApp,
   launchApp,
+  openSettings,
   persistAppLogs,
+  selectSettingsPane,
   type AppHandle,
 } from '../helpers/app';
 import { Transcript } from '../helpers/transcript';
@@ -56,21 +58,22 @@ async function runFallbackCase(
     expect(state.packageFormat).toBe(format);
     transcript.json(name, state);
 
-    await handle.page.getByRole('tab', { name: 'Settings' }).click();
-    await expect(handle.page.getByRole('heading', { name: 'Updates' })).toBeVisible();
+    const settings = await openSettings(handle);
+    await selectSettingsPane(settings, 'Updates');
+    await expect(settings.getByRole('heading', { name: 'Updates' })).toBeVisible();
     if (format === 'deb') {
-      await expect(handle.page.getByText(/package manager/)).toBeVisible();
+      await expect(settings.getByText(/package manager/)).toBeVisible();
       await expect(
-        handle.page.getByRole('button', { name: 'Copy the package-manager command' }),
+        settings.getByRole('button', { name: 'Copy the package-manager command' }),
       ).toBeVisible();
     } else {
-      await expect(handle.page.getByText(/cannot be safely replaced in app/i)).toBeVisible();
+      await expect(settings.getByText(/cannot be safely replaced in app/i)).toBeVisible();
     }
-    await expect(handle.page.getByRole('button', { name: 'Restart to Update' })).toHaveCount(0);
-    await expect(handle.page.getByRole('button', { name: 'Install When Idle' })).toHaveCount(0);
-    await expect(
-      handle.page.getByRole('button', { name: 'Stop Work and Install Now' }),
-    ).toHaveCount(0);
+    await expect(settings.getByRole('button', { name: 'Restart to Update' })).toHaveCount(0);
+    await expect(settings.getByRole('button', { name: 'Install When Idle' })).toHaveCount(0);
+    await expect(settings.getByRole('button', { name: 'Stop Work and Install Now' })).toHaveCount(
+      0,
+    );
     persistAppLogs(handle, `distribution-update-fallbacks-${name}`);
   } finally {
     if (handle !== null) await closeApp(handle);

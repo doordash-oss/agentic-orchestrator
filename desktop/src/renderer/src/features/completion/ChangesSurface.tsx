@@ -139,7 +139,7 @@ export function ChangesSurface({
     <section className="changes-manifest" aria-label="Changes">
       <header className="changes-manifest__intro">
         <div>
-          <p className="cockpit__eyebrow">Repository delta</p>
+          <p className="cockpit__caption">Repository delta</p>
           <h3>Change manifest</h3>
           <p>
             Review the files produced by this feature before opening the worktree or pull request.

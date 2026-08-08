@@ -6,6 +6,7 @@
  * files are read here.
  */
 import {
+  Fragment,
   useCallback,
   useEffect,
   useMemo,
@@ -16,22 +17,30 @@ import {
   type RefObject,
   type SetStateAction,
 } from 'react';
+import { createPortal } from 'react-dom';
 import {
+  attentionOwnerFeatureId,
   isPendingReviewStatus,
   type FeatureSnapshot,
   type RunDetailView,
+  type RunSummaryView,
   type FeatureActionRequest,
   type FeatureActionView,
 } from '../../../shared/ipc';
+import { useDetailsDismiss } from '../components/useDetailsDismiss';
 import { useModalDismiss } from '../components/useModalDismiss';
 import { useMediaQuery } from '../hooks';
 import { parseIpcError, type WizardError } from '../wizard/ipcError';
 import { CurrentRunInspection, type RunMetrics } from './CurrentRunInspection';
+import { classifyHold, railSegments, railTrio } from './phaseRail';
+import { PhaseRail } from './PhaseRailRow';
 import { ReviewSurface } from './ReviewSurface';
 import { FeatureConfigPanel } from './ConfigEditor';
 import { ArchiveMode } from './ArchiveMode';
 import { RewindJourney } from './RewindJourney';
 import { AftercareWorkspace } from './AftercareWorkspace';
+import { AftercareFacts } from './AftercareFacts';
+import { useAftercareEvidence } from './useAftercareEvidence';
 import { InspectorContent } from './CockpitInspector';
 import { ImpactPreviewList } from './ImpactPreviewList';
 import { NeedUserInputModal, type AttentionGate } from './NeedUserInputModal';
@@ -45,7 +54,7 @@ import { ReviewFeedbackLauncher } from './reviewFeedback/ReviewFeedbackLauncher'
 import { RefactorPassWorkspace, useRefactorPass } from './refactor/RefactorPassWorkspace';
 import { refactoringStatusChip } from './refactor/refactorPassModel';
 import { useCompletionPreflight } from './completion/useCompletionPreflight';
-import { pendingDeliverySummary } from './completion/pendingDelivery';
+import { pendingDeliveryFact, pendingDeliverySummary } from './completion/pendingDelivery';
 import {
   completionBarModel,
   type CompletionVerb,
@@ -82,6 +91,8 @@ import {
   createFeatureRefreshScheduler,
   type FeatureRefreshScheduler,
 } from './featureRefreshScheduler';
+import { registerFeatureCommandExecutor } from './featureCommands';
+import type { FeatureCommandId } from '../../../shared/commands';
 
 type CockpitState =
   | { phase: 'loading' }
@@ -109,10 +120,47 @@ export interface FeatureCockpitProps {
   selectedRunNumber?: number | null;
   /** Persist a new selected run number (or null to return to current). */
   onSelectRun?(runNumber: number | null): void;
+  /**
+   * Toolbar-owned DOM node the cockpit's status chip, contextual primary
+   * verbs, and completion controls portal into. When absent (e.g. this
+   * cockpit rendered standalone in a test), they render inline exactly as
+   * before.
+   */
+  actionsHost?: HTMLElement | null;
+  /**
+   * Toolbar-owned DOM node the cockpit's ⋯ overflow menu portals into. When
+   * absent (e.g. this cockpit rendered standalone in a test), the menu
+   * renders inline exactly as before.
+   */
+  overflowMenuHost?: HTMLElement | null;
+  /**
+   * Toolbar-owned DOM node the cockpit's wide-layout inspector-toggle button
+   * portals into. Only mounted while `!isNarrow`; at narrow widths
+   * nothing portals here and the cockpit's own in-content "Inspector" button
+   * opens the drawer instead. When absent (e.g. standalone in a test), the
+   * toggle renders inline exactly like the overflow menu does.
+   */
+  inspectorToggleHost?: HTMLElement | null;
+  /**
+   * Reports the cockpit-owned half of the shell's UI-state summary — the live
+   * action catalogue behind every feature command's enablement, and the
+   * deliberately-unpersisted inspector state behind the View menu's Show/Hide
+   * label. Called on change only; the shell dedupes and pushes to the main
+   * process from there.
+   */
+  onUiStateChange?(state: {
+    featureId: string;
+    actions: readonly FeatureActionView[] | null;
+    inspectorOpen: boolean;
+  }): void;
 }
 
 const MAX_ITERATIONS_RESTART_DELTA = 10;
 const MAX_PLAN_ITERATIONS_RESTART_DELTA = 2;
+
+function isArchiveRunSelected(runNumber: number | null | undefined): boolean {
+  return runNumber !== undefined && runNumber !== null && runNumber > 0;
+}
 
 interface RewindLandingProps {
   outcome: FeatureActionResult;
@@ -132,7 +180,7 @@ function RewindLanding({ outcome, run, onOpenSource, onDismiss }: RewindLandingP
     <section className="cockpit__rewind-landing" aria-label="Rewind outcome" role="status">
       <div className="cockpit__rewind-landing-header">
         <div>
-          <p className="cockpit__eyebrow">Current fork</p>
+          <p className="cockpit__caption">Current fork</p>
           <h3 className="setup-step__title">
             {outcome.newRunNumber !== undefined
               ? `Run ${outcome.newRunNumber} is active`
@@ -215,10 +263,14 @@ interface CockpitMenuAction {
 }
 
 /**
- * The cockpit control bar. It surfaces only the status and the verbs the
- * current state actually invites; every other action — including verbs that
- * exist but are unavailable, which carry their reason inline — lives in the
- * overflow menu so the bar stays quiet and the stage keeps its height.
+ * The cockpit control bar. It dissolves entirely into the shell toolbar's
+ * trailing zone: the status chip and the verbs the current state actually
+ * invites portal into `actionsHost`, the overflow menu (every other action,
+ * including verbs that exist but are unavailable, which carry their reason
+ * inline) portals into `overflowMenuHost`, and the inspector toggle into
+ * `inspectorToggleHost`. Nothing renders in the cockpit's own content flow —
+ * the stage starts at the rail. Absent a host (e.g. standalone in a test),
+ * each piece renders inline exactly as before.
  */
 function CockpitActionBar({
   status,
@@ -229,6 +281,11 @@ function CockpitActionBar({
   isNarrow,
   inspectorButtonRef,
   onOpenInspector,
+  inspectorOpen,
+  onToggleInspector,
+  actionsHost,
+  inspectorToggleHost,
+  overflowMenuHost,
 }: {
   status: FeatureSnapshot['status'];
   /** Replaces the raw status label (e.g. "Refactoring" while a pass runs). */
@@ -238,38 +295,25 @@ function CockpitActionBar({
   extraControls?: ReactNode;
   isNarrow: boolean;
   inspectorButtonRef: RefObject<HTMLButtonElement | null>;
+  /** Narrow-only: opens the slide-over drawer (it has its own close affordances). */
   onOpenInspector(): void;
+  /** Whether the wide-layout trailing split-view pane is currently open. */
+  inspectorOpen: boolean;
+  /** Wide-only: flips the trailing split-view pane open/closed. */
+  onToggleInspector(): void;
+  actionsHost?: HTMLElement | null;
+  inspectorToggleHost?: HTMLElement | null;
+  overflowMenuHost?: HTMLElement | null;
 }) {
   const menuRef = useRef<HTMLDetailsElement>(null);
   const closeMenu = () => {
     if (menuRef.current !== null) menuRef.current.open = false;
   };
 
-  // Native <details> stays open on outside interaction; close it on an outside
-  // pointer or Escape so it never lingers over drawers opened elsewhere.
-  useEffect(() => {
-    const onPointerDown = (event: PointerEvent) => {
-      const menu = menuRef.current;
-      if (menu?.open === true && !menu.contains(event.target as Node)) menu.open = false;
-    };
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape') return;
-      const menu = menuRef.current;
-      if (menu?.open === true) {
-        menu.open = false;
-        menu.querySelector<HTMLElement>('.cockpit__overflow-summary')?.focus();
-      }
-    };
-    document.addEventListener('pointerdown', onPointerDown);
-    document.addEventListener('keydown', onKeyDown);
-    return () => {
-      document.removeEventListener('pointerdown', onPointerDown);
-      document.removeEventListener('keydown', onKeyDown);
-    };
-  }, []);
+  useDetailsDismiss(menuRef, '.cockpit__overflow-summary');
 
-  return (
-    <div className="cockpit__actions" role="group" aria-label="Feature actions">
+  const actionsInner = (
+    <>
       <p className="cockpit__phase-status" role="status" aria-label="Current feature status">
         <code
           data-status={status}
@@ -278,7 +322,6 @@ function CockpitActionBar({
           {statusOverride?.label ?? displayStatusLabel(status)}
         </code>
       </p>
-      <span className="cockpit__actions-spacer" />
       {primaryActions.map((action) => (
         <button
           key={action.key}
@@ -293,54 +336,224 @@ function CockpitActionBar({
         </button>
       ))}
       {extraControls}
-      {menuActions.length > 0 ? (
-        <details ref={menuRef} className="cockpit__overflow">
-          <summary className="cockpit__overflow-summary" aria-label="More actions">
-            <span aria-hidden="true">⋯</span>
-          </summary>
-          <div className="cockpit__overflow-menu" role="menu">
-            {menuActions.map((action) => (
-              <div
-                key={action.key}
-                className="cockpit__overflow-item"
-                data-variant={action.variant ?? 'default'}
+    </>
+  );
+  // The toolbar owns a slot this row portals into once mounted; a cockpit
+  // rendered without that host (e.g. standalone in a test) keeps it inline,
+  // nested in the same "Feature actions" group as the overflow menu and
+  // inspector toggle below, matching pre-portal behavior exactly.
+  const actionsNode = actionsHost != null ? createPortal(actionsInner, actionsHost) : actionsInner;
+
+  const overflow =
+    menuActions.length > 0 ? (
+      <details ref={menuRef} className="cockpit__overflow">
+        <summary className="cockpit__overflow-summary" aria-label="More actions">
+          <span aria-hidden="true">⋯</span>
+        </summary>
+        <div className="cockpit__overflow-menu" role="menu">
+          {menuActions.map((action) => (
+            <div
+              key={action.key}
+              className="cockpit__overflow-item"
+              data-variant={action.variant ?? 'default'}
+            >
+              <button
+                type="button"
+                role="menuitem"
+                disabled={!action.enabled}
+                onClick={() => {
+                  closeMenu();
+                  action.onClick();
+                }}
+                {...(action.ariaLabel !== undefined ? { 'aria-label': action.ariaLabel } : {})}
               >
-                <button
-                  type="button"
-                  role="menuitem"
-                  disabled={!action.enabled}
-                  onClick={() => {
-                    closeMenu();
-                    action.onClick();
-                  }}
-                  {...(action.ariaLabel !== undefined ? { 'aria-label': action.ariaLabel } : {})}
-                >
-                  {action.label}
-                </button>
-                {!action.enabled && action.reasons !== undefined && action.reasons.length > 0 ? (
-                  <ul className="cockpit__overflow-reasons">
-                    {action.reasons.map((reason) => (
-                      <li key={reason}>{reason}</li>
-                    ))}
-                  </ul>
-                ) : null}
-              </div>
-            ))}
-          </div>
-        </details>
-      ) : null}
-      {isNarrow ? (
+                {action.label}
+              </button>
+              {!action.enabled && action.reasons !== undefined && action.reasons.length > 0 ? (
+                <ul className="cockpit__overflow-reasons">
+                  {action.reasons.map((reason) => (
+                    <li key={reason}>{reason}</li>
+                  ))}
+                </ul>
+              ) : null}
+            </div>
+          ))}
+        </div>
+      </details>
+    ) : null;
+  // The toolbar owns a slot the ⋯ menu portals into once mounted; a cockpit
+  // rendered without that host (e.g. standalone in a test) keeps the menu
+  // inline exactly as before.
+  const overflowNode =
+    overflow === null
+      ? null
+      : overflowMenuHost != null
+        ? createPortal(overflow, overflowMenuHost)
+        : overflow;
+
+  const inspectorToggle = isNarrow ? (
+    <button
+      ref={inspectorButtonRef}
+      type="button"
+      className="cockpit__inspector-toggle"
+      aria-controls="cockpit-inspector-drawer"
+      onClick={onOpenInspector}
+    >
+      Inspector
+    </button>
+  ) : (
+    (() => {
+      // The trailing split-view pane's toggle lives in the toolbar
+      // chrome, not the cockpit's own action bar — it portals into the
+      // toolbar-owned slot the same way the ⋯ overflow menu does, and
+      // renders inline when no host is mounted (e.g. a standalone test).
+      const toggle = (
         <button
           ref={inspectorButtonRef}
           type="button"
-          className="cockpit__inspector-toggle"
-          aria-controls="cockpit-inspector-drawer"
-          onClick={onOpenInspector}
+          className="toolbar__inspector-toggle"
+          aria-label="Toggle inspector"
+          aria-pressed={inspectorOpen}
+          onClick={onToggleInspector}
         >
-          Inspector
+          <span aria-hidden="true">▤</span>
         </button>
-      ) : null}
+      );
+      return inspectorToggleHost != null ? createPortal(toggle, inspectorToggleHost) : toggle;
+    })()
+  );
+
+  return (
+    <div className="toolbar__cockpit-actions" role="group" aria-label="Feature actions">
+      {actionsNode}
+      {overflowNode}
+      {inspectorToggle}
     </div>
+  );
+}
+
+const RUN_SWITCHER_PAGE_SIZE = 8;
+
+/**
+ * The sole run switcher: a popup on the stage bar's trailing side. Its label
+ * follows the viewed run — live: phase + iteration, absent parts omitted;
+ * sealed: `Run N · sealed`. Its menu lists the current run first, then
+ * sealed runs newest-first, with a load-older affordance replacing the old
+ * archive selector's paging.
+ */
+function RunSwitcherPopup({
+  featureId,
+  currentRunNumber,
+  liveLabel,
+  isArchiveMode,
+  selectedRunNumber,
+  onSelectRun,
+}: {
+  featureId: string;
+  currentRunNumber: number;
+  /** The live run's own label (phase + iteration), used for the button and menu. */
+  liveLabel: string;
+  isArchiveMode: boolean;
+  selectedRunNumber: number | null;
+  onSelectRun(runNumber: number | null): void;
+}) {
+  const menuRef = useRef<HTMLDetailsElement>(null);
+  const [runs, setRuns] = useState<RunSummaryView[]>([]);
+  const [page, setPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState<WizardError | null>(null);
+  const loadRequestRef = useRef(0);
+
+  const load = useCallback(
+    (nextPage: number) => {
+      const request = ++loadRequestRef.current;
+      setLoading(true);
+      setLoadError(null);
+      window.agentico
+        .listRuns({ featureId, page: nextPage, pageSize: RUN_SWITCHER_PAGE_SIZE })
+        .then((result) => {
+          if (request !== loadRequestRef.current) return;
+          setRuns((current) => (nextPage === 1 ? result.runs : [...current, ...result.runs]));
+          setPage(result.page);
+          setTotalPages(result.totalPages);
+        })
+        .catch((err: unknown) => {
+          if (request !== loadRequestRef.current) return;
+          setLoadError(parseIpcError(err));
+        })
+        .finally(() => {
+          if (request === loadRequestRef.current) setLoading(false);
+        });
+    },
+    [featureId],
+  );
+
+  const closeMenu = () => {
+    if (menuRef.current !== null) menuRef.current.open = false;
+  };
+
+  useDetailsDismiss(menuRef);
+
+  const buttonLabel = isArchiveMode ? `Run ${selectedRunNumber} · sealed` : liveLabel;
+  const sealedRuns = runs.filter((run) => run.runNumber !== currentRunNumber);
+
+  return (
+    <details
+      ref={menuRef}
+      className="cockpit__run-switcher"
+      onToggle={(event) => {
+        if ((event.target as HTMLDetailsElement).open) load(1);
+      }}
+    >
+      <summary className="cockpit__run-switcher-summary">
+        {buttonLabel} <span aria-hidden="true">▾</span>
+      </summary>
+      <div className="cockpit__run-switcher-menu" role="menu" aria-label="Switch run">
+        <button
+          type="button"
+          role="menuitem"
+          className="cockpit__run-switcher-item"
+          aria-current={!isArchiveMode}
+          onClick={() => {
+            closeMenu();
+            onSelectRun(null);
+          }}
+        >
+          {liveLabel} · current
+        </button>
+        {sealedRuns.map((run) => (
+          <button
+            key={run.runNumber}
+            type="button"
+            role="menuitem"
+            className="cockpit__run-switcher-item"
+            aria-current={isArchiveMode && selectedRunNumber === run.runNumber}
+            onClick={() => {
+              closeMenu();
+              onSelectRun(run.runNumber);
+            }}
+          >
+            Run {run.runNumber} · sealed
+          </button>
+        ))}
+        {page < totalPages ? (
+          <button
+            type="button"
+            className="cockpit__run-switcher-more"
+            disabled={loading}
+            onClick={() => load(page + 1)}
+          >
+            {loading ? 'Loading…' : 'Load older'}
+          </button>
+        ) : null}
+        {loadError !== null ? (
+          <p className="cockpit__run-switcher-error" role="status">
+            Could not load run history — {loadError.message}
+          </p>
+        ) : null}
+      </div>
+    </details>
   );
 }
 
@@ -352,32 +565,13 @@ function CompletionWrapUpMenu({
   onSelect: (verb: CompletionVerb) => void;
 }) {
   const menuRef = useRef<HTMLDetailsElement>(null);
-  useEffect(() => {
-    const onPointerDown = (event: PointerEvent) => {
-      const menu = menuRef.current;
-      if (menu?.open === true && !menu.contains(event.target as Node)) menu.open = false;
-    };
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape') return;
-      const menu = menuRef.current;
-      if (menu?.open === true) {
-        menu.open = false;
-        menu.querySelector<HTMLElement>('.cockpit__wrapup-summary')?.focus();
-      }
-    };
-    document.addEventListener('pointerdown', onPointerDown);
-    document.addEventListener('keydown', onKeyDown);
-    return () => {
-      document.removeEventListener('pointerdown', onPointerDown);
-      document.removeEventListener('keydown', onKeyDown);
-    };
-  }, []);
+  useDetailsDismiss(menuRef, '.cockpit__wrapup-summary');
   return (
     <details ref={menuRef} className="cockpit__wrapup">
       <summary className="cockpit__wrapup-summary" aria-label="Wrap up">
         Wrap up <span aria-hidden="true">▾</span>
       </summary>
-      <div className="cockpit__wrapup-menu" role="menu">
+      <div className="cockpit__wrapup-menu" role="menu" aria-label="Wrap up">
         {verbs.map((v) => (
           <div key={v.verb} className="cockpit__wrapup-item">
             <button
@@ -401,21 +595,12 @@ function CompletionWrapUpMenu({
   );
 }
 
-function InspectorDrawer({
-  snapshot,
-  branch,
-  stale,
-  runMetrics,
-  onOpenPullRequest,
-  onClose,
-}: {
-  snapshot: FeatureSnapshot;
-  branch: string | null;
-  stale: boolean;
-  runMetrics: RunMetrics | null;
-  onOpenPullRequest(url: string): void;
-  onClose(): void;
-}) {
+/**
+ * The narrow-width inspector presentation, shared by every surface that has an
+ * inspector: the drawer owns dismissal and focus, the caller supplies whichever
+ * facts its surface inspects.
+ */
+function InspectorDrawer({ onClose, children }: { onClose(): void; children: ReactNode }) {
   const drawerRef = useRef<HTMLElement>(null);
   useEffect(() => {
     drawerRef.current
@@ -450,13 +635,7 @@ function InspectorDrawer({
             Close inspector
           </button>
         </header>
-        <InspectorContent
-          snapshot={snapshot}
-          branch={branch}
-          stale={stale}
-          runMetrics={runMetrics}
-          onOpenPullRequest={onOpenPullRequest}
-        />
+        {children}
       </aside>
     </div>
   );
@@ -750,8 +929,16 @@ export function FeatureCockpit({
   selectedRunNumber,
   onSelectRun,
   active = true,
+  actionsHost = null,
+  overflowMenuHost = null,
+  inspectorToggleHost = null,
+  onUiStateChange,
 }: FeatureCockpitProps) {
   const [state, setState] = useState<CockpitState>({ phase: 'loading' });
+  const [liveExpandHost, setLiveExpandHost] = useState<HTMLDivElement | null>(null);
+  // The Live surface has no frame of its own, so its view toggle and refresh
+  // ride the stage bar alongside the expand control.
+  const [liveControlsHost, setLiveControlsHost] = useState<HTMLDivElement | null>(null);
   const [streamStale, setStreamStale] = useState(false);
   const [refreshFailed, setRefreshFailed] = useState(false);
   const stale = streamStale || refreshFailed;
@@ -778,7 +965,9 @@ export function FeatureCockpit({
   const [configOpen, setConfigOpen] = useState(false);
   const [runMetrics, setRunMetrics] = useState<RunMetrics | null>(null);
   const [aftercareRun, setAftercareRun] = useState<RunDetailView | null>(null);
-  const [activeSurface, setActiveSurface] = useState<'document' | 'live' | 'changes'>('document');
+  const [activeSurface, setActiveSurface] = useState<'live' | 'changes' | 'document' | 'files'>(
+    'document',
+  );
   const [rewindLanding, setRewindLanding] = useState<{
     outcome: FeatureActionResult;
     run: RunDetailView | null;
@@ -802,6 +991,37 @@ export function FeatureCockpit({
   onCloseRef.current = onClose;
   const onDeletedRef = useRef(onDeleted);
   onDeletedRef.current = onDeleted;
+  const onUiStateChangeRef = useRef(onUiStateChange);
+  onUiStateChangeRef.current = onUiStateChange;
+
+  /**
+   * The funnel's view of this cockpit, refreshed every render (the flows it
+   * calls are plain closures over the loaded snapshot, so they cannot be
+   * hooks) and read at invocation time so a stale command can never dispatch.
+   */
+  const commandTargetRef = useRef<{
+    actions: readonly FeatureActionView[] | null;
+    run(id: FeatureCommandId): void;
+  }>({ actions: null, run: () => {} });
+
+  useEffect(
+    () =>
+      registerFeatureCommandExecutor({
+        featureId,
+        actions: () => commandTargetRef.current.actions,
+        run: (id) => commandTargetRef.current.run(id),
+        toggleInspector: () => setInspectorOpen((current) => !current),
+      }),
+    [featureId],
+  );
+
+  useEffect(() => {
+    onUiStateChangeRef.current?.({
+      featureId,
+      actions: state.phase === 'loaded' ? state.snapshot.actions : null,
+      inspectorOpen,
+    });
+  }, [featureId, inspectorOpen, state]);
 
   useEffect(() => {
     if (attentionPreviewRequest === null || attentionPreviewRequest.attentionId !== undefined) {
@@ -950,6 +1170,7 @@ export function FeatureCockpit({
         setStreamStale(event.stream !== 'live');
         return;
       }
+      if (event.type !== 'invalidated') return;
       if (event.relationshipDeleted === true && event.parentId === featureId) {
         if (onDeletedRef.current !== undefined) onDeletedRef.current(featureId);
         else onCloseRef.current();
@@ -961,11 +1182,7 @@ export function FeatureCockpit({
         event.resourceId === featureId ||
         event.parentId === featureId;
       if (relevant) {
-        if (
-          selectedRunNumberRef.current !== undefined &&
-          selectedRunNumberRef.current !== null &&
-          selectedRunNumberRef.current > 0
-        ) {
+        if (isArchiveRunSelected(selectedRunNumberRef.current)) {
           setCurrentRunBadges((badges) => ({
             ...badges,
             changed: true,
@@ -1197,11 +1414,39 @@ export function FeatureCockpit({
     requestAnimationFrame(() => inspectorButtonRef.current?.focus());
   }, []);
 
+  /** Wide layout only: flips the trailing split-view pane open/closed. */
+  const toggleInspector = useCallback(() => {
+    setInspectorOpen((current) => !current);
+  }, []);
+
   useEffect(() => {
     if (!isNarrow) {
       setInspectorOpen(false);
     }
   }, [isNarrow]);
+
+  // The aftercare receipt's on-demand facts. Gated on the surface actually
+  // being aftercare so no other view pays for the fetches, and keyed on the
+  // repository names inside the hook so the polling refresh cannot restart
+  // them.
+  const aftercareSurface =
+    state.phase === 'loaded' &&
+    !isArchiveRunSelected(selectedRunNumber) &&
+    resolvePostImplementationMode(state.snapshot).kind === 'aftercare' &&
+    state.snapshot.activeChild === undefined;
+  const aftercareEvidence = useAftercareEvidence(
+    featureId,
+    state.phase === 'loaded' ? state.snapshot.repos : [],
+    state.phase === 'loaded' &&
+      (state.snapshot.repoStatus ?? []).some((repo) => repo.prUrl !== undefined),
+    aftercareSurface,
+  );
+
+  if (state.phase !== 'loaded') {
+    // No authoritative catalogue, no funnel target: every feature command
+    // resolves to a no-op until the snapshot lands.
+    commandTargetRef.current = { actions: null, run: () => {} };
+  }
 
   if (state.phase === 'loading') {
     return (
@@ -1255,8 +1500,23 @@ export function FeatureCockpit({
   const refactorAction = actionById(snapshot, 'refactor');
   const reviewFeedbackAction = actionById(snapshot, 'review-feedback');
   const hasPendingReview = isPendingReviewStatus(snapshot.status);
-  const isArchiveMode =
-    selectedRunNumber !== undefined && selectedRunNumber !== null && selectedRunNumber > 0;
+  const isArchiveMode = isArchiveRunSelected(selectedRunNumber);
+
+  // The rail's hold looks at every open item this feature owns (including a
+  // refactor pass's routed items), not the review-filtered list the question/
+  // gate modals use — a paused *NeedsReview checkpoint still needs its review
+  // item's `waitingSince` for the Paused Nm duration.
+  const railOpenAttentionItems = attentionItems.filter(
+    (item) => attentionOwnerFeatureId(item) === featureId,
+  );
+  const railHold = classifyHold(snapshot.status, railOpenAttentionItems);
+  const railSegmentsList = railSegments(snapshot, railHold);
+  const railTrioEntries = railTrio({
+    totalSeconds: runMetrics?.totalSeconds,
+    totalUsd: runMetrics?.totalUsd,
+    contextPercentage: runMetrics?.contextPercentage,
+    hold: railHold,
+  });
 
   const openStopDialog = async () => {
     setActionError(null);
@@ -1360,51 +1620,103 @@ export function FeatureCockpit({
     );
   };
 
-  const openHistory = () => {
-    void window.agentico
-      // Fetch a bounded first page that includes a sealed run when the active
-      // run is newest. A one-item page can only contain current.
-      .listRuns({ featureId, page: 1, pageSize: 20 })
-      .then((result) => {
-        const sealed = result.runs.find((run) => run.runNumber !== snapshot.activeRun);
-        if (sealed !== undefined) {
-          onSelectRun?.(sealed.runNumber);
-          return;
-        }
-        setAnnouncement('No sealed runs are available for this feature yet.');
-      })
-      .catch((error: unknown) => {
-        setAnnouncement(`Could not open run history — ${parseIpcError(error).message}`);
-      });
-  };
-
-  // The stage carries at most one surface at a time. At-rest runs land on
-  // Aftercare and retain their transcript as Run record; active work keeps its
-  // live surface. An attention preview always forces the live surface.
-  const atRest = isRunAtRest(snapshot.status);
-  const documentAvailable = hasPendingReview;
-  const liveAvailable = showsRun(snapshot);
+  // The stage carries at most one surface at a time. The segmented control is
+  // fixed — all four segments always render for a run-facing view — but only
+  // one surface can actually exist at a time, so unavailable segments render
+  // disabled rather than being hidden or reordered. An attention preview
+  // always forces the live surface.
+  const documentAvailable = hasPendingReview && !isArchiveMode;
+  const liveAvailable = showsRun(snapshot) && !isArchiveMode;
+  const filesAvailable = liveAvailable;
   const stageSurfaces: {
-    id: 'document' | 'live' | 'changes';
+    id: 'live' | 'changes' | 'document' | 'files';
     label: string;
-  }[] = [];
-  if (documentAvailable) stageSurfaces.push({ id: 'document', label: 'Document' });
-  if (liveAvailable) {
-    stageSurfaces.push({ id: 'live', label: atRest ? 'Run record' : 'Live activity' });
-  }
-  if (completionEnabled) stageSurfaces.push({ id: 'changes', label: 'Changes' });
-  const surfaceIds = stageSurfaces.map((surface) => surface.id);
+    available: boolean;
+  }[] = [
+    { id: 'live', label: 'Live', available: liveAvailable },
+    { id: 'changes', label: 'Changes', available: completionEnabled && !isArchiveMode },
+    { id: 'document', label: 'Review doc', available: documentAvailable },
+    { id: 'files', label: 'Files', available: filesAvailable },
+  ];
+  const availableSurfaceIds = stageSurfaces
+    .filter((surface) => surface.available)
+    .map((surface) => surface.id);
   const forcedLive =
     attentionPreviewRequest?.attentionId !== undefined &&
     routedAttentionItem?.kind !== 'gate' &&
     liveAvailable;
-  const resolvedSurface: 'document' | 'live' | 'changes' | null = forcedLive
+  const resolvedSurface: 'live' | 'changes' | 'document' | 'files' | null = forcedLive
     ? 'live'
     : ready
       ? null
-      : surfaceIds.includes(activeSurface)
+      : availableSurfaceIds.includes(activeSurface)
         ? activeSurface
-        : (surfaceIds[0] ?? null);
+        : (availableSurfaceIds[0] ?? null);
+
+  // The run/iteration popup's label while live: phase + iteration, absent
+  // parts omitted (e.g. "Implement #3").
+  const liveLabel = [
+    displayPhaseLabel(snapshot.currentPhase),
+    snapshot.currentIteration !== undefined ? `#${snapshot.currentIteration}` : undefined,
+  ]
+    .filter((part): part is string => part !== undefined && part.trim() !== '')
+    .join(' ');
+
+  // One home for the switcher's wiring: the persistent stage bar and the
+  // aftercare bar mount the same popup. Aftercare only renders outside archive
+  // mode, so the shared archive state is correct at both sites.
+  const runSwitcher =
+    onSelectRun === undefined ? null : (
+      <RunSwitcherPopup
+        featureId={featureId}
+        currentRunNumber={snapshot.activeRun}
+        liveLabel={liveLabel}
+        isArchiveMode={isArchiveMode}
+        selectedRunNumber={selectedRunNumber ?? null}
+        onSelectRun={onSelectRun}
+      />
+    );
+  const showsLiveExpand = !isArchiveMode && resolvedSurface === 'live';
+
+  // The stage bar row is persistent across live and sealed runs: the popup
+  // is the sole run switcher, so it (and the segmented control, disabled
+  // while a sealed run is shown) renders above whichever surface — live or
+  // archive — is currently below it.
+  const stageBarRow =
+    !ready || isArchiveMode ? (
+      <div className="cockpit__stage-bar">
+        <div className="cockpit__segmented" role="tablist" aria-label="Stage view">
+          {stageSurfaces.map((surface) => (
+            <button
+              key={surface.id}
+              type="button"
+              role="tab"
+              aria-selected={resolvedSurface === surface.id}
+              disabled={!surface.available}
+              className="cockpit__segment"
+              data-active={resolvedSurface === surface.id}
+              onClick={() => setActiveSurface(surface.id)}
+            >
+              {surface.label}
+              {surface.id === 'live' && resolvedSurface !== 'live' && stopAction !== undefined ? (
+                <span className="cockpit__segment-dot" aria-label="Live activity in progress" />
+              ) : null}
+            </button>
+          ))}
+        </div>
+        {runSwitcher !== null || showsLiveExpand ? (
+          <div className="cockpit__stage-bar-trailing">
+            {runSwitcher}
+            {showsLiveExpand ? (
+              <>
+                <div className="cockpit__stage-bar-controls" ref={setLiveControlsHost} />
+                <div className="cockpit__stage-bar-expand" ref={setLiveExpandHost} />
+              </>
+            ) : null}
+          </div>
+        ) : null}
+      </div>
+    ) : null;
 
   const reasonsOf = (action: ReturnType<typeof actionById>): string[] =>
     action?.disabledReasons.map((reason) => displayFeatureMessage(reason.message)) ?? [];
@@ -1544,15 +1856,6 @@ export function FeatureCockpit({
       },
     });
   }
-  if (onSelectRun !== undefined) {
-    menuActions.push({
-      key: 'history',
-      label: 'Run history',
-      ariaLabel: 'View run history',
-      enabled: true,
-      onClick: openHistory,
-    });
-  }
   if (deleteAction !== undefined) {
     menuActions.push({
       key: 'delete',
@@ -1578,26 +1881,61 @@ export function FeatureCockpit({
     setCompletionModal(null);
     void completion.refresh().then(() => setCompletionModal(verb));
   };
-  const completionControls =
-    completionEnabled && barVerbs.length > 0 ? (
-      isNarrow ? (
-        <CompletionWrapUpMenu verbs={barVerbs} onSelect={openCompletionModal} />
-      ) : (
-        <>
-          {barVerbs.map((v) =>
-            v.state === 'done' ? (
+
+  /**
+   * The funnel's dispatch table: every entry is the *same* callback the
+   * cockpit's own control for that verb uses, so a palette or Feature-menu
+   * invocation lands on the identical flow — immediate dispatch for the three
+   * lifecycle verbs, confirmation dialogs for Stop/Restart/Delete, the
+   * completion preflight modals for the four wrap-up verbs, and the existing
+   * launchers and editors for the rest.
+   */
+  const featureCommandFlows: Record<FeatureCommandId, () => void> = {
+    'feature.start': start,
+    'feature.pause-stop': () => void openStopDialog(),
+    'feature.resume': resume,
+    'feature.retry': retry,
+    'feature.restart': restart,
+    'feature.rewind': () => {
+      setRewindSourceRunNumber(snapshot.activeRun);
+      setRewindDialog(true);
+    },
+    'feature.publish': () => openCompletionModal('publish'),
+    'feature.merge': () => openCompletionModal('merge'),
+    'feature.mark-done': () => openCompletionModal('mark-done'),
+    'feature.cleanup': () => openCompletionModal('cleanup'),
+    'feature.rebase': () => launchRebase(),
+    'feature.refactor': () => setLauncherModal('refactor'),
+    'feature.review-feedback': () => setLauncherModal('review-feedback'),
+    'feature.configuration': () => setConfigOpen(true),
+    'feature.delete': () => setDeleteDialog(true),
+  };
+  commandTargetRef.current = {
+    actions: snapshot.actions,
+    run: (id) => featureCommandFlows[id](),
+  };
+  const renderCompletionControls = (
+    verbs: CompletionVerbModel[],
+    options: { showBlocker?: boolean } = {},
+  ): ReactNode =>
+    verbs.length === 0 ? null : isNarrow ? (
+      <CompletionWrapUpMenu verbs={verbs} onSelect={openCompletionModal} />
+    ) : (
+      <>
+        {verbs.map((v) =>
+          v.state === 'done' ? (
+            <button
+              key={v.verb}
+              type="button"
+              className="cockpit__completion-chip"
+              onClick={() => openCompletionModal(v.verb)}
+              aria-label={`${v.label} — reopen`}
+            >
+              {v.label} ✓
+            </button>
+          ) : (
+            <Fragment key={v.verb}>
               <button
-                key={v.verb}
-                type="button"
-                className="cockpit__completion-chip"
-                onClick={() => openCompletionModal(v.verb)}
-                aria-label={`${v.label} — reopen`}
-              >
-                {v.label} ✓
-              </button>
-            ) : (
-              <button
-                key={v.verb}
                 type="button"
                 className={
                   v.primary ? 'cockpit__completion-button' : 'cockpit__completion-secondary'
@@ -1608,11 +1946,26 @@ export function FeatureCockpit({
               >
                 {v.label}
               </button>
-            ),
-          )}
-        </>
-      )
-    ) : null;
+              {options.showBlocker === true && v.state === 'blocked' && v.blocker !== undefined ? (
+                <span className="cockpit__completion-blocker" title={v.blocker}>
+                  {v.blocker}
+                </span>
+              ) : null}
+            </Fragment>
+          ),
+        )}
+      </>
+    );
+  const completionControls = completionEnabled ? renderCompletionControls(barVerbs) : null;
+  // Aftercare's toolbar owns wrap-up only: delivery (Publish/Merge) lives on
+  // the runway, so the trailing zone reduces to Clean up plus a prominent
+  // Mark done — the verb that actually closes the feature out.
+  const aftercareVerbs = barVerbs
+    .filter((v) => v.verb === 'cleanup' || v.verb === 'mark-done')
+    .map((v) => ({ ...v, primary: v.verb === 'mark-done' }));
+  const aftercareCompletionControls = completionEnabled
+    ? renderCompletionControls(aftercareVerbs, { showBlocker: true })
+    : null;
 
   const postImplementationMode = resolvePostImplementationMode(snapshot);
   const postMenuActions = menuActions.filter((action) => {
@@ -1628,7 +1981,7 @@ export function FeatureCockpit({
       openCompletionModal('publish');
       return;
     }
-    if (action.id === 'merge-updates') {
+    if (action.id === 'merge' || action.id === 'merge-updates') {
       openCompletionModal('merge');
       return;
     }
@@ -1638,6 +1991,20 @@ export function FeatureCockpit({
     }
     setLauncherModal(action.id);
   };
+  // One facts element for both aftercare inspector presentations: the trailing
+  // pane when wide, the drawer when narrow.
+  const aftercarePendingFact = pendingDeliveryFact(pendingDelivery);
+  const aftercareFactsFor = (presentation: 'pane' | 'drawer') => (
+    <AftercareFacts
+      snapshot={snapshot}
+      run={aftercareRun}
+      {...(aftercarePendingFact === null ? {} : { pendingFact: aftercarePendingFact })}
+      {...(presentation === 'pane' ? { title: 'Feature' } : {})}
+      onOpenPullRequest={(url) => {
+        void window.agentico.openExternal({ url });
+      }}
+    />
+  );
   const standaloneAttention =
     activeAttentionItem === undefined ? null : (
       <section className="live-preview__attention" aria-label="Agent request">
@@ -1706,6 +2073,11 @@ export function FeatureCockpit({
                 isNarrow={isNarrow}
                 inspectorButtonRef={inspectorButtonRef}
                 onOpenInspector={() => setInspectorOpen(true)}
+                inspectorOpen={inspectorOpen}
+                onToggleInspector={toggleInspector}
+                inspectorToggleHost={inspectorToggleHost}
+                overflowMenuHost={overflowMenuHost}
+                actionsHost={actionsHost}
               />
               {standaloneAttention}
               <RefactorPassWorkspace
@@ -1724,27 +2096,58 @@ export function FeatureCockpit({
                 status={snapshot.status}
                 primaryActions={[]}
                 menuActions={postMenuActions}
-                extraControls={completionControls}
+                extraControls={aftercareCompletionControls}
                 isNarrow={isNarrow}
                 inspectorButtonRef={inspectorButtonRef}
                 onOpenInspector={() => setInspectorOpen(true)}
+                inspectorOpen={inspectorOpen}
+                onToggleInspector={toggleInspector}
+                inspectorToggleHost={inspectorToggleHost}
+                overflowMenuHost={overflowMenuHost}
+                actionsHost={actionsHost}
               />
+              {runSwitcher === null ? null : (
+                <div className="cockpit__stage-bar cockpit__stage-bar--aftercare">
+                  <div className="cockpit__stage-bar-trailing">{runSwitcher}</div>
+                </div>
+              )}
               {standaloneAttention}
-              <AftercareWorkspace
-                snapshot={snapshot}
-                run={aftercareRun}
-                actionError={actionError}
-                pending={pendingDelivery}
-                busyAction={
-                  rebaseLaunchBusy ? { id: 'rebase', label: 'Starting rebase pass…' } : undefined
+              {isNarrow && inspectorOpen ? (
+                <InspectorDrawer onClose={closeInspector}>
+                  {aftercareFactsFor('drawer')}
+                </InspectorDrawer>
+              ) : null}
+              <div
+                className={
+                  !isNarrow && inspectorOpen
+                    ? 'cockpit__content cockpit__content--inspector-open'
+                    : 'cockpit__content'
                 }
-                onAction={openAftercareAction}
-                onOpenRunRecord={() => setRunRecordOpen(true)}
-                onOpenChanges={() => setChangesOpen(true)}
-                onOpenPullRequest={(url) => {
-                  void window.agentico.openExternal({ url });
-                }}
-              />
+              >
+                <AftercareWorkspace
+                  snapshot={snapshot}
+                  run={aftercareRun}
+                  actionError={actionError}
+                  pending={pendingDelivery}
+                  preflight={completion.preflight}
+                  evidence={aftercareEvidence}
+                  busyAction={
+                    rebaseLaunchBusy ? { id: 'rebase', label: 'Starting rebase pass' } : undefined
+                  }
+                  onAction={openAftercareAction}
+                  onOpenRunRecord={() => setRunRecordOpen(true)}
+                  onOpenChanges={() => setChangesOpen(true)}
+                  onOpenConfiguration={() => setConfigOpen(true)}
+                  onOpenPullRequest={(url) => {
+                    void window.agentico.openExternal({ url });
+                  }}
+                />
+                {!isNarrow && inspectorOpen ? (
+                  <aside className="cockpit__inspector" aria-label="Feature inspector">
+                    {aftercareFactsFor('pane')}
+                  </aside>
+                ) : null}
+              </div>
             </>
           )
         ) : null}
@@ -1783,6 +2186,7 @@ export function FeatureCockpit({
             busy={attentionBusy === activeGate.id}
             drafts={attentionDrafts}
             setDrafts={setAttentionDrafts}
+            phase={snapshot.currentPhase}
             onAnswerLater={() => {
               setDismissedGateId(activeGate.id);
               onAttentionPreviewClose?.();
@@ -1808,9 +2212,7 @@ export function FeatureCockpit({
               runNumber={snapshot.activeRun}
               active={retainedEffectsActive}
               currentPhase={snapshot.currentPhase}
-              featureStatus={snapshot.status}
               currentRoadmapPhase={snapshot.currentRoadmapPhase}
-              totalRoadmapPhases={snapshot.totalRoadmapPhases}
               currentIteration={snapshot.currentIteration}
               phaseStatus={snapshot.phaseStatus}
               reviewGate={snapshot.reviewGate}
@@ -2018,19 +2420,15 @@ export function FeatureCockpit({
     <section className="cockpit" aria-label={`Feature ${snapshot.name}`}>
       {isArchiveMode ? (
         <div className="cockpit__archive">
+          {stageBarRow}
           <ArchiveMode
             featureId={featureId}
             selectedRunNumber={selectedRunNumber!}
-            currentRunNumber={snapshot.activeRun}
             active={retainedEffectsActive}
             pipeline={snapshot.pipeline}
             currentRunBadges={currentRunBadges}
             onReturnToCurrent={() => {
               onSelectRun?.(null);
-              setCurrentRunBadges({ changed: false, attention: false });
-            }}
-            onSelectRun={(runNumber) => {
-              onSelectRun?.(runNumber);
               setCurrentRunBadges({ changed: false, attention: false });
             }}
           />
@@ -2045,6 +2443,18 @@ export function FeatureCockpit({
             isNarrow={isNarrow}
             inspectorButtonRef={inspectorButtonRef}
             onOpenInspector={() => setInspectorOpen(true)}
+            inspectorOpen={inspectorOpen}
+            onToggleInspector={toggleInspector}
+            inspectorToggleHost={inspectorToggleHost}
+            overflowMenuHost={overflowMenuHost}
+            actionsHost={actionsHost}
+          />
+
+          <PhaseRail
+            segments={railSegmentsList}
+            trio={railTrioEntries}
+            hold={railHold}
+            tone={snapshot.status === 'Failed' ? 'error' : 'progress'}
           />
 
           {rewindLanding !== null ? (
@@ -2057,48 +2467,31 @@ export function FeatureCockpit({
           ) : null}
 
           {isNarrow && inspectorOpen ? (
-            <InspectorDrawer
-              snapshot={snapshot}
-              branch={branch}
-              stale={stale}
-              runMetrics={runMetrics}
-              onOpenPullRequest={(url) => {
-                void window.agentico.openExternal({ url });
-              }}
-              onClose={closeInspector}
-            />
+            <InspectorDrawer onClose={closeInspector}>
+              <InspectorContent
+                snapshot={snapshot}
+                branch={branch}
+                stale={stale}
+                runMetrics={runMetrics}
+                onOpenPullRequest={(url) => {
+                  void window.agentico.openExternal({ url });
+                }}
+              />
+            </InspectorDrawer>
           ) : null}
 
-          <div className="cockpit__content">
+          <div
+            className={
+              !isNarrow && inspectorOpen
+                ? 'cockpit__content cockpit__content--inspector-open'
+                : 'cockpit__content'
+            }
+          >
             <main className="cockpit__stage">
               <>
                 {resolvedSurface !== 'live' ? standaloneAttention : null}
 
-                {stageSurfaces.length > 1 ? (
-                  <div className="cockpit__stage-tabs" role="tablist" aria-label="Stage view">
-                    {stageSurfaces.map((surface) => (
-                      <button
-                        key={surface.id}
-                        type="button"
-                        role="tab"
-                        aria-selected={resolvedSurface === surface.id}
-                        className="cockpit__stage-tab"
-                        data-active={resolvedSurface === surface.id}
-                        onClick={() => setActiveSurface(surface.id)}
-                      >
-                        {surface.label}
-                        {surface.id === 'live' &&
-                        resolvedSurface !== 'live' &&
-                        stopAction !== undefined ? (
-                          <span
-                            className="cockpit__stage-tab-dot"
-                            aria-label="Live activity in progress"
-                          />
-                        ) : null}
-                      </button>
-                    ))}
-                  </div>
-                ) : null}
+                {stageBarRow}
 
                 {resolvedSurface === 'document' ? (
                   <div className="cockpit__surface cockpit__surface--document">
@@ -2116,15 +2509,15 @@ export function FeatureCockpit({
                       runNumber={snapshot.activeRun}
                       active={retainedEffectsActive}
                       currentPhase={snapshot.currentPhase}
-                      featureStatus={snapshot.status}
                       currentRoadmapPhase={snapshot.currentRoadmapPhase}
-                      totalRoadmapPhases={snapshot.totalRoadmapPhases}
                       currentIteration={snapshot.currentIteration}
                       phaseStatus={snapshot.phaseStatus}
                       reviewGate={snapshot.reviewGate}
                       verificationItems={snapshot.verificationItems}
                       waitReason={snapshot.waitReason}
                       shouldStream={stopAction !== undefined}
+                      expandHost={liveExpandHost}
+                      controlsHost={liveControlsHost}
                       attentionRequestId={
                         attentionPreviewRequest?.attentionId === undefined ||
                         routedAttentionItem?.kind === 'gate'
@@ -2197,6 +2590,27 @@ export function FeatureCockpit({
                   </div>
                 ) : null}
 
+                {resolvedSurface === 'files' ? (
+                  <div className="cockpit__surface cockpit__surface--live">
+                    <CurrentRunInspection
+                      featureId={featureId}
+                      runNumber={snapshot.activeRun}
+                      active={retainedEffectsActive}
+                      currentPhase={snapshot.currentPhase}
+                      currentRoadmapPhase={snapshot.currentRoadmapPhase}
+                      currentIteration={snapshot.currentIteration}
+                      phaseStatus={snapshot.phaseStatus}
+                      reviewGate={snapshot.reviewGate}
+                      verificationItems={snapshot.verificationItems}
+                      waitReason={snapshot.waitReason}
+                      // The files surface renders no transcript, so it never
+                      // subscribes to cohort output.
+                      shouldStream={false}
+                      mode="files"
+                    />
+                  </div>
+                ) : null}
+
                 {resolvedSurface === null && ready ? (
                   <div className="cockpit__empty-state" role="status">
                     <span aria-hidden="true">●</span> Ready to start
@@ -2229,7 +2643,7 @@ export function FeatureCockpit({
                 </div>
               </>
             </main>
-            {!isNarrow ? (
+            {!isNarrow && inspectorOpen ? (
               <aside className="cockpit__inspector" aria-label="Feature inspector">
                 <InspectorContent
                   snapshot={snapshot}
@@ -2260,6 +2674,7 @@ export function FeatureCockpit({
               busy={attentionBusy === activeGate.id}
               drafts={attentionDrafts}
               setDrafts={setAttentionDrafts}
+              phase={snapshot.currentPhase}
               onAnswerLater={() => {
                 setDismissedGateId(activeGate.id);
                 onAttentionPreviewClose?.();

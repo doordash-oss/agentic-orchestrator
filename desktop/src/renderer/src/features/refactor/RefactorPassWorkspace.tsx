@@ -423,9 +423,7 @@ export function RefactorPassWorkspace({
                 runNumber={child.activeRun}
                 active={active}
                 currentPhase={child.currentPhase}
-                featureStatus={child.status}
                 currentRoadmapPhase={child.currentRoadmapPhase}
-                totalRoadmapPhases={child.totalRoadmapPhases}
                 currentIteration={child.currentIteration}
                 phaseStatus={child.phaseStatus}
                 reviewGate={child.reviewGate}
@@ -525,6 +523,7 @@ export function RefactorPassWorkspace({
           busy={attentionBusy === activeGate.id}
           drafts={attentionDrafts}
           setDrafts={setAttentionDrafts}
+          phase={child?.currentPhase}
           onAnswerLater={() => setDismissedGateId(activeGate.id)}
           onResolved={async () => {
             setDismissedGateId(activeGate.id);

@@ -21,14 +21,11 @@ import {
   type JourneyWorld,
   waitFor,
 } from '../helpers/world';
+import { seedVerificationNeedUserInputGate } from '../helpers/verificationGateFixture';
 import { replaceTopLevelBlock, upsertYamlScalar } from '../helpers/yaml';
 
 type AttentionItems = Awaited<ReturnType<Window['agentico']['getAttention']>>['items'];
 type AttentionItem = AttentionItems[number];
-
-const verificationDecisionPrompt =
-  'Enter WAIVE to authorize waiving these blocked checks, or RETRY_AFTER_AUTH after making the required login/permission available.';
-const retryAfterAuth = 'RETRY_AFTER_AUTH';
 
 test('packaged spatial shell keeps tab navigation, draft cancellation, and narrow attention resolution reachable', async ({}, testInfo) => {
   const transcript = new Transcript(
@@ -64,15 +61,15 @@ test('packaged spatial shell keeps tab navigation, draft cancellation, and narro
     await setWindowSize(handle, 1440, 900);
     await setTheme(handle, 'light');
     await handle.page.getByRole('checkbox', { name: /spatial-shell-lab/ }).check();
-    await handle.page.getByRole('button', { name: 'Next: What' }).click();
+    await handle.page.getByRole('button', { name: 'Next: Describe' }).click();
     await handle.page.locator('#feature-name').fill('Spatial Shell Attention Fixture');
     await handle.page
       .locator('#feature-description')
       .fill('A real packaged feature used to exercise the spatial shell journey.');
-    await handle.page.getByRole('button', { name: 'Next: Pipeline' }).click();
-    await handle.page.getByRole('button', { name: 'Next: Review' }).click();
+    await handle.page.getByRole('button', { name: 'Next: Depth' }).click();
+    await handle.page.getByRole('button', { name: 'Next: Contract' }).click();
     await handle.page.getByRole('checkbox', { name: /Start immediately/ }).uncheck();
-    await handle.page.getByRole('button', { name: 'Create feature' }).click();
+    await handle.page.getByRole('button', { name: 'Create', exact: true }).click();
 
     const cockpit = handle.page.getByLabel('Feature Spatial Shell Attention Fixture');
     await expect(cockpit).toBeVisible({ timeout: 30_000 });
@@ -84,7 +81,7 @@ test('packaged spatial shell keeps tab navigation, draft cancellation, and narro
     ]);
     await setWindowSize(handle, 1440, 900);
     await setTheme(handle, 'light');
-    await cockpit.getByRole('button', { name: 'Start', exact: true }).click();
+    await handle.page.getByRole('button', { name: 'Start', exact: true }).click();
     await waitForAttentionItem(handle.page, 'perm-allow-once');
     await captureVisualMatrix(handle, [
       [1440, 900, 'visual_19d981d14d86', 'visual_5fb6b6a2bc0b'],
@@ -92,45 +89,61 @@ test('packaged spatial shell keeps tab navigation, draft cancellation, and narro
       [760, 900, 'visual_7c45b5b3218b', 'visual_990b09a8e40c'],
     ]);
 
-    transcript.section('Overflowing feature tabs remain directly navigable');
+    transcript.section('Every sidebar feature remains directly navigable with no overflow menu');
     const overflowNames = Array.from({ length: 12 }, (_, index) => `Spatial overflow ${index + 1}`);
     await handle.page.evaluate(async (names) => {
       for (const name of names) {
         await window.agentico.createFeature({
           name,
-          description: 'Created through the packaged IPC contract for tab overflow coverage.',
+          description: 'Created through the packaged IPC contract for sidebar-list coverage.',
           repoKeys: ['spatial-shell-lab'],
           useCurrentBranch: false,
         });
       }
     }, overflowNames);
-    await handle.page.getByRole('tab', { name: 'Home' }).click();
+    await handle.page.getByRole('option', { name: 'Overview' }).click();
     for (const name of overflowNames) {
-      const row = handle.page
-        .getByRole('listitem')
-        .filter({ has: handle.page.getByRole('heading', { name, exact: true }) });
+      const row = handle.page.getByRole('listitem').filter({
+        has: handle.page.locator('.overview-row__name', { hasText: sidebarRowNamePattern(name) }),
+      });
       await expect(row).toBeVisible({ timeout: 30_000 });
-      await row.getByRole('button', { name: 'Open' }).click();
-      await handle.page.getByRole('tab', { name: 'Home' }).click();
+      // This section's actual claim is reachability — every bulk-created
+      // feature stays one click away with no overflow affordance — not a
+      // specific lane. A just-created feature can occasionally pick up a
+      // pending attention item of its own (e.g. a review checkpoint) and
+      // land in Waiting rather than At rest; either labeled action reaches
+      // the feature (Answer opens the cockpit plainly when there is no
+      // concrete pending item to jump to), so asserting a specific label
+      // here would test lane classification rather than this section's
+      // actual claim.
+      const actionButton = row.locator('.overview-row__action');
+      await expect(actionButton).toBeVisible({ timeout: 30_000 });
+      await actionButton.click();
+      await handle.page.getByRole('option', { name: 'Overview' }).click();
     }
     await setWindowSize(handle, 760, 900);
     await setWindowSize(handle, 1440, 900);
     await setTheme(handle, 'light');
-    let tabTarget = await featureTabNavigationTarget(handle);
+    // The sidebar is one scrolling list with no overflow affordance: every
+    // feature, including the one furthest down the list, stays reachable by
+    // its own option role with nothing beyond Playwright's own auto-scroll.
+    for (const name of overflowNames) {
+      await expect(
+        handle.page.getByRole('option', { name: sidebarRowNamePattern(name) }),
+      ).toBeVisible();
+    }
     await evidenceShot(handle, 'visual_43fa4c4627eb');
     await setTheme(handle, 'dark');
-    tabTarget = await featureTabNavigationTarget(handle);
     await evidenceShot(handle, 'visual_262f46c3198f');
     await setTheme(handle, 'light');
-    tabTarget = await featureTabNavigationTarget(handle);
-    await tabTarget.click();
-    await expect(handle.page.getByRole('tab', { name: 'Spatial overflow 12' })).toHaveAttribute(
-      'aria-selected',
-      'true',
-    );
+    const lastOverflowOption = handle.page.getByRole('option', {
+      name: sidebarRowNamePattern('Spatial overflow 12'),
+    });
+    await lastOverflowOption.click();
+    await expect(lastOverflowOption).toHaveAttribute('aria-selected', 'true');
 
-    transcript.section('Dirty focused creation requires deliberate cancellation');
-    await handle.page.getByRole('tab', { name: 'Home' }).click();
+    transcript.section('Dirty creation sheet requires deliberate cancellation');
+    await handle.page.getByRole('option', { name: 'Overview' }).click();
     await captureVisualMatrix(handle, [
       [1440, 900, 'visual_5b3f80a793ab', 'visual_51f1a4efb671'],
       [1728, 1117, 'visual_6f63b933d14e', 'visual_790ad17a43d8'],
@@ -140,16 +153,16 @@ test('packaged spatial shell keeps tab navigation, draft cancellation, and narro
     await setTheme(handle, 'light');
     await handle.page.getByRole('button', { name: 'New feature' }).click();
     await handle.page.getByRole('checkbox', { name: /spatial-shell-lab/ }).check();
-    await handle.page.getByRole('button', { name: 'Next: What' }).click();
+    await handle.page.getByRole('button', { name: 'Next: Describe' }).click();
     await handle.page.locator('#feature-name').fill('Discarded spatial shell draft');
-    await handle.page.getByRole('button', { name: 'Back to Home' }).click();
+    await handle.page.getByRole('button', { name: 'Cancel' }).click();
     const discard = handle.page.getByRole('dialog', { name: 'Discard feature draft' });
     await expect(discard).toBeVisible();
     await discard.getByRole('button', { name: 'Discard draft' }).click();
     await expect(handle.page.getByRole('button', { name: 'New feature' })).toBeFocused();
 
     transcript.section('Narrow cockpit resolves blocking attention with inspector access');
-    await handle.page.getByRole('tab', { name: 'Spatial Shell Attention Fixture' }).click();
+    await handle.page.getByRole('option', { name: 'Spatial Shell Attention Fixture' }).click();
     await expect(cockpit.getByRole('button', { name: 'Inspector' })).toBeVisible();
     await cockpit.getByRole('button', { name: 'Inspector' }).click();
     const inspector = handle.page.getByRole('dialog', { name: 'Feature inspector' });
@@ -192,14 +205,19 @@ async function captureVisualMatrix(handle: AppHandle, cells: readonly VisualCell
   }
 }
 
-async function featureTabNavigationTarget(handle: AppHandle): Promise<Locator> {
-  const visibleTab = handle.page.getByRole('tab', { name: 'Spatial overflow 12' });
-  if (await visibleTab.isVisible()) return visibleTab;
-  await handle.page.getByRole('button', { name: /Tabs/ }).click();
-  const menu = handle.page.getByRole('menu', { name: 'Open features' });
-  const menuItem = menu.getByRole('menuitem', { name: 'Spatial overflow 12' });
-  await expect(menuItem).toBeVisible();
-  return menuItem;
+/**
+ * Anchors a sidebar row's expected accessible name at the start and requires
+ * either the end of the name or whitespace right after it, so a numbered
+ * feature name (e.g. "Spatial overflow 1") can't accidentally match a row
+ * whose name merely starts with it (e.g. "Spatial overflow 12") once a lane
+ * sub-line is appended to the row's accessible name.
+ */
+function sidebarRowNamePattern(name: string): RegExp {
+  return new RegExp(`^${escapeRegExp(name)}(?:$|\\s)`);
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 test('packaged inbox and cockpit resolve real attention classes from the bundled server', async ({}, testInfo) => {
@@ -231,19 +249,22 @@ test('packaged inbox and cockpit resolve real attention classes from the bundled
       handle.page,
       'Packaged Attention Resolution',
     );
-    await cockpit.getByRole('button', { name: 'Start', exact: true }).click();
+    await handle.page.getByRole('button', { name: 'Start', exact: true }).click();
 
     transcript.section('Global inbox badge and allow-once resolution');
     await waitForAttentionItem(handle.page, 'perm-allow-once');
     await expect(attentionBell(handle.page)).toHaveAccessibleName(/Attention inbox, 1 pending/);
-    await handle.page.getByRole('tab', { name: 'Home' }).click();
+    await handle.page.getByRole('option', { name: 'Overview' }).click();
+    // The old tab strip rendered every open tab's own badge alongside the
+    // Home dashboard's, so the same status text appeared twice at once. The
+    // sidebar has no such second, always-rendered surface — the equivalent
+    // signal is the Overview waiting-lane row's own state-cell text, which
+    // now carries the pending-approval summary instead of a separate badge.
     await expect(
-      handle.page.getByRole('status', {
-        name: 'Blocking input for Packaged Attention Resolution: 1 pending',
-      }),
-    ).toHaveCount(2);
+      handle.page.locator('.overview-row__state', { hasText: 'Approve 1 request' }),
+    ).toHaveCount(1);
     await evidenceShot(handle, 'attention-badges-dashboard-tab-light-wide');
-    await handle.page.getByRole('tab', { name: /Packaged Attention Resolution/ }).click();
+    await handle.page.getByRole('option', { name: /Packaged Attention Resolution/ }).click();
     let inbox = await openInbox(handle);
     let attentionDetail = await expandInboxItem(handle, inbox, /Permission/);
     await expect(attentionDetail.getByText(/Bash .*printf allow-once/).first()).toBeVisible();
@@ -297,8 +318,8 @@ test('packaged inbox and cockpit resolve real attention classes from the bundled
     transcript.section('Inline cockpit resolution for feature-scoped attention');
     await waitForAttentionItem(handle.page, 'perm-deny');
     await closeInbox(handle.page);
-    await handle.page.getByRole('tab', { name: 'Home' }).click();
-    await handle.page.getByRole('tab', { name: /Packaged Attention Resolution/ }).click();
+    await handle.page.getByRole('option', { name: 'Overview' }).click();
+    await handle.page.getByRole('option', { name: /Packaged Attention Resolution/ }).click();
     cockpit = handle.page.getByLabel('Feature Packaged Attention Resolution');
     const inlineAttention = cockpit.getByRole('region', { name: 'Agent request' });
     await expect(inlineAttention).toBeVisible({ timeout: 30_000 });
@@ -335,6 +356,21 @@ test('packaged inbox and cockpit resolve real attention classes from the bundled
 
     transcript.section('AskUser bundle routed from the inbox and resolved from the cockpit');
     await waitForAttentionItem(handle.page, 'ask-bundle');
+
+    // While the question is pending on a still-executing run, the rail
+    // substitutes the attention-colored Waiting readout for the plain trio —
+    // the same hold the cockpit's own surfaces key on.
+    await handle.page.getByRole('option', { name: /Packaged Attention Resolution/ }).click();
+    cockpit = handle.page.getByLabel('Feature Packaged Attention Resolution');
+    const questionRail = cockpit.locator('.phase-rail');
+    await expect(questionRail).toBeVisible({ timeout: 30_000 });
+    const waitingEntry = questionRail.locator('.phase-rail__trio-entry[data-attention="true"]');
+    await expect(waitingEntry).toHaveCount(1, { timeout: 30_000 });
+    await expect(waitingEntry.locator('dt')).toHaveText('Waiting');
+    await expect(waitingEntry.locator('dd')).toHaveText(/^(<1m|\d+[mhd])$/);
+    await evidenceShot(handle, 'attention-question-rail-waiting');
+    transcript.step('the rail read the attention-colored Waiting hold while the question waited');
+
     inbox = await openInbox(handle);
     // Feature-scoped questions route to the cockpit, where the prompt and
     // options render as the agent's conversation turn and the answer is sent
@@ -382,14 +418,12 @@ test('packaged inbox and cockpit resolve real attention classes from the bundled
     });
 
     handle = await launchApp(world, testInfo, { traceName: 'attention-feature-help-seeded' });
-    await expect(
-      handle.page.getByRole('banner').getByRole('heading', { name: 'Agentico' }),
-    ).toBeVisible({
+    await expect(handle.page.getByRole('navigation', { name: 'Feature sidebar' })).toBeVisible({
       timeout: 60_000,
     });
     await waitForServerPromptText(world, 'Which cockpit help path should continue?');
     const featureHelpItem = await waitForAttentionKind(handle.page, 'help');
-    await handle.page.getByRole('tab', { name: /Packaged Attention Resolution/ }).click();
+    await handle.page.getByRole('option', { name: /Packaged Attention Resolution/ }).click();
     cockpit = handle.page.getByLabel('Feature Packaged Attention Resolution');
     const inlineHelp = cockpit.getByRole('region', { name: 'Agent request' });
     await expect(inlineHelp.getByText('Which cockpit help path should continue?')).toBeVisible();
@@ -454,9 +488,7 @@ test('packaged inbox resolves an interactive help request from chat', async ({},
       );
     }
     await handle.page.reload();
-    await expect(
-      handle.page.getByRole('banner').getByRole('heading', { name: 'Agentico' }),
-    ).toBeVisible({
+    await expect(handle.page.getByRole('navigation', { name: 'Feature sidebar' })).toBeVisible({
       timeout: 60_000,
     });
     await expect(attentionBell(handle.page)).toHaveAccessibleName(/Attention inbox, 1 pending/);
@@ -517,9 +549,7 @@ test('packaged inbox renders and drafts a real NEED_USER_INPUT gate', async ({},
     await assertNoLeakedProcessesEventually(world);
 
     handle = await launchApp(world, testInfo, { traceName: 'attention-gate-seeded' });
-    await expect(
-      handle.page.getByRole('banner').getByRole('heading', { name: 'Agentico' }),
-    ).toBeVisible({
+    await expect(handle.page.getByRole('navigation', { name: 'Feature sidebar' })).toBeVisible({
       timeout: 60_000,
     });
     await waitForAttentionGate(handle.page, feature.id);
@@ -543,7 +573,7 @@ test('packaged inbox renders and drafts a real NEED_USER_INPUT gate', async ({},
     ).toBeDisabled();
     await initialGateDialog.getByRole('button', { name: 'Answer later' }).click();
     await expect(initialGateDialog).toHaveCount(0);
-    await handle.page.getByRole('tab', { name: 'Home' }).click();
+    await handle.page.getByRole('option', { name: 'Overview' }).click();
 
     const inbox = await openInbox(handle);
     await inbox.getByRole('button', { name: /Input gate/ }).click();
@@ -576,9 +606,7 @@ test('packaged inbox renders and drafts a real NEED_USER_INPUT gate', async ({},
     await assertNoLeakedProcessesEventually(world);
 
     handle = await launchApp(world, testInfo, { traceName: 'attention-gate-relaunch' });
-    await expect(
-      handle.page.getByRole('banner').getByRole('heading', { name: 'Agentico' }),
-    ).toBeVisible({
+    await expect(handle.page.getByRole('navigation', { name: 'Feature sidebar' })).toBeVisible({
       timeout: 60_000,
     });
     await waitForAttentionGate(handle.page, feature.id);
@@ -604,7 +632,7 @@ test('packaged inbox renders and drafts a real NEED_USER_INPUT gate', async ({},
     );
 
     transcript.section('Feature-scoped Stop clears the paused gate');
-    await handle.page.getByRole('tab', { name: 'Home' }).click();
+    await handle.page.getByRole('option', { name: 'Overview' }).click();
     await createFeatureViaForm(handle, {
       name: 'Packaged Feature Stop Gate Fixture',
       description: 'Seeded feature-scoped NEED_USER_INPUT gate stopped through the cockpit.',
@@ -626,9 +654,7 @@ test('packaged inbox renders and drafts a real NEED_USER_INPUT gate', async ({},
     });
 
     handle = await launchApp(world, testInfo, { traceName: 'attention-feature-stop-gate' });
-    await expect(
-      handle.page.getByRole('banner').getByRole('heading', { name: 'Agentico' }),
-    ).toBeVisible({
+    await expect(handle.page.getByRole('navigation', { name: 'Feature sidebar' })).toBeVisible({
       timeout: 60_000,
     });
     await waitForAttentionGate(handle.page, stopFeature.id);
@@ -640,13 +666,15 @@ test('packaged inbox renders and drafts a real NEED_USER_INPUT gate', async ({},
     await featureStopGateDialog.getByRole('button', { name: 'Answer later' }).click();
     await expect(featureStopGateDialog).toHaveCount(0);
 
-    const stopFeatureTab = handle.page.getByRole('tab', {
+    const stopFeatureOption = handle.page.getByRole('option', {
       name: 'Packaged Feature Stop Gate Fixture',
     });
-    await stopFeatureTab.click();
-    await expect(stopFeatureTab).toHaveAttribute('aria-selected', 'true');
-    const stopFeatureCockpit = handle.page.getByLabel('Feature Packaged Feature Stop Gate Fixture');
-    const featureStopButton = stopFeatureCockpit.getByRole('button', {
+    await stopFeatureOption.click();
+    await expect(stopFeatureOption).toHaveAttribute('aria-selected', 'true');
+    await expect(
+      handle.page.getByLabel('Feature Packaged Feature Stop Gate Fixture'),
+    ).toBeVisible();
+    const featureStopButton = handle.page.getByRole('button', {
       name: 'Stop',
       exact: true,
     });
@@ -720,7 +748,7 @@ async function closeInbox(page: Page): Promise<void> {
     }
     return;
   }
-  await inbox.getByRole('button', { name: 'Close inbox' }).click();
+  await page.keyboard.press('Escape');
   await expect(inbox).toHaveCount(0);
 }
 
@@ -759,100 +787,6 @@ async function waitForFeatureNamed(
   return found!;
 }
 
-function seedVerificationNeedUserInputGate(
-  world: JourneyWorld,
-  featureId: string,
-  repoName = 'gate-lab',
-): string {
-  const runDir = path.join(world.stateDir, featureId, 'runs', 'run-001');
-  const planPath = path.join(runDir, 'phase-03', 'plan', 'phase-plan.md');
-  const contractPath = path.join(world.stateDir, featureId, 'testing-contract.yaml');
-  const gatePath = path.join(
-    runDir,
-    'phase-03',
-    'implement',
-    'iteration-03',
-    'need-user-input.yaml',
-  );
-  fs.mkdirSync(path.dirname(planPath), { recursive: true });
-  fs.mkdirSync(path.dirname(gatePath), { recursive: true });
-  const trustedContractPath = path.join(
-    fs.realpathSync(path.dirname(contractPath)),
-    path.basename(contractPath),
-  );
-  const trustedGatePath = path.join(
-    fs.realpathSync(path.dirname(gatePath)),
-    path.basename(gatePath),
-  );
-  fs.writeFileSync(
-    planPath,
-    [
-      '# Seeded Gate Resume Plan',
-      '',
-      '## Overview',
-      'Resume the packaged gate fixture into a real implementation session.',
-      '',
-      '## Tasks',
-      '### Task 1: Resume seeded implementation',
-      '',
-      `**Repo:** ${repoName}`,
-      '',
-      '#### What to build',
-      'Record that the packaged gate resume path can relaunch implementation.',
-      '',
-      '#### Acceptance criteria',
-      '- [ ] The workflow provider session starts after Resume.',
-      '',
-    ].join('\n'),
-  );
-  fs.writeFileSync(contractPath, seededVerificationContractYaml('deployment-capability'));
-  fs.writeFileSync(
-    gatePath,
-    [
-      'summary: Required verification is blocked by missing deployment credentials.',
-      'iteration: 3',
-      'questions:',
-      '  - index: 1',
-      `    prompt: ${verificationDecisionPrompt}`,
-      '    answer: ""',
-      'verification:',
-      '  blockers:',
-      '    - item_id: deployment-capability',
-      '      name: Deployment smoke test',
-      `      repo_name: ${repoName}`,
-      '      command: make deploy-smoke',
-      '      reason: missing declared capability "deployment credentials"',
-      '      capabilities:',
-      '        - deployment credentials',
-      '      remediation: Make deployment credentials available, then retry verification.',
-      'verification_decision:',
-      `  contract_path: ${trustedContractPath}`,
-      '  contract_revision: 1',
-      '  item_ids:',
-      '    - deployment-capability',
-      '  allowed_actions:',
-      '    - WAIVE',
-      `    - ${retryAfterAuth}`,
-      '',
-    ].join('\n'),
-  );
-
-  const runPath = path.join(runDir, 'run.yaml');
-  let runYaml = fs.readFileSync(runPath, 'utf8');
-  runYaml = upsertYamlScalar(runYaml, 'current_iteration', '3');
-  runYaml = upsertYamlScalar(runYaml, 'pending_need_user_input_path', trustedGatePath);
-  runYaml = upsertYamlMapScalar(runYaml, 'artifacts', 'plan', planPath);
-  fs.writeFileSync(runPath, runYaml);
-
-  const featurePath = path.join(world.stateDir, featureId, 'feature.yaml');
-  let featureYaml = fs.readFileSync(featurePath, 'utf8');
-  featureYaml = upsertYamlScalar(featureYaml, 'status', 'NeedUserInput');
-  // Phase does not implement string YAML marshaling; PhaseImplement persists as 2.
-  featureYaml = upsertYamlScalar(featureYaml, 'current_phase', '2');
-  fs.writeFileSync(featurePath, featureYaml);
-  return trustedGatePath;
-}
-
 function seedFeatureHelpQueue(world: JourneyWorld, featureId: string): string {
   const featurePath = path.join(world.stateDir, featureId, 'feature.yaml');
   let featureYaml = fs.readFileSync(featurePath, 'utf8');
@@ -866,53 +800,6 @@ function seedFeatureHelpQueue(world: JourneyWorld, featureId: string): string {
   ]);
   fs.writeFileSync(featurePath, featureYaml);
   return featurePath;
-}
-
-function seededVerificationContractYaml(...itemIds: string[]): string {
-  return [
-    'version: 2',
-    'revision: 1',
-    'scope: seeded-e2e-capability',
-    'generated_from: {}',
-    'items:',
-    ...itemIds.flatMap((itemId) => [
-      `  - id: ${itemId}`,
-      '    source: manual',
-      '    owner: harness',
-      `    name: ${itemId}`,
-      '    command: seeded capability probe',
-      '    expected_evidence:',
-      '      kind: manual_observation',
-      '      matcher: non_empty_summary',
-      '    policy:',
-      '      required: true',
-      '      allow_substitution: false',
-      '      allow_blocked: false',
-      '      allow_waiver: true',
-    ]),
-    '',
-  ].join('\n');
-}
-
-function upsertYamlMapScalar(yaml: string, mapKey: string, key: string, value: string): string {
-  const lines = yaml.split('\n');
-  const parentIndex = lines.findIndex((line) => line === `${mapKey}:`);
-  if (parentIndex === -1) {
-    const suffix = yaml.endsWith('\n') ? '' : '\n';
-    return `${yaml}${suffix}${mapKey}:\n  ${key}: ${value}\n`;
-  }
-  let insertIndex = parentIndex + 1;
-  while (insertIndex < lines.length) {
-    const line = lines[insertIndex] ?? '';
-    if (line !== '' && !line.startsWith(' ')) break;
-    if (line.startsWith(`  ${key}:`)) {
-      lines[insertIndex] = `  ${key}: ${value}`;
-      return lines.join('\n');
-    }
-    insertIndex += 1;
-  }
-  lines.splice(insertIndex, 0, `  ${key}: ${value}`);
-  return lines.join('\n');
 }
 
 async function waitForAttentionItem(page: Page, id: string): Promise<AttentionItem> {

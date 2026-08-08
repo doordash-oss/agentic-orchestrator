@@ -20,6 +20,7 @@ import type {
   Settings,
   ThemeInfo,
   UpdateState,
+  WindowPurpose,
 } from '../../../shared/ipc';
 import { defaultSettings } from '../../../shared/ipc';
 
@@ -217,6 +218,7 @@ export interface AgenticoMock {
     onRouteRequest: ReturnType<typeof vi.fn>;
     getSettings: ReturnType<typeof vi.fn>;
     updateSettings: ReturnType<typeof vi.fn>;
+    openSettingsWindow: ReturnType<typeof vi.fn>;
     setThemePreference: ReturnType<typeof vi.fn>;
     getReadiness: ReturnType<typeof vi.fn>;
     refreshReadiness: ReturnType<typeof vi.fn>;
@@ -267,6 +269,7 @@ export interface AgenticoMock {
     getRewindPreview: ReturnType<typeof vi.fn>;
     executeRewind: ReturnType<typeof vi.fn>;
     preflightCompletion: ReturnType<typeof vi.fn>;
+    publishUiState: ReturnType<typeof vi.fn>;
     getRepositoryDiff: ReturnType<typeof vi.fn>;
     generatePublishDescription: ReturnType<typeof vi.fn>;
     openExternal: ReturnType<typeof vi.fn>;
@@ -317,6 +320,8 @@ export function installAgenticoMock(
     attention?: { items: AttentionItem[] };
     updates?: UpdateState;
     diagnostics?: DiagnosticsSnapshot;
+    platform?: string;
+    windowPurpose?: WindowPurpose;
   } = {},
 ): AgenticoMock {
   const connection: ConnectionState = overrides.connection ?? {
@@ -340,6 +345,8 @@ export function installAgenticoMock(
   const diagnostics = overrides.diagnostics ?? defaultDiagnostics();
 
   const api = {
+    platform: overrides.platform ?? 'darwin',
+    windowPurpose: overrides.windowPurpose ?? 'main',
     getConnectionStatus: vi.fn(() => Promise.resolve(connection)),
     retryConnection: vi.fn(() => Promise.resolve(connection)),
     restartConnection: vi.fn(() => Promise.resolve(connection)),
@@ -353,6 +360,7 @@ export function installAgenticoMock(
     }),
     getSettings: vi.fn(() => Promise.resolve(settings)),
     updateSettings: vi.fn(() => Promise.resolve(settings)),
+    openSettingsWindow: vi.fn(() => Promise.resolve({ opened: true })),
     getThemePreference: vi.fn(() => Promise.resolve(theme)),
     setThemePreference: vi.fn((preference: ThemeInfo['preference']) => {
       theme = { preference, resolved: preference === 'system' ? theme.resolved : preference };
@@ -484,6 +492,7 @@ export function installAgenticoMock(
     getRewindPreview: vi.fn(() => Promise.reject(new Error('unused'))),
     executeRewind: vi.fn(() => Promise.reject(new Error('unused'))),
     preflightCompletion: vi.fn(() => Promise.reject(new Error('unused'))),
+    publishUiState: vi.fn(() => Promise.resolve({ accepted: true })),
     getRepositoryDiff: vi.fn(() => Promise.reject(new Error('unused'))),
     generatePublishDescription: vi.fn(() => Promise.reject(new Error('unused'))),
     openExternal: vi.fn(() => Promise.reject(new Error('unused'))),

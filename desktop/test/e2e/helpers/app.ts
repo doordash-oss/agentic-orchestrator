@@ -13,12 +13,18 @@ import { _electron as electron, expect } from '@playwright/test';
 import type { ElectronApplication, Locator, Page, TestInfo } from '@playwright/test';
 import { packagedAppAsar, packagedExecutable, packagedResourcesDir } from './packaged';
 import { killProcessTree, worldProcessPIDs } from './processes';
-import { minimalEnv, type JourneyWorld } from './world';
+import { minimalEnv, waitFor, type JourneyWorld } from './world';
 
 export interface AppHandle {
   app: ElectronApplication;
   appProcess: ChildProcess;
   page: Page;
+  /**
+   * The main window's webContents id, recorded while it was the only window.
+   * `BrowserWindow.getAllWindows()` is not in creation order, so this is how
+   * main-process helpers tell the main window from the Settings window.
+   */
+  mainWebContentsId: number;
   /** Combined stdout+stderr of the app process (redacted logs, gateway notes). */
   logs: string[];
   world: JourneyWorld;
@@ -41,7 +47,7 @@ export interface CreateFeatureOptions {
   description?: string;
   repoPatterns: RegExp[];
   waitForReady?: boolean;
-  /** Runs on the opened Where step, before any repository is selected. */
+  /** Runs on the opened Repositories step, before any repository is selected. */
   beforeRepoSelect?(): void | Promise<void>;
   beforeSubmit?(): void | Promise<void>;
 }
@@ -64,22 +70,22 @@ export async function createFeatureViaForm(
   for (const repoPattern of repoPatterns) {
     await handle.page.getByRole('checkbox', { name: repoPattern }).check();
   }
-  await handle.page.getByRole('button', { name: 'Next: What' }).click();
+  await handle.page.getByRole('button', { name: 'Next: Describe' }).click();
   await handle.page.locator('#feature-name').fill(name);
   if (description !== '') await handle.page.locator('#feature-description').fill(description);
-  await handle.page.getByRole('button', { name: 'Next: Pipeline' }).click();
-  await handle.page.getByRole('button', { name: 'Next: Review' }).click();
+  await handle.page.getByRole('button', { name: 'Next: Depth' }).click();
+  await handle.page.getByRole('button', { name: 'Next: Contract' }).click();
   // Journeys own lifecycle explicitly: opt out of the default auto-start so
   // the cockpit lands in the deterministic pre-start state.
   await handle.page.getByRole('checkbox', { name: /Start immediately/ }).uncheck();
   await beforeSubmit?.();
   const cockpit = handle.page.getByLabel(`Feature ${name}`);
-  // Creation immediately replaces the wizard with a cockpit. Some Electron
+  // Creation immediately closes the sheet and mounts a cockpit. Some Electron
   // builds keep Playwright's click action pending after that intentional
   // detach, so bound the dispatch and use the authoritative cockpit as the
   // success condition.
   await handle.page
-    .getByRole('button', { name: 'Create feature' })
+    .getByRole('button', { name: 'Create', exact: true })
     .click({ timeout: 2_000 })
     .catch(() => undefined);
   await expect(cockpit).toBeVisible({ timeout: 30_000 });
@@ -126,11 +132,23 @@ export async function launchApp(
   appProcess.stderr?.on('data', (chunk: Buffer) => logs.push(chunk.toString()));
   await app.context().tracing.start({ screenshots: true, snapshots: true });
   const page = await app.firstWindow({ timeout: 30_000 });
-  await page.bringToFront();
+  // Recorded now, while the main window is provably the only one open.
+  const mainWebContentsId = await app.evaluate(({ BrowserWindow }) => {
+    const window = BrowserWindow.getAllWindows()[0];
+    if (window === undefined) throw new Error('the main window vanished during launch');
+    return window.webContents.id;
+  });
+  // OS-level activation steals focus from whoever is using the machine and no
+  // journey needs it: CDP input and assertions work without it. Opt back in
+  // for one-off debugging with AGENTICO_E2E_ACTIVATE=1.
+  if (process.env['AGENTICO_E2E_ACTIVATE'] === '1') {
+    await page.bringToFront();
+  }
   return {
     app,
     appProcess,
     page,
+    mainWebContentsId,
     logs,
     world,
     traceName: options.traceName ?? path.basename(testInfo.file, '.spec.ts'),
@@ -266,16 +284,61 @@ function copyTraceToEvidence(tracePath: string, name: string): void {
 /**
  * Named evidence screenshot: always captured (so the flow is exercised in
  * CI too); copied into the evidence screenshots/ directory on evidence runs.
+ *
+ * `page` targets a window other than the main one (the Settings window), so
+ * evidence of a settings surface shows the window that actually renders it.
  */
-export async function evidenceShot(handle: AppHandle, name: string): Promise<void> {
+export async function evidenceShot(handle: AppHandle, name: string, page?: Page): Promise<void> {
   const local = handle.testInfo.outputPath(`${name}.png`);
-  await handle.page.screenshot({ path: local });
+  // Playwright's screenshot pipeline can stall indefinitely on a packaged
+  // Electron window when the suite shares a machine with other heavy work: it
+  // reports "fonts loaded" and then never returns, which used to fail a random
+  // journey per full run. A stalled capture is not a product failure, so fall
+  // back to the main process's own compositor capture — same real window, a
+  // different code path — and only fail if that cannot produce bytes either.
+  await captureWindow(handle, local, page ?? handle.page);
   const dir = evidenceDir();
   if (dir !== null) {
     const target = path.join(dir, 'screenshots');
     fs.mkdirSync(target, { recursive: true });
     fs.copyFileSync(local, path.join(target, `${name}.png`));
   }
+}
+
+/**
+ * The pre-fallback budget has to be small enough that a whole journey's worth
+ * of stalls still fits the 240s test timeout: the heaviest journey takes ten
+ * evidence shots, so anything above ~20s each can blow the test budget even
+ * though every capture eventually succeeds. A healthy Playwright capture of
+ * this window lands in well under a second, and `capturePage()` is accepted as
+ * equivalent evidence — so spend as little as possible waiting on the stall.
+ */
+const PLAYWRIGHT_SHOT_BUDGET_MS = 5_000;
+
+async function captureWindow(handle: AppHandle, target: string, page: Page): Promise<void> {
+  try {
+    await page.screenshot({ path: target, timeout: PLAYWRIGHT_SHOT_BUDGET_MS });
+    return;
+  } catch {
+    // Fall through to the main-process capture below.
+  }
+  // getAllWindows() is not in creation order (macOS returns the frontmost
+  // window first), so windows are addressed by the main window's recorded
+  // webContents id: that id for the main page, anything else for the other.
+  const encoded = await handle.app.evaluate(
+    async ({ BrowserWindow }, { mainId, wantMain }) => {
+      const window = BrowserWindow.getAllWindows().find(
+        (candidate) => (candidate.webContents.id === mainId) === wantMain,
+      );
+      if (window === undefined) throw new Error('window to capture missing');
+      const image = await window.webContents.capturePage();
+      return image.toPNG().toString('base64');
+    },
+    { mainId: handle.mainWebContentsId, wantMain: page === handle.page },
+  );
+  const bytes = Buffer.from(encoded, 'base64');
+  if (bytes.byteLength === 0) throw new Error(`capturePage produced no bytes for ${target}`);
+  fs.writeFileSync(target, bytes);
 }
 
 /**
@@ -308,28 +371,167 @@ export async function setWindowSize(
 ): Promise<void> {
   await handle.app.evaluate(
     ({ BrowserWindow }, size) => {
-      const window = BrowserWindow.getAllWindows()[0];
+      // By id, not by index: an open Settings window can come first.
+      const window = BrowserWindow.getAllWindows().find(
+        (candidate) => candidate.webContents.id === size.mainId,
+      );
       window?.setContentSize(size.width, size.height);
     },
-    { width, height },
+    { width, height, mainId: handle.mainWebContentsId },
   );
   // Let the renderer re-layout (media queries, narrow-mode attributes).
   await handle.page.waitForTimeout(250);
 }
 
-/** Switches the theme through the app's own radiogroup and waits for CSS. */
+/**
+ * Flips the resolved theme via the same IPC channel the real Settings ▸
+ * Appearance radiogroup uses, and waits for the CSS to settle.
+ *
+ * This deliberately does not drive the real switcher: the Appearance
+ * radiogroup lives in the separate Settings window, and almost every caller
+ * only wants a themed screenshot of the *main* window mid-flow. Making them
+ * open (and then close) a second window to get one would add a window to
+ * every themed capture and leave the main window's own state — sizing,
+ * focus, whatever view is on screen — at the mercy of that detour.
+ *
+ * Going straight through `setThemePreference` avoids all of that. But
+ * `useTheme()` (renderer/src/hooks.ts) only
+ * mirrors a change onto `<html data-theme>` when its own `setPreference`
+ * runs, or via the `agentico-theme-sync` window CustomEvent it dispatches
+ * for sibling instances — calling the IPC method directly never reaches
+ * either path, so the mounted hook never re-renders. Dispatching that same
+ * sync event ourselves with the IPC response is what the real switcher does
+ * internally, just triggered from test code instead of another `useTheme()`
+ * instance. The real Settings ▸ Appearance radiogroup is still exercised
+ * directly by `window-chrome.spec.ts`, which is the one place that cares
+ * about the UI mechanism itself.
+ */
 export async function setTheme(handle: AppHandle, theme: 'light' | 'dark'): Promise<void> {
-  // click (not check): the radio is React-controlled and only flips after
-  // the theme IPC round-trip, which check() would misread as a failure.
-  const radio = handle.page
-    .locator('.theme-switcher')
-    .getByRole('radio', { name: theme === 'dark' ? 'Dark' : 'Light' });
-  // Evidence can intentionally capture the open inbox, which covers the
-  // theme picker. Invoke the real DOM control directly so React receives its
-  // change event without altering the captured inbox state.
-  await radio.evaluate((input: HTMLInputElement) => input.click());
+  await handle.page.evaluate(async (preference) => {
+    const info = await window.agentico.setThemePreference(preference);
+    window.dispatchEvent(new CustomEvent('agentico-theme-sync', { detail: info }));
+  }, theme);
   await expect(handle.page.locator(`html[data-theme="${theme}"]`)).toBeAttached();
   await handle.page.waitForTimeout(150); // let colors settle before screenshots
+}
+
+// --- the Settings window --------------------------------------------------------
+
+/** The eight pane labels, in source-list order (see features/settingsPanes). */
+export type SettingsPaneLabel =
+  | 'Workspace roots'
+  | 'Providers'
+  | 'Appearance'
+  | 'Updates'
+  | 'Notifications'
+  | 'Diagnostics'
+  | 'Advanced'
+  | 'Workspace defaults';
+
+/**
+ * Opens Settings through the native "Settings" menu item (⌘,'s own dispatch
+ * path: native menu → route target 'settings' → the Settings window) and
+ * returns that window's page.
+ *
+ * The menu item creates the window on the first call and focuses the existing
+ * one afterwards, so this waits for a *new* window only when none is open yet.
+ */
+export async function openSettings(handle: AppHandle): Promise<Page> {
+  const alreadyOpen = settingsPageOrNull(handle);
+  const appeared =
+    alreadyOpen === null ? handle.app.waitForEvent('window', { timeout: 30_000 }) : null;
+  await handle.app.evaluate(({ BrowserWindow, Menu }, mainId) => {
+    const item = Menu.getApplicationMenu()?.getMenuItemById('global.settings');
+    if (item == null) throw new Error('menu item global.settings missing');
+    const main = BrowserWindow.getAllWindows().find(
+      (candidate) => candidate.webContents.id === mainId,
+    );
+    item.click(undefined, main, undefined);
+  }, handle.mainWebContentsId);
+  const page = appeared === null ? alreadyOpen! : await appeared;
+  return waitForSettingsWindow(page);
+}
+
+/**
+ * The open Settings window's page, or null. The main window is the launch
+ * window; the app opens no other kind, so anything else is Settings — and
+ * `waitForSettingsWindow` confirms it by what only that window renders (both
+ * windows share an origin, so a URL cannot tell them apart).
+ */
+export function settingsPageOrNull(handle: AppHandle): Page | null {
+  return handle.app.windows().find((page) => page !== handle.page) ?? null;
+}
+
+/**
+ * Waits for a Settings window opened by something other than this helper (the
+ * command palette entry, a deep link, an update popover action) and returns
+ * its page.
+ */
+export async function awaitSettingsWindow(handle: AppHandle): Promise<Page> {
+  await waitFor(
+    () => settingsPageOrNull(handle) !== null,
+    'the Settings window to open',
+    30_000,
+    100,
+  );
+  const page = settingsPageOrNull(handle);
+  if (page === null) throw new Error('the Settings window disappeared while opening');
+  return waitForSettingsWindow(page);
+}
+
+/** Waits for the Settings window to finish restoring its persisted pane. */
+export async function waitForSettingsWindow(page: Page): Promise<Page> {
+  await expect(page.locator('.settings-window')).toBeVisible({ timeout: 30_000 });
+  // The window paints a "Restoring settings…" status until the stored pane is
+  // read back; the source list only exists once a pane is selected.
+  await expect(page.getByRole('listbox', { name: 'Settings panes' })).toBeVisible({
+    timeout: 30_000,
+  });
+  return page;
+}
+
+/** Selects a pane in the source list and waits for the selection to land. */
+export async function selectSettingsPane(page: Page, label: SettingsPaneLabel): Promise<void> {
+  const row = page.getByRole('option', { name: label, exact: true });
+  await row.click();
+  await expect(row).toHaveAttribute('aria-selected', 'true');
+  await expect(
+    page.locator('.settings-window__pane').getByRole('heading', { name: label }),
+  ).toBeVisible();
+}
+
+/**
+ * Closes Settings the way ⌘W does: File ▸ Close Window is asserted to exist
+ * with the platform `close` role and the ⌘W accelerator, and then the window is
+ * closed exactly as that role closes it.
+ *
+ * The item cannot be *clicked* from a test: on macOS the standard roles are
+ * NSMenuItem selectors (`close` → `performClose:`) that act on the key window,
+ * so `MenuItem.click()` has no JavaScript body to run and returns having done
+ * nothing. Measured against the packaged app, with and without focusing the
+ * Settings window first: the window count never changed. So the menu wiring
+ * (the item exists, carries `role: 'close'`, and is bound to ⌘W) and the close
+ * semantics are both asserted here, while the OS accelerator dispatch between
+ * them is simply not drivable from the harness. `window.close()` is what the
+ * selector performs, so this still runs the app's real close handler —
+ * geometry persistence, no quit decision — not a test-only shortcut.
+ */
+export async function closeSettings(handle: AppHandle): Promise<void> {
+  const accelerator = await handle.app.evaluate(({ BrowserWindow, Menu }, mainId) => {
+    const target = BrowserWindow.getAllWindows().find((window) => window.webContents.id !== mainId);
+    if (target === undefined) throw new Error('no Settings window is open');
+    const close = flatten(Menu.getApplicationMenu()).find((item) => item.role === 'close');
+    if (close === undefined) throw new Error('File ▸ Close Window is missing from the menu');
+    target.close();
+    return close.accelerator ?? null;
+
+    function flatten(menu: Electron.Menu | null): Electron.MenuItem[] {
+      if (menu === null) return [];
+      return menu.items.flatMap((item) => [item, ...flatten(item.submenu ?? null)]);
+    }
+  }, handle.mainWebContentsId);
+  expect(accelerator).toBe('CommandOrControl+W');
+  await waitFor(() => settingsPageOrNull(handle) === null, 'the Settings window to close', 15_000);
 }
 
 /** Captures the same named moment in both themes (light last, restoring it). */

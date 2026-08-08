@@ -63,15 +63,18 @@ test('zero-gap completion and global parity: diff, irreversible impact, AMA, rec
     seedCompletion(world, feature!.id);
 
     handle = await launchApp(world, testInfo, { traceName: 'zero-gap-completion-global' });
-    await expect(handle.page.getByRole('tab', { name: featureName })).toBeVisible({
+    await expect(handle.page.getByRole('option', { name: featureName })).toBeVisible({
       timeout: 60_000,
     });
-    await handle.page.getByRole('tab', { name: featureName }).click();
+    await handle.page.getByRole('option', { name: featureName }).click();
     const cockpit = handle.page.getByLabel(`Feature ${featureName}`);
     await expect(cockpit).toBeVisible({ timeout: 30_000 });
 
-    // Completion verbs live directly in the cockpit action bar at CodeReady.
-    const publishVerb = cockpit.getByRole('button', { name: 'Publish', exact: true });
+    // Delivery lives on the aftercare runway; the toolbar keeps wrap-up only.
+    const aftercare = handle.page.getByRole('region', { name: 'Feature aftercare' });
+    await expect(aftercare).toBeVisible({ timeout: 30_000 });
+    await expect(handle.page.getByRole('button', { name: 'Publish', exact: true })).toHaveCount(0);
+    const publishVerb = aftercare.getByRole('button', { name: /Publish this feature/ });
     await expect(publishVerb).toBeVisible({ timeout: 30_000 });
     await publishVerb.click();
     const publishModal = handle.page.getByRole('dialog', { name: 'Publish reviewed changes' });
@@ -80,8 +83,9 @@ test('zero-gap completion and global parity: diff, irreversible impact, AMA, rec
     await publishModal.getByRole('button', { name: 'Close' }).click();
     await expect(publishModal).toHaveCount(0);
 
-    // Aftercare opens read-only repository + diff inspection in a workspace dialog.
-    await cockpit.getByRole('button', { name: 'Changes', exact: true }).click();
+    // Aftercare opens read-only repository + diff inspection in a workspace dialog,
+    // from the What-shipped receipt's Changes row.
+    await cockpit.getByRole('button', { name: 'View changes', exact: true }).click();
     const changesModal = handle.page.getByRole('dialog', { name: 'Feature changes' });
     const changes = changesModal.getByRole('region', { name: 'Changes' });
     await expect(changes).toBeVisible({ timeout: 15_000 });
@@ -89,15 +93,16 @@ test('zero-gap completion and global parity: diff, irreversible impact, AMA, rec
     await expect(changes.getByText('Inspecting')).toBeVisible();
     await changesModal.getByRole('button', { name: 'Close' }).click();
 
-    // Merge and Clean up each open their own floating modal from the bar; the
-    // Mark done verb is reachable as a bar control alongside them.
-    await cockpit.getByRole('button', { name: 'Merge', exact: true }).click();
+    // Merge opens its floating modal from the runway's delivery row; Clean up
+    // and Mark done remain the toolbar's wrap-up controls.
+    await expect(handle.page.getByRole('button', { name: 'Merge', exact: true })).toHaveCount(0);
+    await aftercare.getByRole('button', { name: /Merge this feature/ }).click();
     const mergeModal = handle.page.getByRole('dialog', { name: 'Merge local repositories' });
     await expect(mergeModal).toBeVisible({ timeout: 15_000 });
     await mergeModal.getByRole('button', { name: 'Close' }).click();
     await expect(mergeModal).toHaveCount(0);
 
-    await cockpit.getByRole('button', { name: 'Clean up', exact: true }).click();
+    await handle.page.getByRole('button', { name: 'Clean up', exact: true }).click();
     const cleanupDialog = handle.page.getByRole('dialog', { name: 'Clean worktrees?' });
     await expect(cleanupDialog).toBeVisible({ timeout: 15_000 });
     await expect(cleanupDialog.getByRole('button', { name: 'Clean worktrees' })).toBeVisible();
@@ -118,14 +123,18 @@ test('zero-gap completion and global parity: diff, irreversible impact, AMA, rec
     await handle.page.keyboard.press('Escape');
     await expect(palette).toHaveCount(0);
 
-    const dock = handle.page.getByRole('complementary', { name: 'Ask Agentico' });
-    await dock.getByRole('textbox', { name: 'Ask Agentico' }).fill('Summarize completion state.');
-    await dock.getByRole('button', { name: 'Send' }).click();
-    await expect(dock.getByLabel('AMA transcript')).toContainText(/Backfill ready|Live semantic/, {
+    await handle.page.keyboard.press('Alt+Space');
+    const ama = handle.page.getByRole('complementary', { name: 'Ask Agentico' });
+    await expect(ama).toBeVisible();
+    await ama.getByRole('textbox', { name: 'Ask Agentico' }).fill('Summarize completion state.');
+    await ama.getByRole('button', { name: 'Send' }).click();
+    await expect(ama.getByLabel('AMA transcript')).toContainText(/Backfill ready|Live semantic/, {
       timeout: 60_000,
     });
+    await handle.page.keyboard.press('Alt+Space');
+    await expect(ama).toHaveCount(0);
 
-    await handle.page.getByRole('tab', { name: 'Home' }).click();
+    await handle.page.getByRole('option', { name: 'Overview' }).click();
     const recovery = handle.page.getByRole('region', { name: 'Recovery workspace' });
     await expect(recovery).toBeVisible();
     await expect(recovery.getByRole('button', { name: 'Skip' })).toHaveCount(0);
@@ -136,7 +145,7 @@ test('zero-gap completion and global parity: diff, irreversible impact, AMA, rec
     });
     await contractEvidenceShot(
       handle,
-      'global-attention-ama-dock-recovery-entry-and-bulk-action-status-remain-reachable-760x900',
+      'global-attention-ama-panel-recovery-entry-and-bulk-action-status-remain-reachable-760x900',
       760,
       900,
       'light',

@@ -33,6 +33,8 @@ import {
   type ReadinessSnapshot,
   type RepositoryState,
   type Settings,
+  type SettingsOpenRequest,
+  type SettingsOpenResult,
   type SettingsPatch,
   type SetupDispatchResult,
   type ThemeInfo,
@@ -110,6 +112,7 @@ import {
   type RepositoryDiffResult,
   type OpenExternalRequest,
   type RevealPathRequest,
+  type MainWindowUiState,
   type UpdateInstallNowRequest,
   type UpdateState,
   type DiagnosticsSnapshot,
@@ -123,6 +126,7 @@ export interface IpcServices {
   restartConnection(): Promise<ConnectionState> | ConnectionState;
   getSettings(): Settings;
   updateSettings(patch: SettingsPatch): Settings;
+  openSettingsWindow(request: SettingsOpenRequest): SettingsOpenResult;
   getTheme(): ThemeInfo;
   setTheme(preference: ThemePreference): ThemeInfo;
   getReadiness(): Promise<ReadinessSnapshot>;
@@ -208,6 +212,8 @@ export interface IpcServices {
   getDiagnostics(): Promise<DiagnosticsSnapshot> | DiagnosticsSnapshot;
   revealDiagnostics(): Promise<{ ok: boolean }>;
   clearDiagnostics(): Promise<DiagnosticsSnapshot> | DiagnosticsSnapshot;
+  /** Accepts the main window's coarse UI-state summary for the native menu. */
+  publishUiState(state: MainWindowUiState): { accepted: boolean };
 }
 
 export interface IpcMainLike {
@@ -261,6 +267,8 @@ export function registerIpcHandlers(
     [IPC_CHANNELS.connectionRestart]: () => services.restartConnection(),
     [IPC_CHANNELS.settingsGet]: () => services.getSettings(),
     [IPC_CHANNELS.settingsUpdate]: (_event, patch: SettingsPatch) => services.updateSettings(patch),
+    [IPC_CHANNELS.windowOpenSettings]: (_event, request: SettingsOpenRequest) =>
+      services.openSettingsWindow(request),
     [IPC_CHANNELS.themeGet]: () => services.getTheme(),
     [IPC_CHANNELS.themeSet]: (_event, preference: ThemePreference) => services.setTheme(preference),
     [IPC_CHANNELS.readinessGet]: () => services.getReadiness(),
@@ -403,6 +411,8 @@ export function registerIpcHandlers(
     [IPC_CHANNELS.openExternal]: (_event, request: OpenExternalRequest) =>
       services.openExternal(request),
     [IPC_CHANNELS.revealPath]: (_event, request: RevealPathRequest) => services.revealPath(request),
+    [IPC_CHANNELS.uiStatePublish]: (_event, state: MainWindowUiState) =>
+      services.publishUiState(state),
   };
   for (const channel of Object.values(IPC_CHANNELS)) {
     ipcMain.handle(channel, makeHandler(channel, trusted, bindings[channel]));

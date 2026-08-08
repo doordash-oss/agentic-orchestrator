@@ -219,7 +219,7 @@ export function RefactorLauncher({
       onSubmit={submit}
     >
       <section className="refactor-wizard__inherited" aria-label="Inherited repositories">
-        <p className="home-surface__eyebrow">Where · Inherited from {snapshot.name}</p>
+        <p className="eyebrow-label">Where · Inherited from {snapshot.name}</p>
         <ul className="refactor-wizard__repos">
           {snapshot.repos.map((repo) => (
             <li key={repo}>
@@ -268,7 +268,7 @@ export function RefactorLauncher({
 
       {currentStep === 'What' ? (
         <section className="creation-wizard__panel" aria-labelledby="refactor-what">
-          <p className="home-surface__eyebrow">01 / What</p>
+          <p className="eyebrow-label">01 / What</p>
           <h2 id="refactor-what">Define the refactor</h2>
           <label className="form-field">
             <span className="form-field__label">Child name</span>
@@ -312,7 +312,7 @@ export function RefactorLauncher({
 
       {currentStep === 'Pipeline' ? (
         <section className="creation-wizard__panel" aria-labelledby="refactor-pipeline">
-          <p className="home-surface__eyebrow">02 / Pipeline</p>
+          <p className="eyebrow-label">02 / Pipeline</p>
           <h2 id="refactor-pipeline">Set the depth</h2>
           <div className="pipeline-grid">
             {PIPELINES.map((profile) => (
@@ -340,7 +340,7 @@ export function RefactorLauncher({
 
       {currentStep === 'Review' ? (
         <section className="creation-wizard__panel" aria-labelledby="refactor-review">
-          <p className="home-surface__eyebrow">03 / Review</p>
+          <p className="eyebrow-label">03 / Review</p>
           <h2 id="refactor-review">Review the run contract</h2>
           <div className="review-knobs">
             <div className="review-controls">

@@ -77,7 +77,7 @@ test('partial setup failure, retry on the same feature, restart persistence', as
     await expect(cockpit.getByRole('alert')).toContainText('repository "beta" has no commits yet', {
       timeout: 60_000,
     });
-    const retryButton = cockpit.getByRole('button', { name: 'Retry setup' });
+    const retryButton = handle.page.getByRole('button', { name: 'Retry setup' });
     await expect(retryButton).toBeEnabled();
     await evidenceShotBothThemes(handle, 'setup-failure-retry');
 
@@ -98,8 +98,8 @@ test('partial setup failure, retry on the same feature, restart persistence', as
     transcript.command(`git -C ${beta} commit --allow-empty -m "Restore main"`, fixOut);
     await retryButton.click();
     await expect(cockpit.getByText('Ready to start')).toBeVisible({ timeout: 60_000 });
-    await expect(cockpit.getByRole('button', { name: 'Start', exact: true })).toBeVisible();
-    await expect(cockpit.getByRole('button', { name: 'Start', exact: true })).toBeEnabled();
+    await expect(handle.page.getByRole('button', { name: 'Start', exact: true })).toBeVisible();
+    await expect(handle.page.getByRole('button', { name: 'Start', exact: true })).toBeEnabled();
     await expect(cockpit.getByText("Starting isn't available in this version yet.")).toHaveCount(0);
 
     const afterRetry = await handle.page.evaluate(
@@ -128,13 +128,13 @@ test('partial setup failure, retry on the same feature, restart persistence', as
 
     transcript.section('Journey 2 — relaunch against the same state dir');
     handle = await launchApp(world, testInfo, { traceName: 'failure-retry-restart-relaunch' });
-    // The persisted tab (identity + title hint only) restores; the feature
+    // The persisted shell selection (identity only) restores; the feature
     // itself is reloaded from the server, not from any local cache.
     const restoredCockpit = handle.page.getByLabel('Feature Two Repo Feature');
     await expect(restoredCockpit).toBeVisible({ timeout: 60_000 });
     await expect(restoredCockpit.getByText('Ready to start')).toBeVisible({ timeout: 60_000 });
-    await expect(restoredCockpit.getByRole('button', { name: 'Start', exact: true })).toBeVisible();
-    await expect(restoredCockpit.getByRole('button', { name: 'Start', exact: true })).toBeEnabled();
+    await expect(handle.page.getByRole('button', { name: 'Start', exact: true })).toBeVisible();
+    await expect(handle.page.getByRole('button', { name: 'Start', exact: true })).toBeEnabled();
     await expect(
       restoredCockpit.getByText("Starting isn't available in this version yet."),
     ).toHaveCount(0);
@@ -144,11 +144,10 @@ test('partial setup failure, retry on the same feature, restart persistence', as
     expect(restored.setup?.status).toBe('done');
     expect(restored.setup?.attempt).toBe(2);
     const settings = await handle.page.evaluate(() => window.agentico.getSettings());
-    expect(settings.tabs.open.map((tab) => tab.featureId)).toEqual([featureId]);
-    expect(settings.tabs.activeFeatureId).toBe(featureId);
-    transcript.json('restored tab prefs (identity + presentation only)', settings.tabs);
+    expect(settings.shell.activeFeatureId).toBe(featureId);
+    transcript.json('restored shell prefs (identity only)', settings.shell);
     transcript.step(
-      'relaunch restored the feature tab and reloaded the authoritative Ready-to-start state from the server',
+      'relaunch restored the selected feature and reloaded the authoritative Ready-to-start state from the server',
     );
 
     // Still nothing started after failure, retry, and restart.

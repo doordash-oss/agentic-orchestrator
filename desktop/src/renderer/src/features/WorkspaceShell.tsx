@@ -1,11 +1,16 @@
 /**
- * The readiness-gated main surface: a Home tab (authoritative feature list
- * plus one persistent tab per open feature. Feature creation is a focused,
- * secondary flow reached from Home.
- * Local settings store ONLY tab identity and presentation (feature id,
- * title hint, order, active tab); every feature itself is always reloaded
- * from the server, so existing state survives app restarts without any
- * local domain cache.
+ * The readiness-gated main surface: a translucent Bench sidebar — a pinned
+ * Overview row plus five lane-grouped sections of every feature — with
+ * exactly one content pane mounted at a time. Feature creation descends over
+ * that pane as a window-modal sheet reached from Overview — the pane beneath
+ * stays mounted and navigable, so ⌘-digit shortcuts, routed navigation, and
+ * attention deep-links change what is underneath without touching the draft.
+ * Settings is not a state of this shell at all: it lives in its own window,
+ * so every settings entry path is handled in the main process and nothing
+ * here has a settings special case.
+ * Local settings store ONLY the active feature id and sidebar collapse
+ * state; every feature itself is always reloaded from the server, so
+ * existing state survives app restarts without any local domain cache.
  */
 import {
   useCallback,
@@ -13,46 +18,64 @@ import {
   useMemo,
   useRef,
   useState,
-  type CSSProperties,
   type Dispatch,
-  type KeyboardEvent,
-  type RefObject,
   type SetStateAction,
 } from 'react';
-import type { AttentionItem, FeatureSnapshot, RoutedRequest, TabsPrefs } from '../../../shared/ipc';
-import { attentionOwnerFeatureId, defaultTabsPrefs } from '../../../shared/ipc';
+import type {
+  AttentionItem,
+  FeatureActionView,
+  FeatureSnapshot,
+  MainWindowUiState,
+  RoutedRequest,
+  ShellPrefs,
+  UpdateState,
+} from '../../../shared/ipc';
+import {
+  attentionOwnerFeatureId,
+  defaultShellPrefs,
+  isConnectionErrorState,
+  sameMainWindowUiState,
+} from '../../../shared/ipc';
+import { featureCommandEnablement, isFeatureCommandId } from '../../../shared/commands';
+import { runFeatureCommand, toggleActiveInspector } from './featureCommands';
 import { parseIpcError, type WizardError } from '../wizard/ipcError';
+import { isEditingShortcutTarget } from '../components/CommandPalette';
 import { CreateFeatureForm } from './CreateFeatureForm';
 import { FeatureCockpit } from './FeatureCockpit';
-import { SettingsPanel } from './SettingsPanel';
+import { PipRail } from '../components/Pip';
+import { HouseIcon } from '../components/icons';
+import { updateNoticePending } from '../components/UpdatePopover';
 import { emptyAttentionDrafts, type AttentionDrafts } from './AttentionInbox';
+import { Toolbar } from './Toolbar';
 import {
   childStatusSpineIndex,
-  dashboardGroupId,
-  dashboardState,
   displayStatusLabel,
-  formatElapsed,
-  groupDashboardFeatures,
   isRunAtRest,
   orderDashboardFeatures,
-  railStageLabel,
+  runningPhaseSubline,
   spineActiveIndex,
   spineStages,
-  type SpineStage,
 } from './featureView';
+import {
+  LANES,
+  classifyFeaturesByLaneWithAttention,
+  laneLabel,
+  type Lane,
+} from './laneClassification';
+import { overviewHeadline, overviewSubline } from './overviewSummary';
 import { BulkPreviewPanel } from './BulkPreviewPanel';
 import { RecoveryWorkspace } from './RecoveryWorkspace';
-import { usePrefersReducedMotion } from '../hooks';
-
-const SETTINGS_TAB_ID = '__settings__';
+import { useConnectionState, useMediaQuery } from '../hooks';
 
 type ListState =
   | { phase: 'loading' }
   | { phase: 'error'; error: WizardError }
   | { phase: 'loaded'; features: FeatureSnapshot[] };
 
-type CreationDestination =
-  { kind: 'home' } | { kind: 'settings' } | { kind: 'feature'; featureId: string };
+type Selection = { kind: 'overview' } | { kind: 'feature'; featureId: string };
+
+/** A single addressable sidebar row, in the order ⌘2-9 count by. */
+type SidebarRowEntry = { kind: 'overview' } | { kind: 'feature'; featureId: string };
 
 export function WorkspaceShell({
   attentionItems = [],
@@ -61,7 +84,16 @@ export function WorkspaceShell({
   setAttentionDrafts,
   attentionJump = null,
   onAttentionJumpHandled = () => {},
+  onAttentionJump = () => {},
   routeRequest = null,
+  updateState = null,
+  updateDismissedVersion = null,
+  schedulingUpdate = false,
+  onDismissUpdate = () => {},
+  onOpenUpdatesSettings = () => {},
+  onInstallUpdateWhenIdle = async () => {},
+  onOpenAma = () => {},
+  amaSessionActive = false,
 }: {
   attentionItems?: AttentionItem[];
   refreshAttention?: () => Promise<AttentionItem[]>;
@@ -73,17 +105,60 @@ export function WorkspaceShell({
     attentionId?: string;
   } | null;
   onAttentionJumpHandled?: () => void;
+  /** Owned by App: routes a bell/inbox jump into the shell's own selection. */
+  onAttentionJump?(featureId: string, attentionId?: string): void;
   routeRequest?: RoutedRequest | null;
+  updateState?: UpdateState | null;
+  updateDismissedVersion?: string | null;
+  schedulingUpdate?: boolean;
+  onDismissUpdate?(version: string): void;
+  onOpenUpdatesSettings?(): void;
+  onInstallUpdateWhenIdle?(): Promise<void>;
+  /** Owned by App: dispatches the same routeRequest the ⌘⇧M accelerator does. */
+  onOpenAma?(): void;
+  /** True while the singleton AMA chat session is running. */
+  amaSessionActive?: boolean;
 }) {
-  // null while the local tab prefs are being restored.
-  const [tabs, setTabs] = useState<TabsPrefs | null>(null);
-  const tabsStateRef = useRef<TabsPrefs | null>(null);
-  const tabsPersistenceRef = useRef<Promise<void>>(Promise.resolve());
+  // null while the local shell prefs are being restored.
+  const [shell, setShell] = useState<ShellPrefs | null>(null);
+  // A purely visual auto-collapse below ~700px: it never writes
+  // `shell.sidebarCollapsed` (only the toolbar button and ⌘⌃S do that), so
+  // widening back past the breakpoint restores whatever the user last chose
+  // explicitly instead of fighting a value this hook itself set.
+  const isNarrowForSidebar = useMediaQuery('(max-width: 700px)');
+  const connection = useConnectionState();
+  const runtimeReady = connection.status === 'ready';
+  const runtimeLabel = runtimeReady
+    ? 'Runtime ready'
+    : isConnectionErrorState(connection)
+      ? 'Runtime needs attention'
+      : 'Connecting';
+  const runtimeTone = runtimeReady
+    ? 'ready'
+    : isConnectionErrorState(connection)
+      ? 'error'
+      : 'progress';
+  // A connection problem always wins the footer row: an active assistant must
+  // never mask a runtime that needs attention.
+  const showAmaActive = runtimeReady && amaSessionActive;
+  const footerLabel = showAmaActive ? 'Ask Agentico is active' : runtimeLabel;
+  const footerTone = showAmaActive ? 'ama' : runtimeTone;
+  // The footer dot and the toolbar update button share one predicate, so they
+  // appear and disappear together.
+  const updatePending = updateNoticePending(updateState, updateDismissedVersion);
+  const [actionsSlot, setActionsSlot] = useState<HTMLDivElement | null>(null);
+  const [overflowSlot, setOverflowSlot] = useState<HTMLDivElement | null>(null);
+  // The cockpit owns its inspector's open/closed state itself, so it resets
+  // for free on every feature switch via the `key={featureId}` remount
+  // below; this slot is only the chrome-owned mount point its wide-layout
+  // toggle button portals into.
+  const [inspectorSlot, setInspectorSlot] = useState<HTMLDivElement | null>(null);
+  const shellStateRef = useRef<ShellPrefs | null>(null);
+  const shellPersistenceRef = useRef<Promise<void>>(Promise.resolve());
   const [list, setList] = useState<ListState>({ phase: 'loading' });
   const [localAttentionDrafts, setLocalAttentionDrafts] = useState(emptyAttentionDrafts);
   const activeAttentionDrafts = attentionDrafts ?? localAttentionDrafts;
   const updateAttentionDrafts = setAttentionDrafts ?? setLocalAttentionDrafts;
-  const tabRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const newFeatureButtonRef = useRef<HTMLButtonElement | null>(null);
   const handledAttentionJump = useRef<number | null>(null);
   const [attentionPreviewRequest, setAttentionPreviewRequest] = useState<{
@@ -93,40 +168,99 @@ export function WorkspaceShell({
   } | null>(null);
   const handledRouteRequest = useRef<number | null>(null);
   const listRequestRef = useRef(0);
-  const homeActiveRef = useRef(false);
-  const [view, setView] = useState<'home' | 'create'>('home');
+  const overviewActiveRef = useRef(false);
+  const [creationOpen, setCreationOpen] = useState(false);
+  // The cockpit-owned half of the native menu's summary: the live action
+  // catalogue behind every feature verb, and the unpersisted inspector state
+  // behind the View menu's Show/Hide label.
+  const [cockpitUi, setCockpitUi] = useState<{
+    featureId: string;
+    actions: readonly FeatureActionView[] | null;
+    inspectorOpen: boolean;
+  } | null>(null);
+  const pushedUiStateRef = useRef<MainWindowUiState | null>(null);
   const [bulkPreviewRequest, setBulkPreviewRequest] = useState<number | null>(null);
-  const [settingsActivated, setSettingsActivated] = useState(false);
+  const [selectedRuns, setSelectedRuns] = useState<Record<string, number | null>>({});
+  const [expandedLanes, setExpandedLanes] = useState<Record<Lane, boolean>>({
+    waiting: true,
+    running: true,
+    published: true,
+    done: false,
+    'at-rest': true,
+  });
+
+  // Read by the ⌘2-9/⌘⌃S global listener below, which is registered exactly
+  // once on mount: the listener itself must stay referentially stable across
+  // re-renders (there's nothing to key its effect deps on that wouldn't churn
+  // every keystroke's worth of state), so it reaches through this ref for
+  // whatever is current at the moment a shortcut actually fires instead of
+  // closing over a stale render's callbacks.
+  const shortcutRef = useRef<{
+    allRows: SidebarRowEntry[];
+    navigateFeature(featureId: string): void;
+    toggleSidebar(): void;
+  }>({ allRows: [], navigateFeature: () => {}, toggleSidebar: () => {} });
+
+  // ⌘2-9: the 1st-8th feature by absolute sidebar position, counting across
+  // every lane regardless of its disclosure state (unlike Arrow/Home/End,
+  // which only ever land on a visible row). ⌘1 stays entirely on the
+  // existing native-menu → routeRequest("home") path — nothing new here.
+  // ⌘⌃S toggles the same persisted collapse the toolbar button does, and ⌘N
+  // opens the creation sheet the File item and the palette entry open. All of
+  // them bail out untouched when a text input, textarea, or contenteditable
+  // element has focus, matching the ⌘K guard in CommandPalette.
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (isEditingShortcutTarget(event.target)) return;
+      if (event.metaKey && event.ctrlKey && event.key.toLowerCase() === 's') {
+        event.preventDefault();
+        shortcutRef.current.toggleSidebar();
+        return;
+      }
+      const commandKey = event.metaKey || event.ctrlKey;
+      // ⌘N mirrors the File item and the palette entry: it opens the creation
+      // sheet over whatever pane is current. Opening is idempotent, so the
+      // native accelerator and this listener both firing is harmless — the
+      // same duplicate-binding posture ⌘K already has.
+      if (commandKey && !event.shiftKey && !event.altKey && event.key.toLowerCase() === 'n') {
+        event.preventDefault();
+        setCreationOpen(true);
+        return;
+      }
+      if (commandKey && !event.shiftKey && !event.altKey && /^[2-9]$/.test(event.key)) {
+        const row = shortcutRef.current.allRows[Number(event.key) - 1];
+        if (row === undefined || row.kind !== 'feature') return;
+        event.preventDefault();
+        shortcutRef.current.navigateFeature(row.featureId);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
 
   // Restore ONLY identity/presentation state locally; corrupt or missing
-  // settings fall back to an empty tab strip.
+  // settings fall back to an empty selection.
   useEffect(() => {
     let alive = true;
     window.agentico
       .getSettings()
       .then((settings) => {
         if (alive) {
-          tabsStateRef.current = settings.tabs;
-          setTabs(settings.tabs);
+          shellStateRef.current = settings.shell;
+          setShell(settings.shell);
         }
       })
       .catch(() => {
         if (alive) {
-          const fallback = defaultTabsPrefs();
-          tabsStateRef.current = fallback;
-          setTabs(fallback);
+          const fallback = defaultShellPrefs();
+          shellStateRef.current = fallback;
+          setShell(fallback);
         }
       });
     return () => {
       alive = false;
     };
   }, []);
-
-  useEffect(() => {
-    if (tabs?.activeFeatureId === SETTINGS_TAB_ID) {
-      setSettingsActivated(true);
-    }
-  }, [tabs?.activeFeatureId]);
 
   const loadList = useCallback(() => {
     const request = ++listRequestRef.current;
@@ -147,8 +281,8 @@ export function WorkspaceShell({
       });
   }, []);
 
-  // The Home feature list follows the authoritative server state: fetch on
-  // mount and refetch on any feature-scoped invalidation or full resync.
+  // The Overview feature list follows the authoritative server state: fetch
+  // on mount and refetch on any feature-scoped invalidation or full resync.
   useEffect(() => {
     loadList();
     return window.agentico.onAppEvent((event) => {
@@ -169,57 +303,59 @@ export function WorkspaceShell({
 
   // Out-of-band changes (a delete from another window, the CLI, or a missed
   // invalidation) can leave the queue stale. Refetch when the app regains focus
-  // while Home is showing, so returning to the window always shows server truth.
+  // while Overview is showing, so returning to the window always shows server truth.
   useEffect(() => {
-    const refreshHome = () => {
-      if (document.visibilityState === 'visible' && homeActiveRef.current) {
+    const refreshOverview = () => {
+      if (document.visibilityState === 'visible' && overviewActiveRef.current) {
         loadList();
       }
     };
-    window.addEventListener('focus', refreshHome);
-    document.addEventListener('visibilitychange', refreshHome);
+    window.addEventListener('focus', refreshOverview);
+    document.addEventListener('visibilitychange', refreshOverview);
     return () => {
-      window.removeEventListener('focus', refreshHome);
-      document.removeEventListener('visibilitychange', refreshHome);
+      window.removeEventListener('focus', refreshOverview);
+      document.removeEventListener('visibilitychange', refreshOverview);
     };
   }, [loadList]);
 
-  /** Persist failures never block the UI — tabs are presentation only. */
-  const persist = useCallback((next: TabsPrefs) => {
-    tabsStateRef.current = next;
-    setTabs(next);
+  /** Persist failures never block the UI — the shell selection is presentation only. */
+  const persist = useCallback((next: ShellPrefs) => {
+    shellStateRef.current = next;
+    setShell(next);
     const write = () =>
       window.agentico
-        .updateSettings({ tabs: next })
+        .updateSettings({ shell: next })
         .then(() => undefined)
         .catch(() => {
           // The server-side feature state is unaffected; keep later writes moving.
         });
-    tabsPersistenceRef.current = tabsPersistenceRef.current.then(write, write);
+    shellPersistenceRef.current = shellPersistenceRef.current.then(write, write);
   }, []);
 
-  const openFeature = useCallback(
-    (featureId: string, titleHint: string) => {
-      const base = tabs ?? defaultTabsPrefs();
-      const exists = base.open.some((tab) => tab.featureId === featureId);
-      persist({
-        open: exists ? base.open : [...base.open, { featureId, titleHint }],
-        activeFeatureId: featureId,
-      });
+  const selectFeature = useCallback(
+    (featureId: string) => {
+      const base = shellStateRef.current ?? defaultShellPrefs();
+      persist({ ...base, activeFeatureId: featureId });
     },
-    [persist, tabs],
+    [persist],
   );
 
-  const closeFeature = useCallback(
-    (featureId: string) => {
-      const base = tabs ?? defaultTabsPrefs();
-      persist({
-        open: base.open.filter((tab) => tab.featureId !== featureId),
-        activeFeatureId: base.activeFeatureId === featureId ? null : base.activeFeatureId,
-      });
-    },
-    [persist, tabs],
-  );
+  /**
+   * The toolbar's leading sidebar toggle: click-to-collapse/expand, persisted
+   * through the same settings IPC as the selection. The ⌘⌃S handler above
+   * calls this same function; the visual-only auto-collapse below ~700px is
+   * `effectiveSidebarCollapsed`, computed above the restore gate below.
+   */
+  const toggleSidebar = useCallback(() => {
+    const base = shellStateRef.current ?? shell ?? defaultShellPrefs();
+    persist({ ...base, sidebarCollapsed: !base.sidebarCollapsed });
+  }, [persist, shell]);
+
+  const selectOverview = useCallback(() => {
+    const base = shellStateRef.current ?? defaultShellPrefs();
+    persist({ ...base, activeFeatureId: null });
+    loadList();
+  }, [loadList, persist]);
 
   const handleFeatureDeleted = useCallback(
     (featureId: string) => {
@@ -231,38 +367,38 @@ export function WorkspaceShell({
             }
           : current,
       );
-      closeFeature(featureId);
-      loadList();
+      // selectOverview() already refetches the authoritative list; a second
+      // fetch here would race it and can resurrect the just-deleted feature.
+      selectOverview();
     },
-    [closeFeature, loadList],
-  );
-
-  const renameTab = useCallback(
-    (featureId: string, titleHint: string) => {
-      const base = tabsStateRef.current ?? defaultTabsPrefs();
-      const tab = base.open.find((entry) => entry.featureId === featureId);
-      if (tab === undefined || tab.titleHint === titleHint) {
-        return;
-      }
-      persist({
-        open: base.open.map((entry) =>
-          entry.featureId === featureId ? { ...entry, titleHint } : entry,
-        ),
-        activeFeatureId: base.activeFeatureId,
-      });
-    },
-    [persist],
+    [selectOverview],
   );
 
   const attentionByFeature = useMemo(() => {
     const counts = new Map<string, number>();
     for (const item of attentionItems) {
-      // A refactor pass's prompts count against the parent tab that owns them.
+      // A refactor pass's prompts count against the parent it owns.
       const owner = attentionOwnerFeatureId(item);
       if (owner === undefined) continue;
       counts.set(owner, (counts.get(owner) ?? 0) + 1);
     }
     return counts;
+  }, [attentionItems]);
+  const attentionKindsByFeature = useMemo(() => {
+    const kinds = new Map<string, Record<AttentionItem['kind'], number>>();
+    for (const item of attentionItems) {
+      const owner = attentionOwnerFeatureId(item);
+      if (owner === undefined) continue;
+      const entry =
+        kinds.get(owner) ??
+        ({ permission: 0, questions: 0, help: 0, gate: 0, review: 0, recovery: 0 } as Record<
+          AttentionItem['kind'],
+          number
+        >);
+      entry[item.kind] += 1;
+      kinds.set(owner, entry);
+    }
+    return kinds;
   }, [attentionItems]);
   const featureLabel = useCallback(
     (featureId: string | undefined): string => {
@@ -271,40 +407,22 @@ export function WorkspaceShell({
         list.phase === 'loaded'
           ? list.features.find((feature) => feature.id === featureId)?.name
           : undefined;
-      if (listed !== undefined) return listed;
-      const tab = tabs?.open.find((entry) => entry.featureId === featureId);
-      if (tab !== undefined && tab.titleHint !== '') return tab.titleHint;
-      return 'Untitled feature';
+      return listed ?? 'Untitled feature';
     },
-    [list, tabs],
+    [list],
   );
-
-  useEffect(() => {
-    if (tabs === null) return;
-    const index =
-      tabs.activeFeatureId === null
-        ? 0
-        : tabs.activeFeatureId === SETTINGS_TAB_ID
-          ? 1
-          : tabs.open.findIndex((tab) => tab.featureId === tabs.activeFeatureId) + 2;
-    const tab = tabRefs.current[index];
-    if (tab !== null && tab !== undefined && typeof tab.scrollIntoView === 'function') {
-      tab.scrollIntoView({ block: 'nearest', inline: 'nearest' });
-    }
-  }, [tabs]);
 
   useEffect(() => {
     if (attentionJump === null) {
       handledAttentionJump.current = null;
       return;
     }
-    if (tabs === null || handledAttentionJump.current === attentionJump.requestId) return;
+    if (shell === null || handledAttentionJump.current === attentionJump.requestId) return;
     handledAttentionJump.current = attentionJump.requestId;
     if (attentionJump.featureId === '__recovery__') {
-      persist({ ...tabs, activeFeatureId: null });
-      setView('home');
+      persist({ ...(shellStateRef.current ?? shell), activeFeatureId: null });
     } else {
-      openFeature(attentionJump.featureId, featureLabel(attentionJump.featureId));
+      selectFeature(attentionJump.featureId);
       setAttentionPreviewRequest({
         requestId: attentionJump.requestId,
         featureId: attentionJump.featureId,
@@ -314,65 +432,82 @@ export function WorkspaceShell({
       });
     }
     onAttentionJumpHandled();
-  }, [attentionJump, featureLabel, onAttentionJumpHandled, openFeature, persist, tabs]);
+  }, [attentionJump, onAttentionJumpHandled, persist, selectFeature, shell]);
 
-  const completeCreationExit = useCallback(
-    (destination: CreationDestination) => {
-      const base = tabsStateRef.current ?? defaultTabsPrefs();
-      const activeFeatureId =
-        destination.kind === 'home'
-          ? null
-          : destination.kind === 'settings'
-            ? SETTINGS_TAB_ID
-            : destination.featureId;
-      persist({
-        ...base,
-        activeFeatureId,
-      });
-      setView('home');
-      if (destination.kind === 'home') {
-        requestAnimationFrame(() => newFeatureButtonRef.current?.focus());
-      }
-    },
-    [persist],
-  );
-  const creationGuard = useCreationGuard(completeCreationExit);
-
-  const showHome = useCallback(() => {
-    if (tabs === null) return;
-    persist({ ...tabs, activeFeatureId: null });
-    setView('home');
-    loadList();
-  }, [loadList, persist, tabs]);
   const closeAttentionPreview = useCallback(() => setAttentionPreviewRequest(null), []);
 
+  // A visual-only auto-collapse: never persisted, and an explicit user choice
+  // (persisted `true`) always wins over the breakpoint once one exists — see
+  // the module doc comment above `isNarrowForSidebar`. Computed here, ahead of
+  // the restore gate below, because the pushed summary carries what the user
+  // actually sees rather than only what is stored.
+  const effectiveSidebarCollapsed =
+    shell !== null && (shell.sidebarCollapsed || isNarrowForSidebar);
+
+  /**
+   * The coarse summary the native menu bar runs on. Recomputed only from the
+   * things it names — selection, readiness, the two chrome toggles, and the
+   * selected feature's live action catalogue.
+   */
+  const uiStateSummary: MainWindowUiState | null = useMemo(() => {
+    if (shell === null) return null;
+    const activeFeatureId = shell.activeFeatureId;
+    const cockpitMatches = cockpitUi !== null && cockpitUi.featureId === activeFeatureId;
+    return {
+      activeFeatureId,
+      runtimeReady,
+      sidebarCollapsed: effectiveSidebarCollapsed,
+      inspectorOpen: cockpitMatches ? cockpitUi.inspectorOpen : false,
+      // Overview has nothing to inspect, so there is no toggle to offer.
+      inspectorAvailable: activeFeatureId !== null,
+      featureCommands: featureCommandEnablement(cockpitMatches ? cockpitUi.actions : null, {
+        hasSelection: activeFeatureId !== null,
+      }),
+    };
+  }, [cockpitUi, effectiveSidebarCollapsed, runtimeReady, shell]);
+
+  // Push on change only: an identical summary — an unchanged snapshot refresh,
+  // a re-render, a repeated readiness event — never reaches the main process.
   useEffect(() => {
-    if (tabs === null || routeRequest === null) return;
+    if (uiStateSummary === null) return;
+    const previous = pushedUiStateRef.current;
+    if (previous !== null && sameMainWindowUiState(previous, uiStateSummary)) return;
+    pushedUiStateRef.current = uiStateSummary;
+    void window.agentico.publishUiState(uiStateSummary).catch(() => {
+      // The menu is a convenience surface; a failed push never disturbs the
+      // window the user is looking at.
+    });
+  }, [uiStateSummary]);
+
+  useEffect(() => {
+    if (shell === null || routeRequest === null) return;
     if (handledRouteRequest.current === routeRequest.id) return;
     handledRouteRequest.current = routeRequest.id;
+    // Routed navigation acts on the pane beneath an open creation sheet: it
+    // never closes the sheet or touches the draft.
     if (routeRequest.event.target === 'home') {
-      if (view === 'create') {
-        creationGuard.leave({ kind: 'home' });
-      } else {
-        showHome();
-      }
-    } else if (routeRequest.event.target === 'settings') {
-      if (view === 'create') {
-        creationGuard.leave({ kind: 'settings' });
-      } else {
-        persist({ ...tabs, activeFeatureId: SETTINGS_TAB_ID });
-      }
+      selectOverview();
     } else if (routeRequest.event.target === 'bulk') {
       setBulkPreviewRequest(routeRequest.id);
-      if (view === 'create') {
-        creationGuard.leave({ kind: 'home' });
-      } else {
-        showHome();
+      selectOverview();
+    } else if (routeRequest.event.target === 'new-feature') {
+      setCreationOpen(true);
+    } else if (routeRequest.event.target === 'toggle-sidebar') {
+      shortcutRef.current.toggleSidebar();
+    } else if (routeRequest.event.target === 'toggle-inspector') {
+      toggleActiveInspector();
+    } else if (routeRequest.event.target === 'feature-command') {
+      // The route carries only the command's identity; the funnel resolves the
+      // target from the live selection and re-checks its live enablement, so a
+      // click that raced a selection change is a no-op.
+      const command = routeRequest.event.command;
+      if (command !== undefined && isFeatureCommandId(command)) {
+        runFeatureCommand(command);
       }
     }
-  }, [creationGuard, persist, routeRequest, showHome, tabs, view]);
+  }, [routeRequest, selectOverview, shell]);
 
-  if (tabs === null) {
+  if (shell === null) {
     return (
       <section className="shell-card workspace" aria-label="Workspace">
         <p role="status" aria-live="polite" className="cockpit__loading">
@@ -382,492 +517,585 @@ export function WorkspaceShell({
     );
   }
 
-  const activeId = tabs.activeFeatureId;
-  const isSettingsActive = activeId === SETTINGS_TAB_ID;
-  const activeIsOpen = activeId !== null && tabs.open.some((tab) => tab.featureId === activeId);
-  const active = isSettingsActive ? SETTINGS_TAB_ID : activeIsOpen ? activeId : null;
-  // Read by the focus/visibility refresh so it only refetches when Home is shown.
-  homeActiveRef.current = active === null && view !== 'create';
-  const tabCount = tabs.open.length + 2;
+  const activeFeatureId = shell.activeFeatureId;
+  // The cockpit always reloads its own snapshot directly by id, so a
+  // persisted selection is trusted even if the summary list hasn't returned
+  // it yet (or ever) — the cockpit itself renders the "no longer exists"
+  // state when the server truly has nothing under that id.
+  const selection: Selection =
+    activeFeatureId !== null
+      ? { kind: 'feature', featureId: activeFeatureId }
+      : { kind: 'overview' };
+  // Read by the focus/visibility refresh so it only refetches when Overview is shown.
+  overviewActiveRef.current = selection.kind === 'overview' && !creationOpen;
 
-  const focusTab = (index: number): void => {
-    const clamped = (index + tabCount) % tabCount;
-    tabRefs.current[clamped]?.focus();
+  const toggleLane = (lane: Lane, expanded: boolean) => {
+    setExpandedLanes((current) => ({ ...current, [lane]: expanded }));
   };
 
-  const onTabKeyDown = (event: KeyboardEvent, index: number): void => {
-    if (event.key === 'ArrowRight') {
-      event.preventDefault();
-      focusTab(index + 1);
-    } else if (event.key === 'ArrowLeft') {
-      event.preventDefault();
-      focusTab(index - 1);
+  const features = list.phase === 'loaded' ? list.features : [];
+  const laneGroups = classifyFeaturesByLaneWithAttention(features, attentionByFeature);
+  const counts = Object.fromEntries(LANES.map((lane) => [lane, laneGroups[lane].length])) as Record<
+    Lane,
+    number
+  >;
+
+  // The absolute sidebar order ⌘2-9 count by: Overview, then every lane in
+  // display order, every feature within it — regardless of which lanes are
+  // currently expanded. (Arrow/Home/End instead walk the DOM directly, at
+  // click time, so they only ever land on what a `<details>` disclosure
+  // state is actually showing.)
+  const allRows: SidebarRowEntry[] = [{ kind: 'overview' }];
+  for (const lane of LANES) {
+    for (const feature of laneGroups[lane]) {
+      allRows.push({ kind: 'feature', featureId: feature.id });
     }
-  };
+  }
 
-  const activateFeatureTab = (featureId: string) => {
-    persist({ ...tabs, activeFeatureId: featureId });
-    setView('home');
-  };
+  const selectedFeature =
+    selection.kind === 'feature'
+      ? features.find((feature) => feature.id === selection.featureId)
+      : undefined;
+  const showTrailingToolbar = selection.kind === 'feature';
+  // Stays mounted under the creation sheet so closing it restores focus here.
+  const showNewFeatureButton = selection.kind === 'overview';
+  const toolbarTitle =
+    selection.kind === 'feature' ? featureLabel(selection.featureId) : 'Overview';
+  const toolbarSubline =
+    selection.kind === 'feature' ? repoBranchSubline(selectedFeature) : undefined;
 
-  const navigateHome = () => {
-    if (view === 'create') {
-      creationGuard.leave({ kind: 'home' });
-      return;
+  // Keep the global ⌘2-9/⌘⌃S listener's stale-closure guard current every
+  // render — see the ref's declaration above for why it isn't itself a hook.
+  shortcutRef.current = { allRows, navigateFeature: selectFeature, toggleSidebar };
+
+  /**
+   * Roving tabindex: ArrowUp/ArrowDown/Home/End move focus AND selection
+   * together ("selection follows focus") through every row the DOM
+   * currently exposes as `role="option"` — rows inside a collapsed
+   * `<details>` lane stay in the DOM (so ⌘2-9 above can still reach them)
+   * but are excluded here by checking each row's nearest `<details>`
+   * ancestor, matching the disclosure-aware roving-focus pattern already
+   * used for the run-cohort roster in CurrentRunInspection.
+   */
+  const onSidebarListKeyDown = (event: React.KeyboardEvent<HTMLDivElement>): void => {
+    if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
+    const rows = Array.from(
+      event.currentTarget.querySelectorAll<HTMLElement>('[role="option"]'),
+    ).filter((row) => {
+      const details = row.closest('details');
+      return details === null || details.open;
+    });
+    if (rows.length === 0) return;
+    const current = rows.findIndex((row) => row === document.activeElement);
+    const next =
+      event.key === 'Home'
+        ? 0
+        : event.key === 'End'
+          ? rows.length - 1
+          : event.key === 'ArrowDown'
+            ? (current + 1) % rows.length
+            : (Math.max(current, 0) - 1 + rows.length) % rows.length;
+    const target = rows[next];
+    if (target === undefined) return;
+    event.preventDefault();
+    target.focus();
+    if (target.id === 'sidebar-overview') {
+      selectOverview();
+    } else {
+      selectFeature(target.id.slice('sidebar-row-'.length));
     }
-    showHome();
-  };
-
-  const navigateSettings = () => {
-    if (view === 'create') {
-      creationGuard.leave({ kind: 'settings' });
-      return;
-    }
-    persist({ ...tabs, activeFeatureId: SETTINGS_TAB_ID });
-  };
-
-  const navigateFeature = (featureId: string) => {
-    if (view === 'create') {
-      creationGuard.leave({ kind: 'feature', featureId });
-      return;
-    }
-    activateFeatureTab(featureId);
   };
 
   return (
-    <section className="workspace" aria-label="Workspace">
-      <div className="tab-strip__rail">
-        <div className="tab-strip" role="tablist" aria-label="Workspace tabs">
-          <button
-            ref={(node) => {
-              tabRefs.current[0] = node;
-            }}
-            type="button"
-            role="tab"
-            id="tab-home"
-            aria-selected={active === null}
-            aria-controls="panel-home"
-            className="tab-strip__tab"
-            tabIndex={active === null ? 0 : -1}
-            onClick={navigateHome}
-            onKeyDown={(event) => onTabKeyDown(event, 0)}
-          >
-            Home
-          </button>
-          <button
-            ref={(node) => {
-              tabRefs.current[1] = node;
-            }}
-            type="button"
-            role="tab"
-            id="tab-settings"
-            aria-selected={isSettingsActive}
-            aria-controls="panel-settings"
-            className="tab-strip__tab"
-            tabIndex={isSettingsActive ? 0 : -1}
-            onClick={navigateSettings}
-            onKeyDown={(event) => onTabKeyDown(event, 1)}
-          >
-            Settings
-          </button>
-          {tabs.open.map((tab, index) => (
-            <span key={tab.featureId} className="tab-strip__entry">
-              <button
-                ref={(node) => {
-                  tabRefs.current[index + 2] = node;
-                }}
-                type="button"
-                role="tab"
-                id={`tab-${tab.featureId}`}
-                aria-selected={active === tab.featureId}
-                aria-controls={`panel-${tab.featureId}`}
-                className="tab-strip__tab"
-                tabIndex={active === tab.featureId ? 0 : -1}
-                onClick={() => {
-                  navigateFeature(tab.featureId);
-                }}
-                onKeyDown={(event) => onTabKeyDown(event, index + 2)}
+    <section
+      className="workspace"
+      aria-label="Workspace"
+      data-sidebar-collapsed={effectiveSidebarCollapsed}
+    >
+      <nav
+        className="sidebar"
+        aria-label="Feature sidebar"
+        data-collapsed={effectiveSidebarCollapsed}
+      >
+        <div className="sidebar__header" aria-hidden="true" />
+        <div
+          className="sidebar__list"
+          role="listbox"
+          aria-label="Features"
+          onKeyDown={onSidebarListKeyDown}
+        >
+          <SidebarRow
+            id="sidebar-overview"
+            label="Overview"
+            glyph="house"
+            selected={selection.kind === 'overview'}
+            onSelect={selectOverview}
+          />
+          {LANES.map((lane) => {
+            const laneFeatures = laneGroups[lane];
+            if (laneFeatures.length === 0) return null;
+            return (
+              <details
+                key={lane}
+                className="sidebar__lane"
+                open={expandedLanes[lane]}
+                onToggle={(event) => toggleLane(lane, event.currentTarget.open)}
               >
-                <span>{tab.titleHint === '' ? featureLabel(tab.featureId) : tab.titleHint}</span>
-                <AttentionBadge
-                  count={attentionByFeature.get(tab.featureId) ?? 0}
-                  label={`Blocking input for ${featureLabel(tab.featureId)}`}
-                />
-              </button>
-              <button
-                type="button"
-                className="tab-strip__close"
-                aria-label={`Close ${tab.titleHint === '' ? featureLabel(tab.featureId) : tab.titleHint} tab`}
-                onClick={() => closeFeature(tab.featureId)}
-              >
-                <span aria-hidden="true">✕</span>
-              </button>
-            </span>
-          ))}
+                <summary className="sidebar__lane-summary">
+                  <span>{laneLabel(lane)}</span>
+                  <span className="sidebar__lane-count" aria-hidden="true">
+                    {counts[lane]}
+                  </span>
+                </summary>
+                <div role="group" aria-label={laneLabel(lane)} className="sidebar__lane-rows">
+                  {laneFeatures.map((feature) => (
+                    <SidebarFeatureRow
+                      key={feature.id}
+                      lane={lane}
+                      feature={feature}
+                      attentionKinds={attentionKindsByFeature.get(feature.id)}
+                      selected={selection.kind === 'feature' && selection.featureId === feature.id}
+                      onSelect={() => selectFeature(feature.id)}
+                    />
+                  ))}
+                </div>
+              </details>
+            );
+          })}
         </div>
-        <TabOverflowMenu
-          tabs={tabs}
-          attentionByFeature={attentionByFeature}
-          featureLabel={featureLabel}
-          onNavigateHome={navigateHome}
-          onNavigateSettings={navigateSettings}
-          onNavigateFeature={navigateFeature}
-        />
-      </div>
+        <div className="sidebar__footer" data-tone={footerTone}>
+          <span className="sidebar__runtime" role="status">
+            <span aria-hidden="true">●</span> {footerLabel}
+          </span>
+          {/* Indicator only, never a target: the toolbar button stays the one
+           * way into the update popover, and the footer keeps exactly one
+           * interactive element. */}
+          {updatePending ? (
+            <span className="sidebar__update-dot" role="img" aria-label="Update available" />
+          ) : null}
+          <button type="button" className="sidebar__ama" onClick={onOpenAma}>
+            Ask ⌥Space
+          </button>
+        </div>
+      </nav>
 
-      <div
-        id="panel-home"
-        role="tabpanel"
-        aria-labelledby="tab-home"
-        className={`tab-panel${view === 'create' ? ' tab-panel--create' : ''}`}
-        hidden={active !== null}
-      >
-        {view === 'create' ? (
-          <CreationFlow
-            guard={creationGuard}
-            onCreated={({ featureId, name }) => {
-              creationGuard.reset();
-              openFeature(featureId, name);
-              loadList();
-              setView('home');
-            }}
-          />
-        ) : (
-          <>
-            <header className="home-surface__header">
-              <div>
-                <p className="home-surface__eyebrow">Agentico · Supervised runs</p>
-                <h1>Feature queue</h1>
-                <HomeReadout state={list} />
-              </div>
-              {list.phase !== 'loaded' || list.features.length > 0 ? (
-                <button
-                  ref={newFeatureButtonRef}
-                  type="button"
-                  className="create-form__submit"
-                  onClick={() => setView('create')}
-                >
-                  New feature
-                </button>
-              ) : null}
-            </header>
-            <FeatureList
-              state={list}
-              openTabIds={tabs.open.map((tab) => tab.featureId)}
-              attentionByFeature={attentionByFeature}
-              onOpen={openFeature}
-              onRetry={loadList}
-              onCreate={() => setView('create')}
-              createButtonRef={newFeatureButtonRef}
-            />
-            <RecoveryWorkspace
-              onNavigateToFeature={(featureId) => openFeature(featureId, featureLabel(featureId))}
-            />
-            <BulkPreviewPanel autoPreviewKey={bulkPreviewRequest} />
-          </>
-        )}
-      </div>
-      <div
-        id="panel-settings"
-        role="tabpanel"
-        aria-labelledby="tab-settings"
-        className="tab-panel"
-        hidden={!isSettingsActive}
-      >
-        {settingsActivated || isSettingsActive ? (
-          <SettingsPanel
-            routeRequest={routeRequest?.event.target === 'settings' ? routeRequest : null}
-          />
-        ) : null}
-      </div>
-      {tabs.open.map((tab) => {
-        const isActive = active === tab.featureId;
-        return (
-          <div
-            key={tab.featureId}
-            id={`panel-${tab.featureId}`}
-            role="tabpanel"
-            aria-labelledby={`tab-${tab.featureId}`}
-            className="tab-panel tab-panel--cockpit"
-            hidden={!isActive}
-          >
+      <div className="content-column">
+        <Toolbar
+          sidebarCollapsed={effectiveSidebarCollapsed}
+          onToggleSidebar={toggleSidebar}
+          title={toolbarTitle}
+          subline={toolbarSubline}
+          showTrailing={showTrailingToolbar}
+          showNewFeature={showNewFeatureButton}
+          onNewFeature={() => setCreationOpen(true)}
+          newFeatureButtonRef={newFeatureButtonRef}
+          attention={{
+            items: attentionItems,
+            refresh: refreshAttention,
+            featureLabel,
+            drafts: activeAttentionDrafts,
+            setDrafts: updateAttentionDrafts,
+            onJump: onAttentionJump,
+            openRequest:
+              routeRequest?.event.target === 'attention'
+                ? { id: routeRequest.id, attentionId: routeRequest.event.attentionId }
+                : null,
+          }}
+          update={{
+            update: updateState,
+            dismissedVersion: updateDismissedVersion,
+            scheduling: schedulingUpdate,
+            onDismiss: onDismissUpdate,
+            onOpenSettings: onOpenUpdatesSettings,
+            onInstallWhenIdle: onInstallUpdateWhenIdle,
+          }}
+          actionsSlotRef={setActionsSlot}
+          overflowSlotRef={setOverflowSlot}
+          inspectorSlotRef={setInspectorSlot}
+        />
+        <div
+          className={
+            selection.kind === 'feature' ? 'content-pane content-pane--flush' : 'content-pane'
+          }
+        >
+          {selection.kind === 'feature' ? (
             <FeatureCockpit
-              active={isActive}
-              featureId={tab.featureId}
-              titleHint={tab.titleHint || tab.featureId}
-              onClose={() => closeFeature(tab.featureId)}
+              key={selection.featureId}
+              active
+              featureId={selection.featureId}
+              titleHint={featureLabel(selection.featureId)}
+              onClose={selectOverview}
               onDeleted={handleFeatureDeleted}
-              onLoadedName={(name) => renameTab(tab.featureId, name)}
+              onLoadedName={() => {}}
               attentionItems={attentionItems.filter(
                 (item) =>
-                  item.kind !== 'recovery' && attentionOwnerFeatureId(item) === tab.featureId,
+                  item.kind !== 'recovery' && attentionOwnerFeatureId(item) === selection.featureId,
               )}
               refreshAttention={refreshAttention}
               attentionDrafts={activeAttentionDrafts}
               setAttentionDrafts={updateAttentionDrafts}
               attentionPreviewRequest={
-                attentionPreviewRequest?.featureId === tab.featureId
+                attentionPreviewRequest?.featureId === selection.featureId
                   ? attentionPreviewRequest
                   : null
               }
               onAttentionPreviewClose={closeAttentionPreview}
-              selectedRunNumber={tab.selectedRunNumber ?? null}
+              selectedRunNumber={selectedRuns[selection.featureId] ?? null}
               onSelectRun={(runNumber) => {
-                persist({
-                  ...tabs,
-                  open: tabs.open.map((entry) =>
-                    entry.featureId === tab.featureId
-                      ? { ...entry, selectedRunNumber: runNumber }
-                      : entry,
-                  ),
-                });
+                const featureId = selection.featureId;
+                setSelectedRuns((current) => ({ ...current, [featureId]: runNumber }));
               }}
+              actionsHost={actionsSlot}
+              overflowMenuHost={overflowSlot}
+              inspectorToggleHost={inspectorSlot}
+              onUiStateChange={setCockpitUi}
             />
-          </div>
-        );
-      })}
-    </section>
-  );
-}
-
-interface CreationGuard {
-  leave(destination?: CreationDestination): void;
-  reset(): void;
-  onDirtyChange(dirty: boolean): void;
-  discardOpen: boolean;
-  keepEditing(): void;
-  discard(): void;
-}
-
-function useCreationGuard(onExit: (destination: CreationDestination) => void): CreationGuard {
-  const [dirty, setDirty] = useState(false);
-  const [discardOpen, setDiscardOpen] = useState(false);
-  const [pendingDestination, setPendingDestination] = useState<CreationDestination | null>(null);
-
-  const reset = useCallback(() => {
-    setDirty(false);
-    setDiscardOpen(false);
-    setPendingDestination(null);
-  }, []);
-  const leave = useCallback(
-    (destination: CreationDestination = { kind: 'home' }) => {
-      if (dirty) {
-        setPendingDestination(destination);
-        setDiscardOpen(true);
-        return;
-      }
-      reset();
-      onExit(destination);
-    },
-    [dirty, onExit, reset],
-  );
-  const discard = useCallback(() => {
-    const destination = pendingDestination ?? { kind: 'home' };
-    reset();
-    onExit(destination);
-  }, [onExit, pendingDestination, reset]);
-
-  return {
-    leave,
-    reset,
-    onDirtyChange: setDirty,
-    discardOpen,
-    keepEditing: () => setDiscardOpen(false),
-    discard,
-  };
-}
-
-function CreationFlow({
-  guard,
-  onCreated,
-}: {
-  guard: CreationGuard;
-  onCreated(created: { featureId: string; name: string }): void;
-}) {
-  return (
-    <section className="creation-flow" aria-label="New feature flow">
-      <header className="creation-flow__header">
-        <button type="button" className="setup-wizard__action" onClick={() => guard.leave()}>
-          Back to Home
-        </button>
-        <p>Feature definition</p>
-      </header>
-      <CreateFeatureForm onDirtyChange={guard.onDirtyChange} onCreated={onCreated} />
-      {guard.discardOpen ? (
-        <div className="impact-dialog__backdrop">
-          <div
-            className="impact-dialog"
-            role="dialog"
-            aria-modal="true"
-            aria-label="Discard feature draft"
-          >
-            <h2>Discard this feature draft?</h2>
-            <p>Your entered feature details have not been created.</p>
-            <div className="impact-dialog__actions">
-              <button type="button" onClick={guard.keepEditing}>
-                Keep editing
-              </button>
-              <button type="button" className="cockpit__stop" onClick={guard.discard}>
-                Discard draft
-              </button>
+          ) : (
+            <div className="overview-surface">
+              <header className="overview-surface__header">
+                <h1 className="overview-surface__headline">
+                  {overviewHeadline(counts, features.length)}
+                </h1>
+                <p className="overview-surface__subline">
+                  {overviewSubline(laneGroups, attentionItems, features.length)}
+                </p>
+                {features.length === 0 ? (
+                  <button
+                    type="button"
+                    className="overview-surface__cta"
+                    onClick={() => setCreationOpen(true)}
+                  >
+                    Create a feature
+                  </button>
+                ) : null}
+              </header>
+              <OverviewLanes
+                state={list}
+                laneGroups={laneGroups}
+                attentionItems={attentionItems}
+                attentionKindsByFeature={attentionKindsByFeature}
+                onOpen={(featureId) => selectFeature(featureId)}
+                onAnswer={(featureId, attentionId) => {
+                  if (attentionId === undefined) {
+                    selectFeature(featureId);
+                  } else {
+                    onAttentionJump(featureId, attentionId);
+                  }
+                }}
+                onRetry={loadList}
+              />
+              <RecoveryWorkspace onNavigateToFeature={(featureId) => selectFeature(featureId)} />
+              <BulkPreviewPanel autoPreviewKey={bulkPreviewRequest} />
             </div>
-          </div>
+          )}
         </div>
+      </div>
+
+      {creationOpen ? (
+        <CreateFeatureForm
+          onClose={() => setCreationOpen(false)}
+          onCreated={({ featureId }) => {
+            setCreationOpen(false);
+            loadList();
+            selectFeature(featureId);
+          }}
+        />
       ) : null}
     </section>
   );
 }
 
-function TabOverflowMenu({
-  tabs,
-  attentionByFeature,
-  featureLabel,
-  onNavigateHome,
-  onNavigateSettings,
-  onNavigateFeature,
+/**
+ * The toolbar's mono sub-line: the first repository plus its feature branch
+ * (read from the matching setup task, when the server reported one), with a
+ * `+N` suffix when more repositories exist beyond the first. Absent data —
+ * no repos, no matching branch — is omitted outright rather than rendered as
+ * "undefined" or a dangling separator. Overview never calls this.
+ */
+function repoBranchSubline(feature: FeatureSnapshot | undefined): string | undefined {
+  if (feature === undefined) return undefined;
+  const [firstRepo, ...restRepos] = feature.repos;
+  if (firstRepo === undefined) return undefined;
+  const branch = feature.setup?.tasks.find((task) => task.repo === firstRepo)?.branch;
+  const base = branch !== undefined && branch !== '' ? `${firstRepo} · ${branch}` : firstRepo;
+  return restRepos.length > 0 ? `${base} +${restRepos.length}` : base;
+}
+
+/** A single row in the Bench sidebar's listbox: Overview or a lane member. */
+function SidebarRow({
+  id,
+  label,
+  subline,
+  glyphTone,
+  glyph = 'dot',
+  pip,
+  selected,
+  onSelect,
 }: {
-  tabs: TabsPrefs;
-  attentionByFeature: ReadonlyMap<string, number>;
-  featureLabel(featureId: string): string;
-  onNavigateHome(): void;
-  onNavigateSettings(): void;
-  onNavigateFeature(featureId: string): void;
-}) {
-  const [open, setOpen] = useState(false);
-  const buttonRef = useRef<HTMLButtonElement>(null);
-  const menuRef = useRef<HTMLDivElement>(null);
-  const close = useCallback(() => {
-    setOpen(false);
-    requestAnimationFrame(() => buttonRef.current?.focus());
-  }, []);
-
-  useEffect(() => {
-    if (!open) return;
-    const dismiss = (event: MouseEvent) => {
-      if (
-        !menuRef.current?.contains(event.target as Node) &&
-        !buttonRef.current?.contains(event.target as Node)
-      ) {
-        setOpen(false);
-      }
-    };
-    const onKeyDown = (event: globalThis.KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        event.preventDefault();
-        close();
-      }
-    };
-    window.addEventListener('mousedown', dismiss);
-    window.addEventListener('keydown', onKeyDown);
-    return () => {
-      window.removeEventListener('mousedown', dismiss);
-      window.removeEventListener('keydown', onKeyDown);
-    };
-  }, [close, open]);
-
-  const select = (navigate: () => void) => {
-    navigate();
-    close();
+  id: string;
+  label: string;
+  subline?: string;
+  glyphTone?: 'attention' | 'progress' | 'ok' | 'quiet';
+  /**
+   * Feature rows show a status dot; the pinned Overview row shows the house
+   * glyph instead, since it has no status to report. Decorative either way —
+   * the row's accessible name is the label alone.
+   */
+  glyph?: 'dot' | 'house';
+  pip?: {
+    stageCount: number;
+    activeIndex: number;
+    atRest: boolean;
+    tone: 'progress' | 'attention';
   };
+  selected: boolean;
+  onSelect(): void;
+}) {
   return (
-    <div className="tab-strip__overflow-wrap">
-      <button
-        ref={buttonRef}
-        type="button"
-        className="tab-strip__overflow"
-        aria-expanded={open}
-        aria-haspopup="menu"
-        aria-controls="workspace-tab-menu"
-        onClick={() => setOpen((current) => !current)}
-      >
-        Tabs <span aria-hidden="true">⌄</span>
-      </button>
-      {open ? (
-        <div
-          ref={menuRef}
-          id="workspace-tab-menu"
-          className="tab-strip__menu"
-          role="menu"
-          aria-label="Open features"
-        >
-          <button type="button" role="menuitem" onClick={() => select(onNavigateHome)}>
-            Home
-          </button>
-          <button type="button" role="menuitem" onClick={() => select(onNavigateSettings)}>
-            Settings
-          </button>
-          {tabs.open.map((tab) => {
-            const count = attentionByFeature.get(tab.featureId) ?? 0;
-            return (
-              <button
-                key={tab.featureId}
-                type="button"
-                role="menuitem"
-                onClick={() => select(() => onNavigateFeature(tab.featureId))}
-              >
-                {tab.titleHint === '' ? featureLabel(tab.featureId) : tab.titleHint}
-                {count > 0 ? ` · ${count} pending` : ''}
-              </button>
-            );
-          })}
-        </div>
+    <div
+      id={id}
+      role="option"
+      aria-selected={selected}
+      tabIndex={selected ? 0 : -1}
+      className="sidebar__row"
+      data-selected={selected}
+      onClick={onSelect}
+    >
+      {glyph === 'house' ? (
+        <span className="sidebar__row-glyph sidebar__row-glyph--house" aria-hidden="true">
+          <HouseIcon />
+        </span>
+      ) : (
+        <span className="sidebar__row-glyph" data-tone={glyphTone ?? 'quiet'} aria-hidden="true" />
+      )}
+      <span className="sidebar__row-body">
+        <span className="sidebar__row-name">{label}</span>
+        {subline !== undefined ? <span className="sidebar__row-subline">{subline}</span> : null}
+      </span>
+      {pip !== undefined ? (
+        <PipRail
+          stageCount={pip.stageCount}
+          activeIndex={pip.activeIndex}
+          atRest={pip.atRest}
+          tone={pip.tone}
+          label={`${label} progress`}
+        />
       ) : null}
     </div>
   );
 }
 
-interface FeatureListProps {
-  state: ListState;
-  openTabIds: readonly string[];
-  attentionByFeature: ReadonlyMap<string, number>;
-  onOpen(featureId: string, titleHint: string): void;
-  onRetry(): void;
-  onCreate(): void;
-  createButtonRef: RefObject<HTMLButtonElement | null>;
-}
+const LANE_GLYPH_TONE: Readonly<Record<Lane, 'attention' | 'progress' | 'ok' | 'quiet'>> = {
+  waiting: 'attention',
+  running: 'progress',
+  published: 'ok',
+  done: 'ok',
+  'at-rest': 'quiet',
+};
 
-/** The masthead run tally: active, waiting-on-you, and shipped counts. */
-function HomeReadout({ state }: { state: ListState }) {
-  if (state.phase !== 'loaded' || state.features.length === 0) return null;
-  let running = 0;
-  let waiting = 0;
-  let shipped = 0;
-  for (const feature of state.features) {
-    const group = dashboardGroupId(feature);
-    if (group === 'published' || group === 'done') {
-      shipped += 1;
-      continue;
-    }
-    const { bucket } = dashboardState(feature);
-    if (bucket === 'active') running += 1;
-    else if (bucket === 'intervention') waiting += 1;
-  }
+/** Renders a feature row's mono sub-line and progress pip strictly from lane rules. */
+function SidebarFeatureRow({
+  lane,
+  feature,
+  attentionKinds,
+  selected,
+  onSelect,
+}: {
+  lane: Lane;
+  feature: FeatureSnapshot;
+  attentionKinds: Record<AttentionItem['kind'], number> | undefined;
+  selected: boolean;
+  onSelect(): void;
+}) {
+  const subline = laneSubline(lane, feature, attentionKinds);
+  const pipInfo = lane === 'waiting' || lane === 'running' ? pipRailFor(feature) : null;
   return (
-    <p className="home-surface__readout">
-      <b>{running}</b> running<span aria-hidden="true"> · </span>
-      <b>{waiting}</b> waiting on you<span aria-hidden="true"> · </span>
-      <b>{shipped}</b> shipped
-    </p>
+    <SidebarRow
+      id={`sidebar-row-${feature.id}`}
+      label={feature.name}
+      subline={subline}
+      glyphTone={LANE_GLYPH_TONE[lane]}
+      selected={selected}
+      onSelect={onSelect}
+      pip={
+        pipInfo === null
+          ? undefined
+          : {
+              ...pipInfo,
+              tone: lane === 'waiting' ? 'attention' : 'progress',
+            }
+      }
+    />
   );
 }
 
-function FeatureList({
+/** The pipeline position backing a sidebar row's pip strip, from the active child pass
+ * when there is one, otherwise the parent's own pipeline. Returns null when the
+ * status names no phase the rail can place a needle on. */
+function pipRailFor(
+  feature: FeatureSnapshot,
+): { stageCount: number; activeIndex: number; atRest: boolean } | null {
+  const child = feature.activeChild;
+  if (child !== undefined) {
+    const stages = spineStages(child.pipeline);
+    const index = childStatusSpineIndex(child.status, stages);
+    if (index === null) return null;
+    return { stageCount: stages.length, activeIndex: index, atRest: false };
+  }
+  const stages = spineStages(feature.pipeline);
+  return {
+    stageCount: stages.length,
+    activeIndex: spineActiveIndex(feature, stages),
+    atRest: isRunAtRest(feature.status),
+  };
+}
+
+/** One pending-attention summary counter, ordered by how a person should triage them. */
+function attentionSummary(
+  counts: Record<AttentionItem['kind'], number> | undefined,
+): string | undefined {
+  if (counts === undefined) return undefined;
+  const plural = (count: number) => (count === 1 ? '' : 's');
+  if (counts.questions > 0) return `Answer ${counts.questions} question${plural(counts.questions)}`;
+  if (counts.permission > 0)
+    return `Approve ${counts.permission} request${plural(counts.permission)}`;
+  if (counts.gate > 0) return `Resolve ${counts.gate} gate${plural(counts.gate)}`;
+  if (counts.help > 0) return `Respond to ${counts.help} prompt${plural(counts.help)}`;
+  if (counts.review > 0) return `Review ${counts.review} item${plural(counts.review)}`;
+  return undefined;
+}
+
+/**
+ * The row sub-line, entirely lane-scoped: waiting rows summarize what needs a
+ * person (falling back to the status text when nothing raised a discrete
+ * attention item yet), running rows name the active pass or the phase and
+ * iteration, at-rest rows show the plain status text, and published/done
+ * rows carry no sub-line at all — only the name and the status glyph, per
+ * the mock. Any part the snapshot has no data for is omitted rather than
+ * rendered as "undefined".
+ */
+function laneSubline(
+  lane: Lane,
+  feature: FeatureSnapshot,
+  attentionKinds: Record<AttentionItem['kind'], number> | undefined,
+): string | undefined {
+  if (lane === 'waiting') {
+    return attentionSummary(attentionKinds) ?? displayStatusLabel(feature.status);
+  }
+  if (lane === 'running') {
+    if (feature.activeChild !== undefined) return feature.activeChild.name;
+    return runningPhaseSubline(
+      feature.currentPhase,
+      feature.currentRoadmapPhase,
+      feature.totalRoadmapPhases,
+      feature.currentIteration,
+    );
+  }
+  if (lane === 'at-rest') {
+    return displayStatusLabel(feature.status);
+  }
+  // published / done: name + glyph only, no sub-line.
+  return undefined;
+}
+
+interface OverviewLanesProps {
+  state: ListState;
+  laneGroups: Record<Lane, FeatureSnapshot[]>;
+  attentionItems: readonly AttentionItem[];
+  attentionKindsByFeature: ReadonlyMap<string, Record<AttentionItem['kind'], number>>;
+  onOpen(featureId: string): void;
+  onAnswer(featureId: string, attentionId?: string): void;
+  onRetry(): void;
+}
+
+/** The first non-recovery attention item this feature owns, if any. */
+function firstAttentionItemFor(
+  featureId: string,
+  attentionItems: readonly AttentionItem[],
+): AttentionItem | undefined {
+  return attentionItems.find(
+    (item) => item.kind !== 'recovery' && attentionOwnerFeatureId(item) === featureId,
+  );
+}
+
+/** The row's mono sub-line: the repo list, extended with the active pass name. */
+function overviewRowSubline(feature: FeatureSnapshot): string {
+  const repos = feature.repos.join(', ');
+  const childName = feature.activeChild?.name;
+  return childName !== undefined && childName !== '' ? `${repos} · ${childName}` : repos;
+}
+
+/** The lane-scoped fallback text for a lane whose sub-line cascade
+ * (`laneSubline`) has nothing to report — e.g. a running row with no
+ * active child and no current phase. */
+const OVERVIEW_ROW_STATE_FALLBACK: Readonly<Record<Lane, string>> = {
+  waiting: '',
+  running: 'Running',
+  'at-rest': '',
+  published: 'Shipped',
+  done: 'Done',
+};
+
+/** The row's state-cell text, one per lane per the mock: never invents a fact
+ * the snapshot doesn't carry. Reuses the sidebar's own `laneSubline`
+ * cascade so the two never drift apart, falling back only where the
+ * sidebar's undefined sub-line (no sub-line shown there) needs Overview
+ * copy instead. */
+function overviewRowStateText(
+  lane: Lane,
+  feature: FeatureSnapshot,
+  attentionKinds: Record<AttentionItem['kind'], number> | undefined,
+): string {
+  return laneSubline(lane, feature, attentionKinds) ?? OVERVIEW_ROW_STATE_FALLBACK[lane];
+}
+
+/** The row-scale pip rail: sidebar's `pipRailFor` for waiting/running rows,
+ * an all-done rail for the resting lanes (at-rest/published/done). Returns
+ * null for a waiting/running row whose status names no phase the rail can
+ * place a needle on — mirroring the sidebar's `SidebarFeatureRow`, which
+ * renders no pip at all in that case rather than inventing a fully-filled,
+ * done-looking rail for a row that hasn't finished anything. */
+function overviewRowPip(
+  lane: Lane,
+  feature: FeatureSnapshot,
+): {
+  stageCount: number;
+  activeIndex: number;
+  atRest: boolean;
+  tone: 'progress' | 'attention';
+} | null {
+  if (lane === 'waiting' || lane === 'running') {
+    const info = pipRailFor(feature);
+    return info === null ? null : { ...info, tone: lane === 'waiting' ? 'attention' : 'progress' };
+  }
+  const stages = spineStages(feature.activeChild?.pipeline ?? feature.pipeline);
+  return {
+    stageCount: stages.length,
+    activeIndex: stages.length - 1,
+    atRest: true,
+    tone: 'progress',
+  };
+}
+
+/** Every non-empty lane rendered as its own grouped inset list, in sidebar order. */
+function OverviewLanes({
   state,
-  openTabIds,
-  attentionByFeature,
+  laneGroups,
+  attentionItems,
+  attentionKindsByFeature,
   onOpen,
+  onAnswer,
   onRetry,
-  onCreate,
-  createButtonRef,
-}: FeatureListProps) {
+}: OverviewLanesProps) {
+  const totalFeatures = LANES.reduce((sum, lane) => sum + laneGroups[lane].length, 0);
   return (
-    <section className="feature-list" aria-label="Existing features">
+    <section className="overview-lanes" aria-label="Existing features">
       {state.phase === 'loading' ? (
         <p role="status" className="setup-step__empty">
           Loading features…
         </p>
       ) : state.phase === 'error' ? (
-        <div className="feature-list__error">
+        <div className="overview-lanes__error">
           <p className="form-field__error">
             {state.error.code}: {state.error.message}
           </p>
@@ -875,309 +1103,119 @@ function FeatureList({
             Try again
           </button>
         </div>
-      ) : state.features.length === 0 ? (
-        <div className="feature-list__empty">
-          <p className="home-surface__eyebrow">Runtime ready · workspace clear</p>
-          <h3>Turn a goal into a supervised run.</h3>
-          <p>
-            Define the work, choose its repositories, set the pipeline, then review the exact run
-            contract before anything is created.
-          </p>
-          <button
-            ref={createButtonRef}
-            type="button"
-            className="setup-wizard__action"
-            onClick={onCreate}
-          >
-            New feature
-          </button>
-        </div>
-      ) : (
-        <div className="feature-list__groups">
-          {groupDashboardFeatures(state.features).map((group) => (
-            <section
-              key={group.id}
-              className="feature-list__group"
-              aria-labelledby={`feature-list-group-${group.id}`}
-            >
-              <div className="feature-list__group-head" data-kind={group.id}>
-                <h3 id={`feature-list-group-${group.id}`} className="feature-list__group-title">
-                  {group.label}
-                </h3>
-                <span className="feature-list__group-count" aria-hidden="true">
-                  {group.id === 'in-progress'
-                    ? `· ${group.features.length}`
-                    : `× ${group.features.length}`}
-                </span>
-              </div>
-              {group.id === 'in-progress' ? (
-                <ul className="run-grid">
-                  {group.features.map((feature) => (
-                    <RunningCard
-                      key={feature.id}
-                      feature={feature}
-                      isOpen={openTabIds.includes(feature.id)}
-                      attentionCount={attentionByFeature.get(feature.id) ?? 0}
-                      onOpen={onOpen}
-                    />
-                  ))}
-                </ul>
-              ) : (
-                <ul className="queue-rows">
-                  {group.features.map((feature) => (
-                    <QueueRow
-                      key={feature.id}
-                      feature={feature}
-                      isOpen={openTabIds.includes(feature.id)}
-                      onOpen={onOpen}
-                    />
-                  ))}
-                </ul>
-              )}
-            </section>
-          ))}
+      ) : totalFeatures === 0 ? null : (
+        <div className="overview-lanes__groups">
+          {LANES.map((lane) =>
+            laneGroups[lane].length === 0 ? null : (
+              <OverviewLaneSection
+                key={lane}
+                lane={lane}
+                features={laneGroups[lane]}
+                attentionItems={attentionItems}
+                attentionKindsByFeature={attentionKindsByFeature}
+                onOpen={onOpen}
+                onAnswer={onAnswer}
+              />
+            ),
+          )}
         </div>
       )}
     </section>
   );
 }
 
-interface RunRowProps {
-  feature: FeatureSnapshot;
-  isOpen: boolean;
-  onOpen(featureId: string, titleHint: string): void;
-}
-
-/** A feature still in flight: full phase rail, live/needs-you badge, one action. */
-function RunningCard({
-  feature,
-  isOpen,
-  attentionCount,
+function OverviewLaneSection({
+  lane,
+  features,
+  attentionItems,
+  attentionKindsByFeature,
   onOpen,
-}: RunRowProps & { attentionCount: number }) {
-  const stages = spineStages(feature.pipeline);
-  const activeIndex = spineActiveIndex(feature, stages);
-  const { bucket, label } = dashboardState(feature);
-  const needsYou = attentionCount > 0 || bucket === 'intervention';
-  const railTone = needsYou ? 'attention' : 'progress';
-  // Amber when a run wants you, blue pulse while it's genuinely working, quiet
-  // otherwise — so a resting "Code ready" run never reads as live.
-  const badgeState = needsYou ? 'attention' : bucket === 'active' ? 'live' : 'quiet';
-  // Name the specific reason a parked run needs you (Interrupted / Failed /
-  // Review needed / Input needed); a live run with a pending prompt just says
-  // "Needs you"; otherwise Live or the resting state.
-  const badge =
-    bucket === 'intervention'
-      ? label
-      : needsYou
-        ? 'Needs you'
-        : bucket === 'active'
-          ? label === 'Active'
-            ? 'Live'
-            : label
-          : label;
-  const elapsed = formatElapsed(feature);
-  return (
-    <li className="run-card" data-state={badgeState}>
-      <div className="run-card__head">
-        <h4 className="run-card__title">{feature.name}</h4>
-        <span className="run-card__badges">
-          <AttentionBadge count={attentionCount} label={`Blocking input for ${feature.name}`} />
-          <span className="run-card__badge">
-            <span className="run-card__dot" aria-hidden="true" />
-            {badge}
-          </span>
-        </span>
-      </div>
-      <p className="run-card__meta">
-        <span>
-          repo <b>{feature.repos.join(', ')}</b>
-        </span>
-        <span>
-          status{' '}
-          <b>
-            {displayStatusLabel(feature.status)}
-            {feature.activeChild !== undefined ? ' · locked' : ''}
-          </b>
-        </span>
-        {feature.activeChild === undefined && elapsed !== null ? (
-          <span>
-            elapsed <b>{elapsed}</b>
-          </span>
-        ) : null}
-      </p>
-      {feature.activeChild !== undefined ? (
-        // The pass is what is moving; the parent's at-rest rail would read as
-        // a finished run inside the In-progress section.
-        <PassLane child={feature.activeChild} tone={railTone} />
-      ) : (
-        <FlightRail
-          stages={stages}
-          activeIndex={activeIndex}
-          atRest={isRunAtRest(feature.status)}
-          tone={railTone}
-          label={`Pipeline for ${feature.name}`}
-        />
-      )}
-      {feature.failure?.message !== undefined ? (
-        <p className="run-card__failure">
-          <span aria-hidden="true">! </span>
-          {feature.failure.message}
-        </p>
-      ) : null}
-      <div className="run-card__actions">
-        <button
-          type="button"
-          className="run-card__action"
-          onClick={() => onOpen(feature.id, feature.name)}
-        >
-          {isOpen ? 'Show tab' : 'Open'}
-        </button>
-      </div>
-    </li>
-  );
-}
-
-/**
- * The nested refactor-pass lane shows the active child with its own live rail.
- * The needle is derived from the pass's status;
- * a Created pass shows the rail with no needle and every stop upcoming, and
- * statuses that don't name a phase (paused, waiting, failed) show no rail
- * rather than an approximate needle.
- */
-function PassLane({
-  child,
-  tone,
+  onAnswer,
 }: {
-  child: NonNullable<FeatureSnapshot['activeChild']>;
-  tone: 'progress' | 'attention';
+  lane: Lane;
+  features: FeatureSnapshot[];
+  attentionItems: readonly AttentionItem[];
+  attentionKindsByFeature: ReadonlyMap<string, Record<AttentionItem['kind'], number>>;
+  onOpen(featureId: string): void;
+  onAnswer(featureId: string, attentionId?: string): void;
 }) {
-  const stages = spineStages(child.pipeline);
-  const index = childStatusSpineIndex(child.status, stages);
   return (
-    <div className="run-card__pass" data-tone={tone}>
-      <span className="run-card__pass-glyph" aria-hidden="true">
-        ↳
-      </span>
-      <div className="run-card__pass-body">
-        <p className="run-card__pass-line">
-          <b>{child.name}</b>
-          <span>
-            {child.status === 'Created' ? 'Not started' : displayStatusLabel(child.status)}
-          </span>
-        </p>
-        {index === null ? null : (
-          <FlightRail
-            stages={stages}
-            activeIndex={index}
-            atRest={false}
-            tone={tone}
-            label={`Pass pipeline for ${child.name}`}
-          />
-        )}
+    <section className="overview-lane" aria-labelledby={`overview-lane-${lane}`}>
+      <div className="overview-lane__head">
+        <h2 id={`overview-lane-${lane}`} className="overview-lane__title">
+          {laneLabel(lane)}
+        </h2>
+        <span className="overview-lane__count" aria-hidden="true">
+          {features.length}
+        </span>
       </div>
-    </div>
+      <div className="overview-lane__group">
+        <ul className="overview-lane__rows">
+          {features.map((feature) => (
+            <OverviewRow
+              key={feature.id}
+              lane={lane}
+              feature={feature}
+              attentionKinds={attentionKindsByFeature.get(feature.id)}
+              onOpen={() => onOpen(feature.id)}
+              onAnswer={() =>
+                onAnswer(feature.id, firstAttentionItemFor(feature.id, attentionItems)?.id)
+              }
+            />
+          ))}
+        </ul>
+      </div>
+    </section>
   );
 }
 
-/** A shipped feature: compact row with an all-done rail and one action. */
-function QueueRow({ feature, isOpen, onOpen }: RunRowProps) {
-  const stages = spineStages(feature.pipeline);
-  const stateLabel = dashboardGroupId(feature) === 'done' ? 'Done' : 'Shipped';
+function OverviewRow({
+  lane,
+  feature,
+  attentionKinds,
+  onOpen,
+  onAnswer,
+}: {
+  lane: Lane;
+  feature: FeatureSnapshot;
+  attentionKinds: Record<AttentionItem['kind'], number> | undefined;
+  onOpen(): void;
+  onAnswer(): void;
+}) {
+  const pip = overviewRowPip(lane, feature);
+  const tone = LANE_GLYPH_TONE[lane];
   return (
-    <li className="queue-row">
-      <span className="queue-row__name">{feature.name}</span>
-      <span className="queue-row__repo">{feature.repos.join(', ')}</span>
-      <span className="queue-row__rail" aria-hidden="true">
-        {stages.map((stage) => (
-          <i key={stage.id} className="queue-row__pip" />
-        ))}
-      </span>
-      <span className="queue-row__state">{stateLabel}</span>
+    <li className="overview-row" data-lane={lane}>
+      <button type="button" className="overview-row__hit" onClick={onOpen}>
+        <span className="overview-row__body">
+          <span className="overview-row__name">{feature.name}</span>
+          <span className="overview-row__subline">{overviewRowSubline(feature)}</span>
+        </span>
+        <span className="overview-row__state-col">
+          <span className="overview-row__state" data-tone={tone}>
+            <span className="overview-row__state-dot" data-tone={tone} aria-hidden="true" />
+            <span className="overview-row__state-text">
+              {overviewRowStateText(lane, feature, attentionKinds)}
+            </span>
+          </span>
+          {pip === null ? null : (
+            <PipRail
+              stageCount={pip.stageCount}
+              activeIndex={pip.activeIndex}
+              atRest={pip.atRest}
+              tone={pip.tone}
+              label={`${feature.name} progress`}
+            />
+          )}
+        </span>
+      </button>
       <button
         type="button"
-        className="queue-row__action"
-        onClick={() => onOpen(feature.id, feature.name)}
+        className="overview-row__action"
+        onClick={lane === 'waiting' ? onAnswer : onOpen}
       >
-        {isOpen ? 'Show tab' : 'Open'}
+        {lane === 'waiting' ? 'Answer' : 'Open'}
       </button>
     </li>
-  );
-}
-
-/**
- * The signature: a horizontal pipeline rail with a filled track to the active
- * stop, a pulsing needle on the current stage, and condensed stage labels.
- */
-function FlightRail({
-  stages,
-  activeIndex,
-  atRest,
-  tone,
-  label,
-}: {
-  stages: readonly SpineStage[];
-  activeIndex: number;
-  atRest: boolean;
-  tone: 'progress' | 'attention';
-  label: string;
-}) {
-  const reducedMotion = usePrefersReducedMotion();
-  const denom = Math.max(stages.length - 1, 1);
-  // activeIndex -1 = not started: zero fill, every stop upcoming, no needle.
-  const fillPct = (Math.min(Math.max(activeIndex, 0), denom) / denom) * 100;
-  return (
-    <div
-      className="flight-rail"
-      data-tone={tone}
-      role="group"
-      aria-label={label}
-      style={{ '--stops': stages.length } as CSSProperties}
-    >
-      <div className="flight-rail__track">
-        <span className="flight-rail__fill" style={{ width: `${fillPct}%` }} />
-      </div>
-      <div className="flight-rail__stops">
-        {stages.map((stage, index) => {
-          const state =
-            index < activeIndex || (atRest && index === activeIndex)
-              ? 'done'
-              : index === activeIndex
-                ? 'active'
-                : 'upcoming';
-          const isActive = state === 'active';
-          return (
-            <span
-              key={stage.id}
-              className="flight-rail__stop"
-              data-state={state}
-              data-tone={tone}
-              {...(isActive ? { 'aria-current': 'step' as const } : {})}
-            >
-              <span
-                className={
-                  isActive && !reducedMotion
-                    ? 'flight-rail__stop-dot flight-rail__stop-dot--pulse'
-                    : 'flight-rail__stop-dot'
-                }
-                aria-hidden="true"
-              />
-              <span className="flight-rail__stop-label" title={stage.label}>
-                {railStageLabel(stage.label, stages.length)}
-              </span>
-            </span>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-function AttentionBadge({ count, label }: { count: number; label: string }) {
-  if (count === 0) return null;
-  return (
-    <span className="attention-badge" role="status" aria-label={`${label}: ${count} pending`}>
-      {count}
-    </span>
   );
 }

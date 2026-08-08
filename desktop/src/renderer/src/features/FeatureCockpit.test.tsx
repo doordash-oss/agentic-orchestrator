@@ -7,9 +7,10 @@ import { featureSnapshot, featureConfigSnapshot, installAgenticoMock } from '../
 import { dispatchMediaChange, matchMediaState } from '../test/setup';
 import { emptyAttentionDrafts } from './AttentionInbox';
 import { FeatureCockpit } from './FeatureCockpit';
+import { runFeatureCommand, toggleActiveInspector } from './featureCommands';
 
-// The review surface (Document stage) instantiates Monaco, which needs no real
-// editor in jsdom; the stub keeps the stage-tab test light.
+// The Review doc surface instantiates Monaco, which needs no real editor in
+// jsdom; the stub keeps the segmented-control tests light.
 vi.mock('monaco-editor', () => ({
   editor: {
     create: vi.fn(() => ({
@@ -27,6 +28,8 @@ vi.mock('monaco-editor', () => ({
 afterEach(() => {
   cleanup();
   vi.useRealTimers();
+  // Narrow-width tests must never leak their viewport into the next test.
+  matchMediaState.narrowCockpit = false;
 });
 
 const FEATURE_ID = 'abcd1234ef567890';
@@ -94,23 +97,37 @@ function renderCockpit(mock = installAgenticoMock(), active = true) {
   };
 }
 
+/**
+ * Wide layout: the inspector's trailing split-view pane starts closed (Task
+ * 5). Tests that assert on its content (identity facts, pipeline ladder,
+ * durable setup, repository PR link, run totals) open it explicitly via the
+ * same toggle the toolbar's slot portals in real usage — rendered inline here
+ * since `renderCockpit` supplies no `inspectorToggleHost`.
+ */
+async function openInspector() {
+  const user = userEvent.setup();
+  await user.click(await screen.findByRole('button', { name: 'Toggle inspector' }));
+}
+
 describe('FeatureCockpit snapshot rendering', () => {
   it('always reloads the feature from the server and reports its name', async () => {
     const { mock, onLoadedName } = renderCockpit();
-    await screen.findByRole('heading', { name: 'Search revamp' });
+    await screen.findByRole('region', { name: 'Feature Search revamp' });
     expect(mock.api.getFeature).toHaveBeenCalledWith(FEATURE_ID);
     expect(onLoadedName).toHaveBeenCalledWith('Search revamp');
   });
 
   it('omits durable setup from the inspector', async () => {
     renderCockpit();
-    await screen.findByRole('heading', { name: 'Search revamp' });
+    await openInspector();
+    await screen.findByRole('region', { name: 'Feature Search revamp' });
     expect(screen.queryByRole('region', { name: 'Durable setup' })).not.toBeInTheDocument();
   });
 
   it('renders only status and branch in the mono header facts', async () => {
     renderCockpit();
-    await screen.findByRole('heading', { name: 'Search revamp' });
+    await openInspector();
+    await screen.findByRole('region', { name: 'Feature Search revamp' });
     const header = screen.getByText('Status').closest('dl');
     expect(header).not.toBeNull();
     expect(within(header!).getByLabelText('SettingUpWorktrees')).toBeInTheDocument();
@@ -119,18 +136,7 @@ describe('FeatureCockpit snapshot rendering', () => {
     expect(within(header!).queryByText('Repository')).not.toBeInTheDocument();
   });
 
-  it('shows the feature pipeline ladder with Setup active during setup', async () => {
-    renderCockpit();
-    await screen.findByRole('heading', { name: 'Search revamp' });
-    const ladder = screen.getByRole('group', { name: 'Feature pipeline' });
-    const active = within(ladder)
-      .getAllByRole('listitem')
-      .find((item) => item.getAttribute('aria-current') === 'step');
-    expect(active).toHaveTextContent('Setup');
-    expect(document.querySelector('.phase-spine')).not.toBeInTheDocument();
-  });
-
-  it('keeps rewind and run history in the overflow menu', async () => {
+  it('keeps rewind in the overflow menu', async () => {
     const mock = installAgenticoMock({
       feature: featureSnapshot({
         actions: [{ id: 'rewind', enabled: true, disabledReasons: [] }],
@@ -153,7 +159,10 @@ describe('FeatureCockpit snapshot rendering', () => {
     const actions = await screen.findByRole('group', { name: 'Feature actions' });
     await userEvent.click(within(actions).getByLabelText('More actions'));
     expect(within(actions).getByRole('menuitem', { name: 'Rewind feature' })).toBeVisible();
-    expect(within(actions).getByRole('menuitem', { name: 'View run history' })).toBeVisible();
+    // The run/iteration popup is the sole run switcher now — no history menu item.
+    expect(
+      within(actions).queryByRole('menuitem', { name: 'View run history' }),
+    ).not.toBeInTheDocument();
     await userEvent.click(within(actions).getByRole('menuitem', { name: 'Rewind feature' }));
     expect(await screen.findByRole('dialog', { name: /Rewind/ })).toBeVisible();
     expect(mock.api.getFeature).toHaveBeenCalledWith(FEATURE_ID);
@@ -188,7 +197,7 @@ describe('FeatureCockpit snapshot rendering', () => {
     expect(details.open).toBe(false);
   });
 
-  it('opens the publish modal from a server-advertised completion verb', async () => {
+  it('opens the publish modal from the aftercare runway delivery row', async () => {
     const mock = installAgenticoMock({
       feature: featureSnapshot({
         status: 'CodeReady',
@@ -204,7 +213,7 @@ describe('FeatureCockpit snapshot rendering', () => {
     renderCockpit(mock);
     const user = userEvent.setup();
 
-    await user.click(await screen.findByRole('button', { name: 'Publish' }));
+    await user.click(await screen.findByRole('button', { name: /Publish this feature/ }));
 
     expect(
       await screen.findByRole('dialog', { name: 'Publish reviewed changes' }),
@@ -212,7 +221,7 @@ describe('FeatureCockpit snapshot rendering', () => {
     expect(mock.api.preflightCompletion).toHaveBeenCalledWith({ featureId: FEATURE_ID });
   });
 
-  it('hides completion affordances while completion actions are present but disabled', async () => {
+  it('disables the Changes segment while completion actions are present but disabled', async () => {
     const mock = installAgenticoMock({
       feature: featureSnapshot({
         status: 'Running',
@@ -230,19 +239,76 @@ describe('FeatureCockpit snapshot rendering', () => {
     });
     renderCockpit(mock);
 
-    await screen.findByRole('heading', { name: 'Search revamp' });
+    await screen.findByRole('region', { name: 'Feature Search revamp' });
 
-    expect(screen.queryByRole('tab', { name: 'Changes' })).not.toBeInTheDocument();
+    // Fixed segments never hide — the unavailable one renders disabled.
+    expect(screen.getByRole('tab', { name: 'Changes' })).toBeDisabled();
     expect(screen.queryByRole('button', { name: 'Publish' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Merge' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Clean up' })).not.toBeInTheDocument();
     expect(mock.api.preflightCompletion).not.toHaveBeenCalled();
   });
 
+  it('renders the Live transcript with no framed panel and its controls in the stage bar', async () => {
+    const mock = installAgenticoMock({
+      feature: featureSnapshot({
+        status: 'Running',
+        actions: [{ id: 'stop', enabled: true, disabledReasons: [] }],
+      }),
+    });
+    renderCockpit(mock);
+
+    await screen.findByRole('region', { name: 'Feature Search revamp' });
+    await screen.findByRole('region', { name: 'Current run inspection' });
+
+    // No frame between the content pane and the transcript: the reading column
+    // is a direct child of the preview container, with no bar or caption above.
+    expect(document.querySelector('.live-preview')?.parentElement).toHaveClass(
+      'current-inspection__preview',
+    );
+    expect(screen.queryByText('Live activity')).not.toBeInTheDocument();
+
+    const trailing = document.querySelector('.cockpit__stage-bar-trailing');
+    expect(trailing).not.toBeNull();
+    expect(trailing!.querySelector('[aria-label="Preview view"]')).not.toBeNull();
+    expect(trailing!.querySelector('[aria-label="Refresh current run inspection"]')).not.toBeNull();
+  });
+
+  it('relocates the full-screen expand icon to the stage-bar row, not an inline surface bar', async () => {
+    const mock = installAgenticoMock({
+      feature: featureSnapshot({
+        status: 'Running',
+        actions: [
+          { id: 'stop', enabled: true, disabledReasons: [] },
+          { id: 'publish', enabled: false, disabledReasons: [{ code: 'run_active', message: '' }] },
+          { id: 'merge', enabled: false, disabledReasons: [{ code: 'run_active', message: '' }] },
+          {
+            id: 'mark-done',
+            enabled: false,
+            disabledReasons: [{ code: 'run_active', message: '' }],
+          },
+          { id: 'cleanup', enabled: false, disabledReasons: [{ code: 'run_active', message: '' }] },
+        ],
+      }),
+    });
+    renderCockpit(mock);
+    const user = userEvent.setup();
+
+    await screen.findByRole('region', { name: 'Feature Search revamp' });
+    const expandButton = await screen.findByRole('button', {
+      name: 'Expand live preview to full screen',
+    });
+    expect(expandButton.closest('.cockpit__stage-bar-trailing')).not.toBeNull();
+    expect(expandButton.closest('.live-preview__bar-controls')).toBeNull();
+
+    await user.click(expandButton);
+    expect(await screen.findByRole('dialog', { name: 'Live agent preview' })).toBeVisible();
+  });
+
   it('opens configuration from the overflow menu', async () => {
     renderCockpit();
     const user = userEvent.setup();
-    await screen.findByRole('heading', { name: 'Search revamp' });
+    await screen.findByRole('region', { name: 'Feature Search revamp' });
     await user.click(screen.getByLabelText('More actions'));
     await user.click(screen.getByRole('menuitem', { name: 'Edit configuration…' }));
     expect(
@@ -250,7 +316,7 @@ describe('FeatureCockpit snapshot rendering', () => {
     ).toBeInTheDocument();
   });
 
-  it('offers Document and Live activity stage tabs during a pending review', async () => {
+  it('offers the fixed Review doc and Live segments during a pending review', async () => {
     const mock = installAgenticoMock({
       feature: featureSnapshot({
         status: 'ResearchNeedsReview',
@@ -281,9 +347,13 @@ describe('FeatureCockpit snapshot rendering', () => {
     const user = userEvent.setup();
 
     const tablist = await screen.findByRole('tablist', { name: 'Stage view' });
-    const documentTab = within(tablist).getByRole('tab', { name: 'Document' });
-    const liveTab = within(tablist).getByRole('tab', { name: /Live activity/ });
-    expect(within(tablist).queryByRole('tab', { name: 'Aftercare' })).not.toBeInTheDocument();
+    const documentTab = within(tablist).getByRole('tab', { name: 'Review doc' });
+    const liveTab = within(tablist).getByRole('tab', { name: 'Live' });
+    // The four segments are fixed and never hidden; Changes has no surface
+    // to show yet, so it renders present-but-disabled. Files shares Live's
+    // availability, so it stays enabled even though Live isn't selected.
+    expect(within(tablist).getByRole('tab', { name: 'Changes' })).toBeDisabled();
+    expect(within(tablist).getByRole('tab', { name: 'Files' })).toBeEnabled();
     expect(documentTab).toHaveAttribute('aria-selected', 'true');
     expect(screen.getByRole('region', { name: 'Review editor' })).toBeInTheDocument();
 
@@ -295,34 +365,36 @@ describe('FeatureCockpit snapshot rendering', () => {
   });
 
   it.each([
-    ['CodeReady', 'Choose one focused action, or leave the run at rest.'],
-    ['Published', 'Choose one focused action, or leave the feature at rest.'],
-    ['Done', 'The record stays available whenever another focused pass is useful.'],
-  ])('defaults %s features to Aftercare while retaining Run record', async (status, lede) => {
-    const mock = installAgenticoMock({
-      feature: featureSnapshot({
-        status,
-        activeRun: 8,
-        actions: [{ id: 'rebase', enabled: true, disabledReasons: [] }],
-      }),
-    });
-    mock.api.getRun.mockResolvedValue({
-      runNumber: 8,
-      artifactCount: 5,
-      timing: { totalSeconds: 14700, byPhase: {} },
-      cost: { totalUsd: 95.18, byPhase: {} },
-    });
-    renderCockpit(mock);
+    ['CodeReady', 'The work is ready to go out'],
+    ['Published', 'The work is in service'],
+    ['Done', 'This feature is closed out'],
+  ])(
+    'defaults %s features to Aftercare while retaining the run record',
+    async (status, headline) => {
+      const mock = installAgenticoMock({
+        feature: featureSnapshot({
+          status,
+          activeRun: 8,
+          actions: [{ id: 'rebase', enabled: true, disabledReasons: [] }],
+        }),
+      });
+      mock.api.getRun.mockResolvedValue({
+        runNumber: 8,
+        artifactCount: 5,
+        timing: { totalSeconds: 14700, byPhase: {} },
+        cost: { totalUsd: 95.18, byPhase: {} },
+      });
+      renderCockpit(mock);
 
-    expect(await screen.findByRole('region', { name: 'Feature aftercare' })).toBeVisible();
-    expect(screen.queryByRole('tablist', { name: 'Stage view' })).not.toBeInTheDocument();
-    expect(screen.queryByLabelText('Feature pipeline')).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Run record' })).toBeVisible();
-    expect(screen.getByRole('heading', { name: lede })).toBeVisible();
-    await waitFor(() =>
-      expect(mock.api.getRun).toHaveBeenCalledWith({ featureId: FEATURE_ID, runNumber: 8 }),
-    );
-  });
+      expect(await screen.findByRole('region', { name: 'Feature aftercare' })).toBeVisible();
+      expect(screen.queryByRole('tablist', { name: 'Stage view' })).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'View run record' })).toBeVisible();
+      expect(screen.getByRole('heading', { name: headline })).toBeVisible();
+      await waitFor(() =>
+        expect(mock.api.getRun).toHaveBeenCalledWith({ featureId: FEATURE_ID, runNumber: 8 }),
+      );
+    },
+  );
 
   it('keeps feature-scoped attention actionable from published aftercare', async () => {
     installAgenticoMock({
@@ -620,7 +692,7 @@ describe('FeatureCockpit snapshot rendering', () => {
     renderCockpit(mock);
     const user = userEvent.setup();
 
-    await user.click(await screen.findByRole('button', { name: 'Run record' }));
+    await user.click(await screen.findByRole('button', { name: 'View run record' }));
 
     expect(
       await screen.findByRole('region', { name: 'Current run inspection' }),
@@ -630,10 +702,11 @@ describe('FeatureCockpit snapshot rendering', () => {
     );
   });
 
-  it('opens the feature pull request through the guarded desktop bridge', async () => {
+  it('keeps the aftercare facts behind the inspector toggle, closed by default', async () => {
     const mock = installAgenticoMock({
       feature: featureSnapshot({
         status: 'Published',
+        activeRun: 8,
         repoStatus: [
           {
             name: 'agentic-orchestrator',
@@ -647,11 +720,114 @@ describe('FeatureCockpit snapshot rendering', () => {
     renderCockpit(mock);
     const user = userEvent.setup();
 
-    await user.click(await screen.findByRole('button', { name: 'Open pull request' }));
+    await screen.findByRole('region', { name: 'Feature aftercare' });
+    // Closed on every visit: no facts pane until the toolbar toggle opens it.
+    expect(screen.queryByRole('region', { name: 'Feature facts' })).not.toBeInTheDocument();
+    const toggle = screen.getByRole('button', { name: 'Toggle inspector' });
+    expect(toggle).toHaveAttribute('aria-pressed', 'false');
 
+    await user.click(toggle);
+    expect(toggle).toHaveAttribute('aria-pressed', 'true');
+    const facts = screen.getByRole('complementary', { name: 'Feature inspector' });
+    expect(within(facts).getByRole('region', { name: 'Feature facts' })).toBeVisible();
+
+    await user.click(within(facts).getByRole('button', { name: 'Open pull request' }));
     expect(mock.api.openExternal).toHaveBeenCalledWith({
       url: 'https://github.com/doordash-oss/agentic-orchestrator/pull/107',
     });
+
+    await user.click(toggle);
+    expect(screen.queryByRole('region', { name: 'Feature facts' })).not.toBeInTheDocument();
+  });
+
+  it('presents the aftercare facts as a drawer at narrow widths', async () => {
+    matchMediaState.narrowCockpit = true;
+    const mock = installAgenticoMock({
+      feature: featureSnapshot({ status: 'Published', activeRun: 8, actions: [] }),
+    });
+    renderCockpit(mock);
+    const user = userEvent.setup();
+
+    await screen.findByRole('region', { name: 'Feature aftercare' });
+    await user.click(screen.getByRole('button', { name: 'Inspector' }));
+    const drawer = screen.getByRole('dialog', { name: 'Feature inspector' });
+    expect(within(drawer).getByRole('region', { name: 'Feature facts' })).toBeVisible();
+
+    await user.click(within(drawer).getByRole('button', { name: 'Close inspector' }));
+    expect(screen.queryByRole('dialog', { name: 'Feature inspector' })).not.toBeInTheDocument();
+  });
+
+  it('reduces the aftercare toolbar to the wrap-up verbs with a prominent Mark done', async () => {
+    const mock = installAgenticoMock({
+      feature: featureSnapshot({
+        status: 'CodeReady',
+        activeRun: 8,
+        actions: [
+          { id: 'publish', enabled: true, disabledReasons: [] },
+          { id: 'merge', enabled: true, disabledReasons: [] },
+          { id: 'mark-done', enabled: true, disabledReasons: [] },
+          { id: 'cleanup', enabled: true, disabledReasons: [] },
+        ],
+      }),
+    });
+    mock.api.preflightCompletion.mockResolvedValue({
+      featureId: FEATURE_ID,
+      sourceRevision: 'rev-aftercare',
+      canMarkDone: false,
+      markDoneBlocker: 'repo-a has unpublished commits',
+      repos: [{ repo: 'repo-a', publishable: false, touched: true, status: 'eligible' }],
+    });
+    renderCockpit(mock);
+
+    const actions = await screen.findByRole('group', { name: 'Feature actions' });
+    const markDone = await within(actions).findByRole('button', { name: 'Mark done' });
+    // Prominent but disabled, with the preflight blocker read out beside it.
+    expect(markDone).toHaveClass('cockpit__completion-button');
+    expect(markDone).toBeDisabled();
+    expect(within(actions).getByText('repo-a has unpublished commits')).toBeVisible();
+    expect(within(actions).getByRole('button', { name: 'Clean up' })).toBeVisible();
+    // Delivery left the toolbar: it lives on the runway only.
+    expect(within(actions).queryByRole('button', { name: 'Publish' })).not.toBeInTheDocument();
+    expect(within(actions).queryByRole('button', { name: 'Merge' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Merge this feature/ })).toBeVisible();
+  });
+
+  it('carries the reduced verb set into the narrow wrap-up menu', async () => {
+    matchMediaState.narrowCockpit = true;
+    const mock = installAgenticoMock({
+      feature: featureSnapshot({
+        status: 'Published',
+        activeRun: 8,
+        actions: [
+          { id: 'publish', enabled: true, disabledReasons: [] },
+          { id: 'merge', enabled: true, disabledReasons: [] },
+          { id: 'mark-done', enabled: true, disabledReasons: [] },
+          { id: 'cleanup', enabled: true, disabledReasons: [] },
+        ],
+      }),
+    });
+    mock.api.preflightCompletion.mockResolvedValue({
+      featureId: FEATURE_ID,
+      sourceRevision: 'rev-aftercare',
+      canMarkDone: true,
+      repos: [{ repo: 'repo-a', publishable: true, touched: true, status: 'already_published' }],
+    });
+    renderCockpit(mock);
+    const user = userEvent.setup();
+
+    const actions = await screen.findByRole('group', { name: 'Feature actions' });
+    const wrapUp = await waitFor(() => {
+      const summary = actions.querySelector<HTMLElement>('.cockpit__wrapup-summary');
+      expect(summary).not.toBeNull();
+      return summary!;
+    });
+    await user.click(wrapUp);
+    const menu = within(actions).getByRole('menu', { name: 'Wrap up' });
+    expect(
+      within(menu)
+        .getAllByRole('menuitem')
+        .map((item) => item.textContent),
+    ).toEqual(['Clean up', 'Mark done']);
   });
 
   it('opens the regular inspector pull request through the guarded desktop bridge', async () => {
@@ -669,6 +845,7 @@ describe('FeatureCockpit snapshot rendering', () => {
     });
     mock.api.openExternal.mockResolvedValue({ ok: true });
     renderCockpit(mock);
+    await openInspector();
     const user = userEvent.setup();
 
     await user.click(await screen.findByRole('button', { name: 'Open pull request' }));
@@ -692,6 +869,59 @@ describe('FeatureCockpit snapshot rendering', () => {
     expect(screen.queryByRole('dialog', { name: 'Feature inspector' })).not.toBeInTheDocument();
     await waitFor(() => expect(toggle).toHaveFocus());
     dispatchMediaChange('(max-width: 900px)', false);
+  });
+});
+
+describe('FeatureCockpit wide-layout inspector', () => {
+  it('starts closed by default and opens/closes as a trailing split-view pane', async () => {
+    renderCockpit();
+    await screen.findByRole('region', { name: 'Feature Search revamp' });
+
+    // Closed on first view: no split-view pane, and the content column has
+    // not opened its second track.
+    expect(screen.queryByRole('heading', { name: 'Search revamp' })).not.toBeInTheDocument();
+    expect(document.querySelector('.cockpit__content--inspector-open')).toBeNull();
+    const toggle = screen.getByRole('button', { name: 'Toggle inspector' });
+    expect(toggle).toHaveAttribute('aria-pressed', 'false');
+
+    const user = userEvent.setup();
+    await user.click(toggle);
+
+    // Toggling on renders the pane and flips the container's modifier class.
+    expect(await screen.findByRole('heading', { name: 'Search revamp' })).toBeVisible();
+    expect(document.querySelector('.cockpit__content--inspector-open')).not.toBeNull();
+    expect(toggle).toHaveAttribute('aria-pressed', 'true');
+
+    await user.click(toggle);
+
+    // Toggling again closes it.
+    expect(screen.queryByRole('heading', { name: 'Search revamp' })).not.toBeInTheDocument();
+    expect(document.querySelector('.cockpit__content--inspector-open')).toBeNull();
+    expect(toggle).toHaveAttribute('aria-pressed', 'false');
+  });
+
+  it('portals the toggle into a toolbar-owned host when one is supplied', async () => {
+    installAgenticoMock();
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    render(
+      <FeatureCockpit
+        featureId={FEATURE_ID}
+        titleHint="Search revamp"
+        onClose={vi.fn()}
+        onLoadedName={vi.fn()}
+        attentionItems={[]}
+        refreshAttention={() => Promise.resolve([])}
+        attentionDrafts={emptyAttentionDrafts()}
+        setAttentionDrafts={vi.fn()}
+        inspectorToggleHost={host}
+      />,
+    );
+    await screen.findByRole('region', { name: 'Feature Search revamp' });
+
+    const toggle = await screen.findByRole('button', { name: 'Toggle inspector' });
+    expect(host.contains(toggle)).toBe(true);
+    host.remove();
   });
 });
 
@@ -742,14 +972,11 @@ describe('FeatureCockpit failure and retry', () => {
     const mock = installAgenticoMock();
     mock.api.getFeature.mockResolvedValue(failedSnapshot());
     renderCockpit(mock);
-    await screen.findByRole('heading', { name: 'Search revamp' });
+    await openInspector();
+    await screen.findByRole('region', { name: 'Feature Search revamp' });
 
     expect(screen.getByText('Setup failed in repo-a.')).toBeInTheDocument();
     expect(screen.queryByRole('region', { name: 'Durable setup' })).not.toBeInTheDocument();
-    expect(screen.getByRole('group', { name: 'Feature pipeline' })).toHaveAttribute(
-      'data-tone',
-      'error',
-    );
   });
 
   it('retries via the server-authorized setup action on the SAME feature', async () => {
@@ -757,7 +984,7 @@ describe('FeatureCockpit failure and retry', () => {
     mock.api.getFeature.mockResolvedValue(failedSnapshot());
     renderCockpit(mock);
     const user = userEvent.setup();
-    await screen.findByRole('heading', { name: 'Search revamp' });
+    await screen.findByRole('region', { name: 'Feature Search revamp' });
 
     const retry = screen.getByRole('button', { name: 'Retry setup' });
     expect(retry).toBeEnabled();
@@ -775,7 +1002,7 @@ describe('FeatureCockpit failure and retry', () => {
     mock.api.getFeature.mockResolvedValue(failedSnapshot());
     renderCockpit(mock);
     const user = userEvent.setup();
-    await screen.findByRole('heading', { name: 'Search revamp' });
+    await screen.findByRole('region', { name: 'Feature Search revamp' });
     // An unavailable verb lives in the overflow menu, greyed, carrying its reason.
     await user.click(screen.getByLabelText('More actions'));
     expect(screen.getByRole('menuitem', { name: 'Start' })).toBeDisabled();
@@ -829,7 +1056,7 @@ describe('FeatureCockpit ready-to-start', () => {
     ).dispatchFeatureAction = vi.fn(() => new Promise(() => {}));
     renderCockpit(mock);
     const user = userEvent.setup();
-    await screen.findByRole('heading', { name: 'Search revamp' });
+    await screen.findByRole('region', { name: 'Feature Search revamp' });
 
     await waitFor(() => expect(mock.api.preflightCompletion).toHaveBeenCalled());
     await waitFor(() => expect(screen.getByText('Ready to start')).toBeInTheDocument());
@@ -857,7 +1084,7 @@ describe('FeatureCockpit ready-to-start', () => {
     );
     renderCockpit(mock);
     const user = userEvent.setup();
-    await screen.findByRole('heading', { name: 'Search revamp' });
+    await screen.findByRole('region', { name: 'Feature Search revamp' });
     const callsBefore = mock.api.getFeature.mock.calls.length;
 
     await user.click(screen.getByRole('button', { name: 'Start' }));
@@ -931,7 +1158,7 @@ describe('FeatureCockpit convergence', () => {
     renderCockpit(mock);
     const user = userEvent.setup();
 
-    const liveTab = await screen.findByRole('tab', { name: 'Live activity' });
+    const liveTab = await screen.findByRole('tab', { name: 'Live' });
     await user.click(liveTab);
     expect(liveTab).toHaveAttribute('aria-selected', 'true');
 
@@ -939,16 +1166,12 @@ describe('FeatureCockpit convergence', () => {
 
     expect(await screen.findByRole('region', { name: 'Feature aftercare' })).toBeVisible();
     expect(screen.queryByRole('tablist', { name: 'Stage view' })).not.toBeInTheDocument();
-    expect(
-      screen.getByRole('heading', {
-        name: 'Choose one focused action, or leave the feature at rest.',
-      }),
-    ).toBeVisible();
+    expect(screen.getByRole('heading', { name: 'The work is in service' })).toBeVisible();
   });
 
   it('refetches on invalidations for this feature and on resync, ignoring others', async () => {
     const { mock } = renderCockpit();
-    await screen.findByRole('heading', { name: 'Search revamp' });
+    await screen.findByRole('region', { name: 'Feature Search revamp' });
     const base = mock.api.getFeature.mock.calls.length;
 
     mock.emitAppEvent({ type: 'invalidated', kind: 'feature.updated', featureId: 'other-id' });
@@ -964,7 +1187,7 @@ describe('FeatureCockpit convergence', () => {
   it('delays and coalesces invalidations while inactive, then flushes on activation', async () => {
     const mock = installAgenticoMock();
     const view = renderCockpit(mock, false);
-    await screen.findByRole('heading', { name: 'Search revamp' });
+    await screen.findByRole('region', { name: 'Feature Search revamp' });
     vi.useFakeTimers();
     const base = mock.api.getFeature.mock.calls.length;
     mock.emitAppEvent({ type: 'invalidated', kind: 'feature.updated', featureId: FEATURE_ID });
@@ -1049,18 +1272,19 @@ describe('FeatureCockpit convergence', () => {
   it('keeps the loaded snapshot visible when a silent refresh fails', async () => {
     const mock = installAgenticoMock();
     renderCockpit(mock, true);
-    expect(await screen.findByRole('heading', { name: 'Search revamp' })).toBeVisible();
+    expect(await screen.findByRole('region', { name: 'Feature Search revamp' })).toBeVisible();
+    await openInspector();
     mock.api.getFeature.mockRejectedValueOnce(new Error('unavailable: runtime busy'));
     mock.emitAppEvent({ type: 'invalidated', kind: 'feature.updated', featureId: FEATURE_ID });
     expect(await screen.findByText('Refreshing from the runtime…')).toBeVisible();
-    expect(screen.getByRole('heading', { name: 'Search revamp' })).toBeVisible();
+    expect(screen.getByRole('region', { name: 'Feature Search revamp' })).toBeVisible();
     expect(screen.queryByText(/Loading Search revamp from the runtime/)).not.toBeInTheDocument();
   });
 
   it('shows the missing state when a silent refresh reports not_found', async () => {
     const mock = installAgenticoMock();
     renderCockpit(mock, true);
-    await screen.findByRole('heading', { name: 'Search revamp' });
+    await screen.findByRole('region', { name: 'Feature Search revamp' });
     mock.api.getFeature.mockRejectedValueOnce(new Error('not_found: feature not found'));
     mock.emitAppEvent({ type: 'invalidated', kind: 'feature.updated', featureId: FEATURE_ID });
     expect(await screen.findByText('This feature no longer exists on the server.')).toBeVisible();
@@ -1081,8 +1305,9 @@ describe('FeatureCockpit convergence', () => {
     expect(mock.api.getFeature).toHaveBeenCalledTimes(1);
 
     await act(async () => resolveInitial(featureSnapshot()));
+    await openInspector();
     expect(await screen.findByText('Refreshing from the runtime…')).toBeVisible();
-    expect(await screen.findByRole('heading', { name: 'Search revamp' })).toBeVisible();
+    expect(await screen.findByRole('region', { name: 'Feature Search revamp' })).toBeVisible();
     expect(screen.queryByText(/Loading Search revamp from the runtime/)).not.toBeInTheDocument();
   });
 
@@ -1103,7 +1328,7 @@ describe('FeatureCockpit convergence', () => {
           ),
       );
     renderCockpit(mock);
-    await screen.findByRole('heading', { name: 'Search revamp' });
+    await screen.findByRole('region', { name: 'Feature Search revamp' });
 
     mock.emitAppEvent({ type: 'invalidated', kind: 'feature.updated', featureId: FEATURE_ID });
     mock.emitAppEvent({ type: 'invalidated', kind: 'feature.updated', featureId: FEATURE_ID });
@@ -1111,7 +1336,9 @@ describe('FeatureCockpit convergence', () => {
     await act(async () => resolveFirstRefresh(featureSnapshot({ name: 'First refresh' })));
     await waitFor(() => expect(mock.api.getFeature).toHaveBeenCalledTimes(3));
     await act(async () => resolveTrailingRefresh(featureSnapshot({ name: 'Newest snapshot' })));
-    expect(await screen.findByRole('heading', { name: 'Newest snapshot' })).toBeInTheDocument();
+    expect(
+      await screen.findByRole('region', { name: 'Feature Newest snapshot' }),
+    ).toBeInTheDocument();
   });
 
   it('serializes an action refresh with invalidations and converges through one trailing refresh', async () => {
@@ -1162,7 +1389,9 @@ describe('FeatureCockpit convergence', () => {
     await act(async () => resolveActionRefresh(ready));
     await waitFor(() => expect(mock.api.getFeature).toHaveBeenCalledTimes(3));
     await act(async () => resolveTrailingRefresh(converged));
-    expect(await screen.findByRole('heading', { name: 'Converged snapshot' })).toBeInTheDocument();
+    expect(
+      await screen.findByRole('region', { name: 'Feature Converged snapshot' }),
+    ).toBeInTheDocument();
     expect(mock.api.getFeature).toHaveBeenCalledTimes(3);
   });
 
@@ -1202,7 +1431,8 @@ describe('FeatureCockpit convergence', () => {
 
   it('shows a refreshing indicator while the event stream is stale', async () => {
     const { mock } = renderCockpit();
-    await screen.findByRole('heading', { name: 'Search revamp' });
+    await screen.findByRole('region', { name: 'Feature Search revamp' });
+    await openInspector();
 
     mock.emitAppEvent({ type: 'status', stream: 'stale' });
     expect(await screen.findByText('Refreshing from the runtime…')).toBeInTheDocument();
@@ -1255,7 +1485,7 @@ describe('FeatureCockpit convergence', () => {
     render(<Harness />);
     const user = userEvent.setup();
 
-    const request = await screen.findByRole('dialog', { name: 'Agent needs your input' });
+    const request = await screen.findByRole('dialog', { name: 'Answer one question to resume' });
     await user.type(
       within(request).getByLabelText(/Which deployment window should implementation use/),
       'After packaged attention evidence passes.',
@@ -1271,7 +1501,7 @@ describe('FeatureCockpit convergence', () => {
     expect(mock.api.resolveGate).not.toHaveBeenCalled();
     await waitFor(() =>
       expect(
-        screen.queryByRole('dialog', { name: 'Agent needs your input' }),
+        screen.queryByRole('dialog', { name: 'Answer one question to resume' }),
       ).not.toBeInTheDocument(),
     );
   });
@@ -1440,18 +1670,18 @@ describe('FeatureCockpit convergence', () => {
     render(<Harness />);
     const user = userEvent.setup();
 
-    const request = await screen.findByRole('dialog', { name: 'Agent needs your input' });
+    const request = await screen.findByRole('dialog', { name: 'Answer one question to resume' });
     await user.click(within(request).getByRole('button', { name: 'Answer later' }));
     expect(
-      screen.queryByRole('dialog', { name: 'Agent needs your input' }),
+      screen.queryByRole('dialog', { name: 'Answer one question to resume' }),
     ).not.toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: 'Advance attention' }));
 
     expect(
-      within(await screen.findByRole('dialog', { name: 'Agent needs your input' })).getByLabelText(
-        /Which follow-up deployment window should implementation use/,
-      ),
+      within(
+        await screen.findByRole('dialog', { name: 'Answer one question to resume' }),
+      ).getByLabelText(/Which follow-up deployment window should implementation use/),
     ).toBeVisible();
   });
 
@@ -1972,5 +2202,267 @@ describe('FeatureCockpit review-feedback aftercare', () => {
     );
     // The cockpit routes the active child to the pass workspace.
     expect(await screen.findByRole('region', { name: 'Review feedback pass' })).toBeVisible();
+  });
+});
+
+describe('FeatureCockpit run switcher popup', () => {
+  function runSummary(runNumber: number) {
+    return { runNumber, artifactCount: 0, sealedAt: `2026-07-${10 + runNumber}T10:00:00Z` };
+  }
+
+  function renderWithSwitcher() {
+    render(
+      <FeatureCockpit
+        featureId={FEATURE_ID}
+        titleHint="Search revamp"
+        onClose={vi.fn()}
+        onLoadedName={vi.fn()}
+        attentionItems={[]}
+        refreshAttention={() => Promise.resolve([])}
+        attentionDrafts={emptyAttentionDrafts()}
+        setAttentionDrafts={vi.fn()}
+        onSelectRun={vi.fn()}
+      />,
+    );
+  }
+
+  async function openSwitcher() {
+    const user = userEvent.setup();
+    const summary = await screen.findByText('Plan', { selector: '.cockpit__run-switcher-summary' });
+    await user.click(summary);
+    return { user, menu: await screen.findByRole('menu', { name: 'Switch run' }) };
+  }
+
+  it('appends older sealed runs on Load older and drops the control at the last page', async () => {
+    const mock = installAgenticoMock();
+    mock.api.listRuns.mockImplementation(({ page }: { page: number }) =>
+      Promise.resolve(
+        page === 1
+          ? { runs: [runSummary(9), runSummary(8)], page: 1, pageSize: 8, total: 3, totalPages: 2 }
+          : { runs: [runSummary(7)], page: 2, pageSize: 8, total: 3, totalPages: 2 },
+      ),
+    );
+    renderWithSwitcher();
+
+    const { user, menu } = await openSwitcher();
+    expect((await within(menu).findAllByRole('menuitem')).map((item) => item.textContent)).toEqual([
+      'Plan · current',
+      'Run 9 · sealed',
+      'Run 8 · sealed',
+    ]);
+
+    await user.click(within(menu).getByRole('button', { name: 'Load older' }));
+
+    await waitFor(() =>
+      expect(
+        within(menu)
+          .getAllByRole('menuitem')
+          .map((item) => item.textContent),
+      ).toEqual(['Plan · current', 'Run 9 · sealed', 'Run 8 · sealed', 'Run 7 · sealed']),
+    );
+    // Last page reached: the affordance retires rather than requesting page 3.
+    expect(within(menu).queryByRole('button', { name: 'Load older' })).not.toBeInTheDocument();
+    expect(mock.api.listRuns).toHaveBeenCalledTimes(2);
+    expect(mock.api.listRuns).toHaveBeenLastCalledWith({
+      featureId: FEATURE_ID,
+      page: 2,
+      pageSize: 8,
+    });
+  });
+
+  it('resets to the first page when the menu is reopened', async () => {
+    const mock = installAgenticoMock();
+    mock.api.listRuns.mockImplementation(({ page }: { page: number }) =>
+      Promise.resolve(
+        page === 1
+          ? { runs: [runSummary(9)], page: 1, pageSize: 8, total: 2, totalPages: 2 }
+          : { runs: [runSummary(8)], page: 2, pageSize: 8, total: 2, totalPages: 2 },
+      ),
+    );
+    renderWithSwitcher();
+
+    const { user, menu } = await openSwitcher();
+    await user.click(within(menu).getByRole('button', { name: 'Load older' }));
+    await waitFor(() => expect(within(menu).getAllByRole('menuitem')).toHaveLength(3));
+
+    const summary = screen.getByText('Plan', { selector: '.cockpit__run-switcher-summary' });
+    await user.click(summary);
+    await user.click(summary);
+
+    await waitFor(() =>
+      expect(
+        within(menu)
+          .getAllByRole('menuitem')
+          .map((item) => item.textContent),
+      ).toEqual(['Plan · current', 'Run 9 · sealed']),
+    );
+    expect(within(menu).getByRole('button', { name: 'Load older' })).toBeInTheDocument();
+  });
+
+  it('reports a failed run-history read inside the menu without losing the current run', async () => {
+    const mock = installAgenticoMock();
+    mock.api.listRuns.mockRejectedValue(new Error('history unavailable'));
+    renderWithSwitcher();
+
+    const { menu } = await openSwitcher();
+    expect(
+      await within(menu).findByText(/Could not load run history — history unavailable/),
+    ).toBeVisible();
+    expect(within(menu).getByRole('menuitem', { name: 'Plan · current' })).toBeVisible();
+  });
+});
+
+/**
+ * The funnel's other half: whatever invoked a feature command — the ⌘K
+ * palette or the native Feature menu — it lands on the cockpit's own flow.
+ * These drive the registered executor directly, which is exactly what the
+ * palette entry and the routed menu click do.
+ */
+describe('FeatureCockpit feature-command funnel', () => {
+  /** Mounts the cockpit — and with it the funnel registration — and settles. */
+  async function mounted(mock: ReturnType<typeof installAgenticoMock>) {
+    renderCockpit(mock);
+    await screen.findByRole('region', { name: 'Feature Search revamp' });
+    return mock;
+  }
+
+  function withFeature(snapshot: FeatureSnapshot) {
+    return installAgenticoMock({ feature: snapshot });
+  }
+
+  it('presents the cockpit confirmation for Stop rather than dispatching straight away', async () => {
+    const mock = installAgenticoMock({
+      feature: featureSnapshot({
+        status: 'Implementing',
+        actions: [{ id: 'pause-stop', enabled: true, disabledReasons: [] }],
+      }),
+    });
+    mock.api.listSessions.mockResolvedValue([]);
+    await mounted(mock);
+
+    await act(async () => {
+      expect(runFeatureCommand('feature.pause-stop', { featureId: FEATURE_ID })).toBe('executed');
+    });
+
+    expect(await screen.findByRole('dialog', { name: /stop/i })).toBeInTheDocument();
+    expect(mock.api.dispatchFeatureAction).not.toHaveBeenCalled();
+  });
+
+  it('presents the cockpit confirmation for Delete rather than deleting straight away', async () => {
+    const mock = await mounted(
+      withFeature(
+        featureSnapshot({
+          status: 'CodeReady',
+          actions: [{ id: 'delete', enabled: true, disabledReasons: [] }],
+        }),
+      ),
+    );
+
+    await act(async () => {
+      runFeatureCommand('feature.delete', { featureId: FEATURE_ID });
+    });
+
+    expect(await screen.findByRole('dialog', { name: /delete/i })).toBeInTheDocument();
+    expect(mock.api.deleteFeatureCascade).not.toHaveBeenCalled();
+  });
+
+  it('opens the completion preflight modal for Publish', async () => {
+    const mock = installAgenticoMock({
+      feature: featureSnapshot({
+        status: 'CodeReady',
+        actions: [{ id: 'publish', enabled: true, disabledReasons: [] }],
+      }),
+    });
+    mock.api.preflightCompletion.mockResolvedValue({
+      featureId: FEATURE_ID,
+      sourceRevision: 'rev-complete',
+      canMarkDone: true,
+      repos: [{ repo: 'repo-a', publishable: true, touched: true, status: 'eligible' }],
+    });
+    await mounted(mock);
+
+    await act(async () => {
+      runFeatureCommand('feature.publish', { featureId: FEATURE_ID });
+    });
+
+    expect(
+      await screen.findByRole('dialog', { name: 'Publish reviewed changes' }),
+    ).toBeInTheDocument();
+    expect(mock.api.preflightCompletion).toHaveBeenCalledWith({ featureId: FEATURE_ID });
+  });
+
+  it('opens the configuration editor for Configuration, with no server action behind it', async () => {
+    await mounted(withFeature(featureSnapshot({ actions: [] })));
+
+    await act(async () => {
+      expect(runFeatureCommand('feature.configuration', { featureId: FEATURE_ID })).toBe(
+        'executed',
+      );
+    });
+
+    expect(
+      await screen.findByRole('dialog', { name: 'Feature configuration' }),
+    ).toBeInTheDocument();
+  });
+
+  it('dispatches Start immediately, exactly as the cockpit button does', async () => {
+    const mock = await mounted(
+      withFeature(
+        featureSnapshot({
+          status: 'Created',
+          setup: { status: 'done', attempt: 1, tasks: [] },
+          actions: [{ id: 'start', enabled: true, disabledReasons: [] }],
+        }),
+      ),
+    );
+
+    await act(async () => {
+      runFeatureCommand('feature.start', { featureId: FEATURE_ID });
+    });
+
+    await waitFor(() =>
+      expect(mock.api.dispatchFeatureAction).toHaveBeenCalledWith({
+        featureId: FEATURE_ID,
+        action: 'start',
+      }),
+    );
+  });
+
+  it('launches the rebase pass for Rebase, with no modal in between', async () => {
+    const mock = await mounted(
+      withFeature(
+        featureSnapshot({
+          status: 'Published',
+          actions: [{ id: 'rebase', enabled: true, disabledReasons: [] }],
+        }),
+      ),
+    );
+    mock.api.launchRebaseChild.mockResolvedValue({ childId: 'child1234abcd5678' });
+
+    await act(async () => {
+      runFeatureCommand('feature.rebase', { featureId: FEATURE_ID });
+    });
+
+    await waitFor(() =>
+      expect(mock.api.launchRebaseChild).toHaveBeenCalledWith({ featureId: FEATURE_ID }),
+    );
+  });
+
+  it('flips the inspector from the View menu route', async () => {
+    await mounted(withFeature(featureSnapshot()));
+
+    await act(async () => {
+      expect(toggleActiveInspector()).toBe(true);
+    });
+    expect(await screen.findByRole('button', { name: 'Toggle inspector' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+  });
+
+  it('stops being a funnel target once it unmounts', async () => {
+    await mounted(withFeature(featureSnapshot()));
+    cleanup();
+    expect(runFeatureCommand('feature.configuration', { featureId: FEATURE_ID })).toBe('no-target');
   });
 });

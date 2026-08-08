@@ -87,6 +87,35 @@ describe('pendingDeliverySummary', () => {
     const pending = pendingDeliverySummary(null);
     expect(pending.publishRepos).toEqual([]);
     expect(pending.mergeRepos).toEqual([]);
+    expect(pending.initialMergeRepos).toEqual([]);
+  });
+
+  it('collects publish-eligible repositories for the runway delivery row', () => {
+    const pending = pendingDeliverySummary(
+      pf([
+        { repo: 'api', publishable: true, touched: true, status: 'eligible' },
+        // Untouched, non-publishable, or already published are not eligible.
+        { repo: 'idle', publishable: true, touched: false, status: 'eligible' },
+        { repo: 'local', publishable: false, touched: true, status: 'eligible' },
+        { repo: 'web', publishable: true, touched: true, status: 'already_published' },
+      ]),
+    );
+    expect(pending.publishEligibleRepos.map((repo) => repo.repo)).toEqual(['api']);
+  });
+
+  it('collects local repositories whose work has never been merged', () => {
+    const pending = pendingDeliverySummary(
+      pf([
+        { repo: 'local-core', publishable: false, touched: true, status: 'eligible' },
+        // Already merged, and merged-with-new-commits, are not first merges.
+        { repo: 'local-done', publishable: false, touched: true, status: 'completed' },
+        { repo: 'local-again', publishable: false, touched: true, status: 'unmerged_changes' },
+        // Publishable and untouched repositories never merge locally.
+        { repo: 'api', publishable: true, touched: true, status: 'eligible' },
+        { repo: 'idle', publishable: false, touched: false, status: 'eligible' },
+      ]),
+    );
+    expect(pending.initialMergeRepos.map((repo) => repo.repo)).toEqual(['local-core']);
   });
 });
 
@@ -119,6 +148,8 @@ describe('pendingDeliveryFact', () => {
       pendingDeliveryFact({
         publishRepos: [{ repo: 'a', commits: 3, dirty: false, dirtyFiles: [], dirtyFileTotal: 0 }],
         mergeRepos: [{ repo: 'b', commits: 1, dirty: false, dirtyFiles: [], dirtyFileTotal: 0 }],
+        initialMergeRepos: [],
+        publishEligibleRepos: [],
       }),
     ).toEqual({ label: 'Unpublished', value: '3 commits' });
   });
@@ -128,11 +159,20 @@ describe('pendingDeliveryFact', () => {
       pendingDeliveryFact({
         publishRepos: [],
         mergeRepos: [{ repo: 'b', commits: 1, dirty: true, dirtyFiles: [], dirtyFileTotal: 0 }],
+        initialMergeRepos: [],
+        publishEligibleRepos: [],
       }),
     ).toEqual({ label: 'Unmerged', value: '1 commit · uncommitted changes' });
   });
 
   it('is null when everything landed', () => {
-    expect(pendingDeliveryFact({ publishRepos: [], mergeRepos: [] })).toBeNull();
+    expect(
+      pendingDeliveryFact({
+        publishRepos: [],
+        mergeRepos: [],
+        initialMergeRepos: [],
+        publishEligibleRepos: [],
+      }),
+    ).toBeNull();
   });
 });

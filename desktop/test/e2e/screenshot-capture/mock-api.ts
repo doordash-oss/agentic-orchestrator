@@ -31,7 +31,13 @@ import type {
   UpdateState,
   DiagnosticsSnapshot,
 } from '../../../src/shared/ipc';
-import { CHAT_SESSION_ID, defaultSettings } from '../../../src/shared/ipc';
+import {
+  CHAT_SESSION_ID,
+  defaultAmaPrefs,
+  defaultSettings,
+  defaultSettingsWindowPrefs,
+  type SettingsPaneId,
+} from '../../../src/shared/ipc';
 
 const DEMO_FEATURE_CONFIG = {
   models: { planning: 'demo:planner' },
@@ -337,9 +343,9 @@ const FEATURE_SNAPSHOT: FeatureSnapshot = {
   ],
 };
 
-/** Fixtures for the Home flight-board capture: three in-flight runs and a
+/** Fixtures for the Overview lanes capture: three in-flight runs and a
  * shipped ledger, exercising live, needs-you, and published treatments. */
-function flightSnapshot(
+function overviewLaneSnapshot(
   id: string,
   name: string,
   status: string,
@@ -371,8 +377,8 @@ function flightSnapshot(
   };
 }
 
-const FLIGHT_BOARD_FEATURES: FeatureSnapshot[] = [
-  flightSnapshot(
+const OVERVIEW_LANE_FEATURES: FeatureSnapshot[] = [
+  overviewLaneSnapshot(
     'updater-auto-1',
     'electron App auto-updater',
     'NeedUserInput',
@@ -382,7 +388,7 @@ const FLIGHT_BOARD_FEATURES: FeatureSnapshot[] = [
     2462,
   ),
   {
-    ...flightSnapshot(
+    ...overviewLaneSnapshot(
       'refactoring-parent-1',
       'Configure per-phase effort level',
       'Published',
@@ -408,17 +414,25 @@ const FLIGHT_BOARD_FEATURES: FeatureSnapshot[] = [
       cleanupWarnings: [],
     },
   },
-  flightSnapshot(
-    'readme-italian-1',
-    'translate README to Italian',
-    'Implementing',
-    'Implement',
-    ['agentic-orchestrator'],
-    '2026-07-23T08:30:00Z',
-    760,
-    'large',
-  ),
-  flightSnapshot(
+  {
+    // Carries both a roadmap phase-of-total and an iteration number so the
+    // sidebar's running-row sub-line reads "Implement · phase N/M ·
+    // iteration K" beside the pip row (see the sidebar screenshot capture).
+    ...overviewLaneSnapshot(
+      'readme-italian-1',
+      'translate README to Italian',
+      'Implementing',
+      'Implement',
+      ['agentic-orchestrator'],
+      '2026-07-23T08:30:00Z',
+      760,
+      'large',
+    ),
+    currentRoadmapPhase: 3,
+    totalRoadmapPhases: 5,
+    currentIteration: 2,
+  },
+  overviewLaneSnapshot(
     'taulu-ttl-1',
     'Taulu TTL compaction',
     'CodeReady',
@@ -427,7 +441,7 @@ const FLIGHT_BOARD_FEATURES: FeatureSnapshot[] = [
     '2026-07-23T08:00:00Z',
     5940,
   ),
-  flightSnapshot(
+  overviewLaneSnapshot(
     'pub-electron-app',
     'electron APP for agentic Orchestrator',
     'Published',
@@ -436,7 +450,7 @@ const FLIGHT_BOARD_FEATURES: FeatureSnapshot[] = [
     '2026-07-22T10:00:00Z',
     5220,
   ),
-  flightSnapshot(
+  overviewLaneSnapshot(
     'pub-taulu-mv',
     'Taulu materialized views',
     'Published',
@@ -445,7 +459,7 @@ const FLIGHT_BOARD_FEATURES: FeatureSnapshot[] = [
     '2026-07-21T10:00:00Z',
     3180,
   ),
-  flightSnapshot(
+  overviewLaneSnapshot(
     'pub-smart-zone',
     'The Smart Zone',
     'Published',
@@ -454,7 +468,7 @@ const FLIGHT_BOARD_FEATURES: FeatureSnapshot[] = [
     '2026-07-20T10:00:00Z',
     1890,
   ),
-  flightSnapshot(
+  overviewLaneSnapshot(
     'pub-prod-fallback',
     'Prod tenant fallback on READ',
     'Published',
@@ -463,7 +477,7 @@ const FLIGHT_BOARD_FEATURES: FeatureSnapshot[] = [
     '2026-07-19T10:00:00Z',
     4410,
   ),
-  flightSnapshot(
+  overviewLaneSnapshot(
     'pub-static-shard',
     'Taulu Static Sharding',
     'Published',
@@ -472,9 +486,79 @@ const FLIGHT_BOARD_FEATURES: FeatureSnapshot[] = [
     '2026-07-18T10:00:00Z',
     2020,
   ),
+  overviewLaneSnapshot(
+    'done-signal-lab-onboarding',
+    'Signal Lab onboarding checklist',
+    'Done',
+    'Publish',
+    ['signal-lab'],
+    '2026-07-15T10:00:00Z',
+    9600,
+  ),
 ];
 
-const FLIGHT_BOARD_SUMMARY: FeatureSummaryView[] = FLIGHT_BOARD_FEATURES.map((feature) => ({
+/**
+ * The palette-evidence catalogue: a mid-run feature whose authoritative action
+ * catalogue enables some verbs, disables others with real reasons, and never
+ * offers a few at all — so the Feature group photographs as the mixed state a
+ * person actually sees, not a uniformly enabled list.
+ */
+const COMMAND_PALETTE_FEATURE_SNAPSHOT: FeatureSnapshot = {
+  ...FEATURE_SNAPSHOT,
+  actions: [
+    {
+      id: 'start',
+      enabled: false,
+      disabledReasons: [{ code: 'already_running', message: 'The feature is already running.' }],
+    },
+    { id: 'pause-stop', enabled: true, disabledReasons: [] },
+    { id: 'rewind', enabled: true, disabledReasons: [] },
+    { id: 'restart', enabled: true, disabledReasons: [] },
+    {
+      id: 'resume',
+      enabled: false,
+      disabledReasons: [{ code: 'not_paused', message: 'The run is not paused at a gate.' }],
+    },
+    {
+      id: 'retry',
+      enabled: false,
+      disabledReasons: [{ code: 'no_failure', message: 'Nothing has failed to retry.' }],
+    },
+    {
+      id: 'publish',
+      enabled: false,
+      disabledReasons: [{ code: 'run_active', message: 'Review has not finished yet.' }],
+    },
+    {
+      id: 'merge',
+      enabled: false,
+      disabledReasons: [{ code: 'not_published', message: 'Publish the feature first.' }],
+    },
+    {
+      id: 'mark-done',
+      enabled: false,
+      disabledReasons: [{ code: 'run_active', message: 'The run is still in flight.' }],
+    },
+    {
+      id: 'cleanup',
+      enabled: false,
+      disabledReasons: [{ code: 'run_active', message: 'The run is still in flight.' }],
+    },
+    {
+      id: 'refactor',
+      enabled: false,
+      disabledReasons: [{ code: 'run_active', message: 'Wait for the run to come to rest.' }],
+    },
+    {
+      id: 'review-feedback',
+      enabled: false,
+      disabledReasons: [{ code: 'no_pull_request', message: 'No pull request is open yet.' }],
+    },
+    { id: 'delete', enabled: true, disabledReasons: [] },
+  ],
+};
+
+const OVERVIEW_LANE_SUMMARY: FeatureSummaryView[] = OVERVIEW_LANE_FEATURES.map((feature) => ({
   id: feature.id,
   name: feature.name,
   status: feature.status,
@@ -486,8 +570,8 @@ const FLIGHT_BOARD_SUMMARY: FeatureSummaryView[] = FLIGHT_BOARD_FEATURES.map((fe
   warnings: [],
 }));
 
-const FLIGHT_BOARD_SNAPSHOTS: Record<string, FeatureSnapshot> = Object.fromEntries(
-  FLIGHT_BOARD_FEATURES.map((feature) => [feature.id, feature]),
+const OVERVIEW_LANE_SNAPSHOTS: Record<string, FeatureSnapshot> = Object.fromEntries(
+  OVERVIEW_LANE_FEATURES.map((feature) => [feature.id, feature]),
 );
 
 const CYCLES_FEATURE_SNAPSHOT: FeatureSnapshot = {
@@ -623,6 +707,52 @@ const AFTERCARE_FEATURE_SNAPSHOT: FeatureSnapshot = {
   ],
 };
 
+/**
+ * Published aftercare with the verification items still carried. The server
+ * clears them the moment harness verification finishes, so this fixture
+ * exercises the carried-items branch of the receipt's Verification row; the
+ * `aftercare-bare` fixture below exercises the (commoner) cleared case.
+ */
+const AFTERCARE_VERIFIED_SNAPSHOT: FeatureSnapshot = {
+  ...AFTERCARE_FEATURE_SNAPSHOT,
+  verificationItems: [
+    { name: 'lint', state: 'passed' },
+    { name: 'typecheck', state: 'passed' },
+    { name: 'unit', state: 'passed' },
+    { name: 'e2e', state: 'passed' },
+  ],
+};
+
+/** Published with nothing to show: no pull request, no reachable diff. */
+const AFTERCARE_BARE_SNAPSHOT: FeatureSnapshot = {
+  ...AFTERCARE_FEATURE_SNAPSHOT,
+  name: 'Taulu TTL compaction',
+  slug: 'taulu-ttl-compaction',
+  repos: ['taulu'],
+  repoStatus: [{ name: 'taulu', publishable: false, touched: true, freshness: 'local only' }],
+};
+
+/** Code-ready with undelivered commits and Mark done blocked by the preflight. */
+const AFTERCARE_CODEREADY_SNAPSHOT: FeatureSnapshot = {
+  ...AFTERCARE_FEATURE_SNAPSHOT,
+  status: 'CodeReady',
+  currentPhase: 'Review',
+  actions: [
+    { id: 'rebase', enabled: true, disabledReasons: [] },
+    { id: 'refactor', enabled: true, disabledReasons: [] },
+    { id: 'review-feedback', enabled: true, disabledReasons: [] },
+    // The pull request already exists, so publishing again is the delivery of
+    // the new commits — the runway's `Publish new commits` row.
+    {
+      id: 'publish',
+      enabled: false,
+      disabledReasons: [{ code: 'already_published', message: 'Already published.' }],
+    },
+    { id: 'cleanup', enabled: true, disabledReasons: [] },
+    { id: 'mark-done', enabled: true, disabledReasons: [] },
+  ],
+};
+
 const REFACTOR_PASS_CHILD_ID = 'f73d148b32f070a2';
 
 /** Ready-to-start refactor child for the refactor-pass workspace scene. */
@@ -738,6 +868,65 @@ const REFACTOR_PASS_PARENT_SNAPSHOT: FeatureSnapshot = {
         'Repository: agentic-orchestrator\n 14 files changed, 220 insertions(+), 412 deletions(-)',
     },
   ],
+};
+
+const REVIEW_FEEDBACK_PASS_CHILD_ID = 'c41e77b90ad35216';
+
+/**
+ * A review-feedback pass instead of a refactor pass: same custody strip, but the
+ * selected reviewer comments sit right under it, so one frame shows both the
+ * station eyebrows and the comment-type chips.
+ */
+const REVIEW_FEEDBACK_PASS_CHILD_SNAPSHOT: FeatureSnapshot = {
+  ...REFACTOR_PASS_CHILD_SNAPSHOT,
+  id: REVIEW_FEEDBACK_PASS_CHILD_ID,
+  name: 'Address review feedback',
+  slug: 'address-review-feedback',
+  description: 'Answer the reviewer comments left on pull request 107.',
+  parentKind: 'review-feedback',
+  setup: {
+    ...REFACTOR_PASS_CHILD_SNAPSHOT.setup!,
+    tasks: REFACTOR_PASS_CHILD_SNAPSHOT.setup!.tasks.map((task) => ({
+      ...task,
+      branch: 'feature/address-review-feedback',
+    })),
+  },
+  reviewFeedback: [
+    {
+      repo: 'agentic-orchestrator',
+      id: 4181,
+      type: 'review' as const,
+      path: 'internal/orchestrator/phase.go',
+      line: 214,
+      author: 'dana-reviewer',
+      body: 'The retry budget is read twice here — hoist it above the loop so both branches agree.',
+    },
+    {
+      repo: 'agentic-orchestrator',
+      id: 4182,
+      type: 'issue' as const,
+      author: 'dana-reviewer',
+      body: 'Packaged runs still write the evidence bundle under the old path on Linux.',
+    },
+    {
+      repo: 'agentic-orchestrator',
+      id: 4183,
+      type: 'review_body' as const,
+      author: 'sam-maintainer',
+      body: 'Solid pass overall. Two things to settle before merge, both noted inline.',
+    },
+  ],
+};
+
+const REVIEW_FEEDBACK_PASS_PARENT_SNAPSHOT: FeatureSnapshot = {
+  ...REFACTOR_PASS_PARENT_SNAPSHOT,
+  activeChild: {
+    ...REFACTOR_PASS_PARENT_SNAPSHOT.activeChild!,
+    id: REVIEW_FEEDBACK_PASS_CHILD_ID,
+    name: 'Address review feedback',
+    kind: 'review-feedback',
+    displayToken: `review-feedback:${REVIEW_FEEDBACK_PASS_CHILD_ID}`,
+  },
 };
 
 const RECOVERY_ITEMS = [
@@ -877,6 +1066,18 @@ const CONNECTION_STATE: ConnectionState = {
   ownership: 'app-owned',
 };
 
+/** Mid-connect state for the connection-shell capture: two of the six
+ * lifecycle stages (Resolve, Discover) are behind it, `connect` is current. */
+const CONNECTION_STATE_MID_CONNECT: ConnectionState = {
+  status: 'attaching',
+  stage: 'connect',
+  detail: 'Attaching to the resolved runtime…',
+  ownership: 'none',
+};
+
+/** The image the AMA panel scene attaches, matching the mock's chip. */
+const AMA_ATTACHMENT_PATH = '/Users/you/Desktop/cockpit-poll.png';
+
 const AMA_TRANSCRIPT: SessionTranscript = {
   sessionId: CHAT_SESSION_ID,
   cursor: { total: 4, start: 0, end: 4 },
@@ -885,25 +1086,25 @@ const AMA_TRANSCRIPT: SessionTranscript = {
       index: 0,
       role: 'user',
       type: 'text',
-      text: 'How should I finish the background supervision phase?',
+      text: 'Which features still touch the old polled preview?',
     },
     {
       index: 1,
       role: 'assistant',
       type: 'text',
-      text: 'Start with the singleton AMA dock, then verify notifications, close policy, and native command parity.',
+      text: 'Two, both in agentic-orchestrator: ArchiveMode.tsx reads usePolledPreview for sealed runs, and RefactorPassWorkspace.tsx uses the same hook for live passes. The run you have open is replacing the shared hook, so both will need the new subscription. Neither is in its plan.',
     },
     {
       index: 2,
-      role: 'assistant',
+      role: 'user',
       type: 'text',
-      text: 'Streaming update 042: the transcript is bounded, deduplicated by row index, and still readable after the session ends.',
+      text: "Add that to the current run's plan?",
     },
     {
       index: 3,
       role: 'assistant',
       type: 'text',
-      text: 'Next question is waiting inline without stealing focus from the command palette or attention inbox.',
+      text: "I can't change a plan mid-phase. Two routes: answer the next phase-plan checkpoint with these two files, or start a refactor pass after publish.",
     },
   ],
 };
@@ -955,6 +1156,11 @@ function isBackgroundScene(scene: string): boolean {
   return scene.startsWith('background-');
 }
 
+/** Scenes that need the singleton AMA chat session to exist. */
+function hasChatSession(scene: string): boolean {
+  return isBackgroundScene(scene) || scene === 'ama-panel';
+}
+
 export const FEATURE_QUESTION_ITEM = {
   kind: 'questions',
   id: 'ask-feature-direction',
@@ -997,6 +1203,57 @@ export const FEATURE_QUESTION_ITEM = {
   ],
 } satisfies AttentionSnapshot['items'][number];
 const FEATURE_QUESTION = FEATURE_QUESTION_ITEM.questions[0]!;
+
+/**
+ * The compact ask the Bench mock shows: three short options with real
+ * descriptions. `FEATURE_QUESTION_ITEM` above is deliberately extreme (a
+ * paragraph-length prompt and four paragraph-length options) and exists to
+ * prove the layout survives overflow; this one is what the surface looks like
+ * in ordinary use, so design evidence is judged against it.
+ */
+export const FEATURE_QUESTION_BENCH_ITEM = {
+  kind: 'questions',
+  id: 'ask-existing-translation',
+  featureId: 'abcd1234ef567890',
+  sessionId: 'sess-impl-03',
+  phase: 'Implement',
+  waitingSince: new Date(Date.now() - 6 * 60_000).toISOString(),
+  questions: [
+    {
+      key: 'There is already an Italian README at docs/it/README.md. What should happen to it?',
+      header: 'Existing translation',
+      multiSelect: false,
+      options: [
+        {
+          label: 'Replace it with the new translation',
+          description: 'Overwrites the file and keeps its path, so existing links stay valid.',
+          confidence: 0.88,
+        },
+        {
+          label: 'Keep both and cross-link them',
+          description:
+            'Leaves the old file in place and adds a banner at the top of each pointing to the other.',
+          confidence: 0.54,
+        },
+        {
+          label: 'Archive it as README.legacy.md',
+          description:
+            'Preserves the previous translation for reference without shadowing the new one.',
+          confidence: 0.41,
+        },
+      ],
+    },
+  ],
+} satisfies AttentionSnapshot['items'][number];
+const FEATURE_QUESTION_BENCH = FEATURE_QUESTION_BENCH_ITEM.questions[0]!;
+
+/**
+ * The raw question text the transcript carries, so the turn's suppression
+ * matches whichever question the scene actually has pending.
+ */
+function sceneQuestion(scene: string): typeof FEATURE_QUESTION | typeof FEATURE_QUESTION_BENCH {
+  return scene === 'feature-question-bench' ? FEATURE_QUESTION_BENCH : FEATURE_QUESTION;
+}
 
 function backgroundAttentionItems(scene: string): AttentionSnapshot['items'] {
   if (scene === 'background-ama-compact') {
@@ -1048,6 +1305,93 @@ function backgroundAttentionItems(scene: string): AttentionSnapshot['items'] {
   ];
 }
 
+/**
+ * The mixed inbox the `attention-popover` scene shows, so the bell carries a
+ * real count and the popover list holds several distinct kinds at once:
+ *
+ * - an ownerless verification gate, which is the only kind that expands inline
+ *   inside the popover (owned items jump to their feature instead). It carries
+ *   the structured verification branch — blockers plus exactly the WAIVE /
+ *   RETRY_AFTER_AUTH pair against a single question — so the expanded row shows
+ *   the decision radios rather than a free-text answer box.
+ * - a feature-owned permission and a feature-owned review, so the list is
+ *   genuinely mixed rather than three copies of one row.
+ *
+ * The gate deliberately has no `featureId`: that is what "ownerless" means to
+ * `attentionOwnerFeatureId`, and the schema's required `featureId` is why the
+ * literal is cast rather than annotated.
+ */
+const ATTENTION_POPOVER_ITEMS: AttentionSnapshot['items'] = [
+  {
+    kind: 'gate',
+    id: 'verification-gate-signal-lab',
+    waitingSince: new Date(Date.now() - 9 * 60_000).toISOString(),
+    scope: 'repo',
+    repoName: 'signal-lab',
+    iteration: 3,
+    // One blocker, tersely worded: the decision radios are the point of this
+    // evidence, and the popover is only 34rem tall before it scrolls.
+    summary: 'Verification stopped: a check needs credentials this run does not hold.',
+    questions: [{ index: 1, prompt: 'How should Agentico continue?', answer: '' }],
+    verification: {
+      blockers: [
+        {
+          itemId: 'deploy-smoke',
+          name: 'Deployment smoke test',
+          repoName: 'signal-lab',
+          command: 'npm run smoke -- --stage=canary',
+          reason: 'The canary deploy token expired.',
+          capabilities: ['network', 'deploy-token'],
+          remediation: 'Refresh the token, then retry.',
+        },
+      ],
+      allowedActions: ['RETRY_AFTER_AUTH', 'WAIVE'],
+    },
+  } as AttentionSnapshot['items'][number],
+  {
+    kind: 'permission',
+    id: 'perm-rewrite-preview',
+    featureId: 'abcd1234ef567890',
+    sessionId: 'sess-impl-03',
+    phase: 'Implement',
+    toolName: 'Bash',
+    summary: 'Run the bounded verification command for the rewind preview.',
+    input: { command: 'npm run check -- --scope=rewind' },
+    waitingSince: new Date(Date.now() - 4 * 60_000).toISOString(),
+  },
+  {
+    kind: 'review',
+    id: 'review-craft-run-8',
+    featureId: 'abcd1234ef567890',
+    waitingSince: new Date(Date.now() - 2 * 60_000).toISOString(),
+    reviewKind: 'Craft',
+    phase: 'Review',
+  },
+];
+
+/**
+ * The `update-popover` scene's inbox. That capture is about the update popover
+ * and the footer dot, but it also shows the bell beside the Overview "Waiting on
+ * you" lane, and those two read from different sources — the lane from the
+ * feature summaries, the badge from this snapshot. One gate owned by the lane's
+ * single waiting feature (`updater-auto-1`, whose display state is
+ * NeedUserInput) keeps the two agreeing at 1 rather than photographing a zero
+ * badge beside a populated lane.
+ */
+const UPDATE_POPOVER_ITEMS: AttentionSnapshot['items'] = [
+  {
+    kind: 'gate',
+    id: 'gate-updater-auto-1',
+    featureId: 'updater-auto-1',
+    waitingSince: new Date(Date.now() - 6 * 60_000).toISOString(),
+    scope: 'repo',
+    repoName: 'agentic-orchestrator',
+    iteration: 1,
+    summary: 'The updater needs a signing identity before it can publish.',
+    questions: [{ index: 1, prompt: 'Which signing identity should it use?', answer: '' }],
+  },
+];
+
 function makeMockApi(
   scene: string,
   listeners: Set<(event: AppEvent) => void>,
@@ -1061,31 +1405,36 @@ function makeMockApi(
   let currentSettings: Settings = {
     ...defaultSettings(),
     theme: requestedTheme,
-    tabs:
-      scene === 'home-flight-board'
-        ? { open: [], activeFeatureId: null }
-        : {
-            open: [
-              {
-                featureId: 'abcd1234ef567890',
-                titleHint: 'History and Rewind',
-                selectedRunNumber:
-                  scene.startsWith('archive') ||
-                  scene.startsWith('pinned') ||
-                  scene.startsWith('constrained')
-                    ? 7
-                    : null,
-              },
-            ],
-            activeFeatureId:
-              scene === 'update-passive-active' || scene === 'update-constrained'
-                ? null
-                : 'abcd1234ef567890',
-          },
+    // The AMA scenes open the panel from the persisted preference, exactly as
+    // the app does, rather than routing it open from the scene.
+    ama: { ...defaultAmaPrefs(), drawer: scene === 'ama-panel' ? 'expanded' : 'compact' },
+    // The settings scenes open on their pane through the same persisted
+    // preference the app restores on open, rather than being routed there.
+    settingsWindow: { ...defaultSettingsWindowPrefs(), pane: settingsScenePane(scene) },
+    shell: {
+      activeFeatureId:
+        scene === 'overview-lanes' ||
+        scene === 'overview-empty' ||
+        scene === 'command-palette-overview' ||
+        // The update popover is evidenced over Overview; the attention popover
+        // is evidenced over a real feature cockpit, so it keeps the default.
+        scene === 'update-popover' ||
+        scene.startsWith('creation-sheet')
+          ? null
+          : 'abcd1234ef567890',
+      sidebarCollapsed: false,
+    },
   };
 
   return {
-    getConnectionStatus: () => Promise.resolve(CONNECTION_STATE),
+    platform: 'darwin',
+    // Every settings scene mounts the Settings window root; the other scenes
+    // mount the main app root, exactly as the real entry point chooses.
+    windowPurpose: scene.startsWith('settings-') ? 'settings' : 'main',
+    getConnectionStatus: () =>
+      Promise.resolve(
+        scene === 'connection-shell' ? CONNECTION_STATE_MID_CONNECT : CONNECTION_STATE,
+      ),
     retryConnection: () => Promise.resolve(CONNECTION_STATE),
     restartConnection: () => Promise.resolve(CONNECTION_STATE),
     onConnectionChanged: (listener) => {
@@ -1101,6 +1450,7 @@ function makeMockApi(
       currentSettings = { ...currentSettings, ...patch };
       return Promise.resolve(currentSettings);
     },
+    openSettingsWindow: () => Promise.resolve({ opened: true }),
     getThemePreference: () => Promise.resolve(theme),
     setThemePreference: (preference) => {
       theme = { preference, resolved: preference === 'system' ? theme.resolved : preference };
@@ -1115,10 +1465,27 @@ function makeMockApi(
     initRepository: () => Promise.resolve(READY_SNAPSHOT),
     listRepositories: () => Promise.resolve(READY_SNAPSHOT.repositories),
     listFeatures: () =>
-      Promise.resolve(scene === 'home-flight-board' ? FLIGHT_BOARD_SUMMARY : FEATURE_SUMMARY),
+      Promise.resolve(
+        scene === 'overview-lanes' ||
+          scene === 'update-popover' ||
+          scene === 'command-palette-overview' ||
+          scene.startsWith('creation-sheet')
+          ? OVERVIEW_LANE_SUMMARY
+          : scene === 'overview-empty'
+            ? []
+            : FEATURE_SUMMARY,
+      ),
     getFeature: (_featureId: string) => {
-      if (scene === 'home-flight-board') {
-        const snapshot = FLIGHT_BOARD_SNAPSHOTS[_featureId];
+      if (scene === 'command-palette-feature') {
+        return Promise.resolve(COMMAND_PALETTE_FEATURE_SNAPSHOT);
+      }
+      if (
+        scene === 'overview-lanes' ||
+        scene === 'update-popover' ||
+        scene === 'command-palette-overview' ||
+        scene.startsWith('creation-sheet')
+      ) {
+        const snapshot = OVERVIEW_LANE_SNAPSHOTS[_featureId];
         if (snapshot !== undefined) {
           return Promise.resolve(snapshot);
         }
@@ -1145,11 +1512,25 @@ function makeMockApi(
       if (scene === 'repo-instrument' || scene === 'refactor-launch') {
         return Promise.resolve(CYCLES_FEATURE_SNAPSHOT);
       }
-      if (
-        scene === 'aftercare' ||
-        scene === 'aftercare-rebase-up-to-date' ||
-        scene === 'aftercare-unpublished'
-      ) {
+      // The two hold surfaces get run statuses that make the rail agree with
+      // what the surface says: a question pending on a still-running phase
+      // reads `Waiting Nm`, a gate reads `Paused Nm`.
+      if (scene === 'feature-question-bench') {
+        return Promise.resolve({ ...FEATURE_SNAPSHOT, status: 'Implementing' });
+      }
+      if (scene === 'gate-sheet-plain' || scene === 'gate-sheet-verification') {
+        return Promise.resolve({ ...FEATURE_SNAPSHOT, status: 'NeedUserInput' });
+      }
+      if (scene === 'aftercare-verified' || scene === 'aftercare-inspector') {
+        return Promise.resolve(AFTERCARE_VERIFIED_SNAPSHOT);
+      }
+      if (scene === 'aftercare-bare') {
+        return Promise.resolve(AFTERCARE_BARE_SNAPSHOT);
+      }
+      if (scene === 'aftercare-codeready') {
+        return Promise.resolve(AFTERCARE_CODEREADY_SNAPSHOT);
+      }
+      if (scene.startsWith('aftercare')) {
         return Promise.resolve(AFTERCARE_FEATURE_SNAPSHOT);
       }
       if (scene === 'refactor-pass') {
@@ -1157,6 +1538,13 @@ function makeMockApi(
           _featureId === REFACTOR_PASS_CHILD_ID
             ? REFACTOR_PASS_CHILD_SNAPSHOT
             : REFACTOR_PASS_PARENT_SNAPSHOT,
+        );
+      }
+      if (scene === 'refactor-pass-review') {
+        return Promise.resolve(
+          _featureId === REVIEW_FEEDBACK_PASS_CHILD_ID
+            ? REVIEW_FEEDBACK_PASS_CHILD_SNAPSHOT
+            : REVIEW_FEEDBACK_PASS_PARENT_SNAPSHOT,
         );
       }
       if (scene === 'bulk-preview' || scene === 'bulk-queue') {
@@ -1246,17 +1634,21 @@ function makeMockApi(
       Promise.resolve({
         items: isBackgroundScene(scene)
           ? backgroundAttentionItems(scene)
-          : scene === 'recovery' || scene === 'recovery-constrained'
-            ? ([
-                {
-                  kind: 'recovery' as const,
-                  id: 'recovery-scan',
-                  waitingSince: new Date(Date.now() - 120_000).toISOString(),
-                  liveCount: 1,
-                  deadCount: 1,
-                },
-              ] as AttentionSnapshot['items'])
-            : ([] as AttentionSnapshot['items']),
+          : scene === 'attention-popover'
+            ? ATTENTION_POPOVER_ITEMS
+            : scene === 'update-popover'
+              ? UPDATE_POPOVER_ITEMS
+              : scene === 'recovery' || scene === 'recovery-constrained'
+                ? ([
+                    {
+                      kind: 'recovery' as const,
+                      id: 'recovery-scan',
+                      waitingSince: new Date(Date.now() - 120_000).toISOString(),
+                      liveCount: 1,
+                      deadCount: 1,
+                    },
+                  ] as AttentionSnapshot['items'])
+                : ([] as AttentionSnapshot['items']),
       } as AttentionSnapshot),
     answerPermission: () => Promise.resolve({ result: 'submitted' } as AttentionActionResult),
     answerQuestions: () => Promise.resolve({ result: 'submitted' } as AttentionActionResult),
@@ -1266,9 +1658,9 @@ function makeMockApi(
     startChat: () => Promise.resolve({ sessionId: '__chat__', result: 'started' }),
     endChat: () => Promise.resolve({ sessionId: '__chat__', result: 'ended' }),
     listSessions: () =>
-      Promise.resolve(isBackgroundScene(scene) ? [CHAT_SESSION, ...SESSIONS] : SESSIONS),
+      Promise.resolve(hasChatSession(scene) ? [CHAT_SESSION, ...SESSIONS] : SESSIONS),
     getSession: (sessionId) => {
-      const summary = (isBackgroundScene(scene) ? [CHAT_SESSION, ...SESSIONS] : SESSIONS).find(
+      const summary = (hasChatSession(scene) ? [CHAT_SESSION, ...SESSIONS] : SESSIONS).find(
         (s) => s.id === sessionId,
       );
       if (!summary) return Promise.reject(new Error('not_found: session not found'));
@@ -1284,7 +1676,7 @@ function makeMockApi(
       Promise.resolve(
         sessionId === CHAT_SESSION_ID
           ? AMA_TRANSCRIPT
-          : scene === 'feature-question'
+          : scene.startsWith('feature-question')
             ? ({
                 sessionId,
                 cursor: {
@@ -1299,9 +1691,9 @@ function makeMockApi(
                     role: 'assistant',
                     type: 'text',
                     text: [
-                      FEATURE_QUESTION.key,
+                      sceneQuestion(scene).key,
                       '',
-                      ...FEATURE_QUESTION.options.map(
+                      ...sceneQuestion(scene).options.map(
                         (option, index) =>
                           `${index + 1}. ${option.label}${index === 0 && !/\(Recommended\)$/i.test(option.label) ? ' (Recommended)' : ''} [confidence: ${option.confidence?.toFixed(2)}]`,
                       ),
@@ -1337,13 +1729,27 @@ function makeMockApi(
           useCurrentBranch: false,
         },
       } as CreationDefaults),
-    pickCreationFiles: () => Promise.resolve({ paths: [] }),
-    readClipboardImage: () => Promise.resolve({ paths: [] }),
-    importDroppedCreationFiles: () => ({ paths: [] }),
+    // The creation-sheet scenes need real-looking attachment chips; every
+    // other scene keeps the picker inert.
+    pickCreationFiles: (kind) =>
+      Promise.resolve({
+        paths: scene.startsWith('creation-sheet')
+          ? kind === 'image'
+            ? ['/work/space/brief/reference-layout.png']
+            : ['/work/space/brief/acceptance-notes.md']
+          : [],
+      }),
+    readClipboardImage: () =>
+      Promise.resolve({ paths: scene === 'ama-panel' ? [AMA_ATTACHMENT_PATH] : [] }),
+    importDroppedCreationFiles: () => ({
+      paths: scene === 'ama-panel' ? [AMA_ATTACHMENT_PATH] : [],
+    }),
     searchCreationFiles: (request) =>
       Promise.resolve({
         requestId: request.requestId,
-        files: [],
+        files: scene.startsWith('creation-sheet')
+          ? [{ repoKey: 'signal-lab', path: 'docs/style-guide.md' }]
+          : [],
         truncated: false,
         cancelled: false,
       }),
@@ -1423,11 +1829,7 @@ function makeMockApi(
       } as RunListResult);
     },
     getRun: ({ runNumber }) => {
-      if (
-        scene === 'aftercare' ||
-        scene === 'aftercare-rebase-up-to-date' ||
-        scene === 'aftercare-unpublished'
-      ) {
+      if (scene.startsWith('aftercare')) {
         return Promise.resolve({
           ...RUN_DETAIL,
           runNumber,
@@ -1604,7 +2006,18 @@ function makeMockApi(
     fetchReviewFeedback: () =>
       Promise.resolve({
         featureId: 'abcd1234ef567890',
-        repos: [],
+        repos: scene.startsWith('aftercare')
+          ? [
+              {
+                repo: 'agentic-orchestrator',
+                prUrl: 'https://github.com/doordash-oss/agentic-orchestrator/pull/107',
+                comments: [
+                  { repo: 'agentic-orchestrator', id: 1, type: 'review' as const },
+                  { repo: 'agentic-orchestrator', id: 2, type: 'issue' as const },
+                ],
+              },
+            ]
+          : [],
       }),
     launchReviewFeedbackChild: () =>
       Promise.resolve({
@@ -1662,6 +2075,7 @@ function makeMockApi(
           currentBytes: 0,
         },
       }),
+    publishUiState: () => Promise.resolve({ accepted: true }),
     preflightCompletion: () => {
       const isPublishScene = scene === 'completion-publish';
       const isDeleteScene = scene === 'completion-delete';
@@ -1687,7 +2101,43 @@ function makeMockApi(
           ],
         });
       }
-      if (scene === 'aftercare' || scene === 'aftercare-rebase-up-to-date') {
+      if (scene === 'aftercare-codeready') {
+        return Promise.resolve({
+          featureId: 'abcd1234ef567890',
+          sourceRevision: 'rev-aftercare-mock',
+          canMarkDone: false,
+          markDoneBlocker: 'agentic-orchestrator has 3 commits that are not published yet',
+          repos: [
+            {
+              repo: 'agentic-orchestrator',
+              publishable: true,
+              touched: true,
+              status: 'unpublished_changes',
+              prUrl: 'https://github.com/doordash-oss/agentic-orchestrator/pull/107',
+              baseBranch: 'main',
+              branch: 'feature/configure-per-phase-effort-level',
+              freshness: 'up_to_date',
+              pendingCommits: 3,
+              pendingDirty: false,
+              pushMode: 'fast_forward',
+            },
+          ],
+        });
+      }
+      if (scene === 'aftercare-bare') {
+        return Promise.resolve({
+          featureId: 'abcd1234ef567890',
+          sourceRevision: 'rev-aftercare-mock',
+          canMarkDone: true,
+          repos: [{ repo: 'taulu', publishable: false, touched: true, status: 'completed' }],
+        });
+      }
+      if (
+        scene === 'aftercare' ||
+        scene === 'aftercare-verified' ||
+        scene === 'aftercare-inspector' ||
+        scene === 'aftercare-rebase-up-to-date'
+      ) {
         return Promise.resolve({
           featureId: 'abcd1234ef567890',
           sourceRevision: 'rev-aftercare-mock',
@@ -1802,6 +2252,10 @@ function makeMockApi(
     },
     getRepositoryDiff: (_req: { featureId: string; repo: string; filePath?: string }) => {
       const repo = _req.repo;
+      // Worktrees reclaimed: the aftercare receipt must omit its Changes row.
+      if (scene === 'aftercare-bare') {
+        return Promise.reject(new Error('no_worktree: the feature worktrees have been cleaned'));
+      }
       const filePath = _req.filePath;
       const sampleDiff = `diff --git a/README.md b/README.md
 index 5c32b6a..8a9b3c1 100644
@@ -1864,6 +2318,20 @@ index 5c32b6a..8a9b3c1 100644
   };
 }
 
+/**
+ * The pane each settings scene opens on. Every scene whose id names a pane
+ * uses it directly; the update-flavoured scenes (`settings-updates-ready`,
+ * `settings-updates-deb`, `settings-install-now-confirm`) all photograph the
+ * Updates pane with different update states.
+ */
+function settingsScenePane(scene: string): SettingsPaneId {
+  if (scene === 'settings-diagnostics') return 'diagnostics';
+  if (scene === 'settings-appearance') return 'appearance';
+  if (scene === 'settings-workspace-roots') return 'workspace-roots';
+  if (scene === 'settings-providers') return 'providers';
+  return 'updates';
+}
+
 function updateStateForScene(scene: string): UpdateState {
   if (scene === 'settings-updates-deb') {
     return {
@@ -1883,7 +2351,9 @@ function updateStateForScene(scene: string): UpdateState {
       ],
     };
   }
-  if (scene === 'update-passive-active' || scene === 'settings-install-now-confirm') {
+  // `update-popover` needs the active-work summary: it is what makes the popover
+  // offer Install When Idle, so all three actions are visible at once.
+  if (scene === 'update-popover' || scene === 'settings-install-now-confirm') {
     return {
       ...readyUpdateState(),
       activeWorkSummary: '1 workflow and AMA session are active.',

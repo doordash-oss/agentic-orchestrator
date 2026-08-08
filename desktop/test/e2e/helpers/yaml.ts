@@ -20,6 +20,33 @@ export function upsertYamlScalar(yaml: string, key: string, value: string): stri
     : `${yaml.endsWith('\n') ? yaml : `${yaml}\n`}${line}\n`;
 }
 
+/** Upserts a scalar entry nested one level under a top-level YAML map key. */
+export function upsertYamlMapScalar(
+  yaml: string,
+  mapKey: string,
+  key: string,
+  value: string,
+): string {
+  const lines = yaml.split('\n');
+  const parentIndex = lines.findIndex((line) => line === `${mapKey}:`);
+  if (parentIndex === -1) {
+    const suffix = yaml.endsWith('\n') ? '' : '\n';
+    return `${yaml}${suffix}${mapKey}:\n  ${key}: ${value}\n`;
+  }
+  let insertIndex = parentIndex + 1;
+  while (insertIndex < lines.length) {
+    const line = lines[insertIndex] ?? '';
+    if (line !== '' && !line.startsWith(' ')) break;
+    if (line.startsWith(`  ${key}:`)) {
+      lines[insertIndex] = `  ${key}: ${value}`;
+      return lines.join('\n');
+    }
+    insertIndex += 1;
+  }
+  lines.splice(insertIndex, 0, `  ${key}: ${value}`);
+  return lines.join('\n');
+}
+
 /** Replaces a top-level YAML block (key + indented children). */
 export function replaceTopLevelBlock(yaml: string, key: string, block: string[]): string {
   const lines = yaml.replaceAll('\r\n', '\n').split('\n');

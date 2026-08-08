@@ -264,6 +264,9 @@ function classifyLicenseText(text) {
   if (lower.includes('mozilla public license') && lower.includes('version 2.0')) return 'MPL-2.0';
   if (lower.includes('permission is hereby granted, free of charge')) return 'MIT';
   if (lower.includes('isc license')) return 'ISC';
+  if (lower.includes('released into the public domain') && lower.includes('unencumbered')) {
+    return 'Unlicense';
+  }
   if (lower.includes('redistribution and use in source and binary forms')) {
     return lower.includes('neither the name') || lower.includes('nor the names')
       ? 'BSD-3-Clause'

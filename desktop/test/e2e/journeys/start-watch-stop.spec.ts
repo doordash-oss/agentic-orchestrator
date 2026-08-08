@@ -50,22 +50,25 @@ test('packaged real-server start, semantic watch, history, and authoritative sto
     });
     await evidenceShot(handle, 'cockpit-ready-light-wide');
 
+    // The sidebar mounts exactly one cockpit at a time: switching away
+    // unmounts it (unlike the old tab strip, which kept every tab's panel
+    // mounted-but-hidden), so a retained handle to this instance is expected
+    // to disconnect on navigation rather than persist across it.
     const retainedCockpit = await cockpit.elementHandle();
     expect(retainedCockpit).not.toBeNull();
-    await handle.page.getByRole('tab', { name: 'Home' }).click();
-    expect(await retainedCockpit!.evaluate((node) => node.isConnected)).toBe(true);
+    await handle.page.getByRole('option', { name: 'Overview' }).click();
+    await expect.poll(() => retainedCockpit!.evaluate((node) => node.isConnected)).toBe(false);
     await expect(cockpit).toBeHidden();
     const featureList = handle.page.getByRole('region', { name: 'Existing features' });
     await expect(featureList).toContainText('Packaged Signal Journey');
     await featureList.scrollIntoViewIfNeeded();
     await evidenceShot(handle, 'cockpit-intervention-dashboard-light-wide');
-    await handle.page.getByRole('tab', { name: 'Packaged Signal Journey' }).click();
-    expect(await retainedCockpit!.evaluate((node) => node.isConnected)).toBe(true);
+    await handle.page.getByRole('option', { name: 'Packaged Signal Journey' }).click();
     await expect(cockpit).toBeVisible();
     await expect(cockpit.getByText(/Loading .* from the runtime/)).toHaveCount(0);
 
     transcript.section('Start through the UI exactly once');
-    const start = cockpit.getByRole('button', { name: 'Start', exact: true });
+    const start = handle.page.getByRole('button', { name: 'Start', exact: true });
     await expect(start).toBeEnabled();
     await start.click();
     await expect(cockpit.getByText(/Start accepted|Starting from/)).toBeVisible();
@@ -99,15 +102,20 @@ test('packaged real-server start, semantic watch, history, and authoritative sto
       'the authoritative transcript to contain the final live semantic update',
       60_000,
     );
-    await cockpit.getByRole('button', { name: 'Refresh' }).click();
+    await cockpit.getByRole('button', { name: 'Refresh current run inspection' }).click();
     const timeline = cockpit.getByRole('region', { name: 'Live agent transcript' });
     await expect(timeline).toBeVisible({ timeout: 60_000 });
     await expect(timeline.getByText(/Backfill ready|Live semantic update/).first()).toBeVisible({
       timeout: 60_000,
     });
-    await expect(cockpit.getByRole('region', { name: 'Current run inspection' })).toContainText(
-      /Live agent activity|Receiving live output/,
-    );
+    // The transcript lost its framed panel and with it the "Live activity"
+    // caption bar; the activity line in the content pane is what reports live
+    // output now, so that is what the region must carry.
+    const activity = cockpit
+      .getByRole('region', { name: 'Current run inspection' })
+      .locator('.current-inspection__activity');
+    await expect(activity).toBeVisible({ timeout: 60_000 });
+    await expect(activity).not.toBeEmpty();
     const backfill = await handle.page.evaluate(
       (sessionId) => window.agentico.getSessionTranscript({ sessionId, limit: 500 }),
       session!.id,
@@ -150,7 +158,7 @@ test('packaged real-server start, semantic watch, history, and authoritative sto
     await evidenceShot(handle, 'cockpit-live-reconnect-reset-in-progress');
     const afterReset = await waitForNewServer(world, beforeReset.pid);
     await expect(cockpit).toBeVisible({ timeout: 60_000 });
-    await expect(cockpit.getByRole('button', { name: 'Stop', exact: true })).toBeEnabled();
+    await expect(handle.page.getByRole('button', { name: 'Stop', exact: true })).toBeEnabled();
     expect(afterReset.pid).not.toBe(beforeReset.pid);
     expect(providerInvocationCount(world.providerInvocationLog)).toBe(1);
     transcript.json('live reconnect and epoch resnapshot', {
@@ -168,8 +176,8 @@ test('packaged real-server start, semantic watch, history, and authoritative sto
     transcript.section('Responsive cockpit retains timeline, raw containment, and Stop');
     await setWindowSize(handle, 760, 900);
     await setTheme(handle, 'dark');
-    await expect(cockpit.getByRole('button', { name: 'Stop' })).toBeEnabled();
-    await expect(cockpit.getByLabel('Current feature status')).toBeVisible();
+    await expect(handle.page.getByRole('button', { name: 'Stop' })).toBeEnabled();
+    await expect(handle.page.getByLabel('Current feature status')).toBeVisible();
     await cockpit.getByRole('button', { name: 'Inspector' }).click();
     const inspector = handle.page.getByRole('dialog', { name: 'Feature inspector' });
     await expect(inspector).toBeVisible();
@@ -178,11 +186,11 @@ test('packaged real-server start, semantic watch, history, and authoritative sto
     await expect(inspector).toHaveCount(0);
     await evidenceShot(handle, 'cockpit-live-dark-narrow');
     await setTheme(handle, 'light');
-    await expect(cockpit.getByRole('button', { name: 'Stop' })).toBeEnabled();
+    await expect(handle.page.getByRole('button', { name: 'Stop' })).toBeEnabled();
     await evidenceShot(handle, 'cockpit-live-light-narrow');
 
     transcript.section('Stop confirmation and authoritative terminal state');
-    await cockpit.getByRole('button', { name: 'Stop' }).click();
+    await handle.page.getByRole('button', { name: 'Stop' }).click();
     const dialog = handle.page.getByRole('dialog', { name: 'Stop Packaged Signal Journey?' });
     await expect(dialog).toContainText(/currently affects 1 live session/);
     await expect(dialog).toContainText(/Existing validated transcript content remains available/);
@@ -209,9 +217,11 @@ test('packaged real-server start, semantic watch, history, and authoritative sto
     );
     transcript.json('authoritative feature snapshot after Stop', authoritative);
     expect(['running', 'starting', 'stopping']).not.toContain(authoritative.status.toLowerCase());
-    await expect(cockpit.getByText(authoritative.status, { exact: true }).first()).toBeVisible();
+    await expect(
+      handle.page.getByText(authoritative.status, { exact: true }).first(),
+    ).toBeVisible();
 
-    await handle.page.getByRole('tab', { name: 'Home' }).click();
+    await handle.page.getByRole('option', { name: 'Overview' }).click();
     await expect(handle.page.getByRole('region', { name: 'Existing features' })).toContainText(
       'Packaged Signal Journey',
     );

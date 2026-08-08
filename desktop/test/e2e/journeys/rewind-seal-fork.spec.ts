@@ -49,12 +49,11 @@ test('rewind: full-phase preview, typed confirmation, atomic fork, provenance, w
     handle = null;
     seedRunHistory(world, featureId);
     handle = await launchApp(world, testInfo, { traceName: 'rewind-seal-fork-seeded' });
-    await handle.page.getByRole('tab', { name: 'Rewind Journey' }).click();
+    await handle.page.getByRole('option', { name: 'Rewind Journey' }).click();
 
     transcript.section('Open the rewind journey dialog');
-    const cockpit = handle.page.getByLabel('Feature Rewind Journey');
-    await cockpit.locator('summary[aria-label="More actions"]').click();
-    let rewindButton = cockpit.getByRole('menuitem', { name: 'Rewind feature' });
+    await handle.page.locator('summary[aria-label="More actions"]').click();
+    let rewindButton = handle.page.getByRole('menuitem', { name: 'Rewind feature' });
     await expect(rewindButton).toBeVisible();
     await rewindButton.click();
 
@@ -112,8 +111,8 @@ test('rewind: full-phase preview, typed confirmation, atomic fork, provenance, w
     await expect(handle.page.getByRole('dialog', { name: /Rewind/ })).not.toBeVisible();
 
     transcript.section('Reopen and complete the rewind');
-    await cockpit.locator('summary[aria-label="More actions"]').click();
-    rewindButton = cockpit.getByRole('menuitem', { name: 'Rewind feature' });
+    await handle.page.locator('summary[aria-label="More actions"]').click();
+    rewindButton = handle.page.getByRole('menuitem', { name: 'Rewind feature' });
     await rewindButton.click();
     await targetRadio.check();
     await handle.page.getByRole('button', { name: 'Continue' }).click();

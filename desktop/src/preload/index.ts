@@ -26,8 +26,10 @@ import {
   type CreationFileSearchRequest,
   type FeatureActionRequest,
   type InitRepositoryRequest,
+  type SettingsOpenRequest,
   type SettingsPatch,
   type ThemePreference,
+  windowPurposeFromArgv,
   type SessionOutputOpenRequest,
   type SessionOutputOpenResult,
   type SessionOutputEvent,
@@ -61,6 +63,7 @@ import {
   type RepositoryDiffRequest,
   type OpenExternalRequest,
   type RevealPathRequest,
+  type MainWindowUiState,
 } from '../shared/ipc';
 import { assertNoPrototypePollution } from '../shared/sanitize';
 
@@ -81,6 +84,13 @@ async function call<T>(channel: string, ...args: unknown[]): Promise<T> {
 }
 
 const api: AgenticoApi = {
+  // Preload retains a limited `process` even when sandboxed; reading it here
+  // avoids an IPC round trip before first paint.
+  platform: process.platform,
+  // The sandboxed `process` shim carries `argv`, which is where
+  // `webPreferences.additionalArguments` lands — so the window's purpose is
+  // known synchronously and the entry point picks a root before first paint.
+  windowPurpose: windowPurposeFromArgv(process.argv),
   getConnectionStatus: () => call(IPC_CHANNELS.connectionGetStatus),
   retryConnection: () => call(IPC_CHANNELS.connectionRetry),
   restartConnection: () => call(IPC_CHANNELS.connectionRestart),
@@ -120,6 +130,8 @@ const api: AgenticoApi = {
   },
   getSettings: () => call(IPC_CHANNELS.settingsGet),
   updateSettings: (patch: SettingsPatch) => call(IPC_CHANNELS.settingsUpdate, patch),
+  openSettingsWindow: (request: SettingsOpenRequest) =>
+    call(IPC_CHANNELS.windowOpenSettings, request),
   getThemePreference: () => call(IPC_CHANNELS.themeGet),
   setThemePreference: (preference: ThemePreference) => call(IPC_CHANNELS.themeSet, preference),
   getReadiness: () => call(IPC_CHANNELS.readinessGet),
@@ -233,6 +245,7 @@ const api: AgenticoApi = {
     call(IPC_CHANNELS.publishDescription, request),
   openExternal: (request: OpenExternalRequest) => call(IPC_CHANNELS.openExternal, request),
   revealPath: (request: RevealPathRequest) => call(IPC_CHANNELS.revealPath, request),
+  publishUiState: (state: MainWindowUiState) => call(IPC_CHANNELS.uiStatePublish, state),
   launchRebaseChild: (request: LaunchRebaseChildRequest) =>
     call(IPC_CHANNELS.featuresRebase, request),
   launchRefactorChild: (request: LaunchRefactorChildRequest) =>

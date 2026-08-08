@@ -3,7 +3,12 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { SettingsStore } from '../settings';
-import { defaultSettings } from '../../shared/ipc';
+import {
+  defaultAmaGeometry,
+  defaultAmaPrefs,
+  defaultSettings,
+  defaultSettingsWindowPrefs,
+} from '../../shared/ipc';
 import { SafeErrorException } from '../../shared/errors';
 
 let dir: string;
@@ -115,45 +120,150 @@ describe('SettingsStore', () => {
     store.update({ window: { bounds: { x: 1, y: 2, width: 800, height: 600 } } });
     const reloaded = makeStore();
     expect(reloaded.get()).toEqual({
-      schemaVersion: 1,
+      schemaVersion: 2,
       runtime: { selection: null },
       window: { bounds: { x: 1, y: 2, width: 800, height: 600 } },
       theme: 'dark',
       wizard: { collapsedHelp: false },
-      ama: { drawer: 'compact' },
+      ama: defaultAmaPrefs(),
       notifications: { previewEnabled: false },
-      tabs: { open: [], activeFeatureId: null },
+      shell: { activeFeatureId: null, sidebarCollapsed: false },
+      settingsWindow: defaultSettingsWindowPrefs(),
     });
   });
 
-  it('persists tab identity/presentation prefs and restores them on reload', () => {
+  it('persists the AMA panel geometry and open state across a reload', () => {
     const store = makeStore();
     store.update({
-      tabs: {
-        open: [{ featureId: 'abcd1234ef567890', titleHint: 'Search revamp' }],
-        activeFeatureId: 'abcd1234ef567890',
-      },
+      ama: { drawer: 'expanded', geometry: { right: 96, bottom: 48, width: 520, height: 400 } },
     });
-    expect(makeStore().get().tabs).toEqual({
-      open: [{ featureId: 'abcd1234ef567890', titleHint: 'Search revamp' }],
-      activeFeatureId: 'abcd1234ef567890',
+    expect(makeStore().get().ama).toEqual({
+      drawer: 'expanded',
+      geometry: { right: 96, bottom: 48, width: 520, height: 400 },
     });
   });
 
-  it('rejects tab entries carrying server-domain state beyond identity/presentation', () => {
+  it('loads a v2 document written before the panel geometry existed without resetting', () => {
+    fs.writeFileSync(
+      settingsPath(),
+      JSON.stringify({
+        schemaVersion: 2,
+        runtime: { selection: 'claude' },
+        window: {},
+        theme: 'dark',
+        wizard: { collapsedHelp: true },
+        ama: { drawer: 'expanded' },
+        notifications: { previewEnabled: true },
+        shell: { activeFeatureId: 'abcd1234ef567890', sidebarCollapsed: true },
+      }),
+    );
+    const store = makeStore();
+
+    expect(store.get().ama).toEqual({ drawer: 'expanded', geometry: defaultAmaGeometry() });
+    expect(store.get().theme).toBe('dark');
+    expect(store.get().shell).toEqual({
+      activeFeatureId: 'abcd1234ef567890',
+      sidebarCollapsed: true,
+    });
+    expect(warnings).toEqual([]);
+    expect(fs.existsSync(`${settingsPath()}.bak-1`)).toBe(false);
+  });
+
+  it('loads a v2 document written before the Settings window without resetting', () => {
+    fs.writeFileSync(
+      settingsPath(),
+      JSON.stringify({
+        schemaVersion: 2,
+        runtime: { selection: 'claude' },
+        window: { bounds: { x: 10, y: 20, width: 1024, height: 768 } },
+        theme: 'dark',
+        wizard: { collapsedHelp: true },
+        ama: { drawer: 'expanded', geometry: { right: 96, bottom: 48, width: 520, height: 400 } },
+        notifications: { previewEnabled: true },
+        shell: { activeFeatureId: 'abcd1234ef567890', sidebarCollapsed: true },
+      }),
+    );
+    const store = makeStore();
+
+    expect(store.get().settingsWindow).toEqual(defaultSettingsWindowPrefs());
+    expect(store.get().settingsWindow.pane).toBe('workspace-roots');
+    // No other preference is reset by the additive field.
+    expect(store.get()).toEqual({
+      schemaVersion: 2,
+      runtime: { selection: 'claude' },
+      window: { bounds: { x: 10, y: 20, width: 1024, height: 768 } },
+      theme: 'dark',
+      wizard: { collapsedHelp: true },
+      ama: { drawer: 'expanded', geometry: { right: 96, bottom: 48, width: 520, height: 400 } },
+      notifications: { previewEnabled: true },
+      shell: { activeFeatureId: 'abcd1234ef567890', sidebarCollapsed: true },
+      settingsWindow: defaultSettingsWindowPrefs(),
+    });
+    expect(warnings).toEqual([]);
+    expect(fs.existsSync(`${settingsPath()}.bak-1`)).toBe(false);
+  });
+
+  it('persists the Settings window bounds and pane across a reload', () => {
+    const store = makeStore();
+    store.update({
+      settingsWindow: { bounds: { x: 40, y: 60, width: 900, height: 640 }, pane: 'diagnostics' },
+    });
+    expect(makeStore().get().settingsWindow).toEqual({
+      bounds: { x: 40, y: 60, width: 900, height: 640 },
+      pane: 'diagnostics',
+    });
+  });
+
+  it('merges a Settings window patch without dropping other settings', () => {
+    const store = makeStore();
+    store.update({ theme: 'dark', shell: { activeFeatureId: null, sidebarCollapsed: true } });
+    store.update({ settingsWindow: { pane: 'appearance' } });
+    const reloaded = makeStore();
+    expect(reloaded.get().settingsWindow).toEqual({ pane: 'appearance' });
+    expect(reloaded.get().theme).toBe('dark');
+    expect(reloaded.get().shell).toEqual({ activeFeatureId: null, sidebarCollapsed: true });
+  });
+
+  it('rejects a Settings window patch with an unknown pane or extra fields', () => {
+    const store = makeStore();
+    expect(() => store.update({ settingsWindow: { pane: 'nope' } as never })).toThrow(
+      SafeErrorException,
+    );
+    expect(() =>
+      store.update({ settingsWindow: { pane: 'appearance', maximized: true } as never }),
+    ).toThrow(SafeErrorException);
+    expect(fs.existsSync(settingsPath())).toBe(false);
+  });
+
+  it('rejects an AMA patch carrying unknown fields', () => {
     const store = makeStore();
     expect(() =>
       store.update({
-        tabs: {
-          open: [
-            {
-              featureId: 'abcd1234ef567890',
-              titleHint: 'Search',
-              status: 'Created',
-            } as never,
-          ],
+        ama: { drawer: 'expanded', geometry: defaultAmaGeometry(), docked: true } as never,
+      }),
+    ).toThrow(SafeErrorException);
+  });
+
+  it('persists shell presentation prefs and restores them on reload', () => {
+    const store = makeStore();
+    store.update({
+      shell: { activeFeatureId: 'abcd1234ef567890', sidebarCollapsed: true },
+    });
+    expect(makeStore().get().shell).toEqual({
+      activeFeatureId: 'abcd1234ef567890',
+      sidebarCollapsed: true,
+    });
+  });
+
+  it('rejects shell patches carrying unknown fields', () => {
+    const store = makeStore();
+    expect(() =>
+      store.update({
+        shell: {
           activeFeatureId: null,
-        },
+          sidebarCollapsed: false,
+          status: 'Created',
+        } as never,
       }),
     ).toThrow(SafeErrorException);
   });
@@ -176,7 +286,7 @@ describe('SettingsStore', () => {
     const upgraded = makeStore();
     expect(upgraded.get().theme).toBe('dark');
     expect(upgraded.get().wizard).toEqual({ collapsedHelp: false });
-    expect(upgraded.get().ama).toEqual({ drawer: 'compact' });
+    expect(upgraded.get().ama).toEqual(defaultAmaPrefs());
     expect(upgraded.get().notifications).toEqual({ previewEnabled: false });
   });
 
@@ -200,5 +310,113 @@ describe('SettingsStore', () => {
   it('never throws while loading a corrupt file', () => {
     fs.writeFileSync(settingsPath(), 'corrupt');
     expect(() => makeStore().get()).not.toThrow();
+  });
+
+  describe('schema v1 -> v2 migration', () => {
+    function v1Fixture(overrides: Record<string, unknown> = {}) {
+      return {
+        schemaVersion: 1,
+        runtime: { selection: 'claude' },
+        window: { bounds: { x: 10, y: 20, width: 1024, height: 768 } },
+        theme: 'dark',
+        wizard: { collapsedHelp: true },
+        ama: { drawer: 'expanded' },
+        notifications: { previewEnabled: true },
+        tabs: {
+          open: [
+            { featureId: 'abcd1234ef567890', titleHint: 'Search revamp' },
+            {
+              featureId: 'ffee0011aa223344',
+              titleHint: 'Archived run',
+              selectedRunNumber: 7,
+            },
+          ],
+          activeFeatureId: 'ffee0011aa223344',
+        },
+        ...overrides,
+      };
+    }
+
+    it('upgrades a realistic v1 document without resetting to defaults', () => {
+      fs.writeFileSync(settingsPath(), JSON.stringify(v1Fixture()));
+      const store = makeStore();
+
+      expect(store.get()).toEqual({
+        schemaVersion: 2,
+        runtime: { selection: 'claude' },
+        window: { bounds: { x: 10, y: 20, width: 1024, height: 768 } },
+        theme: 'dark',
+        wizard: { collapsedHelp: true },
+        ama: { drawer: 'expanded', geometry: defaultAmaGeometry() },
+        notifications: { previewEnabled: true },
+        shell: { activeFeatureId: 'ffee0011aa223344', sidebarCollapsed: false },
+        settingsWindow: defaultSettingsWindowPrefs(),
+      });
+      expect(warnings).toEqual([]);
+      expect(fs.existsSync(`${settingsPath()}.bak-1`)).toBe(false);
+
+      const onDisk = JSON.parse(fs.readFileSync(settingsPath(), 'utf8'));
+      expect(onDisk.schemaVersion).toBe(2);
+      expect(onDisk.shell).toEqual({
+        activeFeatureId: 'ffee0011aa223344',
+        sidebarCollapsed: false,
+      });
+      expect(onDisk.tabs).toBeUndefined();
+    });
+
+    it('maps the settings-tab sentinel active id to null', () => {
+      fs.writeFileSync(
+        settingsPath(),
+        JSON.stringify(
+          v1Fixture({
+            tabs: {
+              open: [{ featureId: 'abcd1234ef567890', titleHint: 'Search revamp' }],
+              activeFeatureId: '__settings__',
+            },
+          }),
+        ),
+      );
+      const store = makeStore();
+      expect(store.get().shell).toEqual({ activeFeatureId: null, sidebarCollapsed: false });
+    });
+
+    it('still resets to defaults for a corrupt v1-shaped document', () => {
+      fs.writeFileSync(
+        settingsPath(),
+        JSON.stringify({
+          schemaVersion: 1,
+          runtime: { selection: null },
+          window: {},
+          theme: 'not-a-real-theme',
+        }),
+      );
+      const store = makeStore();
+      expect(store.get()).toEqual(defaultSettings());
+      expect(fs.existsSync(`${settingsPath()}.bak-1`)).toBe(true);
+    });
+
+    it('still resets to defaults for an unrecognized version (not 1 or 2)', () => {
+      fs.writeFileSync(settingsPath(), JSON.stringify(v1Fixture({ schemaVersion: 99 })));
+      const store = makeStore();
+      expect(store.get()).toEqual(defaultSettings());
+      expect(fs.existsSync(`${settingsPath()}.bak-1`)).toBe(true);
+    });
+
+    it('still resets to defaults for a version-2-shaped but invalid document', () => {
+      fs.writeFileSync(
+        settingsPath(),
+        JSON.stringify({ ...defaultSettings(), shell: { activeFeatureId: null } }),
+      );
+      const store = makeStore();
+      expect(store.get()).toEqual(defaultSettings());
+      expect(fs.existsSync(`${settingsPath()}.bak-1`)).toBe(true);
+    });
+
+    it('round-trips a shell update through the existing update() API', () => {
+      const store = makeStore();
+      store.update({ shell: { sidebarCollapsed: true, activeFeatureId: 'some-id' } });
+      const reloaded = makeStore();
+      expect(reloaded.get().shell).toEqual({ sidebarCollapsed: true, activeFeatureId: 'some-id' });
+    });
   });
 });

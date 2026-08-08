@@ -70,9 +70,12 @@ export const EXPECTED_API_SURFACE: readonly string[] = [
   'openExternal',
   'openReview',
   'openSessionOutput',
+  'openSettingsWindow',
   'pickCreationFiles',
   'pickWorkspaceDirectory',
+  'platform',
   'preflightCompletion',
+  'publishUiState',
   'readClipboardImage',
   'readRecoveryLog',
   'readReview',
@@ -98,4 +101,5 @@ export const EXPECTED_API_SURFACE: readonly string[] = [
   'updateSettings',
   'updateWorkspaceDefaults',
   'validateReview',
+  'windowPurpose',
 ];

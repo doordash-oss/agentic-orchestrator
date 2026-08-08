@@ -3,21 +3,18 @@ import { featureSnapshot } from '../test/agenticoMock';
 import {
   actionById,
   childStatusSpineIndex,
-  dashboardGroupId,
   dashboardState,
   displayFeatureMessage,
-  displayModelName,
   displayPhaseLabel,
   displayStatusLabel,
   featureBranch,
   fieldForCreationError,
   formatDuration,
   formatElapsed,
-  phaseMetric,
-  groupDashboardFeatures,
   isReadyToStart,
   isRunAtRest,
   orderDashboardFeatures,
+  runningPhaseSubline,
   setupProgress,
   spineActiveIndex,
   spineActiveIndexForPhase,
@@ -117,7 +114,6 @@ describe('intervention-first dashboard ordering', () => {
       label: 'Refactoring',
       tone: 'active',
     });
-    expect(dashboardGroupId(refactoring)).toBe('in-progress');
     expect(
       dashboardState(
         featureSnapshot({
@@ -167,27 +163,6 @@ describe('intervention-first dashboard ordering', () => {
     expect(childStatusSpineIndex('Interrupted', stages)).toBeNull();
     expect(childStatusSpineIndex('NeedUserInput', stages)).toBeNull();
   });
-
-  it('groups dashboard rows into in-progress, published, and done sections', () => {
-    const features = [
-      snapshot('published', 'Published', '2026-07-15T08:00:00Z'),
-      snapshot('failed', 'Failed', '2026-07-14T08:00:00Z'),
-      snapshot('done', 'Done', '2026-07-13T08:00:00Z'),
-      snapshot('ready', 'CodeReady', '2026-07-12T08:00:00Z'),
-    ];
-
-    expect(
-      groupDashboardFeatures(features).map((group) => ({
-        id: group.id,
-        label: group.label,
-        featureIds: group.features.map((feature) => feature.id),
-      })),
-    ).toStrictEqual([
-      { id: 'in-progress', label: 'In progress', featureIds: ['failed', 'ready'] },
-      { id: 'published', label: 'Published', featureIds: ['published'] },
-      { id: 'done', label: 'Done', featureIds: ['done'] },
-    ]);
-  });
 });
 
 describe('formatDuration', () => {
@@ -199,66 +174,6 @@ describe('formatDuration', () => {
     expect(formatDuration(5400)).toBe('1h 30m');
     expect(formatDuration(0)).toBe('0s');
     expect(formatDuration(-5)).toBe('0s');
-  });
-});
-
-describe('phaseMetric', () => {
-  it('reads the active roadmap implementation and planning accounting keys', () => {
-    expect(phaseMetric({ 'phase-5-impl': 760 }, 'Implement', 5)).toBe(760);
-    expect(phaseMetric({ 'phase-5-impl': 12.4 }, 'Review', 5)).toBe(12.4);
-    expect(phaseMetric({ 'phase-5-plan': 95 }, 'Plan', 5)).toBe(95);
-  });
-
-  it('retains phase-name and final-review fallbacks', () => {
-    expect(phaseMetric({ Implement: 120, Plan: 30 }, 'Implement')).toBe(120);
-    expect(phaseMetric({ implement: 120 }, 'Implement')).toBe(120);
-    expect(phaseMetric({ Review: 45 }, 'Final Review')).toBe(45);
-    expect(phaseMetric({ Plan: 5 }, 'Implement')).toBeUndefined();
-    expect(phaseMetric(undefined, 'Implement', 2)).toBeUndefined();
-  });
-});
-
-describe('displayModelName', () => {
-  const catalogue = {
-    providerOrder: ['opencode'],
-    providerModels: {
-      opencode: [
-        {
-          id: 'portkey/@fireworks/accounts/fireworks/models/glm-5p2[1.04M]',
-          displayName: 'GLM 5.2 (1.04M)',
-        },
-      ],
-    },
-    phaseDefaults: {},
-    phaseProviderModels: {},
-  };
-
-  it('uses catalogue display metadata for bare and provider-qualified ids', () => {
-    const model = 'portkey/@fireworks/accounts/fireworks/models/glm-5p2[1.04M]';
-    expect(displayModelName(model, catalogue)).toBe('GLM 5.2 (1.04M)');
-    expect(displayModelName(`opencode:${model}`, catalogue)).toBe('GLM 5.2 (1.04M)');
-  });
-
-  it('preserves colon tags in bare model ids when display metadata is unavailable', () => {
-    expect(
-      displayModelName('portkey/@fireworks/accounts/fireworks/models/glm-5p2[1.04M]', null),
-    ).toBe('glm-5p2[1.04M]');
-    expect(displayModelName('ollama/llama3.1:8b', null)).toBe('llama3.1:8b');
-    expect(displayModelName('claude-sonnet-5', null)).toBe('claude-sonnet-5');
-  });
-
-  it('strips a provider prefix without stripping the canonical colon tag', () => {
-    const taggedCatalogue = {
-      providerOrder: ['opencode'],
-      providerModels: {
-        opencode: [{ id: 'ollama/llama3.1:8b', displayName: 'Llama 3.1 8B' }],
-      },
-      phaseDefaults: {},
-      phaseProviderModels: {},
-    };
-
-    expect(displayModelName('opencode:ollama/llama3.1:8b', taggedCatalogue)).toBe('Llama 3.1 8B');
-    expect(displayModelName('opencode:ollama/llama3.1:8b', null)).toBe('llama3.1:8b');
   });
 });
 
@@ -415,6 +330,36 @@ describe('isRunAtRest', () => {
     ]) {
       expect(isRunAtRest(status)).toBe(false);
     }
+  });
+});
+
+describe('runningPhaseSubline', () => {
+  it('renders the bare phase when there is no roadmap or iteration data', () => {
+    expect(runningPhaseSubline('Implement', undefined, undefined, undefined)).toBe('Implement');
+  });
+
+  it('appends the iteration when there is no roadmap', () => {
+    expect(runningPhaseSubline('Implement', undefined, undefined, 3)).toBe(
+      'Implement · iteration 3',
+    );
+  });
+
+  it('appends the roadmap phase-of-total when there is no iteration', () => {
+    expect(runningPhaseSubline('Implement', 2, 5, undefined)).toBe('Implement · phase 2/5');
+  });
+
+  it('appends both the roadmap phase-of-total and the iteration when both are present', () => {
+    expect(runningPhaseSubline('Implement', 2, 5, 3)).toBe('Implement · phase 2/5 · iteration 3');
+  });
+
+  it('never renders a placeholder for a missing phase', () => {
+    expect(runningPhaseSubline(undefined, 2, 5, 3)).toBeUndefined();
+    expect(runningPhaseSubline('', 2, 5, 3)).toBeUndefined();
+  });
+
+  it('omits the roadmap fragment unless both phase-of-total numbers are present', () => {
+    expect(runningPhaseSubline('Implement', 2, undefined, undefined)).toBe('Implement');
+    expect(runningPhaseSubline('Implement', undefined, 5, undefined)).toBe('Implement');
   });
 });
 

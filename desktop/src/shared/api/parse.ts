@@ -565,7 +565,7 @@ export const FeatureDetailResponseSchema = z.object({
 
 export type FeatureDetailResponse = z.output<typeof FeatureDetailResponseSchema>;
 
-// --- Run history (GET /runs, GET /runs/{n}, GET /runs/{n}/sessions) --------
+// --- Run listing (GET /runs, GET /runs/{n}, GET /runs/{n}/sessions) --------
 
 export const ServerRunSummarySchema = z.object({
   run_number: z.number().int().nonnegative(),

@@ -1,14 +1,13 @@
 /**
  * Archive mode: a persistent, read-only cockpit view for a sealed run.
- * Renders a run selector, a "Sealed run · Read only" band, a muted phase
- * spine, historical artifacts/logs/timeline scoped to the selected run,
- * and a "Return to current run" control. No mutation controls are mounted.
- * Current-run invalidations produce non-disruptive badges while history
- * stays pinned.
+ * Renders a run selector, a "Sealed run · Read only" band, a sealed-tone
+ * phase rail, historical artifacts/logs/timeline scoped to the selected
+ * run, and a "Return to current run" control. No mutation controls are
+ * mounted. Current-run invalidations produce non-disruptive badges while
+ * history stays pinned.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  type RunSummaryView,
   type RunDetailView,
   type RunArtifactView,
   type RunLogView,
@@ -17,7 +16,8 @@ import {
   type SessionTranscript,
 } from '../../../shared/ipc';
 import { parseIpcError, type WizardError } from '../wizard/ipcError';
-import { PhaseSpine } from '../components/PhaseSpine';
+import { PhaseRail } from './PhaseRailRow';
+import { archiveRailSegments, railTrio } from './phaseRail';
 import {
   displayPhaseLabel,
   formatDuration,
@@ -29,15 +29,13 @@ import { HistoricalTimeline } from './RunTimeline';
 export interface ArchiveModeProps {
   featureId: string;
   selectedRunNumber: number;
-  currentRunNumber: number;
   /** Whether this retained archive may perform authoritative refresh work. */
   active?: boolean;
   pipeline?: string;
   /** Non-disruptive notices from the live current run while history stays pinned. */
   currentRunBadges?: { changed: boolean; attention: boolean };
+  /** Returns to the live run — the run/iteration popup is the only switcher now. */
   onReturnToCurrent(): void;
-  /** Notify parent to persist the selected run number. */
-  onSelectRun(runNumber: number): void;
 }
 
 type ArchiveState =
@@ -45,27 +43,17 @@ type ArchiveState =
   | { phase: 'error'; error: WizardError }
   | {
       phase: 'loaded';
-      runs: RunSummaryView[];
       detail: RunDetailView | null;
-      totalPages: number;
-      currentPage: number;
-      total: number;
     };
-
-// Keep selector pages deliberately small: archive history is unbounded, while
-// the selected run is loaded separately and remains available across pages.
-const DEFAULT_PAGE_SIZE = 5;
 
 export function ArchiveMode(props: ArchiveModeProps) {
   const {
     featureId,
     selectedRunNumber,
-    currentRunNumber,
     active = true,
     pipeline,
     currentRunBadges = { changed: false, attention: false },
     onReturnToCurrent,
-    onSelectRun,
   } = props;
 
   const [state, setState] = useState<ArchiveState>({ phase: 'loading' });
@@ -87,39 +75,12 @@ export function ArchiveMode(props: ArchiveModeProps) {
   const selectionRef = useRef<string | null>(null);
 
   const load = useCallback(
-    async (runNumber: number, page = 1) => {
+    async (runNumber: number) => {
       const reqId = ++loadRef.current;
       try {
-        const [initialRunList, runDetail] = await Promise.all([
-          window.agentico.listRuns({ featureId, page, pageSize: DEFAULT_PAGE_SIZE }),
-          window.agentico.getRun({ featureId, runNumber }),
-        ]);
-        // A restored selection may live on an older page. Locate its bounded
-        // page so the selector always includes the selected sealed run.
-        let runList = initialRunList;
-        if (page === 1 && !runList.runs.some((run) => run.runNumber === runNumber)) {
-          for (let candidatePage = 2; candidatePage <= runList.totalPages; candidatePage += 1) {
-            const candidate = await window.agentico.listRuns({
-              featureId,
-              page: candidatePage,
-              pageSize: DEFAULT_PAGE_SIZE,
-            });
-            if (loadRef.current !== reqId) return;
-            if (candidate.runs.some((run) => run.runNumber === runNumber)) {
-              runList = candidate;
-              break;
-            }
-          }
-        }
+        const runDetail = await window.agentico.getRun({ featureId, runNumber });
         if (loadRef.current !== reqId) return;
-        setState({
-          phase: 'loaded',
-          runs: runList.runs,
-          detail: runDetail,
-          totalPages: runList.totalPages,
-          currentPage: runList.page,
-          total: runList.total,
-        });
+        setState({ phase: 'loaded', detail: runDetail });
       } catch (err) {
         if (loadRef.current !== reqId) return;
         setState({ phase: 'error', error: parseIpcError(err) });
@@ -264,11 +225,20 @@ export function ArchiveMode(props: ArchiveModeProps) {
     );
   }
 
-  const { runs, detail } = state;
+  const { detail } = state;
   const stages = spineStages(pipeline);
   const activeIndex = detail?.currentPhase
     ? spineActiveIndexForPhase(detail.currentPhase, stages)
     : 0;
+  // Trio from the sealed run's totals only — Context is omitted (never
+  // "unavailable", just never asked for) and there is never a hold in
+  // archive mode, regardless of the status the run carried when sealed.
+  const railTrioEntries = railTrio({
+    totalSeconds: detail?.timing?.totalSeconds,
+    totalUsd: detail?.cost?.totalUsd,
+    contextPercentage: undefined,
+    hold: null,
+  });
 
   return (
     <>
@@ -280,51 +250,6 @@ export function ArchiveMode(props: ArchiveModeProps) {
             {detail.sealedAt ? ` · sealed ${new Date(detail.sealedAt).toLocaleDateString()}` : ''}
             {detail.sealReason ? ` · sealed by ${detail.sealReason.toLowerCase()}` : ''}
           </span>
-        )}
-      </div>
-
-      <div className="archive-mode__selector">
-        <label className="archive-mode__selector-label" htmlFor="archive-run-select">
-          Run selection
-        </label>
-        <button type="button" className="archive-mode__current-choice" onClick={onReturnToCurrent}>
-          Run {currentRunNumber} · current
-        </button>
-        <select
-          id="archive-run-select"
-          className="archive-mode__select"
-          value={selectedRunNumber}
-          onChange={(e) => onSelectRun(Number(e.target.value))}
-        >
-          {runs.map((run) => (
-            <option key={run.runNumber} value={run.runNumber}>
-              Run {run.runNumber}
-              {run.sealedAt ? ` · ${new Date(run.sealedAt).toLocaleDateString()}` : ''}
-              {run.currentPhase ? ` · ${displayPhaseLabel(run.currentPhase)}` : ''}
-              {run.isRewind ? ' · rewind' : ''}
-            </option>
-          ))}
-        </select>
-        {state.totalPages > 1 && (
-          <div className="archive-mode__pagination" aria-label="Sealed run pages">
-            <button
-              type="button"
-              onClick={() => void load(selectedRunNumber, state.currentPage - 1)}
-              disabled={state.currentPage <= 1}
-            >
-              Newer
-            </button>
-            <span className="archive-mode__page-info">
-              Page {state.currentPage} of {state.totalPages} · {state.total} runs
-            </span>
-            <button
-              type="button"
-              onClick={() => void load(selectedRunNumber, state.currentPage + 1)}
-              disabled={state.currentPage >= state.totalPages}
-            >
-              Older
-            </button>
-          </div>
         )}
         {currentRunBadges.changed && (
           <span className="archive-mode__badge" data-tone="changed" role="status">
@@ -338,9 +263,10 @@ export function ArchiveMode(props: ArchiveModeProps) {
         )}
       </div>
 
-      <PhaseSpine
-        stages={stages}
-        activeIndex={activeIndex}
+      <PhaseRail
+        segments={archiveRailSegments(stages, activeIndex)}
+        trio={railTrioEntries}
+        hold={null}
         tone="sealed"
         label="Historical pipeline"
       />

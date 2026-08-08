@@ -1,5 +1,4 @@
 import type { FeatureSnapshot } from '../../../shared/ipc';
-import { PhaseLadder } from '../components/PhaseLadder';
 import type { RunMetrics } from './CurrentRunInspection';
 import { RepositoryInstrument } from './RepositoryInstrument';
 import { displayStatusLabel, formatDuration } from './featureView';
@@ -31,7 +30,7 @@ export function IdentityFacts({
   );
 }
 
-/** The inspector rail: identity, the vertical pipeline ladder, run totals. */
+/** The inspector rail: identity and run totals. The phase rail above owns pipeline presentation. */
 export function InspectorContent({
   snapshot,
   branch,
@@ -58,7 +57,6 @@ export function InspectorContent({
           </p>
         ) : null}
       </header>
-      <PhaseLadder snapshot={snapshot} />
       {runMetrics !== null ? (
         <section className="cockpit__run-totals" aria-label="This run">
           <h3 className="setup-step__title">This run</h3>

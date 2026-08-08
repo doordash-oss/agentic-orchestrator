@@ -174,8 +174,13 @@ export function resolveWithinRoot(root: string, requestPath: string): string | n
 // --- Sender validation -----------------------------------------------------------
 
 export interface TrustedSender {
-  /** webContents id of the app's main window. */
-  webContentsId: number;
+  /**
+   * webContents ids of the app's own registered windows. A window joins on
+   * creation and is evicted on close, so a closed window's id stops being
+   * trusted even if it is later reused. Held by reference (the window
+   * registry owns the set) so handlers always see live membership.
+   */
+  webContentsIds: ReadonlySet<number>;
   /** Origins the renderer may legitimately be running on. */
   allowedOrigins: ReadonlySet<string>;
 }
@@ -187,7 +192,7 @@ export interface SenderLikeEvent {
 
 /** Every ipcMain handler must pass its event through this check. */
 export function isTrustedSender(event: SenderLikeEvent, trusted: TrustedSender): boolean {
-  if (event.sender.id !== trusted.webContentsId) {
+  if (!trusted.webContentsIds.has(event.sender.id)) {
     return false;
   }
   if (event.senderFrame === null) {

@@ -108,6 +108,8 @@ describe('postImplementationModel', () => {
           { repo: 'api', commits: 3, dirty: false, dirtyFiles: [], dirtyFileTotal: 0 },
         ],
         mergeRepos: [],
+        initialMergeRepos: [],
+        publishEligibleRepos: [],
       },
     );
     expect(actions.map((action) => action.id)).toEqual(['publish-updates', 'refactor']);
@@ -120,6 +122,8 @@ describe('postImplementationModel', () => {
     const actions = aftercareActions(featureSnapshot({ status: 'Done', actions: [] }), {
       publishRepos: [],
       mergeRepos: [{ repo: 'core', commits: 1, dirty: true, dirtyFiles: [], dirtyFileTotal: 0 }],
+      initialMergeRepos: [],
+      publishEligibleRepos: [],
     });
     expect(actions.map((action) => action.id)).toEqual(['merge-updates']);
     expect(actions[0]!.title).toBe('Merge new commits');
@@ -128,10 +132,96 @@ describe('postImplementationModel', () => {
     );
   });
 
+  it('offers the first local merge as a delivery row', () => {
+    const actions = aftercareActions(
+      featureSnapshot({
+        status: 'CodeReady',
+        actions: [{ id: 'rebase', enabled: true, disabledReasons: [] }],
+      }),
+      {
+        publishRepos: [],
+        mergeRepos: [],
+        initialMergeRepos: [
+          { repo: 'local-core', commits: 0, dirty: false, dirtyFiles: [], dirtyFileTotal: 0 },
+        ],
+        publishEligibleRepos: [],
+      },
+    );
+    expect(actions.map((action) => action.id)).toEqual(['merge', 'rebase']);
+    expect(actions[0]!.title).toBe('Merge this feature');
+    expect(actions[0]!.label).toBe('Merge');
+    expect(actions[0]!.description).toBe(
+      'Merge the completed work into the base branch of its local repository.',
+    );
+  });
+
+  it('names every local repository in a multi-repo first merge', () => {
+    const actions = aftercareActions(featureSnapshot({ status: 'CodeReady', actions: [] }), {
+      publishRepos: [],
+      mergeRepos: [],
+      initialMergeRepos: [
+        { repo: 'local-core', commits: 0, dirty: false, dirtyFiles: [], dirtyFileTotal: 0 },
+        { repo: 'local-aux', commits: 0, dirty: false, dirtyFiles: [], dirtyFileTotal: 0 },
+      ],
+      publishEligibleRepos: [],
+    });
+    expect(actions[0]!.description).toBe(
+      'Merge the completed work into the base branch of all 2 local repositories.',
+    );
+  });
+
+  it('offers publish from the preflight when the catalog action is unavailable', () => {
+    // The deleted completion bar derived Publish from preflight eligibility, not
+    // from the action catalogue; the runway has to cover the same states.
+    const actions = aftercareActions(
+      featureSnapshot({
+        status: 'CodeReady',
+        actions: [
+          {
+            id: 'publish',
+            enabled: false,
+            disabledReasons: [{ code: 'manual_publish_required', message: 'waiting' }],
+          },
+        ],
+      }),
+      {
+        publishRepos: [],
+        mergeRepos: [],
+        initialMergeRepos: [],
+        publishEligibleRepos: [
+          { repo: 'api', commits: 0, dirty: false, dirtyFiles: [], dirtyFileTotal: 0 },
+        ],
+      },
+    );
+    expect(actions.map((action) => action.id)).toEqual(['publish']);
+    expect(actions[0]).toMatchObject({ title: 'Publish this feature', label: 'Prepare publish' });
+    expect(actions[0]!.disabledReason).toBeUndefined();
+  });
+
+  it('never doubles the publish row when the catalog also enables it', () => {
+    const actions = aftercareActions(
+      featureSnapshot({
+        status: 'CodeReady',
+        actions: [{ id: 'publish', enabled: true, disabledReasons: [] }],
+      }),
+      {
+        publishRepos: [],
+        mergeRepos: [],
+        initialMergeRepos: [],
+        publishEligibleRepos: [
+          { repo: 'api', commits: 0, dirty: false, dirtyFiles: [], dirtyFileTotal: 0 },
+        ],
+      },
+    );
+    expect(actions.map((action) => action.id)).toEqual(['publish']);
+  });
+
   it('omits undelivered cards when nothing is pending', () => {
     const actions = aftercareActions(featureSnapshot({ status: 'Published', actions: [] }), {
       publishRepos: [],
       mergeRepos: [],
+      initialMergeRepos: [],
+      publishEligibleRepos: [],
     });
     expect(actions).toEqual([]);
   });

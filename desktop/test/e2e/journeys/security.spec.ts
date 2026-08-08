@@ -5,7 +5,9 @@
  *  - the renderer holds no bearer material: not in the DOM, not in
  *    local/session storage or IndexedDB, and the preload exposes exactly the
  *    narrow window.agentico surface (no node globals);
- *  - navigation and window.open are denied;
+ *  - navigation and window.open are denied, in every window;
+ *  - the window census stays trusted: at most the main window plus one
+ *    Settings window, both on the app's own origin behind the same preload;
  *  - settings.json is owner-only (0600) and carries app-local presentation
  *    state only — no domain state, no credentials;
  *  - no offline domain cache exists anywhere under userData after quit;
@@ -21,7 +23,9 @@ import {
   closeApp,
   evidenceShot,
   launchApp,
+  openSettings,
   persistAppLogs,
+  selectSettingsPane,
   type AppHandle,
 } from '../helpers/app';
 import { packagedExecutable } from '../helpers/packaged';
@@ -122,11 +126,18 @@ test('packaged security posture: no token in the renderer, locked-down window, c
     transcript.step('bearer token appears nowhere in the DOM, localStorage, or sessionStorage');
 
     transcript.section('settings.json: owner-only, presentation-only');
-    // Force a persisted settings write through the app's own surface.
-    await handle.page
+    // Force a persisted settings write through the app's own surface. The
+    // theme radiogroup lives in the Settings window's Appearance pane now, so
+    // open that window and switch to the pane first.
+    const settingsWindow = await openSettings(handle);
+    await selectSettingsPane(settingsWindow, 'Appearance');
+    await settingsWindow
       .getByRole('radiogroup', { name: 'Theme' })
       .getByRole('radio', { name: 'Dark' })
       .click();
+    await expect(settingsWindow.locator('html[data-theme="dark"]')).toBeAttached();
+    // The main window follows the same broadcast — no second origin, no
+    // second bridge, one theme.
     await expect(handle.page.locator('html[data-theme="dark"]')).toBeAttached();
     await evidenceShot(handle, 'security-locked-window');
     const settingsPath = path.join(world.userData, 'settings.json');
@@ -140,7 +151,8 @@ test('packaged security posture: no token in the renderer, locked-down window, c
       'notifications',
       'runtime',
       'schemaVersion',
-      'tabs',
+      'settingsWindow',
+      'shell',
       'theme',
       'window',
       'wizard',
@@ -149,9 +161,12 @@ test('packaged security posture: no token in the renderer, locked-down window, c
     expect(settingsRaw).not.toContain(marker);
     transcript.json('settings.json (mode 0600) content', settings);
 
+    // The app's own origin, read before anything tries to leave it.
+    const appOrigin = await handle.page.evaluate(() => window.location.origin);
+
     // Last interactive step: a blocked navigation attempt leaves Playwright's
     // navigation tracker pending, so nothing after this may use locators.
-    transcript.section('Navigation and window.open are denied');
+    transcript.section('Navigation and window.open are denied; the window census is trusted');
     const beforeUrl = handle.page.url();
     await handle.page.evaluate(() => {
       window.location.href = 'https://example.invalid/exfil';
@@ -159,13 +174,37 @@ test('packaged security posture: no token in the renderer, locked-down window, c
     await handle.page.waitForTimeout(500);
     await handle.page.evaluate(() => window.stop());
     expect(handle.page.url()).toBe(beforeUrl);
-    const opened = await handle.page.evaluate(
-      () => window.open('https://example.invalid/') === null,
-    );
-    expect(opened).toBe(true);
+    // Both windows (main and the Settings window opened above) must refuse to
+    // spawn a third one, and every window that does exist must be the app's
+    // own origin running the app's own preload — never a renderer that
+    // arrived from somewhere else.
+    for (const page of handle.app.windows()) {
+      const opened = await page.evaluate(() => window.open('https://example.invalid/') === null);
+      expect(opened).toBe(true);
+    }
     await handle.page.waitForTimeout(300);
-    expect(handle.app.windows()).toHaveLength(1);
-    transcript.step('location.href navigation was blocked; window.open returned null; one window');
+    const census = await Promise.all(
+      handle.app.windows().map((page) =>
+        page.evaluate(() => ({
+          origin: window.location.origin,
+          purpose: window.agentico.windowPurpose,
+          hasRequire: 'require' in window,
+        })),
+      ),
+    );
+    // At most the main window plus one Settings window — nothing else.
+    expect(census).toHaveLength(2);
+    expect(census.map((entry) => entry.purpose).sort()).toEqual(['main', 'settings']);
+    for (const entry of census) {
+      expect(entry.origin).toBe(appOrigin);
+      expect(entry.hasRequire).toBe(false);
+    }
+    transcript.json('trusted window census after the exfiltration attempts', census);
+    transcript.step(
+      'location.href navigation was blocked; window.open returned null in both windows and ' +
+        'opened nothing; the only windows are the main window and one Settings window, both on ' +
+        `\`${appOrigin}\``,
+    );
 
     transcript.section('Quit, then scan every local byte');
     const serverPid = discovery!.pid;

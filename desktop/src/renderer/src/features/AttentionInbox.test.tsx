@@ -160,6 +160,211 @@ function QuestionDetailHarness({
   );
 }
 
+const recoveryItem: AttentionItem = {
+  kind: 'recovery',
+  id: 'recovery-scan',
+  waitingSince: '2026-07-15T10:00:00.000Z',
+  liveCount: 1,
+  deadCount: 0,
+};
+
+function bell(): HTMLElement {
+  return screen.getByRole('button', { name: /Attention inbox, \d+ pending/ });
+}
+
+function popover(): HTMLElement | null {
+  return screen.queryByRole('complementary', { name: 'Attention inbox' });
+}
+
+describe('AttentionInbox popover presentation', () => {
+  it('toggles from the bell, dismisses on Escape and outside pointer, and never offers a close control', async () => {
+    render(<Harness items={[permissionItem]} onJump={vi.fn()} />);
+    const user = userEvent.setup();
+
+    await user.click(bell());
+    expect(popover()).toBeVisible();
+    expect(bell()).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.queryByRole('button', { name: /close/i })).not.toBeInTheDocument();
+
+    // A second click on the trigger closes it and returns focus to the bell.
+    await user.click(bell());
+    expect(popover()).not.toBeInTheDocument();
+    expect(bell()).toHaveFocus();
+
+    await user.click(bell());
+    await user.keyboard('{Escape}');
+    expect(popover()).not.toBeInTheDocument();
+    expect(bell()).toHaveFocus();
+
+    await user.click(bell());
+    await user.click(document.body);
+    expect(popover()).not.toBeInTheDocument();
+  });
+
+  it('toggles with the ⌘⇧A accelerator in both directions', async () => {
+    render(<Harness items={[permissionItem]} onJump={vi.fn()} />);
+    const user = userEvent.setup();
+
+    await user.keyboard('{Meta>}{Shift>}a{/Shift}{/Meta}');
+    expect(popover()).toBeVisible();
+
+    await user.keyboard('{Meta>}{Shift>}a{/Shift}{/Meta}');
+    expect(popover()).not.toBeInTheDocument();
+    expect(bell()).toHaveFocus();
+  });
+
+  it('counts only actionable items in the badge and shows none at zero', async () => {
+    const { rerender } = render(
+      <AttentionInbox
+        items={[permissionItem, reviewItem, recoveryItem]}
+        refresh={async () => []}
+        featureLabel={() => 'Search revamp'}
+        drafts={emptyAttentionDrafts()}
+        setDrafts={vi.fn()}
+        onJump={vi.fn()}
+      />,
+    );
+
+    // Recovery is contextual priority, never a pending answer.
+    expect(bell()).toHaveAccessibleName('Attention inbox, 2 pending');
+    expect(bell()).toHaveAttribute('data-empty', 'false');
+    expect(bell().querySelector('.attention-bell__count')).toHaveTextContent('2');
+
+    await userEvent.click(bell());
+    expect(screen.getByText('2 waiting')).toBeVisible();
+
+    rerender(
+      <AttentionInbox
+        items={[]}
+        refresh={async () => []}
+        featureLabel={() => 'Search revamp'}
+        drafts={emptyAttentionDrafts()}
+        setDrafts={vi.fn()}
+        onJump={vi.fn()}
+      />,
+    );
+    expect(bell()).toHaveAccessibleName('Attention inbox, 0 pending');
+    expect(bell()).toHaveAttribute('data-empty', 'true');
+    expect(bell().querySelector('.attention-bell__count')).toBeNull();
+    expect(screen.getByRole('status')).toHaveTextContent('No blocking input is waiting.');
+  });
+
+  it('honours a controlled open state so the toolbar can close it for the update popover', async () => {
+    const onOpenChange = vi.fn();
+    const view = render(
+      <AttentionInbox
+        items={[permissionItem]}
+        refresh={async () => [permissionItem]}
+        featureLabel={() => 'Search revamp'}
+        drafts={emptyAttentionDrafts()}
+        setDrafts={vi.fn()}
+        onJump={vi.fn()}
+        open={true}
+        onOpenChange={onOpenChange}
+      />,
+    );
+    expect(popover()).toBeVisible();
+
+    await userEvent.keyboard('{Escape}');
+    expect(onOpenChange).toHaveBeenLastCalledWith(false);
+
+    view.rerender(
+      <AttentionInbox
+        items={[permissionItem]}
+        refresh={async () => [permissionItem]}
+        featureLabel={() => 'Search revamp'}
+        drafts={emptyAttentionDrafts()}
+        setDrafts={vi.fn()}
+        onJump={vi.fn()}
+        open={false}
+        onOpenChange={onOpenChange}
+      />,
+    );
+    expect(popover()).not.toBeInTheDocument();
+  });
+
+  it('expands an ownerless item inline and jumps for a recovery item', async () => {
+    const onJump = vi.fn();
+    const ownerless: AttentionItem = { ...helpQuestionItem, featureId: undefined };
+    render(<Harness items={[ownerless, recoveryItem]} onJump={onJump} />);
+    const user = userEvent.setup();
+
+    await user.click(bell());
+    const row = screen.getByRole('button', { name: /Help request/ });
+    await user.click(row);
+    expect(row).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByLabelText('Help reply')).toBeVisible();
+
+    await user.click(screen.getByRole('button', { name: /Recovery/ }));
+    expect(onJump).toHaveBeenCalledWith('__recovery__');
+    expect(popover()).not.toBeInTheDocument();
+  });
+
+  it('keeps a submission notice announced after the popover is dismissed', async () => {
+    const mock = installAgenticoMock();
+    mock.api.sendHelp.mockResolvedValue({ result: 'submitted' });
+    const ownerless: AttentionItem = { ...helpQuestionItem, featureId: undefined };
+    render(<Harness items={[ownerless]} onJump={vi.fn()} />);
+    const user = userEvent.setup();
+
+    await user.click(bell());
+    await user.click(screen.getByRole('button', { name: /Help request/ }));
+    await user.type(screen.getByLabelText('Help reply'), 'carry on');
+    await user.click(screen.getByRole('button', { name: 'Send reply' }));
+    await waitFor(() =>
+      expect(screen.getByRole('status')).toHaveTextContent(/Waiting for the server snapshot/),
+    );
+
+    await user.keyboard('{Escape}');
+    expect(popover()).not.toBeInTheDocument();
+    const announcement = screen.getByRole('status');
+    expect(announcement).toHaveClass('sr-only');
+    expect(announcement).toHaveTextContent(/Waiting for the server snapshot/);
+  });
+
+  it('notices an already-resolved item and moves focus to its neighbour', async () => {
+    const ownerless: AttentionItem = { ...helpQuestionItem, featureId: undefined };
+    const neighbour: AttentionItem = {
+      ...helpQuestionItem,
+      id: 'feature-1:neighbour',
+      featureId: undefined,
+      prompt: 'Second question',
+    };
+    const view = render(
+      <AttentionInbox
+        items={[ownerless, neighbour]}
+        refresh={async () => [neighbour]}
+        featureLabel={() => 'Search revamp'}
+        drafts={emptyAttentionDrafts()}
+        setDrafts={vi.fn()}
+        onJump={vi.fn()}
+        openRequest={{ id: 3, attentionId: ownerless.id }}
+      />,
+    );
+
+    view.rerender(
+      <AttentionInbox
+        items={[neighbour]}
+        refresh={async () => [neighbour]}
+        featureLabel={() => 'Search revamp'}
+        drafts={emptyAttentionDrafts()}
+        setDrafts={vi.fn()}
+        onJump={vi.fn()}
+        openRequest={{ id: 3, attentionId: ownerless.id }}
+      />,
+    );
+
+    await waitFor(() =>
+      expect(
+        screen.getByText('This item was already resolved. The inbox has been refreshed.'),
+      ).toBeVisible(),
+    );
+    const rows = screen.getAllByRole('button', { name: /Help request/ });
+    expect(rows).toHaveLength(1);
+    await waitFor(() => expect(rows[0]).toHaveFocus());
+  });
+});
+
 describe('AttentionInbox navigation', () => {
   it('deep-links a scoped agent request and closes the inbox', async () => {
     const onJump = vi.fn();
@@ -190,7 +395,7 @@ describe('AttentionInbox navigation', () => {
     ).not.toBeInTheDocument();
   });
 
-  it('does not reopen a closed inbox for an already-handled route request', async () => {
+  it('does not reopen a dismissed popover for an already-handled route request', async () => {
     const onJump = vi.fn();
     const props = {
       items: [reviewItem],
@@ -204,7 +409,7 @@ describe('AttentionInbox navigation', () => {
     const view = render(<AttentionInbox {...props} />);
     const user = userEvent.setup();
 
-    await user.click(screen.getByRole('button', { name: 'Close inbox' }));
+    await user.keyboard('{Escape}');
     view.rerender(<AttentionInbox {...props} openRequest={{ id: 7 }} />);
 
     expect(
@@ -278,6 +483,29 @@ describe('AttentionInbox gate detail', () => {
 
     expect(screen.queryByRole('button', { name: 'Abort gate' })).not.toBeInTheDocument();
     expect(screen.queryByRole('dialog', { name: 'Confirm abort' })).not.toBeInTheDocument();
+  });
+
+  it('persists a legacy gate answer on blur', async () => {
+    const mock = installAgenticoMock();
+    mock.api.saveGateDraft.mockResolvedValue({ result: 'saved' });
+    const user = userEvent.setup();
+    const legacyGate = {
+      ...gateItem,
+      id: 'legacy-gate-blur',
+      questions: [{ index: 1, prompt: 'Deployment window?', answer: '' }],
+      verification: undefined,
+    };
+    render(<GateDetailHarness item={legacyGate} />);
+
+    await user.type(screen.getByLabelText(/Deployment window/), 'Tuesday');
+    await user.tab();
+    await waitFor(() =>
+      expect(mock.api.saveGateDraft).toHaveBeenCalledWith({
+        featureId: gateItem.featureId,
+        repoName: 'repo-a',
+        answers: { '1': 'Tuesday' },
+      }),
+    );
   });
 
   it('keeps legacy gate textareas and the resume action', () => {

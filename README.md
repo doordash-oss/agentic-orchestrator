@@ -1,39 +1,39 @@
 # Agentic Orchestrator
 
-### One-shot the moonshot — then do it ten times in parallel.
+### Fai un oneshot della moonshot — poi rifallo dieci volte in parallelo.
 
-Agentic Orchestrator is an AI development workflow orchestrator that turns any engineer into a force multiplier. Describe your features, make the high-level decisions, and AI handles the rest — research, planning, implementation, code review, pull request — all running concurrently from a single terminal.
+Agentic Orchestrator è un orchestratore di workflow di sviluppo AI che trasforma qualsiasi ingegnere in un moltiplicatore di forza. Descrivi le tue feature, prendi le decisioni di alto livello, e l'AI si occupa del resto — ricerca, pianificazione, implementazione, code review, pull request — tutto in esecuzione concorrente da un singolo terminale.
 
-> The local CLI is `agentico`
+> La CLI locale è `agentico`
 
 <img width="3000" height="1800" alt="agentico-basic-flow-3000x1800" src="https://github.com/user-attachments/assets/b61ccb6e-3b0d-4b29-9b74-ade9a3917e82" />
 
-## Why Agentic Orchestrator?
+## Perché Agentic Orchestrator?
 
-The hard part of agentic coding is not asking a model to edit files. The hard part is getting from a vague, high-level feature request to a reviewable PR without losing context, skipping design work, or letting a bad plan produce a huge diff. Left unmanaged, this is how teams get AI slop: plausible-looking code produced faster than the context, tests, and review process needed to make it trustworthy. Agentic Orchestrator is built around that problem: it turns one feature prompt into a durable engineering workflow that gathers context, asks questions, designs the approach, decomposes the work, implements it, verifies it, reviews it, and publishes it.
+La parte difficile della programmazione agentica non è chiedere a un modello di modificare dei file. La parte difficile è arrivare da una richiesta di feature vaga e di alto livello a una PR revisionabile senza perdere il contesto, saltare il lavoro di design, o lasciare che un piano scadente produca un diff enorme. Se lasciato senza gestione, è così che i team ottengono AI slop: codice plausibile prodotto più rapidamente del contesto, dei test e del processo di revisione necessari per renderlo affidabile. Agentic Orchestrator è costruito attorno a questo problema: trasforma un singolo prompt di feature in un workflow di ingegneria duraturo che raccoglie contesto, fa domande, progetta l'approccio, scompone il lavoro, lo implementa, lo verifica, lo revisiona e lo pubblica.
 
-That is the real "oneshot" value: an engineer can describe a large feature once, then supervise the checkpoints where judgment matters instead of manually shepherding every prompt, terminal session, worktree, test run, review pass, and PR step.
+Questo è il vero valore dell'"oneshot": un ingegnere può descrivere una grande feature una sola volta, e poi supervisionare i checkpoint dove conta il giudizio, invece di seguire manualmente ogni prompt, sessione di terminale, worktree, esecuzione di test, passaggio di revisione e passaggio di PR.
 
-- **Context is built, not hoped for** — Large and Moonshot features start by building a per-repo knowledge base, then run inquiry, research, and design phases before planning. The implementation agent reads structured artifacts instead of relying on a single overloaded chat history.
-- **Complexity is phased** — Planning produces a roadmap, then each roadmap phase gets its own detailed phase plan. A tracer-bullet phase establishes the path; later TDD fill-in phases retire stubs and expand coverage.
-- **Quality gates happen before the diff gets expensive** — Plan validators review architecture, scope, structure, and, for high-risk work, security, performance, and testing. Implementation and Final Review loops use explicit verification evidence before the feature becomes publishable.
-- **Human attention is reserved for decisions** — Optional gates pause on inquiry review, research review, design review, roadmap review, phase plan review, user-input, and publish decisions. You approve direction, request iteration, or answer targeted questions; the orchestrator keeps the workflow state.
-- **Parallelism is the multiplier, not the premise** — Because every feature gets isolated worktrees, branches, sessions, and artifacts, you can run several complex workflows at once without mixing state or blocking your main checkout.
-- **Provider orchestration is explicit** — One provider is enough to run the whole workflow; add more to split the work. Claude, Codex, and OpenCode are co-equal: each phase's default is the best available model for that role across every detected provider, and models can be overridden per phase and swapped at runtime. Use `--providers` to restrict the orchestrator to the CLIs you actually have installed.
+- **Il contesto viene costruito, non sperato** — Le feature Large e Moonshot iniziano costruendo una knowledge base per repo, poi eseguono fasi di inquiry, ricerca e design prima della pianificazione. L'agente di implementazione legge artefatti strutturati invece di affidarsi a una singola cronologia di chat sovraccarica.
+- **La complessità è suddivisa in fasi** — La pianificazione produce una roadmap, poi ogni fase della roadmap ottiene il proprio piano di fase dettagliato. Una fase tracer-bullet stabilisce il percorso; le successive fasi di riempimento TDD ritirano gli stub ed espandono la coverage.
+- **I gate di qualità avvengono prima che il diff diventi costoso** — I validatori di piano revisionano architettura, ambito, struttura e, per il lavoro ad alto rischio, sicurezza, performance e testing. I loop di implementazione e di Final Review usano evidenze di verifica esplicite prima che la feature diventi pubblicabile.
+- **L'attenzione umana è riservata alle decisioni** — Gate opzionali si fermano su revisione dell'inquiry, revisione della ricerca, revisione del design, revisione della roadmap, revisione del piano di fase, input utente e decisioni di pubblicazione. Tu approvi la direzione, richiedi un'iterazione o rispondi a domande mirate; l'orchestratore mantiene lo stato del workflow.
+- **Il parallelismo è il moltiplicatore, non la premessa** — Poiché ogni feature ottiene worktree, branch, sessioni e artefatti isolati, puoi eseguire più workflow complessi contemporaneamente senza mescolare lo stato o bloccare il tuo checkout principale.
+- **L'orchestrazione dei provider è esplicita** — Un provider è sufficiente per eseguire l'intero workflow; aggiungine altri per suddividere il lavoro. Claude, Codex e OpenCode sono co-equivalenti: il default di ogni fase è il miglior modello disponibile per quel ruolo tra tutti i provider rilevati, e i modelli possono essere sovrascritti per fase e scambiati a runtime. Usa `--providers` per limitare l'orchestratore alle CLI che hai effettivamente installato.
 
-The design follows patterns described in Anthropic's [Building Effective Agents](https://www.anthropic.com/engineering/building-effective-agents) article: prompt chaining, parallelization, orchestrator-workers, and evaluator-optimizer loops. It also codifies Claude Code's [explore → plan → code](https://code.claude.com/docs/en/best-practices) workflow and OpenAI's guidance on agent [orchestration and guardrails](https://openai.com/business/guides-and-resources/a-practical-guide-to-building-ai-agents/).
+Il design segue i pattern descritti nell'articolo di Anthropic [Building Effective Agents](https://www.anthropic.com/engineering/building-effective-agents): prompt chaining, parallelizzazione, orchestrator-workers e loop evaluator-optimizer. Codifica inoltre il workflow [explore → plan → code](https://code.claude.com/docs/en/best-practices) di Claude Code e le linee guida di OpenAI su [orchestrazione e guardrail](https://openai.com/business/guides-and-resources/a-practical-guide-to-building-ai-agents/) degli agenti.
 
 ## Quick Start
 
-Use Homebrew if you have it; otherwise grab the prebuilt binary. Build from source only if you're working on agentico itself.
+Usa Homebrew se lo hai; altrimenti prendi il binario precompilato. Compila dal source solo se stai lavorando su agentico stesso.
 
-**Homebrew** (recommended — macOS/Linux):
+**Homebrew** (raccomandato — macOS/Linux):
 
 ```bash
 brew install doordash-oss/agentic-orchestrator/agentico
 ```
 
-**Prebuilt binary** — no Homebrew or Go (macOS/Linux, amd64/arm64):
+**Binario precompilato** — senza Homebrew o Go (macOS/Linux, amd64/arm64):
 
 ```bash
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
@@ -41,182 +41,182 @@ ARCH=$(uname -m | sed 's/x86_64/amd64/; s/aarch64/arm64/')
 TAG=$(curl -fsSLI -o /dev/null -w '%{url_effective}' https://github.com/doordash-oss/agentic-orchestrator/releases/latest | sed 's@.*/@@')
 mkdir -p ~/.local/bin
 curl -fsSL "https://github.com/doordash-oss/agentic-orchestrator/releases/download/${TAG}/agentic-orchestrator_${TAG#v}_${OS}_${ARCH}.tar.gz" | tar -xz -C ~/.local/bin agentico
-# ensure ~/.local/bin is on your PATH
+# assicurati che ~/.local/bin sia nel tuo PATH
 ```
 
-**From source** — for contributing to agentico (Go 1.25+):
+**Dal source** — per contribuire ad agentico (Go 1.25+):
 
 ```bash
 go install github.com/doordash-oss/agentic-orchestrator/cmd/agentico@latest
-# or: git clone https://github.com/doordash-oss/agentic-orchestrator.git && cd agentic-orchestrator && make install
+# oppure: git clone https://github.com/doordash-oss/agentic-orchestrator.git && cd agentic-orchestrator && make install
 ```
 
-Then run `agentico`. Update any time with `agentico update` — it uses the right method for how you installed.
+Poi esegui `agentico`. Aggiorna in qualsiasi momento con `agentico update` — usa il metodo giusto in base a come lo hai installato.
 
-On first launch, Agentic Orchestrator walks you through a welcome flow to select your workspace directories. After that, you're on the dashboard.
+Al primo avvio, Agentic Orchestrator ti guida attraverso un flusso di benvenuto per selezionare le tue directory di workspace. Dopo, ti trovi sulla dashboard.
 
-**Three keys to remember**: `n` (new feature), `?` (help), `a` (watch active work; answer, approve, or review when prompted). Everything else is discoverable from the help overlay.
+**Tre tasti da ricordare**: `n` (nuova feature), `?` (aiuto), `a` (osserva il lavoro attivo; rispondi, approva o revisiona quando richiesto). Tutto il resto è scopribile dall'overlay di aiuto.
 
-## Prerequisites
+## Prerequisiti
 
-### Required
+### Richiesti
 
-| Tool | Purpose | Install |
-|------|---------|---------|
-| **`git`** | Worktree, branch, commit, and rebase operations | Pre-installed on most systems |
-| **`gh` CLI** | Push-time PR creation and cross-repo PR body updates during Publish | [GitHub CLI docs](https://docs.github.com/en/github-cli/github-cli), then `gh auth login` |
+| Tool | Scopo | Installazione |
+|------|---------|-------|
+| **`git`** | Operazioni di worktree, branch, commit e rebase | Preinstallato sulla maggior parte dei sistemi |
+| **CLI `gh`** | Creazione di PR al momento del push e aggiornamento del body delle PR cross-repo durante il Publish | [Documentazione GitHub CLI](https://docs.github.com/en/github-cli/github-cli), poi `gh auth login` |
 
-### Provider CLIs — install at least one
+### CLI dei provider — installane almeno una
 
-Agentic Orchestrator needs **at least one** AI provider CLI.
+Agentic Orchestrator richiede **almeno una** CLI di provider AI.
 
-| Tool | Role | Install |
+| Tool | Ruolo | Installazione |
 |------|------|---------|
-| **Claude Code CLI >= 2.1.81** (`claude`) | Backend for KB, inquiry, research, design, planning, implementation, and chat | [Claude Code setup](https://code.claude.com/docs/en/getting-started) or `npm install -g @anthropic-ai/claude-code@latest` |
-| **Codex CLI >= 0.116.0** (`codex`) | Backend for Final Review and Codex-backed review models | [Codex CLI setup](https://developers.openai.com/codex/cli) or `npm i -g @openai/codex@latest` |
-| **OpenCode CLI >= 1.17.9** (`opencode`) | Co-equal backend for every phase and chat; selected with `opencode:<backend/model>` (e.g. `opencode:anthropic/claude-sonnet-4-5`) | [opencode.ai](https://opencode.ai) or `curl -fsSL https://opencode.ai/install \| bash` |
+| **Claude Code CLI >= 2.1.81** (`claude`) | Backend per KB, inquiry, ricerca, design, pianificazione, implementazione e chat | [Setup di Claude Code](https://code.claude.com/docs/en/getting-started) oppure `npm install -g @anthropic-ai/claude-code@latest` |
+| **Codex CLI >= 0.116.0** (`codex`) | Backend per Final Review e per i modelli di review basati su Codex | [Setup di Codex CLI](https://developers.openai.com/codex/cli) oppure `npm i -g @openai/codex@latest` |
+| **OpenCode CLI >= 1.17.9** (`opencode`) | Backend co-equivalente per ogni fase e per la chat; selezionato con `opencode:<backend/model>` (es. `opencode:anthropic/claude-sonnet-4-5`) | [opencode.ai](https://opencode.ai) oppure `curl -fsSL https://opencode.ai/install \| bash` |
 
-OpenCode routes a configured backend provider (Anthropic, OpenAI, Google, a local Ollama model, and so on) through one CLI. Authenticate it with `opencode auth login`, and confirm it is ready with `opencode models`. Agentico runs every OpenCode session against a managed, per-session config and never edits your global OpenCode configuration. Opt into it explicitly with `--providers opencode`, or let it join automatically when its CLI is installed and authenticated.
+OpenCode instrada un provider di backend configurato (Anthropic, OpenAI, Google, un modello Ollama locale, e così via) attraverso un'unica CLI. Autenticala con `opencode auth login`, e conferma che sia pronta con `opencode models`. Agentico esegue ogni sessione OpenCode su una configurazione gestita per-sessione e non modifica mai la tua configurazione globale di OpenCode. Attivala esplicitamente con `--providers opencode`, oppure lasciala aggiungere automaticamente quando la sua CLI è installata e autenticata.
 
-### Optional
+### Opzionali
 
-| Tool | Purpose | Install |
-|------|---------|---------|
-| **Go 1.25+** | Only needed to build `agentico` from source — not required when using a [prebuilt release binary](#quick-start) | [go.dev](https://go.dev/dl/) |
-| **Node.js 18+ and npm** | Only needed when installing Claude Code or Codex through npm | [nodejs.org](https://nodejs.org/) |
+| Tool | Scopo | Installazione |
+|------|---------|-------|
+| **Go 1.25+** | Necessario solo per compilare `agentico` dal source — non richiesto quando si usa un [binario di release precompilato](#quick-start) | [go.dev](https://go.dev/dl/) |
+| **Node.js 18+ e npm** | Necessario solo quando si installa Claude Code o Codex tramite npm | [nodejs.org](https://nodejs.org/) |
 
-After installing your provider CLI(s), confirm each is authenticated — `claude auth status`, `codex login status`, and/or `opencode models` (it lists models only once a backend provider is configured) — plus `gh auth status`, before launching `agentico`. A provider whose CLI is missing, too old, or not yet authenticated is filtered out at startup with a one-line notice, and the orchestrator continues on whatever providers are ready.
+Dopo aver installato la/le tua/e CLI di provider, conferma che ciascuna sia autenticata — `claude auth status`, `codex login status`, e/o `opencode models` (elenca i modelli solo una volta configurato un provider di backend) — oltre a `gh auth status`, prima di lanciare `agentico`. Un provider la cui CLI è mancante, troppo vecchia, o non ancora autenticata viene filtrato all'avvio con un breve avviso, e l'orchestratore continua con qualunque provider sia pronto.
 
-## How It Works
+## Come Funziona
 
-### The Feature Lifecycle
+### Il Ciclo di Vita della Feature
 
-The lifecycle is profile-dependent and checkpoint-driven. Medium starts at planning. Large and Moonshot first build context, clarify intent, and explore design options. All profiles then enter the roadmap loop: create a roadmap, plan one roadmap phase at a time, implement it, commit phase anchors, and continue until the final phase reaches Final Review.
+Il ciclo di vita dipende dal profilo ed è guidato da checkpoint. Medium inizia dalla pianificazione. Large e Moonshot prima costruiscono il contesto, chiariscono l'intento ed esplorano le opzioni di design. Tutti i profili entrano poi nel loop della roadmap: creare una roadmap, pianificare una fase della roadmap alla volta, implementarla, eseguire il commit degli anchor di fase e continuare finché la fase finale non raggiunge la Final Review.
 
 <img width="1051" height="570" alt="image" src="https://github.com/user-attachments/assets/00eb8559-0b0c-4000-a029-2210aa50f920" />
 
-**Knowledge Base Build** — Builds or refreshes a per-repo knowledge base covering architecture, conventions, API surface, dependencies, and verification. Fresh KBs are reused and the phase is skipped.
+**Costruzione della Knowledge Base** — Costruisce o aggiorna una knowledge base per repo che copre architettura, convenzioni, superficie delle API, dipendenze e verifica. Le KB già aggiornate vengono riutilizzate e la fase viene saltata.
 
-**Inquire, Research, Design** — Turns a high-level request into explicit answers, research findings, and a design direction. Q&A artifacts are persisted and fed forward so later phases do not depend on memory alone.
+**Inquiry, Ricerca, Design** — Trasforma una richiesta di alto livello in risposte esplicite, risultati di ricerca e una direzione di design. Gli artefatti di Q&A vengono persistiti e passati in avanti in modo che le fasi successive non dipendano solo dalla memoria.
 
-**Roadmap and Phase Planning** — Creates the top-level roadmap, then a detailed plan for each roadmap phase. Large and Moonshot run plan validators; Medium skips plan critics for lower overhead.
+**Pianificazione della Roadmap e delle Fasi** — Crea la roadmap di livello superiore, poi un piano dettagliato per ogni fase della roadmap. Large e Moonshot eseguono i validatori di piano; Medium salta i critici di piano per un overhead minore.
 
-**Implementation** — Runs a unified phase implementation loop across the phase-scoped repo set. Medium and Large rely on Final Review; Moonshot also keeps per-iteration review during implementation.
+**Implementazione** — Esegue un loop di implementazione di fase unificato attraverso l'insieme di repo delimitato dalla fase. Medium e Large si affidano alla Final Review; Moonshot mantiene inoltre la review per-iterazione durante l'implementazione.
 
-**Final Review** — Runs once after the last roadmap phase, across every touched repo that has not already been published. The phase contains its own review/fix loop. Passing Final Review moves the feature to `CodeReady`; exhausting the loop or violating the phase contract fails the feature.
+**Final Review** — Viene eseguita una volta dopo l'ultima fase della roadmap, su ogni repo toccato che non è già stato pubblicato. La fase contiene il proprio loop di review/fix. Superare la Final Review porta la feature a `CodeReady`; esaurire il loop o violare il contratto di fase fa fallire la feature.
 
-**Publishing** — If auto-publish is enabled, Agentic Orchestrator commits, rebases, pushes, creates PRs, and injects cross-repo PR links automatically. If manual publish is enabled, the TUI pauses at `CodeReady` so you can review the diff and PR description first.
+**Pubblicazione** — Se l'auto-publish è abilitato, Agentic Orchestrator esegue il commit, il rebase, il push, crea le PR e inietta automaticamente i link PR cross-repo. Se è abilitata la pubblicazione manuale, la TUI si ferma a `CodeReady` così puoi prima revisionare il diff e la descrizione della PR.
 
-### Pipeline Profiles
+### Profili della Pipeline
 
-When creating a feature, choose a pipeline depth:
+Quando crei una feature, scegli una profondità di pipeline:
 
-| Profile | Phases | Best for |
+| Profilo | Fasi | Ideale per |
 |---------|--------|----------|
-| **Medium** | Roadmap plan → per-phase plan/implement loop → Final Review → Publish | Small, well-understood changes where you already know the approach |
-| **Large** | KB → Inquire → Research → Design → roadmap loop → Final Review → Publish | Most complex features (default) |
-| **Moonshot** | Same phase sequence as Large, with high effort and per-iteration implementation review | High-risk or highly ambiguous changes |
+| **Medium** | Piano di roadmap → loop di piano/implementazione per fase → Final Review → Publish | Modifiche piccole e ben comprese per cui conosci già l'approccio |
+| **Large** | KB → Inquire → Research → Design → loop di roadmap → Final Review → Publish | La maggior parte delle feature complesse (default) |
+| **Moonshot** | Stessa sequenza di fasi di Large, con effort elevato e review dell'implementazione per-iterazione | Modifiche ad alto rischio o altamente ambigue |
 
-### Worktree Isolation
+### Isolamento dei Worktree
 
-Each feature runs in its own git worktree under `~/.agentic-orchestrator/worktrees/` (legacy installs continue to use `~/.agentic-workflow/worktrees/` until you opt in). This means:
-- Multiple features can work on the same repo simultaneously
-- No branch conflicts between concurrent features
-- Your main working copy stays untouched
-- Worktrees are cleaned up with `c` after completion
+Ogni feature viene eseguita nel proprio worktree git sotto `~/.agentic-orchestrator/worktrees/` (le installazioni legacy continuano a usare `~/.agentic-workflow/worktrees/` finché non si sceglie di aggiornare). Questo significa:
+- Più feature possono lavorare sullo stesso repo contemporaneamente
+- Nessun conflitto di branch tra feature concorrenti
+- La tua copia di lavoro principale resta intatta
+- I worktree vengono rimossi con `c` al termine
 
-### Multiple Repositories
+### Repository Multipli
 
-Every feature targets one or more repositories with the same lifecycle and state machine. When a feature spans more than one repo, Agentic Orchestrator:
-- Creates worktrees in each target repo
-- Builds an execution plan with dependency ordering across repos
-- Runs implementation per-repo (sequentially or in parallel based on dependencies)
-- Cross-references PRs across repos automatically
+Ogni feature ha come target uno o più repository con lo stesso ciclo di vita e la stessa macchina a stati. Quando una feature si estende su più di un repo, Agentic Orchestrator:
+- Crea worktree in ogni repo di destinazione
+- Costruisce un piano di esecuzione con ordinamento delle dipendenze tra i repo
+- Esegue l'implementazione per-repo (in sequenza o in parallelo in base alle dipendenze)
+- Referenzia automaticamente le PR tra i repo
 
-When a feature targets a single repo, the per-repo Repo Progress panel, the cycle-selector modal, and the cross-reference PR table collapse — the rest of the lifecycle is identical.
+Quando una feature ha come target un singolo repo, il pannello Repo Progress per-repo, la modale del selettore di ciclo e la tabella di cross-reference delle PR si comprimono — il resto del ciclo di vita è identico.
 
 ### Knowledge Base
 
-Before diving into a feature, Agentic Orchestrator can build a per-repo knowledge base — a structured document graph covering architecture, conventions, API surface, dependencies, and verification methods. The KB is cached and incrementally updated (only when HEAD changes), so subsequent features in the same repo start faster.
+Prima di immergersi in una feature, Agentic Orchestrator può costruire una knowledge base per repo — un grafo di documenti strutturato che copre architettura, convenzioni, superficie delle API, dipendenze e metodi di verifica. La KB è cachata e aggiornata in modo incrementale (solo quando HEAD cambia), così le feature successive nello stesso repo partono più rapidamente.
 
-### Plan Validation Gate
+### Gate di Validazione del Piano
 
-Plans are reviewed by specialized AI critics before implementation begins:
+I piani sono revisionati da critici AI specializzati prima che inizi l'implementazione:
 
-| Critic | Focus | When Active |
+| Critico | Focus | Quando Attivo |
 |--------|-------|-------------|
-| **Architecture** | Roadmap-level pattern consistency, module boundaries, dependency direction | Large/Moonshot, all risk levels |
-| **Structural** | Phase-plan completeness, required sections, executable task shape | Large/Moonshot, all risk levels |
-| **Scope** | Requirement coverage, phase sizing, over-engineering detection | Large/Moonshot, all risk levels |
-| **Security** | Auth, injection, data protection calibrated to project context | Large/Moonshot, high risk |
-| **Performance** | Scalability, query efficiency, resource management | Large/Moonshot, high risk |
-| **Testing** | Coverage adequacy, edge cases, regression protection | Large/Moonshot phase plans, high risk |
+| **Architecture** | Coerenza dei pattern a livello di roadmap, confini dei moduli, direzione delle dipendenze | Large/Moonshot, tutti i livelli di rischio |
+| **Structural** | Completezza del piano di fase, sezioni richieste, forma eseguibile dei task | Large/Moonshot, tutti i livelli di rischio |
+| **Scope** | Coverage dei requisiti, dimensionamento della fase, rilevamento dell'over-engineering | Large/Moonshot, tutti i livelli di rischio |
+| **Security** | Autenticazione, injection, protezione dei dati calibrata sul contesto del progetto | Large/Moonshot, rischio alto |
+| **Performance** | Scalabilità, efficienza delle query, gestione delle risorse | Large/Moonshot, rischio alto |
+| **Testing** | Adeguatezza della coverage, casi limite, protezione dalle regressioni | Piani di fase Large/Moonshot, rischio alto |
 
-Critics run in parallel and produce independent verdicts. If any critic requests changes, the plan is revised and re-validated automatically. Medium skips plan critics but still runs Final Review before publish.
+I critici vengono eseguiti in parallelo e producono verdetti indipendenti. Se un critico richiede modifiche, il piano viene rivisto e rivalidato automaticamente. Medium salta i critici di piano ma esegue comunque la Final Review prima della pubblicazione.
 
-## Usage
+## Utilizzo
 
-### TUI Dashboard
+### Dashboard TUI
 
-Launch with `agentico`. The dashboard shows all features organized by status:
+Avvia con `agentico`. La dashboard mostra tutte le feature organizzate per stato:
 
-- **In Progress** — actively being worked on (researching, planning, implementing)
-- **Published** — PR created, awaiting merge
-- **Completed** — marked as done
+- **In Progress** — attivamente in lavorazione (in ricerca, pianificazione, implementazione)
+- **Published** — PR creata, in attesa di merge
+- **Completed** — segnata come completata
 
-Features needing your attention (pending permissions, help requests) show a warning indicator.
+Le feature che richiedono la tua attenzione (permessi in sospeso, richieste di aiuto) mostrano un indicatore di avviso.
 
-### Creating a Feature
+### Creare una Feature
 
-Press `n` from the dashboard to open the wizard:
+Premi `n` dalla dashboard per aprire il wizard:
 
-1. **What** — Name and describe the feature. Supports pasting images (`Ctrl+V`) and attaching files (`@`).
-2. **Where** — Select target repo(s). Browse for new directories or create repos on the fly.
-3. **Pipeline** — Choose Medium, Large, or Moonshot and see the available gate options.
-4. **Review** — Adjust risk level, models per phase, checkpoints (inquiry review, research review, design review, roadmap review, phase plan review, manual publish), exit criteria. Submit to start.
+1. **What** — Nomina e descrivi la feature. Supporta l'incolla di immagini (`Ctrl+V`) e l'allegare file (`@`).
+2. **Where** — Seleziona il/i repo di destinazione. Sfoglia per nuove directory o crea repo al volo.
+3. **Pipeline** — Scegli Medium, Large o Moonshot e visualizza le opzioni di gate disponibili.
+4. **Review** — Adatta il livello di rischio, i modelli per fase, i checkpoint (revisione dell'inquiry, revisione della ricerca, revisione del design, revisione della roadmap, revisione del piano di fase, pubblicazione manuale), i criteri di uscita. Invia per iniziare.
 
-### Interacting with Agents
+### Interagire con gli Agenti
 
-**Watch** (`a`) — Open active live work in real time. The same key becomes **Answer**, **Approve**, or **Review** when the agent needs input.
+**Watch** (`a`) — Apri il lavoro attivo in tempo reale. Lo stesso tasto diventa **Answer**, **Approve** o **Review** quando l'agente ha bisogno di input.
 
-**Overview** (`o`) — Switch the dashboard right panel from Live Preview to the detailed overview. Press `l` from Overview to return to Live Preview; outside Overview, `l` still opens logs.
+**Overview** (`o`) — Passa il pannello destro della dashboard da Live Preview alla panoramica dettagliata. Premi `l` da Overview per tornare a Live Preview; fuori da Overview, `l` apre comunque i log.
 
-**Stop watching** (`Esc/Ctrl+]`) — Return to the dashboard. The agent keeps running.
+**Stop watching** (`Esc/Ctrl+]`) — Torna alla dashboard. L'agente continua a essere in esecuzione.
 
-### Post-Implementation Actions
+### Azioni Post-Implementazione
 
-Once a feature reaches code-ready or published state:
+Una volta che una feature raggiunge lo stato code-ready o pubblicato:
 
-| Key | Action |
+| Tasto | Azione |
 |-----|--------|
-| `p` | Publish as PR (diff review → commit log → PR description → confirm) |
-| `b` | Rebase on main |
-| `g` | View and resolve PR review comments |
-| `D` | Mark as done |
+| `p` | Pubblica come PR (revisione del diff → log dei commit → descrizione della PR → conferma) |
+| `b` | Rebase su main |
+| `g` | Visualizza e risolvi i commenti di review della PR |
+| `D` | Segna come completata |
 
 ### Ask Me Anything
 
-Press `/` anywhere to open the built-in AI chat. It's a read-only session — backed by whichever provider your `utilities` model selects (Claude, Codex, or OpenCode) — that can explain how Agentic Orchestrator works, debug issues by reading feature logs and artifacts, search the codebase, and answer questions, without modifying any files.
+Premi `/` ovunque per aprire la chat AI integrata. È una sessione di sola lettura — supportata da qualunque provider selezioni il tuo modello `utilities` (Claude, Codex o OpenCode) — che può spiegare come funziona Agentic Orchestrator, effettuare debug leggendo i log e gli artefatti delle feature, cercare nel codebase e rispondere a domande, senza modificare alcun file.
 
-### Keybindings
+### Keybinding
 
-> For the complete reference, see [docs/keybindings.md](docs/keybindings.md).
+> Per il riferimento completo, vedi [docs/keybindings.md](docs/keybindings.md).
 
-## Configuration
+## Configurazione
 
-Config lives at `~/.agentic-orchestrator/config.yaml` (auto-created on first launch). If a legacy `~/.agentic-workflow/` directory already exists, it is reused in place so existing installs keep working without a manual copy.
+La configurazione si trova in `~/.agentic-orchestrator/config.yaml` (creata automaticamente al primo avvio). Se esiste già una directory legacy `~/.agentic-workflow/`, viene riutilizzata sul posto così le installazioni esistenti continuano a funzionare senza una copia manuale.
 
 ```yaml
 defaults:
   models:
-    inquiry: "sonnet[200K]"      # Model for Clarify/Inquire phase
-    research: "sonnet[200K]"     # Model for research phase
-    planning: "opus[1M]"         # Model for planning phase
-    implementation: "opus[1M]"   # Model for implementation phase
-    review: "gpt-5.4[272K]"      # Model for review phase (Codex)
-    utilities: "sonnet[200K]"    # Model for chat and utility tasks
-    kb_build: "sonnet[200K]"     # Model for knowledge base builds
-    automatic_review: ""         # Empty selects Automatic
+    inquiry: "sonnet[200K]"      # Modello per la fase Clarify/Inquire
+    research: "sonnet[200K]"     # Modello per la fase di ricerca
+    planning: "opus[1M]"         # Modello per la fase di pianificazione
+    implementation: "opus[1M]"   # Modello per la fase di implementazione
+    review: "gpt-5.4[272K]"      # Modello per la fase di review (Codex)
+    utilities: "sonnet[200K]"    # Modello per chat e task di utilità
+    kb_build: "sonnet[200K]"     # Modello per la costruzione della knowledge base
+    automatic_review: ""         # Vuoto seleziona Automatic
   automatic_review_enabled: false
   exit_criteria: |
     - Feature fully implemented per plan
@@ -228,8 +228,8 @@ defaults:
   max_iterations: 10
   max_consecutive_failures: 3
   max_consecutive_no_progress: 3
-  inquireness: high          # How often planning questions are surfaced
-  pipeline: large            # Default pipeline (medium, large, moonshot)
+  inquireness: high          # Con quale frequenza vengono mostrate le domande di pianificazione
+  pipeline: large            # Pipeline di default (medium, large, moonshot)
 
 repos:
   my-service:
@@ -237,20 +237,20 @@ repos:
     verification: "go test ./..."
 
 workspace_roots:
-  - /home/user/projects      # Scanned for git repos on startup
+  - /home/user/projects      # Analizzata per repo git all'avvio
 ```
 
-### Model Overrides
+### Override dei Modelli
 
-Each feature can override default models during creation via the wizard (step 4). The model editor shows the Inquire phase as **Clarify**, separately from **Research**, so requirement clarification and codebase research can use different models. Models can be specified with explicit provider prefixes (e.g., `claude:opus[1M]`, `codex:gpt-5.4[272K]`, `opencode:anthropic/claude-sonnet-4-5`) or as bare ids resolved against the provider registry. There are three ways a selection reaches OpenCode, and they are distinct:
+Ogni feature può sovrascrivere i modelli di default durante la creazione tramite il wizard (passo 4). L'editor dei modelli mostra la fase Inquire come **Clarify**, separatamente da **Research**, così il chiarimento dei requisiti e la ricerca sul codebase possono usare modelli diversi. I modelli possono essere specificati con prefissi di provider espliciti (es. `claude:opus[1M]`, `codex:gpt-5.4[272K]`, `opencode:anthropic/claude-sonnet-4-5`) oppure come id semplici risolti rispetto al registro dei provider. Ci sono tre modi in cui una selezione raggiunge OpenCode, e sono distinti:
 
-- A **plain alias** such as `opus`, `sonnet`, or `gpt-5.4` (no slash) resolves to its owning native provider (Claude or Codex) and **never** to OpenCode — OpenCode contributes only slash-form backend ids.
-- The explicit **`opencode:<provider>/<model>` prefix** always routes to OpenCode, passing the backend id straight through (it works even for a backend OpenCode discovers but Agentico does not pre-list).
-- A **bare slash-form backend id** such as `anthropic/claude-sonnet-4-5` (no prefix) resolves to OpenCode when it matches OpenCode's catalog. This is the form Agentico persists for the provider-neutral per-phase defaults when OpenCode is the only ready provider, so an OpenCode model **can** be a default without any `opencode:` prefix in the config.
+- Un **alias semplice** come `opus`, `sonnet` o `gpt-5.4` (senza slash) si risolve verso il proprio provider nativo (Claude o Codex) e **mai** verso OpenCode — OpenCode contribuisce solo id di backend in forma con slash.
+- Il prefisso esplicito **`opencode:<provider>/<model>`** instrada sempre verso OpenCode, passando l'id di backend direttamente (funziona anche per un backend che OpenCode scopre ma che Agentico non pre-elenca).
+- Un **id di backend in forma con slash semplice** come `anthropic/claude-sonnet-4-5` (senza prefisso) si risolve verso OpenCode quando corrisponde al catalogo di OpenCode. Questa è la forma che Agentico persiste per i default per-fase indipendenti dal provider quando OpenCode è l'unico provider pronto, quindi un modello OpenCode **può** essere un default senza alcun prefisso `opencode:` nella configurazione.
 
-Use `agentico --refresh-models` when a provider CLI shows new models but Agentico still shows an older catalog. Refresh runs live discovery for all ready providers, updates the version-keyed cache on success, and falls back to the previous cache with a warning if discovery fails.
+Usa `agentico --refresh-models` quando una CLI di provider mostra nuovi modelli ma Agentico mostra ancora un catalogo più vecchio. Il refresh esegue una discovery live per tutti i provider pronti, aggiorna la cache con chiave di versione in caso di successo, e ricade sulla cache precedente con un avviso se la discovery fallisce.
 
-### Launch Flags
+### Flag di Avvio
 
 ```text
 agentico [flags]
@@ -266,66 +266,67 @@ Flags:
   --version, -v                    Show version
 ```
 
-### Updating
+### Aggiornamento
 
 ```text
 agentico update [--check|-n]
 ```
 
-Run `agentico update` to upgrade to the latest stable release. Use
-`agentico update --check` (alias `-n`) to report the current and latest
-available versions without installing anything; it exits `0` and prints an
-already-up-to-date message when you are on the newest release.
+Esegui `agentico update` per aggiornare all'ultima release stabile. Usa
+`agentico update --check` (alias `-n`) per riportare le versioni attuale e più
+recente disponibile senza installare nulla; esce con `0` e stampa un
+messaggio di già-aggiornato quando sei sull'ultima release.
 
-## Development
+## Sviluppo
 
 ```bash
 # Build
 go build -o bin/agentico ./cmd/agentico
 
-# Or use the make target (writes ./bin/agentico)
+# Oppure usa il target make (scrive ./bin/agentico)
 make build
 
-# Everyday verification
+# Verifica quotidiana
 make test-fast
 
-# Generate keybinding docs
+# Genera la documentazione dei keybinding
 go generate ./internal/tui/...
 ```
 
-Verification is split into named tiers so everyday checks stay fast while
-extended coverage remains available.
+La verifica è suddivisa in livelli con nome così i controlli quotidiani restano
+rapidi mentre la coverage estesa rimane disponibile.
 
-| Tier | Command | Current wall time | Purpose |
+| Livello | Comando | Tempo di esecuzione attuale | Scopo |
 |------|---------|-------------------|---------|
-| Fast suite | `make test-fast` | 23s, target <=30s | Everyday all-package short-mode check before handoff. |
-| E2E smoke shell | `bash test/e2e/smoke.sh` | 48.53s | Builds the binary and checks CLI flags plus embedded skill layout. |
-| Isolated integration | `go test ./test/integration/... -count=1` | 323.06s | Lifecycle, state-machine, and protocol-violation coverage. |
-| E2E Go (process-launch / API-driven) | `go test ./test/e2e/... -count=1 -race` | 41.51s | Full TUI and process-launch behavior with the race detector. |
-| TUI observability | `go test -tags tui_observe ./internal/tui -run 'Observed|Emits' -count=1` | 15.14s | Observer-backed TUI event and feature-span integration coverage. |
-| Race regression | `go test ./... -count=1 -race` | 158.82s | Extended all-package race/regression sweep. |
-| Eval | `AGENTIC_EVAL=1 go test ./test/eval/... -count=1` | gated; not measured | Live skill/guideline discovery against real LLM CLIs. |
+| Fast suite | `make test-fast` | 23s, target <=30s | Controllo quotidiano in short-mode di tutti i package prima del passaggio di consegna. |
+| E2E smoke shell | `bash test/e2e/smoke.sh` | 48.53s | Compila il binario e verifica i flag della CLI oltre al layout delle skill incorporate. |
+| Isolated integration | `go test ./test/integration/... -count=1` | 323.06s | Coverage del ciclo di vita, della macchina a stati e delle violazioni di protocollo. |
+| E2E Go (process-launch / API-driven) | `go test ./test/e2e/... -count=1 -race` | 41.51s | Comportamento completo della TUI e di process-launch con il race detector. |
+| TUI observability | `go test -tags tui_observe ./internal/tui -run 'Observed|Emits' -count=1` | 15.14s | Coverage di integrazione basata su observer per eventi TUI e feature-span. |
+| Race regression | `go test ./... -count=1 -race` | 158.82s | Sweep estesa di race/regressione su tutti i package. |
+| Eval | `AGENTIC_EVAL=1 go test ./test/eval/... -count=1` | gated; not measured | Discovery live di skill/linee guida contro CLI LLM reali. |
 
-`go vet ./...` and `go build ./...` remain required static and build checks.
-The tagged **TUI observability** tier is the explicit opt-in gate for slower
-observer-backed TUI integration coverage. The race-enabled all-package sweep is
-the **Race regression** tier, not the ordinary unit command. See
-[AGENTS.md](AGENTS.md) and
-[docs/testing-baseline.md](docs/testing-baseline.md) for timing details, and
-see AGENTS.md for the isolated-run pattern for running a second instance without
-colliding with the first.
+`go vet ./...` e `go build ./...` restano controlli statici e di build richiesti.
+Il livello **TUI observability** con tag è l'opt-in esplicito per la coverage
+di integrazione TUI basata su observer, più lenta. Lo sweep con race abilitato
+su tutti i package è il livello **Race regression**, non il comando ordinario
+per unit test. Vedi
+[AGENTS.md](AGENTS.md) e
+[docs/testing-baseline.md](docs/testing-baseline.md) per i dettagli sui tempi, e
+vedi AGENTS.md per il pattern di esecuzione isolata per eseguire una seconda
+istanza senza entrare in collisione con la prima.
 
-## Contributing
+## Contribuire
 
-Pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for the development setup, branch and commit conventions.
+Le pull request sono benvenute. Vedi [CONTRIBUTING.md](CONTRIBUTING.md) per il setup di sviluppo, le convenzioni di branch e commit.
 
-Contributions to this project require agreeing to the DoorDash Contributor License Agreement.
-See [CONTRIBUTOR_LICENSE_AGREEMENT.md](CLA.md).
+I contributi a questo progetto richiedono l'accettazione del DoorDash Contributor License Agreement.
+Vedi [CONTRIBUTOR_LICENSE_AGREEMENT.md](CLA.md).
 
-## License
+## Licenza
 
-Agentic Orchestrator is licensed under the [Apache License, Version 2.0](LICENSE.txt).
+Agentic Orchestrator è concesso in licenza secondo la [Apache License, Version 2.0](LICENSE.txt).
 
-## Notices
+## Avvisi
 
-See [NOTICE.txt](NOTICE.txt) for third-party components and attributions.
+Vedi [NOTICE.txt](NOTICE.txt) per i componenti di terze parti e le attribuzioni.

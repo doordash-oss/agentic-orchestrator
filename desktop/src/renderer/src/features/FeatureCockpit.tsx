@@ -936,6 +936,9 @@ export function FeatureCockpit({
 }: FeatureCockpitProps) {
   const [state, setState] = useState<CockpitState>({ phase: 'loading' });
   const [liveExpandHost, setLiveExpandHost] = useState<HTMLDivElement | null>(null);
+  // The Live surface has no frame of its own, so its view toggle and refresh
+  // ride the stage bar alongside the expand control.
+  const [liveControlsHost, setLiveControlsHost] = useState<HTMLDivElement | null>(null);
   const [streamStale, setStreamStale] = useState(false);
   const [refreshFailed, setRefreshFailed] = useState(false);
   const stale = streamStale || refreshFailed;
@@ -1705,7 +1708,10 @@ export function FeatureCockpit({
           <div className="cockpit__stage-bar-trailing">
             {runSwitcher}
             {showsLiveExpand ? (
-              <div className="cockpit__stage-bar-expand" ref={setLiveExpandHost} />
+              <>
+                <div className="cockpit__stage-bar-controls" ref={setLiveControlsHost} />
+                <div className="cockpit__stage-bar-expand" ref={setLiveExpandHost} />
+              </>
             ) : null}
           </div>
         ) : null}
@@ -2511,6 +2517,7 @@ export function FeatureCockpit({
                       waitReason={snapshot.waitReason}
                       shouldStream={stopAction !== undefined}
                       expandHost={liveExpandHost}
+                      controlsHost={liveControlsHost}
                       attentionRequestId={
                         attentionPreviewRequest?.attentionId === undefined ||
                         routedAttentionItem?.kind === 'gate'

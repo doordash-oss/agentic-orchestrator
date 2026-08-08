@@ -1,49 +1,9 @@
 /*
- * Precision-instrument visual tokens (approved design system).
- * Quiet mineral surfaces; the signal color is reserved for state and
- * intervention; amber is the needle, reserved for attention. Light and
- * dark are distinct token sets, not mechanical inversions.
+ * Neutral layout primitives, shared by every surface. The palette and the
+ * type stacks both live in the Bench set below; only the spacing scale, the
+ * control radius, the focus ring, and the modal scrim are defined here.
  */
-:root,
-:root[data-theme='dark'] {
-  color-scheme: dark;
-  /* Dark set: Basalt / Chalk / Zinc / Rail Dark / Ion Signal / Amber Light */
-  --color-bg: #101514; /* Basalt */
-  --color-panel: #161c1b; /* mineral card, slightly lifted over Basalt */
-  --color-hairline: #2b3532; /* Rail Dark */
-  --color-text: #e8eeec; /* Chalk */
-  --color-muted: #93a09c; /* Zinc */
-  --color-signal: #88a4ff; /* Ion Signal: state + intervention */
-  --color-accent: #f0b15a; /* Amber Light: attention */
-  --color-success: #5fbe8e;
-  --color-danger: #f08a7e;
-}
-
-:root[data-theme='light'] {
-  color-scheme: light;
-  /* Light set: Porcelain / Graphite / Slate / Rail / Cobalt / Burnished Amber */
-  --color-bg: #f3f6f5; /* Porcelain */
-  --color-panel: #ffffff; /* near-white mineral card over Porcelain */
-  --color-hairline: #c9d2cf; /* Rail */
-  --color-text: #18201f; /* Graphite */
-  --color-muted: #66716e; /* Slate */
-  --color-signal: #315cf5; /* Cobalt Signal: state + intervention */
-  --color-accent: #8f5200; /* Burnished Amber: attention */
-  --color-success: #1e7a4a;
-  --color-danger: #b0433c;
-}
-
 :root {
-  /* Display: phase labels and high-level instrument headings. */
-  --font-display:
-    'Barlow Condensed', 'Avenir Next Condensed', 'Arial Narrow', 'Helvetica Neue', system-ui,
-    sans-serif;
-  /* Body: controls and reading text. */
-  --font-body:
-    'Atkinson Hyperlegible', -apple-system, 'Segoe UI', 'Helvetica Neue', system-ui, sans-serif;
-  /* Utility: identifiers, logs, diffs, timing, telemetry. */
-  --font-mono: 'IBM Plex Mono', 'SF Mono', 'Menlo', 'Consolas', 'DejaVu Sans Mono', monospace;
-
   --space-1: 4px;
   --space-2: 8px;
   --space-3: 12px;
@@ -52,17 +12,19 @@
   --space-6: 32px;
 
   --radius: 6px;
-  --focus-ring: 2px solid var(--color-signal);
+  /* Focus rides the Bench accent — the system accent on macOS — so the ring
+   * stays visible in both appearances and matches every other selected thing. */
+  --focus-ring: 2px solid var(--accent);
   /* One scrim for every modal: dark in both themes so the workspace visibly
    * recedes behind a do-and-dismiss task. Trays never use it. */
   --color-scrim: rgb(5 7 10 / 55%);
 }
 
 /*
- * Bench token set, from the Bench mock. Coexists with the legacy tokens
- * above under different, unprefixed property names — nothing here is
- * consumed by an existing surface yet; legacy tokens and consumers stay
- * byte-identical until they migrate.
+ * Bench token set, from the Bench mock — now the app's only palette and type
+ * scale. Dark also answers to a bare `:root` so the first paint is correct
+ * before the renderer mirrors the resolved theme onto <html data-theme>; the
+ * light block outranks it on specificity.
  *
  * --material/--material-edge are the macOS vibrancy-backed values by
  * default; `[data-platform='linux']` — set on <html> from the
@@ -71,6 +33,7 @@
  * equivalents, since there is no vibrancy layer behind the window to show
  * through off macOS.
  */
+:root,
 :root[data-theme='dark'] {
   color-scheme: dark;
   --material: rgb(38 41 48 / 72%);

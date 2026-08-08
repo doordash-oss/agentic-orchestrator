@@ -277,6 +277,41 @@ describe('WorkspaceShell sidebar', () => {
     expect(await screen.findByRole('region', { name: 'Existing features' })).toBeInTheDocument();
   });
 
+  it('marks the pinned Overview row with the house glyph and leaves feature rows on status dots', async () => {
+    const feature = featureSnapshot({
+      id: FEATURE_ID,
+      name: 'Search revamp',
+      status: 'Implementing',
+      setup: { status: 'done', attempt: 1, tasks: [] },
+      actions: [],
+    });
+    const mock = installAgenticoMock({ features: [summaryOf(feature)] });
+    mock.api.getFeature.mockResolvedValue(feature);
+    render(<WorkspaceShell />);
+
+    const overviewRow = await screen.findByRole('option', { name: 'Overview' });
+    const overviewGlyph = overviewRow.querySelector('.sidebar__row-glyph');
+    expect(overviewGlyph).not.toBeNull();
+    expect(overviewGlyph).toHaveClass('sidebar__row-glyph--house');
+    // Decorative: the glyph adds nothing to the row's accessible name.
+    expect(overviewGlyph).toHaveAttribute('aria-hidden', 'true');
+    expect(overviewGlyph!.querySelector('svg')).not.toBeNull();
+
+    const featureRow = await screen.findByRole('option', { name: /Search revamp/ });
+    const featureGlyph = featureRow.querySelector('.sidebar__row-glyph');
+    expect(featureGlyph).not.toBeNull();
+    expect(featureGlyph).not.toHaveClass('sidebar__row-glyph--house');
+    expect(featureGlyph).toHaveAttribute('data-tone');
+
+    // The glyph swap survives selection, where the row inverts its ink.
+    await userEvent.click(overviewRow);
+    expect(
+      (await screen.findByRole('option', { name: 'Overview' })).querySelector(
+        '.sidebar__row-glyph--house',
+      ),
+    ).not.toBeNull();
+  });
+
   it('keeps exactly one row selected with a roving tabindex across Overview and lane rows', async () => {
     const feature = featureSnapshot({
       id: FEATURE_ID,

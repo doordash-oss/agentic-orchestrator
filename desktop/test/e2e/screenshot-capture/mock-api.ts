@@ -870,6 +870,65 @@ const REFACTOR_PASS_PARENT_SNAPSHOT: FeatureSnapshot = {
   ],
 };
 
+const REVIEW_FEEDBACK_PASS_CHILD_ID = 'c41e77b90ad35216';
+
+/**
+ * A review-feedback pass instead of a refactor pass: same custody strip, but the
+ * selected reviewer comments sit right under it, so one frame shows both the
+ * station eyebrows and the comment-type chips.
+ */
+const REVIEW_FEEDBACK_PASS_CHILD_SNAPSHOT: FeatureSnapshot = {
+  ...REFACTOR_PASS_CHILD_SNAPSHOT,
+  id: REVIEW_FEEDBACK_PASS_CHILD_ID,
+  name: 'Address review feedback',
+  slug: 'address-review-feedback',
+  description: 'Answer the reviewer comments left on pull request 107.',
+  parentKind: 'review-feedback',
+  setup: {
+    ...REFACTOR_PASS_CHILD_SNAPSHOT.setup!,
+    tasks: REFACTOR_PASS_CHILD_SNAPSHOT.setup!.tasks.map((task) => ({
+      ...task,
+      branch: 'feature/address-review-feedback',
+    })),
+  },
+  reviewFeedback: [
+    {
+      repo: 'agentic-orchestrator',
+      id: 4181,
+      type: 'review' as const,
+      path: 'internal/orchestrator/phase.go',
+      line: 214,
+      author: 'dana-reviewer',
+      body: 'The retry budget is read twice here — hoist it above the loop so both branches agree.',
+    },
+    {
+      repo: 'agentic-orchestrator',
+      id: 4182,
+      type: 'issue' as const,
+      author: 'dana-reviewer',
+      body: 'Packaged runs still write the evidence bundle under the old path on Linux.',
+    },
+    {
+      repo: 'agentic-orchestrator',
+      id: 4183,
+      type: 'review_body' as const,
+      author: 'sam-maintainer',
+      body: 'Solid pass overall. Two things to settle before merge, both noted inline.',
+    },
+  ],
+};
+
+const REVIEW_FEEDBACK_PASS_PARENT_SNAPSHOT: FeatureSnapshot = {
+  ...REFACTOR_PASS_PARENT_SNAPSHOT,
+  activeChild: {
+    ...REFACTOR_PASS_PARENT_SNAPSHOT.activeChild!,
+    id: REVIEW_FEEDBACK_PASS_CHILD_ID,
+    name: 'Address review feedback',
+    kind: 'review-feedback',
+    displayToken: `review-feedback:${REVIEW_FEEDBACK_PASS_CHILD_ID}`,
+  },
+};
+
 const RECOVERY_ITEMS = [
   {
     key: 'feature-alpha:signal-lab',
@@ -1479,6 +1538,13 @@ function makeMockApi(
           _featureId === REFACTOR_PASS_CHILD_ID
             ? REFACTOR_PASS_CHILD_SNAPSHOT
             : REFACTOR_PASS_PARENT_SNAPSHOT,
+        );
+      }
+      if (scene === 'refactor-pass-review') {
+        return Promise.resolve(
+          _featureId === REVIEW_FEEDBACK_PASS_CHILD_ID
+            ? REVIEW_FEEDBACK_PASS_CHILD_SNAPSHOT
+            : REVIEW_FEEDBACK_PASS_PARENT_SNAPSHOT,
         );
       }
       if (scene === 'bulk-preview' || scene === 'bulk-queue') {
@@ -2262,6 +2328,7 @@ function settingsScenePane(scene: string): SettingsPaneId {
   if (scene === 'settings-diagnostics') return 'diagnostics';
   if (scene === 'settings-appearance') return 'appearance';
   if (scene === 'settings-workspace-roots') return 'workspace-roots';
+  if (scene === 'settings-providers') return 'providers';
   return 'updates';
 }
 

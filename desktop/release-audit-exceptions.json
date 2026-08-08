@@ -9,13 +9,9 @@
     "MIT",
     "MPL-2.0",
     "MPL-2.0 OR Apache-2.0",
-    "OFL-1.1"
+    "Unlicense"
   ],
-  "shippedDevDependencies": [
-    "@fontsource/atkinson-hyperlegible",
-    "@fontsource/barlow-condensed",
-    "@fontsource/ibm-plex-mono"
-  ],
+  "shippedDevDependencies": [],
   "licenseExceptions": [
     {
       "source": "go",

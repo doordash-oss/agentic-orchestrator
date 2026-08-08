@@ -1,43 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import path from 'node:path';
-import fs from 'node:fs';
-
-const EVIDENCE_DIR = process.env['AGENTICO_EVIDENCE_DIR'] ?? '';
-
-function evidencePath(name: string): string {
-  if (EVIDENCE_DIR === '') {
-    throw new Error('AGENTICO_EVIDENCE_DIR must be set');
-  }
-  return path.join(EVIDENCE_DIR, 'screenshots', `${name}.png`);
-}
-
-function ensureDir(filePath: string): void {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-}
-
-async function capture(
-  page: Page,
-  scene: string,
-  theme: 'light' | 'dark',
-  width: number,
-  height: number,
-  fileName: string,
-  waitFor: string,
-  preScreenshot?: (page: Page) => Promise<void>,
-): Promise<void> {
-  await page.setViewportSize({ width, height });
-  await page.goto(`http://localhost:9871/?scene=${scene}&theme=${theme}`);
-  await page.evaluate((t) => {
-    document.documentElement.dataset['theme'] = t;
-  }, theme);
-  await expect(page.locator(waitFor)).toBeVisible({ timeout: 15_000 });
-  if (preScreenshot) {
-    await preScreenshot(page);
-  }
-  const target = evidencePath(fileName);
-  ensureDir(target);
-  await page.screenshot({ path: target, fullPage: false });
-}
+import { capture, skipWithoutEvidenceDir } from './evidence-capture';
 
 /**
  * Scrolls the palette's list so a named group starts at the top — the palette
@@ -80,6 +42,7 @@ async function expectSettingsPane(page: Page, label: string, region: string): Pr
 }
 
 test('capture all visual evidence screenshots', async ({ page }) => {
+  skipWithoutEvidenceDir();
   test.setTimeout(180_000);
 
   await capture(
@@ -628,6 +591,7 @@ test('capture all visual evidence screenshots', async ({ page }) => {
 });
 
 test('phase rail visual evidence screenshots', async ({ page }) => {
+  skipWithoutEvidenceDir();
   test.setTimeout(120_000);
 
   await capture(
@@ -786,6 +750,7 @@ test('phase rail visual evidence screenshots', async ({ page }) => {
 });
 
 test('completion workspace screenshots', async ({ page }) => {
+  skipWithoutEvidenceDir();
   await capture(
     page,
     'completion-inspect',
@@ -845,6 +810,7 @@ test('completion workspace screenshots', async ({ page }) => {
 });
 
 test('constrained completion workspace screenshot', async ({ page }) => {
+  skipWithoutEvidenceDir();
   await capture(
     page,
     'completion-constrained',

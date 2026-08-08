@@ -1,13 +1,6 @@
 import React from 'react';
 import { createRoot } from 'react-dom/client';
 
-import '@fontsource/barlow-condensed/500.css';
-import '@fontsource/barlow-condensed/600.css';
-import '@fontsource/atkinson-hyperlegible/400.css';
-import '@fontsource/atkinson-hyperlegible/700.css';
-import '@fontsource/ibm-plex-mono/400.css';
-import '@fontsource/ibm-plex-mono/500.css';
-
 import '../../../src/renderer/src/styles/tokens.css';
 import '../../../src/renderer/src/styles/app.css';
 
@@ -114,7 +107,7 @@ function ArchiveScene({ scene }: { scene: string }) {
 
 function RewindScene() {
   return (
-    <div style={{ position: 'fixed', inset: 0, background: 'var(--bg-elevation-1, #1a1a1a)' }}>
+    <div style={{ position: 'fixed', inset: 0, background: 'var(--content)' }}>
       <RewindJourney
         featureId="abcd1234ef567890"
         featureName="History and Rewind"
@@ -139,7 +132,7 @@ function ConnectionShellScene() {
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        background: 'var(--bg-elevation-1, #1a1a1a)',
+        background: 'var(--content)',
       }}
     >
       <ConnectionShell />
@@ -173,7 +166,7 @@ function SetupWizardScene() {
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        background: 'var(--bg-elevation-1, #1a1a1a)',
+        background: 'var(--content)',
       }}
     >
       <SetupWizard snapshot={SETUP_WIZARD_MODELS_STEP} onSnapshot={() => {}} />
@@ -550,6 +543,26 @@ function CockpitRedesignScene({ variant }: { variant: CockpitRedesignVariant }) 
             </div>
           ) : null}
         </details>
+        {/* The Live transcript is frameless, so its view toggle and refresh
+         * ride the stage bar exactly as the shell portals them. */}
+        <div className="cockpit__stage-bar-controls">
+          <div className="live-preview__views" role="group" aria-label="Preview view">
+            <button type="button" className="live-preview__view" aria-pressed="true">
+              Conversation
+            </button>
+            <button type="button" className="live-preview__view" aria-pressed="false">
+              Signal trace
+            </button>
+          </div>
+          <button
+            type="button"
+            className="live-preview__icon-button"
+            aria-label="Refresh current run inspection"
+            title="Refresh"
+          >
+            <span aria-hidden="true">↻</span>
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -840,36 +853,7 @@ function CockpitRedesignScene({ variant }: { variant: CockpitRedesignVariant }) 
                 ) : (
                   <>
                     {cohortStrip}
-                    <div className="cockpit__surface cockpit__surface--live">
-                      <div className="live-preview__frame">
-                        <div className="live-preview__bar">
-                          <p className="cockpit__caption">Live activity</p>
-                          <div className="live-preview__bar-controls">
-                            <div
-                              className="live-preview__views"
-                              role="group"
-                              aria-label="Preview view"
-                            >
-                              <button
-                                type="button"
-                                className="live-preview__view"
-                                aria-pressed="true"
-                              >
-                                Conversation
-                              </button>
-                              <button
-                                type="button"
-                                className="live-preview__view"
-                                aria-pressed="false"
-                              >
-                                Signal trace
-                              </button>
-                            </div>
-                          </div>
-                        </div>
-                        {readingColumn}
-                      </div>
-                    </div>
+                    <div className="cockpit__surface cockpit__surface--live">{readingColumn}</div>
                   </>
                 )}
               </main>
@@ -1185,22 +1169,27 @@ function CompletionScene({ scene }: { scene: string }): React.ReactElement {
   const openExternal = (url: string) => api.openExternal({ url });
   const revealPath = (id: string, repo: string) => api.revealPath({ featureId: id, repo });
 
+  // The app shows the publish body inside the cockpit's modal overlay — centred
+  // and scrimmed over the content pane — so the scene stages it the same way
+  // rather than parking the panel in a corner of a bare page.
   if (scene === 'completion-publish') {
     return (
-      <div style={{ height: '100vh', display: 'flex', flexDirection: 'column', padding: '24px' }}>
-        <div className="cockpit__modal" style={{ maxWidth: '720px' }}>
-          {completion.preflight !== null ? (
-            <PublishModalBody
-              featureId="feat-electron-app"
-              preflight={completion.preflight}
-              dispatchAction={dispatchAction}
-              generatePublishDescription={(id, repos) =>
-                api.generatePublishDescription({ featureId: id, repos })
-              }
-              openExternal={openExternal}
-              onDispatched={() => {}}
-            />
-          ) : null}
+      <div style={{ position: 'fixed', inset: 0, background: 'var(--content)' }}>
+        <div className="cockpit__modal-overlay">
+          <div className="cockpit__modal">
+            {completion.preflight !== null ? (
+              <PublishModalBody
+                featureId="feat-electron-app"
+                preflight={completion.preflight}
+                dispatchAction={dispatchAction}
+                generatePublishDescription={(id, repos) =>
+                  api.generatePublishDescription({ featureId: id, repos })
+                }
+                openExternal={openExternal}
+                onDispatched={() => {}}
+              />
+            ) : null}
+          </div>
         </div>
       </div>
     );
@@ -1663,7 +1652,7 @@ function CaptureApp() {
   if (scene === 'setup-wizard') {
     return <SetupWizardScene />;
   }
-  if (scene.startsWith('aftercare') || scene === 'refactor-pass') {
+  if (scene.startsWith('aftercare') || scene.startsWith('refactor-pass')) {
     return <AftercareScene />;
   }
   if (scene === 'feature-question' || scene === 'feature-question-bench') {

@@ -23,7 +23,7 @@ interface LayoutMeasurements {
   previewHeight: number;
   previewContainerHeight: number;
   previewGridTemplateRows: string;
-  frameGridRow: string;
+  columnGridRow: string;
   transcript: ScrollMeasurements | null;
   roster: ScrollMeasurements | null;
   surfaceClientHeight: number;
@@ -86,7 +86,9 @@ async function measureLayout(
       // and trio display for every run-facing view, not just the live one.
       const phaseRailElement = requireElement('.phase-rail', 'phase rail');
       const previewContainer = requireElement('.current-inspection__preview', 'preview container');
-      const preview = requireElement('.live-preview__frame', 'live preview');
+      // There is no framed panel any more: the reading column itself is the
+      // measured region, sitting directly in the content pane.
+      const preview = requireElement('.live-preview__transcript', 'live reading column');
       const transcript = document.querySelector('.conversation__scroll');
       const roster = document.querySelector('.live-preview__strip');
       const activity = document.querySelector('.current-inspection__activity');
@@ -97,7 +99,7 @@ async function measureLayout(
           ? toSection('review summary', reviewSummaryElement)
           : null;
       const sections = [
-        toSection('live frame', preview),
+        toSection('live column', preview),
         ...(activity instanceof HTMLElement ? [toSection('activity', activity)] : []),
         ...(reviewSummary === null ? [] : [reviewSummary]),
       ];
@@ -107,7 +109,7 @@ async function measureLayout(
         previewHeight: preview.getBoundingClientRect().height,
         previewContainerHeight: previewContainer.getBoundingClientRect().height,
         previewGridTemplateRows: getComputedStyle(previewContainer).gridTemplateRows,
-        frameGridRow: getComputedStyle(preview).gridRow,
+        columnGridRow: getComputedStyle(preview).gridRow,
         transcript: transcript instanceof HTMLElement ? measureScroll(transcript) : null,
         roster: roster instanceof HTMLElement ? measureScroll(roster) : null,
         surfaceClientHeight: surface.clientHeight,
@@ -126,7 +128,7 @@ async function measureLayout(
 
 function expectOrderedSections(layout: LayoutMeasurements, contained: boolean): void {
   for (const [index, section] of layout.sections.entries()) {
-    const context = `${layout.scene} at ${layout.viewportHeight}px (container=${layout.previewContainerHeight.toFixed(1)}, rows=${layout.previewGridTemplateRows}, frame-row=${layout.frameGridRow}): ${layout.sections
+    const context = `${layout.scene} at ${layout.viewportHeight}px (container=${layout.previewContainerHeight.toFixed(1)}, rows=${layout.previewGridTemplateRows}, column-row=${layout.columnGridRow}): ${layout.sections
       .map(
         ({ name, top, bottom, left, right }) =>
           `${name}=(${left.toFixed(1)},${top.toFixed(1)})-(${right.toFixed(1)},${bottom.toFixed(1)})`,
@@ -164,7 +166,7 @@ test('all collapsed live phases fit ordinary surfaces and summaries reduce previ
     const context = `${scene}: ${layouts
       .map(
         (layout) =>
-          `${layout.viewportHeight}px frame=${layout.previewHeight.toFixed(1)} container=${layout.previewContainerHeight.toFixed(1)} rows=${layout.previewGridTemplateRows} frame-row=${layout.frameGridRow}`,
+          `${layout.viewportHeight}px column=${layout.previewHeight.toFixed(1)} container=${layout.previewContainerHeight.toFixed(1)} rows=${layout.previewGridTemplateRows} column-row=${layout.columnGridRow}`,
       )
       .join(', ')}`;
     expect(layouts[2]!.previewHeight, context).toBeGreaterThan(layouts[1]!.previewHeight + 200);
@@ -188,11 +190,11 @@ test('all collapsed live phases fit ordinary surfaces and summaries reduce previ
     expect(verifying[index]!.reviewSummary).toBeNull();
   }
   expect(active[0]!.reviewSummary).toBeNull();
-  expect(active[0]!.sections.map(({ name }) => name)).toEqual(['live frame', 'activity']);
-  expect(reviewing[0]!.sections.map(({ name }) => name)).toEqual(['live frame', 'activity']);
+  expect(active[0]!.sections.map(({ name }) => name)).toEqual(['live column', 'activity']);
+  expect(reviewing[0]!.sections.map(({ name }) => name)).toEqual(['live column', 'activity']);
   // While verifying, the activity line is suppressed too — the harness
   // contract's per-command log is the whole story.
-  expect(verifying[0]!.sections.map(({ name }) => name)).toEqual(['live frame']);
+  expect(verifying[0]!.sections.map(({ name }) => name)).toEqual(['live column']);
 });
 
 test('surface owns scrolling only below the complete-panel floor', async ({ page }) => {

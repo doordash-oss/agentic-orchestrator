@@ -6,7 +6,11 @@
 // requiring disk-image facilities merely to launch the package in a sandbox.
 //
 //   1. Desktop app payload: app.asar containing the built main/preload/
-//      renderer entry points and the offline @fontsource font assets.
+//      renderer entry points and carrying no bundled text webfont — the
+//      renderer draws text with system faces only (--bench-font-* in
+//      tokens.css), so any shipped .woff2/.woff/.ttf/.otf/.eot is a
+//      regression back to bundled webfonts. The only permitted payload is
+//      monaco-editor's codicon glyph font (see findDisallowedFontAssets).
 //   2. Bundled server: resources/bin/agentico exists, is executable, and on
 //      macOS is a true universal (x86_64 + arm64) binary.
 //   3. Identity: resources/build-identity.json parses, satisfies the closed
@@ -46,7 +50,7 @@ import {
   validateBuildIdentity,
 } from './lib/identity.mjs';
 import { auditFuseWire } from './lib/fuse-policy.mjs';
-import { unpackedExecutablePath } from './lib/package-layout.mjs';
+import { findDisallowedFontAssets, unpackedExecutablePath } from './lib/package-layout.mjs';
 
 const desktopDir = dirname(dirname(fileURLToPath(import.meta.url)));
 const distDir = join(desktopDir, 'dist');
@@ -92,11 +96,14 @@ function verifyResources(resourcesDir, { expectUniversalBinary }) {
       fail(`app.asar is missing ${required}`);
     }
   }
-  const fonts = entries.filter(
-    (entry) => entry.startsWith('/out/renderer/') && entry.endsWith('.woff2'),
-  );
-  if (fonts.length === 0) {
-    fail('app.asar carries no offline .woff2 font assets under out/renderer/');
+  const fonts = findDisallowedFontAssets(entries);
+  if (fonts.length > 0) {
+    fail(
+      `app.asar ships ${fonts.length} bundled font asset(s); the renderer must ` +
+        'use system text faces only:\n  ' +
+        fonts.slice(0, 10).join('\n  ') +
+        (fonts.length > 10 ? `\n  ...and ${fonts.length - 10} more` : ''),
+    );
   }
 
   // 2. Identity file: present, schema-complete, and for this host target.

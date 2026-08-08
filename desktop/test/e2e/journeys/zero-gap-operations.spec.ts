@@ -92,7 +92,9 @@ test('zero-gap operations: dismissible watch, live inspection, bounded files, an
 
     const inspection = cockpit.getByRole('region', { name: 'Current run inspection' });
     await expect(inspection).toBeVisible({ timeout: 60_000 });
-    await inspection.getByRole('button', { name: 'Refresh current run inspection' }).click();
+    // Refresh moved to the stage bar's trailing side when the transcript shed
+    // its frame, so it is cockpit chrome now, not a control inside the region.
+    await cockpit.getByRole('button', { name: 'Refresh current run inspection' }).click();
     // The fixture can finish between the Start response and this assertion;
     // the current-run contract remains inspectable in either live or freshly
     // completed state, while Context proves the authoritative preview loaded.

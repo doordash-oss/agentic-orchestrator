@@ -43,6 +43,7 @@ import { isEditingShortcutTarget } from '../components/CommandPalette';
 import { CreateFeatureForm } from './CreateFeatureForm';
 import { FeatureCockpit } from './FeatureCockpit';
 import { PipRail } from '../components/Pip';
+import { HouseIcon } from '../components/icons';
 import { updateNoticePending } from '../components/UpdatePopover';
 import { emptyAttentionDrafts, type AttentionDrafts } from './AttentionInbox';
 import { Toolbar } from './Toolbar';
@@ -626,6 +627,7 @@ export function WorkspaceShell({
           <SidebarRow
             id="sidebar-overview"
             label="Overview"
+            glyph="house"
             selected={selection.kind === 'overview'}
             onSelect={selectOverview}
           />
@@ -825,6 +827,7 @@ function SidebarRow({
   label,
   subline,
   glyphTone,
+  glyph = 'dot',
   pip,
   selected,
   onSelect,
@@ -833,6 +836,12 @@ function SidebarRow({
   label: string;
   subline?: string;
   glyphTone?: 'attention' | 'progress' | 'ok' | 'quiet';
+  /**
+   * Feature rows show a status dot; the pinned Overview row shows the house
+   * glyph instead, since it has no status to report. Decorative either way —
+   * the row's accessible name is the label alone.
+   */
+  glyph?: 'dot' | 'house';
   pip?: {
     stageCount: number;
     activeIndex: number;
@@ -852,7 +861,13 @@ function SidebarRow({
       data-selected={selected}
       onClick={onSelect}
     >
-      <span className="sidebar__row-glyph" data-tone={glyphTone ?? 'quiet'} aria-hidden="true" />
+      {glyph === 'house' ? (
+        <span className="sidebar__row-glyph sidebar__row-glyph--house" aria-hidden="true">
+          <HouseIcon />
+        </span>
+      ) : (
+        <span className="sidebar__row-glyph" data-tone={glyphTone ?? 'quiet'} aria-hidden="true" />
+      )}
       <span className="sidebar__row-body">
         <span className="sidebar__row-name">{label}</span>
         {subline !== undefined ? <span className="sidebar__row-subline">{subline}</span> : null}

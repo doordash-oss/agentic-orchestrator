@@ -3,9 +3,10 @@ import path from 'node:path';
 import fs from 'node:fs';
 
 /**
- * Shared plumbing for the `*-evidence.spec.ts` captures. These specs write into the
- * orchestration harness's evidence directory, so they are no-ops on a bare local run —
- * the skip guard lives here so every evidence spec inherits it.
+ * Shared plumbing for every capture spec. These specs write into the orchestration
+ * harness's evidence directory, so they are no-ops on a bare local run — the skip
+ * guard lives here so every capture spec inherits the same one rather than
+ * reinventing it.
  */
 
 export const EVIDENCE_DIR = process.env['AGENTICO_EVIDENCE_DIR'] ?? '';

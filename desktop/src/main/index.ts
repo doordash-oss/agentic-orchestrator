@@ -617,9 +617,9 @@ if (!hasSingleInstanceLock) {
     };
 
     // macOS-only dynamic accent: the renderer mirrors this onto a root
-    // custom property, but no legacy surface reads it yet. Off macOS, and
-    // on any read failure, this never publishes and the static
-    // per-appearance blue tokens hold.
+    // custom property the Bench surfaces read. Off macOS, and on any read
+    // failure, this never publishes and the static per-appearance blue
+    // tokens hold.
     const accent = new AccentController(
       process.platform,
       systemPreferences as unknown as AccentColorSource,

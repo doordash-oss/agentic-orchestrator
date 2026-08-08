@@ -35,6 +35,20 @@ export function MaximizeIcon(props: SVGProps<SVGSVGElement>) {
   );
 }
 
+/**
+ * The pinned Overview row's leading mark, shaped after SF Symbols' `house`.
+ * Overview is the one row that is a place rather than a feature, so it carries
+ * a glyph where feature rows carry a status dot.
+ */
+export function HouseIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Icon {...props}>
+      <path d="M3 10.5 12 4l9 6.5" />
+      <path d="M5.5 12.5V20h13v-7.5" />
+    </Icon>
+  );
+}
+
 export function MinimizeIcon(props: SVGProps<SVGSVGElement>) {
   return (
     <Icon {...props}>

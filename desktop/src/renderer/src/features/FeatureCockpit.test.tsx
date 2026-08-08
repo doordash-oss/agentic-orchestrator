@@ -249,7 +249,32 @@ describe('FeatureCockpit snapshot rendering', () => {
     expect(mock.api.preflightCompletion).not.toHaveBeenCalled();
   });
 
-  it('relocates the full-screen expand icon to the stage-bar row, not the Live surface bar', async () => {
+  it('renders the Live transcript with no framed panel and its controls in the stage bar', async () => {
+    const mock = installAgenticoMock({
+      feature: featureSnapshot({
+        status: 'Running',
+        actions: [{ id: 'stop', enabled: true, disabledReasons: [] }],
+      }),
+    });
+    renderCockpit(mock);
+
+    await screen.findByRole('region', { name: 'Feature Search revamp' });
+    await screen.findByRole('region', { name: 'Current run inspection' });
+
+    // No frame between the content pane and the transcript: the reading column
+    // is a direct child of the preview container, with no bar or caption above.
+    expect(document.querySelector('.live-preview')?.parentElement).toHaveClass(
+      'current-inspection__preview',
+    );
+    expect(screen.queryByText('Live activity')).not.toBeInTheDocument();
+
+    const trailing = document.querySelector('.cockpit__stage-bar-trailing');
+    expect(trailing).not.toBeNull();
+    expect(trailing!.querySelector('[aria-label="Preview view"]')).not.toBeNull();
+    expect(trailing!.querySelector('[aria-label="Refresh current run inspection"]')).not.toBeNull();
+  });
+
+  it('relocates the full-screen expand icon to the stage-bar row, not an inline surface bar', async () => {
     const mock = installAgenticoMock({
       feature: featureSnapshot({
         status: 'Running',
@@ -274,7 +299,7 @@ describe('FeatureCockpit snapshot rendering', () => {
       name: 'Expand live preview to full screen',
     });
     expect(expandButton.closest('.cockpit__stage-bar-trailing')).not.toBeNull();
-    expect(expandButton.closest('.live-preview__bar')).toBeNull();
+    expect(expandButton.closest('.live-preview__bar-controls')).toBeNull();
 
     await user.click(expandButton);
     expect(await screen.findByRole('dialog', { name: 'Live agent preview' })).toBeVisible();

@@ -99,10 +99,17 @@ export interface CurrentRunInspectionProps {
   mode?: 'live' | 'files';
   /**
    * Host node for the restyled full-screen expand icon, supplied by the
-   * stage-bar row's trailing side. Falls back to rendering inline in the
-   * Live surface's own bar when absent (record presentation, tests).
+   * stage-bar row's trailing side. Falls back to rendering inline above the
+   * transcript when absent (record presentation, tests).
    */
   expandHost?: HTMLElement | null;
+  /**
+   * Host node for the view toggle and refresh controls, also supplied by the
+   * stage-bar row. The transcript itself is frameless — it reads directly in
+   * the content pane — so these controls live in the chrome around it and only
+   * fall back to an inline row when no host is given.
+   */
+  controlsHost?: HTMLElement | null;
 }
 
 /** This run's cumulative totals, surfaced to the inspector sidebar and rail. */
@@ -417,6 +424,7 @@ export function CurrentRunInspection({
   presentation = 'regular',
   mode = 'live',
   expandHost = null,
+  controlsHost = null,
 }: CurrentRunInspectionProps): React.ReactElement {
   const [preview, setPreview] = useState<LivePreviewView | null>(null);
   const [artifacts, setArtifacts] = useState<RunArtifactsListResult['artifacts']>([]);
@@ -698,30 +706,35 @@ export function CurrentRunInspection({
     </button>
   );
 
-  const livePreviewFrame = (
-    <div className="live-preview__frame">
-      <div className="live-preview__bar">
-        <p className="cockpit__caption">Live activity</p>
+  // View toggle and refresh, portalled into the stage bar when it offers a
+  // host. The transcript below carries no frame, bar, or caption of its own.
+  const livePreviewControls = (
+    <>
+      <ViewToggle view={view} onChange={setView} showFiles={presentation === 'record'} />
+      <button
+        type="button"
+        className="live-preview__icon-button"
+        aria-label="Refresh current run inspection"
+        title="Refresh"
+        onClick={() => {
+          void refresh();
+          live.refresh();
+        }}
+      >
+        <span aria-hidden="true">↻</span>
+      </button>
+    </>
+  );
+
+  const liveTranscript = (
+    <>
+      {controlsHost === null ? (
         <div className="live-preview__bar-controls">
-          <ViewToggle view={view} onChange={setView} showFiles={presentation === 'record'} />
-          <button
-            type="button"
-            className="live-preview__icon-button"
-            aria-label="Refresh current run inspection"
-            title="Refresh"
-            onClick={() => {
-              void refresh();
-              live.refresh();
-            }}
-          >
-            <span aria-hidden="true">↻</span>
-          </button>
+          {livePreviewControls}
           {expandHost === null ? expandButton : null}
         </div>
-      </div>
-      {initialLoading ? (
-        <p className="setup-step__empty">Loading current run inspection…</p>
-      ) : view === 'files' ? (
+      ) : null}
+      {view === 'files' ? (
         filesSurface
       ) : (
         <TranscriptStage
@@ -734,7 +747,7 @@ export function CurrentRunInspection({
           verificationTicks={verificationTicks}
         />
       )}
-    </div>
+    </>
   );
 
   return (
@@ -755,8 +768,8 @@ export function CurrentRunInspection({
         <p className="setup-step__empty">Loading current run inspection…</p>
       ) : (
         <div className="current-inspection__preview">
-          {livePreviewFrame}
-          {!initialLoading && preview !== null && !verifying ? (
+          {liveTranscript}
+          {preview !== null && !verifying ? (
             <p className="current-inspection__activity">{preview.activity}</p>
           ) : null}
           {attentionFooter !== undefined && !fullscreen ? (
@@ -795,6 +808,7 @@ export function CurrentRunInspection({
       ) : null}
 
       {content !== null ? <FileOverlay content={content} onClose={() => setContent(null)} /> : null}
+      {controlsHost !== null ? createPortal(livePreviewControls, controlsHost) : null}
       {expandHost !== null ? createPortal(expandButton, expandHost) : null}
     </section>
   );

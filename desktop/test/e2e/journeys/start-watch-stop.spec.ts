@@ -108,9 +108,14 @@ test('packaged real-server start, semantic watch, history, and authoritative sto
     await expect(timeline.getByText(/Backfill ready|Live semantic update/).first()).toBeVisible({
       timeout: 60_000,
     });
-    await expect(cockpit.getByRole('region', { name: 'Current run inspection' })).toContainText(
-      /Live activity|Receiving live output/,
-    );
+    // The transcript lost its framed panel and with it the "Live activity"
+    // caption bar; the activity line in the content pane is what reports live
+    // output now, so that is what the region must carry.
+    const activity = cockpit
+      .getByRole('region', { name: 'Current run inspection' })
+      .locator('.current-inspection__activity');
+    await expect(activity).toBeVisible({ timeout: 60_000 });
+    await expect(activity).not.toBeEmpty();
     const backfill = await handle.page.evaluate(
       (sessionId) => window.agentico.getSessionTranscript({ sessionId, limit: 500 }),
       session!.id,

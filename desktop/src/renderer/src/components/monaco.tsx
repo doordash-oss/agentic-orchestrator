@@ -81,7 +81,9 @@ export function MonacoBuffer({
         minimap: { enabled: false },
         automaticLayout: true,
         wordWrap: 'on',
-        fontFamily: 'IBM Plex Mono, monospace',
+        // Monaco takes a plain font list, not a custom property, so the Bench
+        // mono stack is spelled out here to match --bench-font-mono.
+        fontFamily: 'ui-monospace, SF Mono, Menlo, monospace',
         fontSize: 14,
         scrollBeyondLastLine: false,
         readOnly: readOnlyRef.current,

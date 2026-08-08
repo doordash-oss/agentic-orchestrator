@@ -418,7 +418,19 @@ function CockpitActionBar({
           aria-pressed={inspectorOpen}
           onClick={onToggleInspector}
         >
-          <span aria-hidden="true">▤</span>
+          <svg
+            aria-hidden="true"
+            width="18"
+            height="16"
+            viewBox="0 0 18 16"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.5"
+            strokeLinecap="round"
+          >
+            <rect x="1.75" y="2.75" width="14.5" height="10.5" rx="2.75" />
+            <line x1="11.25" y1="3.25" x2="11.25" y2="12.75" />
+          </svg>
         </button>
       );
       return inspectorToggleHost != null ? createPortal(toggle, inspectorToggleHost) : toggle;

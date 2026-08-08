@@ -391,8 +391,12 @@ body {
   min-height: 46px;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  grid-template-rows: auto auto;
+  /* Only rows that carry a disabled reason get a second line (it places itself
+     there); a single-line row centres in the box instead of top-aligning above
+     dead space, so enabled and disabled entries keep one cadence. */
+  grid-template-rows: auto;
   align-items: center;
+  align-content: center;
   gap: var(--space-2);
   border: 1px solid transparent;
   border-radius: var(--radius);

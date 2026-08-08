@@ -40,6 +40,36 @@ async function capture(
 }
 
 /**
+ * Scrolls the palette's list so a named group starts at the top — the palette
+ * holds more commands than 900px shows, and each capture is about a specific
+ * group.
+ */
+async function scrollPaletteGroupToTop(page: Page, group: string): Promise<void> {
+  await expect(page.locator(`.command-palette__group[aria-label="${group}"]`)).toBeVisible();
+  await page.evaluate((name) => {
+    const list = document.querySelector('.command-palette__list');
+    const section = document.querySelector(`.command-palette__group[aria-label="${name}"]`);
+    if (list instanceof HTMLElement && section instanceof HTMLElement) {
+      list.scrollTop = section.offsetTop - list.offsetTop;
+    }
+  }, group);
+}
+
+/**
+ * Scrolls a group to the top and points at one of its entries, so the frame
+ * shows the palette's selection affordance where a person put it rather than
+ * wherever the list happened to open.
+ */
+async function scrollPaletteGroupAndPointAt(
+  page: Page,
+  group: string,
+  entry: RegExp,
+): Promise<void> {
+  await scrollPaletteGroupToTop(page, group);
+  await page.getByRole('option', { name: entry }).hover();
+}
+
+/**
  * A settings scene is already showing exactly one pane — the window's own
  * source-list selection is what puts it there — so all a capture has to
  * confirm is that the expected pane is the selected row and the rendered one.
@@ -184,6 +214,33 @@ test('capture all visual evidence screenshots', async ({ page }) => {
     1117,
     'current-feature-command-palette-showing-enabled-actions-and-authoritative-disabl-1728x1117',
     '.command-palette',
+  );
+
+  // The two command-palette captures: the fifteen-command Feature group over a
+  // selected feature, and the same group disabled on Overview beside the global
+  // entries. The palette list scrolls at this size, so each capture brings its
+  // subject group to the top of the list first — the same scroll a person does
+  // with the arrow keys.
+  await capture(
+    page,
+    'command-palette-feature',
+    'dark',
+    1440,
+    900,
+    'command-palette-with-a-feature-selected-full-fifteen-command-feature-group-with-1440x900',
+    '.command-palette',
+    (target) => scrollPaletteGroupAndPointAt(target, 'Feature', /^Restart/),
+  );
+
+  await capture(
+    page,
+    'command-palette-overview',
+    'light',
+    1440,
+    900,
+    'command-palette-with-overview-selected-feature-group-disabled-with-the-no-active-1440x900',
+    '.command-palette',
+    (target) => scrollPaletteGroupAndPointAt(target, 'File', /^New Feature/),
   );
 
   await capture(

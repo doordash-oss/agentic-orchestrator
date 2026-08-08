@@ -497,6 +497,67 @@ const OVERVIEW_LANE_FEATURES: FeatureSnapshot[] = [
   ),
 ];
 
+/**
+ * The palette-evidence catalogue: a mid-run feature whose authoritative action
+ * catalogue enables some verbs, disables others with real reasons, and never
+ * offers a few at all — so the Feature group photographs as the mixed state a
+ * person actually sees, not a uniformly enabled list.
+ */
+const COMMAND_PALETTE_FEATURE_SNAPSHOT: FeatureSnapshot = {
+  ...FEATURE_SNAPSHOT,
+  actions: [
+    {
+      id: 'start',
+      enabled: false,
+      disabledReasons: [{ code: 'already_running', message: 'The feature is already running.' }],
+    },
+    { id: 'pause-stop', enabled: true, disabledReasons: [] },
+    { id: 'rewind', enabled: true, disabledReasons: [] },
+    { id: 'restart', enabled: true, disabledReasons: [] },
+    {
+      id: 'resume',
+      enabled: false,
+      disabledReasons: [{ code: 'not_paused', message: 'The run is not paused at a gate.' }],
+    },
+    {
+      id: 'retry',
+      enabled: false,
+      disabledReasons: [{ code: 'no_failure', message: 'Nothing has failed to retry.' }],
+    },
+    {
+      id: 'publish',
+      enabled: false,
+      disabledReasons: [{ code: 'run_active', message: 'Review has not finished yet.' }],
+    },
+    {
+      id: 'merge',
+      enabled: false,
+      disabledReasons: [{ code: 'not_published', message: 'Publish the feature first.' }],
+    },
+    {
+      id: 'mark-done',
+      enabled: false,
+      disabledReasons: [{ code: 'run_active', message: 'The run is still in flight.' }],
+    },
+    {
+      id: 'cleanup',
+      enabled: false,
+      disabledReasons: [{ code: 'run_active', message: 'The run is still in flight.' }],
+    },
+    {
+      id: 'refactor',
+      enabled: false,
+      disabledReasons: [{ code: 'run_active', message: 'Wait for the run to come to rest.' }],
+    },
+    {
+      id: 'review-feedback',
+      enabled: false,
+      disabledReasons: [{ code: 'no_pull_request', message: 'No pull request is open yet.' }],
+    },
+    { id: 'delete', enabled: true, disabledReasons: [] },
+  ],
+};
+
 const OVERVIEW_LANE_SUMMARY: FeatureSummaryView[] = OVERVIEW_LANE_FEATURES.map((feature) => ({
   id: feature.id,
   name: feature.name,
@@ -1295,6 +1356,7 @@ function makeMockApi(
       activeFeatureId:
         scene === 'overview-lanes' ||
         scene === 'overview-empty' ||
+        scene === 'command-palette-overview' ||
         // The update popover is evidenced over Overview; the attention popover
         // is evidenced over a real feature cockpit, so it keeps the default.
         scene === 'update-popover' ||
@@ -1347,6 +1409,7 @@ function makeMockApi(
       Promise.resolve(
         scene === 'overview-lanes' ||
           scene === 'update-popover' ||
+          scene === 'command-palette-overview' ||
           scene.startsWith('creation-sheet')
           ? OVERVIEW_LANE_SUMMARY
           : scene === 'overview-empty'
@@ -1354,9 +1417,13 @@ function makeMockApi(
             : FEATURE_SUMMARY,
       ),
     getFeature: (_featureId: string) => {
+      if (scene === 'command-palette-feature') {
+        return Promise.resolve(COMMAND_PALETTE_FEATURE_SNAPSHOT);
+      }
       if (
         scene === 'overview-lanes' ||
         scene === 'update-popover' ||
+        scene === 'command-palette-overview' ||
         scene.startsWith('creation-sheet')
       ) {
         const snapshot = OVERVIEW_LANE_SNAPSHOTS[_featureId];
@@ -1942,6 +2009,7 @@ function makeMockApi(
           currentBytes: 0,
         },
       }),
+    publishUiState: () => Promise.resolve({ accepted: true }),
     preflightCompletion: () => {
       const isPublishScene = scene === 'completion-publish';
       const isDeleteScene = scene === 'completion-delete';

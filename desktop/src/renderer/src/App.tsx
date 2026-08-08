@@ -1,3 +1,4 @@
+import { disabledMainWindowUiState } from '../../shared/ipc';
 import type { AppRouteEvent, AttentionItem, RoutedRequest, UpdateState } from '../../shared/ipc';
 import { ConnectionShell } from './components/ConnectionShell';
 import { AmaPanel } from './components/AmaPanel';
@@ -55,6 +56,16 @@ export default function App() {
   }, []);
 
   useEffect(() => window.agentico.onRouteRequest(requestRoute), [requestRoute]);
+
+  // While the runtime is down the shell — the native menu bar's only source of
+  // selection and enablement — is not mounted at all, so readiness is pushed
+  // from here: the menu goes dark rather than holding whatever it last knew.
+  useEffect(() => {
+    if (runtimeReady) return;
+    void window.agentico.publishUiState(disabledMainWindowUiState()).catch(() => {
+      // A menu that stays stale for a moment is never worth surfacing.
+    });
+  }, [runtimeReady]);
 
   const refreshUpdates = useCallback(async () => {
     try {

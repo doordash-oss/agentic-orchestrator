@@ -7,6 +7,7 @@ import { featureSnapshot, featureConfigSnapshot, installAgenticoMock } from '../
 import { dispatchMediaChange, matchMediaState } from '../test/setup';
 import { emptyAttentionDrafts } from './AttentionInbox';
 import { FeatureCockpit } from './FeatureCockpit';
+import { runFeatureCommand, toggleActiveInspector } from './featureCommands';
 
 // The Review doc surface instantiates Monaco, which needs no real editor in
 // jsdom; the stub keeps the segmented-control tests light.
@@ -2283,5 +2284,160 @@ describe('FeatureCockpit run switcher popup', () => {
       await within(menu).findByText(/Could not load run history — history unavailable/),
     ).toBeVisible();
     expect(within(menu).getByRole('menuitem', { name: 'Plan · current' })).toBeVisible();
+  });
+});
+
+/**
+ * The funnel's other half: whatever invoked a feature command — the ⌘K
+ * palette or the native Feature menu — it lands on the cockpit's own flow.
+ * These drive the registered executor directly, which is exactly what the
+ * palette entry and the routed menu click do.
+ */
+describe('FeatureCockpit feature-command funnel', () => {
+  /** Mounts the cockpit — and with it the funnel registration — and settles. */
+  async function mounted(mock: ReturnType<typeof installAgenticoMock>) {
+    renderCockpit(mock);
+    await screen.findByRole('region', { name: 'Feature Search revamp' });
+    return mock;
+  }
+
+  function withFeature(snapshot: FeatureSnapshot) {
+    return installAgenticoMock({ feature: snapshot });
+  }
+
+  it('presents the cockpit confirmation for Stop rather than dispatching straight away', async () => {
+    const mock = installAgenticoMock({
+      feature: featureSnapshot({
+        status: 'Implementing',
+        actions: [{ id: 'pause-stop', enabled: true, disabledReasons: [] }],
+      }),
+    });
+    mock.api.listSessions.mockResolvedValue([]);
+    await mounted(mock);
+
+    await act(async () => {
+      expect(runFeatureCommand('feature.pause-stop', { featureId: FEATURE_ID })).toBe('executed');
+    });
+
+    expect(await screen.findByRole('dialog', { name: /stop/i })).toBeInTheDocument();
+    expect(mock.api.dispatchFeatureAction).not.toHaveBeenCalled();
+  });
+
+  it('presents the cockpit confirmation for Delete rather than deleting straight away', async () => {
+    const mock = await mounted(
+      withFeature(
+        featureSnapshot({
+          status: 'CodeReady',
+          actions: [{ id: 'delete', enabled: true, disabledReasons: [] }],
+        }),
+      ),
+    );
+
+    await act(async () => {
+      runFeatureCommand('feature.delete', { featureId: FEATURE_ID });
+    });
+
+    expect(await screen.findByRole('dialog', { name: /delete/i })).toBeInTheDocument();
+    expect(mock.api.deleteFeatureCascade).not.toHaveBeenCalled();
+  });
+
+  it('opens the completion preflight modal for Publish', async () => {
+    const mock = installAgenticoMock({
+      feature: featureSnapshot({
+        status: 'CodeReady',
+        actions: [{ id: 'publish', enabled: true, disabledReasons: [] }],
+      }),
+    });
+    mock.api.preflightCompletion.mockResolvedValue({
+      featureId: FEATURE_ID,
+      sourceRevision: 'rev-complete',
+      canMarkDone: true,
+      repos: [{ repo: 'repo-a', publishable: true, touched: true, status: 'eligible' }],
+    });
+    await mounted(mock);
+
+    await act(async () => {
+      runFeatureCommand('feature.publish', { featureId: FEATURE_ID });
+    });
+
+    expect(
+      await screen.findByRole('dialog', { name: 'Publish reviewed changes' }),
+    ).toBeInTheDocument();
+    expect(mock.api.preflightCompletion).toHaveBeenCalledWith({ featureId: FEATURE_ID });
+  });
+
+  it('opens the configuration editor for Configuration, with no server action behind it', async () => {
+    await mounted(withFeature(featureSnapshot({ actions: [] })));
+
+    await act(async () => {
+      expect(runFeatureCommand('feature.configuration', { featureId: FEATURE_ID })).toBe(
+        'executed',
+      );
+    });
+
+    expect(
+      await screen.findByRole('dialog', { name: 'Feature configuration' }),
+    ).toBeInTheDocument();
+  });
+
+  it('dispatches Start immediately, exactly as the cockpit button does', async () => {
+    const mock = await mounted(
+      withFeature(
+        featureSnapshot({
+          status: 'Created',
+          setup: { status: 'done', attempt: 1, tasks: [] },
+          actions: [{ id: 'start', enabled: true, disabledReasons: [] }],
+        }),
+      ),
+    );
+
+    await act(async () => {
+      runFeatureCommand('feature.start', { featureId: FEATURE_ID });
+    });
+
+    await waitFor(() =>
+      expect(mock.api.dispatchFeatureAction).toHaveBeenCalledWith({
+        featureId: FEATURE_ID,
+        action: 'start',
+      }),
+    );
+  });
+
+  it('launches the rebase pass for Rebase, with no modal in between', async () => {
+    const mock = await mounted(
+      withFeature(
+        featureSnapshot({
+          status: 'Published',
+          actions: [{ id: 'rebase', enabled: true, disabledReasons: [] }],
+        }),
+      ),
+    );
+    mock.api.launchRebaseChild.mockResolvedValue({ childId: 'child1234abcd5678' });
+
+    await act(async () => {
+      runFeatureCommand('feature.rebase', { featureId: FEATURE_ID });
+    });
+
+    await waitFor(() =>
+      expect(mock.api.launchRebaseChild).toHaveBeenCalledWith({ featureId: FEATURE_ID }),
+    );
+  });
+
+  it('flips the inspector from the View menu route', async () => {
+    await mounted(withFeature(featureSnapshot()));
+
+    await act(async () => {
+      expect(toggleActiveInspector()).toBe(true);
+    });
+    expect(await screen.findByRole('button', { name: 'Toggle inspector' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+  });
+
+  it('stops being a funnel target once it unmounts', async () => {
+    await mounted(withFeature(featureSnapshot()));
+    cleanup();
+    expect(runFeatureCommand('feature.configuration', { featureId: FEATURE_ID })).toBe('no-target');
   });
 });

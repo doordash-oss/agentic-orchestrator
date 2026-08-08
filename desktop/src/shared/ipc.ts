@@ -96,6 +96,7 @@ export const IPC_CHANNELS = {
   publishDescription: 'agentico:completion:publish-description',
   openExternal: 'agentico:open:external',
   revealPath: 'agentico:open:reveal',
+  uiStatePublish: 'agentico:ui-state:publish',
 } as const;
 
 export type IpcChannel = (typeof IPC_CHANNELS)[keyof typeof IPC_CHANNELS];
@@ -551,10 +552,26 @@ export const SettingsSectionSchema = z.enum(['updates', 'diagnostics']);
 export type SettingsSection = z.output<typeof SettingsSectionSchema>;
 
 export const AppRouteEventSchema = z.strictObject({
-  target: z.enum(['palette', 'help', 'home', 'settings', 'attention', 'ama', 'bulk']),
+  target: z.enum([
+    'palette',
+    'help',
+    'home',
+    'settings',
+    'attention',
+    'ama',
+    'bulk',
+    'new-feature',
+    'toggle-sidebar',
+    'toggle-inspector',
+    // Carries a feature command's identity — never a feature id, so a menu
+    // click that raced a selection change cannot act on a stale target.
+    'feature-command',
+  ]),
   attentionId: z.string().min(1).max(500).optional(),
   featureId: z.string().min(1).max(200).optional(),
   settingsSection: SettingsSectionSchema.optional(),
+  /** The `feature.*` command id a 'feature-command' route asks the renderer to run. */
+  command: z.string().min(1).max(64).optional(),
 });
 
 export type AppRouteEvent = z.output<typeof AppRouteEventSchema>;
@@ -2218,6 +2235,69 @@ export function defaultShellPrefs(): ShellPrefs {
   return { activeFeatureId: null, sidebarCollapsed: false };
 }
 
+// --- The main window's coarse UI-state push ---------------------------------
+/**
+ * A compact summary of everything the native menu bar needs from the main
+ * window's renderer and cannot know on its own: what is selected, which
+ * per-feature commands the live action catalogue enables, whether the runtime
+ * is ready, and the sidebar and inspector states behind the View menu's
+ * Show/Hide labels.
+ *
+ * Pushed on change only — selection, enablement, a toggle, a readiness
+ * transition — never per poll or per frame. It is deliberately identity- and
+ * presentation-only: no feature names, statuses, or other server-domain data
+ * cross this channel.
+ */
+export const MainWindowUiStateSchema = z.strictObject({
+  activeFeatureId: FeatureIdSchema.nullable(),
+  runtimeReady: z.boolean(),
+  sidebarCollapsed: z.boolean(),
+  inspectorOpen: z.boolean(),
+  /** False with Overview selected: there is no inspector to show or hide. */
+  inspectorAvailable: z.boolean(),
+  /** `feature.*` command id → enabled, from the same catalogue the palette reads. */
+  featureCommands: z.record(z.string().min(1).max(64), z.boolean()),
+});
+
+export type MainWindowUiState = z.output<typeof MainWindowUiStateSchema>;
+
+/**
+ * Whether two summaries describe the same menu. Both sides use it: the
+ * renderer to drop an unchanged push, the native-command controller to drop an
+ * unchanged rebuild — so nothing churns per poll or per frame.
+ */
+export function sameMainWindowUiState(a: MainWindowUiState, b: MainWindowUiState): boolean {
+  if (
+    a.activeFeatureId !== b.activeFeatureId ||
+    a.runtimeReady !== b.runtimeReady ||
+    a.sidebarCollapsed !== b.sidebarCollapsed ||
+    a.inspectorOpen !== b.inspectorOpen ||
+    a.inspectorAvailable !== b.inspectorAvailable
+  ) {
+    return false;
+  }
+  const keys = new Set([...Object.keys(a.featureCommands), ...Object.keys(b.featureCommands)]);
+  for (const key of keys) {
+    if (a.featureCommands[key] !== b.featureCommands[key]) return false;
+  }
+  return true;
+}
+
+/**
+ * The everything-disabled default the native-command controller holds until
+ * the first push, and returns to whenever the main window closes.
+ */
+export function disabledMainWindowUiState(): MainWindowUiState {
+  return {
+    activeFeatureId: null,
+    runtimeReady: false,
+    sidebarCollapsed: false,
+    inspectorOpen: false,
+    inspectorAvailable: false,
+    featureCommands: {},
+  };
+}
+
 /**
  * The Settings window's own pane order — today's eight sections, unchanged.
  * The ids are stable storage values (`settingsWindow.pane`), so renaming a
@@ -2855,6 +2935,10 @@ export const ipcContracts: Record<IpcChannel, IpcContract> = {
     request: z.tuple([RevealPathRequestSchema]),
     response: z.strictObject({ ok: z.boolean() }),
   },
+  [IPC_CHANNELS.uiStatePublish]: {
+    request: z.tuple([MainWindowUiStateSchema]),
+    response: z.strictObject({ accepted: z.boolean() }),
+  },
   [IPC_CHANNELS.featuresRebase]: {
     request: z.tuple([LaunchRebaseChildRequestSchema]),
     response: LaunchRebaseChildResultSchema,
@@ -3017,6 +3101,11 @@ export interface AgenticoApi {
   generatePublishDescription(request: PublishDescriptionRequest): Promise<PublishDescriptionResult>;
   openExternal(request: OpenExternalRequest): Promise<{ ok: boolean }>;
   revealPath(request: RevealPathRequest): Promise<{ ok: boolean }>;
+  /**
+   * One-way, fire-and-forget from the main window's renderer: the native menu
+   * bar's enablement and Show/Hide labels. The renderer never reads the ack.
+   */
+  publishUiState(state: MainWindowUiState): Promise<{ accepted: boolean }>;
   launchRebaseChild(request: LaunchRebaseChildRequest): Promise<LaunchRebaseChildResult>;
   launchRefactorChild(request: LaunchRefactorChildRequest): Promise<LaunchRefactorChildResult>;
   discardRefactorChild(request: DiscardRefactorChildRequest): Promise<DiscardRefactorChildResult>;

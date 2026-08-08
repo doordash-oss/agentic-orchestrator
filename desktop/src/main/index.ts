@@ -54,6 +54,7 @@ import { ThemeController } from './theme';
 import {
   actionableAttentionCount,
   CHAT_SESSION_ID,
+  disabledMainWindowUiState,
   CREATION_IMAGE_FORMATS,
   IPC_EVENTS,
   isActiveChatSession,
@@ -640,6 +641,10 @@ if (!hasSingleInstanceLock) {
         window.on('closed', () => {
           mainWindowAttentionFocused = false;
           publishMainWindowFocusTestState(mainWindowAttentionFocused);
+          // No main window, no renderer to own the menu's state: every
+          // window- and feature-scoped verb goes back to disabled.
+          nativeCommands?.resetUiState();
+          publishNativeCommandTestState(nativeCommands);
         });
         window.on('focus', () => {
           mainWindowAttentionFocused = true;
@@ -1122,6 +1127,15 @@ if (!hasSingleInstanceLock) {
         features.generatePublishDescription(request.featureId, request.repos ?? []),
       openExternal: (request) => completion.openExternal(request),
       revealPath: (request) => completion.revealPath(request),
+      // The native menu bar's only source of renderer-owned state. Coarse and
+      // push-on-change: the controller itself drops an unchanged summary.
+      publishUiState: (state) => {
+        const changed = nativeCommands?.updateUiState(state) ?? false;
+        if (changed) {
+          publishNativeCommandTestState(nativeCommands);
+        }
+        return { accepted: true };
+      },
     };
     registerIpcHandlers(ipcMain, trusted, services);
 
@@ -1160,6 +1174,8 @@ function publishNativeCommandTestState(nativeCommands: NativeCommandController |
     trayInstalled: false,
     trayFallbackActive: true,
     platform: process.platform,
+    uiState: disabledMainWindowUiState(),
+    menuRevision: 0,
   };
 }
 

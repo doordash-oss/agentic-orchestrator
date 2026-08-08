@@ -1551,8 +1551,37 @@ function AmaPanelScene(): React.ReactElement {
   );
 }
 
+/**
+ * The ⌘K palette inside the real shell: the same WorkspaceShell the app mounts
+ * (so a real sidebar selection backs the palette's target) beside the real
+ * CommandPalette, opened through the same routed request ⌘K produces. Which
+ * feature is selected, and its action catalogue, come from the mock API keyed
+ * by scene id — so the Feature group's enabled/disabled split is the real rule
+ * reading real catalogue data, never hand-built markup.
+ */
+function CommandPaletteScene(): React.ReactElement {
+  const [attentionItems, setAttentionItems] = React.useState<AttentionItem[]>([]);
+  React.useEffect(() => {
+    void window.agentico.getAttention().then((snapshot) => setAttentionItems(snapshot.items));
+  }, []);
+  const routeRequest = { id: 1, event: { target: 'palette' as const } };
+  return (
+    <div className="app-frame" style={{ height: '100vh' }}>
+      <WorkspaceShell
+        attentionItems={attentionItems}
+        refreshAttention={async () => attentionItems}
+      />
+      <CommandPalette ready routeRequest={routeRequest} onRoute={() => {}} />
+    </div>
+  );
+}
+
 function CaptureApp() {
   const scene = getScene();
+
+  if (scene.startsWith('command-palette-')) {
+    return <CommandPaletteScene />;
+  }
 
   if (scene.startsWith('creation-sheet')) {
     return <CreationSheetScene />;

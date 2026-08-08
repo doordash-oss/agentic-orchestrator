@@ -91,6 +91,8 @@ import {
   createFeatureRefreshScheduler,
   type FeatureRefreshScheduler,
 } from './featureRefreshScheduler';
+import { registerFeatureCommandExecutor } from './featureCommands';
+import type { FeatureCommandId } from '../../../shared/commands';
 
 type CockpitState =
   | { phase: 'loading' }
@@ -139,6 +141,18 @@ export interface FeatureCockpitProps {
    * toggle renders inline exactly like the overflow menu does.
    */
   inspectorToggleHost?: HTMLElement | null;
+  /**
+   * Reports the cockpit-owned half of the shell's UI-state summary — the live
+   * action catalogue behind every feature command's enablement, and the
+   * deliberately-unpersisted inspector state behind the View menu's Show/Hide
+   * label. Called on change only; the shell dedupes and pushes to the main
+   * process from there.
+   */
+  onUiStateChange?(state: {
+    featureId: string;
+    actions: readonly FeatureActionView[] | null;
+    inspectorOpen: boolean;
+  }): void;
 }
 
 const MAX_ITERATIONS_RESTART_DELTA = 10;
@@ -918,6 +932,7 @@ export function FeatureCockpit({
   actionsHost = null,
   overflowMenuHost = null,
   inspectorToggleHost = null,
+  onUiStateChange,
 }: FeatureCockpitProps) {
   const [state, setState] = useState<CockpitState>({ phase: 'loading' });
   const [liveExpandHost, setLiveExpandHost] = useState<HTMLDivElement | null>(null);
@@ -973,6 +988,37 @@ export function FeatureCockpit({
   onCloseRef.current = onClose;
   const onDeletedRef = useRef(onDeleted);
   onDeletedRef.current = onDeleted;
+  const onUiStateChangeRef = useRef(onUiStateChange);
+  onUiStateChangeRef.current = onUiStateChange;
+
+  /**
+   * The funnel's view of this cockpit, refreshed every render (the flows it
+   * calls are plain closures over the loaded snapshot, so they cannot be
+   * hooks) and read at invocation time so a stale command can never dispatch.
+   */
+  const commandTargetRef = useRef<{
+    actions: readonly FeatureActionView[] | null;
+    run(id: FeatureCommandId): void;
+  }>({ actions: null, run: () => {} });
+
+  useEffect(
+    () =>
+      registerFeatureCommandExecutor({
+        featureId,
+        actions: () => commandTargetRef.current.actions,
+        run: (id) => commandTargetRef.current.run(id),
+        toggleInspector: () => setInspectorOpen((current) => !current),
+      }),
+    [featureId],
+  );
+
+  useEffect(() => {
+    onUiStateChangeRef.current?.({
+      featureId,
+      actions: state.phase === 'loaded' ? state.snapshot.actions : null,
+      inspectorOpen,
+    });
+  }, [featureId, inspectorOpen, state]);
 
   useEffect(() => {
     if (attentionPreviewRequest === null || attentionPreviewRequest.attentionId !== undefined) {
@@ -1392,6 +1438,12 @@ export function FeatureCockpit({
       (state.snapshot.repoStatus ?? []).some((repo) => repo.prUrl !== undefined),
     aftercareSurface,
   );
+
+  if (state.phase !== 'loaded') {
+    // No authoritative catalogue, no funnel target: every feature command
+    // resolves to a no-op until the snapshot lands.
+    commandTargetRef.current = { actions: null, run: () => {} };
+  }
 
   if (state.phase === 'loading') {
     return (
@@ -1822,6 +1874,39 @@ export function FeatureCockpit({
   const openCompletionModal = (verb: CompletionVerb): void => {
     setCompletionModal(null);
     void completion.refresh().then(() => setCompletionModal(verb));
+  };
+
+  /**
+   * The funnel's dispatch table: every entry is the *same* callback the
+   * cockpit's own control for that verb uses, so a palette or Feature-menu
+   * invocation lands on the identical flow — immediate dispatch for the three
+   * lifecycle verbs, confirmation dialogs for Stop/Restart/Delete, the
+   * completion preflight modals for the four wrap-up verbs, and the existing
+   * launchers and editors for the rest.
+   */
+  const featureCommandFlows: Record<FeatureCommandId, () => void> = {
+    'feature.start': start,
+    'feature.pause-stop': () => void openStopDialog(),
+    'feature.resume': resume,
+    'feature.retry': retry,
+    'feature.restart': restart,
+    'feature.rewind': () => {
+      setRewindSourceRunNumber(snapshot.activeRun);
+      setRewindDialog(true);
+    },
+    'feature.publish': () => openCompletionModal('publish'),
+    'feature.merge': () => openCompletionModal('merge'),
+    'feature.mark-done': () => openCompletionModal('mark-done'),
+    'feature.cleanup': () => openCompletionModal('cleanup'),
+    'feature.rebase': () => launchRebase(),
+    'feature.refactor': () => setLauncherModal('refactor'),
+    'feature.review-feedback': () => setLauncherModal('review-feedback'),
+    'feature.configuration': () => setConfigOpen(true),
+    'feature.delete': () => setDeleteDialog(true),
+  };
+  commandTargetRef.current = {
+    actions: snapshot.actions,
+    run: (id) => featureCommandFlows[id](),
   };
   const renderCompletionControls = (
     verbs: CompletionVerbModel[],

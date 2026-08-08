@@ -112,6 +112,7 @@ import {
   type RepositoryDiffResult,
   type OpenExternalRequest,
   type RevealPathRequest,
+  type MainWindowUiState,
   type UpdateInstallNowRequest,
   type UpdateState,
   type DiagnosticsSnapshot,
@@ -211,6 +212,8 @@ export interface IpcServices {
   getDiagnostics(): Promise<DiagnosticsSnapshot> | DiagnosticsSnapshot;
   revealDiagnostics(): Promise<{ ok: boolean }>;
   clearDiagnostics(): Promise<DiagnosticsSnapshot> | DiagnosticsSnapshot;
+  /** Accepts the main window's coarse UI-state summary for the native menu. */
+  publishUiState(state: MainWindowUiState): { accepted: boolean };
 }
 
 export interface IpcMainLike {
@@ -408,6 +411,8 @@ export function registerIpcHandlers(
     [IPC_CHANNELS.openExternal]: (_event, request: OpenExternalRequest) =>
       services.openExternal(request),
     [IPC_CHANNELS.revealPath]: (_event, request: RevealPathRequest) => services.revealPath(request),
+    [IPC_CHANNELS.uiStatePublish]: (_event, state: MainWindowUiState) =>
+      services.publishUiState(state),
   };
   for (const channel of Object.values(IPC_CHANNELS)) {
     ipcMain.handle(channel, makeHandler(channel, trusted, bindings[channel]));

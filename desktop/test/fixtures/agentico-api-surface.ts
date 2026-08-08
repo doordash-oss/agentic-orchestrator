@@ -75,6 +75,7 @@ export const EXPECTED_API_SURFACE: readonly string[] = [
   'pickWorkspaceDirectory',
   'platform',
   'preflightCompletion',
+  'publishUiState',
   'readClipboardImage',
   'readRecoveryLog',
   'readReview',

@@ -5,6 +5,8 @@ import {
   actionableAttentionCount,
   defaultSettings,
   type AttentionItem,
+  type ConnectionState,
+  type MainWindowUiState,
   type Settings,
   type UpdateState,
 } from '../../../shared/ipc';
@@ -1161,5 +1163,206 @@ describe('WorkspaceShell ambient notices', () => {
     );
     expect(actionableAttentionCount([])).toBe(0);
     expect(within(sidebar).queryByText('Answer 2 questions')).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * The coarse renderer→main push behind the native menu bar, plus the routes
+ * the new File and View items deliver.
+ */
+describe('WorkspaceShell native-menu UI state', () => {
+  const READY: ConnectionState = {
+    status: 'ready',
+    stage: 'ready',
+    detail: 'Runtime ready.',
+    ownership: 'app-owned',
+  };
+
+  function lastPush(mock: ReturnType<typeof installAgenticoMock>): MainWindowUiState {
+    const calls = mock.api.publishUiState.mock.calls;
+    return calls[calls.length - 1]![0] as MainWindowUiState;
+  }
+
+  it('pushes an everything-disabled feature map while Overview is selected', async () => {
+    const mock = installAgenticoMock({
+      settings: settingsWithActive(null),
+      features: [],
+      connection: READY,
+    });
+    render(<WorkspaceShell />);
+    await screen.findByRole('option', { name: 'Overview' });
+
+    await waitFor(() => expect(mock.api.publishUiState).toHaveBeenCalled());
+    const pushed = lastPush(mock);
+    expect(pushed.activeFeatureId).toBeNull();
+    expect(pushed.runtimeReady).toBe(true);
+    expect(pushed.inspectorAvailable).toBe(false);
+    expect(Object.values(pushed.featureCommands).every((enabled) => !enabled)).toBe(true);
+  });
+
+  it('pushes the selected feature and its live enabled map, and nothing on an unchanged refresh', async () => {
+    const feature = featureSnapshot({
+      id: FEATURE_ID,
+      name: 'Search revamp',
+      actions: [
+        { id: 'start', enabled: true, disabledReasons: [] },
+        {
+          id: 'pause-stop',
+          enabled: false,
+          disabledReasons: [{ code: 'not_running', message: 'nothing is running' }],
+        },
+      ],
+    });
+    const mock = installAgenticoMock({
+      settings: settingsWithActive(FEATURE_ID),
+      features: [summaryOf(feature)],
+      feature,
+      connection: READY,
+    });
+    render(<WorkspaceShell />);
+    await screen.findByRole('region', { name: 'Feature Search revamp' });
+
+    await waitFor(() => {
+      const pushed = lastPush(mock);
+      expect(pushed.activeFeatureId).toBe(FEATURE_ID);
+      expect(pushed.featureCommands['feature.start']).toBe(true);
+    });
+    const pushed = lastPush(mock);
+    expect(pushed.featureCommands['feature.pause-stop']).toBe(false);
+    // Configuration needs no server action, so a selection alone enables it.
+    expect(pushed.featureCommands['feature.configuration']).toBe(true);
+    expect(pushed.inspectorAvailable).toBe(true);
+    expect(pushed.inspectorOpen).toBe(false);
+
+    // An invalidation that re-fetches the same snapshot must not push again.
+    const before = mock.api.publishUiState.mock.calls.length;
+    mock.emitAppEvent({ type: 'invalidated', kind: 'feature.updated', featureId: FEATURE_ID });
+    await waitFor(() => expect(mock.api.getFeature).toHaveBeenCalled());
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(mock.api.publishUiState.mock.calls.length).toBe(before);
+  });
+
+  it('pushes the collapsed sidebar state the menu label flips on', async () => {
+    const mock = installAgenticoMock({
+      settings: settingsWithActive(null),
+      features: [],
+      connection: READY,
+    });
+    render(<WorkspaceShell />);
+    await screen.findByRole('option', { name: 'Overview' });
+    await waitFor(() => expect(mock.api.publishUiState).toHaveBeenCalled());
+    expect(lastPush(mock).sidebarCollapsed).toBe(false);
+
+    fireEvent.keyDown(window, { key: 's', metaKey: true, ctrlKey: true });
+    await waitFor(() => expect(lastPush(mock).sidebarCollapsed).toBe(true));
+  });
+
+  it('opens the creation sheet from ⌘N, the File route, and never twice from one press', async () => {
+    installAgenticoMock({ settings: settingsWithActive(null), features: [], connection: READY });
+    const { rerender } = render(<WorkspaceShell />);
+    await screen.findByRole('option', { name: 'Overview' });
+
+    fireEvent.keyDown(window, { key: 'n', metaKey: true });
+    expect(await screen.findByRole('form', { name: /create a feature/i })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    await waitFor(() =>
+      expect(screen.queryByRole('form', { name: /create a feature/i })).not.toBeInTheDocument(),
+    );
+
+    // The File ▸ New Feature item arrives as a routed request.
+    rerender(<WorkspaceShell routeRequest={{ id: 11, event: { target: 'new-feature' } }} />);
+    expect(await screen.findByRole('form', { name: /create a feature/i })).toBeInTheDocument();
+  });
+
+  it('toggles the sidebar exactly once per View ▸ Show/Hide Sidebar route', async () => {
+    const mock = installAgenticoMock({
+      settings: settingsWithActive(null),
+      features: [],
+      connection: READY,
+    });
+    const { rerender } = render(<WorkspaceShell />);
+    await screen.findByRole('option', { name: 'Overview' });
+
+    rerender(<WorkspaceShell routeRequest={{ id: 12, event: { target: 'toggle-sidebar' } }} />);
+    await waitFor(() =>
+      expect(mock.api.updateSettings).toHaveBeenCalledWith({
+        shell: { activeFeatureId: null, sidebarCollapsed: true },
+      }),
+    );
+    expect(screen.getByRole('navigation', { name: 'Feature sidebar' })).toHaveAttribute(
+      'data-collapsed',
+      'true',
+    );
+    // A re-render with the same request id must not toggle a second time.
+    rerender(<WorkspaceShell routeRequest={{ id: 12, event: { target: 'toggle-sidebar' } }} />);
+    expect(screen.getByRole('navigation', { name: 'Feature sidebar' })).toHaveAttribute(
+      'data-collapsed',
+      'true',
+    );
+  });
+
+  it('runs a Feature-menu route through the funnel against the live selection', async () => {
+    const feature = featureSnapshot({
+      id: FEATURE_ID,
+      name: 'Search revamp',
+      status: 'Implementing',
+      actions: [{ id: 'pause-stop', enabled: true, disabledReasons: [] }],
+    });
+    const mock = installAgenticoMock({
+      settings: settingsWithActive(FEATURE_ID),
+      features: [summaryOf(feature)],
+      feature,
+      connection: READY,
+    });
+    mock.api.listSessions.mockResolvedValue([]);
+    const { rerender } = render(<WorkspaceShell />);
+    await screen.findByRole('region', { name: 'Feature Search revamp' });
+
+    rerender(
+      <WorkspaceShell
+        routeRequest={{
+          id: 13,
+          event: { target: 'feature-command', command: 'feature.pause-stop' },
+        }}
+      />,
+    );
+
+    // The cockpit's own confirmation, not a raw dispatch.
+    expect(await screen.findByRole('dialog', { name: /stop/i })).toBeInTheDocument();
+    expect(mock.api.dispatchFeatureAction).not.toHaveBeenCalled();
+  });
+
+  it('ignores a Feature-menu route for a verb the live catalogue disables', async () => {
+    const feature = featureSnapshot({
+      id: FEATURE_ID,
+      name: 'Search revamp',
+      actions: [
+        {
+          id: 'pause-stop',
+          enabled: false,
+          disabledReasons: [{ code: 'not_running', message: 'nothing is running' }],
+        },
+      ],
+    });
+    const mock = installAgenticoMock({
+      settings: settingsWithActive(FEATURE_ID),
+      features: [summaryOf(feature)],
+      feature,
+      connection: READY,
+    });
+    const { rerender } = render(<WorkspaceShell />);
+    await screen.findByRole('region', { name: 'Feature Search revamp' });
+
+    rerender(
+      <WorkspaceShell
+        routeRequest={{
+          id: 14,
+          event: { target: 'feature-command', command: 'feature.pause-stop' },
+        }}
+      />,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(mock.api.dispatchFeatureAction).not.toHaveBeenCalled();
   });
 });

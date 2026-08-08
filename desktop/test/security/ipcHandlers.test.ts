@@ -215,6 +215,7 @@ function makeServices(): IpcServices {
     generatePublishDescription: vi.fn(() => Promise.reject(new Error('unused'))),
     openExternal: vi.fn(() => Promise.reject(new Error('unused'))),
     revealPath: vi.fn(() => Promise.reject(new Error('unused'))),
+    publishUiState: vi.fn(() => ({ accepted: true })),
   };
 }
 
@@ -271,6 +272,53 @@ describe('registerIpcHandlers', () => {
       requestId: 'perm-1',
       decision: 'deny',
     });
+  });
+
+  it('guards the UI-state push: trusted senders only, schema-validated, no domain data', async () => {
+    const { handlers, services } = register();
+    const valid = {
+      activeFeatureId: 'abcd1234ef567890',
+      runtimeReady: true,
+      sidebarCollapsed: false,
+      inspectorOpen: true,
+      inspectorAvailable: true,
+      featureCommands: { 'feature.start': true, 'feature.delete': false },
+    };
+
+    const foreign = (await handlers.get(IPC_CHANNELS.uiStatePublish)!(foreignEvent, valid)) as {
+      ok: boolean;
+      error?: { code: string };
+    };
+    expect(foreign.ok).toBe(false);
+    expect(foreign.error?.code).toBe('E_UNTRUSTED_SENDER');
+    expect(services.publishUiState).not.toHaveBeenCalled();
+
+    const accepted = (await handlers.get(IPC_CHANNELS.uiStatePublish)!(goodEvent, valid)) as {
+      ok: boolean;
+      value: { accepted: boolean };
+    };
+    expect(accepted.ok).toBe(true);
+    expect(accepted.value.accepted).toBe(true);
+    expect(services.publishUiState).toHaveBeenCalledWith(valid);
+
+    // Anything beyond the identity-and-presentation summary is rejected — the
+    // menu never becomes a side channel for server-domain state.
+    const acceptedCalls = vi.mocked(services.publishUiState).mock.calls.length;
+    const extra = (await handlers.get(IPC_CHANNELS.uiStatePublish)!(goodEvent, {
+      ...valid,
+      featureName: 'Search revamp',
+    })) as { ok: boolean; error?: { code: string } };
+    expect(extra.ok).toBe(false);
+    expect(extra.error?.code).toBe('E_SCHEMA_MISMATCH');
+
+    const malformed = (await handlers.get(IPC_CHANNELS.uiStatePublish)!(goodEvent, {
+      ...valid,
+      featureCommands: { 'feature.start': 'yes' },
+    })) as { ok: boolean; error?: { code: string } };
+    expect(malformed.ok).toBe(false);
+    expect(malformed.error?.code).toBe('E_SCHEMA_MISMATCH');
+    // Neither rejected payload reached the service.
+    expect(vi.mocked(services.publishUiState).mock.calls.length).toBe(acceptedCalls);
   });
 
   it('rejects a connection state carrying token-shaped fields fail-closed', async () => {

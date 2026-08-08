@@ -1,13 +1,12 @@
+import { BrowserWindow, Menu, Tray, nativeImage, type App } from 'electron';
+import { commandById } from '../shared/commands';
 import {
-  BrowserWindow,
-  Menu,
-  Tray,
-  nativeImage,
-  type App,
-  type MenuItemConstructorOptions,
-} from 'electron';
-import { commandById, type CommandId } from '../shared/commands';
-import type { AppRouteEvent } from '../shared/ipc';
+  disabledMainWindowUiState,
+  sameMainWindowUiState,
+  type AppRouteEvent,
+  type MainWindowUiState,
+} from '../shared/ipc';
+import { buildApplicationMenuTemplate } from './menuTemplate';
 
 export interface NativeCommandControllerDeps {
   app: App;
@@ -25,17 +24,24 @@ export interface NativeCommandSnapshot extends BackgroundStatus {
   trayInstalled: boolean;
   trayFallbackActive: boolean;
   platform: NodeJS.Platform;
+  /** The summary the menu bar is currently built from. */
+  uiState: MainWindowUiState;
+  /** Bumped on every menu rebuild, so churn is observable from a test. */
+  menuRevision: number;
 }
 
 export class NativeCommandController {
   private tray: Tray | null = null;
   private trayFallbackActive = false;
   private status: BackgroundStatus = { attentionCount: 0, amaActive: false };
+  /** Everything-disabled until the main window's renderer pushes its first summary. */
+  private uiState: MainWindowUiState = disabledMainWindowUiState();
+  private menuRevision = 0;
 
   constructor(private readonly deps: NativeCommandControllerDeps) {}
 
   install(): void {
-    Menu.setApplicationMenu(this.buildApplicationMenu());
+    this.applyApplicationMenu();
     try {
       this.tray = new Tray(createTrayIcon(this.status.attentionCount));
       this.tray.on('click', () => this.deps.showWindow());
@@ -52,6 +58,25 @@ export class NativeCommandController {
     this.refreshTray();
   }
 
+  /**
+   * Accepts the main window's coarse UI-state summary. Identical consecutive
+   * summaries are dropped, so nothing rebuilds the menu per poll or per frame.
+   * Returns whether the menu was rebuilt.
+   */
+  updateUiState(next: MainWindowUiState): boolean {
+    if (sameMainWindowUiState(this.uiState, next)) {
+      return false;
+    }
+    this.uiState = next;
+    this.applyApplicationMenu();
+    return true;
+  }
+
+  /** The main window is gone: every window- and feature-scoped verb goes dark. */
+  resetUiState(): void {
+    this.updateUiState(disabledMainWindowUiState());
+  }
+
   destroy(): void {
     this.tray?.destroy();
     this.tray = null;
@@ -63,6 +88,8 @@ export class NativeCommandController {
       trayInstalled: this.tray !== null,
       trayFallbackActive: this.trayFallbackActive,
       platform: process.platform,
+      uiState: this.uiState,
+      menuRevision: this.menuRevision,
     };
   }
 
@@ -80,21 +107,7 @@ export class NativeCommandController {
     this.deps.route(event);
   }
 
-  private commandItem(id: CommandId): MenuItemConstructorOptions {
-    const command = commandById(id);
-    const target = command.target;
-    if (target === undefined) {
-      throw new Error(`Command ${id} has no route target.`);
-    }
-    return {
-      id,
-      label: command.label,
-      accelerator: command.accelerator,
-      click: () => this.route(target),
-    };
-  }
-
-  private showItem(): MenuItemConstructorOptions {
+  private showItem() {
     const command = commandById('global.show');
     return {
       id: command.id,
@@ -104,7 +117,7 @@ export class NativeCommandController {
     };
   }
 
-  private quitItem(): MenuItemConstructorOptions {
+  private quitItem() {
     const command = commandById('global.quit');
     return {
       id: command.id,
@@ -114,63 +127,22 @@ export class NativeCommandController {
     };
   }
 
-  private buildApplicationMenu(): Menu {
-    const appMenu: MenuItemConstructorOptions = {
-      label: this.deps.app.name,
-      submenu: [this.showItem(), { type: 'separator' }, this.quitItem()],
-    };
-
-    return Menu.buildFromTemplate([
-      appMenu,
-      // The standard File position, immediately after the app menu. `close`
-      // is the platform role, so ⌘W always closes whichever window is
-      // focused — the Settings window closes outright, the main window goes
-      // through its own close handler and the quit decision behind it.
-      {
-        label: 'File',
-        submenu: [{ role: 'close', label: 'Close Window' }],
-      },
-      {
-        label: 'Navigate',
-        submenu: [
-          this.commandItem('global.palette'),
-          this.commandItem('global.help'),
-          { type: 'separator' },
-          this.commandItem('global.home'),
-          this.commandItem('global.settings'),
-          {
-            id: 'global.updates',
-            label: 'Updates',
-            click: () => this.routeEvent({ target: 'settings', settingsSection: 'updates' }),
-          },
-          this.commandItem('global.attention'),
-          this.commandItem('global.ama'),
-          this.commandItem('global.bulk'),
-        ],
-      },
-      { role: 'editMenu' },
-      {
-        label: 'View',
-        submenu: [
-          {
-            label: 'Zoom In',
-            accelerator: 'CommandOrControl+=',
-            click: () => adjustFocusedZoom(0.2),
-          },
-          {
-            label: 'Zoom Out',
-            accelerator: 'CommandOrControl+-',
-            click: () => adjustFocusedZoom(-0.2),
-          },
-          {
-            label: 'Actual Size',
-            accelerator: 'CommandOrControl+0',
-            click: () => setFocusedZoom(1),
-          },
-        ],
-      },
-      { role: 'windowMenu' },
-    ]);
+  /** Rebuilds and installs the menu bar from the current summary. */
+  private applyApplicationMenu(): void {
+    this.menuRevision += 1;
+    Menu.setApplicationMenu(
+      Menu.buildFromTemplate(
+        buildApplicationMenuTemplate({
+          appName: this.deps.app.name,
+          uiState: this.uiState,
+          showWindow: () => this.deps.showWindow(),
+          quit: () => this.deps.quit(),
+          route: (event) => this.routeEvent(event),
+          adjustZoom: adjustFocusedZoom,
+          setZoom: setFocusedZoom,
+        }),
+      ),
+    );
   }
 
   private refreshTray(): void {

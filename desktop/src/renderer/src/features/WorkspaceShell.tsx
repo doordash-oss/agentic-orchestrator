@@ -23,7 +23,9 @@ import {
 } from 'react';
 import type {
   AttentionItem,
+  FeatureActionView,
   FeatureSnapshot,
+  MainWindowUiState,
   RoutedRequest,
   ShellPrefs,
   UpdateState,
@@ -32,7 +34,10 @@ import {
   attentionOwnerFeatureId,
   defaultShellPrefs,
   isConnectionErrorState,
+  sameMainWindowUiState,
 } from '../../../shared/ipc';
+import { featureCommandEnablement, isFeatureCommandId } from '../../../shared/commands';
+import { runFeatureCommand, toggleActiveInspector } from './featureCommands';
 import { parseIpcError, type WizardError } from '../wizard/ipcError';
 import { isEditingShortcutTarget } from '../components/CommandPalette';
 import { CreateFeatureForm } from './CreateFeatureForm';
@@ -164,6 +169,15 @@ export function WorkspaceShell({
   const listRequestRef = useRef(0);
   const overviewActiveRef = useRef(false);
   const [creationOpen, setCreationOpen] = useState(false);
+  // The cockpit-owned half of the native menu's summary: the live action
+  // catalogue behind every feature verb, and the unpersisted inspector state
+  // behind the View menu's Show/Hide label.
+  const [cockpitUi, setCockpitUi] = useState<{
+    featureId: string;
+    actions: readonly FeatureActionView[] | null;
+    inspectorOpen: boolean;
+  } | null>(null);
+  const pushedUiStateRef = useRef<MainWindowUiState | null>(null);
   const [bulkPreviewRequest, setBulkPreviewRequest] = useState<number | null>(null);
   const [selectedRuns, setSelectedRuns] = useState<Record<string, number | null>>({});
   const [expandedLanes, setExpandedLanes] = useState<Record<Lane, boolean>>({
@@ -190,8 +204,9 @@ export function WorkspaceShell({
   // every lane regardless of its disclosure state (unlike Arrow/Home/End,
   // which only ever land on a visible row). ⌘1 stays entirely on the
   // existing native-menu → routeRequest("home") path — nothing new here.
-  // ⌘⌃S toggles the same persisted collapse the toolbar button does. Both
-  // bail out untouched when a text input, textarea, or contenteditable
+  // ⌘⌃S toggles the same persisted collapse the toolbar button does, and ⌘N
+  // opens the creation sheet the File item and the palette entry open. All of
+  // them bail out untouched when a text input, textarea, or contenteditable
   // element has focus, matching the ⌘K guard in CommandPalette.
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
@@ -202,6 +217,15 @@ export function WorkspaceShell({
         return;
       }
       const commandKey = event.metaKey || event.ctrlKey;
+      // ⌘N mirrors the File item and the palette entry: it opens the creation
+      // sheet over whatever pane is current. Opening is idempotent, so the
+      // native accelerator and this listener both firing is harmless — the
+      // same duplicate-binding posture ⌘K already has.
+      if (commandKey && !event.shiftKey && !event.altKey && event.key.toLowerCase() === 'n') {
+        event.preventDefault();
+        setCreationOpen(true);
+        return;
+      }
       if (commandKey && !event.shiftKey && !event.altKey && /^[2-9]$/.test(event.key)) {
         const row = shortcutRef.current.allRows[Number(event.key) - 1];
         if (row === undefined || row.kind !== 'feature') return;
@@ -319,7 +343,7 @@ export function WorkspaceShell({
    * The toolbar's leading sidebar toggle: click-to-collapse/expand, persisted
    * through the same settings IPC as the selection. The ⌘⌃S handler above
    * calls this same function; the visual-only auto-collapse below ~700px is
-   * `effectiveSidebarCollapsed`, computed later in this component.
+   * `effectiveSidebarCollapsed`, computed above the restore gate below.
    */
   const toggleSidebar = useCallback(() => {
     const base = shellStateRef.current ?? shell ?? defaultShellPrefs();
@@ -411,6 +435,49 @@ export function WorkspaceShell({
 
   const closeAttentionPreview = useCallback(() => setAttentionPreviewRequest(null), []);
 
+  // A visual-only auto-collapse: never persisted, and an explicit user choice
+  // (persisted `true`) always wins over the breakpoint once one exists — see
+  // the module doc comment above `isNarrowForSidebar`. Computed here, ahead of
+  // the restore gate below, because the pushed summary carries what the user
+  // actually sees rather than only what is stored.
+  const effectiveSidebarCollapsed =
+    shell !== null && (shell.sidebarCollapsed || isNarrowForSidebar);
+
+  /**
+   * The coarse summary the native menu bar runs on. Recomputed only from the
+   * things it names — selection, readiness, the two chrome toggles, and the
+   * selected feature's live action catalogue.
+   */
+  const uiStateSummary: MainWindowUiState | null = useMemo(() => {
+    if (shell === null) return null;
+    const activeFeatureId = shell.activeFeatureId;
+    const cockpitMatches = cockpitUi !== null && cockpitUi.featureId === activeFeatureId;
+    return {
+      activeFeatureId,
+      runtimeReady,
+      sidebarCollapsed: effectiveSidebarCollapsed,
+      inspectorOpen: cockpitMatches ? cockpitUi.inspectorOpen : false,
+      // Overview has nothing to inspect, so there is no toggle to offer.
+      inspectorAvailable: activeFeatureId !== null,
+      featureCommands: featureCommandEnablement(cockpitMatches ? cockpitUi.actions : null, {
+        hasSelection: activeFeatureId !== null,
+      }),
+    };
+  }, [cockpitUi, effectiveSidebarCollapsed, runtimeReady, shell]);
+
+  // Push on change only: an identical summary — an unchanged snapshot refresh,
+  // a re-render, a repeated readiness event — never reaches the main process.
+  useEffect(() => {
+    if (uiStateSummary === null) return;
+    const previous = pushedUiStateRef.current;
+    if (previous !== null && sameMainWindowUiState(previous, uiStateSummary)) return;
+    pushedUiStateRef.current = uiStateSummary;
+    void window.agentico.publishUiState(uiStateSummary).catch(() => {
+      // The menu is a convenience surface; a failed push never disturbs the
+      // window the user is looking at.
+    });
+  }, [uiStateSummary]);
+
   useEffect(() => {
     if (shell === null || routeRequest === null) return;
     if (handledRouteRequest.current === routeRequest.id) return;
@@ -422,6 +489,20 @@ export function WorkspaceShell({
     } else if (routeRequest.event.target === 'bulk') {
       setBulkPreviewRequest(routeRequest.id);
       selectOverview();
+    } else if (routeRequest.event.target === 'new-feature') {
+      setCreationOpen(true);
+    } else if (routeRequest.event.target === 'toggle-sidebar') {
+      shortcutRef.current.toggleSidebar();
+    } else if (routeRequest.event.target === 'toggle-inspector') {
+      toggleActiveInspector();
+    } else if (routeRequest.event.target === 'feature-command') {
+      // The route carries only the command's identity; the funnel resolves the
+      // target from the live selection and re-checks its live enablement, so a
+      // click that raced a selection change is a no-op.
+      const command = routeRequest.event.command;
+      if (command !== undefined && isFeatureCommandId(command)) {
+        runFeatureCommand(command);
+      }
     }
   }, [routeRequest, selectOverview, shell]);
 
@@ -469,11 +550,6 @@ export function WorkspaceShell({
       allRows.push({ kind: 'feature', featureId: feature.id });
     }
   }
-
-  // A visual-only auto-collapse: never persisted, and an explicit user
-  // choice (persisted `true`) always wins over the breakpoint once one
-  // exists — see the module doc comment above `isNarrowForSidebar`.
-  const effectiveSidebarCollapsed = shell.sidebarCollapsed || isNarrowForSidebar;
 
   const selectedFeature =
     selection.kind === 'feature'
@@ -670,6 +746,7 @@ export function WorkspaceShell({
               actionsHost={actionsSlot}
               overflowMenuHost={overflowSlot}
               inspectorToggleHost={inspectorSlot}
+              onUiStateChange={setCockpitUi}
             />
           ) : (
             <div className="overview-surface">

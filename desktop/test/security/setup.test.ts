@@ -171,6 +171,7 @@ function makeServices(overrides: Partial<IpcServices> = {}): IpcServices {
     generatePublishDescription: vi.fn(() => Promise.reject(new Error('unused'))),
     openExternal: vi.fn(() => Promise.reject(new Error('unused'))),
     revealPath: vi.fn(() => Promise.reject(new Error('unused'))),
+    publishUiState: vi.fn(() => ({ accepted: true })),
     ...overrides,
     pickCreationFiles: overrides.pickCreationFiles ?? vi.fn(() => Promise.resolve({ paths: [] })),
     readClipboardImage: overrides.readClipboardImage ?? vi.fn(() => Promise.resolve({ paths: [] })),

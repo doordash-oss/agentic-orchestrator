@@ -89,6 +89,22 @@ describe('App readiness gating', () => {
     await waitFor(() => expect(mock.api.listFeatures).toHaveBeenCalledTimes(1));
   });
 
+  it('tells the native menu bar to go dark while the runtime is not ready', async () => {
+    const mock = installAgenticoMock({ readiness: readySnapshot() });
+    render(<App />);
+
+    await screen.findByLabelText(/agentico connection/i);
+    await waitFor(() => expect(mock.api.publishUiState).toHaveBeenCalled());
+    const pushed = mock.api.publishUiState.mock.calls[0]![0] as {
+      runtimeReady: boolean;
+      activeFeatureId: string | null;
+      featureCommands: Record<string, boolean>;
+    };
+    expect(pushed.runtimeReady).toBe(false);
+    expect(pushed.activeFeatureId).toBeNull();
+    expect(Object.keys(pushed.featureCommands)).toHaveLength(0);
+  });
+
   it('uses the authoritative feature name in the global inbox', async () => {
     const featureId = 'abcd1234ef567890';
     const attention: AttentionItem = {

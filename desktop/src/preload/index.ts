@@ -63,6 +63,7 @@ import {
   type RepositoryDiffRequest,
   type OpenExternalRequest,
   type RevealPathRequest,
+  type MainWindowUiState,
 } from '../shared/ipc';
 import { assertNoPrototypePollution } from '../shared/sanitize';
 
@@ -244,6 +245,7 @@ const api: AgenticoApi = {
     call(IPC_CHANNELS.publishDescription, request),
   openExternal: (request: OpenExternalRequest) => call(IPC_CHANNELS.openExternal, request),
   revealPath: (request: RevealPathRequest) => call(IPC_CHANNELS.revealPath, request),
+  publishUiState: (state: MainWindowUiState) => call(IPC_CHANNELS.uiStatePublish, state),
   launchRebaseChild: (request: LaunchRebaseChildRequest) =>
     call(IPC_CHANNELS.featuresRebase, request),
   launchRefactorChild: (request: LaunchRefactorChildRequest) =>

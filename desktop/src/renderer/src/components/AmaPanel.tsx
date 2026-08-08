@@ -34,6 +34,7 @@ import {
   type AttentionSubmitOptions,
 } from '../features/AttentionInbox';
 import { useAttentionDraftSaves } from '../features/useAttentionDraftSaves';
+import { parseIpcError } from '../wizard/ipcError';
 import { buildConversation, reconcileMessages } from '../features/transcript/conversation';
 import { ConversationTranscript } from '../features/transcript/ConversationTranscript';
 import {
@@ -224,6 +225,12 @@ export function AmaPanel({
       setTranscript({ phase: 'ready', messages: loaded.messages, cursor: loaded.cursor });
       return loaded.cursor.end;
     } catch (error) {
+      // Before the first question there is no chat session to read, which is
+      // the empty state rather than a failure.
+      if (parseIpcError(error).code === 'not_found') {
+        setTranscript({ phase: 'ready', messages: [], cursor: EMPTY_CURSOR });
+        return null;
+      }
       setTranscript((current) => ({
         phase: 'error',
         message: error instanceof Error ? error.message : 'Could not load AMA transcript.',

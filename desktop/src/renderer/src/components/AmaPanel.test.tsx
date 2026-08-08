@@ -115,6 +115,28 @@ describe('AmaPanel open and close', () => {
   });
 });
 
+describe('AmaPanel first open', () => {
+  // Before the first question there is no chat session, so a not_found
+  // transcript read is the empty state — never an error banner.
+  it('shows only the empty state when no chat session exists yet', async () => {
+    const mock = installAgenticoMock();
+    mock.api.getSessionTranscript.mockRejectedValue(
+      new Error('not_found: session not found The session no longer exists.'),
+    );
+    mock.api.getSession.mockRejectedValue(new Error('not_found: session not found'));
+    renderPanel();
+    await waitFor(() => expect(mock.api.getSettings).toHaveBeenCalled());
+
+    pressOptionSpace();
+    await screen.findByRole('complementary', { name: 'Ask Agentico' });
+    await waitFor(() => expect(mock.api.getSessionTranscript).toHaveBeenCalled());
+
+    expect(screen.getByText('Ask anything about this workspace.')).toBeVisible();
+    expect(screen.queryByText(/not_found/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/session not found/)).not.toBeInTheDocument();
+  });
+});
+
 describe('AmaPanel geometry', () => {
   it('drags by the header and persists the new placement on release', async () => {
     const mock = installAgenticoMock({ settings: settingsWithAma({ drawer: 'expanded' }) });

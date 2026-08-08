@@ -36,6 +36,10 @@ func TestSandboxGrantRootForDeniedPath(t *testing.T) {
 		{name: "electron app support", denied: "/Users/tester/Library/Application Support/Agentico/Cookies", want: "/Users/tester/Library/Application Support/Agentico"},
 		{name: "library file too shallow", denied: "/Users/tester/Library/somefile", want: ""},
 		{name: "ssh protected", denied: "/Users/tester/.ssh/known_hosts", want: ""},
+		{name: "docker buildx grantable", denied: "/Users/tester/.docker/buildx/activity/default", want: "/Users/tester/.docker/buildx"},
+		{name: "docker buildx grant root is idempotent", denied: "/Users/tester/.docker/buildx", want: "/Users/tester/.docker/buildx"},
+		{name: "docker config protected", denied: "/Users/tester/.docker/config.json", want: ""},
+		{name: "docker root protected", denied: "/Users/tester/.docker", want: ""},
 		{name: "agentic state protected", denied: "/Users/tester/.agentic-workflow/features/x", want: ""},
 		{name: "orchestrator state protected", denied: "/Users/tester/.agentic-orchestrator/features/x", want: ""},
 		{name: "orchestrator config protected", denied: "/Users/tester/.agentic-orchestrator/config.yaml", want: ""},
@@ -89,19 +93,22 @@ func TestSandboxGrantPersistenceRoundtrip(t *testing.T) {
 	}
 	contractPath := filepath.Join(t.TempDir(), "testing-contract.yaml")
 	valid := filepath.Join(home, ".agentico-test-cache")
+	buildx := filepath.Join(home, ".docker", "buildx")
 	protected := filepath.Join(home, ".ssh")
 	for _, grant := range []sandboxGrant{
 		{Root: valid, ItemID: "a", DeniedPath: filepath.Join(valid, "x")},
 		{Root: valid, ItemID: "b", DeniedPath: filepath.Join(valid, "y")},
 		{Root: protected, ItemID: "c", DeniedPath: filepath.Join(protected, "id_rsa")},
+		{Root: buildx, ItemID: "d", DeniedPath: filepath.Join(buildx, "activity", "default")},
+		{Root: filepath.Join(home, ".docker"), ItemID: "e", DeniedPath: filepath.Join(home, ".docker", "config.json")},
 	} {
 		if err := appendSandboxGrant(contractPath, grant); err != nil {
 			t.Fatalf("appendSandboxGrant() error = %v", err)
 		}
 	}
 	roots := loadSandboxGrantRoots(contractPath)
-	if !slices.Equal(roots, []string{valid}) {
-		t.Fatalf("loadSandboxGrantRoots() = %v, want deduped %q with protected root filtered", roots, valid)
+	if !slices.Equal(roots, []string{valid, buildx}) {
+		t.Fatalf("loadSandboxGrantRoots() = %v, want deduped [%q %q] with protected roots filtered", roots, valid, buildx)
 	}
 	if roots := loadSandboxGrantRoots(filepath.Join(t.TempDir(), "missing.yaml")); roots != nil {
 		t.Fatalf("loadSandboxGrantRoots(missing) = %v, want nil", roots)
@@ -113,7 +120,7 @@ func TestSandboxGrantPersistenceRoundtrip(t *testing.T) {
 
 func TestToolchainCacheRoots(t *testing.T) {
 	roots := toolchainCacheRoots("/Users/tester")
-	for _, want := range []string{"/Users/tester/.npm", "/Users/tester/.gradle", "/Users/tester/.m2/repository"} {
+	for _, want := range []string{"/Users/tester/.npm", "/Users/tester/.gradle", "/Users/tester/.m2/repository", "/Users/tester/.docker/buildx"} {
 		if !slices.Contains(roots, want) {
 			t.Fatalf("toolchainCacheRoots() = %v, want to include %q", roots, want)
 		}

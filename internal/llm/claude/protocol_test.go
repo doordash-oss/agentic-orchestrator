@@ -194,6 +194,103 @@ func TestClaudeProtocol_Interrupt_WithoutStdin_ReturnsError(t *testing.T) {
 	}
 }
 
+const askUserQuestionsInput = `{"questions":[{"question":"Which approach?","header":"Scope","multiSelect":false,"options":[{"label":"Option A (Recommended)","description":"a","confidence":0.8},{"label":"Option B","description":"b","confidence":0.2}]}]}`
+
+type askUserControlResponse struct {
+	Type     string `json:"type"`
+	Response struct {
+		Subtype   string `json:"subtype"`
+		RequestID string `json:"request_id"`
+		Response  struct {
+			Behavior     string `json:"behavior"`
+			UpdatedInput struct {
+				Questions []struct {
+					Question string `json:"question"`
+					Options  []struct {
+						Label string `json:"label"`
+					} `json:"options"`
+				} `json:"questions"`
+				Answers map[string]string `json:"answers"`
+			} `json:"updatedInput"`
+		} `json:"response"`
+	} `json:"response"`
+}
+
+func respondToAskUser(t *testing.T, answers map[string]string) askUserControlResponse {
+	t.Helper()
+	p := NewProtocol(llm.ProtocolOpts{})
+	var buf bytes.Buffer
+	p.SetStdin(&buf)
+	if err := p.RespondToAskUser("req-1", json.RawMessage(askUserQuestionsInput), answers, nil); err != nil {
+		t.Fatalf("RespondToAskUser: %v", err)
+	}
+	var out askUserControlResponse
+	if err := json.Unmarshal([]byte(strings.TrimSpace(buf.String())), &out); err != nil {
+		t.Fatalf("unmarshal control response: %v (raw=%q)", err, buf.String())
+	}
+	if out.Response.Response.Behavior != "allow" {
+		t.Fatalf("behavior = %q, want allow", out.Response.Response.Behavior)
+	}
+	return out
+}
+
+func TestClaudeProtocol_RespondToAskUser_ExactLabelPassesThrough(t *testing.T) {
+	out := respondToAskUser(t, map[string]string{"Which approach?": "Option B"})
+	if got := out.Response.Response.UpdatedInput.Answers["Which approach?"]; got != "Option B" {
+		t.Errorf("answer = %q, want Option B", got)
+	}
+	if got := len(out.Response.Response.UpdatedInput.Questions[0].Options); got != 2 {
+		t.Errorf("options len = %d, want 2 (no injection for a matched answer)", got)
+	}
+}
+
+func TestClaudeProtocol_RespondToAskUser_RecommendedSuffixNormalized(t *testing.T) {
+	out := respondToAskUser(t, map[string]string{"Which approach?": "Option A"})
+	if got := out.Response.Response.UpdatedInput.Answers["Which approach?"]; got != "Option A (Recommended)" {
+		t.Errorf("answer = %q, want normalized to the full label", got)
+	}
+	if got := len(out.Response.Response.UpdatedInput.Questions[0].Options); got != 2 {
+		t.Errorf("options len = %d, want 2", got)
+	}
+}
+
+func TestClaudeProtocol_RespondToAskUser_TruncatedAnswerMatchesLabel(t *testing.T) {
+	out := respondToAskUser(t, map[string]string{"Which approach?": "Option A (Recomm..."})
+	if got := out.Response.Response.UpdatedInput.Answers["Which approach?"]; got != "Option A (Recommended)" {
+		t.Errorf("answer = %q, want the untruncated label", got)
+	}
+}
+
+func TestClaudeProtocol_RespondToAskUser_FreeTextInjectedAsOption(t *testing.T) {
+	out := respondToAskUser(t, map[string]string{"Which approach?": "use a third custom approach"})
+	updated := out.Response.Response.UpdatedInput
+	if got := updated.Answers["Which approach?"]; got != "use a third custom approach" {
+		t.Errorf("answer = %q, want the free text verbatim", got)
+	}
+	opts := updated.Questions[0].Options
+	if len(opts) != 3 || opts[2].Label != "use a third custom approach" {
+		t.Errorf("options = %+v, want free text injected as third option", opts)
+	}
+}
+
+func TestClaudeProtocol_RespondToAskUser_FreeTextForOptionlessQuestion(t *testing.T) {
+	p := NewProtocol(llm.ProtocolOpts{})
+	var buf bytes.Buffer
+	p.SetStdin(&buf)
+	questions := json.RawMessage(`{"questions":[{"question":"What version?","header":"Version","multiSelect":false,"options":[]}]}`)
+	if err := p.RespondToAskUser("req-2", questions, map[string]string{"What version?": "1.2.3"}, nil); err != nil {
+		t.Fatalf("RespondToAskUser: %v", err)
+	}
+	var out askUserControlResponse
+	if err := json.Unmarshal([]byte(strings.TrimSpace(buf.String())), &out); err != nil {
+		t.Fatalf("unmarshal control response: %v", err)
+	}
+	opts := out.Response.Response.UpdatedInput.Questions[0].Options
+	if len(opts) != 1 || opts[0].Label != "1.2.3" {
+		t.Errorf("options = %+v, want the free text as the sole option", opts)
+	}
+}
+
 func containsSuffix(s, suffix string) bool {
 	return len(s) >= len(suffix) && s[len(s)-len(suffix):] == suffix
 }

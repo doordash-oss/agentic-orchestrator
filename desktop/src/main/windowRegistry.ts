@@ -18,6 +18,10 @@ export interface WindowRegistryDeps<W> {
   create(purpose: WindowPurpose): W;
   /** Raises an already-open window (restore + show + focus). */
   focus(window: W): void;
+  /** True when the window's renderer has crashed and shows a blank page. */
+  isCrashed(window: W): boolean;
+  /** Reloads a crashed window's renderer so raising it never shows a blank page. */
+  reload(window: W): void;
   /**
    * The window's webContents id — its membership token in the trust set.
    * Read exactly once, at registration: eviction runs from Electron's
@@ -53,6 +57,10 @@ export class WindowRegistry<W> {
   openOrFocus(purpose: WindowPurpose): W {
     const existing = this.windows.get(purpose);
     if (existing !== undefined) {
+      // Focusing a dead renderer would raise a permanently blank window.
+      if (this.deps.isCrashed(existing)) {
+        this.deps.reload(existing);
+      }
       this.deps.focus(existing);
       return existing;
     }
@@ -108,6 +116,49 @@ export class WindowRegistry<W> {
    */
   trustedIds(): ReadonlySet<number> {
     return this.trustedWebContentsIds;
+  }
+}
+
+// --- Renderer crash recovery --------------------------------------------------
+
+export interface CrashRecoveryDeps {
+  /** Reloads the window's renderer in place. */
+  reload(): void;
+  /** Destroys the window so eviction runs and the next open rebuilds fresh. */
+  destroy(): void;
+}
+
+/**
+ * The bounded reload policy behind `render-process-gone`: a non-clean renderer
+ * exit is answered with a reload, up to `maxReloads` times per load attempt.
+ * A finished load resets the budget; exhausting it destroys the window
+ * instead, so the registry evicts it and the next open starts over. Same
+ * dependency-injected posture as the registry above.
+ */
+export class RendererCrashRecovery {
+  private reloads = 0;
+
+  constructor(
+    private readonly deps: CrashRecoveryDeps,
+    private readonly maxReloads = 2,
+  ) {}
+
+  /** Wire to `did-finish-load`: a renderer that came back earns a fresh budget. */
+  loadFinished(): void {
+    this.reloads = 0;
+  }
+
+  /** Wire to `render-process-gone` with the exit reason Electron reports. */
+  crashed(reason: string): void {
+    if (reason === 'clean-exit') {
+      return;
+    }
+    if (this.reloads < this.maxReloads) {
+      this.reloads += 1;
+      this.deps.reload();
+    } else {
+      this.deps.destroy();
+    }
   }
 }
 

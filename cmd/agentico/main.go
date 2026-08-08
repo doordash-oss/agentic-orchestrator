@@ -941,27 +941,19 @@ type featureRebaseChildCreator interface {
 	CreateRebaseChild(parentID string, spec feature.RebaseChildSpec) (*feature.Feature, error)
 }
 
-// freshnessCacheTTL bounds how long a worktree freshness probe is reused.
-// Each probe scans the working tree via git, so the read path (feature
-// detail fetches, list refreshes) must not rescan on every request.
-const freshnessCacheTTL = 5 * time.Second
-
-type freshnessCacheEntry struct {
-	value   serverruntime.RepoFreshness
-	expires time.Time
-}
-
+// gitFreshnessProvider maps cached git freshness onto the API vocabulary. The
+// cache does the work that matters: deduplicated background probes, so a read
+// never waits on git and concurrent reads of one worktree cost one probe.
 type gitFreshnessProvider struct {
-	mu    sync.Mutex
-	probe func(worktreePath string) string
-	cache map[string]freshnessCacheEntry
+	cache *git.FreshnessCache
 }
 
 func newGitFreshnessProvider() *gitFreshnessProvider {
-	return &gitFreshnessProvider{
-		probe: git.RepoFreshness,
-		cache: make(map[string]freshnessCacheEntry),
-	}
+	return &gitFreshnessProvider{cache: git.NewFreshnessCache()}
+}
+
+func newGitFreshnessProviderWithProbe(probe func(worktreePath string) string) *gitFreshnessProvider {
+	return &gitFreshnessProvider{cache: git.NewFreshnessCacheWithProbe(probe)}
 }
 
 func (p *gitFreshnessProvider) Freshness(_ *feature.Feature, repo feature.FeatureRepo) serverruntime.RepoFreshness {
@@ -969,28 +961,16 @@ func (p *gitFreshnessProvider) Freshness(_ *feature.Feature, repo feature.Featur
 	if worktree == "" {
 		worktree = repo.Path
 	}
-	now := time.Now()
-	p.mu.Lock()
-	entry, ok := p.cache[worktree]
-	p.mu.Unlock()
-	if ok && now.Before(entry.expires) {
-		return entry.value
-	}
-	var value serverruntime.RepoFreshness
-	switch p.probe(worktree) {
+	switch p.cache.Freshness(worktree) {
 	case "in sync":
-		value = serverruntime.RepoFreshnessInSync
+		return serverruntime.RepoFreshnessInSync
 	case git.FreshnessLocalChanges:
-		value = serverruntime.RepoFreshnessLocalChanges
+		return serverruntime.RepoFreshnessLocalChanges
 	case "local only":
-		value = serverruntime.RepoFreshnessLocalOnly
+		return serverruntime.RepoFreshnessLocalOnly
 	default:
-		value = serverruntime.RepoFreshnessUnknown
+		return serverruntime.RepoFreshnessUnknown
 	}
-	p.mu.Lock()
-	p.cache[worktree] = freshnessCacheEntry{value: value, expires: now.Add(freshnessCacheTTL)}
-	p.mu.Unlock()
-	return value
 }
 
 func (t *serverMutationTarget) CreateFeature(req serverruntime.CreateFeatureRequest) (serverruntime.CreateFeatureResponse, error) {

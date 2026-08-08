@@ -1453,6 +1453,12 @@ type FeatureDetail struct {
 	// ChildHistory Complete closed-child history in authoritative store order.
 	ChildHistory []RelationshipChild `json:"child_history,omitempty"`
 
+	// ChildHistoryTotal Total closed children, regardless of how many are listed.
+	ChildHistoryTotal int `json:"child_history_total,omitempty"`
+
+	// ChildHistoryTruncated True when child_history omits older closed children.
+	ChildHistoryTruncated bool `json:"child_history_truncated,omitempty"`
+
 	// CloseOutcome Recorded relationship close outcome (e.g. completed); only set on closed child features.
 	CloseOutcome string `json:"close_outcome,omitempty"`
 
@@ -1566,22 +1572,29 @@ type FeatureStopResponse struct {
 
 // FeatureSummary defines model for FeatureSummary.
 type FeatureSummary struct {
-	ActiveChild *RelationshipChild `json:"active_child,omitempty"`
-	ActiveRun   int                `json:"active_run"`
-	Checkpoints Checkpoints        `json:"checkpoints"`
+	// ActiveChild List-safe projection of a relationship child. Carries every relationship field except the preserved diff body, so a parent with many closed children cannot inflate a list response without bound. Fetch RelationshipChild on a detail route for the body itself.
+	ActiveChild *RelationshipChildSummary `json:"active_child,omitempty"`
+	ActiveRun   int                       `json:"active_run"`
+	Checkpoints Checkpoints               `json:"checkpoints"`
 
-	// ChildHistory Complete closed-child history in authoritative store order.
-	ChildHistory []RelationshipChild `json:"child_history,omitempty"`
-	CreatedAt    time.Time           `json:"created_at"`
-	CurrentPhase string              `json:"current_phase"`
-	ID           string              `json:"id"`
-	Name         string              `json:"name"`
-	Progress     FeatureProgress     `json:"progress"`
-	Repos        []string            `json:"repos"`
-	RunCount     int                 `json:"run_count"`
-	Slug         string              `json:"slug"`
-	Status       string              `json:"status"`
-	Warnings     []Warning           `json:"warnings,omitempty"`
+	// ChildHistory Newest closed children in authoritative store order, capped at a fixed server-side limit. Consult child_history_total and child_history_truncated for the full extent, and the feature detail route for the complete history.
+	ChildHistory []RelationshipChildSummary `json:"child_history,omitempty"`
+
+	// ChildHistoryTotal Total closed children, regardless of how many are listed.
+	ChildHistoryTotal int `json:"child_history_total,omitempty"`
+
+	// ChildHistoryTruncated True when child_history omits older closed children.
+	ChildHistoryTruncated bool            `json:"child_history_truncated,omitempty"`
+	CreatedAt             time.Time       `json:"created_at"`
+	CurrentPhase          string          `json:"current_phase"`
+	ID                    string          `json:"id"`
+	Name                  string          `json:"name"`
+	Progress              FeatureProgress `json:"progress"`
+	Repos                 []string        `json:"repos"`
+	RunCount              int             `json:"run_count"`
+	Slug                  string          `json:"slug"`
+	Status                string          `json:"status"`
+	Warnings              []Warning       `json:"warnings,omitempty"`
 }
 
 // FileChange defines model for FileChange.
@@ -1613,6 +1626,7 @@ type HealthResponse struct {
 // HelpQueue defines model for HelpQueue.
 type HelpQueue struct {
 	FeatureID string    `json:"feature_id"`
+	Kind      string    `json:"kind,omitempty"`
 	Pending   bool      `json:"pending"`
 	Question  string    `json:"question"`
 	Time      time.Time `json:"time,omitempty"`
@@ -1997,16 +2011,21 @@ type RelationshipChild struct {
 	DisplayState string `json:"display_state"`
 
 	// DisplayToken Stable, non-positional token suitable for compact UI labels.
-	DisplayToken     string `json:"display_token"`
+	DisplayToken string `json:"display_token"`
+
+	// HasDiffSummary True when a preserved diff summary exists for this closed child. The body itself is only carried by RelationshipChild on a detail route.
+	HasDiffSummary   bool   `json:"has_diff_summary,omitempty"`
 	ID               string `json:"id"`
 	IntegrationState string `json:"integration_state"`
 	Kind             string `json:"kind"`
 
 	// LastError Setup failure message when the child's setup failed.
-	LastError string                   `json:"last_error,omitempty"`
-	Name      string                   `json:"name"`
-	Outcome   RelationshipChildOutcome `json:"outcome,omitempty"`
-	Pipeline  string                   `json:"pipeline"`
+	LastError string `json:"last_error,omitempty"`
+	Name      string `json:"name"`
+
+	// Outcome Recorded relationship close outcome; absent while the child is open.
+	Outcome  RelationshipChildOutcome `json:"outcome,omitempty"`
+	Pipeline string                   `json:"pipeline"`
 
 	// RelationshipState Stable machine state: setting_up, active, completed, or discarded.
 	RelationshipState string `json:"relationship_state,omitempty"`
@@ -2019,8 +2038,46 @@ type RelationshipChild struct {
 	Status string `json:"status"`
 }
 
-// RelationshipChildOutcome defines model for RelationshipChild.Outcome.
+// RelationshipChildOutcome Recorded relationship close outcome; absent while the child is open.
 type RelationshipChildOutcome string
+
+// RelationshipChildSummary List-safe projection of a relationship child. Carries every relationship field except the preserved diff body, so a parent with many closed children cannot inflate a list response without bound. Fetch RelationshipChild on a detail route for the body itself.
+type RelationshipChildSummary struct {
+	Attention       []RelationshipAttention      `json:"attention"`
+	CleanupWarnings []RelationshipCleanupWarning `json:"cleanup_warnings"`
+	ClosedAt        *time.Time                   `json:"closed_at,omitempty"`
+	Cost            Cost                         `json:"cost"`
+
+	// DisplayState Human-readable relationship state. Closed children use exactly "Closed — Completed" or "Closed — Discarded".
+	DisplayState string `json:"display_state"`
+
+	// DisplayToken Stable, non-positional token suitable for compact UI labels.
+	DisplayToken string `json:"display_token"`
+
+	// HasDiffSummary True when a preserved diff summary exists for this closed child. The body itself is only carried by RelationshipChild on a detail route.
+	HasDiffSummary   bool   `json:"has_diff_summary,omitempty"`
+	ID               string `json:"id"`
+	IntegrationState string `json:"integration_state"`
+	Kind             string `json:"kind"`
+
+	// LastError Setup failure message when the child's setup failed.
+	LastError string `json:"last_error,omitempty"`
+	Name      string `json:"name"`
+
+	// Outcome Recorded relationship close outcome; absent while the child is open.
+	Outcome  RelationshipChildOutcome `json:"outcome,omitempty"`
+	Pipeline string                   `json:"pipeline"`
+
+	// RelationshipState Stable machine state: setting_up, active, completed, or discarded.
+	RelationshipState string `json:"relationship_state,omitempty"`
+
+	// SetupStatus Setup status of the child's active run (queued/running/done/failed).
+	SetupStatus string    `json:"setup_status,omitempty"`
+	StartedAt   time.Time `json:"started_at"`
+
+	// Status Stored child lifecycle status; closure never rewrites it.
+	Status string `json:"status"`
+}
 
 // RelationshipCleanupWarning defines model for RelationshipCleanupWarning.
 type RelationshipCleanupWarning struct {

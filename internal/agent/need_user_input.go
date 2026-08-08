@@ -100,6 +100,25 @@ type NeedUserInputQuestion struct {
 // inside an iteration directory.
 const NeedUserInputArtifactName = "need-user-input.yaml"
 
+// verificationReportArtifactName is the harness verification report persisted
+// next to the gate artifact in an iteration directory.
+const verificationReportArtifactName = "verification-report.yaml"
+
+// verificationReportHasBlockedResults reports whether any result is blocked.
+// Blocked results are environment-derived and never a legitimate resume cache
+// hit — the environment may have changed since the report was written.
+func verificationReportHasBlockedResults(report *VerificationReport) bool {
+	if report == nil {
+		return false
+	}
+	for _, result := range report.Results {
+		if NormalizeStatus(result.Status) == VerificationStatusBlocked {
+			return true
+		}
+	}
+	return false
+}
+
 // SynthesizeVerificationNeedUserInputGate creates a same-iteration pause for
 // declared capability failures found by the deterministic executor.
 func SynthesizeVerificationNeedUserInputGate(contractPath string, revision int, itemIDs []string, iteration int) NeedUserInputRecord {
@@ -237,10 +256,13 @@ func verificationBlockerRemediation(reason string, capabilities []string) string
 	return "Resolve the environment limitation described above, then retry verification."
 }
 
-// ApplyNeedUserVerificationDecision applies a user-authorized waiver, or
-// leaves the contract unchanged for an after-auth retry. The caller must only
-// invoke this for a trusted harness-authored gate artifact.
-func ApplyNeedUserVerificationDecision(rec NeedUserInputRecord) error {
+// ApplyNeedUserVerificationDecision applies a user-authorized waiver, or —
+// for an after-auth retry — leaves the contract unchanged and removes the
+// iteration's verification report so resume re-executes the blocked checks
+// instead of replaying them from cache. gatePath is the gate artifact inside
+// the iteration directory. The caller must only invoke this for a trusted
+// harness-authored gate artifact.
+func ApplyNeedUserVerificationDecision(gatePath string, rec NeedUserInputRecord) error {
 	decision := rec.VerificationDecision
 	if decision == nil {
 		return errors.New("need-user-input gate is not a harness verification decision")
@@ -250,6 +272,12 @@ func ApplyNeedUserVerificationDecision(rec NeedUserInputRecord) error {
 		return err
 	}
 	if action == NeedUserVerificationRetryAfterAuth {
+		if gatePath = strings.TrimSpace(gatePath); gatePath != "" {
+			reportPath := filepath.Join(filepath.Dir(gatePath), verificationReportArtifactName)
+			if err := os.Remove(reportPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+				return fmt.Errorf("invalidating verification report for retry: %w", err)
+			}
+		}
 		return nil
 	}
 	contract, err := ReadTestingContract(decision.ContractPath)

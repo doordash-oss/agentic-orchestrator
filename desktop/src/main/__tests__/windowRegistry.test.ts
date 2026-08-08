@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
-import { WindowRegistry, routeSettingsPane, routeWindowPurpose } from '../windowRegistry';
+import {
+  RendererCrashRecovery,
+  WindowRegistry,
+  routeSettingsPane,
+  routeWindowPurpose,
+} from '../windowRegistry';
 import type { AppRouteEvent, WindowPurpose } from '../../shared/ipc';
 
 // --- helpers ---------------------------------------------------------------
@@ -7,6 +12,7 @@ import type { AppRouteEvent, WindowPurpose } from '../../shared/ipc';
 interface FakeWindow {
   purpose: WindowPurpose;
   id: number;
+  crashed?: boolean;
 }
 
 function makeHarness(trusted?: Set<number>) {
@@ -18,11 +24,18 @@ function makeHarness(trusted?: Set<number>) {
     return window;
   });
   const focus = vi.fn();
+  const reload = vi.fn();
   const registry = new WindowRegistry<FakeWindow>(
-    { create, focus, webContentsId: (window) => window.id },
+    {
+      create,
+      focus,
+      isCrashed: (window) => window.crashed === true,
+      reload,
+      webContentsId: (window) => window.id,
+    },
     trusted,
   );
-  return { registry, create, focus, created };
+  return { registry, create, focus, reload, created };
 }
 
 // --- registry ---------------------------------------------------------------
@@ -154,6 +167,8 @@ describe('WindowRegistry', () => {
       {
         create: () => settings,
         focus: () => {},
+        isCrashed: () => false,
+        reload: () => {},
         webContentsId: (window) => {
           if (destroyed) throw new Error('Object has been destroyed');
           return window.id;
@@ -171,6 +186,88 @@ describe('WindowRegistry', () => {
 
     expect(registry.peek('settings')).toBeNull();
     expect([...trusted]).toEqual([]);
+  });
+
+  it('never reloads a live window on focus', () => {
+    const { registry, reload, focus } = makeHarness();
+
+    const main = registry.openOrFocus('main');
+    registry.openOrFocus('main');
+
+    expect(reload).not.toHaveBeenCalled();
+    expect(focus).toHaveBeenCalledWith(main);
+  });
+
+  it('reloads a crashed window before focusing it, instead of raising a blank page', () => {
+    const { registry, reload, focus } = makeHarness();
+
+    const main = registry.openOrFocus('main');
+    main.crashed = true;
+    const raised = registry.openOrFocus('main');
+
+    expect(raised).toBe(main);
+    expect(reload).toHaveBeenCalledTimes(1);
+    expect(reload).toHaveBeenCalledWith(main);
+    expect(focus).toHaveBeenCalledWith(main);
+  });
+
+  it('rebuilds fresh after a crashed window was destroyed and evicted', () => {
+    const { registry, create, reload } = makeHarness();
+
+    const dead = registry.openOrFocus('main');
+    dead.crashed = true;
+    // Repeated crashes exhausted the reload budget: the window was destroyed,
+    // which fires `closed` and evicts it.
+    registry.evict(dead);
+    const rebuilt = registry.openOrFocus('main');
+
+    expect(rebuilt).not.toBe(dead);
+    expect(create).toHaveBeenCalledTimes(2);
+    expect(reload).not.toHaveBeenCalled();
+  });
+});
+
+// --- renderer crash recovery -------------------------------------------------
+
+describe('RendererCrashRecovery', () => {
+  function makeRecovery(maxReloads?: number) {
+    const reload = vi.fn();
+    const destroy = vi.fn();
+    const recovery = new RendererCrashRecovery({ reload, destroy }, maxReloads);
+    return { recovery, reload, destroy };
+  }
+
+  it('answers a non-clean exit with a reload', () => {
+    const { recovery, reload, destroy } = makeRecovery();
+    recovery.crashed('crashed');
+    expect(reload).toHaveBeenCalledTimes(1);
+    expect(destroy).not.toHaveBeenCalled();
+  });
+
+  it('ignores a clean exit', () => {
+    const { recovery, reload, destroy } = makeRecovery();
+    recovery.crashed('clean-exit');
+    expect(reload).not.toHaveBeenCalled();
+    expect(destroy).not.toHaveBeenCalled();
+  });
+
+  it('destroys the window once the reload budget is exhausted', () => {
+    const { recovery, reload, destroy } = makeRecovery();
+    recovery.crashed('oom');
+    recovery.crashed('oom');
+    recovery.crashed('oom');
+    expect(reload).toHaveBeenCalledTimes(2);
+    expect(destroy).toHaveBeenCalledTimes(1);
+  });
+
+  it('resets the budget when a load finishes, so later crashes reload again', () => {
+    const { recovery, reload, destroy } = makeRecovery();
+    recovery.crashed('crashed');
+    recovery.crashed('crashed');
+    recovery.loadFinished();
+    recovery.crashed('crashed');
+    expect(reload).toHaveBeenCalledTimes(3);
+    expect(destroy).not.toHaveBeenCalled();
   });
 });
 

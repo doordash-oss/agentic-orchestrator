@@ -8,7 +8,7 @@
  * separate, explicitly allowlisted operations dispatched through
  * `dispatchAction`.
  */
-import { redactText } from '../shared/errors';
+import { isRequestTimeout, redactText } from '../shared/errors';
 import {
   FeatureActionResponseSchema,
   ServerFeatureOperationalActionResponseSchema,
@@ -86,6 +86,9 @@ const REMEDY_BY_CODE: Record<string, string> = {
   bad_request: 'Correct the highlighted input, then try again.',
   not_found: 'The feature no longer exists on the server. Close its tab.',
   conflict: 'The server rejected the action in its current state. Refresh and retry.',
+  invalid_transition: "The feature's current state doesn't allow this action. Refresh and retry.",
+  need_user_input_open: 'Answer the open input request to continue.',
+  phase_finalizing: 'The phase is being finalized; wait for it to finish.',
 };
 
 const PHASE_MODEL_LABELS: ReadonlyArray<readonly [string, string]> = [
@@ -104,6 +107,13 @@ const EFFORT_LEVELS = new Set<EffortLevel>(['auto', 'low', 'medium', 'high', 'xh
 // idle bounds are five minutes, so leave transport cleanup time beyond that
 // without weakening the 30-second default for ordinary API calls.
 const PUBLISH_DESCRIPTION_TIMEOUT_MS = 6 * 60_000;
+
+// Publish and merge run non-idempotent multi-repository git and forge work
+// (commit, push, then pull-request create or update per repository), which
+// legitimately takes minutes. The 30-second default would abort a request whose
+// server-side work is still progressing, so these carry their own bound.
+const LONG_MUTATION_TIMEOUT_MS = 10 * 60_000;
+const LONG_MUTATION_ACTIONS: ReadonlySet<string> = new Set(['publish', 'merge']);
 
 export class FeatureService {
   private readonly actionFlights = new Map<string, Promise<FeatureActionResult>>();
@@ -250,6 +260,12 @@ export class FeatureService {
       ...(feature.child_history === undefined
         ? {}
         : { childHistory: feature.child_history.map(toRelationshipChildView) }),
+      ...(feature.child_history_total === undefined
+        ? {}
+        : { childHistoryTotal: feature.child_history_total }),
+      ...(feature.child_history_truncated === undefined
+        ? {}
+        : { childHistoryTruncated: feature.child_history_truncated }),
     }));
   }
 
@@ -259,9 +275,21 @@ export class FeatureService {
     const key = `${input.featureId}:${input.action}:${JSON.stringify('body' in input ? input.body : {})}`;
     const existing = this.actionFlights.get(key);
     if (existing !== undefined) return existing;
-    const flight = this.runOperationalAction(input).finally(() => {
+    const release = (): void => {
       if (this.actionFlights.get(key) === flight) this.actionFlights.delete(key);
-    });
+    };
+    const flight = this.runOperationalAction(input).then(
+      (result) => {
+        release();
+        return result;
+      },
+      (error: unknown) => {
+        // A timed-out mutation is still running server-side: keep the flight so
+        // a second dispatch cannot launch a duplicate of it.
+        if (!isRequestTimeout(error)) release();
+        throw error;
+      },
+    );
     this.actionFlights.set(key, flight);
     return flight;
   }
@@ -440,6 +468,7 @@ export class FeatureService {
       const body = await this.api(`/api/v1/features/${input.featureId}/actions/${input.action}`, {
         method: 'POST',
         body: 'body' in input ? input.body : {},
+        ...(LONG_MUTATION_ACTIONS.has(input.action) ? { timeoutMs: LONG_MUTATION_TIMEOUT_MS } : {}),
       });
       const response = validateWithSchema(body, ServerFeatureOperationalActionResponseSchema);
       return {
@@ -590,6 +619,12 @@ function toSnapshot(feature: ServerFeatureDetail): FeatureSnapshot {
     ...(feature.child_history === undefined
       ? {}
       : { childHistory: feature.child_history.map(toRelationshipChildView) }),
+    ...(feature.child_history_total === undefined
+      ? {}
+      : { childHistoryTotal: feature.child_history_total }),
+    ...(feature.child_history_truncated === undefined
+      ? {}
+      : { childHistoryTruncated: feature.child_history_truncated }),
     ...spreadDefined('parentId', feature.parent_id),
     ...spreadDefined('parentKind', feature.parent_kind),
     ...(feature.active === undefined ? {} : { active: feature.active }),
@@ -710,6 +745,7 @@ function toSnapshot(feature: ServerFeatureDetail): FeatureSnapshot {
 }
 
 function toRelationshipChildView(child: ServerRelationshipChild) {
+  const hasDiffSummary = diffSummaryPresence(child);
   return {
     id: validateWithSchema(child.id, FeatureIdSchema),
     name: child.name,
@@ -738,7 +774,17 @@ function toRelationshipChildView(child: ServerRelationshipChild) {
       ? {}
       : { lastError: redactText(child.last_error) }),
     ...spreadDefined('diffSummary', child.diff_summary),
+    ...(hasDiffSummary === undefined ? {} : { hasDiffSummary }),
   };
+}
+
+/**
+ * A detail-route child carries the body and no flag; deriving the flag from it
+ * keeps every consumer on one predicate for "a preserved diff exists".
+ */
+function diffSummaryPresence(child: ServerRelationshipChild): boolean | undefined {
+  if (child.has_diff_summary !== undefined) return child.has_diff_summary;
+  return child.diff_summary === undefined ? undefined : child.diff_summary !== '';
 }
 
 /** Orders tasks by the server-owned task_order; unknown keys keep a stable tail. */

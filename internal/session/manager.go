@@ -470,11 +470,11 @@ func (m *Manager) handleSessionMessage(s *Session, id, featureID string, phase f
 		if msg.ControlRequest.Request.Subtype == "hook_callback" {
 			// no status change
 		} else if msg.ControlRequest.Request.ToolName == "AskUserQuestion" {
-			s.status = SessionWaitingHelp
+			s.setStatusLocked(SessionWaitingHelp)
 			s.hasUnansweredQuestion = true
 		} else {
 			// Other tool permissions (Bash, etc.)
-			s.status = SessionWaitingPermission
+			s.setStatusLocked(SessionWaitingPermission)
 		}
 	case msg.Result != nil:
 		interactive := s.turnMode == ports.TurnModeInteractive
@@ -489,18 +489,18 @@ func (m *Manager) handleSessionMessage(s *Session, id, featureID string, phase f
 				break
 			}
 			if interactive {
-				s.status = SessionWaitingHelp
+				s.setStatusLocked(SessionWaitingHelp)
 			} else {
-				s.status = SessionRunning
+				s.setStatusLocked(SessionRunning)
 			}
 		} else if s.status == SessionWaitingPermission && len(s.pendingControlRequests) == 0 {
 			if interactive {
-				s.status = SessionWaitingHelp
+				s.setStatusLocked(SessionWaitingHelp)
 			} else {
-				s.status = SessionRunning
+				s.setStatusLocked(SessionRunning)
 			}
 		} else if interactive {
-			s.status = SessionWaitingHelp
+			s.setStatusLocked(SessionWaitingHelp)
 		}
 	case msg.Assistant != nil:
 		// An assistant message means the agent moved past the permission
@@ -510,7 +510,7 @@ func (m *Manager) handleSessionMessage(s *Session, id, featureID string, phase f
 		// incorrectly clobber SessionWaitingPermission before the user can
 		// respond.
 		if s.status == SessionWaitingPermission && len(s.pendingControlRequests) == 0 {
-			s.status = SessionRunning
+			s.setStatusLocked(SessionRunning)
 		}
 	}
 	s.mu.Unlock()

@@ -144,6 +144,13 @@ var protectedHomeComponents = map[string]bool{
 	".ssh":             true,
 }
 
+// grantableProtectedSubtrees carves grantable children out of otherwise
+// protected home components: ~/.docker/config.json holds credentials, but
+// buildx keeps builder state under ~/.docker/buildx and needs writes.
+var grantableProtectedSubtrees = map[string]map[string]bool{
+	".docker": {"buildx": true},
+}
+
 // protectedConfigChildren are ~/.config subtrees that hold credentials.
 var protectedConfigChildren = map[string]bool{
 	"gcloud": true,
@@ -202,6 +209,9 @@ func sandboxGrantRootForDeniedPath(home, denied string) (string, bool) {
 			}
 			return "", false
 		case protectedHomeComponents[first]:
+			if children := grantableProtectedSubtrees[first]; len(parts) >= 2 && children[parts[1]] {
+				return filepath.Join(home, first, parts[1]), true
+			}
 			return "", false
 		case first == ".config":
 			if len(parts) >= 2 && !protectedConfigChildren[parts[1]] {
@@ -238,6 +248,7 @@ func toolchainCacheRoots(home string) []string {
 	}
 	relative := []string{
 		".npm", ".yarn", ".pnpm-store",
+		filepath.Join(".docker", "buildx"),
 		filepath.Join(".bun", "install", "cache"),
 		filepath.Join(".cargo", "registry"), filepath.Join(".cargo", "git"),
 		".gradle", filepath.Join(".m2", "repository"),

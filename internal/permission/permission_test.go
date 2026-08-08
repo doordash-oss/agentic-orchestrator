@@ -1427,6 +1427,46 @@ func TestSessionGuardHandler_DeniesHarnessReceiptMutationForEveryProvider(t *tes
 	}
 }
 
+func TestSessionGuardHandler_DeniesTestingContractMutationForEveryProvider(t *testing.T) {
+	contract := filepath.Join(t.TempDir(), testingContractFilename)
+	for _, provider := range []string{"claude", "codex", "opencode"} {
+		for _, tc := range []struct {
+			name  string
+			tool  string
+			input string
+		}{
+			{name: "write", tool: toolNameWrite, input: `{"file_path":"` + contract + `","content":"items: []"}`},
+			{name: "edit", tool: toolNameEdit, input: `{"file_path":"` + contract + `","old_string":"a","new_string":"b"}`},
+			{name: "notebook", tool: toolNameNotebookEdit, input: `{"notebook_path":"` + contract + `"}`},
+			{name: "shell", tool: toolNameBash, input: `{"command":"cat plan.yaml > ` + contract + `"}`},
+		} {
+			t.Run(provider+"/"+tc.name, func(t *testing.T) {
+				handler := Guarded(&AutoApproveHandler{})
+				decision, err := handler.CanUseTool(ports.ToolPermissionRequest{
+					ToolName:     tc.tool,
+					Input:        tc.input,
+					ProviderName: provider,
+				})
+				if err != nil {
+					t.Fatalf("CanUseTool() error = %v", err)
+				}
+				if decision.Behavior != DecisionDeny {
+					t.Fatalf("Behavior = %q, want deny", decision.Behavior)
+				}
+				if !strings.Contains(decision.Reason, "harness-owned") {
+					t.Fatalf("Reason = %q, want harness-owned guidance", decision.Reason)
+				}
+			})
+		}
+	}
+}
+
+func TestSessionGuardHandler_AllowsTestingContractReadThroughReadOnlyTool(t *testing.T) {
+	contract := filepath.Join(t.TempDir(), testingContractFilename)
+	handler := Guarded(&AutoApproveHandler{})
+	requirePermissionAllowed(t, handler, "Read", `{"file_path":"`+contract+`"}`)
+}
+
 func TestSessionGuardHandler_AllowsReceiptReadThroughReadOnlyTool(t *testing.T) {
 	receipt := filepath.Join(t.TempDir(), completionReceiptFilename)
 	handler := Guarded(&AutoApproveHandler{})

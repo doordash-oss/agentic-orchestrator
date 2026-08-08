@@ -7,8 +7,12 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { redactText } from '../../shared/errors';
-import { assertNoPrototypePollution, assertWithinByteSize } from '../../shared/sanitize';
+import { redactText, requestTimeoutError, SafeErrorException } from '../../shared/errors';
+import {
+  assertNoPrototypePollution,
+  assertWithinByteSize,
+  MAX_PAYLOAD_BYTES,
+} from '../../shared/sanitize';
 import type { DiscoveryDeps } from './discovery';
 import type { SseStream } from './events';
 import { RedactedLogBuffer } from './logBuffer';
@@ -21,8 +25,13 @@ const DEFAULT_RUNTIME_PARENT = '~/.agentic-orchestrator';
 const STATE_BASENAME = 'features';
 const CONFIG_BASENAME = 'config.yaml';
 
-/** Upper bound for gateway probe responses (health/readiness are tiny). */
-const MAX_PROBE_RESPONSE_BYTES = 1024 * 1024;
+/**
+ * Upper bound a caller may opt into for health/readiness probes, which are
+ * tiny. It is deliberately NOT the default: domain responses are governed by
+ * the boundary-wide MAX_PAYLOAD_BYTES, so this transport gate can never become
+ * a stricter accidental limit than the documented one.
+ */
+export const MAX_PROBE_RESPONSE_BYTES = 1024 * 1024;
 
 export interface RuntimeGatewayWiringOptions {
   /** Reads the persisted runtime selection (a runtime parent directory). */
@@ -146,18 +155,26 @@ function canonicalize(candidate: string): string {
  * Bounded, sanitized JSON request (GET unless a mutating method is given).
  * The Authorization header is attached here in the main process only; tokens
  * never appear in URLs. Mutations carry the server's CSRF defense header.
+ * Exceeding the bound raises the typed timeout error, never the raw DOM abort
+ * message — a mutation that outran its bound may still be running server-side.
  */
-async function fetchJson(
+export async function fetchJson(
   url: string,
   requestOptions: {
     token?: string;
     timeoutMs: number;
     method?: 'GET' | 'POST' | 'PATCH' | 'PUT';
     body?: unknown;
+    /** Tighter response bound for probe endpoints; defaults to the boundary cap. */
+    maxResponseBytes?: number;
   },
 ): Promise<{ status: number; body: unknown }> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), requestOptions.timeoutMs);
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, requestOptions.timeoutMs);
   try {
     const method = requestOptions.method ?? 'GET';
     const headers: Record<string, string> = { Accept: 'application/json' };
@@ -178,13 +195,18 @@ async function fetchJson(
       ...(payload === undefined ? {} : { body: payload }),
     });
     const text = await response.text();
-    assertWithinByteSize(text, MAX_PROBE_RESPONSE_BYTES);
+    assertWithinByteSize(text, requestOptions.maxResponseBytes ?? MAX_PAYLOAD_BYTES);
     let body: unknown;
     if (text !== '') {
       body = JSON.parse(text);
       assertNoPrototypePollution(body);
     }
     return { status: response.status, body };
+  } catch (err) {
+    if (timedOut) {
+      throw new SafeErrorException(requestTimeoutError());
+    }
+    throw err;
   } finally {
     clearTimeout(timer);
   }

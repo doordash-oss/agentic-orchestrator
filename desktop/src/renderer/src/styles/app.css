@@ -1487,7 +1487,8 @@ body {
   color: var(--bad);
 }
 
-.refactor-pass__retry-load {
+.refactor-pass__retry-load,
+.refactor-pass__answer-now {
   padding: 0;
   border: 0;
   border-bottom: 1px solid currentColor;
@@ -1698,6 +1699,36 @@ body {
   padding: 0 var(--space-2);
   border: 1px solid var(--hairline);
   border-radius: 999px;
+}
+
+.refactor-history__truncation {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  margin: 0 0 var(--space-2);
+  color: var(--muted);
+  font: 12px var(--bench-font-text);
+}
+
+.refactor-history__truncation button,
+.refactor-history__diff button {
+  padding: 2px var(--space-2);
+  border: 1px solid var(--hairline);
+  border-radius: 4px;
+  background: var(--raised);
+  color: var(--text);
+  font: 12px var(--bench-font-text);
+  cursor: pointer;
+}
+
+.refactor-history__truncation button:disabled,
+.refactor-history__diff button:disabled {
+  color: var(--muted);
+  cursor: default;
+}
+
+.refactor-history__diff button {
+  margin-top: var(--space-2);
 }
 
 .refactor-history__entries {
@@ -7282,6 +7313,12 @@ body {
   border-color: var(--bad);
   background: color-mix(in srgb, var(--bad) 10%, transparent);
   color: var(--bad);
+}
+
+.completion-workspace__result--reconciling {
+  border-color: var(--attention);
+  background: color-mix(in srgb, var(--attention) 10%, transparent);
+  color: var(--attention);
 }
 
 .completion-workspace__result-icon {

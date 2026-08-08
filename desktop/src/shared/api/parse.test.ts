@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
-import { HealthResponseSchema, parseServerJson, PromptSnapshotResponseSchema } from './parse';
+import {
+  DIFF_SUMMARY_MAX_BYTES,
+  HealthResponseSchema,
+  parseServerJson,
+  PromptSnapshotResponseSchema,
+  ServerFeatureSummarySchema,
+  ServerRelationshipChildSchema,
+} from './parse';
 import { SafeErrorException } from '../errors';
 import { MAX_PAYLOAD_BYTES } from '../sanitize';
 
@@ -190,5 +197,72 @@ describe('parseServerJson', () => {
       failure(() => parseServerJson(JSON.stringify(fallbackFixture), PromptSnapshotResponseSchema))
         .code,
     ).toBe('E_SCHEMA_MISMATCH');
+  });
+});
+
+describe('ServerRelationshipChildSchema diff_summary bound', () => {
+  const child = (diffSummary: string) => ({
+    id: 'abcd1234ef567890',
+    name: 'Refactor pass',
+    kind: 'refactor',
+    display_token: 'R1',
+    display_state: 'Completed',
+    pipeline: 'medium',
+    status: 'Done',
+    started_at: '2026-07-14T00:00:00Z',
+    cost: { total_usd: 0, by_phase: {} },
+    integration_state: 'merged',
+    attention: [],
+    cleanup_warnings: [],
+    diff_summary: diffSummary,
+  });
+
+  it('accepts a summary inside the server budget', () => {
+    const parsed = ServerRelationshipChildSchema.safeParse(
+      child('x'.repeat(DIFF_SUMMARY_MAX_BYTES)),
+    );
+    expect(parsed.success).toBe(true);
+  });
+
+  it('rejects the oversized field itself rather than the whole payload', () => {
+    const parsed = ServerRelationshipChildSchema.safeParse(
+      child('x'.repeat(DIFF_SUMMARY_MAX_BYTES + 1)),
+    );
+    expect(parsed.success).toBe(false);
+    expect(parsed.error?.issues[0]?.path).toEqual(['diff_summary']);
+  });
+
+  it('accepts the list projection: has_diff_summary with no body', () => {
+    const { diff_summary: _omitted, ...summary } = child('');
+    const parsed = ServerRelationshipChildSchema.safeParse({
+      ...summary,
+      has_diff_summary: true,
+    });
+    expect(parsed.success).toBe(true);
+    expect(parsed.data?.has_diff_summary).toBe(true);
+    expect(parsed.data?.diff_summary).toBeUndefined();
+  });
+});
+
+describe('ServerFeatureSummarySchema bounded child history', () => {
+  it('carries the true total and the truncation flag', () => {
+    const parsed = ServerFeatureSummarySchema.safeParse({
+      id: 'abcd1234ef567890',
+      name: 'Search revamp',
+      slug: 'search-revamp',
+      status: 'Published',
+      current_phase: 'Done',
+      repos: ['repo-a'],
+      created_at: '2026-07-14T10:00:00Z',
+      active_run: 1,
+      run_count: 1,
+      progress: {},
+      child_history: [],
+      child_history_total: 12,
+      child_history_truncated: true,
+    });
+    expect(parsed.success).toBe(true);
+    expect(parsed.data?.child_history_total).toBe(12);
+    expect(parsed.data?.child_history_truncated).toBe(true);
   });
 });

@@ -167,6 +167,32 @@ describe('AftercareWorkspace runway', () => {
     expect(row.querySelector('.aftercare-workspace__action-label')).toBeNull();
   });
 
+  it('explains an unverified worktree state on a blocked pass', () => {
+    renderWorkspace({
+      snapshot: featureSnapshot({
+        status: 'CodeReady',
+        activeRun: 8,
+        actions: [
+          {
+            id: 'refactor',
+            enabled: false,
+            disabledReasons: [
+              {
+                code: 'worktree_state_unknown',
+                message: 'worktree state could not be determined',
+              },
+            ],
+          },
+        ],
+      }),
+    });
+    const row = screen.getByRole('button', { name: /Start a refactor pass/ });
+    expect(row).toBeDisabled();
+    expect(row).toHaveTextContent(
+      'Could not verify whether the repository worktrees are clean — try again.',
+    );
+  });
+
   it('renders the busy label while a one-click launch is dispatching', () => {
     renderWorkspace({
       snapshot: featureSnapshot({
@@ -304,6 +330,43 @@ describe('AftercareWorkspace pass history', () => {
 
     await user.click(screen.getByText('Pass history'));
     expect(screen.getByText(/review-feedback tail: no PR URL/)).toBeVisible();
+  });
+
+  it('loads a list-projected diff body on demand', async () => {
+    const user = userEvent.setup();
+    const onLoadFullChildHistory = vi
+      .fn()
+      .mockResolvedValue([{ ...closedPass, hasDiffSummary: true, diffSummary: '3 files changed' }]);
+    renderWorkspace({
+      snapshot: featureSnapshot({
+        status: 'Published',
+        actions: [],
+        childHistory: [{ ...closedPass, hasDiffSummary: true }],
+      }),
+      onLoadFullChildHistory,
+    });
+
+    await user.click(screen.getByText('Pass history'));
+    await user.click(screen.getByText('Preserved diff (read-only)'));
+    await user.click(screen.getByRole('button', { name: 'Load diff' }));
+    expect(onLoadFullChildHistory).toHaveBeenCalledTimes(1);
+    expect(await screen.findByText(/3 files changed/)).toBeVisible();
+  });
+
+  it('never lets a bounded history read as the whole record', async () => {
+    const user = userEvent.setup();
+    renderWorkspace({
+      snapshot: featureSnapshot({
+        status: 'Published',
+        actions: [],
+        childHistory: [closedPass],
+        childHistoryTotal: 12,
+        childHistoryTruncated: true,
+      }),
+    });
+
+    await user.click(screen.getByText('Pass history'));
+    expect(screen.getByText('1 of 12')).toBeVisible();
   });
 });
 

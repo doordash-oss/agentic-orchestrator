@@ -171,5 +171,5 @@ func (o *Orchestrator) applyTrustedVerificationDecision(featureID, gatePath stri
 	if filepath.Base(absGate) != agent.NeedUserInputArtifactName {
 		return fmt.Errorf("verification decision came from a non-canonical gate artifact")
 	}
-	return agent.ApplyNeedUserVerificationDecision(rec)
+	return agent.ApplyNeedUserVerificationDecision(absGate, rec)
 }

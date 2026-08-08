@@ -1,7 +1,7 @@
 import { Notification } from 'electron';
 import { redactText } from '../shared/errors';
 import type { AttentionItem, AttentionSnapshot } from '../shared/ipc';
-import { attentionOwnerFeatureId } from '../shared/ipc';
+import { attentionOwnerFeatureId, isSyntheticHelpItem } from '../shared/ipc';
 
 type ActionableAttentionItem = Exclude<AttentionItem, { kind: 'recovery' }>;
 
@@ -42,7 +42,11 @@ export class AttentionNotificationCoordinator {
   constructor(private readonly deps: AttentionNotificationCoordinatorDeps) {}
 
   update(snapshot: AttentionSnapshot, options: AttentionNotificationOptions): void {
-    const pending = snapshot.items.filter((item) => item.kind !== 'recovery');
+    // Synthetic help items are inline status, not a request — never notify.
+    const pending = snapshot.items.filter(
+      (item): item is ActionableAttentionItem =>
+        item.kind !== 'recovery' && !isSyntheticHelpItem(item),
+    );
     const pendingIds = new Set(pending.map(notificationIdentity));
     for (const id of this.notified) {
       if (!pendingIds.has(id)) {
@@ -95,7 +99,8 @@ function previewSummary(item: ActionableAttentionItem): string {
     case 'gate':
       return item.summary === undefined ? '' : ` · ${item.summary}`;
     case 'help':
-      return item.waitingKind === 'input' ? ' · Agent is waiting' : ' · Help request';
+      // Synthetic (waitingKind 'input') items are filtered before notifying.
+      return ' · Help request';
     case 'review':
       return ` · ${item.reviewKind} review`;
     default: {

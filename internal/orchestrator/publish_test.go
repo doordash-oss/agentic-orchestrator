@@ -825,6 +825,7 @@ func (s *publishDescriptionSessionHandle) Status() session.SessionStatus {
 func (s *publishDescriptionSessionHandle) IsActive() bool                   { return true }
 func (s *publishDescriptionSessionHandle) Iteration() int                   { return 0 }
 func (s *publishDescriptionSessionHandle) StartedAt() time.Time             { return time.Time{} }
+func (s *publishDescriptionSessionHandle) WaitingSince() time.Time          { return time.Time{} }
 func (s *publishDescriptionSessionHandle) InitialPrompt() string            { return "" }
 func (s *publishDescriptionSessionHandle) ProviderName() string             { return "" }
 func (s *publishDescriptionSessionHandle) Model() string                    { return "" }

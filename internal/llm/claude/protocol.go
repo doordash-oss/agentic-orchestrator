@@ -22,6 +22,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -159,8 +160,92 @@ func (p *Protocol) RespondToHook(requestID string) error {
 }
 
 // RespondToAskUser sends a control response for an AskUserQuestion tool use.
+// The CLI resolves each answer against the question's option labels; an
+// answer matching no label selects nothing and the turn never receives a
+// tool_result, so answers are aligned to labels first and free-text answers
+// are injected as an extra option before being selected.
 func (p *Protocol) RespondToAskUser(requestID string, questions json.RawMessage, answers map[string]string, annotations map[string]llm.AskUserAnnotation) error {
+	questions, answers = alignAskUserAnswers(questions, answers)
 	return p.writeJSON(llm.NewAskUserResponse(requestID, questions, answers, annotations))
+}
+
+// alignAskUserAnswers rewrites each answer to the exact option label it
+// selects (recommended-suffix and display-truncation tolerant) and injects a
+// free-text answer that matches no label as an additional option, so the
+// CLI's label resolution always finds a selection.
+func alignAskUserAnswers(questions json.RawMessage, answers map[string]string) (json.RawMessage, map[string]string) {
+	if len(answers) == 0 {
+		return questions, answers
+	}
+	var root any
+	if err := json.Unmarshal(questions, &root); err != nil {
+		return questions, answers
+	}
+	list := askUserQuestionList(root)
+	if len(list) == 0 {
+		return questions, answers
+	}
+
+	aligned := make(map[string]string, len(answers))
+	for k, v := range answers {
+		aligned[k] = v
+	}
+	changed := false
+	for _, item := range list {
+		q, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		text, _ := q["question"].(string)
+		answer, ok := answers[text]
+		if !ok || strings.TrimSpace(answer) == "" {
+			continue
+		}
+		opts, _ := q["options"].([]any)
+		if label, ok := llm.MatchAskUserOptionLabel(askUserOptionLabels(opts), answer); ok {
+			if label != answer {
+				aligned[text] = label
+				changed = true
+			}
+			continue
+		}
+		q["options"] = append(opts, map[string]any{"label": answer})
+		changed = true
+	}
+	if !changed {
+		return questions, answers
+	}
+	out, err := json.Marshal(root)
+	if err != nil {
+		return questions, answers
+	}
+	return out, aligned
+}
+
+// askUserQuestionList returns the questions array from either the tool input
+// envelope ({"questions":[...]}) or a bare array.
+func askUserQuestionList(root any) []any {
+	switch v := root.(type) {
+	case map[string]any:
+		list, _ := v["questions"].([]any)
+		return list
+	case []any:
+		return v
+	default:
+		return nil
+	}
+}
+
+func askUserOptionLabels(opts []any) []string {
+	labels := make([]string, 0, len(opts))
+	for _, opt := range opts {
+		if m, ok := opt.(map[string]any); ok {
+			if label, ok := m["label"].(string); ok {
+				labels = append(labels, label)
+			}
+		}
+	}
+	return labels
 }
 
 // Interrupt sends a control_request with subtype "interrupt" to cancel the

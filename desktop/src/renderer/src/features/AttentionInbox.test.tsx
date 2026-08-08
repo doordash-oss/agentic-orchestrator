@@ -580,14 +580,22 @@ describe('AttentionInbox help detail', () => {
     expect(meta).toHaveTextContent('Knowledge Base');
   });
 
-  it('labels waiting sessions distinctly in the inbox rows', async () => {
+  it('keeps waiting sessions out of the inbox rows and the badge', async () => {
     const onJump = vi.fn();
     render(<Harness items={[helpWaitingItem, helpQuestionItem]} onJump={onJump} />);
     const user = userEvent.setup();
 
-    await user.click(screen.getByRole('button', { name: /Attention inbox, 2 pending/ }));
-    expect(screen.getByRole('button', { name: /Agent waiting/ })).toBeVisible();
+    await user.click(screen.getByRole('button', { name: /Attention inbox, 1 pending/ }));
+    expect(screen.queryByRole('button', { name: /Agent waiting/ })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Help request/ })).toBeVisible();
+  });
+
+  it('shows the empty state when only a waiting session is open', async () => {
+    render(<Harness items={[helpWaitingItem]} onJump={vi.fn()} />);
+    const user = userEvent.setup();
+
+    await user.click(screen.getByRole('button', { name: /Attention inbox, 0 pending/ }));
+    expect(screen.getByText('No blocking input is waiting.')).toBeVisible();
   });
 });
 

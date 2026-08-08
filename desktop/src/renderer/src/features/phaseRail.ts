@@ -5,7 +5,7 @@
  * renders anything — the rail component, archive mode, and the sidebar
  * sub-lines all compute from this module so they can never disagree.
  */
-import type { AttentionItem, FeatureSnapshot } from '../../../shared/ipc';
+import { isSyntheticHelpItem, type AttentionItem, type FeatureSnapshot } from '../../../shared/ipc';
 import {
   ACTIVE_STATUSES,
   formatDuration,
@@ -153,7 +153,12 @@ export function classifyHold(
 ): RailHold | null {
   if (status === 'Failed') return null;
 
-  const items = openAttentionItems.filter((item) => item.kind !== 'recovery');
+  // Synthetic help items (an interactive session idling between turns) are
+  // inline status, not a human being asked something — they neither hold the
+  // rail nor feed the oldest-waiting timestamp.
+  const items = openAttentionItems.filter(
+    (item) => item.kind !== 'recovery' && !isSyntheticHelpItem(item),
+  );
 
   if (ACTIVE_STATUSES.has(status)) {
     if (!items.some((item) => HUMAN_BLOCKING_KINDS.has(item.kind))) return null;

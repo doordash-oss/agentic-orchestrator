@@ -28,6 +28,21 @@ export interface AftercareAction {
   disabledReason?: string;
 }
 
+/**
+ * Renderer copy for disabled-reason codes whose server message states a
+ * machine fact instead of the reader's next move. `worktree_state_unknown` is
+ * a failed-closed probe, not a dirty worktree: the state is unverified, and
+ * retrying is what resolves it.
+ */
+const DISABLED_REASON_COPY: Record<string, string> = {
+  worktree_state_unknown:
+    'Could not verify whether the repository worktrees are clean — try again.',
+};
+
+export function disabledReasonCopy(reason: { code: string; message: string }): string {
+  return DISABLED_REASON_COPY[reason.code] ?? reason.message;
+}
+
 const AFTERCARE_STATUSES = new Set(['CodeReady', 'Published', 'Done']);
 // The catalog ids only — undelivered-work ids are preflight-derived and never enter this list.
 type CatalogActionId = 'publish' | 'rebase' | 'refactor' | 'review-feedback';
@@ -51,9 +66,9 @@ export function aftercareActions(
     // A blocked pass stays on the runway carrying its reason; silently
     // dropping it is how the surface used to hide available work.
     if (!PASS_ACTION_IDS.includes(id)) return [];
-    const reason = action.disabledReasons[0]?.message;
+    const reason = action.disabledReasons[0];
     if (reason === undefined) return [];
-    return [{ ...aftercareAction(id), disabledReason: reason }];
+    return [{ ...aftercareAction(id), disabledReason: disabledReasonCopy(reason) }];
   });
   // Delivery rows the catalog already covers would only duplicate it — the
   // enabled catalog `publish` row and the preflight's publish-eligible row are

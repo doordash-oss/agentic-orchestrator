@@ -71,6 +71,12 @@ func (h *SessionGuardHandler) CanUseTool(req ports.ToolPermissionRequest) (ports
 			Reason:   "phase_complete is a harness-owned completion receipt; emit the structured root outcome instead",
 		}, nil
 	}
+	if requestsHarnessFileMutation(req, testingContractFilename) {
+		return ports.PermissionDecision{
+			Behavior: DecisionDeny,
+			Reason:   "testing-contract.yaml is harness-owned and regenerated every iteration; amend the phase plan's verification section instead",
+		}, nil
+	}
 	if h.MaxWriteBytes > 0 && req.ProviderName == providerNameClaude && req.ToolName == toolNameWrite {
 		if n, ok := writeContentSize(req.Input); ok && n > h.MaxWriteBytes {
 			return ports.PermissionDecision{
@@ -87,20 +93,27 @@ func (h *SessionGuardHandler) CanUseTool(req ports.ToolPermissionRequest) (ports
 	return h.Inner.CanUseTool(req)
 }
 
-const completionReceiptFilename = "phase_complete"
+const (
+	completionReceiptFilename = "phase_complete"
+	testingContractFilename   = "testing-contract.yaml"
+)
 
 func requestsCompletionReceiptMutation(req ports.ToolPermissionRequest) bool {
+	return requestsHarnessFileMutation(req, completionReceiptFilename)
+}
+
+func requestsHarnessFileMutation(req ports.ToolPermissionRequest, filename string) bool {
 	switch req.ToolName {
 	case toolNameEdit, toolNameWrite, toolNameNotebookEdit:
 		if path, ok := toolInputFilePath(req.Input); ok {
-			return filepath.Base(filepath.Clean(path)) == completionReceiptFilename
+			return filepath.Base(filepath.Clean(path)) == filename
 		}
-		return strings.Contains(req.Input, completionReceiptFilename)
+		return strings.Contains(req.Input, filename)
 	case toolNameBash:
 		// Bash is write-capable and shell syntax is intentionally not parsed
-		// here. Deny any receipt reference through Bash; read-only inspection
+		// here. Deny any reference through Bash; read-only inspection
 		// remains available through the Read tool.
-		return strings.Contains(extractBashCommand(req.Input), completionReceiptFilename)
+		return strings.Contains(extractBashCommand(req.Input), filename)
 	default:
 		return false
 	}
@@ -121,8 +134,8 @@ func writeContentSize(raw string) (int, bool) {
 }
 
 // Guarded wraps inner in a SessionGuardHandler. Every guarded session rejects
-// agent writes to the harness completion receipt; oversized Claude Writes are
-// rejected uniformly as well.
+// agent writes to the harness completion receipt and the harness-owned
+// testing contract; oversized Claude Writes are rejected uniformly as well.
 func Guarded(inner ports.PermissionHandler) ports.PermissionHandler {
 	return &SessionGuardHandler{Inner: inner, MaxWriteBytes: DefaultWriteGuardBytes}
 }

@@ -110,10 +110,16 @@ export function MergeModalBody({
           <button
             type="button"
             className="completion-workspace__action"
-            disabled={mergeAction.busy}
+            disabled={mergeAction.busy || mergeAction.reconciling}
             onClick={() => void handleMerge()}
           >
-            {mergeAction.busy ? 'Merging…' : hasUnmerged ? 'Merge updates' : 'Merge'}
+            {mergeAction.busy
+              ? 'Merging…'
+              : mergeAction.reconciling
+                ? 'Reconciling…'
+                : hasUnmerged
+                  ? 'Merge updates'
+                  : 'Merge'}
           </button>
         </>
       ) : (
@@ -122,7 +128,7 @@ export function MergeModalBody({
         </div>
       )}
       <ResultBox result={mergeAction.result} />
-      {mergeAction.result !== null && !mergeAction.result.ok ? (
+      {mergeAction.result !== null && !mergeAction.result.ok && !mergeAction.reconciling ? (
         <p className="completion-workspace__merge-handoff-hint">
           A conflict or behind-base outcome can be resolved with a rebase pass. Use Start rebase
           pass in the feature's aftercare workspace, then return here to retry the merge.

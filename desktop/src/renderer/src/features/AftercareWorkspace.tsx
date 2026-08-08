@@ -1,6 +1,7 @@
 import type {
   CompletionPreflightResult,
   FeatureSnapshot,
+  RelationshipChildView,
   RunDetailView,
 } from '../../../shared/ipc';
 import { formatDuration } from './featureView';
@@ -21,6 +22,8 @@ export interface AftercareWorkspaceProps {
   actionError?: AftercareActionError | null;
   /** Action currently dispatching a one-click launch; its row renders busy. */
   busyAction?: { id: AftercareAction['id']; label: string };
+  /** Fetches the complete pass history — bodies included — from the feature detail. */
+  onLoadFullChildHistory?: () => Promise<readonly RelationshipChildView[]>;
   onAction(action: AftercareAction): void;
   onOpenRunRecord(): void;
   onOpenChanges(): void;
@@ -44,6 +47,7 @@ export function AftercareWorkspace({
   evidence = EMPTY_AFTERCARE_EVIDENCE,
   actionError = null,
   busyAction,
+  onLoadFullChildHistory,
   onAction,
   onOpenRunRecord,
   onOpenChanges,
@@ -125,7 +129,18 @@ export function AftercareWorkspace({
           onOpenPullRequest={onOpenPullRequest}
         />
 
-        <RefactorHistory entries={snapshot.childHistory ?? []} />
+        <RefactorHistory
+          entries={snapshot.childHistory ?? []}
+          {...(snapshot.childHistoryTotal === undefined
+            ? {}
+            : { total: snapshot.childHistoryTotal })}
+          {...(snapshot.childHistoryTruncated === undefined
+            ? {}
+            : { truncated: snapshot.childHistoryTruncated })}
+          {...(onLoadFullChildHistory === undefined
+            ? {}
+            : { onLoadFullHistory: onLoadFullChildHistory })}
+        />
       </div>
     </section>
   );

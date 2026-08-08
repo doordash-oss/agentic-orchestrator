@@ -126,6 +126,34 @@ func ParentOverlayPath(stateDir, parentID, repoName string) string {
 	return filepath.Join(filepath.Dir(stateDir), "overlays", parentID, repoName)
 }
 
+// CanonicalPath resolves symlinks in path so journaled paths and later guard
+// comparisons agree on one spelling of the state root. When a component does
+// not exist it resolves the deepest existing ancestor and rejoins the rest;
+// unresolvable paths are returned cleaned.
+func CanonicalPath(path string) string {
+	clean := filepath.Clean(path)
+	current := clean
+	var suffix []string
+	for {
+		resolved, err := filepath.EvalSymlinks(current)
+		if err == nil {
+			for i := len(suffix) - 1; i >= 0; i-- {
+				resolved = filepath.Join(resolved, suffix[i])
+			}
+			return filepath.Clean(resolved)
+		}
+		if !os.IsNotExist(err) {
+			return clean
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return clean
+		}
+		suffix = append(suffix, filepath.Base(current))
+		current = parent
+	}
+}
+
 func (s *Store) cascadeDeletePath(parentID string) string {
 	return filepath.Join(s.BaseDir, parentID, "cascade-delete.yaml")
 }
@@ -174,11 +202,12 @@ func (s *Store) BeginCascadeDelete(parentID string, now time.Time) (*CascadeDele
 	for _, child := range children {
 		intent.ChildIDs = append(intent.ChildIDs, child.ID)
 	}
+	stateDir := CanonicalPath(s.BaseDir)
 	for _, child := range children {
-		appendFeatureCascadeManifest(intent, s.BaseDir, child, false)
+		appendFeatureCascadeManifest(intent, stateDir, child, false)
 		appendCascadeRefs(intent, parent, child)
 	}
-	appendFeatureCascadeManifest(intent, s.BaseDir, parent, true)
+	appendFeatureCascadeManifest(intent, stateDir, parent, true)
 
 	if err := s.saveCascadeDeleteUnlocked(intent); err != nil {
 		return nil, err
@@ -198,7 +227,7 @@ func appendFeatureCascadeManifest(intent *CascadeDeleteIntent, stateDir string, 
 			if (task.Kind == SetupTaskImage || task.Kind == SetupTaskAttachment) && task.Path != "" {
 				intent.Resources = append(intent.Resources, CascadeResource{
 					ID: "copy:" + f.ID + ":" + key, Kind: CascadeResourceCopiedInput,
-					OwnerID: f.ID, Path: task.Path,
+					OwnerID: f.ID, Path: CanonicalPath(task.Path),
 				})
 			}
 		}
@@ -207,7 +236,7 @@ func appendFeatureCascadeManifest(intent *CascadeDeleteIntent, stateDir string, 
 		if repo.WorktreePath != "" {
 			intent.Resources = append(intent.Resources, CascadeResource{
 				ID: "worktree:" + f.ID + ":" + repo.Name, Kind: CascadeResourceWorktree,
-				OwnerID: f.ID, Repo: repo.Name, Path: repo.WorktreePath,
+				OwnerID: f.ID, Repo: repo.Name, Path: CanonicalPath(repo.WorktreePath),
 				RepoPath: repo.Path, Branch: repo.Branch,
 			})
 		}

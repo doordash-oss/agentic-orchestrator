@@ -57,6 +57,13 @@ const (
 // AskUserQuestion control request has no readable question of its own.
 const agentQuestionPrompt = "Agent has a question"
 
+// HelpQueue.Kind values: a real help request awaiting an answer vs a
+// synthetic entry for an interactive session idling between turns.
+const (
+	helpKindQuestion = "question"
+	helpKindInput    = "input"
+)
+
 // actionInputKindEnum and actionInputKindString are ActionInput.Kind
 // values: the former for inputs whose value must be one of
 // ActionInput.Options, the latter for free-form string inputs.
@@ -185,6 +192,7 @@ func (h *apiHandler) featureDetailDTO(f *feature.Feature) (FeatureDetail, error)
 		relationshipChildren = children
 		detail.ActiveChild = relationshipChildDTO(children.Active)
 		detail.ChildHistory = relationshipChildDTOs(children.Closed)
+		detail.ChildHistoryTotal = len(detail.ChildHistory)
 		activeRelationshipChild = children.Active
 	}
 	detail.Description = SafeDisplayText(f.Description, 500)
@@ -279,6 +287,10 @@ func appendDisabledReason(actions []Action, reason ActionDisabledReason, exclude
 // parent_worktrees_dirty mutation error returns, so clients can present the
 // remediation immediately instead of only after a failed submission. Without
 // the capability, the coarser freshness probe keeps the historical boolean.
+//
+// A repository whose state could not be determined — probe timeout, failure,
+// or unknown freshness — blocks entry too: these actions rewrite the parent's
+// worktrees, so an unverifiable worktree must never pass as a clean one.
 func (h *apiHandler) refactorEntryDisabledReason(f *feature.Feature) (ActionDisabledReason, bool) {
 	if f == nil {
 		return ActionDisabledReason{}, false
@@ -287,33 +299,58 @@ func (h *apiHandler) refactorEntryDisabledReason(f *feature.Feature) (ActionDisa
 		Code:    "dirty_parent",
 		Message: "worktree has uncommitted changes",
 	}
-	if h.worktrees != nil {
-		if payload := h.dirtyRepoDiagnostics(f.Repos); len(payload) > 0 {
+	if h.cleanliness != nil {
+		payload, indeterminate := h.dirtyRepoDiagnostics(f.Repos)
+		if len(payload) > 0 {
 			reason.Target = map[string]any{"repos": payload}
 			return reason, true
+		}
+		if len(indeterminate) > 0 {
+			return unknownWorktreeStateReason(indeterminate), true
 		}
 		return ActionDisabledReason{}, false
 	}
 	if h.freshness == nil {
 		return ActionDisabledReason{}, false
 	}
-	for _, freshness := range h.probeRepoFreshness(f) {
+	var indeterminate []string
+	for name, freshness := range h.probeRepoFreshness(f) {
 		if freshness == RepoFreshnessLocalChanges {
 			return reason, true
 		}
+		if freshness == RepoFreshnessUnknown {
+			indeterminate = append(indeterminate, name)
+		}
+	}
+	if len(indeterminate) > 0 {
+		sort.Strings(indeterminate)
+		return unknownWorktreeStateReason(indeterminate), true
 	}
 	return ActionDisabledReason{}, false
 }
 
+// unknownWorktreeStateReason blocks an entry action whose preconditions could
+// not be evaluated, naming the repositories whose state is unknown.
+func unknownWorktreeStateReason(repos []string) ActionDisabledReason {
+	return ActionDisabledReason{
+		Code:    "worktree_state_unknown",
+		Message: "worktree state could not be determined; a clean worktree cannot be confirmed",
+		Target:  map[string]any{"repos": repos},
+	}
+}
+
 // dirtyRepoDiagnostics converts the dirty parent repositories into the
-// categorized payload shared with the launch-time error mapping.
-func (h *apiHandler) dirtyRepoDiagnostics(repos []feature.FeatureRepo) []map[string]any {
-	if h.worktrees == nil {
-		return nil
+// categorized payload shared with the launch-time error mapping. The second
+// return names repositories whose cleanliness could not be determined, which
+// callers must treat as not clean.
+func (h *apiHandler) dirtyRepoDiagnostics(repos []feature.FeatureRepo) ([]map[string]any, []string) {
+	if h.cleanliness == nil {
+		return nil, nil
 	}
 	// Inspections shell out to git per repo; run them concurrently and keep
 	// the declared repo order for the payload.
 	reports := make([]*feature.RepoDirtyDiagnostics, len(repos))
+	unknown := make([]string, len(repos))
 	var wg sync.WaitGroup
 	for i, repo := range repos {
 		path := repo.WorktreePath
@@ -326,8 +363,12 @@ func (h *apiHandler) dirtyRepoDiagnostics(repos []feature.FeatureRepo) []map[str
 		wg.Add(1)
 		go func(i int, name, path string) {
 			defer wg.Done()
-			report, err := h.worktrees.InspectCleanliness(path, feature.DefaultDirtyPathLimit)
-			if err != nil || report == nil || !report.Dirty() {
+			report, err := h.cleanliness.InspectCleanliness(path, feature.DefaultDirtyPathLimit)
+			if err != nil || report == nil {
+				unknown[i] = name
+				return
+			}
+			if !report.Dirty() {
 				return
 			}
 			reports[i] = &feature.RepoDirtyDiagnostics{
@@ -349,10 +390,16 @@ func (h *apiHandler) dirtyRepoDiagnostics(repos []feature.FeatureRepo) []map[str
 			dirty = append(dirty, *report)
 		}
 	}
-	if len(dirty) == 0 {
-		return nil
+	indeterminate := make([]string, 0, len(repos))
+	for _, name := range unknown {
+		if name != "" {
+			indeterminate = append(indeterminate, name)
+		}
 	}
-	return dirtyDiagnosticsPayload(dirty)
+	if len(dirty) == 0 {
+		return nil, indeterminate
+	}
+	return dirtyDiagnosticsPayload(dirty), indeterminate
 }
 
 func disableAction(actions []Action, actionID string, reason ActionDisabledReason) {
@@ -380,9 +427,25 @@ func featureDetailFromSummary(summary FeatureSummary) FeatureDetail {
 		Checkpoints:  summary.Checkpoints,
 		Progress:     summary.Progress,
 		Warnings:     summary.Warnings,
-		ActiveChild:  summary.ActiveChild,
-		ChildHistory: summary.ChildHistory,
 	}
+}
+
+// listChildHistoryLimit caps how many closed children a list summary carries.
+// The list projection is unbounded otherwise: every closed child adds an entry
+// and the aggregate can exceed a client's payload budget. Clients read the
+// complete history from the feature detail route.
+const listChildHistoryLimit = 5
+
+// listChildHistory bounds a closed-child history to the newest
+// listChildHistoryLimit entries, reporting the true total and whether older
+// entries were dropped.
+func listChildHistory(closed []*feature.Feature) (entries []RelationshipChildSummary, total int, truncated bool) {
+	total = len(closed)
+	if total > listChildHistoryLimit {
+		closed = closed[:listChildHistoryLimit]
+		truncated = true
+	}
+	return relationshipChildSummaryDTOs(closed), total, truncated
 }
 
 func (h *apiHandler) relationshipChildrenOf(parentID string, loaded []*feature.Feature) (*feature.RelationshipChildren, error) {
@@ -442,7 +505,11 @@ func childSetupComplete(f *feature.Feature) bool {
 	return setup != nil && setup.Status == feature.SetupStatusDone
 }
 
-func relationshipChildDTO(child *feature.Feature) *RelationshipChild {
+// relationshipChildSummaryDTO builds the list-safe projection: every
+// relationship field except the preserved diff body, which is unbounded per
+// parent once several children have closed and therefore belongs only to the
+// detail route (see relationshipChildDTO).
+func relationshipChildSummaryDTO(child *feature.Feature) *RelationshipChildSummary {
 	if child == nil {
 		return nil
 	}
@@ -450,7 +517,7 @@ func relationshipChildDTO(child *feature.Feature) *RelationshipChild {
 	if child.StartedAt != nil {
 		startedAt = *child.StartedAt
 	}
-	dto := &RelationshipChild{
+	dto := &RelationshipChildSummary{
 		ID:                child.ID,
 		Name:              child.Name,
 		Kind:              child.Parent.Kind,
@@ -481,9 +548,7 @@ func relationshipChildDTO(child *feature.Feature) *RelationshipChild {
 	if child.Parent.CloseOutcome != "" {
 		dto.Outcome = RelationshipChildOutcome(child.Parent.CloseOutcome)
 		dto.ClosedAt = child.Parent.ClosedAt
-		// Re-bound at read time: records persisted before the write-time
-		// bound existed may hold raw multi-megabyte diffs.
-		dto.DiffSummary = feature.BoundDiffSummary(child.Parent.DiffSummary)
+		dto.HasDiffSummary = child.Parent.DiffSummary != ""
 		dto.RelationshipState = child.Parent.CloseOutcome
 		switch child.Parent.CloseOutcome {
 		case feature.ChildCloseOutcomeCompleted:
@@ -541,10 +606,55 @@ func relationshipChildDTO(child *feature.Feature) *RelationshipChild {
 	return dto
 }
 
+// relationshipChildDTO builds the detail projection: the summary plus the
+// preserved diff body.
+func relationshipChildDTO(child *feature.Feature) *RelationshipChild {
+	summary := relationshipChildSummaryDTO(child)
+	if summary == nil {
+		return nil
+	}
+	dto := &RelationshipChild{
+		ID:                summary.ID,
+		Name:              summary.Name,
+		Kind:              summary.Kind,
+		DisplayToken:      summary.DisplayToken,
+		DisplayState:      summary.DisplayState,
+		Pipeline:          summary.Pipeline,
+		Status:            summary.Status,
+		SetupStatus:       summary.SetupStatus,
+		RelationshipState: summary.RelationshipState,
+		Outcome:           summary.Outcome,
+		StartedAt:         summary.StartedAt,
+		ClosedAt:          summary.ClosedAt,
+		Cost:              summary.Cost,
+		IntegrationState:  summary.IntegrationState,
+		Attention:         summary.Attention,
+		CleanupWarnings:   summary.CleanupWarnings,
+		LastError:         summary.LastError,
+		HasDiffSummary:    summary.HasDiffSummary,
+	}
+	// Re-bound at read time: records persisted before the write-time bound
+	// existed may hold raw multi-megabyte diffs.
+	if summary.HasDiffSummary {
+		dto.DiffSummary = feature.BoundDiffSummary(child.Parent.DiffSummary)
+	}
+	return dto
+}
+
 func relationshipChildDTOs(children []*feature.Feature) []RelationshipChild {
 	out := make([]RelationshipChild, 0, len(children))
 	for _, child := range children {
 		if dto := relationshipChildDTO(child); dto != nil {
+			out = append(out, *dto)
+		}
+	}
+	return out
+}
+
+func relationshipChildSummaryDTOs(children []*feature.Feature) []RelationshipChildSummary {
+	out := make([]RelationshipChildSummary, 0, len(children))
+	for _, child := range children {
+		if dto := relationshipChildSummaryDTO(child); dto != nil {
 			out = append(out, *dto)
 		}
 	}
@@ -1430,6 +1540,7 @@ func (h *apiHandler) featureQueues() ([]HelpQueue, []NeedUserInputGate, error) {
 				dto: HelpQueue{
 					FeatureID: f.ID,
 					Question:  SafeDisplayText(req.Question, 300),
+					Kind:      helpKindQuestion,
 					Pending:   req.Pending,
 					Time:      req.Time,
 				},
@@ -1455,8 +1566,9 @@ func (h *apiHandler) featureQueues() ([]HelpQueue, []NeedUserInputGate, error) {
 				dto: HelpQueue{
 					FeatureID: sess.FeatureID(),
 					Question:  agentQuestionPrompt,
+					Kind:      helpKindInput,
 					Pending:   true,
-					Time:      sess.StartedAt(),
+					Time:      sess.WaitingSince(),
 				},
 				featureID: sess.FeatureID(),
 				index:     len(help),

@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { SafeErrorException, safeError, toSafeError, redactText } from './errors';
+import {
+  SafeErrorException,
+  safeError,
+  toSafeError,
+  redactText,
+  isRequestTimeout,
+  requestTimeoutError,
+  E_REQUEST_TIMEOUT,
+} from './errors';
 
 describe('safeError', () => {
   it('builds a typed safe error with code, message, and remediation', () => {
@@ -55,5 +63,22 @@ describe('toSafeError', () => {
   it('never embeds non-Error payloads (which could hold raw data) in the message', () => {
     const err = toSafeError({ secret: 'hunter2' }, 'E_FALLBACK');
     expect(JSON.stringify(err)).not.toContain('hunter2');
+  });
+
+  it('maps a fetch abort to the typed timeout code instead of its raw DOM message', () => {
+    const abort = new Error('This operation was aborted');
+    abort.name = 'AbortError';
+    const err = toSafeError(abort, 'E_INTERNAL');
+    expect(err.code).toBe(E_REQUEST_TIMEOUT);
+    expect(err.message).not.toContain('aborted');
+    expect(err.remediation).toBeDefined();
+  });
+});
+
+describe('isRequestTimeout', () => {
+  it('recognizes only the typed timeout exception', () => {
+    expect(isRequestTimeout(new SafeErrorException(requestTimeoutError()))).toBe(true);
+    expect(isRequestTimeout(new SafeErrorException(safeError('conflict', 'no')))).toBe(false);
+    expect(isRequestTimeout(new Error('boom'))).toBe(false);
   });
 });

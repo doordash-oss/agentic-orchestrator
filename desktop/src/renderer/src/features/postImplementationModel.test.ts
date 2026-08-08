@@ -81,6 +81,29 @@ describe('postImplementationModel', () => {
     expect(actions[0]!.disabledReason).toBe('worktree has uncommitted changes');
   });
 
+  it('explains an unverifiable worktree instead of repeating the probe failure', () => {
+    const actions = aftercareActions(
+      featureSnapshot({
+        status: 'CodeReady',
+        actions: [
+          {
+            id: 'rebase',
+            enabled: false,
+            disabledReasons: [
+              {
+                code: 'worktree_state_unknown',
+                message: 'worktree state could not be determined',
+              },
+            ],
+          },
+        ],
+      }),
+    );
+    expect(actions[0]!.disabledReason).toBe(
+      'Could not verify whether the repository worktrees are clean — try again.',
+    );
+  });
+
   it('omits a disabled publish action rather than showing a blocked card', () => {
     const actions = aftercareActions(
       featureSnapshot({

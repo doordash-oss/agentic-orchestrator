@@ -106,6 +106,30 @@ describe('classifyHold', () => {
     expect(hold).toEqual({ kind: 'waiting', waitingSince: '2026-08-06T11:45:00.000Z' });
   });
 
+  it('a synthetic help item never holds an active run', () => {
+    expect(classifyHold('Implementing', [helpItem({ waitingKind: 'input' })])).toBeNull();
+  });
+
+  it('a synthetic help item never feeds the oldest-waiting timestamp', () => {
+    const hold = classifyHold('Implementing', [
+      permissionItem(),
+      helpItem({ waitingKind: 'input', waitingSince: '2026-08-06T10:00:00.000Z' }),
+    ]);
+    expect(hold).toEqual({ kind: 'waiting', waitingSince: '2026-08-06T11:55:00.000Z' });
+    expect(
+      classifyHold('NeedUserInput', [
+        helpItem({ waitingKind: 'input', waitingSince: '2026-08-06T10:00:00.000Z' }),
+      ]),
+    ).toEqual({ kind: 'paused' });
+  });
+
+  it('a real help question still holds an active run', () => {
+    expect(classifyHold('Implementing', [helpItem({ waitingKind: 'question' })])).toEqual({
+      kind: 'waiting',
+      waitingSince: '2026-08-06T11:45:00.000Z',
+    });
+  });
+
   it('NeedUserInput pauses', () => {
     expect(classifyHold('NeedUserInput', [])).toEqual({ kind: 'paused' });
   });

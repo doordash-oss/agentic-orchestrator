@@ -218,6 +218,8 @@ export interface RefactorPassWorkspaceProps {
   pass: RefactorPassController;
   /** Whether retained live pass effects may fetch or subscribe. */
   active?: boolean;
+  /** Inbox jump into an attention item; reopens a dismissed gate. */
+  attentionPreviewRequest?: { requestId: number; attentionId?: string } | null;
   attentionItems: AttentionItem[];
   refreshAttention(): Promise<AttentionItem[]>;
   attentionDrafts: AttentionDrafts;
@@ -235,6 +237,7 @@ export function RefactorPassWorkspace({
   parent,
   pass,
   active = true,
+  attentionPreviewRequest = null,
   attentionItems,
   refreshAttention,
   attentionDrafts,
@@ -253,6 +256,12 @@ export function RefactorPassWorkspace({
       pass.reload();
     },
   });
+
+  useEffect(() => {
+    if (attentionPreviewRequest?.attentionId !== undefined) {
+      setDismissedGateId(undefined);
+    }
+  }, [attentionPreviewRequest]);
 
   const view = pass.view;
   if (view === undefined) return null;
@@ -361,6 +370,18 @@ export function RefactorPassWorkspace({
             <>
               <p className="refactor-pass__state" role="status" data-tone={state.tone}>
                 {state.sentence}
+                {gate !== undefined && activeGate === undefined ? (
+                  <>
+                    {' '}
+                    <button
+                      type="button"
+                      className="refactor-pass__answer-now"
+                      onClick={() => setDismissedGateId(undefined)}
+                    >
+                      Answer now
+                    </button>
+                  </>
+                ) : null}
               </p>
               {state.problems !== undefined && state.problems.length > 0 ? (
                 <ul className="refactor-pass__warnings" aria-label="Integration diagnostics">

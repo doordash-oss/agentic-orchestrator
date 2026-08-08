@@ -2322,7 +2322,9 @@ func TestServerMutationTargetCleanupAndDeleteActionsMutateFeatureState(t *testin
 			t.Fatalf("DeleteFeature() result = %+v; want deleted feature", result)
 		}
 		calls := mockCallsByMethod(worktrees.Calls, "RemoveRef")
-		if len(calls) != 2 || calls[0].Args[0] != testRepoAWorktreePath || calls[1].Args[0] != testRepoAWorktreePath {
+		// The cascade journal records canonical paths, so the mock sees the resolved spelling.
+		wantPath := feature.CanonicalPath(testRepoAWorktreePath)
+		if len(calls) != 2 || calls[0].Args[0] != wantPath || calls[1].Args[0] != wantPath {
 			t.Fatalf("worktree RemoveRef calls = %+v; want durable worktree and branch cleanup", calls)
 		}
 		if _, err := store.Load(f.ID); err == nil {
@@ -2572,6 +2574,7 @@ func (s *mutationTargetSessionView) Status() ports.SessionStatus      { return s
 func (s *mutationTargetSessionView) IsActive() bool                   { return s.active }
 func (s *mutationTargetSessionView) Iteration() int                   { return 0 }
 func (s *mutationTargetSessionView) StartedAt() time.Time             { return time.Time{} }
+func (s *mutationTargetSessionView) WaitingSince() time.Time          { return time.Time{} }
 func (s *mutationTargetSessionView) InitialPrompt() string            { return "" }
 func (s *mutationTargetSessionView) ProviderName() string             { return "" }
 func (s *mutationTargetSessionView) Model() string                    { return "" }

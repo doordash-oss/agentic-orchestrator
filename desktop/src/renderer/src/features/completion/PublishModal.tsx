@@ -115,7 +115,8 @@ export function PublishModalBody({
     publishRepos.size > 0 &&
     (!titleRequired || publishTitle.trim().length > 0) &&
     (dirtySelected.length === 0 || commitConfirmed) &&
-    !publishAction.busy;
+    !publishAction.busy &&
+    !publishAction.reconciling;
 
   const handlePublish = useCallback(async () => {
     const title = publishTitle.trim();
@@ -330,7 +331,13 @@ export function PublishModalBody({
         disabled={!canPublish}
         onClick={() => void handlePublish()}
       >
-        {publishAction.busy ? 'Publishing…' : titleRequired ? 'Publish' : 'Publish updates'}
+        {publishAction.busy
+          ? 'Publishing…'
+          : publishAction.reconciling
+            ? 'Reconciling…'
+            : titleRequired
+              ? 'Publish'
+              : 'Publish updates'}
       </button>
       <ResultBox result={publishAction.result} />
       {publishGenResult !== null && publishAction.result === null ? (

@@ -89,6 +89,7 @@ func (s *utilityTestSession) Status() session.SessionStatus {
 func (s *utilityTestSession) IsActive() bool                   { return true }
 func (s *utilityTestSession) Iteration() int                   { return 0 }
 func (s *utilityTestSession) StartedAt() time.Time             { return time.Time{} }
+func (s *utilityTestSession) WaitingSince() time.Time          { return time.Time{} }
 func (s *utilityTestSession) InitialPrompt() string            { return "" }
 func (s *utilityTestSession) ProviderName() string             { return "" }
 func (s *utilityTestSession) Model() string                    { return "" }

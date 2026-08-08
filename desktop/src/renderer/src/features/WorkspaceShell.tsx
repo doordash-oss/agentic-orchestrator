@@ -25,6 +25,7 @@ import type {
   AttentionItem,
   FeatureActionView,
   FeatureSnapshot,
+  FeatureSummaryView,
   MainWindowUiState,
   RoutedRequest,
   ShellPrefs,
@@ -59,6 +60,7 @@ import {
 import {
   LANES,
   classifyFeaturesByLaneWithAttention,
+  classifyLane,
   laneLabel,
   type Lane,
 } from './laneClassification';
@@ -70,9 +72,80 @@ import { useConnectionState, useMediaQuery } from '../hooks';
 type ListState =
   | { phase: 'loading' }
   | { phase: 'error'; error: WizardError }
-  | { phase: 'loaded'; features: FeatureSnapshot[] };
+  | {
+      phase: 'loaded';
+      features: FeatureSnapshot[];
+      /** Per-feature detail failures; the row still renders from its summary. */
+      detailFailures: ReadonlySet<string>;
+    };
 
 type Selection = { kind: 'overview' } | { kind: 'feature'; featureId: string };
+
+const NO_DETAIL_FAILURES: ReadonlySet<string> = new Set();
+
+/**
+ * How many features one Home load may fetch detail for. Detail responses cost
+ * server-side git freshness probes per repository, so the list must never fan
+ * out one per feature: only the selection and the active rows whose sub-line
+ * and pip read detail-only fields are refined, and never more than this many.
+ */
+const MAX_DETAIL_FETCHES = 8;
+
+/**
+ * Widens a list summary into the snapshot shape the lane, row, and pip helpers
+ * read. Fields the summary DTO does not carry (pipeline profile, roadmap and
+ * iteration counters, durable setup, the action catalogue) stay absent rather
+ * than invented: a row renders one grade coarser until its detail arrives.
+ */
+function snapshotFromSummary(summary: FeatureSummaryView): FeatureSnapshot {
+  return {
+    id: summary.id,
+    name: summary.name,
+    // Absent from the summary DTO and never read from a list row.
+    slug: '',
+    status: summary.status,
+    currentPhase: summary.currentPhase,
+    repos: summary.repos,
+    createdAt: summary.createdAt,
+    activeRun: summary.activeRun,
+    actions: [],
+    reviewGate: {
+      reviewingGate: false,
+      reviewFixing: false,
+      validatingPlan: false,
+      validatorStatuses: {},
+    },
+    automaticReview: { mode: 'default', enabled: false, source: 'global' },
+    ...(summary.phaseStatus === undefined ? {} : { phaseStatus: summary.phaseStatus }),
+    ...(summary.activeChild === undefined ? {} : { activeChild: summary.activeChild }),
+    ...(summary.childHistory === undefined ? {} : { childHistory: summary.childHistory }),
+    ...(summary.childHistoryTotal === undefined
+      ? {}
+      : { childHistoryTotal: summary.childHistoryTotal }),
+    ...(summary.childHistoryTruncated === undefined
+      ? {}
+      : { childHistoryTruncated: summary.childHistoryTruncated }),
+  };
+}
+
+/** The bounded detail set: the current selection first, then the active rows. */
+function detailFetchIds(
+  rows: readonly FeatureSnapshot[],
+  activeFeatureId: string | null,
+): string[] {
+  const ids: string[] = [];
+  const add = (id: string): void => {
+    if (ids.length < MAX_DETAIL_FETCHES && !ids.includes(id)) ids.push(id);
+  };
+  if (activeFeatureId !== null && rows.some((row) => row.id === activeFeatureId)) {
+    add(activeFeatureId);
+  }
+  for (const row of rows) {
+    const lane = classifyLane(row);
+    if (lane === 'waiting' || lane === 'running') add(row.id);
+  }
+  return ids;
+}
 
 /** A single addressable sidebar row, in the order ⌘2-9 count by. */
 type SidebarRowEntry = { kind: 'overview' } | { kind: 'feature'; featureId: string };
@@ -262,24 +335,65 @@ export function WorkspaceShell({
     };
   }, []);
 
-  const loadList = useCallback(() => {
-    const request = ++listRequestRef.current;
-    window.agentico
-      .listFeatures()
-      .then((features) =>
-        Promise.all(features.map((feature) => window.agentico.getFeature(feature.id))),
-      )
-      .then((features) => {
-        if (request === listRequestRef.current) {
-          setList({ phase: 'loaded', features: orderDashboardFeatures(features) });
-        }
-      })
-      .catch((err: unknown) => {
-        if (request === listRequestRef.current) {
-          setList({ phase: 'error', error: parseIpcError(err) });
+  /**
+   * Refines a bounded few rows with their server detail. Settled per feature:
+   * one rejected detail — an oversized payload, a parse failure — flags that
+   * row and leaves every other row exactly as the list returned it.
+   */
+  const refineDetails = useCallback(
+    async (rows: readonly FeatureSnapshot[], isCurrent: () => boolean) => {
+      const ids = detailFetchIds(rows, shellStateRef.current?.activeFeatureId ?? null);
+      if (ids.length === 0) return;
+      const settled = await Promise.allSettled(ids.map((id) => window.agentico.getFeature(id)));
+      if (!isCurrent()) return;
+      const details = new Map<string, FeatureSnapshot>();
+      const detailFailures = new Set<string>();
+      ids.forEach((id, index) => {
+        const result = settled[index];
+        if (result === undefined) return;
+        if (result.status === 'fulfilled') {
+          details.set(id, result.value);
+        } else {
+          detailFailures.add(id);
         }
       });
-  }, []);
+      setList((current) =>
+        current.phase === 'loaded'
+          ? {
+              phase: 'loaded',
+              features: orderDashboardFeatures(
+                current.features.map((feature) => details.get(feature.id) ?? feature),
+              ),
+              detailFailures,
+            }
+          : current,
+      );
+    },
+    [],
+  );
+
+  /**
+   * Overview renders from the list summaries alone, so the whole surface stays
+   * alive even when a single feature's detail is unusable.
+   */
+  const loadList = useCallback(() => {
+    const request = ++listRequestRef.current;
+    const isCurrent = () => request === listRequestRef.current;
+    window.agentico.listFeatures().then(
+      (summaries) => {
+        if (!isCurrent()) return;
+        const rows = orderDashboardFeatures(summaries.map(snapshotFromSummary));
+        setList({ phase: 'loaded', features: rows, detailFailures: NO_DETAIL_FAILURES });
+        void refineDetails(rows, isCurrent).catch(() => {
+          // Refinement is additive; the summary-derived rows already render.
+        });
+      },
+      (err: unknown) => {
+        // Only a failed LIST is fatal: there is nothing to render without it.
+        if (isCurrent()) setList({ phase: 'error', error: parseIpcError(err) });
+      },
+    );
+  }, [refineDetails]);
 
   // The Overview feature list follows the authoritative server state: fetch
   // on mount and refetch on any feature-scoped invalidation or full resync.
@@ -534,6 +648,7 @@ export function WorkspaceShell({
   };
 
   const features = list.phase === 'loaded' ? list.features : [];
+  const detailFailures = list.phase === 'loaded' ? list.detailFailures : NO_DETAIL_FAILURES;
   const laneGroups = classifyFeaturesByLaneWithAttention(features, attentionByFeature);
   const counts = Object.fromEntries(LANES.map((lane) => [lane, laneGroups[lane].length])) as Record<
     Lane,
@@ -771,6 +886,7 @@ export function WorkspaceShell({
               </header>
               <OverviewLanes
                 state={list}
+                detailFailures={detailFailures}
                 laneGroups={laneGroups}
                 attentionItems={attentionItems}
                 attentionKindsByFeature={attentionKindsByFeature}
@@ -1000,6 +1116,8 @@ function laneSubline(
 
 interface OverviewLanesProps {
   state: ListState;
+  /** Features whose detail fetch failed; their rows render summary-only. */
+  detailFailures: ReadonlySet<string>;
   laneGroups: Record<Lane, FeatureSnapshot[]>;
   attentionItems: readonly AttentionItem[];
   attentionKindsByFeature: ReadonlyMap<string, Record<AttentionItem['kind'], number>>;
@@ -1080,6 +1198,7 @@ function overviewRowPip(
 /** Every non-empty lane rendered as its own grouped inset list, in sidebar order. */
 function OverviewLanes({
   state,
+  detailFailures,
   laneGroups,
   attentionItems,
   attentionKindsByFeature,
@@ -1111,6 +1230,7 @@ function OverviewLanes({
                 key={lane}
                 lane={lane}
                 features={laneGroups[lane]}
+                detailFailures={detailFailures}
                 attentionItems={attentionItems}
                 attentionKindsByFeature={attentionKindsByFeature}
                 onOpen={onOpen}
@@ -1127,6 +1247,7 @@ function OverviewLanes({
 function OverviewLaneSection({
   lane,
   features,
+  detailFailures,
   attentionItems,
   attentionKindsByFeature,
   onOpen,
@@ -1134,6 +1255,7 @@ function OverviewLaneSection({
 }: {
   lane: Lane;
   features: FeatureSnapshot[];
+  detailFailures: ReadonlySet<string>;
   attentionItems: readonly AttentionItem[];
   attentionKindsByFeature: ReadonlyMap<string, Record<AttentionItem['kind'], number>>;
   onOpen(featureId: string): void;
@@ -1156,6 +1278,7 @@ function OverviewLaneSection({
               key={feature.id}
               lane={lane}
               feature={feature}
+              detailUnavailable={detailFailures.has(feature.id)}
               attentionKinds={attentionKindsByFeature.get(feature.id)}
               onOpen={() => onOpen(feature.id)}
               onAnswer={() =>
@@ -1172,12 +1295,15 @@ function OverviewLaneSection({
 function OverviewRow({
   lane,
   feature,
+  detailUnavailable,
   attentionKinds,
   onOpen,
   onAnswer,
 }: {
   lane: Lane;
   feature: FeatureSnapshot;
+  /** This row's detail fetch failed; it is flagged rather than dropped. */
+  detailUnavailable: boolean;
   attentionKinds: Record<AttentionItem['kind'], number> | undefined;
   onOpen(): void;
   onAnswer(): void;
@@ -1198,7 +1324,11 @@ function OverviewRow({
               {overviewRowStateText(lane, feature, attentionKinds)}
             </span>
           </span>
-          {pip === null ? null : (
+          {detailUnavailable ? (
+            <span className="overview-row__state" data-tone="attention">
+              <span className="overview-row__state-text">Details unavailable</span>
+            </span>
+          ) : pip === null ? null : (
             <PipRail
               stageCount={pip.stageCount}
               activeIndex={pip.activeIndex}

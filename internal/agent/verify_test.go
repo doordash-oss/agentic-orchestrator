@@ -238,6 +238,26 @@ func TestParsePlanVerificationDeclaresRepoScope(t *testing.T) {
 	}
 }
 
+func TestParsePlanVerificationDeclaresTimeoutOverride(t *testing.T) {
+	steps := ParsePlanVerification("### Automated Verification\n- [ ] [timeout: 30m] Slow suite passes: `make e2e`\n")
+	if len(steps) != 1 {
+		t.Fatalf("ParsePlanVerification() len = %d, want 1", len(steps))
+	}
+	if steps[0].Timeout != "30m" || steps[0].Description != "Slow suite passes" || steps[0].Command != "make e2e" {
+		t.Fatalf("step = %+v, want parsed timeout removed from description", steps[0])
+	}
+}
+
+func TestParsePlanVerificationIgnoresInvalidTimeoutToken(t *testing.T) {
+	steps := ParsePlanVerification("### Automated Verification\n- [ ] [timeout: soon] Suite passes: `make e2e`\n")
+	if len(steps) != 1 {
+		t.Fatalf("ParsePlanVerification() len = %d, want 1", len(steps))
+	}
+	if steps[0].Timeout != "" {
+		t.Fatalf("Timeout = %q, want invalid duration dropped", steps[0].Timeout)
+	}
+}
+
 func TestParsePlanManualVerification(t *testing.T) {
 	plan := "## Success Criteria\n\n" +
 		"### Manual Verification\n" +

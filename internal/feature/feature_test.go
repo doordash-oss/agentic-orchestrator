@@ -1738,6 +1738,33 @@ func TestIsReviewing(t *testing.T) {
 	}
 }
 
+// TestIsFinalizingPhase covers the end-of-phase git boundary marker. It rides
+// on CurrentPhaseStatus so ReviewPassed is never presented as startable while
+// the phase commit is still running.
+func TestIsFinalizingPhase(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name        string
+		phaseStatus string
+		want        bool
+	}{
+		{name: "finalizing", phaseStatus: PhaseStatusFinalizing, want: true},
+		{name: "implementing", phaseStatus: "implementing", want: false},
+		{name: "cleared", phaseStatus: "", want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := &Feature{Status: StatusReviewPassed, CurrentPhaseStatus: tt.phaseStatus}
+			if got := f.IsFinalizingPhase(); got != tt.want {
+				t.Errorf("IsFinalizingPhase() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+	if (*Feature)(nil).IsFinalizingPhase() {
+		t.Error("IsFinalizingPhase() on nil feature = true, want false")
+	}
+}
+
 // TestPRURLs covers the PRURLs accessor. Per-repo entries from RepoImpl
 // are the only source of PR URLs.
 func TestPRURLs(t *testing.T) {

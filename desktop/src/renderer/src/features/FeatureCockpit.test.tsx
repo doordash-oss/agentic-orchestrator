@@ -2086,6 +2086,44 @@ describe('FeatureCockpit review-feedback aftercare', () => {
     expect(screen.getByText('repo-a')).toBeVisible();
   });
 
+  it('loads a preserved diff from the detail route when only the flag arrived', async () => {
+    const user = userEvent.setup();
+    const closed = {
+      id: 'child0000ef567890',
+      name: 'Earlier pass',
+      kind: 'refactor',
+      displayToken: 'refactor:child0000ef567890',
+      displayState: 'Closed — Completed',
+      pipeline: 'medium',
+      status: 'Done',
+      relationshipState: 'closed',
+      outcome: 'completed' as const,
+      startedAt: '2026-07-28T10:00:00Z',
+      closedAt: '2026-07-29T10:00:00Z',
+      cost: { totalUsd: 1, byPhase: {} },
+      integrationState: 'merged',
+      attention: [],
+      cleanupWarnings: [],
+      hasDiffSummary: true,
+    };
+    const withoutBody = featureSnapshot({
+      status: 'Published',
+      actions: [],
+      childHistory: [closed],
+    });
+    const mock = installAgenticoMock({ feature: withoutBody });
+    renderCockpit(mock);
+
+    await user.click(await screen.findByText('Pass history'));
+    await user.click(screen.getByText('Preserved diff (read-only)'));
+    mock.api.getFeature.mockResolvedValue({
+      ...withoutBody,
+      childHistory: [{ ...closed, diffSummary: 'Repository: repo-a\n3 files changed' }],
+    });
+    await user.click(screen.getByRole('button', { name: 'Load diff' }));
+    expect(await screen.findByText(/3 files changed/)).toBeVisible();
+  });
+
   it('routes an active review-feedback child to the pass workspace (kind-agnostic)', async () => {
     const childId = 'child1234ef567890';
     const parent = featureSnapshot({

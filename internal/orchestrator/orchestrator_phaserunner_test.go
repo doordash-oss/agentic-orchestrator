@@ -81,6 +81,7 @@ func (s *stubSessionHandle) Status() session.SessionStatus    { return session.S
 func (s *stubSessionHandle) IsActive() bool                   { return true }
 func (s *stubSessionHandle) Iteration() int                   { return 0 }
 func (s *stubSessionHandle) StartedAt() time.Time             { return time.Time{} }
+func (s *stubSessionHandle) WaitingSince() time.Time          { return time.Time{} }
 func (s *stubSessionHandle) InitialPrompt() string            { return "" }
 func (s *stubSessionHandle) ProviderName() string             { return "" }
 func (s *stubSessionHandle) Model() string                    { return "" }

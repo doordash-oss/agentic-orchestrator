@@ -387,22 +387,19 @@ func (p *Protocol) RespondToAskUser(requestID string, questions json.RawMessage,
 }
 
 // matchAnswerOption returns the optionId whose label the user's answer selected,
-// or "" when the answer matched no listed option. Exact label match is tried
-// first, then a recommended-suffix-insensitive match.
+// or "" when the answer matched no listed option. Matching is exact first, then
+// recommended-suffix and display-truncation insensitive (llm.MatchAskUserOptionLabel).
 func matchAnswerOption(labelToOption map[string]string, answers map[string]string) string {
 	if len(labelToOption) == 0 {
 		return ""
 	}
+	labels := make([]string, 0, len(labelToOption))
+	for label := range labelToOption {
+		labels = append(labels, label)
+	}
 	for _, ans := range answers {
-		if id, ok := labelToOption[ans]; ok {
-			return id
-		}
-		stripped := strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(ans), "(Recommended)"))
-		for label, id := range labelToOption {
-			base := strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(label), "(Recommended)"))
-			if base != "" && base == stripped {
-				return id
-			}
+		if label, ok := llm.MatchAskUserOptionLabel(labels, ans); ok {
+			return labelToOption[label]
 		}
 	}
 	return ""

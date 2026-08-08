@@ -1567,6 +1567,7 @@ export interface components {
             feature_id: string;
             question: string;
             pending: boolean;
+            kind?: string;
             /** Format: date-time */
             time?: string;
         };
@@ -1709,7 +1710,13 @@ export interface components {
             message: string;
             repo?: string;
         };
-        RelationshipChild: {
+        /**
+         * @description Recorded relationship close outcome; absent while the child is open.
+         * @enum {string}
+         */
+        RelationshipChildOutcome: "completed" | "discarded";
+        /** @description List-safe projection of a relationship child. Carries every relationship field except the preserved diff body, so a parent with many closed children cannot inflate a list response without bound. Fetch RelationshipChild on a detail route for the body itself. */
+        RelationshipChildSummary: {
             id: string;
             name: string;
             kind: string;
@@ -1724,8 +1731,7 @@ export interface components {
             setup_status?: string;
             /** @description Stable machine state: setting_up, active, completed, or discarded. */
             relationship_state?: string;
-            /** @enum {string} */
-            outcome?: "completed" | "discarded";
+            outcome?: components["schemas"]["RelationshipChildOutcome"];
             /** Format: date-time */
             started_at: string;
             /** Format: date-time */
@@ -1736,6 +1742,10 @@ export interface components {
             cleanup_warnings: components["schemas"]["RelationshipCleanupWarning"][];
             /** @description Setup failure message when the child's setup failed. */
             last_error?: string;
+            /** @description True when a preserved diff summary exists for this closed child. The body itself is only carried by RelationshipChild on a detail route. */
+            has_diff_summary?: boolean;
+        };
+        RelationshipChild: components["schemas"]["RelationshipChildSummary"] & {
             /** @description Preserved read-only diff summary captured at close time, before the child's disposable worktrees and ephemeral branches were removed. Bounded to 256 KiB: a per-file stat header followed by the diff body, truncated on a line boundary with a marker stating how many bytes were omitted. Empty when no diff was preserved. */
             diff_summary?: string;
         };
@@ -1753,9 +1763,13 @@ export interface components {
             checkpoints: components["schemas"]["Checkpoints"];
             progress: components["schemas"]["FeatureProgress"];
             warnings?: components["schemas"]["Warning"][];
-            active_child?: components["schemas"]["RelationshipChild"];
-            /** @description Complete closed-child history in authoritative store order. */
-            child_history?: components["schemas"]["RelationshipChild"][];
+            active_child?: components["schemas"]["RelationshipChildSummary"];
+            /** @description Newest closed children in authoritative store order, capped at a fixed server-side limit. Consult child_history_total and child_history_truncated for the full extent, and the feature detail route for the complete history. */
+            child_history?: components["schemas"]["RelationshipChildSummary"][];
+            /** @description Total closed children, regardless of how many are listed. */
+            child_history_total?: number;
+            /** @description True when child_history omits older closed children. */
+            child_history_truncated?: boolean;
         };
         ModelDefaults: {
             inquiry?: string;
@@ -1932,6 +1946,9 @@ export interface components {
             impact_preview?: components["schemas"]["ActionImpactPreview"];
         };
         FeatureDetail: components["schemas"]["FeatureSummary"] & {
+            active_child?: components["schemas"]["RelationshipChild"];
+            /** @description Complete closed-child history in authoritative store order. */
+            child_history?: components["schemas"]["RelationshipChild"][];
             description?: string;
             summary?: string;
             wait_reason?: string;

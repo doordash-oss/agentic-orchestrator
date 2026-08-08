@@ -181,6 +181,12 @@ func (p *Provider) EnvVarsToExclude() []string { return []string{"CLAUDECODE"} }
 
 func (p *Provider) SupportsNativeToollessReview() bool { return true }
 
+// EnablesPendingToolWatchdog opts Claude into the generic session watchdog.
+// The adapter emits no tool lifecycle updates, so the watchdog only times a
+// window when one is armed explicitly (e.g. an answered AskUserQuestion that
+// still owes a tool_result).
+func (p *Provider) EnablesPendingToolWatchdog() bool { return true }
+
 type authStatus struct {
 	LoggedIn     bool   `json:"loggedIn"`
 	AuthMethod   string `json:"authMethod"`

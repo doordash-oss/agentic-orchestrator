@@ -67,6 +67,9 @@ const (
 	errCodeRebaseTargetResolution         = "rebase_target_resolution_failed"
 	errCodeRebaseFetchFailed              = "rebase_fetch_failed"
 	errCodeRebaseAlreadyUpToDate          = "rebase_already_up_to_date"
+	errCodeInvalidTransition              = "invalid_transition"
+	errCodeNeedUserInputOpen              = "need_user_input_open"
+	errCodePhaseFinalizing                = "phase_finalizing"
 )
 
 // resultCreated is the ActionResult.Result value for a newly created
@@ -424,6 +427,28 @@ func setStringFieldIfEmpty(resp any, name, value string) {
 	}
 }
 
+// deleteActionResponse extends DeleteFeatureResponse with a retry indicator
+// so a parked cascade reads as resumable work rather than plain success.
+type deleteActionResponse struct {
+	DeleteFeatureResponse
+	Retryable bool `json:"retryable,omitempty"`
+}
+
+func annotateDeleteResponse(r *DeleteFeatureResponse) *deleteActionResponse {
+	resp := &deleteActionResponse{DeleteFeatureResponse: *r}
+	if r.Status == feature.CascadeDeleteCleanupPending ||
+		r.Status == feature.CascadeDeleteAttentionRequired {
+		resp.Retryable = true
+		if len(resp.Diagnostics) == 0 {
+			resp.Diagnostics = []CascadeDiagnostic{{
+				Code:    "cascade_" + string(r.Status),
+				Message: "cascade delete has not completed; retry delete to resume cleanup",
+			}}
+		}
+	}
+	return resp
+}
+
 func writeMutationError(w http.ResponseWriter, err error) {
 	if err == nil {
 		writeAPIError(w, http.StatusInternalServerError, "internal_error", "mutation failed", nil)
@@ -442,6 +467,21 @@ func writeMutationError(w http.ResponseWriter, err error) {
 	}
 	if errors.Is(err, feature.ErrPipelineMismatch) {
 		writeAPIError(w, http.StatusConflict, errCodePipelineMismatch, err.Error(), nil)
+		return
+	}
+	// State-based rejections are conflicts, not malformed input: reporting them
+	// as bad_request makes clients ask the user to correct a field they never
+	// typed.
+	if errors.Is(err, feature.ErrNeedUserInputGateOpen) {
+		writeAPIError(w, http.StatusConflict, errCodeNeedUserInputOpen, err.Error(), nil)
+		return
+	}
+	if errors.Is(err, feature.ErrPhaseFinalizing) {
+		writeAPIError(w, http.StatusConflict, errCodePhaseFinalizing, err.Error(), nil)
+		return
+	}
+	if errors.Is(err, feature.ErrInvalidTransition) {
+		writeAPIError(w, http.StatusConflict, errCodeInvalidTransition, err.Error(), nil)
 		return
 	}
 	writeAPIError(w, http.StatusBadRequest, "bad_request", err.Error(), nil)
@@ -974,7 +1014,7 @@ func (h *apiHandler) handleFeatureActionRoute(w http.ResponseWriter, r *http.Req
 			resp, err, defaultResult = &r, markDoneErr, "done"
 		case actionDelete:
 			r, deleteErr := h.mutations.DeleteFeature(featureID, req)
-			resp, err, defaultResult = &r, deleteErr, "deleted"
+			resp, err, defaultResult = annotateDeleteResponse(&r), deleteErr, "deleted"
 		}
 		if err != nil {
 			writeMutationError(w, err)

@@ -46,6 +46,7 @@ type MockSessionView struct {
 	IsActiveVal        bool
 	IterationVal       int
 	StartedAtVal       time.Time
+	WaitingSinceVal    time.Time
 	InitialPromptVal   string
 	ProviderNameVal    string
 	ModelVal           string
@@ -136,10 +137,16 @@ func (m *MockSessionView) Label() string           { return m.LabelVal }
 
 // --- State ---
 
-func (m *MockSessionView) Status() session.SessionStatus    { return m.StatusVal }
-func (m *MockSessionView) IsActive() bool                   { return m.IsActiveVal }
-func (m *MockSessionView) Iteration() int                   { return m.IterationVal }
-func (m *MockSessionView) StartedAt() time.Time             { return m.StartedAtVal }
+func (m *MockSessionView) Status() session.SessionStatus { return m.StatusVal }
+func (m *MockSessionView) IsActive() bool                { return m.IsActiveVal }
+func (m *MockSessionView) Iteration() int                { return m.IterationVal }
+func (m *MockSessionView) StartedAt() time.Time          { return m.StartedAtVal }
+func (m *MockSessionView) WaitingSince() time.Time {
+	if m.WaitingSinceVal.IsZero() {
+		return m.StartedAtVal
+	}
+	return m.WaitingSinceVal
+}
 func (m *MockSessionView) InitialPrompt() string            { return m.InitialPromptVal }
 func (m *MockSessionView) ProviderName() string             { return m.ProviderNameVal }
 func (m *MockSessionView) Model() string                    { return m.ModelVal }

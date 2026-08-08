@@ -686,6 +686,100 @@ describe('WorkspaceShell sidebar', () => {
   });
 });
 
+describe('WorkspaceShell Overview loading', () => {
+  it('renders every other row when one feature detail rejects', async () => {
+    const failing = featureSnapshot({
+      id: FEATURE_ID,
+      name: 'Oversized feature',
+      status: 'Failed',
+      actions: [],
+    });
+    const healthy = featureSnapshot({
+      id: SECOND_FEATURE_ID,
+      name: 'Healthy feature',
+      status: 'Implementing',
+      setup: { status: 'done', attempt: 1, tasks: [] },
+      actions: [],
+    });
+    const mock = installAgenticoMock({ features: [failing, healthy].map(summaryOf) });
+    mock.api.getFeature.mockImplementation((featureId: string) =>
+      featureId === FEATURE_ID
+        ? Promise.reject(new Error('E_PAYLOAD_TOO_LARGE: payload rejected'))
+        : Promise.resolve(healthy),
+    );
+    render(<WorkspaceShell />);
+
+    const lanes = await screen.findByRole('region', { name: 'Existing features' });
+    // The rest of Overview is intact: both rows, both lanes, no fatal surface.
+    expect(within(lanes).getByText('Healthy feature')).toBeInTheDocument();
+    expect(within(lanes).getByText('Oversized feature')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Try again' })).not.toBeInTheDocument();
+    // Only the unusable row is flagged.
+    const failingRow = within(lanes).getByText('Oversized feature').closest('li')!;
+    await waitFor(() =>
+      expect(within(failingRow).getByText('Details unavailable')).toBeInTheDocument(),
+    );
+    const healthyRow = within(lanes).getByText('Healthy feature').closest('li')!;
+    expect(within(healthyRow).queryByText('Details unavailable')).not.toBeInTheDocument();
+  });
+
+  it('keeps the fatal error surface and its retry when the list fetch fails', async () => {
+    const feature = featureSnapshot({
+      id: FEATURE_ID,
+      name: 'Search revamp',
+      status: 'Implementing',
+      setup: { status: 'done', attempt: 1, tasks: [] },
+      actions: [],
+    });
+    const mock = installAgenticoMock({ features: [summaryOf(feature)] });
+    mock.api.listFeatures.mockRejectedValueOnce(
+      new Error('E_PAYLOAD_TOO_LARGE: payload rejected as too large'),
+    );
+    render(<WorkspaceShell />);
+
+    expect(
+      await screen.findByText('E_PAYLOAD_TOO_LARGE: payload rejected as too large'),
+    ).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Try again' }));
+
+    const lanes = await screen.findByRole('region', { name: 'Existing features' });
+    expect(within(lanes).getByText('Search revamp')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Try again' })).not.toBeInTheDocument();
+  });
+
+  it('fetches detail only for the rows that need it, never one per feature', async () => {
+    const running = featureSnapshot({
+      id: FEATURE_ID,
+      name: 'Mid-flight feature',
+      status: 'Implementing',
+      setup: { status: 'done', attempt: 1, tasks: [] },
+      actions: [],
+    });
+    const resting = ['aaaa1111bbbb2222', 'cccc3333dddd4444', 'eeee5555ffff6666'].map((id, index) =>
+      featureSnapshot({
+        id,
+        name: `Finished feature ${index}`,
+        status: 'Done',
+        setup: { status: 'done', attempt: 1, tasks: [] },
+        actions: [],
+      }),
+    );
+    const snapshots = [running, ...resting];
+    const mock = installAgenticoMock({ features: snapshots.map(summaryOf) });
+    mock.api.getFeature.mockImplementation((featureId: string) =>
+      Promise.resolve(snapshots.find((snapshot) => snapshot.id === featureId) ?? running),
+    );
+    render(<WorkspaceShell />);
+
+    const lanes = await screen.findByRole('region', { name: 'Existing features' });
+    // Every row renders from its list summary.
+    expect(within(lanes).getByText('Mid-flight feature')).toBeInTheDocument();
+    expect(within(lanes).getByText('Finished feature 0')).toBeInTheDocument();
+    await waitFor(() => expect(mock.api.getFeature).toHaveBeenCalledWith(FEATURE_ID));
+    expect(mock.api.getFeature).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('WorkspaceShell toolbar', () => {
   it('toggles and persists shell.sidebarCollapsed from the sidebar-toggle button', async () => {
     const mock = installAgenticoMock({ settings: settingsWithActive(null), features: [] });

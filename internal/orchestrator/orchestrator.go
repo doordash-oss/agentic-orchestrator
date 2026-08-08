@@ -501,6 +501,20 @@ func (o *Orchestrator) StartFeature(featureID string) error {
 		}
 	}
 
+	// An open need-user-input request is answered only through the
+	// need-user-input verb. Start/Resume must refuse: the Implementing
+	// transition is legal from NeedUserInput, so without this guard the verb
+	// would silently bypass the gate, reset the iteration counter, and leave
+	// the request pending but invisible.
+	if f.PendingNeedUserInputPath != "" {
+		return fmt.Errorf("%w: %s", feature.ErrNeedUserInputGateOpen, f.PendingNeedUserInputPath)
+	}
+	// The end-of-phase git boundary runs synchronously while the feature reads
+	// as StatusReviewPassed, which otherwise looks startable.
+	if f.IsFinalizingPhase() {
+		return feature.ErrPhaseFinalizing
+	}
+
 	phase := f.CurrentPhase
 	// For new features, fall back to the pipeline's first phase.
 	//
@@ -1380,6 +1394,19 @@ func (o *Orchestrator) InterruptAllRunning() error {
 
 	var errs []error
 	for _, f := range features {
+		// A crash inside the end-of-phase git boundary persists the finalizing
+		// marker. StatusReviewPassed is not running, so the interrupt arm below
+		// never sweeps it and the feature stays unstartable forever.
+		if f.IsFinalizingPhase() {
+			if err := o.deps.Store.Modify(f.ID, func(ff *feature.Feature) error {
+				if ff.IsFinalizingPhase() {
+					ff.CurrentPhaseStatus = ""
+				}
+				return nil
+			}); err != nil {
+				errs = append(errs, fmt.Errorf("clear stale finalizing marker for %s: %w", f.ID, err))
+			}
+		}
 		switch {
 		case f.Status == feature.StatusSettingUpWorktrees:
 			// Worktree setup is pre-phase lifecycle work, not a session-backed

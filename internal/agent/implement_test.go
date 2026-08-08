@@ -16,6 +16,7 @@ package agent
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -2525,7 +2526,7 @@ func TestImplementLoopHarnessCapabilityPauseKeepsSameIteration(t *testing.T) {
 		t.Fatalf("gate blocker = %+v", blocker)
 	}
 	rec.Questions[0].Answer = NeedUserVerificationWaive
-	if err := ApplyNeedUserVerificationDecision(rec); err != nil {
+	if err := ApplyNeedUserVerificationDecision(result.NeedUserInputPath, rec); err != nil {
 		t.Fatalf("ApplyNeedUserVerificationDecision() error = %v", err)
 	}
 	resumed, err := RunImplementationLoop(cfg, sm)
@@ -2538,6 +2539,103 @@ func TestImplementLoopHarnessCapabilityPauseKeepsSameIteration(t *testing.T) {
 	axes := implementationReviewAxesForGate(implementationReviewGatePerPhase, implementationReviewAxisSelection{Profile: f.EffectivePipeline()})
 	if len(*captured) != 1+len(axes) {
 		t.Fatalf("BuildSession calls after resume = %d, want one implementer + %d review axes (no second implementer)", len(*captured), len(axes))
+	}
+}
+
+// TestImplementLoopRetryAfterAuthReexecutesVerification proves the
+// RETRY_AFTER_AUTH decision invalidates the iteration's verification report:
+// after the user makes the capability available, resume re-probes and passes
+// instead of replaying the cached blocked report into an identical gate.
+func TestImplementLoopRetryAfterAuthReexecutesVerification(t *testing.T) {
+	tmpDir := t.TempDir()
+	workDir := filepath.Join(tmpDir, "work")
+	artifactDir := filepath.Join(tmpDir, "artifacts")
+	stateRoot := filepath.Join(tmpDir, "state")
+	stateDir := filepath.Join(stateRoot, "test-retry-after-auth")
+	scriptsDir := filepath.Join(tmpDir, "scripts")
+	for _, dir := range []string{workDir, artifactDir, stateDir, scriptsDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runner := NewExecCommandRunner()
+	runVerificationTestCommand(t, runner, workDir, "git init -q")
+	runVerificationTestCommand(t, runner, workDir, "git config user.email test@example.com")
+	runVerificationTestCommand(t, runner, workDir, "git config user.name Test")
+	runVerificationTestCommand(t, runner, workDir, "git commit --allow-empty -qm base")
+
+	authToken := filepath.Join(tmpDir, "auth-token")
+	planPath := filepath.Join(artifactDir, "plan.md")
+	plan := "### Automated Verification\n- [ ] Protected [agentico capability: Auth token; probe: test -f " + authToken + "]: `printf protected`\n"
+	if err := os.WriteFile(planPath, []byte(plan), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	agentScript := testutil.WriteScript(t, scriptsDir, "agent.sh",
+		testutil.JSONLInit+"\n"+testutil.WriteImplementSuccessArtifacts(artifactDir)+"\n"+testutil.JSONLSuccess+"\n")
+	reviewScript := testutil.WriteScript(t, scriptsDir, "review.sh",
+		testutil.JSONLInit+"\n"+testutil.WriteReviewApproved(artifactDir)+"\n"+testutil.JSONLSuccess+"\n")
+	f := &feature.Feature{
+		ID: "test-retry-after-auth", Name: "Retry After Auth", Slug: "retry-after-auth",
+		Status: feature.StatusImplementing, CurrentPhase: feature.PhaseImplement, CurrentRoadmapPhase: 1,
+		Repos: []feature.FeatureRepo{{Name: "repo", Path: workDir, WorktreePath: workDir}},
+	}
+	store := feature.NewStore(stateRoot)
+	if err := store.Save(f); err != nil {
+		t.Fatal(err)
+	}
+	buildSession, _ := capturingBuildSession(agentScript, reviewScript)
+	eventCh := make(chan interface{}, 100)
+	sm := session.NewManager(eventCh)
+	defer sm.Shutdown()
+
+	cfg := ImplementConfig{
+		Feature: f, FeatureStore: store, WorkDir: workDir, PlanPath: planPath,
+		MaxIterations: 1, MaxConsecFails: 3, MaxConsecNoProgress: 3,
+		Model: "opus", ReviewModel: "reviewer", ArtifactDir: artifactDir, StateDir: stateDir,
+		DangerouslySkipPermissions: true, BuildSession: buildSession, CommandRunner: runner,
+		SkipIterationReview: true, PhaseType: "collapsed",
+	}
+	result, err := RunImplementationLoop(cfg, sm)
+	if err != nil {
+		t.Fatalf("RunImplementationLoop() error = %v", err)
+	}
+	if result.FinalStatus != "need_user_input" || result.Iterations != 1 {
+		t.Fatalf("result = %+v, want same-iteration need_user_input", result)
+	}
+	reportPath := filepath.Join(filepath.Dir(result.NeedUserInputPath), "verification-report.yaml")
+	if _, err := os.Stat(reportPath); err != nil {
+		t.Fatalf("expected blocked verification report at %s: %v", reportPath, err)
+	}
+
+	rec, err := ReadNeedUserInputRecord(result.NeedUserInputPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec.Questions[0].Answer = NeedUserVerificationRetryAfterAuth
+	if err := ApplyNeedUserVerificationDecision(result.NeedUserInputPath, rec); err != nil {
+		t.Fatalf("ApplyNeedUserVerificationDecision() error = %v", err)
+	}
+	if _, err := os.Stat(reportPath); !os.IsNotExist(err) {
+		t.Fatalf("verification report survived RETRY_AFTER_AUTH: %v", err)
+	}
+
+	// User makes the capability available, then resumes.
+	if err := os.WriteFile(authToken, []byte("ok"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	resumed, err := RunImplementationLoop(cfg, sm)
+	if err != nil {
+		t.Fatalf("resumed RunImplementationLoop() error = %v", err)
+	}
+	if resumed.FinalStatus != finalStatusReviewPassed || resumed.Iterations != 1 {
+		t.Fatalf("resumed result = %+v, want iteration-1 review_passed after re-executed verification", resumed)
+	}
+	report, err := ReadVerificationReport(reportPath)
+	if err != nil {
+		t.Fatalf("ReadVerificationReport() error = %v", err)
+	}
+	if verificationReportHasBlockedResults(report) {
+		t.Fatalf("re-executed report still blocked: %+v", report)
 	}
 }
 
@@ -2782,28 +2880,33 @@ func TestImplementLoopSkipReviewRoutesHarnessRegressionToRetry(t *testing.T) {
 	}
 }
 
-func TestImplementLoop_RejectsImplementerContractMutation(t *testing.T) {
+// TestImplementLoop_ExternalContractAmendmentReanchorsWithoutViolation pins
+// the provenance model: agent writes to testing-contract.yaml are denied at
+// the permission layer, so a fingerprint mismatch is an external amendment.
+// The loop records it and re-anchors instead of charging the implementer a
+// protocol violation.
+func TestImplementLoop_ExternalContractAmendmentReanchorsWithoutViolation(t *testing.T) {
 	tmpDir := t.TempDir()
 	workDir := filepath.Join(tmpDir, "work")
 	artifactDir := filepath.Join(tmpDir, "artifacts")
 	stateRoot := filepath.Join(tmpDir, "state")
-	stateDir := filepath.Join(stateRoot, "test-stale-contract-001")
+	stateDir := filepath.Join(stateRoot, "test-external-amendment")
 	scriptsDir := filepath.Join(tmpDir, "scripts")
 	for _, d := range []string{workDir, artifactDir, stateDir, scriptsDir} {
 		os.MkdirAll(d, 0o755)
 	}
 
 	planPath := filepath.Join(artifactDir, "plan.md")
-	plan := "#### Automated Verification:\n- [ ] Agent package tests pass: `go test ./internal/agent/... -count=1`\n"
+	plan := "#### Automated Verification:\n- [ ] Check passes: `printf ok`\n"
 	if err := os.WriteFile(planPath, []byte(plan), 0o644); err != nil {
 		t.Fatalf("os.WriteFile() error = %v", err)
 	}
 
 	f := &feature.Feature{
-		ID:                  "test-stale-contract-001",
-		Name:                "Test Stale Contract Revision",
-		Slug:                "test-stale-contract-revision",
-		Description:         "Gate must reject stale contract revisions before bounded review",
+		ID:                  "test-external-amendment",
+		Name:                "Test External Contract Amendment",
+		Slug:                "test-external-amendment",
+		Description:         "External contract edits re-anchor instead of charging the implementer",
 		Status:              feature.StatusImplementing,
 		CurrentPhase:        feature.PhaseImplement,
 		CurrentRoadmapPhase: 1,
@@ -2822,43 +2925,13 @@ func TestImplementLoop_RejectsImplementerContractMutation(t *testing.T) {
 	runVerificationTestCommand(t, runner, workDir, "git commit -qm base")
 
 	contractPath := PhaseTestingContractPath(stateRoot, f, 1)
-	contract := CompileTestingContract(plan, planPath, "tdd-fill-in")
-	revisedContract, err := ReviseTestingContract(&contract, []TestingContractChange{
-		{
-			ItemID:       contract.Items[len(contract.Items)-1].ID,
-			ChangeReason: "tighten the contract after implementation starts",
-			ChangedBy:    "implementer",
-		},
-	})
-	if err != nil {
-		t.Fatalf("ReviseTestingContract() error = %v", err)
-	}
-	revisedContractYAML, err := yaml.Marshal(revisedContract)
-	if err != nil {
-		t.Fatalf("yaml.Marshal(revisedContract) error = %v", err)
-	}
-
-	exitCode := 0
-	report := BuildContractVerificationReportStub(&contract, contractPath)
-	for i := range report.Results {
-		report.Results[i].Status = VerificationStatusPassed
-		report.Results[i].Evidence = "ok"
-		report.Results[i].EvidenceData = VerificationEvidence{ExitCode: &exitCode, Summary: "ok"}
-	}
-	reportYAML, err := yaml.Marshal(report)
-	if err != nil {
-		t.Fatalf("yaml.Marshal(report) error = %v", err)
-	}
-
-	writeContractCmd := "cat > \"" + contractPath + "\" <<'CONTRACT_EOF'\n" + string(revisedContractYAML) + "CONTRACT_EOF"
-	writeReportCmd := "_d=\"\"; for d in \"" + artifactDir + "\"/iteration-*; do _d=\"$d\"; done; cat > \"$_d/verification-report.yaml\" <<'REPORT_EOF'\n" + string(reportYAML) + "REPORT_EOF"
+	// Simulate a user amending the harness-owned contract mid-session (the
+	// file ships read-only, so an external editor chmods first).
+	amendContractCmd := "chmod u+w \"" + contractPath + "\" && printf '\\n# amended externally\\n' >> \"" + contractPath + "\""
 	agentScript := testutil.WriteScript(t, scriptsDir, "agent.sh",
 		testutil.JSONLInit+"\n"+
-			writeContractCmd+"\n"+
-			writeReportCmd+"\n"+
-			// Custom verification-report is written above; pair with a
-			// valid progress.md so the harness handoff parser passes.
-			testutil.WriteImplementProgressMd(artifactDir, agentStatusSuccess)+"\n"+
+			amendContractCmd+"\n"+
+			testutil.WriteImplementSuccessArtifacts(artifactDir)+"\n"+
 			testutil.JSONLSuccess+"\n")
 	reviewScript := testutil.WriteScript(t, scriptsDir, "review.sh",
 		testutil.JSONLInit+"\n"+testutil.WriteReviewApproved(artifactDir)+"\n"+testutil.JSONLSuccess+"\n")
@@ -2886,7 +2959,7 @@ func TestImplementLoop_RejectsImplementerContractMutation(t *testing.T) {
 		DangerouslySkipPermissions: true,
 		BuildSession:               buildSession,
 		CommandRunner:              runner,
-		SkipIterationReview:        false,
+		SkipIterationReview:        true,
 		PhaseType:                  "tdd-fill-in",
 	}
 
@@ -2894,20 +2967,19 @@ func TestImplementLoop_RejectsImplementerContractMutation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunImplementationLoop() error = %v", err)
 	}
-	if result.FinalStatus != "max_iterations" {
-		t.Fatalf("RunImplementationLoop() FinalStatus = %s, want max_iterations", result.FinalStatus)
+	if result.FinalStatus != finalStatusReviewPassed {
+		t.Fatalf("RunImplementationLoop() FinalStatus = %s, want review_passed (no violation for an external amendment)", result.FinalStatus)
 	}
 	if len(*captured) != 1 {
-		t.Fatalf("BuildSession() calls = %d, want 1 when gate rejects before review", len(*captured))
+		t.Fatalf("BuildSession() calls = %d, want implementer only", len(*captured))
 	}
 
-	feedbackBytes, err := os.ReadFile(filepath.Join(artifactDir, "iteration-01", "review-feedback.md"))
+	logBytes, err := os.ReadFile(filepath.Join(artifactDir, "output.txt"))
 	if err != nil {
-		t.Fatalf("os.ReadFile(review-feedback.md) error = %v", err)
+		t.Fatalf("os.ReadFile(output.txt) error = %v", err)
 	}
-	feedback := string(feedbackBytes)
-	if !strings.Contains(feedback, "testing-contract.yaml") || !strings.Contains(feedback, "harness-owned") {
-		t.Fatalf("review-feedback.md missing harness-owned contract guidance:\n%s", feedback)
+	if !strings.Contains(string(logBytes), "amended outside the session") {
+		t.Fatalf("aggregate log missing external-amendment record:\n%s", logBytes)
 	}
 }
 
@@ -3270,5 +3342,351 @@ func TestVerificationContextCancelsOnInterruptedFeature(t *testing.T) {
 	case <-ctx.Done():
 	case <-time.After(10 * time.Second):
 		t.Fatal("context not cancelled within 10s of feature interruption")
+	}
+}
+
+// outcomeSignalSession adds the semantic-outcome notification, outcome reset,
+// and result-sequence capabilities to the background-task double, and makes the
+// terminal result settable while the waiter runs.
+type outcomeSignalSession struct {
+	*bgTaskSession
+	outcomeCh chan struct{}
+	seq       atomic.Uint64
+	costPtr   atomic.Pointer[llm.ResultMessage]
+}
+
+func newOutcomeSignalSession() *outcomeSignalSession {
+	return &outcomeSignalSession{
+		bgTaskSession: newBgTaskSession(),
+		outcomeCh:     make(chan struct{}, 1),
+	}
+}
+
+func (s *outcomeSignalSession) RootOutcomeCh() <-chan struct{} { return s.outcomeCh }
+func (s *outcomeSignalSession) ResultSeq() uint64              { return s.seq.Load() }
+func (s *outcomeSignalSession) Cost() *llm.ResultMessage       { return s.costPtr.Load() }
+func (s *outcomeSignalSession) ClearRootCompletionIntent() {
+	s.setRootIntent(llm.CompletionIntent{})
+}
+
+func (s *outcomeSignalSession) emitOutcome(intent llm.CompletionIntent) {
+	s.setRootIntent(intent)
+	select {
+	case s.outcomeCh <- struct{}{}:
+	default:
+	}
+}
+
+func (s *outcomeSignalSession) emitResult(result *llm.ResultMessage) {
+	s.costPtr.Store(result)
+	s.seq.Add(1)
+}
+
+func withBackgroundTaskDeferralCeiling(t *testing.T, d time.Duration) {
+	t.Helper()
+	prev := backgroundTaskDeferralCeiling
+	backgroundTaskDeferralCeiling = d
+	t.Cleanup(func() { backgroundTaskDeferralCeiling = prev })
+}
+
+// chatterUntil keeps the session's stdout timestamp fresh, appending either
+// novel or repeated content, until the returned stop func is called.
+func chatterUntil(sess *outcomeSignalSession, novel bool) func() {
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; ; i++ {
+			select {
+			case <-stop:
+				return
+			case <-time.After(2 * time.Millisecond):
+			}
+			text := "still waiting for the deploy"
+			if novel {
+				text = fmt.Sprintf("checked attempt %d", i)
+			}
+			sess.msgLog.Append(llm.SDKMessage{
+				Type: "assistant",
+				Assistant: &llm.AssistantMessage{
+					Message: llm.ConversationMsg{
+						Role:    "assistant",
+						Content: []llm.ContentBlock{{Type: "text", Text: text}},
+					},
+				},
+			})
+			sess.lastStdoutNs.Store(time.Now().UnixNano())
+		}
+	}()
+	return func() {
+		close(stop)
+		<-done
+	}
+}
+
+// TestWaitForPhaseOutcome_CommitsOutcomeWithoutTerminalResult proves a valid
+// root outcome commits on its own signal, minutes before the provider's
+// terminal Result record would arrive.
+func TestWaitForPhaseOutcome_CommitsOutcomeWithoutTerminalResult(t *testing.T) {
+	sess := newOutcomeSignalSession()
+
+	var commits atomic.Int32
+	resultCh := make(chan PhaseOutcomeWaitResult, 1)
+	go func() {
+		resultCh <- WaitForPhaseOutcome(sess, PhaseOutcomeWaitOptions{
+			CommitOutcome: func(llm.CompletionIntent) ([]ProtocolViolation, error) {
+				commits.Add(1)
+				return nil, nil
+			},
+		})
+	}()
+
+	sess.emitOutcome(validSuccessCompletionIntent())
+
+	select {
+	case result := <-resultCh:
+		if result.Status != agentStatusSuccess || result.Err != nil {
+			t.Fatalf("WaitForPhaseOutcome() = %+v, want success", result)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("WaitForPhaseOutcome() did not commit the outcome without a terminal Result")
+	}
+	if got := commits.Load(); got != 1 {
+		t.Fatalf("commit calls = %d, want 1", got)
+	}
+}
+
+// TestWaitForPhaseOutcome_LaterResultDoesNotReadjudicateOutcome proves the
+// provider's trailing Result for a turn the waiter already adjudicated neither
+// re-commits it nor spends another nudge.
+func TestWaitForPhaseOutcome_LaterResultDoesNotReadjudicateOutcome(t *testing.T) {
+	sess := newOutcomeSignalSession()
+
+	var commits atomic.Int32
+	resultCh := make(chan PhaseOutcomeWaitResult, 1)
+	go func() {
+		resultCh <- WaitForPhaseOutcome(sess, PhaseOutcomeWaitOptions{
+			CommitOutcome: func(llm.CompletionIntent) ([]ProtocolViolation, error) {
+				if commits.Add(1) == 1 {
+					return []ProtocolViolation{{Artifact: "progress.md", Reason: "missing"}}, nil
+				}
+				return nil, nil
+			},
+		})
+	}()
+
+	sess.emitOutcome(validSuccessCompletionIntent())
+	select {
+	case <-sess.userMessages:
+	case <-time.After(time.Second):
+		t.Fatal("rejected outcome did not produce a correction nudge")
+	}
+	if got := rootCompletionIntent(sess); got.Found {
+		t.Fatalf("root intent after rejected commit = %+v, want cleared", got)
+	}
+
+	// The turn's terminal Result lands after the harness already ruled on it.
+	sess.emitResult(newEndedAfterTextResult())
+	sess.statusCh <- agentStatusSuccess
+
+	select {
+	case result := <-resultCh:
+		t.Fatalf("WaitForPhaseOutcome() returned on the already-adjudicated Result: %+v", result)
+	case msg := <-sess.userMessages:
+		t.Fatalf("already-adjudicated Result sent another nudge: %q", msg)
+	case <-time.After(50 * time.Millisecond):
+	}
+	if got := commits.Load(); got != 1 {
+		t.Fatalf("commit calls = %d, want 1", got)
+	}
+
+	sess.emitOutcome(validSuccessCompletionIntent())
+	select {
+	case result := <-resultCh:
+		if result.Status != agentStatusSuccess || result.Err != nil {
+			t.Fatalf("WaitForPhaseOutcome() = %+v, want success after the correction", result)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("WaitForPhaseOutcome() did not commit the corrected outcome")
+	}
+	if got := commits.Load(); got != 2 {
+		t.Fatalf("commit calls = %d, want 2", got)
+	}
+}
+
+// TestWaitForPhaseOutcome_RepeatedTaskOutputCountsAsSilent proves a task loop
+// that keeps printing the same line does not hold the stall grace open: only
+// novel output counts as activity.
+func TestWaitForPhaseOutcome_RepeatedTaskOutputCountsAsSilent(t *testing.T) {
+	withBackgroundTaskPollInterval(t, 5*time.Millisecond)
+	withBackgroundTaskStallGrace(t, 30*time.Millisecond)
+	withBackgroundTaskDeferralCeiling(t, time.Hour)
+
+	sess := newOutcomeSignalSession()
+	sess.liveTasks.Store(1)
+	sess.emitResult(newEndedAfterTextResult())
+	sess.setRootIntent(validSuccessCompletionIntent())
+	stopChatter := chatterUntil(sess, false)
+	defer stopChatter()
+	sess.statusCh <- agentStatusSuccess
+
+	var commits atomic.Int32
+	resultCh := make(chan PhaseOutcomeWaitResult, 1)
+	go func() {
+		resultCh <- WaitForPhaseOutcome(sess, PhaseOutcomeWaitOptions{
+			CommitOutcome: func(llm.CompletionIntent) ([]ProtocolViolation, error) {
+				commits.Add(1)
+				return nil, nil
+			},
+		})
+	}()
+
+	select {
+	case result := <-resultCh:
+		if result.Status != agentStatusSuccess || result.Err != nil {
+			t.Fatalf("WaitForPhaseOutcome() = %+v, want success", result)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("repeated identical task output kept resetting the stall grace")
+	}
+	if !sess.stopped.Load() {
+		t.Fatal("session was not stopped to kill the repeating task")
+	}
+	if got := commits.Load(); got != 1 {
+		t.Fatalf("commit calls = %d, want 1", got)
+	}
+}
+
+// TestWaitForPhaseOutcome_DeferralCeilingCommitsChattyPollLoop proves the
+// absolute ceiling ends the deferral even when the tasks keep producing novel
+// output forever.
+func TestWaitForPhaseOutcome_DeferralCeilingCommitsChattyPollLoop(t *testing.T) {
+	withBackgroundTaskPollInterval(t, 5*time.Millisecond)
+	withBackgroundTaskStallGrace(t, time.Hour)
+	withBackgroundTaskDeferralCeiling(t, 40*time.Millisecond)
+
+	sess := newOutcomeSignalSession()
+	sess.liveTasks.Store(1)
+	sess.emitResult(newEndedAfterTextResult())
+	sess.setRootIntent(validSuccessCompletionIntent())
+	stopChatter := chatterUntil(sess, true)
+	defer stopChatter()
+	sess.statusCh <- agentStatusSuccess
+
+	var commits atomic.Int32
+	resultCh := make(chan PhaseOutcomeWaitResult, 1)
+	go func() {
+		resultCh <- WaitForPhaseOutcome(sess, PhaseOutcomeWaitOptions{
+			CommitOutcome: func(llm.CompletionIntent) ([]ProtocolViolation, error) {
+				commits.Add(1)
+				return nil, nil
+			},
+		})
+	}()
+
+	select {
+	case result := <-resultCh:
+		if result.Status != agentStatusSuccess || result.Err != nil {
+			t.Fatalf("WaitForPhaseOutcome() = %+v, want success", result)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("deferral ceiling did not fire against a chatty poll loop")
+	}
+	if !sess.stopped.Load() {
+		t.Fatal("session was not stopped at the deferral ceiling")
+	}
+	if got := commits.Load(); got != 1 {
+		t.Fatalf("commit calls = %d, want 1", got)
+	}
+}
+
+// TestWaitForPhaseOutcome_DeferralCeilingViolatesWithoutOutcome proves an
+// expired ceiling with no outcome to commit records a protocol violation.
+func TestWaitForPhaseOutcome_DeferralCeilingViolatesWithoutOutcome(t *testing.T) {
+	withBackgroundTaskPollInterval(t, 5*time.Millisecond)
+	withBackgroundTaskStallGrace(t, time.Hour)
+	withBackgroundTaskDeferralCeiling(t, 40*time.Millisecond)
+
+	sess := newOutcomeSignalSession()
+	sess.liveTasks.Store(1)
+	sess.emitResult(newEndedAfterTextResult())
+	stopChatter := chatterUntil(sess, true)
+	defer stopChatter()
+	sess.statusCh <- agentStatusSuccess
+
+	resultCh := make(chan PhaseOutcomeWaitResult, 1)
+	go func() {
+		resultCh <- WaitForPhaseOutcome(sess, PhaseOutcomeWaitOptions{
+			CommitOutcome: func(llm.CompletionIntent) ([]ProtocolViolation, error) {
+				return nil, nil
+			},
+		})
+	}()
+
+	select {
+	case result := <-resultCh:
+		if result.Status != agentStatusProtocolViolation || len(result.ProtocolViolations) != 1 ||
+			!strings.Contains(result.ProtocolViolations[0].Reason, "deferral ceiling") {
+			t.Fatalf("WaitForPhaseOutcome() = %+v, want a deferral-ceiling violation", result)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("deferral ceiling did not bound the wait")
+	}
+}
+
+// TestWaitForPhaseOutcome_ContextEndCommitsPresentOutcome proves an optional
+// bounding context ends the wait, committing a present outcome.
+func TestWaitForPhaseOutcome_ContextEndCommitsPresentOutcome(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	sess := newOutcomeSignalSession()
+	sess.setRootIntent(validSuccessCompletionIntent())
+	cancel()
+
+	var commits atomic.Int32
+	result := WaitForPhaseOutcome(sess, PhaseOutcomeWaitOptions{
+		Ctx: ctx,
+		CommitOutcome: func(llm.CompletionIntent) ([]ProtocolViolation, error) {
+			commits.Add(1)
+			return nil, nil
+		},
+	})
+	if result.Status != agentStatusSuccess || commits.Load() != 1 {
+		t.Fatalf("WaitForPhaseOutcome() = %+v with %d commits, want one committed success", result, commits.Load())
+	}
+
+	bare := newOutcomeSignalSession()
+	result = WaitForPhaseOutcome(bare, PhaseOutcomeWaitOptions{
+		Ctx:           ctx,
+		CommitOutcome: func(llm.CompletionIntent) ([]ProtocolViolation, error) { return nil, nil },
+	})
+	if result.Status != agentStatusFailed || !errors.Is(result.Err, context.Canceled) {
+		t.Fatalf("WaitForPhaseOutcome() = %+v, want a failed turn carrying the context error", result)
+	}
+}
+
+// TestAppendHarnessVerdict_RecordsRejectionInTranscripts proves the harness
+// verdict is visible next to the provider's own [result] line, which reports
+// only the provider subtype.
+func TestAppendHarnessVerdict_RecordsRejectionInTranscripts(t *testing.T) {
+	iterDir := t.TempDir()
+	aggregate := filepath.Join(t.TempDir(), "output.txt")
+	if err := os.WriteFile(filepath.Join(iterDir, "response.txt"), []byte("[result] success cost=$0.1000\n"), 0o644); err != nil {
+		t.Fatalf("seeding response.txt: %v", err)
+	}
+
+	appendHarnessVerdict(iterDir, aggregate, []ProtocolViolation{
+		{Artifact: "progress.md", Reason: "missing required section"},
+	})
+
+	for _, path := range []string{filepath.Join(iterDir, "response.txt"), aggregate} {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("reading %s: %v", path, err)
+		}
+		text := string(data)
+		if !strings.Contains(text, harnessVerdictPrefix+agentStatusProtocolViolation) ||
+			!strings.Contains(text, "missing required section") {
+			t.Fatalf("%s = %q, want the harness protocol-violation verdict", path, text)
+		}
 	}
 }

@@ -351,6 +351,28 @@ type AttachConsumerRegistrar interface {
 	RegisterAttachConsumer() func()
 }
 
+// RootOutcomeNotifier is an optional session capability: sessions that parse the
+// root agent's structured completion outcome signal a coalescing size-1 channel
+// as soon as a committable one is recorded, so waiters do not have to wait for
+// the provider's terminal Result record to arrive.
+type RootOutcomeNotifier interface {
+	RootOutcomeCh() <-chan struct{}
+}
+
+// RootOutcomeResetter is an optional session capability that discards the
+// recorded root outcome. The harness uses it after rejecting a commit so the
+// correction turn starts from a clean slate.
+type RootOutcomeResetter interface {
+	ClearRootCompletionIntent()
+}
+
+// ResultSequencer is an optional session capability reporting a monotonic count
+// of terminal Result records observed, so waiters can detect a genuinely new
+// result without relying on pointer identity.
+type ResultSequencer interface {
+	ResultSeq() uint64
+}
+
 // SessionView is the read-oriented interface external packages (desktop app, agent)
 // use to observe a session.
 type SessionView interface {
@@ -366,6 +388,9 @@ type SessionView interface {
 	IsActive() bool
 	Iteration() int
 	StartedAt() time.Time
+	// WaitingSince returns when the session last entered SessionWaitingHelp,
+	// falling back to StartedAt when no transition has been stamped.
+	WaitingSince() time.Time
 	InitialPrompt() string
 	ProviderName() string
 	Model() string

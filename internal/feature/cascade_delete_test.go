@@ -99,6 +99,106 @@ func TestBeginCascadeDeletePersistsCompleteStableManifest(t *testing.T) {
 	}
 }
 
+func TestBeginCascadeDeleteCanonicalizesSymlinkSpelledResourcePaths(t *testing.T) {
+	t.Parallel()
+
+	tmp, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(tmp, "real-root")
+	alias := filepath.Join(tmp, "alias-root")
+	if err := os.MkdirAll(filepath.Join(root, "features"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(root, alias); err != nil {
+		t.Fatal(err)
+	}
+
+	// The store and every journaled path are spelled through the symlink.
+	aliasStateDir := filepath.Join(alias, "features")
+	store := NewStore(aliasStateDir)
+	parent := &Feature{
+		ID: "parent", Slug: "parent", ActiveRun: 1, RunCount: 1, SchemaVersion: SchemaVersionCurrent,
+		Repos: []FeatureRepo{{
+			Name: "repo-a", Path: "/repos/a",
+			WorktreePath: filepath.Join(alias, "worktrees", "parent", "a"),
+			Branch:       "feature/parent",
+		}},
+	}
+	parent.SetRun(&Run{RunNumber: 1, Setup: &SetupState{Tasks: map[string]SetupTask{
+		"attachment:1": {
+			Key: "attachment:1", Kind: SetupTaskAttachment,
+			Path: filepath.Join(aliasStateDir, "parent", "attachments", "notes.txt"),
+		},
+	}}})
+	if err := store.Save(parent); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(alias, "worktrees", "parent", "a"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	intent, err := store.BeginCascadeDelete("parent", time.Now())
+	if err != nil {
+		t.Fatalf("BeginCascadeDelete: %v", err)
+	}
+	canonicalStateDir := filepath.Join(root, "features")
+	want := map[CascadeResourceKind]string{
+		CascadeResourceCopiedInput: filepath.Join(canonicalStateDir, "parent", "attachments", "notes.txt"),
+		CascadeResourceWorktree:    filepath.Join(root, "worktrees", "parent", "a"),
+		CascadeResourceOverlay:     filepath.Join(root, "overlays", "parent", "repo-a"),
+		CascadeResourceRecord:      filepath.Join(canonicalStateDir, "parent"),
+	}
+	for _, resource := range intent.Resources {
+		expected, ok := want[resource.Kind]
+		if !ok {
+			continue
+		}
+		if resource.Path != expected {
+			t.Fatalf("%s path = %q, want canonical %q", resource.Kind, resource.Path, expected)
+		}
+	}
+}
+
+func TestCanonicalPathFallsBackForMissingComponents(t *testing.T) {
+	t.Parallel()
+
+	tmp, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(tmp, "real-root")
+	alias := filepath.Join(tmp, "alias-root")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(root, alias); err != nil {
+		t.Fatal(err)
+	}
+
+	// Missing components resolve through the deepest existing ancestor.
+	got := CanonicalPath(filepath.Join(alias, "missing", "leaf.txt"))
+	if want := filepath.Join(root, "missing", "leaf.txt"); got != want {
+		t.Fatalf("CanonicalPath = %q, want %q", got, want)
+	}
+
+	// A fully unresolvable path is returned cleaned.
+	missingRoot := filepath.Join(tmp, "gone", "sub", "..", "leaf")
+	if got := CanonicalPath(missingRoot); got != filepath.Join(tmp, "gone", "leaf") {
+		t.Fatalf("CanonicalPath = %q", got)
+	}
+
+	// A broken symlink keeps its own name; only its parent is resolved.
+	broken := filepath.Join(alias, "broken-link")
+	if err := os.Symlink(filepath.Join(tmp, "nowhere"), broken); err != nil {
+		t.Fatal(err)
+	}
+	if got := CanonicalPath(broken); got != filepath.Join(root, "broken-link") {
+		t.Fatalf("CanonicalPath(broken symlink) = %q", got)
+	}
+}
+
 func TestParentOverlayPathIsDeterministicAndRepositoryScoped(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: pure path construction has no shared state.

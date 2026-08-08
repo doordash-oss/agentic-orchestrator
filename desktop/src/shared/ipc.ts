@@ -813,6 +813,8 @@ export const RelationshipChildViewSchema = z.strictObject({
   cleanupWarnings: z.array(z.strictObject({ message: z.string(), repo: z.string().optional() })),
   lastError: z.string().optional(),
   diffSummary: z.string().optional(),
+  /** A preserved diff exists even when `diffSummary` is absent from a list projection. */
+  hasDiffSummary: z.boolean().optional(),
 });
 export type RelationshipChildView = z.output<typeof RelationshipChildViewSchema>;
 
@@ -860,6 +862,9 @@ export const FeatureSummaryViewSchema = z.strictObject({
   warnings: z.array(z.strictObject({ code: z.string(), message: z.string() })).max(100),
   activeChild: RelationshipChildViewSchema.optional(),
   childHistory: z.array(RelationshipChildViewSchema).max(1000).optional(),
+  /** Closed-child count before the list projection's cap. */
+  childHistoryTotal: z.number().int().nonnegative().optional(),
+  childHistoryTruncated: z.boolean().optional(),
 });
 
 export type FeatureSummaryView = z.output<typeof FeatureSummaryViewSchema>;
@@ -949,6 +954,9 @@ export const FeatureSnapshotSchema = z.strictObject({
   actions: z.array(FeatureActionViewSchema),
   activeChild: RelationshipChildViewSchema.optional(),
   childHistory: z.array(RelationshipChildViewSchema).max(1000).optional(),
+  /** Closed-child count before the list projection's cap. */
+  childHistoryTotal: z.number().int().nonnegative().optional(),
+  childHistoryTruncated: z.boolean().optional(),
   parentId: FeatureIdSchema.optional(),
   parentKind: z.string().optional(),
   active: z.boolean().optional(),
@@ -1656,14 +1664,24 @@ export function attentionOwnerFeatureId(item: AttentionItem): string | undefined
   return item.featureId;
 }
 /**
+ * A synthetic help item: an interactive session idling between turns
+ * (waitingKind 'input'). Inline run-view status, not blocking input — it
+ * never badges, notifies, or holds the phase rail.
+ */
+export function isSyntheticHelpItem(item: AttentionItem): boolean {
+  return item.kind === 'help' && item.waitingKind === 'input';
+}
+
+/**
  * The one badge rule, shared by every surface that counts blocking input: the
  * toolbar bell, and the main process's tray icon and "Attention (N)" label.
- * Recovery is contextual priority rather than a request awaiting an answer, so
- * it never contributes to a count — keeping this in one place is what stops the
+ * Recovery is contextual priority rather than a request awaiting an answer,
+ * and a synthetic help item is inline status rather than a question, so
+ * neither contributes to a count — keeping this in one place is what stops the
  * three badges from drifting apart.
  */
 export function actionableAttentionCount(items: readonly AttentionItem[]): number {
-  return items.filter((item) => item.kind !== 'recovery').length;
+  return items.filter((item) => item.kind !== 'recovery' && !isSyntheticHelpItem(item)).length;
 }
 
 export const AttentionSnapshotSchema = z.strictObject({

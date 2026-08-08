@@ -88,7 +88,7 @@ describe('AttentionService waiting sessions', () => {
     ],
   };
 
-  function transport(question: string, sessions: unknown): ServerTransport {
+  function transport(question: string, sessions: unknown, kind?: string): ServerTransport {
     return {
       apiRequest: (path) => {
         if (path === '/api/v1/sessions' && sessions instanceof Error) {
@@ -103,6 +103,7 @@ describe('AttentionService waiting sessions', () => {
                   {
                     feature_id: 'feature-1',
                     question,
+                    ...(kind === undefined ? {} : { kind }),
                     pending: true,
                     time: '2026-07-16T10:05:00Z',
                   },
@@ -132,6 +133,22 @@ describe('AttentionService waiting sessions', () => {
         waitingKind: 'input',
         runningTasks: ['Indexing repository layout'],
       }),
+    ]);
+  });
+
+  it('trusts the wire kind over prompt text when the server sends one', async () => {
+    const synthetic = new AttentionService(
+      transport('Coordinating next steps', sessionsBody, 'input'),
+    );
+    expect((await synthetic.getSnapshot()).items).toEqual([
+      expect.objectContaining({ kind: 'help', waitingKind: 'input' }),
+    ]);
+
+    const question = new AttentionService(
+      transport('Agent has a question', sessionsBody, 'question'),
+    );
+    expect((await question.getSnapshot()).items).toEqual([
+      expect.objectContaining({ kind: 'help', waitingKind: 'question' }),
     ]);
   });
 

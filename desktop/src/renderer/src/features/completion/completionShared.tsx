@@ -1,10 +1,16 @@
 import { useState, useCallback, useMemo } from 'react';
+import { E_REQUEST_TIMEOUT } from '../../../../shared/errors';
 import { parseIpcError } from '../../wizard/ipcError';
 
 export type DiffLayout = 'side-by-side' | 'unified';
 export type CompletionAction = 'publish' | 'merge' | 'mark-done' | 'cleanup' | 'delete';
 
-export type ActionResult = { ok: true; result: string } | { ok: false; message: string };
+/**
+ * `reconciling` is not a failure: the mutation outran its request bound and is
+ * still running server-side, so its outcome arrives through the feature refresh.
+ */
+export type ActionResult =
+  { ok: true; result: string } | { ok: false; message: string; reconciling?: boolean };
 
 export const STATUS_LABELS: Record<string, string> = {
   eligible: 'Eligible',
@@ -122,7 +128,18 @@ export function useCompletionAction() {
         setResult({ ok: true, result: resultStr });
         return true;
       } catch (err) {
-        setResult({ ok: false, message: parseIpcError(err).message });
+        const parsed = parseIpcError(err);
+        if (parsed.code === E_REQUEST_TIMEOUT) {
+          // The server keeps working; repoll so the true outcome surfaces.
+          try {
+            if (refresh) await refresh();
+          } catch {
+            // The cockpit converges through its own invalidation path.
+          }
+          setResult({ ok: false, reconciling: true, message: parsed.message });
+          return false;
+        }
+        setResult({ ok: false, message: parsed.message });
         return false;
       } finally {
         setBusy(false);
@@ -130,7 +147,10 @@ export function useCompletionAction() {
     },
     [],
   );
-  return { busy, result, run };
+  // A reconciling action must not re-arm its trigger: the mutation is still in
+  // flight on the server, and dispatching again would repeat it.
+  const reconciling = result !== null && !result.ok && result.reconciling === true;
+  return { busy, reconciling, result, run };
 }
 
 export function PrLinkButton({
@@ -163,6 +183,21 @@ export function ResultBox({ result }: { result: ActionResult | null }) {
           {'✓'}
         </span>
         <span className="completion-workspace__result-text">{result.result}</span>
+      </div>
+    );
+  }
+  if (result.reconciling === true) {
+    return (
+      <div
+        className="completion-workspace__result completion-workspace__result--reconciling"
+        role="status"
+      >
+        <span className="completion-workspace__result-icon" aria-hidden="true">
+          {'⟳'}
+        </span>
+        <span className="completion-workspace__result-text">
+          still running on the server — reconciling: {result.message}
+        </span>
       </div>
     );
   }

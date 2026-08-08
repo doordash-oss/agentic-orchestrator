@@ -17,11 +17,13 @@ package agent
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -701,7 +703,7 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 				violations = completionIntentViolations(rootCompletionIntent(sess), []string{"progress.md"})
 			}
 			lastErr := formatProtocolViolationError(RoleImplementer, iterDir, violations)
-			if done := recordProtocolViolationIteration(am, summaryPath, iterDir, &meta, i, cfg, iterCtx, cost, iterStart, violations, lastErr, &consecutiveFailures, &reviewerFeedback); done != nil {
+			if done := recordProtocolViolationIteration(am, summaryPath, iterDir, aggregateLogPath, &meta, i, cfg, iterCtx, cost, iterStart, violations, lastErr, &consecutiveFailures, &reviewerFeedback); done != nil {
 				return done, nil
 			}
 			continue
@@ -714,17 +716,17 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			if preliminaryProgress != nil && preliminaryProgress.State == StateSuccess && strings.TrimSpace(testingContractPath) != "" {
 				if contractFingerprint != "" {
 					currentFingerprint, fingerprintErr := Fingerprint(testingContractPath)
-					if fingerprintErr != nil || currentFingerprint != contractFingerprint {
-						reason := "testing-contract.yaml was modified by the implementer; the contract is harness-owned"
-						if fingerprintErr != nil {
-							reason = fmt.Sprintf("testing-contract.yaml could not be verified after implementation: %v", fingerprintErr)
-						}
-						violations := []ProtocolViolation{{Artifact: "testing-contract.yaml", Reason: reason}}
-						lastErr := formatProtocolViolationError(RoleImplementer, iterDir, violations)
-						if done := recordProtocolViolationIteration(am, summaryPath, iterDir, &meta, i, cfg, iterCtx, cost, iterStart, violations, lastErr, &consecutiveFailures, &reviewerFeedback); done != nil {
-							return done, nil
-						}
-						continue
+					if fingerprintErr != nil {
+						return nil, fmt.Errorf("verifying testing contract after implementation: %w", fingerprintErr)
+					}
+					if currentFingerprint != contractFingerprint {
+						// Agent writes to the contract are denied at the
+						// permission layer, so a changed fingerprint is an
+						// external amendment: record it and re-anchor instead
+						// of charging the implementer.
+						appendIterationLog(aggregateLogPath, i,
+							"testing-contract.yaml was amended outside the session (external amendment); re-anchoring the harness fingerprint")
+						contractFingerprint = currentFingerprint
 					}
 				}
 				contract, readErr := ReadTestingContract(testingContractPath)
@@ -743,10 +745,13 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 						}
 					}
 				}
-				if cached, cacheErr := ReadVerificationReport(reportPath); cacheErr == nil && cached != nil && cached.ContractRevision == contract.Revision {
+				if cached, cacheErr := ReadVerificationReport(reportPath); cacheErr == nil && cached != nil &&
+					cached.ContractRevision == contract.Revision && !verificationReportHasBlockedResults(cached) {
 					// Stop/restart resume: the harness already executed this
 					// iteration's contract and persisted the report. Reuse
 					// it so resuming mid-review never re-runs the commands.
+					// Blocked results never replay — they are environment-
+					// derived and must be re-probed after the user retries.
 					harnessVerification = ReconstructVerificationOutcome(cached)
 				} else {
 					verifyCtx, cancelVerify := verificationContext(cfg.FeatureStore, cfg.Feature.ID)
@@ -775,7 +780,7 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			}
 			if !outcome.OK {
 				lastErr := formatProtocolViolationError(RoleImplementer, iterDir, violations)
-				if done := recordProtocolViolationIteration(am, summaryPath, iterDir, &meta, i, cfg, iterCtx, cost, iterStart, violations, lastErr, &consecutiveFailures, &reviewerFeedback); done != nil {
+				if done := recordProtocolViolationIteration(am, summaryPath, iterDir, aggregateLogPath, &meta, i, cfg, iterCtx, cost, iterStart, violations, lastErr, &consecutiveFailures, &reviewerFeedback); done != nil {
 					return done, nil
 				}
 				continue
@@ -798,7 +803,7 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 				if gate.Rejected {
 					gateViolations := reportGateViolations(gate)
 					lastErr := formatProtocolViolationError(RoleImplementer, iterDir, gateViolations)
-					if done := recordProtocolViolationIteration(am, summaryPath, iterDir, &meta, i, cfg, iterCtx, cost, iterStart, gateViolations, lastErr, &consecutiveFailures, &reviewerFeedback); done != nil {
+					if done := recordProtocolViolationIteration(am, summaryPath, iterDir, aggregateLogPath, &meta, i, cfg, iterCtx, cost, iterStart, gateViolations, lastErr, &consecutiveFailures, &reviewerFeedback); done != nil {
 						return done, nil
 					}
 					continue
@@ -1144,10 +1149,38 @@ func formatContractViolationFeedback(role Role, violations []ProtocolViolation) 
 	)
 }
 
+// harnessVerdictPrefix tags the harness's own verdict for a turn in the
+// transcript. The provider's [result] line carries only its own subtype, so a
+// rejected turn otherwise reads as a success.
+const harnessVerdictPrefix = "[harness] "
+
+// appendHarnessVerdict records the rejection next to the provider transcript,
+// in both the iteration response log and the aggregate log.
+func appendHarnessVerdict(iterDir, aggregateLogPath string, violations []ProtocolViolation) {
+	reason := JoinProtocolViolations(violations)
+	if strings.TrimSpace(reason) == "" {
+		reason = "root outcome or required artifacts were invalid"
+	}
+	line := fmt.Sprintf("%s%s: %s\n", harnessVerdictPrefix, agentStatusProtocolViolation, reason)
+	paths := []string{filepath.Join(iterDir, "response.txt")}
+	if strings.TrimSpace(aggregateLogPath) != "" {
+		paths = append(paths, aggregateLogPath)
+	}
+	for _, path := range paths {
+		f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+		if err != nil {
+			continue
+		}
+		_, _ = f.WriteString(line)
+		_ = f.Close()
+	}
+}
+
 func recordProtocolViolationIteration(
 	am *ArtifactManager,
 	summaryPath string,
 	iterDir string,
+	aggregateLogPath string,
 	meta *IterationMeta,
 	iteration int,
 	cfg ImplementConfig,
@@ -1162,6 +1195,7 @@ func recordProtocolViolationIteration(
 	*consecutiveFailures = *consecutiveFailures + 1
 	feedback := formatContractViolationFeedback(RoleImplementer, violations)
 	_ = os.WriteFile(filepath.Join(iterDir, "review-feedback.md"), []byte(feedback), 0o644)
+	appendHarnessVerdict(iterDir, aggregateLogPath, violations)
 	meta.AgentStatus = "PROTOCOL_VIOLATION"
 	meta.ReviewStatus = agentStatusChangesRequested
 	_ = am.WriteMeta(iterDir, *meta)
@@ -1543,6 +1577,12 @@ var backgroundTaskQuietGrace = 15 * time.Second
 // monitors with the process group — and commits the outcome. Var for tests.
 var backgroundTaskStallGrace = 10 * time.Minute
 
+// backgroundTaskDeferralCeiling bounds how long a turn may be deferred for live
+// background tasks, however chatty they are. Past it the tasks are killed with
+// the session and any present outcome is committed, so a never-true poll loop
+// cannot hold a finished phase open indefinitely. Var for tests.
+var backgroundTaskDeferralCeiling = 25 * time.Minute
+
 // phaseOutcomeReclassifyInterval paces the fallback re-classification tick:
 // a session whose terminal Result status was coalesced away or mis-delivered
 // would otherwise wait forever, since Done never fires for multi-turn
@@ -1569,6 +1609,96 @@ func rootCompletionIntent(sess ports.SessionView) llm.CompletionIntent {
 
 func hasPendingRootQuestion(sess ports.SessionView) bool {
 	return sess != nil && sess.HasPendingRootAskUserQuestion()
+}
+
+// rootOutcomeSignal returns the session's semantic-outcome notification
+// channel, or nil for sessions without the capability — a nil channel simply
+// makes the waiter's outcome arm dormant.
+func rootOutcomeSignal(sess ports.SessionView) <-chan struct{} {
+	if notifier, ok := sess.(ports.RootOutcomeNotifier); ok {
+		return notifier.RootOutcomeCh()
+	}
+	return nil
+}
+
+func clearRootCompletionIntent(sess ports.SessionView) {
+	if resetter, ok := sess.(ports.RootOutcomeResetter); ok {
+		resetter.ClearRootCompletionIntent()
+	}
+}
+
+func resultSequence(sess ports.SessionView) (uint64, bool) {
+	if sequencer, ok := sess.(ports.ResultSequencer); ok {
+		return sequencer.ResultSeq(), true
+	}
+	return 0, false
+}
+
+// activityDigestWindow is how many trailing message-log records feed the
+// novelty digest. Comfortably larger than a poll loop's repeat cycle.
+const activityDigestWindow = 8
+
+// sessionActivityDigest fingerprints the distinct content of the session's
+// recent message-log tail. A task loop printing the same output forever leaves
+// it unchanged, so repetition counts as silence even though every line
+// refreshes LastStdoutAt.
+func sessionActivityDigest(sess ports.SessionView) string {
+	if sess == nil {
+		return ""
+	}
+	msgLog := sess.MessageLog()
+	if msgLog == nil {
+		return ""
+	}
+	texts := make([]string, 0, activityDigestWindow)
+	for _, msg := range msgLog.LastN(activityDigestWindow) {
+		if text := strings.TrimSpace(messageContentText(msg)); text != "" {
+			texts = append(texts, text)
+		}
+	}
+	slices.Sort(texts)
+	texts = slices.Compact(texts)
+	sum := sha256.New()
+	for _, text := range texts {
+		sum.Write([]byte(text))
+		sum.Write([]byte{0})
+	}
+	return string(sum.Sum(nil))
+}
+
+// messageContentText renders the content of one log record for the novelty
+// digest: timestamps and counters are deliberately excluded so identical output
+// digests identically.
+func messageContentText(msg llm.SDKMessage) string {
+	var b strings.Builder
+	blocks := [][]llm.ContentBlock{}
+	if msg.Assistant != nil {
+		blocks = append(blocks, msg.Assistant.Message.Content)
+	}
+	if msg.User != nil {
+		blocks = append(blocks, msg.User.Message.Content)
+	}
+	for _, content := range blocks {
+		for _, block := range content {
+			switch {
+			case block.IsText():
+				b.WriteString(block.Text)
+			case block.IsThinking():
+				b.WriteString(block.Thinking)
+			case block.IsToolUse():
+				b.WriteString(block.Name)
+				b.Write(block.Input)
+			case block.IsToolResult():
+				b.Write(block.Content)
+			}
+			b.WriteByte('\n')
+		}
+	}
+	if msg.ToolProgress != nil {
+		b.WriteString(msg.ToolProgress.ToolName)
+		b.WriteString(msg.ToolProgress.Data)
+	}
+	return b.String()
 }
 
 func completionIntentViolations(intent llm.CompletionIntent, expectedArtifacts []string) []ProtocolViolation {
@@ -1763,6 +1893,10 @@ type PhaseOutcomeWaitOptions struct {
 	// It seeds the bounded protocol-nudge text before contract validation can
 	// report more precise violations.
 	MissingArtifacts []string
+	// Ctx bounds the wait. When it ends, a present committable outcome is
+	// committed and anything else fails the turn instead of waiting forever.
+	// Nil leaves the wait unbounded.
+	Ctx context.Context
 }
 
 // PhaseOutcomeWaitResult reports the semantic result of an autonomous root
@@ -1879,17 +2013,64 @@ func WaitForPhaseOutcome(sess ports.SessionView, opts PhaseOutcomeWaitOptions) P
 	// re-invokes the agent when the tasks complete, so no nudge is sent and no
 	// budget is consumed. The bgTicker below provides the fallback paths.
 	awaitingBackgroundTasks := false
+	// awaitingSince stamps when the deferral started so the absolute ceiling is
+	// measured from the yield, not from the last (possibly repeated) output.
+	var awaitingSince time.Time
 	bgTicker := time.NewTicker(backgroundTaskPollInterval)
 	defer bgTicker.Stop()
 
+	// Novel-output tracking: LastStdoutAt is refreshed by any line, so a task
+	// that polls forever would reset every grace window. A window counts as
+	// silent unless stdout is recent *and* its content changed.
+	activityDigest := sessionActivityDigest(sess)
+	lastNovelActivity := time.Now()
+	silence := func() time.Duration {
+		if digest := sessionActivityDigest(sess); digest != activityDigest {
+			activityDigest = digest
+			lastNovelActivity = time.Now()
+		}
+		return max(time.Since(sess.LastStdoutAt()), time.Since(lastNovelActivity))
+	}
+
 	// Fallback wake-up: Done never fires for multi-turn keep-alive sessions
 	// and a StatusCh delivery can be lost, so re-derive the status from the
-	// terminal Result. classifiedResult keeps the tick idempotent with the
+	// terminal Result. classifiedSeq keeps the tick idempotent with the
 	// normal paths — a result handleStatus already saw is never re-classified,
 	// so no commit or nudge is ever duplicated.
 	reclassifyTicker := time.NewTicker(phaseOutcomeReclassifyInterval)
 	defer reclassifyTicker.Stop()
 	var classifiedResult *llm.ResultMessage
+	var classifiedSeq uint64
+
+	// A commit adjudicated from the outcome signal happens before the
+	// provider's terminal Result for that turn arrives. Remember which Result
+	// that is so it is never adjudicated a second time — re-nudging a session
+	// that is already correcting would burn the nudge budget for nothing.
+	var adjudicatedSeq uint64
+	adjudicatedNextResult := false
+	markAdjudicatedAhead := func() {
+		if seq, ok := resultSequence(sess); ok {
+			adjudicatedSeq = seq + 1
+			return
+		}
+		adjudicatedNextResult = true
+	}
+	alreadyAdjudicated := func() bool {
+		if adjudicatedNextResult {
+			adjudicatedNextResult = false
+			return true
+		}
+		if adjudicatedSeq == 0 {
+			return false
+		}
+		seq, ok := resultSequence(sess)
+		if !ok || seq < adjudicatedSeq {
+			return false
+		}
+		hit := seq == adjudicatedSeq
+		adjudicatedSeq = 0
+		return hit
+	}
 
 	commitIntent := func(intent llm.CompletionIntent, sessionDone bool) (PhaseOutcomeWaitResult, bool) {
 		if opts.CommitOutcome == nil {
@@ -1916,6 +2097,9 @@ func WaitForPhaseOutcome(sess ports.SessionView, opts PhaseOutcomeWaitOptions) P
 		if !sessionDone &&
 			sendCompletionNudge(sess, &finishOrViolateNudges,
 				formatCommitViolationNudge(violations, opts.RetryOutcomeAllowed)) {
+			// The rejected outcome must not be re-offered by the correction
+			// turn's bookkeeping; only a freshly emitted one may commit.
+			clearRootCompletionIntent(sess)
 			return PhaseOutcomeWaitResult{}, false
 		}
 		_ = sess.Stop()
@@ -1928,6 +2112,12 @@ func WaitForPhaseOutcome(sess ports.SessionView, opts PhaseOutcomeWaitOptions) P
 
 	handleStatus := func(status string, sessionDone bool) (PhaseOutcomeWaitResult, bool) {
 		classifiedResult = sess.Cost()
+		if seq, ok := resultSequence(sess); ok {
+			classifiedSeq = seq
+		}
+		if !sessionDone && status == agentStatusSuccess && alreadyAdjudicated() {
+			return PhaseOutcomeWaitResult{}, false
+		}
 		if status == agentStatusAPIError {
 			if sessionDone {
 				return PhaseOutcomeWaitResult{Status: agentStatusFailed, Handoff: handoff}, true
@@ -1968,6 +2158,9 @@ func WaitForPhaseOutcome(sess ports.SessionView, opts PhaseOutcomeWaitOptions) P
 					}},
 				}, true
 			}
+			if !awaitingBackgroundTasks {
+				awaitingSince = time.Now()
+			}
 			awaitingBackgroundTasks = true
 			return PhaseOutcomeWaitResult{}, false
 
@@ -2000,6 +2193,7 @@ func WaitForPhaseOutcome(sess ports.SessionView, opts PhaseOutcomeWaitOptions) P
 			autoResumeAttempts = 0
 			violations := completionIntentViolations(intent, opts.MissingArtifacts)
 			if !sessionDone && decideFinishOrViolate(sess, disposition, &finishOrViolateNudges, protocolViolationArtifacts(violations)) {
+				clearRootCompletionIntent(sess)
 				return PhaseOutcomeWaitResult{}, false
 			}
 			_ = sess.Stop()
@@ -2036,8 +2230,22 @@ func WaitForPhaseOutcome(sess ports.SessionView, opts PhaseOutcomeWaitOptions) P
 	}
 
 	doneCh := sess.Done()
+	outcomeC := rootOutcomeSignal(sess)
+	var ctxDone <-chan struct{}
+	if opts.Ctx != nil {
+		ctxDone = opts.Ctx.Done()
+	}
 	for {
 		select {
+		case <-ctxDone:
+			_ = sess.Stop()
+			if intent := rootCompletionIntent(sess); intent.Valid() && !hasPendingRootQuestion(sess) {
+				if result, done := commitIntent(intent, true); done {
+					return result
+				}
+			}
+			return PhaseOutcomeWaitResult{Status: agentStatusFailed, Handoff: handoff, Err: opts.Ctx.Err()}
+
 		case <-handoffC:
 			if opts.ContextHandoffPollHook != nil {
 				opts.ContextHandoffPollHook()
@@ -2068,21 +2276,36 @@ func WaitForPhaseOutcome(sess ports.SessionView, opts PhaseOutcomeWaitOptions) P
 			}
 			if liveBackgroundTasks(sess) > 0 {
 				// Task ceiling: a present root outcome plus tasks that
-				// produced nothing (all task activity arrives via stdout)
-				// for the stall grace is a runaway monitor, not pending
-				// work. Stop kills the process group, taking the monitors
+				// produced no novel output for the stall grace is a runaway
+				// monitor, not pending work. The absolute ceiling covers the
+				// chatty case, where output keeps arriving but says nothing
+				// new. Stop kills the process group, taking the monitors
 				// with it; the outcome is committed as normal.
+				ceilingExpired := !awaitingSince.IsZero() &&
+					time.Since(awaitingSince) >= backgroundTaskDeferralCeiling
 				intent := rootCompletionIntent(sess)
 				if intent.Found && !hasPendingRootQuestion(sess) &&
-					time.Since(sess.LastStdoutAt()) >= backgroundTaskStallGrace {
+					(ceilingExpired || silence() >= backgroundTaskStallGrace) {
 					_ = sess.Stop()
 					if result, done := commitIntent(intent, true); done {
 						return result
 					}
+					continue
+				}
+				if ceilingExpired {
+					_ = sess.Stop()
+					return PhaseOutcomeWaitResult{
+						Status:  agentStatusProtocolViolation,
+						Handoff: handoff,
+						ProtocolViolations: []ProtocolViolation{{
+							Artifact: "agentico-outcome",
+							Reason:   "delegated tasks exceeded the deferral ceiling without a completion outcome",
+						}},
+					}
 				}
 				continue
 			}
-			quiet := time.Since(sess.LastStdoutAt())
+			quiet := silence()
 			// All tasks finished but no new result arrived: the CLI did not
 			// re-invoke the agent on its own. Resume it explicitly, reusing
 			// the truncation budget so a session that keeps yielding without
@@ -2107,9 +2330,35 @@ func WaitForPhaseOutcome(sess ports.SessionView, opts PhaseOutcomeWaitOptions) P
 				}},
 			}
 
+		case <-outcomeC:
+			// A committable outcome is the semantic end of the turn; the
+			// provider's terminal Result can trail it by minutes. Commit on
+			// the outcome itself, but leave any unclassified Result to the
+			// Result-driven paths so truncation and error dispositions keep
+			// precedence.
+			if cost := sess.Cost(); cost != nil && cost != classifiedResult {
+				continue
+			}
+			intent := rootCompletionIntent(sess)
+			if !intent.Valid() || hasPendingRootQuestion(sess) || liveBackgroundTasks(sess) > 0 {
+				continue
+			}
+			awaitingBackgroundTasks = false
+			if result, done := commitIntent(intent, false); done {
+				return result
+			}
+			markAdjudicatedAhead()
+
 		case <-reclassifyTicker.C:
 			cost := sess.Cost()
-			if cost == nil || cost == classifiedResult {
+			if cost == nil {
+				continue
+			}
+			if seq, ok := resultSequence(sess); ok {
+				if seq <= classifiedSeq {
+					continue
+				}
+			} else if cost == classifiedResult {
 				continue
 			}
 			if result, done := handleStatus(statusFromResult(cost), false); done {

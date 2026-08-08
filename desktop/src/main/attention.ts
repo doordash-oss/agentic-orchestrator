@@ -41,9 +41,16 @@ const REMEDIES = {
 };
 const fallbackTime = '1970-01-01T00:00:00.000Z';
 
-// Mirrors the server's synthetic help text (internal/server/read_model.go,
-// agentQuestionPrompt): a WaitingHelp session with no readable question.
+// Fallback for servers that predate HelpQueue.kind: mirrors the synthetic
+// help text (internal/server/read_model.go, agentQuestionPrompt).
 const syntheticHelpPrompt = 'Agent has a question';
+
+function helpWaitingKind(help: { kind?: string; question: string }): 'question' | 'input' {
+  if (help.kind === 'input' || help.kind === 'question') return help.kind;
+  return help.question.trim() === '' || help.question === syntheticHelpPrompt
+    ? 'input'
+    : 'question';
+}
 
 const WAITING_TURN_STATES = new Set(['waiting_input', 'waiting_question']);
 
@@ -186,12 +193,9 @@ export class AttentionService {
             ...(session?.phase === undefined ? {} : { phase: session.phase }),
             waitingSince: help.time ?? fallbackTime,
             prompt: help.question,
-            // The synthetic placeholder means no readable question exists:
-            // the session finished its turn and the runtime is coordinating.
-            waitingKind:
-              help.question.trim() === '' || help.question === syntheticHelpPrompt
-                ? ('input' as const)
-                : ('question' as const),
+            // 'input': the session finished its turn and the runtime is
+            // coordinating — inline status, not a question.
+            waitingKind: helpWaitingKind(help),
             ...(runningTasks.length === 0 ? {} : { runningTasks }),
           };
         }),

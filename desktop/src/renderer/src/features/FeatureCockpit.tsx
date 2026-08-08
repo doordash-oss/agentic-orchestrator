@@ -21,6 +21,7 @@ import { createPortal } from 'react-dom';
 import {
   attentionOwnerFeatureId,
   isPendingReviewStatus,
+  isSyntheticHelpItem,
   type FeatureSnapshot,
   type RunDetailView,
   type RunSummaryView,
@@ -45,6 +46,7 @@ import { InspectorContent } from './CockpitInspector';
 import { ImpactPreviewList } from './ImpactPreviewList';
 import { NeedUserInputModal, type AttentionGate } from './NeedUserInputModal';
 import {
+  disabledReasonCopy,
   resolvePostImplementationMode,
   type AftercareAction,
   type AftercareModalId,
@@ -1074,6 +1076,13 @@ export function FeatureCockpit({
     [],
   );
 
+  // The detail route is the only carrier of the preserved diff bodies and of
+  // the closed passes a list projection caps away.
+  const loadFullChildHistory = useCallback(
+    () => window.agentico.getFeature(featureId).then((detail) => detail.childHistory ?? []),
+    [featureId],
+  );
+
   // Aftercare widens the gate deliberately: undelivered work has to stay
   // detectable in terminal states, where every completion verb can be disabled.
   const completionEnabled =
@@ -1242,7 +1251,12 @@ export function FeatureCockpit({
     if (selectedRunNumber === undefined || selectedRunNumber === null || selectedRunNumber <= 0) {
       return;
     }
-    if (attentionItems.some((item) => item.kind !== 'recovery' && item.featureId === featureId)) {
+    if (
+      attentionItems.some(
+        (item) =>
+          item.kind !== 'recovery' && !isSyntheticHelpItem(item) && item.featureId === featureId,
+      )
+    ) {
       setCurrentRunBadges((badges) => ({ ...badges, attention: true }));
     }
   }, [attentionItems, featureId, selectedRunNumber]);
@@ -1719,7 +1733,8 @@ export function FeatureCockpit({
     ) : null;
 
   const reasonsOf = (action: ReturnType<typeof actionById>): string[] =>
-    action?.disabledReasons.map((reason) => displayFeatureMessage(reason.message)) ?? [];
+    action?.disabledReasons.map((reason) => displayFeatureMessage(disabledReasonCopy(reason))) ??
+    [];
   const primaryActions: CockpitPrimaryAction[] = [];
   if (setupAction?.enabled === true) {
     primaryActions.push({
@@ -2084,6 +2099,7 @@ export function FeatureCockpit({
                 parent={snapshot}
                 pass={refactorPass}
                 active={retainedEffectsActive}
+                attentionPreviewRequest={attentionPreviewRequest}
                 attentionItems={attentionItems}
                 refreshAttention={refreshAttention}
                 attentionDrafts={attentionDrafts}
@@ -2134,6 +2150,7 @@ export function FeatureCockpit({
                   busyAction={
                     rebaseLaunchBusy ? { id: 'rebase', label: 'Starting rebase pass' } : undefined
                   }
+                  onLoadFullChildHistory={loadFullChildHistory}
                   onAction={openAftercareAction}
                   onOpenRunRecord={() => setRunRecordOpen(true)}
                   onOpenChanges={() => setChangesOpen(true)}

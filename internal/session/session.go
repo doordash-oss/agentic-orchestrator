@@ -88,6 +88,7 @@ type Session struct {
 	transcriptPath string
 	recoveredPID   int
 	status         SessionStatus
+	waitingSince   time.Time // stamped on transition into SessionWaitingHelp, cleared on exit
 	startedAt      time.Time
 	workDir        string
 	repoName       string            // repo name for multi-repo features (set via SessionOpts)
@@ -116,10 +117,16 @@ type Session struct {
 	accumulatedUsage llm.Usage   // cumulative usage across all messages
 	messageLog       *MessageLog // structured message log
 	cost             *llm.ResultMessage
+	// resultSeq counts terminal Result records. Monotonic, so waiters can tell
+	// a new result from the one they already classified.
+	resultSeq uint64
 	// rootCompletionIntent is replaced by each final root-assistant message
 	// and cleared whenever a new root turn starts. Child task output can never
 	// mutate it.
 	rootCompletionIntent llm.CompletionIntent
+	// rootOutcomeCh coalesces "a committable root outcome is recorded" wake-ups
+	// so waiters commit on the outcome itself, not on the terminal Result.
+	rootOutcomeCh chan struct{}
 
 	// statusCh carries the SDK-derived session lifecycle status:
 	// "SUCCESS" / "API_ERROR" / "FAILED" (see resultSubtypeToStatus).
@@ -389,8 +396,25 @@ func estimateInitialPromptContextTokens(prompt string) int {
 }
 
 func (s *Session) MessageLog() ports.MessageLog { return s.messageLog }
-func (s *Session) Cost() *llm.ResultMessage     { return s.cost }
 func (s *Session) StatusCh() <-chan string      { return s.statusCh }
+
+// Cost returns the latest terminal Result record. The read is mutex-guarded:
+// the reader loop replaces the pointer under s.mu.
+func (s *Session) Cost() *llm.ResultMessage {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.cost
+}
+
+// ResultSeq returns how many terminal Result records this session has observed.
+func (s *Session) ResultSeq() uint64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.resultSeq
+}
+
+// RootOutcomeCh signals whenever a committable root outcome is recorded.
+func (s *Session) RootOutcomeCh() <-chan struct{} { return s.rootOutcomeCh }
 
 // AdditionalSessionCost returns provider-specific child-session cost that is
 // not included in the primary result cost. Providers without this optional
@@ -476,7 +500,7 @@ func (s *Session) removePendingControlRequestLocked(requestID string) bool {
 		if cr != nil && cr.RequestID == requestID {
 			s.pendingControlRequests = append(s.pendingControlRequests[:i], s.pendingControlRequests[i+1:]...)
 			if s.watchdog != nil {
-				s.watchdog.ResolveControlRequest(requestID)
+				s.watchdog.ResolveControlRequest(requestID, cr.Request.ToolName)
 			}
 			return true
 		}
@@ -617,6 +641,7 @@ func NewSession(id, featureID string, phase feature.Phase) *Session {
 		messageLog:                NewMessageLog(),
 		status:                    SessionRunning,
 		statusCh:                  make(chan string, 1),
+		rootOutcomeCh:             make(chan struct{}, 1),
 		attachCh:                  make(chan llm.SDKMessage, 100),
 		criticalAttachSendTimeout: criticalAttachSendTimeout,
 		controlCh:                 make(chan llm.SDKMessage, 1024),
@@ -904,9 +929,9 @@ func (s *Session) readMessages(onMessage func(llm.SDKMessage)) {
 		if s.process != nil {
 			_ = s.process.Wait()
 			if s.process.ProcessState != nil && s.process.ProcessState.Success() {
-				s.status = SessionDone
+				s.setStatusLocked(SessionDone)
 			} else if s.status != SessionDone {
-				s.status = SessionFailed
+				s.setStatusLocked(SessionFailed)
 			}
 		}
 		pidDir := s.pidDir
@@ -1045,6 +1070,7 @@ func (s *Session) readMessages(onMessage func(llm.SDKMessage)) {
 			if msg.Result != nil {
 				s.mu.Lock()
 				s.cost = msg.Result
+				s.resultSeq++
 				// Extract context window from modelUsage if available (Claude CLI).
 				for _, mu := range msg.Result.ModelUsage {
 					if mu.ContextWindow > 0 && s.latestUsage != nil {
@@ -1525,7 +1551,7 @@ func (s *Session) matchingAskUserToolUseInput(controlInput json.RawMessage) (jso
 // respondToControlViaProtocol sends a control response through the protocol or direct writeJSON.
 func (s *Session) respondToControlViaProtocol(requestID string, allow bool, originalInput json.RawMessage, reason string) {
 	if s.watchdog != nil {
-		s.watchdog.ResolveControlRequest(requestID)
+		s.watchdog.ResolveControlRequest(requestID, "")
 	}
 	if s.protocol != nil {
 		_ = s.protocol.RespondToControl(requestID, allow, originalInput, reason)
@@ -1570,10 +1596,15 @@ func (s *Session) writeJSON(v interface{}) error {
 func (s *Session) SendUserMessage(text string) error {
 	s.mu.Lock()
 	s.hasUnansweredQuestion = false
-	s.rootCompletionIntent = llm.CompletionIntent{}
+	// A committable outcome outlives an unrelated user message — a chat nudge
+	// must not destroy a recorded success that has not been committed yet.
+	// Only the harness discards one, via ClearRootCompletionIntent.
+	if !s.rootCompletionIntent.Valid() {
+		s.rootCompletionIntent = llm.CompletionIntent{}
+	}
 	s.clearPendingControlRequestsLocked()
-	if s.status == SessionWaitingHelp && !s.hasUnansweredQuestion {
-		s.status = SessionRunning
+	if s.status == SessionWaitingHelp {
+		s.setStatusLocked(SessionRunning)
 	}
 	s.mu.Unlock()
 
@@ -1627,7 +1658,32 @@ func (s *Session) observeCompletionIntent(msg llm.SDKMessage) {
 	}
 	intent := llm.ParseCompletionIntent(text.String())
 	s.mu.Lock()
-	s.rootCompletionIntent = intent
+	// Untagged trailing text parses as the zero intent; letting it overwrite a
+	// committable outcome would silently erase the phase result.
+	if intent.Found || !s.rootCompletionIntent.Valid() {
+		s.rootCompletionIntent = intent
+	}
+	valid := s.rootCompletionIntent.Valid()
+	s.mu.Unlock()
+	if valid {
+		s.signalRootOutcome()
+	}
+}
+
+// signalRootOutcome wakes one waiter per recorded committable outcome,
+// coalescing repeats into the size-1 buffer.
+func (s *Session) signalRootOutcome() {
+	select {
+	case s.rootOutcomeCh <- struct{}{}:
+	default:
+	}
+}
+
+// ClearRootCompletionIntent discards the recorded root outcome so a correction
+// turn starts clean. Called by the harness after it rejects a commit.
+func (s *Session) ClearRootCompletionIntent() {
+	s.mu.Lock()
+	s.rootCompletionIntent = llm.CompletionIntent{}
 	s.mu.Unlock()
 }
 
@@ -1640,7 +1696,7 @@ func (s *Session) RespondToControl(requestID string, allow bool, reason string) 
 		s.removePendingControlRequestLocked(requestID)
 	}
 	if s.status == SessionWaitingPermission && len(s.pendingControlRequests) == 0 {
-		s.status = SessionRunning
+		s.setStatusLocked(SessionRunning)
 	}
 	s.mu.Unlock()
 
@@ -1772,7 +1828,7 @@ func (s *Session) captureAskUserResponse(requestID string, questions json.RawMes
 	// is still outstanding — only the last response answer clears it.
 	s.hasUnansweredQuestion = s.hasPendingAskUserQuestionLocked()
 	if s.status == SessionWaitingHelp && !s.hasUnansweredQuestion {
-		s.status = SessionRunning
+		s.setStatusLocked(SessionRunning)
 	}
 	keys := askUserAnswerKeysInPresentedOrder(questions, answers)
 	for _, q := range keys {
@@ -1847,7 +1903,7 @@ func (s *Session) ClearPendingQuestion(requestID string) {
 	s.removePendingControlRequestLocked(requestID)
 	s.hasUnansweredQuestion = s.hasPendingAskUserQuestionLocked()
 	if s.status == SessionWaitingHelp && !s.hasUnansweredQuestion {
-		s.status = SessionRunning
+		s.setStatusLocked(SessionRunning)
 	}
 	s.mu.Unlock()
 }
@@ -1983,7 +2039,7 @@ func (s *Session) Stop() error {
 			// child cannot survive after its group leader exits.
 			terminateProcessGroup(recoveredPID)
 			s.mu.Lock()
-			s.status = SessionDone
+			s.setStatusLocked(SessionDone)
 			s.recoveredPID = 0
 			s.mu.Unlock()
 			s.CloseDone()
@@ -2333,7 +2389,31 @@ func (s *Session) IsActive() bool {
 func (s *Session) SetStatus(status SessionStatus) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.setStatusLocked(status)
+}
+
+// setStatusLocked sets the status and maintains waitingSince: stamped once on
+// the transition into SessionWaitingHelp (preserved while it persists),
+// cleared on any transition out. Caller must hold s.mu.
+func (s *Session) setStatusLocked(status SessionStatus) {
+	switch {
+	case status != SessionWaitingHelp:
+		s.waitingSince = time.Time{}
+	case s.status != SessionWaitingHelp || s.waitingSince.IsZero():
+		s.waitingSince = time.Now().UTC()
+	}
 	s.status = status
+}
+
+// WaitingSince returns when the session last entered SessionWaitingHelp,
+// falling back to StartedAt when no transition has been stamped.
+func (s *Session) WaitingSince() time.Time {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.waitingSince.IsZero() {
+		return s.startedAt
+	}
+	return s.waitingSince
 }
 
 // Status returns the session status under the mutex.
@@ -2395,7 +2475,7 @@ func (s *Session) ResetWaitingStatus() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.status == SessionWaitingPermission || s.status == SessionWaitingHelp {
-		s.status = SessionRunning
+		s.setStatusLocked(SessionRunning)
 	}
 }
 

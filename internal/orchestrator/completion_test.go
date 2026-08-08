@@ -21,6 +21,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -2194,5 +2195,235 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_AllPassed_Idempotent
 	events := drainEvents(o)
 	if hasEventType(events, ports.PhaseCompleted) {
 		t.Error("PhaseCompleted must NOT re-fire when the feature is already past StatusImplementing")
+	}
+}
+
+// Bug 5B: the roadmap phase commit must only visit repos the phase actually
+// touched. `git add -A` over an untouched worktree costs seconds per repo for
+// no anchor, and the hidden scan happens while the UI already shows
+// "Review passed".
+func TestOrchestrator_HandlePhaseCompletion_Implement_RoadmapSkipsUntouchedRepos(t *testing.T) {
+	touchedRepo := testutil.InitGitRepo(t)
+	untouchedRepo := testutil.InitGitRepo(t)
+	for _, repo := range []string{touchedRepo, untouchedRepo} {
+		if err := os.WriteFile(filepath.Join(repo, "phase.txt"), []byte("complete\n"), 0o644); err != nil {
+			t.Fatalf("write phase change: %v", err)
+		}
+	}
+	untouchedHeadBefore, err := git.CurrentHeadSHA(untouchedRepo)
+	if err != nil {
+		t.Fatalf("head of untouched repo: %v", err)
+	}
+	roadmapPath := writeTempFile(t, "roadmap.md",
+		"# Roadmap\n\n## Phase 1: Tracer\n### Goal\nFirst phase.\n\n## Phase 2: Fill\n### Goal\nSecond phase.\n")
+	f := &feature.Feature{
+		ID:                  "feat-roadmap-untouched",
+		Status:              feature.StatusImplementing,
+		CurrentPhase:        feature.PhaseImplement,
+		CurrentRoadmapPhase: 1,
+		TotalRoadmapPhases:  2,
+		RoadmapPhaseType:    "tracer-bullet",
+		Artifacts:           map[string]string{"roadmap": roadmapPath},
+		Repos: []feature.FeatureRepo{
+			{Name: "touched", Path: touchedRepo, WorktreePath: touchedRepo},
+			{Name: "untouched", Path: untouchedRepo, WorktreePath: untouchedRepo},
+		},
+		RepoStates: map[string]*feature.RepoState{
+			"touched":   {Touched: true},
+			"untouched": {Touched: false},
+		},
+	}
+	lc := lifecycleForFeature(f)
+	lc.CompleteImplementationFn = func(id string) error { return nil }
+	lc.AdvanceRoadmapPhaseFn = func(id string) error {
+		f.CurrentRoadmapPhase = 2
+		f.Status = feature.StatusPlanning
+		return nil
+	}
+	lc.StartPlanningFn = func(id string) error { f.Status = feature.StatusPlanning; return nil }
+	var recordedAnchors map[string]string
+	lc.RecordRoadmapPhaseCommitAnchorsFn = func(id string, phase int, anchors map[string]string) error {
+		recordedAnchors = anchors
+		return nil
+	}
+	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: newFeatureStore(f)}, orchestrator.Hooks{})
+
+	if err := o.HandlePhaseCompletion("feat-roadmap-untouched", orchestrator.PhaseCompletionInput{
+		Phase:           feature.PhaseImplement,
+		MultiRepoResult: &agent.OrchestratorResult{FinalStatus: "all_passed"},
+	}); err != nil {
+		t.Fatalf("HandlePhaseCompletion: %v", err)
+	}
+
+	if _, ok := recordedAnchors["touched"]; !ok {
+		t.Errorf("touched repo must be committed; anchors = %v", recordedAnchors)
+	}
+	if _, ok := recordedAnchors["untouched"]; ok {
+		t.Errorf("untouched repo must not be committed; anchors = %v", recordedAnchors)
+	}
+	untouchedHeadAfter, err := git.CurrentHeadSHA(untouchedRepo)
+	if err != nil {
+		t.Fatalf("head of untouched repo after: %v", err)
+	}
+	if untouchedHeadAfter != untouchedHeadBefore {
+		t.Errorf("untouched repo HEAD moved: %q -> %q", untouchedHeadBefore, untouchedHeadAfter)
+	}
+	staged, err := exec.Command("git", "-C", untouchedRepo, "diff", "--cached", "--name-only").Output()
+	if err != nil {
+		t.Fatalf("read staged paths: %v", err)
+	}
+	if strings.TrimSpace(string(staged)) != "" {
+		t.Errorf("untouched repo was scanned by git add -A; staged = %q", staged)
+	}
+}
+
+// With no repo state at all the touched set carries no information, so the
+// phase commit must fall back to every configured repo rather than skipping
+// the phase silently.
+func TestOrchestrator_HandlePhaseCompletion_Implement_RoadmapCommitsAllReposWithoutRepoStates(t *testing.T) {
+	repo := testutil.InitGitRepo(t)
+	if err := os.WriteFile(filepath.Join(repo, "phase.txt"), []byte("complete\n"), 0o644); err != nil {
+		t.Fatalf("write phase change: %v", err)
+	}
+	roadmapPath := writeTempFile(t, "roadmap.md",
+		"# Roadmap\n\n## Phase 1: Tracer\n### Goal\nFirst phase.\n\n## Phase 2: Fill\n### Goal\nSecond phase.\n")
+	f := &feature.Feature{
+		ID:                  "feat-roadmap-no-states",
+		Status:              feature.StatusImplementing,
+		CurrentPhase:        feature.PhaseImplement,
+		CurrentRoadmapPhase: 1,
+		TotalRoadmapPhases:  2,
+		RoadmapPhaseType:    "tracer-bullet",
+		Artifacts:           map[string]string{"roadmap": roadmapPath},
+		Repos:               []feature.FeatureRepo{{Name: "solo", Path: repo, WorktreePath: repo}},
+	}
+	lc := lifecycleForFeature(f)
+	lc.CompleteImplementationFn = func(id string) error { return nil }
+	lc.AdvanceRoadmapPhaseFn = func(id string) error {
+		f.CurrentRoadmapPhase = 2
+		f.Status = feature.StatusPlanning
+		return nil
+	}
+	lc.StartPlanningFn = func(id string) error { f.Status = feature.StatusPlanning; return nil }
+	var recordedAnchors map[string]string
+	lc.RecordRoadmapPhaseCommitAnchorsFn = func(id string, phase int, anchors map[string]string) error {
+		recordedAnchors = anchors
+		return nil
+	}
+	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: newFeatureStore(f)}, orchestrator.Hooks{})
+
+	if err := o.HandlePhaseCompletion("feat-roadmap-no-states", orchestrator.PhaseCompletionInput{
+		Phase:           feature.PhaseImplement,
+		MultiRepoResult: &agent.OrchestratorResult{FinalStatus: "all_passed"},
+	}); err != nil {
+		t.Fatalf("HandlePhaseCompletion: %v", err)
+	}
+	if _, ok := recordedAnchors["solo"]; !ok {
+		t.Errorf("repo must be committed when no touched state exists; anchors = %v", recordedAnchors)
+	}
+}
+
+// Bug 5B: StatusReviewPassed becomes observable before the synchronous
+// per-repo git boundary finishes. The finalizing phase status must already be
+// set at that transition, and cleared before the phase advances.
+func TestOrchestrator_HandlePhaseCompletion_Implement_RoadmapMarksFinalizingAcrossCommitBoundary(t *testing.T) {
+	repo := testutil.InitGitRepo(t)
+	if err := os.WriteFile(filepath.Join(repo, "phase.txt"), []byte("complete\n"), 0o644); err != nil {
+		t.Fatalf("write phase change: %v", err)
+	}
+	roadmapPath := writeTempFile(t, "roadmap.md",
+		"# Roadmap\n\n## Phase 1: Tracer\n### Goal\nFirst phase.\n\n## Phase 2: Fill\n### Goal\nSecond phase.\n")
+	f := &feature.Feature{
+		ID:                  "feat-roadmap-finalizing",
+		Status:              feature.StatusImplementing,
+		CurrentPhase:        feature.PhaseImplement,
+		CurrentRoadmapPhase: 1,
+		TotalRoadmapPhases:  2,
+		RoadmapPhaseType:    "tracer-bullet",
+		Artifacts:           map[string]string{"roadmap": roadmapPath},
+		Repos:               []feature.FeatureRepo{{Name: "solo", Path: repo, WorktreePath: repo}},
+		RepoStates:          map[string]*feature.RepoState{"solo": {Touched: true}},
+	}
+	lc := lifecycleForFeature(f)
+	statusAtCompleteImplementation := ""
+	lc.CompleteImplementationFn = func(id string) error {
+		statusAtCompleteImplementation = f.CurrentPhaseStatus
+		f.Status = feature.StatusReviewPassed
+		return nil
+	}
+	statusAtAdvance := "unset"
+	lc.AdvanceRoadmapPhaseFn = func(id string) error {
+		statusAtAdvance = f.CurrentPhaseStatus
+		f.CurrentRoadmapPhase = 2
+		f.Status = feature.StatusPlanning
+		return nil
+	}
+	lc.StartPlanningFn = func(id string) error { f.Status = feature.StatusPlanning; return nil }
+	lc.RecordRoadmapPhaseCommitAnchorsFn = func(id string, phase int, anchors map[string]string) error { return nil }
+	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: newFeatureStore(f)}, orchestrator.Hooks{})
+
+	if err := o.HandlePhaseCompletion("feat-roadmap-finalizing", orchestrator.PhaseCompletionInput{
+		Phase:           feature.PhaseImplement,
+		MultiRepoResult: &agent.OrchestratorResult{FinalStatus: "all_passed"},
+	}); err != nil {
+		t.Fatalf("HandlePhaseCompletion: %v", err)
+	}
+
+	if statusAtCompleteImplementation != feature.PhaseStatusFinalizing {
+		t.Errorf("phase status at ReviewPassed transition = %q, want %q",
+			statusAtCompleteImplementation, feature.PhaseStatusFinalizing)
+	}
+	if statusAtAdvance != "" {
+		t.Errorf("phase status at AdvanceRoadmapPhase = %q, want cleared", statusAtAdvance)
+	}
+	if f.CurrentPhaseStatus != "" {
+		t.Errorf("phase status after completion = %q, want cleared", f.CurrentPhaseStatus)
+	}
+	if f.IsFinalizingPhase() {
+		t.Error("feature must not remain finalizing after the commit boundary")
+	}
+
+	events := drainEvents(o)
+	sawRepoCommit := false
+	for _, ev := range events {
+		if ev.Type == ports.RepoStatusChanged && ev.RepoName == "solo" {
+			sawRepoCommit = true
+		}
+	}
+	if !sawRepoCommit {
+		t.Errorf("expected a per-repo RepoStatusChanged event for the phase commit; got %+v", events)
+	}
+}
+
+// A non-roadmap feature never crosses the phase commit boundary, so it must
+// not be flagged finalizing.
+func TestOrchestrator_HandlePhaseCompletion_Implement_NonRoadmapDoesNotFlagFinalizing(t *testing.T) {
+	f := &feature.Feature{
+		ID:           "feat-nonroadmap-finalizing",
+		Status:       feature.StatusImplementing,
+		CurrentPhase: feature.PhaseImplement,
+		Repos: []feature.FeatureRepo{
+			{Name: repoName, Path: repoAPath},
+			{Name: repoNameB, Path: repoBPath},
+		},
+	}
+	lc := lifecycleForFeature(f)
+	statusAtCompleteImplementation := "unset"
+	lc.CompleteImplementationFn = func(id string) error {
+		statusAtCompleteImplementation = f.CurrentPhaseStatus
+		f.Status = feature.StatusReviewPassed
+		return nil
+	}
+	lc.MarkCodeReadyFn = func(id string) error { f.Status = feature.StatusCodeReady; return nil }
+	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: newFeatureStore(f)}, orchestrator.Hooks{})
+
+	if err := o.HandlePhaseCompletion("feat-nonroadmap-finalizing", orchestrator.PhaseCompletionInput{
+		Phase:           feature.PhaseImplement,
+		MultiRepoResult: &agent.OrchestratorResult{FinalStatus: "all_passed"},
+	}); err != nil {
+		t.Fatalf("HandlePhaseCompletion: %v", err)
+	}
+	if statusAtCompleteImplementation != "" {
+		t.Errorf("phase status = %q, want empty for a non-roadmap feature", statusAtCompleteImplementation)
 	}
 }

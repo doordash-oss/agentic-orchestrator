@@ -36,6 +36,10 @@ type sessionWatchdog struct {
 	lifecycle      watchdogToolLifecycle
 	seq            uint64
 	lastActivityAt time.Time
+	// exemptSince marks entry into a human-wait state (pending permission or
+	// unanswered question); the interval is excluded from the idle clock
+	// without discarding idle time accrued before it.
+	exemptSince time.Time
 
 	startOnce sync.Once
 }
@@ -52,6 +56,10 @@ type watchdogTool struct {
 	id       string
 	name     string
 	subagent bool
+	// control marks a synthetic entry armed by an answered control request
+	// (AskUserQuestion): the CLI owes a tool_result, and any subsequent
+	// message disarms the entry.
+	control bool
 	// timeout is the invocation's declared execution timeout, when the
 	// provider reported one; silence up to that long is legitimate.
 	timeout time.Duration
@@ -175,18 +183,40 @@ func (w *sessionWatchdog) Observe(msg llm.SDKMessage) {
 	case msg.ToolProgress != nil:
 		w.lifecycle = w.lifecycle.observe(*msg.ToolProgress)
 		w.seq++
+	case msg.Assistant != nil || msg.User != nil:
+		// Any post-answer message proves the CLI consumed a control
+		// response, so synthetic pending windows disarm.
+		if cleared, changed := w.lifecycle.clearControlTools(); changed {
+			w.lifecycle = cleared
+			w.seq++
+		}
 	}
 	w.mu.Unlock()
 }
 
 // ResolveControlRequest starts a fresh idle window after a permission or
 // question response. Pending-request ownership lives on Session; the watchdog
-// only needs the activity boundary.
-func (w *sessionWatchdog) ResolveControlRequest(requestID string) {
+// only needs the activity boundary. An answered AskUserQuestion additionally
+// arms a synthetic pending window: the CLI owes a tool_result for the
+// question, and a turn that produces no further output is stalled. Any
+// subsequent message disarms the window (Observe).
+func (w *sessionWatchdog) ResolveControlRequest(requestID, toolName string) {
 	if w == nil || requestID == "" {
 		return
 	}
-	w.refreshActivity()
+	w.mu.Lock()
+	w.lastActivityAt = time.Now()
+	if toolName == "AskUserQuestion" {
+		l := w.lifecycle.armTool(requestID, toolName, 0)
+		for i := range l.pending {
+			if l.pending[i].id == requestID {
+				l.pending[i].control = true
+			}
+		}
+		w.lifecycle = l
+		w.seq++
+	}
+	w.mu.Unlock()
 }
 
 // ClearControlRequests starts a fresh idle window after a bulk request reset.
@@ -195,7 +225,30 @@ func (w *sessionWatchdog) ClearControlRequests() {
 	if w == nil {
 		return
 	}
-	w.refreshActivity()
+	w.mu.Lock()
+	w.lastActivityAt = time.Now()
+	if cleared, changed := w.lifecycle.clearControlTools(); changed {
+		w.lifecycle = cleared
+		w.seq++
+	}
+	w.mu.Unlock()
+}
+
+// clearControlTools drops synthetic control entries without transitioning to
+// the awaiting-turn phase.
+func (l watchdogToolLifecycle) clearControlTools() (watchdogToolLifecycle, bool) {
+	var pending []watchdogTool
+	for _, tool := range l.pending {
+		if tool.control {
+			continue
+		}
+		pending = append(pending, tool)
+	}
+	if len(pending) == len(l.pending) {
+		return l, false
+	}
+	l.pending = pending
+	return l, true
 }
 
 func (l watchdogToolLifecycle) observe(progress llm.ToolProgressMessage) watchdogToolLifecycle {
@@ -320,20 +373,33 @@ func (w *sessionWatchdog) run() {
 }
 
 func (w *sessionWatchdog) toolStall() (watchdogSnapshot, time.Duration, bool) {
-	if len(w.session.PendingControlRequests()) > 0 || w.session.HasPendingAskUserQuestion() {
-		w.refreshActivity()
-		return watchdogSnapshot{}, 0, false
-	}
 	status := w.session.Status()
-	if status == SessionWaitingHelp {
-		w.refreshActivity()
+	if status == SessionDone || status == SessionFailed {
 		return watchdogSnapshot{}, 0, false
 	}
-	if status == SessionDone || status == SessionFailed {
+	// Waiting on a human (pending permission, unanswered question, or help)
+	// is exempt. Mark the boundary instead of refreshing activity so the
+	// exempt interval is excluded without resetting idle time accrued before
+	// the state was entered.
+	if len(w.session.PendingControlRequests()) > 0 || w.session.HasPendingAskUserQuestion() || status == SessionWaitingHelp {
+		w.mu.Lock()
+		if w.exemptSince.IsZero() {
+			w.exemptSince = time.Now()
+		}
+		w.mu.Unlock()
 		return watchdogSnapshot{}, 0, false
 	}
 
 	w.mu.Lock()
+	if !w.exemptSince.IsZero() {
+		now := time.Now()
+		shifted := w.lastActivityAt.Add(now.Sub(w.exemptSince))
+		if shifted.After(now) {
+			shifted = now
+		}
+		w.lastActivityAt = shifted
+		w.exemptSince = time.Time{}
+	}
 	snap := watchdogSnapshot{
 		phase:    w.lifecycle.phase(),
 		tool:     w.lifecycle.displayTool(),
@@ -352,12 +418,6 @@ func (w *sessionWatchdog) toolStall() (watchdogSnapshot, time.Duration, bool) {
 	}
 	idleFor := time.Since(lastActivityAt)
 	return snap, timeout, idleFor >= timeout
-}
-
-func (w *sessionWatchdog) refreshActivity() {
-	w.mu.Lock()
-	w.lastActivityAt = time.Now()
-	w.mu.Unlock()
 }
 
 func (w *sessionWatchdog) timeoutFor(snap watchdogSnapshot) time.Duration {

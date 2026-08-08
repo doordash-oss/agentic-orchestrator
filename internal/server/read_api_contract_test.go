@@ -1816,13 +1816,15 @@ func assertGatesHaveWaitingSince(t *testing.T, gates any) {
 func TestPromptSnapshotIncludesWaitingHelpSessionWithoutControlRequest(t *testing.T) {
 	t.Parallel()
 	store, f := seedReadFeature(t)
+	waitingSince := time.Date(2026, 6, 13, 12, 30, 0, 0, time.UTC)
 	sessions := fakeSessionManager{views: []ports.SessionView{
 		&fakeSessionView{
-			id:        "sess-waiting-help",
-			featureID: f.ID,
-			phase:     feature.PhaseDesign,
-			status:    ports.SessionWaitingHelp,
-			startedAt: time.Date(2026, 6, 13, 12, 3, 0, 0, time.UTC),
+			id:           "sess-waiting-help",
+			featureID:    f.ID,
+			phase:        feature.PhaseDesign,
+			status:       ports.SessionWaitingHelp,
+			startedAt:    time.Date(2026, 6, 13, 12, 3, 0, 0, time.UTC),
+			waitingSince: waitingSince,
 		},
 	}}
 	opts := baseReadHandlerOptions(store)
@@ -1833,8 +1835,42 @@ func TestPromptSnapshotIncludesWaitingHelpSessionWithoutControlRequest(t *testin
 	if got, want := stringFieldFromJSON(t, prompts["help_queue"], questionFieldKey), []string{agentQuestionPrompt}; strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("prompt help_queue = %v; want %v for WaitingHelp session without control request", got, want)
 	}
+	entry := prompts["help_queue"].([]any)[0].(map[string]any)
+	if got := entry["kind"]; got != helpKindInput {
+		t.Fatalf("synthetic help_queue kind = %v; want %q", got, helpKindInput)
+	}
+	entryTime, err := time.Parse(time.RFC3339Nano, entry["time"].(string))
+	if err != nil {
+		t.Fatalf("Parse(time) error = %v", err)
+	}
+	if !entryTime.Equal(waitingSince) {
+		t.Fatalf("synthetic help_queue time = %v; want WaitingSince %v", entryTime, waitingSince)
+	}
 	if got := stringFieldFromJSON(t, prompts["ask_user_questions"], requestIDKey); len(got) != 0 {
 		t.Fatalf("prompt ask_user_questions = %v; want empty without control request", got)
+	}
+}
+
+func TestPromptSnapshotMarksRealHelpRequestsAsQuestions(t *testing.T) {
+	t.Parallel()
+	store, f := seedReadFeature(t)
+	f.HelpQueue = append(f.HelpQueue, feature.HelpRequest{
+		Question: "real help",
+		Pending:  true,
+		Time:     time.Date(2026, 6, 13, 12, 5, 0, 0, time.UTC),
+	})
+	if err := store.Save(f); err != nil {
+		t.Fatalf("Save(%s) error = %v", f.ID, err)
+	}
+	handler := NewHandler(baseReadHandlerOptions(store))
+
+	prompts := getJSONMap(t, handler, apiPathPrompts)
+	entries := prompts["help_queue"].([]any)
+	if len(entries) != 1 {
+		t.Fatalf("help_queue length = %d; want 1", len(entries))
+	}
+	if got := entries[0].(map[string]any)["kind"]; got != helpKindQuestion {
+		t.Fatalf("real help_queue kind = %v; want %q", got, helpKindQuestion)
 	}
 }
 
@@ -3315,6 +3351,7 @@ type fakeSessionView struct {
 	label          string
 	status         ports.SessionStatus
 	startedAt      time.Time
+	waitingSince   time.Time
 	iteration      int
 	initialPrompt  string
 	provider       string
@@ -3348,6 +3385,12 @@ func (s *fakeSessionView) StartedAt() time.Time {
 		return time.Date(2026, 6, 13, 12, 0, 0, 0, time.UTC)
 	}
 	return s.startedAt
+}
+func (s *fakeSessionView) WaitingSince() time.Time {
+	if s.waitingSince.IsZero() {
+		return s.StartedAt()
+	}
+	return s.waitingSince
 }
 func (s *fakeSessionView) InitialPrompt() string            { return s.initialPrompt }
 func (s *fakeSessionView) ProviderName() string             { return s.provider }

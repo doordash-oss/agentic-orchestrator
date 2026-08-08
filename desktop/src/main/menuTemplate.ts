@@ -158,6 +158,11 @@ export function buildApplicationMenuTemplate(deps: MenuTemplateDeps): MenuItemCo
           enabled: uiState.runtimeReady && uiState.inspectorAvailable,
         }),
         { type: 'separator' },
+        // Escape hatch for a crashed or wedged renderer: the platform roles
+        // reload whichever window is focused.
+        { id: 'view.reload', role: 'reload', accelerator: 'CommandOrControl+R' },
+        { id: 'view.force-reload', role: 'forceReload', accelerator: 'CommandOrControl+Shift+R' },
+        { type: 'separator' },
         {
           id: 'view.zoom-in',
           label: 'Zoom In',

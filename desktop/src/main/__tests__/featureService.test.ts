@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { SafeErrorException, requestTimeoutError } from '../../shared/errors';
 import { FeatureSnapshotSchema, type ReadinessSnapshot } from '../../shared/ipc';
 import { FeatureService, type FeatureServiceDeps } from '../features';
 import type { ApiRequestInit, HttpResult } from '../gateway/runtimeGateway';
@@ -365,7 +366,83 @@ describe('FeatureService.dispatchAction', () => {
         repos: ['repo-a'],
         title: 'Ship reviewed changes',
       },
+      // Publish commits, pushes, and opens or updates a pull request per
+      // repository; the ordinary 30-second bound would abort mid-flight.
+      timeoutMs: 600000,
     });
+  });
+
+  it('gives merge the same long request bound publish gets', async () => {
+    const { service, calls } = makeService(() => ({
+      status: 200,
+      body: { api_version: 'v1', feature_id: 'abcd1234ef567890', result: 'merged' },
+    }));
+
+    await service.dispatchAction({
+      featureId: 'abcd1234ef567890',
+      action: 'merge',
+      body: { source_revision: 'rev-1' },
+    });
+
+    expect(calls[0]?.init?.timeoutMs).toBe(600000);
+  });
+
+  it('keeps the ordinary bound for short lifecycle actions', async () => {
+    const { service, calls } = makeService(() => ({
+      status: 200,
+      body: { api_version: 'v1', feature_id: 'abcd1234ef567890', result: 'started' },
+    }));
+
+    await service.dispatchAction({ featureId: 'abcd1234ef567890', action: 'start' });
+
+    expect(calls[0]?.init?.timeoutMs).toBeUndefined();
+  });
+
+  it('retains the single-flight entry after a request timeout so no duplicate publish is issued', async () => {
+    const request = vi.fn((path: string) => {
+      if (path.endsWith('/actions/publish')) {
+        return Promise.reject(new SafeErrorException(requestTimeoutError()));
+      }
+      return Promise.resolve({ status: 200, body: detailBody() });
+    });
+    const { service } = makeService(request as never);
+    const input = {
+      featureId: 'abcd1234ef567890',
+      action: 'publish' as const,
+      body: { source_revision: 'rev-1', repos: ['repo-a'], title: 'Ship it' },
+    };
+
+    await expect(service.dispatchAction(input)).rejects.toMatchObject({
+      safe: { code: 'E_REQUEST_TIMEOUT' },
+    });
+    // A second click must not reach the server: the first publish is still
+    // running there.
+    await expect(service.dispatchAction(input)).rejects.toMatchObject({
+      safe: { code: 'E_REQUEST_TIMEOUT' },
+    });
+    expect(request.mock.calls.filter(([path]) => path.endsWith('/actions/publish'))).toHaveLength(
+      1,
+    );
+  });
+
+  it('drops the single-flight entry after an ordinary rejection so a retry is possible', async () => {
+    const request = vi.fn((path: string) =>
+      path.endsWith('/actions/publish')
+        ? Promise.resolve({ status: 409, body: { error: { code: 'conflict', message: 'no' } } })
+        : Promise.resolve({ status: 200, body: detailBody() }),
+    );
+    const { service } = makeService(request as never);
+    const input = {
+      featureId: 'abcd1234ef567890',
+      action: 'publish' as const,
+      body: { source_revision: 'rev-1', repos: ['repo-a'], title: 'Ship it' },
+    };
+
+    await expect(service.dispatchAction(input)).rejects.toThrow();
+    await expect(service.dispatchAction(input)).rejects.toThrow();
+    expect(request.mock.calls.filter(([path]) => path.endsWith('/actions/publish'))).toHaveLength(
+      2,
+    );
   });
 
   it('forwards max-iteration restart deltas to the server action endpoint', async () => {
@@ -653,6 +730,56 @@ describe('FeatureService.listFeatures', () => {
       },
     ]);
   });
+
+  it('carries the bounded history counters and the body-less diff flag', async () => {
+    const { service } = makeService(() => ({
+      status: 200,
+      body: {
+        api_version: 'v1',
+        features: [
+          {
+            id: 'abcd1234ef567890',
+            name: 'Search revamp',
+            slug: 'search-revamp',
+            status: 'Published',
+            current_phase: 'Done',
+            active_run: 1,
+            run_count: 1,
+            repos: ['repo-a'],
+            created_at: '2026-07-14T10:00:00Z',
+            checkpoints: {},
+            progress: {},
+            child_history: [
+              {
+                id: 'child0000ef567890',
+                name: 'Extract search core',
+                kind: 'refactor',
+                display_token: 'R1',
+                display_state: 'Closed — Completed',
+                pipeline: 'medium',
+                status: 'Done',
+                outcome: 'completed',
+                started_at: '2026-07-30T10:00:00Z',
+                closed_at: '2026-07-31T10:00:00Z',
+                cost: { total_usd: 1, by_phase: {} },
+                integration_state: 'merged',
+                attention: [],
+                cleanup_warnings: [],
+                has_diff_summary: true,
+              },
+            ],
+            child_history_total: 12,
+            child_history_truncated: true,
+          },
+        ],
+      },
+    }));
+    const [summary] = await service.listFeatures();
+    expect(summary?.childHistoryTotal).toBe(12);
+    expect(summary?.childHistoryTruncated).toBe(true);
+    expect(summary?.childHistory?.[0]).toMatchObject({ hasDiffSummary: true });
+    expect(summary?.childHistory?.[0]?.diffSummary).toBeUndefined();
+  });
 });
 
 describe('FeatureService relationship operations', () => {
@@ -855,6 +982,7 @@ describe('FeatureService relationship operations', () => {
     expect(snapshot.childHistory?.[0]).toMatchObject({
       outcome: 'completed',
       diffSummary: '3 files changed',
+      hasDiffSummary: true,
     });
     expect(snapshot.actions[0]?.impactPreview?.categories[0]?.items).toEqual([
       'Extract search core',

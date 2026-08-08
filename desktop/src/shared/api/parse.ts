@@ -218,6 +218,8 @@ export const ServerHelpQueueSchema = z.object({
   feature_id: AttentionIDSchema,
   session_id: AttentionIDSchema.optional(),
   question: AttentionTextSchema,
+  /** 'question' for real help requests, 'input' for a synthetic idle-session entry. */
+  kind: z.string().max(100).optional(),
   pending: z.boolean(),
   time: z.string().max(100).optional(),
 });
@@ -379,6 +381,15 @@ export const ServerActionSchema = z.object({
   impact_preview: ServerActionImpactSchema.optional(),
 });
 
+/**
+ * Per-entry cap on a preserved child diff summary, matching the server's own
+ * budget (internal/feature/diff_summary.go DiffSummaryBudget), counted in
+ * string length rather than UTF-8 bytes. Bounding the
+ * field rejects one oversized summary instead of letting an unbounded history
+ * grow the whole payload past the boundary limit.
+ */
+export const DIFF_SUMMARY_MAX_BYTES = 256 * 1024;
+
 export const ServerRelationshipChildSchema = z.object({
   id: z.string(),
   name: z.string(),
@@ -399,7 +410,10 @@ export const ServerRelationshipChildSchema = z.object({
   ),
   cleanup_warnings: z.array(z.object({ repo: z.string().optional(), message: z.string() })),
   last_error: z.string().optional(),
-  diff_summary: z.string().optional(),
+  diff_summary: z.string().max(DIFF_SUMMARY_MAX_BYTES).optional(),
+  // Set on list projections, which omit the body itself; the detail route
+  // carries diff_summary instead.
+  has_diff_summary: z.boolean().optional(),
 });
 export type ServerRelationshipChild = z.output<typeof ServerRelationshipChildSchema>;
 
@@ -425,6 +439,8 @@ export const ServerFeatureSummarySchema = z.object({
     .optional(),
   active_child: ServerRelationshipChildSchema.optional(),
   child_history: z.array(ServerRelationshipChildSchema).optional(),
+  child_history_total: z.number().int().nonnegative().optional(),
+  child_history_truncated: z.boolean().optional(),
 });
 
 export type ServerFeatureSummary = z.output<typeof ServerFeatureSummarySchema>;

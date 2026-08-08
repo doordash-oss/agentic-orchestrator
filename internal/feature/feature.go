@@ -677,9 +677,9 @@ type Feature struct {
 	PendingRewindReviewRoadmapPhase *int                     `yaml:"-"`
 	IsRewind                        bool                     `yaml:"-"`
 	// CurrentPhaseStatus tracks the mid-flight phase implement status for the
-	// unified phase-implement loop ("implementing", "reviewing", or "" when
-	// not in a phase). Replaces the per-repo mid-flight presentation tokens
-	// retired in SchemaVersionCurrent = 4.
+	// unified phase-implement loop ("implementing", "reviewing",
+	// PhaseStatusFinalizing, or "" when not in a phase). Replaces the per-repo
+	// mid-flight presentation tokens retired in SchemaVersionCurrent = 4.
 	CurrentPhaseStatus string `yaml:"-"`
 
 	// Roadmap tracking (transient shadows).
@@ -1094,7 +1094,7 @@ func (f *Feature) Transition(to Status) error {
 			return nil
 		}
 	}
-	return fmt.Errorf("invalid transition from %s to %s", f.Status, to)
+	return fmt.Errorf("%w from %s to %s", ErrInvalidTransition, f.Status, to)
 }
 
 // AllReposPublished returns true when every repo declared on f.Repos has
@@ -1144,6 +1144,18 @@ func (f *Feature) FirstRepoPRURL() string {
 		}
 	}
 	return ""
+}
+
+// PhaseStatusFinalizing marks the synchronous end-of-roadmap-phase git
+// boundary: the feature already transitioned to StatusReviewPassed but the
+// per-repo phase commit is still running, so it is not startable yet.
+const PhaseStatusFinalizing = "finalizing_phase"
+
+// IsFinalizingPhase reports whether the feature is inside the end-of-phase
+// git boundary. Readers use it to present in-progress work and refuse Start
+// while StatusReviewPassed looks like a steady state.
+func (f *Feature) IsFinalizingPhase() bool {
+	return f != nil && f.CurrentPhaseStatus == PhaseStatusFinalizing
 }
 
 // IsReviewing reports whether the feature is in a Final Review state. Under

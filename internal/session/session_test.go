@@ -305,6 +305,73 @@ printf '%s\n' '{"type":"result","subtype":"success","result":"ok"}'
 	}
 }
 
+func TestPendingToolWatchdogFailsAnsweredAskUserWithoutToolResult(t *testing.T) {
+	tmpDir := t.TempDir()
+	scriptPath := filepath.Join(tmpDir, "askuser-stall.sh")
+	script := `#!/usr/bin/env bash
+printf '%s\n' '{"type":"control_request","request_id":"req-ask-1","request":{"subtype":"can_use_tool","tool_name":"AskUserQuestion","input":{"questions":[{"question":"Which?","header":"Scope","options":[{"label":"A"},{"label":"B"}]}]}}}'
+sleep 30
+`
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write script: %v", err)
+	}
+
+	mgr := NewManager(nil)
+	defer mgr.Shutdown()
+
+	sess, err := mgr.StartSession(
+		"askuser-watchdog-stall",
+		"feat-1",
+		feature.PhasePlan,
+		[]string{"bash", scriptPath},
+		tmpDir,
+		nil,
+		&SessionOpts{
+			ProviderName: "test-provider",
+			Watchdog: &ports.SessionWatchdogConfig{
+				PendingToolIdleTimeout:    50 * time.Millisecond,
+				TurnCompletionIdleTimeout: 50 * time.Millisecond,
+				PollInterval:              5 * time.Millisecond,
+			},
+		},
+	)
+	if err != nil {
+		t.Fatalf("StartSession() error: %v", err)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && !sess.HasPendingAskUserQuestion() {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if !sess.HasPendingAskUserQuestion() {
+		t.Fatal("timeout waiting for the pending AskUserQuestion")
+	}
+	// A pending question must not stall on its own: give it longer than the
+	// idle timeout before answering.
+	time.Sleep(120 * time.Millisecond)
+
+	crs := sess.PendingControlRequests()
+	if len(crs) != 1 {
+		t.Fatalf("PendingControlRequests() len = %d, want 1", len(crs))
+	}
+	if err := sess.RespondToAskUser("req-ask-1", crs[0].Request.Input, map[string]string{"Which?": "custom free text"}, nil); err != nil {
+		t.Fatalf("RespondToAskUser: %v", err)
+	}
+
+	select {
+	case status := <-sess.StatusCh():
+		if status != "FAILED" {
+			t.Fatalf("StatusCh = %q, want FAILED", status)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timeout waiting for watchdog failure after the answered question produced no tool_result")
+	}
+
+	if got := sess.ErrorDetail(); !strings.Contains(got, "pending tool AskUserQuestion") {
+		t.Fatalf("ErrorDetail() = %q, want pending AskUserQuestion watchdog detail", got)
+	}
+}
+
 func TestPendingToolWatchdogAllowsPromptResultAfterCompletedTool(t *testing.T) {
 	tmpDir := t.TempDir()
 	scriptPath := filepath.Join(tmpDir, "pending-tool-completed.sh")
@@ -535,6 +602,133 @@ func TestWatchdogDeclaredToolTimeoutExtendsPendingLeash(t *testing.T) {
 	}
 }
 
+func TestWatchdogAnsweredAskUserArmsPendingWindow(t *testing.T) {
+	sess := NewSession("watchdog-askuser-armed", "feat-1", feature.PhaseImplement)
+	watchdog := newSessionWatchdog(sess, &ports.SessionWatchdogConfig{
+		PendingToolIdleTimeout:    20 * time.Millisecond,
+		TurnCompletionIdleTimeout: 20 * time.Millisecond,
+		PollInterval:              5 * time.Millisecond,
+	})
+
+	watchdog.ResolveControlRequest("req-ask-1", "AskUserQuestion")
+	if _, _, stalled := watchdog.toolStall(); stalled {
+		t.Fatal("watchdog stalled immediately after the answer")
+	}
+
+	watchdog.mu.Lock()
+	watchdog.lastActivityAt = time.Now().Add(-time.Second)
+	watchdog.mu.Unlock()
+	snap, timeout, stalled := watchdog.toolStall()
+	if !stalled || timeout != 20*time.Millisecond {
+		t.Fatalf("toolStall() = (%+v, %s, stalled=%v), want pending-tool stall for the unconsumed answer", snap, timeout, stalled)
+	}
+	if snap.tool.name != "AskUserQuestion" {
+		t.Fatalf("snap.tool.name = %q, want AskUserQuestion", snap.tool.name)
+	}
+}
+
+func TestWatchdogAnsweredAskUserDisarmsOnNextMessage(t *testing.T) {
+	sess := NewSession("watchdog-askuser-disarm", "feat-1", feature.PhaseImplement)
+	watchdog := newSessionWatchdog(sess, &ports.SessionWatchdogConfig{
+		PendingToolIdleTimeout:    20 * time.Millisecond,
+		TurnCompletionIdleTimeout: 20 * time.Millisecond,
+		PollInterval:              5 * time.Millisecond,
+	})
+
+	watchdog.ResolveControlRequest("req-ask-1", "AskUserQuestion")
+	// The tool_result for the question arrives as a user message.
+	watchdog.Observe(llm.SDKMessage{Type: "user", User: &llm.UserMessage{}})
+
+	watchdog.mu.Lock()
+	watchdog.lastActivityAt = time.Now().Add(-time.Second)
+	watchdog.mu.Unlock()
+	if snap, _, stalled := watchdog.toolStall(); stalled || snap.phase != watchdogToolInactive {
+		t.Fatalf("toolStall() = (%+v, stalled=%v), want disarmed after the answer was consumed", snap, stalled)
+	}
+}
+
+func TestWatchdogPostAnswerMessageKeepsRealPendingTools(t *testing.T) {
+	sess := NewSession("watchdog-askuser-keeps-tools", "feat-1", feature.PhaseImplement)
+	watchdog := newSessionWatchdog(sess, &ports.SessionWatchdogConfig{
+		PendingToolIdleTimeout:    20 * time.Millisecond,
+		TurnCompletionIdleTimeout: 20 * time.Millisecond,
+		PollInterval:              5 * time.Millisecond,
+	})
+	watchdog.Observe(llm.SDKMessage{ToolProgress: &llm.ToolProgressMessage{
+		ToolUseID: "write-1", ToolName: "Write", Data: "pending",
+	}})
+	watchdog.Observe(llm.SDKMessage{Type: "assistant", Assistant: &llm.AssistantMessage{}})
+
+	watchdog.mu.Lock()
+	watchdog.lastActivityAt = time.Now().Add(-time.Second)
+	watchdog.mu.Unlock()
+	if snap, _, stalled := watchdog.toolStall(); !stalled || snap.phase != watchdogToolRunning {
+		t.Fatalf("toolStall() = (%+v, stalled=%v), want real pending tool untouched by messages", snap, stalled)
+	}
+}
+
+func TestWatchdogUnansweredQuestionExemptWithoutResettingIdle(t *testing.T) {
+	sess := NewSession("watchdog-exempt-boundary", "feat-1", feature.PhaseImplement)
+	watchdog := newSessionWatchdog(sess, &ports.SessionWatchdogConfig{
+		PendingToolIdleTimeout:    10 * time.Second,
+		TurnCompletionIdleTimeout: 10 * time.Second,
+		PollInterval:              5 * time.Millisecond,
+	})
+	watchdog.Observe(llm.SDKMessage{ToolProgress: &llm.ToolProgressMessage{
+		ToolUseID: "write-1", ToolName: "Write", Data: "pending",
+	}})
+
+	sess.mu.Lock()
+	sess.recordPendingControlRequestLocked(&llm.ControlRequestMessage{
+		RequestID: "q1",
+		Request:   llm.ControlRequest{Subtype: "can_use_tool", ToolName: "AskUserQuestion"},
+	})
+	sess.mu.Unlock()
+
+	watchdog.mu.Lock()
+	watchdog.lastActivityAt = time.Now().Add(-time.Hour)
+	watchdog.mu.Unlock()
+	if _, _, stalled := watchdog.toolStall(); stalled {
+		t.Fatal("an unanswered question waiting on the human must not stall")
+	}
+	watchdog.mu.Lock()
+	if watchdog.exemptSince.IsZero() {
+		t.Fatal("exempt boundary not marked while a question is pending")
+	}
+	// Simulate 4s in the exempt state after 9s of pre-entry idle: the exempt
+	// interval is excluded but the accrued idle survives (9s < 10s timeout).
+	watchdog.exemptSince = time.Now().Add(-4 * time.Second)
+	watchdog.lastActivityAt = time.Now().Add(-13 * time.Second)
+	watchdog.mu.Unlock()
+
+	sess.mu.Lock()
+	sess.pendingControlRequests = nil
+	sess.mu.Unlock()
+
+	if _, _, stalled := watchdog.toolStall(); stalled {
+		t.Fatal("exempt interval must be excluded from the idle clock")
+	}
+	watchdog.mu.Lock()
+	idle := time.Since(watchdog.lastActivityAt)
+	exemptCleared := watchdog.exemptSince.IsZero()
+	watchdog.mu.Unlock()
+	if !exemptCleared {
+		t.Fatal("exempt boundary should clear when the state exits")
+	}
+	if idle < 8*time.Second || idle > 10*time.Second {
+		t.Fatalf("idle after exemption = %v, want ~9s (pre-exempt idle preserved)", idle)
+	}
+
+	// With 26s of pre-entry idle the stall fires as soon as the state exits.
+	watchdog.mu.Lock()
+	watchdog.exemptSince = time.Now().Add(-4 * time.Second)
+	watchdog.lastActivityAt = time.Now().Add(-30 * time.Second)
+	watchdog.mu.Unlock()
+	if _, _, stalled := watchdog.toolStall(); !stalled {
+		t.Fatal("idle accrued before the exempt state must survive its exit")
+	}
+}
+
 func TestWatchdogParallelSubagentSiblingCompletionKeepsRunning(t *testing.T) {
 	sess := NewSession("watchdog-parallel-subagents", "feat-1", feature.PhaseImplement)
 	watchdog := newSessionWatchdog(sess, &ports.SessionWatchdogConfig{
@@ -589,8 +783,11 @@ func TestWatchdogControlWaitPausesAndRefreshesTurnTimer(t *testing.T) {
 	sess.removePendingControlRequestLocked("permission-1")
 	sess.status = SessionRunning
 	sess.mu.Unlock()
+	// Session wiring resolves the request through the watchdog, which starts
+	// a fresh idle window for the response.
+	watchdog.ResolveControlRequest("permission-1", "")
 	if _, _, stalled := watchdog.toolStall(); stalled {
-		t.Fatal("watchdog reused pre-permission idle time after the control wait ended")
+		t.Fatal("watchdog counted idle time from before the control response")
 	}
 
 	watchdog.mu.Lock()
@@ -1086,6 +1283,41 @@ func TestResetWaitingStatus(t *testing.T) {
 				t.Errorf("ResetWaitingStatus() status = %v, want %v", s.status, tt.want)
 			}
 		})
+	}
+}
+
+func TestWaitingSinceStampedOnWaitingHelpTransition(t *testing.T) {
+	t.Parallel()
+	started := time.Now().Add(-time.Hour)
+	s := &Session{startedAt: started, done: make(chan struct{})}
+
+	if got := s.WaitingSince(); !got.Equal(started) {
+		t.Fatalf("WaitingSince() before waiting = %v, want StartedAt %v", got, started)
+	}
+
+	before := time.Now()
+	s.SetStatus(SessionWaitingHelp)
+	stamp := s.WaitingSince()
+	if stamp.Before(before.UTC()) || stamp.Equal(started) {
+		t.Fatalf("WaitingSince() = %v, want transition stamp at or after %v", stamp, before)
+	}
+
+	// Re-entering the same state preserves the original stamp.
+	s.SetStatus(SessionWaitingHelp)
+	if got := s.WaitingSince(); !got.Equal(stamp) {
+		t.Fatalf("WaitingSince() after duplicate transition = %v, want preserved %v", got, stamp)
+	}
+
+	// Transitioning out clears the stamp back to the StartedAt fallback.
+	s.SetStatus(SessionRunning)
+	if got := s.WaitingSince(); !got.Equal(started) {
+		t.Fatalf("WaitingSince() after leaving = %v, want StartedAt %v", got, started)
+	}
+
+	// A fresh wait gets a fresh stamp.
+	s.SetStatus(SessionWaitingHelp)
+	if got := s.WaitingSince(); got.Before(stamp) {
+		t.Fatalf("WaitingSince() on re-entry = %v, want at or after previous stamp %v", got, stamp)
 	}
 }
 
@@ -2992,4 +3224,106 @@ func TestShouldShutdownOnResult_LoopManagedSessionsStayAlive(t *testing.T) {
 			t.Error("shouldShutdownOnResult() = false, want true for non-keep-alive session")
 		}
 	})
+}
+
+func rootAssistantText(text string) llm.SDKMessage {
+	return llm.SDKMessage{
+		Type:   "assistant",
+		Origin: llm.EventOrigin{Kind: llm.EventOriginRoot},
+		Assistant: &llm.AssistantMessage{
+			Message: llm.ConversationMsg{
+				Role:    "assistant",
+				Content: []llm.ContentBlock{{Type: "text", Text: text}},
+			},
+		},
+	}
+}
+
+func TestObserveCompletionIntent_SignalsOutcomeAndSurvivesTaglessText(t *testing.T) {
+	t.Parallel()
+	s := NewSession("outcome-signal", "feat-1", feature.PhaseImplement)
+
+	s.observeCompletionIntent(rootAssistantText(`Done. <agentico-outcome>{"status":"success"}</agentico-outcome>`))
+	select {
+	case <-s.RootOutcomeCh():
+	default:
+		t.Fatal("RootOutcomeCh() was not signalled for a committable outcome")
+	}
+
+	s.observeCompletionIntent(rootAssistantText("Anything else you want me to look at?"))
+	if got := s.RootCompletionIntent(); !got.Valid() || got.Status != llm.CompletionIntentSuccess {
+		t.Fatalf("RootCompletionIntent() after tagless text = %+v, want the valid success outcome", got)
+	}
+
+	s.observeCompletionIntent(rootAssistantText(`<agentico-outcome>{"status":"retry"}</agentico-outcome>`))
+	if got := s.RootCompletionIntent(); got.Status != llm.CompletionIntentRetry {
+		t.Fatalf("RootCompletionIntent() = %+v, want the newer retry outcome", got)
+	}
+}
+
+func TestSendUserMessage_KeepsCommittableOutcomeUntilHarnessClearsIt(t *testing.T) {
+	t.Parallel()
+	var stdin strings.Builder
+	s := NewSession("outcome-preserve", "feat-1", feature.PhaseImplement)
+	s.SetStdinForTest(nopWriteCloser{Writer: &stdin})
+	s.observeCompletionIntent(rootAssistantText(`<agentico-outcome>{"status":"success"}</agentico-outcome>`))
+
+	if err := s.SendUserMessage("thanks"); err != nil {
+		t.Fatalf("SendUserMessage() error: %v", err)
+	}
+	if got := s.RootCompletionIntent(); !got.Valid() {
+		t.Fatalf("RootCompletionIntent() after user message = %+v, want the outcome preserved", got)
+	}
+
+	s.ClearRootCompletionIntent()
+	if got := s.RootCompletionIntent(); got.Found {
+		t.Fatalf("RootCompletionIntent() after clear = %+v, want zero", got)
+	}
+
+	s.observeCompletionIntent(rootAssistantText("still working on it"))
+	if err := s.SendUserMessage("finish up"); err != nil {
+		t.Fatalf("SendUserMessage() error: %v", err)
+	}
+	if got := s.RootCompletionIntent(); got.Found {
+		t.Fatalf("RootCompletionIntent() = %+v, want a non-committable intent cleared by the user message", got)
+	}
+}
+
+// TestCostAndResultSeq_AreRaceFree reads the terminal-result state concurrently
+// with the reader loop that writes it.
+func TestCostAndResultSeq_AreRaceFree(t *testing.T) {
+	t.Parallel()
+	const results = 20
+	s := NewSession("cost-race", "feat-1", feature.PhaseImplement)
+
+	messages := make([]llm.SDKMessage, 0, results)
+	for i := 0; i < results; i++ {
+		messages = append(messages, llm.SDKMessage{
+			Type:   "result",
+			Result: &llm.ResultMessage{Type: "result", Subtype: "success", TotalCostUSD: float64(i)},
+		})
+	}
+
+	stop := make(chan struct{})
+	readerDone := make(chan struct{})
+	go func() {
+		defer close(readerDone)
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				_ = s.Cost()
+				_ = s.ResultSeq()
+			}
+		}
+	}()
+
+	runMockSession(t, s, messages, nil)
+	close(stop)
+	<-readerDone
+
+	if got := s.ResultSeq(); got != results {
+		t.Fatalf("ResultSeq() = %d, want %d", got, results)
+	}
 }

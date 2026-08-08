@@ -28,6 +28,7 @@ import (
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/internal/instancelock"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
@@ -38,15 +39,20 @@ func NewHandler(opts HandlerOptions) http.Handler {
 }
 
 type apiHandler struct {
-	runtime               RuntimeIdentity
-	policy                LaunchPolicy
-	startedAt             time.Time
-	owner                 instancelock.Owner
-	authToken             string
-	features              FeatureLister
-	store                 FeatureReader
-	freshness             RepoFreshnessProvider
-	worktrees             feature.WorktreeOps
+	runtime   RuntimeIdentity
+	policy    LaunchPolicy
+	startedAt time.Time
+	owner     instancelock.Owner
+	authToken string
+	features  FeatureLister
+	store     FeatureReader
+	freshness RepoFreshnessProvider
+	worktrees feature.WorktreeOps
+	// cleanliness serves worktree dirtiness to read projections from a
+	// deduplicated background cache. worktrees stays the uncached authority
+	// for mutations and launch preflights, which must see the worktree as it
+	// is at the instant they act.
+	cleanliness           git.CleanlinessInspector
 	cfg                   *config.Config
 	registry              *llm.Registry
 	sessions              ports.SessionManager
@@ -110,6 +116,9 @@ func newAPIHandler(opts HandlerOptions) *apiHandler {
 		initGitRepository:     opts.InitGitRepository,
 		reviewSessionLocks:    newReviewSessionLockSet(),
 		creationResults:       make(map[string]creationResult),
+	}
+	if opts.Worktrees != nil {
+		handler.cleanliness = git.NewCleanlinessCache(opts.Worktrees)
 	}
 	return handler
 }
@@ -260,8 +269,8 @@ func (h *apiHandler) handleFeatureList(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		summary.ActiveChild = relationshipChildDTO(children.Active)
-		summary.ChildHistory = relationshipChildDTOs(children.Closed)
+		summary.ActiveChild = relationshipChildSummaryDTO(children.Active)
+		summary.ChildHistory, summary.ChildHistoryTotal, summary.ChildHistoryTruncated = listChildHistory(children.Closed)
 		summary.Warnings = append(summary.Warnings, effortDriftWarnings(f, h.registry)...)
 		summaries = append(summaries, summary)
 	}

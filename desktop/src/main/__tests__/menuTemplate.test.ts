@@ -121,12 +121,25 @@ describe('application menu structure', () => {
       'global.toggle-sidebar',
       'global.toggle-inspector',
       'separator',
+      'view.reload',
+      'view.force-reload',
+      'separator',
       'view.zoom-in',
       'view.zoom-out',
       'view.actual-size',
       'separator',
       'togglefullscreen',
     ]);
+  });
+
+  it('offers Reload and Force Reload as platform roles, the crashed-renderer escape hatch', () => {
+    const template = buildApplicationMenuTemplate(deps(disabledMainWindowUiState()));
+    const reload = itemById(template, 'view.reload');
+    expect(reload?.role).toBe('reload');
+    expect(reload?.accelerator).toBe('CommandOrControl+R');
+    const forceReload = itemById(template, 'view.force-reload');
+    expect(forceReload?.role).toBe('forceReload');
+    expect(forceReload?.accelerator).toBe('CommandOrControl+Shift+R');
   });
 
   it('leaves the ⌘⌃S binding displayed but unregistered, so the renderer toggles exactly once', () => {

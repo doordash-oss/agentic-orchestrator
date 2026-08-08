@@ -919,6 +919,13 @@ func (o *Orchestrator) onMultiReposPassed(featureID string, f *feature.Feature) 
 	if f.Status != feature.StatusImplementing {
 		return nil
 	}
+	// A roadmap phase crosses a synchronous per-repo git boundary below. Flag
+	// it before StatusReviewPassed becomes observable, so no reader sees a
+	// startable steady state while the commit loop is still running.
+	if f.CurrentRoadmapPhase > 0 {
+		o.setFinalizingPhaseStatus(featureID, true)
+		defer o.setFinalizingPhaseStatus(featureID, false)
+	}
 	if err := o.deps.Lifecycle.CompleteImplementation(featureID); err != nil {
 		return fmt.Errorf("complete implementation: %w", err)
 	}
@@ -927,6 +934,7 @@ func (o *Orchestrator) onMultiReposPassed(featureID string, f *feature.Feature) 
 	// Roadmap mid-flight: commit + advance.
 	if f.CurrentRoadmapPhase > 0 && f.CurrentRoadmapPhase < f.TotalRoadmapPhases {
 		anchors := o.commitRoadmapPhase(f)
+		o.setFinalizingPhaseStatus(featureID, false)
 		if err := o.recordRoadmapPhaseCommitAnchors(featureID, f.CurrentRoadmapPhase, anchors); err != nil {
 			return err
 		}
@@ -946,6 +954,7 @@ func (o *Orchestrator) onMultiReposPassed(featureID string, f *feature.Feature) 
 	// Roadmap final phase: commit + fall through to review / publish.
 	if f.CurrentRoadmapPhase > 0 && f.CurrentRoadmapPhase == f.TotalRoadmapPhases {
 		anchors := o.commitRoadmapPhase(f)
+		o.setFinalizingPhaseStatus(featureID, false)
 		if err := o.recordRoadmapPhaseCommitAnchors(featureID, f.CurrentRoadmapPhase, anchors); err != nil {
 			return err
 		}
@@ -1159,20 +1168,73 @@ func (o *Orchestrator) commitRoadmapPhase(f *feature.Feature) map[string]string 
 	}
 	msg += "\n\nFeature: " + f.Slug
 	anchors := make(map[string]string)
-	for _, repo := range f.Repos {
+	for _, repo := range roadmapPhaseCommitRepos(f) {
 		if repo.WorktreePath == "" {
 			continue
 		}
 		sha, err := git.CommitAllAndGetHead(repo.WorktreePath, msg)
 		if err != nil || sha == "" {
+			o.emitEvent(ports.Event{
+				Type:      ports.RepoStatusChanged,
+				FeatureID: f.ID,
+				RepoName:  repo.Name,
+				Error:     err,
+				Message:   fmt.Sprintf("roadmap phase %d commit did not produce an anchor", f.CurrentRoadmapPhase),
+			})
 			continue
 		}
 		anchors[repo.Name] = sha
+		o.emitEvent(ports.Event{
+			Type:      ports.RepoStatusChanged,
+			FeatureID: f.ID,
+			RepoName:  repo.Name,
+			Message:   fmt.Sprintf("committed roadmap phase %d", f.CurrentRoadmapPhase),
+		})
 	}
 	if len(anchors) == 0 {
 		return nil
 	}
 	return anchors
+}
+
+// roadmapPhaseCommitRepos returns the repos the phase commit must visit. Only
+// touched repos carry phase work, and `git add -A` over an untouched
+// multi-gigabyte worktree costs seconds for nothing. When no repo state exists
+// at all the touched set carries no information, so fall back to every
+// configured repo rather than silently skipping the whole phase.
+func roadmapPhaseCommitRepos(f *feature.Feature) []feature.FeatureRepo {
+	touched := f.TouchedRepos()
+	if len(touched) == 0 {
+		if len(f.RepoStates) == 0 {
+			return f.Repos
+		}
+		return nil
+	}
+	repos := make([]feature.FeatureRepo, 0, len(touched))
+	for _, name := range touched {
+		if repo, ok := findRepo(f, name); ok {
+			repos = append(repos, repo)
+		}
+	}
+	return repos
+}
+
+// setFinalizingPhaseStatus flags or clears the end-of-phase git boundary.
+// Clearing only touches the finalizing token so a status written by a later
+// phase step is never clobbered.
+func (o *Orchestrator) setFinalizingPhaseStatus(featureID string, finalizing bool) {
+	if o.deps.Store == nil {
+		return
+	}
+	_ = o.deps.Store.Modify(featureID, func(f *feature.Feature) error {
+		switch {
+		case finalizing:
+			f.CurrentPhaseStatus = feature.PhaseStatusFinalizing
+		case f.IsFinalizingPhase():
+			f.CurrentPhaseStatus = ""
+		}
+		return nil
+	})
 }
 
 func (o *Orchestrator) recordRoadmapPhaseCommitAnchors(featureID string, phase int, anchors map[string]string) error {

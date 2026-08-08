@@ -3143,6 +3143,10 @@ components:
           type: string
         pending:
           type: boolean
+        # "question": a real help request awaiting an answer.
+        # "input": synthetic — an interactive session idling between turns.
+        kind:
+          type: string
         time:
           type: string
           format: date-time
@@ -3436,8 +3440,17 @@ components:
           type: string
         repo:
           type: string
-    RelationshipChild:
+    RelationshipChildOutcome:
+      type: string
+      description: Recorded relationship close outcome; absent while the child is open.
+      enum: [completed, discarded]
+    RelationshipChildSummary:
       type: object
+      description: >-
+        List-safe projection of a relationship child. Carries every
+        relationship field except the preserved diff body, so a parent with
+        many closed children cannot inflate a list response without bound.
+        Fetch RelationshipChild on a detail route for the body itself.
       required:
         - id
         - name
@@ -3479,8 +3492,7 @@ components:
           description: >-
             Stable machine state: setting_up, active, completed, or discarded.
         outcome:
-          type: string
-          enum: [completed, discarded]
+          $ref: "#/components/schemas/RelationshipChildOutcome"
         started_at:
           type: string
           format: date-time
@@ -3503,14 +3515,25 @@ components:
         last_error:
           type: string
           description: Setup failure message when the child's setup failed.
-        diff_summary:
-          type: string
+        has_diff_summary:
+          type: boolean
           description: >-
-            Preserved read-only diff summary captured at close time, before
-            the child's disposable worktrees and ephemeral branches were
-            removed. Bounded to 256 KiB: a per-file stat header followed by
-            the diff body, truncated on a line boundary with a marker stating
-            how many bytes were omitted. Empty when no diff was preserved.
+            True when a preserved diff summary exists for this closed child.
+            The body itself is only carried by RelationshipChild on a detail
+            route.
+    RelationshipChild:
+      allOf:
+        - $ref: "#/components/schemas/RelationshipChildSummary"
+        - type: object
+          properties:
+            diff_summary:
+              type: string
+              description: >-
+                Preserved read-only diff summary captured at close time, before
+                the child's disposable worktrees and ephemeral branches were
+                removed. Bounded to 256 KiB: a per-file stat header followed by
+                the diff body, truncated on a line boundary with a marker stating
+                how many bytes were omitted. Empty when no diff was preserved.
     FeatureSummary:
       type: object
       required:
@@ -3556,13 +3579,23 @@ components:
           items:
             $ref: "#/components/schemas/Warning"
         active_child:
-          $ref: "#/components/schemas/RelationshipChild"
+          $ref: "#/components/schemas/RelationshipChildSummary"
           x-go-type-skip-optional-pointer: false
         child_history:
           type: array
-          description: Complete closed-child history in authoritative store order.
+          description: >-
+            Newest closed children in authoritative store order, capped at a
+            fixed server-side limit. Consult child_history_total and
+            child_history_truncated for the full extent, and the feature
+            detail route for the complete history.
           items:
-            $ref: "#/components/schemas/RelationshipChild"
+            $ref: "#/components/schemas/RelationshipChildSummary"
+        child_history_total:
+          type: integer
+          description: Total closed children, regardless of how many are listed.
+        child_history_truncated:
+          type: boolean
+          description: True when child_history omits older closed children.
     ModelDefaults:
       x-go-type: config.ModelConfig
       x-go-type-import:
@@ -3992,6 +4025,14 @@ components:
             - revision
             - cache_revalidate
           properties:
+            active_child:
+              $ref: "#/components/schemas/RelationshipChild"
+              x-go-type-skip-optional-pointer: false
+            child_history:
+              type: array
+              description: Complete closed-child history in authoritative store order.
+              items:
+                $ref: "#/components/schemas/RelationshipChild"
             description:
               type: string
             summary:

@@ -373,17 +373,17 @@ func (o *Orchestrator) cleanupCascadeResources(
 		var err error
 		switch resource.Kind {
 		case feature.CascadeResourceCopiedInput:
-			if !pathWithin(filepath.Join(o.stateDir(), resource.OwnerID), resource.Path) {
-				err = fmt.Errorf("refusing copied-input path outside feature state: %s", resource.Path)
+			if path, ok := o.resolveCopiedInputPath(resource); ok {
+				err = os.RemoveAll(path)
 			} else {
-				err = os.RemoveAll(resource.Path)
+				err = fmt.Errorf("refusing copied-input path outside feature state: %s", resource.Path)
 			}
 		case feature.CascadeResourceOverlay:
 			expected := feature.ParentOverlayPath(o.stateDir(), intent.ParentID, resource.Repo)
-			if filepath.Clean(resource.Path) != filepath.Clean(expected) {
+			if !samePathResolved(resource.Path, expected) {
 				err = fmt.Errorf("refusing unexpected overlay path %s", resource.Path)
 			} else {
-				err = os.RemoveAll(resource.Path)
+				err = os.RemoveAll(expected)
 			}
 		case feature.CascadeResourceWorktree:
 			if o.deps.Worktrees == nil {
@@ -401,17 +401,20 @@ func (o *Orchestrator) cleanupCascadeResources(
 			}
 		case feature.CascadeResourceKBWorkspace:
 			expected := feature.ChildKBWorkspaceDir(o.stateDir(), resource.OwnerID, resource.Repo)
-			if filepath.Clean(resource.Path) != filepath.Clean(expected) {
+			if !samePathResolved(resource.Path, expected) {
 				err = fmt.Errorf("refusing unexpected KB workspace path %s", resource.Path)
 			} else {
-				err = os.RemoveAll(resource.Path)
+				err = os.RemoveAll(expected)
 			}
 		case feature.CascadeResourcePromotion:
-			if !pathWithin(filepath.Join(o.stateDir(), resource.OwnerID), resource.Path) {
-				err = fmt.Errorf("refusing promotion path outside feature state: %s", resource.Path)
-			} else {
+			owned := filepath.Join(o.stateDir(), resource.OwnerID)
+			if pathWithinResolved(owned, resource.Path) {
 				_ = os.Remove(resource.Path)
-				err = nil
+			} else if healed, ok := healCascadePath(resource.Path,
+				filepath.Join(owned, filepath.Base(filepath.Clean(resource.Path)))); ok {
+				_ = os.Remove(healed)
+			} else {
+				err = fmt.Errorf("refusing promotion path outside feature state: %s", resource.Path)
 			}
 		default:
 			err = fmt.Errorf("unknown cascade resource kind %q", resource.Kind)
@@ -492,4 +495,48 @@ func pathWithin(base, target string) bool {
 	rel, err := filepath.Rel(filepath.Clean(base), filepath.Clean(target))
 	return err == nil && rel != "." && rel != ".." &&
 		!strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+// pathWithinResolved is pathWithin after resolving symlinks on both sides, so
+// journaled paths spelled through a symlinked state root still pass the guard.
+func pathWithinResolved(base, target string) bool {
+	return pathWithin(feature.CanonicalPath(base), feature.CanonicalPath(target))
+}
+
+// samePathResolved compares resolved parent + basename so a symlink leaf is
+// matched by name rather than followed.
+func samePathResolved(a, b string) bool {
+	a, b = filepath.Clean(a), filepath.Clean(b)
+	return filepath.Join(feature.CanonicalPath(filepath.Dir(a)), filepath.Base(a)) ==
+		filepath.Join(feature.CanonicalPath(filepath.Dir(b)), filepath.Base(b))
+}
+
+// healCascadePath maps a journal path recorded under a stale spelling of the
+// state root onto its canonical in-tree candidate: the one it resolves to, or
+// failing that the one that exists.
+func healCascadePath(path string, candidates ...string) (string, bool) {
+	for _, candidate := range candidates {
+		if samePathResolved(candidate, path) {
+			return candidate, true
+		}
+	}
+	for _, candidate := range candidates {
+		if _, err := os.Lstat(candidate); err == nil {
+			return candidate, true
+		}
+	}
+	return "", false
+}
+
+// resolveCopiedInputPath accepts journal paths that resolve inside the
+// owner's state dir and heals stale spellings to the re-derived location.
+func (o *Orchestrator) resolveCopiedInputPath(resource *feature.CascadeResource) (string, bool) {
+	owned := filepath.Join(o.stateDir(), resource.OwnerID)
+	if pathWithinResolved(owned, resource.Path) {
+		return resource.Path, true
+	}
+	base := filepath.Base(filepath.Clean(resource.Path))
+	return healCascadePath(resource.Path,
+		filepath.Join(owned, "images", base),
+		filepath.Join(owned, "attachments", base))
 }

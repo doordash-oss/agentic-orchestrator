@@ -283,6 +283,38 @@ describe('PublishModalBody', () => {
     expect(submit).toBeEnabled();
   });
 
+  it('reconciles instead of failing when publish outruns its request bound', async () => {
+    const dispatchAction = vi.fn(() =>
+      Promise.reject(
+        new Error('E_REQUEST_TIMEOUT: The runtime did not answer within the request bound.'),
+      ),
+    );
+    const onDispatched = vi.fn();
+    render(<PublishModalBody {...props({ dispatchAction, onDispatched })} />);
+    fireEvent.change(screen.getByLabelText('PR title'), { target: { value: 'My PR' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Publish' }));
+
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Reconciling…' })).toBeDisabled(),
+    );
+    expect(screen.getByRole('status').textContent).toContain('still running on the server');
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.queryByText(/^failed:/)).not.toBeInTheDocument();
+    // The true outcome (PR URLs) arrives through the feature refresh.
+    expect(onDispatched).toHaveBeenCalled();
+    expect(dispatchAction).toHaveBeenCalledOnce();
+  });
+
+  it('still reads as a failure for an ordinary rejection and re-arms Publish', async () => {
+    const dispatchAction = vi.fn(() => Promise.reject(new Error('conflict: the server said no')));
+    render(<PublishModalBody {...props({ dispatchAction })} />);
+    fireEvent.change(screen.getByLabelText('PR title'), { target: { value: 'My PR' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Publish' }));
+
+    await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('failed:'));
+    expect(screen.getByRole('button', { name: 'Publish' })).toBeEnabled();
+  });
+
   it('invalidates the confirmation when the dirty selection changes', async () => {
     const dispatchAction = vi.fn().mockResolvedValue({ result: 'published' });
     render(

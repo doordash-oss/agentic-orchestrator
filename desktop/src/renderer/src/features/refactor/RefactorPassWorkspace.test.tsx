@@ -106,17 +106,46 @@ function renderWorkspace(
   parent: FeatureSnapshot,
   pass: RefactorPassController,
   attentionItems: AttentionItem[] = [],
+  options: {
+    attentionPreviewRequest?: { requestId: number; attentionId?: string } | null;
+    refreshAttention?: () => Promise<AttentionItem[]>;
+  } = {},
 ) {
-  render(
+  const workspace = (request: typeof options.attentionPreviewRequest) => (
     <RefactorPassWorkspace
       parent={parent}
       pass={pass}
+      attentionPreviewRequest={request ?? null}
       attentionItems={attentionItems}
-      refreshAttention={() => Promise.resolve([])}
+      refreshAttention={options.refreshAttention ?? (() => Promise.resolve([]))}
       attentionDrafts={emptyAttentionDrafts()}
       setAttentionDrafts={vi.fn()}
-    />,
+    />
   );
+  const view = render(workspace(options.attentionPreviewRequest));
+  return {
+    rerenderWithRequest: (request: { requestId: number; attentionId?: string } | null) =>
+      view.rerender(workspace(request)),
+  };
+}
+
+function gateFor(parent: FeatureSnapshot): AttentionItem {
+  return {
+    kind: 'gate',
+    id: `${CHILD_ID}::`,
+    featureId: CHILD_ID,
+    parentFeatureId: parent.id,
+    waitingSince: '2026-08-01T10:00:00.000Z',
+    summary: 'Choose the slop threshold before the pass continues.',
+    questions: [{ index: 1, prompt: 'Which slop threshold should the pass use?', answer: '' }],
+  };
+}
+
+function waitingChild(): FeatureSnapshot {
+  return readyChild({
+    status: 'NeedUserInput',
+    actions: [{ id: 'discard', enabled: true, disabledReasons: [] }],
+  });
 }
 
 describe('RefactorPassWorkspace', () => {
@@ -420,6 +449,63 @@ describe('RefactorPassWorkspace', () => {
     expect(screen.getByText('fix this')).toBeVisible();
     expect(screen.getByText('broken')).toBeVisible();
     expect(screen.getByText('src/a.go:10')).toBeVisible();
+  });
+
+  it('reopens an answer-later gate when an attention jump routes back to it', async () => {
+    const mock = installAgenticoMock({ feature: waitingChild() });
+    const parent = parentWith({ status: 'NeedUserInput' });
+    const gate = gateFor(parent);
+    const user = userEvent.setup();
+    const { rerenderWithRequest } = renderWorkspace(parent, controllerFor(parent, waitingChild()), [
+      gate,
+    ]);
+
+    const sheet = screen.getByRole('dialog', { name: 'Answer one question to resume' });
+    await user.click(within(sheet).getByRole('button', { name: 'Answer later' }));
+    expect(
+      screen.queryByRole('dialog', { name: 'Answer one question to resume' }),
+    ).not.toBeInTheDocument();
+    // Answering later still saves the draft.
+    await waitFor(() => expect(mock.api.saveGateDraft).toHaveBeenCalled());
+
+    rerenderWithRequest({ requestId: 1, attentionId: gate.id });
+    expect(screen.getByRole('dialog', { name: 'Answer one question to resume' })).toBeVisible();
+  });
+
+  it('keeps a resolved gate suppressed even while the attention list is stale', async () => {
+    const mock = installAgenticoMock({ feature: waitingChild() });
+    const parent = parentWith({ status: 'NeedUserInput' });
+    const gate = gateFor(parent);
+    if (gate.kind === 'gate') gate.questions[0]!.answer = 'Half a slop.';
+    const user = userEvent.setup();
+    renderWorkspace(parent, controllerFor(parent, waitingChild()), [gate], {
+      refreshAttention: () => Promise.resolve([gate]),
+    });
+
+    const sheet = screen.getByRole('dialog', { name: 'Answer one question to resume' });
+    await user.click(within(sheet).getByRole('button', { name: 'Resume agent' }));
+
+    await waitFor(() => expect(mock.api.resolveGate).toHaveBeenCalled());
+    await waitFor(() =>
+      expect(
+        screen.queryByRole('dialog', { name: 'Answer one question to resume' }),
+      ).not.toBeInTheDocument(),
+    );
+  });
+
+  it('offers Answer now on the waiting sentence while the gate is dismissed', async () => {
+    installAgenticoMock({ feature: waitingChild() });
+    const parent = parentWith({ status: 'NeedUserInput' });
+    const gate = gateFor(parent);
+    const user = userEvent.setup();
+    renderWorkspace(parent, controllerFor(parent, waitingChild()), [gate]);
+
+    const sheet = screen.getByRole('dialog', { name: 'Answer one question to resume' });
+    await user.click(within(sheet).getByRole('button', { name: 'Answer later' }));
+
+    const state = screen.getByText('The agent is waiting for your input.');
+    await user.click(within(state).getByRole('button', { name: 'Answer now' }));
+    expect(screen.getByRole('dialog', { name: 'Answer one question to resume' })).toBeVisible();
   });
 
   it('omits the selected-comment summary for a refactor child', () => {

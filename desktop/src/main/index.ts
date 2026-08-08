@@ -69,7 +69,12 @@ import {
   type SettingsSection,
   type WindowPurpose,
 } from '../shared/ipc';
-import { WindowRegistry, routeSettingsPane, routeWindowPurpose } from './windowRegistry';
+import {
+  RendererCrashRecovery,
+  WindowRegistry,
+  routeSettingsPane,
+  routeWindowPurpose,
+} from './windowRegistry';
 import { toSafeError } from '../shared/errors';
 import {
   RENDERER_ENTRY_URL,
@@ -539,6 +544,8 @@ if (!hasSingleInstanceLock) {
           app.focus({ steal: true });
           window.focus();
         },
+        isCrashed: (window) => !window.isDestroyed() && window.webContents.isCrashed(),
+        reload: (window) => window.webContents.reload(),
         webContentsId: (window) => window.webContents.id,
       },
       trustedWindowIds,
@@ -631,12 +638,26 @@ if (!hasSingleInstanceLock) {
       const existed = windows.peek('main') !== null;
       const window = windows.openOrFocus('main');
       if (!existed) {
+        const crashRecovery = new RendererCrashRecovery({
+          reload: () => {
+            if (!window.isDestroyed()) {
+              window.webContents.reload();
+            }
+          },
+          destroy: () => {
+            if (!window.isDestroyed()) {
+              window.destroy();
+            }
+          },
+        });
+        window.webContents.on('did-finish-load', () => crashRecovery.loadFinished());
         window.webContents.on('render-process-gone', (_event, details) => {
           diagnostics.recordCrash({
             processRole: 'renderer',
             category: details.reason,
             context: `exitCode=${details.exitCode}`,
           });
+          crashRecovery.crashed(details.reason);
         });
         window.on('closed', () => {
           mainWindowAttentionFocused = false;

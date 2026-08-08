@@ -30,10 +30,11 @@ import (
 type readModelCleanlinessWorktrees struct {
 	feature.WorktreeOps
 	report *git.CleanlinessReport
+	err    error
 }
 
 func (w *readModelCleanlinessWorktrees) InspectCleanliness(string, int) (*git.CleanlinessReport, error) {
-	return w.report, nil
+	return w.report, w.err
 }
 
 // seedReadChildFeature persists an active refactor child under parentID with
@@ -335,17 +336,12 @@ func TestClosedChildSurfacesPreservedDiffSummary(t *testing.T) {
 	}
 
 	handler := NewHandler(baseReadHandlerOptions(store))
-	parentSummary := getJSONMap(t, handler, apiPathFeatures)["features"].([]any)[0].(map[string]any)
+	detail := getJSONMap(t, handler, "/api/v1/features/"+parent.ID)[entityFeature].(map[string]any)
 
-	if got := parentSummary["active_child"].(map[string]any)["diff_summary"]; got != nil {
+	if got := detail["active_child"].(map[string]any)["diff_summary"]; got != nil {
 		t.Fatalf("active child diff_summary = %#v, want omitted", got)
 	}
-	history := parentSummary["child_history"].([]any)
-	seen := map[string]map[string]any{}
-	for _, raw := range history {
-		item := raw.(map[string]any)
-		seen[item["id"].(string)] = item
-	}
+	seen := childHistoryByID(t, detail)
 	if got := seen[withDiff.ID]["diff_summary"]; got != diffSummary {
 		t.Fatalf("closed child diff_summary = %#v, want preserved summary", got)
 	}
@@ -353,6 +349,17 @@ func TestClosedChildSurfacesPreservedDiffSummary(t *testing.T) {
 		t.Fatalf("no-diff closed child diff_summary = %#v, want omitted", got)
 	}
 	_ = active
+}
+
+// childHistoryByID indexes a projection's child_history entries by child id.
+func childHistoryByID(t *testing.T, projection map[string]any) map[string]map[string]any {
+	t.Helper()
+	seen := map[string]map[string]any{}
+	for _, raw := range projection["child_history"].([]any) {
+		item := raw.(map[string]any)
+		seen[item["id"].(string)] = item
+	}
+	return seen
 }
 
 // TestClosedChildDiffSummaryBoundedInResponse proves an oversized persisted

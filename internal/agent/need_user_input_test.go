@@ -16,6 +16,7 @@ package agent
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"reflect"
 	"sort"
@@ -169,7 +170,8 @@ func TestApplyNeedUserVerificationDecisionPersistsWaiver(t *testing.T) {
 	}
 	rec := SynthesizeVerificationNeedUserInputGate(contractPath, 3, []string{"protected"}, 2)
 	rec.Questions[0].Answer = "WAIVE"
-	if err := ApplyNeedUserVerificationDecision(rec); err != nil {
+	gatePath := filepath.Join(filepath.Dir(contractPath), "iteration-02", NeedUserInputArtifactName)
+	if err := ApplyNeedUserVerificationDecision(gatePath, rec); err != nil {
 		t.Fatalf("ApplyNeedUserVerificationDecision() error = %v", err)
 	}
 	got, err := ReadTestingContract(contractPath)
@@ -179,7 +181,7 @@ func TestApplyNeedUserVerificationDecisionPersistsWaiver(t *testing.T) {
 	if got.Revision != 4 || !IsTestingContractItemWaived(got.Items[0]) {
 		t.Fatalf("contract after waiver = %+v, want revision 4 user waiver", got)
 	}
-	if err := ApplyNeedUserVerificationDecision(rec); err != nil {
+	if err := ApplyNeedUserVerificationDecision(gatePath, rec); err != nil {
 		t.Fatalf("second ApplyNeedUserVerificationDecision() should be idempotent: %v", err)
 	}
 }
@@ -187,9 +189,10 @@ func TestApplyNeedUserVerificationDecisionPersistsWaiver(t *testing.T) {
 func TestApplyNeedUserVerificationDecisionRequiresExactAction(t *testing.T) {
 	for _, answer := range []string{"DO NOT WAIVE", "WAIVE RETRY_AFTER_AUTH", ""} {
 		t.Run(answer, func(t *testing.T) {
-			rec := SynthesizeVerificationNeedUserInputGate(filepath.Join(t.TempDir(), "testing-contract.yaml"), 1, []string{"item"}, 1)
+			dir := t.TempDir()
+			rec := SynthesizeVerificationNeedUserInputGate(filepath.Join(dir, "testing-contract.yaml"), 1, []string{"item"}, 1)
 			rec.Questions[0].Answer = answer
-			if err := ApplyNeedUserVerificationDecision(rec); err == nil {
+			if err := ApplyNeedUserVerificationDecision(filepath.Join(dir, "iteration-01", NeedUserInputArtifactName), rec); err == nil {
 				t.Fatalf("ApplyNeedUserVerificationDecision(%q) error = nil, want exact-action rejection", answer)
 			}
 		})
@@ -206,20 +209,31 @@ func TestApplyNeedUserVerificationDecisionRejectsStaleRevision(t *testing.T) {
 	}
 	rec := SynthesizeVerificationNeedUserInputGate(contractPath, 3, []string{"protected"}, 2)
 	rec.Questions[0].Answer = "WAIVE"
-	if err := ApplyNeedUserVerificationDecision(rec); err == nil || !strings.Contains(err.Error(), "changed from revision") {
+	gatePath := filepath.Join(filepath.Dir(contractPath), "iteration-02", NeedUserInputArtifactName)
+	if err := ApplyNeedUserVerificationDecision(gatePath, rec); err == nil || !strings.Contains(err.Error(), "changed from revision") {
 		t.Fatalf("ApplyNeedUserVerificationDecision() error = %v, want stale revision", err)
 	}
 }
 
 func TestApplyNeedUserVerificationDecisionRetryAfterAuthDoesNotMutateContract(t *testing.T) {
-	contractPath := filepath.Join(t.TempDir(), "testing-contract.yaml")
+	dir := t.TempDir()
+	contractPath := filepath.Join(dir, "testing-contract.yaml")
 	contract := TestingContract{Version: 1, Revision: 3, Items: []TestingContractItem{{ID: "protected"}}}
 	if err := WriteTestingContract(contractPath, contract); err != nil {
 		t.Fatal(err)
 	}
+	iterDir := filepath.Join(dir, "iteration-02")
+	if err := os.MkdirAll(iterDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	reportPath := filepath.Join(iterDir, "verification-report.yaml")
+	if err := os.WriteFile(reportPath, []byte("contract_revision: 3\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	rec := SynthesizeVerificationNeedUserInputGate(contractPath, 3, []string{"protected"}, 2)
 	rec.Questions[0].Answer = "RETRY_AFTER_AUTH"
-	if err := ApplyNeedUserVerificationDecision(rec); err != nil {
+	gatePath := NeedUserInputPath(iterDir)
+	if err := ApplyNeedUserVerificationDecision(gatePath, rec); err != nil {
 		t.Fatalf("ApplyNeedUserVerificationDecision() error = %v", err)
 	}
 	got, err := ReadTestingContract(contractPath)
@@ -229,10 +243,34 @@ func TestApplyNeedUserVerificationDecisionRetryAfterAuthDoesNotMutateContract(t 
 	if got.Revision != 3 || IsTestingContractItemWaived(got.Items[0]) {
 		t.Fatalf("contract mutated on retry-after-auth: %+v", got)
 	}
+	if _, err := os.Stat(reportPath); !os.IsNotExist(err) {
+		t.Fatalf("verification report survived retry-after-auth; resume would replay the blocked gate: %v", err)
+	}
+	// Idempotent when the report is already gone.
+	if err := ApplyNeedUserVerificationDecision(gatePath, rec); err != nil {
+		t.Fatalf("second ApplyNeedUserVerificationDecision() error = %v", err)
+	}
+}
+
+func TestVerificationReportHasBlockedResults(t *testing.T) {
+	if verificationReportHasBlockedResults(nil) {
+		t.Fatal("nil report reported blocked results")
+	}
+	passed := &VerificationReport{Results: []VerificationCheckResult{{ItemID: "a", Status: VerificationStatusPassed}}}
+	if verificationReportHasBlockedResults(passed) {
+		t.Fatalf("passed-only report reported blocked results: %+v", passed)
+	}
+	blocked := &VerificationReport{Results: []VerificationCheckResult{
+		{ItemID: "a", Status: VerificationStatusPassed},
+		{ItemID: "b", Status: VerificationStatusBlocked},
+	}}
+	if !verificationReportHasBlockedResults(blocked) {
+		t.Fatalf("blocked report not detected: %+v", blocked)
+	}
 }
 
 func TestApplyNeedUserVerificationDecisionRejectsUntrustedGenericGate(t *testing.T) {
-	err := ApplyNeedUserVerificationDecision(NeedUserInputRecord{
+	err := ApplyNeedUserVerificationDecision(filepath.Join(t.TempDir(), NeedUserInputArtifactName), NeedUserInputRecord{
 		Summary: "legacy agent-authored gate",
 		Questions: []NeedUserInputQuestion{{
 			Index: 1, Prompt: "Continue?", Answer: "yes",

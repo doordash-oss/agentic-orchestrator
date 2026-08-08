@@ -66,7 +66,12 @@ func IsPartialLoadError(err error) bool {
 
 type Store struct {
 	BaseDir string
-	mu      sync.Mutex // serializes writes while reads use atomic file commits
+	// mu serializes writes against each other and against the multi-record
+	// relationship scans, which hold it shared: those scans read every
+	// feature.yaml, so exclusive reads would queue concurrent API reads
+	// behind one another and behind every mutation. Single-record reads rely
+	// on atomic file commits and take no lock at all.
+	mu sync.RWMutex
 
 	// testSaveInterceptor is a test-only hook consulted by saveUnlocked to
 	// inject failures. The concrete wiring lives in export_test.go.
@@ -186,8 +191,8 @@ func (s *Store) ModifyGuarded(
 // history derived from child-owned Parent links. It fails closed if any stored
 // record cannot be loaded or carries an invalid relationship lifecycle state.
 func (s *Store) RelationshipChildren(parentID string) (*RelationshipChildren, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 
 	return s.relationshipChildrenUnlocked(parentID)
 }
@@ -279,8 +284,8 @@ func sortClosedChildren(closed []*Feature) {
 // single directory pass, enforcing the same fail-closed invariants as
 // RelationshipChildren. Parents without children have no map entry.
 func (s *Store) AllRelationshipChildren() (map[string]*RelationshipChildren, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 
 	entries, err := os.ReadDir(s.BaseDir)
 	if err != nil {

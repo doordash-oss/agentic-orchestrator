@@ -252,6 +252,241 @@ func TestDeleteCascadeRejectsClosedChildWithRelationshipConflict(t *testing.T) {
 	}
 }
 
+func TestDeleteCascadeHealsSymlinkSpelledJournalPaths(t *testing.T) {
+	t.Parallel()
+
+	tmp, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(tmp, "real-root")
+	stateDir := filepath.Join(root, "features")
+	alias := filepath.Join(tmp, "alias-root")
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(root, alias); err != nil {
+		t.Fatal(err)
+	}
+
+	store, parent, child, cleanupPaths := saveCascadeSymlinkFixture(t, stateDir)
+
+	intent, err := store.BeginCascadeDelete(parent.ID, time.Now())
+	if err != nil {
+		t.Fatalf("BeginCascadeDelete: %v", err)
+	}
+	// Simulate a legacy journal recorded under the symlinked spelling.
+	for i := range intent.Resources {
+		r := &intent.Resources[i]
+		switch r.Kind {
+		case feature.CascadeResourceCopiedInput, feature.CascadeResourceOverlay,
+			feature.CascadeResourceKBWorkspace, feature.CascadeResourcePromotion:
+			rel, relErr := filepath.Rel(root, r.Path)
+			if relErr != nil {
+				t.Fatalf("Rel(%q, %q): %v", root, r.Path, relErr)
+			}
+			r.Path = filepath.Join(alias, rel)
+		}
+	}
+	if err := store.SaveCascadeDelete(parent.ID, intent); err != nil {
+		t.Fatalf("SaveCascadeDelete: %v", err)
+	}
+
+	worktrees := &cascadeTestWorktrees{
+		store: store,
+		refs:  map[string]string{"refs/heads/feature/parent": "candidate"},
+	}
+	o := New(Deps{Store: store, Worktrees: worktrees}, Hooks{})
+
+	result, err := o.DeleteCascade(parent.ID)
+	if err != nil {
+		t.Fatalf("DeleteCascade: %v", err)
+	}
+	if result.Status != feature.CascadeDeleteCompleted {
+		t.Fatalf("status = %q diagnostics = %+v, want completed", result.Status, result.Diagnostics)
+	}
+	for _, path := range cleanupPaths {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("%s still exists: %v", path, err)
+		}
+	}
+	if _, err := store.Load(child.ID); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("child load error = %v, want not exist", err)
+	}
+	if _, err := store.Load(parent.ID); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("parent load error = %v, want not exist", err)
+	}
+}
+
+func TestDeleteCascadeHealsBrokenSymlinkSpelledCopiedInput(t *testing.T) {
+	t.Parallel()
+
+	tmp, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(tmp, "real-root")
+	stateDir := filepath.Join(root, "features")
+	alias := filepath.Join(tmp, "alias-root")
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(root, alias); err != nil {
+		t.Fatal(err)
+	}
+
+	store, parent, _, cleanupPaths := saveCascadeSymlinkFixture(t, stateDir)
+
+	intent, err := store.BeginCascadeDelete(parent.ID, time.Now())
+	if err != nil {
+		t.Fatalf("BeginCascadeDelete: %v", err)
+	}
+	for i := range intent.Resources {
+		r := &intent.Resources[i]
+		if r.Kind != feature.CascadeResourceCopiedInput {
+			continue
+		}
+		rel, relErr := filepath.Rel(root, r.Path)
+		if relErr != nil {
+			t.Fatalf("Rel(%q, %q): %v", root, r.Path, relErr)
+		}
+		r.Path = filepath.Join(alias, rel)
+	}
+	if err := store.SaveCascadeDelete(parent.ID, intent); err != nil {
+		t.Fatalf("SaveCascadeDelete: %v", err)
+	}
+	// The old spelling no longer resolves; only the re-derived path exists.
+	if err := os.Remove(alias); err != nil {
+		t.Fatal(err)
+	}
+
+	worktrees := &cascadeTestWorktrees{
+		store: store,
+		refs:  map[string]string{"refs/heads/feature/parent": "candidate"},
+	}
+	o := New(Deps{Store: store, Worktrees: worktrees}, Hooks{})
+
+	result, err := o.DeleteCascade(parent.ID)
+	if err != nil {
+		t.Fatalf("DeleteCascade: %v", err)
+	}
+	if result.Status != feature.CascadeDeleteCompleted {
+		t.Fatalf("status = %q diagnostics = %+v, want completed", result.Status, result.Diagnostics)
+	}
+	for _, path := range cleanupPaths {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("%s still exists: %v", path, err)
+		}
+	}
+}
+
+func TestDeleteCascadeStillRefusesOutOfTreeCopiedInput(t *testing.T) {
+	t.Parallel()
+
+	tmp, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	stateDir := filepath.Join(tmp, "features")
+	outside := filepath.Join(tmp, "outside", "secrets.txt")
+	if err := os.MkdirAll(filepath.Dir(outside), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(outside, []byte("keep"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	store := feature.NewStore(stateDir)
+	parent := &feature.Feature{
+		ID: "parent", Slug: "parent", SchemaVersion: feature.SchemaVersionCurrent,
+		ActiveRun: 1, RunCount: 1,
+	}
+	parent.SetRun(&feature.Run{RunNumber: 1, Setup: &feature.SetupState{Tasks: map[string]feature.SetupTask{
+		"attachment:1": {
+			Key: "attachment:1", Kind: feature.SetupTaskAttachment, Path: outside,
+		},
+	}}})
+	if err := store.Save(parent); err != nil {
+		t.Fatal(err)
+	}
+	o := New(Deps{Store: store}, Hooks{})
+
+	result, err := o.DeleteCascade(parent.ID)
+	if err != nil {
+		t.Fatalf("DeleteCascade: %v", err)
+	}
+	if result.Status != feature.CascadeDeleteCleanupPending {
+		t.Fatalf("status = %q, want cleanup_pending", result.Status)
+	}
+	if len(result.Diagnostics) != 1 || result.Diagnostics[0].Code != "resource_cleanup_failed" {
+		t.Fatalf("diagnostics = %+v", result.Diagnostics)
+	}
+	if _, err := os.Stat(outside); err != nil {
+		t.Fatalf("out-of-tree file removed: %v", err)
+	}
+	if _, err := store.Load(parent.ID); err != nil {
+		t.Fatalf("parent deleted: %v", err)
+	}
+}
+
+// saveCascadeSymlinkFixture persists a parent/child relationship whose
+// disposable resources all exist on disk, returning the paths cleanup must
+// remove.
+func saveCascadeSymlinkFixture(t *testing.T, stateDir string) (*feature.Store, *feature.Feature, *feature.Feature, []string) {
+	t.Helper()
+	store := feature.NewStore(stateDir)
+	parent := &feature.Feature{
+		ID: "parent", Slug: "parent", SchemaVersion: feature.SchemaVersionCurrent,
+		ActiveRun: 1, RunCount: 1,
+		Repos: []feature.FeatureRepo{{
+			Name: "repo-a", Path: "/repos/a", WorktreePath: "/worktrees/parent/a",
+			Branch: "feature/parent",
+		}},
+	}
+	attachment := filepath.Join(stateDir, parent.ID, "attachments", "notes.txt")
+	parent.SetRun(&feature.Run{RunNumber: 1, Setup: &feature.SetupState{Tasks: map[string]feature.SetupTask{
+		"attachment:1": {
+			Key: "attachment:1", Kind: feature.SetupTaskAttachment, Path: attachment,
+		},
+	}}})
+	child := &feature.Feature{
+		ID: "child", Slug: "child", SchemaVersion: feature.SchemaVersionCurrent,
+		ActiveRun: 1, RunCount: 1,
+		Parent: &feature.ChildRelationship{
+			ParentID: parent.ID,
+			Transaction: &feature.TransactionJournal{Entries: []feature.RepoTransactionEntry{{
+				Repo: "repo-a", ParentBranch: "feature/parent",
+				ParentAnchorSHA: "anchor", ExpectedRefSHA: "anchor",
+				CandidateSHA: "candidate", ApplyState: feature.RepoApplyApplied,
+			}}},
+		},
+		Repos: []feature.FeatureRepo{{
+			Name: "repo-a", Path: "/repos/a", WorktreePath: "/worktrees/child/a",
+			Branch: "feature/child",
+		}},
+	}
+	if err := store.Save(parent); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Save(child); err != nil {
+		t.Fatal(err)
+	}
+	overlay := feature.ParentOverlayPath(stateDir, parent.ID, "repo-a")
+	kbWorkspace := feature.ChildKBWorkspaceDir(stateDir, child.ID, "repo-a")
+	promotion := filepath.Join(stateDir, child.ID, "promotion.yaml")
+	for _, dir := range []string{filepath.Dir(attachment), overlay, kbWorkspace} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, file := range []string{attachment, filepath.Join(overlay, "seed.txt"), promotion} {
+		if err := os.WriteFile(file, []byte("fixture"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return store, parent, child, []string{attachment, overlay, kbWorkspace, promotion}
+}
+
 func saveCascadeTestRelationship(t *testing.T) (*feature.Store, *feature.Feature, *feature.Feature) {
 	t.Helper()
 	store := feature.NewStore(filepath.Join(t.TempDir(), "features"))

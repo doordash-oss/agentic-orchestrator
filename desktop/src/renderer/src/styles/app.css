@@ -68,7 +68,9 @@ body {
   padding-left: 80px;
 }
 :root[data-platform='darwin'] .toolbar button,
-:root[data-platform='darwin'] .toolbar input {
+:root[data-platform='darwin'] .toolbar input,
+:root[data-platform='darwin'] .toolbar summary,
+:root[data-platform='darwin'] .toolbar .cockpit__overflow-menu {
   -webkit-app-region: no-drag;
 }
 

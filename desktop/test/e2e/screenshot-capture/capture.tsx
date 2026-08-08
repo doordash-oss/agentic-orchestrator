@@ -699,7 +699,19 @@ function CockpitRedesignScene({ variant }: { variant: CockpitRedesignVariant }) 
           <header className="toolbar">
             <div className="toolbar__leading">
               <button type="button" className="toolbar__sidebar-toggle" aria-label="Hide sidebar">
-                <span aria-hidden="true">▥</span>
+                <svg
+                  aria-hidden="true"
+                  width="18"
+                  height="16"
+                  viewBox="0 0 18 16"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                  strokeLinecap="round"
+                >
+                  <rect x="1.75" y="2.75" width="14.5" height="10.5" rx="2.75" />
+                  <line x1="6.75" y1="3.25" x2="6.75" y2="12.75" />
+                </svg>
               </button>
             </div>
             <div className="toolbar__title">
@@ -884,7 +896,19 @@ function AftercareScene() {
           <header className="toolbar" aria-label="Workspace toolbar">
             <div className="toolbar__leading">
               <button type="button" className="toolbar__sidebar-toggle" aria-label="Hide sidebar">
-                <span aria-hidden="true">▥</span>
+                <svg
+                  aria-hidden="true"
+                  width="18"
+                  height="16"
+                  viewBox="0 0 18 16"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                  strokeLinecap="round"
+                >
+                  <rect x="1.75" y="2.75" width="14.5" height="10.5" rx="2.75" />
+                  <line x1="6.75" y1="3.25" x2="6.75" y2="12.75" />
+                </svg>
               </button>
             </div>
             <div className="toolbar__title">

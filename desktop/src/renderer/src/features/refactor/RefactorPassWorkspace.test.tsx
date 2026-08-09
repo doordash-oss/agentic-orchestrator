@@ -109,6 +109,9 @@ function renderWorkspace(
   options: {
     attentionPreviewRequest?: { requestId: number; attentionId?: string } | null;
     refreshAttention?: () => Promise<AttentionItem[]>;
+    isNarrow?: boolean;
+    inspectorOpen?: boolean;
+    onCloseInspector?: () => void;
   } = {},
 ) {
   const workspace = (request: typeof options.attentionPreviewRequest) => (
@@ -120,6 +123,9 @@ function renderWorkspace(
       refreshAttention={options.refreshAttention ?? (() => Promise.resolve([]))}
       attentionDrafts={emptyAttentionDrafts()}
       setAttentionDrafts={vi.fn()}
+      isNarrow={options.isNarrow ?? false}
+      inspectorOpen={options.inspectorOpen ?? true}
+      onCloseInspector={options.onCloseInspector ?? vi.fn()}
     />
   );
   const view = render(workspace(options.attentionPreviewRequest));
@@ -161,6 +167,82 @@ describe('RefactorPassWorkspace', () => {
 
     const inspector = screen.getByRole('complementary', { name: 'Pass inspector' });
     expect(within(inspector).getByRole('heading', { name: 'Slop removal pass' })).toBeVisible();
+  });
+
+  it('docks the open inspector as the trailing split-view pane, never inline', () => {
+    installAgenticoMock({ feature: readyChild() });
+    const parent = parentWith();
+    renderWorkspace(parent, controllerFor(parent, readyChild()), [], { inspectorOpen: true });
+
+    const inspector = screen.getByRole('complementary', { name: 'Pass inspector' });
+    const content = inspector.parentElement!;
+    expect(content).toHaveClass('cockpit__content', 'cockpit__content--inspector-open');
+    // The inspector is the content grid's trailing column, beside the stage.
+    expect(inspector.previousElementSibling).toHaveClass('cockpit__stage');
+  });
+
+  it('removes the inspector pane entirely while the toggle is closed', () => {
+    installAgenticoMock({ feature: readyChild() });
+    const parent = parentWith();
+    renderWorkspace(parent, controllerFor(parent, readyChild()), [], { inspectorOpen: false });
+
+    expect(screen.queryByRole('complementary', { name: 'Pass inspector' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('region', { name: 'Parent feature' })).not.toBeInTheDocument();
+    const stage = screen.getByRole('main');
+    expect(stage.parentElement).toHaveClass('cockpit__content');
+    expect(stage.parentElement).not.toHaveClass('cockpit__content--inspector-open');
+  });
+
+  it('presents the inspector as the slide-over drawer at narrow widths', async () => {
+    installAgenticoMock({ feature: readyChild() });
+    const parent = parentWith();
+    const onCloseInspector = vi.fn();
+    const user = userEvent.setup();
+    renderWorkspace(parent, controllerFor(parent, readyChild()), [], {
+      isNarrow: true,
+      inspectorOpen: true,
+      onCloseInspector,
+    });
+
+    // Drawer, not the trailing pane: the aside never renders inline.
+    expect(screen.queryByRole('complementary', { name: 'Pass inspector' })).not.toBeInTheDocument();
+    const drawer = screen.getByRole('dialog', { name: 'Pass inspector' });
+    expect(within(drawer).getByRole('region', { name: 'Parent feature' })).toBeVisible();
+
+    await user.click(within(drawer).getByRole('button', { name: 'Close inspector' }));
+    expect(onCloseInspector).toHaveBeenCalled();
+  });
+
+  it("renders the pass's own phase rail from the child pipeline", () => {
+    installAgenticoMock({ feature: readyChild() });
+    const parent = parentWith();
+    renderWorkspace(parent, controllerFor(parent, readyChild()));
+
+    // featureSnapshot's medium pipeline: Setup + Plan/Implement/Review/Publish;
+    // a Created child points at the first startable phase.
+    const rail = screen.getByRole('group', { name: 'Pass phases' });
+    expect(within(rail).getByLabelText('Setup, completed')).toBeInTheDocument();
+    const current = within(rail).getByLabelText('Plan, current');
+    expect(current).toHaveAttribute('aria-current', 'step');
+    expect(within(rail).getByLabelText('Publish, upcoming')).toBeInTheDocument();
+  });
+
+  it('marks the rail held while the pass waits on a gate', () => {
+    installAgenticoMock({ feature: waitingChild() });
+    const parent = parentWith({ status: 'NeedUserInput' });
+    renderWorkspace(parent, controllerFor(parent, waitingChild()), [gateFor(parent)]);
+
+    const rail = screen.getByRole('group', { name: 'Pass phases' });
+    expect(within(rail).getByLabelText('Plan, held')).toBeInTheDocument();
+    expect(screen.getByText('Paused')).toBeVisible();
+  });
+
+  it('omits the phase rail until the child snapshot arrives', () => {
+    installAgenticoMock({ feature: readyChild() });
+    const parent = parentWith();
+    renderWorkspace(parent, controllerFor(parent, null));
+
+    expect(screen.queryByRole('group', { name: 'Pass phases' })).not.toBeInTheDocument();
   });
 
   it('explains setup in the stage instead of rendering dead verbs', () => {

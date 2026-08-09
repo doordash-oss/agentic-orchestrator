@@ -7,6 +7,7 @@ import {
   type SetStateAction,
 } from 'react';
 import {
+  attentionOwnerFeatureId,
   isPendingReviewStatus,
   type AttentionItem,
   type FeatureActionView,
@@ -33,6 +34,9 @@ import { CurrentRunInspection, type RunMetrics } from '../CurrentRunInspection';
 import { ReviewSurface } from '../ReviewSurface';
 import { ImpactPreviewList } from '../ImpactPreviewList';
 import { InspectorContent } from '../CockpitInspector';
+import { InspectorDrawer } from '../InspectorDrawer';
+import { classifyHold, railSegments, railTrio } from '../phaseRail';
+import { PhaseRail } from '../PhaseRailRow';
 import { featureBranch, showsRun } from '../featureView';
 import {
   custodyStations,
@@ -224,6 +228,16 @@ export interface RefactorPassWorkspaceProps {
   refreshAttention(): Promise<AttentionItem[]>;
   attentionDrafts: AttentionDrafts;
   setAttentionDrafts: Dispatch<SetStateAction<AttentionDrafts>>;
+  /** Whether the shell is at the narrow (drawer) width; mirrors the cockpit. */
+  isNarrow?: boolean;
+  /**
+   * Whether the inspector is shown: the trailing split-view pane when wide,
+   * the slide-over drawer when narrow. Owned by the cockpit so the toolbar's
+   * inspector toggle controls this workspace exactly like any feature tab.
+   */
+  inspectorOpen?: boolean;
+  /** Closes the inspector (drawer dismissal); owned by the cockpit. */
+  onCloseInspector?(): void;
 }
 
 /**
@@ -242,11 +256,18 @@ export function RefactorPassWorkspace({
   refreshAttention,
   attentionDrafts,
   setAttentionDrafts,
+  isNarrow = false,
+  inspectorOpen = false,
+  onCloseInspector,
 }: RefactorPassWorkspaceProps): React.ReactElement | null {
   const [attentionBusy, setAttentionBusy] = useState<string | null>(null);
   const [dismissedGateId, setDismissedGateId] = useState<string | undefined>();
   const [runMetrics, setRunMetrics] = useState<RunMetrics | null>(null);
   const [attentionNotice, setAttentionNotice] = useState<string | null>(null);
+  // Stage-bar slots the live surface's view toggle, refresh, and expand
+  // controls portal into, exactly like the cockpit's stage bar.
+  const [liveControlsHost, setLiveControlsHost] = useState<HTMLDivElement | null>(null);
+  const [liveExpandHost, setLiveExpandHost] = useState<HTMLDivElement | null>(null);
 
   const saveAttentionDraft = useAttentionDraftSaves({
     notify: (result, options) => setAttentionNotice(attentionActionNotice(result, options)),
@@ -289,6 +310,22 @@ export function RefactorPassWorkspace({
   const showsLiveSurface =
     child !== null && !isPendingReviewStatus(child.status) && showsRun(child);
 
+  // The pass's own phase rail, computed exactly like the cockpit's: the hold
+  // looks at every open item this child owns (including review items — the
+  // question/gate list above filters those out), the segments come from the
+  // child's own pipeline, and the trio reads the live run metrics.
+  const railOpenAttentionItems = attentionItems.filter(
+    (item) => attentionOwnerFeatureId(item) === view.id,
+  );
+  const railHold = child === null ? null : classifyHold(child.status, railOpenAttentionItems);
+  const railSegmentsList = child === null ? [] : railSegments(child, railHold);
+  const railTrioEntries = railTrio({
+    totalSeconds: runMetrics?.totalSeconds,
+    totalUsd: runMetrics?.totalUsd,
+    contextPercentage: runMetrics?.contextPercentage,
+    hold: railHold,
+  });
+
   const submitAttention = async (
     item: AttentionItem,
     action: Parameters<typeof runAttentionSubmit>[0],
@@ -323,6 +360,39 @@ export function RefactorPassWorkspace({
     );
   };
 
+  // One inspector body for both presentations: the trailing split-view pane
+  // when wide, the slide-over drawer when narrow — mirroring the cockpit.
+  const inspectorContent = (
+    <>
+      {child !== null ? (
+        <InspectorContent
+          snapshot={child}
+          branch={featureBranch(child)}
+          stale={false}
+          runMetrics={runMetrics}
+          onOpenPullRequest={(url) => {
+            void window.agentico.openExternal({ url });
+          }}
+        />
+      ) : (
+        <header className="cockpit__header">
+          <div className="cockpit__identity">
+            <h2 className="cockpit__title">{view.name}</h2>
+            <p className="refactor-pass__state">{view.displayState}</p>
+          </div>
+        </header>
+      )}
+      <section className="refactor-pass__parent-card" aria-label="Parent feature">
+        <p className="feature-facts__eyebrow">Parent</p>
+        <strong>{parent.name}</strong>
+        <p>
+          Locked while the pass runs. Review settings stay editable through Edit configuration… —
+          changes apply to both records, and each keeps its own pipeline.
+        </p>
+      </section>
+    </>
+  );
+
   return (
     <section
       className="refactor-pass"
@@ -330,6 +400,16 @@ export function RefactorPassWorkspace({
       data-state={state?.id ?? 'loading'}
       data-kind={view.kind}
     >
+      {child !== null ? (
+        <PhaseRail
+          segments={railSegmentsList}
+          trio={railTrioEntries}
+          hold={railHold}
+          tone={child.status === 'Failed' ? 'error' : 'progress'}
+          label="Pass phases"
+        />
+      ) : null}
+
       <ol className="refactor-pass__custody" aria-label="Custody of the work">
         {stations.map((station) => (
           <li
@@ -353,7 +433,19 @@ export function RefactorPassWorkspace({
         <SelectedCommentSummary comments={child.reviewFeedback} />
       ) : null}
 
-      <div className="cockpit__content">
+      {isNarrow && inspectorOpen ? (
+        <InspectorDrawer title="Pass inspector" onClose={() => onCloseInspector?.()}>
+          {inspectorContent}
+        </InspectorDrawer>
+      ) : null}
+
+      <div
+        className={
+          !isNarrow && inspectorOpen
+            ? 'cockpit__content cockpit__content--inspector-open'
+            : 'cockpit__content'
+        }
+      >
         <main className="cockpit__stage">
           {childState.phase === 'loading' ? (
             <p className="refactor-pass__state" role="status">
@@ -428,6 +520,19 @@ export function RefactorPassWorkspace({
             </section>
           ) : null}
 
+          {/* The live surface's Conversation/Signal-trace toggle, refresh, and
+           * expand ride a trailing-only stage bar, exactly like the cockpit's
+           * stage-bar hosts (the pass has no surface switcher or run popup,
+           * so the leading zone stays empty). */}
+          {showsLiveSurface ? (
+            <div className="cockpit__stage-bar cockpit__stage-bar--aftercare">
+              <div className="cockpit__stage-bar-trailing">
+                <div className="cockpit__stage-bar-controls" ref={setLiveControlsHost} />
+                <div className="cockpit__stage-bar-expand" ref={setLiveExpandHost} />
+              </div>
+            </div>
+          ) : null}
+
           {child !== null && isPendingReviewStatus(child.status) ? (
             <div className="cockpit__surface cockpit__surface--document">
               <ReviewSurface
@@ -451,6 +556,8 @@ export function RefactorPassWorkspace({
                 verificationItems={child.verificationItems}
                 waitReason={child.waitReason}
                 shouldStream={stopEnabled}
+                expandHost={liveExpandHost}
+                controlsHost={liveControlsHost}
                 onRunMetrics={setRunMetrics}
                 suppressQuestion={suppressQuestion}
                 attentionTurn={
@@ -508,34 +615,11 @@ export function RefactorPassWorkspace({
           ) : null}
         </main>
 
-        <aside className="cockpit__inspector" aria-label="Pass inspector">
-          {child !== null ? (
-            <InspectorContent
-              snapshot={child}
-              branch={featureBranch(child)}
-              stale={false}
-              runMetrics={runMetrics}
-              onOpenPullRequest={(url) => {
-                void window.agentico.openExternal({ url });
-              }}
-            />
-          ) : (
-            <header className="cockpit__header">
-              <div className="cockpit__identity">
-                <h2 className="cockpit__title">{view.name}</h2>
-                <p className="refactor-pass__state">{view.displayState}</p>
-              </div>
-            </header>
-          )}
-          <section className="refactor-pass__parent-card" aria-label="Parent feature">
-            <p className="feature-facts__eyebrow">Parent</p>
-            <strong>{parent.name}</strong>
-            <p>
-              Locked while the pass runs. Review settings stay editable through Edit configuration…
-              — changes apply to both records, and each keeps its own pipeline.
-            </p>
-          </section>
-        </aside>
+        {!isNarrow && inspectorOpen ? (
+          <aside className="cockpit__inspector" aria-label="Pass inspector">
+            {inspectorContent}
+          </aside>
+        ) : null}
       </div>
 
       {activeGate !== undefined ? (

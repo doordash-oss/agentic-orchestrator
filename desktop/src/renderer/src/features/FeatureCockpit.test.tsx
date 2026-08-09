@@ -669,6 +669,14 @@ describe('FeatureCockpit snapshot rendering', () => {
       action: 'start',
     });
 
+    // The toolbar's inspector toggle docks/undocks the pass inspector as the
+    // trailing split-view pane — the aside never renders inline while closed.
+    expect(screen.queryByRole('complementary', { name: 'Pass inspector' })).not.toBeInTheDocument();
+    await user.click(within(bar).getByRole('button', { name: 'Toggle inspector' }));
+    expect(screen.getByRole('complementary', { name: 'Pass inspector' })).toBeVisible();
+    await user.click(within(bar).getByRole('button', { name: 'Toggle inspector' }));
+    expect(screen.queryByRole('complementary', { name: 'Pass inspector' })).not.toBeInTheDocument();
+
     await user.click(within(bar).getByRole('button', { name: 'Discard pass…' }));
     const dialog = await screen.findByRole('dialog', { name: /Discard Slop removal pass/ });
     await user.click(within(dialog).getByRole('button', { name: 'Discard pass' }));

@@ -43,6 +43,7 @@ import { AftercareWorkspace } from './AftercareWorkspace';
 import { AftercareFacts } from './AftercareFacts';
 import { useAftercareEvidence } from './useAftercareEvidence';
 import { InspectorContent } from './CockpitInspector';
+import { InspectorDrawer } from './InspectorDrawer';
 import { ImpactPreviewList } from './ImpactPreviewList';
 import { NeedUserInputModal, type AttentionGate } from './NeedUserInputModal';
 import {
@@ -608,52 +609,6 @@ function CompletionWrapUpMenu({
         ))}
       </div>
     </details>
-  );
-}
-
-/**
- * The narrow-width inspector presentation, shared by every surface that has an
- * inspector: the drawer owns dismissal and focus, the caller supplies whichever
- * facts its surface inspects.
- */
-function InspectorDrawer({ onClose, children }: { onClose(): void; children: ReactNode }) {
-  const drawerRef = useRef<HTMLElement>(null);
-  useEffect(() => {
-    drawerRef.current
-      ?.querySelector<HTMLElement>(
-        'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
-      )
-      ?.focus();
-    const handleKeyDown = (event: globalThis.KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        event.preventDefault();
-        onClose();
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [onClose]);
-
-  return (
-    <div className="cockpit__drawer-backdrop" onMouseDown={onClose}>
-      <aside
-        ref={drawerRef}
-        id="cockpit-inspector-drawer"
-        className="cockpit__drawer"
-        role="dialog"
-        aria-modal="true"
-        aria-label="Feature inspector"
-        onMouseDown={(event) => event.stopPropagation()}
-      >
-        <header>
-          <h3>Feature inspector</h3>
-          <button type="button" onClick={onClose}>
-            Close inspector
-          </button>
-        </header>
-        {children}
-      </aside>
-    </div>
   );
 }
 
@@ -2139,6 +2094,9 @@ export function FeatureCockpit({
                 refreshAttention={refreshAttention}
                 attentionDrafts={attentionDrafts}
                 setAttentionDrafts={setAttentionDrafts}
+                isNarrow={isNarrow}
+                inspectorOpen={inspectorOpen}
+                onCloseInspector={closeInspector}
               />
             </>
           ) : (

@@ -307,6 +307,12 @@ describe('the creation sheet across its four steps', () => {
     await reachContract(user);
 
     const planningPicker = await screen.findByLabelText('Planning model');
+    // The model and effort pickers share one trailing unit in the grouped row.
+    const picksUnit = planningPicker.closest('.config-editor__phase-row-picks');
+    expect(picksUnit).not.toBeNull();
+    expect(
+      screen.getByLabelText('Planning effort').closest('.config-editor__phase-row-picks'),
+    ).toBe(picksUnit);
     await user.selectOptions(planningPicker, 'claude-opus');
     await user.selectOptions(screen.getByLabelText('Planning effort'), 'max');
     await user.click(screen.getByRole('button', { name: 'Create and start' }));

@@ -11905,8 +11905,9 @@ body {
 }
 
 /* Models render as one grouped inset list. Each phase is a single compact
- * row: the phase name and its hint lead, the model and effort pickers sit
- * trailing on the same line, sized to their content. */
+ * row: the phase name and its hint lead, the model and effort pickers trail
+ * as one right-aligned unit. When a row is too narrow the unit wraps to its
+ * own line as a whole (still right-aligned) — the pickers never split. */
 .config-editor__phase-rows {
   display: flex;
   flex-direction: column;
@@ -11946,6 +11947,18 @@ body {
   font: 12px var(--bench-font-text);
 }
 
+.config-editor__phase-row-picks {
+  flex: none;
+  min-width: 0;
+  max-width: 100%;
+  /* Keeps the unit trailing on the copy line and right-aligned when the row
+   * wraps it onto a line of its own. */
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
 .config-editor__pick {
   flex: none;
   min-width: 0;
@@ -11958,9 +11971,14 @@ body {
   font: 12px var(--bench-font-text);
 }
 
-/* SF Mono marks model identifiers; effort names stay in the text face. */
+/* SF Mono marks model identifiers; effort names stay in the text face. Long
+ * provider-fallback labels clamp with an ellipsis — the dropdown options and
+ * the select's title still carry the full label. */
 .config-editor__pick--model {
+  flex-shrink: 1;
+  max-width: 36ch;
   font: 12px var(--bench-font-mono);
+  text-overflow: ellipsis;
 }
 
 .config-editor__pick:focus-visible {

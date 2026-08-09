@@ -206,11 +206,30 @@ export function ModelPicker({ field, value, defaultModel, catalogue, onChange }:
     value !== '' && !canonicalValues.has(value)
       ? catalogueModelForSelection(catalogue, value)
       : undefined;
+  const selectedCanonical =
+    value !== '' && canonicalValues.has(value)
+      ? catalogueModelForSelection(catalogue, value)
+      : undefined;
+  // The select clamps long labels with an ellipsis; the title carries the
+  // full label of the current choice.
+  const selectedLabel =
+    value === ''
+      ? automaticReviewer
+        ? 'Automatic — Claude → OpenCode → Codex'
+        : `Default — ${effectiveDefault}${defaultUnavailable ? ' (unavailable)' : ''}`
+      : canonicalValues.has(value)
+        ? selectedCanonical === undefined
+          ? value
+          : modelDisplayName(catalogue, selectedCanonical.provider, selectedCanonical.model.id)
+        : selectedAlias === undefined
+          ? `${value} (unavailable)`
+          : `${modelDisplayName(catalogue, selectedAlias.provider, selectedAlias.model.id)} — ${value} (alias)`;
 
   return (
     <select
       className="config-editor__pick config-editor__pick--model"
       aria-label={`${field.label} model`}
+      title={selectedLabel}
       value={value}
       onChange={(event) => onChange(event.target.value)}
     >
@@ -255,7 +274,8 @@ export function ModelPicker({ field, value, defaultModel, catalogue, onChange }:
 
 /**
  * One row of the grouped phase list: the phase name and its hint lead, the
- * compact pickers sit trailing on the same line.
+ * compact pickers trail as one unit — beside the copy when they fit, or
+ * wrapped together onto their own trailing line, never split apart.
  */
 export function PhaseRow({
   field,
@@ -272,7 +292,7 @@ export function PhaseRow({
         <b className="config-editor__phase-row-name">{field.label}</b>
         <span className="config-editor__phase-row-hint">{hint}</span>
       </span>
-      {children}
+      <span className="config-editor__phase-row-picks">{children}</span>
     </div>
   );
 }

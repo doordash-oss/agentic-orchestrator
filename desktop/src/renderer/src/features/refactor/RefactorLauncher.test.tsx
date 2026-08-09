@@ -81,6 +81,14 @@ describe('RefactorLauncher', () => {
     expect(screen.getByRole('checkbox', { name: /Inquiry review/ })).toBeChecked();
     expect(screen.getByRole('checkbox', { name: /Manual publish/ })).toBeChecked();
     expect(screen.getByLabelText('Planning model')).toBeVisible();
+    // The model and effort pickers share one trailing unit in the grouped row.
+    const picksUnit = screen
+      .getByLabelText('Planning model')
+      .closest('.config-editor__phase-row-picks');
+    expect(picksUnit).not.toBeNull();
+    expect(
+      screen.getByLabelText('Planning effort').closest('.config-editor__phase-row-picks'),
+    ).toBe(picksUnit);
 
     expect(screen.getByRole('checkbox', { name: /Start immediately/ })).toBeChecked();
     await user.click(screen.getByRole('button', { name: 'Launch and start' }));

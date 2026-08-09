@@ -184,6 +184,38 @@ describe('FeatureConfigPanel', () => {
     expect(within(effort).getByRole('option', { name: 'High' })).toBeVisible();
   });
 
+  it('keeps the model and effort pickers as one unit and titles long labels', async () => {
+    const mock = installAgenticoMock();
+    const longName = 'glm-5p2 (modal → fireworks fallback) (1.04M)';
+    mock.api.getFeatureConfig.mockResolvedValue({
+      ...SNAPSHOT,
+      current: { ...SNAPSHOT.current, models: { implementation: 'claude:glm-5p2' } },
+    });
+    mock.api.getModelCatalogue.mockResolvedValue({
+      ...CATALOGUE,
+      providerModels: {
+        claude: [
+          { id: 'sonnet', displayName: 'Sonnet', effortCapabilities: ['low', 'medium', 'high'] },
+          { id: 'glm-5p2', displayName: longName, effortCapabilities: ['low', 'medium', 'high'] },
+        ],
+        codex: [{ id: 'gpt-a', displayName: 'GPT A', effortCapabilities: ['low', 'medium'] }],
+      },
+      phaseProviderModels: {
+        implementation: { claude: ['sonnet', 'glm-5p2'], codex: ['gpt-a'] },
+      },
+    });
+    render(<FeatureConfigPanel featureId="feat-1" />);
+
+    const model = await screen.findByLabelText('Implementation model');
+    const effort = screen.getByLabelText('Implementation effort');
+    // Long labels clamp visually; the full label rides on the select's title.
+    expect(model).toHaveAttribute('title', longName);
+    // Both pickers share one trailing unit so they wrap together, never split.
+    const unit = model.closest('.config-editor__phase-row-picks');
+    expect(unit).not.toBeNull();
+    expect(effort.closest('.config-editor__phase-row-picks')).toBe(unit);
+  });
+
   it('keeps a persisted model alias available with its canonical effort capabilities', async () => {
     const mock = installAgenticoMock();
     mock.api.getFeatureConfig.mockResolvedValue({

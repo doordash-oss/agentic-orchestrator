@@ -102,6 +102,8 @@ type CockpitState =
   | { phase: 'error'; error: WizardError }
   | { phase: 'loaded'; snapshot: FeatureSnapshot };
 
+const FOCUSED_COMPLETION_SETTLE_MS = 500;
+
 export interface FeatureCockpitProps {
   featureId: string;
   /** Whether this cockpit is the active workspace panel. */
@@ -995,6 +997,7 @@ export function FeatureCockpit({
   const actionInFlightRef = useRef(false);
   const loadRequestRef = useRef(0);
   const schedulerRef = useRef<FeatureRefreshScheduler | null>(null);
+  const completionSettleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const selectedRunNumberRef = useRef(selectedRunNumber);
   selectedRunNumberRef.current = selectedRunNumber;
   const stopButtonRef = useRef<HTMLButtonElement>(null);
@@ -1087,6 +1090,26 @@ export function FeatureCockpit({
       schedulerRef.current?.refresh(options) ?? Promise.resolve(),
     [],
   );
+
+  const cancelCompletionSettle = useCallback(() => {
+    if (completionSettleTimerRef.current === null) return;
+    clearTimeout(completionSettleTimerRef.current);
+    completionSettleTimerRef.current = null;
+  }, []);
+
+  const scheduleCompletionSettle = useCallback(() => {
+    if (!retainedEffectsActive || completionSettleTimerRef.current !== null) return;
+
+    completionSettleTimerRef.current = setTimeout(() => {
+      completionSettleTimerRef.current = null;
+      void refreshFeature({ silent: true });
+    }, FOCUSED_COMPLETION_SETTLE_MS);
+  }, [refreshFeature, retainedEffectsActive]);
+
+  useEffect(() => {
+    if (!retainedEffectsActive) cancelCompletionSettle();
+    return cancelCompletionSettle;
+  }, [cancelCompletionSettle, retainedEffectsActive]);
 
   // The detail route is the only carrier of the preserved diff bodies and of
   // the closed passes a list projection caps away.
@@ -2555,6 +2578,7 @@ export function FeatureCockpit({
                       }
                       onAttentionPreviewClose={onAttentionPreviewClose}
                       onRunMetrics={setRunMetrics}
+                      onSessionSettled={scheduleCompletionSettle}
                       suppressQuestion={suppressQuestion}
                       attentionTurn={
                         questionsAttention === undefined ? undefined : (

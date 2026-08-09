@@ -1199,6 +1199,198 @@ describe('FeatureCockpit convergence', () => {
     expect(mock.api.getFeature).toHaveBeenCalledTimes(base + 1);
   });
 
+  it('coalesces focused session completion into one delayed silent refresh', async () => {
+    const mock = installAgenticoMock({
+      feature: featureSnapshot({
+        status: 'Implementing',
+        currentPhase: 'Implement',
+        setup: { status: 'done', attempt: 1, tasks: [] },
+        actions: [{ id: 'pause-stop', enabled: true, disabledReasons: [] }],
+      }),
+      sessions: [
+        {
+          id: 'session-craft',
+          featureId: FEATURE_ID,
+          runNumber: 1,
+          phase: 'Implement',
+          kind: 'implementer',
+          status: 'running',
+          startedAt: '2026-08-08T10:00:00.000Z',
+          taskActivities: [],
+          runningTaskCount: 0,
+          usage: {},
+        },
+      ],
+    });
+    renderCockpit(mock);
+    await userEvent.click(await screen.findByRole('tab', { name: 'Live' }));
+    await waitFor(() => expect(mock.api.openSessionOutput).toHaveBeenCalled());
+    const initialRequests = mock.api.getFeature.mock.calls.length;
+    vi.useFakeTimers();
+
+    act(() => {
+      mock.emitSessionOutput({
+        subscriptionId: 'subscription-1',
+        type: 'done',
+        sessionId: 'session-craft',
+        nextIndex: 1,
+      });
+      mock.emitSessionOutput({
+        subscriptionId: 'subscription-1',
+        type: 'done',
+        sessionId: 'session-craft',
+        nextIndex: 1,
+      });
+    });
+
+    await act(async () => vi.advanceTimersByTimeAsync(499));
+    expect(mock.api.getFeature).toHaveBeenCalledTimes(initialRequests);
+
+    await act(async () => vi.advanceTimersByTimeAsync(1));
+    expect(mock.api.getFeature).toHaveBeenCalledTimes(initialRequests + 1);
+  });
+
+  it('cancels a completion refresh when the retained view becomes inactive', async () => {
+    const mock = installAgenticoMock({
+      feature: featureSnapshot({
+        status: 'Implementing',
+        currentPhase: 'Implement',
+        setup: { status: 'done', attempt: 1, tasks: [] },
+        actions: [{ id: 'pause-stop', enabled: true, disabledReasons: [] }],
+      }),
+      sessions: [
+        {
+          id: 'session-craft',
+          featureId: FEATURE_ID,
+          runNumber: 1,
+          phase: 'Implement',
+          kind: 'implementer',
+          status: 'running',
+          startedAt: '2026-08-08T10:00:00.000Z',
+          taskActivities: [],
+          runningTaskCount: 0,
+          usage: {},
+        },
+      ],
+    });
+    const view = renderCockpit(mock);
+    await userEvent.click(await screen.findByRole('tab', { name: 'Live' }));
+    await waitFor(() => expect(mock.api.openSessionOutput).toHaveBeenCalled());
+    const initialRequests = mock.api.getFeature.mock.calls.length;
+    vi.useFakeTimers();
+
+    act(() => {
+      mock.emitSessionOutput({
+        subscriptionId: 'subscription-1',
+        type: 'done',
+        sessionId: 'session-craft',
+        nextIndex: 1,
+      });
+      view.setActive(false);
+    });
+
+    await act(async () => vi.advanceTimersByTimeAsync(500));
+    expect(mock.api.getFeature).toHaveBeenCalledTimes(initialRequests);
+  });
+
+  it('cancels a completion refresh when the document becomes hidden', async () => {
+    let visible = true;
+    const visibilitySpy = vi
+      .spyOn(document, 'visibilityState', 'get')
+      .mockImplementation(() => (visible ? 'visible' : 'hidden'));
+    try {
+      const mock = installAgenticoMock({
+        feature: featureSnapshot({
+          status: 'Implementing',
+          currentPhase: 'Implement',
+          setup: { status: 'done', attempt: 1, tasks: [] },
+          actions: [{ id: 'pause-stop', enabled: true, disabledReasons: [] }],
+        }),
+        sessions: [
+          {
+            id: 'session-craft',
+            featureId: FEATURE_ID,
+            runNumber: 1,
+            phase: 'Implement',
+            kind: 'implementer',
+            status: 'running',
+            startedAt: '2026-08-08T10:00:00.000Z',
+            taskActivities: [],
+            runningTaskCount: 0,
+            usage: {},
+          },
+        ],
+      });
+      renderCockpit(mock);
+      await userEvent.click(await screen.findByRole('tab', { name: 'Live' }));
+      await waitFor(() => expect(mock.api.openSessionOutput).toHaveBeenCalled());
+      const initialRequests = mock.api.getFeature.mock.calls.length;
+      vi.useFakeTimers();
+
+      act(() => {
+        mock.emitSessionOutput({
+          subscriptionId: 'subscription-1',
+          type: 'done',
+          sessionId: 'session-craft',
+          nextIndex: 1,
+        });
+        visible = false;
+        document.dispatchEvent(new Event('visibilitychange'));
+      });
+
+      await act(async () => vi.advanceTimersByTimeAsync(500));
+      expect(mock.api.getFeature).toHaveBeenCalledTimes(initialRequests);
+    } finally {
+      visibilitySpy.mockRestore();
+    }
+  });
+
+  it('cancels a completion refresh when the focused cockpit unmounts', async () => {
+    const mock = installAgenticoMock({
+      feature: featureSnapshot({
+        status: 'Implementing',
+        currentPhase: 'Implement',
+        setup: { status: 'done', attempt: 1, tasks: [] },
+        actions: [{ id: 'pause-stop', enabled: true, disabledReasons: [] }],
+      }),
+      sessions: [
+        {
+          id: 'session-craft',
+          featureId: FEATURE_ID,
+          runNumber: 1,
+          phase: 'Implement',
+          kind: 'implementer',
+          status: 'running',
+          startedAt: '2026-08-08T10:00:00.000Z',
+          taskActivities: [],
+          runningTaskCount: 0,
+          usage: {},
+        },
+      ],
+    });
+    renderCockpit(mock);
+    await userEvent.click(await screen.findByRole('tab', { name: 'Live' }));
+    await waitFor(() => expect(mock.api.openSessionOutput).toHaveBeenCalled());
+    const initialRequests = mock.api.getFeature.mock.calls.length;
+    vi.useFakeTimers();
+
+    act(() => {
+      mock.emitSessionOutput({
+        subscriptionId: 'subscription-1',
+        type: 'done',
+        sessionId: 'session-craft',
+        nextIndex: 1,
+      });
+    });
+    expect(vi.getTimerCount()).toBe(1);
+
+    cleanup();
+    expect(vi.getTimerCount()).toBe(0);
+
+    await act(async () => vi.advanceTimersByTimeAsync(500));
+    expect(mock.api.getFeature).toHaveBeenCalledTimes(initialRequests);
+  });
+
   it('propagates document visibility to pause and restore live child work', async () => {
     vi.useFakeTimers();
     let visible = true;

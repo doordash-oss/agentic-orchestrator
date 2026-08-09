@@ -385,29 +385,31 @@ export function RefactorLauncher({
                 Seeded from {snapshot.name}’s configuration; the child keeps its own copy. Only
                 models available from provider discovery can be selected.
               </p>
-              {applicablePhaseFields(pipeline, false).map((field) => (
-                <ModelEffortRow
-                  key={field.key}
-                  field={field}
-                  modelValue={modelChoices[field.key] ?? ''}
-                  defaultModel={modelDefaults[field.key] ?? ''}
-                  effortValue={effortChoices[field.key]}
-                  defaultEffort={
-                    field.key === 'automaticReview' ? undefined : effortDefaults[field.key]
-                  }
-                  catalogue={catalogue}
-                  pipeline={pipeline}
-                  onModelChange={(model, resetEffort) => {
-                    setModelChoices((choices) => ({ ...choices, [field.key]: model }));
-                    if (resetEffort !== undefined) {
-                      setEffortChoices((choices) => ({ ...choices, [field.key]: resetEffort }));
+              <div className="config-editor__phase-rows">
+                {applicablePhaseFields(pipeline, false).map((field) => (
+                  <ModelEffortRow
+                    key={field.key}
+                    field={field}
+                    modelValue={modelChoices[field.key] ?? ''}
+                    defaultModel={modelDefaults[field.key] ?? ''}
+                    effortValue={effortChoices[field.key]}
+                    defaultEffort={
+                      field.key === 'automaticReview' ? undefined : effortDefaults[field.key]
                     }
-                  }}
-                  onEffortChange={(effort) =>
-                    setEffortChoices((choices) => ({ ...choices, [field.key]: effort }))
-                  }
-                />
-              ))}
+                    catalogue={catalogue}
+                    pipeline={pipeline}
+                    onModelChange={(model, resetEffort) => {
+                      setModelChoices((choices) => ({ ...choices, [field.key]: model }));
+                      if (resetEffort !== undefined) {
+                        setEffortChoices((choices) => ({ ...choices, [field.key]: resetEffort }));
+                      }
+                    }}
+                    onEffortChange={(effort) =>
+                      setEffortChoices((choices) => ({ ...choices, [field.key]: effort }))
+                    }
+                  />
+                ))}
+              </div>
             </fieldset>
             <fieldset className="config-editor__group">
               <legend className="config-editor__group-title">Review checkpoints</legend>

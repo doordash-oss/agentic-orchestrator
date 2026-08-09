@@ -29,12 +29,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/observe"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
@@ -344,6 +346,7 @@ func (s *featureFinalReviewLoopState) run() (*FeatureFinalReviewResult, error) {
 
 		switch reviewStatus {
 		case ReviewApproved:
+			s.commitReviewLeftovers(i, "Final review leftover sweep")
 			s.writeIterationMeta(iterDir, i, "approved")
 			return &FeatureFinalReviewResult{FinalStatus: finalStatusReviewPassed, Iterations: i}, nil
 
@@ -387,6 +390,7 @@ func (s *featureFinalReviewLoopState) run() (*FeatureFinalReviewResult, error) {
 				continue
 			}
 
+			s.commitReviewLeftovers(i, "Final review fix sweep")
 			consecutiveFailures = 0
 			s.writeIterationMeta(iterDir, i, "changes_requested")
 			continue
@@ -616,6 +620,27 @@ func (s *featureFinalReviewLoopState) previousAggregateFeedback(iteration int) s
 		return ""
 	}
 	return strings.TrimSpace(string(data))
+}
+
+// commitReviewLeftovers commits any repo-worktree changes a final-review
+// session left uncommitted. The completion protocol validates run artifacts,
+// not git state, so a fixer (or any FR session) that edits files and ends its
+// turn without committing would otherwise strand the feature at CodeReady
+// with a dirty worktree — blocking every aftercare follow-up that demands a
+// clean tree (rebase and refactor passes). Swept after each fix session and
+// again at approval so review-approved code is always committed code. A clean
+// worktree is a no-op; a commit failure is logged, never fatal, because the
+// publish path can still sweep the same changes.
+func (s *featureFinalReviewLoopState) commitReviewLeftovers(iteration int, reason string) {
+	for name, path := range s.workspace.RepoPaths {
+		if path == "" || !git.HasUncommittedChanges(path) {
+			continue
+		}
+		message := fmt.Sprintf("%s (final review iteration %d)", reason, iteration)
+		if err := git.CommitAll(path, message); err != nil {
+			log.Printf("feature %s: final review leftover commit in repo %s: %v", s.cfg.Feature.ID, name, err)
+		}
+	}
 }
 
 // runFix launches one feature-level fix session for iteration i. Same

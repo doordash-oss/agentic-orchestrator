@@ -2827,69 +2827,6 @@ body {
   font: 13px var(--bench-font-text);
 }
 
-/* Each phase's model and effort read as one row of the grouped list: the
- * phase name and its hint lead, the two selects sit trailing. */
-.creation-sheet__rows--models .config-editor__phase-console {
-  padding: var(--space-2) var(--space-3);
-  border-left: 0;
-  background: none;
-}
-
-.creation-sheet__rows--models .config-editor__row {
-  grid-template-columns: minmax(0, 1fr) max-content;
-  grid-template-areas:
-    'label control'
-    'hint control';
-  column-gap: var(--space-3);
-  row-gap: 0;
-  align-items: center;
-  padding: 4px 0;
-  border-top: 0;
-}
-
-.creation-sheet__rows--models .config-editor__row + .config-editor__row {
-  border-top: var(--bench-hairline-width) solid color-mix(in srgb, var(--hairline) 55%, transparent);
-}
-
-.creation-sheet__rows--models .config-editor__row-label {
-  color: var(--text);
-  font: 500 13px var(--bench-font-text);
-  letter-spacing: normal;
-  text-transform: none;
-}
-
-.creation-sheet__rows--models .config-editor__row-hint {
-  color: var(--muted);
-  font: 12px var(--bench-font-text);
-}
-
-/* The effort sub-row is a peer of the model row here, not a sub-heading. */
-.creation-sheet__rows--models .config-editor__effort-row .config-editor__row-label {
-  color: var(--muted);
-  font: 500 12px var(--bench-font-text);
-  letter-spacing: normal;
-  text-transform: none;
-}
-
-.creation-sheet__rows--models .config-editor__select {
-  margin: 0;
-  border: var(--bench-hairline-width) solid var(--hairline);
-  border-radius: var(--bench-radius-control);
-  padding: 4px var(--space-2);
-  background: var(--content);
-  color: var(--text);
-  font: 12px var(--bench-font-text);
-}
-
-.creation-sheet__rows--models .config-editor__effort-select {
-  font: 12px var(--bench-font-mono);
-}
-
-.creation-sheet__rows--models .config-editor__select:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: -1px;
-}
-
 /* Depth profiles ------------------------------------------------------- */
 
 .creation-sheet__profiles {
@@ -5594,24 +5531,6 @@ body {
   min-width: 0;
   margin: 0;
 }
-/* In the wizard, stack each phase console's label/hint above a full-width
-   select so model and effort names stay legible at every panel width. */
-.review-contract .config-editor__row {
-  grid-template-columns: 1fr;
-  grid-template-areas:
-    'label'
-    'hint'
-    'control';
-  row-gap: var(--space-1);
-  align-items: stretch;
-}
-.review-contract .config-editor__row-label {
-  align-self: start;
-}
-.review-contract .config-editor__select {
-  margin-top: var(--space-1);
-}
-
 .creation-summary {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
@@ -10978,6 +10897,47 @@ body {
   outline-offset: 2px;
 }
 
+/* Hover hint for icon-only controls. The native `title` attribute is delayed
+   ~1s by the OS with no way to tune it, which reads as an unresponsive button;
+   the accessible name stays on aria-label, so this layer is decorative. */
+[data-hint] {
+  position: relative;
+}
+
+[data-hint]::after {
+  content: attr(data-hint);
+  position: absolute;
+  top: calc(100% + var(--space-1));
+  left: 50%;
+  z-index: 60;
+  transform: translateX(-50%);
+  padding: 2px var(--space-2);
+  border-radius: var(--radius);
+  background: var(--raised);
+  box-shadow:
+    0 0 0 var(--bench-hairline-width) var(--material-edge),
+    var(--shadow);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 80ms ease;
+}
+
+[data-hint]:hover::after,
+[data-hint]:focus-visible::after {
+  opacity: 1;
+  transition-delay: 200ms;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-hint]::after {
+    transition: none;
+  }
+}
+
 /* With the frame gone, the reading column is the flexible element in the
  * content pane: it takes the leftover height and scrolls inside itself. */
 .live-preview {
@@ -11916,39 +11876,68 @@ body {
   border-top: 1px solid color-mix(in srgb, var(--hairline) 60%, transparent);
 }
 
-.config-editor__phase-console {
-  position: relative;
+/* Models render as one grouped inset list. Each phase is a single compact
+ * row: the phase name and its hint lead, the model and effort pickers sit
+ * trailing on the same line, sized to their content. */
+.config-editor__phase-rows {
   display: flex;
   flex-direction: column;
-  padding-left: var(--space-3);
-  border-left: 2px solid color-mix(in srgb, var(--attention) 38%, var(--hairline));
-  background: linear-gradient(
-    90deg,
-    color-mix(in srgb, var(--attention) 5%, transparent),
-    transparent 42%
-  );
+  border: var(--bench-hairline-width) solid var(--hairline);
+  border-radius: var(--bench-radius-card);
+  background: var(--raised);
+  overflow: hidden;
 }
 
-.config-editor__phase-console .config-editor__row:first-child {
-  border-top-color: color-mix(in srgb, var(--hairline) 80%, transparent);
+.config-editor__phase-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+  padding: var(--space-2) var(--space-3);
 }
 
-.config-editor__effort-row {
-  padding-top: var(--space-1);
-  border-top: 0;
+.config-editor__phase-row + .config-editor__phase-row {
+  border-top: var(--bench-hairline-width) solid var(--hairline);
 }
 
-.config-editor__effort-row .config-editor__row-label {
-  font-family: var(--bench-font-text);
-  font-size: 0.7rem;
-  font-weight: 600;
-  letter-spacing: 0.02em;
+.config-editor__phase-row-copy {
+  flex: 1 1 160px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.config-editor__phase-row-name {
+  color: var(--text);
+  font: 500 13px var(--bench-font-text);
+}
+
+.config-editor__phase-row-hint {
   color: var(--muted);
+  font: 12px var(--bench-font-text);
 }
 
-.config-editor__effort-select {
-  font-family: var(--bench-font-mono);
-  font-size: 0.8rem;
+.config-editor__pick {
+  flex: none;
+  min-width: 0;
+  max-width: 100%;
+  border: var(--bench-hairline-width) solid var(--hairline);
+  border-radius: var(--bench-radius-control);
+  padding: 4px var(--space-2);
+  background: var(--content);
+  color: var(--text);
+  font: 12px var(--bench-font-text);
+}
+
+/* SF Mono marks model identifiers; effort names stay in the text face. */
+.config-editor__pick--model {
+  font: 12px var(--bench-font-mono);
+}
+
+.config-editor__pick:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
 }
 
 .config-editor__row--stacked {
@@ -12136,10 +12125,6 @@ body {
 }
 
 @media (max-width: 720px) {
-  .config-editor__phase-console {
-    padding-left: var(--space-2);
-  }
-
   .config-editor__row {
     grid-template-columns: 1fr;
     grid-template-areas:

@@ -7,11 +7,12 @@
  *  - `WorkspaceDefaultsPanel` edits workspace-wide defaults (plus the
  *    Utilities model) through getWorkspaceDefaults/updateWorkspaceDefaults.
  *
- * Each phase is a paired model/effort console driven by the server's model
+ * Each phase is one compact row of a grouped list — name and hint leading,
+ * the model and effort pickers trailing — driven by the server's model
  * catalogue. Model options are grouped by provider and effort options stay
  * capability-aware, while untouched values name the effective defaults.
  */
-import { useCallback, useEffect, useId, useMemo, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useState, type ReactNode } from 'react';
 import type {
   AutomaticReviewMode,
   Checkpoints,
@@ -207,52 +208,72 @@ export function ModelPicker({ field, value, defaultModel, catalogue, onChange }:
       : undefined;
 
   return (
-    <label className="config-editor__row">
-      <span className="config-editor__row-label">{field.label}</span>
-      <span className="config-editor__row-hint">{field.hint}</span>
-      <select
-        className="config-editor__select"
-        aria-label={`${field.label} model`}
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-      >
-        <option value="">
-          {automaticReviewer ? (
-            <>Automatic — Claude → OpenCode → Codex</>
-          ) : (
-            <>
-              Default — {effectiveDefault}
-              {defaultUnavailable ? ' (unavailable)' : ''}
-            </>
-          )}
+    <select
+      className="config-editor__pick config-editor__pick--model"
+      aria-label={`${field.label} model`}
+      value={value}
+      onChange={(event) => onChange(event.target.value)}
+    >
+      <option value="">
+        {automaticReviewer ? (
+          <>Automatic — Claude → OpenCode → Codex</>
+        ) : (
+          <>
+            Default — {effectiveDefault}
+            {defaultUnavailable ? ' (unavailable)' : ''}
+          </>
+        )}
+      </option>
+      {value !== '' && !canonicalValues.has(value) ? (
+        <option value={value}>
+          {selectedAlias === undefined
+            ? `${value} (unavailable)`
+            : `${modelDisplayName(
+                catalogue,
+                selectedAlias.provider,
+                selectedAlias.model.id,
+              )} — ${value} (alias)`}
         </option>
-        {value !== '' && !canonicalValues.has(value) ? (
-          <option value={value}>
-            {selectedAlias === undefined
-              ? `${value} (unavailable)`
-              : `${modelDisplayName(
-                  catalogue,
-                  selectedAlias.provider,
-                  selectedAlias.model.id,
-                )} — ${value} (alias)`}
-          </option>
-        ) : null}
-        {groups.map((group) => (
-          <optgroup key={group.provider} label={group.provider}>
-            {group.ids.map((id) => {
-              const optionValue = selectionValue(catalogue, group.provider, id);
-              const star = recommended === id || recommended === optionValue ? ' ★' : '';
-              return (
-                <option key={optionValue} value={optionValue}>
-                  {modelDisplayName(catalogue, group.provider, id)}
-                  {star}
-                </option>
-              );
-            })}
-          </optgroup>
-        ))}
-      </select>
-    </label>
+      ) : null}
+      {groups.map((group) => (
+        <optgroup key={group.provider} label={group.provider}>
+          {group.ids.map((id) => {
+            const optionValue = selectionValue(catalogue, group.provider, id);
+            const star = recommended === id || recommended === optionValue ? ' ★' : '';
+            return (
+              <option key={optionValue} value={optionValue}>
+                {modelDisplayName(catalogue, group.provider, id)}
+                {star}
+              </option>
+            );
+          })}
+        </optgroup>
+      ))}
+    </select>
+  );
+}
+
+/**
+ * One row of the grouped phase list: the phase name and its hint lead, the
+ * compact pickers sit trailing on the same line.
+ */
+export function PhaseRow({
+  field,
+  hint,
+  children,
+}: {
+  field: (typeof PHASE_FIELDS)[number];
+  hint: string;
+  children: ReactNode;
+}) {
+  return (
+    <div className="config-editor__phase-row">
+      <span className="config-editor__phase-row-copy">
+        <b className="config-editor__phase-row-name">{field.label}</b>
+        <span className="config-editor__phase-row-hint">{hint}</span>
+      </span>
+      {children}
+    </div>
   );
 }
 
@@ -330,7 +351,10 @@ export function ModelEffortRow({
   };
 
   return (
-    <div className="config-editor__phase-console">
+    <PhaseRow
+      field={field}
+      hint={resetNotice ? 'Effort reset to Auto for the selected model.' : field.hint}
+    >
       <ModelPicker
         field={field}
         value={modelValue}
@@ -338,47 +362,37 @@ export function ModelEffortRow({
         catalogue={catalogue}
         onChange={changeModel}
       />
-      <label className="config-editor__row config-editor__effort-row">
-        <span className="config-editor__row-label">Effort</span>
-        <span className="config-editor__row-hint">
-          {resetNotice
-            ? 'Effort reset to Auto for the selected model.'
-            : capabilities.length === 0
-              ? 'This model uses automatic effort.'
-              : 'Reasoning depth for this phase'}
-        </span>
-        <select
-          className="config-editor__select config-editor__effort-select"
-          aria-label={`${field.label} effort`}
-          value={controlledEffort}
-          onChange={(event) => {
-            const next = event.target.value;
-            setResetNotice(false);
-            onEffortChange(next === '' ? undefined : (next as EffortLevel));
-          }}
-        >
-          {defaultEffort === undefined ? null : (
-            <option key="default" value="">
-              Default — {EFFORT_LABELS[defaultEffort]}
-            </option>
-          )}
-          <option key="auto" value="auto">
-            Auto — {field.key === 'utilities' ? 'Utilities' : pipelineLabel} default (
-            {pipelineEffort})
+      <select
+        className="config-editor__pick config-editor__pick--effort"
+        aria-label={`${field.label} effort`}
+        value={controlledEffort}
+        onChange={(event) => {
+          const next = event.target.value;
+          setResetNotice(false);
+          onEffortChange(next === '' ? undefined : (next as EffortLevel));
+        }}
+      >
+        {defaultEffort === undefined ? null : (
+          <option key="default" value="">
+            Default — {EFFORT_LABELS[defaultEffort]}
           </option>
-          {unavailableEffort !== undefined ? (
-            <option key={`unavailable:${unavailableEffort}`} value={unavailableEffort}>
-              {EFFORT_LABELS[unavailableEffort]} (unavailable)
-            </option>
-          ) : null}
-          {capabilities.map((level) => (
-            <option key={level} value={level}>
-              {EFFORT_LABELS[level]}
-            </option>
-          ))}
-        </select>
-      </label>
-    </div>
+        )}
+        <option key="auto" value="auto">
+          Auto — {field.key === 'utilities' ? 'Utilities' : pipelineLabel} default ({pipelineEffort}
+          )
+        </option>
+        {unavailableEffort !== undefined ? (
+          <option key={`unavailable:${unavailableEffort}`} value={unavailableEffort}>
+            {EFFORT_LABELS[unavailableEffort]} (unavailable)
+          </option>
+        ) : null}
+        {capabilities.map((level) => (
+          <option key={level} value={level}>
+            {EFFORT_LABELS[level]}
+          </option>
+        ))}
+      </select>
+    </PhaseRow>
   );
 }
 
@@ -442,49 +456,52 @@ function ConfigForm({
         <p className="config-editor__group-desc">
           Choose the model for each phase. Default uses the workspace model for that phase.
         </p>
-        {phaseFields.map((field) =>
-          field.supportsEffort === false ? (
-            <ModelPicker
-              key={field.key}
-              field={field}
-              value={value.models[field.key] ?? ''}
-              defaultModel={defaults[field.key] ?? ''}
-              catalogue={catalogue}
-              onChange={(model) =>
-                onChange({
-                  ...value,
-                  models: { ...value.models, [field.key]: model === '' ? undefined : model },
-                })
-              }
-            />
-          ) : (
-            <ModelEffortRow
-              key={field.key}
-              field={field}
-              modelValue={value.models[field.key] ?? ''}
-              defaultModel={defaults[field.key] ?? ''}
-              effortValue={value.effort[field.key]}
-              catalogue={catalogue}
-              pipeline={pipeline}
-              onModelChange={(model, resetEffort) =>
-                onChange({
-                  ...value,
-                  models: { ...value.models, [field.key]: model === '' ? undefined : model },
-                  effort:
-                    resetEffort === undefined
-                      ? value.effort
-                      : { ...value.effort, [field.key]: resetEffort },
-                })
-              }
-              onEffortChange={(effort) =>
-                onChange({
-                  ...value,
-                  effort: { ...value.effort, [field.key]: effort },
-                })
-              }
-            />
-          ),
-        )}
+        <div className="config-editor__phase-rows">
+          {phaseFields.map((field) =>
+            field.supportsEffort === false ? (
+              <PhaseRow key={field.key} field={field} hint={field.hint}>
+                <ModelPicker
+                  field={field}
+                  value={value.models[field.key] ?? ''}
+                  defaultModel={defaults[field.key] ?? ''}
+                  catalogue={catalogue}
+                  onChange={(model) =>
+                    onChange({
+                      ...value,
+                      models: { ...value.models, [field.key]: model === '' ? undefined : model },
+                    })
+                  }
+                />
+              </PhaseRow>
+            ) : (
+              <ModelEffortRow
+                key={field.key}
+                field={field}
+                modelValue={value.models[field.key] ?? ''}
+                defaultModel={defaults[field.key] ?? ''}
+                effortValue={value.effort[field.key]}
+                catalogue={catalogue}
+                pipeline={pipeline}
+                onModelChange={(model, resetEffort) =>
+                  onChange({
+                    ...value,
+                    models: { ...value.models, [field.key]: model === '' ? undefined : model },
+                    effort:
+                      resetEffort === undefined
+                        ? value.effort
+                        : { ...value.effort, [field.key]: resetEffort },
+                  })
+                }
+                onEffortChange={(effort) =>
+                  onChange({
+                    ...value,
+                    effort: { ...value.effort, [field.key]: effort },
+                  })
+                }
+              />
+            ),
+          )}
+        </div>
       </fieldset>
 
       <fieldset className="config-editor__group">

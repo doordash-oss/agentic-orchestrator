@@ -271,7 +271,12 @@ describe('FeatureCockpit snapshot rendering', () => {
     const trailing = document.querySelector('.cockpit__stage-bar-trailing');
     expect(trailing).not.toBeNull();
     expect(trailing!.querySelector('[aria-label="Preview view"]')).not.toBeNull();
-    expect(trailing!.querySelector('[aria-label="Refresh current run inspection"]')).not.toBeNull();
+    const refresh = trailing!.querySelector('[aria-label="Refresh current run inspection"]');
+    expect(refresh).not.toBeNull();
+    // The OS delays a native `title` by ~1s with no way to tune it, so the
+    // hover hint rides on data-hint instead.
+    expect(refresh!.getAttribute('data-hint')).toBe('Refresh');
+    expect(refresh!.hasAttribute('title')).toBe(false);
   });
 
   it('relocates the full-screen expand icon to the stage-bar row, not an inline surface bar', async () => {

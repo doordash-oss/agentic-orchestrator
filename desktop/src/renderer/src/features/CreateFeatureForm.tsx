@@ -816,7 +816,7 @@ export function CreateFeatureForm({ onCreated, onClose }: CreateFeatureFormProps
                         Only models available from provider discovery can be selected. Default uses
                         the workspace model for that phase.
                       </p>
-                      <div className="creation-sheet__rows creation-sheet__rows--models">
+                      <div className="config-editor__phase-rows">
                         {applicablePhaseFields(pipeline, false).map((field) => (
                           <ModelEffortRow
                             key={field.key}

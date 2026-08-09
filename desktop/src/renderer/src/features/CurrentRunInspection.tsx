@@ -702,7 +702,7 @@ export function CurrentRunInspection({
       type="button"
       className="live-preview__icon-button"
       aria-label="Expand live preview to full screen"
-      title="Full screen"
+      data-hint="Full screen"
       onClick={() => setFullscreen(true)}
     >
       <MaximizeIcon />
@@ -718,7 +718,7 @@ export function CurrentRunInspection({
         type="button"
         className="live-preview__icon-button"
         aria-label="Refresh current run inspection"
-        title="Refresh"
+        data-hint="Refresh"
         onClick={() => {
           void refresh();
           live.refresh();
@@ -896,7 +896,7 @@ function FileOverlay({
               type="button"
               className="live-preview__icon-button"
               aria-label="Close file"
-              title="Close"
+              data-hint="Close"
               onClick={onClose}
             >
               <CloseIcon />
@@ -1221,7 +1221,7 @@ function LivePreviewOverlay({
               type="button"
               className="live-preview__icon-button"
               aria-label="Exit full screen"
-              title="Exit full screen"
+              data-hint="Exit full screen"
               onClick={onClose}
             >
               <MinimizeIcon />
@@ -1230,7 +1230,7 @@ function LivePreviewOverlay({
               type="button"
               className="live-preview__icon-button"
               aria-label="Close live preview"
-              title="Close"
+              data-hint="Close"
               onClick={onClose}
             >
               <CloseIcon />

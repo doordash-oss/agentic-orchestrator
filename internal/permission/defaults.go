@@ -38,9 +38,9 @@ func defaultGlobalRules() []Rule {
 		{ToolPattern: "Bash(git log *)", Effect: DecisionAllow},
 		{ToolPattern: "Bash(git show *)", Effect: DecisionAllow},
 		// agentico's own read-only artifact-validation preflight, which every
-		// agent session runs before phase_complete (see rolespec_prompt.go). The
-		// prompt invokes it as the quoted env var, so the pattern matches that
-		// exact prefix.
+		// autonomous agent session runs before it emits a structured outcome
+		// (see rolespec_prompt.go). The prompt invokes it as the quoted env var,
+		// so the pattern matches that exact prefix.
 		{ToolPattern: `Bash("$AGENTICO_BIN" validate-artifacts *)`, Effect: DecisionAllow},
 	}
 }

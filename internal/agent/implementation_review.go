@@ -242,19 +242,22 @@ func runImplementationReviewAxis(cfg ImplementConfig, sm ports.SessionManager, i
 	feedbackPath := filepath.Join(axisDir, "review-feedback.md")
 	// Stop/restart resume: an axis that already completed its verdict for
 	// this iteration is reused instead of re-running the helper. Helper
-	// failure stubs never persist phase_complete, so they are never reused.
-	if HasPhaseComplete(axisDir) {
+	// Failure stubs never receive a harness completion receipt, so they are
+	// never reused.
+	if HasCommittedPhaseOutcome(axisDir, feature.PhaseReview, axis.Role) {
 		if cached, err := ParseReviewFeedback(feedbackPath); err == nil && len(cached.ProtocolViolations) == 0 {
 			return cached.Verdict, cached.Body, nil
 		}
 	}
-	RemovePhaseComplete(axisDir)
+	RemoveCompletionReceipt(axisDir)
+	intent := resolvePromptIntent(cfg.Feature)
 	reviewPrompt := BuildImplementationReviewAxisPromptWithOpts(ImplementationReviewAxisPromptOpts{
 		Gate:                   implementationReviewGatePerPhase,
 		AxisLabel:              axis.Name,
-		FeatureDescription:     featureDescriptionForImplementationReview(cfg.Feature),
+		FeatureDescription:     intent.Description,
 		DesignArtifactPath:     designArtifactPathForImplementationReview(cfg.Feature),
 		LiveRunAxis:            axis.ExecutionPosture == implementationReviewPostureLiveRun,
+		RefactorPassForkPoint:  refactorPassForkPoint(cfg.Feature),
 		PlanPath:               cfg.PlanPath,
 		ExitCriteria:           cfg.ExitCriteria,
 		ProgressPath:           input.ProgressPath,
@@ -363,13 +366,6 @@ func implementationReviewSessionID(cfg ImplementConfig, axisSlug string, iterati
 		}
 	}
 	return fmt.Sprintf("%s%s-implementation-review-%s-%02d", featureID, phasePart, axisSlug, iteration)
-}
-
-func featureDescriptionForImplementationReview(f *feature.Feature) string {
-	if f == nil {
-		return ""
-	}
-	return f.Description
 }
 
 func designArtifactPathForImplementationReview(f *feature.Feature) string {

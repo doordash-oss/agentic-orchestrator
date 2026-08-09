@@ -158,12 +158,12 @@ loop:
 
 // TestControlRequest_ParksIndefinitelyWhenNoConsumer is the regression
 // guard for the headless-Inquire failure: an Inquire/Implement/etc.
-// session is started while no TUI is attached, the agent emits an
+// session is started while no desktop app is attached, the agent emits an
 // AskUserQuestion (or permission request), and there is nobody draining
 // attachCh. The session must NOT synthesize a deny back to the SDK and
 // must NOT remove the request from pendingControlRequests. The request
 // stays parked until a consumer attaches and drains attachCh — at which
-// point the TUI's existing replay path picks it up.
+// point the desktop app's existing replay path picks it up.
 func TestControlRequest_ParksIndefinitelyWhenNoConsumer(t *testing.T) {
 	stdinR, stdinW := io.Pipe()
 	t.Cleanup(func() { _ = stdinW.Close(); _ = stdinR.Close() })
@@ -313,6 +313,31 @@ func TestPendingControlRequests_DedupesByRequestID(t *testing.T) {
 	}
 }
 
+func TestPendingControlRequestsPreservesWaitingSinceOnDuplicate(t *testing.T) {
+	s := NewSession("waiting-since", "feat", 0)
+	first := &llm.ControlRequestMessage{
+		RequestID: "request-1",
+		Request:   llm.ControlRequest{Subtype: "can_use_tool", ToolName: "Bash"},
+	}
+
+	s.mu.Lock()
+	s.recordPendingControlRequestLocked(first)
+	stamped := first.WaitingSince
+	s.recordPendingControlRequestLocked(&llm.ControlRequestMessage{
+		RequestID: "request-1",
+		Request:   llm.ControlRequest{Subtype: "can_use_tool", ToolName: "Bash"},
+	})
+	s.mu.Unlock()
+
+	if stamped.IsZero() {
+		t.Fatal("first pending control request was not stamped")
+	}
+	pending := s.PendingControlRequests()
+	if got := pending[0].WaitingSince; !got.Equal(stamped) {
+		t.Fatalf("duplicate waiting_since = %v; want %v", got, stamped)
+	}
+}
+
 // TestRespondToAskUser_OnlyClearsMatching verifies that responding to
 // one of N parallel AskUserQuestion calls leaves the others pending —
 // the session must not treat one response as resolving every in-flight
@@ -331,7 +356,7 @@ func TestRespondToAskUser_OnlyClearsMatching(t *testing.T) {
 	})
 	s.mu.Unlock()
 
-	// Drive the response through the same code path as the TUI uses,
+	// Drive the response through the same code path as the desktop app uses,
 	// short-circuiting the protocol write since this session has no
 	// subprocess attached.
 	s.mu.Lock()

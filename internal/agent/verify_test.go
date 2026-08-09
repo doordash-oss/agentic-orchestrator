@@ -238,10 +238,30 @@ func TestParsePlanVerificationDeclaresRepoScope(t *testing.T) {
 	}
 }
 
+func TestParsePlanVerificationDeclaresTimeoutOverride(t *testing.T) {
+	steps := ParsePlanVerification("### Automated Verification\n- [ ] [timeout: 30m] Slow suite passes: `make e2e`\n")
+	if len(steps) != 1 {
+		t.Fatalf("ParsePlanVerification() len = %d, want 1", len(steps))
+	}
+	if steps[0].Timeout != "30m" || steps[0].Description != "Slow suite passes" || steps[0].Command != "make e2e" {
+		t.Fatalf("step = %+v, want parsed timeout removed from description", steps[0])
+	}
+}
+
+func TestParsePlanVerificationIgnoresInvalidTimeoutToken(t *testing.T) {
+	steps := ParsePlanVerification("### Automated Verification\n- [ ] [timeout: soon] Suite passes: `make e2e`\n")
+	if len(steps) != 1 {
+		t.Fatalf("ParsePlanVerification() len = %d, want 1", len(steps))
+	}
+	if steps[0].Timeout != "" {
+		t.Fatalf("Timeout = %q, want invalid duration dropped", steps[0].Timeout)
+	}
+}
+
 func TestParsePlanManualVerification(t *testing.T) {
 	plan := "## Success Criteria\n\n" +
 		"### Manual Verification\n" +
-		"- [ ] Create a feature from the TUI and observe it reaches PlanReady.\n" +
+		"- [ ] Create a feature from the desktop app and observe it reaches PlanReady.\n" +
 		"- [x] Run the smoke command against a real workspace.\n" +
 		"\n" +
 		"```markdown\n" +
@@ -253,7 +273,7 @@ func TestParsePlanManualVerification(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("got %d manual steps, want 2: %+v", len(got), got)
 	}
-	if got[0].Description != "Create a feature from the TUI and observe it reaches PlanReady." {
+	if got[0].Description != "Create a feature from the desktop app and observe it reaches PlanReady." {
 		t.Fatalf("first manual step = %q", got[0].Description)
 	}
 	if got[1].Description != "Run the smoke command against a real workspace." {

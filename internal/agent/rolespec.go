@@ -55,9 +55,8 @@ const (
 type ArtifactPresence = roles.ArtifactPresence
 
 const (
-	ArtifactRequired    = roles.ArtifactRequired
-	ArtifactOptional    = roles.ArtifactOptional
-	ArtifactConditional = roles.ArtifactConditional
+	ArtifactRequired = roles.ArtifactRequired
+	ArtifactOptional = roles.ArtifactOptional
 )
 
 type RoleRuntime = roles.RoleRuntime
@@ -182,11 +181,6 @@ func (s RoleSpec) OutputRootPaths(rt RoleRuntime) map[string]string {
 	return s.roleSpec().OutputRootPaths(rt)
 }
 
-// MarkerPath resolves the role's phase_complete marker path.
-func (s RoleSpec) MarkerPath(rt RoleRuntime) string {
-	return s.roleSpec().MarkerPath(rt)
-}
-
 // Contract derives the deterministic completion contract from the RoleSpec.
 func (s RoleSpec) Contract() RoleContract {
 	contract := RoleContract{
@@ -208,12 +202,6 @@ func (s RoleSpec) Contract() RoleContract {
 				HideFromSkill: artifact.HideFromSkill,
 				ResolvePath:   s.artifactPathResolver(artifact),
 				Validate:      validatorForRoleArtifact(artifact),
-			})
-		case ArtifactConditional:
-			contract.Conditional = append(contract.Conditional, ConditionalArtifact{
-				Name:     artifact.Name,
-				When:     conditionForRoleArtifact(artifact),
-				Artifact: s.requiredArtifact(artifact),
 			})
 		}
 	}
@@ -240,8 +228,6 @@ func validatorForRoleArtifact(artifact RoleArtifactSpec) func(iterDir, path stri
 	switch artifact.Validate {
 	case roles.ValidatorProgress:
 		return validateProgressArtifact
-	case roles.ValidatorNeedUserInput:
-		return validateNeedUserInputArtifact
 	case roles.ValidatorRoadmap:
 		return validateRoadmapArtifact
 	case roles.ValidatorPhasePlanMarkdown:
@@ -271,17 +257,6 @@ func validatorForRoleArtifact(artifact RoleArtifactSpec) func(iterDir, path stri
 		return func(_, _ string, _ *Outcome) ([]ProtocolViolation, error) {
 			return []ProtocolViolation{{Artifact: artifact.DisplayPath, Reason: fmt.Sprintf("unknown RoleSpec validator %q", artifact.Validate)}}, nil
 		}
-	}
-}
-
-func conditionForRoleArtifact(artifact RoleArtifactSpec) func(Outcome) bool {
-	switch artifact.When {
-	case roles.ConditionProgressNeedUserInput:
-		return func(out Outcome) bool {
-			return out.Progress != nil && out.Progress.OK() && out.Progress.State == StateNeedUserInput
-		}
-	default:
-		return nil
 	}
 }
 

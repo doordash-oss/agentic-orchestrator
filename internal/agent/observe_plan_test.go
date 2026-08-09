@@ -50,7 +50,7 @@ func TestRoadmapPlanningLoopEmitsEvents(t *testing.T) {
 	_ = os.WriteFile(filepath.Join(planDir, "plan.md"), []byte("# Roadmap\n## Phase 1: Observability Skeleton\nDo stuff"), 0o644)
 
 	planScript := testutil.WriteScript(t, scriptsDir, "plan.sh",
-		testutil.JSONLInit+"\nsleep 0.2\n"+testutil.TouchPhaseCompleteInLatestAttemptDir(planDir)+"\n"+testutil.JSONLSuccess+"\n")
+		testutil.JSONLInit+"\nsleep 0.2\n"+testutil.JSONLSuccess+"\n")
 	criticScript := testutil.WriteScript(t, scriptsDir, "critic.sh",
 		testutil.JSONLInit+"\nsleep 0.1\n"+testutil.WriteAnyValidatorApproved(stateDir)+"\n"+testutil.JSONLSuccess+"\n")
 
@@ -175,18 +175,19 @@ func TestPhasePlanningLoopEmitsEvents(t *testing.T) {
 
 	store := feature.NewStore(stateDir)
 	f := &feature.Feature{
-		ID:           featureID,
-		Name:         "Phase Plan Events Test",
-		Slug:         "phase-plan-events-test",
-		Description:  "Integration test for phase plan observability",
-		Status:       feature.StatusPlanning,
-		CurrentPhase: feature.PhasePlan,
-		ActiveRun:    1,
-		RunCount:     1,
-		TraceID:      "trace-phase-plan-events-001",
-		Repos:        []feature.FeatureRepo{{Name: "test-repo", Path: workDir}},
-		Models:       defaultTestPlanModels(),
-		ExitCriteria: "Relevant tests pass",
+		SchemaVersion: feature.SchemaVersionCurrent,
+		ID:            featureID,
+		Name:          "Phase Plan Events Test",
+		Slug:          "phase-plan-events-test",
+		Description:   "Integration test for phase plan observability",
+		Status:        feature.StatusPlanning,
+		CurrentPhase:  feature.PhasePlan,
+		ActiveRun:     1,
+		RunCount:      1,
+		TraceID:       "trace-phase-plan-events-001",
+		Repos:         []feature.FeatureRepo{{Name: "test-repo", Path: workDir}},
+		Models:        defaultTestPlanModels(),
+		ExitCriteria:  "Relevant tests pass",
 	}
 	_ = store.Save(f)
 

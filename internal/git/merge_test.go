@@ -120,3 +120,23 @@ func TestMergeNoFFConflictAbortsCleanly(t *testing.T) {
 		}
 	}
 }
+
+// TestMergeFeatureBranchWithoutConfiguredIdentity pins the CI contract: the
+// no-ff merge commit succeeds with the Agentico fallback identity when
+// neither the repo nor any git config supplies one (fresh CI runners).
+func TestMergeFeatureBranchWithoutConfiguredIdentity(t *testing.T) {
+	repo := testutil.InitGitRepo(t)
+	runGitMergeTest(t, repo, "checkout", "-b", "feature/ident")
+	testutil.CommitFile(t, repo, "work.txt", "work\n", "feature work")
+
+	if err := gitpkg.MergeFeatureBranch(repo, "feature/ident", "main"); err != nil {
+		t.Fatalf("MergeFeatureBranch() error = %v", err)
+	}
+	parents := runGitMergeTest(t, repo, "rev-list", "--parents", "-n", "1", "main")
+	if fields := len(strings.Fields(parents)); fields != 3 {
+		t.Fatalf("merge HEAD parents = %q, want two-parent merge commit", parents)
+	}
+	if got := runGitMergeTest(t, repo, "branch", "--show-current"); got != "feature/ident" {
+		t.Fatalf("current branch = %q, want feature branch restored", got)
+	}
+}

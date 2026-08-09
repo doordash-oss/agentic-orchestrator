@@ -17,6 +17,7 @@ package orchestrator_test
 import (
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -25,13 +26,14 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/orchestrator"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
+	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
 )
 
 // TestOrchestrator_EnterReviewGate_SetsStatusAndPendingPhase
 // ---------------------------------------------------------------------------
-// EnterReviewGate replaces triggerReviewGateCmd's Store.Modify. It flips the
-// status to the NeedsReview variant and records the target phase so the UI
+// EnterReviewGate flips the status to the NeedsReview variant and records the
+// target phase so clients
 // can render the review editor on a later tick.
 // ---------------------------------------------------------------------------
 
@@ -201,62 +203,6 @@ func TestOrchestrator_ExtendFailedPhaseBudget_NotFailedIsNoOp(t *testing.T) {
 	}
 }
 
-// TestOrchestrator_CollectAndClearRepoCycleRestarts_ReadsPlansAndClears
-// ---------------------------------------------------------------------------
-// CollectAndClearRepoCycleRestarts snapshots the feature's RepoCycles map,
-// reads each cycle's plan file from disk, clears the cycle state via
-// Lifecycle.ClearRepoCycles, and returns restart descriptors the TUI dispatches.
-// ---------------------------------------------------------------------------
-
-func TestOrchestrator_CollectAndClearRepoCycleRestarts_ReadsPlansAndClears(t *testing.T) {
-	tmp := t.TempDir()
-	reviewPath := filepath.Join(tmp, "review-plan.md")
-	if err := os.WriteFile(reviewPath, []byte("review content"), 0o644); err != nil {
-		t.Fatalf("write review plan: %v", err)
-	}
-
-	f := &feature.Feature{
-		ID:     "feat-1",
-		Status: feature.StatusPublished,
-		RepoCycles: map[string]*feature.RepoCycleState{
-			repoName: {Type: feature.CycleReviewComments, PlanPath: reviewPath},
-		},
-	}
-	lc := lifecycleForFeature(f)
-	fs := newFeatureStore(f)
-
-	o := orchestrator.New(orchestrator.Deps{
-		Lifecycle: lc,
-		Store:     fs,
-	}, orchestrator.Hooks{})
-
-	restarts, err := o.CollectAndClearRepoCycleRestarts("feat-1")
-	if err != nil {
-		t.Fatalf("CollectAndClearRepoCycleRestarts: %v", err)
-	}
-	assertLifecycleCall(t, lc, "ClearRepoCycles")
-	if len(restarts) != 1 {
-		t.Fatalf("expected 1 restart, got %d", len(restarts))
-	}
-	if restarts[0].RepoName != repoName || restarts[0].CycleType != feature.CycleReviewComments {
-		t.Errorf("unexpected restart descriptor: %+v", restarts[0])
-	}
-	if restarts[0].PlanContent != "review content" {
-		t.Errorf("restart PlanContent = %q, want %q", restarts[0].PlanContent, "review content")
-	}
-}
-
-// ---------------------------------------------------------------------------
-// Iteration 13 additions: RestartPhase + ResolveGateReviewContext
-// ---------------------------------------------------------------------------
-
-// TestOrchestrator_RestartPhase_FailedPlan_ExtendsBudgetAndDispatches
-// ---------------------------------------------------------------------------
-// A Failed feature at PhasePlan walks status back to PlanReady (via two
-// Transition hops) and returns RestartDispatchPhase{Phase: Plan}. The
-// iteration budget deltas are applied by ExtendFailedPhaseBudget.
-// ---------------------------------------------------------------------------
-
 func TestOrchestrator_RestartPhase_FailedPlan_ExtendsBudgetAndDispatches(t *testing.T) {
 	f := &feature.Feature{
 		ID:                "feat-1",
@@ -345,60 +291,6 @@ func TestOrchestrator_RestartPhase_FailedFinalReview_DispatchesFinalReview(t *te
 		t.Fatalf("RepoStates[agentic] = %+v, want LastError cleared", st)
 	}
 }
-
-// TestOrchestrator_RestartPhase_PublishedWithRepoCycles_ReturnsRestartList
-// ---------------------------------------------------------------------------
-// For a Published feature with RepoCycles, RestartPhase clears the cycles
-// and returns RestartDispatchRepoCycles with per-cycle descriptors the TUI
-// must fan out.
-// ---------------------------------------------------------------------------
-
-func TestOrchestrator_RestartPhase_PublishedWithRepoCycles_ReturnsRestartList(t *testing.T) {
-	tmp := t.TempDir()
-	planPath := filepath.Join(tmp, "review-plan.md")
-	if err := os.WriteFile(planPath, []byte("review plan"), 0o644); err != nil {
-		t.Fatalf("write plan: %v", err)
-	}
-
-	f := &feature.Feature{
-		ID:     "feat-1",
-		Status: feature.StatusPublished,
-		RepoCycles: map[string]*feature.RepoCycleState{
-			repoName: {Type: feature.CycleReviewComments, PlanPath: planPath},
-		},
-	}
-	lc := lifecycleForFeature(f)
-	fs := newFeatureStore(f)
-
-	o := orchestrator.New(orchestrator.Deps{
-		Lifecycle: lc,
-		Store:     fs,
-	}, orchestrator.Hooks{})
-
-	outcome, err := o.RestartPhase("feat-1", 0, 0)
-	if err != nil {
-		t.Fatalf("RestartPhase: %v", err)
-	}
-	if outcome.Action != orchestrator.RestartDispatchRepoCycles {
-		t.Fatalf("Action = %v, want RestartDispatchRepoCycles", outcome.Action)
-	}
-	if len(outcome.RepoCycleRestarts) != 1 {
-		t.Fatalf("expected 1 repo-cycle restart, got %d", len(outcome.RepoCycleRestarts))
-	}
-	if outcome.RepoCycleRestarts[0].RepoName != repoName {
-		t.Errorf("RepoName = %q, want repo-a", outcome.RepoCycleRestarts[0].RepoName)
-	}
-	if outcome.RepoCycleRestarts[0].PlanContent != "review plan" {
-		t.Errorf("PlanContent = %q, want %q", outcome.RepoCycleRestarts[0].PlanContent, "review plan")
-	}
-	assertLifecycleCall(t, lc, "ClearRepoCycles")
-}
-
-// TestOrchestrator_RestartPhase_RunningResearch_TransitionsToInterrupted
-// ---------------------------------------------------------------------------
-// A feature actively running the research phase moves to StatusInterrupted
-// so the next StartFeature dispatch can re-enter the phase cleanly.
-// ---------------------------------------------------------------------------
 
 func TestOrchestrator_RestartPhase_RunningResearch_TransitionsToInterrupted(t *testing.T) {
 	f := &feature.Feature{
@@ -571,8 +463,8 @@ func TestOrchestrator_RestartPhase_InterruptedFeature_KeepsStatus(t *testing.T) 
 // (e.g. wakeKBWaiters' allFresh path before the startPhase fix dropped the
 // PhaseSkipped recursion) must be recoverable via Restart. Pre-fix the default
 // branch attempted Created → Interrupted, which is not in
-// validTransitions[StatusCreated], so RestartPhase errored out and the TUI
-// silently swallowed the failure — pressing 'r' did nothing.
+// validTransitions[StatusCreated], so RestartPhase returned an error and the
+// restart did not occur.
 // ---------------------------------------------------------------------------
 
 func TestOrchestrator_RestartPhase_CreatedFeature_DispatchesWithoutTransition(t *testing.T) {
@@ -745,8 +637,8 @@ func TestOrchestrator_ResolveGateReviewContext_PhaseResearch_ReturnsInquireArtif
 // roadmap feature whose CurrentRoadmapPhase > 0 must resolve the per-phase
 // plan (<state>/<featureID>/phase-NN/plan/*.md), not the generic "plan"
 // artifact. Roadmap phase plans are written under phase-NN/plan by
-// RunPhasePlanningLoop (see internal/agent/plan_validation.go) and the TUI's
-// startPlanReviewSessionCmd uses the same phase-%d-plan key.
+// RunPhasePlanningLoop (see internal/agent/plan_validation.go); the production
+// resolver uses the same phase-%d-plan key.
 // ---------------------------------------------------------------------------
 
 func TestOrchestrator_ResolveGateReviewContext_PhaseImplement_RoadmapPhase_ReturnsPhasePlan(t *testing.T) {
@@ -812,51 +704,6 @@ func TestOrchestrator_ResolveGateReviewContext_PhaseImplement_RoadmapPhase_Retur
 	}
 }
 
-// TestRestartPhase_PublishedWithRepoCycles_DispatchesRepoCycleRestarts
-// ---------------------------------------------------------------------------
-// Regression test: RestartPhase must continue to route a Published feature
-// with len(f.RepoCycles) > 0 through the cycle-restart branch
-// (lifecycle_delegates.go:943) — produces RestartDispatchRepoCycles with
-// per-cycle descriptors. This branch is preserved unchanged by the
-// PhaseReview-branch removal.
-func TestRestartPhase_PublishedWithRepoCycles_DispatchesRepoCycleRestarts(t *testing.T) {
-	tmp := t.TempDir()
-	planPath := filepath.Join(tmp, "review-plan.md")
-	if err := os.WriteFile(planPath, []byte("review-comments plan"), 0o644); err != nil {
-		t.Fatalf("write plan: %v", err)
-	}
-
-	f := &feature.Feature{
-		ID:           "feat-pubcycle",
-		Status:       feature.StatusPublished,
-		CurrentPhase: feature.PhasePublish,
-		RepoCycles: map[string]*feature.RepoCycleState{
-			repoName: {Type: feature.CycleReviewComments, PlanPath: planPath, Status: feature.RepoCycleFailed},
-		},
-	}
-	lc := lifecycleForFeature(f)
-	fs := newFeatureStore(f)
-
-	o := orchestrator.New(orchestrator.Deps{
-		Lifecycle: lc,
-		Store:     fs,
-	}, orchestrator.Hooks{})
-
-	outcome, err := o.RestartPhase("feat-pubcycle", 0, 0)
-	if err != nil {
-		t.Fatalf("RestartPhase: %v", err)
-	}
-	if outcome.Action != orchestrator.RestartDispatchRepoCycles {
-		t.Fatalf("Action = %v, want RestartDispatchRepoCycles", outcome.Action)
-	}
-	if len(outcome.RepoCycleRestarts) != 1 {
-		t.Fatalf("expected 1 repo-cycle restart, got %d", len(outcome.RepoCycleRestarts))
-	}
-	if outcome.RepoCycleRestarts[0].RepoName != repoName {
-		t.Errorf("RepoName = %q, want repo-a", outcome.RepoCycleRestarts[0].RepoName)
-	}
-}
-
 func TestOrchestrator_ResolveRewindReviewContext_PartialImplementReturnsPendingPhasePlan(t *testing.T) {
 	tmp := t.TempDir()
 	phasePlanDir := filepath.Join(tmp, "feat-partial", "runs", "run-002", "phase-02", "plan")
@@ -909,7 +756,7 @@ func TestOrchestrator_ResolveRewindReviewContext_PartialImplementReturnsPendingP
 		t.Errorf("ArtifactPath = %q, want phase plan %q", ctx.ArtifactPath, phasePlanPath)
 	}
 	if ctx.ArtifactPath == globalPlanPath {
-		t.Error("ArtifactPath fell back to global plan despite pending partial phase marker")
+		t.Error("ArtifactPath fell back to global plan despite a pending partial roadmap phase")
 	}
 	if len(ctx.Warnings) != 0 {
 		t.Errorf("Warnings = %v, want none", ctx.Warnings)
@@ -974,8 +821,8 @@ func TestOrchestrator_ResolveRewindReviewContext_PartialImplementMissingPhasePla
 // and dispatch a fresh KB phase the user never asked for; subsequent "r"
 // presses then killed the new sessions and started more, etc. The
 // busy-guard makes RestartPhase return ErrFeatureBusy whenever any session
-// for the feature is still active, so the only side effect of an "r" press
-// during a stop is the TUI surfacing a "wait" hint.
+// for the feature is still active, so the caller can surface a wait hint
+// without starting another phase.
 // ---------------------------------------------------------------------------
 func TestOrchestrator_RestartPhase_RejectsWhileSessionsActive(t *testing.T) {
 	f := &feature.Feature{
@@ -988,8 +835,8 @@ func TestOrchestrator_RestartPhase_RejectsWhileSessionsActive(t *testing.T) {
 
 	sm := mocks.NewMockSessionManager()
 	// One session still active for this feature — the case where Stop is mid-flight.
-	sm.FeatureSessionsFn = func(id string) []session.SessionView {
-		return []session.SessionView{mocks.NewMockSessionView("s-1", "feat-busy")}
+	sm.FeatureSessionsFn = func(id string) []ports.SessionView {
+		return []ports.SessionView{mocks.NewMockSessionView("s-1", "feat-busy")}
 	}
 
 	o := orchestrator.New(orchestrator.Deps{
@@ -1029,8 +876,8 @@ func TestOrchestrator_RestartPhase_AllowsArtifactReviewSession(t *testing.T) {
 
 	sm := mocks.NewMockSessionManager()
 	reviewSess := mocks.NewMockSessionView("feat-review-busy-artifact-review", "feat-review-busy")
-	sm.FeatureSessionsFn = func(id string) []session.SessionView {
-		return []session.SessionView{reviewSess}
+	sm.FeatureSessionsFn = func(id string) []ports.SessionView {
+		return []ports.SessionView{reviewSess}
 	}
 
 	o := orchestrator.New(orchestrator.Deps{
@@ -1077,8 +924,8 @@ func TestOrchestrator_RestartPhase_ProceedsWhenSessionsInactive(t *testing.T) {
 	deadSession := mocks.NewMockSessionView("s-dead", "feat-failed")
 	deadSession.IsActiveVal = false
 	deadSession.StatusVal = session.SessionFailed
-	sm.FeatureSessionsFn = func(id string) []session.SessionView {
-		return []session.SessionView{deadSession}
+	sm.FeatureSessionsFn = func(id string) []ports.SessionView {
+		return []ports.SessionView{deadSession}
 	}
 
 	o := orchestrator.New(orchestrator.Deps{
@@ -1096,5 +943,137 @@ func TestOrchestrator_RestartPhase_ProceedsWhenSessionsInactive(t *testing.T) {
 	}
 	if outcome.Phase != feature.PhaseKnowledgeBase {
 		t.Errorf("Phase = %v, want PhaseKnowledgeBase", outcome.Phase)
+	}
+}
+
+func TestOrchestrator_MergeFeatureLocal_MarksDone(t *testing.T) {
+	notPublishable := false
+	repoPath := testutil.InitGitRepo(t)
+	rename := exec.Command("git", "branch", "-m", "trunk")
+	rename.Dir = repoPath
+	rename.Env = testutil.GitTestEnv()
+	if out, err := rename.CombinedOutput(); err != nil {
+		t.Fatalf("rename default branch: %s: %v", strings.TrimSpace(string(out)), err)
+	}
+	testutil.CreateBranch(t, repoPath, "feature/local-merge")
+	testutil.CommitFile(t, repoPath, "feature.txt", "merged\n", "feature change")
+	checkout := exec.Command("git", "checkout", "trunk")
+	checkout.Dir = repoPath
+	checkout.Env = testutil.GitTestEnv()
+	if out, err := checkout.CombinedOutput(); err != nil {
+		t.Fatalf("checkout trunk: %s: %v", out, err)
+	}
+	f := &feature.Feature{
+		ID:     "feat-local-merge",
+		Slug:   "local-merge",
+		Status: feature.StatusPublished,
+		Repos: []feature.FeatureRepo{{
+			Name:         "repo-a",
+			Path:         repoPath,
+			WorktreePath: repoPath,
+			Branch:       "feature/local-merge",
+			Publishable:  &notPublishable,
+		}},
+	}
+	lc := lifecycleForFeature(f)
+	fs := newFeatureStore(f)
+
+	o := orchestrator.New(orchestrator.Deps{
+		Lifecycle: lc,
+		Store:     fs,
+	}, orchestrator.Hooks{})
+
+	if err := o.MergeFeatureLocal("feat-local-merge"); err != nil {
+		t.Fatalf("MergeFeatureLocal: %v", err)
+	}
+
+	assertLifecycleCall(t, lc, "MarkDone")
+	cmd := exec.Command("git", "log", "--format=%s", "-2")
+	cmd.Dir = repoPath
+	cmd.Env = testutil.GitTestEnv()
+	if out, err := cmd.Output(); err != nil || !strings.Contains(string(out), "feature change") {
+		t.Fatalf("merged history = %q, err=%v", out, err)
+	}
+}
+
+func TestOrchestrator_MarkDone_IsExplicitCompletionAction(t *testing.T) {
+	f := &feature.Feature{
+		ID:     "feat-mark-done",
+		Status: feature.StatusPublished,
+	}
+	lc := lifecycleForFeature(f)
+	fs := newFeatureStore(f)
+	var summaryNeeded bool
+	o := orchestrator.New(orchestrator.Deps{
+		Lifecycle: lc,
+		Store:     fs,
+	}, orchestrator.Hooks{
+		OnFeatureSummaryNeeded: func(featureID string, f *feature.Feature) {
+			summaryNeeded = true
+		},
+	})
+
+	if err := o.MarkDone("feat-mark-done"); err != nil {
+		t.Fatalf("MarkDone: %v", err)
+	}
+
+	if f.Status != feature.StatusDone {
+		t.Fatalf("Status = %s; want %s", f.Status, feature.StatusDone)
+	}
+	if !summaryNeeded {
+		t.Fatal("OnFeatureSummaryNeeded was not called")
+	}
+}
+
+// A feature already Done can merge later work without attempting a second
+// MarkDone: StatusDone has no outgoing transitions, so the call would fail.
+func TestOrchestrator_MergeFeatureLocal_AtDoneSkipsMarkDone(t *testing.T) {
+	notPublishable := false
+	repoPath := testutil.InitGitRepo(t)
+	rename := exec.Command("git", "branch", "-m", "trunk")
+	rename.Dir = repoPath
+	rename.Env = testutil.GitTestEnv()
+	if out, err := rename.CombinedOutput(); err != nil {
+		t.Fatalf("rename default branch: %s: %v", strings.TrimSpace(string(out)), err)
+	}
+	testutil.CreateBranch(t, repoPath, "feature/late-merge")
+	testutil.CommitFile(t, repoPath, "late.txt", "late\n", "late change")
+	checkout := exec.Command("git", "checkout", "trunk")
+	checkout.Dir = repoPath
+	checkout.Env = testutil.GitTestEnv()
+	if out, err := checkout.CombinedOutput(); err != nil {
+		t.Fatalf("checkout trunk: %s: %v", out, err)
+	}
+	f := &feature.Feature{
+		ID:     "feat-late-merge",
+		Slug:   "late-merge",
+		Status: feature.StatusDone,
+		Repos: []feature.FeatureRepo{{
+			Name:         "repo-a",
+			Path:         repoPath,
+			WorktreePath: repoPath,
+			Branch:       "feature/late-merge",
+			Publishable:  &notPublishable,
+		}},
+	}
+	lc := lifecycleForFeature(f)
+	fs := newFeatureStore(f)
+
+	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{})
+
+	if err := o.MergeFeatureLocal("feat-late-merge"); err != nil {
+		t.Fatalf("MergeFeatureLocal: %v", err)
+	}
+
+	for _, c := range lc.Calls {
+		if c.Method == "MarkDone" {
+			t.Error("MarkDone was called on an already-Done feature")
+		}
+	}
+	log := exec.Command("git", "log", "--format=%s", "-2")
+	log.Dir = repoPath
+	log.Env = testutil.GitTestEnv()
+	if out, err := log.Output(); err != nil || !strings.Contains(string(out), "late change") {
+		t.Fatalf("merged history = %q, err = %v", out, err)
 	}
 }

@@ -19,17 +19,51 @@ import (
 	"fmt"
 	"os"
 	"reflect"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
+	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 )
 
-// ChildKindRefactor identifies a child launched as a refactor of its parent.
-const ChildKindRefactor = "refactor"
+const (
+	// ChildKindRefactor identifies a child launched as a refactor of its parent.
+	ChildKindRefactor = "refactor"
+	// ChildKindReviewFeedback identifies a child launched to address selected
+	// pull request review feedback on its parent.
+	ChildKindReviewFeedback = "review-feedback"
+	// ChildKindRebase identifies a child launched to merge-base reconcile
+	// behind parent repositories against their resolved targets.
+	ChildKindRebase = "rebase"
+	// ReviewFeedbackChildName is the fixed display and branch-slug seed for
+	// every review-feedback child.
+	ReviewFeedbackChildName = "Address review feedback"
+	// RebaseChildName is the fixed display and branch-slug seed for every
+	// rebase child.
+	RebaseChildName = "Rebase feature branches"
+	// ReviewFeedbackOutcomesFilename is the well-known JSON file inside the
+	// child's active run directory where the agent records one entry per
+	// selected comment (disposition + explanation). The integration tail
+	// reads this artifact best-effort to build per-comment reply bodies.
+	ReviewFeedbackOutcomesFilename = "review-feedback-outcomes.json"
+)
 
-// Typed refactor-launch failures. The server maps each to a stable machine
+// Typed child-launch failures. The server maps each to a stable machine
 // code; callers should match with errors.Is / errors.As.
 var (
+	// ErrReviewFeedbackEmptySelection rejects a review-feedback child launch
+	// that has no selected comments.
+	ErrReviewFeedbackEmptySelection = errors.New("review feedback selection is empty")
+	// ErrReviewFeedbackUnsupportedCommentType rejects a selected comment whose
+	// GitHub comment type cannot be routed by the integration tail.
+	ErrReviewFeedbackUnsupportedCommentType = errors.New("review feedback comment type is unsupported")
+	// ErrReviewFeedbackUnknownRepo rejects a comment tagged with a repository
+	// outside the parent feature.
+	ErrReviewFeedbackUnknownRepo = errors.New("review feedback repository does not belong to parent")
+	// ErrReviewFeedbackRepoHasNoPR rejects a comment whose parent repository
+	// does not have a pull request to receive the eventual integration tail.
+	ErrReviewFeedbackRepoHasNoPR = errors.New("review feedback repository has no pull request")
 	// ErrRefactorParentNotFound: the requested parent feature does not exist.
 	ErrRefactorParentNotFound = errors.New("refactor parent feature not found")
 	// ErrRefactorParentIsChild: children are one level deep; a child cannot
@@ -59,6 +93,16 @@ var (
 	// a child is active. A complete recoverable cascade operation is
 	// required before parent deletion can be allowed.
 	ErrCascadeDeleteNotAvailable = errors.New("cascade delete is not available while a child is active")
+	// ErrRebaseTargetResolution: a repository's merge target could not be
+	// resolved at rebase child creation. The failing repo is named in the
+	// typed error.
+	ErrRebaseTargetResolution = errors.New("rebase target resolution failed")
+	// ErrRebaseFetchFailed: a repository's remote fetch failed at rebase
+	// child creation. The failing repo is named in the typed error.
+	ErrRebaseFetchFailed = errors.New("rebase fetch failed")
+	// ErrRebaseAlreadyUpToDate: every repository is already up to date with
+	// its resolved target, so no rebase child is needed.
+	ErrRebaseAlreadyUpToDate = errors.New("rebase feature is already up to date")
 )
 
 // ChildRelationshipError identifies the child record that violates a
@@ -121,37 +165,80 @@ func (e *ParentWorktreesDirtyError) Error() string {
 // DefaultDirtyPathLimit bounds each dirty-path category captured at launch.
 const DefaultDirtyPathLimit = 50
 
-// RepoCleanliness is the feature-package view of one repository's worktree
-// cleanliness. Wired from the git adapter via CleanlinessOps.
-type RepoCleanliness struct {
-	Staged         []string
-	Unstaged       []string
-	Untracked      []string
-	StagedTotal    int
-	UnstagedTotal  int
-	UntrackedTotal int
+// RebaseTargetResolutionError names the repository whose merge target could
+// not be resolved at rebase child creation.
+type RebaseTargetResolutionError struct {
+	Repo string
+	Err  error
 }
 
-// Dirty reports whether any category carries at least one path.
-func (r *RepoCleanliness) Dirty() bool {
-	if r == nil {
-		return false
+func (e *RebaseTargetResolutionError) Error() string {
+	if e.Err != nil {
+		return fmt.Sprintf("rebase target resolution failed for repo %s: %v", e.Repo, e.Err)
 	}
-	return r.StagedTotal > 0 || r.UnstagedTotal > 0 || r.UntrackedTotal > 0
+	return fmt.Sprintf("rebase target resolution failed for repo %s", e.Repo)
 }
 
-// CleanlinessOps inspects a worktree for staged/unstaged/untracked changes.
-// Satisfied by the git adapter (wired in the orchestrator module).
-type CleanlinessOps interface {
-	InspectCleanliness(worktreePath string, maxPerCategory int) (*RepoCleanliness, error)
+func (e *RebaseTargetResolutionError) Unwrap() error {
+	if e.Err != nil {
+		return e.Err
+	}
+	return ErrRebaseTargetResolution
 }
 
-// CleanlinessFunc adapts a plain function to CleanlinessOps.
-type CleanlinessFunc func(worktreePath string, maxPerCategory int) (*RepoCleanliness, error)
+// Is supports errors.Is matching against ErrRebaseTargetResolution.
+func (e *RebaseTargetResolutionError) Is(target error) bool {
+	return target == ErrRebaseTargetResolution
+}
 
-// InspectCleanliness implements CleanlinessOps.
-func (fn CleanlinessFunc) InspectCleanliness(worktreePath string, maxPerCategory int) (*RepoCleanliness, error) {
-	return fn(worktreePath, maxPerCategory)
+// RebaseFetchError names the repository whose remote fetch failed at rebase
+// child creation.
+type RebaseFetchError struct {
+	Repo string
+	Err  error
+}
+
+func (e *RebaseFetchError) Error() string {
+	if e.Err != nil {
+		return fmt.Sprintf("fetch failed for repo %s: %v", e.Repo, e.Err)
+	}
+	return fmt.Sprintf("fetch failed for repo %s", e.Repo)
+}
+
+func (e *RebaseFetchError) Unwrap() error {
+	if e.Err != nil {
+		return e.Err
+	}
+	return ErrRebaseFetchFailed
+}
+
+// Is supports errors.Is matching against ErrRebaseFetchFailed.
+func (e *RebaseFetchError) Is(target error) bool {
+	return target == ErrRebaseFetchFailed
+}
+
+// RebaseAlreadyUpToDateError reports that every repository is already up to
+// date with its resolved target. Targets carries the per-repo resolved
+// targets so the message can name each one.
+type RebaseAlreadyUpToDateError struct {
+	Targets []RebaseRepoTarget
+}
+
+func (e *RebaseAlreadyUpToDateError) Error() string {
+	pairs := make([]string, 0, len(e.Targets))
+	for _, t := range e.Targets {
+		pairs = append(pairs, fmt.Sprintf("%s@%s", t.Repo, t.Target))
+	}
+	return fmt.Sprintf("feature is already up to date with all targets: %s", strings.Join(pairs, ", "))
+}
+
+func (e *RebaseAlreadyUpToDateError) Unwrap() error {
+	return ErrRebaseAlreadyUpToDate
+}
+
+// Is supports errors.Is matching against ErrRebaseAlreadyUpToDate.
+func (e *RebaseAlreadyUpToDateError) Is(target error) bool {
+	return target == ErrRebaseAlreadyUpToDate
 }
 
 // ChildRepoBase is the exact per-repository provenance captured at launch:
@@ -161,6 +248,26 @@ type ChildRepoBase struct {
 	Repo         string `yaml:"repo"`
 	SHA          string `yaml:"sha"`
 	ParentBranch string `yaml:"parent_branch,omitempty" `
+}
+
+// RebaseRepoTarget records the resolved merge target for a repository at
+// rebase child creation time. The child never re-resolves or fetches; it
+// reads the creation-time decision from the persisted relationship.
+type RebaseRepoTarget struct {
+	Repo   string `yaml:"repo" json:"repo"`
+	Target string `yaml:"target" json:"target"`
+	// Ref is the tracking ref used for the behind check: "origin/<target>"
+	// for publishable repos, or "<target>" for local-only repos.
+	Ref string `yaml:"ref,omitempty" json:"ref,omitempty"`
+	// Publishable records whether the repo was publishable at creation,
+	// determining whether behind-ness used the remote-tracking ref.
+	Publishable bool `yaml:"publishable" json:"publishable"`
+	// TargetSHA is the full commit SHA the target ref resolved to at the
+	// creation-time fetch, captured immediately after behind-ness was
+	// computed against the same ref. The mechanical integration gate reads
+	// this SHA (never re-resolving the ref) so a target that moves after
+	// creation does not change what the gate checks.
+	TargetSHA string `yaml:"target_sha,omitempty" json:"target_sha,omitempty"`
 }
 
 // ChildRelationship is the child-owned link back to its launch parent. The
@@ -181,10 +288,18 @@ type ChildRelationship struct {
 	Transaction *TransactionJournal `yaml:"transaction,omitempty"`
 	// DiffSummary is the preserved read-only diff captured at close time,
 	// before disposable worktrees and ephemeral branches are removed. It is
-	// empty when no diff was preserved.
+	// bounded at DiffSummaryBudget (oversized diffs are truncated with a
+	// marker) and empty when no diff was preserved.
 	DiffSummary string `yaml:"diff_summary,omitempty" json:"diff_summary,omitempty"`
 	// Bases captures the exact parent tip per repository at launch time.
 	Bases []ChildRepoBase `yaml:"bases,omitempty"`
+	// RebaseTargets captures the resolved per-repo merge targets at rebase
+	// child creation time. Only set for rebase children.
+	RebaseTargets []RebaseRepoTarget `yaml:"rebase_targets,omitempty" json:"rebase_targets,omitempty"`
+	// RebaseBehind captures the set of repositories that were behind their
+	// resolved target at rebase child creation time. Only set for rebase
+	// children.
+	RebaseBehind []string `yaml:"rebase_behind,omitempty" json:"rebase_behind,omitempty"`
 }
 
 // IsChild reports whether the feature was launched as a child of another.
@@ -240,6 +355,34 @@ func (f *Feature) BaseSHA(repoName string) string {
 	return ""
 }
 
+// RebaseTargetForRepo returns the persisted resolved target for the named
+// repository on a rebase child, or the zero value if not found.
+func (f *Feature) RebaseTargetForRepo(repoName string) (RebaseRepoTarget, bool) {
+	if f == nil || f.Parent == nil {
+		return RebaseRepoTarget{}, false
+	}
+	for _, t := range f.Parent.RebaseTargets {
+		if t.Repo == repoName {
+			return t, true
+		}
+	}
+	return RebaseRepoTarget{}, false
+}
+
+// IsRebaseBehindRepo reports whether the named repository was behind its
+// resolved target at rebase child creation time.
+func (f *Feature) IsRebaseBehindRepo(repoName string) bool {
+	if f == nil || f.Parent == nil {
+		return false
+	}
+	for _, r := range f.Parent.RebaseBehind {
+		if r == repoName {
+			return true
+		}
+	}
+	return false
+}
+
 // ChildCreationIntent is the durable record of an in-flight child creation.
 // It contains everything needed to finish creation after a crash: the full
 // child feature specification (with the selected review configuration) and
@@ -287,6 +430,375 @@ type RefactorChildSpec struct {
 	Inquireness Inquireness
 }
 
+// ReviewFeedbackComment is the complete selected GitHub comment payload that
+// a review-feedback child needs for planning and later reply routing.
+type ReviewFeedbackComment struct {
+	Repo      string `yaml:"repo" json:"repo"`
+	ID        int    `yaml:"id" json:"id"`
+	Type      string `yaml:"type" json:"type"`
+	Path      string `yaml:"path,omitempty" json:"path,omitempty"`
+	Line      int    `yaml:"line,omitempty" json:"line,omitempty"`
+	Author    string `yaml:"author,omitempty" json:"author,omitempty"`
+	Body      string `yaml:"body,omitempty" json:"body,omitempty"`
+	DiffHunk  string `yaml:"diff_hunk,omitempty" json:"diff_hunk,omitempty"`
+	InReplyTo int    `yaml:"in_reply_to_id,omitempty" json:"in_reply_to_id,omitempty"`
+}
+
+// ReviewFeedbackChildSpec carries the only launch-time choices supported by
+// review-feedback children: the selected comment payloads and the coupled
+// roadmap/phase-plan gate. A nil gate inherits the parent's Roadmap gate.
+type ReviewFeedbackChildSpec struct {
+	Comments    []ReviewFeedbackComment
+	GateEnabled *bool
+}
+
+// RebaseChildSpec carries the creation-time resolved per-repo targets and
+// behind set produced by the orchestrator preflight. The feature manager
+// persists them on the child relationship so integration and future phases
+// read the creation-time decision rather than re-resolving.
+type RebaseChildSpec struct {
+	// Bases are the captured parent tip SHAs per repo (fork-point pinning).
+	Bases []ChildRepoBase
+	// Targets are the resolved per-repo merge targets.
+	Targets []RebaseRepoTarget
+	// Behind is the set of repo names that were behind their resolved target.
+	Behind []string
+}
+
+// CreateReviewFeedbackChild atomically launches a fixed-Medium child for the
+// selected pull request comments. Validation that depends only on the spec is
+// completed before loading or writing any feature state.
+func (m *Manager) CreateReviewFeedbackChild(parentID string, spec ReviewFeedbackChildSpec) (*Feature, error) {
+	if err := validateReviewFeedbackSpec(spec); err != nil {
+		return nil, err
+	}
+	parent, err := m.Store.Load(parentID)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, fmt.Errorf("%w: %s", ErrRefactorParentNotFound, parentID)
+		}
+		return nil, fmt.Errorf("loading parent feature: %w", err)
+	}
+	if err := ValidateRefactorParent(parent, nil); err != nil {
+		return nil, err
+	}
+	if err := validateReviewFeedbackCommentRepos(parent, spec.Comments); err != nil {
+		return nil, err
+	}
+	bases, err := m.preflightRefactorParent(parent)
+	if err != nil {
+		return nil, err
+	}
+
+	now := time.Now()
+	child, err := m.Store.CreateChildLocked(parentID, func(lockedParent *Feature, activeChild *Feature) (*Feature, *ChildCreationIntent, error) {
+		if err := ValidateRefactorParent(lockedParent, activeChild); err != nil {
+			return nil, nil, err
+		}
+		if err := validateReviewFeedbackCommentRepos(lockedParent, spec.Comments); err != nil {
+			return nil, nil, err
+		}
+		gate := lockedParent.Checkpoints.RoadmapReview
+		if spec.GateEnabled != nil {
+			gate = *spec.GateEnabled
+		}
+		checkpoints := lockedParent.Checkpoints
+		checkpoints.RoadmapReview = gate
+		checkpoints.PhasePlanReview = gate
+		child := m.buildRefactorChild(lockedParent, RefactorChildSpec{
+			Name:         ReviewFeedbackChildName,
+			Description:  reviewFeedbackDescription(lockedParent, spec.Comments),
+			Pipeline:     PipelineMedium,
+			Checkpoints:  checkpoints,
+			ExitCriteria: reviewFeedbackExitCriteria(spec.Comments),
+		}, bases, now)
+		child.Parent.Kind = ChildKindReviewFeedback
+		child.ReviewFeedback = append([]ReviewFeedbackComment(nil), spec.Comments...)
+
+		// Exit criteria is machine-generated per review-feedback pass from the
+		// selected comments and must not pair back to the parent, so save and
+		// restore it around applyResolvedReviewConfig.
+		savedExitCriteria := lockedParent.ExitCriteria
+		applyResolvedReviewConfig(lockedParent, child)
+		lockedParent.ExitCriteria = savedExitCriteria
+		intent := &ChildCreationIntent{
+			ChildID:   child.ID,
+			Kind:      ChildKindReviewFeedback,
+			CreatedAt: now,
+			Child:     *child,
+			Setup:     child.Run().Setup,
+		}
+		return child, intent, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return child, nil
+}
+
+// CreateRebaseChild atomically launches a fixed-Medium child that
+// merge-reconciles behind parent repositories against their resolved targets.
+// The orchestrator preflight resolves targets, fetches, and computes
+// behind-ness before calling this method; the spec carries the results so
+// the child relationship persists the creation-time decision. The parent
+// must be a top-level Published or CodeReady feature with no active child
+// and clean worktrees.
+func (m *Manager) CreateRebaseChild(parentID string, spec RebaseChildSpec) (*Feature, error) {
+	if len(spec.Behind) == 0 {
+		return nil, &RebaseAlreadyUpToDateError{Targets: spec.Targets}
+	}
+	parent, err := m.Store.Load(parentID)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, fmt.Errorf("%w: %s", ErrRefactorParentNotFound, parentID)
+		}
+		return nil, fmt.Errorf("loading parent feature: %w", err)
+	}
+	if err := ValidateRefactorParent(parent, nil); err != nil {
+		return nil, err
+	}
+
+	bases := spec.Bases
+	if len(bases) == 0 {
+		bases, err = m.preflightRefactorParent(parent)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	now := time.Now()
+	child, err := m.Store.CreateChildLocked(parentID, func(lockedParent *Feature, activeChild *Feature) (*Feature, *ChildCreationIntent, error) {
+		if err := ValidateRefactorParent(lockedParent, activeChild); err != nil {
+			return nil, nil, err
+		}
+		child := m.buildRefactorChild(lockedParent, RefactorChildSpec{
+			Name:         RebaseChildName,
+			Description:  rebaseDescription(lockedParent, spec.Targets, spec.Behind),
+			Pipeline:     PipelineMedium,
+			Checkpoints:  lockedParent.Checkpoints,
+			ExitCriteria: rebaseExitCriteria(spec.Targets, spec.Behind),
+		}, bases, now)
+		child.Parent.Kind = ChildKindRebase
+		child.Parent.RebaseTargets = append([]RebaseRepoTarget(nil), spec.Targets...)
+		child.Parent.RebaseBehind = append([]string(nil), spec.Behind...)
+
+		savedExitCriteria := lockedParent.ExitCriteria
+		applyResolvedReviewConfig(lockedParent, child)
+		lockedParent.ExitCriteria = savedExitCriteria
+		intent := &ChildCreationIntent{
+			ChildID:   child.ID,
+			Kind:      ChildKindRebase,
+			CreatedAt: now,
+			Child:     *child,
+			Setup:     child.Run().Setup,
+		}
+		return child, intent, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return child, nil
+}
+
+// rebaseDescription generates the deterministic, machine-authored description
+// for a rebase child. It names each behind repo with its exact persisted
+// resolved target ref, instructs the pipeline to merge (never rebase) the
+// target into the working branch, adapt the feature's code to the base's new
+// APIs where they collide, keep trivial clean merges minimal, leave
+// up-to-date repos untouched, and never push to any remote.
+func rebaseDescription(parent *Feature, targets []RebaseRepoTarget, behind []string) string {
+	behindSet := make(map[string]bool, len(behind))
+	for _, r := range behind {
+		behindSet[r] = true
+	}
+	targetByRepo := make(map[string]RebaseRepoTarget, len(targets))
+	for _, t := range targets {
+		targetByRepo[t.Repo] = t
+	}
+
+	var sb strings.Builder
+	sb.WriteString("This pass merge-reconciles the feature's branches against their resolved base targets.\n")
+	sb.WriteString("\n## Instructions\n\n")
+	sb.WriteString("- For each behind repository listed below, merge the resolved target into the repository's working branch using `git merge` (never rebase, no history rewrite).\n")
+	sb.WriteString("- Adapt the feature's code to the base's new APIs where they collide with the feature's changes.\n")
+	sb.WriteString("- Keep trivial clean merges minimal: do not opportunistically refactor or reformat code that merges cleanly.\n")
+	sb.WriteString("- Leave up-to-date repositories completely untouched. Do not merge, rebase, or modify them in any way.\n")
+	sb.WriteString("- Never push to any remote. All work is local; integration lands through the parent merge transaction.\n")
+	sb.WriteString("- Do not fetch from any remote. The target refs were fetched at creation time and are already available in the shared object store.\n")
+
+	for _, repo := range parent.Repos {
+		if !behindSet[repo.Name] {
+			continue
+		}
+		t := targetByRepo[repo.Name]
+		sb.WriteString("\n## Repository: ")
+		sb.WriteString(repo.Name)
+		sb.WriteString("\n\nResolved target ref: ")
+		sb.WriteString(t.Ref)
+		sb.WriteString(" (branch: ")
+		sb.WriteString(t.Target)
+		sb.WriteString(")\n\n")
+		sb.WriteString("Merge `")
+		sb.WriteString(t.Ref)
+		sb.WriteString("` into the working branch `")
+		sb.WriteString(repo.Branch)
+		sb.WriteString("`. Resolve any conflicts by adapting the feature's code to the base's new APIs. Keep the merge commit (do not squash).\n")
+	}
+	return sb.String()
+}
+
+// rebaseExitCriteria generates deterministic exit criteria for a rebase child.
+// It states the per-behind-repo git-level completion facts the final review
+// can check semantically, plus the invariants that up-to-date repos are
+// unchanged and nothing was pushed.
+func rebaseExitCriteria(targets []RebaseRepoTarget, behind []string) string {
+	behindSet := make(map[string]bool, len(behind))
+	for _, r := range behind {
+		behindSet[r] = true
+	}
+	targetByRepo := make(map[string]RebaseRepoTarget, len(targets))
+	for _, t := range targets {
+		targetByRepo[t.Repo] = t
+	}
+
+	var sb strings.Builder
+	sb.WriteString("This pass is complete when all of the following git-level completion facts hold for every behind repository:\n")
+	for _, r := range behind {
+		t := targetByRepo[r]
+		sb.WriteString("\n### Repository: ")
+		sb.WriteString(r)
+		sb.WriteString("\n\n- The resolved target commit (`")
+		sb.WriteString(t.Ref)
+		sb.WriteString("`) is an ancestor of the working-branch head (`git merge-base --is-ancestor ")
+		sb.WriteString(t.Ref)
+		sb.WriteString(" HEAD` succeeds).\n")
+		sb.WriteString("- No merge is in progress (no `rebase-merge` or `rebase-apply` directory, no `MERGE_HEAD`).\n")
+		sb.WriteString("- No conflict markers remain in any tracked file (content scan for literal `<<<<<<<`, `=======`, `>>>>>>>` sequences is empty).\n")
+		sb.WriteString("- The worktree is clean (`git status --porcelain` is empty).\n")
+	}
+	sb.WriteString("\n## Invariants\n\n")
+	sb.WriteString("- Up-to-date repositories (not listed above) are completely unchanged: their worktree HEAD, branch, and content are byte-identical to the creation-time fork point.\n")
+	sb.WriteString("- Nothing was pushed to any remote at any stage. All work is local.\n")
+	return sb.String()
+}
+
+func validateReviewFeedbackSpec(spec ReviewFeedbackChildSpec) error {
+	if len(spec.Comments) == 0 {
+		return ErrReviewFeedbackEmptySelection
+	}
+	for _, comment := range spec.Comments {
+		switch comment.Type {
+		case git.CommentTypeReview, git.CommentTypeIssue, git.CommentTypeReviewBody:
+		default:
+			return fmt.Errorf("%w: comment %d has type %q", ErrReviewFeedbackUnsupportedCommentType, comment.ID, comment.Type)
+		}
+	}
+	return nil
+}
+
+func validateReviewFeedbackCommentRepos(parent *Feature, comments []ReviewFeedbackComment) error {
+	parentRepos := make(map[string]struct{}, len(parent.Repos))
+	for _, repo := range parent.Repos {
+		parentRepos[repo.Name] = struct{}{}
+	}
+	for _, comment := range comments {
+		if _, ok := parentRepos[comment.Repo]; !ok {
+			return fmt.Errorf("%w: %q", ErrReviewFeedbackUnknownRepo, comment.Repo)
+		}
+		state := parent.RepoStates[comment.Repo]
+		if state == nil || strings.TrimSpace(state.PRURL) == "" {
+			return fmt.Errorf("%w: %q", ErrReviewFeedbackRepoHasNoPR, comment.Repo)
+		}
+	}
+	return nil
+}
+
+func reviewFeedbackDescription(parent *Feature, comments []ReviewFeedbackComment) string {
+	prURLs := make(map[string]string, len(parent.RepoStates))
+	for repo, state := range parent.RepoStates {
+		if state != nil {
+			prURLs[repo] = state.PRURL
+		}
+	}
+	commentsByRepo := make(map[string][]ReviewFeedbackComment)
+	repoOrder := make([]string, 0)
+	for _, comment := range comments {
+		if _, ok := commentsByRepo[comment.Repo]; !ok {
+			repoOrder = append(repoOrder, comment.Repo)
+		}
+		commentsByRepo[comment.Repo] = append(commentsByRepo[comment.Repo], comment)
+	}
+
+	var description strings.Builder
+	description.WriteString("This pass addresses selected pull request review feedback.\n")
+	for _, repo := range repoOrder {
+		description.WriteString("\n## Repository: ")
+		description.WriteString(repo)
+		description.WriteString("\n\nPull request: ")
+		description.WriteString(prURLs[repo])
+		description.WriteString("\n")
+		for _, comment := range commentsByRepo[repo] {
+			description.WriteString("\n### Comment ")
+			description.WriteString(strconv.Itoa(comment.ID))
+			description.WriteString(" (")
+			description.WriteString(comment.Type)
+			description.WriteString(")\n")
+			if comment.Path != "" {
+				description.WriteString("\nFile: ")
+				description.WriteString(comment.Path)
+				if comment.Line > 0 {
+					description.WriteString(":")
+					description.WriteString(strconv.Itoa(comment.Line))
+				}
+				description.WriteString("\n")
+			}
+			description.WriteString("\nAuthor: ")
+			description.WriteString(comment.Author)
+			description.WriteString("\n\nBody:\n")
+			description.WriteString(comment.Body)
+			description.WriteString("\n")
+			if comment.DiffHunk != "" {
+				description.WriteString("\nDiff hunk:\n```diff\n")
+				description.WriteString(comment.DiffHunk)
+				description.WriteString("\n```\n")
+			}
+		}
+	}
+	return description.String()
+}
+
+// reviewFeedbackExitCriteria generates deterministic exit criteria for a
+// review-feedback child. Instead of inheriting the parent's exit criteria,
+// the child is instructed to address or dismiss each selected comment with
+// reasoning and to record one entry per selected comment — comment ID,
+// disposition (addressed/dismissed), and a short explanation — in a JSON
+// file at a fixed, well-known path inside the child's active run directory.
+// Generation is byte-stable for the same selection.
+func reviewFeedbackExitCriteria(comments []ReviewFeedbackComment) string {
+	var sb strings.Builder
+	sb.WriteString("This pass addresses selected pull request review feedback.\n")
+	sb.WriteString("\nFor each selected comment listed below, address the feedback in the code or dismiss it with a short written justification. After all comments are handled, record the outcome of each one in a JSON file named `")
+	sb.WriteString(ReviewFeedbackOutcomesFilename)
+	sb.WriteString("` at the root of the active run directory.\n")
+	sb.WriteString("\nThe JSON file must be an array of objects, one per selected comment, each with these fields:\n")
+	sb.WriteString("- `id` (integer): the GitHub comment ID\n")
+	sb.WriteString("- `disposition` (string): `\"addressed\"` if the code was changed to resolve the comment, or `\"dismissed\"` if the comment was intentionally not acted on\n")
+	sb.WriteString("- `explanation` (string): a one-sentence summary of what was done or why it was dismissed\n")
+	sb.WriteString("\nSelected comments to handle:\n")
+	for _, c := range comments {
+		fmt.Fprintf(&sb, "- Comment %d (%s, repo %s)", c.ID, c.Type, c.Repo)
+		if c.Path != "" {
+			fmt.Fprintf(&sb, " in %s", c.Path)
+			if c.Line > 0 {
+				fmt.Fprintf(&sb, ":%d", c.Line)
+			}
+		}
+		sb.WriteString("\n")
+	}
+	sb.WriteString("\nEvery selected comment must have exactly one entry in the outcomes file. The pass is complete when all comments are handled and the outcomes file is written.")
+	return sb.String()
+}
+
 // CreateRefactorChild atomically launches a refactor child under the given
 // parent. The parent must be a top-level Published or CodeReady feature with
 // no active child and clean worktrees in every repository; one dirty
@@ -301,7 +813,7 @@ func (m *Manager) CreateRefactorChild(parentID string, spec RefactorChildSpec) (
 		}
 		return nil, fmt.Errorf("loading parent feature: %w", err)
 	}
-	if err := validateRefactorParent(parent, nil); err != nil {
+	if err := ValidateRefactorParent(parent, nil); err != nil {
 		return nil, err
 	}
 
@@ -315,7 +827,7 @@ func (m *Manager) CreateRefactorChild(parentID string, spec RefactorChildSpec) (
 
 	now := time.Now()
 	child, err := m.Store.CreateChildLocked(parentID, func(lockedParent *Feature, activeChild *Feature) (*Feature, *ChildCreationIntent, error) {
-		if err := validateRefactorParent(lockedParent, activeChild); err != nil {
+		if err := ValidateRefactorParent(lockedParent, activeChild); err != nil {
 			return nil, nil, err
 		}
 		child := m.buildRefactorChild(lockedParent, spec, bases, now)
@@ -328,12 +840,7 @@ func (m *Manager) CreateRefactorChild(parentID string, spec RefactorChildSpec) (
 		// settings from leaving the two records inconsistent, while
 		// inheriting fields rewrite an identical value. Only the pipeline
 		// identity stays child-specific; the parent's pipeline is untouched.
-		lockedParent.Checkpoints = child.Checkpoints
-		lockedParent.Models = child.Models
-		lockedParent.Effort = child.Effort
-		lockedParent.RiskLevel = child.RiskLevel
-		lockedParent.ExitCriteria = child.ExitCriteria
-		lockedParent.Inquireness = child.Inquireness
+		applyResolvedReviewConfig(lockedParent, child)
 		intent := &ChildCreationIntent{
 			ChildID:   child.ID,
 			Kind:      ChildKindRefactor,
@@ -349,9 +856,21 @@ func (m *Manager) CreateRefactorChild(parentID string, spec RefactorChildSpec) (
 	return child, nil
 }
 
-// validateRefactorParent enforces the launch rules against the parent. When
+// applyResolvedReviewConfig preserves the paired-config invariant at child
+// creation: every shared review axis is committed to both records under the
+// store's creation lock, while the child-specific pipeline remains separate.
+func applyResolvedReviewConfig(parent, child *Feature) {
+	parent.Checkpoints = child.Checkpoints
+	parent.Models = child.Models
+	parent.Effort = child.Effort
+	parent.RiskLevel = child.RiskLevel
+	parent.ExitCriteria = child.ExitCriteria
+	parent.Inquireness = child.Inquireness
+}
+
+// ValidateRefactorParent enforces the launch rules against the parent. When
 // activeChild is non-nil the caller already knows an active child exists.
-func validateRefactorParent(parent *Feature, activeChild *Feature) error {
+func ValidateRefactorParent(parent *Feature, activeChild *Feature) error {
 	if parent.IsChild() {
 		return fmt.Errorf("%w: %s", ErrRefactorParentIsChild, parent.ID)
 	}
@@ -371,7 +890,7 @@ func (m *Manager) preflightRefactorParent(parent *Feature) ([]ChildRepoBase, err
 	// Dirty-worktree inspection is a mandatory safety check for child
 	// launches: a missing adapter must fail the launch explicitly, like
 	// exact-HEAD capture, not silently skip the check.
-	if m.Cleanliness == nil {
+	if m.Worktrees == nil {
 		return nil, fmt.Errorf("cleanliness inspection is not configured")
 	}
 	var bases []ChildRepoBase
@@ -381,7 +900,7 @@ func (m *Manager) preflightRefactorParent(parent *Feature) ([]ChildRepoBase, err
 		if path == "" {
 			path = repo.Path
 		}
-		report, err := m.Cleanliness.InspectCleanliness(path, DefaultDirtyPathLimit)
+		report, err := m.Worktrees.InspectCleanliness(path, DefaultDirtyPathLimit)
 		if err != nil {
 			return nil, fmt.Errorf("inspecting parent worktree %s: %w", repo.Name, err)
 		}
@@ -410,33 +929,12 @@ func (m *Manager) preflightRefactorParent(parent *Feature) ([]ChildRepoBase, err
 	return bases, nil
 }
 
-// HeadSHAReader is the exact-HEAD lookup capability the launch and setup
-// retry paths require: launch captures every parent's exact tip and retry
-// validates worktree reuse against the persisted exact base. It is satisfied
-// by *git.WorktreeManager; wiring that omits it fails the launch or retry
-// loudly instead of silently degrading exact-base guarantees.
-type HeadSHAReader interface {
-	CurrentHeadSHA(worktreePath string) (string, error)
-}
-
-// headSHAReader returns the configured exact-HEAD lookup or an error naming
-// the missing mandatory capability.
-func (m *Manager) headSHAReader() (HeadSHAReader, error) {
-	resolver, ok := m.Worktrees.(HeadSHAReader)
-	if !ok {
-		return nil, fmt.Errorf("exact head capture is not configured")
-	}
-	return resolver, nil
-}
-
-// resolveHeadSHA captures the full HEAD of a worktree through the HeadSHAReader
-// capability.
+// resolveHeadSHA captures the full HEAD of a worktree.
 func (m *Manager) resolveHeadSHA(path string) (string, error) {
-	resolver, err := m.headSHAReader()
-	if err != nil {
-		return "", err
+	if m.Worktrees == nil {
+		return "", fmt.Errorf("exact head capture is not configured")
 	}
-	return resolver.CurrentHeadSHA(path)
+	return m.Worktrees.CurrentHeadSHA(path)
 }
 
 // buildRefactorChild materializes the child aggregate: it inherits every
@@ -448,7 +946,7 @@ func (m *Manager) buildRefactorChild(parent *Feature, spec RefactorChildSpec, ba
 	id := generateID()
 	slug := Slugify(spec.Name)
 	workspaceSlug := WorkspaceSlug(slug, id)
-	branch := m.branchName(workspaceSlug)
+	branch := git.BranchName(workspaceSlug)
 
 	childRepos := make([]FeatureRepo, 0, len(parent.Repos))
 	for _, pr := range parent.Repos {

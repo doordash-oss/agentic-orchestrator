@@ -53,8 +53,8 @@ func TestEditPermission_EmitsCwdRelativeGlob(t *testing.T) {
 }
 
 // TestEditPermission_EmitsExactFileRoot guards bounded review helpers, which
-// pass exact artifact file paths (for example validation feedback and
-// phase_complete) as writable roots. OpenCode evaluates a write to the file
+// pass exact artifact file paths (for example validation feedback) as writable
+// roots. OpenCode evaluates a write to the file
 // path itself, so a recursive child-only pattern like "<file>/**" does not
 // match and the tool falls through to the catch-all deny.
 func TestEditPermission_EmitsExactFileRoot(t *testing.T) {

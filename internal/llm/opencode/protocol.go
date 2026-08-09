@@ -24,6 +24,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 )
@@ -37,7 +38,7 @@ var nextID atomic.Int64
 const requestedProtocolVersion = 1
 
 // jsonRPCMethodNotSupported is the JSON-RPC error code used when Agentico
-// declines an agent->client request it does not implement during Phase 1.
+// declines an agent-to-client request it does not implement.
 const jsonRPCMethodNotSupported = -32601
 
 // Protocol implements llm.Protocol for the OpenCode ACP (Agent Client Protocol)
@@ -99,6 +100,10 @@ type Protocol struct {
 	// attach/live-preview surfaces still need the normalized tool name and any
 	// file target discovered earlier in the call lifecycle.
 	toolCalls map[string]toolCallState
+	// taskByChildSession binds child ACP activity to the root Task tool call
+	// that owns it. OpenCode uses distinct identifiers for those two surfaces;
+	// uncorrelated child updates must not create phantom live tasks.
+	taskByChildSession map[string]string
 
 	// Control-request bookkeeping. pendingPerms maps a permission request id to
 	// the allow/reject option ids the user's approve/deny decision selects;
@@ -129,6 +134,7 @@ type toolCallState struct {
 	kind                string
 	path                string
 	command             string
+	timeoutMS           int64
 	rawInput            json.RawMessage
 	taskToolUseEmitted  bool
 	taskStartedEmitted  bool
@@ -407,7 +413,7 @@ func (p *Protocol) ParseLine(line []byte) ([]llm.SDKMessage, error) {
 	// session establishment), or several (a prompt result emits a cumulative
 	// usage update plus the terminal result).
 	if hasID && env.Method == "" {
-		return p.handleResponse(env), nil
+		return stampRootMessages(p.handleResponse(env)), nil
 	}
 
 	// Server-initiated (agent->client) request: has id and method. Agentico
@@ -473,7 +479,7 @@ func (p *Protocol) malformedStdout(detail string) ([]llm.SDKMessage, error) {
 // protocol stdout line.
 func malformedStdoutDiagnostic(detail string) string {
 	return fmt.Sprintf(
-		"OpenCode emitted malformed JSON-RPC on stdout (%s). The Phase 1 tracer requires clean newline-delimited JSON-RPC on stdout; corrupt protocol output is treated as a failed session. Failing closed.",
+		"OpenCode emitted malformed JSON-RPC on stdout (%s). The protocol requires clean newline-delimited JSON-RPC on stdout; corrupt protocol output is treated as a failed session. Failing closed.",
 		detail,
 	)
 }
@@ -635,6 +641,9 @@ func (p *Protocol) handlePromptResponse(env inboundEnvelope, hasErr bool) []llm.
 			// answer arrives on the follow-up turn's response.
 			return usageMsgs
 		}
+		if strings.TrimSpace(lastText) != "" {
+			usageMsgs = append(usageMsgs, assistantFinal(lastText))
+		}
 		term, emit := p.terminalSuccess()
 		return appendIfEmit(usageMsgs, term, emit)
 	case StopReasonRefusal:
@@ -729,6 +738,12 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) []ll
 			)))
 		}
 	}
+	p.mu.Lock()
+	rootSessionID := p.acpSessionID
+	p.mu.Unlock()
+	if su.SessionID != "" && rootSessionID != "" && su.SessionID != rootSessionID {
+		return p.childSessionUpdate(su)
+	}
 
 	var out []llm.SDKMessage
 	switch su.Update.SessionUpdate {
@@ -781,7 +796,102 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) []ll
 		}
 	}
 
+	now := time.Now().UTC()
+	for i := range out {
+		out[i].OccurredAt = now
+		out[i].Origin = llm.EventOrigin{Kind: llm.EventOriginRoot}
+		switch {
+		case out[i].TaskStarted != nil:
+			out[i].Origin = llm.EventOrigin{
+				Kind:   llm.EventOriginTask,
+				TaskID: out[i].TaskStarted.TaskID,
+			}
+		case out[i].TaskProgress != nil:
+			out[i].Origin = llm.EventOrigin{
+				Kind:   llm.EventOriginTask,
+				TaskID: out[i].TaskProgress.TaskID,
+			}
+		case out[i].TaskNotification != nil:
+			out[i].Origin = llm.EventOrigin{
+				Kind:   llm.EventOriginTask,
+				TaskID: out[i].TaskNotification.TaskID,
+			}
+		}
+	}
 	return out
+}
+
+func (p *Protocol) childSessionUpdate(su SessionUpdateParams) []llm.SDKMessage {
+	if su.SessionID == "" {
+		return nil
+	}
+	taskID := p.parentTaskForChildSession(su.SessionID)
+	if taskID == "" {
+		return nil
+	}
+	progress := &llm.TaskProgressMessage{
+		Type:      "system",
+		Subtype:   "task_progress",
+		TaskID:    taskID,
+		ToolUseID: taskID,
+	}
+	switch su.Update.SessionUpdate {
+	case UpdateAgentMessageChunk, UpdateAgentThoughtChunk:
+		progress.Description = strings.TrimSpace(updateText(su.Update.Content))
+	case UpdateToolCall, UpdateToolCallUpdate:
+		state := mergeToolCallState(toolCallState{}, su.Update)
+		progress.Description = strings.TrimSpace(state.title)
+		progress.LastToolName = normalizedProgressToolName(state)
+		progress.LastPath = strings.TrimSpace(state.path)
+	case UpdateUsage:
+		progress.Usage = &llm.TaskUsage{TotalTokens: su.Update.Used}
+	default:
+		return nil
+	}
+	return []llm.SDKMessage{{
+		Type:         "system",
+		Subtype:      "task_progress",
+		Origin:       llm.EventOrigin{Kind: llm.EventOriginTask, TaskID: taskID, ChildSessionID: su.SessionID},
+		OccurredAt:   time.Now().UTC(),
+		TaskProgress: progress,
+	}}
+}
+
+func (p *Protocol) parentTaskForChildSession(childSessionID string) string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if taskID := p.taskByChildSession[childSessionID]; taskID != "" {
+		return taskID
+	}
+	taskID := ""
+	for candidate, state := range p.toolCalls {
+		if !state.taskStartedEmitted || state.taskTerminalEmitted {
+			continue
+		}
+		if taskID != "" {
+			// ACP child updates do not carry the parent tool-call identifier.
+			// With multiple tasks active, guessing would corrupt liveness.
+			return ""
+		}
+		taskID = candidate
+	}
+	if taskID == "" {
+		return ""
+	}
+	if p.taskByChildSession == nil {
+		p.taskByChildSession = make(map[string]string)
+	}
+	p.taskByChildSession[childSessionID] = taskID
+	return taskID
+}
+
+func stampRootMessages(messages []llm.SDKMessage) []llm.SDKMessage {
+	now := time.Now().UTC()
+	for i := range messages {
+		messages[i].Origin = llm.EventOrigin{Kind: llm.EventOriginRoot}
+		messages[i].OccurredAt = now
+	}
+	return messages
 }
 
 // updateText returns the text of a message-chunk content block, or "" when
@@ -949,6 +1059,7 @@ func (p *Protocol) toolProgressFromUpdate(update SessionUpdate) llm.ToolProgress
 		ToolUseID: update.ToolCallID,
 		ToolName:  normalizedProgressToolName(state),
 		Data:      normalizedProgressData(update.Status, state),
+		TimeoutMS: state.timeoutMS,
 	}
 }
 
@@ -961,6 +1072,9 @@ func mergeToolCallState(state toolCallState, update SessionUpdate) toolCallState
 	}
 	if command := firstStringField(update.RawInput, "", "command", "cmd", "script"); command != "" {
 		state.command = command
+	}
+	if timeoutMS := firstPositiveNumberField(update.RawInput, "timeout"); timeoutMS > 0 {
+		state.timeoutMS = timeoutMS
 	}
 	if len(update.RawInput) > 0 {
 		state.rawInput = update.RawInput
@@ -1262,6 +1376,7 @@ func (p *Protocol) usageLocked() llm.Usage {
 		ContextTotalTokens:       contextFill,
 		ContextWindow:            p.contextWindow,
 		ContextBaseline:          0,
+		CostUSD:                  p.costUSD,
 	}
 }
 
@@ -1375,6 +1490,19 @@ func assistantPartial(block llm.ContentBlock) llm.SDKMessage {
 	}
 }
 
+func assistantFinal(text string) llm.SDKMessage {
+	return llm.SDKMessage{
+		Type: "assistant",
+		Assistant: &llm.AssistantMessage{
+			Type: "assistant",
+			Message: llm.ConversationMsg{
+				Role:    "assistant",
+				Content: []llm.ContentBlock{{Type: "text", Text: text}},
+			},
+		},
+	}
+}
+
 func assistantToolUse(block llm.ContentBlock) llm.SDKMessage {
 	return llm.SDKMessage{
 		Type: "assistant",
@@ -1437,8 +1565,7 @@ func (p *Protocol) SendUserMessage(text string) error {
 func (p *Protocol) RespondToHook(string) error { return nil }
 
 // RespondToControl and RespondToAskUser are implemented in control.go: they
-// answer the Phase 2 permission and question surfaces back through the ACP
-// protocol.
+// answer permission and question requests through the ACP protocol.
 
 // Interrupt cancels the in-flight turn using the ACP session/cancel
 // notification, which OpenCode answers by completing the pending session/prompt
@@ -1512,10 +1639,6 @@ func (p *Protocol) InitialPromptForTest() string { return p.opts.InitialPrompt }
 
 // WorkDirForTest returns the resolved work directory used for session/new.
 func (p *Protocol) WorkDirForTest() string { return p.opts.WorkDir }
-
-// MarkerPathForTest returns the phase_complete marker path threaded through the
-// protocol options.
-func (p *Protocol) MarkerPathForTest() string { return p.opts.MarkerPath }
 
 // BackendModelForTest returns the backend "provider/model" the protocol selected.
 func (p *Protocol) BackendModelForTest() string { return p.model }

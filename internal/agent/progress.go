@@ -73,6 +73,9 @@ type ProgressTracker struct {
 	noProgressCount int
 	hasOutcome      bool
 	bestBlockers    int
+	// Verified stall-evidence state: the last worktree fingerprint seen by
+	// ObserveVerifiedOutcomeWithWorktree.
+	lastVerifiedWorktree string
 	// RETRY stall-evidence state: the last handoff-narrative and worktree
 	// fingerprints seen by ObserveRetryOutcome.
 	hasRetryObservation bool
@@ -115,20 +118,36 @@ func (pt *ProgressTracker) NoProgressCount() int {
 	return pt.noProgressCount
 }
 
-// ObserveVerifiedOutcome records a deterministic outcome. Progress is credited
-// only when the verified blocker count reaches a new low; repeated narrative or
-// file churn without fewer blockers does not reset the safety rail.
+// ObserveVerifiedOutcome records a deterministic outcome when no repository
+// fingerprint is available. Progress is credited when the verified blocker
+// count reaches a new low.
 func (pt *ProgressTracker) ObserveVerifiedOutcome(blockers int) bool {
+	return pt.ObserveVerifiedOutcomeWithWorktree(blockers, "")
+}
+
+// ObserveVerifiedOutcomeWithWorktree records a deterministic verifier/reviewer
+// outcome together with the repository state that produced it. Fewer blockers
+// or a changed worktree is progress; an empty fingerprint cannot disarm the
+// safety rail.
+func (pt *ProgressTracker) ObserveVerifiedOutcomeWithWorktree(blockers int, worktreeFP string) bool {
 	if blockers < 0 {
 		blockers = 0
+	}
+	worktreeChanged := worktreeFP != "" &&
+		pt.lastVerifiedWorktree != "" &&
+		worktreeFP != pt.lastVerifiedWorktree
+	if worktreeFP != "" {
+		pt.lastVerifiedWorktree = worktreeFP
 	}
 	if !pt.hasOutcome {
 		pt.hasOutcome = true
 		pt.bestBlockers = blockers
 		return true
 	}
-	if blockers < pt.bestBlockers {
-		pt.bestBlockers = blockers
+	if blockers < pt.bestBlockers || worktreeChanged {
+		if blockers < pt.bestBlockers {
+			pt.bestBlockers = blockers
+		}
 		pt.noProgressCount = 0
 		return true
 	}
@@ -239,7 +258,7 @@ func CountOpenVerificationOutcomeBlockers(out *VerificationExecutionOutcome) int
 
 // IterationState is the harness-recognised terminal state the agent declares
 // in progress.md's `## Iteration State` section. StateInvalid is reserved for
-// cases where parsing failed or the body did not match one of the three
+// cases where parsing failed or the body did not match one of the two
 // canonical tokens — callers must treat StateInvalid as a protocol violation,
 // not as one of the valid routes.
 type IterationState int
@@ -248,7 +267,6 @@ const (
 	StateInvalid IterationState = iota
 	StateSuccess
 	StateRetry
-	StateNeedUserInput
 )
 
 func (s IterationState) String() string {
@@ -257,8 +275,6 @@ func (s IterationState) String() string {
 		return agentStatusSuccess
 	case StateRetry:
 		return "RETRY"
-	case StateNeedUserInput:
-		return "NEED_USER_INPUT"
 	default:
 		return "INVALID"
 	}
@@ -273,11 +289,9 @@ func (s IterationState) String() string {
 // otherwise looks valid.
 type ParsedProgress struct {
 	State              IterationState
-	StateNote          string // free-text body after the state token (NEED_USER_INPUT only)
 	Deferrals          []feature.IncomingDeferral
 	ClosedDeferrals    []string
 	HandoffSections    map[string]string // sub-section heading -> body (Iteration Handoff children)
-	Questions          []string          // numbered prompts under `## Questions for User`
 	ProtocolViolations []string
 }
 
@@ -319,7 +333,6 @@ var progressHandoffSubsections = []string{
 var validIterationStateTokens = map[string]IterationState{
 	agentStatusSuccess: StateSuccess,
 	"RETRY":            StateRetry,
-	"NEED_USER_INPUT":  StateNeedUserInput,
 }
 
 // progressYAMLBlockRE matches a fenced YAML code block; capture group 1 is
@@ -352,7 +365,7 @@ func ParseProgressMd(path string) (*ParsedProgress, error) {
 		if os.IsNotExist(err) {
 			return &ParsedProgress{
 				ProtocolViolations: []string{
-					fmt.Sprintf("progress.md not found at %s — the implement iteration must emit it as the only narrative output before touching phase_complete", path),
+					fmt.Sprintf("progress.md not found at %s — the implement iteration must emit it before declaring a completion outcome", path),
 				},
 			}, nil
 		}
@@ -422,67 +435,31 @@ func ParseProgressMd(path string) (*ParsedProgress, error) {
 		}
 	}
 
-	// Questions for User: required when state is NEED_USER_INPUT, forbidden
-	// otherwise. The parser tracks section presence separately from parsed
-	// content so a heading-without-content gate ("## Questions for User"
-	// followed by an empty body) is still rejected.
-	_, questionsSectionPresent := findSectionHeadings(body, []string{"## Questions for User"})["## Questions for User"]
-	if questionsBody := extractMarkdownSection(body, "## Questions for User"); questionsBody != "" {
-		parsed.Questions = parseNumberedQuestions(questionsBody)
-	}
-
-	// Iteration State: exactly one of the three tokens on its own line,
-	// possibly followed by free-text (captured as StateNote for the
-	// NEED_USER_INPUT case).
+	// Iteration State: exactly one of the two tokens on its own line.
 	if stateBody := extractMarkdownSection(body, "## Iteration State"); stateBody != "" {
 		token, note := splitStateTokenAndNote(stateBody)
 		if state, ok := validIterationStateTokens[token]; ok {
 			parsed.State = state
-			if state == StateNeedUserInput {
-				parsed.StateNote = note
+			if strings.TrimSpace(note) != "" {
+				parsed.ProtocolViolations = append(parsed.ProtocolViolations,
+					"progress.md `## Iteration State` must contain only the state token on its own line")
 			}
 		} else {
 			parsed.ProtocolViolations = append(parsed.ProtocolViolations, fmt.Sprintf(
-				"progress.md `## Iteration State` body must be exactly one of {SUCCESS, RETRY, NEED_USER_INPUT} on its own line; got %q", token))
+				"progress.md `## Iteration State` body must be exactly one of {SUCCESS, RETRY} on its own line; got %q", token))
 		}
 	} else if !missingOrUnordered {
 		// Section present in heading scan but body empty (e.g., heading
 		// followed immediately by EOF). Treat as a protocol violation.
 		// When the heading was missing we already emitted a finding.
 		parsed.ProtocolViolations = append(parsed.ProtocolViolations,
-			"progress.md `## Iteration State` section is empty — emit one of {SUCCESS, RETRY, NEED_USER_INPUT} on its own line")
+			"progress.md `## Iteration State` section is empty — emit one of {SUCCESS, RETRY} on its own line")
 	}
 
-	// Cross-validate the state-specific Questions contract. NEED_USER_INPUT
-	// requires both a non-empty StateNote (the gate summary surfaced to the
-	// user) and at least one parsed question — without either the gate is
-	// unrecoverable: the user has nothing to act on and resume's answer-
-	// completeness check rejects an empty question set. SUCCESS and RETRY
-	// must NOT carry a Questions section so a stale gate from a prior
-	// iteration cannot survive a resumed iteration. The placement check
-	// (Questions must sit between Deferrals and Iteration State)
-	// is shared logic in validateQuestionsSectionPlacement.
-	switch parsed.State {
-	case StateNeedUserInput:
-		if strings.TrimSpace(parsed.StateNote) == "" {
-			parsed.ProtocolViolations = append(parsed.ProtocolViolations,
-				"progress.md `## Iteration State` body must include a non-empty summary after the `NEED_USER_INPUT` token — the summary is shown to the user as the gate description")
-		}
-		if !questionsSectionPresent {
-			parsed.ProtocolViolations = append(parsed.ProtocolViolations,
-				"progress.md state is `NEED_USER_INPUT` but the required `## Questions for User` section is missing — emit a numbered list of the prompts the user must answer before resume")
-		} else if len(parsed.Questions) == 0 {
-			parsed.ProtocolViolations = append(parsed.ProtocolViolations,
-				"progress.md `## Questions for User` section parsed zero numbered prompts — every NEED_USER_INPUT gate must list at least one numbered question (e.g. `1. Should X target legacy or new?`)")
-		}
-	case StateSuccess, StateRetry:
-		if questionsSectionPresent {
-			parsed.ProtocolViolations = append(parsed.ProtocolViolations, fmt.Sprintf(
-				"progress.md state is `%s` but a `## Questions for User` section is present — that section is reserved for `NEED_USER_INPUT` and must not survive into a resumed iteration",
-				parsed.State))
-		}
+	if _, present := findSectionHeadings(body, []string{"## Questions for User"})["## Questions for User"]; present {
+		parsed.ProtocolViolations = append(parsed.ProtocolViolations,
+			"progress.md must not contain `## Questions for User`; use the formal AskUserQuestion control before declaring an outcome")
 	}
-	validateQuestionsSectionPlacement(body, parsed)
 
 	return parsed, nil
 }
@@ -507,43 +484,13 @@ func FormatProtocolViolationFeedback(parsed *ParsedProgress) string {
 	b.WriteString("\nRe-emit `progress.md` with these sections in order:\n")
 	b.WriteString("1. `## Iteration Handoff` (with the four `### ` sub-sections)\n")
 	b.WriteString("2. `## Deferrals` (fenced YAML block with `deferrals:` and `closed_deferrals:` keys)\n")
-	b.WriteString("3. `## Questions for User` only when `## Iteration State` is `NEED_USER_INPUT`, and only between Deferrals and Iteration State (numbered list of structured prompts)\n")
-	b.WriteString("4. `## Iteration State` (one of `SUCCESS`, `RETRY`, `NEED_USER_INPUT` on its own line; `NEED_USER_INPUT` requires a non-empty summary on the lines that follow)\n")
+	b.WriteString("3. `## Iteration State` (one of `SUCCESS`, `RETRY` on its own line)\n")
 	return FormatStructuredReviewFeedback(
 		"Implementation Review — Iteration Handoff Protocol Violation",
 		strings.TrimRight(b.String(), "\n"),
 		"",
 		ReviewChangesRequested,
 	)
-}
-
-// validateQuestionsSectionPlacement enforces that `## Questions for User`,
-// when present, sits between `## Deferrals` and
-// `## Iteration State`. Misplaced sections (most often appended after
-// `## Iteration State`) are surfaced as a protocol violation so the
-// deterministic retry path catches them before the gate artifact is
-// persisted. Stale-section / missing-section / empty-section cases are
-// already enforced upstream; this helper only adds the ordering rule for
-// NEED_USER_INPUT iterations whose Questions section parsed cleanly.
-func validateQuestionsSectionPlacement(body string, parsed *ParsedProgress) {
-	if parsed.State != StateNeedUserInput {
-		return
-	}
-	positions := findSectionHeadings(body, []string{
-		"## Deferrals",
-		"## Questions for User",
-		"## Iteration State",
-	})
-	qPos, qOK := positions["## Questions for User"]
-	if !qOK {
-		return
-	}
-	statePos, stateOK := positions["## Iteration State"]
-	deferralsPos, deferralsOK := positions["## Deferrals"]
-	if !deferralsOK || !stateOK || !(deferralsPos < qPos && qPos < statePos) {
-		parsed.ProtocolViolations = append(parsed.ProtocolViolations,
-			"progress.md `## Questions for User` must appear between `## Deferrals` and `## Iteration State` when state is `NEED_USER_INPUT`")
-	}
 }
 
 // findSectionHeadings returns the byte offset of each heading in the
@@ -684,49 +631,6 @@ func parseDeferralsYAML(yamlBody string) (*deferralsYAMLDoc, error) {
 		}
 	}
 	return &doc, nil
-}
-
-// numberedQuestionRE matches Markdown lines that begin a numbered question
-// item, e.g. `1. What should X be?` or `2) Choose A or B.`. Captures the
-// prompt body after the leading number+punctuation+space.
-var numberedQuestionRE = regexp.MustCompile(`^\s*\d+[.)]\s+(.+?)\s*$`)
-
-// parseNumberedQuestions extracts numbered prompts from `## Questions for
-// User` body text. Captures the first line of each numbered item; bullet
-// continuations on subsequent indented lines are concatenated as part of
-// the same prompt, separated by spaces. Empty or whitespace-only bodies
-// return nil.
-func parseNumberedQuestions(body string) []string {
-	var out []string
-	var current strings.Builder
-	flush := func() {
-		if current.Len() == 0 {
-			return
-		}
-		s := strings.TrimSpace(current.String())
-		if s != "" {
-			out = append(out, s)
-		}
-		current.Reset()
-	}
-	for _, line := range strings.Split(body, "\n") {
-		if m := numberedQuestionRE.FindStringSubmatch(line); m != nil {
-			flush()
-			current.WriteString(m[1])
-			continue
-		}
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "" {
-			continue
-		}
-		// Continuation of the current question (indented prose).
-		if current.Len() > 0 && (strings.HasPrefix(line, " ") || strings.HasPrefix(line, "\t")) {
-			current.WriteString(" ")
-			current.WriteString(trimmed)
-		}
-	}
-	flush()
-	return out
 }
 
 // splitStateTokenAndNote extracts the first non-blank line as the state

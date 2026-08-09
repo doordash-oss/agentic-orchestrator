@@ -324,9 +324,6 @@ func TestGrillMeFanout_PrimaryBuilders_EndToEnd(t *testing.T) {
 			if err := os.WriteFile(artifactPath, []byte("# "+tc.name+"\n"), 0o644); err != nil {
 				t.Fatalf("write artifact: %v", err)
 			}
-			if err := os.WriteFile(filepath.Join(phaseDir, agent.PhaseCompleteFile), nil, 0o644); err != nil {
-				t.Fatalf("write phase_complete: %v", err)
-			}
 			qaPath := filepath.Join(phaseDir, "qa-answers.md")
 			if err := os.WriteFile(qaPath, []byte(fanoutQAFile), 0o644); err != nil {
 				t.Fatalf("pre-write qa-answers.md: %v", err)
@@ -372,7 +369,7 @@ func TestGrillMeFanout_PrimaryBuilders_EndToEnd(t *testing.T) {
 
 // promptTail returns the last 1500 bytes of a prompt for diagnostic display
 // when an assertion fails. Mirrors the helper in
-// internal/tui/grill_me_smoke_test.go.
+// internal/orchestrator/grill_me_fanout_integration_test.go.
 func promptTail(prompt string) string {
 	const tailBytes = 1500
 	if len(prompt) <= tailBytes {

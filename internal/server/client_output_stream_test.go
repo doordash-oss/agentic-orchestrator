@@ -26,6 +26,9 @@ func TestSubscribeSessionOutputDeliversIndexedRecords(t *testing.T) {
 	t.Parallel()
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer test-token" {
+			t.Fatalf("Authorization = %q, want bearer token", got)
+		}
 		w.Header().Set("Content-Type", "text/event-stream")
 		flusher := w.(http.Flusher)
 		frames := []struct {
@@ -42,7 +45,7 @@ func TestSubscribeSessionOutputDeliversIndexedRecords(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c, err := NewClient(ClientOptions{BaseURL: srv.URL})
+	c, err := NewClient(ClientOptions{BaseURL: srv.URL, Token: testAuthToken})
 	if err != nil {
 		t.Fatalf("NewClient failed: %v", err)
 	}
@@ -109,31 +112,21 @@ func TestSubscribeSessionOutputResumesFromAfterIndex(t *testing.T) {
 	}
 }
 
-// TestSubscribeSessionOutputSurfacesStreamError confirms a
-// session.output.error frame reaches the caller on the error channel.
-func TestSubscribeSessionOutputSurfacesStreamError(t *testing.T) {
+func TestSubscribeSessionOutputRejectsUnknownEvent(t *testing.T) {
 	t.Parallel()
 
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
-		flusher := w.(http.Flusher)
-		_, _ = w.Write([]byte("event: session.output.error\ndata: " + `{"api_version":"v1","session_id":"sess-1","index":0}` + "\n\n"))
-		flusher.Flush()
+		_, _ = w.Write([]byte("event: session.output.unknown\ndata: " + `{"api_version":"v1","session_id":"sess-1","index":0}` + "\n\n"))
 	}))
-	defer srv.Close()
+	t.Cleanup(srv.Close)
 
 	c, err := NewClient(ClientOptions{BaseURL: srv.URL})
 	if err != nil {
-		t.Fatalf("NewClient failed: %v", err)
+		t.Fatalf("NewClient() error = %v", err)
 	}
 	_, errs := c.SubscribeSessionOutput(context.Background(), fixtureSessionID, SessionOutputStreamOptions{})
-
-	select {
-	case err, ok := <-errs:
-		if !ok || err == nil {
-			t.Fatalf("errs = (%v, %v), want a non-nil error", err, ok)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for the stream error")
+	if err := <-errs; err == nil {
+		t.Fatal("SubscribeSessionOutput() error = nil, want protocol error for unknown event")
 	}
 }

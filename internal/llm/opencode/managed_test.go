@@ -239,7 +239,7 @@ func TestManagedConfig_IsolationEnvScrubsInheritedSurfaces(t *testing.T) {
 
 func TestManagedConfig_RoleInstructionsDeliveredAsFile(t *testing.T) {
 	state := t.TempDir()
-	role := "# Agentico Role\nWrite only inside output roots.\nCompletion marker contract.\n"
+	role := "# Agentico Role\nWrite only inside output roots.\nStructured root-outcome contract.\n"
 	p := New()
 	_, env, err := p.BuildCommand(llm.CommandBuildOpts{
 		Model:        "anthropic/claude-sonnet-4-5",

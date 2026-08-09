@@ -1,0 +1,377 @@
+// Package inspection gate for the current host's native target ("current CI
+// matrix target"). Normally opens every artifact electron-builder produced
+// for this host — the universal DMG on macOS, the native-arch AppImage and
+// deb on Linux — and asserts, failing loudly on any gap. `--unpacked` checks
+// the runnable app directory directly for packaged Playwright; this avoids
+// requiring disk-image facilities merely to launch the package in a sandbox.
+//
+//   1. Desktop app payload: app.asar containing the built main/preload/
+//      renderer entry points and carrying no bundled text webfont — the
+//      renderer draws text with system faces only (--bench-font-* in
+//      tokens.css), so any shipped .woff2/.woff/.ttf/.otf/.eot is a
+//      regression back to bundled webfonts. The only permitted payload is
+//      monaco-editor's codicon glyph font (see findDisallowedFontAssets).
+//   2. Bundled server: resources/bin/agentico exists, is executable, and on
+//      macOS is a true universal (x86_64 + arm64) binary.
+//   3. Identity: resources/build-identity.json parses, satisfies the closed
+//      schema (validateBuildIdentity), matches the host target, and
+//      cross-checks against the binary's actual identity — the version and
+//      revision the binary itself reports via --version, and the GOOS the Go
+//      toolchain stamped into it (go version -m).
+//
+// On success it writes dist/package-verification.json recording the verified
+// artifacts, the identity, and the deterministic unpacked-app path the
+// packaged E2E journeys (Task 6b) launch — so 6b consumes a proven layout
+// instead of re-deriving it. The identity-rejection logic itself is
+// unit-tested in scripts/lib/identity.test.mjs against tampered fixtures.
+import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import {
+  accessSync,
+  constants,
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
+import { createRequire } from 'node:module';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { getCurrentFuseWire } from '@electron/fuses';
+
+import {
+  crossCheckServerBinary,
+  parseAgenticoVersionOutput,
+  parseGoBuildInfo,
+  validateBuildIdentity,
+} from './lib/identity.mjs';
+import { auditFuseWire } from './lib/fuse-policy.mjs';
+import { findDisallowedFontAssets, unpackedExecutablePath } from './lib/package-layout.mjs';
+
+const desktopDir = dirname(dirname(fileURLToPath(import.meta.url)));
+const distDir = join(desktopDir, 'dist');
+const require = createRequire(import.meta.url);
+const unpackedOnly = process.argv.slice(2).includes('--unpacked');
+
+class VerificationFailure extends Error {}
+
+function fail(message) {
+  throw new VerificationFailure(message);
+}
+
+function findArtifact(suffix) {
+  const matches = readdirSync(distDir).filter((name) => name.endsWith(suffix));
+  if (matches.length !== 1) {
+    fail(
+      `expected exactly one *${suffix} in ${distDir}, found ${matches.length}` +
+        (matches.length > 0 ? ` (${matches.join(', ')})` : '') +
+        '; run `npm run package:build` first',
+    );
+  }
+  return join(distDir, matches[0]);
+}
+
+/** Assert the app payload inside an extracted/mounted resources directory. */
+function verifyResources(resourcesDir, { expectUniversalBinary }) {
+  // 1. Desktop app payload.
+  const asarPath = join(resourcesDir, 'app.asar');
+  if (!existsSync(asarPath)) {
+    fail(`missing app.asar in ${resourcesDir}`);
+  }
+  if (process.platform === 'darwin' && expectUniversalBinary) {
+    verifyMacAsarIntegrity(resourcesDir, asarPath);
+  }
+  const asar = require('@electron/asar');
+  const entries = asar.listPackage(asarPath).map((entry) => entry.replaceAll('\\', '/'));
+  for (const required of [
+    '/out/main/index.js',
+    '/out/preload/index.cjs',
+    '/out/renderer/index.html',
+  ]) {
+    if (!entries.includes(required)) {
+      fail(`app.asar is missing ${required}`);
+    }
+  }
+  const fonts = findDisallowedFontAssets(entries);
+  if (fonts.length > 0) {
+    fail(
+      `app.asar ships ${fonts.length} bundled font asset(s); the renderer must ` +
+        'use system text faces only:\n  ' +
+        fonts.slice(0, 10).join('\n  ') +
+        (fonts.length > 10 ? `\n  ...and ${fonts.length - 10} more` : ''),
+    );
+  }
+
+  // 2. Identity file: present, schema-complete, and for this host target.
+  const identityPath = join(resourcesDir, 'build-identity.json');
+  if (!existsSync(identityPath)) {
+    fail(`missing build-identity.json in ${resourcesDir}`);
+  }
+  let identity;
+  try {
+    identity = JSON.parse(readFileSync(identityPath, 'utf8'));
+  } catch (error) {
+    fail(`build-identity.json is not valid JSON: ${error.message}`);
+  }
+  const validation = validateBuildIdentity(identity);
+  if (!validation.ok) {
+    fail(`build-identity.json is invalid:\n  ${validation.errors.join('\n  ')}`);
+  }
+  if (identity.os !== process.platform) {
+    fail(`build-identity.json os=${identity.os} does not match host ${process.platform}`);
+  }
+  const expectedArch =
+    process.platform === 'darwin' ? 'universal' : process.arch === 'arm64' ? 'arm64' : 'x64';
+  if (identity.arch !== expectedArch) {
+    fail(`build-identity.json arch=${identity.arch}, expected ${expectedArch} for this host`);
+  }
+
+  // 3. Bundled server binary: executable and matching the identity.
+  const binaryPath = join(resourcesDir, 'bin', 'agentico');
+  if (!existsSync(binaryPath) || !statSync(binaryPath).isFile()) {
+    fail(`missing bundled server binary at ${binaryPath}`);
+  }
+  try {
+    accessSync(binaryPath, constants.X_OK);
+  } catch {
+    fail(`bundled server binary is not executable: ${binaryPath}`);
+  }
+  if (expectUniversalBinary) {
+    const archs = execFileSync('lipo', ['-archs', binaryPath], { encoding: 'utf8' }).trim();
+    for (const arch of ['x86_64', 'arm64']) {
+      if (!archs.split(/\s+/).includes(arch)) {
+        fail(`bundled server binary is not universal (lipo -archs: "${archs}")`);
+      }
+    }
+  }
+  const reported = parseAgenticoVersionOutput(
+    execFileSync(binaryPath, ['--version'], { encoding: 'utf8' }),
+  );
+  if (reported === null) {
+    fail(`could not parse \`${binaryPath} --version\` output`);
+  }
+  const buildInfo = parseGoBuildInfo(
+    execFileSync('go', ['version', '-m', binaryPath], { encoding: 'utf8' }),
+  );
+  const mismatches = crossCheckServerBinary(identity, {
+    reportedVersion: reported.version,
+    reportedRevision: reported.revision,
+    reportedGoos: buildInfo.goos === null ? identity.os : buildInfo.goos,
+  });
+  if (mismatches.length > 0) {
+    fail(`bundled server does not match build-identity.json:\n  ${mismatches.join('\n  ')}`);
+  }
+  return identity;
+}
+
+function verifyMacAsarIntegrity(resourcesDir, asarPath) {
+  // Electron validates the serialized ASAR header, matching the algorithm
+  // used by electron-builder and @electron/universal. A whole-file digest is
+  // a different value and would make a valid archive fail closed at launch.
+  const asar = require('@electron/asar');
+  const actual = createHash('sha256')
+    .update(asar.getRawHeader(asarPath).headerString)
+    .digest('hex');
+  const appDir = dirname(resourcesDir);
+  const declarations = [];
+  const pending = [appDir];
+  while (pending.length > 0) {
+    const current = pending.pop();
+    for (const entry of readdirSync(current, { withFileTypes: true })) {
+      const candidate = join(current, entry.name);
+      if (entry.isDirectory()) {
+        pending.push(candidate);
+      } else if (entry.isFile() && entry.name === 'Info.plist') {
+        try {
+          const expected = execFileSync(
+            '/usr/libexec/PlistBuddy',
+            ['-c', 'Print :ElectronAsarIntegrity:Resources/app.asar:hash', candidate],
+            { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] },
+          ).trim();
+          declarations.push({ path: candidate, expected });
+        } catch {
+          // Not every nested bundle carries the app ASAR declaration.
+        }
+      }
+    }
+  }
+  if (declarations.length === 0) {
+    fail(`macOS app has no embedded ASAR integrity declarations under ${appDir}`);
+  }
+  const mismatch = declarations.find(({ expected }) => expected !== actual);
+  if (mismatch !== undefined) {
+    fail(
+      `macOS embedded ASAR integrity mismatch in ${mismatch.path}: ` +
+        `Info.plist=${mismatch.expected}, app.asar=${actual}`,
+    );
+  }
+}
+
+async function verifyDmg(dmgPath) {
+  const mountPoint = mkdtempSync(join(tmpdir(), 'agentico-verify-dmg-'));
+  execFileSync(
+    'hdiutil',
+    ['attach', dmgPath, '-nobrowse', '-readonly', '-mountpoint', mountPoint],
+    {
+      stdio: 'inherit',
+    },
+  );
+  try {
+    const appDir = join(mountPoint, 'Agentico.app');
+    if (!existsSync(appDir)) {
+      fail(`DMG does not contain Agentico.app (${dmgPath})`);
+    }
+    verifyMacAppSignature(appDir);
+    await verifyElectronFuses(join(appDir, 'Contents', 'MacOS', 'Agentico'));
+    return verifyResources(join(appDir, 'Contents', 'Resources'), {
+      expectUniversalBinary: true,
+    });
+  } finally {
+    execFileSync('hdiutil', ['detach', mountPoint, '-force'], { stdio: 'inherit' });
+    rmSync(mountPoint, { recursive: true, force: true });
+  }
+}
+
+async function verifyAppImage(appImagePath) {
+  const workDir = mkdtempSync(join(tmpdir(), 'agentico-verify-appimage-'));
+  try {
+    // --appimage-extract works without FUSE and always unpacks to
+    // ./squashfs-root under the current working directory.
+    execFileSync(appImagePath, ['--appimage-extract'], { cwd: workDir, stdio: 'ignore' });
+    await verifyElectronFuses(join(workDir, 'squashfs-root', 'agentico'));
+    return verifyResources(join(workDir, 'squashfs-root', 'resources'), {
+      expectUniversalBinary: false,
+    });
+  } finally {
+    rmSync(workDir, { recursive: true, force: true });
+  }
+}
+
+async function verifyDeb(debPath) {
+  const workDir = mkdtempSync(join(tmpdir(), 'agentico-verify-deb-'));
+  try {
+    execFileSync('dpkg-deb', ['-x', debPath, workDir], { stdio: 'inherit' });
+    const resourcesDir = join(workDir, 'opt', 'Agentico', 'resources');
+    if (!existsSync(resourcesDir)) {
+      fail(`deb payload has no resources dir at opt/Agentico/resources (${debPath})`);
+    }
+    await verifyElectronFuses(join(workDir, 'opt', 'Agentico', 'agentico'));
+    return verifyResources(resourcesDir, { expectUniversalBinary: false });
+  } finally {
+    rmSync(workDir, { recursive: true, force: true });
+  }
+}
+
+function unpackedExecutable() {
+  try {
+    return unpackedExecutablePath(desktopDir);
+  } catch (error) {
+    fail(
+      error instanceof Error ? error.message : `unsupported verification host: ${process.platform}`,
+    );
+  }
+}
+
+async function verifyUnpackedApp(executablePath) {
+  if (!existsSync(executablePath)) {
+    fail(`expected unpacked app for packaged E2E at ${executablePath}`);
+  }
+  if (process.platform === 'darwin') {
+    verifyMacAppSignature(dirname(dirname(dirname(executablePath))));
+  }
+  await verifyElectronFuses(executablePath);
+  const resourcesDir =
+    process.platform === 'darwin'
+      ? join(dirname(dirname(executablePath)), 'Resources')
+      : join(dirname(executablePath), 'resources');
+  return verifyResources(resourcesDir, { expectUniversalBinary: process.platform === 'darwin' });
+}
+
+function verifyMacAppSignature(appDir) {
+  try {
+    execFileSync('codesign', ['--verify', '--deep', '--strict', appDir], { stdio: 'pipe' });
+  } catch (error) {
+    const detail = error.stderr?.toString().trim();
+    fail(
+      `macOS app is not runnable with a valid code signature (${appDir})${detail ? `: ${detail}` : ''}`,
+    );
+  }
+}
+
+async function verifyElectronFuses(executablePath) {
+  let fuses;
+  try {
+    fuses = await getCurrentFuseWire(executablePath);
+  } catch (error) {
+    fail(`could not read Electron fuses from ${executablePath}: ${error.message}`);
+  }
+  const mismatches = auditFuseWire(fuses);
+  if (mismatches.length > 0) {
+    fail(`Electron fuses are not hardened:\n  ${mismatches.join('\n  ')}`);
+  }
+}
+
+async function main() {
+  const startedAt = Date.now();
+  const verified = [];
+  let identity;
+  const unpackedApp = unpackedExecutable();
+  if (unpackedOnly) {
+    console.log(`verify-package: inspecting unpacked app ${unpackedApp}`);
+    identity = await verifyUnpackedApp(unpackedApp);
+    verified.push({ target: 'unpacked', path: unpackedApp });
+  } else if (process.platform === 'darwin') {
+    const dmg = findArtifact('.dmg');
+    console.log(`verify-package: inspecting ${dmg}`);
+    identity = await verifyDmg(dmg);
+    verified.push({ target: 'dmg', path: dmg });
+  } else if (process.platform === 'linux') {
+    const appImage = findArtifact('.AppImage');
+    console.log(`verify-package: inspecting ${appImage}`);
+    identity = await verifyAppImage(appImage);
+    verified.push({ target: 'AppImage', path: appImage });
+    const deb = findArtifact('.deb');
+    console.log(`verify-package: inspecting ${deb}`);
+    identity = await verifyDeb(deb);
+    verified.push({ target: 'deb', path: deb });
+  } else {
+    fail(`unsupported verification host: ${process.platform}`);
+  }
+
+  // The deterministic launch path for the packaged E2E journeys (Task 6b):
+  // electron-builder's unpacked staging output, byte-identical in layout to
+  // the payload verified above. Dev fallback for 6b when no package exists:
+  // `npm run package:build` first, or run the app with electron-vite dev +
+  // AGENTICO_SERVER_BIN.
+  if (!existsSync(unpackedApp)) {
+    fail(`expected unpacked app for packaged E2E at ${unpackedApp}`);
+  }
+  const manifest = {
+    verified_at: new Date().toISOString(),
+    host: { os: process.platform, arch: process.arch },
+    artifacts: verified,
+    unpacked_app: unpackedApp,
+    identity,
+  };
+  writeFileSync(
+    join(distDir, 'package-verification.json'),
+    `${JSON.stringify(manifest, null, 2)}\n`,
+  );
+  const seconds = ((Date.now() - startedAt) / 1000).toFixed(1);
+  console.log(`verify-package: OK (${verified.map((v) => v.target).join(', ')}) in ${seconds}s`);
+  console.log(`verify-package: wrote ${join(distDir, 'package-verification.json')}`);
+}
+
+try {
+  await main();
+} catch (error) {
+  if (error instanceof VerificationFailure) {
+    console.error(`verify-package: FAIL: ${error.message}`);
+    process.exit(1);
+  }
+  throw error;
+}

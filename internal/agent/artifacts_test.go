@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
 )
 
 func TestArtifactManagerCreateDir(t *testing.T) {
@@ -182,16 +183,16 @@ func TestArtifactManagerLatestIteration(t *testing.T) {
 // implement loop must handle correctly (see implement.go:162-174). The state
 // of iteration-N on disk dictates where the next run picks up:
 //
-//   - implement unfinished  (no phase_complete, no meta.yaml) → resume impl at N
-//   - impl done, review unfinished (phase_complete present, no meta.yaml) → resume review at N
+//   - implement unfinished (no completion receipt, no meta.yaml) → resume impl at N
+//   - impl done, review unfinished (receipt present, no meta.yaml) → resume review at N
 //   - both done (meta.yaml written after review) → advance to N+1
 //
 // The bug fixed alongside this test: if review was interrupted by app
 // shutdown AND meta.yaml had already been written with ReviewStatus=FAILED,
 // LatestIteration would return N and restart would advance to N+1, skipping
 // the unfinished review. The fix (implement.go early-return-on-shutdown
-// before WriteMeta) keeps scenario (2)'s on-disk shape intact: phase_complete
-// present, meta.yaml absent — which is exactly what this test pins down.
+// before WriteMeta) keeps scenario (2)'s on-disk shape intact: a valid receipt
+// is present and meta.yaml is absent.
 func TestRestartIterationResolution(t *testing.T) {
 	type scenario struct {
 		name              string
@@ -203,14 +204,14 @@ func TestRestartIterationResolution(t *testing.T) {
 	}
 	cases := []scenario{
 		{
-			name:              "implement unfinished: no phase_complete, no meta → resume impl at N",
+			name:              "implement unfinished: no receipt, no meta → resume impl at N",
 			writePhaseDone:    false,
 			writeMeta:         false,
 			wantLatestIter:    0, // treat as N-1; only iter-1 exists on disk and is incomplete
 			wantSkipImplement: false,
 		},
 		{
-			name:              "impl done, review unfinished: phase_complete present, no meta → skip impl, resume review at N",
+			name:              "impl done, review unfinished: receipt present, no meta → skip impl, resume review at N",
 			writePhaseDone:    true,
 			writeMeta:         false,
 			wantLatestIter:    0,
@@ -234,9 +235,8 @@ func TestRestartIterationResolution(t *testing.T) {
 				t.Fatalf("create iter dir: %v", err)
 			}
 			if tc.writePhaseDone {
-				if err := os.WriteFile(filepath.Join(it1, PhaseCompleteFile), []byte("done"), 0o644); err != nil {
-					t.Fatalf("write phase_complete: %v", err)
-				}
+				writeTestCompletionReceiptFor(t, it1, feature.PhaseImplement, RoleImplementer)
+				testutil.WriteImplementHandoffFiles(t, dir, it1, agentStatusSuccess)
 			}
 			if tc.writeMeta {
 				if err := am.WriteMeta(it1, IterationMeta{Iteration: 1, AgentStatus: agentStatusSuccess, ReviewStatus: tc.reviewStatus}); err != nil {
@@ -248,7 +248,7 @@ func TestRestartIterationResolution(t *testing.T) {
 			startIter := am.LatestIteration()
 			nextIter := startIter + 1
 			nextIterDir := filepath.Join(dir, fmt.Sprintf("iteration-%02d", nextIter))
-			skipImplement := HasPhaseComplete(nextIterDir)
+			skipImplement := HasCommittedPhaseOutcome(nextIterDir, feature.PhaseImplement, RoleImplementer)
 
 			if startIter != tc.wantLatestIter {
 				t.Errorf("LatestIteration = %d, want %d", startIter, tc.wantLatestIter)
@@ -420,50 +420,6 @@ func TestPhaseTestingContractPath(t *testing.T) {
 	want := "/tmp/state/feat1/runs/run-001/phase-02/testing-contract.yaml"
 	if got != want {
 		t.Errorf("PhaseTestingContractPath = %q, want %q", got, want)
-	}
-}
-
-func TestCycleTestingContractPath(t *testing.T) {
-	f := &feature.Feature{ID: "feat1", ActiveRun: 1}
-	f.SetRebaseCount(2)
-	got := CycleTestingContractPath("/tmp/state", f, "", feature.CycleRebase)
-	want := "/tmp/state/feat1/runs/run-001/rebase-2/testing-contract.yaml"
-	if got != want {
-		t.Errorf("CycleTestingContractPath = %q, want %q", got, want)
-	}
-}
-
-func TestCycleTestingContractPath_PerRepo(t *testing.T) {
-	f := &feature.Feature{
-		ID:        "feat1",
-		ActiveRun: 1,
-		RepoCycles: map[string]*feature.RepoCycleState{
-			testRepoNameWeb: {Type: feature.CycleReviewComments, Count: 3},
-		},
-	}
-	got := CycleTestingContractPath("/tmp/state", f, testRepoNameWeb, feature.CycleReviewComments)
-	want := "/tmp/state/feat1/runs/run-001/review-comments-3/web/testing-contract.yaml"
-	if got != want {
-		t.Errorf("CycleTestingContractPath = %q, want %q", got, want)
-	}
-}
-
-func TestLatestCycleImplementationVerificationReportPath(t *testing.T) {
-	stateDir := t.TempDir()
-	f := &feature.Feature{ID: "feat1", ActiveRun: 1}
-	f.SetRebaseCount(1)
-	iterDir := filepath.Join(stateDir, "feat1", "runs", "run-001", "rebase-1", "implement", "iteration-02")
-	if err := os.MkdirAll(iterDir, 0o755); err != nil {
-		t.Fatalf("MkdirAll(iterDir): %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(iterDir, "meta.yaml"), []byte("iteration: 2\n"), 0o644); err != nil {
-		t.Fatalf("WriteFile(meta.yaml): %v", err)
-	}
-
-	got := LatestCycleImplementationVerificationReportPath(stateDir, f, "", feature.CycleRebase)
-	want := filepath.Join(iterDir, "verification-report.yaml")
-	if got != want {
-		t.Errorf("LatestCycleImplementationVerificationReportPath = %q, want %q", got, want)
 	}
 }
 

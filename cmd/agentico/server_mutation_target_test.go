@@ -21,6 +21,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -35,7 +36,6 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/permission"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	serverruntime "github.com/doordash-oss/agentic-orchestrator/internal/server"
-	"github.com/doordash-oss/agentic-orchestrator/internal/session"
 	"github.com/doordash-oss/agentic-orchestrator/internal/utilskill"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
 )
@@ -70,11 +70,10 @@ const (
 	testSessionPermissionID = "session-permission"
 	testPermRequestID       = "perm-1"
 	testRepoAName           = "repo-a"
+	testRepoBName           = "repo-b"
 	testSessionAskID        = "session-ask"
 	testSessionHelpID       = "session-help"
 	testReviewerLogin       = "reviewer"
-
-	reviewCommentsModeAddressAll = "address_all"
 )
 
 func TestServerMutationTargetAnswerPermissionRespondsToPendingControlRequest(t *testing.T) {
@@ -447,35 +446,6 @@ func TestServerMutationTargetAnswerAskUserNormalizesTruncatedQuestionKey(t *test
 	}
 }
 
-func TestServerMutationTargetStartRebaseStartsFeatureRebasePromptly(t *testing.T) {
-	starter := &fakeFeatureRebaseStarter{}
-	target := serverMutationTarget{rebaseStarter: starter}
-
-	resp, err := target.StartRebase("feat-rebase", serverruntime.RebaseActionRequest{})
-	if err != nil {
-		t.Fatalf("StartRebase error = %v", err)
-	}
-	if resp.FeatureID != "feat-rebase" || resp.Result != resultStarted || resp.CycleType != string(feature.CycleRebase) {
-		t.Fatalf("StartRebase response = %+v, want started feature rebase", resp)
-	}
-	if resp.SessionID != "" {
-		t.Fatalf("StartRebase response leaked session field: %+v", resp)
-	}
-	if got := strings.Join(starter.featureIDs, ","); got != "feat-rebase" {
-		t.Fatalf("StartFeatureRebase calls = %q, want feat-rebase", got)
-	}
-}
-
-type fakeFeatureRebaseStarter struct {
-	featureIDs []string
-	err        error
-}
-
-func (f *fakeFeatureRebaseStarter) StartFeatureRebase(featureID string) error {
-	f.featureIDs = append(f.featureIDs, featureID)
-	return f.err
-}
-
 // TestServerMutationTargetStartFeatureBlocksChildren exercises the start /
 // resume backend path (serverMutationTarget.StartFeature fronts both routes)
 // end-to-end through the real orchestrator and store: a child whose setup is
@@ -491,12 +461,13 @@ func TestServerMutationTargetStartFeatureBlocksChildren(t *testing.T) {
 		store := feature.NewStore(filepath.Join(runtimeDir, "features"))
 		manager := feature.NewManager(store, cfg)
 		child := &feature.Feature{
-			ID:        "child-blocked",
-			Slug:      "child-blocked",
-			Status:    feature.StatusCreated,
-			ActiveRun: 1,
-			RunCount:  1,
-			Pipeline:  feature.PipelineMedium,
+			ID:            "child-blocked",
+			Slug:          "child-blocked",
+			Status:        feature.StatusCreated,
+			ActiveRun:     1,
+			RunCount:      1,
+			Pipeline:      feature.PipelineMedium,
+			SchemaVersion: feature.SchemaVersionCurrent,
 			Repos: []feature.FeatureRepo{{
 				Name:       testRepoAName,
 				Path:       filepath.Join(runtimeDir, testRepoAName),
@@ -648,6 +619,60 @@ func (f *fakeRefactorChildCreator) CreateRefactorChild(parentID string, spec fea
 	return f.child, f.err
 }
 
+func TestServerMutationTargetReviewFeedbackFeaturePreservesPayloadAndGatePresence(t *testing.T) {
+	t.Parallel()
+
+	explicitFalse := false
+	tests := []struct {
+		name string
+		gate *bool
+	}{
+		{name: "omitted gate inherits", gate: nil},
+		{name: "explicit false overrides", gate: &explicitFalse},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			creator := &fakeReviewFeedbackChildCreator{child: &feature.Feature{ID: "child-review"}}
+			target := serverMutationTarget{reviewFeedbackCreator: creator}
+			comments := []feature.ReviewFeedbackComment{{
+				Repo: "api", ID: 17, Type: "review", Path: "handler.go", Line: 42,
+				Author: "alice", Body: "handle this", DiffHunk: "@@ -41 +41,2 @@", InReplyTo: 9,
+			}}
+
+			resp, err := target.ReviewFeedbackFeature("parent-1", serverruntime.ReviewFeedbackFeatureRequest{
+				Comments: comments,
+				Gate:     tt.gate,
+			})
+			if err != nil {
+				t.Fatalf("ReviewFeedbackFeature() error = %v", err)
+			}
+			if resp.FeatureID != "child-review" || resp.ParentID != "parent-1" || resp.Result != resultCreated {
+				t.Fatalf("ReviewFeedbackFeature() = %+v; want created child reference", resp)
+			}
+			if creator.parentID != "parent-1" || !reflect.DeepEqual(creator.spec.Comments, comments) {
+				t.Fatalf("CreateReviewFeedbackChild args = parent:%q comments:%+v", creator.parentID, creator.spec.Comments)
+			}
+			if creator.spec.GateEnabled != tt.gate {
+				t.Fatalf("gate pointer = %p; want %p", creator.spec.GateEnabled, tt.gate)
+			}
+		})
+	}
+}
+
+type fakeReviewFeedbackChildCreator struct {
+	parentID string
+	spec     feature.ReviewFeedbackChildSpec
+	child    *feature.Feature
+	err      error
+}
+
+func (f *fakeReviewFeedbackChildCreator) CreateReviewFeedbackChild(parentID string, spec feature.ReviewFeedbackChildSpec) (*feature.Feature, error) {
+	f.parentID = parentID
+	f.spec = spec
+	return f.child, f.err
+}
+
 func TestServerMutationTargetSendHelpSendsUserMessageToAddressedActiveSession(t *testing.T) {
 	sess := &mutationTargetSessionView{
 		id:        testSessionHelpID,
@@ -678,6 +703,48 @@ func TestServerMutationTargetSendHelpSendsUserMessageToAddressedActiveSession(t 
 		t.Fatalf("SendHelp() result = %+v; want feature/session sent", result)
 	}
 	assertJSONDoesNotContain(t, result, "Please use the existing migration path.")
+}
+
+func TestServerMutationTargetSendHelpAnswersFeatureHelpQueueWhenNoSessionIsActive(t *testing.T) {
+	store, _, f := newMutationTestFeature(t, "help queue via REST", feature.CreateOptions{}, feature.StatusImplementing, feature.PhaseImplement)
+	requestedAt := time.Date(2026, 7, 15, 10, 0, 0, 0, time.UTC)
+	if err := store.Modify(f.ID, func(ff *feature.Feature) error {
+		ff.HelpQueue = []feature.HelpRequest{{
+			Question: "Which packaged evidence path should continue?",
+			Time:     requestedAt,
+			Pending:  true,
+		}}
+		return nil
+	}); err != nil {
+		t.Fatalf("seed help queue: %v", err)
+	}
+	target := serverMutationTarget{store: store}
+
+	result, err := target.SendHelp(serverruntime.HelpAnswerRequest{
+		FeatureID: f.ID,
+		Message:   "Continue from the feature cockpit.",
+	})
+	if err != nil {
+		t.Fatalf("SendHelp() error = %v", err)
+	}
+
+	loaded, err := store.Load(f.ID)
+	if err != nil {
+		t.Fatalf("Load feature: %v", err)
+	}
+	if len(loaded.HelpQueue) != 1 {
+		t.Fatalf("HelpQueue length = %d, want 1", len(loaded.HelpQueue))
+	}
+	if loaded.HelpQueue[0].Pending {
+		t.Fatal("HelpQueue[0].Pending = true, want false")
+	}
+	if got := loaded.HelpQueue[0].Answer; got != "Continue from the feature cockpit." {
+		t.Fatalf("HelpQueue[0].Answer = %q, want cockpit reply", got)
+	}
+	if result.FeatureID != f.ID || result.SessionID != "" || result.Result != resultSent {
+		t.Fatalf("SendHelp() result = %+v; want feature-scoped sent", result)
+	}
+	assertJSONDoesNotContain(t, result, "Continue from the feature cockpit.")
 }
 
 func TestServerMutationTargetStartChatStartsInteractiveUtilitySessionWithoutSubagents(t *testing.T) {
@@ -729,8 +796,8 @@ func TestServerMutationTargetStartChatStartsInteractiveUtilitySessionWithoutSuba
 	if !reflect.DeepEqual(build.DisallowedTools, []string{"Task"}) {
 		t.Fatalf("BuildSession DisallowedTools = %v, want only Task disabled for AMA", build.DisallowedTools)
 	}
-	if _, ok := build.PermHandler.(*session.AMAHandler); !ok {
-		t.Fatalf("BuildSession PermHandler = %T, want *session.AMAHandler", build.PermHandler)
+	if _, ok := build.PermHandler.(*permission.AMAHandler); !ok {
+		t.Fatalf("BuildSession PermHandler = %T, want *permission.AMAHandler", build.PermHandler)
 	}
 	for _, want := range []string{
 		"Agentic Orchestrator Expert Assistant",
@@ -756,13 +823,73 @@ func TestServerMutationTargetStartChatStartsInteractiveUtilitySessionWithoutSuba
 	if start.id != serverChatSessionID || start.featureID != serverChatSessionID || start.phase != feature.PhaseResearch || start.workdir != testWorkspaceDir {
 		t.Fatalf("StartSession call = %+v, want chat utility identity and research session in workspace", start)
 	}
-	if start.opts == nil || start.opts.Kind != ports.KindChat || start.opts.TurnMode != ports.TurnModeInteractive || start.opts.Label != chatName || start.opts.InitialPrompt != build.Prompt {
-		t.Fatalf("StartSession opts = %+v, want chat-kind interactive session with initial prompt", start.opts)
+	if start.opts == nil || start.opts.Kind != ports.KindChat || start.opts.TurnMode != ports.TurnModeInteractive || start.opts.Label != chatName || start.opts.InitialPrompt != "What is running?" {
+		t.Fatalf("StartSession opts = %+v, want chat-kind interactive session with the user-visible prompt", start.opts)
 	}
 	if start.opts.StderrPath != filepath.Join(stateDir, chatName, "stderr.log") {
 		t.Fatalf("StartSession StderrPath = %q, want chat stderr capture", start.opts.StderrPath)
 	}
 	assertJSONDoesNotContain(t, result, "What is running?")
+}
+
+func TestChatMessageWithImagesAddsInspectableLocalPaths(t *testing.T) {
+	got := chatMessageWithImages("What is shown?", []string{"/tmp/screenshot one.png", "/tmp/detail.png"})
+	for _, want := range []string{
+		"What is shown?",
+		"Attached images (inspect these local files):",
+		`"/tmp/screenshot one.png"`,
+		`"/tmp/detail.png"`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("chatMessageWithImages() missing %q:\n%s", want, got)
+		}
+	}
+	if plain := chatMessageWithImages("No image", nil); plain != "No image" {
+		t.Fatalf("chatMessageWithImages() without images = %q, want unchanged message", plain)
+	}
+}
+
+func TestServerMutationTargetEndChatStopsOnlySingletonChat(t *testing.T) {
+	sessions := &mutationTargetSessionManager{
+		sessions: []ports.SessionView{
+			&mutationTargetSessionView{id: "feature-session", featureID: "feature-1", status: ports.SessionRunning, active: true},
+			&mutationTargetSessionView{id: serverChatSessionID, featureID: serverChatSessionID, status: ports.SessionRunning, active: true},
+		},
+	}
+	target := serverMutationTarget{sessions: sessions}
+
+	result, err := target.EndChat()
+	if err != nil {
+		t.Fatalf("EndChat() error = %v", err)
+	}
+
+	if result.SessionID != serverChatSessionID || result.Result != "ended" {
+		t.Fatalf("EndChat() = %+v, want singleton chat ended", result)
+	}
+	if !reflect.DeepEqual(sessions.stopCalls, []string{serverChatSessionID}) {
+		t.Fatalf("StopSession calls = %v, want only singleton chat", sessions.stopCalls)
+	}
+}
+
+func TestServerMutationTargetEndChatIsIdempotentWhenInactive(t *testing.T) {
+	sessions := &mutationTargetSessionManager{
+		sessions: []ports.SessionView{
+			&mutationTargetSessionView{id: serverChatSessionID, featureID: serverChatSessionID, status: ports.SessionDone, active: false},
+		},
+	}
+	target := serverMutationTarget{sessions: sessions}
+
+	result, err := target.EndChat()
+	if err != nil {
+		t.Fatalf("EndChat() error = %v", err)
+	}
+
+	if result.SessionID != serverChatSessionID || result.Result != "not_active" {
+		t.Fatalf("EndChat() = %+v, want not_active singleton chat", result)
+	}
+	if len(sessions.stopCalls) != 0 {
+		t.Fatalf("StopSession calls = %v, want none", sessions.stopCalls)
+	}
 }
 
 func TestServerMutationTargetDraftNeedUserInputAnswersUpdatesPendingArtifactByPromptAndIndex(t *testing.T) {
@@ -772,7 +899,7 @@ func TestServerMutationTargetDraftNeedUserInputAnswersUpdatesPendingArtifactByPr
 		Iteration: 3,
 		Questions: []agent.NeedUserInputQuestion{
 			{Index: 1, Prompt: "Which database should back search?"},
-			{Index: 2, Prompt: "How should rollout be staged?"},
+			{Prompt: "How should rollout be staged?"},
 		},
 	}
 	if err := agent.WriteNeedUserInputRecord(gatePath, original); err != nil {
@@ -788,6 +915,7 @@ func TestServerMutationTargetDraftNeedUserInputAnswersUpdatesPendingArtifactByPr
 		Slug:                     "need-input",
 		Status:                   feature.StatusNeedUserInput,
 		PendingNeedUserInputPath: gatePath,
+		SchemaVersion:            feature.SchemaVersionCurrent,
 	}
 	if err := store.Save(f); err != nil {
 		t.Fatalf("Save feature error = %v", err)
@@ -837,7 +965,7 @@ func TestServerMutationTargetRuntimeConfigPersistsAllowedDefaultsChanges(t *test
 	cfg.Defaults.Models.Research = "old-research"
 	cfg.Defaults.Models.Implementation = "old-implementation"
 	cfg.Defaults.MaxIterations = 3
-	cfg.Defaults.Inquireness = "low"
+	cfg.Defaults.Inquireness = "none"
 	if err := config.Save(configPath, cfg); err != nil {
 		t.Fatalf("Save config error = %v", err)
 	}
@@ -1167,7 +1295,7 @@ func TestServerMutationTargetCreateFeatureQueuesSetupWithoutWorktreeSideEffects(
 	}
 	store := feature.NewStore(stateDir)
 	manager := feature.NewManager(store, cfg)
-	worktrees := mocks.NewMockWorktreeOperator()
+	worktrees := mocks.NewMockWorktreeOps()
 	worktrees.CreateFn = func(repoPath, featureSlug, repoName, startPoint string) (string, error) {
 		return "", errors.New("worktree creation should be deferred to setup")
 	}
@@ -1199,6 +1327,141 @@ func TestServerMutationTargetCreateFeatureQueuesSetupWithoutWorktreeSideEffects(
 	}
 }
 
+func TestServerMutationTargetSetupFeatureCompletesToStartableStateWithoutStarting(t *testing.T) {
+	runtimeDir := t.TempDir()
+	cfg := config.NewDefault()
+	cfg.Repos[testRepoAName] = config.RepoConfig{Path: filepath.Join(runtimeDir, testRepoAName)}
+	store := feature.NewStore(filepath.Join(runtimeDir, "features"))
+	manager := feature.NewManager(store, cfg)
+	worktrees := mocks.NewMockWorktreeOps()
+	worktrees.CreateFn = func(repoPath, featureSlug, repoName, startPoint string) (string, error) {
+		return filepath.Join(runtimeDir, "worktrees", featureSlug, repoName), nil
+	}
+	manager.Worktrees = worktrees
+
+	started := 0
+	target := serverMutationTarget{
+		orch: orchestrator.New(orchestrator.Deps{Lifecycle: manager, Store: store}, orchestrator.Hooks{
+			OnFeatureStarted: func(string) { started++ },
+		}),
+		store:         store,
+		dispatchAsync: func(fn func()) { fn() },
+	}
+	f, err := manager.Create("Setup via REST action", "desc", []string{testRepoAName}, cfg.Defaults.Models, "", "", nil, feature.CreateOptions{
+		QueueSetup: true,
+		Pipeline:   feature.PipelineMedium,
+	})
+	if err != nil {
+		t.Fatalf("Create feature: %v", err)
+	}
+
+	result, err := target.SetupFeature(f.ID)
+	if err != nil {
+		t.Fatalf("SetupFeature() error = %v", err)
+	}
+	if result.Result != resultSetupStarted || result.FeatureID != f.ID {
+		t.Fatalf("SetupFeature() = %+v; want setup_started", result)
+	}
+
+	updated, err := store.Load(f.ID)
+	if err != nil {
+		t.Fatalf("Load feature: %v", err)
+	}
+	if updated.Status != feature.StatusCreated {
+		t.Fatalf("status = %s; want Created (Start enabled, not started)", updated.Status)
+	}
+	setup := updated.Run().Setup
+	if setup == nil || setup.Status != feature.SetupStatusDone {
+		t.Fatalf("setup = %+v; want done", setup)
+	}
+	if started != 0 {
+		t.Fatalf("OnFeatureStarted fired %d times; want 0 — setup must not start orchestration", started)
+	}
+
+	// A second setup dispatch has nothing to do and reports a conflict.
+	if _, err := target.SetupFeature(f.ID); err == nil {
+		t.Fatal("SetupFeature() on completed setup error = nil; want conflict")
+	}
+}
+
+func TestServerMutationTargetSetupFeatureRetriesOnlyUnfinishedWorkWithoutStarting(t *testing.T) {
+	runtimeDir := t.TempDir()
+	cfg := config.NewDefault()
+	cfg.Repos[testRepoAName] = config.RepoConfig{Path: filepath.Join(runtimeDir, testRepoAName)}
+	cfg.Repos[testRepoBName] = config.RepoConfig{Path: filepath.Join(runtimeDir, testRepoBName)}
+	store := feature.NewStore(filepath.Join(runtimeDir, "features"))
+	manager := feature.NewManager(store, cfg)
+	failRepoB := true
+	creates := 0
+	worktrees := mocks.NewMockWorktreeOps()
+	worktrees.CreateFn = func(repoPath, featureSlug, repoName, startPoint string) (string, error) {
+		creates++
+		if repoName == testRepoBName && failRepoB {
+			return "", errors.New("transient checkout failure")
+		}
+		return filepath.Join(runtimeDir, "worktrees", featureSlug, repoName), nil
+	}
+	manager.Worktrees = worktrees
+
+	started := 0
+	target := serverMutationTarget{
+		orch: orchestrator.New(orchestrator.Deps{Lifecycle: manager, Store: store}, orchestrator.Hooks{
+			OnFeatureStarted: func(string) { started++ },
+		}),
+		store:         store,
+		dispatchAsync: func(fn func()) { fn() },
+	}
+	f, err := manager.Create("Retry setup via REST action", "desc", []string{testRepoAName, testRepoBName}, cfg.Defaults.Models, "", "", nil, feature.CreateOptions{
+		QueueSetup: true,
+		Pipeline:   feature.PipelineMedium,
+	})
+	if err != nil {
+		t.Fatalf("Create feature: %v", err)
+	}
+
+	if _, err := target.SetupFeature(f.ID); err != nil {
+		t.Fatalf("SetupFeature() dispatch error = %v; want dispatch success with durable failure", err)
+	}
+	failed, err := store.Load(f.ID)
+	if err != nil {
+		t.Fatalf("Load failed feature: %v", err)
+	}
+	if failed.Status != feature.StatusFailed || failed.FailureType != feature.FailureWorktreeSetup {
+		t.Fatalf("failed feature = %s/%s; want Failed/worktree_setup with preserved state", failed.Status, failed.FailureType)
+	}
+	if failedSetup := failed.Run().Setup; failedSetup == nil || failedSetup.LastError == "" {
+		t.Fatalf("failed setup = %+v; want durable last_error", failedSetup)
+	}
+	createsAfterFailure := creates
+
+	failRepoB = false
+	result, err := target.SetupFeature(f.ID)
+	if err != nil {
+		t.Fatalf("SetupFeature() retry error = %v", err)
+	}
+	if result.Result != resultSetupStarted {
+		t.Fatalf("retry result = %+v; want setup_started", result)
+	}
+
+	updated, err := store.Load(f.ID)
+	if err != nil {
+		t.Fatalf("Load retried feature: %v", err)
+	}
+	if updated.Status != feature.StatusCreated {
+		t.Fatalf("status = %s; want Created after retry without start", updated.Status)
+	}
+	setup := updated.Run().Setup
+	if setup == nil || setup.Status != feature.SetupStatusDone || setup.Attempt != 2 {
+		t.Fatalf("setup = %+v; want done on attempt 2", setup)
+	}
+	if creates-createsAfterFailure != 1 {
+		t.Fatalf("retry worktree creates = %d; want only the previously failed task", creates-createsAfterFailure)
+	}
+	if started != 0 {
+		t.Fatalf("OnFeatureStarted fired %d times; want 0 for setup retry", started)
+	}
+}
+
 func TestServerMutationTargetRetryFeatureRoutesSetupFailureToSetupRetry(t *testing.T) {
 	runtimeDir := t.TempDir()
 	cfg := config.NewDefault()
@@ -1206,7 +1469,7 @@ func TestServerMutationTargetRetryFeatureRoutesSetupFailureToSetupRetry(t *testi
 	store := feature.NewStore(filepath.Join(runtimeDir, "features"))
 	manager := feature.NewManager(store, cfg)
 	failWorktree := true
-	worktrees := mocks.NewMockWorktreeOperator()
+	worktrees := mocks.NewMockWorktreeOps()
 	worktrees.CreateFn = func(repoPath, featureSlug, repoName, startPoint string) (string, error) {
 		if failWorktree {
 			return "", errors.New("repo checkout missing")
@@ -1251,6 +1514,122 @@ func TestServerMutationTargetRetryFeatureRoutesSetupFailureToSetupRetry(t *testi
 	}
 }
 
+func TestServerMutationTargetRetryFeatureDispatchesFailedPhase(t *testing.T) {
+	runtimeDir := t.TempDir()
+	cfg := config.NewDefault()
+	cfg.Repos[testRepoAName] = config.RepoConfig{Path: filepath.Join(runtimeDir, testRepoAName)}
+	store := feature.NewStore(filepath.Join(runtimeDir, "features"))
+	manager := feature.NewManager(store, cfg)
+	f, err := manager.Create("retry phase via REST", "desc", []string{testRepoAName}, cfg.Defaults.Models, "", "", nil)
+	if err != nil {
+		t.Fatalf("Create feature: %v", err)
+	}
+	planPath := filepath.Join(runtimeDir, "plan.md")
+	if err := os.WriteFile(planPath, []byte("# Plan\n\n## Tasks\n\n**Repo:** repo-a\n\n- Retry the implementation.\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile plan: %v", err)
+	}
+	if err := store.Modify(f.ID, func(ff *feature.Feature) error {
+		ff.Status = feature.StatusFailed
+		ff.CurrentPhase = feature.PhaseImplement
+		ff.FailureType = feature.FailureMaxIterations
+		ff.MaxIterations = 10
+		ff.MaxPlanIterations = 3
+		ff.LastError = "no progress for 3 consecutive iterations"
+		ff.Artifacts = map[string]string{"plan": planPath}
+		return nil
+	}); err != nil {
+		t.Fatalf("prepare feature: %v", err)
+	}
+
+	var dispatched []string
+	orch := orchestrator.New(orchestrator.Deps{
+		Lifecycle: manager,
+		Store:     store,
+	}, orchestrator.Hooks{})
+	orch.SetRunMultiRepoImplFn(func(f *feature.Feature, planPath string, _ ...agent.KBInfo) (chan *agent.OrchestratorResult, error) {
+		dispatched = append(dispatched, f.ID+":"+planPath)
+		ch := make(chan *agent.OrchestratorResult)
+		close(ch)
+		return ch, nil
+	})
+	target := serverMutationTarget{orch: orch, store: store}
+
+	result, err := target.RetryFeature(f.ID)
+	if err != nil {
+		t.Fatalf("RetryFeature() error = %v", err)
+	}
+	if len(dispatched) != 1 || dispatched[0] != f.ID+":"+planPath {
+		t.Fatalf("phase dispatches = %v, want one implementation dispatch with plan path", dispatched)
+	}
+	updated, err := store.Load(f.ID)
+	if err != nil {
+		t.Fatalf("Load retried feature: %v", err)
+	}
+	if updated.Status != feature.StatusImplementing || updated.CurrentPhase != feature.PhaseImplement {
+		t.Fatalf("retried feature status/phase = %s/%s, want Implementing/Implement", updated.Status, updated.CurrentPhase)
+	}
+	if updated.MaxIterations != 20 {
+		t.Fatalf("MaxIterations = %d, want 20", updated.MaxIterations)
+	}
+	if updated.MaxPlanIterations != 3 {
+		t.Fatalf("MaxPlanIterations = %d, want unchanged 3 outside Plan", updated.MaxPlanIterations)
+	}
+	if result.FeatureID != f.ID || result.Result != resultRetried {
+		t.Fatalf("RetryFeature() result = %+v, want retried feature", result)
+	}
+}
+
+func TestRetryFeatureIterationDeltas(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		feature  *feature.Feature
+		wantMax  int
+		wantPlan int
+	}{
+		{
+			name: "max iterations",
+			feature: &feature.Feature{
+				Status:       feature.StatusFailed,
+				FailureType:  feature.FailureMaxIterations,
+				CurrentPhase: feature.PhasePlan,
+			},
+			wantMax:  10,
+			wantPlan: 2,
+		},
+		{
+			name: "other failure",
+			feature: &feature.Feature{
+				Status:       feature.StatusFailed,
+				FailureType:  feature.FailureInfrastructure,
+				CurrentPhase: feature.PhasePlan,
+			},
+		},
+		{
+			name: "stale failure type on active feature",
+			feature: &feature.Feature{
+				Status:       feature.StatusImplementing,
+				FailureType:  feature.FailureMaxIterations,
+				CurrentPhase: feature.PhaseImplement,
+			},
+		},
+		{name: "missing feature"},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			gotMax, gotPlan := retryFeatureIterationDeltas(tt.feature)
+			if gotMax != tt.wantMax || gotPlan != tt.wantPlan {
+				t.Fatalf("retryFeatureIterationDeltas() = (%d, %d), want (%d, %d)", gotMax, gotPlan, tt.wantMax, tt.wantPlan)
+			}
+		})
+	}
+}
+
 func TestServerMutationTargetReviewDecisionRewindProceedsFromExistingRewind(t *testing.T) {
 	runtimeDir := t.TempDir()
 	cfg := config.NewDefault()
@@ -1280,7 +1659,7 @@ func TestServerMutationTargetReviewDecisionRewindProceedsFromExistingRewind(t *t
 		store: store,
 	}
 
-	if _, err := target.ReviewDecision(f.ID, serverruntime.ReviewDecisionRequest{
+	if err := target.ReviewDecision(f.ID, serverruntime.ReviewDecisionRequest{
 		Decision: "proceed",
 		Phase:    phaseNamePlan,
 		IsRewind: true,
@@ -1425,14 +1804,15 @@ func TestServerMutationTargetClosedChildConfigReturnsRelationshipClosed(t *testi
 	cfg := config.NewDefault()
 	closedAt := time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC)
 	child := &feature.Feature{
-		ID:          "closed-child",
-		Name:        "Closed child",
-		Slug:        "closed-child",
-		Status:      feature.StatusDone,
-		Pipeline:    feature.PipelineMedium,
-		Models:      config.ModelConfig{Research: "old-research"},
-		Inquireness: feature.InquirenessMedium,
-		Checkpoints: feature.Checkpoints{RoadmapReview: true},
+		ID:            "closed-child",
+		Name:          "Closed child",
+		Slug:          "closed-child",
+		Status:        feature.StatusDone,
+		Pipeline:      feature.PipelineMedium,
+		Models:        config.ModelConfig{Research: "old-research"},
+		Inquireness:   feature.InquirenessMedium,
+		Checkpoints:   feature.Checkpoints{RoadmapReview: true},
+		SchemaVersion: feature.SchemaVersionCurrent,
 		Parent: &feature.ChildRelationship{
 			ParentID:     "parent",
 			Kind:         feature.ChildKindRefactor,
@@ -1522,6 +1902,44 @@ func TestServerMutationTargetPublishActionPublishesFeatureAndReturnsSafeMetadata
 	assertJSONDoesNotContain(t, result, "https://github.com/acme/repo-a/pull/12")
 }
 
+func TestServerMutationTargetPublishActionRecoversFailedPublish(t *testing.T) {
+	target, manager, store, f := newPublishActionTarget(t)
+	if err := store.Modify(f.ID, func(ff *feature.Feature) error {
+		ff.Status = feature.StatusFailed
+		ff.LastError = "commit failed: index.lock already exists"
+		ff.FailureType = feature.FailureInfrastructure
+		return nil
+	}); err != nil {
+		t.Fatalf("mark feature failed: %v", err)
+	}
+	target.orch.SetPublishRepoFn(func(featureID, repoName string) (string, error) {
+		prURL := "https://github.com/acme/repo-a/pull/13"
+		if err := manager.SetRepoPublished(featureID, repoName, prURL); err != nil {
+			return "", err
+		}
+		return prURL, nil
+	})
+
+	result, err := target.PublishFeature(f.ID, serverruntime.PublishFeatureRequest{Repos: []string{testRepoAName}})
+	if err != nil {
+		t.Fatalf("PublishFeature() error = %v", err)
+	}
+
+	updated, err := store.Load(f.ID)
+	if err != nil {
+		t.Fatalf("Load feature: %v", err)
+	}
+	if updated.Status != feature.StatusPublished {
+		t.Fatalf("feature status = %s, want Published", updated.Status)
+	}
+	if updated.LastError != "" || updated.FailureType != "" {
+		t.Fatalf("terminal failure = (%q, %q), want cleared", updated.LastError, updated.FailureType)
+	}
+	if result.FeatureID != f.ID || result.Result != "published" {
+		t.Fatalf("PublishFeature() result = %+v; want published feature", result)
+	}
+}
+
 func TestServerMutationTargetPublishActionPreservesConflictRoutingMetadata(t *testing.T) {
 	target, _, _, f := newPublishActionTarget(t)
 	target.orch.SetPublishRepoFn(func(featureID, repoName string) (string, error) {
@@ -1553,6 +1971,92 @@ func TestServerMutationTargetPublishActionPreservesConflictRoutingMetadata(t *te
 		"branch":        "feature/publish-conflict",
 		"rebase_target": "main",
 	})
+}
+
+func TestServerMutationTargetCompletionActionsRejectStaleSourceRevision(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		run  func(*serverMutationTarget, string, string) (string, error)
+	}{
+		{
+			name: "publish",
+			run: func(target *serverMutationTarget, featureID, staleRevision string) (string, error) {
+				result, err := target.PublishFeature(featureID, serverruntime.PublishFeatureRequest{
+					SourceRevision: staleRevision,
+					Repos:          []string{testRepoAName},
+					Title:          "Publish completion",
+				})
+				return result.Result, err
+			},
+		},
+		{
+			name: "merge",
+			run: func(target *serverMutationTarget, featureID, staleRevision string) (string, error) {
+				result, err := target.MergeFeature(featureID, serverruntime.GuardedFeatureActionRequest{SourceRevision: staleRevision})
+				return result.Result, err
+			},
+		},
+		{
+			name: "mark done",
+			run: func(target *serverMutationTarget, featureID, staleRevision string) (string, error) {
+				result, err := target.MarkDone(featureID, serverruntime.GuardedFeatureActionRequest{SourceRevision: staleRevision})
+				return result.Result, err
+			},
+		},
+		{
+			name: "cleanup",
+			run: func(target *serverMutationTarget, featureID, staleRevision string) (string, error) {
+				result, err := target.CleanupFeature(featureID, serverruntime.CleanupActionRequest{
+					SourceRevision: staleRevision,
+					Target:         cleanupTargetWorktrees,
+				})
+				return result.Result, err
+			},
+		},
+		{
+			name: "delete",
+			run: func(target *serverMutationTarget, featureID, staleRevision string) (string, error) {
+				result, err := target.DeleteFeature(featureID, serverruntime.GuardedFeatureActionRequest{SourceRevision: staleRevision})
+				if err != nil {
+					return resultFailed, err
+				}
+				return string(result.Status), err
+			},
+		},
+	} {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			target, _, store, f := newPublishActionTarget(t)
+			revision, err := target.orch.CompletionPreflightSourceRevision(f.ID)
+			if err != nil {
+				t.Fatalf("CompletionPreflightSourceRevision: %v", err)
+			}
+			if revision == "" {
+				t.Fatal("source revision is empty")
+			}
+			if err := os.WriteFile(filepath.Join(f.Repos[0].Path, "drift.txt"), []byte("changed\n"), 0o644); err != nil {
+				t.Fatalf("write drift file: %v", err)
+			}
+
+			result, err := tc.run(&target, f.ID, revision)
+			if err == nil {
+				t.Fatal("completion action error = nil; want stale preflight conflict")
+			}
+			var conflict *serverruntime.ActionConflictError
+			if !errors.As(err, &conflict) {
+				t.Fatalf("completion action error = %T %v; want ActionConflictError", err, err)
+			}
+			if result != resultFailed {
+				t.Fatalf("result = %q; want %q", result, resultFailed)
+			}
+			if conflict.Target["reason"] != "stale_preflight" {
+				t.Fatalf("conflict target = %+v; want stale_preflight reason", conflict.Target)
+			}
+			if _, err := store.Load(f.ID); err != nil {
+				t.Fatalf("feature was mutated or deleted despite stale preflight: %v", err)
+			}
+		})
+	}
 }
 
 func TestServerMutationTargetRewindActionReturnsEffectiveTargetMetadata(t *testing.T) {
@@ -1764,146 +2268,7 @@ func TestServerMutationTargetRestartFeatureDispatchesPhaseWork(t *testing.T) {
 	assertJSONDoesNotContain(t, result, "do-not-leak", planPath)
 }
 
-func TestServerMutationTargetReviewCommentsFetchFiltersAndStartStages(t *testing.T) {
-	target, store, f := newReviewCommentsActionTarget(t)
-	if err := agent.SaveAddressedIDsForRepo(store.BaseDir, f, testRepoAName, []int{100}); err != nil {
-		t.Fatalf("SaveAddressedIDsForRepo: %v", err)
-	}
-
-	resp, err := target.FetchReviewComments(f.ID, serverruntime.ReviewCommentsFetchRequest{Repo: testRepoAName})
-	if err != nil {
-		t.Fatalf("FetchReviewComments() error = %v", err)
-	}
-	if len(resp.Comments) != 1 || resp.Comments[0].ID != 101 || resp.Comments[0].RepoName != testRepoAName {
-		t.Fatalf("FetchReviewComments() comments = %+v; want only unaddressed repo-tagged comment 101", resp.Comments)
-	}
-	if _, err := agent.LoadReviewCommentsForRepo(store.BaseDir, f, testRepoAName); err == nil {
-		t.Fatalf("FetchReviewComments staged comments; want fetch to remain read-only")
-	}
-
-	result, err := target.StartReviewComments(f.ID, serverruntime.ReviewCommentsActionRequest{Repo: testRepoAName, Mode: reviewCommentsModeAddressAll})
-	if err == nil {
-		t.Fatal("StartReviewComments() error = nil; want dispatch error from nil phase runner after staging")
-	}
-	if result.FeatureID != f.ID || result.Repo != testRepoAName || result.Mode != reviewCommentsModeAddressAll || result.CycleType != string(feature.CycleReviewComments) || result.Result != resultFailed {
-		t.Fatalf("StartReviewComments() result = %+v; want failed staged review-comments", result)
-	}
-	staged, err := agent.LoadReviewCommentsForRepo(store.BaseDir, f, testRepoAName)
-	if err != nil {
-		t.Fatalf("LoadReviewCommentsForRepo: %v", err)
-	}
-	if staged.Mode != reviewCommentsModeAddressAll || len(staged.Comments) != 1 || staged.Comments[0].ID != 101 || staged.Comments[0].RepoName != testRepoAName {
-		t.Fatalf("staged review comments = %+v; want address_all with comment 101", staged)
-	}
-}
-
-func TestServerMutationTargetReviewCommentsStartUsesProvidedPreviewedComments(t *testing.T) {
-	target, store, f := newReviewCommentsActionTarget(t)
-	reviewer := target.reviewer.(*fakeReviewCommentOperator)
-	reviewer.fetchCalls = 0
-
-	result, err := target.StartReviewComments(f.ID, serverruntime.ReviewCommentsActionRequest{
-		Repo: testRepoAName,
-		Mode: reviewModeAuto,
-		Comments: []serverruntime.ReviewCommentDTO{{
-			ID:        202,
-			Type:      ports.CommentTypeReview,
-			RepoName:  testRepoAName,
-			Path:      "internal/tui/api_app.go",
-			Line:      42,
-			Body:      "use the previewed set",
-			UserLogin: testReviewerLogin,
-			DiffHunk:  "@@ -1 +1 @@\n-old\n+new",
-		}},
-	})
-	if err == nil {
-		t.Fatal("StartReviewComments() error = nil; want dispatch error from nil phase runner after staging")
-	}
-	if reviewer.fetchCalls != 0 {
-		t.Fatalf("FetchPRComments calls = %d; want 0 when comments are provided by preview", reviewer.fetchCalls)
-	}
-	if result.FeatureID != f.ID || result.Repo != testRepoAName || result.Mode != reviewModeAuto || result.Source != "provided" || result.CommentCount != 1 || result.Result != resultFailed {
-		t.Fatalf("StartReviewComments() result = %+v; want failed provided preview", result)
-	}
-	staged, err := agent.LoadReviewCommentsForRepo(store.BaseDir, f, testRepoAName)
-	if err != nil {
-		t.Fatalf("LoadReviewCommentsForRepo: %v", err)
-	}
-	if staged.Mode != reviewModeAuto || len(staged.Comments) != 1 || staged.Comments[0].ID != 202 || staged.Comments[0].DiffHunk == "" || staged.Comments[0].User.Login != testReviewerLogin {
-		t.Fatalf("staged review comments = %+v; want provided previewed comment 202", staged)
-	}
-}
-
-func TestServerMutationTargetReviewCommentsChildCreationWinnerDoesNotStage(t *testing.T) {
-	target, store, parent := newReviewCommentsActionTarget(t)
-	reviewer := target.reviewer.(*fakeReviewCommentOperator)
-	fetchStarted := make(chan struct{}, 1)
-	reviewer.fetchStarted = fetchStarted
-
-	resultCh := make(chan error, 1)
-	if err := target.orch.WithRelationshipWriteLock(func() error {
-		go func() {
-			_, err := target.StartReviewComments(parent.ID, serverruntime.ReviewCommentsActionRequest{
-				Repo: testRepoAName,
-				Mode: reviewCommentsModeAddressAll,
-			})
-			resultCh <- err
-		}()
-
-		select {
-		case <-fetchStarted:
-		case <-time.After(20 * time.Millisecond):
-		}
-
-		child := &feature.Feature{
-			ID:       "review-comments-active-child",
-			Slug:     "review-comments-active-child",
-			Status:   feature.StatusImplementing,
-			Pipeline: feature.PipelineMedium,
-			Parent: &feature.ChildRelationship{
-				ParentID: parent.ID,
-				Kind:     feature.ChildKindRefactor,
-			},
-		}
-		return store.Save(child)
-	}); err != nil {
-		t.Fatalf("create active child under relationship lock: %v", err)
-	}
-
-	select {
-	case err := <-resultCh:
-		if !errors.Is(err, feature.ErrParentMutationLocked) {
-			t.Fatalf("StartReviewComments() error = %v; want ErrParentMutationLocked", err)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("StartReviewComments() did not return after child creation completed")
-	}
-
-	if _, err := agent.LoadReviewCommentsForRepo(store.BaseDir, parent, testRepoAName); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("LoadReviewCommentsForRepo() error = %v; want os.ErrNotExist after rejected parent mutation", err)
-	}
-}
-
 func TestServerMutationTargetCleanupAndDeleteActionsMutateFeatureState(t *testing.T) {
-	t.Run("cleanup cycles", func(t *testing.T) {
-		target, store, f, _ := newCleanupActionTarget(t)
-
-		result, err := target.CleanupFeature(f.ID, serverruntime.CleanupActionRequest{Target: cleanupTargetCycles})
-		if err != nil {
-			t.Fatalf("CleanupFeature(cycles) error = %v", err)
-		}
-		if result.FeatureID != f.ID || result.Target != cleanupTargetCycles || result.Result != resultCleaned {
-			t.Fatalf("CleanupFeature(cycles) result = %+v; want cleaned cycles", result)
-		}
-		updated, err := store.Load(f.ID)
-		if err != nil {
-			t.Fatalf("Load feature after cleanup: %v", err)
-		}
-		if len(updated.RepoCycles) != 0 {
-			t.Fatalf("RepoCycles after cleanup = %+v; want cleared", updated.RepoCycles)
-		}
-	})
-
 	t.Run("cleanup worktrees", func(t *testing.T) {
 		target, store, f, worktrees := newCleanupActionTarget(t)
 
@@ -1914,8 +2279,9 @@ func TestServerMutationTargetCleanupAndDeleteActionsMutateFeatureState(t *testin
 		if result.FeatureID != f.ID || result.Target != cleanupTargetWorktrees || result.Result != resultCleaned {
 			t.Fatalf("CleanupFeature(worktrees) result = %+v; want cleaned worktrees", result)
 		}
-		if len(worktrees.removeCalls) != 1 || worktrees.removeCalls[0].path != testRepoAWorktreePath || worktrees.removeCalls[0].deleteBranch {
-			t.Fatalf("worktree remove calls = %+v; want one non-branch-deleting cleanup", worktrees.removeCalls)
+		calls := mockCallsByMethod(worktrees.Calls, "Remove")
+		if len(calls) != 1 || calls[0].Args[0] != testRepoAWorktreePath || calls[0].Args[1] != false {
+			t.Fatalf("worktree remove calls = %+v; want one non-branch-deleting cleanup", calls)
 		}
 		updated, err := store.Load(f.ID)
 		if err != nil {
@@ -1926,18 +2292,40 @@ func TestServerMutationTargetCleanupAndDeleteActionsMutateFeatureState(t *testin
 		}
 	})
 
+	t.Run("cleanup cycles target is unknown", func(t *testing.T) {
+		target, _, f, worktrees := newCleanupActionTarget(t)
+		worktrees.Calls = nil
+
+		result, err := target.CleanupFeature(f.ID, serverruntime.CleanupActionRequest{Target: "cycles"})
+		if err == nil {
+			t.Fatalf("CleanupFeature(cycles) error = nil; want unknown target error")
+		}
+		if result.FeatureID != f.ID || result.Target != "cycles" || result.Result != resultFailed {
+			t.Fatalf("CleanupFeature(cycles) result = %+v; want failed cycles", result)
+		}
+		if !strings.Contains(err.Error(), "unknown cleanup target") {
+			t.Fatalf("CleanupFeature(cycles) error = %v; want unknown cleanup target", err)
+		}
+		if len(worktrees.Calls) != 0 {
+			t.Fatalf("worktree calls = %+v; want none for unknown target", worktrees.Calls)
+		}
+	})
+
 	t.Run("delete", func(t *testing.T) {
 		target, store, f, worktrees := newCleanupActionTarget(t)
 
-		result, err := target.DeleteFeature(f.ID)
+		result, err := target.DeleteFeature(f.ID, serverruntime.GuardedFeatureActionRequest{})
 		if err != nil {
 			t.Fatalf("DeleteFeature() error = %v", err)
 		}
 		if result.FeatureID != f.ID || result.Status != feature.CascadeDeleteCompleted {
 			t.Fatalf("DeleteFeature() result = %+v; want deleted feature", result)
 		}
-		if len(worktrees.removeCalls) != 1 || worktrees.removeCalls[0].path != testRepoAWorktreePath || !worktrees.removeCalls[0].deleteBranch {
-			t.Fatalf("worktree remove calls = %+v; want one branch-deleting delete", worktrees.removeCalls)
+		calls := mockCallsByMethod(worktrees.Calls, "RemoveRef")
+		// The cascade journal records canonical paths, so the mock sees the resolved spelling.
+		wantPath := feature.CanonicalPath(testRepoAWorktreePath)
+		if len(calls) != 2 || calls[0].Args[0] != wantPath || calls[1].Args[0] != wantPath {
+			t.Fatalf("worktree RemoveRef calls = %+v; want durable worktree and branch cleanup", calls)
 		}
 		if _, err := store.Load(f.ID); err == nil {
 			t.Fatalf("Load deleted feature error = nil; want missing feature")
@@ -1983,7 +2371,9 @@ func newPublishActionTarget(t *testing.T) (serverMutationTarget, *feature.Manage
 	t.Helper()
 	runtimeDir := t.TempDir()
 	cfg := config.NewDefault()
-	cfg.Repos[testRepoAName] = config.RepoConfig{Path: filepath.Join(runtimeDir, testRepoAName)}
+	repoPath := filepath.Join(runtimeDir, testRepoAName)
+	initMutationGitRepo(t, repoPath)
+	cfg.Repos[testRepoAName] = config.RepoConfig{Path: repoPath}
 	store := feature.NewStore(filepath.Join(runtimeDir, "features"))
 	manager := feature.NewManager(store, cfg)
 	f, err := manager.Create("publish via REST", "desc", []string{testRepoAName}, cfg.Defaults.Models, "", "", nil)
@@ -2007,49 +2397,33 @@ func newPublishActionTarget(t *testing.T) (serverMutationTarget, *feature.Manage
 	return serverMutationTarget{orch: orch, store: store}, manager, store, f
 }
 
-func newReviewCommentsActionTarget(t *testing.T) (serverMutationTarget, *feature.Store, *feature.Feature) {
+func initMutationGitRepo(t *testing.T, dir string) {
 	t.Helper()
-	runtimeDir := t.TempDir()
-	cfg := config.NewDefault()
-	cfg.Repos[testRepoAName] = config.RepoConfig{Path: filepath.Join(runtimeDir, testRepoAName)}
-	store := feature.NewStore(filepath.Join(runtimeDir, "features"))
-	manager := feature.NewManager(store, cfg)
-	f, err := manager.Create("review comments via REST", "desc", []string{testRepoAName}, cfg.Defaults.Models, "", "", nil)
-	if err != nil {
-		t.Fatalf("Create feature: %v", err)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir git repo: %v", err)
 	}
-	if err := store.Modify(f.ID, func(ff *feature.Feature) error {
-		publishable := true
-		ff.Status = feature.StatusPublished
-		ff.CurrentPhase = feature.PhasePublish
-		for i := range ff.Repos {
-			ff.Repos[i].Publishable = &publishable
+	for _, args := range [][]string{
+		{"init", "--initial-branch=main"},
+		{"config", "user.email", "test@example.com"},
+		{"config", "user.name", "Test"},
+		{"commit", "--allow-empty", "-m", "initial"},
+	} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %s in %s: %s: %v", strings.Join(args, " "), dir, strings.TrimSpace(string(out)), err)
 		}
-		ff.RepoStates = map[string]*feature.RepoState{testRepoAName: {Touched: true, PRURL: "https://github.com/acme/repo-a/pull/12"}}
-		return nil
-	}); err != nil {
-		t.Fatalf("prepare feature: %v", err)
 	}
-	loaded, err := store.Load(f.ID)
-	if err != nil {
-		t.Fatalf("Load prepared feature: %v", err)
-	}
-	reviewer := &fakeReviewCommentOperator{comments: []ports.ReviewComment{
-		reviewComment(100, "already addressed"),
-		reviewComment(101, "please fix"),
-	}}
-	orch := orchestrator.New(orchestrator.Deps{Lifecycle: manager, Store: store}, orchestrator.Hooks{})
-	return serverMutationTarget{orch: orch, store: store, reviewer: reviewer}, store, loaded
 }
 
-func newCleanupActionTarget(t *testing.T) (serverMutationTarget, *feature.Store, *feature.Feature, *fakeWorktreeOperator) {
+func newCleanupActionTarget(t *testing.T) (serverMutationTarget, *feature.Store, *feature.Feature, *mocks.MockWorktreeOps) {
 	t.Helper()
 	runtimeDir := t.TempDir()
 	cfg := config.NewDefault()
 	cfg.Repos[testRepoAName] = config.RepoConfig{Path: filepath.Join(runtimeDir, testRepoAName)}
 	store := feature.NewStore(filepath.Join(runtimeDir, "features"))
 	manager := feature.NewManager(store, cfg)
-	worktrees := &fakeWorktreeOperator{}
+	worktrees := mocks.NewMockWorktreeOps()
 	manager.Worktrees = worktrees
 	f, err := manager.Create("cleanup via REST", "desc", []string{testRepoAName}, cfg.Defaults.Models, "", "", nil)
 	if err != nil {
@@ -2059,9 +2433,6 @@ func newCleanupActionTarget(t *testing.T) (serverMutationTarget, *feature.Store,
 		ff.Status = feature.StatusPublished
 		ff.CurrentPhase = feature.PhasePublish
 		ff.Repos[0].WorktreePath = testRepoAWorktreePath
-		ff.RepoCycles = map[string]*feature.RepoCycleState{
-			testRepoAName: {Type: feature.CycleReviewComments, Status: feature.RepoCycleFailed},
-		}
 		return nil
 	}); err != nil {
 		t.Fatalf("prepare feature: %v", err)
@@ -2074,96 +2445,14 @@ func newCleanupActionTarget(t *testing.T) (serverMutationTarget, *feature.Store,
 	return serverMutationTarget{orch: orch, store: store}, store, loaded, worktrees
 }
 
-type fakeReviewCommentOperator struct {
-	comments     []ports.ReviewComment
-	fetchCalls   int
-	fetchStarted chan struct{}
-}
-
-func (f *fakeReviewCommentOperator) FetchPRComments(string, string) ([]ports.ReviewComment, error) {
-	f.fetchCalls++
-	if f.fetchStarted != nil {
-		select {
-		case f.fetchStarted <- struct{}{}:
-		default:
+func mockCallsByMethod(calls []mocks.MockCall, method string) []mocks.MockCall {
+	var matching []mocks.MockCall
+	for _, call := range calls {
+		if call.Method == method {
+			matching = append(matching, call)
 		}
 	}
-	out := make([]ports.ReviewComment, len(f.comments))
-	copy(out, f.comments)
-	return out, nil
-}
-
-func (f *fakeReviewCommentOperator) ReplyToPRComment(string, string, int, string) error {
-	return nil
-}
-
-func (f *fakeReviewCommentOperator) ReplyToIssueComment(string, string, string) error {
-	return nil
-}
-
-func (f *fakeReviewCommentOperator) FetchReviewThreadMap(string, string) (map[int]string, error) {
-	return nil, nil
-}
-
-func (f *fakeReviewCommentOperator) ResolveReviewThread(string, string) error {
-	return nil
-}
-
-func (f *fakeReviewCommentOperator) LatestCommitSHA(string) (string, error) {
-	return "", nil
-}
-
-func reviewComment(id int, body string) ports.ReviewComment {
-	comment := ports.ReviewComment{
-		ID:        id,
-		Path:      "main.go",
-		Line:      12,
-		Body:      body,
-		CreatedAt: "2026-06-13T12:00:00Z",
-		Type:      ports.CommentTypeReview,
-	}
-	comment.User.Login = testReviewerLogin
-	return comment
-}
-
-type fakeWorktreeOperator struct {
-	removeCalls []fakeWorktreeRemoveCall
-}
-
-type fakeWorktreeRemoveCall struct {
-	path         string
-	deleteBranch bool
-}
-
-func (f *fakeWorktreeOperator) Create(string, string, string, string) (string, error) {
-	return "", nil
-}
-
-func (f *fakeWorktreeOperator) Remove(path string, deleteBranch bool) error {
-	f.removeCalls = append(f.removeCalls, fakeWorktreeRemoveCall{path: path, deleteBranch: deleteBranch})
-	return nil
-}
-
-func (f *fakeWorktreeOperator) List() ([]ports.WorktreeInfo, error) { return nil, nil }
-
-func (f *fakeWorktreeOperator) DetectStale([]string) ([]ports.WorktreeInfo, error) {
-	return nil, nil
-}
-
-func (f *fakeWorktreeOperator) ResetToBase(string, string) error {
-	return nil
-}
-
-func (f *fakeWorktreeOperator) ResetToBaseLocal(string, string) error {
-	return nil
-}
-
-func (f *fakeWorktreeOperator) ResetToCommit(string, string) error {
-	return nil
-}
-
-func (f *fakeWorktreeOperator) HasUncommittedChanges(string) (bool, error) {
-	return false, nil
+	return matching
 }
 
 func mutationTargetOrchestrator(sessions ports.SessionManager) *orchestrator.Orchestrator {
@@ -2285,6 +2574,7 @@ func (s *mutationTargetSessionView) Status() ports.SessionStatus      { return s
 func (s *mutationTargetSessionView) IsActive() bool                   { return s.active }
 func (s *mutationTargetSessionView) Iteration() int                   { return 0 }
 func (s *mutationTargetSessionView) StartedAt() time.Time             { return time.Time{} }
+func (s *mutationTargetSessionView) WaitingSince() time.Time          { return time.Time{} }
 func (s *mutationTargetSessionView) InitialPrompt() string            { return "" }
 func (s *mutationTargetSessionView) ProviderName() string             { return "" }
 func (s *mutationTargetSessionView) Model() string                    { return "" }
@@ -2323,6 +2613,14 @@ func (s *mutationTargetSessionView) HasPendingAskUserQuestion() bool {
 	}
 	return false
 }
+func (s *mutationTargetSessionView) HasPendingRootAskUserQuestion() bool {
+	return s.HasPendingAskUserQuestion()
+}
+func (s *mutationTargetSessionView) RootCompletionIntent() llm.CompletionIntent {
+	return llm.CompletionIntent{}
+}
+func (s *mutationTargetSessionView) LiveBackgroundTaskCount() int       { return 0 }
+func (s *mutationTargetSessionView) TaskActivities() []llm.TaskActivity { return nil }
 func (s *mutationTargetSessionView) SendUserMessage(text string) error {
 	s.sentMessages = append(s.sentMessages, text)
 	return nil

@@ -23,6 +23,29 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 )
 
+func TestResolveArtifactPathDoesNotAliasOldArtifactToDesign(t *testing.T) {
+	t.Parallel()
+	stateDir := t.TempDir()
+	oldKey := "brain" + "storm"
+	f := &feature.Feature{
+		ID:        "feature-001",
+		ActiveRun: 1,
+		Artifacts: map[string]string{oldKey: oldKey + ".md"},
+	}
+	oldDir := filepath.Join(agent.ActiveRunDir(stateDir, f), oldKey)
+	if err := os.MkdirAll(oldDir, 0o755); err != nil {
+		t.Fatalf("mkdir old artifact dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(oldDir, oldKey+".md"), []byte("legacy"), 0o644); err != nil {
+		t.Fatalf("write old artifact: %v", err)
+	}
+
+	o := New(Deps{PhaseRunner: &agent.PhaseRunner{StateDir: stateDir}}, Hooks{})
+	if got := o.resolveArtifactPath(f, "design"); got != "" {
+		t.Errorf("resolveArtifactPath(design) = %q, want empty", got)
+	}
+}
+
 // TestCollectQAFilePaths_IncludesRoadmap asserts that when fixture
 // qa-answers.md files exist under inquire/, research/, design/, and
 // roadmap/ subdirs, all four paths are returned in the documented order.

@@ -15,7 +15,7 @@ builds:
       - arm64
     ldflags:
       - -s -w
-      - -X github.com/doordash-oss/agentic-orchestrator/internal/tui.version={{.Version}}
+      - -X github.com/doordash-oss/agentic-orchestrator/internal/buildinfo.version={{.Version}}
 
 archives:
   - formats: [tar.gz]
@@ -23,6 +23,20 @@ archives:
 
 checksum:
   name_template: checksums.txt
+  # Fold the electron-builder DMG (built by `npm run package:build` before
+  # goreleaser runs — see `make release`) into checksums.txt so the in-app
+  # updater can match the package against signed metadata.
+  extra_files:
+    - glob: desktop/dist/Agentico-mac-universal.dmg
+
+# Detached Ed25519 signature over checksums.txt in the exact format the
+# desktop updater verifies (agentico-ed25519:<base64>). The signer refuses to
+# run with a key that does not match the trust root embedded in the app.
+signs:
+  - cmd: node
+    args: ["desktop/scripts/release-sign.mjs", "sign", "${artifact}"]
+    artifacts: checksum
+    signature: "${artifact}.sig"
 
 changelog:
   # NOTE: do NOT set disable: true here — it also suppresses --release-notes.
@@ -33,18 +47,29 @@ release:
   github:
     owner: doordash-oss
     name: agentic-orchestrator
+  extra_files:
+    - glob: desktop/dist/Agentico-mac-universal.dmg
 
-brews:
+# Homebrew distribution of the CLI. Casks replaced formulas for pre-compiled
+# binaries (brews is deprecated since goreleaser v2.10); the desktop app cask
+# (agentico-desktop) is published separately by
+# desktop/scripts/publish-desktop-cask.mjs because the OSS cask pipe cannot
+# checksum artifacts goreleaser did not build.
+homebrew_casks:
   - name: agentico
     repository:
       owner: doordash-oss
       name: homebrew-agentic-orchestrator
       branch: main
-    directory: Formula
     homepage: "https://github.com/doordash-oss/agentic-orchestrator"
-    description: "Parallel agentic coding orchestrator TUI"
+    description: "Desktop-first parallel agentic coding orchestrator"
     license: "Apache-2.0"
-    install: |
-      bin.install "agentico"
-    test: |
-      system "#{bin}/agentico", "--version"
+    # The tarball binary is not Developer ID-signed; Homebrew quarantines its
+    # downloads, and Gatekeeper refuses quarantined unsigned binaries. Remove
+    # once releases are signed/notarized.
+    hooks:
+      post:
+        install: |
+          if OS.mac?
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/agentico"]
+          end

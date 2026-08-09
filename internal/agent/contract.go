@@ -25,14 +25,14 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// RoleContract declares the artifacts a role must emit after phase_complete.
+// RoleContract declares the artifacts a role must emit before requesting a
+// completion commit.
 type RoleContract struct {
-	Role        Role
-	Required    []RequiredArtifact
-	Optional    []OptionalArtifact
-	Conditional []ConditionalArtifact
-	NoOp        bool
-	NoOpReason  string
+	Role       Role
+	Required   []RequiredArtifact
+	Optional   []OptionalArtifact
+	NoOp       bool
+	NoOpReason string
 }
 
 // RequiredArtifact describes one artifact in a role's completion contract.
@@ -54,14 +54,6 @@ type OptionalArtifact struct {
 	Validate      func(iterDir, path string, out *Outcome) ([]ProtocolViolation, error)
 }
 
-// ConditionalArtifact adds a required artifact when When matches the parsed
-// payloads produced by the unconditional artifacts.
-type ConditionalArtifact struct {
-	Name     string
-	When     func(Outcome) bool
-	Artifact RequiredArtifact
-}
-
 // ProtocolViolation describes one deterministic contract violation.
 type ProtocolViolation struct {
 	Artifact string
@@ -74,7 +66,6 @@ type Outcome struct {
 	Progress           *ParsedProgress
 	VerificationReport *VerificationReport
 	ReviewFeedback     *ParsedReviewFeedback
-	NeedUserInput      *NeedUserInputRecord
 	RoadmapPhases      []RoadmapPhase
 	PlanAttemptMeta    *PlanAttemptMeta
 	PlanMarkdownPath   string
@@ -92,9 +83,8 @@ func Lookup(phase feature.Phase, role Role) (RoleContract, bool) {
 
 // Validate checks the registered contract for a phase and role.
 //
-// STUB(Phase 1): validators receive only iterDir; later phases may introduce
-// IterationContext for plan-path, repo, state-dir, axis, and helper-dir
-// resolution.
+// Validators receive only iterDir. The registry can later accept richer
+// context for plan-path, repo, state-dir, axis, and helper-dir resolution.
 func Validate(phase feature.Phase, role Role, iterDir string) (Outcome, []ProtocolViolation, error) {
 	contract, ok := Lookup(phase, role)
 	if !ok {
@@ -141,29 +131,15 @@ func validateContractArtifacts(contract RoleContract, iterDir string, includeHid
 		}
 		violations = append(violations, v...)
 	}
-	for _, conditional := range contract.Conditional {
-		if conditional.When == nil || !conditional.When(out) {
-			continue
-		}
-		artifact := conditional.Artifact
-		if artifact.HideFromSkill && !includeHidden {
-			continue
-		}
-		path := artifact.ResolvePath(iterDir)
-		v, err := artifact.Validate(iterDir, path, &out)
-		if err != nil {
-			return out, nil, err
-		}
-		violations = append(violations, v...)
-	}
 	out.OK = len(violations) == 0
 	return out, violations, nil
 }
 
 // ValidateArtifactsPreflight runs cheap artifact checks intended for agents to
-// execute before creating phase_complete. It is intentionally stricter than
-// Validate for YAML syntax so self-checks catch malformed reports even when the
-// harness would tolerate a blocking CHANGES_REQUESTED verdict to route a fix.
+// execute before emitting a structured outcome. It is intentionally stricter
+// than Validate for YAML syntax so self-checks catch malformed reports even
+// when the harness would tolerate a blocking CHANGES_REQUESTED verdict to
+// route a fix.
 func ValidateArtifactsPreflight(phase feature.Phase, role Role, iterDir string) (Outcome, []ProtocolViolation, error) {
 	contract, ok := Lookup(phase, role)
 	if !ok {
@@ -229,8 +205,9 @@ func validateImplementerAgentOwnedEvidencePreflight(iterDir string) ([]ProtocolV
 
 func implementerTestingContractPathCandidates(iterDir string) []string {
 	// Roadmap phase iterations live at <phase>/implement/iteration-N with the
-	// contract at <phase>/testing-contract.yaml. Cycle iterations use the same
-	// phase-dir progress layout and keep the contract beside progress.md.
+	// contract at <phase>/testing-contract.yaml. Implementation iterations
+	// use the same phase-dir progress layout and keep the contract beside
+	// progress.md.
 	parent := filepath.Dir(iterDir)
 	phaseDir := filepath.Dir(parent)
 	candidates := []string{}
@@ -790,18 +767,6 @@ func validatePlanValidatorAxisApprovalArtifact(iterDir, path string, out *Outcom
 		return []ProtocolViolation{{Artifact: displayPath, Reason: fmt.Sprintf("axis approval declares axis %q, want %q", approval.Axis, axis)}}, nil
 	}
 	out.AxisApproval = &approval
-	return nil, nil
-}
-
-func validateNeedUserInputArtifact(_ string, path string, out *Outcome) ([]ProtocolViolation, error) {
-	rec, err := ReadNeedUserInputRecord(path)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return []ProtocolViolation{{Artifact: NeedUserInputArtifactName, Reason: missingArtifactReason("need-user-input.yaml", filepath.Dir(path))}}, nil
-		}
-		return []ProtocolViolation{{Artifact: NeedUserInputArtifactName, Reason: fmt.Sprintf("need-user-input.yaml is unparseable: %v", err)}}, nil
-	}
-	out.NeedUserInput = &rec
 	return nil, nil
 }
 

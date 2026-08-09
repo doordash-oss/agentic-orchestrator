@@ -23,21 +23,18 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"syscall"
 	"time"
 
-	tea "charm.land/bubbletea/v2"
-	"github.com/charmbracelet/colorprofile"
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	agentprompts "github.com/doordash-oss/agentic-orchestrator/internal/agent/prompts"
+	"github.com/doordash-oss/agentic-orchestrator/internal/buildinfo"
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/git"
@@ -55,47 +52,42 @@ import (
 	serverruntime "github.com/doordash-oss/agentic-orchestrator/internal/server"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
 	"github.com/doordash-oss/agentic-orchestrator/internal/skilldef"
-	"github.com/doordash-oss/agentic-orchestrator/internal/tui"
-	"github.com/doordash-oss/agentic-orchestrator/internal/tui/markdown"
 	"github.com/doordash-oss/agentic-orchestrator/internal/utilskill"
 	"go.uber.org/fx"
 	"golang.org/x/term"
 )
 
 const (
-	// Fresh installs default to the Agentic Orchestrator runtime parent.
+	// Default paths live under the Agentic Orchestrator runtime parent.
 	defaultRuntimeParent = "~/.agentic-orchestrator"
-	// Existing default installs may still live under the legacy parent; we
-	// fall back to it when no explicit paths are provided and the new
-	// parent does not yet exist, so user data remains discoverable.
-	legacyRuntimeParent = "~/.agentic-workflow"
 
 	defaultConfigBasename = "config.yaml"
 	defaultStateBasename  = "features"
-	defaultLogBasename    = "agentico.log"
 )
 
 // Wire-level result/status/action strings shared across server mutation
 // handlers (and reused by their tests) to avoid duplicated literals.
 const (
-	resultFailed   = "failed"
-	resultAnswered = "answered"
-	resultConflict = "conflict"
-	resultCleaned  = "cleaned"
-	resultStarted  = "started"
-	resultUpdated  = "updated"
-	resultSent     = "sent"
-	resultRetried  = "retried"
-	resultCreated  = "created"
+	resultFailed       = "failed"
+	resultAnswered     = "answered"
+	resultConflict     = "conflict"
+	resultCleaned      = "cleaned"
+	resultStarted      = "started"
+	resultUpdated      = "updated"
+	resultSent         = "sent"
+	resultRetried      = "retried"
+	resultSetupStarted = "setup_started"
+	resultCreated      = "created"
 
 	dispatchNone = "none"
+
+	maxIterationsRetryDelta     = 10
+	maxPlanIterationsRetryDelta = 2
 
 	toolNameBash            = "Bash"
 	toolNameAskUserQuestion = "AskUserQuestion"
 
 	chatName = "chat"
-
-	reviewModeAuto = "auto"
 
 	phaseNameInquire     = "inquire"
 	phaseNameImplement   = "implement"
@@ -105,7 +97,6 @@ const (
 	phaseNameReview      = "review"
 	phaseNamePublish     = "publish"
 
-	cleanupTargetCycles    = "cycles"
 	cleanupTargetWorktrees = "worktrees"
 
 	providerNameClaude   = "claude"
@@ -135,13 +126,13 @@ func main() {
 type launchMode int
 
 const (
-	launchModeTUI launchMode = iota
+	launchModeDesktop launchMode = iota
+	launchModeServer
 	launchModeHelp
 	launchModeVersion
 	launchModeUpdate
 	launchModeValidateArtifacts
 	launchModeVerifyEvidence
-	launchModeServer
 )
 
 type launchOptions struct {
@@ -169,46 +160,39 @@ type verifyEvidenceOptions struct {
 	dir      string
 }
 
-type defaultLauncher func(configPath, stateDir string, dangerouslySkipPerms bool, enabledProviders []string, refreshModels bool) int
-
 type serverLauncher func(configPath, stateDir string, dangerouslySkipPerms bool, enabledProviders []string, refreshModels bool) int
 
-// updater is the injectable update seam. It mirrors defaultLauncher: production
+// updater is the injectable update seam. Production
 // wiring passes the real updater, tests pass a fake. It returns the process
 // exit code the router propagates verbatim. The update path deliberately never
 // acquires the instance lock, starts the fx container, or reconciles assets.
 type updater func(checkOnly bool, stdout, stderr io.Writer) int
 
 func defaultLaunchOptions() launchOptions {
-	parent := pickRuntimeParent(os.Stat)
+	parent := pickRuntimeParent()
 	return launchOptions{
 		configPath: filepath.Join(parent, defaultConfigBasename),
 		stateDir:   filepath.Join(parent, defaultStateBasename),
 	}
 }
 
-// pickRuntimeParent returns the runtime parent directory used to derive
-// default paths when the user has not passed --config or --state-dir.
-// Fresh installs land under the Agentic Orchestrator namespace. When the
-// new namespace is absent but the legacy default exists, recover by using
-// the legacy parent in place — without copying or moving any user data.
-func pickRuntimeParent(stat func(string) (os.FileInfo, error)) string {
-	newParent := config.ExpandHome(defaultRuntimeParent)
-	legacyParent := config.ExpandHome(legacyRuntimeParent)
-	if _, err := stat(newParent); err == nil {
-		return newParent
-	}
-	if _, err := stat(legacyParent); err == nil {
-		return legacyParent
-	}
-	return newParent
+// pickRuntimeParent returns the current runtime parent used to derive default
+// paths when the user has not passed --config or --state-dir.
+func pickRuntimeParent() string {
+	return config.ExpandHome(defaultRuntimeParent)
 }
 
 func run() {
-	os.Exit(runArgs(os.Args[1:], os.Stdout, os.Stderr, runDefaultClientServer, runServer, runUpdate))
+	os.Exit(runArgs(os.Args[1:], os.Stdout, os.Stderr, runServer, runUpdate))
 }
 
-func runArgs(args []string, stdout, stderr io.Writer, launch defaultLauncher, launchServer serverLauncher, update updater) int {
+func runArgs(args []string, stdout, stderr io.Writer, launchServer serverLauncher, update updater) int {
+	return runArgsWithDesktop(args, stdout, stderr, openRegisteredDesktop, launchServer, update)
+}
+
+type desktopLauncher func() error
+
+func runArgsWithDesktop(args []string, stdout, stderr io.Writer, launchDesktop desktopLauncher, launchServer serverLauncher, update updater) int {
 	opts, err := parseLaunchArgs(args)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
@@ -219,12 +203,12 @@ func runArgs(args []string, stdout, stderr io.Writer, launch defaultLauncher, la
 		printUsage(stdout)
 		return 0
 	case launchModeVersion:
-		fmt.Fprintf(stdout, "agentico v%s\n", tui.GetVersion())
+		fmt.Fprintln(stdout, buildinfo.VersionLine())
 		return 0
 	case launchModeUpdate:
-		// Dispatch through the updater seam ahead of the TUI branch, early
+		// Dispatch through the updater seam ahead of the desktop app branch, early
 		// returning its exit code — exactly as help/version early-return.
-		// The update path never reaches the TUI launcher below, so it takes
+		// The update path never reaches the desktop app launcher below, so it takes
 		// no instance lock, builds no fx container, and reconciles no assets.
 		return update(opts.updateCheck, stdout, stderr)
 	case launchModeValidateArtifacts:
@@ -234,7 +218,12 @@ func runArgs(args []string, stdout, stderr io.Writer, launch defaultLauncher, la
 	case launchModeServer:
 		return launchServer(opts.configPath, opts.stateDir, opts.dangerouslySkipPerms, opts.enabledProviders, opts.refreshModels)
 	default:
-		return launch(opts.configPath, opts.stateDir, opts.dangerouslySkipPerms, opts.enabledProviders, opts.refreshModels)
+		if err := launchDesktop(); err != nil {
+			fmt.Fprintf(stderr, "Could not open the Agentico desktop app: %v\n", err)
+			fmt.Fprintln(stderr, "Install the signed Agentico desktop package from GitHub Releases, or run 'agentico server' for headless automation.")
+			return 1
+		}
+		return 0
 	}
 }
 
@@ -267,6 +256,7 @@ func canonicalizeStateDir(stateDir string) string {
 
 func parseLaunchArgs(args []string) (launchOptions, error) {
 	opts := defaultLaunchOptions()
+	serverOnlyFlag := ""
 	// `update` is a standalone subcommand recognized only as the first
 	// argument. Its sub-flags (--check / -n) are valid only in this context;
 	// elsewhere they fall through to the launch-flag loop and reject as
@@ -289,6 +279,9 @@ func parseLaunchArgs(args []string) (launchOptions, error) {
 	}
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
+		if isServerOnlyLaunchFlag(arg) {
+			serverOnlyFlag = arg
+		}
 		switch arg {
 		case "--config":
 			if i+1 >= len(args) {
@@ -325,7 +318,19 @@ func parseLaunchArgs(args []string) (launchOptions, error) {
 			return opts, fmt.Errorf("unknown command: %s", arg)
 		}
 	}
+	if opts.mode == launchModeDesktop && serverOnlyFlag != "" {
+		return opts, fmt.Errorf("%s is available only with the headless server; run 'agentico server %s ...'", serverOnlyFlag, serverOnlyFlag)
+	}
 	return opts, nil
+}
+
+func isServerOnlyLaunchFlag(flag string) bool {
+	switch flag {
+	case "--config", "--state-dir", "--dangerously-skip-permissions", "--providers", "--refresh-models":
+		return true
+	default:
+		return false
+	}
 }
 
 func parseValidateArtifactsArgs(opts launchOptions, args []string) (launchOptions, error) {
@@ -408,7 +413,7 @@ func parseVerifyEvidenceArgs(opts launchOptions, args []string) (launchOptions, 
 }
 
 // runVerifyEvidence is the in-session self-check the implementer runs before
-// phase_complete: it reads the testing contract and confirms every required
+// declaring semantic success: it reads the testing contract and confirms every required
 // agent-owned capture is present, well-formed, correctly sized, and not a
 // byte-identical duplicate of another row — the same file-backed checks the
 // post-handoff report-integrity gate applies, surfaced early so a missing or
@@ -431,35 +436,34 @@ func runVerifyEvidence(opts verifyEvidenceOptions, stdout, stderr io.Writer) int
 func printUsage(w io.Writer) {
 	fmt.Fprintln(w, `Agentic Orchestrator
 
-Usage: agentico [flags]
+Usage: agentico
        agentico server [flags]
        agentico update [--check|-n]
        agentico validate-artifacts --phase <phase> --role <role> --dir <iteration_dir>
        agentico verify-evidence --contract <testing-contract.yaml> --dir <iteration_dir>
 
-Launches the Bubble Tea TUI dashboard.
-Run 'agentico server' to start the foreground loopback HTTP server.
-Run 'agentico update' to upgrade the binary, or 'agentico update --check'
-(alias -n) to report the latest available release without installing.
-Run 'agentico validate-artifacts' from agent sessions before phase_complete
-to parse and validate role output artifacts without starting the TUI/server.
-Run 'agentico verify-evidence' from implementer sessions before phase_complete
+Starts or focuses the installed Agentico desktop app. Use the explicit 'server'
+subcommand to start the foreground loopback HTTP server for headless automation.
+Run 'agentico update' to open the desktop Updates panel when Agentico is
+registered, or print package-manager guidance otherwise. Run
+'agentico update --check' (alias -n) for a read-only stable-version check.
+Run 'agentico validate-artifacts' from agent sessions before declaring an outcome
+to parse and validate role output artifacts without starting the server.
+Run 'agentico verify-evidence' from implementer sessions before declaring an outcome
 to confirm required agent-owned captures are present, correctly sized, and not
 duplicates — catching gaps before the post-handoff integrity gate does.
 
-Flags:
+Server flags (use with 'agentico server'):
   --config <path>                  Config file path (default: ~/.agentic-orchestrator/config.yaml)
   --state-dir <path>               State directory path (default: ~/.agentic-orchestrator/features)
   --providers <list>               Comma-separated provider list (default: all)
                                    Available: claude, codex, opencode
-  --refresh-models                 Refresh provider model catalogs before opening the TUI
+  --refresh-models                 Refresh provider model catalogs before starting the server
   --dangerously-skip-permissions   Skip all permission prompts (use with caution)
   --check, -n                      With 'update': check for a newer release without installing
+Global flags:
   --help, -h                       Show this help
-  --version, -v                    Show version
-
-When no explicit paths are passed, an existing ~/.agentic-workflow/
-runtime parent is used in place so legacy installs remain discoverable.`)
+  --version, -v                    Show version`)
 }
 
 func runValidateArtifacts(opts validateArtifactsOptions, stdout, stderr io.Writer) int {
@@ -488,7 +492,6 @@ func runValidateArtifacts(opts validateArtifactsOptions, stdout, stderr io.Write
 const providerReadinessTimeout = 5 * time.Second
 const providerReadinessNoticeDelay = 3 * time.Second
 const providerCatalogDiscoveryTimeout = 45 * time.Second
-const defaultLaunchServerReadyTimeout = providerCatalogDiscoveryTimeout + 15*time.Second
 
 type providerReadinessIssue struct {
 	provider llm.LLMProvider
@@ -805,6 +808,21 @@ func discoverModelCatalog(ctx context.Context, discoverer llm.CatalogDiscoverer,
 	return models, nil
 }
 
+func persistRefreshedProviderModelCatalog(cacheRoot string, provider llm.LLMProvider, models []llm.ModelInfo) error {
+	if cacheRoot == "" {
+		return nil
+	}
+	rawVersion, err := provider.VersionInfo()
+	if err != nil {
+		return nil
+	}
+	version, err := clirun.ParseVersionOutput([]byte(rawVersion))
+	if err != nil || !cacheableVersion(version) {
+		return nil
+	}
+	return saveProviderCatalogCache(cacheRoot, provider.Name(), version, models)
+}
+
 func showProviderStartupNotices(w io.Writer, notices []string, delay time.Duration) {
 	if len(notices) == 0 {
 		return
@@ -866,11 +884,11 @@ type runtimeBootstrap struct {
 	phaseRunner     *agent.PhaseRunner
 	observer        *observe.Observer
 	permissionCache *permission.Cache
-	cleanliness     feature.CleanlinessOps
+	worktrees       feature.WorktreeOps
 	eventCh         chan interface{}
 	runtime         serverruntime.RuntimeIdentity
 	workspaceDir    string
-	recoveryItems   []session.RecoveryItem
+	recoveryItems   []ports.RecoveryItem
 	recoveryScanOK  bool
 }
 
@@ -892,22 +910,21 @@ func (b *runtimeBootstrap) Close(ctx context.Context) error {
 }
 
 type serverMutationTarget struct {
-	mu              sync.Mutex
-	orch            *orchestrator.Orchestrator
-	rebaseStarter   featureRebaseStarter
-	childCreator    featureRefactorChildCreator
-	cfg             *config.Config
-	configPath      string
-	store           *feature.Store
-	sessions        ports.SessionManager
-	phaseRunner     *agent.PhaseRunner
-	permissionCache *permission.Cache
-	workspaceDir    string
-	reviewer        ports.ReviewCommentOperator
-}
-
-type featureRebaseStarter interface {
-	StartFeatureRebase(featureID string) error
+	mu                    sync.Mutex
+	orch                  *orchestrator.Orchestrator
+	childCreator          featureRefactorChildCreator
+	reviewFeedbackCreator featureReviewFeedbackChildCreator
+	rebaseChildCreator    featureRebaseChildCreator
+	cfg                   *config.Config
+	configPath            string
+	store                 *feature.Store
+	sessions              ports.SessionManager
+	phaseRunner           *agent.PhaseRunner
+	permissionCache       *permission.Cache
+	workspaceDir          string
+	// dispatchAsync runs server-owned background work (durable feature
+	// setup). Nil means `go fn()`; tests inject a synchronous dispatcher.
+	dispatchAsync func(fn func())
 }
 
 // featureRefactorChildCreator is the narrow feature.Manager surface the
@@ -916,14 +933,35 @@ type featureRefactorChildCreator interface {
 	CreateRefactorChild(parentID string, spec feature.RefactorChildSpec) (*feature.Feature, error)
 }
 
-type gitFreshnessProvider struct{}
+type featureReviewFeedbackChildCreator interface {
+	CreateReviewFeedbackChild(parentID string, spec feature.ReviewFeedbackChildSpec) (*feature.Feature, error)
+}
 
-func (gitFreshnessProvider) Freshness(_ *feature.Feature, repo feature.FeatureRepo) serverruntime.RepoFreshness {
+type featureRebaseChildCreator interface {
+	CreateRebaseChild(parentID string, spec feature.RebaseChildSpec) (*feature.Feature, error)
+}
+
+// gitFreshnessProvider maps cached git freshness onto the API vocabulary. The
+// cache does the work that matters: deduplicated background probes, so a read
+// never waits on git and concurrent reads of one worktree cost one probe.
+type gitFreshnessProvider struct {
+	cache *git.FreshnessCache
+}
+
+func newGitFreshnessProvider() *gitFreshnessProvider {
+	return &gitFreshnessProvider{cache: git.NewFreshnessCache()}
+}
+
+func newGitFreshnessProviderWithProbe(probe func(worktreePath string) string) *gitFreshnessProvider {
+	return &gitFreshnessProvider{cache: git.NewFreshnessCacheWithProbe(probe)}
+}
+
+func (p *gitFreshnessProvider) Freshness(_ *feature.Feature, repo feature.FeatureRepo) serverruntime.RepoFreshness {
 	worktree := repo.WorktreePath
 	if worktree == "" {
 		worktree = repo.Path
 	}
-	switch git.RepoFreshness(worktree) {
+	switch p.cache.Freshness(worktree) {
 	case "in sync":
 		return serverruntime.RepoFreshnessInSync
 	case git.FreshnessLocalChanges:
@@ -967,11 +1005,72 @@ func (t *serverMutationTarget) CreateFeature(req serverruntime.CreateFeatureRequ
 	return serverruntime.CreateFeatureResponse{FeatureID: f.ID, Result: "created"}, nil
 }
 
+// SetupFeature dispatches server-owned durable setup for a freshly created
+// feature — or a retry of a failed setup that reruns only the unfinished
+// tasks — without starting orchestration. On success the feature returns to
+// the startable StatusCreated state; failures are persisted on the feature's
+// setup state and surfaced through setup events, so the HTTP response only
+// acknowledges the dispatch.
+func (t *serverMutationTarget) SetupFeature(featureID string) (serverruntime.FeatureSetupResponse, error) {
+	resp := serverruntime.FeatureSetupResponse{FeatureID: featureID}
+	if t.orch == nil {
+		return resp, errors.New("orchestrator is not available")
+	}
+	if t.store == nil {
+		return resp, errors.New("feature store is not available")
+	}
+	f, err := t.store.Load(featureID)
+	if err != nil {
+		return resp, err
+	}
+	retry := isFailedSetupFeature(f)
+	if !retry && !isPendingSetupFeature(f) {
+		return resp, &serverruntime.ActionConflictError{
+			Message: "feature has no pending or failed setup work",
+			Target:  map[string]any{"feature_id": featureID},
+		}
+	}
+	dispatch := t.dispatchAsync
+	if dispatch == nil {
+		dispatch = func(fn func()) { go fn() }
+	}
+	dispatch(func() {
+		// Errors are durable: the setup runner persists per-task and failure
+		// state on the feature and emits setup events that reach the SSE
+		// stream, so the API surface reports them via the read model.
+		if retry {
+			_ = t.orch.RetrySetupOnly(featureID)
+		} else {
+			_ = t.orch.RunSetupOnly(featureID)
+		}
+	})
+	resp.Result = resultSetupStarted
+	return resp, nil
+}
+
+// isPendingSetupFeature reports whether the feature has queued durable setup
+// that has not completed yet (the state Create leaves it in with QueueSetup).
+func isPendingSetupFeature(f *feature.Feature) bool {
+	if f == nil || f.Status != feature.StatusSettingUpWorktrees {
+		return false
+	}
+	setup := f.Run().Setup
+	return setup != nil &&
+		(setup.Status == feature.SetupStatusQueued || setup.Status == feature.SetupStatusRunning)
+}
+
 func (t *serverMutationTarget) StartFeature(featureID string) (serverruntime.FeatureStartResponse, error) {
 	if err := t.orch.StartFeature(featureID); err != nil {
 		return serverruntime.FeatureStartResponse{}, err
 	}
 	return serverruntime.FeatureStartResponse{FeatureID: featureID, Result: resultStarted}, nil
+}
+
+func (t *serverMutationTarget) ResumeFeature(featureID string) (serverruntime.FeatureStartResponse, error) {
+	if t.orch == nil {
+		return serverruntime.FeatureStartResponse{}, errors.New("orchestrator is not available")
+	}
+	return t.StartFeature(featureID)
 }
 
 func (t *serverMutationTarget) StopFeature(featureID string) (serverruntime.FeatureStopResponse, error) {
@@ -1016,29 +1115,12 @@ func (t *serverMutationTarget) dispatchRestartOutcome(featureID string, outcome 
 			resp.Phase = outcome.Phase.String()
 		}
 		return t.orch.StartFeature(featureID)
-	case orchestrator.RestartDispatchRepoCycles:
-		resp.Dispatch = "repo_cycles"
-		resp.RepoCycleCount = len(outcome.RepoCycleRestarts)
-		sessionIDs := make([]string, 0, len(outcome.RepoCycleRestarts)+1)
-		for _, restart := range outcome.RepoCycleRestarts {
-			sessionID, err := t.orch.StartRepoCycleImplement(featureID, restart.RepoName, restart.CycleType, restart.PlanContent)
-			if sessionID != "" {
-				sessionIDs = append(sessionIDs, sessionID)
-			}
-			if err != nil {
-				return err
-			}
-		}
-		if len(sessionIDs) > 0 {
-			resp.SessionIDs = sessionIDs
-		}
-		return nil
 	default:
 		return fmt.Errorf("unknown restart action %d", outcome.Action)
 	}
 }
 
-func (t *serverMutationTarget) ReviewDecision(featureID string, req serverruntime.ReviewDecisionRequest) (serverruntime.ReviewDecisionResponse, error) {
+func (t *serverMutationTarget) ReviewDecision(featureID string, req serverruntime.ReviewDecisionRequest) error {
 	decision := orchestrator.ReviewDecision{
 		Decision:    req.Decision,
 		TargetPhase: parseServerPhase(req.Phase),
@@ -1047,10 +1129,7 @@ func (t *serverMutationTarget) ReviewDecision(featureID string, req serverruntim
 		Roadmap:     req.Roadmap,
 		Comment:     req.Comment,
 	}
-	if err := t.orch.HandleReviewDecision(featureID, decision); err != nil {
-		return serverruntime.ReviewDecisionResponse{}, err
-	}
-	return serverruntime.ReviewDecisionResponse{FeatureID: featureID, Decision: req.Decision, Result: "submitted"}, nil
+	return t.orch.HandleReviewDecision(featureID, decision)
 }
 
 func (t *serverMutationTarget) UpdateFeatureConfig(featureID string, req serverruntime.FeatureConfigMutationRequest) (serverruntime.FeatureConfigUpdateResponse, error) {
@@ -1141,19 +1220,15 @@ func (t *serverMutationTarget) UpdateFeatureConfig(featureID string, req serverr
 	return serverruntime.FeatureConfigUpdateResponse{}, errors.New("orchestrator is not available")
 }
 
-func (t *serverMutationTarget) NeedUserInputDecision(featureID string, req serverruntime.NeedUserInputDecisionRequest) (serverruntime.NeedUserInputDecisionResponse, error) {
-	if err := t.orch.HandleNeedUserInputDecision(featureID, orchestrator.NeedUserInputDecision{
-		Decision:  req.Decision,
-		RepoName:  req.RepoName,
-		CycleType: feature.RepoCycleType(req.CycleType),
-	}); err != nil {
-		return serverruntime.NeedUserInputDecisionResponse{}, err
+func (t *serverMutationTarget) ResumeNeedUserInput(featureID string, req serverruntime.NeedUserInputResumeRequest) (serverruntime.NeedUserInputResumeResponse, error) {
+	if err := t.orch.ResumeNeedUserInput(featureID, orchestrator.NeedUserInputResume{}); err != nil {
+		return serverruntime.NeedUserInputResumeResponse{}, err
 	}
-	return serverruntime.NeedUserInputDecisionResponse{FeatureID: featureID, Decision: req.Decision, Result: "decided"}, nil
+	return serverruntime.NeedUserInputResumeResponse{FeatureID: featureID, Result: "resumed"}, nil
 }
 
 func (t *serverMutationTarget) DraftNeedUserInputAnswers(featureID string, req serverruntime.NeedUserInputDraftRequest) (serverruntime.NeedUserInputDraftResponse, error) {
-	gatePath, err := t.needUserInputGatePath(featureID, req.RepoName)
+	gatePath, err := t.needUserInputGatePath(featureID)
 	if err != nil {
 		return serverruntime.NeedUserInputDraftResponse{}, err
 	}
@@ -1308,6 +1383,9 @@ func askUserSubmittedKeyMatchesOriginal(submittedKey, originalKey string) bool {
 func (t *serverMutationTarget) SendHelp(req serverruntime.HelpAnswerRequest) (serverruntime.HelpSendResponse, error) {
 	sess, err := t.helpSession(req)
 	if err != nil {
+		if resp, ok, queueErr := t.sendQueuedFeatureHelp(req); ok || queueErr != nil {
+			return resp, queueErr
+		}
 		return serverruntime.HelpSendResponse{}, err
 	}
 	if err := sess.SendUserMessage(req.Message); err != nil {
@@ -1326,8 +1404,9 @@ func (t *serverMutationTarget) StartChat(req serverruntime.ChatStartRequest) (se
 	if t.sessions == nil {
 		return serverruntime.ChatStartResponse{}, errors.New("session manager is not available")
 	}
+	deliveryMessage := chatMessageWithImages(message, req.Images)
 	if sess := t.sessions.GetSession(serverChatSessionID); sess != nil && sess.IsActive() {
-		if err := sess.SendUserMessage(message); err != nil {
+		if err := sess.SendUserMessage(deliveryMessage); err != nil {
 			return serverruntime.ChatStartResponse{}, fmt.Errorf("send chat message: %w", err)
 		}
 		return serverruntime.ChatStartResponse{SessionID: sess.ID(), Result: resultSent}, nil
@@ -1337,7 +1416,7 @@ func (t *serverMutationTarget) StartChat(req serverruntime.ChatStartRequest) (se
 	}
 
 	chatSkillPath := serverChatSkillPath(t.phaseRunner.SkillsDir)
-	prompt := message
+	prompt := deliveryMessage
 	if instruction := serverChatSkillInstruction(t.phaseRunner.SkillsDir); instruction != "" {
 		prompt = instruction + "\n\n" + prompt
 	}
@@ -1361,7 +1440,7 @@ func (t *serverMutationTarget) StartChat(req serverruntime.ChatStartRequest) (se
 		DisallowedTools: []string{"Task"},
 		WorkDir:         workDir,
 		PIDDir:          chatDir,
-		PermHandler:     &session.AMAHandler{},
+		PermHandler:     &permission.AMAHandler{},
 		Phase:           utilskill.PhaseAll,
 		TurnMode:        ports.TurnModeInteractive,
 		EffortLevel:     llm.EffortLow,
@@ -1373,7 +1452,7 @@ func (t *serverMutationTarget) StartChat(req serverruntime.ChatStartRequest) (se
 	if sessOpts == nil {
 		sessOpts = &ports.SessionOpts{}
 	}
-	sessOpts.InitialPrompt = prompt
+	sessOpts.InitialPrompt = deliveryMessage
 	sessOpts.Kind = ports.KindChat
 	sessOpts.TurnMode = ports.TurnModeInteractive
 	sessOpts.Label = chatName
@@ -1384,6 +1463,34 @@ func (t *serverMutationTarget) StartChat(req serverruntime.ChatStartRequest) (se
 		return serverruntime.ChatStartResponse{}, fmt.Errorf("start chat session: %w", err)
 	}
 	return serverruntime.ChatStartResponse{SessionID: sess.ID(), Result: resultStarted}, nil
+}
+
+func chatMessageWithImages(message string, images []string) string {
+	if len(images) == 0 {
+		return message
+	}
+	var prompt strings.Builder
+	prompt.WriteString(message)
+	prompt.WriteString("\n\nAttached images (inspect these local files):")
+	for _, image := range images {
+		prompt.WriteString("\n- ")
+		prompt.WriteString(strconv.Quote(image))
+	}
+	return prompt.String()
+}
+
+func (t *serverMutationTarget) EndChat() (serverruntime.ChatEndResponse, error) {
+	if t.sessions == nil {
+		return serverruntime.ChatEndResponse{}, errors.New("session manager is not available")
+	}
+	sess := t.sessions.GetSession(serverChatSessionID)
+	if sess == nil || !sess.IsActive() {
+		return serverruntime.ChatEndResponse{SessionID: serverChatSessionID, Result: "not_active"}, nil
+	}
+	if err := t.sessions.StopSession(serverChatSessionID); err != nil {
+		return serverruntime.ChatEndResponse{}, fmt.Errorf("end chat session: %w", err)
+	}
+	return serverruntime.ChatEndResponse{SessionID: serverChatSessionID, Result: "ended"}, nil
 }
 
 func serverChatSkillInstruction(skillsDir string) string {
@@ -1465,16 +1572,6 @@ func (t *serverMutationTarget) RuntimeConfig(req serverruntime.RuntimeConfigMuta
 		cfg.WorkspaceRoots = append([]string(nil), (*req.WorkspaceRoots)...)
 		config.DiscoverReposFromRoots(cfg)
 	}
-	if req.UI != nil {
-		if !slices.Equal(cfg.UI.CollapsedSections, req.UI.CollapsedSections) {
-			cfg.UI.CollapsedSections = append([]string(nil), req.UI.CollapsedSections...)
-			changed = true
-		}
-		if req.UI.KeyboardLayout != "" && req.UI.KeyboardLayout != cfg.UI.KeyboardLayout {
-			cfg.UI.KeyboardLayout = req.UI.KeyboardLayout
-			changed = true
-		}
-	}
 	if req.Notifications != nil && cfg.Notifications.MuteFeatureInput != req.Notifications.MuteFeatureInput {
 		cfg.Notifications.MuteFeatureInput = req.Notifications.MuteFeatureInput
 		changed = true
@@ -1505,6 +1602,9 @@ func (t *serverMutationTarget) PublishFeature(featureID string, req serverruntim
 	if t.orch == nil {
 		return serverruntime.PublishFeatureResponse{FeatureID: featureID}, errors.New("orchestrator is not available")
 	}
+	if err := t.rejectStaleCompletionPreflight(featureID, req.SourceRevision); err != nil {
+		return serverruntime.PublishFeatureResponse{FeatureID: featureID, Result: resultFailed}, err
+	}
 	if err := t.orch.PublishWithOptions(featureID, orchestrator.PublishOptions{
 		Repos: req.Repos,
 		Title: req.Title,
@@ -1519,15 +1619,11 @@ func (t *serverMutationTarget) PublishFeature(featureID string, req serverruntim
 }
 
 func (t *serverMutationTarget) GeneratePublishDescription(featureID string, req serverruntime.PublishDescriptionRequest) (serverruntime.PublishDescriptionResponse, error) {
-	if t.phaseRunner == nil {
-		return serverruntime.PublishDescriptionResponse{FeatureID: featureID}, errors.New("phase runner is not available")
+	if t.orch == nil {
+		return serverruntime.PublishDescriptionResponse{FeatureID: featureID}, errors.New("orchestrator is not available")
 	}
-	title, body, err := t.phaseRunner.RunDescriptionGeneration(context.Background(), featureID, req.Model, agent.PRContext{
-		FeatureName:        req.FeatureName,
-		FeatureDescription: req.FeatureDescription,
-		Roadmap:            req.Roadmap,
-		CommitBodies:       req.CommitBodies,
-		DiffStat:           req.DiffStat,
+	title, body, err := t.orch.GeneratePublishDescription(featureID, orchestrator.PublishDescriptionOptions{
+		Repos: req.Repos,
 	})
 	if err != nil {
 		return serverruntime.PublishDescriptionResponse{FeatureID: featureID, Title: title, Body: body, Result: "generated"}, err
@@ -1535,14 +1631,30 @@ func (t *serverMutationTarget) GeneratePublishDescription(featureID string, req 
 	return serverruntime.PublishDescriptionResponse{FeatureID: featureID, Title: title, Body: body, Result: "generated"}, nil
 }
 
-func (t *serverMutationTarget) MergeFeature(featureID string) (serverruntime.MergeFeatureResponse, error) {
+func (t *serverMutationTarget) MergeFeature(featureID string, req serverruntime.GuardedFeatureActionRequest) (serverruntime.MergeFeatureResponse, error) {
 	if t.orch == nil {
 		return serverruntime.MergeFeatureResponse{FeatureID: featureID}, errors.New("orchestrator is not available")
+	}
+	if err := t.rejectStaleCompletionPreflight(featureID, req.SourceRevision); err != nil {
+		return serverruntime.MergeFeatureResponse{FeatureID: featureID, Result: resultFailed}, err
 	}
 	if err := t.orch.MergeFeatureLocal(featureID); err != nil {
 		return serverruntime.MergeFeatureResponse{FeatureID: featureID, Result: resultFailed}, err
 	}
 	return serverruntime.MergeFeatureResponse{FeatureID: featureID, Result: "merged"}, nil
+}
+
+func (t *serverMutationTarget) RepositoryPath(featureID, repoName string) (serverruntime.RepositoryPathResponse, error) {
+	resp := serverruntime.RepositoryPathResponse{FeatureID: featureID, Repo: repoName}
+	if t.orch == nil {
+		return resp, errors.New("orchestrator is not available")
+	}
+	path, err := t.orch.RepositoryWorktreePath(featureID, repoName)
+	if err != nil {
+		return resp, err
+	}
+	resp.Path = path
+	return resp, nil
 }
 
 func (t *serverMutationTarget) RewindFeature(featureID string, req serverruntime.RewindFeatureRequest) (serverruntime.RewindFeatureResponse, error) {
@@ -1563,6 +1675,20 @@ func (t *serverMutationTarget) RewindFeature(featureID string, req serverruntime
 		resp.Result = resultFailed
 		return resp, errors.New("orchestrator is not available")
 	}
+	// Stale-preview guard: when the client presents a preview's source run
+	// and revision, reject before any side effect if the active run changed
+	// or rewind-relevant state advanced since the preview was computed.
+	// Historical source runs (run number below the active run) are rejected
+	// outright — rewind executes only against the current active run.
+	current, err := t.validateRewindGuard(featureID, req)
+	if err != nil {
+		resp.Result = resultFailed
+		return resp, err
+	}
+	sourceRunNumber := 0
+	if current != nil {
+		sourceRunNumber = current.ActiveRun
+	}
 	warnings, effectiveTarget, err := t.orch.RewindWithUpgrade(featureID, feature.RewindRequest{
 		TargetPhase:  targetPhase,
 		RoadmapPhase: req.RoadmapPhase,
@@ -1571,31 +1697,105 @@ func (t *serverMutationTarget) RewindFeature(featureID string, req serverruntime
 		resp.EffectivePhase = effectiveTarget.DirName()
 	}
 	resp.WarningCount = len(warnings)
+	resp.SourceRunNumber = sourceRunNumber
+	resp.Warnings = redactRewindWarnings(warnings)
 	if err != nil {
 		resp.Result = resultFailed
 		return resp, err
 	}
 	resp.Result = "rewound"
+	if t.store != nil {
+		if updated, loadErr := t.store.Load(featureID); loadErr == nil {
+			resp.NewRunNumber = updated.ActiveRun
+		}
+	}
 	return resp, nil
+}
+
+// staleRewindError is a sentinel for a stale/historical rewind-preview guard
+// rejection. It carries a redacted reason; no internal path or token is
+// exposed across the API boundary.
+type staleRewindError struct {
+	reason string
+}
+
+func (e staleRewindError) Error() string { return e.reason }
+
+// validateRewindGuard enforces that a rewind request was previewed against
+// the current active run and rewind-relevant state. It performs no side
+// effect and is safe to call before any mutation. It returns the current
+// feature so execution can use the same loaded snapshot for its source run.
+func (t *serverMutationTarget) validateRewindGuard(featureID string, req serverruntime.RewindFeatureRequest) (*feature.Feature, error) {
+	if t.store == nil {
+		if req.SourceRevision == "" {
+			return nil, nil
+		}
+		return nil, errors.New("store is not available for rewind guard")
+	}
+	current, loadErr := t.store.Load(featureID)
+	if loadErr != nil {
+		return nil, fmt.Errorf("loading feature for rewind guard: %w", loadErr)
+	}
+	if req.SourceRevision == "" {
+		return current, nil
+	}
+	if req.SourceRunNumber != 0 && req.SourceRunNumber != current.ActiveRun {
+		return nil, staleRewindError{reason: "active run changed since preview"}
+	}
+	if got := feature.RewindRevision(current); got != req.SourceRevision {
+		return nil, staleRewindError{reason: "rewind state changed since preview"}
+	}
+	return current, nil
+}
+
+// redactRewindWarnings sanitizes rewind warning strings for API exposure,
+// stripping private tokens and bounding length, mirroring the server's
+// safeDisplayText redaction.
+func redactRewindWarnings(warnings []string) []string {
+	if len(warnings) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(warnings))
+	for _, w := range warnings {
+		out = append(out, serverruntime.SafeDisplayText(w, 300))
+	}
+	return out
 }
 
 func (t *serverMutationTarget) RetryFeature(featureID string) (serverruntime.RetryFeatureResponse, error) {
 	if t.orch == nil {
 		return serverruntime.RetryFeatureResponse{FeatureID: featureID}, errors.New("orchestrator is not available")
 	}
+	var current *feature.Feature
 	if t.store != nil {
 		f, err := t.store.Load(featureID)
-		if err == nil && isFailedSetupFeature(f) {
-			if err := t.orch.RetrySetup(featureID); err != nil {
-				return serverruntime.RetryFeatureResponse{FeatureID: featureID, Result: resultFailed}, err
+		if err == nil {
+			current = f
+			if isFailedSetupFeature(f) {
+				if err := t.orch.RetrySetup(featureID); err != nil {
+					return serverruntime.RetryFeatureResponse{FeatureID: featureID, Result: resultFailed}, err
+				}
+				return serverruntime.RetryFeatureResponse{FeatureID: featureID, Result: resultRetried}, nil
 			}
-			return serverruntime.RetryFeatureResponse{FeatureID: featureID, Result: resultRetried}, nil
 		}
 	}
-	if err := t.orch.RetryPhase(featureID); err != nil {
+	maxIterationsDelta, maxPlanIterationsDelta := retryFeatureIterationDeltas(current)
+	outcome, err := t.orch.RestartPhase(featureID, maxIterationsDelta, maxPlanIterationsDelta)
+	if err != nil {
+		return serverruntime.RetryFeatureResponse{FeatureID: featureID, Result: resultFailed}, err
+	}
+	restartResp := serverruntime.FeatureRestartResponse{FeatureID: featureID, Result: resultRetried}
+	if err := t.dispatchRestartOutcome(featureID, outcome, &restartResp); err != nil {
 		return serverruntime.RetryFeatureResponse{FeatureID: featureID, Result: resultFailed}, err
 	}
 	return serverruntime.RetryFeatureResponse{FeatureID: featureID, Result: resultRetried}, nil
+}
+
+func retryFeatureIterationDeltas(f *feature.Feature) (int, int) {
+	if f == nil || f.Status != feature.StatusFailed || f.FailureType != feature.FailureMaxIterations {
+		return 0, 0
+	}
+	return maxIterationsRetryDelta, maxPlanIterationsRetryDelta
 }
 
 func isFailedSetupFeature(f *feature.Feature) bool {
@@ -1609,23 +1809,74 @@ func isFailedSetupFeature(f *feature.Feature) bool {
 		setup.Status == feature.SetupStatusFailed
 }
 
-func (t *serverMutationTarget) StartRebase(featureID string, req serverruntime.RebaseActionRequest) (serverruntime.RebaseStartResponse, error) {
-	resp := serverruntime.RebaseStartResponse{
-		FeatureID: featureID,
-		CycleType: string(feature.CycleRebase),
+func (t *serverMutationTarget) CompletionPreflight(featureID string) (serverruntime.CompletionPreflightResponse, error) {
+	if t.orch == nil {
+		return serverruntime.CompletionPreflightResponse{FeatureID: featureID}, errors.New("orchestrator is not available")
 	}
-	starter := t.rebaseStarter
-	if starter == nil {
-		starter = t.orch
+	result, err := t.orch.CompletionPreflight(featureID)
+	if err != nil {
+		return serverruntime.CompletionPreflightResponse{FeatureID: featureID}, err
 	}
-	if starter == nil {
-		return resp, errors.New("orchestrator is not available")
+	resp := serverruntime.CompletionPreflightResponse{
+		APIVersion:      serverruntime.APIVersion,
+		FeatureID:       result.FeatureID,
+		SourceRevision:  result.SourceRevision,
+		CanMarkDone:     result.CanMarkDone,
+		MarkDoneBlocker: result.MarkDoneBlocker,
 	}
-	if err := starter.StartFeatureRebase(featureID); err != nil {
-		resp.Result = resultFailed
-		return resp, err
+	for _, r := range result.Repos {
+		resp.Repos = append(resp.Repos, serverruntime.CompletionPreflightRepo{
+			Repo:                  r.Repo,
+			Publishable:           r.Publishable,
+			Touched:               r.Touched,
+			Status:                r.Status,
+			PrURL:                 r.PRURL,
+			Blocker:               r.Blocker,
+			Freshness:             r.Freshness,
+			LastError:             r.LastError,
+			BaseBranch:            r.BaseBranch,
+			Branch:                r.Branch,
+			PendingCommits:        r.PendingCommits,
+			PendingDirty:          r.PendingDirty,
+			PushMode:              r.PushMode,
+			PendingDirtyFiles:     r.PendingDirtyFiles,
+			PendingDirtyFileTotal: r.PendingDirtyFileTotal,
+		})
 	}
-	resp.Result = resultStarted
+	return resp, nil
+}
+
+func (t *serverMutationTarget) RepositoryDiff(featureID, repoName, filePath string) (serverruntime.RepositoryDiffResponse, error) {
+	if t.orch == nil {
+		return serverruntime.RepositoryDiffResponse{FeatureID: featureID, Repo: repoName}, errors.New("orchestrator is not available")
+	}
+	result, err := t.orch.RepositoryDiff(featureID, repoName, filePath)
+	if err != nil {
+		return serverruntime.RepositoryDiffResponse{FeatureID: featureID, Repo: repoName}, err
+	}
+	resp := serverruntime.RepositoryDiffResponse{
+		APIVersion:      serverruntime.APIVersion,
+		FeatureID:       result.FeatureID,
+		Repo:            result.Repo,
+		SourceRevision:  result.SourceRevision,
+		Truncated:       result.Truncated,
+		FileDiff:        result.FileDiff,
+		FileTruncated:   result.FileTruncated,
+		FileBinary:      result.FileBinary,
+		FileUnavailable: result.FileUnavailable,
+		PartialFailure:  result.PartialFailure,
+	}
+	for _, f := range result.Files {
+		resp.Files = append(resp.Files, serverruntime.RepositoryDiffFile{
+			Path:         f.Path,
+			OldPath:      f.OldPath,
+			Operation:    f.Operation,
+			AddedLines:   f.AddedLines,
+			RemovedLines: f.RemovedLines,
+			Binary:       f.Binary,
+			Fingerprint:  f.Fingerprint,
+		})
+	}
 	return resp, nil
 }
 
@@ -1661,7 +1912,7 @@ func (t *serverMutationTarget) RefactorFeature(featureID string, req serverrunti
 	// in-process lock. The orchestrator parks setup-complete children at
 	// Created without starting the pipeline.
 	if t.orch != nil {
-		t.orch.RefactorChildCreated(child)
+		t.orch.ChildCreated(child)
 		t.orch.RunSetupAsync(child.ID)
 	}
 	resp.FeatureID = child.ID
@@ -1669,121 +1920,77 @@ func (t *serverMutationTarget) RefactorFeature(featureID string, req serverrunti
 	return resp, nil
 }
 
-func (t *serverMutationTarget) FetchReviewComments(featureID string, req serverruntime.ReviewCommentsFetchRequest) (serverruntime.ReviewCommentsFetchResponse, error) {
-	comments, err := t.fetchUnaddressedReviewComments(featureID, req.Repo)
-	if err != nil {
-		return serverruntime.ReviewCommentsFetchResponse{}, err
+func (t *serverMutationTarget) ReviewFeedbackFeature(featureID string, req serverruntime.ReviewFeedbackFeatureRequest) (serverruntime.ReviewFeedbackFeatureResponse, error) {
+	resp := serverruntime.ReviewFeedbackFeatureResponse{ParentID: featureID, Result: resultFailed}
+	creator := t.reviewFeedbackCreator
+	if creator == nil {
+		return resp, errors.New("feature manager is not available")
 	}
-	return serverruntime.ReviewCommentsFetchResponse{
-		APIVersion: serverruntime.APIVersion,
-		FeatureID:  featureID,
-		Repo:       req.Repo,
-		Mode:       reviewModeAuto,
-		Comments:   reviewCommentDTOs(req.Repo, comments),
-	}, nil
-}
-
-func (t *serverMutationTarget) fetchUnaddressedReviewComments(featureID, repoName string) ([]ports.ReviewComment, error) {
-	if t.store == nil {
-		return nil, errors.New("feature store is not available")
-	}
-	if t.reviewer == nil {
-		return nil, errors.New("review comment adapter is not available")
-	}
-	f, err := t.store.Load(featureID)
-	if err != nil {
-		return nil, err
-	}
-	repo, ok := findFeatureRepo(f, repoName)
-	if !ok {
-		return nil, fmt.Errorf("repo %s not found", repoName)
-	}
-	prURL := f.PRURLs()[repoName]
-	if prURL == "" {
-		return nil, fmt.Errorf("repo %s has no PR URL", repoName)
-	}
-	comments, err := t.reviewer.FetchPRComments(repo.Path, prURL)
-	if err != nil {
-		return nil, err
-	}
-	for i := range comments {
-		comments[i].RepoName = repoName
-	}
-	addressed, _ := agent.LoadAddressedIDsForRepo(t.store.BaseDir, f, repoName)
-	if len(addressed) > 0 {
-		filtered := comments[:0]
-		for _, comment := range comments {
-			if !addressed[comment.ID] {
-				filtered = append(filtered, comment)
-			}
+	spec := serverruntime.ReviewFeedbackChildSpecFromRequest(req)
+	var child *feature.Feature
+	if t.orch != nil {
+		if lockErr := t.orch.WithRelationshipWriteLock(func() error {
+			var createErr error
+			child, createErr = creator.CreateReviewFeedbackChild(featureID, spec)
+			return createErr
+		}); lockErr != nil {
+			return resp, lockErr
 		}
-		comments = filtered
+	} else {
+		var createErr error
+		child, createErr = creator.CreateReviewFeedbackChild(featureID, spec)
+		if createErr != nil {
+			return resp, createErr
+		}
 	}
-	return comments, nil
+	if t.orch != nil {
+		t.orch.ChildCreated(child)
+		t.orch.RunSetupAsync(child.ID)
+	}
+	resp.FeatureID = child.ID
+	resp.Result = resultCreated
+	return resp, nil
 }
 
-func (t *serverMutationTarget) StartReviewComments(featureID string, req serverruntime.ReviewCommentsActionRequest) (serverruntime.ReviewCommentsStartResponse, error) {
-	resp := serverruntime.ReviewCommentsStartResponse{
-		FeatureID: featureID,
-		Repo:      req.Repo,
-		Mode:      req.Mode,
-		CycleType: string(feature.CycleReviewComments),
+func (t *serverMutationTarget) RebaseFeature(featureID string, _ serverruntime.RebaseFeatureRequest) (serverruntime.RebaseFeatureResponse, error) {
+	resp := serverruntime.RebaseFeatureResponse{ParentID: featureID, Result: resultFailed}
+	creator := t.rebaseChildCreator
+	if creator == nil {
+		return resp, errors.New("feature manager is not available")
 	}
 	if t.orch == nil {
 		return resp, errors.New("orchestrator is not available")
 	}
-	sessionID, err := t.orch.StartRepoCycleImplementWithPreparation(
-		featureID,
-		req.Repo,
-		feature.CycleReviewComments,
-		"",
-		func() error {
-			comments := reviewCommentDTOsToPorts(req.Repo, req.Comments)
-			if len(comments) == 0 {
-				var err error
-				comments, err = t.fetchUnaddressedReviewComments(featureID, req.Repo)
-				if err != nil {
-					resp.Result = resultFailed
-					return err
-				}
-			} else {
-				resp.Source = "provided"
-			}
-			comments = threadedReviewComments(comments)
-			if len(comments) == 0 {
-				resp.Result = "no_comments"
-				return fmt.Errorf("review-comments: no unaddressed comments for repo %s", req.Repo)
-			}
-			git.SortReviewCommentsChronologically(comments)
-			resp.CommentCount = len(comments)
-			f, err := t.store.Load(featureID)
-			if err != nil {
-				resp.Result = resultFailed
-				return err
-			}
-			if err := agent.SaveReviewCommentsForRepo(t.store.BaseDir, f, req.Repo, agent.ReviewCommentsData{Mode: req.Mode, Comments: comments}); err != nil {
-				resp.Result = resultFailed
-				return err
-			}
-			return nil
-		},
-	)
-	if sessionID != "" {
-		resp.SessionID = sessionID
-	}
+	preflight, err := t.orch.RebaseChildPreflight(featureID)
 	if err != nil {
-		if resp.Result == "" {
-			resp.Result = resultFailed
-		}
 		return resp, err
 	}
-	resp.Result = resultStarted
+	spec := feature.RebaseChildSpec{
+		Bases:   preflight.Bases,
+		Targets: preflight.Targets,
+		Behind:  preflight.Behind,
+	}
+	var child *feature.Feature
+	if wErr := t.orch.WithRelationshipWriteLock(func() error {
+		var cErr error
+		child, cErr = creator.CreateRebaseChild(featureID, spec)
+		return cErr
+	}); wErr != nil {
+		return resp, wErr
+	}
+	t.orch.ChildCreated(child)
+	t.orch.RunSetupAsync(child.ID)
+	resp.FeatureID = child.ID
+	resp.Result = resultCreated
 	return resp, nil
 }
 
-func (t *serverMutationTarget) MarkDone(featureID string) (serverruntime.MarkDoneResponse, error) {
+func (t *serverMutationTarget) MarkDone(featureID string, req serverruntime.GuardedFeatureActionRequest) (serverruntime.MarkDoneResponse, error) {
 	if t.orch == nil {
 		return serverruntime.MarkDoneResponse{FeatureID: featureID}, errors.New("orchestrator is not available")
+	}
+	if err := t.rejectStaleCompletionPreflight(featureID, req.SourceRevision); err != nil {
+		return serverruntime.MarkDoneResponse{FeatureID: featureID, Result: resultFailed}, err
 	}
 	if err := t.orch.MarkDone(featureID); err != nil {
 		return serverruntime.MarkDoneResponse{FeatureID: featureID, Result: resultFailed}, err
@@ -1800,20 +2007,16 @@ func (t *serverMutationTarget) CleanupFeature(featureID string, req serverruntim
 	if t.orch == nil {
 		return resp, errors.New("orchestrator is not available")
 	}
+	if err := t.rejectStaleCompletionPreflight(featureID, req.SourceRevision); err != nil {
+		resp.Result = resultFailed
+		return resp, err
+	}
 	switch target {
 	case cleanupTargetWorktrees:
 		if err := t.orch.CleanWorktree(featureID); err != nil {
 			resp.Result = resultFailed
 			return resp, err
 		}
-	case cleanupTargetCycles:
-		if err := t.orch.ClearRepoCycles(featureID); err != nil {
-			resp.Result = resultFailed
-			return resp, err
-		}
-	case "failed-cycles", "completed-cycles":
-		resp.Result = "unsupported"
-		return resp, fmt.Errorf("cleanup target %q is not supported by the orchestrator adapter", target)
 	default:
 		resp.Result = resultFailed
 		return resp, fmt.Errorf("unknown cleanup target %q", req.Target)
@@ -1822,9 +2025,12 @@ func (t *serverMutationTarget) CleanupFeature(featureID string, req serverruntim
 	return resp, nil
 }
 
-func (t *serverMutationTarget) DeleteFeature(featureID string) (serverruntime.DeleteFeatureResponse, error) {
+func (t *serverMutationTarget) DeleteFeature(featureID string, req serverruntime.GuardedFeatureActionRequest) (serverruntime.DeleteFeatureResponse, error) {
 	if t.orch == nil {
 		return serverruntime.DeleteFeatureResponse{FeatureID: featureID}, errors.New("orchestrator is not available")
+	}
+	if err := t.rejectStaleCompletionPreflight(featureID, req.SourceRevision); err != nil {
+		return serverruntime.DeleteFeatureResponse{FeatureID: featureID}, err
 	}
 	result, err := t.orch.DeleteCascade(featureID)
 	if err != nil {
@@ -1848,6 +2054,27 @@ func (t *serverMutationTarget) DiscardChild(featureID string) (serverruntime.Dis
 	return serverruntime.DiscardChildResponse{FeatureID: featureID, Result: "discarded"}, nil
 }
 
+func (t *serverMutationTarget) rejectStaleCompletionPreflight(featureID, sourceRevision string) error {
+	if sourceRevision == "" {
+		return nil
+	}
+	if t.orch == nil {
+		return errors.New("orchestrator is not available")
+	}
+	current, err := t.orch.CompletionPreflightSourceRevision(featureID)
+	if err != nil {
+		return err
+	}
+	if current == sourceRevision {
+		return nil
+	}
+	return &serverruntime.ActionConflictError{
+		Err:     orchestrator.ErrStalePreflight,
+		Message: "stale completion preflight",
+		Target:  map[string]any{"reason": "stale_preflight"},
+	}
+}
+
 func actionConflictError(err error) error {
 	if err == nil {
 		return nil
@@ -1856,7 +2083,7 @@ func actionConflictError(err error) error {
 	if errors.As(err, &publishConflict) {
 		return &serverruntime.ActionConflictError{
 			Err:     err,
-			Message: "publish conflict",
+			Message: "publish conflict — resolve using the Rebase aftercare action",
 			Target: map[string]any{
 				resultConflict:   phaseNamePublish,
 				repoConflictKey:  publishConflict.RepoName,
@@ -1867,63 +2094,6 @@ func actionConflictError(err error) error {
 		}
 	}
 	return nil
-}
-
-func reviewCommentDTOs(repoName string, comments []ports.ReviewComment) []serverruntime.ReviewCommentDTO {
-	out := make([]serverruntime.ReviewCommentDTO, 0, len(comments))
-	for _, comment := range comments {
-		dtoRepo := comment.RepoName
-		if dtoRepo == "" {
-			dtoRepo = repoName
-		}
-		out = append(out, serverruntime.ReviewCommentDTO{
-			ID:        comment.ID,
-			Type:      comment.Type,
-			RepoName:  dtoRepo,
-			Path:      comment.Path,
-			Line:      comment.Line,
-			Body:      comment.Body,
-			UserLogin: comment.User.Login,
-			CreatedAt: comment.CreatedAt,
-			DiffHunk:  comment.DiffHunk,
-			InReplyTo: comment.InReplyTo,
-		})
-	}
-	return out
-}
-
-func reviewCommentDTOsToPorts(repoName string, comments []serverruntime.ReviewCommentDTO) []ports.ReviewComment {
-	out := make([]ports.ReviewComment, 0, len(comments))
-	for _, comment := range comments {
-		dtoRepo := comment.RepoName
-		if dtoRepo == "" {
-			dtoRepo = repoName
-		}
-		portComment := ports.ReviewComment{
-			ID:        comment.ID,
-			Type:      comment.Type,
-			RepoName:  dtoRepo,
-			Path:      comment.Path,
-			Line:      comment.Line,
-			Body:      comment.Body,
-			CreatedAt: comment.CreatedAt,
-			DiffHunk:  comment.DiffHunk,
-			InReplyTo: comment.InReplyTo,
-		}
-		portComment.User.Login = comment.UserLogin
-		out = append(out, portComment)
-	}
-	return out
-}
-
-func threadedReviewComments(comments []ports.ReviewComment) []ports.ReviewComment {
-	filtered := comments[:0]
-	for _, comment := range comments {
-		if comment.Type == "" || comment.Type == ports.CommentTypeReview {
-			filtered = append(filtered, comment)
-		}
-	}
-	return filtered
 }
 
 func findFeatureRepo(f *feature.Feature, repoName string) (feature.FeatureRepo, bool) {
@@ -1939,23 +2109,12 @@ func findFeatureRepo(f *feature.Feature, repoName string) (feature.FeatureRepo, 
 }
 
 func parseServerPhaseStrict(in string) (feature.Phase, error) {
+	if phase, ok := feature.ParsePhaseDirName(in); ok {
+		return phase, nil
+	}
 	switch strings.ToLower(strings.TrimSpace(in)) {
-	case "knowledgebase", "knowledge-base", "knowledge base", "kb":
-		return feature.PhaseKnowledgeBase, nil
-	case phaseNameInquire:
-		return feature.PhaseInquire, nil
-	case phaseNameResearch:
-		return feature.PhaseResearch, nil
-	case "design":
-		return feature.PhaseDesign, nil
-	case phaseNamePlan:
-		return feature.PhasePlan, nil
-	case phaseNameImplement:
-		return feature.PhaseImplement, nil
 	case phaseNameReview:
 		return feature.PhaseReview, nil
-	case phaseNameFinalReview, "final review":
-		return feature.PhaseFinalReview, nil
 	case phaseNamePublish:
 		return feature.PhasePublish, nil
 	default:
@@ -1999,6 +2158,33 @@ func (t *serverMutationTarget) findPendingControlRequest(sessionID, requestID st
 	return nil, nil, fmt.Errorf("pending request %s not found", requestID)
 }
 
+func (t *serverMutationTarget) sendQueuedFeatureHelp(req serverruntime.HelpAnswerRequest) (serverruntime.HelpSendResponse, bool, error) {
+	featureID := strings.TrimSpace(req.FeatureID)
+	if featureID == "" || strings.TrimSpace(req.SessionID) != "" || t.store == nil {
+		return serverruntime.HelpSendResponse{}, false, nil
+	}
+	message := strings.TrimSpace(req.Message)
+	found := false
+	if err := t.store.Modify(featureID, func(f *feature.Feature) error {
+		for i := range f.HelpQueue {
+			if !f.HelpQueue[i].Pending {
+				continue
+			}
+			f.HelpQueue[i].Answer = message
+			f.HelpQueue[i].Pending = false
+			found = true
+			return nil
+		}
+		return nil
+	}); err != nil {
+		return serverruntime.HelpSendResponse{}, true, fmt.Errorf("answer feature help queue: %w", err)
+	}
+	if !found {
+		return serverruntime.HelpSendResponse{}, false, nil
+	}
+	return serverruntime.HelpSendResponse{FeatureID: featureID, Result: resultSent}, true, nil
+}
+
 func (t *serverMutationTarget) helpSession(req serverruntime.HelpAnswerRequest) (ports.SessionView, error) {
 	if t.sessions == nil {
 		return nil, errors.New("session manager is not available")
@@ -2030,20 +2216,13 @@ func (t *serverMutationTarget) helpSession(req serverruntime.HelpAnswerRequest) 
 	}
 }
 
-func (t *serverMutationTarget) needUserInputGatePath(featureID, repoName string) (string, error) {
+func (t *serverMutationTarget) needUserInputGatePath(featureID string) (string, error) {
 	if t.store == nil {
 		return "", errors.New("feature store is not available")
 	}
 	f, err := t.store.Load(featureID)
 	if err != nil {
 		return "", err
-	}
-	repoName = strings.TrimSpace(repoName)
-	if repoName != "" {
-		if rc := f.RepoCycles[repoName]; rc != nil && rc.Status == feature.RepoCycleNeedUserInput && rc.PendingNeedUserInputPath != "" {
-			return rc.PendingNeedUserInputPath, nil
-		}
-		return "", fmt.Errorf("repo %s is not paused on a need-user-input gate", repoName)
 	}
 	if f.PendingNeedUserInputPath == "" {
 		return "", fmt.Errorf("feature %s is not paused on a need-user-input gate", featureID)
@@ -2061,6 +2240,10 @@ func applyNeedUserInputDraftAnswers(rec *agent.NeedUserInputRecord, answers map[
 		if q.Index > 0 {
 			questionByKey[strconv.Itoa(q.Index)] = q
 			questionByKey[fmt.Sprintf("q%d", q.Index)] = q
+		} else {
+			ordinal := i + 1
+			questionByKey[strconv.Itoa(ordinal)] = q
+			questionByKey[fmt.Sprintf("q%d", ordinal)] = q
 		}
 		if prompt := strings.TrimSpace(q.Prompt); prompt != "" {
 			questionByKey[prompt] = q
@@ -2229,7 +2412,7 @@ func parseServerPhase(in string) feature.Phase {
 func bootstrapRuntime(ctx context.Context, configPath, stateDir string, dangerouslySkipPerms bool, enabledProviders []string, refreshModels bool, stderr io.Writer) (*runtimeBootstrap, error) {
 	stateDir = canonicalizeStateDir(stateDir)
 	runtimeDir := filepath.Dir(stateDir)
-	lock, acquired, owner, err := instancelock.Acquire(runtimeDir, stateDir, configPath, tui.GetVersion())
+	lock, acquired, owner, err := instancelock.Acquire(runtimeDir, stateDir, configPath, buildinfo.Version())
 	if err != nil {
 		return nil, fmt.Errorf("acquiring instance lock: %w", err)
 	}
@@ -2264,7 +2447,7 @@ func bootstrapRuntime(ctx context.Context, configPath, stateDir string, dangerou
 	var phaseRunner *agent.PhaseRunner
 	var observer *observe.Observer
 	var permissionCache *permission.Cache
-	var cleanliness feature.CleanlinessOps
+	var worktrees feature.WorktreeOps
 	fxApp := fx.New(
 		fx.Supply(
 			fx.Annotate(configPath, fx.ResultTags(`name:"configPath"`)),
@@ -2275,7 +2458,6 @@ func bootstrapRuntime(ctx context.Context, configPath, stateDir string, dangerou
 		),
 		config.Module,
 		feature.Module,
-		git.Module,
 		session.Module,
 		observe.Module,
 		permission.Module,
@@ -2283,12 +2465,7 @@ func bootstrapRuntime(ctx context.Context, configPath, stateDir string, dangerou
 		fx.Options(providerFxModules(enabledProviders)...),
 		agent.Module,
 		orchestrator.Module,
-		fx.Invoke(func(c *config.Config) {
-			if c.Notifications.TerminalBundleID != "" {
-				tui.SetTerminalBundleID(c.Notifications.TerminalBundleID)
-			}
-		}),
-		fx.Populate(&fm, &sm, &orch, &registry, &cfg, &phaseRunner, &observer, &permissionCache, &cleanliness),
+		fx.Populate(&fm, &sm, &orch, &registry, &cfg, &phaseRunner, &observer, &permissionCache, &worktrees),
 		fx.NopLogger,
 	)
 	boot.fxApp = fxApp
@@ -2298,7 +2475,15 @@ func bootstrapRuntime(ctx context.Context, configPath, stateDir string, dangerou
 
 	detected, warnings, startupNotices, availabilityFiltered, err := checkRequiredProviders(ctx, registry)
 	if err != nil {
-		return nil, err
+		// Setup-capable mode: the headless server stays reachable when no
+		// provider CLI is installed or authenticated so a first-launch client
+		// can drive remediation through /api/v1/readiness and re-probe with
+		// /api/v1/readiness/refresh instead of requiring a new runtime. Model
+		// routing is restricted to nothing until a readiness refresh finds a
+		// usable provider; feature creation is gated server-side meanwhile.
+		fmt.Fprintf(stderr, "Warning: no usable LLM provider; starting in setup-capable mode.\n%v\n", err)
+		registry.RestrictToProviders(nil)
+		detected, warnings, startupNotices, availabilityFiltered = nil, nil, nil, true
 	}
 	for _, w := range warnings {
 		fmt.Fprintln(stderr, w)
@@ -2376,7 +2561,7 @@ func bootstrapRuntime(ctx context.Context, configPath, stateDir string, dangerou
 	boot.phaseRunner = phaseRunner
 	boot.observer = observer
 	boot.permissionCache = permissionCache
-	boot.cleanliness = cleanliness
+	boot.worktrees = worktrees
 	boot.eventCh = eventCh
 	boot.workspaceDir = workspaceDir
 	boot.recoveryItems = recoveryItems
@@ -2385,7 +2570,7 @@ func bootstrapRuntime(ctx context.Context, configPath, stateDir string, dangerou
 	return boot, nil
 }
 
-func scanStartupRecovery(ctx context.Context, orch *orchestrator.Orchestrator, stderr io.Writer) ([]session.RecoveryItem, bool) {
+func scanStartupRecovery(ctx context.Context, orch *orchestrator.Orchestrator, stderr io.Writer) ([]ports.RecoveryItem, bool) {
 	if orch == nil {
 		return nil, true
 	}
@@ -2394,345 +2579,9 @@ func scanStartupRecovery(ctx context.Context, orch *orchestrator.Orchestrator, s
 		fmt.Fprintf(stderr, "Warning: startup recovery scan: %v\n", err)
 		return nil, false
 	}
-	recoveryItems := make([]session.RecoveryItem, len(items))
+	recoveryItems := make([]ports.RecoveryItem, len(items))
 	copy(recoveryItems, items)
 	return recoveryItems, true
-}
-
-type defaultLaunchRequest struct {
-	ConfigPath                 string
-	StateDir                   string
-	DangerouslySkipPermissions bool
-	EnabledProviders           []string
-	RefreshModels              bool
-	Stdin                      io.Reader
-	Stdout                     io.Writer
-	Stderr                     io.Writer
-	WaitForReadyTimeout        time.Duration
-	WaitForReadyPollInterval   time.Duration
-}
-
-type defaultLaunchDeps struct {
-	ResolvePolicy    func(context.Context, defaultLaunchRequest) (serverruntime.LaunchPolicy, error)
-	PrepareDiscovery func(context.Context, string, serverruntime.RuntimeIdentity, serverruntime.LaunchPolicy, *http.Client) (serverruntime.DiscoveryDecision, error)
-	StartServer      func(context.Context, serverStartRequest) (serverProcess, error)
-	LaunchClient     func(context.Context, defaultClientLaunch) error
-	HTTPClient       *http.Client
-}
-
-type serverStartRequest struct {
-	ConfigPath                 string
-	StateDir                   string
-	DangerouslySkipPermissions bool
-	EnabledProviders           []string
-	RefreshModels              bool
-	Stdin                      io.Reader
-	Stdout                     io.Writer
-	Stderr                     io.Writer
-}
-
-type serverProcess interface {
-	Stop(context.Context) error
-}
-
-type serverProcessWaiter interface {
-	Wait(context.Context) error
-}
-
-type serverProcessPID interface {
-	PID() int
-}
-
-type defaultClientLaunch struct {
-	BaseURL            string
-	AuthToken          string
-	Runtime            serverruntime.RuntimeIdentity
-	LaunchPolicy       serverruntime.LaunchPolicy
-	OwnedServer        bool
-	Server             serverProcess
-	ReleaseOwnedServer func()
-}
-
-func runDefaultClientServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledProviders []string, refreshModels bool) int {
-	err := launchDefaultClientServer(context.Background(), defaultLaunchRequest{
-		ConfigPath:                 configPath,
-		StateDir:                   stateDir,
-		DangerouslySkipPermissions: dangerouslySkipPerms,
-		EnabledProviders:           enabledProviders,
-		RefreshModels:              refreshModels,
-		Stdin:                      os.Stdin,
-		Stdout:                     os.Stdout,
-		Stderr:                     os.Stderr,
-	}, defaultLaunchDeps{
-		LaunchClient: launchAPIClientTUI,
-	})
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		return 1
-	}
-	return 0
-}
-
-func launchDefaultClientServer(ctx context.Context, req defaultLaunchRequest, deps defaultLaunchDeps) error {
-	deps = deps.withDefaults()
-	if deps.LaunchClient == nil {
-		return errors.New("client TUI launcher is required")
-	}
-	// Canonicalize before computing identity, and before it's forwarded to the
-	// spawned server child (which independently canonicalizes the same value
-	// in bootstrapRuntime): the discovery/health handshake below compares this
-	// client's identity against the one the server reports back by exact
-	// struct equality (internal/server/discovery.go's "mismatched discovery
-	// runtime" check), so client and server must resolve stateDir identically
-	// or a symlinked runtime parent (e.g. macOS's /var -> /private/var) makes
-	// every discovery attempt look like a foreign server and time out.
-	req.StateDir = canonicalizeStateDir(req.StateDir)
-	runtimeDir := filepath.Dir(req.StateDir)
-	identity := serverruntime.RuntimeIdentity{
-		RuntimeDir: runtimeDir,
-		StateDir:   req.StateDir,
-		Config:     req.ConfigPath,
-	}
-	policy, err := deps.ResolvePolicy(ctx, req)
-	if err != nil {
-		return fmt.Errorf("resolve launch policy: %w", err)
-	}
-	client := deps.HTTPClient
-	if client == nil {
-		client = &http.Client{Timeout: time.Second}
-	}
-	decision, err := deps.PrepareDiscovery(ctx, runtimeDir, identity, policy, client)
-	if err != nil {
-		return fmt.Errorf("validating discovery metadata: %w", err)
-	}
-	if decision.AlreadyRunning {
-		return deps.LaunchClient(ctx, defaultClientLaunch{
-			BaseURL:      decision.Record.BaseURL,
-			AuthToken:    decision.Record.AuthToken,
-			Runtime:      identity,
-			LaunchPolicy: policy,
-		})
-	}
-
-	serverStderr, closeServerStderr := openDefaultLaunchServerStderr(runtimeDir)
-	child, err := deps.StartServer(ctx, serverStartRequest{
-		ConfigPath:                 req.ConfigPath,
-		StateDir:                   req.StateDir,
-		DangerouslySkipPermissions: req.DangerouslySkipPermissions,
-		EnabledProviders:           req.EnabledProviders,
-		RefreshModels:              req.RefreshModels,
-		Stdin:                      req.Stdin,
-		Stdout:                     req.Stdout,
-		Stderr:                     serverStderr,
-	})
-	closeServerStderr()
-	if err != nil {
-		if isRuntimeLockBusy(err) {
-			record, readyErr := waitForDefaultLaunchServerReady(ctx, req, deps, runtimeDir, identity, policy, client)
-			if readyErr != nil {
-				return errors.Join(fmt.Errorf("lock contention from another live owner: %w", err), readyErr)
-			}
-			return deps.LaunchClient(ctx, defaultClientLaunch{
-				BaseURL:      record.BaseURL,
-				AuthToken:    record.AuthToken,
-				Runtime:      identity,
-				LaunchPolicy: policy,
-			})
-		}
-		return fmt.Errorf("server boot failed: %w", err)
-	}
-	record, err := waitForDefaultLaunchServerReady(ctx, req, deps, runtimeDir, identity, policy, client)
-	if err != nil {
-		stopCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		return errors.Join(err, child.Stop(stopCtx))
-	}
-	owned := childOwnsReadyRecord(child, record)
-	launchServer := child
-	if !owned {
-		stopCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		stopErr := child.Stop(stopCtx)
-		cancel()
-		if stopErr != nil {
-			return fmt.Errorf("stop losing child server: %w", stopErr)
-		}
-		launchServer = nil
-	}
-	// The spawned server remains launcher-owned until the TUI either completes
-	// its graceful shutdown or explicitly chooses to keep the server running.
-	// Any other return path, including TUI initialization failure, cleans it up.
-	var serverReleased atomic.Bool
-	clientErr := deps.LaunchClient(ctx, defaultClientLaunch{
-		BaseURL:      record.BaseURL,
-		AuthToken:    record.AuthToken,
-		Runtime:      identity,
-		LaunchPolicy: policy,
-		OwnedServer:  owned,
-		Server:       launchServer,
-		ReleaseOwnedServer: func() {
-			serverReleased.Store(true)
-		},
-	})
-	if !owned || launchServer == nil || serverReleased.Load() {
-		return clientErr
-	}
-	stopCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	return errors.Join(clientErr, launchServer.Stop(stopCtx))
-}
-
-func isRuntimeLockBusy(err error) bool {
-	var busy runtimeLockBusyError
-	return errors.As(err, &busy)
-}
-
-func childOwnsReadyRecord(child serverProcess, record serverruntime.DiscoveryRecord) bool {
-	reporter, ok := child.(serverProcessPID)
-	if !ok {
-		return true
-	}
-	childPID := reporter.PID()
-	if childPID <= 0 || record.PID <= 0 {
-		return true
-	}
-	return childPID == record.PID
-}
-
-func (deps defaultLaunchDeps) withDefaults() defaultLaunchDeps {
-	if deps.ResolvePolicy == nil {
-		deps.ResolvePolicy = resolveDefaultLaunchPolicy
-	}
-	if deps.PrepareDiscovery == nil {
-		deps.PrepareDiscovery = serverruntime.PrepareDiscovery
-	}
-	if deps.StartServer == nil {
-		deps.StartServer = startServerProcess
-	}
-	return deps
-}
-
-func launchAPIClientTUI(ctx context.Context, launch defaultClientLaunch) error {
-	client, err := serverruntime.NewClient(serverruntime.ClientOptions{BaseURL: launch.BaseURL, Token: launch.AuthToken})
-	if err != nil {
-		return fmt.Errorf("create API client: %w", err)
-	}
-	opts := tui.APIAppOptions{
-		Runtime:            launch.Runtime,
-		LaunchPolicy:       launch.LaunchPolicy,
-		OwnedServer:        launch.OwnedServer,
-		ReleaseOwnedServer: launch.ReleaseOwnedServer,
-		EventOptions: serverruntime.EventSubscriptionOptions{
-			HeartbeatInterval: 30 * time.Second,
-			ReconnectDelay:    250 * time.Millisecond,
-		},
-	}
-	if launch.OwnedServer && launch.Server != nil {
-		opts.WaitForOwnedServerShutdown = waitForOwnedServerShutdownOrStop(launch.Server, 2*time.Second)
-	}
-	tui.SetMarkdownRenderer(markdown.Render)
-	app, err := tui.NewAPIAppModel(ctx, client, opts)
-	if err != nil {
-		return fmt.Errorf("initialize API TUI: %w", err)
-	}
-	defer app.Close()
-
-	restoreStderr := redirectStderrToRuntimeLog(launch.Runtime.RuntimeDir)
-	defer restoreStderr()
-
-	p := tea.NewProgram(app, tuiProgramOptions()...)
-	if _, err := p.Run(); err != nil {
-		return fmt.Errorf("run API TUI: %w", err)
-	}
-	return nil
-}
-
-func openRuntimeLogFile(runtimeDir string) (*os.File, error) {
-	if runtimeDir == "" {
-		return nil, errors.New("missing runtime dir")
-	}
-	logPath := filepath.Join(runtimeDir, defaultLogBasename)
-	return os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
-}
-
-func openDefaultLaunchServerStderr(runtimeDir string) (io.Writer, func()) {
-	logFile, err := openRuntimeLogFile(runtimeDir)
-	if err != nil {
-		return io.Discard, func() {}
-	}
-	return logFile, func() {
-		_ = logFile.Close()
-	}
-}
-
-func redirectStderrToRuntimeLog(runtimeDir string) func() {
-	logFile, err := openRuntimeLogFile(runtimeDir)
-	if err != nil {
-		return func() {}
-	}
-	origStderr := os.Stderr
-	os.Stderr = logFile
-	log.SetOutput(logFile)
-	return func() {
-		os.Stderr = origStderr
-		log.SetOutput(origStderr)
-		_ = logFile.Close()
-	}
-}
-
-func tuiProgramOptions() []tea.ProgramOption {
-	opts := []tea.ProgramOption{tea.WithFilter(tui.NewScrollRateLimiter())}
-	if profile, ok := overrideColorProfile(); ok {
-		opts = append(opts, tea.WithColorProfile(profile))
-	}
-	return opts
-}
-
-func waitForDefaultLaunchServerReady(ctx context.Context, req defaultLaunchRequest, deps defaultLaunchDeps, runtimeDir string, identity serverruntime.RuntimeIdentity, policy serverruntime.LaunchPolicy, client *http.Client) (serverruntime.DiscoveryRecord, error) {
-	timeout := req.WaitForReadyTimeout
-	if timeout <= 0 {
-		timeout = defaultLaunchServerReadyTimeout
-	}
-	poll := req.WaitForReadyPollInterval
-	if poll <= 0 {
-		poll = 50 * time.Millisecond
-	}
-	waitCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-	lastReason := "no discovery record"
-	for {
-		decision, err := deps.PrepareDiscovery(waitCtx, runtimeDir, identity, policy, client)
-		if err != nil {
-			return serverruntime.DiscoveryRecord{}, fmt.Errorf("server readiness discovery failed: %w", err)
-		}
-		if decision.AlreadyRunning {
-			return decision.Record, nil
-		}
-		if decision.Reason != "" {
-			lastReason = decision.Reason
-		}
-		timer := time.NewTimer(poll)
-		select {
-		case <-waitCtx.Done():
-			timer.Stop()
-			return serverruntime.DiscoveryRecord{}, fmt.Errorf("server readiness timed out: %s: %w", lastReason, waitCtx.Err())
-		case <-timer.C:
-		}
-	}
-}
-
-func resolveDefaultLaunchPolicy(ctx context.Context, req defaultLaunchRequest) (serverruntime.LaunchPolicy, error) {
-	registry, err := newLaunchPolicyRegistry(req.EnabledProviders, req.Stderr)
-	if err != nil {
-		return serverruntime.LaunchPolicy{}, err
-	}
-	if _, warnings, _, _, err := checkRequiredProviders(ctx, registry); err != nil {
-		return serverruntime.LaunchPolicy{}, err
-	} else if req.Stderr != nil {
-		for _, warning := range warnings {
-			fmt.Fprintln(req.Stderr, warning)
-		}
-	}
-	return runtimeLaunchPolicy(registry, req.DangerouslySkipPermissions), nil
 }
 
 // knownProviderNames is the fixed set of names accepted by --providers.
@@ -2768,161 +2617,6 @@ func normalizeProviderNames(enabled []string, warnBlank bool, warn func(name str
 	return valid
 }
 
-func newLaunchPolicyRegistry(enabled []string, stderr io.Writer) (*llm.Registry, error) {
-	names := normalizeProviderNames(enabled, false, func(name string) {
-		if stderr != nil {
-			fmt.Fprintf(stderr, "Warning: unknown provider %q, skipping\n", name)
-		}
-	})
-	if len(names) == 0 {
-		return nil, errors.New("no valid providers specified in --providers flag")
-	}
-	registry := llm.NewRegistry()
-	for _, name := range names {
-		switch name {
-		case providerNameClaude:
-			registry.Register(&claude.Provider{})
-		case providerNameCodex:
-			registry.Register(&codex.Provider{})
-		case providerNameOpencode:
-			registry.Register(&opencode.Provider{})
-		}
-	}
-	return registry, nil
-}
-
-type childServerProcess struct {
-	cmd  *exec.Cmd
-	done chan error
-}
-
-func startServerProcess(ctx context.Context, req serverStartRequest) (serverProcess, error) {
-	args := []string{cliSubcommandServer, "--config", req.ConfigPath, "--state-dir", req.StateDir}
-	if len(req.EnabledProviders) > 0 {
-		args = append(args, "--providers", strings.Join(req.EnabledProviders, ","))
-	}
-	if req.DangerouslySkipPermissions {
-		args = append(args, "--dangerously-skip-permissions")
-	}
-	if req.RefreshModels {
-		args = append(args, "--refresh-models")
-	}
-	cmd := exec.CommandContext(ctx, os.Args[0], args...)
-	cmd.Stdin = req.Stdin
-	cmd.Stdout = req.Stdout
-	cmd.Stderr = req.Stderr
-	if err := cmd.Start(); err != nil {
-		return nil, err
-	}
-	child := &childServerProcess{cmd: cmd, done: make(chan error, 1)}
-	go func() {
-		child.done <- cmd.Wait()
-	}()
-	return child, nil
-}
-
-func (p *childServerProcess) Stop(ctx context.Context) error {
-	if p == nil || p.cmd == nil || p.cmd.Process == nil {
-		return nil
-	}
-	if err := p.cmd.Process.Signal(os.Interrupt); err != nil && !errors.Is(err, os.ErrProcessDone) {
-		return err
-	}
-	select {
-	case err := <-p.done:
-		return ignoreExpectedProcessStopError(err)
-	case <-ctx.Done():
-		if err := p.cmd.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
-			return err
-		}
-		select {
-		case <-p.done:
-			return nil
-		case <-time.After(time.Second):
-			return ctx.Err()
-		}
-	}
-}
-
-func ignoreExpectedProcessStopError(err error) error {
-	if err == nil {
-		return nil
-	}
-	var exitErr *exec.ExitError
-	if !errors.As(err, &exitErr) {
-		return err
-	}
-	status, ok := exitErr.Sys().(syscall.WaitStatus)
-	if !ok || !status.Signaled() {
-		return err
-	}
-	switch status.Signal() {
-	case syscall.SIGINT, syscall.SIGTERM, syscall.SIGKILL:
-		return nil
-	default:
-		return err
-	}
-}
-
-func (p *childServerProcess) Wait(ctx context.Context) error {
-	if p == nil {
-		return nil
-	}
-	select {
-	case err := <-p.done:
-		return err
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-}
-
-func (p *childServerProcess) PID() int {
-	if p == nil || p.cmd == nil || p.cmd.Process == nil {
-		return 0
-	}
-	return p.cmd.Process.Pid
-}
-
-func waitForOwnedServerShutdownOrStop(process serverProcess, grace time.Duration) func(context.Context) error {
-	return func(ctx context.Context) error {
-		if process == nil {
-			return nil
-		}
-		waiter, ok := process.(serverProcessWaiter)
-		if !ok {
-			return process.Stop(ctx)
-		}
-		if err, done := waitForServerProcessExit(ctx, waiter, grace); done {
-			return err
-		}
-		return process.Stop(ctx)
-	}
-}
-
-// waitForServerProcessExit waits for the process to exit on its own within
-// grace. done is true when the wait already produced a final result (clean
-// exit, an unexpected error, or outer context cancellation); done is false
-// when the grace period elapsed and the caller should escalate to Stop.
-func waitForServerProcessExit(ctx context.Context, waiter serverProcessWaiter, grace time.Duration) (err error, done bool) {
-	waitCtx := ctx
-	if grace > 0 {
-		var cancel context.CancelFunc
-		waitCtx, cancel = context.WithTimeout(ctx, grace)
-		defer cancel()
-	}
-	err = waiter.Wait(waitCtx)
-	if err == nil {
-		return nil, true
-	}
-	if !errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, context.Canceled) {
-		return err, true
-	}
-	if ctx.Err() != nil {
-		return ctx.Err(), true
-	}
-	return nil, false
-}
-
 func runServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledProviders []string, refreshModels bool) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -2940,7 +2634,11 @@ func runServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledPr
 		}
 	}()
 
-	if boot.recoveryScanOK && len(boot.recoveryItems) == 0 {
+	if shouldInterruptRunningOnStartup(
+		boot.recoveryScanOK,
+		len(boot.recoveryItems),
+		len(boot.sessionManager.ActiveSessions()),
+	) {
 		if err := boot.orchestrator.InterruptAllRunning(); err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: startup sweep: %v\n", err)
 		}
@@ -2971,27 +2669,29 @@ func runServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledPr
 		AuthToken:    authToken,
 		Features:     boot.featureManager,
 		FeatureStore: boot.featureManager.Store,
-		Freshness:    gitFreshnessProvider{},
+		Freshness:    newGitFreshnessProvider(),
 		Config:       boot.cfg,
 		Registry:     boot.registry,
 		Sessions:     boot.sessionManager,
 		Events:       boot.eventCh,
 		DomainEvents: boot.orchestrator.Events(),
 		Mutations: &serverMutationTarget{
-			orch:            boot.orchestrator,
-			rebaseStarter:   boot.orchestrator,
-			childCreator:    boot.featureManager,
-			cfg:             boot.cfg,
-			configPath:      boot.runtime.Config,
-			store:           boot.featureManager.Store,
-			sessions:        boot.sessionManager,
-			phaseRunner:     boot.phaseRunner,
-			permissionCache: boot.permissionCache,
-			workspaceDir:    boot.workspaceDir,
-			reviewer:        &git.ReviewCommentAdapter{},
+			orch:                  boot.orchestrator,
+			childCreator:          boot.featureManager,
+			reviewFeedbackCreator: boot.featureManager,
+			rebaseChildCreator:    boot.featureManager,
+			cfg:                   boot.cfg,
+			configPath:            boot.runtime.Config,
+			store:                 boot.featureManager.Store,
+			sessions:              boot.sessionManager,
+			phaseRunner:           boot.phaseRunner,
+			permissionCache:       boot.permissionCache,
+			workspaceDir:          boot.workspaceDir,
 		},
-		RequestShutdown: requestShutdown,
-		Cleanliness:     boot.cleanliness,
+		PersistProviderModelCatalog: func(provider llm.LLMProvider, models []llm.ModelInfo) error {
+			return persistRefreshedProviderModelCatalog(boot.runtime.RuntimeDir, provider, models)
+		},
+		Worktrees: boot.worktrees,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: starting server: %v\n", err)
@@ -3019,7 +2719,7 @@ func runServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledPr
 		PGID:          boot.owner.PGID,
 		StartedAt:     runtimeServer.StartedAt(),
 		PublishedAt:   now,
-		Owner:         serverruntime.OwnerDTOFromInstanceOwner(boot.owner),
+		Owner:         serverruntime.OwnerFromInstanceOwner(boot.owner),
 	}); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: publishing discovery metadata: %v\n", err)
 		return 1
@@ -3031,6 +2731,10 @@ func runServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledPr
 	return 0
 }
 
+func shouldInterruptRunningOnStartup(recoveryScanOK bool, recoveryItemCount, activeSessionCount int) bool {
+	return recoveryScanOK && recoveryItemCount == 0 && activeSessionCount == 0
+}
+
 func runtimeLaunchPolicy(registry *llm.Registry, dangerouslySkipPerms bool) serverruntime.LaunchPolicy {
 	var providers []string
 	if registry != nil {
@@ -3039,13 +2743,6 @@ func runtimeLaunchPolicy(registry *llm.Registry, dangerouslySkipPerms bool) serv
 		}
 	}
 	return serverruntime.NewLaunchPolicy(providers, dangerouslySkipPerms)
-}
-
-func overrideColorProfile() (colorprofile.Profile, bool) {
-	if os.Getenv("TERM_PROGRAM") == "Apple_Terminal" {
-		return colorprofile.ANSI256, true
-	}
-	return 0, false
 }
 
 type modelDiscoveryProgressPrinter struct {
@@ -3370,7 +3067,7 @@ func applyCatalogModelDefaultsToConfig(cfg *config.Config, registry *llm.Registr
 }
 
 // shutdownFeatures stops all active sessions and transitions any feature in a
-// running state to Interrupted so the TUI shows a clean state on next launch.
+// running state to Interrupted so the desktop app shows a clean state on next launch.
 // Delegates the per-feature transition to orchestrator.InterruptAllRunning,
 // which uses the broader Status.IsRunning() set and clears every pending
 // help/permission entry — matching the InterruptFeature behavior used

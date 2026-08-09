@@ -186,11 +186,8 @@ func TestImplementationReviewAxisRegistryProducesWellFormedRoleSpecs(t *testing.
 		if spec.UserTemplate != "implementation_review_axis.user" {
 			t.Fatalf("%s UserTemplate = %q, want implementation_review_axis.user", axis.SkillName, spec.UserTemplate)
 		}
-		if len(spec.OutputRoots) != 1 || spec.OutputRoots[0].Name != "helper_dir" || spec.MarkerRoot != "helper_dir" {
-			t.Fatalf("%s roots = %+v marker=%q, want helper_dir-only axis helper", axis.SkillName, spec.OutputRoots, spec.MarkerRoot)
-		}
-		if got := spec.MarkerPath(RoleRuntime{IterationDir: "/tmp/iter-01/review/" + implementationReviewAxisSlug(axis.Name)}); !strings.HasSuffix(got, "/phase_complete") {
-			t.Fatalf("%s MarkerPath() = %q, want helper-local phase_complete", axis.SkillName, got)
+		if len(spec.OutputRoots) != 1 || spec.OutputRoots[0].Name != "helper_dir" {
+			t.Fatalf("%s roots = %+v, want helper_dir-only axis helper", axis.SkillName, spec.OutputRoots)
 		}
 		if len(spec.Artifacts) != 1 {
 			t.Fatalf("%s artifact count = %d, want review feedback only", axis.SkillName, len(spec.Artifacts))
@@ -530,7 +527,6 @@ func TestRunImplementationReviewAxesUsesLiveRunPostureForFrontendDesign(t *testi
 	}
 	for _, want := range []string{
 		filepath.Join(iterDir, "review", "design", "review-feedback.md"),
-		filepath.Join(iterDir, "review", "design", "phase_complete"),
 		filepath.Join(iterDir, "review", "design", "evidence"),
 		filepath.Join(iterDir, "review", "design", "build-cache"),
 		filepath.Join(iterDir, "review", "design", "tmp"),
@@ -664,4 +660,106 @@ func validatorNamesByEvent(events []observe.Event, eventType string) []string {
 	}
 	slices.Sort(names)
 	return names
+}
+
+// TestRunImplementationReviewAxesPerPhaseGateOmitsAcceptanceClause asserts
+// the per-phase implementation review gate never cites the distilled
+// acceptance authority, even when the feature has a qualifying design
+// artifact — only the Final Review gate does. The per-phase gate keeps
+// judging against the phase-scoped cfg.ExitCriteria.
+func TestRunImplementationReviewAxesPerPhaseGateOmitsAcceptanceClause(t *testing.T) {
+	tmpDir := t.TempDir()
+	workDir := filepath.Join(tmpDir, "work")
+	artifactDir := filepath.Join(tmpDir, "artifacts")
+	iterDir := filepath.Join(artifactDir, "iteration-01")
+	reviewDir := filepath.Join(iterDir, "review")
+	stateDir := filepath.Join(tmpDir, "state")
+	scriptsDir := filepath.Join(tmpDir, "scripts")
+	for _, dir := range []string{workDir, iterDir, scriptsDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", dir, err)
+		}
+	}
+
+	progressPath := filepath.Join(artifactDir, "progress.md")
+	if err := os.WriteFile(progressPath, []byte("# Iteration Progress\n\n## Iteration State\n\nSUCCESS\n"), 0o644); err != nil {
+		t.Fatalf("write progress: %v", err)
+	}
+	reportPath := filepath.Join(iterDir, "verification-report.yaml")
+	if err := os.WriteFile(reportPath, []byte("version: 1\nrequired_checks: []\n"), 0o644); err != nil {
+		t.Fatalf("write verification report: %v", err)
+	}
+	planPath := filepath.Join(artifactDir, "phase-plan.md")
+	if err := os.WriteFile(planPath, []byte("# Plan\n"), 0o644); err != nil {
+		t.Fatalf("write plan: %v", err)
+	}
+	designPath := filepath.Join(tmpDir, "design.md")
+	if err := os.WriteFile(designPath, []byte("# Design\n\n## Acceptance Criteria\n\ndone.\n"), 0o644); err != nil {
+		t.Fatalf("write design: %v", err)
+	}
+
+	reviewScript := testutil.WriteScript(t, scriptsDir, "review.sh",
+		testutil.JSONLInit+"\n"+testutil.WriteReviewApproved(artifactDir)+"\n"+testutil.JSONLSuccess+"\n")
+	buildSession, captured := capturingBuildSession("", reviewScript)
+
+	eventCh := make(chan interface{}, 100)
+	sm := session.NewManager(eventCh)
+	defer sm.Shutdown()
+
+	f := newTestFeature(t, workDir)
+	f.ID = "test-implementation-review-per-phase-acceptance"
+	f.Name = "Implementation Review Per Phase Acceptance"
+	f.Pipeline = feature.PipelineMoonshot
+	f.CurrentPhase = feature.PhaseImplement
+	if f.Artifacts == nil {
+		f.Artifacts = map[string]string{}
+	}
+	f.Artifacts[feature.DesignArtifactKey] = designPath
+	store := feature.NewStore(stateDir)
+	if err := store.Save(f); err != nil {
+		t.Fatalf("save feature: %v", err)
+	}
+
+	cfg := ImplementConfig{
+		Feature:      f,
+		FeatureStore: store,
+		WorkDir:      workDir,
+		PlanPath:     planPath,
+		ExitCriteria: "Relevant tests pass",
+		ReviewModel:  "reviewer",
+		ArtifactDir:  artifactDir,
+		StateDir:     stateDir,
+		BuildSession: buildSession,
+		Observer:     observe.New(false, "", false, "", false, "test"),
+	}
+	status, feedback, err := runImplementationReviewAxes(
+		cfg,
+		sm,
+		1,
+		iterDir,
+		reviewDir,
+		observe.SpanContext{TraceID: f.TraceID, SpanID: "review-span", FeatureID: f.ID, FeatureName: f.Name, RunNumber: 1},
+		implementationReviewInput{ProgressPath: progressPath, VerificationReportPath: reportPath},
+	)
+	if err != nil {
+		t.Fatalf("runImplementationReviewAxes() error = %v", err)
+	}
+	if status != ReviewApproved {
+		t.Fatalf("status = %s, want APPROVED; feedback:\n%s", status, feedback)
+	}
+
+	if len(*captured) == 0 {
+		t.Fatalf("no BuildSession calls captured")
+	}
+	for _, opts := range *captured {
+		if opts.Model != "reviewer" {
+			continue
+		}
+		if strings.Contains(opts.Prompt, "## Acceptance") {
+			t.Fatalf("per-phase gate prompt must not cite the acceptance authority:\n%s", opts.Prompt)
+		}
+		if !strings.Contains(opts.Prompt, "Relevant tests pass") {
+			t.Fatalf("per-phase gate prompt must keep the phase-scoped exit criteria:\n%s", opts.Prompt)
+		}
+	}
 }

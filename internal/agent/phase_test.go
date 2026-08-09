@@ -31,7 +31,6 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/agentdef"
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
-	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm/claude"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm/codex"
@@ -61,7 +60,6 @@ func TestAgentModuleWiresPermissionCacheIntoPhaseRunner(t *testing.T) {
 		),
 		config.Module,
 		feature.Module,
-		git.Module,
 		session.Module,
 		llm.Module,
 		observe.Module,
@@ -806,7 +804,7 @@ func TestRunInteractivePhase_CommandStructure(t *testing.T) {
 	}
 }
 
-func TestRunInteractivePhase_RemovesStalePhaseCompleteBeforeSession(t *testing.T) {
+func TestRunInteractivePhase_RemovesPriorCompletionReceiptBeforeSession(t *testing.T) {
 	tmpDir := t.TempDir()
 	workDir := filepath.Join(tmpDir, "work")
 	stateDir := filepath.Join(tmpDir, "state")
@@ -817,7 +815,7 @@ func TestRunInteractivePhase_RemovesStalePhaseCompleteBeforeSession(t *testing.T
 	}
 
 	f := &feature.Feature{
-		ID:        "test-stale-inquire-marker",
+		ID:        "test-prior-inquire-receipt",
 		Name:      "Test Feature",
 		ActiveRun: 1,
 		RunCount:  1,
@@ -829,17 +827,16 @@ func TestRunInteractivePhase_RemovesStalePhaseCompleteBeforeSession(t *testing.T
 	if err := os.MkdirAll(artifactDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll(%s): %v", artifactDir, err)
 	}
-	if err := os.WriteFile(filepath.Join(artifactDir, PhaseCompleteFile), []byte("stale\n"), 0o644); err != nil {
-		t.Fatalf("WriteFile(phase_complete): %v", err)
-	}
+	writeTestCompletionReceipt(t, artifactDir)
 
 	var buildCalled bool
-	var markerPresentAtBuild bool
+	var receiptPresentAtBuild bool
 	pr := &PhaseRunner{
 		StateDir: stateDir,
 		BuildSessionFn: func(opts BuildSessionOpts) ([]string, []string, *session.SessionOpts, error) {
 			buildCalled = true
-			markerPresentAtBuild = HasPhaseComplete(artifactDir)
+			_, receiptErr := ReadCompletionReceipt(artifactDir)
+			receiptPresentAtBuild = receiptErr == nil
 			return nil, nil, nil, fmt.Errorf("test: stopping after capture")
 		},
 	}
@@ -851,11 +848,11 @@ func TestRunInteractivePhase_RemovesStalePhaseCompleteBeforeSession(t *testing.T
 	if !buildCalled {
 		t.Fatal("BuildSessionFn was not called")
 	}
-	if markerPresentAtBuild {
-		t.Fatal("BuildSessionFn observed stale phase_complete; marker should be removed before session build")
+	if receiptPresentAtBuild {
+		t.Fatal("BuildSessionFn observed the prior completion receipt")
 	}
-	if HasPhaseComplete(artifactDir) {
-		t.Fatal("stale phase_complete still exists after RunInquire")
+	if _, err := os.Stat(filepath.Join(artifactDir, PhaseCompleteFile)); !os.IsNotExist(err) {
+		t.Fatalf("prior completion receipt still exists after RunInquire: %v", err)
 	}
 }
 
@@ -1165,7 +1162,7 @@ func TestRunKnowledgeBaseForRepo_SkillReadInstruction(t *testing.T) {
 	}
 }
 
-func TestRunKnowledgeBaseForRepo_RemovesStalePhaseCompleteBeforeSession(t *testing.T) {
+func TestRunKnowledgeBaseForRepo_RemovesPriorCompletionReceiptBeforeSession(t *testing.T) {
 	tmpDir := t.TempDir()
 	workDir := filepath.Join(tmpDir, "work")
 	stateDir := filepath.Join(tmpDir, "state")
@@ -1177,7 +1174,7 @@ func TestRunKnowledgeBaseForRepo_RemovesStalePhaseCompleteBeforeSession(t *testi
 
 	repo := feature.FeatureRepo{Name: "test-repo", Path: workDir}
 	f := &feature.Feature{
-		ID:     "test-stale-kb-marker",
+		ID:     "test-prior-kb-receipt",
 		Name:   "Test KB",
 		Repos:  []feature.FeatureRepo{repo},
 		Models: config.ModelConfig{},
@@ -1189,16 +1186,15 @@ func TestRunKnowledgeBaseForRepo_RemovesStalePhaseCompleteBeforeSession(t *testi
 	if err := os.WriteFile(KBPath(kbDir), []byte("# stale kb\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile(index.md): %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(kbDir, PhaseCompleteFile), []byte("stale\n"), 0o644); err != nil {
-		t.Fatalf("WriteFile(phase_complete): %v", err)
-	}
+	writeTestCompletionReceipt(t, kbDir)
 
 	var buildCalled bool
-	var markerPresentAtBuild bool
+	var receiptPresentAtBuild bool
 	pr := NewPhaseRunner(nil, nil, stateDir)
 	pr.BuildSessionFn = func(opts BuildSessionOpts) ([]string, []string, *session.SessionOpts, error) {
 		buildCalled = true
-		markerPresentAtBuild = HasPhaseComplete(kbDir)
+		_, receiptErr := ReadCompletionReceipt(kbDir)
+		receiptPresentAtBuild = receiptErr == nil
 		return nil, nil, nil, fmt.Errorf("test: stopping after capture")
 	}
 
@@ -1209,11 +1205,11 @@ func TestRunKnowledgeBaseForRepo_RemovesStalePhaseCompleteBeforeSession(t *testi
 	if !buildCalled {
 		t.Fatal("BuildSessionFn was not called")
 	}
-	if markerPresentAtBuild {
-		t.Fatal("BuildSessionFn observed stale phase_complete; marker should be removed before session build")
+	if receiptPresentAtBuild {
+		t.Fatal("BuildSessionFn observed the prior completion receipt")
 	}
-	if HasPhaseComplete(kbDir) {
-		t.Fatal("stale phase_complete still exists after RunKnowledgeBaseForRepo")
+	if _, err := os.Stat(filepath.Join(kbDir, PhaseCompleteFile)); !os.IsNotExist(err) {
+		t.Fatalf("prior completion receipt still exists after RunKnowledgeBaseForRepo: %v", err)
 	}
 }
 
@@ -1291,15 +1287,14 @@ func newRegistryWithProviders() *llm.Registry {
 }
 
 type captureProvider struct {
-	name            string
-	model           string
-	contextWindow   int
-	watchdog        bool
-	finishOrViolate bool
-	boundedSandbox  bool
-	sessionResume   bool
-	buildOpts       llm.CommandBuildOpts
-	protocolOpts    llm.ProtocolOpts
+	name           string
+	model          string
+	contextWindow  int
+	watchdog       bool
+	boundedSandbox bool
+	sessionResume  bool
+	buildOpts      llm.CommandBuildOpts
+	protocolOpts   llm.ProtocolOpts
 }
 
 func (p *captureProvider) Name() string                 { return p.name }
@@ -1325,7 +1320,6 @@ func (p *captureProvider) EnvVarsToExclude() []string {
 func (p *captureProvider) ComputeCost(string, int64, int64) float64 { return 0 }
 func (p *captureProvider) ContextWindowForModel(string) int         { return p.contextWindow }
 func (p *captureProvider) EnablesPendingToolWatchdog() bool         { return p.watchdog }
-func (p *captureProvider) SupportsFinishOrViolateNudge() bool       { return p.finishOrViolate }
 func (p *captureProvider) UsesBoundedHelperSandbox() bool           { return p.boundedSandbox }
 func (p *captureProvider) SupportsSessionResume() bool              { return p.sessionResume }
 
@@ -1373,16 +1367,14 @@ func TestBuildSessionForwardsProviderBoundaries(t *testing.T) {
 	pr.Registry = newRegistryWithCaptureProvider(provider)
 	pr.SkillsDir = skillsDir
 	pr.GuidelinesDir = guidelinesDir
-	markerPath := filepath.Join(dir, "phase_complete")
-
 	_, _, sessOpts, err := pr.BuildSession(BuildSessionOpts{
-		Model:           "model-a[1M]",
-		Prompt:          "rendered prompt",
-		SystemPrompt:    "system prompt",
-		AdditionalDirs:  []string{kbDir},
-		WorkDir:         workDir,
-		MarkerPath:      markerPath,
-		ResumeSessionID: "session-prior",
+		Model:              "model-a[1M]",
+		Prompt:             "rendered prompt",
+		SystemPrompt:       "system prompt",
+		AdditionalDirs:     []string{kbDir},
+		WorkDir:            workDir,
+		CompletionProtocol: true,
+		ResumeSessionID:    "session-prior",
 	})
 	if err != nil {
 		t.Fatalf("BuildSession() error: %v", err)
@@ -1414,9 +1406,6 @@ func TestBuildSessionForwardsProviderBoundaries(t *testing.T) {
 	if got := provider.protocolOpts.InitialPrompt; got != "rendered prompt" {
 		t.Fatalf("Protocol InitialPrompt = %q, want rendered prompt", got)
 	}
-	if got := provider.protocolOpts.MarkerPath; got != markerPath {
-		t.Fatalf("Protocol MarkerPath = %q, want %q", got, markerPath)
-	}
 	if got := provider.protocolOpts.ResumeSessionID; got != "session-prior" {
 		t.Fatalf("Protocol ResumeSessionID = %q, want session-prior", got)
 	}
@@ -1439,32 +1428,28 @@ func TestWatchdogConfigForProviderCapability(t *testing.T) {
 	}
 }
 
-func TestBuildSession_SurfacesBoundedHelperCapabilities(t *testing.T) {
+func TestBuildSession_SurfacesBoundedHelperSandboxCapability(t *testing.T) {
 	dir := t.TempDir()
 	for _, tc := range []struct {
 		name    string
-		nudge   bool
 		sandbox bool
 	}{
-		{name: "capable provider", nudge: true, sandbox: true},
-		{name: "incapable provider", nudge: false, sandbox: false},
+		{name: "capable provider", sandbox: true},
+		{name: "incapable provider", sandbox: false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			provider := &captureProvider{name: "capture", model: "model-a[1M]", contextWindow: 1_000_000, finishOrViolate: tc.nudge, boundedSandbox: tc.sandbox}
+			provider := &captureProvider{name: "capture", model: "model-a[1M]", contextWindow: 1_000_000, boundedSandbox: tc.sandbox}
 			pr := NewPhaseRunner(session.NewManager(make(chan any, 8)), feature.NewStore(dir), dir)
 			pr.Registry = newRegistryWithCaptureProvider(provider)
 			_, _, sessOpts, err := pr.BuildSession(BuildSessionOpts{
-				Model:        "model-a[1M]",
-				Prompt:       "p",
-				SystemPrompt: "s",
-				WorkDir:      dir,
-				MarkerPath:   filepath.Join(dir, "phase_complete"),
+				Model:              "model-a[1M]",
+				Prompt:             "p",
+				SystemPrompt:       "s",
+				WorkDir:            dir,
+				CompletionProtocol: true,
 			})
 			if err != nil {
 				t.Fatalf("BuildSession() error: %v", err)
-			}
-			if sessOpts.SupportsFinishOrViolateNudge != tc.nudge {
-				t.Errorf("SupportsFinishOrViolateNudge = %v, want %v", sessOpts.SupportsFinishOrViolateNudge, tc.nudge)
 			}
 			if sessOpts.UsesBoundedHelperSandbox != tc.sandbox {
 				t.Errorf("UsesBoundedHelperSandbox = %v, want %v", sessOpts.UsesBoundedHelperSandbox, tc.sandbox)
@@ -1487,11 +1472,11 @@ func TestBuildSession_SurfacesSessionResumeCapability(t *testing.T) {
 			pr := NewPhaseRunner(session.NewManager(make(chan any, 8)), feature.NewStore(dir), dir)
 			pr.Registry = newRegistryWithCaptureProvider(provider)
 			_, _, sessOpts, err := pr.BuildSession(BuildSessionOpts{
-				Model:        "model-a[1M]",
-				Prompt:       "p",
-				SystemPrompt: "s",
-				WorkDir:      dir,
-				MarkerPath:   filepath.Join(dir, "phase_complete"),
+				Model:              "model-a[1M]",
+				Prompt:             "p",
+				SystemPrompt:       "s",
+				WorkDir:            dir,
+				CompletionProtocol: true,
 			})
 			if err != nil {
 				t.Fatalf("BuildSession() error: %v", err)
@@ -1678,7 +1663,6 @@ func TestBuildSession_CodexExplicitWritableRootsDoNotInheritStateOrAdditionalDir
 	workDir := filepath.Join(dir, "work")
 	additionalDir := filepath.Join(dir, "attempt-01")
 	feedbackPath := filepath.Join(additionalDir, "validate-scope", "validation-scope-feedback.md")
-	markerPath := filepath.Join(additionalDir, "validate-scope", "phase_complete")
 	for _, path := range []string{stateDir, workDir, filepath.Dir(feedbackPath)} {
 		if err := os.MkdirAll(path, 0o755); err != nil {
 			t.Fatalf("MkdirAll(%q) error = %v", path, err)
@@ -1695,7 +1679,7 @@ func TestBuildSession_CodexExplicitWritableRootsDoNotInheritStateOrAdditionalDir
 	pr := NewPhaseRunner(sm, store, stateDir)
 	pr.Registry = newRegistryWithProviders()
 
-	wantRoots := []string{feedbackPath, markerPath}
+	wantRoots := []string{feedbackPath}
 	_, _, sessOpts, err := pr.BuildSession(BuildSessionOpts{
 		Model:          "gpt-5.4",
 		Prompt:         "validate this plan",
@@ -2426,6 +2410,64 @@ func TestBuildSession_AllowedToolsPropagation(t *testing.T) {
 	}
 }
 
+func TestBuildSession_ToolFreeHandlerOverridesGlobalPermissionBypass(t *testing.T) {
+	dir := t.TempDir()
+	sm := session.NewManager(make(chan any, 100))
+	store := feature.NewStore(dir)
+	pr := NewPhaseRunner(sm, store, dir)
+	pr.Registry = newRegistryWithProviders()
+	pr.DangerouslySkipPermissions = true
+
+	cmd, _, sessOpts, err := pr.BuildSession(BuildSessionOpts{
+		Model:        "opus",
+		Prompt:       "generate narrative",
+		SystemPrompt: prDescriptionSystemPrompt,
+		PIDDir:       filepath.Join(dir, "pid"),
+		PermHandler:  &prDescriptionPermissionHandler{},
+		WorkDir:      dir,
+		Phase:        feature.PhasePublish,
+	})
+	if err != nil {
+		t.Fatalf("BuildSession() error: %v", err)
+	}
+	if slices.Contains(cmd, "--dangerously-skip-permissions") {
+		t.Errorf("tool-free command inherited --dangerously-skip-permissions: %v", cmd)
+	}
+	if slices.Contains(cmd, "--allowedTools") {
+		t.Errorf("tool-free command advertises allowed tools: %v", cmd)
+	}
+	flagValue := func(name string) string {
+		for i, arg := range cmd {
+			if arg == name && i+1 < len(cmd) {
+				return cmd[i+1]
+			}
+		}
+		return ""
+	}
+	disallowed := flagValue("--disallowedTools")
+	for _, tool := range []string{"Bash", "Read", "Write", "WebSearch", "Agent", "AskUserQuestion"} {
+		if !strings.Contains(disallowed, tool) {
+			t.Errorf("--disallowedTools = %q, want %s", disallowed, tool)
+		}
+	}
+	if got := flagValue("--permission-mode"); got != "default" {
+		t.Errorf("--permission-mode = %q, want default", got)
+	}
+	if sessOpts == nil || sessOpts.PermHandler == nil {
+		t.Fatal("SessionOpts.PermHandler = nil, want tool-free handler")
+	}
+	decision, decisionErr := sessOpts.PermHandler.CanUseTool(ports.ToolPermissionRequest{
+		ToolName: "FutureTool",
+		Input:    `{}`,
+	})
+	if decisionErr != nil {
+		t.Fatalf("CanUseTool(FutureTool): %v", decisionErr)
+	}
+	if decision.Behavior != "deny" {
+		t.Errorf("CanUseTool(FutureTool) behavior = %q, want deny", decision.Behavior)
+	}
+}
+
 func TestBuildSession_WebSearchAlwaysAllowed(t *testing.T) {
 	dir := t.TempDir()
 	eventCh := make(chan any, 100)
@@ -2803,7 +2845,7 @@ func TestBuildSession_SkillsInjection_Codex_EmptySkillsDir(t *testing.T) {
 	}
 }
 
-func TestResolveImplementArtifactDir_CyclePrefix(t *testing.T) {
+func TestResolveImplementArtifactDir_NoPrefix(t *testing.T) {
 	stateDir := t.TempDir()
 
 	tests := []struct {
@@ -2812,42 +2854,9 @@ func TestResolveImplementArtifactDir_CyclePrefix(t *testing.T) {
 		wantDir string
 	}{
 		{
-			"no cycle",
+			"no roadmap phase",
 			&feature.Feature{ID: "f1", ActiveRun: 1},
 			filepath.Join(stateDir, "f1", "runs", "run-001", "implement"),
-		},
-		{
-			"rebase cycle active",
-			func() *feature.Feature {
-				f := &feature.Feature{ID: "f1", ActiveRun: 1}
-				f.SetActiveCycleType(feature.CycleRebase)
-				f.SetRebaseCount(2)
-				return f
-			}(),
-			filepath.Join(stateDir, "f1", "runs", "run-001", "rebase-2", "implement"),
-		},
-		{
-			"review-comments cycle active",
-			func() *feature.Feature {
-				f := &feature.Feature{ID: "f1", ActiveRun: 1}
-				f.SetActiveCycleType(feature.CycleReviewComments)
-				return f
-			}(),
-			filepath.Join(stateDir, "f1", "runs", "run-001", "review-comments", "implement"),
-		},
-		{
-			"roadmap phase with cycle skips phase scoping",
-			func() *feature.Feature {
-				f := &feature.Feature{
-					ID:                  "f1",
-					ActiveRun:           1,
-					CurrentRoadmapPhase: 2,
-				}
-				f.SetActiveCycleType(feature.CycleRebase)
-				f.SetRebaseCount(1)
-				return f
-			}(),
-			filepath.Join(stateDir, "f1", "runs", "run-001", "rebase-1", "implement"),
 		},
 	}
 
@@ -2959,6 +2968,65 @@ func TestBuildSessionReadsLatestFeatureAutomaticReviewMode(t *testing.T) {
 	}
 	if got := build().AutoReview.Enabled; got == nil || !*got {
 		t.Fatalf("updated AutoReview.Enabled = %v, want true", got)
+	}
+}
+
+func TestSessionRuntimeConfigResolverReadsLatestFeatureModel(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	store := feature.NewStore(dir)
+	f := &feature.Feature{
+		ID:       "feature-latest-session-model",
+		Name:     "Latest Session Model",
+		Slug:     "latest-session-model",
+		Status:   feature.StatusImplementing,
+		Pipeline: feature.PipelineMoonshot,
+		Models: config.ModelConfig{
+			Implementation: "opencode:old-model",
+			Review:         "codex:old-review",
+		},
+		SchemaVersion: feature.SchemaVersionCurrent,
+	}
+	if err := store.Save(f); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	pr := NewPhaseRunner(nil, store, dir)
+	resolve := pr.SessionRuntimeConfigResolver(f.ID)
+	if resolve == nil {
+		t.Fatal("SessionRuntimeConfigResolver() = nil")
+	}
+
+	initial, err := resolve(llm.PhaseImplementation)
+	if err != nil {
+		t.Fatalf("initial resolve: %v", err)
+	}
+	if initial.Model != "opencode:old-model" {
+		t.Fatalf("initial model = %q, want opencode:old-model", initial.Model)
+	}
+
+	if err := store.Modify(f.ID, func(current *feature.Feature) error {
+		current.Models.Implementation = "opencode:new-model"
+		current.Models.Review = "claude:new-review"
+		return nil
+	}); err != nil {
+		t.Fatalf("Modify: %v", err)
+	}
+
+	implementation, err := resolve(llm.PhaseImplementation)
+	if err != nil {
+		t.Fatalf("updated implementation resolve: %v", err)
+	}
+	review, err := resolve(llm.PhaseReview)
+	if err != nil {
+		t.Fatalf("updated review resolve: %v", err)
+	}
+	if implementation.Model != "opencode:new-model" {
+		t.Errorf("updated implementation model = %q, want opencode:new-model", implementation.Model)
+	}
+	if review.Model != "claude:new-review" {
+		t.Errorf("updated review model = %q, want claude:new-review", review.Model)
 	}
 }
 

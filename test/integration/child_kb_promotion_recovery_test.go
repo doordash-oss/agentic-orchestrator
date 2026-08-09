@@ -14,8 +14,8 @@
 
 // Integration test for the Large/Moonshot child KB promotion and recovery
 // journey. Proves four behaviors across a multi-repository child:
-//  1. Seeded child KB delta analysis completes.
-//  2. Final KB refresh blocks integration until completion.
+//  1. Seeded child KB delta analysis runs in incremental mode.
+//  2. Integration starts directly after final review approval — no KB gate.
 //  3. Multi-repository promotion: one repository overlay commits and retains
 //     its lock when a later repository promotion fails; cleanup and
 //     auto-publish settlement are blocked while recovery state is preserved.
@@ -38,6 +38,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/git"
+	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/orchestrator"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
@@ -274,22 +275,24 @@ func (fx *kbPromoFixture) orchestrator() *orchestrator.Orchestrator {
 	return orchestrator.New(orchestrator.Deps{
 		Lifecycle: fx.mgr,
 		Store:     fx.store,
-		Publisher: &git.PublishAdapter{},
 		Worktrees: fx.wm,
-		Cleanliness: feature.CleanlinessFunc(func(worktreePath string, maxPerCategory int) (*feature.RepoCleanliness, error) {
-			return &feature.RepoCleanliness{}, nil
-		}),
 	}, orchestrator.Hooks{})
 }
 
-// orchestratorWithPhaseRunner builds an orchestrator with a PhaseRunner and
-// SessionManager that can exercise the KB refresh flow. The writeMarker
-// parameter controls whether the fake build session writes the phase_complete
-// marker, simulating a successful (true) or failed (false) KB build.
-func (fx *kbPromoFixture) orchestratorWithPhaseRunner(writeMarker bool) *orchestrator.Orchestrator {
+// phaseRunner builds a PhaseRunner and mock SessionManager for driving child
+// KB builds. The succeed parameter controls whether the fake session reports
+// a valid success outcome.
+func (fx *kbPromoFixture) phaseRunner(succeed bool) (*agent.PhaseRunner, *mocks.MockSessionManager) {
 	mockSM := mocks.NewMockSessionManager()
 	mockSM.StartSessionFn = func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*session.SessionOpts) (ports.SessionHandle, error) {
 		return session.NewSession(id, featureID, phase), nil
+	}
+	mockSM.GetSessionFn = func(id string) ports.SessionView {
+		view := mocks.NewMockSessionView(id, fx.child.ID)
+		if succeed {
+			view.RootCompletionIntentVal = llm.CompletionIntent{Found: true, Status: llm.CompletionIntentSuccess}
+		}
+		return view
 	}
 	pr := &agent.PhaseRunner{
 		SessionManager: mockSM,
@@ -299,37 +302,35 @@ func (fx *kbPromoFixture) orchestratorWithPhaseRunner(writeMarker bool) *orchest
 		StateDir:       fx.stateDir,
 		BuildSessionFn: func(opts agent.BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error) {
 			fx.capturedPrompt = opts.Prompt
-			if writeMarker && opts.MarkerPath != "" {
-				os.MkdirAll(filepath.Dir(opts.MarkerPath), 0o755)
-				os.WriteFile(opts.MarkerPath, []byte("{}"), 0o644)
-			}
 			return []string{"fake-cmd"}, nil, &ports.SessionOpts{}, nil
 		},
 	}
+	return pr, mockSM
+}
+
+// orchestratorWithPhaseRunner builds an orchestrator with a PhaseRunner and
+// SessionManager that can exercise child KB builds during lifecycle flows.
+func (fx *kbPromoFixture) orchestratorWithPhaseRunner(succeed bool) *orchestrator.Orchestrator {
+	pr, mockSM := fx.phaseRunner(succeed)
 	o := orchestrator.New(orchestrator.Deps{
 		Lifecycle:   fx.mgr,
 		Store:       fx.store,
-		Publisher:   &git.PublishAdapter{},
 		Worktrees:   fx.wm,
 		PhaseRunner: pr,
 		Sessions:    mockSM,
 		CmdRunner:   fx.realRunner(),
-		Cleanliness: feature.CleanlinessFunc(func(worktreePath string, maxPerCategory int) (*feature.RepoCleanliness, error) {
-			return &feature.RepoCleanliness{}, nil
-		}),
 	}, orchestrator.Hooks{})
 	return o
 }
 
 // TestLargeMoonshotChildKnowledgePromotionRecoveryJourney proves the full
 // behavioral contract for a Large refactor child with two repositories:
-//  1. Seeded child KB delta analysis completes (the workspace is seeded from
-//     the canonical KB and the builder runs to completion, setting
-//     AnalyzedCommit and entering INCREMENTAL UPDATE mode).
-//  2. Final KB refresh blocks integration until completion (a workspace with
-//     an empty AnalyzedCommit is not fresh, so the refresh must complete
-//     before integration proceeds; a failed refresh returns an error and no
-//     parent ref is touched).
+//  1. Seeded child KB delta analysis runs in incremental mode (the workspace
+//     is seeded from the canonical KB and the cycle-start builder prompt
+//     enters INCREMENTAL UPDATE mode).
+//  2. Integration starts directly after final review approval: a stale KB
+//     workspace does not gate it and no KB builder session runs at the
+//     integration boundary.
 //  3. Multi-repository promotion failure: one repository overlay commits and
 //     retains its promotion lock when a later repository promotion fails;
 //     cleanup and auto-publish settlement are blocked while the child stays
@@ -354,9 +355,9 @@ func TestLargeMoonshotChildKnowledgePromotionRecoveryJourney(t *testing.T) {
 	fx.runStep1SeededDeltaAnalysis(t)
 
 	// ================================================================
-	// Step 2: Final KB refresh blocks integration until completion
+	// Step 2: Integration starts directly after final review approval
 	// ================================================================
-	fx.runStep2RefreshBlocksIntegration(t)
+	fx.runStep2IntegrationStartsWithoutKBRefresh(t)
 
 	// ================================================================
 	// Step 3: Multi-repository promotion failure
@@ -374,8 +375,8 @@ func TestLargeMoonshotChildKnowledgePromotionRecoveryJourney(t *testing.T) {
 }
 
 // runStep1SeededDeltaAnalysis proves that a seeded child workspace enters
-// INCREMENTAL UPDATE mode (not FULL BUILD) and the completion path sets
-// AnalyzedCommit.
+// INCREMENTAL UPDATE mode (not FULL BUILD) when the cycle-start KB builder
+// runs.
 func (fx *kbPromoFixture) runStep1SeededDeltaAnalysis(t *testing.T) {
 	pathsA := fx.childPaths("repoA")
 	if err := agent.SeedChildKBWorkspace(context.Background(), fx.realRunner(), pathsA); err != nil {
@@ -408,12 +409,16 @@ func (fx *kbPromoFixture) runStep1SeededDeltaAnalysis(t *testing.T) {
 		t.Fatalf("SeedChildKBWorkspace repoB: %v", err)
 	}
 
-	// Run the KB builder through the orchestrator's refresh path to
-	// prove the generated prompt enters INCREMENTAL UPDATE mode.
+	// Run the KB builder through the cycle-start path to prove the
+	// generated prompt enters INCREMENTAL UPDATE mode.
 	fx.capturedPrompt = ""
-	oKB := fx.orchestratorWithPhaseRunner(true)
-	if err := oKB.RefreshChildKBWorkspaces(fx.child.ID); err != nil {
-		t.Fatalf("RefreshChildKBWorkspaces for KB prompt assertion: %v", err)
+	pr, _ := fx.phaseRunner(true)
+	sessionID, err := pr.RunChildKnowledgeBaseForRepo(fx.child, fx.child.Repos[0])
+	if err != nil {
+		t.Fatalf("RunChildKnowledgeBaseForRepo for KB prompt assertion: %v", err)
+	}
+	if sessionID == "" {
+		t.Fatal("expected a KB builder session for a stale seeded workspace")
 	}
 	if !strings.Contains(fx.capturedPrompt, "INCREMENTAL UPDATE") {
 		t.Fatalf("KB prompt should be INCREMENTAL UPDATE for a seeded workspace, got:\n%s", fx.capturedPrompt)
@@ -421,22 +426,15 @@ func (fx *kbPromoFixture) runStep1SeededDeltaAnalysis(t *testing.T) {
 	if strings.Contains(fx.capturedPrompt, "FULL BUILD") {
 		t.Fatalf("KB prompt should not be FULL BUILD for a seeded workspace, got:\n%s", fx.capturedPrompt)
 	}
-	t.Logf("Step 1: KB prompt mode is INCREMENTAL UPDATE (not FULL BUILD)")
-
-	if !agent.IsWorkspaceFresh(context.Background(), fx.realRunner(), fx.workspaceDir("repoA"), fx.childWT("repoA")) {
-		t.Fatal("workspace repoA should be fresh after KB builder completion")
-	}
-	if !agent.IsWorkspaceFresh(context.Background(), fx.realRunner(), fx.workspaceDir("repoB"), fx.childWT("repoB")) {
-		t.Fatal("workspace repoB should be fresh after KB builder completion")
-	}
-	t.Log("Step 1: seeded child KB delta analysis completes — INCREMENTAL prompt, AnalyzedCommit set by completion path")
+	t.Log("Step 1: seeded child KB delta analysis starts at cycle start — INCREMENTAL prompt, not FULL BUILD")
 }
 
-// runStep2RefreshBlocksIntegration proves that a failed KB refresh blocks
-// integration with no parent ref touched, and a successful refresh marks
-// the workspace fresh.
-func (fx *kbPromoFixture) runStep2RefreshBlocksIntegration(t *testing.T) {
-	// Reset repoA workspace: remove and re-seed so AnalyzedCommit is empty.
+// runStep2IntegrationStartsWithoutKBRefresh proves that integration starts
+// directly after final review approval: a stale KB workspace does not gate
+// it, and no KB builder session runs at the integration boundary.
+func (fx *kbPromoFixture) runStep2IntegrationStartsWithoutKBRefresh(t *testing.T) {
+	// Reset both workspaces: remove and re-seed so AnalyzedCommit is empty
+	// (stale — a KB gate would have to rebuild them).
 	pathsA := fx.childPaths("repoA")
 	os.RemoveAll(fx.workspaceDir("repoA"))
 	if err := agent.SeedChildKBWorkspace(context.Background(), fx.realRunner(), pathsA); err != nil {
@@ -445,67 +443,57 @@ func (fx *kbPromoFixture) runStep2RefreshBlocksIntegration(t *testing.T) {
 	if agent.IsWorkspaceFresh(context.Background(), fx.realRunner(), fx.workspaceDir("repoA"), fx.childWT("repoA")) {
 		t.Fatal("workspace repoA should not be fresh after re-seed")
 	}
-
-	// Also reset repoB.
 	pathsB := fx.childPaths("repoB")
 	os.RemoveAll(fx.workspaceDir("repoB"))
 	if err := agent.SeedChildKBWorkspace(context.Background(), fx.realRunner(), pathsB); err != nil {
 		t.Fatalf("re-seed repoB: %v", err)
 	}
 
-	refreshChild, _ := fx.store.Load(fx.child.ID)
-	refreshChild.Status = feature.StatusReviewPassed
-	refreshChild.Parent.CloseOutcome = ""
-	refreshChild.Parent.Transaction = nil
-	refreshChild.CurrentPhase = feature.PhaseFinalReview
-	if err := fx.store.Save(refreshChild); err != nil {
-		t.Fatalf("save child for refresh test: %v", err)
+	child, _ := fx.store.Load(fx.child.ID)
+	child.Status = feature.StatusReviewPassed
+	child.Parent.CloseOutcome = ""
+	child.Parent.Transaction = nil
+	child.CurrentPhase = feature.PhaseFinalReview
+	if err := fx.store.Save(child); err != nil {
+		t.Fatalf("save child for integration test: %v", err)
 	}
 
 	parentHeadBefore := gitRevParse(t, fx.repoDirA, "HEAD")
 
+	// Divert integration at the transaction-parent guard (past the old KB
+	// boundary, before any git mutation) so this journey's later steps keep
+	// control of the transaction state.
+	parentRec, _ := fx.store.Load(fx.parent.ID)
+	originalPath := parentRec.Repos[0].Path
+	parentRec.Repos[0].Path = originalPath + "-moved"
+	if err := fx.store.Save(parentRec); err != nil {
+		t.Fatalf("save diverted parent: %v", err)
+	}
+
+	fx.capturedPrompt = ""
 	o := fx.orchestratorWithPhaseRunner(false)
 	integrationErr := o.RunChildIntegration(fx.child.ID)
-	if integrationErr == nil {
-		t.Fatal("RunChildIntegration should fail when KB refresh does not produce a completion marker")
+	if integrationErr == nil || !strings.Contains(integrationErr.Error(), "path changed since launch") {
+		t.Fatalf("integration should reach the transaction-parent guard with no KB gate before it, got: %v", integrationErr)
 	}
-	if !strings.Contains(integrationErr.Error(), "final KB refresh") {
-		t.Fatalf("expected error to mention 'final KB refresh', got: %v", integrationErr)
+	if strings.Contains(integrationErr.Error(), "KB") {
+		t.Fatalf("integration must not fail on KB state, got: %v", integrationErr)
 	}
-	t.Logf("RunChildIntegration blocked by failed refresh: %v", integrationErr)
+	if fx.capturedPrompt != "" {
+		t.Fatalf("no KB builder session may run at the integration boundary, got prompt:\n%s", fx.capturedPrompt)
+	}
 
 	parentHeadAfter := gitRevParse(t, fx.repoDirA, "HEAD")
 	if parentHeadBefore != parentHeadAfter {
-		t.Fatalf("parent HEAD changed despite refresh failure: before=%s after=%s", parentHeadBefore, parentHeadAfter)
+		t.Fatalf("parent HEAD changed before the transaction path: before=%s after=%s", parentHeadBefore, parentHeadAfter)
 	}
+	t.Log("Step 2: integration starts directly after final review approval — stale KB workspace does not gate it")
 
-	refreshChild2, _ := fx.store.Load(fx.child.ID)
-	if refreshChild2.Parent.Transaction != nil {
-		t.Fatal("transaction should not have been created when refresh failed")
+	// Restore the parent record for the promotion steps.
+	parentRec.Repos[0].Path = originalPath
+	if err := fx.store.Save(parentRec); err != nil {
+		t.Fatalf("restore parent: %v", err)
 	}
-	t.Log("Step 2: final KB refresh blocks integration — error returned, no parent ref touched")
-
-	// Successful KB refresh marks workspace fresh.
-	os.RemoveAll(fx.workspaceDir("repoA"))
-	os.RemoveAll(fx.workspaceDir("repoB"))
-	if err := agent.SeedChildKBWorkspace(context.Background(), fx.realRunner(), pathsA); err != nil {
-		t.Fatalf("re-seed repoA for success case: %v", err)
-	}
-	if err := agent.SeedChildKBWorkspace(context.Background(), fx.realRunner(), pathsB); err != nil {
-		t.Fatalf("re-seed repoB for success case: %v", err)
-	}
-
-	oSuccess := fx.orchestratorWithPhaseRunner(true)
-	if err := oSuccess.RefreshChildKBWorkspaces(fx.child.ID); err != nil {
-		t.Fatalf("RefreshChildKBWorkspaces should succeed with completion marker: %v", err)
-	}
-	if !agent.IsWorkspaceFresh(context.Background(), fx.realRunner(), fx.workspaceDir("repoA"), fx.childWT("repoA")) {
-		t.Fatal("workspace repoA should be fresh after successful KB refresh")
-	}
-	if !agent.IsWorkspaceFresh(context.Background(), fx.realRunner(), fx.workspaceDir("repoB"), fx.childWT("repoB")) {
-		t.Fatal("workspace repoB should be fresh after successful KB refresh")
-	}
-	t.Log("Step 2b: successful KB refresh marks workspace fresh — integration would proceed")
 }
 
 // runStep3MultiRepoPromotionFailure simulates a partial multi-repository

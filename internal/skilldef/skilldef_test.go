@@ -27,7 +27,7 @@ import (
 	skillsFS "github.com/doordash-oss/agentic-orchestrator/skills"
 )
 
-const expectedEmbeddedSkillCount = 29
+const expectedEmbeddedSkillCount = 28
 
 func TestParseSkillFile(t *testing.T) {
 	tests := []struct {
@@ -220,114 +220,6 @@ func TestParseEmbedded_Cached(t *testing.T) {
 	}
 }
 
-func TestBuildPreamble(t *testing.T) {
-	skillsDir := "/test/path/to/skills"
-	preamble := BuildPreamble(skillsDir, []string{"frontend-design", "implement", "research-codebase"})
-
-	for _, want := range []string{
-		"## Available Skills",
-		"frontend-design",
-		"/test/path/to/skills/frontend-design/SKILL.md",
-		"To use a skill",
-		"implement",
-		"research-codebase",
-	} {
-		if !strings.Contains(preamble, want) {
-			t.Errorf("preamble missing %q", want)
-		}
-	}
-
-	// Check that the description from the embedded skill is present
-	skills, _ := ParseEmbedded()
-	fd := skills["frontend-design"]
-	if !strings.Contains(preamble, fd.Description) {
-		t.Errorf("preamble missing frontend-design description %q", fd.Description)
-	}
-}
-
-func TestBuildPreamble_DifferentPaths(t *testing.T) {
-	names := []string{"frontend-design"}
-	a := BuildPreamble("/path/alpha/skills", names)
-	b := BuildPreamble("/path/beta/skills", names)
-	if a == b {
-		t.Error("expected different preambles for different skillsDir values")
-	}
-	if !strings.Contains(a, "/path/alpha/skills") {
-		t.Error("preamble A missing alpha path")
-	}
-	if !strings.Contains(b, "/path/beta/skills") {
-		t.Error("preamble B missing beta path")
-	}
-}
-
-func TestBuildPreamble_EmptyNames(t *testing.T) {
-	preamble := BuildPreamble("/any/path", nil)
-	if preamble != "" {
-		t.Error("BuildPreamble returned non-empty string for nil skillNames")
-	}
-	preamble = BuildPreamble("/any/path", []string{})
-	if preamble != "" {
-		t.Error("BuildPreamble returned non-empty string for empty skillNames")
-	}
-}
-
-func TestBuildPreamble_FiltersToRequestedSkills(t *testing.T) {
-	preamble := BuildPreamble("/any/path", []string{"frontend-design"})
-	if !strings.Contains(preamble, "frontend-design") {
-		t.Error("preamble missing requested skill frontend-design")
-	}
-	if strings.Contains(preamble, "| implement |") {
-		t.Error("preamble should not contain unrequested skill implement")
-	}
-}
-
-func TestReadBody(t *testing.T) {
-	body, err := ReadBody("frontend-design")
-	if err != nil {
-		t.Fatalf("ReadBody(frontend-design) error: %v", err)
-	}
-	if body == "" {
-		t.Error("ReadBody(frontend-design) returned empty body")
-	}
-
-	// Verify it matches ParseEmbedded
-	defs, _ := ParseEmbedded()
-	if body != defs["frontend-design"].Body {
-		t.Error("ReadBody body does not match ParseEmbedded body")
-	}
-}
-
-func TestReadBody_AllCommandSkills(t *testing.T) {
-	commandSkills := []string{
-		"design", "build-knowledge-base", "chat", "create-roadmap", "design",
-		"final-fix", "implement", "inquire", "plan-phase", "research-codebase",
-		"revise-phase-plan", "revise-roadmap",
-		"validate-phase-plan-grounding", "validate-phase-plan-scope",
-		"validate-phase-plan-structural",
-		"validate-plan-performance",
-		"validate-plan-security", "validate-plan-testing",
-		"validate-roadmap-architecture", "validate-roadmap-scope",
-	}
-	for _, name := range commandSkills {
-		t.Run(name, func(t *testing.T) {
-			body, err := ReadBody(name)
-			if err != nil {
-				t.Fatalf("ReadBody(%s) error: %v", name, err)
-			}
-			if body == "" {
-				t.Errorf("ReadBody(%s) returned empty body", name)
-			}
-		})
-	}
-}
-
-func TestReadBody_NotFound(t *testing.T) {
-	_, err := ReadBody("nonexistent_skill_xyz")
-	if err == nil {
-		t.Fatal("expected error for nonexistent skill, got nil")
-	}
-}
-
 func TestReconcileSkills(t *testing.T) {
 	skillsDir := filepath.Join(t.TempDir(), "skills")
 
@@ -425,15 +317,6 @@ func TestReconcileSkills(t *testing.T) {
 	}
 	if !strings.Contains(string(lcData), "Pipeline Profiles") {
 		t.Error("chat/user-guide/feature-lifecycle.md missing expected content")
-	}
-
-	tuiNavPath := filepath.Join(skillsDir, "chat", "user-guide", "tui-navigation.md")
-	tnData, err := os.ReadFile(tuiNavPath)
-	if err != nil {
-		t.Fatalf("reading chat/user-guide/tui-navigation.md: %v", err)
-	}
-	if !strings.Contains(string(tnData), "Dashboard") {
-		t.Error("chat/user-guide/tui-navigation.md missing expected content")
 	}
 
 	configPath := filepath.Join(skillsDir, "chat", "user-guide", "configuration.md")
@@ -618,11 +501,6 @@ func TestReconcileSkills_NonSkillMdFiles(t *testing.T) {
 			wantSub: "Pipeline Profiles",
 		},
 		{
-			name:    "tui navigation topic",
-			path:    filepath.Join(skillsDir, "chat", "user-guide", "tui-navigation.md"),
-			wantSub: "Dashboard",
-		},
-		{
 			name:    "configuration topic",
 			path:    filepath.Join(skillsDir, "chat", "user-guide", "configuration.md"),
 			wantSub: "config.yaml",
@@ -720,7 +598,6 @@ func TestReconcileSkills_SubdirectoryStructure(t *testing.T) {
 		wantSub string
 	}{
 		{"feature-lifecycle.md", "Pipeline Profiles"},
-		{"tui-navigation.md", "Dashboard"},
 		{"configuration.md", "config.yaml"},
 		{"post-publish.md", "Rebase"},
 		{"permissions.md", "Allow & Remember"},

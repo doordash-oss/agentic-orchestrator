@@ -98,20 +98,6 @@ func TestRefactorAPIJourney(t *testing.T) {
 	wm := git.NewWorktreeManager(wtBaseDir)
 	mgr := feature.NewManager(store, config.NewDefault())
 	mgr.Worktrees = wm
-	mgr.Cleanliness = feature.CleanlinessFunc(func(worktreePath string, maxPerCategory int) (*feature.RepoCleanliness, error) {
-		report, err := wm.InspectCleanliness(worktreePath, maxPerCategory)
-		if err != nil {
-			return nil, err
-		}
-		return &feature.RepoCleanliness{
-			Staged:         report.Staged,
-			Unstaged:       report.Unstaged,
-			Untracked:      report.Untracked,
-			StagedTotal:    report.StagedTotal,
-			UnstagedTotal:  report.UnstagedTotal,
-			UntrackedTotal: report.UntrackedTotal,
-		}, nil
-	})
 
 	orch := orchestrator.New(orchestrator.Deps{Lifecycle: mgr, Store: store}, orchestrator.Hooks{})
 	t.Cleanup(func() {
@@ -314,9 +300,38 @@ func (t *journeyMutationTarget) RefactorFeature(featureID string, req server.Ref
 	if err != nil {
 		return resp, err
 	}
-	t.orch.RefactorChildCreated(child)
+	t.orch.ChildCreated(child)
 	// Mirror the production mutation target: asynchronous child setup is
 	// orchestrator-owned so terminal setup errors are recorded and emitted.
+	t.orch.RunSetupAsync(child.ID)
+	resp.FeatureID = child.ID
+	resp.Result = "created"
+	return resp, nil
+}
+
+// RebaseFeature mirrors the production rebase child launch: orchestrator
+// preflight resolves targets and computes behind-ness, then the child is
+// created under the relationship write lock with the persisted results.
+func (t *journeyMutationTarget) RebaseFeature(featureID string, _ server.RebaseFeatureRequest) (server.RebaseFeatureResponse, error) {
+	resp := server.RebaseFeatureResponse{ParentID: featureID, Result: "failed"}
+	preflight, err := t.orch.RebaseChildPreflight(featureID)
+	if err != nil {
+		return resp, err
+	}
+	spec := feature.RebaseChildSpec{
+		Bases:   preflight.Bases,
+		Targets: preflight.Targets,
+		Behind:  preflight.Behind,
+	}
+	var child *feature.Feature
+	if err := t.orch.WithRelationshipWriteLock(func() error {
+		var createErr error
+		child, createErr = t.mgr.CreateRebaseChild(featureID, spec)
+		return createErr
+	}); err != nil {
+		return resp, err
+	}
+	t.orch.ChildCreated(child)
 	t.orch.RunSetupAsync(child.ID)
 	resp.FeatureID = child.ID
 	resp.Result = "created"
@@ -334,8 +349,7 @@ func (t *journeyMutationTarget) StartFeature(featureID string) (server.FeatureSt
 
 // ReviewDecision mirrors the production mapping so the journey resumes
 // configured roadmap and phase-plan gates through the standard flow.
-func (t *journeyMutationTarget) ReviewDecision(featureID string, req server.ReviewDecisionRequest) (server.ReviewDecisionResponse, error) {
-	resp := server.ReviewDecisionResponse{FeatureID: featureID, Decision: req.Decision, Result: "failed"}
+func (t *journeyMutationTarget) ReviewDecision(featureID string, req server.ReviewDecisionRequest) error {
 	decision := orchestrator.ReviewDecision{
 		Decision:    req.Decision,
 		TargetPhase: journeyParsePhase(req.Phase),
@@ -344,11 +358,7 @@ func (t *journeyMutationTarget) ReviewDecision(featureID string, req server.Revi
 		Roadmap:     req.Roadmap,
 		Comment:     req.Comment,
 	}
-	if err := t.orch.HandleReviewDecision(featureID, decision); err != nil {
-		return resp, err
-	}
-	resp.Result = "submitted"
-	return resp, nil
+	return t.orch.HandleReviewDecision(featureID, decision)
 }
 
 // journeyParsePhase mirrors the production phase-name mapping for the small

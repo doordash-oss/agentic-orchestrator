@@ -23,6 +23,39 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
+func TestEffortCapabilitiesForProviderQualifiedModel(t *testing.T) {
+	reg := llm.NewRegistry()
+	reg.Register(&effortCatalogProvider{
+		models: []llm.ModelInfo{{
+			ID:                 "sonnet",
+			EffortCapabilities: []llm.EffortLevel{llm.EffortLow, llm.EffortMedium, llm.EffortHigh},
+		}},
+	})
+
+	got := (&PhaseRunner{Registry: reg}).EffortCapabilitiesForModel("mock:sonnet")
+	if len(got) != 3 || got[0] != llm.EffortLow || got[1] != llm.EffortMedium || got[2] != llm.EffortHigh {
+		t.Fatalf("capabilities = %v, want [low medium high]", got)
+	}
+}
+
+type effortCatalogProvider struct {
+	models []llm.ModelInfo
+}
+
+func (p *effortCatalogProvider) Name() string                   { return "mock" }
+func (p *effortCatalogProvider) MatchesModel(model string) bool { return true }
+func (p *effortCatalogProvider) DetectCLI() bool                { return true }
+func (p *effortCatalogProvider) AvailableModels() []string      { return nil }
+func (p *effortCatalogProvider) BuildCommand(opts llm.CommandBuildOpts) ([]string, []string, error) {
+	return nil, nil, nil
+}
+func (p *effortCatalogProvider) NewProtocol(opts llm.ProtocolOpts) llm.Protocol { return nil }
+func (p *effortCatalogProvider) InstallHint() string                            { return "" }
+func (p *effortCatalogProvider) VersionInfo() (string, error)                   { return "1.0.0", nil }
+func (p *effortCatalogProvider) MinVersion() [3]int                             { return [3]int{} }
+func (p *effortCatalogProvider) EnvVarsToExclude() []string                     { return nil }
+func (p *effortCatalogProvider) ModelCatalog() []llm.ModelInfo                  { return p.models }
+
 func TestResolveEffortForRole(t *testing.T) {
 	// When the PhaseRunner has no Registry (as in this unit test),
 	// capabilities are nil and explicit values fall back to Auto — that is

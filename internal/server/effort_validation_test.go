@@ -73,6 +73,14 @@ func TestValidateEffortConfig(t *testing.T) {
 			wantStatus: http.StatusOK,
 		},
 		{
+			name:       "provider-qualified capable model accepts supported effort",
+			effort:     config.EffortConfig{Implementation: "medium"},
+			models:     config.ModelConfig{Implementation: "mock:sonnet"},
+			reg:        testRegistryWithCaps("sonnet", []llm.EffortLevel{llm.EffortLow, llm.EffortMedium, llm.EffortHigh}),
+			wantOK:     true,
+			wantStatus: http.StatusOK,
+		},
+		{
 			name:       "capable model rejects unsupported effort",
 			effort:     config.EffortConfig{Implementation: "max"},
 			models:     config.ModelConfig{Implementation: "sonnet"},

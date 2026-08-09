@@ -237,7 +237,7 @@ func TestDefaultsConfigPreferenceForPipelineOverlaysRememberedValues(t *testing.
 	}
 }
 
-func TestLoadModelConfigMigratesMissingInquiryFromResearch(t *testing.T) {
+func TestLoadModelConfigOmittedInquiryUsesConfiguredResearch(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
 	content := []byte("defaults:\n  models:\n    research: claude:custom-research\n")
@@ -251,10 +251,50 @@ func TestLoadModelConfigMigratesMissingInquiryFromResearch(t *testing.T) {
 	}
 
 	if cfg.Defaults.Models.Inquiry != "claude:custom-research" {
-		t.Errorf("inquiry = %q, want migrated research model", cfg.Defaults.Models.Inquiry)
+		t.Errorf("inquiry = %q, want configured research model", cfg.Defaults.Models.Inquiry)
 	}
 	if cfg.Defaults.Models.Research != "claude:custom-research" {
 		t.Errorf("research = %q, want configured research model", cfg.Defaults.Models.Research)
+	}
+}
+
+func TestModelConfigYAMLDecodeLeavesOmittedInquiryUnset(t *testing.T) {
+	input := []byte("research: claude:custom-research\n")
+	var models ModelConfig
+	if err := yaml.Unmarshal(input, &models); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+
+	if models.Inquiry != "" {
+		t.Errorf("Inquiry = %q, want empty", models.Inquiry)
+	}
+	if models.Research != "claude:custom-research" {
+		t.Errorf("Research = %q, want claude:custom-research", models.Research)
+	}
+}
+
+func TestModelConfigYAMLCurrentFieldsRoundTrip(t *testing.T) {
+	want := ModelConfig{
+		Inquiry:         "claude:haiku",
+		Research:        "claude:sonnet",
+		Planning:        "claude:opus",
+		Implementation:  "codex:gpt-5.4",
+		Review:          "codex:gpt-5.4-mini",
+		Utilities:       "claude:haiku[200K]",
+		KBBuild:         "claude:sonnet[200K]",
+		AutomaticReview: "claude:haiku",
+	}
+
+	data, err := yaml.Marshal(want)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	var got ModelConfig
+	if err := yaml.Unmarshal(data, &got); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if got != want {
+		t.Errorf("ModelConfig round-trip = %+v, want %+v", got, want)
 	}
 }
 
@@ -271,61 +311,6 @@ func TestYAMLIgnoresUnknownAutoPublish(t *testing.T) {
 	}
 	if !cfg.Defaults.Checkpoints.ManualPublish {
 		t.Error("expected manual_publish to be parsed correctly")
-	}
-}
-
-func TestLoadConfigCheckpointFieldsDefaultOnAndPlanReviewIgnored(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "config.yaml")
-
-	content := []byte(`defaults:
-  checkpoints:
-    plan_review: false
-`)
-	if err := os.WriteFile(path, content, 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	cfg, err := Load(path)
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-
-	got := cfg.Defaults.Checkpoints
-	if !got.InquiryReview ||
-		!got.ResearchReview ||
-		!got.DesignReview ||
-		!got.RoadmapReview ||
-		!got.PhasePlanReview ||
-		!got.ManualPublish {
-		t.Fatalf("omitted checkpoints should default on and plan_review should be ignored, got %+v", got)
-	}
-}
-
-func TestLoadConfigMalformedLegacyPlanReviewIgnored(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "config.yaml")
-
-	content := []byte(`defaults:
-  checkpoints:
-    plan_review:
-      - not-a-bool
-    manual_publish: false
-`)
-	if err := os.WriteFile(path, content, 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	cfg, err := Load(path)
-	if err != nil {
-		t.Fatalf("Load should ignore malformed legacy plan_review: %v", err)
-	}
-	got := cfg.Defaults.Checkpoints
-	if !got.InquiryReview || !got.ResearchReview || !got.DesignReview || !got.RoadmapReview || !got.PhasePlanReview {
-		t.Fatalf("non-legacy omitted checkpoints should default on, got %+v", got)
-	}
-	if got.ManualPublish {
-		t.Fatalf("explicit manual_publish=false should still win, got %+v", got)
 	}
 }
 
@@ -397,9 +382,30 @@ func TestSaveWritesCheckpointFieldsExplicitly(t *testing.T) {
 			t.Fatalf("saved YAML missing %q:\n%s", needle, yamlStr)
 		}
 	}
-	for _, line := range strings.Split(yamlStr, "\n") {
-		if strings.HasPrefix(strings.TrimSpace(line), "plan_review:") {
-			t.Fatalf("saved YAML should not contain legacy plan_review:\n%s", yamlStr)
+
+	var document struct {
+		Defaults struct {
+			Checkpoints map[string]any `yaml:"checkpoints"`
+		} `yaml:"defaults"`
+	}
+	if err := yaml.Unmarshal(data, &document); err != nil {
+		t.Fatalf("Unmarshal saved YAML: %v", err)
+	}
+	wantKeys := map[string]bool{
+		"inquiry_review":    true,
+		"research_review":   true,
+		"design_review":     true,
+		"roadmap_review":    true,
+		"phase_plan_review": true,
+		"manual_publish":    true,
+		"draft_publish":     true,
+	}
+	if len(document.Defaults.Checkpoints) != len(wantKeys) {
+		t.Errorf("saved checkpoint key count = %d, want %d", len(document.Defaults.Checkpoints), len(wantKeys))
+	}
+	for key := range document.Defaults.Checkpoints {
+		if !wantKeys[key] {
+			t.Errorf("saved YAML contains non-current checkpoint key %q", key)
 		}
 	}
 }
@@ -408,8 +414,7 @@ func TestLoadConfigWithoutManualPublishDefaultsToTrue(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
 
-	// Legacy config: has a checkpoints section but no manual_publish key.
-	content := []byte("defaults:\n  checkpoints:\n    plan_review: true\n")
+	content := []byte("defaults:\n  checkpoints:\n    roadmap_review: true\n")
 	if err := os.WriteFile(path, content, 0644); err != nil {
 		t.Fatal(err)
 	}
@@ -601,56 +606,6 @@ func TestUtilitiesModelRoundTrip(t *testing.T) {
 	}
 	if loaded.Defaults.Models.Utilities != "haiku" {
 		t.Errorf("utilities model mismatch after round-trip: got %s, want haiku", loaded.Defaults.Models.Utilities)
-	}
-}
-
-func TestKeyboardLayoutNordic(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "config.yaml")
-	content := []byte(`defaults:
-  models:
-    research: opus
-    planning: opus
-    implementation: opus
-    review: codex
-ui:
-  keyboard_layout: "nordic"
-`)
-	if err := os.WriteFile(path, content, 0o644); err != nil {
-		t.Fatalf("write config: %v", err)
-	}
-
-	loaded, err := Load(path)
-	if err != nil {
-		t.Fatalf("load: %v", err)
-	}
-	if loaded.UI.KeyboardLayout != "nordic" {
-		t.Errorf("expected keyboard_layout nordic, got %q", loaded.UI.KeyboardLayout)
-	}
-}
-
-func TestKeyboardLayoutInvalidResetsToEmpty(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "config.yaml")
-	content := []byte(`defaults:
-  models:
-    research: opus
-    planning: opus
-    implementation: opus
-    review: codex
-ui:
-  keyboard_layout: "nordc"
-`)
-	if err := os.WriteFile(path, content, 0o644); err != nil {
-		t.Fatalf("write config: %v", err)
-	}
-
-	loaded, err := Load(path)
-	if err != nil {
-		t.Fatalf("load: %v", err)
-	}
-	if loaded.UI.KeyboardLayout != "" {
-		t.Errorf("expected invalid keyboard_layout to be reset to empty, got %q", loaded.UI.KeyboardLayout)
 	}
 }
 
@@ -1607,11 +1562,10 @@ func TestNewDefault_Utilities(t *testing.T) {
 	}
 }
 
-func TestMigrateModelConfig_ChatToUtilities(t *testing.T) {
+func TestModelConfigYAMLIgnoresUnknownChatKey(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
 
-	// Legacy config with "chat" key
 	content := []byte("defaults:\n  models:\n    research: opus\n    chat: haiku\n")
 	if err := os.WriteFile(path, content, 0o644); err != nil {
 		t.Fatal(err)
@@ -1621,47 +1575,8 @@ func TestMigrateModelConfig_ChatToUtilities(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if cfg.Defaults.Models.Utilities != "haiku" {
-		t.Errorf("expected Utilities=haiku (migrated from chat), got %q", cfg.Defaults.Models.Utilities)
-	}
-}
-
-func TestMigrateModelConfig_UtilitiesTakesPrecedence(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "config.yaml")
-
-	// Config with both "chat" and "utilities" keys
-	content := []byte("defaults:\n  models:\n    chat: haiku\n    utilities: opus\n")
-	if err := os.WriteFile(path, content, 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	cfg, err := Load(path)
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	if cfg.Defaults.Models.Utilities != "opus" {
-		t.Errorf("expected Utilities=opus (takes precedence over chat), got %q", cfg.Defaults.Models.Utilities)
-	}
-}
-
-func TestMigrateModelConfig_NeitherSet(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "config.yaml")
-
-	// Config with neither chat nor utilities
-	content := []byte("defaults:\n  models:\n    research: opus\n")
-	if err := os.WriteFile(path, content, 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	cfg, err := Load(path)
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	// applyDefaults should fill it with "sonnet[200K]"
 	if cfg.Defaults.Models.Utilities != "sonnet[200K]" {
-		t.Errorf("expected Utilities=sonnet[200K] (from defaults), got %q", cfg.Defaults.Models.Utilities)
+		t.Errorf("Utilities = %q, want default sonnet[200K]", cfg.Defaults.Models.Utilities)
 	}
 }
 

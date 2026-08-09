@@ -40,7 +40,7 @@ const (
 	reviewArtifactPrompt = "prompt"
 )
 
-type reviewDecisionFunc func(featureID string, req ReviewDecisionRequest) (ReviewDecisionResponse, error)
+type reviewDecisionFunc func(featureID string, req ReviewDecisionRequest) error
 
 type reviewSessionService struct {
 	store   FeatureReader
@@ -160,6 +160,66 @@ func (s *reviewSessionService) Create(featureID string) (ReviewSessionResponse, 
 	return reviewSessionResponseFromMeta(meta, string(source)), nil
 }
 
+// Read returns an existing active review session without re-seeding or
+// otherwise changing the persisted draft. Callers use it after invalidation
+// events and before reconcile flows, where Create's reopen semantics are unsafe.
+func (s *reviewSessionService) Read(featureID string) (ReviewSessionResponse, error) {
+	ctx, err := s.resolveContext(featureID)
+	if err != nil {
+		return ReviewSessionResponse{}, err
+	}
+	unlock := s.locks.lock(featureID, ctx.reviewID)
+	defer unlock()
+	meta, draftPath, _, err := s.loadMetaForFeature(featureID, ctx.reviewID)
+	if err != nil {
+		return ReviewSessionResponse{}, err
+	}
+	draft, err := os.ReadFile(draftPath)
+	if err != nil {
+		return ReviewSessionResponse{}, fmt.Errorf("read review draft: %w", err)
+	}
+	return reviewSessionResponseFromMeta(meta, string(draft)), nil
+}
+
+// ValidateDraft performs only synchronous advisory checks. It deliberately
+// evaluates the supplied text instead of stored draft state so the desktop can
+// explain whether the exact pending buffer is eligible for proceeding.
+func (s *reviewSessionService) ValidateDraft(featureID, reviewID string, req ReviewDraftValidationRequest) (ReviewDraftValidationResponse, error) {
+	unlock := s.locks.lock(featureID, reviewID)
+	defer unlock()
+	meta, _, _, err := s.loadMetaForFeature(featureID, reviewID)
+	if err != nil {
+		return ReviewDraftValidationResponse{}, err
+	}
+	response := ReviewDraftValidationResponse{
+		APIVersion: APIVersion,
+		FeatureID:  featureID,
+		ReviewID:   reviewID,
+		Revision:   textRevision([]byte(req.Text)),
+		Findings:   []ReviewDraftValidationFinding{},
+	}
+	if meta.PhasePlan || meta.ArtifactID == feature.PhasePlan.DirName() {
+		response.Applicable = true
+		response.Findings = phasePlanValidationFindings(req.Text)
+		response.Valid = len(response.Findings) == 0
+		return response, nil
+	}
+	response.Applicable = false
+	response.Valid = true
+	return response, nil
+}
+
+func phasePlanValidationFindings(text string) []ReviewDraftValidationFinding {
+	findings := make([]ReviewDraftValidationFinding, 0)
+	if !strings.HasPrefix(strings.TrimSpace(text), "# ") {
+		findings = append(findings, ReviewDraftValidationFinding{Code: "missing_title", Message: "Phase plans need a top-level Markdown title."})
+	}
+	if len(agent.ParsePlanTasks(text)) == 0 {
+		findings = append(findings, ReviewDraftValidationFinding{Code: "missing_tasks", Message: "Phase plans need at least one task under the Tasks section."})
+	}
+	return findings
+}
+
 func (s *reviewSessionService) SaveDraft(featureID, reviewID string, req ReviewDraftUpdateRequest) (ReviewSessionResponse, error) {
 	unlock := s.locks.lock(featureID, reviewID)
 	defer unlock()
@@ -209,7 +269,7 @@ func (s *reviewSessionService) SubmitDecision(featureID, reviewID string, req Re
 		IsRewind:  meta.ReviewMode == reviewModeRewind,
 	}
 	if s.decider != nil {
-		if _, err := s.decider(featureID, decisionReq); err != nil {
+		if err := s.decider(featureID, decisionReq); err != nil {
 			return ReviewSessionDecisionResponse{}, err
 		}
 	}

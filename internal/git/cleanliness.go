@@ -15,8 +15,9 @@
 package git
 
 import (
+	"errors"
 	"fmt"
-	"os/exec"
+	"strconv"
 	"strings"
 )
 
@@ -53,7 +54,9 @@ func (r *CleanlinessReport) Dirty() bool {
 // counted and listed individually (no collapsed `dir/` entries); totals and
 // bounded lists therefore reflect affected paths, not directory entries. Each
 // category list is bounded to maxPerCategory entries (<= 0 applies
-// DefaultCleanlinessPathLimit) while totals keep the true counts.
+// DefaultCleanlinessPathLimit) while totals keep the true counts. A probe that
+// exceeds CleanlinessProbeTimeout yields a nil report and an ErrProbeTimeout
+// error, never a clean one.
 func (w *WorktreeManager) InspectCleanliness(worktreePath string, maxPerCategory int) (*CleanlinessReport, error) {
 	if strings.TrimSpace(worktreePath) == "" {
 		return nil, fmt.Errorf("worktree path is required")
@@ -61,8 +64,10 @@ func (w *WorktreeManager) InspectCleanliness(worktreePath string, maxPerCategory
 	if maxPerCategory <= 0 {
 		maxPerCategory = DefaultCleanlinessPathLimit
 	}
-	cmd := exec.Command("git", "-C", worktreePath, "status", "--porcelain", "--untracked-files=all")
-	out, err := cmd.Output()
+	out, timedOut, err := runProbeBounded(CleanlinessProbeTimeout, "-C", worktreePath, "status", "--porcelain", "--untracked-files=all")
+	if timedOut {
+		return nil, fmt.Errorf("checking git status in %s: %w", worktreePath, ErrProbeTimeout)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("checking git status in %s: %w", worktreePath, err)
 	}
@@ -100,4 +105,72 @@ func (w *WorktreeManager) InspectCleanliness(worktreePath string, maxPerCategory
 		}
 	}
 	return report, nil
+}
+
+// ErrCleanlinessUnknown reports that no cleanliness result is available for a
+// worktree yet: the first probe is still running, or a previous one failed.
+// Callers gating destructive or refactor work must treat it as indeterminate —
+// never as a clean worktree.
+var ErrCleanlinessUnknown = errors.New("git worktree cleanliness is unknown")
+
+// CleanlinessInspector is the InspectCleanliness surface CleanlinessCache
+// decorates.
+type CleanlinessInspector interface {
+	InspectCleanliness(worktreePath string, maxPerCategory int) (*CleanlinessReport, error)
+}
+
+type cleanlinessResult struct {
+	report *CleanlinessReport
+	err    error
+}
+
+// CleanlinessCache decorates an inspector with a bounded, deduplicated,
+// never-blocking cache for read paths that only display cleanliness. It is
+// deliberately not used by launch-time preflights, which must observe the
+// worktree as it is at the moment they act.
+//
+// Probe failures (including ErrProbeTimeout) are cached and returned as-is,
+// and a nil report with no error is converted to ErrCleanlinessUnknown, so an
+// indeterminate worktree never reads as clean.
+type CleanlinessCache struct {
+	cache *ProbeCache[cleanlinessResult]
+}
+
+// NewCleanlinessCache caches inspector with the default TTL and bound.
+func NewCleanlinessCache(inspector CleanlinessInspector) *CleanlinessCache {
+	c := &CleanlinessCache{}
+	c.cache = NewProbeCache(0, 0, func(key string) cleanlinessResult {
+		path, maxPerCategory := splitCleanlinessKey(key)
+		report, err := inspector.InspectCleanliness(path, maxPerCategory)
+		if err == nil && report == nil {
+			err = ErrCleanlinessUnknown
+		}
+		return cleanlinessResult{report: report, err: err}
+	})
+	return c
+}
+
+// InspectCleanliness serves the cached report for worktreePath, refreshing in
+// the background once the entry goes stale.
+func (c *CleanlinessCache) InspectCleanliness(worktreePath string, maxPerCategory int) (*CleanlinessReport, error) {
+	if strings.TrimSpace(worktreePath) == "" {
+		return nil, fmt.Errorf("worktree path is required")
+	}
+	if maxPerCategory <= 0 {
+		maxPerCategory = DefaultCleanlinessPathLimit
+	}
+	result := c.cache.Get(cleanlinessKey(worktreePath, maxPerCategory))
+	return result.report, result.err
+}
+
+// cleanlinessKey keys a cache entry by path and bound, since the bound changes
+// how many paths a report carries.
+func cleanlinessKey(worktreePath string, maxPerCategory int) string {
+	return strconv.Itoa(maxPerCategory) + "\x00" + worktreePath
+}
+
+func splitCleanlinessKey(key string) (worktreePath string, maxPerCategory int) {
+	bound, path, _ := strings.Cut(key, "\x00")
+	maxPerCategory, _ = strconv.Atoi(bound)
+	return path, maxPerCategory
 }

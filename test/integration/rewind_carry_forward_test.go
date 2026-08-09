@@ -227,7 +227,7 @@ func TestRewindToPlan_EndToEnd_CarriesForwardContent(t *testing.T) {
 // end-to-end counterpart to iteration-02's reviewer fix: on Large/Moonshot
 // pipelines the orchestrator writes f.Artifacts["plan"] = abs(<run-NNN>/phase-NN/plan/plan.md)
 // when the implementer starts, so after Phase 2 carry-forward the new run
-// carries a RUN-RELATIVE "phase-NN/plan/plan.md" value. The TUI/Orchestrator
+// carries a RUN-RELATIVE "phase-NN/plan/plan.md" value. The desktop app and orchestrator
 // path resolvers must combine that relative value with ActiveRunDir to locate
 // the deep-copied plan in run-002; otherwise the rewind review fails with
 // "no artifact found for the previous phase" and proceed persists an empty
@@ -242,7 +242,7 @@ func TestRewindToPlan_EndToEnd_CarriesForwardContent(t *testing.T) {
 //  1. run-002/phase-NN/plan/plan.md exists with identical content to run-001.
 //  2. f.Artifacts["plan"] on run-002 is run-relative (no absolute, no "run-001").
 //  3. Joining the carried value to ActiveRunDir(run-002) produces a valid path
-//     that stats cleanly — mirrors the fix in app.go / orchestrator/context.go.
+//     that stats cleanly through orchestrator/context.go.
 func TestRewindToImplement_RoadmapPipeline_CarriedPlanPathResolves(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
@@ -407,7 +407,7 @@ func TestRewindToImplement_RoadmapPipeline_CarriedPlanPathResolves(t *testing.T)
 
 	// 3. Joining the run-relative value to ActiveRunDir(run-002) must produce
 	// a valid absolute path that stats cleanly. This is the exact operation
-	// the TUI's resolvePhaseArtifactPath and the orchestrator's
+	// the desktop app's resolvePhaseArtifactPath and the orchestrator's
 	// resolvePlanPath perform after iteration-02's fix — the rewind review
 	// path ("startRewindReviewSessionCmd") and the proceed path
 	// ("reviewProceed") both rely on this resolution.

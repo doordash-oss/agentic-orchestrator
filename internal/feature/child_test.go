@@ -26,23 +26,26 @@ import (
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
-	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
+	"github.com/doordash-oss/agentic-orchestrator/internal/git"
+	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
 )
 
 // childFakeWorktrees is a minimal WorktreeOps fake that also resolves the
 // exact head SHA per path.
 type childFakeWorktrees struct {
 	heads map[string]string
+	clean func(string, int) (*git.CleanlinessReport, error)
 }
 
 func (f *childFakeWorktrees) Create(repoPath, featureSlug, repoName, startPoint string) (string, error) {
 	return "", nil
 }
-func (f *childFakeWorktrees) Remove(string, bool) error             { return nil }
-func (f *childFakeWorktrees) ResetToBase(string, string) error      { return nil }
-func (f *childFakeWorktrees) ResetToBaseLocal(string, string) error { return nil }
-func (f *childFakeWorktrees) ResetToCommit(string, string) error    { return nil }
-func (f *childFakeWorktrees) ExpectedPath(slug, repo string) string { return "" }
+func (f *childFakeWorktrees) Remove(string, bool) error              { return nil }
+func (f *childFakeWorktrees) RemoveRef(string, string, string) error { return nil }
+func (f *childFakeWorktrees) ResetToBase(string, string) error       { return nil }
+func (f *childFakeWorktrees) ResetToBaseLocal(string, string) error  { return nil }
+func (f *childFakeWorktrees) ResetToCommit(string, string) error     { return nil }
+func (f *childFakeWorktrees) ExpectedPath(slug, repo string) string  { return "" }
 func (f *childFakeWorktrees) CurrentHeadSHA(p string) (string, error) {
 	sha, ok := f.heads[p]
 	if !ok || sha == "" {
@@ -50,28 +53,38 @@ func (f *childFakeWorktrees) CurrentHeadSHA(p string) (string, error) {
 	}
 	return sha, nil
 }
+func (f *childFakeWorktrees) CurrentBranch(string) string                    { return "" }
+func (f *childFakeWorktrees) RefSHA(string, string) (string, error)          { return "", nil }
+func (f *childFakeWorktrees) UpdateRef(string, string, string, string) error { return nil }
+func (f *childFakeWorktrees) CreateMergeCandidate(string, string, string, string) (*git.MergeCandidateResult, error) {
+	return nil, nil
+}
+func (f *childFakeWorktrees) InspectCleanliness(path string, max int) (*git.CleanlinessReport, error) {
+	if f.clean != nil {
+		return f.clean(path, max)
+	}
+	return &git.CleanlinessReport{}, nil
+}
 
-func newChildTestManager(t *testing.T, heads map[string]string, clean feature.CleanlinessOps) *feature.Manager {
+func newChildTestManager(t *testing.T, heads map[string]string, clean func(string, int) (*git.CleanlinessReport, error)) *feature.Manager {
 	t.Helper()
 	dir := t.TempDir()
 	store := feature.NewStore(dir)
 	cfg := config.NewDefault()
 	mgr := feature.NewManager(store, cfg)
-	mgr.Worktrees = &childFakeWorktrees{heads: heads}
-	mgr.Branches = newMockBranches(false)
-	mgr.Cleanliness = clean
+	mgr.Worktrees = &childFakeWorktrees{heads: heads, clean: clean}
 	return mgr
 }
 
-// cleanEverywhere is a CleanlinessOps fake reporting every worktree clean.
-func cleanEverywhere() feature.CleanlinessOps {
-	return feature.CleanlinessFunc(func(string, int) (*feature.RepoCleanliness, error) {
-		return &feature.RepoCleanliness{}, nil
-	})
+func cleanEverywhere() func(string, int) (*git.CleanlinessReport, error) {
+	return func(string, int) (*git.CleanlinessReport, error) {
+		return &git.CleanlinessReport{}, nil
+	}
 }
 
 func saveChildTestParent(t *testing.T, mgr *feature.Manager, f *feature.Feature) {
 	t.Helper()
+	f.SchemaVersion = feature.SchemaVersionCurrent
 	if f.ActiveRun == 0 {
 		f.ActiveRun = 1
 	}
@@ -301,17 +314,17 @@ func assertSharedReviewConfigMatches(t *testing.T, parent, child *feature.Featur
 func TestCreateRefactorChildDirtyParentBlocksEverything(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: per-test temp store and fakes isolate state.
-	mgr := newChildTestManager(t, nil, feature.CleanlinessFunc(func(path string, max int) (*feature.RepoCleanliness, error) {
+	mgr := newChildTestManager(t, nil, func(path string, max int) (*git.CleanlinessReport, error) {
 		if strings.Contains(path, "dirty") {
-			return &feature.RepoCleanliness{
+			return &git.CleanlinessReport{
 				Staged:         []string{"a.go"},
 				Untracked:      []string{"tmp.txt"},
 				StagedTotal:    1,
 				UntrackedTotal: 1,
 			}, nil
 		}
-		return &feature.RepoCleanliness{}, nil
-	}))
+		return &git.CleanlinessReport{}, nil
+	})
 	saveChildTestParent(t, mgr, &feature.Feature{
 		ID:     "parent-dirty",
 		Slug:   "parent-dirty",
@@ -345,11 +358,12 @@ func TestCreateRefactorChildDirtyParentBlocksEverything(t *testing.T) {
 	}
 }
 
-func TestCreateRefactorChildFailsWithoutCleanlinessAdapter(t *testing.T) {
+func TestCreateRefactorChildFailsWithoutWorktreeOps(t *testing.T) {
 	t.Parallel()
-	// A nil Cleanliness adapter must fail the launch explicitly — the
-	// dirty-worktree safety check is mandatory and never silently skipped.
+	// The retained worktree seam owns the mandatory cleanliness check. An
+	// unwired seam must fail explicitly rather than silently skipping it.
 	mgr := newChildTestManager(t, nil, nil)
+	mgr.Worktrees = nil
 	saveChildTestParent(t, mgr, &feature.Feature{ID: "parent-noclean", Slug: "parent-noclean", Status: feature.StatusPublished})
 
 	_, err := mgr.CreateRefactorChild("parent-noclean", childTestSpec())
@@ -511,9 +525,10 @@ func TestModifyGuardedSerializesWithCreateChildLocked(t *testing.T) {
 						return nil, nil, fmt.Errorf("parent not eligible: %s", p.Status)
 					}
 					c := &feature.Feature{
-						ID:     "child-guarded",
-						Slug:   "child-guarded",
-						Status: feature.StatusCreated,
+						ID:            "child-guarded",
+						Slug:          "child-guarded",
+						Status:        feature.StatusCreated,
+						SchemaVersion: feature.SchemaVersionCurrent,
 						Parent: &feature.ChildRelationship{
 							ParentID: "parent-guarded",
 							Kind:     feature.ChildKindRefactor,
@@ -642,13 +657,23 @@ func (f *reuseWorktrees) Create(repoPath, featureSlug, repoName, startPoint stri
 	f.created = true
 	return "", nil
 }
-func (f *reuseWorktrees) Remove(string, bool) error             { return nil }
-func (f *reuseWorktrees) ResetToBase(string, string) error      { return nil }
-func (f *reuseWorktrees) ResetToBaseLocal(string, string) error { return nil }
-func (f *reuseWorktrees) ResetToCommit(string, string) error    { return nil }
-func (f *reuseWorktrees) ExpectedPath(slug, repo string) string { return "" }
+func (f *reuseWorktrees) Remove(string, bool) error              { return nil }
+func (f *reuseWorktrees) RemoveRef(string, string, string) error { return nil }
+func (f *reuseWorktrees) ResetToBase(string, string) error       { return nil }
+func (f *reuseWorktrees) ResetToBaseLocal(string, string) error  { return nil }
+func (f *reuseWorktrees) ResetToCommit(string, string) error     { return nil }
+func (f *reuseWorktrees) ExpectedPath(slug, repo string) string  { return "" }
 func (f *reuseWorktrees) CurrentHeadSHA(p string) (string, error) {
 	return f.heads[p], nil
+}
+func (f *reuseWorktrees) CurrentBranch(string) string                    { return "" }
+func (f *reuseWorktrees) RefSHA(string, string) (string, error)          { return "", nil }
+func (f *reuseWorktrees) UpdateRef(string, string, string, string) error { return nil }
+func (f *reuseWorktrees) CreateMergeCandidate(string, string, string, string) (*git.MergeCandidateResult, error) {
+	return nil, nil
+}
+func (f *reuseWorktrees) InspectCleanliness(string, int) (*git.CleanlinessReport, error) {
+	return &git.CleanlinessReport{}, nil
 }
 
 func TestRunSetupValidatesExactBaseOnReuse(t *testing.T) {
@@ -673,11 +698,9 @@ func TestRunSetupValidatesExactBaseOnReuse(t *testing.T) {
 		if err != nil {
 			t.Fatalf("create child: %v", err)
 		}
-		mgr.Branches.(*mocks.MockBranchOperator).CurrentBranchFn = func(string) (string, error) {
-			return child.Repos[0].Branch, nil
-		}
-		// Pretend a previous attempt created the worktree at the expected path.
-		wtPath := t.TempDir()
+		// A previous attempt left a real worktree on the expected branch.
+		wtPath := testutil.InitGitRepo(t)
+		testutil.CreateBranch(t, wtPath, child.Repos[0].Branch)
 		taskKey := "worktree:repo-a"
 		if err := mgr.Store.Modify(child.ID, func(f *feature.Feature) error {
 			task := f.Run().Setup.Tasks[taskKey]
@@ -742,26 +765,28 @@ func TestReconcilePendingChildCreations(t *testing.T) {
 	store := feature.NewStore(t.TempDir())
 
 	parent := &feature.Feature{
-		ID:           "p-intent",
-		Slug:         "p-intent",
-		Status:       feature.StatusPublished,
-		ActiveRun:    1,
-		RunCount:     1,
-		Checkpoints:  feature.Checkpoints{RoadmapReview: true},
-		Models:       config.ModelConfig{Review: "parent/review-model"},
-		Effort:       config.EffortConfig{Implementation: "high"},
-		RiskLevel:    feature.RiskMedium,
-		ExitCriteria: "submitted exit criteria",
-		Inquireness:  feature.InquirenessMedium,
+		ID:            "p-intent",
+		Slug:          "p-intent",
+		Status:        feature.StatusPublished,
+		ActiveRun:     1,
+		RunCount:      1,
+		Checkpoints:   feature.Checkpoints{RoadmapReview: true},
+		Models:        config.ModelConfig{Review: "parent/review-model"},
+		Effort:        config.EffortConfig{Implementation: "high"},
+		RiskLevel:     feature.RiskMedium,
+		ExitCriteria:  "submitted exit criteria",
+		Inquireness:   feature.InquirenessMedium,
+		SchemaVersion: feature.SchemaVersionCurrent,
 	}
 	intent := &feature.ChildCreationIntent{
 		ChildID: "c-intent",
 		Kind:    feature.ChildKindRefactor,
 		Child: feature.Feature{
-			ID:     "c-intent",
-			Name:   "R",
-			Slug:   "r",
-			Status: feature.StatusSettingUpWorktrees,
+			ID:            "c-intent",
+			Name:          "R",
+			Slug:          "r",
+			Status:        feature.StatusSettingUpWorktrees,
+			SchemaVersion: feature.SchemaVersionCurrent,
 			Repos: []feature.FeatureRepo{
 				{Name: "repo-a", Path: "/src/repo-a", Branch: "feature/r-c", BaseBranch: "main"},
 			},
@@ -842,15 +867,16 @@ func TestReconcilePendingChildCreationsToleratesBrokenParentRunState(t *testing.
 	// active run.yaml must not silently swallow startup recovery: the intent
 	// is still rolled forward and cleared.
 	store := feature.NewStore(t.TempDir())
-	parent := &feature.Feature{ID: "p-norun", Slug: "p-norun", Status: feature.StatusPublished, ActiveRun: 1, RunCount: 1}
+	parent := &feature.Feature{ID: "p-norun", Slug: "p-norun", Status: feature.StatusPublished, ActiveRun: 1, RunCount: 1, SchemaVersion: feature.SchemaVersionCurrent}
 	parent.PendingChild = &feature.ChildCreationIntent{
 		ChildID: "c-norun",
 		Kind:    feature.ChildKindRefactor,
 		Child: feature.Feature{
-			ID:     "c-norun",
-			Name:   "R",
-			Slug:   "r",
-			Status: feature.StatusSettingUpWorktrees,
+			ID:            "c-norun",
+			Name:          "R",
+			Slug:          "r",
+			Status:        feature.StatusSettingUpWorktrees,
+			SchemaVersion: feature.SchemaVersionCurrent,
 			Repos: []feature.FeatureRepo{
 				{Name: "repo-a", Path: "/src/repo-a", Branch: "feature/r-c", BaseBranch: "main"},
 			},
@@ -963,10 +989,8 @@ func TestFailActiveSetupParksRunningSetupRetryable(t *testing.T) {
 
 	// Durably retryable through the ordinary gate: the retried run skips
 	// nothing it cannot validate and completes against the exact base.
-	mgr.Branches.(*mocks.MockBranchOperator).CurrentBranchFn = func(string) (string, error) {
-		return parked.Repos[0].Branch, nil
-	}
-	wtPath := t.TempDir()
+	wtPath := testutil.InitGitRepo(t)
+	testutil.CreateBranch(t, wtPath, parked.Repos[0].Branch)
 	if err := mgr.Store.Modify(child.ID, func(f *feature.Feature) error {
 		task := f.Run().Setup.Tasks["worktree:repo"]
 		task.Path = wtPath

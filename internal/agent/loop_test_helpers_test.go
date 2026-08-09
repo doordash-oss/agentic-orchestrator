@@ -67,16 +67,6 @@ const (
 	testRepoNameInfra = "infra"
 )
 
-// Cycle Communication Contract path-template snippets. These describe the
-// well-known artifact paths a cross-repo cycle prompt must reference, and
-// are checked verbatim in both the rebase-loop and review-comments-loop
-// prompt tests.
-const (
-	wantProgressPathTemplate           = "`progress.md`: `{phase_dir}/progress.md`"
-	wantVerificationReportPathTemplate = "`verification-report.yaml`: `{iteration_dir}/verification-report.yaml`"
-	wantPhaseCompletePathTemplate      = "`phase_complete`: `{iteration_dir}/phase_complete`"
-)
-
 type loopTestFeatureOptions struct {
 	Name         string
 	Slug         string

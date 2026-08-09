@@ -193,7 +193,7 @@ func TestUpdateFeatureConfig_QuiescentWritesAllAxes(t *testing.T) {
 // TestUpdateFeatureConfig_NonQuiescentWritesAllThreeAxes verifies that
 // running, needs-review, and active repo-cycle features can still update the
 // persisted config. The active session keeps its current snapshot; the new
-// values are picked up by the next phase or restart.
+// values are picked up by the next newly-created session.
 func TestUpdateFeatureConfig_NonQuiescentWritesAllThreeAxes(t *testing.T) {
 	cases := []struct {
 		name  string
@@ -205,18 +205,6 @@ func TestUpdateFeatureConfig_NonQuiescentWritesAllThreeAxes(t *testing.T) {
 		{"plan-needs-review", func(f *feature.Feature) { f.Status = feature.StatusPlanNeedsReview }},
 		{"research-needs-review", func(f *feature.Feature) {
 			f.Status = feature.StatusResearchNeedsReview
-		}},
-		{"active-repo-cycle-running", func(f *feature.Feature) {
-			f.Status = feature.StatusPublished
-			f.RepoCycles = map[string]*feature.RepoCycleState{
-				repoName: {Status: feature.RepoCycleRunning},
-			}
-		}},
-		{"active-repo-cycle-reviewing", func(f *feature.Feature) {
-			f.Status = feature.StatusPublished
-			f.RepoCycles = map[string]*feature.RepoCycleState{
-				repoName: {Status: feature.RepoCycleReviewing},
-			}
 		}},
 	}
 

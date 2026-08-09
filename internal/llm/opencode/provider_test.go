@@ -746,16 +746,6 @@ func TestEnvVarsToExclude_Nil(t *testing.T) {
 	}
 }
 
-// TestSupportsFinishOrViolateNudge_True proves OpenCode opts into the shared
-// finish-or-violate auto-continuation retry: when a session ends its turn
-// without producing the required completion artifacts, the harness may nudge the
-// same live session to finish before declaring a protocol violation.
-func TestSupportsFinishOrViolateNudge_True(t *testing.T) {
-	if !New().SupportsFinishOrViolateNudge() {
-		t.Fatal("SupportsFinishOrViolateNudge() = false, want true")
-	}
-}
-
 func TestProviderImplementsExpectedInterfaces(t *testing.T) {
 	var p any = New()
 	if _, ok := p.(llm.LLMProvider); !ok {

@@ -19,12 +19,13 @@ import "go.uber.org/fx"
 // SessionParams holds fx-injected parameters for the session module.
 type SessionParams struct {
 	fx.In
-	EventCh chan interface{} `name:"eventCh"`
+	EventCh  chan interface{} `name:"eventCh"`
+	StateDir string           `name:"stateDir"`
 }
 
 // Module provides the session Manager via fx.
 var Module = fx.Module("session",
 	fx.Provide(func(p SessionParams) *Manager {
-		return NewManager(p.EventCh)
+		return NewRecoveringManager(p.EventCh, p.StateDir)
 	}),
 )

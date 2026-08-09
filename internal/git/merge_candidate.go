@@ -25,11 +25,7 @@ import (
 // MergeCandidateResult holds the outcome of creating a merge candidate without
 // advancing the parent ref.
 type MergeCandidateResult struct {
-	// CandidateSHA is the full SHA of the explicit two-parent no-fast-forward
-	// merge commit created in a temporary detached worktree.
-	CandidateSHA string
-	// ConflictFiles lists the files that conflicted (empty if the merge
-	// succeeded).
+	CandidateSHA  string
 	ConflictFiles []string
 }
 
@@ -65,8 +61,12 @@ func CreateMergeCandidate(mainRepo, parentTip, childHead, message string) (*Merg
 		_ = exec.Command("git", "-C", mainRepo, "worktree", "remove", "--force", tmpWorktree).Run()
 	}()
 
-	// Merge the child head with --no-ff to force an explicit merge commit.
-	mergeCmd := exec.Command("git", "-C", tmpWorktree, "merge", "--no-ff", "-m", message, childHead)
+	// Merge the child head with --no-ff to force an explicit merge commit. The
+	// merge commit needs a committer identity; fall back to the Agentico
+	// identity when the environment has none configured.
+	mergeArgs := append([]string{"-C", tmpWorktree}, identityFallbackArgs(tmpWorktree)...)
+	mergeArgs = append(mergeArgs, "merge", "--no-ff", "-m", message, childHead)
+	mergeCmd := exec.Command("git", mergeArgs...)
 	out, err := mergeCmd.CombinedOutput()
 	if err != nil {
 		// Check if this is a conflict (merge in progress).

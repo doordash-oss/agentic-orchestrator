@@ -43,13 +43,12 @@ const (
 	// atomically writes the three editable per-feature config axes
 	// (Models, Inquireness, Checkpoints). Carries only {Type, FeatureID};
 	// the typed before/after diff flows through observe.Observer.ConfigChanged,
-	// which owns events.jsonl emission with run_number tagging. The TUI
-	// consumes this as OrchFeatureConfigChangedMsg and reloads the feature.
+	// which owns events.jsonl emission with run_number tagging. The desktop SSE
+	// consumer treats this event as an invalidation and reloads the feature.
 	FeatureConfigChanged
-	// NeedUserInputRequired fires when an implement iteration emits
-	// `## Iteration State: NEED_USER_INPUT` and the orchestrator persists
-	// the gate artifact. The TUI consumes it to surface a `Needs user input`
-	// banner. Message carries the agent's gate summary.
+	// NeedUserInputRequired fires when deterministic verification creates a
+	// durable capability-decision gate. The desktop app consumes it to surface
+	// a `Needs user input` banner. Message carries the harness-authored summary.
 	NeedUserInputRequired
 	SetupStarted
 	SetupProgress

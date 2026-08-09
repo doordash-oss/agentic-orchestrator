@@ -175,21 +175,10 @@ func TopModelIDs(catalog []ModelInfo, n int) []string {
 	return ids
 }
 
-// ModelsByCategory returns all models matching the given category.
-func ModelsByCategory(catalog []ModelInfo, category string) []ModelInfo {
-	var out []ModelInfo
-	for _, m := range catalog {
-		if m.Category == category {
-			out = append(out, m)
-		}
-	}
-	return out
-}
-
-// MostCapableFrom returns the most capable model from the catalog.
+// mostCapableFrom returns the most capable model from the catalog.
 // Selection: highest categoryRank, ties broken by largest ContextWindow.
 // Returns false if the catalog is empty.
-func MostCapableFrom(catalog []ModelInfo) (ModelInfo, bool) {
+func mostCapableFrom(catalog []ModelInfo) (ModelInfo, bool) {
 	if len(catalog) == 0 {
 		return ModelInfo{}, false
 	}
@@ -205,30 +194,10 @@ func MostCapableFrom(catalog []ModelInfo) (ModelInfo, bool) {
 	return best, true
 }
 
-// CheapestFrom returns the cheapest (lowest category rank) model.
-// Skips models with unranked categories. Returns false if no ranked models exist.
-func CheapestFrom(catalog []ModelInfo) (ModelInfo, bool) {
-	var best ModelInfo
-	bestRank := 0
-	found := false
-	for _, m := range catalog {
-		r := categoryRank[m.Category]
-		if r == 0 {
-			continue
-		}
-		if !found || r < bestRank {
-			best = m
-			bestRank = r
-			found = true
-		}
-	}
-	return best, found
-}
-
-// BalancedFrom returns a balanced-category model from the catalog.
+// balancedFrom returns a balanced-category model from the catalog.
 // If no model has category "balanced", returns the model closest to rank 2.
 // Returns false if the catalog is empty or all models are unranked.
-func BalancedFrom(catalog []ModelInfo) (ModelInfo, bool) {
+func balancedFrom(catalog []ModelInfo) (ModelInfo, bool) {
 	// First try exact match
 	for _, m := range catalog {
 		if m.Category == "balanced" {
@@ -255,21 +224,4 @@ func BalancedFrom(catalog []ModelInfo) (ModelInfo, bool) {
 		}
 	}
 	return best, found
-}
-
-// LargestContextFrom returns the model with the largest context window.
-// Ties are broken by higher category rank.
-// Returns false if the catalog is empty.
-func LargestContextFrom(catalog []ModelInfo) (ModelInfo, bool) {
-	if len(catalog) == 0 {
-		return ModelInfo{}, false
-	}
-	best := catalog[0]
-	for _, m := range catalog[1:] {
-		if m.ContextWindow > best.ContextWindow ||
-			(m.ContextWindow == best.ContextWindow && categoryRank[m.Category] > categoryRank[best.Category]) {
-			best = m
-		}
-	}
-	return best, true
 }

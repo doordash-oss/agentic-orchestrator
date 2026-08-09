@@ -15,6 +15,7 @@
 package server
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -24,17 +25,24 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/permission"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
-const maxFeatureDetailHistoricalRuns = 5
+const (
+	maxFeatureDetailHistoricalRuns = 5
+	promptSnapshotTooLargeCode     = "prompt_snapshot_too_large"
+)
+
+var errNeedUserInputGateCollectionTooLarge = errors.New("pending prompt snapshot exceeds the safe response limit")
 
 // Tool names as reported by the LLM control protocol; shared across
 // read_model.go, session_model.go, sse.go and their tests.
@@ -50,27 +58,32 @@ const (
 // AskUserQuestion control request has no readable question of its own.
 const agentQuestionPrompt = "Agent has a question"
 
-// actionInputKindEnum and actionInputKindString are ActionInputDTO.Kind
+// HelpQueue.Kind values. "question" and "input" both await the user; only
+// "coordinating" is a byproduct of a phase session parking between turns, which
+// no human needs to answer.
+const (
+	helpKindQuestion     = "question"
+	helpKindInput        = "input"
+	helpKindCoordinating = "coordinating"
+)
+
+// actionInputKindEnum and actionInputKindString are ActionInput.Kind
 // values: the former for inputs whose value must be one of
-// ActionInputDTO.Options, the latter for free-form string inputs.
+// ActionInput.Options, the latter for free-form string inputs.
 const (
 	actionInputKindEnum   = "enum"
 	actionInputKindString = "string"
 )
 
-// disabledCycleActive is the ActionDisabledReasonDTO.Code used when a
-// post-publish action is blocked by another active feature cycle.
-const disabledCycleActive = "cycle_active"
-
-// disabledNotLocalOnly is the ActionDisabledReasonDTO.Code used when merge
+// disabledNotLocalOnly is the ActionDisabledReason.Code used when merge
 // is requested on a feature that is not local-only.
 const disabledNotLocalOnly = "not_local_only"
 
-// disabledStatusNotAllowed is the ActionDisabledReasonDTO.Code used when an
+// disabledStatusNotAllowed is the ActionDisabledReason.Code used when an
 // action is blocked solely by the feature's current status.
 const disabledStatusNotAllowed = "status_not_allowed"
 
-// controlRequestStatusPending is the ControlRequestDTO/TranscriptMessageDTO
+// controlRequestStatusPending is the ControlRequest/TranscriptMessage
 // Status value for a control request awaiting a user decision.
 const controlRequestStatusPending = "pending"
 
@@ -91,10 +104,9 @@ const (
 	actionRefactor       = "refactor"
 	actionRestart        = "restart"
 	actionResume         = "resume"
+	actionSetup          = "setup"
 	actionStart          = "start"
 	actionRetry          = "retry"
-	actionReviewComments = "review-comments"
-	actionReviewDecision = "review-decision"
 	actionRewind         = "rewind"
 )
 
@@ -104,12 +116,12 @@ func revisionForAny(v any) string {
 	return hex.EncodeToString(sum[:12])
 }
 
-func (h *apiHandler) featureDetailDTO(f *feature.Feature) (FeatureDetailDTO, error) {
+func (h *apiHandler) featureDetailDTO(f *feature.Feature) (FeatureDetail, error) {
 	var activeRelationshipChild *feature.Feature
 	var relationshipChildren *feature.RelationshipChildren
 	active := runSummaryDTO(f.Run(), f)
 	historyRunNumbers := boundedHistoricalRunNumbers(f.ActiveRun, f.RunCount, maxFeatureDetailHistoricalRuns)
-	history := make([]RunSummaryDTO, 0, len(historyRunNumbers))
+	history := make([]RunSummary, 0, len(historyRunNumbers))
 	if h.store != nil {
 		for _, n := range historyRunNumbers {
 			run, err := h.store.LoadRun(f.ID, n)
@@ -172,24 +184,29 @@ func (h *apiHandler) featureDetailDTO(f *feature.Feature) (FeatureDetailDTO, err
 		}
 		relationship := relationshipChildDTO(f)
 		detail.Relationship = relationship
+		if len(f.ReviewFeedback) > 0 {
+			detail.ReviewFeedback = append(detail.ReviewFeedback, f.ReviewFeedback...)
+		}
 	} else {
 		children, err := h.relationshipChildrenOf(f.ID, nil)
 		if err != nil {
-			return FeatureDetailDTO{}, err
+			return FeatureDetail{}, err
 		}
 		relationshipChildren = children
 		detail.ActiveChild = relationshipChildDTO(children.Active)
 		detail.ChildHistory = relationshipChildDTOs(children.Closed)
+		detail.ChildHistoryTotal = len(detail.ChildHistory)
 		activeRelationshipChild = children.Active
 	}
-	detail.Description = safeDisplayText(f.Description, 500)
-	detail.Summary = safeDisplayText(f.Summary, 500)
+	detail.Description = SafeDisplayText(f.Description, 500)
+	detail.Summary = SafeDisplayText(f.Summary, 500)
+	detail.WaitReason = SafeDisplayText(f.KBWaitMessage, 240)
 	detail.Pipeline = string(f.Pipeline)
 	detail.Models = f.Models
 	detail.Effort = f.Effort
 	detail.Inquireness = f.Inquireness
 	detail.RiskLevel = f.RiskLevel
-	detail.ExitCriteria = safeDisplayText(f.ExitCriteria, 500)
+	detail.ExitCriteria = SafeDisplayText(f.ExitCriteria, 500)
 	autoReviewEnabled, autoReviewSource := feature.ResolveAutomaticReview(
 		f.AutomaticReviewMode,
 		h.configOrDefault().Defaults.AutomaticReviewEnabled,
@@ -204,7 +221,7 @@ func (h *apiHandler) featureDetailDTO(f *feature.Feature) (FeatureDetailDTO, err
 	detail.RepoStatus = h.repoStatusDTOs(f)
 	detail.Timing = timingDTO(f)
 	detail.Cost = costDTO(f)
-	detail.ReviewGate = ReviewGateDTO{
+	detail.ReviewGate = ReviewGate{
 		ReviewingGate:     f.ReviewingGate,
 		ReviewFixing:      f.ReviewFixing,
 		ValidatingPlan:    f.ValidatingPlan,
@@ -222,7 +239,7 @@ func (h *apiHandler) featureDetailDTO(f *feature.Feature) (FeatureDetailDTO, err
 		attachImpactPreview(detail.Actions, actionDelete, h.parentCascadeDeleteImpactPreview(f, relationshipChildren))
 	}
 	if childHasIntegrationAttention(activeRelationshipChild) {
-		appendDisabledReason(detail.Actions, ActionDisabledReasonDTO{
+		appendDisabledReason(detail.Actions, ActionDisabledReason{
 			Code:    "integration_attention",
 			Message: "the active child relationship requires integration attention",
 		}, actionDelete)
@@ -230,17 +247,18 @@ func (h *apiHandler) featureDetailDTO(f *feature.Feature) (FeatureDetailDTO, err
 	if !f.IsChild() && detail.ActiveChild == nil {
 		if reason, dirty := h.refactorEntryDisabledReason(f); dirty {
 			disableAction(detail.Actions, actionRefactor, reason)
+			disableAction(detail.Actions, actionReviewFeedback, reason)
+			disableAction(detail.Actions, actionRebase, reason)
 		}
 	}
-	detail.Cycle = activeCycleDTO(f)
 	if f.HasTerminalFailure() {
-		detail.Failure = &FailureDTO{
+		detail.Failure = &Failure{
 			Type:    f.FailureType,
-			Message: safeDisplayText(f.LastError, 240),
+			Message: SafeDisplayText(f.LastError, 240),
 		}
 	}
-	if f.PendingNeedUserInputPath != "" {
-		gate := needUserInputGateDTO(f.ID, entityFeature, "", "", f.CurrentIteration, f.InputNotifications, f.PendingNeedUserInputPath)
+	if f.Status == feature.StatusNeedUserInput && f.PendingNeedUserInputPath != "" {
+		gate := needUserInputGateDTO(f.ID, entityFeature, "", f.CurrentIteration, f.InputNotifications, f.PendingNeedUserInputPath)
 		detail.NeedUserInput = &gate
 	}
 	detail.Warnings = append(detail.Warnings, effortDriftWarnings(f, h.registry)...)
@@ -255,7 +273,7 @@ func childHasIntegrationAttention(child *feature.Feature) bool {
 	return tx.Phase == feature.TransactionPhaseAttention || tx.Attention != "" || tx.AnyApplyAttention()
 }
 
-func appendDisabledReason(actions []ActionDTO, reason ActionDisabledReasonDTO, excludedActionID string) {
+func appendDisabledReason(actions []Action, reason ActionDisabledReason, excludedActionID string) {
 	for i := range actions {
 		if actions[i].Enabled || actions[i].ID == excludedActionID {
 			continue
@@ -266,46 +284,80 @@ func appendDisabledReason(actions []ActionDTO, reason ActionDisabledReasonDTO, e
 
 // refactorEntryDisabledReason reports the dirty_parent disabled reason for a
 // refactor-eligible parent whose worktrees carry uncommitted changes. When
-// the cleanliness capability is wired it is the authoritative check — its
+// the worktree capability is wired it is the authoritative check — its
 // staged/unstaged/untracked inspection matches the launch-time preflight —
 // and the reason carries the same structured per-repository diagnostics the
 // parent_worktrees_dirty mutation error returns, so clients can present the
 // remediation immediately instead of only after a failed submission. Without
 // the capability, the coarser freshness probe keeps the historical boolean.
-func (h *apiHandler) refactorEntryDisabledReason(f *feature.Feature) (ActionDisabledReasonDTO, bool) {
+//
+// A repository whose state could not be determined — probe timeout, failure,
+// or unknown freshness — blocks entry too: these actions rewrite the parent's
+// worktrees, so an unverifiable worktree must never pass as a clean one.
+func (h *apiHandler) refactorEntryDisabledReason(f *feature.Feature) (ActionDisabledReason, bool) {
 	if f == nil {
-		return ActionDisabledReasonDTO{}, false
+		return ActionDisabledReason{}, false
 	}
-	reason := ActionDisabledReasonDTO{
+	reason := ActionDisabledReason{
 		Code:    "dirty_parent",
-		Message: "parent repositories must be clean before launching a refactor child",
+		Message: "worktree has uncommitted changes",
 	}
 	if h.cleanliness != nil {
-		if payload := h.dirtyRepoDiagnostics(f.Repos); len(payload) > 0 {
+		payload, indeterminate := h.dirtyRepoDiagnostics(f.Repos)
+		if len(payload) > 0 {
 			reason.Target = map[string]any{"repos": payload}
 			return reason, true
 		}
-		return ActionDisabledReasonDTO{}, false
+		if len(indeterminate) > 0 {
+			return unknownWorktreeStateReason(indeterminate), true
+		}
+		return ActionDisabledReason{}, false
 	}
 	if h.freshness == nil {
-		return ActionDisabledReasonDTO{}, false
+		return ActionDisabledReason{}, false
 	}
-	for _, repo := range f.Repos {
-		if h.freshness.Freshness(f, repo) == RepoFreshnessLocalChanges {
+	var indeterminate []string
+	for name, freshness := range h.probeRepoFreshness(f) {
+		if freshness == RepoFreshnessLocalChanges {
 			return reason, true
 		}
+		if freshness == RepoFreshnessUnknown {
+			indeterminate = append(indeterminate, name)
+		}
 	}
-	return ActionDisabledReasonDTO{}, false
+	if len(indeterminate) > 0 {
+		sort.Strings(indeterminate)
+		return unknownWorktreeStateReason(indeterminate), true
+	}
+	return ActionDisabledReason{}, false
+}
+
+// unknownWorktreeStateReason blocks an entry action whose preconditions could
+// not be evaluated, naming the repositories whose state is unknown.
+func unknownWorktreeStateReason(repos []string) ActionDisabledReason {
+	return ActionDisabledReason{
+		Code:    "worktree_state_unknown",
+		Message: "worktree state could not be determined; a clean worktree cannot be confirmed",
+		Target:  map[string]any{"repos": repos},
+	}
 }
 
 // dirtyRepoDiagnostics converts the dirty parent repositories into the
-// categorized payload shared with the launch-time error mapping.
-func (h *apiHandler) dirtyRepoDiagnostics(repos []feature.FeatureRepo) []map[string]any {
+// categorized payload shared with the launch-time error mapping. The second
+// return names repositories whose worktree could not be read at all, which
+// callers must treat as not clean. A probe that only exceeded its bound is
+// omitted from both: it carries no evidence either way, and blocking on it
+// would permanently disable actions on a repo slower than the bound.
+func (h *apiHandler) dirtyRepoDiagnostics(repos []feature.FeatureRepo) ([]map[string]any, []string) {
 	if h.cleanliness == nil {
-		return nil
+		return nil, nil
 	}
-	dirty := make([]feature.RepoDirtyDiagnostics, 0, len(repos))
-	for _, repo := range repos {
+	// Inspections shell out to git per repo; run them concurrently and keep
+	// the declared repo order for the payload.
+	reports := make([]*feature.RepoDirtyDiagnostics, len(repos))
+	unknown := make([]string, len(repos))
+	var wg sync.WaitGroup
+	for i, repo := range repos {
 		path := repo.WorktreePath
 		if path == "" {
 			path = repo.Path
@@ -313,46 +365,73 @@ func (h *apiHandler) dirtyRepoDiagnostics(repos []feature.FeatureRepo) []map[str
 		if path == "" {
 			continue
 		}
-		report, err := h.cleanliness.InspectCleanliness(path, feature.DefaultDirtyPathLimit)
-		if err != nil || report == nil || !report.Dirty() {
-			continue
+		wg.Add(1)
+		go func(i int, name, path string) {
+			defer wg.Done()
+			report, err := h.cleanliness.InspectCleanliness(path, feature.DefaultDirtyPathLimit)
+			if err != nil || report == nil {
+				// A probe that merely ran out of time says nothing about the
+				// worktree — a repo slower than the bound would be blocked on
+				// every attempt, with retrying futile. Only an unreadable
+				// worktree is treated as unverifiable; launch-time inspection
+				// re-checks against the uncached authority either way.
+				if !errors.Is(err, git.ErrProbeTimeout) {
+					unknown[i] = name
+				}
+				return
+			}
+			if !report.Dirty() {
+				return
+			}
+			reports[i] = &feature.RepoDirtyDiagnostics{
+				Repo:           name,
+				Path:           path,
+				Staged:         report.Staged,
+				Unstaged:       report.Unstaged,
+				Untracked:      report.Untracked,
+				StagedTotal:    report.StagedTotal,
+				UnstagedTotal:  report.UnstagedTotal,
+				UntrackedTotal: report.UntrackedTotal,
+			}
+		}(i, repo.Name, path)
+	}
+	wg.Wait()
+	dirty := make([]feature.RepoDirtyDiagnostics, 0, len(repos))
+	for _, report := range reports {
+		if report != nil {
+			dirty = append(dirty, *report)
 		}
-		dirty = append(dirty, feature.RepoDirtyDiagnostics{
-			Repo:           repo.Name,
-			Path:           path,
-			Staged:         report.Staged,
-			Unstaged:       report.Unstaged,
-			Untracked:      report.Untracked,
-			StagedTotal:    report.StagedTotal,
-			UnstagedTotal:  report.UnstagedTotal,
-			UntrackedTotal: report.UntrackedTotal,
-		})
+	}
+	indeterminate := make([]string, 0, len(repos))
+	for _, name := range unknown {
+		if name != "" {
+			indeterminate = append(indeterminate, name)
+		}
 	}
 	if len(dirty) == 0 {
-		return nil
+		return nil, indeterminate
 	}
-	return dirtyDiagnosticsPayload(dirty)
+	return dirtyDiagnosticsPayload(dirty), indeterminate
 }
 
-func disableAction(actions []ActionDTO, actionID string, reason ActionDisabledReasonDTO) {
+func disableAction(actions []Action, actionID string, reason ActionDisabledReason) {
 	for i := range actions {
 		if actions[i].ID != actionID || !actions[i].Enabled {
 			continue
 		}
 		actions[i].Enabled = false
-		actions[i].DisabledReasons = []ActionDisabledReasonDTO{reason}
+		actions[i].DisabledReasons = []ActionDisabledReason{reason}
 		return
 	}
 }
 
-func featureDetailFromSummary(summary FeatureSummary) FeatureDetailDTO {
-	return FeatureDetailDTO{
+func featureDetailFromSummary(summary FeatureSummary) FeatureDetail {
+	return FeatureDetail{
 		ID:           summary.ID,
 		Name:         summary.Name,
 		Slug:         summary.Slug,
 		Status:       summary.Status,
 		CurrentPhase: summary.CurrentPhase,
-		Cycle:        summary.Cycle,
 		ActiveRun:    summary.ActiveRun,
 		RunCount:     summary.RunCount,
 		Repos:        summary.Repos,
@@ -360,9 +439,25 @@ func featureDetailFromSummary(summary FeatureSummary) FeatureDetailDTO {
 		Checkpoints:  summary.Checkpoints,
 		Progress:     summary.Progress,
 		Warnings:     summary.Warnings,
-		ActiveChild:  summary.ActiveChild,
-		ChildHistory: summary.ChildHistory,
 	}
+}
+
+// listChildHistoryLimit caps how many closed children a list summary carries.
+// The list projection is unbounded otherwise: every closed child adds an entry
+// and the aggregate can exceed a client's payload budget. Clients read the
+// complete history from the feature detail route.
+const listChildHistoryLimit = 5
+
+// listChildHistory bounds a closed-child history to the newest
+// listChildHistoryLimit entries, reporting the true total and whether older
+// entries were dropped.
+func listChildHistory(closed []*feature.Feature) (entries []RelationshipChildSummary, total int, truncated bool) {
+	total = len(closed)
+	if total > listChildHistoryLimit {
+		closed = closed[:listChildHistoryLimit]
+		truncated = true
+	}
+	return relationshipChildSummaryDTOs(closed), total, truncated
 }
 
 func (h *apiHandler) relationshipChildrenOf(parentID string, loaded []*feature.Feature) (*feature.RelationshipChildren, error) {
@@ -422,7 +517,11 @@ func childSetupComplete(f *feature.Feature) bool {
 	return setup != nil && setup.Status == feature.SetupStatusDone
 }
 
-func relationshipChildDTO(child *feature.Feature) *RelationshipChild {
+// relationshipChildSummaryDTO builds the list-safe projection: every
+// relationship field except the preserved diff body, which is unbounded per
+// parent once several children have closed and therefore belongs only to the
+// detail route (see relationshipChildDTO).
+func relationshipChildSummaryDTO(child *feature.Feature) *RelationshipChildSummary {
 	if child == nil {
 		return nil
 	}
@@ -430,7 +529,7 @@ func relationshipChildDTO(child *feature.Feature) *RelationshipChild {
 	if child.StartedAt != nil {
 		startedAt = *child.StartedAt
 	}
-	dto := &RelationshipChild{
+	dto := &RelationshipChildSummary{
 		ID:                child.ID,
 		Name:              child.Name,
 		Kind:              child.Parent.Kind,
@@ -448,9 +547,9 @@ func relationshipChildDTO(child *feature.Feature) *RelationshipChild {
 	if setup := child.Run().Setup; setup != nil {
 		dto.SetupStatus = string(setup.Status)
 		if setup.Status == feature.SetupStatusFailed {
-			dto.LastError = safeDisplayText(setup.LastError, 240)
+			dto.LastError = SafeDisplayText(setup.LastError, 240)
 			if dto.LastError == "" {
-				dto.LastError = safeDisplayText(child.LastError, 240)
+				dto.LastError = SafeDisplayText(child.LastError, 240)
 			}
 		}
 	}
@@ -461,7 +560,7 @@ func relationshipChildDTO(child *feature.Feature) *RelationshipChild {
 	if child.Parent.CloseOutcome != "" {
 		dto.Outcome = RelationshipChildOutcome(child.Parent.CloseOutcome)
 		dto.ClosedAt = child.Parent.ClosedAt
-		dto.DiffSummary = child.Parent.DiffSummary
+		dto.HasDiffSummary = child.Parent.DiffSummary != ""
 		dto.RelationshipState = child.Parent.CloseOutcome
 		switch child.Parent.CloseOutcome {
 		case feature.ChildCloseOutcomeCompleted:
@@ -477,7 +576,7 @@ func relationshipChildDTO(child *feature.Feature) *RelationshipChild {
 		if tx.Attention != "" {
 			dto.Attention = append(dto.Attention, RelationshipAttention{
 				Code:    "integration_attention",
-				Message: safeDisplayText(tx.Attention, 240),
+				Message: SafeDisplayText(tx.Attention, 240),
 			})
 		}
 		for _, entry := range tx.Entries {
@@ -498,17 +597,58 @@ func relationshipChildDTO(child *feature.Feature) *RelationshipChild {
 			if entry.Diagnostics != "" {
 				dto.Attention = append(dto.Attention, RelationshipAttention{
 					Code:    "integration_attention",
-					Message: safeDisplayText(entry.Diagnostics, 240),
+					Message: SafeDisplayText(entry.Diagnostics, 240),
 					Repo:    entry.Repo,
 				})
 			}
 			if entry.CleanupWarning != "" {
 				dto.CleanupWarnings = append(dto.CleanupWarnings, RelationshipCleanupWarning{
-					Message: safeDisplayText(entry.CleanupWarning, 240),
+					Message: SafeDisplayText(entry.CleanupWarning, 240),
+					Repo:    entry.Repo,
+				})
+			}
+			if entry.TailWarning != "" {
+				dto.CleanupWarnings = append(dto.CleanupWarnings, RelationshipCleanupWarning{
+					Message: SafeDisplayText("review-feedback tail: "+entry.TailWarning, 240),
 					Repo:    entry.Repo,
 				})
 			}
 		}
+	}
+	return dto
+}
+
+// relationshipChildDTO builds the detail projection: the summary plus the
+// preserved diff body.
+func relationshipChildDTO(child *feature.Feature) *RelationshipChild {
+	summary := relationshipChildSummaryDTO(child)
+	if summary == nil {
+		return nil
+	}
+	dto := &RelationshipChild{
+		ID:                summary.ID,
+		Name:              summary.Name,
+		Kind:              summary.Kind,
+		DisplayToken:      summary.DisplayToken,
+		DisplayState:      summary.DisplayState,
+		Pipeline:          summary.Pipeline,
+		Status:            summary.Status,
+		SetupStatus:       summary.SetupStatus,
+		RelationshipState: summary.RelationshipState,
+		Outcome:           summary.Outcome,
+		StartedAt:         summary.StartedAt,
+		ClosedAt:          summary.ClosedAt,
+		Cost:              summary.Cost,
+		IntegrationState:  summary.IntegrationState,
+		Attention:         summary.Attention,
+		CleanupWarnings:   summary.CleanupWarnings,
+		LastError:         summary.LastError,
+		HasDiffSummary:    summary.HasDiffSummary,
+	}
+	// Re-bound at read time: records persisted before the write-time bound
+	// existed may hold raw multi-megabyte diffs.
+	if summary.HasDiffSummary {
+		dto.DiffSummary = feature.BoundDiffSummary(child.Parent.DiffSummary)
 	}
 	return dto
 }
@@ -523,107 +663,41 @@ func relationshipChildDTOs(children []*feature.Feature) []RelationshipChild {
 	return out
 }
 
-func activeCycleDTO(f *feature.Feature) *CycleDTO {
-	if f == nil {
-		return nil
-	}
-	if f.ActiveCycle != nil && f.ActiveCycle.Type.IsValid() {
-		return &CycleDTO{
-			Type:      string(f.ActiveCycle.Type),
-			Status:    f.ActiveCycle.Status,
-			Count:     f.ActiveCycle.Count,
-			Iteration: f.ActiveCycle.Iteration,
+func relationshipChildSummaryDTOs(children []*feature.Feature) []RelationshipChildSummary {
+	out := make([]RelationshipChildSummary, 0, len(children))
+	for _, child := range children {
+		if dto := relationshipChildSummaryDTO(child); dto != nil {
+			out = append(out, *dto)
 		}
 	}
-	for _, repo := range f.Repos {
-		if dto := activeRepoCycleDTO(f, f.RepoCycles[repo.Name]); dto != nil {
-			return dto
-		}
-	}
-	if len(f.RepoCycles) == 0 {
-		return nil
-	}
-	names := make([]string, 0, len(f.RepoCycles))
-	for repoName := range f.RepoCycles {
-		names = append(names, repoName)
-	}
-	sort.Strings(names)
-	for _, repoName := range names {
-		if dto := activeRepoCycleDTO(f, f.RepoCycles[repoName]); dto != nil {
-			return dto
-		}
-	}
-	return nil
+	return out
 }
 
-func activeRepoCycleDTO(f *feature.Feature, cycle *feature.RepoCycleState) *CycleDTO {
-	if cycle == nil || !cycle.Type.IsValid() || !isActiveRepoCycleStatus(cycle.Status) {
-		return nil
-	}
-	return &CycleDTO{
-		Type:      string(cycle.Type),
-		Status:    cycle.Status,
-		Count:     activeCycleCount(f, cycle),
-		Iteration: cycle.Iteration,
-	}
-}
-
-func isActiveRepoCycleStatus(status string) bool {
-	switch status {
-	case feature.RepoCycleRunning, feature.RepoCycleReviewing, feature.RepoCycleNeedUserInput:
-		return true
-	default:
-		return false
-	}
-}
-
-func activeCycleCount(f *feature.Feature, cycle *feature.RepoCycleState) int {
-	if f == nil || cycle == nil {
-		return 0
-	}
-	count := cycle.Count
-	switch cycle.Type {
-	case feature.CycleRebase:
-		if f.RebaseCount() > count {
-			count = f.RebaseCount()
-		}
-	case feature.CycleReviewComments:
-		if f.ReviewCommentsCount() > count {
-			count = f.ReviewCommentsCount()
-		}
-	}
-	if count <= 0 && cycle.Type != "" {
-		return 1
-	}
-	return count
-}
-
-func actionCatalogDTOs(f *feature.Feature) []ActionDTO {
+func actionCatalogDTOs(f *feature.Feature) []Action {
 	return actionCatalogDTOsWithChildGuard(f, false)
 }
 
-// disabledParentHasActiveChild is the ActionDisabledReasonDTO used when a
+// disabledParentHasActiveChild is the ActionDisabledReason used when a
 // parent action is locked because an active child exists.
-var disabledParentHasActiveChild = ActionDisabledReasonDTO{
+var disabledParentHasActiveChild = ActionDisabledReason{
 	Code:    "active_child_present",
 	Message: "parent mutations are locked while a child is active; only paired config editing and cascade delete are available",
 }
 
-func actionCatalogDTOsWithChildGuard(f *feature.Feature, hasActiveChild bool) []ActionDTO {
+func actionCatalogDTOsWithChildGuard(f *feature.Feature, hasActiveChild bool) []Action {
 	if f == nil {
 		return nil
 	}
 	status := f.Status
 	running := status.IsRunning()
-	activeCycle := f.HasActiveRepoCycles() || f.ActiveCycleType() != ""
 	publishedOrManualReady := status == feature.StatusPublished ||
 		(status == feature.StatusCodeReady && !f.Checkpoints.AutoPublish())
 
-	action := func(id string, enabled bool, scope ActionScopeDTO, inputs []ActionInputDTO, disabled ...ActionDisabledReasonDTO) ActionDTO {
+	action := func(id string, enabled bool, scope ActionScope, inputs []ActionInput, disabled ...ActionDisabledReason) Action {
 		if inputs == nil {
-			inputs = []ActionInputDTO{}
+			inputs = []ActionInput{}
 		}
-		dto := ActionDTO{
+		dto := Action{
 			ID:             id,
 			Enabled:        enabled,
 			Scope:          scope,
@@ -632,34 +706,34 @@ func actionCatalogDTOsWithChildGuard(f *feature.Feature, hasActiveChild bool) []
 		if !enabled {
 			dto.DisabledReasons = disabled
 			if len(dto.DisabledReasons) == 0 {
-				dto.DisabledReasons = []ActionDisabledReasonDTO{disabledStatusReason(status)}
+				dto.DisabledReasons = []ActionDisabledReason{disabledStatusReason(status)}
 			}
 		}
 		return dto
 	}
-	featureScope := ActionScopeDTO{Type: entityFeature}
-	repoRequired := ActionScopeDTO{Type: entityFeature, RepoSelection: "required"}
+	featureScope := ActionScope{Type: entityFeature}
 
 	if f.IsChild() {
-		return childActionCatalogDTOs(f, status, running, activeCycle, action, disabledStatusReason)
+		return childActionCatalogDTOs(f, status, running, action, disabledStatusReason)
 	}
 
-	canStart := !running && !activeCycle && (status == feature.StatusCreated ||
+	canSetup := setupActionEligible(f)
+	canStart := !running && (status == feature.StatusCreated ||
 		status == feature.StatusInquireReady ||
 		status == feature.StatusPlanReady ||
 		status == feature.StatusDesignReady ||
 		status == feature.StatusImplementReady ||
 		status == feature.StatusReviewPassed)
-	canStop := running || activeCycle
+	canStop := running || status == feature.StatusNeedUserInput
 	canResume := status == feature.StatusInterrupted ||
 		status == feature.StatusNeedUserInput ||
-		f.PendingNeedUserInputPath != "" ||
-		len(f.PendingUserInputCycles()) > 0
+		f.PendingNeedUserInputPath != ""
 	canRestart := !running
 	canPublish := f.IsPublishable() && status == feature.StatusCodeReady && f.Checkpoints.AutoPublish()
 	canMerge := !f.IsPublishable() && (status == feature.StatusCodeReady || status == feature.StatusPublished)
 	canRewind := !running && (len(feature.RewindChoicesForFeature(f)) > 0 || hasRewindUpgradeTarget(f))
-	canPostPublishCycle := publishedOrManualReady && !activeCycle
+	canPostPublishPass := publishedOrManualReady
+	canReviewFeedback := canPostPublishPass && f.IsPublishable() && featureHasPullRequest(f)
 	canRetry := status == feature.StatusFailed
 	canMarkDone := publishedOrManualReady
 	canCleanup := !running
@@ -672,6 +746,7 @@ func actionCatalogDTOsWithChildGuard(f *feature.Feature, hasActiveChild bool) []
 	// paired config editing. The action catalog agrees with the
 	// authoritative relationship guard enforced at the mutation layer.
 	if hasActiveChild {
+		canSetup = false
 		canStart = false
 		canStop = false
 		canResume = false
@@ -679,7 +754,8 @@ func actionCatalogDTOsWithChildGuard(f *feature.Feature, hasActiveChild bool) []
 		canPublish = false
 		canMerge = false
 		canRewind = false
-		canPostPublishCycle = false
+		canPostPublishPass = false
+		canReviewFeedback = false
 		canRetry = false
 		canMarkDone = false
 		canCleanup = false
@@ -687,36 +763,34 @@ func actionCatalogDTOsWithChildGuard(f *feature.Feature, hasActiveChild bool) []
 	}
 
 	// Prepend the child-guard disabled reason to locked actions.
-	childGuardReason := func(enabled bool, fallback ...ActionDisabledReasonDTO) []ActionDisabledReasonDTO {
+	childGuardReason := func(enabled bool, fallback ...ActionDisabledReason) []ActionDisabledReason {
 		if hasActiveChild && !enabled {
-			return append([]ActionDisabledReasonDTO{disabledParentHasActiveChild}, fallback...)
+			return append([]ActionDisabledReason{disabledParentHasActiveChild}, fallback...)
 		}
 		return fallback
 	}
 
-	return []ActionDTO{
+	return []Action{
+		action(actionSetup, canSetup, featureScope, nil, childGuardReason(canSetup, ActionDisabledReason{Code: "no_pending_setup", Message: "feature has no pending or failed setup work"})...),
 		action(actionStart, canStart, featureScope, nil, childGuardReason(canStart, disabledStatusReason(status))...),
-		action(actionPauseStop, canStop, featureScope, nil, childGuardReason(canStop, ActionDisabledReasonDTO{Code: "not_running", Message: "feature has no active work to pause or stop"})...),
-		action(actionResume, canResume, featureScope, nil, childGuardReason(canResume, ActionDisabledReasonDTO{Code: "not_paused", Message: "feature has no paused session or input gate"})...),
-		action(actionRestart, canRestart, featureScope, nil, childGuardReason(canRestart, ActionDisabledReasonDTO{Code: feature.RepoCycleRunning, Message: "feature must stop before restart"})...),
+		action(actionPauseStop, canStop, featureScope, nil, childGuardReason(canStop, ActionDisabledReason{Code: "not_running", Message: "feature has no active work to pause or stop"})...),
+		action(actionResume, canResume, featureScope, nil, childGuardReason(canResume, ActionDisabledReason{Code: "not_paused", Message: "feature has no paused session or input gate"})...),
+		action(actionRestart, canRestart, featureScope, nil, childGuardReason(canRestart, ActionDisabledReason{Code: "running", Message: "feature must stop before restart"})...),
 		action(actionPublish, canPublish, featureScope, nil, childGuardReason(canPublish, publishDisabledReason(f))...),
 		action(actionMerge, canMerge, featureScope, nil, childGuardReason(canMerge, mergeDisabledReason(f))...),
-		action(actionRewind, canRewind, featureScope, []ActionInputDTO{
+		action(actionRewind, canRewind, featureScope, []ActionInput{
 			{Name: "target_phase", Kind: actionInputKindEnum, Required: true, Options: rewindPhaseOptions(f)},
 			{Name: "roadmap_phase", Kind: "integer", Required: false},
 			{Name: "upgrade_pipeline", Kind: actionInputKindEnum, Required: false, Options: rewindUpgradePipelineOptions(f)},
-		}, childGuardReason(canRewind, ActionDisabledReasonDTO{Code: "no_rewind_targets", Message: "feature has no valid rewind targets"})...),
-		action(actionRebase, canPostPublishCycle, featureScope, nil, childGuardReason(canPostPublishCycle, postPublishCycleDisabledReason(f, actionRebase))...),
-		action(actionReviewComments, canPostPublishCycle && f.IsPublishable(), repoRequired, []ActionInputDTO{
-			{Name: "repo", Kind: actionInputKindString, Required: true},
-			{Name: "mode", Kind: actionInputKindEnum, Required: true, Options: []string{reviewCommentsModeAuto, "address_all"}},
-		}, childGuardReason(canPostPublishCycle && f.IsPublishable(), postPublishCycleDisabledReason(f, actionReviewComments))...),
+		}, childGuardReason(canRewind, ActionDisabledReason{Code: "no_rewind_targets", Message: "feature has no valid rewind targets"})...),
+		action(actionRebase, canPostPublishPass, featureScope, nil, childGuardReason(canPostPublishPass, postPublishPassDisabledReason(f))...),
+		action(actionReviewFeedback, canReviewFeedback, featureScope, nil, childGuardReason(canReviewFeedback, reviewFeedbackDisabledReason(f))...),
 		action(actionRefactor, canRefactor, featureScope, nil, childGuardReason(canRefactor, disabledStatusReason(status))...),
-		action(actionRetry, canRetry, featureScope, nil, childGuardReason(canRetry, ActionDisabledReasonDTO{Code: "not_failed", Message: "retry is only available for failed features"})...),
-		action(actionMarkDone, canMarkDone, featureScope, nil, childGuardReason(canMarkDone, ActionDisabledReasonDTO{Code: "not_complete", Message: "feature is not ready to mark done"})...),
-		action(actionCleanup, canCleanup, featureScope, []ActionInputDTO{
-			{Name: "target", Kind: actionInputKindEnum, Required: false, Options: []string{"worktrees", "cycles"}},
-		}, childGuardReason(canCleanup, ActionDisabledReasonDTO{Code: feature.RepoCycleRunning, Message: "cleanup is disabled while work is running"})...),
+		action(actionRetry, canRetry, featureScope, nil, childGuardReason(canRetry, ActionDisabledReason{Code: "not_failed", Message: "retry is only available for failed features"})...),
+		action(actionMarkDone, canMarkDone, featureScope, nil, childGuardReason(canMarkDone, ActionDisabledReason{Code: "not_complete", Message: "feature is not ready to mark done"})...),
+		action(actionCleanup, canCleanup, featureScope, []ActionInput{
+			{Name: "target", Kind: actionInputKindEnum, Required: false, Options: []string{"worktrees"}},
+		}, childGuardReason(canCleanup, ActionDisabledReason{Code: "running", Message: "cleanup is disabled while work is running"})...),
 		action(actionDelete, canDelete, featureScope, nil),
 	}
 }
@@ -735,11 +809,11 @@ func childSetupFailed(f *feature.Feature) bool {
 		setup.Status == feature.SetupStatusFailed
 }
 
-// disabledChildSetupIncomplete is the ActionDisabledReasonDTO.Code used when
+// disabledChildSetupIncomplete is the ActionDisabledReason.Code used when
 // a child cannot execute because setup is queued, running, or failed.
 const disabledChildSetupIncomplete = "setup_incomplete"
 
-// disabledChildRelationshipClosed is the ActionDisabledReasonDTO.Code used
+// disabledChildRelationshipClosed is the ActionDisabledReason.Code used
 // when a child cannot execute because its relationship has settled.
 const disabledChildRelationshipClosed = "relationship_closed"
 
@@ -763,36 +837,36 @@ func childExecutionBlockReason(f *feature.Feature) error {
 // childCapabilityDisabledReason maps a child execution block to the stable
 // disabled-reason code echoed by the action catalog: relationship_closed or
 // setup_incomplete.
-func childCapabilityDisabledReason(err error) ActionDisabledReasonDTO {
+func childCapabilityDisabledReason(err error) ActionDisabledReason {
 	switch {
 	case errors.Is(err, feature.ErrChildExecutionClosed):
-		return ActionDisabledReasonDTO{Code: disabledChildRelationshipClosed, Message: "the child relationship is closed; the settled child cannot execute"}
+		return ActionDisabledReason{Code: disabledChildRelationshipClosed, Message: "the child relationship is closed; the settled child cannot execute"}
 	case errors.Is(err, feature.ErrChildExecutionBlocked):
-		return ActionDisabledReasonDTO{Code: disabledChildSetupIncomplete, Message: "child setup is queued, running, or failed; only setup and setup-retry are available"}
+		return ActionDisabledReason{Code: disabledChildSetupIncomplete, Message: "child setup is queued, running, or failed; only setup and setup-retry are available"}
 	default:
-		return ActionDisabledReasonDTO{Code: disabledStatusNotAllowed, Message: err.Error()}
+		return ActionDisabledReason{Code: disabledStatusNotAllowed, Message: err.Error()}
 	}
 }
 
 // childActionCatalogDTOs builds the restricted child catalog: ordinary
 // start/resume/restart execution entries gated by the same capability check
 // the mutations enforce, plus setup-retry and discard. Child delivery actions
-// (publish, merge, rewind, refactor, mark-done, post-publish cycles) are never
+// (publish, merge, rewind, refactor, mark-done, post-publish passes) are never
 // offered: a child's work reaches the parent only through integration. Child
 // cleanup and single-record delete are also unavailable while the relationship
 // is active; the authoritative RelationshipGuard enforces the same policy at
 // the mutation layer.
-func childActionCatalogDTOs(f *feature.Feature, status feature.Status, running, activeCycle bool,
-	action func(string, bool, ActionScopeDTO, []ActionInputDTO, ...ActionDisabledReasonDTO) ActionDTO,
-	disabledStatusReason func(feature.Status) ActionDisabledReasonDTO) []ActionDTO {
+func childActionCatalogDTOs(f *feature.Feature, status feature.Status, running bool,
+	action func(string, bool, ActionScope, []ActionInput, ...ActionDisabledReason) Action,
+	disabledStatusReason func(feature.Status) ActionDisabledReason) []Action {
 
-	featureScope := ActionScopeDTO{Type: entityFeature}
+	featureScope := ActionScope{Type: entityFeature}
 	if !f.IsActiveChild() {
-		closed := ActionDisabledReasonDTO{
+		closed := ActionDisabledReason{
 			Code:    disabledChildRelationshipClosed,
 			Message: "the child relationship is closed; automatic reconciliation owns any remaining cleanup",
 		}
-		return []ActionDTO{
+		return []Action{
 			action(actionStart, false, featureScope, nil, closed),
 			action(actionPauseStop, false, featureScope, nil, closed),
 			action(actionResume, false, featureScope, nil, closed),
@@ -802,32 +876,32 @@ func childActionCatalogDTOs(f *feature.Feature, status feature.Status, running, 
 		}
 	}
 	blockErr := childExecutionBlockReason(f)
-	blockedReason := func(fallback ActionDisabledReasonDTO) ActionDisabledReasonDTO {
+	blockedReason := func(fallback ActionDisabledReason) ActionDisabledReason {
 		if blockErr != nil {
 			return childCapabilityDisabledReason(blockErr)
 		}
 		return fallback
 	}
 	runnable := blockErr == nil
-	restartStopped := ActionDisabledReasonDTO{Code: feature.RepoCycleRunning, Message: "feature must stop before restart"}
+	restartStopped := ActionDisabledReason{Code: "running", Message: "feature must stop before restart"}
 	restartReason := blockedReason(restartStopped)
-	stopped := !running && !activeCycle
+	stopped := !running
 	canStart := runnable && stopped && (status == feature.StatusCreated ||
 		status == feature.StatusPlanReady ||
 		status == feature.StatusImplementReady ||
 		status == feature.StatusReviewPassed)
-	canStop := runnable && (running || activeCycle)
+	canStop := runnable && running
 	canResume := runnable && (status == feature.StatusInterrupted ||
 		status == feature.StatusNeedUserInput ||
 		f.PendingNeedUserInputPath != "")
 	canRestart := runnable && !running
 
-	return []ActionDTO{
+	return []Action{
 		action(actionStart, canStart, featureScope, nil, blockedReason(disabledStatusReason(status))),
-		action(actionPauseStop, canStop, featureScope, nil, blockedReason(ActionDisabledReasonDTO{Code: "not_running", Message: "child has no active work to pause or stop"})),
-		action(actionResume, canResume, featureScope, nil, blockedReason(ActionDisabledReasonDTO{Code: "not_paused", Message: "feature has no paused session or input gate"})),
+		action(actionPauseStop, canStop, featureScope, nil, blockedReason(ActionDisabledReason{Code: "not_running", Message: "child has no active work to pause or stop"})),
+		action(actionResume, canResume, featureScope, nil, blockedReason(ActionDisabledReason{Code: "not_paused", Message: "feature has no paused session or input gate"})),
 		action(actionRestart, canRestart, featureScope, nil, restartReason),
-		action(actionRetry, childSetupFailed(f), featureScope, nil, ActionDisabledReasonDTO{Code: "not_failed", Message: "retry is only available for failed features"}),
+		action(actionRetry, childSetupFailed(f), featureScope, nil, ActionDisabledReason{Code: "not_failed", Message: "retry is only available for failed features"}),
 		// Discard must be available for every active child — running,
 		// paused, failed, interrupted, review-gated, input-blocked, and
 		// already-discarding — because the durable discard state machine
@@ -835,54 +909,97 @@ func childActionCatalogDTOs(f *feature.Feature, status feature.Status, running, 
 		// quiescence. Gating it on "stopped" would hide the primary
 		// abandon flow exactly when a running child needs it. Repeated
 		// requests converge on the same idempotent outcome.
-		action(actionDiscard, f.IsActiveChild(), featureScope, nil, ActionDisabledReasonDTO{Code: "not_active", Message: "discard is only available for active children"}),
+		action(actionDiscard, f.IsActiveChild(), featureScope, nil, ActionDisabledReason{Code: "not_active", Message: "discard is only available for active children"}),
 	}
 }
 
-func disabledStatusReason(status feature.Status) ActionDisabledReasonDTO {
-	return ActionDisabledReasonDTO{
+// setupActionEligible reports whether the setup action applies: either the
+// feature has queued durable setup that has not completed (fresh run) or its
+// setup failed and only the unfinished tasks are retryable.
+func setupActionEligible(f *feature.Feature) bool {
+	if f == nil {
+		return false
+	}
+	setup := f.Run().Setup
+	if setup == nil {
+		return false
+	}
+	if f.Status == feature.StatusSettingUpWorktrees {
+		return setup.Status == feature.SetupStatusQueued || setup.Status == feature.SetupStatusRunning
+	}
+	return f.Status == feature.StatusFailed &&
+		f.FailureType == feature.FailureWorktreeSetup &&
+		setup.Status == feature.SetupStatusFailed
+}
+
+func disabledStatusReason(status feature.Status) ActionDisabledReason {
+	return ActionDisabledReason{
 		Code:    disabledStatusNotAllowed,
 		Message: "action is not available while feature status is " + status.String(),
 	}
 }
 
-func publishDisabledReason(f *feature.Feature) ActionDisabledReasonDTO {
+func publishDisabledReason(f *feature.Feature) ActionDisabledReason {
 	if f == nil {
 		return disabledStatusReason(feature.StatusCreated)
 	}
 	if !f.IsPublishable() {
-		return ActionDisabledReasonDTO{Code: "local_only", Message: "feature has at least one local-only repo"}
+		return ActionDisabledReason{Code: "local_only", Message: "feature has at least one local-only repo"}
 	}
 	if f.Status == feature.StatusPublished || f.Status == feature.StatusDone {
-		return ActionDisabledReasonDTO{Code: "already_published", Message: "feature already has a published terminal state"}
+		return ActionDisabledReason{Code: "already_published", Message: "feature already has a published terminal state"}
 	}
 	if f.Checkpoints.ManualPublish && f.Status == feature.StatusCodeReady {
-		return ActionDisabledReasonDTO{Code: "manual_publish_required", Message: "feature is waiting for manual publish confirmation"}
+		return ActionDisabledReason{Code: "manual_publish_required", Message: "feature is waiting for manual publish confirmation"}
 	}
 	return disabledStatusReason(f.Status)
 }
 
-func mergeDisabledReason(f *feature.Feature) ActionDisabledReasonDTO {
+func mergeDisabledReason(f *feature.Feature) ActionDisabledReason {
 	if f == nil {
 		return disabledStatusReason(feature.StatusCreated)
 	}
 	if f.IsPublishable() {
-		return ActionDisabledReasonDTO{Code: disabledNotLocalOnly, Message: "merge is only available for local-only features"}
+		return ActionDisabledReason{Code: disabledNotLocalOnly, Message: "merge is only available for local-only features"}
 	}
 	return disabledStatusReason(f.Status)
 }
 
-func postPublishCycleDisabledReason(f *feature.Feature, cycle string) ActionDisabledReasonDTO {
+func postPublishPassDisabledReason(f *feature.Feature) ActionDisabledReason {
 	if f == nil {
 		return disabledStatusReason(feature.StatusCreated)
 	}
-	if f.HasActiveRepoCycles() || f.ActiveCycleType() != "" {
-		return ActionDisabledReasonDTO{Code: disabledCycleActive, Message: "another feature cycle is active"}
+	return disabledStatusReason(f.Status)
+}
+
+func reviewFeedbackDisabledReason(f *feature.Feature) ActionDisabledReason {
+	if f == nil {
+		return disabledStatusReason(feature.StatusCreated)
 	}
-	if cycle == actionReviewComments && !f.IsPublishable() {
-		return ActionDisabledReasonDTO{Code: "not_publishable", Message: "review-comment actions require a published PR"}
+	publishedOrManualReady := f.Status == feature.StatusPublished ||
+		(f.Status == feature.StatusCodeReady && !f.Checkpoints.AutoPublish())
+	if !publishedOrManualReady {
+		return disabledStatusReason(f.Status)
+	}
+	if !f.IsPublishable() {
+		return ActionDisabledReason{Code: "not_publishable", Message: "review feedback requires a publishable parent"}
+	}
+	if !featureHasPullRequest(f) {
+		return ActionDisabledReason{Code: "no_pull_request", Message: "review feedback requires at least one repository with a pull request"}
 	}
 	return disabledStatusReason(f.Status)
+}
+
+func featureHasPullRequest(f *feature.Feature) bool {
+	if f == nil {
+		return false
+	}
+	for _, state := range f.RepoStates {
+		if state != nil && strings.TrimSpace(state.PRURL) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func rewindPhaseOptions(f *feature.Feature) []string {
@@ -895,14 +1012,12 @@ func rewindPhaseOptions(f *feature.Feature) []string {
 }
 
 func rewindUpgradePipelineOptions(f *feature.Feature) []string {
-	switch f.EffectivePipeline() {
-	case feature.PipelineMedium:
-		return []string{string(feature.PipelineLarge), string(feature.PipelineMoonshot)}
-	case feature.PipelineLarge:
-		return []string{string(feature.PipelineMoonshot)}
-	default:
-		return nil
+	opts := f.EffectivePipeline().UpgradeOptions()
+	out := make([]string, 0, len(opts))
+	for _, opt := range opts {
+		out = append(out, string(opt))
 	}
+	return out
 }
 
 func hasRewindUpgradeTarget(f *feature.Feature) bool {
@@ -910,12 +1025,8 @@ func hasRewindUpgradeTarget(f *feature.Feature) bool {
 		return false
 	}
 	current := f.EffectivePipeline()
-	for _, option := range rewindUpgradePipelineOptions(f) {
-		upgraded := *f
-		upgraded.Pipeline = feature.PipelineProfile(option)
-		if upgraded.PipelineUpgradedFrom == "" {
-			upgraded.PipelineUpgradedFrom = current
-		}
+	for _, option := range current.UpgradeOptions() {
+		upgraded := feature.FeatureWithUpgrade(f, option)
 		for _, choice := range feature.RewindChoicesForFeature(&upgraded) {
 			if choice.Phase == feature.PhaseInquire {
 				return true
@@ -940,11 +1051,11 @@ func boundedHistoricalRunNumbers(activeRun, runCount, limit int) []int {
 	return runNumbers
 }
 
-func runSummaryDTO(run *feature.Run, f *feature.Feature) RunSummaryDTO {
+func runSummaryDTO(run *feature.Run, f *feature.Feature) RunSummary {
 	if run == nil {
-		return RunSummaryDTO{}
+		return RunSummary{}
 	}
-	dto := RunSummaryDTO{
+	dto := RunSummary{
 		RunNumber:       run.RunNumber,
 		StartedAt:       run.StartedAt,
 		SealedAt:        run.SealedAt,
@@ -968,86 +1079,95 @@ func runSummaryDTO(run *feature.Run, f *feature.Feature) RunSummaryDTO {
 	return dto
 }
 
-func setupDTO(setup *feature.SetupState) *SetupDTO {
+func setupDTO(setup *feature.SetupState) *Setup {
 	if setup == nil {
 		return nil
 	}
-	tasks := make(map[string]SetupTaskDTO, len(setup.Tasks))
+	tasks := make(map[string]SetupTask, len(setup.Tasks))
 	for key, task := range setup.Tasks {
 		tasks[key] = setupTaskDTO(task)
 	}
-	return &SetupDTO{
+	return &Setup{
 		Status:        string(setup.Status),
 		Attempt:       setup.Attempt,
 		StartedAt:     setup.StartedAt,
 		CompletedAt:   setup.CompletedAt,
-		LatestLogPath: safeDisplayText(setup.LatestLogPath, 1000),
+		LatestLogPath: SafeDisplayText(setup.LatestLogPath, 1000),
 		Tasks:         tasks,
 		TaskOrder:     append([]string(nil), setup.TaskOrder...),
-		LastError:     safeDisplayText(setup.LastError, 500),
+		LastError:     SafeDisplayText(setup.LastError, 500),
 	}
 }
 
-func setupTaskDTO(task feature.SetupTask) SetupTaskDTO {
-	return SetupTaskDTO{
+func setupTaskDTO(task feature.SetupTask) SetupTask {
+	return SetupTask{
 		Key:              task.Key,
 		Kind:             string(task.Kind),
-		Label:            safeDisplayText(task.Label, 200),
-		Repo:             safeDisplayText(task.Repo, 200),
+		Label:            SafeDisplayText(task.Label, 200),
+		Repo:             SafeDisplayText(task.Repo, 200),
 		Status:           string(task.Status),
-		Path:             safeDisplayText(task.Path, 1000),
-		SourcePath:       safeDisplayText(task.SourcePath, 1000),
-		Branch:           safeDisplayText(task.Branch, 500),
-		StartPoint:       safeDisplayText(task.StartPoint, 500),
+		Path:             SafeDisplayText(task.Path, 1000),
+		SourcePath:       SafeDisplayText(task.SourcePath, 1000),
+		Branch:           SafeDisplayText(task.Branch, 500),
+		StartPoint:       SafeDisplayText(task.StartPoint, 500),
 		UseCurrentBranch: task.UseCurrentBranch,
 		Attempt:          task.Attempt,
 		StartedAt:        task.StartedAt,
 		EndedAt:          task.EndedAt,
-		LastError:        safeDisplayText(task.LastError, 500),
+		LastError:        SafeDisplayText(task.LastError, 500),
 	}
 }
 
-func (h *apiHandler) repoStatusDTOs(f *feature.Feature) []RepoStatusDTO {
+// probeRepoFreshness collects freshness for every repo concurrently. Each
+// probe shells out to git and scans the working tree, so serial execution
+// costs the sum of per-repo scans on the read path.
+func (h *apiHandler) probeRepoFreshness(f *feature.Feature) map[string]RepoFreshness {
+	if h.freshness == nil || len(f.Repos) == 0 {
+		return nil
+	}
+	results := make([]RepoFreshness, len(f.Repos))
+	var wg sync.WaitGroup
+	for i, repo := range f.Repos {
+		wg.Add(1)
+		go func(i int, repo feature.FeatureRepo) {
+			defer wg.Done()
+			results[i] = h.freshness.Freshness(f, repo)
+		}(i, repo)
+	}
+	wg.Wait()
+	out := make(map[string]RepoFreshness, len(f.Repos))
+	for i, repo := range f.Repos {
+		out[repo.Name] = results[i]
+	}
+	return out
+}
+
+func (h *apiHandler) repoStatusDTOs(f *feature.Feature) []RepoStatus {
 	if f == nil {
 		return nil
 	}
-	out := make([]RepoStatusDTO, 0, len(f.Repos))
+	freshness := h.probeRepoFreshness(f)
+	out := make([]RepoStatus, 0, len(f.Repos))
 	for _, repo := range f.Repos {
 		state := f.RepoStates[repo.Name]
-		cycle := f.RepoCycles[repo.Name]
-		dto := RepoStatusDTO{
+		dto := RepoStatus{
 			Name:        repo.Name,
 			Publishable: repo.Publishable == nil || *repo.Publishable,
 		}
 		if state != nil {
 			dto.Touched = state.Touched
 			dto.PRURL = state.PRURL
-			dto.LastError = safeDisplayText(state.LastError, 200)
+			dto.LastError = SafeDisplayText(state.LastError, 200)
 		}
-		if h.freshness != nil {
-			dto.Freshness = string(h.freshness.Freshness(f, repo))
-		}
-		if cycle != nil {
-			dto.CycleType = string(cycle.Type)
-			dto.CycleStatus = cycle.Status
-		}
-		if f.RebaseOperation != nil {
-			progress := f.RebaseOperation.Repos[repo.Name]
-			if progress != nil {
-				dto.RebaseStatus = string(progress.Status)
-				dto.RebaseTarget = safeDisplayText(progress.RebaseTarget, 128)
-				dto.ConflictFiles = append([]string(nil), progress.ConflictFiles...)
-				if dto.LastError == "" {
-					dto.LastError = safeDisplayText(progress.LastError, 200)
-				}
-			}
+		if freshness != nil {
+			dto.Freshness = string(freshness[repo.Name])
 		}
 		out = append(out, dto)
 	}
 	return out
 }
 
-func timingDTO(f *feature.Feature) TimingDTO {
+func timingDTO(f *feature.Feature) Timing {
 	byPhase := make(map[string]int64, len(f.PhaseTimings))
 	var total int64
 	for phase, dur := range f.PhaseTimings {
@@ -1055,17 +1175,22 @@ func timingDTO(f *feature.Feature) TimingDTO {
 		byPhase[phase] = seconds
 		total += seconds
 	}
-	return TimingDTO{TotalSeconds: total, ByPhase: byPhase}
+	if f.ActiveTimingKey != "" && f.ActivePhaseStart != nil {
+		activeSeconds := int64(f.PhaseRuntime(f.ActiveTimingKey).Seconds())
+		total += activeSeconds - byPhase[f.ActiveTimingKey]
+		byPhase[f.ActiveTimingKey] = activeSeconds
+	}
+	return Timing{TotalSeconds: total, ByPhase: byPhase}
 }
 
-func costDTO(f *feature.Feature) CostDTO {
+func costDTO(f *feature.Feature) Cost {
 	byPhase := make(map[string]float64, len(f.PhaseCosts))
 	var total float64
 	for phase, cost := range f.PhaseCosts {
 		byPhase[phase] = cost
 		total += cost
 	}
-	return CostDTO{TotalUSD: total, ByPhase: byPhase}
+	return Cost{TotalUSD: total, ByPhase: byPhase}
 }
 
 func (h *apiHandler) handleRuntimeConfig(w http.ResponseWriter, r *http.Request) {
@@ -1079,11 +1204,10 @@ func (h *apiHandler) handleRuntimeConfig(w http.ResponseWriter, r *http.Request)
 		FeatureDefaults: featureDefaultsDTO(cfg.Defaults),
 		Repos:           repos,
 		WorkspaceRoots:  append([]string(nil), cfg.WorkspaceRoots...),
-		UI:              cfg.UI,
-		Notifications: NotificationConfigDTO{
+		Notifications: NotificationConfig{
 			MuteFeatureInput: cfg.Notifications.MuteFeatureInput,
 		},
-		Observability: ObservabilityDTO{
+		Observability: Observability{
 			Events:          cfg.Observability.Events,
 			OTelEnabled:     cfg.Observability.OTelEnabled,
 			OTelServiceName: cfg.Observability.OTelServiceName,
@@ -1102,9 +1226,9 @@ func (h *apiHandler) handleFeatureConfig(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	cfg := h.configOrDefault()
-	defaults := FeatureConfigDTO{
+	defaults := FeatureConfig{
 		Models:             cfg.Defaults.Models,
-		Inquireness:        cfg.Defaults.Inquireness,
+		Inquireness:        FeatureConfigInquireness(cfg.Defaults.Inquireness),
 		Checkpoints:        checkpointsDTO(featureCheckpoints(cfg.Defaults.Checkpoints)),
 		Pipeline:           cfg.Defaults.Pipeline,
 		InputNotifications: FeatureConfigInputNotifications(feature.InputNotificationsModeForMuted(cfg.Notifications.MuteFeatureInput)),
@@ -1116,7 +1240,7 @@ func (h *apiHandler) handleFeatureConfig(w http.ResponseWriter, r *http.Request,
 		Current:    current,
 		Defaults:   defaults,
 		Original:   current,
-		Publish: PublishabilityDTO{
+		Publish: Publishability{
 			ManualPublish: f.Checkpoints.ManualPublish,
 			Repos:         publishabilityByRepo(f),
 		},
@@ -1127,9 +1251,16 @@ func (h *apiHandler) handleFeatureConfig(w http.ResponseWriter, r *http.Request,
 }
 
 func (h *apiHandler) handleModelCatalog(w http.ResponseWriter, r *http.Request) {
+	resp := h.modelCatalogSnapshot()
+	revision := revisionForAny(resp)
+	resp.Meta = h.responseMeta(revision)
+	h.writeRevisionedJSON(w, r, revision, resp)
+}
+
+func (h *apiHandler) modelCatalogSnapshot() ModelCatalogResponse {
 	resp := ModelCatalogResponse{
 		APIVersion:          APIVersion,
-		ProviderModels:      map[string][]ModelDTO{},
+		ProviderModels:      map[string][]Model{},
 		PhaseProviderModels: map[string]map[string][]string{},
 		PhaseDefaults:       h.configOrDefault().Defaults.Models,
 	}
@@ -1146,7 +1277,7 @@ func (h *apiHandler) handleModelCatalog(w http.ResponseWriter, r *http.Request) 
 			}
 			if len(resp.ProviderModels[name]) == 0 {
 				for _, id := range provider.AvailableModels() {
-					resp.ProviderModels[name] = append(resp.ProviderModels[name], ModelDTO{ID: id})
+					resp.ProviderModels[name] = append(resp.ProviderModels[name], Model{ID: id})
 				}
 			}
 		}
@@ -1154,15 +1285,93 @@ func (h *apiHandler) handleModelCatalog(w http.ResponseWriter, r *http.Request) 
 			resp.PhaseProviderModels[string(role)] = h.registry.EligibleModelsForPhase(role)
 		}
 	}
+	return resp
+}
+
+func (h *apiHandler) handleProviderModelRefreshRoute(w http.ResponseWriter, r *http.Request) {
+	if !requireMethod(w, r, http.MethodPost) {
+		return
+	}
+	if !h.requireTrustedMutation(w, r) {
+		return
+	}
+	var req ProviderModelRefreshRequest
+	if !decodeMutationJSON(w, r, &req) {
+		return
+	}
+	if len(req.Provider) > 100 || !validEntityID(req.Provider) {
+		writeAPIError(w, http.StatusBadRequest, "bad_request", "invalid provider name", nil)
+		return
+	}
+	if h.registry == nil || h.registry.ByName(req.Provider) == nil {
+		writeAPIError(w, http.StatusNotFound, "provider_not_found", "provider is not registered", nil)
+		return
+	}
+
+	h.providerRefreshMu.Lock()
+	defer h.providerRefreshMu.Unlock()
+
+	// Ensure a complete cached snapshot exists before replacing one entry.
+	h.providerReadinessStatuses(r.Context(), false)
+	status, _ := h.refreshProviderReadiness(r.Context(), req.Provider)
+	if status.Ready {
+		provider := h.registry.ByName(req.Provider)
+		discoverer, canDiscover := provider.(llm.CatalogDiscoverer)
+		enricher, canEnrich := provider.(llm.CatalogEnricher)
+		if !canDiscover || !canEnrich {
+			writeAPIError(w, http.StatusConflict, "provider_model_refresh_unsupported", "provider does not support model refresh", nil)
+			return
+		}
+		discoveryCtx, cancel := context.WithTimeout(r.Context(), 45*time.Second)
+		models, err := discoverer.DiscoverModelCatalog(discoveryCtx)
+		cancel()
+		if err != nil {
+			writeAPIError(w, http.StatusBadGateway, "provider_model_refresh_failed", "provider model refresh failed", nil)
+			return
+		}
+		if len(models) == 0 {
+			writeAPIError(w, http.StatusBadGateway, "provider_model_refresh_failed", "provider returned no models", nil)
+			return
+		}
+		if h.persistProviderModels != nil {
+			if err := h.persistProviderModels(provider, models); err != nil {
+				writeAPIError(w, http.StatusBadGateway, "provider_model_refresh_failed", "provider model catalog could not be persisted", nil)
+				return
+			}
+		}
+		enricher.SetModelCatalog(models)
+	}
+
+	readiness := h.readinessSnapshot(r.Context(), false)
+	readinessRevision := revisionForAny(readiness)
+	readiness.Meta = h.responseMeta(readinessRevision)
+	catalog := h.modelCatalogSnapshot()
+	catalogRevision := revisionForAny(catalog)
+	catalog.Meta = h.responseMeta(catalogRevision)
+	resp := ProviderModelRefreshResponse{
+		APIVersion: APIVersion,
+		Readiness:  readiness,
+		Catalog:    catalog,
+	}
 	revision := revisionForAny(resp)
 	resp.Meta = h.responseMeta(revision)
-	h.writeRevisionedJSON(w, r, revision, resp)
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func (h *apiHandler) handlePrompts(w http.ResponseWriter, r *http.Request) {
 	asks, perms := h.pendingControls()
 	_ = perms
-	help, gates := h.featureQueues()
+	help, gates, err := h.featureQueues()
+	if err != nil {
+		writeAPIError(
+			w,
+			http.StatusInternalServerError,
+			promptSnapshotTooLargeCode,
+			errNeedUserInputGateCollectionTooLarge.Error(),
+			nil,
+		)
+		return
+	}
 	resp := PromptSnapshotResponse{
 		APIVersion:       APIVersion,
 		AskUserQuestions: asks,
@@ -1189,12 +1398,12 @@ func (h *apiHandler) configOrDefault() *config.Config {
 	return config.NewDefault()
 }
 
-func configRepoDTOs(cfg *config.Config) []ConfigRepoDTO {
+func configRepoDTOs(cfg *config.Config) []ConfigRepo {
 	cfg = runtimeConfigRepoSnapshot(cfg)
 	allRepos := config.AllRepos(cfg)
-	repos := make([]ConfigRepoDTO, 0, len(allRepos))
+	repos := make([]ConfigRepo, 0, len(allRepos))
 	for name, repo := range allRepos {
-		repos = append(repos, ConfigRepoDTO{Name: name, Path: repo.Path, PipelineGates: copyConfigPipelineGates(repo.PipelineGates)})
+		repos = append(repos, ConfigRepo{Name: name, Path: repo.Path, PipelineGates: copyConfigPipelineGates(repo.PipelineGates)})
 	}
 	sort.Slice(repos, func(i, j int) bool { return repos[i].Name < repos[j].Name })
 	return repos
@@ -1236,7 +1445,7 @@ func copyConfigPipelineGates(in map[string]config.Checkpoints) map[string]config
 	return out
 }
 
-func featureDefaultsDTO(defaults config.DefaultsConfig) FeatureDefaultsDTO {
+func featureDefaultsDTO(defaults config.DefaultsConfig) FeatureDefaults {
 	var prefs map[string]config.PipelinePreference
 	if len(defaults.PipelinePreferences) > 0 {
 		prefs = make(map[string]config.PipelinePreference, len(defaults.PipelinePreferences))
@@ -1244,7 +1453,7 @@ func featureDefaultsDTO(defaults config.DefaultsConfig) FeatureDefaultsDTO {
 			prefs[key] = value
 		}
 	}
-	return FeatureDefaultsDTO{
+	return FeatureDefaults{
 		Models:                 defaults.Models,
 		Effort:                 defaults.Effort,
 		PipelinePreferences:    prefs,
@@ -1287,12 +1496,12 @@ func publishabilityByRepo(f *feature.Feature) map[string]bool {
 	return out
 }
 
-func modelDTO(model llm.ModelInfo) ModelDTO {
+func modelDTO(model llm.ModelInfo) Model {
 	caps := make([]string, 0, len(model.EffortCapabilities))
 	for _, cap := range model.EffortCapabilities {
 		caps = append(caps, string(cap))
 	}
-	return ModelDTO{
+	return Model{
 		ID:                 model.ID,
 		DisplayName:        model.DisplayName,
 		ContextWindow:      model.ContextWindow,
@@ -1302,7 +1511,7 @@ func modelDTO(model llm.ModelInfo) ModelDTO {
 	}
 }
 
-func (h *apiHandler) pendingControls() ([]ControlRequestDTO, []ControlRequestDTO) {
+func (h *apiHandler) pendingControls() ([]ControlRequest, []ControlRequest) {
 	if h.sessions == nil {
 		return nil, nil
 	}
@@ -1326,11 +1535,11 @@ func (h *apiHandler) pendingControls() ([]ControlRequestDTO, []ControlRequestDTO
 	}
 	sortOrderedControlRequests(asks)
 	sortOrderedControlRequests(perms)
-	dto := func(w orderedControlRequest) ControlRequestDTO { return w.dto }
+	dto := func(w orderedControlRequest) ControlRequest { return w.dto }
 	return dtosOf(asks, dto), dtosOf(perms, dto)
 }
 
-func (h *apiHandler) featureQueues() ([]HelpQueueDTO, []NeedInputGateDTO) {
+func (h *apiHandler) featureQueues() ([]HelpQueue, []NeedUserInputGate, error) {
 	features, _, _ := listFeatures(h.features)
 	var help []orderedHelpQueue
 	var gates []orderedNeedInputGate
@@ -1340,9 +1549,10 @@ func (h *apiHandler) featureQueues() ([]HelpQueueDTO, []NeedInputGateDTO) {
 				continue
 			}
 			help = append(help, orderedHelpQueue{
-				dto: HelpQueueDTO{
+				dto: HelpQueue{
 					FeatureID: f.ID,
-					Question:  safeDisplayText(req.Question, 300),
+					Question:  SafeDisplayText(req.Question, 300),
+					Kind:      helpKindQuestion,
 					Pending:   req.Pending,
 					Time:      req.Time,
 				},
@@ -1350,24 +1560,12 @@ func (h *apiHandler) featureQueues() ([]HelpQueueDTO, []NeedInputGateDTO) {
 				index:     i,
 			})
 		}
-		if f.PendingNeedUserInputPath != "" {
+		if f.Status == feature.StatusNeedUserInput && f.PendingNeedUserInputPath != "" {
 			gates = append(gates, orderedNeedInputGate{
-				dto:       needUserInputGateDTO(f.ID, entityFeature, "", "", f.CurrentIteration, f.InputNotifications, f.PendingNeedUserInputPath),
+				dto:       needUserInputGateDTO(f.ID, entityFeature, "", f.CurrentIteration, f.InputNotifications, f.PendingNeedUserInputPath),
 				featureID: f.ID,
 				created:   f.Created,
 				gateTime:  gateFileTime(f.PendingNeedUserInputPath),
-			})
-		}
-		for _, cycle := range f.PendingUserInputCycles() {
-			iteration := 0
-			if rc := f.RepoCycles[cycle.RepoName]; rc != nil {
-				iteration = rc.Iteration
-			}
-			gates = append(gates, orderedNeedInputGate{
-				dto:       needUserInputGateDTO(f.ID, entityFeature, cycle.RepoName, cycle.CycleType, iteration, f.InputNotifications, cycle.GatePath),
-				featureID: f.ID,
-				created:   f.Created,
-				gateTime:  gateFileTime(cycle.GatePath),
 			})
 		}
 	}
@@ -1376,12 +1574,20 @@ func (h *apiHandler) featureQueues() ([]HelpQueueDTO, []NeedInputGateDTO) {
 			if sess == nil || sess.Status() != ports.SessionWaitingHelp || sessionHasPendingAskUserControl(sess) {
 				continue
 			}
+			// A chat session waiting between turns is waiting on the user —
+			// the inbox is its only reply surface. A phase session in the same
+			// state is mid-coordination and needs no human.
+			kind := helpKindCoordinating
+			if sess.Kind() == ports.KindChat {
+				kind = helpKindInput
+			}
 			help = append(help, orderedHelpQueue{
-				dto: HelpQueueDTO{
+				dto: HelpQueue{
 					FeatureID: sess.FeatureID(),
 					Question:  agentQuestionPrompt,
+					Kind:      kind,
 					Pending:   true,
-					Time:      sess.StartedAt(),
+					Time:      sess.WaitingSince(),
 				},
 				featureID: sess.FeatureID(),
 				index:     len(help),
@@ -1390,8 +1596,11 @@ func (h *apiHandler) featureQueues() ([]HelpQueueDTO, []NeedInputGateDTO) {
 	}
 	sortOrderedHelpQueue(help)
 	sortOrderedNeedInputGates(gates)
-	return dtosOf(help, func(w orderedHelpQueue) HelpQueueDTO { return w.dto }),
-		dtosOf(gates, func(w orderedNeedInputGate) NeedInputGateDTO { return w.dto })
+	if err := boundNeedUserInputGateCollection(gates); err != nil {
+		return nil, nil, err
+	}
+	return dtosOf(help, func(w orderedHelpQueue) HelpQueue { return w.dto }),
+		dtosOf(gates, func(w orderedNeedInputGate) NeedUserInputGate { return w.dto }), nil
 }
 
 func sessionHasPendingAskUserControl(sess ports.SessionView) bool {
@@ -1406,15 +1615,15 @@ func sessionHasPendingAskUserControl(sess ports.SessionView) bool {
 	return false
 }
 
-func needUserInputGateDTO(featureID, scope, repoName string, cycleType feature.RepoCycleType, iteration int, inputNotifications feature.InputNotificationsMode, gatePath string) NeedInputGateDTO {
-	dto := NeedInputGateDTO{
+func needUserInputGateDTO(featureID, scope, repoName string, iteration int, inputNotifications feature.InputNotificationsMode, gatePath string) NeedUserInputGate {
+	dto := NeedUserInputGate{
 		FeatureID:          featureID,
 		Open:               true,
 		Scope:              scope,
 		RepoName:           repoName,
-		CycleType:          string(cycleType),
 		InputNotifications: string(feature.NormalizeInputNotificationsMode(inputNotifications)),
 		Iteration:          iteration,
+		WaitingSince:       gateFileTime(gatePath),
 	}
 	rec, err := agent.ReadNeedUserInputRecord(gatePath)
 	if err != nil {
@@ -1423,24 +1632,264 @@ func needUserInputGateDTO(featureID, scope, repoName string, cycleType feature.R
 	if dto.Iteration == 0 {
 		dto.Iteration = rec.Iteration
 	}
-	dto.Summary = strings.TrimSpace(rec.Summary)
-	dto.Questions = make([]NeedUserInputQuestionDTO, 0, len(rec.Questions))
+	if !rec.WaitingSince.IsZero() {
+		dto.WaitingSince = rec.WaitingSince
+	}
+	dto.Summary = agent.BoundNeedUserInputVerificationString(
+		strings.TrimSpace(rec.Summary),
+		agent.NeedUserInputVerificationContextTextMaxLength,
+	)
+	dto.Questions = make(
+		[]NeedUserInputQuestion,
+		0,
+		min(len(rec.Questions), agent.NeedUserInputGateMaxQuestions),
+	)
 	for _, q := range rec.Questions {
+		if len(dto.Questions) == agent.NeedUserInputGateMaxQuestions {
+			break
+		}
 		prompt := strings.TrimSpace(q.Prompt)
 		if prompt == "" {
 			continue
 		}
-		dto.Questions = append(dto.Questions, NeedUserInputQuestionDTO{
-			Index:  q.Index,
-			Prompt: prompt,
-			Answer: strings.TrimSpace(q.Answer),
+		questionIndex := q.Index
+		if questionIndex <= 0 {
+			questionIndex = len(dto.Questions) + 1
+		}
+		dto.Questions = append(dto.Questions, NeedUserInputQuestion{
+			Index: questionIndex,
+			Prompt: agent.BoundNeedUserInputVerificationString(
+				prompt,
+				agent.NeedUserInputVerificationContextTextMaxLength,
+			),
+			Answer: agent.BoundNeedUserInputVerificationString(
+				strings.TrimSpace(q.Answer),
+				agent.NeedUserInputVerificationContextTextMaxLength,
+			),
 		})
 	}
+	if rec.Verification != nil && rec.VerificationDecision != nil && len(rec.Verification.Blockers) > 0 {
+		verification := NeedUserInputVerification{
+			Blockers: make(
+				[]NeedUserInputVerificationBlocker,
+				0,
+				min(len(rec.Verification.Blockers), agent.NeedUserInputVerificationMaxBlockers),
+			),
+			AllowedActions: []NeedUserInputVerificationAction{},
+		}
+		for _, blocker := range rec.Verification.Blockers {
+			if len(verification.Blockers) == agent.NeedUserInputVerificationMaxBlockers {
+				break
+			}
+			itemID := strings.TrimSpace(blocker.ItemID)
+			if itemID == "" {
+				continue
+			}
+			capabilities := make(
+				[]string,
+				0,
+				min(
+					len(blocker.Capabilities),
+					agent.NeedUserInputVerificationMaxCapabilities,
+				),
+			)
+			for _, capability := range blocker.Capabilities {
+				if capability = strings.TrimSpace(capability); capability != "" {
+					capabilities = append(
+						capabilities,
+						agent.BoundNeedUserInputVerificationString(
+							capability,
+							agent.NeedUserInputVerificationContextTextMaxLength,
+						),
+					)
+					if len(capabilities) == agent.NeedUserInputVerificationMaxCapabilities {
+						break
+					}
+				}
+			}
+			verification.Blockers = append(verification.Blockers, NeedUserInputVerificationBlocker{
+				ItemID: agent.BoundNeedUserInputVerificationString(
+					itemID,
+					agent.NeedUserInputVerificationItemIDMaxLength,
+				),
+				Name: agent.BoundNeedUserInputVerificationString(
+					strings.TrimSpace(blocker.Name),
+					agent.NeedUserInputVerificationContextTextMaxLength,
+				),
+				RepoName: agent.BoundNeedUserInputVerificationString(
+					strings.TrimSpace(blocker.RepoName),
+					agent.NeedUserInputVerificationRepoNameMaxLength,
+				),
+				Command: agent.BoundNeedUserInputVerificationString(
+					strings.TrimSpace(blocker.Command),
+					agent.NeedUserInputVerificationContextTextMaxLength,
+				),
+				Reason: agent.BoundNeedUserInputVerificationString(
+					strings.TrimSpace(blocker.Reason),
+					agent.NeedUserInputVerificationContextTextMaxLength,
+				),
+				Capabilities: capabilities,
+				Remediation: agent.BoundNeedUserInputVerificationString(
+					strings.TrimSpace(blocker.Remediation),
+					agent.NeedUserInputVerificationContextTextMaxLength,
+				),
+			})
+		}
+		seenActions := make(map[NeedUserInputVerificationAction]struct{}, 2)
+		for _, action := range rec.VerificationDecision.AllowedActions {
+			normalized := strings.ToUpper(strings.TrimSpace(action))
+			switch normalized {
+			case agent.NeedUserVerificationWaive, agent.NeedUserVerificationRetryAfterAuth:
+				candidate := NeedUserInputVerificationAction(normalized)
+				if _, exists := seenActions[candidate]; !exists {
+					seenActions[candidate] = struct{}{}
+					verification.AllowedActions = append(verification.AllowedActions, candidate)
+				}
+			}
+		}
+		dto.Verification = &verification
+	}
+	boundNeedUserInputGateDisplay(&dto)
 	return dto
 }
 
+// A JSON string can expand to six bytes per UTF-16 code unit when control
+// characters are escaped. Reserve three quarters of the gate budget for all
+// questionnaire fields so every projected question remains answerable.
+const needUserInputQuestionJSONExpansion = 6
+
+func boundNeedUserInputGateDisplay(dto *NeedUserInputGate) {
+	if len(dto.Questions) > 0 {
+		questionTextLimit := (agent.NeedUserInputGateDisplayMaxBytes * 3 / 4) /
+			(len(dto.Questions) * 2 * needUserInputQuestionJSONExpansion)
+		questionTextLimit = max(1, min(
+			questionTextLimit,
+			agent.NeedUserInputVerificationContextTextMaxLength,
+		))
+		for i := range dto.Questions {
+			dto.Questions[i].Prompt = agent.BoundNeedUserInputVerificationString(
+				dto.Questions[i].Prompt,
+				questionTextLimit,
+			)
+			dto.Questions[i].Answer = agent.BoundNeedUserInputVerificationString(
+				dto.Questions[i].Answer,
+				questionTextLimit,
+			)
+		}
+	}
+	if needUserInputGateFitsDisplayBudget(*dto) {
+		return
+	}
+	if dto.Verification != nil {
+		for i := range dto.Verification.Blockers {
+			dto.Verification.Blockers[i].Capabilities = []string{}
+		}
+		if needUserInputGateFitsDisplayBudget(*dto) {
+			return
+		}
+	}
+	dto.Summary = ""
+	if needUserInputGateFitsDisplayBudget(*dto) {
+		return
+	}
+	if dto.Verification == nil {
+		return
+	}
+
+	blockers := dto.Verification.Blockers
+	low, high, best := 1, len(blockers), 0
+	for low <= high {
+		mid := low + (high-low)/2
+		dto.Verification.Blockers = blockers[:mid]
+		if needUserInputGateFitsDisplayBudget(*dto) {
+			best = mid
+			low = mid + 1
+		} else {
+			high = mid - 1
+		}
+	}
+	if best > 0 {
+		dto.Verification.Blockers = blockers[:best]
+		return
+	}
+	dto.Verification = nil
+}
+
+func needUserInputGateFitsDisplayBudget(dto NeedUserInputGate) bool {
+	data, err := json.Marshal(dto)
+	return err == nil && len(data) <= agent.NeedUserInputGateDisplayMaxBytes
+}
+
+func boundNeedUserInputGateCollection(gates []orderedNeedInputGate) error {
+	questionCount := 0
+	for i := range gates {
+		questionCount += len(gates[i].dto.Questions)
+	}
+	if questionCount > 0 {
+		questionTextLimit := (agent.NeedUserInputGateCollectionMaxBytes * 3 / 4) /
+			(questionCount * 2 * needUserInputQuestionJSONExpansion)
+		questionTextLimit = max(1, min(
+			questionTextLimit,
+			agent.NeedUserInputVerificationContextTextMaxLength,
+		))
+		for i := range gates {
+			for question := range gates[i].dto.Questions {
+				gates[i].dto.Questions[question].Prompt =
+					agent.BoundNeedUserInputVerificationString(
+						gates[i].dto.Questions[question].Prompt,
+						questionTextLimit,
+					)
+				gates[i].dto.Questions[question].Answer =
+					agent.BoundNeedUserInputVerificationString(
+						gates[i].dto.Questions[question].Answer,
+						questionTextLimit,
+					)
+			}
+		}
+	}
+	if needUserInputGateCollectionFitsBudget(gates) {
+		return nil
+	}
+	for i := range gates {
+		if gates[i].dto.Verification == nil {
+			continue
+		}
+		for blocker := range gates[i].dto.Verification.Blockers {
+			gates[i].dto.Verification.Blockers[blocker].Capabilities = []string{}
+		}
+	}
+	if needUserInputGateCollectionFitsBudget(gates) {
+		return nil
+	}
+	for i := range gates {
+		gates[i].dto.Summary = ""
+	}
+	if needUserInputGateCollectionFitsBudget(gates) {
+		return nil
+	}
+	for i := len(gates) - 1; i >= 0; i-- {
+		if gates[i].dto.Verification == nil {
+			continue
+		}
+		gates[i].dto.Verification = nil
+		if needUserInputGateCollectionFitsBudget(gates) {
+			return nil
+		}
+	}
+	return errNeedUserInputGateCollectionTooLarge
+}
+
+func needUserInputGateCollectionFitsBudget(gates []orderedNeedInputGate) bool {
+	dtos := make([]NeedUserInputGate, len(gates))
+	for i := range gates {
+		dtos[i] = gates[i].dto
+	}
+	data, err := json.Marshal(dtos)
+	return err == nil && len(data) <= agent.NeedUserInputGateCollectionMaxBytes
+}
+
 type orderedControlRequest struct {
-	dto       ControlRequestDTO
+	dto       ControlRequest
 	startedAt time.Time
 	sessionID string
 	index     int
@@ -1465,7 +1914,7 @@ func sortOrderedControlRequests(items []orderedControlRequest) {
 }
 
 type orderedHelpQueue struct {
-	dto       HelpQueueDTO
+	dto       HelpQueue
 	featureID string
 	index     int
 }
@@ -1489,7 +1938,7 @@ func sortOrderedHelpQueue(items []orderedHelpQueue) {
 }
 
 type orderedNeedInputGate struct {
-	dto       NeedInputGateDTO
+	dto       NeedUserInputGate
 	featureID string
 	created   time.Time
 	gateTime  time.Time
@@ -1529,7 +1978,7 @@ func gateFileTime(path string) time.Time {
 	if err != nil {
 		return time.Time{}
 	}
-	return info.ModTime()
+	return info.ModTime().UTC()
 }
 
 func beforeByKnownTime(a, b time.Time) bool {
@@ -1542,12 +1991,12 @@ func beforeByKnownTime(a, b time.Time) bool {
 	return a.Before(b)
 }
 
-func featureConfigDTO(f *feature.Feature) FeatureConfigDTO {
+func featureConfigDTO(f *feature.Feature) FeatureConfig {
 	pipeline := f.Pipeline
-	return FeatureConfigDTO{
+	return FeatureConfig{
 		Models:              f.Models,
 		Effort:              f.Effort,
-		Inquireness:         string(f.Inquireness),
+		Inquireness:         FeatureConfigInquireness(f.Inquireness),
 		Checkpoints:         checkpointsDTO(pipeline.NormalizeCheckpoints(f.Checkpoints, f.IsPublishable())),
 		Pipeline:            string(pipeline),
 		InputNotifications:  FeatureConfigInputNotifications(feature.NormalizeInputNotificationsMode(f.InputNotifications)),
@@ -1555,8 +2004,8 @@ func featureConfigDTO(f *feature.Feature) FeatureConfigDTO {
 	}
 }
 
-func checkpointsDTO(c feature.Checkpoints) CheckpointsDTO {
-	return CheckpointsDTO{
+func checkpointsDTO(c feature.Checkpoints) Checkpoints {
+	return Checkpoints{
 		InquiryReview:   c.InquiryReview,
 		ResearchReview:  c.ResearchReview,
 		DesignReview:    c.DesignReview,
@@ -1567,25 +2016,26 @@ func checkpointsDTO(c feature.Checkpoints) CheckpointsDTO {
 	}
 }
 
-func controlRequestDTO(sess ports.SessionView, req *llm.ControlRequestMessage) ControlRequestDTO {
+func controlRequestDTO(sess ports.SessionView, req *llm.ControlRequestMessage) ControlRequest {
 	if req == nil {
-		return ControlRequestDTO{}
+		return ControlRequest{}
 	}
-	dto := ControlRequestDTO{
-		RequestID: req.RequestID,
-		SessionID: sess.ID(),
-		FeatureID: sess.FeatureID(),
-		Phase:     sess.Phase().String(),
-		ToolName:  req.Request.ToolName,
-		Status:    controlRequestStatusPending,
-		Summary:   safeControlSummary(req),
+	dto := ControlRequest{
+		RequestID:    req.RequestID,
+		SessionID:    sess.ID(),
+		FeatureID:    sess.FeatureID(),
+		Phase:        sess.Phase().String(),
+		ToolName:     req.Request.ToolName,
+		Status:       controlRequestStatusPending,
+		WaitingSince: req.WaitingSince,
+		Summary:      safeControlSummary(req),
 	}
 	if req.Request.ToolName == toolNameAskUserQuestion {
 		dto.Questions = safeAskUserQuestions(sess, req)
 	} else {
 		dto.Input = safeControlInput(req)
 		scope := sess.PermCacheScope()
-		dto.Remember = &PermissionRememberPreviewDTO{
+		dto.Remember = &PermissionRememberPreview{
 			Pattern:      safeRememberPattern(req),
 			Scope:        scope,
 			ScopeDisplay: permissionScopeDisplay(scope),
@@ -1638,14 +2088,14 @@ func safeControlSummary(req *llm.ControlRequestMessage) string {
 			if q == "" {
 				q = envelope.Questions[0].Header
 			}
-			return safeDisplayText(q, 180)
+			return SafeDisplayText(q, 180)
 		}
 		return "user input requested"
 	}
 	if detail := safeControlInputDetail(req.Request.ToolName, req.Request.Input); detail != "" {
-		return safeDisplayText(detail, 180)
+		return SafeDisplayText(detail, 180)
 	}
-	return safeDisplayText(req.Request.ToolName+" requested", 180)
+	return SafeDisplayText(req.Request.ToolName+" requested", 180)
 }
 
 func safeControlInput(req *llm.ControlRequestMessage) map[string]any {
@@ -1674,7 +2124,7 @@ func safeControlInputValue(value any) any {
 		}
 		return out
 	case string:
-		return safeDisplayText(v, 2000)
+		return SafeDisplayText(v, 2000)
 	default:
 		return v
 	}
@@ -1712,7 +2162,7 @@ func safeStringField(fields map[string]any, key string) string {
 	if !ok {
 		return ""
 	}
-	return safeDisplayText(value, 2000)
+	return SafeDisplayText(value, 2000)
 }
 
 const (
@@ -1722,7 +2172,7 @@ const (
 	askUserOptionDescriptionDisplayLimit = 4000
 )
 
-func safeAskUserQuestions(sess ports.SessionView, req *llm.ControlRequestMessage) []AskUserQuestionDTO {
+func safeAskUserQuestions(sess ports.SessionView, req *llm.ControlRequestMessage) []AskUserQuestion {
 	if req == nil || req.Request.ToolName != toolNameAskUserQuestion {
 		return nil
 	}
@@ -1733,16 +2183,17 @@ func safeAskUserQuestions(sess ports.SessionView, req *llm.ControlRequestMessage
 	return enrichAskUserQuestionDTOConfidence(questions, sess.MessageLog())
 }
 
-func safeAskUserQuestionsFromInput(input json.RawMessage) []AskUserQuestionDTO {
+func safeAskUserQuestionsFromInput(input json.RawMessage) []AskUserQuestion {
 	if len(input) == 0 {
 		return nil
 	}
 	var envelope struct {
 		Questions []struct {
-			Question    string `json:"question"`
-			Header      string `json:"header"`
-			MultiSelect bool   `json:"multiSelect"`
-			Options     []struct {
+			Question         string `json:"question"`
+			Header           string `json:"header"`
+			MultiSelect      bool   `json:"multiSelect"`
+			MultiSelectSnake bool   `json:"multi_select"`
+			Options          []struct {
 				Label       string   `json:"label"`
 				Description string   `json:"description"`
 				Confidence  *float64 `json:"confidence"`
@@ -1752,17 +2203,17 @@ func safeAskUserQuestionsFromInput(input json.RawMessage) []AskUserQuestionDTO {
 	if err := json.Unmarshal(input, &envelope); err != nil || len(envelope.Questions) == 0 {
 		return nil
 	}
-	questions := make([]AskUserQuestionDTO, 0, len(envelope.Questions))
+	questions := make([]AskUserQuestion, 0, len(envelope.Questions))
 	for _, rawQuestion := range envelope.Questions {
-		question := AskUserQuestionDTO{
-			Question:    safeDisplayText(rawQuestion.Question, askUserQuestionDisplayLimit),
-			Header:      safeDisplayText(rawQuestion.Header, askUserHeaderDisplayLimit),
-			MultiSelect: rawQuestion.MultiSelect,
+		question := AskUserQuestion{
+			Question:    SafeDisplayText(rawQuestion.Question, askUserQuestionDisplayLimit),
+			Header:      SafeDisplayText(rawQuestion.Header, askUserHeaderDisplayLimit),
+			MultiSelect: rawQuestion.MultiSelect || rawQuestion.MultiSelectSnake,
 		}
 		for _, rawOption := range rawQuestion.Options {
-			option := AskUserOptionDTO{
-				Label:       safeDisplayText(rawOption.Label, askUserOptionLabelDisplayLimit),
-				Description: safeDisplayText(rawOption.Description, askUserOptionDescriptionDisplayLimit),
+			option := AskUserOption{
+				Label:       SafeDisplayText(rawOption.Label, askUserOptionLabelDisplayLimit),
+				Description: SafeDisplayText(rawOption.Description, askUserOptionDescriptionDisplayLimit),
 				Confidence:  rawOption.Confidence,
 			}
 			if option.Label == "" && option.Description == "" && option.Confidence == nil {
@@ -1778,7 +2229,7 @@ func safeAskUserQuestionsFromInput(input json.RawMessage) []AskUserQuestionDTO {
 	return questions
 }
 
-func askUserQuestionDTOsNeedConfidence(questions []AskUserQuestionDTO) bool {
+func askUserQuestionDTOsNeedConfidence(questions []AskUserQuestion) bool {
 	for _, q := range questions {
 		for _, opt := range q.Options {
 			if opt.Confidence == nil {
@@ -1789,7 +2240,7 @@ func askUserQuestionDTOsNeedConfidence(questions []AskUserQuestionDTO) bool {
 	return false
 }
 
-func enrichAskUserQuestionDTOConfidence(questions []AskUserQuestionDTO, log ports.MessageLog) []AskUserQuestionDTO {
+func enrichAskUserQuestionDTOConfidence(questions []AskUserQuestion, log ports.MessageLog) []AskUserQuestion {
 	if log == nil {
 		return questions
 	}
@@ -1808,7 +2259,7 @@ func enrichAskUserQuestionDTOConfidence(questions []AskUserQuestionDTO, log port
 	return questions
 }
 
-func askUserQuestionDTOBundlesMatch(a, b []AskUserQuestionDTO) bool {
+func askUserQuestionDTOBundlesMatch(a, b []AskUserQuestion) bool {
 	if len(a) == 0 || len(a) != len(b) {
 		return false
 	}
@@ -1829,11 +2280,11 @@ func askUserQuestionDTOBundlesMatch(a, b []AskUserQuestionDTO) bool {
 	return true
 }
 
-func copyAskUserQuestionDTOConfidence(questions, source []AskUserQuestionDTO) []AskUserQuestionDTO {
-	enriched := make([]AskUserQuestionDTO, len(questions))
+func copyAskUserQuestionDTOConfidence(questions, source []AskUserQuestion) []AskUserQuestion {
+	enriched := make([]AskUserQuestion, len(questions))
 	for i := range questions {
 		enriched[i] = questions[i]
-		enriched[i].Options = append([]AskUserOptionDTO(nil), questions[i].Options...)
+		enriched[i].Options = append([]AskUserOption(nil), questions[i].Options...)
 		for j := range enriched[i].Options {
 			if enriched[i].Options[j].Confidence == nil {
 				enriched[i].Options[j].Confidence = source[i].Options[j].Confidence
@@ -1843,7 +2294,7 @@ func copyAskUserQuestionDTOConfidence(questions, source []AskUserQuestionDTO) []
 	return enriched
 }
 
-func safeDisplayText(s string, limit int) string {
+func SafeDisplayText(s string, limit int) string {
 	s = strings.ReplaceAll(s, "private-token", "[redacted]")
 	s = strings.ReplaceAll(s, "raw initial prompt", "[redacted prompt]")
 	s = strings.TrimSpace(s)

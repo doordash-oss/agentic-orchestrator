@@ -175,6 +175,112 @@ func TestFeatureListDTOShapeAndNoAuthentication(t *testing.T) {
 	}
 }
 
+// relationshipCountingStore counts relationship scans so list-shaped
+// endpoints can prove they resolve every parent's children in one pass
+// instead of rescanning the store per parent.
+type relationshipCountingStore struct {
+	features       []*feature.Feature
+	perParentCalls int
+	bulkCalls      int
+}
+
+func (s *relationshipCountingStore) List() ([]*feature.Feature, error) { return s.features, nil }
+func (s *relationshipCountingStore) Load(id string) (*feature.Feature, error) {
+	for _, f := range s.features {
+		if f.ID == id {
+			return f, nil
+		}
+	}
+	return nil, os.ErrNotExist
+}
+func (s *relationshipCountingStore) LoadRun(string, int) (*feature.Run, error) {
+	return &feature.Run{}, nil
+}
+func (s *relationshipCountingStore) RunDir(string, int) string      { return "" }
+func (s *relationshipCountingStore) ListRuns(string) ([]int, error) { return nil, nil }
+
+func (s *relationshipCountingStore) classify() map[string]*feature.RelationshipChildren {
+	all := map[string]*feature.RelationshipChildren{}
+	for _, f := range s.features {
+		if !f.IsChild() {
+			continue
+		}
+		children := all[f.Parent.ParentID]
+		if children == nil {
+			children = &feature.RelationshipChildren{}
+			all[f.Parent.ParentID] = children
+		}
+		if f.IsActiveChild() {
+			children.Active = f
+		} else {
+			children.Closed = append(children.Closed, f)
+		}
+	}
+	return all
+}
+
+func (s *relationshipCountingStore) RelationshipChildren(parentID string) (*feature.RelationshipChildren, error) {
+	s.perParentCalls++
+	children := s.classify()[parentID]
+	if children == nil {
+		children = &feature.RelationshipChildren{}
+	}
+	return children, nil
+}
+
+func (s *relationshipCountingStore) AllRelationshipChildren() (map[string]*feature.RelationshipChildren, error) {
+	s.bulkCalls++
+	return s.classify(), nil
+}
+
+func TestFeatureListResolvesRelationshipsInOneScan(t *testing.T) {
+	t.Parallel()
+
+	store := &relationshipCountingStore{features: []*feature.Feature{
+		{ID: "parent-1", Name: "Parent One", Status: feature.StatusPublished, CurrentPhase: feature.PhasePublish},
+		{ID: "parent-2", Name: "Parent Two", Status: feature.StatusPublished, CurrentPhase: feature.PhasePublish},
+		{
+			ID:           "child-1",
+			Name:         "Pass",
+			Status:       feature.StatusDesigning,
+			CurrentPhase: feature.PhaseDesign,
+			Parent:       &feature.ChildRelationship{ParentID: "parent-1", Kind: feature.ChildKindRefactor},
+		},
+	}}
+	handler := NewHandler(HandlerOptions{
+		Runtime:               RuntimeIdentity{RuntimeDir: runtimeDirLiteral, StateDir: testRuntimeStateDir, Config: testRuntimeConfigPath},
+		FeatureStore:          store,
+		DisableHostValidation: true,
+	})
+
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/v1/features", nil))
+	resp := w.Result()
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d; want 200", resp.StatusCode)
+	}
+	var body FeatureListResponse
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(body.Features) != 2 {
+		t.Fatalf("features length = %d; want 2 parents", len(body.Features))
+	}
+	var parentOne *FeatureSummary
+	for i := range body.Features {
+		if body.Features[i].ID == "parent-1" {
+			parentOne = &body.Features[i]
+		}
+	}
+	if parentOne == nil || parentOne.ActiveChild == nil || parentOne.ActiveChild.ID != "child-1" {
+		t.Fatalf("parent-1 active child = %+v; want child-1", parentOne)
+	}
+	if store.bulkCalls != 1 || store.perParentCalls != 0 {
+		t.Fatalf("relationship scans: bulk = %d, per-parent = %d; want one bulk scan and no per-parent scans", store.bulkCalls, store.perParentCalls)
+	}
+}
+
 func TestSnapshotResponsesExposeAsOfSequence(t *testing.T) {
 	t.Parallel()
 
@@ -185,7 +291,7 @@ func TestSnapshotResponsesExposeAsOfSequence(t *testing.T) {
 		}),
 		DisableHostValidation: true,
 	})
-	handler.broker.publish(SSEEventDTO{Kind: testEventKindFeatureState, Resource: ResourceDTO{Type: entityFeature, ID: fixtureFeatureID}})
+	handler.broker.publish(SSEEvent{Kind: testEventKindFeatureState, Resource: Resource{Type: entityFeature, ID: fixtureFeatureID}})
 
 	w := httptest.NewRecorder()
 	handler.routes().ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/v1/features", nil))
@@ -548,6 +654,86 @@ func TestRefactorActionRequiresName(t *testing.T) {
 	}
 }
 
+func TestReviewFeedbackActionLaunchesFromSubmittedPayload(t *testing.T) {
+	t.Parallel()
+
+	target := &reviewFeedbackMutationTarget{resp: ReviewFeedbackFeatureResponse{
+		ParentID:  "parent-1",
+		FeatureID: "child-1",
+		Result:    resultCreated,
+	}}
+	handler := NewHandler(HandlerOptions{Mutations: target, DisableHostValidation: true})
+	body := `{"comments":[{"repo":"api","id":17,"type":"review","path":"handler.go","line":42,"author":"alice","body":"handle this","diff_hunk":"@@ -41 +41,2 @@","in_reply_to_id":9}],"gate":false}`
+	req := httptest.NewRequest(http.MethodPost, apiPathReviewFeedbackAction, bytes.NewBufferString(body))
+	req.URL.Path = "/api/v1/features/parent-1/actions/review-feedback"
+	req.Header.Set("Content-Type", contentTypeJSON)
+	req.Header.Set("X-Agentico-Client", trustedClientHeaderValue)
+	w := httptest.NewRecorder()
+
+	handler.ServeHTTP(w, req)
+
+	resp := w.Result()
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("status = %d; want 201", resp.StatusCode)
+	}
+	if len(target.received) != 1 {
+		t.Fatalf("received requests = %d; want 1", len(target.received))
+	}
+	got := target.received[0]
+	if got.Gate == nil || *got.Gate || len(got.Comments) != 1 {
+		t.Fatalf("request = %+v; want one comment and explicit false gate", got)
+	}
+	want := feature.ReviewFeedbackComment{
+		Repo: "api", ID: 17, Type: "review", Path: "handler.go", Line: 42,
+		Author: "alice", Body: "handle this", DiffHunk: "@@ -41 +41,2 @@", InReplyTo: 9,
+	}
+	if got.Comments[0] != want {
+		t.Fatalf("comment = %+v; want %+v", got.Comments[0], want)
+	}
+}
+
+func TestReviewFeedbackActionTypedValidationErrorCodes(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		err      error
+		wantCode string
+	}{
+		{name: "empty selection", err: feature.ErrReviewFeedbackEmptySelection, wantCode: "review_feedback_empty_selection"},
+		{name: "unsupported comment", err: feature.ErrReviewFeedbackUnsupportedCommentType, wantCode: "review_feedback_unsupported_comment_type"},
+		{name: "unknown repository", err: feature.ErrReviewFeedbackUnknownRepo, wantCode: "review_feedback_unknown_repo"},
+		{name: "repository without pull request", err: feature.ErrReviewFeedbackRepoHasNoPR, wantCode: "review_feedback_repo_has_no_pull_request"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			target := &reviewFeedbackMutationTarget{err: tt.err}
+			handler := NewHandler(HandlerOptions{Mutations: target, DisableHostValidation: true})
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/features/parent-1/actions/review-feedback", bytes.NewBufferString(`{"comments":[{"repo":"api","id":17,"type":"review"}]}`))
+			req.Header.Set("Content-Type", contentTypeJSON)
+			req.Header.Set("X-Agentico-Client", trustedClientHeaderValue)
+			w := httptest.NewRecorder()
+
+			handler.ServeHTTP(w, req)
+
+			resp := w.Result()
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusBadRequest {
+				t.Fatalf("status = %d; want 400", resp.StatusCode)
+			}
+			var body ErrorResponse
+			if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+				t.Fatalf("decode response: %v", err)
+			}
+			if body.Error.Code != tt.wantCode {
+				t.Fatalf("error code = %q; want %q", body.Error.Code, tt.wantCode)
+			}
+		})
+	}
+}
+
 // TestRefactorActionTypedErrorCodes pins the stable machine codes of every
 // typed child-launch failure and of the child execution gate.
 func TestRefactorActionTypedErrorCodes(t *testing.T) {
@@ -758,12 +944,16 @@ func (t *startBlockedMutationTarget) StartFeature(string) (FeatureStartResponse,
 	return FeatureStartResponse{}, t.err
 }
 
+func (t *startBlockedMutationTarget) ResumeFeature(string) (FeatureStartResponse, error) {
+	return FeatureStartResponse{}, t.err
+}
+
 type deleteBlockedMutationTarget struct {
 	MutationTarget
 	err error
 }
 
-func (t *deleteBlockedMutationTarget) DeleteFeature(string) (DeleteFeatureResponse, error) {
+func (t *deleteBlockedMutationTarget) DeleteFeature(string, GuardedFeatureActionRequest) (DeleteFeatureResponse, error) {
 	return DeleteFeatureResponse{}, t.err
 }
 
@@ -772,6 +962,18 @@ type refactorMutationTarget struct {
 	received []RefactorFeatureRequest
 	resp     RefactorFeatureResponse
 	err      error
+}
+
+type reviewFeedbackMutationTarget struct {
+	MutationTarget
+	received []ReviewFeedbackFeatureRequest
+	resp     ReviewFeedbackFeatureResponse
+	err      error
+}
+
+func (t *reviewFeedbackMutationTarget) ReviewFeedbackFeature(_ string, req ReviewFeedbackFeatureRequest) (ReviewFeedbackFeatureResponse, error) {
+	t.received = append(t.received, req)
+	return t.resp, t.err
 }
 
 func (t *refactorMutationTarget) RefactorFeature(featureID string, req RefactorFeatureRequest) (RefactorFeatureResponse, error) {

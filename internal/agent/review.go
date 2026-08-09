@@ -97,8 +97,12 @@ type ImplementationReviewAxisPromptOpts struct {
 	DesignArtifactPath string
 	LiveRunAxis        bool
 	ExitCriteria       string
+	AcceptanceClause   string
 	DiffBase           string
 	PreviousFeedback   string
+	// RefactorPassForkPoint resolves the spec's "fork point" references for a
+	// refactor child ("repo @ sha"). Empty for top-level features.
+	RefactorPassForkPoint string
 
 	ProgressPath           string
 	IterDir                string
@@ -161,12 +165,14 @@ func BuildImplementationReviewAxisPromptWithOpts(opts ImplementationReviewAxisPr
 			FinalGate:                            opts.Gate == implementationReviewGateFinal,
 			LiveRunAxis:                          opts.LiveRunAxis,
 			DiffBase:                             opts.DiffBase,
+			RefactorPassForkPoint:                opts.RefactorPassForkPoint,
 			FeatureDescription:                   opts.FeatureDescription,
 			DesignArtifactPath:                   opts.DesignArtifactPath,
 			PreviousFeedback:                     opts.PreviousFeedback,
 			RoadmapPath:                          opts.RoadmapPath,
 			PlanPath:                             opts.PlanPath,
 			ExitCriteria:                         opts.ExitCriteria,
+			AcceptanceClause:                     opts.AcceptanceClause,
 			VerificationReportPath:               opts.VerificationReportPath,
 			ContractPath:                         opts.ContractPath,
 			RequiredVerification:                 required,

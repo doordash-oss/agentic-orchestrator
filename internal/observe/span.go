@@ -29,7 +29,7 @@ type SpanContext struct {
 	FeatureID    string
 	FeatureName  string
 	// RunNumber is the 1-indexed attempt number of the feature's active run.
-	// Zero means "unknown/unset" (e.g. pre-Phase-4 callers, tests that do not
+	// Zero means "unknown/unset" (for example, callers and tests that do not
 	// opt in). Stamped onto every emitted Event so events.jsonl can be
 	// filtered per run downstream.
 	RunNumber int

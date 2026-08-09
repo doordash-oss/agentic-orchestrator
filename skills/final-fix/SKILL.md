@@ -15,7 +15,7 @@ Run the tests that cover your fixes yourself and report the commands and results
 1. Read the reviewer feedback path named in the user prompt.
 2. Inspect the affected repository worktrees and make the smallest changes that satisfy the blocking findings.
 3. Run focused verification for the changes you made, broadening only when the finding or touched code warrants it.
-4. Create the `phase_complete` marker named by the system prompt as the last action.
+4. Validate the required artifacts and finish with the structured success outcome from the system prompt. The harness writes `phase_complete`.
 
 ## Boundaries
 

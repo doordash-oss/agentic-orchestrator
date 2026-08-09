@@ -29,9 +29,8 @@ var phasePlanCreatorRoleSpec = RoleSpec{
 	UserTemplate: "phase_plan.user",
 	OutputRoots: []OutputRootSpec{
 		artifactDirOutputRoot("Shared per-phase plan artifact root. The phase plan markdown is written here across attempts."),
-		attemptDirOutputRoot("Active phase-plan attempt directory. Debug prompts, attempt metadata, validator output, and phase_complete are written here."),
+		attemptDirOutputRoot("Active phase-plan attempt directory. Debug prompts, attempt metadata, and validator output are written here; the harness records its completion receipt here after validation."),
 	},
-	MarkerRoot: "attempt_dir",
 	Artifacts: []RoleArtifactSpec{
 		phasePlanMarkdownRoleArtifact(),
 		planAttemptMetaRoleArtifact(),

@@ -32,7 +32,7 @@ func TestValidateVerificationReport_SchemaChecks(t *testing.T) {
 	tests := []struct {
 		name           string
 		report         *VerificationReport
-		phaseComplete  bool
+		rootSuccess    bool
 		wantRejected   bool
 		wantCategories []ReportGateCategory
 		wantDetailHas  []string
@@ -46,7 +46,7 @@ func TestValidateVerificationReport_SchemaChecks(t *testing.T) {
 					// Lint check intentionally omitted.
 				},
 			},
-			phaseComplete:  true,
+			rootSuccess:    true,
 			wantRejected:   true,
 			wantCategories: []ReportGateCategory{GateCategorySchema},
 			wantDetailHas:  []string{"missing from the report", "go vet ./..."},
@@ -60,13 +60,13 @@ func TestValidateVerificationReport_SchemaChecks(t *testing.T) {
 					{Name: "Lint", Requirement: "go vet ./...", Status: VerificationStatusPassed, Evidence: "clean"},
 				},
 			},
-			phaseComplete:  true,
+			rootSuccess:    true,
 			wantRejected:   true,
 			wantCategories: []ReportGateCategory{GateCategorySchema},
 			wantDetailHas:  []string{"evidence is empty"},
 		},
 		{
-			name: "not_run_when_phase_complete",
+			name: "not_run_when_root_reports_success",
 			report: &VerificationReport{
 				Version: 1,
 				RequiredChecks: []VerificationCheckResult{
@@ -74,13 +74,13 @@ func TestValidateVerificationReport_SchemaChecks(t *testing.T) {
 					{Name: "Lint", Requirement: "go vet ./...", Status: VerificationStatusNotRun},
 				},
 			},
-			phaseComplete:  true,
+			rootSuccess:    true,
 			wantRejected:   true,
 			wantCategories: []ReportGateCategory{GateCategorySchema},
-			wantDetailHas:  []string{"not_run", "phase is marked complete"},
+			wantDetailHas:  []string{"not_run", "root outcome reports success"},
 		},
 		{
-			name: "not_run_when_phase_incomplete_is_ok",
+			name: "not_run_without_root_success_is_ok",
 			report: &VerificationReport{
 				Version: 1,
 				RequiredChecks: []VerificationCheckResult{
@@ -88,8 +88,8 @@ func TestValidateVerificationReport_SchemaChecks(t *testing.T) {
 					{Name: "Lint", Requirement: "go vet ./...", Status: VerificationStatusNotRun},
 				},
 			},
-			phaseComplete: false,
-			wantRejected:  false,
+			rootSuccess:  false,
+			wantRejected: false,
 		},
 		{
 			name: "unknown_status_value",
@@ -100,7 +100,7 @@ func TestValidateVerificationReport_SchemaChecks(t *testing.T) {
 					{Name: "Lint", Requirement: "go vet ./...", Status: VerificationStatusPassed, Evidence: "clean"},
 				},
 			},
-			phaseComplete:  true,
+			rootSuccess:    true,
 			wantRejected:   true,
 			wantCategories: []ReportGateCategory{GateCategorySchema},
 			wantDetailHas:  []string{"\"maybe\""},
@@ -114,8 +114,8 @@ func TestValidateVerificationReport_SchemaChecks(t *testing.T) {
 					{Name: "Lint", Requirement: "go vet ./...", Status: VerificationRunStatus("pass"), Evidence: "clean"},
 				},
 			},
-			phaseComplete: true,
-			wantRejected:  false,
+			rootSuccess:  true,
+			wantRejected: false,
 		},
 		{
 			name: "clean_report_passes",
@@ -126,8 +126,8 @@ func TestValidateVerificationReport_SchemaChecks(t *testing.T) {
 					{Name: "Lint", Requirement: "go vet ./...", Status: VerificationStatusPassed, Evidence: "no issues"},
 				},
 			},
-			phaseComplete: true,
-			wantRejected:  false,
+			rootSuccess:  true,
+			wantRejected: false,
 		},
 		{
 			name: "failed_status_does_not_reject",
@@ -138,8 +138,8 @@ func TestValidateVerificationReport_SchemaChecks(t *testing.T) {
 					{Name: "Lint", Requirement: "go vet ./...", Status: VerificationStatusFailed, Evidence: "3 issues found"},
 				},
 			},
-			phaseComplete: true,
-			wantRejected:  false,
+			rootSuccess:  true,
+			wantRejected: false,
 		},
 	}
 
@@ -149,7 +149,7 @@ func TestValidateVerificationReport_SchemaChecks(t *testing.T) {
 			for i := range tt.report.RequiredChecks {
 				tt.report.RequiredChecks[i].Status = NormalizeStatus(tt.report.RequiredChecks[i].Status)
 			}
-			result := ValidateVerificationReport(tt.report, required, nil, tt.phaseComplete)
+			result := ValidateVerificationReport(tt.report, required, nil, tt.rootSuccess)
 			if result.Rejected != tt.wantRejected {
 				t.Fatalf("Rejected=%v, want %v; findings=%+v", result.Rejected, tt.wantRejected, result.Findings)
 			}
@@ -403,8 +403,8 @@ func TestValidateVerificationReportWithContext_EvidenceFilesSkippedForBlockedRow
 }
 
 // TestFormatGateFeedback_ConsolidatesRepetitiveFindings covers the main
-// reason gate feedback used to be unreadable: an iteration that writes
-// SUCCESS + phase_complete without running any verification produces N
+// reason gate feedback used to be unreadable: an iteration that reports
+// success without running any verification produces N
 // identical "status is not_run" findings. Feedback should collapse those
 // into one actionable bullet that names the affected checks and points
 // the agent at the progress.md `## Iteration State: RETRY` protocol.
@@ -432,7 +432,7 @@ func TestFormatGateFeedback_ConsolidatesRepetitiveFindings(t *testing.T) {
 	// Must cite the count and point at the RETRY protocol.
 	wantSubstrings := []string{
 		"4 verification checks",
-		"phase_complete",
+		"completion was requested",
 		"## Iteration State: RETRY",
 		"### Remaining from the plan",
 	}

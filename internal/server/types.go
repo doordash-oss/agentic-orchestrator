@@ -51,12 +51,19 @@ type Options struct {
 	Events               <-chan interface{}
 	DomainEvents         <-chan ports.Event
 	Mutations            MutationTarget
-	RequestShutdown      func()
-	// Cleanliness inspects parent worktrees so a dirty refactor entry can
+	// PersistProviderModelCatalog writes a successfully discovered provider
+	// catalog before the server installs it in memory. Nil keeps live refreshes
+	// in memory only.
+	PersistProviderModelCatalog func(llm.LLMProvider, []llm.ModelInfo) error
+	// InitGitRepository overrides the git-init implementation used by the
+	// workspace repository-initialization endpoint. Nil means the default
+	// git adapter (internal/git.InitRepository).
+	InitGitRepository func(path string) error
+	// Worktrees inspects parent worktrees so a dirty refactor entry can
 	// attach the same structured diagnostics the launch-time error carries.
 	// Nil is tolerated: the dirty_parent disabled reason then ships without
 	// a diagnostics target.
-	Cleanliness feature.CleanlinessOps
+	Worktrees feature.WorktreeOps
 }
 
 type HandlerOptions struct {
@@ -68,18 +75,22 @@ type HandlerOptions struct {
 	// DisableHostValidation turns off the loopback Host-header check. Host
 	// validation defaults to ON — only tests exercising something other
 	// than host validation itself should set this to true.
-	DisableHostValidation bool
-	Features              FeatureLister
-	FeatureStore          FeatureReader
-	Freshness             RepoFreshnessProvider
-	Config                *config.Config
-	Registry              *llm.Registry
-	Sessions              ports.SessionManager
-	Events                <-chan interface{}
-	DomainEvents          <-chan ports.Event
-	Mutations             MutationTarget
-	RequestShutdown       func()
-	Cleanliness           feature.CleanlinessOps
+	DisableHostValidation       bool
+	Features                    FeatureLister
+	FeatureStore                FeatureReader
+	Freshness                   RepoFreshnessProvider
+	Config                      *config.Config
+	Registry                    *llm.Registry
+	Sessions                    ports.SessionManager
+	Events                      <-chan interface{}
+	DomainEvents                <-chan ports.Event
+	Mutations                   MutationTarget
+	PersistProviderModelCatalog func(llm.LLMProvider, []llm.ModelInfo) error
+	// InitGitRepository overrides the git-init implementation used by the
+	// workspace repository-initialization endpoint. Nil means the default
+	// git adapter (internal/git.InitRepository).
+	InitGitRepository func(path string) error
+	Worktrees         feature.WorktreeOps
 }
 
 type FeatureLister interface {
@@ -91,22 +102,23 @@ type FeatureReader interface {
 	Load(id string) (*feature.Feature, error)
 	LoadRun(featureID string, runNumber int) (*feature.Run, error)
 	RunDir(featureID string, runNumber int) string
+	ListRuns(featureID string) ([]int, error)
 }
 
 type RelationshipReader interface {
 	RelationshipChildren(parentID string) (*feature.RelationshipChildren, error)
 }
 
-type ErrorDTO = Error
+// BulkRelationshipReader resolves every parent's children in one store pass
+// so list-shaped endpoints avoid a per-parent directory rescan.
+type BulkRelationshipReader interface {
+	AllRelationshipChildren() (map[string]*feature.RelationshipChildren, error)
+}
 
-// OwnerDTO is the public process-owner metadata safe to expose through REST and
-// discovery records.
-type OwnerDTO = Owner
-
-// OwnerDTOFromInstanceOwner drops local filesystem paths from lock owner
+// OwnerFromInstanceOwner drops local filesystem paths from lock owner
 // metadata before it crosses public API or discovery boundaries.
-func OwnerDTOFromInstanceOwner(owner instancelock.Owner) OwnerDTO {
-	return OwnerDTO{
+func OwnerFromInstanceOwner(owner instancelock.Owner) Owner {
+	return Owner{
 		PID:       owner.PID,
 		PGID:      owner.PGID,
 		StartedAt: owner.StartedAt,
@@ -114,104 +126,10 @@ func OwnerDTOFromInstanceOwner(owner instancelock.Owner) OwnerDTO {
 	}
 }
 
-type WarningDTO = Warning
-
-type FeatureDetailDTO = FeatureDetail
-
-type ActionDTO = Action
-
-type ActionScopeDTO = ActionScope
-
-type ActionInputDTO = ActionInput
-
-type ActionDisabledReasonDTO = ActionDisabledReason
-
-type ActionImpactPreviewDTO = ActionImpactPreview
-
-type ActionImpactCategoryDTO = ActionImpactCategory
-
-type ActionImpactSubjectDTO = ActionImpactSubject
-
-type RunSummaryDTO = RunSummary
-
-type SetupDTO = Setup
-
-type SetupTaskDTO = SetupTask
-
-type RepoStatusDTO = RepoStatus
-
-type CycleDTO = Cycle
-
-type TimingDTO = Timing
-
-type CostDTO = Cost
-
-type ReviewGateDTO = ReviewGate
-
-type FailureDTO = Failure
-
-type NeedInputGateDTO = NeedUserInputGate
-
-type NeedUserInputQuestionDTO = NeedUserInputQuestion
-
-type RecoveryItemDTO = RecoveryItem
-
 type RecoveryActionRequest struct {
 	SnapshotID string            `json:"snapshot_id"`
 	Actions    map[string]string `json:"actions"`
 }
-
-type ConfigRepoDTO = ConfigRepo
-
-type FeatureDefaultsDTO = FeatureDefaults
-
-type NotificationConfigDTO = NotificationConfig
-
-type ObservabilityDTO = Observability
-
-type FeatureConfigDTO = FeatureConfig
-
-type CheckpointsDTO = Checkpoints
-
-type PublishabilityDTO = Publishability
-
-type ModelDTO = Model
-
-type ControlRequestDTO = ControlRequest
-
-type PermissionRememberPreviewDTO = PermissionRememberPreview
-
-type AskUserQuestionDTO = AskUserQuestion
-
-type AskUserOptionDTO = AskUserOption
-
-type HelpQueueDTO = HelpQueue
-
-type ArtifactDTO = Artifact
-
-type ContextDTO = Context
-
-type SessionSummaryDTO = SessionSummary
-
-type SessionDetailDTO = SessionDetail
-
-type CursorDTO = Cursor
-
-type UsageDTO = Usage
-
-type TranscriptMessageDTO = TranscriptMessage
-
-type ToolCallDTO = ToolCall
-
-type TaskDTO = Task
-
-type FileChangeDTO = FileChange
-
-type ReviewCommentDTO = ReviewComment
-
-type SSEEventDTO = SSEEvent
-
-type ResourceDTO = Resource
 
 type DiscoveryRecord struct {
 	SchemaVersion int             `json:"schema_version"`
@@ -226,7 +144,7 @@ type DiscoveryRecord struct {
 	PGID          int             `json:"pgid,omitempty"`
 	StartedAt     time.Time       `json:"started_at"`
 	PublishedAt   time.Time       `json:"published_at"`
-	Owner         OwnerDTO        `json:"owner"`
+	Owner         Owner           `json:"owner"`
 }
 
 type DiscoveryDecision struct {

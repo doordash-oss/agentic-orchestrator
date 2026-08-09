@@ -18,6 +18,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // VerificationStep represents a single automated verification command
@@ -26,6 +27,7 @@ type VerificationStep struct {
 	Description  string // Human-readable description (e.g., "Unit tests pass")
 	Command      string // Executable command (e.g., "go test ./...")
 	Repo         string // Explicit [repo: <name>] scope for multi-repo phase commands.
+	Timeout      string // Optional [timeout: <duration>] override for the harness run timeout.
 	Capabilities []VerificationCapability
 }
 
@@ -282,18 +284,21 @@ func verificationStepFromSpan(line string, chosen []int) (VerificationStep, bool
 	description := extractDescription(line, commandWithBackticks)
 	description = strings.TrimSpace(verificationCapabilityRE.ReplaceAllString(description, ""))
 	description = strings.TrimSpace(verificationRepoRE.ReplaceAllString(description, ""))
+	description = strings.TrimSpace(verificationTimeoutRE.ReplaceAllString(description, ""))
 	description = strings.TrimSpace(strings.TrimSuffix(description, ":"))
 
 	return VerificationStep{
 		Description:  description,
 		Command:      command,
 		Repo:         parseVerificationRepo(line),
+		Timeout:      parseVerificationTimeout(line),
 		Capabilities: parseVerificationCapabilities(line),
 	}, true
 }
 
 var verificationCapabilityRE = regexp.MustCompile(`\[agentico capability:\s*([^;\]]+)\s*;\s*probe:\s*([^\]]+)\]`)
 var verificationRepoRE = regexp.MustCompile(`(?i)\[repo:\s*([^\]]+)\]`)
+var verificationTimeoutRE = regexp.MustCompile(`(?i)\[timeout:\s*([^\]]+)\]`)
 
 func parseVerificationRepo(line string) string {
 	match := verificationRepoRE.FindStringSubmatch(line)
@@ -301,6 +306,20 @@ func parseVerificationRepo(line string) string {
 		return ""
 	}
 	return strings.TrimSpace(strings.Trim(match[1], "`"))
+}
+
+// parseVerificationTimeout returns the sanctioned [timeout: <duration>]
+// override, or "" when absent or not a valid duration.
+func parseVerificationTimeout(line string) string {
+	match := verificationTimeoutRE.FindStringSubmatch(line)
+	if len(match) != 2 {
+		return ""
+	}
+	timeout := strings.TrimSpace(strings.Trim(match[1], "`"))
+	if _, err := time.ParseDuration(timeout); err != nil {
+		return ""
+	}
+	return timeout
 }
 
 func parseVerificationCapabilities(line string) []VerificationCapability {

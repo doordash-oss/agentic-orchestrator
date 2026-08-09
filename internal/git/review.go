@@ -15,27 +15,39 @@
 package git
 
 import (
-	"bytes"
-	"encoding/json"
 	"fmt"
+	"net/url"
 	"os/exec"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
+	githubapi "github.com/doordash-oss/agentic-orchestrator/internal/github"
 )
 
-// Comment type constants. Canonical values live in ports.
+// PR comment type constants.
 const (
-	CommentTypeReview     = ports.CommentTypeReview
-	CommentTypeIssue      = ports.CommentTypeIssue
-	CommentTypeReviewBody = ports.CommentTypeReviewBody
+	CommentTypeReview     = "review"
+	CommentTypeIssue      = "issue"
+	CommentTypeReviewBody = "review_body"
 )
 
-// ReviewComment aliases the canonical port type.
-type ReviewComment = ports.ReviewComment
+// ReviewComment is a GitHub PR comment (inline review or issue conversation).
+type ReviewComment struct {
+	ID   int    `json:"id"`
+	Path string `json:"path"`
+	Line int    `json:"line"`
+	Body string `json:"body"`
+	User struct {
+		Login string `json:"login"`
+	} `json:"user"`
+	CreatedAt string `json:"created_at"`
+	DiffHunk  string `json:"diff_hunk"`
+	InReplyTo int    `json:"in_reply_to_id"`
+	Type      string `json:"type"`
+	RepoName  string `json:"repo_name,omitempty"`
+}
 
 // ParsePRURL extracts owner, repo, and PR number from a GitHub PR URL.
 // Expected format: https://github.com/owner/repo/pull/123
@@ -53,41 +65,76 @@ func ParsePRURL(prURL string) (owner, repo string, number int, err error) {
 	return "", "", 0, fmt.Errorf("could not parse PR URL: %s", prURL)
 }
 
-// FetchPRComments fetches inline PR review comments using the gh CLI. Returns
-// only top-level review comments (excludes replies). Each comment's Type field
-// is set to CommentTypeReview so completion can reply directly in the review
-// thread and then resolve the conversation.
-func FetchPRComments(repoPath, prURL string) ([]ReviewComment, error) {
+// prURLHost extracts the host from a PR URL, defaulting to github.com.
+func prURLHost(prURL string) string {
+	u, err := url.Parse(prURL)
+	if err != nil || u.Host == "" {
+		return "github.com"
+	}
+	return u.Host
+}
+
+// FetchPRComments fetches inline review comments, general conversation
+// comments, and submitted review bodies via the GitHub API. It excludes
+// replies to inline comments so each returned item represents one
+// addressable feedback thread or top-level PR comment. repoPath is
+// retained for signature stability; the API needs only the PR URL.
+func FetchPRComments(_ string, prURL string) ([]ReviewComment, error) {
 	owner, repo, number, err := ParsePRURL(prURL)
 	if err != nil {
 		return nil, err
 	}
-
-	// Fetch inline review comments
-	reviewEndpoint := fmt.Sprintf("repos/%s/%s/pulls/%d/comments", owner, repo, number)
-	reviewCmd := exec.Command("gh", "api", "--paginate", reviewEndpoint)
-	reviewCmd.Dir = repoPath
-	reviewOut, err := reviewCmd.CombinedOutput()
-	if err != nil {
-		return nil, fmt.Errorf("fetching PR review comments: %s: %w", strings.TrimSpace(string(reviewOut)), err)
-	}
-
-	reviewComments, err := parsePaginatedComments(reviewOut)
+	client, err := githubapi.ForHost(prURLHost(prURL))
 	if err != nil {
 		return nil, err
 	}
 
-	// Filter to top-level review comments and tag them
+	inline, err := client.ListPRReviewComments(owner, repo, number)
+	if err != nil {
+		return nil, fmt.Errorf("fetching PR review comments: %w", err)
+	}
 	var result []ReviewComment
-	for _, c := range reviewComments {
+	for _, c := range inline {
 		if c.InReplyTo == 0 {
-			c.Type = CommentTypeReview
-			result = append(result, c)
+			result = append(result, apiComment(c, CommentTypeReview))
 		}
+	}
+
+	issue, err := client.ListIssueComments(owner, repo, number)
+	if err != nil {
+		return nil, fmt.Errorf("fetching PR issue comments: %w", err)
+	}
+	for _, c := range issue {
+		result = append(result, apiComment(c, CommentTypeIssue))
+	}
+
+	reviews, err := client.ListPRReviews(owner, repo, number)
+	if err != nil {
+		return nil, fmt.Errorf("fetching PR reviews: %w", err)
+	}
+	for _, review := range reviews {
+		body := strings.TrimSpace(review.Body)
+		if body == "" {
+			continue
+		}
+		comment := ReviewComment{ID: review.ID, Body: body, CreatedAt: review.SubmittedAt, Type: CommentTypeReviewBody}
+		comment.User.Login = review.User.Login
+		result = append(result, comment)
 	}
 
 	SortReviewCommentsChronologically(result)
 	return result, nil
+}
+
+// apiComment converts a REST comment into the orchestrator's type.
+func apiComment(c githubapi.PRComment, commentType string) ReviewComment {
+	comment := ReviewComment{
+		ID: c.ID, Path: c.Path, Line: c.Line, Body: c.Body,
+		CreatedAt: c.CreatedAt, DiffHunk: c.DiffHunk, InReplyTo: c.InReplyTo,
+		Type: commentType,
+	}
+	comment.User.Login = c.User.Login
+	return comment
 }
 
 // SortReviewCommentsChronologically orders comments by their GitHub creation
@@ -122,131 +169,63 @@ func parseReviewCommentCreatedAt(value string) (time.Time, bool) {
 	return t, true
 }
 
-// parsePaginatedComments parses output from gh api --paginate, which emits
-// one JSON array per page, concatenated (e.g. [{...}][{...}]).
-func parsePaginatedComments(data []byte) ([]ReviewComment, error) {
-	var comments []ReviewComment
-	dec := json.NewDecoder(bytes.NewReader(data))
-	for dec.More() {
-		var page []ReviewComment
-		if err := dec.Decode(&page); err != nil {
-			return nil, fmt.Errorf("parsing PR comments: %w", err)
-		}
-		comments = append(comments, page...)
-	}
-	return comments, nil
-}
-
 // ReplyToPRComment posts a reply to a specific review comment.
-func ReplyToPRComment(repoPath, prURL string, commentID int, body string) error {
+func ReplyToPRComment(_ string, prURL string, commentID int, body string) error {
 	body = InjectPRSignature(body)
 	owner, repo, number, err := ParsePRURL(prURL)
 	if err != nil {
 		return err
 	}
-
-	endpoint := fmt.Sprintf("repos/%s/%s/pulls/%d/comments/%d/replies",
-		owner, repo, number, commentID)
-	cmd := exec.Command("gh", "api", endpoint, "-f", "body="+body)
-	cmd.Dir = repoPath
-	out, err := cmd.CombinedOutput()
+	client, err := githubapi.ForHost(prURLHost(prURL))
 	if err != nil {
-		return fmt.Errorf("replying to comment %d: %s: %w",
-			commentID, strings.TrimSpace(string(out)), err)
+		return err
+	}
+	if err := client.ReplyToReviewComment(owner, repo, number, commentID, body); err != nil {
+		return fmt.Errorf("replying to comment %d: %w", commentID, err)
 	}
 	return nil
 }
 
-// FetchReviewThreadMap queries the PR's review threads via GraphQL and returns
-// a map from comment database ID to the thread's GraphQL node ID. Only
-// unresolved threads are included.
-func FetchReviewThreadMap(repoPath, prURL string) (map[int]string, error) {
+// ReplyToIssueComment posts a top-level conversation comment on a PR.
+func ReplyToIssueComment(_ string, prURL, body string) error {
+	body = InjectPRSignature(body)
+	owner, repo, number, err := ParsePRURL(prURL)
+	if err != nil {
+		return err
+	}
+	client, err := githubapi.ForHost(prURLHost(prURL))
+	if err != nil {
+		return err
+	}
+	if err := client.CreateIssueComment(owner, repo, number, body); err != nil {
+		return fmt.Errorf("posting issue comment: %w", err)
+	}
+	return nil
+}
+
+// FetchReviewThreadMap returns comment database ID → unresolved thread
+// node ID for the PR. repoPath is retained for signature stability.
+func FetchReviewThreadMap(_ string, prURL string) (map[int]string, error) {
 	owner, repo, number, err := ParsePRURL(prURL)
 	if err != nil {
 		return nil, err
 	}
-
-	query := fmt.Sprintf(`query {
-  repository(owner: %q, name: %q) {
-    pullRequest(number: %d) {
-      reviewThreads(first: 100) {
-        nodes {
-          id
-          isResolved
-          comments(first: 1) {
-            nodes { databaseId }
-          }
-        }
-      }
-    }
-  }
-}`, owner, repo, number)
-
-	cmd := exec.Command("gh", "api", "graphql", "-f", "query="+query)
-	cmd.Dir = repoPath
-	out, err := cmd.CombinedOutput()
+	client, err := githubapi.ForHost(prURLHost(prURL))
 	if err != nil {
-		return nil, fmt.Errorf("fetching review threads: %s: %w", strings.TrimSpace(string(out)), err)
+		return nil, err
 	}
-
-	return parseReviewThreadMap(out)
+	return client.ReviewThreadMap(owner, repo, number)
 }
 
-// parseReviewThreadMap extracts comment-database-ID → thread-node-ID from the
-// GraphQL response. Only unresolved threads are included.
-func parseReviewThreadMap(data []byte) (map[int]string, error) {
-	var resp struct {
-		Data struct {
-			Repository struct {
-				PullRequest struct {
-					ReviewThreads struct {
-						Nodes []struct {
-							ID         string `json:"id"`
-							IsResolved bool   `json:"isResolved"`
-							Comments   struct {
-								Nodes []struct {
-									DatabaseID int `json:"databaseId"`
-								} `json:"nodes"`
-							} `json:"comments"`
-						} `json:"nodes"`
-					} `json:"reviewThreads"`
-				} `json:"pullRequest"`
-			} `json:"repository"`
-		} `json:"data"`
-	}
-	if err := json.Unmarshal(data, &resp); err != nil {
-		return nil, fmt.Errorf("parsing review threads response: %w", err)
-	}
-
-	result := make(map[int]string)
-	for _, thread := range resp.Data.Repository.PullRequest.ReviewThreads.Nodes {
-		if thread.IsResolved {
-			continue
-		}
-		for _, c := range thread.Comments.Nodes {
-			if c.DatabaseID != 0 {
-				result[c.DatabaseID] = thread.ID
-			}
-		}
-	}
-	return result, nil
-}
-
-// ResolveReviewThread resolves a single review thread via GraphQL mutation.
-func ResolveReviewThread(repoPath, threadNodeID string) error {
-	query := fmt.Sprintf(`mutation {
-  resolveReviewThread(input: {threadId: %q}) {
-    thread { isResolved }
-  }
-}`, threadNodeID)
-
-	cmd := exec.Command("gh", "api", "graphql", "-f", "query="+query)
-	cmd.Dir = repoPath
-	out, err := cmd.CombinedOutput()
+// ResolveReviewThread resolves a single review thread. Thread node IDs
+// come from FetchReviewThreadMap on the same PR; the API host is assumed
+// to be github.com because no PR URL reaches this call.
+func ResolveReviewThread(_ string, threadNodeID string) error {
+	client, err := githubapi.ForHost("github.com")
 	if err != nil {
-		return fmt.Errorf("resolving review thread: %s: %w", strings.TrimSpace(string(out)), err)
+		return err
 	}
-	return nil
+	return client.ResolveReviewThread(threadNodeID)
 }
 
 // LatestCommitSHA returns the short SHA of HEAD in the given directory.

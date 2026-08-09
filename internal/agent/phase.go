@@ -16,6 +16,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -125,11 +126,11 @@ func (pr *PhaseRunner) EffortCapabilitiesForModel(model string) []llm.EffortLeve
 	if pr.Registry == nil || model == "" {
 		return nil
 	}
-	prov, _, err := pr.Registry.ResolveModel(model)
+	prov, resolvedModel, err := pr.Registry.ResolveModel(model)
 	if err != nil {
 		return nil
 	}
-	return llm.EffortCapabilitiesForModel(prov, model)
+	return llm.EffortCapabilitiesForModel(prov, resolvedModel)
 }
 
 // resolveEffortForRole resolves the effective effort level for a primary
@@ -158,9 +159,34 @@ func (pr *PhaseRunner) resolveEffortForRole(f *feature.Feature, role llm.PhaseRo
 	return effectiveEffort, effortSource
 }
 
+// SessionRuntimeConfigResolver returns a role-aware resolver that reloads the
+// persisted feature before each newly-created provider session.
+func (pr *PhaseRunner) SessionRuntimeConfigResolver(featureID string) func(llm.PhaseRole) (SessionRuntimeConfig, error) {
+	if pr.FeatureStore == nil || strings.TrimSpace(featureID) == "" {
+		return nil
+	}
+	return func(role llm.PhaseRole) (SessionRuntimeConfig, error) {
+		latest, err := pr.FeatureStore.Load(featureID)
+		if err != nil {
+			return SessionRuntimeConfig{}, fmt.Errorf("load feature %s: %w", featureID, err)
+		}
+		field := llm.ConfigFieldForRole(role)
+		if field == "" {
+			return SessionRuntimeConfig{}, fmt.Errorf("unsupported session role %q", role)
+		}
+		model := pr.modelForRole(config.ModelConfigFieldByName(latest.Models, field), role)
+		effort, effortSource := pr.resolveEffortForRole(latest, role, model)
+		return SessionRuntimeConfig{
+			Model:           model,
+			EffectiveEffort: effort,
+			EffortSource:    effortSource,
+			AskingClause:    pr.askingQuestionsClauseForModel(model),
+		}, nil
+	}
+}
+
 // ResolveSecondaryEffort is the exported entry point for secondary session
-// launches (validators, review helpers, fix agents, cycle workers, utility
-// helpers). It resolves the effective effort and source from the same
+// launches (validators, review helpers, fix agents, utility helpers). It resolves the effective effort and source from the same
 // configured role as the selected model: Planning for planning agents, Review
 // for validators and review axes, Implementation for implementation and fix
 // workers, and Utilities for utility helpers. Capability drift projects the
@@ -225,7 +251,7 @@ type interactivePhaseConfig struct {
 func (pr *PhaseRunner) runInteractivePhase(f *feature.Feature, cfg interactivePhaseConfig) (string, error) {
 	artifactDir := pr.resolvePhaseArtifactDir(f, cfg.DirName)
 	_ = os.MkdirAll(artifactDir, 0o755)
-	RemovePhaseComplete(artifactDir)
+	RemoveCompletionReceipt(artifactDir)
 	phaseModel := pr.modelForRole(cfg.ConfiguredModel, cfg.ModelRole)
 
 	effectiveEffort, effortSource := pr.resolveEffortForRole(f, cfg.ModelRole, phaseModel)
@@ -265,7 +291,7 @@ func (pr *PhaseRunner) runInteractivePhase(f *feature.Feature, cfg interactivePh
 		EffortLevel:                    effortLevel,
 		Phase:                          cfg.Phase,
 		SystemPromptHasUsefulResources: true,
-		MarkerPath:                     filepath.Join(artifactDir, PhaseCompleteFile),
+		CompletionProtocol:             true,
 	})
 	if err != nil {
 		return "", fmt.Errorf("building inquire session: %w", err)
@@ -277,6 +303,7 @@ func (pr *PhaseRunner) runInteractivePhase(f *feature.Feature, cfg interactivePh
 		sessOpts.EffectiveEffort = effectiveEffort
 		sessOpts.EffortSource = effortSource
 	}
+	sessOpts.RunNumber = f.ActiveRun
 	WriteDebugPrompts(artifactDir, sessOpts.DebugSystemPrompt, cfg.Prompt)
 	sessOpts.PermCacheScope = ""
 	sessionCtx := phaseCtx.Child()
@@ -511,7 +538,11 @@ func (pr *PhaseRunner) runKBSession(f *feature.Feature, repo feature.FeatureRepo
 		return "", nil
 	}
 
-	locked, err := AcquireKBLock(kbDir, f.ID)
+	var ownerStatus FeatureStatusFunc
+	if pr.FeatureStore != nil {
+		ownerStatus = pr.kbLockOwnerStatus
+	}
+	locked, err := AcquireKBLockWithStatus(kbDir, f.ID, ownerStatus)
 	if err != nil {
 		return "", fmt.Errorf("acquiring KB lock for %s: %w", repo.Name, err)
 	}
@@ -525,7 +556,7 @@ func (pr *PhaseRunner) runKBSession(f *feature.Feature, repo feature.FeatureRepo
 		_ = ReleaseKBLock(kbDir, f.ID)
 		return "", nil
 	}
-	RemovePhaseComplete(kbDir)
+	RemoveCompletionReceipt(kbDir)
 
 	// Determine full vs incremental build
 	var existingKBPath, lastCommit string
@@ -605,7 +636,7 @@ func (pr *PhaseRunner) runKBSession(f *feature.Feature, repo feature.FeatureRepo
 		EffortLevel:                    kbEffortLevel,
 		Phase:                          feature.PhaseKnowledgeBase,
 		SystemPromptHasUsefulResources: true,
-		MarkerPath:                     filepath.Join(kbDir, PhaseCompleteFile),
+		CompletionProtocol:             true,
 		LogPath:                        logPath,
 	})
 	if err != nil {
@@ -618,6 +649,7 @@ func (pr *PhaseRunner) runKBSession(f *feature.Feature, repo feature.FeatureRepo
 		sessOpts.EffectiveEffort = kbEffectiveEffort
 		sessOpts.EffortSource = kbEffortSource
 	}
+	sessOpts.RunNumber = f.ActiveRun
 	if sessOpts.LogPath == "" {
 		sessOpts.LogPath = logPath
 	}
@@ -661,6 +693,23 @@ func (pr *PhaseRunner) runKBSession(f *feature.Feature, repo feature.FeatureRepo
 	}
 
 	return sessionID, nil
+}
+
+func (pr *PhaseRunner) kbLockOwnerStatus(featureID string) (int, bool) {
+	if pr == nil || pr.FeatureStore == nil {
+		return int(feature.StatusBuildingKB), true
+	}
+	owner, err := pr.FeatureStore.Load(featureID)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return 0, false
+		}
+		return int(feature.StatusBuildingKB), true
+	}
+	if owner == nil {
+		return 0, false
+	}
+	return int(owner.Status), true
 }
 
 // RunAllKnowledgeBuilds starts KB builds for all repos in a feature.
@@ -736,7 +785,6 @@ func (pr *PhaseRunner) RunPlanningWithValidation(f *feature.Feature, researchArt
 		ValidatorEffortSource:        validatorEffortSource,
 		SkillsDir:                    pr.SkillsDir,
 		GuidelinesDir:                pr.GuidelinesDir,
-		FinishOrViolateNudge:         pr.finishOrViolateNudgeForModel(planningModel),
 		Observer:                     pr.Observer,
 	}
 
@@ -768,7 +816,7 @@ func (pr *PhaseRunner) RunPhasePlanning(f *feature.Feature, roadmapPath string, 
 	if pr.Config != nil && pr.Config.Defaults.MaxPhasePlanIterations > 0 {
 		maxAttempts = pr.Config.Defaults.MaxPhasePlanIterations
 	}
-	// Honor per-feature budget override (set by "iterate more" in the TUI).
+	// Honor per-feature budget override (set by "iterate more" in the desktop app).
 	if f.MaxPlanIterations > maxAttempts {
 		maxAttempts = f.MaxPlanIterations
 	}
@@ -807,7 +855,6 @@ func (pr *PhaseRunner) RunPhasePlanning(f *feature.Feature, roadmapPath string, 
 			ValidatorEffortSource:        phaseValidatorEffortSource,
 			SkillsDir:                    pr.SkillsDir,
 			GuidelinesDir:                pr.GuidelinesDir,
-			FinishOrViolateNudge:         pr.finishOrViolateNudgeForModel(phasePlanModel),
 			Observer:                     pr.Observer,
 		},
 		RoadmapPath:         roadmapPath,
@@ -858,15 +905,10 @@ func (pr *PhaseRunner) RunImplementation(f *feature.Feature, planPath string, kb
 	}
 	reviewEffort, reviewEffortSource := pr.resolveEffortForRole(f, llm.PhaseReview, reviewModel)
 
-	// Cycles (rebase, review-comments) operate on the whole branch,
-	// not a specific roadmap phase — omit roadmap/phase-type context so the
-	// review prompt stays focused on the cycle's objectives.
 	phaseType := f.RoadmapPhaseType
 	roadmapPath := f.Artifacts["roadmap"]
-	if f.CyclePrefix() != "" {
-		phaseType = ""
-		roadmapPath = ""
-	}
+
+	exitCriteria := resolvePromptIntent(f).ExitCriteria
 
 	cfg := ImplementConfig{
 		Feature:                    f,
@@ -877,9 +919,10 @@ func (pr *PhaseRunner) RunImplementation(f *feature.Feature, planPath string, kb
 		MaxIterations:              maxIter,
 		MaxConsecFails:             maxFails,
 		MaxConsecNoProgress:        maxNoProg,
-		ExitCriteria:               f.ExitCriteria,
+		ExitCriteria:               exitCriteria,
 		Model:                      implementationModel,
 		ReviewModel:                reviewModel,
+		ResolveSessionConfig:       pr.SessionRuntimeConfigResolver(f.ID),
 		ArtifactDir:                pr.resolveImplementArtifactDir(f),
 		StateDir:                   filepath.Join(pr.StateDir, f.ID),
 		RunDir:                     ActiveRunDir(pr.StateDir, f),
@@ -899,7 +942,6 @@ func (pr *PhaseRunner) RunImplementation(f *feature.Feature, planPath string, kb
 		SkillsDir:                  pr.SkillsDir,
 		GuidelinesDir:              pr.GuidelinesDir,
 		SkipIterationReview:        f.EffectivePipeline().ShouldSkipIterationReview(),
-		FinishOrViolateNudge:       pr.finishOrViolateNudgeForModel(implementationModel),
 		Observer:                   pr.Observer,
 		OnVerificationProgress:     pr.OnVerificationProgress,
 	}
@@ -914,77 +956,6 @@ func (pr *PhaseRunner) RunImplementation(f *feature.Feature, planPath string, kb
 		}
 	}()
 
-	return resultCh, nil
-}
-
-// RunFeatureCycleFinalReview spawns the unified feature-level Final Review
-// loop for a post-publish cycle. Cwd at the active run dir; --add-dir for every
-// Feature.Repos worktree. The reviewer reads the cumulative diff across
-// all repos. Unlike the engine FR, the post-cycle FR does NOT atomic-stamp
-// per-repo state on completion — the surrounding cycle owns the post-FR
-// transitions. Returns a channel that receives the FR result.
-func (pr *PhaseRunner) RunFeatureCycleFinalReview(
-	f *feature.Feature,
-) (chan *FeatureFinalReviewResult, error) {
-	if f == nil {
-		return nil, fmt.Errorf("nil feature")
-	}
-	if len(f.Repos) == 0 {
-		return nil, fmt.Errorf("feature %s has no repos", f.ID)
-	}
-
-	maxIter, maxFails, maxNoProg := pr.resolveLoopLimits(f)
-	implementationModel := pr.modelForRole(f.Models.Implementation, llm.PhaseImplementation)
-	reviewModel := pr.modelForRole(f.Models.Review, llm.PhaseReview)
-	cycleReviewEffort, cycleReviewEffortSource := pr.resolveEffortForRole(f, llm.PhaseReview, reviewModel)
-	cycleImplEffort, cycleImplEffortSource := pr.resolveEffortForRole(f, llm.PhaseImplementation, implementationModel)
-
-	cfg := OrchestratorConfig{
-		Feature:                    f,
-		FeatureStore:               pr.FeatureStore,
-		StateDir:                   pr.StateDir,
-		Config:                     pr.Config,
-		Model:                      implementationModel,
-		ReviewModel:                reviewModel,
-		MaxIterations:              maxIter,
-		MaxConsecFails:             maxFails,
-		MaxConsecNoProgress:        maxNoProg,
-		DangerouslySkipPermissions: pr.DangerouslySkipPermissions,
-		PermissionCache:            pr.PermissionCache,
-		CommandRunner:              pr.CommandRunner,
-		BuildSession:               pr.buildSessionForFeature(f),
-		AskingClause:               pr.askingQuestionsClauseForModel(implementationModel),
-		EffortLevel:                f.EffectivePipeline().EffortLevel(),
-		EffectiveEffort:            cycleReviewEffort,
-		EffortSource:               cycleReviewEffortSource,
-		ImplEffectiveEffort:        cycleImplEffort,
-		ImplEffortSource:           cycleImplEffortSource,
-		ReviewEffectiveEffort:      cycleReviewEffort,
-		ReviewEffortSource:         cycleReviewEffortSource,
-		SkillsDir:                  pr.SkillsDir,
-		GuidelinesDir:              pr.GuidelinesDir,
-		FinishOrViolateNudge:       pr.finishOrViolateNudgeForModel(reviewModel) && pr.finishOrViolateNudgeForModel(implementationModel),
-		Observer:                   pr.Observer,
-		OnVerificationProgress:     pr.OnVerificationProgress,
-		RunFinalReviewFn:           pr.RunFinalReviewFn,
-	}
-
-	resultCh := make(chan *FeatureFinalReviewResult, 1)
-	go func() {
-		runFn := RunFeatureCycleFinalReviewLoop
-		if cfg.RunFinalReviewFn != nil {
-			runFn = cfg.RunFinalReviewFn
-		}
-		result, err := runFn(cfg, pr.SessionManager)
-		if err != nil {
-			if result == nil {
-				result = &FeatureFinalReviewResult{}
-			}
-			result.FinalStatus = "failed"
-			result.LastError = err.Error()
-		}
-		resultCh <- result
-	}()
 	return resultCh, nil
 }
 
@@ -1016,6 +987,7 @@ func (pr *PhaseRunner) RunMultiRepoImplementation(
 		Config:                     pr.Config,
 		Model:                      model,
 		ReviewModel:                reviewModel,
+		ResolveSessionConfig:       pr.SessionRuntimeConfigResolver(f.ID),
 		MaxIterations:              maxIter,
 		MaxConsecFails:             maxFails,
 		MaxConsecNoProgress:        maxNoProg,
@@ -1034,7 +1006,6 @@ func (pr *PhaseRunner) RunMultiRepoImplementation(
 		ReviewEffortSource:         reviewEffortSource,
 		SkillsDir:                  pr.SkillsDir,
 		GuidelinesDir:              pr.GuidelinesDir,
-		FinishOrViolateNudge:       pr.finishOrViolateNudgeForModel(reviewModel) && pr.finishOrViolateNudgeForModel(model),
 		Observer:                   pr.Observer,
 		OnVerificationProgress:     pr.OnVerificationProgress,
 		RunImplementFn:             pr.RunImplementFn,
@@ -1078,6 +1049,7 @@ func (pr *PhaseRunner) RunMultiRepoFinalReview(
 		Config:                     pr.Config,
 		Model:                      model,
 		ReviewModel:                reviewModel,
+		ResolveSessionConfig:       pr.SessionRuntimeConfigResolver(f.ID),
 		MaxIterations:              maxIter,
 		MaxConsecFails:             maxFails,
 		MaxConsecNoProgress:        maxNoProg,
@@ -1096,7 +1068,6 @@ func (pr *PhaseRunner) RunMultiRepoFinalReview(
 		ReviewEffortSource:         reviewEffortSource,
 		SkillsDir:                  pr.SkillsDir,
 		GuidelinesDir:              pr.GuidelinesDir,
-		FinishOrViolateNudge:       pr.finishOrViolateNudgeForModel(reviewModel) && pr.finishOrViolateNudgeForModel(model),
 		Observer:                   pr.Observer,
 		OnVerificationProgress:     pr.OnVerificationProgress,
 		RunFinalReviewFn:           pr.RunFinalReviewFn,
@@ -1163,10 +1134,10 @@ func (pr *PhaseRunner) resolveLoopLimits(f *feature.Feature) (int, int, int) {
 // AskUserQuestion is still carved out in session.handleControlRequest.
 //
 // When skip is false (normal mode): auto-approve reads and file edits;
-// leave Bash and other tools for the TUI to prompt.
+// leave Bash and other tools for the desktop app to prompt.
 //
-// The returned handler is always wrapped in a SizeGuardHandler that denies
-// oversized Claude Write calls — see permission.SizeGuardHandler for the
+// The returned handler is always wrapped in a SessionGuardHandler that denies
+// oversized Claude Write calls — see permission.SessionGuardHandler for the
 // failure mode (~20KB Write payloads have hung the tool call for minutes
 // and then dropped the turn with nothing written).
 func permHandlerFor(skip bool, cache *permission.Cache, repoName string) ports.PermissionHandler {
@@ -1291,12 +1262,6 @@ func installAutoReviewObserver(handler ports.PermissionHandler, observer *observ
 // directories.
 func (pr *PhaseRunner) resolveImplementArtifactDir(f *feature.Feature) string {
 	runDir := ActiveRunDir(pr.StateDir, f)
-	// Cycle prefix takes precedence — when an active cycle is running,
-	// artifacts go into the cycle subtree (e.g. rebase-1/).
-	// Cycles operate on the whole branch, so roadmap phase scoping is skipped.
-	if prefix := f.CyclePrefix(); prefix != "" {
-		return filepath.Join(runDir, prefix, "implement")
-	}
 	base := runDir
 	if f.CurrentRoadmapPhase > 0 {
 		return filepath.Join(base, fmt.Sprintf("phase-%02d", f.CurrentRoadmapPhase), "implement")
@@ -1368,13 +1333,9 @@ type BuildSessionOpts struct {
 	// that still pass ad-hoc prompts leave this false so BuildSession can
 	// append the guideline preamble when needed.
 	SystemPromptHasUsefulResources bool
-	// MarkerPath, when set, is the absolute path to the role's
-	// `phase_complete` marker file. Forwarded to llm.ProtocolOpts so providers
-	// that synthesize completion-vs-question signals from end-of-turn text
-	// (Codex) can use marker existence as the authoritative completion signal.
-	// Leave empty for paths that don't have a marker contract; the provider
-	// falls back to its legacy heuristic.
-	MarkerPath string
+	// CompletionProtocol keeps the provider session alive across bounded
+	// completion nudges and requires a root-owned semantic outcome.
+	CompletionProtocol bool
 	// ResumeSessionID, when set, asks the provider to resume that prior session
 	// identity rather than start a fresh one. It is forwarded to both command and
 	// protocol setup so each provider resumes via its own supported path.
@@ -1397,14 +1358,30 @@ type BuildSessionOpts struct {
 }
 
 // BuildSessionFunc is the callback signature for session creation via the registry.
-// Used by TUI components and loop configs that need to create sessions.
+// Used by desktop app components and loop configs that need to create sessions.
 type BuildSessionFunc func(BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error)
 
 var sessionWatchdogConfig = ports.SessionWatchdogConfig{
-	PendingToolIdleTimeout:    5 * time.Minute,
+	PendingToolIdleTimeout: 5 * time.Minute,
+	// Subagent tasks (parallel researchers, etc.) surface no parent-session
+	// activity until they finish, so they get a much longer leash.
+	SubagentToolIdleTimeout:   30 * time.Minute,
 	TurnCompletionIdleTimeout: 5 * time.Minute,
 	PollInterval:              time.Second,
 	SubagentHeartbeatInterval: 5 * time.Minute,
+}
+
+type toolFreePermissionHandler interface {
+	ToolFree() bool
+}
+
+func toolFreeDisallowedTools() []string {
+	return []string{
+		"Bash", "Read", "Glob", "Grep", "LS", "LSP", "ExternalDirectory",
+		"WebSearch", "WebFetch", "Edit", "Write", "NotebookEdit",
+		"Agent", "Task", "Skill", "TodoWrite", "TaskCreate", "TaskGet",
+		"TaskList", "TaskUpdate", "AskUserQuestion", "ScheduleWakeup",
+	}
 }
 
 type sessionWatchdogProvider interface {
@@ -1551,14 +1528,27 @@ func (pr *PhaseRunner) BuildSession(opts BuildSessionOpts) (cmd []string, env []
 		commandWritableRoots = subtractRoots(writableRoots, readOnlyContextDirs)
 	}
 
-	agentsJSON, err := AgentsJSONForNames(opts.AgentNames)
+	agentsJSON, err := agentsJSONForNames(opts.AgentNames)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("building selected agents JSON: %w", err)
 	}
 
-	// Always auto-approve web tools so sub-agents can use them without
-	// permission prompts inside the Claude CLI.
-	opts.AllowedTools = append(opts.AllowedTools, "WebSearch", "WebFetch")
+	toolFree := false
+	if handler, ok := opts.PermHandler.(toolFreePermissionHandler); ok {
+		toolFree = handler.ToolFree()
+	}
+	dangerouslySkipPermissions := pr.DangerouslySkipPermissions
+	permissionMode := grillingPhasePermissionMode(opts.Phase)
+	if toolFree {
+		opts.AllowedTools = nil
+		opts.DisallowedTools = append(opts.DisallowedTools, toolFreeDisallowedTools()...)
+		dangerouslySkipPermissions = false
+		permissionMode = "default"
+	} else {
+		// General sessions auto-approve web tools so sub-agents can use them
+		// without permission prompts inside the Claude CLI.
+		opts.AllowedTools = append(opts.AllowedTools, "WebSearch", "WebFetch")
+	}
 
 	buildOpts := llm.CommandBuildOpts{
 		Model:                bareModel,
@@ -1566,13 +1556,13 @@ func (pr *PhaseRunner) BuildSession(opts BuildSessionOpts) (cmd []string, env []
 		SystemPrompt:         opts.SystemPrompt,
 		AllowedTools:         opts.AllowedTools,
 		DisallowedTools:      opts.DisallowedTools,
-		DangerouslySkipPerms: pr.DangerouslySkipPermissions,
+		DangerouslySkipPerms: dangerouslySkipPermissions,
 		AdditionalDirs:       opts.AdditionalDirs,
 		StateDir:             providerStateDir(pr.StateDir),
 		AgentsJSON:           agentsJSON,
 		AgentNames:           opts.AgentNames,
 		EffortLevel:          opts.EffortLevel,
-		PermissionMode:       grillingPhasePermissionMode(opts.Phase),
+		PermissionMode:       permissionMode,
 		ResumeSessionID:      opts.ResumeSessionID,
 		WritableRoots:        commandWritableRoots,
 		ReadRoots:            readRoots,
@@ -1597,9 +1587,8 @@ func (pr *PhaseRunner) BuildSession(opts BuildSessionOpts) (cmd []string, env []
 		SystemPrompt:    opts.SystemPrompt,
 		InitialPrompt:   opts.Prompt,
 		WritableRoots:   writableRoots,
-		DSP:             pr.DangerouslySkipPermissions,
+		DSP:             dangerouslySkipPermissions,
 		StateDir:        pr.StateDir,
-		MarkerPath:      opts.MarkerPath,
 		ResumeSessionID: opts.ResumeSessionID,
 		Interactive:     opts.Interactive,
 	})
@@ -1618,9 +1607,8 @@ func (pr *PhaseRunner) BuildSession(opts BuildSessionOpts) (cmd []string, env []
 	sessOpts = &ports.SessionOpts{
 		PIDDir: opts.PIDDir,
 		// commandWritableRoots is the same boundary just computed for the
-		// provider's own writable-root config, so a plain `touch` or
-		// `mkdir -p` inside it (e.g. the phase_complete marker, or a run
-		// directory the harness already created) can be trusted the same way
+		// provider's own writable-root config, so a plain `mkdir -p` inside a
+		// run directory the harness already created can be trusted the same way
 		// AcceptEditsHandler already trusts an equivalent empty Write —
 		// see permission.WrapGeneralPhaseHandlerWithSafeCreate.
 		PermHandler:         permHandler,
@@ -1629,6 +1617,7 @@ func (pr *PhaseRunner) BuildSession(opts BuildSessionOpts) (cmd []string, env []
 		RepoName:            opts.RepoName,
 		LogPath:             opts.LogPath,
 		ProviderName:        prov.Name(),
+		Model:               bareModel,
 		Protocol:            protocol,
 		DebugSystemPrompt:   opts.SystemPrompt,
 		TurnMode:            opts.TurnMode,
@@ -1636,8 +1625,8 @@ func (pr *PhaseRunner) BuildSession(opts BuildSessionOpts) (cmd []string, env []
 		AutoReview:          arSnap,
 		SessionBuildNotices: automaticReviewSessionBuildNotices(pr.Observer, arSnap),
 	}
-	if c, ok := prov.(finishOrViolateNudgeProvider); ok {
-		sessOpts.SupportsFinishOrViolateNudge = c.SupportsFinishOrViolateNudge()
+	if opts.CompletionProtocol {
+		sessOpts.TurnMode = ports.TurnModeInteractive
 	}
 	if c, ok := prov.(boundedHelperSandboxProvider); ok {
 		sessOpts.UsesBoundedHelperSandbox = c.UsesBoundedHelperSandbox()
@@ -1687,15 +1676,15 @@ func currentAgenticoBinPath() string {
 
 // AskingClauseForModel returns the asking-questions clause for a given model.
 // Exported wrapper around the private askingQuestionsClauseForModel for use
-// by external callers (e.g. TUI).
+// by external callers (e.g. desktop app).
 func (pr *PhaseRunner) AskingClauseForModel(model string) string {
 	return pr.askingQuestionsClauseForModel(model)
 }
 
 // ModelForRole resolves the effective model for a phase role. If configured is
 // non-empty it is returned as-is; otherwise the catalog default for the role is
-// returned. Exported so external callers (e.g. cycle loops) can perform the
-// same resolution that PhaseRunner uses internally.
+// returned. Exported so external callers can perform the same resolution that
+// PhaseRunner uses internally.
 func (pr *PhaseRunner) ModelForRole(configured string, role llm.PhaseRole) string {
 	return pr.modelForRole(configured, role)
 }

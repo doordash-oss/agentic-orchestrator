@@ -31,13 +31,15 @@ func BuildDesignPrompt(f *feature.Feature, skillsDir, guidelinesDir, researchArt
 	repos, images, attachments := researchFeatureViews(f)
 
 	return roles.BuildDesignPrompt(roles.DesignUserInput{
-		Name:                 f.Name,
-		Description:          f.Description,
-		Images:               images,
-		Attachments:          attachments,
-		Repos:                repos,
-		MultiRepo:            len(repos) > 1,
-		ResearchArtifactPath: researchArtifactPath,
+		Name:                  f.Name,
+		Description:           f.Description,
+		ExitCriteria:          f.ExitCriteria,
+		Images:                images,
+		Attachments:           attachments,
+		Repos:                 repos,
+		RefactorPassForkPoint: refactorPassForkPoint(f),
+		MultiRepo:             len(repos) > 1,
+		ResearchArtifactPath:  researchArtifactPath,
 		QAFiles: prompts.QAFilesInput{
 			Paths: append([]string(nil), qaFilePaths...),
 			Lead:  "Read these Q&A files for important context about their intent and preferences:",

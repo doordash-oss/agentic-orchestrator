@@ -83,7 +83,7 @@ func TestRelationshipGuardParentWithActiveChild(t *testing.T) {
 		t.Fatalf("Start guard: err = %v, want ErrParentMutationLocked", err)
 	}
 
-	// Delivery (rebase, review-comments) should be rejected.
+	// Rebase delivery should be rejected.
 	err = o.RelationshipGuard("guard-parent", orchestrator.MutationDelivery)
 	if !errors.Is(err, feature.ErrParentMutationLocked) {
 		t.Fatalf("Delivery guard: err = %v, want ErrParentMutationLocked", err)
@@ -175,7 +175,7 @@ func TestRelationshipGuardChildRestrictions(t *testing.T) {
 		t.Fatalf("Child Discard: err = %v, want nil", err)
 	}
 
-	// Delivery (rebase, review-comments) is not allowed on a child.
+	// Rebase delivery is not allowed on a child.
 	err = o.RelationshipGuard("guard-child-only", orchestrator.MutationDelivery)
 	if !errors.Is(err, feature.ErrChildMutationRestricted) {
 		t.Fatalf("Child Delivery: err = %v, want ErrChildMutationRestricted", err)
@@ -251,6 +251,46 @@ func TestRelationshipGuardFailsClosedOnListError(t *testing.T) {
 	}
 	if errors.Is(err, feature.ErrParentMutationLocked) {
 		t.Errorf("expected the propagated list error, not ErrParentMutationLocked; got %v", err)
+	}
+}
+
+// TestDetectPairedConfigTargetToleratesPartialLoad verifies that legacy
+// feature records (which fail to load with a PartialLoadError) do not block
+// paired config detection: the scan uses the features that did load.
+func TestDetectPairedConfigTargetToleratesPartialLoad(t *testing.T) {
+	t.Parallel()
+	parent := &feature.Feature{
+		ID:       "partial-parent",
+		Status:   feature.StatusPublished,
+		Pipeline: feature.PipelineMoonshot,
+	}
+	child := &feature.Feature{
+		ID:       "partial-child",
+		Status:   feature.StatusCreated,
+		Pipeline: feature.PipelineMedium,
+		Parent:   &feature.ChildRelationship{ParentID: "partial-parent", Kind: feature.ChildKindRefactor},
+	}
+	store := newFeatureStore(parent, child)
+	store.ListFn = func() ([]*feature.Feature, error) {
+		return []*feature.Feature{parent, child}, &feature.PartialLoadError{
+			Warnings: []feature.LoadWarning{{ID: "legacy-record", Err: feature.ErrLegacySchemaVersion}},
+		}
+	}
+	lc := lifecycleForFeature(parent)
+	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: store}, orchestrator.Hooks{})
+
+	parentID, childID, paired, err := o.DetectPairedConfigTarget("partial-parent")
+	if err != nil {
+		t.Fatalf("DetectPairedConfigTarget: err = %v, want nil", err)
+	}
+	if !paired || parentID != "partial-parent" || childID != "partial-child" {
+		t.Fatalf("DetectPairedConfigTarget = (%q, %q, %v), want (partial-parent, partial-child, true)", parentID, childID, paired)
+	}
+
+	// The guard shares the same relationship scan and must still see the
+	// active child through a partial load.
+	if gErr := o.RelationshipGuard("partial-parent", orchestrator.MutationPublish); !errors.Is(gErr, feature.ErrParentMutationLocked) {
+		t.Fatalf("Publish guard: err = %v, want ErrParentMutationLocked", gErr)
 	}
 }
 

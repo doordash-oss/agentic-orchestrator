@@ -73,6 +73,9 @@ func TestCodexBuildSessionEnvContract(t *testing.T) {
 	if sessOpts.ProviderName != "codex" {
 		t.Fatalf("BuildSession() ProviderName = %q, want codex", sessOpts.ProviderName)
 	}
+	if sessOpts.Model != "gpt-5.4[272K]" {
+		t.Fatalf("BuildSession() Model = %q, want gpt-5.4[272K]", sessOpts.Model)
+	}
 	if sessOpts.Protocol == nil {
 		t.Fatal("BuildSession() Protocol = nil, want non-nil")
 	}

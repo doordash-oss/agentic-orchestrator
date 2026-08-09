@@ -23,7 +23,7 @@ import (
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
-	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
+	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 )
 
 // readFileSafe reads a file and returns its contents trimmed of leading/trailing
@@ -36,9 +36,8 @@ func readFileSafe(path string) (string, error) {
 	return strings.TrimSpace(string(data)), nil
 }
 
-// publishRepo publishes a single repo's branch as a PR. Mirrors
-// app.go:5022-5154 (autoPublishRepoCmd) but runs synchronously and consumes
-// port interfaces instead of the package-level git helpers.
+// publishRepo publishes a single repo's branch as a PR. It runs synchronously,
+// using concrete git helpers locally and RemoteOps for remote operations.
 //
 // The caller is expected to have already verified IsPublishable + AutoPublish
 // conditions (startPublish for manual flows). Per-repo failures call
@@ -52,10 +51,6 @@ func (o *Orchestrator) publishRepo(featureID, repoName string) (string, error) {
 }
 
 func (o *Orchestrator) publishRepoWithOptions(featureID, repoName string, opts PublishOptions) (string, error) {
-	if o.deps.Publisher == nil {
-		return "", fmt.Errorf("publishRepo: Publisher port is nil")
-	}
-
 	f, err := o.deps.Lifecycle.Get(featureID)
 	if err != nil {
 		return "", fmt.Errorf("load feature: %w", err)
@@ -69,10 +64,16 @@ func (o *Orchestrator) publishRepoWithOptions(featureID, repoName string, opts P
 	workDir := repoWorkDir(repo)
 	branch := repoBranch(f, repo)
 
+	// A repository that already has a pull request is re-pushed, never
+	// re-described: CreatePR cannot update an existing PR's body, so
+	// generating one would spend an agent call on discarded text.
+	if state := f.RepoStates[repoName]; state != nil && state.PRURL != "" {
+		return o.republishRepo(f, repo, state.PRURL)
+	}
+
 	// Commit any uncommitted changes.
-	hasChanges, err := o.deps.Publisher.HasUncommittedChanges(workDir)
-	if err == nil && hasChanges {
-		if commitErr := o.deps.Publisher.CommitAll(workDir, f.Name); commitErr != nil {
+	if git.HasUncommittedChanges(workDir) {
+		if commitErr := git.CommitAll(workDir, f.Name); commitErr != nil {
 			_ = o.deps.Lifecycle.SetRepoPublishError(featureID, repoName, commitErr.Error())
 			return "", fmt.Errorf("commit failed: %w", commitErr)
 		}
@@ -85,7 +86,11 @@ func (o *Orchestrator) publishRepoWithOptions(featureID, repoName string, opts P
 	title := strings.TrimSpace(opts.Title)
 	body := strings.TrimSpace(opts.Body)
 	if title == "" || body == "" {
-		generatedTitle, generatedBody := o.generatePRDescription(f, prCtx)
+		generatedTitle, generatedBody, generateErr := o.generatePRDescription(f, prCtx)
+		if generateErr != nil {
+			_ = o.deps.Lifecycle.SetRepoPublishError(featureID, repoName, generateErr.Error())
+			return "", fmt.Errorf("generate PR description: %w", generateErr)
+		}
 		if title == "" {
 			title = generatedTitle
 		}
@@ -97,13 +102,13 @@ func (o *Orchestrator) publishRepoWithOptions(featureID, repoName string, opts P
 	leasePush := publishRequiresLeasePush(f)
 
 	// Pull-rebase before a regular push. CodeReady publish is the explicit
-	// post-review path and may follow a rebase cycle that rewrote the feature
+	// post-review path and may follow a rebase child pass that rewrote the feature
 	// branch; rebasing that branch back onto origin/<branch> would undo the
 	// intended direction of sync.
-	if !leasePush && o.deps.Rebaser != nil {
-		res := o.deps.Rebaser.PullRebase(workDir, branch)
+	if !leasePush {
+		res := git.PullRebase(workDir, branch)
 		switch res.Outcome {
-		case ports.PullRebaseConflict:
+		case git.PullRebaseConflict:
 			errMsg := fmt.Sprintf("pull-rebase conflict in repo %s", repoName)
 			_ = o.deps.Lifecycle.SetRepoPublishError(featureID, repoName, errMsg)
 			return "", &PublishConflictError{
@@ -111,7 +116,7 @@ func (o *Orchestrator) publishRepoWithOptions(featureID, repoName string, opts P
 				Branch:       branch,
 				RebaseTarget: o.resolveRebaseTarget(f, &repo),
 			}
-		case ports.PullRebaseFailure:
+		case git.PullRebaseFailure:
 			reason := "pull-rebase failed"
 			if res.Err != nil {
 				reason = res.Err.Error()
@@ -123,16 +128,11 @@ func (o *Orchestrator) publishRepoWithOptions(featureID, repoName string, opts P
 
 	// Push branch.
 	if leasePush {
-		if o.deps.Rebaser == nil {
-			err := errors.New("rebase operator not configured for lease push")
-			_ = o.deps.Lifecycle.SetRepoPublishError(featureID, repoName, err.Error())
-			return "", err
-		}
-		if err := o.deps.Rebaser.ForcePush(workDir, branch); err != nil {
+		if err := o.deps.Remote.ForcePush(workDir, branch); err != nil {
 			_ = o.deps.Lifecycle.SetRepoPublishError(featureID, repoName, err.Error())
 			return "", fmt.Errorf("force push failed: %w", err)
 		}
-	} else if err := o.deps.Publisher.Push(workDir, branch); err != nil {
+	} else if err := o.deps.Remote.Push(workDir, branch); err != nil {
 		_ = o.deps.Lifecycle.SetRepoPublishError(featureID, repoName, err.Error())
 		return "", fmt.Errorf("push failed: %w", err)
 	}
@@ -142,7 +142,7 @@ func (o *Orchestrator) publishRepoWithOptions(featureID, repoName string, opts P
 	if repoPath == "" {
 		repoPath = workDir
 	}
-	prURL, err := o.deps.Publisher.CreatePR(repoPath, branch, title, body, repo.BaseBranch, f.Checkpoints.DraftPublish)
+	prURL, err := o.deps.Remote.CreatePR(repoPath, branch, title, body, repo.BaseBranch, f.Checkpoints.DraftPublish)
 	if err != nil {
 		_ = o.deps.Lifecycle.SetRepoPublishError(featureID, repoName, err.Error())
 		return "", fmt.Errorf("PR creation failed: %w", err)
@@ -161,17 +161,84 @@ func (o *Orchestrator) publishRepoWithOptions(featureID, repoName string, opts P
 	return prURL, nil
 }
 
+// republishRepo pushes new local work to a repository that already has a pull
+// request and re-records the existing URL.
+func (o *Orchestrator) republishRepo(f *feature.Feature, repo feature.FeatureRepo, prURL string) (string, error) {
+	workDir := repoWorkDir(repo)
+	branch := repoBranch(f, repo)
+	if err := o.assertPRAcceptsUpdates(f, repo, prURL); err != nil {
+		return "", err
+	}
+	if git.HasUncommittedChanges(workDir) {
+		if err := git.CommitAll(workDir, f.Name); err != nil {
+			_ = o.deps.Lifecycle.SetRepoPublishError(f.ID, repo.Name, err.Error())
+			return "", fmt.Errorf("commit failed: %w", err)
+		}
+	}
+	if err := o.pushRepublish(workDir, branch); err != nil {
+		_ = o.deps.Lifecycle.SetRepoPublishError(f.ID, repo.Name, err.Error())
+		return "", err
+	}
+	if err := o.deps.Lifecycle.SetRepoPublished(f.ID, repo.Name, prURL); err != nil {
+		return prURL, fmt.Errorf("set repo published: %w", err)
+	}
+	return prURL, nil
+}
+
+// assertPRAcceptsUpdates refuses a republish whose pull request is no longer
+// open. Pushing to a merged or closed PR's branch delivers commits nowhere
+// reviewable — GitHub does not reopen a merged PR — while the feature would
+// still be recorded as Published. This is the only network read in the
+// republish path; CompletionPreflight cannot make it, so it cannot tell an
+// unpublished-changes repository from a dead one.
+//
+// An indeterminate answer proceeds: a transient API or auth failure must not
+// block a legitimate republish.
+func (o *Orchestrator) assertPRAcceptsUpdates(f *feature.Feature, repo feature.FeatureRepo, prURL string) error {
+	repoPath := repo.Path
+	if repoPath == "" {
+		repoPath = repoWorkDir(repo)
+	}
+	state, err := o.deps.Remote.PRState(repoPath, prURL)
+	if err != nil || state == "" || state == git.PRStateOpen {
+		return nil
+	}
+	reason := fmt.Sprintf(
+		"pull request %s is %s; new commits cannot be delivered to it", prURL, state)
+	_ = o.deps.Lifecycle.SetRepoPublishError(f.ID, repo.Name, reason)
+	return errors.New(reason)
+}
+
+// pushRepublish fast-forwards when the remote branch is an ancestor of HEAD.
+// Otherwise the branch was rewritten locally and needs a lease push. We never
+// fetch first: --force-with-lease derives its expectation from the
+// remote-tracking ref, so refreshing that ref right before the push would
+// make the lease compare the remote against itself and silently overwrite
+// commits this clone never saw.
+func (o *Orchestrator) pushRepublish(workDir, branch string) error {
+	if git.IsAncestor(workDir, "origin/"+branch, "HEAD") {
+		if err := o.deps.Remote.Push(workDir, branch); err != nil {
+			return fmt.Errorf("push failed: %w", err)
+		}
+		return nil
+	}
+	if err := o.deps.Remote.ForcePush(workDir, branch); err != nil {
+		return fmt.Errorf("force push failed: %w", err)
+	}
+	return nil
+}
+
 func publishRequiresLeasePush(f *feature.Feature) bool {
 	return f != nil && f.Status == feature.StatusCodeReady && !f.Checkpoints.AutoPublish()
 }
 
 // generatePRDescription produces a PR title/body from a structured PRContext
-// using the description-generation agent. When the agent is unavailable the
-// deterministic fallback is used. Generation errors are logged to the
-// feature-scoped publish error log so auto-publish failures are diagnosable.
-func (o *Orchestrator) generatePRDescription(f *feature.Feature, prCtx agent.PRContext) (string, string) {
+// using the description-generation agent. Generation errors are logged to the
+// feature-scoped publish error log and returned so publishing cannot proceed
+// with synthetic fallback content.
+func (o *Orchestrator) generatePRDescription(f *feature.Feature, prCtx agent.PRContext) (string, string, error) {
 	if o.deps.PhaseRunner == nil {
-		return agent.BuildPRDescriptionFallback(prCtx)
+		return "", "", errors.New("description generation agent is unavailable")
 	}
 	model := f.Models.Planning
 	if model == "" {
@@ -185,25 +252,81 @@ func (o *Orchestrator) generatePRDescription(f *feature.Feature, prCtx agent.PRC
 	)
 	if err != nil {
 		agent.LogPhaseError(o.deps.PhaseRunner.StateDir, f, "publish", "description generation: "+err.Error())
+		return "", "", err
 	}
-	return title, body
+	return title, body, nil
+}
+
+type PublishDescriptionOptions struct {
+	Repos []string
+}
+
+// GeneratePublishDescription derives a shared editable PR title/body from
+// server-owned feature metadata plus bounded git summaries for the selected
+// publish set. The renderer may name repository identities; it never supplies
+// roadmap text, commit logs, diff stats, or fallback content.
+func (o *Orchestrator) GeneratePublishDescription(featureID string, opts PublishDescriptionOptions) (string, string, error) {
+	f, err := o.deps.Lifecycle.Get(featureID)
+	if err != nil {
+		return "", "", fmt.Errorf("load feature: %w", err)
+	}
+	requestedRepos, err := publishRepoSelection(f, opts.Repos)
+	if err != nil {
+		return "", "", err
+	}
+	hasSelection := len(requestedRepos) > 0
+	prCtx := agent.PRContext{
+		FeatureName:        f.Name,
+		FeatureDescription: f.Description,
+		Roadmap:            o.readPhaseArtifact(f, "plan"),
+	}
+	var commitSections []string
+	var diffSections []string
+	selectedCount := 0
+	for _, repo := range f.Repos {
+		if hasSelection {
+			if !requestedRepos[repo.Name] {
+				continue
+			}
+		} else {
+			state := f.RepoStates[repo.Name]
+			publishable := repoPublishable(repo)
+			if !publishable || state == nil || !state.Touched || state.PRURL != "" {
+				continue
+			}
+		}
+		selectedCount++
+		repoCtx := o.buildPRContext(f, repoWorkDir(repo), repo.BaseBranch)
+		if strings.TrimSpace(repoCtx.CommitBodies) != "" {
+			commitSections = append(commitSections, "## "+repo.Name+"\n"+strings.TrimSpace(repoCtx.CommitBodies))
+		}
+		if strings.TrimSpace(repoCtx.DiffStat) != "" {
+			diffSections = append(diffSections, "## "+repo.Name+"\n"+strings.TrimSpace(repoCtx.DiffStat))
+		}
+	}
+	if selectedCount == 0 {
+		return "", "", errors.New("publish description: no eligible repositories")
+	}
+	prCtx.CommitBodies = strings.Join(commitSections, "\n\n")
+	prCtx.DiffStat = strings.Join(diffSections, "\n\n")
+	return o.generatePRDescription(f, prCtx)
 }
 
 // buildPRContext assembles the lean PRContext from the feature metadata and
 // git introspection (commit bodies + diff stat). Individual fetch failures
 // degrade gracefully — empty fields are acceptable inputs to the prompt and
-// fallback builders.
+// generator.
 func (o *Orchestrator) buildPRContext(f *feature.Feature, workDir, baseBranch string) agent.PRContext {
 	prCtx := agent.PRContext{
 		FeatureName:        f.Name,
 		FeatureDescription: f.Description,
 		Roadmap:            o.readPhaseArtifact(f, "plan"),
 	}
-	if o.deps.Publisher != nil && workDir != "" {
-		if bodies, err := o.deps.Publisher.CommitBodies(workDir, baseBranch); err == nil {
+	if workDir != "" {
+		if bodies, err := git.CommitBodies(workDir, baseBranch); err == nil {
 			prCtx.CommitBodies = bodies
 		}
-		if stat, err := o.deps.Publisher.DiffStat(workDir, baseBranch); err == nil {
+		if stat, err := git.DiffStat(workDir, baseBranch); err == nil {
 			prCtx.DiffStat = stat
 		}
 	}
@@ -226,33 +349,32 @@ func (o *Orchestrator) readPhaseArtifact(f *feature.Feature, phase string) strin
 
 // applyCrossRefs injects the multi-repo cross-reference section into the
 // just-created PR body and retroactively updates earlier PRs. No-op when
-// CrossRef port is nil or there is only one repo in the feature.
+// there is only one repo in the feature.
 func (o *Orchestrator) applyCrossRefs(f *feature.Feature, justPublishedRepo, justPublishedURL string) {
-	if o.deps.CrossRef == nil || len(f.Repos) <= 1 {
+	if len(f.Repos) <= 1 {
 		return
 	}
 	entries := buildCrossRefEntries(f, justPublishedRepo, justPublishedURL)
 	if len(entries) <= 1 {
 		return
 	}
-	section := o.deps.CrossRef.BuildCrossReferenceSection(f.Name, entries)
+	section := git.BuildCrossReferenceSection(f.Name, entries)
 	if section == "" {
 		return
 	}
 	// Update the just-created PR.
-	if currentBody, getErr := o.deps.CrossRef.GetPRBody(justPublishedURL); getErr == nil {
-		updated := o.deps.CrossRef.InjectCrossReferenceSection(currentBody, section)
-		_ = o.deps.CrossRef.UpdatePRBody(justPublishedURL, updated)
+	if currentBody, getErr := git.GetPRBody(justPublishedURL); getErr == nil {
+		updated := git.InjectCrossReferenceSection(currentBody, section)
+		_ = git.UpdatePRBody(justPublishedURL, updated)
 	}
 	// Retroactively update earlier PRs. Errors are advisory.
-	_ = o.deps.CrossRef.RetroactivelyUpdateCrossRefs(f.Name, entries, justPublishedRepo)
+	_ = git.RetroactivelyUpdateCrossRefs(f.Name, entries, justPublishedRepo)
 }
 
 // buildCrossRefEntries builds per-repo CrossRefEntry values for the current
 // feature state, substituting the just-published URL for its own repo.
-// Mirrors app.go:5187-5207.
-func buildCrossRefEntries(f *feature.Feature, justPublishedRepo, justPublishedURL string) []ports.CrossRefEntry {
-	var entries []ports.CrossRefEntry
+func buildCrossRefEntries(f *feature.Feature, justPublishedRepo, justPublishedURL string) []git.CrossRefEntry {
+	var entries []git.CrossRefEntry
 	for _, repo := range f.Repos {
 		// Untouched repos contributed no work in any phase — omit them from
 		// cross-reference sections so the just-published PR doesn't link to
@@ -263,7 +385,7 @@ func buildCrossRefEntries(f *feature.Feature, justPublishedRepo, justPublishedUR
 				continue
 			}
 		}
-		entry := ports.CrossRefEntry{
+		entry := git.CrossRefEntry{
 			RepoName: repo.Name,
 			Branch:   repo.Branch,
 		}

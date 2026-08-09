@@ -34,19 +34,6 @@ var ErrNotImplemented = errors.New("not implemented")
 
 const eventChBuffer = 256
 
-type featureRebaseControl struct {
-	mu       sync.Mutex
-	cond     *sync.Cond
-	stopping bool
-	active   int
-}
-
-func newFeatureRebaseControl() *featureRebaseControl {
-	c := &featureRebaseControl{}
-	c.cond = sync.NewCond(&c.mu)
-	return c
-}
-
 // Hooks contains optional callbacks fired at lifecycle points.
 // Nil hooks are silently skipped.
 type Hooks struct {
@@ -107,29 +94,13 @@ type PhaseCompletionInput struct {
 	MultiRepoResult *agent.OrchestratorResult
 }
 
-// NeedUserInputDecision describes the user's choice at a need-user-input gate.
-// Scope selection is derived from a combination of fields plus persisted
-// state on the feature (see HandleNeedUserInputDecision):
-//   - empty RepoName → feature-scoped (single-repo mainline implement)
-//   - RepoName set + RepoCycleState[RepoName].Status == RepoCycleNeedUserInput
-//     on the persisted feature → cycle-scoped (post-publish)
-//   - otherwise → repo-scoped (multi-repo mainline implement)
-type NeedUserInputDecision struct {
-	// Decision is "resume" or "abort". Any other value is rejected.
-	Decision string
-	// RepoName, when set, identifies the repo whose gate this decision
-	// targets in a multi-repo run. Empty for single-repo / feature-scoped
-	// gates.
-	RepoName string
-	// CycleType is the post-publish cycle the UI believed it was acting on
-	// when the user pressed Resume / Abort. Diagnostic only — restart
-	// dispatch reads the persisted RepoCycleState to decide which launcher
-	// to call.
-	CycleType feature.RepoCycleType
-}
+// NeedUserInputResume identifies the paused need-user-input gate to resume.
+// NeedUserInputResume selects the persisted feature-level gate. Rebase owns
+// its own feature-level pause/resume state.
+type NeedUserInputResume struct{}
 
 // ReviewDecision describes a user decision from a review gate or menu.
-// The TUI collects these via its review-editor flow and hands them to the
+// Clients collect these through a review flow and hand them to the
 // orchestrator for downstream state transitions and dispatch.
 type ReviewDecision struct {
 	Decision    string // "proceed" | "iterate"
@@ -177,20 +148,11 @@ type Deps struct {
 	Lifecycle   ports.FeatureLifecycle
 	Store       ports.FeatureStore
 	Sessions    ports.SessionManager
-	Publisher   ports.Publisher
-	Differ      ports.DiffOperator
-	Rebaser     ports.RebaseOperator
-	CrossRef    ports.CrossRefOperator
-	Reviewer    ports.ReviewCommentOperator
-	Worktrees   ports.WorktreeOperator
-	Branch      ports.BranchOperator
+	Remote      RemoteOps
+	Worktrees   feature.WorktreeOps
 	CmdRunner   ports.CommandRunner
 	Recovery    ports.RecoveryOperator
 	PhaseRunner *agent.PhaseRunner // concrete — not behind a port interface
-	// Cleanliness inspects parent worktrees at child-integration preflight
-	// with the same staged/unstaged/untracked contract used at launch.
-	// Nil fails integration closed rather than silently skipping the check.
-	Cleanliness feature.CleanlinessOps
 }
 
 // PhaseStartOutcome enumerates the possible results of starting a phase.
@@ -251,25 +213,17 @@ type Orchestrator struct {
 	doneCh   chan struct{}
 	stopOnce sync.Once
 
-	// cycleWG tracks background goroutines launched by per-repo cycle
-	// dispatch (StartRepoCycleImplement, StartCycleFinalReview,
-	// startFeatureReviewComments). Tests that drive these methods against a
+	// cycleWG tracks background goroutines launched by asynchronous phase
+	// continuations. Tests that drive these methods against a
 	// t.TempDir() state directory must call WaitForCycles before the
 	// test returns so the goroutine's writes don't race with TempDir
 	// cleanup.
 	cycleWG sync.WaitGroup
 
 	// featureStartControls serialize phase admission per feature. This makes
-	// repeated API/TUI start requests idempotent even when they arrive before
+	// repeated API start requests idempotent even when they arrive before
 	// the first request's state transition is visible to the second.
 	featureStartControls sync.Map
-
-	// featureRebaseControls serialize feature-level rebase continuation checks
-	// with Stop/interrupt per feature. The git operations themselves are not
-	// cancellable through the RebaseOperator port, so a stop request waits for
-	// the currently claimed rebase/push operation on that feature to return
-	// before it lands in feature state.
-	featureRebaseControls sync.Map
 
 	// publishFn is a test hook. When nil the orchestrator calls o.Publish.
 	// Tests can override this to intercept publish dispatch without touching
@@ -315,13 +269,8 @@ type Orchestrator struct {
 		kbInfos ...agent.KBInfo,
 	) (chan *agent.LoopResult, error)
 
-	// runRebaseLoopFn is a test seam over agent.RunRebaseLoop. The default
-	// launches the production unified rebase loop; tests override it to
-	// verify rebase gate routing without booting agent sessions.
-	runRebaseLoopFn func(agent.RebaseLoopConfig, ports.SessionManager) (*agent.RebaseLoopResult, error)
-
 	// worktreeFingerprintFn is a test seam for detecting whether a mounted
-	// smart-rebase context repo changed during the agent loop.
+	// context repo changed during the agent loop.
 	worktreeFingerprintFn func(worktreePath string) (string, error)
 }
 
@@ -337,6 +286,9 @@ func (o *Orchestrator) SetRunImplementationFn(fn func(
 
 // New creates an Orchestrator. The eventCh is a bounded buffer (256).
 func New(deps Deps, hooks Hooks) *Orchestrator {
+	if deps.Remote == nil {
+		deps.Remote = gitRemoteOps{}
+	}
 	o := &Orchestrator{
 		deps:    deps,
 		hooks:   hooks,
@@ -346,6 +298,7 @@ func New(deps Deps, hooks Hooks) *Orchestrator {
 	o.supervisor = newPhaseSupervisor(phaseSupervisorConfig{
 		Completion:        o,
 		Sessions:          o.deps.Sessions,
+		CommitOutcome:     o.commitSingleShotOutcome,
 		OnCompletionError: o.surfaceDispatchCompletionError,
 	})
 	if o.deps.PhaseRunner != nil {
@@ -378,7 +331,6 @@ func New(deps Deps, hooks Hooks) *Orchestrator {
 		}
 		return o.deps.PhaseRunner.RunMultiRepoFinalReview(f, kbInfos...)
 	}
-	o.runRebaseLoopFn = agent.RunRebaseLoop
 	o.worktreeFingerprintFn = gitWorktreeFingerprint
 	return o
 }
@@ -391,24 +343,9 @@ func (o *Orchestrator) Events() <-chan ports.Event { return o.eventCh }
 // loops cleanly. The channel is never sent to — only closed.
 func (o *Orchestrator) Done() <-chan struct{} { return o.doneCh }
 
-func (o *Orchestrator) featureRebaseControl(featureID string) *featureRebaseControl {
-	if v, ok := o.featureRebaseControls.Load(featureID); ok {
-		if control, ok := v.(*featureRebaseControl); ok {
-			return control
-		}
-	}
-	control := newFeatureRebaseControl()
-	actual, _ := o.featureRebaseControls.LoadOrStore(featureID, control)
-	if stored, ok := actual.(*featureRebaseControl); ok {
-		return stored
-	}
-	return control
-}
-
-// WaitForCycles blocks until every background goroutine launched by the
-// per-repo cycle entry points (StartRepoCycleImplement,
-// StartCycleFinalReview) and asynchronous phase continuations has returned. Production
-// callers do not need this — the orchestrator drives cycles to completion
+// WaitForCycles blocks until every background goroutine launched by
+// asynchronous phase continuations has returned. Production
+// callers do not need this — the orchestrator drives phases to completion
 // via its event loop. It exists for tests whose state directory is a
 // t.TempDir(): without synchronizing on the goroutine, TempDir cleanup
 // can race with in-flight writes from the implementation loop.
@@ -470,10 +407,10 @@ func (o *Orchestrator) CreateFeature(
 	return f, nil
 }
 
-// RefactorChildCreated emits the relationship-created event for a durable refactor
-// child. Child creation goes through feature.Manager.CreateRefactorChild (not
-// Orchestrator.CreateFeature), so the mutation target reports the launch here.
-func (o *Orchestrator) RefactorChildCreated(child *feature.Feature) {
+// ChildCreated emits the relationship-created event for any durable child.
+// Child creation goes through the feature manager rather than
+// Orchestrator.CreateFeature, so mutation targets report the launch here.
+func (o *Orchestrator) ChildCreated(child *feature.Feature) {
 	if child == nil || !child.IsChild() {
 		return
 	}
@@ -506,7 +443,7 @@ func (o *Orchestrator) emitEvent(ev ports.Event) {
 // emitEventBlocking sends an event on the channel, blocking until the
 // consumer drains it. Used for critical lifecycle signals (PhaseCompleted,
 // ReviewRequired, PublishCompleted, FeatureCompleted, FeatureFailed) that the
-// TUI / downstream consumers must not miss. Selects on doneCh so a full
+// downstream consumers must not miss. Selects on doneCh so a full
 // buffer at shutdown does not deadlock the emitter goroutine.
 func (o *Orchestrator) emitEventBlocking(ev ports.Event) {
 	select {
@@ -562,6 +499,20 @@ func (o *Orchestrator) StartFeature(featureID string) error {
 		if err != nil {
 			return fmt.Errorf("loading feature after setup: %w", err)
 		}
+	}
+
+	// An open need-user-input request is answered only through the
+	// need-user-input verb. Start/Resume must refuse: the Implementing
+	// transition is legal from NeedUserInput, so without this guard the verb
+	// would silently bypass the gate, reset the iteration counter, and leave
+	// the request pending but invisible.
+	if f.PendingNeedUserInputPath != "" {
+		return fmt.Errorf("%w: %s", feature.ErrNeedUserInputGateOpen, f.PendingNeedUserInputPath)
+	}
+	// The end-of-phase git boundary runs synchronously while the feature reads
+	// as StatusReviewPassed, which otherwise looks startable.
+	if f.IsFinalizingPhase() {
+		return feature.ErrPhaseFinalizing
 	}
 
 	phase := f.CurrentPhase
@@ -676,8 +627,7 @@ func (o *Orchestrator) startPhase(featureID string, phase feature.Phase) (featur
 }
 
 // startKB orchestrates the KB phase: per-repo freshness check, conditional
-// skip, per-repo fan-out with mixed-fresh handling. Mirrors app.go:5357-5399
-// and app.go:5402-5426.
+// skip, and per-repo fan-out with mixed-fresh handling.
 //
 // Idempotent for recovery resume: when the feature is already StatusBuildingKB
 // (a crashed KB session was recovered via RecoveryResume), StartKnowledgeBase
@@ -804,7 +754,11 @@ func (o *Orchestrator) startKB(featureID string) (PhaseStartResult, error) {
 					o.markKBWaiting(featureID, baseDir, repo.Name)
 					return PhaseStartResult{Outcome: PhaseStarted}, nil
 				}
-				return PhaseStartResult{}, fmt.Errorf("run KB for repo %s: %w", repo.Name, err)
+				errMsg := fmt.Sprintf("run KB for repo %s: %v", repo.Name, err)
+				if markErr := o.markFailedWithEvent(featureID, feature.FailureInfrastructure, errMsg); markErr != nil {
+					return PhaseStartResult{}, fmt.Errorf("%s (also failed to mark feature failed: %w)", errMsg, markErr)
+				}
+				return PhaseStartResult{}, errors.New(errMsg)
 			}
 			o.superviseSingleShotPhaseSession(featureID, sessionID, feature.PhaseKnowledgeBase)
 		}
@@ -1082,7 +1036,7 @@ func (o *Orchestrator) startDesign(featureID string) (PhaseStartResult, error) {
 		return PhaseStartResult{}, errors.New("research phase did not produce an artifact; cannot proceed to design")
 	}
 	// QA file paths from inquire/research specifically (design's own qa
-	// doesn't exist yet — matches app.go:5577-5582).
+	// does not exist yet).
 	var qaFilePaths []string
 	baseDir := o.stateDir()
 	if baseDir != "" {
@@ -1149,7 +1103,7 @@ func (o *Orchestrator) startPlan(featureID string) (PhaseStartResult, error) {
 }
 
 // startRoadmapPhasePlan starts per-phase planning for the current roadmap
-// phase. Mirrors app.go:5672-5758. Conditionally transitions via
+// phase. It conditionally transitions via
 // StartPlanning only if the feature is not already StatusPlanning.
 func (o *Orchestrator) startRoadmapPhasePlan(featureID string, f *feature.Feature) (PhaseStartResult, error) {
 	if f.Status != feature.StatusPlanning {
@@ -1216,9 +1170,8 @@ func (o *Orchestrator) startRoadmapPhasePlan(featureID string, f *feature.Featur
 // startImplement starts the Implementation phase. Resolves plan path through
 // the cascade, initializes repo impl tracking, persists the execution plan
 // fallback, and then delegates engine invocation and result routing to
-// StartMultiRepoImplementation — which is the single code path for
-// multi-repo implementation runs (both fresh starts and recovery relaunches).
-// Mirrors app.go:5775-5907.
+// StartMultiRepoImplementation — the single code path for multi-repo
+// implementation runs, including fresh starts and recovery relaunches.
 //
 // Idempotent for recovery resume: when the feature is already
 // StatusImplementing (e.g. a PTY session crashed mid-implement and recovery
@@ -1277,7 +1230,7 @@ func (o *Orchestrator) startImplement(featureID string) (PhaseStartResult, error
 	return PhaseStartResult{Outcome: PhaseStarted}, nil
 }
 
-// startPublish is a thin dispatcher mirroring app.go:1197-1224. Returns
+// startPublish is a thin dispatcher. It returns
 // PhaseNoOp when the feature is not publishable or auto-publish is disabled;
 // delegates to o.Publish otherwise.
 func (o *Orchestrator) startPublish(featureID string) (PhaseStartResult, error) {
@@ -1339,9 +1292,9 @@ func (o *Orchestrator) featureStartControl(featureID string) *sync.Mutex {
 	return actual.(*sync.Mutex)
 }
 
-// InterruptFeature stops all sessions for a feature and clears pending help
-// and permission queue flags. Normal phase work and post-publish repo
-// cycles transition the feature to StatusInterrupted.
+// InterruptFeature stops all sessions for a feature and clears pending help,
+// permission, and feature-scoped input gate state. Normal phase work and
+// post-publish rebase children transition the feature to StatusInterrupted.
 // Does NOT clear KBStatus — preserve per-repo KB tracking for resume.
 //
 // Ordering matters: the Interrupted transition is committed BEFORE sessions
@@ -1350,24 +1303,13 @@ func (o *Orchestrator) featureStartControl(featureID string) *sync.Mutex {
 // Otherwise the stopped session's last assistant text would surface
 // as failure_type=session_crash and beat FeatureInterrupted to emission.
 func (o *Orchestrator) InterruptFeature(featureID string) error {
-	rebaseControl := o.featureRebaseControl(featureID)
-	rebaseControl.mu.Lock()
-	rebaseControl.stopping = true
-	for rebaseControl.active > 0 {
-		rebaseControl.cond.Wait()
-	}
-	rebaseControl.mu.Unlock()
-
 	featureInterrupted := false
-	if f, err := o.deps.Lifecycle.Get(featureID); err == nil &&
-		(f.Status == feature.StatusPublished || f.Status == feature.StatusCodeReady) &&
-		hasActiveRepoCycles(f) {
-		interruptFeature := hasInterruptibleRepoCycles(f)
-		if err := o.interruptActiveRepoCycles(featureID, interruptFeature); err != nil {
-			return fmt.Errorf("interrupt active repo cycles: %w", err)
-		}
-		featureInterrupted = interruptFeature
-	} else {
+	f, getErr := o.deps.Lifecycle.Get(featureID)
+	switch {
+	case getErr == nil && isSettledFeatureStatus(f.Status):
+		// Stop is idempotent when work completed after the caller's activity
+		// check.
+	default:
 		// Transition to interrupted FIRST so racing completion handlers
 		// (onKBCompleted, onPhaseCompletedDefault, …) observe the terminal
 		// state and skip their failure paths.
@@ -1384,8 +1326,11 @@ func (o *Orchestrator) InterruptFeature(featureID string) error {
 			_ = o.deps.Sessions.StopSession(s.ID())
 		}
 	}
+	if getErr == nil {
+		o.releaseKBLocksForFeature(f)
+	}
 
-	// Clear pending help/permission requests.
+	// Clear pending help, permission, and feature-scoped gate requests.
 	if err := o.deps.Store.Modify(featureID, func(f *feature.Feature) error {
 		for i := range f.HelpQueue {
 			if f.HelpQueue[i].Pending {
@@ -1397,6 +1342,7 @@ func (o *Orchestrator) InterruptFeature(featureID string) error {
 				f.PermissionsQueue[i].Pending = false
 			}
 		}
+		f.PendingNeedUserInputPath = ""
 		return nil
 	}); err != nil {
 		return fmt.Errorf("clear pending flags: %w", err)
@@ -1411,14 +1357,24 @@ func (o *Orchestrator) InterruptFeature(featureID string) error {
 	return nil
 }
 
+func isSettledFeatureStatus(status feature.Status) bool {
+	switch status {
+	case feature.StatusCodeReady, feature.StatusPublished, feature.StatusDone,
+		feature.StatusFailed, feature.StatusInterrupted:
+		return true
+	default:
+		return false
+	}
+}
+
 // InterruptAllRunning iterates all features; running ones are interrupted
 // (stopping sessions, clearing pending flags, transitioning to interrupted)
 // AND additionally have KBStatus cleared to match the startup sweep.
-// Non-running features (Published, CodeReady) with active repo cycles
-// (rebase/review-comments) are interrupted at the feature level so
+// Non-running features (Published, CodeReady) with an active rebase child
+// are interrupted at the feature level so
 // the dashboard keeps them in the active bucket. KBStatus is preserved for
-// every post-publish cycle shape. CodeReady is the manual_publish=true shape
-// where a rebase cycle can be in flight while the feature waits for the user
+// every post-publish rebase child shape. CodeReady is the manual_publish=true shape
+// where a rebase child can be in flight while the feature waits for the user
 // to publish.
 func (o *Orchestrator) InterruptAllRunning() error {
 	features, listErr := o.deps.Store.List()
@@ -1438,6 +1394,19 @@ func (o *Orchestrator) InterruptAllRunning() error {
 
 	var errs []error
 	for _, f := range features {
+		// A crash inside the end-of-phase git boundary persists the finalizing
+		// marker. StatusReviewPassed is not running, so the interrupt arm below
+		// never sweeps it and the feature stays unstartable forever.
+		if f.IsFinalizingPhase() {
+			if err := o.deps.Store.Modify(f.ID, func(ff *feature.Feature) error {
+				if ff.IsFinalizingPhase() {
+					ff.CurrentPhaseStatus = ""
+				}
+				return nil
+			}); err != nil {
+				errs = append(errs, fmt.Errorf("clear stale finalizing marker for %s: %w", f.ID, err))
+			}
+		}
 		switch {
 		case f.Status == feature.StatusSettingUpWorktrees:
 			// Worktree setup is pre-phase lifecycle work, not a session-backed
@@ -1459,16 +1428,6 @@ func (o *Orchestrator) InterruptAllRunning() error {
 			}); err != nil {
 				errs = append(errs, fmt.Errorf("clear KBStatus for %s: %w", f.ID, err))
 			}
-		case (f.Status == feature.StatusPublished || f.Status == feature.StatusCodeReady) && hasActiveRepoCycles(f):
-			if hasInterruptibleRepoCycles(f) {
-				if err := o.InterruptFeature(f.ID); err != nil {
-					errs = append(errs, fmt.Errorf("interrupt repo cycles for %s: %w", f.ID, err))
-				}
-				continue
-			}
-			if err := o.interruptActiveRepoCycles(f.ID, false); err != nil {
-				errs = append(errs, fmt.Errorf("mark interrupted cycles for %s: %w", f.ID, err))
-			}
 		}
 	}
 
@@ -1478,103 +1437,8 @@ func (o *Orchestrator) InterruptAllRunning() error {
 	return nil
 }
 
-// hasActiveRepoCycles returns true if the feature has any running/reviewing
-// post-publish cycle. Legacy cycles live in RepoCycles; feature-level rebase
-// and review-comment flows live only in ActiveCycle.
-func hasActiveRepoCycles(f *feature.Feature) bool {
-	if hasActiveFeatureLevelInterruptibleCycle(f) {
-		return true
-	}
-	for _, rc := range f.RepoCycles {
-		if rc != nil && (rc.Status == feature.RepoCycleRunning || rc.Status == feature.RepoCycleReviewing) {
-			return true
-		}
-	}
-	return false
-}
-
-func hasInterruptibleRepoCycles(f *feature.Feature) bool {
-	if hasActiveFeatureLevelInterruptibleCycle(f) {
-		return true
-	}
-	for _, rc := range f.RepoCycles {
-		if rc == nil {
-			continue
-		}
-		switch rc.Type {
-		case feature.CycleRebase, feature.CycleReviewComments:
-		default:
-			continue
-		}
-		if rc.Status == feature.RepoCycleRunning || rc.Status == feature.RepoCycleReviewing {
-			return true
-		}
-	}
-	return false
-}
-
-func hasActiveFeatureLevelInterruptibleCycle(f *feature.Feature) bool {
-	if f == nil || f.ActiveCycle == nil {
-		return false
-	}
-	if f.ActiveCycle.Status != feature.RepoCycleRunning && f.ActiveCycle.Status != feature.RepoCycleReviewing {
-		return false
-	}
-	cycleType := f.ActiveCycle.Type
-	if cycleType == "" {
-		cycleType = f.ActiveCycleType()
-	}
-	switch cycleType {
-	case feature.CycleRebase, feature.CycleReviewComments:
-		return true
-	default:
-		return false
-	}
-}
-
-func (o *Orchestrator) interruptActiveRepoCycles(featureID string, interruptFeature bool) error {
-	return o.deps.Store.Modify(featureID, func(ff *feature.Feature) error {
-		for _, rc := range ff.RepoCycles {
-			if rc == nil {
-				continue
-			}
-			if rc.Status == feature.RepoCycleRunning || rc.Status == feature.RepoCycleReviewing {
-				rc.Status = feature.RepoCycleInterrupted
-				rc.LastError = ""
-			}
-		}
-		if ff.ActiveCycle != nil &&
-			(ff.ActiveCycle.Status == feature.RepoCycleRunning || ff.ActiveCycle.Status == feature.RepoCycleReviewing) {
-			ff.ActiveCycle.Status = feature.RepoCycleInterrupted
-			ff.ActiveCycle.LastError = ""
-		}
-		if interruptFeature {
-			ff.Status = feature.StatusInterrupted
-			ff.CurrentPhase = feature.PhasePublish
-			ff.LastError = ""
-			ff.FailureType = ""
-		}
-		for i := range ff.HelpQueue {
-			if ff.HelpQueue[i].Pending {
-				ff.HelpQueue[i].Pending = false
-			}
-		}
-		for i := range ff.PermissionsQueue {
-			if ff.PermissionsQueue[i].Pending {
-				ff.PermissionsQueue[i].Pending = false
-			}
-		}
-		return nil
-	})
-}
-
 // HandlePhaseCompletion dispatches a phase-completion result to the
-// appropriate per-phase handler. Mirrors app.go:2737-2910 (the multi-message
-// fanout in the TUI's Update loop).
-//
-// Active-cycle handling: completion handlers observing f.ActiveCycleType != ""
-// take the cycle-active early-return path — minimum mutation, emit
-// PhaseCompleted, return. Cycle-specific handlers own cycle coordination.
+// appropriate per-phase handler.
 func (o *Orchestrator) HandlePhaseCompletion(featureID string, input PhaseCompletionInput) error {
 	// Fence late completion callbacks from mutating a child whose
 	// relationship is closed (discarded or completed) or whose discard
@@ -1697,7 +1561,7 @@ func (o *Orchestrator) reviewProceed(featureID string, f *feature.Feature, d Rev
 		// "needs_human_review" and the reviewer subsequently approves via the
 		// gate, TotalRoadmapPhases is still 0 and downstream roadmap sequencing
 		// (CurrentRoadmapPhase < TotalRoadmapPhases checks, phase-plan vs legacy
-		// plan routing) would be wrong. Mirrors app.go:3167-3191.
+		// plan routing) would be wrong.
 		o.persistRoadmapPhaseCount(featureID, f)
 		if err := o.deps.Lifecycle.AdvanceRoadmapPhase(featureID); err != nil {
 			return fmt.Errorf("advance roadmap phase: %w", err)
@@ -1741,7 +1605,7 @@ func (o *Orchestrator) reviewProceed(featureID string, f *feature.Feature, d Rev
 // (phase.go:RunPhasePlanning), so we must promote 0 to the default before
 // adding 3 — otherwise the effective budget after iterate drops from the
 // default (10) to just 3, and on the phase-plan path may not extend at all.
-// Mirrors the TUI's promotion at app.go:3149-3155.
+// The explicit promotion prevents a small override from lowering the budget.
 //
 // Plan-attempt meta invalidation fires unconditionally — regardless of
 // d.Roadmap / d.PhasePlan. The planner short-circuits on any APPROVED
@@ -1788,8 +1652,8 @@ func (o *Orchestrator) reviewIterate(featureID string, f *feature.Feature, d Rev
 }
 
 // ProceedFromRewindReview confirms a rewind that has already been performed
-// and dispatches the target phase. The TUI invokes Lifecycle.RewindToPhase
-// directly (rewindCmd) BEFORE opening the rewind-artifact-review session, so
+// and dispatches the target phase. The caller invokes Lifecycle.RewindToPhase
+// before opening the rewind-artifact-review session, so
 // by the time the user picks "Proceed with rewind" the active run is already
 // the freshly forked one with PendingReviewPhase=&target and IsRewind=true.
 // This method clears that gate, reads back description-review.md if the user
@@ -1798,8 +1662,8 @@ func (o *Orchestrator) reviewIterate(featureID string, f *feature.Feature, d Rev
 // StartRoadmapPhaseImplementation for partial roadmap phase rewinds), and
 // starts the target phase.
 //
-// `target` MUST be the effective target phase (post-escalation) — typically
-// the value the TUI received from RewindDoneMsg.TargetPhase. Escalation
+// `target` MUST be the effective target phase returned to the caller after
+// escalation. Escalation
 // (e.g. Medium-upgraded features escalating pre-plan rewinds to KB) was
 // resolved by the original RewindToPhase call and persisted onto the new run.
 //
@@ -1895,8 +1759,7 @@ func (o *Orchestrator) clearReviewGate(featureID string) error {
 // persistRoadmapPhaseCount resolves the roadmap artifact, parses it, and
 // writes TotalRoadmapPhases into feature state. Best-effort: if the roadmap
 // file can't be resolved or parsed, TotalRoadmapPhases is left untouched so
-// the existing value (whatever it is) continues to drive sequencing. Mirrors
-// the TUI helper behaviour in app.go:3171-3184.
+// the existing value continues to drive sequencing.
 func (o *Orchestrator) persistRoadmapPhaseCount(featureID string, f *feature.Feature) {
 	roadmapPath := o.resolveArtifactPath(f, "roadmap")
 	if roadmapPath == "" {
@@ -1918,9 +1781,8 @@ func (o *Orchestrator) persistRoadmapPhaseCount(featureID string, f *feature.Fea
 
 // writePlanAttemptChangesRequested invalidates the latest completed plan
 // attempt so the next planner run treats the artifact as rejected and starts
-// a new attempt. This mirrors the TUI's roadmap-reject path
-// (app.go:3283-3297): find the latest attempt via LatestCompletedPlanAttempt
-// and overwrite its meta.yaml with a CHANGES_REQUESTED entry.
+// a new attempt: find the latest attempt via LatestCompletedPlanAttempt and
+// overwrite its meta.yaml with a CHANGES_REQUESTED entry.
 //
 // The planner's resume logic short-circuits when the latest attempt has
 // ReviewStatus == "APPROVED" (in RunRoadmapPlanningLoop and
@@ -1995,8 +1857,7 @@ func (o *Orchestrator) advanceToNextPhase(featureID string, completedPhase featu
 	}
 	if next == feature.PhasePublish {
 		// Publish dispatch is owned by completion handlers, not the generic
-		// next-phase pathway. Matches TUI semantics where startPhaseCmd(Publish)
-		// returns nil.
+		// next-phase pathway.
 		return nil
 	}
 
@@ -2253,7 +2114,7 @@ func (o *Orchestrator) Shutdown() error {
 // restart, KB-failure propagation) without also triggering lifecycle
 // deletion.
 //
-// Keeping this policy in the orchestrator prevents TUI call sites from
+// Keeping this policy in the orchestrator prevents client call sites from
 // duplicating session-stop rules.
 func (o *Orchestrator) StopFeatureSessions(featureID string) {
 	if o.deps.Sessions == nil {
@@ -2267,8 +2128,41 @@ func (o *Orchestrator) StopFeatureSessions(featureID string) {
 	}
 }
 
-// Delete executes the durable relationship cascade. The error-only wrapper is
-// retained for callers that do not consume the typed convergent result.
+func (o *Orchestrator) releaseKBLocksForFeature(f *feature.Feature) {
+	if f == nil {
+		return
+	}
+	baseDir := o.stateDir()
+	if baseDir == "" {
+		return
+	}
+	released := false
+	for _, repo := range f.Repos {
+		if repo.Name == "" {
+			continue
+		}
+		kbDir := agent.KBStateDir(baseDir, repo.Name)
+		didRelease, err := agent.ReleaseKBLockIfOwned(kbDir, f.ID)
+		if err != nil {
+			o.emitEvent(ports.Event{
+				Type:      ports.FeatureFailed,
+				FeatureID: f.ID,
+				Message:   fmt.Sprintf("KB lock cleanup failed for repo %s: %v", repo.Name, err),
+			})
+			continue
+		}
+		released = released || didRelease
+	}
+	if released {
+		o.wakeKBWaiters(f.ID)
+	}
+}
+
+// Delete executes the durable relationship cascade (which also releases any
+// KB locks the feature still owns). The error-only wrapper is retained for
+// callers that do not consume the typed convergent result. Synchronous
+// (caller learns the outcome via the returned error); no ports.Event is
+// emitted because deletion is synchronously acknowledged.
 func (o *Orchestrator) Delete(featureID string) error {
 	_, err := o.DeleteCascade(featureID)
 	return err

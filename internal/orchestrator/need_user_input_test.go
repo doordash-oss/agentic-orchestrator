@@ -26,7 +26,7 @@ import (
 )
 
 // writeGateArtifact persists a NeedUserInputRecord under iter/need-user-input.yaml
-// and returns the absolute path. Helper for the gate-decision tests.
+// and returns the absolute path. Helper for the gate-resume tests.
 func writeGateArtifact(t *testing.T, summary string, prompts []string, answers []string) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -49,6 +49,33 @@ func writeGateArtifact(t *testing.T, summary string, prompts []string, answers [
 	return path
 }
 
+func writeHarnessVerificationGate(t *testing.T, stateRoot, featureID, summary, answer string) string {
+	t.Helper()
+	contractPath := filepath.Join(stateRoot, featureID, "testing-contract.yaml")
+	contract := agent.TestingContract{
+		Version:  1,
+		Revision: 1,
+		Items: []agent.TestingContractItem{{
+			ID: "capability-blocked",
+			Policy: agent.TestingContractItemPolicy{
+				Required:    true,
+				AllowWaiver: true,
+			},
+		}},
+	}
+	if err := agent.WriteTestingContract(contractPath, contract); err != nil {
+		t.Fatalf("write testing contract: %v", err)
+	}
+	rec := agent.SynthesizeVerificationNeedUserInputGate(contractPath, 1, []string{"capability-blocked"}, 2)
+	rec.Summary = summary
+	rec.Questions[0].Answer = answer
+	path := filepath.Join(stateRoot, featureID, "iteration-02", agent.NeedUserInputArtifactName)
+	if err := agent.WriteNeedUserInputRecord(path, rec); err != nil {
+		t.Fatalf("write harness gate: %v", err)
+	}
+	return path
+}
+
 // TestOrchestrator_HandlePhaseCompletion_NeedUserInput_PausesFeature locks
 // in that an implement loop result with FinalStatus == "need_user_input"
 // transitions the feature into StatusNeedUserInput, persists the gate
@@ -66,7 +93,6 @@ func TestOrchestrator_HandlePhaseCompletion_NeedUserInput_PausesFeature(t *testi
 		Repos:        []feature.FeatureRepo{{Name: repoName, Path: repoAPath}},
 	}
 	lc := lifecycleForFeature(f)
-	lc.ClearAddressingReviewsFn = func(id string) error { return nil }
 	fs := newFeatureStore(f)
 
 	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{})
@@ -102,10 +128,10 @@ func TestOrchestrator_HandlePhaseCompletion_NeedUserInput_PausesFeature(t *testi
 	}
 }
 
-func TestHandleNeedUserInputDecision_StaleRepoNameRoutesToFeatureScope(t *testing.T) {
+func TestResumeNeedUserInput_StaleRepoNameRoutesToFeatureScope(t *testing.T) {
 	// Under SchemaVersionCurrent = 4 phase-implement NEED_USER_INPUT is
 	// feature-scoped. A non-empty RepoName that doesn't match a paused cycle
-	// is treated as a stale hint (the TUI's repo-tab focus context) and
+	// is treated as a stale presentation hint and
 	// routed to the feature-level handler, which validates against
 	// Feature.Status / Feature.PendingNeedUserInputPath. Here the feature is
 	// StatusImplementing (not paused), so the feature-level handler rejects
@@ -120,8 +146,7 @@ func TestHandleNeedUserInputDecision_StaleRepoNameRoutesToFeatureScope(t *testin
 	fs := newFeatureStore(f)
 	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{})
 
-	err := o.HandleNeedUserInputDecision("feat-mr-nui-no-repo",
-		orchestrator.NeedUserInputDecision{Decision: "resume", RepoName: "ghost"})
+	err := o.ResumeNeedUserInput("feat-mr-nui-no-repo", orchestrator.NeedUserInputResume{})
 	if err == nil {
 		t.Fatal("expected error: feature is StatusImplementing, not paused on a gate")
 	}
@@ -133,7 +158,38 @@ func TestHandleNeedUserInputDecision_StaleRepoNameRoutesToFeatureScope(t *testin
 	}
 }
 
-func TestHandleNeedUserInputDecisionAppliesHarnessWaiverBeforeResume(t *testing.T) {
+func TestResumeNeedUserInput_GenericGateResumesWithoutVerificationDecision(t *testing.T) {
+	stateRoot := t.TempDir()
+	gatePath := writeGateArtifact(
+		t,
+		"Implementation needs a deployment window.",
+		[]string{"Deployment window?"},
+		[]string{"Tomorrow morning."},
+	)
+	f := &feature.Feature{
+		ID: "feat-generic-gate", Name: "Generic gate", Slug: "generic-gate",
+		SchemaVersion: feature.SchemaVersionCurrent,
+		Status:        feature.StatusNeedUserInput, CurrentPhase: feature.PhaseImplement,
+		PendingNeedUserInputPath: gatePath,
+		Repos:                    []feature.FeatureRepo{{Name: repoName, Path: repoAPath}},
+	}
+	store := feature.NewStore(stateRoot)
+	if err := store.Save(f); err != nil {
+		t.Fatal(err)
+	}
+	lc := lifecycleForFeature(f)
+	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: store}, orchestrator.Hooks{})
+
+	err := o.ResumeNeedUserInput(f.ID, orchestrator.NeedUserInputResume{})
+	if err == nil || !strings.Contains(err.Error(), "plan phase did not produce an artifact") {
+		t.Fatalf("ResumeNeedUserInput() error = %v, want expected post-resume dispatch failure", err)
+	}
+	if strings.Contains(err.Error(), "not a harness verification decision") {
+		t.Fatalf("ResumeNeedUserInput() error = %v, generic gate must not require verification decision", err)
+	}
+}
+
+func TestResumeNeedUserInputAppliesHarnessWaiverBeforeResume(t *testing.T) {
 	stateRoot := t.TempDir()
 	contractPath := filepath.Join(stateRoot, "feat-waiver", "testing-contract.yaml")
 	contract := agent.TestingContract{Version: 1, Revision: 2, Items: []agent.TestingContractItem{{
@@ -150,8 +206,9 @@ func TestHandleNeedUserInputDecisionAppliesHarnessWaiverBeforeResume(t *testing.
 	}
 	f := &feature.Feature{
 		ID: "feat-waiver", Name: "Waiver", Slug: "waiver", Status: feature.StatusNeedUserInput,
-		CurrentPhase: feature.PhaseImplement, PendingNeedUserInputPath: gatePath,
-		Repos: []feature.FeatureRepo{{Name: repoName, Path: repoAPath}},
+		SchemaVersion: feature.SchemaVersionCurrent, CurrentPhase: feature.PhaseImplement,
+		PendingNeedUserInputPath: gatePath,
+		Repos:                    []feature.FeatureRepo{{Name: repoName, Path: repoAPath}},
 	}
 	store := feature.NewStore(stateRoot)
 	if err := store.Save(f); err != nil {
@@ -160,8 +217,8 @@ func TestHandleNeedUserInputDecisionAppliesHarnessWaiverBeforeResume(t *testing.
 	lc := lifecycleForFeature(f)
 	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: store}, orchestrator.Hooks{})
 
-	if err := o.HandleNeedUserInputDecision(f.ID, orchestrator.NeedUserInputDecision{Decision: "resume"}); err == nil || !strings.Contains(err.Error(), "plan phase did not produce an artifact") {
-		t.Fatalf("HandleNeedUserInputDecision() error = %v, want expected post-decision dispatch failure", err)
+	if err := o.ResumeNeedUserInput(f.ID, orchestrator.NeedUserInputResume{}); err == nil || !strings.Contains(err.Error(), "plan phase did not produce an artifact") {
+		t.Fatalf("ResumeNeedUserInput() error = %v, want expected post-resume dispatch failure", err)
 	}
 	got, err := agent.ReadTestingContract(contractPath)
 	if err != nil {
@@ -169,5 +226,41 @@ func TestHandleNeedUserInputDecisionAppliesHarnessWaiverBeforeResume(t *testing.
 	}
 	if got.Revision != 3 || !agent.IsTestingContractItemWaived(got.Items[0]) {
 		t.Fatalf("contract after resume = %+v, want durable revision-3 user waiver", got)
+	}
+}
+
+func TestResumeNeedUserInputRejectsVerificationGateOutsideFeatureScope(t *testing.T) {
+	stateRoot := t.TempDir()
+	const featureID = "feat-gate-scope"
+	contractPath := filepath.Join(stateRoot, featureID, "testing-contract.yaml")
+	if err := agent.WriteTestingContract(contractPath, agent.TestingContract{
+		Version: 1, Revision: 1,
+		Items: []agent.TestingContractItem{{ID: "blocked"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	rec := agent.SynthesizeVerificationNeedUserInputGate(contractPath, 1, []string{"blocked"}, 1)
+	rec.Questions[0].Answer = agent.NeedUserVerificationRetryAfterAuth
+	gatePath := filepath.Join(stateRoot, "another-feature", "iteration-01", agent.NeedUserInputArtifactName)
+	if err := agent.WriteNeedUserInputRecord(gatePath, rec); err != nil {
+		t.Fatal(err)
+	}
+	f := &feature.Feature{
+		ID: featureID, Name: "Gate scope", Slug: "gate-scope", Status: feature.StatusNeedUserInput,
+		CurrentPhase: feature.PhaseImplement, PendingNeedUserInputPath: gatePath,
+		Repos: []feature.FeatureRepo{{Name: repoName, Path: repoAPath}},
+	}
+	store := feature.NewStore(stateRoot)
+	if err := store.Save(f); err != nil {
+		t.Fatal(err)
+	}
+	o := orchestrator.New(
+		orchestrator.Deps{Lifecycle: lifecycleForFeature(f), Store: store},
+		orchestrator.Hooks{},
+	)
+
+	err := o.ResumeNeedUserInput(featureID, orchestrator.NeedUserInputResume{})
+	if err == nil || !strings.Contains(err.Error(), "gate") || !strings.Contains(err.Error(), "not scoped") {
+		t.Fatalf("ResumeNeedUserInput() error = %v, want off-feature gate rejection", err)
 	}
 }

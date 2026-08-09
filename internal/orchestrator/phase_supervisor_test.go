@@ -23,7 +23,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
-	"github.com/doordash-oss/agentic-orchestrator/internal/session"
+	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
 )
 
@@ -40,7 +40,8 @@ func TestPhaseSupervisorSingleShotCompletesOnSessionResultBeforeProcessExit(t *t
 	sm := mocks.NewMockSessionManager()
 	sess := mocks.NewMockSessionView(inquireSessionID, "feat")
 	sess.PhaseVal = feature.PhaseInquire
-	sm.GetSessionFn = func(id string) session.SessionView {
+	configureSuccessfulRootTurn(sess)
+	sm.GetSessionFn = func(id string) ports.SessionView {
 		if id != inquireSessionID {
 			t.Fatalf("GetSession(%q), want feat-inquire", id)
 		}
@@ -48,8 +49,9 @@ func TestPhaseSupervisorSingleShotCompletesOnSessionResultBeforeProcessExit(t *t
 	}
 
 	supervisor := newPhaseSupervisor(phaseSupervisorConfig{
-		Completion: sink,
-		Sessions:   sm,
+		Completion:    sink,
+		Sessions:      sm,
+		CommitOutcome: commitAllOutcomes,
 	})
 	supervisor.superviseSingleShotSession("feat", inquireSessionID, feature.PhaseInquire)
 
@@ -72,11 +74,13 @@ func TestPhaseSupervisorSingleShotDedupe(t *testing.T) {
 	sm := mocks.NewMockSessionManager()
 	sess := mocks.NewMockSessionView(inquireSessionID, "feat")
 	sess.PhaseVal = feature.PhaseInquire
-	sm.GetSessionFn = func(string) session.SessionView { return sess }
+	configureSuccessfulRootTurn(sess)
+	sm.GetSessionFn = func(string) ports.SessionView { return sess }
 
 	supervisor := newPhaseSupervisor(phaseSupervisorConfig{
-		Completion: sink,
-		Sessions:   sm,
+		Completion:    sink,
+		Sessions:      sm,
+		CommitOutcome: commitAllOutcomes,
 	})
 	supervisor.superviseSingleShotSession("feat", inquireSessionID, feature.PhaseInquire)
 	supervisor.superviseSingleShotSession("feat", inquireSessionID, feature.PhaseInquire)
@@ -97,11 +101,13 @@ func TestPhaseSupervisorSingleShotAllowsReentrantRetryForSameSessionID(t *testin
 	sm := mocks.NewMockSessionManager()
 	first := mocks.NewMockSessionView(inquireSessionID, "feat")
 	first.PhaseVal = feature.PhaseInquire
+	configureSuccessfulRootTurn(first)
 	retry := mocks.NewMockSessionView(inquireSessionID, "feat")
 	retry.PhaseVal = feature.PhaseInquire
+	configureSuccessfulRootTurn(retry)
 
 	var getCount atomic.Int32
-	sm.GetSessionFn = func(id string) session.SessionView {
+	sm.GetSessionFn = func(id string) ports.SessionView {
 		if id != inquireSessionID {
 			t.Fatalf("GetSession(%q), want feat-inquire", id)
 		}
@@ -117,8 +123,9 @@ func TestPhaseSupervisorSingleShotAllowsReentrantRetryForSameSessionID(t *testin
 		retry.StatusChVal <- "SUCCESS"
 	})
 	supervisor = newPhaseSupervisor(phaseSupervisorConfig{
-		Completion: sink,
-		Sessions:   sm,
+		Completion:    sink,
+		Sessions:      sm,
+		CommitOutcome: commitAllOutcomes,
 	})
 	supervisor.superviseSingleShotSession("feat", inquireSessionID, feature.PhaseInquire)
 
@@ -146,7 +153,7 @@ func TestPhaseSupervisorSingleShotFailsWhenSessionExitsWithoutResult(t *testing.
 	sess := mocks.NewMockSessionView("feat-research", "feat")
 	sess.PhaseVal = feature.PhaseResearch
 	sess.ErrorDetailVal = "process exited unexpectedly"
-	sm.GetSessionFn = func(string) session.SessionView { return sess }
+	sm.GetSessionFn = func(string) ports.SessionView { return sess }
 
 	supervisor := newPhaseSupervisor(phaseSupervisorConfig{
 		Completion: sink,
@@ -288,12 +295,13 @@ func TestPhaseSupervisorSingleShotClassifiesDoneResultCost(t *testing.T) {
 	sm := mocks.NewMockSessionManager()
 	sess := mocks.NewMockSessionView("feat-design", "feat")
 	sess.PhaseVal = feature.PhaseDesign
-	sess.CostVal = &llm.ResultMessage{Subtype: "success"}
-	sm.GetSessionFn = func(string) session.SessionView { return sess }
+	configureSuccessfulRootTurn(sess)
+	sm.GetSessionFn = func(string) ports.SessionView { return sess }
 
 	supervisor := newPhaseSupervisor(phaseSupervisorConfig{
-		Completion: sink,
-		Sessions:   sm,
+		Completion:    sink,
+		Sessions:      sm,
+		CommitOutcome: commitAllOutcomes,
 	})
 	supervisor.superviseSingleShotSession("feat", "feat-design", feature.PhaseDesign)
 
@@ -306,4 +314,16 @@ func TestPhaseSupervisorSingleShotClassifiesDoneResultCost(t *testing.T) {
 	if sess.StopCalled != 1 {
 		t.Fatalf("session Stop calls = %d, want 1", sess.StopCalled)
 	}
+}
+
+func configureSuccessfulRootTurn(sess *mocks.MockSessionView) {
+	sess.RootCompletionIntentVal = llm.CompletionIntent{
+		Found:  true,
+		Status: llm.CompletionIntentSuccess,
+	}
+	sess.CostVal = &llm.ResultMessage{Subtype: "success", StopReason: "end_turn"}
+}
+
+func commitAllOutcomes(string, string, feature.Phase, llm.CompletionIntent) ([]agent.ProtocolViolation, error) {
+	return nil, nil
 }

@@ -84,13 +84,13 @@ type RepoTransactionEntry struct {
 	// ChildHeadSHA is the full child HEAD after committing every remaining
 	// child change; recorded before any parent branch is touched.
 	ChildHeadSHA string `yaml:"child_head_sha"`
-	// CandidateSHA is the full SHA of the explicit two-parent no-fast-forward
-	// merge commit staged for this repository without advancing the parent
-	// ref. Empty until preparation is durable.
+	// CandidateSHA is the full SHA staged for this repository without
+	// advancing the parent ref. Usually this is an explicit two-parent
+	// no-fast-forward merge commit; for a rebase pass-through repo that was
+	// already up to date at launch, this can equal ParentAnchorSHA.
 	CandidateSHA string `yaml:"candidate_sha,omitempty"`
-	// MergeHEAD is the full SHA of the merge commit once the parent ref is
-	// confirmed at the candidate. For a successful apply, this equals
-	// CandidateSHA.
+	// MergeHEAD is the full SHA confirmed on the parent ref after apply. For
+	// a successful apply, this equals CandidateSHA.
 	MergeHEAD string `yaml:"merge_head,omitempty"`
 	// PrepState records whether the candidate is pending, prepared, or failed.
 	PrepState RepoPrepState `yaml:"prep_state,omitempty"`
@@ -108,10 +108,42 @@ type RepoTransactionEntry struct {
 	// CleanupWarning records a non-fatal worktree/branch cleanup failure
 	// for this repository.
 	CleanupWarning string `yaml:"cleanup_warning,omitempty"`
+	// TailWarning records a non-fatal review-feedback integration tail
+	// failure for this repository (push, reply, or thread-resolution
+	// failure). It is projected into the existing warnings list with a
+	// distinguishing prefix; no API schema change.
+	TailWarning string `yaml:"tail_warning,omitempty"`
 	// Diagnostics is a human-readable summary of the per-repo attention
 	// condition.
 	Diagnostics string `yaml:"diagnostics,omitempty"`
+	// GateCode is the stable, typed failure code recorded by the rebase
+	// mechanical integration gate when it parks a behind repo at attention
+	// before any candidate or ref is touched. Empty for non-gate attention.
+	// See the GateCode* constants.
+	GateCode string `yaml:"gate_code,omitempty"`
 }
+
+// Stable gate-failure codes recorded by the rebase mechanical integration
+// gate. They are distinct, machine-stable reason strings so review tooling
+// can classify a parked rebase child without parsing free-form diagnostics.
+const (
+	// GateCodeNotAncestor: the persisted creation-time target commit is not
+	// an ancestor of the child branch head — the child did not merge the
+	// creation-time target.
+	GateCodeNotAncestor = "rebase_gate_not_ancestor"
+	// GateCodeMergeInProgress: a merge or rebase sequencer is underway in
+	// the child worktree at gate time (MERGE_HEAD, rebase-merge, or
+	// rebase-apply present).
+	GateCodeMergeInProgress = "rebase_gate_merge_in_progress"
+	// GateCodeConflictMarkers: literal conflict markers remain in one or more
+	// tracked files of the child worktree, or the marker scan itself failed
+	// (fail closed).
+	GateCodeConflictMarkers = "rebase_gate_conflict_markers"
+	// GateCodeMissingTargetSHA: a persisted behind-repo target lacks the
+	// creation-time target SHA (e.g. an in-flight child created before the
+	// gate landed). The child must be discarded and relaunched.
+	GateCodeMissingTargetSHA = "rebase_gate_missing_target_sha"
+)
 
 // TransactionJournal is the ordered per-repository transaction record for
 // all child integration. It preserves inherited repository order and durably
@@ -125,10 +157,16 @@ type TransactionJournal struct {
 	// Attention is a human-readable summary of the blocking condition when
 	// the transaction is parked at attention.
 	Attention string `yaml:"attention,omitempty"`
+	// TailSettled is the durable marker that the review-feedback integration
+	// tail has finished attempting all steps. The startup reconciler skips
+	// settled tails entirely so historical children trigger no pushes, no
+	// gh invocations, and no journal churn on later startups. Refactor
+	// children never set this marker.
+	TailSettled bool `yaml:"tail_settled,omitempty"`
 }
 
 // AllCandidatesPrepared reports whether every per-repo entry has a durable
-// candidate commit (PrepState == prepared and CandidateSHA non-empty).
+// candidate SHA (PrepState == prepared and CandidateSHA non-empty).
 func (t *TransactionJournal) AllCandidatesPrepared() bool {
 	if t == nil || len(t.Entries) == 0 {
 		return false

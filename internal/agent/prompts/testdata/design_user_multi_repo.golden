@@ -8,6 +8,10 @@
 
 > Sign in with Google.
 
+**Exit criteria** (distill these into the design's `## Acceptance Criteria` section as concrete, observable statements):
+
+> Google sign-in works end to end and PKCE is enforced.
+
 ## Target Repositories
 
 This is a multi-repo feature spanning the following repositories. Your design must account for interactions between them:

@@ -2,11 +2,9 @@
 
 ### One-shot the moonshot — then do it ten times in parallel.
 
-Agentic Orchestrator is an AI development workflow orchestrator that turns any engineer into a force multiplier. Describe your features, make the high-level decisions, and AI handles the rest — research, planning, implementation, code review, pull request — all running concurrently from a single terminal.
+Agentic Orchestrator is an AI development workflow orchestrator that turns any engineer into a force multiplier. Describe your features, make the high-level decisions, and AI handles the rest — research, planning, implementation, code review, pull request — with concurrent workflows supervised from one desktop workspace.
 
-> The local CLI is `agentico`
-
-<img width="3000" height="1800" alt="agentico-basic-flow-3000x1800" src="https://github.com/user-attachments/assets/b61ccb6e-3b0d-4b29-9b74-ade9a3917e82" />
+> The desktop app is the primary interface. Its local server and administration CLI is `agentico`.
 
 ## Why Agentic Orchestrator?
 
@@ -25,12 +23,27 @@ The design follows patterns described in Anthropic's [Building Effective Agents]
 
 ## Quick Start
 
-Use Homebrew if you have it; otherwise grab the prebuilt binary. Build from source only if you're working on agentico itself.
+> [!IMPORTANT]
+> **Breaking change:** Before upgrading an installation whose runtime data lives
+> under `~/.agentic-workflow/`, rename that directory to
+> `~/.agentic-orchestrator/`. Headless installations may instead keep data in a
+> custom location by passing explicit `--config` and `--state-dir` flags. The
+> runtime no longer checks the legacy parent automatically.
 
-**Homebrew** (recommended — macOS/Linux):
+Install the desktop app with Homebrew (macOS):
 
 ```bash
-brew install doordash-oss/agentic-orchestrator/agentico
+brew install --cask doordash-oss/agentic-orchestrator/agentico-desktop
+```
+
+or install the desktop package for your platform from [GitHub Releases](https://github.com/doordash-oss/agentic-orchestrator/releases), then open Agentic Orchestrator. The app launches and supervises its matched bundled server. Releases are not yet Developer ID-signed or notarized: the cask clears macOS quarantine after install, but a DMG downloaded with a browser needs `xattr -dr com.apple.quarantine /Applications/Agentico.app` before first launch. On Linux, install the AppImage or deb from the release.
+
+For a headless server, external-runtime setup, or development, install the `agentico` CLI with Homebrew or a prebuilt binary. Build from source only if you're working on Agentico itself.
+
+**Homebrew** (recommended — macOS; on Linux use the prebuilt binary, Homebrew casks are macOS-only):
+
+```bash
+brew install --cask doordash-oss/agentic-orchestrator/agentico
 ```
 
 **Prebuilt binary** — no Homebrew or Go (macOS/Linux, amd64/arm64):
@@ -51,39 +64,42 @@ go install github.com/doordash-oss/agentic-orchestrator/cmd/agentico@latest
 # or: git clone https://github.com/doordash-oss/agentic-orchestrator.git && cd agentic-orchestrator && make install
 ```
 
-Then run `agentico`. Update any time with `agentico update` — it uses the right method for how you installed.
+Running `agentico` with no subcommand launches or focuses the installed
+desktop app, which in turn starts and supervises its matched bundled server.
+Use `agentico server [flags]` to run the foreground loopback server for
+headless automation. Use `agentico update` to open desktop Settings >
+Updates when the app is registered, or to print non-mutating headless update
+guidance.
 
-On first launch, Agentic Orchestrator walks you through a welcome flow to select your workspace directories. After that, you're on the dashboard.
-
-**Three keys to remember**: `n` (new feature), `?` (help), `a` (watch active work; answer, approve, or review when prompted). Everything else is discoverable from the help overlay.
+On first desktop launch, Agentic Orchestrator checks provider readiness — the only setup gate. With a provider installed and authenticated, the app opens the operational dashboard immediately; otherwise it shows what is missing and the command to fix it. Repositories are not configured up front: the Where step of feature creation adopts a folder as a workspace root, or initializes an empty one as a repository with your explicit consent.
 
 ## Prerequisites
 
 ### Required
 
-| Tool | Purpose | Install |
-|------|---------|---------|
-| **`git`** | Worktree, branch, commit, and rebase operations | Pre-installed on most systems |
+| Tool         | Purpose                                                             | Install                                                                                   |
+| ------------ | ------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| **`git`**    | Worktree, branch, commit, and rebase operations                     | Pre-installed on most systems                                                             |
 | **`gh` CLI** | Push-time PR creation and cross-repo PR body updates during Publish | [GitHub CLI docs](https://docs.github.com/en/github-cli/github-cli), then `gh auth login` |
 
 ### Provider CLIs — install at least one
 
 Agentic Orchestrator needs **at least one** AI provider CLI.
 
-| Tool | Role | Install |
-|------|------|---------|
-| **Claude Code CLI >= 2.1.81** (`claude`) | Backend for KB, inquiry, research, design, planning, implementation, and chat | [Claude Code setup](https://code.claude.com/docs/en/getting-started) or `npm install -g @anthropic-ai/claude-code@latest` |
-| **Codex CLI >= 0.116.0** (`codex`) | Backend for Final Review and Codex-backed review models | [Codex CLI setup](https://developers.openai.com/codex/cli) or `npm i -g @openai/codex@latest` |
-| **OpenCode CLI >= 1.17.9** (`opencode`) | Co-equal backend for every phase and chat; selected with `opencode:<backend/model>` (e.g. `opencode:anthropic/claude-sonnet-4-5`) | [opencode.ai](https://opencode.ai) or `curl -fsSL https://opencode.ai/install \| bash` |
+| Tool                                     | Role                                                                                                                              | Install                                                                                                                   |
+| ---------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| **Claude Code CLI >= 2.1.81** (`claude`) | Backend for KB, inquiry, research, design, planning, implementation, and chat                                                     | [Claude Code setup](https://code.claude.com/docs/en/getting-started) or `npm install -g @anthropic-ai/claude-code@latest` |
+| **Codex CLI >= 0.116.0** (`codex`)       | Backend for Final Review and Codex-backed review models                                                                           | [Codex CLI setup](https://developers.openai.com/codex/cli) or `npm i -g @openai/codex@latest`                             |
+| **OpenCode CLI >= 1.17.9** (`opencode`)  | Co-equal backend for every phase and chat; selected with `opencode:<backend/model>` (e.g. `opencode:anthropic/claude-sonnet-4-5`) | [opencode.ai](https://opencode.ai) or `curl -fsSL https://opencode.ai/install \| bash`                                    |
 
 OpenCode routes a configured backend provider (Anthropic, OpenAI, Google, a local Ollama model, and so on) through one CLI. Authenticate it with `opencode auth login`, and confirm it is ready with `opencode models`. Agentico runs every OpenCode session against a managed, per-session config and never edits your global OpenCode configuration. Opt into it explicitly with `--providers opencode`, or let it join automatically when its CLI is installed and authenticated.
 
 ### Optional
 
-| Tool | Purpose | Install |
-|------|---------|---------|
-| **Go 1.25+** | Only needed to build `agentico` from source — not required when using a [prebuilt release binary](#quick-start) | [go.dev](https://go.dev/dl/) |
-| **Node.js 18+ and npm** | Only needed when installing Claude Code or Codex through npm | [nodejs.org](https://nodejs.org/) |
+| Tool                    | Purpose                                                                                                         | Install                           |
+| ----------------------- | --------------------------------------------------------------------------------------------------------------- | --------------------------------- |
+| **Go 1.25+**            | Only needed to build `agentico` from source — not required when using a [prebuilt release binary](#quick-start) | [go.dev](https://go.dev/dl/)      |
+| **Node.js 18+ and npm** | Only needed when installing Claude Code or Codex through npm                                                    | [nodejs.org](https://nodejs.org/) |
 
 After installing your provider CLI(s), confirm each is authenticated — `claude auth status`, `codex login status`, and/or `opencode models` (it lists models only once a backend provider is configured) — plus `gh auth status`, before launching `agentico`. A provider whose CLI is missing, too old, or not yet authenticated is filtered out at startup with a one-line notice, and the orchestrator continues on whatever providers are ready.
 
@@ -105,35 +121,37 @@ The lifecycle is profile-dependent and checkpoint-driven. Medium starts at plann
 
 **Final Review** — Runs once after the last roadmap phase, across every touched repo that has not already been published. The phase contains its own review/fix loop. Passing Final Review moves the feature to `CodeReady`; exhausting the loop or violating the phase contract fails the feature.
 
-**Publishing** — If auto-publish is enabled, Agentic Orchestrator commits, rebases, pushes, creates PRs, and injects cross-repo PR links automatically. If manual publish is enabled, the TUI pauses at `CodeReady` so you can review the diff and PR description first.
+**Publishing** — If auto-publish is enabled, Agentic Orchestrator commits, pushes, creates PRs, and injects cross-repo PR links automatically. If manual publish is enabled, the desktop app pauses at `CodeReady` so you can review the diff and PR description first.
 
 ### Pipeline Profiles
 
 When creating a feature, choose a pipeline depth:
 
-| Profile | Phases | Best for |
-|---------|--------|----------|
-| **Medium** | Roadmap plan → per-phase plan/implement loop → Final Review → Publish | Small, well-understood changes where you already know the approach |
-| **Large** | KB → Inquire → Research → Design → roadmap loop → Final Review → Publish | Most complex features (default) |
-| **Moonshot** | Same phase sequence as Large, with high effort and per-iteration implementation review | High-risk or highly ambiguous changes |
+| Profile      | Phases                                                                                 | Best for                                                           |
+| ------------ | -------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
+| **Medium**   | Roadmap plan → per-phase plan/implement loop → Final Review → Publish                  | Small, well-understood changes where you already know the approach |
+| **Large**    | KB → Inquire → Research → Design → roadmap loop → Final Review → Publish               | Most complex features (default)                                    |
+| **Moonshot** | Same phase sequence as Large, with high effort and per-iteration implementation review | High-risk or highly ambiguous changes                              |
 
 ### Worktree Isolation
 
-Each feature runs in its own git worktree under `~/.agentic-orchestrator/worktrees/` (legacy installs continue to use `~/.agentic-workflow/worktrees/` until you opt in). This means:
+Each feature runs in its own git worktree under `~/.agentic-orchestrator/worktrees/`. This means:
+
 - Multiple features can work on the same repo simultaneously
 - No branch conflicts between concurrent features
 - Your main working copy stays untouched
-- Worktrees are cleaned up with `c` after completion
+- Worktrees remain isolated; cleanup is manual until the desktop cleanup action is delivered
 
 ### Multiple Repositories
 
 Every feature targets one or more repositories with the same lifecycle and state machine. When a feature spans more than one repo, Agentic Orchestrator:
+
 - Creates worktrees in each target repo
 - Builds an execution plan with dependency ordering across repos
 - Runs implementation per-repo (sequentially or in parallel based on dependencies)
 - Cross-references PRs across repos automatically
 
-When a feature targets a single repo, the per-repo Repo Progress panel, the cycle-selector modal, and the cross-reference PR table collapse — the rest of the lifecycle is identical.
+When a feature targets a single repo, the per-repo Repo Progress panel and the cross-reference PR table collapse — the rest of the lifecycle is identical.
 
 ### Knowledge Base
 
@@ -143,22 +161,22 @@ Before diving into a feature, Agentic Orchestrator can build a per-repo knowledg
 
 Plans are reviewed by specialized AI critics before implementation begins:
 
-| Critic | Focus | When Active |
-|--------|-------|-------------|
-| **Architecture** | Roadmap-level pattern consistency, module boundaries, dependency direction | Large/Moonshot, all risk levels |
-| **Structural** | Phase-plan completeness, required sections, executable task shape | Large/Moonshot, all risk levels |
-| **Scope** | Requirement coverage, phase sizing, over-engineering detection | Large/Moonshot, all risk levels |
-| **Security** | Auth, injection, data protection calibrated to project context | Large/Moonshot, high risk |
-| **Performance** | Scalability, query efficiency, resource management | Large/Moonshot, high risk |
-| **Testing** | Coverage adequacy, edge cases, regression protection | Large/Moonshot phase plans, high risk |
+| Critic           | Focus                                                                      | When Active                           |
+| ---------------- | -------------------------------------------------------------------------- | ------------------------------------- |
+| **Architecture** | Roadmap-level pattern consistency, module boundaries, dependency direction | Large/Moonshot, all risk levels       |
+| **Structural**   | Phase-plan completeness, required sections, executable task shape          | Large/Moonshot, all risk levels       |
+| **Scope**        | Requirement coverage, phase sizing, over-engineering detection             | Large/Moonshot, all risk levels       |
+| **Security**     | Auth, injection, data protection calibrated to project context             | Large/Moonshot, high risk             |
+| **Performance**  | Scalability, query efficiency, resource management                         | Large/Moonshot, high risk             |
+| **Testing**      | Coverage adequacy, edge cases, regression protection                       | Large/Moonshot phase plans, high risk |
 
 Critics run in parallel and produce independent verdicts. If any critic requests changes, the plan is revised and re-validated automatically. Medium skips plan critics but still runs Final Review before publish.
 
 ## Usage
 
-### TUI Dashboard
+### Desktop Dashboard
 
-Launch with `agentico`. The dashboard shows all features organized by status:
+Open the Agentic Orchestrator desktop app. The dashboard shows all features organized by status:
 
 - **In Progress** — actively being worked on (researching, planning, implementing)
 - **Published** — PR created, awaiting merge
@@ -166,45 +184,14 @@ Launch with `agentico`. The dashboard shows all features organized by status:
 
 Features needing your attention (pending permissions, help requests) show a warning indicator.
 
-### Creating a Feature
-
-Press `n` from the dashboard to open the wizard:
-
-1. **What** — Name and describe the feature. Supports pasting images (`Ctrl+V`) and attaching files (`@`).
-2. **Where** — Select target repo(s). Browse for new directories or create repos on the fly.
-3. **Pipeline** — Choose Medium, Large, or Moonshot and see the available gate options.
-4. **Review** — Adjust risk level, models per phase, checkpoints (inquiry review, research review, design review, roadmap review, phase plan review, manual publish), exit criteria. Submit to start.
-
-### Interacting with Agents
-
-**Watch** (`a`) — Open active live work in real time. The same key becomes **Answer**, **Approve**, or **Review** when the agent needs input.
-
-**Overview** (`o`) — Switch the dashboard right panel from Live Preview to the detailed overview. Press `l` from Overview to return to Live Preview; outside Overview, `l` still opens logs.
-
-**Stop watching** (`Esc/Ctrl+]`) — Return to the dashboard. The agent keeps running.
-
-### Post-Implementation Actions
-
-Once a feature reaches code-ready or published state:
-
-| Key | Action |
-|-----|--------|
-| `p` | Publish as PR (diff review → commit log → PR description → confirm) |
-| `b` | Rebase on main |
-| `g` | View and resolve PR review comments |
-| `D` | Mark as done |
-
-### Ask Me Anything
-
-Press `/` anywhere to open the built-in AI chat. It's a read-only session — backed by whichever provider your `utilities` model selects (Claude, Codex, or OpenCode) — that can explain how Agentic Orchestrator works, debug issues by reading feature logs and artifacts, search the codebase, and answer questions, without modifying any files.
-
-### Keybindings
-
-> For the complete reference, see [docs/keybindings.md](docs/keybindings.md).
+Create and open features through the dashboard. The app derives available
+actions from the server, keeps active sessions current through REST snapshots
+and SSE streams, and surfaces required review or input directly in the feature
+workspace.
 
 ## Configuration
 
-Config lives at `~/.agentic-orchestrator/config.yaml` (auto-created on first launch). If a legacy `~/.agentic-workflow/` directory already exists, it is reused in place so existing installs keep working without a manual copy.
+Config lives at `~/.agentic-orchestrator/config.yaml` and is auto-created on first launch. Override the location for a headless server with explicit `--config` and `--state-dir` flags.
 
 ```yaml
 defaults:
@@ -228,8 +215,8 @@ defaults:
   max_iterations: 10
   max_consecutive_failures: 3
   max_consecutive_no_progress: 3
-  inquireness: high          # How often planning questions are surfaced
-  pipeline: large            # Default pipeline (medium, large, moonshot)
+  inquireness: high # How often planning questions are surfaced
+  pipeline: large # Default pipeline (medium, large, moonshot)
 
 repos:
   my-service:
@@ -237,8 +224,10 @@ repos:
     verification: "go test ./..."
 
 workspace_roots:
-  - /home/user/projects      # Scanned for git repos on startup
+  - /home/user/projects # Scanned for git repos on startup
 ```
+
+`exit_criteria` seeds the intent-shaping stages: Inquire probes it, and the design distills it into its `## Acceptance Criteria` section (on the medium pipeline, the roadmap distills it into `## Overall Exit Criteria`). Downstream implementers, validators, and reviewers judge against the distilled section — raw exit criteria are inlined only while no distilled artifact exists.
 
 ### Model Overrides
 
@@ -248,20 +237,22 @@ Each feature can override default models during creation via the wizard (step 4)
 - The explicit **`opencode:<provider>/<model>` prefix** always routes to OpenCode, passing the backend id straight through (it works even for a backend OpenCode discovers but Agentico does not pre-list).
 - A **bare slash-form backend id** such as `anthropic/claude-sonnet-4-5` (no prefix) resolves to OpenCode when it matches OpenCode's catalog. This is the form Agentico persists for the provider-neutral per-phase defaults when OpenCode is the only ready provider, so an OpenCode model **can** be a default without any `opencode:` prefix in the config.
 
-Use `agentico --refresh-models` when a provider CLI shows new models but Agentico still shows an older catalog. Refresh runs live discovery for all ready providers, updates the version-keyed cache on success, and falls back to the previous cache with a warning if discovery fails.
+Use `agentico server --refresh-models` when a provider CLI shows new models but Agentico still shows an older catalog. Refresh runs live discovery for all ready providers, updates the version-keyed cache on success, and falls back to the previous cache with a warning if discovery fails.
 
 ### Launch Flags
 
 ```text
-agentico [flags]
+agentico
 agentico server [flags]
 
-Flags:
+Server flags:
   --config <path>                  Config file (default: ~/.agentic-orchestrator/config.yaml)
   --state-dir <path>               State directory (default: ~/.agentic-orchestrator/features)
   --dangerously-skip-permissions   Skip all permission prompts (use with caution)
   --providers <list>               Restrict to specific providers (claude,codex,opencode)
-  --refresh-models                 Refresh provider model catalogs before opening the TUI
+  --refresh-models                 Refresh provider model catalogs before starting the server
+
+Global flags:
   --help, -h                       Show help
   --version, -v                    Show version
 ```
@@ -272,10 +263,11 @@ Flags:
 agentico update [--check|-n]
 ```
 
-Run `agentico update` to upgrade to the latest stable release. Use
-`agentico update --check` (alias `-n`) to report the current and latest
-available versions without installing anything; it exits `0` and prints an
-already-up-to-date message when you are on the newest release.
+Run `agentico update` to focus or launch the desktop app directly into Settings
+Updates when it is registered. In standalone headless installs it prints
+format-aware package-manager or signed GitHub artifact guidance without
+modifying the executable. Use `agentico update --check` (alias `-n`) to perform
+a read-only stable-release metadata check and report current/latest versions.
 
 ## Development
 
@@ -289,30 +281,23 @@ make build
 # Everyday verification
 make test-fast
 
-# Generate keybinding docs
-go generate ./internal/tui/...
+# Desktop checks
+npm ci
+npm run check
+npm test
 ```
 
-Verification is split into named tiers so everyday checks stay fast while
-extended coverage remains available.
-
-| Tier | Command | Current wall time | Purpose |
-|------|---------|-------------------|---------|
-| Fast suite | `make test-fast` | 23s, target <=30s | Everyday all-package short-mode check before handoff. |
-| E2E smoke shell | `bash test/e2e/smoke.sh` | 48.53s | Builds the binary and checks CLI flags plus embedded skill layout. |
-| Isolated integration | `go test ./test/integration/... -count=1` | 323.06s | Lifecycle, state-machine, and protocol-violation coverage. |
-| E2E Go (process-launch / API-driven) | `go test ./test/e2e/... -count=1 -race` | 41.51s | Full TUI and process-launch behavior with the race detector. |
-| TUI observability | `go test -tags tui_observe ./internal/tui -run 'Observed|Emits' -count=1` | 15.14s | Observer-backed TUI event and feature-span integration coverage. |
-| Race regression | `go test ./... -count=1 -race` | 158.82s | Extended all-package race/regression sweep. |
-| Eval | `AGENTIC_EVAL=1 go test ./test/eval/... -count=1` | gated; not measured | Live skill/guideline discovery against real LLM CLIs. |
+See [docs/testing-baseline.md](docs/testing-baseline.md) for the canonical
+verification tier list, commands, timings, and when-to-run guidance. Name the
+tiers run in the PR description, with a short reason for any skipped relevant
+tier.
 
 `go vet ./...` and `go build ./...` remain required static and build checks.
-The tagged **TUI observability** tier is the explicit opt-in gate for slower
-observer-backed TUI integration coverage. The race-enabled all-package sweep is
+The race-enabled all-package sweep is
 the **Race regression** tier, not the ordinary unit command. See
-[AGENTS.md](AGENTS.md) and
-[docs/testing-baseline.md](docs/testing-baseline.md) for timing details, and
-see AGENTS.md for the isolated-run pattern for running a second instance without
+[AGENTS.md](AGENTS.md) and the canonical
+[verification baseline](docs/testing-baseline.md) for details, and see AGENTS.md
+for the isolated-run pattern for running a second instance without
 colliding with the first.
 
 ## Contributing

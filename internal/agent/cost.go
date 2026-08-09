@@ -55,6 +55,7 @@ func ExtractSessionCost(sess ports.SessionView) SessionCost {
 	sc := SessionCost{
 		Usage: sess.AccumulatedUsage(),
 	}
+	sc.TotalCostUSD = sc.Usage.CostUSD
 	if sess.Cost() != nil {
 		sc.TotalCostUSD = sess.Cost().TotalCostUSD
 	}

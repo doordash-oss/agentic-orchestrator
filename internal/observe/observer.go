@@ -135,7 +135,7 @@ func (o *Observer) emit(sc SpanContext, evt Event) error {
 // addRunNumber inserts the current run number into an attrs map when nonzero.
 // Helper so every StartSpan / AddSpanEvent caller in observer.go gets
 // run_number without per-site duplication. Returns attrs unchanged when
-// sc.RunNumber == 0 so pre-Phase-4 callers / tests do not see a spurious
+// sc.RunNumber == 0 so callers without run context do not see a spurious
 // "run_number":"0" attribute on OTel spans.
 func addRunNumber(sc SpanContext, attrs map[string]string) map[string]string {
 	if sc.RunNumber == 0 {
@@ -1187,7 +1187,7 @@ func (o *Observer) Shutdown() error {
 // SpanContext — callers are expected to populate evt.RunNumber directly
 // when they want the event associated with a specific run. Zero is
 // serialised as missing (omitempty), so unstamped events match the
-// pre-Phase-4 shape.
+// schema shape used by events without run context.
 func (o *Observer) Emit(evt Event) error {
 	if o == nil || !o.enabled {
 		return nil
@@ -1199,7 +1199,7 @@ func (o *Observer) Emit(evt Event) error {
 }
 
 // ActivePhaseSpanContext returns the SpanContext stored when PhaseStarted was
-// called for the given feature. This allows the TUI to emit phase.completed
+// called for the given feature. This allows the desktop app to emit phase.completed
 // on the same span that phase.started used for async interactive phases.
 func (o *Observer) ActivePhaseSpanContext(featureID string) (SpanContext, bool) {
 	if o == nil || !o.enabled {

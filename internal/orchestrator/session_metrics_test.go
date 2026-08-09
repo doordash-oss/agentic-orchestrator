@@ -27,6 +27,8 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
 )
 
+const agenticRepoName = "agentic"
+
 // TestAttachDropReport_IncludesRunNumber verifies that attachDropObserver
 // resolves ActiveRun via ports.FeatureStore when emitting the
 // session.critical_message_dropped event. This is the runtime guard that the

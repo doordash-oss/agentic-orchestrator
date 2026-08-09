@@ -30,7 +30,6 @@ var inquirerRoleSpec = RoleSpec{
 	OutputRoots: []OutputRootSpec{
 		singleShotPhaseDirOutputRoot("Inquire phase artifact directory."),
 	},
-	MarkerRoot: "phase_dir",
 	Artifacts: []RoleArtifactSpec{
 		phaseMarkdownRoleArtifact("inquire markdown artifact"),
 	},
@@ -44,11 +43,12 @@ func InquirerRoleSpec() RoleSpec {
 
 // InquireUserInput is the data passed to inquire.user.tmpl.
 type InquireUserInput struct {
-	Name        string
-	Description string
-	Images      []string
-	Attachments []string
-	Repos       []prompts.RepoView
+	Name         string
+	Description  string
+	ExitCriteria string
+	Images       []string
+	Attachments  []string
+	Repos        []prompts.RepoView
 
 	Inquireness prompts.GrillMeInquirenessInput
 }

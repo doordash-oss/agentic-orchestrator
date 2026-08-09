@@ -26,7 +26,7 @@ Own functionality and evidence:
 
 ## Missing Visual / Behavioral Evidence Safety Net
 
-Before approving, compare the iteration diff against the bound testing contract and verification report. When a diff touches a user-facing surface and the contract lacks matching visual or behavioral coverage, request changes. User-facing surfaces include rendered UI, TUI screens, web/mobile/native views, CLI output that a user reads, human-rendered paths such as generated reports or docs, and primary state-mutating user journeys such as create/update/delete flows, setup wizards, submit handlers, top-level commands, and IPC bridge methods that front a mutation.
+Before approving, compare the iteration diff against the bound testing contract and verification report. When a diff touches a user-facing surface and the contract lacks matching visual or behavioral coverage, request changes. User-facing surfaces include rendered UI, terminal interface screens, web/mobile/native views, CLI output that a user reads, human-rendered paths such as generated reports or docs, and primary state-mutating user journeys such as create/update/delete flows, setup wizards, submit handlers, top-level commands, and IPC bridge methods that front a mutation.
 
 Existing visual or behavioral contract rows with valid verification evidence count as coverage. Audit those rows and their evidence before requesting a new row.
 
@@ -80,4 +80,4 @@ Write exactly one `review-feedback.md` with these three `## ` sections, in order
 2. `## Suggestions` - non-blocking Medium/Low improvements, or `- (none)`.
 3. `## Verdict` - exactly `APPROVED` or `CHANGES_REQUESTED`.
 
-Use `CHANGES_REQUESTED` only for Critical or High Functionality/Evidence findings. Once `review-feedback.md` is written, create the `phase_complete` marker named by the system prompt as the final action.
+Use `CHANGES_REQUESTED` only for Critical or High Functionality/Evidence findings. Once `review-feedback.md` is written and validated, emit the structured success outcome from the system prompt. The harness writes `phase_complete`.

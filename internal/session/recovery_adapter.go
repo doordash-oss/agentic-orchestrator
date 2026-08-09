@@ -18,6 +18,7 @@ import (
 	"context"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
 // RecoveryAdapter binds the featuresDir + *feature.Manager context that
@@ -38,12 +39,12 @@ func NewRecoveryAdapter(stateDir string, fm *feature.Manager) *RecoveryAdapter {
 
 // ScanForRecovery delegates to the package-level ScanForRecovery using the
 // adapter's stored featuresDir + feature manager.
-func (a *RecoveryAdapter) ScanForRecovery(_ context.Context) ([]RecoveryItem, error) {
+func (a *RecoveryAdapter) ScanForRecovery(_ context.Context) ([]ports.RecoveryItem, error) {
 	return ScanForRecovery(a.StateDir, a.FeatureManager)
 }
 
 // ExecuteRecovery delegates to the package-level ExecuteRecovery using the
 // adapter's stored feature manager.
-func (a *RecoveryAdapter) ExecuteRecovery(_ context.Context, items []RecoveryItem, actions map[string]RecoveryAction) error {
+func (a *RecoveryAdapter) ExecuteRecovery(_ context.Context, items []ports.RecoveryItem, actions map[string]ports.RecoveryAction) error {
 	return ExecuteRecovery(items, actions, a.FeatureManager)
 }

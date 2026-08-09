@@ -59,8 +59,7 @@ type AtomicPhaseStampInput struct {
 	LastError string
 	GatePath  string
 	// PRURLs is an optional per-repo PR URL map applied alongside the
-	// state transition (used at the end of a cycle when publish has
-	// already populated URLs). May be nil.
+	// state transition. May be nil.
 	PRURLs map[string]string
 }
 

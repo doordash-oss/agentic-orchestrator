@@ -145,89 +145,12 @@ MIT License
 https://opensource.org/license/mit
 --------------------------------------------------------------------------------
 
-  charm.land/bubbles/v2
-      Copyright (c) 2020-2026 Charmbracelet, Inc.
-      https://github.com/charmbracelet/bubbles
-  charm.land/bubbletea/v2
-      Copyright (c) 2020-2026 Charmbracelet, Inc.
-      https://github.com/charmbracelet/bubbletea
-  charm.land/lipgloss/v2
-      Copyright (c) 2021-2026 Charmbracelet, Inc.
-      https://github.com/charmbracelet/lipgloss
-  github.com/alecthomas/chroma/v2
-      Copyright (C) 2017 Alec Thomas
-      https://github.com/alecthomas/chroma
-  github.com/aymanbagabas/go-osc52/v2
-      Copyright (c) 2022 Ayman Bagabas
-      https://github.com/aymanbagabas/go-osc52
-  github.com/aymerick/douceur
-      Copyright (c) 2015 Aymerick JEHANNE
-      https://github.com/aymerick/douceur
   github.com/cenkalti/backoff/v5
       Copyright (c) 2014 Cenk Altı
       https://github.com/cenkalti/backoff
   github.com/cespare/xxhash/v2
       Copyright (c) 2016 Caleb Spare
       https://github.com/cespare/xxhash
-  github.com/charmbracelet/colorprofile
-      Copyright (c) 2020-2024 Charmbracelet, Inc.
-      https://github.com/charmbracelet/colorprofile
-  github.com/charmbracelet/glamour
-      Copyright (c) 2019-2023 Charmbracelet, Inc.
-      https://github.com/charmbracelet/glamour
-  github.com/charmbracelet/lipgloss
-      Copyright (c) 2021-2023 Charmbracelet, Inc.
-      https://github.com/charmbracelet/lipgloss
-  github.com/charmbracelet/ultraviolet
-      Copyright (c) 2025 Charmbracelet, Inc.
-      https://github.com/charmbracelet/ultraviolet
-  github.com/charmbracelet/x/ansi
-  github.com/charmbracelet/x/cellbuf
-  github.com/charmbracelet/x/exp/slice
-  github.com/charmbracelet/x/term
-  github.com/charmbracelet/x/termios
-  github.com/charmbracelet/x/windows
-      Copyright (c) 2023 Charmbracelet, Inc.
-      https://github.com/charmbracelet/x
-  github.com/clipperhouse/displaywidth
-      Copyright (c) 2025 Matt Sherman
-      https://github.com/clipperhouse/displaywidth
-  github.com/clipperhouse/uax29/v2
-      Copyright (c) 2020 Matt Sherman
-      https://github.com/clipperhouse/uax29
-  github.com/dlclark/regexp2
-      Copyright (c) Doug Clark
-      https://github.com/dlclark/regexp2
-  github.com/lucasb-eyer/go-colorful
-      Copyright (c) 2013 Lucas Beyer
-      https://github.com/lucasb-eyer/go-colorful
-  github.com/mattn/go-isatty
-      Copyright (c) Yasuhiro MATSUMOTO <mattn.jp@gmail.com>
-      https://github.com/mattn/go-isatty
-  github.com/mattn/go-runewidth
-      Copyright (c) 2016 Yasuhiro Matsumoto
-      https://github.com/mattn/go-runewidth
-  github.com/muesli/cancelreader
-      Copyright (c) 2022 Erik Geiser and Christian Muehlhaeuser
-      https://github.com/muesli/cancelreader
-  github.com/muesli/reflow
-      Copyright (c) 2019 Christian Muehlhaeuser
-      https://github.com/muesli/reflow
-  github.com/muesli/termenv
-      Copyright (c) 2019 Christian Muehlhaeuser
-      https://github.com/muesli/termenv
-  github.com/rivo/uniseg
-      Copyright (c) 2019 Oliver Kuederle
-      https://github.com/rivo/uniseg
-  github.com/xo/terminfo
-      Copyright (c) 2016 Anmol Sethi
-      https://github.com/xo/terminfo
-  github.com/yuin/goldmark
-      Copyright (c) 2019 Yusuke Inuzuka
-      https://github.com/yuin/goldmark
-  github.com/yuin/goldmark-emoji
-      Copyright (c) 2020 Yusuke Inuzuka
-      https://github.com/yuin/goldmark-emoji
   go.uber.org/dig
       Copyright (c) 2017-2018 Uber Technologies, Inc.
       https://github.com/uber-go/dig
@@ -246,21 +169,12 @@ BSD 3-Clause "New" or "Revised" License
 https://opensource.org/license/BSD-3-clause
 --------------------------------------------------------------------------------
 
-  github.com/atotto/clipboard
-      Copyright (c) 2013 Ato Araki. All rights reserved.
-      https://github.com/atotto/clipboard
   github.com/google/uuid
       Copyright (c) 2009,2014 Google Inc. All rights reserved.
       https://github.com/google/uuid
-  github.com/gorilla/css
-      Copyright (c) 2023 The Gorilla Authors. All rights reserved.
-      https://github.com/gorilla/css
   github.com/grpc-ecosystem/grpc-gateway/v2
       Copyright (c) 2015, Gengo, Inc. All rights reserved.
       https://github.com/grpc-ecosystem/grpc-gateway
-  github.com/microcosm-cc/bluemonday
-      Copyright (c) 2014, David Kitchen <david@buro9.com>. All rights reserved.
-      https://github.com/microcosm-cc/bluemonday
   github.com/rogpeppe/go-internal
       Copyright (c) 2018 The Go Authors. All rights reserved.
       https://github.com/rogpeppe/go-internal

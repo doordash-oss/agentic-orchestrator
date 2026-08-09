@@ -748,14 +748,14 @@ func seedSealedRunYAML(t *testing.T, featureDir string, runNum int, sealedAt *ti
 }
 
 // TestEmit_PreMigrationEventsTreatedAsUnknownRun seeds events.jsonl with raw
-// JSONL lines lacking run_number (pre-Phase-4 byte shape) and asserts
+// JSONL lines lacking run_number and asserts
 // writeFeatureSummaryImpl still produces a well-formed summary. Pre-migration
 // tolerance kicks in only when ActiveRun == 1, so this test uses ActiveRun:1.
 func TestEmit_PreMigrationEventsTreatedAsUnknownRun(t *testing.T) {
 	featureDir := t.TempDir()
 	featureID := "pre_migration_feat"
 
-	// Write raw JSONL lines that lack a run_number key — pre-Phase-4 shape.
+	// Write raw JSONL lines that lack a run_number key.
 	eventsPath := filepath.Join(featureDir, "events.jsonl")
 	raw := `{"timestamp":"2026-04-20T10:00:00Z","trace_id":"t","span_id":"s1","event_type":"session.ended","phase":"implement","feature_id":"pre_migration_feat","session_id":"s1","data":{"input_tokens":300,"output_tokens":100,"total_cost_usd":0.1}}
 {"timestamp":"2026-04-20T10:01:00Z","trace_id":"t","span_id":"s2","event_type":"iteration.started","phase":"implement","feature_id":"pre_migration_feat","iteration":1}
@@ -1095,7 +1095,7 @@ func TestReadSealedRuns_PhaseNameTableMatchesFeaturePackage(t *testing.T) {
 // TestWriteFeatureSummary_FiltersEventsByActiveRun pins the §12 behaviour:
 // after a rewind (ActiveRun >= 2), the top-level totals / phases / repos
 // blocks aggregate ONLY events whose run_number matches the active run.
-// Pre-Phase-4 lines (missing run_number) are excluded because they cannot
+// Lines missing run_number are excluded because they cannot
 // logically belong to a post-rewind run.
 func TestWriteFeatureSummary_FiltersEventsByActiveRun(t *testing.T) {
 	t.Run("post_rewind_run_2_only", func(t *testing.T) {
@@ -1103,7 +1103,7 @@ func TestWriteFeatureSummary_FiltersEventsByActiveRun(t *testing.T) {
 		featureID := "filter_run2_feat"
 
 		// Seed 3 run-1 session.ended events + 2 run-2 session.ended events
-		// + 1 pre-Phase-4 session.ended event (no run_number).
+		// + 1 session.ended event without run_number.
 		eventsPath := filepath.Join(featureDir, "events.jsonl")
 		raw := `{"timestamp":"2026-04-20T10:00:00Z","trace_id":"t","span_id":"s1","event_type":"session.ended","phase":"implement","feature_id":"filter_run2_feat","session_id":"s1","repo_name":"repo-a","run_number":1,"data":{"input_tokens":100,"output_tokens":50,"total_cost_usd":0.01}}
 {"timestamp":"2026-04-20T10:01:00Z","trace_id":"t","span_id":"s2","event_type":"session.ended","phase":"implement","feature_id":"filter_run2_feat","session_id":"s2","repo_name":"repo-a","run_number":1,"data":{"input_tokens":100,"output_tokens":50,"total_cost_usd":0.01}}
@@ -1185,7 +1185,7 @@ func TestWriteFeatureSummary_FiltersEventsByActiveRun(t *testing.T) {
 		featureDir := t.TempDir()
 		featureID := "never_rewound_feat"
 		eventsPath := filepath.Join(featureDir, "events.jsonl")
-		// 2 run-1 events (input=100 each) + 2 pre-Phase-4 events (input=50 each).
+		// 2 run-1 events (input=100 each) + 2 unversioned events (input=50 each).
 		raw := `{"timestamp":"2026-04-20T10:00:00Z","trace_id":"t","span_id":"s1","event_type":"session.ended","phase":"implement","feature_id":"never_rewound_feat","session_id":"s1","run_number":1,"data":{"input_tokens":100,"output_tokens":0,"total_cost_usd":0}}
 {"timestamp":"2026-04-20T10:01:00Z","trace_id":"t","span_id":"s2","event_type":"session.ended","phase":"implement","feature_id":"never_rewound_feat","session_id":"s2","run_number":1,"data":{"input_tokens":100,"output_tokens":0,"total_cost_usd":0}}
 {"timestamp":"2026-04-20T09:00:00Z","trace_id":"t","span_id":"s3","event_type":"session.ended","phase":"implement","feature_id":"never_rewound_feat","session_id":"s3","data":{"input_tokens":50,"output_tokens":0,"total_cost_usd":0}}
@@ -1212,9 +1212,9 @@ func TestWriteFeatureSummary_FiltersEventsByActiveRun(t *testing.T) {
 		if err := yaml.Unmarshal(data, &summary); err != nil {
 			t.Fatalf("unmarshaling summary: %v", err)
 		}
-		// Pre-Phase-4 tolerance under ActiveRun:1 — both runs contribute.
+		// Missing-run tolerance under ActiveRun:1 — both sets contribute.
 		if summary.Totals.InputTokens != 300 {
-			t.Errorf("Totals.InputTokens = %d, want 300 (2×100 run-1 + 2×50 pre-Phase-4)", summary.Totals.InputTokens)
+			t.Errorf("Totals.InputTokens = %d, want 300 (2×100 run-1 + 2×50 unversioned)", summary.Totals.InputTokens)
 		}
 	})
 

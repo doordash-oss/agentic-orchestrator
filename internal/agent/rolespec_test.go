@@ -43,9 +43,6 @@ func TestImplementRoleSpecShape(t *testing.T) {
 	if spec.UserTemplate != "implement.user" {
 		t.Fatalf("ImplementRoleSpec().UserTemplate = %q, want implement.user", spec.UserTemplate)
 	}
-	if spec.MarkerRoot != "iteration_dir" {
-		t.Fatalf("ImplementRoleSpec().MarkerRoot = %q, want iteration_dir", spec.MarkerRoot)
-	}
 
 	var rootNames []string
 	for _, root := range spec.OutputRoots {
@@ -60,14 +57,12 @@ func TestImplementRoleSpecShape(t *testing.T) {
 		artifacts[artifact.Name] = artifact
 	}
 	checks := []struct {
-		name        string
-		root        string
-		path        string
-		presence    ArtifactPresence
-		conditional bool
+		name     string
+		root     string
+		path     string
+		presence ArtifactPresence
 	}{
 		{name: "progress", root: "phase_dir", path: "progress.md", presence: ArtifactRequired},
-		{name: "need_user_input", root: "iteration_dir", path: "need-user-input.yaml", presence: ArtifactConditional, conditional: true},
 	}
 	for _, tt := range checks {
 		got, ok := artifacts[tt.name]
@@ -77,9 +72,6 @@ func TestImplementRoleSpecShape(t *testing.T) {
 		if got.RootName != tt.root || got.RelativePath != tt.path || got.Presence != tt.presence {
 			t.Fatalf("artifact %q = {root:%q path:%q presence:%q}, want {root:%q path:%q presence:%q}",
 				tt.name, got.RootName, got.RelativePath, got.Presence, tt.root, tt.path, tt.presence)
-		}
-		if (got.When != "") != tt.conditional {
-			t.Fatalf("artifact %q conditional predicate set = %v, want %v", tt.name, got.When != "", tt.conditional)
 		}
 		if got.Description == "" {
 			t.Fatalf("artifact %q Description is empty", tt.name)
@@ -96,9 +88,6 @@ func TestImplementRoleSpecDerivesContractPaths(t *testing.T) {
 	if len(contract.Required) != 1 {
 		t.Fatalf("spec.Contract().Required length = %d, want 1", len(contract.Required))
 	}
-	if len(contract.Conditional) != 1 {
-		t.Fatalf("spec.Contract().Conditional length = %d, want 1", len(contract.Conditional))
-	}
 
 	iterDir := filepath.Join(t.TempDir(), "phase-01", "implement", "iteration-02")
 	wantPaths := map[string]string{
@@ -108,9 +97,6 @@ func TestImplementRoleSpecDerivesContractPaths(t *testing.T) {
 		if got, want := artifact.ResolvePath(iterDir), wantPaths[artifact.Name]; got != want {
 			t.Fatalf("required artifact %q path = %q, want %q", artifact.Name, got, want)
 		}
-	}
-	if got, want := contract.Conditional[0].Artifact.ResolvePath(iterDir), filepath.Join(iterDir, "need-user-input.yaml"); got != want {
-		t.Fatalf("conditional need_user_input path = %q, want %q", got, want)
 	}
 }
 
@@ -129,7 +115,8 @@ func TestBuildImplementSystemPromptFromRoleSpec(t *testing.T) {
 		"## Output Roots",
 		"`phase_dir`: /state/feat-x/run-001/phase-01/implement",
 		"`iteration_dir`: /state/feat-x/run-001/phase-01/implement/iteration-02",
-		"/state/feat-x/run-001/phase-01/implement/iteration-02/phase_complete",
+		"The harness owns the durable completion receipt",
+		`<agentico-outcome>{"status":"success"}</agentico-outcome>`,
 		"/skills/implement/SKILL.md",
 		"Read the SKILL.md file completely before taking any other action.",
 		"# Useful Resources",
@@ -221,10 +208,52 @@ func TestRoleSystemPromptIncludesArtifactPreflightCommand(t *testing.T) {
 		"## Artifact Preflight",
 		"`AGENTICO_BIN` is set to the current Agentico executable",
 		`"$AGENTICO_BIN" validate-artifacts --phase review --role final_review_fixer --dir "/state/feat-x/runs/run-001/review/iteration-03"`,
-		"run it before creating `phase_complete`",
+		"run it before emitting the outcome tag",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("BuildRoleSystemPrompt() missing %q in:\n%s", want, got)
+		}
+	}
+}
+
+// TestRoleSystemPromptAdvertisesOnlyValidOutcomeVerbs pins the root cause of
+// a live failure: a final-review validator was shown the retry outcome by the
+// shared completion clause, emitted it, and the harness rejected it at commit
+// time. Only roles whose contract carries iteration state may see retry.
+func TestRoleSystemPromptAdvertisesOnlyValidOutcomeVerbs(t *testing.T) {
+	implementPrompt := BuildRoleSystemPrompt(BuildRoleSystemPromptInput{
+		Spec:         ImplementRoleSpec(),
+		IterationDir: "/state/feat-x/run-001/phase-01/implement/iteration-02",
+		SkillsDir:    "/skills",
+	})
+	if !strings.Contains(implementPrompt, `"status":"retry"`) {
+		t.Fatalf("implement prompt lost the retry outcome:\n%s", implementPrompt)
+	}
+
+	qaSpec, ok := lookupRoleSpec(feature.PhaseReview, RoleImplementationReviewQA)
+	if !ok {
+		t.Fatal("missing RoleSpec for the QA review axis")
+	}
+	for _, spec := range []RoleSpec{
+		qaSpec,
+		FinalReviewFixerRoleSpec(),
+	} {
+		got := BuildRoleSystemPrompt(BuildRoleSystemPromptInput{
+			Spec:         spec,
+			IterationDir: "/state/feat-x/runs/run-001/review/iteration-03",
+			SkillsDir:    "/skills",
+		})
+		if strings.Contains(got, `"status":"retry"`) {
+			t.Fatalf("%s prompt still advertises the retry outcome:\n%s", spec.Role, got)
+		}
+		for _, want := range []string{
+			`"status":"success"`,
+			"`retry` is not a valid outcome",
+			"including when your findings request changes",
+		} {
+			if !strings.Contains(got, want) {
+				t.Fatalf("%s prompt missing %q in:\n%s", spec.Role, want, got)
+			}
 		}
 	}
 }
@@ -292,9 +321,6 @@ func TestPlanningRoleSpecsDeriveContractPaths(t *testing.T) {
 			if !slices.Equal(gotRootNames, tt.wantRoots) {
 				t.Fatalf("%s output roots = %v, want %v", tt.name, gotRootNames, tt.wantRoots)
 			}
-			if got := tt.spec.MarkerPath(RoleRuntime{IterationDir: tt.attemptDir}); got != filepath.Join(tt.attemptDir, "phase_complete") {
-				t.Fatalf("%s marker path = %q, want attempt-local phase_complete", tt.name, got)
-			}
 
 			contract := tt.spec.Contract()
 			if len(contract.Required) != len(tt.wantPaths) {
@@ -322,67 +348,61 @@ func TestSingleShotProducerRoleSpecsDeriveContractPaths(t *testing.T) {
 	base := t.TempDir()
 
 	tests := []struct {
-		name       string
-		spec       RoleSpec
-		phaseDir   string
-		wantPhase  feature.Phase
-		wantRole   Role
-		wantSkill  string
-		wantPath   string
-		wantMarker string
+		name      string
+		spec      RoleSpec
+		phaseDir  string
+		wantPhase feature.Phase
+		wantRole  Role
+		wantSkill string
+		wantPath  string
 	}{
 		{
-			name:       "knowledge base",
-			spec:       KnowledgeBaseBuilderRoleSpec(),
-			phaseDir:   filepath.Join(base, "knowledge-base", "agentic"),
-			wantPhase:  feature.PhaseKnowledgeBase,
-			wantRole:   RoleKnowledgeBaseBuilder,
-			wantSkill:  "build-knowledge-base",
-			wantPath:   filepath.Join(base, "knowledge-base", "agentic", "index.md"),
-			wantMarker: filepath.Join(base, "knowledge-base", "agentic", "phase_complete"),
+			name:      "knowledge base",
+			spec:      KnowledgeBaseBuilderRoleSpec(),
+			phaseDir:  filepath.Join(base, "knowledge-base", "agentic"),
+			wantPhase: feature.PhaseKnowledgeBase,
+			wantRole:  RoleKnowledgeBaseBuilder,
+			wantSkill: "build-knowledge-base",
+			wantPath:  filepath.Join(base, "knowledge-base", "agentic", "index.md"),
 		},
 		{
-			name:       "inquire",
-			spec:       InquirerRoleSpec(),
-			phaseDir:   filepath.Join(base, "runs", "run-001", "inquire"),
-			wantPhase:  feature.PhaseInquire,
-			wantRole:   RoleInquirer,
-			wantSkill:  "inquire",
-			wantPath:   filepath.Join(base, "runs", "run-001", "inquire"),
-			wantMarker: filepath.Join(base, "runs", "run-001", "inquire", "phase_complete"),
+			name:      "inquire",
+			spec:      InquirerRoleSpec(),
+			phaseDir:  filepath.Join(base, "runs", "run-001", "inquire"),
+			wantPhase: feature.PhaseInquire,
+			wantRole:  RoleInquirer,
+			wantSkill: "inquire",
+			wantPath:  filepath.Join(base, "runs", "run-001", "inquire"),
 		},
 		{
-			name:       "research",
-			spec:       ResearcherRoleSpec(),
-			phaseDir:   filepath.Join(base, "runs", "run-001", "research"),
-			wantPhase:  feature.PhaseResearch,
-			wantRole:   RoleResearcher,
-			wantSkill:  "research-codebase",
-			wantPath:   filepath.Join(base, "runs", "run-001", "research"),
-			wantMarker: filepath.Join(base, "runs", "run-001", "research", "phase_complete"),
+			name:      "research",
+			spec:      ResearcherRoleSpec(),
+			phaseDir:  filepath.Join(base, "runs", "run-001", "research"),
+			wantPhase: feature.PhaseResearch,
+			wantRole:  RoleResearcher,
+			wantSkill: "research-codebase",
+			wantPath:  filepath.Join(base, "runs", "run-001", "research"),
 		},
 		{
-			name:       "design",
-			spec:       DesignerRoleSpec(),
-			phaseDir:   filepath.Join(base, "runs", "run-001", "design"),
-			wantPhase:  feature.PhaseDesign,
-			wantRole:   RoleDesigner,
-			wantSkill:  "design",
-			wantPath:   filepath.Join(base, "runs", "run-001", "design"),
-			wantMarker: filepath.Join(base, "runs", "run-001", "design", "phase_complete"),
+			name:      "design",
+			spec:      DesignerRoleSpec(),
+			phaseDir:  filepath.Join(base, "runs", "run-001", "design"),
+			wantPhase: feature.PhaseDesign,
+			wantRole:  RoleDesigner,
+			wantSkill: "design",
+			wantPath:  filepath.Join(base, "runs", "run-001", "design"),
 		},
 		{
 			// Legacy alias: resumed/older runs that still resolve the role as
 			// RoleDesigner must validate the same markdown artifact in the
 			// same phase directory.
-			name:       "design",
-			spec:       DesignerRoleSpec(),
-			phaseDir:   filepath.Join(base, "runs", "run-001", "design"),
-			wantPhase:  feature.PhaseDesign,
-			wantRole:   RoleDesigner,
-			wantSkill:  "design",
-			wantPath:   filepath.Join(base, "runs", "run-001", "design"),
-			wantMarker: filepath.Join(base, "runs", "run-001", "design", "phase_complete"),
+			name:      "design",
+			spec:      DesignerRoleSpec(),
+			phaseDir:  filepath.Join(base, "runs", "run-001", "design"),
+			wantPhase: feature.PhaseDesign,
+			wantRole:  RoleDesigner,
+			wantSkill: "design",
+			wantPath:  filepath.Join(base, "runs", "run-001", "design"),
 		},
 	}
 
@@ -397,9 +417,6 @@ func TestSingleShotProducerRoleSpecsDeriveContractPaths(t *testing.T) {
 			if tt.spec.SkillName != tt.wantSkill {
 				t.Fatalf("%s SkillName = %q, want %q", tt.name, tt.spec.SkillName, tt.wantSkill)
 			}
-			if tt.spec.MarkerRoot != "phase_dir" {
-				t.Fatalf("%s MarkerRoot = %q, want phase_dir", tt.name, tt.spec.MarkerRoot)
-			}
 			if got := rootNames(tt.spec); !slices.Equal(got, []string{"phase_dir"}) {
 				t.Fatalf("%s output roots = %v, want [phase_dir]", tt.name, got)
 			}
@@ -413,9 +430,6 @@ func TestSingleShotProducerRoleSpecsDeriveContractPaths(t *testing.T) {
 			}
 			if got := contract.Required[0].ResolvePath(tt.phaseDir); got != tt.wantPath {
 				t.Fatalf("%s artifact path = %q, want %q", tt.name, got, tt.wantPath)
-			}
-			if got := tt.spec.MarkerPath(RoleRuntime{IterationDir: tt.phaseDir}); got != tt.wantMarker {
-				t.Fatalf("%s marker path = %q, want %q", tt.name, got, tt.wantMarker)
 			}
 			if section := RenderRoleSpecOutputFilesSection(tt.spec); !strings.Contains(section, "{phase_dir}/") {
 				t.Fatalf("%s generated section missing phase_dir path:\n%s", tt.name, section)
@@ -438,7 +452,7 @@ func TestBuildSingleShotSystemPromptFromRoleSpec(t *testing.T) {
 
 	for _, want := range []string{
 		"`phase_dir`: /state/feat-x/runs/run-001/design",
-		"/state/feat-x/runs/run-001/design/phase_complete",
+		"<agentico-outcome>",
 		"/skills/design/SKILL.md",
 		"# Useful Resources",
 		"/kb/agentic/index.md",
@@ -467,9 +481,6 @@ func TestPlanValidatorRoleSpecs(t *testing.T) {
 			t.Fatalf("%s SkillName is empty", spec.Role)
 		}
 		seen[spec.SkillName] = true
-		if got := spec.MarkerPath(RoleRuntime{IterationDir: "/tmp/attempt-01/validate-scope"}); got != "/tmp/attempt-01/validate-scope/phase_complete" {
-			t.Fatalf("%s marker path = %q, want helper-local phase_complete", spec.SkillName, got)
-		}
 		if len(spec.Artifacts) != 1 {
 			t.Fatalf("%s artifact count = %d, want feedback only", spec.SkillName, len(spec.Artifacts))
 		}
@@ -516,9 +527,6 @@ func TestImplementationReviewAxisRoleSpecs(t *testing.T) {
 		if wantRole, ok := wantSkills[spec.SkillName]; !ok || spec.Role != wantRole {
 			t.Fatalf("unexpected implementation review axis spec skill=%q role=%q", spec.SkillName, spec.Role)
 		}
-		if got := spec.MarkerPath(RoleRuntime{IterationDir: "/tmp/iter-01/review/craft"}); got != "/tmp/iter-01/review/craft/phase_complete" {
-			t.Fatalf("%s marker path = %q, want helper-local phase_complete", spec.SkillName, got)
-		}
 		if len(spec.Artifacts) != 1 {
 			t.Fatalf("%s artifact count = %d, want review feedback only", spec.SkillName, len(spec.Artifacts))
 		}
@@ -539,24 +547,22 @@ func TestImplementationReviewAxisRoleSpecs(t *testing.T) {
 
 func TestReviewFamilyRoleSpecs(t *testing.T) {
 	tests := []struct {
-		name       string
-		phase      feature.Phase
-		role       Role
-		iterDir    string
-		wantSkill  string
-		wantRoots  []string
-		wantMarker string
-		wantPaths  map[string]string
-		wantNoOp   bool
+		name      string
+		phase     feature.Phase
+		role      Role
+		iterDir   string
+		wantSkill string
+		wantRoots []string
+		wantPaths map[string]string
+		wantNoOp  bool
 	}{
 		{
-			name:       "final review fixer",
-			phase:      feature.PhaseReview,
-			role:       RoleFinalReviewFixer,
-			iterDir:    "/state/feat/run-001/review/iteration-02",
-			wantSkill:  "final-fix",
-			wantRoots:  []string{"iteration_dir"},
-			wantMarker: "/state/feat/run-001/review/iteration-02/phase_complete",
+			name:      "final review fixer",
+			phase:     feature.PhaseReview,
+			role:      RoleFinalReviewFixer,
+			iterDir:   "/state/feat/run-001/review/iteration-02",
+			wantSkill: "final-fix",
+			wantRoots: []string{"iteration_dir"},
 			// verification-report.yaml is harness-owned; the fixer role has
 			// no required artifacts.
 			wantPaths: map[string]string{},
@@ -577,7 +583,7 @@ func TestReviewFamilyRoleSpecs(t *testing.T) {
 				t.Fatalf("Contract().NoOp = %v, want %v", contract.NoOp, tt.wantNoOp)
 			}
 			if tt.wantNoOp {
-				if len(contract.Required) != 0 || len(contract.Optional) != 0 || len(contract.Conditional) != 0 {
+				if len(contract.Required) != 0 || len(contract.Optional) != 0 {
 					t.Fatalf("NoOp contract has artifacts: %+v", contract)
 				}
 				return
@@ -587,9 +593,6 @@ func TestReviewFamilyRoleSpecs(t *testing.T) {
 			}
 			if got := rootNames(spec); !slices.Equal(got, tt.wantRoots) {
 				t.Fatalf("output roots = %v, want %v", got, tt.wantRoots)
-			}
-			if got := spec.MarkerPath(RoleRuntime{IterationDir: tt.iterDir}); got != tt.wantMarker {
-				t.Fatalf("MarkerPath() = %q, want %q", got, tt.wantMarker)
 			}
 			if len(contract.Required) != len(tt.wantPaths) {
 				t.Fatalf("required artifacts = %d, want %d", len(contract.Required), len(tt.wantPaths))
@@ -632,7 +635,7 @@ func TestBuildReviewFamilySystemPromptsFromRoleSpec(t *testing.T) {
 				GuidelinesDir: "/guidelines",
 				AskingClause:  "## Asking Questions\n\nUse numbered alternatives.",
 			})
-			for _, want := range append(tt.wantRoots, tt.wantSkill, filepath.Join(tt.iterDir, "phase_complete"), "# Useful Resources", "Use numbered alternatives.") {
+			for _, want := range append(tt.wantRoots, tt.wantSkill, "<agentico-outcome>", "# Useful Resources", "Use numbered alternatives.") {
 				if !strings.Contains(got, want) {
 					t.Fatalf("BuildRoleSystemPrompt() missing %q in:\n%s", want, got)
 				}
@@ -656,7 +659,7 @@ func TestBuildPlanningSystemPromptFromRoleSpec(t *testing.T) {
 	for _, want := range []string{
 		"`artifact_dir`: /state/feat/run-001/phase-02/plan",
 		"`attempt_dir`: /state/feat/run-001/phase-02/plan/attempt-03",
-		"/state/feat/run-001/phase-02/plan/attempt-03/phase_complete",
+		"The harness owns the durable completion receipt",
 		"/skills/plan-phase/SKILL.md",
 		"# Useful Resources",
 		"/guidelines/go/index.md",
@@ -779,7 +782,7 @@ func TestBuildValidatorSystemPromptFromRoleSpec(t *testing.T) {
 	for _, want := range []string{
 		"`attempt_dir`: /state/feat/run-001/roadmap/attempt-02",
 		"`helper_dir`: /state/feat/run-001/roadmap/attempt-02/validate-architecture",
-		"/state/feat/run-001/roadmap/attempt-02/validate-architecture/phase_complete",
+		"The harness owns the durable completion receipt",
 		"/skills/validate-roadmap-architecture/SKILL.md",
 		"Use numbered alternatives.",
 	} {

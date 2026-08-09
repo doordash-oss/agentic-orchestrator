@@ -23,6 +23,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 )
 
 var ErrSetupAlreadyRunning = errors.New("setup already running")
@@ -285,19 +287,15 @@ func (m *Manager) executeWorktreeSetupTask(f *Feature, task SetupTask, logPath s
 	if workspaceSlug == "" {
 		workspaceSlug = f.WorkspaceSlug()
 	}
-	if branch == "" || branch == defaultBranchName(workspaceSlug) {
-		branch = m.branchName(workspaceSlug)
+	if branch == "" || branch == git.BranchName(workspaceSlug) {
+		branch = git.BranchName(workspaceSlug)
 	}
 	task.Branch = branch
 	if task.StartPoint == "" && !task.UseCurrentBranch {
 		task.StartPoint = repo.BaseBranch
 	}
 	if task.Path == "" {
-		if pather, ok := m.Worktrees.(interface {
-			ExpectedPath(featureSlug, repoName string) string
-		}); ok {
-			task.Path = pather.ExpectedPath(workspaceSlug, repo.Name)
-		}
+		task.Path = m.Worktrees.ExpectedPath(workspaceSlug, repo.Name)
 	}
 	if task.Path != "" {
 		if err := m.reuseExpectedWorktree(task); err == nil {
@@ -329,24 +327,15 @@ func (m *Manager) reuseExpectedWorktree(task SetupTask) error {
 	if !info.IsDir() {
 		return fmt.Errorf("expected worktree path %s exists but is not a directory", task.Path)
 	}
-	if m.Branches != nil {
-		branch, err := m.Branches.CurrentBranch(task.Path)
-		if err != nil {
-			return fmt.Errorf("checking branch for expected worktree path %s: %w", task.Path, err)
-		}
-		if task.Branch != "" && branch != task.Branch {
-			return fmt.Errorf("expected worktree path %s is on branch %q, want %q", task.Path, branch, task.Branch)
-		}
+	branch := git.CurrentBranch(task.Path)
+	if task.Branch != "" && branch != task.Branch {
+		return fmt.Errorf("expected worktree path %s is on branch %q, want %q", task.Path, branch, task.Branch)
 	}
 	// When the task pinned an exact launch tip, only reuse the worktree when
 	// its HEAD still sits at the persisted SHA; any drift fails safely
 	// instead of silently reusing a worktree at the wrong commit.
 	if task.ExactSHA != "" {
-		resolver, err := m.headSHAReader()
-		if err != nil {
-			return fmt.Errorf("cannot verify exact base %s for expected worktree path %s: %w", task.ExactSHA, task.Path, err)
-		}
-		head, err := resolver.CurrentHeadSHA(task.Path)
+		head, err := m.Worktrees.CurrentHeadSHA(task.Path)
 		if err != nil {
 			return fmt.Errorf("checking HEAD for expected worktree path %s: %w", task.Path, err)
 		}

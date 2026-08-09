@@ -48,10 +48,6 @@ func (o *Orchestrator) cascadeOwnsRelationship(parentID string) (bool, error) {
 	return false, fmt.Errorf("loading cascade ownership for %s: %w", parentID, err)
 }
 
-type cascadeWorktreeRemover interface {
-	RemoveRef(worktreePath, mainRepo, branch string) error
-}
-
 // ReconcileCascadeDeletes resumes every discoverable durable delete intent.
 // Attention is a convergent outcome, not a startup failure; material journal
 // read/write failures fail recovery closed.
@@ -90,6 +86,14 @@ func (o *Orchestrator) ReconcileCascadeDeletes() error {
 func (o *Orchestrator) DeleteCascade(featureID string) (feature.CascadeDeleteResult, error) {
 	o.relationshipMu.Lock()
 	defer o.relationshipMu.Unlock()
+
+	// Release any KB locks the feature still owns before its durable record
+	// disappears, so queued KB waiters are woken rather than orphaned.
+	if o.deps.Lifecycle != nil {
+		if f, err := o.deps.Lifecycle.Get(featureID); err == nil {
+			o.releaseKBLocksForFeature(f)
+		}
+	}
 
 	journals, ok := o.deps.Store.(cascadeDeleteStore)
 	if !ok {
@@ -270,11 +274,6 @@ func (o *Orchestrator) settleCascadeAttention(intent *feature.CascadeDeleteInten
 			f.PendingNeedUserInputPath = ""
 			f.ReviewingGate = false
 			f.ValidatingPlan = false
-			for _, cycle := range f.Run().RepoCycles {
-				if cycle != nil {
-					cycle.PendingNeedUserInputPath = ""
-				}
-			}
 			return nil
 		})
 		if err != nil {
@@ -292,8 +291,7 @@ func (o *Orchestrator) classifyCascadeRefs(
 	if len(intent.Refs) == 0 {
 		return true, nil
 	}
-	cas, ok := o.deps.Worktrees.(refCASOperator)
-	if !ok {
+	if o.deps.Worktrees == nil {
 		intent.Status = feature.CascadeDeleteAttentionRequired
 		intent.Diagnostics = append(intent.Diagnostics, feature.CascadeDiagnostic{
 			Code: "ref_safety_unavailable", Message: "ref safety operations are not configured",
@@ -310,7 +308,7 @@ func (o *Orchestrator) classifyCascadeRefs(
 		ref.Safe = false
 		ref.Restored = false
 		ref.Diagnostic = ""
-		observed, err := cas.RefSHA(ref.RepoPath, ref.Ref)
+		observed, err := o.deps.Worktrees.RefSHA(ref.RepoPath, ref.Ref)
 		ref.ObservedSHA = observed
 		if err != nil {
 			safe = false
@@ -321,8 +319,8 @@ func (o *Orchestrator) classifyCascadeRefs(
 		case ref.AnchorSHA:
 			ref.Safe = true
 		case ref.CandidateSHA:
-			if err := cas.UpdateRef(ref.RepoPath, ref.Ref, ref.CandidateSHA, ref.AnchorSHA); err != nil {
-				latest, _ := cas.RefSHA(ref.RepoPath, ref.Ref)
+			if err := o.deps.Worktrees.UpdateRef(ref.RepoPath, ref.Ref, ref.CandidateSHA, ref.AnchorSHA); err != nil {
+				latest, _ := o.deps.Worktrees.RefSHA(ref.RepoPath, ref.Ref)
 				ref.ObservedSHA = latest
 				safe = false
 				o.addCascadeRefDiagnostic(intent, ref, "ref_restore_failed", err.Error())
@@ -375,47 +373,48 @@ func (o *Orchestrator) cleanupCascadeResources(
 		var err error
 		switch resource.Kind {
 		case feature.CascadeResourceCopiedInput:
-			if !pathWithin(filepath.Join(o.stateDir(), resource.OwnerID), resource.Path) {
-				err = fmt.Errorf("refusing copied-input path outside feature state: %s", resource.Path)
+			if path, ok := o.resolveCopiedInputPath(resource); ok {
+				err = os.RemoveAll(path)
 			} else {
-				err = os.RemoveAll(resource.Path)
+				err = fmt.Errorf("refusing copied-input path outside feature state: %s", resource.Path)
 			}
 		case feature.CascadeResourceOverlay:
 			expected := feature.ParentOverlayPath(o.stateDir(), intent.ParentID, resource.Repo)
-			if filepath.Clean(resource.Path) != filepath.Clean(expected) {
+			if !samePathResolved(resource.Path, expected) {
 				err = fmt.Errorf("refusing unexpected overlay path %s", resource.Path)
 			} else {
-				err = os.RemoveAll(resource.Path)
+				err = os.RemoveAll(expected)
 			}
 		case feature.CascadeResourceWorktree:
-			if remover, ok := o.deps.Worktrees.(cascadeWorktreeRemover); ok {
-				err = remover.RemoveRef(resource.Path, resource.RepoPath, resource.Branch)
-			} else if o.deps.Worktrees != nil {
-				err = o.deps.Worktrees.Remove(resource.Path, true)
-			} else {
+			if o.deps.Worktrees == nil {
 				err = errors.New("worktree cleanup is not configured")
+			} else {
+				err = o.deps.Worktrees.RemoveRef(resource.Path, resource.RepoPath, resource.Branch)
 			}
 		case feature.CascadeResourceBranch:
-			if remover, ok := o.deps.Worktrees.(cascadeWorktreeRemover); ok {
-				err = remover.RemoveRef(worktreePathForResource(intent, resource), resource.RepoPath, resource.Branch)
+			if o.deps.Worktrees != nil {
+				err = o.deps.Worktrees.RemoveRef(worktreePathForResource(intent, resource), resource.RepoPath, resource.Branch)
 			} else if worktreeResourceDone(intent, resource) {
-				// Standard Remove(path,true) already removed the paired branch.
+				// The paired worktree cleanup already removed the branch.
 			} else {
 				err = errors.New("durable branch cleanup is not configured")
 			}
 		case feature.CascadeResourceKBWorkspace:
 			expected := feature.ChildKBWorkspaceDir(o.stateDir(), resource.OwnerID, resource.Repo)
-			if filepath.Clean(resource.Path) != filepath.Clean(expected) {
+			if !samePathResolved(resource.Path, expected) {
 				err = fmt.Errorf("refusing unexpected KB workspace path %s", resource.Path)
 			} else {
-				err = os.RemoveAll(resource.Path)
+				err = os.RemoveAll(expected)
 			}
 		case feature.CascadeResourcePromotion:
-			if !pathWithin(filepath.Join(o.stateDir(), resource.OwnerID), resource.Path) {
-				err = fmt.Errorf("refusing promotion path outside feature state: %s", resource.Path)
-			} else {
+			owned := filepath.Join(o.stateDir(), resource.OwnerID)
+			if pathWithinResolved(owned, resource.Path) {
 				_ = os.Remove(resource.Path)
-				err = nil
+			} else if healed, ok := healCascadePath(resource.Path,
+				filepath.Join(owned, filepath.Base(filepath.Clean(resource.Path)))); ok {
+				_ = os.Remove(healed)
+			} else {
+				err = fmt.Errorf("refusing promotion path outside feature state: %s", resource.Path)
 			}
 		default:
 			err = fmt.Errorf("unknown cascade resource kind %q", resource.Kind)
@@ -496,4 +495,48 @@ func pathWithin(base, target string) bool {
 	rel, err := filepath.Rel(filepath.Clean(base), filepath.Clean(target))
 	return err == nil && rel != "." && rel != ".." &&
 		!strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+// pathWithinResolved is pathWithin after resolving symlinks on both sides, so
+// journaled paths spelled through a symlinked state root still pass the guard.
+func pathWithinResolved(base, target string) bool {
+	return pathWithin(feature.CanonicalPath(base), feature.CanonicalPath(target))
+}
+
+// samePathResolved compares resolved parent + basename so a symlink leaf is
+// matched by name rather than followed.
+func samePathResolved(a, b string) bool {
+	a, b = filepath.Clean(a), filepath.Clean(b)
+	return filepath.Join(feature.CanonicalPath(filepath.Dir(a)), filepath.Base(a)) ==
+		filepath.Join(feature.CanonicalPath(filepath.Dir(b)), filepath.Base(b))
+}
+
+// healCascadePath maps a journal path recorded under a stale spelling of the
+// state root onto its canonical in-tree candidate: the one it resolves to, or
+// failing that the one that exists.
+func healCascadePath(path string, candidates ...string) (string, bool) {
+	for _, candidate := range candidates {
+		if samePathResolved(candidate, path) {
+			return candidate, true
+		}
+	}
+	for _, candidate := range candidates {
+		if _, err := os.Lstat(candidate); err == nil {
+			return candidate, true
+		}
+	}
+	return "", false
+}
+
+// resolveCopiedInputPath accepts journal paths that resolve inside the
+// owner's state dir and heals stale spellings to the re-derived location.
+func (o *Orchestrator) resolveCopiedInputPath(resource *feature.CascadeResource) (string, bool) {
+	owned := filepath.Join(o.stateDir(), resource.OwnerID)
+	if pathWithinResolved(owned, resource.Path) {
+		return resource.Path, true
+	}
+	base := filepath.Base(filepath.Clean(resource.Path))
+	return healCascadePath(resource.Path,
+		filepath.Join(owned, "images", base),
+		filepath.Join(owned, "attachments", base))
 }

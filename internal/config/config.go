@@ -16,7 +16,6 @@ package config
 
 import (
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -25,21 +24,12 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// validKeyboardLayouts defines the set of accepted keyboard_layout values.
-// An empty string means "use default (US) behaviour".
-var validKeyboardLayouts = map[string]bool{
-	"":       true,
-	"us":     true,
-	"nordic": true,
-}
-
 type Config struct {
 	Defaults        DefaultsConfig            `yaml:"defaults"`
 	Repos           map[string]RepoConfig     `yaml:"repos"`
 	WorkspaceRoots  []string                  `yaml:"workspace_roots,omitempty"`
 	DiscoveredRepos map[string]RepoConfig     `yaml:"-"` // in-memory only, never persisted
 	Notifications   NotificationConfig        `yaml:"notifications,omitempty"`
-	UI              UIConfig                  `yaml:"ui,omitempty"`
 	Observability   ObservabilityConfig       `yaml:"observability,omitempty"`
 	Providers       map[string]ProviderConfig `yaml:"providers,omitempty"`
 }
@@ -82,15 +72,7 @@ func (o *ObservabilityConfig) UnmarshalYAML(value *yaml.Node) error {
 	return value.Decode((*plain)(o))
 }
 
-type UIConfig struct {
-	CollapsedSections []string `yaml:"collapsed_sections,omitempty"`
-	KeyboardLayout    string   `yaml:"keyboard_layout,omitempty"`
-}
-
 type NotificationConfig struct {
-	// TerminalBundleID overrides the auto-detected terminal app bundle ID
-	// used by terminal-notifier's -activate flag. Example: "com.googlecode.iterm2"
-	TerminalBundleID string `yaml:"terminal_bundle_id,omitempty"`
 	// MuteFeatureInput suppresses notifications when an agent is waiting for
 	// manual feature input. Other notification types are unaffected.
 	MuteFeatureInput bool `yaml:"mute_feature_input,omitempty"`
@@ -230,41 +212,6 @@ func AllEffortRoles() []string {
 	return []string{"Inquiry", "Research", "Planning", "Implementation", "Review", "Utilities", "KBBuild"}
 }
 
-// UnmarshalYAML migrates the legacy "chat" YAML key to "utilities".
-// If both keys are present, "utilities" takes precedence.
-func (m *ModelConfig) UnmarshalYAML(value *yaml.Node) error {
-	type aux struct {
-		Inquiry         string `yaml:"inquiry"`
-		Research        string `yaml:"research"`
-		Planning        string `yaml:"planning"`
-		Implementation  string `yaml:"implementation"`
-		Review          string `yaml:"review"`
-		Utilities       string `yaml:"utilities"`
-		Chat            string `yaml:"chat"`
-		KBBuild         string `yaml:"kb_build"`
-		AutomaticReview string `yaml:"automatic_review"`
-	}
-	var a aux
-	if err := value.Decode(&a); err != nil {
-		return err
-	}
-	m.Inquiry = a.Inquiry
-	m.Research = a.Research
-	m.Planning = a.Planning
-	m.Implementation = a.Implementation
-	m.Review = a.Review
-	m.Utilities = a.Utilities
-	m.KBBuild = a.KBBuild
-	m.AutomaticReview = a.AutomaticReview
-	if m.Utilities == "" && a.Chat != "" {
-		m.Utilities = a.Chat
-	}
-	if m.Inquiry == "" {
-		m.Inquiry = m.Research
-	}
-	return nil
-}
-
 // Checkpoints controls which phase transitions pause for human review in the config defaults.
 type Checkpoints struct {
 	InquiryReview   bool `yaml:"inquiry_review" json:"inquiry_review,omitempty"`
@@ -280,7 +227,6 @@ type Checkpoints struct {
 
 // UnmarshalYAML defaults omitted checkpoint fields to true, except DraftPublish
 // which defaults to false (opting into draft is the exception, not the rule).
-// The legacy plan_review key is accepted by the decoder but intentionally ignored.
 func (c *Checkpoints) UnmarshalYAML(value *yaml.Node) error {
 	type checkpointFields struct {
 		InquiryReview   *bool `yaml:"inquiry_review"`
@@ -437,11 +383,6 @@ func applyDefaults(cfg *Config) {
 		cfg.Observability.OTelServiceName = "agentico"
 	}
 
-	// Validate keyboard layout; reset to empty (default) if unrecognised.
-	if !validKeyboardLayouts[cfg.UI.KeyboardLayout] {
-		log.Printf("config: unknown keyboard_layout %q, falling back to default", cfg.UI.KeyboardLayout)
-		cfg.UI.KeyboardLayout = ""
-	}
 }
 
 // ExpandHome expands a leading "~" or "~/" in a path to the user's home directory.
@@ -496,7 +437,7 @@ func AllRepos(cfg *Config) map[string]RepoConfig {
 // ApplyProviderDefaults fills empty model config fields with defaults computed
 // from detected providers in the registry. User-set values are never overwritten.
 // The defaults map is keyed by PhaseRole string values (e.g. "research", "planning").
-// Callers obtain this map via registry.DefaultModels().
+// Startup derives this map from registry.CatalogDefaultModels before applying it here.
 func ApplyProviderDefaults(cfg *Config, defaults map[string]string) {
 	if defaults == nil {
 		return

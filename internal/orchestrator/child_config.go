@@ -15,6 +15,7 @@
 package orchestrator
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
@@ -83,7 +84,13 @@ func (o *Orchestrator) DetectPairedConfigTarget(featureID string) (parentID stri
 func (o *Orchestrator) activeChildID(parentID string) (string, error) {
 	features, err := o.deps.Store.List()
 	if err != nil {
-		return "", fmt.Errorf("listing features: %w", err)
+		// PartialLoadError carries the features that DID load alongside the
+		// per-ID load warnings. Treat it as soft: legacy or malformed records
+		// predate child relationships and must not block the scan.
+		var ple *feature.PartialLoadError
+		if !errors.As(err, &ple) {
+			return "", fmt.Errorf("listing features: %w", err)
+		}
 	}
 	for _, f := range features {
 		if f.IsChild() && f.Parent != nil && f.Parent.ParentID == parentID && f.Parent.CloseOutcome == "" {

@@ -79,6 +79,15 @@ A list of testing decisions that were made. Include:
 - Which modules will be tested
 - Prior art for the tests (i.e. similar types of tests in the codebase)
 
+## Acceptance Criteria
+
+The feature-level definition of done. Distill the user's exit criteria and the approved intent into concrete, observable statements about the assembled feature. Downstream reviewers judge the finished feature against this section, so:
+
+- Cover every condition the user's exit criteria imply. If a criterion is vague, resolve it into a measurable statement here instead of repeating the vagueness.
+- State each criterion as an outcome ("X happens when Y"), never as an activity ("implement X").
+- Omit conditions the pipeline already enforces mechanically (test suites pass, lint is clean) unless the user made them feature-specific.
+- Each criterion must be verifiable by exercising the feature or inspecting its output — none may depend on a single implementation detail.
+
 ## Out of Scope
 
 A description of the things that are out of scope for this PRD.

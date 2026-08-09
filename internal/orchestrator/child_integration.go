@@ -23,6 +23,7 @@ import (
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
@@ -36,13 +37,6 @@ import (
 // parent's CodeReady transition are durable before publication begins, so a
 // failed push or pull request never reopens the child or undoes the local
 // merge.
-
-// childHeadReader is the exact-HEAD lookup integration requires; it is
-// satisfied by *git.WorktreeManager and asserted structurally so tests can
-// substitute fakes without widening ports.WorktreeOperator.
-type childHeadReader interface {
-	CurrentHeadSHA(worktreePath string) (string, error)
-}
 
 // checkChildExecution is the fail-closed capability gate for child feature
 // execution. Queued, setting-up, and failed-setup children stay reachable
@@ -124,15 +118,6 @@ func (o *Orchestrator) runChildIntegrationLocked(childID string) error {
 	parent, err := o.deps.Lifecycle.Get(child.Parent.ParentID)
 	if err != nil {
 		return fmt.Errorf("%w: parent %s unreadable: %v", ErrChildIntegrationRefused, child.Parent.ParentID, err)
-	}
-
-	// Final KB refresh: revalidate workspace provenance and rebuild against
-	// the final reviewed child HEAD before any parent ref is touched. Only a
-	// complete, validated refresh vector may enter the integration path.
-	if child.EffectivePipeline().HasPhase(feature.PhaseKnowledgeBase) {
-		if err := o.RefreshChildKBWorkspaces(childID); err != nil {
-			return fmt.Errorf("final KB refresh: %w", err)
-		}
 	}
 
 	return o.runTransactionIntegration(childID, child, parent)
@@ -295,7 +280,7 @@ func (o *Orchestrator) runTransactionIntegration(childID string, child, parent *
 // can propagate a contextual error instead of silently treating a broken
 // worktree as "unchanged."
 func (o *Orchestrator) commitAndCompareChildHeads(child *feature.Feature, journal *feature.TransactionJournal) (bool, error) {
-	if o.deps.Publisher == nil || journal == nil {
+	if journal == nil {
 		return false, nil
 	}
 	for i := range child.Repos {
@@ -303,7 +288,7 @@ func (o *Orchestrator) commitAndCompareChildHeads(child *feature.Feature, journa
 		if childWorktree == "" {
 			childWorktree = child.Repos[i].Path
 		}
-		currentHead, err := o.deps.Publisher.CommitAllAndGetHead(childWorktree, fmt.Sprintf("Integration commit for refactor child %s repo %s", child.ID, child.Repos[i].Name))
+		currentHead, err := git.CommitAllAndGetHead(childWorktree, fmt.Sprintf("Integration commit for refactor child %s repo %s", child.ID, child.Repos[i].Name))
 		if err != nil {
 			return false, fmt.Errorf("committing child changes for repo %s: %w", child.Repos[i].Name, err)
 		}
@@ -362,8 +347,7 @@ func (o *Orchestrator) closeTransactionAfterApply(childID, parentID string) erro
 	}
 
 	// Confirm every parent ref is at its candidate commit.
-	cas, ok := o.deps.Worktrees.(refCASOperator)
-	if !ok {
+	if o.deps.Worktrees == nil {
 		return fmt.Errorf("transaction: ref CAS operations are not configured")
 	}
 	parent, err := o.deps.Lifecycle.Get(parentID)
@@ -377,7 +361,7 @@ func (o *Orchestrator) closeTransactionAfterApply(childID, parentID string) erro
 			return fmt.Errorf("parent no longer has repository %s during closure", entry.Repo)
 		}
 		ref := "refs/heads/" + entry.ParentBranch
-		current, err := cas.RefSHA(parentRepo.Path, ref)
+		current, err := o.deps.Worktrees.RefSHA(parentRepo.Path, ref)
 		if err != nil {
 			return fmt.Errorf("confirming ref %s during closure: %w", ref, err)
 		}
@@ -437,6 +421,15 @@ func (o *Orchestrator) settleChildClosureTail(childID, parentID string) error {
 	child, err := o.deps.Lifecycle.Get(childID)
 	if err != nil {
 		return fmt.Errorf("reload child: %w", err)
+	}
+
+	// A settled review-feedback tail is fully complete — shared cleanup work
+	// and the review-feedback tail both finished. Skip entirely so historical
+	// children trigger no pushes, no gh invocations, and no journal churn on
+	// later startups.
+	if child.Parent.Kind == feature.ChildKindReviewFeedback &&
+		child.Parent.Transaction != nil && child.Parent.Transaction.TailSettled {
+		return nil
 	}
 
 	// Preserve the child's diff before any cleanup removes the disposable
@@ -507,12 +500,15 @@ func (o *Orchestrator) settleChildClosureTail(childID, parentID string) error {
 		FeatureID: childID,
 		ParentID:  parentID,
 		ChildID:   childID,
-		Message:   "refactor child integrated and closed",
+		Message:   child.Parent.Kind + " child integrated and closed",
 	})
 
 	parent, err := o.deps.Lifecycle.Get(parentID)
 	if err != nil {
 		return fmt.Errorf("reload parent: %w", err)
+	}
+	if child.Parent.Kind == feature.ChildKindReviewFeedback {
+		return o.reviewFeedbackIntegrationTail(child, parent)
 	}
 	if parent.IsPublishable() && parent.Checkpoints.AutoPublish() {
 		if err := o.publishWithOptionsLocked(parentID, PublishOptions{}); err != nil {
@@ -523,6 +519,171 @@ func (o *Orchestrator) settleChildClosureTail(childID, parentID string) error {
 			})
 		}
 	}
+	// Parent-scoped event after the tail's last mutation: clients that reload
+	// the parent on the stream's final event must observe settled state,
+	// including read-time gates such as the worktree-cleanliness check.
+	o.emitEvent(ports.Event{
+		Type:      ports.RepoStatusChanged,
+		FeatureID: parentID,
+		Message:   "parent settled after child closure",
+	})
+	return nil
+}
+
+// reviewFeedbackIntegrationTail is the real ending for a review-feedback
+// child after the shared transactional merge has closed the child. For each
+// repo that had selected comments it pull-rebases and pushes the parent
+// branch to the existing PR, replies to every selected comment with
+// type-appropriate routing, resolves inline review threads whose reply
+// succeeded, and records the addressed comment IDs. Repos without selected
+// comments are not pushed. Failures are terminal warnings: the tail
+// attempts every step once, records per-repo failures in the new
+// TailWarning journal field, and marks itself settled regardless. The
+// parent ends Published whether or not any step failed.
+func (o *Orchestrator) reviewFeedbackIntegrationTail(child, parent *feature.Feature) error {
+	// Group selected comments by repo, preserving the parent repo order.
+	commentsByRepo := make(map[string][]feature.ReviewFeedbackComment)
+	for _, c := range child.ReviewFeedback {
+		commentsByRepo[c.Repo] = append(commentsByRepo[c.Repo], c)
+	}
+
+	// Load the outcomes artifact (tolerant: missing/malformed → empty map).
+	outcomes := feature.LoadReviewFeedbackOutcomes(o.stateDir(), child)
+
+	// The ledger store capability (load + append). Production wiring always
+	// uses *feature.Store; test doubles may not implement it — in that case
+	// the nil-ledger path silently skips both the load and the appends.
+	ledger, _ := o.deps.Store.(reviewFeedbackLedger)
+
+	for _, repo := range parent.Repos {
+		comments := commentsByRepo[repo.Name]
+		if len(comments) == 0 {
+			continue
+		}
+
+		// Get the merge SHA for this repo from the transaction journal.
+		mergeSHA := ""
+		if child.Parent.Transaction != nil {
+			if entry := child.Parent.Transaction.EntryByRepo(repo.Name); entry != nil {
+				mergeSHA = entry.MergeHEAD
+			}
+		}
+
+		// Get the PR URL from the parent's repo state.
+		repoState := parent.RepoStates[repo.Name]
+		if repoState == nil || repoState.PRURL == "" {
+			o.recordTransactionTailWarning(child.ID, repo.Name, "no PR URL for review-feedback tail")
+			continue
+		}
+
+		worktree := repo.WorktreePath
+		if worktree == "" {
+			worktree = repo.Path
+		}
+		if worktree == "" {
+			o.recordTransactionTailWarning(child.ID, repo.Name, "parent repo has no worktree path")
+			continue
+		}
+		branch := repo.Branch
+
+		// Pull-rebase and push the parent branch to the existing PR remote.
+		if o.deps.Remote == nil {
+			o.recordTransactionTailWarning(child.ID, repo.Name, "remote operations not configured")
+			continue
+		}
+		if err := o.deps.Remote.PullRebase(worktree, branch); err != nil {
+			o.recordTransactionTailWarning(child.ID, repo.Name, fmt.Sprintf("pull-rebase failed: %v", err))
+			continue
+		}
+		if err := o.deps.Remote.Push(worktree, branch); err != nil {
+			o.recordTransactionTailWarning(child.ID, repo.Name, fmt.Sprintf("push failed: %v", err))
+			continue
+		}
+
+		// Load addressed ledger for recovery dedup.
+		var addressed map[int]bool
+		if ledger != nil {
+			addr, err := ledger.LoadAddressedReviewFeedbackIDs(parent.ID, repo.Name)
+			if err != nil {
+				o.recordTransactionTailWarning(child.ID, repo.Name, fmt.Sprintf("load addressed IDs: %v", err))
+				addressed = make(map[int]bool)
+			} else {
+				addressed = addr
+			}
+		} else {
+			addressed = make(map[int]bool)
+		}
+
+		// Reply to each selected comment.
+		replied := make(map[int]bool)
+		for _, comment := range comments {
+			if addressed[comment.ID] {
+				replied[comment.ID] = true
+				continue
+			}
+			outcome, ok := outcomes[comment.ID]
+			body := feature.ReviewFeedbackReplyBody(outcome, ok, mergeSHA)
+			var replyErr error
+			switch comment.Type {
+			case git.CommentTypeReview:
+				replyErr = git.ReplyToPRComment(worktree, repoState.PRURL, comment.ID, body)
+			case git.CommentTypeIssue, git.CommentTypeReviewBody:
+				replyErr = git.ReplyToIssueComment(worktree, repoState.PRURL, body)
+			default:
+				replyErr = fmt.Errorf("unsupported comment type %q", comment.Type)
+			}
+			if replyErr != nil {
+				o.recordTransactionTailWarning(child.ID, repo.Name, fmt.Sprintf("reply to comment %d: %v", comment.ID, replyErr))
+				continue
+			}
+			replied[comment.ID] = true
+			// Append to the addressed ledger immediately so a resumed tail
+			// skips already-replied comments.
+			if ledger != nil {
+				if err := ledger.AppendAddressedReviewFeedbackIDs(parent.ID, repo.Name, []int{comment.ID}); err != nil {
+					o.recordTransactionTailWarning(child.ID, repo.Name, fmt.Sprintf("record addressed ID %d: %v", comment.ID, err))
+				}
+			}
+		}
+
+		// Fetch the unresolved-thread map and resolve inline threads whose
+		// replies succeeded.
+		threadMap, err := git.FetchReviewThreadMap(worktree, repoState.PRURL)
+		if err != nil {
+			o.recordTransactionTailWarning(child.ID, repo.Name, fmt.Sprintf("fetch thread map: %v", err))
+			continue
+		}
+		for _, comment := range comments {
+			if !replied[comment.ID] || comment.Type != git.CommentTypeReview {
+				continue
+			}
+			threadNodeID, ok := threadMap[comment.ID]
+			if !ok {
+				continue
+			}
+			if err := git.ResolveReviewThread(worktree, threadNodeID); err != nil {
+				o.recordTransactionTailWarning(child.ID, repo.Name, fmt.Sprintf("resolve thread for comment %d: %v", comment.ID, err))
+			}
+		}
+	}
+
+	// The parent ends Published whether or not any step failed.
+	if err := o.deps.Lifecycle.MarkPublished(parent.ID, parent.FirstRepoPRURL()); err != nil {
+		return fmt.Errorf("returning review-feedback parent to published: %w", err)
+	}
+
+	// Persist the durable tail-settled marker regardless of warnings. The
+	// warning is terminal, and unrecorded comment IDs resurfacing in the
+	// next fetch is the retry path.
+	if err := o.deps.Store.Modify(child.ID, func(f *feature.Feature) error {
+		if f.Parent.Transaction != nil {
+			f.Parent.Transaction.TailSettled = true
+		}
+		return nil
+	}); err != nil {
+		return fmt.Errorf("persist tail-settled marker: %w", err)
+	}
+
 	return nil
 }
 
@@ -543,11 +704,39 @@ func (o *Orchestrator) recordTransactionCleanupWarning(childID, repoName, warnin
 	})
 }
 
-// worktreeRefRemover carries the recorded main-repository and branch
-// identity into cleanup, so a retried removal still reaches the ephemeral
-// branch even after an earlier partial removal deregistered the worktree.
-type worktreeRefRemover interface {
-	RemoveRef(worktreePath, mainRepo, branch string) error
+// reviewFeedbackLedger is the store capability for reading and writing the
+// durable addressed-ID ledger. Production wiring always uses *feature.Store.
+type reviewFeedbackLedger interface {
+	LoadAddressedReviewFeedbackIDs(parentID, repoName string) (map[int]bool, error)
+	AppendAddressedReviewFeedbackIDs(parentID, repoName string, ids []int) error
+}
+
+// recordTransactionTailWarning durably records a review-feedback integration
+// tail failure for a repo on the transaction journal's TailWarning field.
+// The warning is terminal — it never blocks the remaining comments or repos
+// and the tail still settles.
+func (o *Orchestrator) recordTransactionTailWarning(childID, repoName, warning string) {
+	if err := o.deps.Store.Modify(childID, func(f *feature.Feature) error {
+		if f.Parent.Transaction != nil {
+			for i := range f.Parent.Transaction.Entries {
+				if f.Parent.Transaction.Entries[i].Repo == repoName {
+					existing := f.Parent.Transaction.Entries[i].TailWarning
+					if existing != "" {
+						existing += "; "
+					}
+					f.Parent.Transaction.Entries[i].TailWarning = existing + warning
+					return nil
+				}
+			}
+		}
+		return nil
+	}); err != nil {
+		o.emitEvent(ports.Event{
+			Type:      ports.RepoStatusChanged,
+			FeatureID: childID,
+			Message:   fmt.Sprintf("failed to record tail warning for %s: %v", repoName, err),
+		})
+	}
 }
 
 // cleanupChildResourcesPerRepo removes the disposable child worktree and
@@ -569,12 +758,7 @@ func (o *Orchestrator) cleanupChildResourcesPerRepo(child *feature.Feature) map[
 		if repo.WorktreePath == "" {
 			continue
 		}
-		var err error
-		if rr, ok := o.deps.Worktrees.(worktreeRefRemover); ok {
-			err = rr.RemoveRef(repo.WorktreePath, repo.Path, repo.Branch)
-		} else {
-			err = o.deps.Worktrees.Remove(repo.WorktreePath, true)
-		}
+		err := o.deps.Worktrees.RemoveRef(repo.WorktreePath, repo.Path, repo.Branch)
 		if err != nil {
 			warnings[repo.Name] = fmt.Sprintf("removing child worktree %s: %v", repo.WorktreePath, err)
 			continue
@@ -593,14 +777,12 @@ func (o *Orchestrator) cleanupChildResourcesPerRepo(child *feature.Feature) map[
 	return warnings
 }
 
-// childHeadSHA reads the full HEAD of a worktree through the structural
-// head-reader capability; absent capability fails closed.
+// childHeadSHA reads the full HEAD of a worktree through the worktree seam.
 func (o *Orchestrator) childHeadSHA(worktreePath string) (string, error) {
-	reader, ok := o.deps.Worktrees.(childHeadReader)
-	if !ok {
+	if o.deps.Worktrees == nil {
 		return "", fmt.Errorf("child integration: exact head capture is not configured")
 	}
-	return reader.CurrentHeadSHA(worktreePath)
+	return o.deps.Worktrees.CurrentHeadSHA(worktreePath)
 }
 
 // closedChildDiffSetter is the store capability that persists the preserved
@@ -610,7 +792,9 @@ type closedChildDiffSetter interface {
 }
 
 // preserveChildDiffSummary best-effort captures and records the closed child's
-// per-repository diff before cleanup removes the disposable worktrees. It
+// per-repository diff — stat header plus body bounded at
+// feature.DiffSummaryBudget; the merge commit remains the full record —
+// before cleanup removes the disposable worktrees. It
 // never fails the closure: missing capabilities, empty diffs, or store errors
 // simply leave the recorded summary empty.
 func (o *Orchestrator) preserveChildDiffSummary(childID string) {
@@ -629,7 +813,7 @@ func (o *Orchestrator) preserveChildDiffSummary(childID string) {
 	if summary == "" {
 		return
 	}
-	_ = setter.SetClosedChildDiffSummary(childID, summary)
+	_ = setter.SetClosedChildDiffSummary(childID, feature.ComposeBoundedDiffSummary(summary))
 }
 
 // captureChildDiffSummary computes the child's preserved diff per repository
@@ -639,9 +823,6 @@ func (o *Orchestrator) preserveChildDiffSummary(childID string) {
 // section per repository. Repos whose diff is empty or fails contribute
 // nothing.
 func (o *Orchestrator) captureChildDiffSummary(child *feature.Feature) string {
-	if o.deps.Publisher == nil {
-		return ""
-	}
 	bases := make(map[string]string, len(child.Parent.Bases))
 	for _, b := range child.Parent.Bases {
 		if b.SHA != "" {
@@ -660,7 +841,7 @@ func (o *Orchestrator) captureChildDiffSummary(child *feature.Feature) string {
 		if worktree == "" {
 			continue
 		}
-		summary, err := o.deps.Publisher.DiffSummary(worktree, bases[repo.Name])
+		summary, err := git.DiffSummary(worktree, bases[repo.Name])
 		if err != nil || strings.TrimSpace(summary) == "" {
 			continue
 		}

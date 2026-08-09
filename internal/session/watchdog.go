@@ -28,19 +28,18 @@ import (
 type sessionWatchdog struct {
 	session                   *Session
 	pendingToolIdleTimeout    time.Duration
+	subagentToolIdleTimeout   time.Duration
 	turnCompletionIdleTimeout time.Duration
 	pollInterval              time.Duration
-	subagentHeartbeatInterval time.Duration
 
-	mu                    sync.Mutex
-	tools                 map[string]watchdogTool
-	awaitingTurn          watchdogTool
-	liveSubagents         map[string]struct{}
-	subagentWaitSince     time.Time
-	nextSubagentHeartbeat time.Time
-	nextToolGeneration    uint64
-	pendingControlRequest map[string]struct{}
-	lastActivityAt        time.Time
+	mu             sync.Mutex
+	lifecycle      watchdogToolLifecycle
+	seq            uint64
+	lastActivityAt time.Time
+	// exemptSince marks entry into a human-wait state (pending permission or
+	// unanswered question); the interval is excluded from the idle clock
+	// without discarding idle time accrued before it.
+	exemptSince time.Time
 
 	startOnce sync.Once
 }
@@ -54,14 +53,74 @@ const (
 )
 
 type watchdogTool struct {
-	phase       watchdogToolPhase
-	id          string
-	name        string
-	generation  uint64
-	activeCount int
+	id       string
+	name     string
+	subagent bool
+	// control marks a synthetic entry armed by an answered control request
+	// (AskUserQuestion): the CLI owes a tool_result, and any subsequent
+	// message disarms the entry.
+	control bool
+	// timeout is the invocation's declared execution timeout, when the
+	// provider reported one; silence up to that long is legitimate.
+	timeout time.Duration
 }
 
-const anonymousWatchdogToolKey = "\x00anonymous-tool"
+// watchdogToolLifecycle tracks every pending tool of the current turn, not
+// just the most recent one: providers can run several tools in parallel
+// (e.g. subagent tasks), and a sibling completing must not make the watchdog
+// treat the turn as awaiting its result while other tools are still running.
+type watchdogToolLifecycle struct {
+	pending      []watchdogTool // arming order
+	awaitingTurn bool
+	turnTool     watchdogTool // last completed tool, for the awaiting-turn message
+}
+
+func (l watchdogToolLifecycle) phase() watchdogToolPhase {
+	switch {
+	case len(l.pending) > 0:
+		return watchdogToolRunning
+	case l.awaitingTurn:
+		return watchdogToolAwaitingTurnResult
+	default:
+		return watchdogToolInactive
+	}
+}
+
+func (l watchdogToolLifecycle) displayTool() watchdogTool {
+	if n := len(l.pending); n > 0 {
+		return l.pending[n-1]
+	}
+	return l.turnTool
+}
+
+func (l watchdogToolLifecycle) anySubagentPending() bool {
+	for _, tool := range l.pending {
+		if tool.subagent {
+			return true
+		}
+	}
+	return false
+}
+
+func (l watchdogToolLifecycle) maxPendingDeclaredTimeout() time.Duration {
+	var longest time.Duration
+	for _, tool := range l.pending {
+		if tool.timeout > longest {
+			longest = tool.timeout
+		}
+	}
+	return longest
+}
+
+// watchdogSnapshot is a point-in-time view handed from the poller to the
+// failure path so both agree on what they are timing.
+type watchdogSnapshot struct {
+	phase    watchdogToolPhase
+	tool     watchdogTool
+	subagent bool
+	declared time.Duration
+	seq      uint64
+}
 
 func newSessionWatchdog(sess *Session, cfg *ports.SessionWatchdogConfig) *sessionWatchdog {
 	if sess == nil || cfg == nil || (cfg.PendingToolIdleTimeout <= 0 && cfg.TurnCompletionIdleTimeout <= 0) {
@@ -81,9 +140,9 @@ func newSessionWatchdog(sess *Session, cfg *ports.SessionWatchdogConfig) *sessio
 	return &sessionWatchdog{
 		session:                   sess,
 		pendingToolIdleTimeout:    cfg.PendingToolIdleTimeout,
+		subagentToolIdleTimeout:   cfg.SubagentToolIdleTimeout,
 		turnCompletionIdleTimeout: cfg.TurnCompletionIdleTimeout,
 		pollInterval:              interval,
-		subagentHeartbeatInterval: cfg.SubagentHeartbeatInterval,
 		lastActivityAt:            time.Now(),
 	}
 }
@@ -119,153 +178,156 @@ func (w *sessionWatchdog) Observe(msg llm.SDKMessage) {
 	w.lastActivityAt = now
 	switch {
 	case msg.Result != nil:
-		w.tools = nil
-		w.awaitingTurn = watchdogTool{}
-		w.liveSubagents = nil
-		w.subagentWaitSince = time.Time{}
-		w.nextSubagentHeartbeat = time.Time{}
-		w.pendingControlRequest = nil
-	case msg.ControlRequest != nil:
-		if watchdogShouldParkForControlRequest(msg.ControlRequest) {
-			if w.pendingControlRequest == nil {
-				w.pendingControlRequest = make(map[string]struct{})
-			}
-			w.pendingControlRequest[msg.ControlRequest.RequestID] = struct{}{}
-		}
-	case msg.TaskStarted != nil || msg.TaskProgress != nil || msg.TaskNotification != nil:
-		w.observeTaskLifecycleLocked(msg, now)
+		w.lifecycle = watchdogToolLifecycle{}
+		w.seq++
 	case msg.ToolProgress != nil:
-		w.observeToolProgressLocked(*msg.ToolProgress)
-	}
-	if len(w.liveSubagents) > 0 && w.subagentHeartbeatInterval > 0 {
-		w.nextSubagentHeartbeat = now.Add(w.subagentHeartbeatInterval)
+		w.lifecycle = w.lifecycle.observe(*msg.ToolProgress)
+		w.seq++
+	case msg.Assistant != nil || msg.User != nil:
+		// Any post-answer message proves the CLI consumed a control
+		// response, so synthetic pending windows disarm.
+		if cleared, changed := w.lifecycle.clearControlTools(); changed {
+			w.lifecycle = cleared
+			w.seq++
+		}
 	}
 	w.mu.Unlock()
 }
 
-func watchdogShouldParkForControlRequest(req *llm.ControlRequestMessage) bool {
-	if req == nil {
-		return false
-	}
-	return req.Request.Subtype != "hook_callback"
-}
-
-func (w *sessionWatchdog) ResolveControlRequest(requestID string) {
+// ResolveControlRequest starts a fresh idle window after a permission or
+// question response. Pending-request ownership lives on Session; the watchdog
+// only needs the activity boundary. An answered AskUserQuestion additionally
+// arms a synthetic pending window: the CLI owes a tool_result for the
+// question, and a turn that produces no further output is stalled. Any
+// subsequent message disarms the window (Observe).
+func (w *sessionWatchdog) ResolveControlRequest(requestID, toolName string) {
 	if w == nil || requestID == "" {
 		return
 	}
 	w.mu.Lock()
-	delete(w.pendingControlRequest, requestID)
-	if len(w.pendingControlRequest) == 0 {
-		w.pendingControlRequest = nil
-	}
 	w.lastActivityAt = time.Now()
+	if toolName == "AskUserQuestion" {
+		l := w.lifecycle.armTool(requestID, toolName, 0)
+		for i := range l.pending {
+			if l.pending[i].id == requestID {
+				l.pending[i].control = true
+			}
+		}
+		w.lifecycle = l
+		w.seq++
+	}
 	w.mu.Unlock()
 }
 
+// ClearControlRequests starts a fresh idle window after a bulk request reset.
+// Session remains the single source of truth for which requests are pending.
 func (w *sessionWatchdog) ClearControlRequests() {
 	if w == nil {
 		return
 	}
 	w.mu.Lock()
-	w.pendingControlRequest = nil
 	w.lastActivityAt = time.Now()
+	if cleared, changed := w.lifecycle.clearControlTools(); changed {
+		w.lifecycle = cleared
+		w.seq++
+	}
 	w.mu.Unlock()
 }
 
-func observeWatchdogToolProgress(current watchdogTool, progress llm.ToolProgressMessage) watchdogTool {
+// clearControlTools drops synthetic control entries without transitioning to
+// the awaiting-turn phase.
+func (l watchdogToolLifecycle) clearControlTools() (watchdogToolLifecycle, bool) {
+	var pending []watchdogTool
+	for _, tool := range l.pending {
+		if tool.control {
+			continue
+		}
+		pending = append(pending, tool)
+	}
+	if len(pending) == len(l.pending) {
+		return l, false
+	}
+	l.pending = pending
+	return l, true
+}
+
+func (l watchdogToolLifecycle) observe(progress llm.ToolProgressMessage) watchdogToolLifecycle {
 	data := strings.TrimSpace(progress.Data)
 	id := strings.TrimSpace(progress.ToolUseID)
 	name := strings.TrimSpace(progress.ToolName)
-	if isWatchdogPendingToolData(data) {
-		return watchdogTool{
-			phase: watchdogToolRunning,
-			id:    id,
-			name:  name,
-		}
-	}
-	if !isWatchdogTerminalToolData(data) {
-		return current
-	}
-	if current.phase == watchdogToolRunning && id != "" && current.id != "" && id != current.id {
-		return current
-	}
-	if id == "" {
-		id = current.id
-	}
-	if name == "" {
-		name = current.name
-	}
-	return watchdogTool{
-		phase: watchdogToolAwaitingTurnResult,
-		id:    id,
-		name:  name,
-	}
-}
-
-func (w *sessionWatchdog) observeToolProgressLocked(progress llm.ToolProgressMessage) {
-	key := strings.TrimSpace(progress.ToolUseID)
-	if key == "" {
-		key = anonymousWatchdogToolKey
-	}
-	current := w.tools[key]
-	next := observeWatchdogToolProgress(current, progress)
-	switch next.phase {
-	case watchdogToolRunning:
-		if w.tools == nil {
-			w.tools = make(map[string]watchdogTool)
-		}
-		w.nextToolGeneration++
-		next.generation = w.nextToolGeneration
-		w.tools[key] = next
-		w.awaitingTurn = watchdogTool{}
-	case watchdogToolAwaitingTurnResult:
-		if current.phase == watchdogToolRunning {
-			delete(w.tools, key)
-		} else if len(w.tools) > 0 {
-			return
-		}
-		if len(w.tools) == 0 {
-			w.nextToolGeneration++
-			next.generation = w.nextToolGeneration
-			w.awaitingTurn = next
-		}
-	}
-}
-
-func (w *sessionWatchdog) observeTaskLifecycleLocked(msg llm.SDKMessage, now time.Time) {
-	key := ""
-	live := false
 	switch {
-	case msg.TaskStarted != nil:
-		key, live = backgroundTaskKey(msg.TaskStarted.TaskID, msg.TaskStarted.ToolUseID), true
-	case msg.TaskProgress != nil:
-		key, live = backgroundTaskKey(msg.TaskProgress.TaskID, msg.TaskProgress.ToolUseID), true
-	case msg.TaskNotification != nil:
-		key = backgroundTaskKey(msg.TaskNotification.TaskID, msg.TaskNotification.ToolUseID)
+	case isWatchdogPendingToolData(data):
+		return l.armTool(id, name, time.Duration(progress.TimeoutMS)*time.Millisecond)
+	case isWatchdogTerminalToolData(data):
+		return l.completeTool(id, name)
 	default:
-		return
+		return l
 	}
-	if key == "" {
-		return
-	}
-	if live {
-		if w.liveSubagents == nil {
-			w.liveSubagents = make(map[string]struct{})
+}
+
+func (l watchdogToolLifecycle) armTool(id, name string, timeout time.Duration) watchdogToolLifecycle {
+	l.awaitingTurn = false
+	l.turnTool = watchdogTool{}
+	pending := append([]watchdogTool(nil), l.pending...)
+	l.pending = pending
+	for i := range pending {
+		if pending[i].id == id {
+			if name != "" {
+				pending[i].name = name
+			}
+			// Providers rename tools to display titles on later updates;
+			// the subagent marker must survive the rename.
+			pending[i].subagent = pending[i].subagent || isWatchdogSubagentToolName(name)
+			if timeout > 0 {
+				pending[i].timeout = timeout
+			}
+			return l
 		}
-		if len(w.liveSubagents) == 0 {
-			w.subagentWaitSince = now
+	}
+	l.pending = append(pending, watchdogTool{id: id, name: name, subagent: isWatchdogSubagentToolName(name), timeout: timeout})
+	return l
+}
+
+func (l watchdogToolLifecycle) completeTool(id, name string) watchdogToolLifecycle {
+	pending := append([]watchdogTool(nil), l.pending...)
+	idx := -1
+	for i := range pending {
+		if pending[i].id == id {
+			idx = i
+			break
 		}
-		w.liveSubagents[key] = struct{}{}
-		return
 	}
-	delete(w.liveSubagents, key)
-	if len(w.liveSubagents) == 0 {
-		w.liveSubagents = nil
-		w.subagentWaitSince = time.Time{}
-		w.nextSubagentHeartbeat = time.Time{}
-		w.lastActivityAt = now
+	if idx < 0 && id == "" && len(pending) > 0 {
+		// A terminal update without an id closes the most recently armed tool.
+		idx = len(pending) - 1
 	}
+	if idx < 0 && len(pending) > 0 {
+		// A terminal update for a tool that was never armed cannot clear
+		// tools that are still running.
+		return l
+	}
+	done := watchdogTool{id: id}
+	if idx >= 0 {
+		done = pending[idx]
+		pending = append(pending[:idx], pending[idx+1:]...)
+	}
+	if name != "" {
+		done.name = name
+	}
+	l.pending = pending
+	if len(pending) > 0 {
+		return l
+	}
+	l.awaitingTurn = true
+	l.turnTool = done
+	return l
+}
+
+// isWatchdogSubagentToolName reports whether a tool name identifies a
+// subagent task. Subagents run in child sessions whose activity is not
+// streamed to the parent, so long silence while one is pending is expected.
+func isWatchdogSubagentToolName(name string) bool {
+	return strings.EqualFold(strings.TrimSpace(name), "task")
 }
 
 func isWatchdogPendingToolData(data string) bool {
@@ -302,106 +364,80 @@ func (w *sessionWatchdog) run() {
 		case <-ticker.C:
 		}
 
-		if status, ok := w.subagentHeartbeatStatus(time.Now()); ok {
-			_ = w.session.appendLocalStatus(status)
-		}
-		if tool, timeout, ok := w.toolStall(); ok {
-			if w.failTool(tool, timeout) {
+		if snap, timeout, ok := w.toolStall(); ok {
+			if w.failTool(snap, timeout) {
 				return
 			}
 		}
 	}
 }
 
-func (w *sessionWatchdog) subagentHeartbeatStatus(now time.Time) (string, bool) {
-	w.mu.Lock()
-	if len(w.liveSubagents) == 0 ||
-		w.subagentHeartbeatInterval <= 0 ||
-		w.subagentWaitSince.IsZero() ||
-		w.nextSubagentHeartbeat.IsZero() ||
-		now.Before(w.nextSubagentHeartbeat) {
-		w.mu.Unlock()
-		return "", false
-	}
-	count := len(w.liveSubagents)
-	waitSince := w.subagentWaitSince
-	w.nextSubagentHeartbeat = now.Add(w.subagentHeartbeatInterval)
-	w.mu.Unlock()
-
-	minutes := int(now.Sub(waitSince) / time.Minute)
-	if minutes < 1 {
-		minutes = 1
-	}
-	noun := "subagents"
-	if count == 1 {
-		noun = "subagent"
-	}
-	return fmt.Sprintf("Waiting for %d %s (%dm)", count, noun, minutes), true
-}
-
-func (w *sessionWatchdog) toolStall() (watchdogTool, time.Duration, bool) {
-	if len(w.session.PendingControlRequests()) > 0 || w.session.HasPendingAskUserQuestion() {
-		w.refreshActivity()
-		return watchdogTool{}, 0, false
-	}
+func (w *sessionWatchdog) toolStall() (watchdogSnapshot, time.Duration, bool) {
 	status := w.session.Status()
-	if status == SessionWaitingHelp {
-		w.refreshActivity()
-		return watchdogTool{}, 0, false
-	}
 	if status == SessionDone || status == SessionFailed {
-		return watchdogTool{}, 0, false
+		return watchdogSnapshot{}, 0, false
+	}
+	// Waiting on a human (pending permission, unanswered question, or help)
+	// is exempt. Mark the boundary instead of refreshing activity so the
+	// exempt interval is excluded without resetting idle time accrued before
+	// the state was entered.
+	if len(w.session.PendingControlRequests()) > 0 || w.session.HasPendingAskUserQuestion() || status == SessionWaitingHelp {
+		w.mu.Lock()
+		if w.exemptSince.IsZero() {
+			w.exemptSince = time.Now()
+		}
+		w.mu.Unlock()
+		return watchdogSnapshot{}, 0, false
 	}
 
 	w.mu.Lock()
-	hasPendingControlRequest := len(w.pendingControlRequest) > 0
-	hasLiveSubagents := len(w.liveSubagents) > 0
-	tool := w.currentToolLocked()
+	if !w.exemptSince.IsZero() {
+		now := time.Now()
+		shifted := w.lastActivityAt.Add(now.Sub(w.exemptSince))
+		if shifted.After(now) {
+			shifted = now
+		}
+		w.lastActivityAt = shifted
+		w.exemptSince = time.Time{}
+	}
+	snap := watchdogSnapshot{
+		phase:    w.lifecycle.phase(),
+		tool:     w.lifecycle.displayTool(),
+		subagent: w.lifecycle.anySubagentPending(),
+		declared: w.lifecycle.maxPendingDeclaredTimeout(),
+		seq:      w.seq,
+	}
 	lastActivityAt := w.lastActivityAt
 	w.mu.Unlock()
-	if hasPendingControlRequest {
-		w.refreshActivity()
-		return watchdogTool{}, 0, false
-	}
-	if hasLiveSubagents {
-		return watchdogTool{}, 0, false
-	}
-	timeout := w.timeoutFor(tool.phase)
+	timeout := w.timeoutFor(snap)
 	if timeout <= 0 {
-		return watchdogTool{}, 0, false
+		return watchdogSnapshot{}, 0, false
 	}
 	if stdoutAt := w.session.LastStdoutAt(); stdoutAt.After(lastActivityAt) {
 		lastActivityAt = stdoutAt
 	}
 	idleFor := time.Since(lastActivityAt)
-	return tool, timeout, idleFor >= timeout
+	return snap, timeout, idleFor >= timeout
 }
 
-func (w *sessionWatchdog) currentToolLocked() watchdogTool {
-	if len(w.tools) == 0 {
-		return w.awaitingTurn
-	}
-	key := ""
-	for candidate := range w.tools {
-		if key == "" || candidate < key {
-			key = candidate
-		}
-	}
-	tool := w.tools[key]
-	tool.activeCount = len(w.tools)
-	return tool
-}
-
-func (w *sessionWatchdog) refreshActivity() {
-	w.mu.Lock()
-	w.lastActivityAt = time.Now()
-	w.mu.Unlock()
-}
-
-func (w *sessionWatchdog) timeoutFor(phase watchdogToolPhase) time.Duration {
-	switch phase {
+func (w *sessionWatchdog) timeoutFor(snap watchdogSnapshot) time.Duration {
+	switch snap.phase {
 	case watchdogToolRunning:
-		return w.pendingToolIdleTimeout
+		// Subagent tasks are opaque: the parent session hears nothing until
+		// they finish, so a pending subagent earns the longer timeout.
+		timeout := w.pendingToolIdleTimeout
+		if snap.subagent && w.subagentToolIdleTimeout > 0 {
+			timeout = w.subagentToolIdleTimeout
+		}
+		// A tool that declared its own execution timeout (e.g. a long test
+		// command) may legitimately stay silent for that long; the provider
+		// then gets the normal idle grace to report a terminal update.
+		if timeout > 0 && snap.declared > 0 {
+			if declared := snap.declared + w.pendingToolIdleTimeout; declared > timeout {
+				timeout = declared
+			}
+		}
+		return timeout
 	case watchdogToolAwaitingTurnResult:
 		return w.turnCompletionIdleTimeout
 	default:
@@ -409,14 +445,15 @@ func (w *sessionWatchdog) timeoutFor(phase watchdogToolPhase) time.Duration {
 	}
 }
 
-func (w *sessionWatchdog) failTool(tool watchdogTool, timeout time.Duration) bool {
+func (w *sessionWatchdog) failTool(snap watchdogSnapshot, timeout time.Duration) bool {
 	// Observe and the poller race at the timeout boundary. Linearize the
-	// decision under the watchdog lock: if a Result or any stdout arrived after
-	// the poll snapshot, that activity wins and the watchdog keeps waiting.
-	// Clearing the selected state here also guarantees a single fire: the only
-	// caller is run(), which returns as soon as this reports true.
+	// decision under the watchdog lock: if a Result, tool update, or any
+	// stdout arrived after the poll snapshot, that activity wins and the
+	// watchdog keeps waiting. Bumping seq here also guarantees a single
+	// fire: the only caller is run(), which returns as soon as this
+	// reports true.
 	w.mu.Lock()
-	if len(w.liveSubagents) > 0 || w.currentToolLocked() != tool {
+	if w.seq != snap.seq {
 		w.mu.Unlock()
 		return false
 	}
@@ -429,17 +466,15 @@ func (w *sessionWatchdog) failTool(tool watchdogTool, timeout time.Duration) boo
 		w.mu.Unlock()
 		return false
 	}
-	w.tools = nil
-	w.awaitingTurn = watchdogTool{}
+	w.lifecycle = watchdogToolLifecycle{}
+	w.seq++
 	w.mu.Unlock()
 
 	var reason string
-	if tool.phase == watchdogToolAwaitingTurnResult {
-		reason = fmt.Sprintf("provider watchdog stalled awaiting turn completion after tool %s for %s (idle %s)", tool.displayName(), timeout, idleFor.Round(time.Millisecond))
-	} else if tool.activeCount > 1 {
-		reason = fmt.Sprintf("provider watchdog stalled with %d pending tools (including %s) for %s (idle %s)", tool.activeCount, tool.displayName(), timeout, idleFor.Round(time.Millisecond))
+	if snap.phase == watchdogToolAwaitingTurnResult {
+		reason = fmt.Sprintf("provider watchdog stalled awaiting turn completion after tool %s for %s (idle %s)", snap.tool.displayName(), timeout, idleFor.Round(time.Millisecond))
 	} else {
-		reason = fmt.Sprintf("provider watchdog stalled with pending tool %s for %s (idle %s)", tool.displayName(), timeout, idleFor.Round(time.Millisecond))
+		reason = fmt.Sprintf("provider watchdog stalled with pending tool %s for %s (idle %s)", snap.tool.displayName(), timeout, idleFor.Round(time.Millisecond))
 	}
 	w.session.failFromWatchdog(reason)
 	return true

@@ -52,7 +52,7 @@ func (o *Orchestrator) ScanRecovery(ctx context.Context) ([]ports.RecoveryItem, 
 	// Reconcile any orphan run directories before scanning for recovery items.
 	// Recovery decisions (resume/kill/skip) must observe a consistent run set;
 	// otherwise a stale committing:true run or run_number > ActiveRun leftover
-	// could steer the TUI toward a run that will be deleted a moment later.
+	// could steer the desktop app toward a run that will be deleted a moment later.
 	if o.deps.Store != nil {
 		if err := o.cleanupOrphanRuns(); err != nil {
 			return nil, fmt.Errorf("cleanup orphan runs: %w", err)
@@ -121,6 +121,7 @@ func (o *Orchestrator) ScanRecovery(ctx context.Context) ([]ports.RecoveryItem, 
 	if err != nil {
 		return nil, fmt.Errorf("scan for recovery: %w", err)
 	}
+	items = o.dropSupervisedSessions(items)
 	o.emitEvent(ports.Event{
 		Type:    ports.RecoveryScanned,
 		Message: fmt.Sprintf("%d items", len(items)),
@@ -129,6 +130,32 @@ func (o *Orchestrator) ScanRecovery(ctx context.Context) ([]ports.RecoveryItem, 
 		o.hooks.OnRecoveryScanned(items)
 	}
 	return items, nil
+}
+
+// dropSupervisedSessions removes scan hits whose PID file belongs to a live
+// session this process still supervises. Those are healthy runs, not orphans;
+// offering resume/kill for them would terminate the run.
+func (o *Orchestrator) dropSupervisedSessions(items []ports.RecoveryItem) []ports.RecoveryItem {
+	if o.deps.Sessions == nil || len(items) == 0 {
+		return items
+	}
+	live := make(map[string]bool)
+	for _, view := range o.deps.Sessions.ActiveSessions() {
+		if view.IsActive() {
+			live[view.ID()] = true
+		}
+	}
+	if len(live) == 0 {
+		return items
+	}
+	kept := make([]ports.RecoveryItem, 0, len(items))
+	for _, item := range items {
+		if item.PIDFile.ManagerID != "" && live[item.PIDFile.ManagerID] {
+			continue
+		}
+		kept = append(kept, item)
+	}
+	return kept
 }
 
 func (o *Orchestrator) emitSetupReconciled(featureID string) {
@@ -277,6 +304,8 @@ func recoveryActionString(action ports.RecoveryAction) string {
 // For each child feature with a transaction journal, it classifies every
 // target ref against its journaled old and candidate SHAs:
 //   - Prepared-but-unapplied: leave retryable without moving refs.
+//   - Rebase pass-through candidate: confirm only when the no-op entry was
+//     durably applied; otherwise leave retryable.
 //   - All refs already at candidates: finish the durable transition once.
 //   - Provable partial apply: conditionally roll back.
 //   - Partially completed rollback: resume from durable and observed state.
@@ -365,8 +394,7 @@ func (o *Orchestrator) reconcileOneIntegration(f *feature.Feature) error {
 		return o.settleChildClosureTail(f.ID, f.Parent.ParentID)
 	}
 
-	cas, ok := o.deps.Worktrees.(refCASOperator)
-	if !ok {
+	if o.deps.Worktrees == nil {
 		return fmt.Errorf("ref CAS operations not configured for reconciliation")
 	}
 
@@ -392,13 +420,24 @@ func (o *Orchestrator) reconcileOneIntegration(f *feature.Feature) error {
 			continue
 		}
 		ref := "refs/heads/" + entry.ParentBranch
-		current, err := cas.RefSHA(parentRepo.Path, ref)
+		current, err := o.deps.Worktrees.RefSHA(parentRepo.Path, ref)
 		if err != nil {
 			entry.Diagnostics = fmt.Sprintf("reading ref %s: %v", ref, err)
 			anyUnclassifiable = true
 			continue
 		}
 		entry.ObservedSHA = current
+		if passThroughCandidate(entry) {
+			if current != entry.ParentAnchorSHA {
+				anyUnclassifiable = true
+				entry.Diagnostics = fmt.Sprintf("ref %s externally moved: pass-through anchor %s observed %s",
+					ref, entry.ParentAnchorSHA, current)
+			}
+			if entry.ApplyState != feature.RepoApplyApplied {
+				allAtCandidate = false
+			}
+			continue
+		}
 		switch {
 		case current == entry.CandidateSHA:
 			entry.ApplyState = feature.RepoApplyApplied

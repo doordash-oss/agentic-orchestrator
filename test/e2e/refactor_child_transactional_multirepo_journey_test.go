@@ -29,7 +29,6 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/internal/orchestrator"
-	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
 )
 
@@ -129,20 +128,10 @@ func (fx *multiRepoE2EFixture) orchestrator() *orchestrator.Orchestrator {
 	return fx.orchestratorWithWorktrees(fx.wm)
 }
 
-func (fx *multiRepoE2EFixture) orchestratorWithWorktrees(wt ports.WorktreeOperator) *orchestrator.Orchestrator {
+func (fx *multiRepoE2EFixture) orchestratorWithWorktrees(wt feature.WorktreeOps) *orchestrator.Orchestrator {
 	return orchestrator.New(orchestrator.Deps{
 		Lifecycle: fx.mgr, Store: fx.store,
-		Publisher: &git.PublishAdapter{}, Worktrees: wt,
-		Cleanliness: feature.CleanlinessFunc(func(worktreePath string, maxPerCategory int) (*feature.RepoCleanliness, error) {
-			report, err := fx.wm.InspectCleanliness(worktreePath, maxPerCategory)
-			if report == nil || err != nil {
-				return nil, err
-			}
-			return &feature.RepoCleanliness{
-				Staged: report.Staged, Unstaged: report.Unstaged, Untracked: report.Untracked,
-				StagedTotal: report.StagedTotal, UnstagedTotal: report.UnstagedTotal, UntrackedTotal: report.UntrackedTotal,
-			}, nil
-		}),
+		Worktrees: wt,
 	}, orchestrator.Hooks{})
 }
 
@@ -348,7 +337,7 @@ func (fx *multiRepoE2EFixture) orchestratorWithFailingStore(failAt int32) *orche
 	return fx.orchestratorWithFailingStoreAndWorktree(failAt, fx.wm)
 }
 
-func (fx *multiRepoE2EFixture) orchestratorWithFailingStoreAndWorktree(failAt int32, wt ports.WorktreeOperator) *orchestrator.Orchestrator {
+func (fx *multiRepoE2EFixture) orchestratorWithFailingStoreAndWorktree(failAt int32, wt feature.WorktreeOps) *orchestrator.Orchestrator {
 	counter := &sharedModifyCounter{failAt: failAt}
 	// Create a new Store with the same BaseDir so both the failing and
 	// fresh orchestrators read/write the same feature files.
@@ -359,17 +348,7 @@ func (fx *multiRepoE2EFixture) orchestratorWithFailingStoreAndWorktree(failAt in
 	fl := &failingLifecycleWrapper{Manager: mgr, counter: counter}
 	return orchestrator.New(orchestrator.Deps{
 		Lifecycle: fl, Store: fs,
-		Publisher: &git.PublishAdapter{}, Worktrees: wt,
-		Cleanliness: feature.CleanlinessFunc(func(worktreePath string, maxPerCategory int) (*feature.RepoCleanliness, error) {
-			report, err := fx.wm.InspectCleanliness(worktreePath, maxPerCategory)
-			if report == nil || err != nil {
-				return nil, err
-			}
-			return &feature.RepoCleanliness{
-				Staged: report.Staged, Unstaged: report.Unstaged, Untracked: report.Untracked,
-				StagedTotal: report.StagedTotal, UnstagedTotal: report.UnstagedTotal, UntrackedTotal: report.UntrackedTotal,
-			}, nil
-		}),
+		Worktrees: wt,
 	}, orchestrator.Hooks{})
 }
 
@@ -425,7 +404,7 @@ func TestRefactorChildTransactionalMultiRepoIntegrationSuccess(t *testing.T) {
 //   - one conflicting repository among clean peers,
 //   - newer parent commits arriving before restart,
 //   - code-changing resolution followed by final-review rerun via
-//     RestartPhase → StartFeature (the TUI's actual dispatch boundary),
+//     RestartPhase → StartFeature (the desktop app's dispatch boundary),
 //   - explicit merge boundaries in every repository after re-prepare.
 func TestRefactorChildTransactionalMultiRepoStagedConflictRestartAndReviewRenewal(t *testing.T) {
 	if testing.Short() {
@@ -517,7 +496,7 @@ func TestRefactorChildTransactionalMultiRepoStagedConflictRestartAndReviewRenewa
 	}
 
 	// Dispatch Final Review via StartFeature — the same entry point the
-	// TUI uses for RestartDispatchPhase. invalidateFinalReview set
+	// client uses for RestartDispatchPhase. invalidateFinalReview set
 	// CurrentPhase=PhaseFinalReview, so StartFeature dispatches it.
 	// The mock returns all_passed, then advanceAfterFinalReview calls
 	// RunChildIntegration to re-prepare candidates against the latest
@@ -529,6 +508,11 @@ func TestRefactorChildTransactionalMultiRepoStagedConflictRestartAndReviewRenewa
 	if atomic.LoadInt32(&frCalled) == 0 {
 		t.Fatal("final review was not dispatched")
 	}
+
+	// startFinalReview completes the pass and advanceAfterFinalReview in a
+	// background cycle goroutine; wait for it before asserting the terminal
+	// integration outcome.
+	o.WaitForCycles()
 
 	// The transaction should complete: child is Completed, parent is
 	// CodeReady, and every repo has an explicit merge boundary.

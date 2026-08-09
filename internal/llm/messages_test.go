@@ -212,50 +212,42 @@ func TestSDKMessage_UnmarshalJSON_ResultStopReason(t *testing.T) {
 		json      string
 		wantStop  string
 		wantTrunc bool
-		wantClass TerminationClass
-		inputs    TerminationInputs
 	}{
 		{
 			name:      "success with tool_use stop is truncated",
 			json:      `{"type":"result","subtype":"success","session_id":"s1","stop_reason":"tool_use"}`,
 			wantStop:  "tool_use",
 			wantTrunc: true,
-			wantClass: TermTurnTruncated,
 		},
 		{
 			name:      "success with end_turn stop is deliberate",
 			json:      `{"type":"result","subtype":"success","session_id":"s1","stop_reason":"end_turn"}`,
 			wantStop:  "end_turn",
 			wantTrunc: false,
-			wantClass: TermEndedAfterText,
 		},
 		{
 			name:      "success with max_tokens stop is truncated",
 			json:      `{"type":"result","subtype":"success","session_id":"s1","stop_reason":"max_tokens"}`,
 			wantStop:  "max_tokens",
 			wantTrunc: true,
-			wantClass: TermTurnTruncated,
 		},
 		{
 			name:      "success with pause_turn stop is truncated",
 			json:      `{"type":"result","subtype":"success","session_id":"s1","stop_reason":"pause_turn"}`,
 			wantStop:  "pause_turn",
 			wantTrunc: true,
-			wantClass: TermTurnTruncated,
 		},
 		{
 			name:      "refusal is not truncation",
 			json:      `{"type":"result","subtype":"success","session_id":"s1","stop_reason":"refusal"}`,
 			wantStop:  "refusal",
 			wantTrunc: false,
-			wantClass: TermRefused,
 		},
 		{
 			name:      "missing stop_reason defaults to deliberate end",
 			json:      `{"type":"result","subtype":"success","session_id":"s1"}`,
 			wantStop:  "",
 			wantTrunc: false,
-			wantClass: TermEndedAfterText,
 		},
 	}
 	for _, tc := range tests {
@@ -273,124 +265,8 @@ func TestSDKMessage_UnmarshalJSON_ResultStopReason(t *testing.T) {
 			if got := msg.Result.IsTurnTruncated(); got != tc.wantTrunc {
 				t.Errorf("IsTurnTruncated() = %v, want %v", got, tc.wantTrunc)
 			}
-			in := tc.inputs
-			in.Result = msg.Result
-			if got := ClassifyTermination(in); got != tc.wantClass {
-				t.Errorf("ClassifyTermination() = %s, want %s", got, tc.wantClass)
-			}
 		})
 	}
-}
-
-func TestClassifyTermination_Priorities(t *testing.T) {
-	// phase_complete wins over everything.
-	t.Run("phase_complete beats tool_use truncation", func(t *testing.T) {
-		in := TerminationInputs{
-			Result:              &ResultMessage{Subtype: "success", StopReason: "tool_use"},
-			PhaseCompleteExists: true,
-		}
-		if got := ClassifyTermination(in); got != TermCompleted {
-			t.Errorf("got %s, want Completed", got)
-		}
-	})
-	// AskUserQuestion beats plain truncation but not completion.
-	t.Run("AskUserQuestion beats truncation", func(t *testing.T) {
-		in := TerminationInputs{
-			Result:                 &ResultMessage{Subtype: "success", StopReason: "tool_use"},
-			AskUserQuestionPending: true,
-		}
-		if got := ClassifyTermination(in); got != TermAskedFormal {
-			t.Errorf("got %s, want AskedFormal", got)
-		}
-	})
-	// Error subtype beats any stop_reason.
-	t.Run("error subtype beats stop_reason", func(t *testing.T) {
-		in := TerminationInputs{
-			Result: &ResultMessage{Subtype: "error", IsError: true, StopReason: "end_turn"},
-		}
-		if got := ClassifyTermination(in); got != TermErrored {
-			t.Errorf("got %s, want Errored", got)
-		}
-	})
-	// A reported error must beat a stale/present phase_complete marker: a failed
-	// invocation (for example a fail-closed control event) cannot be laundered
-	// into a clean completion just because a marker is on disk.
-	t.Run("error beats phase_complete marker", func(t *testing.T) {
-		in := TerminationInputs{
-			Result:              &ResultMessage{Subtype: "error", IsError: true},
-			PhaseCompleteExists: true,
-		}
-		if got := ClassifyTermination(in); got != TermErrored {
-			t.Errorf("got %s, want Errored", got)
-		}
-	})
-	// Likewise when only is_error is set without an error subtype.
-	t.Run("is_error beats phase_complete marker", func(t *testing.T) {
-		in := TerminationInputs{
-			Result:              &ResultMessage{Subtype: "success", IsError: true},
-			PhaseCompleteExists: true,
-		}
-		if got := ClassifyTermination(in); got != TermErrored {
-			t.Errorf("got %s, want Errored", got)
-		}
-	})
-	t.Run("nil result is Unknown", func(t *testing.T) {
-		if got := ClassifyTermination(TerminationInputs{}); got != TermUnknown {
-			t.Errorf("got %s, want Unknown", got)
-		}
-	})
-}
-
-func TestClassifyTermination_BackgroundTasks(t *testing.T) {
-	// An end_turn while background subagents are still running is the agent
-	// yielding to wait for them, not a deliberate stop.
-	t.Run("end_turn with running background tasks awaits", func(t *testing.T) {
-		in := TerminationInputs{
-			Result:                 &ResultMessage{Subtype: "success", StopReason: "end_turn"},
-			BackgroundTasksRunning: true,
-		}
-		if got := ClassifyTermination(in); got != TermAwaitingBackgroundTasks {
-			t.Errorf("got %s, want AwaitingBackgroundTasks", got)
-		}
-	})
-	t.Run("truncation with running background tasks awaits", func(t *testing.T) {
-		in := TerminationInputs{
-			Result:                 &ResultMessage{Subtype: "success", StopReason: "tool_use"},
-			BackgroundTasksRunning: true,
-		}
-		if got := ClassifyTermination(in); got != TermAwaitingBackgroundTasks {
-			t.Errorf("got %s, want AwaitingBackgroundTasks", got)
-		}
-	})
-	t.Run("error beats running background tasks", func(t *testing.T) {
-		in := TerminationInputs{
-			Result:                 &ResultMessage{Subtype: "error", IsError: true},
-			BackgroundTasksRunning: true,
-		}
-		if got := ClassifyTermination(in); got != TermErrored {
-			t.Errorf("got %s, want Errored", got)
-		}
-	})
-	t.Run("phase_complete beats running background tasks", func(t *testing.T) {
-		in := TerminationInputs{
-			Result:                 &ResultMessage{Subtype: "success", StopReason: "end_turn"},
-			PhaseCompleteExists:    true,
-			BackgroundTasksRunning: true,
-		}
-		if got := ClassifyTermination(in); got != TermCompleted {
-			t.Errorf("got %s, want Completed", got)
-		}
-	})
-	t.Run("pending AskUserQuestion beats running background tasks", func(t *testing.T) {
-		in := TerminationInputs{
-			Result:                 &ResultMessage{Subtype: "success", StopReason: "end_turn"},
-			AskUserQuestionPending: true,
-			BackgroundTasksRunning: true,
-		}
-		if got := ClassifyTermination(in); got != TermAskedFormal {
-			t.Errorf("got %s, want AskedFormal", got)
-		}
-	})
 }
 
 func TestSDKMessage_UnmarshalJSON_ControlRequest(t *testing.T) {

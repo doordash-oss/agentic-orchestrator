@@ -23,15 +23,9 @@
 //   - RunMultiRepoFinalReview invokes RunFeatureFinalReviewLoop, the unified
 //     feature-level FR session — one Claude session reads the cumulative
 //     diff across every Feature.Repos worktree.
-//
-// Cycle paths (rebase / review-comments) still consult
-// some of this package's helpers. They will migrate to their own unified
-// loop functions in slices 4-7.
 package agent
 
 import (
-	"fmt"
-	"path/filepath"
 	"sort"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
@@ -57,11 +51,12 @@ type OrchestratorConfig struct {
 	// Resolved model and loop-limit values. These should be populated by the
 	// caller (RunMultiRepoImplementation) using the same resolution logic as
 	// the single-repo path (feature-level overrides → config defaults → fallbacks).
-	Model               string
-	ReviewModel         string
-	MaxIterations       int
-	MaxConsecFails      int
-	MaxConsecNoProgress int
+	Model                string
+	ReviewModel          string
+	ResolveSessionConfig func(llm.PhaseRole) (SessionRuntimeConfig, error)
+	MaxIterations        int
+	MaxConsecFails       int
+	MaxConsecNoProgress  int
 
 	KBInfos []KBInfo
 
@@ -128,12 +123,6 @@ type OrchestratorConfig struct {
 	// GuidelinesDir is the path to the reconciled guidelines directory on disk.
 	GuidelinesDir string
 
-	// FinishOrViolateNudge arms the finish-or-violate auto-continuation retry
-	// for the feature-level Final Review sessions (review + fix legs). Resolved
-	// per-model from the provider capability, so only capability-positive
-	// providers opt in.
-	FinishOrViolateNudge bool
-
 	// Observer is the observability facade for lifecycle events. Nil = no-op.
 	Observer *observe.Observer
 
@@ -142,18 +131,38 @@ type OrchestratorConfig struct {
 	OnVerificationProgress func(featureID string)
 }
 
+func resolveOrchestratorSessionConfig(cfg OrchestratorConfig, role llm.PhaseRole) (SessionRuntimeConfig, error) {
+	if cfg.ResolveSessionConfig != nil {
+		return cfg.ResolveSessionConfig(role)
+	}
+	if role == llm.PhaseReview {
+		return SessionRuntimeConfig{
+			Model:           cfg.ReviewModel,
+			EffectiveEffort: cfg.ReviewEffectiveEffort,
+			EffortSource:    cfg.ReviewEffortSource,
+			AskingClause:    cfg.AskingClause,
+		}, nil
+	}
+	return SessionRuntimeConfig{
+		Model:           cfg.Model,
+		EffectiveEffort: cfg.ImplEffectiveEffort,
+		EffortSource:    cfg.ImplEffortSource,
+		AskingClause:    cfg.AskingClause,
+	}, nil
+}
+
 // OrchestratorResult is the aggregate outcome of multi-repo implementation.
 type OrchestratorResult struct {
 	FinalStatus  string            // "all_passed" | "awaiting_final_review" | "failed" | "need_user_input" | "plan_revision_required" | "interrupted"
 	RepoStatuses map[string]string // per-repo inner loop FinalStatus (e.g., "max_iterations")
 	FailedRepos  []string
-	// PausedRepos lists repos that ended this cycle paused on a need-user-input
+	// PausedRepos lists repos that ended this run paused on a need-user-input
 	// gate. Under the unified flow the gate is feature-scoped, so PausedRepos
 	// carries the phase-declared repo subset when FinalStatus == "need_user_input".
 	PausedRepos []string
 	// NeedUserInputPath is the absolute path to the persisted gate artifact
 	// when FinalStatus == "need_user_input". The orchestrator stores this on
-	// Feature.PendingNeedUserInputPath so the resume/abort decision handler
+	// Feature.PendingNeedUserInputPath so the resume handler
 	// can read the questionnaire and answers.
 	NeedUserInputPath string
 	LastError         string
@@ -311,21 +320,4 @@ func findRepo(f *feature.Feature, name string) *feature.FeatureRepo {
 		}
 	}
 	return nil
-}
-
-// resolveImplementArtifactDirForRepo returns the per-iteration Implement
-// artifact directory for a feature/repo within the active run. The
-// `<repoName>` segment is preserved so the per-repo cycle paths
-// (rebase / review-comments) keep their existing layout until
-// slices 4-7 migrate them. The unified phase-implement loop emits artifacts
-// at the phase level (no per-repo subdir) via resolvePhaseArtifactDir.
-func resolveImplementArtifactDirForRepo(f *feature.Feature, runDir, repoName string) string {
-	if cyclePrefix := f.CyclePrefix(); cyclePrefix != "" {
-		return filepath.Join(runDir, cyclePrefix, "implement", repoName)
-	}
-	base := runDir
-	if f.CurrentRoadmapPhase > 0 {
-		return filepath.Join(base, fmt.Sprintf("phase-%02d", f.CurrentRoadmapPhase), "implement", repoName)
-	}
-	return filepath.Join(base, "implement", repoName)
 }

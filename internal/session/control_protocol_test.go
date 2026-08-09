@@ -16,9 +16,11 @@ package session
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"io"
 	"os"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -26,8 +28,15 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm/codex"
+	"github.com/doordash-oss/agentic-orchestrator/internal/permission"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
+
+type nopWriteCloser struct {
+	io.Writer
+}
+
+func (nopWriteCloser) Close() error { return nil }
 
 const (
 	roleUser        = "user"
@@ -254,7 +263,7 @@ func TestHandleControlRequest_AskUserQuestion_NeverAutoApproved(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: pure session routing, no subprocess or shared state.
 	s := NewSession("ask-test", "feat-1", feature.PhaseResearch)
-	s.permHandler = &AutoApproveHandler{}
+	s.permHandler = &permission.AutoApproveHandler{}
 	msg := llm.SDKMessage{ControlRequest: &llm.ControlRequestMessage{
 		RequestID: "ask_1",
 		Request: llm.ControlRequest{
@@ -265,7 +274,7 @@ func TestHandleControlRequest_AskUserQuestion_NeverAutoApproved(t *testing.T) {
 	}}
 
 	if handled := s.tryHandleControlRequest(msg); handled {
-		t.Fatal("tryHandleControlRequest AskUserQuestion = true, want false so TUI answers it")
+		t.Fatal("tryHandleControlRequest AskUserQuestion = true, want false so desktop app answers it")
 	}
 }
 
@@ -273,7 +282,7 @@ func TestHandleControlRequest_BashWithAutoApprove(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: pure session routing, no subprocess or shared state.
 	s := NewSession("bash-approve", "feat-1", feature.PhaseImplement)
-	s.permHandler = &AutoApproveHandler{}
+	s.permHandler = &permission.AutoApproveHandler{}
 	msg := llm.SDKMessage{ControlRequest: &llm.ControlRequestMessage{
 		RequestID: "bash_1",
 		Request: llm.ControlRequest{
@@ -290,7 +299,7 @@ func TestHandleControlRequest_BashWithAutoApprove(t *testing.T) {
 // --- AcceptEditsHandler tests ---
 
 func TestAcceptEditsHandler_AutoApproves(t *testing.T) {
-	handler := &AcceptEditsHandler{}
+	handler := &permission.AcceptEditsHandler{}
 	autoApproved := []string{
 		"Read", "Glob", "Grep", "LS", "LSP",
 		"Edit", "Write", "NotebookEdit",
@@ -300,7 +309,7 @@ func TestAcceptEditsHandler_AutoApproves(t *testing.T) {
 	}
 	for _, tool := range autoApproved {
 		t.Run(tool, func(t *testing.T) {
-			decision, err := handler.CanUseTool(ToolPermissionRequest{ToolName: tool})
+			decision, err := handler.CanUseTool(ports.ToolPermissionRequest{ToolName: tool})
 			if err != nil {
 				t.Fatalf("error: %v", err)
 			}
@@ -311,27 +320,27 @@ func TestAcceptEditsHandler_AutoApproves(t *testing.T) {
 	}
 }
 
-func TestAcceptEditsHandler_DefersToTUI(t *testing.T) {
-	handler := &AcceptEditsHandler{}
+func TestAcceptEditsHandler_DefersToClient(t *testing.T) {
+	handler := &permission.AcceptEditsHandler{}
 	deferred := []string{"Bash", "EnterWorktree", "ExitWorktree", "CronCreate", "SomeUnknownTool"}
 	for _, tool := range deferred {
 		t.Run(tool, func(t *testing.T) {
-			decision, err := handler.CanUseTool(ToolPermissionRequest{ToolName: tool})
+			decision, err := handler.CanUseTool(ports.ToolPermissionRequest{ToolName: tool})
 			if err != nil {
 				t.Fatalf("error: %v", err)
 			}
 			if decision.Behavior != "" {
-				t.Errorf("AcceptEditsHandler.CanUseTool(%s) = %q, want empty (defer to TUI)", tool, decision.Behavior)
+				t.Errorf("AcceptEditsHandler.CanUseTool(%s) = %q, want empty (defer to desktop app)", tool, decision.Behavior)
 			}
 		})
 	}
 }
 
-func TestAcceptEditsHandler_BashDeferredToTUI_Session(t *testing.T) {
+func TestAcceptEditsHandler_BashDeferredToClientSession(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: pure session routing, no subprocess or shared state.
 	s := NewSession("bash-defer", "feat-1", feature.PhaseImplement)
-	s.permHandler = &AcceptEditsHandler{}
+	s.permHandler = &permission.AcceptEditsHandler{}
 	msg := llm.SDKMessage{ControlRequest: &llm.ControlRequestMessage{
 		RequestID: "bash_1",
 		Request: llm.ControlRequest{
@@ -342,7 +351,7 @@ func TestAcceptEditsHandler_BashDeferredToTUI_Session(t *testing.T) {
 	}}
 
 	if handled := s.tryHandleControlRequest(msg); handled {
-		t.Fatal("tryHandleControlRequest Bash with AcceptEditsHandler = true, want false so TUI decides it")
+		t.Fatal("tryHandleControlRequest Bash with AcceptEditsHandler = true, want false so desktop app decides it")
 	}
 }
 
@@ -350,18 +359,18 @@ type lifecycleBlockingPermissionHandler struct {
 	started chan struct{}
 }
 
-func (h lifecycleBlockingPermissionHandler) CanUseTool(req ToolPermissionRequest) (PermissionDecision, error) {
+func (h lifecycleBlockingPermissionHandler) CanUseTool(req ports.ToolPermissionRequest) (ports.PermissionDecision, error) {
 	close(h.started)
 	<-req.Ctx.Done()
-	return PermissionDecision{}, nil
+	return ports.PermissionDecision{}, nil
 }
 
 type trackingDisposablePermissionHandler struct {
 	disposeCalls atomic.Int32
 }
 
-func (*trackingDisposablePermissionHandler) CanUseTool(ToolPermissionRequest) (PermissionDecision, error) {
-	return PermissionDecision{}, nil
+func (*trackingDisposablePermissionHandler) CanUseTool(ports.ToolPermissionRequest) (ports.PermissionDecision, error) {
+	return ports.PermissionDecision{}, nil
 }
 
 func (h *trackingDisposablePermissionHandler) Dispose() {
@@ -456,6 +465,37 @@ func TestHasUnansweredQuestion_ClearedBySendUserMessage(t *testing.T) {
 	}
 	if s.hasUnansweredQuestion {
 		t.Error("hasUnansweredQuestion should be cleared after SendUserMessage")
+	}
+}
+
+func TestTryHandleControlRequest_DelegatedTaskQuestionCannotCreateRootGate(t *testing.T) {
+	s := NewSession("child-question", "feat-1", feature.PhaseImplement)
+	var stdin bytes.Buffer
+	s.SetStdinForTest(nopWriteCloser{Writer: &stdin})
+
+	msg := llm.SDKMessage{
+		Type:   "control_request",
+		Origin: llm.EventOrigin{Kind: llm.EventOriginTask, TaskID: "task-1", ChildSessionID: "child-1"},
+		ControlRequest: &llm.ControlRequestMessage{
+			Type:      "control_request",
+			RequestID: "child-question-1",
+			Request: llm.ControlRequest{
+				Subtype:  "can_use_tool",
+				ToolName: "AskUserQuestion",
+				Input:    json.RawMessage(`{"questions":[{"question":"Which API?"}]}`),
+			},
+		},
+	}
+
+	if !s.tryHandleControlRequest(msg) {
+		t.Fatal("delegated task question was surfaced as a root control request")
+	}
+	if s.HasPendingRootAskUserQuestion() {
+		t.Fatal("delegated task question created a root user-input gate")
+	}
+	if !strings.Contains(stdin.String(), `"behavior":"deny"`) ||
+		!strings.Contains(stdin.String(), "Delegated tasks cannot ask the user") {
+		t.Fatalf("child question response = %q, want explicit denial", stdin.String())
 	}
 }
 

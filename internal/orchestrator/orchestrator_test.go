@@ -20,7 +20,6 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -28,7 +27,6 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
-	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/observe"
 	"github.com/doordash-oss/agentic-orchestrator/internal/orchestrator"
@@ -43,13 +41,12 @@ import (
 // Compile-time interface satisfaction checks
 // ---------------------------------------------------------------------------
 
-// These pass in Phase 1 — no adapters needed.
+// These methods require no adapters.
 var _ ports.FeatureStore = (*feature.Store)(nil)
 var _ ports.FeatureLifecycle = (*feature.Manager)(nil)
 
-// Phase 2 — these now pass after session widening and adapter introduction.
+// Session lifecycle methods require the concrete session manager.
 var _ ports.SessionManager = (*session.Manager)(nil)
-var _ ports.WorktreeOperator = (*git.WorktreeManager)(nil)
 
 // ---------------------------------------------------------------------------
 // TestOrchestrator_CreateFeature
@@ -275,7 +272,7 @@ func TestOrchestrator_Events(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// TestOrchestrator_NoTUIImport — source-scan regression guard
+// TestOrchestrator_NoDesktopClientImport — source-scan regression guard
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
@@ -326,7 +323,6 @@ func TestOrchestrator_FxIntegration(t *testing.T) {
 		),
 		config.Module,
 		feature.Module,
-		git.Module,
 		session.Module,
 		llm.Module,
 		observe.Module,
@@ -357,40 +353,7 @@ func TestOrchestrator_FxIntegration(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// TestOrchestrator_NoTUIImport — source-scan regression guard
-// ---------------------------------------------------------------------------
-
-func TestOrchestrator_NoTUIImport(t *testing.T) {
-	dirs := []string{
-		filepath.Join("..", "ports"),
-		filepath.Join("..", "orchestrator"),
-	}
-
-	for _, dir := range dirs {
-		files, err := filepath.Glob(filepath.Join(dir, "*.go"))
-		if err != nil {
-			t.Fatalf("glob %s: %v", dir, err)
-		}
-
-		for _, path := range files {
-			if strings.HasSuffix(path, "_test.go") {
-				continue
-			}
-			data, err := os.ReadFile(path)
-			if err != nil {
-				t.Fatalf("reading %s: %v", path, err)
-			}
-			content := string(data)
-			if strings.Contains(content, `"github.com/doordash-oss/agentic-orchestrator/internal/tui"`) ||
-				strings.Contains(content, `"github.com/doordash-oss/agentic-orchestrator/internal/tui`) {
-				t.Errorf("%s imports internal/tui — ports and orchestrator must not depend on the TUI layer", path)
-			}
-		}
-	}
-}
-
-// ---------------------------------------------------------------------------
-// T24. TestNoErrNotImplementedMethods
+// TestNoErrNotImplementedMethods guards every exported orchestrator method.
 //
 // No method on *orchestrator.Orchestrator should have a body that simply
 // returns ErrNotImplemented. Walks each production .go file and parses it with
@@ -398,7 +361,7 @@ func TestOrchestrator_NoTUIImport(t *testing.T) {
 // returning an identifier named "ErrNotImplemented".
 // ---------------------------------------------------------------------------
 
-func TestPhase7_NoErrNotImplementedMethods(t *testing.T) {
+func TestOrchestratorMethodsDoNotReturnErrNotImplemented(t *testing.T) {
 	files, err := filepath.Glob(filepath.Join("..", "orchestrator", "*.go"))
 	if err != nil {
 		t.Fatalf("glob: %v", err)
@@ -438,6 +401,6 @@ func TestPhase7_NoErrNotImplementedMethods(t *testing.T) {
 	}
 
 	if len(offenders) > 0 {
-		t.Errorf("found %d ErrNotImplemented-returning methods after Phase 7: %v", len(offenders), offenders)
+		t.Errorf("found %d ErrNotImplemented-returning methods: %v", len(offenders), offenders)
 	}
 }

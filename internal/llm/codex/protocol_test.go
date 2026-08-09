@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
-	"os"
 	"strings"
 	"testing"
 
@@ -287,6 +286,80 @@ func TestCodexProtocol_NativeToollessReviewFailsClosed(t *testing.T) {
 				t.Fatalf("ParseLine() = %+v, want result/error or parse error", msgs)
 			}
 		})
+	}
+}
+
+func TestCodexProtocol_NormalizesRootAndDelegatedTaskActivity(t *testing.T) {
+	p := NewProtocol(llm.ProtocolOpts{})
+	p.SetThreadIDForTest("thread-root")
+
+	root, err := p.ParseLine([]byte(`{"method":"item/completed","params":{"threadId":"thread-root","turnId":"turn-root","item":{"id":"message-1","type":"agentMessage","text":"working"}}}`))
+	if err != nil {
+		t.Fatalf("ParseLine(root): %v", err)
+	}
+	if len(root) != 1 || root[0].Assistant == nil || !root[0].Origin.IsRoot() {
+		t.Fatalf("root messages = %+v", root)
+	}
+
+	started, err := p.ParseLine([]byte(`{"method":"item/started","params":{"threadId":"thread-root","turnId":"turn-root","item":{"id":"collab-1","type":"collabAgentToolCall","tool":"spawn_agent","status":"inProgress","receiverThreadIds":["thread-child"],"prompt":"Inspect the server package."}}}`))
+	if err != nil {
+		t.Fatalf("ParseLine(task start): %v", err)
+	}
+	if len(started) != 1 ||
+		started[0].TaskStarted == nil ||
+		started[0].Origin.Kind != llm.EventOriginTask ||
+		started[0].Origin.TaskID != "collab-1" ||
+		started[0].Origin.ChildSessionID != "thread-child" {
+		t.Fatalf("task start = %+v", started)
+	}
+
+	progress, err := p.ParseLine([]byte(`{"method":"item/started","params":{"threadId":"thread-child","turnId":"turn-child","item":{"id":"cmd-1","type":"commandExecution","command":"go test ./..."}}}`))
+	if err != nil {
+		t.Fatalf("ParseLine(child progress): %v", err)
+	}
+	if len(progress) != 1 ||
+		progress[0].TaskProgress == nil ||
+		progress[0].TaskProgress.LastToolName != "Bash" ||
+		progress[0].Origin.TaskID != "collab-1" ||
+		progress[0].Origin.ChildSessionID != "thread-child" {
+		t.Fatalf("child progress = %+v", progress)
+	}
+
+	completed, err := p.ParseLine([]byte(`{"method":"item/completed","params":{"threadId":"thread-root","turnId":"turn-root","item":{"id":"collab-1","type":"collabAgentToolCall","tool":"spawn_agent","status":"completed","receiverThreadIds":["thread-child"]}}}`))
+	if err != nil {
+		t.Fatalf("ParseLine(task completed): %v", err)
+	}
+	if len(completed) != 1 ||
+		completed[0].TaskNotification == nil ||
+		completed[0].TaskNotification.Status != "completed" ||
+		completed[0].Origin.TaskID != "collab-1" {
+		t.Fatalf("task completed = %+v", completed)
+	}
+}
+
+func TestCodexProtocol_IgnoresUnboundDelegatedTaskStart(t *testing.T) {
+	p := NewProtocol(llm.ProtocolOpts{})
+	p.SetThreadIDForTest("thread-root")
+
+	msgs, err := p.ParseLine([]byte(`{"method":"item/started","params":{"threadId":"thread-root","turnId":"turn-root","item":{"id":"collab-abandoned","type":"collabAgentToolCall","tool":"spawnAgent","status":"inProgress","receiverThreadIds":[],"prompt":"Inspect the server package."}}}`))
+	if err != nil {
+		t.Fatalf("ParseLine(task start): %v", err)
+	}
+	if len(msgs) != 0 {
+		t.Fatalf("unbound delegated task messages = %+v, want no running task before Codex assigns a child thread", msgs)
+	}
+}
+
+func TestCodexProtocol_IgnoresUncorrelatedChildThreadActivity(t *testing.T) {
+	p := NewProtocol(llm.ProtocolOpts{})
+	p.SetThreadIDForTest("thread-root")
+
+	msgs, err := p.ParseLine([]byte(`{"method":"item/started","params":{"threadId":"thread-unknown","turnId":"turn-child","item":{"id":"cmd-1","type":"commandExecution","command":"go test ./..."}}}`))
+	if err != nil {
+		t.Fatalf("ParseLine(child): %v", err)
+	}
+	if len(msgs) != 0 {
+		t.Fatalf("uncorrelated child messages = %+v, want no invented task identity", msgs)
 	}
 }
 
@@ -1237,6 +1310,40 @@ func TestBuildAskUserAnswerEnvelope_HandlesMissingOptions(t *testing.T) {
 	}
 }
 
+// TestRespondToAskUser_NativePreservesCustomAnswer pins the native JSON-RPC
+// response contract for a free-text custom answer.
+func TestRespondToAskUser_NativePreservesCustomAnswer(t *testing.T) {
+	var buf bytes.Buffer
+	p := NewProtocol(llm.ProtocolOpts{})
+	p.SetStdin(&buf)
+	p.SetQuestionIDsForTest(map[string]string{"Which approach?": "question-7"})
+
+	const customAnswer = "Use a third custom approach"
+	if err := p.RespondToAskUser(
+		"42",
+		json.RawMessage(`{"questions":[{"question":"Which approach?"}]}`),
+		map[string]string{"Which approach?": customAnswer},
+		nil,
+	); err != nil {
+		t.Fatalf("RespondToAskUser: %v", err)
+	}
+
+	var out struct {
+		JSONRPC string        `json:"jsonrpc"`
+		ID      int           `json:"id"`
+		Result  AskUserResult `json:"result"`
+	}
+	if err := json.Unmarshal(bytes.TrimSpace(buf.Bytes()), &out); err != nil {
+		t.Fatalf("unmarshal response: %v (raw=%q)", err, buf.String())
+	}
+	if out.JSONRPC != "2.0" || out.ID != 42 {
+		t.Fatalf("response envelope = %+v, want JSON-RPC id 42", out)
+	}
+	if len(out.Result.Answers) != 1 || out.Result.Answers[0].QuestionID != "question-7" || out.Result.Answers[0].Value != customAnswer {
+		t.Fatalf("answers = %+v, want question-7 with verbatim custom value", out.Result.Answers)
+	}
+}
+
 // TestRespondToAskUser_SyntheticSendsFramedFollowUp pins down the wire
 // behaviour the synthetic ask-user path produces. Before this change it sent
 // the bare answer string ("Replace README.md") as a fresh user turn, and Codex
@@ -1339,8 +1446,16 @@ func TestTurnCompletedComputesCostWithCachedInputTokens(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := p.parseNotification("thread/tokenUsage/updated", params); !ok {
+	usageMsg, ok := p.parseNotification("thread/tokenUsage/updated", params)
+	if !ok {
 		t.Fatal("token usage notification ok = false, want true")
+	}
+	const want = 10.90 // Long context: 600K at $10/M + 400K cached at $1/M + 100K output at $45/M
+	if usageMsg.UsageUpdate == nil {
+		t.Fatal("usage notification UsageUpdate = nil")
+	}
+	if diff := usageMsg.UsageUpdate.CostUSD - want; diff < -0.001 || diff > 0.001 {
+		t.Fatalf("running CostUSD = %.6f, want %.2f", usageMsg.UsageUpdate.CostUSD, want)
 	}
 
 	msg, ok := p.parseNotification("turn/completed", completedTurnParams(t, "thread-1"))
@@ -1350,7 +1465,6 @@ func TestTurnCompletedComputesCostWithCachedInputTokens(t *testing.T) {
 	if msg.Result == nil {
 		t.Fatal("Result = nil")
 	}
-	const want = 10.90 // Long context: 600K at $10/M + 400K cached at $1/M + 100K output at $45/M
 	if diff := msg.Result.TotalCostUSD - want; diff < -0.001 || diff > 0.001 {
 		t.Fatalf("TotalCostUSD = %.6f, want %.2f", msg.Result.TotalCostUSD, want)
 	}
@@ -1856,8 +1970,8 @@ APPROVED`
 // single turn (rg/cat to ground its question in the codebase) and then
 // asks the one remaining ambiguity as a well-formed numbered-options
 // question. Even though turnHadToolUse=true, the question must surface
-// as a control_request rather than emitting a SUCCESS Result that
-// triggers session shutdown without a phase_complete.
+// as a control_request rather than emitting a SUCCESS result that the harness
+// would classify as a missing-root-outcome violation.
 func TestTurnCompleted_NumberedOptionsAfterToolUseSurfacesQuestion(t *testing.T) {
 	var buf bytes.Buffer
 	p := NewProtocol(llm.ProtocolOpts{WorkDir: "/tmp/test", Model: "codex"})
@@ -1929,9 +2043,9 @@ func TestTurnCompleted_FreeFormSentinelAfterToolUse(t *testing.T) {
 // false-positive guard. A tool-heavy turn whose final text merely contains
 // '?' without numbered options or a FREE_FORM sentinel — e.g., narrating
 // intent like "Wrote the file. Is that what you wanted?" — must NOT be
-// reclassified as a question when no MarkerPath is configured (legacy /
-// test paths). Without the no-tool-use gate on the loose path, every mid-
-// turn rhetorical '?' would synthesize an AskUser and stall the session.
+// reclassified as a question. Without the no-tool-use gate on the loose path,
+// every mid-turn rhetorical '?' would synthesize an AskUser and stall the
+// session.
 func TestTurnCompleted_LooseQuestionAfterToolUseEmitsSuccess(t *testing.T) {
 	var buf bytes.Buffer
 	p := NewProtocol(llm.ProtocolOpts{WorkDir: "/tmp/test", Model: "codex"})
@@ -1940,7 +2054,7 @@ func TestTurnCompleted_LooseQuestionAfterToolUseEmitsSuccess(t *testing.T) {
 
 	p.mu.Lock()
 	p.turnHadToolUse = true
-	p.lastAssistantText = "Wrote the README and touched phase_complete. Is that what you wanted?"
+	p.lastAssistantText = "Wrote the README. Is that what you wanted?"
 	p.mu.Unlock()
 
 	msg, ok := p.parseNotification("turn/completed", completedTurnParams(t, "thread-1"))
@@ -1955,84 +2069,6 @@ func TestTurnCompleted_LooseQuestionAfterToolUseEmitsSuccess(t *testing.T) {
 	}
 	if buf.Len() != 0 {
 		t.Errorf("unexpected reformat follow-up written to stdin: %s", buf.String())
-	}
-}
-
-func TestTurnCompleted_LooseQuestionAfterToolUse_NoMarker_TriggersReformat(t *testing.T) {
-	tmp := t.TempDir()
-	markerPath := tmp + "/phase_complete"
-
-	var buf bytes.Buffer
-	p := NewProtocol(llm.ProtocolOpts{
-		WorkDir:    "/tmp/test",
-		Model:      "codex",
-		MarkerPath: markerPath,
-	})
-	p.SetStdin(&buf)
-	p.SetThreadIDForTest("thread-1")
-
-	p.mu.Lock()
-	p.turnHadToolUse = true
-	p.lastAssistantText = "I'd recommend keeping the no-subcommand launch contract. Is that the startup contract you want for the web replacement?"
-	p.mu.Unlock()
-
-	msg, ok := p.parseNotification("turn/completed", completedTurnParams(t, "thread-1"))
-	if ok {
-		t.Fatalf("parseNotification ok = true (msg=%+v); want false (reformat-retry suppresses the message)", msg)
-	}
-	if buf.Len() == 0 {
-		t.Fatal("expected a reformat follow-up turn to be written to stdin")
-	}
-	if !strings.Contains(buf.String(), "not in the required question format") {
-		t.Errorf("reformat reminder missing format-violation language; payload=%s", buf.String())
-	}
-	p.mu.Lock()
-	retry := p.formatRetryCount
-	p.mu.Unlock()
-	if retry != 1 {
-		t.Errorf("formatRetryCount = %d, want 1 after first marker-absent loose-question turn", retry)
-	}
-}
-
-// TestTurnCompleted_LooseQuestionAfterToolUse_WithMarker_EmitsSuccess
-// covers the legitimate completion path. The agent did tool use, the
-// marker file IS present on disk (i.e., the agent executed the
-// completion contract), and the trailing "?" is rhetorical narration.
-// Marker presence is the authoritative completion signal, so we emit a
-// SUCCESS Result without sending a reformat reminder.
-func TestTurnCompleted_LooseQuestionAfterToolUse_WithMarker_EmitsSuccess(t *testing.T) {
-	tmp := t.TempDir()
-	markerPath := tmp + "/phase_complete"
-	if err := os.WriteFile(markerPath, nil, 0o644); err != nil {
-		t.Fatalf("write marker: %v", err)
-	}
-
-	var buf bytes.Buffer
-	p := NewProtocol(llm.ProtocolOpts{
-		WorkDir:    "/tmp/test",
-		Model:      "codex",
-		MarkerPath: markerPath,
-	})
-	p.SetStdin(&buf)
-	p.SetThreadIDForTest("thread-1")
-
-	p.mu.Lock()
-	p.turnHadToolUse = true
-	p.lastAssistantText = "Wrote the README and touched phase_complete. Is that what you wanted?"
-	p.mu.Unlock()
-
-	msg, ok := p.parseNotification("turn/completed", completedTurnParams(t, "thread-1"))
-	if !ok {
-		t.Fatal("parseNotification ok = false, want true")
-	}
-	if msg.Type != "result" || msg.Subtype != "success" {
-		t.Fatalf("got Type=%q Subtype=%q, want result/success when marker is present", msg.Type, msg.Subtype)
-	}
-	if msg.ControlRequest != nil {
-		t.Errorf("unexpected ControlRequest when marker is present: %+v", msg.ControlRequest)
-	}
-	if buf.Len() != 0 {
-		t.Errorf("unexpected reformat follow-up written to stdin when marker is present: %s", buf.String())
 	}
 }
 

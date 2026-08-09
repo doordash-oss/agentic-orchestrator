@@ -515,11 +515,11 @@ func validatePathOperand(arg, workDir string, writableRoots []string) bool {
 		return false
 	}
 	parts := strings.Split(arg, "/")
-	for _, part := range parts {
+	for i, part := range parts {
 		if part == ".." {
 			return false
 		}
-		if isSensitivePathComponent(part) {
+		if isSensitivePathComponent(part) && !isExemptWorktreesComponent(parts, i) {
 			return false
 		}
 	}
@@ -674,4 +674,27 @@ var sensitivePathComponents = []string{
 	"credentials", "credential", "secret", "secrets",
 	"id_rsa", "id_dsa", "id_ecdsa", "id_ed25519",
 	"password", "passwd",
+}
+
+// StateParentComponents are the orchestrator state-parent directory names.
+// Feature repo checkouts live inside them under a worktrees/ subtree, so a
+// state-parent path component immediately followed by "worktrees" is exempt
+// from sensitive-path protection; every other child (features/, config.yaml,
+// tokens, provider state) stays protected. internal/agent's sandbox grant
+// policy shares this definition.
+var StateParentComponents = []string{".agentic-workflow", ".agentic-orchestrator"}
+
+// isExemptWorktreesComponent reports whether the sensitive component parts[i]
+// is a state parent immediately followed by a "worktrees" component.
+func isExemptWorktreesComponent(parts []string, i int) bool {
+	if i+1 >= len(parts) || !strings.EqualFold(parts[i+1], "worktrees") {
+		return false
+	}
+	lower := strings.ToLower(parts[i])
+	for _, s := range StateParentComponents {
+		if lower == s {
+			return true
+		}
+	}
+	return false
 }

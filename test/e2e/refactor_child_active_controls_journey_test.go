@@ -40,7 +40,7 @@ import (
 // TestRefactorChildActiveControlsJourney exercises the active-child control
 // surface end-to-end through the real API: paired config propagation,
 // relationship-guard enforcement on parent mutations, the restricted child
-// action catalog, review-decision resume through configured gates, and the
+// action catalog, review-session decisions through configured gates, and the
 // running-discard state machine that closes the child with outcome
 // "discarded" while preserving the parent's paired configuration and
 // clearing the active-child projection so a new child can be launched. The
@@ -96,7 +96,6 @@ func TestRefactorChildActiveControlsJourney(t *testing.T) {
 	wm := git.NewWorktreeManager(wtBaseDir)
 	mgr := feature.NewManager(store, config.NewDefault())
 	mgr.Worktrees = wm
-	mgr.Cleanliness = journeyCleanliness(wm)
 
 	serverEvents := make(chan interface{}, 512)
 	stopForwarding := make(chan struct{})
@@ -110,11 +109,9 @@ func TestRefactorChildActiveControlsJourney(t *testing.T) {
 		Lifecycle:   mgr,
 		Store:       store,
 		Sessions:    sm,
-		Publisher:   &git.PublishAdapter{},
 		Worktrees:   wm,
 		PhaseRunner: pr,
 		CmdRunner:   pr.CommandRunner,
-		Cleanliness: journeyCleanliness(wm),
 	}, orchestrator.Hooks{})
 	t.Cleanup(func() {
 		_ = orch.Shutdown()
@@ -226,11 +223,6 @@ func TestRefactorChildActiveControlsJourney(t *testing.T) {
 		{"mark-done", `{}`},
 		{"cleanup", `{}`},
 		{"pause-stop", `{}`},
-		// A review-decision on a terminal parent (Published) with an
-		// active child can restart the parent pipeline (CodeReady ->
-		// ImplementReady); it must be rejected with parent_mutation_locked
-		// even via a direct trusted POST that bypasses action discovery.
-		{"review-decision", `{"decision":"proceed","roadmap":true}`},
 	}
 	for _, ca := range conflictActions {
 		status, respBody := postActionStatus(t, srv.URL, parent.ID, ca.action, ca.body)
@@ -310,7 +302,7 @@ func TestRefactorChildActiveControlsJourney(t *testing.T) {
 	// Step 4: Restart/resume — approve the roadmap gate to continue to the
 	// phase-plan review gate.
 	// ------------------------------------------------------------------
-	postAction(t, srv.URL, childID, "review-decision", `{"decision":"proceed","roadmap":true}`)
+	postReviewSessionProceed(t, srv.URL, childID)
 	waitForJourneyGate(t, srv.URL, childID, 1)
 
 	// ------------------------------------------------------------------
@@ -389,7 +381,7 @@ func (t *journeyMutationTarget) DiscardChild(featureID string) (server.DiscardCh
 	return resp, nil
 }
 
-// ScanRecovery mirrors the production mutation target so a TUI cold boot
+// ScanRecovery mirrors the production mutation target so a client cold boot
 // (which always pulls the recovery snapshot) sees the real orphan/session
 // scan rather than the unimplemented embedded interface.
 func (t *journeyMutationTarget) ScanRecovery(ctx context.Context) ([]ports.RecoveryItem, error) {
@@ -433,7 +425,7 @@ func (t *journeyMutationTarget) StopFeature(featureID string) (server.FeatureSto
 // RestartFeature mirrors the production mutation target: RestartPhase
 // computes the restart outcome under the relationship guard, and the
 // returned outcome drives the ordinary resume dispatch (StartFeature for a
-// phase restart, StartRepoCycleImplement for repo cycles).
+// phase restart).
 func (t *journeyMutationTarget) RestartFeature(featureID string, req server.RestartFeatureRequest) (server.FeatureRestartResponse, error) {
 	resp := server.FeatureRestartResponse{FeatureID: featureID, Result: "failed"}
 	outcome, err := t.orch.RestartPhase(featureID, req.MaxIterationsDelta, req.MaxPlanIterationsDelta)
@@ -453,20 +445,6 @@ func (t *journeyMutationTarget) RestartFeature(featureID string, req server.Rest
 		if err := t.orch.StartFeature(featureID); err != nil {
 			resp.Result = "failed"
 			return resp, err
-		}
-		return resp, nil
-	case orchestrator.RestartDispatchRepoCycles:
-		resp.Dispatch = "repo_cycles"
-		resp.RepoCycleCount = len(outcome.RepoCycleRestarts)
-		for _, restart := range outcome.RepoCycleRestarts {
-			sessionID, err := t.orch.StartRepoCycleImplement(featureID, restart.RepoName, restart.CycleType, restart.PlanContent)
-			if sessionID != "" {
-				resp.SessionIDs = append(resp.SessionIDs, sessionID)
-			}
-			if err != nil {
-				resp.Result = "failed"
-				return resp, err
-			}
 		}
 		return resp, nil
 	default:
@@ -529,7 +507,7 @@ func (t *journeyMutationTarget) PublishFeature(featureID string, req server.Publ
 	return server.PublishFeatureResponse{FeatureID: featureID, Result: "published"}, nil
 }
 
-func (t *journeyMutationTarget) MarkDone(featureID string) (server.MarkDoneResponse, error) {
+func (t *journeyMutationTarget) MarkDone(featureID string, _ server.GuardedFeatureActionRequest) (server.MarkDoneResponse, error) {
 	if err := t.orch.MarkDone(featureID); err != nil {
 		return server.MarkDoneResponse{FeatureID: featureID, Result: "failed"}, err
 	}
@@ -550,7 +528,7 @@ func (t *journeyMutationTarget) CleanupFeature(featureID string, req server.Clea
 	return resp, nil
 }
 
-func (t *journeyMutationTarget) DeleteFeature(featureID string) (server.DeleteFeatureResponse, error) {
+func (t *journeyMutationTarget) DeleteFeature(featureID string, _ server.GuardedFeatureActionRequest) (server.DeleteFeatureResponse, error) {
 	result, err := t.orch.DeleteCascade(featureID)
 	if err != nil {
 		return server.DeleteFeatureResponse{FeatureID: featureID}, err

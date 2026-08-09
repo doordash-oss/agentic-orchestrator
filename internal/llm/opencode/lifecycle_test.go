@@ -105,6 +105,9 @@ func TestUsageUpdateCarriesContextAndCost(t *testing.T) {
 	if u.ContextBaseline != 0 {
 		t.Fatalf("context baseline = %d, want 0 (OpenCode has no fixed overhead)", u.ContextBaseline)
 	}
+	if u.CostUSD != 0.0425 {
+		t.Fatalf("running cost = %v, want 0.0425", u.CostUSD)
+	}
 
 	// The cost rides through to the terminal result's TotalCostUSD.
 	r := terminalResult(t, mustParse(t, p, promptResultLine(t, promptID, "end_turn", nil)))
@@ -503,8 +506,9 @@ func TestInterrupt_CancelledPromptIsNonSuccessAndSticky(t *testing.T) {
 	if len(cancelled) != 1 || cancelled[0].Result == nil || cancelled[0].Result.IsSuccess() {
 		t.Fatalf("cancelled prompt produced %+v, want a non-success result", cancelled)
 	}
-	if cls := llm.ClassifyTermination(llm.TerminationInputs{Result: cancelled[0].Result, PhaseCompleteExists: true}); cls != llm.TermErrored {
-		t.Fatalf("cancelled result with marker classified as %v, want Errored", cls)
+	intent := llm.CompletionIntent{Found: true, Status: llm.CompletionIntentSuccess}
+	if got := llm.ClassifyTurn(llm.TurnSignals{Result: cancelled[0].Result, RootIntent: intent}); got != llm.TurnErrored {
+		t.Fatalf("cancelled result classified as %v, want Errored", got)
 	}
 
 	// A late end_turn after the sealed cancellation must not emit a success.

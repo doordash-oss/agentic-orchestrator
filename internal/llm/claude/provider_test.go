@@ -521,7 +521,7 @@ func TestClaudeProvider_ContextWindowForModel_ReturnsHardcodedWithoutSeed(t *tes
 }
 
 // TestClaudeProvider_ModelCatalog_FallsBackToHardcoded verifies the same
-// fallback on the catalog-exposing API that the TUI and registry depend on.
+// fallback on the catalog-exposing API that the desktop app and registry depend on.
 func TestClaudeProvider_ModelCatalog_FallsBackToHardcoded(t *testing.T) {
 	p := &Provider{}
 	got := p.ModelCatalog()

@@ -109,6 +109,23 @@ func (o *Orchestrator) startFeatureAfterSetup(featureID string) error {
 	return o.StartFeature(featureID)
 }
 
+// RunSetupOnly runs the queued durable setup without starting orchestration:
+// on success the feature returns to StatusCreated, a startable
+// pre-orchestration state where the action catalogue enables Start but no
+// planning or provider session has begun. Setup progress and failure are
+// still emitted through the standard setup events.
+func (o *Orchestrator) RunSetupOnly(featureID string) error {
+	return o.runSetupWith(false, featureID)
+}
+
+// RetrySetupOnly reruns only the unfinished setup tasks of a failed setup,
+// preserving completed task state, without starting orchestration. On
+// success the feature reaches the same startable StatusCreated state as
+// RunSetupOnly.
+func (o *Orchestrator) RetrySetupOnly(featureID string) error {
+	return o.runSetupWith(true, featureID)
+}
+
 func (o *Orchestrator) runSetupWith(retry bool, featureID string) error {
 	runner, ok := o.deps.Lifecycle.(setupRunner)
 	if !ok {

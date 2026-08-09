@@ -81,7 +81,6 @@ func planValidatorRoleSpec(role Role, skillName, axis string) RoleSpec {
 			validatorAttemptDirOutputRoot(),
 			validatorHelperDirOutputRoot(),
 		},
-		MarkerRoot: "helper_dir",
 		Artifact: RoleArtifactSpec{
 			Name:         "plan_validator_feedback",
 			DisplayPath:  fmt.Sprintf("validation-%s-feedback.md", axis),
@@ -97,10 +96,11 @@ func planValidatorRoleSpec(role Role, skillName, axis string) RoleSpec {
 // ValidateSpecializedUserInput is the data passed to
 // validate_specialized.user.tmpl.
 type ValidateSpecializedUserInput struct {
-	Name         string
-	Description  string
-	ExitCriteria string
-	RiskLevel    string
+	Name             string
+	Description      string
+	ExitCriteria     string
+	AcceptanceClause string
+	RiskLevel        string
 
 	DomainName string
 	PlanPath   string

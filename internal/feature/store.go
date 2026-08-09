@@ -17,6 +17,7 @@ package feature
 import (
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -65,7 +66,12 @@ func IsPartialLoadError(err error) bool {
 
 type Store struct {
 	BaseDir string
-	mu      sync.Mutex // serializes writes while reads use atomic file commits
+	// mu serializes writes against each other and against the multi-record
+	// relationship scans, which hold it shared: those scans read every
+	// feature.yaml, so exclusive reads would queue concurrent API reads
+	// behind one another and behind every mutation. Single-record reads rely
+	// on atomic file commits and take no lock at all.
+	mu sync.RWMutex
 
 	// testSaveInterceptor is a test-only hook consulted by saveUnlocked to
 	// inject failures. The concrete wiring lives in export_test.go.
@@ -80,12 +86,19 @@ type RelationshipChildren struct {
 	Closed []*Feature
 }
 
-// isLegacyProviderBookkeepingDir identifies provider-owned directories that
-// older Agentico versions wrote beneath the feature store. They are not
-// feature records and must not participate in feature or relationship scans.
+// isLegacyProviderBookkeepingDir identifies runtime-owned directories written
+// beneath the feature store: provider bookkeeping from older Agentico
+// versions plus the server-owned AMA chat session state. They are not feature
+// records and must not participate in feature or relationship scans.
+// ErrLegacySchemaVersion marks a record persisted by an older release with an
+// explicit lower schema version. Legacy records predate child relationships,
+// so relationship scans may skip them; every other read path still refuses
+// the record.
+var ErrLegacySchemaVersion = errors.New("legacy feature schema version")
+
 func isLegacyProviderBookkeepingDir(name string) bool {
 	switch name {
-	case "opencode", "codex-home":
+	case "opencode", "codex-home", "chat":
 		return true
 	default:
 		return false
@@ -178,8 +191,8 @@ func (s *Store) ModifyGuarded(
 // history derived from child-owned Parent links. It fails closed if any stored
 // record cannot be loaded or carries an invalid relationship lifecycle state.
 func (s *Store) RelationshipChildren(parentID string) (*RelationshipChildren, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 
 	return s.relationshipChildrenUnlocked(parentID)
 }
@@ -220,8 +233,9 @@ func (s *Store) CloseChild(childID, outcome string, closedAt time.Time) error {
 }
 
 // SetClosedChildDiffSummary records the best-effort preserved diff summary of
-// a closed child for post-close inspection. It no-ops when the feature is not
-// a closed child (the close write owns ordering) or the summary is unchanged.
+// a closed child for post-close inspection, bounded at DiffSummaryBudget. It
+// no-ops when the feature is not a closed child (the close write owns
+// ordering) or the summary is unchanged.
 func (s *Store) SetClosedChildDiffSummary(childID, summary string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -229,6 +243,7 @@ func (s *Store) SetClosedChildDiffSummary(childID, summary string) error {
 	if summary == "" {
 		return nil
 	}
+	summary = BoundDiffSummary(summary)
 	child, err := s.loadUnlocked(childID)
 	if err != nil {
 		return err
@@ -248,8 +263,13 @@ func (s *Store) relationshipChildrenUnlocked(parentID string) (*RelationshipChil
 	if err != nil {
 		return nil, err
 	}
-	sort.Slice(result.Closed, func(i, j int) bool {
-		left, right := result.Closed[i], result.Closed[j]
+	sortClosedChildren(result.Closed)
+	return result, nil
+}
+
+func sortClosedChildren(closed []*Feature) {
+	sort.Slice(closed, func(i, j int) bool {
+		left, right := closed[i], closed[j]
 		if !left.Parent.ClosedAt.Equal(*right.Parent.ClosedAt) {
 			return left.Parent.ClosedAt.After(*right.Parent.ClosedAt)
 		}
@@ -258,6 +278,63 @@ func (s *Store) relationshipChildrenUnlocked(parentID string) (*RelationshipChil
 		}
 		return left.ID < right.ID
 	})
+}
+
+// AllRelationshipChildren classifies every stored child by its parent in a
+// single directory pass, enforcing the same fail-closed invariants as
+// RelationshipChildren. Parents without children have no map entry.
+func (s *Store) AllRelationshipChildren() (map[string]*RelationshipChildren, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	entries, err := os.ReadDir(s.BaseDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return map[string]*RelationshipChildren{}, nil
+		}
+		return nil, fmt.Errorf("listing features directory: %w", err)
+	}
+	result := map[string]*RelationshipChildren{}
+	for _, entry := range entries {
+		if !entry.IsDir() || isLegacyProviderBookkeepingDir(entry.Name()) {
+			continue
+		}
+		child, err := s.loadUnlocked(entry.Name())
+		if err != nil {
+			if errors.Is(err, ErrLegacySchemaVersion) {
+				// Legacy records predate child relationships; one stale
+				// record must not fail every relationship read.
+				log.Printf("feature store: skipping legacy record %q during relationship scan: %v", entry.Name(), err)
+				continue
+			}
+			return nil, fmt.Errorf("classifying feature record %q during relationship scan: %w", entry.Name(), err)
+		}
+		if child.Parent == nil || child.Parent.ParentID == child.ID {
+			continue
+		}
+		if err := validateChildRelationship(child); err != nil {
+			return nil, err
+		}
+		children := result[child.Parent.ParentID]
+		if children == nil {
+			children = &RelationshipChildren{}
+			result[child.Parent.ParentID] = children
+		}
+		if child.IsActiveChild() {
+			if children.Active != nil {
+				return nil, &ChildRelationshipError{
+					ChildID: child.ID,
+					Reason:  fmt.Sprintf("parent %s has multiple active children %s and %s", child.Parent.ParentID, children.Active.ID, child.ID),
+				}
+			}
+			children.Active = child
+			continue
+		}
+		children.Closed = append(children.Closed, child)
+	}
+	for _, children := range result {
+		sortClosedChildren(children.Closed)
+	}
 	return result, nil
 }
 
@@ -280,6 +357,12 @@ func (s *Store) validatedRelationshipChildrenUnlocked(parentID string) (*Relatio
 		}
 		child, err := s.loadUnlocked(entry.Name())
 		if err != nil {
+			if errors.Is(err, ErrLegacySchemaVersion) {
+				// Legacy records predate child relationships; one stale
+				// record must not fail every relationship read.
+				log.Printf("feature store: skipping legacy record %q during relationship scan: %v", entry.Name(), err)
+				continue
+			}
 			return nil, fmt.Errorf("classifying feature record %q during relationship scan: %w", entry.Name(), err)
 		}
 		if child.Parent == nil || child.Parent.ParentID != parentID {
@@ -458,6 +541,18 @@ func (s *Store) loadUnlocked(id string) (*Feature, error) {
 	if err != nil {
 		return nil, fmt.Errorf("reading feature file: %w", err)
 	}
+	var header struct {
+		SchemaVersion int `yaml:"schema_version"`
+	}
+	if err := yaml.Unmarshal(data, &header); err != nil {
+		return nil, fmt.Errorf("parsing feature file: %w", err)
+	}
+	if header.SchemaVersion != SchemaVersionCurrent {
+		if header.SchemaVersion > 0 && header.SchemaVersion < SchemaVersionCurrent {
+			return nil, fmt.Errorf("feature schema version %d, expected %d: %w", header.SchemaVersion, SchemaVersionCurrent, ErrLegacySchemaVersion)
+		}
+		return nil, fmt.Errorf("feature schema version %d, expected %d", header.SchemaVersion, SchemaVersionCurrent)
+	}
 	var f Feature
 	if err := yaml.Unmarshal(data, &f); err != nil {
 		return nil, fmt.Errorf("parsing feature file: %w", err)
@@ -483,8 +578,6 @@ func (s *Store) loadRunUnlocked(featureID string, runNumber int) (*Run, error) {
 	if err := yaml.Unmarshal(data, &r); err != nil {
 		return nil, fmt.Errorf("parsing run file: %w", err)
 	}
-	normalizeLegacyArtifactAliases(r.Artifacts)
-	dropUnknownCycleState(&r)
 	return &r, nil
 }
 
@@ -548,6 +641,36 @@ func (s *Store) CreateRun(featureID string, r *Run) error {
 // LoadRun reads a specific run's run.yaml.
 func (s *Store) LoadRun(featureID string, runNumber int) (*Run, error) {
 	return s.loadRunUnlocked(featureID, runNumber)
+}
+
+// ListRuns enumerates every run directory on disk for a feature and returns
+// the parseable run numbers sorted ascending. It reads the filesystem rather
+// than deriving from ActiveRun/RunCount so it survives active-run gaps left
+// by crash recovery and reports run numbers above 999 without lexicographic
+// truncation. A missing runs directory yields an empty slice and no error.
+// Callers paginate/newest-first by reversing the result.
+func (s *Store) ListRuns(featureID string) ([]int, error) {
+	runsDir := filepath.Join(s.BaseDir, featureID, "runs")
+	entries, err := os.ReadDir(runsDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("listing runs directory: %w", err)
+	}
+	var runNumbers []int
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		n, ok := parseRunDirName(e.Name())
+		if !ok {
+			continue
+		}
+		runNumbers = append(runNumbers, n)
+	}
+	sort.Ints(runNumbers)
+	return runNumbers, nil
 }
 
 // SaveRun writes a run.yaml. Panics if r.IsSealed() — a sealed run is
@@ -1002,10 +1125,8 @@ func (s *Store) writeFeatureYAMLUnlocked(id string, f *Feature) error {
 	return nil
 }
 
-// parseRunDirName parses "run-NNN" directory names into their numeric run
-// number. Accepts any positive-integer suffix so numeric sort order (not
-// lexicographic) works for run-1000+. Returns (0, false) for unparseable
-// names.
+// parseRunDirName parses canonical run directory names into their numeric run
+// number. Returns (0, false) for names the current writer would not emit.
 func parseRunDirName(name string) (int, bool) {
 	rest, ok := strings.CutPrefix(name, "run-")
 	if !ok || rest == "" {
@@ -1013,6 +1134,9 @@ func parseRunDirName(name string) (int, bool) {
 	}
 	n, err := strconv.Atoi(rest)
 	if err != nil || n <= 0 {
+		return 0, false
+	}
+	if RunDirName(n) != name {
 		return 0, false
 	}
 	return n, true

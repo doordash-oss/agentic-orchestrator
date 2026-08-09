@@ -33,11 +33,23 @@ Thumbs.db
 .env.*
 *.pem
 *.key
+*.p12
+*.cer
 id_rsa*
 id_ed25519*
 *.log
 
 # Claude
 .claude/
-/agentic
-/bin/agentic
+/agentico
+
+# Node / desktop app
+node_modules/
+desktop/out/
+desktop/test-results/
+desktop/dist/
+desktop/coverage/
+playwright-report/
+# Packaging staging area (server binary + build-identity.json), regenerated
+# by desktop/scripts/prepare-server.mjs on every package build.
+desktop/resources/

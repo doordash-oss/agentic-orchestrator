@@ -99,8 +99,8 @@ func TestRecoveryAdapter_ExecuteDelegatesToPackageFunction(t *testing.T) {
 		t.Fatalf("expected 1 item, got %d", len(items))
 	}
 
-	actions := map[string]session.RecoveryAction{
-		session.RecoveryActionKey("feat-exec", ""): session.RecoverySkip,
+	actions := map[string]ports.RecoveryAction{
+		ports.RecoveryActionKey("feat-exec", ""): ports.RecoverySkip,
 	}
 	if err := adapter.ExecuteRecovery(context.Background(), items, actions); err != nil {
 		t.Fatalf("ExecuteRecovery: %v", err)

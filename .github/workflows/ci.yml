@@ -22,5 +22,86 @@ jobs:
       - name: go vet
         run: go vet ./...
 
+      - name: OpenAPI drift (generated Go server code)
+        run: go run ./tools/openapi-generate --check
+
       - name: go test
         run: go test ./... -short -count=1
+
+  # Native package gate per platform: strict checks (typecheck, lint, format,
+  # OpenAPI->TypeScript drift), unit/component/security suites, production
+  # build, then construct and inspect the unsigned package for this host
+  # (universal DMG on macOS; x64 AppImage + deb on ubuntu-latest x64; arm64
+  # AppImage + deb on ubuntu-24.04-arm). Every supported Linux architecture
+  # is built and inspected on a native runner so delivered package coverage
+  # spans Linux x64 and arm64 without gaps.
+  desktop:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history so `git describe --tags` produces the real server
+          # version bound into build-identity.json.
+          fetch-depth: 0
+          fetch-tags: true
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Check (typecheck, lint, format, API drift)
+        run: npm run check
+
+      - name: Unit and component tests
+        run: npm test
+
+      - name: Security tests
+        run: npm run test:security
+
+      - name: Build
+        run: npm run build
+
+      - name: Package and verify (native target)
+        run: npm run package:verify
+
+      # Packaged E2E journeys (Task 6b): Playwright drives the unpacked app
+      # verified above with the real bundled server. Electron needs a display
+      # on Linux, so the ubuntu leg runs under xvfb.
+      - name: Packaged E2E journeys
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            xvfb-run -a --server-args="-screen 0 1600x1000x24" npm run test:e2e:packaged
+          else
+            npm run test:e2e:packaged
+          fi
+
+      - name: Preserve packaging evidence on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-${{ matrix.os }}-failure-evidence
+          if-no-files-found: ignore
+          retention-days: 7
+          path: |
+            desktop/dist/**/*.dmg
+            desktop/dist/**/*.AppImage
+            desktop/dist/**/*.deb
+            desktop/dist/**/*.yml
+            desktop/dist/**/*.yaml
+            desktop/dist/package-verification.json
+            desktop/dist/builder-debug.yml
+            desktop/resources/build-identity.json
+            desktop/test-results/

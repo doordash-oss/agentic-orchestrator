@@ -18,7 +18,11 @@
 
 > {{ blockquote .Description }}
 
-{{ if .Images }}Attached Images:
+{{ if .ExitCriteria }}**Exit criteria** (the user's acceptance conditions — probe anything ambiguous, unmeasurable, or contradictory):
+
+> {{ blockquote .ExitCriteria }}
+
+{{ end }}{{ if .Images }}Attached Images:
 {{ range $i, $p := .Images }}- [Image #{{ inc $i }}]: {{ $p }}
 {{ end }}
 {{ end }}{{ if .Attachments }}Attached Files:

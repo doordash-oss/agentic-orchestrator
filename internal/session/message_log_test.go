@@ -412,9 +412,9 @@ func TestMessageLog_UpdateLastAssistantPartial(t *testing.T) {
 		log.UpdateLastAssistantPartial(partial("The main binary"))
 		log.UpdateLastAssistantPartial(partial("The main binary is flag-only"))
 		log.Append(toolProgress("running rg ..."))
-		log.UpdateLastAssistantPartial(partial("The main binary is flag-only, then runs Bubble Tea"))
+		log.UpdateLastAssistantPartial(partial("The main binary is flag-only, then starts the server"))
 		log.Append(toolProgress("more output"))
-		log.UpdateLastAssistantPartial(partial("The main binary is flag-only, then runs Bubble Tea. orchestrator actions."))
+		log.UpdateLastAssistantPartial(partial("The main binary is flag-only, then starts the server. orchestrator actions."))
 
 		msgs := log.Messages()
 		var partials []string
@@ -426,7 +426,7 @@ func TestMessageLog_UpdateLastAssistantPartial(t *testing.T) {
 		if len(partials) != 1 {
 			t.Fatalf("want exactly 1 in-flight partial after coalescing, got %d: %v", len(partials), partials)
 		}
-		if got, want := partials[0], "The main binary is flag-only, then runs Bubble Tea. orchestrator actions."; got != want {
+		if got, want := partials[0], "The main binary is flag-only, then starts the server. orchestrator actions."; got != want {
 			t.Errorf("partial text = %q, want %q", got, want)
 		}
 	})

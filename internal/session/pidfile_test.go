@@ -107,6 +107,9 @@ func TestFindPIDFilesDoesNotDescendIntoFeatureArtifacts(t *testing.T) {
 	if err := WritePIDFile(filepath.Join(featureDir, "runs"), PIDFile{PID: 300, FeatureID: "copied", RepoName: "shallow-fixture"}); err != nil {
 		t.Fatalf("write shallow fixture PID file: %v", err)
 	}
+	if err := WritePIDFile(filepath.Join(featureDir, "design"), PIDFile{PID: 400, FeatureID: "legacy", RepoName: "phase-layout"}); err != nil {
+		t.Fatalf("write legacy phase PID file: %v", err)
+	}
 
 	pids, err := FindPIDFiles(dir)
 	if err != nil {

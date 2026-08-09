@@ -21,10 +21,13 @@
 
 **Name**: {{ .Name }}
 
-**Description**:
+{{ if .Description }}**Description**:
 > {{ blockquote .Description }}
 
-{{ if .ExitCriteria }}**Exit Criteria**:
+{{ end }}{{ if .AcceptanceClause }}**Acceptance**:
+{{ .AcceptanceClause }}
+
+{{ end }}{{ if .ExitCriteria }}**Exit Criteria**:
 > {{ blockquote .ExitCriteria }}
 
 {{ end }}{{ if .RiskLevel }}**Risk Level**: {{ .RiskLevel }}

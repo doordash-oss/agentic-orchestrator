@@ -15,6 +15,7 @@
 package git_test
 
 import (
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -111,6 +112,52 @@ func TestCreateMergeCandidateAcceptsCleanParentAdvancement(t *testing.T) {
 	parents := runGitRefTest(t, repo, "rev-list", "--parents", "-n", "1", result.CandidateSHA)
 	if fields := len(strings.Fields(parents)); fields != 3 {
 		t.Fatalf("candidate parents = %q, want two-parent merge commit", parents)
+	}
+}
+
+// TestCreateMergeCandidateWithoutConfiguredIdentity proves the merge commit
+// carries the Agentico fallback identity when nothing else configures one.
+// Hosts that cannot derive an identity from the system reject the commit with
+// "empty ident name"; asserting the committer covers both kinds of host,
+// since a host that can derive one would otherwise stamp its own.
+func TestCreateMergeCandidateWithoutConfiguredIdentity(t *testing.T) {
+	repo := testutil.InitGitRepo(t)
+	testutil.CommitFile(t, repo, "base.txt", "base\n", "parent base")
+	parentTip := runGitRefTest(t, repo, "rev-parse", "HEAD")
+
+	runGitRefTest(t, repo, "checkout", "-b", "child-branch")
+	testutil.CommitFile(t, repo, "child.txt", "child work\n", "child commit")
+	childHead := runGitRefTest(t, repo, "rev-parse", "HEAD")
+	runGitRefTest(t, repo, "checkout", "main")
+
+	// Strip every identity source the merge could otherwise inherit.
+	runGitRefTest(t, repo, "config", "--unset", "user.email")
+	runGitRefTest(t, repo, "config", "--unset", "user.name")
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_SYSTEM", os.DevNull)
+	for _, key := range []string{
+		"GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL",
+		"GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL",
+		"EMAIL",
+	} {
+		// t.Setenv registers the restore; the unset makes the variable absent
+		// rather than set-and-empty, which git rejects outright.
+		t.Setenv(key, "")
+		if err := os.Unsetenv(key); err != nil {
+			t.Fatalf("unset %s: %v", key, err)
+		}
+	}
+
+	result, err := gitpkg.CreateMergeCandidate(repo, parentTip, childHead, "merge candidate")
+	if err != nil {
+		t.Fatalf("CreateMergeCandidate() error = %v, want candidate without configured identity", err)
+	}
+	if result.CandidateSHA == "" {
+		t.Fatal("candidate SHA is empty")
+	}
+	committer := runGitRefTest(t, repo, "show", "-s", "--format=%cn <%ce>", result.CandidateSHA)
+	if committer != "Agentico <agentico@localhost>" {
+		t.Fatalf("candidate committer = %q, want the Agentico fallback identity", committer)
 	}
 }
 

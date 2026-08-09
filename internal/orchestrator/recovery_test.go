@@ -219,6 +219,43 @@ func TestScanRecovery_PortError_PropagatesAndDoesNotEmit(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// T4b. ScanRecovery_DropsSessionsThisProcessStillSupervises
+// ---------------------------------------------------------------------------
+
+// A PID file whose manager id matches a live managed session belongs to a
+// healthy run this process is supervising, not an orphan. Offering resume or
+// kill for it would terminate the run, so the scan must drop it.
+func TestScanRecovery_DropsSessionsThisProcessStillSupervises(t *testing.T) {
+	items := fakeRecoveryItems(
+		itemSpec{FeatureID: "feat-a", CurrentPhase: feature.PhaseImplement, ProcessAlive: true},
+		itemSpec{FeatureID: "feat-b", CurrentPhase: feature.PhaseImplement},
+	)
+	items[0].PIDFile.ManagerID = "feat-a-implement"
+	fake := &fakeRecoveryOp{Items: items}
+	sessions := mocks.NewMockSessionManager()
+	sessions.ActiveSessionsFn = func() []ports.SessionView {
+		return []ports.SessionView{mocks.NewMockSessionView("feat-a-implement", "feat-a")}
+	}
+
+	o := orchestrator.New(orchestrator.Deps{Recovery: fake, Sessions: sessions}, orchestrator.Hooks{})
+
+	got, err := o.ScanRecovery(context.Background())
+	if err != nil {
+		t.Fatalf("ScanRecovery: %v", err)
+	}
+	if len(got) != 1 || got[0].PIDFile.FeatureID != "feat-b" {
+		t.Fatalf("items = %+v, want only feat-b", got)
+	}
+
+	events := drainEvents(o)
+	for _, ev := range events {
+		if ev.Type == ports.RecoveryScanned && ev.Message != "1 items" {
+			t.Errorf("Message = %q, want %q", ev.Message, "1 items")
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
 // T5. ExecuteRecovery_DispatchesThroughPort
 // ---------------------------------------------------------------------------
 
@@ -549,7 +586,7 @@ func TestExecuteRecovery_Resume_InquiringFeature_RealManager_NoInvalidTransition
 // fresh must NOT attempt the forbidden StatusBuildingKB → StatusInquiring
 // transition.
 //
-// Background: iteration-04 review flagged that `startKB`'s `allFresh` branch
+// Background: `startKB`'s `allFresh` branch previously
 // returned PhaseSkipped → PhaseInquire while the feature was still in
 // StatusBuildingKB. The recursive `startPhase(PhaseInquire)` → `startInquire`
 // then called `Lifecycle.StartInquire`, which resolves to
@@ -793,13 +830,9 @@ func TestScanRecovery_CallsCleanupOrphanRunsBeforeScan(t *testing.T) {
 func TestScanRecovery_ReconcilesAbandonedSetupBeforeScan(t *testing.T) {
 	store := feature.NewStore(t.TempDir())
 	cfg := config.NewDefault()
-	cfg.Repos["test-repo"] = config.RepoConfig{Path: "/repos/test-repo"}
+	repoPath := testutil.InitGitRepo(t)
+	cfg.Repos["test-repo"] = config.RepoConfig{Path: repoPath}
 	mgr := feature.NewManager(store, cfg)
-	branches := mocks.NewMockBranchOperator()
-	branches.DefaultBranchFn = func(repoPath string) (string, error) { return mainBranch, nil }
-	branches.HasOriginRemoteFn = func(repoPath string) (bool, error) { return false, nil }
-	branches.BranchNameFn = func(featureSlug string) string { return "feature/" + featureSlug }
-	mgr.Branches = branches
 
 	f, err := mgr.Create("Abandoned Setup", "stale setup", []string{"test-repo"}, cfg.Defaults.Models, "", "", nil, feature.CreateOptions{QueueSetup: true})
 	if err != nil {
@@ -1005,4 +1038,53 @@ func containsString(sl []string, v string) bool {
 		}
 	}
 	return false
+}
+
+// T10. TestExecuteRecovery_Resume_NeedUserInputCycle_DoesNotRelaunch
+//
+// When a recovery item carries a RepoName and the feature has a
+// pending need-user-input gate for that repo, Resume must NOT relaunch the
+// phase (that would bypass the gate's answer-validating, shared-gate-clearing
+// single dispatch) and must NOT fall through to a generic feature-phase
+// restart via startPhase. The process-level recovery action runs; the user
+// answers the gate separately to resume.
+func TestExecuteRecovery_Resume_NoCycle_FallsThroughToPhase(t *testing.T) {
+	planPath := writeTempFile(t, "plan.md", "# plan")
+	f := &feature.Feature{
+		ID:           "feat-phase-recovery",
+		CurrentPhase: feature.PhaseImplement,
+		Status:       feature.StatusImplementing,
+		Repos:        []feature.FeatureRepo{{Name: repoName, Path: repoAPath}},
+		Artifacts:    map[string]string{"plan": planPath},
+	}
+	writeExecOrderNextToPlan(t, planPath, f.Repos)
+	items := fakeRecoveryItems(itemSpec{
+		FeatureID:    "feat-phase-recovery",
+		CurrentPhase: feature.PhaseImplement,
+		Status:       feature.StatusImplementing,
+	})
+	items[0].Feature = f
+
+	actions := map[string]ports.RecoveryAction{
+		ports.RecoveryActionKey("feat-phase-recovery", ""): ports.RecoveryResume,
+	}
+
+	fake := &fakeRecoveryOp{}
+	store := newFeatureStore(f)
+	lc := lifecycleForFeature(f)
+	spy := &fakeRunMultiRepoImpl{}
+
+	o := orchestrator.New(orchestrator.Deps{
+		Recovery:  fake,
+		Lifecycle: lc,
+		Store:     store,
+	}, orchestrator.Hooks{})
+	o.SetRunMultiRepoImplFn(spy.Fn())
+
+	if err := o.ExecuteRecovery(context.Background(), items, actions); err != nil {
+		t.Fatalf("ExecuteRecovery: %v", err)
+	}
+	if spy.numCalls() != 1 {
+		t.Errorf("runMultiRepoImplFn calls = %d, want 1 (phase resume should dispatch)", spy.numCalls())
+	}
 }

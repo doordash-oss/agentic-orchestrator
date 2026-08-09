@@ -17,56 +17,14 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
 
-// Guards live docs contract: API-backed TUI plus foreground server launch guidance.
+// Guards live docs contract: desktop app plus foreground server launch guidance.
 func TestUserFacingDocsDescribeLaunchSurface(t *testing.T) {
 	repoRoot := filepath.Join("..", "..")
-	docs := []string{"README.md"}
-	userGuideDocs, err := filepath.Glob(filepath.Join(repoRoot, "skills", "chat", "user-guide", "*.md"))
-	if err != nil {
-		t.Fatalf("Glob user guide docs: %v", err)
-	}
-	for _, path := range userGuideDocs {
-		rel, err := filepath.Rel(repoRoot, path)
-		if err != nil {
-			t.Fatalf("Rel(%q): %v", path, err)
-		}
-		docs = append(docs, rel)
-	}
-
-	banned := []string{
-		"`agentico run`",
-		"agentico run",
-		"agentico [flags] [command]",
-		"Commands:",
-		"feature list       List all features",
-		"feature create     Create a new feature",
-		"agentico feature create",
-		"`agentico feature create`",
-		"direct TUI",
-		"starts the direct TUI",
-		"--name <name>",
-		"--repo <path>",
-		"--jira <ticket>",
-		"--checkpoint <gate>",
-		"--auto-publish",
-		"**From the CLI:**",
-	}
-	for _, rel := range docs {
-		body, err := os.ReadFile(filepath.Join(repoRoot, rel))
-		if err != nil {
-			t.Fatalf("ReadFile(%s): %v", rel, err)
-		}
-		text := string(body)
-		for _, token := range banned {
-			if strings.Contains(text, token) {
-				t.Fatalf("%s still advertises removed command-era surface %q", rel, token)
-			}
-		}
-	}
 
 	for _, rel := range []string{
 		"README.md",
@@ -78,7 +36,7 @@ func TestUserFacingDocsDescribeLaunchSurface(t *testing.T) {
 		}
 		text := string(body)
 		for _, want := range []string{
-			"agentico [flags]",
+			"agentico server [flags]",
 			"--config <path>",
 			"--state-dir <path>",
 			"--providers <list>",
@@ -86,7 +44,7 @@ func TestUserFacingDocsDescribeLaunchSurface(t *testing.T) {
 			"--dangerously-skip-permissions",
 			"--help",
 			"--version",
-			// Phase 1 update surface: docs must advertise the new subcommand
+			// The update surface must advertise the installed subcommand
 			// and its check-only flag alongside the retained launch flags.
 			"agentico update",
 			"--check",
@@ -149,9 +107,6 @@ func TestUserFacingDocsAdvertiseRenamedProduct(t *testing.T) {
 		"CONTRIBUTING.md": {
 			"Agentic Orchestrator",
 			"agentico",
-		},
-		filepath.Join("docs", "keybindings.md"): {
-			"Agentic Orchestrator Keybinding Reference",
 		},
 	}
 
@@ -371,15 +326,18 @@ func TestAGENTSdocumentsTestIsolationRules(t *testing.T) {
 
 func TestVerificationDocsDescribeFastSuiteContract(t *testing.T) {
 	repoRoot := filepath.Join("..", "..")
-	docs := []string{
+	pointerDocs := []string{
 		"AGENTS.md",
 		"CONTRIBUTING.md",
 		"README.md",
+	}
+	canonicalDocs := []string{
 		filepath.Join("docs", "testing-baseline.md"),
 		filepath.Join("skills", "chat", "user-guide", "verification.md"),
 	}
+	docs := append(append([]string{}, pointerDocs...), canonicalDocs...)
 
-	for _, rel := range docs {
+	for _, rel := range canonicalDocs {
 		body, err := os.ReadFile(filepath.Join(repoRoot, rel))
 		if err != nil {
 			t.Fatalf("ReadFile(%s): %v", rel, err)
@@ -388,13 +346,38 @@ func TestVerificationDocsDescribeFastSuiteContract(t *testing.T) {
 		for _, want := range []string{
 			"`make test-fast`",
 			"23s, target <=30s",
-			"TUI observability",
-			"`go test -tags tui_observe ./internal/tui -run 'Observed|Emits' -count=1`",
+			"E2E Go (process-launch / API-driven)",
+			"Desktop static checks",
+			"Desktop unit/component/security tests",
+			"Desktop packaged E2E",
+			"Desktop release audit",
 		} {
 			if !strings.Contains(text, want) {
-				t.Errorf("%s missing fast-suite contract token %q", rel, want)
+				t.Errorf("%s missing canonical verification-tier token %q", rel, want)
 			}
 		}
+	}
+
+	for _, rel := range pointerDocs {
+		body, err := os.ReadFile(filepath.Join(repoRoot, rel))
+		if err != nil {
+			t.Fatalf("ReadFile(%s): %v", rel, err)
+		}
+		text := string(body)
+		if !strings.Contains(text, "testing-baseline.md") {
+			t.Errorf("%s missing pointer to docs/testing-baseline.md", rel)
+		}
+		if strings.Contains(text, "E2E Go (process-launch / API-driven)") {
+			t.Errorf("%s contains verification-tier list marker", rel)
+		}
+	}
+
+	for _, rel := range docs {
+		body, err := os.ReadFile(filepath.Join(repoRoot, rel))
+		if err != nil {
+			t.Fatalf("ReadFile(%s): %v", rel, err)
+		}
+		text := string(body)
 		for _, banned := range []string{
 			"115s, target <=30s",
 			"29s, target <=30s",
@@ -411,6 +394,35 @@ func TestVerificationDocsDescribeFastSuiteContract(t *testing.T) {
 		} {
 			if strings.Contains(text, banned) {
 				t.Errorf("%s still contains stale fast-suite contract token %q", rel, banned)
+			}
+		}
+	}
+
+	specPattern := regexp.MustCompile(`[A-Za-z0-9_-]+\.spec\.ts`)
+	for _, rel := range docs {
+		body, err := os.ReadFile(filepath.Join(repoRoot, rel))
+		if err != nil {
+			t.Fatalf("ReadFile(%s): %v", rel, err)
+		}
+		for _, spec := range specPattern.FindAllString(string(body), -1) {
+			found := false
+			err := filepath.WalkDir(filepath.Join(repoRoot, "desktop"), func(path string, entry os.DirEntry, err error) error {
+				if err != nil {
+					return err
+				}
+				if entry.IsDir() && entry.Name() == "node_modules" {
+					return filepath.SkipDir
+				}
+				if !entry.IsDir() && entry.Name() == spec {
+					found = true
+				}
+				return nil
+			})
+			if err != nil {
+				t.Fatalf("WalkDir(desktop) for %s: %v", spec, err)
+			}
+			if !found {
+				t.Errorf("%s references missing desktop spec %q", rel, spec)
 			}
 		}
 	}
@@ -436,9 +448,7 @@ func TestVerificationDocsDescribeFastSuiteContract(t *testing.T) {
 	}
 	makefileText := string(makefile)
 	for _, want := range []string{
-		"go list ./...",
-		"go test $$core_pkgs -short -count=1 -parallel 32",
-		"go test $$ui_test_pkgs -short -count=1 -parallel 32",
+		"go test ./... -short -count=1 -parallel 32",
 	} {
 		if !strings.Contains(makefileText, want) {
 			t.Fatalf("Makefile test-fast missing all-package sharded sweep token %q", want)

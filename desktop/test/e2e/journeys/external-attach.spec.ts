@@ -1,0 +1,174 @@
+/**
+ * Journey 3 — compatible external attach: the test starts the BUNDLED server
+ * binary itself (external ownership), waits for its discovery record, then
+ * launches the packaged app. The app must attach (ownership `external`),
+ * and quitting the app must leave the external server running — the app
+ * never signals a process it does not own.
+ */
+import { spawn, type ChildProcess } from 'node:child_process';
+import fs from 'node:fs';
+import { expect, test } from '@playwright/test';
+import {
+  assertNoLeakedProcesses,
+  closeApp,
+  evidenceShot,
+  launchApp,
+  persistAppLogs,
+  type AppHandle,
+} from '../helpers/app';
+import { bundledServerBinary, packagedExecutable } from '../helpers/packaged';
+import { Transcript } from '../helpers/transcript';
+import { tailText } from '../helpers/runtime';
+import {
+  createRepo,
+  createWorld,
+  destroyWorld,
+  minimalEnv,
+  processAlive,
+  readDiscovery,
+  waitFor,
+} from '../helpers/world';
+
+test('external compatible server: attach, never own, never stop', async ({}, testInfo) => {
+  const transcript = new Transcript(
+    'ownership-compatibility',
+    'Journeys 3 + 4 — server ownership and compatibility (packaged app)',
+  );
+  const world = createWorld('external-attach', {
+    auth: { loggedIn: true, authMethod: 'oauth', email: 'e2e@example.invalid' },
+    presetWorkspaceRoot: true,
+  });
+  createRepo(world, 'alpha', { commit: true });
+
+  let external: ChildProcess | null = null;
+  let handle: AppHandle | null = null;
+  const externalLogs: string[] = [];
+  try {
+    transcript.section('Journey 3 — start the bundled server externally');
+    const serverBinary = bundledServerBinary(packagedExecutable());
+    const args = ['server', '--config', world.configPath, '--state-dir', world.stateDir];
+    external = spawn(serverBinary, args, {
+      env: minimalEnv(world),
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    external.stdout?.on('data', (chunk: Buffer) => externalLogs.push(chunk.toString()));
+    external.stderr?.on('data', (chunk: Buffer) => externalLogs.push(chunk.toString()));
+    transcript.command(`${serverBinary} ${args.join(' ')} &`, '(started as a test-owned process)');
+
+    await waitFor(() => readDiscovery(world) !== null, 'external server discovery record', 30_000);
+    const discovery = readDiscovery(world)!;
+    expect(discovery.pid).toBe(external.pid);
+    await waitFor(
+      async () => (await healthStatus(discovery.base_url)) === 200,
+      'external server health',
+      30_000,
+    );
+    transcript.json('discovery record published by the external server (token redacted)', {
+      ...discovery,
+      auth_token: '[redacted]',
+    });
+
+    transcript.section('Launch the app: it attaches instead of launching its own');
+    handle = await launchApp(world, testInfo, { traceName: 'external-attach' });
+    await expect(handle.page.getByRole('button', { name: 'New feature' })).toBeVisible({
+      timeout: 60_000,
+    });
+    const connection = await handle.page.evaluate(() => window.agentico.getConnectionStatus());
+    expect(connection.status).toBe('ready');
+    expect(connection.ownership).toBe('external');
+    expect(connection.serverBuild?.version).toBeTruthy();
+    transcript.json('connection state (via IPC): attached with external ownership', connection);
+    await evidenceShot(handle, 'external-attach');
+
+    // Same pid, same discovery record: the app did not spawn a second server.
+    expect(readDiscovery(world)!.pid).toBe(external.pid);
+
+    transcript.section('Quit the app: the external server survives');
+    persistAppLogs(handle, 'external-attach-app');
+    await closeApp(handle);
+    handle = null;
+    // The external server must still be alive and healthy after app exit.
+    await new Promise((resolve) => setTimeout(resolve, 1_500));
+    expect(processAlive(external.pid!)).toBe(true);
+    expect(external.exitCode).toBeNull();
+    expect(await healthStatus(discovery.base_url)).toBe(200);
+    transcript.step(
+      `external server pid ${external.pid} is still alive and healthy after the app quit — ` +
+        'the app never signalled it',
+    );
+
+    transcript.section('Test-owned teardown of the external server');
+    external.kill('SIGTERM');
+    await waitFor(
+      () => external!.exitCode !== null || external!.signalCode !== null,
+      'external server to exit after test-sent SIGTERM',
+      15_000,
+    );
+    transcript.step(
+      `test sent SIGTERM; external server exited (code ${String(external.exitCode)}, ` +
+        `signal ${String(external.signalCode)})`,
+    );
+    transcript.codeBlock('external server stderr tail', tailText(externalLogs.join(''), 15));
+    assertNoLeakedProcesses(world);
+    transcript.write(testInfo);
+  } finally {
+    if (handle !== null) {
+      await closeApp(handle).catch(() => {});
+    }
+    if (external !== null && external.exitCode === null && external.signalCode === null) {
+      external.kill('SIGKILL');
+    }
+    assertNoLeakedProcesses(world);
+    destroyWorld(world);
+  }
+});
+
+async function healthStatus(baseUrl: string): Promise<number> {
+  try {
+    const response = await fetch(`${baseUrl.replace(/\/+$/, '')}/api/v1/health`, {
+      signal: AbortSignal.timeout(2_000),
+    });
+    await response.arrayBuffer();
+    return response.status;
+  } catch {
+    return 0;
+  }
+}
+
+// Sanity: the discovery file itself must be owner-only on disk.
+test('external server publishes owner-only discovery material', async () => {
+  // Covered implicitly above; kept as an explicit cheap assertion so a
+  // regression in file modes fails with a precise message.
+  const world = createWorld('external-perms', {
+    auth: { loggedIn: true },
+    presetWorkspaceRoot: true,
+  });
+  let external: ChildProcess | null = null;
+  try {
+    const serverBinary = bundledServerBinary(packagedExecutable());
+    external = spawn(
+      serverBinary,
+      ['server', '--config', world.configPath, '--state-dir', world.stateDir],
+      {
+        env: minimalEnv(world),
+        stdio: 'ignore',
+      },
+    );
+    await waitFor(() => readDiscovery(world) !== null, 'discovery record', 30_000);
+    const mode = fs.statSync(`${world.runtimeDir}/.agentico-server.json`).mode & 0o777;
+    expect(mode).toBe(0o600);
+    const tokenMode = fs.statSync(`${world.runtimeDir}/.agentico-server-token`).mode & 0o777;
+    expect(tokenMode).toBe(0o600);
+  } finally {
+    if (external !== null) {
+      external.kill('SIGTERM');
+      await waitFor(
+        () => external!.exitCode !== null || external!.signalCode !== null,
+        'server exit',
+        15_000,
+      ).catch(() => external!.kill('SIGKILL'));
+    }
+    assertNoLeakedProcesses(world);
+    destroyWorld(world);
+  }
+});

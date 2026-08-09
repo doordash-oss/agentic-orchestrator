@@ -2,10 +2,10 @@
 
 exec agentico --help
 stdout '^Agentic Orchestrator$'
-! stdout 'Agentic Workflow Orchestrator'
-stdout 'Usage: agentico \[flags\]'
+stdout '^Usage: agentico$'
 stdout 'agentico server \[flags\]'
-stdout 'Launches the Bubble Tea TUI dashboard'
+stdout 'Starts or focuses the installed Agentico desktop app'
+stdout 'explicit .server.'
 stdout 'foreground loopback HTTP server'
 stdout '--config <path>'
 stdout '--state-dir <path>'
@@ -17,10 +17,6 @@ stdout '~/.agentic-orchestrator/config.yaml'
 stdout '~/.agentic-orchestrator/features'
 stdout 'agentico update \[--check\|-n\]'
 stdout '--check'
-! stdout 'Commands:'
-! stdout 'feature list'
-! stdout 'feature create'
-! stdout 'run             Launch'
 ! stderr .
 
 exec agentico --version
@@ -47,6 +43,6 @@ stderr 'unknown command: feature'
 ! stdout .
 
 ! exec agentico --config $WORK/config.yaml --state-dir $WORK/features --dangerously-skip-permissions --providers not-a-provider
-stderr 'unknown provider "not-a-provider"'
-stderr 'no valid providers specified'
+stderr '--providers is available only with the headless server'
+stderr 'agentico server --providers'
 ! stdout .

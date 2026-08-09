@@ -8,8 +8,8 @@ IMPORTANT: The user attached the image(s) below when creating this feature. They
 
 This is fix iteration 2.
 
-**Exit criteria**:
-Relevant tests pass.
+**Acceptance**:
+Feature acceptance is defined by the `## Acceptance Criteria` section of the approved design at /state/feat-x/run-1/design/design.md. Judge acceptance against that section, not against any restatement of it.
 
 ## Reviewer Feedback
 

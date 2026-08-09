@@ -27,7 +27,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/observe"
 	"github.com/doordash-oss/agentic-orchestrator/internal/orchestrator"
 	"github.com/doordash-oss/agentic-orchestrator/internal/permission"
-	"github.com/doordash-oss/agentic-orchestrator/internal/session"
+	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
 )
 
@@ -305,7 +305,7 @@ func TestBuildHooks_AllFieldsPopulated_AndNilSafe(t *testing.T) {
 	h.OnFeatureFailed("x", "t", "e")
 	h.OnPhaseStarted("x", feature.PhaseImplement)
 	h.OnPhaseCompleted("x", feature.PhaseImplement, nil)
-	h.OnRecoveryScanned([]session.RecoveryItem{})
+	h.OnRecoveryScanned([]ports.RecoveryItem{})
 	h.OnRecoveryAction("x", "", "resume")
 	h.OnReviewRequired("x", feature.PhaseImplement)
 	h.OnPublishStarted("x")
@@ -418,8 +418,8 @@ func TestOrchestrator_Delete_StopsSessionsAndCallsLifecycle(t *testing.T) {
 	t.Run("happy_path", func(t *testing.T) {
 		lifecycle := mocks.NewMockFeatureLifecycle()
 		sessions := mocks.NewMockSessionManager()
-		sessions.FeatureSessionsFn = func(featureID string) []session.SessionView {
-			return []session.SessionView{
+		sessions.FeatureSessionsFn = func(featureID string) []ports.SessionView {
+			return []ports.SessionView{
 				mocks.NewMockSessionView("s1", featureID),
 				mocks.NewMockSessionView("s2", featureID),
 			}

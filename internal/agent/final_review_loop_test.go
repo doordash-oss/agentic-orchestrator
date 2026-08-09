@@ -91,7 +91,7 @@ func frArtifactDir(stateDir string, f *feature.Feature) string {
 	return filepath.Join(ActiveRunDir(stateDir, f), feature.PhaseReview.DirName())
 }
 
-func runFinalReviewWithFixScript(t *testing.T, fixBody func(artDir string) string) *FeatureFinalReviewResult {
+func runFinalReviewWithFixScript(t *testing.T, fixBody func(artDir string) string, resultScript string) *FeatureFinalReviewResult {
 	t.Helper()
 	env := newFRLoopEnv(t)
 	store, f, _ := newFRTestFeature(t, env.stateDir, "fr-fix-protocol", []string{testRepoNameAPI, testRepoNameWeb})
@@ -109,7 +109,7 @@ func runFinalReviewWithFixScript(t *testing.T, fixBody func(artDir string) strin
 	fixScript := testutil.WriteScript(t, env.scriptsDir, "fix.sh",
 		testutil.JSONLInit+"\n"+
 			fixBody(artDir)+"\n"+
-			testutil.JSONLSuccess+"\n")
+			resultScript+"\n")
 
 	eventCh := make(chan any, 100)
 	sm := session.NewManager(eventCh)
@@ -138,6 +138,11 @@ func runFinalReviewWithFixScript(t *testing.T, fixBody func(artDir string) strin
 
 func runFinalReviewWithReviewScript(t *testing.T, reviewBody func(artDir string) string) *FeatureFinalReviewResult {
 	t.Helper()
+	return runFinalReviewWithReviewScriptAndResult(t, reviewBody, testutil.JSONLSuccess)
+}
+
+func runFinalReviewWithReviewScriptAndResult(t *testing.T, reviewBody func(artDir string) string, resultScript string) *FeatureFinalReviewResult {
+	t.Helper()
 	env := newFRLoopEnv(t)
 	store, f, _ := newFRTestFeature(t, env.stateDir, "fr-reviewer-protocol", []string{testRepoNameAPI, testRepoNameWeb})
 
@@ -149,7 +154,7 @@ func runFinalReviewWithReviewScript(t *testing.T, reviewBody func(artDir string)
 	reviewScript := testutil.WriteScript(t, env.scriptsDir, "review.sh",
 		testutil.JSONLInit+"\n"+
 			reviewBody(artDir)+"\n"+
-			testutil.JSONLSuccess+"\n")
+			resultScript+"\n")
 
 	eventCh := make(chan any, 100)
 	sm := session.NewManager(eventCh)
@@ -193,8 +198,7 @@ func TestRunFeatureFinalReviewLoop_SessionsCarryFinalReviewPhase(t *testing.T) {
 		switch {
 		case strings.Contains(id, "-fix-01"):
 			// No testing contract executes at Final Review; the fix session
-			// only completes its marker.
-			touchPhaseComplete(t, iterDir)
+			// only emits its root outcome.
 		case strings.HasSuffix(id, "-01"), strings.HasSuffix(id, "-02"):
 			iteration := 1
 			feedback := testutil.StructuredReviewFeedback("- **High**: needs final review fix", "", agentStatusChangesRequested)
@@ -206,15 +210,18 @@ func TestRunFeatureFinalReviewLoop_SessionsCarryFinalReviewPhase(t *testing.T) {
 			axisSlug := strings.TrimSuffix(strings.TrimPrefix(id, f.ID+"-"), suffix)
 			axisDir := filepath.Join(iterDir, axisSlug)
 			writeFinalReviewFeedbackFile(t, axisDir, feedback)
-			touchPhaseComplete(t, axisDir)
 		default:
 			t.Fatalf("unexpected session id %q", id)
 		}
 
-		sess := session.NewSession(id, featureID, phase)
-		sess.SetCost(&llm.ResultMessage{Type: testResultMessageType, Subtype: testResultSuccessValue, SessionID: testMockIdentifier})
-		sess.SendStatus(agentStatusSuccess)
-		sess.CloseDone()
+		sess := newUtilityTestSession()
+		sess.id = id
+		sess.featureID = featureID
+		sess.phase = phase
+		sess.setRootIntent(validSuccessCompletionIntent())
+		sess.result = &llm.ResultMessage{Type: testResultMessageType, Subtype: testResultSuccessValue, SessionID: testMockIdentifier, StopReason: "end_turn"}
+		sess.statusCh <- agentStatusSuccess
+		close(sess.done)
 		return sess, nil
 	}
 
@@ -268,13 +275,6 @@ func writeFinalReviewFeedbackFile(t *testing.T, iterDir, body string) {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(iterDir, "review-feedback.md"), []byte(body), 0o644); err != nil {
 		t.Fatalf("write final review feedback: %v", err)
-	}
-}
-
-func touchPhaseComplete(t *testing.T, iterDir string) {
-	t.Helper()
-	if err := os.WriteFile(filepath.Join(iterDir, PhaseCompleteFile), nil, 0o644); err != nil {
-		t.Fatalf("touch %s: %v", PhaseCompleteFile, err)
 	}
 }
 
@@ -427,9 +427,9 @@ func TestRunFeatureFinalReviewLoop_ReviewApprovedAtomicallyStampsAllRepos(t *tes
 
 // TestRunFeatureFinalReviewLoop_FinishOrViolateNudgeRecoversSameSession proves
 // the FR review leg recovers within one iteration via the finish-or-violate
-// nudge: the reviewer ends its first turn without the FR completion artifacts,
-// the harness nudges the same live session, and the nudged turn writes the
-// APPROVED feedback + phase_complete so the loop ends review_passed.
+// nudge: the reviewer ends its first turn without a root outcome, the harness
+// nudges the same live session, and the nudged turn writes APPROVED feedback
+// plus a structured outcome so the loop ends review_passed.
 func TestRunFeatureFinalReviewLoop_FinishOrViolateNudgeRecoversSameSession(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
@@ -448,30 +448,28 @@ while IFS= read -r _line; do
   case "$_line" in
     %s)
       %s
-      echo '{"type":"result","subtype":"success","session_id":"mock","total_cost_usd":0.001,"stop_reason":"end_turn"}'
+      %s
       exit 0
       ;;
   esac
 done
-`, testutil.JSONLInit, finishOrViolateNudgeCasePattern, testutil.WriteFinalReviewApproved(artDir)))
+`, testutil.JSONLInit, finishOrViolateNudgeCasePattern, testutil.WriteFinalReviewApproved(artDir), testutil.JSONLSuccess))
 
 	eventCh := make(chan any, 100)
 	sm := session.NewManager(eventCh)
 	defer sm.Shutdown()
 
 	cfg := OrchestratorConfig{
-		Feature:              f,
-		FeatureStore:         store,
-		StateDir:             env.stateDir,
-		Model:                "agent",
-		ReviewModel:          "reviewer",
-		MaxIterations:        3,
-		MaxConsecFails:       3,
-		FinishOrViolateNudge: true,
+		Feature:        f,
+		FeatureStore:   store,
+		StateDir:       env.stateDir,
+		Model:          "agent",
+		ReviewModel:    "reviewer",
+		MaxIterations:  3,
+		MaxConsecFails: 3,
 		BuildSession: func(opts BuildSessionOpts) ([]string, []string, *session.SessionOpts, error) {
 			command, env, sessOpts, err := mockBuildSessionByModel(map[string]string{"reviewer": reviewScript})(opts)
 			if sessOpts != nil {
-				sessOpts.SupportsFinishOrViolateNudge = true
 			}
 			return command, env, sessOpts, err
 		},
@@ -606,7 +604,6 @@ fi`,
 	// Fix agent succeeds.
 	fixScript := testutil.WriteScript(t, env.scriptsDir, "fix.sh",
 		testutil.JSONLInit+"\n"+
-			testutil.WriteFinalReviewFixSuccessArtifacts(artDir)+"\n"+
 			testutil.JSONLSuccess+"\n")
 
 	eventCh := make(chan any, 100)
@@ -690,22 +687,20 @@ fi`,
 			testutil.JSONLSuccess,
 			testutil.JSONLInit,
 			testutil.WriteFinalReviewChangesRequested(artDir, "- **High**: README still contains untranslated text"),
-			malformedReport+testutil.TouchPhaseComplete(artDir),
+			malformedReport,
 			testutil.JSONLSuccess))
 
 	fixScript := testutil.WriteScript(t, env.scriptsDir, "fix.sh",
 		fmt.Sprintf(`%s
 for _d in "%s"/iteration-*; do :; done
-if grep -q 'command: manual: compare' "$_d/verification-report.yaml"; then
+if grep -q 'command: manual: compare' "$_d/verification-report.yaml" 2>/dev/null; then
   echo "malformed reviewer verification report leaked to final fixer" >&2
   exit 1
 fi
 %s
-%s
 `,
 			testutil.JSONLInit,
 			artDir,
-			testutil.WriteFinalReviewFixSuccessArtifacts(artDir),
 			testutil.JSONLSuccess))
 
 	eventCh := make(chan any, 100)
@@ -775,7 +770,6 @@ fi`,
 
 	fixScript := testutil.WriteScript(t, env.scriptsDir, "fix.sh",
 		testutil.JSONLInit+"\n"+
-			testutil.WriteFinalReviewFixSuccessArtifacts(artDir)+"\n"+
 			testutil.JSONLSuccess+"\n")
 
 	bs, captured := capturingBuildSessionByModel(map[string]string{
@@ -893,7 +887,6 @@ func TestRunFeatureFinalReviewLoop_FinalGateRunsAxesAndAggregates(t *testing.T) 
 			testutil.JSONLSuccess+"\n")
 	fixScript := testutil.WriteScript(t, env.scriptsDir, "fix.sh",
 		testutil.JSONLInit+"\n"+
-			testutil.WriteFinalReviewFixSuccessArtifacts(artDir)+"\n"+
 			testutil.JSONLSuccess+"\n")
 
 	bs, captured := capturingBuildSessionByModel(map[string]string{
@@ -1070,7 +1063,6 @@ func TestRunFeatureFinalReviewLoop_QAAxisUsesLiveRunPosture(t *testing.T) {
 	}
 	for _, want := range []string{
 		filepath.Join(artDir, "iteration-01", "qa", "review-feedback.md"),
-		filepath.Join(artDir, "iteration-01", "qa", "phase_complete"),
 		filepath.Join(artDir, "iteration-01", "qa", "evidence"),
 		filepath.Join(artDir, "iteration-01", "qa", "build-cache"),
 		filepath.Join(artDir, "iteration-01", "qa", "tmp"),
@@ -1078,6 +1070,9 @@ func TestRunFeatureFinalReviewLoop_QAAxisUsesLiveRunPosture(t *testing.T) {
 		if !sliceContains(qaOpts.WritableRoots, want) {
 			t.Fatalf("QA WritableRoots missing %q in %#v", want, qaOpts.WritableRoots)
 		}
+	}
+	if receiptPath := filepath.Join(artDir, "iteration-01", "qa", PhaseCompleteFile); sliceContains(qaOpts.WritableRoots, receiptPath) {
+		t.Fatalf("QA WritableRoots includes harness-owned receipt %q", receiptPath)
 	}
 	requirePermissionDecision(t, qaOpts.PermHandler, "Bash", `{"command":"npm install && npm run build > out.log"}`, "allow")
 	requirePermissionDecision(t, qaOpts.PermHandler, "Write", `{"file_path":"`+filepath.Join(artDir, "iteration-01", "qa", "evidence", "home.png")+`"}`, "allow")
@@ -1157,7 +1152,6 @@ func TestRunFeatureFinalReviewLoop_FrontendDesignAxisUsesLiveRunPosture(t *testi
 	}
 	for _, want := range []string{
 		filepath.Join(artDir, "iteration-01", "design", "review-feedback.md"),
-		filepath.Join(artDir, "iteration-01", "design", "phase_complete"),
 		filepath.Join(artDir, "iteration-01", "design", "evidence"),
 		filepath.Join(artDir, "iteration-01", "design", "build-cache"),
 		filepath.Join(artDir, "iteration-01", "design", "tmp"),
@@ -1166,11 +1160,17 @@ func TestRunFeatureFinalReviewLoop_FrontendDesignAxisUsesLiveRunPosture(t *testi
 			t.Fatalf("Design WritableRoots missing %q in %#v", want, designOpts.WritableRoots)
 		}
 	}
+	if sliceContains(designOpts.WritableRoots, filepath.Join(artDir, "iteration-01", "design", PhaseCompleteFile)) {
+		t.Fatalf("Design WritableRoots grants model access to the harness receipt: %#v", designOpts.WritableRoots)
+	}
 	requirePermissionDecision(t, designOpts.PermHandler, "Bash", `{"command":"npm install && npm run build > out.log"}`, "allow")
 	requirePermissionDecision(t, designOpts.PermHandler, "Write", `{"file_path":"`+filepath.Join(artDir, "iteration-01", "design", "evidence", "home.png")+`"}`, "allow")
 	requirePermissionDecision(t, designOpts.PermHandler, "Write", `{"file_path":"`+filepath.Join(f.Repos[0].Path, "main.go")+`"}`, "deny")
 }
 
+// writeFinalAxisFeedbackScript writes feedback via tmp+mv: the parallel axis
+// sessions all scan every axis dir, so a plain `cat > "$_fb"` can expose a
+// partially written file to a concurrent writer or the harness's parser.
 func writeFinalAxisFeedbackScript(artDir string, qaRequestsChangesFirstIteration bool) string {
 	qaChanges := "0"
 	if qaRequestsChangesFirstIteration {
@@ -1181,17 +1181,15 @@ func writeFinalAxisFeedbackScript(artDir string, qaRequestsChangesFirstIteration
   _axis=$(basename "$_dir")
   _iter=$(basename "$(dirname "$_dir")")
   _fb="$_dir/review-feedback.md"
-  if [ -f "$_fb" ]; then
-    touch "$_dir/phase_complete"
-    continue
-  fi
+  if [ -f "$_fb" ]; then continue; fi
   _verdict="APPROVED"
   _findings="- (none)"
   if [ "%s" = "1" ] && [ "$_iter" = "iteration-01" ] && [ "$_axis" = "qa" ]; then
     _verdict="CHANGES_REQUESTED"
     _findings="- **Critical**: feature fails launched smoke journey"
   fi
-  cat > "$_fb" << REVIEWEOF
+  _tmp="$_fb.tmp.$$"
+  cat > "$_tmp" << REVIEWEOF
 ## Findings
 $_findings
 
@@ -1201,15 +1199,14 @@ $_findings
 ## Verdict
 $_verdict
 REVIEWEOF
-  touch "$_dir/phase_complete"
+  mv "$_tmp" "$_fb"
 done`, artDir, qaChanges)
 }
 
-func touchFinalAxisPhaseCompleteWithoutFeedback(artDir string) string {
+func removeFinalAxisFeedback(artDir string) string {
 	return fmt.Sprintf(`for _prompt in $(find "%s" -mindepth 3 -maxdepth 3 -name review-prompt.md -type f 2>/dev/null); do
   _dir=$(dirname "$_prompt")
   rm -f "$_dir/review-feedback.md"
-  touch "$_dir/phase_complete"
 done`, artDir)
 }
 
@@ -1236,7 +1233,6 @@ func TestRunFeatureFinalReviewLoop_MaxIterationsAtomicFailureStamp(t *testing.T)
 
 	fixScript := testutil.WriteScript(t, env.scriptsDir, "fix.sh",
 		testutil.JSONLInit+"\n"+
-			testutil.WriteFinalReviewFixSuccessArtifacts(artDir)+"\n"+
 			testutil.JSONLSuccess+"\n")
 
 	eventCh := make(chan any, 100)
@@ -1279,8 +1275,8 @@ func TestRunFeatureFinalReviewLoop_MaxIterationsAtomicFailureStamp(t *testing.T)
 
 // TestRunFeatureFinalReviewLoop_ConsecutiveFailuresSafetyRail covers the
 // fix-agent safety rail: review keeps requesting changes and the fix agent
-// fails (no phase_complete). The consecutive-failure counter trips and
-// every repo lands at "failed".
+// fails without a valid root outcome. The consecutive-failure counter trips
+// and every repo lands at "failed".
 func TestRunFeatureFinalReviewLoop_ConsecutiveFailuresSafetyRail(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
@@ -1298,7 +1294,7 @@ func TestRunFeatureFinalReviewLoop_ConsecutiveFailuresSafetyRail(t *testing.T) {
 			testutil.WriteFinalReviewChangesRequested(artDir, "- **High**: keep failing")+"\n"+
 			testutil.JSONLSuccess+"\n")
 
-	// Fix agent fails: no phase_complete touch.
+	// Fix agent fails without emitting a root outcome.
 	failFixScript := testutil.WriteScript(t, env.scriptsDir, "fix.sh",
 		testutil.JSONLInit+"\n")
 
@@ -1369,9 +1365,10 @@ fi`,
 			testutil.JSONLInit,
 			testutil.WriteFinalReviewChangesRequested(artDir, "- **Critical**: MISSING_EVIDENCE_REQUIREMENT behavioral: Record the create-project CLI journey."),
 			testutil.JSONLSuccess))
+	fixMarker := filepath.Join(artDir, "fix-ran")
 	fixScript := testutil.WriteScript(t, env.scriptsDir, "fix.sh",
 		testutil.JSONLInit+"\n"+
-			testutil.WriteFinalReviewFixSuccessArtifacts(artDir)+"\n"+
+			fmt.Sprintf("touch %q\n", fixMarker)+
 			testutil.JSONLSuccess+"\n")
 
 	eventCh := make(chan any, 100)
@@ -1405,11 +1402,24 @@ fi`,
 	if result.Iterations != 2 {
 		t.Fatalf("Iterations = %d, want 2 after fix-agent iteration", result.Iterations)
 	}
-	if _, err := os.Stat(filepath.Join(artDir, "iteration-01", "phase_complete")); err != nil {
-		t.Fatalf("iteration-01 phase_complete missing: %v", err)
+	if _, err := os.Stat(fixMarker); err != nil {
+		t.Fatalf("fix agent did not run: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(artDir, "iteration-02", "phase_complete")); err != nil {
-		t.Fatalf("iteration-02 phase_complete missing: %v", err)
+	for _, dir := range []string{
+		filepath.Join(artDir, "iteration-01"),
+		filepath.Join(artDir, "iteration-01", "craft"),
+		filepath.Join(artDir, "iteration-01", "qa"),
+		filepath.Join(artDir, "iteration-01", "cleanliness"),
+		filepath.Join(artDir, "iteration-02", "craft"),
+		filepath.Join(artDir, "iteration-02", "qa"),
+		filepath.Join(artDir, "iteration-02", "cleanliness"),
+	} {
+		if _, err := ReadCompletionReceipt(dir); err != nil {
+			t.Fatalf("harness completion receipt missing from %q: %v", dir, err)
+		}
+	}
+	if _, err := ReadCompletionReceipt(filepath.Join(artDir, "iteration-02")); err == nil {
+		t.Fatal("approved review iteration unexpectedly has an aggregate fixer receipt")
 	}
 }
 
@@ -1459,7 +1469,6 @@ fi`,
 	fixScript := testutil.WriteScript(t, env.scriptsDir, "fix.sh",
 		testutil.JSONLInit+"\n"+
 			fmt.Sprintf("touch %q\n", fixMarker)+
-			testutil.WriteFinalReviewFixSuccessArtifacts(artDir)+"\n"+
 			testutil.JSONLSuccess+"\n")
 
 	eventCh := make(chan any, 100)
@@ -1492,37 +1501,33 @@ fi`,
 	}
 }
 
-func TestRunFeatureFinalReviewLoop_FixMissingPhaseCompleteTripsProtocolViolation(t *testing.T) {
+func TestRunFeatureFinalReviewLoop_FixMissingRootOutcomeTripsProtocolViolation(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
-	result := runFinalReviewWithFixScript(t, func(string) string {
-		return ""
-	})
+	result := runFinalReviewWithFixScript(t, func(string) string { return "" }, testutil.JSONLResult(""))
 
 	if result.FinalStatus != BoundedHelperStatusProtocolViolation {
 		t.Fatalf("FinalStatus = %q, want protocol_violation", result.FinalStatus)
 	}
 	if !strings.Contains(result.LastError, "final_review_fixer @") ||
-		!strings.Contains(result.LastError, "phase_complete") {
-		t.Fatalf("LastError = %q, want final_review_fixer phase_complete violation", result.LastError)
+		!strings.Contains(result.LastError, "agentico-outcome") {
+		t.Fatalf("LastError = %q, want final_review_fixer root-outcome violation", result.LastError)
 	}
 }
 
-func TestRunFeatureFinalReviewLoop_ReviewerMissingPhaseCompleteTripsProtocolViolation(t *testing.T) {
+func TestRunFeatureFinalReviewLoop_ReviewerMissingRootOutcomeTripsProtocolViolation(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
-	result := runFinalReviewWithReviewScript(t, func(artDir string) string {
-		return testutil.WriteReviewApprovedWithoutPhaseComplete(artDir)
-	})
+	result := runFinalReviewWithReviewScriptAndResult(t, testutil.WriteReviewApproved, testutil.JSONLResult(""))
 
 	if result.FinalStatus != BoundedHelperStatusProtocolViolation {
 		t.Fatalf("FinalStatus = %q, want protocol_violation", result.FinalStatus)
 	}
 	if !strings.Contains(result.LastError, "implementation_review_") ||
-		!strings.Contains(result.LastError, "phase_complete") {
-		t.Fatalf("LastError = %q, want implementation review axis phase_complete violation", result.LastError)
+		!strings.Contains(result.LastError, "agentico-outcome") {
+		t.Fatalf("LastError = %q, want implementation review axis root-outcome violation", result.LastError)
 	}
 }
 
@@ -1531,7 +1536,7 @@ func TestRunFeatureFinalReviewLoop_ReviewerMissingFeedbackTripsProtocolViolation
 		t.Skip("skipping integration test in short mode")
 	}
 	result := runFinalReviewWithReviewScript(t, func(artDir string) string {
-		return touchFinalAxisPhaseCompleteWithoutFeedback(artDir)
+		return removeFinalAxisFeedback(artDir)
 	})
 
 	if result.FinalStatus != BoundedHelperStatusProtocolViolation {
@@ -1611,7 +1616,6 @@ func TestRunFeatureFinalReviewLoop_CrashRecoveryResumesFromInterruptedIter(t *te
 
 	fixScript := testutil.WriteScript(t, env.scriptsDir, "fix.sh",
 		testutil.JSONLInit+"\n"+
-			testutil.WriteFinalReviewFixSuccessArtifacts(artDir)+"\n"+
 			testutil.JSONLSuccess+"\n")
 
 	eventCh := make(chan any, 100)

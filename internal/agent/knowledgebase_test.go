@@ -16,9 +16,12 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -212,6 +215,134 @@ func TestIsKBLockStaleOwnerCheck(t *testing.T) {
 				t.Errorf("IsKBLockStale = %v, want %v", got, tt.wantStale)
 			}
 		})
+	}
+}
+
+func TestIsKBLockStalePreservesOldActiveOwner(t *testing.T) {
+	dir := t.TempDir()
+	old := KBLockInfo{FeatureID: "feature-1", Timestamp: time.Now().Add(-2 * time.Hour)}
+	data, _ := json.Marshal(old)
+	if err := os.WriteFile(KBLockPath(dir), data, 0o644); err != nil {
+		t.Fatalf("write lock: %v", err)
+	}
+
+	if IsKBLockStale(dir, func(id string) (int, bool) {
+		return int(feature.StatusBuildingKB), true
+	}) {
+		t.Fatal("old lock with confirmed BuildingKB owner should not be stale")
+	}
+	if !IsKBLockStale(dir, nil) {
+		t.Fatal("old lock without owner status should use age fallback")
+	}
+}
+
+func TestAcquireKBLockWithStatusReclaimsMissingOrStoppedOwner(t *testing.T) {
+	tests := []struct {
+		name     string
+		statusFn FeatureStatusFunc
+	}{
+		{
+			name:     "missing owner",
+			statusFn: func(id string) (int, bool) { return 0, false },
+		},
+		{
+			name:     "stopped owner",
+			statusFn: func(id string) (int, bool) { return int(feature.StatusInterrupted), true },
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if locked, err := AcquireKBLock(dir, "owner"); err != nil || !locked {
+				t.Fatalf("AcquireKBLock owner = %v, %v; want acquired", locked, err)
+			}
+
+			locked, err := AcquireKBLockWithStatus(dir, "waiter", tt.statusFn)
+			if err != nil {
+				t.Fatalf("AcquireKBLockWithStatus: %v", err)
+			}
+			if !locked {
+				t.Fatal("expected stale owner lock to be reclaimed")
+			}
+			if owner := ReadKBLockOwner(dir); owner != "waiter" {
+				t.Fatalf("lock owner = %q, want waiter", owner)
+			}
+		})
+	}
+}
+
+func TestAcquireKBLockWithStatusPreservesActiveOwner(t *testing.T) {
+	dir := t.TempDir()
+	old := KBLockInfo{FeatureID: "owner", Timestamp: time.Now().Add(-2 * time.Hour)}
+	data, _ := json.Marshal(old)
+	if err := os.WriteFile(KBLockPath(dir), data, 0o644); err != nil {
+		t.Fatalf("write lock: %v", err)
+	}
+
+	locked, err := AcquireKBLockWithStatus(dir, "waiter", func(id string) (int, bool) {
+		return int(feature.StatusBuildingKB), true
+	})
+	if err != nil {
+		t.Fatalf("AcquireKBLockWithStatus: %v", err)
+	}
+	if locked {
+		t.Fatal("expected active owner lock to be preserved")
+	}
+	if owner := ReadKBLockOwner(dir); owner != "owner" {
+		t.Fatalf("lock owner = %q, want owner", owner)
+	}
+}
+
+func TestAcquireKBLockWithStatusConcurrentReclaimHasOneWinner(t *testing.T) {
+	dir := t.TempDir()
+	if locked, err := AcquireKBLock(dir, "owner"); err != nil || !locked {
+		t.Fatalf("AcquireKBLock owner = %v, %v; want acquired", locked, err)
+	}
+
+	const contenders = 16
+	var winners atomic.Int32
+	var wg sync.WaitGroup
+	wg.Add(contenders)
+	for i := 0; i < contenders; i++ {
+		i := i
+		go func() {
+			defer wg.Done()
+			locked, err := AcquireKBLockWithStatus(dir, "waiter-"+string(rune('a'+i)), func(id string) (int, bool) {
+				if id == "owner" {
+					return 0, false
+				}
+				return int(feature.StatusBuildingKB), true
+			})
+			if err != nil {
+				t.Errorf("AcquireKBLockWithStatus: %v", err)
+				return
+			}
+			if locked {
+				winners.Add(1)
+			}
+		}()
+	}
+	wg.Wait()
+	if got := winners.Load(); got != 1 {
+		t.Fatalf("winners = %d, want 1", got)
+	}
+}
+
+func TestReleaseKBLockIfOwnedDoesNotRemoveReplacement(t *testing.T) {
+	dir := t.TempDir()
+	if locked, err := AcquireKBLock(dir, "replacement"); err != nil || !locked {
+		t.Fatalf("AcquireKBLock replacement = %v, %v; want acquired", locked, err)
+	}
+
+	removed, err := ReleaseKBLockIfOwned(dir, "old-owner")
+	if err != nil {
+		t.Fatalf("ReleaseKBLockIfOwned: %v", err)
+	}
+	if removed {
+		t.Fatal("wrong owner release reported removal")
+	}
+	if owner := ReadKBLockOwner(dir); owner != "replacement" {
+		t.Fatalf("lock owner = %q, want replacement", owner)
 	}
 }
 

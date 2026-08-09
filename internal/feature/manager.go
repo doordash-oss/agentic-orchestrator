@@ -25,48 +25,41 @@ import (
 	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
+	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 )
 
 // ErrDuplicateSlug is returned when a feature with the same slug already exists.
 var ErrDuplicateSlug = fmt.Errorf("feature with this slug already exists")
 
-// WorktreeOps is the minimal worktree-management surface the feature
-// manager depends on. Defined locally so the feature package stays free of
-// any adapter-specific git package. Satisfied by *git.WorktreeManager.
+// WorktreeOps is the feature package's single worktree substitution point.
+// Satisfied by *git.WorktreeManager.
 type WorktreeOps interface {
 	Create(repoPath, featureSlug, repoName, startPoint string) (string, error)
+	ExpectedPath(featureSlug, repoName string) string
 	Remove(worktreePath string, deleteBranch bool) error
+	RemoveRef(worktreePath, mainRepo, branch string) error
 	ResetToBase(worktreePath, baseBranch string) error
 	ResetToBaseLocal(worktreePath, baseBranch string) error
 	ResetToCommit(worktreePath, commitSHA string) error
+	CurrentHeadSHA(worktreePath string) (string, error)
+	CurrentBranch(worktreePath string) string
+	RefSHA(repoPath, ref string) (string, error)
+	UpdateRef(repoPath, ref, oldSHA, newSHA string) error
+	CreateMergeCandidate(mainRepo, parentTip, childHead, message string) (*git.MergeCandidateResult, error)
+	InspectCleanliness(worktreePath string, maxPerCategory int) (*git.CleanlinessReport, error)
 }
 
-// BranchOps captures the branch-level git operations the feature manager
-// uses during feature creation, rewind, and restart. Satisfied by the
-// git.BranchAdapter (structural match on method set).
-type BranchOps interface {
-	DefaultBranch(repoPath string) (string, error)
-	HasOriginRemote(repoPath string) (bool, error)
-	BranchName(featureSlug string) string
-	BranchExistsOnRemote(repoPath, branch string) (bool, error)
-	CurrentBranch(repoPath string) (string, error)
-	CreateBackupBranch(worktreePath, slug string) (string, error)
-}
-
-// PRCloser abstracts the single git/gh operation the feature manager
-// performs against an open pull request (close on rewind). Satisfied by
-// *git.PublishAdapter.
+// PRCloser abstracts the single git/gh operation the feature manager performs
+// against an open pull request (close on rewind).
 type PRCloser interface {
 	ClosePR(prURL string) error
 }
 
 type Manager struct {
-	Store       *Store
-	Config      *config.Config
-	Worktrees   WorktreeOps    // optional; nil skips worktree creation
-	Branches    BranchOps      // optional; nil skips branch lookups during Create/Rewind
-	PRs         PRCloser       // optional; nil skips PR close on rewind
-	Cleanliness CleanlinessOps // required for child launches; nil fails CreateRefactorChild explicitly
+	Store     *Store
+	Config    *config.Config
+	Worktrees WorktreeOps // optional for basic lifecycle; required for child launch/integration safety checks
+	PRs       PRCloser    // optional; nil skips PR close on rewind
 
 	setupMu    sync.Mutex
 	setupLocks map[string]struct{}
@@ -91,31 +84,6 @@ func NewManager(store *Store, cfg *config.Config) *Manager {
 	return &Manager{Store: store, Config: cfg}
 }
 
-// resolveRepoBase resolves a repo's default branch and remote availability
-// via the injected BranchOps. When Branches is nil (test/minimal
-// construction) it falls back to empty base branch and no remote.
-func (m *Manager) resolveRepoBase(repoPath string) (baseBranch string, hasRemote bool, err error) {
-	if m.Branches == nil {
-		return "", false, nil
-	}
-	baseBranch, _ = m.Branches.DefaultBranch(repoPath)
-	hasRemote, _ = m.Branches.HasOriginRemote(repoPath)
-	return baseBranch, hasRemote, nil
-}
-
-// defaultBranchName returns the local branch name derived from a feature
-// slug when no BranchOps is wired in. Kept in sync with git.BranchName.
-func defaultBranchName(slug string) string {
-	return "feature/" + slug
-}
-
-func (m *Manager) branchName(slug string) string {
-	if m.Branches != nil {
-		return m.Branches.BranchName(slug)
-	}
-	return defaultBranchName(slug)
-}
-
 func branchSlug(branch string) string {
 	return strings.TrimPrefix(branch, "feature/")
 }
@@ -135,8 +103,8 @@ func setupWorkspaceSlug(f *Feature, repo FeatureRepo, task SetupTask) (string, s
 		return "", task.Branch
 	}
 	qualified := f.WorkspaceSlug()
-	qualifiedBranch := defaultBranchName(qualified)
-	legacyBranch := defaultBranchName(f.Slug)
+	qualifiedBranch := git.BranchName(qualified)
+	legacyBranch := git.BranchName(f.Slug)
 	if task.Branch == "" || task.Branch == legacyBranch {
 		return qualified, qualifiedBranch
 	}
@@ -234,10 +202,8 @@ func (m *Manager) Create(name, description string, repos []string, models config
 		if strings.TrimSpace(rc.Path) == "" {
 			return nil, fmt.Errorf("repo %q has no path configured; add it under workspace_roots or set repos.%s.path", repoName, repoName)
 		}
-		baseBranch, hasRemote, err := m.resolveRepoBase(rc.Path)
-		if err != nil {
-			return nil, err
-		}
+		baseBranch := git.DefaultBranch(rc.Path)
+		hasRemote := git.HasOriginRemote(rc.Path)
 		publishable := &hasRemote
 		featureRepos = append(featureRepos, FeatureRepo{
 			Name:        repoName,
@@ -249,18 +215,17 @@ func (m *Manager) Create(name, description string, repos []string, models config
 
 	// Ensure the branch name doesn't conflict with an existing upstream branch.
 	// If it does, append a random 4-char hex suffix and recheck (up to 5 attempts).
-	if (opt.QueueSetup || m.Worktrees != nil) && m.Branches != nil {
+	if opt.QueueSetup || m.Worktrees != nil {
 		baseSlug := slug
 		for attempt := 0; attempt < 5; attempt++ {
 			workspaceSlug = WorkspaceSlug(slug, id)
-			branch := m.Branches.BranchName(workspaceSlug)
+			branch := git.BranchName(workspaceSlug)
 			conflict := false
 			for _, fr := range featureRepos {
 				if fr.Publishable != nil && !*fr.Publishable {
 					continue // no remote to check
 				}
-				exists, _ := m.Branches.BranchExistsOnRemote(fr.Path, branch)
-				if exists {
+				if git.BranchExistsOnRemote(fr.Path, branch) {
 					conflict = true
 					break
 				}
@@ -275,13 +240,16 @@ func (m *Manager) Create(name, description string, repos []string, models config
 
 	if opt.QueueSetup || m.Worktrees != nil {
 		for i := range featureRepos {
-			featureRepos[i].Branch = m.branchName(workspaceSlug)
+			featureRepos[i].Branch = git.BranchName(workspaceSlug)
 		}
 	}
 
 	inq := Inquireness(inquireness)
 	if inq == "" {
 		inq = Inquireness(m.Config.Defaults.Inquireness)
+	}
+	if !inq.IsValid() {
+		return nil, fmt.Errorf("invalid inquireness level %q: must be one of none, medium, high", inq)
 	}
 
 	now := time.Now()
@@ -634,7 +602,7 @@ func (m *Manager) StartImplementation(featureID string) error {
 		}
 		f.CurrentPhase = PhaseImplement
 		f.CurrentIteration = 1
-		// Use existing cycle key (rebase-N, review-comments) if set,
+		// Use the existing rebase cycle key if set,
 		// or default to "implement" (or "phase-N-impl" for roadmap phases).
 		// This preserves cycle keys across interrupt/fail → resume transitions.
 		// Accumulate any in-flight time under the old key before switching.
@@ -651,14 +619,6 @@ func (m *Manager) StartImplementation(featureID string) error {
 		if f.StartedAt == nil {
 			f.StartedAt = &now
 		}
-		return nil
-	})
-}
-
-// UpdateIteration updates the current iteration counter on a feature.
-func (m *Manager) UpdateIteration(featureID string, iteration int) error {
-	return m.Store.Modify(featureID, func(f *Feature) error {
-		f.CurrentIteration = iteration
 		return nil
 	})
 }
@@ -728,291 +688,9 @@ func (m *Manager) MarkDone(featureID string) error {
 	})
 }
 
-// ReturnToPublished transitions a CodeReady feature back to Published, preserving the existing PR URL.
-// A publishable feature must already have a PR URL recorded (either at the
-// feature level or on any repo); otherwise the transition is refused so we
-// never promote to Published without a real PR on record.
-//
-// Re-entrancy / crash recovery:
-//
-//	(a) Idempotent on retry. The mutation is gated by f.Transition, which is
-//	    a no-op when the feature is already StatusPublished, and the trailing
-//	    field assignments (CurrentPhase, ActiveCycleType) are
-//	    overwrite-with-the-same-value semantics on a republished feature.
-//	    Re-issuing this call against a feature lacking a PR URL keeps
-//	    returning the same guard error rather than corrupting state.
-//	(b) On crash before Store.Modify returns: the modify wrapper writes
-//	    feature.yaml atomically (rename), so persisted state is either the
-//	    pre-call snapshot or the fully transitioned snapshot — never a
-//	    half-written file. Recovery is the normal startup load.
-func (m *Manager) ReturnToPublished(featureID string) error {
-	return m.Store.Modify(featureID, func(f *Feature) error {
-		if f.IsPublishable() && len(f.PRURLs()) == 0 {
-			return fmt.Errorf("ReturnToPublished: publishable feature %s has no PR URL", featureID)
-		}
-		if err := f.Transition(StatusPublished); err != nil {
-			return err
-		}
-		f.CurrentPhase = PhasePublish
-		f.SetActiveCycleType("")
-		return nil
-	})
-}
-
-// StartAddressingReviews transitions a Published feature back to ImplementReady
-// for addressing PR review comments.
-func (m *Manager) StartAddressingReviews(featureID string) error {
-	return m.Store.Modify(featureID, func(f *Feature) error {
-		if err := f.Transition(StatusImplementReady); err != nil {
-			return err
-		}
-		f.SetAddressingReviews(true)
-		f.SetActiveCycleType(CycleReviewComments)
-		f.CurrentPhase = PhaseImplement
-		// Pre-set timing key — StartImplementation will use this
-		f.ActiveTimingKey = "review-comments"
-		return nil
-	})
-}
-
-// ClearAddressingReviews clears the review-comments flow flag.
-func (m *Manager) ClearAddressingReviews(featureID string) error {
-	return m.Store.Modify(featureID, func(f *Feature) error {
-		f.SetAddressingReviews(false)
-		f.SetActiveCycleType("")
-		return nil
-	})
-}
-
-func (m *Manager) StartFeatureRebaseOperation(featureID string) error {
-	return m.Store.Modify(featureID, func(f *Feature) error {
-		if hasActiveNonRebaseCycle(f) {
-			return fmt.Errorf("cannot start rebase operation while %s cycle is active", activeNonRebaseCycleType(f))
-		}
-		if hasActiveRebaseOperation(f) {
-			return fmt.Errorf("rebase operation already active")
-		}
-		now := time.Now()
-		f.SetActiveCycleType(CycleRebase)
-		f.ActiveCycle = &CycleState{Type: CycleRebase, Status: RepoCycleRunning, Count: f.RebaseCount() + 1}
-		f.RebaseOperation = &RebaseOperationState{
-			Stage:     RebaseStageHarness,
-			StartedAt: now,
-			UpdatedAt: now,
-			Repos:     map[string]*RebaseRepoProgress{},
-		}
-		return nil
-	})
-}
-
-func (m *Manager) MarkFeatureRebaseStage(featureID string, stage RebaseStage) error {
-	return m.Store.Modify(featureID, func(f *Feature) error {
-		if hasActiveNonRebaseCycle(f) {
-			return fmt.Errorf("cannot mark rebase stage while %s cycle is active", activeNonRebaseCycleType(f))
-		}
-		if !hasActiveRebaseOperation(f) {
-			return fmt.Errorf("no active rebase operation")
-		}
-		now := time.Now()
-		if f.RebaseOperation == nil {
-			f.RebaseOperation = &RebaseOperationState{StartedAt: now, Repos: map[string]*RebaseRepoProgress{}}
-		}
-		f.RebaseOperation.Stage = stage
-		f.RebaseOperation.UpdatedAt = now
-		if f.ActiveCycle == nil {
-			f.ActiveCycle = &CycleState{Type: CycleRebase, Status: RepoCycleRunning, Count: f.RebaseCount() + 1}
-		} else {
-			f.ActiveCycle.Type = CycleRebase
-		}
-		if stage == RebaseStageFinalReview {
-			f.ActiveCycle.Status = RepoCycleReviewing
-		}
-		f.SetActiveCycleType(CycleRebase)
-		return nil
-	})
-}
-
-func (m *Manager) UpdateFeatureRebaseRepo(featureID, repoName string, status RebaseRepoStatus, progress RebaseRepoProgress) error {
-	return m.Store.Modify(featureID, func(f *Feature) error {
-		if hasActiveNonRebaseCycle(f) {
-			return fmt.Errorf("cannot update rebase operation while %s cycle is active", activeNonRebaseCycleType(f))
-		}
-		if f.RebaseOperation == nil {
-			return fmt.Errorf("no active rebase operation")
-		}
-		if f.RebaseOperation.Repos == nil {
-			f.RebaseOperation.Repos = map[string]*RebaseRepoProgress{}
-		}
-		progress.Status = status
-		progress.ConflictFiles = append([]string(nil), progress.ConflictFiles...)
-		f.RebaseOperation.Repos[repoName] = &progress
-		f.RebaseOperation.UpdatedAt = time.Now()
-		return nil
-	})
-}
-
-func (m *Manager) ClearFeatureRebaseOperation(featureID string) error {
-	return m.Store.Modify(featureID, func(f *Feature) error {
-		f.RebaseOperation = nil
-		if f.ActiveCycle != nil && f.ActiveCycle.Type == CycleRebase {
-			f.ActiveCycle = nil
-		}
-		if f.ActiveCycleType() == CycleRebase {
-			f.SetActiveCycleType("")
-		}
-		return nil
-	})
-}
-
-func hasActiveNonRebaseCycle(f *Feature) bool {
-	if f.ActiveCycle != nil && f.ActiveCycle.Type != CycleRebase {
-		return true
-	}
-	activeType := f.ActiveCycleType()
-	return activeType != "" && activeType != CycleRebase
-}
-
-func hasActiveRebaseOperation(f *Feature) bool {
-	if f.RebaseOperation != nil {
-		return true
-	}
-	if f.ActiveCycle != nil && f.ActiveCycle.Type == CycleRebase {
-		return true
-	}
-	return f.ActiveCycleType() == CycleRebase
-}
-
-func activeNonRebaseCycleType(f *Feature) RepoCycleType {
-	if f.ActiveCycle != nil && f.ActiveCycle.Type != CycleRebase {
-		return f.ActiveCycle.Type
-	}
-	return f.ActiveCycleType()
-}
-
-// StartRepoCycle starts a per-repo post-publish cycle.
-// The feature stays StatusPublished; only the per-repo cycle state is set.
-func (m *Manager) StartRepoCycle(featureID, repoName string, cycleType RepoCycleType) error {
-	return m.Store.Modify(featureID, func(f *Feature) error {
-		if cycleType == CycleRebase {
-			return fmt.Errorf("per-repo rebase cycles are not supported; use StartFeatureRebaseOperation")
-		}
-		if f.RepoCycles == nil {
-			f.RepoCycles = make(map[string]*RepoCycleState)
-		}
-		if existing, ok := f.RepoCycles[repoName]; ok && (existing.Status == RepoCycleRunning || existing.Status == RepoCycleReviewing || existing.Status == RepoCycleNeedUserInput) {
-			return fmt.Errorf("%s is already running a %s cycle", repoName, existing.Type)
-		}
-
-		f.RepoCycles[repoName] = &RepoCycleState{
-			Type:   cycleType,
-			Status: RepoCycleRunning,
-			Count:  1,
-		}
-		return nil
-	})
-}
-
-// CompleteRepoCycle removes the per-repo cycle entry on success.
-func (m *Manager) CompleteRepoCycle(featureID, repoName string) error {
-	return m.Store.Modify(featureID, func(f *Feature) error {
-		delete(f.RepoCycles, repoName)
-		if len(f.RepoCycles) == 0 {
-			f.RepoCycles = nil
-		}
-		return nil
-	})
-}
-
-// RemoveRepoCycle removes a per-repo cycle entry without recording failure.
-// Used when cleaning up stale cycle entries that cannot be restarted.
-func (m *Manager) RemoveRepoCycle(featureID, repoName string) error {
-	return m.Store.Modify(featureID, func(f *Feature) error {
-		delete(f.RepoCycles, repoName)
-		if len(f.RepoCycles) == 0 {
-			f.RepoCycles = nil
-		}
-		return nil
-	})
-}
-
-// FailRepoCycle marks a per-repo cycle as failed and clears any paused
-// gate state so post-publish abort cannot leave dangling gate pointers.
-func (m *Manager) FailRepoCycle(featureID, repoName, errMsg string) error {
-	return m.Store.Modify(featureID, func(f *Feature) error {
-		if f.RepoCycles == nil {
-			return nil
-		}
-		rc, ok := f.RepoCycles[repoName]
-		if !ok {
-			return nil
-		}
-		rc.Status = RepoCycleFailed
-		rc.LastError = errMsg
-		rc.PendingNeedUserInputPath = ""
-		return nil
-	})
-}
-
-// MarkRepoCycleReviewing transitions a repo's active cycle to the
-// "reviewing" status, indicating the Final Review is in progress.
-func (m *Manager) MarkRepoCycleReviewing(featureID, repoName string) error {
-	return m.Store.Modify(featureID, func(f *Feature) error {
-		if f.RepoCycles == nil {
-			return fmt.Errorf("no active cycles")
-		}
-		rc, ok := f.RepoCycles[repoName]
-		if !ok {
-			return fmt.Errorf("no active cycle for repo %q", repoName)
-		}
-		rc.Status = RepoCycleReviewing
-		return nil
-	})
-}
-
-// HasActiveRepoCycles returns true if any repo has a running, reviewing, or
-// need-user-input-paused cycle. Paused cycles count as active so post-publish
-// gating reflects outstanding work waiting on user input.
-func (m *Manager) HasActiveRepoCycles(featureID string) (bool, error) {
-	f, err := m.Get(featureID)
-	if err != nil {
-		return false, err
-	}
-	for _, rc := range f.RepoCycles {
-		if rc == nil || !rc.Type.IsValid() {
-			continue
-		}
-		switch rc.Status {
-		case RepoCycleRunning, RepoCycleReviewing, RepoCycleNeedUserInput:
-			return true, nil
-		}
-	}
-	return false, nil
-}
-
-// ClearRepoCycles removes all per-repo cycle state (used by stop-all).
-func (m *Manager) ClearRepoCycles(featureID string) error {
-	return m.Store.Modify(featureID, func(f *Feature) error {
-		f.RepoCycles = nil
-		return nil
-	})
-}
-
-// SetRepoCyclePlanPath records the plan artifact path for a per-repo cycle.
-func (m *Manager) SetRepoCyclePlanPath(featureID, repoName, planPath string) error {
-	return m.Store.Modify(featureID, func(f *Feature) error {
-		if f.RepoCycles == nil {
-			return fmt.Errorf("no active cycles")
-		}
-		if rc, ok := f.RepoCycles[repoName]; ok {
-			rc.PlanPath = planPath
-		}
-		return nil
-	})
-}
-
 // AdvanceRoadmapPhase increments the current roadmap phase and transitions
 // the feature back to StatusPlanning for the next phase's plan creation.
-// Called by TUI when a phase's implementation review passes and more phases remain.
+// Called by desktop app when a phase's implementation review passes and more phases remain.
 func (m *Manager) AdvanceRoadmapPhase(featureID string) error {
 	return m.Store.Modify(featureID, func(f *Feature) error {
 		// When called after roadmap approval, the feature is already in StatusPlanning
@@ -1059,18 +737,6 @@ func (m *Manager) StartRoadmapPhaseImplementation(featureID string) error {
 	return m.Transition(featureID, StatusImplementReady)
 }
 
-// CompleteRoadmap marks the final roadmap phase as complete and
-// transitions to StatusCodeReady.
-func (m *Manager) CompleteRoadmap(featureID string) error {
-	return m.Store.Modify(featureID, func(f *Feature) error {
-		if err := f.Transition(StatusCodeReady); err != nil {
-			return err
-		}
-		f.CurrentPhase = PhasePublish
-		return nil
-	})
-}
-
 // RecordRoadmapPhaseCommitAnchors persists per-repo full HEAD SHAs for a
 // completed roadmap phase.
 func (m *Manager) RecordRoadmapPhaseCommitAnchors(featureID string, phase int, anchors map[string]string) error {
@@ -1096,29 +762,6 @@ func (m *Manager) RecordRoadmapPhaseCommitAnchors(featureID string, phase int, a
 			return nil
 		}
 		r.RoadmapPhaseCommitAnchors[phase] = copied
-		return nil
-	})
-}
-
-// RecreateWorktree re-creates a worktree for a feature from its existing branch.
-func (m *Manager) RecreateWorktree(featureID string) error {
-	if m.Worktrees == nil {
-		return fmt.Errorf("worktree manager not configured")
-	}
-	return m.Store.Modify(featureID, func(f *Feature) error {
-		for i, repo := range f.Repos {
-			if repo.WorktreePath != "" {
-				continue // already has a worktree
-			}
-			if repo.Branch == "" {
-				return fmt.Errorf("repo %s has no branch to recreate from", repo.Name)
-			}
-			wtPath, err := m.Worktrees.Create(repo.Path, repoWorkspaceSlug(f, repo), repo.Name, repo.Branch)
-			if err != nil {
-				return fmt.Errorf("recreating worktree for %s: %w", repo.Name, err)
-			}
-			f.Repos[i].WorktreePath = wtPath
-		}
 		return nil
 	})
 }
@@ -1159,47 +802,6 @@ func (m *Manager) MarkFailed(featureID, failureType, lastError string) error {
 		f.LastError = lastError
 		return nil
 	})
-}
-
-// RestartFromBeginning resets a feature back to its first pipeline phase by
-// sealing the active run and forking a fresh one. It uses `RewindToPhase` plus
-// a follow-up `ForceKBRebuild = true` mutation so sealed runs are preserved
-// intact under `runs/run-NNN/`.
-//
-// Pipeline first-phase mapping: PipelineMoonshot/Large first phase is
-// PhaseKnowledgeBase, but RewindToPhase rejects that target directly. We
-// rewind to PhaseInquire (the first user-rewindable phase for those
-// profiles) and rely on ForceKBRebuild to trigger KB rebuild on the next
-// run. Medium features rewind to PhasePlan.
-//
-// Callers that used to rely on "silently discard worktree reset errors" now
-// see warnings through `RewindToPhase`'s return; the current single call
-// site discards them, matching prior behaviour in spirit.
-func (m *Manager) RestartFromBeginning(featureID string) error {
-	f, err := m.Store.Load(featureID)
-	if err != nil {
-		return fmt.Errorf("loading feature: %w", err)
-	}
-	rewindTarget := firstRewindablePhase(f.EffectivePipeline())
-	if _, _, err := m.RewindToPhase(featureID, rewindTarget); err != nil {
-		return fmt.Errorf("restarting from beginning: %w", err)
-	}
-	// Preserve legacy `ForceKBRebuild` semantics: a restart always wants KB
-	// to rebuild. The active run is now the freshly-forked one.
-	return m.Store.Modify(featureID, func(f *Feature) error {
-		f.ForceKBRebuild = true
-		return nil
-	})
-}
-
-// firstRewindablePhase maps a pipeline profile to the first phase
-// RewindToPhase will accept as a target. Moonshot/Large: PhaseInquire
-// (KB rebuild happens via ForceKBRebuild on the new run). Medium: PhasePlan.
-func firstRewindablePhase(p PipelineProfile) Phase {
-	if p == PipelineMedium {
-		return PhasePlan
-	}
-	return PhaseInquire
 }
 
 // PhasesFromOnwards returns all phases from targetPhase through PhaseImplement in logical order.
@@ -1334,39 +936,7 @@ type partialRewindPlan struct {
 }
 
 func (m *Manager) validatePartialRewindRequest(f *Feature, request RewindRequest) (partialRewindPlan, error) {
-	if request.RoadmapPhase == 0 {
-		return partialRewindPlan{}, nil
-	}
-	if request.TargetPhase != PhaseImplement {
-		return partialRewindPlan{}, fmt.Errorf("roadmap phase rewind is only valid for Implement targets")
-	}
-	if f.TotalRoadmapPhases <= 1 {
-		return partialRewindPlan{}, fmt.Errorf("roadmap phase rewind requires a multi-phase roadmap run")
-	}
-	if request.RoadmapPhase < 1 || request.RoadmapPhase > f.TotalRoadmapPhases {
-		return partialRewindPlan{}, fmt.Errorf("roadmap phase %d out of range 1..%d", request.RoadmapPhase, f.TotalRoadmapPhases)
-	}
-	partial := partialRewindPlan{enabled: true, roadmapPhase: request.RoadmapPhase}
-	if request.RoadmapPhase == 1 {
-		return partial, nil
-	}
-	previousPhase := request.RoadmapPhase - 1
-	anchors := f.Run().RoadmapPhaseCommitAnchors[previousPhase]
-	if len(anchors) == 0 {
-		return partialRewindPlan{}, fmt.Errorf("missing commit anchor for roadmap phase %d", previousPhase)
-	}
-	partial.resetAnchors = make(map[string]string)
-	for _, repo := range f.Repos {
-		if repo.WorktreePath == "" {
-			continue
-		}
-		sha := anchors[repo.Name]
-		if sha == "" {
-			return partialRewindPlan{}, fmt.Errorf("missing commit anchor for roadmap phase %d repo %s", previousPhase, repo.Name)
-		}
-		partial.resetAnchors[repo.Name] = sha
-	}
-	return partial, nil
+	return validatePartialRewindRequestForFeature(f, request)
 }
 
 func roadmapPhaseType(phase, total int) string {
@@ -1421,27 +991,12 @@ func (m *Manager) RewindWithRequest(featureID string, request RewindRequest) (wa
 	// Validate: target phase must be rewindable from the current state.
 	// Use RewindChoicesForFeature so escalation targets are also valid.
 	choices := RewindChoicesForFeature(f)
-	validTarget := false
-	for _, c := range choices {
-		if c.Phase == targetPhase {
-			validTarget = true
-			break
-		}
-	}
-	if !validTarget {
-		if targetPhase == PhaseKnowledgeBase {
-			return nil, 0, fmt.Errorf("cannot rewind to knowledge base phase")
-		}
-		return nil, 0, fmt.Errorf("cannot rewind to %s from current state %s", targetPhase, f.Status)
+	if err := ValidateRewindTarget(choices, targetPhase, f.Status); err != nil {
+		return nil, 0, err
 	}
 
 	// Compute effective target (may differ if KB was never built)
-	effectiveTarget = targetPhase
-	if f.PipelineUpgradedFrom == PipelineMedium && !PipelineMedium.HasPhase(targetPhase) {
-		// Feature was upgraded from medium via UpgradePipeline without rewinding.
-		// Pre-plan phases still need KB Build because KB was never completed.
-		effectiveTarget = PhaseKnowledgeBase
-	}
+	effectiveTarget = EffectiveRewindPhase(f, targetPhase)
 
 	partial, err := m.validatePartialRewindRequest(f, request)
 	if err != nil {
@@ -1483,12 +1038,12 @@ func (m *Manager) RewindWithRequest(featureID string, request RewindRequest) (wa
 	// Per-repo failures warn but do not abort — rewind continues so the user
 	// can still reach an uncorrupted new run.
 	backupBranches := map[string]string{}
-	if targetPhase.LogicalOrder() <= PhaseImplement.LogicalOrder() && m.Branches != nil {
+	if targetPhase.LogicalOrder() <= PhaseImplement.LogicalOrder() {
 		for _, repo := range f.Repos {
 			if repo.WorktreePath == "" {
 				continue
 			}
-			branchName, err := m.Branches.CreateBackupBranch(repo.WorktreePath, f.Slug)
+			branchName, err := git.CreateBackupBranch(repo.WorktreePath, f.Slug)
 			if err != nil {
 				warns = append(warns, fmt.Sprintf("failed to create backup branch for %s: %v", repo.Name, err))
 				continue
@@ -1507,11 +1062,12 @@ func (m *Manager) RewindWithRequest(featureID string, request RewindRequest) (wa
 					continue
 				}
 				var resetErr error
-				if partial.enabled && partial.roadmapPhase > 1 {
+				switch WorktreeResetKind(repo, partial.enabled, partial.roadmapPhase) {
+				case ResetKindAnchor:
 					resetErr = m.Worktrees.ResetToCommit(repo.WorktreePath, partial.resetAnchors[repo.Name])
-				} else if repo.BaseBranch != "" && repo.Publishable != nil && !*repo.Publishable {
+				case ResetKindBaseLocal:
 					resetErr = m.Worktrees.ResetToBaseLocal(repo.WorktreePath, repo.BaseBranch)
-				} else if repo.BaseBranch != "" {
+				case ResetKindBase:
 					resetErr = m.Worktrees.ResetToBase(repo.WorktreePath, repo.BaseBranch)
 				}
 				if resetErr != nil {
@@ -1586,41 +1142,9 @@ func (m *Manager) RewindWithRequest(featureID string, request RewindRequest) (wa
 		// on the already-persisted skeleton. The Store clears Committing and
 		// re-persists newRun after populate returns.
 		func(oldRun, newRun *Run) error {
-			// Static matrix per target; empty for PhaseInquire.
-			dirs := append([]string(nil), carryForwardDirs(targetPhase)...)
-
-			// For rewind-to-PhaseImplement, also carry every phase-NN/plan/
-			// directory that exists in the sealed run.
-			//
-			// Pipeline-variant guard: this `targetPhase == PhaseImplement`
-			// branch is reached by Medium, Large, AND Moonshot — it is a
-			// dynamic-discovery scope (not a pipeline gate). Medium features
-			// produce no `phase-NN/` subdirs, so `discoverCarriedPhasePlanDirs`
-			// returns nil and only the static `plan`/`roadmap` entries (above)
-			// may carry. Large/Moonshot populate `phase-NN/plan/` and have
-			// no top-level `plan/` dir; both are listed in `dirs` but
-			// `copyRunArtifactsForward` silently skips missing sources. All
-			// three profiles thus reach the same path with pipeline-specific
-			// behavior produced by the on-disk contents of the sealed run.
-			if targetPhase == PhaseImplement {
-				if partial.enabled {
-					phaseHistory, err := discoverPartialImplementCarryForward(sealedRunDir, partial.roadmapPhase)
-					if err != nil {
-						return fmt.Errorf("discovering partial roadmap phase history: %w", err)
-					}
-					dirs = append(dirs, phaseHistory...)
-				} else {
-					phaseDirs, err := discoverCarriedPhasePlanDirs(sealedRunDir)
-					if err != nil {
-						return fmt.Errorf("discovering phase-NN plan dirs: %w", err)
-					}
-					dirs = append(dirs, phaseDirs...)
-					phaseFiles, err := discoverCarriedPhaseFiles(sealedRunDir)
-					if err != nil {
-						return fmt.Errorf("discovering phase-root history files: %w", err)
-					}
-					dirs = append(dirs, phaseFiles...)
-				}
+			dirs, err := carryForwardSet(targetPhase, sealedRunDir, partial.roadmapPhase)
+			if err != nil {
+				return err
 			}
 
 			// Deep-copy carried directories from sealed to new run. On error
@@ -1716,6 +1240,33 @@ func carryForwardDirs(target Phase) []string {
 	return nil
 }
 
+// carryForwardSet returns the complete static and on-disk carry-forward set
+// shared by rewind preview and execution. A positive partialRoadmapPhase
+// selects the partial Implement rule; zero selects the full Implement rule.
+func carryForwardSet(target Phase, sealedRunDir string, partialRoadmapPhase int) ([]string, error) {
+	dirs := append([]string(nil), carryForwardDirs(target)...)
+	if target != PhaseImplement || sealedRunDir == "" {
+		return dirs, nil
+	}
+	if partialRoadmapPhase > 0 {
+		phaseHistory, err := discoverPartialImplementCarryForward(sealedRunDir, partialRoadmapPhase)
+		if err != nil {
+			return nil, fmt.Errorf("discovering partial roadmap phase history: %w", err)
+		}
+		return append(dirs, phaseHistory...), nil
+	}
+	phaseDirs, err := discoverCarriedPhasePlanDirs(sealedRunDir)
+	if err != nil {
+		return nil, fmt.Errorf("discovering phase-NN plan dirs: %w", err)
+	}
+	phaseFiles, err := discoverCarriedPhaseFiles(sealedRunDir)
+	if err != nil {
+		return nil, fmt.Errorf("discovering phase-root history files: %w", err)
+	}
+	dirs = append(dirs, phaseDirs...)
+	return append(dirs, phaseFiles...), nil
+}
+
 // UpgradePipeline escalates a feature's pipeline profile without rewinding.
 // Gates are reset to the new profile's defaults. The current phase continues.
 func (m *Manager) UpgradePipeline(featureID string, newProfile PipelineProfile) error {
@@ -1769,38 +1320,6 @@ func (m *Manager) Delete(featureID string) error {
 	}
 
 	return m.Store.Delete(featureID)
-}
-
-// EnsureWorktree creates a worktree for a feature if one doesn't exist.
-// Uses the feature's BaseBranch as the start point, which for sequential
-// children points to the predecessor's branch.
-func (m *Manager) EnsureWorktree(featureID string) error {
-	if m.Worktrees == nil {
-		return nil
-	}
-	return m.Store.Modify(featureID, func(f *Feature) error {
-		if len(f.Repos) == 0 {
-			return fmt.Errorf("feature has no repos")
-		}
-		repo := f.Repos[0]
-		if repo.WorktreePath != "" {
-			return nil // already has worktree
-		}
-		startPoint := repo.BaseBranch
-		if startPoint == "" {
-			startPoint = "HEAD"
-		}
-		workspaceSlug := repoWorkspaceSlug(f, repo)
-		wtPath, err := m.Worktrees.Create(repo.Path, workspaceSlug, repo.Name, startPoint)
-		if err != nil {
-			return fmt.Errorf("creating worktree: %w", err)
-		}
-		f.Repos[0].WorktreePath = wtPath
-		if f.Repos[0].Branch == "" {
-			f.Repos[0].Branch = m.branchName(workspaceSlug)
-		}
-		return nil
-	})
 }
 
 func generateID() string {
@@ -1922,7 +1441,29 @@ func (m *Manager) TryCompletePublish(featureID string) (bool, error) {
 	if !f.AllReposPublished() {
 		return false, nil
 	}
-	// Only transition if feature is at ReviewPassed or CodeReady
+	// A manual publish can successfully finish after an earlier Publish-phase
+	// failure. Recover that stale terminal state now that every touched repo
+	// has a PR, clearing the failure fields before entering a successful status.
+	if f.Status == StatusFailed && f.CurrentPhase == PhasePublish {
+		if err := m.Store.Modify(featureID, func(current *Feature) error {
+			if current.Status != StatusFailed || current.CurrentPhase != PhasePublish || !current.AllReposPublished() {
+				return nil
+			}
+			if err := current.Transition(StatusCodeReady); err != nil {
+				return err
+			}
+			current.LastError = ""
+			current.FailureType = ""
+			return nil
+		}); err != nil {
+			return false, err
+		}
+		f, err = m.Get(featureID)
+		if err != nil {
+			return false, err
+		}
+	}
+	// Only transition if feature is at ReviewPassed or CodeReady.
 	if f.Status != StatusReviewPassed && f.Status != StatusCodeReady {
 		return false, nil
 	}

@@ -41,7 +41,7 @@ type Owner struct {
 	Version   string    `json:"version,omitempty"`
 }
 
-// Lock represents an acquired instance lock. Call Close when the TUI exits.
+// Lock represents an acquired instance lock. Call Close when the desktop app exits.
 type Lock struct {
 	file  *os.File
 	owner Owner

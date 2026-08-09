@@ -160,6 +160,12 @@ func TestOpenAPIDeclaresHardeningSchemas(t *testing.T) {
 	assertSchemaProperties(t, spec, "ResponseMeta", "revision", "generated_at", "as_of_seq")
 	assertSchemaProperties(t, spec, "SSEEvent", "seq", "epoch", "kind", "resource", "resource_version", "snapshot_required")
 	assertSchemaProperties(t, spec, "Resource", "type", "id", "feature_id", "phase")
+	assertSchemaProperties(t, spec, "NeedUserInputGate", "verification")
+	assertSchemaProperties(t, spec, "NeedUserInputVerification", "blockers", "allowed_actions")
+	assertSchemaProperties(
+		t, spec, "NeedUserInputVerificationBlocker",
+		"item_id", "name", "repo_name", "command", "reason", "capabilities", "remediation",
+	)
 }
 
 // TestRefactorRequestSchemaOmitsRepoSelection pins the refactor contract:
@@ -187,6 +193,10 @@ func TestRefactorRequestSchemaOmitsRepoSelection(t *testing.T) {
 // apiPathRefactorAction is the served URL of the refactor launch action.
 const apiPathRefactorAction = "/api/v1/features/{feature_id}/actions/refactor"
 
+const apiPathReviewFeedbackFetch = "/api/v1/features/{feature_id}/actions/review-feedback/fetch"
+
+const apiPathReviewFeedbackAction = "/api/v1/features/{feature_id}/actions/review-feedback"
+
 // TestRefactorOperationBindsTypedSchemas pins the statically documented
 // refactor operation: the request body must reference RefactorFeatureRequest
 // (so oapi-codegen emits the typed Go binding) and the success/typed error
@@ -208,6 +218,62 @@ func TestRefactorOperationBindsTypedSchemas(t *testing.T) {
 	}
 	declaredOpenAPIResponse(t, op, "404")
 	declaredOpenAPIResponse(t, op, "409")
+}
+
+func TestReviewFeedbackFetchOperationBindsTypedSchemas(t *testing.T) {
+	spec := loadOpenAPISpec(t)
+	op := lookupOpenAPIOperation(t, spec, http.MethodPost, apiPathReviewFeedbackFetch)
+	if op.OperationID != "fetchReviewFeedback" {
+		t.Fatalf("operationId = %q, want fetchReviewFeedback", op.OperationID)
+	}
+	schemaRef := nestedYAMLRef(t, op.RequestBody, "content", "application/json", "schema")
+	if schemaRef != "#/components/schemas/ReviewFeedbackFetchRequest" {
+		t.Fatalf("fetchReviewFeedback requestBody schema = %q, want ReviewFeedbackFetchRequest", schemaRef)
+	}
+	resp200 := declaredOpenAPIResponse(t, op, "200")
+	respSchemaRef := nestedYAMLRef(t, responseContentMap(t, resp200), "schema")
+	if respSchemaRef != "#/components/schemas/ReviewFeedbackFetchResponse" {
+		t.Fatalf("fetchReviewFeedback 200 schema = %q, want ReviewFeedbackFetchResponse", respSchemaRef)
+	}
+	declaredOpenAPIResponse(t, op, "400")
+	declaredOpenAPIResponse(t, op, "404")
+	declaredOpenAPIResponse(t, op, "502")
+}
+
+func TestReviewFeedbackLaunchOperationBindsTypedSchemas(t *testing.T) {
+	spec := loadOpenAPISpec(t)
+	op := lookupOpenAPIOperation(t, spec, http.MethodPost, apiPathReviewFeedbackAction)
+	if op.OperationID != "reviewFeedbackFeature" {
+		t.Fatalf("operationId = %q, want reviewFeedbackFeature", op.OperationID)
+	}
+	schemaRef := nestedYAMLRef(t, op.RequestBody, "content", "application/json", "schema")
+	if schemaRef != "#/components/schemas/ReviewFeedbackFeatureRequest" {
+		t.Fatalf("reviewFeedbackFeature requestBody schema = %q, want ReviewFeedbackFeatureRequest", schemaRef)
+	}
+	resp201 := declaredOpenAPIResponse(t, op, "201")
+	respSchemaRef := nestedYAMLRef(t, responseContentMap(t, resp201), "schema")
+	if respSchemaRef != "#/components/schemas/ReviewFeedbackFeatureResponse" {
+		t.Fatalf("reviewFeedbackFeature 201 schema = %q, want ReviewFeedbackFeatureResponse", respSchemaRef)
+	}
+	declaredOpenAPIResponse(t, op, "400")
+	declaredOpenAPIResponse(t, op, "404")
+	declaredOpenAPIResponse(t, op, "409")
+
+	schema, ok := spec.Components.Schemas["ReviewFeedbackFeatureRequest"]
+	if !ok {
+		t.Fatal("components.schemas.ReviewFeedbackFeatureRequest missing")
+	}
+	props := schemaProperties(schema)
+	for _, required := range []string{"comments", "gate"} {
+		if !props[required] {
+			t.Fatalf("ReviewFeedbackFeatureRequest missing property %q", required)
+		}
+	}
+	for _, forbidden := range []string{"repo", "mode"} {
+		if props[forbidden] {
+			t.Fatalf("ReviewFeedbackFeatureRequest must carry fetched comments without %q", forbidden)
+		}
+	}
 }
 
 // TestGeneratedRefactorSurfaceIsTyped pins the generated Go surface: the
@@ -380,6 +446,14 @@ func topLevelPatternForPath(path string) string {
 		return apiPathConfigRuntime
 	case path == apiPathCatalogModels:
 		return apiPathCatalogModels
+	case path == apiPathCatalogRefresh:
+		return apiPathCatalogRefresh
+	case path == apiPathReadiness:
+		return apiPathReadiness
+	case path == apiPathReadinessRefresh:
+		return apiPathReadinessRefresh
+	case path == apiPathWorkspaceRepositoriesInit:
+		return apiPathWorkspaceRepositoriesInit
 	case path == apiPathPrompts:
 		return apiPathPrompts
 	case strings.HasPrefix(path, "/api/v1/prompts/"):
@@ -396,8 +470,8 @@ func topLevelPatternForPath(path string) string {
 		return apiPathRecovery
 	case path == apiPathRecoveryActions:
 		return apiPathRecoveryActions
-	case path == apiPathShutdown:
-		return apiPathShutdown
+	case path == apiPathRecoveryLogs:
+		return apiPathRecoveryLogs
 	case path == apiPathEvents:
 		return apiPathEvents
 	default:
@@ -432,23 +506,41 @@ func documentedServerRoutes() []documentedRoute {
 		{method: httpMethodGet, path: "/api/v1/features/{feature_id}/config"},
 		{method: httpMethodPost, path: "/api/v1/features/{feature_id}/config", mutation: true},
 		{method: httpMethodGet, path: "/api/v1/features/{feature_id}/live-preview"},
+		{method: httpMethodGet, path: "/api/v1/features/{feature_id}/reviews"},
 		{method: httpMethodPost, path: "/api/v1/features/{feature_id}/reviews", mutation: true},
+		{method: httpMethodPost, path: "/api/v1/features/{feature_id}/reviews/{review_id}/validate", mutation: true},
 		{method: "put", path: "/api/v1/features/{feature_id}/reviews/{review_id}/draft", mutation: true},
 		{method: httpMethodPost, path: "/api/v1/features/{feature_id}/reviews/{review_id}/decision", mutation: true},
 		{method: httpMethodPost, path: "/api/v1/features/{feature_id}/actions/{action}", mutation: true},
 		{method: httpMethodPost, path: "/api/v1/features/{feature_id}/actions/refactor", mutation: true},
+		{method: httpMethodPost, path: "/api/v1/features/{feature_id}/actions/rebase", mutation: true},
+		{method: httpMethodPost, path: apiPathReviewFeedbackAction, mutation: true},
+		{method: httpMethodPost, path: apiPathReviewFeedbackFetch, mutation: true},
 		{method: httpMethodPost, path: "/api/v1/features/{feature_id}/actions/{action}/{subaction}", mutation: true},
+		{method: httpMethodGet, path: "/api/v1/features/{feature_id}/rewind/preview"},
+		{method: httpMethodGet, path: "/api/v1/features/{feature_id}/completion/preflight"},
+		{method: httpMethodGet, path: "/api/v1/features/{feature_id}/repositories/{repo_name}/diff"},
+		{method: httpMethodGet, path: "/api/v1/features/{feature_id}/repositories/{repo_name}/path"},
+		{method: httpMethodGet, path: "/api/v1/features/{feature_id}/runs"},
+		{method: httpMethodGet, path: "/api/v1/features/{feature_id}/runs/{run_number}"},
+		{method: httpMethodGet, path: "/api/v1/features/{feature_id}/runs/{run_number}/sessions"},
 		{method: httpMethodGet, path: "/api/v1/features/{feature_id}/runs/{run_number}/artifacts"},
 		{method: httpMethodGet, path: "/api/v1/features/{feature_id}/runs/{run_number}/artifacts/{artifact_id}"},
 		{method: httpMethodGet, path: "/api/v1/features/{feature_id}/runs/{run_number}/logs/{log_id}"},
+		{method: httpMethodGet, path: "/api/v1/features/{feature_id}/runs/{run_number}/logs"},
 		{method: httpMethodGet, path: apiPathConfigRuntime},
 		{method: "patch", path: apiPathConfigRuntime, mutation: true},
 		{method: "put", path: apiPathConfigRuntime, mutation: true},
 		{method: httpMethodGet, path: apiPathCatalogModels},
+		{method: httpMethodPost, path: apiPathCatalogRefresh, mutation: true},
+		{method: httpMethodGet, path: apiPathReadiness},
+		{method: httpMethodPost, path: apiPathReadinessRefresh, mutation: true},
+		{method: httpMethodPost, path: apiPathWorkspaceRepositoriesInit, mutation: true},
 		{method: httpMethodGet, path: apiPathPrompts},
 		{method: httpMethodPost, path: "/api/v1/prompts/ask-user/answer", mutation: true},
 		{method: httpMethodPost, path: "/api/v1/prompts/help/send", mutation: true},
 		{method: httpMethodPost, path: "/api/v1/prompts/chat/start", mutation: true},
+		{method: httpMethodPost, path: "/api/v1/prompts/chat/end", mutation: true},
 		{method: httpMethodGet, path: apiPathPermissions},
 		{method: httpMethodPost, path: apiPathPermissionsAnswer, mutation: true},
 		{method: httpMethodGet, path: apiPathSessions},
@@ -457,7 +549,7 @@ func documentedServerRoutes() []documentedRoute {
 		{method: httpMethodGet, path: "/api/v1/sessions/{session_id}/output/stream", sse: true},
 		{method: httpMethodGet, path: apiPathRecovery},
 		{method: httpMethodPost, path: apiPathRecoveryActions, mutation: true},
-		{method: httpMethodPost, path: apiPathShutdown, mutation: true},
+		{method: httpMethodGet, path: apiPathRecoveryLogs},
 		{method: httpMethodGet, path: apiPathEvents, sse: true},
 	}
 }

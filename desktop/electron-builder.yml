@@ -1,0 +1,84 @@
+# Local packaging remains unsigned and unpublished by default. Protected tag
+# release jobs provide Developer ID/notarization and GPG material through CI
+# environment only; release verification rejects strict runs without them.
+appId: com.doordash.agentico
+productName: Agentico
+protocols:
+  - name: Agentico
+    schemes:
+      - agentico
+directories:
+  buildResources: build
+  output: dist
+files:
+  - out/**
+  - package.json
+asar: true
+electronFuses:
+  runAsNode: false
+  enableCookieEncryption: true
+  enableNodeOptionsEnvironmentVariable: false
+  enableNodeCliInspectArguments: false
+  enableEmbeddedAsarIntegrityValidation: true
+  onlyLoadAppFromAsar: true
+  # Standard Electron packages do not ship browser_v8_context_snapshot.bin;
+  # enabling this fuse makes the browser process fail before main starts.
+  loadBrowserProcessSpecificV8Snapshot: false
+  grantFileProtocolExtraPrivileges: false
+npmRebuild: false
+# No publishing or update delivery: a null publish config also stops
+# electron-builder from emitting auto-update metadata (latest-*.yml).
+publish: null
+# Staged by scripts/prepare-server.mjs before every package build: the
+# target-matched Go server at bin/agentico (lipo'd universal on macOS) and
+# the build-identity.json binding desktop/API/schema/server/os/arch
+# identities. Lands in Contents/Resources/ (macOS) or resources/ (Linux),
+# which is exactly where src/main/gateway/resources.ts resolves the bundled
+# server: process.resourcesPath/bin/agentico.
+extraResources:
+  - from: resources
+    to: .
+  # Theme-matched dock icon variants swapped at runtime by the main process.
+  - from: build/icon-dark.png
+    to: icons/icon-dark.png
+  - from: build/icon-light.png
+    to: icons/icon-light.png
+  - from: ../LICENSE.txt
+    to: LICENSE.txt
+  - from: ../NOTICE.txt
+    to: NOTICE.txt
+mac:
+  target:
+    - target: dmg
+      arch: universal
+  # The in-app updater selects macOS assets by /mac|darwin/ + .dmg and the
+  # release URL stays version-agnostic (the tag carries the version), so the
+  # artifact name is fixed: Agentico-mac-universal.dmg.
+  artifactName: ${productName}-mac-${arch}.${ext}
+  category: public.app-category.developer-tools
+  hardenedRuntime: true
+  # Development build: use an ad-hoc signature instead of looking up a
+  # distribution identity. macOS arm64 requires this signature to execute,
+  # and verify-package rejects DMGs that cannot launch after mounting.
+  identity: '-'
+  notarize: false
+linux:
+  # electron-builder would otherwise derive the executable from the npm
+  # package name (@agentico/desktop), which it rejects for file paths; the
+  # journeys and verify-package.mjs resolve <unpacked>/agentico.
+  executableName: agentico
+  target:
+    - AppImage
+    - deb
+  category: Development
+  # Debian control metadata for the unsigned dev package; the org address is
+  # the doordash-oss GitHub organization behind the project homepage.
+  maintainer: DoorDash open source <opensource@doordash.com>
+# The default deb filename derives from the npm package name
+# (@agentico/desktop) and cannot be written; use the Debian convention.
+deb:
+  artifactName: agentico_${version}_${arch}.${ext}
+# The in-app updater selects AppImage assets by arch token, which the default
+# name (productName-version.AppImage) lacks.
+appImage:
+  artifactName: ${productName}-${arch}.${ext}

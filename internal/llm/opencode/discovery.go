@@ -376,7 +376,7 @@ func displayNameFromBackendID(id string) string {
 // "id name" text and ordered: a shrink token (mini/small) demotes an otherwise
 // capable family to balanced, and cheap tokens win outright. Unrecognized models
 // return "" (unknown). The buckets only need to be stable and let selection run;
-// Phase 6 owns provider-neutral default ranking.
+// Provider-neutral discovery owns default ranking.
 var (
 	cheapModelTokens     = []string{"nano", "haiku", "flash", "lite", "tiny", "embed"}
 	balancedShrinkTokens = []string{"mini", "small"}

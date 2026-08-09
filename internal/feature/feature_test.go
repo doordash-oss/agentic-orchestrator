@@ -16,7 +16,7 @@ package feature
 
 import (
 	"bytes"
-	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -384,81 +384,15 @@ func TestDesignStatusBehavior(t *testing.T) {
 	}
 }
 
-func TestStatusYAMLLegacyInt(t *testing.T) {
+func TestStatusYAMLRejectsNonCanonicalValues(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: pure value, table-driven, or per-test temp-dir assertions with no shared state.
-	// Test that legacy integer format (before SplitParent was added) still works
-	tests := []struct {
-		yaml string
-		want Status
-	}{
-		{"0", StatusCreated},
-		{"1", StatusResearching},
-		{"8", StatusPublished},
-		{"9", StatusFailed},
-		{"12", StatusDone}, // legacy: 12 was Done before SplitParent insertion
-	}
-	for _, tt := range tests {
-		var got Status
-		if err := yaml.Unmarshal([]byte(tt.yaml), &got); err != nil {
-			t.Fatalf("Unmarshal %q: %v", tt.yaml, err)
-		}
-		if got != tt.want {
-			t.Errorf("legacy int %s: got %v, want %v", tt.yaml, got, tt.want)
-		}
-	}
-}
-
-func TestStatusYAMLLegacyBrainstormAliases(t *testing.T) {
-	t.Parallel()
-	tests := []struct {
-		yaml string
-		want Status
-	}{
-		{"BrainstormReady", StatusDesignReady},
-		{"Brainstorming", StatusDesigning},
-	}
-	for _, tt := range tests {
-		t.Run(tt.yaml, func(t *testing.T) {
+	for _, value := range []string{"PR" + "Ready", "Brain" + "stormReady", "Brain" + "storming", "0", "12"} {
+		t.Run(value, func(t *testing.T) {
 			var got Status
-			if err := yaml.Unmarshal([]byte(tt.yaml), &got); err != nil {
-				t.Fatalf("Unmarshal(%q) error = %v", tt.yaml, err)
-			}
-			if got != tt.want {
-				t.Errorf("Unmarshal(%q) = %v, want %v", tt.yaml, got, tt.want)
-			}
-		})
-	}
-}
-
-func TestNormalizeLegacyArtifactAliasesAddsDesignFromBrainstorm(t *testing.T) {
-	t.Parallel()
-	tests := []struct {
-		name string
-		in   map[string]string
-		want string
-	}{
-		{
-			name: "legacy basename uses brainstorm directory",
-			in:   map[string]string{"brainstorm": "brainstorm.md"},
-			want: filepath.Join("brainstorm", "brainstorm.md"),
-		},
-		{
-			name: "absolute legacy path is preserved",
-			in:   map[string]string{"brainstorm": "/tmp/brainstorm.md"},
-			want: "/tmp/brainstorm.md",
-		},
-		{
-			name: "existing design wins",
-			in:   map[string]string{"design": "design.md", "brainstorm": "brainstorm.md"},
-			want: "design.md",
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			normalizeLegacyArtifactAliases(tt.in)
-			if got := tt.in["design"]; got != tt.want {
-				t.Errorf("normalizeLegacyArtifactAliases() design = %q, want %q", got, tt.want)
+			err := yaml.Unmarshal([]byte(value), &got)
+			if err == nil || !strings.Contains(err.Error(), "unknown status") {
+				t.Errorf("Unmarshal(%q) error = %v, want unknown status error", value, err)
 			}
 		})
 	}
@@ -692,7 +626,6 @@ func TestResumeRebaseCyclePreservesTimingKey(t *testing.T) {
 		ActiveTimingKey:  "rebase-1",
 		ActivePhaseStart: &start,
 	}
-	f.SetRebaseCount(1)
 
 	// Interrupt accumulates time but preserves ActiveTimingKey
 	if err := f.Transition(StatusInterrupted); err != nil {
@@ -719,35 +652,6 @@ func TestResumeRebaseCyclePreservesTimingKey(t *testing.T) {
 	}
 }
 
-func TestResumeReviewCommentsCyclePreservesTimingKey(t *testing.T) {
-	t.Parallel()
-	// parallel-candidate: pure value, table-driven, or per-test temp-dir assertions with no shared state.
-	start := time.Now().Add(-8 * time.Minute)
-	f := &Feature{
-		Status:           StatusImplementing,
-		CurrentPhase:     PhaseImplement,
-		ActiveTimingKey:  "review-comments",
-		ActivePhaseStart: &start,
-	}
-	f.SetAddressingReviews(true)
-
-	// Interrupt during review-comments
-	if err := f.Transition(StatusInterrupted); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if f.ActiveTimingKey != "review-comments" {
-		t.Errorf("expected ActiveTimingKey preserved as 'review-comments', got %q", f.ActiveTimingKey)
-	}
-
-	// Resume: Interrupted → Implementing
-	if err := f.Transition(StatusImplementing); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if f.ActiveTimingKey != "review-comments" {
-		t.Errorf("expected ActiveTimingKey to remain 'review-comments' after resume, got %q", f.ActiveTimingKey)
-	}
-}
-
 func TestIsImplementTimingKey(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: pure value, table-driven, or per-test temp-dir assertions with no shared state.
@@ -758,7 +662,6 @@ func TestIsImplementTimingKey(t *testing.T) {
 		{"implement", true},
 		{"rebase-1", true},
 		{"rebase-10", true},
-		{"review-comments", true},
 		{"research", false},
 		{"plan", false},
 		{"", false},
@@ -1602,58 +1505,6 @@ func TestTouchedRepos(t *testing.T) {
 	}
 }
 
-func TestCyclePrefix(t *testing.T) {
-	t.Parallel()
-	// parallel-candidate: pure value, table-driven, or per-test temp-dir assertions with no shared state.
-	tests := []struct {
-		name            string
-		activeCycleType RepoCycleType
-		rebaseCount     int
-		want            string
-	}{
-		{"no cycle", "", 0, ""},
-		{"rebase count 1", CycleRebase, 1, "rebase-1"},
-		{"rebase count 3", CycleRebase, 3, "rebase-3"},
-		{"rebase count 0 fallback", CycleRebase, 0, "rebase"},
-		{"review-comments", CycleReviewComments, 0, "review-comments"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			f := &Feature{}
-			f.SetActiveCycleType(tt.activeCycleType)
-			f.SetRebaseCount(tt.rebaseCount)
-			if got := f.CyclePrefix(); got != tt.want {
-				t.Errorf("CyclePrefix() = %q, want %q", got, tt.want)
-			}
-		})
-	}
-}
-
-func TestRepoCycleDirName(t *testing.T) {
-	t.Parallel()
-	// parallel-candidate: pure value, table-driven, or per-test temp-dir assertions with no shared state.
-	tests := []struct {
-		name      string
-		cycleType RepoCycleType
-		count     int
-		want      string
-	}{
-		{"rebase count 1", CycleRebase, 1, "rebase-1"},
-		{"rebase count 5", CycleRebase, 5, "rebase-5"},
-		{"rebase count 0 fallback", CycleRebase, 0, "rebase"},
-		{"review-comments count 1", CycleReviewComments, 1, "review-comments-1"},
-		{"review-comments count 5", CycleReviewComments, 5, "review-comments-5"},
-		{"review-comments count 0 fallback", CycleReviewComments, 0, "review-comments"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := RepoCycleDirName(tt.cycleType, tt.count); got != tt.want {
-				t.Errorf("RepoCycleDirName(%q, %d) = %q, want %q", tt.cycleType, tt.count, got, tt.want)
-			}
-		})
-	}
-}
-
 func TestEffectivePipeline(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: pure value, table-driven, or per-test temp-dir assertions with no shared state.
@@ -1855,115 +1706,6 @@ func TestEffectivePhases(t *testing.T) {
 	}
 }
 
-func TestFeature_HasActiveRepoCycles(t *testing.T) {
-	t.Parallel()
-	// parallel-candidate: pure value, table-driven, or per-test temp-dir assertions with no shared state.
-	tests := []struct {
-		name  string
-		repos map[string]*RepoCycleState
-		want  bool
-	}{
-		{"nil repo cycles", nil, false},
-		{"empty repo cycles", map[string]*RepoCycleState{}, false},
-		{
-			name:  "single running cycle",
-			repos: map[string]*RepoCycleState{"repo-a": {Type: CycleRebase, Status: RepoCycleRunning}},
-			want:  true,
-		},
-		{
-			name:  "single reviewing cycle",
-			repos: map[string]*RepoCycleState{"repo-a": {Type: CycleReviewComments, Status: RepoCycleReviewing}},
-			want:  true,
-		},
-		{
-			name:  "paused need-user-input cycle is active",
-			repos: map[string]*RepoCycleState{"repo-a": {Type: CycleRebase, Status: RepoCycleNeedUserInput}},
-			want:  true,
-		},
-		{
-			name:  "single done cycle",
-			repos: map[string]*RepoCycleState{"repo-a": {Type: CycleRebase, Status: "done"}},
-			want:  false,
-		},
-		{
-			name:  "unknown cycle type running is not active",
-			repos: map[string]*RepoCycleState{"repo-a": {Type: "refactor", Status: RepoCycleRunning}},
-			want:  false,
-		},
-		{
-			name: "mixed cycles",
-			repos: map[string]*RepoCycleState{
-				"repo-a": {Type: CycleRebase, Status: "done"},
-				"repo-b": {Type: CycleReviewComments, Status: RepoCycleRunning},
-			},
-			want: true,
-		},
-		{
-			name: "nil entry is skipped",
-			repos: map[string]*RepoCycleState{
-				"repo-a": nil,
-				"repo-b": {Type: CycleRebase, Status: "done"},
-			},
-			want: false,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			f := &Feature{RepoCycles: tt.repos}
-			if got := f.HasActiveRepoCycles(); got != tt.want {
-				t.Errorf("HasActiveRepoCycles() = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
-
-func TestPendingUserInputCycles_ReturnsPausedCycles(t *testing.T) {
-	t.Parallel()
-	// parallel-candidate: pure value, table-driven, or per-test temp-dir assertions with no shared state.
-	f := &Feature{
-		Status: StatusPublished,
-		RepoCycles: map[string]*RepoCycleState{
-			"repo-a": {
-				Type:                     CycleReviewComments,
-				Status:                   RepoCycleNeedUserInput,
-				Iteration:                2,
-				PendingNeedUserInputPath: "/tmp/review-comments/repo-a/iteration-02/need-user-input.yaml",
-			},
-			"repo-b": {Type: CycleReviewComments, Status: RepoCycleRunning},
-			"repo-c": {
-				Type:                     CycleRebase,
-				Status:                   RepoCycleNeedUserInput,
-				PendingNeedUserInputPath: "/tmp/rebase/repo-c/iteration-01/need-user-input.yaml",
-			},
-			// Missing gate path — must be filtered out.
-			"repo-d": {Type: CycleRebase, Status: RepoCycleNeedUserInput},
-		},
-	}
-
-	got := f.PendingUserInputCycles()
-	if len(got) != 2 {
-		t.Fatalf("PendingUserInputCycles() len = %d, want 2 (got %+v)", len(got), got)
-	}
-	if got[0].RepoName != "repo-a" || got[0].CycleType != CycleReviewComments {
-		t.Fatalf("PendingUserInputCycles()[0] = %+v", got[0])
-	}
-	if got[1].RepoName != "repo-c" || got[1].CycleType != CycleRebase {
-		t.Fatalf("PendingUserInputCycles()[1] = %+v", got[1])
-	}
-}
-
-func TestPendingUserInputCycles_NilOrEmpty(t *testing.T) {
-	t.Parallel()
-	// parallel-candidate: pure value, table-driven, or per-test temp-dir assertions with no shared state.
-	if got := (*Feature)(nil).PendingUserInputCycles(); got != nil {
-		t.Fatalf("nil feature should return nil, got %+v", got)
-	}
-	f := &Feature{Status: StatusPublished}
-	if got := f.PendingUserInputCycles(); got != nil {
-		t.Fatalf("empty cycles should return nil, got %+v", got)
-	}
-}
-
 // TestIsReviewing covers the IsReviewing accessor under SchemaVersionCurrent = 4.
 // Per-repo "awaiting_final_review" was deleted; the unified flow uses the
 // feature-level StatusFinalReviewing instead.
@@ -1993,6 +1735,33 @@ func TestIsReviewing(t *testing.T) {
 				t.Errorf("IsReviewing() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+// TestIsFinalizingPhase covers the end-of-phase git boundary marker. It rides
+// on CurrentPhaseStatus so ReviewPassed is never presented as startable while
+// the phase commit is still running.
+func TestIsFinalizingPhase(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name        string
+		phaseStatus string
+		want        bool
+	}{
+		{name: "finalizing", phaseStatus: PhaseStatusFinalizing, want: true},
+		{name: "implementing", phaseStatus: "implementing", want: false},
+		{name: "cleared", phaseStatus: "", want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := &Feature{Status: StatusReviewPassed, CurrentPhaseStatus: tt.phaseStatus}
+			if got := f.IsFinalizingPhase(); got != tt.want {
+				t.Errorf("IsFinalizingPhase() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+	if (*Feature)(nil).IsFinalizingPhase() {
+		t.Error("IsFinalizingPhase() on nil feature = true, want false")
 	}
 }
 

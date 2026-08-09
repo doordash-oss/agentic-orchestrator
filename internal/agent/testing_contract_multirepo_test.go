@@ -110,30 +110,6 @@ func TestCompileTestingContractMultiRepo_CrossRepoStepsFromPlan(t *testing.T) {
 	}
 }
 
-func TestCompileTestingContractMultiRepo_PlanLessNoPlanItems(t *testing.T) {
-	plan := strings.Join([]string{
-		"## Tasks",
-		"### Task 1: api work",
-		"**Repo:** `api`",
-		"#### Automated Verification:",
-		"- [ ] api tests: `go test ./api/... -count=1`",
-	}, "\n")
-	in := MultiRepoContractInput{
-		Repos:    []string{testRepoNameAPI},
-		PlanText: plan,
-		PlanLess: true,
-	}
-	c := CompileTestingContractMultiRepo(in)
-	for _, it := range c.Items {
-		if it.Source == testingContractPlanSource {
-			t.Errorf("plan-less mode emitted plan-source item: %+v", it)
-		}
-	}
-	if len(c.Items) != 0 {
-		t.Errorf("plan-less mode emitted items: %+v", c.Items)
-	}
-}
-
 func TestCompileTestingContractMultiRepo_SingleRepoDegenerate(t *testing.T) {
 	plan := strings.Join([]string{
 		"#### Automated Verification:",
@@ -308,27 +284,5 @@ func TestCompileTestingContractMultiRepo_EvidenceRowsMultiRepoAreCrossRepo(t *te
 	}
 	if got := countItems(c.Items, testingContractBehavioralSource, TestingContractCrossRepoTag); got != 1 {
 		t.Fatalf("multi-repo behavioral rows = %d, want 1", got)
-	}
-}
-
-func TestCompileTestingContractMultiRepo_PlanLessNoEvidenceRows(t *testing.T) {
-	plan := strings.Join([]string{
-		"## Success Criteria",
-		"### Visual Evidence",
-		"- [ ] Capture the screen.",
-		"### Behavioral Evidence",
-		"- [ ] Attach the transcript.",
-	}, "\n")
-
-	c := CompileTestingContractMultiRepo(MultiRepoContractInput{
-		Repos:    []string{testRepoNameAPI, testRepoNameWeb},
-		PlanText: plan,
-		PlanLess: true,
-	})
-
-	for _, it := range c.Items {
-		if it.Source == testingContractVisualSource || it.Source == testingContractBehavioralSource {
-			t.Fatalf("plan-less contract emitted evidence row: %+v", it)
-		}
 	}
 }

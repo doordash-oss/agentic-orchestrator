@@ -1,0 +1,247 @@
+import { describe, expect, it } from 'vitest';
+
+import {
+  auditLicenseInventory,
+  auditNpmLockfile,
+  collectNpmRuntimeInventory,
+  hasElectronBuilderProtocolScheme,
+  highestGoSeverity,
+  parseGoModRequirements,
+} from './audit-release.mjs';
+
+describe('release audit lockfile and license checks', () => {
+  it('collects production npm packages plus explicitly shipped renderer dev assets', () => {
+    const lock = {
+      lockfileVersion: 3,
+      packages: {
+        '': { workspaces: ['desktop'] },
+        desktop: { dependencies: { 'runtime-lib': '^1.0.0' } },
+        'node_modules/runtime-lib': {
+          version: '1.0.0',
+          license: 'MIT',
+          resolved: 'https://registry.npmjs.org/runtime-lib/-/runtime-lib-1.0.0.tgz',
+          integrity: 'sha512-abc=',
+          dependencies: { transitive: '^2.0.0' },
+        },
+        'node_modules/transitive': {
+          version: '2.0.0',
+          license: 'Apache-2.0',
+          resolved: 'https://registry.npmjs.org/transitive/-/transitive-2.0.0.tgz',
+          integrity: 'sha512-def=',
+        },
+        'node_modules/@fontsource/example': {
+          version: '3.0.0',
+          license: 'OFL-1.1',
+          resolved: 'https://registry.npmjs.org/@fontsource/example/-/example-3.0.0.tgz',
+          integrity: 'sha512-ghi=',
+          dev: true,
+        },
+      },
+    };
+
+    const inventory = collectNpmRuntimeInventory(
+      lock,
+      { dependencies: { 'runtime-lib': '^1.0.0' } },
+      { shippedDevDependencies: ['@fontsource/example'] },
+    );
+
+    expect(inventory.map((pkg) => pkg.name).sort()).toEqual([
+      '@fontsource/example',
+      'runtime-lib',
+      'transitive',
+    ]);
+    expect(
+      auditNpmLockfile(lock, { dependencies: { 'runtime-lib': '^1.0.0' } }, inventory),
+    ).toEqual([]);
+  });
+
+  it('resolves npm dependencies through the closest package ancestor before root hoists', () => {
+    const lock = {
+      lockfileVersion: 3,
+      packages: {
+        '': { workspaces: ['desktop'] },
+        desktop: { dependencies: { parent: '^1.0.0' } },
+        'node_modules/parent': {
+          version: '1.0.0',
+          license: 'MIT',
+          resolved: 'https://registry.npmjs.org/parent/-/parent-1.0.0.tgz',
+          integrity: 'sha512-parent=',
+          dependencies: { child: '^1.0.0' },
+        },
+        'node_modules/parent/node_modules/child': {
+          version: '1.0.0',
+          license: 'MIT',
+          resolved: 'https://registry.npmjs.org/child/-/child-1.0.0.tgz',
+          integrity: 'sha512-child=',
+          dependencies: { '@scope/shared': '^2.0.0' },
+        },
+        'node_modules/parent/node_modules/@scope/shared': {
+          version: '2.0.0',
+          license: 'Apache-2.0',
+          resolved: 'https://registry.npmjs.org/@scope/shared/-/shared-2.0.0.tgz',
+          integrity: 'sha512-shared2=',
+        },
+        'node_modules/@scope/shared': {
+          version: '1.0.0',
+          license: 'Apache-2.0',
+          resolved: 'https://registry.npmjs.org/@scope/shared/-/shared-1.0.0.tgz',
+          integrity: 'sha512-shared1=',
+        },
+      },
+    };
+
+    const inventory = collectNpmRuntimeInventory(
+      lock,
+      { dependencies: { parent: '^1.0.0' } },
+      { shippedDevDependencies: [] },
+    );
+
+    expect(inventory).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: '@scope/shared',
+          path: 'node_modules/parent/node_modules/@scope/shared',
+          version: '2.0.0',
+        }),
+      ]),
+    );
+  });
+
+  it('rejects runtime npm dependencies without registry provenance and sha512 integrity', () => {
+    const inventory = [
+      {
+        source: 'npm',
+        name: 'bad-lib',
+        path: 'node_modules/bad-lib',
+        version: '1.0.0',
+        license: 'MIT',
+        resolved: 'git+https://example.invalid/bad-lib',
+        integrity: null,
+      },
+    ];
+
+    expect(
+      auditNpmLockfile(
+        { lockfileVersion: 3, packages: { '': { workspaces: ['desktop'] }, desktop: {} } },
+        { dependencies: {} },
+        inventory,
+      ),
+    ).toEqual(
+      expect.arrayContaining([
+        'runtime npm package has non-registry provenance: node_modules/bad-lib',
+        'runtime npm package missing sha512 integrity: node_modules/bad-lib',
+      ]),
+    );
+  });
+
+  it('parses direct and indirect Go requirements', () => {
+    expect(
+      parseGoModRequirements(
+        [
+          'module example.test/app',
+          'require example.test/direct v1.2.3',
+          'require (',
+          '  example.test/indirect v0.1.0 // indirect',
+          ')',
+        ].join('\n'),
+      ),
+    ).toEqual([
+      { path: 'example.test/direct', version: 'v1.2.3', indirect: false },
+      { path: 'example.test/indirect', version: 'v0.1.0', indirect: true },
+    ]);
+  });
+
+  it('requires licenses to be allowed or covered by an active exception', () => {
+    const inventory = [
+      { source: 'npm', name: 'allowed', version: '1.0.0', license: 'MIT' },
+      { source: 'go', name: 'exceptional', version: '1.0.0', license: 'Custom' },
+    ];
+    const exceptions = {
+      allowedLicenses: ['MIT'],
+      licenseExceptions: [
+        {
+          source: 'go',
+          name: 'exceptional',
+          license: 'Custom',
+          reason: 'Reviewed fixture license.',
+          expires: '2099-01-01',
+        },
+      ],
+    };
+
+    expect(auditLicenseInventory(inventory, exceptions, new Date('2026-07-20'))).toEqual([]);
+  });
+
+  it('fails expired license exceptions', () => {
+    expect(
+      auditLicenseInventory(
+        [{ source: 'npm', name: 'old-lib', version: '1.0.0', license: 'Custom' }],
+        {
+          allowedLicenses: ['MIT'],
+          licenseExceptions: [
+            {
+              source: 'npm',
+              name: 'old-lib',
+              license: 'Custom',
+              reason: 'Expired fixture.',
+              expires: '2024-01-01',
+            },
+          ],
+        },
+        new Date('2026-07-20'),
+      ),
+    ).toEqual(
+      expect.arrayContaining([
+        'npm package old-lib@1.0.0 uses unreviewed license Custom',
+        'license exception for npm:old-lib Custom is expired or has no valid expires date',
+      ]),
+    );
+  });
+
+  it('classifies real OSV CVSS vector severities and fails closed on malformed scores', () => {
+    expect(
+      highestGoSeverity({
+        severity: [
+          {
+            type: 'CVSS_V3',
+            score: 'CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H',
+          },
+        ],
+      }),
+    ).toBe('critical');
+
+    expect(
+      highestGoSeverity({
+        severity: [{ type: 'CVSS_V4', score: 'CVSS:4.0/unknown-fixture' }],
+      }),
+    ).toBe('high');
+  });
+
+  it('requires the agentico protocol scheme under electron-builder protocols', () => {
+    expect(
+      hasElectronBuilderProtocolScheme(
+        [
+          'appId: com.doordash.agentico',
+          'protocols:',
+          '  - name: Agentico',
+          '    schemes:',
+          '      - "agentico" # app protocol',
+        ].join('\n'),
+        'agentico',
+      ),
+    ).toBe(true);
+
+    expect(
+      hasElectronBuilderProtocolScheme(
+        [
+          'appId: com.doordash.agentico',
+          'protocols:',
+          '  - name: Agentico',
+          '    schemes:',
+          '      - other',
+        ].join('\n'),
+        'agentico',
+      ),
+    ).toBe(false);
+  });
+});

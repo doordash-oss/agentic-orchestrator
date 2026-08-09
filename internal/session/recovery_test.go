@@ -23,6 +23,7 @@ import (
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
 // startProcessGroup spawns a "sleep 60" process in its own process group
@@ -115,7 +116,7 @@ func TestExecuteRecoveryKill(t *testing.T) {
 	pidDir := filepath.Join(dir, "feat-kill")
 	_ = WritePIDFile(pidDir, PIDFile{PID: 999999999, FeatureID: "feat-kill", Phase: "implement", Dir: pidDir})
 
-	items := []RecoveryItem{
+	items := []ports.RecoveryItem{
 		{
 			PIDFile:      PIDFile{PID: 999999999, FeatureID: "feat-kill", Phase: "implement", Dir: pidDir},
 			ProcessAlive: false,
@@ -123,8 +124,8 @@ func TestExecuteRecoveryKill(t *testing.T) {
 		},
 	}
 
-	actions := map[string]RecoveryAction{
-		"feat-kill": RecoveryKill,
+	actions := map[string]ports.RecoveryAction{
+		"feat-kill": ports.RecoveryKill,
 	}
 
 	err := ExecuteRecovery(items, actions, fm)
@@ -164,7 +165,7 @@ func TestExecuteRecoveryResume(t *testing.T) {
 	pidDir := filepath.Join(dir, "feat-resume")
 	_ = WritePIDFile(pidDir, PIDFile{PID: 999999999, FeatureID: "feat-resume", Phase: "implement", Dir: pidDir})
 
-	items := []RecoveryItem{
+	items := []ports.RecoveryItem{
 		{
 			PIDFile:      PIDFile{PID: 999999999, FeatureID: "feat-resume", Phase: "implement", Dir: pidDir},
 			ProcessAlive: false,
@@ -172,8 +173,8 @@ func TestExecuteRecoveryResume(t *testing.T) {
 		},
 	}
 
-	actions := map[string]RecoveryAction{
-		"feat-resume": RecoveryResume,
+	actions := map[string]ports.RecoveryAction{
+		"feat-resume": ports.RecoveryResume,
 	}
 
 	err := ExecuteRecovery(items, actions, fm)
@@ -201,15 +202,15 @@ func TestExecuteRecoverySkipDeadProcess(t *testing.T) {
 	pidDir := filepath.Join(dir, "feat-skip")
 	_ = WritePIDFile(pidDir, PIDFile{PID: 999999999, FeatureID: "feat-skip", Phase: "implement", Dir: pidDir})
 
-	items := []RecoveryItem{
+	items := []ports.RecoveryItem{
 		{
 			PIDFile:      PIDFile{PID: 999999999, FeatureID: "feat-skip", Phase: "implement", Dir: pidDir},
 			ProcessAlive: false,
 		},
 	}
 
-	actions := map[string]RecoveryAction{
-		"feat-skip": RecoverySkip,
+	actions := map[string]ports.RecoveryAction{
+		"feat-skip": ports.RecoverySkip,
 	}
 
 	err := ExecuteRecovery(items, actions, nil)
@@ -237,7 +238,7 @@ func TestRecoveryActionKey(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := RecoveryActionKey(tt.featureID, tt.repoName)
+			got := ports.RecoveryActionKey(tt.featureID, tt.repoName)
 			if got != tt.want {
 				t.Errorf("RecoveryActionKey(%q, %q) = %q, want %q", tt.featureID, tt.repoName, got, tt.want)
 			}
@@ -295,7 +296,7 @@ func TestExecuteRecoveryKillMultiRepo(t *testing.T) {
 	_ = WritePIDFile(pidDir, PIDFile{PID: 999999998, FeatureID: "feat-mr-kill", Phase: "implement", Dir: pidDir, RepoName: "service-b"})
 
 	// Kill only service-a
-	items := []RecoveryItem{
+	items := []ports.RecoveryItem{
 		{
 			PIDFile:      PIDFile{PID: 999999999, FeatureID: "feat-mr-kill", Phase: "implement", Dir: pidDir, RepoName: "service-a"},
 			ProcessAlive: false,
@@ -304,8 +305,8 @@ func TestExecuteRecoveryKillMultiRepo(t *testing.T) {
 		},
 	}
 
-	actions := map[string]RecoveryAction{
-		RecoveryActionKey("feat-mr-kill", "service-a"): RecoveryKill,
+	actions := map[string]ports.RecoveryAction{
+		ports.RecoveryActionKey("feat-mr-kill", "service-a"): ports.RecoveryKill,
 	}
 
 	err := ExecuteRecovery(items, actions, fm)
@@ -347,7 +348,7 @@ func TestExecuteRecoveryKillLiveProcess(t *testing.T) {
 	pidDir := filepath.Join(dir, "feat-live-kill")
 	_ = WritePIDFile(pidDir, PIDFile{PID: pid, FeatureID: "feat-live-kill", Phase: "implement", Dir: pidDir})
 
-	items := []RecoveryItem{
+	items := []ports.RecoveryItem{
 		{
 			PIDFile:      PIDFile{PID: pid, FeatureID: "feat-live-kill", Phase: "implement", Dir: pidDir},
 			ProcessAlive: true,
@@ -355,8 +356,8 @@ func TestExecuteRecoveryKillLiveProcess(t *testing.T) {
 		},
 	}
 
-	actions := map[string]RecoveryAction{
-		"feat-live-kill": RecoveryKill,
+	actions := map[string]ports.RecoveryAction{
+		"feat-live-kill": ports.RecoveryKill,
 	}
 
 	err := ExecuteRecovery(items, actions, fm)

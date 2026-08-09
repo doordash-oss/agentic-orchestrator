@@ -40,12 +40,13 @@ func BuildInquirePrompt(f *feature.Feature, skillsDir string, kbInfos ...KBInfo)
 	}
 
 	in := roles.InquireUserInput{
-		Name:        f.Name,
-		Description: f.Description,
-		Images:      append([]string(nil), f.Images...),
-		Attachments: append([]string(nil), f.Attachments...),
-		Repos:       repos,
-		Inquireness: prompts.GrillMeInquirenessInput{Level: string(f.Inquireness)},
+		Name:         f.Name,
+		Description:  f.Description,
+		ExitCriteria: f.ExitCriteria,
+		Images:       append([]string(nil), f.Images...),
+		Attachments:  append([]string(nil), f.Attachments...),
+		Repos:        repos,
+		Inquireness:  prompts.GrillMeInquirenessInput{Level: string(f.Inquireness)},
 	}
 
 	return roles.BuildInquirePrompt(in)

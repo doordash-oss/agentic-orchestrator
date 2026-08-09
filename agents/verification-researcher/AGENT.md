@@ -184,7 +184,7 @@ Source: `Makefile`
 ### Application Execution
 - **Start command**: `./bin/agentico` or `go run ./cmd/agentico`
 - **Dev mode**: [if applicable]
-- **CLI invocations**: `agentico [flags]` (this product is TUI-only; there are no CLI subcommands)
+- **CLI invocations**: `agentico [flags]` starts the headless server; `agentico server [flags]` is the explicit Electron/service alias
 - **Environment requirements**: [env vars, services, etc.]
 
 ### AI Tool Verification

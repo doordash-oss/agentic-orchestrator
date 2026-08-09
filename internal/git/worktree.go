@@ -20,12 +20,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-
-	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
-
-// WorktreeInfo aliases the canonical port type.
-type WorktreeInfo = ports.WorktreeInfo
 
 type WorktreeManager struct {
 	BaseDir string
@@ -222,62 +217,6 @@ func (w *WorktreeManager) RemoveRef(worktreePath, mainRepo, branch string) error
 	return nil
 }
 
-func (w *WorktreeManager) List() ([]WorktreeInfo, error) {
-	var result []WorktreeInfo
-
-	entries, err := os.ReadDir(w.BaseDir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("listing worktree directory: %w", err)
-	}
-
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		featureDir := filepath.Join(w.BaseDir, entry.Name())
-		repoEntries, err := os.ReadDir(featureDir)
-		if err != nil {
-			continue
-		}
-		for _, re := range repoEntries {
-			if !re.IsDir() {
-				continue
-			}
-			wtPath := filepath.Join(featureDir, re.Name())
-			branch := CurrentBranch(wtPath)
-			result = append(result, WorktreeInfo{
-				Path:      wtPath,
-				Branch:    branch,
-				RepoName:  re.Name(),
-				FeatureID: entry.Name(),
-			})
-		}
-	}
-
-	return result, nil
-}
-
-func (w *WorktreeManager) DetectStale(activeFeatureIDs []string) ([]WorktreeInfo, error) {
-	all, err := w.List()
-	if err != nil {
-		return nil, err
-	}
-	active := make(map[string]bool)
-	for _, id := range activeFeatureIDs {
-		active[id] = true
-	}
-	var stale []WorktreeInfo
-	for _, wt := range all {
-		if !active[wt.FeatureID] {
-			stale = append(stale, wt)
-		}
-	}
-	return stale, nil
-}
-
 // ResetToBase hard-resets a worktree back to its base branch, discarding all
 // local commits and changes on the feature branch.
 func (w *WorktreeManager) ResetToBase(worktreePath, baseBranch string) error {
@@ -329,13 +268,4 @@ func (w *WorktreeManager) ResetToCommit(worktreePath, commitSHA string) error {
 		return fmt.Errorf("cleaning worktree after reset to commit %s: %s: %w", commitSHA, strings.TrimSpace(string(out)), err)
 	}
 	return nil
-}
-
-func (w *WorktreeManager) HasUncommittedChanges(repoPath string) (bool, error) {
-	cmd := exec.Command("git", "-C", repoPath, "status", "--porcelain")
-	out, err := cmd.Output()
-	if err != nil {
-		return false, fmt.Errorf("checking git status: %w", err)
-	}
-	return len(strings.TrimSpace(string(out))) > 0, nil
 }

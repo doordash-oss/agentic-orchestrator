@@ -184,7 +184,7 @@ func TestDecideAskUserAutoPick(t *testing.T) {
 			),
 		},
 		{
-			name:        "numbered options use current TUI label parsing",
+			name:        "numbered options use current desktop app label parsing",
 			purpose:     ports.AskUserAutoPickPurposeInquire,
 			inquireness: feature.InquirenessNone,
 			input:       askInput(`{"question":"Which scope?\n1. Repository-first (Recommended): cover repo code. [confidence: 0.81]\n2. Everything: include adjacent state. [confidence: 0.34]\nReply with 1 or 2.","options":[]}`),

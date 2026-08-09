@@ -67,13 +67,7 @@ type MockFeatureLifecycle struct {
 	AllKBsCompletedFn     func(featureID string) (bool, error)
 
 	// Plan / review hooks.
-	NeedsPlanReviewFn             func(featureID string) error
-	StartAddressingReviewsFn      func(featureID string) error
-	ClearAddressingReviewsFn      func(featureID string) error
-	StartFeatureRebaseOperationFn func(featureID string) error
-	MarkFeatureRebaseStageFn      func(featureID string, stage feature.RebaseStage) error
-	UpdateFeatureRebaseRepoFn     func(featureID, repoName string, status feature.RebaseRepoStatus, progress feature.RebaseRepoProgress) error
-	ClearFeatureRebaseOperationFn func(featureID string) error
+	NeedsPlanReviewFn func(featureID string) error
 
 	// Roadmap hooks.
 	AdvanceRoadmapPhaseFn             func(featureID string) error
@@ -89,11 +83,6 @@ type MockFeatureLifecycle struct {
 	SetRepoPublishErrorFn  func(featureID, repoName, errMsg string) error
 	TryCompletePublishFn   func(featureID string) (bool, error)
 	InitRepoImplFn         func(featureID string) error
-
-	// Per-repo cycle hook — tests that need to mimic the real
-	// CompleteRepoCycle side-effect (delete RepoCycles[repoName]) install
-	// this. Called after the mock records the invocation.
-	CompleteRepoCycleFn func(featureID, repoName string) error
 
 	// FailRepoImplementationFn lets tests intercept the per-repo
 	// implementation failure path. The plan parameter was dropped in
@@ -133,11 +122,6 @@ func (m *MockFeatureLifecycle) Create(name, description string, repos []string, 
 		return m.CreateFn(name, description, repos, models, exitCriteria, inquireness, images, opts...)
 	}
 	return nil, m.DefaultError
-}
-
-func (m *MockFeatureLifecycle) SlugExists(slug string) (string, error) {
-	m.record("SlugExists", slug)
-	return "", m.DefaultError
 }
 
 func (m *MockFeatureLifecycle) Get(id string) (*feature.Feature, error) {
@@ -348,11 +332,6 @@ func (m *MockFeatureLifecycle) StartImplementation(featureID string) error {
 	return m.DefaultError
 }
 
-func (m *MockFeatureLifecycle) UpdateIteration(featureID string, iteration int) error {
-	m.record("UpdateIteration", featureID, iteration)
-	return m.DefaultError
-}
-
 func (m *MockFeatureLifecycle) CompleteImplementation(featureID string) error {
 	m.record("CompleteImplementation", featureID)
 	if m.CompleteImplementationFn != nil {
@@ -394,115 +373,12 @@ func (m *MockFeatureLifecycle) MarkDone(featureID string) error {
 	return m.DefaultError
 }
 
-func (m *MockFeatureLifecycle) ReturnToPublished(featureID string) error {
-	m.record("ReturnToPublished", featureID)
-	return m.DefaultError
-}
-
 // ---------------------------------------------------------------------------
-// Post-publish cycles
-// ---------------------------------------------------------------------------
-
-func (m *MockFeatureLifecycle) StartAddressingReviews(featureID string) error {
-	m.record("StartAddressingReviews", featureID)
-	if m.StartAddressingReviewsFn != nil {
-		return m.StartAddressingReviewsFn(featureID)
-	}
-	return m.DefaultError
-}
-
-func (m *MockFeatureLifecycle) ClearAddressingReviews(featureID string) error {
-	m.record("ClearAddressingReviews", featureID)
-	if m.ClearAddressingReviewsFn != nil {
-		return m.ClearAddressingReviewsFn(featureID)
-	}
-	return m.DefaultError
-}
-
-func (m *MockFeatureLifecycle) StartFeatureRebaseOperation(featureID string) error {
-	m.record("StartFeatureRebaseOperation", featureID)
-	if m.StartFeatureRebaseOperationFn != nil {
-		return m.StartFeatureRebaseOperationFn(featureID)
-	}
-	return m.DefaultError
-}
-
-func (m *MockFeatureLifecycle) MarkFeatureRebaseStage(featureID string, stage feature.RebaseStage) error {
-	m.record("MarkFeatureRebaseStage", featureID, stage)
-	if m.MarkFeatureRebaseStageFn != nil {
-		return m.MarkFeatureRebaseStageFn(featureID, stage)
-	}
-	return m.DefaultError
-}
-
-func (m *MockFeatureLifecycle) UpdateFeatureRebaseRepo(featureID, repoName string, status feature.RebaseRepoStatus, progress feature.RebaseRepoProgress) error {
-	m.record("UpdateFeatureRebaseRepo", featureID, repoName, status, progress)
-	if m.UpdateFeatureRebaseRepoFn != nil {
-		return m.UpdateFeatureRebaseRepoFn(featureID, repoName, status, progress)
-	}
-	return m.DefaultError
-}
-
-func (m *MockFeatureLifecycle) ClearFeatureRebaseOperation(featureID string) error {
-	m.record("ClearFeatureRebaseOperation", featureID)
-	if m.ClearFeatureRebaseOperationFn != nil {
-		return m.ClearFeatureRebaseOperationFn(featureID)
-	}
-	return m.DefaultError
-}
-
-// ---------------------------------------------------------------------------
-// Per-repo cycles
-// ---------------------------------------------------------------------------
-
-func (m *MockFeatureLifecycle) StartRepoCycle(featureID, repoName string, cycleType feature.RepoCycleType) error {
-	m.record("StartRepoCycle", featureID, repoName, cycleType)
-	return m.DefaultError
-}
-
-func (m *MockFeatureLifecycle) CompleteRepoCycle(featureID, repoName string) error {
-	m.record("CompleteRepoCycle", featureID, repoName)
-	if m.CompleteRepoCycleFn != nil {
-		return m.CompleteRepoCycleFn(featureID, repoName)
-	}
-	return m.DefaultError
-}
-
-func (m *MockFeatureLifecycle) RemoveRepoCycle(featureID, repoName string) error {
-	m.record("RemoveRepoCycle", featureID, repoName)
-	return m.DefaultError
-}
-
-func (m *MockFeatureLifecycle) FailRepoCycle(featureID, repoName, errMsg string) error {
-	m.record("FailRepoCycle", featureID, repoName, errMsg)
-	return m.DefaultError
-}
-
 func (m *MockFeatureLifecycle) FailRepoImplementation(featureID, repoName, errMsg string) error {
 	m.record("FailRepoImplementation", featureID, repoName, errMsg)
 	if m.FailRepoImplementationFn != nil {
 		return m.FailRepoImplementationFn(featureID, repoName, errMsg)
 	}
-	return m.DefaultError
-}
-
-func (m *MockFeatureLifecycle) MarkRepoCycleReviewing(featureID, repoName string) error {
-	m.record("MarkRepoCycleReviewing", featureID, repoName)
-	return m.DefaultError
-}
-
-func (m *MockFeatureLifecycle) HasActiveRepoCycles(featureID string) (bool, error) {
-	m.record("HasActiveRepoCycles", featureID)
-	return false, m.DefaultError
-}
-
-func (m *MockFeatureLifecycle) ClearRepoCycles(featureID string) error {
-	m.record("ClearRepoCycles", featureID)
-	return m.DefaultError
-}
-
-func (m *MockFeatureLifecycle) SetRepoCyclePlanPath(featureID, repoName, planPath string) error {
-	m.record("SetRepoCyclePlanPath", featureID, repoName, planPath)
 	return m.DefaultError
 }
 
@@ -526,11 +402,6 @@ func (m *MockFeatureLifecycle) StartRoadmapPhaseImplementation(featureID string)
 	return m.DefaultError
 }
 
-func (m *MockFeatureLifecycle) CompleteRoadmap(featureID string) error {
-	m.record("CompleteRoadmap", featureID)
-	return m.DefaultError
-}
-
 func (m *MockFeatureLifecycle) RecordRoadmapPhaseCommitAnchors(featureID string, phase int, anchors map[string]string) error {
 	m.record("RecordRoadmapPhaseCommitAnchors", featureID, phase, anchors)
 	if m.RecordRoadmapPhaseCommitAnchorsFn != nil {
@@ -543,18 +414,8 @@ func (m *MockFeatureLifecycle) RecordRoadmapPhaseCommitAnchors(featureID string,
 // Worktree management
 // ---------------------------------------------------------------------------
 
-func (m *MockFeatureLifecycle) RecreateWorktree(featureID string) error {
-	m.record("RecreateWorktree", featureID)
-	return m.DefaultError
-}
-
 func (m *MockFeatureLifecycle) CleanWorktree(featureID string) error {
 	m.record("CleanWorktree", featureID)
-	return m.DefaultError
-}
-
-func (m *MockFeatureLifecycle) EnsureWorktree(featureID string) error {
-	m.record("EnsureWorktree", featureID)
 	return m.DefaultError
 }
 
@@ -567,11 +428,6 @@ func (m *MockFeatureLifecycle) MarkFailed(featureID, failureType, lastError stri
 	if m.MarkFailedFn != nil {
 		return m.MarkFailedFn(featureID, failureType, lastError)
 	}
-	return m.DefaultError
-}
-
-func (m *MockFeatureLifecycle) RestartFromBeginning(featureID string) error {
-	m.record("RestartFromBeginning", featureID)
 	return m.DefaultError
 }
 

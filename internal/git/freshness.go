@@ -15,7 +15,6 @@
 package git
 
 import (
-	"os/exec"
 	"strconv"
 	"strings"
 )
@@ -31,15 +30,17 @@ func RepoFreshness(worktreePath string) string {
 	if worktreePath == "" {
 		return FreshnessUnknown
 	}
-	if out, err := exec.Command("git", "-C", worktreePath, "status", "--porcelain").Output(); err != nil {
+	if out, _, err := runProbe("--no-optional-locks", "-C", worktreePath, "status", "--porcelain"); err != nil {
 		return FreshnessUnknown
 	} else if strings.TrimSpace(string(out)) != "" {
 		return FreshnessLocalChanges
 	}
-	if err := exec.Command("git", "-C", worktreePath, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}").Run(); err != nil {
+	if _, timedOut, err := runProbe("-C", worktreePath, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"); timedOut {
+		return FreshnessUnknown
+	} else if err != nil {
 		return "local only"
 	}
-	out, err := exec.Command("git", "-C", worktreePath, "rev-list", "--left-right", "--count", "HEAD...@{upstream}").Output()
+	out, _, err := runProbe("-C", worktreePath, "rev-list", "--left-right", "--count", "HEAD...@{upstream}")
 	if err != nil {
 		return FreshnessUnknown
 	}
@@ -56,4 +57,30 @@ func RepoFreshness(worktreePath string) string {
 		return "in sync"
 	}
 	return FreshnessLocalChanges
+}
+
+// FreshnessCache decorates RepoFreshness with a bounded, deduplicated,
+// never-blocking cache so repeated read-model requests for the same worktree
+// cost one background git probe rather than up to three subprocesses each.
+type FreshnessCache struct {
+	cache *ProbeCache[string]
+}
+
+// NewFreshnessCache caches RepoFreshness with the default TTL and bound.
+func NewFreshnessCache() *FreshnessCache {
+	return NewFreshnessCacheWithProbe(RepoFreshness)
+}
+
+// NewFreshnessCacheWithProbe caches an arbitrary freshness probe.
+func NewFreshnessCacheWithProbe(probe func(worktreePath string) string) *FreshnessCache {
+	return &FreshnessCache{cache: NewProbeCache(0, 0, probe)}
+}
+
+// Freshness reports the freshness of worktreePath from cache, refreshing in
+// the background once the entry goes stale.
+func (c *FreshnessCache) Freshness(worktreePath string) string {
+	if worktreePath == "" {
+		return FreshnessUnknown
+	}
+	return c.cache.Get(worktreePath)
 }

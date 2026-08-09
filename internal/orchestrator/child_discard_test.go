@@ -23,7 +23,6 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/orchestrator"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
-	"github.com/doordash-oss/agentic-orchestrator/internal/session"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
 )
 
@@ -303,9 +302,9 @@ func TestDiscardChildWithActiveSession(t *testing.T) {
 	sv.StatusVal = ports.SessionRunning
 
 	sm := mocks.NewMockSessionManager()
-	sm.FeatureSessionsFn = func(featureID string) []session.SessionView {
+	sm.FeatureSessionsFn = func(featureID string) []ports.SessionView {
 		if featureID == child.ID {
-			return []session.SessionView{sv}
+			return []ports.SessionView{sv}
 		}
 		return nil
 	}

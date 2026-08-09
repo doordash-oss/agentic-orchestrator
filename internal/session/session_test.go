@@ -30,6 +30,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm/claude"
+	"github.com/doordash-oss/agentic-orchestrator/internal/permission"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
@@ -304,6 +305,73 @@ printf '%s\n' '{"type":"result","subtype":"success","result":"ok"}'
 	}
 }
 
+func TestPendingToolWatchdogFailsAnsweredAskUserWithoutToolResult(t *testing.T) {
+	tmpDir := t.TempDir()
+	scriptPath := filepath.Join(tmpDir, "askuser-stall.sh")
+	script := `#!/usr/bin/env bash
+printf '%s\n' '{"type":"control_request","request_id":"req-ask-1","request":{"subtype":"can_use_tool","tool_name":"AskUserQuestion","input":{"questions":[{"question":"Which?","header":"Scope","options":[{"label":"A"},{"label":"B"}]}]}}}'
+sleep 30
+`
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write script: %v", err)
+	}
+
+	mgr := NewManager(nil)
+	defer mgr.Shutdown()
+
+	sess, err := mgr.StartSession(
+		"askuser-watchdog-stall",
+		"feat-1",
+		feature.PhasePlan,
+		[]string{"bash", scriptPath},
+		tmpDir,
+		nil,
+		&SessionOpts{
+			ProviderName: "test-provider",
+			Watchdog: &ports.SessionWatchdogConfig{
+				PendingToolIdleTimeout:    50 * time.Millisecond,
+				TurnCompletionIdleTimeout: 50 * time.Millisecond,
+				PollInterval:              5 * time.Millisecond,
+			},
+		},
+	)
+	if err != nil {
+		t.Fatalf("StartSession() error: %v", err)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && !sess.HasPendingAskUserQuestion() {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if !sess.HasPendingAskUserQuestion() {
+		t.Fatal("timeout waiting for the pending AskUserQuestion")
+	}
+	// A pending question must not stall on its own: give it longer than the
+	// idle timeout before answering.
+	time.Sleep(120 * time.Millisecond)
+
+	crs := sess.PendingControlRequests()
+	if len(crs) != 1 {
+		t.Fatalf("PendingControlRequests() len = %d, want 1", len(crs))
+	}
+	if err := sess.RespondToAskUser("req-ask-1", crs[0].Request.Input, map[string]string{"Which?": "custom free text"}, nil); err != nil {
+		t.Fatalf("RespondToAskUser: %v", err)
+	}
+
+	select {
+	case status := <-sess.StatusCh():
+		if status != "FAILED" {
+			t.Fatalf("StatusCh = %q, want FAILED", status)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timeout waiting for watchdog failure after the answered question produced no tool_result")
+	}
+
+	if got := sess.ErrorDetail(); !strings.Contains(got, "pending tool AskUserQuestion") {
+		t.Fatalf("ErrorDetail() = %q, want pending AskUserQuestion watchdog detail", got)
+	}
+}
+
 func TestPendingToolWatchdogAllowsPromptResultAfterCompletedTool(t *testing.T) {
 	tmpDir := t.TempDir()
 	scriptPath := filepath.Join(tmpDir, "pending-tool-completed.sh")
@@ -357,41 +425,80 @@ printf '%s\n' '{"type":"result","subtype":"success","result":"ok"}'
 func TestWatchdogToolProgressTransitions(t *testing.T) {
 	t.Parallel()
 
-	running := watchdogTool{phase: watchdogToolRunning, id: "tool-1", name: "Write"}
+	observe := func(l watchdogToolLifecycle, msgs ...llm.ToolProgressMessage) watchdogToolLifecycle {
+		for _, m := range msgs {
+			l = l.observe(m)
+		}
+		return l
+	}
 	tests := []struct {
-		name     string
-		current  watchdogTool
-		progress llm.ToolProgressMessage
-		want     watchdogTool
+		name      string
+		progress  []llm.ToolProgressMessage
+		wantPhase watchdogToolPhase
+		wantName  string
 	}{
 		{
-			name:     "pending arms running tool",
-			progress: llm.ToolProgressMessage{ToolUseID: "tool-1", ToolName: "Write", Data: "pending"},
-			want:     running,
+			name:      "pending arms running tool",
+			progress:  []llm.ToolProgressMessage{{ToolUseID: "tool-1", ToolName: "Write", Data: "pending"}},
+			wantPhase: watchdogToolRunning,
+			wantName:  "Write",
 		},
 		{
-			name:     "completed awaits enclosing turn result",
-			current:  running,
-			progress: llm.ToolProgressMessage{ToolUseID: "tool-1", ToolName: "Write", Data: "Status: completed"},
-			want:     watchdogTool{phase: watchdogToolAwaitingTurnResult, id: "tool-1", name: "Write"},
+			name: "completed awaits enclosing turn result",
+			progress: []llm.ToolProgressMessage{
+				{ToolUseID: "tool-1", ToolName: "Write", Data: "pending"},
+				{ToolUseID: "tool-1", ToolName: "Write", Data: "Status: completed"},
+			},
+			wantPhase: watchdogToolAwaitingTurnResult,
+			wantName:  "Write",
 		},
 		{
-			name:     "failed awaits enclosing turn result",
-			current:  running,
-			progress: llm.ToolProgressMessage{ToolUseID: "tool-1", ToolName: "Write", Data: "failed"},
-			want:     watchdogTool{phase: watchdogToolAwaitingTurnResult, id: "tool-1", name: "Write"},
+			name: "failed awaits enclosing turn result",
+			progress: []llm.ToolProgressMessage{
+				{ToolUseID: "tool-1", ToolName: "Write", Data: "pending"},
+				{ToolUseID: "tool-1", ToolName: "Write", Data: "failed"},
+			},
+			wantPhase: watchdogToolAwaitingTurnResult,
+			wantName:  "Write",
 		},
 		{
-			name:     "terminal update for another tool cannot clear running tool",
-			current:  running,
-			progress: llm.ToolProgressMessage{ToolUseID: "tool-2", ToolName: "Read", Data: "completed"},
-			want:     running,
+			name: "terminal update for another tool cannot clear running tool",
+			progress: []llm.ToolProgressMessage{
+				{ToolUseID: "tool-1", ToolName: "Write", Data: "pending"},
+				{ToolUseID: "tool-2", ToolName: "Read", Data: "completed"},
+			},
+			wantPhase: watchdogToolRunning,
+			wantName:  "Write",
 		},
 		{
-			name:     "unrecognized progress keeps current state",
-			current:  running,
-			progress: llm.ToolProgressMessage{ToolUseID: "tool-1", ToolName: "Write", Data: "Status: running"},
-			want:     running,
+			name: "unrecognized progress keeps current state",
+			progress: []llm.ToolProgressMessage{
+				{ToolUseID: "tool-1", ToolName: "Write", Data: "pending"},
+				{ToolUseID: "tool-1", ToolName: "Write", Data: "Status: running"},
+			},
+			wantPhase: watchdogToolRunning,
+			wantName:  "Write",
+		},
+		{
+			name: "sibling completion keeps remaining tools running",
+			progress: []llm.ToolProgressMessage{
+				{ToolUseID: "tool-1", ToolName: "Write", Data: "pending"},
+				{ToolUseID: "tool-2", ToolName: "Read", Data: "pending"},
+				{ToolUseID: "tool-2", ToolName: "Read", Data: "completed"},
+			},
+			wantPhase: watchdogToolRunning,
+			wantName:  "Write",
+		},
+		{
+			name: "last sibling completion awaits enclosing turn result",
+			progress: []llm.ToolProgressMessage{
+				{ToolUseID: "tool-1", ToolName: "Write", Data: "pending"},
+				{ToolUseID: "tool-2", ToolName: "Read", Data: "pending"},
+				{ToolUseID: "tool-2", ToolName: "Read", Data: "completed"},
+				{ToolUseID: "tool-1", ToolName: "Write", Data: "completed"},
+			},
+			wantPhase: watchdogToolAwaitingTurnResult,
+			wantName:  "Write",
 		},
 	}
 
@@ -399,151 +506,251 @@ func TestWatchdogToolProgressTransitions(t *testing.T) {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			if got := observeWatchdogToolProgress(tt.current, tt.progress); got != tt.want {
-				t.Fatalf("observeWatchdogToolProgress() = %+v, want %+v", got, tt.want)
+			got := observe(watchdogToolLifecycle{}, tt.progress...)
+			if got.phase() != tt.wantPhase {
+				t.Fatalf("phase() = %v, want %v", got.phase(), tt.wantPhase)
+			}
+			if name := got.displayTool().displayName(); name != tt.wantName {
+				t.Fatalf("displayTool().displayName() = %q, want %q", name, tt.wantName)
 			}
 		})
 	}
 }
 
-func TestWatchdogConcurrentToolsRemainIndependent(t *testing.T) {
+func TestWatchdogSubagentTaskTracking(t *testing.T) {
 	t.Parallel()
 
-	sess := NewSession("watchdog-concurrent-tools", "feat-1", feature.PhaseImplement)
+	l := watchdogToolLifecycle{}
+	l = l.observe(llm.ToolProgressMessage{ToolUseID: "task-1", ToolName: "task", Data: "pending"})
+	if !l.anySubagentPending() {
+		t.Fatal("task tool should be tracked as a pending subagent")
+	}
+	// OpenCode renames the tool to its display title on later updates; the
+	// subagent marker must survive the rename.
+	l = l.observe(llm.ToolProgressMessage{ToolUseID: "task-1", ToolName: "Verification research", Data: "in_progress"})
+	if !l.anySubagentPending() {
+		t.Fatal("subagent marker should survive a display-name rename")
+	}
+	if name := l.displayTool().displayName(); name != "Verification research" {
+		t.Fatalf("displayName() = %q, want renamed title", name)
+	}
+	l = l.observe(llm.ToolProgressMessage{ToolUseID: "task-1", Data: "completed"})
+	if l.anySubagentPending() {
+		t.Fatal("completed subagent should not be pending")
+	}
+}
+
+func TestWatchdogSubagentTimeoutOverridesPendingToolTimeout(t *testing.T) {
+	sess := NewSession("watchdog-subagent-timeout", "feat-1", feature.PhaseImplement)
+	watchdog := newSessionWatchdog(sess, &ports.SessionWatchdogConfig{
+		PendingToolIdleTimeout:    20 * time.Millisecond,
+		SubagentToolIdleTimeout:   500 * time.Millisecond,
+		TurnCompletionIdleTimeout: 20 * time.Millisecond,
+		PollInterval:              5 * time.Millisecond,
+	})
+	watchdog.Observe(llm.SDKMessage{ToolProgress: &llm.ToolProgressMessage{
+		ToolUseID: "task-1", ToolName: "task", Data: "in_progress",
+	}})
+	watchdog.Observe(llm.SDKMessage{ToolProgress: &llm.ToolProgressMessage{
+		ToolUseID: "task-1", ToolName: "Verification research", Data: "in_progress",
+	}})
+
+	watchdog.mu.Lock()
+	watchdog.lastActivityAt = time.Now().Add(-100 * time.Millisecond)
+	watchdog.mu.Unlock()
+	if _, _, stalled := watchdog.toolStall(); stalled {
+		t.Fatal("watchdog stalled a pending subagent before the subagent timeout")
+	}
+
+	watchdog.mu.Lock()
+	watchdog.lastActivityAt = time.Now().Add(-time.Second)
+	watchdog.mu.Unlock()
+	snap, timeout, stalled := watchdog.toolStall()
+	if !stalled || timeout != 500*time.Millisecond {
+		t.Fatalf("toolStall() = (%+v, %s, stalled=%v), want subagent-timeout stall", snap, timeout, stalled)
+	}
+}
+
+func TestWatchdogDeclaredToolTimeoutExtendsPendingLeash(t *testing.T) {
+	sess := NewSession("watchdog-declared-timeout", "feat-1", feature.PhaseImplement)
 	watchdog := newSessionWatchdog(sess, &ports.SessionWatchdogConfig{
 		PendingToolIdleTimeout:    20 * time.Millisecond,
 		TurnCompletionIdleTimeout: 20 * time.Millisecond,
 		PollInterval:              5 * time.Millisecond,
 	})
 	watchdog.Observe(llm.SDKMessage{ToolProgress: &llm.ToolProgressMessage{
-		ToolUseID: "tool-a",
-		ToolName:  "Write",
-		Data:      "in_progress",
+		ToolUseID: "bash-1", ToolName: "Bash", Data: "in_progress", TimeoutMS: 500,
 	}})
+	// A later update without a declared timeout must not shrink the leash.
 	watchdog.Observe(llm.SDKMessage{ToolProgress: &llm.ToolProgressMessage{
-		ToolUseID: "tool-b",
-		ToolName:  "Read",
-		Data:      "in_progress",
+		ToolUseID: "bash-1", ToolName: "Bash", Data: "in_progress",
 	}})
-	watchdog.Observe(llm.SDKMessage{ToolProgress: &llm.ToolProgressMessage{
-		ToolUseID: "tool-b",
-		ToolName:  "Read",
-		Data:      "completed",
-	}})
-	watchdog.mu.Lock()
-	watchdog.lastActivityAt = time.Now().Add(-time.Second)
-	watchdog.mu.Unlock()
 
-	tool, _, stalled := watchdog.toolStall()
-	if !stalled || tool.phase != watchdogToolRunning || tool.id != "tool-a" {
-		t.Fatalf("toolStall() = (%+v, stalled=%v), want remaining running tool-a", tool, stalled)
+	watchdog.mu.Lock()
+	watchdog.lastActivityAt = time.Now().Add(-100 * time.Millisecond)
+	watchdog.mu.Unlock()
+	if _, _, stalled := watchdog.toolStall(); stalled {
+		t.Fatal("watchdog stalled a tool inside its declared execution timeout")
 	}
 
-	watchdog.Observe(llm.SDKMessage{ToolProgress: &llm.ToolProgressMessage{
-		ToolUseID: "tool-a",
-		ToolName:  "Write",
-		Data:      "completed",
-	}})
 	watchdog.mu.Lock()
 	watchdog.lastActivityAt = time.Now().Add(-time.Second)
 	watchdog.mu.Unlock()
-	tool, _, stalled = watchdog.toolStall()
-	if !stalled || tool.phase != watchdogToolAwaitingTurnResult || tool.id != "tool-a" {
-		t.Fatalf("toolStall() after final completion = (%+v, stalled=%v), want awaiting turn after tool-a", tool, stalled)
+	snap, timeout, stalled := watchdog.toolStall()
+	if !stalled || timeout != 520*time.Millisecond {
+		t.Fatalf("toolStall() = (%+v, %s, stalled=%v), want stall at declared timeout plus idle grace", snap, timeout, stalled)
 	}
 }
 
-func TestWatchdogLiveSubagentsSuppressIdleFailureUntilEveryTaskTerminates(t *testing.T) {
-	t.Parallel()
-
-	sess := NewSession("watchdog-live-subagents", "feat-1", feature.PhaseImplement)
+func TestWatchdogAnsweredAskUserArmsPendingWindow(t *testing.T) {
+	sess := NewSession("watchdog-askuser-armed", "feat-1", feature.PhaseImplement)
 	watchdog := newSessionWatchdog(sess, &ports.SessionWatchdogConfig{
 		PendingToolIdleTimeout:    20 * time.Millisecond,
 		TurnCompletionIdleTimeout: 20 * time.Millisecond,
 		PollInterval:              5 * time.Millisecond,
 	})
-	for _, taskID := range []string{"task-a", "task-b"} {
-		watchdog.Observe(taskStartedMsg(taskID))
-		watchdog.Observe(llm.SDKMessage{ToolProgress: &llm.ToolProgressMessage{
-			ToolUseID: taskID,
-			ToolName:  "Task",
-			Data:      "in_progress",
-		}})
+
+	watchdog.ResolveControlRequest("req-ask-1", "AskUserQuestion")
+	if _, _, stalled := watchdog.toolStall(); stalled {
+		t.Fatal("watchdog stalled immediately after the answer")
 	}
+
 	watchdog.mu.Lock()
 	watchdog.lastActivityAt = time.Now().Add(-time.Second)
 	watchdog.mu.Unlock()
-
-	if tool, _, stalled := watchdog.toolStall(); stalled {
-		t.Fatalf("toolStall() with two live subagents = (%+v, true), want parked watchdog", tool)
+	snap, timeout, stalled := watchdog.toolStall()
+	if !stalled || timeout != 20*time.Millisecond {
+		t.Fatalf("toolStall() = (%+v, %s, stalled=%v), want pending-tool stall for the unconsumed answer", snap, timeout, stalled)
 	}
-
-	watchdog.Observe(taskNotificationMsg("task-a"))
-	watchdog.mu.Lock()
-	watchdog.lastActivityAt = time.Now().Add(-time.Second)
-	watchdog.mu.Unlock()
-	if tool, _, stalled := watchdog.toolStall(); stalled {
-		t.Fatalf("toolStall() with one live subagent = (%+v, true), want parked watchdog", tool)
-	}
-
-	watchdog.Observe(llm.SDKMessage{ToolProgress: &llm.ToolProgressMessage{
-		ToolUseID: "task-a",
-		ToolName:  "Task",
-		Data:      "completed",
-	}})
-	watchdog.Observe(llm.SDKMessage{ToolProgress: &llm.ToolProgressMessage{
-		ToolUseID: "task-b",
-		ToolName:  "Task",
-		Data:      "completed",
-	}})
-	watchdog.Observe(taskNotificationMsg("task-b"))
-	if tool, _, stalled := watchdog.toolStall(); stalled {
-		t.Fatalf("toolStall() immediately after final task terminal = (%+v, true), want freshly rearmed timer", tool)
+	if snap.tool.name != "AskUserQuestion" {
+		t.Fatalf("snap.tool.name = %q, want AskUserQuestion", snap.tool.name)
 	}
 }
 
-func TestWatchdogLiveSubagentHeartbeatIsLocalAndStopsAtTerminal(t *testing.T) {
-	sess := NewSession("watchdog-subagent-heartbeat", "feat-1", feature.PhaseImplement)
-	statuses := make(chan llm.SDKMessage, 4)
-	sess.onMessage = func(msg llm.SDKMessage) {
-		if msg.Status != nil {
-			statuses <- msg
-		}
-	}
+func TestWatchdogAnsweredAskUserDisarmsOnNextMessage(t *testing.T) {
+	sess := NewSession("watchdog-askuser-disarm", "feat-1", feature.PhaseImplement)
 	watchdog := newSessionWatchdog(sess, &ports.SessionWatchdogConfig{
-		PendingToolIdleTimeout:    time.Second,
-		TurnCompletionIdleTimeout: time.Second,
+		PendingToolIdleTimeout:    20 * time.Millisecond,
+		TurnCompletionIdleTimeout: 20 * time.Millisecond,
 		PollInterval:              5 * time.Millisecond,
-		SubagentHeartbeatInterval: 20 * time.Millisecond,
 	})
-	watchdog.Observe(taskStartedMsg("task-a"))
-	watchdog.mu.Lock()
-	providerActivityAt := watchdog.lastActivityAt
-	watchdog.mu.Unlock()
-	watchdog.Start()
-	t.Cleanup(func() { close(sess.done) })
 
-	select {
-	case msg := <-statuses:
-		if msg.Status == nil || !strings.Contains(msg.Status.Message, "Waiting for 1 subagent (") {
-			t.Fatalf("heartbeat status = %+v, want one-subagent wait status", msg)
-		}
-	case <-time.After(500 * time.Millisecond):
-		t.Fatal("timed out waiting for live-subagent heartbeat")
+	watchdog.ResolveControlRequest("req-ask-1", "AskUserQuestion")
+	// The tool_result for the question arrives as a user message.
+	watchdog.Observe(llm.SDKMessage{Type: "user", User: &llm.UserMessage{}})
+
+	watchdog.mu.Lock()
+	watchdog.lastActivityAt = time.Now().Add(-time.Second)
+	watchdog.mu.Unlock()
+	if snap, _, stalled := watchdog.toolStall(); stalled || snap.phase != watchdogToolInactive {
+		t.Fatalf("toolStall() = (%+v, stalled=%v), want disarmed after the answer was consumed", snap, stalled)
+	}
+}
+
+func TestWatchdogPostAnswerMessageKeepsRealPendingTools(t *testing.T) {
+	sess := NewSession("watchdog-askuser-keeps-tools", "feat-1", feature.PhaseImplement)
+	watchdog := newSessionWatchdog(sess, &ports.SessionWatchdogConfig{
+		PendingToolIdleTimeout:    20 * time.Millisecond,
+		TurnCompletionIdleTimeout: 20 * time.Millisecond,
+		PollInterval:              5 * time.Millisecond,
+	})
+	watchdog.Observe(llm.SDKMessage{ToolProgress: &llm.ToolProgressMessage{
+		ToolUseID: "write-1", ToolName: "Write", Data: "pending",
+	}})
+	watchdog.Observe(llm.SDKMessage{Type: "assistant", Assistant: &llm.AssistantMessage{}})
+
+	watchdog.mu.Lock()
+	watchdog.lastActivityAt = time.Now().Add(-time.Second)
+	watchdog.mu.Unlock()
+	if snap, _, stalled := watchdog.toolStall(); !stalled || snap.phase != watchdogToolRunning {
+		t.Fatalf("toolStall() = (%+v, stalled=%v), want real pending tool untouched by messages", snap, stalled)
+	}
+}
+
+func TestWatchdogUnansweredQuestionExemptWithoutResettingIdle(t *testing.T) {
+	sess := NewSession("watchdog-exempt-boundary", "feat-1", feature.PhaseImplement)
+	watchdog := newSessionWatchdog(sess, &ports.SessionWatchdogConfig{
+		PendingToolIdleTimeout:    10 * time.Second,
+		TurnCompletionIdleTimeout: 10 * time.Second,
+		PollInterval:              5 * time.Millisecond,
+	})
+	watchdog.Observe(llm.SDKMessage{ToolProgress: &llm.ToolProgressMessage{
+		ToolUseID: "write-1", ToolName: "Write", Data: "pending",
+	}})
+
+	sess.mu.Lock()
+	sess.recordPendingControlRequestLocked(&llm.ControlRequestMessage{
+		RequestID: "q1",
+		Request:   llm.ControlRequest{Subtype: "can_use_tool", ToolName: "AskUserQuestion"},
+	})
+	sess.mu.Unlock()
+
+	watchdog.mu.Lock()
+	watchdog.lastActivityAt = time.Now().Add(-time.Hour)
+	watchdog.mu.Unlock()
+	if _, _, stalled := watchdog.toolStall(); stalled {
+		t.Fatal("an unanswered question waiting on the human must not stall")
+	}
+	watchdog.mu.Lock()
+	if watchdog.exemptSince.IsZero() {
+		t.Fatal("exempt boundary not marked while a question is pending")
+	}
+	// Simulate 4s in the exempt state after 9s of pre-entry idle: the exempt
+	// interval is excluded but the accrued idle survives (9s < 10s timeout).
+	watchdog.exemptSince = time.Now().Add(-4 * time.Second)
+	watchdog.lastActivityAt = time.Now().Add(-13 * time.Second)
+	watchdog.mu.Unlock()
+
+	sess.mu.Lock()
+	sess.pendingControlRequests = nil
+	sess.mu.Unlock()
+
+	if _, _, stalled := watchdog.toolStall(); stalled {
+		t.Fatal("exempt interval must be excluded from the idle clock")
+	}
+	watchdog.mu.Lock()
+	idle := time.Since(watchdog.lastActivityAt)
+	exemptCleared := watchdog.exemptSince.IsZero()
+	watchdog.mu.Unlock()
+	if !exemptCleared {
+		t.Fatal("exempt boundary should clear when the state exits")
+	}
+	if idle < 8*time.Second || idle > 10*time.Second {
+		t.Fatalf("idle after exemption = %v, want ~9s (pre-exempt idle preserved)", idle)
+	}
+
+	// With 26s of pre-entry idle the stall fires as soon as the state exits.
+	watchdog.mu.Lock()
+	watchdog.exemptSince = time.Now().Add(-4 * time.Second)
+	watchdog.lastActivityAt = time.Now().Add(-30 * time.Second)
+	watchdog.mu.Unlock()
+	if _, _, stalled := watchdog.toolStall(); !stalled {
+		t.Fatal("idle accrued before the exempt state must survive its exit")
+	}
+}
+
+func TestWatchdogParallelSubagentSiblingCompletionKeepsRunning(t *testing.T) {
+	sess := NewSession("watchdog-parallel-subagents", "feat-1", feature.PhaseImplement)
+	watchdog := newSessionWatchdog(sess, &ports.SessionWatchdogConfig{
+		PendingToolIdleTimeout:    20 * time.Millisecond,
+		SubagentToolIdleTimeout:   time.Minute,
+		TurnCompletionIdleTimeout: 20 * time.Millisecond,
+		PollInterval:              5 * time.Millisecond,
+	})
+	for _, p := range []llm.ToolProgressMessage{
+		{ToolUseID: "task-1", ToolName: "task", Data: "in_progress"},
+		{ToolUseID: "task-2", ToolName: "task", Data: "in_progress"},
+		{ToolUseID: "task-2", Data: "completed"},
+	} {
+		p := p
+		watchdog.Observe(llm.SDKMessage{ToolProgress: &p})
 	}
 
 	watchdog.mu.Lock()
-	afterHeartbeat := watchdog.lastActivityAt
+	watchdog.lastActivityAt = time.Now().Add(-time.Second)
 	watchdog.mu.Unlock()
-	if !afterHeartbeat.Equal(providerActivityAt) {
-		t.Fatalf("heartbeat changed provider activity from %s to %s", providerActivityAt, afterHeartbeat)
-	}
-
-	watchdog.Observe(taskNotificationMsg("task-a"))
-	select {
-	case msg := <-statuses:
-		t.Fatalf("heartbeat continued after terminal task notification: %+v", msg)
-	case <-time.After(60 * time.Millisecond):
+	if snap, _, stalled := watchdog.toolStall(); stalled || snap.phase != watchdogToolRunning {
+		t.Fatalf("toolStall() = (%+v, stalled=%v), want still-running while a sibling subagent is pending", snap, stalled)
 	}
 }
 
@@ -576,8 +783,11 @@ func TestWatchdogControlWaitPausesAndRefreshesTurnTimer(t *testing.T) {
 	sess.removePendingControlRequestLocked("permission-1")
 	sess.status = SessionRunning
 	sess.mu.Unlock()
+	// Session wiring resolves the request through the watchdog, which starts
+	// a fresh idle window for the response.
+	watchdog.ResolveControlRequest("permission-1", "")
 	if _, _, stalled := watchdog.toolStall(); stalled {
-		t.Fatal("watchdog reused pre-permission idle time after the control wait ended")
+		t.Fatal("watchdog counted idle time from before the control response")
 	}
 
 	watchdog.mu.Lock()
@@ -778,7 +988,7 @@ func TestSessionStop(t *testing.T) {
 // Codex provider exception for one-shot post-Result wrapper cleanup. The
 // Codex provider's `app-server` is multi-turn: a Result on turn/completed is
 // not a process-exit signal, and the orchestrator's
-// SessionWaitingHelp branch (agent.waitForStatus) needs the session
+// SessionWaitingHelp branch (agent.WaitForPhaseOutcome) needs the session
 // alive to deliver a follow-up user message. Closing stdin would EOF
 // the JSON-RPC channel and kill app-server.
 //
@@ -879,7 +1089,7 @@ func TestSession_ResultUnsticksHungWrapper(t *testing.T) {
 	}
 }
 
-func TestSession_TruncatedResultKeepsStdinForContinuationWhenOptedIn(t *testing.T) {
+func TestSession_TurnResultKeepsStdinForContinuationWhenOptedIn(t *testing.T) {
 	if testing.Short() {
 		t.Skip("subprocess-backed truncated-turn continuation extended regression")
 	}
@@ -908,7 +1118,7 @@ func TestSession_TruncatedResultKeepsStdinForContinuationWhenOptedIn(t *testing.
 		[]string{"bash", script},
 		dir,
 		[]string{"CONTINUED_FILE=" + continuedPath},
-		&SessionOpts{KeepAliveOnTruncatedResult: true, ResultShutdownGrace: 100 * time.Millisecond},
+		&SessionOpts{KeepAliveOnTurnResult: true, ResultShutdownGrace: 100 * time.Millisecond},
 	)
 	if err != nil {
 		t.Fatalf("start: %v", err)
@@ -1076,6 +1286,41 @@ func TestResetWaitingStatus(t *testing.T) {
 	}
 }
 
+func TestWaitingSinceStampedOnWaitingHelpTransition(t *testing.T) {
+	t.Parallel()
+	started := time.Now().Add(-time.Hour)
+	s := &Session{startedAt: started, done: make(chan struct{})}
+
+	if got := s.WaitingSince(); !got.Equal(started) {
+		t.Fatalf("WaitingSince() before waiting = %v, want StartedAt %v", got, started)
+	}
+
+	before := time.Now()
+	s.SetStatus(SessionWaitingHelp)
+	stamp := s.WaitingSince()
+	if stamp.Before(before.UTC()) || stamp.Equal(started) {
+		t.Fatalf("WaitingSince() = %v, want transition stamp at or after %v", stamp, before)
+	}
+
+	// Re-entering the same state preserves the original stamp.
+	s.SetStatus(SessionWaitingHelp)
+	if got := s.WaitingSince(); !got.Equal(stamp) {
+		t.Fatalf("WaitingSince() after duplicate transition = %v, want preserved %v", got, stamp)
+	}
+
+	// Transitioning out clears the stamp back to the StartedAt fallback.
+	s.SetStatus(SessionRunning)
+	if got := s.WaitingSince(); !got.Equal(started) {
+		t.Fatalf("WaitingSince() after leaving = %v, want StartedAt %v", got, started)
+	}
+
+	// A fresh wait gets a fresh stamp.
+	s.SetStatus(SessionWaitingHelp)
+	if got := s.WaitingSince(); got.Before(stamp) {
+		t.Fatalf("WaitingSince() on re-entry = %v, want at or after previous stamp %v", got, stamp)
+	}
+}
+
 func TestSessionSendInput(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: in-process stdin pipe with per-test session state.
@@ -1112,7 +1357,7 @@ func TestSessionControlRequest(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: in-process protocol replay with per-test session state.
 	s := NewSession("control-test", "feat-1", feature.PhaseImplement)
-	s.permHandler = &AutoApproveHandler{}
+	s.permHandler = &permission.AutoApproveHandler{}
 	runMockSession(t, s, []llm.SDKMessage{
 		{
 			Type:    "system",
@@ -1159,6 +1404,37 @@ func TestSessionSendUserMessage(t *testing.T) {
 
 	if err := s.SendUserMessage("Hello Claude"); err != nil {
 		t.Errorf("SendUserMessage: %v", err)
+	}
+}
+
+func TestSessionSendUserMessageRecordsChatTurn(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: in-process protocol double with per-test session state.
+	s := NewSession("chat-user-test", "__chat__", feature.PhaseResearch)
+	s.SetKind(ports.KindChat)
+	s.protocol = &interruptTrackingProtocol{}
+	s.transcriptPath = filepath.Join(t.TempDir(), "transcript.jsonl")
+
+	if err := s.SendUserMessage("What changed?"); err != nil {
+		t.Fatalf("SendUserMessage: %v", err)
+	}
+	messages := s.MessageLog().Messages()
+	if len(messages) != 1 || messages[0].User == nil {
+		t.Fatalf("messages = %+v, want one user message", messages)
+	}
+	if !messages[0].LocallyAppended || messages[0].User.Message.Role != "user" {
+		t.Fatalf("user message = %+v, want locally appended user role", messages[0])
+	}
+	if got := messages[0].User.Message.Content; len(got) != 1 || got[0].Text != "What changed?" {
+		t.Fatalf("user content = %+v, want follow-up text", got)
+	}
+
+	persisted, err := readPersistedTranscript(s.transcriptPath)
+	if err != nil {
+		t.Fatalf("readPersistedTranscript: %v", err)
+	}
+	if len(persisted) != 1 || persisted[0].User == nil || persisted[0].User.Message.Content[0].Text != "What changed?" {
+		t.Fatalf("persisted messages = %+v, want follow-up user message", persisted)
 	}
 }
 
@@ -1279,7 +1555,7 @@ echo "stderr content" >&2
 
 // TestSessionResultDeliveredUnderBackpressure reproduces the AMA-chat hang:
 // when the CLI streams many messages faster than the consumer drains them,
-// the Result message — which is the only in-band signal the TUI uses to
+// the Result message — which is the only in-band signal the desktop app uses to
 // clear its "Thinking…" state — must not be dropped. The session's
 // forwarder uses a bounded blocking send for Result so the consumer
 // eventually receives it even if partials are dropped under load.
@@ -1516,6 +1792,28 @@ echo '{"type":"result","subtype":"success","session_id":"s2","total_cost_usd":0.
 	}
 }
 
+// TestSession_StatusChCoalescesToLatestResult proves that when two results
+// arrive before the single consumer reads statusCh, the stale status is
+// evicted and the latest one is delivered — never silently dropped.
+func TestSession_StatusChCoalescesToLatestResult(t *testing.T) {
+	t.Parallel()
+	s := NewSession("coalesce-test", "feat-1", feature.PhaseImplement)
+	runSessionWithStdoutLines(t, s, []string{
+		`{"type":"system","subtype":"init","session_id":"s1","model":"test"}`,
+		`{"type":"result","subtype":"error","error":"rate limited"}`,
+		`{"type":"result","subtype":"success","session_id":"s1","total_cost_usd":0.01}`,
+	}, nil)
+
+	select {
+	case status := <-s.statusCh:
+		if status != "SUCCESS" {
+			t.Errorf("statusCh = %q, want latest status SUCCESS", status)
+		}
+	default:
+		t.Error("statusCh empty, expected coalesced SUCCESS")
+	}
+}
+
 func TestSession_SIGTERMEscalation(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
@@ -1680,7 +1978,7 @@ echo '{"type":"result","subtype":"success","session_id":"s1","total_cost_usd":0.
 `), 0o755)
 
 	s := NewSession("ask-user-test", "feat-1", feature.PhaseResearch)
-	// No permHandler — AskUserQuestion is always surfaced to TUI
+	// No permHandler — AskUserQuestion is always surfaced to desktop app
 	err := s.Start([]string{"bash", script}, dir, nil, nil)
 	if err != nil {
 		t.Fatalf("start: %v", err)
@@ -1751,7 +2049,7 @@ echo '{"type":"result","subtype":"success","session_id":"s1","total_cost_usd":0.
 `), 0o755)
 
 	s := NewSession("deny-test", "feat-1", feature.PhaseResearch)
-	s.permHandler = &DenyAllHandler{}
+	s.permHandler = &permission.DenyAllHandler{}
 	err := s.Start([]string{"bash", script}, dir, nil, nil)
 	if err != nil {
 		t.Fatalf("start: %v", err)
@@ -2191,6 +2489,7 @@ type usageUpdateLine struct {
 	ContextTotalTokens int     `json:"context_total_tokens,omitempty"`
 	ContextBaseline    int     `json:"context_baseline,omitempty"`
 	ContextWindow      int     `json:"context_window,omitempty"`
+	CostUSD            float64 `json:"cost_usd,omitempty"`
 	Subtype            string  `json:"subtype,omitempty"`
 	SessionID          string  `json:"session_id,omitempty"`
 	TotalCostUSD       float64 `json:"total_cost_usd,omitempty"`
@@ -2227,6 +2526,7 @@ func (p *usageUpdateProtocol) ParseLine(line []byte) ([]llm.SDKMessage, error) {
 				ContextTotalTokens: raw.ContextTotalTokens,
 				ContextBaseline:    raw.ContextBaseline,
 				ContextWindow:      raw.ContextWindow,
+				CostUSD:            raw.CostUSD,
 			},
 		}}, nil
 	case "result":
@@ -2250,9 +2550,9 @@ func TestAccumulatedUsageCodexSETSemantics(t *testing.T) {
 	s := NewSession("codex-usage-test", "feat-1", feature.PhaseImplement)
 	s.protocol = &usageUpdateProtocol{sid: "codex-test"}
 	runSessionWithStdoutLines(t, s, []string{
-		`{"type":"usage_update","input_tokens":100,"output_tokens":50}`,
-		`{"type":"usage_update","input_tokens":250,"output_tokens":120}`,
-		`{"type":"usage_update","input_tokens":400,"output_tokens":200}`,
+		`{"type":"usage_update","input_tokens":100,"output_tokens":50,"cost_usd":0.01}`,
+		`{"type":"usage_update","input_tokens":250,"output_tokens":120,"cost_usd":0.03}`,
+		`{"type":"usage_update","input_tokens":400,"output_tokens":200,"cost_usd":0.05}`,
 		`{"type":"result","subtype":"success","session_id":"codex-test","total_cost_usd":0.05}`,
 	}, nil)
 
@@ -2264,6 +2564,9 @@ func TestAccumulatedUsageCodexSETSemantics(t *testing.T) {
 	}
 	if got.OutputTokens != 200 {
 		t.Errorf("AccumulatedUsage().OutputTokens = %d, want 200 (SET semantics, not sum 370)", got.OutputTokens)
+	}
+	if got.CostUSD != 0.05 {
+		t.Errorf("AccumulatedUsage().CostUSD = %v, want 0.05 (latest cumulative snapshot)", got.CostUSD)
 	}
 }
 
@@ -2437,7 +2740,7 @@ func TestSession_AttachDropReporterSilentWithoutReporter(t *testing.T) {
 }
 
 // TestSession_DrainerExitsOnCloseWithFullAttachChAndRingItems reproduces
-// the shutdown hang seen when a session crashes with the TUI detached:
+// the shutdown hang seen when a session crashes with the desktop app detached:
 // attachCh stays full (no consumer), the streamRing still has buffered
 // deltas, and the drainer must still exit so readMessages' cleanup
 // <-drainerDone does not deadlock. Without this guarantee the feature
@@ -2447,7 +2750,7 @@ func TestSession_DrainerExitsOnCloseWithFullAttachChAndRingItems(t *testing.T) {
 
 	// Saturate attachCh beyond the drainer's reserve so the reserve
 	// check would short-circuit the inner drain loop in normal
-	// operation. No consumer is attached — this models a detached TUI.
+	// operation. No consumer is attached — this models a detached desktop app.
 	for i := 0; i < cap(s.attachCh); i++ {
 		s.attachCh <- llm.SDKMessage{Type: "filler"}
 	}
@@ -2663,87 +2966,6 @@ func TestSession_StatusChSignalAfterResultCallback(t *testing.T) {
 	<-done
 }
 
-func TestSessionAppendLocalStatusIsOrderedAndNonTerminal(t *testing.T) {
-	t.Parallel()
-
-	s := NewSession("status-session", "feature-1", feature.PhaseImplement)
-	s.messageLog.Append(llm.SDKMessage{Type: "assistant", Assistant: &llm.AssistantMessage{
-		Message: llm.ConversationMsg{Content: []llm.ContentBlock{{Type: "text", Text: "before"}}},
-	}})
-	var callbackRecordCount int
-	s.onMessage = func(msg llm.SDKMessage) {
-		if msg.Status == nil || msg.Status.Message != "Auto-approved Bash: go test ./..." {
-			t.Errorf("status callback message = %+v", msg)
-		}
-		callbackRecordCount = s.messageLog.Len()
-	}
-
-	if err := s.appendLocalStatus("Auto-approved Bash: go test ./..."); err != nil {
-		t.Fatalf("appendLocalStatus() error = %v", err)
-	}
-	messages := s.messageLog.Messages()
-	if len(messages) != 2 || messages[1].Status == nil || messages[1].Status.Message != "Auto-approved Bash: go test ./..." {
-		t.Fatalf("message log = %+v, want ordered status after assistant", messages)
-	}
-	if callbackRecordCount != 2 {
-		t.Fatalf("callback record count = %d, want post-append count 2", callbackRecordCount)
-	}
-	if s.Status() != SessionRunning || s.messageLog.LastResultMessage() != nil {
-		t.Fatalf("status append changed terminal state: status=%s result=%+v", s.Status(), s.messageLog.LastResultMessage())
-	}
-	select {
-	case attached := <-s.attachCh:
-		if attached.Status == nil || attached.Status.Message != "Auto-approved Bash: go test ./..." {
-			t.Fatalf("attach message = %+v", attached)
-		}
-	default:
-		t.Fatal("status was not delivered to attach channel")
-	}
-}
-
-func TestManagerPublishesSessionBuildNoticeOnce(t *testing.T) {
-	manager := NewManager(nil)
-	t.Cleanup(manager.Shutdown)
-	emitted := make(chan ports.SessionBuildNoticeContext, 1)
-	const status = "Automatic review enabled but no reviewer available: authentication unavailable"
-	handle, err := manager.StartSession(
-		"notice-session",
-		"feature-1",
-		feature.PhaseImplement,
-		[]string{"sh", "-c", "while IFS= read -r line; do :; done"},
-		t.TempDir(),
-		nil,
-		&SessionOpts{
-			RepoName:  "repo-a",
-			Iteration: 2,
-			SessionBuildNotices: []ports.SessionBuildNotice{{
-				Status: status,
-				Emit: func(ctx ports.SessionBuildNoticeContext) {
-					emitted <- ctx
-				},
-			}},
-		},
-	)
-	if err != nil {
-		t.Fatalf("StartSession() error = %v", err)
-	}
-	t.Cleanup(func() { _ = handle.Stop() })
-
-	messages := handle.MessageLog().Messages()
-	if len(messages) != 1 || messages[0].Status == nil || messages[0].Status.Message != status {
-		t.Fatalf("initial messages = %+v, want one local status notice", messages)
-	}
-	select {
-	case got := <-emitted:
-		if got.SessionID != "notice-session" || got.FeatureID != "feature-1" ||
-			got.Phase != feature.PhaseImplement || got.RepoName != "repo-a" || got.Iteration != 2 {
-			t.Fatalf("notice context = %+v", got)
-		}
-	default:
-		t.Fatal("session-build operator notice was not emitted")
-	}
-}
-
 func taskStartedMsg(taskID string) llm.SDKMessage {
 	return llm.SDKMessage{
 		Type: "system", Subtype: "task_started",
@@ -2772,65 +2994,336 @@ func TestObserveBackgroundTasks_TracksLifecycle(t *testing.T) {
 		t.Fatalf("initial LiveBackgroundTaskCount() = %d, want 0", got)
 	}
 
-	s.observeBackgroundTasks(taskStartedMsg("task-a"))
-	s.observeBackgroundTasks(taskStartedMsg("task-b"))
+	s.observeTaskActivity(taskStartedMsg("task-a"))
+	s.observeTaskActivity(taskStartedMsg("task-b"))
 	if got := s.LiveBackgroundTaskCount(); got != 2 {
 		t.Fatalf("after two starts LiveBackgroundTaskCount() = %d, want 2", got)
 	}
 
 	// Duplicate progress for a known task must not double-count.
-	s.observeBackgroundTasks(taskProgressMsg("task-a"))
+	s.observeTaskActivity(taskProgressMsg("task-a"))
 	if got := s.LiveBackgroundTaskCount(); got != 2 {
 		t.Fatalf("after progress LiveBackgroundTaskCount() = %d, want 2", got)
 	}
 
 	// Progress for a task whose start we never saw (session attach mid-task)
 	// registers it as live.
-	s.observeBackgroundTasks(taskProgressMsg("task-c"))
+	s.observeTaskActivity(taskProgressMsg("task-c"))
 	if got := s.LiveBackgroundTaskCount(); got != 3 {
 		t.Fatalf("after unseen-task progress LiveBackgroundTaskCount() = %d, want 3", got)
 	}
 
 	// task_notification is the terminal lifecycle event.
-	s.observeBackgroundTasks(taskNotificationMsg("task-a"))
-	s.observeBackgroundTasks(taskNotificationMsg("task-b"))
-	s.observeBackgroundTasks(taskNotificationMsg("task-c"))
+	s.observeTaskActivity(taskNotificationMsg("task-a"))
+	s.observeTaskActivity(taskNotificationMsg("task-b"))
+	s.observeTaskActivity(taskNotificationMsg("task-c"))
 	if got := s.LiveBackgroundTaskCount(); got != 0 {
 		t.Fatalf("after notifications LiveBackgroundTaskCount() = %d, want 0", got)
 	}
 
-	// Notification for an unknown task is a no-op, not a panic or negative count.
-	s.observeBackgroundTasks(taskNotificationMsg("task-x"))
+	// Delayed progress after a terminal event must not resurrect a phantom task.
+	s.observeTaskActivity(taskProgressMsg("task-a"))
+	if got := s.LiveBackgroundTaskCount(); got != 0 {
+		t.Fatalf("after delayed terminal-task progress LiveBackgroundTaskCount() = %d, want 0", got)
+	}
+
+	// Notification for an unknown task records a terminal snapshot without
+	// producing a panic or negative count.
+	s.observeTaskActivity(taskNotificationMsg("task-x"))
 	if got := s.LiveBackgroundTaskCount(); got != 0 {
 		t.Fatalf("after unknown notification LiveBackgroundTaskCount() = %d, want 0", got)
 	}
 }
 
-func TestShouldShutdownOnResult_LiveBackgroundTasksKeepAlive(t *testing.T) {
+func TestTaskActivities_PreserveProviderNeutralLifecycleDetails(t *testing.T) {
+	s := NewSession("task-activity-test", "feat-1", feature.PhaseImplement)
+	startedAt := time.Date(2026, 7, 28, 10, 0, 0, 0, time.UTC)
+	progressAt := startedAt.Add(2 * time.Minute)
+	finishedAt := progressAt.Add(time.Minute)
+
+	s.observeTaskActivity(llm.SDKMessage{
+		Type:       "system",
+		Subtype:    "task_started",
+		OccurredAt: startedAt,
+		Origin: llm.EventOrigin{
+			Kind:           llm.EventOriginTask,
+			TaskID:         "task-a",
+			ChildSessionID: "child-session-a",
+		},
+		TaskStarted: &llm.TaskStartedMessage{
+			TaskID:      "task-a",
+			ToolUseID:   "tool-a",
+			Description: "Refactor the execution path",
+		},
+	})
+	s.observeTaskActivity(llm.SDKMessage{
+		Type:       "system",
+		Subtype:    "task_progress",
+		OccurredAt: progressAt,
+		Origin: llm.EventOrigin{
+			Kind:           llm.EventOriginTask,
+			TaskID:         "task-a",
+			ChildSessionID: "child-session-a",
+		},
+		TaskProgress: &llm.TaskProgressMessage{
+			TaskID:       "task-a",
+			LastToolName: "apply_patch",
+			LastPath:     "internal/server/runtime.go",
+			Usage:        &llm.TaskUsage{TotalTokens: 1200, ToolUses: 4},
+		},
+	})
+
+	running := s.TaskActivities()
+	if len(running) != 1 {
+		t.Fatalf("len(TaskActivities()) = %d, want 1", len(running))
+	}
+	if got := running[0]; got.State != llm.TaskActivityRunning ||
+		got.TaskID != "task-a" ||
+		got.ChildSessionID != "child-session-a" ||
+		got.Description != "Refactor the execution path" ||
+		got.LastToolName != "apply_patch" ||
+		got.LastPath != "internal/server/runtime.go" ||
+		!got.StartedAt.Equal(startedAt) ||
+		!got.UpdatedAt.Equal(progressAt) ||
+		got.Usage == nil ||
+		got.Usage.TotalTokens != 1200 {
+		t.Fatalf("running TaskActivities()[0] = %+v", got)
+	}
+	if got := s.LiveBackgroundTaskCount(); got != 1 {
+		t.Fatalf("LiveBackgroundTaskCount() = %d, want 1", got)
+	}
+
+	s.observeTaskActivity(llm.SDKMessage{
+		Type:       "system",
+		Subtype:    "task_notification",
+		OccurredAt: finishedAt,
+		Origin: llm.EventOrigin{
+			Kind:           llm.EventOriginTask,
+			TaskID:         "task-a",
+			ChildSessionID: "child-session-a",
+		},
+		TaskNotification: &llm.TaskNotificationMessage{
+			TaskID:  "task-a",
+			Status:  "failed",
+			Summary: "tests failed",
+		},
+	})
+
+	finished := s.TaskActivities()
+	if len(finished) != 1 {
+		t.Fatalf("len(TaskActivities()) after terminal event = %d, want 1", len(finished))
+	}
+	if got := finished[0]; got.State != llm.TaskActivityFailed ||
+		got.Summary != "tests failed" ||
+		!got.FinishedAt.Equal(finishedAt) ||
+		!got.UpdatedAt.Equal(finishedAt) {
+		t.Fatalf("finished TaskActivities()[0] = %+v", got)
+	}
+	if got := s.LiveBackgroundTaskCount(); got != 0 {
+		t.Fatalf("LiveBackgroundTaskCount() after terminal event = %d, want 0", got)
+	}
+}
+
+func TestTaskActivities_CorrelatesToolUseFallbackWithLaterProviderTaskID(t *testing.T) {
+	s := NewSession("task-identity-upgrade", "feat-1", feature.PhaseImplement)
+	s.observeTaskActivity(llm.SDKMessage{
+		OccurredAt: time.Date(2026, 7, 28, 10, 0, 0, 0, time.UTC),
+		TaskStarted: &llm.TaskStartedMessage{
+			ToolUseID:   "tool-a",
+			Description: "Started before the provider assigned a task ID",
+		},
+	})
+	s.observeTaskActivity(llm.SDKMessage{
+		OccurredAt: time.Date(2026, 7, 28, 10, 1, 0, 0, time.UTC),
+		TaskProgress: &llm.TaskProgressMessage{
+			TaskID:      "task-a",
+			ToolUseID:   "tool-a",
+			Description: "Provider task ID assigned",
+		},
+	})
+	s.observeTaskActivity(llm.SDKMessage{
+		OccurredAt: time.Date(2026, 7, 28, 10, 2, 0, 0, time.UTC),
+		TaskNotification: &llm.TaskNotificationMessage{
+			TaskID:    "task-a",
+			ToolUseID: "tool-a",
+			Status:    "completed",
+		},
+	})
+
+	activities := s.TaskActivities()
+	if len(activities) != 1 {
+		t.Fatalf("TaskActivities() = %+v, want one correlated task", activities)
+	}
+	if got := activities[0]; got.TaskID != "task-a" ||
+		got.ToolUseID != "tool-a" ||
+		got.State != llm.TaskActivityCompleted {
+		t.Fatalf("TaskActivities()[0] = %+v, want upgraded terminal task identity", got)
+	}
+	if got := s.LiveBackgroundTaskCount(); got != 0 {
+		t.Fatalf("LiveBackgroundTaskCount() = %d, want 0", got)
+	}
+}
+
+func TestRootCompletionIntent_IgnoresDelegatedTaskOutput(t *testing.T) {
+	s := NewSession("completion-origin-test", "feat-1", feature.PhaseImplement)
+	outcomeText := `<agentico-outcome>{"status":"success"}</agentico-outcome>`
+
+	s.observeCompletionIntent(llm.SDKMessage{
+		Type:   "assistant",
+		Origin: llm.EventOrigin{Kind: llm.EventOriginTask, TaskID: "task-a"},
+		Assistant: &llm.AssistantMessage{
+			Message: llm.ConversationMsg{
+				Role:    "assistant",
+				Content: []llm.ContentBlock{{Type: "text", Text: outcomeText}},
+			},
+		},
+	})
+	if got := s.RootCompletionIntent(); got.Found {
+		t.Fatalf("child RootCompletionIntent() = %+v, want no root intent", got)
+	}
+
+	s.observeCompletionIntent(llm.SDKMessage{
+		Type:   "assistant",
+		Origin: llm.EventOrigin{Kind: llm.EventOriginRoot},
+		Assistant: &llm.AssistantMessage{
+			Message: llm.ConversationMsg{
+				Role:    "assistant",
+				Content: []llm.ContentBlock{{Type: "text", Text: outcomeText}},
+			},
+		},
+	})
+	if got := s.RootCompletionIntent(); !got.Valid() || got.Status != llm.CompletionIntentSuccess {
+		t.Fatalf("root RootCompletionIntent() = %+v, want valid success", got)
+	}
+}
+
+func TestShouldShutdownOnResult_LoopManagedSessionsStayAlive(t *testing.T) {
 	endTurn := &llm.ResultMessage{Type: "result", Subtype: "success", StopReason: "end_turn"}
 
 	t.Run("keep-alive session with live tasks stays up on end_turn", func(t *testing.T) {
 		s := NewSession("bg-keepalive", "feat-1", feature.PhaseImplement)
-		s.keepAliveOnTruncatedResult = true
-		s.observeBackgroundTasks(taskStartedMsg("task-a"))
+		s.keepAliveOnTurnResult = true
+		s.observeTaskActivity(taskStartedMsg("task-a"))
 		if s.shouldShutdownOnResult(endTurn) {
 			t.Error("shouldShutdownOnResult() = true, want false while background tasks run")
 		}
 	})
 
-	t.Run("keep-alive session without live tasks shuts down on end_turn", func(t *testing.T) {
+	t.Run("keep-alive session without live tasks stays up for a harness nudge", func(t *testing.T) {
 		s := NewSession("bg-none", "feat-1", feature.PhaseImplement)
-		s.keepAliveOnTruncatedResult = true
-		if !s.shouldShutdownOnResult(endTurn) {
-			t.Error("shouldShutdownOnResult() = false, want true with no background tasks")
+		s.keepAliveOnTurnResult = true
+		if s.shouldShutdownOnResult(endTurn) {
+			t.Error("shouldShutdownOnResult() = true, want false for loop-managed turn")
 		}
 	})
 
 	t.Run("non-loop session with live tasks still shuts down", func(t *testing.T) {
 		s := NewSession("bg-oneshot", "feat-1", feature.PhaseImplement)
-		s.observeBackgroundTasks(taskStartedMsg("task-a"))
+		s.observeTaskActivity(taskStartedMsg("task-a"))
 		if !s.shouldShutdownOnResult(endTurn) {
 			t.Error("shouldShutdownOnResult() = false, want true for non-keep-alive session")
 		}
 	})
+}
+
+func rootAssistantText(text string) llm.SDKMessage {
+	return llm.SDKMessage{
+		Type:   "assistant",
+		Origin: llm.EventOrigin{Kind: llm.EventOriginRoot},
+		Assistant: &llm.AssistantMessage{
+			Message: llm.ConversationMsg{
+				Role:    "assistant",
+				Content: []llm.ContentBlock{{Type: "text", Text: text}},
+			},
+		},
+	}
+}
+
+func TestObserveCompletionIntent_SignalsOutcomeAndSurvivesTaglessText(t *testing.T) {
+	t.Parallel()
+	s := NewSession("outcome-signal", "feat-1", feature.PhaseImplement)
+
+	s.observeCompletionIntent(rootAssistantText(`Done. <agentico-outcome>{"status":"success"}</agentico-outcome>`))
+	select {
+	case <-s.RootOutcomeCh():
+	default:
+		t.Fatal("RootOutcomeCh() was not signalled for a committable outcome")
+	}
+
+	s.observeCompletionIntent(rootAssistantText("Anything else you want me to look at?"))
+	if got := s.RootCompletionIntent(); !got.Valid() || got.Status != llm.CompletionIntentSuccess {
+		t.Fatalf("RootCompletionIntent() after tagless text = %+v, want the valid success outcome", got)
+	}
+
+	s.observeCompletionIntent(rootAssistantText(`<agentico-outcome>{"status":"retry"}</agentico-outcome>`))
+	if got := s.RootCompletionIntent(); got.Status != llm.CompletionIntentRetry {
+		t.Fatalf("RootCompletionIntent() = %+v, want the newer retry outcome", got)
+	}
+}
+
+func TestSendUserMessage_KeepsCommittableOutcomeUntilHarnessClearsIt(t *testing.T) {
+	t.Parallel()
+	var stdin strings.Builder
+	s := NewSession("outcome-preserve", "feat-1", feature.PhaseImplement)
+	s.SetStdinForTest(nopWriteCloser{Writer: &stdin})
+	s.observeCompletionIntent(rootAssistantText(`<agentico-outcome>{"status":"success"}</agentico-outcome>`))
+
+	if err := s.SendUserMessage("thanks"); err != nil {
+		t.Fatalf("SendUserMessage() error: %v", err)
+	}
+	if got := s.RootCompletionIntent(); !got.Valid() {
+		t.Fatalf("RootCompletionIntent() after user message = %+v, want the outcome preserved", got)
+	}
+
+	s.ClearRootCompletionIntent()
+	if got := s.RootCompletionIntent(); got.Found {
+		t.Fatalf("RootCompletionIntent() after clear = %+v, want zero", got)
+	}
+
+	s.observeCompletionIntent(rootAssistantText("still working on it"))
+	if err := s.SendUserMessage("finish up"); err != nil {
+		t.Fatalf("SendUserMessage() error: %v", err)
+	}
+	if got := s.RootCompletionIntent(); got.Found {
+		t.Fatalf("RootCompletionIntent() = %+v, want a non-committable intent cleared by the user message", got)
+	}
+}
+
+// TestCostAndResultSeq_AreRaceFree reads the terminal-result state concurrently
+// with the reader loop that writes it.
+func TestCostAndResultSeq_AreRaceFree(t *testing.T) {
+	t.Parallel()
+	const results = 20
+	s := NewSession("cost-race", "feat-1", feature.PhaseImplement)
+
+	messages := make([]llm.SDKMessage, 0, results)
+	for i := 0; i < results; i++ {
+		messages = append(messages, llm.SDKMessage{
+			Type:   "result",
+			Result: &llm.ResultMessage{Type: "result", Subtype: "success", TotalCostUSD: float64(i)},
+		})
+	}
+
+	stop := make(chan struct{})
+	readerDone := make(chan struct{})
+	go func() {
+		defer close(readerDone)
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				_ = s.Cost()
+				_ = s.ResultSeq()
+			}
+		}
+	}()
+
+	runMockSession(t, s, messages, nil)
+	close(stop)
+	<-readerDone
+
+	if got := s.ResultSeq(); got != results {
+		t.Fatalf("ResultSeq() = %d, want %d", got, results)
+	}
 }

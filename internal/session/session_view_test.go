@@ -24,6 +24,7 @@ import (
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
+	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
 // stubProtocol is a minimal llm.Protocol for testing session accessors.
@@ -48,9 +49,9 @@ func (p *stubProtocol) Close() error           { return nil }
 
 func TestSessionImplementsSessionView(t *testing.T) {
 	// Compile-time check is in session_view.go:
-	//   var _ SessionView = (*Session)(nil)
+	//   var _ ports.SessionView = (*Session)(nil)
 	// This test exercises runtime behavior:
-	var sv SessionView = NewSession("test-id", "feat-id", feature.PhaseResearch)
+	var sv ports.SessionView = NewSession("test-id", "feat-id", feature.PhaseResearch)
 	if sv.ID() != "test-id" {
 		t.Errorf("ID() = %q, want %q", sv.ID(), "test-id")
 	}
@@ -206,7 +207,7 @@ func TestManagerGetSessionReturnsSessionView(t *testing.T) {
 	s := NewSession("s1", "f1", feature.PhaseResearch)
 	mgr.RegisterTestSession(s)
 
-	var sv SessionView = mgr.GetSession("s1")
+	var sv ports.SessionView = mgr.GetSession("s1")
 	if sv == nil {
 		t.Fatal("GetSession returned nil")
 	}
@@ -228,7 +229,7 @@ func TestManagerActiveSessionsReturnsSessionView(t *testing.T) {
 	if len(sessions) != 1 {
 		t.Fatalf("ActiveSessions() returned %d sessions, want 1", len(sessions))
 	}
-	var sv SessionView = sessions[0]
+	var sv ports.SessionView = sessions[0]
 	if sv.ID() != "s1" {
 		t.Errorf("ID() = %q, want %q", sv.ID(), "s1")
 	}
@@ -245,7 +246,7 @@ func TestManagerFeatureSessionsReturnsSessionView(t *testing.T) {
 	if len(sessions) != 1 {
 		t.Fatalf("FeatureSessions('f1') returned %d sessions, want 1", len(sessions))
 	}
-	var sv SessionView = sessions[0]
+	var sv ports.SessionView = sessions[0]
 	if sv.FeatureID() != "f1" {
 		t.Errorf("FeatureID() = %q, want %q", sv.FeatureID(), "f1")
 	}

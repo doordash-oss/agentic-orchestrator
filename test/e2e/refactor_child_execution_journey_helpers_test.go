@@ -20,6 +20,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -27,7 +28,6 @@ import (
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
-	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
@@ -60,59 +60,62 @@ var journeyPhasePlanText = "# Phase 1 Plan\n\n" +
 	"### Visual Evidence\n- [ ] None required: no user-facing rendered surface.\n\n" +
 	"### Behavioral Evidence\n- [ ] None required: automated tests provide the artifact.\n"
 
-// journeyCleanliness adapts the git cleanliness report to the feature view,
-// mirroring the production module wiring.
-func journeyCleanliness(wm *git.WorktreeManager) feature.CleanlinessOps {
-	return feature.CleanlinessFunc(func(worktreePath string, maxPerCategory int) (*feature.RepoCleanliness, error) {
-		report, err := wm.InspectCleanliness(worktreePath, maxPerCategory)
-		if report == nil || err != nil {
-			return nil, err
-		}
-		return &feature.RepoCleanliness{
-			Staged:         report.Staged,
-			Unstaged:       report.Unstaged,
-			Untracked:      report.Untracked,
-			StagedTotal:    report.StagedTotal,
-			UnstagedTotal:  report.UnstagedTotal,
-			UntrackedTotal: report.UntrackedTotal,
-		}, nil
-	})
-}
-
 // journeyChildPhaseRunner wires scripted plan sessions plus stubbed
 // implement and final-review kernels so the journey exercises the real
 // orchestrator/server wiring without launching provider CLIs. The implement
 // stub writes one artifact into the child worktree, which integration must
 // carry into the parent.
 func journeyChildPhaseRunner(t *testing.T, sm *session.Manager, store *feature.Store, stateDir string) *agent.PhaseRunner {
+	return journeyChildPhaseRunnerWithOpts(t, sm, store, stateDir, journeyPhaseRunnerOptions{})
+}
+
+// journeyPhaseRunnerOptions configures the scripted phase runner.
+type journeyPhaseRunnerOptions struct {
+	// mergeRebaseTarget, when true, makes the implement stub merge the
+	// persisted creation-time target ref into each behind repo's child
+	// worktree so the rebase child satisfies the mechanical integration
+	// gate's ancestor check. False leaves the child branch without the
+	// target commit (used to exercise the gate's not-ancestor failure).
+	mergeRebaseTarget bool
+}
+
+// journeyChildPhaseRunnerWithOpts is the configurable core of
+// journeyChildPhaseRunner.
+func journeyChildPhaseRunnerWithOpts(t *testing.T, sm *session.Manager, store *feature.Store, stateDir string, opts journeyPhaseRunnerOptions) *agent.PhaseRunner {
 	t.Helper()
 	scriptsDir := t.TempDir()
 
 	pr := agent.NewPhaseRunner(sm, store, stateDir)
 	pr.BuildSessionFn = func(opts agent.BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error) {
-		// MarkerPath is <artifactDir>/attempt-NN/phase_complete; the phase
-		// artifact belongs one level up in <artifactDir>. Utility sessions
-		// (e.g. PR description generation during auto-publish) carry no
-		// marker and just need a text response.
-		artifactDir := filepath.Dir(filepath.Dir(opts.MarkerPath))
+		// Plan sessions write their artifact into the run-scoped artifact
+		// directory and finish with the structured agentico-outcome; the
+		// harness owns phase_complete. Utility sessions (e.g. PR description
+		// generation during auto-publish) just need a text response.
+		f, _ := store.Load(opts.FeatureID)
 		var script string
 		switch {
-		case opts.MarkerPath == "":
+		case opts.Phase != feature.PhasePlan || f == nil:
 			script = testutil.WriteScript(t, scriptsDir, "description.sh", testutil.JSONLInit+"\n"+
 				`read -r _agentic_init`+"\n"+
 				testutil.JSONLAssistant("TITLE: Child integration\n\nBODY: Integrated the refactor child.")+"\n"+
 				testutil.JSONLSuccess+"\n")
-		case strings.Contains(opts.MarkerPath, "roadmap"):
+		case strings.Contains(strings.ToLower(opts.Prompt), "roadmap"):
+			artifactDir := agent.RoadmapDir(stateDir, f)
 			script = testutil.WriteScript(t, scriptsDir, "roadmap.sh", testutil.JSONLInit+"\n"+
 				`read -r _agentic_init`+"\n"+
+				fmt.Sprintf("mkdir -p %q", artifactDir)+"\n"+
 				fmt.Sprintf("cat > %q <<'ROADMAP_EOF'\n%s\nROADMAP_EOF", filepath.Join(artifactDir, "roadmap.md"), journeyRoadmapText)+"\n"+
-				fmt.Sprintf("touch %q", opts.MarkerPath)+"\n"+
 				testutil.JSONLSuccess+"\n")
 		default:
+			phaseNum := f.CurrentRoadmapPhase
+			if phaseNum == 0 {
+				phaseNum = 1
+			}
+			artifactDir := agent.PhasePlanDir(stateDir, f, phaseNum)
 			script = testutil.WriteScript(t, scriptsDir, "phase-plan.sh", testutil.JSONLInit+"\n"+
 				`read -r _agentic_init`+"\n"+
+				fmt.Sprintf("mkdir -p %q", artifactDir)+"\n"+
 				fmt.Sprintf("cat > %q <<'PLAN_EOF'\n%s\nPLAN_EOF", filepath.Join(artifactDir, "plan.md"), journeyPhasePlanText)+"\n"+
-				fmt.Sprintf("touch %q", opts.MarkerPath)+"\n"+
 				testutil.JSONLSuccess+"\n")
 		}
 		return []string{"bash", script}, nil, &ports.SessionOpts{
@@ -126,12 +129,46 @@ func journeyChildPhaseRunner(t *testing.T, sm *session.Manager, store *feature.S
 		// Stand in for the implement kernel: leave one real change in the
 		// child worktree for the integration boundary to commit and merge.
 		for _, repo := range c.Feature.Repos {
+			if c.Feature.Parent != nil &&
+				c.Feature.Parent.Kind == feature.ChildKindRebase &&
+				!c.Feature.IsRebaseBehindRepo(repo.Name) {
+				continue
+			}
 			wt := repo.WorktreePath
 			if wt == "" {
 				wt = repo.Path
 			}
 			if err := os.WriteFile(filepath.Join(wt, "child-output.txt"), []byte("child work\n"), 0o644); err != nil {
 				return nil, fmt.Errorf("write child output: %w", err)
+			}
+		}
+		// For a rebase child, the implement kernel is expected to merge the
+		// creation-time target into each behind repo's working branch. The
+		// mechanical integration gate re-verifies the result, so the stub
+		// must actually land the merge (cleanly, against a non-conflicting
+		// target) for the happy path to pass the gate. When
+		// mergeRebaseTarget is false the stub leaves the branch without the
+		// target, exercising the gate's not-ancestor failure.
+		if opts.mergeRebaseTarget && c.Feature.Parent != nil && c.Feature.Parent.Kind == feature.ChildKindRebase {
+			behind := make(map[string]bool, len(c.Feature.Parent.RebaseBehind))
+			for _, r := range c.Feature.Parent.RebaseBehind {
+				behind[r] = true
+			}
+			for _, repo := range c.Feature.Repos {
+				if !behind[repo.Name] {
+					continue
+				}
+				wt := repo.WorktreePath
+				if wt == "" {
+					wt = repo.Path
+				}
+				tgt, ok := c.Feature.RebaseTargetForRepo(repo.Name)
+				if !ok || tgt.Ref == "" {
+					return nil, fmt.Errorf("rebase journey stub: no persisted target for %s", repo.Name)
+				}
+				if err := journeyMergeRebaseTarget(t, wt, tgt.Ref); err != nil {
+					return nil, fmt.Errorf("rebase journey stub merge %s: %w", repo.Name, err)
+				}
 			}
 		}
 		return &agent.LoopResult{FinalStatus: "review_passed", Iterations: 1}, nil
@@ -154,6 +191,24 @@ func journeyChildPhaseRunner(t *testing.T, sm *session.Manager, store *feature.S
 	return pr
 }
 
+// journeyMergeRebaseTarget merges the persisted target ref into the child
+// worktree's current branch with a no-ff merge commit, using the test git
+// identity. It assumes a non-conflicting target (the journey repos diverge on
+// disjoint files).
+func journeyMergeRebaseTarget(t *testing.T, worktreePath, ref string) error {
+	t.Helper()
+	cmd := exec.Command("git", "-C", worktreePath, "merge", "--no-ff", "-m",
+		"journey stub: merge rebase target "+ref, ref)
+	cmd.Env = append(testutil.GitTestEnv(),
+		"GIT_AUTHOR_NAME=Test", "GIT_AUTHOR_EMAIL=test@test.com",
+		"GIT_COMMITTER_NAME=Test", "GIT_COMMITTER_EMAIL=test@test.com",
+	)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("git merge %s: %v\n%s", ref, err, out)
+	}
+	return nil
+}
+
 // postAction runs one feature action through the raw action route and fails
 // on a non-200 response.
 func postAction(t *testing.T, baseURL, featureID, action, body string) {
@@ -174,6 +229,48 @@ func postAction(t *testing.T, baseURL, featureID, action, body string) {
 		payload, _ := io.ReadAll(resp.Body)
 		t.Fatalf("POST action %s status = %d; body: %s", action, resp.StatusCode, payload)
 	}
+}
+
+// postReviewSessionProceed approves the feature's active review gate through
+// the review-session decision endpoint — the live decision path. It creates
+// (or reopens) the session to read the draft revision the decision must
+// carry, then submits an unmodified proceed.
+func postReviewSessionProceed(t *testing.T, baseURL, featureID string) {
+	t.Helper()
+	created := journeyPostJSON(t, baseURL+"/api/v1/features/"+featureID+"/reviews", `{}`)
+	reviewID, _ := created["review_id"].(string)
+	draftRevision, _ := created["draft_revision"].(string)
+	if reviewID == "" || draftRevision == "" {
+		t.Fatalf("review session create = %v; want review_id and draft_revision", created)
+	}
+	journeyPostJSON(t, baseURL+"/api/v1/features/"+featureID+"/reviews/"+reviewID+"/decision",
+		`{"decision":"proceed","base_revision":"`+draftRevision+`"}`)
+}
+
+// journeyPostJSON posts a trusted JSON mutation and returns the decoded
+// response, failing on non-200.
+func journeyPostJSON(t *testing.T, url, body string) map[string]any {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodPost, url, strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("NewRequest() error = %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Agentico-Client", "local")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST %s: %v", url, err)
+	}
+	defer resp.Body.Close()
+	payload, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("POST %s status = %d; body: %s", url, resp.StatusCode, payload)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(payload, &decoded); err != nil {
+		t.Fatalf("decode %s response: %v (body: %s)", url, err, payload)
+	}
+	return decoded
 }
 
 // waitForJourneyGate polls until the child is parked at the plan-review gate
@@ -308,7 +405,11 @@ func waitForParentPublishOutcome(t *testing.T, store *feature.Store, parentID st
 		time.Sleep(100 * time.Millisecond)
 	}
 	parent, _ := store.Load(parentID)
-	t.Fatalf("parent %s publication never settled: %+v", parentID, parent.RepoStates)
+	var repoState feature.RepoState
+	if state := parent.RepoStates["repoA"]; state != nil {
+		repoState = *state
+	}
+	t.Fatalf("parent %s publication never settled: status=%s checkpoints=%+v repoA=%+v", parentID, parent.Status, parent.Checkpoints, repoState)
 }
 
 func journeyFeatureBody(baseURL, featureID string) map[string]any {

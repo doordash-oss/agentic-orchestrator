@@ -17,13 +17,25 @@ package server
 import (
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
+
+type readModelCleanlinessWorktrees struct {
+	feature.WorktreeOps
+	report *git.CleanlinessReport
+	err    error
+}
+
+func (w *readModelCleanlinessWorktrees) InspectCleanliness(string, int) (*git.CleanlinessReport, error) {
+	return w.report, w.err
+}
 
 // seedReadChildFeature persists an active refactor child under parentID with
 // the given durable status/setup state and returns it.
@@ -222,16 +234,17 @@ func TestParentProjectionsCarryCompleteRelationshipHistory(t *testing.T) {
 
 	closedAt := time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC)
 	closed := &feature.Feature{
-		ID:           parent.ID + "-closed",
-		Name:         "Completed refactor",
-		Slug:         "completed-refactor",
-		Status:       feature.StatusReviewPassed,
-		CurrentPhase: feature.PhaseImplement,
-		Created:      time.Date(2026, 7, 26, 9, 0, 0, 0, time.UTC),
-		Repos:        []feature.FeatureRepo{{Name: repoNameSelf}},
-		Pipeline:     feature.PipelineMedium,
-		ActiveRun:    1,
-		RunCount:     1,
+		ID:            parent.ID + "-closed",
+		Name:          "Completed refactor",
+		Slug:          "completed-refactor",
+		Status:        feature.StatusReviewPassed,
+		CurrentPhase:  feature.PhaseImplement,
+		Created:       time.Date(2026, 7, 26, 9, 0, 0, 0, time.UTC),
+		Repos:         []feature.FeatureRepo{{Name: repoNameSelf}},
+		Pipeline:      feature.PipelineMedium,
+		ActiveRun:     1,
+		RunCount:      1,
+		SchemaVersion: feature.SchemaVersionCurrent,
 		Parent: &feature.ChildRelationship{
 			ParentID:     parent.ID,
 			Kind:         feature.ChildKindRefactor,
@@ -293,7 +306,7 @@ func TestClosedChildSurfacesPreservedDiffSummary(t *testing.T) {
 		Status: feature.StatusReviewPassed, CurrentPhase: feature.PhaseImplement,
 		Created:   time.Date(2026, 7, 26, 9, 0, 0, 0, time.UTC),
 		Repos:     []feature.FeatureRepo{{Name: repoNameSelf}},
-		ActiveRun: 1, RunCount: 1,
+		ActiveRun: 1, RunCount: 1, SchemaVersion: feature.SchemaVersionCurrent,
 		Parent: &feature.ChildRelationship{
 			ParentID: parent.ID, Kind: feature.ChildKindRefactor,
 			CloseOutcome: feature.ChildCloseOutcomeCompleted, ClosedAt: &closedAt,
@@ -311,7 +324,7 @@ func TestClosedChildSurfacesPreservedDiffSummary(t *testing.T) {
 		Status: feature.StatusReviewPassed, CurrentPhase: feature.PhaseImplement,
 		Created:   time.Date(2026, 7, 25, 9, 0, 0, 0, time.UTC),
 		Repos:     []feature.FeatureRepo{{Name: repoNameSelf}},
-		ActiveRun: 1, RunCount: 1,
+		ActiveRun: 1, RunCount: 1, SchemaVersion: feature.SchemaVersionCurrent,
 		Parent: &feature.ChildRelationship{
 			ParentID: parent.ID, Kind: feature.ChildKindRefactor,
 			CloseOutcome: feature.ChildCloseOutcomeDiscarded, ClosedAt: &olderClosedAt,
@@ -323,17 +336,12 @@ func TestClosedChildSurfacesPreservedDiffSummary(t *testing.T) {
 	}
 
 	handler := NewHandler(baseReadHandlerOptions(store))
-	parentSummary := getJSONMap(t, handler, apiPathFeatures)["features"].([]any)[0].(map[string]any)
+	detail := getJSONMap(t, handler, "/api/v1/features/"+parent.ID)[entityFeature].(map[string]any)
 
-	if got := parentSummary["active_child"].(map[string]any)["diff_summary"]; got != nil {
+	if got := detail["active_child"].(map[string]any)["diff_summary"]; got != nil {
 		t.Fatalf("active child diff_summary = %#v, want omitted", got)
 	}
-	history := parentSummary["child_history"].([]any)
-	seen := map[string]map[string]any{}
-	for _, raw := range history {
-		item := raw.(map[string]any)
-		seen[item["id"].(string)] = item
-	}
+	seen := childHistoryByID(t, detail)
 	if got := seen[withDiff.ID]["diff_summary"]; got != diffSummary {
 		t.Fatalf("closed child diff_summary = %#v, want preserved summary", got)
 	}
@@ -341,6 +349,63 @@ func TestClosedChildSurfacesPreservedDiffSummary(t *testing.T) {
 		t.Fatalf("no-diff closed child diff_summary = %#v, want omitted", got)
 	}
 	_ = active
+}
+
+// childHistoryByID indexes a projection's child_history entries by child id.
+func childHistoryByID(t *testing.T, projection map[string]any) map[string]map[string]any {
+	t.Helper()
+	seen := map[string]map[string]any{}
+	for _, raw := range projection["child_history"].([]any) {
+		item := raw.(map[string]any)
+		seen[item["id"].(string)] = item
+	}
+	return seen
+}
+
+// TestClosedChildDiffSummaryBoundedInResponse proves an oversized persisted
+// diff summary (a pre-fix record holding a raw multi-megabyte diff) can no
+// longer inflate the feature-detail response: the DTO value is capped with a
+// truncation marker.
+func TestClosedChildDiffSummaryBoundedInResponse(t *testing.T) {
+	t.Parallel()
+
+	store, parent := seedReadFeature(t)
+	closedAt := time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC)
+	hugeDiff := "Repository: " + repoNameSelf + "\n" +
+		strings.Repeat("+a persisted raw diff line from before the bound existed\n", (feature.DiffSummaryBudget*4)/57)
+	closed := &feature.Feature{
+		ID: parent.ID + "-closed-huge", Name: "Closed with huge diff", Slug: "closed-huge",
+		Status: feature.StatusReviewPassed, CurrentPhase: feature.PhaseImplement,
+		Created:   time.Date(2026, 7, 26, 9, 0, 0, 0, time.UTC),
+		Repos:     []feature.FeatureRepo{{Name: repoNameSelf}},
+		ActiveRun: 1, RunCount: 1, SchemaVersion: feature.SchemaVersionCurrent,
+		Parent: &feature.ChildRelationship{
+			ParentID: parent.ID, Kind: feature.ChildKindRefactor,
+			CloseOutcome: feature.ChildCloseOutcomeCompleted, ClosedAt: &closedAt,
+			DiffSummary: hugeDiff,
+		},
+	}
+	closed.SetRun(&feature.Run{RunNumber: 1, Setup: &feature.SetupState{Status: feature.SetupStatusDone}})
+	if err := store.Save(closed); err != nil {
+		t.Fatalf("Save(closed) error = %v", err)
+	}
+
+	handler := NewHandler(baseReadHandlerOptions(store))
+	detail := getJSONMap(t, handler, "/api/v1/features/"+parent.ID)[entityFeature].(map[string]any)
+	history := detail["child_history"].([]any)
+	var got string
+	for _, raw := range history {
+		item := raw.(map[string]any)
+		if item["id"] == closed.ID {
+			got = item["diff_summary"].(string)
+		}
+	}
+	if got == "" || len(got) > feature.DiffSummaryBudget {
+		t.Fatalf("diff_summary length = %d, want non-empty and <= %d", len(got), feature.DiffSummaryBudget)
+	}
+	if !strings.HasSuffix(got, " bytes omitted]") {
+		t.Fatalf("diff_summary missing truncation marker, tail = %q", got[len(got)-120:])
+	}
 }
 
 func TestParentDeleteRemainsEnabledDuringActiveRelationship(t *testing.T) {
@@ -405,16 +470,16 @@ func TestParentRefactorDirtyReasonCarriesDiagnostics(t *testing.T) {
 	}
 	opts := baseReadHandlerOptions(store)
 	opts.Freshness = StaticFreshnessProvider{repoNameSelf: RepoFreshnessLocalChanges}
-	opts.Cleanliness = feature.CleanlinessFunc(func(worktreePath string, _ int) (*feature.RepoCleanliness, error) {
-		return &feature.RepoCleanliness{
+	opts.Worktrees = &readModelCleanlinessWorktrees{
+		report: &git.CleanlinessReport{
 			Staged:         []string{"staged.txt"},
 			Unstaged:       []string{"unstaged.txt"},
 			Untracked:      []string{"untracked-a.txt", "untracked-b.txt"},
 			StagedTotal:    1,
 			UnstagedTotal:  1,
 			UntrackedTotal: 2,
-		}, nil
-	})
+		},
+	}
 	handler := NewHandler(opts)
 
 	body := getJSONMap(t, handler, "/api/v1/features/"+parent.ID)[entityFeature].(map[string]any)
@@ -479,6 +544,91 @@ func TestParentRefactorDirtyReasonWithoutCleanlinessOmitsTarget(t *testing.T) {
 	t.Fatal("refactor action missing")
 }
 
+func TestReviewFeedbackActionCatalogEligibility(t *testing.T) {
+	t.Parallel()
+	publishable := true
+	base := actionCatalogTestFeature(feature.StatusPublished, feature.Checkpoints{}, &publishable)
+	base.RepoStates = map[string]*feature.RepoState{
+		repoNameSelf: {PRURL: "https://github.example/org/repo/pull/17"},
+	}
+
+	tests := []struct {
+		name             string
+		feature          *feature.Feature
+		hasActiveChild   bool
+		wantEnabled      bool
+		wantDisabledCode string
+	}{
+		{name: "published parent with pull request", feature: base, wantEnabled: true},
+		{
+			name: "no pull request",
+			feature: func() *feature.Feature {
+				copy := *base
+				copy.RepoStates = map[string]*feature.RepoState{repoNameSelf: {}}
+				return &copy
+			}(),
+			wantDisabledCode: "no_pull_request",
+		},
+		{
+			name:             "active child",
+			feature:          base,
+			hasActiveChild:   true,
+			wantDisabledCode: "active_child_present",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			action := actionDTOByID(t, actionCatalogDTOsWithChildGuard(tt.feature, tt.hasActiveChild), actionReviewFeedback)
+			if action.Enabled != tt.wantEnabled {
+				t.Fatalf("review-feedback enabled = %v; want %v", action.Enabled, tt.wantEnabled)
+			}
+			if tt.wantEnabled {
+				if len(action.RequiredInputs) != 0 || action.Scope.Type != entityFeature || action.Scope.RepoSelection != "" {
+					t.Fatalf("review-feedback metadata = %+v; want feature scope with no catalog inputs", action)
+				}
+				return
+			}
+			if len(action.DisabledReasons) == 0 || action.DisabledReasons[0].Code != tt.wantDisabledCode {
+				t.Fatalf("review-feedback disabled reasons = %+v; want %q first", action.DisabledReasons, tt.wantDisabledCode)
+			}
+		})
+	}
+}
+
+func TestParentReviewFeedbackDirtyReasonCarriesDiagnostics(t *testing.T) {
+	t.Parallel()
+
+	store, parent := seedReadFeature(t)
+	parent.Status = feature.StatusPublished
+	if err := store.Save(parent); err != nil {
+		t.Fatalf("Save(parent) error = %v", err)
+	}
+	opts := baseReadHandlerOptions(store)
+	opts.Worktrees = &readModelCleanlinessWorktrees{report: &git.CleanlinessReport{
+		Unstaged:      []string{"review.go"},
+		UnstagedTotal: 1,
+	}}
+	handler := NewHandler(opts)
+
+	body := getJSONMap(t, handler, "/api/v1/features/"+parent.ID)[entityFeature].(map[string]any)
+	for _, raw := range body["actions"].([]any) {
+		action := raw.(map[string]any)
+		if action["id"] != actionReviewFeedback {
+			continue
+		}
+		if action["enabled"] != false {
+			t.Fatalf("review-feedback enabled = %v; want dirty-parent rejection", action["enabled"])
+		}
+		reasons := action["disabled_reasons"].([]any)
+		if len(reasons) == 0 || reasons[0].(map[string]any)["code"] != "dirty_parent" {
+			t.Fatalf("review-feedback disabled reasons = %+v; want dirty_parent", reasons)
+		}
+		return
+	}
+	t.Fatal("review-feedback action missing")
+}
+
 func assertRelationshipProjection(t *testing.T, raw any, wantID, wantOutcome, wantDisplayPrefix string) {
 	t.Helper()
 	projection, ok := raw.(map[string]any)
@@ -518,6 +668,97 @@ func TestChildDetailExposesSetupComplete(t *testing.T) {
 	if !ok || setupBody["status"] != string(feature.SetupStatusDone) {
 		t.Fatalf("child detail setup block = %+v, want done durable setup", active["setup"])
 	}
+}
+
+// TestReviewFeedbackChildDetailExposesPersistedComments pins the projection
+// of the persisted selected-comment artifact onto the child's own feature
+// detail read model. The comments must appear in persisted order with all
+// stored fields intact, and the field must be absent for refactor children
+// and parents.
+func TestReviewFeedbackChildDetailExposesPersistedComments(t *testing.T) {
+	t.Parallel()
+
+	comments := []feature.ReviewFeedbackComment{
+		{Repo: "org/repo-a", ID: 101, Type: "review", Path: "src/a.go", Line: 42, Author: "alice", Body: "nit: use context"},
+		{Repo: "org/repo-b", ID: 202, Type: "issue", Author: "bob", Body: "this breaks"},
+	}
+
+	t.Run("review-feedback child carries persisted comments in order", func(t *testing.T) {
+		t.Parallel()
+		store, parent := seedReadFeature(t)
+		child := &feature.Feature{
+			ID: parent.ID + "-rfchild", Name: "Address review feedback", Slug: "review-feedback",
+			Status: feature.StatusSettingUpWorktrees, CurrentPhase: feature.PhaseImplement,
+			Created:       time.Date(2026, 6, 18, 10, 0, 0, 0, time.UTC),
+			Repos:         []feature.FeatureRepo{{Name: repoNameSelf, Branch: "feature/rf"}},
+			ActiveRun:     1,
+			RunCount:      1,
+			SchemaVersion: feature.SchemaVersionCurrent,
+			Parent: &feature.ChildRelationship{
+				ParentID: parent.ID,
+				Kind:     feature.ChildKindReviewFeedback,
+				Bases:    []feature.ChildRepoBase{{Repo: repoNameSelf, SHA: "deadbeef", ParentBranch: "main"}},
+			},
+			ReviewFeedback: comments,
+		}
+		child.SetRun(&feature.Run{RunNumber: 1, Setup: &feature.SetupState{Status: feature.SetupStatusQueued}})
+		if err := store.Save(child); err != nil {
+			t.Fatalf("Save(child) error = %v", err)
+		}
+
+		handler := NewHandler(baseReadHandlerOptions(store))
+		detail := getJSONMap(t, handler, "/api/v1/features/"+child.ID)
+		body := detail[entityFeature].(map[string]any)
+		rawComments, ok := body["review_feedback"]
+		if !ok {
+			t.Fatalf("child detail missing review_feedback: keys=%v", sortedKeys(body))
+		}
+		list, ok := rawComments.([]any)
+		if !ok || len(list) != 2 {
+			t.Fatalf("review_feedback = %#v, want 2-element array", rawComments)
+		}
+		first := list[0].(map[string]any)
+		if first["repo"] != "org/repo-a" || first["id"] != float64(101) || first["type"] != "review" || first["path"] != "src/a.go" {
+			t.Fatalf("first comment = %#v, want repo-a/101/review/src/a.go", first)
+		}
+		second := list[1].(map[string]any)
+		if second["repo"] != "org/repo-b" || second["id"] != float64(202) || second["type"] != "issue" {
+			t.Fatalf("second comment = %#v, want repo-b/202/issue", second)
+		}
+	})
+
+	t.Run("refactor child omits review_feedback", func(t *testing.T) {
+		t.Parallel()
+		store, parent := seedReadFeature(t)
+		refactorChild := seedReadChildFeature(t, store, parent.ID, feature.StatusCreated, feature.SetupStatusDone, "")
+		handler := NewHandler(baseReadHandlerOptions(store))
+		detail := getJSONMap(t, handler, "/api/v1/features/"+refactorChild.ID)
+		body := detail[entityFeature].(map[string]any)
+		if _, exists := body["review_feedback"]; exists {
+			t.Fatalf("refactor child detail must not carry review_feedback")
+		}
+	})
+
+	t.Run("parent omits review_feedback", func(t *testing.T) {
+		t.Parallel()
+		store, _ := seedReadFeature(t)
+		handler := NewHandler(baseReadHandlerOptions(store))
+		parentID := fixtureFeatureIDAlt
+		detail := getJSONMap(t, handler, "/api/v1/features/"+parentID)
+		body := detail[entityFeature].(map[string]any)
+		if _, exists := body["review_feedback"]; exists {
+			t.Fatalf("parent detail must not carry review_feedback")
+		}
+	})
+}
+
+func sortedKeys(m map[string]any) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 func TestEventDTOFromDomainMapsRelationshipResource(t *testing.T) {

@@ -22,6 +22,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/doordash-oss/agentic-orchestrator/internal/github"
 )
 
 // PushFunc is the function used by Push. Tests can replace it to avoid real
@@ -50,67 +52,34 @@ func defaultPush(worktreePath, branch string) error {
 	return nil
 }
 
-// buildCreatePRArgs assembles the gh CLI argument slice for pr create.
-// Separated from CreatePR so tests can verify argument construction without
-// invoking the gh binary.
-func buildCreatePRArgs(branch, title, body string, draft bool, baseBranch ...string) []string {
-	args := []string{"pr", "create",
-		"--title", title,
-		"--body", body,
-		"--head", branch,
-	}
-	if len(baseBranch) > 0 && baseBranch[0] != "" {
-		args = append(args, "--base", baseBranch[0])
-	}
-	if draft {
-		args = append(args, "--draft")
-	}
-	return args
-}
-
-// CreatePR creates a GitHub PR using the gh CLI.
+// CreatePR creates a GitHub PR for the branch pushed from repoPath.
 // If baseBranch is provided and non-empty, the PR targets that branch
-// instead of the repository's default branch (for stacked PRs).
-// When draft is true, --draft is appended so the PR is created as a draft.
-//
-// If a PR already exists for the branch, the existing PR URL is returned
-// instead of an error (the push already updated the remote branch).
+// instead of the repository's default branch (for stacked PRs). When
+// draft is true the PR is created as a draft. If a PR already exists
+// for the branch, the existing PR URL is returned instead of an error
+// (the push already updated the remote branch).
 func CreatePR(repoPath, branch, title, body string, draft bool, baseBranch ...string) (string, error) {
 	body = InjectPRSignature(body)
-	args := buildCreatePRArgs(branch, title, body, draft, baseBranch...)
-	cmd := exec.Command("gh", args...)
-	cmd.Dir = repoPath
-	out, err := cmd.CombinedOutput()
+	host, owner, repo, err := originRepo(repoPath)
 	if err != nil {
-		output := strings.TrimSpace(string(out))
-		if url := extractExistingPRURL(output); url != "" {
-			return url, nil
-		}
-		return "", fmt.Errorf("creating PR: %s: %w", output, err)
+		return "", fmt.Errorf("creating PR: %w", err)
 	}
-	return strings.TrimSpace(string(out)), nil
-}
-
-// extractExistingPRURL extracts a GitHub PR URL from gh's "already exists"
-// error output. Returns empty string if the output doesn't match.
-//
-// Example gh output:
-//
-//	a pull request for branch "feature/foo" into branch "main" already exists:
-//	https://github.com/org/repo/pull/123
-func extractExistingPRURL(output string) string {
-	if !strings.Contains(output, "already exists") {
-		return ""
+	client, err := github.ForHost(host)
+	if err != nil {
+		return "", fmt.Errorf("creating PR: %w", err)
 	}
-	idx := strings.LastIndex(output, "https://")
-	if idx < 0 {
-		return ""
+	base := ""
+	if len(baseBranch) > 0 {
+		base = baseBranch[0]
 	}
-	url := strings.Fields(output[idx:])[0]
-	if strings.Contains(url, "/pull/") {
-		return url
+	prURL, err := client.CreatePR(github.CreatePRParams{
+		Owner: owner, Repo: repo, Head: branch, Base: base,
+		Title: title, Body: body, Draft: draft,
+	})
+	if err != nil {
+		return "", err
 	}
-	return ""
+	return prURL, nil
 }
 
 // DiffSummary returns the diff between the worktree branch and its base branch,
@@ -207,18 +176,6 @@ func HasUncommittedChanges(worktreePath string) bool {
 	return strings.TrimSpace(string(out)) != ""
 }
 
-// HasLocalCommits returns true if the current branch has commits not yet
-// pushed to its upstream tracking branch. Returns false when no upstream
-// is configured (e.g. branch hasn't been pushed yet).
-func HasLocalCommits(worktreePath string) bool {
-	cmd := exec.Command("git", "-C", worktreePath, "rev-list", "--count", "@{u}..HEAD")
-	out, err := cmd.Output()
-	if err != nil {
-		return false
-	}
-	return strings.TrimSpace(string(out)) != "0"
-}
-
 // CommitAll stages all changes (including untracked files) and creates a commit.
 // The Agentic signature trailer is automatically appended to the commit message.
 func CommitAll(worktreePath, message string) error {
@@ -312,26 +269,21 @@ func CurrentHeadSHA(worktreePath string) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
-// ClosePR closes a GitHub PR by URL using the gh CLI.
+// ClosePR closes a GitHub PR by URL.
 // Errors are returned but callers should treat them as non-fatal.
 func ClosePR(prURL string) error {
-	cmd := exec.Command("gh", "pr", "close", prURL)
-	out, err := cmd.CombinedOutput()
+	owner, repo, number, err := ParsePRURL(prURL)
 	if err != nil {
-		return fmt.Errorf("closing PR: %s: %w", strings.TrimSpace(string(out)), err)
+		return err
+	}
+	client, err := github.ForHost(prURLHost(prURL))
+	if err != nil {
+		return err
+	}
+	if err := client.ClosePR(owner, repo, number); err != nil {
+		return fmt.Errorf("closing PR: %w", err)
 	}
 	return nil
-}
-
-// CommitLog returns the commit log between the worktree branch and its base branch.
-func CommitLog(worktreePath string, baseBranch ...string) (string, error) {
-	base := resolveBase(worktreePath, baseBranch...)
-	cmd := exec.Command("git", "-C", worktreePath, "log", "--oneline", base+"..HEAD")
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return "", fmt.Errorf("getting commit log: %s: %w", strings.TrimSpace(string(out)), err)
-	}
-	return string(out), nil
 }
 
 // CommitBodies returns the full commit messages (subject + body) between the
@@ -360,11 +312,20 @@ func DiffStat(worktreePath string, baseBranch ...string) (string, error) {
 	return string(out), nil
 }
 
-// resolveBase returns the base branch to diff against. If an explicit base is
-// provided, it's used directly. Otherwise falls back to detecting main/master.
+// resolveBase returns the base ref to diff against. A matching origin
+// remote-tracking branch takes precedence over the local branch because
+// publish and completion diffs describe what a PR against the remote base
+// would contain. Otherwise the supplied or detected local ref is used.
 func resolveBase(worktreePath string, baseBranch ...string) string {
+	base := ""
 	if len(baseBranch) > 0 && baseBranch[0] != "" {
-		return baseBranch[0]
+		base = baseBranch[0]
+	} else {
+		base = DefaultBranch(worktreePath)
 	}
-	return DefaultBranch(worktreePath)
+	remoteRef := "refs/remotes/origin/" + base
+	if exec.Command("git", "-C", worktreePath, "show-ref", "--verify", "--quiet", remoteRef).Run() == nil {
+		return "origin/" + base
+	}
+	return base
 }

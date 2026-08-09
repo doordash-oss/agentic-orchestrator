@@ -31,6 +31,11 @@ Iteration artifacts directory: {{ .IterDir }}
 - Keep this axis read-only: inspect source and artifacts, then write only the required review-feedback.md file.
 
 {{ end -}}
+{{ if .RefactorPassForkPoint }}## Refactor Pass Fork Point
+
+This feature is a refactor pass forked from its parent feature's delivered state at {{ .RefactorPassForkPoint }}. The cumulative diff therefore also contains the parent's approved, already-delivered changes: anything that already exists at the fork point belongs to the parent, not to this pass. Wherever the specification refers to prior, current, or existing state, resolve that reference against the fork point — this pass's own delta is `git diff <fork-sha>..HEAD` — never against the repository base branch. Judge the assembled result as a whole, but attribute each change to the record that made it: the parent's delivered state is not, by itself, a finding against this pass.
+
+{{ end -}}
 {{ if .FinalGate }}## Final Review Scope
 
 Review the assembled feature across the cumulative cross-repo diff.
@@ -71,6 +76,10 @@ Scope guidance:
 {{ end }}{{ if and (not .FinalGate) .PlanPath }}## Implementation Plan
 
 Read the implementation plan (source of truth) at: {{ .PlanPath }}
+
+{{ end }}{{ if .AcceptanceClause }}## Acceptance
+
+{{ .AcceptanceClause }}
 
 {{ end }}{{ if .ExitCriteria }}## Exit Criteria
 

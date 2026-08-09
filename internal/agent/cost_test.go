@@ -41,10 +41,22 @@ func TestExtractSessionCostNilResult(t *testing.T) {
 
 func TestExtractSessionCostFromResult(t *testing.T) {
 	sess := session.NewSession("test", "feat-1", 0)
+	sess.SetAccumulatedUsage(llm.Usage{CostUSD: 1.25})
 	sess.SetCost(&llm.ResultMessage{TotalCostUSD: 2.75})
 	cost := ExtractSessionCost(sess)
 	if cost.TotalCostUSD != 2.75 {
 		t.Errorf("TotalCostUSD = %v, want 2.75", cost.TotalCostUSD)
+	}
+}
+
+func TestExtractSessionCostFallsBackToRunningUsageCost(t *testing.T) {
+	sess := session.NewSession("test", "feat-1", 0)
+	sess.SetAccumulatedUsage(llm.Usage{CostUSD: 0.42})
+
+	cost := ExtractSessionCost(sess)
+
+	if cost.TotalCostUSD != 0.42 {
+		t.Errorf("TotalCostUSD = %v, want 0.42 from running usage snapshot", cost.TotalCostUSD)
 	}
 }
 

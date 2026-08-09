@@ -28,7 +28,7 @@ import (
 // path, runs PhaseScope to derive the phase-declared repo subset, clears any
 // stale per-repo error state on that subset (so the loop starts fresh
 // against known state), invokes the engine via the runMultiRepoImplFn seam,
-// and asks the phase supervisor to route cycle-terminal results back through
+// and asks the phase supervisor to route phase-terminal results back through
 // HandlePhaseCompletion. Crash recovery re-runs the interrupted unit from
 // scratch with a fresh Claude session; durable state on disk is the resume
 // scaffolding.
@@ -116,7 +116,7 @@ func (o *Orchestrator) surfaceDispatchCompletionError(featureID string, cause er
 	var publishConflict *PublishConflictError
 	if errors.As(cause, &publishConflict) {
 		// Publish already emitted PublishCompleted with the structured conflict;
-		// the TUI owns routing that into the rebase-resolution cycle.
+		// the desktop app owns routing that into the rebase-resolution child pipeline.
 		return
 	}
 	if f, err := o.deps.Lifecycle.Get(featureID); err == nil &&

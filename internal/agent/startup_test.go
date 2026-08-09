@@ -175,15 +175,28 @@ func TestCheckRequiredTools_ErrorFormat(t *testing.T) {
 }
 
 func TestCheckRequiredTools_ContainsInstallHints(t *testing.T) {
+	// Isolate GitHub auth so the credentials warning is deterministic
+	// rather than depending on the machine's ambient gh/env state.
+	isolateGitHubAuth(t)
 	errors, warnings := CheckRequiredTools()
 	all := append(errors, warnings...)
+	sawCredentialsWarning := false
 	for _, msg := range all {
-		if strings.Contains(msg, "git") && !strings.Contains(msg, "git-scm.com") {
+		// "git not found" pins this to the git-tool message; a bare "git"
+		// substring also matches "github.com" inside the credentials warning.
+		if strings.Contains(msg, "git not found") && !strings.Contains(msg, "git-scm.com") {
 			t.Error("git message should contain install hint URL")
 		}
-		if strings.Contains(msg, "gh") && !strings.Contains(msg, "cli.github.com") {
-			t.Error("gh message should contain install hint URL")
+		if strings.Contains(msg, "no GitHub credentials found") {
+			sawCredentialsWarning = true
+			want := "Set GH_TOKEN or install GitHub CLI (https://cli.github.com/) and run 'gh auth login'."
+			if !strings.Contains(msg, want) {
+				t.Errorf("credentials warning = %q; want it to contain %q", msg, want)
+			}
 		}
+	}
+	if !sawCredentialsWarning {
+		t.Error("expected a no-GitHub-credentials warning with isolated auth env")
 	}
 }
 

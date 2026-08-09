@@ -773,8 +773,8 @@ func TestImplementLoopMultiIterationEmitsUniqueSpans(t *testing.T) {
 	artifactDir := filepath.Join(stateDir, featureID, "phase-impl", "implement", "agentic")
 	os.MkdirAll(artifactDir, 0755)
 
-	// Agent script: first call exits without result (→ FAILED/retry),
-	// second call writes phase_complete and emits success.
+	// Agent script: first call exits without result (→ FAILED/retry), then the
+	// second call writes valid artifacts and emits a structured success.
 	progressFile := filepath.Join(repoDir, "progress.md")
 	scriptDir := t.TempDir()
 	agentScript := testutil.WriteScript(t, scriptDir, "agent.sh", `

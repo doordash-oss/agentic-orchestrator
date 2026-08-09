@@ -34,10 +34,16 @@ type ReviewUserInput struct {
 	FeatureDescription string
 	DesignArtifactPath string
 	PreviousFeedback   string
+	// RefactorPassForkPoint names a refactor child's fork-point commits
+	// ("repo @ sha"). It resolves the spec's "fork point" references and
+	// attributes cumulative-diff hunks between parent and pass. Empty for
+	// top-level features.
+	RefactorPassForkPoint string
 
 	RoadmapPath            string
 	PlanPath               string
 	ExitCriteria           string
+	AcceptanceClause       string
 	VerificationReportPath string
 
 	ContractPath         string

@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -145,6 +146,77 @@ func TestStoreSaveAndLoadAutomaticReviewMode(t *testing.T) {
 	}
 	if got := NormalizeAutomaticReviewMode(loaded.AutomaticReviewMode); got != AutomaticReviewEnabled {
 		t.Errorf("loaded AutomaticReviewMode = %q, want %q", got, AutomaticReviewEnabled)
+	}
+}
+
+func TestStoreSaveAndLoadRebaseTargetsRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	store := NewStore(dir)
+	now := time.Now().Truncate(time.Second)
+	f := &Feature{
+		ID:            "test-rebase-targets-roundtrip",
+		Name:          "Test Rebase Targets RoundTrip",
+		Slug:          "test-rebase-targets-roundtrip",
+		Status:        StatusCreated,
+		SchemaVersion: SchemaVersionCurrent,
+		Created:       now,
+		Parent: &ChildRelationship{
+			ParentID: "parent-1",
+			Kind:     ChildKindRebase,
+			RebaseTargets: []RebaseRepoTarget{
+				{
+					Repo:        "repoA",
+					Target:      "main",
+					Ref:         "origin/main",
+					Publishable: true,
+					TargetSHA:   "0123456789abcdef0123456789abcdef01234567",
+				},
+				{
+					Repo:        "repoB",
+					Target:      "develop",
+					Ref:         "develop",
+					Publishable: false,
+					TargetSHA:   "fedcba9876543210fedcba9876543210fedcba98",
+				},
+			},
+			RebaseBehind: []string{"repoA", "repoB"},
+		},
+	}
+	if err := store.Save(f); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	loaded, err := store.Load(f.ID)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if loaded.Parent == nil || loaded.Parent.Kind != ChildKindRebase {
+		t.Fatalf("loaded parent kind = %+v, want rebase", loaded.Parent)
+	}
+	if len(loaded.Parent.RebaseTargets) != 2 {
+		t.Fatalf("loaded RebaseTargets = %+v, want 2", loaded.Parent.RebaseTargets)
+	}
+	gotA := loaded.Parent.RebaseTargets[0]
+	if gotA.TargetSHA != "0123456789abcdef0123456789abcdef01234567" {
+		t.Errorf("repoA TargetSHA = %q, want persisted SHA", gotA.TargetSHA)
+	}
+	if gotA.Target != "main" || gotA.Ref != "origin/main" || !gotA.Publishable {
+		t.Errorf("repoA target = %+v, want main/origin/main/publishable", gotA)
+	}
+	gotB := loaded.Parent.RebaseTargets[1]
+	if gotB.TargetSHA != "fedcba9876543210fedcba9876543210fedcba98" {
+		t.Errorf("repoB TargetSHA = %q, want persisted SHA", gotB.TargetSHA)
+	}
+	if !reflect.DeepEqual(loaded.Parent.RebaseBehind, []string{"repoA", "repoB"}) {
+		t.Errorf("loaded RebaseBehind = %+v, want [repoA repoB]", loaded.Parent.RebaseBehind)
+	}
+
+	// Accessor round-trip.
+	tgt, ok := loaded.RebaseTargetForRepo("repoA")
+	if !ok || tgt.TargetSHA != "0123456789abcdef0123456789abcdef01234567" {
+		t.Errorf("RebaseTargetForRepo(repoA) = %+v ok=%v, want persisted SHA", tgt, ok)
 	}
 }
 
@@ -412,6 +484,7 @@ func TestStoreRelationshipChildrenReturnsActiveAndOrderedClosedHistory(t *testin
 		},
 	}
 	for _, child := range children {
+		child.SchemaVersion = SchemaVersionCurrent
 		if err := store.Save(child); err != nil {
 			t.Fatalf("Save(%q): %v", child.ID, err)
 		}
@@ -431,6 +504,110 @@ func TestStoreRelationshipChildrenReturnsActiveAndOrderedClosedHistory(t *testin
 	wantIDs := []string{"closed-created-newer", "closed-a", "closed-z", "closed-older"}
 	if !slices.Equal(gotIDs, wantIDs) {
 		t.Fatalf("RelationshipChildren(%q).Closed IDs = %v, want %v", parentID, gotIDs, wantIDs)
+	}
+}
+
+func TestStoreAllRelationshipChildrenMatchesPerParentScans(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: per-test temp dirs isolate persisted relationship state.
+
+	store := NewStore(t.TempDir())
+	base := time.Date(2026, time.July, 29, 12, 0, 0, 0, time.UTC)
+	records := []*Feature{
+		{ID: "parent-a", Name: "parent a"},
+		{ID: "parent-b", Name: "parent b"},
+		{ID: "childless", Name: "no children"},
+		{
+			ID:      "a-active",
+			Created: base,
+			Parent:  &ChildRelationship{ParentID: "parent-a", Kind: ChildKindRefactor},
+		},
+		{
+			ID:      "a-closed-new",
+			Created: base,
+			Parent: &ChildRelationship{
+				ParentID:     "parent-a",
+				Kind:         ChildKindRefactor,
+				CloseOutcome: ChildCloseOutcomeCompleted,
+				ClosedAt:     timePointer(base.Add(time.Hour)),
+			},
+		},
+		{
+			ID:      "a-closed-old",
+			Created: base,
+			Parent: &ChildRelationship{
+				ParentID:     "parent-a",
+				Kind:         ChildKindRefactor,
+				CloseOutcome: ChildCloseOutcomeDiscarded,
+				ClosedAt:     timePointer(base),
+			},
+		},
+		{
+			ID:      "b-closed",
+			Created: base,
+			Parent: &ChildRelationship{
+				ParentID:     "parent-b",
+				Kind:         ChildKindRefactor,
+				CloseOutcome: ChildCloseOutcomeCompleted,
+				ClosedAt:     timePointer(base),
+			},
+		},
+	}
+	for _, record := range records {
+		record.SchemaVersion = SchemaVersionCurrent
+		if err := store.Save(record); err != nil {
+			t.Fatalf("Save(%q): %v", record.ID, err)
+		}
+	}
+
+	all, err := store.AllRelationshipChildren()
+	if err != nil {
+		t.Fatalf("AllRelationshipChildren(): %v", err)
+	}
+	for _, parentID := range []string{"parent-a", "parent-b"} {
+		perParent, err := store.RelationshipChildren(parentID)
+		if err != nil {
+			t.Fatalf("RelationshipChildren(%q): %v", parentID, err)
+		}
+		bulk := all[parentID]
+		if bulk == nil {
+			t.Fatalf("AllRelationshipChildren()[%q] = nil, want children", parentID)
+		}
+		if (bulk.Active == nil) != (perParent.Active == nil) ||
+			(bulk.Active != nil && bulk.Active.ID != perParent.Active.ID) {
+			t.Fatalf("AllRelationshipChildren()[%q].Active = %#v, want %#v", parentID, bulk.Active, perParent.Active)
+		}
+		bulkIDs := make([]string, len(bulk.Closed))
+		for i, child := range bulk.Closed {
+			bulkIDs[i] = child.ID
+		}
+		wantIDs := make([]string, len(perParent.Closed))
+		for i, child := range perParent.Closed {
+			wantIDs[i] = child.ID
+		}
+		if !slices.Equal(bulkIDs, wantIDs) {
+			t.Fatalf("AllRelationshipChildren()[%q].Closed IDs = %v, want %v", parentID, bulkIDs, wantIDs)
+		}
+	}
+	if _, ok := all["childless"]; ok {
+		t.Fatal(`AllRelationshipChildren()["childless"] present, want absent`)
+	}
+}
+
+func TestStoreAllRelationshipChildrenFailsClosedOnInvalidRecords(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: per-test temp dirs isolate persisted relationship state.
+
+	store := NewStore(t.TempDir())
+	if err := store.Save(&Feature{
+		ID:     "bad-child",
+		Parent: &ChildRelationship{ParentID: "parent", Kind: ChildKindRefactor, CloseOutcome: "merged"},
+	}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	if _, err := store.AllRelationshipChildren(); err == nil || !strings.Contains(err.Error(), "bad-child") {
+		t.Fatalf("AllRelationshipChildren() error = %v, want fail-closed error naming bad-child", err)
 	}
 }
 
@@ -490,6 +667,7 @@ func TestStoreRelationshipChildrenFailsClosedOnInvalidRecords(t *testing.T) {
 
 			store := NewStore(t.TempDir())
 			for _, child := range tt.children {
+				child.SchemaVersion = SchemaVersionCurrent
 				if err := store.Save(child); err != nil {
 					t.Fatalf("Save(%q): %v", child.ID, err)
 				}
@@ -524,16 +702,17 @@ func TestStoreCloseChildIsIdempotentAndPreservesInspectionState(t *testing.T) {
 	firstClose := created.Add(2 * time.Hour)
 	retryClose := firstClose.Add(time.Hour)
 	child := &Feature{
-		ID:          "child-close",
-		Name:        "inspectable child",
-		Created:     created,
-		Status:      StatusFailed,
-		LastError:   "integration needs attention",
-		FailureType: FailureInfrastructure,
-		Pipeline:    PipelineMedium,
-		Artifacts:   map[string]string{"plan": "phase-01/plan.md"},
-		PhaseCosts:  map[string]float64{"implement": 12.5},
-		Repos:       []FeatureRepo{{Name: "repo", WorktreePath: "/tmp/child"}},
+		ID:            "child-close",
+		SchemaVersion: SchemaVersionCurrent,
+		Name:          "inspectable child",
+		Created:       created,
+		Status:        StatusFailed,
+		LastError:     "integration needs attention",
+		FailureType:   FailureInfrastructure,
+		Pipeline:      PipelineMedium,
+		Artifacts:     map[string]string{"plan": "phase-01/plan.md"},
+		PhaseCosts:    map[string]float64{"implement": 12.5},
+		Repos:         []FeatureRepo{{Name: "repo", WorktreePath: "/tmp/child"}},
 		Parent: &ChildRelationship{
 			ParentID: "parent",
 			Kind:     ChildKindRefactor,
@@ -590,7 +769,7 @@ func TestStoreSetClosedChildDiffSummary(t *testing.T) {
 	summary := "Repository: repo\ndiff --git a/auth.go b/auth.go\n+session rotation"
 
 	child := &Feature{
-		ID: "child-diff", Name: "diff child", Status: StatusReviewPassed,
+		ID: "child-diff", Name: "diff child", Status: StatusReviewPassed, SchemaVersion: SchemaVersionCurrent,
 		Repos: []FeatureRepo{{Name: "repo"}},
 		Parent: &ChildRelationship{
 			ParentID: "parent", Kind: ChildKindRefactor,
@@ -622,7 +801,7 @@ func TestStoreSetClosedChildDiffSummary(t *testing.T) {
 
 	// An open child and a non-child never receive a summary.
 	openChild := &Feature{
-		ID: "child-open", Name: "open child", Status: StatusImplementing,
+		ID: "child-open", Name: "open child", Status: StatusImplementing, SchemaVersion: SchemaVersionCurrent,
 		Repos:  []FeatureRepo{{Name: "repo"}},
 		Parent: &ChildRelationship{ParentID: "parent", Kind: ChildKindRefactor},
 	}
@@ -637,7 +816,7 @@ func TestStoreSetClosedChildDiffSummary(t *testing.T) {
 		t.Fatalf("open child DiffSummary = %q, want empty", got.Parent.DiffSummary)
 	}
 
-	plain := &Feature{ID: "plain", Name: "plain", Status: StatusImplementing}
+	plain := &Feature{ID: "plain", Name: "plain", Status: StatusImplementing, SchemaVersion: SchemaVersionCurrent}
 	if err := store.Save(plain); err != nil {
 		t.Fatalf("Save(%q): %v", plain.ID, err)
 	}
@@ -650,6 +829,42 @@ func TestStoreSetClosedChildDiffSummary(t *testing.T) {
 	}
 }
 
+// TestStoreSetClosedChildDiffSummaryBoundsOversizedDiff proves the store
+// never persists a diff summary beyond DiffSummaryBudget, even when handed a
+// raw multi-megabyte diff.
+func TestStoreSetClosedChildDiffSummaryBoundsOversizedDiff(t *testing.T) {
+	t.Parallel()
+
+	store := NewStore(t.TempDir())
+	closedAt := time.Date(2026, time.July, 29, 12, 0, 0, 0, time.UTC)
+	child := &Feature{
+		ID: "child-huge-diff", Name: "huge diff child", Status: StatusReviewPassed, SchemaVersion: SchemaVersionCurrent,
+		Repos: []FeatureRepo{{Name: "repo"}},
+		Parent: &ChildRelationship{
+			ParentID: "parent", Kind: ChildKindRefactor,
+			CloseOutcome: ChildCloseOutcomeCompleted, ClosedAt: &closedAt,
+		},
+	}
+	if err := store.Save(child); err != nil {
+		t.Fatalf("Save(%q): %v", child.ID, err)
+	}
+
+	huge := strings.Repeat("+a raw diff line that repeats forever\n", (DiffSummaryBudget*4)/38)
+	if err := store.SetClosedChildDiffSummary(child.ID, huge); err != nil {
+		t.Fatalf("SetClosedChildDiffSummary(huge): %v", err)
+	}
+	got, err := store.Load(child.ID)
+	if err != nil {
+		t.Fatalf("Load(%q): %v", child.ID, err)
+	}
+	if len(got.Parent.DiffSummary) > DiffSummaryBudget {
+		t.Fatalf("persisted DiffSummary length = %d, want <= %d", len(got.Parent.DiffSummary), DiffSummaryBudget)
+	}
+	if !strings.HasSuffix(got.Parent.DiffSummary, " bytes omitted]") {
+		t.Fatalf("persisted DiffSummary missing truncation marker, tail = %q", got.Parent.DiffSummary[len(got.Parent.DiffSummary)-120:])
+	}
+}
+
 func TestStoreModifyGuardedRejectsClosedChildBeforeCallbacks(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: per-test temp dirs isolate persisted relationship state.
@@ -657,10 +872,11 @@ func TestStoreModifyGuardedRejectsClosedChildBeforeCallbacks(t *testing.T) {
 	store := NewStore(t.TempDir())
 	closedAt := time.Date(2026, time.July, 29, 12, 0, 0, 0, time.UTC)
 	child := &Feature{
-		ID:     "closed-child",
-		Name:   "immutable",
-		Status: StatusDone,
-		Repos:  []FeatureRepo{{Name: "repo", WorktreePath: "/tmp/original"}},
+		ID:            "closed-child",
+		SchemaVersion: SchemaVersionCurrent,
+		Name:          "immutable",
+		Status:        StatusDone,
+		Repos:         []FeatureRepo{{Name: "repo", WorktreePath: "/tmp/original"}},
 		Parent: &ChildRelationship{
 			ParentID:     "parent",
 			Kind:         ChildKindRefactor,
@@ -1562,25 +1778,26 @@ func TestStoreSetupStateRoundTrip(t *testing.T) {
 	}
 }
 
-func TestStoreLoadMigratesLegacyBrainstormStatusAndArtifact(t *testing.T) {
+func TestStoreLoadRejectsNonCurrentSchemaVersion(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	store := NewStore(dir)
 
-	const featureID = "legacy-brainstorm-001"
+	const featureID = "old-schema-001"
 	featureDir := filepath.Join(dir, featureID)
 	runDir := filepath.Join(featureDir, "runs", "run-001")
 	if err := os.MkdirAll(runDir, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
 
+	oldStatus := "Brain" + "stormReady"
 	featureYAML := fmt.Sprintf(`id: %s
-name: Legacy Brainstorm Feature
-slug: legacy-brainstorm-feature
-description: legacy brainstorm status
+name: Old Schema Feature
+slug: old-schema-feature
+description: old schema
 created: 2026-01-01T00:00:00Z
-status: BrainstormReady
-current_phase: 7
+status: %s
+current_phase: 0
 repos:
   - name: repo-a
     path: /tmp/a
@@ -1590,32 +1807,43 @@ inquireness: medium
 active_run: 1
 run_count: 1
 schema_version: %d
-`, featureID, SchemaVersionCurrent)
+`, featureID, oldStatus, SchemaVersionCurrent-1)
 	if err := os.WriteFile(filepath.Join(featureDir, "feature.yaml"), []byte(featureYAML), 0o644); err != nil {
 		t.Fatalf("write feature.yaml: %v", err)
 	}
 
 	runYAML := `run_number: 1
-artifacts:
-  brainstorm: brainstorm.md
+artifacts: {}
 `
 	if err := os.WriteFile(filepath.Join(runDir, "run.yaml"), []byte(runYAML), 0o644); err != nil {
 		t.Fatalf("write run.yaml: %v", err)
 	}
 
-	loaded, err := store.Load(featureID)
+	_, err := store.Load(featureID)
+	want := fmt.Sprintf("schema version %d, expected %d", SchemaVersionCurrent-1, SchemaVersionCurrent)
+	if err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("Load() error = %v, want containing %q", err, want)
+	}
+}
+
+func TestStoreListRunsAcceptsOnlyCanonicalDirectoryNames(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	store := NewStore(dir)
+	runsDir := filepath.Join(dir, "feature-001", "runs")
+	for _, name := range []string{"run-001", "run-999", "run-1000", "run-1", "run-01", "run-01000", "run-abc"} {
+		if err := os.MkdirAll(filepath.Join(runsDir, name), 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", name, err)
+		}
+	}
+
+	got, err := store.ListRuns("feature-001")
 	if err != nil {
-		t.Fatalf("Load() error = %v; want nil", err)
+		t.Fatalf("ListRuns() error = %v", err)
 	}
-	if loaded.Status != StatusDesignReady {
-		t.Errorf("loaded.Status = %v, want %v", loaded.Status, StatusDesignReady)
-	}
-	wantArtifact := filepath.Join("brainstorm", "brainstorm.md")
-	if got := loaded.Artifacts["design"]; got != wantArtifact {
-		t.Errorf("loaded.Artifacts[design] = %q, want %q", got, wantArtifact)
-	}
-	if got := loaded.Run().Artifacts["design"]; got != wantArtifact {
-		t.Errorf("loaded.Run().Artifacts[design] = %q, want %q", got, wantArtifact)
+	want := []int{1, 999, 1000}
+	if !slices.Equal(got, want) {
+		t.Errorf("ListRuns() = %v, want %v", got, want)
 	}
 }
 
@@ -1764,7 +1992,7 @@ repo_cycles:
     status: running
     count: 1
   repo-b:
-    type: review-comments
+    type: rebase
     status: failed
     count: 1
     last_error: boom
@@ -1778,35 +2006,6 @@ artifacts: {}
 	if err != nil {
 		t.Fatalf("Load() error = %v; want nil (legacy refactor keys must be ignored)", err)
 	}
-	// Legacy Refactor cycle state must be dropped on load: no active cycle
-	// type, no feature-level active cycle, no Refactor repo-cycle entries.
-	if got := string(loaded.ActiveCycleType()); got != "" {
-		t.Errorf("ActiveCycleType() = %q, want empty for dropped refactor cycle", got)
-	}
-	if loaded.ActiveCycle != nil {
-		t.Errorf("ActiveCycle = %+v, want nil for dropped refactor cycle", loaded.ActiveCycle)
-	}
-	if _, ok := loaded.RepoCycles["repo-a"]; ok {
-		t.Errorf("RepoCycles[repo-a] = %+v, want absent (refactor entry must be dropped)", loaded.RepoCycles["repo-a"])
-	}
-	if rc := loaded.RepoCycles["repo-b"]; rc == nil || rc.Type != CycleReviewComments || rc.Status != RepoCycleFailed {
-		t.Errorf("RepoCycles[repo-b] = %+v, want surviving failed review-comments entry preserved", rc)
-	}
-	if loaded.HasActiveRepoCycles() {
-		t.Error("HasActiveRepoCycles() = true, want false for dropped refactor cycle")
-	}
-	// No artifact-cycle prefix may engage for dropped cycle state.
-	if got := loaded.CyclePrefix(); got != "" {
-		t.Errorf("CyclePrefix() = %q, want empty for dropped refactor cycle", got)
-	}
-	loadedRun, err := store.LoadRun(featureID, 1)
-	if err != nil {
-		t.Fatalf("LoadRun: %v", err)
-	}
-	if got := loadedRun.CyclePrefix(); got != "" {
-		t.Errorf("Run.CyclePrefix() = %q, want empty for dropped refactor cycle", got)
-	}
-
 	// Round-trip save and re-read the raw run.yaml: dropped keys and cycle
 	// state must not be re-emitted.
 	if err := store.Save(loaded); err != nil {
@@ -1822,5 +2021,264 @@ artifacts: {}
 	}
 	if strings.Contains(savedStr, "active_cycle") {
 		t.Errorf("saved run.yaml still contains 'active_cycle'; dropped cycle state should not be re-emitted:\n%s", savedStr)
+	}
+}
+
+// TestStoreLoadDropsLegacyReviewCommentsState verifies that a legacy run.yaml
+// containing review-comments cycle state and its retired scalar fields loads
+// cleanly, preserves an unrelated rebase entry, and drops the removed state on
+// the next save.
+func TestStoreLoadDropsLegacyReviewCommentsState(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
+	dir := t.TempDir()
+	store := NewStore(dir)
+
+	const featureID = "review-comments-legacy-001"
+	featureDir := filepath.Join(dir, featureID)
+	runDir := filepath.Join(featureDir, "runs", "run-001")
+	if err := os.MkdirAll(runDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	featureYAML := fmt.Sprintf(`id: %s
+name: Legacy Review Comments
+slug: legacy-review-comments
+description: pre-removal state with review-comments cycle keys
+created: 2026-01-01T00:00:00Z
+status: Published
+current_phase: 6
+repos:
+  - name: repo-active
+    path: /tmp/active
+    worktree_path: ""
+    branch: ""
+  - name: repo-history
+    path: /tmp/history
+    worktree_path: ""
+    branch: ""
+  - name: repo-rebase
+    path: /tmp/rebase
+    worktree_path: ""
+    branch: ""
+models: {}
+exit_criteria: ""
+inquireness: medium
+permissions_queue: []
+help_queue: []
+active_run: 1
+run_count: 1
+schema_version: %d
+`, featureID, SchemaVersionCurrent)
+	if err := os.WriteFile(filepath.Join(featureDir, "feature.yaml"), []byte(featureYAML), 0o644); err != nil {
+		t.Fatalf("write feature.yaml: %v", err)
+	}
+	runYAML := `run_number: 1
+started_at: 2026-01-01T00:00:00Z
+rebase_count: 2
+review_comments_count: 4
+addressing_reviews: true
+active_cycle_type: review-comments
+active_cycle:
+  type: review-comments
+  status: running
+  count: 4
+  plan_path: /tmp/review-comments-plan.md
+repo_cycles:
+  repo-active:
+    type: review-comments
+    status: running
+    count: 4
+    plan_path: /tmp/repo-active-plan.md
+    iteration: 3
+    pending_need_user_input_path: /tmp/repo-active-gate.yaml
+  repo-history:
+    type: review-comments
+    status: failed
+    count: 2
+    plan_path: /tmp/repo-history-plan.md
+    iteration: 1
+    pending_need_user_input_path: /tmp/repo-history-gate.yaml
+    last_error: boom
+  repo-rebase:
+    type: rebase
+    status: failed
+    count: 2
+    last_error: conflict
+artifacts: {}
+`
+	if err := os.WriteFile(filepath.Join(runDir, "run.yaml"), []byte(runYAML), 0o644); err != nil {
+		t.Fatalf("write run.yaml: %v", err)
+	}
+
+	loaded, err := store.Load(featureID)
+	if err != nil {
+		t.Fatalf("Load() error = %v; want nil (legacy review-comments keys must be ignored)", err)
+	}
+
+	if err := store.Save(loaded); err != nil {
+		t.Fatalf("Save() error = %v; want nil", err)
+	}
+	saved, err := os.ReadFile(filepath.Join(runDir, "run.yaml"))
+	if err != nil {
+		t.Fatalf("ReadFile after Save: %v", err)
+	}
+	savedStr := string(saved)
+	for _, droppedKey := range []string{
+		"review-comments",
+		"review_comments_count",
+		"addressing_reviews",
+		"plan_path",
+		"iteration",
+		"pending_need_user_input_path",
+		"active_cycle",
+		"repo_cycles",
+	} {
+		if strings.Contains(savedStr, droppedKey) {
+			t.Errorf("saved run.yaml still contains %q; dropped legacy state should not be re-emitted:\n%s", droppedKey, savedStr)
+		}
+	}
+}
+
+// TestStoreLoadDropsLegacyRebaseCycleState verifies that a legacy run.yaml
+// containing all the removed rebase cycle fields loads cleanly and that a
+// round-trip save does not re-emit any of the dropped keys.
+func TestStoreLoadDropsLegacyRebaseCycleState(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
+	dir := t.TempDir()
+	store := NewStore(dir)
+
+	const featureID = "rebase-legacy-001"
+	featureDir := filepath.Join(dir, featureID)
+	runDir := filepath.Join(featureDir, "runs", "run-001")
+	if err := os.MkdirAll(runDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	featureYAML := fmt.Sprintf(`id: %s
+name: Legacy Rebase
+slug: legacy-rebase
+description: pre-removal state with rebase cycle keys
+created: 2026-01-01T00:00:00Z
+status: Published
+current_phase: 6
+repos:
+  - name: repo-a
+    path: /tmp/a
+    worktree_path: ""
+    branch: ""
+models: {}
+exit_criteria: ""
+inquireness: medium
+permissions_queue: []
+help_queue: []
+active_run: 1
+run_count: 1
+schema_version: %d
+`, featureID, SchemaVersionCurrent)
+	if err := os.WriteFile(filepath.Join(featureDir, "feature.yaml"), []byte(featureYAML), 0o644); err != nil {
+		t.Fatalf("write feature.yaml: %v", err)
+	}
+	runYAML := `run_number: 1
+started_at: 2026-01-01T00:00:00Z
+rebase_count: 2
+active_cycle_type: rebase
+active_cycle:
+  type: rebase
+  status: running
+  count: 1
+  iteration: 1
+repo_cycles:
+  repo-a:
+    type: rebase
+    status: running
+    count: 1
+    iteration: 1
+rebase_operation:
+  stage: harness
+  repos: {}
+artifacts: {}
+`
+	if err := os.WriteFile(filepath.Join(runDir, "run.yaml"), []byte(runYAML), 0o644); err != nil {
+		t.Fatalf("write run.yaml: %v", err)
+	}
+
+	loaded, err := store.Load(featureID)
+	if err != nil {
+		t.Fatalf("Load() error = %v; want nil (legacy rebase cycle keys must be ignored)", err)
+	}
+
+	if err := store.Save(loaded); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	saved, err := os.ReadFile(filepath.Join(runDir, "run.yaml"))
+	if err != nil {
+		t.Fatalf("ReadFile after Save: %v", err)
+	}
+	savedStr := string(saved)
+	for _, droppedKey := range []string{
+		"rebase_count",
+		"active_cycle_type",
+		"active_cycle",
+		"repo_cycles",
+		"rebase_operation",
+	} {
+		if strings.Contains(savedStr, droppedKey) {
+			t.Errorf("saved run.yaml still contains %q; dropped legacy rebase state should not be re-emitted:\n%s", droppedKey, savedStr)
+		}
+	}
+}
+
+func TestStoreRelationshipScansSkipLegacyRecords(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: per-test temp dirs isolate persisted relationship state.
+
+	store := NewStore(t.TempDir())
+	base := time.Date(2026, time.August, 2, 12, 0, 0, 0, time.UTC)
+	for _, f := range []*Feature{
+		{ID: "parent-a", Name: "parent a", SchemaVersion: SchemaVersionCurrent},
+		{
+			ID:            "a-closed",
+			Created:       base,
+			SchemaVersion: SchemaVersionCurrent,
+			Parent: &ChildRelationship{
+				ParentID:     "parent-a",
+				Kind:         ChildKindRefactor,
+				CloseOutcome: ChildCloseOutcomeCompleted,
+				ClosedAt:     timePointer(base.Add(time.Hour)),
+			},
+		},
+	} {
+		if err := store.Save(f); err != nil {
+			t.Fatalf("save %s: %v", f.ID, err)
+		}
+	}
+	// An explicitly legacy-versioned record must degrade to a skip: it
+	// predates child relationships, and one stale record must not take down
+	// every relationship read. (Corrupt records still fail closed.)
+	legacyDir := filepath.Join(store.BaseDir, "legacy-record")
+	if err := os.MkdirAll(legacyDir, 0o755); err != nil {
+		t.Fatalf("mkdir legacy: %v", err)
+	}
+	legacy := "id: legacy-record\nname: legacy\nschema_version: 5\n"
+	if err := os.WriteFile(filepath.Join(legacyDir, "feature.yaml"), []byte(legacy), 0o644); err != nil {
+		t.Fatalf("write legacy: %v", err)
+	}
+
+	all, err := store.AllRelationshipChildren()
+	if err != nil {
+		t.Fatalf("AllRelationshipChildren() error = %v, want legacy record skipped", err)
+	}
+	if all["parent-a"] == nil || len(all["parent-a"].Closed) != 1 {
+		t.Fatalf("AllRelationshipChildren()[parent-a] = %#v, want one closed child", all["parent-a"])
+	}
+
+	perParent, err := store.RelationshipChildren("parent-a")
+	if err != nil {
+		t.Fatalf("RelationshipChildren() error = %v, want legacy record skipped", err)
+	}
+	if len(perParent.Closed) != 1 {
+		t.Fatalf("RelationshipChildren().Closed = %d entries, want 1", len(perParent.Closed))
 	}
 }

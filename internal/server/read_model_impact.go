@@ -46,14 +46,14 @@ const (
 // worktrees and ephemeral branches are removed, and the temporary knowledge
 // workspace is discarded — while the paired Review configuration and the
 // immutable closed (Discarded) child record are retained.
-func (h *apiHandler) childDiscardImpactPreview(f *feature.Feature) *ActionImpactPreviewDTO {
+func (h *apiHandler) childDiscardImpactPreview(f *feature.Feature) *ActionImpactPreview {
 	if f == nil || !f.IsChild() || !f.IsActiveChild() {
 		return nil
 	}
-	return &ActionImpactPreviewDTO{
+	return &ActionImpactPreview{
 		Kind:    ChildDiscard,
-		Subject: ActionImpactSubjectDTO{ID: f.ID, Name: f.Name},
-		Categories: []ActionImpactCategoryDTO{
+		Subject: ActionImpactSubject{ID: f.ID, Name: f.Name},
+		Categories: []ActionImpactCategory{
 			{Key: impactCategorySessions, Label: "Sessions stopped", Items: h.sessionImpactEntries(f)},
 			{Key: impactCategoryWorktrees, Label: "Disposable worktrees removed", Items: worktreeImpactEntries(f)},
 			{Key: impactCategoryBranches, Label: "Ephemeral branches removed", Items: branchImpactEntries(f)},
@@ -69,7 +69,7 @@ func (h *apiHandler) childDiscardImpactPreview(f *feature.Feature) *ActionImpact
 // history, and the knowledge overlays/workspaces owned by the relationship.
 // It returns nil for an ordinary child-free feature so a plain single-feature
 // delete never carries a preview.
-func (h *apiHandler) parentCascadeDeleteImpactPreview(f *feature.Feature, children *feature.RelationshipChildren) *ActionImpactPreviewDTO {
+func (h *apiHandler) parentCascadeDeleteImpactPreview(f *feature.Feature, children *feature.RelationshipChildren) *ActionImpactPreview {
 	if f == nil || f.IsChild() || children == nil || (children.Active == nil && len(children.Closed) == 0) {
 		return nil
 	}
@@ -86,10 +86,10 @@ func (h *apiHandler) parentCascadeDeleteImpactPreview(f *feature.Feature, childr
 		worktrees = append(worktrees, worktreeImpactEntries(member)...)
 		branches = append(branches, branchImpactEntries(member)...)
 	}
-	return &ActionImpactPreviewDTO{
+	return &ActionImpactPreview{
 		Kind:    ParentCascadeDelete,
-		Subject: ActionImpactSubjectDTO{ID: f.ID, Name: f.Name},
-		Categories: []ActionImpactCategoryDTO{
+		Subject: ActionImpactSubject{ID: f.ID, Name: f.Name},
+		Categories: []ActionImpactCategory{
 			{Key: impactCategoryChildren, Label: "Child records removed", Items: childrenItems},
 			{Key: impactCategorySessions, Label: "Sessions stopped", Items: sessions},
 			{Key: impactCategoryWorktrees, Label: "Worktrees removed", Items: worktrees},
@@ -248,7 +248,7 @@ func relationshipHistoryImpactEntries(children *feature.RelationshipChildren) []
 
 // attachImpactPreview sets the structured preview on one action in place,
 // leaving every other action untouched.
-func attachImpactPreview(actions []ActionDTO, actionID string, preview *ActionImpactPreviewDTO) {
+func attachImpactPreview(actions []Action, actionID string, preview *ActionImpactPreview) {
 	if preview == nil {
 		return
 	}

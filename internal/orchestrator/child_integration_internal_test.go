@@ -35,7 +35,6 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
-	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
 )
 
 type childIntegrationFixture struct {
@@ -142,18 +141,7 @@ func (fx *childIntegrationFixture) orchestrator() *Orchestrator {
 	return New(Deps{
 		Lifecycle: fx.mgr,
 		Store:     fx.store,
-		Publisher: &git.PublishAdapter{},
 		Worktrees: fx.wm,
-		Cleanliness: feature.CleanlinessFunc(func(worktreePath string, maxPerCategory int) (*feature.RepoCleanliness, error) {
-			report, err := fx.wm.InspectCleanliness(worktreePath, maxPerCategory)
-			if report == nil || err != nil {
-				return nil, err
-			}
-			return &feature.RepoCleanliness{
-				Staged: report.Staged, Unstaged: report.Unstaged, Untracked: report.Untracked,
-				StagedTotal: report.StagedTotal, UnstagedTotal: report.UnstagedTotal, UntrackedTotal: report.UntrackedTotal,
-			}, nil
-		}),
 	}, Hooks{})
 }
 
@@ -197,43 +185,82 @@ func execCommandGit(dir string, args ...string) *exec.Cmd {
 // skips repos whose diff fails or is empty without failing the capture.
 func TestCaptureChildDiffSummaryConcatenatesPerRepo(t *testing.T) {
 	t.Parallel()
-	pub := mocks.NewMockPublisher()
-	pub.DiffSummaryFn = func(path, base string) (string, error) {
-		switch path {
-		case "/wt/repo-a":
-			if base != "base-sha-a" {
-				return "", fmt.Errorf("repo-a diff base = %q, want base-sha-a", base)
-			}
-			return "diff --git a/a b/a\n+one", nil
-		case "/wt/repo-b":
-			return "", errors.New("worktree gone")
-		default:
-			return "", fmt.Errorf("unexpected worktree %q", path)
-		}
+	repoA := testutil.InitGitRepo(t)
+	baseA, err := execCommandGit(repoA, "rev-parse", "HEAD").Output()
+	if err != nil {
+		t.Fatalf("resolve base: %v", err)
 	}
-	o := New(Deps{Publisher: pub, Store: feature.NewStore(t.TempDir())}, Hooks{})
+	testutil.CommitFile(t, repoA, "a", "one\n", "child change")
+	o := New(Deps{Store: feature.NewStore(t.TempDir())}, Hooks{})
 
 	child := &feature.Feature{
 		ID: "child-diff-capture",
 		Repos: []feature.FeatureRepo{
-			{Name: "repo-a", Path: "/repos/repo-a", WorktreePath: "/wt/repo-a"},
-			{Name: "repo-b", Path: "/repos/repo-b", WorktreePath: "/wt/repo-b"},
-			{Name: "repo-c", Path: "/repos/repo-c", WorktreePath: "/wt/repo-c"},
+			{Name: "repo-a", Path: repoA, WorktreePath: repoA},
+			{Name: "repo-b", Path: "/repos/repo-b", WorktreePath: "/worktree/gone"},
 		},
 		Parent: &feature.ChildRelationship{
 			ParentID: "parent",
 			Kind:     feature.ChildKindRefactor,
 			Bases: []feature.ChildRepoBase{
-				{Repo: "repo-a", SHA: "base-sha-a", ParentBranch: "main"},
+				{Repo: "repo-a", SHA: strings.TrimSpace(string(baseA)), ParentBranch: "main"},
 				{Repo: "repo-b", SHA: "base-sha-b", ParentBranch: "main"},
 			},
 		},
 	}
 
 	got := o.captureChildDiffSummary(child)
-	want := "Repository: repo-a\ndiff --git a/a b/a\n+one\n"
-	if got != want {
-		t.Fatalf("captureChildDiffSummary = %q, want %q", got, want)
+	if !strings.Contains(got, "Repository: repo-a\n") || !strings.Contains(got, "+one") {
+		t.Fatalf("captureChildDiffSummary = %q, want repo-a diff", got)
+	}
+}
+
+// TestPreserveChildDiffSummaryBoundsHugeDiff proves closure persists a
+// bounded stat-headed summary — never the raw multi-megabyte diff — so a
+// single huge child cannot bloat the feature record.
+func TestPreserveChildDiffSummaryBoundsHugeDiff(t *testing.T) {
+	t.Parallel()
+	repo := testutil.InitGitRepo(t)
+	base := childIntegrationGit(t, repo, "rev-parse", "HEAD")
+	var body strings.Builder
+	for i := 0; body.Len() <= feature.DiffSummaryBudget*4; i++ {
+		fmt.Fprintf(&body, "huge line %08d\n", i)
+	}
+	testutil.CommitFile(t, repo, "huge.txt", body.String(), "huge child change")
+
+	store := feature.NewStore(t.TempDir())
+	closedAt := time.Now()
+	child := &feature.Feature{
+		ID: "child-huge-diff", Name: "huge", Slug: "child-huge-diff",
+		Status: feature.StatusReviewPassed, SchemaVersion: feature.SchemaVersionCurrent,
+		ActiveRun: 1, RunCount: 1,
+		Repos: []feature.FeatureRepo{{Name: "repo-a", Path: repo, WorktreePath: repo}},
+		Parent: &feature.ChildRelationship{
+			ParentID: "parent", Kind: feature.ChildKindRefactor,
+			CloseOutcome: feature.ChildCloseOutcomeCompleted, ClosedAt: &closedAt,
+			Bases: []feature.ChildRepoBase{{Repo: "repo-a", SHA: base, ParentBranch: "main"}},
+		},
+	}
+	if err := store.Save(child); err != nil {
+		t.Fatalf("save child: %v", err)
+	}
+	o := New(Deps{Store: store, Lifecycle: feature.NewManager(store, config.NewDefault())}, Hooks{})
+
+	o.preserveChildDiffSummary(child.ID)
+
+	got, err := store.Load(child.ID)
+	if err != nil {
+		t.Fatalf("reload child: %v", err)
+	}
+	summary := got.Parent.DiffSummary
+	if summary == "" || len(summary) > feature.DiffSummaryBudget {
+		t.Fatalf("persisted summary length = %d, want non-empty and <= %d", len(summary), feature.DiffSummaryBudget)
+	}
+	if !strings.Contains(summary, " huge.txt | ") || !strings.Contains(summary, "file changed") {
+		t.Fatalf("summary missing stat header, head = %q", summary[:200])
+	}
+	if !strings.HasSuffix(summary, " bytes omitted]") {
+		t.Fatalf("summary missing truncation marker, tail = %q", summary[len(summary)-120:])
 	}
 }
 
@@ -564,6 +591,48 @@ func TestChildIntegrationRepeatedCompletionIsIdempotent(t *testing.T) {
 	}
 }
 
+// TestChildIntegrationFinalEventIsParentScoped proves the closure tail emits
+// a parent-scoped event after all of its mutations, so a client that reloads
+// the parent on the stream's last event observes settled state — including
+// read-time gates like the worktree-cleanliness check on the refactor action.
+func TestChildIntegrationFinalEventIsParentScoped(t *testing.T) {
+	if testing.Short() {
+		t.Skip("real-git integration test")
+	}
+	fx := newChildIntegrationFixture(t, feature.StatusPublished, true)
+	o := fx.orchestrator()
+
+	if err := o.RunChildIntegration(fx.child.ID); err != nil {
+		t.Fatalf("runChildIntegration() error = %v", err)
+	}
+
+	var events []ports.Event
+	for {
+		select {
+		case ev := <-o.Events():
+			events = append(events, ev)
+			continue
+		default:
+		}
+		break
+	}
+	closedIdx, lastParentIdx := -1, -1
+	for i, ev := range events {
+		if ev.Type == ports.RelationshipClosed {
+			closedIdx = i
+		}
+		if ev.FeatureID == fx.parent.ID {
+			lastParentIdx = i
+		}
+	}
+	if closedIdx == -1 {
+		t.Fatalf("RelationshipClosed not emitted; events = %+v", events)
+	}
+	if lastParentIdx <= closedIdx {
+		t.Fatalf("no parent-scoped event after RelationshipClosed (closed at %d, last parent event at %d); events = %+v", closedIdx, lastParentIdx, events)
+	}
+}
+
 // failingRemoveWorktrees wraps the real worktree manager and fails Remove,
 // simulating a transient cleanup failure after the merge is durable.
 type failingRemoveWorktrees struct {
@@ -713,6 +782,57 @@ func TestChildIntegrationAutoPublishFailureKeepsCodeReady(t *testing.T) {
 	parent, child := fx.reload()
 	if parent.Status != feature.StatusCodeReady {
 		t.Fatalf("parent status = %s, want CodeReady after failed auto-publish", parent.Status)
+	}
+	if child.Parent.CloseOutcome != feature.ChildCloseOutcomeCompleted {
+		t.Fatalf("child close outcome = %q, want completed", child.Parent.CloseOutcome)
+	}
+}
+
+// TestReviewFeedbackIntegrationTailReturnsParentPublished proves the
+// review-feedback closure tail never enters the ordinary publish path, even
+// when the parent's checkpoints would otherwise enable auto-publish.
+func TestReviewFeedbackIntegrationTailReturnsParentPublished(t *testing.T) {
+	if testing.Short() {
+		t.Skip("real-git integration test")
+	}
+	fx := newChildIntegrationFixture(t, feature.StatusPublished, false)
+	if err := fx.store.Modify(fx.parent.ID, func(f *feature.Feature) error {
+		f.RepoStates["repoA"].PRURL = "https://example.test/org/repo/pull/1"
+		return nil
+	}); err != nil {
+		t.Fatalf("seed parent PR URL: %v", err)
+	}
+	if err := fx.store.Modify(fx.child.ID, func(f *feature.Feature) error {
+		f.Parent.Kind = feature.ChildKindReviewFeedback
+		return nil
+	}); err != nil {
+		t.Fatalf("set child kind: %v", err)
+	}
+
+	publishStarts := 0
+	o := New(Deps{
+		Lifecycle: fx.mgr,
+		Store:     fx.store,
+		Worktrees: fx.wm,
+	}, Hooks{OnPublishStarted: func(string) { publishStarts++ }})
+	publishCalls := 0
+	o.publishRepoFn = func(featureID, repoName string) (string, error) {
+		publishCalls++
+		return "", errors.New("review-feedback tail must not publish")
+	}
+
+	if err := o.RunChildIntegration(fx.child.ID); err != nil {
+		t.Fatalf("RunChildIntegration() error = %v", err)
+	}
+	parent, child := fx.reload()
+	if publishCalls != 0 {
+		t.Fatalf("publish calls = %d, want 0", publishCalls)
+	}
+	if publishStarts != 0 {
+		t.Fatalf("publish starts = %d, want 0", publishStarts)
+	}
+	if parent.Status != feature.StatusPublished {
+		t.Fatalf("parent status = %s, want Published", parent.Status)
 	}
 	if child.Parent.CloseOutcome != feature.ChildCloseOutcomeCompleted {
 		t.Fatalf("child close outcome = %q, want completed", child.Parent.CloseOutcome)
@@ -1251,5 +1371,40 @@ func TestConcurrentDiscardAndIntegrationAutoPublish(t *testing.T) {
 		if discardErr == nil {
 			t.Fatal("discard should have failed when integration won")
 		}
+	}
+}
+
+// TestRestartPhase_ReviewPassedFinalReviewNilTransaction_DispatchesIntegration
+// pins the crash-recovery route: integration was dispatched but died before
+// creating a durable journal, stranding the child at ReviewPassed@FinalReview
+// with a nil transaction. Restart must replay the integration boundary — not
+// return NoOp and leave the child unrecoverable.
+func TestRestartPhase_ReviewPassedFinalReviewNilTransaction_DispatchesIntegration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("real-git integration test")
+	}
+	fx := newChildIntegrationFixture(t, feature.StatusPublished, true)
+	if fx.child.Parent.Transaction != nil {
+		t.Fatal("fixture precondition: child transaction must be nil")
+	}
+
+	outcome, err := fx.orchestrator().RestartPhase(fx.child.ID, 0, 0)
+	if err != nil {
+		t.Fatalf("RestartPhase() error = %v", err)
+	}
+	if outcome.Action != RestartNoOp {
+		t.Fatalf("RestartPhase() action = %v, want RestartNoOp after completed integration", outcome.Action)
+	}
+
+	parent, child := fx.reload()
+	if child.Parent.CloseOutcome != feature.ChildCloseOutcomeCompleted {
+		t.Fatalf("child close outcome = %q, want completed integration", child.Parent.CloseOutcome)
+	}
+	parents := childIntegrationGit(t, fx.repoDir, "rev-list", "--parents", "-n", "1", "HEAD")
+	if fields := len(strings.Fields(parents)); fields != 3 {
+		t.Fatalf("parent merge commit parents = %q, want two-parent merge", parents)
+	}
+	if parent.Status != feature.StatusCodeReady {
+		t.Fatalf("parent status = %s, want CodeReady", parent.Status)
 	}
 }

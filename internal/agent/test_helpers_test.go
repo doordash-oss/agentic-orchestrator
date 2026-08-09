@@ -33,7 +33,7 @@ import (
 // a legacy path still uses ReadOnlyHandler. Tests treat both as "review session".
 func isReviewHelper(h interface{}) bool {
 	switch typed := h.(type) {
-	case *permission.SizeGuardHandler:
+	case *permission.SessionGuardHandler:
 		return isReviewHelper(typed.Inner)
 	case *permission.BoundedHelperArtifactHandler:
 		return true

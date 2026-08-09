@@ -383,8 +383,18 @@ func TestRespondToAskUser_StructuredFreeFormFallsBackToFollowUpTurn(t *testing.T
 	if followUp.Method != "session/prompt" {
 		t.Fatalf("follow-up method = %q, want session/prompt", followUp.Method)
 	}
-	if !strings.Contains(buf.String(), `"outcome":"cancelled"`) {
-		t.Fatalf("expected a cancelled outcome to release the native request; got %q", buf.String())
+	// encoding/json HTML-escapes the quoted prompt marker as \\u003e on the
+	// wire; normalize it so this contract checks the framed prompt text.
+	wire := strings.ReplaceAll(buf.String(), `\u003e`, ">")
+	for _, want := range []string{
+		`"outcome":"cancelled"`,
+		"[AskUserQuestion answer]",
+		"> Pick one",
+		"User's selected answer: Actually do C instead",
+	} {
+		if !strings.Contains(wire, want) {
+			t.Errorf("custom-answer wire output missing %q: %s", want, wire)
+		}
 	}
 }
 

@@ -1310,6 +1310,40 @@ func TestBuildAskUserAnswerEnvelope_HandlesMissingOptions(t *testing.T) {
 	}
 }
 
+// TestRespondToAskUser_NativePreservesCustomAnswer pins the native JSON-RPC
+// response contract for a free-text custom answer.
+func TestRespondToAskUser_NativePreservesCustomAnswer(t *testing.T) {
+	var buf bytes.Buffer
+	p := NewProtocol(llm.ProtocolOpts{})
+	p.SetStdin(&buf)
+	p.SetQuestionIDsForTest(map[string]string{"Which approach?": "question-7"})
+
+	const customAnswer = "Use a third custom approach"
+	if err := p.RespondToAskUser(
+		"42",
+		json.RawMessage(`{"questions":[{"question":"Which approach?"}]}`),
+		map[string]string{"Which approach?": customAnswer},
+		nil,
+	); err != nil {
+		t.Fatalf("RespondToAskUser: %v", err)
+	}
+
+	var out struct {
+		JSONRPC string        `json:"jsonrpc"`
+		ID      int           `json:"id"`
+		Result  AskUserResult `json:"result"`
+	}
+	if err := json.Unmarshal(bytes.TrimSpace(buf.Bytes()), &out); err != nil {
+		t.Fatalf("unmarshal response: %v (raw=%q)", err, buf.String())
+	}
+	if out.JSONRPC != "2.0" || out.ID != 42 {
+		t.Fatalf("response envelope = %+v, want JSON-RPC id 42", out)
+	}
+	if len(out.Result.Answers) != 1 || out.Result.Answers[0].QuestionID != "question-7" || out.Result.Answers[0].Value != customAnswer {
+		t.Fatalf("answers = %+v, want question-7 with verbatim custom value", out.Result.Answers)
+	}
+}
+
 // TestRespondToAskUser_SyntheticSendsFramedFollowUp pins down the wire
 // behaviour the synthetic ask-user path produces. Before this change it sent
 // the bare answer string ("Replace README.md") as a fresh user turn, and Codex

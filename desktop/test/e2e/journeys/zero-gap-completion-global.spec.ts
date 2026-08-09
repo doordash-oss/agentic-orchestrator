@@ -119,7 +119,7 @@ test('zero-gap completion and global parity: diff, irreversible impact, AMA, rec
     await handle.page.keyboard.press(process.platform === 'darwin' ? 'Meta+K' : 'Control+K');
     const palette = handle.page.getByRole('dialog', { name: 'Command palette' });
     await expect(palette).toBeVisible();
-    await expect(palette.getByLabel('Search commands')).toBeFocused();
+    await expect(palette.getByLabel('Search features and commands')).toBeFocused();
     await handle.page.keyboard.press('Escape');
     await expect(palette).toHaveCount(0);
 

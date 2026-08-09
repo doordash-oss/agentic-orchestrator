@@ -13,19 +13,30 @@ import {
   type FeatureCommandId,
 } from '../../../shared/commands';
 import { activeFeatureCommandTarget, runFeatureCommand } from '../features/featureCommands';
-import type { AppRouteEvent, RoutedRequest } from '../../../shared/ipc';
+import { displayPhaseLabel, displayStatusLabel } from '../features/featureView';
+import type { AppRouteEvent, FeatureSummaryView, RoutedRequest } from '../../../shared/ipc';
+
+/**
+ * The palette lists two kinds of row: the command catalogue, grouped by its own
+ * groups, and the live feature list under a group of its own — so ⌘K is one
+ * search box for "what can I do" and "where do I go".
+ */
+type PaletteGroup = CommandGroup | 'feature-nav';
 
 interface PaletteEntry {
-  id: CommandId;
+  id: CommandId | `feature-nav.${string}`;
   label: string;
-  group: CommandGroup;
+  group: PaletteGroup;
+  /** Secondary matchable text: a feature's status and phase. */
+  detail?: string;
   accelerator?: string;
   disabled?: boolean;
   disabledReason?: string;
   run(): Promise<void> | void;
 }
 
-const GROUP_LABELS: Record<CommandGroup, string> = {
+const GROUP_LABELS: Record<PaletteGroup, string> = {
+  'feature-nav': 'Features',
   window: 'Window',
   file: 'File',
   navigation: 'Navigation',
@@ -51,6 +62,7 @@ export function CommandPalette({
   const [activeFeatureId, setActiveFeatureId] = useState<string | null>(null);
   // The selected feature's live action catalogue, or null while it is unknown.
   const [activeActions, setActiveActions] = useState<readonly FeatureActionLike[] | null>(null);
+  const [features, setFeatures] = useState<readonly FeatureSummaryView[]>([]);
   const [activeIndex, setActiveIndex] = useState(0);
   const dialogRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -121,6 +133,16 @@ export function CommandPalette({
       .catch(() => {
         if (alive) setActiveActions(null);
       });
+    // Navigating to a feature by name needs the whole list, not just the
+    // selection; the runtime owns it, so it is fetched per open.
+    window.agentico
+      .listFeatures()
+      .then((rows) => {
+        if (alive) setFeatures(rows);
+      })
+      .catch(() => {
+        if (alive) setFeatures([]);
+      });
     return () => {
       alive = false;
     };
@@ -131,15 +153,22 @@ export function CommandPalette({
     [activeFeatureId, activeActions, close, onRoute, ready],
   );
 
+  const featureEntries = useMemo(
+    () => features.map((feature) => featureNavEntry(feature, onRoute, close)),
+    [close, features, onRoute],
+  );
+
   const filtered = useMemo(() => {
     const needle = query.trim().toLocaleLowerCase();
+    // Feature rows are a search result, not a browsable list: with no query the
+    // palette stays the command catalogue it has always been, and the sidebar
+    // remains the place to browse features.
     if (needle === '') return entries;
-    return entries.filter((entry) =>
-      `${entry.label} ${GROUP_LABELS[entry.group]} ${entry.disabledReason ?? ''}`
-        .toLocaleLowerCase()
-        .includes(needle),
-    );
-  }, [entries, query]);
+    return [
+      ...rankedFeatureMatches(featureEntries, needle),
+      ...entries.filter((entry) => matches(entry, needle)),
+    ];
+  }, [entries, featureEntries, query]);
 
   useEffect(() => {
     setActiveIndex(0);
@@ -197,15 +226,15 @@ export function CommandPalette({
         <input
           ref={inputRef}
           className="command-palette__input"
-          aria-label="Search commands"
+          aria-label="Search features and commands"
           value={query}
           onChange={(event) => setQuery(event.target.value)}
           onKeyDown={onInputKeyDown}
-          placeholder="Search commands"
+          placeholder="Search features and commands"
         />
         <div className="command-palette__list" role="listbox" aria-label="Commands">
           {filtered.length === 0 ? (
-            <p className="command-palette__empty">No commands match.</p>
+            <p className="command-palette__empty">No features or commands match.</p>
           ) : (
             grouped(filtered).map(([group, groupEntries]) => (
               <section
@@ -235,6 +264,9 @@ export function CommandPalette({
                       onClick={() => void runEntry(entry)}
                     >
                       <span className="command-palette__item-label">{entry.label}</span>
+                      {entry.detail !== undefined ? (
+                        <span className="command-palette__item-reason">{entry.detail}</span>
+                      ) : null}
                       {entry.disabledReason !== undefined ? (
                         <span className="command-palette__item-reason">{entry.disabledReason}</span>
                       ) : null}
@@ -251,6 +283,49 @@ export function CommandPalette({
       </div>
     </div>
   );
+}
+
+function matches(entry: PaletteEntry, needle: string): boolean {
+  return `${entry.label} ${GROUP_LABELS[entry.group]} ${entry.detail ?? ''} ${entry.disabledReason ?? ''}`
+    .toLocaleLowerCase()
+    .includes(needle);
+}
+
+/**
+ * Feature matches on name, with the rows whose name starts with the needle
+ * ahead of the rest — typing the first letters of a feature puts it under the
+ * cursor, so Enter opens it without an arrow key.
+ */
+function rankedFeatureMatches(entries: PaletteEntry[], needle: string): PaletteEntry[] {
+  const scored = entries.flatMap((entry) => {
+    const name = entry.label.toLocaleLowerCase();
+    if (name.startsWith(needle)) return [{ entry, rank: 0 }];
+    if (name.includes(needle)) return [{ entry, rank: 1 }];
+    return matches(entry, needle) ? [{ entry, rank: 2 }] : [];
+  });
+  return scored.sort((a, b) => a.rank - b.rank).map((match) => match.entry);
+}
+
+/** A row that selects the feature in the sidebar, the same as clicking it. */
+function featureNavEntry(
+  feature: FeatureSummaryView,
+  onRoute: (event: AppRouteEvent) => void,
+  close: () => void,
+): PaletteEntry {
+  const phase = displayPhaseLabel(feature.currentPhase);
+  return {
+    id: `feature-nav.${feature.id}`,
+    label: feature.name,
+    group: 'feature-nav',
+    detail:
+      phase === ''
+        ? displayStatusLabel(feature.status)
+        : `${displayStatusLabel(feature.status)} · ${phase}`,
+    run: () => {
+      onRoute({ target: 'select-feature', featureId: feature.id });
+      close();
+    },
+  };
 }
 
 function buildEntries({
@@ -344,8 +419,8 @@ function featureEntry(
   };
 }
 
-function grouped(entries: PaletteEntry[]): Array<[CommandGroup, PaletteEntry[]]> {
-  const groups: Array<[CommandGroup, PaletteEntry[]]> = [];
+function grouped(entries: PaletteEntry[]): Array<[PaletteGroup, PaletteEntry[]]> {
+  const groups: Array<[PaletteGroup, PaletteEntry[]]> = [];
   for (const entry of entries) {
     const existing = groups.find(([group]) => group === entry.group);
     if (existing === undefined) {

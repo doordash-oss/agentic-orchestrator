@@ -2618,7 +2618,9 @@ type SessionOutputChunk struct {
 	Done       bool   `json:"done,omitempty"`
 
 	// Index Transcript row index — the same index space /transcript and session.output.activity's record_count use. Not a byte offset.
-	Index     int               `json:"index"`
+	Index int `json:"index"`
+
+	// Message A TranscriptMessageDTO row (see the /transcript response).
 	Message   TranscriptMessage `json:"message,omitempty"`
 	SessionID string            `json:"session_id,omitempty"`
 }

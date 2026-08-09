@@ -1,6 +1,6 @@
 # Agentic Orchestrator
 
-### Faites un one-shot de la moonshot — puis recommencez-le dix fois en parallele.
+### Faites un one-shot de la moonshot — puis recommencez-le dix fois en parallèle.
 
 Agentic Orchestrator è un orchestratore di workflow di sviluppo AI che trasforma qualsiasi ingegnere in un moltiplicatore di forza. Descrivi le tue feature, prendi le decisioni di alto livello, e l'AI si occupa del resto — ricerca, pianificazione, implementazione, code review, pull request — tutto in esecuzione concorrente da un singolo terminale.
 
@@ -23,7 +23,7 @@ Questo è il vero valore dell'"oneshot": un ingegnere può descrivere una grande
 
 Il design segue i pattern descritti nell'articolo di Anthropic [Building Effective Agents](https://www.anthropic.com/engineering/building-effective-agents): prompt chaining, parallelizzazione, orchestrator-workers e loop evaluator-optimizer. Codifica inoltre il workflow [explore → plan → code](https://code.claude.com/docs/en/best-practices) di Claude Code e le linee guida di OpenAI su [orchestrazione e guardrail](https://openai.com/business/guides-and-resources/a-practical-guide-to-building-ai-agents/) degli agenti.
 
-## Demarrage rapide
+## Démarrage rapide
 
 Usa Homebrew se lo hai; altrimenti prendi il binario precompilato. Compila dal source solo se stai lavorando su agentico stesso.
 
@@ -57,7 +57,7 @@ Al primo avvio, Agentic Orchestrator ti guida attraverso un flusso di benvenuto 
 
 **Tre tasti da ricordare**: `n` (nuova feature), `?` (aiuto), `a` (osserva il lavoro attivo; rispondi, approva o revisiona quando richiesto). Tutto il resto è scopribile dall'overlay di aiuto.
 
-## Prerequis
+## Prérequis
 
 ### Requis
 
@@ -87,9 +87,9 @@ OpenCode instrada un provider di backend configurato (Anthropic, OpenAI, Google,
 
 Dopo aver installato la/le tua/e CLI di provider, conferma che ciascuna sia autenticata — `claude auth status`, `codex login status`, e/o `opencode models` (elenca i modelli solo una volta configurato un provider di backend) — oltre a `gh auth status`, prima di lanciare `agentico`. Un provider la cui CLI è mancante, troppo vecchia, o non ancora autenticata viene filtrato all'avvio con un breve avviso, e l'orchestratore continua con qualunque provider sia pronto.
 
-## Comment ca marche
+## Comment ça marche
 
-### Le cycle de vie de la fonctionnalite
+### Le cycle de vie de la fonctionnalité
 
 Il ciclo di vita dipende dal profilo ed è guidato da checkpoint. Medium inizia dalla pianificazione. Large e Moonshot prima costruiscono il contesto, chiariscono l'intento ed esplorano le opzioni di design. Tutti i profili entrano poi nel loop della roadmap: creare una roadmap, pianificare una fase della roadmap alla volta, implementarla, eseguire il commit degli anchor di fase e continuare finché la fase finale non raggiunge la Final Review.
 
@@ -125,7 +125,7 @@ Ogni feature viene eseguita nel proprio worktree git sotto `~/.agentic-orchestra
 - La tua copia di lavoro principale resta intatta
 - I worktree vengono rimossi con `c` al termine
 
-### Depots multiples
+### Dépôts multiples
 
 Ogni feature ha come target uno o più repository con lo stesso ciclo di vita e la stessa macchina a stati. Quando una feature si estende su più di un repo, Agentic Orchestrator:
 - Crea worktree in ogni repo di destinazione
@@ -139,7 +139,7 @@ Quando una feature ha come target un singolo repo, il pannello Repo Progress per
 
 Prima di immergersi in una feature, Agentic Orchestrator può costruire una knowledge base per repo — un grafo di documenti strutturato che copre architettura, convenzioni, superficie delle API, dipendenze e metodi di verifica. La KB è cachata e aggiornata in modo incrementale (solo quando HEAD cambia), così le feature successive nello stesso repo partono più rapidamente.
 
-### Controles de validation du plan
+### Contrôles de validation du plan
 
 I piani sono revisionati da critici AI specializzati prima che inizi l'implementazione:
 
@@ -166,7 +166,7 @@ Avvia con `agentico`. La dashboard mostra tutte le feature organizzate per stato
 
 Le feature che richiedono la tua attenzione (permessi in sospeso, richieste di aiuto) mostrano un indicatore di avviso.
 
-### Creer une fonctionnalite
+### Créer une fonctionnalité
 
 Premi `n` dalla dashboard per aprire il wizard:
 
@@ -183,7 +183,7 @@ Premi `n` dalla dashboard per aprire il wizard:
 
 **Stop watching** (`Esc/Ctrl+]`) — Torna alla dashboard. L'agente continua a essere in esecuzione.
 
-### Actions post-implementation
+### Actions post-implémentation
 
 Una volta che una feature raggiunge lo stato code-ready o pubblicato:
 
@@ -240,7 +240,7 @@ workspace_roots:
   - /home/user/projects      # Analizzata per repo git all'avvio
 ```
 
-### Surcharges des modeles
+### Surcharges des modèles
 
 Ogni feature può sovrascrivere i modelli di default durante la creazione tramite il wizard (passo 4). L'editor dei modelli mostra la fase Inquire come **Clarify**, separatamente da **Research**, così il chiarimento dei requisiti e la ricerca sul codebase possono usare modelli diversi. I modelli possono essere specificati con prefissi di provider espliciti (es. `claude:opus[1M]`, `codex:gpt-5.4[272K]`, `opencode:anthropic/claude-sonnet-4-5`) oppure come id semplici risolti rispetto al registro dei provider. Ci sono tre modi in cui una selezione raggiunge OpenCode, e sono distinti:
 
@@ -250,7 +250,7 @@ Ogni feature può sovrascrivere i modelli di default durante la creazione tramit
 
 Usa `agentico --refresh-models` quando una CLI di provider mostra nuovi modelli ma Agentico mostra ancora un catalogo più vecchio. Il refresh esegue una discovery live per tutti i provider pronti, aggiorna la cache con chiave di versione in caso di successo, e ricade sulla cache precedente con un avviso se la discovery fallisce.
 
-### Options de demarrage
+### Options de démarrage
 
 ```text
 agentico [flags]
@@ -266,7 +266,7 @@ Flags:
   --version, -v                    Show version
 ```
 
-### Mise a jour
+### Mise à jour
 
 ```text
 agentico update [--check|-n]
@@ -277,7 +277,7 @@ Esegui `agentico update` per aggiornare all'ultima release stabile. Usa
 recente disponibile senza installare nulla; esce con `0` e stampa un
 messaggio di già-aggiornato quando sei sull'ultima release.
 
-## Developpement
+## Développement
 
 ```bash
 # Build

@@ -19,16 +19,10 @@ That is the real "oneshot" value: an engineer can describe a large feature once,
 - **Parallelism is the multiplier, not the premise** — Because every feature gets isolated worktrees, branches, sessions, and artifacts, you can run several complex workflows at once without mixing state or blocking your main checkout.
 - **Provider orchestration is explicit** — One provider is enough to run the whole workflow; add more to split the work. Claude, Codex, and OpenCode are co-equal: each phase's default is the best available model for that role across every detected provider, and models can be overridden per phase and swapped at runtime. Use `--providers` to restrict the orchestrator to the CLIs you actually have installed.
 
-The design follows patterns described in Anthropic's [Building Effective Agents](https://www.anthropic.com/engineering/building-effective-agents) article: prompt chaining, parallelization, orchestrator-workers, and evaluator-optimizer loops. It also codifies Claude Code's [explore → plan → code](https://code.claude.com/docs/en/best-practices) workflow and OpenAI's guidance on agent [orchestration and guardrails](https://openai.com/business/guides-and-resources/a-practical-guide-to-building-ai-agents/).
+<img width="1000" height="625" alt="agentico-demo-light" src="https://github.com/user-attachments/assets/1df0c833-eeae-4b14-92d5-2694ac5506ff" />
+
 
 ## Quick Start
-
-> [!IMPORTANT]
-> **Breaking change:** Before upgrading an installation whose runtime data lives
-> under `~/.agentic-workflow/`, rename that directory to
-> `~/.agentic-orchestrator/`. Headless installations may instead keep data in a
-> custom location by passing explicit `--config` and `--state-dir` flags. The
-> runtime no longer checks the legacy parent automatically.
 
 Install the desktop app with Homebrew (macOS):
 

@@ -132,6 +132,12 @@ export async function launchApp(
   appProcess.stderr?.on('data', (chunk: Buffer) => logs.push(chunk.toString()));
   await app.context().tracing.start({ screenshots: true, snapshots: true });
   const page = await app.firstWindow({ timeout: 30_000 });
+  // Actions (click/check/fill) otherwise inherit the whole test budget, so a
+  // control that never becomes actionable — disabled while work is in flight,
+  // or never stable while the surface repaints — burns the full 240s and
+  // reports a bare "test timeout" with no page snapshot and no saved trace.
+  // Bounding them names the stuck action and leaves budget for the evidence.
+  page.setDefaultTimeout(Number(process.env['AGENTICO_E2E_ACTION_TIMEOUT'] ?? 60_000));
   // Recorded now, while the main window is provably the only one open.
   const mainWebContentsId = await app.evaluate(({ BrowserWindow }) => {
     const window = BrowserWindow.getAllWindows()[0];
@@ -169,19 +175,46 @@ export async function closeApp(handle: AppHandle): Promise<void> {
   handle.closed = true;
   const tracePath = handle.testInfo.outputPath(`${handle.traceName}-trace.zip`);
   try {
-    await handle.app.context().tracing.stop({ path: tracePath });
+    // Bounded: against a wedged app these calls never settle, and an unbounded
+    // await here costs the worker its whole teardown budget and loses the trace
+    // — the one artifact that would explain the wedge.
+    await bounded(handle.app.context().tracing.stop({ path: tracePath }), 60_000, 'tracing.stop');
     copyTraceToEvidence(tracePath, `${handle.traceName}-trace.zip`);
   } catch {
     // Tracing is evidence, not correctness — never fail teardown on it.
   }
   const appProcess = handle.appProcess;
-  await installTeardownQuitDialogAnswer(handle).catch(() => undefined);
-  await handle.app.close();
+  // Generous on purpose: without this stub a quit-confirmation dialog blocks the
+  // quit outright, so giving up early would *cause* the hang it guards against.
+  const stubFailure = await bounded(
+    installTeardownQuitDialogAnswer(handle),
+    60_000,
+    'quit dialog answer',
+  ).then(
+    () => null,
+    (error: unknown) => (error instanceof Error ? error.message : String(error)),
+  );
+  // Generous, because the heaviest journeys quit a server that is still winding
+  // down real sessions: only a genuine wedge should trip this, never a loaded
+  // runner. The reason is reported rather than swallowed, so the failure below
+  // distinguishes "close() never returned" from "the process outlived a
+  // returned close()".
+  const closeFailure = await bounded(handle.app.close(), 90_000, 'app.close').then(
+    () => null,
+    (error: unknown) => (error instanceof Error ? error.message : String(error)),
+  );
   const deadline = Date.now() + 15_000;
   while (appProcess.exitCode === null && appProcess.signalCode === null) {
     if (Date.now() > deadline) {
+      // The app's own logs are the only record of what its quit was waiting on.
+      persistAppLogs(handle, `${handle.traceName}-hung-quit`);
       killProcessTree(appProcess.pid);
-      throw new Error('the app process did not exit within 15s of close()');
+      const causes = [stubFailure, closeFailure].filter((cause) => cause !== null);
+      throw new Error(
+        causes.length === 0
+          ? 'the app process did not exit within 15s of close()'
+          : `the app process did not exit within 15s of close(); teardown steps failed first: ${causes.join('; ')}`,
+      );
     }
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
@@ -244,6 +277,21 @@ async function installTeardownQuitDialogAnswer(handle: AppHandle): Promise<void>
       return { response: 0, checkboxChecked: false };
     }) as typeof dialog.showMessageBox;
   });
+}
+
+/** Rejects if `work` has not settled within `ms`, naming the step that stuck. */
+async function bounded<T>(work: Promise<T>, ms: number, step: string): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      work,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`teardown step "${step}" exceeded ${ms}ms`)), ms);
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
 }
 
 /** Writes app logs alongside the test output (and returns the joined text). */

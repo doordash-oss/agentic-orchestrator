@@ -215,6 +215,9 @@ test('recovery orphans: priority attention, live/dead context, batch actions, an
     }
   } finally {
     if (handle !== null) {
+      // However the journey ended, the live app's own logs are the only record
+      // of what its server was doing; write them before it is torn down.
+      persistAppLogs(handle, 'recovery-orphans-last');
       await closeApp(handle).catch(() => {});
     }
     if (liveOrphan !== null) {

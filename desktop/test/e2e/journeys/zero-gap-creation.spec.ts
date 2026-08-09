@@ -62,7 +62,7 @@ test('the creation sheet covers scoped files, initialization, the contract, setu
     await evidenceShot(app, SHOTS.home);
 
     await app.page.keyboard.press('ControlOrMeta+K');
-    await app.page.getByLabel('Search commands').fill('keyboard shortcuts');
+    await app.page.getByLabel('Search features and commands').fill('keyboard shortcuts');
     await app.page.keyboard.press('Enter');
     await app.page.setViewportSize({ width: 760, height: 900 });
     await setTheme(app, 'dark');

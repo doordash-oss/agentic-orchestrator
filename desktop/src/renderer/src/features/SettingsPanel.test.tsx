@@ -148,7 +148,12 @@ describe('SettingsPanel updates pane', () => {
     render(<SettingsPanel pane="updates" />);
 
     const updates = await screen.findByRole('region', { name: 'Updates' });
-    expect(within(updates).getByText('sudo apt install ./agentico_0.2.0_amd64.deb')).toBeVisible();
+    // The section renders before its update state arrives, so the first
+    // state-dependent assertion has to wait for it — a synchronous get here
+    // races the fetch and only holds on a fast machine.
+    expect(
+      await within(updates).findByText('sudo apt install ./agentico_0.2.0_amd64.deb'),
+    ).toBeVisible();
     expect(screen.queryByRole('button', { name: 'Restart to Update' })).not.toBeInTheDocument();
     expect(
       screen.queryByRole('button', { name: 'Stop Work and Install Now' }),
@@ -181,7 +186,7 @@ describe('SettingsPanel updates pane', () => {
     render(<SettingsPanel pane="updates" />);
 
     const updates = await screen.findByRole('region', { name: 'Updates' });
-    expect(within(updates).getByRole('button', { name: 'Restart to Update' })).toBeVisible();
+    expect(await within(updates).findByRole('button', { name: 'Restart to Update' })).toBeVisible();
     expect(within(updates).queryByRole('button', { name: 'Install When Idle' })).toBeNull();
     expect(within(updates).queryByRole('button', { name: 'Stop Work and Install Now' })).toBeNull();
   });
@@ -201,7 +206,9 @@ describe('SettingsPanel updates pane', () => {
     render(<SettingsPanel pane="updates" />);
 
     const updates = await screen.findByRole('region', { name: 'Updates' });
-    expect(within(updates).getByText('1 workflow and AMA session are active.')).toBeVisible();
+    expect(
+      await within(updates).findByText('1 workflow and AMA session are active.'),
+    ).toBeVisible();
     expect(within(updates).getByRole('button', { name: 'Install When Idle' })).toBeVisible();
     expect(
       within(updates).getByRole('button', { name: 'Stop Work and Install Now' }),

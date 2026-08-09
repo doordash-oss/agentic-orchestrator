@@ -52,7 +52,7 @@ test('packaged command palette, native menu routes, and active close policy stay
 
     await openPalette(handle);
     const palette = handle.page.getByRole('dialog', { name: 'Command palette' });
-    await palette.getByLabel('Search commands').fill('settings');
+    await palette.getByLabel('Search features and commands').fill('settings');
     await handle.page.keyboard.press('Enter');
     // Settings is its own window: the palette entry raises it rather than
     // routing the main window anywhere. Put it away again so the lifecycle
@@ -64,7 +64,7 @@ test('packaged command palette, native menu routes, and active close policy stay
     await openPalette(handle);
     // The palette searches command labels, not ids: `global.home` is now
     // labeled "Overview", so it's found by that text.
-    await palette.getByLabel('Search commands').fill('overview');
+    await palette.getByLabel('Search features and commands').fill('overview');
     await handle.page.keyboard.press('Enter');
     await expect(handle.page.getByRole('option', { name: 'Overview' })).toHaveAttribute(
       'aria-selected',
@@ -393,7 +393,7 @@ async function assertPaletteTargetsCurrentFeature(
 ): Promise<void> {
   await openPalette(handle);
   const palette = handle.page.getByRole('dialog', { name: 'Command palette' });
-  await palette.getByLabel('Search commands').fill('start feature');
+  await palette.getByLabel('Search features and commands').fill('start feature');
   await handle.page.keyboard.press('Enter');
   await waitFor(
     async () => {

@@ -566,6 +566,8 @@ export const AppRouteEventSchema = z.strictObject({
     // Carries a feature command's identity — never a feature id, so a menu
     // click that raced a selection change cannot act on a stale target.
     'feature-command',
+    // Selects the feature named by `featureId` in the sidebar.
+    'select-feature',
   ]),
   attentionId: z.string().min(1).max(500).optional(),
   featureId: z.string().min(1).max(200).optional(),

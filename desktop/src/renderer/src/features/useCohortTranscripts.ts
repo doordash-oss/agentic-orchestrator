@@ -35,6 +35,7 @@ export function useCohortTranscripts(
   currentIteration?: number,
   currentReviewAxes?: readonly string[],
   active = true,
+  onSessionSettled?: () => void,
 ): CohortTranscripts {
   const [runSessions, setRunSessions] = useState<SessionSummary[]>([]);
   const [membership, setMembership] = useState(EMPTY_COHORT);
@@ -137,6 +138,10 @@ export function useCohortTranscripts(
 
     const unsubscribe = window.agentico.onSessionOutput((event) => {
       if (disposed || !members.includes(event.sessionId)) return;
+      if (event.type === 'done') {
+        onSessionSettled?.();
+        return;
+      }
       if (event.type !== 'record') return;
       setTranscripts((current) => ({
         ...current,
@@ -177,7 +182,16 @@ export function useCohortTranscripts(
       unsubscribe();
       for (const id of subscriptions) void window.agentico.cancelSessionOutput(id);
     };
-  }, [active, featureId, runNumber, cohortKey, activeKey, shouldStream, generation]);
+  }, [
+    active,
+    featureId,
+    runNumber,
+    cohortKey,
+    activeKey,
+    shouldStream,
+    generation,
+    onSessionSettled,
+  ]);
 
   const selectSession = useCallback((id: string) => setSelectedId(id), []);
 

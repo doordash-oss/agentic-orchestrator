@@ -89,6 +89,7 @@ export interface CurrentRunInspectionProps {
   onAttentionPreviewClose?(): void;
   /** Reports this run's totals up so the inspector sidebar can show them. */
   onRunMetrics?(metrics: RunMetrics | null): void;
+  onSessionSettled?(): void;
   /** Record view supplies its own header label and hides live controls. */
   presentation?: 'regular' | 'record';
   /**
@@ -421,6 +422,7 @@ export function CurrentRunInspection({
   suppressQuestion,
   onAttentionPreviewClose,
   onRunMetrics,
+  onSessionSettled,
   presentation = 'regular',
   mode = 'live',
   expandHost = null,
@@ -457,6 +459,7 @@ export function CurrentRunInspection({
     currentIteration,
     currentReviewAxes,
     active,
+    onSessionSettled,
   );
   const presentedCohort = live.cohort;
   const selectedSession =

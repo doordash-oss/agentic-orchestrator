@@ -34,7 +34,7 @@ const REVIEW_GATE = {
   validatorStatuses: {},
 };
 
-function renderCohort() {
+function renderCohort(onSessionSettled?: () => void) {
   const mock = installAgenticoMock();
   mock.api.getLivePreview.mockResolvedValue({
     featureId: 'abcd1234ef567890',
@@ -72,6 +72,7 @@ function renderCohort() {
       runNumber={8}
       currentPhase="Implement"
       reviewGate={REVIEW_GATE}
+      onSessionSettled={onSessionSettled}
     />,
   );
   return mock;
@@ -967,6 +968,49 @@ describe('CurrentRunInspection', () => {
     expect(screen.queryByText('Craft added tests.')).not.toBeInTheDocument();
     await user.click(screen.getByRole('tab', { name: /Craft/ }));
     expect(await screen.findByText('Craft added tests.')).toBeVisible();
+  });
+
+  it('reports done only for a member of the active cohort', async () => {
+    const onSessionSettled = vi.fn();
+    const mock = renderCohort(onSessionSettled);
+
+    await screen.findByText('Security review underway.');
+    await waitFor(() => expect(mock.api.openSessionOutput).toHaveBeenCalled());
+
+    act(() => {
+      mock.emitSessionOutput({
+        subscriptionId: 'subscription-1',
+        type: 'record',
+        sessionId: 'craft',
+        index: 1,
+        message: { index: 1, role: 'assistant', type: 'text', text: 'Still working.' },
+      });
+      mock.emitSessionOutput({
+        subscriptionId: 'subscription-1',
+        type: 'error',
+        sessionId: 'craft',
+        error: { code: 'E_SESSION_STREAM', message: 'stream interrupted' },
+      });
+      mock.emitSessionOutput({
+        subscriptionId: 'subscription-1',
+        type: 'done',
+        sessionId: 'outside-cohort',
+        nextIndex: 2,
+      });
+    });
+
+    expect(onSessionSettled).not.toHaveBeenCalled();
+
+    act(() => {
+      mock.emitSessionOutput({
+        subscriptionId: 'subscription-1',
+        type: 'done',
+        sessionId: 'craft',
+        nextIndex: 2,
+      });
+    });
+
+    expect(onSessionSettled).toHaveBeenCalledTimes(1);
   });
 
   it('cancels every subscription and listener on unmount', async () => {

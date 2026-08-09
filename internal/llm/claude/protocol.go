@@ -171,8 +171,11 @@ func (p *Protocol) RespondToAskUser(requestID string, questions json.RawMessage,
 
 // alignAskUserAnswers rewrites each answer to the exact option label it
 // selects (recommended-suffix and display-truncation tolerant) and injects a
-// free-text answer that matches no label as an additional option, so the
-// CLI's label resolution always finds a selection.
+// free-text answer that matches no label as an option, so the CLI's label
+// resolution always finds a selection. The resulting option list stays within
+// Claude's required 2-4 cardinality: an optionless question receives one
+// padding choice, while a full list reserves its final slot for the custom
+// answer.
 func alignAskUserAnswers(questions json.RawMessage, answers map[string]string) (json.RawMessage, map[string]string) {
 	if len(answers) == 0 {
 		return questions, answers
@@ -208,6 +211,19 @@ func alignAskUserAnswers(questions json.RawMessage, answers map[string]string) (
 				changed = true
 			}
 			continue
+		}
+		if len(opts) == 0 {
+			paddingLabel := "Other"
+			if _, matchesAnswer := llm.MatchAskUserOptionLabel([]string{paddingLabel}, answer); matchesAnswer {
+				paddingLabel = "Alternative answer"
+			}
+			opts = append(opts, map[string]any{
+				"label":       paddingLabel,
+				"description": "Provide a different custom answer.",
+			})
+		}
+		if len(opts) >= 4 {
+			opts = opts[:3]
 		}
 		q["options"] = append(opts, map[string]any{
 			"label":       answer,

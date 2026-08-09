@@ -218,11 +218,15 @@ type askUserControlResponse struct {
 }
 
 func respondToAskUser(t *testing.T, answers map[string]string) askUserControlResponse {
+	return respondToAskUserInput(t, json.RawMessage(askUserQuestionsInput), answers)
+}
+
+func respondToAskUserInput(t *testing.T, questions json.RawMessage, answers map[string]string) askUserControlResponse {
 	t.Helper()
 	p := NewProtocol(llm.ProtocolOpts{})
 	var buf bytes.Buffer
 	p.SetStdin(&buf)
-	if err := p.RespondToAskUser("req-1", json.RawMessage(askUserQuestionsInput), answers, nil); err != nil {
+	if err := p.RespondToAskUser("req-1", questions, answers, nil); err != nil {
 		t.Fatalf("RespondToAskUser: %v", err)
 	}
 	var out askUserControlResponse
@@ -279,20 +283,39 @@ func TestClaudeProtocol_RespondToAskUser_FreeTextInjectedAsOption(t *testing.T) 
 }
 
 func TestClaudeProtocol_RespondToAskUser_FreeTextForOptionlessQuestion(t *testing.T) {
-	p := NewProtocol(llm.ProtocolOpts{})
-	var buf bytes.Buffer
-	p.SetStdin(&buf)
 	questions := json.RawMessage(`{"questions":[{"question":"What version?","header":"Version","multiSelect":false,"options":[]}]}`)
-	if err := p.RespondToAskUser("req-2", questions, map[string]string{"What version?": "1.2.3"}, nil); err != nil {
-		t.Fatalf("RespondToAskUser: %v", err)
-	}
-	var out askUserControlResponse
-	if err := json.Unmarshal([]byte(strings.TrimSpace(buf.String())), &out); err != nil {
-		t.Fatalf("unmarshal control response: %v", err)
-	}
+	out := respondToAskUserInput(t, questions, map[string]string{"What version?": "1.2.3"})
 	opts := out.Response.Response.UpdatedInput.Questions[0].Options
-	if len(opts) != 1 || opts[0].Label != "1.2.3" {
-		t.Errorf("options = %+v, want the free text as the sole option", opts)
+	if len(opts) != 2 {
+		t.Fatalf("options = %+v, want two schema-valid options", opts)
+	}
+	if opts[0].Label != "Other" || opts[0].Description != "Provide a different custom answer." {
+		t.Errorf("padding option = %+v, want stable schema-valid placeholder", opts[0])
+	}
+	if opts[1].Label != "1.2.3" || opts[1].Description != "User-provided custom answer." {
+		t.Errorf("custom option = %+v, want schema-valid free-text selection", opts[1])
+	}
+}
+
+func TestClaudeProtocol_RespondToAskUser_FreeTextForFourOptionQuestion(t *testing.T) {
+	questions := json.RawMessage(`{"questions":[{"question":"Which approach?","header":"Scope","multiSelect":false,"options":[{"label":"A","description":"first"},{"label":"B","description":"second"},{"label":"C","description":"third"},{"label":"D","description":"fourth"}]}]}`)
+	const customAnswer = "Use a custom fifth approach"
+	out := respondToAskUserInput(t, questions, map[string]string{"Which approach?": customAnswer})
+	updated := out.Response.Response.UpdatedInput
+	if got := updated.Answers["Which approach?"]; got != customAnswer {
+		t.Errorf("answer = %q, want the free text verbatim", got)
+	}
+	opts := updated.Questions[0].Options
+	if len(opts) != 4 {
+		t.Fatalf("options = %+v, want four schema-valid options", opts)
+	}
+	for i, want := range []string{"A", "B", "C"} {
+		if opts[i].Label != want {
+			t.Errorf("option %d label = %q, want preserved %q", i, opts[i].Label, want)
+		}
+	}
+	if opts[3].Label != customAnswer || opts[3].Description != "User-provided custom answer." {
+		t.Errorf("final option = %+v, want schema-valid custom answer replacing D", opts[3])
 	}
 }
 

@@ -375,26 +375,42 @@ func TestRespondToAskUser_StructuredFreeFormFallsBackToFollowUpTurn(t *testing.T
 	if err := p.RespondToAskUser("92", raw, map[string]string{"Pick one": "Actually do C instead"}, nil); err != nil {
 		t.Fatalf("RespondToAskUser error: %v", err)
 	}
+	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("outbound lines = %d, want cancellation followed by prompt: %q", len(lines), buf.String())
+	}
+	cancelled := decodePermissionResponse(t, []byte(lines[len(lines)-2]))
+	if cancelled.ID != reqID || cancelled.Result.Outcome.Outcome != OutcomeCancelled || cancelled.Result.Outcome.OptionID != "" {
+		t.Fatalf("cancellation = %+v, want request %d cancelled without option", cancelled, reqID)
+	}
+
 	// The last outbound line is the follow-up turn carrying the answer envelope.
 	var followUp Request
-	if err := json.Unmarshal(buf.lastLine(t), &followUp); err != nil {
+	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &followUp); err != nil {
 		t.Fatalf("expected a follow-up session/prompt: %v (%q)", err, buf.String())
 	}
 	if followUp.Method != "session/prompt" {
 		t.Fatalf("follow-up method = %q, want session/prompt", followUp.Method)
 	}
-	// encoding/json HTML-escapes the quoted prompt marker as \\u003e on the
-	// wire; normalize it so this contract checks the framed prompt text.
-	wire := strings.ReplaceAll(buf.String(), `\u003e`, ">")
-	for _, want := range []string{
-		`"outcome":"cancelled"`,
-		"[AskUserQuestion answer]",
-		"> Pick one",
-		"User's selected answer: Actually do C instead",
-	} {
-		if !strings.Contains(wire, want) {
-			t.Errorf("custom-answer wire output missing %q: %s", want, wire)
-		}
+	var params PromptParams
+	if err := json.Unmarshal(mustMarshal(t, followUp.Params), &params); err != nil {
+		t.Fatalf("decode follow-up params: %v", err)
+	}
+	const wantEnvelope = `[AskUserQuestion answer]
+The user has answered your question.
+
+Question you asked:
+> Pick one
+
+Options you presented:
+  1. A
+  2. B
+
+User's selected answer: Actually do C instead
+
+[Reminder] When you ask your next question, follow the asking-questions format from your system prompt.`
+	if params.SessionID != "ses_x" || len(params.Prompt) != 1 || params.Prompt[0] != (ContentBlock{Type: "text", Text: wantEnvelope}) {
+		t.Fatalf("follow-up params = %+v, want exact custom-answer envelope", params)
 	}
 }
 

@@ -1,60 +1,27 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
   <defs>
     <clipPath id="sq"><rect x="100" y="100" width="824" height="824" rx="185"/></clipPath>
-    <linearGradient id="bg" x1="0" y1="0" x2="0.4" y2="1">
-      <stop offset="0" stop-color="#1d2038"/><stop offset="1" stop-color="#131527"/>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2a2e38"/><stop offset="1" stop-color="#14161c"/>
     </linearGradient>
-    <linearGradient id="legL" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#f4575c"/><stop offset="1" stop-color="#e04a55"/>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#4f8bff"/><stop offset="1" stop-color="#2f6fed"/>
     </linearGradient>
-    <linearGradient id="legR" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#f4575c"/><stop offset="1" stop-color="#8f4d7a"/>
+    <linearGradient id="sheen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.28"/>
+      <stop offset="0.45" stop-color="#ffffff" stop-opacity="0.06"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
     </linearGradient>
-    <linearGradient id="arc1" x1="0" y1="0" x2="1" y2="0">
-      <stop offset="0" stop-color="#f2884f"/><stop offset="1" stop-color="#7a6fa8"/>
-    </linearGradient>
-    <linearGradient id="arc2" x1="0" y1="0" x2="1" y2="0">
-      <stop offset="0" stop-color="#8a819f"/><stop offset="1" stop-color="#5d5b85"/>
-    </linearGradient>
-    <linearGradient id="strut" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#f7b23f"/><stop offset="1" stop-color="#f08a3e"/>
-    </linearGradient>
-    <linearGradient id="rim" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#ffffff" stop-opacity="0.1"/>
-      <stop offset="0.3" stop-color="#ffffff" stop-opacity="0"/>
-    </linearGradient>
-    <filter id="glow" x="-80%" y="-80%" width="260%" height="260%"><feGaussianBlur stdDeviation="24"/></filter>
   </defs>
+  <!-- The Glass Monogram: the ivory stroke (the human) and the accent stroke
+       (the agent) lean into each other to form the A. The accent stroke is the
+       brand constant — identical in the light variant. -->
   <g clip-path="url(#sq)">
     <rect x="100" y="100" width="824" height="824" fill="url(#bg)"/>
-    <circle cx="512" cy="492" r="316" fill="none" stroke="#282c4a" stroke-width="3"/>
-    <circle cx="270" cy="250" r="4.5" fill="#3a3f60"/><circle cx="760" cy="220" r="4.5" fill="#3a3f60"/><circle cx="820" cy="420" r="4.5" fill="#3a3f60"/><circle cx="220" cy="480" r="4.5" fill="#3a3f60"/><circle cx="300" cy="850" r="4.5" fill="#3a3f60"/><circle cx="740" cy="860" r="4.5" fill="#3a3f60"/><circle cx="640" cy="160" r="4.5" fill="#3a3f60"/><circle cx="180" cy="660" r="4.5" fill="#3a3f60"/>
-
-    <!-- orbital arcs through the crossbar -->
-    <path d="M326,696 Q512,532 698,696" fill="none" stroke="url(#arc2)" stroke-width="44" stroke-linecap="round"/>
-    <path d="M326,696 Q512,344 698,696" fill="none" stroke="url(#arc1)" stroke-width="44" stroke-linecap="round"/>
-
-    <!-- A frame -->
-    <path d="M512,258 L326,696" fill="none" stroke="url(#legL)" stroke-width="56" stroke-linecap="round"/>
-    <path d="M512,258 L698,696" fill="none" stroke="url(#legR)" stroke-width="56" stroke-linecap="round"/>
-
-    <!-- strut and dotted return path -->
-    <circle cx="320.0" cy="726.0" r="7" fill="#f08a3e"/><circle cx="339.2" cy="734.2" r="7" fill="#f08a3e"/><circle cx="358.4" cy="741.5" r="7" fill="#f08a3e"/><circle cx="377.6" cy="747.9" r="7" fill="#f08a3e"/><circle cx="396.8" cy="753.5" r="7" fill="#f08a3e"/><circle cx="416.0" cy="758.3" r="7" fill="#f08a3e"/><circle cx="608.0" cy="758.3" r="7" fill="#f08a3e"/><circle cx="627.2" cy="753.5" r="7" fill="#f08a3e"/><circle cx="646.4" cy="747.9" r="7" fill="#f08a3e"/><circle cx="665.6" cy="741.5" r="7" fill="#f08a3e"/><circle cx="684.8" cy="734.2" r="7" fill="#f08a3e"/><circle cx="704.0" cy="726.0" r="7" fill="#f08a3e"/>
-    <line x1="512" y1="520" x2="512" y2="756" stroke="url(#strut)" stroke-width="32"/>
-
-    <!-- nodes -->
-    <circle cx="512" cy="756" r="66" fill="#f08a3e" opacity="0.55" filter="url(#glow)"/>
-    <circle cx="512" cy="258" r="46" fill="#f4575c"/>
-     <circle cx="512" cy="258" r="21" fill="#151830"/>
-    <circle cx="326" cy="696" r="40" fill="#e04a55"/>
-     <circle cx="326" cy="696" r="18" fill="#151830"/>
-    <circle cx="698" cy="696" r="40" fill="#c04f68"/>
-     <circle cx="698" cy="696" r="18" fill="#151830"/>
-    <circle cx="512" cy="520" r="38" fill="#f7b23f"/>
-     <circle cx="512" cy="520" r="17" fill="#151830"/>
-    <circle cx="512" cy="756" r="50" fill="#f08a3e"/>
-     <circle cx="512" cy="756" r="22" fill="#151830"/>
-
-    <rect x="102.5" y="102.5" width="819" height="819" rx="183" fill="none" stroke="url(#rim)" stroke-width="5"/>
+    <g transform="translate(100 100) scale(0.8046875)" fill="none" stroke-linecap="round" stroke-width="150">
+      <path d="M 330 810 L 512 250" stroke="#f4f5f7" stroke-opacity="0.92"/>
+      <path d="M 694 810 L 512 250" stroke="url(#accent)" stroke-opacity="0.9"/>
+    </g>
+    <rect x="100" y="100" width="824" height="412" fill="url(#sheen)"/>
   </g>
 </svg>

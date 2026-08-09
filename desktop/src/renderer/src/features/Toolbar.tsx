@@ -1,6 +1,8 @@
 /**
  * The 52px translucent toolbar spanning the content side of the shell (never
- * the sidebar): a leading sidebar-collapse toggle, a center-leading title
+ * the sidebar): a leading slot (empty while the sidebar is visible — the
+ * sidebar header owns the window-chrome control cluster then — and hosting
+ * that cluster once the sidebar collapses), a center-leading title
  * block (feature name or "Overview", plus a `repo · branch` mono sub-line),
  * and a trailing group carrying the always-visible attention bell, the
  * transient update button, and — only while a feature is selected, per the
@@ -21,7 +23,13 @@
  * as the header it replaces: the bar itself is draggable, every interactive
  * child opts out via `-webkit-app-region: no-drag` (app.css).
  */
-import { useState, type Dispatch, type RefObject, type SetStateAction } from 'react';
+import {
+  useState,
+  type Dispatch,
+  type ReactNode,
+  type RefObject,
+  type SetStateAction,
+} from 'react';
 import type { AttentionItem, UpdateState } from '../../../shared/ipc';
 import { AttentionInbox, type AttentionDrafts } from './AttentionInbox';
 import { UpdatePopover } from '../components/UpdatePopover';
@@ -46,8 +54,13 @@ export interface ToolbarUpdateProps {
 }
 
 export interface ToolbarProps {
-  sidebarCollapsed: boolean;
-  onToggleSidebar(): void;
+  /**
+   * The shell-owned leading content. While the sidebar is collapsed the shell
+   * moves its window-chrome control cluster (sidebar toggle + palette search)
+   * here so the buttons stay anchored beside the traffic lights; while the
+   * sidebar is visible its own header hosts them and this stays empty.
+   */
+  leading?: ReactNode;
   title: string;
   subline?: string;
   /** Gates the cockpit-owned slots, which only exist while a feature is open. */
@@ -67,8 +80,7 @@ export interface ToolbarProps {
 }
 
 export function Toolbar({
-  sidebarCollapsed,
-  onToggleSidebar,
+  leading,
   title,
   subline,
   showTrailing,
@@ -85,29 +97,7 @@ export function Toolbar({
 
   return (
     <header className="toolbar" aria-label="Workspace toolbar">
-      <div className="toolbar__leading">
-        <button
-          type="button"
-          className="toolbar__sidebar-toggle"
-          aria-label={sidebarCollapsed ? 'Show sidebar' : 'Hide sidebar'}
-          aria-pressed={sidebarCollapsed}
-          onClick={onToggleSidebar}
-        >
-          <svg
-            aria-hidden="true"
-            width="18"
-            height="16"
-            viewBox="0 0 18 16"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="1.5"
-            strokeLinecap="round"
-          >
-            <rect x="1.75" y="2.75" width="14.5" height="10.5" rx="2.75" />
-            <line x1="6.75" y1="3.25" x2="6.75" y2="12.75" />
-          </svg>
-        </button>
-      </div>
+      <div className="toolbar__leading">{leading}</div>
       <div className="toolbar__title">
         <p className="toolbar__title-name">{title}</p>
         {subline !== undefined ? <p className="toolbar__title-subline">{subline}</p> : null}

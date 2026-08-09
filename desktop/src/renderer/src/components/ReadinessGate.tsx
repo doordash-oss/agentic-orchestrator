@@ -39,6 +39,7 @@ export function ReadinessGate({
   onOpenUpdatesSettings = () => {},
   onInstallUpdateWhenIdle = async () => {},
   onOpenAma = () => {},
+  onOpenPalette = () => {},
   amaSessionActive = false,
 }: {
   attentionDrafts?: AttentionDrafts;
@@ -61,6 +62,8 @@ export function ReadinessGate({
   onOpenUpdatesSettings?(): void;
   onInstallUpdateWhenIdle?(): Promise<void>;
   onOpenAma?(): void;
+  /** Owned by App: dispatches the same 'palette' routeRequest ⌘K resolves to. */
+  onOpenPalette?(): void;
   amaSessionActive?: boolean;
 }) {
   const [state, setState] = useState<GateState>({ phase: 'loading' });
@@ -125,6 +128,7 @@ export function ReadinessGate({
         onOpenUpdatesSettings={onOpenUpdatesSettings}
         onInstallUpdateWhenIdle={onInstallUpdateWhenIdle}
         onOpenAma={onOpenAma}
+        onOpenPalette={onOpenPalette}
         amaSessionActive={amaSessionActive}
       />
     );

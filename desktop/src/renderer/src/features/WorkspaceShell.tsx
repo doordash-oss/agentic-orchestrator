@@ -47,6 +47,7 @@ import { PipRail } from '../components/Pip';
 import { HouseIcon } from '../components/icons';
 import { updateNoticePending } from '../components/UpdatePopover';
 import { emptyAttentionDrafts, type AttentionDrafts } from './AttentionInbox';
+import { SidebarChromeControls } from './SidebarChromeControls';
 import { Toolbar } from './Toolbar';
 import {
   childStatusSpineIndex,
@@ -166,6 +167,7 @@ export function WorkspaceShell({
   onOpenUpdatesSettings = () => {},
   onInstallUpdateWhenIdle = async () => {},
   onOpenAma = () => {},
+  onOpenPalette = () => {},
   amaSessionActive = false,
 }: {
   attentionItems?: AttentionItem[];
@@ -189,6 +191,8 @@ export function WorkspaceShell({
   onInstallUpdateWhenIdle?(): Promise<void>;
   /** Owned by App: dispatches the same routeRequest the ⌘⇧M accelerator does. */
   onOpenAma?(): void;
+  /** Owned by App: dispatches the same 'palette' routeRequest ⌘K resolves to. */
+  onOpenPalette?(): void;
   /** True while the singleton AMA chat session is running. */
   amaSessionActive?: boolean;
 }) {
@@ -455,7 +459,8 @@ export function WorkspaceShell({
   );
 
   /**
-   * The toolbar's leading sidebar toggle: click-to-collapse/expand, persisted
+   * The sidebar header's chrome-cluster toggle (the toolbar's leading zone
+   * hosts it while collapsed): click-to-collapse/expand, persisted
    * through the same settings IPC as the selection. The ⌘⌃S handler above
    * calls this same function; the visual-only auto-collapse below ~700px is
    * `effectiveSidebarCollapsed`, computed above the restore gate below.
@@ -721,6 +726,20 @@ export function WorkspaceShell({
     }
   };
 
+  // The Claude-Desktop-style window-chrome cluster: exactly one instance,
+  // moved between two homes rather than rendered twice. While the sidebar is
+  // visible it lives in the sidebar header (right of the traffic lights);
+  // once the sidebar collapses that header disappears with it, so the same
+  // cluster moves into the toolbar's leading zone, which then carries the
+  // traffic-light clearance — the buttons never leave the top-left corner.
+  const chromeControls = (
+    <SidebarChromeControls
+      sidebarCollapsed={effectiveSidebarCollapsed}
+      onToggleSidebar={toggleSidebar}
+      onOpenPalette={onOpenPalette}
+    />
+  );
+
   return (
     <section
       className="workspace"
@@ -732,7 +751,7 @@ export function WorkspaceShell({
         aria-label="Feature sidebar"
         data-collapsed={effectiveSidebarCollapsed}
       >
-        <div className="sidebar__header" aria-hidden="true" />
+        <div className="sidebar__header">{effectiveSidebarCollapsed ? null : chromeControls}</div>
         <div
           className="sidebar__list"
           role="listbox"
@@ -796,8 +815,7 @@ export function WorkspaceShell({
 
       <div className="content-column">
         <Toolbar
-          sidebarCollapsed={effectiveSidebarCollapsed}
-          onToggleSidebar={toggleSidebar}
+          leading={effectiveSidebarCollapsed ? chromeControls : undefined}
           title={toolbarTitle}
           subline={toolbarSubline}
           showTrailing={showTrailingToolbar}

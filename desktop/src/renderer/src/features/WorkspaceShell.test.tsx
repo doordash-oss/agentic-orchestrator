@@ -786,6 +786,9 @@ describe('WorkspaceShell toolbar', () => {
     render(<WorkspaceShell />);
 
     const toggle = await screen.findByRole('button', { name: 'Hide sidebar' });
+    // The window-chrome cluster lives in the sidebar header while the
+    // sidebar is visible, per Claude Desktop — not in the content toolbar.
+    expect(toggle.closest('.sidebar__header')).not.toBeNull();
     expect(screen.getByRole('navigation', { name: 'Feature sidebar' })).toHaveAttribute(
       'data-collapsed',
       'false',
@@ -797,11 +800,30 @@ describe('WorkspaceShell toolbar', () => {
         shell: { activeFeatureId: null, sidebarCollapsed: true },
       }),
     );
-    expect(await screen.findByRole('button', { name: 'Show sidebar' })).toBeInTheDocument();
+    // Collapsing hides the sidebar header with the sidebar, so the same
+    // cluster — toggle and magnifier both — moves to the toolbar's leading
+    // zone and stays clickable at the top-left, and is never rendered twice.
+    const reopened = await screen.findByRole('button', { name: 'Show sidebar' });
+    expect(reopened.closest('.toolbar__leading')).not.toBeNull();
+    expect(screen.getAllByRole('button', { name: /sidebar/ })).toHaveLength(1);
+    const collapsedSearch = screen.getByRole('button', { name: 'Search features' });
+    expect(collapsedSearch.closest('.toolbar__leading')).not.toBeNull();
     expect(screen.getByRole('navigation', { name: 'Feature sidebar' })).toHaveAttribute(
       'data-collapsed',
       'true',
     );
+  });
+
+  it('opens the command palette from the sidebar header magnifier, exactly as ⌘K does', async () => {
+    installAgenticoMock({ settings: settingsWithActive(null), features: [] });
+    const onOpenPalette = vi.fn();
+    render(<WorkspaceShell onOpenPalette={onOpenPalette} />);
+
+    const search = await screen.findByRole('button', { name: 'Search features' });
+    expect(search.closest('.sidebar__header')).not.toBeNull();
+    expect(search.closest('.sidebar__chrome-controls')).not.toBeNull();
+    await userEvent.click(search);
+    expect(onOpenPalette).toHaveBeenCalledTimes(1);
   });
 
   it('shows the active-session footer state only while the runtime is healthy', async () => {

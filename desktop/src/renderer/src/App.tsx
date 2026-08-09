@@ -176,6 +176,7 @@ export default function App() {
               requestRoute({ target: 'settings', settingsSection: 'updates' })
             }
             onOpenAma={() => requestRoute({ target: 'ama' })}
+            onOpenPalette={() => requestRoute({ target: 'palette' })}
             amaSessionActive={amaSessionActive}
             onInstallUpdateWhenIdle={async () => {
               try {

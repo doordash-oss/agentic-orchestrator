@@ -24,6 +24,7 @@ import { useCompletionPreflight } from '../../../src/renderer/src/features/compl
 import type { CompletionAction } from '../../../src/renderer/src/features/completion/completionShared';
 import SettingsWindow from '../../../src/renderer/src/SettingsWindow';
 import { WorkspaceShell } from '../../../src/renderer/src/features/WorkspaceShell';
+import { SidebarChromeControls } from '../../../src/renderer/src/features/SidebarChromeControls';
 import { FeatureCockpit } from '../../../src/renderer/src/features/FeatureCockpit';
 import { ConnectionShell } from '../../../src/renderer/src/components/ConnectionShell';
 import { SetupWizard } from '../../../src/renderer/src/components/wizard/SetupWizard';
@@ -694,26 +695,20 @@ function CockpitRedesignScene({ variant }: { variant: CockpitRedesignVariant }) 
   return (
     <div className="app-frame" style={{ height: '100vh' }}>
       <div className="workspace">
-        <div className="sidebar" aria-hidden="true" />
+        <div className="sidebar" aria-hidden="true">
+          {/* Matches the shell: the window-chrome cluster (sidebar toggle +
+           * palette magnifier) lives in the sidebar header, not the toolbar. */}
+          <div className="sidebar__header">
+            <SidebarChromeControls
+              sidebarCollapsed={false}
+              onToggleSidebar={() => undefined}
+              onOpenPalette={() => undefined}
+            />
+          </div>
+        </div>
         <div className="content-column">
           <header className="toolbar">
-            <div className="toolbar__leading">
-              <button type="button" className="toolbar__sidebar-toggle" aria-label="Hide sidebar">
-                <svg
-                  aria-hidden="true"
-                  width="18"
-                  height="16"
-                  viewBox="0 0 18 16"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.5"
-                  strokeLinecap="round"
-                >
-                  <rect x="1.75" y="2.75" width="14.5" height="10.5" rx="2.75" />
-                  <line x1="6.75" y1="3.25" x2="6.75" y2="12.75" />
-                </svg>
-              </button>
-            </div>
+            <div className="toolbar__leading" />
             <div className="toolbar__title">
               <p className="toolbar__title-name">translate README to Italian</p>
               <p className="toolbar__title-subline">
@@ -903,26 +898,20 @@ function AftercareScene() {
   return (
     <div className="app-frame">
       <div className="workspace">
-        <div className="sidebar" aria-hidden="true" />
+        <div className="sidebar" aria-hidden="true">
+          {/* Matches the shell: the window-chrome cluster (sidebar toggle +
+           * palette magnifier) lives in the sidebar header, not the toolbar. */}
+          <div className="sidebar__header">
+            <SidebarChromeControls
+              sidebarCollapsed={false}
+              onToggleSidebar={() => undefined}
+              onOpenPalette={() => undefined}
+            />
+          </div>
+        </div>
         <div className="content-column">
           <header className="toolbar" aria-label="Workspace toolbar">
-            <div className="toolbar__leading">
-              <button type="button" className="toolbar__sidebar-toggle" aria-label="Hide sidebar">
-                <svg
-                  aria-hidden="true"
-                  width="18"
-                  height="16"
-                  viewBox="0 0 18 16"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.5"
-                  strokeLinecap="round"
-                >
-                  <rect x="1.75" y="2.75" width="14.5" height="10.5" rx="2.75" />
-                  <line x1="6.75" y1="3.25" x2="6.75" y2="12.75" />
-                </svg>
-              </button>
-            </div>
+            <div className="toolbar__leading" />
             <div className="toolbar__title">
               <p className="toolbar__title-name">{title}</p>
               <p className="toolbar__title-subline">

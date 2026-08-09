@@ -9,8 +9,6 @@ afterEach(cleanup);
 
 function baseProps() {
   return {
-    sidebarCollapsed: false,
-    onToggleSidebar: vi.fn(),
     title: 'Overview',
   };
 }
@@ -57,6 +55,25 @@ function updateProps(): ToolbarUpdateProps {
     onInstallWhenIdle: async () => {},
   };
 }
+
+describe('Toolbar leading slot', () => {
+  it('owns no sidebar toggle of its own; it renders whatever leading content the shell hands it', () => {
+    const view = render(<Toolbar {...baseProps()} showTrailing={false} />);
+    // The toggle moved into the sidebar header (SidebarChromeControls); the
+    // shell only hands it back here while the sidebar is collapsed.
+    expect(screen.queryByRole('button', { name: 'Hide sidebar' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Search features' })).not.toBeInTheDocument();
+
+    view.rerender(
+      <Toolbar
+        {...baseProps()}
+        showTrailing={false}
+        leading={<button type="button">Chrome cluster</button>}
+      />,
+    );
+    expect(screen.getByRole('button', { name: 'Chrome cluster' })).toBeVisible();
+  });
+});
 
 describe('Toolbar trailing notices', () => {
   it('keeps the bell mounted on every selection, with or without the cockpit slots', () => {

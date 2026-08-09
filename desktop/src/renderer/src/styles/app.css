@@ -80,7 +80,26 @@ body {
   align-items: center;
 }
 
-.toolbar__sidebar-toggle {
+/* The window-chrome control cluster (sidebar toggle + palette magnifier).
+ * The shell renders exactly one instance: in the sidebar header while the
+ * sidebar is visible, in the toolbar's leading zone once it collapses — so
+ * the buttons stay anchored beside the traffic lights in both states. Both
+ * homes are macOS drag regions; the cluster opts itself out below. */
+.sidebar__chrome-controls {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+/* `-webkit-app-region` does not inherit, so the buttons are exempted
+ * alongside their container — matching the `.toolbar button` exemptions. */
+:root[data-platform='darwin'] .sidebar__chrome-controls,
+:root[data-platform='darwin'] .sidebar__chrome-controls button {
+  -webkit-app-region: no-drag;
+}
+
+.toolbar__sidebar-toggle,
+.toolbar__palette-search {
   display: grid;
   place-items: center;
   width: 28px;
@@ -92,7 +111,8 @@ body {
   cursor: pointer;
 }
 
-.toolbar__sidebar-toggle:hover {
+.toolbar__sidebar-toggle:hover,
+.toolbar__palette-search:hover {
   background: var(--raised);
   color: var(--text);
 }
@@ -4842,18 +4862,26 @@ body {
   display: none;
 }
 
-/* An empty drag strip the same height as the toolbar, so the top of the
- * window — sidebar included — stays one continuous draggable band with the
- * traffic lights cleared, exactly as the deleted global header was. */
+/* A drag strip the same height as the toolbar, so the top of the window —
+ * sidebar included — stays one continuous draggable band, now hosting the
+ * window-chrome control cluster (sidebar toggle + palette magnifier) to the
+ * right of the traffic lights, per Claude Desktop. The cluster itself opts
+ * out of the drag region (.sidebar__chrome-controls, above). */
 .sidebar__header {
   flex: 0 0 auto;
   min-height: 52px;
+  display: flex;
+  align-items: center;
+  padding: 0 var(--space-2);
   border-bottom: var(--bench-hairline-width) solid var(--hairline);
 }
 
 :root[data-platform='darwin'] .sidebar__header {
   -webkit-app-region: drag;
   -webkit-user-select: none;
+  /* Clears the traffic lights (x:18 + ~54px cluster), matching the 80px the
+   * collapsed toolbar carries. Non-darwin has a native frame, so no inset. */
+  padding-left: 80px;
 }
 
 .sidebar__list {

@@ -207,7 +207,8 @@ type askUserControlResponse struct {
 				Questions []struct {
 					Question string `json:"question"`
 					Options  []struct {
-						Label string `json:"label"`
+						Label       string `json:"label"`
+						Description string `json:"description"`
 					} `json:"options"`
 				} `json:"questions"`
 				Answers map[string]string `json:"answers"`
@@ -262,14 +263,18 @@ func TestClaudeProtocol_RespondToAskUser_TruncatedAnswerMatchesLabel(t *testing.
 }
 
 func TestClaudeProtocol_RespondToAskUser_FreeTextInjectedAsOption(t *testing.T) {
-	out := respondToAskUser(t, map[string]string{"Which approach?": "use a third custom approach"})
+	const customAnswer = "use a third custom approach"
+	out := respondToAskUser(t, map[string]string{"Which approach?": customAnswer})
 	updated := out.Response.Response.UpdatedInput
-	if got := updated.Answers["Which approach?"]; got != "use a third custom approach" {
+	if got := updated.Answers["Which approach?"]; got != customAnswer {
 		t.Errorf("answer = %q, want the free text verbatim", got)
 	}
 	opts := updated.Questions[0].Options
-	if len(opts) != 3 || opts[2].Label != "use a third custom approach" {
-		t.Errorf("options = %+v, want free text injected as third option", opts)
+	if len(opts) != 3 {
+		t.Fatalf("options len = %d, want 3", len(opts))
+	}
+	if opts[2].Label != customAnswer || opts[2].Description != "User-provided custom answer." {
+		t.Errorf("injected option = %+v, want schema-valid custom option", opts[2])
 	}
 }
 

@@ -209,7 +209,10 @@ func alignAskUserAnswers(questions json.RawMessage, answers map[string]string) (
 			}
 			continue
 		}
-		q["options"] = append(opts, map[string]any{"label": answer})
+		q["options"] = append(opts, map[string]any{
+			"label":       answer,
+			"description": "User-provided custom answer.",
+		})
 		changed = true
 	}
 	if !changed {

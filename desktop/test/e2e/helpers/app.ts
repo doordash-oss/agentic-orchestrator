@@ -178,22 +178,43 @@ export async function closeApp(handle: AppHandle): Promise<void> {
     // Bounded: against a wedged app these calls never settle, and an unbounded
     // await here costs the worker its whole teardown budget and loses the trace
     // — the one artifact that would explain the wedge.
-    await bounded(handle.app.context().tracing.stop({ path: tracePath }), 30_000, 'tracing.stop');
+    await bounded(handle.app.context().tracing.stop({ path: tracePath }), 60_000, 'tracing.stop');
     copyTraceToEvidence(tracePath, `${handle.traceName}-trace.zip`);
   } catch {
     // Tracing is evidence, not correctness — never fail teardown on it.
   }
   const appProcess = handle.appProcess;
-  await bounded(installTeardownQuitDialogAnswer(handle), 15_000, 'quit dialog answer').catch(
-    () => undefined,
+  // Generous on purpose: without this stub a quit-confirmation dialog blocks the
+  // quit outright, so giving up early would *cause* the hang it guards against.
+  const stubFailure = await bounded(
+    installTeardownQuitDialogAnswer(handle),
+    60_000,
+    'quit dialog answer',
+  ).then(
+    () => null,
+    (error: unknown) => (error instanceof Error ? error.message : String(error)),
   );
-  // A hung close() falls through to the exit wait below, which kills the tree.
-  await bounded(handle.app.close(), 30_000, 'app.close').catch(() => undefined);
+  // Generous, because the heaviest journeys quit a server that is still winding
+  // down real sessions: only a genuine wedge should trip this, never a loaded
+  // runner. The reason is reported rather than swallowed, so the failure below
+  // distinguishes "close() never returned" from "the process outlived a
+  // returned close()".
+  const closeFailure = await bounded(handle.app.close(), 90_000, 'app.close').then(
+    () => null,
+    (error: unknown) => (error instanceof Error ? error.message : String(error)),
+  );
   const deadline = Date.now() + 15_000;
   while (appProcess.exitCode === null && appProcess.signalCode === null) {
     if (Date.now() > deadline) {
+      // The app's own logs are the only record of what its quit was waiting on.
+      persistAppLogs(handle, `${handle.traceName}-hung-quit`);
       killProcessTree(appProcess.pid);
-      throw new Error('the app process did not exit within 15s of close()');
+      const causes = [stubFailure, closeFailure].filter((cause) => cause !== null);
+      throw new Error(
+        causes.length === 0
+          ? 'the app process did not exit within 15s of close()'
+          : `the app process did not exit within 15s of close(); teardown steps failed first: ${causes.join('; ')}`,
+      );
     }
     await new Promise((resolve) => setTimeout(resolve, 100));
   }

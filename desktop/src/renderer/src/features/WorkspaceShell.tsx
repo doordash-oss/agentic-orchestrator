@@ -615,6 +615,11 @@ export function WorkspaceShell({
       shortcutRef.current.toggleSidebar();
     } else if (routeRequest.event.target === 'toggle-inspector') {
       toggleActiveInspector();
+    } else if (routeRequest.event.target === 'select-feature') {
+      const featureId = routeRequest.event.featureId;
+      if (featureId !== undefined) {
+        selectFeature(featureId);
+      }
     } else if (routeRequest.event.target === 'feature-command') {
       // The route carries only the command's identity; the funnel resolves the
       // target from the live selection and re-checks its live enablement, so a
@@ -624,7 +629,7 @@ export function WorkspaceShell({
         runFeatureCommand(command);
       }
     }
-  }, [routeRequest, selectOverview, shell]);
+  }, [routeRequest, selectFeature, selectOverview, shell]);
 
   if (shell === null) {
     return (

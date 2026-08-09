@@ -1452,6 +1452,32 @@ describe('WorkspaceShell native-menu UI state', () => {
     );
   });
 
+  it('selects the feature a palette search routed to', async () => {
+    const feature = featureSnapshot({ id: FEATURE_ID, name: 'Search revamp', status: 'Created' });
+    const mock = installAgenticoMock({
+      settings: settingsWithActive(null),
+      features: [summaryOf(feature)],
+      feature,
+      connection: READY,
+    });
+    mock.api.listSessions.mockResolvedValue([]);
+    const { rerender } = render(<WorkspaceShell />);
+    await screen.findByRole('option', { name: 'Overview' });
+
+    rerender(
+      <WorkspaceShell
+        routeRequest={{ id: 21, event: { target: 'select-feature', featureId: FEATURE_ID } }}
+      />,
+    );
+
+    expect(
+      await screen.findByRole('region', { name: 'Feature Search revamp' }),
+    ).toBeInTheDocument();
+    expect(mock.api.updateSettings).toHaveBeenCalledWith({
+      shell: { activeFeatureId: FEATURE_ID, sidebarCollapsed: false },
+    });
+  });
+
   it('runs a Feature-menu route through the funnel against the live selection', async () => {
     const feature = featureSnapshot({
       id: FEATURE_ID,

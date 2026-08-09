@@ -147,7 +147,7 @@ describe('CommandPalette feature group', () => {
     expect(within(group).getByRole('option', { name: /^Start/ })).toBeEnabled();
     expect(within(group).getByRole('option', { name: /^Stop/ })).toBeDisabled();
 
-    await userEvent.type(screen.getByLabelText('Search commands'), 'start feature');
+    await userEvent.type(screen.getByLabelText('Search features and commands'), 'start feature');
     await userEvent.keyboard('{Enter}');
     await waitFor(() => expect(run).toHaveBeenCalledWith('feature.start'));
   });
@@ -173,6 +173,111 @@ describe('CommandPalette feature group', () => {
 
     expect(run).not.toHaveBeenCalled();
     expect(mock.api.dispatchFeatureAction).not.toHaveBeenCalled();
+  });
+});
+
+const FEATURE_ROWS = [
+  {
+    id: 'checkout1234abcd56',
+    name: 'Checkout redesign',
+    status: 'Running',
+    currentPhase: 'implement',
+    repos: ['pedregal'],
+    createdAt: '2026-08-01T00:00:00Z',
+    activeRun: 1,
+    runCount: 1,
+    warnings: [],
+  },
+  {
+    id: 'search1234abcd5678',
+    name: 'Search revamp',
+    status: 'Created',
+    currentPhase: 'plan',
+    repos: ['pedregal'],
+    createdAt: '2026-08-02T00:00:00Z',
+    activeRun: 0,
+    runCount: 0,
+    warnings: [],
+  },
+];
+
+describe('CommandPalette feature search', () => {
+  function installFeatures() {
+    return installAgenticoMock({
+      settings: { ...defaultSettings(), shell: { activeFeatureId: null, sidebarCollapsed: false } },
+      features: FEATURE_ROWS,
+    });
+  }
+
+  it('lists features matching the query by name, with their status and phase', async () => {
+    installFeatures();
+    renderPalette();
+
+    await screen.findByRole('dialog', { name: 'Command palette' });
+    // Features are a search result: an empty query is the command catalogue.
+    expect(screen.queryByRole('region', { name: 'Features' })).toBeNull();
+
+    await userEvent.type(screen.getByLabelText('Search features and commands'), 'revamp');
+    const group = await screen.findByRole('region', { name: 'Features' });
+    const rows = within(group).getAllByRole('option');
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toHaveTextContent('Search revamp');
+    expect(rows[0]).toHaveTextContent('Created · Plan');
+  });
+
+  it('selects the matched feature and closes', async () => {
+    installFeatures();
+    const onRoute = vi.fn();
+    render(
+      <CommandPalette
+        ready
+        routeRequest={{ id: 1, event: { target: 'palette' } }}
+        onRoute={onRoute}
+      />,
+    );
+
+    const palette = await screen.findByRole('dialog', { name: 'Command palette' });
+    await userEvent.type(screen.getByLabelText('Search features and commands'), 'checkout');
+    await userEvent.click(await screen.findByRole('option', { name: /Checkout redesign/ }));
+
+    expect(onRoute).toHaveBeenCalledWith({
+      target: 'select-feature',
+      featureId: 'checkout1234abcd56',
+    });
+    expect(palette).not.toBeInTheDocument();
+  });
+
+  it('puts a prefix match under the cursor so Enter opens it', async () => {
+    installFeatures();
+    const onRoute = vi.fn();
+    render(
+      <CommandPalette
+        ready
+        routeRequest={{ id: 1, event: { target: 'palette' } }}
+        onRoute={onRoute}
+      />,
+    );
+
+    await screen.findByRole('dialog', { name: 'Command palette' });
+    await userEvent.type(screen.getByLabelText('Search features and commands'), 'search');
+    await waitFor(() =>
+      expect(screen.getByRole('option', { selected: true })).toHaveTextContent('Search revamp'),
+    );
+    await userEvent.keyboard('{Enter}');
+
+    expect(onRoute).toHaveBeenCalledWith({
+      target: 'select-feature',
+      featureId: 'search1234abcd5678',
+    });
+  });
+
+  it('reports no matches when neither a feature nor a command matches', async () => {
+    installFeatures();
+    renderPalette();
+
+    await screen.findByRole('dialog', { name: 'Command palette' });
+    await userEvent.type(screen.getByLabelText('Search features and commands'), 'zzzznope');
+    expect(await screen.findByText('No features or commands match.')).toBeInTheDocument();
   });
 });
 
@@ -206,7 +311,7 @@ describe('CommandPalette keyboard selection', () => {
         .getAllByRole('option')
         .filter((option) => !(option as HTMLButtonElement).disabled);
       expect(enabled.length).toBeGreaterThan(3);
-      const input = screen.getByLabelText('Search commands');
+      const input = screen.getByLabelText('Search features and commands');
       input.focus();
       for (let step = 0; step < enabled.length - 1; step += 1) {
         await userEvent.keyboard('{ArrowDown}');

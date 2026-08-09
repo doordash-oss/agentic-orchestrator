@@ -232,13 +232,13 @@ test('packaged attention notifications are private, deduplicated, bounded, passi
     await waitForAttentionItem(handle, 'perm-remember');
     await openPalette(handle);
     const palette = handle.page.getByRole('dialog', { name: 'Command palette' });
-    await palette.getByLabel('Search commands').fill('settings');
-    await expect(palette.getByLabel('Search commands')).toBeFocused();
+    await palette.getByLabel('Search features and commands').fill('settings');
+    await expect(palette.getByLabel('Search features and commands')).toBeFocused();
     await answerPermission(handle, 'perm-remember', 'allow_remember');
     await waitForAttentionItem(handle, 'perm-remember-followup');
     await answerPermission(handle, 'perm-remember-followup', 'allow_once');
     await waitForAttentionItem(handle, 'ask-bundle');
-    await expect(palette.getByLabel('Search commands')).toBeFocused();
+    await expect(palette.getByLabel('Search features and commands')).toBeFocused();
     await handle.page.keyboard.press('Escape');
     await expect(palette).not.toBeVisible();
 

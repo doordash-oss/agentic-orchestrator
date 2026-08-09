@@ -1,6 +1,6 @@
 # Agentic Orchestrator
 
-### Fai un oneshot della moonshot — poi rifallo dieci volte in parallelo.
+### Faites un one-shot de la moonshot — puis recommencez-le dix fois en parallele.
 
 Agentic Orchestrator è un orchestratore di workflow di sviluppo AI che trasforma qualsiasi ingegnere in un moltiplicatore di forza. Descrivi le tue feature, prendi le decisioni di alto livello, e l'AI si occupa del resto — ricerca, pianificazione, implementazione, code review, pull request — tutto in esecuzione concorrente da un singolo terminale.
 
@@ -8,7 +8,7 @@ Agentic Orchestrator è un orchestratore di workflow di sviluppo AI che trasform
 
 <img width="3000" height="1800" alt="agentico-basic-flow-3000x1800" src="https://github.com/user-attachments/assets/b61ccb6e-3b0d-4b29-9b74-ade9a3917e82" />
 
-## Perché Agentic Orchestrator?
+## Pourquoi Agentic Orchestrator ?
 
 La parte difficile della programmazione agentica non è chiedere a un modello di modificare dei file. La parte difficile è arrivare da una richiesta di feature vaga e di alto livello a una PR revisionabile senza perdere il contesto, saltare il lavoro di design, o lasciare che un piano scadente produca un diff enorme. Se lasciato senza gestione, è così che i team ottengono AI slop: codice plausibile prodotto più rapidamente del contesto, dei test e del processo di revisione necessari per renderlo affidabile. Agentic Orchestrator è costruito attorno a questo problema: trasforma un singolo prompt di feature in un workflow di ingegneria duraturo che raccoglie contesto, fa domande, progetta l'approccio, scompone il lavoro, lo implementa, lo verifica, lo revisiona e lo pubblica.
 
@@ -23,7 +23,7 @@ Questo è il vero valore dell'"oneshot": un ingegnere può descrivere una grande
 
 Il design segue i pattern descritti nell'articolo di Anthropic [Building Effective Agents](https://www.anthropic.com/engineering/building-effective-agents): prompt chaining, parallelizzazione, orchestrator-workers e loop evaluator-optimizer. Codifica inoltre il workflow [explore → plan → code](https://code.claude.com/docs/en/best-practices) di Claude Code e le linee guida di OpenAI su [orchestrazione e guardrail](https://openai.com/business/guides-and-resources/a-practical-guide-to-building-ai-agents/) degli agenti.
 
-## Quick Start
+## Demarrage rapide
 
 Usa Homebrew se lo hai; altrimenti prendi il binario precompilato. Compila dal source solo se stai lavorando su agentico stesso.
 
@@ -57,16 +57,16 @@ Al primo avvio, Agentic Orchestrator ti guida attraverso un flusso di benvenuto 
 
 **Tre tasti da ricordare**: `n` (nuova feature), `?` (aiuto), `a` (osserva il lavoro attivo; rispondi, approva o revisiona quando richiesto). Tutto il resto è scopribile dall'overlay di aiuto.
 
-## Prerequisiti
+## Prerequis
 
-### Richiesti
+### Requis
 
 | Tool | Scopo | Installazione |
 |------|---------|-------|
 | **`git`** | Operazioni di worktree, branch, commit e rebase | Preinstallato sulla maggior parte dei sistemi |
 | **CLI `gh`** | Creazione di PR al momento del push e aggiornamento del body delle PR cross-repo durante il Publish | [Documentazione GitHub CLI](https://docs.github.com/en/github-cli/github-cli), poi `gh auth login` |
 
-### CLI dei provider — installane almeno una
+### CLI des fournisseurs — installez-en au moins une
 
 Agentic Orchestrator richiede **almeno una** CLI di provider AI.
 
@@ -78,7 +78,7 @@ Agentic Orchestrator richiede **almeno una** CLI di provider AI.
 
 OpenCode instrada un provider di backend configurato (Anthropic, OpenAI, Google, un modello Ollama locale, e così via) attraverso un'unica CLI. Autenticala con `opencode auth login`, e conferma che sia pronta con `opencode models`. Agentico esegue ogni sessione OpenCode su una configurazione gestita per-sessione e non modifica mai la tua configurazione globale di OpenCode (*global OpenCode configuration*). Attivala esplicitamente con `--providers opencode`, oppure lasciala aggiungere automaticamente quando la sua CLI è installata e autenticata.
 
-### Opzionali
+### Optionnels
 
 | Tool | Scopo | Installazione |
 |------|---------|-------|
@@ -87,9 +87,9 @@ OpenCode instrada un provider di backend configurato (Anthropic, OpenAI, Google,
 
 Dopo aver installato la/le tua/e CLI di provider, conferma che ciascuna sia autenticata — `claude auth status`, `codex login status`, e/o `opencode models` (elenca i modelli solo una volta configurato un provider di backend) — oltre a `gh auth status`, prima di lanciare `agentico`. Un provider la cui CLI è mancante, troppo vecchia, o non ancora autenticata viene filtrato all'avvio con un breve avviso, e l'orchestratore continua con qualunque provider sia pronto.
 
-## Come Funziona
+## Comment ca marche
 
-### Il Ciclo di Vita della Feature
+### Le cycle de vie de la fonctionnalite
 
 Il ciclo di vita dipende dal profilo ed è guidato da checkpoint. Medium inizia dalla pianificazione. Large e Moonshot prima costruiscono il contesto, chiariscono l'intento ed esplorano le opzioni di design. Tutti i profili entrano poi nel loop della roadmap: creare una roadmap, pianificare una fase della roadmap alla volta, implementarla, eseguire il commit degli anchor di fase e continuare finché la fase finale non raggiunge la Final Review.
 
@@ -107,7 +107,7 @@ Il ciclo di vita dipende dal profilo ed è guidato da checkpoint. Medium inizia 
 
 **Pubblicazione** — Se l'auto-publish è abilitato, Agentic Orchestrator esegue il commit, il rebase, il push, crea le PR e inietta automaticamente i link PR cross-repo. Se è abilitata la pubblicazione manuale, la TUI si ferma a `CodeReady` così puoi prima revisionare il diff e la descrizione della PR.
 
-### Profili della Pipeline
+### Profils du pipeline
 
 Quando crei una feature, scegli una profondità di pipeline:
 
@@ -117,7 +117,7 @@ Quando crei una feature, scegli una profondità di pipeline:
 | **Large** | KB → Inquire → Research → Design → loop di roadmap → Final Review → Publish | La maggior parte delle feature complesse (default) |
 | **Moonshot** | Stessa sequenza di fasi di Large, con effort elevato e review dell'implementazione per-iterazione | Modifiche ad alto rischio o altamente ambigue |
 
-### Isolamento dei Worktree
+### Isolation des worktrees
 
 Ogni feature viene eseguita nel proprio worktree git sotto `~/.agentic-orchestrator/worktrees/` (le installazioni legacy continuano a usare `~/.agentic-workflow/worktrees/` finché non si sceglie di aggiornare). Questo significa:
 - Più feature possono lavorare sullo stesso repo contemporaneamente
@@ -125,7 +125,7 @@ Ogni feature viene eseguita nel proprio worktree git sotto `~/.agentic-orchestra
 - La tua copia di lavoro principale resta intatta
 - I worktree vengono rimossi con `c` al termine
 
-### Repository Multipli
+### Depots multiples
 
 Ogni feature ha come target uno o più repository con lo stesso ciclo di vita e la stessa macchina a stati. Quando una feature si estende su più di un repo, Agentic Orchestrator:
 - Crea worktree in ogni repo di destinazione
@@ -135,11 +135,11 @@ Ogni feature ha come target uno o più repository con lo stesso ciclo di vita e 
 
 Quando una feature ha come target un singolo repo, il pannello Repo Progress per-repo, la modale del selettore di ciclo e la tabella di cross-reference delle PR si comprimono — il resto del ciclo di vita è identico.
 
-### Knowledge Base
+### Base de connaissances
 
 Prima di immergersi in una feature, Agentic Orchestrator può costruire una knowledge base per repo — un grafo di documenti strutturato che copre architettura, convenzioni, superficie delle API, dipendenze e metodi di verifica. La KB è cachata e aggiornata in modo incrementale (solo quando HEAD cambia), così le feature successive nello stesso repo partono più rapidamente.
 
-### Gate di Validazione del Piano
+### Controles de validation du plan
 
 I piani sono revisionati da critici AI specializzati prima che inizi l'implementazione:
 
@@ -154,9 +154,9 @@ I piani sono revisionati da critici AI specializzati prima che inizi l'implement
 
 I critici vengono eseguiti in parallelo e producono verdetti indipendenti. Se un critico richiede modifiche, il piano viene rivisto e rivalidato automaticamente. Medium salta i critici di piano ma esegue comunque la Final Review prima della pubblicazione.
 
-## Utilizzo
+## Utilisation
 
-### Dashboard TUI
+### Tableau de bord TUI
 
 Avvia con `agentico`. La dashboard mostra tutte le feature organizzate per stato:
 
@@ -166,7 +166,7 @@ Avvia con `agentico`. La dashboard mostra tutte le feature organizzate per stato
 
 Le feature che richiedono la tua attenzione (permessi in sospeso, richieste di aiuto) mostrano un indicatore di avviso.
 
-### Creare una Feature
+### Creer une fonctionnalite
 
 Premi `n` dalla dashboard per aprire il wizard:
 
@@ -175,7 +175,7 @@ Premi `n` dalla dashboard per aprire il wizard:
 3. **Pipeline** — Scegli Medium, Large o Moonshot e visualizza le opzioni di gate disponibili.
 4. **Review** — Adatta il livello di rischio, i modelli per fase, i checkpoint (revisione dell'inquiry, revisione della ricerca, revisione del design, revisione della roadmap, revisione del piano di fase, pubblicazione manuale), i criteri di uscita. Invia per iniziare.
 
-### Interagire con gli Agenti
+### Interagir avec les agents
 
 **Watch** (`a`) — Apri il lavoro attivo in tempo reale. Lo stesso tasto diventa **Answer**, **Approve** o **Review** quando l'agente ha bisogno di input.
 
@@ -183,7 +183,7 @@ Premi `n` dalla dashboard per aprire il wizard:
 
 **Stop watching** (`Esc/Ctrl+]`) — Torna alla dashboard. L'agente continua a essere in esecuzione.
 
-### Azioni Post-Implementazione
+### Actions post-implementation
 
 Una volta che una feature raggiunge lo stato code-ready o pubblicato:
 
@@ -194,15 +194,15 @@ Una volta che una feature raggiunge lo stato code-ready o pubblicato:
 | `g` | Visualizza e risolvi i commenti di review della PR |
 | `D` | Segna come completata |
 
-### Ask Me Anything
+### Demandez-moi n'importe quoi
 
 Premi `/` ovunque per aprire la chat AI integrata. È una sessione di sola lettura — supportata da qualunque provider selezioni il tuo modello `utilities` (Claude, Codex o OpenCode) — che può spiegare come funziona Agentic Orchestrator, effettuare debug leggendo i log e gli artefatti delle feature, cercare nel codebase e rispondere a domande, senza modificare alcun file.
 
-### Keybinding
+### Raccourcis clavier
 
 > Per il riferimento completo, vedi [docs/keybindings.md](docs/keybindings.md).
 
-## Configurazione
+## Configuration
 
 La configurazione si trova in `~/.agentic-orchestrator/config.yaml` (creata automaticamente al primo avvio). Se esiste già una directory legacy `~/.agentic-workflow/`, viene riutilizzata sul posto così le installazioni esistenti continuano a funzionare senza una copia manuale.
 
@@ -240,7 +240,7 @@ workspace_roots:
   - /home/user/projects      # Analizzata per repo git all'avvio
 ```
 
-### Override dei Modelli
+### Surcharges des modeles
 
 Ogni feature può sovrascrivere i modelli di default durante la creazione tramite il wizard (passo 4). L'editor dei modelli mostra la fase Inquire come **Clarify**, separatamente da **Research**, così il chiarimento dei requisiti e la ricerca sul codebase possono usare modelli diversi. I modelli possono essere specificati con prefissi di provider espliciti (es. `claude:opus[1M]`, `codex:gpt-5.4[272K]`, `opencode:anthropic/claude-sonnet-4-5`) oppure come id semplici risolti rispetto al registro dei provider. Ci sono tre modi in cui una selezione raggiunge OpenCode, e sono distinti:
 
@@ -250,7 +250,7 @@ Ogni feature può sovrascrivere i modelli di default durante la creazione tramit
 
 Usa `agentico --refresh-models` quando una CLI di provider mostra nuovi modelli ma Agentico mostra ancora un catalogo più vecchio. Il refresh esegue una discovery live per tutti i provider pronti, aggiorna la cache con chiave di versione in caso di successo, e ricade sulla cache precedente con un avviso se la discovery fallisce.
 
-### Flag di Avvio
+### Options de demarrage
 
 ```text
 agentico [flags]
@@ -266,7 +266,7 @@ Flags:
   --version, -v                    Show version
 ```
 
-### Aggiornamento
+### Mise a jour
 
 ```text
 agentico update [--check|-n]
@@ -277,7 +277,7 @@ Esegui `agentico update` per aggiornare all'ultima release stabile. Usa
 recente disponibile senza installare nulla; esce con `0` e stampa un
 messaggio di già-aggiornato quando sei sull'ultima release.
 
-## Sviluppo
+## Developpement
 
 ```bash
 # Build
@@ -316,17 +316,17 @@ per unit test. Vedi
 vedi AGENTS.md per il pattern di esecuzione isolata per eseguire una seconda
 istanza senza entrare in collisione con la prima.
 
-## Contribuire
+## Contribuer
 
 Le pull request sono benvenute. Vedi [CONTRIBUTING.md](CONTRIBUTING.md) per il setup di sviluppo, le convenzioni di branch e commit.
 
 I contributi a questo progetto richiedono l'accettazione del DoorDash Contributor License Agreement.
 Vedi [CONTRIBUTOR_LICENSE_AGREEMENT.md](CLA.md).
 
-## Licenza
+## Licence
 
 Agentic Orchestrator è concesso in licenza secondo la [Apache License, Version 2.0](LICENSE.txt).
 
-## Avvisi
+## Avis
 
 Vedi [NOTICE.txt](NOTICE.txt) per i componenti di terze parti e le attribuzioni.

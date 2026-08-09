@@ -76,7 +76,7 @@ Agentic Orchestrator richiede **almeno una** CLI di provider AI.
 | **Codex CLI >= 0.116.0** (`codex`) | Backend per Final Review e per i modelli di review basati su Codex | [Setup di Codex CLI](https://developers.openai.com/codex/cli) oppure `npm i -g @openai/codex@latest` |
 | **OpenCode CLI >= 1.17.9** (`opencode`) | Backend co-equivalente per ogni fase e per la chat; selezionato con `opencode:<backend/model>` (es. `opencode:anthropic/claude-sonnet-4-5`) | [opencode.ai](https://opencode.ai) oppure `curl -fsSL https://opencode.ai/install \| bash` |
 
-OpenCode instrada un provider di backend configurato (Anthropic, OpenAI, Google, un modello Ollama locale, e così via) attraverso un'unica CLI. Autenticala con `opencode auth login`, e conferma che sia pronta con `opencode models`. Agentico esegue ogni sessione OpenCode su una configurazione gestita per-sessione e non modifica mai la tua configurazione globale di OpenCode. Attivala esplicitamente con `--providers opencode`, oppure lasciala aggiungere automaticamente quando la sua CLI è installata e autenticata.
+OpenCode instrada un provider di backend configurato (Anthropic, OpenAI, Google, un modello Ollama locale, e così via) attraverso un'unica CLI. Autenticala con `opencode auth login`, e conferma che sia pronta con `opencode models`. Agentico esegue ogni sessione OpenCode su una configurazione gestita per-sessione e non modifica mai la tua configurazione globale di OpenCode (*global OpenCode configuration*). Attivala esplicitamente con `--providers opencode`, oppure lasciala aggiungere automaticamente quando la sua CLI è installata e autenticata.
 
 ### Opzionali
 
@@ -131,7 +131,7 @@ Ogni feature ha come target uno o più repository con lo stesso ciclo di vita e 
 - Crea worktree in ogni repo di destinazione
 - Costruisce un piano di esecuzione con ordinamento delle dipendenze tra i repo
 - Esegue l'implementazione per-repo (in sequenza o in parallelo in base alle dipendenze)
-- Referenzia automaticamente le PR tra i repo
+- Incrocia automaticamente i riferimenti alle PR tra i repo
 
 Quando una feature ha come target un singolo repo, il pannello Repo Progress per-repo, la modale del selettore di ciclo e la tabella di cross-reference delle PR si comprimono — il resto del ciclo di vita è identico.
 
@@ -170,7 +170,7 @@ Le feature che richiedono la tua attenzione (permessi in sospeso, richieste di a
 
 Premi `n` dalla dashboard per aprire il wizard:
 
-1. **What** — Nomina e descrivi la feature. Supporta l'incolla di immagini (`Ctrl+V`) e l'allegare file (`@`).
+1. **What** — Nomina e descrivi la feature. Supporta l'incolla di immagini (`Ctrl+V`) e l'allegare file (*attaching files*, `@`).
 2. **Where** — Seleziona il/i repo di destinazione. Sfoglia per nuove directory o crea repo al volo.
 3. **Pipeline** — Scegli Medium, Large o Moonshot e visualizza le opzioni di gate disponibili.
 4. **Review** — Adatta il livello di rischio, i modelli per fase, i checkpoint (revisione dell'inquiry, revisione della ricerca, revisione del design, revisione della roadmap, revisione del piano di fase, pubblicazione manuale), i criteri di uscita. Invia per iniziare.
@@ -244,9 +244,9 @@ workspace_roots:
 
 Ogni feature può sovrascrivere i modelli di default durante la creazione tramite il wizard (passo 4). L'editor dei modelli mostra la fase Inquire come **Clarify**, separatamente da **Research**, così il chiarimento dei requisiti e la ricerca sul codebase possono usare modelli diversi. I modelli possono essere specificati con prefissi di provider espliciti (es. `claude:opus[1M]`, `codex:gpt-5.4[272K]`, `opencode:anthropic/claude-sonnet-4-5`) oppure come id semplici risolti rispetto al registro dei provider. Ci sono tre modi in cui una selezione raggiunge OpenCode, e sono distinti:
 
-- Un **alias semplice** come `opus`, `sonnet` o `gpt-5.4` (senza slash) si risolve verso il proprio provider nativo (Claude o Codex) e **mai** verso OpenCode — OpenCode contribuisce solo id di backend in forma con slash.
+- Un **alias semplice** (*plain alias*) come `opus`, `sonnet` o `gpt-5.4` (senza slash) si risolve verso il proprio provider nativo (Claude o Codex) e **mai** verso OpenCode — OpenCode contribuisce solo id di backend in forma con slash (*bare slash-form*).
 - Il prefisso esplicito **`opencode:<provider>/<model>`** instrada sempre verso OpenCode, passando l'id di backend direttamente (funziona anche per un backend che OpenCode scopre ma che Agentico non pre-elenca).
-- Un **id di backend in forma con slash semplice** come `anthropic/claude-sonnet-4-5` (senza prefisso) si risolve verso OpenCode quando corrisponde al catalogo di OpenCode. Questa è la forma che Agentico persiste per i default per-fase indipendenti dal provider quando OpenCode è l'unico provider pronto, quindi un modello OpenCode **può** essere un default senza alcun prefisso `opencode:` nella configurazione.
+- Un **id di backend in forma con slash semplice** (*bare slash-form* backend id) come `anthropic/claude-sonnet-4-5` (senza prefisso) si risolve verso OpenCode quando corrisponde al catalogo di OpenCode. Questa è la forma che Agentico persiste per i default per-fase indipendenti dal provider (*provider-neutral per-phase defaults*) quando OpenCode è l'unico provider pronto, quindi un modello OpenCode **può** essere un default senza alcun prefisso `opencode:` nella configurazione.
 
 Usa `agentico --refresh-models` quando una CLI di provider mostra nuovi modelli ma Agentico mostra ancora un catalogo più vecchio. Il refresh esegue una discovery live per tutti i provider pronti, aggiorna la cache con chiave di versione in caso di successo, e ricade sulla cache precedente con un avviso se la discovery fallisce.
 

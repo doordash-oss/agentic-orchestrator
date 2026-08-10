@@ -17,7 +17,6 @@ export type ActionResult =
       message: string;
       remediation?: string;
       reconciling?: boolean;
-      reconciled?: boolean;
     };
 
 export const STATUS_LABELS: Record<string, string> = {
@@ -139,35 +138,17 @@ export function useCompletionAction() {
         const parsed = parseIpcError(err);
         if (parsed.code === E_REQUEST_TIMEOUT) {
           // The server keeps working; repoll so the true outcome surfaces.
+          try {
+            if (refresh) await refresh();
+          } catch {
+            // The cockpit converges through its own invalidation path.
+          }
           setResult({
             ok: false,
             code: parsed.code,
             message: parsed.message,
             ...(parsed.remediation === undefined ? {} : { remediation: parsed.remediation }),
             reconciling: true,
-          });
-          let refreshed = true;
-          try {
-            if (refresh) await refresh();
-          } catch {
-            // The cockpit converges through its own invalidation path.
-            refreshed = false;
-          }
-          if (!refreshed) {
-            setResult({
-              ok: false,
-              code: parsed.code,
-              message: parsed.message,
-              ...(parsed.remediation === undefined ? {} : { remediation: parsed.remediation }),
-            });
-            return false;
-          }
-          setResult({
-            ok: false,
-            code: parsed.code,
-            message: 'Publish state refreshed. Review the latest state before continuing.',
-            ...(parsed.remediation === undefined ? {} : { remediation: parsed.remediation }),
-            reconciled: true,
           });
           return false;
         }
@@ -223,7 +204,7 @@ export function ResultBox({ result }: { result: ActionResult | null }) {
       </div>
     );
   }
-  if (result.reconciling === true || result.reconciled === true) {
+  if (result.reconciling === true) {
     return (
       <div
         className="completion-workspace__result completion-workspace__result--reconciling"
@@ -233,9 +214,7 @@ export function ResultBox({ result }: { result: ActionResult | null }) {
           {'⟳'}
         </span>
         <span className="completion-workspace__result-text">
-          {result.reconciling === true
-            ? `still running on the server — reconciling: ${result.message}`
-            : result.message}
+          still running on the server — reconciling: {result.message}
         </span>
       </div>
     );

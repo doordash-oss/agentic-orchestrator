@@ -264,7 +264,7 @@ describe('PublishModal', () => {
     const dispatchAction = vi.fn().mockResolvedValue(result);
     render(<PublishModal {...props({ dispatchAction })} />);
 
-    expect(screen.getByRole('button', { name: 'Publish' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Publish' })).toBeEnabled();
     const details = screen.getByRole('region', { name: 'Pull request details' });
     expect(within(details).getByRole('button', { name: 'Generate narrative' })).toBeVisible();
     await user.type(screen.getByLabelText('PR title'), 'Ship reviewed work');
@@ -281,6 +281,67 @@ describe('PublishModal', () => {
         body: 'A compact description.',
       },
     });
+  });
+
+  it('validates a blank title on an actual Publish click and moves focus to the field', async () => {
+    const user = userEvent.setup();
+    render(<PublishModal {...props()} />);
+
+    const publish = screen.getByRole('button', { name: 'Publish' });
+    expect(publish).toBeEnabled();
+    await user.click(publish);
+
+    expect(screen.getByLabelText('PR title')).toHaveFocus();
+    expect(screen.getByLabelText('PR title')).toHaveAttribute('aria-invalid', 'true');
+    expect(screen.getByText('Add a title to create the pull request.')).toBeVisible();
+  });
+
+  it('moves focus to a narrative-generation failure notice', async () => {
+    const user = userEvent.setup();
+    render(
+      <PublishModal
+        {...props({
+          generatePublishDescription: vi.fn().mockRejectedValue(new Error('generation failed')),
+        })}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Generate narrative' }));
+    expect(await screen.findByRole('alert')).toHaveFocus();
+  });
+
+  it('keeps the publish mutation locked after a swallowed refresh following a timeout', async () => {
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+    const dispatchAction = vi
+      .fn()
+      .mockRejectedValue(new Error('E_REQUEST_TIMEOUT: publish did not answer before the bound'));
+    render(
+      <PublishModal
+        {...props({
+          dispatchAction,
+          onClose,
+          // Completion refresh swallows an IPC fetch failure and resolves, just
+          // as the production preflight hook does.
+          onDispatched: vi.fn().mockResolvedValue(undefined),
+          preflight: {
+            featureId,
+            sourceRevision: 'rev-1',
+            canMarkDone: true,
+            repos: [
+              { repo: 'api', publishable: true, touched: true, status: 'unpublished_changes' },
+            ],
+          },
+        })}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Publish updates' }));
+    expect(await screen.findByRole('status')).toHaveTextContent('may still be running');
+    expect(screen.getByRole('button', { name: 'Reconciling…' })).toBeDisabled();
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(onClose).toHaveBeenCalledOnce();
+    expect(dispatchAction).toHaveBeenCalledOnce();
   });
 
   it('marks a blank required title invalid after local validation', async () => {
@@ -385,7 +446,7 @@ describe('PublishModal', () => {
     );
   });
 
-  it('announces timeout reconciliation and lets the user dismiss after refresh completes', async () => {
+  it('announces a timeout without claiming completion and lets the user dismiss after refresh', async () => {
     const user = userEvent.setup();
     let finishRefresh: (() => void) | undefined;
     const onDispatched = vi.fn(
@@ -417,17 +478,21 @@ describe('PublishModal', () => {
     );
 
     await user.click(screen.getByRole('button', { name: 'Publish updates' }));
-    expect(await screen.findByRole('status')).toHaveTextContent('still running on the server');
+    expect(await screen.findByRole('status')).toHaveTextContent(
+      'Refreshing the latest publish state',
+    );
     await user.click(screen.getByRole('button', { name: 'Cancel' }));
     expect(onClose).not.toHaveBeenCalled();
 
     finishRefresh?.();
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Cancel' })).toBeEnabled());
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Reconciling…' })).toBeDisabled(),
+    );
     await user.click(screen.getByRole('button', { name: 'Cancel' }));
     expect(onClose).toHaveBeenCalledOnce();
   });
 
-  it('keeps a failed reconciliation actionable instead of claiming the state refreshed', async () => {
+  it('keeps a timeout locked when its refresh callback rejects', async () => {
     const user = userEvent.setup();
     const dispatchAction = vi
       .fn()
@@ -450,10 +515,8 @@ describe('PublishModal', () => {
     );
 
     await user.click(screen.getByRole('button', { name: 'Publish updates' }));
-    expect(await screen.findByRole('alert')).toHaveTextContent(
-      "Agentico couldn't prepare this publish.",
-    );
-    expect(screen.getByRole('alert')).not.toHaveTextContent('Publish state refreshed.');
+    expect(await screen.findByRole('status')).toHaveTextContent('may still be running');
+    expect(screen.getByRole('button', { name: 'Reconciling…' })).toBeDisabled();
   });
 
   it('groups repository metadata and the pull-request link in the manifest row', () => {

@@ -4,14 +4,10 @@ import type {
   FeatureActionResult,
   PublishFeatureActionRequest,
 } from '../../../../shared/ipc';
+import { E_REQUEST_TIMEOUT } from '../../../../shared/errors';
 import { useModalDismiss } from '../../components/useModalDismiss';
 import { parseIpcError } from '../../wizard/ipcError';
-import {
-  PrLinkButton,
-  useCompletionAction,
-  isEligibleForPublish,
-  type ActionResult,
-} from './completionShared';
+import { PrLinkButton, isEligibleForPublish, type ActionResult } from './completionShared';
 import { UNPUBLISHED_CHANGES, pendingDeliveryDetail } from './pendingDelivery';
 
 const PUBLISH_FAILURE_COPY: Record<string, { title: string; next: string }> = {
@@ -73,13 +69,6 @@ function PublishStatusNotice({ result }: { result: ActionResult | null }) {
   if (result.reconciling) {
     return (
       <div className="completion-publish-sheet__status" role="status">
-        Publish is still running on the server. Refreshing the latest publish state…
-      </div>
-    );
-  }
-  if (result.reconciled) {
-    return (
-      <div className="completion-publish-sheet__status" role="status">
         {result.message}
       </div>
     );
@@ -112,7 +101,9 @@ export function PublishModal({
   const [titleVisited, setTitleVisited] = useState(false);
   const [generatingDescription, setGeneratingDescription] = useState(false);
   const [publishGenResult, setPublishGenResult] = useState<ActionResult | null>(null);
-  const publishAction = useCompletionAction();
+  const [publishBusy, setPublishBusy] = useState(false);
+  const [publishLocked, setPublishLocked] = useState(false);
+  const [publishResult, setPublishResult] = useState<ActionResult | null>(null);
 
   const eligibleRepos = useMemo(() => preflight.repos.filter(isEligibleForPublish), [preflight]);
   const unpublishedRepos = useMemo(
@@ -148,14 +139,13 @@ export function PublishModal({
   const canPublish =
     preflight.sourceRevision.trim() !== '' &&
     publishRepos.size > 0 &&
-    (!titleRequired || publishTitle.trim() !== '') &&
     (dirtySelected.length === 0 || commitConfirmed) &&
-    !publishAction.busy &&
-    !publishAction.reconciling;
+    !publishBusy &&
+    !publishLocked;
 
   const requestClose = useCallback(() => {
-    if (!publishAction.busy && !publishAction.reconciling) onClose();
-  }, [onClose, publishAction.busy, publishAction.reconciling]);
+    if (!publishBusy) onClose();
+  }, [onClose, publishBusy]);
   useModalDismiss(dialogRef, requestClose);
 
   useEffect(() => {
@@ -169,14 +159,12 @@ export function PublishModal({
 
   useEffect(() => {
     if (
-      publishAction.result !== null &&
-      !publishAction.result.ok &&
-      !publishAction.result.reconciling &&
-      !publishAction.result.reconciled
+      (publishResult !== null && !publishResult.ok && !publishResult.reconciling) ||
+      (publishGenResult !== null && !publishGenResult.ok)
     ) {
       failureRef.current?.focus();
     }
-  }, [publishAction.result]);
+  }, [publishGenResult, publishResult]);
 
   const togglePublishRepo = useCallback((repo: string) => {
     setPublishRepos((previous) => {
@@ -225,19 +213,51 @@ export function PublishModal({
         ...(publishBody.trim() === '' ? {} : { body: publishBody }),
       },
     };
-    await publishAction.run(
-      () => dispatchAction(request).then((result) => result.result),
-      async () => {
-        await onDispatched();
-      },
-    );
+    setPublishBusy(true);
+    setPublishResult(null);
+    try {
+      const result = await dispatchAction(request);
+      await onDispatched();
+      setPublishResult({ ok: true, result: result.result });
+    } catch (error) {
+      const parsed = parseIpcError(error);
+      if (parsed.code === E_REQUEST_TIMEOUT) {
+        setPublishResult({
+          ok: false,
+          code: parsed.code,
+          message: 'Publish may still be running. Refreshing the latest publish state…',
+          reconciling: true,
+        });
+        try {
+          await onDispatched();
+        } catch {
+          // Refresh hooks can deliberately absorb their own transport errors.
+        }
+        setPublishLocked(true);
+        setPublishResult({
+          ok: false,
+          code: parsed.code,
+          message:
+            'Publish may still be running. Close this sheet and refresh the feature before publishing again.',
+          reconciling: true,
+        });
+      } else {
+        setPublishResult({
+          ok: false,
+          code: parsed.code,
+          message: parsed.message,
+          ...(parsed.remediation === undefined ? {} : { remediation: parsed.remediation }),
+        });
+      }
+    } finally {
+      setPublishBusy(false);
+    }
   }, [
     canPublish,
     dispatchAction,
     featureId,
     onDispatched,
     preflight.sourceRevision,
-    publishAction,
     publishBody,
     publishRepos,
     publishTitle,
@@ -381,10 +401,10 @@ export function PublishModal({
                 </label>
               </div>
             ) : null}
-            <PublishStatusNotice result={publishAction.result} />
-            <PublishFailureNotice result={publishAction.result} noticeRef={failureRef} />
-            {publishGenResult !== null && publishAction.result === null ? (
-              <PublishFailureNotice result={publishGenResult} />
+            <PublishStatusNotice result={publishResult} />
+            <PublishFailureNotice result={publishResult} noticeRef={failureRef} />
+            {publishGenResult !== null && publishResult === null ? (
+              <PublishFailureNotice result={publishGenResult} noticeRef={failureRef} />
             ) : null}
           </div>
         </div>
@@ -398,9 +418,9 @@ export function PublishModal({
             disabled={!canPublish}
             onClick={() => void handlePublish()}
           >
-            {publishAction.busy
+            {publishBusy
               ? 'Publishing…'
-              : publishAction.reconciling
+              : publishLocked
                 ? 'Reconciling…'
                 : titleRequired
                   ? 'Publish'

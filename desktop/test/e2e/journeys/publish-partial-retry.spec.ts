@@ -227,7 +227,9 @@ test('packaged publish existing pull-request updates omit title and narrative fi
       );
     }
 
-    transcript.section('Seed a published pull-request branch, then add an unpublished local commit');
+    transcript.section(
+      'Seed a published pull-request branch, then add an unpublished local commit',
+    );
     seeded = seedExistingPRUpdateFixture(world, featureId, existingPrRepo);
     transcript.json('seeded worktrees', seeded.worktrees);
 
@@ -244,12 +246,16 @@ test('packaged publish existing pull-request updates omit title and narrative fi
     await expect(publishModal.getByRole('checkbox', { name: existingPrRepo })).toBeChecked();
     await expect(publishModal.getByLabel('PR title')).toHaveCount(0);
     await expect(publishModal.getByLabel('PR body')).toHaveCount(0);
-    await expect(publishModal.getByRole('button', { name: 'Generate PR narrative' })).toHaveCount(0);
+    await expect(publishModal.getByRole('button', { name: 'Generate PR narrative' })).toHaveCount(
+      0,
+    );
     await expect(publishModal.getByRole('button', { name: 'Generate narrative' })).toHaveCount(0);
     await publishModal.getByRole('button', { name: 'Publish updates' }).click();
     await expect(publishModal.getByRole('status')).toContainText(/published/i);
     assertPublishedBranch(seeded, existingPrRepo);
-    transcript.step('existing pull-request branch was updated without PR title or narrative controls');
+    transcript.step(
+      'existing pull-request branch was updated without PR title or narrative controls',
+    );
 
     persistAppLogs(handle, 'publish-existing-pr-update-app-server');
     transcript.write(testInfo);

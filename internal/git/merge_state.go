@@ -40,10 +40,10 @@ func MergeInProgress(worktreePath string) bool {
 // worktreePath that contain literal git conflict marker lines. The scan
 // matches the `git grep`-based contract the generated rebase-child prompt and
 // exit criteria already impose: the three conflict markers (start, middle
-// separator, end) searched as fixed strings. It is a literal marker scan, not
-// an unmerged-index check — after the transaction commits child changes,
-// `git diff --name-only --diff-filter=U` is vacuous, so only a content scan
-// can prove a worktree is free of markers.
+// separator, end) searched as anchored line expressions. It is a literal
+// marker scan, not an unmerged-index check — after the transaction commits
+// child changes, `git diff --name-only --diff-filter=U` is vacuous, so only a
+// content scan can prove a worktree is free of markers.
 //
 // The marker patterns are constructed from split strings so this source file
 // does not itself contain the literal marker sequences and false-positive on
@@ -55,9 +55,9 @@ func MergeInProgress(worktreePath string) bool {
 func ConflictMarkerFiles(worktreePath string) ([]string, error) {
 	// Construct the marker patterns from split strings so this source file
 	// does not match its own scan.
-	start := "<" + "<<<<" + "<< "
-	mid := "=" + "=====" + "="
-	end := ">" + ">>>>" + ">> "
+	start := "^" + "<" + "<<<<" + "<< "
+	mid := "^" + "=" + "=====" + "=$"
+	end := "^" + ">" + ">>>>" + ">> "
 
 	cmd := exec.Command("git", "-C", worktreePath, "grep", "-l",
 		"-e", start, "-e", mid, "-e", end, "--", ".")

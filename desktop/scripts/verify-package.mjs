@@ -49,8 +49,12 @@ import {
   validateBuildIdentity,
 } from './lib/identity.mjs';
 import { auditFuseWire } from './lib/fuse-policy.mjs';
-import { findDisallowedFontAssets, unpackedExecutablePath } from './lib/package-layout.mjs';
-import { resolvePackageTarget, selectPackageArtifact } from './lib/release-artifacts.mjs';
+import { findDisallowedFontAssets } from './lib/package-layout.mjs';
+import {
+  createPackageVerificationPlan,
+  packageIdentityTargetError,
+} from './lib/package-verification.mjs';
+import { resolvePackageTarget } from './lib/release-artifacts.mjs';
 
 const desktopDir = dirname(dirname(fileURLToPath(import.meta.url)));
 const distDir = join(desktopDir, 'dist');
@@ -66,17 +70,6 @@ class VerificationFailure extends Error {}
 
 function fail(message) {
   throw new VerificationFailure(message);
-}
-
-function findArtifact(format) {
-  try {
-    return join(distDir, selectPackageArtifact(readdirSync(distDir), packageTarget, format));
-  } catch (error) {
-    fail(
-      `${error instanceof Error ? error.message : String(error)} in ${distDir}; ` +
-        'run `npm run package:build` first',
-    );
-  }
 }
 
 /** Assert the app payload inside an extracted/mounted resources directory. */
@@ -125,11 +118,9 @@ function verifyResources(resourcesDir, { expectUniversalBinary, target }) {
   if (!validation.ok) {
     fail(`build-identity.json is invalid:\n  ${validation.errors.join('\n  ')}`);
   }
-  if (identity.os !== target.os) {
-    fail(`build-identity.json os=${identity.os} does not match package target ${target.os}`);
-  }
-  if (identity.arch !== target.arch) {
-    fail(`build-identity.json arch=${identity.arch}, expected ${target.arch} for package target`);
+  const identityTargetError = packageIdentityTargetError(identity, target);
+  if (identityTargetError !== null) {
+    fail(identityTargetError);
   }
 
   // 3. Bundled server binary: executable and matching the identity.
@@ -270,16 +261,6 @@ async function verifyDeb(debPath) {
   }
 }
 
-function unpackedExecutable() {
-  try {
-    return unpackedExecutablePath(desktopDir, process.platform, packageTarget.arch);
-  } catch (error) {
-    fail(
-      error instanceof Error ? error.message : `unsupported verification host: ${process.platform}`,
-    );
-  }
-}
-
 async function verifyUnpackedApp(executablePath) {
   if (!existsSync(executablePath)) {
     fail(`expected unpacked app for packaged E2E at ${executablePath}`);
@@ -326,22 +307,35 @@ async function main() {
   const startedAt = Date.now();
   const verified = [];
   let identity;
-  const unpackedApp = unpackedExecutable();
+  let verificationPlan;
+  try {
+    verificationPlan = createPackageVerificationPlan({
+      desktopDir,
+      target: packageTarget,
+      files: unpackedOnly ? undefined : readdirSync(distDir),
+    });
+  } catch (error) {
+    fail(
+      `${error instanceof Error ? error.message : String(error)} in ${distDir}; ` +
+        'run `npm run package:build` first',
+    );
+  }
+  const unpackedApp = verificationPlan.unpackedApp;
   if (unpackedOnly) {
     console.log(`verify-package: inspecting unpacked app ${unpackedApp}`);
     identity = await verifyUnpackedApp(unpackedApp);
     verified.push({ target: 'unpacked', path: unpackedApp });
   } else if (process.platform === 'darwin') {
-    const dmg = findArtifact('dmg');
+    const dmg = verificationPlan.artifacts[0].path;
     console.log(`verify-package: inspecting ${dmg}`);
     identity = await verifyDmg(dmg);
     verified.push({ target: 'dmg', path: dmg });
   } else if (process.platform === 'linux') {
-    const appImage = findArtifact('AppImage');
+    const appImage = verificationPlan.artifacts[0].path;
     console.log(`verify-package: inspecting ${appImage}`);
     identity = await verifyAppImage(appImage);
     verified.push({ target: 'AppImage', path: appImage });
-    const deb = findArtifact('deb');
+    const deb = verificationPlan.artifacts[1].path;
     console.log(`verify-package: inspecting ${deb}`);
     identity = await verifyDeb(deb);
     verified.push({ target: 'deb', path: deb });
@@ -365,11 +359,7 @@ async function main() {
     identity,
   };
   const receipt = `${JSON.stringify(manifest, null, 2)}\n`;
-  const compatibilityReceipt = join(distDir, 'package-verification.json');
-  const targetReceipt = join(
-    distDir,
-    `package-verification-${packageTarget.os}-${packageTarget.arch}.json`,
-  );
+  const { compatibility: compatibilityReceipt, target: targetReceipt } = verificationPlan.receipts;
   writeFileSync(compatibilityReceipt, receipt);
   writeFileSync(targetReceipt, receipt);
   const seconds = ((Date.now() - startedAt) / 1000).toFixed(1);

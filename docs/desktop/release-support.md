@@ -68,12 +68,15 @@ package-manager-managed: the app presents verified package-manager guidance
 and the trusted release page, rather than replacing a DEB installation itself.
 
 If a macOS or Linux build, package receipt, identity, or inventory check fails,
-`make release` stops before GoReleaser and creates no GitHub release. If
-GoReleaser has already created a partial release, or the post-publication
-manifest check fails, treat it as partial publication: remove the GitHub
-release and remote tag, fix the release configuration or signing material, and
-rerun while retaining the local tag. Homebrew publication is last; a rejected
-tap push can be retried independently.
+`make release` stops before GoReleaser and creates no GitHub release. A failure
+during GoReleaser, or a failed post-publication manifest check, can leave a
+partial GitHub release and CLI cask: remove the GitHub release and remote tag,
+fix the release configuration or signing material, and rerun while retaining
+the local tag. The final `agentico-desktop` cask publication is different: if
+the signed manifest passed and only
+`node desktop/scripts/publish-desktop-cask.mjs` fails, rerun that idempotent
+desktop-cask publisher alone; do not remove the already-complete release or
+CLI cask.
 
 ### Release signing key
 
@@ -160,11 +163,13 @@ app-owned diagnostics directory and does not touch runtime workflow state.
 ```bash
 npm run audit:release --workspace desktop
 npm run test:performance --workspace desktop
-npm run release:credentials:check --workspace desktop
 npm run release:verify --workspace desktop
 ```
 
 `release:verify` performs local static release checks. The production release
 gate is the single `make release` command above: it builds all five desktop
 artifacts, verifies their identities before publication, and verifies the
-signed checksum manifest afterward.
+signed checksum manifest afterward. The release credential that matters to the
+updater is the local Ed25519 key described in [Release signing key](#release-signing-key);
+the legacy `release:credentials:check` script is not a prerequisite for the
+current ad-hoc macOS distribution.

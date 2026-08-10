@@ -79,7 +79,7 @@ export function verifyReleaseArtifacts({
     ok: errors.length === 0,
     errors,
   };
-  writeEvidence(desktopDist, evidence);
+  safelyWriteEvidence(desktopDist, evidence);
   return evidence;
 }
 
@@ -136,32 +136,50 @@ function writeEvidence(distDir, evidence) {
   );
 }
 
+function safelyWriteEvidence(distDir, evidence) {
+  try {
+    writeEvidence(distDir, evidence);
+  } catch (error) {
+    evidence.errors.push(
+      `could not write release artifact verification evidence: ${errorMessage(error)}`,
+    );
+    evidence.ok = false;
+  }
+}
+
 function errorMessage(error) {
   const stderr = error?.stderr?.toString().trim();
   return stderr || (error instanceof Error ? error.message : String(error));
 }
 
-function git(...args) {
+function git(_cwd, ...args) {
   return execFileSync('git', args, { cwd: repoRoot, encoding: 'utf8' }).trim();
 }
 
-function main() {
-  const [mode, ...flags] = process.argv.slice(2);
+/** Resolve CLI arguments into a status and printable result without exiting. */
+export function runReleaseArtifactCli({
+  args = process.argv.slice(2),
+  desktopDist = DESKTOP_DIST,
+  gitCommand = git,
+} = {}) {
+  const [mode, ...flags] = args;
   const linuxOnly = flags.length === 1 && flags[0] === '--linux-only';
   if (
     !['packages', 'manifest'].includes(mode) ||
     (flags.length > 0 && !linuxOnly) ||
     (linuxOnly && mode !== 'packages')
   ) {
-    console.error('usage: verify-release-artifacts.mjs packages [--linux-only]|manifest');
-    process.exit(1);
+    return {
+      status: 1,
+      message: 'usage: verify-release-artifacts.mjs packages [--linux-only]|manifest',
+    };
   }
 
   let tag;
   let revision;
   try {
-    tag = git('describe', '--tags', '--exact-match');
-    revision = git('rev-parse', 'HEAD');
+    tag = gitCommand(repoRoot, 'describe', '--tags', '--exact-match');
+    revision = gitCommand(repoRoot, 'rev-parse', 'HEAD');
   } catch (error) {
     const evidence = {
       verified_at: new Date().toISOString(),
@@ -170,17 +188,30 @@ function main() {
       ok: false,
       errors: [`could not resolve exact release tag and revision: ${errorMessage(error)}`],
     };
-    writeEvidence(DESKTOP_DIST, evidence);
-    console.error(`verify-release-artifacts: FAIL:\n  ${evidence.errors.join('\n  ')}`);
-    process.exit(1);
+    safelyWriteEvidence(desktopDist, evidence);
+    return {
+      status: 1,
+      message: `verify-release-artifacts: FAIL:\n  ${evidence.errors.join('\n  ')}`,
+    };
   }
 
-  const evidence = verifyReleaseArtifacts({ mode, linuxOnly, tag, revision });
+  const evidence = verifyReleaseArtifacts({ mode, linuxOnly, tag, revision, desktopDist });
   if (!evidence.ok) {
-    console.error(`verify-release-artifacts: FAIL:\n  ${evidence.errors.join('\n  ')}`);
+    return {
+      status: 1,
+      message: `verify-release-artifacts: FAIL:\n  ${evidence.errors.join('\n  ')}`,
+    };
+  }
+  return { status: 0, message: `verify-release-artifacts: ${mode} OK` };
+}
+
+function main() {
+  const result = runReleaseArtifactCli();
+  if (result.status !== 0) {
+    console.error(result.message);
     process.exit(1);
   }
-  console.log(`verify-release-artifacts: ${mode} OK`);
+  console.log(result.message);
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) main();

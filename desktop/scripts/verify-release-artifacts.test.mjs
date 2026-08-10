@@ -8,14 +8,19 @@ import {
   validateArtifactInventory,
   validateChecksumManifest,
 } from './lib/release-artifacts.mjs';
-import { verifyReleaseArtifacts } from './verify-release-artifacts.mjs';
+import { runReleaseArtifactCli, verifyReleaseArtifacts } from './verify-release-artifacts.mjs';
 
 const TAG = 'v0.150.0';
 const REVISION = '1234567890abcdef1234567890abcdef12345678';
 
 function receipt(os, arch, artifacts) {
+  const paths = {
+    dmg: 'Agentico-mac-universal.dmg',
+    AppImage: `Agentico-${arch}.AppImage`,
+    deb: `agentico_0.150.0_${arch === 'x64' ? 'amd64' : arch}.deb`,
+  };
   return {
-    artifacts: artifacts.map((target) => ({ target, path: `/tmp/${target}` })),
+    artifacts: artifacts.map((target) => ({ target, path: `/tmp/${paths[target]}` })),
     identity: {
       desktop_version: '0.150.0',
       server_version: TAG,
@@ -100,6 +105,39 @@ describe('validateArtifactInventory', () => {
 
     expect(validateArtifactInventory(fixture)).toContain(
       'missing verification receipt: package-verification-darwin-universal.json',
+    );
+  });
+
+  it('rejects receipt entries that are swapped between Linux targets', () => {
+    const fixture = completeV0150Fixture();
+    const x64 = fixture.receipts['package-verification-linux-x64.json'].artifacts;
+    const arm64 = fixture.receipts['package-verification-linux-arm64.json'].artifacts;
+    for (let index = 0; index < x64.length; index += 1) {
+      [x64[index].path, arm64[index].path] = [arm64[index].path, x64[index].path];
+    }
+
+    expect(validateArtifactInventory(fixture)).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('package-verification-linux-x64.json AppImage path='),
+        expect.stringContaining('package-verification-linux-arm64.json deb path='),
+      ]),
+    );
+  });
+
+  it('requires exactly one correctly formatted receipt entry for each artifact', () => {
+    const fixture = completeV0150Fixture();
+    const receipt = fixture.receipts['package-verification-linux-x64.json'];
+    receipt.artifacts = [
+      { target: 'AppImage', path: '/tmp/agentico_0.150.0_amd64.deb' },
+      { target: 'AppImage', path: '/tmp/Agentico-x64.AppImage' },
+      { target: 'dmg', path: '/tmp/Agentico-mac-universal.dmg' },
+    ];
+
+    expect(validateArtifactInventory(fixture)).toEqual(
+      expect.arrayContaining([
+        'package-verification-linux-x64.json has 2 AppImage verification entries, expected exactly 1',
+        'package-verification-linux-x64.json does not verify deb',
+      ]),
     );
   });
 
@@ -210,5 +248,62 @@ describe('verifyReleaseArtifacts', () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  it('preserves package failures when writing evidence itself fails', () => {
+    const root = mkdtempSync(join(tmpdir(), 'agentico-release-artifacts-'));
+    const invalidDesktopDist = join(root, 'not-a-directory');
+    writeFileSync(invalidDesktopDist, 'not a directory\n');
+
+    try {
+      const result = verifyReleaseArtifacts({
+        mode: 'packages',
+        tag: TAG,
+        revision: REVISION,
+        desktopDist: invalidDesktopDist,
+      });
+
+      expect(result).toMatchObject({ ok: false });
+      expect(result.errors).toEqual(
+        expect.arrayContaining([
+          expect.stringContaining('could not list desktop dist directory'),
+          'missing desktop artifact: Agentico-mac-universal.dmg',
+          expect.stringContaining('could not write release artifact verification evidence'),
+        ]),
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('reports both inventory and evidence-write failures from the CLI boundary', () => {
+    const root = mkdtempSync(join(tmpdir(), 'agentico-release-artifacts-'));
+    const invalidDesktopDist = join(root, 'not-a-directory');
+    writeFileSync(invalidDesktopDist, 'not a directory\n');
+
+    try {
+      const result = runReleaseArtifactCli({
+        args: ['packages'],
+        desktopDist: invalidDesktopDist,
+        gitCommand: (_cwd, ...args) => {
+          if (args.join(' ') === 'describe --tags --exact-match') return TAG;
+          if (args.join(' ') === 'rev-parse HEAD') return REVISION;
+          throw new Error(`unexpected Git command: ${args.join(' ')}`);
+        },
+      });
+
+      expect(result.status).toBe(1);
+      expect(result.message).toContain('missing desktop artifact: Agentico-mac-universal.dmg');
+      expect(result.message).toContain('could not write release artifact verification evidence');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects invalid CLI flags without resolving release metadata', () => {
+    expect(runReleaseArtifactCli({ args: ['manifest', '--linux-only'] })).toEqual({
+      status: 1,
+      message: 'usage: verify-release-artifacts.mjs packages [--linux-only]|manifest',
+    });
   });
 });

@@ -1,4 +1,5 @@
 // Pure release artifact and Docker-build contract shared by local release scripts.
+import { basename, resolve } from 'node:path';
 
 export const LINUX_BUILDER_IMAGE =
   'electronuserland/builder:22@sha256:b76a82a6c6a8a1dea1abbc93e394f54316744824b64e6a50d959f1e3ba8951a9';
@@ -214,9 +215,9 @@ function receiptTargets(artifacts) {
       os: artifact.os,
       arch: artifact.arch,
       receipt: `package-verification-${artifact.os}-${artifact.arch}.json`,
-      formats: [],
+      artifacts: [],
     };
-    existing.formats.push(artifact.format);
+    existing.artifacts.push(artifact);
     targets.set(key, existing);
   }
   return targets.values();
@@ -252,9 +253,25 @@ function validateReceipt({ receiptsByName, target, tag, revision, errors }) {
   }
 
   const verified = Array.isArray(receipt.artifacts) ? receipt.artifacts : [];
-  for (const format of target.formats) {
-    if (!verified.some((artifact) => artifact?.target === format)) {
-      errors.push(`${target.receipt} does not verify ${format}`);
+  for (const expectedArtifact of target.artifacts) {
+    const matches = verified.filter((artifact) => artifact?.target === expectedArtifact.format);
+    if (matches.length === 0) {
+      errors.push(`${target.receipt} does not verify ${expectedArtifact.format}`);
+      continue;
+    }
+    if (matches.length !== 1) {
+      errors.push(
+        `${target.receipt} has ${matches.length} ${expectedArtifact.format} verification entries, ` +
+          'expected exactly 1',
+      );
+      continue;
+    }
+    const path = matches[0].path;
+    if (typeof path !== 'string' || basename(resolve(path)) !== expectedArtifact.name) {
+      errors.push(
+        `${target.receipt} ${expectedArtifact.format} path=${path}, ` +
+          `expected basename ${expectedArtifact.name}`,
+      );
     }
   }
 }

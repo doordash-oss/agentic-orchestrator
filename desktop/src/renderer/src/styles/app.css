@@ -7303,10 +7303,10 @@ body {
   font: 700 12px var(--bench-font-text);
   cursor: pointer;
 }
-.completion-workspace__diff
-  .completion-workspace__publish
-  .completion-workspace__merge
-  .completion-workspace__done {
+.completion-workspace__diff,
+.completion-workspace__publish,
+.completion-workspace__merge,
+.completion-workspace__done {
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
@@ -7314,19 +7314,23 @@ body {
   width: 100%;
 }
 
-.completion-workspace__publish .completion-workspace__merge .completion-workspace__done {
+.completion-workspace__publish,
+.completion-workspace__merge,
+.completion-workspace__done {
   margin-inline: auto;
   max-width: 46rem;
 }
 
-.completion-workspace__publish h3 .completion-workspace__merge h3 .completion-workspace__done h3 {
+.completion-workspace__publish h3,
+.completion-workspace__merge h3,
+.completion-workspace__done h3 {
   margin: 0;
   font: 600 18px var(--bench-font-text);
 }
 
-.completion-workspace__publish-hint
-  .completion-workspace__merge-hint
-  .completion-workspace__done-hint {
+.completion-workspace__publish-hint,
+.completion-workspace__merge-hint,
+.completion-workspace__done-hint {
   margin: 0;
   max-width: 54rem;
   font-size: 13px;
@@ -7919,8 +7923,69 @@ body {
   background: var(--raised);
 }
 
-.completion-workspace__publish-repo-check {
-  display: contents;
+.completion-publish-sheet {
+  width: min(680px, calc(100% - var(--space-6)));
+}
+
+.completion-publish-sheet__body {
+  padding: var(--space-5);
+}
+
+.completion-publish-sheet .completion-workspace__publish-repo {
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--space-2) var(--space-3);
+}
+
+.completion-workspace__publish-repo-main {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.completion-workspace__pending-note {
+  grid-column: 1 / -1;
+  border-left: 2px solid var(--attention);
+  padding-left: var(--space-2);
+}
+
+.completion-publish-sheet__details {
+  display: grid;
+  gap: var(--space-2);
+  padding-top: var(--space-2);
+}
+
+.completion-publish-sheet__details h4 {
+  margin: 0;
+  font: 700 11px var(--bench-font-text);
+  letter-spacing: 0.02em;
+}
+
+.completion-publish-sheet__details em {
+  color: var(--muted);
+  font-style: normal;
+}
+
+.completion-publish-sheet__failure {
+  border-left: 2px solid var(--bad);
+  padding-left: var(--space-2);
+  color: var(--text);
+  font: 12px var(--bench-font-text);
+}
+
+.completion-publish-sheet__failure p {
+  margin: var(--space-1) 0 0;
+}
+
+.completion-publish-sheet__failure details {
+  margin-top: var(--space-2);
+}
+
+.completion-publish-sheet input:focus-visible,
+.completion-publish-sheet textarea:focus-visible,
+.completion-publish-sheet button:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 2px;
 }
 
 .completion-workspace__merge-repo {
@@ -12181,5 +12246,14 @@ body {
 
   .config-editor__segments {
     grid-template-columns: 1fr;
+  }
+
+  .completion-publish-sheet .completion-workspace__publish-repo {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .completion-publish-sheet .completion-workspace__pending-detail,
+  .completion-publish-sheet .completion-workspace__pr-link {
+    justify-self: start;
   }
 }

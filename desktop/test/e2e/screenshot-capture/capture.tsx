@@ -18,7 +18,7 @@ import { RefactorLauncher } from '../../../src/renderer/src/features/refactor/Re
 import { BulkPreviewPanel } from '../../../src/renderer/src/features/BulkPreviewPanel';
 import { RecoveryWorkspace } from '../../../src/renderer/src/features/RecoveryWorkspace';
 import { ChangesSurface } from '../../../src/renderer/src/features/completion/ChangesSurface';
-import { PublishModalBody } from '../../../src/renderer/src/features/completion/PublishModal';
+import { PublishModal } from '../../../src/renderer/src/features/completion/PublishModal';
 import { CleanupConfirm } from '../../../src/renderer/src/features/completion/CleanupConfirm';
 import { useCompletionPreflight } from '../../../src/renderer/src/features/completion/useCompletionPreflight';
 import type { CompletionAction } from '../../../src/renderer/src/features/completion/completionShared';
@@ -44,6 +44,7 @@ import type {
   AppRouteEvent,
   AttentionItem,
   FeatureActionRequest,
+  PublishFeatureActionRequest,
 } from '../../../src/shared/ipc';
 
 function getScene(): string {
@@ -1191,6 +1192,8 @@ function CompletionScene({ scene }: { scene: string }): React.ReactElement {
       action,
       ...(body ? { body } : {}),
     } as FeatureActionRequest);
+  const dispatchPublish = (request: PublishFeatureActionRequest) =>
+    api.dispatchFeatureAction(request);
   const openExternal = (url: string) => api.openExternal({ url });
   const revealPath = (id: string, repo: string) => api.revealPath({ featureId: id, repo });
 
@@ -1200,22 +1203,19 @@ function CompletionScene({ scene }: { scene: string }): React.ReactElement {
   if (scene === 'completion-publish') {
     return (
       <div style={{ position: 'fixed', inset: 0, background: 'var(--content)' }}>
-        <div className="cockpit__modal-overlay">
-          <div className="cockpit__modal">
-            {completion.preflight !== null ? (
-              <PublishModalBody
-                featureId="feat-electron-app"
-                preflight={completion.preflight}
-                dispatchAction={dispatchAction}
-                generatePublishDescription={(id, repos) =>
-                  api.generatePublishDescription({ featureId: id, repos })
-                }
-                openExternal={openExternal}
-                onDispatched={() => {}}
-              />
-            ) : null}
-          </div>
-        </div>
+        {completion.preflight !== null ? (
+          <PublishModal
+            featureId="feat-electron-app"
+            preflight={completion.preflight}
+            dispatchAction={dispatchPublish}
+            generatePublishDescription={(id, repos) =>
+              api.generatePublishDescription({ featureId: id, repos })
+            }
+            openExternal={openExternal}
+            onDispatched={() => {}}
+            onClose={() => {}}
+          />
+        ) : null}
       </div>
     );
   }

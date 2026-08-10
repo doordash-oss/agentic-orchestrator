@@ -64,12 +64,12 @@ import {
   type CompletionVerbModel,
 } from './completion/completionBarModel';
 import { ChangesSurface } from './completion/ChangesSurface';
-import { PublishModalBody } from './completion/PublishModal';
+import { PublishModal } from './completion/PublishModal';
 import { MergeModalBody } from './completion/MergeModal';
 import { MarkDoneModalBody } from './completion/MarkDoneModal';
 import { CleanupConfirm } from './completion/CleanupConfirm';
 import type { CompletionAction } from './completion/completionShared';
-import type { FeatureActionResult } from '../../../shared/ipc';
+import type { FeatureActionResult, PublishFeatureActionRequest } from '../../../shared/ipc';
 import {
   AttentionDetail,
   attentionActionNotice,
@@ -1101,6 +1101,10 @@ export function FeatureCockpit({
         action,
         ...(body === undefined ? {} : { body }),
       } as FeatureActionRequest),
+    [],
+  );
+  const dispatchPublish = useCallback(
+    (request: PublishFeatureActionRequest) => window.agentico.dispatchFeatureAction(request),
     [],
   );
   const onCompletionDispatched = useCallback(() => {
@@ -2355,22 +2359,17 @@ export function FeatureCockpit({
         ) : null}
 
         {completionModal === 'publish' && completion.preflight !== null ? (
-          <CockpitModal
-            title="Publish"
-            ariaLabel="Publish reviewed changes"
+          <PublishModal
+            featureId={featureId}
+            preflight={completion.preflight}
+            dispatchAction={dispatchPublish}
+            generatePublishDescription={(id, repos) =>
+              window.agentico.generatePublishDescription({ featureId: id, repos })
+            }
+            openExternal={(url) => window.agentico.openExternal({ url })}
+            onDispatched={onCompletionDispatched}
             onClose={() => setCompletionModal(null)}
-          >
-            <PublishModalBody
-              featureId={featureId}
-              preflight={completion.preflight}
-              dispatchAction={dispatchCompletion}
-              generatePublishDescription={(id, repos) =>
-                window.agentico.generatePublishDescription({ featureId: id, repos })
-              }
-              openExternal={(url) => window.agentico.openExternal({ url })}
-              onDispatched={onCompletionDispatched}
-            />
-          </CockpitModal>
+          />
         ) : null}
 
         {completionModal === 'merge' && completion.preflight !== null ? (
@@ -2804,22 +2803,17 @@ export function FeatureCockpit({
           ) : null}
 
           {completionModal === 'publish' && completion.preflight !== null ? (
-            <CockpitModal
-              title="Publish"
-              ariaLabel="Publish reviewed changes"
+            <PublishModal
+              featureId={featureId}
+              preflight={completion.preflight}
+              dispatchAction={dispatchPublish}
+              generatePublishDescription={(id, repos) =>
+                window.agentico.generatePublishDescription({ featureId: id, repos })
+              }
+              openExternal={(url) => window.agentico.openExternal({ url })}
+              onDispatched={onCompletionDispatched}
               onClose={() => setCompletionModal(null)}
-            >
-              <PublishModalBody
-                featureId={featureId}
-                preflight={completion.preflight}
-                dispatchAction={dispatchCompletion}
-                generatePublishDescription={(id, repos) =>
-                  window.agentico.generatePublishDescription({ featureId: id, repos })
-                }
-                openExternal={(url) => window.agentico.openExternal({ url })}
-                onDispatched={onCompletionDispatched}
-              />
-            </CockpitModal>
+            />
           ) : null}
 
           {completionModal === 'merge' && completion.preflight !== null ? (

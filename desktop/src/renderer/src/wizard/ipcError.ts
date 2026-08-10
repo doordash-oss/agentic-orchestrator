@@ -6,6 +6,7 @@
 export interface WizardError {
   code: string;
   message: string;
+  remediation?: string;
   dirtyWorktrees?: Array<{
     repo?: string;
     path?: string;
@@ -20,15 +21,37 @@ export interface WizardError {
 
 export function parseIpcError(err: unknown): WizardError {
   const raw = err instanceof Error ? err.message : '';
+  const attached =
+    err instanceof Error
+      ? (err as Error & { code?: unknown; remediation?: unknown; details?: unknown })
+      : undefined;
+  const attachedCode =
+    typeof attached?.code === 'string' && attached.code !== '' ? attached.code : undefined;
+  const remediation =
+    typeof attached?.remediation === 'string' && attached.remediation !== ''
+      ? attached.remediation
+      : undefined;
+  const attachedMessage =
+    attachedCode === undefined
+      ? undefined
+      : raw
+          .replace(new RegExp(`^${attachedCode.replace(/[.*+?^${}()|[\\]\\]/g, '\\$&')}:\\s*`), '')
+          .replace(
+            remediation === undefined
+              ? /$^/
+              : new RegExp(`\\s*${remediation.replace(/[.*+?^${}()|[\\]\\]/g, '\\$&')}$`),
+            '',
+          );
   const match = /^([A-Za-z0-9_]+):\s*([\s\S]*)$/.exec(raw);
-  if (match !== null && match[2] !== undefined && match[2] !== '') {
+  if (attachedCode !== undefined || (match !== null && match[2] !== undefined && match[2] !== '')) {
     const details =
       err instanceof Error && 'details' in err
         ? (err as Error & { details?: { dirtyWorktrees?: WizardError['dirtyWorktrees'] } }).details
         : undefined;
     return {
-      code: match[1] ?? 'E_IPC',
-      message: match[2],
+      code: attachedCode ?? match?.[1] ?? 'E_IPC',
+      message: attachedMessage ?? match?.[2] ?? raw,
+      ...(remediation === undefined ? {} : { remediation }),
       ...(details?.dirtyWorktrees === undefined ? {} : { dirtyWorktrees: details.dirtyWorktrees }),
     };
   }

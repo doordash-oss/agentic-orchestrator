@@ -10,7 +10,14 @@ export type CompletionAction = 'publish' | 'merge' | 'mark-done' | 'cleanup' | '
  * still running server-side, so its outcome arrives through the feature refresh.
  */
 export type ActionResult =
-  { ok: true; result: string } | { ok: false; message: string; reconciling?: boolean };
+  | { ok: true; result: string }
+  | {
+      ok: false;
+      code: string;
+      message: string;
+      remediation?: string;
+      reconciling?: boolean;
+    };
 
 export const STATUS_LABELS: Record<string, string> = {
   eligible: 'Eligible',
@@ -136,10 +143,21 @@ export function useCompletionAction() {
           } catch {
             // The cockpit converges through its own invalidation path.
           }
-          setResult({ ok: false, reconciling: true, message: parsed.message });
+          setResult({
+            ok: false,
+            code: parsed.code,
+            message: parsed.message,
+            ...(parsed.remediation === undefined ? {} : { remediation: parsed.remediation }),
+            reconciling: true,
+          });
           return false;
         }
-        setResult({ ok: false, message: parsed.message });
+        setResult({
+          ok: false,
+          code: parsed.code,
+          message: parsed.message,
+          ...(parsed.remediation === undefined ? {} : { remediation: parsed.remediation }),
+        });
         return false;
       } finally {
         setBusy(false);

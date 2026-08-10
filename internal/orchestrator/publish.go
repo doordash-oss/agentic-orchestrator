@@ -128,9 +128,9 @@ func (o *Orchestrator) publishRepoWithOptions(featureID, repoName string, opts P
 
 	// Push branch.
 	if leasePush {
-		if err := o.deps.Remote.ForcePush(workDir, branch); err != nil {
+		if err := o.pushRewrittenBranch(repoName, workDir, branch); err != nil {
 			_ = o.deps.Lifecycle.SetRepoPublishError(featureID, repoName, err.Error())
-			return "", fmt.Errorf("force push failed: %w", err)
+			return "", err
 		}
 	} else if err := o.deps.Remote.Push(workDir, branch); err != nil {
 		_ = o.deps.Lifecycle.SetRepoPublishError(featureID, repoName, err.Error())
@@ -175,7 +175,7 @@ func (o *Orchestrator) republishRepo(f *feature.Feature, repo feature.FeatureRep
 			return "", fmt.Errorf("commit failed: %w", err)
 		}
 	}
-	if err := o.pushRepublish(workDir, branch); err != nil {
+	if err := o.pushRepublish(repo.Name, workDir, branch); err != nil {
 		_ = o.deps.Lifecycle.SetRepoPublishError(f.ID, repo.Name, err.Error())
 		return "", err
 	}
@@ -210,22 +210,43 @@ func (o *Orchestrator) assertPRAcceptsUpdates(f *feature.Feature, repo feature.F
 }
 
 // pushRepublish fast-forwards when the remote branch is an ancestor of HEAD.
-// Otherwise the branch was rewritten locally and needs a lease push. We never
-// fetch first: --force-with-lease derives its expectation from the
-// remote-tracking ref, so refreshing that ref right before the push would
-// make the lease compare the remote against itself and silently overwrite
-// commits this clone never saw.
-func (o *Orchestrator) pushRepublish(workDir, branch string) error {
+// Otherwise the branch was rewritten locally and needs the guarded rewritten
+// push, which inspects the live remote without mutating its tracking ref.
+func (o *Orchestrator) pushRepublish(repoName, workDir, branch string) error {
 	if git.IsAncestor(workDir, "origin/"+branch, "HEAD") {
 		if err := o.deps.Remote.Push(workDir, branch); err != nil {
 			return fmt.Errorf("push failed: %w", err)
 		}
 		return nil
 	}
-	if err := o.deps.Remote.ForcePush(workDir, branch); err != nil {
-		return fmt.Errorf("force push failed: %w", err)
+	if err := o.pushRewrittenBranch(repoName, workDir, branch); err != nil {
+		return err
 	}
 	return nil
+}
+
+func (o *Orchestrator) pushRewrittenBranch(repoName, workDir, branch string) error {
+	err := o.deps.Remote.PushRewrittenBranch(workDir, branch)
+	if err == nil {
+		return nil
+	}
+	var pushErr *git.RewritePushError
+	if errors.As(err, &pushErr) {
+		switch pushErr.Kind {
+		case git.RewritePushRemoteDiverged:
+			return &PublishRemoteDivergedError{
+				RepoName:          repoName,
+				Branch:            pushErr.Branch,
+				RemoteOnlyCommits: pushErr.RemoteOnlyCommits,
+			}
+		case git.RewritePushRemoteChanged:
+			return &PublishRemoteChangedError{
+				RepoName: repoName,
+				Branch:   pushErr.Branch,
+			}
+		}
+	}
+	return fmt.Errorf("rewritten push failed: %w", err)
 }
 
 func publishRequiresLeasePush(f *feature.Feature) bool {

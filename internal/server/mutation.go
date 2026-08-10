@@ -33,6 +33,7 @@ import (
 const MaxMutationBodyBytes = 64 * 1024
 const MaxActionTextBytes = 4000
 
+// Stable API codes for publish-time remote branch safety conflicts.
 const (
 	maxCreationIdempotencyKeyLength = 128
 	maxRememberedCreationResults    = 1000
@@ -44,6 +45,11 @@ const errCodeBadRequest = "bad_request"
 // errCodeConflict is the API error code for an action rejected because of a
 // conflicting feature state (ActionConflictError).
 const errCodeConflict = "conflict"
+
+const (
+	ErrorCodePublishRemoteDiverged = "publish_remote_diverged"
+	ErrorCodePublishRemoteChanged  = "publish_remote_changed"
+)
 
 // Stable machine codes for the typed refactor-launch failures and the
 // child-feature execution gate. Each maps a feature-package sentinel or
@@ -164,6 +170,7 @@ type MutationTarget interface {
 
 type ActionConflictError struct {
 	Err     error
+	Code    string
 	Message string
 	Target  map[string]any
 }
@@ -462,7 +469,11 @@ func writeMutationError(w http.ResponseWriter, err error) {
 	}
 	var conflict *ActionConflictError
 	if errors.As(err, &conflict) {
-		writeAPIError(w, http.StatusConflict, errCodeConflict, conflict.Error(), conflict.Target)
+		code := conflict.Code
+		if strings.TrimSpace(code) == "" {
+			code = errCodeConflict
+		}
+		writeAPIError(w, http.StatusConflict, code, conflict.Error(), conflict.Target)
 		return
 	}
 	if errors.Is(err, feature.ErrPipelineMismatch) {

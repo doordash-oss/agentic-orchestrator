@@ -451,7 +451,7 @@ func TestOrchestrator_PublishRepo_PullRebaseConflict_Sentinel(t *testing.T) {
 	}
 }
 
-func TestOrchestrator_PublishRepo_ManualCodeReadyUsesForcePushWithLease(t *testing.T) {
+func TestOrchestrator_PublishRepo_ManualCodeReadyUsesRewrittenBranchPush(t *testing.T) {
 	f := &feature.Feature{
 		ID:           "feat-manual-publish-rebased",
 		Name:         "manual publish rebased",
@@ -486,7 +486,7 @@ func TestOrchestrator_PublishRepo_ManualCodeReadyUsesForcePushWithLease(t *testi
 		return "https://github.com/org/r1/pull/1", nil
 	}
 
-	pub.ForcePushFn = func(worktreePath, branch string) error { return nil }
+	pub.PushRewrittenBranchFn = func(worktreePath, branch string) error { return nil }
 
 	o := orchestrator.New(orchestrator.Deps{
 		Lifecycle: lc,
@@ -501,13 +501,97 @@ func TestOrchestrator_PublishRepo_ManualCodeReadyUsesForcePushWithLease(t *testi
 		t.Fatalf("Publish: %v", err)
 	}
 
-	if got := countPublisherCalls(pub, "ForcePush"); got != 1 {
-		t.Fatalf("RemoteOps.ForcePush calls = %d, want 1", got)
+	if got := countPublisherCalls(pub, "PushRewrittenBranch"); got != 1 {
+		t.Fatalf("RemoteOps.PushRewrittenBranch calls = %d, want 1", got)
 	}
 	if got := countPublisherCalls(pub, "CreatePR"); got != 1 {
 		t.Fatalf("Publisher.CreatePR calls = %d, want 1", got)
 	}
 	assertLifecycleCall(t, lc, "SetRepoPublished")
+}
+
+func TestOrchestrator_Publish_RewrittenBranchRemoteDiverged(t *testing.T) {
+	f := &feature.Feature{
+		ID:           "feat-publish-remote-diverged",
+		Name:         "publish remote diverged",
+		Slug:         "publish-remote-diverged",
+		Status:       feature.StatusCodeReady,
+		CurrentPhase: feature.PhasePublish,
+		Checkpoints:  feature.Checkpoints{ManualPublish: true},
+		Repos: []feature.FeatureRepo{
+			{Name: "r1", Path: "/tmp/r1", WorktreePath: wtR1Path, Branch: "feature/remote-diverged", BaseBranch: mainBranch},
+		},
+		RepoStates: map[string]*feature.RepoState{"r1": {Touched: true}},
+	}
+	lc := lifecycleForFeature(f)
+	lc.SetRepoPublishErrorFn = func(id, repo, msg string) error { return nil }
+	lc.TryCompletePublishFn = func(id string) (bool, error) { return false, nil }
+	pub := mocks.NewMockRemoteOps()
+	pub.PushRewrittenBranchFn = func(path, branch string) error {
+		return &git.RewritePushError{
+			Kind:              git.RewritePushRemoteDiverged,
+			Branch:            branch,
+			RemoteOnlyCommits: 2,
+		}
+	}
+	o := orchestrator.New(orchestrator.Deps{
+		Lifecycle: lc,
+		Store:     newFeatureStore(f),
+		Remote:    pub,
+	}, orchestrator.Hooks{})
+
+	err := o.PublishWithOptions(f.ID, orchestrator.PublishOptions{
+		Repos: []string{"r1"},
+		Title: "Publish remote diverged",
+		Body:  "Verified body",
+	})
+	var diverged *orchestrator.PublishRemoteDivergedError
+	if !errors.As(err, &diverged) {
+		t.Fatalf("error = %T %v; want PublishRemoteDivergedError", err, err)
+	}
+	if diverged.RepoName != "r1" || diverged.Branch != "feature/remote-diverged" || diverged.RemoteOnlyCommits != 2 {
+		t.Fatalf("PublishRemoteDivergedError = %+v; want repo r1, branch feature/remote-diverged, 2 remote commits", diverged)
+	}
+}
+
+func TestOrchestrator_Publish_RewrittenBranchRemoteChanged(t *testing.T) {
+	f := &feature.Feature{
+		ID:           "feat-publish-remote-changed",
+		Name:         "publish remote changed",
+		Slug:         "publish-remote-changed",
+		Status:       feature.StatusCodeReady,
+		CurrentPhase: feature.PhasePublish,
+		Checkpoints:  feature.Checkpoints{ManualPublish: true},
+		Repos: []feature.FeatureRepo{
+			{Name: "r1", Path: "/tmp/r1", WorktreePath: wtR1Path, Branch: "feature/remote-changed", BaseBranch: mainBranch},
+		},
+		RepoStates: map[string]*feature.RepoState{"r1": {Touched: true}},
+	}
+	lc := lifecycleForFeature(f)
+	lc.SetRepoPublishErrorFn = func(id, repo, msg string) error { return nil }
+	lc.TryCompletePublishFn = func(id string) (bool, error) { return false, nil }
+	pub := mocks.NewMockRemoteOps()
+	pub.PushRewrittenBranchFn = func(path, branch string) error {
+		return &git.RewritePushError{Kind: git.RewritePushRemoteChanged, Branch: branch}
+	}
+	o := orchestrator.New(orchestrator.Deps{
+		Lifecycle: lc,
+		Store:     newFeatureStore(f),
+		Remote:    pub,
+	}, orchestrator.Hooks{})
+
+	err := o.PublishWithOptions(f.ID, orchestrator.PublishOptions{
+		Repos: []string{"r1"},
+		Title: "Publish remote changed",
+		Body:  "Verified body",
+	})
+	var changed *orchestrator.PublishRemoteChangedError
+	if !errors.As(err, &changed) {
+		t.Fatalf("error = %T %v; want PublishRemoteChangedError", err, err)
+	}
+	if changed.RepoName != "r1" || changed.Branch != "feature/remote-changed" {
+		t.Fatalf("PublishRemoteChangedError = %+v; want repo r1, branch feature/remote-changed", changed)
+	}
 }
 
 func TestOrchestrator_PublishRepo_UsesPhaseRunnerDescriptionGeneration(t *testing.T) {
@@ -990,7 +1074,7 @@ func TestOrchestrator_Republish_FastForwardPushesWithoutCreatePR(t *testing.T) {
 	if got := countPublisherCalls(pub, "Push"); got != 1 {
 		t.Errorf("Push calls = %d; want 1", got)
 	}
-	for _, method := range []string{"ForcePush", "CreatePR"} {
+	for _, method := range []string{"ForcePush", "PushRewrittenBranch", "CreatePR"} {
 		if got := countPublisherCalls(pub, method); got != 0 {
 			t.Errorf("%s calls = %d; want 0", method, got)
 		}
@@ -1014,7 +1098,7 @@ func TestOrchestrator_Republish_RewriteUsesLeasePush(t *testing.T) {
 	fs := newFeatureStore(f)
 
 	pub := mocks.NewMockRemoteOps()
-	pub.ForcePushFn = func(path, branch string) error { return nil }
+	pub.PushRewrittenBranchFn = func(path, branch string) error { return nil }
 
 	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs, Remote: pub}, orchestrator.Hooks{})
 
@@ -1024,10 +1108,10 @@ func TestOrchestrator_Republish_RewriteUsesLeasePush(t *testing.T) {
 		t.Fatalf("PublishWithOptions: %v", err)
 	}
 
-	if got := countPublisherCalls(pub, "ForcePush"); got != 1 {
-		t.Errorf("ForcePush calls = %d; want 1", got)
+	if got := countPublisherCalls(pub, "PushRewrittenBranch"); got != 1 {
+		t.Errorf("PushRewrittenBranch calls = %d; want 1", got)
 	}
-	for _, method := range []string{"Push", "CreatePR"} {
+	for _, method := range []string{"Push", "ForcePush", "CreatePR"} {
 		if got := countPublisherCalls(pub, method); got != 0 {
 			t.Errorf("%s calls = %d; want 0", method, got)
 		}
@@ -1091,13 +1175,15 @@ func TestOrchestrator_Republish_PushFailureRecorded(t *testing.T) {
 	assertLifecycleCall(t, lc, "SetRepoPublishError")
 }
 
-// leaseTestRemoteOps keeps the push path genuinely unmocked — git.ForcePush is
-// the code under test — while answering the PR-state lookup locally so the
-// test never reaches the network.
+// leaseTestRemoteOps keeps the push path genuinely unmocked while answering
+// the PR-state lookup locally so the test never reaches the network.
 type leaseTestRemoteOps struct{}
 
 func (leaseTestRemoteOps) Push(path, branch string) error      { return git.Push(path, branch) }
 func (leaseTestRemoteOps) ForcePush(path, branch string) error { return git.ForcePush(path, branch) }
+func (leaseTestRemoteOps) PushRewrittenBranch(path, branch string) error {
+	return git.PushRewrittenBranch(path, branch)
+}
 func (leaseTestRemoteOps) PullRebase(path, branch string) error {
 	return git.PullRebase(path, branch).Err
 }
@@ -1109,14 +1195,11 @@ func (leaseTestRemoteOps) PRState(string, string) (string, error) {
 	return "", errors.New("state lookup unavailable in test")
 }
 
-// A caller-side fetch before the lease push would refresh the stale tracking
-// ref to the true remote tip right before --force-with-lease compares
-// against it, making the lease pass and silently discard the second clone's
-// commit. This test uses leaseTestRemoteOps, which delegates pushes to the
-// real git package, driving an unmocked push through pushRepublish while
-// answering the PR-state lookup locally so the test never reaches the
-// network.
-func TestOrchestrator_Republish_LeaseRejectsWhenRemoteMovedUnfetched(t *testing.T) {
+// An unfetched remote commit is translated through the real Git rewritten-push
+// implementation into an orchestrator-owned divergence error. The test uses a
+// local bare remote and answers the PR-state lookup locally, so it never reaches
+// an external service.
+func TestOrchestrator_Republish_RemoteDivergedErrorFromRealGit(t *testing.T) {
 	branch := "feature/republish-lease"
 	repoPath := newRepublishRepo(t, branch)
 	bareRemote := runPublishGitOutput(t, repoPath, "remote", "get-url", "origin")
@@ -1148,6 +1231,13 @@ func TestOrchestrator_Republish_LeaseRejectsWhenRemoteMovedUnfetched(t *testing.
 	})
 	if err == nil {
 		t.Fatal("PublishWithOptions() = nil, want an error: the remote moved and this repo never fetched")
+	}
+	var diverged *orchestrator.PublishRemoteDivergedError
+	if !errors.As(err, &diverged) {
+		t.Fatalf("PublishWithOptions() error = %T %v; want PublishRemoteDivergedError", err, err)
+	}
+	if diverged.RepoName != "r1" || diverged.Branch != branch || diverged.RemoteOnlyCommits != 2 {
+		t.Fatalf("PublishRemoteDivergedError = %+v; want repo r1, branch %s, 2 remote commits", diverged, branch)
 	}
 	assertLifecycleCall(t, lc, "SetRepoPublishError")
 }

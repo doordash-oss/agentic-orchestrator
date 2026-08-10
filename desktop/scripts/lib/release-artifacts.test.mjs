@@ -109,11 +109,7 @@ describe('createLinuxDockerPlan', () => {
         '-v',
         '/repo/.git:/repo/.git:ro',
         '-v',
-        '/repo/worktree/desktop/dist:/repo/worktree/desktop/dist',
-        '-v',
-        '/repo/worktree/desktop/out:/repo/worktree/desktop/out',
-        '-v',
-        '/repo/worktree/desktop/resources:/repo/worktree/desktop/resources',
+        '/repo/worktree/desktop:/repo/worktree/desktop',
       ]),
     );
     expect(plan[0].args.join(' ')).toContain(LINUX_BUILDER_IMAGE);

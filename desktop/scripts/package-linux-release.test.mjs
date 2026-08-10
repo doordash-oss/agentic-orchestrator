@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { runLinuxRelease, runLocalLinuxRelease } from './package-linux-release.mjs';
+import { LINUX_ARM64_VERIFIER_IMAGE } from './lib/release-artifacts.mjs';
 
 const GiB = 1024 ** 3;
 const scriptPath = fileURLToPath(new URL('./package-linux-release.mjs', import.meta.url));
@@ -102,6 +103,25 @@ describe('runLinuxRelease', () => {
         join(options.repoRoot, 'desktop', 'dist', 'package-verification-linux-arm64.json'),
       ),
     ).toBe(true);
+  });
+
+  it('does not accept arm64 outputs until the matching-architecture verifier succeeds', () => {
+    const options = validFixtureOptions({ execute: () => {} });
+    let arm64VerifierRan = false;
+    options.execute = (_command, args) => {
+      const arch = args
+        .find((arg) => arg.startsWith('AGENTICO_PACKAGE_ARCH='))
+        ?.split('=')
+        .at(-1);
+      if (arch === 'x64') writeReleaseOutputs(options.repoRoot, 'x64');
+      if (args.includes(LINUX_ARM64_VERIFIER_IMAGE)) {
+        arm64VerifierRan = true;
+        writeReleaseOutputs(options.repoRoot, 'arm64');
+      }
+    };
+
+    expect(runLinuxRelease(options).completed).toEqual(['x64', 'arm64']);
+    expect(arm64VerifierRan).toBe(true);
   });
 
   it('rejects an unavailable Docker daemon without running a command', () => {

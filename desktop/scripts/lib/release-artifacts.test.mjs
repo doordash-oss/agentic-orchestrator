@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   LINUX_BUILDER_IMAGE,
+  LINUX_ARM64_VERIFIER_IMAGE,
   createLinuxDockerPlan,
   expectedDesktopArtifacts,
   releaseVersionFromTag,
@@ -140,6 +141,27 @@ describe('createLinuxDockerPlan', () => {
     expect(command).toContain('2852af0cb20a13139b3448992e69b868e50ed0f8a1e5940ee1de9e19a123b613');
     expect(command).toContain('sha256sum --check');
     expect(command).toContain('PATH=/usr/local/go/bin:$PATH');
+  });
+
+  it('verifies the arm64 package in a matching pinned runtime container', () => {
+    const arm64 = createLinuxDockerPlan({
+      repoRoot: '/repo/worktree',
+      gitCommonDir: '/repo/.git',
+      volumePrefix: 'agentico-release',
+    })[1];
+
+    expect(arm64.args.at(-1)).toContain('npm run package:build --workspace desktop');
+    expect(arm64.verificationArgs).toEqual(
+      expect.arrayContaining([
+        '--platform',
+        'linux/arm64',
+        '-e',
+        'AGENTICO_PACKAGE_ARCH=arm64',
+        LINUX_ARM64_VERIFIER_IMAGE,
+      ]),
+    );
+    expect(arm64.verificationArgs.at(-1)).toContain('go1.25.0.linux-arm64.tar.gz');
+    expect(arm64.verificationArgs.at(-1)).toContain('node desktop/scripts/verify-package.mjs');
   });
 
   it('returns a frozen plan', () => {

@@ -3,9 +3,19 @@ import { resolve } from 'node:path';
 
 export const LINUX_BUILDER_IMAGE =
   'electronuserland/builder:22@sha256:b76a82a6c6a8a1dea1abbc93e394f54316744824b64e6a50d959f1e3ba8951a9';
+export const LINUX_ARM64_VERIFIER_IMAGE =
+  'node:22.22.2-bookworm@sha256:62e4daa6819762bbd3072af77cc282ab72c631c4aed30dd7980192babaf385b3';
 
-const GO_LINUX_AMD64_TARBALL = 'go1.25.0.linux-amd64.tar.gz';
-const GO_LINUX_AMD64_SHA256 = '2852af0cb20a13139b3448992e69b868e50ed0f8a1e5940ee1de9e19a123b613';
+const GO_LINUX_TARBALLS = Object.freeze({
+  amd64: Object.freeze({
+    name: 'go1.25.0.linux-amd64.tar.gz',
+    sha256: '2852af0cb20a13139b3448992e69b868e50ed0f8a1e5940ee1de9e19a123b613',
+  }),
+  arm64: Object.freeze({
+    name: 'go1.25.0.linux-arm64.tar.gz',
+    sha256: '05de75d6994a2783699815ee553bd5a9327d8b79991de36e38b66862782f54ae',
+  }),
+});
 const RELEASE_TAG = /^v(\d+\.\d+\.\d+)$/;
 const LINUX_ARCHITECTURES = new Set(['x64', 'arm64']);
 
@@ -163,26 +173,29 @@ export function selectPackageArtifact(files, target, format) {
 
 /** Create the ordered Docker invocations for Linux x64 and arm64 packaging. */
 export function createLinuxDockerPlan({ repoRoot, gitCommonDir, volumePrefix }) {
-  const command = [
-    'bash',
-    '-lc',
-    [
-      'set -euo pipefail',
-      `go_tarball=/tmp/${GO_LINUX_AMD64_TARBALL}`,
-      `curl --fail --location --retry 3 --output \"$go_tarball\" https://go.dev/dl/${GO_LINUX_AMD64_TARBALL}`,
-      `echo \"${GO_LINUX_AMD64_SHA256}  $go_tarball\" | sha256sum --check --status`,
-      'rm -rf /usr/local/go',
-      'tar -C /usr/local -xzf \"$go_tarball\"',
-      'rm -f \"$go_tarball\"',
-      'export PATH=/usr/local/go/bin:$PATH',
-      'go version',
-      'npm ci',
-      'npm run package:verify --workspace desktop',
-    ].join(' && '),
+  const mounts = [
+    '-v',
+    `${repoRoot}:${repoRoot}`,
+    '-v',
+    `${gitCommonDir}:${gitCommonDir}`,
+    '-v',
+    `${volumePrefix}-node-modules:/repo/node_modules`,
+    '-v',
+    `${volumePrefix}-electron:/root/.cache/electron`,
+    '-v',
+    `${volumePrefix}-electron-builder:/root/.cache/electron-builder`,
+    '--workdir',
+    repoRoot,
   ];
   return Object.freeze(
-    ['x64', 'arm64'].map((arch) =>
-      Object.freeze({
+    ['x64', 'arm64'].map((arch) => {
+      const builderCommand = [...goBootstrapCommand('amd64'), 'npm ci'];
+      builderCommand.push(
+        arch === 'arm64'
+          ? 'npm run package:build --workspace desktop'
+          : 'npm run package:verify --workspace desktop',
+      );
+      const invocation = {
         arch,
         args: Object.freeze([
           'run',
@@ -191,24 +204,47 @@ export function createLinuxDockerPlan({ repoRoot, gitCommonDir, volumePrefix }) 
           'linux/amd64',
           '-e',
           `AGENTICO_PACKAGE_ARCH=${arch}`,
-          '-v',
-          `${repoRoot}:${repoRoot}`,
-          '-v',
-          `${gitCommonDir}:${gitCommonDir}`,
-          '-v',
-          `${volumePrefix}-node-modules:/repo/node_modules`,
-          '-v',
-          `${volumePrefix}-electron:/root/.cache/electron`,
-          '-v',
-          `${volumePrefix}-electron-builder:/root/.cache/electron-builder`,
-          '--workdir',
-          repoRoot,
+          ...mounts,
           LINUX_BUILDER_IMAGE,
-          ...command,
+          'bash',
+          '-lc',
+          builderCommand.join(' && '),
         ]),
-      }),
-    ),
+      };
+      if (arch === 'arm64') {
+        invocation.verificationArgs = Object.freeze([
+          'run',
+          '--rm',
+          '--platform',
+          'linux/arm64',
+          '-e',
+          'AGENTICO_PACKAGE_ARCH=arm64',
+          ...mounts,
+          LINUX_ARM64_VERIFIER_IMAGE,
+          'bash',
+          '-lc',
+          [...goBootstrapCommand('arm64'), 'node desktop/scripts/verify-package.mjs'].join(' && '),
+        ]);
+      }
+      return Object.freeze(invocation);
+    }),
   );
+}
+
+function goBootstrapCommand(arch) {
+  const toolchain = GO_LINUX_TARBALLS[arch];
+  if (toolchain === undefined) throw new Error(`unsupported Go toolchain architecture: ${arch}`);
+  return [
+    'set -euo pipefail',
+    `go_tarball=/tmp/${toolchain.name}`,
+    `curl --fail --location --retry 3 --output \"$go_tarball\" https://go.dev/dl/${toolchain.name}`,
+    `echo \"${toolchain.sha256}  $go_tarball\" | sha256sum --check --status`,
+    'rm -rf /usr/local/go',
+    'tar -C /usr/local -xzf \"$go_tarball\"',
+    'rm -f \"$go_tarball\"',
+    'export PATH=/usr/local/go/bin:$PATH',
+    'go version',
+  ];
 }
 
 function matchesArtifact(file, target, format) {

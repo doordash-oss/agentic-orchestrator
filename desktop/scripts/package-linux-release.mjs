@@ -5,6 +5,7 @@ import { resolve, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
+  LINUX_ARM64_VERIFIER_IMAGE,
   LINUX_BUILDER_IMAGE,
   createLinuxDockerPlan,
   releaseVersionFromTag,
@@ -38,7 +39,7 @@ export function runLinuxRelease({
   }
 
   const plan = createLinuxDockerPlan({ repoRoot, gitCommonDir, volumePrefix });
-  ensureLinuxBuilderImage(execute);
+  ensureLinuxImages(execute);
 
   const completed = [];
   const receipts = [];
@@ -46,6 +47,9 @@ export function runLinuxRelease({
     const receipt = `package-verification-linux-${invocation.arch}.json`;
     removeBuildOutputs(repoRoot, invocation.arch, version, receipt);
     execute('docker', invocation.args);
+    if (invocation.verificationArgs !== undefined) {
+      execute('docker', invocation.verificationArgs);
+    }
     requireBuildOutputs(repoRoot, invocation.arch, version, receipt);
     completed.push(invocation.arch);
     receipts.push(receipt);
@@ -54,12 +58,14 @@ export function runLinuxRelease({
   return { tag: exactTag, completed, receipts };
 }
 
-function ensureLinuxBuilderImage(execute) {
-  try {
-    execute('docker', ['image', 'inspect', LINUX_BUILDER_IMAGE]);
-  } catch (error) {
-    if (!isImageNotFound(error)) throw error;
-    execute('docker', ['pull', LINUX_BUILDER_IMAGE]);
+function ensureLinuxImages(execute) {
+  for (const image of [LINUX_BUILDER_IMAGE, LINUX_ARM64_VERIFIER_IMAGE]) {
+    try {
+      execute('docker', ['image', 'inspect', image]);
+    } catch (error) {
+      if (!isImageNotFound(error)) throw error;
+      execute('docker', ['pull', image]);
+    }
   }
 }
 

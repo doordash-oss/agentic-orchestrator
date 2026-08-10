@@ -44,20 +44,23 @@ const PARKED_TRANSACTION_PHASES = new Set(['attention', 'rolling_back', 'rolled_
 
 function transactionProblems(transaction: RelationshipTransactionView): string[] {
   const problems: string[] = [];
-  if (transaction.attention !== undefined && transaction.attention !== '') {
-    problems.push(transaction.attention);
-  }
   for (const entry of transaction.entries ?? []) {
     const repo = entry.repo === undefined ? '' : `${entry.repo}: `;
-    if (entry.conflictFiles !== undefined && entry.conflictFiles.length > 0) {
-      problems.push(`${repo}conflicts in ${entry.conflictFiles.join(', ')}`);
-    }
     if (entry.diagnostics !== undefined && entry.diagnostics !== '') {
       problems.push(`${repo}${entry.diagnostics}`);
+    } else if (entry.conflictFiles !== undefined && entry.conflictFiles.length > 0) {
+      problems.push(`${repo}conflicts in ${entry.conflictFiles.join(', ')}`);
     }
     if (entry.cleanupWarning !== undefined && entry.cleanupWarning !== '') {
       problems.push(`${repo}${entry.cleanupWarning}`);
     }
+  }
+  if (
+    problems.length === 0 &&
+    transaction.attention !== undefined &&
+    transaction.attention !== ''
+  ) {
+    problems.push(transaction.attention);
   }
   return problems;
 }

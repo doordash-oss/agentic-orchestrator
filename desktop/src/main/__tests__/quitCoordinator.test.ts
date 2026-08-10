@@ -3,6 +3,7 @@ import {
   QuitCoordinator,
   activeWorkDialog,
   quitAnywayDialog,
+  shouldRequestQuitOnMainWindowClose,
   stopFailureDialog,
   type ActiveWorkCheck,
   type QuitCoordinatorDeps,
@@ -42,6 +43,16 @@ function makeDeps(
     ...overrides,
   };
 }
+
+describe('shouldRequestQuitOnMainWindowClose', () => {
+  it.each([
+    ['darwin', false],
+    ['win32', true],
+    ['linux', true],
+  ] as const)('returns %s => %s', (platform, expected) => {
+    expect(shouldRequestQuitOnMainWindowClose(platform)).toBe(expected);
+  });
+});
 
 describe('QuitCoordinator', () => {
   it('quits immediately when authoritative activity is idle', async () => {

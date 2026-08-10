@@ -168,6 +168,10 @@ export function hasActiveWork(active: ActiveWorkCheck): boolean {
   return active.detectionFailed || active.featureIds.length > 0 || active.chatActive;
 }
 
+export function shouldRequestQuitOnMainWindowClose(platform: NodeJS.Platform): boolean {
+  return platform !== 'darwin';
+}
+
 export function activeWorkDialog(active: ActiveWorkCheck): QuitDialogOptions {
   const details = [
     active.detectionFailed

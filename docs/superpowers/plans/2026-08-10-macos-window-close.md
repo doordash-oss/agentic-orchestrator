@@ -54,7 +54,7 @@ and the inverse regression where Windows or Linux silently remain running.
 Run:
 
 ```bash
-npm test --workspace desktop -- --project node desktop/src/main/__tests__/quitCoordinator.test.ts
+npm test --workspace desktop -- --project node src/main/__tests__/quitCoordinator.test.ts
 ```
 
 Expected: FAIL because `shouldRequestQuitOnMainWindowClose` is not exported.
@@ -225,7 +225,7 @@ shutdown as selected.
 - [ ] **Step 5: Run the focused unit test again**
 
 ```bash
-npm test --workspace desktop -- --project node desktop/src/main/__tests__/quitCoordinator.test.ts
+npm test --workspace desktop -- --project node src/main/__tests__/quitCoordinator.test.ts
 ```
 
 Expected: PASS, proving the entry point still consumes the tested policy.

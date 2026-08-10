@@ -19,6 +19,7 @@ const VOLUME_PREFIX = 'agentico-release';
 export function runLinuxRelease({
   repoRoot,
   gitCommonDir,
+  gitEntry,
   gitStatus,
   exactTag,
   freeBytes,
@@ -40,7 +41,7 @@ export function runLinuxRelease({
     throw new Error('Docker daemon is unavailable; start Docker before packaging Linux releases');
   }
 
-  const plan = createLinuxDockerPlan({ repoRoot, gitCommonDir, volumePrefix });
+  const plan = createLinuxDockerPlan({ repoRoot, gitCommonDir, gitEntry, volumePrefix });
   for (const directory of ['desktop/dist', 'desktop/out', 'desktop/resources']) {
     mkdirSync(join(repoRoot, directory), { recursive: true });
   }

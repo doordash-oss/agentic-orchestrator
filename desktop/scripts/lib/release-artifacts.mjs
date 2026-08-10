@@ -319,6 +319,7 @@ export function createLinuxDockerPlan({
   volumePrefix,
 }) {
   const sourceMount = '/agentico-release-source';
+  const resourcesOutputMount = '/agentico-release-output/resources';
   const mounts = [
     '-v',
     `${repoRoot}:${sourceMount}:ro`,
@@ -329,7 +330,7 @@ export function createLinuxDockerPlan({
     '-v',
     `${repoRoot}/desktop/out:${repoRoot}/desktop/out`,
     '-v',
-    `${repoRoot}/desktop/resources:${repoRoot}/desktop/resources`,
+    `${repoRoot}/desktop/resources:${resourcesOutputMount}`,
     '-v',
     `${volumePrefix}-node-modules:${repoRoot}/node_modules`,
     '-v',
@@ -352,6 +353,7 @@ export function createLinuxDockerPlan({
           ? 'npm run package:build --workspace desktop'
           : 'npm run package:verify --workspace desktop',
       );
+      builderCommand.push(...copyResourcesCommand(repoRoot, resourcesOutputMount));
       const invocation = {
         arch,
         args: Object.freeze([
@@ -399,6 +401,16 @@ function copySourceCommand(sourceMount, repoRoot) {
     `mkdir -p ${destination}`,
     `tar -C ${source} --exclude=.git --exclude=node_modules --exclude=desktop/dist --exclude=desktop/out --exclude=desktop/resources -cf - . | tar -C ${destination} -xf -`,
     `cd ${destination}`,
+  ];
+}
+
+function copyResourcesCommand(repoRoot, outputMount) {
+  const source = JSON.stringify(`${repoRoot}/desktop/resources`);
+  const destination = JSON.stringify(outputMount);
+  return [
+    `mkdir -p ${destination}`,
+    `find ${destination} -mindepth 1 -delete`,
+    `tar -C ${source} -cf - . | tar -C ${destination} -xf -`,
   ];
 }
 

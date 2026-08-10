@@ -113,7 +113,7 @@ describe('createLinuxDockerPlan', () => {
         '-v',
         '/repo/worktree/desktop/out:/repo/worktree/desktop/out',
         '-v',
-        '/repo/worktree/desktop/resources:/repo/worktree/desktop/resources',
+        '/repo/worktree/desktop/resources:/agentico-release-output/resources',
       ]),
     );
     expect(plan[0].args.join(' ')).toContain(LINUX_BUILDER_IMAGE);
@@ -208,6 +208,21 @@ describe('createLinuxDockerPlan', () => {
 
     expect(plan[0].args.at(-1)).toContain(
       'tar -C "/agentico-release-source" --exclude=.git --exclude=node_modules --exclude=desktop/dist --exclude=desktop/out --exclude=desktop/resources -cf - . | tar -C "/repo/worktree" -xf -',
+    );
+  });
+
+  it('copies staged resources out only after packaging can replace its local directory', () => {
+    const plan = createLinuxDockerPlan({
+      repoRoot: '/repo/worktree',
+      gitCommonDir: '/repo/.git',
+      volumePrefix: 'agentico-release',
+    });
+
+    expect(plan[0].args.at(-1)).toContain(
+      'find "/agentico-release-output/resources" -mindepth 1 -delete',
+    );
+    expect(plan[0].args.at(-1)).toContain(
+      'tar -C "/repo/worktree/desktop/resources" -cf - . | tar -C "/agentico-release-output/resources" -xf -',
     );
   });
 });

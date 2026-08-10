@@ -105,6 +105,30 @@ describe('runLinuxRelease', () => {
     ).toBe(true);
   });
 
+  it('passes a linked-worktree Git entry through to each Docker build', () => {
+    const options = validFixtureOptions({
+      gitCommonDir: '/repo/.git',
+      gitEntry: '/repo/worktrees/linux-release/.git',
+    });
+    const dockerInvocations = [];
+    options.execute = (_command, args) => {
+      dockerInvocations.push(args);
+      const arch = args
+        .find((arg) => arg.startsWith('AGENTICO_PACKAGE_ARCH='))
+        ?.split('=')
+        .at(-1);
+      if (arch !== undefined) writeReleaseOutputs(options.repoRoot, arch);
+    };
+
+    runLinuxRelease(options);
+
+    expect(
+      dockerInvocations
+        .filter((args) => args.includes('linux/amd64'))
+        .some((args) => args.includes(`${options.gitEntry}:${options.repoRoot}/.git:ro`)),
+    ).toBe(true);
+  });
+
   it('does not accept arm64 outputs until the matching-architecture verifier succeeds', () => {
     const options = validFixtureOptions({ execute: () => {} });
     let arm64VerifierRan = false;

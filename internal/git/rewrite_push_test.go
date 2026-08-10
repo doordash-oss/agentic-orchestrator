@@ -68,8 +68,9 @@ func TestPushRewrittenBranch_RejectsCompetingCreationAfterAbsenceInspection(t *t
 	if !hookCalled {
 		t.Fatal("beforePush hook was not called after authoritative absence inspection")
 	}
-	if err == nil {
-		t.Fatal("PushRewrittenBranch() error = nil; want competing branch creation rejected")
+	assertRewritePushError(t, err, RewritePushRemoteChanged, branch, 0)
+	if cause := errors.Unwrap(err); cause == nil || strings.Contains(cause.Error(), "fetch first") || len(cause.Error()) > 128 {
+		t.Fatalf("RewritePushError unwrap = %v; want bounded command failure without raw push stderr", cause)
 	}
 	if got := remoteBranchSHA(t, bare, branch); got != competingSHA {
 		t.Fatalf("remote tip = %s; want competing remote work %s preserved", got, competingSHA)
@@ -93,6 +94,74 @@ func TestPushRewrittenBranch_DoesNotTreatRemoteFailureAsAbsence(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "checking exact remote branch") {
 		t.Fatalf("PushRewrittenBranch() error = %v; want authoritative absence check failure", err)
+	}
+}
+
+func TestPushRewrittenBranch_KeepsRejectedAbsentCreationOperational(t *testing.T) {
+	repo, bare := testutil.InitPublishReadyGitRepo(t)
+	branch := "feature/rejected-creation"
+	testutil.CreateBranch(t, repo, branch)
+	testutil.CommitFile(t, repo, "local.txt", "local\n", "local branch")
+	hook := `#!/bin/sh
+# Copyright 2026 DoorDash, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+echo "creation rejected" >&2
+exit 1
+`
+	if err := os.WriteFile(filepath.Join(bare, "hooks", "pre-receive"), []byte(hook), 0o755); err != nil {
+		t.Fatalf("writing rejecting pre-receive hook: %v", err)
+	}
+
+	err := PushRewrittenBranch(repo, branch)
+	if err == nil {
+		t.Fatal("PushRewrittenBranch() error = nil; want rejected creation error")
+	}
+	var pushErr *RewritePushError
+	if errors.As(err, &pushErr) {
+		t.Fatalf("PushRewrittenBranch() error = %v; absent ref after rejection must remain operational", err)
+	}
+	if !strings.Contains(err.Error(), "creation rejected") {
+		t.Fatalf("PushRewrittenBranch() error = %v; want primary push rejection retained", err)
+	}
+	if err := rewriteGitCommand(bare, "show-ref", "--verify", "--quiet", "refs/heads/"+branch).Run(); err == nil {
+		t.Fatal("rejected remote branch unexpectedly exists")
+	}
+}
+
+func TestPushRewrittenBranch_KeepsFailedReprobeOperational(t *testing.T) {
+	repo, bare := testutil.InitPublishReadyGitRepo(t)
+	branch := "feature/failed-reprobe"
+	testutil.CreateBranch(t, repo, branch)
+	testutil.CommitFile(t, repo, "local.txt", "local\n", "local branch")
+	unreachable := filepath.Join(t.TempDir(), "missing-origin.git")
+
+	err := pushRewrittenBranch(repo, branch, func() {
+		runRewriteGit(t, repo, "remote", "set-url", "origin", unreachable)
+	})
+	if err == nil {
+		t.Fatal("PushRewrittenBranch() error = nil; want failed re-probe error")
+	}
+	var pushErr *RewritePushError
+	if errors.As(err, &pushErr) {
+		t.Fatalf("PushRewrittenBranch() error = %v; failed re-probe must remain operational", err)
+	}
+	if !strings.Contains(err.Error(), "pushing branch") || !strings.Contains(err.Error(), "checking exact remote branch") {
+		t.Fatalf("PushRewrittenBranch() error = %v; want primary push and re-probe failures retained", err)
+	}
+	if err := rewriteGitCommand(bare, "show-ref", "--verify", "--quiet", "refs/heads/"+branch).Run(); err == nil {
+		t.Fatal("remote branch unexpectedly exists after failed re-probe")
 	}
 }
 

@@ -78,7 +78,25 @@ func pushRewrittenBranch(worktreePath, branch string, beforePush func()) error {
 		if beforePush != nil {
 			beforePush()
 		}
-		return Push(worktreePath, branch)
+		pushErr := Push(worktreePath, branch)
+		if pushErr == nil {
+			return nil
+		}
+		// Distinguish a concurrent creation from an ordinary push failure. The
+		// probe is diagnostic only: no result retries or force-pushes.
+		_, appeared, probeErr := rewritePushRemoteBranchState(worktreePath, remoteRef)
+		if probeErr != nil {
+			return fmt.Errorf("creating remote branch and checking rejected push: %w", errors.Join(pushErr, probeErr))
+		}
+		if appeared {
+			return &RewritePushError{
+				Kind:              RewritePushRemoteChanged,
+				Branch:            branch,
+				RemoteOnlyCommits: 0,
+				Err:               sanitizeOrdinaryPushError(pushErr),
+			}
+		}
+		return pushErr
 	}
 
 	inspectionRef, err := newRewriteInspectionRef()
@@ -154,6 +172,14 @@ func pushRewrittenBranch(worktreePath, branch string, beforePush func()) error {
 	}
 
 	return nil
+}
+
+func sanitizeOrdinaryPushError(err error) error {
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		return fmt.Errorf("git push creating remote branch: %w", exitErr)
+	}
+	return errors.New("git push creating remote branch failed")
 }
 
 func newRewriteInspectionRef() (string, error) {

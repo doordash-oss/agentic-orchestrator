@@ -115,7 +115,7 @@ describe('passState post-review lifecycle', () => {
     expect(passActions(child)).toEqual([{ id: 'start', label: 'Start pass', kind: 'primary' }]);
   });
 
-  it('surfaces conflict files and diagnostics when the transaction parks', () => {
+  it('prefers repository diagnostics over redundant transaction details', () => {
     const state = passState(
       featureSnapshot({
         ...base,
@@ -134,11 +134,40 @@ describe('passState post-review lifecycle', () => {
       }),
     );
     expect(state).toMatchObject({ id: 'integration-attention', tone: 'attention' });
-    expect(state.problems).toEqual([
-      'merge conflict in repo-a',
-      'repo-a: conflicts in internal/api.go, cmd/main.go',
-      'repo-a: rebase stopped on internal/api.go',
-    ]);
+    expect(state.problems).toEqual(['repo-a: rebase stopped on internal/api.go']);
+  });
+
+  it('falls back to conflict files when a repository has no diagnostic', () => {
+    const state = passState(
+      featureSnapshot({
+        ...base,
+        status: 'ReviewPassed',
+        transaction: {
+          phase: 'attention',
+          entries: [
+            {
+              repo: 'repo-a',
+              conflictFiles: ['internal/api.go', 'cmd/main.go'],
+            },
+          ],
+        },
+      }),
+    );
+    expect(state.problems).toEqual(['repo-a: conflicts in internal/api.go, cmd/main.go']);
+  });
+
+  it('falls back to transaction attention when repositories provide no details', () => {
+    const state = passState(
+      featureSnapshot({
+        ...base,
+        status: 'ReviewPassed',
+        transaction: {
+          phase: 'attention',
+          attention: 'merge conflict in repo-a',
+        },
+      }),
+    );
+    expect(state.problems).toEqual(['merge conflict in repo-a']);
   });
 
   it('walks applied, merged, and discarded closures without reverting to ready', () => {

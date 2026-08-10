@@ -148,6 +148,32 @@ func TestConflictMarkerFiles_CleanTree(t *testing.T) {
 	}
 }
 
+func TestConflictMarkerFiles_IgnoresDecorativeSeparators(t *testing.T) {
+	if testing.Short() {
+		t.Skip("real-git conflict marker scan")
+	}
+	t.Parallel()
+	repo := testutil.InitGitRepo(t)
+
+	content := strings.Join([]string{
+		`log.Printf("==============================")`,
+		"// =============================================================================",
+		"=======",
+		"embedded ======= separator",
+		"prefixed <<<<<<< example",
+		"prefixed >>>>>>> example",
+	}, "\n") + "\n"
+	testutil.CommitFile(t, repo, "decorative.txt", content, "add decorative separators")
+
+	files, err := ConflictMarkerFiles(repo)
+	if err != nil {
+		t.Fatalf("ConflictMarkerFiles() error = %v", err)
+	}
+	if len(files) != 0 {
+		t.Errorf("ConflictMarkerFiles() = %v; want empty for decorative separators", files)
+	}
+}
+
 func TestConflictMarkerFiles_DetectsMarkers(t *testing.T) {
 	if testing.Short() {
 		t.Skip("real-git conflict marker scan")

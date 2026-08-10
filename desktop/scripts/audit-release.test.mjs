@@ -184,6 +184,10 @@ release:
       '\tnode desktop/scripts/publish-desktop-cask.mjs --early',
       '\tnode desktop/scripts/release-goreleaser.mjs',
       '\tgoreleaser release --clean',
+      '\t/opt/homebrew/bin/goreleaser release --clean',
+      '\t./bin/goreleaser release --clean',
+      '\tGITHUB_TOKEN=token ./bin/goreleaser release --clean',
+      '\tenv GITHUB_TOKEN=token /opt/homebrew/bin/goreleaser release --clean',
       '\tnpm run release:artifacts:verify --workspace desktop -- manifest --again',
     ]) {
       const recipe = [...validRecipe];

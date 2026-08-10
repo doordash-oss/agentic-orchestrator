@@ -9,7 +9,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import os from 'node:os';
-import { dirname, join, posix } from 'node:path';
+import { basename, dirname, join, posix } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { auditElectronBuilderFuseConfig } from './lib/fuse-policy.mjs';
@@ -138,8 +138,25 @@ function isPublicationSensitiveCommand(command) {
     command.includes('release:artifacts:verify') ||
     command.includes('release-goreleaser.mjs') ||
     command.includes('publish-desktop-cask.mjs') ||
-    /(?:^|\s)goreleaser(?:\s|$)/.test(command)
+    commandRunsGoReleaser(command)
   );
+}
+
+/** Find a shell command's executable after simple assignments or `env` prefixes. */
+function commandRunsGoReleaser(command) {
+  const tokens = command.trim().split(/\s+/);
+  let index = 0;
+  while (isEnvironmentAssignment(tokens[index])) index += 1;
+  if (tokens[index] === 'env') {
+    index += 1;
+    while (tokens[index]?.startsWith('-')) index += 1;
+    while (isEnvironmentAssignment(tokens[index])) index += 1;
+  }
+  return basename(tokens[index] ?? '') === 'goreleaser';
+}
+
+function isEnvironmentAssignment(token) {
+  return /^[A-Za-z_][A-Za-z0-9_]*=/.test(token ?? '');
 }
 
 /** Extract only tab-indented shell commands from one exact Make target's recipe. */

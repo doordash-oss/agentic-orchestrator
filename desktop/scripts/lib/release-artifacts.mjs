@@ -325,7 +325,7 @@ export function createLinuxDockerPlan({ repoRoot, gitCommonDir, volumePrefix }) 
     '-v',
     `${repoRoot}/desktop/resources:${repoRoot}/desktop/resources`,
     '-v',
-    `${volumePrefix}-node-modules:${repoRoot}/node_modules`,
+    `${repoRoot}/node_modules:${repoRoot}/node_modules`,
     '-v',
     `${volumePrefix}-electron:/root/.cache/electron`,
     '-v',

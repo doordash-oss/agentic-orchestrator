@@ -123,7 +123,7 @@ describe('createLinuxDockerPlan', () => {
     expect(plan[0].args).toEqual(
       expect.arrayContaining([
         '-v',
-        'agentico-release-node-modules:/repo/worktree/node_modules',
+        '/repo/worktree/node_modules:/repo/worktree/node_modules',
         '-v',
         'agentico-release-electron:/root/.cache/electron',
         '-v',

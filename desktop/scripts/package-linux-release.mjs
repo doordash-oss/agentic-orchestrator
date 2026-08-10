@@ -1,6 +1,6 @@
 // Build and verify Linux desktop release packages locally in sequential Docker containers.
 import { execFileSync } from 'node:child_process';
-import { existsSync, rmSync, statSync, statfsSync } from 'node:fs';
+import { existsSync, mkdirSync, rmSync, statSync, statfsSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -41,6 +41,9 @@ export function runLinuxRelease({
   }
 
   const plan = createLinuxDockerPlan({ repoRoot, gitCommonDir, volumePrefix });
+  for (const directory of ['node_modules', 'desktop/dist', 'desktop/out', 'desktop/resources']) {
+    mkdirSync(join(repoRoot, directory), { recursive: true });
+  }
   ensureLinuxImages(execute);
 
   const completed = [];

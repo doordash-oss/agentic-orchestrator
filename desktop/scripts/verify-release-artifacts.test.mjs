@@ -1,11 +1,21 @@
 import { createHash } from 'node:crypto';
 import { afterEach, describe, expect, it } from 'vitest';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import {
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import {
+  createPackageVerificationReceipt,
   expectedDesktopArtifacts,
+  readArtifactEvidence,
   validateArtifactInventory,
   validateChecksumManifest,
 } from './lib/release-artifacts.mjs';
@@ -26,8 +36,7 @@ function receipt(os, arch, artifacts, artifactDir = DIST_DIR) {
     AppImage: `Agentico-${arch}.AppImage`,
     deb: `agentico_0.150.0_${arch === 'x64' ? 'amd64' : arch}.deb`,
   };
-  return {
-    schema_version: 2,
+  return createPackageVerificationReceipt({
     target: { os, arch },
     artifacts: artifacts.map((format) => {
       const path = join(artifactDir, paths[format]);
@@ -46,14 +55,8 @@ function receipt(os, arch, artifacts, artifactDir = DIST_DIR) {
         },
       };
     }),
-    identity: {
-      desktop_version: '0.150.0',
-      server_version: TAG,
-      server_revision: REVISION,
-      os,
-      arch,
-    },
-  };
+    unpackedApp: join(artifactDir, 'unpacked', 'agentico'),
+  });
 }
 
 function completeV0150Fixture(artifactDir = DIST_DIR) {
@@ -221,7 +224,7 @@ describe('validateArtifactInventory', () => {
       '/different-unverified-directory/Agentico-x64.AppImage';
 
     expect(validateArtifactInventory(fixture).join('\n')).toContain(
-      'package-verification-linux-x64.json AppImage path=/different-unverified-directory/Agentico-x64.AppImage, expected ',
+      'package-verification-linux-x64.json could not hash AppImage at /different-unverified-directory/Agentico-x64.AppImage',
     );
   });
 
@@ -236,6 +239,18 @@ describe('validateArtifactInventory', () => {
         expect.stringContaining('package-verification-linux-x64.json AppImage size='),
       ]),
     );
+  });
+
+  it('rejects a symlink in place of a release artifact', () => {
+    const fixture = completeV0150Fixture();
+    const artifact = join(fixture.artifactDir, 'Agentico-x64.AppImage');
+    const replacement = join(fixture.artifactDir, 'replacement.AppImage');
+    writeFileSync(replacement, 'replacement\n');
+    rmSync(artifact);
+    symlinkSync(replacement, artifact);
+
+    expect(() => readArtifactEvidence(artifact)).toThrow('not a regular file');
+    expect(validateArtifactInventory(fixture).join('\n')).toContain('could not hash AppImage');
   });
 
   it('rejects a receipt that claims the current AppImage but stale DEB evidence', () => {
@@ -353,6 +368,37 @@ describe('verifyReleaseArtifacts', () => {
         mode: 'manifest',
         ok: false,
       });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects a signed checksum whose desktop hash differs from verified receipt bytes', () => {
+    const root = mkdtempSync(join(tmpdir(), 'agentico-release-artifacts-'));
+    const desktopDist = join(root, 'desktop', 'dist');
+    const checksumsPath = join(root, 'dist', 'checksums.txt');
+    mkdirSync(join(root, 'dist'), { recursive: true });
+    const fixture = completeV0150Fixture(desktopDist);
+    for (const [name, evidence] of Object.entries(fixture.receipts)) {
+      writeFileSync(join(desktopDist, name), `${JSON.stringify(evidence)}\n`);
+    }
+    writeFileSync(
+      checksumsPath,
+      fixture.files.map((name) => `${'a'.repeat(64)}  ${name}`).join('\n'),
+    );
+
+    try {
+      const result = verifyReleaseArtifacts({
+        mode: 'manifest',
+        tag: TAG,
+        revision: REVISION,
+        desktopDist,
+        checksumsPath,
+        runSignatureVerification: () => {},
+      });
+      expect(result.errors.join('\n')).toContain(
+        'checksums.txt SHA-256 for Agentico-mac-universal.dmg=',
+      );
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

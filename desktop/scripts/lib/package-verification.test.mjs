@@ -58,11 +58,26 @@ function elf(machine) {
   return bytes;
 }
 
+function thinMachO(cpuType) {
+  const bytes = Buffer.alloc(32);
+  bytes.writeUInt32LE(0xfeedfacf, 0);
+  bytes.writeUInt32LE(cpuType, 4);
+  return bytes;
+}
+
 function fatMachO(cpuTypes) {
-  const bytes = Buffer.alloc(8 + cpuTypes.length * 20);
+  const tableEnd = 8 + cpuTypes.length * 20;
+  const bytes = Buffer.alloc(tableEnd + cpuTypes.length * 32);
   bytes.writeUInt32BE(0xcafebabe, 0);
   bytes.writeUInt32BE(cpuTypes.length, 4);
-  for (const [index, cpuType] of cpuTypes.entries()) bytes.writeUInt32BE(cpuType, 8 + index * 20);
+  for (const [index, cpuType] of cpuTypes.entries()) {
+    const entry = 8 + index * 20;
+    const offset = tableEnd + index * 32;
+    bytes.writeUInt32BE(cpuType, entry);
+    bytes.writeUInt32BE(offset, entry + 8);
+    bytes.writeUInt32BE(32, entry + 12);
+    thinMachO(cpuType).copy(bytes, offset);
+  }
   return bytes;
 }
 
@@ -99,6 +114,36 @@ describe('inspectExecutableArchitecture', () => {
     ).toContain('requires arm64, found amd64');
     expect(inspectExecutableArchitecture(Buffer.from('not-an-executable'))).toEqual({
       format: 'unknown',
+      architectures: [],
+    });
+  });
+
+  it('fails closed on malformed ELF headers and bogus Mach-O fat slices', () => {
+    const invalidElf = elf(62);
+    invalidElf[4] = 1;
+    expect(inspectExecutableArchitecture(invalidElf)).toEqual({
+      format: 'unknown',
+      architectures: [],
+    });
+
+    const invalidEndian = elf(62);
+    invalidEndian[5] = 3;
+    expect(inspectExecutableArchitecture(invalidEndian)).toEqual({
+      format: 'unknown',
+      architectures: [],
+    });
+
+    const malformedFat = fatMachO([0x01000007]);
+    malformedFat.writeUInt32BE(malformedFat.length + 1, 16);
+    expect(inspectExecutableArchitecture(malformedFat)).toEqual({
+      format: 'Mach-O fat',
+      architectures: [],
+    });
+
+    const mismatchedSlice = fatMachO([0x01000007]);
+    thinMachO(0x0100000c).copy(mismatchedSlice, 28);
+    expect(inspectExecutableArchitecture(mismatchedSlice)).toEqual({
+      format: 'Mach-O fat',
       architectures: [],
     });
   });

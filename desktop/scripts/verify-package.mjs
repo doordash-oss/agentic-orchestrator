@@ -24,7 +24,6 @@
 // layout instead of re-deriving it. The identity-rejection logic itself is
 // unit-tested in scripts/lib/identity.test.mjs against tampered fixtures.
 import { execFileSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
 import {
   accessSync,
   constants,
@@ -38,7 +37,7 @@ import {
 } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { getCurrentFuseWire } from '@electron/fuses';
 
@@ -57,7 +56,11 @@ import {
   inspectExecutableArchitecture,
   packageIdentityTargetError,
 } from './lib/package-verification.mjs';
-import { resolvePackageTarget } from './lib/release-artifacts.mjs';
+import {
+  createPackageVerificationReceipt,
+  readArtifactEvidence,
+  resolvePackageTarget,
+} from './lib/release-artifacts.mjs';
 
 const desktopDir = dirname(dirname(fileURLToPath(import.meta.url)));
 const distDir = join(desktopDir, 'dist');
@@ -171,22 +174,29 @@ function verifyExecutableTarget(executablePath, target, label) {
   if (mismatch !== null) fail(`${label} architecture mismatch at ${executablePath}: ${mismatch}`);
 }
 
-function verifiedArtifactReceipt({ format, path, identity }) {
-  const canonicalPath = resolve(path);
-  let bytes;
-  let size;
+async function verifyBoundArtifact({ format, path, verify }) {
+  let before;
   try {
-    bytes = readFileSync(canonicalPath);
-    size = statSync(canonicalPath).size;
+    before = readArtifactEvidence(path);
   } catch (error) {
-    fail(`could not bind verified ${format} artifact at ${canonicalPath}: ${error.message}`);
+    fail(`could not bind ${format} artifact before inspection: ${error.message}`);
+  }
+  const identity = await verify(before.path);
+  let after;
+  try {
+    after = readArtifactEvidence(before.path);
+  } catch (error) {
+    fail(`could not bind ${format} artifact after inspection: ${error.message}`);
+  }
+  if (before.sha256 !== after.sha256 || before.size !== after.size || before.path !== after.path) {
+    fail(`verified ${format} artifact changed during inspection: ${before.path}`);
   }
   return {
     target: { ...packageTarget },
     format,
-    path: canonicalPath,
-    sha256: createHash('sha256').update(bytes).digest('hex'),
-    size,
+    path: after.path,
+    sha256: after.sha256,
+    size: after.size,
     identity: { ...identity },
   };
 }
@@ -362,21 +372,28 @@ async function main() {
   if (unpackedOnly) {
     console.log(`verify-package: inspecting unpacked app ${unpackedApp}`);
     identity = await verifyUnpackedApp(unpackedApp);
-    verified.push({ target: 'unpacked', path: resolve(unpackedApp), identity });
+    verified.push({ target: 'unpacked', path: unpackedApp, identity });
   } else if (process.platform === 'darwin') {
     const dmg = verificationPlan.artifacts[0].path;
     console.log(`verify-package: inspecting ${dmg}`);
-    identity = await verifyDmg(dmg);
-    verified.push(verifiedArtifactReceipt({ format: 'dmg', path: dmg, identity }));
+    const artifact = await verifyBoundArtifact({ format: 'dmg', path: dmg, verify: verifyDmg });
+    identity = artifact.identity;
+    verified.push(artifact);
   } else if (process.platform === 'linux') {
     const appImage = verificationPlan.artifacts[0].path;
     console.log(`verify-package: inspecting ${appImage}`);
-    identity = await verifyAppImage(appImage);
-    verified.push(verifiedArtifactReceipt({ format: 'AppImage', path: appImage, identity }));
+    const appImageArtifact = await verifyBoundArtifact({
+      format: 'AppImage',
+      path: appImage,
+      verify: verifyAppImage,
+    });
+    identity = appImageArtifact.identity;
+    verified.push(appImageArtifact);
     const deb = verificationPlan.artifacts[1].path;
     console.log(`verify-package: inspecting ${deb}`);
-    identity = await verifyDeb(deb);
-    verified.push(verifiedArtifactReceipt({ format: 'deb', path: deb, identity }));
+    const debArtifact = await verifyBoundArtifact({ format: 'deb', path: deb, verify: verifyDeb });
+    identity = debArtifact.identity;
+    verified.push(debArtifact);
   } else {
     fail(`unsupported verification host: ${process.platform}`);
   }
@@ -389,24 +406,28 @@ async function main() {
   if (!existsSync(unpackedApp)) {
     fail(`expected unpacked app for packaged E2E at ${unpackedApp}`);
   }
-  const manifest = {
-    schema_version: 2,
-    verified_at: new Date().toISOString(),
-    host: { os: process.platform, arch: process.arch },
-    artifacts: verified,
-    unpacked_app: unpackedApp,
-    // Compatibility consumers use this as a summary only. Release gating
-    // binds the per-artifact identities above, never this mutable aggregate.
-    identity,
-  };
+  const manifest = unpackedOnly
+    ? {
+        verified_at: new Date().toISOString(),
+        host: { os: process.platform, arch: process.arch },
+        artifacts: verified,
+        unpacked_app: unpackedApp,
+        identity,
+      }
+    : createPackageVerificationReceipt({
+        target: packageTarget,
+        artifacts: verified,
+        unpackedApp,
+        host: { os: process.platform, arch: process.arch },
+      });
   const receipt = `${JSON.stringify(manifest, null, 2)}\n`;
   const { compatibility: compatibilityReceipt, target: targetReceipt } = verificationPlan.receipts;
   writeFileSync(compatibilityReceipt, receipt);
-  writeFileSync(targetReceipt, receipt);
+  if (!unpackedOnly) writeFileSync(targetReceipt, receipt);
   const seconds = ((Date.now() - startedAt) / 1000).toFixed(1);
   console.log(`verify-package: OK (${verified.map((v) => v.target).join(', ')}) in ${seconds}s`);
   console.log(`verify-package: wrote ${compatibilityReceipt}`);
-  console.log(`verify-package: wrote ${targetReceipt}`);
+  if (!unpackedOnly) console.log(`verify-package: wrote ${targetReceipt}`);
 }
 
 try {

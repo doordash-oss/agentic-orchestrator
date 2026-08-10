@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 
 import {
   expectedDesktopArtifacts,
+  receiptArtifactDigests,
   validateArtifactInventory,
   validateChecksumManifest,
 } from './lib/release-artifacts.mjs';
@@ -56,8 +57,17 @@ export function verifyReleaseArtifacts({
     if (!existsSync(checksumsPath)) {
       errors.push(`missing checksum manifest: ${checksumsPath}`);
     } else {
+      const receipts = readReceipts(desktopDist, false, errors);
+      const receiptEvidence = receiptArtifactDigests({ tag, revision, receipts });
+      errors.push(...receiptEvidence.errors);
       try {
-        errors.push(...validateChecksumManifest(readFileSync(checksumsPath, 'utf8'), expected));
+        errors.push(
+          ...validateChecksumManifest(
+            readFileSync(checksumsPath, 'utf8'),
+            expected,
+            receiptEvidence.digests,
+          ),
+        );
       } catch (error) {
         errors.push(`could not read checksum manifest ${checksumsPath}: ${errorMessage(error)}`);
       }

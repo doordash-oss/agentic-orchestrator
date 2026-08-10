@@ -43,10 +43,18 @@ export function packageIdentityTargetError(identity, target) {
  */
 export function inspectExecutableArchitecture(bytes) {
   const buffer = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes);
-  if (buffer.length >= 20 && buffer.subarray(0, 4).equals(Buffer.from([0x7f, 0x45, 0x4c, 0x46]))) {
+  if (
+    buffer.length >= 64 &&
+    buffer.subarray(0, 4).equals(Buffer.from([0x7f, 0x45, 0x4c, 0x46])) &&
+    buffer[4] === 2 &&
+    (buffer[5] === 1 || buffer[5] === 2)
+  ) {
     const littleEndian = buffer[5] === 1;
     const machine = littleEndian ? buffer.readUInt16LE(18) : buffer.readUInt16BE(18);
-    return { format: 'ELF', architectures: elfArchitecture(machine) };
+    const architectures = elfArchitecture(machine);
+    return architectures.length === 1
+      ? { format: 'ELF', architectures }
+      : { format: 'unknown', architectures: [] };
   }
 
   if (buffer.length >= 8) {
@@ -63,7 +71,23 @@ export function inspectExecutableArchitecture(bytes) {
       }
       const architectures = new Set();
       for (let index = 0; index < count; index += 1) {
-        for (const architecture of machOArchitecture(readU32(8 + index * entrySize))) {
+        const entry = 8 + index * entrySize;
+        const cpuType = readU32(entry);
+        const offset = readU32(entry + 8);
+        const size = readU32(entry + 12);
+        if (
+          offset < 8 + count * entrySize ||
+          size < 28 ||
+          offset > buffer.length ||
+          size > buffer.length - offset
+        ) {
+          return { format: 'Mach-O fat', architectures: [] };
+        }
+        const innerCpuType = thinMachOCpuType(buffer, offset);
+        if (innerCpuType === null || innerCpuType !== cpuType) {
+          return { format: 'Mach-O fat', architectures: [] };
+        }
+        for (const architecture of machOArchitecture(cpuType)) {
           architectures.add(architecture);
         }
       }
@@ -71,6 +95,15 @@ export function inspectExecutableArchitecture(bytes) {
     }
   }
   return { format: 'unknown', architectures: [] };
+}
+
+function thinMachOCpuType(buffer, offset) {
+  if (offset + 8 > buffer.length) return null;
+  const magicLe = buffer.readUInt32LE(offset);
+  const magicBe = buffer.readUInt32BE(offset);
+  if (magicLe === 0xfeedface || magicLe === 0xfeedfacf) return buffer.readUInt32LE(offset + 4);
+  if (magicBe === 0xfeedface || magicBe === 0xfeedfacf) return buffer.readUInt32BE(offset + 4);
+  return null;
 }
 
 /** Return a precise target mismatch, or null when executable evidence is sufficient. */

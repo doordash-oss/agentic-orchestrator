@@ -40,10 +40,12 @@ func MergeInProgress(worktreePath string) bool {
 // worktreePath that contain literal git conflict marker lines. The scan
 // matches the `git grep`-based contract the generated rebase-child prompt and
 // exit criteria already impose: the three conflict markers (start, middle
-// separator, end) searched as anchored line expressions. It is a literal
-// marker scan, not an unmerged-index check — after the transaction commits
-// child changes, `git diff --name-only --diff-filter=U` is vacuous, so only a
-// content scan can prove a worktree is free of markers.
+// separator, end) searched as anchored line expressions. A file must contain
+// all three forms to be reported, so ordinary headings and dividers do not
+// trip the gate. It is a literal marker scan, not an unmerged-index check.
+// After the transaction commits child changes,
+// `git diff --name-only --diff-filter=U` is vacuous, so only a content scan can
+// prove a worktree is free of markers.
 //
 // The marker patterns are constructed from split strings so this source file
 // does not itself contain the literal marker sequences and false-positive on
@@ -59,20 +61,31 @@ func ConflictMarkerFiles(worktreePath string) ([]string, error) {
 	mid := "^" + "=" + "=====" + "=$"
 	end := "^" + ">" + ">>>>" + ">> "
 
-	cmd := exec.Command("git", "-C", worktreePath, "grep", "-l",
-		"-e", start, "-e", mid, "-e", end, "--", ".")
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		// git grep exits 1 when there are no matches: that is the clean-tree
-		// case, not an error. Distinguish it from a real failure by checking
-		// the exit code via the typed *exec.ExitError.
-		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
-			return nil, nil
+	patterns := []string{start, mid, end}
+	matches := make(map[string]int)
+	for _, pattern := range patterns {
+		cmd := exec.Command("git", "-C", worktreePath, "grep", "-l",
+			"-e", pattern, "--", ".")
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			// git grep exits 1 when there are no matches: that is a clean result
+			// for this marker form, not a scan failure.
+			if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
+				continue
+			}
+			return nil, &ConflictMarkerScanError{WorktreePath: worktreePath, Err: err, Output: string(out)}
 		}
-		return nil, &ConflictMarkerScanError{WorktreePath: worktreePath, Err: err, Output: string(out)}
+		for _, file := range parseGrepFiles(string(out)) {
+			matches[file]++
+		}
 	}
 
-	files := parseGrepFiles(string(out))
+	files := make([]string, 0, len(matches))
+	for file, count := range matches {
+		if count == len(patterns) {
+			files = append(files, file)
+		}
+	}
 	sort.Strings(files)
 	return files, nil
 }

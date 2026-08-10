@@ -158,6 +158,7 @@ func TestConflictMarkerFiles_IgnoresDecorativeSeparators(t *testing.T) {
 	content := strings.Join([]string{
 		`log.Printf("==============================")`,
 		"// =============================================================================",
+		"=======",
 		"embedded ======= separator",
 		"prefixed <<<<<<< example",
 		"prefixed >>>>>>> example",

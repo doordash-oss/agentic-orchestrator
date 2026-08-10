@@ -313,25 +313,34 @@ export function selectPackageArtifact(files, target, format) {
 
 /** Create the ordered Docker invocations for Linux x64 and arm64 packaging. */
 export function createLinuxDockerPlan({ repoRoot, gitCommonDir, volumePrefix }) {
+  const sourceMount = '/agentico-release-source';
   const mounts = [
     '-v',
-    `${repoRoot}:${repoRoot}:ro`,
+    `${repoRoot}:${sourceMount}:ro`,
     '-v',
     `${gitCommonDir}:${gitCommonDir}:ro`,
     '-v',
-    `${repoRoot}/desktop:${repoRoot}/desktop`,
+    `${repoRoot}/desktop/dist:${repoRoot}/desktop/dist`,
     '-v',
-    `${repoRoot}/node_modules:${repoRoot}/node_modules`,
+    `${repoRoot}/desktop/out:${repoRoot}/desktop/out`,
+    '-v',
+    `${repoRoot}/desktop/resources:${repoRoot}/desktop/resources`,
+    '-v',
+    `${volumePrefix}-node-modules:${repoRoot}/node_modules`,
     '-v',
     `${volumePrefix}-electron:/root/.cache/electron`,
     '-v',
     `${volumePrefix}-electron-builder:/root/.cache/electron-builder`,
     '--workdir',
-    repoRoot,
+    '/',
   ];
   return Object.freeze(
     ['x64', 'arm64'].map((arch) => {
-      const builderCommand = [...goBootstrapCommand('amd64'), 'npm ci'];
+      const builderCommand = [
+        ...copySourceCommand(sourceMount, repoRoot),
+        ...goBootstrapCommand('amd64'),
+        'npm ci',
+      ];
       builderCommand.push(
         arch === 'arm64'
           ? 'npm run package:build --workspace desktop'
@@ -365,12 +374,28 @@ export function createLinuxDockerPlan({ repoRoot, gitCommonDir, volumePrefix }) 
           LINUX_ARM64_VERIFIER_IMAGE,
           'bash',
           '-lc',
-          [...goBootstrapCommand('arm64'), 'node desktop/scripts/verify-package.mjs'].join(' && '),
+          [
+            ...copySourceCommand(sourceMount, repoRoot),
+            ...goBootstrapCommand('arm64'),
+            'node desktop/scripts/verify-package.mjs',
+          ].join(' && '),
         ]);
       }
       return Object.freeze(invocation);
     }),
   );
+}
+
+function copySourceCommand(sourceMount, repoRoot) {
+  const source = JSON.stringify(sourceMount);
+  const destination = JSON.stringify(repoRoot);
+  const parent = JSON.stringify(resolve(repoRoot, '..'));
+  return [
+    `mkdir -p ${parent}`,
+    `mkdir -p ${destination}`,
+    `tar -C ${source} --exclude=node_modules --exclude=desktop/dist --exclude=desktop/out --exclude=desktop/resources -cf - . | tar -C ${parent} -xf -`,
+    `cd ${destination}`,
+  ];
 }
 
 function goBootstrapCommand(arch) {

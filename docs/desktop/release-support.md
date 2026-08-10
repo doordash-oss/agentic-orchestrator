@@ -107,7 +107,7 @@ GoReleaser and creates no GitHub release. Recovery depends on what changed:
   never ran (for example Docker was stopped or `GITHUB_TOKEN` was unavailable),
   fix that local condition and rerun `make release` with the same local tag.
   The remote-tag preflight will confirm that it is still safe. The signing key
-  is consumed inside GoReleaser, not by this pre-GoReleaser gate; if it fails,
+  is loaded and validated by this pre-GoReleaser gate, then consumed by GoReleaser; if signing fails,
   first check whether GoReleaser created a remote tag or release before
   deciding which recovery path applies.
 - **Transient verifier failure after GoReleaser.** An authentication, DNS, or

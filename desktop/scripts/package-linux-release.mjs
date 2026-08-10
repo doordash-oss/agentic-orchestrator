@@ -41,7 +41,7 @@ export function runLinuxRelease({
   }
 
   const plan = createLinuxDockerPlan({ repoRoot, gitCommonDir, volumePrefix });
-  for (const directory of ['node_modules', 'desktop/dist', 'desktop/out', 'desktop/resources']) {
+  for (const directory of ['desktop/dist', 'desktop/out', 'desktop/resources']) {
     mkdirSync(join(repoRoot, directory), { recursive: true });
   }
   ensureLinuxImages(execute);

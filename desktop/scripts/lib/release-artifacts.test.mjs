@@ -105,11 +105,15 @@ describe('createLinuxDockerPlan', () => {
         '-e',
         'AGENTICO_PACKAGE_ARCH=x64',
         '-v',
-        '/repo/worktree:/repo/worktree:ro',
+        '/repo/worktree:/agentico-release-source:ro',
         '-v',
         '/repo/.git:/repo/.git:ro',
         '-v',
-        '/repo/worktree/desktop:/repo/worktree/desktop',
+        '/repo/worktree/desktop/dist:/repo/worktree/desktop/dist',
+        '-v',
+        '/repo/worktree/desktop/out:/repo/worktree/desktop/out',
+        '-v',
+        '/repo/worktree/desktop/resources:/repo/worktree/desktop/resources',
       ]),
     );
     expect(plan[0].args.join(' ')).toContain(LINUX_BUILDER_IMAGE);
@@ -119,7 +123,7 @@ describe('createLinuxDockerPlan', () => {
     expect(plan[0].args).toEqual(
       expect.arrayContaining([
         '-v',
-        '/repo/worktree/node_modules:/repo/worktree/node_modules',
+        'agentico-release-node-modules:/repo/worktree/node_modules',
         '-v',
         'agentico-release-electron:/root/.cache/electron',
         '-v',

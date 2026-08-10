@@ -9,7 +9,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import os from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, posix } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { auditElectronBuilderFuseConfig } from './lib/fuse-policy.mjs';
@@ -51,6 +51,9 @@ function requireFile(path, label, failures) {
  * the release configuration deliberately small and auditable without adding a
  * YAML parser to the release runtime: the two relevant blocks have an
  * unambiguous top-level section, `extra_files` child, and `- glob` entries.
+ * Each required path is literal after POSIX normalization, rather than a
+ * filename match, so an unrelated directory or broad wildcard cannot cause a
+ * release package to bypass signing or upload.
  */
 export function auditGoReleaserDesktopArtifacts(configText, expectedNames) {
   const failures = [];
@@ -60,8 +63,16 @@ export function auditGoReleaserDesktopArtifacts(configText, expectedNames) {
   ]) {
     const globs = goreleaserExtraFileGlobs(configText, section);
     for (const name of expectedNames) {
-      if (!globs.some((glob) => goreleaserGlobMatchesArtifact(glob, name))) {
+      const expectedGlob = expectedGoReleaserDesktopGlob(name);
+      const entries = globs.filter(
+        (glob) => normalizeGoReleaserExtraFileGlob(glob) === expectedGlob,
+      );
+      if (entries.length === 0) {
         failures.push(`GoReleaser ${label} omits ${name}`);
+      } else if (entries.length !== 1) {
+        failures.push(
+          `GoReleaser ${label} has ${entries.length} entries for ${name}, expected exactly 1`,
+        );
       }
     }
   }
@@ -92,27 +103,16 @@ function goreleaserExtraFileGlobs(configText, section) {
   return globs;
 }
 
-function goreleaserGlobMatchesArtifact(glob, artifactName) {
-  const candidate = glob
-    .replace(/^['"]|['"]$/g, '')
-    .split('/')
-    .at(-1);
-  if (candidate === undefined) return false;
-  const expression = `^${candidate
-    .split(/{{\s*\.Version\s*}}/)
-    .map(goreleaserGlobSegmentExpression)
-    .join('[^/]+')}$`;
-  return new RegExp(expression).test(artifactName);
+function expectedGoReleaserDesktopGlob(artifactName) {
+  const deb = /^agentico_\d+\.\d+\.\d+_(amd64|arm64)\.deb$/.exec(artifactName);
+  if (deb?.[1] !== undefined) {
+    return `desktop/dist/agentico_{{ .Version }}_${deb[1]}.deb`;
+  }
+  return `desktop/dist/${artifactName}`;
 }
 
-function goreleaserGlobSegmentExpression(segment) {
-  return [...segment]
-    .map((character) => {
-      if (character === '*') return '.*';
-      if (character === '?') return '.';
-      return escapeRegExp(character);
-    })
-    .join('');
+function normalizeGoReleaserExtraFileGlob(glob) {
+  return posix.normalize(glob.replace(/^['"]|['"]$/g, ''));
 }
 
 function normalizeLicense(license) {

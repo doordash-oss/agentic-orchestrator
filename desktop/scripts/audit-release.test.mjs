@@ -57,6 +57,52 @@ release:
     );
   });
 
+  it('requires the exact desktop artifact directory and versioned Debian paths', () => {
+    const config = `
+checksum:
+  extra_files:
+    - glob: wrong/place/Agentico-x64.AppImage
+    - glob: desktop/dist/agentico_*_amd64.deb
+release:
+  extra_files:
+    - glob: desktop/dist/Agentico-x64.AppImage
+    - glob: wrong/place/agentico_{{ .Version }}_amd64.deb
+`;
+
+    expect(
+      auditGoReleaserDesktopArtifacts(config, [
+        'Agentico-x64.AppImage',
+        'agentico_0.150.0_amd64.deb',
+      ]),
+    ).toEqual(
+      expect.arrayContaining([
+        'GoReleaser checksum.extra_files omits Agentico-x64.AppImage',
+        'GoReleaser checksum.extra_files omits agentico_0.150.0_amd64.deb',
+        'GoReleaser release.extra_files omits agentico_0.150.0_amd64.deb',
+      ]),
+    );
+  });
+
+  it('requires each exact desktop path exactly once in each GoReleaser block', () => {
+    const config = `
+checksum:
+  extra_files:
+    - glob: desktop/dist/Agentico-x64.AppImage
+    - glob: desktop/dist/Agentico-x64.AppImage
+release:
+  extra_files:
+    - glob: desktop/dist/Agentico-x64.AppImage
+    - glob: desktop/dist/Agentico-x64.AppImage
+`;
+
+    expect(auditGoReleaserDesktopArtifacts(config, ['Agentico-x64.AppImage'])).toEqual(
+      expect.arrayContaining([
+        'GoReleaser checksum.extra_files has 2 entries for Agentico-x64.AppImage, expected exactly 1',
+        'GoReleaser release.extra_files has 2 entries for Agentico-x64.AppImage, expected exactly 1',
+      ]),
+    );
+  });
+
   it('accepts the actual GoReleaser desktop artifact configuration', () => {
     const config = readFileSync(new URL('../../.goreleaser.yaml', import.meta.url), 'utf8');
     expect(

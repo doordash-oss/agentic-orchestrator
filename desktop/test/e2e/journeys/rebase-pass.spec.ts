@@ -44,7 +44,7 @@ import {
  * advances `origin/main` so the feature branch is behind its remote target.
  * Manual publish keeps the post-rebase parent work local until the user chooses
  * Publish updates, and the seeded PR URL makes the preflight classify it as a
- * rewrite of an existing pull request rather than a first publication.
+ * fast-forward update to an existing pull request rather than a first publication.
  */
 function seedBehindFeature(world: ReturnType<typeof createWorld>, featureId: string): void {
   const featurePath = featureYamlPath(world, featureId);
@@ -166,6 +166,7 @@ test('rebase pass: behind feature → card click → pass workspace → completi
 
     const startRebase = aftercare.getByRole('button', { name: /Start rebase pass/ });
     await expect(startRebase).toBeVisible();
+    await expect(aftercare.getByRole('button', { name: /Publish new commits/ })).toHaveCount(0);
     await startRebase.click();
     transcript.step('clicked "Start rebase pass" in aftercare');
 

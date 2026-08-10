@@ -1224,7 +1224,7 @@ describe('FeatureCockpit convergence', () => {
             touched: true,
             status: 'unpublished_changes',
             pendingCommits: 1,
-            pushMode: 'rewrite',
+            pushMode: 'fast_forward',
           },
         ],
       });

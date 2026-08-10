@@ -315,9 +315,15 @@ export function selectPackageArtifact(files, target, format) {
 export function createLinuxDockerPlan({ repoRoot, gitCommonDir, volumePrefix }) {
   const mounts = [
     '-v',
-    `${repoRoot}:${repoRoot}`,
+    `${repoRoot}:${repoRoot}:ro`,
     '-v',
-    `${gitCommonDir}:${gitCommonDir}`,
+    `${gitCommonDir}:${gitCommonDir}:ro`,
+    '-v',
+    `${repoRoot}/desktop/dist:${repoRoot}/desktop/dist`,
+    '-v',
+    `${repoRoot}/desktop/out:${repoRoot}/desktop/out`,
+    '-v',
+    `${repoRoot}/desktop/resources:${repoRoot}/desktop/resources`,
     '-v',
     `${volumePrefix}-node-modules:${repoRoot}/node_modules`,
     '-v',

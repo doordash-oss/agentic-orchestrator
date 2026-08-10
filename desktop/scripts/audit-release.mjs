@@ -97,6 +97,9 @@ export function auditGoReleaserReleaseTarget(configText) {
 export function auditReleaseMakefile(makefileText) {
   const failures = [];
   const recipe = makeRecipeCommands(makefileText, 'release');
+  const localPreflight = 'node desktop/scripts/release-preflight.mjs';
+  const provenanceRecheck = 'node desktop/scripts/release-preflight.mjs verify';
+  const nativeInstall = 'npm ci';
   const expected = [
     'node desktop/scripts/verify-release-publication.mjs preflight --tag "$(RELEASE_TAG)" --commit "$(RELEASE_COMMIT)"',
     'npm run release:artifacts:verify --workspace desktop -- packages',
@@ -106,6 +109,41 @@ export function auditReleaseMakefile(makefileText) {
     'node desktop/scripts/publish-desktop-cask.mjs',
   ];
   const sensitive = recipe.filter(isPublicationSensitiveCommand);
+  if (recipe.filter((command) => command === localPreflight).length !== 1) {
+    failures.push('Makefile release recipe must run one local preflight before any build');
+  }
+  if (recipe.filter((command) => command === nativeInstall).length !== 1) {
+    failures.push('Makefile release recipe must run unconditional npm ci from the lockfile');
+  }
+  if (recipe.filter((command) => command === provenanceRecheck).length !== 1) {
+    failures.push(
+      'Makefile release recipe must run one provenance recheck immediately before GoReleaser',
+    );
+  }
+  const nativePackage = recipe.indexOf('npm run package:verify --workspace desktop');
+  const linuxPackage = recipe.indexOf('npm run package:linux:release --workspace desktop');
+  const localPreflightIndex = recipe.indexOf(localPreflight);
+  const nativeInstallIndex = recipe.indexOf(nativeInstall);
+  const provenanceIndex = recipe.indexOf(provenanceRecheck);
+  const goreleaserIndex = recipe.indexOf('node desktop/scripts/release-goreleaser.mjs');
+  if (
+    localPreflightIndex === -1 ||
+    nativeInstallIndex === -1 ||
+    nativePackage === -1 ||
+    linuxPackage === -1 ||
+    !(
+      localPreflightIndex < nativeInstallIndex &&
+      nativeInstallIndex < nativePackage &&
+      nativePackage < linuxPackage
+    )
+  ) {
+    failures.push(
+      'Makefile release preflight and lockfile install must precede native and Linux builds',
+    );
+  }
+  if (provenanceIndex === -1 || goreleaserIndex === -1 || provenanceIndex + 1 !== goreleaserIndex) {
+    failures.push('Makefile release provenance recheck must run immediately before GoReleaser');
+  }
   if (sensitive.some((command) => command.includes('GORELEASER_FLAGS'))) {
     failures.push(
       'Makefile must not expose GORELEASER_FLAGS; only AGENTICO_RELEASE_NOTES_FILE is supported',

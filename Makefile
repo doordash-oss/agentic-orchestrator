@@ -70,14 +70,13 @@ install-desktop:
 # Set AGENTICO_RELEASE_NOTES_FILE to provide the sole supported GoReleaser
 # input; arbitrary flags are intentionally not accepted.
 release:
-	@[ -z "$$(git status --porcelain)" ] || { echo "release: working tree is dirty"; exit 1; }
-	@[ -n "$(RELEASE_TAG)" ] || { echo "release: HEAD is not on a release tag"; exit 1; }
-	@[ -n "$(RELEASE_COMMIT)" ] || { echo "release: could not resolve HEAD"; exit 1; }
+	node desktop/scripts/release-preflight.mjs
 	node desktop/scripts/verify-release-publication.mjs preflight --tag "$(RELEASE_TAG)" --commit "$(RELEASE_COMMIT)"
-	@[ -d node_modules ] || npm ci
+	npm ci
 	npm run package:verify --workspace desktop
 	npm run package:linux:release --workspace desktop
 	npm run release:artifacts:verify --workspace desktop -- packages
+	node desktop/scripts/release-preflight.mjs verify
 	node desktop/scripts/release-goreleaser.mjs
 	npm run release:artifacts:verify --workspace desktop -- manifest
 	node desktop/scripts/verify-release-publication.mjs verify --tag "$(RELEASE_TAG)" --commit "$(RELEASE_COMMIT)"

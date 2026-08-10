@@ -179,6 +179,25 @@ describe('runLinuxRelease', () => {
     expect(existsSync(arm64AttemptPath)).toBe(false);
   });
 
+  it('stops before arm64 when the x64 container changes release provenance', () => {
+    const options = validFixtureOptions();
+    const arm64AttemptPath = join(options.repoRoot, 'arm64-attempted');
+    options.verifyProvenance = () => {
+      throw new Error('release provenance changed');
+    };
+    options.execute = (_command, args) => {
+      const arch = args
+        .find((arg) => arg.startsWith('AGENTICO_PACKAGE_ARCH='))
+        ?.split('=')
+        .at(-1);
+      if (arch === 'x64') writeReleaseOutputs(options.repoRoot, 'x64');
+      if (arch === 'arm64') writeFileSync(arm64AttemptPath, 'attempted\n');
+    };
+
+    expect(() => runLinuxRelease(options)).toThrow(/release provenance changed/);
+    expect(existsSync(arm64AttemptPath)).toBe(false);
+  });
+
   it('rejects a completed container that does not write its x64 receipt', () => {
     const options = validFixtureOptions({ execute: () => {} });
 

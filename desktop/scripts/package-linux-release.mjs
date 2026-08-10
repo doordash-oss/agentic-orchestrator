@@ -10,6 +10,7 @@ import {
   createLinuxDockerPlan,
   releaseVersionFromTag,
 } from './lib/release-artifacts.mjs';
+import { verifyReleaseProvenance } from './release-preflight.mjs';
 
 const MINIMUM_FREE_BYTES = 12 * 1024 ** 3;
 const VOLUME_PREFIX = 'agentico-release';
@@ -23,6 +24,7 @@ export function runLinuxRelease({
   freeBytes,
   dockerAvailable,
   execute,
+  verifyProvenance = () => {},
   volumePrefix = VOLUME_PREFIX,
 }) {
   if (gitStatus.trim() !== '') {
@@ -47,8 +49,10 @@ export function runLinuxRelease({
     const receipt = `package-verification-linux-${invocation.arch}.json`;
     removeBuildOutputs(repoRoot, invocation.arch, version, receipt);
     execute('docker', invocation.args);
+    verifyProvenance();
     if (invocation.verificationArgs !== undefined) {
       execute('docker', invocation.verificationArgs);
+      verifyProvenance();
     }
     requireBuildOutputs(repoRoot, invocation.arch, version, receipt);
     completed.push(invocation.arch);
@@ -143,6 +147,7 @@ export function runLocalLinuxRelease({
   statfs = statfsSync,
   dockerInfo = (repoRoot) => commandSucceeds('docker', ['info'], repoRoot),
   execute,
+  verifyProvenance = () => {},
 } = {}) {
   const { repoRoot, gitCommonDir, volumePrefix } = localPlanOptions(cwd, gitCommand);
   const stats = statfs(repoRoot);
@@ -156,6 +161,7 @@ export function runLocalLinuxRelease({
     dockerAvailable: () => dockerInfo(repoRoot),
     execute:
       execute === undefined ? (command, args) => executeDocker(command, args, repoRoot) : execute,
+    verifyProvenance,
   });
 }
 
@@ -166,7 +172,7 @@ function main() {
     console.log(JSON.stringify(plan, null, 2));
     return;
   }
-  const result = runLocalLinuxRelease();
+  const result = runLocalLinuxRelease({ verifyProvenance: () => verifyReleaseProvenance() });
   console.log(`Linux release packages verified for ${result.tag}: ${result.completed.join(', ')}`);
 }
 

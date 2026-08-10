@@ -198,6 +198,27 @@ release:
     }
   });
 
+  it('requires local preflight, a lockfile install, and a provenance recheck before publication', () => {
+    const recipe = [
+      'release:',
+      '\tnode desktop/scripts/verify-release-publication.mjs preflight --tag "$(RELEASE_TAG)" --commit "$(RELEASE_COMMIT)"',
+      '\tnpm run package:verify --workspace desktop',
+      '\tnpm run package:linux:release --workspace desktop',
+      '\tnpm run release:artifacts:verify --workspace desktop -- packages',
+      '\tnode desktop/scripts/release-goreleaser.mjs',
+      '\tnpm run release:artifacts:verify --workspace desktop -- manifest',
+      '\tnode desktop/scripts/verify-release-publication.mjs verify --tag "$(RELEASE_TAG)" --commit "$(RELEASE_COMMIT)"',
+      '\tnode desktop/scripts/publish-desktop-cask.mjs',
+    ].join('\n');
+    expect(auditReleaseMakefile(recipe)).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('local preflight'),
+        expect.stringContaining('npm ci'),
+        expect.stringContaining('provenance recheck'),
+      ]),
+    );
+  });
+
   it('collects production npm packages plus explicitly shipped renderer dev assets', () => {
     const lock = {
       lockfileVersion: 3,

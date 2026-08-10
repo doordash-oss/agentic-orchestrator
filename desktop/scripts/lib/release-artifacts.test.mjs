@@ -105,9 +105,15 @@ describe('createLinuxDockerPlan', () => {
         '-e',
         'AGENTICO_PACKAGE_ARCH=x64',
         '-v',
-        '/repo/worktree:/repo/worktree',
+        '/repo/worktree:/repo/worktree:ro',
         '-v',
-        '/repo/.git:/repo/.git',
+        '/repo/.git:/repo/.git:ro',
+        '-v',
+        '/repo/worktree/desktop/dist:/repo/worktree/desktop/dist',
+        '-v',
+        '/repo/worktree/desktop/out:/repo/worktree/desktop/out',
+        '-v',
+        '/repo/worktree/desktop/resources:/repo/worktree/desktop/resources',
       ]),
     );
     expect(plan[0].args.join(' ')).toContain(LINUX_BUILDER_IMAGE);

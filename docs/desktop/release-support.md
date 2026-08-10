@@ -17,12 +17,24 @@ AGENTICO_RELEASE_NOTES_FILE=/absolute/path/to/notes.md make release
 
 Before running it, make sure the local machine has:
 
-- a running Docker daemon with `buildx` available;
-- at least 12 GiB of free disk space for the two Linux container builds and
-  their caches;
+- macOS, a running Docker daemon, and at least 12 GiB free on the checkout's
+  filesystem for the two Linux container builds and their caches;
 - GoReleaser v2.10 or later, an exported `GITHUB_TOKEN` with repository
   release/tag access, and the local update-signing key
   described below.
+
+The first command in `make release` enforces these requirements before any
+package is built: it requires an exact clean `vX.Y.Z` tag at HEAD (including
+untracked source files), captures the full commit/tag evidence under ignored
+`desktop/dist/`, checks the token and the local Ed25519 private key against
+the updater's embedded public key, verifies Docker, and inspects or pulls only
+the two digest-pinned images. It uses
+`electronuserland/builder:22@sha256:b76a82a6c6a8a1dea1abbc93e394f54316744824b64e6a50d959f1e3ba8951a9`
+for packaging and
+`node:22.22.2-bookworm@sha256:62e4daa6819762bbd3072af77cc282ab72c631c4aed30dd7980192babaf385b3`
+to verify the arm64 package. Image pulls and the checksum-pinned Go toolchain
+downloads are network dependencies; a daemon, authentication, or download
+failure stops before publication.
 
 `make release` is deliberately ordered so every desktop artifact is built and
 validated before GoReleaser can create a GitHub release. The optional
@@ -30,7 +42,8 @@ validated before GoReleaser can create a GitHub release. The optional
 GoReleaser input: raw GoReleaser flags are not accepted, so a shell variable
 cannot bypass the release checks.
 
-1. `npm run package:verify --workspace desktop` builds and verifies the native
+1. `npm ci` runs unconditionally after preflight so the root lockfile is the
+   authoritative native dependency installation. `npm run package:verify --workspace desktop` then builds and verifies the native
    universal macOS DMG.
    Because HEAD sits exactly on a clean `vX.Y.Z` tag, package-build stamps the
    tag version into the app (`app.getVersion()`) and into
@@ -45,7 +58,12 @@ cannot bypass the release checks.
 3. `npm run release:artifacts:verify --workspace desktop -- packages` verifies
    the complete desktop inventory, architecture-specific package receipts, and
    embedded identities before publishing.
-4. Before GoReleaser runs, the release gate verifies that the remote tag does
+4. The Linux build mounts the checked-out source and shared Git metadata
+   read-only, with only ignored build-output directories writable. After each
+   Docker packaging or arm64 verification container, and immediately before
+   GoReleaser, the release gate rechecks the captured full HEAD, exact tag,
+   and tracked/untracked cleanliness. Any source/provenance drift stops the
+   release before publishing. It then verifies that the remote tag does
    not already exist. GoReleaser then builds CLI archives and creates the
    GitHub release with `target_commitish: "{{ .Commit }}"`, so the tag is
    pinned to the local HEAD captured when `make release` began. It uploads
@@ -90,7 +108,7 @@ GoReleaser and creates no GitHub release. Recovery depends on what changed:
   first check whether GoReleaser created a remote tag or release before
   deciding which recovery path applies.
 - **Transient verifier failure after GoReleaser.** An authentication, DNS, or
-  network failure while checking the manifest or GitHub publication does *not*
+  network failure while checking the manifest or GitHub publication does _not_
   prove that the release is partial. Do not delete anything. Restore the token
   or connectivity, then re-run the final checks against the original tag and
   captured commit:
@@ -104,6 +122,7 @@ GoReleaser and creates no GitHub release. Recovery depends on what changed:
   ```
 
   If both pass, finish with `node desktop/scripts/publish-desktop-cask.mjs`.
+
 - **Confirmed repository/configuration or remote-state defect.** Only a
   verified wrong commit, draft/prerelease state, missing/incomplete asset, bad
   signature, or equivalent release defect needs destructive reconciliation.
@@ -213,6 +232,7 @@ npm run release:verify --workspace desktop
 gate is the single `make release` command above: it builds all five desktop
 artifacts, verifies their identities before publication, and verifies the
 signed checksum manifest afterward. The release credential that matters to the
-updater is the local Ed25519 key described in [Release signing key](#release-signing-key);
-the legacy `release:credentials:check` script is not a prerequisite for the
-current ad-hoc macOS distribution.
+updater is the local Ed25519 key described in [Release signing key](#release-signing-key).
+`npm run release:credentials:check --workspace desktop` is a backward-compatible
+alias for the same complete local preflight; maintainers normally invoke only
+the release skill, which invokes the single `make release` command.

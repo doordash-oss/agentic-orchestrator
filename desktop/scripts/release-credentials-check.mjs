@@ -1,16 +1,10 @@
-const REQUIRED = [
-  'APPLE_ID',
-  'APPLE_APP_SPECIFIC_PASSWORD',
-  'APPLE_TEAM_ID',
-  'CSC_LINK',
-  'CSC_KEY_PASSWORD',
-  'AGENTICO_RELEASE_GPG_KEY',
-  'AGENTICO_RELEASE_GPG_KEY_ID',
-];
+// Backward-compatible release credential entry point for local operators.
+import { runReleasePreflight } from './release-preflight.mjs';
 
-const missing = REQUIRED.filter((key) => (process.env[key] ?? '').trim() === '');
-if (missing.length > 0) {
-  console.error(`missing protected release credential inputs:\n- ${missing.join('\n- ')}`);
-  process.exit(2);
+try {
+  const evidence = runReleasePreflight();
+  console.log(`release credentials and local prerequisites verified for ${evidence.tag}`);
+} catch (error) {
+  console.error(error instanceof Error ? error.message : String(error));
+  process.exitCode = 1;
 }
-console.log('protected release credential inputs are present');

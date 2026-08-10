@@ -209,20 +209,11 @@ func (o *Orchestrator) assertPRAcceptsUpdates(f *feature.Feature, repo feature.F
 	return errors.New(reason)
 }
 
-// pushRepublish fast-forwards when the remote branch is an ancestor of HEAD.
-// Otherwise the branch was rewritten locally and needs the guarded rewritten
-// push, which inspects the live remote without mutating its tracking ref.
+// pushRepublish always delegates transport selection to the guarded rewritten
+// push. Its live remote inspection can choose an ordinary push when safe;
+// origin/<branch> may be stale and must not decide delivery here.
 func (o *Orchestrator) pushRepublish(repoName, workDir, branch string) error {
-	if git.IsAncestor(workDir, "origin/"+branch, "HEAD") {
-		if err := o.deps.Remote.Push(workDir, branch); err != nil {
-			return fmt.Errorf("push failed: %w", err)
-		}
-		return nil
-	}
-	if err := o.pushRewrittenBranch(repoName, workDir, branch); err != nil {
-		return err
-	}
-	return nil
+	return o.pushRewrittenBranch(repoName, workDir, branch)
 }
 
 func (o *Orchestrator) pushRewrittenBranch(repoName, workDir, branch string) error {

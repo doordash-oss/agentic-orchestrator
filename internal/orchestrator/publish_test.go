@@ -1048,10 +1048,11 @@ func republishFeature(id, repoPath, branch string) *feature.Feature {
 	}
 }
 
-// A repository whose remote branch is an ancestor of HEAD is fast-forwarded.
-// No PR is created and no description is generated — with a nil PhaseRunner,
-// any attempt to generate one would fail the publish.
-func TestOrchestrator_Republish_FastForwardPushesWithoutCreatePR(t *testing.T) {
+// A fast-forwardable republish still routes through live remote inspection.
+// The Git primitive may choose an ordinary push after inspection. No PR is
+// created and no description is generated — with a nil PhaseRunner, any
+// attempt to generate one would fail the publish.
+func TestOrchestrator_Republish_FastForwardRoutesThroughLiveInspectionWithoutCreatePR(t *testing.T) {
 	repoPath := newRepublishRepo(t, "feature/republish")
 	testutil.CommitFile(t, repoPath, "later.txt", "later\n", "later pass")
 	f := republishFeature("feat-republish-ff", repoPath, "feature/republish")
@@ -1061,7 +1062,7 @@ func TestOrchestrator_Republish_FastForwardPushesWithoutCreatePR(t *testing.T) {
 	fs := newFeatureStore(f)
 
 	pub := mocks.NewMockRemoteOps()
-	pub.PushFn = func(path, branch string) error { return nil }
+	pub.PushRewrittenBranchFn = func(path, branch string) error { return nil }
 
 	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs, Remote: pub}, orchestrator.Hooks{})
 
@@ -1071,10 +1072,10 @@ func TestOrchestrator_Republish_FastForwardPushesWithoutCreatePR(t *testing.T) {
 		t.Fatalf("PublishWithOptions: %v", err)
 	}
 
-	if got := countPublisherCalls(pub, "Push"); got != 1 {
-		t.Errorf("Push calls = %d; want 1", got)
+	if got := countPublisherCalls(pub, "PushRewrittenBranch"); got != 1 {
+		t.Errorf("PushRewrittenBranch calls = %d; want 1", got)
 	}
-	for _, method := range []string{"ForcePush", "PushRewrittenBranch", "CreatePR"} {
+	for _, method := range []string{"Push", "ForcePush", "CreatePR"} {
 		if got := countPublisherCalls(pub, method); got != 0 {
 			t.Errorf("%s calls = %d; want 0", method, got)
 		}
@@ -1131,7 +1132,7 @@ func TestOrchestrator_Republish_CommitsUncommittedChanges(t *testing.T) {
 	fs := newFeatureStore(f)
 
 	pub := mocks.NewMockRemoteOps()
-	pub.PushFn = func(path, branch string) error { return nil }
+	pub.PushRewrittenBranchFn = func(path, branch string) error { return nil }
 
 	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs, Remote: pub}, orchestrator.Hooks{})
 
@@ -1156,7 +1157,7 @@ func TestOrchestrator_Republish_PushFailureRecorded(t *testing.T) {
 	fs := newFeatureStore(f)
 
 	pub := mocks.NewMockRemoteOps()
-	pub.PushFn = func(path, branch string) error { return errors.New("remote rejected") }
+	pub.PushRewrittenBranchFn = func(path, branch string) error { return errors.New("remote rejected") }
 
 	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs, Remote: pub}, orchestrator.Hooks{})
 
@@ -1169,8 +1170,8 @@ func TestOrchestrator_Republish_PushFailureRecorded(t *testing.T) {
 	if !strings.Contains(err.Error(), "remote rejected") {
 		t.Errorf("error = %q; want it to mention the injected failure", err.Error())
 	}
-	if got := countPublisherCalls(pub, "Push"); got != 1 {
-		t.Errorf("Push calls = %d; want 1", got)
+	if got := countPublisherCalls(pub, "PushRewrittenBranch"); got != 1 {
+		t.Errorf("PushRewrittenBranch calls = %d; want 1", got)
 	}
 	assertLifecycleCall(t, lc, "SetRepoPublishError")
 }
@@ -1259,6 +1260,74 @@ func TestOrchestrator_Publish_ManualCodeReadyCreatesAbsentRemoteBranch(t *testin
 	if got := published.Args[2]; got != prURL {
 		t.Fatalf("published PR URL = %v; want %s", got, prURL)
 	}
+}
+
+// A stale tracking ref must not choose the republish transport. The live
+// remote can contain a redundant merge after origin/<branch> was last updated;
+// PushRewrittenBranch must inspect and prove that live merge before replacing
+// it with the rewritten local head.
+func TestOrchestrator_Republish_StaleTrackingRefAllowsRedundantLiveMerge(t *testing.T) {
+	const branch = "feature/republish-stale-redundant-merge"
+	repoPath, bareRemote := testutil.InitPublishReadyGitRepo(t)
+	testutil.CreateBranch(t, repoPath, branch)
+	featureParent := testutil.CommitFile(t, repoPath, "feature.txt", "feature\n", "feature parent")
+	testutil.SimulatePush(t, repoPath, bareRemote, branch, branch)
+
+	runPublishGit(t, repoPath, "checkout", mainBranch)
+	testutil.CommitFile(t, repoPath, "main-1.txt", "main 1\n", "main 1")
+	mainParent := testutil.CommitFile(t, repoPath, "main-2.txt", "main 2\n", "main 2")
+	runPublishGit(t, repoPath, "checkout", branch)
+	runPublishGit(t, repoPath, "merge", "--no-ff", mainParent, "-m", "remote redundant merge")
+	remoteMerge := runPublishGitOutput(t, repoPath, "rev-parse", "HEAD")
+	if remoteMerge == featureParent {
+		t.Fatalf("remote merge = stale feature parent %s; want a distinct merge commit", featureParent)
+	}
+	if got := runPublishGitOutput(t, repoPath, "show", "--remerge-diff", "--format=", "--no-ext-diff", remoteMerge); got != "" {
+		t.Fatalf("remote merge remerge diff = %q; want a redundant merge with no unique resolution", got)
+	}
+
+	// Advance only the live bare remote. Deliberately do not fetch it back into
+	// the worktree: origin/<branch> must remain at the old feature parent.
+	runPublishGit(t, bareRemote, "fetch", repoPath, "HEAD:refs/heads/"+branch)
+	if got := runPublishGitOutput(t, repoPath, "rev-parse", "origin/"+branch); got != featureParent {
+		t.Fatalf("tracking ref = %s; want stale feature parent %s", got, featureParent)
+	}
+	if got := runPublishGitOutput(t, bareRemote, "rev-parse", "refs/heads/"+branch); got != remoteMerge {
+		t.Fatalf("live remote = %s; want redundant merge %s", got, remoteMerge)
+	}
+
+	// Rewrite locally without the remote merge commit, but retain both of its
+	// parents in the ancestry of the new local head.
+	runPublishGit(t, repoPath, "reset", "--hard", featureParent)
+	runPublishGit(t, repoPath, "merge", "--no-ff", mainParent, "-m", "rewritten local merge")
+	testutil.CommitFile(t, repoPath, "local-head.txt", "local head\n", "local rewritten head")
+	localHead := runPublishGitOutput(t, repoPath, "rev-parse", "HEAD")
+	remoteParents := strings.Fields(runPublishGitOutput(t, repoPath, "rev-list", "--parents", "-n", "1", remoteMerge))
+	if len(remoteParents) != 3 {
+		t.Fatalf("remote merge parents = %v; want exactly two parents", remoteParents[1:])
+	}
+	for _, parent := range remoteParents[1:] {
+		runPublishGit(t, repoPath, "merge-base", "--is-ancestor", parent, "HEAD")
+	}
+
+	f := republishFeature("feat-republish-stale-redundant-merge", repoPath, branch)
+	lc := lifecycleForFeature(f)
+	lc.SetRepoPublishedFn = func(id, repo, url string) error { return nil }
+	lc.SetRepoPublishErrorFn = func(id, repo, msg string) error { return nil }
+	lc.TryCompletePublishFn = func(id string) (bool, error) { return false, nil }
+	o := orchestrator.New(orchestrator.Deps{
+		Lifecycle: lc,
+		Store:     newFeatureStore(f),
+		Remote:    realGitPublishRemoteOps{},
+	}, orchestrator.Hooks{})
+
+	if err := o.PublishWithOptions(f.ID, orchestrator.PublishOptions{Repos: []string{"r1"}}); err != nil {
+		t.Fatalf("PublishWithOptions() error = %v; live redundant merge should be replaceable", err)
+	}
+	if got := runPublishGitOutput(t, bareRemote, "rev-parse", "refs/heads/"+branch); got != localHead {
+		t.Fatalf("remote tip = %s; want rewritten local head %s", got, localHead)
+	}
+	assertLifecycleCall(t, lc, "SetRepoPublished")
 }
 
 // An unfetched remote commit is translated through the real Git rewritten-push
@@ -1351,7 +1420,7 @@ func TestOrchestrator_Republish_RefusesWhenPRNoLongerOpen(t *testing.T) {
 			if !strings.Contains(err.Error(), state) {
 				t.Errorf("error = %q; want it to name the pull-request state %q", err.Error(), state)
 			}
-			for _, method := range []string{"Push", "ForcePush", "CreatePR"} {
+			for _, method := range []string{"Push", "ForcePush", "PushRewrittenBranch", "CreatePR"} {
 				if got := countPublisherCalls(pub, method); got != 0 {
 					t.Errorf("%s calls = %d; want 0 — nothing may be pushed", method, got)
 				}
@@ -1372,7 +1441,7 @@ func TestOrchestrator_Republish_ProceedsWhenPRStateIndeterminate(t *testing.T) {
 	fs := newFeatureStore(f)
 
 	pub := mocks.NewMockRemoteOps()
-	pub.PushFn = func(path, branch string) error { return nil }
+	pub.PushRewrittenBranchFn = func(path, branch string) error { return nil }
 	pub.PRStateFn = func(repoPath, prURL string) (string, error) {
 		return "", errors.New("api unreachable")
 	}
@@ -1384,7 +1453,7 @@ func TestOrchestrator_Republish_ProceedsWhenPRStateIndeterminate(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("PublishWithOptions: %v", err)
 	}
-	if got := countPublisherCalls(pub, "Push"); got != 1 {
-		t.Errorf("Push calls = %d; want 1", got)
+	if got := countPublisherCalls(pub, "PushRewrittenBranch"); got != 1 {
+		t.Errorf("PushRewrittenBranch calls = %d; want 1", got)
 	}
 }

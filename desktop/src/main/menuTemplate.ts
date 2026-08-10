@@ -118,8 +118,9 @@ export function buildApplicationMenuTemplate(deps: MenuTemplateDeps): MenuItemCo
     // is shell-level by design — it opens the creation sheet over whatever
     // pane is current — so it is enabled on readiness alone, regardless of
     // selection. `close` is the platform role, so ⌘W always closes whichever
-    // window is focused — the Settings window closes outright, the main window
-    // goes through its own close handler and the quit decision behind it.
+    // window is focused. Settings always closes outright; on macOS the main
+    // window closes while the application remains active, while other platforms
+    // send a main-window close through the coordinated quit decision.
     {
       label: 'File',
       submenu: [

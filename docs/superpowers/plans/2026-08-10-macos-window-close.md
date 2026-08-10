@@ -22,10 +22,12 @@
 ### Task 1: Encode the platform close policy
 
 **Files:**
+
 - Modify: `desktop/src/main/quitCoordinator.ts`
 - Test: `desktop/src/main/__tests__/quitCoordinator.test.ts`
 
 **Interfaces:**
+
 - Consumes: `NodeJS.Platform`, supplied explicitly by the Electron entry point or a unit test.
 - Produces: `shouldRequestQuitOnMainWindowClose(platform: NodeJS.Platform): boolean`; `false` only for `darwin`, `true` for `win32` and `linux`.
 
@@ -35,12 +37,12 @@ Add `shouldRequestQuitOnMainWindowClose` to the existing import from
 `../quitCoordinator`, then add this test before the `QuitCoordinator` describe:
 
 ```ts
-describe('shouldRequestQuitOnMainWindowClose', () => {
+describe("shouldRequestQuitOnMainWindowClose", () => {
   it.each([
-    ['darwin', false],
-    ['win32', true],
-    ['linux', true],
-  ] as const)('returns %s => %s', (platform, expected) => {
+    ["darwin", false],
+    ["win32", true],
+    ["linux", true],
+  ] as const)("returns %s => %s", (platform, expected) => {
     expect(shouldRequestQuitOnMainWindowClose(platform)).toBe(expected);
   });
 });
@@ -64,8 +66,10 @@ Expected: FAIL because `shouldRequestQuitOnMainWindowClose` is not exported.
 Add this export beside `hasActiveWork` in `quitCoordinator.ts`:
 
 ```ts
-export function shouldRequestQuitOnMainWindowClose(platform: NodeJS.Platform): boolean {
-  return platform !== 'darwin';
+export function shouldRequestQuitOnMainWindowClose(
+  platform: NodeJS.Platform,
+): boolean {
+  return platform !== "darwin";
 }
 ```
 
@@ -87,11 +91,13 @@ git commit -m "Keep macOS window close distinct from application quit" -m "Co-au
 ### Task 2: Route macOS close through the native window lifecycle
 
 **Files:**
+
 - Modify: `desktop/test/e2e/journeys/background-lifecycle-commands.spec.ts`
 - Modify: `desktop/src/main/index.ts`
 - Modify: `desktop/src/main/menuTemplate.ts`
 
 **Interfaces:**
+
 - Consumes: `shouldRequestQuitOnMainWindowClose(process.platform)` from Task 1, `WindowRegistry` eviction/recreation, Electron `app` activation, and the existing `global.quit` native command.
 - Produces: macOS close -> destroyed main window with live application/runtime; app activation -> fresh main window; explicit Quit -> unchanged `QuitCoordinator` flow.
 
@@ -111,25 +117,29 @@ Use these assertions after active work is observable:
 
 ```ts
 await closeMainWindowAndReactivate(handle);
-const restored = await handle.page.evaluate((id) => window.agentico.getFeature(id), featureId);
+const restored = await handle.page.evaluate(
+  (id) => window.agentico.getFeature(id),
+  featureId,
+);
 expect(restored.actions).toContainEqual(
-  expect.objectContaining({ id: 'pause-stop', enabled: true }),
+  expect.objectContaining({ id: "pause-stop", enabled: true }),
 );
 
-const cancelResult = await triggerQuitDecision(handle, [2], 'native-quit');
+const cancelResult = await triggerQuitDecision(handle, [2], "native-quit");
 expect(cancelResult.visible).toBe(true);
-expect(JSON.stringify(cancelResult.captured[0])).toContain('Cancel');
+expect(JSON.stringify(cancelResult.captured[0])).toContain("Cancel");
 
-const stopResult = await triggerQuitDecision(handle, [1], 'native-quit');
-expect(JSON.stringify(stopResult.captured[0])).toContain('Stop Work and Quit');
+const stopResult = await triggerQuitDecision(handle, [1], "native-quit");
+expect(JSON.stringify(stopResult.captured[0])).toContain("Stop Work and Quit");
 ```
 
-Replace the idle-close journey's expectation that the app exits with the same
-close/reactivate contract, followed by a native explicit quit that does exit.
+Split the existing idle-close journey by platform: the macOS case uses the same
+close/reactivate contract followed by a native explicit quit that does exit,
+while the non-macOS case retains the existing close-to-quit assertion.
 
 ```ts
 await closeMainWindowAndReactivate(handle);
-await clickNativeMenu(handle, 'global.quit');
+await clickNativeMenu(handle, "global.quit");
 await waitForAppExit(handle);
 handle.closed = true;
 ```
@@ -139,38 +149,50 @@ Add this same-file helper near `triggerQuitDecision`:
 ```ts
 async function closeMainWindowAndReactivate(handle: AppHandle): Promise<void> {
   const previousId = handle.mainWebContentsId;
-  const close = await handle.app.evaluate(async ({ BrowserWindow, dialog }, mainId) => {
-    const window = BrowserWindow.getAllWindows().find(
-      (candidate) => candidate.webContents.id === mainId,
-    );
-    if (window === undefined) throw new Error('main window missing');
-    const original = dialog.showMessageBox;
-    let promptCount = 0;
-    dialog.showMessageBox = (async () => {
-      promptCount += 1;
-      return { response: 2, checkboxChecked: false };
-    }) as typeof dialog.showMessageBox;
-    window.close();
-    const deadline = Date.now() + 2_000;
-    while (!window.isDestroyed() && Date.now() < deadline) {
-      await new Promise((resolve) => setTimeout(resolve, 25));
-    }
-    dialog.showMessageBox = original;
-    return { promptCount, destroyed: window.isDestroyed(), openWindows: BrowserWindow.getAllWindows().length };
-  }, previousId);
+  const close = await handle.app.evaluate(
+    async ({ BrowserWindow, dialog }, mainId) => {
+      const window = BrowserWindow.getAllWindows().find(
+        (candidate) => candidate.webContents.id === mainId,
+      );
+      if (window === undefined) throw new Error("main window missing");
+      const original = dialog.showMessageBox;
+      let promptCount = 0;
+      dialog.showMessageBox = (async () => {
+        promptCount += 1;
+        return { response: 2, checkboxChecked: false };
+      }) as typeof dialog.showMessageBox;
+      window.close();
+      const deadline = Date.now() + 2_000;
+      while (!window.isDestroyed() && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      dialog.showMessageBox = original;
+      return {
+        promptCount,
+        destroyed: window.isDestroyed(),
+        openWindows: BrowserWindow.getAllWindows().length,
+      };
+    },
+    previousId,
+  );
   expect(close).toEqual({ promptCount: 0, destroyed: true, openWindows: 0 });
   expect(handle.appProcess.exitCode).toBeNull();
   expect(handle.appProcess.signalCode).toBeNull();
   expect(processAlive(readDiscovery(handle.world)!.pid)).toBe(true);
 
-  const appeared = handle.app.waitForEvent('window', { timeout: 30_000 });
-  await handle.app.evaluate(({ app }) => app.emit('activate'));
+  const appeared = handle.app.waitForEvent("window", { timeout: 30_000 });
+  await handle.app.evaluate(({ app }) => app.emit("activate"));
   const page = await appeared;
-  page.setDefaultTimeout(Number(process.env['AGENTICO_E2E_ACTION_TIMEOUT'] ?? 60_000));
-  await expect(page.getByRole('button', { name: 'New feature' })).toBeVisible({ timeout: 60_000 });
+  page.setDefaultTimeout(
+    Number(process.env["AGENTICO_E2E_ACTION_TIMEOUT"] ?? 60_000),
+  );
+  await expect(
+    page.getByRole("status").filter({ hasText: "Runtime ready" }),
+  ).toBeVisible({ timeout: 60_000 });
   const mainWebContentsId = await handle.app.evaluate(({ BrowserWindow }) => {
     const window = BrowserWindow.getAllWindows()[0];
-    if (window === undefined) throw new Error('reactivated main window missing');
+    if (window === undefined)
+      throw new Error("reactivated main window missing");
     return window.webContents.id;
   });
   expect(mainWebContentsId).not.toBe(previousId);
@@ -242,11 +264,13 @@ git commit -m "Honor native macOS window close semantics" -m "Co-authored-by: Co
 ### Task 3: Verify and publish the dedicated pull request
 
 **Files:**
+
 - Include: `docs/superpowers/specs/2026-08-10-macos-window-close-design.md`
 - Include: `docs/superpowers/plans/2026-08-10-macos-window-close.md`
 - Verify all production and test files committed in Tasks 1-2.
 
 **Interfaces:**
+
 - Consumes: the complete branch diff against `origin/main` and the canonical verification commands in `docs/testing-baseline.md`.
 - Produces: a pushed `fix/macos-window-close-behavior` branch and one GitHub pull request whose body names every verification tier run.
 

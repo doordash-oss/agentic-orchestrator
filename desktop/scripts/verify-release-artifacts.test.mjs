@@ -12,15 +12,16 @@ import { runReleaseArtifactCli, verifyReleaseArtifacts } from './verify-release-
 
 const TAG = 'v0.150.0';
 const REVISION = '1234567890abcdef1234567890abcdef12345678';
+const DIST_DIR = '/release/desktop/dist';
 
-function receipt(os, arch, artifacts) {
+function receipt(os, arch, artifacts, artifactDir = DIST_DIR) {
   const paths = {
     dmg: 'Agentico-mac-universal.dmg',
     AppImage: `Agentico-${arch}.AppImage`,
     deb: `agentico_0.150.0_${arch === 'x64' ? 'amd64' : arch}.deb`,
   };
   return {
-    artifacts: artifacts.map((target) => ({ target, path: `/tmp/${paths[target]}` })),
+    artifacts: artifacts.map((target) => ({ target, path: join(artifactDir, paths[target]) })),
     identity: {
       desktop_version: '0.150.0',
       server_version: TAG,
@@ -31,17 +32,33 @@ function receipt(os, arch, artifacts) {
   };
 }
 
-function completeV0150Fixture() {
+function completeV0150Fixture(artifactDir = DIST_DIR) {
   const files = expectedDesktopArtifacts(TAG).map(({ name }) => name);
   return {
     tag: TAG,
     revision: REVISION,
+    artifactDir,
     files,
     sizes: Object.fromEntries(files.map((name) => [name, 1])),
     receipts: {
-      'package-verification-darwin-universal.json': receipt('darwin', 'universal', ['dmg']),
-      'package-verification-linux-x64.json': receipt('linux', 'x64', ['AppImage', 'deb']),
-      'package-verification-linux-arm64.json': receipt('linux', 'arm64', ['AppImage', 'deb']),
+      'package-verification-darwin-universal.json': receipt(
+        'darwin',
+        'universal',
+        ['dmg'],
+        artifactDir,
+      ),
+      'package-verification-linux-x64.json': receipt(
+        'linux',
+        'x64',
+        ['AppImage', 'deb'],
+        artifactDir,
+      ),
+      'package-verification-linux-arm64.json': receipt(
+        'linux',
+        'arm64',
+        ['AppImage', 'deb'],
+        artifactDir,
+      ),
     },
   };
 }
@@ -128,9 +145,23 @@ describe('validateArtifactInventory', () => {
     const fixture = completeV0150Fixture();
     const receipt = fixture.receipts['package-verification-linux-x64.json'];
     receipt.artifacts = [
-      { target: 'AppImage', path: '/tmp/agentico_0.150.0_amd64.deb' },
-      { target: 'AppImage', path: '/tmp/Agentico-x64.AppImage' },
-      { target: 'dmg', path: '/tmp/Agentico-mac-universal.dmg' },
+      { target: 'AppImage', path: join(DIST_DIR, 'agentico_0.150.0_amd64.deb') },
+      { target: 'deb', path: join(DIST_DIR, 'Agentico-x64.AppImage') },
+    ];
+
+    expect(validateArtifactInventory(fixture)).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('package-verification-linux-x64.json AppImage path='),
+        expect.stringContaining('package-verification-linux-x64.json deb path='),
+      ]),
+    );
+  });
+
+  it('rejects duplicate and missing receipt entries independently', () => {
+    const fixture = completeV0150Fixture();
+    fixture.receipts['package-verification-linux-x64.json'].artifacts = [
+      { target: 'AppImage', path: join(DIST_DIR, 'Agentico-x64.AppImage') },
+      { target: 'AppImage', path: join(DIST_DIR, 'Agentico-x64.AppImage') },
     ];
 
     expect(validateArtifactInventory(fixture)).toEqual(
@@ -138,6 +169,16 @@ describe('validateArtifactInventory', () => {
         'package-verification-linux-x64.json has 2 AppImage verification entries, expected exactly 1',
         'package-verification-linux-x64.json does not verify deb',
       ]),
+    );
+  });
+
+  it('rejects a matching filename from an unverified directory', () => {
+    const fixture = completeV0150Fixture();
+    fixture.receipts['package-verification-linux-x64.json'].artifacts[0].path =
+      '/different-unverified-directory/Agentico-x64.AppImage';
+
+    expect(validateArtifactInventory(fixture)).toContain(
+      'package-verification-linux-x64.json AppImage path=/different-unverified-directory/Agentico-x64.AppImage, expected /release/desktop/dist/Agentico-x64.AppImage',
     );
   });
 
@@ -184,7 +225,7 @@ describe('verifyReleaseArtifacts', () => {
     const root = mkdtempSync(join(tmpdir(), 'agentico-release-artifacts-'));
     const desktopDist = join(root, 'desktop', 'dist');
     mkdirSync(desktopDist, { recursive: true });
-    const fixture = completeV0150Fixture();
+    const fixture = completeV0150Fixture(desktopDist);
     for (const name of fixture.files) writeFileSync(join(desktopDist, name), 'artifact\n');
     for (const [name, receipt] of Object.entries(fixture.receipts)) {
       writeFileSync(join(desktopDist, name), `${JSON.stringify(receipt)}\n`);

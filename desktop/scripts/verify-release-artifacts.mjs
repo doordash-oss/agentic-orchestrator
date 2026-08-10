@@ -42,6 +42,7 @@ export function verifyReleaseArtifacts({
         files: readDistFiles(desktopDist, errors),
         sizes: readDistSizes(desktopDist, errors),
         receipts: readReceipts(desktopDist, linuxOnly, errors),
+        artifactDir: desktopDist,
         linuxOnly,
       }),
     );

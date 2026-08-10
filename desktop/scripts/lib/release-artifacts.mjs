@@ -1,5 +1,5 @@
 // Pure release artifact and Docker-build contract shared by local release scripts.
-import { basename, resolve } from 'node:path';
+import { resolve } from 'node:path';
 
 export const LINUX_BUILDER_IMAGE =
   'electronuserland/builder:22@sha256:b76a82a6c6a8a1dea1abbc93e394f54316744824b64e6a50d959f1e3ba8951a9';
@@ -59,6 +59,7 @@ export function validateArtifactInventory({
   files,
   receipts,
   sizes,
+  artifactDir,
   linuxOnly = false,
 }) {
   const errors = [];
@@ -91,7 +92,7 @@ export function validateArtifactInventory({
   }
 
   for (const target of receiptTargets(artifacts)) {
-    validateReceipt({ receiptsByName, target, tag, revision, errors });
+    validateReceipt({ receiptsByName, target, tag, revision, artifactDir, errors });
   }
   return errors;
 }
@@ -223,7 +224,7 @@ function receiptTargets(artifacts) {
   return targets.values();
 }
 
-function validateReceipt({ receiptsByName, target, tag, revision, errors }) {
+function validateReceipt({ receiptsByName, target, tag, revision, artifactDir, errors }) {
   const receipt = receiptsByName[target.receipt];
   if (receipt === undefined) {
     errors.push(`missing verification receipt: ${target.receipt}`);
@@ -267,10 +268,16 @@ function validateReceipt({ receiptsByName, target, tag, revision, errors }) {
       continue;
     }
     const path = matches[0].path;
-    if (typeof path !== 'string' || basename(resolve(path)) !== expectedArtifact.name) {
+    const expectedPath =
+      typeof artifactDir === 'string' ? resolve(artifactDir, expectedArtifact.name) : null;
+    const actualPath = typeof path === 'string' ? resolve(path) : null;
+    if (expectedPath === null) {
       errors.push(
-        `${target.receipt} ${expectedArtifact.format} path=${path}, ` +
-          `expected basename ${expectedArtifact.name}`,
+        `${target.receipt} cannot bind ${expectedArtifact.format}: no artifact directory`,
+      );
+    } else if (actualPath !== expectedPath) {
+      errors.push(
+        `${target.receipt} ${expectedArtifact.format} path=${path}, expected ${expectedPath}`,
       );
     }
   }

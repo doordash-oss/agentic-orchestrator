@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
 
 import {
   auditLicenseInventory,
+  auditGoReleaserDesktopArtifacts,
   auditNpmLockfile,
   collectNpmRuntimeInventory,
   hasElectronBuilderProtocolScheme,
@@ -10,6 +12,64 @@ import {
 } from './audit-release.mjs';
 
 describe('release audit lockfile and license checks', () => {
+  it('rejects a release config that uploads an AppImage without signing it', () => {
+    const config = `
+checksum:
+  extra_files:
+    - glob: desktop/dist/Agentico-mac-universal.dmg
+release:
+  extra_files:
+    - glob: desktop/dist/Agentico-mac-universal.dmg
+    - glob: desktop/dist/Agentico-x64.AppImage
+`;
+
+    expect(
+      auditGoReleaserDesktopArtifacts(config, [
+        'Agentico-mac-universal.dmg',
+        'Agentico-x64.AppImage',
+      ]),
+    ).toContain('GoReleaser checksum.extra_files omits Agentico-x64.AppImage');
+  });
+
+  it('detects independent checksum and release omissions', () => {
+    const config = `
+checksum:
+  extra_files:
+    - glob: desktop/dist/Agentico-mac-universal.dmg
+    - glob: desktop/dist/Agentico-x64.AppImage
+release:
+  extra_files:
+    - glob: desktop/dist/Agentico-mac-universal.dmg
+    - glob: desktop/dist/Agentico-arm64.AppImage
+`;
+
+    expect(
+      auditGoReleaserDesktopArtifacts(config, [
+        'Agentico-mac-universal.dmg',
+        'Agentico-x64.AppImage',
+        'Agentico-arm64.AppImage',
+      ]),
+    ).toEqual(
+      expect.arrayContaining([
+        'GoReleaser checksum.extra_files omits Agentico-arm64.AppImage',
+        'GoReleaser release.extra_files omits Agentico-x64.AppImage',
+      ]),
+    );
+  });
+
+  it('accepts the actual GoReleaser desktop artifact configuration', () => {
+    const config = readFileSync(new URL('../../.goreleaser.yaml', import.meta.url), 'utf8');
+    expect(
+      auditGoReleaserDesktopArtifacts(config, [
+        'Agentico-mac-universal.dmg',
+        'Agentico-x64.AppImage',
+        'Agentico-arm64.AppImage',
+        'agentico_0.150.0_amd64.deb',
+        'agentico_0.150.0_arm64.deb',
+      ]),
+    ).toEqual([]);
+  });
+
   it('collects production npm packages plus explicitly shipped renderer dev assets', () => {
     const lock = {
       lockfileVersion: 3,

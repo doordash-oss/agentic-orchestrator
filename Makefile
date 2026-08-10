@@ -58,17 +58,22 @@ install-desktop:
 
 # Cut a release from a clean checkout of a vX.Y.Z tag, run locally by the
 # release operator (no CI credentials involved):
-#   1. package the desktop DMG (stamped with the tag version),
-#   2. goreleaser: CLI archives + GitHub release + signed checksums covering
-#      the DMG + the agentico CLI cask in the tap,
-#   3. publish the agentico-desktop cask for the DMG to the tap.
+#   1. package and verify the native macOS DMG (stamped with the tag version),
+#   2. package and verify Linux x64 then arm64 AppImage + DEB artifacts,
+#   3. verify the complete desktop inventory before publishing,
+#   4. goreleaser: CLI archives + GitHub release + signed checksums covering
+#      every desktop artifact,
+#   5. verify the signed checksum manifest, then publish the macOS cask.
 # Extra goreleaser flags (e.g. --release-notes) go in GORELEASER_FLAGS.
 release:
 	@[ -z "$$(git status --porcelain)" ] || { echo "release: working tree is dirty"; exit 1; }
 	@git describe --tags --exact-match >/dev/null 2>&1 || { echo "release: HEAD is not on a release tag"; exit 1; }
 	@[ -d node_modules ] || npm ci
-	npm run package:build --workspace desktop
+	npm run package:verify --workspace desktop
+	npm run package:linux:release --workspace desktop
+	npm run release:artifacts:verify --workspace desktop -- packages
 	goreleaser release --clean $(GORELEASER_FLAGS)
+	npm run release:artifacts:verify --workspace desktop -- manifest
 	node desktop/scripts/publish-desktop-cask.mjs
 
 install-system: build

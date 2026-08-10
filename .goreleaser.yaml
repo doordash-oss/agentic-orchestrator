@@ -23,11 +23,15 @@ archives:
 
 checksum:
   name_template: checksums.txt
-  # Fold the electron-builder DMG (built by `npm run package:build` before
-  # goreleaser runs — see `make release`) into checksums.txt so the in-app
-  # updater can match the package against signed metadata.
+  # Fold every desktop package (built and verified before goreleaser runs —
+  # see `make release`) into checksums.txt so the in-app updater can match its
+  # AppImage against signed metadata. DEBs are package-manager managed.
   extra_files:
     - glob: desktop/dist/Agentico-mac-universal.dmg
+    - glob: desktop/dist/Agentico-x64.AppImage
+    - glob: desktop/dist/Agentico-arm64.AppImage
+    - glob: desktop/dist/agentico_{{ .Version }}_amd64.deb
+    - glob: desktop/dist/agentico_{{ .Version }}_arm64.deb
 
 # Detached Ed25519 signature over checksums.txt in the exact format the
 # desktop updater verifies (agentico-ed25519:<base64>). The signer refuses to
@@ -49,6 +53,10 @@ release:
     name: agentic-orchestrator
   extra_files:
     - glob: desktop/dist/Agentico-mac-universal.dmg
+    - glob: desktop/dist/Agentico-x64.AppImage
+    - glob: desktop/dist/Agentico-arm64.AppImage
+    - glob: desktop/dist/agentico_{{ .Version }}_amd64.deb
+    - glob: desktop/dist/agentico_{{ .Version }}_arm64.deb
 
 # Homebrew distribution of the CLI. Casks replaced formulas for pre-compiled
 # binaries (brews is deprecated since goreleaser v2.10); the desktop app cask

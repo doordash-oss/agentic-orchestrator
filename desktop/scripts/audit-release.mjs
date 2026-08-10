@@ -13,6 +13,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { auditElectronBuilderFuseConfig } from './lib/fuse-policy.mjs';
+import { expectedDesktopArtifacts } from './lib/release-artifacts.mjs';
 
 const desktopDir = dirname(dirname(fileURLToPath(import.meta.url)));
 const rootDir = dirname(desktopDir);
@@ -20,6 +21,9 @@ const distDir = join(desktopDir, 'dist');
 const exceptionsPath = join(desktopDir, 'release-audit-exceptions.json');
 const inventoryPath = join(distDir, 'third-party-license-inventory.json');
 const MiB = 1024 * 1024;
+const RELEASE_AUDIT_DESKTOP_ARTIFACTS = Object.freeze(
+  expectedDesktopArtifacts('v0.0.0').map(({ name }) => name),
+);
 
 const SEVERITY_RANK = Object.freeze({
   info: 0,
@@ -40,6 +44,75 @@ function loadJson(path, label) {
 
 function requireFile(path, label, failures) {
   if (!existsSync(path)) failures.push(`missing ${label}: ${path}`);
+}
+
+/**
+ * Ensure that GoReleaser signs and uploads each desktop package. This keeps
+ * the release configuration deliberately small and auditable without adding a
+ * YAML parser to the release runtime: the two relevant blocks have an
+ * unambiguous top-level section, `extra_files` child, and `- glob` entries.
+ */
+export function auditGoReleaserDesktopArtifacts(configText, expectedNames) {
+  const failures = [];
+  for (const [section, label] of [
+    ['checksum', 'checksum.extra_files'],
+    ['release', 'release.extra_files'],
+  ]) {
+    const globs = goreleaserExtraFileGlobs(configText, section);
+    for (const name of expectedNames) {
+      if (!globs.some((glob) => goreleaserGlobMatchesArtifact(glob, name))) {
+        failures.push(`GoReleaser ${label} omits ${name}`);
+      }
+    }
+  }
+  return failures;
+}
+
+function goreleaserExtraFileGlobs(configText, section) {
+  const lines = configText.split(/\r?\n/);
+  const sectionIndex = lines.findIndex((line) =>
+    new RegExp(`^${section}:\\s*(?:#.*)?$`).test(line),
+  );
+  if (sectionIndex === -1) return [];
+
+  const globs = [];
+  let inExtraFiles = false;
+  for (let index = sectionIndex + 1; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (/^\S/.test(line)) break;
+    if (/^  extra_files:\s*(?:#.*)?$/.test(line)) {
+      inExtraFiles = true;
+      continue;
+    }
+    if (!inExtraFiles) continue;
+    if (/^  \S/.test(line)) break;
+    const match = /^    - glob:\s*(.+?)(?:\s+#.*)?$/.exec(line);
+    if (match?.[1] !== undefined) globs.push(match[1].trim());
+  }
+  return globs;
+}
+
+function goreleaserGlobMatchesArtifact(glob, artifactName) {
+  const candidate = glob
+    .replace(/^['"]|['"]$/g, '')
+    .split('/')
+    .at(-1);
+  if (candidate === undefined) return false;
+  const expression = `^${candidate
+    .split(/{{\s*\.Version\s*}}/)
+    .map(goreleaserGlobSegmentExpression)
+    .join('[^/]+')}$`;
+  return new RegExp(expression).test(artifactName);
+}
+
+function goreleaserGlobSegmentExpression(segment) {
+  return [...segment]
+    .map((character) => {
+      if (character === '*') return '.*';
+      if (character === '?') return '.';
+      return escapeRegExp(character);
+    })
+    .join('');
 }
 
 function normalizeLicense(license) {
@@ -805,6 +878,11 @@ export function runReleaseAudit() {
   }
   if (!/^asar:\s*true$/m.test(builder)) failures.push('electron-builder.yml must package app.asar');
   failures.push(...auditElectronBuilderFuseConfig(builder));
+
+  const goreleaserConfig = readFileSync(join(rootDir, '.goreleaser.yaml'), 'utf8');
+  failures.push(
+    ...auditGoReleaserDesktopArtifacts(goreleaserConfig, RELEASE_AUDIT_DESKTOP_ARTIFACTS),
+  );
 
   const goMod = readFileSync(join(rootDir, 'go.mod'), 'utf8');
   const goSum = readFileSync(join(rootDir, 'go.sum'), 'utf8');

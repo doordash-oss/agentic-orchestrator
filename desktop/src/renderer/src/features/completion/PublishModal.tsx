@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type {
   CompletionPreflightResult,
   FeatureActionResult,
@@ -38,11 +38,17 @@ export interface PublishModalProps {
   onClose(): void;
 }
 
-function PublishFailureNotice({ result }: { result: ActionResult | null }) {
+function PublishFailureNotice({
+  result,
+  noticeRef,
+}: {
+  result: ActionResult | null;
+  noticeRef?: React.RefObject<HTMLDivElement | null>;
+}) {
   if (result === null || result.ok || result.reconciling) return null;
   const copy = PUBLISH_FAILURE_COPY[result.code];
   return (
-    <div className="completion-publish-sheet__failure" role="alert">
+    <div ref={noticeRef} className="completion-publish-sheet__failure" role="alert" tabIndex={-1}>
       <strong>{copy?.title ?? "Agentico couldn't prepare this publish."}</strong>
       {copy !== undefined ? <p>{copy.next}</p> : null}
       {copy === undefined ? (
@@ -55,6 +61,32 @@ function PublishFailureNotice({ result }: { result: ActionResult | null }) {
   );
 }
 
+function PublishStatusNotice({ result }: { result: ActionResult | null }) {
+  if (result === null) return null;
+  if (result.ok) {
+    return (
+      <div className="completion-publish-sheet__status" role="status">
+        {result.result}
+      </div>
+    );
+  }
+  if (result.reconciling) {
+    return (
+      <div className="completion-publish-sheet__status" role="status">
+        Publish is still running on the server. Refreshing the latest publish state…
+      </div>
+    );
+  }
+  if (result.reconciled) {
+    return (
+      <div className="completion-publish-sheet__status" role="status">
+        {result.message}
+      </div>
+    );
+  }
+  return null;
+}
+
 export function PublishModal({
   featureId,
   preflight,
@@ -65,6 +97,8 @@ export function PublishModal({
   onClose,
 }: PublishModalProps): React.ReactElement {
   const dialogRef = useRef<HTMLDivElement>(null);
+  const titleRef = useRef<HTMLInputElement>(null);
+  const failureRef = useRef<HTMLDivElement>(null);
   const [publishRepos, setPublishRepos] = useState<Set<string>>(
     () =>
       new Set(
@@ -75,6 +109,7 @@ export function PublishModal({
   );
   const [publishTitle, setPublishTitle] = useState('');
   const [publishBody, setPublishBody] = useState('');
+  const [titleVisited, setTitleVisited] = useState(false);
   const [generatingDescription, setGeneratingDescription] = useState(false);
   const [publishGenResult, setPublishGenResult] = useState<ActionResult | null>(null);
   const publishAction = useCompletionAction();
@@ -99,6 +134,7 @@ export function PublishModal({
     () => eligibleRepos.some((repo) => publishRepos.has(repo.repo)),
     [eligibleRepos, publishRepos],
   );
+  const titleInvalid = titleRequired && titleVisited && publishTitle.trim() === '';
   const dirtySelected = useMemo(
     () =>
       preflight.repos.filter((repo) => publishRepos.has(repo.repo) && repo.pendingDirty === true),
@@ -121,6 +157,26 @@ export function PublishModal({
     if (!publishAction.busy && !publishAction.reconciling) onClose();
   }, [onClose, publishAction.busy, publishAction.reconciling]);
   useModalDismiss(dialogRef, requestClose);
+
+  useEffect(() => {
+    const publishable = new Set(
+      preflight.repos
+        .filter((repo) => isEligibleForPublish(repo) || repo.status === UNPUBLISHED_CHANGES)
+        .map((repo) => repo.repo),
+    );
+    setPublishRepos((previous) => new Set([...previous].filter((repo) => publishable.has(repo))));
+  }, [preflight]);
+
+  useEffect(() => {
+    if (
+      publishAction.result !== null &&
+      !publishAction.result.ok &&
+      !publishAction.result.reconciling &&
+      !publishAction.result.reconciled
+    ) {
+      failureRef.current?.focus();
+    }
+  }, [publishAction.result]);
 
   const togglePublishRepo = useCallback((repo: string) => {
     setPublishRepos((previous) => {
@@ -153,6 +209,11 @@ export function PublishModal({
 
   const handlePublish = useCallback(async () => {
     const title = publishTitle.trim();
+    if (titleRequired && title === '') {
+      setTitleVisited(true);
+      titleRef.current?.focus();
+      return;
+    }
     if (!canPublish) return;
     const request: PublishFeatureActionRequest = {
       featureId,
@@ -180,6 +241,7 @@ export function PublishModal({
     publishBody,
     publishRepos,
     publishTitle,
+    titleRequired,
   ]);
 
   return (
@@ -196,9 +258,11 @@ export function PublishModal({
         <div className="sheet__body completion-publish-sheet__body">
           <div className="completion-workspace__publish">
             <div>
-              <h3>Publish reviewed changes</h3>
+              <h3>Publish updates</h3>
               <p className="completion-workspace__publish-hint">
-                Choose the repositories that are ready to publish.
+                {titleRequired
+                  ? 'Choose the repositories whose reviewed work is ready. Existing pull requests are updated without changing their narrative.'
+                  : 'Agentico will update the selected pull-request branches.'}
               </p>
             </div>
             <div className="completion-workspace__publish-repos">
@@ -250,26 +314,41 @@ export function PublishModal({
                 className="completion-publish-sheet__details"
                 aria-label="Pull request details"
               >
-                <h4>Pull request details</h4>
+                <div className="completion-publish-sheet__details-heading">
+                  <h4>Pull request details</h4>
+                  <button
+                    type="button"
+                    className="completion-workspace__secondary-action"
+                    disabled={generatingDescription}
+                    onClick={() => void handleGeneratePublishDescription()}
+                  >
+                    {generatingDescription ? 'Generating…' : 'Generate narrative'}
+                  </button>
+                </div>
                 <label className="completion-workspace__field">
                   <span>
                     PR title <em>Required</em>
                   </span>
                   <input
+                    ref={titleRef}
                     aria-label="PR title"
+                    aria-invalid={titleInvalid || undefined}
+                    aria-describedby={titleInvalid ? 'publish-title-error' : undefined}
                     value={publishTitle}
-                    onChange={(event) => setPublishTitle(event.target.value)}
+                    onChange={(event) => {
+                      setPublishTitle(event.target.value);
+                      if (event.target.value.trim() !== '') setTitleVisited(false);
+                    }}
+                    onBlur={() => setTitleVisited(true)}
                     maxLength={200}
+                    placeholder="Enter PR title"
                   />
                 </label>
-                <button
-                  type="button"
-                  className="completion-workspace__secondary-action"
-                  disabled={generatingDescription}
-                  onClick={() => void handleGeneratePublishDescription()}
-                >
-                  {generatingDescription ? 'Generating…' : 'Generate PR narrative'}
-                </button>
+                {titleInvalid ? (
+                  <p id="publish-title-error" className="completion-publish-sheet__field-error">
+                    Add a title to create the pull request.
+                  </p>
+                ) : null}
                 <label className="completion-workspace__field">
                   <span>
                     PR body <em>Optional</em>
@@ -280,6 +359,7 @@ export function PublishModal({
                     onChange={(event) => setPublishBody(event.target.value)}
                     maxLength={4000}
                     rows={5}
+                    placeholder="Enter PR description"
                   />
                 </label>
               </section>
@@ -301,7 +381,8 @@ export function PublishModal({
                 </label>
               </div>
             ) : null}
-            <PublishFailureNotice result={publishAction.result} />
+            <PublishStatusNotice result={publishAction.result} />
+            <PublishFailureNotice result={publishAction.result} noticeRef={failureRef} />
             {publishGenResult !== null && publishAction.result === null ? (
               <PublishFailureNotice result={publishGenResult} />
             ) : null}
@@ -321,7 +402,9 @@ export function PublishModal({
               ? 'Publishing…'
               : publishAction.reconciling
                 ? 'Reconciling…'
-                : 'Publish updates'}
+                : titleRequired
+                  ? 'Publish'
+                  : 'Publish updates'}
           </button>
         </footer>
       </div>
@@ -358,17 +441,19 @@ function PublishRepoRow({
           </span>
         ) : null}
       </div>
-      {repo.status === UNPUBLISHED_CHANGES ? (
-        <span className="completion-workspace__pending-detail">
-          {pendingDeliveryDetail({
-            commits: repo.pendingCommits ?? 0,
-            dirty: repo.pendingDirty ?? false,
-          })}
-        </span>
-      ) : null}
-      {repo.prUrl !== undefined ? (
-        <PrLinkButton url={repo.prUrl} openExternal={openExternal} />
-      ) : null}
+      <div className="completion-workspace__publish-repo-meta">
+        {repo.status === UNPUBLISHED_CHANGES ? (
+          <span className="completion-workspace__pending-detail">
+            {pendingDeliveryDetail({
+              commits: repo.pendingCommits ?? 0,
+              dirty: repo.pendingDirty ?? false,
+            })}
+          </span>
+        ) : null}
+        {repo.prUrl !== undefined ? (
+          <PrLinkButton url={repo.prUrl} openExternal={openExternal} />
+        ) : null}
+      </div>
       {repo.pushMode === 'rewrite' ? (
         <p className="completion-workspace__pending-note">
           Rewrites the pull-request branch with a safety lease.

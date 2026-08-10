@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import type { CompletionPreflightResult, FeatureActionResult } from '../../../../shared/ipc';
@@ -257,5 +257,234 @@ describe('PublishModal', () => {
     fireEvent.mouseDown(screen.getByRole('dialog').parentElement as HTMLElement);
     fireEvent.keyDown(window, { key: 'Escape' });
     expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('uses Publish and sends title metadata when a selected repo needs a new pull request', async () => {
+    const user = userEvent.setup();
+    const dispatchAction = vi.fn().mockResolvedValue(result);
+    render(<PublishModal {...props({ dispatchAction })} />);
+
+    expect(screen.getByRole('button', { name: 'Publish' })).toBeDisabled();
+    const details = screen.getByRole('region', { name: 'Pull request details' });
+    expect(within(details).getByRole('button', { name: 'Generate narrative' })).toBeVisible();
+    await user.type(screen.getByLabelText('PR title'), 'Ship reviewed work');
+    await user.type(screen.getByLabelText('PR body'), 'A compact description.');
+    await user.click(screen.getByRole('button', { name: 'Publish' }));
+
+    expect(dispatchAction).toHaveBeenCalledWith({
+      featureId,
+      action: 'publish',
+      body: {
+        source_revision: 'rev-1',
+        repos: ['web'],
+        title: 'Ship reviewed work',
+        body: 'A compact description.',
+      },
+    });
+  });
+
+  it('marks a blank required title invalid after local validation', async () => {
+    const user = userEvent.setup();
+    render(<PublishModal {...props()} />);
+
+    await user.click(screen.getByLabelText('PR title'));
+    await user.tab();
+
+    const title = screen.getByLabelText('PR title');
+    expect(title).toHaveAttribute('aria-invalid', 'true');
+    expect(screen.getByText('Add a title to create the pull request.')).toBeVisible();
+  });
+
+  it('moves focus to an asynchronous publish failure notice', async () => {
+    const user = userEvent.setup();
+    const dispatchAction = vi.fn().mockRejectedValue(new Error('publish failed safely'));
+    render(
+      <PublishModal
+        {...props({
+          dispatchAction,
+          preflight: {
+            featureId,
+            sourceRevision: 'rev-1',
+            canMarkDone: true,
+            repos: [
+              {
+                repo: 'api',
+                publishable: true,
+                touched: true,
+                status: 'unpublished_changes',
+              },
+            ],
+          },
+        })}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Publish updates' }));
+    expect(await screen.findByRole('alert')).toHaveFocus();
+  });
+
+  it('keeps sanitized unexpected details collapsed until requested', async () => {
+    const user = userEvent.setup();
+    const dispatchAction = vi.fn().mockRejectedValue(new Error('safe diagnostic detail'));
+    render(
+      <PublishModal
+        {...props({
+          dispatchAction,
+          preflight: {
+            featureId,
+            sourceRevision: 'rev-1',
+            canMarkDone: true,
+            repos: [
+              { repo: 'api', publishable: true, touched: true, status: 'unpublished_changes' },
+            ],
+          },
+        })}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Publish updates' }));
+    const details = screen.getByText('Show details').closest('details');
+    expect(details).not.toBeNull();
+    expect(details).not.toHaveAttribute('open');
+    await user.click(screen.getByText('Show details'));
+    expect(screen.getByText('safe diagnostic detail')).toBeVisible();
+  });
+
+  it('announces success and retries only repositories still publishable after refresh', async () => {
+    const user = userEvent.setup();
+    const dispatchAction = vi.fn().mockResolvedValue(result);
+    const initial: CompletionPreflightResult = {
+      featureId,
+      sourceRevision: 'rev-1',
+      canMarkDone: true,
+      repos: [
+        { repo: 'api', publishable: true, touched: true, status: 'unpublished_changes' },
+        { repo: 'web', publishable: true, touched: true, status: 'unpublished_changes' },
+      ],
+    };
+    const refreshed: CompletionPreflightResult = {
+      ...initial,
+      repos: [
+        { repo: 'api', publishable: true, touched: true, status: 'already_published' },
+        { repo: 'web', publishable: true, touched: true, status: 'unpublished_changes' },
+      ],
+    };
+    const view = render(<PublishModal {...props({ dispatchAction, preflight: initial })} />);
+
+    await user.click(screen.getByRole('button', { name: 'Publish updates' }));
+    expect(await screen.findByRole('status')).toHaveTextContent('published');
+    view.rerender(<PublishModal {...props({ dispatchAction, preflight: refreshed })} />);
+    await user.click(screen.getByRole('button', { name: 'Publish updates' }));
+
+    await waitFor(() =>
+      expect(dispatchAction).toHaveBeenLastCalledWith({
+        featureId,
+        action: 'publish',
+        body: { source_revision: 'rev-1', repos: ['web'] },
+      }),
+    );
+  });
+
+  it('announces timeout reconciliation and lets the user dismiss after refresh completes', async () => {
+    const user = userEvent.setup();
+    let finishRefresh: (() => void) | undefined;
+    const onDispatched = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          finishRefresh = resolve;
+        }),
+    );
+    const onClose = vi.fn();
+    const dispatchAction = vi
+      .fn()
+      .mockRejectedValue(new Error('E_REQUEST_TIMEOUT: publish did not answer before the bound'));
+    render(
+      <PublishModal
+        {...props({
+          dispatchAction,
+          onDispatched,
+          onClose,
+          preflight: {
+            featureId,
+            sourceRevision: 'rev-1',
+            canMarkDone: true,
+            repos: [
+              { repo: 'api', publishable: true, touched: true, status: 'unpublished_changes' },
+            ],
+          },
+        })}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Publish updates' }));
+    expect(await screen.findByRole('status')).toHaveTextContent('still running on the server');
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(onClose).not.toHaveBeenCalled();
+
+    finishRefresh?.();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Cancel' })).toBeEnabled());
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it('keeps a failed reconciliation actionable instead of claiming the state refreshed', async () => {
+    const user = userEvent.setup();
+    const dispatchAction = vi
+      .fn()
+      .mockRejectedValue(new Error('E_REQUEST_TIMEOUT: publish did not answer before the bound'));
+    render(
+      <PublishModal
+        {...props({
+          dispatchAction,
+          onDispatched: vi.fn().mockRejectedValue(new Error('refresh unavailable')),
+          preflight: {
+            featureId,
+            sourceRevision: 'rev-1',
+            canMarkDone: true,
+            repos: [
+              { repo: 'api', publishable: true, touched: true, status: 'unpublished_changes' },
+            ],
+          },
+        })}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Publish updates' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      "Agentico couldn't prepare this publish.",
+    );
+    expect(screen.getByRole('alert')).not.toHaveTextContent('Publish state refreshed.');
+  });
+
+  it('groups repository metadata and the pull-request link in the manifest row', () => {
+    render(
+      <PublishModal
+        {...props({
+          preflight: {
+            featureId,
+            sourceRevision: 'rev-1',
+            canMarkDone: true,
+            repos: [
+              {
+                repo: 'api',
+                publishable: true,
+                touched: true,
+                status: 'unpublished_changes',
+                pendingCommits: 3,
+                prUrl: 'https://example.test/pr/1',
+              },
+            ],
+          },
+        })}
+      />,
+    );
+
+    const row = screen
+      .getByRole('checkbox', { name: 'api' })
+      .closest('.completion-workspace__publish-repo');
+    expect(row?.querySelector('.completion-workspace__publish-repo-meta')).toHaveTextContent(
+      '3 commits',
+    );
+    expect(within(row as HTMLElement).getByRole('button', { name: 'PR ↗' })).toBeVisible();
   });
 });

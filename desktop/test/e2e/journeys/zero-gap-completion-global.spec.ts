@@ -80,7 +80,7 @@ test('zero-gap completion and global parity: diff, irreversible impact, AMA, rec
     const publishModal = handle.page.getByRole('dialog', { name: 'Publish reviewed changes' });
     await expect(publishModal).toBeVisible({ timeout: 15_000 });
     await expect(publishModal.locator('.completion-workspace__publish')).toBeVisible();
-    await publishModal.getByRole('button', { name: 'Close' }).click();
+    await publishModal.getByRole('button', { name: 'Cancel' }).click();
     await expect(publishModal).toHaveCount(0);
 
     // Aftercare opens read-only repository + diff inspection in a workspace dialog,

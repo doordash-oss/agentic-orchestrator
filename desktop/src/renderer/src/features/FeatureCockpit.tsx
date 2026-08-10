@@ -1108,7 +1108,9 @@ export function FeatureCockpit({
     [],
   );
   const onCompletionDispatched = useCallback(() => {
-    void refreshFeature({ silent: true });
+    // The scheduler-backed feature refresh also refreshes completion preflight
+    // through completionRefreshRef, so return that single convergence promise.
+    return refreshFeature({ silent: true });
   }, [refreshFeature]);
 
   const onPassChanged = useCallback(() => {

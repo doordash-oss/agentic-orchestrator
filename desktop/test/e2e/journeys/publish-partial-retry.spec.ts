@@ -126,7 +126,7 @@ test('packaged publish partial retry: push succeeds, PR creation fails, retry sc
     transcript.step('publish-api repository status loaded lazily');
     await changesModal.getByRole('button', { name: 'Close' }).click();
 
-    transcript.section('Open publish modal and generate PR narrative');
+    transcript.section('Open publish sheet and generate a PR narrative');
     await publishRow.click();
     const publishModal = handle.page.getByRole('dialog', { name: 'Publish reviewed changes' });
     await expect(publishModal.locator('.completion-workspace__publish')).toBeVisible();
@@ -135,7 +135,9 @@ test('packaged publish partial retry: push succeeds, PR creation fails, retry sc
     await expect(publishModal.getByRole('checkbox', { name: 'publish-web' })).toBeChecked();
     await expect(publishModal.getByRole('checkbox', { name: 'local-only' })).toHaveCount(0);
     await expect(publishModal.getByText('Already published')).toBeVisible({ timeout: 10_000 });
-    await publishModal.getByRole('button', { name: 'Generate PR narrative' }).click();
+    await expect(publishModal.getByText('Required')).toBeVisible();
+    await expect(publishModal.getByText('Optional')).toBeVisible();
+    await publishModal.getByRole('button', { name: 'Generate narrative' }).click();
     await expect(publishModal.getByPlaceholder('Enter PR title')).not.toHaveValue('');
     await expect(publishModal.getByPlaceholder('Enter PR description')).not.toHaveValue('');
     transcript.step(
@@ -146,9 +148,12 @@ test('packaged publish partial retry: push succeeds, PR creation fails, retry sc
     const publishButton = publishModal.getByRole('button', { name: 'Publish', exact: true });
     await expect(publishButton).toBeEnabled();
     await publishButton.click();
-    await expect(publishModal.locator('.completion-workspace__result')).toBeVisible({
-      timeout: 60_000,
-    });
+    await expect(publishModal.getByRole('alert')).toContainText(
+      "Agentico couldn't prepare this publish.",
+      {
+        timeout: 60_000,
+      },
+    );
     assertPublishedBranch(seeded, 'publish-web');
     transcript.step(
       'publish action completed with partial outcome (push succeeded, PR creation failed)',
@@ -156,7 +161,7 @@ test('packaged publish partial retry: push succeeds, PR creation fails, retry sc
 
     transcript.section('Verify retry scope defaults to failed/unpublished repositories');
     // Reopen the publish modal so it re-derives scope from the post-publish preflight.
-    await publishModal.getByRole('button', { name: 'Close' }).click();
+    await publishModal.getByRole('button', { name: 'Cancel' }).click();
     await expect(publishModal).toHaveCount(0);
     await aftercareRunway
       .getByRole('button', { name: /Publish (this feature|new commits)/ })

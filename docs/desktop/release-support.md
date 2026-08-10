@@ -1,40 +1,79 @@
 # Desktop Release, Updates, and Diagnostics
 
-Agentico desktop stable releases are assembled from a protected `vX.Y.Z` tag.
-Local development packages remain unsigned and unpublished; protected CI tag
-runs are the only place Developer ID, notarization, and GPG signing material is
-accepted.
+Agentico desktop stable releases are assembled locally by the release operator
+from an exact `vX.Y.Z` tag. Development packages remain unpublished. Release
+credentials, the GitHub token, and the update-signing key stay on the release
+operator's machine; the release flow does not depend on CI credentials.
 
 ## Cutting a Release
 
-Releases are cut locally by the release operator — no CI credentials — from a
-clean checkout of the release tag:
+Releases are cut locally by the release operator from a clean exact release
+tag. The maintainer workflow is intentionally one command after tagging:
 
 ```bash
-git tag vX.Y.Z && git push origin vX.Y.Z
-make release            # GORELEASER_FLAGS='--release-notes notes.md' to add notes
+git tag vX.Y.Z
+make release GORELEASER_FLAGS='--release-notes notes.md'
 ```
 
-`make release` runs three steps that must stay in this order:
+Before running it, make sure the local machine has:
 
-1. `npm run package:build --workspace desktop` — builds the universal DMG.
+- a running Docker daemon with `buildx` available;
+- at least 12 GiB of free disk space for the two Linux container builds and
+  their caches;
+- GoReleaser v2.10 or later, a GitHub token, and the local update-signing key
+  described below.
+
+`make release` is deliberately ordered so every desktop artifact is built and
+validated before GoReleaser can create a GitHub release:
+
+1. `npm run package:verify --workspace desktop` builds and verifies the native
+   universal macOS DMG.
    Because HEAD sits exactly on a clean `vX.Y.Z` tag, package-build stamps the
    tag version into the app (`app.getVersion()`) and into
    `build-identity.json`'s `desktop_version`; any other build keeps the static
    development version from `desktop/package.json`.
-2. `goreleaser release` — builds the CLI archives, creates the GitHub release,
-   uploads the DMG (`release.extra_files`), folds the DMG's SHA-256 into
-   `checksums.txt` (`checksum.extra_files`), signs `checksums.txt` with the
-   operator's Ed25519 key (`desktop/scripts/release-sign.mjs`), and pushes the
-   `agentico` CLI cask to the tap.
-3. `node desktop/scripts/publish-desktop-cask.mjs` — renders
+2. `npm run package:linux:release --workspace desktop` runs two sequential
+   Linux container builds: x64 first, then arm64. They use Docker/buildx and
+   the immutable
+   `electronuserland/builder:22@sha256:b76a82a6c6a8a1dea1abbc93e394f54316744824b64e6a50d959f1e3ba8951a9`
+   builder image. The builds must remain sequential because they share desktop
+   build output and caches.
+3. `npm run release:artifacts:verify --workspace desktop -- packages` verifies
+   the complete desktop inventory, architecture-specific package receipts, and
+   embedded identities before publishing.
+4. `goreleaser release` builds CLI archives, creates the GitHub release,
+   uploads every desktop package, folds every desktop SHA-256 into
+   `checksums.txt`, signs that manifest with the operator's Ed25519 key
+   (`desktop/scripts/release-sign.mjs`), and pushes the `agentico` CLI cask to
+   the tap. `npm run release:artifacts:verify --workspace desktop -- manifest`
+   immediately verifies the signature and requires exactly one checksum entry
+   for every desktop package.
+5. `node desktop/scripts/publish-desktop-cask.mjs` renders
    `Casks/agentico-desktop.rb` from the DMG and pushes it to the tap
    (goreleaser's OSS cask pipe cannot checksum artifacts it did not build).
 
-The in-app updater consumes exactly this shape: it picks the highest stable
-SemVer release, selects `Agentico-mac-universal.dmg` (or the arch-matched
-AppImage/deb), and verifies the package hash against the
-`agentico-ed25519`-signed `checksums.txt` before offering an install.
+The resulting desktop assets are exactly:
+
+- `Agentico-mac-universal.dmg`
+- `Agentico-x64.AppImage`
+- `Agentico-arm64.AppImage`
+- `agentico_X.Y.Z_amd64.deb`
+- `agentico_X.Y.Z_arm64.deb`
+
+All five are uploaded to the GitHub release and have exactly one line in the
+signed `checksums.txt`. The updater uses the manifest only after verifying its
+Ed25519 signature. The native DMG and either AppImage support staged in-app
+updates requiring an explicit restart action. DEB installations are
+package-manager-managed: the app presents verified package-manager guidance
+and the trusted release page, rather than replacing a DEB installation itself.
+
+If a macOS or Linux build, package receipt, identity, or inventory check fails,
+`make release` stops before GoReleaser and creates no GitHub release. If
+GoReleaser has already created a partial release, or the post-publication
+manifest check fails, treat it as partial publication: remove the GitHub
+release and remote tag, fix the release configuration or signing material, and
+rerun while retaining the local tag. Homebrew publication is last; a rejected
+tap push can be retried independently.
 
 ### Release signing key
 
@@ -42,7 +81,7 @@ The updater trusts one Ed25519 public key embedded as `RELEASE_PUBLIC_KEY` in
 `desktop/src/main/updates.ts`. The private half lives only with the release
 operator at `~/.config/agentico-release/release-key.pem` (override with
 `AGENTICO_RELEASE_SIGNING_KEY` / `AGENTICO_RELEASE_SIGNING_KEY_FILE`) and never
-enters the repo or CI. `release-sign.mjs sign` refuses keys whose public half
+enters the repository. `release-sign.mjs sign` refuses keys whose public half
 does not match the embedded trust root. To rotate: move the old key aside, run
 `node desktop/scripts/release-sign.mjs keygen`, embed the printed public key in
 `updates.ts`, and ship a release — apps older than that release will report
@@ -50,16 +89,16 @@ does not match the embedded trust root. To rotate: move the old key aside, run
 committed fixture keypair in `test/e2e/helpers/update-fixtures.ts` is trusted
 only when `AGENTICO_UPDATE_FIXTURE` routes the feed to a local fixture.
 
-### Interim unsigned distribution (until Developer ID/notarization)
+### Interim unsigned macOS distribution (until Developer ID/notarization)
 
-macOS artifacts carry only an ad-hoc signature, so Gatekeeper blocks them when
+macOS artifacts currently carry only an ad-hoc signature, so Gatekeeper blocks them when
 they carry the quarantine attribute. Both casks therefore strip
 `com.apple.quarantine` in a post-install hook; installs via `curl`/`git` never
 acquire the attribute in the first place. Once a signing/notarization pipeline
-exists: provide the Developer ID + notarization credentials to the packaging
-step (see `release-credentials-check.mjs`), and delete the quarantine hooks
-from `.goreleaser.yaml` and `desktop/scripts/lib/desktop-cask.mjs`. Nothing
-else in the release flow changes.
+is available, configure the Developer ID and notarization credentials in the
+release operator's environment, then delete the quarantine hooks from
+`.goreleaser.yaml` and `desktop/scripts/lib/desktop-cask.mjs`. Nothing else in
+the release flow changes.
 
 ### One-time tap migration (formula → cask)
 
@@ -125,6 +164,7 @@ npm run release:credentials:check --workspace desktop
 npm run release:verify --workspace desktop
 ```
 
-`release:verify` performs local static release checks outside protected tag
-mode. With `AGENTICO_RELEASE_STRICT=1` or a tag-triggered GitHub Actions run, it
-also requires signing credentials and signed native artifacts.
+`release:verify` performs local static release checks. The production release
+gate is the single `make release` command above: it builds all five desktop
+artifacts, verifies their identities before publication, and verifies the
+signed checksum manifest afterward.

@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -30,5 +30,19 @@ describe('normalizeLinuxAppImage', () => {
     writeFileSync(join(distDir, 'Agentico-arm64.AppImage'), 'package');
 
     expect(normalizeLinuxAppImage(distDir, 'arm64')).toBe(join(distDir, 'Agentico-arm64.AppImage'));
+  });
+
+  it('refuses to overwrite an existing x64 release artifact', () => {
+    const distDir = mkdtempSync(join(tmpdir(), 'agentico-linux-artifacts-'));
+    cleanup.push(distDir);
+    const source = join(distDir, 'Agentico-x86_64.AppImage');
+    const destination = join(distDir, 'Agentico-x64.AppImage');
+    writeFileSync(source, 'new package');
+    writeFileSync(destination, 'existing release package');
+
+    expect(() => normalizeLinuxAppImage(distDir, 'x64')).toThrow(/refusing to overwrite/);
+    expect(readFileSync(source, 'utf8')).toBe('new package');
+    expect(readFileSync(destination, 'utf8')).toBe('existing release package');
+    expect(existsSync(source)).toBe(true);
   });
 });

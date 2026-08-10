@@ -83,7 +83,9 @@ function requireBuildOutputs(repoRoot, arch, version, receipt) {
 
 function removeBuildOutputs(repoRoot, arch, version, receipt) {
   const debArch = arch === 'x64' ? 'amd64' : arch;
-  for (const name of [receipt, `Agentico-${arch}.AppImage`, `agentico_${version}_${debArch}.deb`]) {
+  const artifacts = [receipt, `Agentico-${arch}.AppImage`, `agentico_${version}_${debArch}.deb`];
+  if (arch === 'x64') artifacts.push('Agentico-x86_64.AppImage');
+  for (const name of artifacts) {
     rmSync(join(repoRoot, 'desktop', 'dist', name), { force: true });
   }
 }

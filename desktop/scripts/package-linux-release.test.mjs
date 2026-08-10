@@ -205,6 +205,26 @@ describe('runLinuxRelease', () => {
     expect(existsSync(arm64AttemptPath)).toBe(false);
   });
 
+  it('removes stale x86_64 intermediate output before a non-producing x64 build', () => {
+    const options = validFixtureOptions();
+    const staleIntermediate = join(options.repoRoot, 'desktop', 'dist', 'Agentico-x86_64.AppImage');
+    const arm64AttemptPath = join(options.repoRoot, 'arm64-attempted');
+    writeFileSync(staleIntermediate, 'stale x64 intermediate\n');
+    options.execute = (_command, args) => {
+      const arch = args
+        .find((arg) => arg.startsWith('AGENTICO_PACKAGE_ARCH='))
+        ?.split('=')
+        .at(-1);
+      if (arch === 'arm64') writeFileSync(arm64AttemptPath, 'attempted\n');
+    };
+
+    expect(() => runLinuxRelease(options)).toThrow(
+      /x64 package verification did not produce required release files/,
+    );
+    expect(existsSync(staleIntermediate)).toBe(false);
+    expect(existsSync(arm64AttemptPath)).toBe(false);
+  });
+
   it('does not pull when pinned-image inspection fails for a daemon error', () => {
     const options = validFixtureOptions();
     const pullAttemptPath = join(options.repoRoot, 'pull-attempted');
@@ -235,6 +255,45 @@ describe('runLinuxRelease', () => {
         throw error;
       }
       if (args[0] === 'pull') writeFileSync(pullPath, 'pulled\n');
+      const arch = args
+        .find((arg) => arg.startsWith('AGENTICO_PACKAGE_ARCH='))
+        ?.split('=')
+        .at(-1);
+      if (arch !== undefined) writeReleaseOutputs(options.repoRoot, arch);
+    };
+
+    expect(runLinuxRelease(options).completed).toEqual(['x64', 'arm64']);
+    expect(existsSync(pullPath)).toBe(true);
+  });
+
+  it('does not pull the arm64 verifier image when its inspection has a daemon error', () => {
+    const options = validFixtureOptions();
+    const pullAttemptPath = join(options.repoRoot, 'pull-attempted');
+    options.execute = (_command, args) => {
+      if (args.join(' ') === `image inspect ${LINUX_ARM64_VERIFIER_IMAGE}`) {
+        const error = new Error('Cannot connect to the Docker daemon');
+        error.stderr = 'Cannot connect to the Docker daemon';
+        throw error;
+      }
+      if (args[0] === 'pull') writeFileSync(pullAttemptPath, 'attempted\n');
+    };
+
+    expect(() => runLinuxRelease(options)).toThrow(/Cannot connect to the Docker daemon/);
+    expect(existsSync(pullAttemptPath)).toBe(false);
+  });
+
+  it('pulls the arm64 verifier image after an image-not-found inspection result', () => {
+    const options = validFixtureOptions();
+    const pullPath = join(options.repoRoot, 'pulled-arm64-verifier-image');
+    options.execute = (_command, args) => {
+      if (args.join(' ') === `image inspect ${LINUX_ARM64_VERIFIER_IMAGE}`) {
+        const error = new Error('No such image');
+        error.stderr = 'Error response from daemon: No such image';
+        throw error;
+      }
+      if (args.join(' ') === `pull ${LINUX_ARM64_VERIFIER_IMAGE}`) {
+        writeFileSync(pullPath, 'pulled\n');
+      }
       const arch = args
         .find((arg) => arg.startsWith('AGENTICO_PACKAGE_ARCH='))
         ?.split('=')

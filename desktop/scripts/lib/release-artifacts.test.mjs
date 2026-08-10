@@ -117,7 +117,7 @@ describe('createLinuxDockerPlan', () => {
     expect(plan[0].args).toEqual(
       expect.arrayContaining([
         '-v',
-        'agentico-release-node-modules:/repo/node_modules',
+        'agentico-release-node-modules:/repo/worktree/node_modules',
         '-v',
         'agentico-release-electron:/root/.cache/electron',
         '-v',
@@ -160,7 +160,13 @@ describe('createLinuxDockerPlan', () => {
         LINUX_ARM64_VERIFIER_IMAGE,
       ]),
     );
+    expect(LINUX_ARM64_VERIFIER_IMAGE).toBe(
+      'node:22.22.2-bookworm@sha256:62e4daa6819762bbd3072af77cc282ab72c631c4aed30dd7980192babaf385b3',
+    );
     expect(arm64.verificationArgs.at(-1)).toContain('go1.25.0.linux-arm64.tar.gz');
+    expect(arm64.verificationArgs.at(-1)).toContain(
+      '05de75d6994a2783699815ee553bd5a9327d8b79991de36e38b66862782f54ae',
+    );
     expect(arm64.verificationArgs.at(-1)).toContain('node desktop/scripts/verify-package.mjs');
   });
 

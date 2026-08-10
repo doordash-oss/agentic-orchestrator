@@ -179,7 +179,7 @@ export function createLinuxDockerPlan({ repoRoot, gitCommonDir, volumePrefix }) 
     '-v',
     `${gitCommonDir}:${gitCommonDir}`,
     '-v',
-    `${volumePrefix}-node-modules:/repo/node_modules`,
+    `${volumePrefix}-node-modules:${repoRoot}/node_modules`,
     '-v',
     `${volumePrefix}-electron:/root/.cache/electron`,
     '-v',

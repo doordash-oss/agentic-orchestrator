@@ -103,6 +103,7 @@ import {
   activeWorkDialog,
   hasActiveWork,
   quitAnywayDialog,
+  shouldRequestQuitOnMainWindowClose,
   stopFailureDialog,
   type ActiveWorkCheck,
   type ActiveWorkDecision,
@@ -812,7 +813,10 @@ if (!hasSingleInstanceLock) {
     }
 
     function handleWindowClose(event: ElectronEvent, window: BrowserWindow): void {
-      if (quitCoordinator.shouldAllowClose()) {
+      if (
+        quitCoordinator.shouldAllowClose() ||
+        !shouldRequestQuitOnMainWindowClose(process.platform)
+      ) {
         return;
       }
       event.preventDefault();

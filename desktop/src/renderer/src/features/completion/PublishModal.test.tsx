@@ -30,6 +30,8 @@ function props(over: Partial<React.ComponentProps<typeof PublishModal>> = {}) {
     openExternal: vi.fn().mockResolvedValue({ ok: true }),
     onDispatched: vi.fn(),
     onClose: vi.fn(),
+    publishTimeoutLocked: false,
+    setPublishTimeoutLocked: vi.fn(),
     ...over,
   };
 }
@@ -264,7 +266,7 @@ describe('PublishModal', () => {
     const dispatchAction = vi.fn().mockResolvedValue(result);
     render(<PublishModal {...props({ dispatchAction })} />);
 
-    expect(screen.getByRole('button', { name: 'Publish' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Publish' })).toBeDisabled();
     const details = screen.getByRole('region', { name: 'Pull request details' });
     expect(within(details).getByRole('button', { name: 'Generate narrative' })).toBeVisible();
     await user.type(screen.getByLabelText('PR title'), 'Ship reviewed work');
@@ -283,17 +285,19 @@ describe('PublishModal', () => {
     });
   });
 
-  it('validates a blank title on an actual Publish click and moves focus to the field', async () => {
+  it('keeps Publish disabled until the required title is nonblank', async () => {
     const user = userEvent.setup();
     render(<PublishModal {...props()} />);
 
     const publish = screen.getByRole('button', { name: 'Publish' });
-    expect(publish).toBeEnabled();
-    await user.click(publish);
+    expect(publish).toBeDisabled();
 
-    expect(screen.getByLabelText('PR title')).toHaveFocus();
-    expect(screen.getByLabelText('PR title')).toHaveAttribute('aria-invalid', 'true');
+    await user.click(screen.getByLabelText('PR title'));
+    await user.tab();
     expect(screen.getByText('Add a title to create the pull request.')).toBeVisible();
+
+    await user.type(screen.getByLabelText('PR title'), 'Ship reviewed work');
+    expect(publish).toBeEnabled();
   });
 
   it('moves focus to a narrative-generation failure notice', async () => {
@@ -313,6 +317,7 @@ describe('PublishModal', () => {
   it('keeps the publish mutation locked after a swallowed refresh following a timeout', async () => {
     const user = userEvent.setup();
     const onClose = vi.fn();
+    const setPublishTimeoutLocked = vi.fn();
     const dispatchAction = vi
       .fn()
       .mockRejectedValue(new Error('E_REQUEST_TIMEOUT: publish did not answer before the bound'));
@@ -321,6 +326,7 @@ describe('PublishModal', () => {
         {...props({
           dispatchAction,
           onClose,
+          setPublishTimeoutLocked,
           // Completion refresh swallows an IPC fetch failure and resolves, just
           // as the production preflight hook does.
           onDispatched: vi.fn().mockResolvedValue(undefined),
@@ -339,6 +345,7 @@ describe('PublishModal', () => {
     await user.click(screen.getByRole('button', { name: 'Publish updates' }));
     expect(await screen.findByRole('status')).toHaveTextContent('may still be running');
     expect(screen.getByRole('button', { name: 'Reconciling…' })).toBeDisabled();
+    expect(setPublishTimeoutLocked).toHaveBeenCalledWith(true);
     await user.click(screen.getByRole('button', { name: 'Cancel' }));
     expect(onClose).toHaveBeenCalledOnce();
     expect(dispatchAction).toHaveBeenCalledOnce();

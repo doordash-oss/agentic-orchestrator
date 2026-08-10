@@ -1214,6 +1214,8 @@ function CompletionScene({ scene }: { scene: string }): React.ReactElement {
             openExternal={openExternal}
             onDispatched={() => {}}
             onClose={() => {}}
+            publishTimeoutLocked={false}
+            setPublishTimeoutLocked={() => {}}
           />
         ) : null}
       </div>

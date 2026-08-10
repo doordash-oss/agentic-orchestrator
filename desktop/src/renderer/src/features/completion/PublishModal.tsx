@@ -32,6 +32,8 @@ export interface PublishModalProps {
   openExternal(url: string): Promise<{ ok: boolean }>;
   onDispatched(): void | Promise<void>;
   onClose(): void;
+  publishTimeoutLocked: boolean;
+  setPublishTimeoutLocked(locked: boolean): void;
 }
 
 function PublishFailureNotice({
@@ -57,8 +59,21 @@ function PublishFailureNotice({
   );
 }
 
-function PublishStatusNotice({ result }: { result: ActionResult | null }) {
-  if (result === null) return null;
+function PublishStatusNotice({
+  result,
+  publishTimeoutLocked,
+}: {
+  result: ActionResult | null;
+  publishTimeoutLocked: boolean;
+}) {
+  if (result === null) {
+    if (!publishTimeoutLocked) return null;
+    return (
+      <div className="completion-publish-sheet__status" role="status">
+        A previous publish may still be running. Refresh the feature before publishing again.
+      </div>
+    );
+  }
   if (result.ok) {
     return (
       <div className="completion-publish-sheet__status" role="status">
@@ -84,6 +99,8 @@ export function PublishModal({
   openExternal,
   onDispatched,
   onClose,
+  publishTimeoutLocked,
+  setPublishTimeoutLocked,
 }: PublishModalProps): React.ReactElement {
   const dialogRef = useRef<HTMLDivElement>(null);
   const titleRef = useRef<HTMLInputElement>(null);
@@ -102,8 +119,9 @@ export function PublishModal({
   const [generatingDescription, setGeneratingDescription] = useState(false);
   const [publishGenResult, setPublishGenResult] = useState<ActionResult | null>(null);
   const [publishBusy, setPublishBusy] = useState(false);
-  const [publishLocked, setPublishLocked] = useState(false);
+  const [timedOutThisOpen, setTimedOutThisOpen] = useState(false);
   const [publishResult, setPublishResult] = useState<ActionResult | null>(null);
+  const publishLocked = publishTimeoutLocked || timedOutThisOpen;
 
   const eligibleRepos = useMemo(() => preflight.repos.filter(isEligibleForPublish), [preflight]);
   const unpublishedRepos = useMemo(
@@ -139,6 +157,7 @@ export function PublishModal({
   const canPublish =
     preflight.sourceRevision.trim() !== '' &&
     publishRepos.size > 0 &&
+    (!titleRequired || publishTitle.trim() !== '') &&
     (dirtySelected.length === 0 || commitConfirmed) &&
     !publishBusy &&
     !publishLocked;
@@ -222,6 +241,8 @@ export function PublishModal({
     } catch (error) {
       const parsed = parseIpcError(error);
       if (parsed.code === E_REQUEST_TIMEOUT) {
+        setTimedOutThisOpen(true);
+        setPublishTimeoutLocked(true);
         setPublishResult({
           ok: false,
           code: parsed.code,
@@ -233,7 +254,6 @@ export function PublishModal({
         } catch {
           // Refresh hooks can deliberately absorb their own transport errors.
         }
-        setPublishLocked(true);
         setPublishResult({
           ok: false,
           code: parsed.code,
@@ -258,6 +278,7 @@ export function PublishModal({
     featureId,
     onDispatched,
     preflight.sourceRevision,
+    setPublishTimeoutLocked,
     publishBody,
     publishRepos,
     publishTitle,
@@ -401,7 +422,10 @@ export function PublishModal({
                 </label>
               </div>
             ) : null}
-            <PublishStatusNotice result={publishResult} />
+            <PublishStatusNotice
+              result={publishResult}
+              publishTimeoutLocked={publishTimeoutLocked}
+            />
             <PublishFailureNotice result={publishResult} noticeRef={failureRef} />
             {publishGenResult !== null && publishResult === null ? (
               <PublishFailureNotice result={publishGenResult} noticeRef={failureRef} />

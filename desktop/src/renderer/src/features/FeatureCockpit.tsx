@@ -930,6 +930,7 @@ export function FeatureCockpit({
   const [rewindSourceRunNumber, setRewindSourceRunNumber] = useState<number | undefined>();
   const [launcherModal, setLauncherModal] = useState<AftercareModalId | null>(null);
   const [completionModal, setCompletionModal] = useState<CompletionVerb | null>(null);
+  const [publishTimeoutLocked, setPublishTimeoutLocked] = useState(false);
   const [runRecordOpen, setRunRecordOpen] = useState(false);
   const [changesOpen, setChangesOpen] = useState(false);
   const [dismissedGateId, setDismissedGateId] = useState<string | undefined>();
@@ -2371,6 +2372,8 @@ export function FeatureCockpit({
             openExternal={(url) => window.agentico.openExternal({ url })}
             onDispatched={onCompletionDispatched}
             onClose={() => setCompletionModal(null)}
+            publishTimeoutLocked={publishTimeoutLocked}
+            setPublishTimeoutLocked={setPublishTimeoutLocked}
           />
         ) : null}
 
@@ -2815,6 +2818,8 @@ export function FeatureCockpit({
               openExternal={(url) => window.agentico.openExternal({ url })}
               onDispatched={onCompletionDispatched}
               onClose={() => setCompletionModal(null)}
+              publishTimeoutLocked={publishTimeoutLocked}
+              setPublishTimeoutLocked={setPublishTimeoutLocked}
             />
           ) : null}
 

@@ -395,11 +395,9 @@ export function createLinuxDockerPlan({
 function copySourceCommand(sourceMount, repoRoot) {
   const source = JSON.stringify(sourceMount);
   const destination = JSON.stringify(repoRoot);
-  const parent = JSON.stringify(resolve(repoRoot, '..'));
   return [
-    `mkdir -p ${parent}`,
     `mkdir -p ${destination}`,
-    `tar -C ${source} --exclude=.git --exclude=node_modules --exclude=desktop/dist --exclude=desktop/out --exclude=desktop/resources -cf - . | tar -C ${parent} -xf -`,
+    `tar -C ${source} --exclude=.git --exclude=node_modules --exclude=desktop/dist --exclude=desktop/out --exclude=desktop/resources -cf - . | tar -C ${destination} -xf -`,
     `cd ${destination}`,
   ];
 }

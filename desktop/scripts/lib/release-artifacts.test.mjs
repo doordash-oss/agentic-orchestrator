@@ -198,4 +198,16 @@ describe('createLinuxDockerPlan', () => {
     expect(plan[0].args).toContain('/repo/worktrees/linux/.git:/repo/worktree/.git:ro');
     expect(plan[0].args.at(-1)).toContain('--exclude=.git');
   });
+
+  it('extracts the isolated source archive into the release checkout itself', () => {
+    const plan = createLinuxDockerPlan({
+      repoRoot: '/repo/worktree',
+      gitCommonDir: '/repo/.git',
+      volumePrefix: 'agentico-release',
+    });
+
+    expect(plan[0].args.at(-1)).toContain(
+      'tar -C "/agentico-release-source" --exclude=.git --exclude=node_modules --exclude=desktop/dist --exclude=desktop/out --exclude=desktop/resources -cf - . | tar -C "/repo/worktree" -xf -',
+    );
+  });
 });

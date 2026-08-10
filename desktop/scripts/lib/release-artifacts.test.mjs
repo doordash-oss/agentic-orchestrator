@@ -123,9 +123,23 @@ describe('createLinuxDockerPlan', () => {
         'agentico-release-electron-builder:/root/.cache/electron-builder',
         'bash',
         '-lc',
-        'npm ci && npm run package:verify --workspace desktop',
+        expect.stringContaining('npm ci && npm run package:verify --workspace desktop'),
       ]),
     );
+  });
+
+  it('bootstraps the pinned Go toolchain required by the release module', () => {
+    const plan = createLinuxDockerPlan({
+      repoRoot: '/repo/worktree',
+      gitCommonDir: '/repo/.git',
+      volumePrefix: 'agentico-release',
+    });
+
+    const command = plan[0].args.at(-1);
+    expect(command).toContain('go1.25.0.linux-amd64.tar.gz');
+    expect(command).toContain('2852af0cb20a13139b3448992e69b868e50ed0f8a1e5940ee1de9e19a123b613');
+    expect(command).toContain('sha256sum --check');
+    expect(command).toContain('PATH=/usr/local/go/bin:$PATH');
   });
 
   it('returns a frozen plan', () => {

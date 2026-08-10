@@ -82,12 +82,14 @@ type Hooks struct {
 // PhaseCompletionInput is a sum-type describing a phase completion. Exactly
 // one of the pointer result fields is non-nil for loop-driven phases; for
 // session-parser-driven phases (KB/Inquire/Research/Design) all pointer
-// fields are nil and the handler uses Success + ErrorDetail + SessionID.
+// fields are nil and the handler uses Success + ErrorDetail + FailureType +
+// SessionID. FailureType is optional and defaults to a session crash.
 type PhaseCompletionInput struct {
 	Phase       feature.Phase
 	SessionID   string
 	Success     bool
 	ErrorDetail string
+	FailureType string
 
 	PlanResult      *agent.PlanLoopResult
 	ImplementResult *agent.LoopResult

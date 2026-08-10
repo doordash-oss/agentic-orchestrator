@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -33,6 +34,29 @@ func TestKBStateDir(t *testing.T) {
 	want := "/home/user/.agentic-workflow/knowledge-base/myrepo"
 	if got != want {
 		t.Errorf("KBStateDir = %q, want %q", got, want)
+	}
+}
+
+func TestBuildKBSessionIDKeepsQualifiedRepoNamesURLSafeAndDistinct(t *testing.T) {
+	t.Parallel()
+
+	validSessionID := regexp.MustCompile(`^[A-Za-z0-9._-]{1,200}$`)
+	first := BuildKBSessionID("abc123", "root-a/service")
+	second := BuildKBSessionID("abc123", "root-b/service")
+
+	for _, id := range []string{first, second} {
+		if !validSessionID.MatchString(id) {
+			t.Errorf("BuildKBSessionID returned desktop-incompatible ID %q", id)
+		}
+	}
+	if first == second {
+		t.Fatalf("qualified repository names produced the same session ID %q", first)
+	}
+	if got := RepoNameFromKBSession(first); got != "" {
+		t.Errorf("RepoNameFromKBSession(encoded ID) = %q, want empty metadata fallback", got)
+	}
+	if got, want := BuildKBSessionID("abc123", "my-service"), "abc123-kb-my-service"; got != want {
+		t.Errorf("BuildKBSessionID preserved format = %q, want %q", got, want)
 	}
 }
 

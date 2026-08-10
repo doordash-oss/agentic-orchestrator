@@ -658,6 +658,36 @@ func TestOrchestrator_HandlePhaseCompletion_Inquire_Failure(t *testing.T) {
 	}
 }
 
+func TestOrchestrator_HandlePhaseCompletion_Inquire_ProtocolFailure(t *testing.T) {
+	f := &feature.Feature{
+		ID:           "feat-inq-protocol",
+		Status:       feature.StatusInquiring,
+		CurrentPhase: feature.PhaseInquire,
+		Pipeline:     feature.PipelineLarge,
+	}
+	lc := lifecycleForFeature(f)
+	lc.MarkFailedFn = func(id, ft, msg string) error { return nil }
+	fs := newFeatureStore(f)
+
+	var failureType string
+	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{
+		OnFeatureFailed: func(id string, ft, em string) { failureType = ft },
+	})
+
+	if err := o.HandlePhaseCompletion("feat-inq-protocol", orchestrator.PhaseCompletionInput{
+		Phase:       feature.PhaseInquire,
+		Success:     false,
+		ErrorDetail: "protocol violation: inquirer @ /tmp/inquire: agentico-outcome is missing",
+		FailureType: feature.FailureProtocolViolation,
+	}); err != nil {
+		t.Fatalf("HandlePhaseCompletion: %v", err)
+	}
+
+	if failureType != feature.FailureProtocolViolation {
+		t.Errorf("failure type = %q, want %q", failureType, feature.FailureProtocolViolation)
+	}
+}
+
 func TestOrchestrator_HandlePhaseCompletion_ArtifactPhaseFailureOnInterruptedFeature_DoesNotMarkFailed(t *testing.T) {
 	for _, tc := range artifactPhaseCases() {
 		t.Run(tc.name, func(t *testing.T) {

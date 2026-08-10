@@ -472,7 +472,6 @@ func (pr *PhaseRunner) RunKnowledgeBase(f *feature.Feature) (string, error) {
 }
 
 // RunKnowledgeBaseForRepo starts a KB build for a single repo within a feature.
-// Session ID format: "<featureID>-kb-<repoName>"
 // Returns (sessionID, error). Returns ("", nil) if KB is already fresh.
 func (pr *PhaseRunner) RunKnowledgeBaseForRepo(f *feature.Feature, repo feature.FeatureRepo) (string, error) {
 	kbDir := KBStateDir(pr.StateDir, repo.Name)
@@ -604,7 +603,7 @@ func (pr *PhaseRunner) runKBSession(f *feature.Feature, repo feature.FeatureRepo
 		GuidelinesDir: pr.GuidelinesDir,
 		AskingClause:  pr.askingQuestionsClauseForModel(kbModel),
 	})
-	sessionID := fmt.Sprintf("%s-kb-%s", f.ID, repo.Name)
+	sessionID := BuildKBSessionID(f.ID, repo.Name)
 
 	featureCtx := observe.SpanContextForFeature(f.ID, f.TraceID, f.Name, f.FeatureSpanID).WithRun(f.ActiveRun)
 	phaseCtx := featureCtx.Child()

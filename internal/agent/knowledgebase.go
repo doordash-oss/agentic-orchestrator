@@ -16,11 +16,13 @@ package agent
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -43,16 +45,35 @@ func KBStateDir(stateDir, repoName string) string {
 	return filepath.Join(filepath.Dir(stateDir), "knowledge-base", repoName)
 }
 
-// BuildKBSessionID returns the canonical session ID for a per-repo KB build.
-// Format: "<featureID>-kb-<repoName>". Mirrors the literal in
-// PhaseRunner.RunKnowledgeBaseForRepo.
+var validKBSessionIDPattern = regexp.MustCompile(`^[A-Za-z0-9._-]{1,200}$`)
+
+// BuildKBSessionID returns a desktop- and URL-safe session ID for a per-repo
+// KB build. It preserves the legacy "<featureID>-kb-<repoName>" form when the
+// repository name is already safe. Qualified discovery keys and other names
+// containing unsafe characters use a readable slug plus a collision-resistant
+// hash; callers must use the session's RepoName metadata as canonical identity.
 func BuildKBSessionID(featureID, repoName string) string {
-	return fmt.Sprintf("%s-kb-%s", featureID, repoName)
+	legacyID := fmt.Sprintf("%s-kb-%s", featureID, repoName)
+	if validKBSessionIDPattern.MatchString(legacyID) {
+		return legacyID
+	}
+
+	safeFeatureID := feature.Slugify(featureID)
+	if safeFeatureID == "" {
+		safeFeatureID = "feature"
+	}
+	safeRepoName := feature.Slugify(repoName)
+	if safeRepoName == "" {
+		safeRepoName = "repo"
+	}
+	digest := sha256.Sum256([]byte(repoName))
+	return fmt.Sprintf("%s-kbv2-%s-%x", safeFeatureID, safeRepoName, digest[:6])
 }
 
 // RepoNameFromKBSession extracts the repo name from a per-repo KB session ID.
 // Format: "<featureID>-kb-<repoName>" → "<repoName>". Returns "" when the
-// session ID does not contain the "-kb-" separator (legacy "<featureID>-kb").
+// session ID does not use that legacy, reversible format. New encoded IDs keep
+// the canonical repository name in session metadata instead.
 func RepoNameFromKBSession(sessionID string) string {
 	idx := strings.Index(sessionID, "-kb-")
 	if idx < 0 {

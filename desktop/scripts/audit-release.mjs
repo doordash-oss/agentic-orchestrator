@@ -79,6 +79,61 @@ export function auditGoReleaserDesktopArtifacts(configText, expectedNames) {
   return failures;
 }
 
+/** Keep releases pinned to the commit that the local operator actually tagged. */
+export function auditGoReleaserReleaseTarget(configText) {
+  const lines = releaseSectionLines(configText);
+  const targets = lines
+    .map((line) => /^  target_commitish:\s*(.+?)\s*$/.exec(line)?.[1])
+    .filter((value) => value !== undefined);
+  if (targets.length !== 1 || targets[0] !== '"{{ .Commit }}"') {
+    return [
+      'GoReleaser release.target_commitish must be exactly "{{ .Commit }}" to prevent publishing another commit',
+    ];
+  }
+  return [];
+}
+
+/** Audit the publication ordering and prohibit raw GoReleaser flag injection. */
+export function auditReleaseMakefile(makefileText) {
+  const failures = [];
+  if (makefileText.includes('GORELEASER_FLAGS')) {
+    failures.push(
+      'Makefile must not expose GORELEASER_FLAGS; only AGENTICO_RELEASE_NOTES_FILE is supported',
+    );
+  }
+  const preflight = makefileText.indexOf('verify-release-publication.mjs preflight');
+  const goreleaser = makefileText.indexOf('release-goreleaser.mjs');
+  const manifest = makefileText.indexOf('release:artifacts:verify --workspace desktop -- manifest');
+  const publication = makefileText.indexOf('verify-release-publication.mjs verify');
+  const desktopCask = makefileText.indexOf('publish-desktop-cask.mjs');
+  if (preflight === -1 || goreleaser === -1 || preflight > goreleaser) {
+    failures.push('Makefile must verify the remote tag is absent before GoReleaser runs');
+  }
+  if (
+    manifest === -1 ||
+    publication === -1 ||
+    desktopCask === -1 ||
+    !(goreleaser < manifest && manifest < publication && publication < desktopCask)
+  ) {
+    failures.push(
+      'Makefile must verify local manifest then remote publication before publishing the desktop cask',
+    );
+  }
+  return failures;
+}
+
+function releaseSectionLines(configText) {
+  const lines = configText.split(/\r?\n/);
+  const start = lines.findIndex((line) => /^release:\s*(?:#.*)?$/.test(line));
+  if (start === -1) return [];
+  const section = [];
+  for (let index = start + 1; index < lines.length; index += 1) {
+    if (/^\S/.test(lines[index])) break;
+    section.push(lines[index]);
+  }
+  return section;
+}
+
 function goreleaserExtraFileGlobs(configText, section) {
   const lines = configText.split(/\r?\n/);
   const sectionIndex = lines.findIndex((line) =>
@@ -883,6 +938,8 @@ export function runReleaseAudit() {
   failures.push(
     ...auditGoReleaserDesktopArtifacts(goreleaserConfig, RELEASE_AUDIT_DESKTOP_ARTIFACTS),
   );
+  failures.push(...auditGoReleaserReleaseTarget(goreleaserConfig));
+  failures.push(...auditReleaseMakefile(readFileSync(join(rootDir, 'Makefile'), 'utf8')));
 
   const goMod = readFileSync(join(rootDir, 'go.mod'), 'utf8');
   const goSum = readFileSync(join(rootDir, 'go.sum'), 'utf8');

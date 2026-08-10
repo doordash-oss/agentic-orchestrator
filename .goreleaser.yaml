@@ -48,6 +48,9 @@ changelog:
   sort: asc
 
 release:
+  # Never let GoReleaser default to a branch name: the remote release tag must
+  # point at exactly the local commit captured by `make release`.
+  target_commitish: "{{ .Commit }}"
   github:
     owner: doordash-oss
     name: agentic-orchestrator

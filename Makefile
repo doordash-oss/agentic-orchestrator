@@ -5,6 +5,8 @@ VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev
 # when building from a linked git worktree.
 REVISION ?= $(shell git rev-parse HEAD 2>/dev/null || echo "")
 LDFLAGS := -s -w -X github.com/doordash-oss/agentic-orchestrator/internal/buildinfo.version=$(VERSION) -X github.com/doordash-oss/agentic-orchestrator/internal/buildinfo.revision=$(REVISION)
+RELEASE_TAG := $(shell git describe --tags --exact-match 2>/dev/null || echo "")
+RELEASE_COMMIT := $(shell git rev-parse HEAD 2>/dev/null || echo "")
 
 APP_NAME        := Agentico.app
 APP_INSTALL_DIR ?= /Applications
@@ -61,19 +63,24 @@ install-desktop:
 #   1. package and verify the native macOS DMG (stamped with the tag version),
 #   2. package and verify Linux x64 then arm64 AppImage + DEB artifacts,
 #   3. verify the complete desktop inventory before publishing,
-#   4. goreleaser: CLI archives + GitHub release + signed checksums covering
-#      every desktop artifact,
-#   5. verify the signed checksum manifest, then publish the macOS cask.
-# Extra goreleaser flags (e.g. --release-notes) go in GORELEASER_FLAGS.
+#   4. verify the remote tag is absent, then create a GitHub release pinned to
+#      this exact commit and signed checksums covering every desktop artifact,
+#   5. verify the signed checksum manifest and remote published assets, then
+#      publish the macOS cask.
+# Set AGENTICO_RELEASE_NOTES_FILE to provide the sole supported GoReleaser
+# input; arbitrary flags are intentionally not accepted.
 release:
 	@[ -z "$$(git status --porcelain)" ] || { echo "release: working tree is dirty"; exit 1; }
-	@git describe --tags --exact-match >/dev/null 2>&1 || { echo "release: HEAD is not on a release tag"; exit 1; }
+	@[ -n "$(RELEASE_TAG)" ] || { echo "release: HEAD is not on a release tag"; exit 1; }
+	@[ -n "$(RELEASE_COMMIT)" ] || { echo "release: could not resolve HEAD"; exit 1; }
+	node desktop/scripts/verify-release-publication.mjs preflight --tag "$(RELEASE_TAG)" --commit "$(RELEASE_COMMIT)"
 	@[ -d node_modules ] || npm ci
 	npm run package:verify --workspace desktop
 	npm run package:linux:release --workspace desktop
 	npm run release:artifacts:verify --workspace desktop -- packages
-	goreleaser release --clean $(GORELEASER_FLAGS)
+	node desktop/scripts/release-goreleaser.mjs
 	npm run release:artifacts:verify --workspace desktop -- manifest
+	node desktop/scripts/verify-release-publication.mjs verify --tag "$(RELEASE_TAG)" --commit "$(RELEASE_COMMIT)"
 	node desktop/scripts/publish-desktop-cask.mjs
 
 install-system: build

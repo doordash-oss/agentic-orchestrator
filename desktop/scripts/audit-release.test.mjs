@@ -4,6 +4,8 @@ import { readFileSync } from 'node:fs';
 import {
   auditLicenseInventory,
   auditGoReleaserDesktopArtifacts,
+  auditGoReleaserReleaseTarget,
+  auditReleaseMakefile,
   auditNpmLockfile,
   collectNpmRuntimeInventory,
   hasElectronBuilderProtocolScheme,
@@ -114,6 +116,30 @@ release:
         'agentico_0.150.0_arm64.deb',
       ]),
     ).toEqual([]);
+  });
+
+  it('requires GoReleaser to pin the release target to the captured commit', () => {
+    expect(auditGoReleaserReleaseTarget('release:\n  target_commitish: main\n')).toEqual([
+      'GoReleaser release.target_commitish must be exactly "{{ .Commit }}" to prevent publishing another commit',
+    ]);
+    const config = readFileSync(new URL('../../.goreleaser.yaml', import.meta.url), 'utf8');
+    expect(auditGoReleaserReleaseTarget(config)).toEqual([]);
+  });
+
+  it('requires remote publication verification before the desktop cask and no raw flags', () => {
+    expect(
+      auditReleaseMakefile(
+        'goreleaser release --clean $(GORELEASER_FLAGS)\nnode desktop/scripts/publish-desktop-cask.mjs\n',
+      ),
+    ).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('must not expose GORELEASER_FLAGS'),
+        expect.stringContaining('remote tag is absent'),
+        expect.stringContaining('local manifest then remote publication'),
+      ]),
+    );
+    const makefile = readFileSync(new URL('../../Makefile', import.meta.url), 'utf8');
+    expect(auditReleaseMakefile(makefile)).toEqual([]);
   });
 
   it('collects production npm packages plus explicitly shipped renderer dev assets', () => {

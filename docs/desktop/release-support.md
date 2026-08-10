@@ -12,7 +12,7 @@ tag. The maintainer workflow is intentionally one command after tagging:
 
 ```bash
 git tag vX.Y.Z
-make release GORELEASER_FLAGS='--release-notes notes.md'
+AGENTICO_RELEASE_NOTES_FILE=/absolute/path/to/notes.md make release
 ```
 
 Before running it, make sure the local machine has:
@@ -20,11 +20,15 @@ Before running it, make sure the local machine has:
 - a running Docker daemon with `buildx` available;
 - at least 12 GiB of free disk space for the two Linux container builds and
   their caches;
-- GoReleaser v2.10 or later, a GitHub token, and the local update-signing key
+- GoReleaser v2.10 or later, an exported `GITHUB_TOKEN` with repository
+  release/tag access, and the local update-signing key
   described below.
 
 `make release` is deliberately ordered so every desktop artifact is built and
-validated before GoReleaser can create a GitHub release:
+validated before GoReleaser can create a GitHub release. The optional
+`AGENTICO_RELEASE_NOTES_FILE` is deliberately the sole operator-controlled
+GoReleaser input: raw GoReleaser flags are not accepted, so a shell variable
+cannot bypass the release checks.
 
 1. `npm run package:verify --workspace desktop` builds and verifies the native
    universal macOS DMG.
@@ -41,14 +45,21 @@ validated before GoReleaser can create a GitHub release:
 3. `npm run release:artifacts:verify --workspace desktop -- packages` verifies
    the complete desktop inventory, architecture-specific package receipts, and
    embedded identities before publishing.
-4. `goreleaser release` builds CLI archives, creates the GitHub release,
-   uploads every desktop package, folds every desktop SHA-256 into
+4. Before GoReleaser runs, the release gate verifies that the remote tag does
+   not already exist. GoReleaser then builds CLI archives and creates the
+   GitHub release with `target_commitish: "{{ .Commit }}"`, so the tag is
+   pinned to the local HEAD captured when `make release` began. It uploads
+   every desktop package, folds every desktop SHA-256 into
    `checksums.txt`, signs that manifest with the operator's Ed25519 key
    (`desktop/scripts/release-sign.mjs`), and pushes the `agentico` CLI cask to
    the tap. `npm run release:artifacts:verify --workspace desktop -- manifest`
    immediately verifies the signature and requires exactly one checksum entry
    for every desktop package.
-5. `node desktop/scripts/publish-desktop-cask.mjs` renders
+5. The release gate then verifies, through the GitHub API, that the remote tag
+   dereferences (including annotated tags) to the captured local HEAD, that
+   the release is published and stable rather than a draft, and that all five
+   desktop files plus `checksums.txt` and `checksums.txt.sig` are attached.
+   Only then does `node desktop/scripts/publish-desktop-cask.mjs` render
    `Casks/agentico-desktop.rb` from the DMG and pushes it to the tap
    (goreleaser's OSS cask pipe cannot checksum artifacts it did not build).
 
@@ -67,13 +78,29 @@ updates requiring an explicit restart action. DEB installations are
 package-manager-managed: the app presents verified package-manager guidance
 and the trusted release page, rather than replacing a DEB installation itself.
 
-If a macOS or Linux build, package receipt, identity, or inventory check fails,
-`make release` stops before GoReleaser and creates no GitHub release. A failure
-during GoReleaser, or a failed post-publication manifest check, can leave a
-partial GitHub release and CLI cask: remove the GitHub release and remote tag,
-fix the release configuration or signing material, and rerun while retaining
-the local tag. The final `agentico-desktop` cask publication is different: if
-the signed manifest passed and only
+If a macOS or Linux build, package receipt, identity, inventory, remote-tag
+preflight, or local credential check fails, `make release` stops before
+GoReleaser and creates no GitHub release. Recovery depends on what changed:
+
+- **Environment-only retry.** If no repository files changed and GoReleaser
+  never ran (for example Docker was stopped or a local signing credential was
+  unavailable), fix that local condition and rerun `make release` with the
+  same local tag. The remote-tag preflight will confirm that it is still safe.
+- **Repository/configuration fix after GoReleaser started.** First inspect and
+  remove any partial GitHub release and remote tag. Also inspect the tap's
+  `Casks/agentico.rb`: GoReleaser may have pushed it before the failure, so
+  restore or revert that generated cask commit and push the reconciliation
+  before retrying. Commit and verify the repository fix, then either delete
+  and recreate the local `vX.Y.Z` tag on that fixed commit (only after the
+  remote tag is gone) or cut a new patch tag. Never retry an old tag that
+  still points at the broken commit.
+- **Remote publication verification failure.** Treat it as a partial release,
+  not as a cask-only problem: reconcile the GitHub release/tag and CLI cask as
+  above, investigate the mismatched commit/state/assets, and then use the
+  repository-fix path if source or release configuration changed.
+
+The final `agentico-desktop` cask publication is different: if the signed
+manifest and remote publication verification passed and only
 `node desktop/scripts/publish-desktop-cask.mjs` fails, rerun that idempotent
 desktop-cask publisher alone; do not remove the already-complete release or
 CLI cask.

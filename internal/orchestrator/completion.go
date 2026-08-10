@@ -89,6 +89,13 @@ func formatSingleShotProtocolViolationError(role agent.Role, dir string, violati
 	return agent.FormatSingleShotProtocolViolationError(role, dir, violations)
 }
 
+func singleShotFailureType(input PhaseCompletionInput) string {
+	if input.FailureType != "" {
+		return input.FailureType
+	}
+	return feature.FailureSessionCrash
+}
+
 // markFailedWithEvent transitions the feature to StatusFailed via lifecycle
 // and emits FeatureFailed. External observer concerns remain upstream of the
 // orchestrator port.
@@ -147,9 +154,9 @@ func (o *Orchestrator) MarkFailed(featureID, failureType, errMsg string) error {
 //  1. MarkRepoKBFailed(featureID, repoName, errMsg).
 //  2. Stop sibling KB sessions for this feature.
 //  3. emit PhaseCompleted with err.
-//  4. markFailedWithEvent(FailureSessionCrash).
+//  4. markFailedWithEvent(reported failure type, defaulting to session crash).
 func (o *Orchestrator) onKBCompleted(featureID string, input PhaseCompletionInput) error {
-	repoName := agent.RepoNameFromKBSession(input.SessionID)
+	repoName := o.repoNameForKBSession(input.SessionID)
 
 	if !input.Success {
 		errMsg := input.ErrorDetail
@@ -180,7 +187,7 @@ func (o *Orchestrator) onKBCompleted(featureID string, input PhaseCompletionInpu
 			}
 		}
 		o.emitPhaseCompleted(featureID, feature.PhaseKnowledgeBase, errors.New(errMsg))
-		err := o.markFailedWithEvent(featureID, feature.FailureSessionCrash, errMsg)
+		err := o.markFailedWithEvent(featureID, singleShotFailureType(input), errMsg)
 		// The session-cleanup func released this feature's kb.lock before
 		// onKBCompleted was dispatched. Wake any waiters parked on that lock
 		// regardless of whether the failure-mark itself succeeded.
@@ -362,7 +369,7 @@ func (o *Orchestrator) onArtifactPhaseCompletedWithKey(
 			errMsg = fmt.Sprintf("%s phase failed: %s", input.Phase, input.ErrorDetail)
 		}
 		o.emitPhaseCompleted(featureID, input.Phase, errors.New(errMsg))
-		return o.markFailedWithEvent(featureID, feature.FailureSessionCrash, errMsg)
+		return o.markFailedWithEvent(featureID, singleShotFailureType(input), errMsg)
 	}
 
 	f, err := o.deps.Lifecycle.Get(featureID)

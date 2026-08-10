@@ -81,7 +81,7 @@ func (o *Orchestrator) singleShotCompletionContract(
 	}
 	switch phase {
 	case feature.PhaseKnowledgeBase:
-		repoName := agent.RepoNameFromKBSession(sessionID)
+		repoName := o.repoNameForKBSession(sessionID)
 		if repoName == "" {
 			return "", "", nil, fmt.Errorf("resolving knowledge base completion contract: repo name is missing from session %q", sessionID)
 		}
@@ -99,4 +99,13 @@ func (o *Orchestrator) singleShotCompletionContract(
 	default:
 		return "", "", nil, fmt.Errorf("resolving completion contract: phase %s is not single-shot", phase)
 	}
+}
+
+func (o *Orchestrator) repoNameForKBSession(sessionID string) string {
+	if o != nil && o.deps.Sessions != nil {
+		if sess := o.deps.Sessions.GetSession(sessionID); sess != nil && sess.RepoName() != "" {
+			return sess.RepoName()
+		}
+	}
+	return agent.RepoNameFromKBSession(sessionID)
 }

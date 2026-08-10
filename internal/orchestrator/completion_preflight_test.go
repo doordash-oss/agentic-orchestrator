@@ -21,9 +21,12 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/git"
+	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
+	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
 )
 
 type completionFixture struct {
@@ -101,6 +104,44 @@ func runCompletionGit(t *testing.T, dir string, args ...string) {
 }
 
 func boolPtr(b bool) *bool { return &b }
+
+func TestKnowledgeBaseCompletionContractUsesSessionRepoMetadata(t *testing.T) {
+	t.Parallel()
+
+	store := feature.NewStore(t.TempDir())
+	sessions := mocks.NewMockSessionManager()
+	const (
+		sessionID = "abc123-kbv2-root-a-service-0123456789ab"
+		repoName  = "root-a/service"
+	)
+	sess := mocks.NewMockSessionView(sessionID, "abc123")
+	sess.RepoNameVal = repoName
+	sessions.GetSessionFn = func(id string) ports.SessionView {
+		if id != sessionID {
+			t.Fatalf("GetSession(%q), want %q", id, sessionID)
+		}
+		return sess
+	}
+	o := New(Deps{Store: store, Sessions: sessions}, Hooks{})
+
+	role, artifactDir, repoNames, err := o.singleShotCompletionContract(
+		&feature.Feature{ID: "abc123"},
+		sessionID,
+		feature.PhaseKnowledgeBase,
+	)
+	if err != nil {
+		t.Fatalf("singleShotCompletionContract: %v", err)
+	}
+	if role != agent.RoleKnowledgeBaseBuilder {
+		t.Errorf("role = %q, want %q", role, agent.RoleKnowledgeBaseBuilder)
+	}
+	if want := agent.KBStateDir(store.BaseDir, repoName); artifactDir != want {
+		t.Errorf("artifactDir = %q, want %q", artifactDir, want)
+	}
+	if len(repoNames) != 1 || repoNames[0] != repoName {
+		t.Errorf("repoNames = %v, want [%q]", repoNames, repoName)
+	}
+}
 
 func TestCompletionPreflightEnumeratesRepoStatus(t *testing.T) {
 	t.Parallel()

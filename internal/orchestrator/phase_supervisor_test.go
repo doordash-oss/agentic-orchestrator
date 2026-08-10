@@ -16,6 +16,8 @@ package orchestrator
 
 import (
 	"errors"
+	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -169,6 +171,45 @@ func TestPhaseSupervisorSingleShotFailsWhenSessionExitsWithoutResult(t *testing.
 	}
 	if call.input.ErrorDetail != "process exited unexpectedly" {
 		t.Fatalf("ErrorDetail = %q, want session detail", call.input.ErrorDetail)
+	}
+}
+
+func TestPhaseSupervisorSingleShotReportsTerminalOutcomeViolation(t *testing.T) {
+	sink := newRecordingPhaseCompletionSink()
+	sm := mocks.NewMockSessionManager()
+	sess := mocks.NewMockSessionView("feat-kbv2-my-service-0123456789ab", "feat")
+	sess.PhaseVal = feature.PhaseKnowledgeBase
+	sess.LogFilePathVal = filepath.Join(t.TempDir(), "output.txt")
+	sess.CostVal = &llm.ResultMessage{Subtype: "success", StopReason: "end_turn"}
+	sm.GetSessionFn = func(string) ports.SessionView { return sess }
+
+	supervisor := newPhaseSupervisor(phaseSupervisorConfig{
+		Completion: sink,
+		Sessions:   sm,
+	})
+	supervisor.superviseSingleShotSession("feat", sess.ID(), feature.PhaseKnowledgeBase)
+
+	// The first two clean turns receive bounded correction nudges. The third
+	// missing outcome is terminal and must be reported as a protocol failure.
+	for range 3 {
+		sess.StatusChVal <- phaseSupervisorStatusSuccess
+	}
+
+	call := sink.wait(t)
+	if call.input.FailureType != feature.FailureProtocolViolation {
+		t.Errorf("FailureType = %q, want %q", call.input.FailureType, feature.FailureProtocolViolation)
+	}
+	if !strings.Contains(call.input.ErrorDetail, string(agent.RoleKnowledgeBaseBuilder)) {
+		t.Errorf("ErrorDetail = %q, want knowledge base role", call.input.ErrorDetail)
+	}
+	if want := filepath.Dir(sess.LogFilePathVal); !strings.Contains(call.input.ErrorDetail, want) {
+		t.Errorf("ErrorDetail = %q, want artifact dir %q", call.input.ErrorDetail, want)
+	}
+	if strings.Contains(call.input.ErrorDetail, "<unresolved>") {
+		t.Errorf("ErrorDetail = %q, want resolved artifact dir", call.input.ErrorDetail)
+	}
+	if got := len(sess.SentMessages); got != 2 {
+		t.Errorf("completion correction nudges = %d, want 2", got)
 	}
 }
 

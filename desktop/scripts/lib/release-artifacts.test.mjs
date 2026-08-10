@@ -39,7 +39,7 @@ describe('expectedDesktopArtifacts', () => {
 });
 
 describe('resolvePackageTarget', () => {
-  it('uses an explicit Linux package architecture over the process architecture', () => {
+  it('resolves an explicit arm64 package target independently of process.arch', () => {
     expect(resolvePackageTarget('linux', 'x64', 'arm64')).toEqual({ os: 'linux', arch: 'arm64' });
     expect(resolvePackageTarget('linux', 'arm64', 'x64')).toEqual({ os: 'linux', arch: 'x64' });
   });
@@ -71,10 +71,13 @@ describe('selectPackageArtifact', () => {
     );
   });
 
-  it('rejects zero or multiple target artifacts', () => {
+  it('rejects a missing target artifact', () => {
     expect(() => selectPackageArtifact([], { os: 'linux', arch: 'arm64' }, 'AppImage')).toThrow(
       /exactly one arm64 AppImage/,
     );
+  });
+
+  it('rejects duplicate target artifacts instead of choosing nondeterministically', () => {
     expect(() =>
       selectPackageArtifact(
         ['Agentico-arm64.AppImage', 'Agentico-arm64.AppImage'],

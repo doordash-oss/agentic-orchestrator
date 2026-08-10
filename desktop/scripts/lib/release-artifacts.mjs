@@ -32,6 +32,7 @@ export function createPackageVerificationReceipt({
 }) {
   if (!isTarget(target)) throw new Error('package verification receipt requires a target');
   if (!Array.isArray(artifacts)) throw new Error('package verification receipt requires artifacts');
+  const identity = summaryIdentity(artifacts);
   return {
     schema_version: PACKAGE_VERIFICATION_RECEIPT_SCHEMA_VERSION,
     verified_at: verifiedAt ?? new Date().toISOString(),
@@ -46,7 +47,22 @@ export function createPackageVerificationReceipt({
       identity: { ...artifact.identity },
     })),
     unpacked_app: unpackedApp,
+    // Packaged E2E and transcript helpers consume this compatibility summary;
+    // publication gates validate the independent artifact identities above.
+    identity,
   };
+}
+
+function summaryIdentity(artifacts) {
+  const first = artifacts[0]?.identity;
+  if (first === null || typeof first !== 'object' || Array.isArray(first)) {
+    throw new Error('cannot derive summary identity without an artifact identity');
+  }
+  const serialized = JSON.stringify(first);
+  if (!artifacts.every((artifact) => JSON.stringify(artifact?.identity) === serialized)) {
+    throw new Error('cannot derive summary identity: artifact identities disagree');
+  }
+  return { ...first };
 }
 
 /** Read a regular, non-symlinked artifact and bind its canonical path, digest, and size. */

@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 
 import { unpackedExecutablePath } from './package-layout.mjs';
@@ -47,10 +48,9 @@ export function inspectExecutableArchitecture(bytes) {
     buffer.length >= 64 &&
     buffer.subarray(0, 4).equals(Buffer.from([0x7f, 0x45, 0x4c, 0x46])) &&
     buffer[4] === 2 &&
-    (buffer[5] === 1 || buffer[5] === 2)
+    buffer[5] === 1
   ) {
-    const littleEndian = buffer[5] === 1;
-    const machine = littleEndian ? buffer.readUInt16LE(18) : buffer.readUInt16BE(18);
+    const machine = buffer.readUInt16LE(18);
     const architectures = elfArchitecture(machine);
     return architectures.length === 1
       ? { format: 'ELF', architectures }
@@ -73,11 +73,11 @@ export function inspectExecutableArchitecture(bytes) {
       for (let index = 0; index < count; index += 1) {
         const entry = 8 + index * entrySize;
         const cpuType = readU32(entry);
-        const offset = readU32(entry + 8);
-        const size = readU32(entry + 12);
+        const offset = is64 ? readU64(buffer, entry + 8, littleEndian) : readU32(entry + 8);
+        const size = is64 ? readU64(buffer, entry + 16, littleEndian) : readU32(entry + 12);
         if (
           offset < 8 + count * entrySize ||
-          size < 28 ||
+          size < 32 ||
           offset > buffer.length ||
           size > buffer.length - offset
         ) {
@@ -100,10 +100,17 @@ export function inspectExecutableArchitecture(bytes) {
 function thinMachOCpuType(buffer, offset) {
   if (offset + 8 > buffer.length) return null;
   const magicLe = buffer.readUInt32LE(offset);
-  const magicBe = buffer.readUInt32BE(offset);
-  if (magicLe === 0xfeedface || magicLe === 0xfeedfacf) return buffer.readUInt32LE(offset + 4);
-  if (magicBe === 0xfeedface || magicBe === 0xfeedfacf) return buffer.readUInt32BE(offset + 4);
-  return null;
+  return magicLe === 0xfeedfacf ? buffer.readUInt32LE(offset + 4) : null;
+}
+
+function readU64(buffer, offset, littleEndian) {
+  const value = littleEndian ? buffer.readBigUInt64LE(offset) : buffer.readBigUInt64BE(offset);
+  return value <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(value) : Number.MAX_SAFE_INTEGER + 1;
+}
+
+/** Calculate the exact ASAR header digest used by the macOS package verifier. */
+export function macAsarIntegrityHash(headerString) {
+  return createHash('sha256').update(headerString).digest('hex');
 }
 
 /** Return a precise target mismatch, or null when executable evidence is sufficient. */

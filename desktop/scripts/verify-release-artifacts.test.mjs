@@ -98,7 +98,25 @@ function completeV0150Fixture(artifactDir = DIST_DIR) {
 
 describe('validateArtifactInventory', () => {
   it('accepts one verified receipt and nonempty file for every desktop artifact', () => {
-    expect(validateArtifactInventory(completeV0150Fixture())).toEqual([]);
+    const fixture = completeV0150Fixture();
+    expect(validateArtifactInventory(fixture)).toEqual([]);
+    expect(fixture.receipts['package-verification-linux-x64.json'].identity).toMatchObject({
+      server_version: TAG,
+      server_revision: REVISION,
+      os: 'linux',
+      arch: 'x64',
+    });
+  });
+
+  it('refuses to derive the compatibility identity when package identities disagree', () => {
+    const fixture = completeV0150Fixture();
+    const [appImage, deb] = fixture.receipts['package-verification-linux-x64.json'].artifacts;
+    expect(() =>
+      createPackageVerificationReceipt({
+        target: { os: 'linux', arch: 'x64' },
+        artifacts: [appImage, { ...deb, identity: { ...deb.identity, server_revision: 'stale' } }],
+      }),
+    ).toThrow('cannot derive summary identity');
   });
 
   it('rejects an arm64 receipt carrying the x64 identity', () => {

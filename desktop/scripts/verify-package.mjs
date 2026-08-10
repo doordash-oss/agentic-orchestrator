@@ -24,6 +24,7 @@
 // layout instead of re-deriving it. The identity-rejection logic itself is
 // unit-tested in scripts/lib/identity.test.mjs against tampered fixtures.
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import {
   accessSync,
   constants,

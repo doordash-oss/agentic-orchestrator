@@ -163,12 +163,35 @@ release:
       expect.arrayContaining([
         expect.stringContaining('must not expose GORELEASER_FLAGS'),
         expect.stringContaining('remote tag is absent'),
-        expect.stringContaining('local manifest then remote publication'),
         expect.stringContaining('exact audited publication commands'),
       ]),
     );
     const makefile = readFileSync(new URL('../../Makefile', import.meta.url), 'utf8');
     expect(auditReleaseMakefile(makefile)).toEqual([]);
+  });
+
+  it('rejects an early cask and every duplicate or extra publication-sensitive command', () => {
+    const validRecipe = [
+      'release:',
+      '\tnode desktop/scripts/verify-release-publication.mjs preflight --tag "$(RELEASE_TAG)" --commit "$(RELEASE_COMMIT)"',
+      '\tnpm run release:artifacts:verify --workspace desktop -- packages',
+      '\tnode desktop/scripts/release-goreleaser.mjs',
+      '\tnpm run release:artifacts:verify --workspace desktop -- manifest',
+      '\tnode desktop/scripts/verify-release-publication.mjs verify --tag "$(RELEASE_TAG)" --commit "$(RELEASE_COMMIT)"',
+      '\tnode desktop/scripts/publish-desktop-cask.mjs',
+    ];
+    for (const extra of [
+      '\tnode desktop/scripts/publish-desktop-cask.mjs --early',
+      '\tnode desktop/scripts/release-goreleaser.mjs',
+      '\tgoreleaser release --clean',
+      '\tnpm run release:artifacts:verify --workspace desktop -- manifest --again',
+    ]) {
+      const recipe = [...validRecipe];
+      recipe.splice(1, 0, extra);
+      expect(auditReleaseMakefile(recipe.join('\n'))).toEqual(
+        expect.arrayContaining([expect.stringContaining('exact audited publication commands')]),
+      );
+    }
   });
 
   it('collects production npm packages plus explicitly shipped renderer dev assets', () => {

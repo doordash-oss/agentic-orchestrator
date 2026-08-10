@@ -54,6 +54,25 @@ describe('UpdateCoordinator', () => {
     expect(stagedMetadata.packageSha256).toBe(sha256(Buffer.from('macos package bytes')));
   });
 
+  it('follows GitHub release asset redirects through the current release asset host', async () => {
+    const fixture = signedFixture('v0.2.0', 'Agentico-mac-universal.dmg', 'macos package bytes', {
+      redirectAssets: true,
+    });
+    const update = makeCoordinator({
+      platform: 'darwin',
+      arch: 'arm64',
+      packageFormat: 'macos',
+      fixture,
+    });
+
+    await expect(update.checkNow()).resolves.toMatchObject({
+      status: 'ready',
+      targetVersion: '0.2.0',
+      signatureStatus: 'verified',
+    });
+    expect(fixture.requestedPackage).toHaveBeenCalledOnce();
+  });
+
   it('resumes already staged verified package bytes without downloading the package again', async () => {
     const fixture = signedFixture('v0.2.0', 'Agentico-mac-universal.dmg', 'macos package bytes');
     const first = makeCoordinator({
@@ -192,6 +211,28 @@ describe('UpdateCoordinator', () => {
     expect(fixture.requestedPackage).not.toHaveBeenCalled();
   });
 
+  it('falls back to signed-download guidance when the macOS app location is not writable', async () => {
+    const fixture = signedFixture('v0.2.0', 'Agentico-mac-universal.dmg', 'macos package bytes');
+    const update = makeCoordinator({
+      platform: 'darwin',
+      arch: 'arm64',
+      packageFormat: 'macos',
+      canInstallInApp: false,
+      fixture,
+    });
+
+    await expect(update.checkNow()).resolves.toMatchObject({
+      status: 'available',
+      targetVersion: '0.2.0',
+      signatureStatus: 'verified',
+      message: 'A verified update is available for manual signed installation.',
+    });
+    expect(update.getState().guidance?.join('\n')).toContain(
+      'macOS application location cannot be safely replaced in app',
+    );
+    expect(update.getState().guidance?.join('\n')).not.toContain('AppImage');
+  });
+
   it('requires explicit install consent and persists active-work refusal state', async () => {
     const fixture = signedFixture('v0.2.0', 'Agentico-mac-universal.dmg', 'package bytes');
     const onStateChanged = vi.fn();
@@ -253,6 +294,69 @@ describe('UpdateCoordinator', () => {
     expect(restart).toHaveBeenCalledOnce();
     await update.reconcileScheduledInstall();
     expect(restart).toHaveBeenCalledOnce();
+  });
+
+  it('hands the exact verified staged package to the update installer', async () => {
+    const fixture = signedFixture('v0.2.0', 'Agentico-mac-universal.dmg', 'package bytes');
+    const restart = vi.fn();
+    const update = makeCoordinator({
+      platform: 'darwin',
+      arch: 'arm64',
+      packageFormat: 'macos',
+      fixture,
+      restart,
+    });
+    await update.checkNow();
+
+    await update.restartToUpdate();
+
+    expect(restart).toHaveBeenCalledWith({
+      packageFormat: 'macos',
+      packagePath: path.join(dir, 'updates', 'v0.2.0', 'Agentico-mac-universal.dmg'),
+      targetVersion: '0.2.0',
+    });
+  });
+
+  it('rechecks active work before applying a previously ready update', async () => {
+    const fixture = signedFixture('v0.2.0', 'Agentico-mac-universal.dmg', 'package bytes');
+    const activeWork = { featureCount: 0, amaActive: false, detectionFailed: false };
+    const restart = vi.fn();
+    const update = makeCoordinator({
+      platform: 'darwin',
+      arch: 'arm64',
+      packageFormat: 'macos',
+      fixture,
+      activeWork,
+      restart,
+    });
+    await update.checkNow();
+    activeWork.featureCount = 1;
+
+    await expect(Promise.resolve(update.restartToUpdate())).resolves.toMatchObject({
+      status: 'ready',
+      activeWorkSummary: '1 workflow',
+      message: 'Active work must be stopped before installing now.',
+    });
+    expect(restart).not.toHaveBeenCalled();
+  });
+
+  it('keeps a verified staged package retryable when native installation fails', async () => {
+    const fixture = signedFixture('v0.2.0', 'Agentico-mac-universal.dmg', 'package bytes');
+    const update = makeCoordinator({
+      platform: 'darwin',
+      arch: 'arm64',
+      packageFormat: 'macos',
+      fixture,
+      restart: vi.fn(() => Promise.reject(new Error('/private/path must stay private'))),
+    });
+    await update.checkNow();
+
+    await expect(update.restartToUpdate()).resolves.toMatchObject({
+      status: 'ready',
+      signatureStatus: 'verified',
+      message: 'The verified update could not be installed. Retry or use the release notes.',
+    });
+    expect(update.getState().message).not.toContain('/private/path');
   });
 
   it('keeps scheduled consent pending when authoritative activity remains non-idle', async () => {
@@ -336,6 +440,17 @@ describe('detectPackageFormat', () => {
 });
 
 describe('detectCanInstallInApp', () => {
+  it('offers macOS self-install only when the app bundle parent is writable', () => {
+    const execPath = '/Applications/Agentico.app/Contents/MacOS/Agentico';
+    expect(
+      detectCanInstallInApp('macos', {}, execPath, () => {
+        throw new Error('read-only');
+      }),
+    ).toBe(false);
+    expect(detectCanInstallInApp('macos', {}, execPath, () => undefined)).toBe(true);
+    expect(detectCanInstallInApp('macos', {}, '/tmp/Electron', () => undefined)).toBe(false);
+  });
+
   it('rejects DEB and read-only or nonstandard AppImage locations', () => {
     expect(detectCanInstallInApp('deb', {}, '/opt/Agentico/agentico')).toBe(false);
     expect(detectCanInstallInApp('appimage', {}, '/tmp/AppRun')).toBe(false);
@@ -400,7 +515,11 @@ function makeCoordinator({
     amaActive: boolean;
     detectionFailed: boolean;
   }) => Promise<{ stopped: boolean; message?: string }>;
-  restart?: () => void;
+  restart?: (update: {
+    packageFormat: 'macos' | 'appimage' | 'deb' | 'unknown';
+    packagePath: string;
+    targetVersion: string;
+  }) => Promise<void> | void;
 }) {
   return new UpdateCoordinator({
     currentVersion: '0.1.0',
@@ -438,6 +557,7 @@ function signedFixture(
     signatureText?: string;
     servedPackageBytes?: Buffer;
     extraReleases?: unknown[];
+    redirectAssets?: boolean;
   } = {},
 ): SignedFixture {
   const packageBytes = Buffer.from(packageText);
@@ -468,7 +588,16 @@ function signedFixture(
     if (url === RELEASES_API) {
       return response(files.get('feed')!);
     }
-    const name = path.basename(new URL(url).pathname);
+    const parsedUrl = new URL(url);
+    if (options.redirectAssets === true && parsedUrl.hostname === 'github.com') {
+      return new Response(null, {
+        status: 302,
+        headers: {
+          location: `https://release-assets.githubusercontent.com/github-production-release-asset/fixture/${path.basename(parsedUrl.pathname)}?token=fixture`,
+        },
+      });
+    }
+    const name = path.basename(parsedUrl.pathname);
     const bytes = files.get(name);
     if (bytes === undefined) return new Response('not found', { status: 404 });
     if (name === packageName) requestedPackage();

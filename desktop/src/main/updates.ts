@@ -28,6 +28,7 @@ const TRUSTED_DOWNLOAD_HOSTS = new Set([
   'github.com',
   'objects.githubusercontent.com',
   'github-releases.githubusercontent.com',
+  'release-assets.githubusercontent.com',
 ]);
 // Trust root for signed release metadata. The matching private key lives only
 // with the release operator (see desktop/scripts/release-sign.mjs); it is
@@ -50,6 +51,12 @@ export interface UpdateActiveWork {
   detectionFailed: boolean;
 }
 
+export interface VerifiedUpdatePackage {
+  packageFormat: UpdatePackageFormat;
+  packagePath: string;
+  targetVersion: string;
+}
+
 export interface UpdateCoordinatorOptions {
   currentVersion: string;
   isPackaged: boolean;
@@ -67,7 +74,7 @@ export interface UpdateCoordinatorOptions {
   onStateChanged?: (state: UpdateState) => void;
   detectActiveWork(): Promise<UpdateActiveWork>;
   stopActiveWork(active: UpdateActiveWork): Promise<{ stopped: boolean; message?: string }>;
-  restart(): void;
+  restart(update: VerifiedUpdatePackage): Promise<void> | void;
 }
 
 interface ReleaseAsset {
@@ -111,6 +118,7 @@ export class UpdateCoordinator {
   private inFlight: Promise<UpdateState> | null = null;
   private scheduledInstallInFlight: Promise<UpdateState> | null = null;
   private timer: ReturnType<typeof setTimeout> | null = null;
+  private stagedPackage: VerifiedUpdatePackage | null = null;
 
   private readonly fetchImpl: typeof fetch;
   private readonly now: () => Date;
@@ -203,7 +211,7 @@ export class UpdateCoordinator {
     }
     const active = await this.options.detectActiveWork();
     if (!active.detectionFailed && active.featureCount === 0 && !active.amaActive) {
-      return this.restartToUpdate();
+      return this.applyStagedUpdate();
     }
     this.state = {
       ...this.state,
@@ -264,16 +272,41 @@ export class UpdateCoordinator {
         return this.state;
       }
     }
-    return this.restartToUpdate();
+    return this.applyStagedUpdate();
   }
 
-  restartToUpdate(): UpdateState {
+  async restartToUpdate(): Promise<UpdateState> {
     if (this.state.status === 'installing') {
       return this.state;
     }
     if (!isInstallable(this.state)) {
       return this.fail('No verified update is ready to install.');
     }
+    let active: UpdateActiveWork;
+    try {
+      active = await this.options.detectActiveWork();
+    } catch {
+      active = { featureCount: 0, amaActive: false, detectionFailed: true };
+    }
+    if (active.detectionFailed || active.featureCount > 0 || active.amaActive) {
+      this.state = {
+        ...this.state,
+        status: 'ready',
+        activeWorkSummary: activeSummary(active),
+        message: 'Active work must be stopped before installing now.',
+      };
+      this.options.diagnostics?.record('update', 'warn', this.state.message);
+      this.notify();
+      return this.state;
+    }
+    return this.applyStagedUpdate();
+  }
+
+  private async applyStagedUpdate(): Promise<UpdateState> {
+    if (!isInstallable(this.state) || this.stagedPackage === null) {
+      return this.fail('No verified update is ready to install.');
+    }
+    const readyState = this.state;
     this.state = {
       ...this.state,
       status: 'installing',
@@ -282,7 +315,18 @@ export class UpdateCoordinator {
     };
     this.options.diagnostics?.record('update', 'info', this.state.message);
     this.notify();
-    this.options.restart();
+    try {
+      await this.options.restart(this.stagedPackage);
+    } catch (error) {
+      this.state = {
+        ...readyState,
+        status: 'ready',
+        activeWorkSummary: undefined,
+        message: 'The verified update could not be installed. Retry or use the release notes.',
+      };
+      this.options.diagnostics?.record('update', 'warn', this.state.message, safeMessage(error));
+      this.notify();
+    }
     return this.state;
   }
 
@@ -320,6 +364,7 @@ export class UpdateCoordinator {
         });
       }
       if (versionComparison === 0) {
+        this.stagedPackage = null;
         this.state = {
           ...this.state,
           status: 'current',
@@ -358,6 +403,7 @@ export class UpdateCoordinator {
       }
 
       if (this.packageFormat === 'deb') {
+        this.stagedPackage = null;
         this.state = {
           ...this.state,
           status: 'available',
@@ -375,6 +421,19 @@ export class UpdateCoordinator {
       }
 
       if (!this.canInstallInApp) {
+        this.stagedPackage = null;
+        const guidance =
+          this.packageFormat === 'macos'
+            ? [
+                'This macOS application location cannot be safely replaced in app.',
+                `Download ${selected.packageAsset.name} and ${metadata.checksumAsset} from the GitHub release.`,
+                'Verify the checksum before installing the DMG manually.',
+              ]
+            : [
+                'This AppImage location cannot be safely replaced in app.',
+                `Download ${selected.packageAsset.name} and ${metadata.checksumAsset} from the GitHub release.`,
+                'Verify the checksum before replacing the AppImage manually.',
+              ];
         this.state = {
           ...this.state,
           status: 'available',
@@ -382,19 +441,19 @@ export class UpdateCoordinator {
           releaseNotesUrl: latest.html_url,
           signatureStatus: 'verified',
           message: 'A verified update is available for manual signed installation.',
-          guidance: [
-            'This AppImage location cannot be safely replaced in app.',
-            `Download ${selected.packageAsset.name} and ${metadata.checksumAsset} from the GitHub release.`,
-            'Verify the checksum before replacing the AppImage manually.',
-          ],
+          guidance,
         };
         return this.state;
       }
 
-      const resumed = await this.tryResumeStagedPackage(latest, selected, metadata);
-      if (!resumed) {
-        await this.downloadAndStagePackage(latest, selected, metadata);
-      }
+      const packagePath =
+        (await this.tryResumeStagedPackage(latest, selected, metadata)) ??
+        (await this.downloadAndStagePackage(latest, selected, metadata));
+      this.stagedPackage = {
+        packageFormat: this.packageFormat,
+        packagePath,
+        targetVersion: stripLeadingV(latest.tag_name),
+      };
       this.state = {
         ...this.state,
         status: 'ready',
@@ -463,7 +522,7 @@ export class UpdateCoordinator {
     release: ReleaseCandidate,
     selected: SelectedAsset,
     metadata: VerifiedMetadata,
-  ): Promise<void> {
+  ): Promise<string> {
     if (selected.packageAsset.size <= 0 || selected.packageAsset.size > MAX_PACKAGE_BYTES) {
       throw new Error('The update package size is outside the allowed bounds.');
     }
@@ -520,15 +579,16 @@ export class UpdateCoordinator {
       'Verified update package staged.',
       `${release.tag_name} ${selected.packageAsset.name}`,
     );
+    return packagePath;
   }
 
   private async tryResumeStagedPackage(
     release: ReleaseCandidate,
     selected: SelectedAsset,
     metadata: VerifiedMetadata,
-  ): Promise<boolean> {
+  ): Promise<string | null> {
     if (selected.packageAsset.size <= 0 || selected.packageAsset.size > MAX_PACKAGE_BYTES) {
-      return false;
+      return null;
     }
     const stageDir = path.join(this.options.userDataDir, 'updates', release.tag_name);
     const metadataPath = path.join(stageDir, 'selected-asset.json');
@@ -536,7 +596,7 @@ export class UpdateCoordinator {
     try {
       stagedMetadata = parseStagedPackageMetadata(fs.readFileSync(metadataPath, 'utf8'));
     } catch {
-      return false;
+      return null;
     }
     if (
       stagedMetadata.tag !== release.tag_name ||
@@ -545,20 +605,20 @@ export class UpdateCoordinator {
       stagedMetadata.signature !== metadata.signatureAsset ||
       stagedMetadata.packageSha256 !== metadata.packageSha256
     ) {
-      return false;
+      return null;
     }
     const packagePath = path.join(stageDir, safeAssetName(selected.packageAsset.name));
     let packageBytes: Buffer;
     try {
       packageBytes = fs.readFileSync(packagePath);
     } catch {
-      return false;
+      return null;
     }
     if (
       packageBytes.byteLength !== selected.packageAsset.size ||
       sha256Buffer(packageBytes) !== metadata.packageSha256
     ) {
-      return false;
+      return null;
     }
     this.options.diagnostics?.record(
       'update',
@@ -566,7 +626,7 @@ export class UpdateCoordinator {
       'Verified staged update package resumed.',
       `${release.tag_name} ${selected.packageAsset.name}`,
     );
-    return true;
+    return packagePath;
   }
 
   private scheduleNext(): void {
@@ -637,7 +697,7 @@ export class UpdateCoordinator {
         'info',
         'Scheduled update consent remained valid after work went idle.',
       );
-      return this.restartToUpdate();
+      return this.applyStagedUpdate();
     }
     this.state = {
       ...this.state,
@@ -675,9 +735,20 @@ export function detectCanInstallInApp(
   access: (path: string, mode: number) => void = fs.accessSync,
 ): boolean {
   const forced = env.AGENTICO_UPDATE_INSTALL_MODE;
-  if (forced === 'in-app') return format !== 'deb';
   if (forced === 'guidance') return false;
-  if (format === 'macos') return true;
+  if (format === 'macos') {
+    const resolved = path.resolve(execPath);
+    const marker = `${path.sep}Contents${path.sep}MacOS${path.sep}`;
+    const markerIndex = resolved.lastIndexOf(marker);
+    const appPath = markerIndex < 0 ? '' : resolved.slice(0, markerIndex);
+    if (!appPath.endsWith('.app')) return false;
+    try {
+      access(path.dirname(appPath), fs.constants.W_OK);
+      return true;
+    } catch {
+      return false;
+    }
+  }
   if (format === 'deb' || format === 'unknown') return false;
   const appImagePath = env.APPIMAGE ?? (execPath.endsWith('.AppImage') ? execPath : undefined);
   if (appImagePath === undefined || !path.isAbsolute(appImagePath)) return false;

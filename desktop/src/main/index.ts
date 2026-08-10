@@ -94,6 +94,11 @@ import {
   detectPackageFormat,
 } from './updates';
 import {
+  applyVerifiedUpdate,
+  cleanupAppliedUpdate,
+  relaunchUpdatedApplication,
+} from './updateInstaller';
+import {
   QuitCoordinator,
   activeWorkDialog,
   hasActiveWork,
@@ -883,6 +888,19 @@ if (!hasSingleInstanceLock) {
     }
 
     const updatePackageFormat = detectPackageFormat(process.platform, process.env, runtimeExecPath);
+    const updateCleanupMarkerPath = path.join(
+      app.getPath('userData'),
+      'updates',
+      'install-cleanup.json',
+    );
+    cleanupAppliedUpdate({
+      currentVersion: app.getVersion(),
+      execPath: runtimeExecPath,
+      appImagePath: process.env.APPIMAGE ?? runtimeExecPath,
+      cleanupMarkerPath: updateCleanupMarkerPath,
+    });
+    const updateFixturePath =
+      testPackagedResources === null ? undefined : process.env.AGENTICO_UPDATE_FIXTURE;
     const updates = new UpdateCoordinator({
       currentVersion: app.getVersion(),
       isPackaged: isPackagedRuntime,
@@ -890,10 +908,10 @@ if (!hasSingleInstanceLock) {
       canInstallInApp: detectCanInstallInApp(updatePackageFormat, process.env, runtimeExecPath),
       userDataDir: app.getPath('userData'),
       diagnostics,
-      ...(process.env.AGENTICO_UPDATE_FIXTURE === undefined
+      ...(updateFixturePath === undefined
         ? {}
         : {
-            fetch: createUpdateFixtureFetch(process.env.AGENTICO_UPDATE_FIXTURE),
+            fetch: createUpdateFixtureFetch(updateFixturePath),
             releasePublicKey: FIXTURE_RELEASE_PUBLIC_KEY,
           }),
       onStateChanged: () => broadcastAppEvent({ type: 'invalidated', kind: 'updates.changed' }),
@@ -919,9 +937,24 @@ if (!hasSingleInstanceLock) {
               }),
         };
       },
-      restart: () => {
-        app.relaunch();
-        void quitCoordinator.requestQuitDecision();
+      restart: async (update) => {
+        // Packaged journeys normally use a tiny signed fixture instead of a
+        // native DMG/AppImage. The installer itself is covered against real
+        // filesystem swaps; opt into the native path for the dedicated
+        // end-to-end install journey only.
+        if (updateFixturePath === undefined || process.env.AGENTICO_E2E_APPLY_UPDATE === '1') {
+          await applyVerifiedUpdate(update, {
+            execPath: runtimeExecPath,
+            appImagePath: process.env.APPIMAGE ?? runtimeExecPath,
+            cleanupMarkerPath: updateCleanupMarkerPath,
+          });
+        }
+        relaunchUpdatedApplication(
+          update,
+          (options) => app.relaunch(options),
+          process.env.APPIMAGE ?? runtimeExecPath,
+        );
+        await quitCoordinator.requestQuitDecision();
       },
     });
 

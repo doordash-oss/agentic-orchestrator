@@ -1,4 +1,6 @@
 // Pure release artifact and Docker-build contract shared by local release scripts.
+import { createHash } from 'node:crypto';
+import { readFileSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 export const LINUX_BUILDER_IMAGE =
@@ -289,27 +291,32 @@ function validateReceipt({ receiptsByName, target, tag, revision, artifactDir, e
     return;
   }
 
-  const identity = receipt.identity;
-  if (identity === null || typeof identity !== 'object' || Array.isArray(identity)) {
-    errors.push(`${target.receipt} has no build identity`);
-  } else {
-    const expected = {
-      desktop_version: releaseVersionFromTag(tag),
-      server_version: tag,
-      server_revision: revision,
-      os: target.os,
-      arch: target.arch,
-    };
-    for (const [field, value] of Object.entries(expected)) {
-      if (identity[field] !== value) {
-        errors.push(`${target.receipt} identity ${field}=${identity[field]}, expected ${value}`);
-      }
-    }
+  if (receipt.schema_version !== 2) {
+    errors.push(`${target.receipt} schema_version=${receipt.schema_version}, expected 2`);
+  }
+  if (receipt.target?.os !== target.os || receipt.target?.arch !== target.arch) {
+    errors.push(
+      `${target.receipt} target=${formatTarget(receipt.target)}, expected ${target.os}/${target.arch}`,
+    );
   }
 
   const verified = Array.isArray(receipt.artifacts) ? receipt.artifacts : [];
+  if (verified.length !== target.artifacts.length) {
+    errors.push(
+      `${target.receipt} has ${verified.length} artifact verification entries, expected ${target.artifacts.length}`,
+    );
+  }
+  for (const artifact of verified) {
+    if (
+      !target.artifacts.some((expectedArtifact) => expectedArtifact.format === artifact?.format)
+    ) {
+      errors.push(
+        `${target.receipt} has unexpected artifact format ${artifact?.format ?? '(missing)'}`,
+      );
+    }
+  }
   for (const expectedArtifact of target.artifacts) {
-    const matches = verified.filter((artifact) => artifact?.target === expectedArtifact.format);
+    const matches = verified.filter((artifact) => artifact?.format === expectedArtifact.format);
     if (matches.length === 0) {
       errors.push(`${target.receipt} does not verify ${expectedArtifact.format}`);
       continue;
@@ -321,7 +328,8 @@ function validateReceipt({ receiptsByName, target, tag, revision, artifactDir, e
       );
       continue;
     }
-    const path = matches[0].path;
+    const artifact = matches[0];
+    const path = artifact.path;
     const expectedPath =
       typeof artifactDir === 'string' ? resolve(artifactDir, expectedArtifact.name) : null;
     const actualPath = typeof path === 'string' ? resolve(path) : null;
@@ -334,5 +342,66 @@ function validateReceipt({ receiptsByName, target, tag, revision, artifactDir, e
         `${target.receipt} ${expectedArtifact.format} path=${path}, expected ${expectedPath}`,
       );
     }
+    if (artifact.target?.os !== target.os || artifact.target?.arch !== target.arch) {
+      errors.push(
+        `${target.receipt} ${expectedArtifact.format} target=${formatTarget(artifact.target)}, ` +
+          `expected ${target.os}/${target.arch}`,
+      );
+    }
+    if (expectedPath !== null && actualPath === expectedPath) {
+      try {
+        const bytes = readFileSync(expectedPath);
+        const actualHash = createHash('sha256').update(bytes).digest('hex');
+        const actualSize = statSync(expectedPath).size;
+        if (artifact.sha256 !== actualHash) {
+          errors.push(
+            `${target.receipt} ${expectedArtifact.format} SHA-256=${artifact.sha256}, expected ${actualHash}`,
+          );
+        }
+        if (artifact.size !== actualSize) {
+          errors.push(
+            `${target.receipt} ${expectedArtifact.format} size=${artifact.size}, expected ${actualSize}`,
+          );
+        }
+      } catch (error) {
+        errors.push(
+          `${target.receipt} could not hash ${expectedArtifact.format} at ${expectedPath}: ` +
+            `${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
+    validateArtifactIdentity({
+      identity: artifact.identity,
+      target,
+      tag,
+      revision,
+      prefix: `${target.receipt} ${expectedArtifact.format} identity`,
+      errors,
+    });
   }
+}
+
+function validateArtifactIdentity({ identity, target, tag, revision, prefix, errors }) {
+  if (identity === null || typeof identity !== 'object' || Array.isArray(identity)) {
+    errors.push(`${prefix} is missing`);
+    return;
+  }
+  const expected = {
+    desktop_version: releaseVersionFromTag(tag),
+    server_version: tag,
+    server_revision: revision,
+    os: target.os,
+    arch: target.arch,
+  };
+  for (const [field, value] of Object.entries(expected)) {
+    if (identity[field] !== value) {
+      errors.push(`${prefix} ${field}=${identity[field]}, expected ${value}`);
+    }
+  }
+}
+
+function formatTarget(target) {
+  return target !== null && typeof target === 'object'
+    ? `${target.os ?? '(unknown)'}/${target.arch ?? '(unknown)'}`
+    : String(target);
 }

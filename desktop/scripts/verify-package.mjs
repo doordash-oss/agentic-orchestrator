@@ -38,7 +38,7 @@ import {
 } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { getCurrentFuseWire } from '@electron/fuses';
 
@@ -52,6 +52,9 @@ import { auditFuseWire } from './lib/fuse-policy.mjs';
 import { findDisallowedFontAssets } from './lib/package-layout.mjs';
 import {
   createPackageVerificationPlan,
+  debArchitectureError,
+  executableArchitectureError,
+  inspectExecutableArchitecture,
   packageIdentityTargetError,
 } from './lib/package-verification.mjs';
 import { resolvePackageTarget } from './lib/release-artifacts.mjs';
@@ -73,13 +76,13 @@ function fail(message) {
 }
 
 /** Assert the app payload inside an extracted/mounted resources directory. */
-function verifyResources(resourcesDir, { expectUniversalBinary, target }) {
+function verifyResources(resourcesDir, { electronExecutablePath, target }) {
   // 1. Desktop app payload.
   const asarPath = join(resourcesDir, 'app.asar');
   if (!existsSync(asarPath)) {
     fail(`missing app.asar in ${resourcesDir}`);
   }
-  if (process.platform === 'darwin' && expectUniversalBinary) {
+  if (process.platform === 'darwin' && target.os === 'darwin') {
     verifyMacAsarIntegrity(resourcesDir, asarPath);
   }
   const asar = require('@electron/asar');
@@ -123,6 +126,8 @@ function verifyResources(resourcesDir, { expectUniversalBinary, target }) {
     fail(identityTargetError);
   }
 
+  verifyExecutableTarget(electronExecutablePath, target, 'Electron executable');
+
   // 3. Bundled server binary: executable and matching the identity.
   const binaryPath = join(resourcesDir, 'bin', 'agentico');
   if (!existsSync(binaryPath) || !statSync(binaryPath).isFile()) {
@@ -133,14 +138,7 @@ function verifyResources(resourcesDir, { expectUniversalBinary, target }) {
   } catch {
     fail(`bundled server binary is not executable: ${binaryPath}`);
   }
-  if (expectUniversalBinary) {
-    const archs = execFileSync('lipo', ['-archs', binaryPath], { encoding: 'utf8' }).trim();
-    for (const arch of ['x86_64', 'arm64']) {
-      if (!archs.split(/\s+/).includes(arch)) {
-        fail(`bundled server binary is not universal (lipo -archs: "${archs}")`);
-      }
-    }
-  }
+  verifyExecutableTarget(binaryPath, target, 'bundled server binary');
   const reported = parseAgenticoVersionOutput(
     execFileSync(binaryPath, ['--version'], { encoding: 'utf8' }),
   );
@@ -154,11 +152,43 @@ function verifyResources(resourcesDir, { expectUniversalBinary, target }) {
     reportedVersion: reported.version,
     reportedRevision: reported.revision,
     reportedGoos: buildInfo.goos === null ? identity.os : buildInfo.goos,
+    reportedGoarch: buildInfo.goarch,
   });
   if (mismatches.length > 0) {
     fail(`bundled server does not match build-identity.json:\n  ${mismatches.join('\n  ')}`);
   }
   return identity;
+}
+
+function verifyExecutableTarget(executablePath, target, label) {
+  let evidence;
+  try {
+    evidence = inspectExecutableArchitecture(readFileSync(executablePath));
+  } catch (error) {
+    fail(`could not inspect ${label} at ${executablePath}: ${error.message}`);
+  }
+  const mismatch = executableArchitectureError(evidence, target);
+  if (mismatch !== null) fail(`${label} architecture mismatch at ${executablePath}: ${mismatch}`);
+}
+
+function verifiedArtifactReceipt({ format, path, identity }) {
+  const canonicalPath = resolve(path);
+  let bytes;
+  let size;
+  try {
+    bytes = readFileSync(canonicalPath);
+    size = statSync(canonicalPath).size;
+  } catch (error) {
+    fail(`could not bind verified ${format} artifact at ${canonicalPath}: ${error.message}`);
+  }
+  return {
+    target: { ...packageTarget },
+    format,
+    path: canonicalPath,
+    sha256: createHash('sha256').update(bytes).digest('hex'),
+    size,
+    identity: { ...identity },
+  };
 }
 
 function verifyMacAsarIntegrity(resourcesDir, asarPath) {
@@ -221,7 +251,7 @@ async function verifyDmg(dmgPath) {
     verifyMacAppSignature(appDir);
     await verifyElectronFuses(join(appDir, 'Contents', 'MacOS', 'Agentico'));
     return verifyResources(join(appDir, 'Contents', 'Resources'), {
-      expectUniversalBinary: true,
+      electronExecutablePath: join(appDir, 'Contents', 'MacOS', 'Agentico'),
       target: packageTarget,
     });
   } finally {
@@ -238,7 +268,7 @@ async function verifyAppImage(appImagePath) {
     execFileSync(appImagePath, ['--appimage-extract'], { cwd: workDir, stdio: 'ignore' });
     await verifyElectronFuses(join(workDir, 'squashfs-root', 'agentico'));
     return verifyResources(join(workDir, 'squashfs-root', 'resources'), {
-      expectUniversalBinary: false,
+      electronExecutablePath: join(workDir, 'squashfs-root', 'agentico'),
       target: packageTarget,
     });
   } finally {
@@ -249,13 +279,21 @@ async function verifyAppImage(appImagePath) {
 async function verifyDeb(debPath) {
   const workDir = mkdtempSync(join(tmpdir(), 'agentico-verify-deb-'));
   try {
+    const controlArchitecture = execFileSync('dpkg-deb', ['--field', debPath, 'Architecture'], {
+      encoding: 'utf8',
+    }).trim();
+    const debArchitectureMismatch = debArchitectureError(controlArchitecture, packageTarget);
+    if (debArchitectureMismatch !== null) fail(debArchitectureMismatch);
     execFileSync('dpkg-deb', ['-x', debPath, workDir], { stdio: 'inherit' });
     const resourcesDir = join(workDir, 'opt', 'Agentico', 'resources');
     if (!existsSync(resourcesDir)) {
       fail(`deb payload has no resources dir at opt/Agentico/resources (${debPath})`);
     }
     await verifyElectronFuses(join(workDir, 'opt', 'Agentico', 'agentico'));
-    return verifyResources(resourcesDir, { expectUniversalBinary: false, target: packageTarget });
+    return verifyResources(resourcesDir, {
+      electronExecutablePath: join(workDir, 'opt', 'Agentico', 'agentico'),
+      target: packageTarget,
+    });
   } finally {
     rmSync(workDir, { recursive: true, force: true });
   }
@@ -274,7 +312,7 @@ async function verifyUnpackedApp(executablePath) {
       ? join(dirname(dirname(executablePath)), 'Resources')
       : join(dirname(executablePath), 'resources');
   return verifyResources(resourcesDir, {
-    expectUniversalBinary: packageTarget.os === 'darwin',
+    electronExecutablePath: executablePath,
     target: packageTarget,
   });
 }
@@ -324,21 +362,21 @@ async function main() {
   if (unpackedOnly) {
     console.log(`verify-package: inspecting unpacked app ${unpackedApp}`);
     identity = await verifyUnpackedApp(unpackedApp);
-    verified.push({ target: 'unpacked', path: unpackedApp });
+    verified.push({ target: 'unpacked', path: resolve(unpackedApp), identity });
   } else if (process.platform === 'darwin') {
     const dmg = verificationPlan.artifacts[0].path;
     console.log(`verify-package: inspecting ${dmg}`);
     identity = await verifyDmg(dmg);
-    verified.push({ target: 'dmg', path: dmg });
+    verified.push(verifiedArtifactReceipt({ format: 'dmg', path: dmg, identity }));
   } else if (process.platform === 'linux') {
     const appImage = verificationPlan.artifacts[0].path;
     console.log(`verify-package: inspecting ${appImage}`);
     identity = await verifyAppImage(appImage);
-    verified.push({ target: 'AppImage', path: appImage });
+    verified.push(verifiedArtifactReceipt({ format: 'AppImage', path: appImage, identity }));
     const deb = verificationPlan.artifacts[1].path;
     console.log(`verify-package: inspecting ${deb}`);
     identity = await verifyDeb(deb);
-    verified.push({ target: 'deb', path: deb });
+    verified.push(verifiedArtifactReceipt({ format: 'deb', path: deb, identity }));
   } else {
     fail(`unsupported verification host: ${process.platform}`);
   }
@@ -352,10 +390,13 @@ async function main() {
     fail(`expected unpacked app for packaged E2E at ${unpackedApp}`);
   }
   const manifest = {
+    schema_version: 2,
     verified_at: new Date().toISOString(),
     host: { os: process.platform, arch: process.arch },
     artifacts: verified,
     unpacked_app: unpackedApp,
+    // Compatibility consumers use this as a summary only. Release gating
+    // binds the per-artifact identities above, never this mutable aggregate.
     identity,
   };
   const receipt = `${JSON.stringify(manifest, null, 2)}\n`;

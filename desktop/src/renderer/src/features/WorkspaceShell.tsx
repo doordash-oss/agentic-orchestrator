@@ -205,8 +205,11 @@ export function WorkspaceShell({
   const isNarrowForSidebar = useMediaQuery('(max-width: 700px)');
   const connection = useConnectionState();
   const runtimeReady = connection.status === 'ready';
+  // A named server introduces itself by name; a name-less (older) server
+  // keeps the generic ready label. Display-only — the footer row still owns
+  // exactly one interactive element.
   const runtimeLabel = runtimeReady
-    ? 'Runtime ready'
+    ? (connection.serverName ?? 'Runtime ready')
     : isConnectionErrorState(connection)
       ? 'Runtime needs attention'
       : 'Connecting';

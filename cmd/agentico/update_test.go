@@ -39,7 +39,7 @@ func failingUpdater(t *testing.T) updater {
 
 func failingServerLauncher(t *testing.T) serverLauncher {
 	t.Helper()
-	return func(string, string, bool, []string, bool) int {
+	return func(string, string, bool, []string, bool, string, string) int {
 		t.Fatal("server seam invoked on a non-server launch path")
 		return 1
 	}
@@ -113,7 +113,7 @@ func TestRunArgsDispatchesUpdateToSeam(t *testing.T) {
 			var stdout, stderr bytes.Buffer
 			var gotCheck, updateCalled, launchCalled bool
 			code := runArgs(tt.args, &stdout, &stderr,
-				func(string, string, bool, []string, bool) int {
+				func(string, string, bool, []string, bool, string, string) int {
 					launchCalled = true
 					return 0
 				},
@@ -144,7 +144,7 @@ func TestRunArgsDefaultLaunchesDesktopNotServerOrUpdate(t *testing.T) {
 	var desktopCalled, serverCalled, updateCalled bool
 	code := runArgsWithDesktop(nil, &stdout, &stderr,
 		func() error { desktopCalled = true; return nil },
-		func(string, string, bool, []string, bool) int {
+		func(string, string, bool, []string, bool, string, string) int {
 			serverCalled = true
 			return 0
 		},

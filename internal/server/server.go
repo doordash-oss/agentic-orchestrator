@@ -39,9 +39,13 @@ func Start(ctx context.Context, opts Options) (*RuntimeServer, error) {
 		return nil, errors.New("server auth token is required")
 	}
 	startedAt := time.Now().UTC()
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	listenAddr, err := ResolveListenAddr(opts.ListenAddr)
 	if err != nil {
-		return nil, fmt.Errorf("listen on loopback: %w", err)
+		return nil, err
+	}
+	ln, err := net.Listen("tcp", listenAddr)
+	if err != nil {
+		return nil, fmt.Errorf("listen on %s: %w", listenAddr, err)
 	}
 	baseURL := "http://" + ln.Addr().String()
 	handler := newAPIHandler(HandlerOptions{
@@ -50,6 +54,7 @@ func Start(ctx context.Context, opts Options) (*RuntimeServer, error) {
 		StartedAt:                   startedAt,
 		Owner:                       opts.Owner,
 		AuthToken:                   opts.AuthToken,
+		Name:                        opts.Name,
 		Features:                    opts.Features,
 		FeatureStore:                opts.FeatureStore,
 		Freshness:                   opts.Freshness,

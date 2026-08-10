@@ -340,6 +340,15 @@ observability:
 | `otel_insecure`     | `false`      | Allow insecure OTLP connections          |
 | `otel_service_name` | `"agentico"` | Service name for OTel traces             |
 
+## Server (`server`)
+
+Startup-only settings for the headless server. They are read once at launch
+and are not part of the runtime-config REST surface.
+
+| Field  | Default | Description                                                                                      |
+| ------ | ------- | ------------------------------------------------------------------------------------------------ |
+| `name` | `""`    | Server display name. Precedence: `--name` flag > `server.name` > generated name persisted in the runtime directory (max 64 chars). |
+
 ## Launch Flags
 
 Plain `agentico` starts or focuses the installed Electron desktop app. Launch flags configure the explicit `agentico server [flags]` foreground loopback REST runtime for headless automation. The packaged desktop app launches and supervises its matched bundled runtime automatically.
@@ -350,6 +359,8 @@ Plain `agentico` starts or focuses the installed Electron desktop app. Launch fl
 | `--state-dir <path>`             | State directory path                                            | `~/.agentic-orchestrator/features`    |
 | `--providers <list>`             | Comma-separated provider list (e.g., `claude,codex,opencode`)   | all detected                          |
 | `--refresh-models`               | Refresh provider model catalogs before the server becomes ready | `false`                               |
+| `--listen [host:]port`           | Bind address (loopback hosts only: `127.0.0.1`, `localhost`, `[::1]`) | ephemeral `127.0.0.1` port      |
+| `--name <name>`                  | Server display name (max 64 chars; overrides `server.name` config and the persisted generated name) | generated, persisted per runtime dir |
 | `--dangerously-skip-permissions` | Skip all permission prompts                                     | `false`                               |
 | `--help`, `-h`                   | Print usage                                                     | -                                     |
 | `--version`, `-v`                | Print version                                                   | -                                     |

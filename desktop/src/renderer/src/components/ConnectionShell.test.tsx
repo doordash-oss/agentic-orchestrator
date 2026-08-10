@@ -125,6 +125,44 @@ describe('ConnectionShell', () => {
     expect(screen.getByText(/server v9\.9\.9-other/i)).toBeInTheDocument();
   });
 
+  it('shows the reported server name beside the build chip', async () => {
+    const mock = installAgenticoMock();
+    render(<ConnectionShell />);
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent(/resolving/i));
+    act(() => {
+      mock.emitConnection(
+        state({
+          status: 'ready',
+          stage: 'ready',
+          ownership: 'external',
+          serverBuild: { version: 'v9.9.9-other' },
+          serverName: 'frothy-macchiato',
+        }),
+      );
+    });
+    expect(screen.getByText('frothy-macchiato')).toBeInTheDocument();
+    expect(screen.getByText(/server v9\.9\.9-other/i)).toBeInTheDocument();
+  });
+
+  it('omits the name chip cleanly when the server reports no name', async () => {
+    const mock = installAgenticoMock();
+    render(<ConnectionShell />);
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent(/resolving/i));
+    act(() => {
+      mock.emitConnection(
+        state({
+          status: 'ready',
+          stage: 'ready',
+          ownership: 'external',
+          serverBuild: { version: 'v9.9.9-other' },
+        }),
+      );
+    });
+    expect(screen.getByText(/server v9\.9\.9-other/i)).toBeInTheDocument();
+    // Only the desktop and server-build chips render; no empty name chip.
+    expect(document.querySelectorAll('.shell-card__version--server')).toHaveLength(1);
+  });
+
   it('announces changes politely via a live region', async () => {
     installAgenticoMock();
     render(<ConnectionShell />);

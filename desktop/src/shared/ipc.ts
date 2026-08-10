@@ -239,6 +239,12 @@ const connectionStateBase = {
   detail: z.string(),
   serverBuild: ServerBuildInfoSchema.optional(),
   /**
+   * The connected server's display name, when it reports one (server-side
+   * cap: MaxServerNameLength = 64). Purely informational — never gates
+   * compatibility; absent/null for older servers and before connect.
+   */
+  serverName: z.string().max(64).nullable().optional(),
+  /**
    * The runtime directory the gateway actually resolved and connected with.
    * Absent until the connect cycle resolves the selected runtime; null when
    * no runtime has been resolved yet. The renderer compares this against

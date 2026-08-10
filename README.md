@@ -245,6 +245,10 @@ Server flags:
   --dangerously-skip-permissions   Skip all permission prompts (use with caution)
   --providers <list>               Restrict to specific providers (claude,codex,opencode)
   --refresh-models                 Refresh provider model catalogs before starting the server
+  --listen [host:]port             Bind address (loopback hosts only: 127.0.0.1, localhost,
+                                   [::1]; default: ephemeral 127.0.0.1 port)
+  --name <name>                    Server display name (overrides server.name config and the
+                                   persisted generated name)
 
 Global flags:
   --help, -h                       Show help

@@ -108,6 +108,11 @@ export function ConnectionShell() {
             server {state.serverBuild.version}
           </span>
         ) : null}
+        {state.serverName !== undefined && state.serverName !== null ? (
+          <span className="shell-card__version shell-card__version--server">
+            {state.serverName}
+          </span>
+        ) : null}
       </header>
 
       <PhaseRailTrack

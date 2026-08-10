@@ -44,6 +44,7 @@ type apiHandler struct {
 	startedAt time.Time
 	owner     instancelock.Owner
 	authToken string
+	name      string
 	features  FeatureLister
 	store     FeatureReader
 	freshness RepoFreshnessProvider
@@ -102,6 +103,7 @@ func newAPIHandler(opts HandlerOptions) *apiHandler {
 		startedAt:             startedAt,
 		owner:                 opts.Owner,
 		authToken:             opts.AuthToken,
+		name:                  opts.Name,
 		features:              features,
 		store:                 store,
 		freshness:             opts.Freshness,
@@ -231,6 +233,7 @@ func (h *apiHandler) handleHealth(w http.ResponseWriter, _ *http.Request) {
 		Owner:         OwnerFromInstanceOwner(h.owner),
 		ServerTime:    time.Now().UTC(),
 		Compatibility: NewCompatibilityDeclaration(h.owner.Version),
+		Name:          h.name,
 	})
 }
 

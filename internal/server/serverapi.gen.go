@@ -1616,6 +1616,7 @@ type HealthResponse struct {
 	Compatibility CompatibilityDeclaration `json:"compatibility"`
 	LaunchPolicy  LaunchPolicy             `json:"launch_policy"`
 	Meta          ResponseMeta             `json:"meta,omitempty"`
+	Name          string                   `json:"name,omitempty"`
 	Owner         Owner                    `json:"owner"`
 	Runtime       RuntimeIdentity          `json:"runtime"`
 	ServerTime    time.Time                `json:"server_time"`

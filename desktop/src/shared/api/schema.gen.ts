@@ -935,6 +935,7 @@ export interface components {
             /** Format: date-time */
             server_time: string;
             compatibility: components["schemas"]["CompatibilityDeclaration"];
+            name?: string;
         };
         /** @description Build provenance for one side of the desktop/server pairing. Purely informational: a differing build identity alone never blocks attachment — compatibility is decided by the explicit declaration fields, not by comparing versions. */
         BuildIdentity: {

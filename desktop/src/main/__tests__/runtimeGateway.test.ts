@@ -267,6 +267,47 @@ describe('RuntimeGateway attach', () => {
     expectNoTokenLeak(env);
   });
 
+  it('threads a health-reported server name into the ready state without gating attach', async () => {
+    const env = makeEnv({
+      discovery: JSON.stringify(discoveryRecord({ name: 'frothy-macchiato' })),
+      health: { [EXTERNAL_BASE]: healthBody({ name: 'frothy-macchiato' }) },
+    });
+    await env.gateway.start();
+
+    const state = env.gateway.getState();
+    expect(state.status).toBe('ready');
+    expect(state.ownership).toBe('external');
+    expect(state.serverName).toBe('frothy-macchiato');
+    // The name is informational: the compatible server still attaches.
+    expect(env.spawnCalls).toHaveLength(0);
+    expectNoTokenLeak(env);
+  });
+
+  it('attaches to a name-less older server with a null display name', async () => {
+    const env = makeEnv({ discovery: JSON.stringify(discoveryRecord()) });
+    await env.gateway.start();
+
+    const state = env.gateway.getState();
+    expect(state.status).toBe('ready');
+    expect(state.serverName ?? null).toBeNull();
+    expectNoTokenLeak(env);
+  });
+
+  it('drops an oversized or malformed health name without blocking attach', async () => {
+    for (const bad of ['x'.repeat(65), 42]) {
+      const env = makeEnv({
+        discovery: JSON.stringify(discoveryRecord()),
+        health: { [EXTERNAL_BASE]: healthBody({ name: bad }) },
+      });
+      await env.gateway.start();
+
+      const state = env.gateway.getState();
+      expect(state.status).toBe('ready');
+      expect(state.serverName ?? null).toBeNull();
+      expectNoTokenLeak(env);
+    }
+  });
+
   it('authenticates readiness with the discovery token kept in main-process memory', async () => {
     const env = makeEnv({
       discovery: JSON.stringify(discoveryRecord()),

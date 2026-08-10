@@ -253,6 +253,28 @@ describe('ConnectionStateSchema', () => {
     expect(ConnectionStateSchema.parse(state)).toEqual(state);
   });
 
+  it('carries the optional server display name within its 64-char bound', () => {
+    const base = {
+      status: 'ready',
+      stage: 'ready',
+      detail: 'Connected to an externally managed Agentico runtime.',
+      ownership: 'external',
+    };
+    // Absent (older servers), null, at-bound, and in-bound names all pass.
+    expect(ConnectionStateSchema.safeParse(base).success).toBe(true);
+    expect(ConnectionStateSchema.safeParse({ ...base, serverName: null }).success).toBe(true);
+    expect(ConnectionStateSchema.safeParse({ ...base, serverName: 'x'.repeat(64) }).success).toBe(
+      true,
+    );
+    const named = { ...base, serverName: 'frothy-macchiato' };
+    expect(ConnectionStateSchema.parse(named)).toEqual(named);
+    // Oversized or wrong-typed names fail closed.
+    expect(ConnectionStateSchema.safeParse({ ...base, serverName: 'x'.repeat(65) }).success).toBe(
+      false,
+    );
+    expect(ConnectionStateSchema.safeParse({ ...base, serverName: 42 }).success).toBe(false);
+  });
+
   it('accepts terminal error states with redacted diagnostics', () => {
     const state = {
       status: 'incompatible',

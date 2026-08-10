@@ -141,6 +141,8 @@ type launchOptions struct {
 	dangerouslySkipPerms bool
 	enabledProviders     []string
 	refreshModels        bool
+	listenAddr           string
+	serverName           string
 	mode                 launchMode
 	validateArtifacts    validateArtifactsOptions
 	verifyEvidence       verifyEvidenceOptions
@@ -160,7 +162,7 @@ type verifyEvidenceOptions struct {
 	dir      string
 }
 
-type serverLauncher func(configPath, stateDir string, dangerouslySkipPerms bool, enabledProviders []string, refreshModels bool) int
+type serverLauncher func(configPath, stateDir string, dangerouslySkipPerms bool, enabledProviders []string, refreshModels bool, listenAddr, serverName string) int
 
 // updater is the injectable update seam. Production
 // wiring passes the real updater, tests pass a fake. It returns the process
@@ -216,7 +218,7 @@ func runArgsWithDesktop(args []string, stdout, stderr io.Writer, launchDesktop d
 	case launchModeVerifyEvidence:
 		return runVerifyEvidence(opts.verifyEvidence, stdout, stderr)
 	case launchModeServer:
-		return launchServer(opts.configPath, opts.stateDir, opts.dangerouslySkipPerms, opts.enabledProviders, opts.refreshModels)
+		return launchServer(opts.configPath, opts.stateDir, opts.dangerouslySkipPerms, opts.enabledProviders, opts.refreshModels, opts.listenAddr, opts.serverName)
 	default:
 		if err := launchDesktop(); err != nil {
 			fmt.Fprintf(stderr, "Could not open the Agentico desktop app: %v\n", err)
@@ -311,6 +313,18 @@ func parseLaunchArgs(args []string) (launchOptions, error) {
 			return opts, nil
 		case "--refresh-models":
 			opts.refreshModels = true
+		case "--listen":
+			if i+1 >= len(args) {
+				return opts, fmt.Errorf("--listen requires a value")
+			}
+			i++
+			opts.listenAddr = args[i]
+		case "--name":
+			if i+1 >= len(args) {
+				return opts, fmt.Errorf("--name requires a value")
+			}
+			i++
+			opts.serverName = args[i]
 		default:
 			if strings.HasPrefix(arg, "-") {
 				return opts, fmt.Errorf("unknown flag: %s", arg)
@@ -321,12 +335,28 @@ func parseLaunchArgs(args []string) (launchOptions, error) {
 	if opts.mode == launchModeDesktop && serverOnlyFlag != "" {
 		return opts, fmt.Errorf("%s is available only with the headless server; run 'agentico server %s ...'", serverOnlyFlag, serverOnlyFlag)
 	}
+	// --listen/--name values are normalized and validated here at parse time
+	// (after the server-only check above) so bad values fail fast, before any
+	// socket is opened.
+	if opts.listenAddr != "" {
+		resolved, err := serverruntime.ResolveListenAddr(opts.listenAddr)
+		if err != nil {
+			return opts, err
+		}
+		opts.listenAddr = resolved
+	}
+	if name := strings.TrimSpace(opts.serverName); name != "" {
+		if err := serverruntime.ValidateServerName(name); err != nil {
+			return opts, fmt.Errorf("invalid --name value: %w", err)
+		}
+		opts.serverName = name
+	}
 	return opts, nil
 }
 
 func isServerOnlyLaunchFlag(flag string) bool {
 	switch flag {
-	case "--config", "--state-dir", "--dangerously-skip-permissions", "--providers", "--refresh-models":
+	case "--config", "--state-dir", "--dangerously-skip-permissions", "--providers", "--refresh-models", "--listen", "--name":
 		return true
 	default:
 		return false
@@ -459,6 +489,10 @@ Server flags (use with 'agentico server'):
   --providers <list>               Comma-separated provider list (default: all)
                                    Available: claude, codex, opencode
   --refresh-models                 Refresh provider model catalogs before starting the server
+  --listen [host:]port             Bind address (loopback hosts only: 127.0.0.1, localhost,
+                                   [::1]; default: ephemeral 127.0.0.1 port)
+  --name <name>                    Server display name (default: generated, persisted per
+                                   runtime directory)
   --dangerously-skip-permissions   Skip all permission prompts (use with caution)
   --check, -n                      With 'update': check for a newer release without installing
 Global flags:
@@ -2617,7 +2651,7 @@ func normalizeProviderNames(enabled []string, warnBlank bool, warn func(name str
 	return valid
 }
 
-func runServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledProviders []string, refreshModels bool) int {
+func runServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledProviders []string, refreshModels bool, listenAddr, serverName string) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	runtimeCtx, requestShutdown := context.WithCancel(ctx)
@@ -2660,6 +2694,15 @@ func runServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledPr
 		fmt.Fprintf(os.Stderr, "Error: preparing server auth token: %v\n", err)
 		return 1
 	}
+	var configName string
+	if boot.cfg != nil {
+		configName = boot.cfg.Server.Name
+	}
+	resolvedName, err := serverruntime.ResolveServerName(serverName, configName, boot.runtime.RuntimeDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: resolving server name: %v\n", err)
+		return 1
+	}
 
 	runtimeServer, err := serverruntime.Start(ctx, serverruntime.Options{
 		Runtime:      boot.runtime,
@@ -2667,6 +2710,8 @@ func runServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledPr
 		StartMode:    cliSubcommandServer,
 		Owner:        boot.owner,
 		AuthToken:    authToken,
+		ListenAddr:   listenAddr,
+		Name:         resolvedName,
 		Features:     boot.featureManager,
 		FeatureStore: boot.featureManager.Store,
 		Freshness:    newGitFreshnessProvider(),
@@ -2712,6 +2757,7 @@ func runServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledPr
 		BaseURL:       runtimeServer.BaseURL(),
 		Epoch:         runtimeServer.EventEpoch(),
 		AuthToken:     authToken,
+		Name:          resolvedName,
 		Runtime:       boot.runtime,
 		LaunchPolicy:  policy,
 		StartMode:     cliSubcommandServer,
@@ -2725,7 +2771,7 @@ func runServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledPr
 		return 1
 	}
 
-	fmt.Fprintf(os.Stderr, "Agentic server listening at %s\n", runtimeServer.BaseURL())
+	fmt.Fprintf(os.Stderr, "Agentic server %q listening at %s\n", resolvedName, runtimeServer.BaseURL())
 	<-runtimeCtx.Done()
 	shutdownFeatures(boot.orchestrator, boot.sessionManager)
 	return 0

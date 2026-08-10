@@ -130,6 +130,10 @@ const ProbeHealthSchema = z.object({
   status: z.string(),
   compatibility: z.unknown().optional(),
   runtime: z.object({ state_dir: z.string() }).optional(),
+  // Operator-assigned display name (server cap: MaxServerNameLength = 64).
+  // Informational only — an oversized or malformed name is dropped, never
+  // treated as an attach blocker.
+  name: z.string().max(64).optional().catch(undefined),
 });
 
 const INCOMPATIBLE_REMEDIATION =
@@ -510,6 +514,8 @@ export class RuntimeGateway {
       return 'blocked';
     }
 
+    const serverName = probe.data.name ?? null;
+
     const token = record.auth_token;
     if (token === undefined || token === '') {
       this.setState({
@@ -518,6 +524,7 @@ export class RuntimeGateway {
         detail: 'The running runtime published no credentials to attach with.',
         ownership: 'external',
         serverBuild: verdict.serverBuild,
+        serverName,
         error: {
           code: 'E_ATTACH_NO_TOKEN',
           message: 'The discovery record for the running runtime carries no auth token.',
@@ -535,6 +542,7 @@ export class RuntimeGateway {
       detail: 'Authenticating with the running runtime.',
       ownership: 'external',
       serverBuild: verdict.serverBuild,
+      serverName,
     });
     const authenticated = await this.fetchReadiness(record.base_url);
     if (this.cancelled(generation)) {
@@ -548,6 +556,7 @@ export class RuntimeGateway {
         detail: 'Could not authenticate with the running runtime.',
         ownership: 'external',
         serverBuild: verdict.serverBuild,
+        serverName,
         error: {
           code: 'E_ATTACH_AUTH',
           message: 'The running runtime rejected the stored credentials.',
@@ -563,6 +572,7 @@ export class RuntimeGateway {
       detail: 'Connected to an externally managed Agentico runtime.',
       ownership: 'external',
       serverBuild: verdict.serverBuild,
+      serverName,
     });
     this.readySince = this.now();
     return 'attached';
@@ -680,6 +690,7 @@ export class RuntimeGateway {
       detail: 'Authenticating with the runtime.',
       ownership: 'app-owned',
       serverBuild: verdict.serverBuild,
+      serverName: ready.serverName,
     });
     const authenticated = await this.fetchReadiness(ready.record.base_url);
     if (this.cancelled(generation)) {
@@ -710,6 +721,7 @@ export class RuntimeGateway {
       detail: 'Connected to the app-managed Agentico runtime.',
       ownership: 'app-owned',
       serverBuild: verdict.serverBuild,
+      serverName: ready.serverName,
     });
     this.readySince = this.now();
   }
@@ -718,7 +730,11 @@ export class RuntimeGateway {
     generation: number,
     selected: SelectedRuntime,
     child: ServerChildLike,
-  ): Promise<{ record: DiscoveryRecord; compatibility: unknown } | null> {
+  ): Promise<{
+    record: DiscoveryRecord;
+    compatibility: unknown;
+    serverName: string | null;
+  } | null> {
     const attempts = Math.max(
       1,
       Math.ceil(this.timeouts.launchReadyMs / Math.max(1, this.timeouts.pollIntervalMs)),
@@ -757,7 +773,11 @@ export class RuntimeGateway {
           if (health.status === 200) {
             const probe = ProbeHealthSchema.safeParse(health.body);
             if (probe.success && probe.data.status === 'ok') {
-              return { record: outcome.record, compatibility: probe.data.compatibility };
+              return {
+                record: outcome.record,
+                compatibility: probe.data.compatibility,
+                serverName: probe.data.name ?? null,
+              };
             }
           }
         } catch {

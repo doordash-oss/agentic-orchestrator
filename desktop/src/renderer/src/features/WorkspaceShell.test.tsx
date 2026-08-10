@@ -864,6 +864,80 @@ describe('WorkspaceShell toolbar', () => {
     expect(screen.queryByText('Ask Agentico is active')).not.toBeInTheDocument();
   });
 
+  it('shows the named server in the footer instead of the generic ready label', async () => {
+    installAgenticoMock({
+      settings: settingsWithActive(null),
+      features: [],
+      connection: {
+        status: 'ready',
+        stage: 'ready',
+        detail: 'Connected to an externally managed Agentico runtime.',
+        ownership: 'external',
+        serverName: 'frothy-macchiato',
+      },
+    });
+    render(<WorkspaceShell />);
+
+    expect(await screen.findByText('frothy-macchiato')).toBeVisible();
+    const footer = document.querySelector('.sidebar__footer')!;
+    expect(footer).toHaveTextContent('frothy-macchiato');
+    expect(screen.queryByText('Runtime ready')).toBeNull();
+    // The name is display-only: the footer keeps exactly one button.
+    expect(footer.getElementsByTagName('button')).toHaveLength(1);
+  });
+
+  it('falls back to "Runtime ready" for a ready but name-less server', async () => {
+    installAgenticoMock({
+      settings: settingsWithActive(null),
+      features: [],
+      connection: {
+        status: 'ready',
+        stage: 'ready',
+        detail: 'Connected to an externally managed Agentico runtime.',
+        ownership: 'external',
+      },
+    });
+    render(<WorkspaceShell />);
+
+    expect(await screen.findByText('Runtime ready')).toBeVisible();
+  });
+
+  it('never shows the server name while connecting or needing attention', async () => {
+    installAgenticoMock({
+      settings: settingsWithActive(null),
+      features: [],
+      connection: {
+        status: 'discovering',
+        stage: 'discover',
+        detail: 'Looking for a running Agentico runtime.',
+        ownership: 'none',
+        serverName: 'frothy-macchiato',
+      },
+    });
+    render(<WorkspaceShell />);
+
+    expect(await screen.findByText('Connecting')).toBeVisible();
+    expect(screen.queryByText('frothy-macchiato')).toBeNull();
+  });
+
+  it('keeps the active-session label over a named server', async () => {
+    installAgenticoMock({
+      settings: settingsWithActive(null),
+      features: [],
+      connection: {
+        status: 'ready',
+        stage: 'ready',
+        detail: 'Connected to an externally managed Agentico runtime.',
+        ownership: 'external',
+        serverName: 'frothy-macchiato',
+      },
+    });
+    render(<WorkspaceShell amaSessionActive />);
+
+    expect(await screen.findByText('Ask Agentico is active')).toBeVisible();
+    expect(screen.queryByText('frothy-macchiato')).toBeNull();
+  });
+
   it('routes the sidebar footer AMA hint through onOpenAma', async () => {
     installAgenticoMock({ settings: settingsWithActive(null), features: [] });
     const onOpenAma = vi.fn();

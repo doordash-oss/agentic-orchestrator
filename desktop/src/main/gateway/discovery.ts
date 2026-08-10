@@ -30,6 +30,9 @@ export const DiscoveryRecordSchema = z.object({
   }),
   pid: z.number().int().positive(),
   started_at: z.string().optional(),
+  // Optional operator-assigned display name (server cap: MaxServerNameLength
+  // = 64). Informational only; the authoritative read is the health probe.
+  name: z.string().max(64).optional(),
 });
 
 export type DiscoveryRecord = z.output<typeof DiscoveryRecordSchema>;

@@ -47,6 +47,86 @@ export function expectedDesktopArtifacts(tag) {
   ]);
 }
 
+/**
+ * Validate every desktop distributable and its target-specific package receipt.
+ * Returns all observed failures so the release operator can repair a whole
+ * incomplete inventory in one pass.
+ */
+export function validateArtifactInventory({
+  tag,
+  revision,
+  files,
+  receipts,
+  sizes,
+  linuxOnly = false,
+}) {
+  const errors = [];
+  let artifacts;
+  try {
+    artifacts = expectedDesktopArtifacts(tag).filter(({ os }) => !linuxOnly || os === 'linux');
+  } catch (error) {
+    return [error instanceof Error ? error.message : String(error)];
+  }
+
+  const names = Array.isArray(files) ? files : [];
+  const sizeByName = sizes !== null && typeof sizes === 'object' ? sizes : {};
+  const receiptsByName = receipts !== null && typeof receipts === 'object' ? receipts : {};
+  const version = releaseVersionFromTag(tag);
+
+  for (const { name } of artifacts) {
+    const count = names.filter((file) => file === name).length;
+    if (count === 0) errors.push(`missing desktop artifact: ${name}`);
+    else if (count > 1) errors.push(`duplicate desktop artifact: ${name}`);
+    if (count > 0 && (!Number.isFinite(sizeByName[name]) || sizeByName[name] <= 0)) {
+      errors.push(`desktop artifact is empty: ${name}`);
+    }
+  }
+
+  for (const name of names) {
+    const match = /^agentico_(.+)_(amd64|arm64)\.deb$/.exec(name);
+    if (match !== null && match[1] !== version) {
+      errors.push(`unexpected desktop package version: ${name} (expected ${version})`);
+    }
+  }
+
+  for (const target of receiptTargets(artifacts)) {
+    validateReceipt({ receiptsByName, target, tag, revision, errors });
+  }
+  return errors;
+}
+
+/**
+ * Ensure each expected desktop filename appears exactly once with a valid
+ * SHA-256 digest. Other release checksums (for CLI archives) are intentionally
+ * ignored; this gate owns only the desktop additions.
+ */
+export function validateChecksumManifest(text, expectedNames) {
+  const errors = [];
+  const expected = new Set(expectedNames);
+  const entries = new Map([...expected].map((name) => [name, 0]));
+  const lines = typeof text === 'string' ? text.split(/\r?\n/) : [];
+
+  for (const line of lines) {
+    if (line.trim() === '') continue;
+    const fields = /^(\S+)\s+\*?(.+?)\s*$/.exec(line);
+    if (fields === null) continue;
+    const [, hash, name] = fields;
+    if (!expected.has(name)) continue;
+    entries.set(name, entries.get(name) + 1);
+    if (!/^[0-9a-f]{64}$/i.test(hash)) {
+      errors.push(`checksums.txt has malformed SHA-256 for ${name}`);
+    }
+  }
+
+  for (const [name, count] of entries) {
+    if (count === 0) errors.push(`checksums.txt has no entry for ${name}`);
+    else if (count !== 1) {
+      errors.push(`checksums.txt has ${count} entries for ${name}, expected exactly 1`);
+    }
+  }
+  return errors;
+}
+
 /** Resolve the package target independently from the process running verification. */
 export function resolvePackageTarget(platform, processArch, packageArch) {
   if (platform === 'darwin') {
@@ -124,4 +204,57 @@ function matchesArtifact(file, target, format) {
     return new RegExp(`^agentico_.+_${debArch}\\.deb$`).test(file);
   }
   return false;
+}
+
+function receiptTargets(artifacts) {
+  const targets = new Map();
+  for (const artifact of artifacts) {
+    const key = `${artifact.os}-${artifact.arch}`;
+    const existing = targets.get(key) ?? {
+      os: artifact.os,
+      arch: artifact.arch,
+      receipt: `package-verification-${artifact.os}-${artifact.arch}.json`,
+      formats: [],
+    };
+    existing.formats.push(artifact.format);
+    targets.set(key, existing);
+  }
+  return targets.values();
+}
+
+function validateReceipt({ receiptsByName, target, tag, revision, errors }) {
+  const receipt = receiptsByName[target.receipt];
+  if (receipt === undefined) {
+    errors.push(`missing verification receipt: ${target.receipt}`);
+    return;
+  }
+  if (receipt === null || typeof receipt !== 'object' || Array.isArray(receipt)) {
+    errors.push(`verification receipt is not a JSON object: ${target.receipt}`);
+    return;
+  }
+
+  const identity = receipt.identity;
+  if (identity === null || typeof identity !== 'object' || Array.isArray(identity)) {
+    errors.push(`${target.receipt} has no build identity`);
+  } else {
+    const expected = {
+      desktop_version: releaseVersionFromTag(tag),
+      server_version: tag,
+      server_revision: revision,
+      os: target.os,
+      arch: target.arch,
+    };
+    for (const [field, value] of Object.entries(expected)) {
+      if (identity[field] !== value) {
+        errors.push(`${target.receipt} identity ${field}=${identity[field]}, expected ${value}`);
+      }
+    }
+  }
+
+  const verified = Array.isArray(receipt.artifacts) ? receipt.artifacts : [];
+  for (const format of target.formats) {
+    if (!verified.some((artifact) => artifact?.target === format)) {
+      errors.push(`${target.receipt} does not verify ${format}`);
+    }
+  }
 }

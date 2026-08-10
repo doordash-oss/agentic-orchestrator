@@ -188,6 +188,78 @@ test('packaged publish partial retry: push succeeds, PR creation fails, retry sc
   }
 });
 
+test('packaged publish existing pull-request updates omit title and narrative fields', async ({}, testInfo) => {
+  test.setTimeout(300_000);
+  const transcript = new Transcript(
+    'publish-existing-pr-update',
+    'Publish existing pull-request update journey',
+  );
+  const existingPrRepo = 'existing-pr-repo';
+  const world = createWorld('publish-existing-pr-update', {
+    auth: { loggedIn: true, authMethod: 'oauth', email: 'e2e@example.invalid' },
+    presetWorkspaceRoot: true,
+  });
+  createRepo(world, existingPrRepo, { commit: true });
+
+  const featureName = `PublishExistingPR ${Math.random().toString(16).slice(2, 8)}`;
+  let handle: AppHandle | null = null;
+  let seeded: PublishFixture | null = null;
+
+  try {
+    transcript.section('Create feature through packaged UI');
+    handle = await launchApp(world, testInfo, { traceName: 'publish-existing-pr-create' });
+    await createFeatureViaForm(handle, {
+      name: featureName,
+      description: 'title-less existing pull-request update fixture',
+      repoPatterns: [new RegExp(existingPrRepo)],
+      waitForReady: true,
+    });
+    const featureId = await findFeatureId(handle, featureName);
+
+    const discovery = readDiscovery(world);
+    await closeApp(handle);
+    handle = null;
+    if (discovery !== null) {
+      await waitFor(
+        () => !processAlive(discovery.pid),
+        `app-owned server ${discovery.pid} to stop before seeding`,
+        15_000,
+      );
+    }
+
+    transcript.section('Seed a published pull-request branch, then add an unpublished local commit');
+    seeded = seedExistingPRUpdateFixture(world, featureId, existingPrRepo);
+    transcript.json('seeded worktrees', seeded.worktrees);
+
+    transcript.section('Publish the existing pull-request update through the packaged app');
+    handle = await launchApp(world, testInfo, { traceName: 'publish-existing-pr-update' });
+    await openCompletion(handle, featureName);
+    const aftercareRunway = handle.page.getByRole('region', { name: 'Feature aftercare' });
+    const publishRow = aftercareRunway.getByRole('button', { name: /Publish new commits/ });
+    await expect(publishRow).toBeVisible({ timeout: 30_000 });
+    await publishRow.click();
+
+    const publishModal = handle.page.getByRole('dialog', { name: 'Publish reviewed changes' });
+    await expect(publishModal.getByText('Unpublished changes')).toBeVisible();
+    await expect(publishModal.getByRole('checkbox', { name: existingPrRepo })).toBeChecked();
+    await expect(publishModal.getByLabel('PR title')).toHaveCount(0);
+    await expect(publishModal.getByLabel('PR body')).toHaveCount(0);
+    await expect(publishModal.getByRole('button', { name: 'Generate PR narrative' })).toHaveCount(0);
+    await expect(publishModal.getByRole('button', { name: 'Generate narrative' })).toHaveCount(0);
+    await publishModal.getByRole('button', { name: 'Publish updates' }).click();
+    await expect(publishModal.getByRole('status')).toContainText(/published/i);
+    assertPublishedBranch(seeded, existingPrRepo);
+    transcript.step('existing pull-request branch was updated without PR title or narrative controls');
+
+    persistAppLogs(handle, 'publish-existing-pr-update-app-server');
+    transcript.write(testInfo);
+  } finally {
+    if (handle !== null) await closeApp(handle).catch(() => {});
+    assertNoLeakedProcesses(world);
+    destroyWorld(world);
+  }
+});
+
 async function openCompletion(handle: AppHandle, featureName: string): Promise<Locator> {
   await expect(handle.page.getByRole('option', { name: featureName })).toBeVisible({
     timeout: 60_000,
@@ -254,6 +326,59 @@ function seedPublishFixture(world: JourneyWorld, featureId: string): PublishFixt
   }
 
   return { worktrees: repos, sources, origins };
+}
+
+function seedExistingPRUpdateFixture(
+  world: JourneyWorld,
+  featureId: string,
+  repoName: string,
+): PublishFixture {
+  const featurePath = featureYamlPath(world, featureId);
+  let featureYaml = fs.readFileSync(featurePath, 'utf8');
+  const repos = parseFeatureRepos(featureYaml);
+  const sources = parseFeatureRepoSources(featureYaml);
+  const worktree = repos[repoName];
+  const source = sources[repoName];
+  if (worktree === undefined || source === undefined) {
+    throw new Error(`feature.yaml missing repo ${repoName}`);
+  }
+
+  featureYaml = upsertYamlScalar(featureYaml, 'status', 'CodeReady');
+  featureYaml = upsertYamlScalar(featureYaml, 'current_phase', '3');
+  featureYaml = replaceTopLevelBlock(featureYaml, 'checkpoints', [
+    'checkpoints:',
+    '  manual_publish: true',
+    '  draft_publish: false',
+  ]);
+  featureYaml = setRepoPublishable(featureYaml, repoName, true);
+  fs.writeFileSync(featurePath, featureYaml);
+
+  const runPath = activeRunYamlPath(world, featureId);
+  let runYaml = clearRunFailures(fs.readFileSync(runPath, 'utf8'));
+  runYaml = replaceTopLevelBlock(runYaml, 'repo_states', [
+    'repo_states:',
+    `  ${repoName}:`,
+    '    touched: true',
+    `    pr_url: https://github.example/local-bare/${repoName}/pull/1`,
+  ]);
+  fs.writeFileSync(runPath, runYaml);
+
+  const origin = path.join(world.root, `${repoName}-origin.git`);
+  git(world.root, 'init', '--bare', origin, '--initial-branch=main');
+  git(source, 'remote', 'add', 'origin', origin);
+  git(source, 'push', '-u', 'origin', 'main');
+
+  writeWorktreeChange(worktree, 'README.md', '# existing pull request\npublished change\n');
+  git(worktree, 'add', '.');
+  git(worktree, 'commit', '-m', 'Published pull-request change');
+  const branch = git(worktree, 'rev-parse', '--abbrev-ref', 'HEAD').trim();
+  git(worktree, 'push', '-u', 'origin', branch);
+
+  writeWorktreeChange(worktree, 'README.md', '# existing pull request\nunpublished update\n');
+  git(worktree, 'add', '.');
+  git(worktree, 'commit', '-m', 'Unpublished pull-request update');
+
+  return { worktrees: repos, sources, origins: { [repoName]: origin } };
 }
 
 function assertPublishedBranch(seeded: PublishFixture, repoName: string): void {

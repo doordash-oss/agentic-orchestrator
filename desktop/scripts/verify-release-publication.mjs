@@ -48,6 +48,10 @@ function requireStatus(response, expected, path) {
   return response.data;
 }
 
+function isRecord(value) {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
 /** Dereference either a lightweight or annotated Git tag to its commit SHA. */
 export async function dereferenceRemoteTag({ tag, request }) {
   const refPath = tagRefPath(tag);
@@ -91,22 +95,52 @@ export async function verifyReleasePublication({ tag, commit, request }) {
 
   const path = releasePath(tag);
   const release = requireStatus(await request(path), 200, path);
+  if (!isRecord(release)) throw new Error(`GitHub release ${tag} response must be an object`);
   if (release.tag_name !== tag)
     throw new Error(`GitHub release tag is ${release.tag_name}, expected ${tag}`);
-  if (release.draft === true) throw new Error(`GitHub release ${tag} is still a draft`);
-  if (release.prerelease === true)
-    throw new Error(`GitHub release ${tag} is a prerelease, expected stable`);
-  if (typeof release.published_at !== 'string' || release.published_at === '') {
-    throw new Error(`GitHub release ${tag} has not been published`);
+  if (release.draft !== false) {
+    throw new Error(
+      `GitHub release ${tag} draft must be exactly false, got ${String(release.draft)}`,
+    );
+  }
+  if (release.prerelease !== false) {
+    throw new Error(
+      `GitHub release ${tag} prerelease must be exactly false, got ${String(release.prerelease)}`,
+    );
+  }
+  if (
+    typeof release.published_at !== 'string' ||
+    release.published_at === '' ||
+    Number.isNaN(Date.parse(release.published_at))
+  ) {
+    throw new Error(`GitHub release ${tag} published_at must be a valid timestamp`);
   }
 
-  const assets = Array.isArray(release.assets) ? release.assets : [];
-  const names = assets.map((asset) => asset?.name).filter((name) => typeof name === 'string');
+  if (!Array.isArray(release.assets))
+    throw new Error(`GitHub release ${tag} assets must be an array`);
+  const assets = release.assets;
+  if (assets.some((asset) => !isRecord(asset))) {
+    throw new Error(`GitHub release ${tag} assets must contain only objects`);
+  }
   const required = requiredAssetsForTag(tag);
   const invalid = required.flatMap((name) => {
-    const count = names.filter((candidate) => candidate === name).length;
-    if (count === 1) return [];
-    return [`GitHub release ${tag} has ${count} assets named ${name}, expected exactly 1`];
+    const matching = assets.filter((asset) => isRecord(asset) && asset.name === name);
+    if (matching.length !== 1) {
+      return [
+        `GitHub release ${tag} has ${matching.length} assets named ${name}, expected exactly 1`,
+      ];
+    }
+    const [asset] = matching;
+    if (asset.state !== 'uploaded') {
+      return [`GitHub release ${tag} asset ${name} is ${String(asset.state)}, expected uploaded`];
+    }
+    if (typeof asset.browser_download_url !== 'string' || asset.browser_download_url === '') {
+      return [`GitHub release ${tag} asset ${name} has no nonempty browser_download_url`];
+    }
+    if (!Number.isSafeInteger(asset.size) || asset.size <= 0) {
+      return [`GitHub release ${tag} asset ${name} has invalid size ${String(asset.size)}`];
+    }
+    return [];
   });
   if (invalid.length > 0) throw new Error(invalid.join('; '));
   return { tag, commit, assets: required };

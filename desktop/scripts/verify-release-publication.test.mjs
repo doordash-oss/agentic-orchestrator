@@ -16,7 +16,12 @@ function route(responses) {
 }
 
 function releasedAssets() {
-  return REQUIRED_RELEASE_ASSETS.map((name) => ({ name: name.replace('{{VERSION}}', '0.150.0') }));
+  return REQUIRED_RELEASE_ASSETS.map((name, index) => ({
+    name: name.replace('{{VERSION}}', '0.150.0'),
+    state: 'uploaded',
+    browser_download_url: `https://example.test/releases/${index}`,
+    size: index + 1,
+  }));
 }
 
 describe('remote release publication verification', () => {
@@ -170,6 +175,110 @@ describe('remote release publication verification', () => {
       };
       await expect(
         verifyReleasePublication({ tag: TAG, commit: COMMIT, request: route(responses) }),
+      ).rejects.toThrow(expected);
+    }
+  });
+
+  it('fails closed on malformed release data and assets that have not finished uploading', async () => {
+    const common = {
+      '/repos/doordash-oss/agentic-orchestrator/git/ref/tags/v0.150.0': {
+        status: 200,
+        data: { object: { type: 'commit', sha: COMMIT } },
+      },
+    };
+    const invalidReleases = [
+      [null, /response must be an object/],
+      ['not an object', /response must be an object/],
+      [
+        {
+          tag_name: TAG,
+          draft: 'false',
+          prerelease: false,
+          published_at: '2026-08-10T00:00:00Z',
+          assets: releasedAssets(),
+        },
+        /draft must be exactly false/,
+      ],
+      [
+        {
+          tag_name: TAG,
+          draft: false,
+          prerelease: null,
+          published_at: '2026-08-10T00:00:00Z',
+          assets: releasedAssets(),
+        },
+        /prerelease must be exactly false/,
+      ],
+      [
+        {
+          tag_name: TAG,
+          draft: false,
+          prerelease: false,
+          published_at: 'not a date',
+          assets: releasedAssets(),
+        },
+        /published_at must be a valid timestamp/,
+      ],
+      [
+        {
+          tag_name: TAG,
+          draft: false,
+          prerelease: false,
+          published_at: '2026-08-10T00:00:00Z',
+          assets: null,
+        },
+        /assets must be an array/,
+      ],
+      [
+        {
+          tag_name: TAG,
+          draft: false,
+          prerelease: false,
+          published_at: '2026-08-10T00:00:00Z',
+          assets: [...releasedAssets(), null],
+        },
+        /assets must contain only objects/,
+      ],
+      [
+        {
+          tag_name: TAG,
+          draft: false,
+          prerelease: false,
+          published_at: '2026-08-10T00:00:00Z',
+          assets: releasedAssets().map((asset) =>
+            asset.name === 'checksums.txt.sig' ? { ...asset, state: 'new' } : asset,
+          ),
+        },
+        /checksums\.txt\.sig is new, expected uploaded/,
+      ],
+      [
+        {
+          tag_name: TAG,
+          draft: false,
+          prerelease: false,
+          published_at: '2026-08-10T00:00:00Z',
+          assets: releasedAssets().map((asset) =>
+            asset.name === 'checksums.txt'
+              ? { ...asset, browser_download_url: '', size: 0 }
+              : asset,
+          ),
+        },
+        /checksums\.txt has no nonempty browser_download_url/,
+      ],
+    ];
+    for (const [release, expected] of invalidReleases) {
+      await expect(
+        verifyReleasePublication({
+          tag: TAG,
+          commit: COMMIT,
+          request: route({
+            ...common,
+            '/repos/doordash-oss/agentic-orchestrator/releases/tags/v0.150.0': {
+              status: 200,
+              data: release,
+            },
+          }),
+        }),
       ).rejects.toThrow(expected);
     }
   });

@@ -126,16 +126,45 @@ release:
     expect(auditGoReleaserReleaseTarget(config)).toEqual([]);
   });
 
-  it('requires remote publication verification before the desktop cask and no raw flags', () => {
+  it('audits only the actual release recipe with exact publication command ordering', () => {
     expect(
       auditReleaseMakefile(
-        'goreleaser release --clean $(GORELEASER_FLAGS)\nnode desktop/scripts/publish-desktop-cask.mjs\n',
+        [
+          '# node desktop/scripts/verify-release-publication.mjs preflight --tag "$(RELEASE_TAG)" --commit "$(RELEASE_COMMIT)"',
+          'other:',
+          '\tnode desktop/scripts/verify-release-publication.mjs preflight --tag "$(RELEASE_TAG)" --commit "$(RELEASE_COMMIT)"',
+          '\tnode desktop/scripts/release-goreleaser.mjs',
+          '\tnpm run release:artifacts:verify --workspace desktop -- manifest',
+          '\tnode desktop/scripts/verify-release-publication.mjs verify --tag "$(RELEASE_TAG)" --commit "$(RELEASE_COMMIT)"',
+          '\tnode desktop/scripts/publish-desktop-cask.mjs',
+          'release:',
+          '\t# A comment must not satisfy the release audit.',
+          '\tnode desktop/scripts/publish-desktop-cask.mjs',
+        ].join('\n'),
+      ),
+    ).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('remote tag is absent'),
+        expect.stringContaining('local manifest then remote publication'),
+      ]),
+    );
+    expect(
+      auditReleaseMakefile(
+        [
+          'release:',
+          '\tnode desktop/scripts/verify-release-publication.mjs preflight --commit "$(RELEASE_COMMIT)" --tag "$(RELEASE_TAG)"',
+          '\tnode desktop/scripts/release-goreleaser.mjs GORELEASER_FLAGS=--skip=publish',
+          '\tnpm run release:artifacts:verify --workspace desktop -- manifest',
+          '\tnode desktop/scripts/verify-release-publication.mjs verify --tag "$(RELEASE_TAG)" --commit "wrong"',
+          '\tnode desktop/scripts/publish-desktop-cask.mjs',
+        ].join('\n'),
       ),
     ).toEqual(
       expect.arrayContaining([
         expect.stringContaining('must not expose GORELEASER_FLAGS'),
         expect.stringContaining('remote tag is absent'),
         expect.stringContaining('local manifest then remote publication'),
+        expect.stringContaining('exact audited publication commands'),
       ]),
     );
     const makefile = readFileSync(new URL('../../Makefile', import.meta.url), 'utf8');

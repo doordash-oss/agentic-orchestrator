@@ -79,25 +79,41 @@ package-manager-managed: the app presents verified package-manager guidance
 and the trusted release page, rather than replacing a DEB installation itself.
 
 If a macOS or Linux build, package receipt, identity, inventory, remote-tag
-preflight, or local credential check fails, `make release` stops before
+preflight, or GitHub authentication check fails, `make release` stops before
 GoReleaser and creates no GitHub release. Recovery depends on what changed:
 
 - **Environment-only retry.** If no repository files changed and GoReleaser
-  never ran (for example Docker was stopped or a local signing credential was
-  unavailable), fix that local condition and rerun `make release` with the
-  same local tag. The remote-tag preflight will confirm that it is still safe.
-- **Repository/configuration fix after GoReleaser started.** First inspect and
-  remove any partial GitHub release and remote tag. Also inspect the tap's
-  `Casks/agentico.rb`: GoReleaser may have pushed it before the failure, so
-  restore or revert that generated cask commit and push the reconciliation
-  before retrying. Commit and verify the repository fix, then either delete
-  and recreate the local `vX.Y.Z` tag on that fixed commit (only after the
-  remote tag is gone) or cut a new patch tag. Never retry an old tag that
-  still points at the broken commit.
-- **Remote publication verification failure.** Treat it as a partial release,
-  not as a cask-only problem: reconcile the GitHub release/tag and CLI cask as
-  above, investigate the mismatched commit/state/assets, and then use the
-  repository-fix path if source or release configuration changed.
+  never ran (for example Docker was stopped or `GITHUB_TOKEN` was unavailable),
+  fix that local condition and rerun `make release` with the same local tag.
+  The remote-tag preflight will confirm that it is still safe. The signing key
+  is consumed inside GoReleaser, not by this pre-GoReleaser gate; if it fails,
+  first check whether GoReleaser created a remote tag or release before
+  deciding which recovery path applies.
+- **Transient verifier failure after GoReleaser.** An authentication, DNS, or
+  network failure while checking the manifest or GitHub publication does *not*
+  prove that the release is partial. Do not delete anything. Restore the token
+  or connectivity, then re-run the final checks against the original tag and
+  captured commit:
+
+  ```bash
+  RELEASE_TAG=vX.Y.Z
+  RELEASE_COMMIT="$(git rev-parse "${RELEASE_TAG}^{commit}")"
+  npm run release:artifacts:verify --workspace desktop -- manifest
+  node desktop/scripts/verify-release-publication.mjs verify \
+    --tag "$RELEASE_TAG" --commit "$RELEASE_COMMIT"
+  ```
+
+  If both pass, finish with `node desktop/scripts/publish-desktop-cask.mjs`.
+- **Confirmed repository/configuration or remote-state defect.** Only a
+  verified wrong commit, draft/prerelease state, missing/incomplete asset, bad
+  signature, or equivalent release defect needs destructive reconciliation.
+  First inspect and remove the partial GitHub release and remote tag. Also
+  inspect the tap's `Casks/agentico.rb`: GoReleaser may have pushed it before
+  the failure, so restore or revert that generated cask commit and push the
+  reconciliation before retrying. Commit and verify the repository fix, then
+  either delete and recreate the local `vX.Y.Z` tag on that fixed commit (only
+  after the remote tag is gone) or cut a new patch tag. Never retry an old tag
+  that still points at the broken commit.
 
 The final `agentico-desktop` cask publication is different: if the signed
 manifest and remote publication verification passed and only

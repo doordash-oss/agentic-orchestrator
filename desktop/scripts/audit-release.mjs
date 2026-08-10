@@ -96,30 +96,68 @@ export function auditGoReleaserReleaseTarget(configText) {
 /** Audit the publication ordering and prohibit raw GoReleaser flag injection. */
 export function auditReleaseMakefile(makefileText) {
   const failures = [];
-  if (makefileText.includes('GORELEASER_FLAGS')) {
+  const recipe = makeRecipeCommands(makefileText, 'release');
+  if (recipe.some((command) => command.includes('GORELEASER_FLAGS'))) {
     failures.push(
       'Makefile must not expose GORELEASER_FLAGS; only AGENTICO_RELEASE_NOTES_FILE is supported',
     );
   }
-  const preflight = makefileText.indexOf('verify-release-publication.mjs preflight');
-  const goreleaser = makefileText.indexOf('release-goreleaser.mjs');
-  const manifest = makefileText.indexOf('release:artifacts:verify --workspace desktop -- manifest');
-  const publication = makefileText.indexOf('verify-release-publication.mjs verify');
-  const desktopCask = makefileText.indexOf('publish-desktop-cask.mjs');
-  if (preflight === -1 || goreleaser === -1 || preflight > goreleaser) {
+  const expected = [
+    'node desktop/scripts/verify-release-publication.mjs preflight --tag "$(RELEASE_TAG)" --commit "$(RELEASE_COMMIT)"',
+    'node desktop/scripts/release-goreleaser.mjs',
+    'npm run release:artifacts:verify --workspace desktop -- manifest',
+    'node desktop/scripts/verify-release-publication.mjs verify --tag "$(RELEASE_TAG)" --commit "$(RELEASE_COMMIT)"',
+    'node desktop/scripts/publish-desktop-cask.mjs',
+  ];
+  const positions = expected.map((command) => recipe.indexOf(command));
+  const uniqueExpectedCommands = expected.every(
+    (command) => recipe.filter((candidate) => candidate === command).length === 1,
+  );
+  const unsupportedPublicationCommand = recipe.some(
+    (command) =>
+      (command.includes('verify-release-publication.mjs') &&
+        ![expected[0], expected[3]].includes(command)) ||
+      (command.includes('goreleaser') && command !== expected[1]),
+  );
+  if (positions[0] === -1 || positions[1] === -1 || positions[0] > positions[1]) {
     failures.push('Makefile must verify the remote tag is absent before GoReleaser runs');
   }
   if (
-    manifest === -1 ||
-    publication === -1 ||
-    desktopCask === -1 ||
-    !(goreleaser < manifest && manifest < publication && publication < desktopCask)
+    positions.slice(1).some((position) => position === -1) ||
+    !(positions[1] < positions[2] && positions[2] < positions[3] && positions[3] < positions[4])
   ) {
     failures.push(
       'Makefile must verify local manifest then remote publication before publishing the desktop cask',
     );
   }
+  if (!uniqueExpectedCommands || unsupportedPublicationCommand) {
+    failures.push(
+      'Makefile release recipe must use the exact audited publication commands and arguments',
+    );
+  }
   return failures;
+}
+
+/** Extract only tab-indented shell commands from one exact Make target's recipe. */
+function makeRecipeCommands(makefileText, target) {
+  const lines = makefileText.split(/\r?\n/);
+  const targetIndex = lines.findIndex((line) => new RegExp(`^${target}:\\s*(?:#.*)?$`).test(line));
+  if (targetIndex === -1) return [];
+  const commands = [];
+  for (let index = targetIndex + 1; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (line.startsWith('\t')) {
+      commands.push(
+        line
+          .slice(1)
+          .replace(/^[@+\-]/, '')
+          .trim(),
+      );
+      continue;
+    }
+    if (/^\S/.test(line) && !line.startsWith('#')) break;
+  }
+  return commands;
 }
 
 function releaseSectionLines(configText) {

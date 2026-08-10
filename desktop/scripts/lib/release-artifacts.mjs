@@ -334,6 +334,8 @@ export function createLinuxDockerPlan({
     '-v',
     `${volumePrefix}-node-modules:${repoRoot}/node_modules`,
     '-v',
+    `${volumePrefix}-npm-cache:/root/.npm`,
+    '-v',
     `${volumePrefix}-electron:/root/.cache/electron`,
     '-v',
     `${volumePrefix}-electron-builder:/root/.cache/electron-builder`,
@@ -346,7 +348,7 @@ export function createLinuxDockerPlan({
       const builderCommand = [
         ...copySourceCommand(sourceMount, repoRoot),
         ...goBootstrapCommand('amd64'),
-        'npm ci',
+        'npm ci --fetch-retries=5 --fetch-retry-mintimeout=1000 --fetch-retry-maxtimeout=30000 --fetch-timeout=300000',
       ];
       builderCommand.push(
         arch === 'arm64'

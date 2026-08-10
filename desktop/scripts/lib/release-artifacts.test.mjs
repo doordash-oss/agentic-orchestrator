@@ -125,12 +125,16 @@ describe('createLinuxDockerPlan', () => {
         '-v',
         'agentico-release-node-modules:/repo/worktree/node_modules',
         '-v',
+        'agentico-release-npm-cache:/root/.npm',
+        '-v',
         'agentico-release-electron:/root/.cache/electron',
         '-v',
         'agentico-release-electron-builder:/root/.cache/electron-builder',
         'bash',
         '-lc',
-        expect.stringContaining('npm ci && npm run package:verify --workspace desktop'),
+        expect.stringContaining(
+          'npm ci --fetch-retries=5 --fetch-retry-mintimeout=1000 --fetch-retry-maxtimeout=30000 --fetch-timeout=300000 && npm run package:verify --workspace desktop',
+        ),
       ]),
     );
   });

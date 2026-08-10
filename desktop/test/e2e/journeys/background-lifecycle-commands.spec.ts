@@ -97,22 +97,33 @@ test('packaged command palette, native menu routes, and active close policy stay
       timeout: 60_000,
     });
 
-    const closeResult = await triggerQuitDecision(handle, [0], 'window-close');
-    expect(closeResult.visible).toBe(false);
-    expect(JSON.stringify(closeResult.captured[0])).toContain('Keep Running');
-    expect(JSON.stringify(closeResult.captured[0])).toContain('Stop Work and Quit');
-    expect(JSON.stringify(closeResult.captured[0])).toContain('Cancel');
+    if (process.platform === 'darwin') {
+      await closeMainWindowAndReactivate(handle);
+      const restored = await handle.page.evaluate(
+        (id) => window.agentico.getFeature(id),
+        featureId,
+      );
+      expect(restored.actions).toContainEqual(
+        expect.objectContaining({ id: 'pause-stop', enabled: true }),
+      );
+    } else {
+      const closeResult = await triggerQuitDecision(handle, [0], 'window-close');
+      expect(closeResult.visible).toBe(false);
+      expect(JSON.stringify(closeResult.captured[0])).toContain('Keep Running');
+      expect(JSON.stringify(closeResult.captured[0])).toContain('Stop Work and Quit');
+      expect(JSON.stringify(closeResult.captured[0])).toContain('Cancel');
+      await handle.app.evaluate(({ BrowserWindow }) => {
+        const window = BrowserWindow.getAllWindows()[0];
+        window?.show();
+        window?.focus();
+      });
+    }
 
-    await handle.app.evaluate(({ BrowserWindow }) => {
-      const window = BrowserWindow.getAllWindows()[0];
-      window?.show();
-      window?.focus();
-    });
     const cancelResult = await triggerQuitDecision(handle, [2], 'native-quit');
     expect(cancelResult.visible).toBe(true);
     expect(JSON.stringify(cancelResult.captured[0])).toContain('Cancel');
 
-    const stopResult = await triggerQuitDecision(handle, [1], 'window-close');
+    const stopResult = await triggerQuitDecision(handle, [1], 'native-quit');
     expect(JSON.stringify(stopResult.captured[0])).toContain('Stop Work and Quit');
     await waitForAppExit(handle);
     handle.closed = true;
@@ -133,7 +144,35 @@ test('packaged command palette, native menu routes, and active close policy stay
   }
 });
 
-test('packaged idle close quits without prompting for active-work decisions', async ({}, testInfo) => {
+test('packaged macOS idle close keeps the app alive and activation recreates its window', async ({}, testInfo) => {
+  test.skip(process.platform !== 'darwin', 'macOS keeps the application active after window close');
+  const world = createWorld('background-lifecycle-idle-close', {
+    auth: { loggedIn: true, authMethod: 'oauth', email: 'e2e@example.invalid' },
+    presetWorkspaceRoot: true,
+    workflowProvider: true,
+  });
+  createRepo(world, 'idle-lab', { commit: true });
+  let handle: AppHandle | null = null;
+
+  try {
+    handle = await launchApp(world, testInfo, { traceName: 'background-lifecycle-idle-close' });
+    await expect(handle.page.getByRole('button', { name: 'New feature' })).toBeVisible({
+      timeout: 60_000,
+    });
+    await closeMainWindowAndReactivate(handle);
+    await clickNativeMenu(handle, 'global.quit');
+    await waitForAppExit(handle);
+    handle.closed = true;
+    persistAppLogs(handle, 'background-lifecycle-idle-close-app-server');
+  } finally {
+    if (handle !== null) await closeApp(handle).catch(() => {});
+    await assertNoLeakedProcesses(world);
+    destroyWorld(world);
+  }
+});
+
+test('packaged non-macOS idle close quits without prompting for active-work decisions', async ({}, testInfo) => {
+  test.skip(process.platform === 'darwin', 'macOS keeps the application active after window close');
   const world = createWorld('background-lifecycle-idle-close', {
     auth: { loggedIn: true, authMethod: 'oauth', email: 'e2e@example.invalid' },
     presetWorkspaceRoot: true,
@@ -171,7 +210,7 @@ test('packaged idle close quits without prompting for active-work decisions', as
   }
 });
 
-test('packaged close policy exposes partial-stop Retry controls', async ({}, testInfo) => {
+test('packaged explicit quit exposes partial-stop Retry controls', async ({}, testInfo) => {
   const world = createWorld('background-lifecycle-partial-retry', {
     auth: { loggedIn: true, authMethod: 'oauth', email: 'e2e@example.invalid' },
     presetWorkspaceRoot: true,
@@ -200,7 +239,7 @@ test('packaged close policy exposes partial-stop Retry controls', async ({}, tes
     });
     await forceNextStopFailure(handle, 1);
 
-    const result = await triggerQuitDecision(handle, [1, 1, 0], 'window-close');
+    const result = await triggerQuitDecision(handle, [1, 1, 0], 'native-quit');
     expect(JSON.stringify(result.captured[1])).toContain('Retry');
     expect(JSON.stringify(result.captured[1])).toContain('Quit Anyway');
     expect(JSON.stringify(result.captured[1])).toContain('Partial Stop Retry');
@@ -490,6 +529,55 @@ async function forceNextStopFailure(handle: AppHandle, count: number): Promise<v
     };
     global.__agenticoForceStopFailureCount = failureCount;
   }, count);
+}
+
+async function closeMainWindowAndReactivate(handle: AppHandle): Promise<void> {
+  const previousId = handle.mainWebContentsId;
+  const close = await handle.app.evaluate(async ({ BrowserWindow, dialog }, mainId) => {
+    const window = BrowserWindow.getAllWindows().find(
+      (candidate) => candidate.webContents.id === mainId,
+    );
+    if (window === undefined) throw new Error('main window missing');
+    const original = dialog.showMessageBox;
+    let promptCount = 0;
+    dialog.showMessageBox = (async () => {
+      promptCount += 1;
+      return { response: 2, checkboxChecked: false };
+    }) as typeof dialog.showMessageBox;
+    window.close();
+    const deadline = Date.now() + 2_000;
+    while (!window.isDestroyed() && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    dialog.showMessageBox = original;
+    return {
+      promptCount,
+      destroyed: window.isDestroyed(),
+      openWindows: BrowserWindow.getAllWindows().length,
+    };
+  }, previousId);
+  expect(close).toEqual({ promptCount: 0, destroyed: true, openWindows: 0 });
+  expect(handle.appProcess.exitCode).toBeNull();
+  expect(handle.appProcess.signalCode).toBeNull();
+  const discovery = readDiscovery(handle.world);
+  if (discovery === null) throw new Error('owned server discovery disappeared after window close');
+  expect(processAlive(discovery.pid)).toBe(true);
+
+  const appeared = handle.app.waitForEvent('window', { timeout: 30_000 });
+  await handle.app.evaluate(({ app }) => app.emit('activate'));
+  const page = await appeared;
+  page.setDefaultTimeout(Number(process.env['AGENTICO_E2E_ACTION_TIMEOUT'] ?? 60_000));
+  await expect(page.getByRole('status').filter({ hasText: 'Runtime ready' })).toBeVisible({
+    timeout: 60_000,
+  });
+  const mainWebContentsId = await handle.app.evaluate(({ BrowserWindow }) => {
+    const window = BrowserWindow.getAllWindows()[0];
+    if (window === undefined) throw new Error('reactivated main window missing');
+    return window.webContents.id;
+  });
+  expect(mainWebContentsId).not.toBe(previousId);
+  handle.page = page;
+  handle.mainWebContentsId = mainWebContentsId;
 }
 
 async function triggerQuitDecision(

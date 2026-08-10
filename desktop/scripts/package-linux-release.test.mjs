@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { runLinuxRelease } from './package-linux-release.mjs';
+import { runLinuxRelease, runLocalLinuxRelease } from './package-linux-release.mjs';
 
 const GiB = 1024 ** 3;
 const scriptPath = fileURLToPath(new URL('./package-linux-release.mjs', import.meta.url));
@@ -51,6 +51,22 @@ function validFixtureOptions(overrides = {}) {
       if (arch !== undefined) writeReleaseOutputs(repoRoot, arch);
     },
     ...overrides,
+  };
+}
+
+function localFixtureOptions({ gitStatus = '', exactTag = 'v0.150.0', freeBytes = 20 * GiB } = {}) {
+  const repoRoot = makeTempRoot();
+  return {
+    cwd: repoRoot,
+    gitCommand: (_cwd, ...args) => {
+      const command = args.join(' ');
+      if (command === 'rev-parse --show-toplevel') return repoRoot;
+      if (command === 'rev-parse --git-common-dir') return '.git';
+      if (command === 'describe --tags --exact-match') return exactTag;
+      if (command === 'status --porcelain') return gitStatus;
+      throw new Error(`unexpected Git command: ${command}`);
+    },
+    statfs: () => ({ bavail: freeBytes, bsize: 1 }),
   };
 }
 
@@ -149,6 +165,84 @@ describe('runLinuxRelease', () => {
     expect(() => runLinuxRelease(options)).toThrow(
       /x64 package verification did not produce required release files/,
     );
+  });
+
+  it('removes stale x64 outputs before requiring the current build to produce them', () => {
+    const options = validFixtureOptions();
+    writeReleaseOutputs(options.repoRoot, 'x64');
+    const arm64AttemptPath = join(options.repoRoot, 'arm64-attempted');
+    options.execute = (_command, args) => {
+      const arch = args
+        .find((arg) => arg.startsWith('AGENTICO_PACKAGE_ARCH='))
+        ?.split('=')
+        .at(-1);
+      if (arch === 'arm64') writeFileSync(arm64AttemptPath, 'attempted\n');
+    };
+
+    expect(() => runLinuxRelease(options)).toThrow(
+      /x64 package verification did not produce required release files/,
+    );
+    expect(existsSync(arm64AttemptPath)).toBe(false);
+  });
+
+  it('does not pull when pinned-image inspection fails for a daemon error', () => {
+    const options = validFixtureOptions();
+    const pullAttemptPath = join(options.repoRoot, 'pull-attempted');
+    options.execute = (_command, args) => {
+      if (
+        args.join(' ') ===
+        'image inspect electronuserland/builder:22@sha256:b76a82a6c6a8a1dea1abbc93e394f54316744824b64e6a50d959f1e3ba8951a9'
+      ) {
+        const error = new Error('Cannot connect to the Docker daemon');
+        error.stderr = 'Cannot connect to the Docker daemon';
+        throw error;
+      }
+      if (args[0] === 'pull') writeFileSync(pullAttemptPath, 'attempted\n');
+    };
+
+    expect(() => runLinuxRelease(options)).toThrow(/Cannot connect to the Docker daemon/);
+    expect(existsSync(pullAttemptPath)).toBe(false);
+  });
+
+  it('pulls the pinned image after an image-not-found inspection result', () => {
+    const options = validFixtureOptions();
+    const pullPath = join(options.repoRoot, 'pulled-image');
+    options.execute = (_command, args) => {
+      if (args[0] === 'image') {
+        const error = new Error('No such image');
+        error.stderr = 'Error response from daemon: No such image';
+        error.status = 1;
+        throw error;
+      }
+      if (args[0] === 'pull') writeFileSync(pullPath, 'pulled\n');
+      const arch = args
+        .find((arg) => arg.startsWith('AGENTICO_PACKAGE_ARCH='))
+        ?.split('=')
+        .at(-1);
+      if (arch !== undefined) writeReleaseOutputs(options.repoRoot, arch);
+    };
+
+    expect(runLinuxRelease(options).completed).toEqual(['x64', 'arm64']);
+    expect(existsSync(pullPath)).toBe(true);
+  });
+});
+
+describe('runLocalLinuxRelease preflight ordering', () => {
+  it.each([
+    ['a dirty checkout', { gitStatus: ' M Makefile' }, /working tree is dirty/],
+    ['a non-exact tag', { exactTag: 'v0.150.0-rc.1' }, /invalid release tag/],
+    ['less than 12 GiB free', { freeBytes: 12 * GiB - 1 }, /at least 12 GiB/],
+  ])('rejects %s before contacting Docker', (_description, fixture, expectedError) => {
+    const options = localFixtureOptions(fixture);
+    const dockerContactPath = join(options.cwd, 'docker-contacted');
+
+    expect(() =>
+      runLocalLinuxRelease({
+        ...options,
+        dockerInfo: () => writeFileSync(dockerContactPath, 'contacted\n'),
+      }),
+    ).toThrow(expectedError);
+    expect(existsSync(dockerContactPath)).toBe(false);
   });
 });
 

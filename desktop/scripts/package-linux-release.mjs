@@ -1,6 +1,6 @@
 // Build and verify Linux desktop release packages locally in sequential Docker containers.
 import { execFileSync } from 'node:child_process';
-import { existsSync, statSync, statfsSync } from 'node:fs';
+import { existsSync, rmSync, statSync, statfsSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -33,7 +33,7 @@ export function runLinuxRelease({
   if (freeBytes < MINIMUM_FREE_BYTES) {
     throw new Error('at least 12 GiB of free disk space is required for Linux release packaging');
   }
-  if (!dockerAvailable) {
+  if (!resolveDockerAvailability(dockerAvailable)) {
     throw new Error('Docker daemon is unavailable; start Docker before packaging Linux releases');
   }
 
@@ -43,8 +43,9 @@ export function runLinuxRelease({
   const completed = [];
   const receipts = [];
   for (const invocation of plan) {
-    execute('docker', invocation.args);
     const receipt = `package-verification-linux-${invocation.arch}.json`;
+    removeBuildOutputs(repoRoot, invocation.arch, version, receipt);
+    execute('docker', invocation.args);
     requireBuildOutputs(repoRoot, invocation.arch, version, receipt);
     completed.push(invocation.arch);
     receipts.push(receipt);
@@ -56,7 +57,8 @@ export function runLinuxRelease({
 function ensureLinuxBuilderImage(execute) {
   try {
     execute('docker', ['image', 'inspect', LINUX_BUILDER_IMAGE]);
-  } catch {
+  } catch (error) {
+    if (!isImageNotFound(error)) throw error;
     execute('docker', ['pull', LINUX_BUILDER_IMAGE]);
   }
 }
@@ -71,6 +73,25 @@ function requireBuildOutputs(repoRoot, arch, version, receipt) {
       `${arch} package verification did not produce required release files: ${missing.join(', ')}`,
     );
   }
+}
+
+function removeBuildOutputs(repoRoot, arch, version, receipt) {
+  const debArch = arch === 'x64' ? 'amd64' : arch;
+  for (const name of [receipt, `Agentico-${arch}.AppImage`, `agentico_${version}_${debArch}.deb`]) {
+    rmSync(join(repoRoot, 'desktop', 'dist', name), { force: true });
+  }
+}
+
+function resolveDockerAvailability(dockerAvailable) {
+  return typeof dockerAvailable === 'function' ? dockerAvailable() : dockerAvailable;
+}
+
+function isImageNotFound(error) {
+  const detail = [error?.message, error?.stderr, error?.stdout]
+    .filter((value) => value !== undefined)
+    .map((value) => String(value))
+    .join('\n');
+  return /(?:no such image|no such object|image .* not found)/i.test(detail);
 }
 
 function isFile(path) {
@@ -95,31 +116,39 @@ function commandSucceeds(command, args, cwd) {
 }
 
 function executeDocker(command, args, cwd) {
-  execFileSync(command, args, { cwd, stdio: 'inherit' });
+  const inspect = args[0] === 'image' && args[1] === 'inspect';
+  execFileSync(command, args, { cwd, stdio: inspect ? ['ignore', 'pipe', 'pipe'] : 'inherit' });
 }
 
-function localPlanOptions(cwd) {
-  const repoRoot = git(cwd, 'rev-parse', '--show-toplevel');
+function localPlanOptions(cwd, gitCommand = git) {
+  const repoRoot = gitCommand(cwd, 'rev-parse', '--show-toplevel');
   return {
     repoRoot,
-    gitCommonDir: resolve(repoRoot, git(repoRoot, 'rev-parse', '--git-common-dir')),
+    gitCommonDir: resolve(repoRoot, gitCommand(repoRoot, 'rev-parse', '--git-common-dir')),
     volumePrefix: VOLUME_PREFIX,
   };
 }
 
-function localReleaseOptions(cwd) {
-  const { repoRoot, gitCommonDir, volumePrefix } = localPlanOptions(cwd);
-  const stats = statfsSync(repoRoot);
-  return {
+export function runLocalLinuxRelease({
+  cwd = process.cwd(),
+  gitCommand = git,
+  statfs = statfsSync,
+  dockerInfo = (repoRoot) => commandSucceeds('docker', ['info'], repoRoot),
+  execute,
+} = {}) {
+  const { repoRoot, gitCommonDir, volumePrefix } = localPlanOptions(cwd, gitCommand);
+  const stats = statfs(repoRoot);
+  return runLinuxRelease({
     repoRoot,
     gitCommonDir,
     volumePrefix,
-    exactTag: git(repoRoot, 'describe', '--tags', '--exact-match'),
-    gitStatus: git(repoRoot, 'status', '--porcelain'),
+    exactTag: gitCommand(repoRoot, 'describe', '--tags', '--exact-match'),
+    gitStatus: gitCommand(repoRoot, 'status', '--porcelain'),
     freeBytes: stats.bavail * stats.bsize,
-    dockerAvailable: commandSucceeds('docker', ['info'], repoRoot),
-    execute: (command, args) => executeDocker(command, args, repoRoot),
-  };
+    dockerAvailable: () => dockerInfo(repoRoot),
+    execute:
+      execute === undefined ? (command, args) => executeDocker(command, args, repoRoot) : execute,
+  });
 }
 
 function main() {
@@ -129,7 +158,7 @@ function main() {
     console.log(JSON.stringify(plan, null, 2));
     return;
   }
-  const result = runLinuxRelease(localReleaseOptions(process.cwd()));
+  const result = runLocalLinuxRelease();
   console.log(`Linux release packages verified for ${result.tag}: ${result.completed.join(', ')}`);
 }
 

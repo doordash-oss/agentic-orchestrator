@@ -36,6 +36,66 @@ func TestPushRewrittenBranch_AllowsRedundantRemoteMerge(t *testing.T) {
 	}
 }
 
+func TestPushRewrittenBranch_CreatesAbsentRemoteBranch(t *testing.T) {
+	repo, bare := testutil.InitPublishReadyGitRepo(t)
+	branch := "feature/absent"
+	testutil.CreateBranch(t, repo, branch)
+	testutil.CommitFile(t, repo, "created.txt", "created\n", "create remote branch")
+
+	if err := PushRewrittenBranch(repo, branch); err != nil {
+		t.Fatalf("PushRewrittenBranch() error = %v; want absent remote branch created", err)
+	}
+	if got := remoteBranchSHA(t, bare, branch); got != localHeadSHA(t, repo) {
+		t.Fatalf("remote tip = %s; want newly published HEAD", got)
+	}
+}
+
+func TestPushRewrittenBranch_RejectsCompetingCreationAfterAbsenceInspection(t *testing.T) {
+	repo, bare := testutil.InitPublishReadyGitRepo(t)
+	branch := "feature/competing-creation"
+	testutil.CreateBranch(t, repo, branch)
+	testutil.CommitFile(t, repo, "local.txt", "local\n", "local branch")
+
+	other := cloneFreshnessRepo(t, bare)
+	var competingSHA string
+	hookCalled := false
+	err := pushRewrittenBranch(repo, branch, func() {
+		hookCalled = true
+		runRewriteGit(t, other, "checkout", "-b", branch)
+		competingSHA = testutil.CommitFile(t, other, "competitor.txt", "competitor\n", "competing branch")
+		testutil.SimulatePush(t, other, bare, branch, branch)
+	})
+	if !hookCalled {
+		t.Fatal("beforePush hook was not called after authoritative absence inspection")
+	}
+	if err == nil {
+		t.Fatal("PushRewrittenBranch() error = nil; want competing branch creation rejected")
+	}
+	if got := remoteBranchSHA(t, bare, branch); got != competingSHA {
+		t.Fatalf("remote tip = %s; want competing remote work %s preserved", got, competingSHA)
+	}
+	if got := runRewriteGit(t, bare, "show", "refs/heads/"+branch+":competitor.txt"); got != "competitor" {
+		t.Fatalf("remote competitor content = %q; want preserved", got)
+	}
+}
+
+func TestPushRewrittenBranch_DoesNotTreatRemoteFailureAsAbsence(t *testing.T) {
+	repo := testutil.InitGitRepo(t)
+	branch := "feature/unreachable-origin"
+	testutil.CreateBranch(t, repo, branch)
+	testutil.CommitFile(t, repo, "local.txt", "local\n", "local branch")
+	unreachable := filepath.Join(t.TempDir(), "missing-origin.git")
+	runRewriteGit(t, repo, "remote", "add", "origin", unreachable)
+
+	err := PushRewrittenBranch(repo, branch)
+	if err == nil {
+		t.Fatal("PushRewrittenBranch() error = nil; want unreachable remote rejected")
+	}
+	if !strings.Contains(err.Error(), "checking exact remote branch") {
+		t.Fatalf("PushRewrittenBranch() error = %v; want authoritative absence check failure", err)
+	}
+}
+
 func TestPushRewrittenBranch_RejectsOrdinaryRemoteCommit(t *testing.T) {
 	repo, bare := testutil.InitPublishReadyGitRepo(t)
 	branch := "feature/ordinary-remote"

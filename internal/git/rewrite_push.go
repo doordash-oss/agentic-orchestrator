@@ -69,6 +69,18 @@ func PushRewrittenBranch(worktreePath, branch string) error {
 }
 
 func pushRewrittenBranch(worktreePath, branch string, beforePush func()) error {
+	remoteRef := "refs/heads/" + branch
+	_, remoteExists, err := rewritePushRemoteBranchState(worktreePath, remoteRef)
+	if err != nil {
+		return err
+	}
+	if !remoteExists {
+		if beforePush != nil {
+			beforePush()
+		}
+		return Push(worktreePath, branch)
+	}
+
 	inspectionRef, err := newRewriteInspectionRef()
 	if err != nil {
 		return fmt.Errorf("creating rewritten-push inspection ref: %w", err)
@@ -77,7 +89,6 @@ func pushRewrittenBranch(worktreePath, branch string, beforePush func()) error {
 		_ = exec.Command("git", "-C", worktreePath, "update-ref", "-d", inspectionRef).Run()
 	}()
 
-	remoteRef := "refs/heads/" + branch
 	if err := runRewritePushGit(worktreePath, "fetching remote branch for rewritten-push inspection",
 		"fetch", "--no-tags", "origin", remoteRef+":"+inspectionRef); err != nil {
 		return err
@@ -221,19 +232,28 @@ func rewritePushProofCommand(worktreePath string, args ...string) *exec.Cmd {
 }
 
 func rewritePushRemoteSHA(worktreePath, remoteRef string) (string, error) {
-	out, err := rewritePushGitOutput(worktreePath, "checking remote branch after rejected lease",
-		"ls-remote", "origin", remoteRef)
+	sha, _, err := rewritePushRemoteBranchState(worktreePath, remoteRef)
+	return sha, err
+}
+
+// rewritePushRemoteBranchState uses ls-remote's documented exit code 2 for an
+// exact-ref miss. Every other command failure is operational, never absence.
+func rewritePushRemoteBranchState(worktreePath, remoteRef string) (string, bool, error) {
+	cmd := exec.Command("git", "-C", worktreePath, "ls-remote", "--exit-code", "origin", remoteRef)
+	cmd.Stderr = io.Discard
+	out, err := cmd.Output()
 	if err != nil {
-		return "", err
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && exitErr.ExitCode() == 2 {
+			return "", false, nil
+		}
+		return "", false, fmt.Errorf("checking exact remote branch: %w", err)
 	}
 	fields := strings.Fields(string(out))
-	if len(fields) == 0 {
-		return "", nil
-	}
 	if len(fields) != 2 || fields[1] != remoteRef {
-		return "", errors.New("checking remote branch after rejected lease: unexpected ls-remote response")
+		return "", false, errors.New("checking exact remote branch: unexpected ls-remote response")
 	}
-	return fields[0], nil
+	return fields[0], true, nil
 }
 
 func runRewritePushGit(worktreePath, operation string, args ...string) error {

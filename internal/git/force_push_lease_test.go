@@ -36,7 +36,7 @@ func TestForcePush_RejectsWhenRemoteMovedWithoutFetch(t *testing.T) {
 	// A second clone pushes a commit this clone never fetches.
 	other := cloneFreshnessRepo(t, bare)
 	runFreshnessGit(t, other, "checkout", "feature/lease")
-	testutil.CommitFile(t, other, "other.txt", "other\n", "other's commit")
+	remoteSHA := testutil.CommitFile(t, other, "other.txt", "other\n", "other's commit")
 	testutil.SimulatePush(t, other, bare, "feature/lease", "feature/lease")
 
 	// This clone rewrites its own branch locally without ever fetching, so
@@ -46,6 +46,9 @@ func TestForcePush_RejectsWhenRemoteMovedWithoutFetch(t *testing.T) {
 
 	if err := ForcePush(repo, "feature/lease"); err == nil {
 		t.Fatal("ForcePush() = nil, want an error: the remote moved and this clone never fetched")
+	}
+	if got := remoteBranchSHA(t, bare, "feature/lease"); got != remoteSHA {
+		t.Fatalf("remote tip = %s; want unseen remote work %s preserved", got, remoteSHA)
 	}
 }
 
@@ -63,7 +66,7 @@ func TestForcePush_RejectsWhenFetchRefreshedTheLease(t *testing.T) {
 
 	other := cloneFreshnessRepo(t, bare)
 	runFreshnessGit(t, other, "checkout", "feature/lease-fetched")
-	testutil.CommitFile(t, other, "other.txt", "other\n", "other's commit")
+	remoteSHA := testutil.CommitFile(t, other, "other.txt", "other\n", "other's commit")
 	testutil.SimulatePush(t, other, bare, "feature/lease-fetched", "feature/lease-fetched")
 
 	// The fetch that defeats a bare lease: origin/feature/lease-fetched now
@@ -75,5 +78,8 @@ func TestForcePush_RejectsWhenFetchRefreshedTheLease(t *testing.T) {
 
 	if err := ForcePush(repo, "feature/lease-fetched"); err == nil {
 		t.Fatal("ForcePush() = nil, want an error: the fetched remote tip was never in this clone")
+	}
+	if got := remoteBranchSHA(t, bare, "feature/lease-fetched"); got != remoteSHA {
+		t.Fatalf("remote tip = %s; want unseen remote work %s preserved", got, remoteSHA)
 	}
 }

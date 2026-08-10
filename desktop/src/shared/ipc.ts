@@ -1026,7 +1026,7 @@ export const FeatureActionRequestSchema = z.discriminatedUnion('action', [
     body: z.strictObject({
       source_revision: CompletionSourceRevisionSchema,
       repos: z.array(CompletionRepoNameSchema).min(1).max(200),
-      title: z.string().trim().min(1).max(200),
+      title: z.string().trim().min(1).max(200).optional(),
       body: z.string().max(4000).optional(),
     }),
   }),
@@ -1056,6 +1056,7 @@ export const FeatureActionRequestSchema = z.discriminatedUnion('action', [
   }),
 ]);
 export type FeatureActionRequest = z.output<typeof FeatureActionRequestSchema>;
+export type PublishFeatureActionRequest = Extract<FeatureActionRequest, { action: 'publish' }>;
 
 // Compile-time drift guard: every FeatureOperationalActionSchema member must
 // appear as a FeatureActionRequestSchema branch's action literal. If an action

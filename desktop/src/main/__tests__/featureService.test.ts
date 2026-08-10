@@ -372,6 +372,52 @@ describe('FeatureService.dispatchAction', () => {
     });
   });
 
+  it('forwards an existing-PR update without unused PR metadata', async () => {
+    const { service, calls } = makeService(() => ({
+      status: 200,
+      body: {
+        api_version: 'v1',
+        feature_id: 'abcd1234ef567890',
+        result: 'published',
+      },
+    }));
+
+    await service.dispatchAction({
+      featureId: 'abcd1234ef567890',
+      action: 'publish',
+      body: { source_revision: 'rev-1', repos: ['repo-a'] },
+    });
+
+    expect(calls[0]?.init?.body).toStrictEqual({
+      source_revision: 'rev-1',
+      repos: ['repo-a'],
+    });
+  });
+
+  it.each([
+    [
+      'publish_remote_diverged',
+      'Review and reconcile the pull-request branch on GitHub, then refresh and retry.',
+    ],
+    [
+      'publish_remote_changed',
+      'Refresh the publish state and retry; Agentico did not overwrite the newer branch.',
+    ],
+  ])('provides a publish remedy for %s', async (code, remediation) => {
+    const { service } = makeService(() => ({
+      status: 409,
+      body: { error: { code, message: 'publish rejected' } },
+    }));
+
+    await expect(
+      service.dispatchAction({
+        featureId: 'abcd1234ef567890',
+        action: 'publish',
+        body: { source_revision: 'rev-1', repos: ['repo-a'] },
+      }),
+    ).rejects.toMatchObject({ safe: { code, remediation } });
+  });
+
   it('gives merge the same long request bound publish gets', async () => {
     const { service, calls } = makeService(() => ({
       status: 200,

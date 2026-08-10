@@ -1175,24 +1175,90 @@ func TestOrchestrator_Republish_PushFailureRecorded(t *testing.T) {
 	assertLifecycleCall(t, lc, "SetRepoPublishError")
 }
 
-// leaseTestRemoteOps keeps the push path genuinely unmocked while answering
-// the PR-state lookup locally so the test never reaches the network.
-type leaseTestRemoteOps struct{}
+// realGitPublishRemoteOps keeps Git push behavior genuinely unmocked while
+// replacing GitHub API calls so tests never reach an external service.
+type realGitPublishRemoteOps struct {
+	createdPRURL string
+}
 
-func (leaseTestRemoteOps) Push(path, branch string) error      { return git.Push(path, branch) }
-func (leaseTestRemoteOps) ForcePush(path, branch string) error { return git.ForcePush(path, branch) }
-func (leaseTestRemoteOps) PushRewrittenBranch(path, branch string) error {
+func (realGitPublishRemoteOps) Push(path, branch string) error { return git.Push(path, branch) }
+func (realGitPublishRemoteOps) ForcePush(path, branch string) error {
+	return git.ForcePush(path, branch)
+}
+func (realGitPublishRemoteOps) PushRewrittenBranch(path, branch string) error {
 	return git.PushRewrittenBranch(path, branch)
 }
-func (leaseTestRemoteOps) PullRebase(path, branch string) error {
+func (realGitPublishRemoteOps) PullRebase(path, branch string) error {
 	return git.PullRebase(path, branch).Err
 }
-func (leaseTestRemoteOps) CreatePR(string, string, string, string, string, bool) (string, error) {
-	return "", errors.New("CreatePR is not used by this test")
+func (o realGitPublishRemoteOps) CreatePR(string, string, string, string, string, bool) (string, error) {
+	if o.createdPRURL == "" {
+		return "", errors.New("CreatePR is not used by this test")
+	}
+	return o.createdPRURL, nil
 }
-func (leaseTestRemoteOps) PRBaseBranch(string, string) string { return "" }
-func (leaseTestRemoteOps) PRState(string, string) (string, error) {
+func (realGitPublishRemoteOps) PRBaseBranch(string, string) string { return "" }
+func (realGitPublishRemoteOps) PRState(string, string) (string, error) {
 	return "", errors.New("state lookup unavailable in test")
+}
+
+// The first manual CodeReady publish has no remote pull-request branch yet.
+// It still travels through PushRewrittenBranch, which must create that branch
+// with an ordinary push before the orchestrator records the new PR.
+func TestOrchestrator_Publish_ManualCodeReadyCreatesAbsentRemoteBranch(t *testing.T) {
+	const branch = "feature/manual-first-publish"
+	const prURL = "https://github.com/org/r1/pull/1"
+	repoPath, bareRemote := testutil.InitPublishReadyGitRepo(t)
+	testutil.CreateBranch(t, repoPath, branch)
+	testutil.CommitFile(t, repoPath, "first.txt", "first\n", "first publish")
+	if git.BranchExistsOnRemote(repoPath, branch) {
+		t.Fatalf("remote branch %s exists before first publish", branch)
+	}
+
+	f := &feature.Feature{
+		ID:           "feat-manual-first-publish",
+		Name:         "manual first publish",
+		Slug:         "manual-first-publish",
+		Status:       feature.StatusCodeReady,
+		CurrentPhase: feature.PhasePublish,
+		Checkpoints:  feature.Checkpoints{ManualPublish: true},
+		Repos: []feature.FeatureRepo{
+			{Name: "r1", Path: repoPath, WorktreePath: repoPath, Branch: branch, BaseBranch: mainBranch},
+		},
+		RepoStates: map[string]*feature.RepoState{"r1": {Touched: true}},
+	}
+	lc := lifecycleForFeature(f)
+	lc.SetRepoPublishedFn = func(id, repo, url string) error { return nil }
+	lc.TryCompletePublishFn = func(id string) (bool, error) { return false, nil }
+	o := orchestrator.New(orchestrator.Deps{
+		Lifecycle: lc,
+		Store:     newFeatureStore(f),
+		Remote:    realGitPublishRemoteOps{createdPRURL: prURL},
+	}, orchestrator.Hooks{})
+
+	if err := o.PublishWithOptions(f.ID, orchestrator.PublishOptions{
+		Repos: []string{"r1"},
+		Title: "Manual first publish",
+		Body:  "Verified body",
+	}); err != nil {
+		t.Fatalf("PublishWithOptions() error = %v", err)
+	}
+	if !git.BranchExistsOnRemote(repoPath, branch) {
+		t.Fatalf("remote branch %s does not exist after first publish", branch)
+	}
+
+	remoteTip := runPublishGitOutput(t, bareRemote, "rev-parse", "refs/heads/"+branch)
+	localTip := runPublishGitOutput(t, repoPath, "rev-parse", "HEAD")
+	if remoteTip != localTip {
+		t.Fatalf("remote branch tip = %s; want published local HEAD %s", remoteTip, localTip)
+	}
+	published := assertLifecycleCall(t, lc, "SetRepoPublished")
+	if published == nil {
+		t.FailNow()
+	}
+	if got := published.Args[2]; got != prURL {
+		t.Fatalf("published PR URL = %v; want %s", got, prURL)
+	}
 }
 
 // An unfetched remote commit is translated through the real Git rewritten-push
@@ -1224,7 +1290,7 @@ func TestOrchestrator_Republish_RemoteDivergedErrorFromRealGit(t *testing.T) {
 	lc.TryCompletePublishFn = func(id string) (bool, error) { return false, nil }
 	fs := newFeatureStore(f)
 
-	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs, Remote: leaseTestRemoteOps{}}, orchestrator.Hooks{})
+	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs, Remote: realGitPublishRemoteOps{}}, orchestrator.Hooks{})
 
 	err := o.PublishWithOptions("feat-republish-lease", orchestrator.PublishOptions{
 		Repos: []string{"r1"},

@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { statfsSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
@@ -69,6 +69,34 @@ function capture({ cwd, gitCommand }) {
   return { tag, commit };
 }
 
+function evidencePathFor(cwd, gitCommand) {
+  const path = gitCommand(cwd, 'rev-parse', '--git-path', 'agentico-release-preflight.json');
+  return resolve(cwd, path);
+}
+
+function validateEvidence(evidence) {
+  if (evidence === null || typeof evidence !== 'object' || Array.isArray(evidence)) {
+    throw new Error('release provenance evidence is not an object');
+  }
+  if (evidence.schema_version !== 1 || evidence.platform !== 'darwin') {
+    throw new Error('release provenance evidence has an unsupported schema or platform');
+  }
+  releaseVersionFromTag(evidence.tag);
+  if (!/^[0-9a-f]{40}$/i.test(evidence.commit ?? '')) {
+    throw new Error('release provenance evidence has an invalid commit');
+  }
+  if (typeof evidence.captured_at !== 'string' || Number.isNaN(Date.parse(evidence.captured_at))) {
+    throw new Error('release provenance evidence has an invalid timestamp');
+  }
+  if (
+    JSON.stringify(evidence.images) !==
+    JSON.stringify([LINUX_BUILDER_IMAGE, LINUX_ARM64_VERIFIER_IMAGE])
+  ) {
+    throw new Error('release provenance evidence does not contain the pinned release images');
+  }
+  return evidence;
+}
+
 /** Validate local release prerequisites and preserve the exact source provenance for later gates. */
 export function runReleasePreflight({
   cwd = rootDir,
@@ -77,9 +105,10 @@ export function runReleasePreflight({
   freeBytes = statfsSync(cwd).bavail * statfsSync(cwd).bsize,
   dockerInfo = (directory) => executeDocker('docker', ['info'], directory),
   ensureImage = (image) => ensurePinnedImage({ image, cwd }),
+  goreleaserVersion = () => execFileSync('goreleaser', ['--version'], { encoding: 'utf8' }),
   verifySigningKey = () => signingKeyMatchesTrustRoot(process.env),
   env = process.env,
-  evidencePath = join(cwd, 'desktop', 'dist', 'release-preflight.json'),
+  evidencePath = evidencePathFor(cwd, gitCommand),
 } = {}) {
   if (platform !== 'darwin') throw new Error('release preflight: releases must run on macOS');
   const provenance = capture({ cwd, gitCommand });
@@ -93,6 +122,15 @@ export function runReleasePreflight({
     throw new Error(
       'release preflight: Ed25519 signing key does not match the embedded updater trust root',
     );
+  }
+  const goreleaser = String(goreleaserVersion());
+  const version = /v?(\d+)\.(\d+)/.exec(goreleaser);
+  if (
+    version === null ||
+    Number(version[1]) < 2 ||
+    (Number(version[1]) === 2 && Number(version[2]) < 10)
+  ) {
+    throw new Error('release preflight: GoReleaser v2.10 or later is required');
   }
   if (dockerInfo(cwd) === false) {
     throw new Error('release preflight: Docker daemon is unavailable');
@@ -109,16 +147,7 @@ export function runReleasePreflight({
     images: [LINUX_BUILDER_IMAGE, LINUX_ARM64_VERIFIER_IMAGE],
   });
   mkdirSync(dirname(evidencePath), { recursive: true });
-  try {
-    const existing = JSON.parse(readFileSync(evidencePath, 'utf8'));
-    if (existing.tag !== evidence.tag || existing.commit !== evidence.commit) {
-      throw new Error('release preflight evidence already belongs to a different tag or commit');
-    }
-    return Object.freeze(existing);
-  } catch (error) {
-    if (error?.code !== 'ENOENT') throw error;
-  }
-  writeFileSync(evidencePath, `${JSON.stringify(evidence, null, 2)}\n`, { flag: 'wx' });
+  writeFileSync(evidencePath, `${JSON.stringify(evidence, null, 2)}\n`);
   return evidence;
 }
 
@@ -127,9 +156,9 @@ export function verifyReleaseProvenance({
   cwd = rootDir,
   git: gitCommand = git,
   evidence,
-  evidencePath = join(cwd, 'desktop', 'dist', 'release-preflight.json'),
+  evidencePath = evidencePathFor(cwd, gitCommand),
 } = {}) {
-  const expected = evidence ?? JSON.parse(readFileSync(evidencePath, 'utf8'));
+  const expected = validateEvidence(evidence ?? JSON.parse(readFileSync(evidencePath, 'utf8')));
   let actual;
   try {
     actual = capture({ cwd, gitCommand });

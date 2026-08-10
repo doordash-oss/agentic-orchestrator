@@ -65,11 +65,18 @@ describe('release preflight', () => {
     expect(() => verifyReleaseProvenance({ ...options, evidence })).toThrow(/working tree changed/);
   });
 
-  it('does not overwrite evidence from a different release invocation', () => {
+  it('overwrites prior evidence for a new release invocation', () => {
     const options = fixture();
     runReleasePreflight(options);
     options.state.head = 'b'.repeat(40);
-    expect(() => runReleasePreflight(options)).toThrow(/preflight evidence already belongs/);
+    expect(runReleasePreflight(options)).toMatchObject({ commit: 'b'.repeat(40) });
     expect(existsSync(options.evidencePath)).toBe(true);
+  });
+
+  it('rejects forged incomplete evidence before comparing provenance', () => {
+    const options = fixture();
+    expect(() => verifyReleaseProvenance({ ...options, evidence: { tag: 'v0.150.0' } })).toThrow(
+      /unsupported schema/,
+    );
   });
 });

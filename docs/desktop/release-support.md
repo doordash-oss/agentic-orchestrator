@@ -35,6 +35,9 @@ for packaging and
 to verify the arm64 package. Image pulls and the checksum-pinned Go toolchain
 downloads are network dependencies; a daemon, authentication, or download
 failure stops before publication.
+The preflight loads and validates that local signing key before any build;
+GoReleaser subsequently consumes the same validated operator key to sign
+`checksums.txt`.
 
 `make release` is deliberately ordered so every desktop artifact is built and
 validated before GoReleaser can create a GitHub release. The optional

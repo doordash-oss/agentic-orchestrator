@@ -97,6 +97,24 @@ export function auditGoReleaserReleaseTarget(configText) {
 export function auditReleaseMakefile(makefileText) {
   const failures = [];
   const recipe = makeRecipeCommands(makefileText, 'release');
+  const completeRecipe = [
+    'node desktop/scripts/release-preflight.mjs',
+    'node desktop/scripts/verify-release-publication.mjs preflight --tag "$(RELEASE_TAG)" --commit "$(RELEASE_COMMIT)"',
+    'npm ci',
+    'npm run package:verify --workspace desktop',
+    'npm run package:linux:release --workspace desktop',
+    'npm run release:artifacts:verify --workspace desktop -- packages',
+    'node desktop/scripts/release-preflight.mjs verify',
+    'node desktop/scripts/release-goreleaser.mjs',
+    'npm run release:artifacts:verify --workspace desktop -- manifest',
+    'node desktop/scripts/verify-release-publication.mjs verify --tag "$(RELEASE_TAG)" --commit "$(RELEASE_COMMIT)"',
+    'node desktop/scripts/publish-desktop-cask.mjs',
+  ];
+  if (JSON.stringify(recipe) !== JSON.stringify(completeRecipe)) {
+    failures.push(
+      'Makefile release recipe must contain only the complete audited release command structure',
+    );
+  }
   const localPreflight = 'node desktop/scripts/release-preflight.mjs';
   const provenanceRecheck = 'node desktop/scripts/release-preflight.mjs verify';
   const nativeInstall = 'npm ci';

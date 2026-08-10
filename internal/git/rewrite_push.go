@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"strings"
 )
@@ -100,7 +101,7 @@ func pushRewrittenBranch(worktreePath, branch string, beforePush func()) error {
 		return Push(worktreePath, branch)
 	}
 
-	remoteOnlyOutput, err := rewritePushGitOutput(worktreePath, "enumerating remote-only commits",
+	remoteOnlyOutput, err := rewritePushProofOutput(worktreePath, "enumerating remote-only commits",
 		"rev-list", inspectionRef, "^HEAD")
 	if err != nil {
 		return err
@@ -153,7 +154,7 @@ func newRewriteInspectionRef() (string, error) {
 }
 
 func proveRemoteOnlyMergeIsRedundant(worktreePath, commitSHA string) error {
-	parentsOutput, err := rewritePushGitOutput(worktreePath, "reading remote-only commit parents",
+	parentsOutput, err := rewritePushProofOutput(worktreePath, "reading remote-only commit parents",
 		"rev-list", "--parents", "-n", "1", commitSHA)
 	if err != nil {
 		return err
@@ -173,7 +174,7 @@ func proveRemoteOnlyMergeIsRedundant(worktreePath, commitSHA string) error {
 		}
 	}
 
-	remergeDiff, err := rewritePushGitOutput(worktreePath, "checking remote-only merge resolution",
+	remergeDiff, err := rewritePushProofOutput(worktreePath, "checking remote-only merge resolution",
 		"show", "--remerge-diff", "--format=", "--no-ext-diff", commitSHA)
 	if err != nil {
 		return err
@@ -185,7 +186,7 @@ func proveRemoteOnlyMergeIsRedundant(worktreePath, commitSHA string) error {
 }
 
 func rewritePushIsAncestor(worktreePath, ancestor, descendant string) (bool, error) {
-	cmd := exec.Command("git", "-C", worktreePath, "merge-base", "--is-ancestor", ancestor, descendant)
+	cmd := rewritePushProofCommand(worktreePath, "merge-base", "--is-ancestor", ancestor, descendant)
 	err := cmd.Run()
 	if err == nil {
 		return true, nil
@@ -195,6 +196,28 @@ func rewritePushIsAncestor(worktreePath, ancestor, descendant string) (bool, err
 		return false, nil
 	}
 	return false, fmt.Errorf("git merge-base --is-ancestor: %w", err)
+}
+
+func rewritePushProofOutput(worktreePath, operation string, args ...string) ([]byte, error) {
+	cmd := rewritePushProofCommand(worktreePath, args...)
+	cmd.Stderr = io.Discard
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", operation, err)
+	}
+	return out, nil
+}
+
+// rewritePushProofCommand reads the repository's real object graph. Both
+// replace refs and the legacy graft file are local, untrusted overlays that
+// could otherwise make ordinary remote work appear to be a redundant merge.
+func rewritePushProofCommand(worktreePath string, args ...string) *exec.Cmd {
+	cmd := exec.Command("git", append([]string{"--no-replace-objects", "-C", worktreePath}, args...)...)
+	cmd.Env = append(cmd.Environ(),
+		"GIT_NO_REPLACE_OBJECTS=1",
+		"GIT_GRAFT_FILE="+os.DevNull,
+	)
+	return cmd
 }
 
 func rewritePushRemoteSHA(worktreePath, remoteRef string) (string, error) {

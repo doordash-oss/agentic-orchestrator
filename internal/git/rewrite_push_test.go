@@ -16,7 +16,9 @@ package git
 
 import (
 	"errors"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -82,6 +84,59 @@ func TestPushRewrittenBranch_RejectsRemoteMoveAfterInspection(t *testing.T) {
 	}
 }
 
+func TestPushRewrittenBranch_RejectsOrdinaryRemoteCommitHiddenByReplaceRef(t *testing.T) {
+	fixture := ordinaryRemoteMasqueradeFixture(t, "feature/replace-ref")
+	runRewriteGit(t, fixture.repo, "replace", "--graft", fixture.remoteSHA, fixture.featureA, fixture.master2)
+
+	replacedParents := strings.Fields(runRewriteGit(t, fixture.repo, "rev-list", "--parents", "-n", "1", fixture.remoteSHA))
+	if len(replacedParents) != 3 {
+		t.Fatalf("replaced remote commit fields = %v; want commit plus two fake parents", replacedParents)
+	}
+	actualParents := strings.Fields(runRewriteGit(t, fixture.repo, "--no-replace-objects", "rev-list", "--parents", "-n", "1", fixture.remoteSHA))
+	if len(actualParents) != 2 {
+		t.Fatalf("actual remote commit fields = %v; want commit plus one real parent", actualParents)
+	}
+	if got := runRewriteGit(t, fixture.repo, "show", "--remerge-diff", "--format=", "--no-ext-diff", fixture.remoteSHA); got != "" {
+		t.Fatalf("replacement merge remerge diff = %q; want empty exploit proof", got)
+	}
+
+	err := PushRewrittenBranch(fixture.repo, fixture.branch)
+	assertRewritePushError(t, err, RewritePushRemoteDiverged, fixture.branch, 1)
+	if got := remoteBranchSHA(t, fixture.bare, fixture.branch); got != fixture.remoteSHA {
+		t.Fatalf("remote tip = %s; want ordinary remote commit %s preserved", got, fixture.remoteSHA)
+	}
+	if got := runRewriteGit(t, fixture.bare, "show", "refs/heads/"+fixture.branch+":master-2.txt"); got != fixture.remoteContent {
+		t.Fatalf("remote content = %q; want %q preserved", got, fixture.remoteContent)
+	}
+}
+
+func TestPushRewrittenBranch_RejectsOrdinaryRemoteCommitHiddenByGraft(t *testing.T) {
+	fixture := ordinaryRemoteMasqueradeFixture(t, "feature/graft")
+	runRewriteGit(t, fixture.repo, "config", "advice.graftFileDeprecated", "false")
+	graftPath := runRewriteGit(t, fixture.repo, "rev-parse", "--git-path", "info/grafts")
+	if !filepath.IsAbs(graftPath) {
+		graftPath = filepath.Join(fixture.repo, graftPath)
+	}
+	graft := fixture.remoteSHA + " " + fixture.featureA + " " + fixture.master2 + "\n"
+	if err := os.WriteFile(graftPath, []byte(graft), 0o600); err != nil {
+		t.Fatalf("writing local graft file: %v", err)
+	}
+
+	graftedParents := strings.Fields(runRewriteGit(t, fixture.repo, "rev-list", "--parents", "-n", "1", fixture.remoteSHA))
+	if len(graftedParents) != 3 {
+		t.Fatalf("grafted remote commit fields = %v; want commit plus two fake parents", graftedParents)
+	}
+
+	err := PushRewrittenBranch(fixture.repo, fixture.branch)
+	assertRewritePushError(t, err, RewritePushRemoteDiverged, fixture.branch, 1)
+	if got := remoteBranchSHA(t, fixture.bare, fixture.branch); got != fixture.remoteSHA {
+		t.Fatalf("remote tip = %s; want ordinary remote commit %s preserved", got, fixture.remoteSHA)
+	}
+	if got := runRewriteGit(t, fixture.bare, "show", "refs/heads/"+fixture.branch+":master-2.txt"); got != fixture.remoteContent {
+		t.Fatalf("remote content = %q; want %q preserved", got, fixture.remoteContent)
+	}
+}
+
 func TestRewritePushError_HidesWrappedCommandDetail(t *testing.T) {
 	cause := errors.New("raw command output")
 	pushErr := &RewritePushError{
@@ -96,6 +151,54 @@ func TestRewritePushError_HidesWrappedCommandDetail(t *testing.T) {
 	}
 	if !errors.Is(pushErr, cause) {
 		t.Fatal("errors.Is(RewritePushError, cause) = false; want wrapped detail retained through Unwrap")
+	}
+}
+
+type ordinaryRemoteMasquerade struct {
+	repo          string
+	bare          string
+	branch        string
+	featureA      string
+	master2       string
+	remoteSHA     string
+	remoteContent string
+}
+
+func ordinaryRemoteMasqueradeFixture(t *testing.T, branch string) ordinaryRemoteMasquerade {
+	t.Helper()
+
+	repo, bare := testutil.InitPublishReadyGitRepo(t)
+	testutil.CreateBranch(t, repo, branch)
+	featureA := testutil.CommitFile(t, repo, "feature.txt", "feature A\n", "feature A")
+
+	runRewriteGit(t, repo, "checkout", "main")
+	testutil.CommitFile(t, repo, "master-1.txt", "master 1\n", "master 1")
+	master2 := testutil.CommitFile(t, repo, "master-2.txt", "master 2\n", "master 2")
+
+	// The remote tip is an ordinary one-parent commit whose tree happens to
+	// match the clean merge of featureA and master2.
+	runRewriteGit(t, repo, "checkout", branch)
+	runRewriteGit(t, repo, "checkout", master2, "--", "master-1.txt", "master-2.txt")
+	runRewriteGit(t, repo, "commit", "-m", "ordinary remote commit")
+	remoteSHA := localHeadSHA(t, repo)
+	testutil.SimulatePush(t, repo, bare, branch, branch)
+	remoteContent := runRewriteGit(t, bare, "show", "refs/heads/"+branch+":master-2.txt")
+
+	// Local rewritten history contains both would-be fake parents, then changes
+	// the remote file. Honoring a local replacement or graft would misclassify
+	// the ordinary remote commit as a redundant merge.
+	runRewriteGit(t, repo, "reset", "--hard", featureA)
+	runRewriteGit(t, repo, "merge", "--no-ff", master2, "-m", "rewritten local merge")
+	testutil.CommitFile(t, repo, "master-2.txt", "local rewritten\n", "local rewritten head")
+
+	return ordinaryRemoteMasquerade{
+		repo:          repo,
+		bare:          bare,
+		branch:        branch,
+		featureA:      featureA,
+		master2:       master2,
+		remoteSHA:     remoteSHA,
+		remoteContent: remoteContent,
 	}
 }
 

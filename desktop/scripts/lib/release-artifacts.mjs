@@ -312,7 +312,12 @@ export function selectPackageArtifact(files, target, format) {
 }
 
 /** Create the ordered Docker invocations for Linux x64 and arm64 packaging. */
-export function createLinuxDockerPlan({ repoRoot, gitCommonDir, volumePrefix }) {
+export function createLinuxDockerPlan({
+  repoRoot,
+  gitCommonDir,
+  gitEntry = resolve(repoRoot, '.git'),
+  volumePrefix,
+}) {
   const sourceMount = '/agentico-release-source';
   const mounts = [
     '-v',
@@ -334,6 +339,7 @@ export function createLinuxDockerPlan({ repoRoot, gitCommonDir, volumePrefix }) 
     '--workdir',
     '/',
   ];
+  if (gitEntry !== gitCommonDir) mounts.splice(4, 0, '-v', `${gitEntry}:${repoRoot}/.git:ro`);
   return Object.freeze(
     ['x64', 'arm64'].map((arch) => {
       const builderCommand = [
@@ -393,7 +399,7 @@ function copySourceCommand(sourceMount, repoRoot) {
   return [
     `mkdir -p ${parent}`,
     `mkdir -p ${destination}`,
-    `tar -C ${source} --exclude=node_modules --exclude=desktop/dist --exclude=desktop/out --exclude=desktop/resources -cf - . | tar -C ${parent} -xf -`,
+    `tar -C ${source} --exclude=.git --exclude=node_modules --exclude=desktop/dist --exclude=desktop/out --exclude=desktop/resources -cf - . | tar -C ${parent} -xf -`,
     `cd ${destination}`,
   ];
 }

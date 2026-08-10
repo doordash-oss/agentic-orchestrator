@@ -26,7 +26,7 @@ Before running it, make sure the local machine has:
 The first command in `make release` enforces these requirements before any
 package is built: it requires an exact clean `vX.Y.Z` tag at HEAD (including
 untracked source files), captures the full commit/tag evidence under ignored
-`desktop/dist/`, checks the token and the local Ed25519 private key against
+per-worktree Git metadata (`git rev-parse --git-path`), checks the token and the local Ed25519 private key against
 the updater's embedded public key, verifies Docker, and inspects or pulls only
 the two digest-pinned images. It uses
 `electronuserland/builder:22@sha256:b76a82a6c6a8a1dea1abbc93e394f54316744824b64e6a50d959f1e3ba8951a9`

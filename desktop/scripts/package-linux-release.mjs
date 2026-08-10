@@ -139,6 +139,7 @@ function localPlanOptions(cwd, gitCommand = git) {
   const repoRoot = gitCommand(cwd, 'rev-parse', '--show-toplevel');
   return {
     repoRoot,
+    gitEntry: resolve(repoRoot, '.git'),
     gitCommonDir: resolve(repoRoot, gitCommand(repoRoot, 'rev-parse', '--git-common-dir')),
     volumePrefix: VOLUME_PREFIX,
   };
@@ -152,11 +153,12 @@ export function runLocalLinuxRelease({
   execute,
   verifyProvenance = () => {},
 } = {}) {
-  const { repoRoot, gitCommonDir, volumePrefix } = localPlanOptions(cwd, gitCommand);
+  const { repoRoot, gitEntry, gitCommonDir, volumePrefix } = localPlanOptions(cwd, gitCommand);
   const stats = statfs(repoRoot);
   return runLinuxRelease({
     repoRoot,
     gitCommonDir,
+    gitEntry,
     volumePrefix,
     exactTag: gitCommand(repoRoot, 'describe', '--tags', '--exact-match'),
     gitStatus: gitCommand(repoRoot, 'status', '--porcelain'),

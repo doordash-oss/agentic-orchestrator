@@ -187,4 +187,15 @@ describe('createLinuxDockerPlan', () => {
       ),
     ).toBe(true);
   });
+
+  it('mounts a linked-worktree .git entry separately while copying no Git metadata', () => {
+    const plan = createLinuxDockerPlan({
+      repoRoot: '/repo/worktree',
+      gitEntry: '/repo/worktrees/linux/.git',
+      gitCommonDir: '/repo/.git',
+      volumePrefix: 'agentico-release',
+    });
+    expect(plan[0].args).toContain('/repo/worktrees/linux/.git:/repo/worktree/.git:ro');
+    expect(plan[0].args.at(-1)).toContain('--exclude=.git');
+  });
 });

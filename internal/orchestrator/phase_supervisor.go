@@ -16,6 +16,7 @@ package orchestrator
 
 import (
 	"fmt"
+	"path/filepath"
 	"sync"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
@@ -106,17 +107,32 @@ func (s *phaseSupervisor) runSingleShotSession(featureID, sessionID string, phas
 	}
 
 	detail := singleShotErrorDetail(phase, sess)
+	failureType := ""
 	if result.Err != nil {
 		detail = result.Err.Error()
 	} else if len(result.ProtocolViolations) > 0 {
-		detail = formatSingleShotProtocolViolationError("", "", result.ProtocolViolations)
+		artifactDir := ""
+		if logPath := sess.LogFilePath(); logPath != "" {
+			artifactDir = filepath.Dir(logPath)
+		}
+		detail = formatSingleShotProtocolViolationError(singleShotPhaseRole(phase), artifactDir, result.ProtocolViolations)
+		failureType = feature.FailureProtocolViolation
 	}
 	s.complete(featureID, PhaseCompletionInput{
 		Phase:       phase,
 		SessionID:   sessionID,
 		Success:     false,
 		ErrorDetail: detail,
+		FailureType: failureType,
 	})
+}
+
+func singleShotPhaseRole(phase feature.Phase) agent.Role {
+	if phase == feature.PhaseKnowledgeBase {
+		return agent.RoleKnowledgeBaseBuilder
+	}
+	role, _ := artifactPhaseRole(phase)
+	return role
 }
 
 func (s *phaseSupervisor) claimSingleShotSession(sessionID string) bool {

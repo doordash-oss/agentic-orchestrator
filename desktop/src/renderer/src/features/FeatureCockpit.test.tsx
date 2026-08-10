@@ -1197,6 +1197,58 @@ describe('FeatureCockpit convergence', () => {
     await waitFor(() => expect(mock.api.getFeature.mock.calls.length).toBe(base + 2));
   });
 
+  it('refreshes pending delivery when a rebase relationship settles', async () => {
+    const published = featureSnapshot({
+      status: 'Published',
+      actions: [
+        { id: 'rebase', enabled: true, disabledReasons: [] },
+        { id: 'cleanup', enabled: true, disabledReasons: [] },
+      ],
+    });
+    const mock = installAgenticoMock({ feature: published });
+    mock.api.preflightCompletion
+      .mockResolvedValueOnce({
+        featureId: FEATURE_ID,
+        sourceRevision: 'before-rebase',
+        canMarkDone: true,
+        repos: [{ repo: 'repo-a', publishable: true, touched: true, status: 'completed' }],
+      })
+      .mockResolvedValue({
+        featureId: FEATURE_ID,
+        sourceRevision: 'after-rebase',
+        canMarkDone: true,
+        repos: [
+          {
+            repo: 'repo-a',
+            publishable: true,
+            touched: true,
+            status: 'unpublished_changes',
+            pendingCommits: 1,
+            pushMode: 'rewrite',
+          },
+        ],
+      });
+    renderCockpit(mock);
+
+    const aftercare = await screen.findByRole('region', { name: 'Feature aftercare' });
+    await waitFor(() => expect(mock.api.preflightCompletion).toHaveBeenCalledTimes(1));
+    expect(within(aftercare).queryByRole('button', { name: /Publish new commits/ })).toBeNull();
+
+    mock.emitAppEvent({
+      type: 'invalidated',
+      kind: 'lifecycle.updated',
+      resourceType: 'relationship',
+      resourceId: `${FEATURE_ID}:rebase1234ef567890`,
+      parentId: FEATURE_ID,
+      childId: 'rebase1234ef567890',
+    });
+
+    expect(
+      await within(aftercare).findByRole('button', { name: /Publish new commits/ }),
+    ).toHaveTextContent('Publish updates');
+    expect(mock.api.preflightCompletion).toHaveBeenCalledTimes(2);
+  });
+
   it('delays and coalesces invalidations while inactive, then flushes on activation', async () => {
     const mock = installAgenticoMock();
     const view = renderCockpit(mock, false);

@@ -4,12 +4,14 @@
  * aftercare. A second branch covers the up-to-date case where the server
  * returns `rebase_already_up_to_date` and the cockpit stays in aftercare.
  *
- * The behind case seeds a Published feature whose repo is genuinely behind its
- * target by advancing the local `main` branch after feature creation (the same
- * seeding strategy the local-merge fixture uses). The rebase-provider stub
- * resolves the merge during the child's implement phase and approves the
- * review, so the full child lifecycle runs against the real bundled server
- * without network or real provider CLIs.
+ * The behind case seeds a Published feature whose publishable repo is genuinely
+ * behind its target by advancing `origin/main` after feature creation. Its
+ * existing pull-request branch stays at the pre-rebase parent tip, so child
+ * completion must refresh the aftercare preflight and reveal Publish updates
+ * without closing the tab. The rebase-provider stub resolves the merge during
+ * the child's implement phase and approves the review, so the full child
+ * lifecycle runs against the real bundled server without network or real
+ * provider CLIs.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -17,6 +19,7 @@ import { expect, test, type TestInfo } from '@playwright/test';
 import { closeApp, createFeatureViaForm, launchApp, type AppHandle } from '../helpers/app';
 import { Transcript } from '../helpers/transcript';
 import {
+  addBareRemote,
   createRepo,
   createWorld,
   destroyWorld,
@@ -27,7 +30,9 @@ import {
 } from '../helpers/world';
 import { setFeatureStatus } from '../helpers/seed';
 import {
+  activeRunYamlPath,
   featureYamlPath,
+  parseFeatureRepos,
   parseFeatureRepoSources,
   replaceTopLevelBlock,
   setRepoBaseBranch,
@@ -35,33 +40,52 @@ import {
 } from '../helpers/completionFixture';
 
 /**
- * Advances the local `main` branch on the source repo so the feature branch
- * is behind its target. Also sets `base_branch: main` and `publishable: false`
- * in the feature manifest so the server's rebase preflight resolves the target
- * to `main` and uses `IsBehindLocal` (not `IsBehindRemote`).
+ * Publishes the current feature tip as the existing pull-request branch, then
+ * advances `origin/main` so the feature branch is behind its remote target.
+ * Manual publish keeps the post-rebase parent work local until the user chooses
+ * Publish updates, and the seeded PR URL makes the preflight classify it as a
+ * rewrite of an existing pull request rather than a first publication.
  */
 function seedBehindFeature(world: ReturnType<typeof createWorld>, featureId: string): void {
   const featurePath = featureYamlPath(world, featureId);
   let featureYaml = fs.readFileSync(featurePath, 'utf8');
   const sources = parseFeatureRepoSources(featureYaml);
+  const worktrees = parseFeatureRepos(featureYaml);
   const alphaRepo = sources['alpha'];
+  const alphaWorktree = worktrees['alpha'];
   if (alphaRepo === undefined) {
     throw new Error('feature.yaml missing repo alpha');
   }
-  featureYaml = setRepoPublishable(featureYaml, 'alpha', false);
+  if (alphaWorktree === undefined) {
+    throw new Error('feature.yaml missing worktree alpha');
+  }
+  featureYaml = setRepoPublishable(featureYaml, 'alpha', true);
   featureYaml = setRepoBaseBranch(featureYaml, 'alpha', 'main');
   featureYaml = replaceTopLevelBlock(featureYaml, 'checkpoints', [
     'checkpoints:',
     '    inquiry_review: false',
     '    roadmap_review: false',
     '    phase_plan_review: false',
+    '    manual_publish: true',
   ]);
   fs.writeFileSync(featurePath, featureYaml);
+
+  let runYaml = fs.readFileSync(activeRunYamlPath(world, featureId), 'utf8');
+  runYaml = replaceTopLevelBlock(runYaml, 'repo_states', [
+    'repo_states:',
+    '    alpha:',
+    '        touched: true',
+    '        pr_url: https://github.example/agentico/alpha/pull/1',
+  ]);
+  fs.writeFileSync(activeRunYamlPath(world, featureId), runYaml);
+
+  git(alphaWorktree, 'push', '-u', 'origin', 'HEAD');
 
   git(alphaRepo, 'checkout', 'main');
   fs.writeFileSync(path.join(alphaRepo, 'README.md'), '# alpha\nRemote advance for rebase\n');
   git(alphaRepo, 'add', '.');
   git(alphaRepo, 'commit', '-m', 'Remote advance for rebase pass journey');
+  git(alphaRepo, 'push', 'origin', 'main');
   git(alphaRepo, 'checkout', '-');
 }
 
@@ -73,7 +97,9 @@ test('rebase pass: behind feature → card click → pass workspace → completi
     presetWorkspaceRoot: true,
     rebaseProvider: true,
   });
-  createRepo(world, 'alpha', { commit: true });
+  const alphaRepo = createRepo(world, 'alpha', { commit: true });
+  addBareRemote(world, alphaRepo);
+  git(alphaRepo, 'push', '-u', 'origin', 'main');
   transcript.section('World');
   transcript.step(`isolated world at \`${world.root}\``);
   transcript.step('committed repository: alpha');
@@ -173,8 +199,12 @@ test('rebase pass: behind feature → card click → pass workspace → completi
     expect(finalSnapshot.activeChild).toBeUndefined();
     const hasRebase = (finalSnapshot.childHistory ?? []).some((child) => child.kind === 'rebase');
     expect(hasRebase, 'rebase pass should appear in child history after completion').toBe(true);
+    await expect(aftercare).toBeVisible({ timeout: 30_000 });
+    const publishUpdates = aftercare.getByRole('button', { name: /Publish new commits/ });
+    await expect(publishUpdates).toBeVisible({ timeout: 30_000 });
+    await expect(publishUpdates).toContainText('Publish updates');
     transcript.step(
-      'rebase child completed; parent returned to aftercare with rebase pass in history',
+      'rebase child completed; parent returned to aftercare with Publish updates and pass history',
     );
     transcript.json('final feature status', finalSnapshot.status);
   } finally {

@@ -952,6 +952,7 @@ export function FeatureCockpit({
   const actionInFlightRef = useRef(false);
   const loadRequestRef = useRef(0);
   const schedulerRef = useRef<FeatureRefreshScheduler | null>(null);
+  const completionRefreshRef = useRef<(() => Promise<void>) | null>(null);
   const completionSettleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const selectedRunNumberRef = useRef(selectedRunNumber);
   selectedRunNumberRef.current = selectedRunNumber;
@@ -1016,7 +1017,7 @@ export function FeatureCockpit({
         setRefreshFailed(false);
         setState({ phase: 'loading' });
       }
-      return window.agentico
+      const featureRefresh = window.agentico
         .getFeature(featureId)
         .then((snapshot) => {
           if (request !== loadRequestRef.current) return;
@@ -1036,6 +1037,8 @@ export function FeatureCockpit({
             setState({ phase: 'error', error: parsed });
           }
         });
+      const completionRefresh = completionRefreshRef.current?.() ?? Promise.resolve();
+      return Promise.all([featureRefresh, completionRefresh]).then(() => undefined);
     },
     [featureId],
   );
@@ -1086,6 +1089,7 @@ export function FeatureCockpit({
     [],
   );
   const completion = useCompletionPreflight(featureId, completionEnabled, preflightCompletion);
+  completionRefreshRef.current = completionEnabled ? completion.refresh : null;
   const pendingDelivery = useMemo(
     () => pendingDeliverySummary(completion.preflight),
     [completion.preflight],
@@ -1100,9 +1104,8 @@ export function FeatureCockpit({
     [],
   );
   const onCompletionDispatched = useCallback(() => {
-    void completion.refresh();
     void refreshFeature({ silent: true });
-  }, [completion, refreshFeature]);
+  }, [refreshFeature]);
 
   const onPassChanged = useCallback(() => {
     void refreshFeature({ silent: true });

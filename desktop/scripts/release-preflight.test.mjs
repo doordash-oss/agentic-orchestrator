@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { runReleasePreflight, verifyReleaseProvenance } from './release-preflight.mjs';
 
@@ -38,6 +40,21 @@ function fixture(overrides = {}) {
 }
 
 describe('release preflight', () => {
+  it('runs its CLI through a symlinked script path', () => {
+    const root = mkdtempSync(join(tmpdir(), 'agentico-release-preflight-cli-'));
+    roots.push(root);
+    const script = fileURLToPath(new URL('./release-preflight.mjs', import.meta.url));
+    const aliasedScript = join(root, 'release-preflight.mjs');
+    symlinkSync(script, aliasedScript);
+
+    const result = spawnSync(process.execPath, [aliasedScript, 'unexpected'], {
+      encoding: 'utf8',
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('usage: release-preflight.mjs [verify]');
+  });
+
   it('rejects a non-macOS host before contacting Docker', () => {
     const options = fixture({ platform: 'linux' });
     expect(() => runReleasePreflight(options)).toThrow(/must run on macOS/);

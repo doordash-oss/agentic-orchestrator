@@ -1,7 +1,7 @@
 // Run the fixed GoReleaser publication command with an optional release-notes file.
 import { execFileSync } from 'node:child_process';
 import { statSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
+import { isMainModule } from './lib/main-entry.mjs';
 
 export function goreleaserArguments(notesFile) {
   const args = ['release', '--clean'];
@@ -40,4 +40,4 @@ function main() {
   }
 }
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) main();
+if (isMainModule(import.meta.url)) main();

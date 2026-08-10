@@ -16,6 +16,7 @@ import {
   privateKeyFromMaterial,
   publicKeyPem,
 } from './lib/release-signing.mjs';
+import { isMainModule } from './lib/main-entry.mjs';
 
 const desktopDir = dirname(dirname(fileURLToPath(import.meta.url)));
 const rootDir = dirname(desktopDir);
@@ -193,4 +194,4 @@ function main() {
   }
 }
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) main();
+if (isMainModule(import.meta.url)) main();

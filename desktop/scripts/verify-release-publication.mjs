@@ -1,5 +1,5 @@
 // Verify the remote GitHub publication before the desktop cask is allowed to ship.
-import { fileURLToPath } from 'node:url';
+import { isMainModule } from './lib/main-entry.mjs';
 
 const REPOSITORY = 'doordash-oss/agentic-orchestrator';
 const API_ROOT = 'https://api.github.com';
@@ -233,4 +233,4 @@ async function main() {
   console.log(result.message);
 }
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) void main();
+if (isMainModule(import.meta.url)) void main();

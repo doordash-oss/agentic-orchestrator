@@ -3,6 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isMainModule } from './lib/main-entry.mjs';
 
 import { LINUX_ARM64_VERIFIER_IMAGE, LINUX_BUILDER_IMAGE } from './lib/release-artifacts.mjs';
 
@@ -65,4 +66,4 @@ function main() {
   console.log('release verification passed');
 }
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) main();
+if (isMainModule(import.meta.url)) main();

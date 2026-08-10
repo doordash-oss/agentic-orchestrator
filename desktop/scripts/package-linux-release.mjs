@@ -2,7 +2,6 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, rmSync, statSync, statfsSync } from 'node:fs';
 import { resolve, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 
 import {
   LINUX_ARM64_VERIFIER_IMAGE,
@@ -11,6 +10,7 @@ import {
   releaseVersionFromTag,
 } from './lib/release-artifacts.mjs';
 import { verifyReleaseProvenance } from './release-preflight.mjs';
+import { isMainModule } from './lib/main-entry.mjs';
 
 const MINIMUM_FREE_BYTES = 12 * 1024 ** 3;
 const VOLUME_PREFIX = 'agentico-release';
@@ -179,4 +179,4 @@ function main() {
   console.log(`Linux release packages verified for ${result.tag}: ${result.completed.join(', ')}`);
 }
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) main();
+if (isMainModule(import.meta.url)) main();

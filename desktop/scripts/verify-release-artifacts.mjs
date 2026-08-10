@@ -10,6 +10,7 @@ import {
   validateArtifactInventory,
   validateChecksumManifest,
 } from './lib/release-artifacts.mjs';
+import { isMainModule } from './lib/main-entry.mjs';
 
 const desktopDir = dirname(dirname(fileURLToPath(import.meta.url)));
 const repoRoot = dirname(desktopDir);
@@ -225,4 +226,4 @@ function main() {
   console.log(result.message);
 }
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) main();
+if (isMainModule(import.meta.url)) main();

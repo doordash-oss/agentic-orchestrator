@@ -148,12 +148,11 @@ test('packaged publish partial retry: push succeeds, PR creation fails, retry sc
     const publishButton = publishModal.getByRole('button', { name: 'Publish', exact: true });
     await expect(publishButton).toBeEnabled();
     await publishButton.click();
-    await expect(publishModal.getByRole('alert')).toContainText(
-      "Agentico couldn't prepare this publish.",
-      {
-        timeout: 60_000,
-      },
-    );
+    const publishFailure = publishModal.locator('.completion-publish-sheet__failure');
+    await expect(publishFailure).toContainText("Agentico couldn't prepare this publish.", {
+      timeout: 60_000,
+    });
+    await expect(publishFailure).toContainText('Review the details, then refresh and retry.');
     assertPublishedBranch(seeded, 'publish-web');
     transcript.step(
       'publish action completed with partial outcome (push succeeded, PR creation failed)',

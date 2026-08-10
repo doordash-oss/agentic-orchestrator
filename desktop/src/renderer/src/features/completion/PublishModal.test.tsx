@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { useState } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import type { CompletionPreflightResult, FeatureActionResult } from '../../../../shared/ipc';
 import { PublishModal } from './PublishModal';
@@ -414,8 +415,128 @@ describe('PublishModal', () => {
     const details = screen.getByText('Show details').closest('details');
     expect(details).not.toBeNull();
     expect(details).not.toHaveAttribute('open');
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'Review the details, then refresh and retry.',
+    );
     await user.click(screen.getByText('Show details'));
     expect(screen.getByText('safe diagnostic detail')).toBeVisible();
+  });
+
+  it('renders structured remediation for an unknown publish failure', async () => {
+    const user = userEvent.setup();
+    const failure = Object.assign(new Error('publish_partial_failure: one repository failed'), {
+      code: 'publish_partial_failure',
+      remediation: 'Resolve the repository failure, then retry the remaining work.',
+    });
+    render(
+      <PublishModal
+        {...props({
+          dispatchAction: vi.fn().mockRejectedValue(failure),
+          preflight: {
+            featureId,
+            sourceRevision: 'rev-1',
+            canMarkDone: true,
+            repos: [
+              { repo: 'api', publishable: true, touched: true, status: 'unpublished_changes' },
+            ],
+          },
+        })}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Publish updates' }));
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent(
+      'Resolve the repository failure, then retry the remaining work.',
+    );
+    expect(screen.getByText('Show details').closest('details')).not.toHaveAttribute('open');
+  });
+
+  it('refreshes partial progress before retrying only the repository that still failed', async () => {
+    const user = userEvent.setup();
+    const dispatchAction = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('publish_partial_failure: web push failed'))
+      .mockResolvedValueOnce(result);
+    const initial: CompletionPreflightResult = {
+      featureId,
+      sourceRevision: 'rev-1',
+      canMarkDone: true,
+      repos: [
+        { repo: 'api', publishable: true, touched: true, status: 'unpublished_changes' },
+        { repo: 'web', publishable: true, touched: true, status: 'unpublished_changes' },
+      ],
+    };
+    const refreshed: CompletionPreflightResult = {
+      ...initial,
+      repos: [
+        { repo: 'api', publishable: true, touched: true, status: 'already_published' },
+        { repo: 'web', publishable: true, touched: true, status: 'unpublished_changes' },
+      ],
+    };
+    function PartialPublishHarness() {
+      const [preflight, setPreflight] = useState(initial);
+      return (
+        <PublishModal
+          {...props({
+            dispatchAction,
+            preflight,
+            onDispatched: () => setPreflight(refreshed),
+          })}
+        />
+      );
+    }
+    render(<PartialPublishHarness />);
+
+    await user.click(screen.getByRole('button', { name: 'Publish updates' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      "Agentico couldn't prepare this publish.",
+    );
+    await user.click(screen.getByRole('button', { name: 'Publish updates' }));
+
+    expect(dispatchAction).toHaveBeenLastCalledWith({
+      featureId,
+      action: 'publish',
+      body: { source_revision: 'rev-1', repos: ['web'] },
+    });
+  });
+
+  it('preserves the publish failure when its best-effort refresh also fails', async () => {
+    const user = userEvent.setup();
+    let rejectRefresh: ((reason: Error) => void) | undefined;
+    const onDispatched = vi.fn(
+      () =>
+        new Promise<void>((_resolve, reject) => {
+          rejectRefresh = reject;
+        }),
+    );
+    render(
+      <PublishModal
+        {...props({
+          dispatchAction: vi.fn().mockRejectedValue(new Error('publish failed safely')),
+          onDispatched,
+          preflight: {
+            featureId,
+            sourceRevision: 'rev-1',
+            canMarkDone: true,
+            repos: [
+              { repo: 'api', publishable: true, touched: true, status: 'unpublished_changes' },
+            ],
+          },
+        })}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Publish updates' }));
+    expect(screen.getByRole('button', { name: 'Publishing…' })).toBeDisabled();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+
+    rejectRefresh?.(new Error('refresh unavailable'));
+    await waitFor(() =>
+      expect(screen.getByRole('alert')).toHaveTextContent('publish failed safely'),
+    );
+    expect(screen.getByRole('alert')).not.toHaveTextContent('refresh unavailable');
+    expect(screen.getByRole('button', { name: 'Publish updates' })).toBeEnabled();
   });
 
   it('announces success and retries only repositories still publishable after refresh', async () => {
@@ -523,6 +644,9 @@ describe('PublishModal', () => {
 
     await user.click(screen.getByRole('button', { name: 'Publish updates' }));
     expect(await screen.findByRole('status')).toHaveTextContent('may still be running');
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'Publish may still be running. Quit and reopen Agentico before publishing again.',
+    );
     expect(screen.getByRole('button', { name: 'Reconciling…' })).toBeDisabled();
   });
 

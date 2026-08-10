@@ -20,6 +20,9 @@ const PUBLISH_FAILURE_COPY: Record<string, { title: string; next: string }> = {
     next: 'Refresh the publish state and retry. Agentico did not overwrite the newer branch.',
   },
 };
+const PUBLISH_TIMEOUT_LOCKED_MESSAGE =
+  'Publish may still be running. Quit and reopen Agentico before publishing again.';
+const UNKNOWN_PUBLISH_FAILURE_NEXT = 'Review the details, then refresh and retry.';
 
 export interface PublishModalProps {
   featureId: string;
@@ -50,10 +53,13 @@ function PublishFailureNotice({
       <strong>{copy?.title ?? "Agentico couldn't prepare this publish."}</strong>
       {copy !== undefined ? <p>{copy.next}</p> : null}
       {copy === undefined ? (
-        <details>
-          <summary>Show details</summary>
-          <p>{result.message}</p>
-        </details>
+        <>
+          <p>{result.remediation ?? UNKNOWN_PUBLISH_FAILURE_NEXT}</p>
+          <details>
+            <summary>Show details</summary>
+            <p>{result.message}</p>
+          </details>
+        </>
       ) : null}
     </div>
   );
@@ -70,7 +76,7 @@ function PublishStatusNotice({
     if (!publishTimeoutLocked) return null;
     return (
       <div className="completion-publish-sheet__status" role="status">
-        A previous publish may still be running. Refresh the feature before publishing again.
+        {PUBLISH_TIMEOUT_LOCKED_MESSAGE}
       </div>
     );
   }
@@ -257,11 +263,15 @@ export function PublishModal({
         setPublishResult({
           ok: false,
           code: parsed.code,
-          message:
-            'Publish may still be running. Close this sheet and refresh the feature before publishing again.',
+          message: PUBLISH_TIMEOUT_LOCKED_MESSAGE,
           reconciling: true,
         });
       } else {
+        try {
+          await onDispatched();
+        } catch {
+          // Preserve the publish failure when the best-effort refresh also fails.
+        }
         setPublishResult({
           ok: false,
           code: parsed.code,

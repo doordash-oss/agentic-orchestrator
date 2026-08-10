@@ -2727,7 +2727,7 @@ describe('FeatureCockpit feature-command funnel', () => {
     });
     expect(
       await screen.findByText(
-        'A previous publish may still be running. Refresh the feature before publishing again.',
+        'Publish may still be running. Quit and reopen Agentico before publishing again.',
       ),
     ).toBeVisible();
     expect(screen.getByRole('button', { name: 'Reconciling…' })).toBeDisabled();

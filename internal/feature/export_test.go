@@ -14,7 +14,11 @@
 
 package feature
 
-import "fmt"
+import (
+	"fmt"
+
+	gitadapter "github.com/doordash-oss/agentic-orchestrator/internal/git"
+)
 
 // This file exposes a handful of unexported helpers to the external
 // feature_test package. It is compiled only during testing.
@@ -49,4 +53,12 @@ func (s *Store) SetSaveHook(h *StoreSaveHook) {
 // ResetSaveHook removes any test-only save interceptor.
 func (s *Store) ResetSaveHook() {
 	s.testSaveInterceptor = nil
+}
+
+// SwapFetchPRCommentsForTest replaces the GitHub comment resolver used by
+// draft-based review-feedback launch and returns a restore function.
+func SwapFetchPRCommentsForTest(fn func(repoPath, prURL string) ([]gitadapter.ReviewComment, error)) func() {
+	prior := fetchPRCommentsFunc
+	fetchPRCommentsFunc = fn
+	return func() { fetchPRCommentsFunc = prior }
 }

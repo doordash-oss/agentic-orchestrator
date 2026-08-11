@@ -442,6 +442,7 @@ type ReviewFeedbackComment struct {
 	Body      string `yaml:"body,omitempty" json:"body,omitempty"`
 	DiffHunk  string `yaml:"diff_hunk,omitempty" json:"diff_hunk,omitempty"`
 	InReplyTo int    `yaml:"in_reply_to_id,omitempty" json:"in_reply_to_id,omitempty"`
+	CreatedAt string `yaml:"created_at,omitempty" json:"created_at,omitempty"`
 }
 
 // ReviewFeedbackChildSpec carries the only launch-time choices supported by

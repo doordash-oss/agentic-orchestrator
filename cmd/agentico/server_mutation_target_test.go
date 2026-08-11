@@ -635,14 +635,10 @@ func TestServerMutationTargetReviewFeedbackFeaturePreservesPayloadAndGatePresenc
 			t.Parallel()
 			creator := &fakeReviewFeedbackChildCreator{child: &feature.Feature{ID: "child-review"}}
 			target := serverMutationTarget{reviewFeedbackCreator: creator}
-			comments := []feature.ReviewFeedbackComment{{
-				Repo: "api", ID: 17, Type: "review", Path: "handler.go", Line: 42,
-				Author: "alice", Body: "handle this", DiffHunk: "@@ -41 +41,2 @@", InReplyTo: 9,
-			}}
 
 			resp, err := target.ReviewFeedbackFeature("parent-1", serverruntime.ReviewFeedbackFeatureRequest{
-				Comments: comments,
-				Gate:     tt.gate,
+				ExpectedRevision: 9,
+				Gate:             tt.gate,
 			})
 			if err != nil {
 				t.Fatalf("ReviewFeedbackFeature() error = %v", err)
@@ -650,27 +646,39 @@ func TestServerMutationTargetReviewFeedbackFeaturePreservesPayloadAndGatePresenc
 			if resp.FeatureID != "child-review" || resp.ParentID != "parent-1" || resp.Result != resultCreated {
 				t.Fatalf("ReviewFeedbackFeature() = %+v; want created child reference", resp)
 			}
-			if creator.parentID != "parent-1" || !reflect.DeepEqual(creator.spec.Comments, comments) {
-				t.Fatalf("CreateReviewFeedbackChild args = parent:%q comments:%+v", creator.parentID, creator.spec.Comments)
+			if creator.parentID != "parent-1" || creator.expectedRevision != 9 {
+				t.Fatalf("launch args = parent:%q revision:%d", creator.parentID, creator.expectedRevision)
 			}
-			if creator.spec.GateEnabled != tt.gate {
-				t.Fatalf("gate pointer = %p; want %p", creator.spec.GateEnabled, tt.gate)
+			if creator.gate != tt.gate {
+				t.Fatalf("gate pointer = %p; want %p", creator.gate, tt.gate)
 			}
 		})
 	}
 }
 
 type fakeReviewFeedbackChildCreator struct {
-	parentID string
-	spec     feature.ReviewFeedbackChildSpec
-	child    *feature.Feature
-	err      error
+	parentID         string
+	spec             feature.ReviewFeedbackChildSpec
+	expectedRevision int64
+	gate             *bool
+	child            *feature.Feature
+	err              error
 }
 
 func (f *fakeReviewFeedbackChildCreator) CreateReviewFeedbackChild(parentID string, spec feature.ReviewFeedbackChildSpec) (*feature.Feature, error) {
 	f.parentID = parentID
 	f.spec = spec
 	return f.child, f.err
+}
+
+func (f *fakeReviewFeedbackChildCreator) LaunchReviewFeedbackChildFromDraft(parentID string, expectedRevision int64, gate *bool) (*feature.ReviewFeedbackLaunchResult, error) {
+	f.parentID = parentID
+	f.expectedRevision = expectedRevision
+	f.gate = gate
+	if f.err != nil {
+		return nil, f.err
+	}
+	return &feature.ReviewFeedbackLaunchResult{Child: f.child, Changed: 2, Omitted: 1, Deferred: 3}, nil
 }
 
 func TestServerMutationTargetSendHelpSendsUserMessageToAddressedActiveSession(t *testing.T) {

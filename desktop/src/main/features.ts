@@ -21,11 +21,13 @@ import {
   DiscardChildResponseSchema,
   DeleteFeatureResponseSchema,
   ReviewFeedbackFetchResponseSchema,
+  ReviewFeedbackSelectionResponseSchema,
   ReviewFeedbackFeatureResponseSchema,
   validateWithSchema,
   type ServerFeatureDetail,
   type ServerRelationshipChild,
   type ServerReviewFeedbackComment,
+  type ServerReviewFeedbackDraftComment,
   type ServerSetup,
 } from '../shared/api/parse';
 import {
@@ -38,6 +40,7 @@ import {
   DiscardRefactorChildRequestSchema,
   DeleteFeatureCascadeRequestSchema,
   FetchReviewFeedbackRequestSchema,
+  UpdateReviewFeedbackSelectionRequestSchema,
   LaunchReviewFeedbackChildRequestSchema,
   type CreateFeatureInput,
   type CreateFeatureResult,
@@ -61,9 +64,13 @@ import {
   type DeleteFeatureCascadeResult,
   type FetchReviewFeedbackRequest,
   type FetchReviewFeedbackResult,
+  type UpdateReviewFeedbackSelectionRequest,
+  type UpdateReviewFeedbackSelectionResult,
   type LaunchReviewFeedbackChildRequest,
   type LaunchReviewFeedbackChildResult,
   type ReviewFeedbackCommentView,
+  type ReviewFeedbackDraftCommentView,
+  type ReviewFeedbackRepoGroup,
   type SetupDispatchResult,
   type SetupTaskView,
 } from '../shared/ipc';
@@ -406,11 +413,34 @@ export class FeatureService {
     const response = validateWithSchema(body, ReviewFeedbackFetchResponseSchema);
     return {
       featureId: input.featureId,
-      repos: response.repos.map((group) => ({
-        repo: group.repo,
-        prUrl: group.pr_url,
-        comments: group.comments.map(toReviewFeedbackCommentView),
-      })),
+      revision: response.revision,
+      snapshotId: response.snapshot_id,
+      repos: response.repos.map(toReviewFeedbackRepoGroupView),
+    };
+  }
+
+  async updateReviewFeedbackSelection(
+    request: UpdateReviewFeedbackSelectionRequest,
+  ): Promise<UpdateReviewFeedbackSelectionResult> {
+    const input = validateWithSchema(request, UpdateReviewFeedbackSelectionRequestSchema);
+    const body = await this.api(
+      `/api/v1/features/${input.featureId}/actions/review-feedback/selection`,
+      {
+        method: 'POST',
+        body: {
+          expected_revision: input.expectedRevision,
+          updates: input.updates.map((update) => ({
+            stable_ref: update.stableRef,
+            selected: update.selected,
+          })),
+        },
+      },
+    );
+    const response = validateWithSchema(body, ReviewFeedbackSelectionResponseSchema);
+    return {
+      featureId: input.featureId,
+      revision: response.revision,
+      repos: response.repos.map(toReviewFeedbackRepoGroupView),
     };
   }
 
@@ -421,15 +451,18 @@ export class FeatureService {
     const body = await this.api(`/api/v1/features/${input.parentId}/actions/review-feedback`, {
       method: 'POST',
       body: {
-        comments: input.comments.map(toWireReviewFeedbackComment),
+        expected_revision: input.expectedRevision,
         ...(input.gate === undefined ? {} : { gate: input.gate }),
       },
     });
     const response = validateWithSchema(body, ReviewFeedbackFeatureResponseSchema);
     return {
-      childId: validateWithSchema(response.feature_id, FeatureIdSchema),
+      childId: validateWithSchema(response.child_id ?? response.feature_id, FeatureIdSchema),
       parentId: validateWithSchema(response.parent_id, FeatureIdSchema),
       result: response.result,
+      ...(response.changed === undefined ? {} : { changed: response.changed }),
+      ...(response.omitted === undefined ? {} : { omitted: response.omitted }),
+      ...(response.deferred === undefined ? {} : { deferred: response.deferred }),
     };
   }
 
@@ -517,21 +550,31 @@ function toReviewFeedbackCommentView(
     ...(comment.body === undefined ? {} : { body: redactText(comment.body) }),
     ...(comment.diff_hunk === undefined ? {} : { diffHunk: redactText(comment.diff_hunk) }),
     ...spreadDefined('inReplyToId', comment.in_reply_to_id),
+    ...spreadDefined('createdAt', comment.created_at),
   };
 }
 
-/** Maps a renderer-facing view comment (camelCase) to the wire format (snake_case) for server requests. */
-function toWireReviewFeedbackComment(comment: ReviewFeedbackCommentView) {
+/** Maps a pending-draft comment to its renderer-facing view, redacting free text. */
+function toReviewFeedbackDraftCommentView(
+  comment: ServerReviewFeedbackDraftComment,
+): ReviewFeedbackDraftCommentView {
   return {
-    repo: comment.repo,
-    id: comment.id,
-    type: comment.type,
-    ...(comment.path === undefined ? {} : { path: comment.path }),
-    ...(comment.line === undefined ? {} : { line: comment.line }),
-    ...(comment.author === undefined ? {} : { author: comment.author }),
-    ...(comment.body === undefined ? {} : { body: comment.body }),
-    ...(comment.diffHunk === undefined ? {} : { diff_hunk: comment.diffHunk }),
-    ...(comment.inReplyToId === undefined ? {} : { in_reply_to_id: comment.inReplyToId }),
+    stableRef: comment.stable_ref,
+    selected: comment.selected,
+    ...toReviewFeedbackCommentView(comment),
+  };
+}
+
+/** Maps a server repo group (snake_case) to the renderer-facing view (camelCase). */
+function toReviewFeedbackRepoGroupView(group: {
+  repo: string;
+  pr_url: string;
+  comments: ServerReviewFeedbackDraftComment[];
+}): ReviewFeedbackRepoGroup {
+  return {
+    repo: group.repo,
+    prUrl: group.pr_url,
+    comments: group.comments.map(toReviewFeedbackDraftCommentView),
   };
 }
 

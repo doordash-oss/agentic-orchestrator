@@ -416,11 +416,21 @@ describe('AftercareWorkspace What shipped', () => {
         ...diffEvidence,
         reviewFeedback: {
           featureId: 'abcd1234ef567890',
+          revision: 1,
+          snapshotId: 'snap-1',
           repos: [
             {
               repo: 'agentic-orchestrator',
               prUrl: 'https://github.com/doordash-oss/agentic-orchestrator/pull/107',
-              comments: [{ repo: 'agentic-orchestrator', id: 1, type: 'review' }],
+              comments: [
+                {
+                  stableRef: 'agentic-orchestrator:review:1',
+                  selected: true,
+                  repo: 'agentic-orchestrator',
+                  id: 1,
+                  type: 'review',
+                },
+              ],
             },
           ],
         },

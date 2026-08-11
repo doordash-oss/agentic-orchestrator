@@ -153,6 +153,7 @@ function makeServices(overrides: Partial<IpcServices> = {}): IpcServices {
     discardRefactorChild: vi.fn(() => Promise.reject(new Error('unused'))),
     deleteFeatureCascade: vi.fn(() => Promise.reject(new Error('unused'))),
     fetchReviewFeedback: vi.fn(() => Promise.reject(new Error('unused'))),
+    updateReviewFeedbackSelection: vi.fn(() => Promise.reject(new Error('unused'))),
     launchReviewFeedbackChild: vi.fn(() => Promise.reject(new Error('unused'))),
     scanRecovery: vi.fn(() => Promise.reject(new Error('unused'))),
     executeRecovery: vi.fn(() => Promise.reject(new Error('unused'))),

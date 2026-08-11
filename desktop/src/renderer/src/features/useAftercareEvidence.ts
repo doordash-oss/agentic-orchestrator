@@ -6,6 +6,12 @@
  * snapshot, so a poll cycle that hands back a new snapshot object cannot
  * restart the fetches. Every failure degrades to omission: a rejected fetch
  * simply leaves its datum out.
+ *
+ * The review-feedback fetch now returns the server-owned pending draft view:
+ * the same repo grouping as before, plus a `revision` and per-comment
+ * `stableRef`/`selected`/`createdAt`. The receipt grouping only reads
+ * `repos[].repo` and `repos[].comments`, so it is shape-compatible both ways;
+ * the draft fields pass through unused here.
  */
 import { useEffect, useRef, useState } from 'react';
 import type { FetchReviewFeedbackResult, RepositoryDiffResult } from '../../../shared/ipc';

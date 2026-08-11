@@ -10286,6 +10286,196 @@ body {
   margin-top: var(--space-1);
 }
 
+/* ─── Review-feedback workspace (full-screen draft picker) ─── */
+
+.review-feedback-workspace {
+  position: fixed;
+  z-index: 30;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-5);
+  background: var(--color-surface, var(--raised));
+}
+
+.review-feedback-workspace__header {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+}
+
+.review-feedback-workspace__back {
+  font-family: var(--bench-font-text);
+  font-weight: 700;
+  font-size: 13px;
+  color: var(--text);
+  background: transparent;
+  border: 1px solid var(--hairline);
+  border-radius: var(--bench-radius-control);
+  padding: var(--space-2) var(--space-4);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.review-feedback-workspace__back:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.review-feedback-workspace__back:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.review-feedback-workspace__heading {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.review-feedback-workspace__title {
+  margin: 0;
+  font-family: var(--bench-font-text);
+  font-weight: 600;
+  font-size: 1.5rem;
+  letter-spacing: 0.02em;
+}
+
+.review-feedback-workspace__subtitle {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.review-feedback-workspace__ledger {
+  margin: 0;
+  font-family: var(--bench-font-mono);
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.review-feedback-workspace__body {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 220px 1fr;
+  gap: var(--space-4);
+}
+
+.review-feedback-workspace__rail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  overflow-y: auto;
+  border-right: 1px solid var(--hairline);
+  padding-right: var(--space-3);
+}
+
+.review-feedback-workspace__scope {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  border: 1px solid transparent;
+  border-radius: var(--bench-radius-control);
+  background: transparent;
+  padding: var(--space-2) var(--space-3);
+  font-family: var(--bench-font-text);
+  font-size: 13px;
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+}
+
+.review-feedback-workspace__scope:hover {
+  border-color: var(--hairline);
+}
+
+.review-feedback-workspace__scope[data-active='true'] {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, var(--raised));
+}
+
+.review-feedback-workspace__scope-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.review-feedback-workspace__scope-count {
+  font-family: var(--bench-font-mono);
+  font-size: 11px;
+  color: var(--muted);
+  flex-shrink: 0;
+}
+
+.review-feedback-workspace__feed {
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.review-feedback-card {
+  border: 1px solid var(--hairline);
+  border-radius: var(--bench-radius-control);
+  background: var(--raised);
+  padding: var(--space-2) var(--space-3);
+}
+
+.review-feedback-card[data-selected='false'] .review-feedback-card__body {
+  opacity: 0.55;
+}
+
+.review-feedback-card__label {
+  display: flex;
+  gap: var(--space-2);
+  align-items: flex-start;
+  cursor: pointer;
+}
+
+.review-feedback-card__label input[type='checkbox'] {
+  margin-top: 2px;
+  flex-shrink: 0;
+}
+
+.review-feedback-card__body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.review-feedback-card__repo {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.review-feedback-card__created {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.review-feedback-card__diff {
+  margin: 0;
+  font-family: var(--bench-font-mono);
+  font-size: 11px;
+  color: var(--muted);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.review-feedback-workspace__footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  border-top: 1px solid var(--hairline);
+  padding-top: var(--space-3);
+}
+
 /* ─── Bulk resume/retry preview panel ─── */
 
 .bulk-preview {

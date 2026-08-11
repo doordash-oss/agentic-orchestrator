@@ -2006,18 +2006,38 @@ function makeMockApi(
     fetchReviewFeedback: () =>
       Promise.resolve({
         featureId: 'abcd1234ef567890',
+        revision: 1,
+        snapshotId: 'snapshot-001',
         repos: scene.startsWith('aftercare')
           ? [
               {
                 repo: 'agentic-orchestrator',
                 prUrl: 'https://github.com/doordash-oss/agentic-orchestrator/pull/107',
                 comments: [
-                  { repo: 'agentic-orchestrator', id: 1, type: 'review' as const },
-                  { repo: 'agentic-orchestrator', id: 2, type: 'issue' as const },
+                  {
+                    stableRef: 'agentic-orchestrator:review:1',
+                    selected: true,
+                    repo: 'agentic-orchestrator',
+                    id: 1,
+                    type: 'review' as const,
+                  },
+                  {
+                    stableRef: 'agentic-orchestrator:issue:2',
+                    selected: true,
+                    repo: 'agentic-orchestrator',
+                    id: 2,
+                    type: 'issue' as const,
+                  },
                 ],
               },
             ]
           : [],
+      }),
+    updateReviewFeedbackSelection: (request) =>
+      Promise.resolve({
+        featureId: request.featureId,
+        revision: request.expectedRevision + 1,
+        repos: [],
       }),
     launchReviewFeedbackChild: () =>
       Promise.resolve({

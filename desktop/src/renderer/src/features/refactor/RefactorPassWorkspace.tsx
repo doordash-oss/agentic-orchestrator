@@ -222,6 +222,11 @@ export interface RefactorPassWorkspaceProps {
   pass: RefactorPassController;
   /** Whether retained live pass effects may fetch or subscribe. */
   active?: boolean;
+  /**
+   * Launch receipt from a review-feedback pass (e.g. "2 changed, 1 omitted,
+   * 3 deferred since review"); informational only, never blocks the pass.
+   */
+  launchReceipt?: string | null;
   /** Inbox jump into an attention item; reopens a dismissed gate. */
   attentionPreviewRequest?: { requestId: number; attentionId?: string } | null;
   attentionItems: AttentionItem[];
@@ -251,6 +256,7 @@ export function RefactorPassWorkspace({
   parent,
   pass,
   active = true,
+  launchReceipt = null,
   attentionPreviewRequest = null,
   attentionItems,
   refreshAttention,
@@ -428,6 +434,12 @@ export function RefactorPassWorkspace({
           </li>
         ))}
       </ol>
+
+      {launchReceipt !== null ? (
+        <p className="refactor-pass__state" role="status" data-tone="quiet">
+          {launchReceipt}
+        </p>
+      ) : null}
 
       {child?.reviewFeedback !== undefined && child.reviewFeedback.length > 0 ? (
         <SelectedCommentSummary comments={child.reviewFeedback} />

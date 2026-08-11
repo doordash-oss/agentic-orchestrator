@@ -98,6 +98,7 @@ export const EXPECTED_API_SURFACE: readonly string[] = [
   'setThemePreference',
   'startChat',
   'updateFeatureConfig',
+  'updateReviewFeedbackSelection',
   'updateSettings',
   'updateWorkspaceDefaults',
   'validateReview',

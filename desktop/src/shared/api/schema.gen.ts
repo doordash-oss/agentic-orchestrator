@@ -287,8 +287,8 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Launch a child feature for selected pull-request feedback.
-         * @description Accepts the complete selected comment payloads returned by fetchReviewFeedback plus an optional coupled roadmap/phase-plan gate. The server does not re-fetch GitHub. Failure machine codes include 400 `review_feedback_empty_selection`, `review_feedback_unsupported_comment_type`, `review_feedback_unknown_repo`, and `review_feedback_repo_has_no_pull_request`; 404 `parent_not_found`; and 409 `parent_is_child`, `parent_status_ineligible`, `active_child_exists`, and `parent_worktrees_dirty`.
+         * Launch a child feature from the pending review-feedback draft.
+         * @description Constant-size request: accepts only the expected pending-draft revision plus an optional coupled roadmap/phase-plan gate. The server re-fetches GitHub at launch, reconciles the draft's selected stable references against current data, and injects the complete current comment content into the child-creation path. Failure machine codes include 400 `review_feedback_empty_selection`, `review_feedback_zero_launchable_selection`, `review_feedback_unsupported_comment_type`, `review_feedback_unknown_repo`, and `review_feedback_repo_has_no_pull_request`; 404 `parent_not_found`; and 409 `review_feedback_revision_conflict`, `parent_is_child`, `parent_status_ineligible`, `active_child_exists`, and `parent_worktrees_dirty`.
          */
         post: operations["reviewFeedbackFeature"];
         delete?: never;
@@ -307,10 +307,30 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Fetch unaddressed pull-request feedback across every parent repository.
-         * @description Aggregates every repository carrying a PR URL, silently skips parent repositories without one, and returns comments grouped in parent repo order and chronologically within each group. The request deliberately has no repository or mode selector. Any single-repository GitHub failure fails the operation atomically with that repository identified.
+         * Fetch unaddressed pull-request feedback and establish the pending draft.
+         * @description Aggregates every repository carrying a PR URL, silently skips parent repositories without one, and reconciles the result with the parent-scoped durable pending draft: first fetch selects every visible unaddressed reference, later fetches retain prior selections for known stable references, select newly observed ones, and prune references that disappeared. Repositories are returned in the parent's stable repository order with comments oldest-first inside each group (stable reference as the deterministic tie-breaker). Any single-repository GitHub failure fails the operation atomically with that repository identified. The response carries the authoritative pending-draft revision.
          */
         post: operations["fetchReviewFeedback"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/features/{feature_id}/actions/review-feedback/selection": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Commit one review-feedback selection against the pending draft.
+         * @description Bounded, reference-only mutation: accepts the expected pending-draft revision and a list of stable references with selection values only. Comment bodies, diff hunks, paths, authors, and timestamps are never accepted here. The server validates authentication, parent eligibility, reference membership, request bounds, and the expected revision before atomically saving the next draft revision. Failure machine codes include 400 `review_feedback_unknown_reference` and `review_feedback_selection_update_too_large`; 404 `parent_not_found`; and 409 `review_feedback_revision_conflict`.
+         */
+        post: operations["updateReviewFeedbackSelection"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1348,22 +1368,69 @@ export interface components {
             body?: string;
             diff_hunk?: string;
             in_reply_to_id?: number;
+            /** @description GitHub creation timestamp of the comment. */
+            created_at?: string;
+        };
+        /** @description One review-feedback comment inside the revisioned pending-draft view. `stable_ref` is the repository identity plus supported comment type plus GitHub database comment ID; `selected` is the committed draft selection. The remaining fields snapshot the reviewed child-visible content used to reconcile launch-time changes. */
+        ReviewFeedbackDraftComment: {
+            stable_ref: string;
+            selected: boolean;
+            repo: string;
+            id: number;
+            /** @enum {string} */
+            type: "review" | "issue" | "review_body";
+            path?: string;
+            line?: number;
+            author?: string;
+            body?: string;
+            diff_hunk?: string;
+            in_reply_to_id?: number;
+            created_at?: string;
         };
         ReviewFeedbackRepoComments: {
             repo: string;
             pr_url: string;
-            comments: components["schemas"]["ReviewFeedbackComment"][];
+            comments: components["schemas"]["ReviewFeedbackDraftComment"][];
         };
-        ReviewFeedbackFetchResponse: components["schemas"]["JSONResponse"] & {
+        ReviewFeedbackFetchResponse: {
+            api_version: string;
+            meta?: components["schemas"]["ResponseMeta"];
+            /** @description Authoritative pending-draft revision. */
+            revision: number;
+            /** @description Identity of the reviewed snapshot the draft was last reconciled from. */
+            snapshot_id: string;
+            repos: components["schemas"]["ReviewFeedbackRepoComments"][];
+        };
+        /** @description One bounded selection change. Carries only a stable reference and a selection value; comment content is never accepted. */
+        ReviewFeedbackSelectionUpdate: {
+            stable_ref: string;
+            selected: boolean;
+        };
+        ReviewFeedbackSelectionRequest: {
+            /** @description Draft revision the caller based these updates on. */
+            expected_revision: number;
+            updates: components["schemas"]["ReviewFeedbackSelectionUpdate"][];
+        };
+        ReviewFeedbackSelectionResponse: components["schemas"]["JSONResponse"] & {
+            revision: number;
             repos: components["schemas"]["ReviewFeedbackRepoComments"][];
         };
         ReviewFeedbackFeatureRequest: {
-            comments: components["schemas"]["ReviewFeedbackComment"][];
+            /** @description Pending-draft revision the launch commits. The child is built only from the draft's committed selections at this revision. */
+            expected_revision: number;
             /** @description When present, sets both Roadmap review and Phase plan review on the parent and child. When omitted, inherits the parent's Roadmap review value. */
             gate?: boolean;
         };
         ReviewFeedbackFeatureResponse: components["schemas"]["ActionBaseResponse"] & components["schemas"]["FeatureActionResult"] & {
             parent_id: string;
+            /** @description Identity of the created review-feedback child. */
+            child_id?: string;
+            /** @description Selected reviewed references still present at launch whose child-visible content changed since the reviewed snapshot. */
+            changed?: number;
+            /** @description Selected reviewed references deleted before launch and thus omitted from the child. */
+            omitted?: number;
+            /** @description Comments first observed after the reviewed snapshot, deferred to a future pass. */
+            deferred?: number;
         };
         /** @description Zero-input request. Any JSON body (including the legacy source_revision payload) is accepted and ignored; the rebase child launch takes no user input. */
         RebaseFeatureRequest: {
@@ -2916,7 +2983,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Unaddressed review feedback grouped by repository. */
+            /** @description Authoritative pending-draft view with revision. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -2929,6 +2996,39 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             404: components["responses"]["ErrorResponse"];
             502: components["responses"]["ErrorResponse"];
+        };
+    };
+    updateReviewFeedbackSelection: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required. */
+                "X-Agentico-Client": components["parameters"]["TrustedMutationHeader"];
+            };
+            path: {
+                feature_id: components["parameters"]["FeatureID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReviewFeedbackSelectionRequest"];
+            };
+        };
+        responses: {
+            /** @description Authoritative pending-draft view at the next revision. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReviewFeedbackSelectionResponse"];
+                };
+            };
+            400: components["responses"]["ErrorResponse"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["ErrorResponse"];
+            409: components["responses"]["ErrorResponse"];
         };
     };
     rebaseFeature: {

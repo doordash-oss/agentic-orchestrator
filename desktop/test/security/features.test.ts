@@ -165,6 +165,7 @@ function makeServices(overrides: Partial<IpcServices> = {}): IpcServices {
     discardRefactorChild: vi.fn(() => Promise.reject(new Error('unused'))),
     deleteFeatureCascade: vi.fn(() => Promise.reject(new Error('unused'))),
     fetchReviewFeedback: vi.fn(() => Promise.reject(new Error('unused'))),
+    updateReviewFeedbackSelection: vi.fn(() => Promise.reject(new Error('unused'))),
     launchReviewFeedbackChild: vi.fn(() => Promise.reject(new Error('unused'))),
     scanRecovery: vi.fn(() => Promise.reject(new Error('unused'))),
     executeRecovery: vi.fn(() => Promise.reject(new Error('unused'))),
@@ -298,6 +299,53 @@ describe('feature IPC security', () => {
     }
     expect(services.getFeature).not.toHaveBeenCalled();
     expect(services.dispatchFeatureSetup).not.toHaveBeenCalled();
+  });
+
+  it('rejects review-feedback launches carrying comment payloads — dispatch is constant-size', async () => {
+    const { handlers, services } = register();
+    const huge = {
+      parentId: 'abcd1234ef567890',
+      expectedRevision: 7,
+      comments: [{ repo: 'repo-a', id: 1, type: 'review', body: 'x'.repeat(128 * 1024) }],
+    };
+    const result = (await handlers.get(IPC_CHANNELS.featuresReviewFeedbackLaunch)!(
+      goodEvent,
+      huge,
+    )) as Envelope;
+    expect(result.ok).toBe(false);
+    expect(result.error?.code).toBe('E_SCHEMA_MISMATCH');
+    expect(services.launchReviewFeedbackChild).not.toHaveBeenCalled();
+
+    // The schema-valid launch carries only identity, revision, and the gate.
+    const valid = { parentId: 'abcd1234ef567890', expectedRevision: 7, gate: true };
+    expect(JSON.stringify(valid).length).toBeLessThan(256);
+    await handlers.get(IPC_CHANNELS.featuresReviewFeedbackLaunch)!(goodEvent, valid);
+    expect(services.launchReviewFeedbackChild).toHaveBeenCalledWith(valid);
+  });
+
+  it('rejects review-feedback selection updates carrying comment content', async () => {
+    const { handlers, services } = register();
+    for (const bad of [
+      {
+        featureId: 'abcd1234ef567890',
+        expectedRevision: 7,
+        updates: [{ stableRef: 'repo-a:review:41', selected: true, body: 'smuggled' }],
+      },
+      {
+        featureId: 'abcd1234ef567890',
+        expectedRevision: 7,
+        updates: [{ stableRef: 'repo-a:review:41' }],
+      },
+      { featureId: 'abcd1234ef567890', expectedRevision: 7, updates: [] },
+    ]) {
+      const result = (await handlers.get(IPC_CHANNELS.featuresReviewFeedbackSelection)!(
+        goodEvent,
+        bad,
+      )) as Envelope;
+      expect(result.ok).toBe(false);
+      expect(result.error?.code).toBe('E_SCHEMA_MISMATCH');
+    }
+    expect(services.updateReviewFeedbackSelection).not.toHaveBeenCalled();
   });
 
   it('fails closed when a feature snapshot carries token-shaped fields', async () => {

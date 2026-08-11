@@ -383,17 +383,21 @@ paths:
   /api/v1/features/{feature_id}/actions/review-feedback:
     post:
       operationId: reviewFeedbackFeature
-      summary: Launch a child feature for selected pull-request feedback.
+      summary: Launch a child feature from the pending review-feedback draft.
       description: >-
-        Accepts the complete selected comment payloads returned by
-        fetchReviewFeedback plus an optional coupled roadmap/phase-plan gate.
-        The server does not re-fetch GitHub. Failure machine codes include 400
-        `review_feedback_empty_selection`,
+        Constant-size request: accepts only the expected pending-draft
+        revision plus an optional coupled roadmap/phase-plan gate. The
+        server re-fetches GitHub at launch, reconciles the draft's selected
+        stable references against current data, and injects the complete
+        current comment content into the child-creation path. Failure
+        machine codes include 400 `review_feedback_empty_selection`,
+        `review_feedback_zero_launchable_selection`,
         `review_feedback_unsupported_comment_type`,
         `review_feedback_unknown_repo`, and
-        `review_feedback_repo_has_no_pull_request`; 404 `parent_not_found`; and
-        409 `parent_is_child`, `parent_status_ineligible`,
-        `active_child_exists`, and `parent_worktrees_dirty`.
+        `review_feedback_repo_has_no_pull_request`; 404 `parent_not_found`;
+        and 409 `review_feedback_revision_conflict`, `parent_is_child`,
+        `parent_status_ineligible`, `active_child_exists`, and
+        `parent_worktrees_dirty`.
       parameters:
         - $ref: "#/components/parameters/FeatureID"
         - $ref: "#/components/parameters/TrustedMutationHeader"
@@ -425,13 +429,19 @@ paths:
   /api/v1/features/{feature_id}/actions/review-feedback/fetch:
     post:
       operationId: fetchReviewFeedback
-      summary: Fetch unaddressed pull-request feedback across every parent repository.
+      summary: Fetch unaddressed pull-request feedback and establish the pending draft.
       description: >-
         Aggregates every repository carrying a PR URL, silently skips parent
-        repositories without one, and returns comments grouped in parent repo
-        order and chronologically within each group. The request deliberately
-        has no repository or mode selector. Any single-repository GitHub
-        failure fails the operation atomically with that repository identified.
+        repositories without one, and reconciles the result with the
+        parent-scoped durable pending draft: first fetch selects every
+        visible unaddressed reference, later fetches retain prior selections
+        for known stable references, select newly observed ones, and prune
+        references that disappeared. Repositories are returned in the
+        parent's stable repository order with comments oldest-first inside
+        each group (stable reference as the deterministic tie-breaker). Any
+        single-repository GitHub failure fails the operation atomically with
+        that repository identified. The response carries the authoritative
+        pending-draft revision.
       parameters:
         - $ref: "#/components/parameters/FeatureID"
         - $ref: "#/components/parameters/TrustedMutationHeader"
@@ -443,7 +453,7 @@ paths:
               $ref: "#/components/schemas/ReviewFeedbackFetchRequest"
       responses:
         "200":
-          description: Unaddressed review feedback grouped by repository.
+          description: Authoritative pending-draft view with revision.
           content:
             application/json:
               schema:
@@ -456,6 +466,49 @@ paths:
           $ref: "#/components/responses/ErrorResponse"
         "502":
           $ref: "#/components/responses/ErrorResponse"
+
+  # Statically documented form of the review-feedback selection subaction.
+  # The server routes it through the dynamic action/subaction dispatcher, so
+  # the served URL remains exactly the generic dispatch URL below.
+  /api/v1/features/{feature_id}/actions/review-feedback/selection:
+    post:
+      operationId: updateReviewFeedbackSelection
+      summary: Commit one review-feedback selection against the pending draft.
+      description: >-
+        Bounded, reference-only mutation: accepts the expected pending-draft
+        revision and a list of stable references with selection values only.
+        Comment bodies, diff hunks, paths, authors, and timestamps are never
+        accepted here. The server validates authentication, parent
+        eligibility, reference membership, request bounds, and the expected
+        revision before atomically saving the next draft revision. Failure
+        machine codes include 400 `review_feedback_unknown_reference` and
+        `review_feedback_selection_update_too_large`; 404 `parent_not_found`;
+        and 409 `review_feedback_revision_conflict`.
+      parameters:
+        - $ref: "#/components/parameters/FeatureID"
+        - $ref: "#/components/parameters/TrustedMutationHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReviewFeedbackSelectionRequest"
+      responses:
+        "200":
+          description: Authoritative pending-draft view at the next revision.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReviewFeedbackSelectionResponse"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/ErrorResponse"
+        "409":
+          $ref: "#/components/responses/ErrorResponse"
+
 
   # Statically documented form of the rebase child launch action. The server
   # routes the rebase launch through the dynamic /actions/{action} dispatch,
@@ -2665,6 +2718,45 @@ components:
           type: string
         in_reply_to_id:
           type: integer
+        created_at:
+          type: string
+          description: GitHub creation timestamp of the comment.
+    ReviewFeedbackDraftComment:
+      type: object
+      required: [stable_ref, selected, repo, id, type]
+      additionalProperties: false
+      description: >-
+        One review-feedback comment inside the revisioned pending-draft view.
+        `stable_ref` is the repository identity plus supported comment type
+        plus GitHub database comment ID; `selected` is the committed draft
+        selection. The remaining fields snapshot the reviewed child-visible
+        content used to reconcile launch-time changes.
+      properties:
+        stable_ref:
+          type: string
+        selected:
+          type: boolean
+        repo:
+          type: string
+        id:
+          type: integer
+        type:
+          type: string
+          enum: [review, issue, review_body]
+        path:
+          type: string
+        line:
+          type: integer
+        author:
+          type: string
+        body:
+          type: string
+        diff_hunk:
+          type: string
+        in_reply_to_id:
+          type: integer
+        created_at:
+          type: string
     ReviewFeedbackRepoComments:
       type: object
       required: [repo, pr_url, comments]
@@ -2677,26 +2769,74 @@ components:
         comments:
           type: array
           items:
-            $ref: "#/components/schemas/ReviewFeedbackComment"
+            $ref: "#/components/schemas/ReviewFeedbackDraftComment"
     ReviewFeedbackFetchResponse:
+      type: object
+      required: [api_version, revision, snapshot_id, repos]
+      properties:
+        api_version:
+          type: string
+        meta:
+          $ref: "#/components/schemas/ResponseMeta"
+        revision:
+          type: integer
+          description: Authoritative pending-draft revision.
+        snapshot_id:
+          type: string
+          description: >-
+            Identity of the reviewed snapshot the draft was last reconciled
+            from.
+        repos:
+          type: array
+          items:
+            $ref: "#/components/schemas/ReviewFeedbackRepoComments"
+    ReviewFeedbackSelectionUpdate:
+      type: object
+      required: [stable_ref, selected]
+      additionalProperties: false
+      description: >-
+        One bounded selection change. Carries only a stable reference and a
+        selection value; comment content is never accepted.
+      properties:
+        stable_ref:
+          type: string
+        selected:
+          type: boolean
+    ReviewFeedbackSelectionRequest:
+      type: object
+      required: [expected_revision, updates]
+      additionalProperties: false
+      properties:
+        expected_revision:
+          type: integer
+          description: Draft revision the caller based these updates on.
+        updates:
+          type: array
+          maxItems: 512
+          items:
+            $ref: "#/components/schemas/ReviewFeedbackSelectionUpdate"
+    ReviewFeedbackSelectionResponse:
       allOf:
         - $ref: "#/components/schemas/JSONResponse"
         - type: object
-          required: [repos]
+          required: [revision, repos]
           properties:
+            revision:
+              type: integer
             repos:
               type: array
               items:
                 $ref: "#/components/schemas/ReviewFeedbackRepoComments"
     ReviewFeedbackFeatureRequest:
       type: object
-      required: [comments]
+      required: [expected_revision]
       additionalProperties: false
       properties:
-        comments:
-          type: array
-          items:
-            $ref: "#/components/schemas/ReviewFeedbackComment"
+        expected_revision:
+          type: integer
+          description: >-
+            Pending-draft revision the launch commits. The child is built
+            only from the draft's committed selections at this revision.
         gate:
           type: boolean
           x-go-type-skip-optional-pointer: false
@@ -2713,6 +2853,24 @@ components:
           properties:
             parent_id:
               type: string
+            child_id:
+              type: string
+              description: Identity of the created review-feedback child.
+            changed:
+              type: integer
+              description: >-
+                Selected reviewed references still present at launch whose
+                child-visible content changed since the reviewed snapshot.
+            omitted:
+              type: integer
+              description: >-
+                Selected reviewed references deleted before launch and thus
+                omitted from the child.
+            deferred:
+              type: integer
+              description: >-
+                Comments first observed after the reviewed snapshot, deferred
+                to a future pass.
     RebaseFeatureRequest:
       type: object
       additionalProperties: true

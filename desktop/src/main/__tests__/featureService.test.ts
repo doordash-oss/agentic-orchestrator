@@ -1048,12 +1048,16 @@ describe('FeatureService review-feedback operations', () => {
       status: 200,
       body: {
         api_version: 'v1',
+        revision: 7,
+        snapshot_id: 'snapshot-009',
         repos: [
           {
             repo: 'repo-a',
             pr_url: 'https://github.com/org/repo-a/pull/1',
             comments: [
               {
+                stable_ref: 'repo-a:review:41',
+                selected: true,
                 repo: 'repo-a',
                 id: 41,
                 type: 'review',
@@ -1063,8 +1067,11 @@ describe('FeatureService review-feedback operations', () => {
                 body: 'Bearer tok-secret leaks here',
                 diff_hunk: 'clone /Users/someone/repo-a',
                 in_reply_to_id: 39,
+                created_at: '2026-07-16T00:00:00Z',
               },
               {
+                stable_ref: 'repo-a:issue:42',
+                selected: false,
                 repo: 'repo-a',
                 id: 42,
                 type: 'issue',
@@ -1075,19 +1082,32 @@ describe('FeatureService review-feedback operations', () => {
           {
             repo: 'repo-b',
             pr_url: 'https://github.com/org/repo-b/pull/7',
-            comments: [{ repo: 'repo-b', id: 90, type: 'review_body', author: 'reviewer' }],
+            comments: [
+              {
+                stable_ref: 'repo-b:review_body:90',
+                selected: true,
+                repo: 'repo-b',
+                id: 90,
+                type: 'review_body',
+                author: 'reviewer',
+              },
+            ],
           },
         ],
       },
     }));
     await expect(service.fetchReviewFeedback({ featureId: 'abcd1234ef567890' })).resolves.toEqual({
       featureId: 'abcd1234ef567890',
+      revision: 7,
+      snapshotId: 'snapshot-009',
       repos: [
         {
           repo: 'repo-a',
           prUrl: 'https://github.com/org/repo-a/pull/1',
           comments: [
             {
+              stableRef: 'repo-a:review:41',
+              selected: true,
               repo: 'repo-a',
               id: 41,
               type: 'review',
@@ -1097,14 +1117,31 @@ describe('FeatureService review-feedback operations', () => {
               body: '[redacted] leaks here',
               diffHunk: 'clone [path]',
               inReplyToId: 39,
+              createdAt: '2026-07-16T00:00:00Z',
             },
-            { repo: 'repo-a', id: 42, type: 'issue', body: 'plain note' },
+            {
+              stableRef: 'repo-a:issue:42',
+              selected: false,
+              repo: 'repo-a',
+              id: 42,
+              type: 'issue',
+              body: 'plain note',
+            },
           ],
         },
         {
           repo: 'repo-b',
           prUrl: 'https://github.com/org/repo-b/pull/7',
-          comments: [{ repo: 'repo-b', id: 90, type: 'review_body', author: 'reviewer' }],
+          comments: [
+            {
+              stableRef: 'repo-b:review_body:90',
+              selected: true,
+              repo: 'repo-b',
+              id: 90,
+              type: 'review_body',
+              author: 'reviewer',
+            },
+          ],
         },
       ],
     });
@@ -1121,12 +1158,16 @@ describe('FeatureService review-feedback operations', () => {
       status: 200,
       body: {
         api_version: 'v1',
+        revision: 1,
+        snapshot_id: 'snapshot-001',
         repos: [
           {
             repo: 'repo-a',
             pr_url: 'https://github.com/org/repo-a/pull/1',
             comments: [
               {
+                stable_ref: 'repo-a:review:1',
+                selected: true,
                 repo: 'repo-a',
                 id: 1,
                 type: 'review',
@@ -1145,59 +1186,102 @@ describe('FeatureService review-feedback operations', () => {
     expect(comment?.diffHunk).not.toContain('/home/hidden');
   });
 
-  it('maps a launch to the typed review-feedback action with selected comments and the gate', async () => {
+  it('maps a selection update to the typed selection endpoint with reference-only updates', async () => {
+    const { service, calls } = makeService(() => ({
+      status: 200,
+      body: {
+        api_version: 'v1',
+        revision: 8,
+        repos: [
+          {
+            repo: 'repo-a',
+            pr_url: 'https://github.com/org/repo-a/pull/1',
+            comments: [
+              {
+                stable_ref: 'repo-a:review:41',
+                selected: false,
+                repo: 'repo-a',
+                id: 41,
+                type: 'review',
+              },
+            ],
+          },
+        ],
+      },
+    }));
+    await expect(
+      service.updateReviewFeedbackSelection({
+        featureId: 'abcd1234ef567890',
+        expectedRevision: 7,
+        updates: [{ stableRef: 'repo-a:review:41', selected: false }],
+      }),
+    ).resolves.toEqual({
+      featureId: 'abcd1234ef567890',
+      revision: 8,
+      repos: [
+        {
+          repo: 'repo-a',
+          prUrl: 'https://github.com/org/repo-a/pull/1',
+          comments: [
+            {
+              stableRef: 'repo-a:review:41',
+              selected: false,
+              repo: 'repo-a',
+              id: 41,
+              type: 'review',
+            },
+          ],
+        },
+      ],
+    });
+    expect(calls).toEqual([
+      {
+        path: '/api/v1/features/abcd1234ef567890/actions/review-feedback/selection',
+        init: {
+          method: 'POST',
+          body: {
+            expected_revision: 7,
+            updates: [{ stable_ref: 'repo-a:review:41', selected: false }],
+          },
+        },
+      },
+    ]);
+  });
+
+  it('maps a launch to the typed review-feedback action with the expected revision and the gate', async () => {
     const { service, calls } = makeService(() => ({
       status: 201,
       body: {
         api_version: 'v1',
-        feature_id: 'child1234ef567890',
+        feature_id: 'abcd1234ef567890',
         parent_id: 'abcd1234ef567890',
+        child_id: 'child1234ef567890',
         result: 'created',
+        changed: 1,
+        omitted: 2,
+        deferred: 3,
       },
     }));
-    const comments = [
-      {
-        repo: 'repo-a',
-        id: 41,
-        type: 'review' as const,
-        path: 'src/query.ts',
-        line: 12,
-        author: 'octocat',
-        body: 'redacted body',
-        diffHunk: 'redacted hunk',
-        inReplyToId: 39,
-      },
-      { repo: 'repo-b', id: 90, type: 'review_body' as const, author: 'reviewer' },
-    ];
     await expect(
-      service.launchReviewFeedbackChild({ parentId: 'abcd1234ef567890', comments, gate: true }),
+      service.launchReviewFeedbackChild({
+        parentId: 'abcd1234ef567890',
+        expectedRevision: 7,
+        gate: true,
+      }),
     ).resolves.toEqual({
       childId: 'child1234ef567890',
       parentId: 'abcd1234ef567890',
       result: 'created',
+      changed: 1,
+      omitted: 2,
+      deferred: 3,
     });
     expect(calls).toEqual([
       {
         path: '/api/v1/features/abcd1234ef567890/actions/review-feedback',
         init: {
           method: 'POST',
-          body: {
-            comments: [
-              {
-                repo: 'repo-a',
-                id: 41,
-                type: 'review',
-                path: 'src/query.ts',
-                line: 12,
-                author: 'octocat',
-                body: 'redacted body',
-                diff_hunk: 'redacted hunk',
-                in_reply_to_id: 39,
-              },
-              { repo: 'repo-b', id: 90, type: 'review_body', author: 'reviewer' },
-            ],
-            gate: true,
-          },
+          body: { expected_revision: 7, gate: true },
         },
       },
     ]);
@@ -1215,7 +1299,7 @@ describe('FeatureService review-feedback operations', () => {
     }));
     await service.launchReviewFeedbackChild({
       parentId: 'abcd1234ef567890',
-      comments: [{ repo: 'repo-a', id: 41, type: 'review' }],
+      expectedRevision: 7,
     });
     expect(calls[0]?.init?.body).not.toHaveProperty('gate');
   });

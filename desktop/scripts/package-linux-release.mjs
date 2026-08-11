@@ -153,8 +153,9 @@ export function runLocalLinuxRelease({
   dockerInfo = (repoRoot) => commandSucceeds('docker', ['info'], repoRoot),
   execute,
   verifyProvenance = () => {},
+  volumePrefix = VOLUME_PREFIX,
 } = {}) {
-  const { repoRoot, gitEntry, gitCommonDir, volumePrefix } = localPlanOptions(cwd, gitCommand);
+  const { repoRoot, gitEntry, gitCommonDir } = localPlanOptions(cwd, gitCommand);
   const stats = statfs(repoRoot);
   return runLinuxRelease({
     repoRoot,
@@ -178,7 +179,11 @@ function main() {
     console.log(JSON.stringify(plan, null, 2));
     return;
   }
-  const result = runLocalLinuxRelease({ verifyProvenance: () => verifyReleaseProvenance() });
+  const evidence = verifyReleaseProvenance();
+  const result = runLocalLinuxRelease({
+    volumePrefix: `${VOLUME_PREFIX}-${evidence.run_id.replace(/[^a-z0-9]/gi, '')}`,
+    verifyProvenance: () => verifyReleaseProvenance(),
+  });
   console.log(`Linux release packages verified for ${result.tag}: ${result.completed.join(', ')}`);
 }
 

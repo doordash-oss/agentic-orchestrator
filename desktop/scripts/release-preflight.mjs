@@ -1,5 +1,6 @@
 // Capture and recheck the local release provenance before anything is published.
 import { execFileSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { statfsSync } from 'node:fs';
@@ -95,6 +96,9 @@ function validateEvidence(evidence) {
   ) {
     throw new Error('release provenance evidence does not contain the pinned release images');
   }
+  if (!/^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(evidence.run_id ?? '')) {
+    throw new Error('release provenance evidence has an invalid run_id');
+  }
   return evidence;
 }
 
@@ -145,6 +149,7 @@ export function runReleasePreflight({
     commit: provenance.commit,
     platform,
     captured_at: new Date().toISOString(),
+    run_id: randomUUID(),
     images: [LINUX_BUILDER_IMAGE, LINUX_ARM64_VERIFIER_IMAGE],
   });
   mkdirSync(dirname(evidencePath), { recursive: true });

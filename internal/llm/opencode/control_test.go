@@ -526,6 +526,50 @@ func TestPromptEndTurn_NumberedOptionsToleratesTrailingStemAndRecommendedAfterCo
 	}
 }
 
+// TestPromptEndTurn_NumberedOptionsWithoutStemRemindsBeforeSurfacing proves an
+// options-only response is not surfaced with the raw option list duplicated as
+// its question text.
+func TestPromptEndTurn_NumberedOptionsWithoutStemRemindsBeforeSurfacing(t *testing.T) {
+	p, buf, promptID := newPostHandshakeProtocol(t)
+	optionsOnly := strings.Join([]string{
+		"1. Both loops, all profiles (Recommended): Use the same mechanism everywhere. [confidence: 0.76]",
+		"2. Both loops, Moonshot only: Limit the additional context. [confidence: 0.52]",
+		"3. Final-review fixer only: Preserve the per-phase gate. [confidence: 0.48]",
+	}, "\n")
+	streamAssistantText(t, p, optionsOnly)
+	if msgs := endTurn(t, p, promptID); len(msgs) != 0 {
+		t.Fatalf("options-only question produced %+v, want no message while reminder is sent", msgs)
+	}
+	var reminder Request
+	if err := json.Unmarshal(buf.lastLine(t), &reminder); err != nil || reminder.Method != "session/prompt" {
+		t.Fatalf("expected question-format reminder session/prompt; got %q (err %v)", buf.String(), err)
+	}
+	var pp PromptParams
+	if err := json.Unmarshal(mustMarshal(t, reminder.Params), &pp); err != nil {
+		t.Fatalf("decode reminder params: %v", err)
+	}
+	if !strings.Contains(pp.Prompt[0].Text, "<question stem ending with '?'>") {
+		t.Fatalf("reminder = %q, want question-stem instruction", pp.Prompt[0].Text)
+	}
+
+	var msgs []llm.SDKMessage
+	for i := 0; i < maxQuestionFormatRetries+1 && len(msgs) == 0; i++ {
+		pID := p.promptIDForTest()
+		streamAssistantText(t, p, optionsOnly)
+		msgs = endTurn(t, p, pID)
+	}
+	if len(msgs) != 1 || msgs[0].ControlRequest == nil || msgs[0].Result != nil {
+		t.Fatalf("after retries, produced %+v, want a synthesized AskUserQuestion and no result", msgs)
+	}
+	qs := askUserQuestionsFrom(t, msgs[0].ControlRequest)
+	if len(qs) != 1 || qs[0].Question != "Which option should Agentico use?" {
+		t.Fatalf("fallback questions = %+v, want a neutral question stem", qs)
+	}
+	if len(qs[0].Options) != 3 {
+		t.Fatalf("fallback options = %+v, want all three parsed options", qs[0].Options)
+	}
+}
+
 func TestPromptEndTurn_NumberedOptionsMissingConfidenceRemindsBeforeSurfacing(t *testing.T) {
 	p, buf, promptID := newPostHandshakeProtocol(t)
 	streamAssistantText(t, p, strings.Join([]string{

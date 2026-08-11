@@ -201,6 +201,12 @@ func TestDecideAskUserAutoPick(t *testing.T) {
 			wantAnswer:  "Italian tech terms where established (Recommended)",
 			wantConf:    0.85,
 		},
+		{
+			name:        "numbered options without a question stem decline",
+			purpose:     ports.AskUserAutoPickPurposeInquire,
+			inquireness: feature.InquirenessNone,
+			input:       askInput(`{"question":"1. Both loops, all profiles (Recommended): Use the same mechanism everywhere. [confidence: 0.76]\n2. Both loops, Moonshot only: Limit the additional context. [confidence: 0.52]\n3. Final-review fixer only: Preserve the per-phase gate. [confidence: 0.48]","options":[]}`),
+		},
 	}
 
 	for _, tt := range tests {

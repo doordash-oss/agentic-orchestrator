@@ -23,6 +23,7 @@ const READY_LOCAL: ConnectionState = {
   stage: 'ready',
   detail: 'Connected.',
   ownership: 'app-owned',
+  kind: 'local',
   serverKey: LOCAL_KEY,
 };
 

@@ -18,6 +18,11 @@ import {
   type RepositoryFileRef,
 } from '../../../shared/ipc';
 import { parseIpcError, type WizardError } from '../wizard/ipcError';
+import { useConnectionKind } from '../hooks';
+import {
+  ATTACHMENT_REQUIRES_LOCAL_SERVER,
+  FILE_SEARCH_REQUIRES_LOCAL_SERVER,
+} from '../localServerCopy';
 
 interface MentionToken {
   /** Index of the "@" character in the description. */
@@ -80,8 +85,20 @@ export function DescriptionComposer({
   const [mentionIndex, setMentionIndex] = useState(0);
   const [mentionStatus, setMentionStatus] = useState<'idle' | 'searching'>('idle');
   const [attachMenuOpen, setAttachMenuOpen] = useState(false);
+  const [notice, setNotice] = useState('');
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const attachMenuRef = useRef<HTMLDivElement | null>(null);
+  // Remote connections gate every local-filesystem affordance; the copy is
+  // shared with the AMA panel and mention popover via localServerCopy.
+  const remote = useConnectionKind() === 'remote';
+
+  // The intercepted-import explanation is transient: it fades on its own
+  // instead of joining the wizard's persistent error slot.
+  useEffect(() => {
+    if (notice === '') return;
+    const timer = window.setTimeout(() => setNotice(''), 5000);
+    return () => window.clearTimeout(timer);
+  }, [notice]);
 
   useEffect(() => {
     if (!attachMenuOpen) return;
@@ -93,7 +110,9 @@ export function DescriptionComposer({
   }, [attachMenuOpen]);
 
   useEffect(() => {
-    if (mention === null || mention.query === '' || repoKeys.length === 0) {
+    // Remote connections never search: the popover explains the limitation
+    // instead of spinning on an endpoint the server cannot serve.
+    if (remote || mention === null || mention.query === '' || repoKeys.length === 0) {
       setMentionResults([]);
       setMentionStatus('idle');
       return;
@@ -118,7 +137,7 @@ export function DescriptionComposer({
       window.clearTimeout(timer);
       if (dispatched) void window.agentico.cancelCreationFileSearch(requestId);
     };
-  }, [mention, onError, repoKeys]);
+  }, [remote, mention, onError, repoKeys]);
 
   const importFiles = (files: FileList | readonly File[]): number => {
     const list = Array.from(files);
@@ -209,6 +228,12 @@ export function DescriptionComposer({
     );
     if (!hasImage && event.clipboardData.files.length === 0) return;
     event.preventDefault();
+    // Intercept file imports remotely instead of silently dropping them;
+    // plain-text pastes never reach this branch.
+    if (remote) {
+      setNotice(ATTACHMENT_REQUIRES_LOCAL_SERVER);
+      return;
+    }
     const importedCount = importFiles(event.clipboardData.files);
     if (hasImage && importedCount === 0) {
       void window.agentico
@@ -224,6 +249,11 @@ export function DescriptionComposer({
 
   const onDrop = (event: DragEvent): void => {
     event.preventDefault();
+    if (event.dataTransfer.files.length === 0) return;
+    if (remote) {
+      setNotice(ATTACHMENT_REQUIRES_LOCAL_SERVER);
+      return;
+    }
     importFiles(event.dataTransfer.files);
   };
 
@@ -250,7 +280,11 @@ export function DescriptionComposer({
       </label>
       {mention !== null && repoKeys.length > 0 ? (
         <div className="composer__mentions" role="listbox" aria-label="Repository files">
-          {mention.query === '' ? (
+          {remote ? (
+            <p className="composer__mentions-hint" role="status">
+              {FILE_SEARCH_REQUIRES_LOCAL_SERVER}
+            </p>
+          ) : mention.query === '' ? (
             <p className="composer__mentions-hint">Keep typing to search repository files…</p>
           ) : mentionStatus === 'searching' && mentionResults.length === 0 ? (
             <p className="composer__mentions-hint" role="status">
@@ -285,6 +319,8 @@ export function DescriptionComposer({
             aria-label="Attach files or photos"
             aria-haspopup="menu"
             aria-expanded={attachMenuOpen}
+            disabled={remote}
+            title={remote ? ATTACHMENT_REQUIRES_LOCAL_SERVER : undefined}
             onClick={() => setAttachMenuOpen((open) => !open)}
           >
             +
@@ -301,9 +337,16 @@ export function DescriptionComposer({
           ) : null}
         </div>
         <span className="composer__hint">
-          Paste or drop images and documents anywhere in the description.
+          {remote
+            ? ATTACHMENT_REQUIRES_LOCAL_SERVER
+            : 'Paste or drop images and documents anywhere in the description.'}
         </span>
       </div>
+      {notice !== '' ? (
+        <p className="composer__notice" role="status">
+          {notice}
+        </p>
+      ) : null}
       {images.length > 0 || attachments.length > 0 ? (
         <ol className="composer__chips" aria-label="Attached files">
           {images.map((path) => (

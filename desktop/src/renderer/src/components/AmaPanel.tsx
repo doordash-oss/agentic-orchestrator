@@ -34,6 +34,8 @@ import {
   type AttentionSubmitOptions,
 } from '../features/AttentionInbox';
 import { useAttentionDraftSaves } from '../features/useAttentionDraftSaves';
+import { useConnectionKind } from '../hooks';
+import { ATTACHMENT_REQUIRES_LOCAL_SERVER } from '../localServerCopy';
 import { parseIpcError } from '../wizard/ipcError';
 import { buildConversation, reconcileMessages } from '../features/transcript/conversation';
 import { ConversationTranscript } from '../features/transcript/ConversationTranscript';
@@ -125,6 +127,9 @@ export function AmaPanel({
   geometryRef.current = geometry;
   const activeDrafts = attentionDrafts ?? localDrafts;
   const updateDrafts = setAttentionDrafts ?? setLocalDrafts;
+  // Remote connections cannot import images; the paste intercept explains
+  // the limitation through the panel's existing notice slot.
+  const remote = useConnectionKind() === 'remote';
 
   const amaAttentionItems = useMemo(
     () =>
@@ -437,6 +442,10 @@ export function AmaPanel({
     );
     if (!hasImage && imageFiles.length === 0) return;
     event.preventDefault();
+    if (remote) {
+      setNotice(ATTACHMENT_REQUIRES_LOCAL_SERVER);
+      return;
+    }
     const imported = window.agentico.importDroppedCreationFiles('image', imageFiles);
     if (imported.paths.length > 0) {
       setImages((current) => uniquePaths(current, imported.paths));

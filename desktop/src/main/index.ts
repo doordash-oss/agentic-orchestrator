@@ -40,6 +40,8 @@ import { RecoveryService } from './recovery';
 import { BulkService } from './bulk';
 import { AttentionService } from './attention';
 import { SessionService } from './serverClient';
+import { assertLocalConnection } from './locality';
+import { randomUUID } from 'node:crypto';
 import { registerIpcHandlers, type IpcServices } from './ipcHandlers';
 import {
   installSecurityPolicies,
@@ -484,6 +486,8 @@ if (!hasSingleInstanceLock) {
       return result.canceled ? [] : result.filePaths;
     };
     const readClipboardImage = async (): Promise<{ paths: string[] }> => {
+      // Clipboard capture stages a local file; remote connections refuse.
+      assertLocalConnection(() => gateway.connectedLocality);
       const image = clipboard.readImage();
       if (image.isEmpty()) return { paths: [] };
       const directory = path.join(app.getPath('temp'), 'agentico-clipboard');
@@ -515,19 +519,33 @@ if (!hasSingleInstanceLock) {
     const creationFiles = new CreationFilesService({
       pickFiles: pickCreationFiles,
       readReadiness: () => setup.getReadiness(),
+      locality: () => gateway.connectedLocality,
     });
+
+    // Locality-guard notices (stripped submit paths) are counts only and
+    // pass through the same redaction as every other main-process log.
+    const localityNotice = (line: string) =>
+      console.warn(`[agentico-locality] ${redactText(line)}`);
 
     const features = new FeatureService({
       transport: gateway,
       readReadiness: () => setup.getReadiness(),
       resolveRepositoryFiles: (refs) => creationFiles.resolve(refs),
+      locality: () => gateway.connectedLocality,
+      log: localityNotice,
     });
     const completion = new CompletionService({
       transport: gateway,
+      locality: () => gateway.connectedLocality,
     });
     const recovery = new RecoveryService(gateway);
     const bulk = new BulkService(features);
-    const sessions = new SessionService(gateway);
+    const sessions = new SessionService(
+      gateway,
+      randomUUID,
+      () => gateway.connectedLocality,
+      localityNotice,
+    );
     const reviews = new ReviewService(gateway);
     const configService = new ConfigService(gateway);
     const attention = new AttentionService(gateway);
@@ -1328,6 +1346,7 @@ if (!hasSingleInstanceLock) {
         features.generatePublishDescription(request.featureId, request.repos ?? []),
       openExternal: (request) => completion.openExternal(request),
       revealPath: (request) => completion.revealPath(request),
+      writeClipboardText: (text) => completion.writeClipboardText(text),
       // The native menu bar's only source of renderer-owned state. Coarse and
       // push-on-change: the controller itself drops an unchanged summary.
       publishUiState: (state) => {

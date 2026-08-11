@@ -110,4 +110,5 @@ export const EXPECTED_API_SURFACE: readonly string[] = [
   'updateWorkspaceDefaults',
   'validateReview',
   'windowPurpose',
+  'writeClipboardText',
 ];

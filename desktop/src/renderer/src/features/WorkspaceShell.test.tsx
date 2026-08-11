@@ -838,6 +838,7 @@ describe('WorkspaceShell toolbar', () => {
         stage: 'ready',
         detail: 'Connected to the app-owned runtime.',
         ownership: 'app-owned',
+        kind: 'local',
       },
     });
     const { rerender } = render(<WorkspaceShell amaSessionActive />);
@@ -876,6 +877,7 @@ describe('WorkspaceShell toolbar', () => {
         stage: 'ready',
         detail: 'Connected to an externally managed Agentico runtime.',
         ownership: 'external',
+        kind: 'remote',
         serverName: 'frothy-macchiato',
       },
     });
@@ -901,6 +903,7 @@ describe('WorkspaceShell toolbar', () => {
         stage: 'ready',
         detail: 'Connected to an externally managed Agentico runtime.',
         ownership: 'external',
+        kind: 'remote',
       },
     });
     render(<WorkspaceShell />);
@@ -935,6 +938,7 @@ describe('WorkspaceShell toolbar', () => {
         stage: 'ready',
         detail: 'Connected to an externally managed Agentico runtime.',
         ownership: 'external',
+        kind: 'remote',
         serverName: 'frothy-macchiato',
       },
     });
@@ -1410,6 +1414,7 @@ describe('WorkspaceShell native-menu UI state', () => {
     stage: 'ready',
     detail: 'Runtime ready.',
     ownership: 'app-owned',
+    kind: 'local',
   };
 
   function lastPush(mock: ReturnType<typeof installAgenticoMock>): MainWindowUiState {
@@ -1634,6 +1639,7 @@ describe('WorkspaceShell per-server scoping', () => {
       stage: 'ready',
       detail: 'Connected.',
       ownership: 'external',
+      kind: 'remote',
       serverKey,
       serverName: serverKey,
     };

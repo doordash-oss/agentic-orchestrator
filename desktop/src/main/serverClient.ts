@@ -46,6 +46,7 @@ import { assertCompatibleApiVersion } from '../shared/apiVersion';
 import { assertNoPrototypePollution, assertWithinByteSize } from '../shared/sanitize';
 import { SseBlockAssembler, type SseBlock, type SseStream } from './gateway/events';
 import type { ApiRequestInit, HttpResult } from './gateway/runtimeGateway';
+import { alwaysLocal, type LocalitySource } from './locality';
 
 /** The authenticated transport surface the runtime gateway provides. */
 export interface ServerTransport {
@@ -116,6 +117,13 @@ export class SessionService {
   constructor(
     private readonly transport: ServerTransport,
     private readonly makeSubscriptionId: () => string = randomUUID,
+    /**
+     * Gateway-owned locality of the active connection. While remote, chat
+     * start defensively drops local image paths from the outgoing payload
+     * (with a notice via `log`) so a stale draft never POSTs one.
+     */
+    private readonly locality: LocalitySource = alwaysLocal,
+    private readonly log?: (line: string) => void,
   ) {}
 
   async list(): Promise<SessionSummary[]> {
@@ -157,12 +165,19 @@ export class SessionService {
 
   async startChat(request: ChatStartRequest): Promise<ChatActionResult> {
     const input = validateWithSchema(request, ChatStartRequestSchema);
+    const remote = this.locality() === 'remote';
+    if (remote && (input.images?.length ?? 0) > 0) {
+      // Counts only — local paths never ride a log line.
+      this.log?.(
+        `remote AMA chat start: stripped ${input.images?.length ?? 0} local image path(s) from the outgoing payload (requires a local server)`,
+      );
+    }
     const response = await serverRequest(
       this.transport,
       '/api/v1/prompts/chat/start',
       {
         method: 'POST',
-        body: { message: input.message, images: input.images ?? [] },
+        body: { message: input.message, images: remote ? [] : (input.images ?? []) },
       } as ApiRequestInit,
       { remedyByCode: CHAT_REMEDIES },
     );

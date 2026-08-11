@@ -2930,6 +2930,13 @@ body {
   flex-wrap: wrap;
 }
 
+/* Remote servers get a typed path in place of the native picker. */
+.creation-sheet__path-entry {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
 .creation-sheet__browser-title {
   margin: 0;
   color: var(--text);
@@ -5630,6 +5637,12 @@ body {
   border-color: var(--attention);
   color: var(--attention);
 }
+.composer__attach-button:disabled {
+  border-color: var(--hairline);
+  color: var(--muted);
+  cursor: not-allowed;
+  opacity: 0.6;
+}
 .composer__attach-menu {
   position: absolute;
   bottom: calc(100% + 0.4rem);
@@ -5657,6 +5670,11 @@ body {
 }
 .composer__hint {
   color: var(--muted);
+  font-size: 0.78rem;
+}
+.composer__notice {
+  margin: 0;
+  color: var(--attention);
   font-size: 0.78rem;
 }
 .composer__chips {
@@ -7860,6 +7878,7 @@ body {
 
 .changes-manifest__repository-bar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: var(--space-3);
@@ -7867,6 +7886,19 @@ body {
   padding: var(--space-2) var(--space-5);
   border-bottom: 1px solid var(--hairline);
   background: color-mix(in srgb, var(--raised) 88%, var(--content));
+}
+
+/* Copy-path confirmation/error lines drop below the reveal/copy control. */
+.changes-manifest__repository-bar > .completion-workspace__notice,
+.changes-manifest__repository-bar > .completion-workspace__error {
+  flex-basis: 100%;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.completion-workspace__notice {
+  color: var(--muted);
+  font: 500 12px var(--bench-font-text);
 }
 
 .changes-manifest__repository-bar > div:first-child {
@@ -8943,6 +8975,19 @@ body {
   margin: 0;
   color: var(--muted);
   font: 500 0.75rem/1.4 var(--bench-font-text);
+}
+
+/* Remote servers get a typed path in place of the native picker. */
+.settings-panel__path-entry {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+  max-width: 32rem;
+}
+
+.settings-panel__path-entry .form-field {
+  align-self: stretch;
 }
 
 .settings-panel__button-row {

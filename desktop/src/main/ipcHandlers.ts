@@ -121,6 +121,7 @@ import {
   type RepositoryDiffResult,
   type OpenExternalRequest,
   type RevealPathRequest,
+  type RevealPathResult,
   type MainWindowUiState,
   type UpdateInstallNowRequest,
   type UpdateState,
@@ -221,7 +222,8 @@ export interface IpcServices {
   getRepositoryDiff(request: RepositoryDiffRequest): Promise<RepositoryDiffResult>;
   generatePublishDescription(request: PublishDescriptionRequest): Promise<PublishDescriptionResult>;
   openExternal(request: OpenExternalRequest): Promise<{ ok: boolean }>;
-  revealPath(request: RevealPathRequest): Promise<{ ok: boolean }>;
+  revealPath(request: RevealPathRequest): Promise<RevealPathResult>;
+  writeClipboardText(text: string): Promise<{ ok: boolean }>;
   getUpdates(): Promise<UpdateState> | UpdateState;
   checkForUpdates(): Promise<UpdateState>;
   installUpdateWhenIdle(): Promise<UpdateState>;
@@ -442,6 +444,7 @@ export function registerIpcHandlers(
     [IPC_CHANNELS.openExternal]: (_event, request: OpenExternalRequest) =>
       services.openExternal(request),
     [IPC_CHANNELS.revealPath]: (_event, request: RevealPathRequest) => services.revealPath(request),
+    [IPC_CHANNELS.clipboardWriteText]: (_event, text: string) => services.writeClipboardText(text),
     [IPC_CHANNELS.uiStatePublish]: (_event, state: MainWindowUiState) =>
       services.publishUiState(state),
   };

@@ -1069,6 +1069,7 @@ const CONNECTION_STATE: ConnectionState = {
   stage: 'ready',
   detail: 'Connected to runtime.',
   ownership: 'app-owned',
+  kind: 'local',
   serverKey: SERVER_KEY,
 };
 
@@ -2339,6 +2340,7 @@ index 5c32b6a..8a9b3c1 100644
       }),
     openExternal: () => Promise.resolve({ ok: true }),
     revealPath: () => Promise.resolve({ ok: true }),
+    writeClipboardText: () => Promise.resolve({ ok: true }),
     onAppEvent: (listener) => {
       appEventListeners.add(listener);
       return () => appEventListeners.delete(listener);

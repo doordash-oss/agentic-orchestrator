@@ -271,6 +271,7 @@ const api: AgenticoApi = {
     call(IPC_CHANNELS.publishDescription, request),
   openExternal: (request: OpenExternalRequest) => call(IPC_CHANNELS.openExternal, request),
   revealPath: (request: RevealPathRequest) => call(IPC_CHANNELS.revealPath, request),
+  writeClipboardText: (text: string) => call(IPC_CHANNELS.clipboardWriteText, text),
   publishUiState: (state: MainWindowUiState) => call(IPC_CHANNELS.uiStatePublish, state),
   launchRebaseChild: (request: LaunchRebaseChildRequest) =>
     call(IPC_CHANNELS.featuresRebase, request),

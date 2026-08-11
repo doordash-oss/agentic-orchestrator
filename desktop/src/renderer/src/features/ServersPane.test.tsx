@@ -89,6 +89,7 @@ const READY_CONNECTION: ConnectionState = {
   stage: 'ready',
   detail: 'Connected.',
   ownership: 'external',
+  kind: 'remote',
   serverKey: REMOTE.serverKey,
 };
 

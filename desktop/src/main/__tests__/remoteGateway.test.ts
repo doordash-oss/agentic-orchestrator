@@ -372,9 +372,12 @@ describe('RuntimeGateway remote attach profile', () => {
     await env.gateway.start();
 
     const state = env.gateway.getState();
-    expect(state.status).toBe('ready');
-    expect(state.ownership).toBe('external');
-    expect(state.serverKey).toBe(remoteKey());
+    expect(state).toMatchObject({
+      status: 'ready',
+      ownership: 'external',
+      kind: 'remote',
+      serverKey: remoteKey(),
+    });
     expect(scanRegistry).not.toHaveBeenCalled();
     expect(readFile).not.toHaveBeenCalled();
     expect(isProcessAlive).not.toHaveBeenCalled();
@@ -950,6 +953,89 @@ describe('RuntimeGateway remote switching', () => {
     expect(chosen.status).toBe('ready');
     expect(chosen.serverKey).toBe(remoteKey());
     expect(env.spawnCalls).toBe(0);
+    expectNoTokenLeak(env);
+  });
+});
+
+describe('RuntimeGateway ready-state locality', () => {
+  it('kind flips local→remote→local with the switch, never emitting a ready state under the wrong kind', async () => {
+    const env = makeEnv({ registryScan: () => alphaScan() });
+    expect(env.gateway.connectedLocality).toBeNull();
+    await env.gateway.start();
+    expect(env.gateway.getState()).toMatchObject({
+      status: 'ready',
+      kind: 'local',
+      serverKey: ALPHA_KEY,
+    });
+    expect(env.gateway.connectedLocality).toBe('local');
+
+    env.updateServers({ upsertKnown: remoteEntry() });
+    env.tokens.save(remoteKey(), REMOTE_TOKEN);
+    env.states.length = 0;
+    const remote = await env.gateway.switchServer({ serverKey: remoteKey() });
+    expect(remote).toMatchObject({ status: 'ready', kind: 'remote', serverKey: remoteKey() });
+    expect(env.gateway.connectedLocality).toBe('remote');
+    // Transitional states carry no locality; ready states never the stale one.
+    for (const emitted of env.states) {
+      ConnectionStateSchema.parse(emitted);
+      if (emitted.status === 'ready') {
+        expect(emitted.kind).toBe('remote');
+      } else {
+        expect('kind' in emitted).toBe(false);
+      }
+    }
+
+    env.states.length = 0;
+    const back = await env.gateway.switchServer({ serverKey: ALPHA_KEY });
+    expect(back).toMatchObject({ status: 'ready', kind: 'local', serverKey: ALPHA_KEY });
+    expect(env.gateway.connectedLocality).toBe('local');
+    for (const emitted of env.states) {
+      ConnectionStateSchema.parse(emitted);
+      if (emitted.status === 'ready') {
+        expect(emitted.kind).toBe('local');
+      } else {
+        expect('kind' in emitted).toBe(false);
+      }
+    }
+    expectNoTokenLeak(env);
+  });
+
+  it('a restart mid-remote-attach fences the generation: no ready state ever carries the fenced kind', async () => {
+    const env = makeEnv({ registryScan: () => alphaScan() });
+    await env.gateway.start();
+    expect(env.gateway.getState()).toMatchObject({ status: 'ready', kind: 'local' });
+    env.updateServers({ upsertKnown: remoteEntry() });
+    env.tokens.save(remoteKey(), REMOTE_TOKEN);
+
+    let releaseHealth: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      releaseHealth = resolve;
+    });
+    const realFetch = env.deps.fetchJson;
+    env.deps.fetchJson = async (url, opts) => {
+      if (url.startsWith(REMOTE_BASE) && url.endsWith('/api/v1/health')) {
+        await gate;
+      }
+      return realFetch(url, opts);
+    };
+
+    const switching = env.gateway.switchServer({ serverKey: remoteKey() });
+    await Promise.resolve();
+    // Restart bumps the generation; the gated remote attach must be fenced.
+    await env.gateway.restart();
+    releaseHealth();
+    await switching;
+
+    // No ready state was ever emitted under the fenced remote kind.
+    expect(env.states.filter((s) => s.status === 'ready' && s.kind === 'remote')).toHaveLength(0);
+
+    // A fresh start re-attaches locally and stamps kind afresh.
+    await env.gateway.start();
+    expect(env.gateway.getState()).toMatchObject({
+      status: 'ready',
+      kind: 'local',
+      serverKey: ALPHA_KEY,
+    });
     expectNoTokenLeak(env);
   });
 });

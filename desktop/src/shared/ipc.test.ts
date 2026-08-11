@@ -256,9 +256,38 @@ describe('ConnectionStateSchema', () => {
       stage: 'ready',
       detail: 'Connected to an externally managed Agentico runtime.',
       ownership: 'external',
+      kind: 'local',
       serverBuild: { version: 'v1.2.3', revision: 'abc' },
     };
     expect(ConnectionStateSchema.parse(state)).toEqual(state);
+  });
+
+  it('requires locality on the ready state and bounds it to local|remote', () => {
+    const base = {
+      status: 'ready',
+      stage: 'ready',
+      detail: 'Connected.',
+      ownership: 'external',
+    };
+    // Both kinds validate; the field is additive within the strict shape.
+    expect(ConnectionStateSchema.safeParse({ ...base, kind: 'local' }).success).toBe(true);
+    expect(ConnectionStateSchema.safeParse({ ...base, kind: 'remote' }).success).toBe(true);
+    // A ready state without locality fails closed: consumers must never guess.
+    expect(ConnectionStateSchema.safeParse(base).success).toBe(false);
+    expect(ConnectionStateSchema.safeParse({ ...base, kind: null }).success).toBe(false);
+    // Foreign kinds are not locality.
+    expect(ConnectionStateSchema.safeParse({ ...base, kind: 'nearby' }).success).toBe(false);
+    expect(ConnectionStateSchema.safeParse({ ...base, kind: 'LOCAL' }).success).toBe(false);
+    // Transitional states carry no locality at all (strict shape rejects it).
+    expect(
+      ConnectionStateSchema.safeParse({
+        status: 'connecting',
+        stage: 'authenticate',
+        detail: 'Authenticating.',
+        ownership: 'external',
+        kind: 'remote',
+      }).success,
+    ).toBe(false);
   });
 
   it('carries the optional server display name within its 64-char bound', () => {
@@ -267,6 +296,7 @@ describe('ConnectionStateSchema', () => {
       stage: 'ready',
       detail: 'Connected to an externally managed Agentico runtime.',
       ownership: 'external',
+      kind: 'local',
     };
     // Absent (older servers), null, at-bound, and in-bound names all pass.
     expect(ConnectionStateSchema.safeParse(base).success).toBe(true);
@@ -339,6 +369,7 @@ describe('ConnectionStateSchema', () => {
         stage: 'ready',
         detail: 'Connected.',
         ownership: 'none',
+        kind: 'local',
       }).success,
     ).toBe(false);
   });
@@ -350,6 +381,7 @@ describe('ConnectionStateSchema', () => {
         stage: 'ready',
         detail: 'Connected.',
         ownership: 'app-owned',
+        kind: 'local',
         error: { code: 'E_X', message: 'impossible' },
       }).success,
     ).toBe(false);
@@ -435,6 +467,7 @@ describe('ConnectionStateSchema', () => {
           stage: expected.stage === 'ready' ? 'discover' : 'ready',
           detail: 'invalid lifecycle pairing',
           ownership: expected.ownership,
+          ...(status === 'ready' ? { kind: 'local' } : {}),
           ...(status === 'incompatible' ||
           status === 'resources-missing' ||
           status === 'launch-failed' ||
@@ -449,7 +482,13 @@ describe('ConnectionStateSchema', () => {
   });
 
   it('rejects token-shaped fields anywhere in the state', () => {
-    const base = { status: 'ready', stage: 'ready', detail: '', ownership: 'app-owned' };
+    const base = {
+      status: 'ready',
+      stage: 'ready',
+      detail: '',
+      ownership: 'app-owned',
+      kind: 'local',
+    };
     for (const extra of [
       { bearerToken: 'x' },
       { authToken: 'x' },

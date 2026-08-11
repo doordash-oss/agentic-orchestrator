@@ -53,6 +53,27 @@ export function safeError(
 export const E_REQUEST_TIMEOUT = 'E_REQUEST_TIMEOUT';
 
 /**
+ * The distinct locality refusal: local-filesystem work (pickers, clipboard
+ * capture, repository file walks, local path submission) is meaningless
+ * while the active connection targets a remote server. Main-process guards
+ * throw this before touching the filesystem or the network; the renderer
+ * surfaces the message verbatim.
+ */
+export const E_REQUIRES_LOCAL_SERVER = 'E_REQUIRES_LOCAL_SERVER';
+
+export function requiresLocalServerError(): SafeError {
+  return safeError(
+    E_REQUIRES_LOCAL_SERVER,
+    'This action requires a local server.',
+    'Connect to a locally running Agentico server, then retry.',
+  );
+}
+
+export function isRequiresLocalServerError(err: unknown): boolean {
+  return err instanceof SafeErrorException && err.safe.code === E_REQUIRES_LOCAL_SERVER;
+}
+
+/**
  * The typed timeout error. Distinct from a failure: the mutation was accepted
  * and may still be completing server-side, so callers must reconcile rather
  * than retry.

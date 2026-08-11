@@ -58,6 +58,9 @@ export function SettingsPanel({
   const { preference: themePref, setPreference: setThemePref } = useTheme();
   const [error, setError] = useState<string | null>(null);
   const [addingRoot, setAddingRoot] = useState(false);
+  /** Typed-path entry for remote servers; the server's PATCH validates it. */
+  const [rootDraft, setRootDraft] = useState('');
+  const [rootAddError, setRootAddError] = useState<string | null>(null);
   const [removingRoot, setRemovingRoot] = useState<string | null>(null);
   const [reordering, setReordering] = useState(false);
   const [refreshingProviders, setRefreshingProviders] = useState<Set<string>>(() => new Set());
@@ -78,6 +81,10 @@ export function SettingsPanel({
   const [clearingDiagnostics, setClearingDiagnostics] = useState(false);
   const installNowTriggerRef = useRef<HTMLButtonElement | null>(null);
   const clearDiagnosticsTriggerRef = useRef<HTMLButtonElement | null>(null);
+
+  // Locality picks the root-entry affordance: the native directory picker
+  // on a local server, typed paths validated by the server on a remote one.
+  const remoteServer = connection.status === 'ready' && connection.kind === 'remote';
 
   const configuredPath = normalizePath(settings?.runtime.selection ?? null);
   const connectedPath = normalizePath(connection.connectedRuntimeDir ?? null);
@@ -182,6 +189,31 @@ export function SettingsPanel({
       setAddingRoot(false);
     }
   }, [refresh]);
+
+  /**
+   * Remote-only root entry: the folder lives on the server host, so the
+   * typed path goes straight into the tightened runtime-config PATCH and
+   * its rejection is the validation the form reports inline.
+   */
+  const handleAddTypedRoot = useCallback(async () => {
+    const path = rootDraft.trim();
+    if (path === '') return;
+    if (!path.startsWith('/')) {
+      setRootAddError('Enter the path exactly as the server sees it, starting with /.');
+      return;
+    }
+    try {
+      setAddingRoot(true);
+      setRootAddError(null);
+      await window.agentico.addWorkspaceRoot(path);
+      setRootDraft('');
+      refresh();
+    } catch (e: unknown) {
+      setRootAddError(parseIpcError(e).message);
+    } finally {
+      setAddingRoot(false);
+    }
+  }, [rootDraft, refresh]);
 
   const handleRemoveRoot = useCallback(
     async (rootPath: string) => {
@@ -467,14 +499,56 @@ export function SettingsPanel({
               })
             )}
           </ul>
-          <button
-            type="button"
-            className="setup-wizard__action"
-            onClick={() => void handleAddRoot()}
-            disabled={addingRoot || refreshingProviders.size > 0}
-          >
-            {addingRoot ? 'Adding…' : 'Add workspace root'}
-          </button>
+          {remoteServer ? (
+            <div className="settings-panel__path-entry">
+              <label className="form-field" htmlFor="settings-root-path">
+                <span className="form-field__label">Folder path on the server</span>
+                <input
+                  id="settings-root-path"
+                  className="form-field__input"
+                  type="text"
+                  value={rootDraft}
+                  placeholder="/srv/work"
+                  spellCheck={false}
+                  autoComplete="off"
+                  disabled={addingRoot}
+                  aria-invalid={rootAddError !== null}
+                  onChange={(event) => {
+                    setRootDraft(event.currentTarget.value);
+                    setRootAddError(null);
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') {
+                      event.preventDefault();
+                      void handleAddTypedRoot();
+                    }
+                  }}
+                />
+              </label>
+              {rootAddError !== null ? (
+                <p className="form-field__error" role="alert">
+                  {rootAddError}
+                </p>
+              ) : null}
+              <button
+                type="button"
+                className="setup-wizard__action"
+                onClick={() => void handleAddTypedRoot()}
+                disabled={addingRoot || refreshingProviders.size > 0 || rootDraft.trim() === ''}
+              >
+                {addingRoot ? 'Adding…' : 'Add root'}
+              </button>
+            </div>
+          ) : (
+            <button
+              type="button"
+              className="setup-wizard__action"
+              onClick={() => void handleAddRoot()}
+              disabled={addingRoot || refreshingProviders.size > 0}
+            >
+              {addingRoot ? 'Adding…' : 'Add workspace root'}
+            </button>
+          )}
         </section>
       )}
 

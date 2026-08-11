@@ -1,8 +1,14 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { defaultSettings, type AttentionItem, type Settings } from '../../../shared/ipc';
+import {
+  defaultSettings,
+  type AttentionItem,
+  type ConnectionState,
+  type Settings,
+} from '../../../shared/ipc';
 import { installAgenticoMock } from '../test/agenticoMock';
+import { ATTACHMENT_REQUIRES_LOCAL_SERVER } from '../localServerCopy';
 import { AmaPanel } from './AmaPanel';
 
 afterEach(cleanup);
@@ -441,6 +447,66 @@ describe('AmaPanel expanded presentation', () => {
     );
     expect(mock.api.updateSettings).not.toHaveBeenCalled();
     expect(screen.getByRole('complementary', { name: 'Ask Agentico' })).toBeVisible();
+  });
+});
+
+describe('AmaPanel on a remote server', () => {
+  const remoteConnection: ConnectionState = {
+    status: 'ready',
+    stage: 'ready',
+    detail: 'Connected.',
+    ownership: 'external',
+    kind: 'remote',
+  };
+
+  it('intercepts image pastes with the shared explanation and attaches nothing', async () => {
+    const mock = installAgenticoMock({
+      connection: remoteConnection,
+      settings: settingsWithAma({ drawer: 'expanded' }),
+    });
+    renderPanel();
+    const input = await screen.findByRole('textbox', { name: 'Ask Agentico' });
+
+    fireEvent.paste(input, {
+      clipboardData: {
+        files: [new File(['image'], 'image.png', { type: 'image/png' })],
+        items: [{ type: 'image/png' }],
+      },
+    });
+
+    const notice = await screen.findByText(ATTACHMENT_REQUIRES_LOCAL_SERVER);
+    expect(notice).toHaveAttribute('role', 'status');
+    expect(mock.api.importDroppedCreationFiles).not.toHaveBeenCalled();
+    expect(mock.api.readClipboardImage).not.toHaveBeenCalled();
+    expect(screen.queryByLabelText('Attached images')).not.toBeInTheDocument();
+  });
+
+  it('leaves plain-text pastes alone and re-enables image import after switching back to local', async () => {
+    const mock = installAgenticoMock({
+      connection: remoteConnection,
+      settings: settingsWithAma({ drawer: 'expanded' }),
+    });
+    mock.api.readClipboardImage.mockResolvedValue({ paths: ['/tmp/clipboard-image.png'] });
+    renderPanel();
+    const input = await screen.findByRole('textbox', { name: 'Ask Agentico' });
+
+    fireEvent.paste(input, {
+      clipboardData: { files: [], items: [{ type: 'text/plain' }] },
+    });
+    expect(screen.queryByText(ATTACHMENT_REQUIRES_LOCAL_SERVER)).not.toBeInTheDocument();
+    expect(mock.api.importDroppedCreationFiles).not.toHaveBeenCalled();
+
+    act(() => {
+      mock.emitConnection({ ...remoteConnection, kind: 'local', ownership: 'app-owned' });
+    });
+
+    fireEvent.paste(input, {
+      clipboardData: {
+        files: [new File(['image'], 'image.png', { type: 'image/png' })],
+        items: [{ type: 'image/png' }],
+      },
+    });
+    expect(await screen.findByText('clipboard-image.png')).toBeVisible();
   });
 });
 

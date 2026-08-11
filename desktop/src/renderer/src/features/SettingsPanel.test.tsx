@@ -2,6 +2,7 @@ import { act, cleanup, render, screen, waitFor, within } from '@testing-library/
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it } from 'vitest';
 import type {
+  ConnectionState,
   ModelCatalogue,
   ProviderModelRefreshResult,
   WorkspaceDefaults,
@@ -295,5 +296,53 @@ describe('SettingsPanel workspace defaults pane', () => {
     expect(screen.getByRole('region', { name: 'Settings and readiness' })).toBeVisible();
     expect(screen.getByRole('region', { name: 'Workspace defaults' })).toBeVisible();
     expect(screen.getByRole('button', { name: 'Save changes' })).toBeEnabled();
+  });
+});
+
+const READY_REMOTE: ConnectionState = {
+  status: 'ready',
+  stage: 'ready',
+  detail: 'Runtime ready.',
+  ownership: 'external',
+  kind: 'remote',
+};
+
+describe('SettingsPanel workspace roots on a remote server', () => {
+  it('replaces the native picker with typed paths the server validates inline', async () => {
+    const user = userEvent.setup();
+    const mock = installAgenticoMock({
+      connection: READY_REMOTE,
+      readiness: readySnapshot(),
+    });
+    mock.api.addWorkspaceRoot.mockRejectedValueOnce(
+      new Error('invalid_workspace_root: /srv/work/gone does not exist on this server'),
+    );
+    render(<SettingsPanel pane="workspace-roots" />);
+
+    // The native dialog is gone: only the server can see its own folders.
+    const field = await screen.findByLabelText('Folder path on the server');
+    expect(screen.queryByRole('button', { name: 'Add workspace root' })).toBeNull();
+
+    // A non-absolute entry is refused before the server is ever asked.
+    await user.type(field, 'srv/work');
+    await user.click(screen.getByRole('button', { name: 'Add root' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(/starting with \//);
+    expect(mock.api.addWorkspaceRoot).not.toHaveBeenCalled();
+
+    // The server's rejection renders inline and names the bad path.
+    await user.clear(field);
+    await user.type(field, '/srv/work/gone');
+    await user.click(screen.getByRole('button', { name: 'Add root' }));
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('/srv/work/gone does not exist on this server');
+    expect(mock.api.addWorkspaceRoot).toHaveBeenCalledWith('/srv/work/gone');
+
+    // A valid path saves through the same PATCH-backed action and clears.
+    await user.clear(field);
+    await user.type(field, '/srv/work');
+    await user.click(screen.getByRole('button', { name: 'Add root' }));
+    await waitFor(() => expect(mock.api.addWorkspaceRoot).toHaveBeenCalledWith('/srv/work'));
+    await waitFor(() => expect(field).toHaveValue(''));
+    expect(screen.queryByRole('alert')).toBeNull();
   });
 });

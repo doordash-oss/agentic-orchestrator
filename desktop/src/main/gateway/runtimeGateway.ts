@@ -284,6 +284,16 @@ export class RuntimeGateway {
     return this.state;
   }
 
+  /**
+   * Locality of the active connection, read at call time by main-process
+   * locality guards. `null` unless the connection is currently ready — the
+   * same rule that stamps `kind` onto the ready ConnectionState. This value
+   * is main-process owned; it never enters an IPC payload as an argument.
+   */
+  get connectedLocality(): 'local' | 'remote' | null {
+    return this.state.status === 'ready' ? this.connectedKind : null;
+  }
+
   subscribe(listener: (state: ConnectionState) => void): () => void {
     this.listeners.add(listener);
     return () => {
@@ -1219,6 +1229,7 @@ export class RuntimeGateway {
     this.setState({
       status: 'ready',
       stage: 'ready',
+      kind: 'local',
       detail: reOwn
         ? 'Connected to the app-managed Agentico runtime.'
         : 'Connected to an externally managed Agentico runtime.',
@@ -1404,6 +1415,7 @@ export class RuntimeGateway {
     this.setState({
       status: 'ready',
       stage: 'ready',
+      kind: 'remote',
       detail: 'Connected to the remote Agentico server.',
       ownership: 'external',
       serverBuild: verdict.serverBuild,
@@ -1628,6 +1640,7 @@ export class RuntimeGateway {
     this.setState({
       status: 'ready',
       stage: 'ready',
+      kind: 'local',
       detail: 'Connected to the app-managed Agentico runtime.',
       ownership: 'app-owned',
       serverBuild: verdict.serverBuild,
@@ -1968,6 +1981,12 @@ export class RuntimeGateway {
         ? { connectedRuntimeDir: this.connectedRuntimeDir }
         : {}),
       ...(this.serverKey !== null ? { serverKey: this.serverKey } : {}),
+      // Locality is main-process-owned: every ready state carries the kind
+      // the active attach established (set before its ready emission; cleared
+      // on teardown), so transitional states never stamp a stale value.
+      ...(next.status === 'ready' && this.connectedKind !== null
+        ? { kind: this.connectedKind }
+        : {}),
     } as ConnectionState;
     const sanitized = this.sanitizeState(withIdentity);
     this.state = sanitized;

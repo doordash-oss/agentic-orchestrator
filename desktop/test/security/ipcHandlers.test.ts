@@ -237,6 +237,7 @@ function makeServices(): IpcServices {
     generatePublishDescription: vi.fn(() => Promise.reject(new Error('unused'))),
     openExternal: vi.fn(() => Promise.reject(new Error('unused'))),
     revealPath: vi.fn(() => Promise.reject(new Error('unused'))),
+    writeClipboardText: vi.fn(() => Promise.reject(new Error('unused'))),
     publishUiState: vi.fn(() => ({ accepted: true })),
   };
 }

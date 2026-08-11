@@ -1731,6 +1731,62 @@ describe('RuntimeGateway switchServer', () => {
   });
 });
 
+describe('RuntimeGateway ready-state locality', () => {
+  it('stamps kind: local on the ready state for the spawn profile', async () => {
+    const env = makeEnv();
+    await env.gateway.start();
+
+    const state = env.gateway.getState();
+    expect(state).toMatchObject({ status: 'ready', ownership: 'app-owned', kind: 'local' });
+    expect(env.gateway.connectedLocality).toBe('local');
+  });
+
+  it('stamps kind: local on the ready state for the local attach profile', async () => {
+    const env = makeEnv({ discovery: JSON.stringify(discoveryRecord()) });
+    await env.gateway.start();
+
+    expect(env.gateway.getState()).toMatchObject({
+      status: 'ready',
+      ownership: 'external',
+      kind: 'local',
+    });
+  });
+
+  it('keeps kind: local across a local↔local switch and never stamps locality on transitional states', async () => {
+    const alpha = registryCandidate({
+      runtimeDir: ALPHA_RUNTIME_DIR,
+      baseUrl: ALPHA_BASE,
+      token: ALPHA_TOKEN,
+      name: 'alpha',
+    });
+    const beta = registryCandidate({
+      runtimeDir: BETA_RUNTIME_DIR,
+      baseUrl: BETA_BASE,
+      token: BETA_TOKEN,
+      name: 'beta',
+    });
+    const env = makeMultiServerEnv({
+      registryScans: [{ candidates: [alpha], pruned: 0, rejected: [] }],
+    });
+    await env.gateway.start();
+    env.setRegistryScans([{ candidates: [alpha, beta], pruned: 0, rejected: [] }]);
+
+    const state = await env.gateway.switchServer({ serverKey: beta.serverKey });
+
+    expect(state).toMatchObject({ status: 'ready', kind: 'local' });
+    // Every emitted ready state is schema-valid (kind required) and local.
+    for (const emitted of env.states) {
+      ConnectionStateSchema.parse(emitted);
+      if (emitted.status === 'ready') {
+        expect(emitted.kind).toBe('local');
+      } else {
+        expect('kind' in emitted).toBe(false);
+      }
+    }
+    expectNoTokenLeak(env);
+  });
+});
+
 describe('RuntimeGateway decoupled app-owned supervision', () => {
   const OWN_PID = 777;
   function ownAlphaCandidate() {

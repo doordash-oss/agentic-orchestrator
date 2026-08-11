@@ -442,6 +442,7 @@ export function installAgenticoMock(
     getCreationDefaults: vi.fn(() => Promise.resolve(defaults)),
     pickCreationFiles: vi.fn(() => Promise.resolve({ paths: [] })),
     readClipboardImage: vi.fn(() => Promise.resolve({ paths: [] })),
+    writeClipboardText: vi.fn(() => Promise.resolve({ ok: true })),
     importDroppedCreationFiles: vi.fn(() => ({ paths: [] })),
     searchCreationFiles: vi.fn((request) =>
       Promise.resolve({

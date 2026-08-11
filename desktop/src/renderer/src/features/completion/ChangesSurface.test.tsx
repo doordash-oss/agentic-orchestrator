@@ -1,7 +1,28 @@
-import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { act, render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { ChangesSurface } from './ChangesSurface';
-import type { CompletionPreflightResult, RepositoryDiffResult } from '../../../../shared/ipc';
+import { installAgenticoMock } from '../../test/agenticoMock';
+import type {
+  CompletionPreflightResult,
+  ConnectionState,
+  RepositoryDiffResult,
+} from '../../../../shared/ipc';
+
+const READY_LOCAL: ConnectionState = {
+  status: 'ready',
+  stage: 'ready',
+  detail: 'Runtime ready.',
+  ownership: 'app-owned',
+  kind: 'local',
+};
+
+const READY_REMOTE: ConnectionState = {
+  status: 'ready',
+  stage: 'ready',
+  detail: 'Runtime ready.',
+  ownership: 'external',
+  kind: 'remote',
+};
 
 const preflight: CompletionPreflightResult = {
   featureId: 'f',
@@ -25,11 +46,18 @@ function props(over?: Partial<Parameters<typeof ChangesSurface>[0]>) {
     getRepositoryDiff: vi.fn(() => Promise.resolve(diff)),
     openExternal: vi.fn(() => Promise.resolve({ ok: true })),
     revealPath: vi.fn(() => Promise.resolve({ ok: true })),
+    copyText: vi.fn(() => Promise.resolve({ ok: true })),
     ...over,
   };
 }
 
 describe('ChangesSurface', () => {
+  // The surface reads locality from the live connection state; default to a
+  // ready local runtime, individual tests override.
+  beforeEach(() => {
+    installAgenticoMock({ connection: READY_LOCAL });
+  });
+
   it('presents a change manifest and loads the first repository immediately', async () => {
     const getRepositoryDiff = vi.fn(() => Promise.resolve(diff));
     render(<ChangesSurface {...props({ getRepositoryDiff })} />);
@@ -63,5 +91,75 @@ describe('ChangesSurface', () => {
     render(<ChangesSurface {...props({ error: 'nope', preflight: null, onRetry })} />);
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
     expect(onRetry).toHaveBeenCalled();
+  });
+});
+
+describe('ChangesSurface worktree affordance by locality', () => {
+  it('reveals the worktree through the OS on a local server', async () => {
+    installAgenticoMock({ connection: READY_LOCAL });
+    const revealPath = vi.fn(() => Promise.resolve({ ok: true }));
+    render(<ChangesSurface {...props({ revealPath })} />);
+
+    const button = await screen.findByRole('button', { name: 'Reveal in Finder' });
+    fireEvent.click(button);
+
+    await waitFor(() => expect(revealPath).toHaveBeenCalledWith('f', 'repo-a'));
+    // Local behavior is exactly fire-and-forget: no confirm, no error line.
+    expect(screen.queryByText(/copied/i)).toBeNull();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('copies the server-reported path and confirms it refers to the server host', async () => {
+    installAgenticoMock({ connection: READY_REMOTE });
+    const copyText = vi.fn(() => Promise.resolve({ ok: true }));
+    const serverPath = '/srv/agentico/features/f/repo-a';
+    const revealPath = vi.fn(() => Promise.resolve({ ok: true, path: serverPath }));
+    render(<ChangesSurface {...props({ revealPath, copyText })} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Copy Path' }));
+
+    await waitFor(() => expect(copyText).toHaveBeenCalledWith(serverPath));
+    const confirmation = await screen.findByRole('status');
+    expect(confirmation).toHaveTextContent(serverPath);
+    expect(confirmation).toHaveTextContent(/server host/i);
+  });
+
+  it('surfaces an actionable inline error when the server path call fails', async () => {
+    installAgenticoMock({ connection: READY_REMOTE });
+    const revealPath = vi.fn(() =>
+      Promise.reject(new Error('not_found: The feature no longer exists on the server.')),
+    );
+    render(<ChangesSurface {...props({ revealPath })} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Copy Path' }));
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent(/could not copy the worktree path/i);
+    expect(alert).toHaveTextContent('The feature no longer exists on the server.');
+  });
+
+  it('surfaces an actionable inline error when the clipboard write fails', async () => {
+    installAgenticoMock({ connection: READY_REMOTE });
+    const copyText = vi.fn(() => Promise.reject(new Error('denied')));
+    const revealPath = vi.fn(() => Promise.resolve({ ok: true, path: '/srv/wt' }));
+    render(<ChangesSurface {...props({ revealPath, copyText })} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Copy Path' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/could not copy the worktree path/i);
+  });
+
+  it('swaps the affordance with the connection kind without remounting', async () => {
+    const mock = installAgenticoMock({ connection: READY_LOCAL });
+    const revealPath = vi.fn(() => Promise.resolve({ ok: true, path: '/srv/wt' }));
+    render(<ChangesSurface {...props({ revealPath })} />);
+
+    expect(await screen.findByRole('button', { name: 'Reveal in Finder' })).toBeVisible();
+
+    act(() => mock.emitConnection(READY_REMOTE));
+    expect(await screen.findByRole('button', { name: 'Copy Path' })).toBeVisible();
+
+    act(() => mock.emitConnection(READY_LOCAL));
+    expect(await screen.findByRole('button', { name: 'Reveal in Finder' })).toBeVisible();
   });
 });

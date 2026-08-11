@@ -103,6 +103,7 @@ export const IPC_CHANNELS = {
   publishDescription: 'agentico:completion:publish-description',
   openExternal: 'agentico:open:external',
   revealPath: 'agentico:open:reveal',
+  clipboardWriteText: 'agentico:clipboard:write-text',
   uiStatePublish: 'agentico:ui-state:publish',
 } as const;
 
@@ -332,22 +333,29 @@ export const ConnectionAuthenticatingStateSchema = z.strictObject({
   ownership: z.enum(['external', 'app-owned']),
 });
 
-/** Connected: always names who owns the server and never carries an error. */
+/**
+ * Whether a server is a locally spawned or registry-discovered runtime
+ * (`local`, identified by its runtime dir) or a remotely reachable plain-http
+ * endpoint (`remote`, identified by URL). Persisted local entries must carry
+ * `runtimeDir`; remote entries must not.
+ */
+export const ServerKindSchema = z.enum(['local', 'remote']);
+export type ServerKind = z.output<typeof ServerKindSchema>;
+
+/**
+ * Connected: always names who owns the server, never carries an error, and
+ * always stamps the connection's locality (`kind`) — the single authoritative
+ * signal for whether the app talks to a co-located runtime or a remote
+ * endpoint. Main-process-owned: the gateway stamps it from its internal
+ * attach bookkeeping; consumers never derive it from the server list.
+ */
 export const ConnectionReadyStateSchema = z.strictObject({
   status: z.literal('ready'),
   stage: connectionStage('ready'),
   ...connectionStateBase,
   ownership: z.enum(['external', 'app-owned']),
+  kind: ServerKindSchema,
 });
-
-/**
- * Whether a known/pickable server is a locally spawned or registry-discovered
- * runtime (`local`, identified by its runtime dir) or a remotely reachable
- * plain-http endpoint (`remote`, identified by URL). Persisted local entries
- * must carry `runtimeDir`; remote entries must not.
- */
-export const ServerKindSchema = z.enum(['local', 'remote']);
-export type ServerKind = z.output<typeof ServerKindSchema>;
 
 export const SERVER_ROW_HEALTH = ['healthy', 'unreachable', 'probing'] as const;
 export const ServerRowHealthSchema = z.enum(SERVER_ROW_HEALTH);
@@ -1406,6 +1414,20 @@ export const RevealPathRequestSchema = z.strictObject({
   repo: z.string().max(128),
 });
 export type RevealPathRequest = z.output<typeof RevealPathRequestSchema>;
+
+/**
+ * Local answer to a reveal: `ok` reports whether the OS file manager opened
+ * the worktree. On a remote connection there is no local folder to reveal,
+ * so main skips the file manager entirely and instead returns the
+ * server-reported worktree `path` verbatim for the renderer to copy to the
+ * clipboard (the path is treated as opaque display/copy text, never as a
+ * local filesystem target). `path` is present only on that remote copy flow.
+ */
+export const RevealPathResultSchema = z.strictObject({
+  ok: z.boolean(),
+  path: z.string().min(1).max(4096).optional(),
+});
+export type RevealPathResult = z.output<typeof RevealPathResultSchema>;
 
 export const LaunchRebaseChildResultSchema = z.strictObject({
   childId: FeatureIdSchema,
@@ -3450,6 +3472,10 @@ export const ipcContracts: Record<IpcChannel, IpcContract> = {
   },
   [IPC_CHANNELS.revealPath]: {
     request: z.tuple([RevealPathRequestSchema]),
+    response: RevealPathResultSchema,
+  },
+  [IPC_CHANNELS.clipboardWriteText]: {
+    request: z.tuple([z.string().min(1).max(4096)]),
     response: z.strictObject({ ok: z.boolean() }),
   },
   [IPC_CHANNELS.uiStatePublish]: {
@@ -3650,7 +3676,13 @@ export interface AgenticoApi {
   getRepositoryDiff(request: RepositoryDiffRequest): Promise<RepositoryDiffResult>;
   generatePublishDescription(request: PublishDescriptionRequest): Promise<PublishDescriptionResult>;
   openExternal(request: OpenExternalRequest): Promise<{ ok: boolean }>;
-  revealPath(request: RevealPathRequest): Promise<{ ok: boolean }>;
+  revealPath(request: RevealPathRequest): Promise<RevealPathResult>;
+  /**
+   * Writes text to the OS clipboard through the main process. The renderer
+   * has no Chromium clipboard permission by policy, so the remote Copy Path
+   * affordance goes through this narrow call instead.
+   */
+  writeClipboardText(text: string): Promise<{ ok: boolean }>;
   /**
    * One-way, fire-and-forget from the main window's renderer: the native menu
    * bar's enablement and Show/Hide labels. The renderer never reads the ack.

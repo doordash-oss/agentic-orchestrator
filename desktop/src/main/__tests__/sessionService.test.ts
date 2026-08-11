@@ -161,6 +161,58 @@ describe('SessionService singleton chat mutations', () => {
       safe: { code: 'E_SCHEMA_MISMATCH' },
     });
   });
+
+  it('drops staged local image paths while remotely connected and logs the strip', async () => {
+    const apiRequest = vi.fn(() =>
+      Promise.resolve({
+        status: 200,
+        body: { api_version: 'v1', session_id: '__chat__', result: 'started' },
+      }),
+    );
+    const log = vi.fn();
+    const service = new SessionService(transport({ apiRequest }), undefined, () => 'remote', log);
+
+    await expect(
+      service.startChat({ message: 'What is running?', images: ['/tmp/clipboard.png'] }),
+    ).resolves.toStrictEqual({ sessionId: '__chat__', result: 'started' });
+    expect(apiRequest).toHaveBeenCalledWith('/api/v1/prompts/chat/start', {
+      method: 'POST',
+      body: { message: 'What is running?', images: [] },
+    });
+    expect(log).toHaveBeenCalledTimes(1);
+    expect(String(log.mock.calls[0]?.[0])).toContain('stripped 1');
+  });
+
+  it('sends chat images unchanged while locally connected', async () => {
+    const apiRequest = vi.fn(() =>
+      Promise.resolve({
+        status: 200,
+        body: { api_version: 'v1', session_id: '__chat__', result: 'started' },
+      }),
+    );
+    const log = vi.fn();
+    const service = new SessionService(transport({ apiRequest }), undefined, () => 'local', log);
+
+    await service.startChat({ message: 'here', images: ['/tmp/clipboard.png'] });
+    expect(apiRequest).toHaveBeenCalledWith('/api/v1/prompts/chat/start', {
+      method: 'POST',
+      body: { message: 'here', images: ['/tmp/clipboard.png'] },
+    });
+    expect(log).not.toHaveBeenCalled();
+  });
+
+  it('does not log a strip remotely when nothing was staged', async () => {
+    const apiRequest = vi.fn(() =>
+      Promise.resolve({
+        status: 200,
+        body: { api_version: 'v1', session_id: '__chat__', result: 'started' },
+      }),
+    );
+    const log = vi.fn();
+    const service = new SessionService(transport({ apiRequest }), undefined, () => 'remote', log);
+    await service.startChat({ message: 'no images' });
+    expect(log).not.toHaveBeenCalled();
+  });
 });
 
 describe('SessionService output subscriptions', () => {

@@ -17,18 +17,26 @@ import {
   type RepositoryFileRef,
 } from '../shared/ipc';
 import { validateWithSchema } from '../shared/api/parse';
+import { alwaysLocal, assertLocalConnection, type LocalitySource } from './locality';
 
 export interface CreationFilesServiceDeps {
   pickFiles(kind: CreationFileKind): Promise<string[]>;
   readReadiness(): Promise<ReadinessSnapshot>;
+  /** Gateway-owned locality; remotely connected the local walks refuse. */
+  locality?: LocalitySource;
 }
 
 export class CreationFilesService {
   private readonly searches = new Map<string, AbortController>();
+  private readonly locality: LocalitySource;
 
-  constructor(private readonly deps: CreationFilesServiceDeps) {}
+  constructor(private readonly deps: CreationFilesServiceDeps) {
+    this.locality = deps.locality ?? alwaysLocal;
+  }
 
   async pickFiles(kind: CreationFileKind): Promise<{ paths: string[] }> {
+    // Local-path refusal precedes the native dialog entirely.
+    assertLocalConnection(this.locality);
     const limit = kind === 'image' ? CREATION_IMAGE_LIMIT : CREATION_ATTACHMENT_LIMIT;
     const picked = await this.deps.pickFiles(kind);
     return {
@@ -39,6 +47,8 @@ export class CreationFilesService {
   }
 
   async search(request: CreationFileSearchRequest): Promise<CreationFileSearchResult> {
+    // No local repository walk against a remote server.
+    assertLocalConnection(this.locality);
     const controller = new AbortController();
     this.searches.set(request.requestId, controller);
     try {
@@ -83,6 +93,8 @@ export class CreationFilesService {
 
   async resolve(refs: readonly RepositoryFileRef[]): Promise<string[]> {
     if (refs.length === 0) return [];
+    // Refs resolve to local absolute paths; remote submission never sees any.
+    assertLocalConnection(this.locality);
     const snapshot = await this.deps.readReadiness();
     const repositories = new Map(
       snapshot.repositories.filter((repo) => repo.valid).map((repo) => [repo.name, repo.path]),

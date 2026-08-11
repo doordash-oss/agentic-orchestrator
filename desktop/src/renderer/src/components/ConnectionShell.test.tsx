@@ -12,6 +12,9 @@ function state(overrides: Record<string, unknown>): ConnectionState {
     stage: 'discover',
     detail: 'Looking for a running Agentico runtime.',
     ownership: 'none',
+    // Ready states carry main-owned locality; default it so tests that do not
+    // pin locality still emit a schema-valid ready state.
+    ...(overrides.status === 'ready' ? { kind: 'local' } : {}),
     ...overrides,
   });
 }

@@ -20,7 +20,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
+	"os"
 	"reflect"
 	"strings"
 
@@ -28,6 +30,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
+	"github.com/doordash-oss/agentic-orchestrator/internal/workspace"
 )
 
 const MaxMutationBodyBytes = 64 * 1024
@@ -44,6 +47,11 @@ const errCodeBadRequest = "bad_request"
 // errCodeConflict is the API error code for an action rejected because of a
 // conflicting feature state (ActionConflictError).
 const errCodeConflict = "conflict"
+
+// errCodeInvalidWorkspaceRoot is the API error code returned by the runtime
+// config mutation when a submitted workspace root does not resolve to an
+// existing directory on the server's filesystem.
+const errCodeInvalidWorkspaceRoot = "invalid_workspace_root"
 
 // Stable machine codes for the typed refactor-launch failures and the
 // child-feature execution gate. Each maps a feature-package sentinel or
@@ -1139,6 +1147,9 @@ func (h *apiHandler) handleRuntimeConfigRoute(w http.ResponseWriter, r *http.Req
 		if !validateEffortConfig(w, req.Defaults.Effort, models, h.registry) {
 			return
 		}
+		if req.WorkspaceRoots != nil && !validateWorkspaceRootPaths(w, *req.WorkspaceRoots) {
+			return
+		}
 		resp, err := h.mutations.RuntimeConfig(req)
 		if err != nil {
 			writeMutationError(w, err)
@@ -1150,6 +1161,44 @@ func (h *apiHandler) handleRuntimeConfigRoute(w http.ResponseWriter, r *http.Req
 		w.Header().Set("Allow", "GET, PATCH, PUT")
 		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed", nil)
 	}
+}
+
+// validateWorkspaceRootPaths rejects runtime-config workspace roots that do
+// not resolve to real directories on the server's filesystem, using the same
+// resolution conventions as the workspace catalog and readiness surface
+// (home expansion, symlinks followed by os.Stat). Every rejected path is
+// reported with its reason so the client can fix the whole list in one
+// round-trip; nothing is persisted when any root is invalid.
+func validateWorkspaceRootPaths(w http.ResponseWriter, roots []string) bool {
+	type rejectedRoot struct {
+		Path   string `json:"path"`
+		Reason string `json:"reason"`
+	}
+	var invalid []rejectedRoot
+	for _, root := range roots {
+		info, err := os.Stat(workspace.ExpandHome(root))
+		switch {
+		case err == nil && info.IsDir():
+			// Valid root.
+		case err == nil:
+			invalid = append(invalid, rejectedRoot{Path: root, Reason: "path is not a directory"})
+		case errors.Is(err, fs.ErrNotExist):
+			invalid = append(invalid, rejectedRoot{Path: root, Reason: "path does not exist"})
+		default:
+			invalid = append(invalid, rejectedRoot{Path: root, Reason: "path could not be resolved"})
+		}
+	}
+	if len(invalid) == 0 {
+		return true
+	}
+	summaries := make([]string, 0, len(invalid))
+	for _, entry := range invalid {
+		summaries = append(summaries, fmt.Sprintf("%s (%s)", entry.Path, entry.Reason))
+	}
+	writeAPIError(w, http.StatusBadRequest, errCodeInvalidWorkspaceRoot,
+		"workspace_roots must resolve to existing directories; rejected: "+strings.Join(summaries, "; "),
+		map[string]any{"invalid_workspace_roots": invalid})
+	return false
 }
 
 func (h *apiHandler) handlePermissionMutationRoutes(w http.ResponseWriter, r *http.Request) {

@@ -482,13 +482,19 @@ export interface paths {
         };
         /** Read runtime configuration. */
         get: operations["getRuntimeConfig"];
-        /** Replace runtime configuration. */
+        /**
+         * Replace runtime configuration.
+         * @description Replaces the runtime configuration. Submitted workspace_roots are validated the same way as for PATCH: each root must exist and resolve to a directory, otherwise the request fails with a 400 invalid_workspace_root error and nothing is persisted.
+         */
         put: operations["putRuntimeConfig"];
         post?: never;
         delete?: never;
         options?: never;
         head?: never;
-        /** Patch runtime configuration. */
+        /**
+         * Patch runtime configuration.
+         * @description Partially updates the runtime configuration. Submitted workspace_roots are validated against the server's filesystem before persistence: every root must exist and resolve to a directory, otherwise the request fails with a 400 invalid_workspace_root error naming each offending path in error.target.invalid_workspace_roots and nothing is persisted.
+         */
         patch: operations["patchRuntimeConfig"];
         trace?: never;
     };
@@ -3134,6 +3140,7 @@ export interface operations {
         requestBody: components["requestBodies"]["JSONMutation"];
         responses: {
             200: components["responses"]["ActionResponse"];
+            400: components["responses"]["ErrorResponse"];
             401: components["responses"]["Unauthorized"];
         };
     };
@@ -3150,6 +3157,7 @@ export interface operations {
         requestBody: components["requestBodies"]["JSONMutation"];
         responses: {
             200: components["responses"]["ActionResponse"];
+            400: components["responses"]["ErrorResponse"];
             401: components["responses"]["Unauthorized"];
         };
     };

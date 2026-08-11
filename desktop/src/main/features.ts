@@ -68,6 +68,7 @@ import {
   type SetupTaskView,
 } from '../shared/ipc';
 import type { ApiRequestInit } from './gateway/runtimeGateway';
+import { alwaysLocal, type LocalitySource } from './locality';
 import { serverRequest, type ServerTransport } from './serverClient';
 
 /** The authenticated transport surface the gateway provides. */
@@ -78,6 +79,15 @@ export interface FeatureServiceDeps {
   /** Fresh authoritative readiness (repository eligibility for creation). */
   readReadiness(): Promise<ReadinessSnapshot>;
   resolveRepositoryFiles(refs: readonly RepositoryFileRef[]): Promise<string[]>;
+  /**
+   * Gateway-owned locality of the active connection. While remote, submit
+   * boundaries defensively drop local image/attachment paths from outgoing
+   * payloads (with a notice via `log`) so a stale renderer draft can never
+   * POST a meaningless local path.
+   */
+  locality?: LocalitySource;
+  /** Redacted diagnostic sink used when local paths are stripped remotely. */
+  log?(line: string): void;
 }
 
 /** Concrete, safe next steps per structured server error code. */
@@ -117,8 +127,11 @@ const LONG_MUTATION_ACTIONS: ReadonlySet<string> = new Set(['publish', 'merge'])
 
 export class FeatureService {
   private readonly actionFlights = new Map<string, Promise<FeatureActionResult>>();
+  private readonly locality: LocalitySource;
 
-  constructor(private readonly deps: FeatureServiceDeps) {}
+  constructor(private readonly deps: FeatureServiceDeps) {
+    this.locality = deps.locality ?? alwaysLocal;
+  }
 
   /**
    * Fresh creation context in one main-process composition: repository
@@ -169,7 +182,19 @@ export class FeatureService {
   async createFeature(input: CreateFeatureInput): Promise<CreateFeatureResult> {
     // Defense in depth: the IPC layer already validated this shape.
     const validated = validateWithSchema(input, CreateFeatureInputSchema);
-    const repositoryAttachments = await this.deps.resolveRepositoryFiles(validated.repositoryFiles);
+    const remote = this.locality() === 'remote';
+    // Remote submit boundary: drop locally staged paths so a pre-switch
+    // draft cannot send the remote server a path it cannot read.
+    const repositoryAttachments = remote
+      ? []
+      : await this.deps.resolveRepositoryFiles(validated.repositoryFiles);
+    if (remote) {
+      this.noteStripped('feature create', [
+        ...validated.images,
+        ...validated.attachments,
+        ...validated.repositoryFiles.map((ref) => `${ref.repoKey}:${ref.path}`),
+      ]);
+    }
     const body = await this.api('/api/v1/features', {
       method: 'POST',
       body: {
@@ -177,8 +202,8 @@ export class FeatureService {
         ...(validated.description.trim() === '' ? {} : { description: validated.description }),
         repos: validated.repoKeys,
         ...(validated.useCurrentBranch ? { use_current_branch: true } : {}),
-        images: validated.images,
-        attachments: [...validated.attachments, ...repositoryAttachments],
+        images: remote ? [] : validated.images,
+        attachments: remote ? [] : [...validated.attachments, ...repositoryAttachments],
         pipeline: validated.pipeline,
         risk_level: validated.riskLevel,
         inquireness: validated.inquireness,
@@ -323,17 +348,27 @@ export class FeatureService {
     request: LaunchRefactorChildRequest,
   ): Promise<LaunchRefactorChildResult> {
     const input = validateWithSchema(request, LaunchRefactorChildRequestSchema);
+    // Remote submit boundary: stage nothing local; referenced repository
+    // files are also local-path material and are dropped here.
+    const remote = this.locality() === 'remote';
     // Referenced repository files travel as attachments, as in creation.
-    const repositoryAttachments = await this.deps.resolveRepositoryFiles(
-      input.repositoryFiles ?? [],
-    );
-    const attachments = [...(input.attachments ?? []), ...repositoryAttachments];
+    const repositoryAttachments = remote
+      ? []
+      : await this.deps.resolveRepositoryFiles(input.repositoryFiles ?? []);
+    if (remote) {
+      this.noteStripped('refactor launch', [
+        ...(input.images ?? []),
+        ...(input.attachments ?? []),
+        ...(input.repositoryFiles ?? []).map((ref) => `${ref.repoKey}:${ref.path}`),
+      ]);
+    }
+    const attachments = remote ? [] : [...(input.attachments ?? []), ...repositoryAttachments];
     const body = await this.api(`/api/v1/features/${input.parentId}/actions/refactor`, {
       method: 'POST',
       body: {
         name: input.name,
         ...(input.description === undefined ? {} : { description: input.description }),
-        ...(input.images === undefined ? {} : { images: input.images }),
+        ...(remote || input.images === undefined ? {} : { images: input.images }),
         ...(attachments.length === 0 ? {} : { attachments }),
         ...(input.pipeline === undefined ? {} : { pipeline: input.pipeline }),
         ...(input.checkpoints === undefined
@@ -450,6 +485,20 @@ export class FeatureService {
   }
 
   // --- transport helpers -----------------------------------------------------
+
+  /**
+   * Surfaces (to the redacted log) that a remote submit boundary dropped
+   * locally staged paths, so the strip is a notice, never a silent edit.
+   * Counts only — paths never ride the log line.
+   */
+  private noteStripped(boundary: string, stripped: readonly string[]): void {
+    if (stripped.length === 0) {
+      return;
+    }
+    this.deps.log?.(
+      `remote ${boundary}: stripped ${stripped.length} local image/attachment path(s) from the outgoing payload (requires a local server)`,
+    );
+  }
 
   /**
    * One authenticated request through the shared server client. The 409

@@ -49,6 +49,17 @@ Scope guidance:
 
 {{ end }}{{ if .PlanPath }}Read the implementation plan at: {{ .PlanPath }}
 
+{{ end }}{{ else if .RoadmapPath }}## Approved Roadmap
+
+This phase is one step in a larger plan. Read the approved roadmap at: {{ .RoadmapPath }}
+
+Scope guidance:
+- Your review MUST be scoped to the current phase's objectives only.
+- Consult the roadmap to understand what this phase is responsible for and what later phases will handle.
+- Do NOT flag missing functionality that is explicitly deferred to a subsequent phase in the roadmap.
+- Do NOT request changes for incomplete features that are scheduled for later phases.
+- DO flag issues where this phase's specific objectives are not met.
+
 {{ end }}{{ if .PriorAxisReport }}## Prior Axis Report (Round N-1)
 
 This is your own prior review report from the previous round. Use it to track what you already found and what the fixer addressed.
@@ -74,7 +85,7 @@ The delta below covers what changed since your last reviewed round — it is you
 
 {{ .PreviousFeedback }}
 
-{{ end }}{{ if or .PriorImplementationReportPaths .PriorImplementationEvidenceRootDirs .PriorImplementationEvidenceArtifacts }}## Prior Implementation Evidence
+{{ end }}{{ if .FinalGate }}{{ if or .PriorImplementationReportPaths .PriorImplementationEvidenceRootDirs .PriorImplementationEvidenceArtifacts }}## Prior Implementation Evidence
 
 {{ if .PriorImplementationReportPaths }}Implementation verification reports:
 {{ range .PriorImplementationReportPaths }}- {{ . }}
@@ -83,18 +94,7 @@ The delta below covers what changed since your last reviewed round — it is you
 {{ end }}{{ end }}{{ if .PriorImplementationEvidenceArtifacts }}Evidence artifacts:
 {{ range .PriorImplementationEvidenceArtifacts }}- {{ . }}
 {{ end }}{{ end }}
-{{ end }}{{ else if .RoadmapPath }}## Approved Roadmap
-
-This phase is one step in a larger plan. Read the approved roadmap at: {{ .RoadmapPath }}
-
-Scope guidance:
-- Your review MUST be scoped to the current phase's objectives only.
-- Consult the roadmap to understand what this phase is responsible for and what later phases will handle.
-- Do NOT flag missing functionality that is explicitly deferred to a subsequent phase in the roadmap.
-- Do NOT request changes for incomplete features that are scheduled for later phases.
-- DO flag issues where this phase's specific objectives are not met.
-
-{{ end }}{{ if and (not .FinalGate) .PlanPath }}## Implementation Plan
+{{ end }}{{ end }}{{ if and (not .FinalGate) .PlanPath }}## Implementation Plan
 
 Read the implementation plan (source of truth) at: {{ .PlanPath }}
 

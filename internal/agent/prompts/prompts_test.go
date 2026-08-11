@@ -711,6 +711,87 @@ func TestGoldenSnapshots(t *testing.T) {
 			},
 		},
 		{
+			name: "implementation_review_axis_user_round2",
+			render: func() string {
+				return ImplementationReviewAxisUserPrompt(ReviewUserInput{
+					Iteration:          2,
+					IterDir:            "/state/feat-x/run-1/phase-1/implement/iteration-02",
+					AxisLabel:          "Craft",
+					RoadmapPath:        "/state/feat-x/run-1/roadmap/plan.md",
+					PlanPath:           "/state/feat-x/run-1/phase-1/plan.md",
+					ExitCriteria:       "Relevant tests pass.",
+					VerificationReportPath: "/state/feat-x/run-1/phase-1/implement/iteration-02/verification-report.yaml",
+					ContractPath:           "/state/feat-x/run-1/testing-contract.yaml",
+					ProgressPath:           "/state/feat-x/run-1/phase-1/implement/progress.md",
+					PhaseType:              "tdd-fill-in",
+					FeedbackPath:           "/state/feat-x/run-1/phase-1/implement/iteration-02/review/craft/review-feedback.md",
+					PreviousFeedback:   "## Findings\n- Craft issues found.\n\n## Suggestions\n- Refactor X.\n\n## Verdict\nCHANGES_REQUESTED",
+					PriorAxisReport:    "## Findings\n- Craft: tighten error handling in auth.go.\n\n## Suggestions\n- Consider extracting retry logic.\n\n## Verdict\nCHANGES_REQUESTED",
+					RepoDeltas: []RepoDeltaBlock{
+						{
+							RepoName:       "api",
+							CommitMessages: "fix: tighten error handling in auth.go\n---commit---\nrefactor: extract retry logic",
+							DiffText:       "--- a/auth.go\n+++ b/auth.go\n@@ -10,7 +10,9 @@\n func login() {\n-	if err != nil {\n-		log.Fatal(err)\n-	}\n+	if err != nil {\n+		return fmt.Errorf(\"login: %w\", err)\n+	}\n }",
+						},
+					},
+				})
+			},
+		},
+		{
+			name: "implementation_review_axis_user_round2_capped",
+			render: func() string {
+				return ImplementationReviewAxisUserPrompt(ReviewUserInput{
+					Iteration:          2,
+					IterDir:            "/state/feat-x/run-1/phase-1/implement/iteration-02",
+					AxisLabel:          "Craft",
+					RoadmapPath:        "/state/feat-x/run-1/roadmap/plan.md",
+					PlanPath:           "/state/feat-x/run-1/phase-1/plan.md",
+					ExitCriteria:       "Relevant tests pass.",
+					VerificationReportPath: "/state/feat-x/run-1/phase-1/implement/iteration-02/verification-report.yaml",
+					ContractPath:           "/state/feat-x/run-1/testing-contract.yaml",
+					ProgressPath:           "/state/feat-x/run-1/phase-1/implement/progress.md",
+					PhaseType:              "tdd-fill-in",
+					FeedbackPath:           "/state/feat-x/run-1/phase-1/implement/iteration-02/review/craft/review-feedback.md",
+					PreviousFeedback:   "## Findings\n- Craft issues found.\n\n## Suggestions\n- Refactor X.\n\n## Verdict\nCHANGES_REQUESTED",
+					PriorAxisReport:    "## Findings\n- Craft: tighten error handling.\n\n## Suggestions\n- Extract retry logic.\n\n## Verdict\nCHANGES_REQUESTED",
+					RepoDeltas: []RepoDeltaBlock{
+						{
+							RepoName:       "api",
+							CommitMessages: "fix: tighten error handling\n---commit---\nrefactor: extract retry logic\n---commit---\nchore: update deps",
+							DiffText:       " 10 files changed, 500 insertions(+), 200 deletions(-)",
+							Capped:         true,
+						},
+					},
+				})
+			},
+		},
+		{
+			name: "implementation_review_axis_user_round2_empty_delta",
+			render: func() string {
+				return ImplementationReviewAxisUserPrompt(ReviewUserInput{
+					Iteration:          2,
+					IterDir:            "/state/feat-x/run-1/phase-1/implement/iteration-02",
+					AxisLabel:          "Craft",
+					RoadmapPath:        "/state/feat-x/run-1/roadmap/plan.md",
+					PlanPath:           "/state/feat-x/run-1/phase-1/plan.md",
+					ExitCriteria:       "Relevant tests pass.",
+					VerificationReportPath: "/state/feat-x/run-1/phase-1/implement/iteration-02/verification-report.yaml",
+					ContractPath:           "/state/feat-x/run-1/testing-contract.yaml",
+					ProgressPath:           "/state/feat-x/run-1/phase-1/implement/progress.md",
+					PhaseType:              "tdd-fill-in",
+					FeedbackPath:           "/state/feat-x/run-1/phase-1/implement/iteration-02/review/craft/review-feedback.md",
+					PreviousFeedback:   "## Findings\n- Craft issues found.\n\n## Suggestions\n- Refactor X.\n\n## Verdict\nCHANGES_REQUESTED",
+					PriorAxisReport:    "## Findings\n- Craft: tighten error handling.\n\n## Suggestions\n- Extract retry logic.\n\n## Verdict\nCHANGES_REQUESTED",
+					RepoDeltas: []RepoDeltaBlock{
+						{
+							RepoName: "api",
+							IsEmpty: true,
+						},
+					},
+				})
+			},
+		},
+		{
 			name: "pr_description_user_full",
 			render: func() string {
 				return PRDescriptionUserPrompt(PRDescriptionUserInput{

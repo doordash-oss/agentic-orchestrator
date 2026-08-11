@@ -1,0 +1,84 @@
+Axis under review: Craft
+Review feedback output: /state/feat-x/run-1/phase-1/implement/iteration-02/review/craft/review-feedback.md
+
+Iteration under review: 2
+Iteration artifacts directory: /state/feat-x/run-1/phase-1/implement/iteration-02
+
+## Review Posture
+
+- Keep this axis read-only: inspect source and artifacts, then write only the required review-feedback.md file.
+
+## Approved Roadmap
+
+This phase is one step in a larger plan. Read the approved roadmap at: /state/feat-x/run-1/roadmap/plan.md
+
+Scope guidance:
+- Your review MUST be scoped to the current phase's objectives only.
+- Consult the roadmap to understand what this phase is responsible for and what later phases will handle.
+- Do NOT flag missing functionality that is explicitly deferred to a subsequent phase in the roadmap.
+- Do NOT request changes for incomplete features that are scheduled for later phases.
+- DO flag issues where this phase's specific objectives are not met.
+
+## Prior Axis Report (Round N-1)
+
+This is your own prior review report from the previous round. Use it to track what you already found and what the fixer addressed.
+
+## Findings
+- Craft: tighten error handling.
+
+## Suggestions
+- Extract retry logic.
+
+## Verdict
+CHANGES_REQUESTED
+
+## Delta Since Your Last Reviewed Round
+
+The delta below covers what changed since your last reviewed round — it is your primary re-review target. The cumulative diff base above remains the overall feature scope.
+
+### api
+
+Commit messages:
+fix: tighten error handling
+---commit---
+refactor: extract retry logic
+---commit---
+chore: update deps
+
+Diff (capped to --stat summary, full diff exceeded size budget):
+ 10 files changed, 500 insertions(+), 200 deletions(-)
+
+## Prior Aggregate Feedback
+
+## Findings
+- Craft issues found.
+
+## Suggestions
+- Refactor X.
+
+## Verdict
+CHANGES_REQUESTED
+
+## Implementation Plan
+
+Read the implementation plan (source of truth) at: /state/feat-x/run-1/phase-1/plan.md
+
+## Exit Criteria
+
+Relevant tests pass.
+
+## Verification Report
+
+Read the verification report at: /state/feat-x/run-1/phase-1/implement/iteration-02/verification-report.yaml
+
+## Testing Contract
+
+Read the binding testing contract at: /state/feat-x/run-1/testing-contract.yaml
+
+## Progress
+
+Read the current progress at: /state/feat-x/run-1/phase-1/implement/progress.md
+
+## Phase Type
+
+This is a **tdd-fill-in** phase. If the axis methodology defines phase-aware criteria, apply them; otherwise use the phase type as scope context.

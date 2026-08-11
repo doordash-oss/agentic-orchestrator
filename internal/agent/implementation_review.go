@@ -251,6 +251,9 @@ func runImplementationReviewAxis(cfg ImplementConfig, sm ports.SessionManager, i
 	}
 	RemoveCompletionReceipt(axisDir)
 	intent := resolvePromptIntent(cfg.Feature)
+	priorAxisReport := perPhasePriorAxisReport(cfg.ArtifactDir, iteration, axisSlug)
+	previousFeedback := perPhasePreviousAggregateFeedback(cfg.ArtifactDir, iteration)
+	repoDeltas := assembleImplementRepoDeltas(cfg, cfg.ArtifactDir)
 	reviewPrompt := BuildImplementationReviewAxisPromptWithOpts(ImplementationReviewAxisPromptOpts{
 		Gate:                   implementationReviewGatePerPhase,
 		AxisLabel:              axis.Name,
@@ -269,6 +272,9 @@ func runImplementationReviewAxis(cfg ImplementConfig, sm ports.SessionManager, i
 		RoadmapPath:            cfg.RoadmapPath,
 		PhaseType:              cfg.PhaseType,
 		FeedbackPath:           feedbackPath,
+		PreviousFeedback:       previousFeedback,
+		PriorAxisReport:         priorAxisReport,
+		RepoDeltas:             repoDeltas,
 	})
 	if cfg.Feature != nil {
 		if block := visualReferencesSection(cfg.Feature.Images, "reviewing this iteration"); block != "" {

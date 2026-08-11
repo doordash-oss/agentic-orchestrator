@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"slices"
@@ -29,6 +30,7 @@ import (
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent/roles"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/observe"
 	"github.com/doordash-oss/agentic-orchestrator/internal/permission"
@@ -992,11 +994,13 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 				}, nil
 			}
 
-			switch reviewStatus {
-			case ReviewApproved:
-				meta.MadeProgress = observeVerifiedImplementationOutcome(pt, 0, cfg)
-				meta.ReviewStatus = reviewStatus.String()
-				_ = am.WriteMeta(iterDir, meta)
+		switch reviewStatus {
+		case ReviewApproved:
+			anchors := anchorImplementIteration(cfg, i, "approved")
+			meta.MadeProgress = observeVerifiedImplementationOutcome(pt, 0, cfg)
+			meta.ReviewStatus = reviewStatus.String()
+			meta.Anchors = anchors
+			_ = am.WriteMeta(iterDir, meta)
 				_ = am.WriteSummary(summaryPath, meta)
 				consecutiveFailures = 0
 				cfg.Observer.IterationEnded(iterCtx, i, toSessionUsage(cost), time.Since(iterStart), finalStatusReviewPassed)
@@ -1004,10 +1008,16 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 					FinalStatus: finalStatusReviewPassed,
 					Iterations:  i,
 				}, nil
-			case ReviewChangesRequested:
-				meta.MadeProgress = observeVerifiedImplementationOutcome(pt, CountBlockingReviewFindings(feedback)+CountOpenVerificationOutcomeBlockers(harnessVerification), cfg)
-				meta.ReviewStatus = reviewStatus.String()
-				_ = am.WriteMeta(iterDir, meta)
+		case ReviewChangesRequested:
+			outcome := "changes requested"
+			if isGateSynthesizedChangesRequested(iterDir) {
+				outcome = "changes requested (gate)"
+			}
+			anchors := anchorImplementIteration(cfg, i, outcome)
+			meta.MadeProgress = observeVerifiedImplementationOutcome(pt, CountBlockingReviewFindings(feedback)+CountOpenVerificationOutcomeBlockers(harnessVerification), cfg)
+			meta.ReviewStatus = reviewStatus.String()
+			meta.Anchors = anchors
+			_ = am.WriteMeta(iterDir, meta)
 				_ = am.WriteSummary(summaryPath, meta)
 				missingReqs := MissingEvidenceRequirements(feedback)
 				insufficientReqs := InsufficientEvidenceRequirements(feedback)
@@ -1260,6 +1270,57 @@ func implementWorktreePaths(cfg ImplementConfig) []string {
 		return []string{cfg.WorkDir}
 	}
 	return nil
+}
+
+// anchorImplementIteration is the per-phase implementation loop's commit
+// step, mirroring the Final Review loop's anchorIteration. For each managed
+// repo it captures the base HEAD, commits any worktree changes with a
+// deterministic harness message derived from the phase number, iteration,
+// and outcome, and captures the head SHA. On a clean tree it records the
+// existing HEAD without creating a commit (CommitAllAndGetHead semantics).
+// Commit failures are non-fatal (log-and-continue) but the repo's anchors
+// are omitted from the returned map so meta never records SHAs the harness
+// failed to anchor. RETRY, FAILED, unclear, and review-failed iterations
+// do not call this function — their leftover worktree state folds into the
+// next anchored iteration's commit, exactly as FR's crash-recovery folding.
+func anchorImplementIteration(cfg ImplementConfig, iteration int, outcome string) RepoAnchors {
+	anchors := make(RepoAnchors)
+	if cfg.Feature == nil || len(cfg.Feature.Repos) == 0 {
+		return anchors
+	}
+	phaseNum := cfg.Feature.CurrentRoadmapPhase
+	message := fmt.Sprintf("Phase %d implement iteration %d: %s", phaseNum, iteration, outcome)
+	for _, repo := range cfg.Feature.Repos {
+		path := repo.WorktreePath
+		if path == "" {
+			path = repo.Path
+		}
+		if path == "" || repo.Name == "" {
+			continue
+		}
+		base, err := git.CurrentHeadSHA(path)
+		if err != nil {
+			log.Printf("feature %s: implement anchor base capture for repo %s: %v", cfg.Feature.ID, repo.Name, err)
+			continue
+		}
+		head, err := git.CommitAllAndGetHead(path, message)
+		if err != nil {
+			log.Printf("feature %s: implement anchor commit for repo %s: %v", cfg.Feature.ID, repo.Name, err)
+			continue
+		}
+		anchors[repo.Name] = RepoAnchor{Base: base, Head: head}
+	}
+	return anchors
+}
+
+// isGateSynthesizedChangesRequested reports whether a ReviewChangesRequested
+// verdict from runReviewGate was gate-synthesized (report-integrity or
+// deferral-ledger rejection) rather than produced by the LLM review axes.
+// The gate-synthesized path returns before creating the per-iteration
+// review/ directory, so its absence is a reliable signal.
+func isGateSynthesizedChangesRequested(iterDir string) bool {
+	_, err := os.Stat(filepath.Join(iterDir, "review"))
+	return err != nil
 }
 
 func isFailureBudgetAgentStatus(status string) bool {

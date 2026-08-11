@@ -58,18 +58,14 @@ install-desktop:
 
 # Cut a release from a clean checkout of a vX.Y.Z tag, run locally by the
 # release operator (no CI credentials involved):
-#   1. package the desktop DMG (stamped with the tag version),
-#   2. goreleaser: CLI archives + GitHub release + signed checksums covering
-#      the DMG + the agentico CLI cask in the tap,
-#   3. publish the agentico-desktop cask for the DMG to the tap.
-# Extra goreleaser flags (e.g. --release-notes) go in GORELEASER_FLAGS.
+# The audited runner captures the tag/commit, creates a detached source-only
+# worktree, performs all builds and gates there, atomically reserves the remote
+# tag, publishes immutable receipt-bound bytes, verifies GitHub digests, then
+# publishes the macOS cask and safely removes the detached worktree.
+# Set AGENTICO_RELEASE_NOTES_FILE to provide the sole supported GoReleaser
+# input; arbitrary flags are intentionally not accepted.
 release:
-	@[ -z "$$(git status --porcelain)" ] || { echo "release: working tree is dirty"; exit 1; }
-	@git describe --tags --exact-match >/dev/null 2>&1 || { echo "release: HEAD is not on a release tag"; exit 1; }
-	@[ -d node_modules ] || npm ci
-	npm run package:build --workspace desktop
-	goreleaser release --clean $(GORELEASER_FLAGS)
-	node desktop/scripts/publish-desktop-cask.mjs
+	node desktop/scripts/release-run.mjs
 
 install-system: build
 	cp $(BIN_DIR)/$(BINARY) $(INSTALL_DIR)/$(BINARY)

@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
 
 import {
   auditLicenseInventory,
+  auditGoReleaserDesktopArtifacts,
+  auditGoReleaserReleaseTarget,
+  auditReleaseMakefile,
+  auditReleaseRunner,
+  auditReleaseWorkspace,
   auditNpmLockfile,
   collectNpmRuntimeInventory,
   hasElectronBuilderProtocolScheme,
@@ -10,6 +16,199 @@ import {
 } from './audit-release.mjs';
 
 describe('release audit lockfile and license checks', () => {
+  it('rejects a release config that uploads an AppImage without signing it', () => {
+    const config = `
+checksum:
+  extra_files:
+    - glob: desktop/dist/Agentico-mac-universal.dmg
+release:
+  extra_files:
+    - glob: desktop/dist/Agentico-mac-universal.dmg
+    - glob: desktop/dist/Agentico-x64.AppImage
+`;
+
+    expect(
+      auditGoReleaserDesktopArtifacts(config, [
+        'Agentico-mac-universal.dmg',
+        'Agentico-x64.AppImage',
+      ]),
+    ).toContain('GoReleaser checksum.extra_files omits Agentico-x64.AppImage');
+  });
+
+  it('detects independent checksum and release omissions', () => {
+    const config = `
+checksum:
+  extra_files:
+    - glob: desktop/dist/Agentico-mac-universal.dmg
+    - glob: desktop/dist/Agentico-x64.AppImage
+release:
+  extra_files:
+    - glob: desktop/dist/Agentico-mac-universal.dmg
+    - glob: desktop/dist/Agentico-arm64.AppImage
+`;
+
+    expect(
+      auditGoReleaserDesktopArtifacts(config, [
+        'Agentico-mac-universal.dmg',
+        'Agentico-x64.AppImage',
+        'Agentico-arm64.AppImage',
+      ]),
+    ).toEqual(
+      expect.arrayContaining([
+        'GoReleaser checksum.extra_files omits Agentico-arm64.AppImage',
+        'GoReleaser release.extra_files omits Agentico-x64.AppImage',
+      ]),
+    );
+  });
+
+  it('requires the exact desktop artifact directory and versioned Debian paths', () => {
+    const config = `
+checksum:
+  extra_files:
+    - glob: wrong/place/Agentico-x64.AppImage
+    - glob: desktop/dist/agentico_*_amd64.deb
+release:
+  extra_files:
+    - glob: desktop/dist/Agentico-x64.AppImage
+    - glob: wrong/place/agentico_{{ .Version }}_amd64.deb
+`;
+
+    expect(
+      auditGoReleaserDesktopArtifacts(config, [
+        'Agentico-x64.AppImage',
+        'agentico_0.150.0_amd64.deb',
+      ]),
+    ).toEqual(
+      expect.arrayContaining([
+        'GoReleaser checksum.extra_files omits Agentico-x64.AppImage',
+        'GoReleaser checksum.extra_files omits agentico_0.150.0_amd64.deb',
+        'GoReleaser release.extra_files omits agentico_0.150.0_amd64.deb',
+      ]),
+    );
+  });
+
+  it('requires each exact desktop path exactly once in each GoReleaser block', () => {
+    const config = `
+checksum:
+  extra_files:
+    - glob: desktop/dist/publication/Agentico-x64.AppImage
+    - glob: desktop/dist/publication/Agentico-x64.AppImage
+release:
+  extra_files:
+    - glob: desktop/dist/publication/Agentico-x64.AppImage
+    - glob: desktop/dist/publication/Agentico-x64.AppImage
+`;
+
+    expect(auditGoReleaserDesktopArtifacts(config, ['Agentico-x64.AppImage'])).toEqual(
+      expect.arrayContaining([
+        'GoReleaser checksum.extra_files has 2 entries for Agentico-x64.AppImage, expected exactly 1',
+        'GoReleaser release.extra_files has 2 entries for Agentico-x64.AppImage, expected exactly 1',
+      ]),
+    );
+  });
+
+  it('accepts the actual GoReleaser desktop artifact configuration', () => {
+    const config = readFileSync(new URL('../../.goreleaser.yaml', import.meta.url), 'utf8');
+    expect(
+      auditGoReleaserDesktopArtifacts(config, [
+        'Agentico-mac-universal.dmg',
+        'Agentico-x64.AppImage',
+        'Agentico-arm64.AppImage',
+        'agentico_0.150.0_amd64.deb',
+        'agentico_0.150.0_arm64.deb',
+        'desktop-release.json',
+        'desktop-release.json.sig',
+      ]),
+    ).toEqual([]);
+  });
+
+  it('requires GoReleaser to pin the release target to the captured commit', () => {
+    expect(auditGoReleaserReleaseTarget('release:\n  target_commitish: main\n')).toEqual([
+      'GoReleaser release.target_commitish must be exactly "{{ .Commit }}" to prevent publishing another commit',
+    ]);
+    const config = readFileSync(new URL('../../.goreleaser.yaml', import.meta.url), 'utf8');
+    expect(auditGoReleaserReleaseTarget(config)).toEqual([]);
+  });
+
+  it('allows only the audited release runner in the Make target', () => {
+    expect(
+      auditReleaseMakefile('release:\n\tnode desktop/scripts/release-goreleaser.mjs\n'),
+    ).toContain(
+      'Makefile release recipe must contain only the complete audited release command structure',
+    );
+    expect(
+      auditReleaseMakefile(
+        'release:\n\tRELEASE_TAG=v0.150.0 node desktop/scripts/release-run.mjs\n',
+      ),
+    ).toContain('Makefile must not expose publication identity or arbitrary GoReleaser inputs');
+    const makefile = readFileSync(new URL('../../Makefile', import.meta.url), 'utf8');
+    expect(auditReleaseMakefile(makefile)).toEqual([]);
+  });
+
+  it('rejects duplicate and extra commands around the audited runner', () => {
+    expect(
+      auditReleaseMakefile(
+        'release:\n\tnode desktop/scripts/release-run.mjs\n\tnode desktop/scripts/publish-desktop-cask.mjs\n',
+      ),
+    ).toContain(
+      'Makefile release recipe must contain only the complete audited release command structure',
+    );
+  });
+
+  it('audits snapshot, atomic reservation, publication, remote bytes, cask, and cleanup order', () => {
+    const runner = readFileSync(new URL('./release-run.mjs', import.meta.url), 'utf8');
+    expect(auditReleaseRunner(runner)).toEqual([]);
+    expect(
+      auditReleaseRunner(
+        runner.replace(
+          "await reserveTag({ evidence });\n    revalidateWorkspace(evidence.workspace_token);\n    saveResume(evidence, snapshot, 'goreleaser-started');\n    publish({ evidence, snapshot, notesFile });",
+          "publish({ evidence, snapshot, notesFile });\n    revalidateWorkspace(evidence.workspace_token);\n    saveResume(evidence, snapshot, 'goreleaser-started');\n    await reserveTag({ evidence });",
+        ),
+      ),
+    ).toContain(
+      "release runner omits or reorders audited step: saveResume(evidence, snapshot, 'goreleaser-started')",
+    );
+    expect(
+      auditReleaseRunner(
+        runner.replace(
+          "publish({ evidence, snapshot, notesFile });\n    saveResume(evidence, snapshot, 'goreleaser-published');",
+          "publish({ evidence, snapshot, notesFile });\n    saveResume(evidence, snapshot, 'remote-verified');",
+        ),
+      ),
+    ).toContain(
+      "release runner omits or reorders audited step: saveResume(evidence, snapshot, 'goreleaser-published')",
+    );
+    expect(
+      auditReleaseRunner(
+        runner.replace(
+          'cleanup(evidence);\n      if (clearResumeAfterCleanup) removeResume(operatorRoot);',
+          'if (clearResumeAfterCleanup) removeResume(operatorRoot);\n      cleanup(evidence);',
+        ),
+      ),
+    ).toContain('release runner must remove resume state only after detached-workspace cleanup');
+    expect(
+      auditReleaseRunner(
+        runner.replace(
+          'await verifyRemote({ evidence, snapshot });\n      } catch',
+          '// remote verification omitted\n      } catch',
+        ),
+      ),
+    ).toContain('release runner must reverify remote publication before every resumed cask');
+  });
+
+  it('forbids cleanup from executing ambient operator source', () => {
+    expect(
+      auditReleaseWorkspace(
+        "execFileSync('go', ['run', './desktop/scripts/release-cleanup', workspace.path])",
+      ),
+    ).toContain('release workspace cleanup must never execute ambient source with go run');
+    expect(
+      auditReleaseWorkspace(
+        'execFileSync(workspace.cleanupHelper.path, [workspace.path]); preserved for manual cleanup',
+      ),
+    ).toEqual([]);
+  });
+
   it('collects production npm packages plus explicitly shipped renderer dev assets', () => {
     const lock = {
       lockfileVersion: 3,

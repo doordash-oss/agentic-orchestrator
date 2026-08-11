@@ -31,7 +31,24 @@ afterEach(() => {
 });
 
 describe('UpdateCoordinator', () => {
-  it('downloads the exact package bytes and stages them only after signed checksum verification', async () => {
+  it('verifies a signed release envelope before downloading its exact package', async () => {
+    const fixture = signedFixture('v0.2.0', 'Agentico-mac-universal.dmg', 'macos package bytes');
+    const update = makeCoordinator({
+      platform: 'darwin',
+      arch: 'arm64',
+      packageFormat: 'macos',
+      fixture,
+    });
+
+    await expect(update.checkNow()).resolves.toMatchObject({
+      status: 'ready',
+      targetVersion: '0.2.0',
+      signatureStatus: 'verified',
+    });
+    expect(fixture.requestedPackage).toHaveBeenCalledOnce();
+  });
+
+  it('downloads the exact package bytes and stages them only after signed envelope verification', async () => {
     const fixture = signedFixture('v0.2.0', 'Agentico-mac-universal.dmg', 'macos package bytes');
     const update = makeCoordinator({
       platform: 'darwin',
@@ -53,6 +70,24 @@ describe('UpdateCoordinator', () => {
     ) as { packageSha256: string };
     expect(fs.readFileSync(stagedPackage, 'utf8')).toBe('macos package bytes');
     expect(stagedMetadata.packageSha256).toBe(sha256(Buffer.from('macos package bytes')));
+  });
+
+  it('selects the exact release envelope when its signature appears first', async () => {
+    const fixture = signedFixture('v0.2.0', 'Agentico-mac-universal.dmg', 'macos package bytes', {
+      signatureBeforeEnvelope: true,
+    });
+    const update = makeCoordinator({
+      platform: 'darwin',
+      arch: 'arm64',
+      packageFormat: 'macos',
+      fixture,
+    });
+
+    await expect(update.checkNow()).resolves.toMatchObject({
+      status: 'ready',
+      targetVersion: '0.2.0',
+      signatureStatus: 'verified',
+    });
   });
 
   it('follows GitHub release asset redirects through the current release asset host', async () => {
@@ -114,8 +149,7 @@ describe('UpdateCoordinator', () => {
 
   it('rejects altered signed metadata before downloading a package', async () => {
     const fixture = signedFixture('v0.2.0', 'Agentico-mac-universal.dmg', 'package bytes', {
-      checksumText: `${'0'.repeat(64)}  Agentico-mac-universal.dmg\n`,
-      signatureText: `${sha256(Buffer.from('package bytes'))}  Agentico-mac-universal.dmg\n`,
+      servedEnvelopeBytes: Buffer.from('{"tampered":true}\n'),
     });
     const update = makeCoordinator({
       platform: 'darwin',
@@ -131,6 +165,212 @@ describe('UpdateCoordinator', () => {
     });
     expect(fixture.requestedPackage).not.toHaveBeenCalled();
     expect(fs.existsSync(path.join(dir, 'updates', 'v0.2.0'))).toBe(false);
+  });
+
+  it('rejects replaying an older signed envelope under a higher release tag', async () => {
+    const fixture = signedFixture('v0.3.0', 'Agentico-mac-universal.dmg', 'package bytes', {
+      envelopeTag: 'v0.2.0',
+      envelopeVersion: '0.2.0',
+    });
+    const update = makeCoordinator({
+      platform: 'darwin',
+      arch: 'arm64',
+      packageFormat: 'macos',
+      fixture,
+    });
+
+    await expect(update.checkNow()).resolves.toMatchObject({
+      status: 'failed',
+      message: 'The signed release envelope did not match the selected release.',
+    });
+    expect(fixture.requestedPackage).not.toHaveBeenCalled();
+  });
+
+  it('rejects an envelope whose inventory omits one of the five desktop packages', async () => {
+    const fixture = signedFixture('v0.2.0', 'Agentico-mac-universal.dmg', 'package bytes', {
+      omitEnvelopeArtifact: 'Agentico-arm64.AppImage',
+    });
+    const update = makeCoordinator({
+      platform: 'darwin',
+      arch: 'arm64',
+      packageFormat: 'macos',
+      fixture,
+    });
+
+    await expect(update.checkNow()).resolves.toMatchObject({
+      status: 'failed',
+      message: 'The signed release envelope did not contain the exact desktop package inventory.',
+    });
+    expect(fixture.requestedPackage).not.toHaveBeenCalled();
+  });
+
+  it('rejects duplicate exact package assets instead of choosing the first one', async () => {
+    const fixture = signedFixture('v0.2.0', 'Agentico-mac-universal.dmg', 'package bytes', {
+      duplicateReleaseAsset: 'Agentico-mac-universal.dmg',
+    });
+    const update = makeCoordinator({
+      platform: 'darwin',
+      arch: 'arm64',
+      packageFormat: 'macos',
+      fixture,
+    });
+
+    await expect(update.checkNow()).resolves.toMatchObject({
+      status: 'failed',
+      message: 'The release contained ambiguous desktop update assets.',
+    });
+    expect(fixture.requestedPackage).not.toHaveBeenCalled();
+  });
+
+  it('rejects duplicate exact release-envelope assets instead of choosing the first one', async () => {
+    const fixture = signedFixture('v0.2.0', 'Agentico-mac-universal.dmg', 'package bytes', {
+      duplicateReleaseAsset: 'desktop-release.json',
+    });
+    const update = makeCoordinator({
+      platform: 'darwin',
+      arch: 'arm64',
+      packageFormat: 'macos',
+      fixture,
+    });
+
+    await expect(update.checkNow()).resolves.toMatchObject({
+      status: 'failed',
+      message: 'The release contained ambiguous signed update metadata.',
+    });
+    expect(fixture.requestedPackage).not.toHaveBeenCalled();
+  });
+
+  it('keeps updates without a complete signed release envelope non-installable', async () => {
+    const fixture = signedFixture('v0.2.0', 'Agentico-mac-universal.dmg', 'package bytes', {
+      omitReleaseAsset: 'desktop-release.json.sig',
+    });
+    const update = makeCoordinator({
+      platform: 'darwin',
+      arch: 'arm64',
+      packageFormat: 'macos',
+      fixture,
+    });
+
+    await expect(update.checkNow()).resolves.toMatchObject({
+      status: 'available',
+      signatureStatus: 'unknown',
+      message: 'An update is available, but the signed release envelope is incomplete.',
+    });
+    expect(fixture.requestedPackage).not.toHaveBeenCalled();
+  });
+
+  it('rejects duplicate signed envelope entries for the selected package', async () => {
+    const fixture = signedFixture('v0.2.0', 'Agentico-mac-universal.dmg', 'package bytes', {
+      duplicateEnvelopeArtifact: 'Agentico-mac-universal.dmg',
+    });
+    const update = makeCoordinator({
+      platform: 'darwin',
+      arch: 'arm64',
+      packageFormat: 'macos',
+      fixture,
+    });
+
+    await expect(update.checkNow()).resolves.toMatchObject({
+      status: 'failed',
+      message: 'The signed release envelope did not contain the exact desktop package inventory.',
+    });
+    expect(fixture.requestedPackage).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['unsupported schema', (envelope: TestReleaseEnvelope) => ({ ...envelope, schema_version: 2 })],
+    [
+      'invalid commit',
+      (envelope: TestReleaseEnvelope) => ({ ...envelope, commit: 'not-a-commit' }),
+    ],
+    ['extra top-level field', (envelope: TestReleaseEnvelope) => ({ ...envelope, extra: true })],
+    [
+      'extra artifact field',
+      (envelope: TestReleaseEnvelope) => ({
+        ...envelope,
+        artifacts: [{ ...envelope.artifacts[0], extra: true }, ...envelope.artifacts.slice(1)],
+      }),
+    ],
+  ])('rejects signed release envelopes with %s', async (_label, transformEnvelope) => {
+    const fixture = signedFixture('v0.2.0', 'Agentico-mac-universal.dmg', 'package bytes', {
+      transformEnvelope,
+    });
+    const update = makeCoordinator({
+      platform: 'darwin',
+      arch: 'arm64',
+      packageFormat: 'macos',
+      fixture,
+    });
+
+    await expect(update.checkNow()).resolves.toMatchObject({ status: 'failed' });
+    expect(fixture.requestedPackage).not.toHaveBeenCalled();
+  });
+
+  it('rejects a GitHub package size that differs from the signed envelope', async () => {
+    const fixture = signedFixture('v0.2.0', 'Agentico-mac-universal.dmg', 'package bytes', {
+      transformEnvelope: (envelope) => ({
+        ...envelope,
+        artifacts: envelope.artifacts.map((artifact) =>
+          artifact.name === 'Agentico-mac-universal.dmg'
+            ? { ...artifact, size: artifact.size + 1 }
+            : artifact,
+        ),
+      }),
+    });
+    const update = makeCoordinator({
+      platform: 'darwin',
+      arch: 'arm64',
+      packageFormat: 'macos',
+      fixture,
+    });
+
+    await expect(update.checkNow()).resolves.toMatchObject({
+      status: 'failed',
+      message: 'The signed release envelope did not match the selected update package.',
+    });
+    expect(fixture.requestedPackage).not.toHaveBeenCalled();
+  });
+
+  it('rejects fuzzy package names when the exact production filename is absent', async () => {
+    const fixture = signedFixture('v0.2.0', 'Agentico-mac-universal.dmg', 'package bytes', {
+      omitReleaseAsset: 'Agentico-mac-universal.dmg',
+      extraReleaseAsset: { name: 'Agentico-mac-arm64.dmg', size: 13 },
+    });
+    const update = makeCoordinator({
+      platform: 'darwin',
+      arch: 'arm64',
+      packageFormat: 'macos',
+      fixture,
+    });
+
+    await expect(update.checkNow()).resolves.toMatchObject({
+      status: 'failed',
+      message: 'No macos update package is available for darwin/arm64.',
+    });
+    expect(fixture.requestedPackage).not.toHaveBeenCalled();
+  });
+
+  it('does not resume staged bytes that were bound to a different signed envelope', async () => {
+    const firstFixture = signedFixture('v0.2.0', 'Agentico-mac-universal.dmg', 'package bytes');
+    await makeCoordinator({
+      platform: 'darwin',
+      arch: 'arm64',
+      packageFormat: 'macos',
+      fixture: firstFixture,
+    }).checkNow();
+
+    const secondFixture = signedFixture('v0.2.0', 'Agentico-mac-universal.dmg', 'package bytes', {
+      envelopeCommit: 'fedcba9876543210fedcba9876543210fedcba98',
+    });
+    await expect(
+      makeCoordinator({
+        platform: 'darwin',
+        arch: 'arm64',
+        packageFormat: 'macos',
+        fixture: secondFixture,
+      }).checkNow(),
+    ).resolves.toMatchObject({ status: 'ready' });
+    expect(secondFixture.requestedPackage).toHaveBeenCalledOnce();
   });
 
   it('rejects tampered or partial packages without staging them', async () => {
@@ -188,7 +428,40 @@ describe('UpdateCoordinator', () => {
     expect(update.getState().guidance?.join('\n')).toContain(
       'sudo apt install ./agentico_0.2.0_amd64.deb',
     );
+    expect(update.getState().guidance?.join('\n')).toContain('desktop-release.json');
+    expect(update.getState().guidance?.join('\n')).not.toContain('checksum');
     expect(fixture.requestedPackage).not.toHaveBeenCalled();
+  });
+
+  it('derives the exact arm64 AppImage and versioned DEB production filenames', async () => {
+    const appImageFixture = signedFixture(
+      'v0.2.0',
+      'Agentico-arm64.AppImage',
+      'arm64 appimage bytes',
+    );
+    await expect(
+      makeCoordinator({
+        platform: 'linux',
+        arch: 'arm64',
+        packageFormat: 'appimage',
+        fixture: appImageFixture,
+      }).checkNow(),
+    ).resolves.toMatchObject({ status: 'ready', signatureStatus: 'verified' });
+    expect(appImageFixture.requestedPackage).toHaveBeenCalledOnce();
+
+    const debFixture = signedFixture('v0.2.0', 'agentico_0.2.0_arm64.deb', 'arm64 deb bytes');
+    const deb = makeCoordinator({
+      platform: 'linux',
+      arch: 'arm64',
+      packageFormat: 'deb',
+      fixture: debFixture,
+    });
+    await expect(deb.checkNow()).resolves.toMatchObject({
+      status: 'available',
+      signatureStatus: 'verified',
+    });
+    expect(deb.getState().guidance?.join('\n')).toContain('agentico_0.2.0_arm64.deb');
+    expect(debFixture.requestedPackage).not.toHaveBeenCalled();
   });
 
   it('falls back to signed-download guidance when AppImage cannot be replaced in app', async () => {
@@ -209,6 +482,7 @@ describe('UpdateCoordinator', () => {
       message: 'A verified update is available for manual signed installation.',
     });
     expect(update.getState().guidance?.join('\n')).toContain('cannot be safely replaced in app');
+    expect(update.getState().guidance?.join('\n')).toContain('desktop-release.json.sig');
     expect(fixture.requestedPackage).not.toHaveBeenCalled();
   });
 
@@ -231,6 +505,7 @@ describe('UpdateCoordinator', () => {
     expect(update.getState().guidance?.join('\n')).toContain(
       'macOS application location cannot be safely replaced in app',
     );
+    expect(update.getState().guidance?.join('\n')).toContain('desktop-release.json.sig');
     expect(update.getState().guidance?.join('\n')).not.toContain('AppImage');
   });
 
@@ -567,39 +842,102 @@ interface SignedFixture {
   feedPath(dir: string): string;
 }
 
+interface TestReleaseEnvelope {
+  schema_version: number;
+  tag: string;
+  version: string;
+  commit: string;
+  artifacts: Array<{ name: string; sha256: string; size: number }>;
+}
+
 function signedFixture(
   tag: string,
   packageName: string,
   packageText: string,
   options: {
-    checksumText?: string;
-    signatureText?: string;
     servedPackageBytes?: Buffer;
+    servedEnvelopeBytes?: Buffer;
     extraReleases?: unknown[];
     redirectAssets?: boolean;
+    signatureBeforeEnvelope?: boolean;
+    envelopeTag?: string;
+    envelopeVersion?: string;
+    envelopeCommit?: string;
+    omitEnvelopeArtifact?: string;
+    duplicateEnvelopeArtifact?: string;
+    duplicateReleaseAsset?: string;
+    transformEnvelope?: (envelope: TestReleaseEnvelope) => unknown;
+    omitReleaseAsset?: string;
+    extraReleaseAsset?: { name: string; size: number };
   } = {},
 ): SignedFixture {
   const packageBytes = Buffer.from(packageText);
-  const checksumText = options.checksumText ?? `${sha256(packageBytes)}  ${packageName}\n`;
-  const signatureText = options.signatureText ?? checksumText;
-  const checksumSignature = Buffer.concat([
-    Buffer.from('agentico-ed25519:'),
-    Buffer.from(
-      sign(null, Buffer.from(signatureText), createPrivateKey(PRIVATE_KEY)).toString('base64'),
-    ),
-  ]);
-  const assets = [
-    asset(tag, packageName, packageBytes.byteLength),
-    asset(tag, 'SHA256SUMS', Buffer.byteLength(checksumText)),
-    asset(tag, 'SHA256SUMS.sig', checksumSignature.byteLength),
-  ];
+  const version = tag.replace(/^v/, '');
+  const desktopPackages: Array<{ name: string; bytes: Buffer }> = [
+    { name: 'Agentico-mac-universal.dmg', bytes: Buffer.from('fixture macos') },
+    { name: 'Agentico-x64.AppImage', bytes: Buffer.from('fixture x64 appimage') },
+    { name: 'Agentico-arm64.AppImage', bytes: Buffer.from('fixture arm64 appimage') },
+    { name: `agentico_${version}_amd64.deb`, bytes: Buffer.from('fixture amd64 deb') },
+    { name: `agentico_${version}_arm64.deb`, bytes: Buffer.from('fixture arm64 deb') },
+  ].map((entry) => (entry.name === packageName ? { ...entry, bytes: packageBytes } : entry));
+  let envelopeArtifacts = desktopPackages
+    .filter(({ name }) => name !== options.omitEnvelopeArtifact)
+    .map(({ name, bytes }) => ({
+      name,
+      sha256: sha256(bytes),
+      size: bytes.byteLength,
+    }));
+  if (options.duplicateEnvelopeArtifact !== undefined) {
+    const duplicate = envelopeArtifacts.find(
+      ({ name }) => name === options.duplicateEnvelopeArtifact,
+    );
+    if (duplicate !== undefined) envelopeArtifacts = [...envelopeArtifacts, { ...duplicate }];
+  }
+  const envelope: TestReleaseEnvelope = {
+    schema_version: 1,
+    tag: options.envelopeTag ?? tag,
+    version: options.envelopeVersion ?? version,
+    commit: options.envelopeCommit ?? '0123456789abcdef0123456789abcdef01234567',
+    artifacts: envelopeArtifacts,
+  };
+  const releaseEnvelope = Buffer.from(
+    `${JSON.stringify(options.transformEnvelope?.(envelope) ?? envelope, null, 2)}\n`,
+  );
+  const releaseEnvelopeSignature = Buffer.from(
+    `agentico-ed25519:${sign(null, releaseEnvelope, createPrivateKey(PRIVATE_KEY)).toString('base64')}`,
+  );
+  const envelopeAsset = asset(tag, 'desktop-release.json', releaseEnvelope.byteLength);
+  const signatureAsset = asset(
+    tag,
+    'desktop-release.json.sig',
+    releaseEnvelopeSignature.byteLength,
+  );
+  let assets = [
+    ...desktopPackages.map(({ name, bytes }) => asset(tag, name, bytes.byteLength)),
+    ...(options.signatureBeforeEnvelope === true
+      ? [signatureAsset, envelopeAsset]
+      : [envelopeAsset, signatureAsset]),
+  ].filter(({ name }) => name !== options.omitReleaseAsset);
+  if (options.extraReleaseAsset !== undefined) {
+    assets = [
+      asset(tag, options.extraReleaseAsset.name, options.extraReleaseAsset.size),
+      ...assets,
+    ];
+  }
+  if (options.duplicateReleaseAsset !== undefined) {
+    const duplicate = assets.find(({ name }) => name === options.duplicateReleaseAsset);
+    if (duplicate !== undefined) assets = [...assets, { ...duplicate }];
+  }
   const feed = [...(options.extraReleases ?? []), release(tag, assets)];
   const requestedPackage = vi.fn();
   const files = new Map<string, Buffer>([
     ['feed', Buffer.from(JSON.stringify(feed))],
     [packageName, options.servedPackageBytes ?? packageBytes],
-    ['SHA256SUMS', Buffer.from(checksumText)],
-    ['SHA256SUMS.sig', checksumSignature],
+    ['desktop-release.json', options.servedEnvelopeBytes ?? releaseEnvelope],
+    ['desktop-release.json.sig', releaseEnvelopeSignature],
+    ...desktopPackages
+      .filter(({ name }) => name !== packageName)
+      .map(({ name, bytes }) => [name, bytes] as [string, Buffer]),
   ]);
   const fixtureFetch: typeof fetch = async (input) => {
     const url =

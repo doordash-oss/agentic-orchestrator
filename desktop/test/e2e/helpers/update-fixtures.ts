@@ -13,8 +13,7 @@ export interface UpdateFixtureOptions {
   packageText?: string;
   packageBytes?: Buffer;
   servedPackageBytes?: Buffer;
-  checksumText?: string;
-  signatureText?: string;
+  servedEnvelopeBytes?: Buffer;
   includePrerelease?: boolean;
   onlyPrerelease?: boolean;
   malformedFeed?: boolean;
@@ -32,27 +31,45 @@ export function writeSignedUpdateFixture(root: string, options: UpdateFixtureOpt
   const packageBytes =
     options.packageBytes ?? Buffer.from(options.packageText ?? 'agentico update');
   const servedPackageBytes = options.servedPackageBytes ?? packageBytes;
-  const checksumText = options.checksumText ?? `${sha256(packageBytes)}  ${packageName}\n`;
-  const signatureText = options.signatureText ?? checksumText;
-  const signature = sign(null, Buffer.from(signatureText), createPrivateKey(PRIVATE_KEY)).toString(
-    'base64',
+  const packageFiles = [
+    { name: 'Agentico-mac-universal.dmg', bytes: Buffer.from('fixture macos') },
+    { name: 'Agentico-x64.AppImage', bytes: Buffer.from('fixture x64 appimage') },
+    { name: 'Agentico-arm64.AppImage', bytes: Buffer.from('fixture arm64 appimage') },
+    { name: `agentico_${version}_amd64.deb`, bytes: Buffer.from('fixture amd64 deb') },
+    { name: `agentico_${version}_arm64.deb`, bytes: Buffer.from('fixture arm64 deb') },
+  ].map((entry) => (entry.name === packageName ? { ...entry, bytes: packageBytes } : entry));
+  const envelopeBytes = Buffer.from(
+    `${JSON.stringify(
+      {
+        schema_version: 1,
+        tag,
+        version,
+        commit: '0123456789abcdef0123456789abcdef01234567',
+        artifacts: packageFiles.map(({ name, bytes }) => ({
+          name,
+          sha256: sha256(bytes),
+          size: bytes.byteLength,
+        })),
+      },
+      null,
+      2,
+    )}\n`,
   );
-  const checksumSignature = Buffer.from(`agentico-ed25519:${signature}`);
+  const signature = sign(null, envelopeBytes, createPrivateKey(PRIVATE_KEY)).toString('base64');
+  const envelopeSignature = Buffer.from(`agentico-ed25519:${signature}`);
 
   fs.writeFileSync(path.join(dir, packageName), servedPackageBytes);
-  fs.writeFileSync(path.join(dir, 'SHA256SUMS'), checksumText);
-  fs.writeFileSync(path.join(dir, 'SHA256SUMS.sig'), checksumSignature);
+  fs.writeFileSync(
+    path.join(dir, 'desktop-release.json'),
+    options.servedEnvelopeBytes ?? envelopeBytes,
+  );
+  fs.writeFileSync(path.join(dir, 'desktop-release.json.sig'), envelopeSignature);
 
   const assets = [
-    asset(tag, packageName, packageBytes.byteLength),
-    asset(tag, 'SHA256SUMS', Buffer.byteLength(checksumText)),
-    asset(tag, 'SHA256SUMS.sig', checksumSignature.byteLength),
-    asset(tag, `agentico_${version}_${arch === 'arm64' ? 'arm64' : 'amd64'}.deb`, 12),
-    asset(tag, `Agentico-${arch}.AppImage`, 12),
-    asset(tag, 'Agentico-mac-universal.dmg', 12),
-  ].filter(
-    (value, index, all) => all.findIndex((candidate) => candidate.name === value.name) === index,
-  );
+    ...packageFiles.map(({ name, bytes }) => asset(tag, name, bytes.byteLength)),
+    asset(tag, 'desktop-release.json', envelopeBytes.byteLength),
+    asset(tag, 'desktop-release.json.sig', envelopeSignature.byteLength),
+  ];
 
   const releases = options.malformedFeed
     ? [{ tag_name: tag, draft: false, prerelease: false, assets }]

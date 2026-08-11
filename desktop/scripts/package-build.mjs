@@ -16,6 +16,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { flipFuses, FuseVersion } from '@electron/fuses';
 import { PRODUCTION_FUSE_POLICY } from './lib/fuse-policy.mjs';
+import { normalizeLinuxAppImage } from './lib/linux-artifacts.mjs';
 import { unpackedExecutablePath } from './lib/package-layout.mjs';
 import { desktopVersionFromExactTag } from './lib/release-version.mjs';
 
@@ -57,6 +58,7 @@ function nodeBin(pkg, relBin) {
 // installed version explicitly so packaging always matches the dev runtime.
 const electronVersion = require('electron/package.json').version;
 const builderArgs = ['--publish', 'never', `--config.electronVersion=${electronVersion}`];
+let linuxPackageArch;
 const stampedVersion = releaseTagVersion();
 if (stampedVersion !== null) {
   builderArgs.push(`--config.extraMetadata.version=${stampedVersion}`);
@@ -70,8 +72,9 @@ if (unpackedOnly) {
   }
 }
 if (process.platform === 'linux') {
-  const arch = process.env.AGENTICO_PACKAGE_ARCH ?? (process.arch === 'arm64' ? 'arm64' : 'x64');
-  builderArgs.push(arch === 'arm64' ? '--arm64' : '--x64');
+  linuxPackageArch =
+    process.env.AGENTICO_PACKAGE_ARCH ?? (process.arch === 'arm64' ? 'arm64' : 'x64');
+  builderArgs.push(linuxPackageArch === 'arm64' ? '--arm64' : '--x64');
 }
 
 // electron-builder skips macOS signing on pull-request builds unless forced.
@@ -83,6 +86,10 @@ process.env.CSC_FOR_PULL_REQUEST ??= 'true';
 run(process.execPath, [nodeBin('electron-vite', 'bin/electron-vite.js'), 'build']);
 run(process.execPath, [join(desktopDir, 'scripts', 'prepare-server.mjs')]);
 run(process.execPath, [nodeBin('electron-builder', 'cli.js'), ...builderArgs]);
+if (process.platform === 'linux' && !unpackedOnly) {
+  const appImage = normalizeLinuxAppImage(join(desktopDir, 'dist'), linuxPackageArch);
+  console.log(`package-build: normalized Linux AppImage name to ${appImage}`);
+}
 if (unpackedOnly) {
   await enforceUnpackedFuses();
 }

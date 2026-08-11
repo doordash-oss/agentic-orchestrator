@@ -142,7 +142,21 @@ export function crossCheckServerBinary(identity, probe) {
         `${probe.reportedGoos ?? '(unknown)'}`,
     );
   }
+  const expectedGoarch = expectedGoarchForIdentity(identity);
+  if (expectedGoarch !== null && probe.reportedGoarch !== expectedGoarch) {
+    errors.push(
+      `server binary GOARCH mismatch: package target ${identity.os}/${identity.arch} requires ` +
+        `${expectedGoarch}, binary built for ${probe.reportedGoarch ?? '(unknown)'}`,
+    );
+  }
   return errors;
+}
+
+/** Map a package identity to the single GOARCH its bundled server must carry. */
+export function expectedGoarchForIdentity(identity) {
+  if (identity.os === 'linux') return identity.arch === 'x64' ? 'amd64' : 'arm64';
+  // Each slice of the macOS universal binary is independently inspected below.
+  return null;
 }
 
 /**

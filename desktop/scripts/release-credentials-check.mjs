@@ -1,10 +1,13 @@
 // Backward-compatible release credential entry point for local operators.
-import { runReleasePreflight } from './release-preflight.mjs';
+import { cleanupReleaseWorkspace, runReleasePreflight } from './release-preflight.mjs';
 
+let evidence;
 try {
-  const evidence = runReleasePreflight();
+  evidence = runReleasePreflight();
   console.log(`release credentials and local prerequisites verified for ${evidence.tag}`);
 } catch (error) {
   console.error(error instanceof Error ? error.message : String(error));
   process.exitCode = 1;
+} finally {
+  if (evidence !== undefined) cleanupReleaseWorkspace({ evidence });
 }

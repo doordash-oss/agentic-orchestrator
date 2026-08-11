@@ -237,12 +237,13 @@ export function cleanupReleaseWorkspace({
 }
 
 function main() {
+  let evidence;
   try {
     if (process.argv[2] === 'verify') {
-      const evidence = verifyReleaseProvenance();
+      evidence = verifyReleaseProvenance();
       console.log(`release provenance verified for ${evidence.tag} (${evidence.commit})`);
     } else if (process.argv[2] === undefined) {
-      const evidence = runReleasePreflight();
+      evidence = runReleasePreflight();
       console.log(`release preflight passed for ${evidence.tag} (${evidence.commit})`);
     } else {
       throw new Error('usage: release-preflight.mjs [verify]');
@@ -250,6 +251,10 @@ function main() {
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
     process.exitCode = 1;
+  } finally {
+    if (process.argv[2] === undefined && evidence !== undefined) {
+      cleanupReleaseWorkspace({ evidence });
+    }
   }
 }
 

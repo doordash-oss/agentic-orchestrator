@@ -105,6 +105,14 @@ function makeServices(overrides: Partial<IpcServices> = {}): IpcServices {
       detail: 'ok',
       ownership: 'external' as const,
     })),
+    switchConnectionServer: vi.fn(() => ({
+      status: 'ready' as const,
+      stage: 'ready' as const,
+      detail: 'ok',
+      ownership: 'external' as const,
+    })),
+    listServers: vi.fn(() => ({ rows: [] })),
+    probeServers: vi.fn(() => ({ rows: [] })),
     getSettings: vi.fn(() => defaultSettings()),
     updateSettings: vi.fn(() => defaultSettings()),
     openSettingsWindow: vi.fn(() => ({ opened: true })),
@@ -354,7 +362,7 @@ describe('feature IPC security', () => {
     const { handlers } = register();
     const result = (await handlers.get(IPC_CHANNELS.settingsUpdate)!(goodEvent, {
       shell: {
-        activeFeatureId: 'abcd1234ef567890',
+        setActiveFeature: { serverKey: 'a'.repeat(64), featureId: 'abcd1234ef567890' },
         sidebarCollapsed: false,
       },
     })) as Envelope;

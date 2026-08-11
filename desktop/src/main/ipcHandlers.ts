@@ -16,6 +16,9 @@ import {
   IPC_EVENTS,
   type ChooseServerRequest,
   type ConnectionState,
+  type ServerListSnapshot,
+  type ServersProbeRequest,
+  type SwitchServerRequest,
   type CreateFeatureInput,
   type CreateFeatureResult,
   type CreationDefaults,
@@ -126,6 +129,9 @@ export interface IpcServices {
   retryConnection(): Promise<ConnectionState> | ConnectionState;
   restartConnection(): Promise<ConnectionState> | ConnectionState;
   chooseConnectionServer(request: ChooseServerRequest): Promise<ConnectionState> | ConnectionState;
+  switchConnectionServer(request: SwitchServerRequest): Promise<ConnectionState> | ConnectionState;
+  listServers(): ServerListSnapshot;
+  probeServers(request: ServersProbeRequest): ServerListSnapshot;
   getSettings(): Settings;
   updateSettings(patch: SettingsPatch): Settings;
   openSettingsWindow(request: SettingsOpenRequest): SettingsOpenResult;
@@ -269,6 +275,11 @@ export function registerIpcHandlers(
     [IPC_CHANNELS.connectionRestart]: () => services.restartConnection(),
     [IPC_CHANNELS.connectionChooseServer]: (_event, request: ChooseServerRequest) =>
       services.chooseConnectionServer(request),
+    [IPC_CHANNELS.connectionSwitchServer]: (_event, request: SwitchServerRequest) =>
+      services.switchConnectionServer(request),
+    [IPC_CHANNELS.serversList]: () => services.listServers(),
+    [IPC_CHANNELS.serversProbe]: (_event, request: ServersProbeRequest) =>
+      services.probeServers(request),
     [IPC_CHANNELS.settingsGet]: () => services.getSettings(),
     [IPC_CHANNELS.settingsUpdate]: (_event, patch: SettingsPatch) => services.updateSettings(patch),
     [IPC_CHANNELS.windowOpenSettings]: (_event, request: SettingsOpenRequest) =>

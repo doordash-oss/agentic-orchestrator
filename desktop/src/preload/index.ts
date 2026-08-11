@@ -9,6 +9,7 @@ import {
   AppEventSchema,
   AppRouteEventSchema,
   SessionOutputEventSchema,
+  ServerListSnapshotSchema,
   ConnectionStateSchema,
   CREATION_ATTACHMENT_LIMIT,
   CREATION_IMAGE_FORMATS,
@@ -20,6 +21,7 @@ import {
   type AppEvent,
   type AppRouteEvent,
   type ConnectionState,
+  type ServerListSnapshot,
   type ChatStartRequest,
   type CreateFeatureInput,
   type CreationFileKind,
@@ -95,6 +97,26 @@ const api: AgenticoApi = {
   retryConnection: () => call(IPC_CHANNELS.connectionRetry),
   restartConnection: () => call(IPC_CHANNELS.connectionRestart),
   chooseConnectionServer: (request) => call(IPC_CHANNELS.connectionChooseServer, request),
+  switchConnectionServer: (request) => call(IPC_CHANNELS.connectionSwitchServer, request),
+  listServers: () => call(IPC_CHANNELS.serversList),
+  probeServers: (request) => call(IPC_CHANNELS.serversProbe, request),
+  onServersChanged: (listener: (snapshot: ServerListSnapshot) => void) => {
+    const wrapped = (_event: unknown, payload: unknown): void => {
+      try {
+        assertNoPrototypePollution(payload);
+      } catch {
+        return; // drop unsafe events silently — fail closed
+      }
+      const snapshot = ServerListSnapshotSchema.safeParse(payload);
+      if (snapshot.success) {
+        listener(snapshot.data);
+      }
+    };
+    ipcRenderer.on(IPC_EVENTS.serversChanged, wrapped);
+    return () => {
+      ipcRenderer.removeListener(IPC_EVENTS.serversChanged, wrapped);
+    };
+  },
   onConnectionChanged: (listener: (state: ConnectionState) => void) => {
     const wrapped = (_event: unknown, payload: unknown): void => {
       try {

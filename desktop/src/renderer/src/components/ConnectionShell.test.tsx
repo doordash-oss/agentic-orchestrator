@@ -387,3 +387,60 @@ describe('ConnectionShell server picker', () => {
     expect(screen.queryByRole('button', { name: /start|launch|spawn/i })).not.toBeInTheDocument();
   });
 });
+
+describe('ConnectionShell failed switch', () => {
+  function failedSwitch(): ConnectionState {
+    return state({
+      status: 'error',
+      stage: 'connect',
+      error: {
+        code: 'E_SWITCH_UNAVAILABLE',
+        message: 'The selected Agentico server is no longer running.',
+      },
+      switchContext: {
+        attempted: { serverKey: 'key-beta', name: 'beta', runtimeDir: '/rt/beta' },
+        previous: { serverKey: 'key-alpha', name: 'alpha', runtimeDir: '/rt/alpha' },
+      },
+    });
+  }
+
+  it('offers retry-the-target and back-to-previous, both through switchConnectionServer', async () => {
+    const mock = installAgenticoMock({ connection: failedSwitch() });
+    render(<ConnectionShell />);
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Retry' }));
+    expect(mock.api.switchConnectionServer).toHaveBeenCalledWith({ serverKey: 'key-beta' });
+
+    await userEvent.click(screen.getByRole('button', { name: 'Back to alpha' }));
+    expect(mock.api.switchConnectionServer).toHaveBeenCalledWith({ serverKey: 'key-alpha' });
+    // The plain retry path stays out of a switch failure.
+    expect(mock.api.retryConnection).not.toHaveBeenCalled();
+  });
+
+  it('offers only retry when there is no previous server to return to', async () => {
+    const orphan = failedSwitch();
+    if (orphan.status !== 'error' || orphan.switchContext === undefined) throw new Error('shape');
+    installAgenticoMock({
+      connection: { ...orphan, switchContext: { ...orphan.switchContext, previous: null } },
+    });
+    render(<ConnectionShell />);
+
+    expect(await screen.findByRole('button', { name: 'Retry' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Back to/ })).not.toBeInTheDocument();
+  });
+
+  it('keeps the plain retry button for non-switch failures', async () => {
+    const mock = installAgenticoMock({
+      connection: state({
+        status: 'error',
+        stage: 'connect',
+        error: { code: 'E_X', message: 'failed' },
+      }),
+    });
+    render(<ConnectionShell />);
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Retry' }));
+    expect(mock.api.retryConnection).toHaveBeenCalled();
+    expect(mock.api.switchConnectionServer).not.toHaveBeenCalled();
+  });
+});

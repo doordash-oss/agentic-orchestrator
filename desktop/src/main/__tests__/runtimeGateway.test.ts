@@ -1492,3 +1492,288 @@ describe('RuntimeGateway registry-first startup selection', () => {
     expect(env.spawnCalls).toHaveLength(1);
   });
 });
+
+// --- Server identity + mid-session switching (Phase 3) -----------------------
+
+describe('RuntimeGateway server identity', () => {
+  it('registry attach exposes the candidate serverKey on the ready state', async () => {
+    const alpha = registryCandidate({
+      runtimeDir: ALPHA_RUNTIME_DIR,
+      baseUrl: ALPHA_BASE,
+      token: ALPHA_TOKEN,
+      name: 'alpha',
+    });
+    const env = makeMultiServerEnv({
+      registryScans: [{ candidates: [alpha], pruned: 0, rejected: [] }],
+    });
+    await env.gateway.start();
+    const state = env.gateway.getState();
+    expect(state.status).toBe('ready');
+    expect(state.serverKey).toBe(alpha.serverKey);
+    ConnectionStateSchema.parse(state);
+  });
+
+  it('legacy discovery attach derives the serverKey from the canonical runtime dir', async () => {
+    const env = makeEnv({
+      discovery: JSON.stringify(discoveryRecord()),
+      registryScans: [EMPTY_SCAN],
+    });
+    await env.gateway.start();
+    const state = env.gateway.getState();
+    expect(state.status).toBe('ready');
+    expect(state.serverKey).toBe(serverKeyFor(SELECTED.runtimeDir));
+  });
+
+  it('spawned attach derives the serverKey from the canonical runtime dir', async () => {
+    const env = makeEnv({ registryScans: [EMPTY_SCAN] });
+    await env.gateway.start();
+    const state = env.gateway.getState();
+    expect(state.status).toBe('ready');
+    expect(state.ownership).toBe('app-owned');
+    expect(state.serverKey).toBe(serverKeyFor(SELECTED.runtimeDir));
+  });
+});
+
+describe('RuntimeGateway switchServer', () => {
+  function alphaCandidate(pid = 4242) {
+    return registryCandidate({
+      runtimeDir: ALPHA_RUNTIME_DIR,
+      baseUrl: ALPHA_BASE,
+      token: ALPHA_TOKEN,
+      name: 'alpha',
+      pid,
+    });
+  }
+  function betaCandidate() {
+    return registryCandidate({
+      runtimeDir: BETA_RUNTIME_DIR,
+      baseUrl: BETA_BASE,
+      token: BETA_TOKEN,
+      name: 'beta',
+    });
+  }
+  async function startAtAlpha() {
+    const env = makeMultiServerEnv({
+      registryScans: [{ candidates: [alphaCandidate()], pruned: 0, rejected: [] }],
+    });
+    await env.gateway.start();
+    expect(env.gateway.getState().status).toBe('ready');
+    expect(env.gateway.getState().serverKey).toBe(serverKeyFor(ALPHA_RUNTIME_DIR));
+    return env;
+  }
+
+  it('switches ready→ready through the connection transition without spawning or stopping anything', async () => {
+    const env = await startAtAlpha();
+    const beta = betaCandidate();
+    env.setRegistryScans([{ candidates: [alphaCandidate(), beta], pruned: 0, rejected: [] }]);
+
+    const before = env.states.length;
+    const state = await env.gateway.switchServer({ serverKey: beta.serverKey });
+
+    expect(state.status).toBe('ready');
+    expect(state.serverKey).toBe(beta.serverKey);
+    expect(state.serverName).toBe('beta');
+    expect(state.connectedRuntimeDir).toBe(BETA_RUNTIME_DIR);
+    // The transition rides the existing leaving-ready path.
+    const transition = env.states.slice(before).map((s) => s.status);
+    expect(transition).toContain('attaching');
+    expect(transition[transition.length - 1]).toBe('ready');
+    expect(env.spawnCalls).toHaveLength(0);
+    // The successful attach refreshes the last-used pointer.
+    expect(env.servers().lastUsed).toBe(beta.serverKey);
+    expectNoTokenLeak(env);
+  });
+
+  it('is a no-op when the target is the current server', async () => {
+    const env = await startAtAlpha();
+    const before = env.states.length;
+    const state = await env.gateway.switchServer({ serverKey: serverKeyFor(ALPHA_RUNTIME_DIR) });
+    expect(state.status).toBe('ready');
+    expect(env.states.length).toBe(before);
+  });
+
+  it('fences in-flight switch work: a restart mid-switch keeps it from re-emitting', async () => {
+    const env = await startAtAlpha();
+    const beta = betaCandidate();
+    env.setRegistryScans([{ candidates: [alphaCandidate(), beta], pruned: 0, rejected: [] }]);
+
+    const realFetch = env.deps.fetchJson;
+    let releaseHealth: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      releaseHealth = resolve;
+    });
+    env.deps.fetchJson = async (url, opts) => {
+      if (url.startsWith(BETA_BASE) && url.endsWith('/api/v1/health')) {
+        await gate;
+      }
+      return realFetch(url, opts);
+    };
+
+    const switching = env.gateway.switchServer({ serverKey: beta.serverKey });
+    await Promise.resolve();
+    await env.gateway.restart();
+    releaseHealth();
+    await switching;
+
+    // The fenced cycle can never promote beta to ready.
+    expect(env.gateway.getState().status).not.toBe('ready');
+    expect(
+      env.states.filter((s) => s.status === 'ready' && s.serverKey === beta.serverKey),
+    ).toHaveLength(0);
+  });
+
+  it('a dead target lands on the error surface with both switch identities; back re-attaches, retry re-attempts', async () => {
+    const env = await startAtAlpha();
+    const beta = betaCandidate();
+    env.setRegistryScans([{ candidates: [alphaCandidate()], pruned: 0, rejected: [] }]);
+
+    const failed = await env.gateway.switchServer({ serverKey: beta.serverKey });
+    expect(failed.status).toBe('error');
+    if (failed.status !== 'error' || failed.switchContext === undefined) {
+      throw new Error('expected a switch failure context');
+    }
+    expect(failed.error.code).toBe('E_SWITCH_UNAVAILABLE');
+    expect(failed.switchContext.attempted.serverKey).toBe(beta.serverKey);
+    const previous = failed.switchContext.previous;
+    expect(previous).not.toBeNull();
+    expect(previous!.serverKey).toBe(alphaCandidate().serverKey);
+    expect(previous!.runtimeDir).toBe(ALPHA_RUNTIME_DIR);
+    // A failed switch never moves the last-used pointer.
+    expect(env.servers().lastUsed).toBe(alphaCandidate().serverKey);
+
+    // Back to the previous server re-attaches through the standard path.
+    const back = await env.gateway.switchServer({ serverKey: previous!.serverKey });
+    expect(back.status).toBe('ready');
+    expect(back.serverKey).toBe(alphaCandidate().serverKey);
+
+    // Retry of the target reuses the same attach path once it is live.
+    env.setRegistryScans([{ candidates: [alphaCandidate(), beta], pruned: 0, rejected: [] }]);
+    const retried = await env.gateway.switchServer({ serverKey: beta.serverKey });
+    expect(retried.status).toBe('ready');
+    expect(retried.serverKey).toBe(beta.serverKey);
+    expectNoTokenLeak(env);
+  });
+
+  it('a target that dies between scan and probe still lands on the switch surface', async () => {
+    const beta = betaCandidate();
+    const env = makeMultiServerEnv({
+      registryScans: [{ candidates: [alphaCandidate()], pruned: 0, rejected: [] }],
+      health: {
+        [ALPHA_BASE]: healthFor(ALPHA_RUNTIME_DIR, 'alpha'),
+        [BETA_BASE]: new Error('connection refused'),
+        [LAUNCH_BASE]: healthBody({ owner: { pid: 777, started_at: '2026-07-14T00:00:02Z' } }),
+      },
+    });
+    await env.gateway.start();
+    env.setRegistryScans([{ candidates: [alphaCandidate(), beta], pruned: 0, rejected: [] }]);
+
+    const failed = await env.gateway.switchServer({ serverKey: beta.serverKey });
+    expect(failed.status).toBe('error');
+    if (failed.status !== 'error' || failed.switchContext === undefined) {
+      throw new Error('expected a switch failure context');
+    }
+    expect(failed.error.code).toBe('E_ATTACH_UNREACHABLE');
+    expect(failed.switchContext.attempted.serverKey).toBe(beta.serverKey);
+    expect(failed.switchContext.previous?.serverKey).toBe(alphaCandidate().serverKey);
+  });
+});
+
+describe('RuntimeGateway decoupled app-owned supervision', () => {
+  const OWN_PID = 777;
+  function ownAlphaCandidate() {
+    return registryCandidate({
+      runtimeDir: ALPHA_RUNTIME_DIR,
+      baseUrl: LAUNCH_BASE,
+      token: LAUNCH_TOKEN,
+      name: 'alpha',
+      pid: OWN_PID,
+    });
+  }
+  function betaCandidate() {
+    return registryCandidate({
+      runtimeDir: BETA_RUNTIME_DIR,
+      baseUrl: BETA_BASE,
+      token: BETA_TOKEN,
+      name: 'beta',
+    });
+  }
+  async function startAppOwned() {
+    const env = makeMultiServerEnv({ registryScans: [EMPTY_SCAN] });
+    await env.gateway.start();
+    const state = env.gateway.getState();
+    expect(state.status).toBe('ready');
+    expect(state.ownership).toBe('app-owned');
+    expect(env.spawnCalls).toHaveLength(1);
+    return env;
+  }
+
+  it('leaves the app-owned child running across a switch-away and stops it on quit', async () => {
+    const env = await startAppOwned();
+    const child = env.spawned[0]!;
+    env.setRegistryScans([{ candidates: [betaCandidate()], pruned: 0, rejected: [] }]);
+
+    const switched = await env.gateway.switchServer({ serverKey: serverKeyFor(BETA_RUNTIME_DIR) });
+    expect(switched.status).toBe('ready');
+    expect(switched.ownership).toBe('external');
+    expect(child.exited).toBe(false);
+    expect(child.stopCalls).toHaveLength(0);
+
+    await env.gateway.shutdown();
+    expect(child.stopCalls).toHaveLength(1);
+  });
+
+  it('a left-behind crash restarts silently within budget and never drives ConnectionState', async () => {
+    const env = await startAppOwned();
+    env.setRegistryScans([{ candidates: [betaCandidate()], pruned: 0, rejected: [] }]);
+    await env.gateway.switchServer({ serverKey: serverKeyFor(BETA_RUNTIME_DIR) });
+    expect(env.gateway.getState().status).toBe('ready');
+
+    const before = env.states.length;
+    const tick = async () => {
+      for (let i = 0; i < 5; i += 1) await Promise.resolve();
+    };
+    // Four crashes: three budgeted silent relaunches, then exhaustion (a log
+    // line, never a crash-loop surface).
+    for (let crash = 0; crash < 4; crash += 1) {
+      const child = env.spawned[env.spawned.length - 1]!;
+      child.emitExit(1, null);
+      await tick();
+    }
+    expect(env.spawnCalls).toHaveLength(4);
+    expect(env.logs.some((line) => line.includes('exhausted its restart budget'))).toBe(true);
+    // Not one connection-state emission: supervision stayed decoupled.
+    expect(env.states.length).toBe(before);
+    expect(env.gateway.getState().status).toBe('ready');
+    expect(env.gateway.getState().serverKey).toBe(serverKeyFor(BETA_RUNTIME_DIR));
+  });
+
+  it('re-attaches to the still-running child when switching back, restoring app-owned supervision', async () => {
+    const env = await startAppOwned();
+    const child = env.spawned[0]!;
+    env.setRegistryScans([{ candidates: [betaCandidate()], pruned: 0, rejected: [] }]);
+    await env.gateway.switchServer({ serverKey: serverKeyFor(BETA_RUNTIME_DIR) });
+    expect(env.gateway.getState().ownership).toBe('external');
+
+    env.setRegistryScans([{ candidates: [ownAlphaCandidate()], pruned: 0, rejected: [] }]);
+    const back = await env.gateway.switchServer({ serverKey: serverKeyFor(ALPHA_RUNTIME_DIR) });
+    expect(back.status).toBe('ready');
+    expect(back.ownership).toBe('app-owned');
+    expect(back.serverKey).toBe(serverKeyFor(ALPHA_RUNTIME_DIR));
+    // Re-attach: no new process was spawned.
+    expect(env.spawnCalls).toHaveLength(1);
+
+    // Supervision drives the surface again: a crash is foreground once more.
+    child.emitExit(1, null);
+    const crashed = env.gateway.getState();
+    expect(crashed.status).toBe('crashed');
+    expect(requireError(crashed).code).toBe('E_SERVER_CRASHED');
+  });
+
+  it('restart() still stops the app-owned child (only switching decouples supervision)', async () => {
+    const env = await startAppOwned();
+    const child = env.spawned[0]!;
+    await env.gateway.restart();
+    expect(child.stopCalls).toHaveLength(1);
+    expect(env.gateway.getState().status).toBe('ready');
+  });
+});

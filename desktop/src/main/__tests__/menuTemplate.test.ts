@@ -197,6 +197,7 @@ describe('application menu enablement matrix', () => {
     expect(itemById(unready, 'global.new-feature')?.enabled).toBe(false);
     expect(itemById(unready, 'global.toggle-sidebar')?.enabled).toBe(false);
     expect(itemById(unready, 'global.toggle-inspector')?.enabled).toBe(false);
+    expect(itemById(unready, 'global.switch-server')?.enabled).toBe(false);
 
     const overview = buildApplicationMenuTemplate(
       deps({ ...disabledMainWindowUiState(), runtimeReady: true }),
@@ -204,6 +205,8 @@ describe('application menu enablement matrix', () => {
     expect(itemById(overview, 'global.new-feature')?.enabled).toBe(true);
     expect(itemById(overview, 'global.toggle-sidebar')?.enabled).toBe(true);
     expect(itemById(overview, 'global.toggle-inspector')?.enabled).toBe(false);
+    // The switcher footer exists whenever the workspace does.
+    expect(itemById(overview, 'global.switch-server')?.enabled).toBe(true);
 
     const feature = buildApplicationMenuTemplate(deps(selected(['start'])));
     expect(itemById(feature, 'global.toggle-inspector')?.enabled).toBe(true);
@@ -245,6 +248,7 @@ describe('application menu dispatch', () => {
       ['global.toggle-sidebar', 'toggle-sidebar'],
       ['global.toggle-inspector', 'toggle-inspector'],
       ['global.home', 'home'],
+      ['global.switch-server', 'switch-server'],
       ['global.attention', 'attention'],
     ] as const) {
       route.mockClear();

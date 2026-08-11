@@ -17,7 +17,7 @@ import {
 import type { DiscoveryDeps } from './discovery';
 import type { SseStream } from './events';
 import { RedactedLogBuffer } from './logBuffer';
-import { scanRegistry, type RegistryDeps } from './registry';
+import { scanRegistry, type RegistryDeps, type RegistryScan } from './registry';
 import { fileIsExecutable, resolveServerBinary } from './resources';
 import { RuntimeGateway, type GatewayDeps, type SelectedRuntime } from './runtimeGateway';
 import { ManagedServerProcess } from './serverProcess';
@@ -54,6 +54,8 @@ export interface WiredRuntimeGateway {
   gateway: RuntimeGateway;
   /** Local redacted diagnostics (child stdio + gateway notes). */
   logBuffer: RedactedLogBuffer;
+  /** Fresh central-registry scan against the same deps the gateway uses. */
+  scanRegistry(): RegistryScan;
 }
 
 export function createRuntimeGateway(options: RuntimeGatewayWiringOptions): WiredRuntimeGateway {
@@ -144,7 +146,11 @@ export function createRuntimeGateway(options: RuntimeGatewayWiringOptions): Wire
     recordAttachedServer: (entry) => options.recordAttachedServer(entry),
   };
 
-  return { gateway: new RuntimeGateway(deps), logBuffer };
+  return {
+    gateway: new RuntimeGateway(deps),
+    logBuffer,
+    scanRegistry: () => scanRegistry(registry),
+  };
 }
 
 /**

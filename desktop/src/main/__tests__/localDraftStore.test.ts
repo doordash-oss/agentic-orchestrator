@@ -87,3 +87,21 @@ describe('LocalDraftStore', () => {
     expect(fs.existsSync(`${draftPath()}.bak-1`)).toBe(true);
   });
 });
+
+describe('LocalDraftStore identity re-key', () => {
+  it('re-keys drafts from the legacy identity to the serverKey, idempotently', () => {
+    const store = makeStore();
+    store.save({ ...key, text: 'legacy draft' });
+    store.save({ ...key, runtimeId: 'other-server-key', text: 'not legacy' });
+
+    expect(store.rekeyRuntimeIds('server-key-a', ['runtime-state-a', 'default-runtime'])).toBe(1);
+    // The matching draft moved; the foreign draft is untouched.
+    expect(store.load({ ...key, runtimeId: 'server-key-a' })?.text).toBe('legacy draft');
+    expect(store.load({ ...key, runtimeId: 'other-server-key' })?.text).toBe('not legacy');
+    expect(store.load(key)).toBeNull();
+    // A repeated migration is a no-op and persists nothing more.
+    expect(store.rekeyRuntimeIds('server-key-a', ['runtime-state-a', 'default-runtime'])).toBe(0);
+    // The re-key survives a reload.
+    expect(makeStore().load({ ...key, runtimeId: 'server-key-a' })?.text).toBe('legacy draft');
+  });
+});

@@ -480,21 +480,27 @@ describe('SettingsSchema', () => {
     expect(SettingsSchema.safeParse({ ...defaultSettings(), schemaVersion: 2 }).success).toBe(
       false,
     );
-    expect(SettingsSchema.safeParse({ ...defaultSettings(), schemaVersion: 4 }).success).toBe(
+    expect(SettingsSchema.safeParse({ ...defaultSettings(), schemaVersion: 3 }).success).toBe(
+      false,
+    );
+    expect(SettingsSchema.safeParse({ ...defaultSettings(), schemaVersion: 5 }).success).toBe(
       false,
     );
   });
 
   it('accepts a full settings document with window bounds and theme', () => {
     const doc = {
-      schemaVersion: 3,
+      schemaVersion: 4,
       runtime: { selection: 'claude' },
       window: { bounds: { x: 10, y: 20, width: 800, height: 600 } },
       theme: 'dark',
       wizard: { collapsedHelp: true },
       ama: { drawer: 'expanded', geometry: { right: 40, bottom: 60, width: 480, height: 620 } },
       notifications: { previewEnabled: true },
-      shell: { activeFeatureId: 'abcd1234ef567890', sidebarCollapsed: true },
+      shell: {
+        featureByServer: { ['a'.repeat(64)]: 'abcd1234ef567890' },
+        sidebarCollapsed: true,
+      },
       settingsWindow: {
         bounds: { x: 40, y: 60, width: 900, height: 640 },
         pane: 'diagnostics',
@@ -517,7 +523,7 @@ describe('SettingsSchema', () => {
 
   it('fills wizard presentation prefs with defaults for pre-wizard documents', () => {
     const doc = {
-      schemaVersion: 3,
+      schemaVersion: 4,
       runtime: { selection: null },
       window: {},
       theme: 'system',
@@ -535,7 +541,7 @@ describe('SettingsSchema', () => {
 
   it('fills the Settings window prefs with defaults for pre-Settings-window documents', () => {
     const doc = {
-      schemaVersion: 3,
+      schemaVersion: 4,
       runtime: { selection: 'claude' },
       window: {},
       theme: 'dark',

@@ -21,7 +21,8 @@ import {
   type Event as ElectronEvent,
   type MessageBoxReturnValue,
 } from 'electron';
-import { createRuntimeGateway } from './gateway/wiring';
+import { createRuntimeGateway, fetchJson, MAX_PROBE_RESPONSE_BYTES } from './gateway/wiring';
+import { ServerListService } from './gateway/serverListService';
 import { AccentController, type AccentColorSource } from './accent';
 import {
   resolveTestOutputFile,
@@ -54,6 +55,7 @@ import { ThemeController } from './theme';
 import {
   actionableAttentionCount,
   CHAT_SESSION_ID,
+  DEFAULT_RUNTIME_ID,
   disabledMainWindowUiState,
   CREATION_IMAGE_FORMATS,
   IPC_EVENTS,
@@ -75,7 +77,7 @@ import {
   routeSettingsPane,
   routeWindowPurpose,
 } from './windowRegistry';
-import { toSafeError } from '../shared/errors';
+import { redactText, toSafeError } from '../shared/errors';
 import {
   RENDERER_ENTRY_URL,
   RENDERER_ORIGIN,
@@ -394,7 +396,7 @@ if (!hasSingleInstanceLock) {
 
     const settings = new SettingsStore(app.getPath('userData'));
     const localDrafts = new LocalDraftStore(app.getPath('userData'));
-    const { gateway, logBuffer } = createRuntimeGateway({
+    const { gateway, logBuffer, scanRegistry } = createRuntimeGateway({
       getRuntimeSelection: () => settings.get().runtime.selection,
       getServersPrefs: () => settings.get().servers,
       recordAttachedServer: (entry) => {
@@ -567,6 +569,18 @@ if (!hasSingleInstanceLock) {
       return window !== null && !window.isDestroyed() ? window : null;
     };
 
+    // The switcher popover's server list: union of registry scan and
+    // persisted known-servers, health probed only while the popover signals
+    // open. Rows are renderer-safe — no token or base URL crosses.
+    const serverList = new ServerListService({
+      scanRegistry,
+      knownServers: () => settings.get().servers,
+      currentServerKey: () => gateway.getState().serverKey ?? null,
+      fetchJson: (url, options) =>
+        fetchJson(url, { ...options, maxResponseBytes: MAX_PROBE_RESPONSE_BYTES }),
+      log: (line) => console.warn(`[agentico-servers] ${redactText(line)}`),
+    });
+
     // Connection state is fanned out to every open window rather than wired
     // per-window at creation, so the Settings window's panes see the same
     // runtime state the main window does.
@@ -574,6 +588,15 @@ if (!hasSingleInstanceLock) {
       for (const window of windows.all()) {
         if (!window.isDestroyed()) {
           window.webContents.send(IPC_EVENTS.connectionChanged, state);
+        }
+      }
+      serverList.notifyConnectionChanged();
+    });
+
+    serverList.subscribe((snapshot) => {
+      for (const window of windows.all()) {
+        if (!window.isDestroyed()) {
+          window.webContents.send(IPC_EVENTS.serversChanged, snapshot);
         }
       }
     });
@@ -1034,9 +1057,34 @@ if (!hasSingleInstanceLock) {
     stopStreams = () => {
       eventSupervisor.stop();
       sessions.cancelAll();
+      serverList.dispose();
     };
+    // The stream cursor is scoped to the attached server's identity: a server
+    // switch starts a fresh (seq, epoch) space, while same-server reconnects
+    // keep replaying only missed events.
+    let streamServerKey: string | null = null;
+    // Review drafts saved before the serverKey identity existed carry the
+    // global runtime.selection as their runtimeId; the first ready connection
+    // re-keys them to the connecting server's identity. Drafts belonging to a
+    // different identity are never touched.
+    let legacyDraftsRekeyed = false;
     gateway.subscribe((state) => {
       if (state.status === 'ready') {
+        const key = state.serverKey ?? null;
+        if (key !== streamServerKey) {
+          eventSupervisor.resetCursor();
+          streamServerKey = key;
+        }
+        if (!legacyDraftsRekeyed && key !== null) {
+          legacyDraftsRekeyed = true;
+          const selection = settings.get().runtime.selection;
+          const legacyIds = [
+            ...new Set([selection ?? DEFAULT_RUNTIME_ID, DEFAULT_RUNTIME_ID]),
+          ].filter((id) => id !== key);
+          if (legacyIds.length > 0) {
+            localDrafts.rekeyRuntimeIds(key, legacyIds);
+          }
+        }
         eventSupervisor.start();
         updates.startAutomaticChecks();
         void refreshBackgroundState();
@@ -1070,6 +1118,9 @@ if (!hasSingleInstanceLock) {
       retryConnection: () => gateway.retry(),
       restartConnection: () => gateway.restart(),
       chooseConnectionServer: (request) => gateway.chooseServer(request),
+      switchConnectionServer: (request) => gateway.switchServer(request),
+      listServers: () => serverList.list(),
+      probeServers: (request) => serverList.setOpen(request.open),
       getSettings: () => settings.get(),
       updateSettings: (patch) => {
         const next = settings.update(patch);

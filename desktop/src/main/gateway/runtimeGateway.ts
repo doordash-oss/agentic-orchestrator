@@ -22,7 +22,10 @@ import {
   type ConnectionState,
   type ChooseServerRequest,
   type KnownServer,
+  type ServerChoiceCandidate,
   type ServersPrefs,
+  type SwitchContext,
+  type SwitchServerRequest,
 } from '../../shared/ipc';
 import { z } from 'zod';
 import { evaluateCompatibility } from './compatibility';
@@ -199,6 +202,21 @@ export class RuntimeGateway {
    */
   private connectedRuntimeDir: string | null = null;
   /**
+   * The connected server's identity (the known-servers key). Populated on
+   * every successful attach — registry, legacy discovery (derived from the
+   * canonical runtime dir), or spawn — and exposed on ConnectionState so the
+   * renderer can key per-server UI state. Never credential material.
+   */
+  private serverKey: string | null = null;
+  /**
+   * The launch coordinates of the running app-owned child. Supervision is
+   * decoupled from connection state: after a switch away, the child keeps
+   * running under this identity and its backoff restart budget keeps working
+   * silently instead of driving ConnectionState. Cleared whenever the child
+   * is deliberately stopped.
+   */
+  private ownedSelected: SelectedRuntime | null = null;
+  /**
    * The registry snapshot behind an awaiting-server-choice state. Records
    * stay in the main process (tokens included); only the renderer-safe
    * candidate projection crosses IPC. Cleared at the start of every connect
@@ -373,6 +391,7 @@ export class RuntimeGateway {
     this.token = null;
     this.baseUrl = null;
     this.readySince = null;
+    this.serverKey = null;
     this.setState({
       status: 'idle',
       stage: 'resolve-runtime',
@@ -421,6 +440,126 @@ export class RuntimeGateway {
   }
 
   /**
+   * Switches the workspace to another running server without an app restart.
+   * Unlike chooseServer this is not gated on awaiting-server-choice: it is
+   * invokable from ready (and from a failed switch's error state for its
+   * retry/back-to-previous actions). It bumps the generation — fencing
+   * in-flight attach/connect work so nothing re-emits state after the
+   * switch — and re-aims at the target through the existing record-consuming
+   * attachCandidate path (a fresh registry scan, so a restarted target's new
+   * port/token are picked up).
+   *
+   * Critical deviation from restart(): the app-owned child is NOT stopped —
+   * supervision is decoupled from connection state, so a left-behind child
+   * keeps its backoff restart budget silently and is still unconditionally
+   * stopped by shutdown() on quit.
+   *
+   * A failed switch lands on the error surface carrying the attempted target
+   * (Retry) and the previous server's identity (Back to <name>) — never an
+   * automatic rollback. settings.runtime.selection stays untouched.
+   */
+  async switchServer(request: SwitchServerRequest): Promise<ConnectionState> {
+    if (this.shuttingDown || this.busy) {
+      return this.state;
+    }
+    if (this.state.status === 'ready' && this.serverKey === request.serverKey) {
+      // Already connected to the target: the switch is a no-op.
+      return this.state;
+    }
+    const previous = this.switchPrevious(request.serverKey);
+    const known = this.deps
+      .knownServers()
+      .known.find((entry) => entry.serverKey === request.serverKey);
+    this.busy = true;
+    const generation = ++this.generation;
+    try {
+      // Deliberately no stopChild(): the app-owned child survives the switch.
+      this.token = null;
+      this.baseUrl = null;
+      this.readySince = null;
+      this.crashAttempts = [];
+      this.serverKey = null;
+      const scan = this.deps.scanRegistry();
+      const candidate = scan.candidates.find((entry) => entry.serverKey === request.serverKey);
+      const attempted: ServerChoiceCandidate = {
+        serverKey: request.serverKey,
+        name: candidate?.record.name ?? known?.name ?? null,
+        runtimeDir: candidate?.runtimeDir ?? known?.runtimeDir ?? '',
+      };
+      const switchContext: SwitchContext = { attempted, previous };
+      if (candidate === undefined) {
+        this.deps.log('switch target is not in the live registry scan');
+        this.setState({
+          status: 'error',
+          stage: 'connect',
+          detail: 'The selected server is not running.',
+          ownership: 'none',
+          error: {
+            code: 'E_SWITCH_UNAVAILABLE',
+            message: 'The selected Agentico server is no longer running.',
+            remediation:
+              previous !== null
+                ? 'Use Retry to try again, or go back to the previous server.'
+                : 'Use Retry to try again.',
+          },
+          switchContext,
+        });
+        return this.state;
+      }
+      await this.attachCandidate(generation, candidate, 'error', switchContext);
+    } catch (err) {
+      const safe = toSafeError(err, 'E_GATEWAY');
+      this.deps.log(`gateway cycle failed: ${safe.code}: ${safe.message}`);
+      const attempted: ServerChoiceCandidate = {
+        serverKey: request.serverKey,
+        name: known?.name ?? null,
+        runtimeDir: known?.runtimeDir ?? '',
+      };
+      this.setState({
+        status: 'error',
+        stage: 'connect',
+        detail: 'The connection attempt failed unexpectedly.',
+        ownership: 'none',
+        error: safe,
+        switchContext: { attempted, previous },
+      });
+    } finally {
+      this.busy = false;
+    }
+    return this.state;
+  }
+
+  /**
+   * The "Back to <name>" identity for a failed switch: the currently
+   * connected server when there is one, else the previous entry from the
+   * failed switch's own context (never the target itself).
+   */
+  private switchPrevious(targetKey: string): ServerChoiceCandidate | null {
+    if (
+      this.serverKey !== null &&
+      this.serverKey !== targetKey &&
+      this.connectedRuntimeDir !== null
+    ) {
+      return {
+        serverKey: this.serverKey,
+        name: this.state.serverName ?? null,
+        runtimeDir: this.connectedRuntimeDir,
+      };
+    }
+    if (this.state.status === 'error') {
+      const context = this.state.switchContext;
+      if (
+        context !== undefined &&
+        context.previous !== null &&
+        context.previous.serverKey !== targetKey
+      ) {
+        return context.previous;
+      }
+    }
+    return null;
+  }
+
+  /**
    * Verifies a stale global stream before dropping an externally owned
    * connection. This never signals, restarts, or adopts the external process.
    */
@@ -455,6 +594,7 @@ export class RuntimeGateway {
     this.token = null;
     this.baseUrl = null;
     this.readySince = null;
+    this.serverKey = null;
     this.setState({
       status: 'error',
       stage: 'connect',
@@ -481,6 +621,7 @@ export class RuntimeGateway {
     this.token = null;
     this.baseUrl = null;
     this.connectedRuntimeDir = null;
+    this.serverKey = null;
     this.pendingCandidates = [];
   }
 
@@ -490,6 +631,7 @@ export class RuntimeGateway {
     await this.stopChild(); // never leave a stray child from an earlier cycle
     this.token = null;
     this.baseUrl = null;
+    this.serverKey = null;
     this.launchCommandContext = null;
     this.pendingCandidates = [];
 
@@ -607,6 +749,7 @@ export class RuntimeGateway {
     generation: number,
     candidate: RegistryCandidate,
     stale: StaleHandling,
+    switchContext?: SwitchContext,
   ): Promise<boolean> {
     const record = candidate.record;
     const selected: SelectedRuntime = {
@@ -618,7 +761,14 @@ export class RuntimeGateway {
     // settings.runtime.selection — the last-used pointer is the reconnection
     // authority.
     this.connectedRuntimeDir = selected.runtimeDir;
-    const result = await this.tryAttach(generation, selected, record, stale, candidate.serverKey);
+    const result = await this.tryAttach(
+      generation,
+      selected,
+      record,
+      stale,
+      candidate.serverKey,
+      switchContext,
+    );
     if (result === 'launch') {
       return false;
     }
@@ -631,6 +781,7 @@ export class RuntimeGateway {
     record: DiscoveryRecord,
     stale: StaleHandling = 'launch',
     serverKey?: string,
+    switchContext?: SwitchContext,
   ): Promise<AttachResult> {
     const staleResult = (note: string): AttachResult => {
       this.deps.log(note);
@@ -645,6 +796,7 @@ export class RuntimeGateway {
             message: 'The selected Agentico server is no longer reachable.',
             remediation: 'Use Retry to rescan the running servers.',
           },
+          ...(switchContext !== undefined ? { switchContext } : {}),
         });
         return 'blocked';
       }
@@ -700,6 +852,11 @@ export class RuntimeGateway {
     }
 
     const serverName = probe.data.name ?? null;
+    // Re-owning: switching back to the server this app spawned (still our
+    // supervised child, same pid) makes the attach app-owned again so its
+    // supervision drives ConnectionState as before the switch.
+    const reOwn = this.child !== null && !this.child.exited && record.pid === this.child.pid;
+    const attachOwnership: 'external' | 'app-owned' = reOwn ? 'app-owned' : 'external';
 
     const token = record.auth_token;
     if (token === undefined || token === '') {
@@ -725,7 +882,7 @@ export class RuntimeGateway {
       status: 'connecting',
       stage: 'authenticate',
       detail: 'Authenticating with the running runtime.',
-      ownership: 'external',
+      ownership: attachOwnership,
       serverBuild: verdict.serverBuild,
       serverName,
     });
@@ -739,7 +896,7 @@ export class RuntimeGateway {
         status: 'error',
         stage: 'authenticate',
         detail: 'Could not authenticate with the running runtime.',
-        ownership: 'external',
+        ownership: attachOwnership,
         serverBuild: verdict.serverBuild,
         serverName,
         error: {
@@ -751,11 +908,14 @@ export class RuntimeGateway {
       return 'blocked';
     }
     this.baseUrl = trimBase(record.base_url);
+    this.serverKey = serverKey ?? registryEntryKey(selected.runtimeDir);
     this.setState({
       status: 'ready',
       stage: 'ready',
-      detail: 'Connected to an externally managed Agentico runtime.',
-      ownership: 'external',
+      detail: reOwn
+        ? 'Connected to the app-managed Agentico runtime.'
+        : 'Connected to an externally managed Agentico runtime.',
+      ownership: attachOwnership,
       serverBuild: verdict.serverBuild,
       serverName,
     });
@@ -763,7 +923,7 @@ export class RuntimeGateway {
     // Every successful attach (registry or legacy discovery) refreshes the
     // known-servers entry and the last-used pointer.
     this.deps.recordAttachedServer({
-      serverKey: serverKey ?? registryEntryKey(selected.runtimeDir),
+      serverKey: this.serverKey,
       name: serverName ?? '',
       baseUrl: trimBase(record.base_url),
       runtimeDir: selected.runtimeDir,
@@ -824,6 +984,7 @@ export class RuntimeGateway {
       return;
     }
     this.adoptChild(child);
+    this.ownedSelected = selected;
 
     this.setState({
       status: 'waiting-health',
@@ -909,6 +1070,7 @@ export class RuntimeGateway {
       return;
     }
     this.baseUrl = trimBase(ready.record.base_url);
+    this.serverKey = registryEntryKey(selected.runtimeDir);
     this.setState({
       status: 'ready',
       stage: 'ready',
@@ -1008,7 +1170,14 @@ export class RuntimeGateway {
   }
 
   private handleChildExit(info: ChildExit): void {
-    const wasReady = this.state.status === 'ready';
+    // Supervision is decoupled from connection state: an unexpected exit only
+    // drives ConnectionState while the child is the connected app-owned
+    // server. A left-behind child (we switched elsewhere, or it died before
+    // attach) keeps its backoff restart budget silently instead of hijacking
+    // the connection surface.
+    const attached = this.state.status === 'ready' && this.state.ownership === 'app-owned';
+    const detached: SelectedRuntime | null =
+      this.state.ownership === 'app-owned' ? null : this.ownedSelected;
     this.releaseChild();
     if (info.expected || this.shuttingDown) {
       return;
@@ -1016,7 +1185,10 @@ export class RuntimeGateway {
     this.deps.log(
       `app-owned runtime exited unexpectedly (code ${String(info.code)}, signal ${String(info.signal)})`,
     );
-    if (!wasReady) {
+    if (!attached) {
+      if (detached !== null) {
+        this.scheduleBackgroundRecovery(detached);
+      }
       // Startup-phase exits are reported by the launch loop with more context.
       return;
     }
@@ -1123,6 +1295,63 @@ export class RuntimeGateway {
       });
   }
 
+  /**
+   * Relaunches a left-behind app-owned child after an unexpected exit, within
+   * the same rolling budget as connected supervision, but silently: no
+   * ConnectionState change while a different server is active. The relaunched
+   * server republishes its discovery/registry record, so switching back
+   * re-attaches through the standard scan.
+   */
+  private scheduleBackgroundRecovery(selected: SelectedRuntime): void {
+    if (this.recoveryPending || this.shuttingDown) {
+      return;
+    }
+    const now = this.now();
+    this.crashAttempts = this.crashAttempts.filter(
+      (attemptedAt) => now - attemptedAt < this.timeouts.crashWindowMs,
+    );
+    if (this.crashAttempts.length >= 3) {
+      this.deps.log('detached app-owned server exhausted its restart budget; leaving it stopped');
+      return;
+    }
+    const attempt = this.crashAttempts.length;
+    this.crashAttempts.push(now);
+    this.recoveryPending = true;
+    const delay = this.timeouts.crashRestartInitialMs * 2 ** attempt;
+    void this.deps
+      .sleep(delay)
+      .then(() => {
+        this.recoveryPending = false;
+        if (this.shuttingDown || (this.child !== null && !this.child.exited)) {
+          return;
+        }
+        const resolved = this.deps.resolveServerBinary();
+        if (!resolved.ok) {
+          this.deps.log('bundled server binary not found for background relaunch');
+          return;
+        }
+        try {
+          const child = this.deps.spawnServer(resolved.path, [
+            'server',
+            '--config',
+            selected.configPath,
+            '--state-dir',
+            selected.stateDir,
+          ]);
+          this.adoptChild(child);
+          this.deps.log('detached app-owned server relaunched silently');
+        } catch (err) {
+          const safe = toSafeError(err, 'E_LAUNCH_FAILED');
+          this.deps.log(`background server relaunch failed: ${safe.message}`);
+        }
+      })
+      .catch((err: unknown) => {
+        this.recoveryPending = false;
+        const safe = toSafeError(err, 'E_RECOVERY_DELAY');
+        this.deps.log(`background recovery delay failed: ${safe.message}`);
+      });
+  }
+
   private releaseChild(): void {
     this.childExitUnsubscribe?.();
     this.childExitUnsubscribe = null;
@@ -1135,6 +1364,9 @@ export class RuntimeGateway {
     if (child === null) {
       return;
     }
+    // A deliberate stop ends silent supervision: nothing relaunches a child
+    // the gateway itself stopped.
+    this.ownedSelected = null;
     if (child.exited) {
       this.releaseChild();
       return;
@@ -1176,13 +1408,14 @@ export class RuntimeGateway {
   }
 
   private setState(next: ConnectionState): void {
-    const withRuntime = {
+    const withIdentity = {
       ...next,
       ...(this.connectedRuntimeDir !== null
         ? { connectedRuntimeDir: this.connectedRuntimeDir }
         : {}),
+      ...(this.serverKey !== null ? { serverKey: this.serverKey } : {}),
     } as ConnectionState;
-    const sanitized = this.sanitizeState(withRuntime);
+    const sanitized = this.sanitizeState(withIdentity);
     this.state = sanitized;
     for (const listener of [...this.listeners]) {
       listener(sanitized);

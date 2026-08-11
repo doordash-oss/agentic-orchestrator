@@ -14,6 +14,9 @@ export const IPC_CHANNELS = {
   connectionRetry: 'agentico:connection:retry',
   connectionRestart: 'agentico:connection:restart',
   connectionChooseServer: 'agentico:connection:choose-server',
+  connectionSwitchServer: 'agentico:connection:switch-server',
+  serversList: 'agentico:servers:list',
+  serversProbe: 'agentico:servers:probe',
   settingsGet: 'agentico:settings:get',
   settingsUpdate: 'agentico:settings:update',
   windowOpenSettings: 'agentico:window:open-settings',
@@ -131,6 +134,7 @@ export function windowPurposeFromArgv(argv: readonly string[]): WindowPurpose {
 /** Main-to-renderer push events (webContents.send). */
 export const IPC_EVENTS = {
   connectionChanged: 'agentico:connection:changed',
+  serversChanged: 'agentico:servers:changed',
   appEvent: 'agentico:events:app',
   sessionOutput: 'agentico:sessions:output',
   routeRequested: 'agentico:route:requested',
@@ -254,6 +258,13 @@ const connectionStateBase = {
    * authoritatively, without transient component state.
    */
   connectedRuntimeDir: z.string().max(4096).nullable().optional(),
+  /**
+   * The connected server's stable identity (the Phase 2 known-servers key:
+   * a sha256 prefix of the canonical runtime dir). Renderer-safe and
+   * credential-free; the renderer keys per-server UI state on it. Absent until
+   * an attach target is known.
+   */
+  serverKey: z.string().min(1).max(64).nullable().optional(),
 } as const;
 
 const connectionStage = <T extends ConnectionStage>(stage: T) => z.literal(stage);
@@ -342,6 +353,18 @@ export type ServerChoiceCandidate = z.output<typeof ServerChoiceCandidateSchema>
 export const MAX_SERVER_CHOICE_CANDIDATES = 32;
 
 /**
+ * Recovery context carried by a failed server switch: the attempted target
+ * (for "Retry") and the previously connected server's identity (for
+ * "Back to <name>"). Renderer-safe only — keys, names, runtime dirs; never
+ * tokens or URLs. Absent from errors unrelated to switching.
+ */
+export const SwitchContextSchema = z.strictObject({
+  attempted: ServerChoiceCandidateSchema,
+  previous: ServerChoiceCandidateSchema.nullable(),
+});
+export type SwitchContext = z.output<typeof SwitchContextSchema>;
+
+/**
  * A user-decision state: several live servers compete and nothing else can
  * proceed until the user picks one (attach-only snapshot — retry rescans).
  * It is neither pending nor an error: connecting waits on a human choice.
@@ -389,6 +412,8 @@ const ConnectionUnexpectedErrorStateSchema = z.strictObject({
   ...connectionStateBase,
   ownership: ServerOwnershipSchema,
   error: SafeErrorSchema,
+  /** Present when this failure interrupted a server switch. */
+  switchContext: SwitchContextSchema.optional(),
 });
 
 export const ConnectionErrorStateSchema = z.union([
@@ -436,6 +461,51 @@ export const ChooseServerRequestSchema = z.strictObject({
   serverKey: z.string().min(1).max(64),
 });
 export type ChooseServerRequest = z.output<typeof ChooseServerRequestSchema>;
+
+/**
+ * A mid-session server switch request: the identity key of a server from the
+ * footer switcher's list (registry scan union persisted known-servers). Unlike
+ * chooseServer this is not gated on awaiting-server-choice; it is invokable
+ * while ready and from a failed switch's error state.
+ */
+export const SwitchServerRequestSchema = z.strictObject({
+  serverKey: z.string().min(1).max(64),
+});
+export type SwitchServerRequest = z.output<typeof SwitchServerRequestSchema>;
+
+// --- Footer switcher server list (renderer-safe) ----------------------------
+// Union of the live registry scan and the persisted known-servers list,
+// probed for liveness while the switcher popover is open. Rows NEVER carry
+// tokens or other credential material; base URLs stay in the main process.
+
+export const SERVER_ROW_HEALTH = ['healthy', 'unreachable', 'probing'] as const;
+export const ServerRowHealthSchema = z.enum(SERVER_ROW_HEALTH);
+export type ServerRowHealth = z.output<typeof ServerRowHealthSchema>;
+
+export const ServerListRowSchema = z.strictObject({
+  serverKey: z.string().min(1).max(64),
+  name: z.string().max(64).nullable(),
+  runtimeDir: z.string().max(4096),
+  current: z.boolean(),
+  health: ServerRowHealthSchema,
+});
+export type ServerListRow = z.output<typeof ServerListRowSchema>;
+
+export const ServerListSnapshotSchema = z.strictObject({
+  rows: z.array(ServerListRowSchema).max(MAX_SERVER_CHOICE_CANDIDATES),
+});
+export type ServerListSnapshot = z.output<typeof ServerListSnapshotSchema>;
+
+/**
+ * Bounds health probing to the switcher popover's lifetime: `open: true`
+ * kicks an immediate probe round and a light interval, `open: false` stops
+ * all polling. The response is the freshest snapshot at apply time; further
+ * updates stream over IPC_EVENTS.serversChanged.
+ */
+export const ServersProbeRequestSchema = z.strictObject({
+  open: z.boolean(),
+});
+export type ServersProbeRequest = z.output<typeof ServersProbeRequestSchema>;
 
 /** Narrows to the failure variant, which always carries error detail. */
 export function isConnectionErrorState(state: ConnectionState): state is ConnectionErrorState {
@@ -614,6 +684,8 @@ export const AppRouteEventSchema = z.strictObject({
     'feature-command',
     // Selects the feature named by `featureId` in the sidebar.
     'select-feature',
+    // Focuses and opens the footer server switcher (the single switcher UI).
+    'switch-server',
   ]),
   attentionId: z.string().min(1).max(500).optional(),
   featureId: z.string().min(1).max(200).optional(),
@@ -2199,7 +2271,7 @@ export type CreationFileSearchResult = z.output<typeof CreationFileSearchResultS
 // attachment metadata only (identity key, name, loopback base URL, runtime
 // dir, last-seen) — never a token.
 
-export const SETTINGS_SCHEMA_VERSION = 3;
+export const SETTINGS_SCHEMA_VERSION = 4;
 
 /**
  * Hard bound on the persisted known-servers list. The list is ordered
@@ -2401,21 +2473,76 @@ export function defaultNotificationPrefs(): NotificationPrefs {
 }
 
 /**
- * Shell presentation preferences ONLY: which feature is active and whether
- * the sidebar is collapsed. The active id is strictly identity — feature
- * state, setup progress, and any other server-domain data are never stored
- * here. v1's settings-tab sentinel ('__settings__') is mapped to null by the
- * migration in settings.ts and must never be stored in this field.
+ * Shell presentation preferences ONLY: which feature is active per server and
+ * whether the sidebar is collapsed. `featureByServer` maps the connected
+ * server's identity key (the known-servers key) to the active feature id, so
+ * switching servers restores each server's own selection. The map is ordered
+ * most-recent-first and bounded to MAX_KNOWN_SERVERS entries — the same LRU
+ * discipline as the known-servers list — via applyShellPatch. The active id
+ * is strictly identity — feature state, setup progress, and any other
+ * server-domain data are never stored here. v1's settings-tab sentinel
+ * ('__settings__') is dropped by the migration chain in settings.ts and must
+ * never be stored in this map.
  */
 export const ShellPrefsSchema = z.strictObject({
-  activeFeatureId: FeatureIdSchema.nullable(),
+  featureByServer: z
+    .record(z.string().min(1).max(64), FeatureIdSchema)
+    .refine((map) => Object.keys(map).length <= MAX_KNOWN_SERVERS, {
+      message: `featureByServer must not exceed ${String(MAX_KNOWN_SERVERS)} entries`,
+    }),
   sidebarCollapsed: z.boolean(),
 });
 
 export type ShellPrefs = z.output<typeof ShellPrefsSchema>;
 
 export function defaultShellPrefs(): ShellPrefs {
-  return { activeFeatureId: null, sidebarCollapsed: false };
+  return { featureByServer: {}, sidebarCollapsed: false };
+}
+
+/**
+ * The only shell section the patch surface accepts: toggle the sidebar and/or
+ * set (or clear, with `featureId: null`) the active feature for one server
+ * key. The map is never merged wholesale — SettingsStore.update applies the
+ * LRU upsert and eviction itself.
+ */
+export const ShellPatchSchema = z
+  .strictObject({
+    sidebarCollapsed: z.boolean().optional(),
+    setActiveFeature: z
+      .strictObject({
+        serverKey: z.string().min(1).max(64),
+        featureId: FeatureIdSchema.nullable(),
+      })
+      .optional(),
+  })
+  .refine((patch) => patch.sidebarCollapsed !== undefined || patch.setActiveFeature !== undefined, {
+    message: 'shell patch must carry sidebarCollapsed and/or setActiveFeature',
+  });
+
+export type ShellPatch = z.output<typeof ShellPatchSchema>;
+
+/**
+ * Applies a shell patch to the persisted section. A `setActiveFeature` entry
+ * is matched by `serverKey`: it moves to the front (most-recent-first order),
+ * `featureId: null` removes the entry, and entries beyond MAX_KNOWN_SERVERS
+ * evict from the tail. Shared between the real SettingsStore and test doubles
+ * so the eviction semantics never drift.
+ */
+export function applyShellPatch(current: ShellPrefs, patch: ShellPatch): ShellPrefs {
+  let featureByServer = current.featureByServer;
+  if (patch.setActiveFeature !== undefined) {
+    const { serverKey, featureId } = patch.setActiveFeature;
+    const rest = Object.entries(featureByServer).filter(([key]) => key !== serverKey);
+    featureByServer = Object.fromEntries(
+      featureId === null
+        ? rest.slice(0, MAX_KNOWN_SERVERS)
+        : [[serverKey, featureId] as const, ...rest].slice(0, MAX_KNOWN_SERVERS),
+    );
+  }
+  return {
+    featureByServer,
+    sidebarCollapsed: patch.sidebarCollapsed ?? current.sidebarCollapsed,
+  };
 }
 
 // --- The main window's coarse UI-state push ---------------------------------
@@ -2568,7 +2695,7 @@ export const SettingsPatchSchema = z.strictObject({
   wizard: WizardPrefsSchema.optional(),
   ama: AmaPrefsSchema.optional(),
   notifications: NotificationPrefsSchema.optional(),
-  shell: ShellPrefsSchema.optional(),
+  shell: ShellPatchSchema.optional(),
   settingsWindow: SettingsWindowPrefsSchema.optional(),
   servers: ServersPatchSchema.optional(),
 });
@@ -2867,6 +2994,18 @@ export const ipcContracts: Record<IpcChannel, IpcContract> = {
   [IPC_CHANNELS.connectionChooseServer]: {
     request: z.tuple([ChooseServerRequestSchema]),
     response: ConnectionStateSchema,
+  },
+  [IPC_CHANNELS.connectionSwitchServer]: {
+    request: z.tuple([SwitchServerRequestSchema]),
+    response: ConnectionStateSchema,
+  },
+  [IPC_CHANNELS.serversList]: {
+    request: z.tuple([]),
+    response: ServerListSnapshotSchema,
+  },
+  [IPC_CHANNELS.serversProbe]: {
+    request: z.tuple([ServersProbeRequestSchema]),
+    response: ServerListSnapshotSchema,
   },
   [IPC_CHANNELS.settingsGet]: {
     request: z.tuple([]),
@@ -3228,6 +3367,17 @@ export interface AgenticoApi {
    * existing error states (retry rescans).
    */
   chooseConnectionServer(request: ChooseServerRequest): Promise<ConnectionState>;
+  /**
+   * Switches the workspace to another running server without an app restart.
+   * Invokable while ready and from a failed switch's error state; the result
+   * (and every intermediate transition) also streams via onConnectionChanged.
+   */
+  switchConnectionServer(request: SwitchServerRequest): Promise<ConnectionState>;
+  /** Renderer-safe switcher rows: registry scan union persisted known servers. */
+  listServers(): Promise<ServerListSnapshot>;
+  /** Bounds health probing to the switcher popover's open lifetime. */
+  probeServers(request: ServersProbeRequest): Promise<ServerListSnapshot>;
+  onServersChanged(listener: (snapshot: ServerListSnapshot) => void): () => void;
   onConnectionChanged(listener: (state: ConnectionState) => void): () => void;
   onRouteRequest(listener: (event: AppRouteEvent) => void): () => void;
   getSettings(): Promise<Settings>;

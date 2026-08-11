@@ -33,6 +33,7 @@ import type {
 } from '../../../src/shared/ipc';
 import {
   applyServersPatch,
+  applyShellPatch,
   CHAT_SESSION_ID,
   defaultAmaPrefs,
   defaultSettings,
@@ -1060,11 +1061,15 @@ const READY_SNAPSHOT: ReadinessSnapshot = {
   issues: [],
 };
 
+/** The mock server's identity key; per-server shell prefs are keyed on it. */
+const SERVER_KEY = 'a'.repeat(64);
+
 const CONNECTION_STATE: ConnectionState = {
   status: 'ready',
   stage: 'ready',
   detail: 'Connected to runtime.',
   ownership: 'app-owned',
+  serverKey: SERVER_KEY,
 };
 
 /** Mid-connect state for the connection-shell capture: two of the six
@@ -1413,7 +1418,7 @@ function makeMockApi(
     // preference the app restores on open, rather than being routed there.
     settingsWindow: { ...defaultSettingsWindowPrefs(), pane: settingsScenePane(scene) },
     shell: {
-      activeFeatureId:
+      featureByServer:
         scene === 'overview-lanes' ||
         scene === 'overview-empty' ||
         scene === 'command-palette-overview' ||
@@ -1421,8 +1426,8 @@ function makeMockApi(
         // is evidenced over a real feature cockpit, so it keeps the default.
         scene === 'update-popover' ||
         scene.startsWith('creation-sheet')
-          ? null
-          : 'abcd1234ef567890',
+          ? {}
+          : { [SERVER_KEY]: 'abcd1234ef567890' },
       sidebarCollapsed: false,
     },
   };
@@ -1439,6 +1444,10 @@ function makeMockApi(
     retryConnection: () => Promise.resolve(CONNECTION_STATE),
     restartConnection: () => Promise.resolve(CONNECTION_STATE),
     chooseConnectionServer: () => Promise.resolve(CONNECTION_STATE),
+    switchConnectionServer: () => Promise.resolve(CONNECTION_STATE),
+    listServers: () => Promise.resolve({ rows: [] }),
+    probeServers: () => Promise.resolve({ rows: [] }),
+    onServersChanged: () => () => {},
     onConnectionChanged: (listener) => {
       connectionListeners.add(listener);
       return () => connectionListeners.delete(listener);
@@ -1449,12 +1458,18 @@ function makeMockApi(
     },
     getSettings: () => Promise.resolve(currentSettings),
     updateSettings: (patch) => {
-      const { servers, ...rest } = patch;
+      const { servers, shell, ...rest } = patch;
       currentSettings = { ...currentSettings, ...rest };
       if (servers !== undefined) {
         currentSettings = {
           ...currentSettings,
           servers: applyServersPatch(currentSettings.servers, servers),
+        };
+      }
+      if (shell !== undefined) {
+        currentSettings = {
+          ...currentSettings,
+          shell: applyShellPatch(currentSettings.shell, shell),
         };
       }
       return Promise.resolve(currentSettings);

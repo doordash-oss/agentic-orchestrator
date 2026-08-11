@@ -5028,6 +5028,141 @@ body {
   color: var(--text);
 }
 
+/* The footer's server control: the connected server's name and status dot
+ * acting as the switcher trigger. Same metrics as the passive runtime pill. */
+.sidebar__server {
+  min-width: 0;
+}
+
+.sidebar__server-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 0;
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  font: 11px var(--bench-font-text);
+  cursor: pointer;
+}
+
+.sidebar__server-control:hover:not(:disabled) {
+  color: var(--text);
+}
+
+.sidebar__server-control:disabled {
+  cursor: default;
+  opacity: 0.7;
+}
+
+.sidebar__server-dot {
+  flex: 0 0 auto;
+}
+
+.sidebar__server-dot[data-tone='ready'] {
+  color: var(--ok);
+}
+
+.sidebar__server-dot[data-tone='progress'] {
+  color: var(--accent);
+}
+
+.sidebar__server-dot[data-tone='error'] {
+  color: var(--bad);
+}
+
+.sidebar__server-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The switcher popover hangs off the footer, so it opens upward, flush left. */
+.server-switcher {
+  top: auto;
+  bottom: calc(100% + var(--space-2));
+  right: auto;
+  left: 0;
+  width: 320px;
+  max-width: 80vw;
+  gap: var(--space-1);
+  padding: var(--space-2);
+}
+
+.server-switcher__empty {
+  margin: 0;
+  padding: var(--space-2);
+  color: var(--muted);
+  font: 12px var(--bench-font-text);
+}
+
+.server-switcher__list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.server-switcher__row {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr) auto;
+  grid-template-areas:
+    'check primary status'
+    'check runtime status';
+  align-items: center;
+  column-gap: 6px;
+  padding: 6px 8px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  font: 12px var(--bench-font-text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.server-switcher__row[data-selected='true'] {
+  background: var(--hover, var(--material-edge));
+}
+
+.server-switcher__row[aria-disabled='true'] {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.server-switcher__check {
+  grid-area: check;
+  color: var(--accent);
+}
+
+.server-switcher__primary {
+  grid-area: primary;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.server-switcher__runtime {
+  grid-area: runtime;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.server-switcher__status {
+  grid-area: status;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.server-switcher__row[data-health='unreachable'] .server-switcher__status {
+  color: var(--bad);
+}
+
 .sidebar__lane {
   margin-top: var(--space-2);
 }

@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
@@ -39,7 +39,10 @@ const SECOND_FEATURE_ID = '1234abcd5678ef90';
 function settingsWithActive(featureId: string | null = FEATURE_ID): Settings {
   return {
     ...defaultSettings(),
-    shell: { activeFeatureId: featureId, sidebarCollapsed: false },
+    shell: {
+      featureByServer: featureId === null ? {} : { 'default-runtime': featureId },
+      sidebarCollapsed: false,
+    },
   };
 }
 
@@ -339,7 +342,7 @@ describe('WorkspaceShell sidebar', () => {
     expect(selected).toHaveLength(1);
   });
 
-  it('restores the previously active feature from shell.activeFeatureId and persists a new selection', async () => {
+  it("restores the previously active feature from the shell's per-server map and persists a new selection", async () => {
     const mock = installAgenticoMock({
       settings: settingsWithActive(FEATURE_ID),
       features: [summaryOf(featureSnapshot({ id: FEATURE_ID, name: 'Search revamp' }))],
@@ -358,7 +361,7 @@ describe('WorkspaceShell sidebar', () => {
     await userEvent.click(screen.getByRole('option', { name: 'Overview' }));
     await waitFor(() =>
       expect(mock.api.updateSettings).toHaveBeenCalledWith({
-        shell: { activeFeatureId: null, sidebarCollapsed: false },
+        shell: { setActiveFeature: { serverKey: 'default-runtime', featureId: null } },
       }),
     );
   });
@@ -465,7 +468,7 @@ describe('WorkspaceShell sidebar', () => {
     ).toBeInTheDocument();
     await waitFor(() =>
       expect(mock.api.updateSettings).toHaveBeenCalledWith({
-        shell: { activeFeatureId: FEATURE_ID, sidebarCollapsed: false },
+        shell: { setActiveFeature: { serverKey: 'default-runtime', featureId: FEATURE_ID } },
       }),
     );
     expect(mock.api.getFeature).toHaveBeenCalledWith(FEATURE_ID);
@@ -596,7 +599,7 @@ describe('WorkspaceShell sidebar', () => {
     expect(screen.queryByRole('region', { name: 'Feature Search revamp' })).not.toBeInTheDocument();
     await waitFor(() =>
       expect(mock.api.updateSettings).toHaveBeenCalledWith({
-        shell: { activeFeatureId: null, sidebarCollapsed: false },
+        shell: { setActiveFeature: { serverKey: 'default-runtime', featureId: null } },
       }),
     );
   });
@@ -632,7 +635,7 @@ describe('WorkspaceShell sidebar', () => {
     );
     await waitFor(() =>
       expect(mock.api.updateSettings).toHaveBeenCalledWith({
-        shell: { activeFeatureId: SECOND_FEATURE_ID, sidebarCollapsed: false },
+        shell: { setActiveFeature: { serverKey: 'default-runtime', featureId: SECOND_FEATURE_ID } },
       }),
     );
   });
@@ -797,7 +800,7 @@ describe('WorkspaceShell toolbar', () => {
     await userEvent.click(toggle);
     await waitFor(() =>
       expect(mock.api.updateSettings).toHaveBeenCalledWith({
-        shell: { activeFeatureId: null, sidebarCollapsed: true },
+        shell: { sidebarCollapsed: true },
       }),
     );
     // Collapsing hides the sidebar header with the sidebar, so the same
@@ -878,12 +881,15 @@ describe('WorkspaceShell toolbar', () => {
     });
     render(<WorkspaceShell />);
 
-    expect(await screen.findByText('frothy-macchiato')).toBeVisible();
+    // The footer pill is now the server control: the name rides its button.
+    expect(
+      await screen.findByRole('button', { name: 'frothy-macchiato — switch server' }),
+    ).toBeVisible();
     const footer = document.querySelector('.sidebar__footer')!;
     expect(footer).toHaveTextContent('frothy-macchiato');
     expect(screen.queryByText('Runtime ready')).toBeNull();
-    // The name is display-only: the footer keeps exactly one button.
-    expect(footer.getElementsByTagName('button')).toHaveLength(1);
+    // Two controls: the server switcher and the Ask affordance.
+    expect(footer.getElementsByTagName('button')).toHaveLength(2);
   });
 
   it('falls back to "Runtime ready" for a ready but name-less server', async () => {
@@ -1195,7 +1201,7 @@ describe('WorkspaceShell keyboard shortcuts', () => {
     fireEvent.keyDown(window, { key: 's', metaKey: true, ctrlKey: true });
     await waitFor(() =>
       expect(mock.api.updateSettings).toHaveBeenCalledWith({
-        shell: { activeFeatureId: null, sidebarCollapsed: true },
+        shell: { sidebarCollapsed: true },
       }),
     );
     expect(screen.getByRole('navigation', { name: 'Feature sidebar' })).toHaveAttribute(
@@ -1239,7 +1245,10 @@ describe('WorkspaceShell auto-collapse at narrow viewports', () => {
 
   it('stays collapsed at any width once the user has explicitly collapsed the sidebar', async () => {
     installAgenticoMock({
-      settings: { ...defaultSettings(), shell: { activeFeatureId: null, sidebarCollapsed: true } },
+      settings: {
+        ...defaultSettings(),
+        shell: { featureByServer: {}, sidebarCollapsed: true },
+      },
       features: [],
     });
     render(<WorkspaceShell />);
@@ -1511,7 +1520,7 @@ describe('WorkspaceShell native-menu UI state', () => {
     rerender(<WorkspaceShell routeRequest={{ id: 12, event: { target: 'toggle-sidebar' } }} />);
     await waitFor(() =>
       expect(mock.api.updateSettings).toHaveBeenCalledWith({
-        shell: { activeFeatureId: null, sidebarCollapsed: true },
+        shell: { sidebarCollapsed: true },
       }),
     );
     expect(screen.getByRole('navigation', { name: 'Feature sidebar' })).toHaveAttribute(
@@ -1548,7 +1557,7 @@ describe('WorkspaceShell native-menu UI state', () => {
       await screen.findByRole('region', { name: 'Feature Search revamp' }),
     ).toBeInTheDocument();
     expect(mock.api.updateSettings).toHaveBeenCalledWith({
-      shell: { activeFeatureId: FEATURE_ID, sidebarCollapsed: false },
+      shell: { setActiveFeature: { serverKey: 'default-runtime', featureId: FEATURE_ID } },
     });
   });
 
@@ -1615,5 +1624,70 @@ describe('WorkspaceShell native-menu UI state', () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(screen.queryByRole('dialog')).toBeNull();
     expect(mock.api.dispatchFeatureAction).not.toHaveBeenCalled();
+  });
+});
+
+describe('WorkspaceShell per-server scoping', () => {
+  function readyAt(serverKey: string): ConnectionState {
+    return {
+      status: 'ready',
+      stage: 'ready',
+      detail: 'Connected.',
+      ownership: 'external',
+      serverKey,
+      serverName: serverKey,
+    };
+  }
+
+  it("restores each server's active feature across a switch A→B→A", async () => {
+    const feature = featureSnapshot({ id: FEATURE_ID, name: 'Search revamp', status: 'Created' });
+    const mock = installAgenticoMock({
+      features: [summaryOf(feature)],
+      settings: {
+        ...defaultSettings(),
+        shell: {
+          featureByServer: { 'key-alpha': FEATURE_ID },
+          sidebarCollapsed: false,
+        },
+      },
+      connection: readyAt('key-alpha'),
+    });
+    render(<WorkspaceShell />);
+
+    // alpha's recorded selection is restored.
+    expect(await screen.findByRole('option', { name: /Search revamp/ })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
+
+    // server B has no recorded selection: the shell lands on Overview.
+    act(() => mock.emitConnection(readyAt('key-beta')));
+    await waitFor(() =>
+      expect(screen.getByRole('option', { name: 'Overview' })).toHaveAttribute(
+        'aria-selected',
+        'true',
+      ),
+    );
+    expect(screen.getByRole('option', { name: /Search revamp/ })).toHaveAttribute(
+      'aria-selected',
+      'false',
+    );
+
+    // Selecting on B persists under B's key, never A's.
+    await userEvent.click(screen.getByRole('option', { name: /Search revamp/ }));
+    await waitFor(() =>
+      expect(mock.api.updateSettings).toHaveBeenCalledWith({
+        shell: { setActiveFeature: { serverKey: 'key-beta', featureId: FEATURE_ID } },
+      }),
+    );
+
+    // Back on A the recorded selection is restored exactly.
+    act(() => mock.emitConnection(readyAt('key-alpha')));
+    await waitFor(() =>
+      expect(screen.getByRole('option', { name: /Search revamp/ })).toHaveAttribute(
+        'aria-selected',
+        'true',
+      ),
+    );
   });
 });

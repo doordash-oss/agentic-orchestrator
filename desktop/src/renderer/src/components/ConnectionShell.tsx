@@ -12,6 +12,7 @@ import {
   type ConnectionStage,
   type ConnectionState,
   type ServerChoiceCandidate,
+  type SwitchContext,
 } from '../../../shared/ipc';
 import { PhaseRailTrack } from '../features/PhaseRailRow';
 import { stepSegments } from '../features/phaseRail';
@@ -159,6 +160,43 @@ function ServerChoiceList({
   );
 }
 
+/**
+ * A failed switch's recovery affordances: Retry re-attempts the target,
+ * Back re-attaches the previous server. Both ride the standard attach path
+ * — there is never an automatic rollback.
+ */
+function SwitchFailureActions({
+  context,
+  onSwitch,
+}: {
+  context: SwitchContext;
+  onSwitch(serverKey: string): void;
+}): ReactElement {
+  return (
+    <>
+      <button
+        type="button"
+        className="shell-card__retry"
+        onClick={() => onSwitch(context.attempted.serverKey)}
+      >
+        Retry
+      </button>
+      {context.previous !== null ? (
+        <button
+          type="button"
+          className="shell-card__retry shell-card__retry--secondary"
+          onClick={() => {
+            const { previous } = context;
+            if (previous !== null) onSwitch(previous.serverKey);
+          }}
+        >
+          Back to {context.previous.name ?? 'previous server'}
+        </button>
+      ) : null}
+    </>
+  );
+}
+
 export function ConnectionShell() {
   const [state, setState] = useState<ConnectionState>(INITIAL_STATE);
 
@@ -179,6 +217,15 @@ export function ConnectionShell() {
   const chooseServer = useCallback((serverKey: string) => {
     window.agentico
       .chooseConnectionServer({ serverKey })
+      .then(setState)
+      .catch((err: unknown) => setState(ipcFailureState(err)));
+  }, []);
+
+  // Both recovery affordances of a failed switch ride the standard attach
+  // path: Retry re-attempts the target, Back re-attaches the previous server.
+  const switchTo = useCallback((serverKey: string) => {
+    window.agentico
+      .switchConnectionServer({ serverKey })
       .then(setState)
       .catch((err: unknown) => setState(ipcFailureState(err)));
   }, []);
@@ -265,9 +312,13 @@ export function ConnectionShell() {
               )}
             </details>
           ) : null}
-          <button type="button" className="shell-card__retry" onClick={retry}>
-            Retry
-          </button>
+          {failure.status === 'error' && failure.switchContext !== undefined ? (
+            <SwitchFailureActions context={failure.switchContext} onSwitch={switchTo} />
+          ) : (
+            <button type="button" className="shell-card__retry" onClick={retry}>
+              Retry
+            </button>
+          )}
         </div>
       ) : null}
     </section>

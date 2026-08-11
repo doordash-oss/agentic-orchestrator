@@ -15,7 +15,7 @@ import {
   constants,
   writeFileSync,
 } from 'node:fs';
-import { basename, join, relative, resolve, sep } from 'node:path';
+import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 
 import { readArtifactEvidence } from './lib/release-artifacts.mjs';
 
@@ -407,6 +407,7 @@ export function createPublicationSnapshot({
     syncFile(snapshotEvidencePath);
     chmodSync(path, 0o500);
     syncSnapshotDirectory(path);
+    syncSnapshotDirectory(dirname(path));
     return Object.freeze(snapshot);
   } catch (error) {
     // Preserve the failed snapshot as forensic evidence. Final inode-bound root cleanup owns it.

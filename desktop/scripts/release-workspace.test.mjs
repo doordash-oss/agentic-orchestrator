@@ -15,7 +15,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 
@@ -439,7 +439,7 @@ describe('publication snapshot', () => {
     chmodSync(snapshot.path, 0o700);
   });
 
-  it('fsyncs every publication file before fsyncing the snapshot directory', () => {
+  it('fsyncs every publication file before the snapshot and parent directories', () => {
     const root = mkdtempSync(join(tmpdir(), 'agentico-publication-fsync-test-'));
     roots.push(root);
     const source = join(root, 'source');
@@ -482,6 +482,7 @@ describe('publication snapshot', () => {
       `file:${receiptName}`,
       'file:publication-snapshot.json',
       `directory:${snapshot.path}`,
+      `directory:${dirname(snapshot.path)}`,
     ]);
     chmodSync(snapshot.path, 0o700);
   });

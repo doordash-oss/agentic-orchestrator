@@ -1196,6 +1196,10 @@ $_findings
 ## Suggestions
 - (none)
 
+## Review Scope
+full
+No prior round context; full verification applied.
+
 ## Verdict
 $_verdict
 REVIEWEOF

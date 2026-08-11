@@ -994,13 +994,13 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 				}, nil
 			}
 
-		switch reviewStatus {
-		case ReviewApproved:
-			anchors := anchorImplementIteration(cfg, i, "approved")
-			meta.MadeProgress = observeVerifiedImplementationOutcome(pt, 0, cfg)
-			meta.ReviewStatus = reviewStatus.String()
-			meta.Anchors = anchors
-			_ = am.WriteMeta(iterDir, meta)
+			switch reviewStatus {
+			case ReviewApproved:
+				anchors := anchorImplementIteration(cfg, i, "approved")
+				meta.MadeProgress = observeVerifiedImplementationOutcome(pt, 0, cfg)
+				meta.ReviewStatus = reviewStatus.String()
+				meta.Anchors = anchors
+				_ = am.WriteMeta(iterDir, meta)
 				_ = am.WriteSummary(summaryPath, meta)
 				consecutiveFailures = 0
 				cfg.Observer.IterationEnded(iterCtx, i, toSessionUsage(cost), time.Since(iterStart), finalStatusReviewPassed)
@@ -1008,16 +1008,16 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 					FinalStatus: finalStatusReviewPassed,
 					Iterations:  i,
 				}, nil
-		case ReviewChangesRequested:
-			outcome := "changes requested"
-			if isGateSynthesizedChangesRequested(iterDir) {
-				outcome = "changes requested (gate)"
-			}
-			anchors := anchorImplementIteration(cfg, i, outcome)
-			meta.MadeProgress = observeVerifiedImplementationOutcome(pt, CountBlockingReviewFindings(feedback)+CountOpenVerificationOutcomeBlockers(harnessVerification), cfg)
-			meta.ReviewStatus = reviewStatus.String()
-			meta.Anchors = anchors
-			_ = am.WriteMeta(iterDir, meta)
+			case ReviewChangesRequested:
+				outcome := "changes requested"
+				if isGateSynthesizedChangesRequested(iterDir) {
+					outcome = "changes requested (gate)"
+				}
+				anchors := anchorImplementIteration(cfg, i, outcome)
+				meta.MadeProgress = observeVerifiedImplementationOutcome(pt, CountBlockingReviewFindings(feedback)+CountOpenVerificationOutcomeBlockers(harnessVerification), cfg)
+				meta.ReviewStatus = reviewStatus.String()
+				meta.Anchors = anchors
+				_ = am.WriteMeta(iterDir, meta)
 				_ = am.WriteSummary(summaryPath, meta)
 				missingReqs := MissingEvidenceRequirements(feedback)
 				insufficientReqs := InsufficientEvidenceRequirements(feedback)

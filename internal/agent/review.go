@@ -265,14 +265,14 @@ const reviewStatusSkipped = "skipped"
 // typed Verdict / Markers fields are left zero. Callers MUST inspect
 // ProtocolViolations before trusting Verdict.
 type ParsedReviewFeedback struct {
-	Verdict            ReviewStatus
-	Body               string
-	Findings           string
-	Suggestions        string
-	ReviewScope        string
+	Verdict                  ReviewStatus
+	Body                     string
+	Findings                 string
+	Suggestions              string
+	ReviewScope              string
 	ReviewScopeJustification string
-	Markers            ValidatorMarkers
-	ProtocolViolations []string
+	Markers                  ValidatorMarkers
+	ProtocolViolations       []string
 }
 
 // OK reports whether the feedback file satisfies the handoff contract.

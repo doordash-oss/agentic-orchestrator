@@ -489,6 +489,10 @@ if [ "$(basename "$_d")" = "iteration-01" ]; then
 ## Suggestions
 - **Medium**: Preserve this pooled craft suggestion for the implementer.
 
+## Review Scope
+full
+No prior round; full review applied.
+
 ## Verdict
 APPROVED
 REVIEWEOF
@@ -504,6 +508,10 @@ REVIEWEOF
 
 ## Suggestions
 - (none)
+
+## Review Scope
+full
+No prior round; full review applied.
 
 ## Verdict
 APPROVED
@@ -523,6 +531,10 @@ else
 
 ## Suggestions
 - (none)
+
+## Review Scope
+full
+No prior round; full review applied.
 
 ## Verdict
 APPROVED

@@ -1,7 +1,8 @@
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
   chmodSync,
+  copyFileSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -14,6 +15,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import {
@@ -25,6 +27,7 @@ import {
 } from './release-workspace.mjs';
 
 const roots = [];
+const projectRoot = fileURLToPath(new URL('../..', import.meta.url));
 
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
@@ -72,6 +75,7 @@ describe('detached release workspace', () => {
       removeDetachedReleaseWorkspace(workspace);
     }
     expect(existsSync(workspace.path)).toBe(false);
+    expect(git(fixture.root, 'worktree', 'list', '--porcelain')).not.toContain(workspace.path);
   }, 20_000);
 
   it('clears ambient Go workspace and flags while forcing readonly modules', () => {
@@ -114,8 +118,9 @@ describe('detached release workspace', () => {
     chmodSync(victim, 0o755);
     mkdirSync(join(workspace.path, 'desktop', 'dist'), { recursive: true });
     symlinkSync(victim, join(workspace.path, 'desktop', 'dist', 'publication'));
-    expect(() => removeDetachedReleaseWorkspace(workspace)).toThrow(/symlink/);
+    expect(() => removeDetachedReleaseWorkspace(workspace)).not.toThrow();
     expect(statSync(victim).mode & 0o777).toBe(0o755);
+    expect(existsSync(workspace.path)).toBe(false);
   });
 
   it.each(['desktop', 'dist'])(
@@ -141,38 +146,88 @@ describe('detached release workspace', () => {
         mkdirSync(join(workspace.path, 'desktop'));
         symlinkSync(victim, join(workspace.path, 'desktop', 'dist'));
       }
-      expect(() => removeDetachedReleaseWorkspace(workspace)).toThrow(/symlink/);
+      expect(() => removeDetachedReleaseWorkspace(workspace)).not.toThrow();
       expect(statSync(victimPublication).mode & 0o777).toBe(0o755);
       expect(existsSync(victim)).toBe(true);
+      expect(existsSync(workspace.path)).toBe(false);
     },
   );
 
-  it('detects a workspace root swapped concurrently at the removal boundary', () => {
+  it('uses Git only for non-destructive administrative pruning after inode-bound cleanup', () => {
     const fixture = repositoryFixture();
     const workspace = createDetachedReleaseWorkspace({
       operatorRoot: fixture.root,
       commit: fixture.commit,
       runId: '55555555-5555-4555-8555-555555555555',
     });
-    const victim = join(fixture.root, 'root-swap-victim');
-    mkdirSync(victim);
-    writeFileSync(join(victim, 'keep'), 'unchanged');
-    chmodSync(victim, 0o755);
-    expect(() =>
-      removeDetachedReleaseWorkspace(workspace, {
-        gitCommand: (cwd, ...args) => {
-          if (args.slice(0, 3).join(' ') === 'worktree remove --force') {
-            renameSync(workspace.path, `${workspace.path}.swapped`);
-            symlinkSync(victim, workspace.path);
-            return '';
-          }
-          return git(cwd, ...args);
-        },
-      }),
-    ).toThrow(/changed after validation/);
-    expect(readFileSync(join(victim, 'keep'), 'utf8')).toBe('unchanged');
-    expect(statSync(victim).mode & 0o777).toBe(0o755);
+    const gitCalls = [];
+    let cleaned;
+    removeDetachedReleaseWorkspace(workspace, {
+      cleanupCommand: (value) => {
+        cleaned = value;
+      },
+      gitCommand: (_cwd, ...args) => {
+        gitCalls.push(args);
+        return '';
+      },
+    });
+    expect(cleaned.token).toEqual(workspace.token);
+    expect(gitCalls).toEqual([['worktree', 'prune', '--expire', 'now']]);
+    expect(gitCalls.flat()).not.toContain(workspace.path);
   });
+
+  it('never traverses a real-directory root replacement carrying the copied worktree pointer', async () => {
+    const fixture = repositoryFixture();
+    const workspace = createDetachedReleaseWorkspace({
+      operatorRoot: fixture.root,
+      commit: fixture.commit,
+      runId: '77777777-7777-4777-8777-777777777777',
+    });
+    const child = spawn(
+      'go',
+      [
+        'run',
+        './desktop/scripts/release-cleanup',
+        workspace.path,
+        String(workspace.token.dev),
+        String(workspace.token.ino),
+      ],
+      { cwd: projectRoot, stdio: ['pipe', 'pipe', 'pipe'] },
+    );
+    await new Promise((resolve, reject) => {
+      let output = '';
+      child.stdout.on('data', (chunk) => {
+        output += chunk;
+        if (output.includes('ready\n')) resolve();
+      });
+      child.once('error', reject);
+      child.once('exit', (code) =>
+        reject(new Error(`cleanup helper exited before ready: ${code}`)),
+      );
+    });
+    const original = `${workspace.path}.validated-original`;
+    renameSync(workspace.path, original);
+    mkdirSync(workspace.path);
+    const worktreePointer = readFileSync(join(original, '.git'), 'utf8');
+    copyFileSync(join(original, '.git'), join(workspace.path, '.git'));
+    writeFileSync(join(workspace.path, 'keep'), 'victim bytes');
+    chmodSync(workspace.path, 0o755);
+    const exit = new Promise((resolve) => {
+      let stderr = '';
+      child.stderr.on('data', (chunk) => {
+        stderr += chunk;
+      });
+      child.once('exit', (code) => resolve({ code, stderr }));
+    });
+    child.stdin.end();
+    const { code, stderr } = await exit;
+    expect(code).not.toBe(0);
+    expect(stderr).toMatch(/workspace root changed|not empty/);
+    expect(readFileSync(join(workspace.path, 'keep'), 'utf8')).toBe('victim bytes');
+    expect(readFileSync(join(workspace.path, '.git'), 'utf8')).toBe(worktreePointer);
+    expect(statSync(workspace.path).mode & 0o777).toBe(0o755);
+    expect(existsSync(original)).toBe(false);
+  }, 30_000);
 });
 
 describe('publication snapshot', () => {

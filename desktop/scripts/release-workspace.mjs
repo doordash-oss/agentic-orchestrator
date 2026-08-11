@@ -2,26 +2,24 @@
 import { execFileSync } from 'node:child_process';
 import {
   chmodSync,
-  closeSync,
-  constants,
   copyFileSync,
   existsSync,
-  fchmodSync,
-  fstatSync,
   lstatSync,
   mkdirSync,
-  openSync,
   readFileSync,
   realpathSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
-import { basename, join, relative, resolve, sep } from 'node:path';
+import { basename, dirname, join, relative, resolve, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { readArtifactEvidence } from './lib/release-artifacts.mjs';
 
 const RUN_ID = /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/;
 const FULL_SHA = /^[0-9a-f]{40}$/i;
+const desktopDir = dirname(dirname(fileURLToPath(import.meta.url)));
+const projectRoot = dirname(desktopDir);
 
 function git(cwd, ...args) {
   return execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
@@ -110,78 +108,22 @@ export function revalidateWorkspaceToken(token) {
   return token;
 }
 
-function existingDirectoryWithoutSymlinks(root, components) {
-  let path = root;
-  for (const component of components) {
-    path = join(path, component);
-    let stat;
-    try {
-      stat = lstatSync(path);
-    } catch (error) {
-      if (error?.code === 'ENOENT') return null;
-      throw error;
-    }
-    if (stat.isSymbolicLink()) {
-      throw new Error(`release workspace cleanup encountered a symlink: ${path}`);
-    }
-    if (!stat.isDirectory()) {
-      throw new Error(`release workspace cleanup expected a directory: ${path}`);
-    }
-  }
-  return path;
-}
-
-function openValidatedDirectory(path, token) {
-  const fd = openSync(path, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
-  const stat = fstatSync(fd);
-  if (!stat.isDirectory() || stat.dev !== token.dev || stat.ino !== token.ino) {
-    closeSync(fd);
-    throw new Error('release workspace changed after validation');
-  }
-  return fd;
-}
-
-function revalidateOpenWorkspace(fd, token) {
-  const stat = fstatSync(fd);
-  if (!stat.isDirectory() || stat.dev !== token.dev || stat.ino !== token.ino) {
-    throw new Error('release workspace changed after validation');
-  }
-  revalidateWorkspaceToken(token);
-}
-
-function makePublicationDirectoryWritable(workspaceFd, token) {
-  const components = ['desktop', 'dist', 'publication'];
-  const path = existingDirectoryWithoutSymlinks(token.path, components);
-  if (path === null) return;
-  revalidateOpenWorkspace(workspaceFd, token);
-  const fd = openSync(path, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
-  try {
-    revalidateOpenWorkspace(workspaceFd, token);
-    const confirmed = existingDirectoryWithoutSymlinks(token.path, components);
-    const pathStat = lstatSync(confirmed);
-    const openStat = fstatSync(fd);
-    if (
-      realpathSync(confirmed) !== confirmed ||
-      pathStat.dev !== openStat.dev ||
-      pathStat.ino !== openStat.ino
-    ) {
-      throw new Error('release publication directory changed during cleanup');
-    }
-    fchmodSync(fd, 0o700);
-  } finally {
-    closeSync(fd);
-  }
-}
-
-function assertWorkspaceRemovedOrUnchanged(token) {
-  try {
-    lstatSync(token.path);
-  } catch (error) {
-    if (error?.code === 'ENOENT') return;
-    throw error;
-  }
-  revalidateWorkspaceToken(token);
-  throw new Error('release workspace still exists after removal');
+function inodeBoundCleanup(workspace) {
+  return execFileSync(
+    'go',
+    [
+      'run',
+      './desktop/scripts/release-cleanup',
+      workspace.path,
+      String(workspace.token.dev),
+      String(workspace.token.ino),
+    ],
+    {
+      cwd: projectRoot,
+      env: cleanGoEnvironment(process.env),
+      stdio: ['ignore', 'pipe', 'pipe'],
+    },
+  );
 }
 
 /** Create a detached Git worktree whose filesystem starts from only captured committed files. */
@@ -206,17 +148,18 @@ export function createDetachedReleaseWorkspace({
   const path = contained(base, join(base, runId), 'release workspace');
   if (existsSync(path)) throw new Error(`release workspace already exists: ${path}`);
   gitCommand(operatorRoot, 'worktree', 'add', '--detach', path, commit);
+  const token = captureWorkspaceToken(path);
   const actual = gitCommand(path, 'rev-parse', 'HEAD');
   const status = gitCommand(path, 'status', '--porcelain', '--untracked-files=all');
   if (actual !== commit || status !== '') {
     try {
-      gitCommand(operatorRoot, 'worktree', 'remove', '--force', path);
+      inodeBoundCleanup({ path: token.path, token });
+      gitCommand(operatorRoot, 'worktree', 'prune', '--expire', 'now');
     } catch {
       // Preserve the primary provenance failure; recovery can prune the validated Git path.
     }
     throw new Error('detached release workspace does not exactly match captured committed source');
   }
-  const token = captureWorkspaceToken(path);
   return Object.freeze({
     operatorRoot: realpathSync(operatorRoot),
     commonDir,
@@ -228,7 +171,10 @@ export function createDetachedReleaseWorkspace({
 }
 
 /** Remove only a workspace object returned by createDetachedReleaseWorkspace. */
-export function removeDetachedReleaseWorkspace(workspace, { gitCommand = git } = {}) {
+export function removeDetachedReleaseWorkspace(
+  workspace,
+  { gitCommand = git, cleanupCommand = inodeBoundCleanup } = {},
+) {
   if (
     workspace === null ||
     typeof workspace !== 'object' ||
@@ -246,15 +192,8 @@ export function removeDetachedReleaseWorkspace(workspace, { gitCommand = git } =
     throw new Error('refusing to remove a release workspace at an unexpected path');
   }
   revalidateWorkspaceToken(workspace.token);
-  const workspaceFd = openValidatedDirectory(workspace.path, workspace.token);
-  try {
-    makePublicationDirectoryWritable(workspaceFd, workspace.token);
-    revalidateOpenWorkspace(workspaceFd, workspace.token);
-    gitCommand(workspace.operatorRoot, 'worktree', 'remove', '--force', workspace.path);
-    assertWorkspaceRemovedOrUnchanged(workspace.token);
-  } finally {
-    closeSync(workspaceFd);
-  }
+  cleanupCommand(workspace);
+  gitCommand(workspace.operatorRoot, 'worktree', 'prune', '--expire', 'now');
 }
 
 function copyRegular(source, destination) {

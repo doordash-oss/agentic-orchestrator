@@ -2,10 +2,15 @@
 import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import {
-  chmodSync,
+  closeSync,
+  constants,
   existsSync,
+  fchmodSync,
+  fstatSync,
+  fsyncSync,
   lstatSync,
   mkdirSync,
+  openSync,
   readFileSync,
   renameSync,
   rmSync,
@@ -152,15 +157,32 @@ export function writeReleaseEvidence(
   mkdirSync(directory, { recursive: true });
   const temporary = join(directory, `.${basename(path)}.${randomId()}.tmp`);
   let created = false;
+  let fd;
   try {
-    writeFileSync(temporary, `${JSON.stringify(evidence, null, 2)}\n`, {
-      flag: 'wx',
-      mode: 0o600,
-    });
+    fd = openSync(
+      temporary,
+      constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
+      0o600,
+    );
     created = true;
-    chmodSync(temporary, 0o600);
+    writeFileSync(fd, `${JSON.stringify(evidence, null, 2)}\n`);
+    fchmodSync(fd, 0o600);
+    fsyncSync(fd);
+    const owned = fstatSync(fd);
+    closeSync(fd);
+    fd = undefined;
     renameFile(temporary, path);
+    const published = lstatSync(path);
+    if (
+      !published.isFile() ||
+      published.isSymbolicLink() ||
+      published.dev !== owned.dev ||
+      published.ino !== owned.ino
+    ) {
+      throw new Error('release evidence temporary file changed before atomic publication');
+    }
   } catch (error) {
+    if (fd !== undefined) closeSync(fd);
     if (created) rmSync(temporary, { force: true });
     throw error;
   }

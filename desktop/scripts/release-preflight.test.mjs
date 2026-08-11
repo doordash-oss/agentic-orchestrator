@@ -1,11 +1,13 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import {
+  chmodSync,
   existsSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  renameSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -17,6 +19,7 @@ import { fileURLToPath } from 'node:url';
 
 import {
   cleanupReleaseWorkspace,
+  readReleaseEvidence,
   runReleasePreflight,
   verifyReleaseProvenance,
   writeReleaseEvidence,
@@ -153,6 +156,32 @@ describe('release preflight', () => {
     ).toThrow(/rename failed/);
     expect(existsSync(temporary)).toBe(false);
     expect(existsSync(options.evidencePath)).toBe(false);
+  });
+
+  it('fails closed when its owned temporary inode is replaced by a victim symlink before rename', () => {
+    const options = fixture();
+    const victim = join(options.cwd, 'temporary-swap-victim');
+    writeFileSync(victim, 'victim bytes');
+    chmodSync(victim, 0o644);
+    expect(() =>
+      writeReleaseEvidence(
+        options.evidencePath,
+        { owned: true },
+        {
+          randomId: () => 'swap',
+          renameFile: (temporary, destination) => {
+            renameSync(temporary, `${temporary}.owned`);
+            symlinkSync(victim, temporary);
+            renameSync(temporary, destination);
+          },
+        },
+      ),
+    ).toThrow(/temporary file changed/);
+    expect(readFileSync(victim, 'utf8')).toBe('victim bytes');
+    expect(statSync(victim).mode & 0o777).toBe(0o644);
+    expect(() => readReleaseEvidence({ evidencePath: options.evidencePath })).toThrow(
+      /not a regular file/,
+    );
   });
 
   it('rejects forged incomplete evidence before comparing provenance', () => {

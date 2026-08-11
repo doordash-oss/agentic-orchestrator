@@ -878,6 +878,7 @@ body {
 
 .ama-panel__attachment[data-state='failed'] {
   border: 1px solid var(--bad);
+  flex-wrap: wrap;
 }
 
 .ama-panel__attachment-state,
@@ -886,11 +887,14 @@ body {
   color: var(--faint);
 }
 
+/* Failure remediation is actionable copy: wrap it onto its own row so the
+   full message stays readable instead of being ellipsized mid-sentence. */
 .ama-panel__attachment-message {
-  max-width: 220px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  flex-basis: 100%;
+  max-width: 22rem;
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
   color: var(--bad);
 }
 

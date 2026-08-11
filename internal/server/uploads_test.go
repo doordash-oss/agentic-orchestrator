@@ -23,6 +23,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -33,6 +34,7 @@ import (
 // flow into; unset methods fail loudly via the embedded nil target.
 type uploadMutationRecorder struct {
 	MutationTarget
+	mu          sync.Mutex
 	createReq   *CreateFeatureRequest
 	createErr   error
 	refactorReq *RefactorFeatureRequest
@@ -43,7 +45,9 @@ type uploadMutationRecorder struct {
 
 func (r *uploadMutationRecorder) CreateFeature(req CreateFeatureRequest) (CreateFeatureResponse, error) {
 	copied := req
+	r.mu.Lock()
 	r.createReq = &copied
+	r.mu.Unlock()
 	if r.createErr != nil {
 		return CreateFeatureResponse{Result: "failed"}, r.createErr
 	}
@@ -52,7 +56,9 @@ func (r *uploadMutationRecorder) CreateFeature(req CreateFeatureRequest) (Create
 
 func (r *uploadMutationRecorder) RefactorFeature(_ string, req RefactorFeatureRequest) (RefactorFeatureResponse, error) {
 	copied := req
+	r.mu.Lock()
 	r.refactorReq = &copied
+	r.mu.Unlock()
 	if r.refactorErr != nil {
 		return RefactorFeatureResponse{Result: "failed"}, r.refactorErr
 	}
@@ -61,7 +67,9 @@ func (r *uploadMutationRecorder) RefactorFeature(_ string, req RefactorFeatureRe
 
 func (r *uploadMutationRecorder) StartChat(req ChatStartRequest) (ChatStartResponse, error) {
 	copied := req
+	r.mu.Lock()
 	r.chatReq = &copied
+	r.mu.Unlock()
 	if r.chatErr != nil {
 		return ChatStartResponse{Result: "failed"}, r.chatErr
 	}
@@ -608,4 +616,153 @@ func TestUploadPreflightAccepted(t *testing.T) {
 	if got := w.Header().Get("Access-Control-Allow-Origin"); got != "http://127.0.0.1:9000" {
 		t.Fatalf("Access-Control-Allow-Origin = %q; want loopback origin", got)
 	}
+}
+
+// TestDuplicateUploadRefInOneRequestRejected covers create, refactor, and
+// chat: listing the same reference twice in one request is a client error
+// that consumes nothing.
+func TestDuplicateUploadRefInOneRequestRejected(t *testing.T) {
+	t.Parallel()
+	t.Run("create", func(t *testing.T) {
+		t.Parallel()
+		target := &uploadMutationRecorder{}
+		api, handler, _ := newUploadTestAPI(t, target, false)
+		image := stageViaAPI(t, handler, uploadKindImage, "dup.png", []byte("dup"))
+		w := postTrustedJSON(handler, apiPathFeatures, map[string]any{
+			"name":          "dup ref",
+			"image_uploads": []string{image.Reference, image.Reference},
+		})
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d body=%s; want 400", w.Code, w.Body.String())
+		}
+		if target.createReq != nil {
+			t.Fatal("CreateFeature must not be called for a duplicated reference")
+		}
+		if _, err := api.uploads.resolve(image.Reference, uploadKindImage); err != nil {
+			t.Fatalf("reference after rejection = %v; want still staged", err)
+		}
+	})
+	t.Run("refactor", func(t *testing.T) {
+		t.Parallel()
+		target := &uploadMutationRecorder{}
+		api, handler, _ := newUploadTestAPI(t, target, false)
+		attachment := stageViaAPI(t, handler, uploadKindAttachment, "dup.txt", []byte("dup"))
+		w := postTrustedJSON(handler, apiPathFeatures+"/"+fixtureFeatureID+"/actions/refactor", map[string]any{
+			"name":               "dup ref",
+			"attachment_uploads": []string{attachment.Reference, attachment.Reference},
+		})
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d body=%s; want 400", w.Code, w.Body.String())
+		}
+		if target.refactorReq != nil {
+			t.Fatal("RefactorFeature must not be called for a duplicated reference")
+		}
+		if _, err := api.uploads.resolve(attachment.Reference, uploadKindAttachment); err != nil {
+			t.Fatalf("reference after rejection = %v; want still staged", err)
+		}
+	})
+	t.Run("chat", func(t *testing.T) {
+		t.Parallel()
+		target := &uploadMutationRecorder{}
+		api, handler, _ := newUploadTestAPI(t, target, false)
+		image := stageViaAPI(t, handler, uploadKindImage, "dup.png", []byte("dup"))
+		w := postTrustedJSON(handler, "/api/v1/prompts/chat/start", map[string]any{
+			"message":       "dup ref",
+			"image_uploads": []string{image.Reference, image.Reference},
+		})
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d body=%s; want 400", w.Code, w.Body.String())
+		}
+		if target.chatReq != nil {
+			t.Fatal("StartChat must not be called for a duplicated reference")
+		}
+		if _, err := api.uploads.resolve(image.Reference, uploadKindImage); err != nil {
+			t.Fatalf("reference after rejection = %v; want still staged", err)
+		}
+	})
+	t.Run("across kinds", func(t *testing.T) {
+		t.Parallel()
+		target := &uploadMutationRecorder{}
+		api, handler, _ := newUploadTestAPI(t, target, false)
+		image := stageViaAPI(t, handler, uploadKindImage, "dup.png", []byte("dup"))
+		w := postTrustedJSON(handler, apiPathFeatures, map[string]any{
+			"name":               "dup across kinds",
+			"image_uploads":      []string{image.Reference},
+			"attachment_uploads": []string{image.Reference},
+		})
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d body=%s; want 400", w.Code, w.Body.String())
+		}
+		if target.createReq != nil {
+			t.Fatal("CreateFeature must not be called for a duplicated reference")
+		}
+		if _, err := api.uploads.resolve(image.Reference, uploadKindImage); err != nil {
+			t.Fatalf("reference after rejection = %v; want still staged", err)
+		}
+	})
+}
+
+// TestConcurrentUploadConsumers covers create, refactor, and chat: racing
+// requests for the same staged reference yield exactly one winner; losers
+// fail with 400 and nothing is partially consumed.
+func TestConcurrentUploadConsumers(t *testing.T) {
+	t.Parallel()
+	const racers = 8
+	run := func(t *testing.T, path string, body func(ref string) map[string]any, wantOK int) {
+		t.Helper()
+		target := &uploadMutationRecorder{}
+		_, handler, stateDir := newUploadTestAPI(t, target, false)
+		image := stageViaAPI(t, handler, uploadKindImage, "race.png", []byte("race-bytes"))
+		codes := make(chan int, racers)
+		var wg sync.WaitGroup
+		for i := 0; i < racers; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				w := postTrustedJSON(handler, path, body(image.Reference))
+				codes <- w.Code
+			}()
+		}
+		wg.Wait()
+		close(codes)
+		successes, rejects := 0, 0
+		for code := range codes {
+			switch code {
+			case wantOK:
+				successes++
+			case http.StatusBadRequest:
+				rejects++
+			default:
+				t.Fatalf("unexpected status %d; want exactly one %d and rest 400", code, wantOK)
+			}
+		}
+		if successes != 1 || rejects != racers-1 {
+			t.Fatalf("outcomes = %d successes, %d rejects; want 1 and %d", successes, rejects, racers-1)
+		}
+		// The winner consumed the single-use reference exactly once.
+		if _, err := os.Stat(filepath.Join(stateDir, uploadStagingDirName, image.Reference)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("staged file after race err = %v; want deleted", err)
+		}
+		if _, err := newUploadStore(stateDir).resolve(image.Reference, uploadKindImage); err == nil {
+			t.Fatal("resolve after race: want the reference to stay consumed")
+		}
+	}
+	t.Run("create", func(t *testing.T) {
+		t.Parallel()
+		run(t, apiPathFeatures, func(ref string) map[string]any {
+			return map[string]any{"name": "racing create", "image_uploads": []string{ref}}
+		}, http.StatusCreated)
+	})
+	t.Run("refactor", func(t *testing.T) {
+		t.Parallel()
+		run(t, apiPathFeatures+"/"+fixtureFeatureID+"/actions/refactor", func(ref string) map[string]any {
+			return map[string]any{"name": "racing refactor", "image_uploads": []string{ref}}
+		}, http.StatusCreated)
+	})
+	t.Run("chat", func(t *testing.T) {
+		t.Parallel()
+		run(t, "/api/v1/prompts/chat/start", func(ref string) map[string]any {
+			return map[string]any{"message": "racing chat", "image_uploads": []string{ref}}
+		}, http.StatusOK)
+	})
 }

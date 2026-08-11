@@ -27,6 +27,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -132,13 +133,20 @@ type preparedUpload struct {
 
 type uploadStore struct {
 	dir string
+	// mu guards the consumption transaction (resolve + claim + durable
+	// copy) so concurrent mutations cannot consume the same staged
+	// reference. claims holds references reserved by a still-open
+	// transaction; a claim is released on rollback or replaced by a
+	// tombstone on commit.
+	mu     sync.Mutex
+	claims map[string]struct{}
 }
 
 func newUploadStore(stateDir string) *uploadStore {
 	if strings.TrimSpace(stateDir) == "" {
 		return nil
 	}
-	return &uploadStore{dir: filepath.Join(stateDir, uploadStagingDirName)}
+	return &uploadStore{dir: filepath.Join(stateDir, uploadStagingDirName), claims: map[string]struct{}{}}
 }
 
 func (s *uploadStore) dataPath(ref string) string { return filepath.Join(s.dir, ref) }
@@ -244,12 +252,14 @@ func safeUploadExtension(name string) string {
 }
 
 // copyInto durably copies staged bytes to destDir under a name derived from
-// the opaque reference (never the client name).
-func (s *uploadStore) copyInto(p preparedUpload, destDir string) (string, error) {
+// the claim ID and the opaque reference (never the client name), so each
+// transaction gets an isolated handoff path even if another request
+// referenced the same upload.
+func (s *uploadStore) copyInto(p preparedUpload, claimID, destDir string) (string, error) {
 	if err := os.MkdirAll(destDir, 0o755); err != nil {
 		return "", err
 	}
-	dest := filepath.Join(destDir, consumedUploadPrefix+p.ref+safeUploadExtension(p.meta.Name))
+	dest := filepath.Join(destDir, consumedUploadPrefix+claimID+"-"+p.ref+safeUploadExtension(p.meta.Name))
 	src, err := os.Open(s.dataPath(p.ref))
 	if err != nil {
 		return "", err
@@ -358,10 +368,12 @@ func (s *uploadStore) sweepLoop(ctx context.Context) {
 	}
 }
 
-// consumedUploads is the two-phase handoff for staged upload references:
-// every reference is validated and copied to a durable location before any
-// state mutates; rollback removes the copies (a failed request consumes
-// nothing), commit deletes each staged source so a reused reference fails.
+// consumedUploads is the result of one store-owned consumption transaction:
+// every reference was validated and claimed, and its staged bytes were
+// copied to a durable per-claim location before the transaction returned.
+// rollback releases the claims and removes the copies (a failed request
+// consumes nothing); commit deletes each staged source and tombstones its
+// sidecar so a reused reference fails.
 type consumedUploads struct {
 	store           *uploadStore
 	prepared        []preparedUpload
@@ -370,44 +382,71 @@ type consumedUploads struct {
 	attachmentPaths []string
 }
 
-// consumeUploadRefs validates ALL references, then copies their staged bytes
-// into destDir (the staging dir itself is the feature launch handoff; the
-// chat dir for chat images). The durable copies are what the existing
-// async copy pipeline (feature setup image/attachment tasks) or the chat
-// prompt embedding consume; deleting the staged source at commit time
-// satisfies the copy-then-delete single-use rule because the copies are
-// durable.
-func (h *apiHandler) consumeUploadRefs(imageRefs, attachmentRefs []string, destDir string) (*consumedUploads, error) {
+// consume runs one atomic consumption transaction under the store mutex:
+// the request is deduplicated, every reference is validated and claimed (so
+// no concurrent transaction can resolve it), and staged bytes are copied
+// into destDir under per-claim handoff names (the staging dir itself is the
+// feature launch handoff; the chat dir for chat images). Any failure
+// releases every claim and removes prior copies, so a rejected request
+// consumes nothing. The durable copies are what the existing async copy
+// pipeline (feature setup image/attachment tasks) or the chat prompt
+// embedding consume; deleting the staged source at commit time satisfies
+// the copy-then-delete single-use rule because the copies are durable.
+func (s *uploadStore) consume(imageRefs, attachmentRefs []string, destDir string) (*consumedUploads, error) {
 	if len(imageRefs) == 0 && len(attachmentRefs) == 0 {
 		return nil, nil
 	}
-	if h.uploads == nil {
+	if s == nil {
 		return nil, errors.New("upload service is unavailable")
 	}
 	if destDir == "" {
-		destDir = h.uploads.dir
+		destDir = s.dir
 	}
-	consumed := &consumedUploads{store: h.uploads}
-	for _, ref := range imageRefs {
-		p, err := h.uploads.resolve(ref, uploadKindImage)
+	claimID, err := newUploadReference()
+	if err != nil {
+		return nil, fmt.Errorf("begin upload consumption claim: %w", err)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	seen := map[string]struct{}{}
+	consumed := &consumedUploads{store: s}
+	resolve := func(ref, wantKind string) error {
+		if _, dup := seen[ref]; dup {
+			return &uploadReferenceError{msg: fmt.Sprintf("upload reference %q is listed more than once", ref)}
+		}
+		seen[ref] = struct{}{}
+		if _, claimed := s.claims[ref]; claimed {
+			return &uploadReferenceError{msg: fmt.Sprintf("upload reference %q is unknown, expired, or already consumed", ref)}
+		}
+		p, err := s.resolve(ref, wantKind)
 		if err != nil {
+			return err
+		}
+		// Claim the reference now so another transaction interleaving with
+		// the copy loop below still sees it as consumed.
+		s.claims[ref] = struct{}{}
+		consumed.prepared = append(consumed.prepared, p)
+		return nil
+	}
+	for _, ref := range imageRefs {
+		if err := resolve(ref, uploadKindImage); err != nil {
+			consumed.releaseClaims()
 			return nil, err
 		}
-		consumed.prepared = append(consumed.prepared, p)
 	}
 	for _, ref := range attachmentRefs {
-		p, err := h.uploads.resolve(ref, uploadKindAttachment)
-		if err != nil {
+		if err := resolve(ref, uploadKindAttachment); err != nil {
+			consumed.releaseClaims()
 			return nil, err
 		}
-		consumed.prepared = append(consumed.prepared, p)
 	}
 	for _, p := range consumed.prepared {
-		copyPath, err := h.uploads.copyInto(p, destDir)
+		copyPath, err := s.copyInto(p, claimID, destDir)
 		if err != nil {
 			for _, prior := range consumed.copies {
 				_ = os.Remove(prior)
 			}
+			consumed.releaseClaims()
 			return nil, fmt.Errorf("consume upload reference %q: %w", p.ref, err)
 		}
 		consumed.copies = append(consumed.copies, copyPath)
@@ -420,29 +459,51 @@ func (h *apiHandler) consumeUploadRefs(imageRefs, attachmentRefs []string, destD
 	return consumed, nil
 }
 
-// rollback removes the durable copies produced at consume time; the staged
-// sources stay intact so the caller can retry the request unchanged.
+// consumeUploadRefs wraps the store-owned consumption transaction for the
+// handler's upload store.
+func (h *apiHandler) consumeUploadRefs(imageRefs, attachmentRefs []string, destDir string) (*consumedUploads, error) {
+	return h.uploads.consume(imageRefs, attachmentRefs, destDir)
+}
+
+// releaseClaims drops every claim this transaction holds. Callers must hold
+// the store mutex.
+func (c *consumedUploads) releaseClaims() {
+	for _, p := range c.prepared {
+		delete(c.store.claims, p.ref)
+	}
+}
+
+// rollback removes the durable copies produced at consume time and releases
+// the claims; the staged sources stay intact so the caller can retry the
+// request unchanged.
 func (c *consumedUploads) rollback() {
 	if c == nil {
 		return
 	}
+	c.store.mu.Lock()
+	defer c.store.mu.Unlock()
 	for _, copyPath := range c.copies {
 		_ = os.Remove(copyPath)
 	}
+	c.releaseClaims()
 }
 
 // commit deletes each consumed staged source and tombstones its sidecar so
-// the reference is single-use: a reused reference fails resolution.
+// the reference is single-use: a reused reference fails resolution. The
+// claims are released because the tombstones supersede them.
 func (c *consumedUploads) commit() {
 	if c == nil {
 		return
 	}
+	c.store.mu.Lock()
+	defer c.store.mu.Unlock()
 	for _, p := range c.prepared {
 		_ = os.Remove(c.store.dataPath(p.ref))
 		meta := p.meta
 		meta.ConsumedAt = time.Now().UTC().Unix()
 		_ = c.store.writeMeta(p.ref, meta)
 	}
+	c.releaseClaims()
 }
 
 // handleUploadsRoute serves POST /api/v1/uploads.

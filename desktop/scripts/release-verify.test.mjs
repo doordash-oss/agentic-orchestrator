@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { verifyLocalReleaseModel } from './release-verify.mjs';
 
 describe('local release verification', () => {
-  it('rejects a release recipe that omits provenance rechecks before GoReleaser', () => {
+  it('rejects a release recipe that bypasses the isolated audited runner', () => {
     expect(
       verifyLocalReleaseModel({
         makefile:
@@ -11,9 +11,7 @@ describe('local release verification', () => {
         builder: 'hardenedRuntime: true\nprotocols:\n',
         signingScript: 'ed25519\nRELEASE_PUBLIC_KEY\n',
       }),
-    ).toContain(
-      'release verification requires provenance verification immediately before GoReleaser',
-    );
+    ).toContain('release verification requires node desktop/scripts/release-run.mjs');
   });
 
   it('accepts the actual local-operator release model without protected-CI warnings', () => {

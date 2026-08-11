@@ -33,13 +33,31 @@ describe('GoReleaser release wrapper', () => {
     runGoreleaserRelease({
       notesFile: '/tmp/notes.md',
       isFile: () => true,
-      execute: (command, args) => calls.push({ command, args }),
+      evidence: { workspace_root: '/release/workspace' },
+      verifyEvidence: (evidence) => evidence,
+      verifySnapshot: () => {},
+      execute: (command, args, options) => calls.push({ command, args, options }),
     });
     expect(calls).toEqual([
       {
         command: 'goreleaser',
         args: ['release', '--clean', '--release-notes', '/tmp/notes.md'],
+        options: expect.objectContaining({
+          cwd: '/release/workspace',
+          env: expect.objectContaining({ GOWORK: 'off', GOFLAGS: '-mod=readonly' }),
+        }),
       },
     ]);
+  });
+
+  it('rehashes the immutable publication snapshot before and after GoReleaser', () => {
+    const phases = [];
+    runGoreleaserRelease({
+      evidence: { workspace_root: '/release/workspace' },
+      verifyEvidence: (evidence) => evidence,
+      verifySnapshot: () => phases.push('hash'),
+      execute: () => phases.push('publish'),
+    });
+    expect(phases).toEqual(['hash', 'publish', 'hash']);
   });
 });

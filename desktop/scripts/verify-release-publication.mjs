@@ -1,5 +1,9 @@
 // Verify the remote GitHub publication before the desktop cask is allowed to ship.
 import { isMainModule } from './lib/main-entry.mjs';
+import { basename, join } from 'node:path';
+import { readArtifactEvidence } from './lib/release-artifacts.mjs';
+import { readReleaseEvidence, verifyReleaseProvenance } from './release-preflight.mjs';
+import { readPublicationSnapshot } from './release-workspace.mjs';
 
 const REPOSITORY = 'doordash-oss/agentic-orchestrator';
 const API_ROOT = 'https://api.github.com';
@@ -19,6 +23,10 @@ function endpoint(path) {
 
 function tagRefPath(tag) {
   return endpoint(`/git/ref/tags/${encodeURIComponent(tag)}`);
+}
+
+function tagRefsPath() {
+  return endpoint('/git/refs');
 }
 
 function tagObjectPath(sha) {
@@ -83,8 +91,40 @@ export async function checkRemoteTagPreflight({ tag, request }) {
   );
 }
 
+/** Atomically reserve the release subject with a lightweight remote tag. */
+export async function reserveRemoteTag({ tag, commit, request }) {
+  if (!/^v\d+\.\d+\.\d+$/.test(tag ?? '') || !/^[0-9a-f]{40}$/i.test(commit ?? '')) {
+    throw new Error('remote tag reservation requires strict release evidence');
+  }
+  const path = tagRefsPath();
+  const response = await request(path, {
+    method: 'POST',
+    body: { ref: `refs/tags/${tag}`, sha: commit },
+  });
+  if (response.status === 201) {
+    const created = response.data?.object;
+    if (created?.type !== 'commit' || created.sha !== commit) {
+      throw new Error(`GitHub created ${tag} without confirming captured commit ${commit}`);
+    }
+    return { tag, commit, created: true };
+  }
+  if (response.status !== 422) {
+    requireStatus(response, 201, path);
+  }
+  const existing = await dereferenceRemoteTag({ tag, request });
+  if (existing !== commit) {
+    throw new Error(
+      `remote tag ${tag} was reserved by another commit (${String(existing)}), expected ${commit}`,
+    );
+  }
+  return { tag, commit, created: false };
+}
+
 /** Verify GoReleaser published this exact local commit and a complete stable release. */
-export async function verifyReleasePublication({ tag, commit, request }) {
+export async function verifyReleasePublication({ tag, commit, expectedDigests, request }) {
+  if (!isRecord(expectedDigests)) {
+    throw new Error('local publication digests are required');
+  }
   const remoteCommit = await dereferenceRemoteTag({ tag, request });
   if (remoteCommit === null) throw new Error(`remote tag ${tag} is missing after GoReleaser`);
   if (remoteCommit !== commit) {
@@ -140,6 +180,18 @@ export async function verifyReleasePublication({ tag, commit, request }) {
     if (!Number.isSafeInteger(asset.size) || asset.size <= 0) {
       return [`GitHub release ${tag} asset ${name} has invalid size ${String(asset.size)}`];
     }
+    if (typeof asset.digest !== 'string' || !/^sha256:[0-9a-f]{64}$/.test(asset.digest)) {
+      return [`GitHub release ${tag} asset ${name} has absent or malformed SHA-256 digest`];
+    }
+    const expectedDigest = expectedDigests[name];
+    if (typeof expectedDigest !== 'string' || !/^[0-9a-f]{64}$/.test(expectedDigest)) {
+      return [`local publication digest for ${name} is absent or malformed`];
+    }
+    if (asset.digest.slice('sha256:'.length) !== expectedDigest) {
+      return [
+        `GitHub release ${tag} asset ${name} digest ${asset.digest} does not match local sha256:${expectedDigest}`,
+      ];
+    }
     return [];
   });
   if (invalid.length > 0) throw new Error(invalid.join('; '));
@@ -149,7 +201,7 @@ export async function verifyReleasePublication({ tag, commit, request }) {
 /** GitHub REST boundary; tests inject `request` and never make network calls. */
 export async function githubRequest(
   path,
-  { fetchImpl = globalThis.fetch, token = process.env.GITHUB_TOKEN } = {},
+  { fetchImpl = globalThis.fetch, token = process.env.GITHUB_TOKEN, method = 'GET', body } = {},
 ) {
   if (typeof token !== 'string' || token === '') {
     throw new Error('GITHUB_TOKEN is required for GitHub release publication verification');
@@ -157,11 +209,13 @@ export async function githubRequest(
   let response;
   try {
     response = await fetchImpl(`${API_ROOT}${path}`, {
+      method,
       headers: {
         Accept: 'application/vnd.github+json',
         Authorization: `Bearer ${token}`,
         'X-GitHub-Api-Version': '2022-11-28',
       },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
   } catch (error) {
     throw new Error(
@@ -177,44 +231,44 @@ export async function githubRequest(
   return { status: response.status, data };
 }
 
-function parseCli(args) {
-  const [mode, ...flags] = args;
-  if (!['preflight', 'verify'].includes(mode) || flags.length !== 4) return null;
-  const values = {};
-  for (let index = 0; index < flags.length; index += 2) {
-    const [flag, value] = [flags[index], flags[index + 1]];
-    if (
-      !['--tag', '--commit'].includes(flag) ||
-      value === undefined ||
-      values[flag] !== undefined
-    ) {
-      return null;
-    }
-    values[flag] = value;
-  }
-  if (typeof values['--tag'] !== 'string' || typeof values['--commit'] !== 'string') return null;
-  return { mode, tag: values['--tag'], commit: values['--commit'] };
+function localPublicationDigests(evidence) {
+  const snapshot = readPublicationSnapshot(evidence.workspace_root);
+  return Object.fromEntries(
+    [
+      ...snapshot.artifacts,
+      readArtifactEvidence(join(evidence.workspace_root, 'dist', 'checksums.txt')),
+      readArtifactEvidence(join(evidence.workspace_root, 'dist', 'checksums.txt.sig')),
+    ].map(({ path, sha256 }) => [basename(path), sha256]),
+  );
 }
 
 export async function runReleasePublicationCli({
   args = process.argv.slice(2),
   request = githubRequest,
+  loadEvidence = readReleaseEvidence,
+  verifyEvidence = (evidence) => verifyReleaseProvenance({ evidence }),
+  resolveDigests = localPublicationDigests,
 } = {}) {
-  const parsed = parseCli(args);
-  if (parsed === null) {
+  const [mode] = args;
+  if (!['reserve', 'verify'].includes(mode) || args.length !== 1) {
     return {
       status: 1,
-      message:
-        'usage: verify-release-publication.mjs <preflight|verify> --tag vX.Y.Z --commit <sha>',
+      message: 'usage: verify-release-publication.mjs <reserve|verify>',
     };
   }
   try {
-    if (parsed.mode === 'preflight') {
-      await checkRemoteTagPreflight({ tag: parsed.tag, request });
-      return { status: 0, message: `release publication preflight: ${parsed.tag} is available` };
+    const evidence = verifyEvidence(loadEvidence());
+    if (mode === 'reserve') {
+      await reserveRemoteTag({ tag: evidence.tag, commit: evidence.commit, request });
+      return { status: 0, message: `release publication subject reserved: ${evidence.tag}` };
     }
-    await verifyReleasePublication({ tag: parsed.tag, commit: parsed.commit, request });
-    return { status: 0, message: `release publication verification: ${parsed.tag} is published` };
+    await verifyReleasePublication({
+      tag: evidence.tag,
+      commit: evidence.commit,
+      expectedDigests: resolveDigests(evidence),
+      request,
+    });
+    return { status: 0, message: `release publication verification: ${evidence.tag} is published` };
   } catch (error) {
     return {
       status: 1,

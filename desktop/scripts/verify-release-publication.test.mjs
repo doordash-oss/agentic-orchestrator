@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   REQUIRED_RELEASE_ASSETS,
-  checkRemoteTagPreflight,
+  reserveRemoteTag,
   githubRequest,
   verifyReleasePublication,
 } from './verify-release-publication.mjs';
@@ -21,50 +21,69 @@ function releasedAssets() {
     state: 'uploaded',
     browser_download_url: `https://example.test/releases/${index}`,
     size: index + 1,
+    digest: `sha256:${String(index + 1)
+      .repeat(64)
+      .slice(0, 64)}`,
   }));
 }
 
+function publishedDigests() {
+  return Object.fromEntries(releasedAssets().map(({ name, digest }) => [name, digest.slice(7)]));
+}
+
 describe('remote release publication verification', () => {
-  it('allows an absent remote tag during the pre-publish check', async () => {
+  it('atomically reserves an absent remote lightweight tag at the captured commit', async () => {
+    const calls = [];
     await expect(
-      checkRemoteTagPreflight({
+      reserveRemoteTag({
         tag: TAG,
-        request: route({
-          '/repos/doordash-oss/agentic-orchestrator/git/ref/tags/v0.150.0': {
-            status: 404,
-            data: { message: 'Not Found' },
-          },
-        }),
+        commit: COMMIT,
+        request: async (path, options) => {
+          calls.push({ path, options });
+          return { status: 201, data: { object: { type: 'commit', sha: COMMIT } } };
+        },
       }),
-    ).resolves.toEqual({ tag: TAG, absent: true });
+    ).resolves.toEqual({ tag: TAG, commit: COMMIT, created: true });
+    expect(calls[0]).toMatchObject({
+      path: '/repos/doordash-oss/agentic-orchestrator/git/refs',
+      options: { method: 'POST', body: { ref: 'refs/tags/v0.150.0', sha: COMMIT } },
+    });
   });
 
-  it('rejects an existing remote tag before GoReleaser can publish', async () => {
+  it('accepts a tag-creation race only when the winner points at the captured commit', async () => {
+    let calls = 0;
     await expect(
-      checkRemoteTagPreflight({
+      reserveRemoteTag({
         tag: TAG,
-        request: route({
-          '/repos/doordash-oss/agentic-orchestrator/git/ref/tags/v0.150.0': {
-            status: 200,
-            data: { object: { type: 'commit', sha: COMMIT } },
-          },
-        }),
+        commit: COMMIT,
+        request: async (path) => {
+          calls += 1;
+          if (calls === 1) return { status: 422, data: { message: 'Reference already exists' } };
+          expect(path).toContain('/git/ref/tags/');
+          return { status: 200, data: { object: { type: 'commit', sha: COMMIT } } };
+        },
       }),
-    ).rejects.toThrow(`remote tag ${TAG} already exists`);
+    ).resolves.toEqual({ tag: TAG, commit: COMMIT, created: false });
   });
 
-  it('does not treat authentication or transport failures as an absent tag', async () => {
+  it('rejects a reservation race won by another commit and propagates non-race failures', async () => {
     await expect(
-      checkRemoteTagPreflight({
+      reserveRemoteTag({
         tag: TAG,
-        request: route({
-          '/repos/doordash-oss/agentic-orchestrator/git/ref/tags/v0.150.0': {
-            status: 401,
-            data: { message: 'Bad credentials' },
-          },
-        }),
+        commit: COMMIT,
+        request: async (path) =>
+          path.endsWith('/git/refs')
+            ? { status: 422, data: { message: 'Reference already exists' } }
+            : { status: 200, data: { object: { type: 'commit', sha: 'c'.repeat(40) } } },
       }),
-    ).rejects.toThrow(/GitHub API .*401/);
+    ).rejects.toThrow(/reserved by another commit/);
+    await expect(
+      reserveRemoteTag({
+        tag: TAG,
+        commit: COMMIT,
+        request: async () => ({ status: 401, data: { message: 'Bad credentials' } }),
+      }),
+    ).rejects.toThrow(/returned 401/);
   });
 
   it('requires GITHUB_TOKEN before it makes a real GitHub API request', async () => {
@@ -82,6 +101,7 @@ describe('remote release publication verification', () => {
     const result = await verifyReleasePublication({
       tag: TAG,
       commit: COMMIT,
+      expectedDigests: publishedDigests(),
       request: route({
         '/repos/doordash-oss/agentic-orchestrator/git/ref/tags/v0.150.0': {
           status: 200,
@@ -116,6 +136,7 @@ describe('remote release publication verification', () => {
       verifyReleasePublication({
         tag: TAG,
         commit: COMMIT,
+        expectedDigests: publishedDigests(),
         request: route({
           '/repos/doordash-oss/agentic-orchestrator/git/ref/tags/v0.150.0': {
             status: 200,
@@ -174,7 +195,12 @@ describe('remote release publication verification', () => {
         },
       };
       await expect(
-        verifyReleasePublication({ tag: TAG, commit: COMMIT, request: route(responses) }),
+        verifyReleasePublication({
+          tag: TAG,
+          commit: COMMIT,
+          expectedDigests: publishedDigests(),
+          request: route(responses),
+        }),
       ).rejects.toThrow(expected);
     }
   });
@@ -271,6 +297,7 @@ describe('remote release publication verification', () => {
         verifyReleasePublication({
           tag: TAG,
           commit: COMMIT,
+          expectedDigests: publishedDigests(),
           request: route({
             ...common,
             '/repos/doordash-oss/agentic-orchestrator/releases/tags/v0.150.0': {
@@ -280,6 +307,47 @@ describe('remote release publication verification', () => {
           }),
         }),
       ).rejects.toThrow(expected);
+    }
+  });
+
+  it('fails closed on absent, malformed, or locally mismatched GitHub asset digests', async () => {
+    const base = releasedAssets();
+    for (const assets of [
+      base.map((asset) =>
+        asset.name === 'Agentico-x64.AppImage' ? { ...asset, digest: null } : asset,
+      ),
+      base.map((asset) =>
+        asset.name === 'checksums.txt' ? { ...asset, digest: 'sha256:not-a-digest' } : asset,
+      ),
+      base.map((asset) =>
+        asset.name === 'checksums.txt.sig'
+          ? { ...asset, digest: `sha256:${'f'.repeat(64)}` }
+          : asset,
+      ),
+    ]) {
+      await expect(
+        verifyReleasePublication({
+          tag: TAG,
+          commit: COMMIT,
+          expectedDigests: publishedDigests(),
+          request: route({
+            '/repos/doordash-oss/agentic-orchestrator/git/ref/tags/v0.150.0': {
+              status: 200,
+              data: { object: { type: 'commit', sha: COMMIT } },
+            },
+            '/repos/doordash-oss/agentic-orchestrator/releases/tags/v0.150.0': {
+              status: 200,
+              data: {
+                tag_name: TAG,
+                draft: false,
+                prerelease: false,
+                published_at: '2026-08-10T00:00:00Z',
+                assets,
+              },
+            },
+          }),
+        }),
+      ).rejects.toThrow(/digest/);
     }
   });
 });

@@ -6,6 +6,16 @@
 
 **Architecture:** A pure release-artifact contract defines names, architecture mappings, Docker commands, and manifest validation. A local Docker orchestrator runs the existing package-and-verify pipeline sequentially for Linux x64 and arm64, captures per-platform verification receipts, and a prepublish gate validates the full desktop inventory before GoReleaser creates remote state. GoReleaser then signs and uploads every artifact, followed by a local signed-manifest check and the existing Homebrew publication.
 
+**Implemented hardening addendum:** The final pipeline runs behind one audited
+`release-run.mjs` wrapper in a detached worktree at captured committed HEAD.
+Native npm packaging, Docker assembly, and GoReleaser use that workspace;
+release Go builds disable ambient workspaces/overlays and require readonly
+module resolution. Verified artifacts are copied into a canonical read-only
+publication snapshot and rehashed before/after GoReleaser. The runner atomically
+reserves the remote tag immediately before publication, and the final GitHub
+gate compares every required asset digest—including `checksums.txt` and its
+signature—to local receipt-bound bytes before cask publication.
+
 **Tech Stack:** Node.js 22 ESM scripts, Vitest, Docker/buildx, electron-builder 26, GoReleaser v2, Make, Ed25519 release signing.
 
 ## Global Constraints
@@ -25,10 +35,12 @@
 ### Task 1: Define the release artifact and Docker plan contract
 
 **Files:**
+
 - Create: `desktop/scripts/lib/release-artifacts.mjs`
 - Create: `desktop/scripts/lib/release-artifacts.test.mjs`
 
 **Interfaces:**
+
 - Produces: `LINUX_BUILDER_IMAGE: string`
 - Produces: `releaseVersionFromTag(tag: string): string`
 - Produces: `expectedDesktopArtifacts(tag: string): readonly ArtifactExpectation[]`
@@ -42,62 +54,62 @@
 The production bugs these tests catch are: dropping an architecture, swapping Debian architecture names, selecting the other architecture's package when both are present, using an unpinned container, or omitting the linked-worktree Git mount.
 
 ```js
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it } from "vitest";
 import {
   createLinuxDockerPlan,
   expectedDesktopArtifacts,
   releaseVersionFromTag,
   resolvePackageTarget,
   selectPackageArtifact,
-} from './release-artifacts.mjs';
+} from "./release-artifacts.mjs";
 
-it('defines the complete v0.150.0 desktop inventory', () => {
-  expect(expectedDesktopArtifacts('v0.150.0').map(({ name }) => name)).toEqual([
-    'Agentico-mac-universal.dmg',
-    'Agentico-x64.AppImage',
-    'Agentico-arm64.AppImage',
-    'agentico_0.150.0_amd64.deb',
-    'agentico_0.150.0_arm64.deb',
+it("defines the complete v0.150.0 desktop inventory", () => {
+  expect(expectedDesktopArtifacts("v0.150.0").map(({ name }) => name)).toEqual([
+    "Agentico-mac-universal.dmg",
+    "Agentico-x64.AppImage",
+    "Agentico-arm64.AppImage",
+    "agentico_0.150.0_amd64.deb",
+    "agentico_0.150.0_arm64.deb",
   ]);
 });
 
-it('selects only the requested Linux architecture when dist contains both', () => {
+it("selects only the requested Linux architecture when dist contains both", () => {
   const files = [
-    'Agentico-x64.AppImage',
-    'Agentico-arm64.AppImage',
-    'agentico_0.150.0_amd64.deb',
-    'agentico_0.150.0_arm64.deb',
+    "Agentico-x64.AppImage",
+    "Agentico-arm64.AppImage",
+    "agentico_0.150.0_amd64.deb",
+    "agentico_0.150.0_arm64.deb",
   ];
-  expect(selectPackageArtifact(files, { os: 'linux', arch: 'arm64' }, 'AppImage')).toBe(
-    'Agentico-arm64.AppImage',
-  );
-  expect(selectPackageArtifact(files, { os: 'linux', arch: 'x64' }, 'deb')).toBe(
-    'agentico_0.150.0_amd64.deb',
-  );
+  expect(
+    selectPackageArtifact(files, { os: "linux", arch: "arm64" }, "AppImage"),
+  ).toBe("Agentico-arm64.AppImage");
+  expect(
+    selectPackageArtifact(files, { os: "linux", arch: "x64" }, "deb"),
+  ).toBe("agentico_0.150.0_amd64.deb");
 });
 
-it('builds sequential pinned Docker invocations with worktree Git metadata', () => {
+it("builds sequential pinned Docker invocations with worktree Git metadata", () => {
   const plan = createLinuxDockerPlan({
-    repoRoot: '/repo/worktree',
-    gitCommonDir: '/repo/.git',
-    volumePrefix: 'agentico-release',
+    repoRoot: "/repo/worktree",
+    gitCommonDir: "/repo/.git",
+    volumePrefix: "agentico-release",
   });
-  expect(plan.map(({ arch }) => arch)).toEqual(['x64', 'arm64']);
+  expect(plan.map(({ arch }) => arch)).toEqual(["x64", "arm64"]);
   expect(plan[0].args).toEqual(
     expect.arrayContaining([
-      '--rm',
-      '--platform',
-      'linux/amd64',
-      '-e',
-      'AGENTICO_PACKAGE_ARCH=x64',
-      '-v',
-      '/repo/worktree:/repo/worktree',
-      '-v',
-      '/repo/.git:/repo/.git',
+      "--rm",
+      "--platform",
+      "linux/amd64",
+      "-e",
+      "AGENTICO_PACKAGE_ARCH=x64",
+      "-v",
+      "/repo/worktree:/repo/worktree",
+      "-v",
+      "/repo/.git:/repo/.git",
     ]),
   );
-  expect(plan[0].args.join(' ')).toContain(
-    'electronuserland/builder:22@sha256:b76a82a6c6a8a1dea1abbc93e394f54316744824b64e6a50d959f1e3ba8951a9',
+  expect(plan[0].args.join(" ")).toContain(
+    "electronuserland/builder:22@sha256:b76a82a6c6a8a1dea1abbc93e394f54316744824b64e6a50d959f1e3ba8951a9",
   );
 });
 ```
@@ -114,9 +126,9 @@ Implement strict tag parsing, a frozen literal artifact list, exact target selec
 
 ```js
 const command = [
-  'bash',
-  '-lc',
-  'npm ci && npm run package:verify --workspace desktop',
+  "bash",
+  "-lc",
+  "npm ci && npm run package:verify --workspace desktop",
 ];
 ```
 
@@ -140,10 +152,12 @@ git commit -m "Define Linux desktop release contract" -m "Co-authored-by: Codex 
 ### Task 2: Make package verification target-aware
 
 **Files:**
+
 - Modify: `desktop/scripts/verify-package.mjs`
 - Modify: `desktop/scripts/lib/release-artifacts.test.mjs`
 
 **Interfaces:**
+
 - Consumes: `resolvePackageTarget` and `selectPackageArtifact` from Task 1.
 - Produces: `desktop/dist/package-verification-<os>-<arch>.json` in addition to the existing `package-verification.json` compatibility receipt.
 
@@ -152,17 +166,23 @@ git commit -m "Define Linux desktop release contract" -m "Co-authored-by: Codex 
 Extend the pure contract test with the bug that currently occurs when an x64 Linux container builds arm64 while both architectures exist:
 
 ```js
-it('resolves an explicit arm64 package target independently of process.arch', () => {
-  expect(resolvePackageTarget('linux', 'x64', 'arm64')).toEqual({ os: 'linux', arch: 'arm64' });
-  expect(resolvePackageTarget('linux', 'arm64', 'x64')).toEqual({ os: 'linux', arch: 'x64' });
+it("resolves an explicit arm64 package target independently of process.arch", () => {
+  expect(resolvePackageTarget("linux", "x64", "arm64")).toEqual({
+    os: "linux",
+    arch: "arm64",
+  });
+  expect(resolvePackageTarget("linux", "arm64", "x64")).toEqual({
+    os: "linux",
+    arch: "x64",
+  });
 });
 
-it('rejects duplicate target artifacts instead of choosing nondeterministically', () => {
+it("rejects duplicate target artifacts instead of choosing nondeterministically", () => {
   expect(() =>
     selectPackageArtifact(
-      ['Agentico-arm64.AppImage', 'Agentico-arm64.AppImage'],
-      { os: 'linux', arch: 'arm64' },
-      'AppImage',
+      ["Agentico-arm64.AppImage", "Agentico-arm64.AppImage"],
+      { os: "linux", arch: "arm64" },
+      "AppImage",
     ),
   ).toThrow(/exactly one arm64 AppImage/);
 });
@@ -216,11 +236,13 @@ git commit -m "Verify cross-architecture desktop packages" -m "Co-authored-by: C
 ### Task 3: Add the local Docker Linux release orchestrator
 
 **Files:**
+
 - Create: `desktop/scripts/package-linux-release.mjs`
 - Create: `desktop/scripts/package-linux-release.test.mjs`
 - Modify: `desktop/package.json`
 
 **Interfaces:**
+
 - Consumes: `LINUX_BUILDER_IMAGE`, `createLinuxDockerPlan`, and `releaseVersionFromTag` from Task 1.
 - Produces CLI: `node desktop/scripts/package-linux-release.mjs [--print-plan]`.
 - Produces npm command: `npm run package:linux:release --workspace desktop`.
@@ -230,29 +252,29 @@ git commit -m "Verify cross-architecture desktop packages" -m "Co-authored-by: C
 The script accepts dependency injection through an exported `runLinuxRelease(options)` function. Tests use a real temporary directory and fake command boundary; assertions target returned state and created receipts, not calls to the fake itself.
 
 ```js
-it('rejects a dirty checkout before attempting a container build', () => {
+it("rejects a dirty checkout before attempting a container build", () => {
   expect(() =>
     runLinuxRelease({
       repoRoot: tempRoot,
-      gitStatus: ' M Makefile',
-      exactTag: 'v0.150.0',
+      gitStatus: " M Makefile",
+      exactTag: "v0.150.0",
       freeBytes: 20 * 1024 ** 3,
       dockerAvailable: true,
       execute: () => {
-        throw new Error('must not execute');
+        throw new Error("must not execute");
       },
     }),
   ).toThrow(/working tree is dirty/);
 });
 
-it('returns x64 then arm64 receipts only after both builds succeed', () => {
+it("returns x64 then arm64 receipts only after both builds succeed", () => {
   const result = runLinuxRelease(validFixtureOptions());
   expect(result).toEqual({
-    tag: 'v0.150.0',
-    completed: ['x64', 'arm64'],
+    tag: "v0.150.0",
+    completed: ["x64", "arm64"],
     receipts: [
-      'package-verification-linux-x64.json',
-      'package-verification-linux-arm64.json',
+      "package-verification-linux-x64.json",
+      "package-verification-linux-arm64.json",
     ],
   });
 });
@@ -271,10 +293,10 @@ Expected: FAIL because the orchestrator does not exist.
 Production dependencies resolve:
 
 ```js
-const repoRoot = git('rev-parse', '--show-toplevel');
-const gitCommonDir = resolve(repoRoot, git('rev-parse', '--git-common-dir'));
-const exactTag = git('describe', '--tags', '--exact-match');
-const gitStatus = git('status', '--porcelain');
+const repoRoot = git("rev-parse", "--show-toplevel");
+const gitCommonDir = resolve(repoRoot, git("rev-parse", "--git-common-dir"));
+const exactTag = git("describe", "--tags", "--exact-match");
+const gitStatus = git("status", "--porcelain");
 const freeBytes = statfsSync(repoRoot).bavail * statfsSync(repoRoot).bsize;
 ```
 
@@ -303,12 +325,14 @@ git commit -m "Build Linux release packages locally" -m "Co-authored-by: Codex <
 ### Task 4: Gate the complete artifact set and signed checksum manifest
 
 **Files:**
+
 - Create: `desktop/scripts/verify-release-artifacts.mjs`
 - Create: `desktop/scripts/verify-release-artifacts.test.mjs`
 - Modify: `desktop/scripts/lib/release-artifacts.mjs`
 - Modify: `desktop/package.json`
 
 **Interfaces:**
+
 - Produces: `validateArtifactInventory({ tag, revision, files, receipts, sizes }): string[]`.
 - Produces: `validateChecksumManifest(text: string, expectedNames: readonly string[]): string[]`.
 - Produces CLI: `verify-release-artifacts.mjs packages [--linux-only]|manifest`.
@@ -316,25 +340,31 @@ git commit -m "Build Linux release packages locally" -m "Co-authored-by: Codex <
 - [ ] **Step 1: Write failing inventory and checksum tests**
 
 ```js
-it('accepts one verified receipt and nonempty file for every desktop artifact', () => {
+it("accepts one verified receipt and nonempty file for every desktop artifact", () => {
   expect(validateArtifactInventory(completeV0150Fixture())).toEqual([]);
 });
 
-it('rejects an arm64 receipt carrying the x64 identity', () => {
+it("rejects an arm64 receipt carrying the x64 identity", () => {
   const fixture = completeV0150Fixture();
-  fixture.receipts['package-verification-linux-arm64.json'].identity.arch = 'x64';
+  fixture.receipts["package-verification-linux-arm64.json"].identity.arch =
+    "x64";
   expect(validateArtifactInventory(fixture)).toContain(
-    'package-verification-linux-arm64.json identity arch=x64, expected arm64',
+    "package-verification-linux-arm64.json identity arch=x64, expected arm64",
   );
 });
 
-it('requires exactly one checksum line per desktop artifact', () => {
-  const expected = expectedDesktopArtifacts('v0.150.0').map(({ name }) => name);
-  const manifest = expected.map((name) => `${'a'.repeat(64)}  ${name}`).join('\n');
+it("requires exactly one checksum line per desktop artifact", () => {
+  const expected = expectedDesktopArtifacts("v0.150.0").map(({ name }) => name);
+  const manifest = expected
+    .map((name) => `${"a".repeat(64)}  ${name}`)
+    .join("\n");
   expect(validateChecksumManifest(manifest, expected)).toEqual([]);
-  expect(validateChecksumManifest(manifest.replace(/.*Agentico-arm64.AppImage\n/, ''), expected)).toContain(
-    'checksums.txt has no entry for Agentico-arm64.AppImage',
-  );
+  expect(
+    validateChecksumManifest(
+      manifest.replace(/.*Agentico-arm64.AppImage\n/, ""),
+      expected,
+    ),
+  ).toContain("checksums.txt has no entry for Agentico-arm64.AppImage");
 });
 ```
 
@@ -387,12 +417,14 @@ git commit -m "Gate complete desktop release artifacts" -m "Co-authored-by: Code
 ### Task 5: Wire all desktop artifacts into Make and GoReleaser
 
 **Files:**
+
 - Modify: `Makefile`
 - Modify: `.goreleaser.yaml`
 - Modify: `desktop/scripts/audit-release.mjs`
 - Modify: `desktop/scripts/audit-release.test.mjs`
 
 **Interfaces:**
+
 - Consumes: package and manifest verification CLIs from Task 4.
 - Produces: unchanged external command `make release` with the expanded internal pipeline.
 
@@ -401,7 +433,7 @@ git commit -m "Gate complete desktop release artifacts" -m "Co-authored-by: Code
 Export `auditGoReleaserDesktopArtifacts(configText, expectedNames)` and test omissions independently of the real config:
 
 ```js
-it('rejects a release config that uploads an AppImage without signing it', () => {
+it("rejects a release config that uploads an AppImage without signing it", () => {
   const config = `
 checksum:
   extra_files:
@@ -411,10 +443,12 @@ release:
     - glob: desktop/dist/Agentico-mac-universal.dmg
     - glob: desktop/dist/Agentico-x64.AppImage
 `;
-  expect(auditGoReleaserDesktopArtifacts(config, [
-    'Agentico-mac-universal.dmg',
-    'Agentico-x64.AppImage',
-  ])).toContain('GoReleaser checksum.extra_files omits Agentico-x64.AppImage');
+  expect(
+    auditGoReleaserDesktopArtifacts(config, [
+      "Agentico-mac-universal.dmg",
+      "Agentico-x64.AppImage",
+    ]),
+  ).toContain("GoReleaser checksum.extra_files omits Agentico-x64.AppImage");
 });
 ```
 
@@ -464,10 +498,12 @@ git commit -m "Publish Linux desktop release artifacts" -m "Co-authored-by: Code
 ### Task 6: Preserve the one-command maintainer workflow in documentation and skill
 
 **Files:**
+
 - Modify: `docs/desktop/release-support.md`
 - Modify outside repository: `/Users/ivar.lazzaro/.claude/skills/release-agentico/SKILL.md`
 
 **Interfaces:**
+
 - Consumes: the final `make release` behavior from Task 5.
 - Produces: unchanged `/release-agentico` invocation with Docker preflight and expanded verification.
 
@@ -521,9 +557,11 @@ The local skill edit is intentionally not part of the repository commit; report 
 ### Task 7: Run local multi-platform rehearsal and required verification
 
 **Files:**
+
 - Modify only if a test exposes a defect; every defect begins with a failing regression test.
 
 **Interfaces:**
+
 - Verifies every interface produced by Tasks 1–6.
 
 - [ ] **Step 1: Run repository static and unit gates**

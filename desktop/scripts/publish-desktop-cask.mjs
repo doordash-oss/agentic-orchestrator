@@ -21,7 +21,10 @@ import { renderDesktopCask } from './lib/desktop-cask.mjs';
 import { desktopVersionFromExactTag } from './lib/release-version.mjs';
 
 const desktopDir = dirname(dirname(fileURLToPath(import.meta.url)));
-const DMG_PATH = join(desktopDir, 'dist', 'Agentico-mac-universal.dmg');
+const DMG_PATH = join(
+  process.env.AGENTICO_PUBLICATION_DIR ?? join(desktopDir, 'dist'),
+  'Agentico-mac-universal.dmg',
+);
 const TAP_REMOTE =
   process.env.AGENTICO_TAP_REMOTE ??
   'https://github.com/doordash-oss/homebrew-agentic-orchestrator.git';

@@ -15,26 +15,37 @@ export function verifyLocalReleaseModel({
   makefile = readFileSync(join(rootDir, 'Makefile'), 'utf8'),
   builder = readFileSync(join(desktopDir, 'electron-builder.yml'), 'utf8'),
   signingScript = readFileSync(join(desktopDir, 'scripts', 'release-sign.mjs'), 'utf8'),
+  releaseRunner = readFileSync(join(desktopDir, 'scripts', 'release-run.mjs'), 'utf8'),
+  prepareServer = readFileSync(join(desktopDir, 'scripts', 'prepare-server.mjs'), 'utf8'),
+  goreleaserConfig = readFileSync(join(rootDir, '.goreleaser.yaml'), 'utf8'),
 } = {}) {
   const failures = [];
-  const requiredCommands = [
-    'node desktop/scripts/release-preflight.mjs',
-    'npm ci',
-    'npm run package:verify --workspace desktop',
-    'npm run package:linux:release --workspace desktop',
-    'npm run release:artifacts:verify --workspace desktop -- packages',
-    'node desktop/scripts/release-preflight.mjs verify',
-    'node desktop/scripts/release-goreleaser.mjs',
-    'npm run release:artifacts:verify --workspace desktop -- manifest',
-  ];
+  const requiredCommands = ['node desktop/scripts/release-run.mjs'];
   for (const command of requiredCommands) {
     if (!makefile.includes(command)) failures.push(`release verification requires ${command}`);
   }
-  const recheck = makefile.indexOf('node desktop/scripts/release-preflight.mjs verify');
-  const goreleaser = makefile.indexOf('node desktop/scripts/release-goreleaser.mjs');
-  if (recheck === -1 || goreleaser === -1 || recheck > goreleaser) {
+  if (/RELEASE_TAG|RELEASE_COMMIT|GORELEASER_FLAGS/.test(makefile)) {
+    failures.push('release Makefile must not accept caller-controlled publication identity');
+  }
+  for (const token of [
+    'createPublicationSnapshot',
+    'verifyProvenance(evidence)',
+    'await reserveTag({ evidence })',
+    'publish({ evidence, snapshot })',
+    'await verifyRemote({ evidence, snapshot })',
+  ]) {
+    if (!releaseRunner.includes(token))
+      failures.push(`release runner is missing audited step: ${token}`);
+  }
+  if (!prepareServer.includes("'-mod=readonly'") || !prepareServer.includes('cleanGoEnvironment')) {
+    failures.push('desktop Go build must disable workspaces/overlays and require readonly modules');
+  }
+  if (
+    !goreleaserConfig.includes('GOWORK=off') ||
+    !goreleaserConfig.includes('GOFLAGS=-mod=readonly')
+  ) {
     failures.push(
-      'release verification requires provenance verification immediately before GoReleaser',
+      'GoReleaser builds must disable workspaces/overlays and require readonly modules',
     );
   }
   if (!builder.includes('hardenedRuntime: true')) failures.push('hardened runtime is not enabled');

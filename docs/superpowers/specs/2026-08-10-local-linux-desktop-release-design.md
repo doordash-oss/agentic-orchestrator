@@ -39,16 +39,28 @@ on the maintainer's machine; no release credentials move into GitHub Actions.
 `make release` remains the sole repository release entry point. It performs the
 following ordered operations from a clean exact `vX.Y.Z` tag:
 
+Before those operations, the audited runner captures the tag and full commit,
+creates a detached Git worktree at that commit under validated Git metadata,
+and runs every native, container, and GoReleaser build from that committed-only
+workspace. Ambient ignored files are absent. All release Go builds force
+`GOWORK=off` and `GOFLAGS=-mod=readonly` so local workspaces and overlays cannot
+affect inputs.
+
 1. Preflight Docker and the pinned Linux builder image.
 2. Build the universal macOS DMG natively with the existing package script.
 3. Build Linux x64 AppImage and DEB packages in a Linux container.
 4. Build Linux arm64 AppImage and DEB packages in a second, sequential Linux
    container invocation.
 5. Verify the complete desktop artifact inventory and embedded identities.
-6. Run GoReleaser, which builds CLI archives, creates one checksum manifest over
+6. Copy the five receipt-bound artifacts into a read-only publication snapshot,
+   rewrite receipt paths to that canonical snapshot, and rehash the snapshot.
+7. Atomically reserve the remote lightweight tag at the captured commit. An
+   existing tag is accepted only when it dereferences to that same commit.
+8. Run GoReleaser from the detached workspace, which builds CLI archives, creates one checksum manifest over
    the CLI archives and all desktop packages, signs that manifest, and uploads
    the complete release.
-7. Publish the existing macOS desktop Homebrew cask.
+9. Require GitHub SHA-256 asset digests to match the five receipts and the local
+   checksum manifest/signature, then publish the existing macOS desktop Homebrew cask.
 
 Linux builds are sequential because electron-vite, `prepare-server.mjs`, and
 electron-builder share `desktop/out`, `desktop/resources`, and `desktop/dist`.
@@ -133,8 +145,11 @@ step or command.
 ## Failure and Recovery
 
 - A macOS or Linux build/verification failure aborts before GoReleaser and
-  creates no GitHub release. The local tag can be retained while the cause is
-  fixed, matching existing recovery behavior.
+  creates no GitHub release. If failure occurs after remote-tag reservation,
+  retain a matching reservation while fixing the cause; a reservation pointing
+  at any other commit is a remote-state defect. The detached release worktree is
+  removed on success or failure, while captured evidence remains under Git
+  metadata.
 - A GoReleaser failure uses the existing partial-release cleanup procedure.
 - A missing checksum entry or invalid signature after GoReleaser is treated as
   a partial release: remove the GitHub release and remote tag, fix the release

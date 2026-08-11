@@ -18,6 +18,10 @@ import {
   publicKeyPem,
 } from './lib/release-signing.mjs';
 import { isMainModule } from './lib/main-entry.mjs';
+import {
+  createDetachedReleaseWorkspace,
+  removeDetachedReleaseWorkspace,
+} from './release-workspace.mjs';
 
 const desktopDir = dirname(dirname(fileURLToPath(import.meta.url)));
 const rootDir = dirname(desktopDir);
@@ -80,7 +84,7 @@ function validateEvidence(evidence) {
   if (evidence === null || typeof evidence !== 'object' || Array.isArray(evidence)) {
     throw new Error('release provenance evidence is not an object');
   }
-  if (evidence.schema_version !== 1 || evidence.platform !== 'darwin') {
+  if (evidence.schema_version !== 2 || evidence.platform !== 'darwin') {
     throw new Error('release provenance evidence has an unsupported schema or platform');
   }
   releaseVersionFromTag(evidence.tag);
@@ -99,6 +103,14 @@ function validateEvidence(evidence) {
   if (!/^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(evidence.run_id ?? '')) {
     throw new Error('release provenance evidence has an invalid run_id');
   }
+  if (
+    typeof evidence.operator_root !== 'string' ||
+    !evidence.operator_root.startsWith('/') ||
+    typeof evidence.workspace_root !== 'string' ||
+    !evidence.workspace_root.startsWith('/')
+  ) {
+    throw new Error('release provenance evidence has invalid workspace paths');
+  }
   return evidence;
 }
 
@@ -114,6 +126,7 @@ export function runReleasePreflight({
   verifySigningKey = () => signingKeyMatchesTrustRoot(process.env),
   env = process.env,
   evidencePath = evidencePathFor(cwd, gitCommand),
+  createWorkspace = (options) => createDetachedReleaseWorkspace(options),
 } = {}) {
   if (platform !== 'darwin') throw new Error('release preflight: releases must run on macOS');
   const provenance = capture({ cwd, gitCommand });
@@ -143,17 +156,30 @@ export function runReleasePreflight({
   ensureImage(LINUX_BUILDER_IMAGE);
   ensureImage(LINUX_ARM64_VERIFIER_IMAGE);
 
+  const runId = randomUUID();
+  const workspace = createWorkspace({ operatorRoot: cwd, commit: provenance.commit, runId });
   const evidence = Object.freeze({
-    schema_version: 1,
+    schema_version: 2,
     tag: provenance.tag,
     commit: provenance.commit,
     platform,
     captured_at: new Date().toISOString(),
-    run_id: randomUUID(),
+    run_id: runId,
     images: [LINUX_BUILDER_IMAGE, LINUX_ARM64_VERIFIER_IMAGE],
+    operator_root: resolve(cwd),
+    workspace_root: workspace.path,
   });
-  mkdirSync(dirname(evidencePath), { recursive: true });
-  writeFileSync(evidencePath, `${JSON.stringify(evidence, null, 2)}\n`);
+  try {
+    mkdirSync(dirname(evidencePath), { recursive: true });
+    writeFileSync(evidencePath, `${JSON.stringify(evidence, null, 2)}\n`);
+  } catch (error) {
+    try {
+      removeDetachedReleaseWorkspace(workspace);
+    } catch {
+      // Preserve the evidence-write failure.
+    }
+    throw error;
+  }
   return evidence;
 }
 
@@ -167,7 +193,7 @@ export function verifyReleaseProvenance({
   const expected = validateEvidence(evidence ?? JSON.parse(readFileSync(evidencePath, 'utf8')));
   let actual;
   try {
-    actual = capture({ cwd, gitCommand });
+    actual = capture({ cwd: expected.workspace_root, gitCommand });
   } catch (error) {
     if (error instanceof Error && error.message.includes('working tree is dirty')) {
       throw new Error('release provenance changed: working tree changed since preflight evidence');
@@ -180,6 +206,34 @@ export function verifyReleaseProvenance({
     );
   }
   return expected;
+}
+
+export function readReleaseEvidence({
+  cwd = rootDir,
+  git: gitCommand = git,
+  evidencePath = evidencePathFor(cwd, gitCommand),
+} = {}) {
+  return validateEvidence(JSON.parse(readFileSync(evidencePath, 'utf8')));
+}
+
+export function cleanupReleaseWorkspace({
+  cwd = rootDir,
+  git: gitCommand = git,
+  evidence,
+  evidencePath = evidencePathFor(cwd, gitCommand),
+  removeWorkspace = removeDetachedReleaseWorkspace,
+} = {}) {
+  const trusted = validateEvidence(evidence ?? JSON.parse(readFileSync(evidencePath, 'utf8')));
+  removeWorkspace({
+    operatorRoot: trusted.operator_root,
+    commonDir: resolve(
+      trusted.operator_root,
+      gitCommand(trusted.operator_root, 'rev-parse', '--path-format=absolute', '--git-common-dir'),
+    ),
+    path: trusted.workspace_root,
+    commit: trusted.commit,
+    runId: trusted.run_id,
+  });
 }
 
 function main() {

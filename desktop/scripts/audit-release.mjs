@@ -9,7 +9,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import os from 'node:os';
-import { basename, dirname, join, posix } from 'node:path';
+import { dirname, join, posix } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { auditElectronBuilderFuseConfig } from './lib/fuse-policy.mjs';
@@ -97,122 +97,47 @@ export function auditGoReleaserReleaseTarget(configText) {
 export function auditReleaseMakefile(makefileText) {
   const failures = [];
   const recipe = makeRecipeCommands(makefileText, 'release');
-  const completeRecipe = [
-    'node desktop/scripts/release-preflight.mjs',
-    'node desktop/scripts/verify-release-publication.mjs preflight --tag "$(RELEASE_TAG)" --commit "$(RELEASE_COMMIT)"',
-    'npm ci',
-    'npm run package:verify --workspace desktop',
-    'npm run package:linux:release --workspace desktop',
-    'npm run release:artifacts:verify --workspace desktop -- packages',
-    'node desktop/scripts/release-preflight.mjs verify',
-    'node desktop/scripts/release-goreleaser.mjs',
-    'npm run release:artifacts:verify --workspace desktop -- manifest',
-    'node desktop/scripts/verify-release-publication.mjs verify --tag "$(RELEASE_TAG)" --commit "$(RELEASE_COMMIT)"',
-    'node desktop/scripts/publish-desktop-cask.mjs',
-  ];
+  const completeRecipe = ['node desktop/scripts/release-run.mjs'];
   if (JSON.stringify(recipe) !== JSON.stringify(completeRecipe)) {
     failures.push(
       'Makefile release recipe must contain only the complete audited release command structure',
     );
   }
-  const localPreflight = 'node desktop/scripts/release-preflight.mjs';
-  const provenanceRecheck = 'node desktop/scripts/release-preflight.mjs verify';
-  const nativeInstall = 'npm ci';
-  const expected = [
-    'node desktop/scripts/verify-release-publication.mjs preflight --tag "$(RELEASE_TAG)" --commit "$(RELEASE_COMMIT)"',
-    'npm run release:artifacts:verify --workspace desktop -- packages',
-    'node desktop/scripts/release-goreleaser.mjs',
-    'npm run release:artifacts:verify --workspace desktop -- manifest',
-    'node desktop/scripts/verify-release-publication.mjs verify --tag "$(RELEASE_TAG)" --commit "$(RELEASE_COMMIT)"',
-    'node desktop/scripts/publish-desktop-cask.mjs',
-  ];
-  const sensitive = recipe.filter(isPublicationSensitiveCommand);
-  if (recipe.filter((command) => command === localPreflight).length !== 1) {
-    failures.push('Makefile release recipe must run one local preflight before any build');
-  }
-  if (recipe.filter((command) => command === nativeInstall).length !== 1) {
-    failures.push('Makefile release recipe must run unconditional npm ci from the lockfile');
-  }
-  if (recipe.filter((command) => command === provenanceRecheck).length !== 1) {
-    failures.push(
-      'Makefile release recipe must run one provenance recheck immediately before GoReleaser',
-    );
-  }
-  const nativePackage = recipe.indexOf('npm run package:verify --workspace desktop');
-  const linuxPackage = recipe.indexOf('npm run package:linux:release --workspace desktop');
-  const localPreflightIndex = recipe.indexOf(localPreflight);
-  const nativeInstallIndex = recipe.indexOf(nativeInstall);
-  const provenanceIndex = recipe.indexOf(provenanceRecheck);
-  const goreleaserIndex = recipe.indexOf('node desktop/scripts/release-goreleaser.mjs');
-  if (
-    localPreflightIndex === -1 ||
-    nativeInstallIndex === -1 ||
-    nativePackage === -1 ||
-    linuxPackage === -1 ||
-    !(
-      localPreflightIndex < nativeInstallIndex &&
-      nativeInstallIndex < nativePackage &&
-      nativePackage < linuxPackage
-    )
-  ) {
-    failures.push(
-      'Makefile release preflight and lockfile install must precede native and Linux builds',
-    );
-  }
-  if (provenanceIndex === -1 || goreleaserIndex === -1 || provenanceIndex + 1 !== goreleaserIndex) {
-    failures.push('Makefile release provenance recheck must run immediately before GoReleaser');
-  }
-  if (sensitive.some((command) => command.includes('GORELEASER_FLAGS'))) {
-    failures.push(
-      'Makefile must not expose GORELEASER_FLAGS; only AGENTICO_RELEASE_NOTES_FILE is supported',
-    );
-  }
-  const positions = expected.map((command) => recipe.indexOf(command));
-  if (positions[0] === -1 || positions[2] === -1 || positions[0] > positions[2]) {
-    failures.push('Makefile must verify the remote tag is absent before GoReleaser runs');
-  }
-  if (
-    positions.slice(2).some((position) => position === -1) ||
-    !(positions[2] < positions[3] && positions[3] < positions[4] && positions[4] < positions[5])
-  ) {
-    failures.push(
-      'Makefile must verify local manifest then remote publication before publishing the desktop cask',
-    );
-  }
-  if (JSON.stringify(sensitive) !== JSON.stringify(expected)) {
-    failures.push(
-      'Makefile release recipe must use the exact audited publication commands and arguments',
-    );
+  if (/RELEASE_TAG|RELEASE_COMMIT|GORELEASER_FLAGS/.test(recipe.join('\n'))) {
+    failures.push('Makefile must not expose publication identity or arbitrary GoReleaser inputs');
   }
   return failures;
 }
 
-function isPublicationSensitiveCommand(command) {
-  return (
-    command.includes('GORELEASER_FLAGS') ||
-    command.includes('verify-release-publication.mjs') ||
-    command.includes('release:artifacts:verify') ||
-    command.includes('release-goreleaser.mjs') ||
-    command.includes('publish-desktop-cask.mjs') ||
-    commandRunsGoReleaser(command)
-  );
-}
-
-/** Find a shell command's executable after simple assignments or `env` prefixes. */
-function commandRunsGoReleaser(command) {
-  const tokens = command.trim().split(/\s+/);
-  let index = 0;
-  while (isEnvironmentAssignment(tokens[index])) index += 1;
-  if (tokens[index] === 'env') {
-    index += 1;
-    while (tokens[index]?.startsWith('-')) index += 1;
-    while (isEnvironmentAssignment(tokens[index])) index += 1;
+/** Require the wrapper's outward-facing operations in one fail-closed order. */
+export function auditReleaseRunner(runnerText) {
+  const start = runnerText.indexOf('evidence = preflight();');
+  if (start === -1) return ['release runner does not begin with captured preflight evidence'];
+  const body = runnerText.slice(start);
+  const ordered = [
+    "command('npm-ci'",
+    "command('mac-package'",
+    "command('linux-packages'",
+    'verifyPackages({ evidence, desktopDist:',
+    'snapshot = createSnapshot({',
+    'verifySnapshot(snapshot)',
+    'verifyPackages({ evidence, desktopDist: snapshot.path })',
+    'verifyProvenance(evidence)',
+    'await reserveTag({ evidence })',
+    'publish({ evidence, snapshot })',
+    'verifyManifest({ evidence, snapshot })',
+    'await verifyRemote({ evidence, snapshot })',
+    'publishCask({ evidence, snapshot })',
+  ];
+  let cursor = -1;
+  for (const step of ordered) {
+    const index = body.indexOf(step, cursor + 1);
+    if (index === -1) return [`release runner omits or reorders audited step: ${step}`];
+    cursor = index;
   }
-  return basename(tokens[index] ?? '') === 'goreleaser';
-}
-
-function isEnvironmentAssignment(token) {
-  return /^[A-Za-z_][A-Za-z0-9_]*=/.test(token ?? '');
+  const cleanup = body.indexOf('if (evidence !== undefined) cleanup(evidence)', cursor);
+  if (cleanup === -1) return ['release runner must clean the detached workspace in finally'];
+  return [];
 }
 
 /** Extract only tab-indented shell commands from one exact Make target's recipe. */
@@ -276,9 +201,9 @@ function goreleaserExtraFileGlobs(configText, section) {
 function expectedGoReleaserDesktopGlob(artifactName) {
   const deb = /^agentico_\d+\.\d+\.\d+_(amd64|arm64)\.deb$/.exec(artifactName);
   if (deb?.[1] !== undefined) {
-    return `desktop/dist/agentico_{{ .Version }}_${deb[1]}.deb`;
+    return `desktop/dist/publication/agentico_{{ .Version }}_${deb[1]}.deb`;
   }
-  return `desktop/dist/${artifactName}`;
+  return `desktop/dist/publication/${artifactName}`;
 }
 
 function normalizeGoReleaserExtraFileGlob(glob) {
@@ -1055,6 +980,9 @@ export function runReleaseAudit() {
   );
   failures.push(...auditGoReleaserReleaseTarget(goreleaserConfig));
   failures.push(...auditReleaseMakefile(readFileSync(join(rootDir, 'Makefile'), 'utf8')));
+  failures.push(
+    ...auditReleaseRunner(readFileSync(join(desktopDir, 'scripts', 'release-run.mjs'), 'utf8')),
+  );
 
   const goMod = readFileSync(join(rootDir, 'go.mod'), 'utf8');
   const goSum = readFileSync(join(rootDir, 'go.sum'), 'utf8');

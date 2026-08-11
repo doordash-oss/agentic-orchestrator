@@ -6,6 +6,7 @@ import {
   auditGoReleaserDesktopArtifacts,
   auditGoReleaserReleaseTarget,
   auditReleaseMakefile,
+  auditReleaseRunner,
   auditNpmLockfile,
   collectNpmRuntimeInventory,
   hasElectronBuilderProtocolScheme,
@@ -89,12 +90,12 @@ release:
     const config = `
 checksum:
   extra_files:
-    - glob: desktop/dist/Agentico-x64.AppImage
-    - glob: desktop/dist/Agentico-x64.AppImage
+    - glob: desktop/dist/publication/Agentico-x64.AppImage
+    - glob: desktop/dist/publication/Agentico-x64.AppImage
 release:
   extra_files:
-    - glob: desktop/dist/Agentico-x64.AppImage
-    - glob: desktop/dist/Agentico-x64.AppImage
+    - glob: desktop/dist/publication/Agentico-x64.AppImage
+    - glob: desktop/dist/publication/Agentico-x64.AppImage
 `;
 
     expect(auditGoReleaserDesktopArtifacts(config, ['Agentico-x64.AppImage'])).toEqual(
@@ -126,97 +127,42 @@ release:
     expect(auditGoReleaserReleaseTarget(config)).toEqual([]);
   });
 
-  it('audits only the actual release recipe with exact publication command ordering', () => {
+  it('allows only the audited release runner in the Make target', () => {
     expect(
-      auditReleaseMakefile(
-        [
-          '# node desktop/scripts/verify-release-publication.mjs preflight --tag "$(RELEASE_TAG)" --commit "$(RELEASE_COMMIT)"',
-          'other:',
-          '\tnode desktop/scripts/verify-release-publication.mjs preflight --tag "$(RELEASE_TAG)" --commit "$(RELEASE_COMMIT)"',
-          '\tnode desktop/scripts/release-goreleaser.mjs',
-          '\tnpm run release:artifacts:verify --workspace desktop -- manifest',
-          '\tnode desktop/scripts/verify-release-publication.mjs verify --tag "$(RELEASE_TAG)" --commit "$(RELEASE_COMMIT)"',
-          '\tnode desktop/scripts/publish-desktop-cask.mjs',
-          'release:',
-          '\t# A comment must not satisfy the release audit.',
-          '\tnode desktop/scripts/publish-desktop-cask.mjs',
-        ].join('\n'),
-      ),
-    ).toEqual(
-      expect.arrayContaining([
-        expect.stringContaining('remote tag is absent'),
-        expect.stringContaining('local manifest then remote publication'),
-      ]),
+      auditReleaseMakefile('release:\n\tnode desktop/scripts/release-goreleaser.mjs\n'),
+    ).toContain(
+      'Makefile release recipe must contain only the complete audited release command structure',
     );
     expect(
       auditReleaseMakefile(
-        [
-          'release:',
-          '\tnode desktop/scripts/verify-release-publication.mjs preflight --commit "$(RELEASE_COMMIT)" --tag "$(RELEASE_TAG)"',
-          '\tnode desktop/scripts/release-goreleaser.mjs GORELEASER_FLAGS=--skip=publish',
-          '\tnpm run release:artifacts:verify --workspace desktop -- manifest',
-          '\tnode desktop/scripts/verify-release-publication.mjs verify --tag "$(RELEASE_TAG)" --commit "wrong"',
-          '\tnode desktop/scripts/publish-desktop-cask.mjs',
-        ].join('\n'),
+        'release:\n\tRELEASE_TAG=v0.150.0 node desktop/scripts/release-run.mjs\n',
       ),
-    ).toEqual(
-      expect.arrayContaining([
-        expect.stringContaining('must not expose GORELEASER_FLAGS'),
-        expect.stringContaining('remote tag is absent'),
-        expect.stringContaining('exact audited publication commands'),
-      ]),
-    );
+    ).toContain('Makefile must not expose publication identity or arbitrary GoReleaser inputs');
     const makefile = readFileSync(new URL('../../Makefile', import.meta.url), 'utf8');
     expect(auditReleaseMakefile(makefile)).toEqual([]);
   });
 
-  it('rejects an early cask and every duplicate or extra publication-sensitive command', () => {
-    const validRecipe = [
-      'release:',
-      '\tnode desktop/scripts/verify-release-publication.mjs preflight --tag "$(RELEASE_TAG)" --commit "$(RELEASE_COMMIT)"',
-      '\tnpm run release:artifacts:verify --workspace desktop -- packages',
-      '\tnode desktop/scripts/release-goreleaser.mjs',
-      '\tnpm run release:artifacts:verify --workspace desktop -- manifest',
-      '\tnode desktop/scripts/verify-release-publication.mjs verify --tag "$(RELEASE_TAG)" --commit "$(RELEASE_COMMIT)"',
-      '\tnode desktop/scripts/publish-desktop-cask.mjs',
-    ];
-    for (const extra of [
-      '\tnode desktop/scripts/publish-desktop-cask.mjs --early',
-      '\tnode desktop/scripts/release-goreleaser.mjs',
-      '\tgoreleaser release --clean',
-      '\t/opt/homebrew/bin/goreleaser release --clean',
-      '\t./bin/goreleaser release --clean',
-      '\tGITHUB_TOKEN=token ./bin/goreleaser release --clean',
-      '\tenv GITHUB_TOKEN=token /opt/homebrew/bin/goreleaser release --clean',
-      '\tnpm run release:artifacts:verify --workspace desktop -- manifest --again',
-    ]) {
-      const recipe = [...validRecipe];
-      recipe.splice(1, 0, extra);
-      expect(auditReleaseMakefile(recipe.join('\n'))).toEqual(
-        expect.arrayContaining([expect.stringContaining('exact audited publication commands')]),
-      );
-    }
+  it('rejects duplicate and extra commands around the audited runner', () => {
+    expect(
+      auditReleaseMakefile(
+        'release:\n\tnode desktop/scripts/release-run.mjs\n\tnode desktop/scripts/publish-desktop-cask.mjs\n',
+      ),
+    ).toContain(
+      'Makefile release recipe must contain only the complete audited release command structure',
+    );
   });
 
-  it('requires local preflight, a lockfile install, and a provenance recheck before publication', () => {
-    const recipe = [
-      'release:',
-      '\tnode desktop/scripts/verify-release-publication.mjs preflight --tag "$(RELEASE_TAG)" --commit "$(RELEASE_COMMIT)"',
-      '\tnpm run package:verify --workspace desktop',
-      '\tnpm run package:linux:release --workspace desktop',
-      '\tnpm run release:artifacts:verify --workspace desktop -- packages',
-      '\tnode desktop/scripts/release-goreleaser.mjs',
-      '\tnpm run release:artifacts:verify --workspace desktop -- manifest',
-      '\tnode desktop/scripts/verify-release-publication.mjs verify --tag "$(RELEASE_TAG)" --commit "$(RELEASE_COMMIT)"',
-      '\tnode desktop/scripts/publish-desktop-cask.mjs',
-    ].join('\n');
-    expect(auditReleaseMakefile(recipe)).toEqual(
-      expect.arrayContaining([
-        expect.stringContaining('local preflight'),
-        expect.stringContaining('npm ci'),
-        expect.stringContaining('provenance recheck'),
-      ]),
-    );
+  it('audits snapshot, atomic reservation, publication, remote bytes, cask, and cleanup order', () => {
+    const runner = readFileSync(new URL('./release-run.mjs', import.meta.url), 'utf8');
+    expect(auditReleaseRunner(runner)).toEqual([]);
+    expect(
+      auditReleaseRunner(
+        runner.replace(
+          'await reserveTag({ evidence });\n    publish({ evidence, snapshot });',
+          'publish({ evidence, snapshot });\n    await reserveTag({ evidence });',
+        ),
+      ),
+    ).toContain('release runner omits or reorders audited step: publish({ evidence, snapshot })');
   });
 
   it('collects production npm packages plus explicitly shipped renderer dev assets', () => {

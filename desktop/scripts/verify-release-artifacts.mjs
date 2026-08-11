@@ -33,6 +33,7 @@ export function verifyReleaseArtifacts({
   revision,
   desktopDist = DESKTOP_DIST,
   checksumsPath = join(repoRoot, 'dist', 'checksums.txt'),
+  evidenceDir = desktopDist,
   runSignatureVerification = verifySignature,
 }) {
   const errors = [];
@@ -91,7 +92,7 @@ export function verifyReleaseArtifacts({
     ok: errors.length === 0,
     errors,
   };
-  safelyWriteEvidence(desktopDist, evidence);
+  safelyWriteEvidence(evidenceDir, evidence);
   return evidence;
 }
 

@@ -2,6 +2,8 @@
 import { execFileSync } from 'node:child_process';
 import { statSync } from 'node:fs';
 import { isMainModule } from './lib/main-entry.mjs';
+import { verifyReleaseProvenance } from './release-preflight.mjs';
+import { cleanGoEnvironment, readPublicationSnapshot } from './release-workspace.mjs';
 
 export function goreleaserArguments(notesFile) {
   const args = ['release', '--clean'];
@@ -21,13 +23,26 @@ function regularFile(path) {
 export function runGoreleaserRelease({
   notesFile = process.env.AGENTICO_RELEASE_NOTES_FILE,
   isFile = regularFile,
-  execute = (command, args) => execFileSync(command, args, { stdio: 'inherit' }),
+  evidence,
+  verifyEvidence = (value) => verifyReleaseProvenance({ evidence: value }),
+  verifySnapshot = (workspaceRoot) => readPublicationSnapshot(workspaceRoot),
+  execute = (command, args, options) => execFileSync(command, args, options),
 } = {}) {
   if (notesFile !== undefined && notesFile !== '' && !isFile(notesFile)) {
     throw new Error(`release notes file does not exist or is not a regular file: ${notesFile}`);
   }
+  const trusted = verifyEvidence(evidence);
+  if (typeof trusted.workspace_root !== 'string' || trusted.workspace_root === '') {
+    throw new Error('release provenance evidence has no isolated workspace');
+  }
+  verifySnapshot(trusted.workspace_root);
   const args = goreleaserArguments(notesFile);
-  execute('goreleaser', args);
+  execute('goreleaser', args, {
+    cwd: trusted.workspace_root,
+    stdio: 'inherit',
+    env: cleanGoEnvironment(process.env),
+  });
+  verifySnapshot(trusted.workspace_root);
   return args;
 }
 

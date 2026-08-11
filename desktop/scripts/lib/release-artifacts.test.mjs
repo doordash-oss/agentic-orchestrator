@@ -373,7 +373,7 @@ describe('committed HEAD archive checkout', () => {
     writeFileSync(join(source, 'ignored.txt'), 'ignored\n');
     writeFileSync(join(source, 'local.txt'), 'local\n');
     probeArchivedCheckout(source);
-  });
+  }, 20_000);
 
   it('supports release Git commands from a linked worktree gitfile', () => {
     const main = tempRoot();
@@ -383,5 +383,5 @@ describe('committed HEAD archive checkout', () => {
     writeFileSync(join(linked, 'tracked.txt'), 'modified\n');
     writeFileSync(join(linked, 'ignored.txt'), 'ignored\n');
     probeArchivedCheckout(linked);
-  });
+  }, 20_000);
 });

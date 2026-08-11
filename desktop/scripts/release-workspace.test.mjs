@@ -1,0 +1,165 @@
+import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, describe, expect, it } from 'vitest';
+
+import {
+  cleanGoEnvironment,
+  createDetachedReleaseWorkspace,
+  createPublicationSnapshot,
+  removeDetachedReleaseWorkspace,
+  verifyPublicationSnapshot,
+} from './release-workspace.mjs';
+
+const roots = [];
+
+afterEach(() => {
+  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+});
+
+function git(cwd, ...args) {
+  return execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
+}
+
+function repositoryFixture() {
+  const root = mkdtempSync(join(tmpdir(), 'agentico-release-workspace-test-'));
+  roots.push(root);
+  git(root, 'init');
+  git(root, 'config', 'user.email', 'test@example.com');
+  git(root, 'config', 'user.name', 'Test');
+  writeFileSync(join(root, '.gitignore'), 'go.work\nskills/.env\nnode_modules\n');
+  writeFileSync(join(root, 'tracked.txt'), 'committed\n');
+  mkdirSync(join(root, 'skills'));
+  writeFileSync(join(root, 'skills', '.env'), 'SECRET=ambient\n');
+  writeFileSync(join(root, 'go.work'), 'go 1.25\n');
+  git(root, 'add', '.gitignore', 'tracked.txt');
+  git(root, 'commit', '-m', 'fixture');
+  return { root, commit: git(root, 'rev-parse', 'HEAD') };
+}
+
+describe('detached release workspace', () => {
+  it('contains only the captured committed source and excludes ambient ignored inputs', () => {
+    const fixture = repositoryFixture();
+    const workspace = createDetachedReleaseWorkspace({
+      operatorRoot: fixture.root,
+      commit: fixture.commit,
+      runId: '11111111-1111-4111-8111-111111111111',
+    });
+    try {
+      expect(readFileSync(join(workspace.path, 'tracked.txt'), 'utf8')).toBe('committed\n');
+      expect(existsSync(join(workspace.path, 'go.work'))).toBe(false);
+      expect(existsSync(join(workspace.path, 'skills', '.env'))).toBe(false);
+      expect(git(workspace.path, 'rev-parse', 'HEAD')).toBe(fixture.commit);
+      expect(git(workspace.path, 'status', '--porcelain', '--untracked-files=all')).toBe('');
+      const readonlySnapshot = join(workspace.path, 'desktop', 'dist', 'publication');
+      mkdirSync(readonlySnapshot, { recursive: true });
+      writeFileSync(join(readonlySnapshot, 'artifact'), 'bytes');
+      chmodSync(readonlySnapshot, 0o500);
+    } finally {
+      removeDetachedReleaseWorkspace(workspace);
+    }
+    expect(existsSync(workspace.path)).toBe(false);
+  }, 20_000);
+
+  it('clears ambient Go workspace and flags while forcing readonly modules', () => {
+    expect(
+      cleanGoEnvironment({
+        GOWORK: '/tmp/poison/go.work',
+        GOFLAGS: '-overlay=/tmp/poison.json',
+        X: 'ok',
+      }),
+    ).toMatchObject({ GOWORK: 'off', GOFLAGS: '-mod=readonly', X: 'ok' });
+  });
+});
+
+describe('publication snapshot', () => {
+  it('copies receipt-bound artifacts, rewrites canonical paths, and detects later byte changes', () => {
+    const root = mkdtempSync(join(tmpdir(), 'agentico-publication-test-'));
+    roots.push(root);
+    const source = join(root, 'source');
+    const workspace = join(root, 'workspace');
+    mkdirSync(source);
+    mkdirSync(workspace);
+    const names = ['Agentico-mac-universal.dmg'];
+    writeFileSync(join(source, names[0]), 'dmg bytes');
+    writeFileSync(
+      join(source, 'package-verification-darwin-universal.json'),
+      `${JSON.stringify({
+        schema_version: 2,
+        target: { os: 'darwin', arch: 'universal' },
+        artifacts: [
+          {
+            target: { os: 'darwin', arch: 'universal' },
+            format: 'dmg',
+            path: join(source, names[0]),
+            sha256: createHash('sha256').update('dmg bytes').digest('hex'),
+            size: 9,
+            identity: {},
+          },
+        ],
+      })}\n`,
+    );
+
+    const snapshot = createPublicationSnapshot({
+      workspaceRoot: workspace,
+      sourceDir: source,
+      artifactNames: names,
+      receiptNames: ['package-verification-darwin-universal.json'],
+    });
+    expect(snapshot.artifacts[0].path).toBe(join(snapshot.path, names[0]));
+    const receipt = JSON.parse(
+      readFileSync(join(snapshot.path, 'package-verification-darwin-universal.json'), 'utf8'),
+    );
+    expect(receipt.artifacts[0].path).toBe(join(snapshot.path, names[0]));
+    expect(receipt.artifacts[0].sha256).toBe(snapshot.artifacts[0].sha256);
+    expect(statSync(join(snapshot.path, names[0])).mode & 0o222).toBe(0);
+    expect(() => verifyPublicationSnapshot(snapshot)).not.toThrow();
+    chmodSync(join(snapshot.path, names[0]), 0o600);
+    writeFileSync(join(snapshot.path, names[0]), 'changed');
+    expect(() => verifyPublicationSnapshot(snapshot)).toThrow(/changed after snapshot/);
+    chmodSync(snapshot.path, 0o700);
+  });
+
+  it('refuses to bless artifact bytes that no longer match the verified receipt', () => {
+    const root = mkdtempSync(join(tmpdir(), 'agentico-publication-stale-test-'));
+    roots.push(root);
+    const source = join(root, 'source');
+    const workspace = join(root, 'workspace');
+    mkdirSync(source);
+    mkdirSync(workspace);
+    writeFileSync(join(source, 'Agentico-mac-universal.dmg'), 'changed bytes');
+    writeFileSync(
+      join(source, 'package-verification-darwin-universal.json'),
+      `${JSON.stringify({
+        schema_version: 2,
+        artifacts: [
+          {
+            format: 'dmg',
+            path: join(source, 'Agentico-mac-universal.dmg'),
+            sha256: createHash('sha256').update('original bytes').digest('hex'),
+            size: 14,
+          },
+        ],
+      })}\n`,
+    );
+    expect(() =>
+      createPublicationSnapshot({
+        workspaceRoot: workspace,
+        sourceDir: source,
+        artifactNames: ['Agentico-mac-universal.dmg'],
+        receiptNames: ['package-verification-darwin-universal.json'],
+      }),
+    ).toThrow(/receipt digest does not match staged artifact/);
+  });
+});

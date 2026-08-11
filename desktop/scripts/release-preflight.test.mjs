@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -34,6 +34,11 @@ function fixture(overrides = {}) {
     ensureImage: (image) => state.docker.push(image),
     verifySigningKey: () => true,
     evidencePath: join(root, 'desktop', 'dist', 'release-preflight.json'),
+    createWorkspace: ({ commit, runId }) => {
+      const path = join(root, `workspace-${runId}`);
+      mkdirSync(path);
+      return { operatorRoot: root, commonDir: join(root, '.git'), path, commit, runId };
+    },
     state,
     ...overrides,
   };
@@ -64,7 +69,12 @@ describe('release preflight', () => {
   it('records the exact clean tag and commit only after all prerequisites pass', () => {
     const options = fixture();
     const evidence = runReleasePreflight(options);
-    expect(evidence).toMatchObject({ tag: 'v0.150.0', commit: 'a'.repeat(40) });
+    expect(evidence).toMatchObject({
+      tag: 'v0.150.0',
+      commit: 'a'.repeat(40),
+      operator_root: options.cwd,
+      workspace_root: expect.stringContaining('workspace-'),
+    });
     expect(options.state.docker).toHaveLength(2);
     expect(JSON.parse(readFileSync(options.evidencePath, 'utf8'))).toMatchObject(evidence);
   });

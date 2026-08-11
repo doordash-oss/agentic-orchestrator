@@ -5,8 +5,6 @@ VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev
 # when building from a linked git worktree.
 REVISION ?= $(shell git rev-parse HEAD 2>/dev/null || echo "")
 LDFLAGS := -s -w -X github.com/doordash-oss/agentic-orchestrator/internal/buildinfo.version=$(VERSION) -X github.com/doordash-oss/agentic-orchestrator/internal/buildinfo.revision=$(REVISION)
-RELEASE_TAG := $(shell git describe --tags --exact-match 2>/dev/null || echo "")
-RELEASE_COMMIT := $(shell git rev-parse HEAD 2>/dev/null || echo "")
 
 APP_NAME        := Agentico.app
 APP_INSTALL_DIR ?= /Applications
@@ -60,27 +58,14 @@ install-desktop:
 
 # Cut a release from a clean checkout of a vX.Y.Z tag, run locally by the
 # release operator (no CI credentials involved):
-#   1. package and verify the native macOS DMG (stamped with the tag version),
-#   2. package and verify Linux x64 then arm64 AppImage + DEB artifacts,
-#   3. verify the complete desktop inventory before publishing,
-#   4. verify the remote tag is absent, then create a GitHub release pinned to
-#      this exact commit and signed checksums covering every desktop artifact,
-#   5. verify the signed checksum manifest and remote published assets, then
-#      publish the macOS cask.
+# The audited runner captures the tag/commit, creates a detached source-only
+# worktree, performs all builds and gates there, atomically reserves the remote
+# tag, publishes immutable receipt-bound bytes, verifies GitHub digests, then
+# publishes the macOS cask and safely removes the detached worktree.
 # Set AGENTICO_RELEASE_NOTES_FILE to provide the sole supported GoReleaser
 # input; arbitrary flags are intentionally not accepted.
 release:
-	node desktop/scripts/release-preflight.mjs
-	node desktop/scripts/verify-release-publication.mjs preflight --tag "$(RELEASE_TAG)" --commit "$(RELEASE_COMMIT)"
-	npm ci
-	npm run package:verify --workspace desktop
-	npm run package:linux:release --workspace desktop
-	npm run release:artifacts:verify --workspace desktop -- packages
-	node desktop/scripts/release-preflight.mjs verify
-	node desktop/scripts/release-goreleaser.mjs
-	npm run release:artifacts:verify --workspace desktop -- manifest
-	node desktop/scripts/verify-release-publication.mjs verify --tag "$(RELEASE_TAG)" --commit "$(RELEASE_COMMIT)"
-	node desktop/scripts/publish-desktop-cask.mjs
+	node desktop/scripts/release-run.mjs
 
 install-system: build
 	cp $(BIN_DIR)/$(BINARY) $(INSTALL_DIR)/$(BINARY)

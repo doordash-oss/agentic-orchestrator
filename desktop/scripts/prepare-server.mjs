@@ -21,6 +21,8 @@ import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync, readFileSync 
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isMainModule } from './lib/main-entry.mjs';
+import { cleanGoEnvironment } from './release-workspace.mjs';
 
 import {
   createBuildIdentity,
@@ -52,6 +54,7 @@ function goBuild({ goos, goarch, version, revision, output }) {
     'go',
     [
       'build',
+      '-mod=readonly',
       '-trimpath',
       '-ldflags',
       `-s -w -X ${LDFLAGS_VERSION_SYMBOL}=${version} -X ${LDFLAGS_REVISION_SYMBOL}=${revision}`,
@@ -62,7 +65,12 @@ function goBuild({ goos, goarch, version, revision, output }) {
     {
       cwd: repoRoot,
       stdio: 'inherit',
-      env: { ...process.env, GOOS: goos, GOARCH: goarch, CGO_ENABLED: '0' },
+      env: {
+        ...cleanGoEnvironment(process.env),
+        GOOS: goos,
+        GOARCH: goarch,
+        CGO_ENABLED: '0',
+      },
     },
   );
 }
@@ -85,7 +93,7 @@ function resolveTarget() {
   throw new Error(`unsupported packaging host platform: ${platform}`);
 }
 
-function main() {
+export function main() {
   const target = resolveTarget();
   const version = git('describe', '--tags', '--always', '--dirty');
   const revision = git('rev-parse', 'HEAD');
@@ -151,4 +159,4 @@ function main() {
   console.log(JSON.stringify(identity, null, 2));
 }
 
-main();
+if (isMainModule(import.meta.url)) main();

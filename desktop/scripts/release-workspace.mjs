@@ -4,6 +4,7 @@ import {
   chmodSync,
   copyFileSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   readFileSync,
   realpathSync,
@@ -36,6 +37,74 @@ export function cleanGoEnvironment(env = process.env) {
   return { ...env, GOWORK: 'off', GOFLAGS: '-mod=readonly' };
 }
 
+const RELEASE_SECRET_NAMES = new Set([
+  'GITHUB_TOKEN',
+  'GH_TOKEN',
+  'GH_ENTERPRISE_TOKEN',
+  'GITHUB_ENTERPRISE_TOKEN',
+  'HOMEBREW_GITHUB_API_TOKEN',
+  'AGENTICO_RELEASE_SIGNING_KEY',
+  'AGENTICO_RELEASE_SIGNING_KEY_FILE',
+  'AGENTICO_RELEASE_NOTES_FILE',
+]);
+
+/** Build subprocesses get dependency auth but never publication/signing credentials. */
+export function secretFreeBuildEnvironment(env, evidencePath) {
+  const clean = cleanGoEnvironment(env);
+  for (const name of RELEASE_SECRET_NAMES) delete clean[name];
+  for (const name of Object.keys(clean)) {
+    if (name.startsWith('GORELEASER_')) delete clean[name];
+  }
+  clean.AGENTICO_RELEASE_EVIDENCE_FILE = evidencePath;
+  return clean;
+}
+
+/** Publication retains required credentials while rejecting ambient GoReleaser overrides. */
+export function goreleaserEnvironment(env, tag) {
+  const clean = cleanGoEnvironment(env);
+  for (const name of Object.keys(clean)) {
+    if (name.startsWith('GORELEASER_')) delete clean[name];
+  }
+  clean.GORELEASER_CURRENT_TAG = tag;
+  return clean;
+}
+
+function captureWorkspaceToken(path) {
+  const requested = resolve(path);
+  const stat = lstatSync(requested);
+  if (!stat.isDirectory() || stat.isSymbolicLink()) {
+    throw new Error(`release workspace is not a real directory: ${requested}`);
+  }
+  return Object.freeze({
+    path: realpathSync(requested),
+    kind: 'directory',
+    dev: stat.dev,
+    ino: stat.ino,
+  });
+}
+
+export function revalidateWorkspaceToken(token) {
+  if (token?.kind !== 'directory' || typeof token.path !== 'string') {
+    throw new Error('release workspace token is invalid');
+  }
+  let stat;
+  try {
+    stat = lstatSync(token.path);
+  } catch (error) {
+    throw new Error('release workspace changed after validation', { cause: error });
+  }
+  if (
+    !stat.isDirectory() ||
+    stat.isSymbolicLink() ||
+    realpathSync(token.path) !== token.path ||
+    stat.dev !== token.dev ||
+    stat.ino !== token.ino
+  ) {
+    throw new Error('release workspace changed after validation');
+  }
+  return token;
+}
+
 /** Create a detached Git worktree whose filesystem starts from only captured committed files. */
 export function createDetachedReleaseWorkspace({
   operatorRoot,
@@ -47,9 +116,11 @@ export function createDetachedReleaseWorkspace({
   if (!RUN_ID.test(runId ?? '') || runId === '.' || runId === '..') {
     throw new Error(`invalid release run id: ${runId}`);
   }
-  const commonDir = resolve(
-    operatorRoot,
-    gitCommand(operatorRoot, 'rev-parse', '--path-format=absolute', '--git-common-dir'),
+  const commonDir = realpathSync(
+    resolve(
+      operatorRoot,
+      gitCommand(operatorRoot, 'rev-parse', '--path-format=absolute', '--git-common-dir'),
+    ),
   );
   const base = join(commonDir, 'agentico-release-workspaces');
   mkdirSync(base, { recursive: true, mode: 0o700 });
@@ -66,12 +137,14 @@ export function createDetachedReleaseWorkspace({
     }
     throw new Error('detached release workspace does not exactly match captured committed source');
   }
+  const token = captureWorkspaceToken(path);
   return Object.freeze({
     operatorRoot: realpathSync(operatorRoot),
     commonDir,
-    path,
+    path: token.path,
     commit,
     runId,
+    token,
   });
 }
 
@@ -93,9 +166,13 @@ export function removeDetachedReleaseWorkspace(workspace, { gitCommand = git } =
   if (resolve(workspace.path) !== expected) {
     throw new Error('refusing to remove a release workspace at an unexpected path');
   }
+  revalidateWorkspaceToken(workspace.token);
   if (existsSync(workspace.path)) {
     const snapshot = join(workspace.path, 'desktop', 'dist', 'publication');
-    if (existsSync(snapshot)) chmodSync(snapshot, 0o700);
+    if (existsSync(snapshot)) {
+      const stat = lstatSync(snapshot);
+      if (stat.isDirectory() && !stat.isSymbolicLink()) chmodSync(snapshot, 0o700);
+    }
     gitCommand(workspace.operatorRoot, 'worktree', 'remove', '--force', workspace.path);
   }
 }
@@ -168,6 +245,7 @@ export function createPublicationSnapshot({
       path,
       artifacts: artifacts.map((artifact) => ({ ...artifact })),
       receipts: [...receiptNames],
+      receipt_evidence: receiptNames.map((name) => readArtifactEvidence(join(path, name))),
     };
     writeFileSync(
       join(path, 'publication-snapshot.json'),
@@ -196,6 +274,15 @@ export function verifyPublicationSnapshot(snapshot) {
     throw new Error('invalid publication snapshot evidence');
   }
   for (const expected of snapshot.artifacts) {
+    const actual = readArtifactEvidence(expected.path);
+    if (actual.sha256 !== expected.sha256 || actual.size !== expected.size) {
+      throw new Error(`${basename(expected.path)} changed after snapshot creation`);
+    }
+  }
+  if (!Array.isArray(snapshot.receipt_evidence)) {
+    throw new Error('publication snapshot has no receipt evidence');
+  }
+  for (const expected of snapshot.receipt_evidence) {
     const actual = readArtifactEvidence(expected.path);
     if (actual.sha256 !== expected.sha256 || actual.size !== expected.size) {
       throw new Error(`${basename(expected.path)} changed after snapshot creation`);

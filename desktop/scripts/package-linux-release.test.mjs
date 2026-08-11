@@ -21,8 +21,15 @@ import {
   prepareReleaseDirectories,
   runLinuxRelease,
   runLocalLinuxRelease,
+  resolveLinuxReleaseEvidence,
 } from './package-linux-release.mjs';
 import { LINUX_ARM64_VERIFIER_IMAGE } from './lib/release-artifacts.mjs';
+import { LINUX_BUILDER_IMAGE } from './lib/release-artifacts.mjs';
+import { evidencePathFor } from './release-preflight.mjs';
+import {
+  createDetachedReleaseWorkspace,
+  removeDetachedReleaseWorkspace,
+} from './release-workspace.mjs';
 
 const GiB = 1024 ** 3;
 const scriptPath = fileURLToPath(new URL('./package-linux-release.mjs', import.meta.url));
@@ -674,4 +681,93 @@ describe('--print-plan', () => {
     expect(plan[0].args).toContain('AGENTICO_PACKAGE_ARCH=x64');
     expect(plan[1].args).toContain('AGENTICO_PACKAGE_ARCH=arm64');
   });
+});
+
+describe('detached release evidence boundary', () => {
+  it('requires the explicit absolute evidence file and binds its path, run, tag, and commit', () => {
+    const evidence = {
+      evidence_path: '/git/agentico-release-preflight.json',
+      run_id: '11111111-1111-4111-8111-111111111111',
+      tag: 'v0.150.0',
+      commit: 'a'.repeat(40),
+    };
+    expect(
+      resolveLinuxReleaseEvidence({
+        env: { AGENTICO_RELEASE_EVIDENCE_FILE: evidence.evidence_path },
+        readEvidence: (path) => {
+          expect(path).toBe(evidence.evidence_path);
+          return evidence;
+        },
+        verifyEvidence: (value) => value,
+      }),
+    ).toEqual(evidence);
+    expect(() => resolveLinuxReleaseEvidence({ env: {}, readEvidence: () => evidence })).toThrow(
+      /must be an absolute validated path/,
+    );
+    expect(() =>
+      resolveLinuxReleaseEvidence({
+        env: { AGENTICO_RELEASE_EVIDENCE_FILE: '/different/evidence.json' },
+        readEvidence: () => evidence,
+        verifyEvidence: (value) => value,
+      }),
+    ).toThrow(/does not match captured/);
+  });
+
+  it.each(['normal checkout', 'linked worktree'])(
+    'reads matching run/tag/commit evidence from a real %s release workspace',
+    (kind) => {
+      const main = mkdtempSync(join(tmpdir(), 'agentico-evidence-integration-'));
+      tempRoots.push(main);
+      execFileSync('git', ['init', '--quiet'], { cwd: main });
+      execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: main });
+      execFileSync('git', ['config', 'user.name', 'Test'], { cwd: main });
+      writeFileSync(join(main, 'tracked'), 'committed\n');
+      execFileSync('git', ['add', 'tracked'], { cwd: main });
+      execFileSync('git', ['commit', '--quiet', '-m', 'fixture'], { cwd: main });
+      execFileSync('git', ['tag', 'v0.150.0'], { cwd: main });
+      let operatorRoot = main;
+      if (kind === 'linked worktree') {
+        operatorRoot = mkdtempSync(join(tmpdir(), 'agentico-evidence-linked-'));
+        rmSync(operatorRoot, { recursive: true });
+        tempRoots.push(operatorRoot);
+        execFileSync('git', ['worktree', 'add', '--quiet', '--detach', operatorRoot, 'HEAD'], {
+          cwd: main,
+        });
+      }
+      const commit = execFileSync('git', ['rev-parse', 'HEAD'], {
+        cwd: operatorRoot,
+        encoding: 'utf8',
+      }).trim();
+      const runId =
+        kind === 'linked worktree'
+          ? '22222222-2222-4222-8222-222222222222'
+          : '11111111-1111-4111-8111-111111111111';
+      const workspace = createDetachedReleaseWorkspace({ operatorRoot, commit, runId });
+      const evidencePath = evidencePathFor(operatorRoot);
+      const evidence = {
+        schema_version: 3,
+        tag: 'v0.150.0',
+        commit,
+        platform: 'darwin',
+        captured_at: '2026-08-10T00:00:00.000Z',
+        run_id: runId,
+        images: [LINUX_BUILDER_IMAGE, LINUX_ARM64_VERIFIER_IMAGE],
+        operator_root: realpathSync(operatorRoot),
+        workspace_root: workspace.path,
+        workspace_token: workspace.token,
+        evidence_path: evidencePath,
+      };
+      writeFileSync(evidencePath, `${JSON.stringify(evidence, null, 2)}\n`);
+      try {
+        expect(
+          resolveLinuxReleaseEvidence({
+            env: { AGENTICO_RELEASE_EVIDENCE_FILE: evidencePath },
+          }),
+        ).toMatchObject({ run_id: runId, tag: 'v0.150.0', commit });
+      } finally {
+        removeDetachedReleaseWorkspace(workspace);
+      }
+    },
+    20_000,
+  );
 });

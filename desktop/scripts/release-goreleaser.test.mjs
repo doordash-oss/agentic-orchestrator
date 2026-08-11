@@ -1,4 +1,8 @@
 import { describe, expect, it } from 'vitest';
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import { goreleaserArguments, runGoreleaserRelease } from './release-goreleaser.mjs';
 
@@ -59,5 +63,63 @@ describe('GoReleaser release wrapper', () => {
       execute: () => phases.push('publish'),
     });
     expect(phases).toEqual(['hash', 'publish', 'hash']);
+  });
+
+  it('scrubs ambient GoReleaser identity/config overrides and pins only the evidence tag', () => {
+    let invoked;
+    runGoreleaserRelease({
+      evidence: { workspace_root: '/release/workspace', tag: 'v0.150.0' },
+      verifyEvidence: (value) => value,
+      verifySnapshot: () => {},
+      env: {
+        GITHUB_TOKEN: 'publish-token',
+        GORELEASER_CURRENT_TAG: 'v9.9.9',
+        GORELEASER_PREVIOUS_TAG: 'v9.9.8',
+        GORELEASER_CONFIG: '/tmp/evil.yaml',
+        GORELEASER_GIT_COMMIT: 'b'.repeat(40),
+      },
+      execute: (_command, _args, options) => {
+        invoked = options;
+      },
+    });
+    expect(invoked.env).toMatchObject({
+      GITHUB_TOKEN: 'publish-token',
+      GORELEASER_CURRENT_TAG: 'v0.150.0',
+      GOWORK: 'off',
+      GOFLAGS: '-mod=readonly',
+    });
+    expect(Object.keys(invoked.env).filter((name) => name.startsWith('GORELEASER_'))).toEqual([
+      'GORELEASER_CURRENT_TAG',
+    ]);
+  });
+
+  it('passes the evidence tag to a real probe subprocess instead of ambient identity', () => {
+    const root = mkdtempSync(join(tmpdir(), 'agentico-goreleaser-probe-'));
+    const probe = join(root, 'probe.mjs');
+    const output = join(root, 'environment.json');
+    writeFileSync(
+      probe,
+      "import { writeFileSync } from 'node:fs'; writeFileSync(process.argv[2], JSON.stringify(process.env));\n",
+    );
+    try {
+      runGoreleaserRelease({
+        evidence: { workspace_root: root, tag: 'v0.150.0' },
+        verifyEvidence: (value) => value,
+        verifySnapshot: () => {},
+        env: {
+          GORELEASER_CURRENT_TAG: 'v9.9.9',
+          GORELEASER_CONFIG: '/tmp/evil.yaml',
+          GORELEASER_GIT_COMMIT: 'b'.repeat(40),
+        },
+        execute: (_command, _args, options) =>
+          execFileSync(process.execPath, [probe, output], options),
+      });
+      const observed = JSON.parse(readFileSync(output, 'utf8'));
+      expect(observed.GORELEASER_CURRENT_TAG).toBe('v0.150.0');
+      expect(observed).not.toHaveProperty('GORELEASER_CONFIG');
+      expect(observed).not.toHaveProperty('GORELEASER_GIT_COMMIT');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

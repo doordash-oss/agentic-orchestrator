@@ -1,7 +1,7 @@
 // Capture and recheck the local release provenance before anything is published.
 import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { statfsSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
@@ -75,16 +75,16 @@ function capture({ cwd, gitCommand }) {
   return { tag, commit };
 }
 
-function evidencePathFor(cwd, gitCommand) {
+export function evidencePathFor(cwd, gitCommand = git) {
   const path = gitCommand(cwd, 'rev-parse', '--git-path', 'agentico-release-preflight.json');
   return resolve(cwd, path);
 }
 
-function validateEvidence(evidence) {
+export function validateReleaseEvidence(evidence) {
   if (evidence === null || typeof evidence !== 'object' || Array.isArray(evidence)) {
     throw new Error('release provenance evidence is not an object');
   }
-  if (evidence.schema_version !== 2 || evidence.platform !== 'darwin') {
+  if (evidence.schema_version !== 3 || evidence.platform !== 'darwin') {
     throw new Error('release provenance evidence has an unsupported schema or platform');
   }
   releaseVersionFromTag(evidence.tag);
@@ -111,7 +111,27 @@ function validateEvidence(evidence) {
   ) {
     throw new Error('release provenance evidence has invalid workspace paths');
   }
+  if (typeof evidence.evidence_path !== 'string' || !evidence.evidence_path.startsWith('/')) {
+    throw new Error('release provenance evidence has invalid evidence path');
+  }
+  const token = evidence.workspace_token;
+  if (
+    token?.kind !== 'directory' ||
+    token.path !== evidence.workspace_root ||
+    !Number.isSafeInteger(token.dev) ||
+    !Number.isSafeInteger(token.ino)
+  ) {
+    throw new Error('release provenance evidence has invalid workspace token');
+  }
   return evidence;
+}
+
+function readEvidenceFile(path) {
+  const stat = lstatSync(path);
+  if (!stat.isFile() || stat.isSymbolicLink()) {
+    throw new Error('release provenance evidence is not a regular file');
+  }
+  return JSON.parse(readFileSync(path, 'utf8'));
 }
 
 /** Validate local release prerequisites and preserve the exact source provenance for later gates. */
@@ -159,7 +179,7 @@ export function runReleasePreflight({
   const runId = randomUUID();
   const workspace = createWorkspace({ operatorRoot: cwd, commit: provenance.commit, runId });
   const evidence = Object.freeze({
-    schema_version: 2,
+    schema_version: 3,
     tag: provenance.tag,
     commit: provenance.commit,
     platform,
@@ -168,6 +188,8 @@ export function runReleasePreflight({
     images: [LINUX_BUILDER_IMAGE, LINUX_ARM64_VERIFIER_IMAGE],
     operator_root: resolve(cwd),
     workspace_root: workspace.path,
+    workspace_token: workspace.token,
+    evidence_path: resolve(evidencePath),
   });
   try {
     mkdirSync(dirname(evidencePath), { recursive: true });
@@ -190,7 +212,7 @@ export function verifyReleaseProvenance({
   evidence,
   evidencePath = evidencePathFor(cwd, gitCommand),
 } = {}) {
-  const expected = validateEvidence(evidence ?? JSON.parse(readFileSync(evidencePath, 'utf8')));
+  const expected = validateReleaseEvidence(evidence ?? readEvidenceFile(evidencePath));
   let actual;
   try {
     actual = capture({ cwd: expected.workspace_root, gitCommand });
@@ -208,12 +230,21 @@ export function verifyReleaseProvenance({
   return expected;
 }
 
+export function verifyOperatorReleaseSubject({ evidence, git: gitCommand = git } = {}) {
+  const expected = validateReleaseEvidence(evidence);
+  const actual = capture({ cwd: expected.operator_root, gitCommand });
+  if (actual.commit !== expected.commit || actual.tag !== expected.tag) {
+    throw new Error('release resume subject no longer matches the captured operator tag and HEAD');
+  }
+  return expected;
+}
+
 export function readReleaseEvidence({
   cwd = rootDir,
   git: gitCommand = git,
   evidencePath = evidencePathFor(cwd, gitCommand),
 } = {}) {
-  return validateEvidence(JSON.parse(readFileSync(evidencePath, 'utf8')));
+  return validateReleaseEvidence(readEvidenceFile(evidencePath));
 }
 
 export function cleanupReleaseWorkspace({
@@ -222,8 +253,9 @@ export function cleanupReleaseWorkspace({
   evidence,
   evidencePath = evidencePathFor(cwd, gitCommand),
   removeWorkspace = removeDetachedReleaseWorkspace,
+  removeEvidence = true,
 } = {}) {
-  const trusted = validateEvidence(evidence ?? JSON.parse(readFileSync(evidencePath, 'utf8')));
+  const trusted = validateReleaseEvidence(evidence ?? readEvidenceFile(evidencePath));
   removeWorkspace({
     operatorRoot: trusted.operator_root,
     commonDir: resolve(
@@ -233,7 +265,20 @@ export function cleanupReleaseWorkspace({
     path: trusted.workspace_root,
     commit: trusted.commit,
     runId: trusted.run_id,
+    token: trusted.workspace_token,
   });
+  if (removeEvidence) {
+    const path = resolve(trusted.evidence_path);
+    const expectedPath = resolve(evidencePathFor(trusted.operator_root, gitCommand));
+    if (path !== expectedPath) throw new Error('refusing to remove unexpected release evidence');
+    if (existsSync(path)) {
+      const stat = lstatSync(path);
+      if (!stat.isFile() || stat.isSymbolicLink()) {
+        throw new Error('refusing to remove replaced release evidence');
+      }
+      rmSync(path);
+    }
+  }
 }
 
 function main() {

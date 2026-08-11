@@ -13,7 +13,7 @@ import {
   statfsSync,
   writeFileSync,
 } from 'node:fs';
-import { basename, resolve, join, relative, sep } from 'node:path';
+import { basename, isAbsolute, resolve, join, relative, sep } from 'node:path';
 
 import {
   LINUX_ARM64_VERIFIER_IMAGE,
@@ -22,7 +22,7 @@ import {
   readArtifactEvidence,
   releaseVersionFromTag,
 } from './lib/release-artifacts.mjs';
-import { verifyReleaseProvenance } from './release-preflight.mjs';
+import { readReleaseEvidence, verifyReleaseProvenance } from './release-preflight.mjs';
 import { isMainModule } from './lib/main-entry.mjs';
 
 const MINIMUM_FREE_BYTES = 12 * 1024 ** 3;
@@ -517,6 +517,22 @@ export function runLocalLinuxRelease({
   });
 }
 
+export function resolveLinuxReleaseEvidence({
+  env = process.env,
+  readEvidence = (path) => readReleaseEvidence({ evidencePath: path }),
+  verifyEvidence = (evidence) => verifyReleaseProvenance({ evidence }),
+} = {}) {
+  const path = env.AGENTICO_RELEASE_EVIDENCE_FILE;
+  if (typeof path !== 'string' || !isAbsolute(path)) {
+    throw new Error('AGENTICO_RELEASE_EVIDENCE_FILE must be an absolute validated path');
+  }
+  const evidence = readEvidence(path);
+  if (evidence.evidence_path !== path) {
+    throw new Error('Linux release evidence path does not match captured preflight evidence');
+  }
+  return verifyEvidence(evidence);
+}
+
 function main() {
   const printPlan = process.argv.slice(2).includes('--print-plan');
   if (printPlan) {
@@ -537,10 +553,10 @@ function main() {
     console.log(JSON.stringify(plan, null, 2));
     return;
   }
-  const evidence = verifyReleaseProvenance();
+  const evidence = resolveLinuxReleaseEvidence();
   const result = runLocalLinuxRelease({
     volumePrefix: `${VOLUME_PREFIX}-${evidence.run_id.replace(/[^a-z0-9]/gi, '')}`,
-    verifyProvenance: () => verifyReleaseProvenance(),
+    verifyProvenance: () => verifyReleaseProvenance({ evidence }),
   });
   console.log(`Linux release packages verified for ${result.tag}: ${result.completed.join(', ')}`);
 }

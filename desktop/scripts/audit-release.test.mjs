@@ -163,6 +163,24 @@ release:
         ),
       ),
     ).toContain('release runner omits or reorders audited step: publish({ evidence, snapshot })');
+    expect(
+      auditReleaseRunner(
+        runner.replace(
+          "saveResume(evidence, snapshot, 'goreleaser-published');",
+          "saveResume(evidence, snapshot, 'remote-verified');",
+        ),
+      ),
+    ).toContain(
+      "release runner omits or reorders audited step: saveResume(evidence, snapshot, 'goreleaser-published')",
+    );
+    expect(
+      auditReleaseRunner(
+        runner.replace(
+          'cleanup(evidence);\n      if (clearResumeAfterCleanup) removeResume(operatorRoot);',
+          'if (clearResumeAfterCleanup) removeResume(operatorRoot);\n      cleanup(evidence);',
+        ),
+      ),
+    ).toContain('release runner must remove resume state only after detached-workspace cleanup');
   });
 
   it('collects production npm packages plus explicitly shipped renderer dev assets', () => {

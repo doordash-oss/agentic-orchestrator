@@ -112,9 +112,12 @@ updates requiring an explicit restart action. DEB installations are
 package-manager-managed: the app presents verified package-manager guidance
 and the trusted release page, rather than replacing a DEB installation itself.
 
-The detached release worktree is removed after success or failure. Captured
-tag/commit evidence remains under Git metadata for diagnosis. Recovery depends
-on where the failure occurred:
+Before GoReleaser publishes, the detached release worktree and its temporary
+evidence are removed after either success or failure. After GoReleaser
+publishes, the runner durably retains that workspace, evidence, immutable
+publication snapshot, and a small resume record under Git metadata until the
+remote-byte and desktop-cask gates succeed. Recovery depends on where the
+failure occurred:
 
 - **Before remote-tag reservation.** No remote state exists. Fix the local
   Docker, credential, package, receipt, or inventory condition and rerun the
@@ -127,10 +130,12 @@ on where the failure occurred:
 - **Transient verifier failure after GoReleaser.** Authentication, DNS, or
   network failure while checking GitHub does _not_ prove that the release is
   partial. Do not delete anything. Restore credentials/connectivity and rerun
-  the complete `make release` against the unchanged tag; do not supply tag or
-  commit overrides. If the existing release prevents a safe automated retry,
-  inspect its tag, asset digests, manifest, and signature before changing any
-  remote state.
+  the same `make release` against the unchanged tag. The audited runner detects
+  its retained resume record, revalidates the operator tag and commit, detached
+  workspace identity, evidence, publication snapshot, receipts, and signed
+  manifest, then resumes at remote verification without rebuilding or invoking
+  GoReleaser again. Any mismatch fails closed for inspection; do not supply tag
+  or commit overrides or change remote state merely to force a retry.
 - **Confirmed repository/configuration or remote-state defect.** Only a
   verified wrong commit, draft/prerelease state, missing/incomplete asset,
   digest mismatch, bad signature, or equivalent defect needs destructive
@@ -146,9 +151,11 @@ on where the failure occurred:
 The final `agentico-desktop` cask publication is different: if the signed
 manifest and remote publication verification passed and only
 `node desktop/scripts/publish-desktop-cask.mjs` fails, do not remove the
-already-complete release or CLI cask. Inspect the tap failure and retry from
-the unchanged tag through the audited release workflow so the DMG digest is
-again derived from verified publication bytes.
+already-complete release or CLI cask. Inspect the tap failure and rerun the
+same `make release` from the unchanged tag. The retained, validated resume
+record skips builds, GoReleaser, and the already-complete remote-byte gate and
+retries only the desktop cask. Successful cleanup removes the detached
+workspace, its evidence, and the resume record.
 
 ### Release signing key
 

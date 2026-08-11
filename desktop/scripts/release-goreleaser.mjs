@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { statSync } from 'node:fs';
 import { isMainModule } from './lib/main-entry.mjs';
 import { verifyReleaseProvenance } from './release-preflight.mjs';
-import { cleanGoEnvironment, readPublicationSnapshot } from './release-workspace.mjs';
+import { goreleaserEnvironment, readPublicationSnapshot } from './release-workspace.mjs';
 
 export function goreleaserArguments(notesFile) {
   const args = ['release', '--clean'];
@@ -27,6 +27,7 @@ export function runGoreleaserRelease({
   verifyEvidence = (value) => verifyReleaseProvenance({ evidence: value }),
   verifySnapshot = (workspaceRoot) => readPublicationSnapshot(workspaceRoot),
   execute = (command, args, options) => execFileSync(command, args, options),
+  env = process.env,
 } = {}) {
   if (notesFile !== undefined && notesFile !== '' && !isFile(notesFile)) {
     throw new Error(`release notes file does not exist or is not a regular file: ${notesFile}`);
@@ -40,7 +41,7 @@ export function runGoreleaserRelease({
   execute('goreleaser', args, {
     cwd: trusted.workspace_root,
     stdio: 'inherit',
-    env: cleanGoEnvironment(process.env),
+    env: goreleaserEnvironment(env, trusted.tag),
   });
   verifySnapshot(trusted.workspace_root);
   return args;

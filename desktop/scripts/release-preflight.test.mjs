@@ -1,11 +1,23 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { runReleasePreflight, verifyReleaseProvenance } from './release-preflight.mjs';
+import {
+  cleanupReleaseWorkspace,
+  runReleasePreflight,
+  verifyReleaseProvenance,
+} from './release-preflight.mjs';
 
 const GiB = 1024 ** 3;
 const roots = [];
@@ -37,7 +49,15 @@ function fixture(overrides = {}) {
     createWorkspace: ({ commit, runId }) => {
       const path = join(root, `workspace-${runId}`);
       mkdirSync(path);
-      return { operatorRoot: root, commonDir: join(root, '.git'), path, commit, runId };
+      const stat = statSync(path);
+      return {
+        operatorRoot: root,
+        commonDir: join(root, '.git'),
+        path,
+        commit,
+        runId,
+        token: { path, kind: 'directory', dev: stat.dev, ino: stat.ino },
+      };
     },
     state,
     ...overrides,
@@ -74,6 +94,7 @@ describe('release preflight', () => {
       commit: 'a'.repeat(40),
       operator_root: options.cwd,
       workspace_root: expect.stringContaining('workspace-'),
+      evidence_path: options.evidencePath,
     });
     expect(options.state.docker).toHaveLength(2);
     expect(JSON.parse(readFileSync(options.evidencePath, 'utf8'))).toMatchObject(evidence);
@@ -105,5 +126,26 @@ describe('release preflight', () => {
     expect(() => verifyReleaseProvenance({ ...options, evidence: { tag: 'v0.150.0' } })).toThrow(
       /unsupported schema/,
     );
+  });
+
+  it('removes standalone evidence after its temporary workspace is cleaned', () => {
+    const options = fixture();
+    const evidence = runReleasePreflight(options);
+    expect(existsSync(options.evidencePath)).toBe(true);
+    cleanupReleaseWorkspace({
+      ...options,
+      evidence,
+      removeWorkspace: () => {},
+      git: (_cwd, ...args) => {
+        if (args.join(' ') === 'rev-parse --path-format=absolute --git-common-dir') {
+          return join(options.cwd, '.git');
+        }
+        if (args.join(' ') === 'rev-parse --git-path agentico-release-preflight.json') {
+          return options.evidencePath;
+        }
+        throw new Error(`unexpected cleanup Git command: ${args.join(' ')}`);
+      },
+    });
+    expect(existsSync(options.evidencePath)).toBe(false);
   });
 });

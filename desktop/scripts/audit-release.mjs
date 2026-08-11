@@ -125,8 +125,10 @@ export function auditReleaseRunner(runnerText) {
     'verifyProvenance(evidence)',
     'await reserveTag({ evidence })',
     'publish({ evidence, snapshot })',
+    "saveResume(evidence, snapshot, 'goreleaser-published')",
     'verifyManifest({ evidence, snapshot })',
     'await verifyRemote({ evidence, snapshot })',
+    "saveResume(evidence, snapshot, 'remote-verified')",
     'publishCask({ evidence, snapshot })',
   ];
   let cursor = -1;
@@ -135,8 +137,12 @@ export function auditReleaseRunner(runnerText) {
     if (index === -1) return [`release runner omits or reorders audited step: ${step}`];
     cursor = index;
   }
-  const cleanup = body.indexOf('if (evidence !== undefined) cleanup(evidence)', cursor);
+  const cleanup = body.indexOf('cleanup(evidence)', cursor);
   if (cleanup === -1) return ['release runner must clean the detached workspace in finally'];
+  const removeResume = body.indexOf('removeResume(operatorRoot)', cleanup + 1);
+  if (removeResume === -1) {
+    return ['release runner must remove resume state only after detached-workspace cleanup'];
+  }
   return [];
 }
 

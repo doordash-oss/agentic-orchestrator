@@ -8,6 +8,7 @@ import {
   readFileSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -80,6 +81,40 @@ describe('detached release workspace', () => {
         X: 'ok',
       }),
     ).toMatchObject({ GOWORK: 'off', GOFLAGS: '-mod=readonly', X: 'ok' });
+  });
+
+  it('refuses cleanup after workspace replacement without touching a symlink victim', () => {
+    const fixture = repositoryFixture();
+    const workspace = createDetachedReleaseWorkspace({
+      operatorRoot: fixture.root,
+      commit: fixture.commit,
+      runId: '22222222-2222-4222-8222-222222222222',
+    });
+    git(fixture.root, 'worktree', 'remove', '--force', workspace.path);
+    const victim = join(fixture.root, 'victim');
+    mkdirSync(victim);
+    writeFileSync(join(victim, 'keep'), 'unchanged');
+    chmodSync(victim, 0o755);
+    symlinkSync(victim, workspace.path);
+    expect(() => removeDetachedReleaseWorkspace(workspace)).toThrow(/changed after validation/);
+    expect(readFileSync(join(victim, 'keep'), 'utf8')).toBe('unchanged');
+    expect(statSync(victim).mode & 0o777).toBe(0o755);
+  });
+
+  it('does not chmod a symlink substituted for the read-only publication directory', () => {
+    const fixture = repositoryFixture();
+    const workspace = createDetachedReleaseWorkspace({
+      operatorRoot: fixture.root,
+      commit: fixture.commit,
+      runId: '33333333-3333-4333-8333-333333333333',
+    });
+    const victim = join(fixture.root, 'publication-victim');
+    mkdirSync(victim);
+    chmodSync(victim, 0o755);
+    mkdirSync(join(workspace.path, 'desktop', 'dist'), { recursive: true });
+    symlinkSync(victim, join(workspace.path, 'desktop', 'dist', 'publication'));
+    removeDetachedReleaseWorkspace(workspace);
+    expect(statSync(victim).mode & 0o777).toBe(0o755);
   });
 });
 

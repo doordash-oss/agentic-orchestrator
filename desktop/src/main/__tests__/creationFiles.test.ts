@@ -30,15 +30,12 @@ function makeService(overrides: Partial<CreationFilesServiceDeps> = {}) {
 describe('CreationFilesService remote-connection guards', () => {
   const remote = () => 'remote' as const;
 
-  it('refuses the native picker remotely before any dialog or filesystem work', async () => {
+  it('still runs the native picker remotely (upload staging happens via the upload channel)', async () => {
     const { deps, service } = makeService({ locality: remote });
-    await expect(service.pickFiles('image')).rejects.toMatchObject({
-      safe: {
-        code: 'E_REQUIRES_LOCAL_SERVER',
-        message: expect.stringContaining('requires a local server'),
-      },
+    await expect(service.pickFiles('image')).resolves.toStrictEqual({
+      paths: ['/picked/a.png', '/picked/b.png'],
     });
-    expect(deps.pickFiles).not.toHaveBeenCalled();
+    expect(deps.pickFiles).toHaveBeenCalledWith('image');
   });
 
   it('refuses the repository file search remotely before any walk', async () => {

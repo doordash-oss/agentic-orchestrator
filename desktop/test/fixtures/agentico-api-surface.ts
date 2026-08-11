@@ -108,6 +108,7 @@ export const EXPECTED_API_SURFACE: readonly string[] = [
   'updateFeatureConfig',
   'updateSettings',
   'updateWorkspaceDefaults',
+  'uploadCreationFiles',
   'validateReview',
   'windowPurpose',
   'writeClipboardText',

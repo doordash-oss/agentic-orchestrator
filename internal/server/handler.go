@@ -59,6 +59,10 @@ type apiHandler struct {
 	sessions              ports.SessionManager
 	broker                *eventBroker
 	mutations             MutationTarget
+	// uploads owns the octet-stream upload staging area under the runtime
+	// state dir; nil when the runtime identity has no state dir (tests that
+	// never stage uploads).
+	uploads               *uploadStore
 	persistProviderModels func(llm.LLMProvider, []llm.ModelInfo) error
 	disableHostValidation bool
 	runtimePolicy         string
@@ -119,6 +123,7 @@ func newAPIHandler(opts HandlerOptions) *apiHandler {
 		sessions:              opts.Sessions,
 		broker:                newEventBroker(opts.Events, opts.DomainEvents),
 		mutations:             opts.Mutations,
+		uploads:               newUploadStore(opts.Runtime.StateDir),
 		persistProviderModels: opts.PersistProviderModelCatalog,
 		disableHostValidation: opts.DisableHostValidation,
 		initGitRepository:     opts.InitGitRepository,
@@ -156,6 +161,7 @@ const (
 	apiPathRecoveryActions  = "/api/v1/recovery/actions"
 	apiPathRecoveryLogs     = "/api/v1/recovery/logs"
 	apiPathEvents           = "/api/v1/events"
+	apiPathUploads          = "/api/v1/uploads"
 )
 
 // routeSegmentConfig is the feature sub-route segment for the per-feature
@@ -195,6 +201,7 @@ var topLevelServerRoutes = []topLevelRoute{
 	{apiPathRecoveryActions, func(h *apiHandler) http.HandlerFunc { return h.handleRecoveryActionRoute }},
 	{apiPathRecoveryLogs, func(h *apiHandler) http.HandlerFunc { return h.handleRecoveryLogRoute }},
 	{apiPathEvents, func(h *apiHandler) http.HandlerFunc { return methodHandler(h.handleEvents) }},
+	{apiPathUploads, func(h *apiHandler) http.HandlerFunc { return h.handleUploadsRoute }},
 }
 
 func (h *apiHandler) routes() http.Handler {

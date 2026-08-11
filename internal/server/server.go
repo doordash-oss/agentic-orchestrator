@@ -92,11 +92,17 @@ func Start(ctx context.Context, opts Options) (*RuntimeServer, error) {
 		// would cap the whole connection lifetime, killing long-lived SSE
 		// streams (/api/v1/events, /sessions/{id}/output/stream). Mutation
 		// bodies are still bounded — decodeMutationJSON wraps r.Body in
-		// http.MaxBytesReader(MaxMutationBodyBytes) — so an
-		// unbounded-body-read DoS isn't reintroduced by this tradeoff.
+		// http.MaxBytesReader(MaxMutationBodyBytes) and the upload route caps
+		// per kind via http.MaxBytesReader — so an unbounded-body-read DoS
+		// isn't reintroduced by this tradeoff.
 		ReadHeaderTimeout: 5 * time.Second,
 		WriteTimeout:      0,
 		IdleTimeout:       30 * time.Second,
+	}
+	if handler.uploads != nil {
+		// Reap orphaned staged uploads: once at startup, then hourly until the
+		// server lifetime context ends.
+		go handler.uploads.sweepLoop(ctx)
 	}
 	s := &RuntimeServer{
 		baseURL:   baseURL,

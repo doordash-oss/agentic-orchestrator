@@ -4,10 +4,8 @@ import { useState } from 'react';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { ConnectionState, RepositoryFileRef } from '../../../shared/ipc';
 import { installAgenticoMock } from '../test/agenticoMock';
-import {
-  ATTACHMENT_REQUIRES_LOCAL_SERVER,
-  FILE_SEARCH_REQUIRES_LOCAL_SERVER,
-} from '../localServerCopy';
+import { FILE_SEARCH_REQUIRES_LOCAL_SERVER } from '../localServerCopy';
+import { STAGED_ON_OTHER_SERVER, type ComposerUploadItem } from './stagedItems';
 import { DescriptionComposer } from './DescriptionComposer';
 
 afterEach(cleanup);
@@ -26,6 +24,7 @@ const REMOTE_CONNECTION: ConnectionState = {
   detail: 'Connected.',
   ownership: 'external',
   kind: 'remote',
+  serverKey: 'server-key-1',
 };
 
 /** A controlled host so staged images/attachments/references render as chips. */
@@ -33,6 +32,8 @@ function Harness() {
   const [value, setValue] = useState('');
   const [images, setImages] = useState<readonly string[]>([]);
   const [attachments, setAttachments] = useState<readonly string[]>([]);
+  const [imageUploads, setImageUploads] = useState<readonly ComposerUploadItem[]>([]);
+  const [attachmentUploads, setAttachmentUploads] = useState<readonly ComposerUploadItem[]>([]);
   const [files, setFiles] = useState<readonly RepositoryFileRef[]>([]);
   return (
     <DescriptionComposer
@@ -43,10 +44,14 @@ function Harness() {
       repoKeys={['repo-a']}
       images={images}
       attachments={attachments}
+      imageUploads={imageUploads}
+      attachmentUploads={attachmentUploads}
       repositoryFiles={files}
       onValueChange={setValue}
       onImagesChange={(update) => setImages(update)}
       onAttachmentsChange={(update) => setAttachments(update)}
+      onImageUploadsChange={(update) => setImageUploads(update)}
+      onAttachmentUploadsChange={(update) => setAttachmentUploads(update)}
       onRepositoryFilesChange={(update) => setFiles(update)}
       onError={() => undefined}
     />
@@ -57,38 +62,125 @@ const IMAGE_FILE = () => new File(['image'], 'image.png', { type: 'image/png' })
 const DOC_FILE = () => new File(['doc'], 'notes.pdf', { type: 'application/pdf' });
 
 describe('DescriptionComposer on a remote server', () => {
-  it('disables the attach picker with the shared explanation and swaps the hint', async () => {
-    installAgenticoMock({ connection: REMOTE_CONNECTION });
+  it('keeps the attach affordances enabled and stages picks as uploads', async () => {
+    const mock = installAgenticoMock({ connection: REMOTE_CONNECTION });
+    mock.api.pickCreationFiles.mockResolvedValue({ paths: ['/shots/one.png'] });
     render(<Harness />);
     const user = userEvent.setup();
 
     const attach = await screen.findByRole('button', { name: 'Attach files or photos' });
-    expect(attach).toBeDisabled();
-    expect(attach).toHaveAttribute('title', ATTACHMENT_REQUIRES_LOCAL_SERVER);
-    expect(screen.getByText(ATTACHMENT_REQUIRES_LOCAL_SERVER)).toBeVisible();
+    expect(attach).toBeEnabled();
+    expect(screen.getByText(/files upload to the server\./)).toBeVisible();
 
     await user.click(attach);
-    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+    await user.click(screen.getByRole('menuitem', { name: 'Add photos' }));
+
+    expect(mock.api.pickCreationFiles).toHaveBeenCalledWith('image');
+    expect(mock.api.uploadCreationFiles).toHaveBeenCalledWith('image', ['/shots/one.png']);
+    expect(await screen.findByText(/one\.png/)).toBeVisible();
+    // Nothing local is staged as a path remotely.
+    expect(mock.api.uploadCreationFiles).toHaveBeenCalledTimes(1);
   });
 
-  it('intercepts pasted files with the explanation and stages nothing', async () => {
+  it('shows per-item uploading state while the batch is in flight', async () => {
     const mock = installAgenticoMock({ connection: REMOTE_CONNECTION });
+    let release: (result: unknown) => void = () => undefined;
+    mock.api.uploadCreationFiles.mockImplementation(
+      () => new Promise((resolve) => (release = resolve)),
+    );
+    mock.api.importDroppedCreationFiles.mockImplementation(() => ({
+      paths: ['/shots/dropped.png'],
+    }));
+    render(<Harness />);
+    const textarea = await screen.findByLabelText('Description');
+
+    fireEvent.drop(textarea.closest('.composer')!, { dataTransfer: { files: [IMAGE_FILE()] } });
+
+    expect(await screen.findByText('Uploading…')).toBeVisible();
+    expect(mock.api.uploadCreationFiles).toHaveBeenCalledWith('image', ['/shots/dropped.png']);
+
+    await act(async () => {
+      release({
+        results: [
+          {
+            ok: true,
+            name: 'dropped.png',
+            upload: {
+              reference: 'ref-dropped',
+              kind: 'image',
+              name: 'dropped.png',
+              size: 4,
+              serverKey: 'server-key-1',
+            },
+          },
+        ],
+      });
+    });
+    expect(screen.queryByText('Uploading…')).not.toBeInTheDocument();
+    expect(screen.getByText(/dropped\.png/)).toBeVisible();
+  });
+
+  it('marks failed items with the message and a retry/remove pair', async () => {
+    const mock = installAgenticoMock({ connection: REMOTE_CONNECTION });
+    mock.api.pickCreationFiles.mockResolvedValue({ paths: ['/shots/big.png'] });
+    mock.api.uploadCreationFiles.mockResolvedValue({
+      results: [
+        {
+          ok: false,
+          name: 'big.png',
+          error: {
+            code: 'request_too_large',
+            message: 'File exceeds limit.',
+            remediation: 'Choose a smaller file.',
+          },
+        },
+      ],
+    });
+    render(<Harness />);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Attach files or photos' }));
+    await user.click(screen.getByRole('menuitem', { name: 'Add photos' }));
+
+    const failure = await screen.findByText(/File exceeds limit\./);
+    expect(failure).toBeVisible();
+    expect(await screen.findByRole('button', { name: 'Retry big.png' })).toBeVisible();
+
+    // The error path is recoverable without re-picking: retry re-uploads the source.
+    mock.api.uploadCreationFiles.mockImplementation(() => new Promise(() => undefined));
+    await user.click(screen.getByRole('button', { name: 'Retry big.png' }));
+    expect(mock.api.uploadCreationFiles).toHaveBeenLastCalledWith('image', ['/shots/big.png']);
+    expect(await screen.findByText('Uploading…')).toBeVisible();
+
+    await user.click(screen.getByRole('button', { name: 'Remove big.png' }));
+    expect(screen.queryByText('big.png')).not.toBeInTheDocument();
+  });
+
+  it('imports pasted files as uploads and stages path-less clipboard bitmaps', async () => {
+    const mock = installAgenticoMock({ connection: REMOTE_CONNECTION });
+    mock.api.importDroppedCreationFiles.mockImplementation((kind: string) => ({
+      paths: kind === 'image' ? ['/safe/pasted.png'] : ['/safe/notes.pdf'],
+    }));
+    mock.api.readClipboardImage.mockResolvedValue({ paths: ['/tmp/clipboard-image.png'] });
     render(<Harness />);
     const textarea = await screen.findByLabelText('Description');
 
     fireEvent.paste(textarea, {
-      clipboardData: {
-        files: [IMAGE_FILE(), DOC_FILE()],
-        items: [{ type: 'image/png' }],
-      },
+      clipboardData: { files: [IMAGE_FILE(), DOC_FILE()], items: [{ type: 'image/png' }] },
     });
 
-    // The permanently visible hint carries the same copy; the transient
-    // intercept notice is the live region.
-    expect(screen.getByRole('status')).toHaveTextContent(ATTACHMENT_REQUIRES_LOCAL_SERVER);
-    expect(mock.api.importDroppedCreationFiles).not.toHaveBeenCalled();
-    expect(mock.api.readClipboardImage).not.toHaveBeenCalled();
-    expect(screen.queryByLabelText('Attached files')).not.toBeInTheDocument();
+    expect(await screen.findByText(/pasted\.png/)).toBeVisible();
+    expect(screen.getByText(/notes\.pdf/)).toBeVisible();
+    expect(mock.api.uploadCreationFiles).toHaveBeenCalledWith('image', ['/safe/pasted.png']);
+    expect(mock.api.uploadCreationFiles).toHaveBeenCalledWith('attachment', ['/safe/notes.pdf']);
+
+    mock.api.importDroppedCreationFiles.mockImplementation(() => ({ paths: [] }));
+    fireEvent.paste(textarea, {
+      clipboardData: { files: [IMAGE_FILE()], items: [{ type: 'image/png' }] },
+    });
+    expect(await screen.findByText(/clipboard-image\.png/)).toBeVisible();
+    expect(mock.api.uploadCreationFiles).toHaveBeenCalledWith('image', [
+      '/tmp/clipboard-image.png',
+    ]);
   });
 
   it('leaves plain-text pastes untouched', async () => {
@@ -103,19 +195,30 @@ describe('DescriptionComposer on a remote server', () => {
     expect(screen.queryByRole('status')).not.toBeInTheDocument();
     expect(mock.api.importDroppedCreationFiles).not.toHaveBeenCalled();
     expect(mock.api.readClipboardImage).not.toHaveBeenCalled();
+    expect(mock.api.uploadCreationFiles).not.toHaveBeenCalled();
   });
 
-  it('intercepts dropped files with the explanation and stages nothing', async () => {
+  it('badges uploads staged on another server after a switch', async () => {
     const mock = installAgenticoMock({ connection: REMOTE_CONNECTION });
+    mock.api.pickCreationFiles.mockResolvedValue({ paths: ['/shots/one.png'] });
     render(<Harness />);
-    const textarea = await screen.findByLabelText('Description');
-    const composer = textarea.closest('.composer')!;
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Attach files or photos' }));
+    await user.click(screen.getByRole('menuitem', { name: 'Add photos' }));
+    expect(await screen.findByText(/one\.png/)).toBeVisible();
+    expect(screen.queryByText(STAGED_ON_OTHER_SERVER)).not.toBeInTheDocument();
 
-    fireEvent.drop(composer, { dataTransfer: { files: [IMAGE_FILE()] } });
+    act(() =>
+      mock.emitConnection({
+        ...REMOTE_CONNECTION,
+        serverKey: 'server-key-2',
+      }),
+    );
 
-    expect(screen.getByRole('status')).toHaveTextContent(ATTACHMENT_REQUIRES_LOCAL_SERVER);
-    expect(mock.api.importDroppedCreationFiles).not.toHaveBeenCalled();
-    expect(screen.queryByLabelText('Attached files')).not.toBeInTheDocument();
+    expect(await screen.findByText(STAGED_ON_OTHER_SERVER)).toBeVisible();
+
+    act(() => mock.emitConnection(REMOTE_CONNECTION));
+    expect(screen.queryByText(STAGED_ON_OTHER_SERVER)).not.toBeInTheDocument();
   });
 
   it('keeps opening the @-mention popover but explains instead of searching', async () => {
@@ -140,19 +243,18 @@ describe('DescriptionComposer on a remote server', () => {
     expect(mock.api.cancelCreationFileSearch).not.toHaveBeenCalled();
   });
 
-  it('re-enables every affordance live when the server switches back to local', async () => {
+  it('switches the staging strategy live with the connection kind', async () => {
     const mock = installAgenticoMock({ connection: REMOTE_CONNECTION });
     mock.api.pickCreationFiles.mockResolvedValue({ paths: ['/safe/one.png'] });
     render(<Harness />);
     const user = userEvent.setup();
 
-    expect(await screen.findByRole('button', { name: 'Attach files or photos' })).toBeDisabled();
+    expect(await screen.findByText(/files upload to the server\./)).toBeVisible();
 
     act(() => mock.emitConnection(LOCAL_CONNECTION));
 
     const attach = screen.getByRole('button', { name: 'Attach files or photos' });
     expect(attach).toBeEnabled();
-    expect(attach).not.toHaveAttribute('title');
     expect(
       screen.getByText('Paste or drop images and documents anywhere in the description.'),
     ).toBeVisible();
@@ -160,6 +262,8 @@ describe('DescriptionComposer on a remote server', () => {
     await user.click(attach);
     await user.click(screen.getByRole('menuitem', { name: 'Add photos' }));
     expect(mock.api.pickCreationFiles).toHaveBeenCalledWith('image');
+    // Locally the pick stages a path directly — no upload round trip.
+    expect(mock.api.uploadCreationFiles).not.toHaveBeenCalled();
     expect(await screen.findByText(/one\.png/)).toBeVisible();
   });
 });
@@ -182,7 +286,7 @@ describe('DescriptionComposer on a local server', () => {
 
     expect(await screen.findByText(/one\.png/)).toBeVisible();
     expect(screen.getByText(/spec\.pdf/)).toBeVisible();
-    expect(screen.queryByText(ATTACHMENT_REQUIRES_LOCAL_SERVER)).not.toBeInTheDocument();
+    expect(mock.api.uploadCreationFiles).not.toHaveBeenCalled();
   });
 
   it('imports pasted files and materializes path-less clipboard bitmaps', async () => {
@@ -250,19 +354,17 @@ describe('DescriptionComposer on a local server', () => {
 });
 
 describe('DescriptionComposer locality gating matrix', () => {
-  it('gates only on an authoritative remote connection; connecting states behave locally', async () => {
+  it('keeps attach affordances enabled under every connection; only mention search stays local-only', async () => {
     const mock = installAgenticoMock();
-    expect(mock).toBeDefined();
     render(<Harness />);
 
-    // The mock default connection is mid-resolution, not ready: nothing gates.
+    // The mock default connection is mid-resolution (local-permissive).
     const attach = await screen.findByRole('button', { name: 'Attach files or photos' });
     expect(attach).toBeEnabled();
 
-    act(() => mock.emitConnection(REMOTE_CONNECTION));
-    expect(attach).toBeDisabled();
-
-    act(() => mock.emitConnection(LOCAL_CONNECTION));
-    expect(attach).toBeEnabled();
+    for (const connection of [REMOTE_CONNECTION, LOCAL_CONNECTION]) {
+      act(() => mock.emitConnection(connection));
+      expect(screen.getByRole('button', { name: 'Attach files or photos' })).toBeEnabled();
+    }
   });
 });

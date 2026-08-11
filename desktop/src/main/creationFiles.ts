@@ -35,8 +35,9 @@ export class CreationFilesService {
   }
 
   async pickFiles(kind: CreationFileKind): Promise<{ paths: string[] }> {
-    // Local-path refusal precedes the native dialog entirely.
-    assertLocalConnection(this.locality);
+    // The native dialog runs under every connection kind: locally the paths
+    // are submitted as-is; remotely the renderer stages them through the
+    // upload channel. Only the repository walks below stay local-only.
     const limit = kind === 'image' ? CREATION_IMAGE_LIMIT : CREATION_ATTACHMENT_LIMIT;
     const picked = await this.deps.pickFiles(kind);
     return {

@@ -162,25 +162,35 @@ describe('SessionService singleton chat mutations', () => {
     });
   });
 
-  it('drops staged local image paths while remotely connected and logs the strip', async () => {
+  it('refuses staged local image paths while remotely connected (fail, never leak)', async () => {
     const apiRequest = vi.fn(() =>
       Promise.resolve({
         status: 200,
         body: { api_version: 'v1', session_id: '__chat__', result: 'started' },
       }),
     );
-    const log = vi.fn();
-    const service = new SessionService(transport({ apiRequest }), undefined, () => 'remote', log);
+    const service = new SessionService(transport({ apiRequest }), undefined, () => 'remote');
 
     await expect(
       service.startChat({ message: 'What is running?', images: ['/tmp/clipboard.png'] }),
-    ).resolves.toStrictEqual({ sessionId: '__chat__', result: 'started' });
+    ).rejects.toMatchObject({ safe: { code: 'E_REQUIRES_LOCAL_SERVER' } });
+    expect(apiRequest).not.toHaveBeenCalled();
+  });
+
+  it('forwards staged upload references remotely as image_uploads', async () => {
+    const apiRequest = vi.fn(() =>
+      Promise.resolve({
+        status: 200,
+        body: { api_version: 'v1', session_id: '__chat__', result: 'started' },
+      }),
+    );
+    const service = new SessionService(transport({ apiRequest }), undefined, () => 'remote');
+
+    await service.startChat({ message: 'Look at this', imageUploads: ['ref-image-1'] });
     expect(apiRequest).toHaveBeenCalledWith('/api/v1/prompts/chat/start', {
       method: 'POST',
-      body: { message: 'What is running?', images: [] },
+      body: { message: 'Look at this', images: [], image_uploads: ['ref-image-1'] },
     });
-    expect(log).toHaveBeenCalledTimes(1);
-    expect(String(log.mock.calls[0]?.[0])).toContain('stripped 1');
   });
 
   it('sends chat images unchanged while locally connected', async () => {
@@ -190,28 +200,28 @@ describe('SessionService singleton chat mutations', () => {
         body: { api_version: 'v1', session_id: '__chat__', result: 'started' },
       }),
     );
-    const log = vi.fn();
-    const service = new SessionService(transport({ apiRequest }), undefined, () => 'local', log);
+    const service = new SessionService(transport({ apiRequest }), undefined, () => 'local');
 
     await service.startChat({ message: 'here', images: ['/tmp/clipboard.png'] });
     expect(apiRequest).toHaveBeenCalledWith('/api/v1/prompts/chat/start', {
       method: 'POST',
       body: { message: 'here', images: ['/tmp/clipboard.png'] },
     });
-    expect(log).not.toHaveBeenCalled();
   });
 
-  it('does not log a strip remotely when nothing was staged', async () => {
+  it('never emits image_uploads locally', async () => {
     const apiRequest = vi.fn(() =>
       Promise.resolve({
         status: 200,
         body: { api_version: 'v1', session_id: '__chat__', result: 'started' },
       }),
     );
-    const log = vi.fn();
-    const service = new SessionService(transport({ apiRequest }), undefined, () => 'remote', log);
+    const service = new SessionService(transport({ apiRequest }), undefined, () => 'local');
     await service.startChat({ message: 'no images' });
-    expect(log).not.toHaveBeenCalled();
+    expect(apiRequest).toHaveBeenCalledWith('/api/v1/prompts/chat/start', {
+      method: 'POST',
+      body: { message: 'no images', images: [] },
+    });
   });
 });
 

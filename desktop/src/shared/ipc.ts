@@ -71,6 +71,7 @@ export const IPC_CHANNELS = {
   sessionsOutputCancel: 'agentico:sessions:output-cancel',
   creationDefaults: 'agentico:creation:defaults',
   creationPickFiles: 'agentico:creation:pick-files',
+  creationUploadFiles: 'agentico:creation:upload-files',
   clipboardReadImage: 'agentico:clipboard:read-image',
   creationSearchFiles: 'agentico:creation:search-files',
   creationCancelFileSearch: 'agentico:creation:cancel-file-search',
@@ -1977,11 +1978,16 @@ export type AttentionActionResult = z.output<typeof AttentionActionResultSchema>
 
 // --- Singleton AMA chat -----------------------------------------------------
 
+/** An opaque, single-use staged-upload handle the server returned. */
+export const UploadReferenceSchema = z.string().min(1).max(128);
+
 export const CHAT_SESSION_ID = '__chat__';
 
 export const ChatStartRequestSchema = z.strictObject({
   message: AttentionTextSchema.refine((value) => value.trim() !== ''),
   images: z.array(AbsolutePathSchema).max(12).optional(),
+  /** Server-staged image upload references (remote connections; images only). */
+  imageUploads: z.array(UploadReferenceSchema).max(12).optional(),
 });
 export type ChatStartRequest = z.output<typeof ChatStartRequestSchema>;
 
@@ -2256,6 +2262,13 @@ export const CreateFeatureInputSchema = z.strictObject({
   /** Native-picker approved inputs; main/server revalidate before reading. */
   images: z.array(AbsolutePathSchema).max(CREATION_IMAGE_LIMIT).default([]),
   attachments: z.array(AbsolutePathSchema).max(CREATION_ATTACHMENT_LIMIT).default([]),
+  /**
+   * Server-staged upload references (remote connections). The main process
+   * forwards them as `image_uploads`/`attachment_uploads`; a remote payload
+   * carrying raw local paths in `images`/`attachments` is refused instead.
+   */
+  imageUploads: z.array(UploadReferenceSchema).max(CREATION_IMAGE_LIMIT).default([]),
+  attachmentUploads: z.array(UploadReferenceSchema).max(CREATION_ATTACHMENT_LIMIT).default([]),
   repositoryFiles: z.array(RepositoryFileRefSchema).max(CREATION_REPOSITORY_FILE_LIMIT).default([]),
   pipeline: z.enum(['medium', 'large', 'moonshot']).default('medium'),
   riskLevel: z.enum(['low', 'medium', 'high']).default('medium'),
@@ -2308,6 +2321,9 @@ export const LaunchRefactorChildRequestSchema = z.strictObject({
   description: z.string().max(10_000).optional(),
   images: z.array(AbsolutePathSchema).max(CREATION_IMAGE_LIMIT).optional(),
   attachments: z.array(AbsolutePathSchema).max(CREATION_ATTACHMENT_LIMIT).optional(),
+  /** Server-staged upload references (remote connections); see CreateFeatureInputSchema. */
+  imageUploads: z.array(UploadReferenceSchema).max(CREATION_IMAGE_LIMIT).optional(),
+  attachmentUploads: z.array(UploadReferenceSchema).max(CREATION_ATTACHMENT_LIMIT).optional(),
   repositoryFiles: z.array(RepositoryFileRefSchema).max(CREATION_REPOSITORY_FILE_LIMIT).optional(),
   pipeline: z.enum(['medium', 'large', 'moonshot']).optional(),
   checkpoints: z
@@ -2368,6 +2384,50 @@ export const PickedCreationFilesSchema = z.strictObject({
   paths: z.array(AbsolutePathSchema).max(CREATION_ATTACHMENT_LIMIT),
 });
 export type PickedCreationFiles = z.output<typeof PickedCreationFilesSchema>;
+
+// --- Main-process upload staging (POST /api/v1/uploads) ---------------------
+
+/**
+ * A file the main process staged against the connected server. Renderer-safe:
+ * the reference is opaque and unguessable, the serverKey only scopes which
+ * connection can consume it. Never carries the local source path — retry
+ * bookkeeping (source paths) stays in renderer-local state.
+ */
+export const StagedUploadSchema = z.strictObject({
+  reference: UploadReferenceSchema,
+  kind: CreationFileKindSchema,
+  name: z.string().min(1).max(255),
+  size: z.number().int().nonnegative(),
+  /** Identity of the server the upload was staged on. */
+  serverKey: z.string().min(1).max(64),
+});
+export type StagedUpload = z.output<typeof StagedUploadSchema>;
+
+/**
+ * Per-file outcome of one batch upload request, in request order: a batch
+ * never fails wholesale, so the renderer can keep the chips that staged and
+ * mark (and retry) only the ones that did not.
+ */
+export const UploadedCreationFileSchema = z.strictObject({
+  ok: z.literal(true),
+  name: z.string().max(255),
+  upload: StagedUploadSchema,
+});
+export const FailedCreationFileUploadSchema = z.strictObject({
+  ok: z.literal(false),
+  name: z.string().max(255),
+  error: SafeErrorSchema,
+});
+export const CreationFileUploadResultSchema = z.union([
+  UploadedCreationFileSchema,
+  FailedCreationFileUploadSchema,
+]);
+export type CreationFileUploadResult = z.output<typeof CreationFileUploadResultSchema>;
+
+export const UploadCreationFilesResultSchema = z.strictObject({
+  results: z.array(CreationFileUploadResultSchema).max(CREATION_ATTACHMENT_LIMIT),
+});
+export type UploadCreationFilesResult = z.output<typeof UploadCreationFilesResultSchema>;
 export const CreationFileSearchRequestSchema = z.strictObject({
   requestId: z.string().uuid(),
   repoKeys: z.array(z.string().min(1).max(200)).min(1).max(32),
@@ -3346,6 +3406,13 @@ export const ipcContracts: Record<IpcChannel, IpcContract> = {
     request: z.tuple([CreationFileKindSchema]),
     response: PickedCreationFilesSchema,
   },
+  [IPC_CHANNELS.creationUploadFiles]: {
+    request: z.tuple([
+      CreationFileKindSchema,
+      z.array(AbsolutePathSchema).max(CREATION_ATTACHMENT_LIMIT),
+    ]),
+    response: UploadCreationFilesResultSchema,
+  },
   [IPC_CHANNELS.clipboardReadImage]: {
     request: z.tuple([]),
     response: PickedCreationFilesSchema,
@@ -3646,6 +3713,16 @@ export interface AgenticoApi {
   pickCreationFiles(kind: CreationFileKind): Promise<PickedCreationFiles>;
   readClipboardImage(): Promise<PickedCreationFiles>;
   importDroppedCreationFiles(kind: CreationFileKind, files: readonly File[]): PickedCreationFiles;
+  /**
+   * Stages local files on the connected server (POST /api/v1/uploads, one
+   * call per file), returning a per-file result in request order. Called
+   * only while the connection is remote; local connections submit paths
+   * directly and never stage uploads.
+   */
+  uploadCreationFiles(
+    kind: CreationFileKind,
+    paths: readonly string[],
+  ): Promise<UploadCreationFilesResult>;
   searchCreationFiles(request: CreationFileSearchRequest): Promise<CreationFileSearchResult>;
   cancelCreationFileSearch(requestId: string): Promise<boolean>;
   loadLocalReviewDraft(request: LocalReviewDraftLookupRequest): Promise<LocalReviewDraft | null>;

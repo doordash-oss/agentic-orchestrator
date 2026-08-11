@@ -8,7 +8,12 @@
  * separate, explicitly allowlisted operations dispatched through
  * `dispatchAction`.
  */
-import { isRequestTimeout, redactText } from '../shared/errors';
+import {
+  isRequestTimeout,
+  redactText,
+  requiresLocalServerError,
+  SafeErrorException,
+} from '../shared/errors';
 import {
   FeatureActionResponseSchema,
   ServerFeatureOperationalActionResponseSchema,
@@ -81,13 +86,11 @@ export interface FeatureServiceDeps {
   resolveRepositoryFiles(refs: readonly RepositoryFileRef[]): Promise<string[]>;
   /**
    * Gateway-owned locality of the active connection. While remote, submit
-   * boundaries defensively drop local image/attachment paths from outgoing
-   * payloads (with a notice via `log`) so a stale renderer draft can never
-   * POST a meaningless local path.
+   * boundaries refuse any locally staged image/attachment/repository-file
+   * path with E_REQUIRES_LOCAL_SERVER (a stale renderer draft must fail,
+   * never leak a local path) and forward staged upload references instead.
    */
   locality?: LocalitySource;
-  /** Redacted diagnostic sink used when local paths are stripped remotely. */
-  log?(line: string): void;
 }
 
 /** Concrete, safe next steps per structured server error code. */
@@ -112,6 +115,21 @@ const PHASE_MODEL_LABELS: ReadonlyArray<readonly [string, string]> = [
 ];
 
 const EFFORT_LEVELS = new Set<EffortLevel>(['auto', 'low', 'medium', 'high', 'xhigh', 'max']);
+
+/**
+ * Remote submit guard: while remotely connected, a locally shaped path
+ * payload (images/attachments/repository-file refs) fails with the locality
+ * error rather than leaking a path the server cannot read. Local payloads
+ * and staged upload references pass through untouched.
+ */
+function assertNoLocalPathsRemotely(remote: boolean, ...groups: readonly string[][]): void {
+  if (!remote) return;
+  for (const group of groups) {
+    if (group.length > 0) {
+      throw new SafeErrorException(requiresLocalServerError());
+    }
+  }
+}
 
 // Description generation is a synchronous utility LLM session. Its session
 // idle bounds are five minutes, so leave transport cleanup time beyond that
@@ -183,18 +201,19 @@ export class FeatureService {
     // Defense in depth: the IPC layer already validated this shape.
     const validated = validateWithSchema(input, CreateFeatureInputSchema);
     const remote = this.locality() === 'remote';
-    // Remote submit boundary: drop locally staged paths so a pre-switch
-    // draft cannot send the remote server a path it cannot read.
+    // Remote submit boundary: refuse locally staged paths outright (a
+    // pre-switch draft must fail, not leak a path the server cannot read);
+    // staged upload references travel as image_uploads/attachment_uploads.
+    assertNoLocalPathsRemotely(
+      remote,
+      validated.images,
+      validated.attachments,
+      // Repository-file references resolve to local paths; refuse remotely.
+      validated.repositoryFiles.map((ref) => `${ref.repoKey}:${ref.path}`),
+    );
     const repositoryAttachments = remote
       ? []
       : await this.deps.resolveRepositoryFiles(validated.repositoryFiles);
-    if (remote) {
-      this.noteStripped('feature create', [
-        ...validated.images,
-        ...validated.attachments,
-        ...validated.repositoryFiles.map((ref) => `${ref.repoKey}:${ref.path}`),
-      ]);
-    }
     const body = await this.api('/api/v1/features', {
       method: 'POST',
       body: {
@@ -202,8 +221,14 @@ export class FeatureService {
         ...(validated.description.trim() === '' ? {} : { description: validated.description }),
         repos: validated.repoKeys,
         ...(validated.useCurrentBranch ? { use_current_branch: true } : {}),
-        images: remote ? [] : validated.images,
-        attachments: remote ? [] : [...validated.attachments, ...repositoryAttachments],
+        images: validated.images,
+        attachments: [...validated.attachments, ...repositoryAttachments],
+        ...(remote
+          ? {
+              image_uploads: validated.imageUploads,
+              attachment_uploads: validated.attachmentUploads,
+            }
+          : {}),
         pipeline: validated.pipeline,
         risk_level: validated.riskLevel,
         inquireness: validated.inquireness,
@@ -348,20 +373,19 @@ export class FeatureService {
     request: LaunchRefactorChildRequest,
   ): Promise<LaunchRefactorChildResult> {
     const input = validateWithSchema(request, LaunchRefactorChildRequestSchema);
-    // Remote submit boundary: stage nothing local; referenced repository
-    // files are also local-path material and are dropped here.
     const remote = this.locality() === 'remote';
+    // Remote submit boundary: refuse locally staged paths outright; staged
+    // upload references travel as image_uploads/attachment_uploads.
+    assertNoLocalPathsRemotely(
+      remote,
+      input.images ?? [],
+      input.attachments ?? [],
+      (input.repositoryFiles ?? []).map((ref) => `${ref.repoKey}:${ref.path}`),
+    );
     // Referenced repository files travel as attachments, as in creation.
     const repositoryAttachments = remote
       ? []
       : await this.deps.resolveRepositoryFiles(input.repositoryFiles ?? []);
-    if (remote) {
-      this.noteStripped('refactor launch', [
-        ...(input.images ?? []),
-        ...(input.attachments ?? []),
-        ...(input.repositoryFiles ?? []).map((ref) => `${ref.repoKey}:${ref.path}`),
-      ]);
-    }
     const attachments = remote ? [] : [...(input.attachments ?? []), ...repositoryAttachments];
     const body = await this.api(`/api/v1/features/${input.parentId}/actions/refactor`, {
       method: 'POST',
@@ -370,6 +394,14 @@ export class FeatureService {
         ...(input.description === undefined ? {} : { description: input.description }),
         ...(remote || input.images === undefined ? {} : { images: input.images }),
         ...(attachments.length === 0 ? {} : { attachments }),
+        ...(remote
+          ? {
+              ...(input.imageUploads === undefined ? {} : { image_uploads: input.imageUploads }),
+              ...(input.attachmentUploads === undefined
+                ? {}
+                : { attachment_uploads: input.attachmentUploads }),
+            }
+          : {}),
         ...(input.pipeline === undefined ? {} : { pipeline: input.pipeline }),
         ...(input.checkpoints === undefined
           ? {}
@@ -485,20 +517,6 @@ export class FeatureService {
   }
 
   // --- transport helpers -----------------------------------------------------
-
-  /**
-   * Surfaces (to the redacted log) that a remote submit boundary dropped
-   * locally staged paths, so the strip is a notice, never a silent edit.
-   * Counts only — paths never ride the log line.
-   */
-  private noteStripped(boundary: string, stripped: readonly string[]): void {
-    if (stripped.length === 0) {
-      return;
-    }
-    this.deps.log?.(
-      `remote ${boundary}: stripped ${stripped.length} local image/attachment path(s) from the outgoing payload (requires a local server)`,
-    );
-  }
 
   /**
    * One authenticated request through the shared server client. The 409

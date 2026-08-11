@@ -869,6 +869,29 @@ body {
   color: var(--text);
 }
 
+/* Upload lifecycle affordances (remote connections): same chip language. */
+.ama-panel__attachment[data-state='uploading'] {
+  opacity: 0.7;
+}
+
+.ama-panel__attachment[data-state='failed'] {
+  border: 1px solid var(--bad);
+}
+
+.ama-panel__attachment-state,
+.ama-panel__attachment-badge {
+  font: 10px var(--bench-font-text);
+  color: var(--faint);
+}
+
+.ama-panel__attachment-message {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--bad);
+}
+
 /* Resize from every edge and corner, like a real macOS panel. The grips sit
  * just inside the edge — the panel clips its own overflow, so a straddling
  * target would lose half its hit area to the clip. */
@@ -5714,6 +5737,44 @@ body {
 }
 .composer__chip button:hover {
   color: var(--text);
+}
+
+/* Upload lifecycle affordances (remote connections): same chip language. */
+.composer__chip[data-state='uploading'] {
+  opacity: 0.7;
+}
+
+.composer__chip[data-state='failed'] {
+  border-color: var(--bad);
+}
+
+.composer__chip-state {
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.composer__chip-badge {
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-style: normal;
+  border: 1px solid var(--hairline);
+  border-radius: 999px;
+  padding: 0 0.4rem;
+}
+
+.composer__chip-message {
+  max-width: 16rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--bad);
+}
+
+/* The blocked-submit explanation that replaces an enabled Launch/Create. */
+.creation-wizard__blocking-note {
+  color: var(--muted);
+  font-size: 0.82rem;
+  max-width: 22rem;
 }
 .composer__mentions {
   z-index: 30;

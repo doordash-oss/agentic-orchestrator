@@ -1773,6 +1773,8 @@ function makeMockApi(
     importDroppedCreationFiles: () => ({
       paths: scene === 'ama-panel' ? [AMA_ATTACHMENT_PATH] : [],
     }),
+    // Screenshot scenes never exercise the remote upload path; keep it inert.
+    uploadCreationFiles: () => Promise.resolve({ results: [] }),
     searchCreationFiles: (request) =>
       Promise.resolve({
         requestId: request.requestId,

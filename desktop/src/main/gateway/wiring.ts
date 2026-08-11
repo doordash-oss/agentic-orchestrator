@@ -127,6 +127,7 @@ export function createRuntimeGateway(options: RuntimeGatewayWiringOptions): Wire
     selectRuntime: () => selectRuntime(options.getRuntimeSelection()),
     discovery,
     fetchJson,
+    fetchOctetPost,
     openSse,
     resolveServerBinary: () =>
       resolveServerBinary(
@@ -246,6 +247,60 @@ export async function fetchJson(
       headers,
       redirect: 'error',
       ...(payload === undefined ? {} : { body: payload }),
+    });
+    const text = await response.text();
+    assertWithinByteSize(text, requestOptions.maxResponseBytes ?? MAX_PAYLOAD_BYTES);
+    let body: unknown;
+    if (text !== '') {
+      body = JSON.parse(text);
+      assertNoPrototypePollution(body);
+    }
+    return { status: response.status, body };
+  } catch (err) {
+    if (timedOut) {
+      throw new SafeErrorException(requestTimeoutError());
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Bounded binary POST for upload staging: raw octet-stream bytes in, the
+ * same bounded/pollution-scanned JSON surface out as fetchJson. Shares
+ * fetchJson's invariants — bearer header attached here in the main process
+ * only, the CSRF mutation header, the typed timeout error — so a staged
+ * upload can never outrun the mutation bound silently.
+ */
+export async function fetchOctetPost(
+  url: string,
+  requestOptions: {
+    token: string;
+    timeoutMs: number;
+    body: Uint8Array;
+    /** Tighter response bound for probe endpoints; defaults to the boundary cap. */
+    maxResponseBytes?: number;
+  },
+): Promise<{ status: number; body: unknown }> {
+  const controller = new AbortController();
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, requestOptions.timeoutMs);
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      signal: controller.signal,
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/octet-stream',
+        Authorization: `Bearer ${requestOptions.token}`,
+        'X-Agentico-Client': 'local',
+      },
+      redirect: 'error',
+      body: requestOptions.body,
     });
     const text = await response.text();
     assertWithinByteSize(text, requestOptions.maxResponseBytes ?? MAX_PAYLOAD_BYTES);

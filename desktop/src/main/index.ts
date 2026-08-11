@@ -40,7 +40,7 @@ import { RecoveryService } from './recovery';
 import { BulkService } from './bulk';
 import { AttentionService } from './attention';
 import { SessionService } from './serverClient';
-import { assertLocalConnection } from './locality';
+import { UploadService } from './uploads';
 import { randomUUID } from 'node:crypto';
 import { registerIpcHandlers, type IpcServices } from './ipcHandlers';
 import {
@@ -486,8 +486,9 @@ if (!hasSingleInstanceLock) {
       return result.canceled ? [] : result.filePaths;
     };
     const readClipboardImage = async (): Promise<{ paths: string[] }> => {
-      // Clipboard capture stages a local file; remote connections refuse.
-      assertLocalConnection(() => gateway.connectedLocality);
+      // Clipboard capture writes the same local temp file under every
+      // connection kind: locally the path is submitted as-is; remotely the
+      // renderer stages it through the upload channel.
       const image = clipboard.readImage();
       if (image.isEmpty()) return { paths: [] };
       const directory = path.join(app.getPath('temp'), 'agentico-clipboard');
@@ -522,17 +523,23 @@ if (!hasSingleInstanceLock) {
       locality: () => gateway.connectedLocality,
     });
 
-    // Locality-guard notices (stripped submit paths) are counts only and
-    // pass through the same redaction as every other main-process log.
-    const localityNotice = (line: string) =>
-      console.warn(`[agentico-locality] ${redactText(line)}`);
+    // Upload staging for remote connections: the bearer and server identity
+    // are gateway-owned; this service only reads local files and posts bytes.
+    const uploads = new UploadService({
+      transport: gateway,
+      readFile: (filePath) => fs.promises.readFile(filePath),
+      statFile: (filePath) => fs.promises.stat(filePath),
+      serverKey: () => {
+        const state = gateway.getState();
+        return state.status === 'ready' ? (state.serverKey ?? null) : null;
+      },
+    });
 
     const features = new FeatureService({
       transport: gateway,
       readReadiness: () => setup.getReadiness(),
       resolveRepositoryFiles: (refs) => creationFiles.resolve(refs),
       locality: () => gateway.connectedLocality,
-      log: localityNotice,
     });
     const completion = new CompletionService({
       transport: gateway,
@@ -540,12 +547,7 @@ if (!hasSingleInstanceLock) {
     });
     const recovery = new RecoveryService(gateway);
     const bulk = new BulkService(features);
-    const sessions = new SessionService(
-      gateway,
-      randomUUID,
-      () => gateway.connectedLocality,
-      localityNotice,
-    );
+    const sessions = new SessionService(gateway, randomUUID, () => gateway.connectedLocality);
     const reviews = new ReviewService(gateway);
     const configService = new ConfigService(gateway);
     const attention = new AttentionService(gateway);
@@ -1269,6 +1271,7 @@ if (!hasSingleInstanceLock) {
       cancelSessionOutput: (subscriptionId) => sessions.cancel(subscriptionId),
       getCreationDefaults: () => features.creationDefaults(),
       pickCreationFiles: (kind) => creationFiles.pickFiles(kind),
+      uploadCreationFiles: (kind, paths) => uploads.stageFiles(kind, paths),
       readClipboardImage,
       searchCreationFiles: (request) => creationFiles.search(request),
       cancelCreationFileSearch: (requestId) => creationFiles.cancelSearch(requestId),

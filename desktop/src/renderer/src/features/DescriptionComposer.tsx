@@ -15,14 +15,20 @@ import {
   CREATION_ATTACHMENT_LIMIT,
   CREATION_IMAGE_LIMIT,
   CREATION_REPOSITORY_FILE_LIMIT,
+  type CreationFileKind,
   type RepositoryFileRef,
 } from '../../../shared/ipc';
 import { parseIpcError, type WizardError } from '../wizard/ipcError';
-import { useConnectionKind } from '../hooks';
+import { useConnectionState } from '../hooks';
+import { FILE_SEARCH_REQUIRES_LOCAL_SERVER } from '../localServerCopy';
 import {
-  ATTACHMENT_REQUIRES_LOCAL_SERVER,
-  FILE_SEARCH_REQUIRES_LOCAL_SERVER,
-} from '../localServerCopy';
+  failPendingUploads,
+  isStagedOnOtherServer,
+  pendingUploadItems,
+  reconcileUploadResults,
+  STAGED_ON_OTHER_SERVER,
+  type ComposerUploadItem,
+} from './stagedItems';
 
 interface MentionToken {
   /** Index of the "@" character in the description. */
@@ -53,12 +59,22 @@ export interface DescriptionComposerProps {
   value: string;
   /** Repositories the @-mention search covers. */
   repoKeys: readonly string[];
+  /** Local-path attachments (local connections; remote refuses these at submit). */
   images: readonly string[];
   attachments: readonly string[];
+  /** Server-staged attachments in every state (uploading/ready/failed). */
+  imageUploads: readonly ComposerUploadItem[];
+  attachmentUploads: readonly ComposerUploadItem[];
   repositoryFiles: readonly RepositoryFileRef[];
   onValueChange(value: string): void;
   onImagesChange(update: (items: readonly string[]) => readonly string[]): void;
   onAttachmentsChange(update: (items: readonly string[]) => readonly string[]): void;
+  onImageUploadsChange(
+    update: (items: readonly ComposerUploadItem[]) => readonly ComposerUploadItem[],
+  ): void;
+  onAttachmentUploadsChange(
+    update: (items: readonly ComposerUploadItem[]) => readonly ComposerUploadItem[],
+  ): void;
   onRepositoryFilesChange(
     update: (files: readonly RepositoryFileRef[]) => readonly RepositoryFileRef[],
   ): void;
@@ -73,10 +89,14 @@ export function DescriptionComposer({
   repoKeys,
   images,
   attachments,
+  imageUploads,
+  attachmentUploads,
   repositoryFiles,
   onValueChange,
   onImagesChange,
   onAttachmentsChange,
+  onImageUploadsChange,
+  onAttachmentUploadsChange,
   onRepositoryFilesChange,
   onError,
 }: DescriptionComposerProps) {
@@ -85,20 +105,14 @@ export function DescriptionComposer({
   const [mentionIndex, setMentionIndex] = useState(0);
   const [mentionStatus, setMentionStatus] = useState<'idle' | 'searching'>('idle');
   const [attachMenuOpen, setAttachMenuOpen] = useState(false);
-  const [notice, setNotice] = useState('');
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const attachMenuRef = useRef<HTMLDivElement | null>(null);
-  // Remote connections gate every local-filesystem affordance; the copy is
-  // shared with the AMA panel and mention popover via localServerCopy.
-  const remote = useConnectionKind() === 'remote';
-
-  // The intercepted-import explanation is transient: it fades on its own
-  // instead of joining the wizard's persistent error slot.
-  useEffect(() => {
-    if (notice === '') return;
-    const timer = window.setTimeout(() => setNotice(''), 5000);
-    return () => window.clearTimeout(timer);
-  }, [notice]);
+  // Locality follows the live connection: remote connections stage files
+  // through the upload channel; only the @-mention repository search stays
+  // local-only (its copy is shared with the AMA panel via localServerCopy).
+  const connection = useConnectionState();
+  const remote = connection.status === 'ready' && connection.kind === 'remote';
+  const serverKey = connection.status === 'ready' ? (connection.serverKey ?? null) : null;
 
   useEffect(() => {
     if (!attachMenuOpen) return;
@@ -139,6 +153,43 @@ export function DescriptionComposer({
     };
   }, [remote, mention, onError, repoKeys]);
 
+  /**
+   * Stages picked/dropped/pasted local paths on the connected server. The
+   * pending chips land immediately (uploading state), then flip per-file to
+   * ready or failed — the renderer's per-item progress surface.
+   */
+  const stageRemotely = (kind: CreationFileKind, paths: readonly string[]): void => {
+    if (paths.length === 0) return;
+    const apply = kind === 'image' ? onImageUploadsChange : onAttachmentUploadsChange;
+    const limit = kind === 'image' ? CREATION_IMAGE_LIMIT : CREATION_ATTACHMENT_LIMIT;
+    const pending = pendingUploadItems(kind, paths);
+    apply((items) => {
+      const known = new Set(items.map((item) => item.sourcePath));
+      const additions = pending.filter((item) => !known.has(item.sourcePath));
+      return [...items, ...additions].slice(0, limit);
+    });
+    window.agentico
+      .uploadCreationFiles(kind, paths)
+      .then((result) => {
+        apply((items) => reconcileUploadResults(items, pending, result.results));
+      })
+      .catch((err: unknown) => {
+        const message = parseIpcError(err).message;
+        apply((items) => failPendingUploads(items, pending, message));
+      });
+  };
+
+  const retryUpload = (item: ComposerUploadItem): void => {
+    const apply = item.kind === 'image' ? onImageUploadsChange : onAttachmentUploadsChange;
+    apply((items) => items.filter((candidate) => candidate.id !== item.id));
+    stageRemotely(item.kind, [item.sourcePath]);
+  };
+
+  const removeUploadItem = (item: ComposerUploadItem): void => {
+    const apply = item.kind === 'image' ? onImageUploadsChange : onAttachmentUploadsChange;
+    apply((items) => items.filter((candidate) => candidate.id !== item.id));
+  };
+
   const importFiles = (files: FileList | readonly File[]): number => {
     const list = Array.from(files);
     let importedCount = 0;
@@ -147,16 +198,24 @@ export function DescriptionComposer({
     if (photos.length > 0) {
       const imported = window.agentico.importDroppedCreationFiles('image', photos);
       importedCount += imported.paths.length;
-      onImagesChange((items) =>
-        unique([...items, ...imported.paths]).slice(0, CREATION_IMAGE_LIMIT),
-      );
+      if (remote) {
+        stageRemotely('image', imported.paths);
+      } else {
+        onImagesChange((items) =>
+          unique([...items, ...imported.paths]).slice(0, CREATION_IMAGE_LIMIT),
+        );
+      }
     }
     if (documents.length > 0) {
       const imported = window.agentico.importDroppedCreationFiles('attachment', documents);
       importedCount += imported.paths.length;
-      onAttachmentsChange((items) =>
-        unique([...items, ...imported.paths]).slice(0, CREATION_ATTACHMENT_LIMIT),
-      );
+      if (remote) {
+        stageRemotely('attachment', imported.paths);
+      } else {
+        onAttachmentsChange((items) =>
+          unique([...items, ...imported.paths]).slice(0, CREATION_ATTACHMENT_LIMIT),
+        );
+      }
     }
     return importedCount;
   };
@@ -165,7 +224,9 @@ export function DescriptionComposer({
     setAttachMenuOpen(false);
     try {
       const result = await window.agentico.pickCreationFiles(kind);
-      if (kind === 'image')
+      if (remote) {
+        stageRemotely(kind, result.paths);
+      } else if (kind === 'image')
         onImagesChange((current) =>
           unique([...current, ...result.paths]).slice(0, CREATION_IMAGE_LIMIT),
         );
@@ -228,21 +289,19 @@ export function DescriptionComposer({
     );
     if (!hasImage && event.clipboardData.files.length === 0) return;
     event.preventDefault();
-    // Intercept file imports remotely instead of silently dropping them;
-    // plain-text pastes never reach this branch.
-    if (remote) {
-      setNotice(ATTACHMENT_REQUIRES_LOCAL_SERVER);
-      return;
-    }
     const importedCount = importFiles(event.clipboardData.files);
     if (hasImage && importedCount === 0) {
       void window.agentico
         .readClipboardImage()
-        .then((result) =>
-          onImagesChange((items) =>
-            unique([...items, ...result.paths]).slice(0, CREATION_IMAGE_LIMIT),
-          ),
-        )
+        .then((result) => {
+          if (remote) {
+            stageRemotely('image', result.paths);
+          } else {
+            onImagesChange((items) =>
+              unique([...items, ...result.paths]).slice(0, CREATION_IMAGE_LIMIT),
+            );
+          }
+        })
         .catch((err: unknown) => onError(parseIpcError(err)));
     }
   };
@@ -250,10 +309,6 @@ export function DescriptionComposer({
   const onDrop = (event: DragEvent): void => {
     event.preventDefault();
     if (event.dataTransfer.files.length === 0) return;
-    if (remote) {
-      setNotice(ATTACHMENT_REQUIRES_LOCAL_SERVER);
-      return;
-    }
     importFiles(event.dataTransfer.files);
   };
 
@@ -319,8 +374,6 @@ export function DescriptionComposer({
             aria-label="Attach files or photos"
             aria-haspopup="menu"
             aria-expanded={attachMenuOpen}
-            disabled={remote}
-            title={remote ? ATTACHMENT_REQUIRES_LOCAL_SERVER : undefined}
             onClick={() => setAttachMenuOpen((open) => !open)}
           >
             +
@@ -338,16 +391,14 @@ export function DescriptionComposer({
         </div>
         <span className="composer__hint">
           {remote
-            ? ATTACHMENT_REQUIRES_LOCAL_SERVER
+            ? 'Paste or drop images and documents anywhere in the description; files upload to the server.'
             : 'Paste or drop images and documents anywhere in the description.'}
         </span>
       </div>
-      {notice !== '' ? (
-        <p className="composer__notice" role="status">
-          {notice}
-        </p>
-      ) : null}
-      {images.length > 0 || attachments.length > 0 ? (
+      {images.length > 0 ||
+      attachments.length > 0 ||
+      imageUploads.length > 0 ||
+      attachmentUploads.length > 0 ? (
         <ol className="composer__chips" aria-label="Attached files">
           {images.map((path) => (
             <li key={path} className="composer__chip" data-kind="image">
@@ -370,6 +421,45 @@ export function DescriptionComposer({
                 onClick={() =>
                   onAttachmentsChange((items) => items.filter((item) => item !== path))
                 }
+              >
+                ×
+              </button>
+            </li>
+          ))}
+          {[...imageUploads, ...attachmentUploads].map((item) => (
+            <li
+              key={item.id}
+              className="composer__chip"
+              data-kind={item.kind}
+              data-state={item.state}
+            >
+              <span>
+                {item.kind === 'image' ? '🖼' : '📎'} {item.name}
+              </span>
+              {item.state === 'uploading' ? (
+                <span className="composer__chip-state">Uploading…</span>
+              ) : null}
+              {item.state === 'failed' ? (
+                <>
+                  <span className="composer__chip-message" title={item.message}>
+                    {item.message ?? 'Upload failed.'}
+                  </span>
+                  <button
+                    type="button"
+                    aria-label={`Retry ${item.name}`}
+                    onClick={() => retryUpload(item)}
+                  >
+                    ↻
+                  </button>
+                </>
+              ) : null}
+              {isStagedOnOtherServer(item, serverKey) ? (
+                <span className="composer__chip-badge">{STAGED_ON_OTHER_SERVER}</span>
+              ) : null}
+              <button
+                type="button"
+                aria-label={`Remove ${item.name}`}
+                onClick={() => removeUploadItem(item)}
               >
                 ×
               </button>

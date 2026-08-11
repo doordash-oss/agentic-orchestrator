@@ -31,6 +31,7 @@ import {
   type CreationFileSearchRequest,
   type CreationFileSearchResult,
   type PickedCreationFiles,
+  type UploadCreationFilesResult,
   type FeatureSnapshot,
   type FeatureSummaryView,
   type FeatureActionRequest,
@@ -171,6 +172,10 @@ export interface IpcServices {
   cancelSessionOutput(subscriptionId: string): boolean;
   getCreationDefaults(): Promise<CreationDefaults>;
   pickCreationFiles(kind: CreationFileKind): Promise<PickedCreationFiles>;
+  uploadCreationFiles(
+    kind: CreationFileKind,
+    paths: readonly string[],
+  ): Promise<UploadCreationFilesResult>;
   readClipboardImage(): Promise<PickedCreationFiles>;
   searchCreationFiles(request: CreationFileSearchRequest): Promise<CreationFileSearchResult>;
   cancelCreationFileSearch(requestId: string): Promise<boolean> | boolean;
@@ -354,6 +359,11 @@ export function registerIpcHandlers(
     [IPC_CHANNELS.creationDefaults]: () => services.getCreationDefaults(),
     [IPC_CHANNELS.creationPickFiles]: (_event, kind: CreationFileKind) =>
       services.pickCreationFiles(kind),
+    [IPC_CHANNELS.creationUploadFiles]: (
+      _event,
+      kind: CreationFileKind,
+      paths: readonly string[],
+    ) => services.uploadCreationFiles(kind, paths),
     [IPC_CHANNELS.clipboardReadImage]: () => services.readClipboardImage(),
     [IPC_CHANNELS.creationSearchFiles]: (_event, request: CreationFileSearchRequest) =>
       services.searchCreationFiles(request),

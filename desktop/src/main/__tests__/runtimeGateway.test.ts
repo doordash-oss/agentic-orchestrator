@@ -933,6 +933,70 @@ describe('RuntimeGateway apiRequest', () => {
     expect(env.fetchCalls).toHaveLength(0);
   });
 
+  it('apiUpload rejects with E_NOT_CONNECTED before the gateway is ready', async () => {
+    const env = makeEnv();
+    await expect(
+      env.gateway.apiUpload('/api/v1/uploads?kind=image&name=a.png', new Uint8Array([1])),
+    ).rejects.toMatchObject({ safe: { code: 'E_NOT_CONNECTED' } });
+  });
+
+  it('apiUpload sends raw bytes with the bearer once ready, through the allowlisted query', async () => {
+    const env = makeEnv({ discovery: JSON.stringify(discoveryRecord()) });
+    await env.gateway.start();
+    const uploadCalls: Array<{ url: string; token: string; body: Uint8Array }> = [];
+    env.deps.fetchOctetPost = (url, options) => {
+      uploadCalls.push({ url, token: options.token, body: options.body });
+      return Promise.resolve({
+        status: 200,
+        body: { api_version: 'v1', reference: 'ref-1', kind: 'image', name: 'a.png', size: 3 },
+      });
+    };
+
+    const result = await env.gateway.apiUpload(
+      '/api/v1/uploads?kind=image&name=a.png',
+      new Uint8Array([1, 2, 3]),
+    );
+
+    expect(result.status).toBe(200);
+    expect(uploadCalls).toEqual([
+      {
+        url: `${EXTERNAL_BASE}/api/v1/uploads?kind=image&name=a.png`,
+        token: EXTERNAL_TOKEN,
+        body: new Uint8Array([1, 2, 3]),
+      },
+    ]);
+    expectNoTokenLeak(env);
+  });
+
+  it('apiUpload fails closed on malformed or missing upload query parameters', async () => {
+    const env = makeEnv({ discovery: JSON.stringify(discoveryRecord()) });
+    await env.gateway.start();
+    env.deps.fetchOctetPost = () => Promise.resolve({ status: 200, body: {} });
+
+    for (const path of [
+      '/api/v1/uploads',
+      '/api/v1/uploads?kind=image',
+      '/api/v1/uploads?kind=document&name=a.png',
+      '/api/v1/uploads?kind=image&name=a.png&extra=1',
+      '/api/v1/uploads?kind=image&name=',
+      '/api/v1/uploads?kind=image&kind=image&name=a.png',
+      '/api/v1/uploads/../uploads?kind=image&name=a.png',
+    ]) {
+      await expect(env.gateway.apiUpload(path, new Uint8Array([1]))).rejects.toMatchObject({
+        safe: { code: 'E_BAD_API_PATH' },
+      });
+    }
+  });
+
+  it('apiUpload fails closed when the build wires no upload transport', async () => {
+    const env = makeEnv({ discovery: JSON.stringify(discoveryRecord()) });
+    await env.gateway.start();
+
+    await expect(
+      env.gateway.apiUpload('/api/v1/uploads?kind=image&name=a.png', new Uint8Array([1])),
+    ).rejects.toMatchObject({ safe: { code: 'E_UPLOAD_UNAVAILABLE' } });
+  });
+
   it('sends authenticated requests to the attached runtime once ready', async () => {
     const env = makeEnv({ discovery: JSON.stringify(discoveryRecord()) });
     await env.gateway.start();

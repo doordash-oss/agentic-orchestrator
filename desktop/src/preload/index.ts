@@ -209,6 +209,8 @@ const api: AgenticoApi = {
   },
   getCreationDefaults: () => call(IPC_CHANNELS.creationDefaults),
   pickCreationFiles: (kind: CreationFileKind) => call(IPC_CHANNELS.creationPickFiles, kind),
+  uploadCreationFiles: (kind: CreationFileKind, paths: readonly string[]) =>
+    call(IPC_CHANNELS.creationUploadFiles, kind, paths),
   readClipboardImage: () => call(IPC_CHANNELS.clipboardReadImage),
   importDroppedCreationFiles: (kind: CreationFileKind, files: readonly File[]) => {
     const limit = kind === 'image' ? CREATION_IMAGE_LIMIT : CREATION_ATTACHMENT_LIMIT;

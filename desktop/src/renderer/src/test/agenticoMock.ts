@@ -248,6 +248,7 @@ export interface AgenticoMock {
     cancelSessionOutput: ReturnType<typeof vi.fn>;
     getCreationDefaults: ReturnType<typeof vi.fn>;
     pickCreationFiles: ReturnType<typeof vi.fn>;
+    uploadCreationFiles: ReturnType<typeof vi.fn>;
     readClipboardImage: ReturnType<typeof vi.fn>;
     importDroppedCreationFiles: ReturnType<typeof vi.fn>;
     searchCreationFiles: ReturnType<typeof vi.fn>;
@@ -441,6 +442,21 @@ export function installAgenticoMock(
     }),
     getCreationDefaults: vi.fn(() => Promise.resolve(defaults)),
     pickCreationFiles: vi.fn(() => Promise.resolve({ paths: [] })),
+    uploadCreationFiles: vi.fn((kind: string, paths: readonly string[]) =>
+      Promise.resolve({
+        results: paths.map((filePath) => ({
+          ok: true as const,
+          name: filePath.split(/[\\/]/).at(-1) ?? 'file',
+          upload: {
+            reference: `ref-${(filePath.split(/[\\/]/).at(-1) ?? 'file').replace(/[^a-z0-9]/gi, '')}`,
+            kind: kind as 'image' | 'attachment',
+            name: filePath.split(/[\\/]/).at(-1) ?? 'file',
+            size: 10,
+            serverKey: 'server-key-1',
+          },
+        })),
+      }),
+    ),
     readClipboardImage: vi.fn(() => Promise.resolve({ paths: [] })),
     writeClipboardText: vi.fn(() => Promise.resolve({ ok: true })),
     importDroppedCreationFiles: vi.fn(() => ({ paths: [] })),

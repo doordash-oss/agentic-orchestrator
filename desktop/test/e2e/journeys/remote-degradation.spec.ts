@@ -65,7 +65,6 @@ const REPO = 'degradation-lab';
 const FEATURE_NAME = 'Remote degradation feature';
 /** Sentinel: a staged-artifact name that must NEVER reach the server. */
 const DROP_SENTINEL = 'remote-degradation-drop-sentinel.png';
-const REQUIRES_LOCAL_SERVER = /requires a local server/;
 
 interface RecordedRequest {
   method: string;
@@ -349,14 +348,16 @@ test('remote degradation: gated affordances, copy-path completion, server-valida
     await handle.page.getByRole('checkbox', { name: new RegExp(REPO) }).check();
     await handle.page.getByRole('button', { name: 'Next: Describe' }).click();
 
-    // The attach affordance is disabled with the shared explanation.
+    // The attach affordance stays enabled: files now stage via server upload.
     const attach = handle.page.getByRole('button', { name: 'Attach files or photos' });
-    await expect(attach).toBeDisabled();
-    await expect(attach).toHaveAttribute('title', REQUIRES_LOCAL_SERVER);
-    await expect(handle.page.locator('.composer__hint')).toContainText(REQUIRES_LOCAL_SERVER);
+    await expect(attach).toBeEnabled();
+    await expect(handle.page.locator('.composer__hint')).toContainText(
+      /files upload to the server/,
+    );
     await evidenceShot(handle, 'remote-degradation-composer-gated');
 
-    // A dropped file is intercepted with the same notice; nothing stages.
+    // A synthetic dropped file resolves no local path for the preload
+    // (webUtils), so nothing stages; real drops stage upload chips.
     await handle.page.evaluate((sentinel) => {
       const composer = document.querySelector('.composer');
       if (composer === null) throw new Error('composer not mounted');
@@ -366,7 +367,6 @@ test('remote degradation: gated affordances, copy-path completion, server-valida
         new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer }),
       );
     }, DROP_SENTINEL);
-    await expect(handle.page.locator('.composer__notice')).toContainText(REQUIRES_LOCAL_SERVER);
     await expect(handle.page.getByLabel('Attached files')).toHaveCount(0);
 
     // The @-mention popover still opens and explains instead of searching.

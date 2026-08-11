@@ -702,4 +702,67 @@ describe('the creation sheet on a remote server', () => {
     await user.click(screen.getByRole('button', { name: 'Initialize repository' }));
     expect(await screen.findByRole('checkbox', { name: /fresh/ })).toBeChecked();
   });
+
+  it('stages picked files as uploads and submits references, never local paths', async () => {
+    const mock = installAgenticoMock({
+      connection: { ...READY_REMOTE, serverKey: 'server-key-1' },
+    });
+    mock.api.pickCreationFiles.mockImplementation((kind: string) =>
+      Promise.resolve({ paths: kind === 'image' ? ['/safe/one.png'] : ['/safe/spec.pdf'] }),
+    );
+    mock.api.createFeature.mockResolvedValue({ featureId: 'abcd1234ef567890' });
+    const { user } = await renderForm(mock);
+    await reachContract(user);
+
+    // Attachment staging happens on Describe; jump back to attach.
+    await user.click(screen.getByRole('button', { name: /Describe/ }));
+    await user.click(screen.getByRole('button', { name: 'Attach files or photos' }));
+    await user.click(screen.getByRole('menuitem', { name: 'Add photos' }));
+    await user.click(screen.getByRole('button', { name: 'Attach files or photos' }));
+    await user.click(screen.getByRole('menuitem', { name: 'Add files' }));
+    expect(mock.api.uploadCreationFiles).toHaveBeenCalledWith('image', ['/safe/one.png']);
+    expect(mock.api.uploadCreationFiles).toHaveBeenCalledWith('attachment', ['/safe/spec.pdf']);
+    expect(await screen.findByText(/one\.png/)).toBeVisible();
+
+    // The rail only navigates backward; return forward via the step buttons.
+    await user.click(screen.getByRole('button', { name: 'Next: Depth' }));
+    await user.click(screen.getByRole('button', { name: 'Next: Contract' }));
+    await user.click(screen.getByRole('button', { name: 'Create and start' }));
+
+    await waitFor(() => expect(mock.api.createFeature).toHaveBeenCalled());
+    const input = mock.api.createFeature.mock.calls[0]?.[0];
+    expect(input.imageUploads).toEqual(['ref-onepng']);
+    expect(input.attachmentUploads).toEqual(['ref-specpdf']);
+    expect(JSON.stringify(input)).not.toContain('/safe/');
+  });
+
+  it('blocks creation while a staged upload belongs to another server, until removed', async () => {
+    const mock = installAgenticoMock({
+      connection: { ...READY_REMOTE, serverKey: 'server-key-1' },
+    });
+    mock.api.pickCreationFiles.mockResolvedValue({ paths: ['/safe/one.png'] });
+    const { user } = await renderForm(mock);
+    await reachContract(user);
+
+    await user.click(screen.getByRole('button', { name: /Describe/ }));
+    await user.click(screen.getByRole('button', { name: 'Attach files or photos' }));
+    await user.click(screen.getByRole('menuitem', { name: 'Add photos' }));
+    expect(await screen.findByText(/one\.png/)).toBeVisible();
+
+    // Switching to another remote identity orphans the staged upload.
+    fireEvent(window, new Event('noop'));
+    mock.emitConnection({ ...READY_REMOTE, serverKey: 'server-key-2' });
+    await screen.findByText('Staged on another server');
+
+    await user.click(screen.getByRole('button', { name: 'Next: Depth' }));
+    await user.click(screen.getByRole('button', { name: 'Next: Contract' }));
+    const submit = screen.getByRole('button', { name: 'Create and start' });
+    expect(submit).toBeDisabled();
+
+    await user.click(screen.getByRole('button', { name: /Describe/ }));
+    await user.click(screen.getByRole('button', { name: 'Remove one.png' }));
+    await user.click(screen.getByRole('button', { name: 'Next: Depth' }));
+    await user.click(screen.getByRole('button', { name: 'Next: Contract' }));
+    expect(screen.getByRole('button', { name: 'Create and start' })).toBeEnabled();
+  });
 });

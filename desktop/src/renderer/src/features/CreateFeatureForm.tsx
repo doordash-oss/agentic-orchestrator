@@ -16,6 +16,12 @@ import {
 import { ConsentDialog } from '../components/wizard/ConsentDialog';
 import { useModalDismiss } from '../components/useModalDismiss';
 import { useConnectionState } from '../hooks';
+import {
+  isBlockingStagedItem,
+  STAGED_ITEMS_BLOCK_SUBMIT,
+  submittableReferences,
+  type ComposerUploadItem,
+} from './stagedItems';
 import { parseIpcError, type WizardError } from '../wizard/ipcError';
 import {
   GATE_FIELDS,
@@ -129,6 +135,8 @@ export function CreateFeatureForm({ onCreated, onClose }: CreateFeatureFormProps
   const [exitCriteria, setExitCriteria] = useState('');
   const [images, setImages] = useState<readonly string[]>([]);
   const [attachments, setAttachments] = useState<readonly string[]>([]);
+  const [imageUploads, setImageUploads] = useState<readonly ComposerUploadItem[]>([]);
+  const [attachmentUploads, setAttachmentUploads] = useState<readonly ComposerUploadItem[]>([]);
   const [repositoryFiles, setRepositoryFiles] = useState<readonly RepositoryFileRef[]>([]);
   const [autoStart, setAutoStart] = useState(true);
   const [folderCandidate, setFolderCandidate] = useState<string | null>(null);
@@ -160,6 +168,12 @@ export function CreateFeatureForm({ onCreated, onClose }: CreateFeatureFormProps
   // state so a server switch swaps the affordance without remounting.
   const connection = useConnectionState();
   const remoteServer = connection.status === 'ready' && connection.kind === 'remote';
+  const serverKey = connection.status === 'ready' ? (connection.serverKey ?? null) : null;
+  // In-progress, failed, or foreign-server uploads block creation until
+  // they are removed (or the user switches back to the server that holds them).
+  const uploadsBlocking = [...imageUploads, ...attachmentUploads].some((item) =>
+    isBlockingStagedItem(item, serverKey),
+  );
 
   /** Unsaved work worth confirming before it is thrown away. */
   const dirty =
@@ -167,7 +181,9 @@ export function CreateFeatureForm({ onCreated, onClose }: CreateFeatureFormProps
     description !== '' ||
     repoKeys.length > 0 ||
     images.length > 0 ||
-    attachments.length > 0;
+    attachments.length > 0 ||
+    imageUploads.length > 0 ||
+    attachmentUploads.length > 0;
 
   const requestCancel = useCallback(() => {
     if (dirty) {
@@ -382,7 +398,7 @@ export function CreateFeatureForm({ onCreated, onClose }: CreateFeatureFormProps
 
   const submit = (event: FormEvent): void => {
     event.preventDefault();
-    if (pending || state.phase !== 'loaded') return;
+    if (pending || uploadsBlocking || state.phase !== 'loaded') return;
     if (!validateStep(0)) {
       setStepIndex(0);
       return;
@@ -404,6 +420,12 @@ export function CreateFeatureForm({ onCreated, onClose }: CreateFeatureFormProps
     const submittedGates = applicableGates(pipeline);
     void (async () => {
       try {
+        const createdImageRefs = submittableReferences(imageUploads, 'image', serverKey);
+        const createdAttachmentRefs = submittableReferences(
+          attachmentUploads,
+          'attachment',
+          serverKey,
+        );
         const created = await window.agentico.createFeature({
           name: name.trim(),
           description,
@@ -411,6 +433,10 @@ export function CreateFeatureForm({ onCreated, onClose }: CreateFeatureFormProps
           useCurrentBranch,
           images: [...images],
           attachments: [...attachments],
+          ...(createdImageRefs.length === 0 ? {} : { imageUploads: createdImageRefs }),
+          ...(createdAttachmentRefs.length === 0
+            ? {}
+            : { attachmentUploads: createdAttachmentRefs }),
           repositoryFiles: [...repositoryFiles],
           pipeline,
           riskLevel,
@@ -811,10 +837,14 @@ export function CreateFeatureForm({ onCreated, onClose }: CreateFeatureFormProps
                       repoKeys={repoKeys}
                       images={images}
                       attachments={attachments}
+                      imageUploads={imageUploads}
+                      attachmentUploads={attachmentUploads}
                       repositoryFiles={repositoryFiles}
                       onValueChange={setDescription}
                       onImagesChange={setImages}
                       onAttachmentsChange={setAttachments}
+                      onImageUploadsChange={setImageUploads}
+                      onAttachmentUploadsChange={setAttachmentUploads}
                       onRepositoryFilesChange={setRepositoryFiles}
                       onError={setFormError}
                     />
@@ -1046,14 +1076,21 @@ export function CreateFeatureForm({ onCreated, onClose }: CreateFeatureFormProps
                     Next: {STEPS[stepIndex + 1]}
                   </button>
                 ) : (
-                  <button
-                    key="create-feature"
-                    type="submit"
-                    className="sheet__footer-primary"
-                    disabled={pending}
-                  >
-                    {pending ? 'Creating…' : autoStart ? 'Create and start' : 'Create'}
-                  </button>
+                  <>
+                    {uploadsBlocking ? (
+                      <span className="sheet__footer-note" role="status">
+                        {STAGED_ITEMS_BLOCK_SUBMIT}
+                      </span>
+                    ) : null}
+                    <button
+                      key="create-feature"
+                      type="submit"
+                      className="sheet__footer-primary"
+                      disabled={pending || uploadsBlocking}
+                    >
+                      {pending ? 'Creating…' : autoStart ? 'Create and start' : 'Create'}
+                    </button>
+                  </>
                 )}
               </div>
             )}

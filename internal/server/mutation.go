@@ -23,6 +23,7 @@ import (
 	"io/fs"
 	"net/http"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 
@@ -205,10 +206,12 @@ type CreateFeatureRequest struct {
 	ExitCriteria            string                  `json:"exit_criteria,omitempty"`
 	Inquireness             string                  `json:"inquireness,omitempty"`
 	Images                  []string                `json:"images,omitempty"`
+	ImageUploads            []string                `json:"image_uploads,omitempty"`
 	UseCurrentBranch        bool                    `json:"use_current_branch,omitempty"`
 	UseCurrentBranchPerRepo map[string]bool         `json:"use_current_branch_per_repo,omitempty"`
 	Checkpoints             feature.Checkpoints     `json:"checkpoints,omitempty"`
 	Attachments             []string                `json:"attachments,omitempty"`
+	AttachmentUploads       []string                `json:"attachment_uploads,omitempty"`
 	RiskLevel               feature.RiskLevel       `json:"risk_level,omitempty"`
 	Pipeline                feature.PipelineProfile `json:"pipeline,omitempty"`
 	IdempotencyKey          string                  `json:"idempotency_key,omitempty"`
@@ -265,8 +268,12 @@ type HelpAnswerRequest struct {
 }
 
 type ChatStartRequest struct {
-	Message string   `json:"message"`
+	Message string `json:"message"`
 	Images  []string `json:"images,omitempty"`
+	// ImageUploads carries staged upload references (see POST
+	// /api/v1/uploads); chat resolves image references only — attachments
+	// remain unsupported there.
+	ImageUploads []string `json:"image_uploads,omitempty"`
 }
 
 type RuntimeConfigMutationRequest struct {
@@ -674,6 +681,8 @@ func mutationRouteMethods(path string) ([]string, bool) {
 		return []string{http.MethodPost}, true
 	case apiPathWorkspaceRepositoriesInit:
 		return []string{http.MethodPost}, true
+	case apiPathUploads:
+		return []string{http.MethodPost}, true
 	case "/api/v1/prompts/ask-user/answer", "/api/v1/prompts/help/send", "/api/v1/prompts/chat/start", "/api/v1/prompts/chat/end":
 		return []string{http.MethodPost}, true
 	}
@@ -782,6 +791,9 @@ func (h *apiHandler) handleCreateFeatureMutation(w http.ResponseWriter, r *http.
 		writeAPIError(w, http.StatusBadRequest, errCodeBadRequest, fmt.Sprintf("idempotency_key exceeds the %d character limit", maxCreationIdempotencyKeyLength), nil)
 		return
 	}
+	if !validateCombinedUploadCounts(w, len(req.Images), len(req.ImageUploads), len(req.Attachments), len(req.AttachmentUploads)) {
+		return
+	}
 	if !h.requireTrustedMutation(w, r) {
 		return
 	}
@@ -829,7 +841,7 @@ func (h *apiHandler) validateRequestedModels(w http.ResponseWriter, models confi
 
 func (h *apiHandler) createFeatureOnce(req CreateFeatureRequest) (CreateFeatureResponse, error) {
 	if req.IdempotencyKey == "" {
-		return h.mutations.CreateFeature(req)
+		return h.createFeatureWithUploads(req)
 	}
 	payload, _ := json.Marshal(req)
 	fingerprint := string(payload)
@@ -841,13 +853,37 @@ func (h *apiHandler) createFeatureOnce(req CreateFeatureRequest) (CreateFeatureR
 		}
 		return prior.response, nil
 	}
-	resp, err := h.mutations.CreateFeature(req)
+	resp, err := h.createFeatureWithUploads(req)
 	if err == nil {
 		if len(h.creationResults) >= maxRememberedCreationResults {
 			// Bound process memory at the cost of forgetting older retry identities.
 			clear(h.creationResults)
 		}
 		h.creationResults[req.IdempotencyKey] = creationResult{fingerprint: fingerprint, response: resp}
+	}
+	return resp, err
+}
+
+// createFeatureWithUploads resolves staged upload references into durable
+// handoff copies and merges those paths into the local-path inputs the
+// existing setup pipeline consumes. Consumption is two-phase so a failed
+// creation leaves every staged file intact for retry: the handoff copies are
+// rolled back on error, and the staged sources are deleted (single-use) only
+// after the mutation succeeds.
+func (h *apiHandler) createFeatureWithUploads(req CreateFeatureRequest) (CreateFeatureResponse, error) {
+	consumed, err := h.consumeUploadRefs(req.ImageUploads, req.AttachmentUploads, "")
+	if err != nil {
+		return CreateFeatureResponse{}, err
+	}
+	if consumed != nil {
+		req.Images = append(req.Images, consumed.imagePaths...)
+		req.Attachments = append(req.Attachments, consumed.attachmentPaths...)
+	}
+	resp, err := h.mutations.CreateFeature(req)
+	if err != nil {
+		consumed.rollback() // nil-safe: nothing to roll back without refs
+	} else {
+		consumed.commit()
 	}
 	return resp, err
 }
@@ -1298,11 +1334,30 @@ func (h *apiHandler) handlePromptMutationRoutes(w http.ResponseWriter, r *http.R
 			writeAPIError(w, http.StatusBadRequest, "bad_request", "message is required", nil)
 			return
 		}
+		if !validateCombinedUploadCounts(w, len(req.Images), len(req.ImageUploads), 0, 0) {
+			return
+		}
+		// Chat resolves staged image references by copying them into the chat
+		// session directory; the copied paths are what the prompt embeds.
+		chatDir := ""
+		if h.uploads != nil {
+			chatDir = filepath.Join(h.runtime.StateDir, uploadChatDirName)
+		}
+		consumed, err := h.consumeUploadRefs(req.ImageUploads, nil, chatDir)
+		if err != nil {
+			writeAPIError(w, http.StatusBadRequest, errCodeBadRequest, err.Error(), nil)
+			return
+		}
+		if consumed != nil {
+			req.Images = append(req.Images, consumed.imagePaths...)
+		}
 		resp, err := h.mutations.StartChat(req)
 		if err != nil {
+			consumed.rollback() // nil-safe: nothing to roll back without refs
 			writeMutationError(w, err)
 			return
 		}
+		consumed.commit()
 		defaultActionFields(&resp, "", resultStarted)
 		writeActionJSON(w, http.StatusOK, &resp)
 	case "chat/end":
@@ -1384,11 +1439,25 @@ func (h *apiHandler) handleRefactorFeatureMutationTrusted(w http.ResponseWriter,
 	if !validateEffortConfig(w, req.Effort, req.Models, h.registry) {
 		return
 	}
+	if !validateCombinedUploadCounts(w, len(req.Images), len(req.ImageUploads), len(req.Attachments), len(req.AttachmentUploads)) {
+		return
+	}
+	consumed, err := h.consumeUploadRefs(req.ImageUploads, req.AttachmentUploads, "")
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, errCodeBadRequest, err.Error(), nil)
+		return
+	}
+	if consumed != nil {
+		req.Images = append(req.Images, consumed.imagePaths...)
+		req.Attachments = append(req.Attachments, consumed.attachmentPaths...)
+	}
 	resp, err := h.mutations.RefactorFeature(featureID, req)
 	if err != nil {
+		consumed.rollback() // nil-safe: nothing to roll back without refs
 		writeMutationError(w, err)
 		return
 	}
+	consumed.commit()
 	defaultActionFields(&resp, "", resultCreated)
 	writeActionJSON(w, http.StatusCreated, &resp)
 }
@@ -1448,7 +1517,10 @@ func validateInquireness(w http.ResponseWriter, inq feature.Inquireness) bool {
 // RefactorChildSpecFromRequest maps a typed refactor launch request to the
 // domain launch brief. This is the single request→spec mapping: the
 // production mutation target and tests share it so no request field (Review
-// configuration, copied inputs) can silently drift out of one path.
+// configuration, copied inputs) can silently drift out of one path. Staged
+// upload references (image_uploads/attachment_uploads) never reach this
+// mapper: the route handler resolves them to durable local paths and merges
+// them into Images/Attachments first.
 func RefactorChildSpecFromRequest(req RefactorFeatureRequest) (feature.RefactorChildSpec, error) {
 	spec := feature.RefactorChildSpec{
 		Name:         req.Name,

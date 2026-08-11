@@ -117,6 +117,15 @@ export interface GatewayDeps {
     options: { token?: string; timeoutMs: number; method?: ApiMethod; body?: unknown },
   ): Promise<HttpResult>;
   /**
+   * Bounded binary POST (raw octet-stream body, JSON response) for the
+   * upload-staging endpoint. Same bearer discipline as fetchJson: the token
+   * is attached here in the main process only.
+   */
+  fetchOctetPost?(
+    url: string,
+    options: { token: string; timeoutMs: number; body: Uint8Array },
+  ): Promise<HttpResult>;
+  /**
    * Opens a long-lived SSE response. The bearer travels only as an
    * Authorization header supplied here — never as a URL parameter.
    */
@@ -330,6 +339,40 @@ export class RuntimeGateway {
       token: this.token,
       timeoutMs: init.timeoutMs ?? this.timeouts.apiRequestMs,
       ...(method === 'GET' ? {} : { method, body: init.body ?? {} }),
+    });
+  }
+
+  /**
+   * Authenticated binary POST against `/api/v1/uploads` (raw file bytes,
+   * kind/name as bounded query parameters). The bearer token and base URL
+   * never leave this method's closure; callers receive status + parsed JSON
+   * body only.
+   */
+  async apiUpload(path: string, body: Uint8Array): Promise<HttpResult> {
+    if (!isAllowedApiPath(path)) {
+      throw new SafeErrorException(
+        safeError('E_BAD_API_PATH', 'The requested API path is not allowed.'),
+      );
+    }
+    if (this.state.status !== 'ready' || this.token === null || this.baseUrl === null) {
+      throw new SafeErrorException(
+        safeError(
+          'E_NOT_CONNECTED',
+          'The app is not connected to an Agentico runtime.',
+          'Wait for the connection to become ready, then retry.',
+        ),
+      );
+    }
+    const fetchOctetPost = this.deps.fetchOctetPost;
+    if (fetchOctetPost === undefined) {
+      throw new SafeErrorException(
+        safeError('E_UPLOAD_UNAVAILABLE', 'This build has no upload transport wired.'),
+      );
+    }
+    return fetchOctetPost(`${this.baseUrl}${path}`, {
+      token: this.token,
+      timeoutMs: this.timeouts.apiRequestMs,
+      body,
     });
   }
 
@@ -2084,11 +2127,17 @@ const REPOSITORY_DIFF_PATH_PATTERN = new RegExp(
   `^/api/v1/features/${SAFE_API_SEGMENT}/repositories/${SAFE_API_SEGMENT}/diff$`,
   'i',
 );
+const UPLOADS_PATH_PATTERN = /^\/api\/v1\/uploads$/i;
 
 function isAllowedApiPath(path: string): boolean {
   const parts = path.split('?');
   const pathname = parts[0] ?? '';
   if (pathname.split('/').some((segment) => segment === '.' || segment === '..')) return false;
+  if (UPLOADS_PATH_PATTERN.test(pathname)) {
+    // Uploads require the mutually-required kind/name query; a queryless
+    // uploads path must not fall through to the generic queryless branch.
+    return parts.length === 2 && hasUploadsQuery(parts[1] ?? '');
+  }
   if (parts.length === 1) {
     return (
       QUERYLESS_API_PATH_PATTERN.test(pathname) || QUERYLESS_SESSION_API_PATH_PATTERN.test(pathname)
@@ -2166,6 +2215,24 @@ function hasRepositoryDiffQuery(rawQuery: string): boolean {
     }
   }
   return seen.has('file_path');
+}
+
+/**
+ * The upload-staging query: exactly `kind` (image|attachment) and `name`
+ * (a bounded original filename), each exactly once. Mirrors the server's
+ * mutually-required query contract; anything else fails closed here.
+ */
+function hasUploadsQuery(rawQuery: string): boolean {
+  if (rawQuery === '') return false;
+  const seen = new Set<string>();
+  for (const [key, value] of new URLSearchParams(rawQuery)) {
+    if (seen.has(key)) return false;
+    seen.add(key);
+    if (key === 'kind' && (value === 'image' || value === 'attachment')) continue;
+    if (key === 'name' && value.length > 0 && value.length <= 255) continue;
+    return false;
+  }
+  return seen.has('kind') && seen.has('name');
 }
 
 function trimBase(baseUrl: string): string {

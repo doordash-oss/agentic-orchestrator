@@ -8,7 +8,13 @@
  * the remediation).
  */
 import { randomUUID } from 'node:crypto';
-import { redactText, SafeErrorException, safeError, toSafeError } from '../shared/errors';
+import {
+  redactText,
+  requiresLocalServerError,
+  SafeErrorException,
+  safeError,
+  toSafeError,
+} from '../shared/errors';
 import {
   ServerErrorResponseSchema,
   ServerErrorWithIssuesSchema,
@@ -119,11 +125,10 @@ export class SessionService {
     private readonly makeSubscriptionId: () => string = randomUUID,
     /**
      * Gateway-owned locality of the active connection. While remote, chat
-     * start defensively drops local image paths from the outgoing payload
-     * (with a notice via `log`) so a stale draft never POSTs one.
+     * start refuses any local image path outright (a stale draft must fail,
+     * never leak one) and forwards staged upload references instead.
      */
     private readonly locality: LocalitySource = alwaysLocal,
-    private readonly log?: (line: string) => void,
   ) {}
 
   async list(): Promise<SessionSummary[]> {
@@ -167,17 +172,21 @@ export class SessionService {
     const input = validateWithSchema(request, ChatStartRequestSchema);
     const remote = this.locality() === 'remote';
     if (remote && (input.images?.length ?? 0) > 0) {
-      // Counts only — local paths never ride a log line.
-      this.log?.(
-        `remote AMA chat start: stripped ${input.images?.length ?? 0} local image path(s) from the outgoing payload (requires a local server)`,
-      );
+      // A locally shaped path remotely is a stale draft: fail, never leak.
+      throw new SafeErrorException(requiresLocalServerError());
     }
     const response = await serverRequest(
       this.transport,
       '/api/v1/prompts/chat/start',
       {
         method: 'POST',
-        body: { message: input.message, images: remote ? [] : (input.images ?? []) },
+        body: {
+          message: input.message,
+          images: input.images ?? [],
+          ...(remote && (input.imageUploads?.length ?? 0) > 0
+            ? { image_uploads: input.imageUploads }
+            : {}),
+        },
       } as ApiRequestInit,
       { remedyByCode: CHAT_REMEDIES },
     );

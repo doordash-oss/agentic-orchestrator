@@ -176,6 +176,7 @@ function makeServices(): IpcServices {
       }),
     ),
     pickCreationFiles: vi.fn(() => Promise.resolve({ paths: [] })),
+    uploadCreationFiles: vi.fn(() => Promise.resolve({ results: [] })),
     readClipboardImage: vi.fn(() => Promise.resolve({ paths: [] })),
     searchCreationFiles: vi.fn((request) =>
       Promise.resolve({

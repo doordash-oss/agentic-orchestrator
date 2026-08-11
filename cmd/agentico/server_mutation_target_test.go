@@ -1973,6 +1973,66 @@ func TestServerMutationTargetPublishActionPreservesConflictRoutingMetadata(t *te
 	})
 }
 
+func TestServerMutationTargetPublishActionMapsRemoteSafetyConflicts(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		publishErr error
+		wantCode   string
+		wantTarget map[string]any
+	}{
+		{
+			name: "remote diverged",
+			publishErr: &orchestrator.PublishRemoteDivergedError{
+				RepoName:          testRepoAName,
+				Branch:            "feature/remote-diverged",
+				RemoteOnlyCommits: 2,
+			},
+			wantCode: serverruntime.ErrorCodePublishRemoteDiverged,
+			wantTarget: map[string]any{
+				"repo":                testRepoAName,
+				"branch":              "feature/remote-diverged",
+				"remote_only_commits": 2,
+			},
+		},
+		{
+			name: "remote changed",
+			publishErr: &orchestrator.PublishRemoteChangedError{
+				RepoName: testRepoAName,
+				Branch:   "feature/remote-changed",
+			},
+			wantCode: serverruntime.ErrorCodePublishRemoteChanged,
+			wantTarget: map[string]any{
+				"repo":   testRepoAName,
+				"branch": "feature/remote-changed",
+			},
+		},
+	} {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			target, _, _, f := newPublishActionTarget(t)
+			target.orch.SetPublishRepoFn(func(featureID, repoName string) (string, error) {
+				return "", tc.publishErr
+			})
+
+			result, err := target.PublishFeature(f.ID, serverruntime.PublishFeatureRequest{})
+			if err == nil {
+				t.Fatal("PublishFeature() error = nil, want remote safety conflict")
+			}
+			var conflict *serverruntime.ActionConflictError
+			if !errors.As(err, &conflict) {
+				t.Fatalf("PublishFeature() error = %T %v; want ActionConflictError", err, err)
+			}
+			if conflict.Code != tc.wantCode {
+				t.Fatalf("ActionConflictError.Code = %q; want %q", conflict.Code, tc.wantCode)
+			}
+			if result.Result != resultConflict {
+				t.Fatalf("PublishFeature() result = %q; want %q", result.Result, resultConflict)
+			}
+			assertTarget(t, conflict.Target, tc.wantTarget)
+		})
+	}
+}
+
 func TestServerMutationTargetCompletionActionsRejectStaleSourceRevision(t *testing.T) {
 	for _, tc := range []struct {
 		name string

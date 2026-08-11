@@ -1,373 +1,684 @@
-import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { PublishModalBody } from './PublishModal';
-import type { CompletionPreflightResult } from '../../../../shared/ipc';
+import { useState } from 'react';
+import { describe, expect, it, vi } from 'vitest';
+import type { CompletionPreflightResult, FeatureActionResult } from '../../../../shared/ipc';
+import { PublishModal } from './PublishModal';
 
-const preflight: CompletionPreflightResult = {
-  featureId: 'f',
-  sourceRevision: 'rev-1',
-  canMarkDone: false,
-  repos: [{ repo: 'repo-a', publishable: true, touched: true, status: 'eligible' }],
+const featureId = 'abcd1234ef567890';
+const result: FeatureActionResult = {
+  featureId,
+  action: 'publish',
+  result: 'published',
+  sessionIds: [],
 };
-function props(over?: Partial<Parameters<typeof PublishModalBody>[0]>) {
+
+const newPrPreflight: CompletionPreflightResult = {
+  featureId,
+  sourceRevision: 'rev-1',
+  canMarkDone: true,
+  repos: [{ repo: 'web', publishable: true, touched: true, status: 'eligible' }],
+};
+
+function props(over: Partial<React.ComponentProps<typeof PublishModal>> = {}) {
   return {
-    featureId: 'f',
-    preflight,
-    dispatchAction: vi.fn(() => Promise.resolve({ result: 'published repo-a' })),
-    generatePublishDescription: vi.fn(() =>
-      Promise.resolve({ featureId: 'f', title: 'T', body: 'B' }),
-    ),
-    openExternal: vi.fn(() => Promise.resolve({ ok: true })),
+    featureId,
+    preflight: newPrPreflight,
+    dispatchAction: vi.fn().mockResolvedValue(result),
+    generatePublishDescription: vi
+      .fn()
+      .mockResolvedValue({ featureId, title: 'Title', body: 'Body' }),
+    openExternal: vi.fn().mockResolvedValue({ ok: true }),
     onDispatched: vi.fn(),
+    onClose: vi.fn(),
+    publishTimeoutLocked: false,
+    setPublishTimeoutLocked: vi.fn(),
     ...over,
   };
 }
 
-describe('PublishModalBody', () => {
-  it('disables Publish until a title is entered', () => {
-    render(<PublishModalBody {...props()} />);
-    expect(screen.getByRole('button', { name: 'Publish' })).toBeDisabled();
-    fireEvent.change(screen.getByLabelText('PR title'), { target: { value: 'My PR' } });
-    expect(screen.getByRole('button', { name: 'Publish' })).toBeEnabled();
-  });
-
-  it('dispatches publish with source_revision, repos, and title', async () => {
-    const dispatchAction = vi.fn(() => Promise.resolve({ result: 'ok' }));
-    const onDispatched = vi.fn();
-    render(<PublishModalBody {...props({ dispatchAction, onDispatched })} />);
-    fireEvent.change(screen.getByLabelText('PR title'), { target: { value: 'My PR' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Publish' }));
-    await waitFor(() =>
-      expect(dispatchAction).toHaveBeenCalledWith('f', 'publish', {
-        source_revision: 'rev-1',
-        repos: ['repo-a'],
-        title: 'My PR',
-      }),
-    );
-    await waitFor(() => expect(onDispatched).toHaveBeenCalled());
-  });
-
-  it('fills title/body from generate', async () => {
-    render(<PublishModalBody {...props()} />);
-    fireEvent.click(screen.getByRole('button', { name: 'Generate PR narrative' }));
-    await waitFor(() =>
-      expect((screen.getByLabelText('PR title') as HTMLInputElement).value).toBe('T'),
-    );
-  });
-
-  it('preselects repositories with undelivered work and publishes without a title', async () => {
-    const dispatchAction = vi.fn().mockResolvedValue({ result: 'published' });
+describe('PublishModal', () => {
+  it('keeps an existing pull-request update focused on work users can control', () => {
     render(
-      <PublishModalBody
-        featureId="abcd1234ef567890"
-        preflight={{
-          featureId: 'abcd1234ef567890',
-          sourceRevision: 'rev-1',
-          canMarkDone: true,
-          repos: [
-            {
-              repo: 'api',
-              publishable: true,
-              touched: true,
-              status: 'unpublished_changes',
-              pendingCommits: 3,
-              pendingDirty: true,
-              pushMode: 'rewrite',
-              prUrl: 'https://example/pull/1',
-            },
-          ],
-        }}
-        dispatchAction={dispatchAction}
-        generatePublishDescription={vi.fn()}
-        openExternal={vi.fn()}
-        onDispatched={vi.fn()}
+      <PublishModal
+        {...props({
+          preflight: {
+            featureId,
+            sourceRevision: 'rev-1',
+            canMarkDone: true,
+            repos: [
+              {
+                repo: 'api',
+                publishable: true,
+                touched: true,
+                status: 'unpublished_changes',
+                pendingCommits: 1,
+                pushMode: 'rewrite',
+              },
+            ],
+          },
+        })}
       />,
     );
 
-    expect(screen.getByRole('heading', { name: 'Unpublished changes' })).toBeInTheDocument();
-    expect(screen.getByText('3 commits · uncommitted changes')).toBeInTheDocument();
-    expect(screen.getByText('Force-updates the pull-request branch.')).toBeInTheDocument();
-    expect(screen.getByRole('checkbox', { name: 'api' })).toBeChecked();
-
-    // pendingDirty is true with no enumerated files (nil Worktrees or an
-    // InspectCleanliness error upstream) — publish still requires explicit
-    // confirmation rather than silently sweeping up unknown files.
-    expect(
-      screen.getByText('Could not list the files this publish would commit.'),
-    ).toBeInTheDocument();
-    const submit = screen.getByRole('button', { name: 'Publish updates' });
-    expect(submit).toBeDisabled();
-    await userEvent.click(screen.getByRole('checkbox', { name: 'Commit uncommitted files' }));
-    expect(submit).toBeEnabled();
-    await userEvent.click(submit);
-
-    expect(dispatchAction).toHaveBeenCalledWith('abcd1234ef567890', 'publish', {
-      source_revision: 'rev-1',
-      repos: ['api'],
-    });
-  });
-
-  it('still requires a title when a selected repository has no pull request', async () => {
-    render(
-      <PublishModalBody
-        featureId="abcd1234ef567890"
-        preflight={{
-          featureId: 'abcd1234ef567890',
-          sourceRevision: 'rev-1',
-          canMarkDone: true,
-          repos: [
-            { repo: 'web', publishable: true, touched: true, status: 'eligible' },
-            {
-              repo: 'api',
-              publishable: true,
-              touched: true,
-              status: 'unpublished_changes',
-              pendingCommits: 1,
-            },
-          ],
-        }}
-        dispatchAction={vi.fn()}
-        generatePublishDescription={vi.fn()}
-        openExternal={vi.fn()}
-        onDispatched={vi.fn()}
-      />,
-    );
-
-    expect(screen.getByRole('button', { name: 'Publish' })).toBeDisabled();
-    await userEvent.type(screen.getByLabelText('PR title'), 'Ship it');
-    expect(screen.getByRole('button', { name: 'Publish' })).toBeEnabled();
-  });
-
-  it('lists dirty files and gates publish on the confirmation checkbox', async () => {
-    const dispatchAction = vi.fn().mockResolvedValue({ result: 'published' });
-    render(
-      <PublishModalBody
-        featureId="abcd1234ef567890"
-        preflight={{
-          featureId: 'abcd1234ef567890',
-          sourceRevision: 'rev-1',
-          canMarkDone: true,
-          repos: [
-            {
-              repo: 'api',
-              publishable: true,
-              touched: true,
-              status: 'unpublished_changes',
-              pendingCommits: 3,
-              pendingDirty: true,
-              pushMode: 'rewrite',
-              prUrl: 'https://example/pull/1',
-              pendingDirtyFiles: ['src/a.ts', 'src/b.ts'],
-              pendingDirtyFileTotal: 2,
-            },
-          ],
-        }}
-        dispatchAction={dispatchAction}
-        generatePublishDescription={vi.fn()}
-        openExternal={vi.fn()}
-        onDispatched={vi.fn()}
-      />,
-    );
-
-    expect(screen.getByText('src/a.ts')).toBeInTheDocument();
-    expect(screen.getByText('src/b.ts')).toBeInTheDocument();
-    expect(
-      screen.getByText('api — 2 uncommitted files will be committed and pushed:'),
-    ).toBeInTheDocument();
-    expect(screen.queryByText(/more$/)).not.toBeInTheDocument();
-
-    const submit = screen.getByRole('button', { name: 'Publish updates' });
-    expect(submit).toBeDisabled();
-
-    await userEvent.click(screen.getByRole('checkbox', { name: 'Commit uncommitted files' }));
-    expect(submit).toBeEnabled();
-
-    await userEvent.click(submit);
-    expect(dispatchAction).toHaveBeenCalledWith('abcd1234ef567890', 'publish', {
-      source_revision: 'rev-1',
-      repos: ['api'],
-    });
-  });
-
-  it('renders no dirty notice and needs no confirmation for a clean repo', () => {
-    render(
-      <PublishModalBody
-        featureId="abcd1234ef567890"
-        preflight={{
-          featureId: 'abcd1234ef567890',
-          sourceRevision: 'rev-1',
-          canMarkDone: true,
-          repos: [
-            {
-              repo: 'api',
-              publishable: true,
-              touched: true,
-              status: 'unpublished_changes',
-              pendingCommits: 3,
-            },
-          ],
-        }}
-        dispatchAction={vi.fn()}
-        generatePublishDescription={vi.fn()}
-        openExternal={vi.fn()}
-        onDispatched={vi.fn()}
-      />,
-    );
-
-    expect(screen.queryByText('Uncommitted changes')).not.toBeInTheDocument();
+    expect(screen.getByRole('dialog', { name: 'Publish reviewed changes' })).toBeVisible();
+    expect(screen.queryByLabelText('PR title')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('PR body')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Generate PR narrative' })).not.toBeInTheDocument();
+    expect(screen.getByText('Rewrites the pull-request branch with a safety lease.')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeVisible();
     expect(screen.getByRole('button', { name: 'Publish updates' })).toBeEnabled();
   });
 
-  it('renders a +N more line when the dirty file sample is truncated', () => {
-    render(
-      <PublishModalBody
-        featureId="abcd1234ef567890"
-        preflight={{
-          featureId: 'abcd1234ef567890',
-          sourceRevision: 'rev-1',
-          canMarkDone: true,
-          repos: [
-            {
-              repo: 'api',
-              publishable: true,
-              touched: true,
-              status: 'unpublished_changes',
-              pendingDirty: true,
-              pendingDirtyFiles: ['src/a.ts', 'src/b.ts'],
-              pendingDirtyFileTotal: 5,
-            },
-          ],
-        }}
-        dispatchAction={vi.fn()}
-        generatePublishDescription={vi.fn()}
-        openExternal={vi.fn()}
-        onDispatched={vi.fn()}
-      />,
-    );
+  it('uses the sheet family and a cancel-first footer', () => {
+    render(<PublishModal {...props({ preflight: { ...newPrPreflight, repos: [] } })} />);
 
-    expect(screen.getByText('+3 more')).toBeInTheDocument();
-  });
-
-  it('shows a fallback notice and still requires confirmation when the preflight could not enumerate', async () => {
-    render(
-      <PublishModalBody
-        featureId="abcd1234ef567890"
-        preflight={{
-          featureId: 'abcd1234ef567890',
-          sourceRevision: 'rev-1',
-          canMarkDone: true,
-          repos: [
-            {
-              repo: 'api',
-              publishable: true,
-              touched: true,
-              status: 'unpublished_changes',
-              pendingDirty: true,
-            },
-          ],
-        }}
-        dispatchAction={vi.fn()}
-        generatePublishDescription={vi.fn()}
-        openExternal={vi.fn()}
-        onDispatched={vi.fn()}
-      />,
-    );
-
+    const dialog = screen.getByRole('dialog', { name: 'Publish reviewed changes' });
+    expect(dialog).toHaveClass('sheet', 'completion-publish-sheet');
+    const footer = dialog.querySelector('.sheet__footer');
     expect(
-      screen.getByText('Could not list the files this publish would commit.'),
-    ).toBeInTheDocument();
-    const submit = screen.getByRole('button', { name: 'Publish updates' });
-    expect(submit).toBeDisabled();
-    await userEvent.click(screen.getByRole('checkbox', { name: 'Commit uncommitted files' }));
-    expect(submit).toBeEnabled();
+      within(footer as HTMLElement)
+        .getAllByRole('button')
+        .map((button) => button.textContent),
+    ).toEqual(['Cancel', 'Publish updates']);
   });
 
-  it('reconciles instead of failing when publish outruns its request bound', async () => {
-    const dispatchAction = vi.fn(() =>
-      Promise.reject(
-        new Error('E_REQUEST_TIMEOUT: The runtime did not answer within the request bound.'),
-      ),
+  it('dispatches the typed request for an existing pull request', async () => {
+    const user = userEvent.setup();
+    const dispatchAction = vi.fn().mockResolvedValue(result);
+    render(
+      <PublishModal
+        {...props({
+          dispatchAction,
+          preflight: {
+            featureId,
+            sourceRevision: 'rev-1',
+            canMarkDone: true,
+            repos: [
+              {
+                repo: 'api',
+                publishable: true,
+                touched: true,
+                status: 'unpublished_changes',
+                pendingCommits: 1,
+              },
+            ],
+          },
+        })}
+      />,
     );
-    const onDispatched = vi.fn();
-    render(<PublishModalBody {...props({ dispatchAction, onDispatched })} />);
-    fireEvent.change(screen.getByLabelText('PR title'), { target: { value: 'My PR' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Publish' }));
 
-    await waitFor(() =>
-      expect(screen.getByRole('button', { name: 'Reconciling…' })).toBeDisabled(),
+    await user.click(screen.getByRole('button', { name: 'Publish updates' }));
+    expect(dispatchAction).toHaveBeenCalledWith({
+      featureId,
+      action: 'publish',
+      body: { source_revision: 'rev-1', repos: ['api'] },
+    });
+  });
+
+  it('shows required and optional PR fields only while a new PR is selected', async () => {
+    const user = userEvent.setup();
+    render(
+      <PublishModal
+        {...props({
+          preflight: {
+            featureId,
+            sourceRevision: 'rev-1',
+            canMarkDone: true,
+            repos: [
+              { repo: 'web', publishable: true, touched: true, status: 'eligible' },
+              {
+                repo: 'api',
+                publishable: true,
+                touched: true,
+                status: 'unpublished_changes',
+                pendingCommits: 1,
+              },
+            ],
+          },
+        })}
+      />,
     );
-    expect(screen.getByRole('status').textContent).toContain('still running on the server');
-    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
-    expect(screen.queryByText(/^failed:/)).not.toBeInTheDocument();
-    // The true outcome (PR URLs) arrives through the feature refresh.
-    expect(onDispatched).toHaveBeenCalled();
+
+    expect(screen.getByText('Required')).toBeVisible();
+    expect(screen.getByText('Optional')).toBeVisible();
+    await user.click(screen.getByRole('checkbox', { name: 'web' }));
+    expect(screen.queryByLabelText('PR title')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('PR body')).not.toBeInTheDocument();
+  });
+
+  it('requires confirmation before committing selected dirty files', async () => {
+    const user = userEvent.setup();
+    render(
+      <PublishModal
+        {...props({
+          preflight: {
+            featureId,
+            sourceRevision: 'rev-1',
+            canMarkDone: true,
+            repos: [
+              {
+                repo: 'api',
+                publishable: true,
+                touched: true,
+                status: 'unpublished_changes',
+                pendingDirty: true,
+                pendingDirtyFiles: ['src/a.ts'],
+                pendingDirtyFileTotal: 1,
+              },
+            ],
+          },
+        })}
+      />,
+    );
+
+    const publish = screen.getByRole('button', { name: 'Publish updates' });
+    expect(publish).toBeDisabled();
+    await user.click(screen.getByRole('checkbox', { name: 'Commit uncommitted files' }));
+    expect(publish).toBeEnabled();
+  });
+
+  it('renders concise branch-divergence recovery without a raw push command', async () => {
+    const user = userEvent.setup();
+    const dispatchAction = vi
+      .fn()
+      .mockRejectedValue(
+        new Error(
+          'publish_remote_diverged: pull-request branch contains remote work that is not in this workspace Review and reconcile the pull-request branch on GitHub, then refresh and retry.',
+        ),
+      );
+    render(
+      <PublishModal
+        {...props({
+          dispatchAction,
+          preflight: {
+            featureId,
+            sourceRevision: 'rev-1',
+            canMarkDone: true,
+            repos: [
+              {
+                repo: 'api',
+                publishable: true,
+                touched: true,
+                status: 'unpublished_changes',
+                pendingCommits: 1,
+              },
+            ],
+          },
+        })}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Publish updates' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      "The pull-request branch contains changes that aren't in this workspace.",
+    );
+    expect(screen.getByRole('alert')).not.toHaveTextContent('git push');
+  });
+
+  it('closes through Escape, the scrim, and Cancel while idle', async () => {
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+    render(<PublishModal {...props({ onClose, preflight: { ...newPrPreflight, repos: [] } })} />);
+
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    fireEvent.mouseDown(screen.getByRole('dialog').parentElement as HTMLElement);
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(onClose).toHaveBeenCalledTimes(3);
+  });
+
+  it('does not close through Cancel, scrim, or Escape while publishing', async () => {
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+    const dispatchAction = vi.fn(() => new Promise<FeatureActionResult>(() => undefined));
+    render(
+      <PublishModal
+        {...props({
+          onClose,
+          dispatchAction,
+          preflight: {
+            featureId,
+            sourceRevision: 'rev-1',
+            canMarkDone: true,
+            repos: [
+              {
+                repo: 'api',
+                publishable: true,
+                touched: true,
+                status: 'unpublished_changes',
+                pendingCommits: 1,
+              },
+            ],
+          },
+        })}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Publish updates' }));
+    expect(screen.getByRole('button', { name: 'Publishing…' })).toBeDisabled();
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    fireEvent.mouseDown(screen.getByRole('dialog').parentElement as HTMLElement);
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('uses Publish and sends title metadata when a selected repo needs a new pull request', async () => {
+    const user = userEvent.setup();
+    const dispatchAction = vi.fn().mockResolvedValue(result);
+    render(<PublishModal {...props({ dispatchAction })} />);
+
+    expect(screen.getByRole('button', { name: 'Publish' })).toBeDisabled();
+    const details = screen.getByRole('region', { name: 'Pull request details' });
+    expect(within(details).getByRole('button', { name: 'Generate narrative' })).toBeVisible();
+    await user.type(screen.getByLabelText('PR title'), 'Ship reviewed work');
+    await user.type(screen.getByLabelText('PR body'), 'A compact description.');
+    await user.click(screen.getByRole('button', { name: 'Publish' }));
+
+    expect(dispatchAction).toHaveBeenCalledWith({
+      featureId,
+      action: 'publish',
+      body: {
+        source_revision: 'rev-1',
+        repos: ['web'],
+        title: 'Ship reviewed work',
+        body: 'A compact description.',
+      },
+    });
+  });
+
+  it('keeps Publish disabled until the required title is nonblank', async () => {
+    const user = userEvent.setup();
+    render(<PublishModal {...props()} />);
+
+    const publish = screen.getByRole('button', { name: 'Publish' });
+    expect(publish).toBeDisabled();
+
+    await user.click(screen.getByLabelText('PR title'));
+    await user.tab();
+    expect(screen.getByText('Add a title to create the pull request.')).toBeVisible();
+
+    await user.type(screen.getByLabelText('PR title'), 'Ship reviewed work');
+    expect(publish).toBeEnabled();
+  });
+
+  it('moves focus to a narrative-generation failure notice', async () => {
+    const user = userEvent.setup();
+    render(
+      <PublishModal
+        {...props({
+          generatePublishDescription: vi.fn().mockRejectedValue(new Error('generation failed')),
+        })}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Generate narrative' }));
+    expect(await screen.findByRole('alert')).toHaveFocus();
+  });
+
+  it('keeps the publish mutation locked after a swallowed refresh following a timeout', async () => {
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+    const setPublishTimeoutLocked = vi.fn();
+    const dispatchAction = vi
+      .fn()
+      .mockRejectedValue(new Error('E_REQUEST_TIMEOUT: publish did not answer before the bound'));
+    render(
+      <PublishModal
+        {...props({
+          dispatchAction,
+          onClose,
+          setPublishTimeoutLocked,
+          // Completion refresh swallows an IPC fetch failure and resolves, just
+          // as the production preflight hook does.
+          onDispatched: vi.fn().mockResolvedValue(undefined),
+          preflight: {
+            featureId,
+            sourceRevision: 'rev-1',
+            canMarkDone: true,
+            repos: [
+              { repo: 'api', publishable: true, touched: true, status: 'unpublished_changes' },
+            ],
+          },
+        })}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Publish updates' }));
+    expect(await screen.findByRole('status')).toHaveTextContent('may still be running');
+    expect(screen.getByRole('button', { name: 'Reconciling…' })).toBeDisabled();
+    expect(setPublishTimeoutLocked).toHaveBeenCalledWith(true);
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(onClose).toHaveBeenCalledOnce();
     expect(dispatchAction).toHaveBeenCalledOnce();
   });
 
-  it('still reads as a failure for an ordinary rejection and re-arms Publish', async () => {
-    const dispatchAction = vi.fn(() => Promise.reject(new Error('conflict: the server said no')));
-    render(<PublishModalBody {...props({ dispatchAction })} />);
-    fireEvent.change(screen.getByLabelText('PR title'), { target: { value: 'My PR' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Publish' }));
+  it('marks a blank required title invalid after local validation', async () => {
+    const user = userEvent.setup();
+    render(<PublishModal {...props()} />);
 
-    await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('failed:'));
-    expect(screen.getByRole('button', { name: 'Publish' })).toBeEnabled();
+    await user.click(screen.getByLabelText('PR title'));
+    await user.tab();
+
+    const title = screen.getByLabelText('PR title');
+    expect(title).toHaveAttribute('aria-invalid', 'true');
+    expect(screen.getByText('Add a title to create the pull request.')).toBeVisible();
   });
 
-  it('invalidates the confirmation when the dirty selection changes', async () => {
-    const dispatchAction = vi.fn().mockResolvedValue({ result: 'published' });
+  it('moves focus to an asynchronous publish failure notice', async () => {
+    const user = userEvent.setup();
+    const dispatchAction = vi.fn().mockRejectedValue(new Error('publish failed safely'));
     render(
-      <PublishModalBody
-        featureId="abcd1234ef567890"
-        preflight={{
-          featureId: 'abcd1234ef567890',
-          sourceRevision: 'rev-1',
-          canMarkDone: true,
-          repos: [
-            {
-              repo: 'api',
-              publishable: true,
-              touched: true,
-              status: 'unpublished_changes',
-              pendingDirty: true,
-              pendingDirtyFiles: ['a.ts'],
-              pendingDirtyFileTotal: 1,
-            },
-            {
-              repo: 'core',
-              publishable: true,
-              touched: true,
-              status: 'unpublished_changes',
-              pendingDirty: true,
-              pendingDirtyFiles: ['b.ts', 'c.ts', 'd.ts'],
-              pendingDirtyFileTotal: 3,
-            },
-          ],
-        }}
-        dispatchAction={dispatchAction}
-        generatePublishDescription={vi.fn()}
-        openExternal={vi.fn()}
-        onDispatched={vi.fn()}
+      <PublishModal
+        {...props({
+          dispatchAction,
+          preflight: {
+            featureId,
+            sourceRevision: 'rev-1',
+            canMarkDone: true,
+            repos: [
+              {
+                repo: 'api',
+                publishable: true,
+                touched: true,
+                status: 'unpublished_changes',
+              },
+            ],
+          },
+        })}
       />,
     );
 
-    const submit = screen.getByRole('button', { name: 'Publish updates' });
-    const confirm = screen.getByRole('checkbox', { name: 'Commit uncommitted files' });
-    const coreCheckbox = screen.getByRole('checkbox', { name: 'core' });
+    await user.click(screen.getByRole('button', { name: 'Publish updates' }));
+    expect(await screen.findByRole('alert')).toHaveFocus();
+  });
 
-    // Both dirty repos start selected. Deselect one, so only "api" (1 file)
-    // remains dirty-selected.
-    await userEvent.click(coreCheckbox);
-    expect(submit).toBeDisabled();
+  it('keeps sanitized unexpected details collapsed until requested', async () => {
+    const user = userEvent.setup();
+    const dispatchAction = vi.fn().mockRejectedValue(new Error('safe diagnostic detail'));
+    render(
+      <PublishModal
+        {...props({
+          dispatchAction,
+          preflight: {
+            featureId,
+            sourceRevision: 'rev-1',
+            canMarkDone: true,
+            repos: [
+              { repo: 'api', publishable: true, touched: true, status: 'unpublished_changes' },
+            ],
+          },
+        })}
+      />,
+    );
 
-    // Confirm against that smaller set.
-    await userEvent.click(confirm);
-    expect(submit).toBeEnabled();
+    await user.click(screen.getByRole('button', { name: 'Publish updates' }));
+    const details = screen.getByText('Show details').closest('details');
+    expect(details).not.toBeNull();
+    expect(details).not.toHaveAttribute('open');
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'Review the details, then refresh and retry.',
+    );
+    await user.click(screen.getByText('Show details'));
+    expect(screen.getByText('safe diagnostic detail')).toBeVisible();
+  });
 
-    // Re-select "core" (3 files) — the confirmed set was only ever "api",
-    // so the tick must not carry over to authorize the larger set.
-    await userEvent.click(coreCheckbox);
-    expect(submit).toBeDisabled();
+  it('renders structured remediation for an unknown publish failure', async () => {
+    const user = userEvent.setup();
+    const failure = Object.assign(new Error('publish_partial_failure: one repository failed'), {
+      code: 'publish_partial_failure',
+      remediation: 'Resolve the repository failure, then retry the remaining work.',
+    });
+    render(
+      <PublishModal
+        {...props({
+          dispatchAction: vi.fn().mockRejectedValue(failure),
+          preflight: {
+            featureId,
+            sourceRevision: 'rev-1',
+            canMarkDone: true,
+            repos: [
+              { repo: 'api', publishable: true, touched: true, status: 'unpublished_changes' },
+            ],
+          },
+        })}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Publish updates' }));
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent(
+      'Resolve the repository failure, then retry the remaining work.',
+    );
+    expect(screen.getByText('Show details').closest('details')).not.toHaveAttribute('open');
+  });
+
+  it('refreshes partial progress before retrying only the repository that still failed', async () => {
+    const user = userEvent.setup();
+    const dispatchAction = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('publish_partial_failure: web push failed'))
+      .mockResolvedValueOnce(result);
+    const initial: CompletionPreflightResult = {
+      featureId,
+      sourceRevision: 'rev-1',
+      canMarkDone: true,
+      repos: [
+        { repo: 'api', publishable: true, touched: true, status: 'unpublished_changes' },
+        { repo: 'web', publishable: true, touched: true, status: 'unpublished_changes' },
+      ],
+    };
+    const refreshed: CompletionPreflightResult = {
+      ...initial,
+      repos: [
+        { repo: 'api', publishable: true, touched: true, status: 'already_published' },
+        { repo: 'web', publishable: true, touched: true, status: 'unpublished_changes' },
+      ],
+    };
+    function PartialPublishHarness() {
+      const [preflight, setPreflight] = useState(initial);
+      return (
+        <PublishModal
+          {...props({
+            dispatchAction,
+            preflight,
+            onDispatched: () => setPreflight(refreshed),
+          })}
+        />
+      );
+    }
+    render(<PartialPublishHarness />);
+
+    await user.click(screen.getByRole('button', { name: 'Publish updates' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      "Agentico couldn't prepare this publish.",
+    );
+    await user.click(screen.getByRole('button', { name: 'Publish updates' }));
+
+    expect(dispatchAction).toHaveBeenLastCalledWith({
+      featureId,
+      action: 'publish',
+      body: { source_revision: 'rev-1', repos: ['web'] },
+    });
+  });
+
+  it('preserves the publish failure when its best-effort refresh also fails', async () => {
+    const user = userEvent.setup();
+    let rejectRefresh: ((reason: Error) => void) | undefined;
+    const onDispatched = vi.fn(
+      () =>
+        new Promise<void>((_resolve, reject) => {
+          rejectRefresh = reject;
+        }),
+    );
+    render(
+      <PublishModal
+        {...props({
+          dispatchAction: vi.fn().mockRejectedValue(new Error('publish failed safely')),
+          onDispatched,
+          preflight: {
+            featureId,
+            sourceRevision: 'rev-1',
+            canMarkDone: true,
+            repos: [
+              { repo: 'api', publishable: true, touched: true, status: 'unpublished_changes' },
+            ],
+          },
+        })}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Publish updates' }));
+    expect(screen.getByRole('button', { name: 'Publishing…' })).toBeDisabled();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+
+    rejectRefresh?.(new Error('refresh unavailable'));
+    await waitFor(() =>
+      expect(screen.getByRole('alert')).toHaveTextContent('publish failed safely'),
+    );
+    expect(screen.getByRole('alert')).not.toHaveTextContent('refresh unavailable');
+    expect(screen.getByRole('button', { name: 'Publish updates' })).toBeEnabled();
+  });
+
+  it('announces success and retries only repositories still publishable after refresh', async () => {
+    const user = userEvent.setup();
+    const dispatchAction = vi.fn().mockResolvedValue(result);
+    const initial: CompletionPreflightResult = {
+      featureId,
+      sourceRevision: 'rev-1',
+      canMarkDone: true,
+      repos: [
+        { repo: 'api', publishable: true, touched: true, status: 'unpublished_changes' },
+        { repo: 'web', publishable: true, touched: true, status: 'unpublished_changes' },
+      ],
+    };
+    const refreshed: CompletionPreflightResult = {
+      ...initial,
+      repos: [
+        { repo: 'api', publishable: true, touched: true, status: 'already_published' },
+        { repo: 'web', publishable: true, touched: true, status: 'unpublished_changes' },
+      ],
+    };
+    const view = render(<PublishModal {...props({ dispatchAction, preflight: initial })} />);
+
+    await user.click(screen.getByRole('button', { name: 'Publish updates' }));
+    expect(await screen.findByRole('status')).toHaveTextContent('published');
+    view.rerender(<PublishModal {...props({ dispatchAction, preflight: refreshed })} />);
+    await user.click(screen.getByRole('button', { name: 'Publish updates' }));
+
+    await waitFor(() =>
+      expect(dispatchAction).toHaveBeenLastCalledWith({
+        featureId,
+        action: 'publish',
+        body: { source_revision: 'rev-1', repos: ['web'] },
+      }),
+    );
+  });
+
+  it('announces a timeout without claiming completion and lets the user dismiss after refresh', async () => {
+    const user = userEvent.setup();
+    let finishRefresh: (() => void) | undefined;
+    const onDispatched = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          finishRefresh = resolve;
+        }),
+    );
+    const onClose = vi.fn();
+    const dispatchAction = vi
+      .fn()
+      .mockRejectedValue(new Error('E_REQUEST_TIMEOUT: publish did not answer before the bound'));
+    render(
+      <PublishModal
+        {...props({
+          dispatchAction,
+          onDispatched,
+          onClose,
+          preflight: {
+            featureId,
+            sourceRevision: 'rev-1',
+            canMarkDone: true,
+            repos: [
+              { repo: 'api', publishable: true, touched: true, status: 'unpublished_changes' },
+            ],
+          },
+        })}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Publish updates' }));
+    expect(await screen.findByRole('status')).toHaveTextContent(
+      'Refreshing the latest publish state',
+    );
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(onClose).not.toHaveBeenCalled();
+
+    finishRefresh?.();
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Reconciling…' })).toBeDisabled(),
+    );
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it('keeps a timeout locked when its refresh callback rejects', async () => {
+    const user = userEvent.setup();
+    const dispatchAction = vi
+      .fn()
+      .mockRejectedValue(new Error('E_REQUEST_TIMEOUT: publish did not answer before the bound'));
+    render(
+      <PublishModal
+        {...props({
+          dispatchAction,
+          onDispatched: vi.fn().mockRejectedValue(new Error('refresh unavailable')),
+          preflight: {
+            featureId,
+            sourceRevision: 'rev-1',
+            canMarkDone: true,
+            repos: [
+              { repo: 'api', publishable: true, touched: true, status: 'unpublished_changes' },
+            ],
+          },
+        })}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Publish updates' }));
+    expect(await screen.findByRole('status')).toHaveTextContent('may still be running');
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'Publish may still be running. Quit and reopen Agentico before publishing again.',
+    );
+    expect(screen.getByRole('button', { name: 'Reconciling…' })).toBeDisabled();
+  });
+
+  it('groups repository metadata and the pull-request link in the manifest row', () => {
+    render(
+      <PublishModal
+        {...props({
+          preflight: {
+            featureId,
+            sourceRevision: 'rev-1',
+            canMarkDone: true,
+            repos: [
+              {
+                repo: 'api',
+                publishable: true,
+                touched: true,
+                status: 'unpublished_changes',
+                pendingCommits: 3,
+                prUrl: 'https://example.test/pr/1',
+              },
+            ],
+          },
+        })}
+      />,
+    );
+
+    const row = screen
+      .getByRole('checkbox', { name: 'api' })
+      .closest('.completion-workspace__publish-repo');
+    expect(row?.querySelector('.completion-workspace__publish-repo-meta')).toHaveTextContent(
+      '3 commits',
+    );
+    expect(within(row as HTMLElement).getByRole('button', { name: 'PR ↗' })).toBeVisible();
   });
 });

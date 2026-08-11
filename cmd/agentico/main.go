@@ -2079,6 +2079,31 @@ func actionConflictError(err error) error {
 	if err == nil {
 		return nil
 	}
+	var diverged *orchestrator.PublishRemoteDivergedError
+	if errors.As(err, &diverged) {
+		return &serverruntime.ActionConflictError{
+			Err:     err,
+			Code:    serverruntime.ErrorCodePublishRemoteDiverged,
+			Message: diverged.Error(),
+			Target: map[string]any{
+				"repo":                diverged.RepoName,
+				"branch":              diverged.Branch,
+				"remote_only_commits": diverged.RemoteOnlyCommits,
+			},
+		}
+	}
+	var changed *orchestrator.PublishRemoteChangedError
+	if errors.As(err, &changed) {
+		return &serverruntime.ActionConflictError{
+			Err:     err,
+			Code:    serverruntime.ErrorCodePublishRemoteChanged,
+			Message: changed.Error(),
+			Target: map[string]any{
+				"repo":   changed.RepoName,
+				"branch": changed.Branch,
+			},
+		}
+	}
 	var publishConflict *orchestrator.PublishConflictError
 	if errors.As(err, &publishConflict) {
 		return &serverruntime.ActionConflictError{

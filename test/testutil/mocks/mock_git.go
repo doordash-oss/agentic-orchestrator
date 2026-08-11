@@ -21,14 +21,15 @@ import (
 // MockRemoteOps is the small test substitute for orchestrator-owned remote
 // operations.
 type MockRemoteOps struct {
-	PushFn         func(worktreePath, branch string) error
-	ForcePushFn    func(worktreePath, branch string) error
-	PullRebaseFn   func(worktreePath, branch string) error
-	CreatePRFn     func(repoPath, branch, title, body, baseBranch string, draft bool) (string, error)
-	PRBaseBranchFn func(repoPath, prURL string) string
-	PRStateFn      func(repoPath, prURL string) (string, error)
-	DefaultError   error
-	Calls          []MockCall
+	PushFn                func(worktreePath, branch string) error
+	ForcePushFn           func(worktreePath, branch string) error
+	PushRewrittenBranchFn func(worktreePath, branch string) error
+	PullRebaseFn          func(worktreePath, branch string) error
+	CreatePRFn            func(repoPath, branch, title, body, baseBranch string, draft bool) (string, error)
+	PRBaseBranchFn        func(repoPath, prURL string) string
+	PRStateFn             func(repoPath, prURL string) (string, error)
+	DefaultError          error
+	Calls                 []MockCall
 }
 
 func NewMockRemoteOps() *MockRemoteOps { return &MockRemoteOps{} }
@@ -45,6 +46,14 @@ func (m *MockRemoteOps) ForcePush(worktreePath, branch string) error {
 	m.Calls = append(m.Calls, MockCall{Method: "ForcePush", Args: []any{worktreePath, branch}})
 	if m.ForcePushFn != nil {
 		return m.ForcePushFn(worktreePath, branch)
+	}
+	return m.DefaultError
+}
+
+func (m *MockRemoteOps) PushRewrittenBranch(worktreePath, branch string) error {
+	m.Calls = append(m.Calls, MockCall{Method: "PushRewrittenBranch", Args: []any{worktreePath, branch}})
+	if m.PushRewrittenBranchFn != nil {
+		return m.PushRewrittenBranchFn(worktreePath, branch)
 	}
 	return m.DefaultError
 }

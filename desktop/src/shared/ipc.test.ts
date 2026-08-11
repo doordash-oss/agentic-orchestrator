@@ -120,6 +120,23 @@ describe('operational IPC schemas', () => {
     expect(
       FeatureActionRequestSchema.parse({
         featureId: 'abcd1234',
+        action: 'publish',
+        body: {
+          source_revision: 'rev-1',
+          repos: ['repo-a'],
+        },
+      }),
+    ).toStrictEqual({
+      featureId: 'abcd1234',
+      action: 'publish',
+      body: {
+        source_revision: 'rev-1',
+        repos: ['repo-a'],
+      },
+    });
+    expect(
+      FeatureActionRequestSchema.parse({
+        featureId: 'abcd1234',
         action: 'delete',
         body: { source_revision: 'rev-1' },
       }),

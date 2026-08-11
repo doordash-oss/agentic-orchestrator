@@ -7,6 +7,7 @@ import {
   readFileSync,
   readdirSync,
   realpathSync,
+  renameSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -31,9 +32,11 @@ afterEach(() => {
   for (const root of tempRoots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
-function makeTempRoot() {
-  const root = mkdtempSync(join(tmpdir(), 'agentico-linux-release-'));
-  tempRoots.push(root);
+function makeTempRoot(name) {
+  const base = mkdtempSync(join(tmpdir(), 'agentico-linux-release-'));
+  tempRoots.push(base);
+  const root = name === undefined ? base : join(base, name);
+  if (name !== undefined) mkdirSync(root);
   mkdirSync(join(root, 'desktop', 'dist'), { recursive: true });
   mkdirSync(join(root, '.git'), { recursive: true });
   return root;
@@ -85,11 +88,12 @@ function writeInvocationOutputs(root, args) {
 }
 
 function validFixtureOptions(overrides = {}) {
-  const repoRoot = makeTempRoot();
+  const repoRoot = overrides.repoRoot ?? makeTempRoot();
   return {
     repoRoot,
     gitCommonDir: join(repoRoot, '.git'),
     gitWorktreeDir: join(repoRoot, '.git'),
+    gitEntry: join(repoRoot, '.git'),
     runId: 'run-123',
     gitStatus: '',
     exactTag: 'v0.150.0',
@@ -153,11 +157,81 @@ describe('runLinuxRelease', () => {
     ).toBe(true);
   });
 
-  it('passes a linked-worktree Git entry through to each Docker build', () => {
-    const options = validFixtureOptions({
-      gitCommonDir: '/repo/.git',
-      gitEntry: '/repo/worktrees/linux-release/.git',
-    });
+  it('cleans only its per-run node_modules volume and staging tree after success', () => {
+    const options = validFixtureOptions({ volumePrefix: 'agentico-release-run-123' });
+    const calls = [];
+    options.execute = (_command, args) => {
+      calls.push(args);
+      writeInvocationOutputs(options.repoRoot, args);
+    };
+
+    runLinuxRelease(options);
+
+    expect(calls).toContainEqual([
+      'volume',
+      'rm',
+      '--force',
+      'agentico-release-run-123-node-modules',
+    ]);
+    expect(calls.filter((args) => args[0] === 'volume')).toEqual([
+      ['volume', 'rm', '--force', 'agentico-release-run-123-node-modules'],
+    ]);
+    expect(existsSync(join(options.repoRoot, '.git', 'agentico-release-staging', 'run-123'))).toBe(
+      false,
+    );
+  });
+
+  it('cleans exact per-run resources after a failed x64 build', () => {
+    const options = validFixtureOptions({ volumePrefix: 'agentico-release-run-123' });
+    const calls = [];
+    options.execute = (_command, args) => {
+      calls.push(args);
+      if (args.includes('AGENTICO_PACKAGE_ARCH=x64')) throw new Error('x64 failed');
+    };
+
+    expect(() => runLinuxRelease(options)).toThrow(/x64 failed/);
+    expect(calls).toContainEqual([
+      'volume',
+      'rm',
+      '--force',
+      'agentico-release-run-123-node-modules',
+    ]);
+    expect(existsSync(join(options.repoRoot, '.git', 'agentico-release-staging', 'run-123'))).toBe(
+      false,
+    );
+  });
+
+  it('surfaces cleanup failure alongside the primary build failure', () => {
+    const options = validFixtureOptions({ volumePrefix: 'agentico-release-run-123' });
+    options.execute = (_command, args) => {
+      if (args.includes('AGENTICO_PACKAGE_ARCH=x64')) throw new Error('primary x64 failure');
+      if (args[0] === 'volume') throw new Error('volume cleanup failure');
+    };
+
+    let observed;
+    try {
+      runLinuxRelease(options);
+    } catch (error) {
+      observed = error;
+    }
+    expect(observed).toBeInstanceOf(AggregateError);
+    expect(observed.cause).toMatchObject({ message: 'primary x64 failure' });
+    expect(observed.errors.map(({ message }) => message)).toEqual(
+      expect.arrayContaining(['primary x64 failure', 'volume cleanup failure']),
+    );
+  });
+
+  it('surfaces cleanup failure after successful packaging', () => {
+    const options = validFixtureOptions({ volumePrefix: 'agentico-release-run-123' });
+    options.execute = (_command, args) => {
+      writeInvocationOutputs(options.repoRoot, args);
+      if (args[0] === 'volume') throw new Error('volume cleanup failure');
+    };
+    expect(() => runLinuxRelease(options)).toThrow(/volume cleanup failure/);
+  });
+
+  it('passes the validated Git entry through to each Docker build checkout', () => {
+    const options = validFixtureOptions();
     const dockerInvocations = [];
     options.execute = (_command, args) => {
       dockerInvocations.push(args);
@@ -173,7 +247,11 @@ describe('runLinuxRelease', () => {
     expect(
       dockerInvocations
         .filter((args) => args.includes('linux/amd64'))
-        .some((args) => args.includes(`${options.gitEntry}:/agentico-release-source/.git:ro`)),
+        .some((args) =>
+          args.includes(
+            `type=bind,src=${options.gitEntry},dst=/agentico-release-build/.git,readonly`,
+          ),
+        ),
     ).toBe(true);
   });
 
@@ -272,6 +350,67 @@ describe('runLinuxRelease', () => {
         runId: '../../desktop/dist',
       }),
     ).toThrow(/invalid release run id/);
+  });
+
+  it.each(['comma,path', 'new\nline'])(
+    'rejects Docker --mount delimiter path %j before contacting Docker',
+    (name) => {
+      const repoRoot = makeTempRoot(name);
+      let dockerContacted = false;
+      const options = validFixtureOptions({
+        repoRoot,
+        dockerAvailable: () => {
+          dockerContacted = true;
+          return true;
+        },
+      });
+      expect(() => runLinuxRelease(options)).toThrow(/cannot contain comma or newline/);
+      expect(dockerContacted).toBe(false);
+    },
+  );
+
+  it('accepts a colon in host bind paths', () => {
+    const options = validFixtureOptions({ repoRoot: makeTempRoot('colon:path') });
+    expect(runLinuxRelease(options).completed).toEqual(['x64', 'arm64']);
+  });
+
+  it('detects target-stage replacement between x64 and arm64 before the arm bind', () => {
+    const options = validFixtureOptions();
+    const redirected = join(options.repoRoot, 'redirected-arm-stage');
+    mkdirSync(redirected);
+    let provenanceChecks = 0;
+    let armBuildStarted = false;
+    options.execute = (_command, args) => {
+      if (args.includes('AGENTICO_PACKAGE_ARCH=arm64')) armBuildStarted = true;
+      writeInvocationOutputs(options.repoRoot, args);
+    };
+    options.verifyProvenance = () => {
+      provenanceChecks += 1;
+      if (provenanceChecks === 1) {
+        const armStage = stagingDir(options.repoRoot, 'arm64');
+        renameSync(armStage, `${armStage}-original`);
+        symlinkSync(redirected, armStage);
+      }
+    };
+    expect(() => runLinuxRelease(options)).toThrow(/directory changed|symbolic link/i);
+    expect(armBuildStarted).toBe(false);
+    expect(readdirSync(redirected)).toEqual([]);
+  });
+
+  it('detects final-dist replacement before assembly and writes nothing redirected', () => {
+    const options = validFixtureOptions();
+    const redirected = join(options.repoRoot, 'redirected-final-dist');
+    mkdirSync(redirected);
+    options.execute = (_command, args) => writeInvocationOutputs(options.repoRoot, args);
+    options.verifyProvenance = () => {
+      const dist = join(options.repoRoot, 'desktop', 'dist');
+      if (!existsSync(`${dist}-original`)) {
+        renameSync(dist, `${dist}-original`);
+        symlinkSync(redirected, dist);
+      }
+    };
+    expect(() => runLinuxRelease(options)).toThrow(/directory changed|symbolic link/i);
+    expect(readdirSync(redirected)).toEqual([]);
   });
 
   it('does not accept arm64 outputs until the matching-architecture verifier succeeds', () => {

@@ -52,48 +52,99 @@ export function runLinuxRelease({
   if (freeBytes < MINIMUM_FREE_BYTES) {
     throw new Error('at least 12 GiB of free disk space is required for Linux release packaging');
   }
-  if (!resolveDockerAvailability(dockerAvailable)) {
-    throw new Error('Docker daemon is unavailable; start Docker before packaging Linux releases');
-  }
-
-  const directories = prepareReleaseDirectories({ repoRoot, gitWorktreeDir, runId });
-  const plan = createLinuxDockerPlan({
-    repoRoot: directories.repoRoot,
-    gitCommonDir,
-    gitEntry,
-    volumePrefix,
-    version,
-    stagingDirs: directories.stagingDirs,
-  });
-  removeFinalTargetOutputs(directories.distDir, version);
-  ensureLinuxImages(execute);
-
-  const completed = [];
-  const receipts = [];
-  for (const invocation of plan) {
-    const receipt = `package-verification-linux-${invocation.arch}.json`;
-    execute('docker', invocation.args);
-    verifyProvenance();
-    if (invocation.verificationArgs !== undefined) {
-      validateStagingSet({
-        directory: directories.stagingDirs[invocation.arch],
-        expected: targetOutputNames(invocation.arch, version, false),
-      });
-      execute('docker', invocation.verificationArgs);
-      verifyProvenance();
-    }
-    assembleTargetOutputs({
-      stagingDir: directories.stagingDirs[invocation.arch],
-      distDir: directories.distDir,
-      arch: invocation.arch,
-      version,
-      receipt,
+  let directories;
+  let nodeModulesVolumeMayExist = false;
+  let primaryError;
+  let result;
+  try {
+    directories = prepareReleaseDirectories({
+      repoRoot,
+      gitWorktreeDir,
+      gitCommonDir,
+      gitEntry,
+      runId,
     });
-    completed.push(invocation.arch);
-    receipts.push(receipt);
+    const plan = createLinuxDockerPlan({
+      repoRoot: directories.repoRoot,
+      gitCommonDir: directories.gitCommonDir,
+      gitEntry: directories.gitEntry,
+      volumePrefix,
+      cacheVolumePrefix: VOLUME_PREFIX,
+      version,
+      stagingDirs: directories.stagingDirs,
+    });
+    if (!resolveDockerAvailability(dockerAvailable)) {
+      throw new Error('Docker daemon is unavailable; start Docker before packaging Linux releases');
+    }
+
+    removeFinalTargetOutputs(directories, version);
+    ensureLinuxImages(execute);
+
+    const completed = [];
+    const receipts = [];
+    for (const invocation of plan) {
+      const receipt = `package-verification-linux-${invocation.arch}.json`;
+      nodeModulesVolumeMayExist = true;
+      executeBoundDocker({ directories, arch: invocation.arch, execute, args: invocation.args });
+      verifyProvenance();
+      if (invocation.verificationArgs !== undefined) {
+        validateStagingSet({
+          directories,
+          arch: invocation.arch,
+          expected: targetOutputNames(invocation.arch, version, false),
+        });
+        executeBoundDocker({
+          directories,
+          arch: invocation.arch,
+          execute,
+          args: invocation.verificationArgs,
+        });
+        verifyProvenance();
+      }
+      assembleTargetOutputs({ directories, arch: invocation.arch, version, receipt });
+      completed.push(invocation.arch);
+      receipts.push(receipt);
+    }
+    result = { tag: exactTag, completed, receipts };
+  } catch (error) {
+    primaryError = error;
   }
 
-  return { tag: exactTag, completed, receipts };
+  const cleanupErrors = [];
+  if (nodeModulesVolumeMayExist) {
+    try {
+      execute('docker', ['volume', 'rm', '--force', `${volumePrefix}-node-modules`]);
+    } catch (error) {
+      cleanupErrors.push(error);
+    }
+  }
+  if (directories !== undefined) {
+    try {
+      cleanupStagingRun(directories);
+    } catch (error) {
+      cleanupErrors.push(error);
+    }
+  }
+  if (primaryError !== undefined && cleanupErrors.length > 0) {
+    throw new AggregateError(
+      [primaryError, ...cleanupErrors],
+      `${errorMessage(primaryError)}; Linux release cleanup also failed: ${cleanupErrors.map(errorMessage).join('; ')}`,
+      { cause: primaryError },
+    );
+  }
+  if (primaryError !== undefined) throw primaryError;
+  if (cleanupErrors.length > 0) {
+    throw new AggregateError(
+      cleanupErrors,
+      `Linux release cleanup failed: ${cleanupErrors.map(errorMessage).join('; ')}`,
+    );
+  }
+  return result;
+}
+
+function executeBoundDocker({ directories, arch, execute, args }) {
+  revalidateReleaseDirectories(directories, arch);
+  execute('docker', args);
 }
 
 function ensureLinuxImages(execute) {
@@ -114,12 +165,15 @@ function targetOutputNames(arch, version, includeReceipt = true) {
   return names;
 }
 
-function removeFinalTargetOutputs(distDir, version) {
+function removeFinalTargetOutputs(directories, version) {
   for (const arch of ['x64', 'arm64']) {
-    for (const name of targetOutputNames(arch, version))
-      rmSync(join(distDir, name), { force: true });
+    for (const name of targetOutputNames(arch, version)) {
+      revalidateReleaseDirectories(directories, arch);
+      rmSync(join(directories.distDir, name), { force: true });
+    }
   }
-  rmSync(join(distDir, 'Agentico-x86_64.AppImage'), { force: true });
+  revalidateReleaseDirectories(directories);
+  rmSync(join(directories.distDir, 'Agentico-x86_64.AppImage'), { force: true });
 }
 
 function resolveDockerAvailability(dockerAvailable) {
@@ -134,42 +188,70 @@ function isImageNotFound(error) {
   return /(?:no such image|no such object|image .* not found)/i.test(detail);
 }
 
+function errorMessage(error) {
+  return error instanceof Error ? error.message : String(error);
+}
+
 /** Prepare real, contained final-output and per-worktree staging directories. */
-export function prepareReleaseDirectories({ repoRoot, gitWorktreeDir, runId }) {
+export function prepareReleaseDirectories({
+  repoRoot,
+  gitWorktreeDir,
+  gitCommonDir = gitWorktreeDir,
+  gitEntry = gitCommonDir,
+  runId,
+}) {
   if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(runId ?? '') || runId === '.' || runId === '..') {
     throw new Error(`invalid release run id: ${runId}`);
   }
-  const canonicalRepo = requireRealDirectory(repoRoot, 'repository root');
-  const desktopDir = ensureContainedDirectory(canonicalRepo, 'desktop', 'desktop directory');
-  const distDir = ensureContainedDirectory(desktopDir, 'dist', 'final dist directory');
-  const canonicalGitDir = requireRealDirectory(gitWorktreeDir, 'per-worktree Git metadata');
+  const repoToken = captureDirectory(repoRoot, 'repository root');
+  const desktopToken = ensureContainedDirectory(repoToken, 'desktop', 'desktop directory');
+  const distToken = ensureContainedDirectory(desktopToken, 'dist', 'final dist directory');
+  const gitWorktreeToken = captureDirectory(gitWorktreeDir, 'per-worktree Git metadata');
+  const gitCommonToken = captureDirectory(gitCommonDir, 'Git common directory');
+  const gitEntryToken = captureGitEntry(gitEntry);
   const stagingBase = ensureContainedDirectory(
-    canonicalGitDir,
+    gitWorktreeToken,
     'agentico-release-staging',
     'release staging root',
   );
   const runDir = ensureContainedDirectory(stagingBase, runId, 'release staging run directory');
-  const stagingDirs = {};
+  const stagingTokens = {};
   for (const arch of ['x64', 'arm64']) {
     const target = ensureContainedDirectory(runDir, arch, `${arch} release staging directory`);
-    const entries = readdirSync(target);
+    const entries = readdirSync(target.path);
     if (entries.length > 0) {
       throw new Error(
         `${arch} release staging directory contains stale or unexpected entries: ${entries.sort().join(', ')}`,
       );
     }
-    stagingDirs[arch] = target;
+    stagingTokens[arch] = target;
   }
+  const tokens = Object.freeze({
+    repo: repoToken,
+    desktop: desktopToken,
+    dist: distToken,
+    gitWorktree: gitWorktreeToken,
+    gitCommon: gitCommonToken,
+    gitEntry: gitEntryToken,
+    stagingBase,
+    run: runDir,
+    staging: Object.freeze(stagingTokens),
+  });
   return Object.freeze({
-    repoRoot: canonicalRepo,
-    desktopDir,
-    distDir,
-    stagingRoot: runDir,
-    stagingDirs: Object.freeze(stagingDirs),
+    repoRoot: repoToken.path,
+    desktopDir: desktopToken.path,
+    distDir: distToken.path,
+    gitCommonDir: gitCommonToken.requested,
+    gitEntry: gitEntryToken.requested,
+    stagingRoot: runDir.path,
+    stagingDirs: Object.freeze(
+      Object.fromEntries(Object.entries(stagingTokens).map(([arch, token]) => [arch, token.path])),
+    ),
+    tokens,
   });
 }
 
-function requireRealDirectory(path, label) {
+function captureDirectory(path, label) {
   const requested = resolve(path);
   let stat;
   try {
@@ -184,29 +266,105 @@ function requireRealDirectory(path, label) {
   if (!canonicalStat.isDirectory() || canonicalStat.isSymbolicLink()) {
     throw new Error(`${label} is not a real directory: ${requested}`);
   }
-  return canonical;
+  return Object.freeze({
+    requested,
+    path: canonical,
+    label,
+    dev: canonicalStat.dev,
+    ino: canonicalStat.ino,
+    kind: 'directory',
+  });
 }
 
-function ensureContainedDirectory(parent, childName, label) {
+function captureGitEntry(path) {
+  const requested = resolve(path);
+  const stat = lstatSync(requested);
+  if (stat.isSymbolicLink()) {
+    throw new Error(`Git entry must not be a symbolic link: ${requested}`);
+  }
+  if (!stat.isDirectory() && !stat.isFile()) {
+    throw new Error(`Git entry must be a directory or gitfile: ${requested}`);
+  }
+  const canonical = realpathSync(requested);
+  const canonicalStat = lstatSync(canonical);
+  return Object.freeze({
+    requested,
+    path: canonical,
+    label: 'Git entry',
+    dev: canonicalStat.dev,
+    ino: canonicalStat.ino,
+    kind: canonicalStat.isDirectory() ? 'directory' : 'file',
+  });
+}
+
+function ensureContainedDirectory(parentToken, childName, label) {
   if (basename(childName) !== childName || childName === '.' || childName === '..') {
     throw new Error(`${label} has an unsafe name: ${childName}`);
   }
-  const target = join(parent, childName);
+  const target = join(parentToken.path, childName);
   if (!existsSync(target)) mkdirSync(target);
-  const canonical = requireRealDirectory(target, label);
-  const relation = relative(parent, canonical);
+  const token = captureDirectory(target, label);
+  const relation = relative(parentToken.path, token.path);
   if (
     relation === '..' ||
     relation.startsWith(`..${sep}`) ||
-    resolve(canonical) === resolve(parent)
+    resolve(token.path) === resolve(parentToken.path)
   ) {
     throw new Error(`${label} escapes its expected parent: ${target}`);
   }
-  return canonical;
+  return token;
 }
 
-function validateStagingSet({ directory, expected }) {
-  const canonical = requireRealDirectory(directory, 'release staging directory');
+function revalidatePathToken(token) {
+  let stat;
+  try {
+    stat = lstatSync(token.requested);
+  } catch (error) {
+    throw new Error(`${token.label} is unavailable: ${token.requested}`, { cause: error });
+  }
+  if (stat.isSymbolicLink()) {
+    throw new Error(`${token.label} must not be a symbolic link: ${token.requested}`);
+  }
+  const canonical = realpathSync(token.requested);
+  const canonicalStat = lstatSync(canonical);
+  const correctKind =
+    token.kind === 'directory' ? canonicalStat.isDirectory() : canonicalStat.isFile();
+  if (
+    !correctKind ||
+    canonical !== token.path ||
+    canonicalStat.dev !== token.dev ||
+    canonicalStat.ino !== token.ino
+  ) {
+    throw new Error(`${token.label} directory changed after validation: ${token.requested}`);
+  }
+}
+
+function revalidateContainedToken(token, parentToken) {
+  revalidatePathToken(parentToken);
+  revalidatePathToken(token);
+  const relation = relative(parentToken.path, token.path);
+  if (relation === '..' || relation.startsWith(`..${sep}`) || token.path === parentToken.path) {
+    throw new Error(`${token.label} escapes its expected parent: ${token.path}`);
+  }
+}
+
+function revalidateReleaseDirectories(directories, arch) {
+  const { tokens } = directories;
+  revalidatePathToken(tokens.repo);
+  revalidateContainedToken(tokens.desktop, tokens.repo);
+  revalidateContainedToken(tokens.dist, tokens.desktop);
+  revalidatePathToken(tokens.gitWorktree);
+  revalidatePathToken(tokens.gitCommon);
+  revalidatePathToken(tokens.gitEntry);
+  revalidateContainedToken(tokens.stagingBase, tokens.gitWorktree);
+  revalidateContainedToken(tokens.run, tokens.stagingBase);
+  const arches = arch === undefined ? ['x64', 'arm64'] : [arch];
+  for (const selected of arches) revalidateContainedToken(tokens.staging[selected], tokens.run);
+}
+
+function validateStagingSet({ directories, arch, expected }) {
+  revalidateReleaseDirectories(directories, arch);
+  const canonical = directories.stagingDirs[arch];
   const actual = readdirSync(canonical).sort();
   const wanted = [...expected].sort();
   if (JSON.stringify(actual) !== JSON.stringify(wanted)) {
@@ -232,15 +390,22 @@ function validateStagingSet({ directory, expected }) {
   }
 }
 
-function assembleTargetOutputs({ stagingDir, distDir, arch, version, receipt }) {
+function assembleTargetOutputs({ directories, arch, version, receipt }) {
+  revalidateReleaseDirectories(directories, arch);
+  const stagingDir = directories.stagingDirs[arch];
+  const distDir = directories.distDir;
   const expected = targetOutputNames(arch, version);
-  validateStagingSet({ directory: stagingDir, expected });
+  validateStagingSet({ directories, arch, expected });
   const artifactNames = expected.filter((name) => name !== receipt);
   const stagedEvidence = Object.fromEntries(
-    artifactNames.map((name) => [name, readArtifactEvidence(join(stagingDir, name))]),
+    artifactNames.map((name) => {
+      revalidateReleaseDirectories(directories, arch);
+      return [name, readArtifactEvidence(join(stagingDir, name))];
+    }),
   );
   let receiptValue;
   try {
+    revalidateReleaseDirectories(directories, arch);
     receiptValue = JSON.parse(readFileSync(join(stagingDir, receipt), 'utf8'));
   } catch (error) {
     throw new Error(`${arch} staging receipt is not valid JSON`, { cause: error });
@@ -256,6 +421,7 @@ function assembleTargetOutputs({ stagingDir, distDir, arch, version, receipt }) 
   }
 
   for (const name of artifactNames) {
+    revalidateReleaseDirectories(directories, arch);
     const destination = join(distDir, name);
     copyFileSync(join(stagingDir, name), destination, constants.COPYFILE_EXCL);
     const finalEvidence = readArtifactEvidence(destination);
@@ -264,13 +430,16 @@ function assembleTargetOutputs({ stagingDir, distDir, arch, version, receipt }) 
       throw new Error(`${arch} final artifact copy does not match staged bytes: ${name}`);
     }
     const entry = receiptArtifacts.find((artifact) => basename(artifact?.path ?? '') === name);
+    revalidateReleaseDirectories(directories, arch);
     entry.path = finalEvidence.path;
   }
+  revalidateReleaseDirectories(directories, arch);
   writeFileSync(join(distDir, receipt), `${JSON.stringify(receiptValue, null, 2)}\n`, {
     flag: 'wx',
   });
 
   for (const name of artifactNames) {
+    revalidateReleaseDirectories(directories, arch);
     const finalEvidence = readArtifactEvidence(join(distDir, name));
     if (
       finalEvidence.sha256 !== stagedEvidence[name].sha256 ||
@@ -279,6 +448,11 @@ function assembleTargetOutputs({ stagingDir, distDir, arch, version, receipt }) 
       throw new Error(`${arch} final inventory rehash failed for ${name}`);
     }
   }
+}
+
+function cleanupStagingRun(directories) {
+  revalidateReleaseDirectories(directories);
+  rmSync(directories.stagingRoot, { recursive: true });
 }
 
 function git(cwd, ...args) {

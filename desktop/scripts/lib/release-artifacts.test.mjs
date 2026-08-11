@@ -1,8 +1,21 @@
-import { describe, expect, it } from 'vitest';
+import { execFileSync } from 'node:child_process';
+import {
+  existsSync,
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, describe, expect, it } from 'vitest';
 
 import {
   LINUX_BUILDER_IMAGE,
   LINUX_ARM64_VERIFIER_IMAGE,
+  createGitArchiveCommands,
   createLinuxDockerPlan,
   expectedDesktopArtifacts,
   releaseVersionFromTag,
@@ -10,6 +23,46 @@ import {
   selectPackageArtifact,
   shellQuote,
 } from './release-artifacts.mjs';
+
+const tempRoots = [];
+
+afterEach(() => {
+  for (const root of tempRoots.splice(0)) rmSync(root, { recursive: true, force: true });
+});
+
+function tempRoot() {
+  const root = mkdtempSync(join(tmpdir(), 'agentico-release-plan-'));
+  tempRoots.push(root);
+  return root;
+}
+
+function git(cwd, ...args) {
+  return execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
+}
+
+function initializeRepository(root) {
+  git(root, 'init', '--quiet');
+  git(root, 'config', 'user.email', 'release-test@example.com');
+  git(root, 'config', 'user.name', 'Release Test');
+  writeFileSync(join(root, '.gitignore'), 'ignored.txt\n');
+  writeFileSync(join(root, 'tracked.txt'), 'committed\n');
+  git(root, 'add', '.gitignore', 'tracked.txt');
+  git(root, 'commit', '--quiet', '-m', 'fixture');
+  git(root, 'tag', 'v1.2.3');
+}
+
+function probeArchivedCheckout(sourceRoot) {
+  const buildRoot = join(tempRoot(), 'build');
+  mkdirSync(buildRoot);
+  symlinkSync(join(sourceRoot, '.git'), join(buildRoot, '.git'));
+  execFileSync('bash', ['-lc', createGitArchiveCommands(sourceRoot, buildRoot).join(' && ')]);
+  expect(readFileSync(join(buildRoot, 'tracked.txt'), 'utf8')).toBe('committed\n');
+  expect(existsSync(join(buildRoot, 'ignored.txt'))).toBe(false);
+  expect(existsSync(join(buildRoot, 'local.txt'))).toBe(false);
+  expect(git(buildRoot, 'describe', '--tags', '--exact-match')).toBe('v1.2.3');
+  expect(git(buildRoot, 'rev-parse', 'HEAD')).toMatch(/^[0-9a-f]{40}$/);
+  expect(git(buildRoot, 'status', '--porcelain')).toBe('');
+}
 
 describe('releaseVersionFromTag', () => {
   it('strips the v from a strict release tag', () => {
@@ -101,6 +154,7 @@ describe('createLinuxDockerPlan', () => {
       repoRoot: '/repo/worktree',
       gitCommonDir: '/repo/.git',
       volumePrefix: 'agentico-release',
+      cacheVolumePrefix: 'agentico-release',
       version: '0.150.0',
       stagingDirs,
       ...overrides,
@@ -117,12 +171,14 @@ describe('createLinuxDockerPlan', () => {
         'linux/amd64',
         '-e',
         'AGENTICO_PACKAGE_ARCH=x64',
-        '-v',
-        '/repo/worktree:/agentico-release-source:ro',
-        '-v',
-        '/repo/.git:/repo/.git:ro',
-        '-v',
-        '/repo/.git/agentico-release-staging/run/x64:/agentico-release-export',
+        '--mount',
+        'type=bind,src=/repo/worktree,dst=/agentico-release-source,readonly',
+        '--mount',
+        'type=bind,src=/repo/.git,dst=/repo/.git,readonly',
+        '--mount',
+        'type=bind,src=/repo/worktree/.git,dst=/agentico-release-build/.git,readonly',
+        '--mount',
+        'type=bind,src=/repo/.git/agentico-release-staging/run/x64,dst=/agentico-release-export',
       ]),
     );
     expect(plan[0].args.join(' ')).toContain(LINUX_BUILDER_IMAGE);
@@ -131,14 +187,14 @@ describe('createLinuxDockerPlan', () => {
     );
     expect(plan[0].args).toEqual(
       expect.arrayContaining([
-        '-v',
-        'agentico-release-node-modules:/agentico-release-build/node_modules',
-        '-v',
-        'agentico-release-npm-cache:/root/.npm',
-        '-v',
-        'agentico-release-electron:/root/.cache/electron',
-        '-v',
-        'agentico-release-electron-builder:/root/.cache/electron-builder',
+        '--mount',
+        'type=volume,src=agentico-release-node-modules,dst=/agentico-release-build/node_modules',
+        '--mount',
+        'type=volume,src=agentico-release-npm-cache,dst=/root/.npm',
+        '--mount',
+        'type=volume,src=agentico-release-electron,dst=/root/.cache/electron',
+        '--mount',
+        'type=volume,src=agentico-release-electron-builder,dst=/root/.cache/electron-builder',
         'bash',
         '-lc',
         expect.stringContaining(
@@ -191,7 +247,12 @@ describe('createLinuxDockerPlan', () => {
         gitEntry: '/repo/worktrees/linux/.git',
       }),
     );
-    expect(plan[0].args).toContain('/repo/worktrees/linux/.git:/agentico-release-source/.git:ro');
+    expect(plan[0].args).toContain(
+      'type=bind,src=/repo/worktrees/linux/.git,dst=/agentico-release-source/.git,readonly',
+    );
+    expect(plan[0].args).toContain(
+      'type=bind,src=/repo/worktrees/linux/.git,dst=/agentico-release-build/.git,readonly',
+    );
     expect(plan[0].args.at(-1)).toContain(
       "git -C '/agentico-release-source' archive --format=tar HEAD",
     );
@@ -209,10 +270,10 @@ describe('createLinuxDockerPlan', () => {
     const plan = createLinuxDockerPlan(planOptions());
     const x64 = plan[0].args;
     const arm64 = plan[1].args;
-    expect(x64).toContain(`${stagingDirs.x64}:/agentico-release-export`);
-    expect(x64).not.toContain(`${stagingDirs.arm64}:/agentico-release-export`);
-    expect(arm64).toContain(`${stagingDirs.arm64}:/agentico-release-export`);
-    expect(arm64).not.toContain(`${stagingDirs.x64}:/agentico-release-export`);
+    expect(x64).toContain(`type=bind,src=${stagingDirs.x64},dst=/agentico-release-export`);
+    expect(x64).not.toContain(`type=bind,src=${stagingDirs.arm64},dst=/agentico-release-export`);
+    expect(arm64).toContain(`type=bind,src=${stagingDirs.arm64},dst=/agentico-release-export`);
+    expect(arm64).not.toContain(`type=bind,src=${stagingDirs.x64},dst=/agentico-release-export`);
     for (const invocation of plan.flatMap(({ args, verificationArgs = [] }) => [
       args,
       verificationArgs,
@@ -245,16 +306,71 @@ describe('createLinuxDockerPlan', () => {
     const plan = createLinuxDockerPlan(
       planOptions({ repoRoot: hostileRoot, gitCommonDir: hostileGit, stagingDirs: hostileStages }),
     );
-    expect(plan[0].args).toContain(`${hostileRoot}:/agentico-release-source:ro`);
-    expect(plan[0].args).toContain(`${hostileStages.x64}:/agentico-release-export`);
+    expect(plan[0].args).toContain(
+      `type=bind,src=${hostileRoot},dst=/agentico-release-source,readonly`,
+    );
+    expect(plan[0].args).toContain(
+      `type=bind,src=${hostileStages.x64},dst=/agentico-release-export`,
+    );
     expect(plan[0].args.at(-1)).not.toContain(hostileRoot);
     expect(plan[0].args.at(-1)).not.toContain('$()');
     expect(plan[0].args.at(-1)).not.toContain('`tick`');
+  });
+
+  it('scopes executable node_modules per run while keeping download caches global', () => {
+    const plan = createLinuxDockerPlan(planOptions({ volumePrefix: 'agentico-release-run123' }));
+    expect(plan[0].args).toContain(
+      'type=volume,src=agentico-release-run123-node-modules,dst=/agentico-release-build/node_modules',
+    );
+    expect(plan[0].args).toContain('type=volume,src=agentico-release-npm-cache,dst=/root/.npm');
+    expect(plan[0].args.join('\n')).not.toContain('agentico-release-run123-npm-cache');
+  });
+
+  it('accepts colons in bind sources and rejects --mount delimiters', () => {
+    const colonRoot = '/repo/colon:path';
+    expect(
+      createLinuxDockerPlan(
+        planOptions({
+          repoRoot: colonRoot,
+          gitEntry: `${colonRoot}/.git`,
+          stagingDirs: {
+            x64: '/git/stage:colon/x64',
+            arm64: '/git/stage:colon/arm64',
+          },
+        }),
+      )[0].args,
+    ).toContain(`type=bind,src=${colonRoot},dst=/agentico-release-source,readonly`);
+    for (const invalid of ['/repo/comma,path', '/repo/new\nline']) {
+      expect(() => createLinuxDockerPlan(planOptions({ repoRoot: invalid }))).toThrow(
+        /cannot contain comma or newline/,
+      );
+    }
   });
 });
 
 describe('shellQuote', () => {
   it('preserves spaces, substitutions, backticks, and single quotes as one literal word', () => {
     expect(shellQuote("space $() `tick` 'quote'")).toBe(`'space $() \`tick\` '"'"'quote'"'"''`);
+  });
+});
+
+describe('committed HEAD archive checkout', () => {
+  it('supports release Git commands in a normal checkout without local files', () => {
+    const source = tempRoot();
+    initializeRepository(source);
+    writeFileSync(join(source, 'tracked.txt'), 'modified\n');
+    writeFileSync(join(source, 'ignored.txt'), 'ignored\n');
+    writeFileSync(join(source, 'local.txt'), 'local\n');
+    probeArchivedCheckout(source);
+  });
+
+  it('supports release Git commands from a linked worktree gitfile', () => {
+    const main = tempRoot();
+    initializeRepository(main);
+    const linked = join(tempRoot(), 'linked');
+    git(main, 'worktree', 'add', '--quiet', linked, 'HEAD');
+    writeFileSync(join(linked, 'tracked.txt'), 'modified\n');
+    writeFileSync(join(linked, 'ignored.txt'), 'ignored\n');
+    probeArchivedCheckout(linked);
   });
 });

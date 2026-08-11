@@ -317,6 +317,7 @@ export function createLinuxDockerPlan({
   gitCommonDir,
   gitEntry = resolve(repoRoot, '.git'),
   volumePrefix,
+  cacheVolumePrefix = 'agentico-release',
   version,
   stagingDirs,
 }) {
@@ -333,26 +334,21 @@ export function createLinuxDockerPlan({
         throw new Error(`missing ${arch} release staging directory`);
       }
       const mounts = [
-        '-v',
-        `${repoRoot}:${sourceMount}:ro`,
-        '-v',
-        `${gitCommonDir}:${gitCommonDir}:ro`,
-        '-v',
-        `${targetStage}:${exportMount}`,
-        '-v',
-        `${volumePrefix}-node-modules:${buildRoot}/node_modules`,
-        '-v',
-        `${volumePrefix}-npm-cache:/root/.npm`,
-        '-v',
-        `${volumePrefix}-electron:/root/.cache/electron`,
-        '-v',
-        `${volumePrefix}-electron-builder:/root/.cache/electron-builder`,
+        ...dockerBindMount(repoRoot, sourceMount, true),
+        ...dockerBindMount(gitCommonDir, gitCommonDir, true),
+        ...dockerBindMount(gitEntry, `${sourceMount}/.git`, true),
+        ...dockerBindMount(gitEntry, `${buildRoot}/.git`, true),
+        ...dockerBindMount(targetStage, exportMount, false),
+        ...dockerVolumeMount(`${volumePrefix}-node-modules`, `${buildRoot}/node_modules`),
+        ...dockerVolumeMount(`${cacheVolumePrefix}-npm-cache`, '/root/.npm'),
+        ...dockerVolumeMount(`${cacheVolumePrefix}-electron`, '/root/.cache/electron'),
+        ...dockerVolumeMount(
+          `${cacheVolumePrefix}-electron-builder`,
+          '/root/.cache/electron-builder',
+        ),
         '--workdir',
         '/',
       ];
-      if (gitEntry !== gitCommonDir) {
-        mounts.splice(4, 0, '-v', `${gitEntry}:${sourceMount}/.git:ro`);
-      }
       const builderCommand = [
         ...copySourceCommand(sourceMount, buildRoot),
         ...goBootstrapCommand('amd64'),
@@ -406,7 +402,8 @@ export function createLinuxDockerPlan({
   );
 }
 
-function copySourceCommand(sourceMount, repoRoot) {
+/** Build the committed-HEAD extraction commands used by production and archive probes. */
+export function createGitArchiveCommands(sourceMount, repoRoot) {
   const source = shellQuote(sourceMount);
   const destination = shellQuote(repoRoot);
   return [
@@ -414,6 +411,27 @@ function copySourceCommand(sourceMount, repoRoot) {
     `git -C ${source} archive --format=tar HEAD | tar -C ${destination} -xf -`,
     `cd ${destination}`,
   ];
+}
+
+const copySourceCommand = createGitArchiveCommands;
+
+function dockerBindMount(source, destination, readonly) {
+  validateDockerMountValue(source, 'bind source');
+  validateDockerMountValue(destination, 'bind destination');
+  return ['--mount', `type=bind,src=${source},dst=${destination}${readonly ? ',readonly' : ''}`];
+}
+
+function dockerVolumeMount(source, destination) {
+  validateDockerMountValue(source, 'volume name');
+  validateDockerMountValue(destination, 'volume destination');
+  return ['--mount', `type=volume,src=${source},dst=${destination}`];
+}
+
+function validateDockerMountValue(value, label) {
+  if (typeof value !== 'string' || value === '') throw new Error(`${label} must not be empty`);
+  if (/[,\r\n]/.test(value)) {
+    throw new Error(`${label} cannot contain comma or newline: ${JSON.stringify(value)}`);
+  }
 }
 
 function targetArtifactNames(arch, version) {

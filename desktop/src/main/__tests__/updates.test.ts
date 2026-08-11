@@ -5,6 +5,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   UpdateCoordinator,
+  UpdateRestartPostponedError,
   createUpdateFixtureFetch,
   detectCanInstallInApp,
   detectPackageFormat,
@@ -357,6 +358,24 @@ describe('UpdateCoordinator', () => {
       message: 'The verified update could not be installed. Retry or use the release notes.',
     });
     expect(update.getState().message).not.toContain('/private/path');
+  });
+
+  it('keeps a verified staged package retryable, with an accurate message, when restart is postponed', async () => {
+    const fixture = signedFixture('v0.2.0', 'Agentico-mac-universal.dmg', 'package bytes');
+    const update = makeCoordinator({
+      platform: 'darwin',
+      arch: 'arm64',
+      packageFormat: 'macos',
+      fixture,
+      restart: vi.fn(() => Promise.reject(new UpdateRestartPostponedError())),
+    });
+    await update.checkNow();
+
+    await expect(update.restartToUpdate()).resolves.toMatchObject({
+      status: 'ready',
+      signatureStatus: 'verified',
+      message: 'Restart was postponed. The verified update remains staged and ready to install.',
+    });
   });
 
   it('keeps scheduled consent pending when authoritative activity remains non-idle', async () => {

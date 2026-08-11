@@ -78,44 +78,59 @@ export class QuitCoordinator<TParent = unknown> {
     return this.forceQuit;
   }
 
-  async requestQuitDecision(parent: TParent | null = null): Promise<void> {
-    if (this.forceQuit || this.quitPromptInFlight || this.quitInProgress) {
-      return;
+  /**
+   * Runs the full quit decision flow and reports whether an actual quit was
+   * initiated (deps.shutdown ran and deps.quitApplication was called) versus
+   * the app staying open (kept running, cancelled, or a reentrant call while
+   * another decision is already in flight). Callers that need to gate an
+   * irreversible side effect on the user genuinely agreeing to quit — e.g.
+   * applying a staged update — must check this return value rather than
+   * assuming the promise resolving means quit happened.
+   */
+  async requestQuitDecision(parent: TParent | null = null): Promise<boolean> {
+    if (this.forceQuit) {
+      return true;
+    }
+    if (this.quitPromptInFlight || this.quitInProgress) {
+      return false;
     }
     this.quitPromptInFlight = true;
     try {
       if (this.options.testMode === true) {
         await this.shutdown({ quitAnyway: true });
-        return;
+        return true;
       }
       if (this.deps.runtimeOwnership() === 'external') {
         await this.shutdown({ quitAnyway: false });
-        return;
+        return true;
       }
       const active = await this.deps.detectActiveWork();
       if (!hasActiveWork(active)) {
         await this.shutdown({ quitAnyway: false });
-        return;
+        return true;
       }
 
       const decision = await this.deps.showActiveWorkDialog(active, parent);
       if (decision === 'keep-running') {
         this.deps.hide(parent);
-        return;
+        return false;
       }
       if (decision === 'stop-and-quit') {
-        await this.stopAndQuit(active, parent);
-        return;
+        return await this.stopAndQuit(active, parent);
       }
       this.deps.focusMainWindow();
+      return false;
     } finally {
       this.quitPromptInFlight = false;
     }
   }
 
-  private async stopAndQuit(initialActive: ActiveWorkCheck, parent: TParent | null): Promise<void> {
+  private async stopAndQuit(
+    initialActive: ActiveWorkCheck,
+    parent: TParent | null,
+  ): Promise<boolean> {
     if (this.quitInProgress) {
-      return;
+      return false;
     }
     this.quitInProgress = true;
     try {
@@ -124,7 +139,7 @@ export class QuitCoordinator<TParent = unknown> {
         const result = await this.deps.stopWork(active);
         if (result.unresolved.length === 0) {
           await this.shutdown({ quitAnyway: false });
-          return;
+          return true;
         }
 
         const ownership = this.deps.runtimeOwnership();
@@ -133,7 +148,7 @@ export class QuitCoordinator<TParent = unknown> {
           active = await this.deps.detectActiveWork();
           if (!hasActiveWork(active)) {
             await this.shutdown({ quitAnyway: false });
-            return;
+            return true;
           }
           continue;
         }
@@ -141,11 +156,11 @@ export class QuitCoordinator<TParent = unknown> {
           const confirmed = await this.deps.confirmQuitAnyway(result, ownership, parent);
           if (confirmed) {
             await this.shutdown({ quitAnyway: true });
-            return;
+            return true;
           }
         }
         this.deps.focusMainWindow();
-        return;
+        return false;
       }
     } finally {
       if (!this.forceQuit) {

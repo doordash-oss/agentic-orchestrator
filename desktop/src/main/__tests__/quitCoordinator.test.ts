@@ -6,6 +6,7 @@ import {
   shouldRequestQuitOnMainWindowClose,
   stopFailureDialog,
   type ActiveWorkCheck,
+  type ActiveWorkDecision,
   type QuitCoordinatorDeps,
   type StopWorkResult,
   type UnresolvedWorkItem,
@@ -61,7 +62,7 @@ describe('QuitCoordinator', () => {
     });
     const coordinator = new QuitCoordinator(deps);
 
-    await coordinator.requestQuitDecision('window');
+    await expect(coordinator.requestQuitDecision('window')).resolves.toBe(true);
 
     expect(deps.showActiveWorkDialog).not.toHaveBeenCalled();
     expect(deps.shutdown).toHaveBeenCalledWith({ quitAnyway: false });
@@ -75,7 +76,7 @@ describe('QuitCoordinator', () => {
     });
     const coordinator = new QuitCoordinator(deps);
 
-    await coordinator.requestQuitDecision('window');
+    await expect(coordinator.requestQuitDecision('window')).resolves.toBe(true);
 
     expect(deps.detectActiveWork).not.toHaveBeenCalled();
     expect(deps.showActiveWorkDialog).not.toHaveBeenCalled();
@@ -91,11 +92,43 @@ describe('QuitCoordinator', () => {
     });
     const coordinator = new QuitCoordinator(deps);
 
-    await coordinator.requestQuitDecision('window');
+    await expect(coordinator.requestQuitDecision('window')).resolves.toBe(false);
 
     expect(deps.hide).toHaveBeenCalledWith('window');
     expect(deps.shutdown).not.toHaveBeenCalled();
     expect(coordinator.shouldAllowClose()).toBe(false);
+  });
+
+  it('reports false on a reentrant call while a decision is already in flight', async () => {
+    let releaseDialog!: () => void;
+    const deps = makeDeps({
+      showActiveWorkDialog: vi.fn(
+        () =>
+          new Promise<ActiveWorkDecision>((resolve) => {
+            releaseDialog = () => resolve('cancel');
+          }),
+      ),
+    });
+    const coordinator = new QuitCoordinator(deps);
+
+    const first = coordinator.requestQuitDecision('window');
+    await vi.waitFor(() => expect(deps.showActiveWorkDialog).toHaveBeenCalledOnce());
+    await expect(coordinator.requestQuitDecision('window')).resolves.toBe(false);
+
+    releaseDialog();
+    await expect(first).resolves.toBe(false);
+  });
+
+  it('reports true immediately once a quit is already underway', async () => {
+    const deps = makeDeps({
+      detectActiveWork: vi.fn().mockResolvedValue(active([], false, false)),
+    });
+    const coordinator = new QuitCoordinator(deps);
+
+    await expect(coordinator.requestQuitDecision('window')).resolves.toBe(true);
+    await expect(coordinator.requestQuitDecision('window')).resolves.toBe(true);
+
+    expect(deps.shutdown).toHaveBeenCalledOnce();
   });
 
   it('cancels active quit without stopping or hiding work', async () => {
@@ -104,7 +137,7 @@ describe('QuitCoordinator', () => {
     });
     const coordinator = new QuitCoordinator(deps);
 
-    await coordinator.requestQuitDecision('window');
+    await expect(coordinator.requestQuitDecision('window')).resolves.toBe(false);
 
     expect(deps.focusMainWindow).toHaveBeenCalledOnce();
     expect(deps.stopWork).not.toHaveBeenCalled();
@@ -117,7 +150,7 @@ describe('QuitCoordinator', () => {
     });
     const coordinator = new QuitCoordinator(deps);
 
-    await coordinator.requestQuitDecision('window');
+    await expect(coordinator.requestQuitDecision('window')).resolves.toBe(true);
 
     expect(deps.stopWork).toHaveBeenCalledWith(active());
     expect(deps.shutdown).toHaveBeenCalledWith({ quitAnyway: false });
@@ -139,7 +172,7 @@ describe('QuitCoordinator', () => {
     });
     const coordinator = new QuitCoordinator(deps);
 
-    await coordinator.requestQuitDecision('window');
+    await expect(coordinator.requestQuitDecision('window')).resolves.toBe(true);
 
     expect(deps.showStopFailureDialog).toHaveBeenCalledOnce();
     expect(deps.stopWork).toHaveBeenCalledTimes(2);
@@ -159,7 +192,7 @@ describe('QuitCoordinator', () => {
     });
     const coordinator = new QuitCoordinator(deps);
 
-    await coordinator.requestQuitDecision('window');
+    await expect(coordinator.requestQuitDecision('window')).resolves.toBe(true);
 
     expect(deps.confirmQuitAnyway).toHaveBeenCalledWith(
       { unresolved: [unresolvedFeature] },
@@ -169,13 +202,46 @@ describe('QuitCoordinator', () => {
     expect(deps.shutdown).toHaveBeenCalledWith({ quitAnyway: true });
   });
 
+  it('stays open when Quit Anyway is declined at the second confirmation', async () => {
+    const deps = makeDeps({
+      showActiveWorkDialog: vi.fn().mockResolvedValue('stop-and-quit'),
+      stopWork: vi
+        .fn()
+        .mockResolvedValue({ unresolved: [unresolvedFeature] } satisfies StopWorkResult),
+      showStopFailureDialog: vi.fn().mockResolvedValue('quit-anyway'),
+      confirmQuitAnyway: vi.fn().mockResolvedValue(false),
+    });
+    const coordinator = new QuitCoordinator(deps);
+
+    await expect(coordinator.requestQuitDecision('window')).resolves.toBe(false);
+
+    expect(deps.focusMainWindow).toHaveBeenCalledOnce();
+    expect(deps.shutdown).not.toHaveBeenCalled();
+  });
+
+  it('stays open when the stop-failure dialog is cancelled', async () => {
+    const deps = makeDeps({
+      showActiveWorkDialog: vi.fn().mockResolvedValue('stop-and-quit'),
+      stopWork: vi
+        .fn()
+        .mockResolvedValue({ unresolved: [unresolvedFeature] } satisfies StopWorkResult),
+      showStopFailureDialog: vi.fn().mockResolvedValue('cancel'),
+    });
+    const coordinator = new QuitCoordinator(deps);
+
+    await expect(coordinator.requestQuitDecision('window')).resolves.toBe(false);
+
+    expect(deps.focusMainWindow).toHaveBeenCalledOnce();
+    expect(deps.shutdown).not.toHaveBeenCalled();
+  });
+
   it('in test mode, quits immediately without dialogs even when detection would fail', async () => {
     const deps = makeDeps({
       detectActiveWork: vi.fn().mockResolvedValue(active(['feature-1'], true, true)),
     });
     const coordinator = new QuitCoordinator(deps, { testMode: true });
 
-    await coordinator.requestQuitDecision('window');
+    await expect(coordinator.requestQuitDecision('window')).resolves.toBe(true);
 
     expect(deps.detectActiveWork).not.toHaveBeenCalled();
     expect(deps.showActiveWorkDialog).not.toHaveBeenCalled();
@@ -200,9 +266,9 @@ describe('QuitCoordinator', () => {
 
     const first = coordinator.requestQuitDecision('window');
     await vi.waitFor(() => expect(deps.stopWork).toHaveBeenCalledOnce());
-    await coordinator.requestQuitDecision('window');
+    await expect(coordinator.requestQuitDecision('window')).resolves.toBe(false);
     releaseStop();
-    await first;
+    await expect(first).resolves.toBe(true);
 
     expect(deps.detectActiveWork).toHaveBeenCalledOnce();
     expect(deps.stopWork).toHaveBeenCalledOnce();

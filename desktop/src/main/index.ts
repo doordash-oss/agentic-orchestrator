@@ -89,6 +89,7 @@ import { applyLoginShellPath } from './shellEnv';
 import {
   FIXTURE_RELEASE_PUBLIC_KEY,
   UpdateCoordinator,
+  UpdateRestartPostponedError,
   createUpdateFixtureFetch,
   detectCanInstallInApp,
   detectPackageFormat,
@@ -942,6 +943,21 @@ if (!hasSingleInstanceLock) {
         };
       },
       restart: async (update) => {
+        // Ask for quit consent BEFORE touching disk. requestQuitDecision may
+        // show the active-work dialog and resolve without ever quitting (Keep
+        // Running, Cancel, or a stop failure the user didn't override) — the
+        // bundle must not be swapped in that case, or the app is left running
+        // an on-disk version that doesn't match what's loaded, with a
+        // relaunch silently queued for whenever the user does eventually
+        // quit. Once requestQuitDecision returns true, an actual quit is
+        // already underway (deps.shutdown ran); the swap below is safe to
+        // run synchronously because the installer's execFileSync calls block
+        // this process's only event loop, so Electron's own quit machinery
+        // cannot tear the process down mid-swap.
+        const quitConfirmed = await quitCoordinator.requestQuitDecision();
+        if (!quitConfirmed) {
+          throw new UpdateRestartPostponedError();
+        }
         // Packaged journeys normally use a tiny signed fixture instead of a
         // native DMG/AppImage. The installer itself is covered against real
         // filesystem swaps; opt into the native path for the dedicated
@@ -958,7 +974,6 @@ if (!hasSingleInstanceLock) {
           (options) => app.relaunch(options),
           process.env.APPIMAGE ?? runtimeExecPath,
         );
-        await quitCoordinator.requestQuitDecision();
       },
     });
 

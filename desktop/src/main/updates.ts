@@ -77,6 +77,22 @@ export interface UpdateCoordinatorOptions {
   restart(update: VerifiedUpdatePackage): Promise<void> | void;
 }
 
+/**
+ * Sentinel a `restart` implementation throws to signal that the app is not
+ * actually quitting right now — e.g. the user chose Keep Running at the
+ * quit-consent dialog — as distinct from a genuine install failure.
+ * `restart` must throw this (rather than performing the on-disk swap) before
+ * an affirmed quit, so the update stays staged with nothing on disk changed:
+ * the swap is only safe to run once quitting is confirmed, since it is the
+ * one signal that the process will not be torn down mid-install.
+ */
+export class UpdateRestartPostponedError extends Error {
+  constructor(message = 'Restart was postponed; the update remains staged.') {
+    super(message);
+    this.name = 'UpdateRestartPostponedError';
+  }
+}
+
 interface ReleaseAsset {
   name: string;
   size: number;
@@ -318,13 +334,21 @@ export class UpdateCoordinator {
     try {
       await this.options.restart(this.stagedPackage);
     } catch (error) {
+      const postponed = error instanceof UpdateRestartPostponedError;
       this.state = {
         ...readyState,
         status: 'ready',
         activeWorkSummary: undefined,
-        message: 'The verified update could not be installed. Retry or use the release notes.',
+        message: postponed
+          ? 'Restart was postponed. The verified update remains staged and ready to install.'
+          : 'The verified update could not be installed. Retry or use the release notes.',
       };
-      this.options.diagnostics?.record('update', 'warn', this.state.message, safeMessage(error));
+      this.options.diagnostics?.record(
+        'update',
+        postponed ? 'info' : 'warn',
+        this.state.message,
+        safeMessage(error),
+      );
       this.notify();
     }
     return this.state;

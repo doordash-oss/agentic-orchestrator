@@ -449,7 +449,7 @@ export function DescriptionComposer({
                     aria-label={`Retry ${item.name}`}
                     onClick={() => retryUpload(item)}
                   >
-                    ↻
+                    ↻ Retry
                   </button>
                 </>
               ) : null}

@@ -5127,12 +5127,32 @@ body {
  * home — is display:none, so the shell re-homes the same control into this
  * out-of-flow dock pinned just under the toolbar's trailing edge. Only
  * mounted in that state; the popover opens downward from here, mirroring
- * the toolbar popovers' presentation. */
+ * the toolbar popovers' presentation. The docked control gets a restrained
+ * pill treatment so it reads as an actionable button rather than a passive
+ * status dot. */
 .server-switcher-dock {
   position: absolute;
   top: calc(52px + var(--space-2));
   right: var(--space-3);
   z-index: 30;
+}
+
+.server-switcher-dock .sidebar__server-control {
+  padding: 3px 10px;
+  border: 1px solid var(--hairline);
+  border-radius: 999px;
+  background: var(--raised);
+  box-shadow: 0 2px 8px rgb(0 0 0 / 12%);
+}
+
+.server-switcher-dock .sidebar__server-control:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.server-switcher-dock .sidebar__server-control:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 .server-switcher-dock .server-switcher {
@@ -5768,6 +5788,7 @@ body {
 
 .composer__chip[data-state='failed'] {
   border-color: var(--bad);
+  flex-wrap: wrap;
 }
 
 .composer__chip-state {
@@ -5784,11 +5805,14 @@ body {
   padding: 0 0.4rem;
 }
 
+/* Failure remediation is actionable copy: wrap it onto its own row so the
+   full message stays readable instead of being ellipsized mid-sentence. */
 .composer__chip-message {
-  max-width: 16rem;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  flex-basis: 100%;
+  max-width: 22rem;
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
   color: var(--bad);
 }
 

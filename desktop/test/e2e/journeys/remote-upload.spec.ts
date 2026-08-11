@@ -418,7 +418,7 @@ test('remote upload: picker/paste staging, server materialization, cleanup, reje
     expect(fs.readFileSync(path.join(imagesDir, 'image-1.png'))).toEqual(PICKER_PNG);
     const attachments = fs.readdirSync(path.join(featureDir, 'attachments'));
     expect(attachments).toHaveLength(1);
-    expect(attachments[0]).toMatch(/^consumed-[0-9a-f]{32}\.pdf$/);
+    expect(attachments[0]).toMatch(/^consumed-[0-9a-f]{32}-[0-9a-f]{32}\.pdf$/);
     expect(fs.readFileSync(path.join(featureDir, 'attachments', attachments[0]!))).toEqual(
       ATTACHMENT_BYTES,
     );
@@ -444,7 +444,7 @@ test('remote upload: picker/paste staging, server materialization, cleanup, reje
     const chatDir = path.join(remote.stateDir, 'chat');
     const chatCopies = fs
       .readdirSync(chatDir)
-      .filter((entry) => /^consumed-[0-9a-f]{32}\.png$/.test(entry));
+      .filter((entry) => /^consumed-[0-9a-f]{32}-[0-9a-f]{32}\.png$/.test(entry));
     expect(chatCopies).toHaveLength(1);
     const chatImagePath = path.join(chatDir, chatCopies[0]!);
     expect(fs.statSync(chatImagePath).size).toBeGreaterThan(0);

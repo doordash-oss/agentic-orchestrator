@@ -1248,6 +1248,41 @@ describe('FeatureService review-feedback operations', () => {
     ]);
   });
 
+  it('carries a renderer-chunked 512-update selection batch across the boundary unchanged', async () => {
+    // Bulk actions split targets at the server's 512-update bound; the
+    // boundary must transport exactly those reference-only batches.
+    const updates = Array.from({ length: 512 }, (_, index) => ({
+      stableRef: `repo-a:review:${index + 1}`,
+      selected: false,
+    }));
+    const { service, calls } = makeService(() => ({
+      status: 200,
+      body: { api_version: 'v1', revision: 8, repos: [] },
+    }));
+    await expect(
+      service.updateReviewFeedbackSelection({
+        featureId: 'abcd1234ef567890',
+        expectedRevision: 7,
+        updates,
+      }),
+    ).resolves.toEqual({ featureId: 'abcd1234ef567890', revision: 8, repos: [] });
+    expect(calls).toEqual([
+      {
+        path: '/api/v1/features/abcd1234ef567890/actions/review-feedback/selection',
+        init: {
+          method: 'POST',
+          body: {
+            expected_revision: 7,
+            updates: updates.map((update) => ({
+              stable_ref: update.stableRef,
+              selected: update.selected,
+            })),
+          },
+        },
+      },
+    ]);
+  });
+
   it('maps a launch to the typed review-feedback action with the expected revision and the gate', async () => {
     const { service, calls } = makeService(() => ({
       status: 201,

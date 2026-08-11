@@ -1,18 +1,33 @@
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   featureConfigSnapshot,
   featureSnapshot,
   installAgenticoMock,
   type AgenticoMock,
 } from '../../test/agenticoMock';
+import { matchMediaState } from '../../test/setup';
 import { ReviewFeedbackWorkspace } from './ReviewFeedbackWorkspace';
-import type { ReviewFeedbackDraftView } from './reviewFeedbackDraftApi';
+import type {
+  ReviewFeedbackDraftCommentView,
+  ReviewFeedbackDraftView,
+} from './reviewFeedbackDraftApi';
 
 afterEach(cleanup);
 
+beforeEach(() => {
+  matchMediaState.narrowCockpit = false;
+});
+
 const PARENT_ID = 'abcd1234ef567890';
+
+function comment(
+  overrides: Partial<ReviewFeedbackDraftCommentView> &
+    Pick<ReviewFeedbackDraftCommentView, 'stableRef' | 'repo' | 'id' | 'type'>,
+): ReviewFeedbackDraftCommentView {
+  return { selected: true, ...overrides };
+}
 
 function draftView(overrides: Partial<ReviewFeedbackDraftView> = {}): ReviewFeedbackDraftView {
   return {
@@ -23,41 +38,41 @@ function draftView(overrides: Partial<ReviewFeedbackDraftView> = {}): ReviewFeed
         repo: 'repo-a',
         prUrl: 'https://github.com/org/repo-a/pull/1',
         comments: [
-          {
+          comment({
             stableRef: 'repo-a:review:41',
-            selected: true,
             repo: 'repo-a',
             id: 41,
             type: 'review',
             path: 'src/query.ts',
             line: 12,
-            author: 'octocat',
+            author: 'Octocat',
             body: 'Rewrite this to avoid the bearer token.',
             inReplyToId: 39,
             createdAt: '2026-07-20T10:00:00Z',
-          },
-          {
+          }),
+          comment({
             stableRef: 'repo-a:issue:42',
-            selected: true,
             repo: 'repo-a',
             id: 42,
             type: 'issue',
+            author: 'hubot',
             body: 'Consider extracting the parser.',
-          },
+          }),
         ],
       },
       {
         repo: 'repo-b',
         prUrl: 'https://github.com/org/repo-b/pull/7',
         comments: [
-          {
+          comment({
             stableRef: 'repo-b:review_body:90',
-            selected: false,
             repo: 'repo-b',
             id: 90,
             type: 'review_body',
-            author: 'reviewer',
-          },
+            author: 'Reviewer',
+            body: 'Overall looks good.',
+            selected: false,
+          }),
         ],
       },
     ],
@@ -101,48 +116,255 @@ async function renderWorkspace({
     />,
   );
   await waitFor(() => expect(mock.api.fetchReviewFeedback).toHaveBeenCalledOnce());
-  await screen.findByText(/Rewrite this to avoid the bearer token/);
+  await screen.findAllByText(/of \d+ comments visible/);
   return { mock, onBack, onDispatched, user: userEvent.setup() };
 }
 
+function ackWith(revision: number, draft = draftView({ revision })) {
+  return { revision, repos: draft.repos };
+}
+
+/** The visible-result summary rendered above the feed. */
+function summary(text: string | RegExp): HTMLElement {
+  return within(screen.getByRole('main', { name: 'Review feedback' })).getByText(text, {
+    selector: '.review-feedback-feedbar__summary',
+  });
+}
+
 describe('ReviewFeedbackWorkspace', () => {
-  it('renders the scope rail with counts and the feed cards in server order', async () => {
-    const { mock } = await renderWorkspace();
+  it('renders repository sections in server order with ledgers, PR links, and the scope rail', async () => {
+    const { mock, user } = await renderWorkspace();
     expect(mock.api.fetchReviewFeedback).toHaveBeenCalledWith({ featureId: PARENT_ID });
-    const dialog = screen.getByRole('dialog', { name: 'Address review feedback' });
-    expect(dialog).toBeVisible();
-    // Header ledger counts the committed draft selection (repo-b is deselected).
-    expect(screen.getByText('2 of 3 selected')).toBeVisible();
-    // Scope rail: All feedback plus one entry per repo in parent order.
+    expect(screen.getByRole('dialog', { name: 'Address review feedback' })).toBeVisible();
+    expect(screen.getByText('2 of 3 selected', { selector: 'p' })).toBeVisible();
+
+    // Scope rail ledger: All feedback plus one row per repo, parent order.
     const rail = screen.getByRole('navigation', { name: 'Feedback scope' });
-    const scopeNames = Array.from(
-      rail.querySelectorAll('.review-feedback-workspace__scope-name'),
-    ).map((node) => node.textContent);
-    expect(scopeNames).toEqual(['All feedback', 'repo-a', 'repo-b']);
-    const scopeCounts = Array.from(
-      rail.querySelectorAll('.review-feedback-workspace__scope-count'),
-    ).map((node) => node.textContent);
-    expect(scopeCounts).toEqual(['2/3', '2/2', '0/1']);
-    // Cards: repo, author, type label, path:line, humanized creation time.
-    expect(screen.getAllByText('repo-a').length).toBeGreaterThanOrEqual(2);
-    expect(screen.getByText('octocat')).toBeVisible();
-    expect(screen.getByText('Review comment')).toBeVisible();
+    const radios = within(rail).getAllByRole('radio');
+    expect(
+      radios.map(
+        (radio) =>
+          within(radio.closest('label')!).getByText(/.*/, {
+            selector: '.review-feedback-workspace__scope-name',
+          }).textContent,
+      ),
+    ).toEqual(['All feedback', 'repo-a', 'repo-b']);
+    expect(radios[0]).toBeChecked();
+    // Accessible ratios accompany the visible ones.
+    expect(within(rail).getByText('2 of 3 selected')).toBeVisible();
+    expect(within(rail).getByText('2 of 2 selected')).toBeVisible();
+    expect(within(rail).getByText('0 of 1 selected')).toBeVisible();
+
+    // Feed: one labelled section per repository, server order, oldest-first cards.
+    const sections = screen.getAllByRole('region', { name: /^repo-/ });
+    expect(sections.map((section) => section.getAttribute('aria-label'))).toEqual([
+      'repo-a',
+      'repo-b',
+    ]);
+    expect(within(sections[0]!).getByRole('heading', { name: 'repo-a' })).toBeVisible();
+    expect(within(sections[0]!).getByText('2 of 2 selected')).toBeVisible();
+    expect(within(sections[1]!).getByText('0 of 1 selected')).toBeVisible();
+
+    // Cards: author, type label, path:line, humanized creation time.
+    expect(within(sections[0]!).getByText('Octocat')).toBeVisible();
+    expect(within(sections[0]!).getByText('Review comment')).toBeVisible();
     expect(screen.getByText('src/query.ts:12')).toBeVisible();
     expect(screen.getByText(/\d+ days ago/)).toBeVisible();
-    const comment42 = screen.getByLabelText(/Consider extracting the parser/);
-    expect(comment42).toBeChecked();
-    expect(screen.getByLabelText(/Review body/)).not.toBeChecked();
+    expect(screen.getByLabelText(/Consider extracting the parser/)).toBeChecked();
+    expect(screen.getByLabelText(/Overall looks good/)).not.toBeChecked();
+
+    // PR links route through the privileged external-browser boundary.
+    await user.click(within(sections[1]!).getByRole('button', { name: 'Open pull request' }));
+    expect(mock.api.openExternal).toHaveBeenCalledWith({
+      url: 'https://github.com/org/repo-b/pull/7',
+    });
+  });
+
+  it('choosing one repository narrows the feed without touching selections anywhere', async () => {
+    const { user } = await renderWorkspace();
+    await user.click(screen.getByRole('radio', { name: /repo-b/ }));
+    expect(screen.getByRole('radio', { name: /repo-b/ })).toBeChecked();
+    expect(screen.queryByText(/Rewrite this to avoid the bearer token/)).not.toBeInTheDocument();
+    const reviewBody = screen.getByLabelText(/Overall looks good/);
+    expect(reviewBody).not.toBeChecked();
+    // The header ledger still counts the full draft, including hidden scopes.
+    expect(screen.getByText('2 of 3 selected', { selector: 'p' })).toBeVisible();
+    // And the visible summary reflects the scoped count.
+    expect(summary('1 of 1 comments visible')).toBeVisible();
+    // Returning to All feedback restores both sections.
+    await user.click(screen.getByRole('radio', { name: /All feedback/ }));
+    expect(screen.getByText(/Rewrite this to avoid the bearer token/)).toBeVisible();
+  });
+
+  it('combines author and type facets with OR inside and AND across, with path substring matching', async () => {
+    const { user } = await renderWorkspace();
+    // Author facet: one of two authors in scope.
+    await user.click(screen.getByRole('checkbox', { name: 'Octocat' }));
+    expect(summary('1 of 3 comments visible')).toBeVisible();
+    expect(screen.getByText('Author: Octocat')).toBeVisible();
+    // OR within the facet.
+    await user.click(screen.getByRole('checkbox', { name: 'hubot' }));
+    expect(summary('2 of 3 comments visible')).toBeVisible();
+    // AND across facets: of the two selected authors, only Octocat wrote a
+    // review comment; hubot's issue comment drops out.
+    await user.click(screen.getByRole('checkbox', { name: 'Review comment' }));
+    expect(summary('1 of 3 comments visible')).toBeVisible();
+    expect(screen.queryByLabelText(/Consider extracting the parser/)).not.toBeInTheDocument();
+    // Path query is a case-insensitive substring over the displayed path.
+    await user.type(screen.getByRole('searchbox', { name: 'File path' }), 'QUERY.TS');
+    expect(summary('1 of 3 comments visible')).toBeVisible();
+    expect(screen.getByLabelText(/Rewrite this to avoid the bearer token/)).toBeInTheDocument();
+    // The pathless comment 42 is in the selected author facet but has no path,
+    // so it never matches a non-empty path query.
+    expect(screen.queryByLabelText(/Consider extracting the parser/)).not.toBeInTheDocument();
+  });
+
+  it('prunes facet values that leave the scope while keeping the path query', async () => {
+    const { user } = await renderWorkspace();
+    await user.click(screen.getByRole('checkbox', { name: 'Octocat' }));
+    await user.type(screen.getByRole('searchbox', { name: 'File path' }), 'src/');
+    await user.click(screen.getByRole('radio', { name: /repo-b/ }));
+    // Octocat is not an author in repo-b: the chip and constraint are gone...
+    expect(screen.queryByText('Author: Octocat')).not.toBeInTheDocument();
+    expect(screen.queryByRole('checkbox', { name: 'Octocat' })).not.toBeInTheDocument();
+    // ...but the path query is retained and applied to the new scope.
+    expect(screen.getByRole('searchbox', { name: 'File path' })).toHaveValue('src/');
+    expect(screen.getByText('Path: src/')).toBeVisible();
+    // The pathless repo-b comment does not match the retained path query.
+    expect(summary('0 of 1 comments visible')).toBeVisible();
+    expect(screen.getByText(/No comments match the active filters/)).toBeVisible();
+  });
+
+  it('removes filters via chips or Clear all without changing scope or selections', async () => {
+    const { user } = await renderWorkspace();
+    await user.click(screen.getByRole('checkbox', { name: 'Octocat' }));
+    await user.type(screen.getByRole('searchbox', { name: 'File path' }), 'query');
+    await user.click(screen.getByRole('button', { name: 'Remove author filter: Octocat' }));
+    expect(screen.queryByText('Author: Octocat')).not.toBeInTheDocument();
+    expect(summary('1 of 3 comments visible')).toBeVisible();
+    await user.click(screen.getByRole('button', { name: 'Clear all filters' }));
+    expect(summary('3 of 3 comments visible')).toBeVisible();
+    expect(screen.getByRole('radio', { name: /All feedback/ })).toBeChecked();
+    expect(screen.getByLabelText(/Overall looks good/)).not.toBeChecked();
+  });
+
+  it('shows a zero-result state that preserves the full draft and launch availability', async () => {
+    const { user } = await renderWorkspace();
+    await user.click(screen.getByRole('checkbox', { name: 'Octocat' }));
+    await user.click(screen.getByRole('checkbox', { name: 'Issue' }));
+    const empty = screen.getByRole('status');
+    expect(empty).toHaveTextContent(/No comments match the active filters/);
+    // Launch stays based on the full committed draft, not the empty feed.
+    expect(screen.getByRole('button', { name: 'Launch child (2)' })).toBeEnabled();
+    await user.click(within(empty).getByRole('button', { name: 'Clear all filters' }));
+    expect(summary('3 of 3 comments visible')).toBeVisible();
+  });
+
+  it('Select visible and Clear visible act only on the visible set, with counted labels', async () => {
+    const { mock, user } = await renderWorkspace();
+    // "Clear visible (2)": both selected repo-a/repo-b-visible comments; the
+    // deselected review body is not a clear target.
+    const clear = screen.getByRole('button', { name: 'Clear visible (2)' });
+    expect(screen.getByRole('button', { name: 'Select visible (1)' })).toBeEnabled();
+    const ack = draftView({ revision: 8 });
+    ack.repos[0]!.comments[0] = { ...ack.repos[0]!.comments[0]!, selected: false };
+    ack.repos[0]!.comments[1] = { ...ack.repos[0]!.comments[1]!, selected: false };
+    mock.api.updateReviewFeedbackSelection.mockResolvedValue(ackWith(8, ack));
+    await user.click(clear);
+    await waitFor(() => expect(mock.api.updateReviewFeedbackSelection).toHaveBeenCalledOnce());
+    // Only the visible state-changing references were sent — hidden (none here)
+    // and already-deselected comments are excluded.
+    expect(mock.api.updateReviewFeedbackSelection.mock.calls[0]![0]).toEqual({
+      featureId: PARENT_ID,
+      expectedRevision: 7,
+      updates: [
+        { stableRef: 'repo-a:review:41', selected: false },
+        { stableRef: 'repo-a:issue:42', selected: false },
+      ],
+    });
+    // Hidden selections are unaffected: the draft stays 0/3 selected after ack.
+    expect(screen.getByText('0 of 3 selected', { selector: 'p' })).toBeVisible();
+    // Disabled at zero once there is nothing left to clear.
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Clear visible (0)' })).toBeDisabled(),
+    );
+  });
+
+  it('splits bulk targets into sequential batches of at most 512 chained revisions', async () => {
+    const many: ReviewFeedbackDraftCommentView[] = Array.from({ length: 1025 }, (_, index) =>
+      comment({
+        stableRef: `repo-a:review:${index + 1}`,
+        repo: 'repo-a',
+        id: index + 1,
+        type: 'review',
+        author: 'octocat',
+      }),
+    );
+    const draft = draftView({
+      repos: [{ repo: 'repo-a', prUrl: '', comments: many }],
+    });
+    const { mock, user } = await renderWorkspace({ draft });
+    const first = deferred<{ revision: number; repos: ReviewFeedbackDraftView['repos'] }>();
+    mock.api.updateReviewFeedbackSelection
+      .mockReturnValueOnce(first.promise)
+      .mockResolvedValue(ackWith(9));
+    await user.click(screen.getByRole('button', { name: 'Clear visible (1025)' }));
+    await waitFor(() => expect(mock.api.updateReviewFeedbackSelection).toHaveBeenCalledOnce());
+    const batch1 = mock.api.updateReviewFeedbackSelection.mock.calls[0]![0] as {
+      expectedRevision: number;
+      updates: ReviewFeedbackDraftCommentView[];
+    };
+    expect(batch1.expectedRevision).toBe(7);
+    expect(batch1.updates).toHaveLength(512);
+    // The second batch cannot start before the first batch's revision returns.
+    expect(mock.api.updateReviewFeedbackSelection).toHaveBeenCalledOnce();
+    first.resolve({ revision: 8, repos: draft.repos });
+    await waitFor(() => expect(mock.api.updateReviewFeedbackSelection).toHaveBeenCalledTimes(3));
+    const batch2 = mock.api.updateReviewFeedbackSelection.mock.calls[1]![0] as {
+      expectedRevision: number;
+      updates: unknown[];
+    };
+    expect(batch2.expectedRevision).toBe(8);
+    expect(batch2.updates).toHaveLength(512);
+    const batch3 = mock.api.updateReviewFeedbackSelection.mock.calls[2]![0] as {
+      expectedRevision: number;
+      updates: unknown[];
+    };
+    expect(batch3.expectedRevision).toBe(9);
+    expect(batch3.updates).toHaveLength(1);
+  });
+
+  it('stops later bulk batches when one batch fails and converges via refetch', async () => {
+    const many: ReviewFeedbackDraftCommentView[] = Array.from({ length: 600 }, (_, index) =>
+      comment({
+        stableRef: `repo-a:review:${index + 1}`,
+        repo: 'repo-a',
+        id: index + 1,
+        type: 'review',
+      }),
+    );
+    const draft = draftView({ repos: [{ repo: 'repo-a', prUrl: '', comments: many }] });
+    const { mock, user } = await renderWorkspace({ draft });
+    mock.api.updateReviewFeedbackSelection
+      .mockResolvedValueOnce({ revision: 8, repos: draft.repos })
+      .mockRejectedValueOnce(
+        Object.assign(new Error('stale'), { code: 'review_feedback_revision_conflict' }),
+      );
+    await user.click(screen.getByRole('button', { name: 'Clear visible (600)' }));
+    await waitFor(() => expect(mock.api.updateReviewFeedbackSelection).toHaveBeenCalledTimes(2));
+    // No third batch is ever sent against the stale revision.
+    await waitFor(() => expect(mock.api.fetchReviewFeedback).toHaveBeenCalledTimes(2));
+    expect(mock.api.updateReviewFeedbackSelection).toHaveBeenCalledTimes(2);
+    expect(await screen.findByRole('alert')).toHaveTextContent(/stale/);
   });
 
   it('toggles update the visible choice immediately and send a reference-only mutation', async () => {
     const { mock, user } = await renderWorkspace();
-    // The ack carries the authoritative view with the toggle committed.
     const ack = draftView({ revision: 8 });
     ack.repos[0]!.comments[1] = { ...ack.repos[0]!.comments[1]!, selected: false };
-    mock.api.updateReviewFeedbackSelection.mockResolvedValue({ revision: 8, repos: ack.repos });
+    mock.api.updateReviewFeedbackSelection.mockResolvedValue(ackWith(8, ack));
     const comment42 = screen.getByLabelText(/Consider extracting the parser/);
     await user.click(comment42);
-    // Optimistic: unchecked; the ack keeps it that way (committed server-side).
     expect(comment42).not.toBeChecked();
     await waitFor(() => expect(mock.api.updateReviewFeedbackSelection).toHaveBeenCalledOnce());
     const request = mock.api.updateReviewFeedbackSelection.mock.calls[0]![0] as {
@@ -152,7 +374,6 @@ describe('ReviewFeedbackWorkspace', () => {
     };
     expect(request.featureId).toBe(PARENT_ID);
     expect(request.expectedRevision).toBe(7);
-    // Reference-only: no comment content is ever sent.
     expect(request.updates).toEqual([{ stableRef: 'repo-a:issue:42', selected: false }]);
   });
 
@@ -161,13 +382,12 @@ describe('ReviewFeedbackWorkspace', () => {
     const first = deferred<{ revision: number; repos: ReviewFeedbackDraftView['repos'] }>();
     mock.api.updateReviewFeedbackSelection
       .mockReturnValueOnce(first.promise)
-      .mockResolvedValueOnce({ revision: 9, repos: draftView({ revision: 9 }).repos });
+      .mockResolvedValueOnce(ackWith(9));
     await user.click(screen.getByLabelText(/Rewrite this to avoid the bearer token/));
     await waitFor(() => expect(mock.api.updateReviewFeedbackSelection).toHaveBeenCalledOnce());
     await user.click(screen.getByLabelText(/Consider extracting the parser/));
-    // The second edit waits for the first acknowledgement.
     expect(mock.api.updateReviewFeedbackSelection).toHaveBeenCalledOnce();
-    first.resolve({ revision: 8, repos: draftView({ revision: 8 }).repos });
+    first.resolve(ackWith(8));
     await waitFor(() => expect(mock.api.updateReviewFeedbackSelection).toHaveBeenCalledTimes(2));
     expect(mock.api.updateReviewFeedbackSelection.mock.calls[1]![0]).toEqual({
       featureId: PARENT_ID,
@@ -182,11 +402,9 @@ describe('ReviewFeedbackWorkspace', () => {
       code: 'review_feedback_revision_conflict',
     });
     mock.api.updateReviewFeedbackSelection.mockRejectedValueOnce(conflict);
-    const comment90 = screen.getByLabelText(/Review body/);
+    const comment90 = screen.getByLabelText(/Overall looks good/);
     await user.click(comment90);
-    // The conflict triggers a refetch.
     await waitFor(() => expect(mock.api.fetchReviewFeedback).toHaveBeenCalledTimes(2));
-    // The optimistic toggle is rolled back to the committed server value.
     expect(comment90).not.toBeChecked();
     expect(await screen.findByRole('alert')).toHaveTextContent(/stale/);
   });
@@ -195,14 +413,10 @@ describe('ReviewFeedbackWorkspace', () => {
     const { mock, user } = await renderWorkspace();
     const pending = deferred<{ revision: number; repos: ReviewFeedbackDraftView['repos'] }>();
     mock.api.updateReviewFeedbackSelection.mockReturnValueOnce(pending.promise);
-    mock.api.launchReviewFeedbackChild.mockResolvedValue({
-      featureId: 'child1234ef567890',
-      parentId: PARENT_ID,
-    });
     await user.click(screen.getByLabelText(/Consider extracting the parser/));
     const launch = screen.getByRole('button', { name: /^Launch child/ });
     expect(launch).toBeDisabled();
-    pending.resolve({ revision: 8, repos: draftView({ revision: 8 }).repos });
+    pending.resolve(ackWith(8));
     await waitFor(() => expect(launch).toBeEnabled());
   });
 
@@ -213,11 +427,11 @@ describe('ReviewFeedbackWorkspace', () => {
     await user.click(screen.getByLabelText(/Consider extracting the parser/));
     await user.click(screen.getByRole('button', { name: 'Back' }));
     expect(onBack).not.toHaveBeenCalled();
-    pending.resolve({ revision: 8, repos: draftView({ revision: 8 }).repos });
+    pending.resolve(ackWith(8));
     await waitFor(() => expect(onBack).toHaveBeenCalledOnce());
   });
 
-  it('restores the committed selection on re-entry', async () => {
+  it('restores the committed selection on re-entry with view state reset', async () => {
     const mock = installAgenticoMock();
     mock.api.getFeatureConfig.mockResolvedValue(featureConfigSnapshot({}));
     const committed = draftView({ revision: 8 });
@@ -236,7 +450,11 @@ describe('ReviewFeedbackWorkspace', () => {
     );
     const comment42 = await screen.findByLabelText(/Consider extracting the parser/);
     expect(comment42).not.toBeChecked();
-    expect(screen.getByText('1 of 3 selected')).toBeVisible();
+    // Header reports the committed 1-of-3 draft selection.
+    expect(screen.getByText('1 of 3 selected', { selector: 'p' })).toBeVisible();
+    // Fresh entry: All feedback scope, no filters.
+    expect(screen.getByRole('radio', { name: /All feedback/ })).toBeChecked();
+    expect(screen.queryByRole('list', { name: 'Active filters' })).not.toBeInTheDocument();
   });
 
   it('launches with only the expected revision and gate, then reports the child and receipt', async () => {
@@ -274,7 +492,70 @@ describe('ReviewFeedbackWorkspace', () => {
     );
     await user.click(screen.getByRole('button', { name: /Launch child \(2\)/ }));
     expect(await screen.findByRole('alert')).toHaveTextContent(/nothing launchable/);
-    // The workspace stays open with the draft view intact.
     expect(screen.getByLabelText(/Consider extracting the parser/)).toBeChecked();
+  });
+
+  describe('narrow layout', () => {
+    beforeEach(() => {
+      matchMediaState.narrowCockpit = true;
+    });
+
+    it('hides the rail and exposes the same controls in a focus-managed drawer', async () => {
+      const { user } = await renderWorkspace();
+      expect(screen.queryByRole('navigation', { name: 'Feedback scope' })).not.toBeInTheDocument();
+      const opener = screen.getByRole('button', { name: 'Repositories and filters' });
+      expect(opener).toHaveAttribute('aria-expanded', 'false');
+      await user.click(opener);
+      expect(opener).toHaveAttribute('aria-expanded', 'true');
+      const drawer = screen.getByRole('dialog', { name: 'Repositories and filters' });
+      // The same panel: scope ledger, facets, path input, summary, bulk actions.
+      expect(within(drawer).getByRole('radio', { name: /All feedback/ })).toBeChecked();
+      expect(within(drawer).getByRole('checkbox', { name: 'Octocat' })).toBeInTheDocument();
+      expect(within(drawer).getByRole('searchbox', { name: 'File path' })).toBeInTheDocument();
+      expect(within(drawer).getByText('3 of 3 comments visible')).toBeVisible();
+      expect(within(drawer).getByRole('button', { name: 'Clear visible (2)' })).toBeEnabled();
+      // Focus moved into the drawer on opening.
+      expect(within(drawer).getByRole('button', { name: 'Close filters' })).toHaveFocus();
+      // The wide rail is not mounted while the drawer is open (no duplicates).
+      expect(screen.queryByRole('navigation', { name: 'Feedback scope' })).not.toBeInTheDocument();
+      // Escape closes and restores focus to the opener.
+      await user.keyboard('{Escape}');
+      expect(
+        screen.queryByRole('dialog', { name: 'Repositories and filters' }),
+      ).not.toBeInTheDocument();
+      expect(opener).toHaveFocus();
+    });
+
+    it('keeps the drawer open while filtering and closes it via its close control', async () => {
+      const { user } = await renderWorkspace();
+      await user.click(screen.getByRole('button', { name: 'Repositories and filters' }));
+      const drawer = screen.getByRole('dialog', { name: 'Repositories and filters' });
+      await user.click(within(drawer).getByRole('checkbox', { name: 'Octocat' }));
+      await user.type(within(drawer).getByRole('searchbox', { name: 'File path' }), 'query');
+      // Composing filters never dismisses the drawer...
+      expect(drawer).toBeInTheDocument();
+      expect(within(drawer).getByText('1 of 3 comments visible')).toBeVisible();
+      // ...and the feed behind it updates without stealing focus back.
+      expect(screen.queryByLabelText(/Consider extracting the parser/)).not.toBeInTheDocument();
+      await user.click(within(drawer).getByRole('button', { name: 'Close filters' }));
+      expect(
+        screen.queryByRole('dialog', { name: 'Repositories and filters' }),
+      ).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Repositories and filters' })).toHaveFocus();
+    });
+
+    it('cycles tab focus inside the modal drawer', async () => {
+      const { user } = await renderWorkspace();
+      await user.click(screen.getByRole('button', { name: 'Repositories and filters' }));
+      const drawer = screen.getByRole('dialog', { name: 'Repositories and filters' });
+      // Tabbing from the last control wraps back to the first (the close action).
+      const bulk = within(drawer).getByRole('button', { name: 'Clear visible (2)' });
+      bulk.focus();
+      await user.tab();
+      expect(within(drawer).getByRole('button', { name: 'Close filters' })).toHaveFocus();
+      // Shift+Tab from the first wraps to the last enabled control.
+      await user.tab({ shift: true });
+      expect(within(drawer).getByRole('button', { name: 'Clear visible (2)' })).toHaveFocus();
+    });
   });
 });

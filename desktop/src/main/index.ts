@@ -89,10 +89,16 @@ import { applyLoginShellPath } from './shellEnv';
 import {
   FIXTURE_RELEASE_PUBLIC_KEY,
   UpdateCoordinator,
+  UpdateRestartPostponedError,
   createUpdateFixtureFetch,
   detectCanInstallInApp,
   detectPackageFormat,
 } from './updates';
+import {
+  applyVerifiedUpdate,
+  cleanupAppliedUpdate,
+  relaunchUpdatedApplication,
+} from './updateInstaller';
 import {
   QuitCoordinator,
   activeWorkDialog,
@@ -887,6 +893,19 @@ if (!hasSingleInstanceLock) {
     }
 
     const updatePackageFormat = detectPackageFormat(process.platform, process.env, runtimeExecPath);
+    const updateCleanupMarkerPath = path.join(
+      app.getPath('userData'),
+      'updates',
+      'install-cleanup.json',
+    );
+    cleanupAppliedUpdate({
+      currentVersion: app.getVersion(),
+      execPath: runtimeExecPath,
+      appImagePath: process.env.APPIMAGE ?? runtimeExecPath,
+      cleanupMarkerPath: updateCleanupMarkerPath,
+    });
+    const updateFixturePath =
+      testPackagedResources === null ? undefined : process.env.AGENTICO_UPDATE_FIXTURE;
     const updates = new UpdateCoordinator({
       currentVersion: app.getVersion(),
       isPackaged: isPackagedRuntime,
@@ -894,10 +913,10 @@ if (!hasSingleInstanceLock) {
       canInstallInApp: detectCanInstallInApp(updatePackageFormat, process.env, runtimeExecPath),
       userDataDir: app.getPath('userData'),
       diagnostics,
-      ...(process.env.AGENTICO_UPDATE_FIXTURE === undefined
+      ...(updateFixturePath === undefined
         ? {}
         : {
-            fetch: createUpdateFixtureFetch(process.env.AGENTICO_UPDATE_FIXTURE),
+            fetch: createUpdateFixtureFetch(updateFixturePath),
             releasePublicKey: FIXTURE_RELEASE_PUBLIC_KEY,
           }),
       onStateChanged: () => broadcastAppEvent({ type: 'invalidated', kind: 'updates.changed' }),
@@ -923,9 +942,38 @@ if (!hasSingleInstanceLock) {
               }),
         };
       },
-      restart: () => {
-        app.relaunch();
-        void quitCoordinator.requestQuitDecision();
+      restart: async (update) => {
+        // Ask for quit consent BEFORE touching disk. requestQuitDecision may
+        // show the active-work dialog and resolve without ever quitting (Keep
+        // Running, Cancel, or a stop failure the user didn't override) — the
+        // bundle must not be swapped in that case, or the app is left running
+        // an on-disk version that doesn't match what's loaded, with a
+        // relaunch silently queued for whenever the user does eventually
+        // quit. Once requestQuitDecision returns true, an actual quit is
+        // already underway (deps.shutdown ran); the swap below is safe to
+        // run synchronously because the installer's execFileSync calls block
+        // this process's only event loop, so Electron's own quit machinery
+        // cannot tear the process down mid-swap.
+        const quitConfirmed = await quitCoordinator.requestQuitDecision();
+        if (!quitConfirmed) {
+          throw new UpdateRestartPostponedError();
+        }
+        // Packaged journeys normally use a tiny signed fixture instead of a
+        // native DMG/AppImage. The installer itself is covered against real
+        // filesystem swaps; opt into the native path for the dedicated
+        // end-to-end install journey only.
+        if (updateFixturePath === undefined || process.env.AGENTICO_E2E_APPLY_UPDATE === '1') {
+          await applyVerifiedUpdate(update, {
+            execPath: runtimeExecPath,
+            appImagePath: process.env.APPIMAGE ?? runtimeExecPath,
+            cleanupMarkerPath: updateCleanupMarkerPath,
+          });
+        }
+        relaunchUpdatedApplication(
+          update,
+          (options) => app.relaunch(options),
+          process.env.APPIMAGE ?? runtimeExecPath,
+        );
       },
     });
 

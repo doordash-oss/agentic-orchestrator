@@ -8,7 +8,7 @@ import {
 } from '../helpers/app';
 import { Transcript } from '../helpers/transcript';
 import { createRepo, createWorld, destroyWorld, type JourneyWorld } from '../helpers/world';
-import { sha256, writeSignedUpdateFixture } from '../helpers/update-fixtures';
+import { writeSignedUpdateFixture } from '../helpers/update-fixtures';
 
 test('update validation rejects malformed metadata, signature tamper, downgrades, and prereleases', async ({}, testInfo) => {
   test.setTimeout(180_000);
@@ -20,10 +20,9 @@ test('update validation rejects malformed metadata, signature tamper, downgrades
   await runValidationCase(testInfo, transcript, 'malformed schema', (world) =>
     writeSignedUpdateFixture(world.root, { malformedFeed: true }),
   );
-  await runValidationCase(testInfo, transcript, 'altered signed checksum metadata', (world) =>
+  await runValidationCase(testInfo, transcript, 'altered signed release envelope', (world) =>
     writeSignedUpdateFixture(world.root, {
-      checksumText: `${'0'.repeat(64)}  Agentico-mac-universal.dmg\n`,
-      signatureText: `${sha256(Buffer.from('package bytes'))}  Agentico-mac-universal.dmg\n`,
+      servedEnvelopeBytes: Buffer.from('{"tampered":true}\n'),
       packageText: 'package bytes',
     }),
   );

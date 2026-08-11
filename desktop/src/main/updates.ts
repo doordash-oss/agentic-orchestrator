@@ -20,7 +20,7 @@ const CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const CHECK_JITTER_MS = 20 * 60 * 1000;
 const FETCH_TIMEOUT_MS = 8000;
 const MAX_RELEASE_BYTES = 1024 * 1024;
-const MAX_CHECKSUM_BYTES = 1024 * 1024;
+const MAX_RELEASE_ENVELOPE_BYTES = 1024 * 1024;
 const MAX_SIGNATURE_BYTES = 64 * 1024;
 const MAX_PACKAGE_BYTES = 512 * 1024 * 1024;
 const TRUSTED_DOWNLOAD_HOSTS = new Set([
@@ -28,6 +28,7 @@ const TRUSTED_DOWNLOAD_HOSTS = new Set([
   'github.com',
   'objects.githubusercontent.com',
   'github-releases.githubusercontent.com',
+  'release-assets.githubusercontent.com',
 ]);
 // Trust root for signed release metadata. The matching private key lives only
 // with the release operator (see desktop/scripts/release-sign.mjs); it is
@@ -50,6 +51,12 @@ export interface UpdateActiveWork {
   detectionFailed: boolean;
 }
 
+export interface VerifiedUpdatePackage {
+  packageFormat: UpdatePackageFormat;
+  packagePath: string;
+  targetVersion: string;
+}
+
 export interface UpdateCoordinatorOptions {
   currentVersion: string;
   isPackaged: boolean;
@@ -67,7 +74,23 @@ export interface UpdateCoordinatorOptions {
   onStateChanged?: (state: UpdateState) => void;
   detectActiveWork(): Promise<UpdateActiveWork>;
   stopActiveWork(active: UpdateActiveWork): Promise<{ stopped: boolean; message?: string }>;
-  restart(): void;
+  restart(update: VerifiedUpdatePackage): Promise<void> | void;
+}
+
+/**
+ * Sentinel a `restart` implementation throws to signal that the app is not
+ * actually quitting right now — e.g. the user chose Keep Running at the
+ * quit-consent dialog — as distinct from a genuine install failure.
+ * `restart` must throw this (rather than performing the on-disk swap) before
+ * an affirmed quit, so the update stays staged with nothing on disk changed:
+ * the swap is only safe to run once quitting is confirmed, since it is the
+ * one signal that the process will not be torn down mid-install.
+ */
+export class UpdateRestartPostponedError extends Error {
+  constructor(message = 'Restart was postponed; the update remains staged.') {
+    super(message);
+    this.name = 'UpdateRestartPostponedError';
+  }
 }
 
 interface ReleaseAsset {
@@ -86,7 +109,7 @@ interface ReleaseCandidate {
 
 interface SelectedAsset {
   packageAsset: ReleaseAsset;
-  checksumAsset?: ReleaseAsset;
+  releaseEnvelopeAsset?: ReleaseAsset;
   signatureAsset?: ReleaseAsset;
 }
 
@@ -94,16 +117,32 @@ type FetchHeaders = Record<string, string>;
 
 interface VerifiedMetadata {
   packageSha256: string;
-  checksumAsset: string;
+  releaseEnvelopeAsset: string;
+  releaseEnvelopeSha256: string;
   signatureAsset: string;
 }
 
 interface StagedPackageMetadata {
   tag: string;
   package: string;
-  checksum: string;
+  releaseEnvelope: string;
+  releaseEnvelopeSha256: string;
   signature: string;
   packageSha256: string;
+}
+
+interface ReleaseEnvelopeArtifact {
+  name: string;
+  sha256: string;
+  size: number;
+}
+
+interface ReleaseEnvelope {
+  schema_version: number;
+  tag: string;
+  version: string;
+  commit: string;
+  artifacts: ReleaseEnvelopeArtifact[];
 }
 
 export class UpdateCoordinator {
@@ -111,6 +150,7 @@ export class UpdateCoordinator {
   private inFlight: Promise<UpdateState> | null = null;
   private scheduledInstallInFlight: Promise<UpdateState> | null = null;
   private timer: ReturnType<typeof setTimeout> | null = null;
+  private stagedPackage: VerifiedUpdatePackage | null = null;
 
   private readonly fetchImpl: typeof fetch;
   private readonly now: () => Date;
@@ -203,7 +243,7 @@ export class UpdateCoordinator {
     }
     const active = await this.options.detectActiveWork();
     if (!active.detectionFailed && active.featureCount === 0 && !active.amaActive) {
-      return this.restartToUpdate();
+      return this.applyStagedUpdate();
     }
     this.state = {
       ...this.state,
@@ -264,16 +304,41 @@ export class UpdateCoordinator {
         return this.state;
       }
     }
-    return this.restartToUpdate();
+    return this.applyStagedUpdate();
   }
 
-  restartToUpdate(): UpdateState {
+  async restartToUpdate(): Promise<UpdateState> {
     if (this.state.status === 'installing') {
       return this.state;
     }
     if (!isInstallable(this.state)) {
       return this.fail('No verified update is ready to install.');
     }
+    let active: UpdateActiveWork;
+    try {
+      active = await this.options.detectActiveWork();
+    } catch {
+      active = { featureCount: 0, amaActive: false, detectionFailed: true };
+    }
+    if (active.detectionFailed || active.featureCount > 0 || active.amaActive) {
+      this.state = {
+        ...this.state,
+        status: 'ready',
+        activeWorkSummary: activeSummary(active),
+        message: 'Active work must be stopped before installing now.',
+      };
+      this.options.diagnostics?.record('update', 'warn', this.state.message);
+      this.notify();
+      return this.state;
+    }
+    return this.applyStagedUpdate();
+  }
+
+  private async applyStagedUpdate(): Promise<UpdateState> {
+    if (!isInstallable(this.state) || this.stagedPackage === null) {
+      return this.fail('No verified update is ready to install.');
+    }
+    const readyState = this.state;
     this.state = {
       ...this.state,
       status: 'installing',
@@ -282,7 +347,26 @@ export class UpdateCoordinator {
     };
     this.options.diagnostics?.record('update', 'info', this.state.message);
     this.notify();
-    this.options.restart();
+    try {
+      await this.options.restart(this.stagedPackage);
+    } catch (error) {
+      const postponed = error instanceof UpdateRestartPostponedError;
+      this.state = {
+        ...readyState,
+        status: 'ready',
+        activeWorkSummary: undefined,
+        message: postponed
+          ? 'Restart was postponed. The verified update remains staged and ready to install.'
+          : 'The verified update could not be installed. Retry or use the release notes.',
+      };
+      this.options.diagnostics?.record(
+        'update',
+        postponed ? 'info' : 'warn',
+        this.state.message,
+        safeMessage(error),
+      );
+      this.notify();
+    }
     return this.state;
   }
 
@@ -320,6 +404,7 @@ export class UpdateCoordinator {
         });
       }
       if (versionComparison === 0) {
+        this.stagedPackage = null;
         this.state = {
           ...this.state,
           status: 'current',
@@ -332,7 +417,12 @@ export class UpdateCoordinator {
         return this.state;
       }
 
-      const selected = selectAsset(latest.assets, this.platform, this.arch, this.packageFormat);
+      const selected = selectAsset(
+        latest.assets,
+        this.arch,
+        this.packageFormat,
+        stripLeadingV(latest.tag_name),
+      );
       if (selected === null) {
         return this.fail(
           `No ${this.packageFormat} update package is available for ${this.platform}/${this.arch}.`,
@@ -343,7 +433,7 @@ export class UpdateCoordinator {
           },
         );
       }
-      const metadata = await this.verifyReleaseMetadata(selected);
+      const metadata = await this.verifyReleaseMetadata(latest, selected);
       if (metadata === null) {
         this.state = {
           ...this.state,
@@ -351,13 +441,14 @@ export class UpdateCoordinator {
           targetVersion: stripLeadingV(latest.tag_name),
           releaseNotesUrl: latest.html_url,
           signatureStatus: 'unknown',
-          message: 'An update is available, but signed checksum metadata is incomplete.',
-          guidance: ['Open the release notes and verify the signed artifact manually.'],
+          message: 'An update is available, but the signed release envelope is incomplete.',
+          guidance: ['Open the release notes to choose a signed artifact manually.'],
         };
         return this.state;
       }
 
       if (this.packageFormat === 'deb') {
+        this.stagedPackage = null;
         this.state = {
           ...this.state,
           status: 'available',
@@ -367,7 +458,7 @@ export class UpdateCoordinator {
           message: 'A verified DEB update is available.',
           guidance: [
             'DEB installs are updated by the package manager, not by in-app replacement.',
-            'Download the signed DEB and checksum from the GitHub release.',
+            `Download the DEB, ${metadata.releaseEnvelopeAsset}, and ${metadata.signatureAsset} from the GitHub release.`,
             `Install with: sudo apt install ./${selected.packageAsset.name}`,
           ],
         };
@@ -375,6 +466,19 @@ export class UpdateCoordinator {
       }
 
       if (!this.canInstallInApp) {
+        this.stagedPackage = null;
+        const guidance =
+          this.packageFormat === 'macos'
+            ? [
+                'This macOS application location cannot be safely replaced in app.',
+                `Download ${selected.packageAsset.name}, ${metadata.releaseEnvelopeAsset}, and ${metadata.signatureAsset} from the GitHub release.`,
+                'Verify the signed release envelope before installing the DMG manually.',
+              ]
+            : [
+                'This AppImage location cannot be safely replaced in app.',
+                `Download ${selected.packageAsset.name}, ${metadata.releaseEnvelopeAsset}, and ${metadata.signatureAsset} from the GitHub release.`,
+                'Verify the signed release envelope before replacing the AppImage manually.',
+              ];
         this.state = {
           ...this.state,
           status: 'available',
@@ -382,19 +486,19 @@ export class UpdateCoordinator {
           releaseNotesUrl: latest.html_url,
           signatureStatus: 'verified',
           message: 'A verified update is available for manual signed installation.',
-          guidance: [
-            'This AppImage location cannot be safely replaced in app.',
-            `Download ${selected.packageAsset.name} and ${metadata.checksumAsset} from the GitHub release.`,
-            'Verify the checksum before replacing the AppImage manually.',
-          ],
+          guidance,
         };
         return this.state;
       }
 
-      const resumed = await this.tryResumeStagedPackage(latest, selected, metadata);
-      if (!resumed) {
-        await this.downloadAndStagePackage(latest, selected, metadata);
-      }
+      const packagePath =
+        (await this.tryResumeStagedPackage(latest, selected, metadata)) ??
+        (await this.downloadAndStagePackage(latest, selected, metadata));
+      this.stagedPackage = {
+        packageFormat: this.packageFormat,
+        packagePath,
+        targetVersion: stripLeadingV(latest.tag_name),
+      };
       this.state = {
         ...this.state,
         status: 'ready',
@@ -432,14 +536,17 @@ export class UpdateCoordinator {
     return stable;
   }
 
-  private async verifyReleaseMetadata(selected: SelectedAsset): Promise<VerifiedMetadata | null> {
-    if (selected.checksumAsset === undefined || selected.signatureAsset === undefined) {
+  private async verifyReleaseMetadata(
+    release: ReleaseCandidate,
+    selected: SelectedAsset,
+  ): Promise<VerifiedMetadata | null> {
+    if (selected.releaseEnvelopeAsset === undefined || selected.signatureAsset === undefined) {
       return null;
     }
-    const checksumBytes = await fetchBytes(
+    const releaseEnvelopeBytes = await fetchBytes(
       this.fetchImpl,
-      selected.checksumAsset.browser_download_url,
-      MAX_CHECKSUM_BYTES,
+      selected.releaseEnvelopeAsset.browser_download_url,
+      MAX_RELEASE_ENVELOPE_BYTES,
       FETCH_TIMEOUT_MS,
     );
     const signatureBytes = await fetchBytes(
@@ -448,13 +555,19 @@ export class UpdateCoordinator {
       MAX_SIGNATURE_BYTES,
       FETCH_TIMEOUT_MS,
     );
-    if (!verifyReleaseSignature(checksumBytes, signatureBytes, this.releasePublicKey)) {
+    if (!verifyReleaseSignature(releaseEnvelopeBytes, signatureBytes, this.releasePublicKey)) {
       this.state = { ...this.state, signatureStatus: 'failed' };
       throw new Error('Signed update metadata could not be verified.');
     }
+    const envelope = parseReleaseEnvelope(releaseEnvelopeBytes, release.tag_name);
+    const artifact = envelope.artifacts.find(({ name }) => name === selected.packageAsset.name);
+    if (artifact === undefined || artifact.size !== selected.packageAsset.size) {
+      throw new Error('The signed release envelope did not match the selected update package.');
+    }
     return {
-      packageSha256: checksumForPackage(checksumBytes.toString('utf8'), selected.packageAsset.name),
-      checksumAsset: selected.checksumAsset.name,
+      packageSha256: artifact.sha256,
+      releaseEnvelopeAsset: selected.releaseEnvelopeAsset.name,
+      releaseEnvelopeSha256: sha256Buffer(releaseEnvelopeBytes),
       signatureAsset: selected.signatureAsset.name,
     };
   }
@@ -463,7 +576,7 @@ export class UpdateCoordinator {
     release: ReleaseCandidate,
     selected: SelectedAsset,
     metadata: VerifiedMetadata,
-  ): Promise<void> {
+  ): Promise<string> {
     if (selected.packageAsset.size <= 0 || selected.packageAsset.size > MAX_PACKAGE_BYTES) {
       throw new Error('The update package size is outside the allowed bounds.');
     }
@@ -504,7 +617,8 @@ export class UpdateCoordinator {
           {
             tag: release.tag_name,
             package: selected.packageAsset.name,
-            checksum: metadata.checksumAsset,
+            releaseEnvelope: metadata.releaseEnvelopeAsset,
+            releaseEnvelopeSha256: metadata.releaseEnvelopeSha256,
             signature: metadata.signatureAsset,
             packageSha256,
           },
@@ -520,15 +634,16 @@ export class UpdateCoordinator {
       'Verified update package staged.',
       `${release.tag_name} ${selected.packageAsset.name}`,
     );
+    return packagePath;
   }
 
   private async tryResumeStagedPackage(
     release: ReleaseCandidate,
     selected: SelectedAsset,
     metadata: VerifiedMetadata,
-  ): Promise<boolean> {
+  ): Promise<string | null> {
     if (selected.packageAsset.size <= 0 || selected.packageAsset.size > MAX_PACKAGE_BYTES) {
-      return false;
+      return null;
     }
     const stageDir = path.join(this.options.userDataDir, 'updates', release.tag_name);
     const metadataPath = path.join(stageDir, 'selected-asset.json');
@@ -536,29 +651,30 @@ export class UpdateCoordinator {
     try {
       stagedMetadata = parseStagedPackageMetadata(fs.readFileSync(metadataPath, 'utf8'));
     } catch {
-      return false;
+      return null;
     }
     if (
       stagedMetadata.tag !== release.tag_name ||
       stagedMetadata.package !== selected.packageAsset.name ||
-      stagedMetadata.checksum !== metadata.checksumAsset ||
+      stagedMetadata.releaseEnvelope !== metadata.releaseEnvelopeAsset ||
+      stagedMetadata.releaseEnvelopeSha256 !== metadata.releaseEnvelopeSha256 ||
       stagedMetadata.signature !== metadata.signatureAsset ||
       stagedMetadata.packageSha256 !== metadata.packageSha256
     ) {
-      return false;
+      return null;
     }
     const packagePath = path.join(stageDir, safeAssetName(selected.packageAsset.name));
     let packageBytes: Buffer;
     try {
       packageBytes = fs.readFileSync(packagePath);
     } catch {
-      return false;
+      return null;
     }
     if (
       packageBytes.byteLength !== selected.packageAsset.size ||
       sha256Buffer(packageBytes) !== metadata.packageSha256
     ) {
-      return false;
+      return null;
     }
     this.options.diagnostics?.record(
       'update',
@@ -566,7 +682,7 @@ export class UpdateCoordinator {
       'Verified staged update package resumed.',
       `${release.tag_name} ${selected.packageAsset.name}`,
     );
-    return true;
+    return packagePath;
   }
 
   private scheduleNext(): void {
@@ -637,7 +753,7 @@ export class UpdateCoordinator {
         'info',
         'Scheduled update consent remained valid after work went idle.',
       );
-      return this.restartToUpdate();
+      return this.applyStagedUpdate();
     }
     this.state = {
       ...this.state,
@@ -675,9 +791,25 @@ export function detectCanInstallInApp(
   access: (path: string, mode: number) => void = fs.accessSync,
 ): boolean {
   const forced = env.AGENTICO_UPDATE_INSTALL_MODE;
-  if (forced === 'in-app') return format !== 'deb';
   if (forced === 'guidance') return false;
-  if (format === 'macos') return true;
+  // Packaged journeys launch the linux-unpacked binary (or a mounted DMG
+  // copy), which is not a replaceable install location; 'in-app' is the
+  // explicit test override that skips the location checks below. DEB and
+  // unknown formats are package-manager owned and stay guidance-only.
+  if (forced === 'in-app' && (format === 'macos' || format === 'appimage')) return true;
+  if (format === 'macos') {
+    const resolved = path.resolve(execPath);
+    const marker = `${path.sep}Contents${path.sep}MacOS${path.sep}`;
+    const markerIndex = resolved.lastIndexOf(marker);
+    const appPath = markerIndex < 0 ? '' : resolved.slice(0, markerIndex);
+    if (!appPath.endsWith('.app')) return false;
+    try {
+      access(path.dirname(appPath), fs.constants.W_OK);
+      return true;
+    } catch {
+      return false;
+    }
+  }
   if (format === 'deb' || format === 'unknown') return false;
   const appImagePath = env.APPIMAGE ?? (execPath.endsWith('.AppImage') ? execPath : undefined);
   if (appImagePath === undefined || !path.isAbsolute(appImagePath)) return false;
@@ -757,7 +889,8 @@ function parseStagedPackageMetadata(text: string): StagedPackageMetadata {
   if (
     typeof candidate.tag !== 'string' ||
     typeof candidate.package !== 'string' ||
-    typeof candidate.checksum !== 'string' ||
+    typeof candidate.releaseEnvelope !== 'string' ||
+    typeof candidate.releaseEnvelopeSha256 !== 'string' ||
     typeof candidate.signature !== 'string' ||
     typeof candidate.packageSha256 !== 'string'
   ) {
@@ -766,7 +899,8 @@ function parseStagedPackageMetadata(text: string): StagedPackageMetadata {
   return {
     tag: candidate.tag,
     package: candidate.package,
-    checksum: candidate.checksum,
+    releaseEnvelope: candidate.releaseEnvelope,
+    releaseEnvelopeSha256: candidate.releaseEnvelopeSha256,
     signature: candidate.signature,
     packageSha256: candidate.packageSha256,
   };
@@ -774,31 +908,53 @@ function parseStagedPackageMetadata(text: string): StagedPackageMetadata {
 
 function selectAsset(
   assets: readonly ReleaseAsset[],
-  platform: NodeJS.Platform,
   arch: string,
   format: UpdatePackageFormat,
+  version: string,
 ): SelectedAsset | null {
-  const archNeedle = arch === 'arm64' ? /(arm64|aarch64)/i : /(x64|amd64|x86_64)/i;
-  const candidates = assets.filter((asset) => {
-    if (format === 'macos')
-      return /\.(dmg|zip)$/i.test(asset.name) && /mac|darwin/i.test(asset.name);
-    if (format === 'appimage')
-      return /\.AppImage$/i.test(asset.name) && archNeedle.test(asset.name);
-    if (format === 'deb') return /\.deb$/i.test(asset.name) && archNeedle.test(asset.name);
-    return platform === 'darwin' ? /\.(dmg|zip)$/i.test(asset.name) : archNeedle.test(asset.name);
-  });
-  const packageAsset = candidates[0];
+  const expectedName = expectedDesktopPackageName(arch, format, version);
+  if (expectedName === null) return null;
+  const packageAssets = assets.filter((asset) => asset.name === expectedName);
+  if (packageAssets.length > 1) {
+    throw new Error('The release contained ambiguous desktop update assets.');
+  }
+  const packageAsset = packageAssets[0];
   if (packageAsset === undefined) return null;
-  const checksumAsset = assets.find((asset) => /sha256|checksums?/i.test(asset.name));
-  const signatureAsset =
-    checksumAsset === undefined
-      ? undefined
-      : assets.find(
-          (asset) =>
-            asset.name === `${checksumAsset.name}.sig` ||
-            asset.name === `${checksumAsset.name}.asc`,
-        );
-  return { packageAsset, checksumAsset, signatureAsset };
+  const releaseEnvelopeAssets = assets.filter((asset) => asset.name === 'desktop-release.json');
+  const signatureAssets = assets.filter((asset) => asset.name === 'desktop-release.json.sig');
+  if (releaseEnvelopeAssets.length > 1 || signatureAssets.length > 1) {
+    throw new Error('The release contained ambiguous signed update metadata.');
+  }
+  const releaseEnvelopeAsset = releaseEnvelopeAssets[0];
+  const signatureAsset = signatureAssets[0];
+  return { packageAsset, releaseEnvelopeAsset, signatureAsset };
+}
+
+function expectedDesktopPackageName(
+  arch: string,
+  format: UpdatePackageFormat,
+  version: string,
+): string | null {
+  if (format === 'macos') return 'Agentico-mac-universal.dmg';
+  if (format === 'appimage') {
+    if (arch === 'x64') return 'Agentico-x64.AppImage';
+    if (arch === 'arm64') return 'Agentico-arm64.AppImage';
+  }
+  if (format === 'deb') {
+    if (arch === 'x64') return `agentico_${version}_amd64.deb`;
+    if (arch === 'arm64') return `agentico_${version}_arm64.deb`;
+  }
+  return null;
+}
+
+function expectedDesktopArtifactNames(version: string): string[] {
+  return [
+    'Agentico-mac-universal.dmg',
+    'Agentico-x64.AppImage',
+    'Agentico-arm64.AppImage',
+    `agentico_${version}_amd64.deb`,
+    `agentico_${version}_arm64.deb`,
+  ];
 }
 
 function isInstallable(state: UpdateState): boolean {
@@ -918,22 +1074,69 @@ function parseSignature(signaturePayload: Buffer): Buffer {
   return Buffer.from(encoded, 'base64');
 }
 
-function checksumForPackage(checksumText: string, packageName: string): string {
-  for (const line of checksumText.split(/\r?\n/)) {
-    const trimmed = line.trim();
-    if (trimmed === '') continue;
-    const match = /^([a-fA-F0-9]{64})\s+\*?(.+)$/.exec(trimmed);
-    const digest = match?.[1];
-    const candidateName = match?.[2];
-    if (
-      digest !== undefined &&
-      candidateName !== undefined &&
-      path.basename(candidateName) === packageName
-    ) {
-      return digest.toLowerCase();
-    }
+function parseReleaseEnvelope(payload: Buffer, releaseTag: string): ReleaseEnvelope {
+  const parsed = JSON.parse(payload.toString('utf8')) as unknown;
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    throw new Error('The signed release envelope was malformed.');
   }
-  throw new Error('Signed checksum metadata did not name the selected update package.');
+  const candidate = parsed as Record<string, unknown>;
+  if (
+    !hasExactKeys(candidate, ['schema_version', 'tag', 'version', 'commit', 'artifacts']) ||
+    candidate.schema_version !== 1 ||
+    candidate.tag !== releaseTag ||
+    typeof candidate.version !== 'string' ||
+    candidate.tag !== `v${candidate.version}` ||
+    typeof candidate.commit !== 'string' ||
+    !/^[0-9a-f]{40}$/.test(candidate.commit) ||
+    !Array.isArray(candidate.artifacts)
+  ) {
+    throw new Error('The signed release envelope did not match the selected release.');
+  }
+  const artifacts = candidate.artifacts.map((value) => {
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+      throw new Error('The signed release envelope was malformed.');
+    }
+    const artifact = value as Record<string, unknown>;
+    if (
+      !hasExactKeys(artifact, ['name', 'sha256', 'size']) ||
+      typeof artifact.name !== 'string' ||
+      typeof artifact.sha256 !== 'string' ||
+      !/^[0-9a-f]{64}$/.test(artifact.sha256) ||
+      typeof artifact.size !== 'number' ||
+      !Number.isSafeInteger(artifact.size) ||
+      artifact.size <= 0
+    ) {
+      throw new Error('The signed release envelope was malformed.');
+    }
+    return {
+      name: artifact.name,
+      sha256: artifact.sha256,
+      size: artifact.size,
+    };
+  });
+  const expectedNames = expectedDesktopArtifactNames(candidate.version);
+  if (
+    artifacts.length !== expectedNames.length ||
+    expectedNames.some(
+      (name) => artifacts.filter((artifact) => artifact.name === name).length !== 1,
+    )
+  ) {
+    throw new Error(
+      'The signed release envelope did not contain the exact desktop package inventory.',
+    );
+  }
+  return {
+    schema_version: 1,
+    tag: releaseTag,
+    version: candidate.version,
+    commit: candidate.commit,
+    artifacts,
+  };
+}
+
+function hasExactKeys(value: Record<string, unknown>, expected: readonly string[]): boolean {
+  const keys = Object.keys(value);
+  return keys.length === expected.length && expected.every((key) => keys.includes(key));
 }
 
 function writeFileAtomic(filePath: string, data: Buffer, mode: number): void {

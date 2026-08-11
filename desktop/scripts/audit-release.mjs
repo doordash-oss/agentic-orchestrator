@@ -9,10 +9,11 @@ import {
   writeFileSync,
 } from 'node:fs';
 import os from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, posix } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { auditElectronBuilderFuseConfig } from './lib/fuse-policy.mjs';
+import { expectedDesktopArtifacts } from './lib/release-artifacts.mjs';
 
 const desktopDir = dirname(dirname(fileURLToPath(import.meta.url)));
 const rootDir = dirname(desktopDir);
@@ -20,6 +21,11 @@ const distDir = join(desktopDir, 'dist');
 const exceptionsPath = join(desktopDir, 'release-audit-exceptions.json');
 const inventoryPath = join(distDir, 'third-party-license-inventory.json');
 const MiB = 1024 * 1024;
+const RELEASE_AUDIT_DESKTOP_ARTIFACTS = Object.freeze([
+  ...expectedDesktopArtifacts('v0.0.0').map(({ name }) => name),
+  'desktop-release.json',
+  'desktop-release.json.sig',
+]);
 
 const SEVERITY_RANK = Object.freeze({
   info: 0,
@@ -40,6 +46,211 @@ function loadJson(path, label) {
 
 function requireFile(path, label, failures) {
   if (!existsSync(path)) failures.push(`missing ${label}: ${path}`);
+}
+
+/**
+ * Ensure that GoReleaser signs and uploads each desktop package. This keeps
+ * the release configuration deliberately small and auditable without adding a
+ * YAML parser to the release runtime: the two relevant blocks have an
+ * unambiguous top-level section, `extra_files` child, and `- glob` entries.
+ * Each required path is literal after POSIX normalization, rather than a
+ * filename match, so an unrelated directory or broad wildcard cannot cause a
+ * release package to bypass signing or upload.
+ */
+export function auditGoReleaserDesktopArtifacts(configText, expectedNames) {
+  const failures = [];
+  for (const [section, label] of [
+    ['checksum', 'checksum.extra_files'],
+    ['release', 'release.extra_files'],
+  ]) {
+    const globs = goreleaserExtraFileGlobs(configText, section);
+    for (const name of expectedNames) {
+      const expectedGlob = expectedGoReleaserDesktopGlob(name);
+      const entries = globs.filter(
+        (glob) => normalizeGoReleaserExtraFileGlob(glob) === expectedGlob,
+      );
+      if (entries.length === 0) {
+        failures.push(`GoReleaser ${label} omits ${name}`);
+      } else if (entries.length !== 1) {
+        failures.push(
+          `GoReleaser ${label} has ${entries.length} entries for ${name}, expected exactly 1`,
+        );
+      }
+    }
+  }
+  return failures;
+}
+
+/** Keep releases pinned to the commit that the local operator actually tagged. */
+export function auditGoReleaserReleaseTarget(configText) {
+  const lines = releaseSectionLines(configText);
+  const targets = lines
+    .map((line) => /^  target_commitish:\s*(.+?)\s*$/.exec(line)?.[1])
+    .filter((value) => value !== undefined);
+  if (targets.length !== 1 || targets[0] !== '"{{ .Commit }}"') {
+    return [
+      'GoReleaser release.target_commitish must be exactly "{{ .Commit }}" to prevent publishing another commit',
+    ];
+  }
+  return [];
+}
+
+/** Audit the publication ordering and prohibit raw GoReleaser flag injection. */
+export function auditReleaseMakefile(makefileText) {
+  const failures = [];
+  const recipe = makeRecipeCommands(makefileText, 'release');
+  const completeRecipe = ['node desktop/scripts/release-run.mjs'];
+  if (JSON.stringify(recipe) !== JSON.stringify(completeRecipe)) {
+    failures.push(
+      'Makefile release recipe must contain only the complete audited release command structure',
+    );
+  }
+  if (/RELEASE_TAG|RELEASE_COMMIT|GORELEASER_FLAGS/.test(recipe.join('\n'))) {
+    failures.push('Makefile must not expose publication identity or arbitrary GoReleaser inputs');
+  }
+  return failures;
+}
+
+/** Require the wrapper's outward-facing operations in one fail-closed order. */
+export function auditReleaseRunner(runnerText) {
+  const start = runnerText.indexOf('evidence = preflight();');
+  if (start === -1) return ['release runner does not begin with captured preflight evidence'];
+  const resumeStart = runnerText.indexOf('if (pending !== null)');
+  const resumeBody = resumeStart === -1 ? '' : runnerText.slice(resumeStart, start);
+  const resumedRemoteChecks = [
+    ...resumeBody.matchAll(/await verifyRemote\(\{ evidence, snapshot \}\)/g),
+  ].map((match) => match.index);
+  const resumedCasks = [...resumeBody.matchAll(/publishCask\(\{ evidence, snapshot \}\)/g)].map(
+    (match) => match.index,
+  );
+  if (resumedCasks.length === 0) {
+    return ['release runner must reverify remote publication before every resumed cask'];
+  }
+  let previousCask = -1;
+  for (const resumedCask of resumedCasks) {
+    if (!resumedRemoteChecks.some((remote) => remote > previousCask && remote < resumedCask)) {
+      return ['release runner must reverify remote publication before every resumed cask'];
+    }
+    previousCask = resumedCask;
+  }
+  const body = runnerText.slice(start);
+  const ordered = [
+    "command('npm-ci'",
+    "command('mac-package'",
+    "command('linux-packages'",
+    'verifyPackages({ evidence, desktopDist:',
+    'prepareDesktopManifest({ evidence, desktopDist })',
+    'verifyDesktopManifest({ evidence, desktopDist })',
+    'snapshot = createSnapshot({',
+    'verifySnapshot(snapshot)',
+    'verifyPackages({ evidence, desktopDist: snapshot.path })',
+    'verifyDesktopManifest({ evidence, desktopDist: snapshot.path })',
+    'verifyProvenance(evidence)',
+    "saveResume(evidence, snapshot, 'tag-reservation-started')",
+    'await reserveTag({ evidence })',
+    "saveResume(evidence, snapshot, 'goreleaser-started')",
+    'publish({ evidence, snapshot, notesFile })',
+    "saveResume(evidence, snapshot, 'goreleaser-published')",
+    'verifyManifest({ evidence, snapshot })',
+    'await verifyRemote({ evidence, snapshot })',
+    "saveResume(evidence, snapshot, 'remote-verified')",
+    'publishCask({ evidence, snapshot })',
+  ];
+  let cursor = -1;
+  for (const step of ordered) {
+    const index = body.indexOf(step, cursor + 1);
+    if (index === -1) return [`release runner omits or reorders audited step: ${step}`];
+    cursor = index;
+  }
+  const cleanup = body.indexOf('cleanup(evidence)', cursor);
+  if (cleanup === -1) return ['release runner must clean the detached workspace in finally'];
+  const removeResume = body.indexOf('removeResume(operatorRoot)', cleanup + 1);
+  if (removeResume === -1) {
+    return ['release runner must remove resume state only after detached-workspace cleanup'];
+  }
+  return [];
+}
+
+/** Prohibit cleanup from compiling or running source from the operator checkout. */
+export function auditReleaseWorkspace(workspaceText) {
+  if (
+    /execFileSync\(\s*['"]go['"]\s*,\s*\[[\s\S]*?['"]run['"][\s\S]*?release-cleanup/.test(
+      workspaceText,
+    )
+  ) {
+    return ['release workspace cleanup must never execute ambient source with go run'];
+  }
+  return [];
+}
+
+/** Extract only tab-indented shell commands from one exact Make target's recipe. */
+function makeRecipeCommands(makefileText, target) {
+  const lines = makefileText.split(/\r?\n/);
+  const targetIndex = lines.findIndex((line) => new RegExp(`^${target}:\\s*(?:#.*)?$`).test(line));
+  if (targetIndex === -1) return [];
+  const commands = [];
+  for (let index = targetIndex + 1; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (line.startsWith('\t')) {
+      commands.push(
+        line
+          .slice(1)
+          .replace(/^[@+\-]/, '')
+          .trim(),
+      );
+      continue;
+    }
+    if (/^\S/.test(line) && !line.startsWith('#')) break;
+  }
+  return commands;
+}
+
+function releaseSectionLines(configText) {
+  const lines = configText.split(/\r?\n/);
+  const start = lines.findIndex((line) => /^release:\s*(?:#.*)?$/.test(line));
+  if (start === -1) return [];
+  const section = [];
+  for (let index = start + 1; index < lines.length; index += 1) {
+    if (/^\S/.test(lines[index])) break;
+    section.push(lines[index]);
+  }
+  return section;
+}
+
+function goreleaserExtraFileGlobs(configText, section) {
+  const lines = configText.split(/\r?\n/);
+  const sectionIndex = lines.findIndex((line) =>
+    new RegExp(`^${section}:\\s*(?:#.*)?$`).test(line),
+  );
+  if (sectionIndex === -1) return [];
+
+  const globs = [];
+  let inExtraFiles = false;
+  for (let index = sectionIndex + 1; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (/^\S/.test(line)) break;
+    if (/^  extra_files:\s*(?:#.*)?$/.test(line)) {
+      inExtraFiles = true;
+      continue;
+    }
+    if (!inExtraFiles) continue;
+    if (/^  \S/.test(line)) break;
+    const match = /^    - glob:\s*(.+?)(?:\s+#.*)?$/.exec(line);
+    if (match?.[1] !== undefined) globs.push(match[1].trim());
+  }
+  return globs;
+}
+
+function expectedGoReleaserDesktopGlob(artifactName) {
+  const deb = /^agentico_\d+\.\d+\.\d+_(amd64|arm64)\.deb$/.exec(artifactName);
+  if (deb?.[1] !== undefined) {
+    return `desktop/dist/publication/agentico_{{ .Version }}_${deb[1]}.deb`;
+  }
+  return `desktop/dist/publication/${artifactName}`;
+}
+
+function normalizeGoReleaserExtraFileGlob(glob) {
+  return posix.normalize(glob.replace(/^['"]|['"]$/g, ''));
 }
 
 function normalizeLicense(license) {
@@ -805,6 +1016,21 @@ export function runReleaseAudit() {
   }
   if (!/^asar:\s*true$/m.test(builder)) failures.push('electron-builder.yml must package app.asar');
   failures.push(...auditElectronBuilderFuseConfig(builder));
+
+  const goreleaserConfig = readFileSync(join(rootDir, '.goreleaser.yaml'), 'utf8');
+  failures.push(
+    ...auditGoReleaserDesktopArtifacts(goreleaserConfig, RELEASE_AUDIT_DESKTOP_ARTIFACTS),
+  );
+  failures.push(...auditGoReleaserReleaseTarget(goreleaserConfig));
+  failures.push(...auditReleaseMakefile(readFileSync(join(rootDir, 'Makefile'), 'utf8')));
+  failures.push(
+    ...auditReleaseRunner(readFileSync(join(desktopDir, 'scripts', 'release-run.mjs'), 'utf8')),
+  );
+  failures.push(
+    ...auditReleaseWorkspace(
+      readFileSync(join(desktopDir, 'scripts', 'release-workspace.mjs'), 'utf8'),
+    ),
+  );
 
   const goMod = readFileSync(join(rootDir, 'go.mod'), 'utf8');
   const goSum = readFileSync(join(rootDir, 'go.sum'), 'utf8');

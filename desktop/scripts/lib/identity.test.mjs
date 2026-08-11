@@ -172,6 +172,7 @@ describe('crossCheckServerBinary', () => {
     reportedVersion: complete.server_version,
     reportedRevision: complete.server_revision,
     reportedGoos: 'darwin',
+    reportedGoarch: 'arm64',
   };
 
   it('passes when the binary matches the identity file', () => {
@@ -198,6 +199,19 @@ describe('crossCheckServerBinary', () => {
   it('fails when the binary was built for a different OS', () => {
     const errors = crossCheckServerBinary(identity, { ...probe, reportedGoos: 'linux' });
     expect(errors.join('\n')).toContain('GOOS');
+  });
+
+  it('fails when GOARCH is absent or does not match the package target', () => {
+    const linuxIdentity = createBuildIdentity({ ...complete, os: 'linux', arch: 'arm64' });
+    const linuxProbe = { ...probe, reportedGoos: 'linux', reportedGoarch: 'amd64' };
+    expect(crossCheckServerBinary(linuxIdentity, linuxProbe).join('\n')).toContain(
+      'GOARCH mismatch: package target linux/arm64 requires arm64, binary built for amd64',
+    );
+    expect(
+      crossCheckServerBinary(linuxIdentity, { ...linuxProbe, reportedGoarch: null }).join('\n'),
+    ).toContain(
+      'GOARCH mismatch: package target linux/arm64 requires arm64, binary built for (unknown)',
+    );
   });
 });
 

@@ -1,6 +1,6 @@
-# Local packaging remains unsigned and unpublished by default. Protected tag
-# release jobs provide Developer ID/notarization and GPG material through CI
-# environment only; release verification rejects strict runs without them.
+# Local packaging remains unpublished by default. The operator-run release
+# preflight validates the GitHub token and the Ed25519 key trusted by the
+# updater; Developer ID/notarization is intentionally not part of this flow.
 appId: com.doordash.agentico
 productName: Agentico
 protocols:

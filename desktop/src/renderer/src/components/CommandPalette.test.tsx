@@ -62,7 +62,10 @@ describe('CommandPalette feature group', () => {
     const mock = installAgenticoMock({
       settings: {
         ...defaultSettings(),
-        shell: { activeFeatureId: ACTIVE_FEATURE_ID, sidebarCollapsed: false },
+        shell: {
+          featureByServer: { 'default-runtime': ACTIVE_FEATURE_ID },
+          sidebarCollapsed: false,
+        },
       },
     });
     mock.api.getFeature.mockImplementation((featureId: string) =>
@@ -90,7 +93,7 @@ describe('CommandPalette feature group', () => {
 
   it('disables the whole group with the no-active-feature reason on Overview', async () => {
     installAgenticoMock({
-      settings: { ...defaultSettings(), shell: { activeFeatureId: null, sidebarCollapsed: false } },
+      settings: { ...defaultSettings(), shell: { featureByServer: {}, sidebarCollapsed: false } },
     });
     renderPalette();
 
@@ -106,7 +109,10 @@ describe('CommandPalette feature group', () => {
     const mock = installAgenticoMock({
       settings: {
         ...defaultSettings(),
-        shell: { activeFeatureId: 'stale1234abcd5678', sidebarCollapsed: false },
+        shell: {
+          featureByServer: { 'default-runtime': 'stale1234abcd5678' },
+          sidebarCollapsed: false,
+        },
       },
     });
     mock.api.getFeature.mockImplementation((featureId: string) =>
@@ -135,7 +141,10 @@ describe('CommandPalette feature group', () => {
     const mock = installAgenticoMock({
       settings: {
         ...defaultSettings(),
-        shell: { activeFeatureId: ACTIVE_FEATURE_ID, sidebarCollapsed: false },
+        shell: {
+          featureByServer: { 'default-runtime': ACTIVE_FEATURE_ID },
+          sidebarCollapsed: false,
+        },
       },
     });
     mock.api.getSettings.mockReturnValue(new Promise(() => {}));
@@ -156,7 +165,10 @@ describe('CommandPalette feature group', () => {
     const mock = installAgenticoMock({
       settings: {
         ...defaultSettings(),
-        shell: { activeFeatureId: ACTIVE_FEATURE_ID, sidebarCollapsed: false },
+        shell: {
+          featureByServer: { 'default-runtime': ACTIVE_FEATURE_ID },
+          sidebarCollapsed: false,
+        },
       },
     });
     mock.api.getFeature.mockImplementation((featureId: string) =>
@@ -204,7 +216,7 @@ const FEATURE_ROWS = [
 describe('CommandPalette feature search', () => {
   function installFeatures() {
     return installAgenticoMock({
-      settings: { ...defaultSettings(), shell: { activeFeatureId: null, sidebarCollapsed: false } },
+      settings: { ...defaultSettings(), shell: { featureByServer: {}, sidebarCollapsed: false } },
       features: FEATURE_ROWS,
     });
   }
@@ -293,7 +305,10 @@ describe('CommandPalette keyboard selection', () => {
       const mock = installAgenticoMock({
         settings: {
           ...defaultSettings(),
-          shell: { activeFeatureId: ACTIVE_FEATURE_ID, sidebarCollapsed: false },
+          shell: {
+            featureByServer: { 'default-runtime': ACTIVE_FEATURE_ID },
+            sidebarCollapsed: false,
+          },
         },
       });
       mock.api.getFeature.mockImplementation((featureId: string) =>
@@ -332,7 +347,7 @@ describe('CommandPalette keyboard selection', () => {
 describe('CommandPalette global entries', () => {
   it('carries New Feature and the two View toggles, and never Close Window or Quit', async () => {
     installAgenticoMock({
-      settings: { ...defaultSettings(), shell: { activeFeatureId: null, sidebarCollapsed: false } },
+      settings: { ...defaultSettings(), shell: { featureByServer: {}, sidebarCollapsed: false } },
     });
     renderPalette();
 
@@ -348,7 +363,7 @@ describe('CommandPalette global entries', () => {
 
   it('routes New Feature and the sidebar toggle to their catalogue targets', async () => {
     installAgenticoMock({
-      settings: { ...defaultSettings(), shell: { activeFeatureId: null, sidebarCollapsed: false } },
+      settings: { ...defaultSettings(), shell: { featureByServer: {}, sidebarCollapsed: false } },
     });
     const onRoute = vi.fn();
     render(
@@ -368,7 +383,10 @@ describe('CommandPalette global entries', () => {
     const mock = installAgenticoMock({
       settings: {
         ...defaultSettings(),
-        shell: { activeFeatureId: ACTIVE_FEATURE_ID, sidebarCollapsed: false },
+        shell: {
+          featureByServer: { 'default-runtime': ACTIVE_FEATURE_ID },
+          sidebarCollapsed: false,
+        },
       },
     });
     mock.api.getFeature.mockImplementation((featureId: string) =>

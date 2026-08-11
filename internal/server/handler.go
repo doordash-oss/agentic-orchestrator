@@ -44,6 +44,7 @@ type apiHandler struct {
 	startedAt time.Time
 	owner     instancelock.Owner
 	authToken string
+	name      string
 	features  FeatureLister
 	store     FeatureReader
 	freshness RepoFreshnessProvider
@@ -58,8 +59,13 @@ type apiHandler struct {
 	sessions              ports.SessionManager
 	broker                *eventBroker
 	mutations             MutationTarget
+	// uploads owns the octet-stream upload staging area under the runtime
+	// state dir; nil when the runtime identity has no state dir (tests that
+	// never stage uploads).
+	uploads               *uploadStore
 	persistProviderModels func(llm.LLMProvider, []llm.ModelInfo) error
 	disableHostValidation bool
+	runtimePolicy         string
 	initGitRepository     func(path string) error
 
 	recoveryMu         sync.Mutex
@@ -96,12 +102,18 @@ func newAPIHandler(opts HandlerOptions) *apiHandler {
 	if features == nil && store != nil {
 		features = store
 	}
+	runtimePolicy := opts.RuntimePolicy
+	if runtimePolicy == "" {
+		runtimePolicy = CompatibilityRuntimePolicy
+	}
 	handler := &apiHandler{
+		runtimePolicy:         runtimePolicy,
 		runtime:               opts.Runtime,
 		policy:                opts.LaunchPolicy,
 		startedAt:             startedAt,
 		owner:                 opts.Owner,
 		authToken:             opts.AuthToken,
+		name:                  opts.Name,
 		features:              features,
 		store:                 store,
 		freshness:             opts.Freshness,
@@ -111,6 +123,7 @@ func newAPIHandler(opts HandlerOptions) *apiHandler {
 		sessions:              opts.Sessions,
 		broker:                newEventBroker(opts.Events, opts.DomainEvents),
 		mutations:             opts.Mutations,
+		uploads:               newUploadStore(opts.Runtime.StateDir),
 		persistProviderModels: opts.PersistProviderModelCatalog,
 		disableHostValidation: opts.DisableHostValidation,
 		initGitRepository:     opts.InitGitRepository,
@@ -148,6 +161,7 @@ const (
 	apiPathRecoveryActions  = "/api/v1/recovery/actions"
 	apiPathRecoveryLogs     = "/api/v1/recovery/logs"
 	apiPathEvents           = "/api/v1/events"
+	apiPathUploads          = "/api/v1/uploads"
 )
 
 // routeSegmentConfig is the feature sub-route segment for the per-feature
@@ -187,6 +201,7 @@ var topLevelServerRoutes = []topLevelRoute{
 	{apiPathRecoveryActions, func(h *apiHandler) http.HandlerFunc { return h.handleRecoveryActionRoute }},
 	{apiPathRecoveryLogs, func(h *apiHandler) http.HandlerFunc { return h.handleRecoveryLogRoute }},
 	{apiPathEvents, func(h *apiHandler) http.HandlerFunc { return methodHandler(h.handleEvents) }},
+	{apiPathUploads, func(h *apiHandler) http.HandlerFunc { return h.handleUploadsRoute }},
 }
 
 func (h *apiHandler) routes() http.Handler {
@@ -230,7 +245,8 @@ func (h *apiHandler) handleHealth(w http.ResponseWriter, _ *http.Request) {
 		StartedAt:     h.startedAt,
 		Owner:         OwnerFromInstanceOwner(h.owner),
 		ServerTime:    time.Now().UTC(),
-		Compatibility: NewCompatibilityDeclaration(h.owner.Version),
+		Compatibility: NewCompatibilityDeclaration(h.owner.Version, h.runtimePolicy),
+		Name:          h.name,
 	})
 }
 
@@ -612,6 +628,12 @@ func (h *apiHandler) rejectUnauthorized(w http.ResponseWriter, r *http.Request) 
 
 func (h *apiHandler) rejectInvalidHost(w http.ResponseWriter, r *http.Request) bool {
 	if h == nil || h.disableHostValidation {
+		return false
+	}
+	// The network policy accepts any Host header: the bearer token is the
+	// real authentication. The Origin rule stays loopback-only in both
+	// policies, so browser CSRF/DNS-rebinding vectors remain closed.
+	if h.runtimePolicy == CompatibilityNetworkRuntimePolicy {
 		return false
 	}
 	if isAllowedLoopbackHost(r.Host) {

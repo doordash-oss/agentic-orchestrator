@@ -20,8 +20,15 @@ export const SUPPORTED_SERVER_API_VERSIONS: readonly string[] = ['v1'];
 /** Server schema contract series this desktop build supports. */
 export const SUPPORTED_SERVER_SCHEMA_VERSIONS: readonly number[] = [1];
 
-/** Runtime security/ownership policy contracts this desktop build supports. */
-export const SUPPORTED_RUNTIME_POLICIES: readonly string[] = ['loopback-bearer-v1'];
+/**
+ * Runtime security/ownership policy contracts this desktop build supports:
+ * the loopback policy (loopback-only listener) and the network policy
+ * (non-loopback listener with bearer auth and strict Origin enforcement).
+ */
+export const SUPPORTED_RUNTIME_POLICIES: readonly string[] = [
+  'loopback-bearer-v1',
+  'network-bearer-v1',
+];
 
 export type CompatibilityVerdict =
   { compatible: true; serverBuild: BuildIdentity } | { compatible: false; reason: string };

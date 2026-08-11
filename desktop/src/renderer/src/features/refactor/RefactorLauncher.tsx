@@ -14,6 +14,13 @@ import type {
   RepositoryFileRef,
 } from '../../../../shared/ipc';
 import { parseIpcError, type WizardError } from '../../wizard/ipcError';
+import { useConnectionState } from '../../hooks';
+import {
+  isBlockingStagedItem,
+  STAGED_ITEMS_BLOCK_SUBMIT,
+  submittableReferences,
+  type ComposerUploadItem,
+} from '../stagedItems';
 import {
   GATE_FIELDS,
   ModelEffortRow,
@@ -57,6 +64,8 @@ export function RefactorLauncher({
   const [description, setDescription] = useState('');
   const [images, setImages] = useState<readonly string[]>([]);
   const [attachments, setAttachments] = useState<readonly string[]>([]);
+  const [imageUploads, setImageUploads] = useState<readonly ComposerUploadItem[]>([]);
+  const [attachmentUploads, setAttachmentUploads] = useState<readonly ComposerUploadItem[]>([]);
   const [repositoryFiles, setRepositoryFiles] = useState<readonly RepositoryFileRef[]>([]);
   const [pipeline, setPipeline] = useState<Pipeline>(
     isPipeline(snapshot.pipeline) ? snapshot.pipeline : 'medium',
@@ -84,6 +93,13 @@ export function RefactorLauncher({
   const catalogue = useModelCatalogue();
   const nameRef = useRef<HTMLInputElement | null>(null);
   const formErrorRef = useRef<HTMLDivElement | null>(null);
+  const connection = useConnectionState();
+  const serverKey = connection.status === 'ready' ? (connection.serverKey ?? null) : null;
+  // In-progress, failed, or foreign-server uploads block launch until they
+  // are removed (or the user switches back to the server that holds them).
+  const uploadsBlocking = [...imageUploads, ...attachmentUploads].some((item) =>
+    isBlockingStagedItem(item, serverKey),
+  );
 
   const loadSeed = useCallback(() => {
     setSeed({ phase: 'loading' });
@@ -134,7 +150,7 @@ export function RefactorLauncher({
 
   const submit = (event: FormEvent): void => {
     event.preventDefault();
-    if (pending || seed.phase !== 'ready') return;
+    if (pending || uploadsBlocking || seed.phase !== 'ready') return;
     if (!validateName()) {
       setStepIndex(0);
       return;
@@ -150,6 +166,8 @@ export function RefactorLauncher({
       if (chosenEffort !== undefined) effort[modelConfigKey(field.key)] = chosenEffort;
     }
     const gates = applicableGates(pipeline);
+    const imageRefs = submittableReferences(imageUploads, 'image', serverKey);
+    const attachmentRefs = submittableReferences(attachmentUploads, 'attachment', serverKey);
     void (async () => {
       try {
         const launched = await window.agentico.launchRefactorChild({
@@ -158,6 +176,8 @@ export function RefactorLauncher({
           ...(description.trim() === '' ? {} : { description }),
           ...(images.length === 0 ? {} : { images: [...images] }),
           ...(attachments.length === 0 ? {} : { attachments: [...attachments] }),
+          ...(imageRefs.length === 0 ? {} : { imageUploads: imageRefs }),
+          ...(attachmentRefs.length === 0 ? {} : { attachmentUploads: attachmentRefs }),
           ...(repositoryFiles.length === 0 ? {} : { repositoryFiles: [...repositoryFiles] }),
           pipeline,
           riskLevel,
@@ -295,15 +315,19 @@ export function RefactorLauncher({
           <DescriptionComposer
             id="refactor-brief"
             label="Brief"
-            placeholder="Describe the refactor. Type @ to reference files in the inherited repositories; paste or drop images and files to attach them."
+            placeholder="Describe the refactor. Type @ to reference files in the inherited repositories; paste or drop files to attach them."
             value={description}
             repoKeys={snapshot.repos}
             images={images}
             attachments={attachments}
+            imageUploads={imageUploads}
+            attachmentUploads={attachmentUploads}
             repositoryFiles={repositoryFiles}
             onValueChange={setDescription}
             onImagesChange={setImages}
             onAttachmentsChange={setAttachments}
+            onImageUploadsChange={setImageUploads}
+            onAttachmentUploadsChange={setAttachmentUploads}
             onRepositoryFilesChange={setRepositoryFiles}
             onError={setFormError}
           />
@@ -491,8 +515,8 @@ export function RefactorLauncher({
             className="create-form__submit"
             onClick={(event) => {
               // React can reuse this DOM node as the submit button when the
-              // click advances to Review. Cancel the original button's
-              // browser default before that type transition occurs.
+              // click advances to Review. Cancel the original
+              // button's browser default before that type transition occurs.
               event.preventDefault();
               next();
             }}
@@ -500,14 +524,21 @@ export function RefactorLauncher({
             Next: {STEPS[stepIndex + 1]}
           </button>
         ) : (
-          <button
-            key="launch-child"
-            type="submit"
-            className="create-form__submit"
-            disabled={pending}
-          >
-            {pending ? 'Launching…' : autoStart ? 'Launch and start' : 'Launch child'}
-          </button>
+          <>
+            {uploadsBlocking ? (
+              <span className="creation-wizard__blocking-note" role="status">
+                {STAGED_ITEMS_BLOCK_SUBMIT}
+              </span>
+            ) : null}
+            <button
+              key="launch-child"
+              type="submit"
+              className="create-form__submit"
+              disabled={pending || uploadsBlocking}
+            >
+              {pending ? 'Launching…' : autoStart ? 'Launch and start' : 'Launch child'}
+            </button>
+          </>
         )}
       </footer>
     </form>

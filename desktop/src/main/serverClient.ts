@@ -8,7 +8,13 @@
  * the remediation).
  */
 import { randomUUID } from 'node:crypto';
-import { redactText, SafeErrorException, safeError, toSafeError } from '../shared/errors';
+import {
+  redactText,
+  requiresLocalServerError,
+  SafeErrorException,
+  safeError,
+  toSafeError,
+} from '../shared/errors';
 import {
   ServerErrorResponseSchema,
   ServerErrorWithIssuesSchema,
@@ -46,6 +52,7 @@ import { assertCompatibleApiVersion } from '../shared/apiVersion';
 import { assertNoPrototypePollution, assertWithinByteSize } from '../shared/sanitize';
 import { SseBlockAssembler, type SseBlock, type SseStream } from './gateway/events';
 import type { ApiRequestInit, HttpResult } from './gateway/runtimeGateway';
+import { alwaysLocal, type LocalitySource } from './locality';
 
 /** The authenticated transport surface the runtime gateway provides. */
 export interface ServerTransport {
@@ -116,6 +123,12 @@ export class SessionService {
   constructor(
     private readonly transport: ServerTransport,
     private readonly makeSubscriptionId: () => string = randomUUID,
+    /**
+     * Gateway-owned locality of the active connection. While remote, chat
+     * start refuses any local image path outright (a stale draft must fail,
+     * never leak one) and forwards staged upload references instead.
+     */
+    private readonly locality: LocalitySource = alwaysLocal,
   ) {}
 
   async list(): Promise<SessionSummary[]> {
@@ -157,12 +170,23 @@ export class SessionService {
 
   async startChat(request: ChatStartRequest): Promise<ChatActionResult> {
     const input = validateWithSchema(request, ChatStartRequestSchema);
+    const remote = this.locality() === 'remote';
+    if (remote && (input.images?.length ?? 0) > 0) {
+      // A locally shaped path remotely is a stale draft: fail, never leak.
+      throw new SafeErrorException(requiresLocalServerError());
+    }
     const response = await serverRequest(
       this.transport,
       '/api/v1/prompts/chat/start',
       {
         method: 'POST',
-        body: { message: input.message, images: input.images ?? [] },
+        body: {
+          message: input.message,
+          images: input.images ?? [],
+          ...(remote && (input.imageUploads?.length ?? 0) > 0
+            ? { image_uploads: input.imageUploads }
+            : {}),
+        },
       } as ApiRequestInit,
       { remedyByCode: CHAT_REMEDIES },
     );

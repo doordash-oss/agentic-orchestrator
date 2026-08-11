@@ -93,6 +93,28 @@ function makeServices(): IpcServices {
       detail: 'Restarting to apply the pending runtime change.',
       ownership: 'none' as const,
     })),
+    chooseConnectionServer: vi.fn(() => ({
+      status: 'resolving-runtime' as const,
+      stage: 'resolve-runtime' as const,
+      detail: 'Resolving the selected runtime.',
+      ownership: 'none' as const,
+    })),
+    switchConnectionServer: vi.fn(() => ({
+      status: 'resolving-runtime' as const,
+      stage: 'resolve-runtime' as const,
+      detail: 'Resolving the selected runtime.',
+      ownership: 'none' as const,
+    })),
+    listServers: vi.fn(() => ({ rows: [] })),
+    probeServers: vi.fn(() => ({ rows: [] })),
+    addRemoteServer: vi.fn(() => Promise.reject(new Error('unused'))),
+    removeServer: vi.fn(() => ({
+      status: 'idle' as const,
+      stage: 'resolve-runtime' as const,
+      detail: 'Reconnecting after the server was removed.',
+      ownership: 'none' as const,
+    })),
+    getServerTokenStatus: vi.fn(() => ({ status: 'local' as const })),
     getSettings: vi.fn(() => defaultSettings()),
     updateSettings: vi.fn((patch) => ({ ...defaultSettings(), ...patch })),
     openSettingsWindow: vi.fn(() => ({ opened: true })),
@@ -154,6 +176,7 @@ function makeServices(): IpcServices {
       }),
     ),
     pickCreationFiles: vi.fn(() => Promise.resolve({ paths: [] })),
+    uploadCreationFiles: vi.fn(() => Promise.resolve({ results: [] })),
     readClipboardImage: vi.fn(() => Promise.resolve({ paths: [] })),
     searchCreationFiles: vi.fn((request) =>
       Promise.resolve({
@@ -215,6 +238,7 @@ function makeServices(): IpcServices {
     generatePublishDescription: vi.fn(() => Promise.reject(new Error('unused'))),
     openExternal: vi.fn(() => Promise.reject(new Error('unused'))),
     revealPath: vi.fn(() => Promise.reject(new Error('unused'))),
+    writeClipboardText: vi.fn(() => Promise.reject(new Error('unused'))),
     publishUiState: vi.fn(() => ({ accepted: true })),
   };
 }
@@ -319,6 +343,86 @@ describe('registerIpcHandlers', () => {
     expect(malformed.error?.code).toBe('E_SCHEMA_MISMATCH');
     // Neither rejected payload reached the service.
     expect(vi.mocked(services.publishUiState).mock.calls.length).toBe(acceptedCalls);
+  });
+
+  it('remoteServerAdd: rejects extra request fields and token-shaped response fields', async () => {
+    const services = makeServices();
+    const { handlers } = register(services);
+
+    const extra = (await handlers.get(IPC_CHANNELS.remoteServerAdd)!(goodEvent, {
+      connectionString: 'agentico://tok@127.0.0.1:8080',
+      token: 'smuggled',
+    })) as { ok: boolean; error?: { code: string } };
+    expect(extra.ok).toBe(false);
+    expect(extra.error?.code).toBe('E_SCHEMA_MISMATCH');
+    expect(services.addRemoteServer).not.toHaveBeenCalled();
+
+    const missing = (await handlers.get(IPC_CHANNELS.remoteServerAdd)!(goodEvent, {})) as {
+      ok: boolean;
+      error?: { code: string };
+    };
+    expect(missing.ok).toBe(false);
+    expect(missing.error?.code).toBe('E_SCHEMA_MISMATCH');
+
+    services.addRemoteServer = vi.fn(() =>
+      Promise.resolve({
+        status: 'added',
+        serverKey: 'a'.repeat(32),
+        token: 'tok-leak-456',
+      } as never),
+    );
+    const leaky = (await handlers.get(IPC_CHANNELS.remoteServerAdd)!(goodEvent, {
+      connectionString: 'agentico://tok@127.0.0.1:8080',
+    })) as { ok: boolean; error?: { code: string } };
+    expect(leaky.ok).toBe(false);
+    expect(leaky.error?.code).toBe('E_SCHEMA_MISMATCH');
+    expect(JSON.stringify(leaky)).not.toContain('tok-leak-456');
+  });
+
+  it('serverRemove: rejects extra fields and empty keys; passes the result state through', async () => {
+    const services = makeServices();
+    const { handlers } = register(services);
+
+    const extra = (await handlers.get(IPC_CHANNELS.serverRemove)!(goodEvent, {
+      serverKey: 'a'.repeat(32),
+      token: 'smuggled',
+    })) as { ok: boolean; error?: { code: string } };
+    expect(extra.ok).toBe(false);
+    expect(extra.error?.code).toBe('E_SCHEMA_MISMATCH');
+    expect(services.removeServer).not.toHaveBeenCalled();
+
+    const empty = (await handlers.get(IPC_CHANNELS.serverRemove)!(goodEvent, {
+      serverKey: '',
+    })) as { ok: boolean; error?: { code: string } };
+    expect(empty.ok).toBe(false);
+    expect(empty.error?.code).toBe('E_SCHEMA_MISMATCH');
+    expect(services.removeServer).not.toHaveBeenCalled();
+
+    const accepted = (await handlers.get(IPC_CHANNELS.serverRemove)!(goodEvent, {
+      serverKey: 'a'.repeat(32),
+    })) as { ok: boolean; value?: { status: string } };
+    expect(accepted.ok).toBe(true);
+    expect(accepted.value?.status).toBe('idle');
+    expect(services.removeServer).toHaveBeenCalledWith({ serverKey: 'a'.repeat(32) });
+  });
+
+  it('serverTokenStatus: rejects unknown statuses and smuggled token fields', async () => {
+    const services = makeServices();
+    const { handlers } = register(services);
+
+    const accepted = (await handlers.get(IPC_CHANNELS.serverTokenStatus)!(goodEvent, {
+      serverKey: 'b'.repeat(32),
+    })) as { ok: boolean; value?: { status: string } };
+    expect(accepted.ok).toBe(true);
+    expect(accepted.value).toEqual({ status: 'local' });
+
+    services.getServerTokenStatus = vi.fn(() => ({ status: 'ok', token: 'tok' }) as never);
+    const rogue = (await handlers.get(IPC_CHANNELS.serverTokenStatus)!(goodEvent, {
+      serverKey: 'b'.repeat(32),
+    })) as { ok: boolean; error?: { code: string } };
+    expect(rogue.ok).toBe(false);
+    expect(rogue.error?.code).toBe('E_SCHEMA_MISMATCH');
+    expect(JSON.stringify(rogue)).not.toContain('tok');
   });
 
   it('rejects a connection state carrying token-shaped fields fail-closed', async () => {

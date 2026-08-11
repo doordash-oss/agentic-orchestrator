@@ -27,25 +27,35 @@ const (
 	// compatible.
 	CompatibilityMinClientSchema = 1
 
-	// CompatibilityRuntimePolicy names the runtime security/ownership policy
-	// contract this server enforces: loopback-only listener, bearer-token
-	// auth, single-owner discovery record.
+	// CompatibilityRuntimePolicy names the loopback runtime security/ownership
+	// policy contract: loopback-only listener, bearer-token auth, single-owner
+	// discovery record.
 	CompatibilityRuntimePolicy = "loopback-bearer-v1"
+
+	// CompatibilityNetworkRuntimePolicy names the network runtime policy: a
+	// non-loopback listener under the same bearer-token auth, with any Host
+	// header accepted and the Origin rule unchanged from the loopback policy.
+	CompatibilityNetworkRuntimePolicy = "network-bearer-v1"
 )
 
 // NewCompatibilityDeclaration builds the explicit compatibility contract
 // served on /api/v1/health. buildVersion is the server build's version
 // string (the instance-lock owner version); an empty value falls back to
 // "dev" so the declaration always carries a non-empty build identity.
-func NewCompatibilityDeclaration(buildVersion string) CompatibilityDeclaration {
+// runtimePolicy is the bind-mode policy from the resolved listen address;
+// an empty value falls back to the loopback policy.
+func NewCompatibilityDeclaration(buildVersion, runtimePolicy string) CompatibilityDeclaration {
 	if buildVersion == "" {
 		buildVersion = "dev"
+	}
+	if runtimePolicy == "" {
+		runtimePolicy = CompatibilityRuntimePolicy
 	}
 	return CompatibilityDeclaration{
 		APIVersion:      APIVersion,
 		SchemaVersion:   CompatibilitySchemaVersion,
 		MinClientSchema: CompatibilityMinClientSchema,
-		RuntimePolicy:   CompatibilityRuntimePolicy,
+		RuntimePolicy:   runtimePolicy,
 		ServerBuild: BuildIdentity{
 			Version:  buildVersion,
 			Revision: buildRevision(),

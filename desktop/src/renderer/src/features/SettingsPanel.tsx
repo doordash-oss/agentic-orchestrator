@@ -16,9 +16,13 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { useConnectionState, useTheme } from '../hooks';
 import { parseIpcError } from '../wizard/ipcError';
 import { WorkspaceDefaultsPanel } from './ConfigEditor';
+import type { PaneFocusIntent } from './settingsPanes';
 import type {
+  KnownServer,
   ReadinessSnapshot,
   RepositoryState,
+  ServerListRow,
+  ServerTokenStatus,
   SessionSummary,
   Settings,
   SettingsPaneId,
@@ -40,13 +44,23 @@ function normalizePath(p: string | null | undefined): string | null {
   return p.replace(/\/+$/, '');
 }
 
-export function SettingsPanel({ pane = 'workspace-roots' }: { pane?: SettingsPaneId }) {
+export function SettingsPanel({
+  pane = 'workspace-roots',
+  focusIntent = null,
+}: {
+  pane?: SettingsPaneId;
+  /** Within-pane focus intent delivered by a settings deep link. */
+  focusIntent?: PaneFocusIntent | null;
+}) {
   const connection = useConnectionState();
   const [readiness, setReadiness] = useState<ReadinessSnapshot | null>(null);
   const [repos, setRepos] = useState<RepositoryState[]>([]);
   const { preference: themePref, setPreference: setThemePref } = useTheme();
   const [error, setError] = useState<string | null>(null);
   const [addingRoot, setAddingRoot] = useState(false);
+  /** Typed-path entry for remote servers; the server's PATCH validates it. */
+  const [rootDraft, setRootDraft] = useState('');
+  const [rootAddError, setRootAddError] = useState<string | null>(null);
   const [removingRoot, setRemovingRoot] = useState<string | null>(null);
   const [reordering, setReordering] = useState(false);
   const [refreshingProviders, setRefreshingProviders] = useState<Set<string>>(() => new Set());
@@ -67,6 +81,10 @@ export function SettingsPanel({ pane = 'workspace-roots' }: { pane?: SettingsPan
   const [clearingDiagnostics, setClearingDiagnostics] = useState(false);
   const installNowTriggerRef = useRef<HTMLButtonElement | null>(null);
   const clearDiagnosticsTriggerRef = useRef<HTMLButtonElement | null>(null);
+
+  // Locality picks the root-entry affordance: the native directory picker
+  // on a local server, typed paths validated by the server on a remote one.
+  const remoteServer = connection.status === 'ready' && connection.kind === 'remote';
 
   const configuredPath = normalizePath(settings?.runtime.selection ?? null);
   const connectedPath = normalizePath(connection.connectedRuntimeDir ?? null);
@@ -171,6 +189,31 @@ export function SettingsPanel({ pane = 'workspace-roots' }: { pane?: SettingsPan
       setAddingRoot(false);
     }
   }, [refresh]);
+
+  /**
+   * Remote-only root entry: the folder lives on the server host, so the
+   * typed path goes straight into the tightened runtime-config PATCH and
+   * its rejection is the validation the form reports inline.
+   */
+  const handleAddTypedRoot = useCallback(async () => {
+    const path = rootDraft.trim();
+    if (path === '') return;
+    if (!path.startsWith('/')) {
+      setRootAddError('Enter the path exactly as the server sees it, starting with /.');
+      return;
+    }
+    try {
+      setAddingRoot(true);
+      setRootAddError(null);
+      await window.agentico.addWorkspaceRoot(path);
+      setRootDraft('');
+      refresh();
+    } catch (e: unknown) {
+      setRootAddError(parseIpcError(e).message);
+    } finally {
+      setAddingRoot(false);
+    }
+  }, [rootDraft, refresh]);
 
   const handleRemoveRoot = useCallback(
     async (rootPath: string) => {
@@ -456,15 +499,61 @@ export function SettingsPanel({ pane = 'workspace-roots' }: { pane?: SettingsPan
               })
             )}
           </ul>
-          <button
-            type="button"
-            className="setup-wizard__action"
-            onClick={() => void handleAddRoot()}
-            disabled={addingRoot || refreshingProviders.size > 0}
-          >
-            {addingRoot ? 'Adding…' : 'Add workspace root'}
-          </button>
+          {remoteServer ? (
+            <div className="settings-panel__path-entry">
+              <label className="form-field" htmlFor="settings-root-path">
+                <span className="form-field__label">Folder path on the server</span>
+                <input
+                  id="settings-root-path"
+                  className="form-field__input"
+                  type="text"
+                  value={rootDraft}
+                  placeholder="/srv/work"
+                  spellCheck={false}
+                  autoComplete="off"
+                  disabled={addingRoot}
+                  aria-invalid={rootAddError !== null}
+                  onChange={(event) => {
+                    setRootDraft(event.currentTarget.value);
+                    setRootAddError(null);
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') {
+                      event.preventDefault();
+                      void handleAddTypedRoot();
+                    }
+                  }}
+                />
+              </label>
+              {rootAddError !== null ? (
+                <p className="form-field__error" role="alert">
+                  {rootAddError}
+                </p>
+              ) : null}
+              <button
+                type="button"
+                className="setup-wizard__action"
+                onClick={() => void handleAddTypedRoot()}
+                disabled={addingRoot || refreshingProviders.size > 0 || rootDraft.trim() === ''}
+              >
+                {addingRoot ? 'Adding…' : 'Add root'}
+              </button>
+            </div>
+          ) : (
+            <button
+              type="button"
+              className="setup-wizard__action"
+              onClick={() => void handleAddRoot()}
+              disabled={addingRoot || refreshingProviders.size > 0}
+            >
+              {addingRoot ? 'Adding…' : 'Add workspace root'}
+            </button>
+          )}
         </section>
+      )}
+
+      {pane === 'servers' && (
+        <ServersPane settings={settings} onSettingsChange={setSettings} focusIntent={focusIntent} />
       )}
 
       {pane === 'providers' && (
@@ -880,6 +969,484 @@ export function SettingsPanel({ pane = 'workspace-roots' }: { pane?: SettingsPan
                 onClick={() => void handleClearDiagnostics()}
               >
                 Clear Diagnostics
+              </button>
+            </div>
+          </div>
+        </SettingsConfirmationDialog>
+      )}
+    </section>
+  );
+}
+
+const SERVERS_PANE_HEALTH_LABEL: Record<ServerListRow['health'], string> = {
+  healthy: 'Available',
+  unreachable: 'Unreachable',
+  probing: 'Checking…',
+};
+
+/** Distinct lead-ins per failure class of the add-server flow. */
+function addServerErrorTitle(code: string): string {
+  if (code.startsWith('E_CONNECTION_STRING_')) return 'The connection string could not be parsed.';
+  if (code === 'E_REMOTE_UNREACHABLE') return 'The server could not be reached.';
+  if (code === 'E_REMOTE_INCOMPATIBLE') return 'The server is not compatible with this app.';
+  if (code === 'E_REMOTE_AUTH_REJECTED') return 'The token was rejected.';
+  return 'The server could not be added.';
+}
+
+function serverDisplayName(entry: KnownServer): string {
+  return entry.nickname ?? (entry.name === '' ? 'Unnamed server' : entry.name);
+}
+
+/**
+ * The Servers pane: one list of every known server, local and remote, with
+ * the inline add-server form at the top. Each row carries its kind badge,
+ * endpoint, probe status and last-seen, and offers nickname editing
+ * (settings patch upsert), removal (dedicated channel; main deletes the
+ * stored credential and tears down the connection when the removed server
+ * was active), and an expandable details panel.
+ *
+ * Token invariants: the paste field's content crosses to main exactly once
+ * via addRemoteServer, is cleared on every outcome, and is never written to
+ * settings, component state stores, or logs. Re-paste deliberately reuses
+ * the full add flow — remoteServerAdd re-probes and overwrites both the
+ * credential blob and the settings entry.
+ */
+function ServersPane({
+  settings,
+  onSettingsChange,
+  focusIntent = null,
+}: {
+  settings: Settings | null;
+  onSettingsChange: (next: Settings) => void;
+  focusIntent?: PaneFocusIntent | null;
+}) {
+  const [rows, setRows] = useState<readonly ServerListRow[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [editingKey, setEditingKey] = useState<string | null>(null);
+  const [nicknameDraft, setNicknameDraft] = useState('');
+  const [savingNickname, setSavingNickname] = useState(false);
+  const [confirmingKey, setConfirmingKey] = useState<string | null>(null);
+  const [removingKey, setRemovingKey] = useState<string | null>(null);
+  const [detailsKey, setDetailsKey] = useState<string | null>(null);
+  const [tokenStatusByKey, setTokenStatusByKey] = useState<ReadonlyMap<string, ServerTokenStatus>>(
+    () => new Map(),
+  );
+  const [paste, setPaste] = useState('');
+  const [adding, setAdding] = useState(false);
+  const [addFeedback, setAddFeedback] = useState<
+    | { kind: 'error'; title: string; message: string }
+    | { kind: 'added' }
+    | { kind: 'session-only' }
+    | { kind: 'duplicate-local'; serverKey: string }
+    | null
+  >(null);
+  const pasteRef = useRef<HTMLTextAreaElement | null>(null);
+
+  // Health probing is bounded by the pane's mounted lifetime, exactly as
+  // the footer popover bounds it by its open lifetime.
+  useEffect(() => {
+    let alive = true;
+    void window.agentico
+      .probeServers({ open: true })
+      .then((snapshot) => {
+        if (alive) setRows(snapshot.rows);
+      })
+      .catch(() => {});
+    const unsubscribe = window.agentico.onServersChanged((snapshot) => {
+      setRows(snapshot.rows);
+    });
+    return () => {
+      alive = false;
+      unsubscribe();
+      void window.agentico.probeServers({ open: false }).catch(() => {});
+    };
+  }, []);
+
+  // The add-server deep-link intent focuses the paste field.
+  useEffect(() => {
+    if (focusIntent?.intent === 'add-server') {
+      pasteRef.current?.focus();
+    }
+  }, [focusIntent]);
+
+  const reloadSettings = useCallback(async () => {
+    try {
+      onSettingsChange(await window.agentico.getSettings());
+    } catch (e: unknown) {
+      setError(parseIpcError(e).message);
+    }
+  }, [onSettingsChange]);
+
+  const known = settings?.servers.known ?? [];
+  const rowByKey = new Map((rows ?? []).map((row) => [row.serverKey, row]));
+  const confirmingEntry =
+    confirmingKey === null ? undefined : known.find((entry) => entry.serverKey === confirmingKey);
+
+  const saveNickname = useCallback(
+    async (entry: KnownServer) => {
+      const trimmed = nicknameDraft.trim();
+      if (trimmed === (entry.nickname ?? '')) {
+        setEditingKey(null);
+        return;
+      }
+      setSavingNickname(true);
+      try {
+        // An empty draft clears the nickname: the field is dropped entirely
+        // rather than persisted as an empty string.
+        const { nickname: _dropped, ...base } = entry;
+        const next: KnownServer = { ...base, ...(trimmed === '' ? {} : { nickname: trimmed }) };
+        const updated = await window.agentico.updateSettings({ servers: { upsertKnown: next } });
+        onSettingsChange(updated);
+        setEditingKey(null);
+        setError(null);
+      } catch (e: unknown) {
+        setError(parseIpcError(e).message);
+      } finally {
+        setSavingNickname(false);
+      }
+    },
+    [nicknameDraft, onSettingsChange],
+  );
+
+  const confirmRemove = useCallback(
+    async (entry: KnownServer) => {
+      setConfirmingKey(null);
+      setRemovingKey(entry.serverKey);
+      try {
+        // Main-side removes the credential blob (remote), drops the settings
+        // entry, and — when this was the active server — tears the
+        // connection down into the standard startup selection flow.
+        await window.agentico.removeServer({ serverKey: entry.serverKey });
+        await reloadSettings();
+        setError(null);
+      } catch (e: unknown) {
+        setError(parseIpcError(e).message);
+      } finally {
+        setRemovingKey(null);
+      }
+    },
+    [reloadSettings],
+  );
+
+  const toggleDetails = useCallback(
+    async (entry: KnownServer) => {
+      const opening = detailsKey !== entry.serverKey;
+      setDetailsKey(opening ? entry.serverKey : null);
+      if (opening && entry.kind === 'remote' && !tokenStatusByKey.has(entry.serverKey)) {
+        try {
+          const result = await window.agentico.getServerTokenStatus({
+            serverKey: entry.serverKey,
+          });
+          setTokenStatusByKey((current) => new Map(current).set(entry.serverKey, result.status));
+        } catch {
+          // The details panel surfaces the absence generically below.
+        }
+      }
+    },
+    [detailsKey, tokenStatusByKey],
+  );
+
+  const submitAdd = useCallback(async () => {
+    const connectionString = paste;
+    if (connectionString.trim() === '') return;
+    setAdding(true);
+    setAddFeedback(null);
+    setError(null);
+    try {
+      const result = await window.agentico.addRemoteServer({ connectionString });
+      // The pasted string is cleared on every outcome: no token remains in
+      // the DOM or in component state once the call has resolved.
+      setPaste('');
+      if (result.status === 'added') {
+        // The same explicit switch the footer popover performs, so the app
+        // attaches to the new server immediately.
+        void window.agentico.switchConnectionServer({ serverKey: result.serverKey }).catch(() => {
+          // The connection shell owns the switch's failure surface.
+        });
+        setAddFeedback({ kind: 'added' });
+      } else if (result.status === 'session-only') {
+        setAddFeedback({ kind: 'session-only' });
+      } else {
+        setAddFeedback({ kind: 'duplicate-local', serverKey: result.serverKey });
+      }
+      await reloadSettings();
+    } catch (e: unknown) {
+      setPaste('');
+      const parsed = parseIpcError(e);
+      setAddFeedback({
+        kind: 'error',
+        title: addServerErrorTitle(parsed.code),
+        message: parsed.message,
+      });
+    } finally {
+      setAdding(false);
+    }
+  }, [paste, reloadSettings]);
+
+  return (
+    <section className="settings-panel__section" aria-label="Servers">
+      <h2 className="settings-panel__section-title">Servers</h2>
+      <p className="settings-panel__section-desc">
+        The servers Agentico knows — the ones it runs on this machine and the remote ones you add. A
+        nickname is shown everywhere the server appears.
+      </p>
+      {error && (
+        <p className="form-field__error" role="alert">
+          {error}
+        </p>
+      )}
+
+      <div className="settings-panel__server-add">
+        <label className="form-field__label" htmlFor="servers-add-string">
+          Add a remote server
+        </label>
+        <textarea
+          id="servers-add-string"
+          ref={pasteRef}
+          className="form-field__input form-field__input--multiline"
+          placeholder="agentico://<token>@<host>:<port>?name=…"
+          rows={2}
+          spellCheck={false}
+          autoComplete="off"
+          maxLength={2048}
+          value={paste}
+          disabled={adding}
+          onChange={(event) => setPaste(event.currentTarget.value)}
+        />
+        <p className="settings-panel__section-desc">
+          Paste the connection string the remote server printed. It is verified once and its token
+          is stored in the OS keychain — never in settings.
+        </p>
+        <div className="settings-panel__button-row">
+          <button
+            type="button"
+            className="setup-wizard__action setup-wizard__action--primary"
+            onClick={() => void submitAdd()}
+            disabled={adding || paste.trim() === ''}
+          >
+            {adding ? 'Probing…' : 'Probe and connect'}
+          </button>
+        </div>
+        {addFeedback?.kind === 'error' && (
+          <p className="form-field__error" role="alert">
+            <strong>{addFeedback.title}</strong> {addFeedback.message}
+          </p>
+        )}
+        {addFeedback?.kind === 'added' && (
+          <p className="settings-panel__copy-notice" role="status">
+            Server added; switching to it now.
+          </p>
+        )}
+        {addFeedback?.kind === 'session-only' && (
+          <p className="settings-panel__copy-notice" role="status">
+            The server answered, but the OS keychain on this machine is unavailable, so nothing was
+            saved. It will not appear in the list; add it again when the keychain is available.
+          </p>
+        )}
+        {addFeedback?.kind === 'duplicate-local' && (
+          <p className="settings-panel__copy-notice" role="status">
+            That address is one of your local servers, already in the list below.{' '}
+            <button
+              type="button"
+              className="settings-panel__root-btn"
+              onClick={() =>
+                void window.agentico
+                  .switchConnectionServer({ serverKey: addFeedback.serverKey })
+                  .catch(() => {})
+              }
+            >
+              Switch to it
+            </button>
+          </p>
+        )}
+      </div>
+
+      {settings === null ? (
+        <p className="settings-panel__server-empty" role="status">
+          Loading servers…
+        </p>
+      ) : known.length === 0 ? (
+        <p className="settings-panel__server-empty">No servers known yet.</p>
+      ) : (
+        <ul className="settings-panel__servers">
+          {known.map((entry) => {
+            const joined = rowByKey.get(entry.serverKey);
+            const current = joined?.current === true;
+            const display = serverDisplayName(entry);
+            const statusText = current
+              ? 'Connected'
+              : (SERVERS_PANE_HEALTH_LABEL[joined?.health ?? 'probing'] ?? 'Checking…');
+            const editing = editingKey === entry.serverKey;
+            return (
+              <li
+                key={entry.serverKey}
+                className="settings-panel__server"
+                data-kind={entry.kind}
+                data-current={current}
+              >
+                <div className="settings-panel__server-header">
+                  {editing ? (
+                    <div className="settings-panel__server-inline-edit">
+                      <input
+                        className="form-field__input settings-panel__server-nickname-input"
+                        aria-label={`Nickname for ${display}`}
+                        placeholder={entry.name === '' ? 'Unnamed server' : entry.name}
+                        maxLength={64}
+                        value={nicknameDraft}
+                        autoFocus
+                        onChange={(event) => setNicknameDraft(event.currentTarget.value)}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter') {
+                            event.preventDefault();
+                            void saveNickname(entry);
+                          } else if (event.key === 'Escape') {
+                            event.preventDefault();
+                            setEditingKey(null);
+                          }
+                        }}
+                      />
+                      <button
+                        type="button"
+                        className="settings-panel__root-btn"
+                        onClick={() => void saveNickname(entry)}
+                        disabled={savingNickname}
+                      >
+                        {savingNickname ? '…' : 'Save'}
+                      </button>
+                      <button
+                        type="button"
+                        className="settings-panel__root-btn"
+                        onClick={() => setEditingKey(null)}
+                        disabled={savingNickname}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  ) : (
+                    <>
+                      <span className="settings-panel__server-name">{display}</span>
+                      <span className="settings-panel__server-kind" data-kind={entry.kind}>
+                        {entry.kind === 'remote' ? 'Remote' : 'Local'}
+                      </span>
+                      <span className="settings-panel__server-status" role="status">
+                        {statusText}
+                      </span>
+                      <div className="settings-panel__root-actions">
+                        <button
+                          type="button"
+                          className="settings-panel__root-btn"
+                          aria-label={`Rename ${display}`}
+                          onClick={() => {
+                            setEditingKey(entry.serverKey);
+                            setNicknameDraft(entry.nickname ?? '');
+                          }}
+                        >
+                          Rename
+                        </button>
+                        <button
+                          type="button"
+                          className="settings-panel__root-btn"
+                          onClick={() => void toggleDetails(entry)}
+                        >
+                          Details
+                        </button>
+                        <button
+                          type="button"
+                          className="settings-panel__root-btn settings-panel__root-btn--danger"
+                          onClick={() => setConfirmingKey(entry.serverKey)}
+                          disabled={removingKey === entry.serverKey}
+                          aria-label={`Remove ${display}`}
+                        >
+                          {removingKey === entry.serverKey ? '…' : 'Remove'}
+                        </button>
+                      </div>
+                    </>
+                  )}
+                </div>
+                <code className="settings-panel__server-endpoint">{entry.baseUrl}</code>
+                <span className="settings-panel__server-last-seen">
+                  Last seen {entry.lastSeenAt.slice(0, 10)}
+                </span>
+                {detailsKey === entry.serverKey && (
+                  <dl className="settings-panel__server-details">
+                    <dt>Kind</dt>
+                    <dd>{entry.kind === 'remote' ? 'Remote' : 'Local'}</dd>
+                    <dt>Base URL</dt>
+                    <dd>{entry.baseUrl}</dd>
+                    {entry.runtimeDir !== undefined && (
+                      <>
+                        <dt>Runtime dir</dt>
+                        <dd>{entry.runtimeDir}</dd>
+                      </>
+                    )}
+                    <dt>Server name</dt>
+                    <dd>{entry.name === '' ? 'Unnamed server' : entry.name}</dd>
+                    <dt>Last seen</dt>
+                    <dd>{entry.lastSeenAt}</dd>
+                    {entry.kind === 'remote' && (
+                      <>
+                        <dt>Token</dt>
+                        <dd>
+                          {tokenStatusByKey.get(entry.serverKey) === 'saved'
+                            ? 'Saved in the OS keychain.'
+                            : tokenStatusByKey.get(entry.serverKey) === 're-paste-required'
+                              ? 'Re-paste required — the stored credential cannot be read on this machine.'
+                              : tokenStatusByKey.get(entry.serverKey) === 'session-only'
+                                ? 'Not saved (session-only).'
+                                : 'Checking…'}{' '}
+                          {tokenStatusByKey.get(entry.serverKey) !== 'saved' &&
+                            tokenStatusByKey.get(entry.serverKey) !== undefined && (
+                              <button
+                                type="button"
+                                className="settings-panel__root-btn"
+                                aria-label={`Re-paste the connection string for ${display}`}
+                                onClick={() => pasteRef.current?.focus()}
+                              >
+                                Re-paste the connection string
+                              </button>
+                            )}
+                        </dd>
+                      </>
+                    )}
+                  </dl>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+
+      {confirmingEntry !== undefined && (
+        <SettingsConfirmationDialog
+          ariaLabel="Remove server confirmation"
+          onCancel={() => setConfirmingKey(null)}
+        >
+          <div className="restart-prompt">
+            <h2 className="restart-prompt__title">Remove {serverDisplayName(confirmingEntry)}?</h2>
+            <p className="restart-prompt__summary">
+              This deletes the saved entry
+              {confirmingEntry.kind === 'remote'
+                ? ' and the stored credential from the OS keychain'
+                : ''}
+              . The server itself is not stopped or touched.
+              {rowByKey.get(confirmingEntry.serverKey)?.current === true
+                ? ' You are connected to this server; removing it disconnects and selects another one.'
+                : ''}
+            </p>
+            <div className="restart-prompt__actions">
+              <button
+                type="button"
+                className="setup-wizard__action"
+                onClick={() => setConfirmingKey(null)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="setup-wizard__action setup-wizard__action--primary"
+                onClick={() => void confirmRemove(confirmingEntry)}
+              >
+                Remove
               </button>
             </div>
           </div>

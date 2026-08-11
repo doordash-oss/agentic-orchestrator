@@ -34,6 +34,18 @@ import {
   type AttentionSubmitOptions,
 } from '../features/AttentionInbox';
 import { useAttentionDraftSaves } from '../features/useAttentionDraftSaves';
+import { useConnectionState } from '../hooks';
+import {
+  failPendingUploads,
+  isBlockingStagedItem,
+  isStagedOnOtherServer,
+  pendingUploadItems,
+  reconcileUploadResults,
+  STAGED_ITEMS_BLOCK_SUBMIT,
+  STAGED_ON_OTHER_SERVER,
+  submittableReferences,
+  type ComposerUploadItem,
+} from '../features/stagedItems';
 import { parseIpcError } from '../wizard/ipcError';
 import { buildConversation, reconcileMessages } from '../features/transcript/conversation';
 import { ConversationTranscript } from '../features/transcript/ConversationTranscript';
@@ -103,6 +115,7 @@ export function AmaPanel({
   });
   const [message, setMessage] = useState('');
   const [images, setImages] = useState<readonly string[]>([]);
+  const [imageUploads, setImageUploads] = useState<readonly ComposerUploadItem[]>([]);
   const [optimisticMessage, setOptimisticMessage] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState('');
@@ -125,6 +138,14 @@ export function AmaPanel({
   geometryRef.current = geometry;
   const activeDrafts = attentionDrafts ?? localDrafts;
   const updateDrafts = setAttentionDrafts ?? setLocalDrafts;
+  // Remote connections stage pasted/dropped images through the upload
+  // channel; local connections submit paths as today.
+  const connection = useConnectionState();
+  const remote = connection.status === 'ready' && connection.kind === 'remote';
+  const serverKey = connection.status === 'ready' ? (connection.serverKey ?? null) : null;
+  // In-progress, failed, or foreign-server uploads stay in the composer but
+  // block sending until removed (or switched back to).
+  const uploadsBlocking = imageUploads.some((item) => isBlockingStagedItem(item, serverKey));
 
   const amaAttentionItems = useMemo(
     () =>
@@ -396,17 +417,24 @@ export function AmaPanel({
   const submit = async (event: FormEvent): Promise<void> => {
     event.preventDefault();
     const text = message.trim();
-    if (text === '' || busy) return;
+    if (text === '' || busy || uploadsBlocking) return;
     setOptimisticMessage(text);
     setMessage('');
     const submittedImages = images;
     setImages([]);
+    const submittedUploads = imageUploads;
+    setImageUploads([]);
     setPinToBottom((value) => value + 1);
     setBusy(true);
     setNotice('');
     setOpenPersisted(true);
     try {
-      await window.agentico.startChat({ message: text, images: [...submittedImages] });
+      const uploadRefs = submittableReferences(submittedUploads, 'image', serverKey);
+      await window.agentico.startChat({
+        message: text,
+        images: [...submittedImages],
+        ...(uploadRefs.length === 0 ? {} : { imageUploads: uploadRefs }),
+      });
       await refreshSession();
       const from = await loadTranscript();
       if (from !== null) {
@@ -422,10 +450,39 @@ export function AmaPanel({
       setOptimisticMessage(null);
       setMessage(text);
       setImages(submittedImages);
+      setImageUploads(submittedUploads);
       setNotice(error instanceof Error ? error.message : 'Could not send AMA message.');
     } finally {
       setBusy(false);
     }
+  };
+
+  /**
+   * Stages local image paths on the connected server (remote flow): pending
+   * chips appear immediately, then flip per-file to ready or failed.
+   */
+  const stageImagesRemotely = (paths: readonly string[]): void => {
+    if (paths.length === 0) return;
+    const pending = pendingUploadItems('image', paths);
+    setImageUploads((items) => {
+      const known = new Set(items.map((item) => item.sourcePath));
+      const additions = pending.filter((item) => !known.has(item.sourcePath));
+      return [...items, ...additions].slice(0, CREATION_IMAGE_LIMIT);
+    });
+    window.agentico
+      .uploadCreationFiles('image', paths)
+      .then((result) =>
+        setImageUploads((items) => reconcileUploadResults(items, pending, result.results)),
+      )
+      .catch((error: unknown) => {
+        const message = parseIpcError(error).message;
+        setImageUploads((items) => failPendingUploads(items, pending, message));
+      });
+  };
+
+  const retryUpload = (item: ComposerUploadItem): void => {
+    setImageUploads((items) => items.filter((candidate) => candidate.id !== item.id));
+    stageImagesRemotely([item.sourcePath]);
   };
 
   const onComposerPaste = (event: ClipboardEvent<HTMLTextAreaElement>): void => {
@@ -438,6 +495,19 @@ export function AmaPanel({
     if (!hasImage && imageFiles.length === 0) return;
     event.preventDefault();
     const imported = window.agentico.importDroppedCreationFiles('image', imageFiles);
+    if (remote) {
+      if (imported.paths.length > 0) {
+        stageImagesRemotely(imported.paths);
+        return;
+      }
+      void window.agentico
+        .readClipboardImage()
+        .then((result) => stageImagesRemotely(result.paths))
+        .catch((error: unknown) =>
+          setNotice(error instanceof Error ? error.message : 'Could not paste image.'),
+        );
+      return;
+    }
     if (imported.paths.length > 0) {
       setImages((current) => uniquePaths(current, imported.paths));
       return;
@@ -643,7 +713,7 @@ export function AmaPanel({
           </div>
         ) : null}
         <form className="ama-panel__composer" onSubmit={(event) => void submit(event)}>
-          {images.length > 0 ? (
+          {images.length > 0 || imageUploads.length > 0 ? (
             <ol className="ama-panel__attachments" aria-label="Attached images">
               {images.map((image) => (
                 <li key={image} className="ama-panel__attachment" data-kind="image">
@@ -653,6 +723,48 @@ export function AmaPanel({
                     type="button"
                     aria-label={`Remove ${basename(image)}`}
                     onClick={() => setImages((current) => current.filter((item) => item !== image))}
+                  >
+                    ×
+                  </button>
+                </li>
+              ))}
+              {imageUploads.map((item) => (
+                <li
+                  key={item.id}
+                  className="ama-panel__attachment"
+                  data-kind="image"
+                  data-state={item.state}
+                >
+                  <span aria-hidden="true" className="ama-panel__attachment-glyph" />
+                  <span>{item.name}</span>
+                  {item.state === 'uploading' ? (
+                    <span className="ama-panel__attachment-state">Uploading…</span>
+                  ) : null}
+                  {item.state === 'failed' ? (
+                    <>
+                      <span className="ama-panel__attachment-message" title={item.message}>
+                        {item.message ?? 'Upload failed.'}
+                      </span>
+                      <button
+                        type="button"
+                        aria-label={`Retry ${item.name}`}
+                        onClick={() => retryUpload(item)}
+                      >
+                        ↻ Retry
+                      </button>
+                    </>
+                  ) : null}
+                  {isStagedOnOtherServer(item, serverKey) ? (
+                    <span className="ama-panel__attachment-badge">{STAGED_ON_OTHER_SERVER}</span>
+                  ) : null}
+                  <button
+                    type="button"
+                    aria-label={`Remove ${item.name}`}
+                    onClick={() =>
+                      setImageUploads((current) =>
+                        current.filter((candidate) => candidate.id !== item.id),
+                      )
+                    }
                   >
                     ×
                   </button>
@@ -689,7 +801,8 @@ export function AmaPanel({
             <button
               type="submit"
               className="ama-panel__send"
-              disabled={busy || message.trim() === ''}
+              disabled={busy || uploadsBlocking || message.trim() === ''}
+              title={uploadsBlocking ? STAGED_ITEMS_BLOCK_SUBMIT : undefined}
             >
               Send
               <span aria-hidden="true"> ↵</span>

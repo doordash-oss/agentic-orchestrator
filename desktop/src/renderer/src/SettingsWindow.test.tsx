@@ -12,9 +12,10 @@ beforeEach(() => {
   document.title = '';
 });
 
-/** The eight panes, in the order the source list documents. */
+/** The panes, in the order the source list documents. */
 const PANE_ORDER = [
   'Workspace roots',
+  'Servers',
   'Providers',
   'Appearance',
   'Updates',
@@ -27,6 +28,7 @@ const PANE_ORDER = [
 /** Each pane's own aria-labelled region inside the content column. */
 const PANE_REGION_LABEL: Record<string, string> = {
   'workspace-roots': 'Workspace roots',
+  servers: 'Servers',
   providers: 'Provider readiness',
   appearance: 'Appearance',
   updates: 'Updates',
@@ -94,7 +96,7 @@ function expectOnlyPaneRendered(paneId: string): void {
 }
 
 describe('SettingsWindow pane list', () => {
-  it('lists the eight panes in order with single-select listbox semantics and a roving tabindex', async () => {
+  it('lists the panes in order with single-select listbox semantics and a roving tabindex', async () => {
     installSettingsWindowMock();
     render(<SettingsWindow />);
 
@@ -190,7 +192,7 @@ describe('SettingsWindow keyboard navigation', () => {
     render(<SettingsWindow />);
 
     const first = await screen.findByRole('option', { name: 'Workspace roots' });
-    const second = screen.getByRole('option', { name: 'Providers' });
+    const second = screen.getByRole('option', { name: 'Servers' });
     const last = screen.getByRole('option', { name: 'Workspace defaults' });
 
     first.focus();
@@ -198,7 +200,7 @@ describe('SettingsWindow keyboard navigation', () => {
     expect(second).toHaveFocus();
     expect(second).toHaveAttribute('aria-selected', 'true');
     expect(first).toHaveAttribute('aria-selected', 'false');
-    expect(await screen.findByRole('region', { name: 'Provider readiness' })).toBeVisible();
+    expect(await screen.findByRole('region', { name: 'Servers' })).toBeVisible();
 
     await userEvent.keyboard('{ArrowUp}');
     expect(first).toHaveFocus();
@@ -301,6 +303,7 @@ describe('SettingsWindow deep links', () => {
       region: 'Diagnostics',
       pane: 'diagnostics',
     },
+    { section: 'servers' as const, row: 'Servers', region: 'Servers', pane: 'servers' },
   ])(
     'switches to the $row pane for a settings route carrying $section',
     async ({ section, row, region, pane }) => {
@@ -316,6 +319,46 @@ describe('SettingsWindow deep links', () => {
       await waitFor(() => expect(document.title).toBe(row));
     },
   );
+
+  it('focuses the Servers pane add field for a route carrying the add-server intent', async () => {
+    const mock = installSettingsWindowMock();
+    render(<SettingsWindow />);
+
+    await screen.findByRole('region', { name: 'Workspace roots' });
+    act(() =>
+      mock.emitRouteRequest({
+        target: 'settings',
+        settingsSection: 'servers',
+        settingsFocus: 'add-server',
+      }),
+    );
+
+    await screen.findByRole('region', { name: 'Servers' });
+    await waitFor(() =>
+      expect(screen.getByRole('textbox', { name: /add a remote server/i })).toHaveFocus(),
+    );
+  });
+
+  it('consumes a persisted cold-open focus intent once and clears it', async () => {
+    const base = defaultSettings();
+    const mock = installSettingsWindowMock({
+      settings: {
+        ...base,
+        settingsWindow: { pane: 'servers', focus: 'add-server' },
+      },
+    });
+    render(<SettingsWindow />);
+
+    await screen.findByRole('region', { name: 'Servers' });
+    await waitFor(() =>
+      expect(screen.getByRole('textbox', { name: /add a remote server/i })).toHaveFocus(),
+    );
+    await waitFor(() =>
+      expect(mock.api.updateSettings).toHaveBeenCalledWith({
+        settingsWindow: { pane: 'servers', focus: undefined },
+      }),
+    );
+  });
 
   it('ignores a settings route with no section, and any other route target', async () => {
     const mock = installSettingsWindowMock({ settings: settingsWithPane('notifications') });

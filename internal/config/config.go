@@ -32,6 +32,17 @@ type Config struct {
 	Notifications   NotificationConfig        `yaml:"notifications,omitempty"`
 	Observability   ObservabilityConfig       `yaml:"observability,omitempty"`
 	Providers       map[string]ProviderConfig `yaml:"providers,omitempty"`
+	// Server holds startup-only settings for the headless server. They are
+	// read at launch and intentionally not part of the runtime-config REST
+	// surface.
+	Server ServerConfig `yaml:"server,omitempty"`
+}
+
+// ServerConfig holds headless-server settings applied once at startup.
+type ServerConfig struct {
+	// Name overrides the server display name. Precedence is
+	// --name > server.name > the persisted generated name.
+	Name string `yaml:"name,omitempty"`
 }
 
 // ProviderConfig holds per-provider overrides. CLI overrides the executable

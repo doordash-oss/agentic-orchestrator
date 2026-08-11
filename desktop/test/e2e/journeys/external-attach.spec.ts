@@ -7,6 +7,7 @@
  */
 import { spawn, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
+import net from 'node:net';
 import { expect, test } from '@playwright/test';
 import {
   assertNoLeakedProcesses,
@@ -134,6 +135,113 @@ async function healthStatus(baseUrl: string): Promise<number> {
     return 0;
   }
 }
+
+/** Reserves a free loopback port for a test-owned --listen server. */
+async function freeLoopbackPort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const probe = net.createServer();
+    probe.once('error', reject);
+    probe.listen(0, '127.0.0.1', () => {
+      const address = probe.address();
+      probe.close(() => {
+        if (address === null || typeof address === 'string') {
+          reject(new Error('could not reserve a loopback port'));
+          return;
+        }
+        resolve(address.port);
+      });
+    });
+  });
+}
+
+test('external named server: the name surfaces in the app', async ({}, testInfo) => {
+  const SERVER_NAME = 'frothy-macchiato';
+  const transcript = new Transcript(
+    'external-named-attach',
+    'External attach with an operator-named server (packaged app)',
+  );
+  const world = createWorld('external-named-attach', {
+    auth: { loggedIn: true, authMethod: 'oauth', email: 'e2e@example.invalid' },
+    presetWorkspaceRoot: true,
+  });
+  createRepo(world, 'alpha', { commit: true });
+
+  let external: ChildProcess | null = null;
+  let handle: AppHandle | null = null;
+  const externalLogs: string[] = [];
+  try {
+    transcript.section('Start a named external server on an explicit port');
+    const serverBinary = bundledServerBinary(packagedExecutable());
+    const listenPort = await freeLoopbackPort();
+    const args = [
+      'server',
+      '--config',
+      world.configPath,
+      '--state-dir',
+      world.stateDir,
+      '--listen',
+      String(listenPort),
+      '--name',
+      SERVER_NAME,
+    ];
+    external = spawn(serverBinary, args, {
+      env: minimalEnv(world),
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    external.stdout?.on('data', (chunk: Buffer) => externalLogs.push(chunk.toString()));
+    external.stderr?.on('data', (chunk: Buffer) => externalLogs.push(chunk.toString()));
+    transcript.command(`${serverBinary} ${args.join(' ')} &`, '(started as a test-owned process)');
+
+    await waitFor(() => readDiscovery(world) !== null, 'named server discovery record', 30_000);
+    const discovery = readDiscovery(world)!;
+    expect(discovery.pid).toBe(external.pid);
+    await waitFor(
+      async () => (await healthStatus(discovery.base_url)) === 200,
+      'named server health',
+      30_000,
+    );
+
+    transcript.section('Launch the app: the name rides the connection state');
+    handle = await launchApp(world, testInfo, { traceName: 'external-named-attach' });
+    await expect(handle.page.getByRole('button', { name: 'New feature' })).toBeVisible({
+      timeout: 60_000,
+    });
+    const connection = await handle.page.evaluate(() => window.agentico.getConnectionStatus());
+    expect(connection.status).toBe('ready');
+    expect(connection.ownership).toBe('external');
+    expect(connection.serverName).toBe(SERVER_NAME);
+    transcript.json('connection state (via IPC): named external runtime attached', connection);
+    // The sidebar footer greets the user with the server name.
+    await expect(handle.page.locator('.sidebar__footer').getByText(SERVER_NAME)).toBeVisible();
+    await evidenceShot(handle, 'external-named-attach');
+
+    // The app attached, it did not launch its own server.
+    expect(readDiscovery(world)!.pid).toBe(external.pid);
+
+    transcript.section('Test-owned teardown of the external server');
+    persistAppLogs(handle, 'external-named-attach-app');
+    await closeApp(handle);
+    handle = null;
+    external.kill('SIGTERM');
+    await waitFor(
+      () => external!.exitCode !== null || external!.signalCode !== null,
+      'external server to exit after test-sent SIGTERM',
+      15_000,
+    );
+    transcript.codeBlock('named server stderr tail', tailText(externalLogs.join(''), 15));
+    assertNoLeakedProcesses(world);
+    transcript.write(testInfo);
+  } finally {
+    if (handle !== null) {
+      await closeApp(handle).catch(() => {});
+    }
+    if (external !== null && external.exitCode === null && external.signalCode === null) {
+      external.kill('SIGKILL');
+    }
+    assertNoLeakedProcesses(world);
+    destroyWorld(world);
+  }
+});
 
 // Sanity: the discovery file itself must be owner-only on disk.
 test('external server publishes owner-only discovery material', async () => {

@@ -16,6 +16,23 @@ Tests fail if the committed generated code drifts from `api/openapi.yaml`.
 - `base_url`: loopback server origin.
 - `auth_token`: bearer token required on every `/api/v1` route.
 - `epoch`: event stream epoch for cursor invalidation.
+- `name` (optional): the resolved server display name (from `--name`,
+  `server.name`, or the persisted generated name). New servers always send
+  it; consumers must tolerate its absence and must not treat unknown new
+  fields as errors.
+
+`/api/v1/health` carries the same optional top-level `name` field. Both
+surfaces are strictly additive: the compatibility declaration
+(`loopback-bearer-v1`, schema 1) and the discovery schema version are
+unchanged, so older consumers keep working against named servers and newer
+consumers tolerate name-less servers.
+
+The server's bind address is selected with `--listen [host:]port` (loopback
+hosts only: `127.0.0.1`, `localhost`, `[::1]`; a bare port binds
+`127.0.0.1`). Non-loopback hosts and ports outside 1-65535 are rejected
+before any socket is opened, and a busy port fails fast with the address
+named and no discovery record written. Omitting the flag keeps the default
+ephemeral `127.0.0.1` bind.
 
 Programmatic clients send `Authorization: Bearer <auth_token>`. Browser
 `EventSource` clients that cannot set headers may pass `access_token` only on

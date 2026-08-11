@@ -141,6 +141,7 @@ export function buildApplicationMenuTemplate(deps: MenuTemplateDeps): MenuItemCo
           label: 'Updates',
           click: () => deps.route({ target: 'settings', settingsSection: 'updates' }),
         },
+        routedItem('global.switch-server', deps, { enabled: uiState.runtimeReady }),
         routedItem('global.attention', deps),
         routedItem('global.ama', deps),
         routedItem('global.bulk', deps),

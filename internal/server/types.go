@@ -39,6 +39,16 @@ type Options struct {
 	StartMode    string
 	Owner        instancelock.Owner
 	AuthToken    string
+	// ListenAddr overrides the TCP bind address (normalized via
+	// ResolveListenAddr). Empty keeps the default ephemeral 127.0.0.1 bind.
+	ListenAddr string
+	// RuntimePolicy overrides the declared runtime policy selected from the
+	// resolved listen address. Empty keeps the bind-driven selection. Only
+	// tests exercise this; production derives the policy from ListenAddr.
+	RuntimePolicy string
+	// Name is the resolved server display name surfaced in the startup
+	// line, health payload, and discovery record.
+	Name string
 	// AllowUnauthenticated is only for tests that intentionally exercise the
 	// server without discovery bootstrap. Production Start requires AuthToken.
 	AllowUnauthenticated bool
@@ -72,10 +82,16 @@ type HandlerOptions struct {
 	StartedAt    time.Time
 	Owner        instancelock.Owner
 	AuthToken    string
-	// DisableHostValidation turns off the loopback Host-header check. Host
-	// validation defaults to ON — only tests exercising something other
-	// than host validation itself should set this to true.
-	DisableHostValidation       bool
+	// Name is the resolved server display name reported by /api/v1/health.
+	Name string
+	// DisableHostValidation turns off the Host-header check. Host validation
+	// defaults to ON — only tests exercising something other than host
+	// validation itself should set this to true.
+	DisableHostValidation bool
+	// RuntimePolicy is the server's declared runtime policy (loopback or
+	// network). Empty defaults to the loopback policy, which enforces the
+	// loopback-only Host-header rule.
+	RuntimePolicy               string
 	Features                    FeatureLister
 	FeatureStore                FeatureReader
 	Freshness                   RepoFreshnessProvider
@@ -137,6 +153,7 @@ type DiscoveryRecord struct {
 	BaseURL       string          `json:"base_url"`
 	Epoch         string          `json:"epoch,omitempty"`
 	AuthToken     string          `json:"auth_token,omitempty"`
+	Name          string          `json:"name,omitempty"`
 	Runtime       RuntimeIdentity `json:"runtime"`
 	LaunchPolicy  LaunchPolicy    `json:"launch_policy"`
 	StartMode     string          `json:"start_mode"`

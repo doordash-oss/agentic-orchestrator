@@ -41,6 +41,8 @@ func TestUserFacingDocsDescribeLaunchSurface(t *testing.T) {
 			"--state-dir <path>",
 			"--providers <list>",
 			"--refresh-models",
+			"--listen",
+			"--name",
 			"--dangerously-skip-permissions",
 			"--help",
 			"--version",

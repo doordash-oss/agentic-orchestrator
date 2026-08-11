@@ -151,7 +151,13 @@ describe('preload surface', () => {
     expect(on).toHaveBeenCalledWith('agentico:connection:changed', expect.any(Function));
     const listener = on.mock.calls[0]![1] as (event: unknown, payload: unknown) => void;
 
-    const validState = { status: 'ready', stage: 'ready', detail: 'ok', ownership: 'external' };
+    const validState = {
+      status: 'ready',
+      stage: 'ready',
+      detail: 'ok',
+      ownership: 'external',
+      kind: 'remote',
+    };
     listener({}, validState);
     expect(cb).toHaveBeenCalledWith(validState);
 

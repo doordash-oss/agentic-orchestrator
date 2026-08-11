@@ -109,6 +109,7 @@ function detailBody(overrides: Record<string, unknown> = {}): Record<string, unk
 function makeService(
   respond: (path: string, init?: ApiRequestInit) => HttpResult | Promise<HttpResult>,
   resolveRepositoryFiles: FeatureServiceDeps['resolveRepositoryFiles'] = () => Promise.resolve([]),
+  extras: Partial<FeatureServiceDeps> = {},
 ) {
   const calls: Call[] = [];
   const service = new FeatureService({
@@ -120,6 +121,7 @@ function makeService(
     },
     readReadiness: () => Promise.resolve(readiness()),
     resolveRepositoryFiles,
+    ...extras,
   });
   return { service, calls };
 }
@@ -141,6 +143,170 @@ describe('FeatureService.creationDefaults', () => {
       { phase: 'Planning', effort: 'high' },
       { phase: 'Implementation', effort: 'max' },
     ]);
+  });
+});
+
+describe('FeatureService remote-connection submit boundary', () => {
+  const created = () => ({
+    status: 201,
+    body: { api_version: 'v1', result: 'created', feature_id: 'abcd1234ef567890' },
+  });
+
+  it('feature create refuses local image/attachment/repository-file paths remotely (fail, never leak)', async () => {
+    const resolveRepositoryFiles = vi.fn(() => Promise.resolve(['/resolved/repo-a/query.ts']));
+    const { service, calls } = makeService(created, resolveRepositoryFiles, {
+      locality: () => 'remote',
+    });
+    await expect(
+      service.createFeature({
+        name: 'Staged before the switch',
+        description: '',
+        repoKeys: ['repo-a'],
+        useCurrentBranch: false,
+        images: ['/staged/shot.png'],
+        attachments: [],
+        repositoryFiles: [],
+      }),
+    ).rejects.toMatchObject({ safe: { code: 'E_REQUIRES_LOCAL_SERVER' } });
+    await expect(
+      service.createFeature({
+        name: 'Staged before the switch',
+        description: '',
+        repoKeys: ['repo-a'],
+        useCurrentBranch: false,
+        images: [],
+        attachments: ['/staged/spec.pdf'],
+        repositoryFiles: [],
+      }),
+    ).rejects.toMatchObject({ safe: { code: 'E_REQUIRES_LOCAL_SERVER' } });
+    await expect(
+      service.createFeature({
+        name: 'Staged before the switch',
+        description: '',
+        repoKeys: ['repo-a'],
+        useCurrentBranch: false,
+        images: [],
+        attachments: [],
+        repositoryFiles: [{ repoKey: 'repo-a', path: 'src/query.ts' }],
+      }),
+    ).rejects.toMatchObject({ safe: { code: 'E_REQUIRES_LOCAL_SERVER' } });
+    expect(resolveRepositoryFiles).not.toHaveBeenCalled();
+    expect(calls).toHaveLength(0);
+  });
+
+  it('feature create forwards staged upload references remotely as image_uploads/attachment_uploads', async () => {
+    const resolveRepositoryFiles = vi.fn(() => Promise.resolve([]));
+    const { service, calls } = makeService(created, resolveRepositoryFiles, {
+      locality: () => 'remote',
+    });
+    await service.createFeature({
+      name: 'Staged remotely',
+      description: '',
+      repoKeys: ['repo-a'],
+      useCurrentBranch: false,
+      images: [],
+      attachments: [],
+      repositoryFiles: [],
+      imageUploads: ['ref-image-1'],
+      attachmentUploads: ['ref-attachment-1', 'ref-attachment-2'],
+    });
+    expect(calls[0]?.init?.body).toEqual(
+      expect.objectContaining({
+        images: [],
+        attachments: [],
+        image_uploads: ['ref-image-1'],
+        attachment_uploads: ['ref-attachment-1', 'ref-attachment-2'],
+      }),
+    );
+    expect(JSON.stringify(calls)).not.toContain('/staged/');
+  });
+
+  it('feature create sends staged paths unchanged when the connection is local', async () => {
+    const resolveRepositoryFiles = vi.fn((refs: readonly { repoKey: string; path: string }[]) =>
+      Promise.resolve(refs.map((ref) => `/resolved/${ref.repoKey}/${ref.path}`)),
+    );
+    const { service, calls } = makeService(created, resolveRepositoryFiles, {
+      locality: () => 'local',
+    });
+    await service.createFeature({
+      name: 'Staged locally',
+      description: '',
+      repoKeys: ['repo-a'],
+      useCurrentBranch: false,
+      images: ['/staged/shot.png'],
+      attachments: ['/staged/spec.pdf'],
+      repositoryFiles: [{ repoKey: 'repo-a', path: 'src/query.ts' }],
+    });
+    expect(calls[0]?.init?.body).toEqual(
+      expect.objectContaining({
+        images: ['/staged/shot.png'],
+        attachments: ['/staged/spec.pdf', '/resolved/repo-a/src/query.ts'],
+      }),
+    );
+  });
+
+  it('refactor launch refuses staged paths remotely and forwards upload references', async () => {
+    const resolveRepositoryFiles = vi.fn(() => Promise.resolve(['/resolved/repo-a/query.ts']));
+    const { service, calls } = makeService(
+      () => ({
+        status: 202,
+        body: {
+          api_version: 'v1',
+          feature_id: 'child1234ef567890',
+          parent_id: 'abcd1234ef567890',
+          result: 'created',
+        },
+      }),
+      resolveRepositoryFiles,
+      { locality: () => 'remote' },
+    );
+    await expect(
+      service.launchRefactorChild({
+        parentId: 'abcd1234ef567890',
+        name: 'Extract search core',
+        images: ['/staged/shot.png'],
+      }),
+    ).rejects.toMatchObject({ safe: { code: 'E_REQUIRES_LOCAL_SERVER' } });
+    await expect(
+      service.launchRefactorChild({
+        parentId: 'abcd1234ef567890',
+        name: 'Extract search core',
+        repositoryFiles: [{ repoKey: 'repo-a', path: 'src/query.ts' }],
+      }),
+    ).rejects.toMatchObject({ safe: { code: 'E_REQUIRES_LOCAL_SERVER' } });
+    await service.launchRefactorChild({
+      parentId: 'abcd1234ef567890',
+      name: 'Extract search core',
+      imageUploads: ['ref-image-1'],
+      attachmentUploads: ['ref-attachment-1'],
+    });
+    expect(resolveRepositoryFiles).not.toHaveBeenCalled();
+    const body = calls[0]?.init?.body as Record<string, unknown>;
+    expect('images' in body).toBe(false);
+    expect('attachments' in body).toBe(false);
+    expect(body).toMatchObject({
+      image_uploads: ['ref-image-1'],
+      attachment_uploads: ['ref-attachment-1'],
+    });
+    expect(JSON.stringify(calls)).not.toContain('/staged/');
+  });
+
+  it('rejects a creation payload that tries to smuggle locality past the boundary', async () => {
+    const resolveRepositoryFiles = vi.fn(() => Promise.resolve([]));
+    const { service, calls } = makeService(created, resolveRepositoryFiles, {
+      locality: () => 'remote',
+    });
+    await expect(
+      service.createFeature({
+        name: 'Spoof attempt',
+        description: '',
+        repoKeys: ['repo-a'],
+        useCurrentBranch: false,
+        images: ['/staged/shot.png'],
+        kind: 'local',
+      } as never),
+    ).rejects.toMatchObject({ safe: { code: 'E_SCHEMA_MISMATCH' } });
+    expect(calls).toHaveLength(0);
   });
 });
 

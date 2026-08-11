@@ -32,6 +32,8 @@ import type {
   DiagnosticsSnapshot,
 } from '../../../src/shared/ipc';
 import {
+  applyServersPatch,
+  applyShellPatch,
   CHAT_SESSION_ID,
   defaultAmaPrefs,
   defaultSettings,
@@ -1059,11 +1061,16 @@ const READY_SNAPSHOT: ReadinessSnapshot = {
   issues: [],
 };
 
+/** The mock server's identity key; per-server shell prefs are keyed on it. */
+const SERVER_KEY = 'a'.repeat(64);
+
 const CONNECTION_STATE: ConnectionState = {
   status: 'ready',
   stage: 'ready',
   detail: 'Connected to runtime.',
   ownership: 'app-owned',
+  kind: 'local',
+  serverKey: SERVER_KEY,
 };
 
 /** Mid-connect state for the connection-shell capture: two of the six
@@ -1412,7 +1419,7 @@ function makeMockApi(
     // preference the app restores on open, rather than being routed there.
     settingsWindow: { ...defaultSettingsWindowPrefs(), pane: settingsScenePane(scene) },
     shell: {
-      activeFeatureId:
+      featureByServer:
         scene === 'overview-lanes' ||
         scene === 'overview-empty' ||
         scene === 'command-palette-overview' ||
@@ -1420,8 +1427,8 @@ function makeMockApi(
         // is evidenced over a real feature cockpit, so it keeps the default.
         scene === 'update-popover' ||
         scene.startsWith('creation-sheet')
-          ? null
-          : 'abcd1234ef567890',
+          ? {}
+          : { [SERVER_KEY]: 'abcd1234ef567890' },
       sidebarCollapsed: false,
     },
   };
@@ -1437,6 +1444,15 @@ function makeMockApi(
       ),
     retryConnection: () => Promise.resolve(CONNECTION_STATE),
     restartConnection: () => Promise.resolve(CONNECTION_STATE),
+    chooseConnectionServer: () => Promise.resolve(CONNECTION_STATE),
+    switchConnectionServer: () => Promise.resolve(CONNECTION_STATE),
+    listServers: () => Promise.resolve({ rows: [] }),
+    probeServers: () => Promise.resolve({ rows: [] }),
+    addRemoteServer: () => Promise.reject(new Error('addRemoteServer not available in capture')),
+    removeServer: () => Promise.reject(new Error('removeServer not available in capture')),
+    getServerTokenStatus: () =>
+      Promise.reject(new Error('getServerTokenStatus not available in capture')),
+    onServersChanged: () => () => {},
     onConnectionChanged: (listener) => {
       connectionListeners.add(listener);
       return () => connectionListeners.delete(listener);
@@ -1447,7 +1463,20 @@ function makeMockApi(
     },
     getSettings: () => Promise.resolve(currentSettings),
     updateSettings: (patch) => {
-      currentSettings = { ...currentSettings, ...patch };
+      const { servers, shell, ...rest } = patch;
+      currentSettings = { ...currentSettings, ...rest };
+      if (servers !== undefined) {
+        currentSettings = {
+          ...currentSettings,
+          servers: applyServersPatch(currentSettings.servers, servers),
+        };
+      }
+      if (shell !== undefined) {
+        currentSettings = {
+          ...currentSettings,
+          shell: applyShellPatch(currentSettings.shell, shell),
+        };
+      }
       return Promise.resolve(currentSettings);
     },
     openSettingsWindow: () => Promise.resolve({ opened: true }),
@@ -1744,6 +1773,8 @@ function makeMockApi(
     importDroppedCreationFiles: () => ({
       paths: scene === 'ama-panel' ? [AMA_ATTACHMENT_PATH] : [],
     }),
+    // Screenshot scenes never exercise the remote upload path; keep it inert.
+    uploadCreationFiles: () => Promise.resolve({ results: [] }),
     searchCreationFiles: (request) =>
       Promise.resolve({
         requestId: request.requestId,
@@ -2311,6 +2342,7 @@ index 5c32b6a..8a9b3c1 100644
       }),
     openExternal: () => Promise.resolve({ ok: true }),
     revealPath: () => Promise.resolve({ ok: true }),
+    writeClipboardText: () => Promise.resolve({ ok: true }),
     onAppEvent: (listener) => {
       appEventListeners.add(listener);
       return () => appEventListeners.delete(listener);

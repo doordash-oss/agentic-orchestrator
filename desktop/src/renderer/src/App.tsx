@@ -5,7 +5,14 @@ import { AmaPanel } from './components/AmaPanel';
 import { CommandPalette } from './components/CommandPalette';
 import { HelpOverlay } from './components/HelpOverlay';
 import { ReadinessGate } from './components/ReadinessGate';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type Dispatch,
+  type SetStateAction,
+} from 'react';
 import { emptyAttentionDrafts, type AttentionDrafts } from './features/AttentionInbox';
 import { useConnectionState, useSystemAccentMirror, useTheme } from './hooks';
 
@@ -18,8 +25,37 @@ export default function App() {
   useSystemAccentMirror();
   const connection = useConnectionState();
   const runtimeReady = connection.status === 'ready';
+  const serverKey = connection.serverKey ?? null;
   const [serverAttentionItems, setServerAttentionItems] = useState<AttentionItem[]>([]);
-  const [attentionDrafts, setAttentionDrafts] = useState<AttentionDrafts>(emptyAttentionDrafts);
+  /**
+   * Attention/Ama drafts are scoped to the connected server's identity: this
+   * component deliberately does NOT unmount during a connection flip, so the
+   * map keeps each server's in-progress drafts and nothing bleeds across.
+   * Entries live for the app session only; nothing is persisted.
+   */
+  const [draftsByServer, setDraftsByServer] = useState<ReadonlyMap<string, AttentionDrafts>>(
+    () => new Map(),
+  );
+  const attentionDrafts: AttentionDrafts =
+    (serverKey !== null ? draftsByServer.get(serverKey) : undefined) ?? emptyAttentionDrafts();
+  const setAttentionDrafts = useCallback<Dispatch<SetStateAction<AttentionDrafts>>>(
+    (next) => {
+      if (serverKey === null) {
+        return;
+      }
+      setDraftsByServer((current) => {
+        const previous = current.get(serverKey) ?? emptyAttentionDrafts();
+        const resolved = typeof next === 'function' ? next(previous) : next;
+        if (resolved === previous) {
+          return current;
+        }
+        const updated = new Map(current);
+        updated.set(serverKey, resolved);
+        return updated;
+      });
+    },
+    [serverKey],
+  );
   const [attentionJump, setAttentionJump] = useState<{
     requestId: number;
     featureId: string;

@@ -217,6 +217,8 @@ body {
   min-height: 0;
   display: flex;
   flex-direction: column;
+  /* Anchor for .server-switcher-dock (out-of-flow children only). */
+  position: relative;
 }
 
 /* ─── Toolbar popovers ────────────────────────────────────────────────────
@@ -867,6 +869,33 @@ body {
 
 .ama-panel__attachment button:hover {
   color: var(--text);
+}
+
+/* Upload lifecycle affordances (remote connections): same chip language. */
+.ama-panel__attachment[data-state='uploading'] {
+  opacity: 0.7;
+}
+
+.ama-panel__attachment[data-state='failed'] {
+  border: 1px solid var(--bad);
+  flex-wrap: wrap;
+}
+
+.ama-panel__attachment-state,
+.ama-panel__attachment-badge {
+  font: 10px var(--bench-font-text);
+  color: var(--faint);
+}
+
+/* Failure remediation is actionable copy: wrap it onto its own row so the
+   full message stays readable instead of being ellipsized mid-sentence. */
+.ama-panel__attachment-message {
+  flex-basis: 100%;
+  max-width: 22rem;
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
+  color: var(--bad);
 }
 
 /* Resize from every edge and corner, like a real macOS panel. The grips sit
@@ -2930,6 +2959,13 @@ body {
   flex-wrap: wrap;
 }
 
+/* Remote servers get a typed path in place of the native picker. */
+.creation-sheet__path-entry {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
 .creation-sheet__browser-title {
   margin: 0;
   color: var(--text);
@@ -4372,6 +4408,79 @@ body {
   border-color: var(--accent);
 }
 
+/* --- Server picker (awaiting-server-choice) ------------------------------------
+   One quiet registry list: hairline rows, the selected row lifts with the
+   accent edge — never color alone, the row carries the "Running" word too. */
+
+.shell-card__picker {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.shell-card__picker-row {
+  display: grid;
+  grid-template-columns: minmax(0, auto) minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: var(--space-2);
+  width: 100%;
+  text-align: left;
+  font-family: var(--bench-font-text);
+  color: var(--text);
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--hairline);
+  padding: var(--space-2) var(--space-3);
+  cursor: pointer;
+}
+
+.shell-card__picker-row:last-child {
+  border-bottom: none;
+}
+
+.shell-card__picker-row[data-selected='true'] {
+  background: var(--content);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.shell-card__picker-row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.shell-card__picker-primary {
+  font-weight: 700;
+  font-size: 13px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.shell-card__picker-runtime {
+  font-family: var(--bench-font-mono);
+  font-size: 11px;
+  color: var(--muted);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.shell-card__picker-state {
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  color: var(--ok);
+  white-space: nowrap;
+}
+
+.shell-card__picker-state::before {
+  content: '● ';
+  font-size: 9px;
+}
+
 .sr-only {
   position: absolute;
   width: 1px;
@@ -4955,6 +5064,200 @@ body {
   color: var(--text);
 }
 
+/* The footer's server control: the connected server's name and status dot
+ * acting as the switcher trigger. Same metrics as the passive runtime pill. */
+.sidebar__server {
+  min-width: 0;
+}
+
+.sidebar__server-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 0;
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  font: 11px var(--bench-font-text);
+  cursor: pointer;
+}
+
+.sidebar__server-control:hover:not(:disabled) {
+  color: var(--text);
+}
+
+.sidebar__server-control:disabled {
+  cursor: default;
+  opacity: 0.7;
+}
+
+.sidebar__server-dot {
+  flex: 0 0 auto;
+}
+
+.sidebar__server-dot[data-tone='ready'] {
+  color: var(--ok);
+}
+
+.sidebar__server-dot[data-tone='progress'] {
+  color: var(--accent);
+}
+
+.sidebar__server-dot[data-tone='error'] {
+  color: var(--bad);
+}
+
+.sidebar__server-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The switcher popover hangs off the footer, so it opens upward, flush left. */
+.server-switcher {
+  top: auto;
+  bottom: calc(100% + var(--space-2));
+  right: auto;
+  left: 0;
+  width: 320px;
+  max-width: 80vw;
+  gap: var(--space-1);
+  padding: var(--space-2);
+}
+
+/* While the sidebar is collapsed (below the ~700px auto-collapse breakpoint
+ * or by the user's explicit choice) its footer — the switcher's wide-layout
+ * home — is display:none, so the shell re-homes the same control into this
+ * out-of-flow dock pinned just under the toolbar's trailing edge. Only
+ * mounted in that state; the popover opens downward from here, mirroring
+ * the toolbar popovers' presentation. The docked control gets a restrained
+ * pill treatment so it reads as an actionable button rather than a passive
+ * status dot. */
+.server-switcher-dock {
+  position: absolute;
+  top: calc(52px + var(--space-2));
+  right: var(--space-3);
+  z-index: 30;
+}
+
+.server-switcher-dock .sidebar__server-control {
+  padding: 3px 10px;
+  border: 1px solid var(--hairline);
+  border-radius: 999px;
+  background: var(--raised);
+  box-shadow: 0 2px 8px rgb(0 0 0 / 12%);
+}
+
+.server-switcher-dock .sidebar__server-control:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.server-switcher-dock .sidebar__server-control:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.server-switcher-dock .server-switcher {
+  top: calc(100% + var(--space-2));
+  bottom: auto;
+  left: auto;
+  right: 0;
+}
+
+.server-switcher__empty {
+  margin: 0;
+  padding: var(--space-2);
+  color: var(--muted);
+  font: 12px var(--bench-font-text);
+}
+
+.server-switcher__list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.server-switcher__row {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr) auto;
+  grid-template-areas:
+    'check primary status'
+    'check runtime status';
+  align-items: center;
+  column-gap: 6px;
+  padding: 6px 8px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  font: 12px var(--bench-font-text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.server-switcher__row[data-selected='true'] {
+  background: var(--hover, var(--material-edge));
+}
+
+.server-switcher__row[aria-disabled='true'] {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.server-switcher__check {
+  grid-area: check;
+  color: var(--accent);
+}
+
+.server-switcher__primary {
+  grid-area: primary;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.server-switcher__runtime {
+  grid-area: runtime;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.server-switcher__status {
+  grid-area: status;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.server-switcher__row[data-health='unreachable'] .server-switcher__status {
+  color: var(--bad);
+}
+
+/* Fixed "Add Server…" footer row: same row styling, separated by a hairline. */
+.server-switcher__footer {
+  margin-top: 1px;
+  padding-top: 1px;
+  border-top: 1px solid var(--hairline);
+}
+
+/* The picker/popover reuse the Servers pane's kind badge verbatim; it only
+   needs a breath of space after the server name. */
+.server-switcher__primary .settings-panel__server-kind,
+.shell-card__picker-primary .settings-panel__server-kind {
+  margin-left: var(--space-2);
+  vertical-align: 1px;
+}
+
+.shell-card__picker-state[data-health='unreachable'] {
+  color: var(--bad);
+}
+
 .sidebar__lane {
   margin-top: var(--space-2);
 }
@@ -5403,6 +5706,12 @@ body {
   border-color: var(--attention);
   color: var(--attention);
 }
+.composer__attach-button:disabled {
+  border-color: var(--hairline);
+  color: var(--muted);
+  cursor: not-allowed;
+  opacity: 0.6;
+}
 .composer__attach-menu {
   position: absolute;
   bottom: calc(100% + 0.4rem);
@@ -5430,6 +5739,11 @@ body {
 }
 .composer__hint {
   color: var(--muted);
+  font-size: 0.78rem;
+}
+.composer__notice {
+  margin: 0;
+  color: var(--attention);
   font-size: 0.78rem;
 }
 .composer__chips {
@@ -5469,6 +5783,48 @@ body {
 }
 .composer__chip button:hover {
   color: var(--text);
+}
+
+/* Upload lifecycle affordances (remote connections): same chip language. */
+.composer__chip[data-state='uploading'] {
+  opacity: 0.7;
+}
+
+.composer__chip[data-state='failed'] {
+  border-color: var(--bad);
+  flex-wrap: wrap;
+}
+
+.composer__chip-state {
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.composer__chip-badge {
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-style: normal;
+  border: 1px solid var(--hairline);
+  border-radius: 999px;
+  padding: 0 0.4rem;
+}
+
+/* Failure remediation is actionable copy: wrap it onto its own row so the
+   full message stays readable instead of being ellipsized mid-sentence. */
+.composer__chip-message {
+  flex-basis: 100%;
+  max-width: 22rem;
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
+  color: var(--bad);
+}
+
+/* The blocked-submit explanation that replaces an enabled Launch/Create. */
+.creation-wizard__blocking-note {
+  color: var(--muted);
+  font-size: 0.82rem;
+  max-width: 22rem;
 }
 .composer__mentions {
   z-index: 30;
@@ -7640,6 +7996,7 @@ body {
 
 .changes-manifest__repository-bar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: var(--space-3);
@@ -7647,6 +8004,19 @@ body {
   padding: var(--space-2) var(--space-5);
   border-bottom: 1px solid var(--hairline);
   background: color-mix(in srgb, var(--raised) 88%, var(--content));
+}
+
+/* Copy-path confirmation/error lines drop below the reveal/copy control. */
+.changes-manifest__repository-bar > .completion-workspace__notice,
+.changes-manifest__repository-bar > .completion-workspace__error {
+  flex-basis: 100%;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.completion-workspace__notice {
+  color: var(--muted);
+  font: 500 12px var(--bench-font-text);
 }
 
 .changes-manifest__repository-bar > div:first-child {
@@ -8823,6 +9193,19 @@ body {
   font: 500 0.75rem/1.4 var(--bench-font-text);
 }
 
+/* Remote servers get a typed path in place of the native picker. */
+.settings-panel__path-entry {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+  max-width: 32rem;
+}
+
+.settings-panel__path-entry .form-field {
+  align-self: stretch;
+}
+
 .settings-panel__button-row {
   display: flex;
   flex-wrap: wrap;
@@ -9047,6 +9430,120 @@ body {
 }
 
 .settings-panel__provider-empty {
+  color: var(--muted);
+  font: 400 0.8125rem/1.4 var(--bench-font-text);
+}
+
+/* Servers pane: one card per known server, same vocabulary as the provider
+ * rows — hairline card, small text buttons, a tinted kind badge. */
+.settings-panel__server-add {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-bottom: var(--space-4);
+  padding: var(--space-3);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+}
+
+.settings-panel__servers {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.settings-panel__server {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-3);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+}
+
+.settings-panel__server[data-current='true'] {
+  border-color: var(--accent);
+}
+
+.settings-panel__server-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.settings-panel__server-name {
+  font: 600 0.875rem/1.3 var(--bench-font-text);
+}
+
+.settings-panel__server-kind {
+  flex-shrink: 0;
+  font: 500 0.6875rem/1.2 var(--bench-font-text);
+  padding: 2px var(--space-2);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  color: var(--muted);
+}
+
+.settings-panel__server-kind[data-kind='remote'] {
+  color: var(--accent);
+  border-color: transparent;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.settings-panel__server-status {
+  flex-shrink: 0;
+  color: var(--muted);
+  font: 400 0.6875rem/1.2 var(--bench-font-text);
+}
+
+.settings-panel__server-endpoint {
+  color: var(--muted);
+  font: 400 0.75rem/1.3 var(--bench-font-mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-panel__server-last-seen {
+  color: var(--muted);
+  font: 400 0.6875rem/1.2 var(--bench-font-text);
+}
+
+.settings-panel__server-inline-edit {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex: 1 1 auto;
+}
+
+.settings-panel__server-nickname-input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.settings-panel__server-details {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: var(--space-1) var(--space-3);
+  margin: var(--space-1) 0 0;
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--hairline);
+  font: 400 0.75rem/1.4 var(--bench-font-text);
+}
+
+.settings-panel__server-details dt {
+  color: var(--muted);
+}
+
+.settings-panel__server-details dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.settings-panel__server-empty {
   color: var(--muted);
   font: 400 0.8125rem/1.4 var(--bench-font-text);
 }

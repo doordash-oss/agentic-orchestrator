@@ -929,15 +929,30 @@ func (e ExecuteRecoveryActionsParamsXAgenticoClient) Valid() bool {
 	}
 }
 
+// Defines values for StageUploadParamsXAgenticoClient.
+const (
+	StageUploadParamsXAgenticoClientLocal StageUploadParamsXAgenticoClient = "local"
+)
+
+// Valid indicates whether the value is a known member of the StageUploadParamsXAgenticoClient enum.
+func (e StageUploadParamsXAgenticoClient) Valid() bool {
+	switch e {
+	case StageUploadParamsXAgenticoClientLocal:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for InitWorkspaceRepositoryParamsXAgenticoClient.
 const (
-	InitWorkspaceRepositoryParamsXAgenticoClientLocal InitWorkspaceRepositoryParamsXAgenticoClient = "local"
+	Local InitWorkspaceRepositoryParamsXAgenticoClient = "local"
 )
 
 // Valid indicates whether the value is a known member of the InitWorkspaceRepositoryParamsXAgenticoClient enum.
 func (e InitWorkspaceRepositoryParamsXAgenticoClient) Valid() bool {
 	switch e {
-	case InitWorkspaceRepositoryParamsXAgenticoClientLocal:
+	case Local:
 		return true
 	default:
 		return false
@@ -1298,19 +1313,21 @@ type Cost struct {
 
 // CreateFeatureMutationRequest defines model for CreateFeatureMutationRequest.
 type CreateFeatureMutationRequest struct {
-	Attachments      []string                                `json:"attachments,omitempty"`
-	Checkpoints      Checkpoints                             `json:"checkpoints,omitempty"`
-	Description      string                                  `json:"description,omitempty"`
-	ExitCriteria     string                                  `json:"exit_criteria,omitempty"`
-	IdempotencyKey   string                                  `json:"idempotency_key,omitempty"`
-	Images           []string                                `json:"images,omitempty"`
-	Inquireness      CreateFeatureMutationRequestInquireness `json:"inquireness,omitempty"`
-	Models           ModelDefaults                           `json:"models,omitempty"`
-	Name             string                                  `json:"name"`
-	Pipeline         CreateFeatureMutationRequestPipeline    `json:"pipeline,omitempty"`
-	Repos            []string                                `json:"repos,omitempty"`
-	RiskLevel        CreateFeatureMutationRequestRiskLevel   `json:"risk_level,omitempty"`
-	UseCurrentBranch bool                                    `json:"use_current_branch,omitempty"`
+	AttachmentUploads []string                                `json:"attachment_uploads,omitempty"`
+	Attachments       []string                                `json:"attachments,omitempty"`
+	Checkpoints       Checkpoints                             `json:"checkpoints,omitempty"`
+	Description       string                                  `json:"description,omitempty"`
+	ExitCriteria      string                                  `json:"exit_criteria,omitempty"`
+	IdempotencyKey    string                                  `json:"idempotency_key,omitempty"`
+	ImageUploads      []string                                `json:"image_uploads,omitempty"`
+	Images            []string                                `json:"images,omitempty"`
+	Inquireness       CreateFeatureMutationRequestInquireness `json:"inquireness,omitempty"`
+	Models            ModelDefaults                           `json:"models,omitempty"`
+	Name              string                                  `json:"name"`
+	Pipeline          CreateFeatureMutationRequestPipeline    `json:"pipeline,omitempty"`
+	Repos             []string                                `json:"repos,omitempty"`
+	RiskLevel         CreateFeatureMutationRequestRiskLevel   `json:"risk_level,omitempty"`
+	UseCurrentBranch  bool                                    `json:"use_current_branch,omitempty"`
 }
 
 // CreateFeatureMutationRequestInquireness defines model for CreateFeatureMutationRequest.Inquireness.
@@ -1616,6 +1633,7 @@ type HealthResponse struct {
 	Compatibility CompatibilityDeclaration `json:"compatibility"`
 	LaunchPolicy  LaunchPolicy             `json:"launch_policy"`
 	Meta          ResponseMeta             `json:"meta,omitempty"`
+	Name          string                   `json:"name,omitempty"`
 	Owner         Owner                    `json:"owner"`
 	Runtime       RuntimeIdentity          `json:"runtime"`
 	ServerTime    time.Time                `json:"server_time"`
@@ -1968,17 +1986,19 @@ type RecoverySnapshotResponse struct {
 
 // RefactorFeatureRequest defines model for RefactorFeatureRequest.
 type RefactorFeatureRequest struct {
-	Attachments  []string                `json:"attachments,omitempty"`
-	Checkpoints  feature.Checkpoints     `json:"checkpoints,omitempty"`
-	Description  string                  `json:"description,omitempty"`
-	Effort       EffortConfig            `json:"effort,omitempty"`
-	ExitCriteria string                  `json:"exit_criteria,omitempty"`
-	Images       []string                `json:"images,omitempty"`
-	Inquireness  feature.Inquireness     `json:"inquireness,omitempty"`
-	Models       ModelDefaults           `json:"models,omitempty"`
-	Name         string                  `json:"name"`
-	Pipeline     feature.PipelineProfile `json:"pipeline,omitempty"`
-	RiskLevel    feature.RiskLevel       `json:"risk_level,omitempty"`
+	AttachmentUploads []string                `json:"attachment_uploads,omitempty"`
+	Attachments       []string                `json:"attachments,omitempty"`
+	Checkpoints       feature.Checkpoints     `json:"checkpoints,omitempty"`
+	Description       string                  `json:"description,omitempty"`
+	Effort            EffortConfig            `json:"effort,omitempty"`
+	ExitCriteria      string                  `json:"exit_criteria,omitempty"`
+	ImageUploads      []string                `json:"image_uploads,omitempty"`
+	Images            []string                `json:"images,omitempty"`
+	Inquireness       feature.Inquireness     `json:"inquireness,omitempty"`
+	Models            ModelDefaults           `json:"models,omitempty"`
+	Name              string                  `json:"name"`
+	Pipeline          feature.PipelineProfile `json:"pipeline,omitempty"`
+	RiskLevel         feature.RiskLevel       `json:"risk_level,omitempty"`
 }
 
 // RefactorFeatureResponse defines model for RefactorFeatureResponse.
@@ -2678,6 +2698,15 @@ type SetupTask struct {
 	UseCurrentBranch bool       `json:"use_current_branch,omitempty"`
 }
 
+// StageUploadResponse defines model for StageUploadResponse.
+type StageUploadResponse struct {
+	APIVersion string `json:"api_version"`
+	Kind       string `json:"kind"`
+	Name       string `json:"name"`
+	Reference  string `json:"reference"`
+	Size       int64  `json:"size"`
+}
+
 // Task defines model for Task.
 type Task struct {
 	Description  string `json:"description,omitempty"`
@@ -3193,6 +3222,21 @@ type GetSessionTranscriptParams struct {
 	Offset int64 `form:"offset,omitempty" json:"offset,omitempty"`
 	Limit  Limit `form:"limit,omitempty" json:"limit,omitempty"`
 }
+
+// StageUploadParams defines parameters for StageUpload.
+type StageUploadParams struct {
+	// Kind Staged upload kind: image or attachment.
+	Kind string `form:"kind" json:"kind"`
+
+	// Name Original client-side file name, retained as metadata only.
+	Name string `form:"name" json:"name"`
+
+	// XAgenticoClient CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required.
+	XAgenticoClient StageUploadParamsXAgenticoClient `json:"X-Agentico-Client"`
+}
+
+// StageUploadParamsXAgenticoClient defines parameters for StageUpload.
+type StageUploadParamsXAgenticoClient string
 
 // InitWorkspaceRepositoryParams defines parameters for InitWorkspaceRepository.
 type InitWorkspaceRepositoryParams struct {

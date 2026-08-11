@@ -161,6 +161,68 @@ describe('SessionService singleton chat mutations', () => {
       safe: { code: 'E_SCHEMA_MISMATCH' },
     });
   });
+
+  it('refuses staged local image paths while remotely connected (fail, never leak)', async () => {
+    const apiRequest = vi.fn(() =>
+      Promise.resolve({
+        status: 200,
+        body: { api_version: 'v1', session_id: '__chat__', result: 'started' },
+      }),
+    );
+    const service = new SessionService(transport({ apiRequest }), undefined, () => 'remote');
+
+    await expect(
+      service.startChat({ message: 'What is running?', images: ['/tmp/clipboard.png'] }),
+    ).rejects.toMatchObject({ safe: { code: 'E_REQUIRES_LOCAL_SERVER' } });
+    expect(apiRequest).not.toHaveBeenCalled();
+  });
+
+  it('forwards staged upload references remotely as image_uploads', async () => {
+    const apiRequest = vi.fn(() =>
+      Promise.resolve({
+        status: 200,
+        body: { api_version: 'v1', session_id: '__chat__', result: 'started' },
+      }),
+    );
+    const service = new SessionService(transport({ apiRequest }), undefined, () => 'remote');
+
+    await service.startChat({ message: 'Look at this', imageUploads: ['ref-image-1'] });
+    expect(apiRequest).toHaveBeenCalledWith('/api/v1/prompts/chat/start', {
+      method: 'POST',
+      body: { message: 'Look at this', images: [], image_uploads: ['ref-image-1'] },
+    });
+  });
+
+  it('sends chat images unchanged while locally connected', async () => {
+    const apiRequest = vi.fn(() =>
+      Promise.resolve({
+        status: 200,
+        body: { api_version: 'v1', session_id: '__chat__', result: 'started' },
+      }),
+    );
+    const service = new SessionService(transport({ apiRequest }), undefined, () => 'local');
+
+    await service.startChat({ message: 'here', images: ['/tmp/clipboard.png'] });
+    expect(apiRequest).toHaveBeenCalledWith('/api/v1/prompts/chat/start', {
+      method: 'POST',
+      body: { message: 'here', images: ['/tmp/clipboard.png'] },
+    });
+  });
+
+  it('never emits image_uploads locally', async () => {
+    const apiRequest = vi.fn(() =>
+      Promise.resolve({
+        status: 200,
+        body: { api_version: 'v1', session_id: '__chat__', result: 'started' },
+      }),
+    );
+    const service = new SessionService(transport({ apiRequest }), undefined, () => 'local');
+    await service.startChat({ message: 'no images' });
+    expect(apiRequest).toHaveBeenCalledWith('/api/v1/prompts/chat/start', {
+      method: 'POST',
+      body: { message: 'no images', images: [] },
+    });
+  });
 });
 
 describe('SessionService output subscriptions', () => {

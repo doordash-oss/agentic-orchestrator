@@ -143,8 +143,13 @@ test('partial setup failure, retry on the same feature, restart persistence', as
     expect(restored.id).toBe(featureId);
     expect(restored.setup?.status).toBe('done');
     expect(restored.setup?.attempt).toBe(2);
-    const settings = await handle.page.evaluate(() => window.agentico.getSettings());
-    expect(settings.shell.activeFeatureId).toBe(featureId);
+    const [settings, restoredState] = await handle.page.evaluate(() =>
+      Promise.all([window.agentico.getSettings(), window.agentico.getConnectionStatus()]),
+    );
+    const restoredKey = restoredState.serverKey ?? null;
+    expect(
+      restoredKey === null ? null : (settings.shell.featureByServer[restoredKey] ?? null),
+    ).toBe(featureId);
     transcript.json('restored shell prefs (identity only)', settings.shell);
     transcript.step(
       'relaunch restored the selected feature and reloaded the authoritative Ready-to-start state from the server',

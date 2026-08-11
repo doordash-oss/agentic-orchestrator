@@ -1259,6 +1259,7 @@ function CompletionScene({ scene }: { scene: string }): React.ReactElement {
         getRepositoryDiff={getRepositoryDiff}
         openExternal={openExternal}
         revealPath={revealPath}
+        copyText={(text) => api.writeClipboardText(text)}
       />
     </div>
   );

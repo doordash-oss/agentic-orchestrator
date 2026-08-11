@@ -1,10 +1,19 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { ConnectionState } from '../../../shared/ipc';
 import { creationDefaults, installAgenticoMock, readySnapshot } from '../test/agenticoMock';
 import { CreateFeatureForm } from './CreateFeatureForm';
 
 afterEach(cleanup);
+
+const READY_REMOTE: ConnectionState = {
+  status: 'ready',
+  stage: 'ready',
+  detail: 'Runtime ready.',
+  ownership: 'external',
+  kind: 'remote',
+};
 
 async function renderForm(mock = installAgenticoMock()) {
   const onCreated = vi.fn();
@@ -596,5 +605,164 @@ describe('the creation sheet across its four steps', () => {
     await user.keyboard('{Escape}');
     expect(screen.queryByRole('dialog', { name: 'Discard feature draft' })).toBeNull();
     expect(onClose).not.toHaveBeenCalled();
+  });
+});
+
+describe('the creation sheet on a remote server', () => {
+  it('swaps the folder browse for server-validated typed path entry', async () => {
+    const mock = installAgenticoMock({
+      connection: READY_REMOTE,
+      defaults: creationDefaults({ repositories: [] }),
+    });
+    mock.api.addWorkspaceRoot.mockResolvedValue(
+      readySnapshot({
+        workspaceRoots: [{ path: '/srv/work/solo', valid: true }],
+        repositories: [{ name: 'solo', path: '/srv/work/solo', valid: true }],
+      }),
+    );
+    const { user } = await renderForm(mock);
+
+    // The native dialog is gone: only the server can see its own folders.
+    expect(screen.queryByRole('button', { name: 'Browse for folder' })).toBeNull();
+    const field = screen.getByLabelText('Folder path on the server');
+    expect(screen.getByText(/validated on the server host/)).toBeVisible();
+
+    // A non-absolute entry is refused before the server is ever asked.
+    await user.type(field, 'srv/work/solo');
+    await user.click(screen.getByRole('button', { name: 'Use this path' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(/starting with \//);
+    expect(mock.api.pickWorkspaceDirectory).not.toHaveBeenCalled();
+    expect(mock.api.addWorkspaceRoot).not.toHaveBeenCalled();
+
+    // The server's rejection stays beside the field and names the bad path.
+    await user.clear(field);
+    await user.type(field, '/srv/work/solo');
+    await user.click(screen.getByRole('button', { name: 'Use this path' }));
+    mock.api.addWorkspaceRoot.mockRejectedValueOnce(
+      new Error('invalid_workspace_root: /srv/work/solo does not exist on this server'),
+    );
+    await user.click(screen.getByRole('button', { name: 'Use this folder' }));
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('/srv/work/solo does not exist on this server');
+
+    // A valid path saves and the discovered repository selects itself.
+    await user.click(screen.getByRole('button', { name: 'Use this folder' }));
+    expect(mock.api.addWorkspaceRoot).toHaveBeenLastCalledWith('/srv/work/solo');
+    expect(await screen.findByRole('checkbox', { name: /solo/ })).toBeChecked();
+    expect(screen.getByText('Added solo and selected it.')).toBeVisible();
+    await user.click(screen.getByRole('button', { name: 'Next: Describe' }));
+    expect(screen.getByRole('heading', { name: 'Define the work' })).toBeVisible();
+  });
+
+  it('initializes a typed folder as a repository with server errors surfaced inline', async () => {
+    const mock = installAgenticoMock({
+      connection: READY_REMOTE,
+      defaults: creationDefaults({ repositories: [] }),
+    });
+    mock.api.addWorkspaceRoot.mockResolvedValue(
+      readySnapshot({ workspaceRoots: [{ path: '/srv/work/fresh', valid: true }] }),
+    );
+    mock.api.removeWorkspaceRoot.mockResolvedValue(
+      readySnapshot({
+        workspaceRoots: [{ path: '/srv/work/fresh', valid: true }],
+        repositories: [{ name: 'fresh', path: '/srv/work/fresh', valid: true }],
+      }),
+    );
+    mock.api.initRepository
+      .mockRejectedValueOnce(
+        new Error('directory_not_empty: the directory contains files. Empty it or pick another.'),
+      )
+      .mockResolvedValue(
+        readySnapshot({
+          workspaceRoots: [{ path: '/srv/work/fresh', valid: true }],
+          repositories: [{ name: 'fresh', path: '/srv/work/fresh', valid: true }],
+        }),
+      );
+    const { user } = await renderForm(mock);
+
+    await user.type(screen.getByLabelText('Folder path on the server'), '/srv/work/fresh');
+    await user.click(screen.getByRole('button', { name: 'Use this path' }));
+    await user.click(screen.getByRole('button', { name: 'Use this folder' }));
+    expect(await screen.findByText(/holds no git repository yet/i)).toBeVisible();
+    expect(screen.getByText(/or type a different folder/)).toBeVisible();
+
+    await user.click(screen.getByRole('button', { name: /Initialize it as a repository/ }));
+    await user.click(screen.getByRole('button', { name: 'Initialize repository' }));
+
+    // The transient parent root dance is unchanged remotely; the server's
+    // rejection stays next to the typed path, recoverable in place.
+    expect(mock.api.addWorkspaceRoot).toHaveBeenCalledWith('/srv/work');
+    expect(mock.api.initRepository).toHaveBeenCalledWith({
+      path: '/srv/work/fresh',
+      consent: true,
+    });
+    expect(await screen.findByRole('alert')).toHaveTextContent('the directory contains files');
+
+    await user.click(screen.getByRole('button', { name: /Initialize it as a repository/ }));
+    await user.click(screen.getByRole('button', { name: 'Initialize repository' }));
+    expect(await screen.findByRole('checkbox', { name: /fresh/ })).toBeChecked();
+  });
+
+  it('stages picked files as uploads and submits references, never local paths', async () => {
+    const mock = installAgenticoMock({
+      connection: { ...READY_REMOTE, serverKey: 'server-key-1' },
+    });
+    mock.api.pickCreationFiles.mockImplementation((kind: string) =>
+      Promise.resolve({ paths: kind === 'image' ? ['/safe/one.png'] : ['/safe/spec.pdf'] }),
+    );
+    mock.api.createFeature.mockResolvedValue({ featureId: 'abcd1234ef567890' });
+    const { user } = await renderForm(mock);
+    await reachContract(user);
+
+    // Attachment staging happens on Describe; jump back to attach.
+    await user.click(screen.getByRole('button', { name: /Describe/ }));
+    await user.click(screen.getByRole('button', { name: 'Attach files or photos' }));
+    await user.click(screen.getByRole('menuitem', { name: 'Add photos' }));
+    await user.click(screen.getByRole('button', { name: 'Attach files or photos' }));
+    await user.click(screen.getByRole('menuitem', { name: 'Add files' }));
+    expect(mock.api.uploadCreationFiles).toHaveBeenCalledWith('image', ['/safe/one.png']);
+    expect(mock.api.uploadCreationFiles).toHaveBeenCalledWith('attachment', ['/safe/spec.pdf']);
+    expect(await screen.findByText(/one\.png/)).toBeVisible();
+
+    // The rail only navigates backward; return forward via the step buttons.
+    await user.click(screen.getByRole('button', { name: 'Next: Depth' }));
+    await user.click(screen.getByRole('button', { name: 'Next: Contract' }));
+    await user.click(screen.getByRole('button', { name: 'Create and start' }));
+
+    await waitFor(() => expect(mock.api.createFeature).toHaveBeenCalled());
+    const input = mock.api.createFeature.mock.calls[0]?.[0];
+    expect(input.imageUploads).toEqual(['ref-onepng']);
+    expect(input.attachmentUploads).toEqual(['ref-specpdf']);
+    expect(JSON.stringify(input)).not.toContain('/safe/');
+  });
+
+  it('blocks creation while a staged upload belongs to another server, until removed', async () => {
+    const mock = installAgenticoMock({
+      connection: { ...READY_REMOTE, serverKey: 'server-key-1' },
+    });
+    mock.api.pickCreationFiles.mockResolvedValue({ paths: ['/safe/one.png'] });
+    const { user } = await renderForm(mock);
+    await reachContract(user);
+
+    await user.click(screen.getByRole('button', { name: /Describe/ }));
+    await user.click(screen.getByRole('button', { name: 'Attach files or photos' }));
+    await user.click(screen.getByRole('menuitem', { name: 'Add photos' }));
+    expect(await screen.findByText(/one\.png/)).toBeVisible();
+
+    // Switching to another remote identity orphans the staged upload.
+    fireEvent(window, new Event('noop'));
+    mock.emitConnection({ ...READY_REMOTE, serverKey: 'server-key-2' });
+    await screen.findByText('Staged on another server');
+
+    await user.click(screen.getByRole('button', { name: 'Next: Depth' }));
+    await user.click(screen.getByRole('button', { name: 'Next: Contract' }));
+    const submit = screen.getByRole('button', { name: 'Create and start' });
+    expect(submit).toBeDisabled();
+
+    await user.click(screen.getByRole('button', { name: /Describe/ }));
+    await user.click(screen.getByRole('button', { name: 'Remove one.png' }));
+    await user.click(screen.getByRole('button', { name: 'Next: Depth' }));
+    await user.click(screen.getByRole('button', { name: 'Next: Contract' }));
+    expect(screen.getByRole('button', { name: 'Create and start' })).toBeEnabled();
   });
 });

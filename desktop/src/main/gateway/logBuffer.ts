@@ -45,6 +45,16 @@ export class RedactedLogBuffer {
     }
   }
 
+  /**
+   * Scrubs one string against registered secrets (plus generic token/path
+   * redaction) without retaining it. Used by server-boundary consumers that
+   * ingest server-controlled text (e.g. health-payload display names) into
+   * places the log buffer never sees: IPC state and settings.
+   */
+  scrub(line: string): string {
+    return this.redact(line);
+  }
+
   /** The redacted retained lines, oldest first. */
   snapshot(): string[] {
     const snapshot = [...this.lines];

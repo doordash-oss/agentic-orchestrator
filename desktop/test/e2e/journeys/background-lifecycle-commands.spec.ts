@@ -533,6 +533,19 @@ async function forceNextStopFailure(handle: AppHandle, count: number): Promise<v
 
 async function closeMainWindowAndReactivate(handle: AppHandle): Promise<void> {
   const previousId = handle.mainWebContentsId;
+  // A named server introduces itself by name in the footer status; a
+  // name-less (older) server keeps the generic ready label. Reactivation
+  // reconnects to the same app-owned server, so the label is captured here
+  // where the connection is known to be ready rather than racing the new
+  // window's first state push.
+  // While connected, the sidebar footer's runtime pill *is* the server
+  // control, so readiness is asserted on the switcher button rather than a
+  // passive status element. A name-less (older) server keeps the generic
+  // ready label. Reactivation reconnects to the same app-owned server, so
+  // the label is captured here where the connection is known to be ready
+  // rather than racing the new window's first state push.
+  const beforeClose = await handle.page.evaluate(() => window.agentico.getConnectionStatus());
+  const readyLabel: string = beforeClose.serverName ?? 'Runtime ready';
   const close = await handle.app.evaluate(async ({ BrowserWindow, dialog }, mainId) => {
     const window = BrowserWindow.getAllWindows().find(
       (candidate) => candidate.webContents.id === mainId,
@@ -567,7 +580,7 @@ async function closeMainWindowAndReactivate(handle: AppHandle): Promise<void> {
   await handle.app.evaluate(({ app }) => app.emit('activate'));
   const page = await appeared;
   page.setDefaultTimeout(Number(process.env['AGENTICO_E2E_ACTION_TIMEOUT'] ?? 60_000));
-  await expect(page.getByRole('status').filter({ hasText: 'Runtime ready' })).toBeVisible({
+  await expect(page.getByRole('button', { name: `${readyLabel} — switch server` })).toBeVisible({
     timeout: 60_000,
   });
   const mainWebContentsId = await handle.app.evaluate(({ BrowserWindow }) => {

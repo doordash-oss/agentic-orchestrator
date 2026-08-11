@@ -474,6 +474,8 @@ func topLevelPatternForPath(path string) string {
 		return apiPathRecoveryLogs
 	case path == apiPathEvents:
 		return apiPathEvents
+	case path == apiPathUploads:
+		return apiPathUploads
 	default:
 		return path
 	}
@@ -551,6 +553,7 @@ func documentedServerRoutes() []documentedRoute {
 		{method: httpMethodPost, path: apiPathRecoveryActions, mutation: true},
 		{method: httpMethodGet, path: apiPathRecoveryLogs},
 		{method: httpMethodGet, path: apiPathEvents, sse: true},
+		{method: httpMethodPost, path: apiPathUploads, mutation: true},
 	}
 }
 

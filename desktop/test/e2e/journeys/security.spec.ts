@@ -151,6 +151,7 @@ test('packaged security posture: no token in the renderer, locked-down window, c
       'notifications',
       'runtime',
       'schemaVersion',
+      'servers',
       'settingsWindow',
       'shell',
       'theme',

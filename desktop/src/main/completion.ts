@@ -7,7 +7,8 @@
  */
 import { realpath, stat } from 'node:fs/promises';
 import path from 'node:path';
-import { shell } from 'electron';
+import { clipboard, shell } from 'electron';
+import { z } from 'zod';
 import { redactText } from '../shared/errors';
 import {
   validateWithSchema,
@@ -30,6 +31,7 @@ import {
   type OpenExternalRequest,
   type RevealPathRequest,
 } from '../shared/ipc';
+import { alwaysLocal, type LocalitySource } from './locality';
 
 const COMPLETION_REMEDIES: Readonly<Record<string, string>> = {
   not_found: 'The feature no longer exists on the server. Close its tab.',
@@ -37,12 +39,28 @@ const COMPLETION_REMEDIES: Readonly<Record<string, string>> = {
   conflict: 'The server state has changed. Refresh the completion preview.',
 };
 
+export interface RevealPathOutcome {
+  ok: boolean;
+  /** Server-reported absolute path; present when it can be copied (remote). */
+  path?: string;
+}
+
 export interface CompletionServiceDeps {
   transport: ServerTransport;
+  /**
+   * Gateway-owned locality of the active connection. While remote, the
+   * reveal service skips local realpath/stat validation (the path is not on
+   * this filesystem) and returns the server-reported path for copy use.
+   */
+  locality?: LocalitySource;
 }
 
 export class CompletionService {
-  constructor(private readonly deps: CompletionServiceDeps) {}
+  private readonly locality: LocalitySource;
+
+  constructor(private readonly deps: CompletionServiceDeps) {
+    this.locality = deps.locality ?? alwaysLocal;
+  }
 
   async preflightCompletion(
     request: CompletionPreflightRequest,
@@ -124,11 +142,28 @@ export class CompletionService {
     return { ok: opened };
   }
 
-  async revealPath(request: RevealPathRequest): Promise<{ ok: boolean }> {
+  /**
+   * The renderer never holds a Chromium clipboard permission (security.ts's
+   * deny-all policy), so the remote Copy Path affordance writes through the
+   * main-process clipboard. Bounded text only; what the renderer cannot
+   * write is anything but the string itself.
+   */
+  writeClipboardText(text: unknown): Promise<{ ok: boolean }> {
+    const value = validateWithSchema(text, z.string().min(1).max(4096));
+    clipboard.writeText(value);
+    return Promise.resolve({ ok: true });
+  }
+
+  async revealPath(request: RevealPathRequest): Promise<RevealPathOutcome> {
     const { featureId, repo } = validateWithSchema(request, RevealPathRequestSchema);
     const worktreePath = await this.resolveWorktreePath(featureId, repo);
     if (!worktreePath) {
       return { ok: false };
+    }
+    if (this.locality() === 'remote') {
+      // The path lives on the server's host: never open or validate it
+      // locally — hand it back so the renderer can offer Copy Path.
+      return { ok: true, path: worktreePath };
     }
     const result = await shell.openPath(worktreePath);
     return { ok: result === '' };
@@ -148,6 +183,12 @@ export class CompletionService {
     }
     if (!path.isAbsolute(response.path) || response.path.includes('\0')) {
       return null;
+    }
+    if (this.locality() === 'remote') {
+      // Remote servers report paths on their own host; local realpath/stat
+      // validation would falsely reject (or worse, resolve a same-named
+      // local directory). Trust the server identity check above only.
+      return response.path;
     }
     try {
       const real = await realpath(response.path);

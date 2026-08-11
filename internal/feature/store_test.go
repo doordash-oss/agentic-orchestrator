@@ -287,6 +287,43 @@ func TestStoreList(t *testing.T) {
 	}
 }
 
+// TestStoreScansSkipRuntimeBookkeepingDirs pins that runtime-owned
+// directories beneath the state dir (provider bookkeeping, the AMA chat
+// session state, upload staging) never participate in feature listing or
+// relationship scans: they carry no feature.yaml and must not fail any
+// read. Regression coverage for the uploads staging dir breaking feature
+// detail with "classifying feature record".
+func TestStoreScansSkipRuntimeBookkeepingDirs(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
+	dir := t.TempDir()
+	store := NewStore(dir)
+
+	f1 := &Feature{ID: "feat-001", Name: "Feature 1", Slug: "feature-1", Status: StatusCreated, SchemaVersion: SchemaVersionCurrent}
+	if err := store.Save(f1); err != nil {
+		t.Fatalf("save f1: %v", err)
+	}
+	for _, name := range []string{"opencode", "codex-home", "chat", "uploads"} {
+		if err := os.MkdirAll(filepath.Join(dir, name), 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", name, err)
+		}
+	}
+
+	features, err := store.List()
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(features) != 1 {
+		t.Errorf("expected 1 feature, got %d", len(features))
+	}
+	if _, err := store.AllRelationshipChildren(); err != nil {
+		t.Fatalf("AllRelationshipChildren: %v", err)
+	}
+	if _, err := store.RelationshipChildren("feat-001"); err != nil {
+		t.Fatalf("RelationshipChildren: %v", err)
+	}
+}
+
 func TestStoreReadPathsDoNotWaitForInFlightModify(t *testing.T) {
 	const featureNameOriginal = "Original"
 

@@ -1,9 +1,18 @@
-import { useCallback, useEffect, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type ReactElement,
+} from 'react';
 import {
   CONNECTION_STAGES,
   isConnectionErrorState,
   type ConnectionStage,
   type ConnectionState,
+  type ServerChoiceCandidate,
+  type SwitchContext,
 } from '../../../shared/ipc';
 import { PhaseRailTrack } from '../features/PhaseRailRow';
 import { stepSegments } from '../features/phaseRail';
@@ -19,6 +28,23 @@ const STAGE_LABELS: Record<ConnectionStage, string> = {
 
 const SPINE_STAGES = CONNECTION_STAGES.map((id) => ({ id, label: STAGE_LABELS[id] }));
 
+/**
+ * Picker rows for registry-located locals just proved liveness in the scan,
+ * so they omit a health verdict and read "Running" as they always have;
+ * remote candidates carry the verdict of the probe run while the snapshot
+ * was assembled.
+ */
+function candidateStateLabel(candidate: ServerChoiceCandidate): string {
+  if (candidate.health === undefined) {
+    return 'Running';
+  }
+  return candidate.health === 'healthy'
+    ? 'Running'
+    : candidate.health === 'unreachable'
+      ? 'Unreachable'
+      : 'Checking…';
+}
+
 /** Every status pairs a text label with a shape cue — never color alone. */
 const STATUS_META: Record<ConnectionState['status'], { label: string; icon: string }> = {
   idle: { label: 'Idle', icon: '○' },
@@ -28,6 +54,9 @@ const STATUS_META: Record<ConnectionState['status'], { label: string; icon: stri
   launching: { label: 'Launching', icon: '◐' },
   'waiting-health': { label: 'Waiting for health', icon: '◐' },
   connecting: { label: 'Authenticating', icon: '◐' },
+  // User-decision state (not progress, not failure): the ring pauses on a
+  // choice the app cannot make for you.
+  'awaiting-server-choice': { label: 'Choose a server', icon: '◉' },
   ready: { label: 'Ready', icon: '●' },
   incompatible: { label: 'Incompatible', icon: '⊘' },
   'resources-missing': { label: 'Resources missing', icon: '✕' },
@@ -69,6 +98,134 @@ function ipcFailureState(err: unknown): ConnectionState {
   };
 }
 
+/**
+ * Attach-only, snapshot-based server picker (CommandPalette-style rows: a
+ * listbox of option buttons, wrap-around arrow navigation on a roving
+ * tabindex). No spawn affordance and no live refresh — Retry rescans.
+ */
+function ServerChoiceList({
+  candidates,
+  onChoose,
+}: {
+  candidates: readonly ServerChoiceCandidate[];
+  onChoose: (serverKey: string) => void;
+}): ReactElement {
+  const [highlight, setHighlight] = useState(0);
+  const listRef = useRef<HTMLDivElement>(null);
+
+  // Follow keyboard navigation into focus; hover-only highlight never steals it.
+  useEffect(() => {
+    const list = listRef.current;
+    if (list?.contains(document.activeElement)) {
+      list.querySelectorAll('button')[highlight]?.focus();
+    }
+  }, [highlight]);
+
+  const onKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
+    if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      setHighlight((index) => (index + 1) % candidates.length);
+    } else if (event.key === 'ArrowUp') {
+      event.preventDefault();
+      setHighlight((index) => (index + candidates.length - 1) % candidates.length);
+    } else if (event.key === 'Home') {
+      event.preventDefault();
+      setHighlight(0);
+    } else if (event.key === 'End') {
+      event.preventDefault();
+      setHighlight(candidates.length - 1);
+    }
+  };
+
+  return (
+    <div
+      className="shell-card__picker"
+      role="listbox"
+      aria-label="Running Agentico servers"
+      onKeyDown={onKeyDown}
+      ref={listRef}
+    >
+      {candidates.map((candidate, index) => {
+        const selected = index === highlight;
+        // Remote candidates have no local runtime dir to disambiguate by.
+        const location =
+          candidate.runtimeDir === undefined ? ' on a remote host' : ` at ${candidate.runtimeDir}`;
+        return (
+          <button
+            key={candidate.serverKey}
+            type="button"
+            role="option"
+            aria-selected={selected}
+            tabIndex={selected ? 0 : -1}
+            aria-label={`Connect to ${candidate.name ?? 'unnamed server'}${location}`}
+            className="shell-card__picker-row"
+            data-selected={selected}
+            onMouseEnter={() => setHighlight(index)}
+            onFocus={() => setHighlight(index)}
+            onClick={() => onChoose(candidate.serverKey)}
+          >
+            <span className="shell-card__picker-primary" aria-hidden="true">
+              {candidate.name ?? 'Unnamed server'}
+              {candidate.kind === 'remote' ? (
+                <span className="settings-panel__server-kind" data-kind="remote">
+                  Remote
+                </span>
+              ) : null}
+            </span>
+            <span className="shell-card__picker-runtime" aria-hidden="true">
+              {candidate.runtimeDir ?? ''}
+            </span>
+            <span
+              className="shell-card__picker-state"
+              data-health={candidate.health ?? 'healthy'}
+              aria-hidden="true"
+            >
+              {candidateStateLabel(candidate)}
+            </span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/**
+ * A failed switch's recovery affordances: Retry re-attempts the target,
+ * Back re-attaches the previous server. Both ride the standard attach path
+ * — there is never an automatic rollback.
+ */
+function SwitchFailureActions({
+  context,
+  onSwitch,
+}: {
+  context: SwitchContext;
+  onSwitch(serverKey: string): void;
+}): ReactElement {
+  return (
+    <>
+      <button
+        type="button"
+        className="shell-card__retry"
+        onClick={() => onSwitch(context.attempted.serverKey)}
+      >
+        Retry
+      </button>
+      {context.previous !== null ? (
+        <button
+          type="button"
+          className="shell-card__retry shell-card__retry--secondary"
+          onClick={() => {
+            const { previous } = context;
+            if (previous !== null) onSwitch(previous.serverKey);
+          }}
+        >
+          Back to {context.previous.name ?? 'previous server'}
+        </button>
+      ) : null}
+    </>
+  );
+}
+
 export function ConnectionShell() {
   const [state, setState] = useState<ConnectionState>(INITIAL_STATE);
 
@@ -82,6 +239,22 @@ export function ConnectionShell() {
   const retry = useCallback(() => {
     window.agentico
       .retryConnection()
+      .then(setState)
+      .catch((err: unknown) => setState(ipcFailureState(err)));
+  }, []);
+
+  const chooseServer = useCallback((serverKey: string) => {
+    window.agentico
+      .chooseConnectionServer({ serverKey })
+      .then(setState)
+      .catch((err: unknown) => setState(ipcFailureState(err)));
+  }, []);
+
+  // Both recovery affordances of a failed switch ride the standard attach
+  // path: Retry re-attempts the target, Back re-attaches the previous server.
+  const switchTo = useCallback((serverKey: string) => {
+    window.agentico
+      .switchConnectionServer({ serverKey })
       .then(setState)
       .catch((err: unknown) => setState(ipcFailureState(err)));
   }, []);
@@ -106,6 +279,11 @@ export function ConnectionShell() {
         {state.serverBuild !== undefined ? (
           <span className="shell-card__version shell-card__version--server">
             server {state.serverBuild.version}
+          </span>
+        ) : null}
+        {state.serverName !== undefined && state.serverName !== null ? (
+          <span className="shell-card__version shell-card__version--server">
+            {state.serverName}
           </span>
         ) : null}
       </header>
@@ -135,6 +313,10 @@ export function ConnectionShell() {
         <span className="shell-card__status-detail">{state.detail}</span>
       </p>
 
+      {state.status === 'awaiting-server-choice' ? (
+        <ServerChoiceList candidates={state.candidates} onChoose={chooseServer} />
+      ) : null}
+
       {failure !== null ? (
         <div className="shell-card__error">
           <div className="shell-card__error-head">
@@ -159,9 +341,13 @@ export function ConnectionShell() {
               )}
             </details>
           ) : null}
-          <button type="button" className="shell-card__retry" onClick={retry}>
-            Retry
-          </button>
+          {failure.status === 'error' && failure.switchContext !== undefined ? (
+            <SwitchFailureActions context={failure.switchContext} onSwitch={switchTo} />
+          ) : (
+            <button type="button" className="shell-card__retry" onClick={retry}>
+              Retry
+            </button>
+          )}
         </div>
       ) : null}
     </section>

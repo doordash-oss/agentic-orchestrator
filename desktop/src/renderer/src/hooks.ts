@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { ConnectionState, ThemeInfo, ThemePreference } from '../../shared/ipc';
+import type { ConnectionState, ServerKind, ThemeInfo, ThemePreference } from '../../shared/ipc';
 
 /** Subscribes to a media query reactively. */
 export function useMediaQuery(query: string): boolean {
@@ -58,6 +58,17 @@ export function useConnectionState(): ConnectionState {
     };
   }, []);
   return state;
+}
+
+/**
+ * The locality of the ready connection, or `null` while connecting or on a
+ * terminal failure. `null` degrades to the local behavior: only an
+ * authoritative `remote` gates local-only affordances. Reacts live to
+ * server switches through the pushed connection updates.
+ */
+export function useConnectionKind(): ServerKind | null {
+  const state = useConnectionState();
+  return state.status === 'ready' ? state.kind : null;
 }
 
 export interface ThemeState {

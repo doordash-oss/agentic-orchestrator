@@ -1,10 +1,15 @@
+import { createHash } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 import {
   ConnectionStateSchema,
   isConnectionErrorState,
+  MAX_KNOWN_SERVERS,
   type ConnectionState,
+  type KnownServer,
+  type ServersPrefs,
 } from '../../shared/ipc';
 import type { SafeError } from '../../shared/errors';
+import type { RegistryScan } from '../gateway/registry';
 import { DEFAULT_STOP_TIMEOUT_MS, type ChildExit } from '../gateway/serverProcess';
 import {
   RuntimeGateway,
@@ -13,6 +18,8 @@ import {
   type ServerChildLike,
   type SelectedRuntime,
 } from '../gateway/runtimeGateway';
+
+const EMPTY_SCAN: RegistryScan = { candidates: [], pruned: 0, rejected: [] };
 
 const SELECTED: SelectedRuntime = {
   runtimeDir: '/home/ü ser/.agentic-orchestrator',
@@ -110,6 +117,12 @@ interface Env {
   fetchCalls: Array<{ url: string; token?: string; timeoutMs: number }>;
   setDiscovery(content: string | null): void;
   alive: Set<number>;
+  /** Ordered registry scans consumed by the gateway; the last one repeats. */
+  setRegistryScans(scans: RegistryScan[]): void;
+  /** Successful-attach persistence calls, in order. */
+  attachRecords: KnownServer[];
+  /** Live view of the persisted known-servers prefs. */
+  servers(): ServersPrefs;
 }
 
 interface EnvOptions {
@@ -127,10 +140,16 @@ interface EnvOptions {
   diagnosticLines?: readonly string[];
   useDefaultTimeouts?: boolean;
   sleep?: (ms: number) => Promise<void>;
+  /** Scripted registry scans (last repeats when exhausted). Default: empty. */
+  registryScans?: RegistryScan[];
+  /** Pre-populated known-servers prefs (bounded list + last-used pointer). */
+  serversPrefs?: ServersPrefs;
 }
 
 function makeEnv(options: EnvOptions = {}): Env {
   let discovery = options.discovery ?? null;
+  let registryScans = [...(options.registryScans ?? [])];
+  let serversPrefs: ServersPrefs = options.serversPrefs ?? { known: [], lastUsed: null };
   const alive = new Set<number>([4242]);
   const health = options.health ?? { [EXTERNAL_BASE]: healthBody() };
   const readinessTokens = options.readinessTokens ?? {
@@ -201,6 +220,27 @@ function makeEnv(options: EnvOptions = {}): Env {
     sleep: options.sleep ?? (() => Promise.resolve()),
     log: (line) => env.logs.push(line),
     readDiagnosticLines: () => options.diagnosticLines ?? [],
+    scanRegistry: () => {
+      if (registryScans.length === 0) {
+        return EMPTY_SCAN;
+      }
+      const scan = registryScans[0] ?? EMPTY_SCAN;
+      if (registryScans.length > 1) {
+        registryScans.shift();
+      }
+      return scan;
+    },
+    knownServers: () => serversPrefs,
+    recordAttachedServer: (entry) => {
+      env.attachRecords.push(entry);
+      serversPrefs = {
+        known: [entry, ...serversPrefs.known.filter((k) => k.serverKey !== entry.serverKey)].slice(
+          0,
+          MAX_KNOWN_SERVERS,
+        ),
+        lastUsed: entry.serverKey,
+      };
+    },
     ...(options.now === undefined ? {} : { now: options.now }),
     timeouts: options.useDefaultTimeouts
       ? options.timeouts
@@ -224,6 +264,11 @@ function makeEnv(options: EnvOptions = {}): Env {
       discovery = content;
     },
     alive,
+    attachRecords: [],
+    setRegistryScans: (scans: RegistryScan[]) => {
+      registryScans = [...scans];
+    },
+    servers: () => serversPrefs,
   });
   // Re-run assignment for arrays captured before Object.assign.
   return env;
@@ -265,6 +310,65 @@ describe('RuntimeGateway attach', () => {
     expect(statuses).toContain('attaching');
     expect(statuses).toContain('connecting');
     expectNoTokenLeak(env);
+  });
+
+  it('attaches to a network-bound server declaring the network runtime policy', async () => {
+    const env = makeEnv({
+      discovery: JSON.stringify(discoveryRecord()),
+      health: {
+        [EXTERNAL_BASE]: healthBody({
+          compatibility: { ...compatibleDeclaration(), runtime_policy: 'network-bearer-v1' },
+        }),
+      },
+    });
+    await env.gateway.start();
+
+    const state = env.gateway.getState();
+    expect(state.status).toBe('ready');
+    expect(state.ownership).toBe('external');
+    expect(env.spawnCalls).toHaveLength(0);
+    expectNoTokenLeak(env);
+  });
+
+  it('threads a health-reported server name into the ready state without gating attach', async () => {
+    const env = makeEnv({
+      discovery: JSON.stringify(discoveryRecord({ name: 'frothy-macchiato' })),
+      health: { [EXTERNAL_BASE]: healthBody({ name: 'frothy-macchiato' }) },
+    });
+    await env.gateway.start();
+
+    const state = env.gateway.getState();
+    expect(state.status).toBe('ready');
+    expect(state.ownership).toBe('external');
+    expect(state.serverName).toBe('frothy-macchiato');
+    // The name is informational: the compatible server still attaches.
+    expect(env.spawnCalls).toHaveLength(0);
+    expectNoTokenLeak(env);
+  });
+
+  it('attaches to a name-less older server with a null display name', async () => {
+    const env = makeEnv({ discovery: JSON.stringify(discoveryRecord()) });
+    await env.gateway.start();
+
+    const state = env.gateway.getState();
+    expect(state.status).toBe('ready');
+    expect(state.serverName ?? null).toBeNull();
+    expectNoTokenLeak(env);
+  });
+
+  it('drops an oversized or malformed health name without blocking attach', async () => {
+    for (const bad of ['x'.repeat(65), 42]) {
+      const env = makeEnv({
+        discovery: JSON.stringify(discoveryRecord()),
+        health: { [EXTERNAL_BASE]: healthBody({ name: bad }) },
+      });
+      await env.gateway.start();
+
+      const state = env.gateway.getState();
+      expect(state.status).toBe('ready');
+      expect(state.serverName ?? null).toBeNull();
+      expectNoTokenLeak(env);
+    }
   });
 
   it('authenticates readiness with the discovery token kept in main-process memory', async () => {
@@ -829,6 +933,70 @@ describe('RuntimeGateway apiRequest', () => {
     expect(env.fetchCalls).toHaveLength(0);
   });
 
+  it('apiUpload rejects with E_NOT_CONNECTED before the gateway is ready', async () => {
+    const env = makeEnv();
+    await expect(
+      env.gateway.apiUpload('/api/v1/uploads?kind=image&name=a.png', new Uint8Array([1])),
+    ).rejects.toMatchObject({ safe: { code: 'E_NOT_CONNECTED' } });
+  });
+
+  it('apiUpload sends raw bytes with the bearer once ready, through the allowlisted query', async () => {
+    const env = makeEnv({ discovery: JSON.stringify(discoveryRecord()) });
+    await env.gateway.start();
+    const uploadCalls: Array<{ url: string; token: string; body: Uint8Array }> = [];
+    env.deps.fetchOctetPost = (url, options) => {
+      uploadCalls.push({ url, token: options.token, body: options.body });
+      return Promise.resolve({
+        status: 200,
+        body: { api_version: 'v1', reference: 'ref-1', kind: 'image', name: 'a.png', size: 3 },
+      });
+    };
+
+    const result = await env.gateway.apiUpload(
+      '/api/v1/uploads?kind=image&name=a.png',
+      new Uint8Array([1, 2, 3]),
+    );
+
+    expect(result.status).toBe(200);
+    expect(uploadCalls).toEqual([
+      {
+        url: `${EXTERNAL_BASE}/api/v1/uploads?kind=image&name=a.png`,
+        token: EXTERNAL_TOKEN,
+        body: new Uint8Array([1, 2, 3]),
+      },
+    ]);
+    expectNoTokenLeak(env);
+  });
+
+  it('apiUpload fails closed on malformed or missing upload query parameters', async () => {
+    const env = makeEnv({ discovery: JSON.stringify(discoveryRecord()) });
+    await env.gateway.start();
+    env.deps.fetchOctetPost = () => Promise.resolve({ status: 200, body: {} });
+
+    for (const path of [
+      '/api/v1/uploads',
+      '/api/v1/uploads?kind=image',
+      '/api/v1/uploads?kind=document&name=a.png',
+      '/api/v1/uploads?kind=image&name=a.png&extra=1',
+      '/api/v1/uploads?kind=image&name=',
+      '/api/v1/uploads?kind=image&kind=image&name=a.png',
+      '/api/v1/uploads/../uploads?kind=image&name=a.png',
+    ]) {
+      await expect(env.gateway.apiUpload(path, new Uint8Array([1]))).rejects.toMatchObject({
+        safe: { code: 'E_BAD_API_PATH' },
+      });
+    }
+  });
+
+  it('apiUpload fails closed when the build wires no upload transport', async () => {
+    const env = makeEnv({ discovery: JSON.stringify(discoveryRecord()) });
+    await env.gateway.start();
+
+    await expect(
+      env.gateway.apiUpload('/api/v1/uploads?kind=image&name=a.png', new Uint8Array([1])),
+    ).rejects.toMatchObject({ safe: { code: 'E_UPLOAD_UNAVAILABLE' } });
+  });
+
   it('sends authenticated requests to the attached runtime once ready', async () => {
     const env = makeEnv({ discovery: JSON.stringify(discoveryRecord()) });
     await env.gateway.start();
@@ -1011,5 +1179,774 @@ describe('RuntimeGateway openEventStream', () => {
     await expect(env.gateway.openEventStream()).rejects.toMatchObject({
       safe: { code: 'E_NOT_CONNECTED' },
     });
+  });
+});
+
+// --- Registry-first startup selection ------------------------------------------
+
+const ALPHA_RUNTIME_DIR = '/home/ü ser/.agentic-orchestrator';
+const BETA_RUNTIME_DIR = '/srv/runtimes/beta';
+const ALPHA_BASE = 'http://127.0.0.1:51001';
+const BETA_BASE = 'http://127.0.0.1:51002';
+const ALPHA_TOKEN = 'tok-alpha-secret-aaa';
+const BETA_TOKEN = 'tok-beta-secret-bbb';
+
+function registryCandidate(options: {
+  runtimeDir: string;
+  baseUrl: string;
+  token: string;
+  name?: string;
+  pid?: number;
+}): {
+  serverKey: string;
+  runtimeDir: string;
+  record: RegistryScan['candidates'][number]['record'];
+} {
+  const runtimeDir = options.runtimeDir;
+  return {
+    serverKey: serverKeyFor(runtimeDir),
+    runtimeDir,
+    record: {
+      schema_version: 1,
+      api_version: 'v1',
+      base_url: options.baseUrl,
+      auth_token: options.token,
+      ...(options.name === undefined ? {} : { name: options.name }),
+      runtime: {
+        runtime_dir: runtimeDir,
+        state_dir: `${runtimeDir}/features`,
+        config_path: `${runtimeDir}/config.yaml`,
+      },
+      pid: options.pid ?? 4242,
+    },
+  };
+}
+
+function serverKeyFor(runtimeDir: string): string {
+  // The scanner owns key derivation; tests compute it the same way the
+  // candidate construction in the gateway expects.
+  return createHash('sha256').update(runtimeDir).digest('hex').slice(0, 32);
+}
+
+function healthFor(runtimeDir: string, name?: string): Record<string, unknown> {
+  return healthBody({
+    runtime: {
+      runtime_dir: runtimeDir,
+      state_dir: `${runtimeDir}/features`,
+      config_path: `${runtimeDir}/config.yaml`,
+    },
+    ...(name === undefined ? {} : { name }),
+  });
+}
+
+/** Two-registry-server world: alpha and beta, both healthy and attachable. */
+function makeMultiServerEnv(options: EnvOptions = {}): Env {
+  return makeEnv({
+    health: {
+      [ALPHA_BASE]: healthFor(ALPHA_RUNTIME_DIR, 'alpha'),
+      [BETA_BASE]: healthFor(BETA_RUNTIME_DIR, 'beta'),
+      [LAUNCH_BASE]: healthBody({
+        owner: { pid: 777, started_at: '2026-07-14T00:00:02Z' },
+      }),
+      ...options.health,
+    },
+    readinessTokens: {
+      [ALPHA_BASE]: ALPHA_TOKEN,
+      [BETA_BASE]: BETA_TOKEN,
+      [LAUNCH_BASE]: LAUNCH_TOKEN,
+      ...options.readinessTokens,
+    },
+    ...options,
+  });
+}
+
+describe('RuntimeGateway registry-first startup selection', () => {
+  it('keeps the spawn path byte-identical when the registry has no live entries', async () => {
+    const env = makeMultiServerEnv({ registryScans: [EMPTY_SCAN] });
+    await env.gateway.start();
+
+    expect(env.gateway.getState().status).toBe('ready');
+    expect(env.gateway.getState().ownership).toBe('app-owned');
+    expect(env.spawnCalls).toHaveLength(1);
+    expect(env.attachRecords).toHaveLength(0); // only attach persists
+    expectNoTokenLeak(env);
+  });
+
+  it('exactly one live registry candidate attaches silently without a discovery file', async () => {
+    const env = makeMultiServerEnv({
+      registryScans: [
+        {
+          candidates: [
+            registryCandidate({
+              runtimeDir: ALPHA_RUNTIME_DIR,
+              baseUrl: ALPHA_BASE,
+              token: ALPHA_TOKEN,
+              name: 'alpha',
+            }),
+          ],
+          pruned: 0,
+          rejected: [],
+        },
+      ],
+    });
+    await env.gateway.start();
+
+    const state = env.gateway.getState();
+    expect(state.status).toBe('ready');
+    expect(state.ownership).toBe('external');
+    expect(state.serverName).toBe('alpha');
+    expect(state.connectedRuntimeDir).toBe(ALPHA_RUNTIME_DIR);
+    expect(env.spawnCalls).toHaveLength(0);
+    expect(env.attachRecords).toHaveLength(1);
+    expect(env.attachRecords[0]!.serverKey).toBe(serverKeyFor(ALPHA_RUNTIME_DIR));
+    expect(env.attachRecords[0]!.name).toBe('alpha');
+    expect(env.servers().lastUsed).toBe(serverKeyFor(ALPHA_RUNTIME_DIR));
+    expectNoTokenLeak(env);
+  });
+
+  it('attaches to a non-loopback registry candidate declaring the network policy', async () => {
+    const NETWORK_BASE = 'http://10.1.2.3:8080';
+    const alpha = registryCandidate({
+      runtimeDir: ALPHA_RUNTIME_DIR,
+      baseUrl: NETWORK_BASE,
+      token: ALPHA_TOKEN,
+      name: 'alpha',
+    });
+    const env = makeMultiServerEnv({
+      registryScans: [{ candidates: [alpha], pruned: 0, rejected: [] }],
+      health: {
+        [NETWORK_BASE]: {
+          ...healthFor(ALPHA_RUNTIME_DIR, 'alpha'),
+          compatibility: { ...compatibleDeclaration(), runtime_policy: 'network-bearer-v1' },
+        },
+      },
+      readinessTokens: { [NETWORK_BASE]: ALPHA_TOKEN },
+    });
+    await env.gateway.start();
+
+    const state = env.gateway.getState();
+    expect(state.status).toBe('ready');
+    expect(state.ownership).toBe('external');
+    expect(state.serverName).toBe('alpha');
+    expect(state.serverKey).toBe(alpha.serverKey);
+    expect(env.spawnCalls).toHaveLength(0);
+    expectNoTokenLeak(env);
+  });
+
+  it('last-used live among many -> silent reconnect to the remembered server', async () => {
+    const beta = registryCandidate({
+      runtimeDir: BETA_RUNTIME_DIR,
+      baseUrl: BETA_BASE,
+      token: BETA_TOKEN,
+      name: 'beta',
+    });
+    const env = makeMultiServerEnv({
+      registryScans: [
+        {
+          candidates: [
+            registryCandidate({
+              runtimeDir: ALPHA_RUNTIME_DIR,
+              baseUrl: ALPHA_BASE,
+              token: ALPHA_TOKEN,
+              name: 'alpha',
+            }),
+            beta,
+          ],
+          pruned: 0,
+          rejected: [],
+        },
+      ],
+      serversPrefs: {
+        known: [
+          {
+            serverKey: beta.serverKey,
+            kind: 'local',
+            name: 'beta',
+            baseUrl: BETA_BASE,
+            runtimeDir: BETA_RUNTIME_DIR,
+            lastSeenAt: '2026-07-14T00:00:00Z',
+          },
+        ],
+        lastUsed: beta.serverKey,
+      },
+    });
+    await env.gateway.start();
+
+    const state = env.gateway.getState();
+    expect(state.status).toBe('ready');
+    expect(state.serverName).toBe('beta');
+    expect(state.connectedRuntimeDir).toBe(BETA_RUNTIME_DIR);
+    expect(env.spawnCalls).toHaveLength(0);
+    // No pick step was rendered: no awaiting state ever appeared.
+    expect(env.states.some((s) => s.status === 'awaiting-server-choice')).toBe(false);
+    expectNoTokenLeak(env);
+  });
+
+  it('multiple live without a usable last-used -> picker; choosing attaches and persists', async () => {
+    const alpha = registryCandidate({
+      runtimeDir: ALPHA_RUNTIME_DIR,
+      baseUrl: ALPHA_BASE,
+      token: ALPHA_TOKEN,
+      name: 'alpha',
+    });
+    const beta = registryCandidate({
+      runtimeDir: BETA_RUNTIME_DIR,
+      baseUrl: BETA_BASE,
+      token: BETA_TOKEN,
+      name: 'beta',
+    });
+    const env = makeMultiServerEnv({
+      registryScans: [{ candidates: [alpha, beta], pruned: 0, rejected: [] }],
+    });
+    await env.gateway.start();
+
+    const state = env.gateway.getState();
+    expect(state.status).toBe('awaiting-server-choice');
+    if (state.status !== 'awaiting-server-choice') {
+      throw new Error('unreachable');
+    }
+    expect(state.candidates).toEqual([
+      {
+        serverKey: alpha.serverKey,
+        kind: 'local',
+        name: 'alpha',
+        runtimeDir: ALPHA_RUNTIME_DIR,
+      },
+      { serverKey: beta.serverKey, kind: 'local', name: 'beta', runtimeDir: BETA_RUNTIME_DIR },
+    ]);
+    // Snapshot-based: nothing was probed or spawned before the choice.
+    expect(env.fetchCalls).toHaveLength(0);
+    expect(env.spawnCalls).toHaveLength(0);
+    // The snapshot never carries tokens.
+    expect(JSON.stringify(state)).not.toContain(ALPHA_TOKEN);
+    expect(JSON.stringify(state)).not.toContain(BETA_TOKEN);
+
+    await env.gateway.chooseServer({ serverKey: alpha.serverKey });
+    const attached = env.gateway.getState();
+    expect(attached.status).toBe('ready');
+    expect(attached.ownership).toBe('external');
+    expect(attached.serverName).toBe('alpha');
+    expect(attached.connectedRuntimeDir).toBe(ALPHA_RUNTIME_DIR);
+    expect(env.spawnCalls).toHaveLength(0);
+    expect(env.attachRecords).toHaveLength(1);
+    expect(env.attachRecords[0]!.serverKey).toBe(alpha.serverKey);
+    expect(env.servers().lastUsed).toBe(alpha.serverKey);
+    expectNoTokenLeak(env);
+  });
+
+  it('last-used dead with others live -> picker (the dead entry is already pruned by the scanner)', async () => {
+    const alpha = registryCandidate({
+      runtimeDir: ALPHA_RUNTIME_DIR,
+      baseUrl: ALPHA_BASE,
+      token: ALPHA_TOKEN,
+      name: 'alpha',
+    });
+    const beta = registryCandidate({
+      runtimeDir: BETA_RUNTIME_DIR,
+      baseUrl: BETA_BASE,
+      token: BETA_TOKEN,
+      name: 'beta',
+    });
+    const env = makeMultiServerEnv({
+      registryScans: [{ candidates: [alpha, beta], pruned: 1, rejected: [] }],
+      serversPrefs: {
+        known: [],
+        lastUsed: 'dead0000000000000000000000000000',
+      },
+    });
+    await env.gateway.start();
+    expect(env.gateway.getState().status).toBe('awaiting-server-choice');
+  });
+
+  it('last-used dead with no live servers -> spawn fallback', async () => {
+    const env = makeMultiServerEnv({
+      registryScans: [{ candidates: [], pruned: 1, rejected: [] }],
+      serversPrefs: {
+        known: [],
+        lastUsed: 'dead0000000000000000000000000000',
+      },
+    });
+    await env.gateway.start();
+    expect(env.gateway.getState().status).toBe('ready');
+    expect(env.gateway.getState().ownership).toBe('app-owned');
+    expect(env.spawnCalls).toHaveLength(1);
+  });
+
+  it('relaunch auto-reconnects silently to the server chosen last launch', async () => {
+    const alpha = registryCandidate({
+      runtimeDir: ALPHA_RUNTIME_DIR,
+      baseUrl: ALPHA_BASE,
+      token: ALPHA_TOKEN,
+      name: 'alpha',
+    });
+    const beta = registryCandidate({
+      runtimeDir: BETA_RUNTIME_DIR,
+      baseUrl: BETA_BASE,
+      token: BETA_TOKEN,
+      name: 'beta',
+    });
+    const first = makeMultiServerEnv({
+      registryScans: [{ candidates: [alpha, beta], pruned: 0, rejected: [] }],
+    });
+    await first.gateway.start();
+    await first.gateway.chooseServer({ serverKey: beta.serverKey });
+    expect(first.gateway.getState().serverName).toBe('beta');
+
+    const relaunch = makeMultiServerEnv({
+      registryScans: [{ candidates: [alpha, beta], pruned: 0, rejected: [] }],
+      serversPrefs: first.servers(),
+    });
+    await relaunch.gateway.start();
+    expect(relaunch.gateway.getState().status).toBe('ready');
+    expect(relaunch.gateway.getState().serverName).toBe('beta');
+    expect(relaunch.states.some((s) => s.status === 'awaiting-server-choice')).toBe(false);
+  });
+
+  it('an unknown choice rescans from scratch (then spawns when nothing is live)', async () => {
+    const alpha = registryCandidate({
+      runtimeDir: ALPHA_RUNTIME_DIR,
+      baseUrl: ALPHA_BASE,
+      token: ALPHA_TOKEN,
+      name: 'alpha',
+    });
+    const beta = registryCandidate({
+      runtimeDir: BETA_RUNTIME_DIR,
+      baseUrl: BETA_BASE,
+      token: BETA_TOKEN,
+      name: 'beta',
+    });
+    const env = makeMultiServerEnv({
+      registryScans: [{ candidates: [alpha, beta], pruned: 0, rejected: [] }],
+    });
+    await env.gateway.start();
+    expect(env.gateway.getState().status).toBe('awaiting-server-choice');
+
+    env.setRegistryScans([EMPTY_SCAN]);
+    const state = await env.gateway.chooseServer({ serverKey: 'nobodys-key' });
+    expect(state.status).toBe('ready');
+    expect(state.ownership).toBe('app-owned');
+    expect(env.spawnCalls).toHaveLength(1);
+  });
+
+  it('a server dying mid-pick lands in the error state; retry rescans', async () => {
+    const alpha = registryCandidate({
+      runtimeDir: ALPHA_RUNTIME_DIR,
+      baseUrl: ALPHA_BASE,
+      token: ALPHA_TOKEN,
+      name: 'alpha',
+    });
+    const beta = registryCandidate({
+      runtimeDir: BETA_RUNTIME_DIR,
+      baseUrl: BETA_BASE,
+      token: BETA_TOKEN,
+      name: 'beta',
+    });
+    const env = makeMultiServerEnv({
+      registryScans: [{ candidates: [alpha, beta], pruned: 0, rejected: [] }],
+      // alpha dies between the scan and the choice.
+      health: {
+        [ALPHA_BASE]: new Error('connection refused'),
+        [BETA_BASE]: healthFor(BETA_RUNTIME_DIR, 'beta'),
+      },
+    });
+    await env.gateway.start();
+    expect(env.gateway.getState().status).toBe('awaiting-server-choice');
+
+    const state = await env.gateway.chooseServer({ serverKey: alpha.serverKey });
+    expect(requireError(state).code).toBe('E_ATTACH_UNREACHABLE');
+
+    // Retry rescans from scratch: alpha is gone from the new scan, beta alone
+    // attaches silently.
+    env.setRegistryScans([{ candidates: [beta], pruned: 1, rejected: [] }]);
+    const retried = await env.gateway.retry();
+    expect(retried.status).toBe('ready');
+    expect(retried.serverName).toBe('beta');
+  });
+
+  it('a last-used candidate dying between scan and probe falls back to spawn', async () => {
+    const alpha = registryCandidate({
+      runtimeDir: ALPHA_RUNTIME_DIR,
+      baseUrl: ALPHA_BASE,
+      token: ALPHA_TOKEN,
+      name: 'alpha',
+    });
+    const env = makeMultiServerEnv({
+      registryScans: [{ candidates: [alpha], pruned: 0, rejected: [] }],
+      health: {
+        [ALPHA_BASE]: new Error('connection refused'),
+        [BETA_BASE]: healthFor(BETA_RUNTIME_DIR, 'beta'),
+      },
+      serversPrefs: { known: [], lastUsed: alpha.serverKey },
+    });
+    await env.gateway.start();
+    expect(env.gateway.getState().status).toBe('ready');
+    expect(env.gateway.getState().ownership).toBe('app-owned');
+    expect(env.spawnCalls).toHaveLength(1);
+  });
+
+  it('old-binary world: registry empty, legacy discovery candidate attaches and persists last-used', async () => {
+    const env = makeEnv({
+      discovery: JSON.stringify(discoveryRecord()),
+      registryScans: [EMPTY_SCAN],
+    });
+    await env.gateway.start();
+
+    expect(env.gateway.getState().status).toBe('ready');
+    expect(env.gateway.getState().ownership).toBe('external');
+    expect(env.spawnCalls).toHaveLength(0);
+    expect(env.attachRecords).toHaveLength(1);
+    expect(env.attachRecords[0]!.serverKey).toBe(serverKeyFor(SELECTED.runtimeDir));
+    expect(env.servers().lastUsed).toBe(serverKeyFor(SELECTED.runtimeDir));
+  });
+
+  it('chooseServer is a no-op outside the awaiting-server-choice state', async () => {
+    const env = makeMultiServerEnv({ registryScans: [EMPTY_SCAN] });
+    await env.gateway.start();
+    expect(env.gateway.getState().status).toBe('ready');
+
+    const state = await env.gateway.chooseServer({ serverKey: 'nobodys-key' });
+    expect(state.status).toBe('ready');
+    expect(env.spawnCalls).toHaveLength(1);
+  });
+});
+
+// --- Server identity + mid-session switching -----------------------------------
+
+describe('RuntimeGateway server identity', () => {
+  it('registry attach exposes the candidate serverKey on the ready state', async () => {
+    const alpha = registryCandidate({
+      runtimeDir: ALPHA_RUNTIME_DIR,
+      baseUrl: ALPHA_BASE,
+      token: ALPHA_TOKEN,
+      name: 'alpha',
+    });
+    const env = makeMultiServerEnv({
+      registryScans: [{ candidates: [alpha], pruned: 0, rejected: [] }],
+    });
+    await env.gateway.start();
+    const state = env.gateway.getState();
+    expect(state.status).toBe('ready');
+    expect(state.serverKey).toBe(alpha.serverKey);
+    ConnectionStateSchema.parse(state);
+  });
+
+  it('legacy discovery attach derives the serverKey from the canonical runtime dir', async () => {
+    const env = makeEnv({
+      discovery: JSON.stringify(discoveryRecord()),
+      registryScans: [EMPTY_SCAN],
+    });
+    await env.gateway.start();
+    const state = env.gateway.getState();
+    expect(state.status).toBe('ready');
+    expect(state.serverKey).toBe(serverKeyFor(SELECTED.runtimeDir));
+  });
+
+  it('spawned attach derives the serverKey from the canonical runtime dir', async () => {
+    const env = makeEnv({ registryScans: [EMPTY_SCAN] });
+    await env.gateway.start();
+    const state = env.gateway.getState();
+    expect(state.status).toBe('ready');
+    expect(state.ownership).toBe('app-owned');
+    expect(state.serverKey).toBe(serverKeyFor(SELECTED.runtimeDir));
+  });
+});
+
+describe('RuntimeGateway switchServer', () => {
+  function alphaCandidate(pid = 4242) {
+    return registryCandidate({
+      runtimeDir: ALPHA_RUNTIME_DIR,
+      baseUrl: ALPHA_BASE,
+      token: ALPHA_TOKEN,
+      name: 'alpha',
+      pid,
+    });
+  }
+  function betaCandidate() {
+    return registryCandidate({
+      runtimeDir: BETA_RUNTIME_DIR,
+      baseUrl: BETA_BASE,
+      token: BETA_TOKEN,
+      name: 'beta',
+    });
+  }
+  async function startAtAlpha() {
+    const env = makeMultiServerEnv({
+      registryScans: [{ candidates: [alphaCandidate()], pruned: 0, rejected: [] }],
+    });
+    await env.gateway.start();
+    expect(env.gateway.getState().status).toBe('ready');
+    expect(env.gateway.getState().serverKey).toBe(serverKeyFor(ALPHA_RUNTIME_DIR));
+    return env;
+  }
+
+  it('switches ready→ready through the connection transition without spawning or stopping anything', async () => {
+    const env = await startAtAlpha();
+    const beta = betaCandidate();
+    env.setRegistryScans([{ candidates: [alphaCandidate(), beta], pruned: 0, rejected: [] }]);
+
+    const before = env.states.length;
+    const state = await env.gateway.switchServer({ serverKey: beta.serverKey });
+
+    expect(state.status).toBe('ready');
+    expect(state.serverKey).toBe(beta.serverKey);
+    expect(state.serverName).toBe('beta');
+    expect(state.connectedRuntimeDir).toBe(BETA_RUNTIME_DIR);
+    // The transition rides the existing leaving-ready path.
+    const transition = env.states.slice(before).map((s) => s.status);
+    expect(transition).toContain('attaching');
+    expect(transition[transition.length - 1]).toBe('ready');
+    expect(env.spawnCalls).toHaveLength(0);
+    // The successful attach refreshes the last-used pointer.
+    expect(env.servers().lastUsed).toBe(beta.serverKey);
+    expectNoTokenLeak(env);
+  });
+
+  it('is a no-op when the target is the current server', async () => {
+    const env = await startAtAlpha();
+    const before = env.states.length;
+    const state = await env.gateway.switchServer({ serverKey: serverKeyFor(ALPHA_RUNTIME_DIR) });
+    expect(state.status).toBe('ready');
+    expect(env.states.length).toBe(before);
+  });
+
+  it('fences in-flight switch work: a restart mid-switch keeps it from re-emitting', async () => {
+    const env = await startAtAlpha();
+    const beta = betaCandidate();
+    env.setRegistryScans([{ candidates: [alphaCandidate(), beta], pruned: 0, rejected: [] }]);
+
+    const realFetch = env.deps.fetchJson;
+    let releaseHealth: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      releaseHealth = resolve;
+    });
+    env.deps.fetchJson = async (url, opts) => {
+      if (url.startsWith(BETA_BASE) && url.endsWith('/api/v1/health')) {
+        await gate;
+      }
+      return realFetch(url, opts);
+    };
+
+    const switching = env.gateway.switchServer({ serverKey: beta.serverKey });
+    await Promise.resolve();
+    await env.gateway.restart();
+    releaseHealth();
+    await switching;
+
+    // The fenced cycle can never promote beta to ready.
+    expect(env.gateway.getState().status).not.toBe('ready');
+    expect(
+      env.states.filter((s) => s.status === 'ready' && s.serverKey === beta.serverKey),
+    ).toHaveLength(0);
+  });
+
+  it('a dead target lands on the error surface with both switch identities; back re-attaches, retry re-attempts', async () => {
+    const env = await startAtAlpha();
+    const beta = betaCandidate();
+    env.setRegistryScans([{ candidates: [alphaCandidate()], pruned: 0, rejected: [] }]);
+
+    const failed = await env.gateway.switchServer({ serverKey: beta.serverKey });
+    expect(failed.status).toBe('error');
+    if (failed.status !== 'error' || failed.switchContext === undefined) {
+      throw new Error('expected a switch failure context');
+    }
+    expect(failed.error.code).toBe('E_SWITCH_UNAVAILABLE');
+    expect(failed.switchContext.attempted.serverKey).toBe(beta.serverKey);
+    const previous = failed.switchContext.previous;
+    expect(previous).not.toBeNull();
+    expect(previous!.serverKey).toBe(alphaCandidate().serverKey);
+    expect(previous!.runtimeDir).toBe(ALPHA_RUNTIME_DIR);
+    // A failed switch never moves the last-used pointer.
+    expect(env.servers().lastUsed).toBe(alphaCandidate().serverKey);
+
+    // Back to the previous server re-attaches through the standard path.
+    const back = await env.gateway.switchServer({ serverKey: previous!.serverKey });
+    expect(back.status).toBe('ready');
+    expect(back.serverKey).toBe(alphaCandidate().serverKey);
+
+    // Retry of the target reuses the same attach path once it is live.
+    env.setRegistryScans([{ candidates: [alphaCandidate(), beta], pruned: 0, rejected: [] }]);
+    const retried = await env.gateway.switchServer({ serverKey: beta.serverKey });
+    expect(retried.status).toBe('ready');
+    expect(retried.serverKey).toBe(beta.serverKey);
+    expectNoTokenLeak(env);
+  });
+
+  it('a target that dies between scan and probe still lands on the switch surface', async () => {
+    const beta = betaCandidate();
+    const env = makeMultiServerEnv({
+      registryScans: [{ candidates: [alphaCandidate()], pruned: 0, rejected: [] }],
+      health: {
+        [ALPHA_BASE]: healthFor(ALPHA_RUNTIME_DIR, 'alpha'),
+        [BETA_BASE]: new Error('connection refused'),
+        [LAUNCH_BASE]: healthBody({ owner: { pid: 777, started_at: '2026-07-14T00:00:02Z' } }),
+      },
+    });
+    await env.gateway.start();
+    env.setRegistryScans([{ candidates: [alphaCandidate(), beta], pruned: 0, rejected: [] }]);
+
+    const failed = await env.gateway.switchServer({ serverKey: beta.serverKey });
+    expect(failed.status).toBe('error');
+    if (failed.status !== 'error' || failed.switchContext === undefined) {
+      throw new Error('expected a switch failure context');
+    }
+    expect(failed.error.code).toBe('E_ATTACH_UNREACHABLE');
+    expect(failed.switchContext.attempted.serverKey).toBe(beta.serverKey);
+    expect(failed.switchContext.previous?.serverKey).toBe(alphaCandidate().serverKey);
+  });
+});
+
+describe('RuntimeGateway ready-state locality', () => {
+  it('stamps kind: local on the ready state for the spawn profile', async () => {
+    const env = makeEnv();
+    await env.gateway.start();
+
+    const state = env.gateway.getState();
+    expect(state).toMatchObject({ status: 'ready', ownership: 'app-owned', kind: 'local' });
+    expect(env.gateway.connectedLocality).toBe('local');
+  });
+
+  it('stamps kind: local on the ready state for the local attach profile', async () => {
+    const env = makeEnv({ discovery: JSON.stringify(discoveryRecord()) });
+    await env.gateway.start();
+
+    expect(env.gateway.getState()).toMatchObject({
+      status: 'ready',
+      ownership: 'external',
+      kind: 'local',
+    });
+  });
+
+  it('keeps kind: local across a local↔local switch and never stamps locality on transitional states', async () => {
+    const alpha = registryCandidate({
+      runtimeDir: ALPHA_RUNTIME_DIR,
+      baseUrl: ALPHA_BASE,
+      token: ALPHA_TOKEN,
+      name: 'alpha',
+    });
+    const beta = registryCandidate({
+      runtimeDir: BETA_RUNTIME_DIR,
+      baseUrl: BETA_BASE,
+      token: BETA_TOKEN,
+      name: 'beta',
+    });
+    const env = makeMultiServerEnv({
+      registryScans: [{ candidates: [alpha], pruned: 0, rejected: [] }],
+    });
+    await env.gateway.start();
+    env.setRegistryScans([{ candidates: [alpha, beta], pruned: 0, rejected: [] }]);
+
+    const state = await env.gateway.switchServer({ serverKey: beta.serverKey });
+
+    expect(state).toMatchObject({ status: 'ready', kind: 'local' });
+    // Every emitted ready state is schema-valid (kind required) and local.
+    for (const emitted of env.states) {
+      ConnectionStateSchema.parse(emitted);
+      if (emitted.status === 'ready') {
+        expect(emitted.kind).toBe('local');
+      } else {
+        expect('kind' in emitted).toBe(false);
+      }
+    }
+    expectNoTokenLeak(env);
+  });
+});
+
+describe('RuntimeGateway decoupled app-owned supervision', () => {
+  const OWN_PID = 777;
+  function ownAlphaCandidate() {
+    return registryCandidate({
+      runtimeDir: ALPHA_RUNTIME_DIR,
+      baseUrl: LAUNCH_BASE,
+      token: LAUNCH_TOKEN,
+      name: 'alpha',
+      pid: OWN_PID,
+    });
+  }
+  function betaCandidate() {
+    return registryCandidate({
+      runtimeDir: BETA_RUNTIME_DIR,
+      baseUrl: BETA_BASE,
+      token: BETA_TOKEN,
+      name: 'beta',
+    });
+  }
+  async function startAppOwned() {
+    const env = makeMultiServerEnv({ registryScans: [EMPTY_SCAN] });
+    await env.gateway.start();
+    const state = env.gateway.getState();
+    expect(state.status).toBe('ready');
+    expect(state.ownership).toBe('app-owned');
+    expect(env.spawnCalls).toHaveLength(1);
+    return env;
+  }
+
+  it('leaves the app-owned child running across a switch-away and stops it on quit', async () => {
+    const env = await startAppOwned();
+    const child = env.spawned[0]!;
+    env.setRegistryScans([{ candidates: [betaCandidate()], pruned: 0, rejected: [] }]);
+
+    const switched = await env.gateway.switchServer({ serverKey: serverKeyFor(BETA_RUNTIME_DIR) });
+    expect(switched.status).toBe('ready');
+    expect(switched.ownership).toBe('external');
+    expect(child.exited).toBe(false);
+    expect(child.stopCalls).toHaveLength(0);
+
+    await env.gateway.shutdown();
+    expect(child.stopCalls).toHaveLength(1);
+  });
+
+  it('a left-behind crash restarts silently within budget and never drives ConnectionState', async () => {
+    const env = await startAppOwned();
+    env.setRegistryScans([{ candidates: [betaCandidate()], pruned: 0, rejected: [] }]);
+    await env.gateway.switchServer({ serverKey: serverKeyFor(BETA_RUNTIME_DIR) });
+    expect(env.gateway.getState().status).toBe('ready');
+
+    const before = env.states.length;
+    const tick = async () => {
+      for (let i = 0; i < 5; i += 1) await Promise.resolve();
+    };
+    // Four crashes: three budgeted silent relaunches, then exhaustion (a log
+    // line, never a crash-loop surface).
+    for (let crash = 0; crash < 4; crash += 1) {
+      const child = env.spawned[env.spawned.length - 1]!;
+      child.emitExit(1, null);
+      await tick();
+    }
+    expect(env.spawnCalls).toHaveLength(4);
+    expect(env.logs.some((line) => line.includes('exhausted its restart budget'))).toBe(true);
+    // Not one connection-state emission: supervision stayed decoupled.
+    expect(env.states.length).toBe(before);
+    expect(env.gateway.getState().status).toBe('ready');
+    expect(env.gateway.getState().serverKey).toBe(serverKeyFor(BETA_RUNTIME_DIR));
+  });
+
+  it('re-attaches to the still-running child when switching back, restoring app-owned supervision', async () => {
+    const env = await startAppOwned();
+    const child = env.spawned[0]!;
+    env.setRegistryScans([{ candidates: [betaCandidate()], pruned: 0, rejected: [] }]);
+    await env.gateway.switchServer({ serverKey: serverKeyFor(BETA_RUNTIME_DIR) });
+    expect(env.gateway.getState().ownership).toBe('external');
+
+    env.setRegistryScans([{ candidates: [ownAlphaCandidate()], pruned: 0, rejected: [] }]);
+    const back = await env.gateway.switchServer({ serverKey: serverKeyFor(ALPHA_RUNTIME_DIR) });
+    expect(back.status).toBe('ready');
+    expect(back.ownership).toBe('app-owned');
+    expect(back.serverKey).toBe(serverKeyFor(ALPHA_RUNTIME_DIR));
+    // Re-attach: no new process was spawned.
+    expect(env.spawnCalls).toHaveLength(1);
+
+    // Supervision drives the surface again: a crash is foreground once more.
+    child.emitExit(1, null);
+    const crashed = env.gateway.getState();
+    expect(crashed.status).toBe('crashed');
+    expect(requireError(crashed).code).toBe('E_SERVER_CRASHED');
+  });
+
+  it('restart() still stops the app-owned child (only switching decouples supervision)', async () => {
+    const env = await startAppOwned();
+    const child = env.spawned[0]!;
+    await env.gateway.restart();
+    expect(child.stopCalls).toHaveLength(1);
+    expect(env.gateway.getState().status).toBe('ready');
   });
 });

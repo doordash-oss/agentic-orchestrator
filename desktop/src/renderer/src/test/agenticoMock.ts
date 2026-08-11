@@ -17,6 +17,7 @@ import type {
   SessionOutputEvent,
   SessionSummary,
   SessionTranscript,
+  ServerListSnapshot,
   Settings,
   ThemeInfo,
   UpdateState,
@@ -215,6 +216,13 @@ export interface AgenticoMock {
     getConnectionStatus: ReturnType<typeof vi.fn>;
     retryConnection: ReturnType<typeof vi.fn>;
     restartConnection: ReturnType<typeof vi.fn>;
+    chooseConnectionServer: ReturnType<typeof vi.fn>;
+    switchConnectionServer: ReturnType<typeof vi.fn>;
+    listServers: ReturnType<typeof vi.fn>;
+    probeServers: ReturnType<typeof vi.fn>;
+    addRemoteServer: ReturnType<typeof vi.fn>;
+    removeServer: ReturnType<typeof vi.fn>;
+    getServerTokenStatus: ReturnType<typeof vi.fn>;
     onRouteRequest: ReturnType<typeof vi.fn>;
     getSettings: ReturnType<typeof vi.fn>;
     updateSettings: ReturnType<typeof vi.fn>;
@@ -240,6 +248,7 @@ export interface AgenticoMock {
     cancelSessionOutput: ReturnType<typeof vi.fn>;
     getCreationDefaults: ReturnType<typeof vi.fn>;
     pickCreationFiles: ReturnType<typeof vi.fn>;
+    uploadCreationFiles: ReturnType<typeof vi.fn>;
     readClipboardImage: ReturnType<typeof vi.fn>;
     importDroppedCreationFiles: ReturnType<typeof vi.fn>;
     searchCreationFiles: ReturnType<typeof vi.fn>;
@@ -303,6 +312,8 @@ export interface AgenticoMock {
   routeListenerCount(): number;
   emitSessionOutput(event: SessionOutputEvent): void;
   sessionOutputListenerCount(): number;
+  emitServersChanged(snapshot: ServerListSnapshot): void;
+  serversChangedListenerCount(): number;
 }
 
 export function installAgenticoMock(
@@ -343,6 +354,7 @@ export function installAgenticoMock(
   const sessions = overrides.sessions ?? [];
   const updates = overrides.updates ?? defaultUpdateState();
   const diagnostics = overrides.diagnostics ?? defaultDiagnostics();
+  const serversChangedListeners = new Set<(snapshot: ServerListSnapshot) => void>();
 
   const api = {
     platform: overrides.platform ?? 'darwin',
@@ -350,6 +362,17 @@ export function installAgenticoMock(
     getConnectionStatus: vi.fn(() => Promise.resolve(connection)),
     retryConnection: vi.fn(() => Promise.resolve(connection)),
     restartConnection: vi.fn(() => Promise.resolve(connection)),
+    chooseConnectionServer: vi.fn(() => Promise.resolve(connection)),
+    switchConnectionServer: vi.fn(() => Promise.resolve(connection)),
+    listServers: vi.fn(() => Promise.resolve({ rows: [] })),
+    probeServers: vi.fn(() => Promise.resolve({ rows: [] })),
+    addRemoteServer: vi.fn(() => Promise.reject(new Error('addRemoteServer not mocked'))),
+    removeServer: vi.fn(() => Promise.resolve(connection)),
+    getServerTokenStatus: vi.fn(() => Promise.resolve({ status: 'local' as const })),
+    onServersChanged: vi.fn((listener: (snapshot: ServerListSnapshot) => void) => {
+      serversChangedListeners.add(listener);
+      return () => serversChangedListeners.delete(listener);
+    }),
     onConnectionChanged: vi.fn((listener: (state: ConnectionState) => void) => {
       listeners.add(listener);
       return () => listeners.delete(listener);
@@ -419,7 +442,23 @@ export function installAgenticoMock(
     }),
     getCreationDefaults: vi.fn(() => Promise.resolve(defaults)),
     pickCreationFiles: vi.fn(() => Promise.resolve({ paths: [] })),
+    uploadCreationFiles: vi.fn((kind: string, paths: readonly string[]) =>
+      Promise.resolve({
+        results: paths.map((filePath) => ({
+          ok: true as const,
+          name: filePath.split(/[\\/]/).at(-1) ?? 'file',
+          upload: {
+            reference: `ref-${(filePath.split(/[\\/]/).at(-1) ?? 'file').replace(/[^a-z0-9]/gi, '')}`,
+            kind: kind as 'image' | 'attachment',
+            name: filePath.split(/[\\/]/).at(-1) ?? 'file',
+            size: 10,
+            serverKey: 'server-key-1',
+          },
+        })),
+      }),
+    ),
     readClipboardImage: vi.fn(() => Promise.resolve({ paths: [] })),
+    writeClipboardText: vi.fn(() => Promise.resolve({ ok: true })),
     importDroppedCreationFiles: vi.fn(() => ({ paths: [] })),
     searchCreationFiles: vi.fn((request) =>
       Promise.resolve({
@@ -566,6 +605,10 @@ export function installAgenticoMock(
       for (const listener of sessionOutputListeners) listener(event);
     },
     sessionOutputListenerCount: () => sessionOutputListeners.size,
+    emitServersChanged: (snapshot) => {
+      for (const listener of serversChangedListeners) listener(snapshot);
+    },
+    serversChangedListenerCount: () => serversChangedListeners.size,
   };
 }
 

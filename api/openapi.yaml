@@ -633,6 +633,12 @@ paths:
     patch:
       operationId: patchRuntimeConfig
       summary: Patch runtime configuration.
+      description: >-
+        Partially updates the runtime configuration. Submitted workspace_roots
+        are validated against the server's filesystem before persistence: every
+        root must exist and resolve to a directory, otherwise the request fails
+        with a 400 invalid_workspace_root error naming each offending path in
+        error.target.invalid_workspace_roots and nothing is persisted.
       parameters:
         - $ref: "#/components/parameters/TrustedMutationHeader"
       requestBody:
@@ -640,11 +646,18 @@ paths:
       responses:
         "200":
           $ref: "#/components/responses/ActionResponse"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
         "401":
           $ref: "#/components/responses/Unauthorized"
     put:
       operationId: putRuntimeConfig
       summary: Replace runtime configuration.
+      description: >-
+        Replaces the runtime configuration. Submitted workspace_roots are
+        validated the same way as for PATCH: each root must exist and resolve
+        to a directory, otherwise the request fails with a 400
+        invalid_workspace_root error and nothing is persisted.
       parameters:
         - $ref: "#/components/parameters/TrustedMutationHeader"
       requestBody:
@@ -652,6 +665,8 @@ paths:
       responses:
         "200":
           $ref: "#/components/responses/ActionResponse"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
         "401":
           $ref: "#/components/responses/Unauthorized"
 
@@ -996,6 +1011,62 @@ paths:
           $ref: "#/components/responses/EventStream"
         "401":
           $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/uploads:
+    post:
+      operationId: stageUpload
+      summary: Stage one image or attachment upload server-side.
+      description: >-
+        Accepts one file per request as a raw application/octet-stream body
+        with metadata in the query string. Accepted bytes land in a staging
+        directory under the server's state dir, keyed by an opaque,
+        unguessable, single-use reference; the client-supplied name is kept
+        as metadata only and never becomes an on-disk name. Image uploads
+        require a png, jpg, jpeg, gif, or webp file name extension and are
+        capped at 10 MiB; attachment uploads accept any bytes and are capped
+        at 25 MiB. References are consumed by the image_uploads /
+        attachment_uploads fields of the feature-creation, refactor-launch,
+        and chat-start mutations (chat resolves image references only) and
+        expire 24 hours after staging.
+      parameters:
+        - name: kind
+          in: query
+          required: true
+          schema:
+            type: string
+          description: "Staged upload kind: image or attachment."
+        - name: name
+          in: query
+          required: true
+          schema:
+            type: string
+            maxLength: 255
+          description: Original client-side file name, retained as metadata only.
+        - $ref: "#/components/parameters/TrustedMutationHeader"
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        "200":
+          description: Staged upload reference.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StageUploadResponse"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/ErrorResponse"
+        "413":
+          $ref: "#/components/responses/ErrorResponse"
+        "415":
+          $ref: "#/components/responses/ErrorResponse"
 
 components:
   securitySchemes:
@@ -1594,6 +1665,9 @@ components:
               format: date-time
             compatibility:
               $ref: "#/components/schemas/CompatibilityDeclaration"
+            name:
+              type: string
+              maxLength: 64
     BuildIdentity:
       type: object
       description: >-
@@ -2287,7 +2361,15 @@ components:
           type: array
           maxItems: 12
           items: { type: string }
+        image_uploads:
+          type: array
+          maxItems: 12
+          items: { type: string }
         attachments:
+          type: array
+          maxItems: 24
+          items: { type: string }
+        attachment_uploads:
           type: array
           maxItems: 24
           items: { type: string }
@@ -2301,6 +2383,22 @@ components:
           type: string
           enum: [medium, large, moonshot]
         idempotency_key: { type: string, maxLength: 128 }
+    StageUploadResponse:
+      type: object
+      additionalProperties: false
+      required: [api_version, reference, kind, name, size]
+      properties:
+        api_version:
+          type: string
+        reference:
+          type: string
+        kind:
+          type: string
+        name:
+          type: string
+        size:
+          type: integer
+          format: int64
     FeatureSetupResponse:
       description: >-
         Result of the setup action: durable server-owned setup (fresh run or
@@ -2579,7 +2677,15 @@ components:
           type: array
           items:
             type: string
+        image_uploads:
+          type: array
+          items:
+            type: string
         attachments:
+          type: array
+          items:
+            type: string
+        attachment_uploads:
           type: array
           items:
             type: string

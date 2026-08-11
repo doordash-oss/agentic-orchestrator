@@ -66,8 +66,16 @@ describe('evaluateCompatibility', () => {
     }
   });
 
+  it('accepts a declaration under the network runtime policy', () => {
+    const verdict = evaluateCompatibility(declaration({ runtime_policy: 'network-bearer-v1' }));
+    expect(verdict.compatible).toBe(true);
+    if (verdict.compatible) {
+      expect(verdict.serverBuild).toEqual({ version: 'v9.9.9-other', revision: 'abc123' });
+    }
+  });
+
   it('rejects an undeclared or foreign runtime policy', () => {
-    for (const policy of ['', 'multi-tenant-v1', 'loopback-bearer-v2']) {
+    for (const policy of ['', 'multi-tenant-v1', 'loopback-bearer-v2', 'bearer-v2']) {
       const verdict = evaluateCompatibility(declaration({ runtime_policy: policy }));
       expect(verdict.compatible).toBe(false);
       if (!verdict.compatible) {
@@ -76,9 +84,22 @@ describe('evaluateCompatibility', () => {
     }
   });
 
+  it('never gates on informational fields: a server display name changes no outcome', () => {
+    // The name lives at the health-payload top level and is threaded by the
+    // gateway; any copy stray into the declaration itself is dropped, never
+    // judged — compatible stays compatible, incompatible stays incompatible.
+    const named = evaluateCompatibility(declaration({ name: 'frothy-macchiato' }));
+    expect(named.compatible).toBe(true);
+    expect(evaluateCompatibility(declaration({ name: 0xdeadbeef })).compatible).toBe(true);
+    expect(
+      evaluateCompatibility(declaration({ schema_version: 999, name: 'frothy-macchiato' }))
+        .compatible,
+    ).toBe(false);
+  });
+
   it('pins the desktop support tables so widening is a conscious change', () => {
     expect(DESKTOP_SCHEMA_VERSION).toBe(1);
     expect(SUPPORTED_SERVER_SCHEMA_VERSIONS).toEqual([1]);
-    expect(SUPPORTED_RUNTIME_POLICIES).toEqual(['loopback-bearer-v1']);
+    expect(SUPPORTED_RUNTIME_POLICIES).toEqual(['loopback-bearer-v1', 'network-bearer-v1']);
   });
 });

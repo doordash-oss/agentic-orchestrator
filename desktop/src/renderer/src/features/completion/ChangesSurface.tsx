@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
-import { useMediaQuery } from '../../hooks';
+import { useConnectionState, useMediaQuery } from '../../hooks';
 import { parseIpcError } from '../../wizard/ipcError';
 import {
   DiffViewer,
@@ -8,7 +8,11 @@ import {
   FILE_OP_GLYPH,
   type DiffLayout,
 } from './completionShared';
-import type { CompletionPreflightResult, RepositoryDiffResult } from '../../../../shared/ipc';
+import type {
+  CompletionPreflightResult,
+  RepositoryDiffResult,
+  RevealPathResult,
+} from '../../../../shared/ipc';
 
 export interface ChangesSurfaceProps {
   featureId: string;
@@ -22,7 +26,9 @@ export interface ChangesSurfaceProps {
     filePath?: string,
   ) => Promise<RepositoryDiffResult>;
   openExternal: (url: string) => Promise<{ ok: boolean }>;
-  revealPath: (featureId: string, repo: string) => Promise<{ ok: boolean }>;
+  revealPath: (featureId: string, repo: string) => Promise<RevealPathResult>;
+  /** Main-process clipboard write (the renderer holds no clipboard permission). */
+  copyText: (text: string) => Promise<{ ok: boolean }>;
 }
 
 export function ChangesSurface({
@@ -34,6 +40,7 @@ export function ChangesSurface({
   getRepositoryDiff,
   openExternal,
   revealPath,
+  copyText,
 }: ChangesSurfaceProps): React.ReactElement {
   const [selectedRepo, setSelectedRepo] = useState<string | null>(null);
   const [diff, setDiff] = useState<RepositoryDiffResult | null>(null);
@@ -46,6 +53,13 @@ export function ChangesSurface({
   const repoDiffRequestRef = useRef(0);
   const fileDiffRequestRef = useRef(0);
   const constrainedLayout = useMediaQuery('(max-width: 900px)');
+  // Locality drives the affordance, so it follows the live connection state:
+  // a server switch relabels the action in place, without remounting.
+  const connection = useConnectionState();
+  const remote = connection.status === 'ready' && connection.kind === 'remote';
+  const [worktreeActionPending, setWorktreeActionPending] = useState(false);
+  const [worktreeNotice, setWorktreeNotice] = useState<string | null>(null);
+  const [worktreeActionError, setWorktreeActionError] = useState<string | null>(null);
   const diffLayout: DiffLayout =
     diffLayoutOverride ?? (constrainedLayout ? 'unified' : 'side-by-side');
 
@@ -135,6 +149,51 @@ export function ChangesSurface({
 
   const activeRepo = preflight?.repos.find((repo) => repo.repo === selectedRepo);
 
+  /**
+   * One control, two verbs by locality. Local: reveal the worktree in the OS
+   * file manager exactly as before. Remote: there is nothing to reveal, so
+   * the same narrow server-path call returns the worktree path verbatim and
+   * it goes to this machine's clipboard. Either side surfaces failures
+   * inline rather than swallowing them.
+   */
+  const handleWorktreeAction = useCallback(
+    async (repo: string) => {
+      setWorktreeNotice(null);
+      setWorktreeActionError(null);
+      if (!remote) {
+        await revealPath(featureId, repo).catch(() => {
+          // Local reveal stays fire-and-forget, unchanged from before.
+        });
+        return;
+      }
+      setWorktreeActionPending(true);
+      try {
+        const result = await revealPath(featureId, repo);
+        const serverPath = result.path;
+        if (!result.ok || serverPath === undefined) {
+          setWorktreeActionError(
+            'The server did not report a worktree path for this repository. Refresh the completion preview and try again.',
+          );
+          return;
+        }
+        const copied = await copyText(serverPath);
+        if (!copied.ok) {
+          setWorktreeActionError('The clipboard write failed; copy from the path shown instead.');
+          setWorktreeNotice(serverPath);
+          return;
+        }
+        setWorktreeNotice(
+          `Copied — this path is on the server host, not this machine: ${serverPath}`,
+        );
+      } catch (err) {
+        setWorktreeActionError(`Could not copy the worktree path. ${parseIpcError(err).message}`);
+      } finally {
+        setWorktreeActionPending(false);
+      }
+    },
+    [featureId, remote, revealPath, copyText],
+  );
+
   return (
     <section className="changes-manifest" aria-label="Changes">
       <header className="changes-manifest__intro">
@@ -201,11 +260,22 @@ export function ChangesSurface({
             <button
               type="button"
               className="completion-workspace__reveal"
-              onClick={() => void revealPath(featureId, selectedRepo)}
+              disabled={worktreeActionPending}
+              onClick={() => void handleWorktreeAction(selectedRepo)}
             >
-              Reveal in Finder
+              {remote ? (worktreeActionPending ? 'Copying…' : 'Copy Path') : 'Reveal in Finder'}
             </button>
           </div>
+          {worktreeNotice !== null ? (
+            <p className="completion-workspace__notice" role="status">
+              {worktreeNotice}
+            </p>
+          ) : null}
+          {worktreeActionError !== null ? (
+            <p className="completion-workspace__error" role="alert">
+              {worktreeActionError}
+            </p>
+          ) : null}
         </div>
       ) : null}
 

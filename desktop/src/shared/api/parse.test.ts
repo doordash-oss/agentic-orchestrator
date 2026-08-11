@@ -45,6 +45,35 @@ describe('parseServerJson', () => {
     expect(parsed.owner.pid).toBe(123);
   });
 
+  it('accepts a health payload carrying the optional bounded server name', () => {
+    const parsed = parseServerJson(
+      JSON.stringify({ ...healthFixture, name: 'frothy-macchiato' }),
+      HealthResponseSchema,
+    );
+    expect(parsed.name).toBe('frothy-macchiato');
+    // Name-less payloads from older servers stay valid.
+    expect(
+      parseServerJson(JSON.stringify(healthFixture), HealthResponseSchema).name,
+    ).toBeUndefined();
+  });
+
+  it('drops an oversized or malformed server name instead of failing the health parse', () => {
+    for (const bad of ['x'.repeat(65), 42, { nested: true }]) {
+      const parsed = parseServerJson(
+        JSON.stringify({ ...healthFixture, name: bad }),
+        HealthResponseSchema,
+      );
+      expect(parsed.name).toBeUndefined();
+      expect(parsed.status).toBe('ok');
+    }
+    // Exactly at the bound is accepted.
+    const atBound = parseServerJson(
+      JSON.stringify({ ...healthFixture, name: 'x'.repeat(64) }),
+      HealthResponseSchema,
+    );
+    expect(atBound.name).toBe('x'.repeat(64));
+  });
+
   it('fails closed on malformed JSON without echoing the payload', () => {
     const safe = failure(() => parseServerJson('{"secretfragment": tru', HealthResponseSchema));
     expect(safe.code).toBe('E_MALFORMED_RESPONSE');

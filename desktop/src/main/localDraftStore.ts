@@ -65,6 +65,20 @@ export class LocalDraftStore {
   discard(key: ReviewDraftKey): boolean {
     return this.store.discard(key);
   }
+
+  /**
+   * One-time identity migration: drafts stored under a legacy runtime id
+   * (the pre-serverKey `runtime.selection` value or the default) are re-keyed
+   * to the connecting server's identity key. Drafts belonging to any other
+   * identity are never touched; repeated calls are no-ops.
+   */
+  rekeyRuntimeIds(serverKey: string, legacyRuntimeIds: readonly string[]): number {
+    const legacy = new Set(legacyRuntimeIds);
+    return this.store.rekey(
+      (draft) => legacy.has(draft.runtimeId),
+      (draft) => ({ ...draft, runtimeId: serverKey }),
+    );
+  }
 }
 
 function keysMatch(draft: ReviewDraftKey, key: ReviewDraftKey): boolean {

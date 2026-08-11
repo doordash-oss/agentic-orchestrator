@@ -887,7 +887,7 @@ func TestRunArgsLaunchesDesktopByDefault(t *testing.T) {
 			desktopLaunched = true
 			return nil
 		},
-		func(string, string, bool, []string, bool) int {
+		func(string, string, bool, []string, bool, string, string) int {
 			serverLaunched = true
 			return 0
 		},
@@ -939,7 +939,7 @@ func TestRunArgsPassesRetainedLaunchFlags(t *testing.T) {
 		[]string{cliSubcommandServer, "--config", "/tmp/agentic-config.yaml", "--state-dir", "/tmp/agentic-features", "--providers", "codex, claude", "--dangerously-skip-permissions"},
 		&stdout,
 		&stderr,
-		func(configPath, stateDir string, dangerouslySkipPerms bool, enabledProviders []string, _ bool) int {
+		func(configPath, stateDir string, dangerouslySkipPerms bool, enabledProviders []string, _ bool, _ string, _ string) int {
 			gotConfig = configPath
 			gotState = stateDir
 			gotDangerouslySkipPerms = dangerouslySkipPerms
@@ -975,7 +975,7 @@ func TestRunArgsPassesRefreshModelsToLauncher(t *testing.T) {
 		[]string{cliSubcommandServer, "--refresh-models"},
 		&stdout,
 		&stderr,
-		func(_ string, _ string, _ bool, _ []string, refreshModels bool) int {
+		func(_ string, _ string, _ bool, _ []string, refreshModels bool, _ string, _ string) int {
 			gotRefresh = refreshModels
 			return 0
 		},
@@ -1013,7 +1013,7 @@ func TestRunArgsValidateArtifactsCatchesMalformedReviewFeedback(t *testing.T) {
 		[]string{cliSubcommandValidateArtifacts, cliFlagPhase, phaseNameReview, cliFlagRole, string(agent.RoleImplementationReviewCraft), cliFlagDir, iterDir},
 		&stdout,
 		&stderr,
-		func(string, string, bool, []string, bool) int {
+		func(string, string, bool, []string, bool, string, string) int {
 			launchedServer = true
 			return 0
 		},
@@ -1162,7 +1162,7 @@ func TestRunArgsDispatchesServerToSeam(t *testing.T) {
 		[]string{cliSubcommandServer, "--config", testServerConfigPath, "--state-dir", testStateFeaturesDir, "--providers", providerNameCodex},
 		&stdout,
 		&stderr,
-		func(configPath, stateDir string, dangerouslySkipPerms bool, enabledProviders []string, refreshModels bool) int {
+		func(configPath, stateDir string, dangerouslySkipPerms bool, enabledProviders []string, refreshModels bool, _ string, _ string) int {
 			launchedServer = true
 			if configPath != testServerConfigPath {
 				t.Errorf("configPath = %q; want server config", configPath)
@@ -1300,7 +1300,7 @@ func TestParseLaunchArgsRejectsRemovedSurface(t *testing.T) {
 		{name: "run alias", args: []string{"run"}, wantErr: "unknown command: run"},
 		{name: "feature list", args: []string{"feature", "list"}, wantErr: "unknown command: feature"},
 		{name: "feature create", args: []string{"feature", "create", "--name", "x"}, wantErr: "unknown command: feature"},
-		{name: "feature create flag at top level", args: []string{"--name", "x"}, wantErr: "unknown flag: --name"},
+		{name: "feature create flag at top level", args: []string{"--title", "x"}, wantErr: "unknown flag: --title"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1687,6 +1687,39 @@ func TestPickRuntimeParent(t *testing.T) {
 	if got := pickRuntimeParent(); got != want {
 		t.Errorf("pickRuntimeParent() = %q, want %q", got, want)
 	}
+}
+
+func TestResolveRegistryParent(t *testing.T) {
+	t.Run("fresh parent wins when it exists", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		if err := os.MkdirAll(filepath.Join(home, ".agentic-orchestrator"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(filepath.Join(home, ".agentic-workflow"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if got, want := resolveRegistryParent(), filepath.Join(home, ".agentic-orchestrator"); got != want {
+			t.Errorf("resolveRegistryParent() = %q, want %q", got, want)
+		}
+	})
+	t.Run("legacy parent used when it alone exists", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		if err := os.MkdirAll(filepath.Join(home, ".agentic-workflow"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if got, want := resolveRegistryParent(), filepath.Join(home, ".agentic-workflow"); got != want {
+			t.Errorf("resolveRegistryParent() = %q, want %q", got, want)
+		}
+	})
+	t.Run("fresh parent default when neither exists", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		if got, want := resolveRegistryParent(), filepath.Join(home, ".agentic-orchestrator"); got != want {
+			t.Errorf("resolveRegistryParent() = %q, want %q", got, want)
+		}
+	})
 }
 
 func TestPrintUsageAdvertisesRenamedDefaults(t *testing.T) {

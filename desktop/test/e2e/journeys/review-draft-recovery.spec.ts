@@ -52,9 +52,11 @@ test('packaged review recovers unsaved drafts and keeps hostile markdown inert',
       () =>
         handle!.page
           .evaluate(
-            ({ id, review }) =>
+            async ({ id, review }) =>
               window.agentico.loadLocalReviewDraft({
-                runtimeId: 'default-runtime',
+                // Local review drafts are keyed by the connected server's identity.
+                runtimeId:
+                  (await window.agentico.getConnectionStatus()).serverKey ?? 'default-runtime',
                 featureId: id,
                 reviewId: review.reviewId,
               }),

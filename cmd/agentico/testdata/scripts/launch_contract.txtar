@@ -11,6 +11,8 @@ stdout '--config <path>'
 stdout '--state-dir <path>'
 stdout '--providers <list>'
 stdout '--refresh-models'
+stdout '--listen \[host:\]port'
+stdout '--name <name>'
 stdout '--dangerously-skip-permissions'
 stdout '--version, -v'
 stdout '~/.agentic-orchestrator/config.yaml'
@@ -45,4 +47,44 @@ stderr 'unknown command: feature'
 ! exec agentico --config $WORK/config.yaml --state-dir $WORK/features --dangerously-skip-permissions --providers not-a-provider
 stderr '--providers is available only with the headless server'
 stderr 'agentico server --providers'
+! stdout .
+
+# --listen and --name are server-only: without the subcommand they hit the
+# existing headless-server guidance.
+! exec agentico --listen 8080
+stderr '--listen is available only with the headless server'
+! stdout .
+
+! exec agentico --name my-server
+stderr '--name is available only with the headless server'
+! stdout .
+
+# Non-loopback --listen values are accepted by parse-time validation: the
+# network policy binds them (concrete IPs and wildcards alike), so only
+# genuinely invalid values fail fast now.
+! exec agentico server --listen 0.0.0.0:0
+stderr 'between 1 and 65535'
+! stdout .
+
+! exec agentico server --listen 10.0.0.5:notaport
+stderr 'invalid --listen value'
+! stdout .
+
+! exec agentico server --listen 127.0.0.2:notaport
+stderr 'between 1 and 65535'
+! stdout .
+
+# Invalid ports are clear parse errors.
+! exec agentico server --listen 65536
+stderr 'between 1 and 65535'
+! stdout .
+
+! exec agentico server --listen notaport
+stderr 'invalid --listen value'
+! stdout .
+
+# Invalid --name values fail fast as well.
+! exec agentico server --name nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn
+stderr 'invalid --name value'
+stderr 'maximum is 64'
 ! stdout .

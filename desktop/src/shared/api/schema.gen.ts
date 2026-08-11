@@ -482,13 +482,19 @@ export interface paths {
         };
         /** Read runtime configuration. */
         get: operations["getRuntimeConfig"];
-        /** Replace runtime configuration. */
+        /**
+         * Replace runtime configuration.
+         * @description Replaces the runtime configuration. Submitted workspace_roots are validated the same way as for PATCH: each root must exist and resolve to a directory, otherwise the request fails with a 400 invalid_workspace_root error and nothing is persisted.
+         */
         put: operations["putRuntimeConfig"];
         post?: never;
         delete?: never;
         options?: never;
         head?: never;
-        /** Patch runtime configuration. */
+        /**
+         * Patch runtime configuration.
+         * @description Partially updates the runtime configuration. Submitted workspace_roots are validated against the server's filesystem before persistence: every root must exist and resolve to a directory, otherwise the request fails with a 400 invalid_workspace_root error naming each offending path in error.target.invalid_workspace_roots and nothing is persisted.
+         */
         patch: operations["patchRuntimeConfig"];
         trace?: never;
     };
@@ -850,6 +856,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/uploads": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Stage one image or attachment upload server-side.
+         * @description Accepts one file per request as a raw application/octet-stream body with metadata in the query string. Accepted bytes land in a staging directory under the server's state dir, keyed by an opaque, unguessable, single-use reference; the client-supplied name is kept as metadata only and never becomes an on-disk name. Image uploads require a png, jpg, jpeg, gif, or webp file name extension and are capped at 10 MiB; attachment uploads accept any bytes and are capped at 25 MiB. References are consumed by the image_uploads / attachment_uploads fields of the feature-creation, refactor-launch, and chat-start mutations (chat resolves image references only) and expire 24 hours after staging.
+         */
+        post: operations["stageUpload"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -935,6 +961,7 @@ export interface components {
             /** Format: date-time */
             server_time: string;
             compatibility: components["schemas"]["CompatibilityDeclaration"];
+            name?: string;
         };
         /** @description Build provenance for one side of the desktop/server pairing. Purely informational: a differing build identity alone never blocks attachment — compatibility is decided by the explicit declaration fields, not by comparing versions. */
         BuildIdentity: {
@@ -1209,7 +1236,9 @@ export interface components {
             /** @enum {string} */
             inquireness?: "none" | "medium" | "high";
             images?: string[];
+            image_uploads?: string[];
             attachments?: string[];
+            attachment_uploads?: string[];
             use_current_branch?: boolean;
             checkpoints?: components["schemas"]["Checkpoints"];
             /** @enum {string} */
@@ -1217,6 +1246,14 @@ export interface components {
             /** @enum {string} */
             pipeline?: "medium" | "large" | "moonshot";
             idempotency_key?: string;
+        };
+        StageUploadResponse: {
+            api_version: string;
+            reference: string;
+            kind: string;
+            name: string;
+            /** Format: int64 */
+            size: number;
         };
         /** @description Result of the setup action: durable server-owned setup (fresh run or retry of unfinished tasks) has been dispatched without starting orchestration. Progress is reported through the feature detail setup state and SSE invalidation events; on success the feature reaches a startable pre-orchestration state. */
         FeatureSetupResponse: components["schemas"]["ActionBaseResponse"] & components["schemas"]["FeatureActionResult"];
@@ -1318,7 +1355,9 @@ export interface components {
             name: string;
             description?: string;
             images?: string[];
+            image_uploads?: string[];
             attachments?: string[];
+            attachment_uploads?: string[];
             pipeline?: string;
             checkpoints?: unknown;
             effort?: components["schemas"]["EffortConfig"];
@@ -3133,6 +3172,7 @@ export interface operations {
         requestBody: components["requestBodies"]["JSONMutation"];
         responses: {
             200: components["responses"]["ActionResponse"];
+            400: components["responses"]["ErrorResponse"];
             401: components["responses"]["Unauthorized"];
         };
     };
@@ -3149,6 +3189,7 @@ export interface operations {
         requestBody: components["requestBodies"]["JSONMutation"];
         responses: {
             200: components["responses"]["ActionResponse"];
+            400: components["responses"]["ErrorResponse"];
             401: components["responses"]["Unauthorized"];
         };
     };
@@ -3475,6 +3516,43 @@ export interface operations {
         responses: {
             200: components["responses"]["EventStream"];
             401: components["responses"]["Unauthorized"];
+        };
+    };
+    stageUpload: {
+        parameters: {
+            query: {
+                /** @description Staged upload kind: image or attachment. */
+                kind: string;
+                /** @description Original client-side file name, retained as metadata only. */
+                name: string;
+            };
+            header: {
+                /** @description CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required. */
+                "X-Agentico-Client": components["parameters"]["TrustedMutationHeader"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/octet-stream": string;
+            };
+        };
+        responses: {
+            /** @description Staged upload reference. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StageUploadResponse"];
+                };
+            };
+            400: components["responses"]["ErrorResponse"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["ErrorResponse"];
+            413: components["responses"]["ErrorResponse"];
+            415: components["responses"]["ErrorResponse"];
         };
     };
 }

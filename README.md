@@ -245,11 +245,21 @@ Server flags:
   --dangerously-skip-permissions   Skip all permission prompts (use with caution)
   --providers <list>               Restrict to specific providers (claude,codex,opencode)
   --refresh-models                 Refresh provider model catalogs before starting the server
+  --listen [host:]port             Bind address (default: ephemeral 127.0.0.1 port).
+                                   Wildcards (0.0.0.0, ::) expose the server on the
+                                   network and print a bearer-token connection string;
+  --name <name>                    Server display name (overrides server.name config and the
+                                   persisted generated name)
 
 Global flags:
   --help, -h                       Show help
   --version, -v                    Show version
 ```
+
+To run the server on another machine and attach the desktop app to it (network
+bind, connection string, trusted-network expectations, SSH tunneling, and
+keychain recovery), see
+[docs/desktop/remote-servers.md](docs/desktop/remote-servers.md).
 
 ### Updating
 

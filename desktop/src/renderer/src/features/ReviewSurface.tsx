@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { DEFAULT_RUNTIME_ID } from '../../../shared/ipc';
 import type { ReviewDraftKey, ReviewSession, ReviewValidation } from '../../../shared/ipc';
 import { MonacoBuffer, MonacoDiff, useResolvedTheme } from '../components/monaco';
-import { useMediaQuery } from '../hooks';
+import { useConnectionState, useMediaQuery } from '../hooks';
 import { parseIpcError } from '../wizard/ipcError';
 import { renderSanitizedMarkdown } from './sanitizedMarkdown';
 
@@ -53,6 +53,7 @@ export function ReviewSurface({
   const [recoveredKey, setRecoveredKey] = useState<ReviewDraftKey | null>(null);
   const [reconcile, setReconcile] = useState<ReconcileState | null>(null);
   const isNarrow = useMediaQuery('(max-width: 900px)');
+  const connection = useConnectionState();
   const theme = useResolvedTheme();
   const [editorKey, setEditorKey] = useState(0);
 
@@ -62,9 +63,14 @@ export function ReviewSurface({
 
   useEffect(() => {
     let alive = true;
-    void Promise.all([window.agentico.openReview({ featureId }), window.agentico.getSettings()])
-      .then(async ([next, settings]) => {
-        const nextRuntime = settings.runtime.selection ?? DEFAULT_RUNTIME_ID;
+    void window.agentico
+      .openReview({ featureId })
+      .then(async (next) => {
+        // Local recovery drafts are scoped to the connected server's identity,
+        // never the global runtime selection: drafts for server A are
+        // unreachable while connected to B. The mount-time key is stable —
+        // the connection shell remounts this surface on every switch.
+        const nextRuntime = connection.serverKey ?? DEFAULT_RUNTIME_ID;
         const local = await window.agentico.loadLocalReviewDraft({
           runtimeId: nextRuntime,
           featureId,
@@ -107,7 +113,7 @@ export function ReviewSurface({
     return () => {
       alive = false;
     };
-  }, [featureId]);
+  }, [featureId, connection.serverKey]);
 
   useEffect(() => {
     if (session === null) return;

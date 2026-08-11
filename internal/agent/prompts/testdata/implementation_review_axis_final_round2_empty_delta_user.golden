@@ -1,0 +1,68 @@
+Axis under review: Craft
+Gate under review: Final Review
+Review feedback output: /state/feat-x/run-1/review/iteration-02/craft/review-feedback.md
+
+Iteration under review: 2
+Iteration artifacts directory: /state/feat-x/run-1/review/iteration-02
+
+## Approved Design Grounding
+
+Approved design: /state/feat-x/run-1/design/design.md
+
+Approved intent:
+Sign in with Google.
+
+## Review Posture
+
+- Keep this axis read-only: inspect source and artifacts, then write only the required review-feedback.md file.
+
+## Final Review Scope
+
+Review the assembled feature across the cumulative cross-repo diff.
+Cumulative diff base: main
+
+Scope guidance:
+- Judge the whole assembled feature across all repositories in the workspace.
+- Use the approved roadmap as scope context for the completed feature, not as a reason to ignore feature-level gaps.
+- Do not apply per-phase deferral criteria; the full feature is in scope at Final Review.
+Read the approved roadmap at: /state/feat-x/run-1/roadmap/plan.md
+
+Read the implementation plan at: /state/feat-x/run-1/phase-2/plan.md
+
+## Prior Axis Report (Round N-1)
+
+This is your own prior review report from the previous round. Use it to track what you already found and what the fixer addressed.
+
+## Findings
+- Craft: tighten error handling.
+
+## Suggestions
+- Extract retry logic.
+
+## Verdict
+CHANGES_REQUESTED
+
+## Delta Since Your Last Reviewed Round
+
+The delta below covers what changed since your last reviewed round — it is your primary re-review target. The cumulative diff base above remains the overall feature scope.
+
+### api
+
+No changes since your last reviewed round.
+
+## Prior Aggregate Feedback
+
+## Findings
+- Craft issues found.
+
+## Suggestions
+- Refactor X.
+
+## Verdict
+CHANGES_REQUESTED
+
+## Acceptance
+
+Feature acceptance is defined by the `## Acceptance Criteria` section of the approved design at /state/feat-x/run-1/design/design.md.
+
+Apply the "Review Rules (Without Verification Items)" section from the axis methodology.

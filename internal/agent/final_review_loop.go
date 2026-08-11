@@ -35,6 +35,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/doordash-oss/agentic-orchestrator/internal/agent/roles"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
@@ -515,6 +516,8 @@ func (s *featureFinalReviewLoopState) runFinalReviewAxis(iteration int, iterDir 
 	diffBase := featureDefaultDiffBase(cfg.Feature)
 	priorEvidence := priorImplementationEvidenceContextForRun(filepath.Dir(s.artifactDir))
 	intent := resolvePromptIntent(cfg.Feature)
+	priorAxisReport := s.priorAxisReportForAxis(iteration, axisSlug)
+	repoDeltas := s.assembleRepoDeltas(cfg.Feature)
 	prompt := BuildImplementationReviewAxisPromptWithOpts(ImplementationReviewAxisPromptOpts{
 		Gate:                                 implementationReviewGateFinal,
 		AxisLabel:                            axis.Name,
@@ -526,6 +529,8 @@ func (s *featureFinalReviewLoopState) runFinalReviewAxis(iteration int, iterDir 
 		DiffBase:                             diffBase,
 		RefactorPassForkPoint:                refactorPassForkPoint(cfg.Feature),
 		PreviousFeedback:                     s.previousAggregateFeedback(iteration),
+		PriorAxisReport:                      priorAxisReport,
+		RepoDeltas:                           repoDeltas,
 		Iteration:                            iteration,
 		RoadmapPath:                          finalReviewArtifactPath(s.stateDir, cfg.Feature, "roadmap"),
 		PlanPath:                             finalReviewArtifactPath(s.stateDir, cfg.Feature, "plan"),
@@ -620,6 +625,87 @@ func (s *featureFinalReviewLoopState) previousAggregateFeedback(iteration int) s
 		return ""
 	}
 	return strings.TrimSpace(string(data))
+}
+
+// priorAxisReportForAxis reads this axis's own verbatim round N-1
+// review-feedback.md from the previous iteration's on-disk directory.
+// Returns "" on round 1 or when the file is missing/unreadable, so the
+// template omits the section (graceful degradation).
+func (s *featureFinalReviewLoopState) priorAxisReportForAxis(iteration int, axisSlug string) string {
+	if iteration <= 1 {
+		return ""
+	}
+	prevIterDir := filepath.Join(s.artifactDir, fmt.Sprintf("iteration-%02d", iteration-1))
+	path := filepath.Join(prevIterDir, axisSlug, "review-feedback.md")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(data))
+}
+
+// incrementalDiffCapBytes is the harness-owned per-repo size cap for the
+// incremental diff text. When the raw diff exceeds it, the section
+// degrades to a --stat summary plus the full commit-message list.
+const incrementalDiffCapBytes = 200 * 1024
+
+// assembleRepoDeltas builds the per-repo incremental delta blocks for a
+// Final Review round N>1 axis prompt. For each FR-staged repo it resolves
+// the diff range from the previous round's recorded anchor head to the
+// current HEAD using the Phase 1 delta-range helper, then collects the
+// commit messages and full diff text (capped to ~200 KB). An empty range
+// (head == base) yields an explicit empty-delta block. On round 1 (no
+// prior recorded anchor for a repo) the repo is skipped (no delta
+// content). The lookup is restart-safe: it reads from on-disk metas.
+func (s *featureFinalReviewLoopState) assembleRepoDeltas(f *feature.Feature) []roles.RepoDeltaBlock {
+	var deltas []roles.RepoDeltaBlock
+	for _, name := range s.stagedRepos {
+		path := s.workspace.RepoPaths[name]
+		if path == "" {
+			continue
+		}
+		// Only produce delta content for repos with a prior recorded
+		// anchor (round N>1). On round 1 (no prior anchor), the repo
+		// is skipped — no delta content is rendered.
+		priorHead := LatestAnchorHeadForRepo(s.artifactDir, name)
+		if priorHead == "" {
+			continue
+		}
+		rng := ReviewDiffRangeForRepo(s.artifactDir, name, f)
+		if rng.Base == "" || rng.IsEmpty() {
+			deltas = append(deltas, roles.RepoDeltaBlock{
+				RepoName: name,
+				IsEmpty:  true,
+			})
+			continue
+		}
+		commits, err := git.CommitBodiesRange(path, rng.Base, rng.Head)
+		if err != nil {
+			log.Printf("feature %s: incremental delta commit messages for repo %s: %v", s.cfg.Feature.ID, name, err)
+			commits = ""
+		}
+		diffText, err := git.DiffRangeSHAs(path, rng.Base, rng.Head)
+		if err != nil {
+			log.Printf("feature %s: incremental delta diff for repo %s: %v", s.cfg.Feature.ID, name, err)
+			diffText = ""
+		}
+		block := roles.RepoDeltaBlock{
+			RepoName:       name,
+			CommitMessages: strings.TrimSpace(commits),
+			DiffText:       diffText,
+		}
+		if len(diffText) > incrementalDiffCapBytes {
+			stat, statErr := git.DiffStatRange(path, rng.Base, rng.Head)
+			if statErr != nil {
+				log.Printf("feature %s: incremental delta stat fallback for repo %s: %v", s.cfg.Feature.ID, name, statErr)
+				stat = ""
+			}
+			block.DiffText = strings.TrimSpace(stat)
+			block.Capped = true
+		}
+		deltas = append(deltas, block)
+	}
+	return deltas
 }
 
 // anchorIteration is the uniform per-iteration commit step that runs once

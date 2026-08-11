@@ -203,6 +203,14 @@ type VerificationItemView struct {
 	Requirement string
 }
 
+type RepoDeltaBlock struct {
+	RepoName       string
+	CommitMessages string
+	DiffText       string
+	IsEmpty        bool
+	Capped         bool
+}
+
 type ImplementUserInput struct {
 	PlanPath             string
 	ExitCriteria         string
@@ -217,13 +225,15 @@ type ReviewUserInput struct {
 	IterDir   string
 	AxisLabel string
 
-	GateLabel             string
-	FinalGate             bool
-	LiveRunAxis           bool
-	DiffBase              string
-	FeatureDescription    string
-	DesignArtifactPath    string
-	PreviousFeedback      string
+	GateLabel          string
+	FinalGate          bool
+	LiveRunAxis        bool
+	DiffBase           string
+	FeatureDescription string
+	DesignArtifactPath string
+	PreviousFeedback   string
+	PriorAxisReport    string
+	RepoDeltas         []RepoDeltaBlock
 	RefactorPassForkPoint string
 
 	RoadmapPath            string
@@ -613,6 +623,90 @@ func TestGoldenSnapshots(t *testing.T) {
 					PriorImplementationEvidenceRootDirs:  []string{"/state/feat-x/run-1/phase-1/implement/iteration-02"},
 					PriorImplementationEvidenceArtifacts: []string{"/state/feat-x/run-1/phase-1/implement/iteration-02/screenshots/login.png"},
 					FeedbackPath:                         "/state/feat-x/run-1/review/iteration-03/functionality-evidence/review-feedback.md",
+				})
+			},
+		},
+		{
+			name: "implementation_review_axis_final_round2_user",
+			render: func() string {
+				return ImplementationReviewAxisUserPrompt(ReviewUserInput{
+					Iteration:          2,
+					IterDir:            "/state/feat-x/run-1/review/iteration-02",
+					AxisLabel:          "Craft",
+					GateLabel:          "Final Review",
+					FinalGate:          true,
+					DiffBase:           "main",
+					FeatureDescription: "Sign in with Google.",
+					DesignArtifactPath: "/state/feat-x/run-1/design/design.md",
+					PreviousFeedback:   "## Findings\n- Craft issues found.\n\n## Suggestions\n- Refactor X.\n\n## Verdict\nCHANGES_REQUESTED",
+					PriorAxisReport:    "## Findings\n- Craft: tighten error handling in auth.go.\n\n## Suggestions\n- Consider extracting retry logic.\n\n## Verdict\nCHANGES_REQUESTED",
+					RepoDeltas: []RepoDeltaBlock{
+						{
+							RepoName:       "api",
+							CommitMessages: "fix: tighten error handling in auth.go\n---commit---\nrefactor: extract retry logic",
+							DiffText:       "--- a/auth.go\n+++ b/auth.go\n@@ -10,7 +10,9 @@\n func login() {\n-	if err != nil {\n-		log.Fatal(err)\n-	}\n+	if err != nil {\n+		return fmt.Errorf(\"login: %w\", err)\n+	}\n }",
+						},
+					},
+					RoadmapPath:                          "/state/feat-x/run-1/roadmap/plan.md",
+					PlanPath:                             "/state/feat-x/run-1/phase-2/plan.md",
+					AcceptanceClause:                     "Feature acceptance is defined by the `## Acceptance Criteria` section of the approved design at /state/feat-x/run-1/design/design.md.",
+					FeedbackPath:                         "/state/feat-x/run-1/review/iteration-02/craft/review-feedback.md",
+				})
+			},
+		},
+		{
+			name: "implementation_review_axis_final_round2_capped_user",
+			render: func() string {
+				return ImplementationReviewAxisUserPrompt(ReviewUserInput{
+					Iteration:          2,
+					IterDir:            "/state/feat-x/run-1/review/iteration-02",
+					AxisLabel:          "Craft",
+					GateLabel:          "Final Review",
+					FinalGate:          true,
+					DiffBase:           "main",
+					FeatureDescription: "Sign in with Google.",
+					DesignArtifactPath: "/state/feat-x/run-1/design/design.md",
+					PreviousFeedback:   "## Findings\n- Craft issues found.\n\n## Suggestions\n- Refactor X.\n\n## Verdict\nCHANGES_REQUESTED",
+					PriorAxisReport:    "## Findings\n- Craft: tighten error handling.\n\n## Suggestions\n- Extract retry logic.\n\n## Verdict\nCHANGES_REQUESTED",
+					RepoDeltas: []RepoDeltaBlock{
+						{
+							RepoName:       "api",
+							CommitMessages: "fix: tighten error handling\n---commit---\nrefactor: extract retry logic\n---commit---\nchore: update deps",
+							DiffText:       " 10 files changed, 500 insertions(+), 200 deletions(-)",
+							Capped:         true,
+						},
+					},
+					RoadmapPath:                          "/state/feat-x/run-1/roadmap/plan.md",
+					PlanPath:                             "/state/feat-x/run-1/phase-2/plan.md",
+					AcceptanceClause:                     "Feature acceptance is defined by the `## Acceptance Criteria` section of the approved design at /state/feat-x/run-1/design/design.md.",
+					FeedbackPath:                         "/state/feat-x/run-1/review/iteration-02/craft/review-feedback.md",
+				})
+			},
+		},
+		{
+			name: "implementation_review_axis_final_round2_empty_delta_user",
+			render: func() string {
+				return ImplementationReviewAxisUserPrompt(ReviewUserInput{
+					Iteration:          2,
+					IterDir:            "/state/feat-x/run-1/review/iteration-02",
+					AxisLabel:          "Craft",
+					GateLabel:          "Final Review",
+					FinalGate:          true,
+					DiffBase:           "main",
+					FeatureDescription: "Sign in with Google.",
+					DesignArtifactPath: "/state/feat-x/run-1/design/design.md",
+					PreviousFeedback:   "## Findings\n- Craft issues found.\n\n## Suggestions\n- Refactor X.\n\n## Verdict\nCHANGES_REQUESTED",
+					PriorAxisReport:    "## Findings\n- Craft: tighten error handling.\n\n## Suggestions\n- Extract retry logic.\n\n## Verdict\nCHANGES_REQUESTED",
+					RepoDeltas: []RepoDeltaBlock{
+						{
+							RepoName: "api",
+							IsEmpty: true,
+						},
+					},
+					RoadmapPath:                          "/state/feat-x/run-1/roadmap/plan.md",
+					PlanPath:                             "/state/feat-x/run-1/phase-2/plan.md",
+					AcceptanceClause:                     "Feature acceptance is defined by the `## Acceptance Criteria` section of the approved design at /state/feat-x/run-1/design/design.md.",
+					FeedbackPath:                         "/state/feat-x/run-1/review/iteration-02/craft/review-feedback.md",
 				})
 			},
 		},

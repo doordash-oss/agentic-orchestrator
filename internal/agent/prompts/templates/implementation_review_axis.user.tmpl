@@ -49,6 +49,27 @@ Scope guidance:
 
 {{ end }}{{ if .PlanPath }}Read the implementation plan at: {{ .PlanPath }}
 
+{{ end }}{{ if .PriorAxisReport }}## Prior Axis Report (Round N-1)
+
+This is your own prior review report from the previous round. Use it to track what you already found and what the fixer addressed.
+
+{{ .PriorAxisReport }}
+
+{{ end }}{{ if .RepoDeltas }}## Delta Since Your Last Reviewed Round
+
+The delta below covers what changed since your last reviewed round — it is your primary re-review target. The cumulative diff base above remains the overall feature scope.
+
+{{ range .RepoDeltas }}### {{ .RepoName }}
+
+{{ if .IsEmpty }}No changes since your last reviewed round.
+{{ else }}{{ if .CommitMessages }}Commit messages:
+{{ .CommitMessages }}
+
+{{ end }}{{ if .Capped }}Diff (capped to --stat summary, full diff exceeded size budget):
+{{ .DiffText }}
+{{ else if .DiffText }}Diff:
+{{ .DiffText }}
+{{ end }}{{ end }}{{ end }}
 {{ end }}{{ if .PreviousFeedback }}## Prior Aggregate Feedback
 
 {{ .PreviousFeedback }}

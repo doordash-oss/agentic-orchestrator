@@ -312,6 +312,48 @@ func DiffStat(worktreePath string, baseBranch ...string) (string, error) {
 	return string(out), nil
 }
 
+// DiffRangeSHAs returns the full unified diff between two explicit SHAs
+// (baseSHA..headSHA). Unlike DiffSummary/CommitBodies which resolve a
+// branch-name base, this function accepts raw SHAs — used by the Final
+// Review incremental-context path to diff between a prior round's
+// anchor head and the current HEAD. An empty headSHA defaults to "HEAD".
+func DiffRangeSHAs(worktreePath, baseSHA, headSHA string) (string, error) {
+	if headSHA == "" {
+		headSHA = "HEAD"
+	}
+	return diffRange(worktreePath, baseSHA+".."+headSHA)
+}
+
+// CommitBodiesRange returns the full commit messages (subject + body) in
+// the range baseSHA..headSHA, separated by ---commit--- markers. Uses
+// explicit SHAs rather than branch-name resolution.
+func CommitBodiesRange(worktreePath, baseSHA, headSHA string) (string, error) {
+	if headSHA == "" {
+		headSHA = "HEAD"
+	}
+	cmd := exec.Command("git", "-C", worktreePath, "log", "--format=%B%n---commit---", baseSHA+".."+headSHA)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("getting commit bodies in range %s..%s: %s: %w", baseSHA, headSHA, strings.TrimSpace(string(out)), err)
+	}
+	return string(out), nil
+}
+
+// DiffStatRange returns a per-file --stat summary between two explicit
+// SHAs. Used as the capped-diff fallback when the full diff exceeds the
+// size budget.
+func DiffStatRange(worktreePath, baseSHA, headSHA string) (string, error) {
+	if headSHA == "" {
+		headSHA = "HEAD"
+	}
+	cmd := exec.Command("git", "-C", worktreePath, "diff", "--stat", baseSHA+".."+headSHA)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("getting diff stat in range %s..%s: %s: %w", baseSHA, headSHA, strings.TrimSpace(string(out)), err)
+	}
+	return string(out), nil
+}
+
 // resolveBase returns the base ref to diff against. A matching origin
 // remote-tracking branch takes precedence over the local branch because
 // publish and completion diffs describe what a PR against the remote base

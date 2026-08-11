@@ -100,6 +100,12 @@ type ImplementationReviewAxisPromptOpts struct {
 	AcceptanceClause   string
 	DiffBase           string
 	PreviousFeedback   string
+	// PriorAxisReport carries this axis's own verbatim round N-1
+	// review-feedback.md for Final Review round N>1.
+	PriorAxisReport string
+	// RepoDeltas carries the per-repo incremental diff blocks for Final
+	// Review round N>1.
+	RepoDeltas []roles.RepoDeltaBlock
 	// RefactorPassForkPoint resolves the spec's "fork point" references for a
 	// refactor child ("repo @ sha"). Empty for top-level features.
 	RefactorPassForkPoint string
@@ -169,6 +175,8 @@ func BuildImplementationReviewAxisPromptWithOpts(opts ImplementationReviewAxisPr
 			FeatureDescription:                   opts.FeatureDescription,
 			DesignArtifactPath:                   opts.DesignArtifactPath,
 			PreviousFeedback:                     opts.PreviousFeedback,
+			PriorAxisReport:                      opts.PriorAxisReport,
+			RepoDeltas:                           opts.RepoDeltas,
 			RoadmapPath:                          opts.RoadmapPath,
 			PlanPath:                             opts.PlanPath,
 			ExitCriteria:                         opts.ExitCriteria,

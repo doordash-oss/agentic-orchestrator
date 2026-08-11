@@ -84,6 +84,16 @@ describe('remote release publication verification', () => {
         request: async () => ({ status: 401, data: { message: 'Bad credentials' } }),
       }),
     ).rejects.toThrow(/returned 401/);
+    await expect(
+      reserveRemoteTag({
+        tag: TAG,
+        commit: COMMIT,
+        request: async (path) =>
+          path.endsWith('/git/refs')
+            ? { status: 422, data: { message: 'Reference already exists' } }
+            : { status: 404, data: { message: 'Not Found' } },
+      }),
+    ).rejects.toThrow(/reserved by another commit/);
   });
 
   it('requires GITHUB_TOKEN before it makes a real GitHub API request', async () => {

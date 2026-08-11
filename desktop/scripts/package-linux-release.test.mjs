@@ -1,11 +1,26 @@
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import {
+  existsSync,
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { runLinuxRelease, runLocalLinuxRelease } from './package-linux-release.mjs';
+import {
+  prepareReleaseDirectories,
+  runLinuxRelease,
+  runLocalLinuxRelease,
+} from './package-linux-release.mjs';
 import { LINUX_ARM64_VERIFIER_IMAGE } from './lib/release-artifacts.mjs';
 
 const GiB = 1024 ** 3;
@@ -20,18 +35,52 @@ function makeTempRoot() {
   const root = mkdtempSync(join(tmpdir(), 'agentico-linux-release-'));
   tempRoots.push(root);
   mkdirSync(join(root, 'desktop', 'dist'), { recursive: true });
+  mkdirSync(join(root, '.git'), { recursive: true });
   return root;
 }
 
-function writeReleaseOutputs(root, arch) {
-  const distDir = join(root, 'desktop', 'dist');
+function stagingDir(root, arch) {
+  return join(root, '.git', 'agentico-release-staging', 'run-123', arch);
+}
+
+function writeReleaseOutputs(root, arch, { receipt = true } = {}) {
+  const distDir = stagingDir(root, arch);
+  mkdirSync(distDir, { recursive: true });
   const debArch = arch === 'x64' ? 'amd64' : arch;
-  for (const name of [
-    `Agentico-${arch}.AppImage`,
-    `agentico_0.150.0_${debArch}.deb`,
-    `package-verification-linux-${arch}.json`,
-  ]) {
-    writeFileSync(join(distDir, name), `${arch}\n`);
+  const names = [`Agentico-${arch}.AppImage`, `agentico_0.150.0_${debArch}.deb`];
+  const evidence = new Map();
+  for (const name of names) {
+    const bytes = Buffer.from(`${arch}-${name}\n`);
+    writeFileSync(join(distDir, name), bytes);
+    evidence.set(name, {
+      sha256: createHash('sha256').update(bytes).digest('hex'),
+      size: bytes.length,
+    });
+  }
+  if (receipt) {
+    const artifacts = names.map((name, index) => ({
+      target: { os: 'linux', arch },
+      format: index === 0 ? 'AppImage' : 'deb',
+      path: `/agentico-release-build/desktop/dist/${name}`,
+      sha256: evidence.get(name).sha256,
+      size: evidence.get(name).size,
+      identity: {},
+    }));
+    writeFileSync(
+      join(distDir, `package-verification-linux-${arch}.json`),
+      `${JSON.stringify({ schema_version: 2, target: { os: 'linux', arch }, artifacts })}\n`,
+    );
+  }
+}
+
+function writeInvocationOutputs(root, args) {
+  const arch = args
+    .find((arg) => arg.startsWith('AGENTICO_PACKAGE_ARCH='))
+    ?.split('=')
+    .at(-1);
+  if (arch === 'x64') writeReleaseOutputs(root, arch);
+  if (arch === 'arm64') {
+    writeReleaseOutputs(root, arch, { receipt: args.includes(LINUX_ARM64_VERIFIER_IMAGE) });
   }
 }
 
@@ -40,16 +89,14 @@ function validFixtureOptions(overrides = {}) {
   return {
     repoRoot,
     gitCommonDir: join(repoRoot, '.git'),
+    gitWorktreeDir: join(repoRoot, '.git'),
+    runId: 'run-123',
     gitStatus: '',
     exactTag: 'v0.150.0',
     freeBytes: 20 * GiB,
     dockerAvailable: true,
     execute: (_command, args) => {
-      const arch = args
-        .find((arg) => arg.startsWith('AGENTICO_PACKAGE_ARCH='))
-        ?.split('=')
-        .at(-1);
-      if (arch !== undefined) writeReleaseOutputs(repoRoot, arch);
+      writeInvocationOutputs(repoRoot, args);
     },
     ...overrides,
   };
@@ -63,6 +110,7 @@ function localFixtureOptions({ gitStatus = '', exactTag = 'v0.150.0', freeBytes 
       const command = args.join(' ');
       if (command === 'rev-parse --show-toplevel') return repoRoot;
       if (command === 'rev-parse --git-common-dir') return '.git';
+      if (command === 'rev-parse --git-dir') return '.git';
       if (command === 'describe --tags --exact-match') return exactTag;
       if (command === 'status --porcelain') return gitStatus;
       throw new Error(`unexpected Git command: ${command}`);
@@ -117,7 +165,7 @@ describe('runLinuxRelease', () => {
         .find((arg) => arg.startsWith('AGENTICO_PACKAGE_ARCH='))
         ?.split('=')
         .at(-1);
-      if (arch !== undefined) writeReleaseOutputs(options.repoRoot, arch);
+      if (arch !== undefined) writeInvocationOutputs(options.repoRoot, args);
     };
 
     runLinuxRelease(options);
@@ -125,8 +173,105 @@ describe('runLinuxRelease', () => {
     expect(
       dockerInvocations
         .filter((args) => args.includes('linux/amd64'))
-        .some((args) => args.includes(`${options.gitEntry}:${options.repoRoot}/.git:ro`)),
+        .some((args) => args.includes(`${options.gitEntry}:/agentico-release-source/.git:ro`)),
     ).toBe(true);
+  });
+
+  it('assembles exact staged outputs into final dist and rewrites receipt paths canonically', () => {
+    const options = validFixtureOptions();
+    runLinuxRelease(options);
+    const receipt = JSON.parse(
+      readFileSync(
+        join(options.repoRoot, 'desktop', 'dist', 'package-verification-linux-x64.json'),
+        'utf8',
+      ),
+    );
+    const canonicalRoot = realpathSync(options.repoRoot);
+    expect(receipt.artifacts.map(({ path }) => path)).toEqual([
+      join(canonicalRoot, 'desktop', 'dist', 'Agentico-x64.AppImage'),
+      join(canonicalRoot, 'desktop', 'dist', 'agentico_0.150.0_amd64.deb'),
+    ]);
+  });
+
+  it('rejects an unexpected staging file before assembling target outputs', () => {
+    const options = validFixtureOptions();
+    options.execute = (_command, args) => {
+      const arch = args
+        .find((arg) => arg.startsWith('AGENTICO_PACKAGE_ARCH='))
+        ?.split('=')
+        .at(-1);
+      if (arch === 'x64') {
+        writeReleaseOutputs(options.repoRoot, arch);
+        writeFileSync(join(stagingDir(options.repoRoot, arch), 'unexpected'), 'hostile\n');
+      }
+    };
+    expect(() => runLinuxRelease(options)).toThrow(/unexpected staging entries.*unexpected/);
+    expect(readdirSync(join(options.repoRoot, 'desktop', 'dist'))).toEqual([]);
+  });
+
+  it('rejects a symlinked staging artifact', () => {
+    const options = validFixtureOptions();
+    options.execute = (_command, args) => {
+      const arch = args
+        .find((arg) => arg.startsWith('AGENTICO_PACKAGE_ARCH='))
+        ?.split('=')
+        .at(-1);
+      if (arch === 'x64') {
+        writeReleaseOutputs(options.repoRoot, arch);
+        const artifact = join(stagingDir(options.repoRoot, arch), 'Agentico-x64.AppImage');
+        rmSync(artifact);
+        symlinkSync('/etc/passwd', artifact);
+      }
+    };
+    expect(() => runLinuxRelease(options)).toThrow(/staging entry is not a regular file/);
+  });
+
+  it('rejects symlinked staging parents before Docker', () => {
+    const options = validFixtureOptions();
+    const stagingRoot = join(options.repoRoot, '.git', 'agentico-release-staging');
+    symlinkSync(join(options.repoRoot, 'desktop'), stagingRoot);
+    let contacted = false;
+    options.execute = () => {
+      contacted = true;
+    };
+    expect(() => runLinuxRelease(options)).toThrow(/staging.*symbolic link/i);
+    expect(contacted).toBe(false);
+  });
+
+  it('rejects stale staging entries before Docker', () => {
+    const options = validFixtureOptions();
+    const target = stagingDir(options.repoRoot, 'x64');
+    mkdirSync(target, { recursive: true });
+    writeFileSync(join(target, 'stale.AppImage'), 'stale\n');
+    let contacted = false;
+    options.execute = () => {
+      contacted = true;
+    };
+    expect(() => runLinuxRelease(options)).toThrow(/stale or unexpected entries/);
+    expect(contacted).toBe(false);
+  });
+
+  it('rejects a symlinked final dist directory before Docker', () => {
+    const options = validFixtureOptions();
+    rmSync(join(options.repoRoot, 'desktop', 'dist'), { recursive: true });
+    symlinkSync(join(options.repoRoot, '.git'), join(options.repoRoot, 'desktop', 'dist'));
+    let contacted = false;
+    options.execute = () => {
+      contacted = true;
+    };
+    expect(() => runLinuxRelease(options)).toThrow(/final dist.*symbolic link/i);
+    expect(contacted).toBe(false);
+  });
+
+  it('rejects staging directories outside the per-worktree Git metadata root', () => {
+    const root = makeTempRoot();
+    expect(() =>
+      prepareReleaseDirectories({
+        repoRoot: root,
+        gitWorktreeDir: join(root, '.git'),
+        runId: '../../desktop/dist',
+      }),
+    ).toThrow(/invalid release run id/);
   });
 
   it('does not accept arm64 outputs until the matching-architecture verifier succeeds', () => {
@@ -138,7 +283,10 @@ describe('runLinuxRelease', () => {
         ?.split('=')
         .at(-1);
       if (arch === 'x64') writeReleaseOutputs(options.repoRoot, 'x64');
-      if (args.includes(LINUX_ARM64_VERIFIER_IMAGE)) {
+      if (arch === 'arm64' && !args.includes(LINUX_ARM64_VERIFIER_IMAGE)) {
+        writeReleaseOutputs(options.repoRoot, 'arm64', { receipt: false });
+      }
+      if (arch === 'arm64' && args.includes(LINUX_ARM64_VERIFIER_IMAGE)) {
         arm64VerifierRan = true;
         writeReleaseOutputs(options.repoRoot, 'arm64');
       }
@@ -225,14 +373,19 @@ describe('runLinuxRelease', () => {
   it('rejects a completed container that does not write its x64 receipt', () => {
     const options = validFixtureOptions({ execute: () => {} });
 
-    expect(() => runLinuxRelease(options)).toThrow(
-      /x64 package verification did not produce required release files/,
-    );
+    expect(() => runLinuxRelease(options)).toThrow(/missing required entries/);
   });
 
   it('removes stale x64 outputs before requiring the current build to produce them', () => {
     const options = validFixtureOptions();
-    writeReleaseOutputs(options.repoRoot, 'x64');
+    const finalDist = join(options.repoRoot, 'desktop', 'dist');
+    for (const name of [
+      'Agentico-x64.AppImage',
+      'agentico_0.150.0_amd64.deb',
+      'package-verification-linux-x64.json',
+    ]) {
+      writeFileSync(join(finalDist, name), 'stale\n');
+    }
     const arm64AttemptPath = join(options.repoRoot, 'arm64-attempted');
     options.execute = (_command, args) => {
       const arch = args
@@ -242,9 +395,8 @@ describe('runLinuxRelease', () => {
       if (arch === 'arm64') writeFileSync(arm64AttemptPath, 'attempted\n');
     };
 
-    expect(() => runLinuxRelease(options)).toThrow(
-      /x64 package verification did not produce required release files/,
-    );
+    expect(() => runLinuxRelease(options)).toThrow(/missing required entries/);
+    expect(readdirSync(finalDist)).toEqual([]);
     expect(existsSync(arm64AttemptPath)).toBe(false);
   });
 
@@ -261,9 +413,7 @@ describe('runLinuxRelease', () => {
       if (arch === 'arm64') writeFileSync(arm64AttemptPath, 'attempted\n');
     };
 
-    expect(() => runLinuxRelease(options)).toThrow(
-      /x64 package verification did not produce required release files/,
-    );
+    expect(() => runLinuxRelease(options)).toThrow(/missing required entries/);
     expect(existsSync(staleIntermediate)).toBe(false);
     expect(existsSync(arm64AttemptPath)).toBe(false);
   });
@@ -302,7 +452,7 @@ describe('runLinuxRelease', () => {
         .find((arg) => arg.startsWith('AGENTICO_PACKAGE_ARCH='))
         ?.split('=')
         .at(-1);
-      if (arch !== undefined) writeReleaseOutputs(options.repoRoot, arch);
+      if (arch !== undefined) writeInvocationOutputs(options.repoRoot, args);
     };
 
     expect(runLinuxRelease(options).completed).toEqual(['x64', 'arm64']);
@@ -341,7 +491,7 @@ describe('runLinuxRelease', () => {
         .find((arg) => arg.startsWith('AGENTICO_PACKAGE_ARCH='))
         ?.split('=')
         .at(-1);
-      if (arch !== undefined) writeReleaseOutputs(options.repoRoot, arch);
+      if (arch !== undefined) writeInvocationOutputs(options.repoRoot, args);
     };
 
     expect(runLinuxRelease(options).completed).toEqual(['x64', 'arm64']);

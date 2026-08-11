@@ -56,6 +56,7 @@ import {
   executableArchitectureError,
   inspectExecutableArchitecture,
   packageIdentityTargetError,
+  shouldRequireUnpackedApp,
 } from './lib/package-verification.mjs';
 import {
   createPackageVerificationReceipt,
@@ -67,6 +68,7 @@ const desktopDir = dirname(dirname(fileURLToPath(import.meta.url)));
 const distDir = join(desktopDir, 'dist');
 const require = createRequire(import.meta.url);
 const unpackedOnly = process.argv.slice(2).includes('--unpacked');
+const artifactsOnly = process.env.AGENTICO_VERIFY_ARTIFACTS_ONLY === '1';
 const packageTarget = resolvePackageTarget(
   process.platform,
   process.arch,
@@ -404,7 +406,7 @@ async function main() {
   // the payload verified above. Dev fallback for 6b when no package exists:
   // `npm run package:build` first, or run the app with electron-vite dev +
   // AGENTICO_SERVER_BIN.
-  if (!existsSync(unpackedApp)) {
+  if (shouldRequireUnpackedApp({ unpackedOnly, artifactsOnly }) && !existsSync(unpackedApp)) {
     fail(`expected unpacked app for packaged E2E at ${unpackedApp}`);
   }
   const manifest = unpackedOnly
@@ -418,7 +420,7 @@ async function main() {
     : createPackageVerificationReceipt({
         target: packageTarget,
         artifacts: verified,
-        unpackedApp,
+        unpackedApp: artifactsOnly ? undefined : unpackedApp,
         host: { os: process.platform, arch: process.arch },
       });
   const receipt = `${JSON.stringify(manifest, null, 2)}\n`;

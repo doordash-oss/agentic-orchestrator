@@ -8,6 +8,7 @@ import {
   releaseVersionFromTag,
   resolvePackageTarget,
   selectPackageArtifact,
+  shellQuote,
 } from './release-artifacts.mjs';
 
 describe('releaseVersionFromTag', () => {
@@ -90,12 +91,24 @@ describe('selectPackageArtifact', () => {
 });
 
 describe('createLinuxDockerPlan', () => {
-  it('builds sequential pinned Docker invocations with worktree Git metadata', () => {
-    const plan = createLinuxDockerPlan({
+  const stagingDirs = Object.freeze({
+    x64: '/repo/.git/agentico-release-staging/run/x64',
+    arm64: '/repo/.git/agentico-release-staging/run/arm64',
+  });
+
+  function planOptions(overrides = {}) {
+    return {
       repoRoot: '/repo/worktree',
       gitCommonDir: '/repo/.git',
       volumePrefix: 'agentico-release',
-    });
+      version: '0.150.0',
+      stagingDirs,
+      ...overrides,
+    };
+  }
+
+  it('builds sequential pinned Docker invocations with worktree Git metadata', () => {
+    const plan = createLinuxDockerPlan(planOptions());
     expect(plan.map(({ arch }) => arch)).toEqual(['x64', 'arm64']);
     expect(plan[0].args).toEqual(
       expect.arrayContaining([
@@ -109,11 +122,7 @@ describe('createLinuxDockerPlan', () => {
         '-v',
         '/repo/.git:/repo/.git:ro',
         '-v',
-        '/repo/worktree/desktop/dist:/repo/worktree/desktop/dist',
-        '-v',
-        '/repo/worktree/desktop/out:/repo/worktree/desktop/out',
-        '-v',
-        '/repo/worktree/desktop/resources:/agentico-release-output/resources',
+        '/repo/.git/agentico-release-staging/run/x64:/agentico-release-export',
       ]),
     );
     expect(plan[0].args.join(' ')).toContain(LINUX_BUILDER_IMAGE);
@@ -123,7 +132,7 @@ describe('createLinuxDockerPlan', () => {
     expect(plan[0].args).toEqual(
       expect.arrayContaining([
         '-v',
-        'agentico-release-node-modules:/repo/worktree/node_modules',
+        'agentico-release-node-modules:/agentico-release-build/node_modules',
         '-v',
         'agentico-release-npm-cache:/root/.npm',
         '-v',
@@ -140,11 +149,7 @@ describe('createLinuxDockerPlan', () => {
   });
 
   it('bootstraps the pinned Go toolchain required by the release module', () => {
-    const plan = createLinuxDockerPlan({
-      repoRoot: '/repo/worktree',
-      gitCommonDir: '/repo/.git',
-      volumePrefix: 'agentico-release',
-    });
+    const plan = createLinuxDockerPlan(planOptions());
 
     const command = plan[0].args.at(-1);
     expect(command).toContain('go1.25.0.linux-amd64.tar.gz');
@@ -154,11 +159,7 @@ describe('createLinuxDockerPlan', () => {
   });
 
   it('verifies the arm64 package in a matching pinned runtime container', () => {
-    const arm64 = createLinuxDockerPlan({
-      repoRoot: '/repo/worktree',
-      gitCommonDir: '/repo/.git',
-      volumePrefix: 'agentico-release',
-    })[1];
+    const arm64 = createLinuxDockerPlan(planOptions())[1];
 
     expect(arm64.args.at(-1)).toContain('npm run package:build --workspace desktop');
     expect(arm64.verificationArgs).toEqual(
@@ -181,52 +182,79 @@ describe('createLinuxDockerPlan', () => {
   });
 
   it('returns a frozen plan', () => {
-    expect(
-      Object.isFrozen(
-        createLinuxDockerPlan({
-          repoRoot: '/repo/worktree',
-          gitCommonDir: '/repo/.git',
-          volumePrefix: 'agentico-release',
-        }),
-      ),
-    ).toBe(true);
+    expect(Object.isFrozen(createLinuxDockerPlan(planOptions()))).toBe(true);
   });
 
   it('mounts a linked-worktree .git entry separately while copying no Git metadata', () => {
-    const plan = createLinuxDockerPlan({
-      repoRoot: '/repo/worktree',
-      gitEntry: '/repo/worktrees/linux/.git',
-      gitCommonDir: '/repo/.git',
-      volumePrefix: 'agentico-release',
-    });
-    expect(plan[0].args).toContain('/repo/worktrees/linux/.git:/repo/worktree/.git:ro');
-    expect(plan[0].args.at(-1)).toContain('--exclude=.git');
-  });
-
-  it('extracts the isolated source archive into the release checkout itself', () => {
-    const plan = createLinuxDockerPlan({
-      repoRoot: '/repo/worktree',
-      gitCommonDir: '/repo/.git',
-      volumePrefix: 'agentico-release',
-    });
-
+    const plan = createLinuxDockerPlan(
+      planOptions({
+        gitEntry: '/repo/worktrees/linux/.git',
+      }),
+    );
+    expect(plan[0].args).toContain('/repo/worktrees/linux/.git:/agentico-release-source/.git:ro');
     expect(plan[0].args.at(-1)).toContain(
-      'tar -C "/agentico-release-source" --exclude=.git --exclude=node_modules --exclude=desktop/dist --exclude=desktop/out --exclude=desktop/resources -cf - . | tar -C "/repo/worktree" -xf -',
+      "git -C '/agentico-release-source' archive --format=tar HEAD",
     );
   });
 
-  it('copies staged resources out only after packaging can replace its local directory', () => {
-    const plan = createLinuxDockerPlan({
-      repoRoot: '/repo/worktree',
-      gitCommonDir: '/repo/.git',
-      volumePrefix: 'agentico-release',
-    });
+  it('extracts exactly committed HEAD into the container-local checkout', () => {
+    const plan = createLinuxDockerPlan(planOptions());
 
     expect(plan[0].args.at(-1)).toContain(
-      'find "/agentico-release-output/resources" -mindepth 1 -delete',
+      "git -C '/agentico-release-source' archive --format=tar HEAD | tar -C '/agentico-release-build' -xf -",
     );
+  });
+
+  it('mounts only the current target staging directory and no host build outputs', () => {
+    const plan = createLinuxDockerPlan(planOptions());
+    const x64 = plan[0].args;
+    const arm64 = plan[1].args;
+    expect(x64).toContain(`${stagingDirs.x64}:/agentico-release-export`);
+    expect(x64).not.toContain(`${stagingDirs.arm64}:/agentico-release-export`);
+    expect(arm64).toContain(`${stagingDirs.arm64}:/agentico-release-export`);
+    expect(arm64).not.toContain(`${stagingDirs.x64}:/agentico-release-export`);
+    for (const invocation of plan.flatMap(({ args, verificationArgs = [] }) => [
+      args,
+      verificationArgs,
+    ])) {
+      expect(invocation.some((arg) => arg.includes('/desktop/dist:'))).toBe(false);
+      expect(invocation.some((arg) => arg.includes('/desktop/out:'))).toBe(false);
+      expect(invocation.some((arg) => arg.includes('/desktop/resources:'))).toBe(false);
+    }
+  });
+
+  it('exports only exact target artifacts and keeps x64 invisible to arm verification', () => {
+    const plan = createLinuxDockerPlan(planOptions());
     expect(plan[0].args.at(-1)).toContain(
-      'tar -C "/repo/worktree/desktop/resources" -cf - . | tar -C "/agentico-release-output/resources" -xf -',
+      "cp -- '/agentico-release-build/desktop/dist/Agentico-x64.AppImage' '/agentico-release-export/Agentico-x64.AppImage'",
     );
+    expect(plan[0].args.at(-1)).toContain('package-verification-linux-x64.json');
+    expect(plan[1].args.at(-1)).not.toContain('package-verification-linux-arm64.json');
+    expect(plan[1].verificationArgs.at(-1)).toContain('Agentico-arm64.AppImage');
+    expect(plan[1].verificationArgs.at(-1)).not.toContain('Agentico-x64.AppImage');
+    expect(plan[1].verificationArgs.at(-1)).toContain('package-verification-linux-arm64.json');
+  });
+
+  it('passes hostile host paths as literal Docker arguments, never shell source', () => {
+    const hostileRoot = "/repo/space $() `tick` 'quote'";
+    const hostileGit = `${hostileRoot}/.git`;
+    const hostileStages = {
+      x64: `${hostileGit}/agentico release/x64`,
+      arm64: `${hostileGit}/agentico release/arm64`,
+    };
+    const plan = createLinuxDockerPlan(
+      planOptions({ repoRoot: hostileRoot, gitCommonDir: hostileGit, stagingDirs: hostileStages }),
+    );
+    expect(plan[0].args).toContain(`${hostileRoot}:/agentico-release-source:ro`);
+    expect(plan[0].args).toContain(`${hostileStages.x64}:/agentico-release-export`);
+    expect(plan[0].args.at(-1)).not.toContain(hostileRoot);
+    expect(plan[0].args.at(-1)).not.toContain('$()');
+    expect(plan[0].args.at(-1)).not.toContain('`tick`');
+  });
+});
+
+describe('shellQuote', () => {
+  it('preserves spaces, substitutions, backticks, and single quotes as one literal word', () => {
+    expect(shellQuote("space $() `tick` 'quote'")).toBe(`'space $() \`tick\` '"'"'quote'"'"''`);
   });
 });

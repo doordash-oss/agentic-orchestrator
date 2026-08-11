@@ -8,6 +8,7 @@ import {
   inspectExecutableArchitecture,
   macAsarIntegrityHash,
   packageIdentityTargetError,
+  shouldRequireUnpackedApp,
 } from './package-verification.mjs';
 import { resolvePackageTarget } from './release-artifacts.mjs';
 
@@ -50,6 +51,14 @@ describe('createPackageVerificationPlan', () => {
     expect(packageIdentityTargetError({ os: 'linux', arch: 'x64' }, plan.target)).toMatch(
       /expected arm64 for package target/,
     );
+  });
+});
+
+describe('shouldRequireUnpackedApp', () => {
+  it('allows a native verifier container to validate imported distributables only', () => {
+    expect(shouldRequireUnpackedApp({ unpackedOnly: false, artifactsOnly: true })).toBe(false);
+    expect(shouldRequireUnpackedApp({ unpackedOnly: false, artifactsOnly: false })).toBe(true);
+    expect(shouldRequireUnpackedApp({ unpackedOnly: true, artifactsOnly: true })).toBe(true);
   });
 });
 

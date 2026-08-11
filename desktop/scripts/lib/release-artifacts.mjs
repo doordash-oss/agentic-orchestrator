@@ -317,36 +317,44 @@ export function createLinuxDockerPlan({
   gitCommonDir,
   gitEntry = resolve(repoRoot, '.git'),
   volumePrefix,
+  version,
+  stagingDirs,
 }) {
   const sourceMount = '/agentico-release-source';
-  const resourcesOutputMount = '/agentico-release-output/resources';
-  const mounts = [
-    '-v',
-    `${repoRoot}:${sourceMount}:ro`,
-    '-v',
-    `${gitCommonDir}:${gitCommonDir}:ro`,
-    '-v',
-    `${repoRoot}/desktop/dist:${repoRoot}/desktop/dist`,
-    '-v',
-    `${repoRoot}/desktop/out:${repoRoot}/desktop/out`,
-    '-v',
-    `${repoRoot}/desktop/resources:${resourcesOutputMount}`,
-    '-v',
-    `${volumePrefix}-node-modules:${repoRoot}/node_modules`,
-    '-v',
-    `${volumePrefix}-npm-cache:/root/.npm`,
-    '-v',
-    `${volumePrefix}-electron:/root/.cache/electron`,
-    '-v',
-    `${volumePrefix}-electron-builder:/root/.cache/electron-builder`,
-    '--workdir',
-    '/',
-  ];
-  if (gitEntry !== gitCommonDir) mounts.splice(4, 0, '-v', `${gitEntry}:${repoRoot}/.git:ro`);
+  const buildRoot = '/agentico-release-build';
+  const exportMount = '/agentico-release-export';
+  if (!/^\d+\.\d+\.\d+$/.test(version ?? '')) {
+    throw new Error(`invalid release version for Docker plan: ${version}`);
+  }
   return Object.freeze(
     ['x64', 'arm64'].map((arch) => {
+      const targetStage = stagingDirs?.[arch];
+      if (typeof targetStage !== 'string' || targetStage === '') {
+        throw new Error(`missing ${arch} release staging directory`);
+      }
+      const mounts = [
+        '-v',
+        `${repoRoot}:${sourceMount}:ro`,
+        '-v',
+        `${gitCommonDir}:${gitCommonDir}:ro`,
+        '-v',
+        `${targetStage}:${exportMount}`,
+        '-v',
+        `${volumePrefix}-node-modules:${buildRoot}/node_modules`,
+        '-v',
+        `${volumePrefix}-npm-cache:/root/.npm`,
+        '-v',
+        `${volumePrefix}-electron:/root/.cache/electron`,
+        '-v',
+        `${volumePrefix}-electron-builder:/root/.cache/electron-builder`,
+        '--workdir',
+        '/',
+      ];
+      if (gitEntry !== gitCommonDir) {
+        mounts.splice(4, 0, '-v', `${gitEntry}:${sourceMount}/.git:ro`);
+      }
       const builderCommand = [
-        ...copySourceCommand(sourceMount, repoRoot),
+        ...copySourceCommand(sourceMount, buildRoot),
         ...goBootstrapCommand('amd64'),
         'npm ci --fetch-retries=5 --fetch-retry-mintimeout=1000 --fetch-retry-maxtimeout=30000 --fetch-timeout=300000',
       ];
@@ -355,7 +363,7 @@ export function createLinuxDockerPlan({
           ? 'npm run package:build --workspace desktop'
           : 'npm run package:verify --workspace desktop',
       );
-      builderCommand.push(...copyResourcesCommand(repoRoot, resourcesOutputMount));
+      builderCommand.push(...exportTargetCommands({ arch, version, buildRoot, exportMount }));
       const invocation = {
         arch,
         args: Object.freeze([
@@ -385,9 +393,11 @@ export function createLinuxDockerPlan({
           'bash',
           '-lc',
           [
-            ...copySourceCommand(sourceMount, repoRoot),
+            ...copySourceCommand(sourceMount, buildRoot),
+            ...importTargetCommands({ arch, version, buildRoot, exportMount }),
             ...goBootstrapCommand('arm64'),
-            'node desktop/scripts/verify-package.mjs',
+            'AGENTICO_VERIFY_ARTIFACTS_ONLY=1 node desktop/scripts/verify-package.mjs',
+            ...exportReceiptCommands({ arch, buildRoot, exportMount }),
           ].join(' && '),
         ]);
       }
@@ -397,23 +407,49 @@ export function createLinuxDockerPlan({
 }
 
 function copySourceCommand(sourceMount, repoRoot) {
-  const source = JSON.stringify(sourceMount);
-  const destination = JSON.stringify(repoRoot);
+  const source = shellQuote(sourceMount);
+  const destination = shellQuote(repoRoot);
   return [
     `mkdir -p ${destination}`,
-    `tar -C ${source} --exclude=.git --exclude=node_modules --exclude=desktop/dist --exclude=desktop/out --exclude=desktop/resources -cf - . | tar -C ${destination} -xf -`,
+    `git -C ${source} archive --format=tar HEAD | tar -C ${destination} -xf -`,
     `cd ${destination}`,
   ];
 }
 
-function copyResourcesCommand(repoRoot, outputMount) {
-  const source = JSON.stringify(`${repoRoot}/desktop/resources`);
-  const destination = JSON.stringify(outputMount);
+function targetArtifactNames(arch, version) {
+  const debArch = arch === 'x64' ? 'amd64' : 'arm64';
+  return [`Agentico-${arch}.AppImage`, `agentico_${version}_${debArch}.deb`];
+}
+
+function exportTargetCommands({ arch, version, buildRoot, exportMount }) {
+  const names = targetArtifactNames(arch, version);
+  if (arch === 'x64') names.push('package-verification-linux-x64.json');
+  return names.map(
+    (name) =>
+      `cp -- ${shellQuote(`${buildRoot}/desktop/dist/${name}`)} ${shellQuote(`${exportMount}/${name}`)}`,
+  );
+}
+
+function importTargetCommands({ arch, version, buildRoot, exportMount }) {
+  const dist = `${buildRoot}/desktop/dist`;
   return [
-    `mkdir -p ${destination}`,
-    `find ${destination} -mindepth 1 -delete`,
-    `tar -C ${source} -cf - . | tar -C ${destination} -xf -`,
+    `mkdir -p ${shellQuote(dist)}`,
+    ...targetArtifactNames(arch, version).map(
+      (name) => `cp -- ${shellQuote(`${exportMount}/${name}`)} ${shellQuote(`${dist}/${name}`)}`,
+    ),
   ];
+}
+
+function exportReceiptCommands({ arch, buildRoot, exportMount }) {
+  const name = `package-verification-linux-${arch}.json`;
+  return [
+    `cp -- ${shellQuote(`${buildRoot}/desktop/dist/${name}`)} ${shellQuote(`${exportMount}/${name}`)}`,
+  ];
+}
+
+/** Quote one dynamic shell word for POSIX-compatible single-quoted execution. */
+export function shellQuote(value) {
+  return `'${String(value).replaceAll("'", `'"'"'`)}'`;
 }
 
 function goBootstrapCommand(arch) {

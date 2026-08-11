@@ -4,6 +4,11 @@ import { join } from 'node:path';
 import { unpackedExecutablePath } from './package-layout.mjs';
 import { selectPackageArtifact } from './release-artifacts.mjs';
 
+/** Decide whether a verification mode must retain the unpacked application output. */
+export function shouldRequireUnpackedApp({ unpackedOnly, artifactsOnly }) {
+  return unpackedOnly || !artifactsOnly;
+}
+
 /** Build the target-specific paths and distributable inventory for package verification. */
 export function createPackageVerificationPlan({ desktopDir, target, files }) {
   const distDir = join(desktopDir, 'dist');

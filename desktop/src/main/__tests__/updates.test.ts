@@ -54,6 +54,24 @@ describe('UpdateCoordinator', () => {
     expect(stagedMetadata.packageSha256).toBe(sha256(Buffer.from('macos package bytes')));
   });
 
+  it('selects the exact checksum manifest when its signature appears first', async () => {
+    const fixture = signedFixture('v0.2.0', 'Agentico-mac-universal.dmg', 'macos package bytes', {
+      signatureBeforeChecksum: true,
+    });
+    const update = makeCoordinator({
+      platform: 'darwin',
+      arch: 'arm64',
+      packageFormat: 'macos',
+      fixture,
+    });
+
+    await expect(update.checkNow()).resolves.toMatchObject({
+      status: 'ready',
+      targetVersion: '0.2.0',
+      signatureStatus: 'verified',
+    });
+  });
+
   it('follows GitHub release asset redirects through the current release asset host', async () => {
     const fixture = signedFixture('v0.2.0', 'Agentico-mac-universal.dmg', 'macos package bytes', {
       redirectAssets: true,
@@ -558,6 +576,7 @@ function signedFixture(
     servedPackageBytes?: Buffer;
     extraReleases?: unknown[];
     redirectAssets?: boolean;
+    signatureBeforeChecksum?: boolean;
   } = {},
 ): SignedFixture {
   const packageBytes = Buffer.from(packageText);
@@ -569,18 +588,21 @@ function signedFixture(
       sign(null, Buffer.from(signatureText), createPrivateKey(PRIVATE_KEY)).toString('base64'),
     ),
   ]);
+  const checksumAsset = asset(tag, 'checksums.txt', Buffer.byteLength(checksumText));
+  const signatureAsset = asset(tag, 'checksums.txt.sig', checksumSignature.byteLength);
   const assets = [
     asset(tag, packageName, packageBytes.byteLength),
-    asset(tag, 'SHA256SUMS', Buffer.byteLength(checksumText)),
-    asset(tag, 'SHA256SUMS.sig', checksumSignature.byteLength),
+    ...(options.signatureBeforeChecksum === true
+      ? [signatureAsset, checksumAsset]
+      : [checksumAsset, signatureAsset]),
   ];
   const feed = [...(options.extraReleases ?? []), release(tag, assets)];
   const requestedPackage = vi.fn();
   const files = new Map<string, Buffer>([
     ['feed', Buffer.from(JSON.stringify(feed))],
     [packageName, options.servedPackageBytes ?? packageBytes],
-    ['SHA256SUMS', Buffer.from(checksumText)],
-    ['SHA256SUMS.sig', checksumSignature],
+    ['checksums.txt', Buffer.from(checksumText)],
+    ['checksums.txt.sig', checksumSignature],
   ]);
   const fixtureFetch: typeof fetch = async (input) => {
     const url =

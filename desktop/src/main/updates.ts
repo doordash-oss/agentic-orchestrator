@@ -860,15 +860,8 @@ function selectAsset(
   });
   const packageAsset = candidates[0];
   if (packageAsset === undefined) return null;
-  const checksumAsset = assets.find((asset) => /sha256|checksums?/i.test(asset.name));
-  const signatureAsset =
-    checksumAsset === undefined
-      ? undefined
-      : assets.find(
-          (asset) =>
-            asset.name === `${checksumAsset.name}.sig` ||
-            asset.name === `${checksumAsset.name}.asc`,
-        );
+  const checksumAsset = assets.find((asset) => asset.name === 'checksums.txt');
+  const signatureAsset = assets.find((asset) => asset.name === 'checksums.txt.sig');
   return { packageAsset, checksumAsset, signatureAsset };
 }
 

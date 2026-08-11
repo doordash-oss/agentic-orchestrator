@@ -40,13 +40,13 @@ export function writeSignedUpdateFixture(root: string, options: UpdateFixtureOpt
   const checksumSignature = Buffer.from(`agentico-ed25519:${signature}`);
 
   fs.writeFileSync(path.join(dir, packageName), servedPackageBytes);
-  fs.writeFileSync(path.join(dir, 'SHA256SUMS'), checksumText);
-  fs.writeFileSync(path.join(dir, 'SHA256SUMS.sig'), checksumSignature);
+  fs.writeFileSync(path.join(dir, 'checksums.txt'), checksumText);
+  fs.writeFileSync(path.join(dir, 'checksums.txt.sig'), checksumSignature);
 
   const assets = [
     asset(tag, packageName, packageBytes.byteLength),
-    asset(tag, 'SHA256SUMS', Buffer.byteLength(checksumText)),
-    asset(tag, 'SHA256SUMS.sig', checksumSignature.byteLength),
+    asset(tag, 'checksums.txt', Buffer.byteLength(checksumText)),
+    asset(tag, 'checksums.txt.sig', checksumSignature.byteLength),
     asset(tag, `agentico_${version}_${arch === 'arm64' ? 'arm64' : 'amd64'}.deb`, 12),
     asset(tag, `Agentico-${arch}.AppImage`, 12),
     asset(tag, 'Agentico-mac-universal.dmg', 12),

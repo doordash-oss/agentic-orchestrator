@@ -433,10 +433,19 @@ func (o *Observer) ValidatorStarted(sc SpanContext, validatorName string) {
 	o.otel.StartSpan(sc, "validator."+validatorName, addRunNumber(sc, map[string]string{"validator": validatorName}))
 }
 
-// ValidatorCompleted emits a validator.completed event.
-func (o *Observer) ValidatorCompleted(sc SpanContext, validatorName, verdict string, duration time.Duration) {
+// ValidatorCompleted emits a validator.completed event. reviewScope carries
+// the declared review scope token ("targeted" or "full") for implementation-
+// review and final-review axes; pass "" for plan validators that do not
+// declare a scope.
+func (o *Observer) ValidatorCompleted(sc SpanContext, validatorName, verdict, reviewScope string, duration time.Duration) {
 	if o == nil || !o.enabled {
 		return
+	}
+	data := map[string]any{
+		"validator_name": validatorName,
+	}
+	if reviewScope != "" {
+		data["review_scope"] = reviewScope
 	}
 	o.emit(sc, Event{
 		Timestamp:    time.Now(),
@@ -447,9 +456,7 @@ func (o *Observer) ValidatorCompleted(sc SpanContext, validatorName, verdict str
 		Status:       verdict,
 		FeatureID:    sc.FeatureID,
 		DurationMs:   duration.Milliseconds(),
-		Data: map[string]any{
-			"validator_name": validatorName,
-		},
+		Data:         data,
 	})
 	o.otel.EndSpan(sc.SpanID, verdict, nil)
 }

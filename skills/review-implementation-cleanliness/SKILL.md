@@ -42,10 +42,11 @@ At the Final gate, judge Cleanliness over the whole assembled feature and cumula
 
 ## Handoff Contract
 
-Write exactly one `review-feedback.md` with these three `## ` sections, in order:
+Write exactly one `review-feedback.md` with these four `## ` sections, in order:
 
 1. `## Findings` - one severity-prefixed bullet per issue, or `- (none)`.
 2. `## Suggestions` - non-blocking Medium/Low improvements, or `- (none)`.
-3. `## Verdict` - exactly `APPROVED` or `CHANGES_REQUESTED`.
+3. `## Review Scope` — scope token (`targeted` or `full`) on its own line, followed by a non-empty justification explaining what was reviewed and what was deliberately skipped. Round 1 is `full` because no prior context exists.
+4. `## Verdict` - exactly `APPROVED` or `CHANGES_REQUESTED`.
 
 Use `CHANGES_REQUESTED` only for Critical or High Cleanliness findings. Once `review-feedback.md` is written and validated, emit the structured success outcome from the system prompt. The harness writes `phase_complete`.

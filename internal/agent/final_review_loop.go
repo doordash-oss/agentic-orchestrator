@@ -451,7 +451,7 @@ func (s *featureFinalReviewLoopState) runFinalReviewAxes(iteration int, iterDir 
 		AnyPhaseFrontend: cfg.Feature.AnyRoadmapPhaseFrontend(),
 	})
 	if len(axes) == 0 {
-		feedback := FormatStructuredReviewFeedback("Multi-Axis Final Review", "", "", ReviewApproved)
+		feedback := FormatStructuredReviewFeedbackWithScope("Multi-Axis Final Review", "", "", ReviewApproved, "full", "No axis round ran — the aggregate was synthesized by the harness.")
 		return ReviewApproved, feedback, nil
 	}
 
@@ -480,7 +480,8 @@ func (s *featureFinalReviewLoopState) runFinalReviewAxes(iteration int, iterDir 
 		if err != nil {
 			verdict = "error"
 		}
-		cfg.Observer.ValidatorCompleted(axisCtx, axis.Name, verdict, time.Since(axisStart))
+		scopeToken, _ := extractAxisScope(feedback)
+		cfg.Observer.ValidatorCompleted(axisCtx, axis.Name, verdict, scopeToken, time.Since(axisStart))
 		updateMultiAxisValidatorStatus(cfg.FeatureStore, cfg.Feature.ID, axis.Name, status, err)
 	})
 	if !isFeatureInterrupted(cfg.FeatureStore, cfg.Feature.ID) {
@@ -601,11 +602,13 @@ func (s *featureFinalReviewLoopState) runFinalReviewAxis(iteration int, iterDir 
 			feedback = helperResult.Feedback
 		}
 		if _, statErr := os.Stat(feedbackPath); os.IsNotExist(statErr) {
-			stub := FormatStructuredReviewFeedback(
+			stub := FormatStructuredReviewFeedbackWithScope(
 				fmt.Sprintf("%s Final Review — Helper Failed", axis.Name),
 				fmt.Sprintf("- **Critical**: %s final review axis terminated before writing review-feedback.md: %v", axis.Name, err),
 				"",
 				ReviewChangesRequested,
+				"full",
+				"No axis round ran — the helper failed before writing feedback.",
 			)
 			_ = os.WriteFile(feedbackPath, []byte(stub), 0o644)
 			feedback = stub

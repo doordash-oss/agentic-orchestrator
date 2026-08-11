@@ -1151,11 +1151,13 @@ func formatContractViolationFeedback(role Role, violations []ProtocolViolation) 
 	for _, v := range violations {
 		fmt.Fprintf(&b, "- **Critical**: %s: %s\n", v.Artifact, v.Reason)
 	}
-	return FormatStructuredReviewFeedback(
+	return FormatStructuredReviewFeedbackWithScope(
 		fmt.Sprintf("Implementation Review — %s contract violation", role),
 		strings.TrimSpace(b.String()),
 		"",
 		ReviewChangesRequested,
+		"full",
+		"No axis round ran — the contract violation was synthesized by the harness.",
 	)
 }
 

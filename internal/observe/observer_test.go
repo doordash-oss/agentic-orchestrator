@@ -992,7 +992,7 @@ func TestValidatorCompletedEmitsEvent(t *testing.T) {
 
 	rootSC := SpanContextForFeature(featureID, "", "", "")
 	childSC := rootSC.Child()
-	obs.ValidatorCompleted(childSC, "Architecture", "APPROVED", 2*time.Second)
+	obs.ValidatorCompleted(childSC, "Architecture", "APPROVED", "", 2*time.Second)
 
 	events := readEvents(t, stateDir, featureID)
 	if len(events) != 1 {
@@ -1016,6 +1016,46 @@ func TestValidatorCompletedEmitsEvent(t *testing.T) {
 	}
 }
 
+func TestValidatorCompletedEmitsReviewScope(t *testing.T) {
+	stateDir := t.TempDir()
+	featureID := "vdator_scope_feat"
+	os.MkdirAll(filepath.Join(stateDir, featureID), 0755)
+	obs := New(true, stateDir, false, "", false, "agentic")
+
+	rootSC := SpanContextForFeature(featureID, "", "", "")
+	childSC := rootSC.Child()
+	obs.ValidatorCompleted(childSC, "Craft", "APPROVED", "targeted", 2*time.Second)
+
+	events := readEvents(t, stateDir, featureID)
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(events))
+	}
+	evt := events[0]
+	if scope, ok := evt.Data["review_scope"].(string); !ok || scope != "targeted" {
+		t.Errorf("Data[review_scope] = %v, want %q", evt.Data["review_scope"], "targeted")
+	}
+}
+
+func TestValidatorCompletedOmitsReviewScopeWhenEmpty(t *testing.T) {
+	stateDir := t.TempDir()
+	featureID := "vdator_noscope_feat"
+	os.MkdirAll(filepath.Join(stateDir, featureID), 0755)
+	obs := New(true, stateDir, false, "", false, "agentic")
+
+	rootSC := SpanContextForFeature(featureID, "", "", "")
+	childSC := rootSC.Child()
+	obs.ValidatorCompleted(childSC, "Architecture", "APPROVED", "", 2*time.Second)
+
+	events := readEvents(t, stateDir, featureID)
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(events))
+	}
+	evt := events[0]
+	if _, ok := evt.Data["review_scope"]; ok {
+		t.Errorf("Data[review_scope] should be absent for empty scope, got %v", evt.Data["review_scope"])
+	}
+}
+
 func TestNilObserverLifecycleMethodsAreNoOps(t *testing.T) {
 	var obs *Observer
 	sc := SpanContext{TraceID: "test", SpanID: "test", FeatureID: "test"}
@@ -1024,7 +1064,7 @@ func TestNilObserverLifecycleMethodsAreNoOps(t *testing.T) {
 	obs.ValidationStarted(sc, "plan", 3)
 	obs.ValidationCompleted(sc, "plan", "APPROVED", 5*time.Second, 3)
 	obs.ValidatorStarted(sc, "Architecture")
-	obs.ValidatorCompleted(sc, "Architecture", "APPROVED", 2*time.Second)
+	obs.ValidatorCompleted(sc, "Architecture", "APPROVED", "", 2*time.Second)
 }
 
 func TestDisabledObserverLifecycleMethodsAreNoOps(t *testing.T) {
@@ -1036,7 +1076,7 @@ func TestDisabledObserverLifecycleMethodsAreNoOps(t *testing.T) {
 	obs.ValidationStarted(sc, "plan", 3)
 	obs.ValidationCompleted(sc, "plan", "APPROVED", 5*time.Second, 3)
 	obs.ValidatorStarted(sc, "Architecture")
-	obs.ValidatorCompleted(sc, "Architecture", "APPROVED", 2*time.Second)
+	obs.ValidatorCompleted(sc, "Architecture", "APPROVED", "", 2*time.Second)
 
 	eventsPath := filepath.Join(stateDir, featureID, "events.jsonl")
 	if _, err := os.Stat(eventsPath); !os.IsNotExist(err) {
@@ -1867,7 +1907,7 @@ func TestEmit_IncludesRunNumber(t *testing.T) {
 	obs.ValidationStarted(sc, "plan", 2)
 	obs.ValidationCompleted(sc, "plan", "APPROVED", time.Second, 2)
 	obs.ValidatorStarted(sc, "critic-architecture")
-	obs.ValidatorCompleted(sc, "critic-architecture", "APPROVED", time.Second)
+	obs.ValidatorCompleted(sc, "critic-architecture", "APPROVED", "", time.Second)
 	obs.FeatureStarted(sc, "my-feature", []string{"repo-a"}, "large")
 	obs.FeatureCompleted(sc, 0.5, time.Second)
 	obs.FeatureFailed(sc, "infrastructure", "boom")

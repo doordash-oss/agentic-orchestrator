@@ -730,8 +730,8 @@ func validateProgressArtifact(iterDir, path string, out *Outcome) ([]ProtocolVio
 	return nil, nil
 }
 
-func validateReviewFeedbackArtifactWithDisplay(_ string, path, displayPath string, out *Outcome) ([]ProtocolViolation, error) {
-	parsed, err := ParseReviewFeedback(path)
+func validateReviewFeedbackArtifactWithDisplay(_ string, path, displayPath string, requireReviewScope bool, out *Outcome) ([]ProtocolViolation, error) {
+	parsed, err := ParseReviewFeedback(path, requireReviewScope)
 	if err != nil {
 		return nil, err
 	}

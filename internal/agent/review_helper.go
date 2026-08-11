@@ -150,6 +150,7 @@ func (pr *PhaseRunner) RunReadOnlyReviewHelper(ctx context.Context, cfg ReviewHe
 	if !ok {
 		return nil, fmt.Errorf("running review helper: missing RoleSpec for phase %s role %s", contractPhase, cfg.Role)
 	}
+	requireScope := roleSpecRequiresReviewScope(spec)
 	systemPrompt := BuildRoleSystemPrompt(BuildRoleSystemPromptInput{
 		Spec:          spec,
 		IterationDir:  cfg.HelperIterDir,
@@ -242,7 +243,7 @@ func (pr *PhaseRunner) RunReadOnlyReviewHelper(ctx context.Context, cfg ReviewHe
 	// Parse the structured handoff file; on protocol violation, overwrite
 	// it with the synthesized CHANGES_REQUESTED feedback so the on-disk
 	// artifact matches the verdict the harness routed on.
-	parsed, parseErr := ParseReviewFeedback(cfg.FeedbackPath)
+	parsed, parseErr := ParseReviewFeedback(cfg.FeedbackPath, requireScope)
 	if parseErr != nil {
 		if runErr != nil {
 			return result, runErr
@@ -254,7 +255,7 @@ func (pr *PhaseRunner) RunReadOnlyReviewHelper(ctx context.Context, cfg ReviewHe
 		result.Feedback = strings.TrimSpace(parsed.Body)
 		result.Markers = parsed.Markers
 	} else {
-		synth := reviewHelperProtocolViolationFeedback(parsed, runErr)
+		synth := reviewHelperProtocolViolationFeedback(parsed, runErr, requireScope)
 		_ = os.WriteFile(cfg.FeedbackPath, []byte(synth), 0o644)
 		result.Status = ReviewChangesRequested
 		result.Feedback = strings.TrimSpace(synth)
@@ -262,7 +263,7 @@ func (pr *PhaseRunner) RunReadOnlyReviewHelper(ctx context.Context, cfg ReviewHe
 
 	if runErr != nil {
 		if isProtocolViolationError(runErr) && parsed.OK() {
-			synth := reviewHelperProtocolViolationFeedback(parsed, runErr)
+			synth := reviewHelperProtocolViolationFeedback(parsed, runErr, requireScope)
 			_ = os.WriteFile(cfg.FeedbackPath, []byte(synth), 0o644)
 			result.Status = ReviewChangesRequested
 			result.Feedback = strings.TrimSpace(synth)
@@ -323,6 +324,7 @@ func (pr *PhaseRunner) RunLiveRunReviewHelper(ctx context.Context, cfg ReviewHel
 	if !ok {
 		return nil, fmt.Errorf("running live-run review helper: missing RoleSpec for phase %s role %s", contractPhase, cfg.Role)
 	}
+	requireScope := roleSpecRequiresReviewScope(spec)
 	systemPrompt := BuildRoleSystemPrompt(BuildRoleSystemPromptInput{
 		Spec:          spec,
 		IterationDir:  cfg.HelperIterDir,
@@ -413,7 +415,7 @@ func (pr *PhaseRunner) RunLiveRunReviewHelper(ctx context.Context, cfg ReviewHel
 		Usage:  boundedResult.Usage,
 	}
 
-	parsed, parseErr := ParseReviewFeedback(cfg.FeedbackPath)
+	parsed, parseErr := ParseReviewFeedback(cfg.FeedbackPath, requireScope)
 	if parseErr != nil {
 		if runErr != nil {
 			return result, runErr
@@ -425,7 +427,7 @@ func (pr *PhaseRunner) RunLiveRunReviewHelper(ctx context.Context, cfg ReviewHel
 		result.Feedback = strings.TrimSpace(parsed.Body)
 		result.Markers = parsed.Markers
 	} else {
-		synth := reviewHelperProtocolViolationFeedback(parsed, runErr)
+		synth := reviewHelperProtocolViolationFeedback(parsed, runErr, requireScope)
 		_ = os.WriteFile(cfg.FeedbackPath, []byte(synth), 0o644)
 		result.Status = ReviewChangesRequested
 		result.Feedback = strings.TrimSpace(synth)
@@ -433,7 +435,7 @@ func (pr *PhaseRunner) RunLiveRunReviewHelper(ctx context.Context, cfg ReviewHel
 
 	if runErr != nil {
 		if isProtocolViolationError(runErr) && parsed.OK() {
-			synth := reviewHelperProtocolViolationFeedback(parsed, runErr)
+			synth := reviewHelperProtocolViolationFeedback(parsed, runErr, requireScope)
 			_ = os.WriteFile(cfg.FeedbackPath, []byte(synth), 0o644)
 			result.Status = ReviewChangesRequested
 			result.Feedback = strings.TrimSpace(synth)
@@ -536,7 +538,7 @@ func mergeSessionEnv(env []string, overrides ...string) []string {
 	return out
 }
 
-func reviewHelperProtocolViolationFeedback(parsed *ParsedReviewFeedback, runErr error) string {
+func reviewHelperProtocolViolationFeedback(parsed *ParsedReviewFeedback, runErr error, requireScope bool) string {
 	var findings []string
 	if parsed != nil {
 		for _, violation := range parsed.ProtocolViolations {
@@ -546,11 +548,19 @@ func reviewHelperProtocolViolationFeedback(parsed *ParsedReviewFeedback, runErr 
 	if runErr != nil && isProtocolViolationError(runErr) {
 		findings = append(findings, fmt.Sprintf("- **Critical**: review helper completion protocol violation: %v", runErr))
 	}
-	return FormatStructuredReviewFeedback(
+	scope := ""
+	scopeJust := ""
+	if requireScope {
+		scope = "full"
+		scopeJust = "No axis round ran — the protocol violation was synthesized by the harness."
+	}
+	return FormatStructuredReviewFeedbackWithScope(
 		"Review Helper — Handoff Protocol Violation",
 		strings.Join(findings, "\n"),
 		"",
 		ReviewChangesRequested,
+		scope,
+		scopeJust,
 	)
 }
 
@@ -558,4 +568,17 @@ func boundedReviewHelperAllowedPaths(cfg ReviewHelperConfig) []string {
 	allowed := []string{cfg.FeedbackPath}
 	allowed = append(allowed, cfg.AllowedPaths...)
 	return allowed
+}
+
+// roleSpecRequiresReviewScope reports whether any artifact in the RoleSpec
+// requires the `## Review Scope` section. Implementation-review and
+// final-review axis roles set RequireReviewScope=true; plan-review
+// validators do not.
+func roleSpecRequiresReviewScope(spec RoleSpec) bool {
+	for _, a := range spec.Artifacts {
+		if a.RequireReviewScope {
+			return true
+		}
+	}
+	return false
 }

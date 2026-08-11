@@ -399,7 +399,7 @@ func TestRunBoundedHelper_NudgeWritesContractArtifactsThenCompletes(t *testing.T
 	}
 
 	// The nudged turn writes the contract artifact and emits a root outcome.
-	writeReviewFeedbackFile(t, filepath.Join(phaseDir, "review-feedback.md"), testutil.StructuredReviewFeedback("", "", agentStatusApproved))
+	writeReviewFeedbackFile(t, filepath.Join(phaseDir, "review-feedback.md"), testutil.StructuredReviewFeedbackWithScope("", "", agentStatusApproved, "full", "Round 1 — no prior context exists."))
 	sess.setRootIntent(validSuccessCompletionIntent())
 	sess.statusC <- agentStatusSuccess
 
@@ -444,7 +444,7 @@ func TestRunBoundedHelper_CommitRejectionNudgesRoleCorrectVerbs(t *testing.T) {
 	// The validator writes its verdict but closes with retry — invalid for a
 	// role without iteration state. Expect a reason-carrying correction that
 	// does not re-offer retry.
-	writeReviewFeedbackFile(t, filepath.Join(phaseDir, "review-feedback.md"), testutil.StructuredReviewFeedback("", "", agentStatusChangesRequested))
+	writeReviewFeedbackFile(t, filepath.Join(phaseDir, "review-feedback.md"), testutil.StructuredReviewFeedbackWithScope("", "", agentStatusChangesRequested, "full", "Round 1 — no prior context exists."))
 	sess.setRootIntent(llm.CompletionIntent{Found: true, Status: llm.CompletionIntentRetry})
 	sess.statusC <- agentStatusSuccess
 
@@ -538,7 +538,7 @@ func TestRunBoundedHelper_RetriesEarlyInfrastructureFailure(t *testing.T) {
 		if len(sessionIDs) == 1 {
 			return newTerminalStatusTestSession(ports.SessionFailed), nil
 		}
-		writeReviewFeedbackFile(t, filepath.Join(phaseDir, "review-feedback.md"), testutil.StructuredReviewFeedback("", "", agentStatusApproved))
+		writeReviewFeedbackFile(t, filepath.Join(phaseDir, "review-feedback.md"), testutil.StructuredReviewFeedbackWithScope("", "", agentStatusApproved, "full", "Round 1 — no prior context exists."))
 		sess := newUtilityTestSession()
 		sess.result = &llm.ResultMessage{Type: testResultMessageType, Subtype: testResultSuccessValue, StopReason: testStopReasonEndTurn}
 		sess.setRootIntent(validSuccessCompletionIntent())
@@ -682,7 +682,7 @@ func TestRunBoundedHelper_DefersOnLiveBackgroundTasks(t *testing.T) {
 	// Tasks finish; the re-invoked agent writes the contract artifact, emits
 	// a root outcome, and ends its turn again.
 	sess.liveTasks.Store(0)
-	writeReviewFeedbackFile(t, filepath.Join(phaseDir, "review-feedback.md"), testutil.StructuredReviewFeedback("", "", agentStatusApproved))
+	writeReviewFeedbackFile(t, filepath.Join(phaseDir, "review-feedback.md"), testutil.StructuredReviewFeedbackWithScope("", "", agentStatusApproved, "full", "Round 1 — no prior context exists."))
 	sess.setRootIntent(validSuccessCompletionIntent())
 	sess.statusC <- agentStatusSuccess
 
@@ -748,7 +748,7 @@ func TestRunBoundedHelper_BackgroundTasksFinishQuietlyAutoResumes(t *testing.T) 
 	}
 
 	// The resumed turn writes the contract artifacts and ends cleanly.
-	writeReviewFeedbackFile(t, filepath.Join(phaseDir, "review-feedback.md"), testutil.StructuredReviewFeedback("", "", agentStatusApproved))
+	writeReviewFeedbackFile(t, filepath.Join(phaseDir, "review-feedback.md"), testutil.StructuredReviewFeedbackWithScope("", "", agentStatusApproved, "full", "Round 1 — no prior context exists."))
 	sess.setRootIntent(validSuccessCompletionIntent())
 	sess.result.StopReason = testStopReasonEndTurn
 	sess.statusC <- agentStatusSuccess
@@ -786,7 +786,7 @@ func TestRunBoundedHelper_RetriesOnErroredResult(t *testing.T) {
 		}
 		// Simulate the resumed helper writing its contract artifact and
 		// emitting a root outcome before ending its turn.
-		writeReviewFeedbackFile(t, filepath.Join(phaseDir, "review-feedback.md"), testutil.StructuredReviewFeedback("", "", agentStatusApproved))
+		writeReviewFeedbackFile(t, filepath.Join(phaseDir, "review-feedback.md"), testutil.StructuredReviewFeedbackWithScope("", "", agentStatusApproved, "full", "Round 1 — no prior context exists."))
 		okSess.setRootIntent(validSuccessCompletionIntent())
 		return okSess, nil
 	}
@@ -942,7 +942,7 @@ func TestRunBoundedHelper_TruncatedTurnAutoResumes(t *testing.T) {
 	}
 
 	// The resumed turn writes the contract artifacts and ends cleanly.
-	writeReviewFeedbackFile(t, filepath.Join(phaseDir, "review-feedback.md"), testutil.StructuredReviewFeedback("", "", agentStatusApproved))
+	writeReviewFeedbackFile(t, filepath.Join(phaseDir, "review-feedback.md"), testutil.StructuredReviewFeedbackWithScope("", "", agentStatusApproved, "full", "Round 1 — no prior context exists."))
 	sess.setRootIntent(validSuccessCompletionIntent())
 	sess.result.StopReason = testStopReasonEndTurn
 	sess.statusC <- agentStatusSuccess
@@ -1067,7 +1067,7 @@ func TestRunBoundedHelper_SilentLiveTaskWaitsUntilTerminal(t *testing.T) {
 		t.Fatal("timed out waiting for auto-resume after terminal task")
 	}
 
-	writeReviewFeedbackFile(t, filepath.Join(phaseDir, "review-feedback.md"), testutil.StructuredReviewFeedback("", "", agentStatusApproved))
+	writeReviewFeedbackFile(t, filepath.Join(phaseDir, "review-feedback.md"), testutil.StructuredReviewFeedbackWithScope("", "", agentStatusApproved, "full", "Round 1 — no prior context exists."))
 	sess.setRootIntent(validSuccessCompletionIntent())
 	sess.statusC <- agentStatusSuccess
 	select {
@@ -1088,7 +1088,7 @@ func TestRunBoundedHelper_DoneArmRejectsLiveBackgroundTasks(t *testing.T) {
 	sess := newBoundedBgTaskSession(&llm.ResultMessage{Type: testResultMessageType, Subtype: testResultSuccessValue, StopReason: testStopReasonEndTurn})
 	sess.liveTasks.Store(2)
 	sess.setRootIntent(validSuccessCompletionIntent())
-	writeReviewFeedbackFile(t, filepath.Join(phaseDir, "review-feedback.md"), testutil.StructuredReviewFeedback("", "", agentStatusApproved))
+	writeReviewFeedbackFile(t, filepath.Join(phaseDir, "review-feedback.md"), testutil.StructuredReviewFeedbackWithScope("", "", agentStatusApproved, "full", "Round 1 — no prior context exists."))
 
 	sm := mocks.NewMockSessionManager()
 	sm.StartSessionFn = func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*session.SessionOpts) (ports.SessionHandle, error) {

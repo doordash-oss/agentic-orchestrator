@@ -336,9 +336,9 @@ fi`,
 	}
 
 	// Write the aggregate feedback for round 1.
-	aggFeedback := FormatStructuredReviewFeedback("Multi-Axis Final Review",
+	aggFeedback := FormatStructuredReviewFeedbackWithScope("Multi-Axis Final Review",
 		"### Craft\n- **High**: Craft issues\n### Cleanliness\n- **High**: Cleanliness issues\n### QA\n- **High**: QA issues",
-		"", ReviewChangesRequested)
+		"", ReviewChangesRequested, "full", "Round 1 — no prior context exists.")
 	if err := os.WriteFile(filepath.Join(iter01, "review-feedback.md"), []byte(aggFeedback), 0o644); err != nil {
 		t.Fatalf("write aggregate feedback: %v", err)
 	}
@@ -349,10 +349,10 @@ fi`,
 		if err := os.MkdirAll(axisDir, 0o755); err != nil {
 			t.Fatalf("mkdir axis dir: %v", err)
 		}
-		axisFeedback := FormatStructuredReviewFeedback(
+		axisFeedback := FormatStructuredReviewFeedbackWithScope(
 			fmt.Sprintf("%s Final Review", axisSlug),
 			fmt.Sprintf("- **High**: %s finding", axisSlug),
-			"", ReviewChangesRequested)
+			"", ReviewChangesRequested, "full", "Round 1 — no prior context exists.")
 		if err := os.WriteFile(filepath.Join(axisDir, "review-feedback.md"), []byte(axisFeedback), 0o644); err != nil {
 			t.Fatalf("write axis feedback: %v", err)
 		}
@@ -443,6 +443,10 @@ func writeFinalAxisFeedbackWithVerdict(artDir, verdict, findings string) string 
 
 ## Suggestions
 - (none)
+
+## Review Scope
+full
+Round 1 — no prior context exists.
 
 ## Verdict
 %s

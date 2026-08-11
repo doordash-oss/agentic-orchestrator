@@ -25,6 +25,10 @@ Own visible UI quality against the approved design, attached baseline images, an
 
 At the per-phase gate, judge only the current frontend phase's committed UI work. At the Final gate, judge the assembled frontend experience across the completed feature.
 
+### Review Scope Decision
+
+Choose `targeted` only when the delta is narrow and you can verify the delta's touched surfaces plus everything the prior round's findings flagged. Choose `full` when the delta is broad or cross-cutting, when the prior round was also targeted (periodic full re-verification), or when in doubt. The justification must name what was deliberately not re-run (named-skip accounting). Round 1 is `full` because no prior context exists.
+
 ### Design Smells
 
 Each smell reads *what it is* → *how to fix*; match it against the rendered UI and screenshots, and name the smell in each finding. Smells describe symptoms, not a house style — a brutalist page, a dense enterprise dashboard, and an expressive editorial layout can all pass.
@@ -90,10 +94,11 @@ When the app cannot be rendered live for a reason you cannot attribute to the co
 
 ## Handoff Contract
 
-Write exactly one `review-feedback.md` with these three `## ` sections, in order:
+Write exactly one `review-feedback.md` with these four `## ` sections, in order:
 
 1. `## Findings` - one severity-prefixed bullet per blocking Design defect, or `- (none)`.
 2. `## Suggestions` - non-blocking caveats and Medium/Low observations, or `- (none)`.
-3. `## Verdict` - exactly `APPROVED` or `CHANGES_REQUESTED`.
+3. `## Review Scope` — scope token (`targeted` or `full`) on its own line, followed by a non-empty justification explaining what was reviewed and what was deliberately skipped. Round 1 is `full` because no prior context exists.
+4. `## Verdict` - exactly `APPROVED` or `CHANGES_REQUESTED`.
 
 Use `CHANGES_REQUESTED` only for Critical or High Design findings under this skill. Once `review-feedback.md` is written and validated, emit the structured success outcome from the system prompt.

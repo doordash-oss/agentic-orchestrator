@@ -934,7 +934,7 @@ func TestContractRegistryImplementationReviewAxisRequiresReviewFeedback(t *testi
 	if err := os.MkdirAll(helperDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
 	}
-	writeReviewFeedbackFile(t, filepath.Join(helperDir, "review-feedback.md"), testutil.StructuredReviewFeedback("", "", agentStatusApproved))
+	writeReviewFeedbackFile(t, filepath.Join(helperDir, "review-feedback.md"), testutil.StructuredReviewFeedbackWithScope("", "", agentStatusApproved, "full", "Round 1 — no prior context exists."))
 
 	contract, ok := Lookup(feature.PhaseReview, RoleImplementationReviewCraft)
 	if !ok {

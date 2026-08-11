@@ -119,7 +119,7 @@ func TestRunLiveRunReviewHelper_ConfiguresScratchRootsEnvAndPermissions(t *testi
 		if len(opts) > 0 {
 			startOpts = opts[0]
 		}
-		if err := os.WriteFile(feedbackPath, []byte(testutil.StructuredReviewFeedback("", "", "APPROVED")), 0o644); err != nil {
+		if err := os.WriteFile(feedbackPath, []byte(testutil.StructuredReviewFeedbackWithScope("", "", "APPROVED", "full", "Round 1 — no prior context exists.")), 0o644); err != nil {
 			t.Errorf("write feedback: %v", err)
 		}
 		sess.setRootIntent(validSuccessCompletionIntent())

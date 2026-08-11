@@ -248,8 +248,9 @@ func validatorForRoleArtifact(artifact RoleArtifactSpec) func(iterDir, path stri
 		}
 	case roles.ValidatorReviewFeedback:
 		displayPath := artifact.DisplayPath
+		requireReviewScope := artifact.RequireReviewScope
 		return func(iterDir, path string, out *Outcome) ([]ProtocolViolation, error) {
-			return validateReviewFeedbackArtifactWithDisplay(iterDir, path, displayPath, out)
+			return validateReviewFeedbackArtifactWithDisplay(iterDir, path, displayPath, requireReviewScope, out)
 		}
 	case roles.ValidatorPlanValidatorAxisApproval:
 		return validatePlanValidatorAxisApprovalArtifact

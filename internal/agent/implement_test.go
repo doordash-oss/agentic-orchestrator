@@ -2081,7 +2081,7 @@ func TestImplementLoopReviewInfraFailureParksForReviewOnlyResume(t *testing.T) {
 	if err := os.MkdirAll(cachedAxisDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	cachedFeedback := FormatStructuredReviewFeedback(cachedAxis.Name+" Implementation Review", "- (none)", "- (none)", ReviewApproved)
+	cachedFeedback := FormatStructuredReviewFeedbackWithScope(cachedAxis.Name+" Implementation Review", "- (none)", "- (none)", ReviewApproved, "full", "Round 1 — no prior context exists.")
 	if err := os.WriteFile(filepath.Join(cachedAxisDir, "review-feedback.md"), []byte(cachedFeedback), 0o644); err != nil {
 		t.Fatal(err)
 	}

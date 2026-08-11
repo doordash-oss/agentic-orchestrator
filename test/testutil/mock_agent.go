@@ -396,19 +396,49 @@ func StructuredReviewFeedback(findings, suggestions, verdict string) string {
 	return b.String()
 }
 
+// StructuredReviewFeedbackWithScope is StructuredReviewFeedback plus a
+// `## Review Scope` section between `## Suggestions` and `## Verdict`.
+// scope must be "targeted" or "full"; justification must be non-empty.
+// Use this for test mocks that simulate implementation-review or
+// final-review axis feedback.
+func StructuredReviewFeedbackWithScope(findings, suggestions, verdict, scope, justification string) string {
+	if verdict != "APPROVED" && verdict != "CHANGES_REQUESTED" {
+		panic(fmt.Sprintf("StructuredReviewFeedbackWithScope: verdict must be APPROVED or CHANGES_REQUESTED, got %q", verdict))
+	}
+	if scope != "targeted" && scope != "full" {
+		panic(fmt.Sprintf("StructuredReviewFeedbackWithScope: scope must be targeted or full, got %q", scope))
+	}
+	var b strings.Builder
+	b.WriteString("## Findings\n")
+	if strings.TrimSpace(findings) == "" {
+		b.WriteString("- (none)\n\n")
+	} else {
+		fmt.Fprintf(&b, "%s\n\n", strings.TrimRight(findings, "\n"))
+	}
+	b.WriteString("## Suggestions\n")
+	if strings.TrimSpace(suggestions) == "" {
+		b.WriteString("- (none)\n\n")
+	} else {
+		fmt.Fprintf(&b, "%s\n\n", strings.TrimRight(suggestions, "\n"))
+	}
+	fmt.Fprintf(&b, "## Review Scope\n%s\n%s\n\n", scope, justification)
+	fmt.Fprintf(&b, "## Verdict\n%s\n", verdict)
+	return b.String()
+}
+
 // WriteReviewApproved returns a shell snippet that writes a minimal APPROVED
 // review-feedback.md to the latest iteration-* directory under artifactDir.
 // Must be emitted BEFORE the JSONL success result so the helper's parser
 // sees the file when the turn ends.
 func WriteReviewApproved(artifactDir string) string {
-	return writeIterationReviewFeedbackInLatestIter(artifactDir, StructuredReviewFeedback("", "", "APPROVED"))
+	return writeIterationReviewFeedbackInLatestIter(artifactDir, StructuredReviewFeedbackWithScope("", "", "APPROVED", "full", "Round 1 — no prior context exists."))
 }
 
 // WriteReviewChangesRequested returns a shell snippet that writes a
 // CHANGES_REQUESTED review-feedback.md (with the supplied findings prose)
 // to the latest iteration-* directory under artifactDir.
 func WriteReviewChangesRequested(artifactDir, findings string) string {
-	return writeIterationReviewFeedbackInLatestIter(artifactDir, StructuredReviewFeedback(findings, "", "CHANGES_REQUESTED"))
+	return writeIterationReviewFeedbackInLatestIter(artifactDir, StructuredReviewFeedbackWithScope(findings, "", "CHANGES_REQUESTED", "full", "Round 1 — no prior context exists."))
 }
 
 // WriteFinalReviewApproved writes APPROVED review feedback for the latest
@@ -442,13 +472,13 @@ func WriteReviewFeedback(artifactDir, body string) string {
 // WriteReviewApprovedInDir writes a minimal APPROVED review-feedback.md
 // directly to dir (no iteration-* lookup).
 func WriteReviewApprovedInDir(dir string) string {
-	return writeReviewFeedbackInExactDir(dir, StructuredReviewFeedback("", "", "APPROVED"))
+	return writeReviewFeedbackInExactDir(dir, StructuredReviewFeedbackWithScope("", "", "APPROVED", "full", "Round 1 — no prior context exists."))
 }
 
 // WriteReviewChangesRequestedInDir writes a CHANGES_REQUESTED
 // review-feedback.md directly to dir.
 func WriteReviewChangesRequestedInDir(dir, findings string) string {
-	return writeReviewFeedbackInExactDir(dir, StructuredReviewFeedback(findings, "", "CHANGES_REQUESTED"))
+	return writeReviewFeedbackInExactDir(dir, StructuredReviewFeedbackWithScope(findings, "", "CHANGES_REQUESTED", "full", "Round 1 — no prior context exists."))
 }
 
 // WriteReviewFeedbackInDir writes the supplied structured body verbatim into

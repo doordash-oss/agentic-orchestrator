@@ -187,7 +187,7 @@ func runImplementationReviewAxes(cfg ImplementConfig, sm ports.SessionManager, i
 		AnyPhaseFrontend:     anyPhaseFrontend,
 	})
 	if len(axes) == 0 {
-		feedback := FormatStructuredReviewFeedback("Implementation Review", "", "", ReviewApproved)
+		feedback := FormatStructuredReviewFeedbackWithScope("Implementation Review", "", "", ReviewApproved, "full", "No axis round ran — the aggregate was synthesized by the harness.")
 		return ReviewApproved, feedback, nil
 	}
 
@@ -212,7 +212,8 @@ func runImplementationReviewAxes(cfg ImplementConfig, sm ports.SessionManager, i
 		if err != nil {
 			verdict = "error"
 		}
-		cfg.Observer.ValidatorCompleted(axisCtx, axis.Name, verdict, time.Since(axisStart))
+		scopeToken, _ := extractAxisScope(feedback)
+		cfg.Observer.ValidatorCompleted(axisCtx, axis.Name, verdict, scopeToken, time.Since(axisStart))
 		updateImplementationReviewAxisStatus(cfg, axis.Name, status, err)
 	})
 
@@ -245,7 +246,7 @@ func runImplementationReviewAxis(cfg ImplementConfig, sm ports.SessionManager, i
 	// Failure stubs never receive a harness completion receipt, so they are
 	// never reused.
 	if HasCommittedPhaseOutcome(axisDir, feature.PhaseReview, axis.Role) {
-		if cached, err := ParseReviewFeedback(feedbackPath); err == nil && len(cached.ProtocolViolations) == 0 {
+		if cached, err := ParseReviewFeedback(feedbackPath, true); err == nil && len(cached.ProtocolViolations) == 0 {
 			return cached.Verdict, cached.Body, nil
 		}
 	}
@@ -348,11 +349,13 @@ func runImplementationReviewAxis(cfg ImplementConfig, sm ports.SessionManager, i
 			feedback = helperResult.Feedback
 		}
 		if _, statErr := os.Stat(feedbackPath); os.IsNotExist(statErr) {
-			stub := FormatStructuredReviewFeedback(
+			stub := FormatStructuredReviewFeedbackWithScope(
 				fmt.Sprintf("%s Implementation Review — Helper Failed", axis.Name),
 				fmt.Sprintf("- **Critical**: %s implementation review axis terminated before writing review-feedback.md: %v", axis.Name, err),
 				"",
 				ReviewChangesRequested,
+				"full",
+				"No axis round ran — the helper failed before writing feedback.",
 			)
 			_ = os.WriteFile(feedbackPath, []byte(stub), 0o644)
 			feedback = stub
@@ -422,8 +425,18 @@ func composeMultiAxisReviewFeedback(title string, results []reviewAxisResult, se
 	firstErr := firstMultiAxisReviewError(results)
 	var findings strings.Builder
 	var suggestions strings.Builder
+	allTargeted := true
+	var targetedAxes []string
 	for _, result := range results {
+		scopeToken, scopeJust := extractAxisScope(result.Feedback)
+		if scopeToken == "targeted" {
+			targetedAxes = append(targetedAxes, result.Axis)
+		} else {
+			allTargeted = false
+		}
+
 		fmt.Fprintf(&findings, "### %s\n", result.Axis)
+		writeScopeLine(&findings, scopeToken, scopeJust)
 		axisFindings := strings.TrimSpace(extractMarkdownSection(result.Feedback, "## Findings"))
 		if result.Error != nil {
 			fmt.Fprintf(&findings, "- **Critical**: %s axis failed: %v\n\n", result.Axis, result.Error)
@@ -434,6 +447,7 @@ func composeMultiAxisReviewFeedback(title string, results []reviewAxisResult, se
 		}
 
 		fmt.Fprintf(&suggestions, "### %s\n", result.Axis)
+		writeScopeLine(&suggestions, scopeToken, scopeJust)
 		axisSuggestions := strings.TrimSpace(extractMarkdownSection(result.Feedback, "## Suggestions"))
 		if axisSuggestions == "" {
 			suggestions.WriteString("- (none)\n\n")
@@ -441,10 +455,45 @@ func composeMultiAxisReviewFeedback(title string, results []reviewAxisResult, se
 			fmt.Fprintf(&suggestions, "%s\n\n", axisSuggestions)
 		}
 	}
-	return status, FormatStructuredReviewFeedback(
+	aggScope := "full"
+	if allTargeted && len(results) > 0 {
+		aggScope = "targeted"
+	}
+	aggJust := fmt.Sprintf("%d of %d axes targeted: %s", len(targetedAxes), len(results), strings.Join(targetedAxes, ", "))
+	return status, FormatStructuredReviewFeedbackWithScope(
 		title,
 		strings.TrimRight(findings.String(), "\n"),
 		strings.TrimRight(suggestions.String(), "\n"),
 		status,
+		aggScope,
+		aggJust,
 	), firstErr
+}
+
+// extractAxisScope reads the `## Review Scope` section from an axis's
+// review-feedback.md body and returns the scope token and justification.
+// Returns ("full", "") when the section is absent or the token is invalid,
+// so the aggregate defaults to a safe full-scope derivation.
+func extractAxisScope(feedback string) (token, justification string) {
+	scopeBody := extractMarkdownSection(feedback, reviewScopeHeading)
+	if scopeBody == "" {
+		return "full", ""
+	}
+	token = firstNonBlankLine(scopeBody)
+	if !reviewScopeTokens[token] {
+		return "full", ""
+	}
+	justification = strings.TrimSpace(strings.TrimPrefix(scopeBody, token))
+	return token, justification
+}
+
+func writeScopeLine(b *strings.Builder, token, justification string) {
+	if token == "" {
+		return
+	}
+	if justification != "" {
+		fmt.Fprintf(b, "**Scope:** %s — %s\n\n", token, justification)
+	} else {
+		fmt.Fprintf(b, "**Scope:** %s\n\n", token)
+	}
 }

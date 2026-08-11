@@ -209,6 +209,20 @@ func implementationReviewGateLabel(gate implementationReviewGate) string {
 // reviewVerdictTokens on its own line.
 const reviewVerdictHeading = "## Verdict"
 
+// reviewScopeHeading is the ATX heading for the review-scope section. When
+// requireReviewScope is true the parser treats this as a mandatory section
+// between `## Suggestions` and `## Verdict`; the first non-blank line is the
+// scope token (targeted|full) and the remaining non-blank lines are the
+// justification text.
+const reviewScopeHeading = "## Review Scope"
+
+// reviewScopeTokens is the closed set of valid scope tokens for the
+// `## Review Scope` section.
+var reviewScopeTokens = map[string]bool{
+	"targeted": true,
+	"full":     true,
+}
+
 // reviewRequiredSections is the closed list of `## ` sections the reviewer
 // (LLM or deterministic gate) MUST emit, in order. Missing or out-of-order
 // headings are protocol violations — the parser names each one separately so
@@ -217,6 +231,16 @@ const reviewVerdictHeading = "## Verdict"
 var reviewRequiredSections = []string{
 	"## Findings",
 	"## Suggestions",
+	reviewVerdictHeading,
+}
+
+// reviewRequiredSectionsWithScope is the required-sections list when the
+// axis role must declare a review scope. `## Review Scope` is inserted
+// between `## Suggestions` and `## Verdict`.
+var reviewRequiredSectionsWithScope = []string{
+	"## Findings",
+	"## Suggestions",
+	reviewScopeHeading,
 	reviewVerdictHeading,
 }
 
@@ -245,6 +269,8 @@ type ParsedReviewFeedback struct {
 	Body               string
 	Findings           string
 	Suggestions        string
+	ReviewScope        string
+	ReviewScopeJustification string
 	Markers            ValidatorMarkers
 	ProtocolViolations []string
 }
@@ -263,11 +289,17 @@ func (p *ParsedReviewFeedback) OK() bool {
 // ParseProgressMd — so the synthesized feedback enumerates all of them in
 // one pass. Callers MUST inspect ProtocolViolations before trusting Verdict.
 //
+// When requireReviewScope is true the parser additionally enforces a
+// mandatory `## Review Scope` section between `## Suggestions` and
+// `## Verdict`. This is set for implementation-review and final-review axis
+// roles only; plan-review validators that share the review_feedback artifact
+// type are unaffected.
+//
 // A missing file is not an error from the function's perspective: the
 // returned ParsedReviewFeedback flags it as a protocol violation so the
 // short-circuit feedback path can surface a useful message to the next
 // iteration.
-func ParseReviewFeedback(path string) (*ParsedReviewFeedback, error) {
+func ParseReviewFeedback(path string, requireReviewScope bool) (*ParsedReviewFeedback, error) {
 	if path == "" {
 		return nil, fmt.Errorf("ParseReviewFeedback: empty path")
 	}
@@ -290,20 +322,25 @@ func ParseReviewFeedback(path string) (*ParsedReviewFeedback, error) {
 	parsed := &ParsedReviewFeedback{Body: string(data), Verdict: ReviewFailed}
 	body := parsed.Body
 
-	headingPositions := findSectionHeadings(body, reviewRequiredSections)
+	sections := reviewRequiredSections
+	if requireReviewScope {
+		sections = reviewRequiredSectionsWithScope
+	}
+
+	headingPositions := findSectionHeadings(body, sections)
 	missingOrUnordered := false
 	lastPos := -1
-	for _, h := range reviewRequiredSections {
+	for _, h := range sections {
 		pos, ok := headingPositions[h]
 		if !ok {
 			parsed.ProtocolViolations = append(parsed.ProtocolViolations,
-				fmt.Sprintf("review-feedback.md missing required section %q — the three `## ` sections must all be present, in order", h))
+				fmt.Sprintf("review-feedback.md missing required section %q — the required `## ` sections must all be present, in order", h))
 			missingOrUnordered = true
 			continue
 		}
 		if pos < lastPos {
 			parsed.ProtocolViolations = append(parsed.ProtocolViolations,
-				fmt.Sprintf("review-feedback.md section %q appears out of order — required order is: %s", h, strings.Join(reviewRequiredSections, ", ")))
+				fmt.Sprintf("review-feedback.md section %q appears out of order — required order is: %s", h, strings.Join(sections, ", ")))
 			missingOrUnordered = true
 		}
 		lastPos = pos
@@ -311,6 +348,29 @@ func ParseReviewFeedback(path string) (*ParsedReviewFeedback, error) {
 
 	parsed.Findings = strings.TrimSpace(extractMarkdownSection(body, "## Findings"))
 	parsed.Suggestions = strings.TrimSpace(extractMarkdownSection(body, "## Suggestions"))
+
+	if requireReviewScope {
+		scopeBody := extractMarkdownSection(body, reviewScopeHeading)
+		if scopeBody != "" {
+			scopeToken := firstNonBlankLine(scopeBody)
+			if !reviewScopeTokens[scopeToken] {
+				parsed.ProtocolViolations = append(parsed.ProtocolViolations, fmt.Sprintf(
+					"review-feedback.md `%s` first line must be exactly one of {targeted, full}; got %q", reviewScopeHeading, scopeToken))
+			} else {
+				parsed.ReviewScope = scopeToken
+			}
+			justification := strings.TrimSpace(strings.TrimPrefix(scopeBody, scopeToken))
+			if justification == "" {
+				parsed.ProtocolViolations = append(parsed.ProtocolViolations, fmt.Sprintf(
+					"review-feedback.md `%s` justification is empty — after the scope token, explain what was reviewed or deliberately skipped", reviewScopeHeading))
+			} else {
+				parsed.ReviewScopeJustification = justification
+			}
+		} else if !missingOrUnordered {
+			parsed.ProtocolViolations = append(parsed.ProtocolViolations, fmt.Sprintf(
+				"review-feedback.md `%s` section is empty — emit the scope token (targeted or full) on its own line followed by a non-empty justification", reviewScopeHeading))
+		}
+	}
 
 	verdictBody := extractMarkdownSection(body, reviewVerdictHeading)
 	if verdictBody == "" && !missingOrUnordered {
@@ -343,7 +403,10 @@ func ParseReviewFeedback(path string) (*ParsedReviewFeedback, error) {
 // shaped to satisfy the handoff contract on its own (so a downstream caller
 // that re-parses the synthesized file gets a clean ParseReviewFeedback). The
 // output mirrors FormatProtocolViolationFeedback for progress.md.
-func FormatReviewProtocolViolationFeedback(parsed *ParsedReviewFeedback) string {
+//
+// When requireReviewScope is true the repair instructions and emitted
+// feedback include the `## Review Scope` section.
+func FormatReviewProtocolViolationFeedback(parsed *ParsedReviewFeedback, requireReviewScope bool) string {
 	var b strings.Builder
 	b.WriteString("# Implementation Review — Handoff Protocol Violation\n\n")
 	b.WriteString("This iteration's `review-feedback.md` did not satisfy the handoff contract spelled out in the review skill. The deterministic handoff parser ran ahead of the LLM reviewer's downstream consumers; every defect listed below was decided mechanically (no model judgment), so the list is exhaustive and fixing every item will let the next review handoff parse cleanly.\n\n")
@@ -356,11 +419,22 @@ func FormatReviewProtocolViolationFeedback(parsed *ParsedReviewFeedback) string 
 		}
 		b.WriteString("\n")
 	}
-	b.WriteString("Re-emit `review-feedback.md` with all three sections in order:\n")
-	b.WriteString("1. `## Findings` (severity-prefixed bullets, or `- (none)`)\n")
-	b.WriteString("2. `## Suggestions` (non-blocking improvements, or `- (none)`)\n")
-	b.WriteString("3. `## Verdict` (one of `APPROVED`, `CHANGES_REQUESTED` on its own line)\n\n")
+	if requireReviewScope {
+		b.WriteString("Re-emit `review-feedback.md` with all four sections in order:\n")
+		b.WriteString("1. `## Findings` (severity-prefixed bullets, or `- (none)`)\n")
+		b.WriteString("2. `## Suggestions` (non-blocking improvements, or `- (none)`)\n")
+		b.WriteString("3. `## Review Scope` (scope token `targeted` or `full` on its own line, followed by a non-empty justification)\n")
+		b.WriteString("4. `## Verdict` (one of `APPROVED`, `CHANGES_REQUESTED` on its own line)\n\n")
+	} else {
+		b.WriteString("Re-emit `review-feedback.md` with all three sections in order:\n")
+		b.WriteString("1. `## Findings` (severity-prefixed bullets, or `- (none)`)\n")
+		b.WriteString("2. `## Suggestions` (non-blocking improvements, or `- (none)`)\n")
+		b.WriteString("3. `## Verdict` (one of `APPROVED`, `CHANGES_REQUESTED` on its own line)\n\n")
+	}
 	b.WriteString("## Suggestions\n- (none)\n\n")
+	if requireReviewScope {
+		b.WriteString("## Review Scope\nfull\nNo axis round ran — the protocol violation was synthesized by the harness.\n\n")
+	}
 	b.WriteString("## Verdict\nCHANGES_REQUESTED\n")
 	return b.String()
 }
@@ -374,6 +448,16 @@ func FormatReviewProtocolViolationFeedback(parsed *ParsedReviewFeedback) string 
 // section headings. When findings or suggestions are empty, the canonical
 // `- (none)` placeholder is used so the file still parses cleanly.
 func FormatStructuredReviewFeedback(title, findings, suggestions string, verdict ReviewStatus) string {
+	return FormatStructuredReviewFeedbackWithScope(title, findings, suggestions, verdict, "", "")
+}
+
+// FormatStructuredReviewFeedbackWithScope is FormatStructuredReviewFeedback
+// plus a `## Review Scope` section emitted between `## Suggestions` and
+// `## Verdict`. When scope is empty the section is omitted (identical to
+// FormatStructuredReviewFeedback). Deterministic gates that synthesize
+// feedback for implementation-review or final-review axis roles should pass
+// scope="full" with a justification explaining no axis round ran.
+func FormatStructuredReviewFeedbackWithScope(title, findings, suggestions string, verdict ReviewStatus, scope, scopeJustification string) string {
 	var b strings.Builder
 	if title != "" {
 		fmt.Fprintf(&b, "# %s\n\n", title)
@@ -389,6 +473,17 @@ func FormatStructuredReviewFeedback(title, findings, suggestions string, verdict
 		b.WriteString("- (none)\n\n")
 	} else {
 		fmt.Fprintf(&b, "%s\n\n", strings.TrimRight(suggestions, "\n"))
+	}
+	if scope != "" {
+		b.WriteString(reviewScopeHeading)
+		b.WriteByte('\n')
+		b.WriteString(scope)
+		b.WriteByte('\n')
+		if strings.TrimSpace(scopeJustification) != "" {
+			fmt.Fprintf(&b, "%s\n\n", strings.TrimRight(scopeJustification, "\n"))
+		} else {
+			b.WriteByte('\n')
+		}
 	}
 	b.WriteString(reviewVerdictHeading)
 	b.WriteByte('\n')

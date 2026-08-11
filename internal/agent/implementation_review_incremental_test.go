@@ -387,14 +387,14 @@ func TestImplementIncrementalContext_RestartResume(t *testing.T) {
 	})
 
 	// Write aggregate review-feedback.md.
-	aggFeedback := testutil.StructuredReviewFeedback("- **High**: Please add error handling", "", "CHANGES_REQUESTED")
+	aggFeedback := testutil.StructuredReviewFeedbackWithScope("- **High**: Please add error handling", "", "CHANGES_REQUESTED", "full", "Round 1 — no prior context exists.")
 	os.WriteFile(filepath.Join(iter1Dir, "review-feedback.md"), []byte(aggFeedback), 0o644)
 
 	// Write per-axis feedback files under review/<axis-slug>/.
 	for _, axisSlug := range []string{"craft", "functionality-evidence", "cleanliness"} {
 		axisDir := filepath.Join(iter1Dir, "review", axisSlug)
 		os.MkdirAll(axisDir, 0o755)
-		axisFeedback := testutil.StructuredReviewFeedback("- "+axisSlug+" finding", "", "CHANGES_REQUESTED")
+		axisFeedback := testutil.StructuredReviewFeedbackWithScope("- "+axisSlug+" finding", "", "CHANGES_REQUESTED", "full", "Round 1 — no prior context exists.")
 		os.WriteFile(filepath.Join(axisDir, "review-feedback.md"), []byte(axisFeedback), 0o644)
 	}
 

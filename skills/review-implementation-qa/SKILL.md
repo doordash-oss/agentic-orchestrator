@@ -24,7 +24,9 @@ Own functional QA at Final Review:
 
 Read the design artifact (its acceptance criteria are the feature-level definition of done), roadmap and plan context, previous aggregate feedback, and prior implementation evidence before choosing what to exercise. Prefer a few representative end-to-end journeys over static inspection.
 
-Before returning APPROVED, execute the repository's full automated test suites (the documented aggregate commands) yourself and confirm they pass. For features without per-iteration machine verification you are the only execution gate; do not approve on code reading alone.
+### Review Scope Decision
+
+Choose `targeted` only when the delta is narrow and you can verify the delta's touched surfaces plus everything the prior round's findings flagged. Choose `full` when the delta is broad or cross-cutting, when the prior round was also targeted (periodic full re-verification), or when in doubt. The justification must name what was deliberately not re-run (named-skip accounting). Round 1 is `full` because no prior context exists. For features without per-iteration machine verification you are the only execution gate; do not approve on code reading alone.
 
 ## Blocking Mandate
 
@@ -36,10 +38,11 @@ When you cannot exercise a surface for a reason you cannot attribute to the code
 
 ## Handoff Contract
 
-Write exactly one `review-feedback.md` with these three `## ` sections, in order:
+Write exactly one `review-feedback.md` with these four `## ` sections, in order:
 
 1. `## Findings` - one severity-prefixed bullet per blocking functional defect, or `- (none)`.
 2. `## Suggestions` - non-blocking caveats and Medium/Low observations, or `- (none)`.
-3. `## Verdict` - exactly `APPROVED` or `CHANGES_REQUESTED`.
+3. `## Review Scope` — scope token (`targeted` or `full`) on its own line, followed by a non-empty justification explaining what was reviewed and what was deliberately skipped. Round 1 is `full` because no prior context exists.
+4. `## Verdict` - exactly `APPROVED` or `CHANGES_REQUESTED`.
 
 Once `review-feedback.md` is written and validated, emit the structured success outcome from the system prompt. The harness writes `phase_complete`.

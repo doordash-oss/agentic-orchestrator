@@ -1,6 +1,12 @@
 Axis under review: Design
 Review feedback output: /state/feat-x/run-1/phase-2/implement/iteration-01/review/design/review-feedback.md
 
+Required sections in `review-feedback.md` (in this exact order):
+1. `## Findings` — severity-prefixed bullets or `- (none)`
+2. `## Suggestions` — non-blocking improvements or `- (none)`
+3. `## Review Scope` — scope token (`targeted` or `full`) on its own line, followed by a non-empty justification
+4. `## Verdict` — exactly `APPROVED` or `CHANGES_REQUESTED`
+
 Iteration under review: 1
 Iteration artifacts directory: /state/feat-x/run-1/phase-2/implement/iteration-01
 
@@ -16,6 +22,15 @@ Launch a polished settings dashboard.
 - Use the live-run posture: build, launch, drive, screenshot, and record evidence as needed.
 - Treat the source tree as read-only. Write captured evidence only under the live-run evidence root named in this prompt.
 - Judge from the attached baseline images plus the captured `### Visual Evidence` screenshots under this iteration's `screenshots/` directory.
+- **Targeted-vs-full decision rule** (applies when incremental context is provided, i.e. round N>1): Choose `targeted` only when the delta is narrow and you can verify the delta's touched surfaces plus everything the prior round's findings flagged. Choose `full` when the delta is broad or cross-cutting, when the prior round was also targeted (periodic full re-verification), or when in doubt. The `## Review Scope` justification must name what was deliberately not re-run.
+
+## Review Scope
+
+Declare your review scope in the `## Review Scope` section of `review-feedback.md`:
+- The first line must be exactly `targeted` or `full`.
+- Follow with a non-empty justification explaining what you reviewed and what you deliberately skipped.
+- Round 1 is `full` because no prior context exists to narrow the scope (guidance only — the parser accepts any valid token).
+- Choosing `targeted` requires referencing the provided incremental context (delta, prior axis report, prior aggregate feedback).
 
 ## Approved Roadmap
 

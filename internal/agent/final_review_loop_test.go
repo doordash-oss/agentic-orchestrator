@@ -201,10 +201,10 @@ func TestRunFeatureFinalReviewLoop_SessionsCarryFinalReviewPhase(t *testing.T) {
 			// only emits its root outcome.
 		case strings.HasSuffix(id, "-01"), strings.HasSuffix(id, "-02"):
 			iteration := 1
-			feedback := testutil.StructuredReviewFeedback("- **High**: needs final review fix", "", agentStatusChangesRequested)
+			feedback := testutil.StructuredReviewFeedbackWithScope("- **High**: needs final review fix", "", agentStatusChangesRequested, "full", "Round 1 — no prior context exists.")
 			if strings.HasSuffix(id, "-02") {
 				iteration = 2
-				feedback = testutil.StructuredReviewFeedback("", "", agentStatusApproved)
+				feedback = testutil.StructuredReviewFeedbackWithScope("", "", agentStatusApproved, "full", "Round 2 — full re-verification after prior round changes.")
 			}
 			suffix := fmt.Sprintf("-%02d", iteration)
 			axisSlug := strings.TrimSuffix(strings.TrimPrefix(id, f.ID+"-"), suffix)

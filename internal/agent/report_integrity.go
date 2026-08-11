@@ -768,11 +768,13 @@ func FormatGateFeedback(result ReportGateResult) string {
 		b.WriteString(deferralBlock)
 	}
 
-	return FormatStructuredReviewFeedback(
+	return FormatStructuredReviewFeedbackWithScope(
 		"Report Integrity Gate — CHANGES_REQUESTED",
 		strings.TrimRight(b.String(), "\n"),
 		"",
 		ReviewChangesRequested,
+		"full",
+		"No axis round ran — the report integrity gate synthesized this feedback deterministically.",
 	)
 }
 

@@ -94,3 +94,15 @@ runs:
 
 Legacy `run.yaml` files without `rewind_roadmap_phase` continue to load without
 migration.
+
+### Validator Events
+
+Per-axis review and plan-validation helpers emit a `validator.started` /
+`validator.completed` event pair:
+
+- `validator.started` — `data.validator_name`: the axis or validator display name.
+- `validator.completed` — `data.validator_name`: same; `status`: the verdict string; `duration_ms`: helper duration.
+
+For implementation-review and final-review axes, `validator.completed` also
+carries `data.review_scope`: the declared scope token (`targeted` or `full`).
+Plan-validation axes do not declare a scope and omit the field.

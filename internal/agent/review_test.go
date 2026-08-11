@@ -265,7 +265,7 @@ func TestParseReviewFeedback(t *testing.T) {
 			if err := os.WriteFile(path, []byte(tt.body), 0o644); err != nil {
 				t.Fatalf("WriteFile: %v", err)
 			}
-			parsed, err := ParseReviewFeedback(path)
+			parsed, err := ParseReviewFeedback(path, false)
 			if err != nil {
 				t.Fatalf("ParseReviewFeedback: %v", err)
 			}
@@ -289,7 +289,7 @@ func TestParseReviewFeedback(t *testing.T) {
 }
 
 func TestParseReviewFeedback_MissingFile(t *testing.T) {
-	parsed, err := ParseReviewFeedback(filepath.Join(t.TempDir(), "does-not-exist.md"))
+	parsed, err := ParseReviewFeedback(filepath.Join(t.TempDir(), "does-not-exist.md"), false)
 	if err != nil {
 		t.Fatalf("ParseReviewFeedback: %v", err)
 	}
@@ -298,5 +298,104 @@ func TestParseReviewFeedback_MissingFile(t *testing.T) {
 	}
 	if len(parsed.ProtocolViolations) == 0 {
 		t.Errorf("expected a protocol violation for the missing file")
+	}
+}
+
+func TestParseReviewFeedback_WithScope(t *testing.T) {
+	tests := []struct {
+		name             string
+		body             string
+		wantStat         ReviewStatus
+		wantViolations   bool
+		wantScope        string
+		wantJustification string
+	}{
+		{
+			name:               "valid targeted scope with justification",
+			body:               "## Findings\n- (none)\n\n## Suggestions\n- (none)\n\n## Review Scope\ntargeted\nDelta touched only auth.go and its tests; prior round flagged error handling.\n\n## Verdict\nAPPROVED\n",
+			wantStat:           ReviewApproved,
+			wantScope:          "targeted",
+			wantJustification: "Delta touched only auth.go and its tests; prior round flagged error handling.",
+		},
+		{
+			name:               "valid full scope with justification",
+			body:               "## Findings\n- (none)\n\n## Suggestions\n- (none)\n\n## Review Scope\nfull\nNo prior round existed; running full verification.\n\n## Verdict\nAPPROVED\n",
+			wantStat:           ReviewApproved,
+			wantScope:          "full",
+			wantJustification: "No prior round existed; running full verification.",
+		},
+		{
+			name:             "missing review scope section is a violation",
+			body:             "## Findings\n- (none)\n\n## Suggestions\n- (none)\n\n## Verdict\nAPPROVED\n",
+			wantStat:         ReviewApproved,
+			wantViolations:   true,
+		},
+		{
+			name:             "invalid scope token is a violation",
+			body:             "## Findings\n- (none)\n\n## Suggestions\n- (none)\n\n## Review Scope\npartial\nSome justification.\n\n## Verdict\nAPPROVED\n",
+			wantStat:         ReviewApproved,
+			wantViolations:   true,
+		},
+		{
+			name:             "empty justification is a violation",
+			body:             "## Findings\n- (none)\n\n## Suggestions\n- (none)\n\n## Review Scope\ntargeted\n\n## Verdict\nAPPROVED\n",
+			wantStat:         ReviewApproved,
+			wantViolations:   true,
+		},
+		{
+			name:             "scope section out of order (after verdict) is a violation",
+			body:             "## Findings\n- (none)\n\n## Suggestions\n- (none)\n\n## Verdict\nAPPROVED\n\n## Review Scope\ntargeted\nSome justification.\n",
+			wantStat:         ReviewApproved,
+			wantViolations:   true,
+		},
+		{
+			name:             "empty scope section body is a violation",
+			body:             "## Findings\n- (none)\n\n## Suggestions\n- (none)\n\n## Review Scope\n\n## Verdict\nAPPROVED\n",
+			wantStat:         ReviewApproved,
+			wantViolations:   true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "review-feedback.md")
+			if err := os.WriteFile(path, []byte(tt.body), 0o644); err != nil {
+				t.Fatalf("WriteFile: %v", err)
+			}
+			parsed, err := ParseReviewFeedback(path, true)
+			if err != nil {
+				t.Fatalf("ParseReviewFeedback: %v", err)
+			}
+			if parsed.Verdict != tt.wantStat {
+				t.Errorf("Verdict = %v, want %v (violations=%v)", parsed.Verdict, tt.wantStat, parsed.ProtocolViolations)
+			}
+			gotViolations := len(parsed.ProtocolViolations) > 0
+			if gotViolations != tt.wantViolations {
+				t.Errorf("ProtocolViolations present = %v, want %v: %v", gotViolations, tt.wantViolations, parsed.ProtocolViolations)
+			}
+			if !tt.wantViolations {
+				if parsed.ReviewScope != tt.wantScope {
+					t.Errorf("ReviewScope = %q, want %q", parsed.ReviewScope, tt.wantScope)
+				}
+				if parsed.ReviewScopeJustification != tt.wantJustification {
+					t.Errorf("ReviewScopeJustification = %q, want %q", parsed.ReviewScopeJustification, tt.wantJustification)
+				}
+			}
+		})
+	}
+}
+
+func TestParseReviewFeedback_PlanValidatorNoScope(t *testing.T) {
+	body := "## Findings\n- (none)\n\n## Suggestions\n- (none)\n\n## Verdict\nAPPROVED\n"
+	path := filepath.Join(t.TempDir(), "review-feedback.md")
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	parsed, err := ParseReviewFeedback(path, false)
+	if err != nil {
+		t.Fatalf("ParseReviewFeedback: %v", err)
+	}
+	if !parsed.OK() {
+		t.Errorf("expected OK for plan-validator feedback without scope section, got violations: %v", parsed.ProtocolViolations)
 	}
 }

@@ -77,6 +77,10 @@ type RoleArtifactSpec struct {
 	HideFromSkill bool
 	ResolvePath   func(RoleRuntime, RoleArtifactSpec) string
 	Validate      ArtifactValidator
+	// RequireReviewScope gates the mandatory `## Review Scope` section in
+	// review-feedback artifacts. Implementation-review and final-review
+	// axis roles set this true; plan-review validators leave it false.
+	RequireReviewScope bool
 }
 
 // RoleSpec is the canonical declaration for one phase/role pairing.
@@ -293,13 +297,14 @@ func phaseMarkdownRoleArtifact(display string) RoleArtifactSpec {
 
 func reviewFeedbackRoleArtifact(rootName string) RoleArtifactSpec {
 	return RoleArtifactSpec{
-		Name:         "review_feedback",
-		DisplayPath:  "review-feedback.md",
-		RootName:     rootName,
-		RelativePath: "review-feedback.md",
-		Presence:     ArtifactRequired,
-		Description:  "structured review feedback markdown with findings, suggestions, and verdict",
-		Validate:     ValidatorReviewFeedback,
+		Name:               "review_feedback",
+		DisplayPath:        "review-feedback.md",
+		RootName:           rootName,
+		RelativePath:       "review-feedback.md",
+		Presence:           ArtifactRequired,
+		Description:        "structured review feedback markdown with findings, suggestions, and verdict",
+		Validate:           ValidatorReviewFeedback,
+		RequireReviewScope: true,
 	}
 }
 

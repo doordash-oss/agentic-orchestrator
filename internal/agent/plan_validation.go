@@ -1241,7 +1241,7 @@ func runValidatorSet(cfg PlanLoopConfig, sm ports.SessionManager, attempt int, a
 				// span counts stay consistent with the non-cached path.
 				skipCtx := validationCtx.Child()
 				cfg.Observer.ValidatorStarted(skipCtx, v.Name)
-				cfg.Observer.ValidatorCompleted(skipCtx, v.Name, "APPROVED (cached)", 0)
+				cfg.Observer.ValidatorCompleted(skipCtx, v.Name, "APPROVED (cached)", "", 0)
 				updateValidatorStatus(cfg, v.Name, ReviewApproved, nil)
 				continue
 			}
@@ -1277,7 +1277,7 @@ func runValidatorSet(cfg PlanLoopConfig, sm ports.SessionManager, attempt int, a
 		if err != nil {
 			verdict = "error"
 		}
-		cfg.Observer.ValidatorCompleted(validatorCtx, v.Name, verdict, time.Since(validatorStart))
+		cfg.Observer.ValidatorCompleted(validatorCtx, v.Name, verdict, "", time.Since(validatorStart))
 
 		updateValidatorStatus(cfg, v.Name, status, err)
 	})

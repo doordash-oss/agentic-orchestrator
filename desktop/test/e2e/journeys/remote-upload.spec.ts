@@ -2,7 +2,7 @@
  * Remote-upload journey (packaged app): attaches to a test-owned loopback
  * server EXACTLY like remote-degradation.spec.ts — own HOME, own state dir,
  * outside the app registry, all traffic through a request-capturing proxy —
- * then proves the Phase 7 byte-upload story end to end:
+ * then proves the byte-upload story end to end:
  *
  *   (1) creation composer staging on a remote connection: the native picker
  *       (dialog.showOpenDialog stubbed in the RUNNING main process, the same

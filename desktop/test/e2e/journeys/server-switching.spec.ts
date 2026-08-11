@@ -378,7 +378,7 @@ test('the app-owned child survives a switch-away and is still stopped on quit', 
     await waitFor(() => discoveryAt(beta.runtimeDir) !== null, 'beta discovery record', 30_000);
     await waitFor(() => readRegistry(world).length === 2, 'two registry entries', 30_000);
 
-    // The spawned child names itself (Phase 1 name generation), so the
+    // The spawned child names itself (generated server name), so the
     // footer label is read back from the state rather than assumed.
     const ownedLabel: string = spawnedState.serverName ?? 'Runtime ready';
     await handle.page.getByRole('button', { name: `${ownedLabel} — switch server` }).click();

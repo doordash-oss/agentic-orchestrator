@@ -30,6 +30,7 @@ export function ServerSwitcher({
   tone,
   enabled,
   openRequest = null,
+  onRouteHandled,
 }: {
   /** Footer text: the connected server's display name (or generic label). */
   currentLabel: string;
@@ -39,6 +40,12 @@ export function ServerSwitcher({
   enabled: boolean;
   /** Route-and-focus signal from the global "Switch Server…" command. */
   openRequest?: { id: number } | null;
+  /**
+   * Fires once an openRequest has been consumed, so the owner can clear the
+   * signal: this same control is re-homed across a breakpoint, and a stale
+   * id would otherwise reopen the popover on the remount.
+   */
+  onRouteHandled?(): void;
 }) {
   const [open, setOpen] = useState(false);
   const [rows, setRows] = useState<readonly ServerListRow[] | null>(null);
@@ -55,7 +62,8 @@ export function ServerSwitcher({
     handledRoute.current = openRequest.id;
     anchorRef.current?.focus();
     setOpen(true);
-  }, [enabled, openRequest]);
+    onRouteHandled?.();
+  }, [enabled, openRequest, onRouteHandled]);
 
   // All health probing is bounded by the popover's open lifetime: opening
   // kicks an immediate round, closing stops every poll.

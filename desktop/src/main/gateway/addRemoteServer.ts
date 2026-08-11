@@ -17,8 +17,6 @@
  */
 import path from 'node:path';
 
-import { z } from 'zod';
-
 import { SafeErrorException, safeError, stripSecrets } from '../../shared/errors';
 import type {
   KnownServer,
@@ -27,6 +25,7 @@ import type {
   ServersPrefs,
 } from '../../shared/ipc';
 import { parseConnectionString, serverKeyForBaseUrl } from '../connectionString';
+import { ProbeHealthSchema } from './attachProfiles';
 import { evaluateCompatibility } from './compatibility';
 import type { RegistryScan } from './registry';
 import type { SaveResult as TokenSaveResult } from './remoteTokenStore';
@@ -67,15 +66,6 @@ export interface AddRemoteServerDeps {
   now?(): number;
   timeouts?: { healthProbeMs?: number };
 }
-
-/** Lenient probe view identical to runtimeGateway's ProbeHealthSchema. */
-const ProbeHealthSchema = z.object({
-  status: z.string(),
-  compatibility: z.unknown().optional(),
-  runtime: z.object({ state_dir: z.string() }).optional(),
-  // Operator-assigned display name: informational only, never a blocker.
-  name: z.string().max(64).optional().catch(undefined),
-});
 
 function fail(code: string, message: string, remediation: string): never {
   throw new SafeErrorException(safeError(code, message, remediation));

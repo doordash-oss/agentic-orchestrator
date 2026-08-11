@@ -217,6 +217,8 @@ body {
   min-height: 0;
   display: flex;
   flex-direction: column;
+  /* Anchor for .server-switcher-dock (out-of-flow children only). */
+  position: relative;
 }
 
 /* ─── Toolbar popovers ────────────────────────────────────────────────────
@@ -5118,6 +5120,26 @@ body {
   max-width: 80vw;
   gap: var(--space-1);
   padding: var(--space-2);
+}
+
+/* While the sidebar is collapsed (below the ~700px auto-collapse breakpoint
+ * or by the user's explicit choice) its footer — the switcher's wide-layout
+ * home — is display:none, so the shell re-homes the same control into this
+ * out-of-flow dock pinned just under the toolbar's trailing edge. Only
+ * mounted in that state; the popover opens downward from here, mirroring
+ * the toolbar popovers' presentation. */
+.server-switcher-dock {
+  position: absolute;
+  top: calc(52px + var(--space-2));
+  right: var(--space-3);
+  z-index: 30;
+}
+
+.server-switcher-dock .server-switcher {
+  top: calc(100% + var(--space-2));
+  bottom: auto;
+  left: auto;
+  right: 0;
 }
 
 .server-switcher__empty {

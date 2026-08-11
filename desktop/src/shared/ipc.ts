@@ -264,7 +264,7 @@ const connectionStateBase = {
    */
   connectedRuntimeDir: z.string().max(4096).nullable().optional(),
   /**
-   * The connected server's stable identity (the Phase 2 known-servers key:
+   * The connected server's stable identity (the known-servers key:
    * a sha256 prefix of the canonical runtime dir). Renderer-safe and
    * credential-free; the renderer keys per-server UI state on it. Absent until
    * an attach target is known.

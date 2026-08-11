@@ -261,6 +261,10 @@ export function WorkspaceShell({
   // Route-and-focus signal for the footer's server switcher (the menu and
   // palette "Switch Server…" command lands here).
   const [switcherRoute, setSwitcherRoute] = useState<{ id: number } | null>(null);
+  // Cleared when the switcher has consumed a route: the control moves
+  // between two homes across the collapse breakpoint, and a kept id would
+  // reopen the popover on the remount.
+  const clearSwitcherRoute = useCallback(() => setSwitcherRoute(null), []);
   const listRequestRef = useRef(0);
   const overviewActiveRef = useRef(false);
   const [creationOpen, setCreationOpen] = useState(false);
@@ -767,6 +771,24 @@ export function WorkspaceShell({
     />
   );
 
+  /**
+   * One ServerSwitcher instance, homed where it stays visible: the sidebar
+   * footer while the sidebar shows, a dock under the toolbar once the
+   * sidebar is collapsed (a narrow window's auto-collapse or the user's
+   * explicit choice hides the whole footer — and with it the only landing
+   * spot for the routed "Switch Server…" command — otherwise).
+   */
+  const serverSwitcher =
+    runtimeReady && !showAmaActive ? (
+      <ServerSwitcher
+        currentLabel={runtimeLabel}
+        tone={runtimeTone}
+        enabled
+        openRequest={switcherRoute}
+        onRouteHandled={clearSwitcherRoute}
+      />
+    ) : null;
+
   return (
     <section
       className="workspace"
@@ -827,13 +849,8 @@ export function WorkspaceShell({
         <div className="sidebar__footer" data-tone={footerTone}>
           {/* The runtime pill is the server control while connected; the
            * AMA-active label and every non-ready state keep the passive pill. */}
-          {runtimeReady && !showAmaActive ? (
-            <ServerSwitcher
-              currentLabel={runtimeLabel}
-              tone={runtimeTone}
-              enabled
-              openRequest={switcherRoute}
-            />
+          {!effectiveSidebarCollapsed && serverSwitcher !== null ? (
+            serverSwitcher
           ) : (
             <span className="sidebar__runtime" role="status">
               <span aria-hidden="true">●</span> {footerLabel}
@@ -852,6 +869,11 @@ export function WorkspaceShell({
       </nav>
 
       <div className="content-column">
+        {/* The collapsed-sidebar home of the switcher above: out of flow so
+         * the column's toolbar/content-pane layout never shifts. */}
+        {effectiveSidebarCollapsed && serverSwitcher !== null ? (
+          <div className="server-switcher-dock">{serverSwitcher}</div>
+        ) : null}
         <Toolbar
           leading={effectiveSidebarCollapsed ? chromeControls : undefined}
           title={toolbarTitle}

@@ -1182,7 +1182,7 @@ describe('RuntimeGateway openEventStream', () => {
   });
 });
 
-// --- Registry-first startup selection (Phase 2) ------------------------------
+// --- Registry-first startup selection ------------------------------------------
 
 const ALPHA_RUNTIME_DIR = '/home/ü ser/.agentic-orchestrator';
 const BETA_RUNTIME_DIR = '/srv/runtimes/beta';
@@ -1610,7 +1610,7 @@ describe('RuntimeGateway registry-first startup selection', () => {
   });
 });
 
-// --- Server identity + mid-session switching (Phase 3) -----------------------
+// --- Server identity + mid-session switching -----------------------------------
 
 describe('RuntimeGateway server identity', () => {
   it('registry attach exposes the candidate serverKey on the ready state', async () => {

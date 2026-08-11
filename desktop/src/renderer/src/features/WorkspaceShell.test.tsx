@@ -1697,3 +1697,133 @@ describe('WorkspaceShell per-server scoping', () => {
     );
   });
 });
+
+/**
+ * The "Switch Server…" route (menu item and palette command) must always
+ * land on a visible switcher: below the ~700px auto-collapse breakpoint the
+ * sidebar footer is display:none, so the control moves into the narrow dock.
+ */
+describe('WorkspaceShell routed server switcher', () => {
+  const READY: ConnectionState = {
+    status: 'ready',
+    stage: 'ready',
+    detail: 'Runtime ready.',
+    ownership: 'app-owned',
+    kind: 'local',
+    serverName: 'alpha',
+  };
+
+  function installReadySwitcherMock() {
+    const mock = installAgenticoMock({
+      settings: settingsWithActive(null),
+      features: [],
+      connection: READY,
+    });
+    const snapshot = {
+      rows: [
+        {
+          kind: 'local' as const,
+          serverKey: 'a'.repeat(64),
+          name: 'alpha',
+          runtimeDir: '/rt/alpha',
+          current: true,
+          health: 'healthy' as const,
+        },
+        {
+          kind: 'local' as const,
+          serverKey: 'b'.repeat(64),
+          name: 'beta',
+          runtimeDir: '/rt/beta',
+          current: false,
+          health: 'healthy' as const,
+        },
+      ],
+    };
+    mock.api.listServers.mockResolvedValue(snapshot);
+    mock.api.probeServers.mockResolvedValue(snapshot);
+    return mock;
+  }
+
+  it('opens a usable Servers listbox from the route while the shell is narrow', async () => {
+    matchMediaState.narrowShell = true;
+    const mock = installReadySwitcherMock();
+    const { rerender } = render(<WorkspaceShell />);
+    await screen.findByRole('option', { name: 'Overview' });
+    expect(screen.getByRole('navigation', { name: 'Feature sidebar' })).toHaveAttribute(
+      'data-collapsed',
+      'true',
+    );
+
+    rerender(<WorkspaceShell routeRequest={{ id: 31, event: { target: 'switch-server' } }} />);
+
+    const listbox = await screen.findByRole('listbox', { name: 'Servers' });
+    // Exactly one switcher surface exists, and it lives in the visible narrow
+    // dock — not the collapsed sidebar footer.
+    expect(screen.getAllByRole('listbox', { name: 'Servers' })).toHaveLength(1);
+    const dock = document.querySelector('.server-switcher-dock')!;
+    expect(dock).not.toBeNull();
+    expect(dock.contains(listbox)).toBe(true);
+    expect(document.querySelector('.sidebar__footer .sidebar__server-control')).toBeNull();
+    // Focus lands on the control the route is meant to focus.
+    expect(document.activeElement).toBe(dock.querySelector('.sidebar__server-control'));
+
+    // A listed server row can be picked — the switcher is fully usable here.
+    await userEvent.click(await screen.findByRole('option', { name: /beta at .+ — Available/ }));
+    expect(mock.api.switchConnectionServer).toHaveBeenCalledWith({
+      serverKey: 'b'.repeat(64),
+    });
+    await waitFor(() =>
+      expect(screen.queryByRole('listbox', { name: 'Servers' })).not.toBeInTheDocument(),
+    );
+  });
+
+  it('keeps the routed switcher in the sidebar footer at wide widths', async () => {
+    installReadySwitcherMock();
+    const { rerender } = render(<WorkspaceShell />);
+    await screen.findByRole('option', { name: 'Overview' });
+    expect(screen.getByRole('navigation', { name: 'Feature sidebar' })).toHaveAttribute(
+      'data-collapsed',
+      'false',
+    );
+
+    rerender(<WorkspaceShell routeRequest={{ id: 32, event: { target: 'switch-server' } }} />);
+
+    const listbox = await screen.findByRole('listbox', { name: 'Servers' });
+    expect(document.querySelector('.server-switcher-dock')).toBeNull();
+    expect(document.querySelector('.sidebar__footer')!.contains(listbox)).toBe(true);
+    expect(document.activeElement).toBe(
+      screen.getByRole('button', { name: 'alpha — switch server' }),
+    );
+    // Escape closes it, same as the direct-click open.
+    await userEvent.keyboard('{Escape}');
+    await waitFor(() =>
+      expect(screen.queryByRole('listbox', { name: 'Servers' })).not.toBeInTheDocument(),
+    );
+  });
+
+  it('does not reopen the switcher when the breakpoint is crossed after a route', async () => {
+    installReadySwitcherMock();
+    const { rerender } = render(<WorkspaceShell />);
+    await screen.findByRole('option', { name: 'Overview' });
+
+    rerender(<WorkspaceShell routeRequest={{ id: 33, event: { target: 'switch-server' } }} />);
+    await screen.findByRole('listbox', { name: 'Servers' });
+    await userEvent.keyboard('{Escape}');
+    await waitFor(() =>
+      expect(screen.queryByRole('listbox', { name: 'Servers' })).not.toBeInTheDocument(),
+    );
+
+    // Crossing into the narrow layout remounts the control in the dock; the
+    // consumed route must not replay there.
+    matchMediaState.narrowShell = true;
+    dispatchMediaChange('(max-width: 700px)', true);
+    await waitFor(() =>
+      expect(screen.getByRole('navigation', { name: 'Feature sidebar' })).toHaveAttribute(
+        'data-collapsed',
+        'true',
+      ),
+    );
+    expect(document.querySelector('.server-switcher-dock')).not.toBeNull();
+    expect(screen.queryByRole('listbox', { name: 'Servers' })).not.toBeInTheDocument();
+  });
+});

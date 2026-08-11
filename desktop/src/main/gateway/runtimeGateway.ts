@@ -12,6 +12,13 @@
  *    process this gateway ever stops is the child it spawned itself.
  *  - Every failure lands in a renderer-visible connection-shell state with
  *    redacted diagnostics and a manual retry path.
+ *
+ * The class keeps the single public state machine and credential transport.
+ * The attach workflows live in attachProfiles.ts (local-attach and
+ * remote-attach profiles over one shared pipeline), app-owned child
+ * supervision lives in childSupervisor.ts, and API-path authorization lives
+ * in apiPaths.ts; each reaches gateway state only through a narrow
+ * adapter.
  */
 import {
   SafeErrorException,
@@ -22,9 +29,7 @@ import {
 } from '../../shared/errors';
 import {
   isConnectionErrorState,
-  MAX_RUN_CONTENT_BYTES,
   MAX_SERVER_CHOICE_CANDIDATES,
-  SESSION_ID_SEGMENT_PATTERN,
   type ConnectionDiagnostics,
   type ConnectionState,
   type ChooseServerRequest,
@@ -35,7 +40,17 @@ import {
   type SwitchContext,
   type SwitchServerRequest,
 } from '../../shared/ipc';
-import { z } from 'zod';
+import { isAllowedApiPath, SESSION_ID_PATTERN } from './apiPaths';
+import {
+  ProbeHealthSchema,
+  runLocalAttach,
+  runRemoteAttach,
+  trimBase,
+  type AttachHost,
+  type AttachOutcome,
+  type StaleHandling,
+} from './attachProfiles';
+import { ChildSupervisor, type ChildSupervisorHost } from './childSupervisor';
 import { evaluateCompatibility } from './compatibility';
 import { evaluateDiscoveryFile, type DiscoveryDeps, type DiscoveryRecord } from './discovery';
 import type { SseStream } from './events';
@@ -168,22 +183,6 @@ export interface GatewayDeps {
 }
 
 /**
- * Lenient view of /api/v1/health used while probing possibly-foreign
- * servers: only what the attach decision needs, tolerant of unknown fields
- * and future shapes. The compatibility declaration itself is validated
- * separately (fail-closed) by evaluateCompatibility.
- */
-const ProbeHealthSchema = z.object({
-  status: z.string(),
-  compatibility: z.unknown().optional(),
-  runtime: z.object({ state_dir: z.string() }).optional(),
-  // Operator-assigned display name (server cap: MaxServerNameLength = 64).
-  // Informational only — an oversized or malformed name is dropped, never
-  // treated as an attach blocker.
-  name: z.string().max(64).optional().catch(undefined),
-});
-
-/**
  * Background re-probe of a lost remote server: first probe after 1s, doubling
  * per missed probe and capped at 15s. The whole loop is bounded by
  * REMOTE_REPROBE_BUDGET_MS of wall-clock probing (~3 minutes), after which the
@@ -194,24 +193,6 @@ const ProbeHealthSchema = z.object({
 const REMOTE_REPROBE_INITIAL_MS = 1000;
 const REMOTE_REPROBE_MAX_MS = 15000;
 const REMOTE_REPROBE_BUDGET_MS = 180000;
-
-const REMOTE_REPASTE_REMEDIATION =
-  'Re-enter the remote server token in Settings (paste its connection string again), then use Retry.';
-
-const INCOMPATIBLE_REMEDIATION =
-  'Update the Agentico desktop app and the agentico runtime to matching releases, then retry. ' +
-  'This app never shuts down a runtime it does not own — close that runtime from wherever it ' +
-  'was started if you want this app to manage its own.';
-
-type AttachResult = 'attached' | 'blocked' | 'launch';
-
-/**
- * What tryAttach does when the candidate server turns out unreachable or
- * stale before compatibility is decided: `launch` falls through to the
- * legacy/spawn paths (startup scan race), `error` lands in the visible
- * error/retry state (a server the user explicitly picked died mid-pick).
- */
-type StaleHandling = 'launch' | 'error';
 
 export class RuntimeGateway {
   private state: ConnectionState = {
@@ -228,14 +209,9 @@ export class RuntimeGateway {
   private token: string | null = null;
   /** Base URL of the connected runtime; only set while status is ready. */
   private baseUrl: string | null = null;
-  private child: ServerChildLike | null = null;
-  private childExitUnsubscribe: (() => void) | null = null;
   private busy = false;
   private shuttingDown = false;
   private generation = 0;
-  private crashAttempts: number[] = [];
-  private readySince: number | null = null;
-  private recoveryPending = false;
   private launchCommandContext: string | null = null;
   /**
    * The runtime directory the gateway actually resolved and connected with.
@@ -251,20 +227,14 @@ export class RuntimeGateway {
    */
   private serverKey: string | null = null;
   /**
-   * The launch coordinates of the running app-owned child. Supervision is
-   * decoupled from connection state: after a switch away, the child keeps
-   * running under this identity and its backoff restart budget keeps working
-   * silently instead of driving ConnectionState. Cleared whenever the child
-   * is deliberately stopped.
-   */
-  private ownedSelected: SelectedRuntime | null = null;
-  /**
    * The registry snapshot behind an awaiting-server-choice state. Records
    * stay in the main process (tokens included); only the renderer-safe
    * candidate projection crosses IPC. Cleared at the start of every connect
    * cycle and once a choice is consumed.
    */
   private pendingCandidates: RegistryCandidate[] = [];
+  /** Supervises the app-owned bundled child and its crash-restart budget. */
+  private readonly supervision: ChildSupervisor;
   /**
    * Whether the currently connected server is a registry/discovery local
    * runtime or a persisted remote endpoint. Drives switch candidates and the
@@ -287,6 +257,64 @@ export class RuntimeGateway {
 
   constructor(private readonly deps: GatewayDeps) {
     this.timeouts = { ...DEFAULT_TIMEOUTS, ...deps.timeouts };
+    this.supervision = new ChildSupervisor(this.supervisionHost(), {
+      shutdownGraceMs: this.timeouts.shutdownGraceMs,
+      crashRestartInitialMs: this.timeouts.crashRestartInitialMs,
+      crashWindowMs: this.timeouts.crashWindowMs,
+    });
+  }
+
+  /** The adapter through which the attach profiles affect gateway state. */
+  private attachHost(): AttachHost {
+    return {
+      fetchJson: (url, options) => this.deps.fetchJson(url, options),
+      log: (line) => this.deps.log(line),
+      registerSecret: (secret) => this.deps.registerSecret(secret),
+      knownServers: () => this.deps.knownServers(),
+      recordAttachedServer: (entry) => this.deps.recordAttachedServer(entry),
+      remoteTokens: this.deps.remoteTokens,
+      healthProbeMs: this.timeouts.healthProbeMs,
+      now: () => this.now(),
+      setState: (next) => this.setState(next),
+      cancelled: (generation) => this.cancelled(generation),
+      fetchReadiness: (baseUrl) => this.fetchReadiness(baseUrl),
+      scrubServerText: (text, secret) => this.scrubServerText(text, secret),
+      setToken: (token) => {
+        this.token = token;
+      },
+      liveOwnedPid: () => this.supervision.liveChildPid(),
+      parkChoiceForDeadRemote: (generation, dead) => this.parkChoiceForDeadRemote(generation, dead),
+      beginAttachedConnection: (connection) => {
+        this.baseUrl = connection.baseUrl;
+        this.serverKey = connection.serverKey;
+        this.connectedKind = connection.connectedKind;
+        this.remoteEntry = connection.remoteEntry;
+        if (connection.connectedKind === 'remote') {
+          this.connectedRuntimeDir = null;
+        }
+      },
+      markReady: () => this.supervision.markReady(),
+    };
+  }
+
+  /** The adapter through which the child supervisor drives gateway state. */
+  private supervisionHost(): ChildSupervisorHost {
+    return {
+      isShuttingDown: () => this.shuttingDown,
+      getState: () => this.state,
+      setState: (next) => this.setState(next),
+      log: (line) => this.deps.log(line),
+      sleeper: (ms) => this.deps.sleep(ms),
+      clock: () => this.now(),
+      resolveServerBinary: () => this.deps.resolveServerBinary(),
+      spawnServer: (binaryPath, args) => this.deps.spawnServer(binaryPath, args),
+      clearConnectionCredentials: () => {
+        this.token = null;
+        this.baseUrl = null;
+      },
+      ownedDiagnosticsField: () => this.ownedDiagnosticsField(),
+      startFromRecovery: () => this.start(),
+    };
   }
 
   getState(): ConnectionState {
@@ -311,7 +339,7 @@ export class RuntimeGateway {
   }
 
   hasOwnedChild(): boolean {
-    return this.child !== null && !this.child.exited;
+    return this.supervision.hasLiveChild();
   }
 
   /**
@@ -456,15 +484,7 @@ export class RuntimeGateway {
     try {
       await this.connect(generation);
     } catch (err) {
-      const safe = toSafeError(err, 'E_GATEWAY');
-      this.deps.log(`gateway cycle failed: ${safe.code}: ${safe.message}`);
-      this.setState({
-        status: 'error',
-        stage: this.state.stage,
-        detail: 'The connection attempt failed unexpectedly.',
-        ownership: 'none',
-        error: safe,
-      });
+      this.failCycle(err, { stage: this.state.stage });
     } finally {
       this.busy = false;
     }
@@ -473,8 +493,8 @@ export class RuntimeGateway {
 
   /** Manual retry from any terminal state; a healthy connection is untouched. */
   async retry(): Promise<ConnectionState> {
-    if (this.state.status === 'crashed' && !this.recoveryPending) {
-      this.crashAttempts = [];
+    if (this.state.status === 'crashed' && !this.supervision.isRecoveryPending) {
+      this.supervision.resetCrashAttempts();
     }
     await this.start();
     return this.state;
@@ -492,13 +512,7 @@ export class RuntimeGateway {
       return this.state;
     }
     this.generation += 1;
-    await this.stopChild();
-    this.token = null;
-    this.baseUrl = null;
-    this.readySince = null;
-    this.serverKey = null;
-    this.connectedKind = null;
-    this.remoteEntry = null;
+    await this.resetConnection({ stopChild: true });
     this.setState({
       status: 'idle',
       stage: 'resolve-runtime',
@@ -537,15 +551,7 @@ export class RuntimeGateway {
       try {
         await this.attachRemote(generation, known);
       } catch (err) {
-        const safe = toSafeError(err, 'E_GATEWAY');
-        this.deps.log(`gateway cycle failed: ${safe.code}: ${safe.message}`);
-        this.setState({
-          status: 'error',
-          stage: 'resolve-runtime',
-          detail: 'The connection attempt failed unexpectedly.',
-          ownership: 'none',
-          error: safe,
-        });
+        this.failCycle(err, { stage: 'resolve-runtime' });
       } finally {
         this.busy = false;
       }
@@ -556,15 +562,7 @@ export class RuntimeGateway {
     try {
       await this.attachCandidate(generation, candidate, 'error');
     } catch (err) {
-      const safe = toSafeError(err, 'E_GATEWAY');
-      this.deps.log(`gateway cycle failed: ${safe.code}: ${safe.message}`);
-      this.setState({
-        status: 'error',
-        stage: this.state.stage,
-        detail: 'The connection attempt failed unexpectedly.',
-        ownership: 'none',
-        error: safe,
-      });
+      this.failCycle(err, { stage: this.state.stage });
     } finally {
       this.busy = false;
     }
@@ -606,13 +604,7 @@ export class RuntimeGateway {
     const generation = ++this.generation;
     try {
       // Deliberately no stopChild(): the app-owned child survives the switch.
-      this.token = null;
-      this.baseUrl = null;
-      this.readySince = null;
-      this.crashAttempts = [];
-      this.serverKey = null;
-      this.connectedKind = null;
-      this.remoteEntry = null;
+      await this.resetConnection({ resetCrashAttempts: true });
       if (known !== undefined && known.kind === 'remote') {
         // Remote targets resolve from the persisted known-servers entry only
         // — never the registry, never discovery, never spawn. The generation
@@ -683,7 +675,7 @@ export class RuntimeGateway {
    * Tears down the connection when the user's Servers pane removed the
    * server it points at, then re-enters the standard startup selection
    * flow (registry scan → picker when multiple servers live → local spawn
-   * otherwise) — exactly what Phase 2/3 do at launch. Settings must already
+   * otherwise) — the same registry startup selection run at launch. Settings must already
    * be updated: the removed entry and any last-used pointer to it are gone
    * by the time this runs, so the fresh connect cycle cannot reattach to
    * the removed server.
@@ -707,12 +699,7 @@ export class RuntimeGateway {
     // remote re-probe for the removed connection.
     const generation = ++this.generation;
     try {
-      this.token = null;
-      this.baseUrl = null;
-      this.readySince = null;
-      this.serverKey = null;
-      this.connectedKind = null;
-      this.remoteEntry = null;
+      await this.resetConnection();
       this.setState({
         status: 'idle',
         stage: 'resolve-runtime',
@@ -721,15 +708,7 @@ export class RuntimeGateway {
       });
       await this.connect(generation);
     } catch (err) {
-      const safe = toSafeError(err, 'E_GATEWAY');
-      this.deps.log(`gateway cycle failed: ${safe.code}: ${safe.message}`);
-      this.setState({
-        status: 'error',
-        stage: 'resolve-runtime',
-        detail: 'The connection attempt failed unexpectedly.',
-        ownership: 'none',
-        error: safe,
-      });
+      this.failCycle(err, { stage: 'resolve-runtime' });
     } finally {
       this.busy = false;
     }
@@ -807,7 +786,7 @@ export class RuntimeGateway {
     this.generation += 1;
     this.token = null;
     this.baseUrl = null;
-    this.readySince = null;
+    this.supervision.clearReadySince();
     this.serverKey = null;
     if (this.connectedKind === 'remote' && this.remoteEntry !== null) {
       // Lost remote: never spawn, never consume the crash budget. Surface a
@@ -852,29 +831,23 @@ export class RuntimeGateway {
    */
   async shutdown(): Promise<void> {
     this.shuttingDown = true;
-    this.recoveryPending = false;
     this.generation += 1; // invalidate in-flight connect work
-    await this.stopChild();
-    this.token = null;
-    this.baseUrl = null;
-    this.connectedRuntimeDir = null;
-    this.serverKey = null;
-    this.connectedKind = null;
-    this.remoteEntry = null;
-    this.pendingCandidates = [];
+    await this.resetConnection({
+      stopChild: true,
+      clearConnectedRuntimeDir: true,
+      clearPendingCandidates: true,
+    });
   }
 
   // --- connect cycle ---------------------------------------------------------
 
   private async connect(generation: number): Promise<void> {
-    await this.stopChild(); // never leave a stray child from an earlier cycle
-    this.token = null;
-    this.baseUrl = null;
-    this.serverKey = null;
-    this.connectedKind = null;
-    this.remoteEntry = null;
-    this.launchCommandContext = null;
-    this.pendingCandidates = [];
+    // never leave a stray child from an earlier cycle
+    await this.resetConnection({
+      stopChild: true,
+      clearLaunchContext: true,
+      clearPendingCandidates: true,
+    });
 
     // Remote last-used intent: when the last successfully attached server is
     // a persisted remote entry, the cycle attaches to it directly — never the
@@ -1130,168 +1103,16 @@ export class RuntimeGateway {
     stale: StaleHandling = 'launch',
     serverKey?: string,
     switchContext?: SwitchContext,
-  ): Promise<AttachResult> {
-    const staleResult = (note: string): AttachResult => {
-      this.deps.log(note);
-      if (stale === 'error') {
-        this.setState({
-          status: 'error',
-          stage: 'connect',
-          detail: 'The selected server stopped responding.',
-          ownership: 'none',
-          error: {
-            code: 'E_ATTACH_UNREACHABLE',
-            message: 'The selected Agentico server is no longer reachable.',
-            remediation: 'Use Retry to rescan the running servers.',
-          },
-          ...(switchContext !== undefined ? { switchContext } : {}),
-        });
-        return 'blocked';
-      }
-      return 'launch';
-    };
-
-    this.setState({
-      status: 'attaching',
-      stage: 'connect',
-      detail: 'Checking the running runtime.',
-      ownership: 'none',
-    });
-
-    // Health is auth-exempt by design: compatibility is evaluated before any
-    // credential is presented.
-    let health: HttpResult;
-    try {
-      health = await this.deps.fetchJson(`${trimBase(record.base_url)}/api/v1/health`, {
-        timeoutMs: this.timeouts.healthProbeMs,
-      });
-    } catch {
-      return staleResult('discovery candidate did not answer its health probe; treating as stale');
-    }
-    if (this.cancelled(generation)) {
-      return 'blocked';
-    }
-    if (health.status !== 200) {
-      return staleResult('discovery candidate returned an unhealthy status; treating as stale');
-    }
-    const probe = ProbeHealthSchema.safeParse(health.body);
-    if (!probe.success || probe.data.status !== 'ok') {
-      return staleResult('discovery candidate health payload was unusable; treating as stale');
-    }
-    if (probe.data.runtime !== undefined && probe.data.runtime.state_dir !== selected.stateDir) {
-      return staleResult('running server reports a different runtime identity; not a match');
-    }
-
-    const verdict = evaluateCompatibility(probe.data.compatibility);
-    if (!verdict.compatible) {
-      this.deps.log(`external runtime is incompatible: ${verdict.reason}`);
-      this.setState({
-        status: 'incompatible',
-        stage: 'connect',
-        detail: 'A running Agentico runtime is not compatible with this app.',
-        ownership: 'external',
-        error: {
-          code: 'E_INCOMPATIBLE_SERVER',
-          message: verdict.reason,
-          remediation: INCOMPATIBLE_REMEDIATION,
-        },
-      });
-      return 'blocked';
-    }
-
-    // A user-assigned nickname wins over the server-reported name for the
-    // displayed identity (footer, connection shell); identity itself is
-    // never affected. The raw name is only used before the token is known;
-    // once the record's token is in scope, the scrubbed form wins.
-    const knownEntry =
-      serverKey === undefined
-        ? undefined
-        : this.deps.knownServers().known.find((entry) => entry.serverKey === serverKey);
-    const rawServerName = knownEntry?.nickname ?? probe.data.name ?? null;
-    const reOwn = this.child !== null && !this.child.exited && record.pid === this.child.pid;
-    const attachOwnership: 'external' | 'app-owned' = reOwn ? 'app-owned' : 'external';
-
-    const token = record.auth_token;
-    if (token === undefined || token === '') {
-      this.setState({
-        status: 'error',
-        stage: 'authenticate',
-        detail: 'The running runtime published no credentials to attach with.',
-        ownership: 'external',
-        serverBuild: verdict.serverBuild,
-        serverName: rawServerName,
-        error: {
-          code: 'E_ATTACH_NO_TOKEN',
-          message: 'The discovery record for the running runtime carries no auth token.',
-          remediation: 'Restart that runtime from where it was started, then retry.',
-        },
-      });
-      return 'blocked';
-    }
-    this.token = token;
-    this.deps.registerSecret(token);
-    // Server-controlled display text: scrub the credential itself out before
-    // it can ride a state or a persisted entry (hostile server echoing the
-    // token back in its probed name). The token is only in scope after the
-    // presence check above, so the scrub lives past it.
-    const serverName = this.scrubServerText(rawServerName, token);
-
-    this.setState({
-      status: 'connecting',
-      stage: 'authenticate',
-      detail: 'Authenticating with the running runtime.',
-      ownership: attachOwnership,
-      serverBuild: verdict.serverBuild,
-      serverName,
-    });
-    const authenticated = await this.fetchReadiness(record.base_url);
-    if (this.cancelled(generation)) {
-      return 'blocked';
-    }
-    if (!authenticated) {
-      this.token = null;
-      this.setState({
-        status: 'error',
-        stage: 'authenticate',
-        detail: 'Could not authenticate with the running runtime.',
-        ownership: attachOwnership,
-        serverBuild: verdict.serverBuild,
-        serverName,
-        error: {
-          code: 'E_ATTACH_AUTH',
-          message: 'The running runtime rejected the stored credentials.',
-          remediation: 'Restart that runtime from where it was started, then retry.',
-        },
-      });
-      return 'blocked';
-    }
-    this.baseUrl = trimBase(record.base_url);
-    this.serverKey = serverKey ?? registryEntryKey(selected.runtimeDir);
-    this.connectedKind = 'local';
-    this.remoteEntry = null;
-    this.setState({
-      status: 'ready',
-      stage: 'ready',
-      kind: 'local',
-      detail: reOwn
-        ? 'Connected to the app-managed Agentico runtime.'
-        : 'Connected to an externally managed Agentico runtime.',
-      ownership: attachOwnership,
-      serverBuild: verdict.serverBuild,
-      serverName,
-    });
-    this.readySince = this.now();
-    // Every successful attach (registry or legacy discovery) refreshes the
-    // known-servers entry and the last-used pointer.
-    this.deps.recordAttachedServer({
-      serverKey: this.serverKey,
-      kind: 'local',
-      name: serverName ?? '',
-      baseUrl: trimBase(record.base_url),
-      runtimeDir: selected.runtimeDir,
-      lastSeenAt: new Date(this.now()).toISOString(),
-    });
-    return 'attached';
+  ): Promise<AttachOutcome> {
+    return runLocalAttach(
+      this.attachHost(),
+      generation,
+      selected,
+      record,
+      stale,
+      serverKey,
+      switchContext,
+    );
   }
 
   // --- remote attach path ----------------------------------------------------
@@ -1311,176 +1132,7 @@ export class RuntimeGateway {
     switchContext?: SwitchContext,
     options?: { unreachableToChoice?: boolean },
   ): Promise<void> {
-    const baseUrl = trimBase(entry.baseUrl);
-    this.setState({
-      status: 'attaching',
-      stage: 'connect',
-      detail: 'Connecting to the remote Agentico server.',
-      ownership: 'none',
-    });
-
-    // The token store registers the loaded secret for log redaction itself.
-    const loaded = this.deps.remoteTokens?.load(entry.serverKey) ?? { status: 'absent' as const };
-    if (loaded.status !== 'ok') {
-      this.setState({
-        status: 'error',
-        stage: 'authenticate',
-        detail: 'The stored credentials for the remote server must be re-entered.',
-        ownership: 'none',
-        error: {
-          code: 'E_REMOTE_TOKEN_REPASTE',
-          message:
-            loaded.status === 're-paste-required'
-              ? 'The stored token for this remote server could not be decrypted.'
-              : 'There is no stored token for this remote server.',
-          remediation: REMOTE_REPASTE_REMEDIATION,
-        },
-        ...(switchContext !== undefined ? { switchContext } : {}),
-      });
-      return;
-    }
-
-    // Health is auth-exempt by design: compatibility is evaluated before any
-    // credential is presented.
-    let health: HttpResult;
-    try {
-      health = await this.deps.fetchJson(`${baseUrl}/api/v1/health`, {
-        timeoutMs: this.timeouts.healthProbeMs,
-      });
-    } catch {
-      if (options?.unreachableToChoice === true) {
-        if (await this.parkChoiceForDeadRemote(generation, entry)) {
-          return;
-        }
-      }
-      this.setState({
-        status: 'error',
-        stage: 'connect',
-        detail: 'The remote Agentico server is not reachable.',
-        ownership: 'none',
-        error: {
-          code: 'E_EXTERNAL_SERVER_LOST',
-          message: 'The remote Agentico server did not answer its health probe.',
-          remediation: 'Check that the remote server is running and reachable, then use Retry.',
-        },
-        ...(switchContext !== undefined ? { switchContext } : {}),
-      });
-      return;
-    }
-    if (this.cancelled(generation)) {
-      return;
-    }
-    const probe = health.status === 200 ? ProbeHealthSchema.safeParse(health.body) : null;
-    if (probe === null || !probe.success || probe.data.status !== 'ok') {
-      if (options?.unreachableToChoice === true) {
-        if (await this.parkChoiceForDeadRemote(generation, entry)) {
-          return;
-        }
-      }
-      this.setState({
-        status: 'error',
-        stage: 'connect',
-        detail: 'The remote Agentico server is not healthy.',
-        ownership: 'none',
-        error: {
-          code: 'E_EXTERNAL_SERVER_LOST',
-          message: 'The remote Agentico server answered with an unhealthy status.',
-          remediation: 'Check that the remote server is running and reachable, then use Retry.',
-        },
-        ...(switchContext !== undefined ? { switchContext } : {}),
-      });
-      return;
-    }
-
-    const verdict = evaluateCompatibility(probe.data.compatibility);
-    if (!verdict.compatible) {
-      this.deps.log(`remote server is incompatible: ${verdict.reason}`);
-      this.setState({
-        status: 'incompatible',
-        stage: 'connect',
-        detail: 'The remote Agentico server is not compatible with this app.',
-        ownership: 'external',
-        error: {
-          code: 'E_INCOMPATIBLE_SERVER',
-          message: verdict.reason,
-          remediation: INCOMPATIBLE_REMEDIATION,
-        },
-      });
-      return;
-    }
-    if (this.cancelled(generation)) {
-      return;
-    }
-
-    // `probeName` is the server-reported name (also the base-name refresh
-    // source); the displayed name prefers the user's nickname. Server
-    // controlled, so the stored credential itself is scrubbed out before the
-    // name can ride a state or a persisted entry (a hostile server echoing
-    // the presented token back in its health name must not leak it).
-    const probeName = this.scrubServerText(probe.data.name ?? null, loaded.token);
-    const serverName = entry.nickname ?? probeName;
-    this.token = loaded.token;
-    this.setState({
-      status: 'connecting',
-      stage: 'authenticate',
-      detail: 'Authenticating with the remote Agentico server.',
-      ownership: 'external',
-      serverBuild: verdict.serverBuild,
-      serverName,
-    });
-    const authenticated = await this.fetchReadiness(baseUrl);
-    if (this.cancelled(generation)) {
-      return;
-    }
-    if (!authenticated) {
-      this.token = null;
-      this.setState({
-        status: 'error',
-        stage: 'authenticate',
-        detail: 'The remote Agentico server rejected the stored credentials.',
-        ownership: 'external',
-        serverBuild: verdict.serverBuild,
-        serverName,
-        error: {
-          code: 'E_REMOTE_TOKEN_REPASTE',
-          message: 'The remote Agentico server rejected the stored token.',
-          remediation: REMOTE_REPASTE_REMEDIATION,
-        },
-        ...(switchContext !== undefined ? { switchContext } : {}),
-      });
-      return;
-    }
-
-    this.baseUrl = baseUrl;
-    this.serverKey = entry.serverKey;
-    this.connectedKind = 'remote';
-    this.connectedRuntimeDir = null;
-    this.setState({
-      status: 'ready',
-      stage: 'ready',
-      kind: 'remote',
-      detail: 'Connected to the remote Agentico server.',
-      ownership: 'external',
-      serverBuild: verdict.serverBuild,
-      serverName,
-    });
-    this.readySince = this.now();
-    // A successful remote attach refreshes lastSeenAt and the last-used
-    // pointer. The stored base name auto-refreshes from the health probe
-    // only while no user nickname is set — a nickname locks the rule out.
-    const refreshed: KnownServer = {
-      serverKey: entry.serverKey,
-      kind: 'remote',
-      name:
-        entry.nickname === undefined && probeName !== null && probeName !== ''
-          ? probeName
-          : entry.name,
-      ...(entry.nickname === undefined ? {} : { nickname: entry.nickname }),
-      baseUrl,
-      lastSeenAt: new Date(this.now()).toISOString(),
-    };
-    this.remoteEntry = refreshed;
-    this.deps.recordAttachedServer(refreshed);
+    await runRemoteAttach(this.attachHost(), generation, entry, switchContext, options);
   }
 
   /**
@@ -1590,8 +1242,8 @@ export class RuntimeGateway {
       });
       return;
     }
-    this.adoptChild(child);
-    this.ownedSelected = selected;
+    this.supervision.adopt(child);
+    this.supervision.setOwnedSelected(selected);
 
     this.setState({
       status: 'waiting-health',
@@ -1609,7 +1261,7 @@ export class RuntimeGateway {
     if (!verdict.compatible) {
       // Packaging bug: the app's own bundled server disagrees with the app.
       // This child is app-owned, so stopping it is permitted.
-      await this.stopChild();
+      await this.supervision.stop();
       this.deps.log(`bundled runtime is incompatible: ${verdict.reason}`);
       this.setState({
         status: 'launch-failed',
@@ -1628,7 +1280,7 @@ export class RuntimeGateway {
 
     const token = ready.record.auth_token;
     if (token === undefined || token === '') {
-      await this.stopChild();
+      await this.supervision.stop();
       this.setState({
         status: 'launch-failed',
         stage: 'authenticate',
@@ -1661,7 +1313,7 @@ export class RuntimeGateway {
     if (!authenticated) {
       const diagnostics = this.ownedDiagnosticsField();
       this.token = null;
-      await this.stopChild();
+      await this.supervision.stop();
       this.setState({
         status: 'launch-failed',
         stage: 'authenticate',
@@ -1689,7 +1341,7 @@ export class RuntimeGateway {
       serverBuild: verdict.serverBuild,
       serverName: ready.serverName,
     });
-    this.readySince = this.now();
+    this.supervision.markReady();
   }
 
   private async waitForOwnedServer(
@@ -1710,7 +1362,7 @@ export class RuntimeGateway {
         return null;
       }
       if (child.exited) {
-        this.releaseChild();
+        this.supervision.release();
         this.setState({
           status: 'launch-failed',
           stage: 'wait-health',
@@ -1756,7 +1408,7 @@ export class RuntimeGateway {
     if (this.cancelled(generation)) {
       return null;
     }
-    await this.stopChild(); // bounded SIGTERM→SIGKILL: never leak the child
+    await this.supervision.stop(); // bounded SIGTERM→SIGKILL: never leak the child
     this.setState({
       status: 'launch-failed',
       stage: 'wait-health',
@@ -1772,222 +1424,65 @@ export class RuntimeGateway {
     return null;
   }
 
-  // --- child supervision -----------------------------------------------------
+  // --- connection teardown/reset ----------------------------------------------
 
-  private adoptChild(child: ServerChildLike): void {
-    this.child = child;
-    this.childExitUnsubscribe = child.onExit((info) => this.handleChildExit(info));
-  }
-
-  private handleChildExit(info: ChildExit): void {
-    // Supervision is decoupled from connection state: an unexpected exit only
-    // drives ConnectionState while the child is the connected app-owned
-    // server. A left-behind child (we switched elsewhere, or it died before
-    // attach) keeps its backoff restart budget silently instead of hijacking
-    // the connection surface.
-    const attached = this.state.status === 'ready' && this.state.ownership === 'app-owned';
-    const detached: SelectedRuntime | null =
-      this.state.ownership === 'app-owned' ? null : this.ownedSelected;
-    this.releaseChild();
-    if (info.expected || this.shuttingDown) {
-      return;
+  /**
+   * Central connection teardown: clears the credential, endpoint, identity,
+   * and readiness fields every reset path shares. Per-call-site differences
+   * are explicit options: stopping the app-owned child (restart, shutdown,
+   * connect), resetting the crash budget (switch), and clearing the launch
+   * context, pending picker snapshot, or resolved runtime dir.
+   */
+  private async resetConnection(
+    options: {
+      stopChild?: boolean;
+      resetCrashAttempts?: boolean;
+      clearLaunchContext?: boolean;
+      clearPendingCandidates?: boolean;
+      clearConnectedRuntimeDir?: boolean;
+    } = {},
+  ): Promise<void> {
+    if (options.stopChild === true) {
+      await this.supervision.stop();
     }
-    this.deps.log(
-      `app-owned runtime exited unexpectedly (code ${String(info.code)}, signal ${String(info.signal)})`,
-    );
-    if (!attached) {
-      if (detached !== null) {
-        this.scheduleBackgroundRecovery(detached);
-      }
-      // Startup-phase exits are reported by the launch loop with more context.
-      return;
-    }
-    const diagnostics = this.ownedDiagnosticsField();
     this.token = null;
     this.baseUrl = null;
-    const now = this.now();
-    if (this.readySince !== null && now - this.readySince >= this.timeouts.crashWindowMs) {
-      this.crashAttempts = [];
+    this.supervision.clearReadySince();
+    this.serverKey = null;
+    this.connectedKind = null;
+    this.remoteEntry = null;
+    if (options.resetCrashAttempts === true) {
+      this.supervision.resetCrashAttempts();
     }
-    this.readySince = null;
-    this.setState({
-      status: 'crashed',
-      stage: 'connect',
-      detail: 'The app-managed runtime exited unexpectedly.',
-      ownership: 'none',
-      error: {
-        code: 'E_SERVER_CRASHED',
-        message: 'The app-managed Agentico runtime exited unexpectedly.',
-        remediation:
-          'Agentico will try to restart it automatically. Local diagnostics were recorded.',
-      },
-      ...diagnostics,
-    });
-    this.scheduleAutomaticRecovery();
-  }
-
-  /** Relaunches at most three times in the rolling crash window. */
-  private scheduleAutomaticRecovery(): void {
-    if (this.recoveryPending || this.shuttingDown) {
-      return;
+    if (options.clearLaunchContext === true) {
+      this.launchCommandContext = null;
     }
-    const now = this.now();
-    this.crashAttempts = this.crashAttempts.filter(
-      (attemptedAt) => now - attemptedAt < this.timeouts.crashWindowMs,
-    );
-    if (this.crashAttempts.length >= 3) {
-      this.setState({
-        status: 'crashed',
-        stage: 'connect',
-        detail: 'The app-managed runtime stopped repeatedly.',
-        ownership: 'none',
-        error: {
-          code: 'E_SERVER_CRASH_LOOP',
-          message: 'Three automatic restart attempts failed within one minute.',
-          remediation:
-            'Inspect the redacted local diagnostics, then use Retry to start a fresh cycle.',
-        },
-        ...this.ownedDiagnosticsField(),
-      });
-      return;
+    if (options.clearPendingCandidates === true) {
+      this.pendingCandidates = [];
     }
-    const attempt = this.crashAttempts.length;
-    this.crashAttempts.push(now);
-    this.recoveryPending = true;
-    const delay = this.timeouts.crashRestartInitialMs * 2 ** attempt;
-    void this.deps
-      .sleep(delay)
-      .then(async () => {
-        if (this.shuttingDown) {
-          this.recoveryPending = false;
-          return;
-        }
-        this.recoveryPending = false;
-        const started = await this.start();
-        if (!started) {
-          this.crashAttempts.pop();
-          return;
-        }
-        if (this.state.status !== 'ready' && !this.shuttingDown) {
-          this.setState({
-            status: 'crashed',
-            stage: 'connect',
-            detail: 'The app-managed runtime could not be recovered.',
-            ownership: 'none',
-            error: {
-              code: 'E_SERVER_CRASHED',
-              message: 'The automatic runtime restart did not reach a healthy state.',
-              remediation: 'Agentico will retry within the bounded crash budget.',
-            },
-            ...this.ownedDiagnosticsField(),
-          });
-          this.scheduleAutomaticRecovery();
-        }
-      })
-      .catch((err: unknown) => {
-        this.recoveryPending = false;
-        this.crashAttempts.pop();
-        const safe = toSafeError(err, 'E_RECOVERY_DELAY');
-        this.deps.log(`automatic recovery delay failed: ${safe.message}`);
-        if (this.shuttingDown) return;
-        this.setState({
-          status: 'crashed',
-          stage: 'connect',
-          detail: 'Automatic recovery could not be scheduled.',
-          ownership: 'none',
-          error: {
-            code: 'E_SERVER_CRASHED',
-            message: 'The automatic runtime restart could not be scheduled.',
-            remediation: 'Use Retry to start a fresh supervised cycle.',
-          },
-          ...this.ownedDiagnosticsField(),
-        });
-      });
+    if (options.clearConnectedRuntimeDir === true) {
+      this.connectedRuntimeDir = null;
+    }
   }
 
   /**
-   * Relaunches a left-behind app-owned child after an unexpected exit, within
-   * the same rolling budget as connected supervision, but silently: no
-   * ConnectionState change while a different server is active. The relaunched
-   * server republishes its discovery/registry record, so switching back
-   * re-attaches through the standard scan.
+   * Terminal transition for any unexpected connect-cycle throw: logs the
+   * redacted failure and parks in the renderer-visible error state with a
+   * manual retry path.
    */
-  private scheduleBackgroundRecovery(selected: SelectedRuntime): void {
-    if (this.recoveryPending || this.shuttingDown) {
-      return;
-    }
-    const now = this.now();
-    this.crashAttempts = this.crashAttempts.filter(
-      (attemptedAt) => now - attemptedAt < this.timeouts.crashWindowMs,
-    );
-    if (this.crashAttempts.length >= 3) {
-      this.deps.log('detached app-owned server exhausted its restart budget; leaving it stopped');
-      return;
-    }
-    const attempt = this.crashAttempts.length;
-    this.crashAttempts.push(now);
-    this.recoveryPending = true;
-    const delay = this.timeouts.crashRestartInitialMs * 2 ** attempt;
-    void this.deps
-      .sleep(delay)
-      .then(() => {
-        this.recoveryPending = false;
-        if (this.shuttingDown || (this.child !== null && !this.child.exited)) {
-          return;
-        }
-        const resolved = this.deps.resolveServerBinary();
-        if (!resolved.ok) {
-          this.deps.log('bundled server binary not found for background relaunch');
-          return;
-        }
-        try {
-          const child = this.deps.spawnServer(resolved.path, [
-            'server',
-            '--config',
-            selected.configPath,
-            '--state-dir',
-            selected.stateDir,
-          ]);
-          this.adoptChild(child);
-          this.deps.log('detached app-owned server relaunched silently');
-        } catch (err) {
-          const safe = toSafeError(err, 'E_LAUNCH_FAILED');
-          this.deps.log(`background server relaunch failed: ${safe.message}`);
-        }
-      })
-      .catch((err: unknown) => {
-        this.recoveryPending = false;
-        const safe = toSafeError(err, 'E_RECOVERY_DELAY');
-        this.deps.log(`background recovery delay failed: ${safe.message}`);
-      });
-  }
-
-  private releaseChild(): void {
-    this.childExitUnsubscribe?.();
-    this.childExitUnsubscribe = null;
-    this.child = null;
-  }
-
-  /** Stops the app-owned child (if any). Never touches external processes. */
-  private async stopChild(): Promise<void> {
-    const child = this.child;
-    if (child === null) {
-      return;
-    }
-    // A deliberate stop ends silent supervision: nothing relaunches a child
-    // the gateway itself stopped.
-    this.ownedSelected = null;
-    if (child.exited) {
-      this.releaseChild();
-      return;
-    }
-    try {
-      await child.stop({ timeoutMs: this.timeouts.shutdownGraceMs });
-    } finally {
-      if (this.child === child) {
-        this.releaseChild();
-      }
-    }
+  private failCycle(
+    err: unknown,
+    options: { stage: Extract<ConnectionState, { status: 'error' }>['stage'] },
+  ): void {
+    const safe = toSafeError(err, 'E_GATEWAY');
+    this.deps.log(`gateway cycle failed: ${safe.code}: ${safe.message}`);
+    this.setState({
+      status: 'error',
+      stage: options.stage,
+      detail: 'The connection attempt failed unexpectedly.',
+      ownership: 'none',
+      error: safe,
+    });
   }
 
   // --- helpers ---------------------------------------------------------------
@@ -2101,140 +1596,4 @@ export class RuntimeGateway {
       .replace(/[A-Za-z]:\\[^\s"']+/g, '[path]')
       .replace(/(^|[\s("'=])\/(?!\/)[^\s"']+/g, '$1[path]');
   }
-}
-
-const SESSION_ID_PATTERN = new RegExp(`^${SESSION_ID_SEGMENT_PATTERN}$`, 'i');
-const QUERYLESS_API_PATH_PATTERN = /^\/api\/v1(\/[a-z0-9_-]+)*$/i;
-const QUERYLESS_SESSION_API_PATH_PATTERN = new RegExp(
-  `^/api/v1/sessions/${SESSION_ID_SEGMENT_PATTERN}(?:/[a-z0-9_-]+)*$`,
-  'i',
-);
-const SESSION_TRANSCRIPT_PATH_PATTERN = new RegExp(
-  `^/api/v1/sessions/${SESSION_ID_SEGMENT_PATTERN}/transcript$`,
-  'i',
-);
-const SAFE_API_SEGMENT = '[a-z0-9_-]+';
-const RUN_LIST_PATH_PATTERN = new RegExp(`^/api/v1/features/${SAFE_API_SEGMENT}/runs$`, 'i');
-const RUN_CONTENT_PATH_PATTERN = new RegExp(
-  `^/api/v1/features/${SAFE_API_SEGMENT}/runs/\\d+/(?:artifacts|logs)/${SAFE_API_SEGMENT}$`,
-  'i',
-);
-const REWIND_PREVIEW_PATH_PATTERN = new RegExp(
-  `^/api/v1/features/${SAFE_API_SEGMENT}/rewind/preview$`,
-  'i',
-);
-const REPOSITORY_DIFF_PATH_PATTERN = new RegExp(
-  `^/api/v1/features/${SAFE_API_SEGMENT}/repositories/${SAFE_API_SEGMENT}/diff$`,
-  'i',
-);
-const UPLOADS_PATH_PATTERN = /^\/api\/v1\/uploads$/i;
-
-function isAllowedApiPath(path: string): boolean {
-  const parts = path.split('?');
-  const pathname = parts[0] ?? '';
-  if (pathname.split('/').some((segment) => segment === '.' || segment === '..')) return false;
-  if (UPLOADS_PATH_PATTERN.test(pathname)) {
-    // Uploads require the mutually-required kind/name query; a queryless
-    // uploads path must not fall through to the generic queryless branch.
-    return parts.length === 2 && hasUploadsQuery(parts[1] ?? '');
-  }
-  if (parts.length === 1) {
-    return (
-      QUERYLESS_API_PATH_PATTERN.test(pathname) || QUERYLESS_SESSION_API_PATH_PATTERN.test(pathname)
-    );
-  }
-  if (parts.length === 2 && RUN_LIST_PATH_PATTERN.test(pathname)) {
-    return hasBoundedIntegerQuery(parts[1] ?? '', {
-      page: { min: 1 },
-      page_size: { min: 1, max: 100 },
-    });
-  }
-  if (parts.length === 2 && RUN_CONTENT_PATH_PATTERN.test(pathname)) {
-    return hasBoundedIntegerQuery(parts[1] ?? '', {
-      offset: { min: 0 },
-      limit: { min: 1, max: MAX_RUN_CONTENT_BYTES },
-    });
-  }
-  if (parts.length === 2 && REWIND_PREVIEW_PATH_PATTERN.test(pathname)) {
-    return hasRewindPreviewQuery(parts[1] ?? '');
-  }
-  if (parts.length === 2 && REPOSITORY_DIFF_PATH_PATTERN.test(pathname)) {
-    return hasRepositoryDiffQuery(parts[1] ?? '');
-  }
-  if (parts.length !== 2 || !SESSION_TRANSCRIPT_PATH_PATTERN.test(pathname)) {
-    return false;
-  }
-  return hasBoundedIntegerQuery(parts[1] ?? '', {
-    offset: { min: 0 },
-    limit: { min: 1, max: 500 },
-  });
-}
-
-function hasBoundedIntegerQuery(
-  rawQuery: string,
-  allowed: Record<string, { min: number; max?: number }>,
-): boolean {
-  if (rawQuery === '') return false;
-  const seen = new Set<string>();
-  for (const [key, value] of new URLSearchParams(rawQuery)) {
-    const bounds = allowed[key];
-    if (bounds === undefined || seen.has(key) || !/^\d+$/.test(value)) return false;
-    const parsed = Number(value);
-    if (!Number.isSafeInteger(parsed) || parsed < bounds.min) return false;
-    if (bounds.max !== undefined && parsed > bounds.max) return false;
-    seen.add(key);
-  }
-  return seen.size > 0;
-}
-
-function hasRewindPreviewQuery(rawQuery: string): boolean {
-  if (rawQuery === '') return false;
-  const seen = new Set<string>();
-  for (const [key, value] of new URLSearchParams(rawQuery)) {
-    if (seen.has(key)) return false;
-    seen.add(key);
-    if (key === 'target_phase' && /^[a-z][a-z0-9_-]{0,199}$/i.test(value)) continue;
-    if (key === 'roadmap_phase' && /^\d+$/.test(value) && Number(value) >= 1) continue;
-    if (key === 'upgrade_pipeline' && /^[a-z][a-z0-9_-]{0,199}$/i.test(value)) continue;
-    return false;
-  }
-  return seen.has('target_phase');
-}
-
-function hasRepositoryDiffQuery(rawQuery: string): boolean {
-  if (rawQuery === '') return false;
-  const seen = new Set<string>();
-  for (const [key, value] of new URLSearchParams(rawQuery)) {
-    if (seen.has(key) || key !== 'file_path') return false;
-    seen.add(key);
-    if (value === '' || value.length > 4096) return false;
-    if (value.startsWith('/') || value.startsWith('\\') || value.includes('\\')) return false;
-    const segments = value.split('/');
-    if (segments.some((segment) => segment === '' || segment === '.' || segment === '..')) {
-      return false;
-    }
-  }
-  return seen.has('file_path');
-}
-
-/**
- * The upload-staging query: exactly `kind` (image|attachment) and `name`
- * (a bounded original filename), each exactly once. Mirrors the server's
- * mutually-required query contract; anything else fails closed here.
- */
-function hasUploadsQuery(rawQuery: string): boolean {
-  if (rawQuery === '') return false;
-  const seen = new Set<string>();
-  for (const [key, value] of new URLSearchParams(rawQuery)) {
-    if (seen.has(key)) return false;
-    seen.add(key);
-    if (key === 'kind' && (value === 'image' || value === 'attachment')) continue;
-    if (key === 'name' && value.length > 0 && value.length <= 255) continue;
-    return false;
-  }
-  return seen.has('kind') && seen.has('name');
-}
-
-function trimBase(baseUrl: string): string {
-  return baseUrl.replace(/\/+$/, '');
 }

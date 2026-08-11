@@ -23,7 +23,7 @@ import (
 
 // TestWriteNetworkAccessNoticeLoopbackSilent pins the loopback posture: no
 // notice, no connection string, no token printed — the startup output is
-// byte-for-byte the Phase 3 "listening at" line and nothing else.
+// byte-for-byte the loopback "listening at" line and nothing else.
 func TestWriteNetworkAccessNoticeLoopbackSilent(t *testing.T) {
 	t.Parallel()
 	var buf strings.Builder

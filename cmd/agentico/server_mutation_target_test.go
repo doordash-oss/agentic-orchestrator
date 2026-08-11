@@ -663,6 +663,7 @@ type fakeReviewFeedbackChildCreator struct {
 	gate             *bool
 	child            *feature.Feature
 	err              error
+	replayed         bool
 }
 
 func (f *fakeReviewFeedbackChildCreator) CreateReviewFeedbackChild(parentID string, spec feature.ReviewFeedbackChildSpec) (*feature.Feature, error) {
@@ -678,7 +679,28 @@ func (f *fakeReviewFeedbackChildCreator) LaunchReviewFeedbackChildFromDraft(pare
 	if f.err != nil {
 		return nil, f.err
 	}
-	return &feature.ReviewFeedbackLaunchResult{Child: f.child, Changed: 2, Omitted: 1, Deferred: 3}, nil
+	return &feature.ReviewFeedbackLaunchResult{Child: f.child, Changed: 2, Omitted: 1, Deferred: 3, Replayed: f.replayed}, nil
+}
+
+// A replayed durable launch receipt returns the original child and counts
+// without re-announcing child creation or re-dispatching setup: with the
+// orchestrator wired, any duplicate dispatch would surface as a panicking
+// background setup goroutine during WaitForCycles.
+func TestServerMutationTargetReviewFeedbackFeatureReplaySkipsChildDispatch(t *testing.T) {
+	t.Parallel()
+
+	creator := &fakeReviewFeedbackChildCreator{replayed: true, child: &feature.Feature{ID: "child-review"}}
+	orch := mutationTargetOrchestrator(nil)
+	target := serverMutationTarget{reviewFeedbackCreator: creator, orch: orch}
+
+	resp, err := target.ReviewFeedbackFeature("parent-1", serverruntime.ReviewFeedbackFeatureRequest{ExpectedRevision: 4})
+	if err != nil {
+		t.Fatalf("ReviewFeedbackFeature() error = %v", err)
+	}
+	if resp.ChildID != "child-review" || resp.Result != resultCreated || resp.Changed != 2 || resp.Omitted != 1 || resp.Deferred != 3 {
+		t.Fatalf("ReviewFeedbackFeature() = %+v; want replayed original child and counts", resp)
+	}
+	orch.WaitForCycles()
 }
 
 func TestServerMutationTargetSendHelpSendsUserMessageToAddressedActiveSession(t *testing.T) {

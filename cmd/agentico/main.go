@@ -1947,7 +1947,9 @@ func (t *serverMutationTarget) ReviewFeedbackFeature(featureID string, req serve
 			return resp, launchErr
 		}
 	}
-	if t.orch != nil {
+	if t.orch != nil && !launch.Replayed {
+		// A replayed launch re-announces nothing: the child was already
+		// reported created and its durable setup intent already dispatched.
 		t.orch.ChildCreated(launch.Child)
 		t.orch.RunSetupAsync(launch.Child.ID)
 	}

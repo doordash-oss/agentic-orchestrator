@@ -13,13 +13,24 @@
  * mutation, unacknowledged edits sit in an overlay the acknowledgement never
  * overwrites, and bulk targets are split into deterministic batches of at
  * most 512 reference-only updates, each chained onto the previous batch's
- * returned revision. A 409 conflict (or any failed save) stops later batches,
- * refetches, and adopts the server's view. Selections hidden by scope or
+ * returned revision. A visible choice is therefore always committed, saving,
+ * or unsaved: a non-conflict save failure keeps the failed batch and every
+ * unsent batch visible as unsaved local choices over the last acknowledged
+ * revision, stops the queue, freezes selection/bulk/gate/Launch/Back, and
+ * focuses a recovery alert offering `Retry save` (outstanding stable
+ * references in their original order, bounded batches, from the latest
+ * acknowledged revision) or `Reload saved selections` (fetch the
+ * authoritative draft first, then deliberately discard the overlay and reset
+ * the view). A typed revision conflict never replays local choices over the
+ * other writer: it bumps the epoch, refetches, adopts the committed view,
+ * and focuses a conflict explanation. Selections hidden by scope or
  * filters are never part of a bulk target set. Launch sends only
  * `{expected_revision, gate}` and stays disabled while a save is pending;
- * Back waits for the pending save to commit before leaving, so a fresh
- * re-entry restores exactly the selection the user last saw. Scope, filters,
- * scroll, and the drawer reset to their defaults on every fresh entry.
+ * a replayed launch response (same child, original counts) is handled
+ * identically to the original dispatch. Back waits for the pending save to
+ * commit before leaving, so a fresh re-entry restores exactly the selection
+ * the user last saw. Scope, filters, scroll, and the drawer reset to their
+ * defaults on every fresh entry.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { FeatureSnapshot } from '../../../../shared/ipc';
@@ -94,7 +105,17 @@ export function ReviewFeedbackWorkspace({
   const [pending, setPending] = useState<ReadonlyMap<string, PendingSelection>>(new Map());
   const [scope, setScope] = useState<string>('all');
   const [filters, setFilters] = useState<ReviewFeedbackFilters>(EMPTY_FILTERS);
-  const [laneError, setLaneError] = useState<WizardError | null>(null);
+  // Recoverable save failure: the overlay keeps the failed and unsent local
+  // choices visible as unsaved; selection/bulk/gate/Launch/Back stay frozen
+  // until `Retry save` or `Reload saved selections` resolves the state.
+  const [saveFailure, setSaveFailure] = useState<WizardError | null>(null);
+  // A typed revision conflict reloaded the committed view; purely explanatory.
+  const [conflictNotice, setConflictNotice] = useState<WizardError | null>(null);
+  // A launch dispatch that failed before durable creation; Launch re-enables.
+  const [launchError, setLaunchError] = useState<WizardError | null>(null);
+  const [retrying, setRetrying] = useState(false);
+  // Polite one-shot status after a deliberate reload succeeds.
+  const [reloaded, setReloaded] = useState(false);
   const [gate, setGate] = useState(true);
   const [launching, setLaunching] = useState(false);
   const [leaving, setLeaving] = useState(false);
@@ -105,6 +126,9 @@ export function ReviewFeedbackWorkspace({
   const [expandedRefs, setExpandedRefs] = useState<ReadonlySet<string>>(new Set());
   const feedRef = useRef<HTMLElement | null>(null);
   const openerRef = useRef<HTMLButtonElement | null>(null);
+  const saveFailureAlertRef = useRef<HTMLDivElement | null>(null);
+  const conflictAlertRef = useRef<HTMLDivElement | null>(null);
+  const launchAlertRef = useRef<HTMLDivElement | null>(null);
 
   const revisionRef = useRef(0);
   const pendingRef = useRef<ReadonlyMap<string, PendingSelection>>(new Map());
@@ -113,6 +137,24 @@ export function ReviewFeedbackWorkspace({
   // no-op instead of writing against a revision the user has already lost.
   const epochRef = useRef(0);
   const queueRef = useRef<Promise<void>>(Promise.resolve());
+  // Mirrored so queued lane steps and guarded callbacks see the freeze
+  // synchronously, without re-creating every callback per failure.
+  const saveFailureRef = useRef<WizardError | null>(null);
+  const mirrorSaveFailure = (next: WizardError | null): void => {
+    saveFailureRef.current = next;
+    setSaveFailure(next);
+  };
+
+  // Actionable alerts own focus; background saving only announces politely.
+  useEffect(() => {
+    if (saveFailure !== null) saveFailureAlertRef.current?.focus();
+  }, [saveFailure]);
+  useEffect(() => {
+    if (conflictNotice !== null) conflictAlertRef.current?.focus();
+  }, [conflictNotice]);
+  useEffect(() => {
+    if (launchError !== null) launchAlertRef.current?.focus();
+  }, [launchError]);
 
   const isNarrow = useMediaQuery('(max-width: 900px)');
 
@@ -154,7 +196,11 @@ export function ReviewFeedbackWorkspace({
   const load = useCallback(() => {
     epochRef.current += 1;
     setFetchState({ phase: 'loading' });
-    setLaneError(null);
+    mirrorSaveFailure(null);
+    setConflictNotice(null);
+    setLaunchError(null);
+    setRetrying(false);
+    setReloaded(false);
     fetchReviewFeedbackDraft(featureId)
       .then((view) => {
         adoptServerView(view);
@@ -180,34 +226,133 @@ export function ReviewFeedbackWorkspace({
   }, [isNarrow]);
 
   /**
-   * A failed save is never presented as committed: drop the overlay for every
-   * edit based on the lost draft, surface the error, stop any queued bulk
-   * batches, and reconcile the visible view against the server.
+   * Two distinct failure contracts:
+   *
+   * A typed revision conflict means another writer committed first: the local
+   * choices are never replayed over their view — the epoch invalidates queued
+   * sends, the overlay is dropped, the committed draft is reloaded, and a
+   * conflict explanation takes focus.
+   *
+   * Any other failure keeps the failed batch and every unsent batch in the
+   * overlay as unsaved local choices over the last acknowledged revision.
+   * The queue stops (queued sends check `saveFailureRef` and no-op), no
+   * refetch adopts the server view, and the recovery alert offers the only
+   * two ways forward.
    */
   const handleSaveFailure = useCallback(
     (err: unknown, epoch: number): void => {
       if (epoch !== epochRef.current) return;
-      epochRef.current += 1;
       const parsed = parseIpcError(err);
-      setLaneError(parsed);
       setLeaving(false);
-      fetchReviewFeedbackDraft(featureId)
-        .then((view) => adoptServerView(view))
-        .catch(() => {});
+      if (
+        parsed.code === 'review_feedback_revision_conflict' ||
+        parsed.code === 'review_feedback_draft_not_found'
+      ) {
+        epochRef.current += 1;
+        mirrorSaveFailure(null);
+        setRetrying(false);
+        setReloaded(false);
+        setConflictNotice(parsed);
+        fetchReviewFeedbackDraft(featureId)
+          .then((view) => adoptServerView(view))
+          .catch(() => {});
+        return;
+      }
+      mirrorSaveFailure(parsed);
     },
     [featureId, adoptServerView],
   );
 
+  /**
+   * Retry the outstanding unsaved choices: the overlay ordered by edit
+   * sequence (so later edits win per reference, original ordering otherwise),
+   * re-batched at the 512-update bound, starting from the latest acknowledged
+   * revision. A transient failure lands back in the same recoverable state; a
+   * conflict converges via `handleSaveFailure`.
+   */
+  const retrySave = useCallback((): void => {
+    const outstanding = [...pendingRef.current.entries()]
+      .map(([stableRef, entry]) => ({ stableRef, selected: entry.value, seq: entry.seq }))
+      .sort((a, b) => a.seq - b.seq);
+    if (outstanding.length === 0) {
+      mirrorSaveFailure(null);
+      return;
+    }
+    const seqs = new Map(outstanding.map((entry) => [entry.stableRef, entry.seq]));
+    const epoch = epochRef.current;
+    const updates: ReviewFeedbackSelectionUpdate[] = outstanding.map(({ stableRef, selected }) => ({
+      stableRef,
+      selected,
+    }));
+    const batches = chunkSelectionUpdates(updates);
+    setRetrying(true);
+    queueRef.current = queueRef.current.then(async () => {
+      for (const batch of batches) {
+        try {
+          const ack = await saveReviewFeedbackSelection({
+            featureId,
+            expectedRevision: revisionRef.current,
+            updates: batch,
+          });
+          if (epoch !== epochRef.current) return;
+          revisionRef.current = ack.revision;
+          mirrorRepos(ack.repos);
+          const cleared = new Map(pendingRef.current);
+          for (const update of batch) {
+            if (cleared.get(update.stableRef)?.seq === seqs.get(update.stableRef)) {
+              cleared.delete(update.stableRef);
+            }
+          }
+          mirrorPending(cleared);
+        } catch (err) {
+          setRetrying(false);
+          handleSaveFailure(err, epoch);
+          return;
+        }
+      }
+      if (epoch !== epochRef.current) return;
+      setRetrying(false);
+      mirrorSaveFailure(null);
+    });
+  }, [featureId, handleSaveFailure]);
+
+  /**
+   * Deliberately abandon the unsaved overlay: fetch the authoritative draft
+   * first, and only on success discard the overlay, reset the view (All
+   * feedback scope, cleared filters/expansion, feed top), and announce the
+   * reload politely. A failed fetch keeps the unsaved choices and recovery
+   * actions exactly as they were.
+   */
+  const reloadSavedSelections = useCallback((): void => {
+    const epoch = epochRef.current;
+    setRetrying(true);
+    fetchReviewFeedbackDraft(featureId)
+      .then((view) => {
+        if (epoch !== epochRef.current) return;
+        // Invalidate queued sends that still reference the abandoned overlay.
+        epochRef.current += 1;
+        adoptServerView(view);
+        mirrorSaveFailure(null);
+        setConflictNotice(null);
+        setLaunchError(null);
+        setReloaded(true);
+        feedRef.current?.scrollTo?.(0, 0);
+      })
+      .catch(() => {})
+      .finally(() => setRetrying(false));
+  }, [featureId, adoptServerView]);
+
   const toggleComment = useCallback(
     (comment: ReviewFeedbackDraftCommentView, checked: boolean): void => {
+      if (saveFailureRef.current !== null) return;
       const seq = ++seqRef.current;
       const epoch = epochRef.current;
       const next = new Map(pendingRef.current);
       next.set(comment.stableRef, { value: !checked, seq });
       mirrorPending(next);
-      setLaneError(null);
+      setReloaded(false);
       queueRef.current = queueRef.current.then(async () => {
-        if (epoch !== epochRef.current) return;
+        if (epoch !== epochRef.current || saveFailureRef.current !== null) return;
         await saveReviewFeedbackSelection({
           featureId,
           expectedRevision: revisionRef.current,
@@ -305,7 +450,7 @@ export function ReviewFeedbackWorkspace({
    */
   const applyBulk = useCallback(
     (targets: ReviewFeedbackDraftCommentView[], selected: boolean): void => {
-      if (targets.length === 0) return;
+      if (targets.length === 0 || saveFailureRef.current !== null) return;
       const epoch = epochRef.current;
       const seqs = new Map<string, number>();
       const updates: ReviewFeedbackSelectionUpdate[] = [];
@@ -317,10 +462,10 @@ export function ReviewFeedbackWorkspace({
         updates.push({ stableRef: comment.stableRef, selected });
       }
       mirrorPending(next);
-      setLaneError(null);
+      setReloaded(false);
       const batches = chunkSelectionUpdates(updates);
       queueRef.current = queueRef.current.then(async () => {
-        if (epoch !== epochRef.current) return;
+        if (epoch !== epochRef.current || saveFailureRef.current !== null) return;
         for (const batch of batches) {
           try {
             const ack = await saveReviewFeedbackSelection({
@@ -392,22 +537,26 @@ export function ReviewFeedbackWorkspace({
   const saving = pending.size > 0;
 
   // Back waits for the pending save: the effect fires once the queue drains
-  // successfully. A failed save clears `leaving` in the catch path instead.
+  // successfully. A failed save clears `leaving` in the catch path instead,
+  // and unresolved unsaved choices can never leave.
   useEffect(() => {
-    if (leaving && pending.size === 0 && laneError === null) onBack();
-  }, [leaving, pending, laneError, onBack]);
+    if (leaving && pending.size === 0 && saveFailure === null) onBack();
+  }, [leaving, pending, saveFailure, onBack]);
 
   const requestBack = useCallback((): void => {
+    if (saveFailure !== null) return;
     if (pending.size === 0) {
       onBack();
       return;
     }
     setLeaving(true);
-  }, [pending, onBack]);
+  }, [pending, saveFailure, onBack]);
 
   const launch = useCallback((): void => {
-    if (saving || launching || fetchState.phase !== 'ready') return;
-    setLaneError(null);
+    if (saving || launching || saveFailure !== null || fetchState.phase !== 'ready') return;
+    setLaunchError(null);
+    setConflictNotice(null);
+    setReloaded(false);
     setLaunching(true);
     launchReviewFeedbackDraft({
       parentId: featureId,
@@ -415,32 +564,51 @@ export function ReviewFeedbackWorkspace({
       gate,
     })
       .then((result) => {
+        // A replayed response (interrupted original dispatch) carries the same
+        // shape — the original child ID and original counts — and transitions
+        // identically.
         const receipt = launchReceiptText(result);
         onDispatched({ childId: result.childId, ...(receipt === undefined ? {} : { receipt }) });
         onBack();
       })
       .catch((err: unknown) => {
         const parsed = parseIpcError(err);
-        setLaneError(parsed);
         // A launch conflict means this draft view was stale; the draft itself
         // (and the committed selection) is preserved — refetch and adopt it.
         if (
           parsed.code === 'review_feedback_revision_conflict' ||
           parsed.code === 'review_feedback_draft_not_found'
         ) {
+          epochRef.current += 1;
+          setConflictNotice(parsed);
           fetchReviewFeedbackDraft(featureId)
             .then((view) => adoptServerView(view))
             .catch(() => {});
+          return;
         }
+        setLaunchError(parsed);
       })
       .finally(() => setLaunching(false));
-  }, [featureId, gate, saving, launching, fetchState.phase, onBack, onDispatched, adoptServerView]);
+  }, [
+    featureId,
+    gate,
+    saving,
+    launching,
+    saveFailure,
+    fetchState.phase,
+    onBack,
+    onDispatched,
+    adoptServerView,
+  ]);
 
-  const launchLabel = launching
-    ? 'Launching…'
-    : counts.selected === 0
-      ? 'Select comments to launch'
-      : `Launch child (${counts.selected})`;
+  const launchLabel =
+    saveFailure !== null
+      ? 'Unsaved choices — retry or reload'
+      : launching
+        ? 'Launching…'
+        : counts.selected === 0
+          ? 'Select comments to launch'
+          : `Launch child (${counts.selected})`;
 
   const activeFilters = filtersActive(filters);
 
@@ -462,6 +630,7 @@ export function ReviewFeedbackWorkspace({
       onSelectVisible={() => applyBulk(selectTargets, true)}
       onClearVisible={() => applyBulk(clearTargets, false)}
       launching={launching}
+      mutationsDisabled={saveFailure !== null}
     />
   );
 
@@ -549,6 +718,7 @@ export function ReviewFeedbackWorkspace({
               const created = formatCreatedAgo(comment.createdAt);
               const expanded = expandedRefs.has(comment.stableRef);
               const collapsible = needsExpansion(comment);
+              const unsaved = saveFailure !== null && pending.has(comment.stableRef);
               const contentId = `review-feedback-content-${comment.stableRef.replace(/[^\w-]/g, '-')}`;
               // The selection checkbox is a sibling of — never an ancestor of
               // — rich content, so links, image actions, task items, and the
@@ -562,15 +732,19 @@ export function ReviewFeedbackWorkspace({
                   key={comment.stableRef}
                   className="review-feedback-card"
                   data-selected={checked}
+                  data-unsaved={unsaved}
                 >
                   <input
                     type="checkbox"
                     className="review-feedback-card__select"
                     aria-label={selectLabel}
                     checked={checked}
-                    disabled={launching}
+                    disabled={launching || saveFailure !== null}
                     onChange={() => toggleComment(comment, checked)}
                   />
+                  {unsaved ? (
+                    <span className="review-feedback-card__unsaved">Unsaved choice</span>
+                  ) : null}
                   <div className="review-feedback-card__body">
                     <span className="review-feedback-modal__comment-meta">
                       <b className="review-feedback-modal__comment-type">
@@ -638,13 +812,14 @@ export function ReviewFeedbackWorkspace({
       role="dialog"
       aria-modal="true"
       aria-label="Address review feedback"
+      aria-busy={launching}
     >
       <header className="review-feedback-workspace__header">
         <button
           type="button"
           className="review-feedback-workspace__back"
           onClick={requestBack}
-          disabled={launching || leaving}
+          disabled={launching || leaving || saveFailure !== null}
         >
           {leaving ? 'Saving…' : 'Back'}
         </button>
@@ -656,16 +831,75 @@ export function ReviewFeedbackWorkspace({
           </p>
           <p className="review-feedback-workspace__ledger" aria-live="polite">
             {counts.selected} of {counts.total} selected
-            {saving ? ' · saving…' : ''}
+            {saving && saveFailure === null ? ' · saving…' : ''}
+            {saveFailure !== null ? ' · includes unsaved choices' : ''}
           </p>
         </div>
       </header>
 
-      {laneError !== null ? (
-        <div role="alert" className="create-form__error">
-          <b className="create-form__error-code">{laneError.code}</b>
-          <p className="create-form__error-message">{laneError.message}</p>
+      {launching ? (
+        <p className="sr-only" role="status">
+          Launching child pass…
+        </p>
+      ) : null}
+
+      {saveFailure !== null ? (
+        <div
+          role="alert"
+          className="create-form__error review-feedback-recovery"
+          ref={saveFailureAlertRef}
+          tabIndex={-1}
+        >
+          <b className="create-form__error-code">Choices not saved</b>
+          <p className="create-form__error-message">
+            Your latest selection changes could not be saved. They stay visible below as unsaved
+            choices over the last saved view, and nothing else can change until you save them or
+            deliberately reload the saved selections.
+          </p>
+          <p className="review-feedback-recovery__detail">
+            Error detail: {saveFailure.code}
+            {saveFailure.message !== '' ? ` — ${saveFailure.message}` : ''}
+          </p>
+          <div className="review-feedback-recovery__actions">
+            <button type="button" disabled={retrying} onClick={retrySave}>
+              Retry save
+            </button>
+            <button type="button" disabled={retrying} onClick={reloadSavedSelections}>
+              Reload saved selections
+            </button>
+          </div>
         </div>
+      ) : null}
+
+      {conflictNotice !== null ? (
+        <div role="alert" className="create-form__error" ref={conflictAlertRef} tabIndex={-1}>
+          <b className="create-form__error-code">Selections reloaded</b>
+          <p className="create-form__error-message">
+            Another writer committed changes to this draft first. Your selections were reloaded from
+            their committed view; any unsent edits were discarded and the workspace is ready for new
+            choices.
+          </p>
+          <p className="review-feedback-recovery__detail">
+            Error detail: {conflictNotice.code}
+            {conflictNotice.message !== '' ? ` — ${conflictNotice.message}` : ''}
+          </p>
+        </div>
+      ) : null}
+
+      {launchError !== null ? (
+        <div role="alert" className="create-form__error" ref={launchAlertRef} tabIndex={-1}>
+          <b className="create-form__error-code">Launch failed</b>
+          <p className="create-form__error-message">
+            The child pass could not be launched. Your saved selections are unchanged; fix the issue
+            and choose Launch again. {launchError.message}
+          </p>
+        </div>
+      ) : null}
+
+      {reloaded ? (
+        <p role="status" className="review-feedback-workspace__ledger">
+          Saved selections reloaded; view reset to All feedback.
+        </p>
       ) : null}
 
       {fetchState.phase === 'loading' ? (
@@ -731,7 +965,7 @@ export function ReviewFeedbackWorkspace({
                 <input
                   type="checkbox"
                   checked={gate}
-                  disabled={launching}
+                  disabled={launching || saveFailure !== null}
                   onChange={(event) => setGate(event.target.checked)}
                 />
                 <span className="config-editor__gate-text">
@@ -745,7 +979,7 @@ export function ReviewFeedbackWorkspace({
               <button
                 type="button"
                 className="launcher-modal__primary"
-                disabled={saving || launching || counts.selected === 0}
+                disabled={saving || launching || saveFailure !== null || counts.selected === 0}
                 onClick={launch}
               >
                 {launchLabel}

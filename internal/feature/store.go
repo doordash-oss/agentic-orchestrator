@@ -1080,6 +1080,16 @@ func (s *Store) ReconcilePendingChildCreations() ([]string, error) {
 			errs = append(errs, fmt.Errorf("clearing child intent on parent %s: %w", parent.ID, err))
 			continue
 		}
+		// A review-feedback launch that reached the durable intent already
+		// consumed the pending draft: converge the draft cleanup an
+		// interrupted launch could not finish so the consumed draft is never
+		// edited or relaunched against the replayed child.
+		if intent.Kind == ChildKindReviewFeedback && intent.LaunchReceipt != nil {
+			if err := s.deleteReviewFeedbackDraftUnlocked(parent.ID); err != nil {
+				errs = append(errs, fmt.Errorf("parent %s: deleting review-feedback draft consumed by launch: %w", parent.ID, err))
+				continue
+			}
+		}
 		reconciled = append(reconciled, parent.ID)
 	}
 	if len(errs) > 0 {

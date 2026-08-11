@@ -201,6 +201,12 @@ func (s *Store) SaveReviewFeedbackDraft(parentID string, draft *ReviewFeedbackDr
 func (s *Store) DeleteReviewFeedbackDraft(parentID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.deleteReviewFeedbackDraftUnlocked(parentID)
+}
+
+// deleteReviewFeedbackDraftUnlocked removes the pending draft while the
+// caller already holds the store lock. It is a no-op when no draft exists.
+func (s *Store) deleteReviewFeedbackDraftUnlocked(parentID string) error {
 	err := os.Remove(reviewFeedbackDraftPath(s.BaseDir, parentID))
 	if err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("delete review feedback draft for parent %q: %w", parentID, err)

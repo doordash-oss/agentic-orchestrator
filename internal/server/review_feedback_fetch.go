@@ -50,6 +50,18 @@ type reviewFeedbackDraftStore interface {
 	SaveReviewFeedbackDraft(parentID string, draft *feature.ReviewFeedbackDraft, expectedRevision int64) error
 }
 
+// reviewFeedbackLaunchReceiptReader reports the durable launch receipt of
+// the active review-feedback child, when one exists.
+type reviewFeedbackLaunchReceiptReader interface {
+	ActiveReviewFeedbackLaunchReceipt(parentID string) (*feature.Feature, *feature.ReviewFeedbackLaunchReceipt, error)
+}
+
+// reviewFeedbackDraftCleaner deletes a pending draft consumed by a durable
+// launch receipt.
+type reviewFeedbackDraftCleaner interface {
+	DeleteReviewFeedbackDraft(parentID string) error
+}
+
 func reviewFeedbackFetchPath(featureID string) string {
 	return featureActionPath(featureID, actionReviewFeedback) + "/" + reviewFeedbackSubactionFetch
 }
@@ -135,6 +147,28 @@ func (h *apiHandler) handleReviewFeedbackFetchTrusted(w http.ResponseWriter, r *
 	if loadErr != nil {
 		writeAPIError(w, http.StatusInternalServerError, "internal_error", "read review feedback draft", nil)
 		return
+	}
+	// Converge a pending draft already consumed by a durable launch receipt:
+	// an ordinary refresh must recognize the receipt, finish the draft
+	// cleanup an interrupted launch could not, and rebase the view onto the
+	// current authoritative feedback instead of relaunching a consumed draft.
+	if existing != nil {
+		if receiptReader, ok := h.store.(reviewFeedbackLaunchReceiptReader); ok {
+			if deleter, ok := h.store.(reviewFeedbackDraftCleaner); ok {
+				_, receipt, receiptErr := receiptReader.ActiveReviewFeedbackLaunchReceipt(parent.ID)
+				if receiptErr != nil {
+					writeAPIError(w, http.StatusInternalServerError, "internal_error", "read review-feedback launch receipt", nil)
+					return
+				}
+				if receipt != nil && receipt.DraftRevision == existing.Revision {
+					if delErr := deleter.DeleteReviewFeedbackDraft(parent.ID); delErr != nil {
+						writeAPIError(w, http.StatusInternalServerError, "internal_error", "delete review feedback draft consumed by launch", nil)
+						return
+					}
+					existing = nil
+				}
+			}
+		}
 	}
 	expectedRevision := int64(0)
 	if existing != nil {

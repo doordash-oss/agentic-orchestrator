@@ -18,6 +18,7 @@
 import { expect, test, type TestInfo } from '@playwright/test';
 import http from 'node:http';
 import fs from 'node:fs';
+import path from 'node:path';
 import { closeApp, createFeatureViaForm, launchApp, type AppHandle } from '../helpers/app';
 import { Transcript } from '../helpers/transcript';
 import {
@@ -44,7 +45,11 @@ interface RepoFixture {
  * comment fixtures for several repositories at the GitHub REST API paths the
  * fetch handler calls. Returns the server URL for AGENTICO_GITHUB_API_BASE.
  */
-function startFakeGitHubAPI(fixtures: Record<string, RepoFixture>): Promise<http.Server> {
+function startFakeGitHubAPI(fixtures: Record<string, RepoFixture>): Promise<{
+  server: http.Server;
+  /** Mutable route bodies: rewrite entries to change what the app fetches. */
+  routes: Record<string, string>;
+}> {
   const routes: Record<string, string> = {};
   for (const [repoPath, fixture] of Object.entries(fixtures)) {
     routes[`/repos/${repoPath}/pulls/1/comments`] = JSON.stringify(fixture.reviewComments);
@@ -63,7 +68,7 @@ function startFakeGitHubAPI(fixtures: Record<string, RepoFixture>): Promise<http
     res.end(JSON.stringify({ message: `unexpected path: ${key}` }));
   });
   return new Promise((resolve) => {
-    server.listen(0, '127.0.0.1', () => resolve(server));
+    server.listen(0, '127.0.0.1', () => resolve({ server, routes }));
   });
 }
 
@@ -149,7 +154,7 @@ test('multi-repo review-feedback triage: sections → filtered bulk clear → re
     fs.writeFileSync(runPath, runYaml);
     transcript.step('seeded pr_urls for alpha and beta in repo_states');
 
-    fakeGitHub = await startFakeGitHubAPI({
+    const fake = await startFakeGitHubAPI({
       'e2e/alpha': {
         reviewComments: [
           {
@@ -215,6 +220,7 @@ test('multi-repo review-feedback triage: sections → filtered bulk clear → re
         ],
       },
     });
+    fakeGitHub = fake.server;
     const apiBase = serverBaseUrl(fakeGitHub);
     transcript.step(`fake GitHub API listening at \`${apiBase}\``);
 
@@ -440,6 +446,289 @@ test('multi-repo review-feedback triage: sections → filtered bulk clear → re
     // transitions out of the "ready" state without a manual click.
     await expect(pass).toHaveAttribute('data-state', 'working', { timeout: 60_000 });
     transcript.step('auto-start attempted: pass transitioned to working without a manual click');
+  } finally {
+    if (handle !== null) {
+      await closeApp(handle);
+    }
+    fakeGitHub?.close();
+    destroyWorld(world);
+  }
+  transcript.write(testInfo);
+});
+
+test('review-feedback recovery: failed-save Retry/Reload → conflict convergence → interrupted-launch replay with original counts', async ({}, testInfo: TestInfo) => {
+  const transcript = new Transcript(
+    'review-feedback-recovery',
+    'Failed-save recovery, conflict convergence, and interrupted-launch replay journey',
+  );
+  const world = createWorld('review-feedback-recovery', {
+    auth: { loggedIn: true, authMethod: 'oauth', email: 'e2e@example.invalid' },
+    presetWorkspaceRoot: true,
+    workflowProvider: true,
+  });
+  const alpha = createRepo(world, 'alpha', { commit: true });
+  addBareRemote(world, alpha);
+  transcript.section('World');
+  transcript.step(`isolated world at \`${world.root}\`; repository: \`${alpha}\``);
+
+  const prUrl = 'https://github.com/e2e/alpha/pull/1';
+  // Shared fixture objects: the launch phase rewrites them so reconciliation
+  // observes exactly one selected comment changed since review.
+  const alphaComments = [
+    {
+      id: 101,
+      path: 'src/main.go',
+      line: 42,
+      body: '`cleanup()` never cancels the derived context.',
+      diff_hunk: '@@ -40 +40 @@\n-cancel()\n+cancel()',
+      user: { login: 'alice' },
+      created_at: '2026-08-02T09:00:00Z',
+    },
+    {
+      id: 102,
+      path: 'src/util.go',
+      line: 15,
+      body: 'This function could be simplified.',
+      diff_hunk: '@@ -14 +14,2 @@\n-old\n+new',
+      user: { login: 'bob' },
+      created_at: '2026-08-02T09:30:00Z',
+    },
+  ];
+
+  let handle: AppHandle | null = null;
+  let fakeGitHub: http.Server | null = null;
+  try {
+    transcript.section('Launch and create the feature');
+    handle = await launchApp(world, testInfo, { traceName: 'review-feedback-recovery' });
+    await expect(handle.page.getByRole('button', { name: 'New feature' })).toBeVisible({
+      timeout: 60_000,
+    });
+    const featureName = `ReviewFeedbackRecovery${Math.random().toString(16).slice(2, 8)}`;
+    const cockpit = await createFeatureViaForm(handle, {
+      name: featureName,
+      description: 'review feedback recovery journey',
+      repoPatterns: [/alpha/],
+    });
+    await expect(cockpit).toBeVisible({ timeout: 30_000 });
+    const features = await handle.page.evaluate(() => window.agentico.listFeatures());
+    const featureId = features[0]!.id;
+    transcript.json('feature id', featureId);
+
+    transcript.section('Quit, seed Published + pr_url, relaunch against the fake GitHub API');
+    const discovery = readDiscovery(world);
+    await closeApp(handle);
+    handle = null;
+    if (discovery !== null) {
+      await waitFor(
+        () => !processAlive(discovery.pid),
+        `first app-owned server ${discovery.pid} to be reaped`,
+        15_000,
+      );
+    }
+    setFeatureStatus(world.stateDir, featureId, 'Published');
+    const runPath = activeRunYamlPath(world, featureId);
+    let runYaml = fs.readFileSync(runPath, 'utf8');
+    runYaml = clearRunFailures(runYaml);
+    runYaml = replaceTopLevelBlock(runYaml, 'repo_states', [
+      'repo_states:',
+      '  alpha:',
+      '    touched: true',
+      `    pr_url: ${prUrl}`,
+    ]);
+    fs.writeFileSync(runPath, runYaml);
+
+    const fake = await startFakeGitHubAPI({
+      'e2e/alpha': { reviewComments: alphaComments, issueComments: [], reviews: [] },
+    });
+    fakeGitHub = fake.server;
+    handle = await launchApp(world, testInfo, {
+      traceName: 'review-feedback-recovery-seeded',
+      env: { AGENTICO_GITHUB_API_BASE: serverBaseUrl(fake.server) },
+    });
+    const overviewOption = handle.page.getByRole('option', { name: 'Overview' });
+    await expect(overviewOption).toBeVisible({ timeout: 60_000 });
+    await overviewOption.click();
+    await handle.page.getByRole('option', { name: featureName }).click();
+    const seededCockpit = handle.page.getByLabel(`Feature ${featureName}`);
+    await expect(seededCockpit).toBeVisible({ timeout: 30_000 });
+    const aftercare = seededCockpit.getByRole('region', { name: 'Feature aftercare' });
+    const addressReviewFeedback = aftercare.getByRole('button', {
+      name: /Address review feedback/,
+    });
+    await addressReviewFeedback.click();
+    const workspace = handle.page.getByRole('dialog', { name: 'Address review feedback' });
+    await expect(workspace).toBeVisible({ timeout: 15_000 });
+    const feed = workspace.getByLabel('Review feedback');
+    const comment101 = feed.getByLabel(/never cancels the derived context/);
+    const comment102 = feed.getByLabel(/This function could be simplified/);
+    await expect(comment101).toBeChecked();
+    await expect(comment102).toBeChecked();
+    transcript.step('workspace opened with both alpha comments pre-selected');
+
+    transcript.section('Failed save: unsaved marker, Retry save commits the outstanding choice');
+    // Packaged failure injection happens beneath the renderer: the pending
+    // draft lives at <stateDir>/<featureId>/review-feedback/draft.json, and
+    // the server persists every selection mutation there. Making the draft
+    // directory read-only turns the next save into a genuine non-conflict
+    // server failure without touching the frozen context-bridge preload.
+    const draftDir = path.join(world.stateDir, featureId, 'review-feedback');
+    fs.chmodSync(draftDir, 0o555);
+    await comment101.click();
+    const alert = workspace.getByRole('alert');
+    await expect(alert).toContainText('Choices not saved');
+    await expect(alert).toBeFocused();
+    await expect(workspace.getByText('Unsaved choice', { exact: true })).toBeVisible();
+    await expect(comment101).not.toBeChecked();
+    await expect(comment102).toBeDisabled();
+    await expect(
+      workspace.getByRole('button', { name: 'Unsaved choices — retry or reload' }),
+    ).toBeDisabled();
+    await expect(workspace.getByRole('button', { name: 'Back', exact: true })).toBeDisabled();
+    transcript.step('failed save remained visible as an unsaved choice; mutations frozen');
+
+    fs.chmodSync(draftDir, 0o755);
+    await workspace.getByRole('button', { name: 'Retry save' }).click();
+    await expect(alert).toHaveCount(0, { timeout: 15_000 });
+    await expect(workspace.getByText('Unsaved choice', { exact: true })).toHaveCount(0);
+    await expect(comment101).not.toBeChecked();
+    await expect(workspace.getByText('1 of 2 selected').first()).toBeVisible();
+    transcript.step('Retry save committed the outstanding choice; markers cleared');
+
+    transcript.section('Failed save again: Reload saved selections abandons the overlay');
+    fs.chmodSync(draftDir, 0o555);
+    await comment101.click();
+    await expect(workspace.getByRole('alert')).toContainText('Choices not saved');
+    await expect(comment101).toBeChecked();
+    fs.chmodSync(draftDir, 0o755);
+    await workspace.getByRole('button', { name: 'Reload saved selections' }).click();
+    await expect(workspace.getByRole('alert')).toHaveCount(0, { timeout: 15_000 });
+    await expect(comment101).not.toBeChecked();
+    await expect(workspace.getByText('Unsaved choice', { exact: true })).toHaveCount(0);
+    await expect(workspace.getByText(/Saved selections reloaded/)).toBeVisible();
+    await expect(workspace.getByText('1 of 2 selected').first()).toBeVisible();
+    transcript.step('Reload adopted the authoritative draft and cleared the unsaved overlay');
+
+    transcript.section('Conflict convergence: a concurrent writer commits first');
+    // A second writer (the bundled server itself, driven directly) commits an
+    // unrelated change on the current committed revision; the workspace's next
+    // save must converge instead of replaying over it.
+    const draftNow = await handle.page.evaluate((id) => {
+      const api = window.agentico as unknown as {
+        fetchReviewFeedback(request: { featureId: string }): Promise<{ revision: number }>;
+      };
+      return api.fetchReviewFeedback({ featureId: id });
+    }, featureId);
+    const ref101 = 'alpha:review:101';
+    await handle.page.evaluate(
+      ([id, revision, ref]) => {
+        const api = window.agentico as unknown as {
+          updateReviewFeedbackSelection(request: {
+            featureId: string;
+            expectedRevision: number;
+            updates: Array<{ stableRef: string; selected: boolean }>;
+          }): Promise<unknown>;
+        };
+        return api.updateReviewFeedbackSelection({
+          featureId: id,
+          expectedRevision: revision,
+          updates: [{ stableRef: ref, selected: true }],
+        });
+      },
+      [featureId, draftNow.revision, ref101] as const,
+    );
+    await comment102.click();
+    const conflictAlert = workspace.getByRole('alert');
+    await expect(conflictAlert).toContainText('Selections reloaded', { timeout: 15_000 });
+    await expect(conflictAlert).toBeFocused();
+    // The workspace adopted the other writer's committed view: 101 selected.
+    await expect(comment101).toBeChecked({ timeout: 15_000 });
+    await expect(comment102).toBeChecked();
+    await expect(workspace.getByText('2 of 2 selected').first()).toBeVisible();
+    transcript.step('UI save conflicted, refetched, and adopted the committed view');
+
+    transcript.section('Interrupted-launch replay: same child, original counts, one auto-start');
+    // Re-enter so the workspace's acknowledged revision is provably fresh.
+    await workspace.getByRole('button', { name: 'Back', exact: true }).click();
+    await expect(workspace).toHaveCount(0);
+    await addressReviewFeedback.click();
+    await expect(workspace).toBeVisible({ timeout: 15_000 });
+    // The workspace's acknowledged revision is the durable draft revision on
+    // disk: read it directly, because an out-of-band fetch would itself
+    // advance the revision and leave the workspace view stale.
+    const draftOnDisk = JSON.parse(fs.readFileSync(path.join(draftDir, 'draft.json'), 'utf8')) as {
+      revision: number;
+    };
+    // One selected comment changes after the draft snapshot: reconciliation
+    // at launch counts it as "changed since review".
+    alphaComments[1]!.body = 'This function could be simplified — please show me how.';
+    fake.routes['/repos/e2e/alpha/pulls/1/comments'] = JSON.stringify(alphaComments);
+    // The gate choice must match for the replay to claim the original receipt.
+    const gateToggle = workspace.getByRole('checkbox', {
+      name: /Pause for Roadmap and Phase plan review/,
+    });
+    await gateToggle.check();
+    const originalLaunch = await handle.page.evaluate(
+      ([id, revision]) => {
+        const api = window.agentico as unknown as {
+          launchReviewFeedbackChild(request: {
+            parentId: string;
+            expectedRevision: number;
+            gate: boolean;
+          }): Promise<{ childId?: string; parentId: string; changed?: number }>;
+        };
+        return api.launchReviewFeedbackChild({
+          parentId: id,
+          expectedRevision: revision,
+          gate: true,
+        });
+      },
+      [featureId, draftOnDisk.revision] as const,
+    );
+    const originalChildId = originalLaunch.childId;
+    expect(originalChildId).toBeTruthy();
+    transcript.step(`original (interrupted) launch created child \`${originalChildId}\``);
+    // A transport-level repeat of the same launch request (the response was
+    // "lost") replays the durable receipt: same child, same original counts.
+    const replayLaunch = await handle.page.evaluate(
+      ([id, revision]) => {
+        const api = window.agentico as unknown as {
+          launchReviewFeedbackChild(request: {
+            parentId: string;
+            expectedRevision: number;
+            gate: boolean;
+          }): Promise<{ childId?: string; parentId: string; changed?: number }>;
+        };
+        return api.launchReviewFeedbackChild({
+          parentId: id,
+          expectedRevision: revision,
+          gate: true,
+        });
+      },
+      [featureId, draftOnDisk.revision] as const,
+    );
+    expect(replayLaunch.childId).toBe(originalChildId);
+    expect(replayLaunch.changed).toBe(originalLaunch.changed);
+    transcript.step('transport-level replay returned the same child and counts');
+
+    const replayClick = workspace.getByRole('button', { name: /Launch child \(2\)/ });
+    await expect(replayClick).toBeEnabled();
+    await replayClick.click();
+    // Replay transitions like the original dispatch: the workspace leaves,
+    // the SAME child workspace opens, and the durable banner carries the
+    // original reconciliation counts.
+    await expect(workspace).toHaveCount(0, { timeout: 30_000 });
+    const pass = seededCockpit.getByRole('region', { name: 'Review feedback pass' });
+    await expect(pass).toBeVisible({ timeout: 60_000 });
+    await expect(handle.page.getByText('1 changed since review')).toBeVisible({ timeout: 30_000 });
+    transcript.step('replay transitioned to the child with the original reconciliation banner');
+
+    // Exactly one child exists, carried on the parent's activeChild slot.
+    const afterReplay = await handle.page.evaluate(() => window.agentico.listFeatures());
+    expect(afterReplay).toHaveLength(1);
+    expect(afterReplay[0]!.activeChild?.id).toBe(originalChildId);
+    // Single auto-started child: the pass leaves "ready" without a manual click.
+    await expect(pass).toHaveAttribute('data-state', 'working', { timeout: 60_000 });
+    transcript.step('one child, one receipt, one auto-start — no duplicate dispatch');
   } finally {
     if (handle !== null) {
       await closeApp(handle);

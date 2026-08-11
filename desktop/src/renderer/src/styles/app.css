@@ -10467,6 +10467,57 @@ body {
   background: var(--hover);
 }
 
+/* Unsaved choices: a structural edge mark plus an explicit text marker, so
+   the state never relies on color alone. */
+.review-feedback-card[data-unsaved='true'] {
+  border-left: 3px solid var(--attention);
+}
+
+.review-feedback-card__unsaved {
+  flex-shrink: 0;
+  margin-top: 3px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--attention);
+}
+
+/* Recovery alert: same error surface as elsewhere, with a plain-language
+   headline/message row and the two named recovery actions. */
+.review-feedback-recovery__detail {
+  margin: 0;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.review-feedback-recovery__actions {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.review-feedback-recovery__actions button {
+  border: 1px solid var(--hairline);
+  border-radius: var(--bench-radius-control);
+  background: var(--raised);
+  color: var(--text);
+  font-size: 12px;
+  padding: var(--space-1) var(--space-2);
+  cursor: pointer;
+}
+
+.review-feedback-recovery__actions button:hover:not(:disabled) {
+  background: var(--hover);
+}
+
+.review-feedback-recovery__actions button:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.review-feedback-recovery__actions button:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
 /* ─── Review-feedback safe Markdown ─── */
 
 .review-feedback-md {

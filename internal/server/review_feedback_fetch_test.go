@@ -172,3 +172,101 @@ func installReviewFeedbackFetchFakeAPI(t *testing.T, failWebInline bool) {
 	fake.HandleJSON("/repos/example/web/issues/2/comments", http.StatusOK, `[]`)
 	fake.HandleJSON("/repos/example/web/pulls/2/reviews", http.StatusOK, `[]`)
 }
+
+// seedActiveReviewFeedbackChild installs an active review-feedback child
+// carrying the given durable launch receipt for the parent.
+func seedActiveReviewFeedbackChild(t *testing.T, store *feature.Store, parentID string, receipt *feature.ReviewFeedbackLaunchReceipt) {
+	t.Helper()
+	child := &feature.Feature{
+		ID:            "child-review-active",
+		Slug:          "child-review-active",
+		Status:        feature.StatusImplementing,
+		ActiveRun:     1,
+		RunCount:      1,
+		SchemaVersion: feature.SchemaVersionCurrent,
+		Parent:        &feature.ChildRelationship{ParentID: parentID, Kind: feature.ChildKindReviewFeedback, LaunchReceipt: receipt},
+	}
+	if err := store.Save(child); err != nil {
+		t.Fatalf("Save(child): %v", err)
+	}
+}
+
+// An ordinary refresh recognizes the durable launch receipt matching the
+// pending draft's revision and finishes the cleanup an interrupted launch
+// could not: the consumed draft is replaced by the current authoritative
+// feedback, not relaunched.
+func TestReviewFeedbackFetchConvergesDraftConsumedByLaunchReceipt(t *testing.T) {
+	store, f := seedReviewFeedbackFetchFeature(t)
+	draft := seedReviewFeedbackSelectionDraft(t, store, f.ID)
+	// Commit a selection change so the consumed draft is distinguishable
+	// from a fresh reconciliation.
+	if err := feature.ApplyReviewFeedbackSelection(draft, map[feature.StableReviewFeedbackRef]bool{"web:review:44": false}); err != nil {
+		t.Fatal(err)
+	}
+	draft.Revision++
+	if err := store.SaveReviewFeedbackDraft(f.ID, draft, draft.Revision-1); err != nil {
+		t.Fatal(err)
+	}
+	seedActiveReviewFeedbackChild(t, store, f.ID, &feature.ReviewFeedbackLaunchReceipt{
+		DraftRevision: draft.Revision, Changed: 1, Omitted: 0, Deferred: 0,
+	})
+	installReviewFeedbackFetchFakeAPI(t, false)
+
+	handler := NewHandler(HandlerOptions{Features: store, FeatureStore: store, Mutations: &refactorMutationTarget{}, DisableHostValidation: true})
+	w := postTrustedJSON(handler, reviewFeedbackFetchPath(f.ID), map[string]any{})
+	if w.Code != http.StatusOK {
+		t.Fatalf("fetch status = %d, want 200: %s", w.Code, w.Body.String())
+	}
+	response := selectionResponse(t, w.Body.Bytes())
+	if response.Revision != 1 {
+		t.Fatalf("revision = %d, want 1: the consumed draft must be replaced by a fresh reconciliation", response.Revision)
+	}
+	for _, group := range response.Repos {
+		for _, comment := range group.Comments {
+			if !comment.Selected {
+				t.Fatalf("consumed selection leaked into refreshed draft for %q", comment.StableRef)
+			}
+		}
+	}
+	kept, err := store.LoadReviewFeedbackDraft(f.ID)
+	if err != nil || kept == nil {
+		t.Fatalf("reload draft: %v", err)
+	}
+	if kept.Revision != 1 {
+		t.Fatalf("persisted revision = %d, want fresh revision 1", kept.Revision)
+	}
+}
+
+// A receipt that does not match the pending draft's revision does not claim
+// it: ordinary reconciliation retains the committed selections.
+func TestReviewFeedbackFetchIgnoresNonMatchingReceipt(t *testing.T) {
+	store, f := seedReviewFeedbackFetchFeature(t)
+	draft := seedReviewFeedbackSelectionDraft(t, store, f.ID)
+	if err := feature.ApplyReviewFeedbackSelection(draft, map[feature.StableReviewFeedbackRef]bool{"web:review:44": false}); err != nil {
+		t.Fatal(err)
+	}
+	draft.Revision++
+	if err := store.SaveReviewFeedbackDraft(f.ID, draft, draft.Revision-1); err != nil {
+		t.Fatal(err)
+	}
+	seedActiveReviewFeedbackChild(t, store, f.ID, &feature.ReviewFeedbackLaunchReceipt{DraftRevision: draft.Revision + 9})
+	installReviewFeedbackFetchFakeAPI(t, false)
+
+	handler := NewHandler(HandlerOptions{Features: store, FeatureStore: store, Mutations: &refactorMutationTarget{}, DisableHostValidation: true})
+	w := postTrustedJSON(handler, reviewFeedbackFetchPath(f.ID), map[string]any{})
+	if w.Code != http.StatusOK {
+		t.Fatalf("fetch status = %d, want 200: %s", w.Code, w.Body.String())
+	}
+	response := selectionResponse(t, w.Body.Bytes())
+	if response.Revision != int(draft.Revision)+1 {
+		t.Fatalf("revision = %d, want %d (ordinary reconciliation)", response.Revision, draft.Revision+1)
+	}
+	for _, group := range response.Repos {
+		for _, comment := range group.Comments {
+			want := comment.StableRef != "web:review:44"
+			if comment.Selected != want {
+				t.Fatalf("refetch changed committed selection for %q", comment.StableRef)
+			}
+		}
+	}
+}

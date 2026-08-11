@@ -529,7 +529,7 @@ describe('ReviewFeedbackWorkspace', () => {
     expect(batch3.updates).toHaveLength(1);
   });
 
-  it('stops later bulk batches when one batch fails and converges via refetch', async () => {
+  it('stops later bulk batches on a conflict and converges via refetch with a focused explanation', async () => {
     const many: ReviewFeedbackDraftCommentView[] = Array.from({ length: 600 }, (_, index) =>
       comment({
         stableRef: `repo-a:review:${index + 1}`,
@@ -550,7 +550,10 @@ describe('ReviewFeedbackWorkspace', () => {
     // No third batch is ever sent against the stale revision.
     await waitFor(() => expect(mock.api.fetchReviewFeedback).toHaveBeenCalledTimes(2));
     expect(mock.api.updateReviewFeedbackSelection).toHaveBeenCalledTimes(2);
-    expect(await screen.findByRole('alert')).toHaveTextContent(/stale/);
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('Selections reloaded');
+    expect(alert).toHaveTextContent(/stale/);
+    expect(alert).toHaveFocus();
   });
 
   it('toggles update the visible choice immediately and send a reference-only mutation', async () => {
@@ -601,7 +604,10 @@ describe('ReviewFeedbackWorkspace', () => {
     await user.click(comment90);
     await waitFor(() => expect(mock.api.fetchReviewFeedback).toHaveBeenCalledTimes(2));
     expect(comment90).not.toBeChecked();
-    expect(await screen.findByRole('alert')).toHaveTextContent(/stale/);
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('Selections reloaded');
+    expect(alert).toHaveTextContent(/stale/);
+    expect(alert).toHaveFocus();
   });
 
   it('disables launch while a selection save is pending and re-enables after the ack', async () => {
@@ -690,6 +696,334 @@ describe('ReviewFeedbackWorkspace', () => {
     expect(screen.getByLabelText(/Consider extracting the parser/)).toBeChecked();
   });
 
+  describe('unsaved-choice recovery', () => {
+    it('keeps a failed save visible as an unsaved choice, focuses the recovery alert, and freezes mutations', async () => {
+      const { mock, user } = await renderWorkspace();
+      mock.api.updateReviewFeedbackSelection.mockRejectedValueOnce(new Error('socket dropped'));
+      const comment41 = screen.getByLabelText(/Rewrite this to avoid the bearer token/);
+      await user.click(comment41);
+      const alert = await screen.findByRole('alert');
+      expect(alert).toHaveTextContent('Choices not saved');
+      expect(alert).toHaveTextContent(/Retry save/);
+      expect(alert).toHaveTextContent(/Reload saved selections/);
+      expect(alert).toHaveFocus();
+      // The user's choice stays visible as unsaved; the server view was not
+      // adopted over it (no refetch).
+      expect(comment41).not.toBeChecked();
+      expect(screen.getByText('Unsaved choice')).toBeVisible();
+      expect(screen.getByText(/includes unsaved choices/)).toBeVisible();
+      expect(mock.api.fetchReviewFeedback).toHaveBeenCalledOnce();
+      expect(alert).toHaveTextContent(/E_IPC/); // internal code stays secondary
+      // Selection, bulk, gate, Launch, and Back freeze…
+      expect(screen.getByLabelText(/Consider extracting the parser/)).toBeDisabled();
+      expect(screen.getByLabelText(/Overall looks good/)).toBeDisabled();
+      expect(screen.getByRole('button', { name: /Clear visible/ })).toBeDisabled();
+      expect(screen.getByRole('button', { name: /Select visible/ })).toBeDisabled();
+      expect(
+        screen.getByRole('checkbox', { name: /Pause for Roadmap and Phase plan review/ }),
+      ).toBeDisabled();
+      expect(
+        screen.getByRole('button', { name: 'Unsaved choices — retry or reload' }),
+      ).toBeDisabled();
+      expect(screen.getByRole('button', { name: 'Back' })).toBeDisabled();
+      // …while scope, filters, expansion, and PR actions stay operable.
+      expect(screen.getByRole('radio', { name: /All feedback/ })).toBeEnabled();
+      expect(screen.getByRole('searchbox', { name: 'File path' })).toBeEnabled();
+      expect(screen.getAllByRole('button', { name: 'Show full feedback' })[0]).toBeEnabled();
+      expect(screen.getAllByRole('button', { name: 'Open pull request' })[0]).toBeEnabled();
+      expect(screen.getByRole('button', { name: 'Retry save' })).toBeEnabled();
+      expect(screen.getByRole('button', { name: 'Reload saved selections' })).toBeEnabled();
+    });
+
+    it('does not move focus or announce beyond the polite ledger for a background save', async () => {
+      const { mock, user } = await renderWorkspace();
+      const inflight = deferred<{ revision: number; repos: ReviewFeedbackDraftView['repos'] }>();
+      mock.api.updateReviewFeedbackSelection.mockReturnValueOnce(inflight.promise);
+      const comment42 = screen.getByLabelText(/Consider extracting the parser/);
+      await user.click(comment42);
+      expect(comment42).toHaveFocus();
+      expect(comment42).not.toBeChecked();
+      // The ledger stays the only announcement: no alert ever takes focus.
+      expect(screen.getByText('1 of 3 selected · saving…')).toBeVisible();
+      const ack = draftView({ revision: 8 });
+      ack.repos[0]!.comments = ack.repos[0]!.comments.map((entry) =>
+        entry.stableRef === 'repo-a:issue:42' ? { ...entry, selected: false } : entry,
+      );
+      inflight.resolve(ackWith(8, ack));
+      await waitFor(() =>
+        expect(screen.getByText('1 of 3 selected', { selector: 'p' })).toBeVisible(),
+      );
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+      expect(comment42).toHaveFocus();
+    });
+
+    it('does not send a later edit queued behind a failing save', async () => {
+      const { mock, user } = await renderWorkspace();
+      const first = deferred<{ revision: number; repos: ReviewFeedbackDraftView['repos'] }>();
+      mock.api.updateReviewFeedbackSelection.mockReturnValueOnce(first.promise);
+      await user.click(screen.getByLabelText(/Rewrite this to avoid the bearer token/));
+      await waitFor(() => expect(mock.api.updateReviewFeedbackSelection).toHaveBeenCalledOnce());
+      await user.click(screen.getByLabelText(/Consider extracting the parser/));
+      first.reject(new Error('socket dropped'));
+      const alert = await screen.findByRole('alert');
+      // The queue stopped: the second edit was never sent and both choices
+      // remain visible as unsaved over the last acknowledged revision.
+      expect(mock.api.updateReviewFeedbackSelection).toHaveBeenCalledOnce();
+      expect(screen.getAllByText('Unsaved choice')).toHaveLength(2);
+      // Retry sends both outstanding references once, in seq order, from the
+      // acknowledged revision.
+      const acked = draftView({ revision: 8 });
+      acked.repos[0]!.comments = acked.repos[0]!.comments.map((entry) => ({
+        ...entry,
+        selected: false,
+      }));
+      mock.api.updateReviewFeedbackSelection.mockResolvedValueOnce({
+        revision: 8,
+        repos: acked.repos,
+      });
+      await user.click(within(alert).getByRole('button', { name: 'Retry save' }));
+      await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument());
+      expect(mock.api.updateReviewFeedbackSelection).toHaveBeenCalledTimes(2);
+      expect(mock.api.updateReviewFeedbackSelection.mock.calls[1]![0]).toEqual({
+        featureId: PARENT_ID,
+        expectedRevision: 7,
+        updates: [
+          { stableRef: 'repo-a:review:41', selected: false },
+          { stableRef: 'repo-a:issue:42', selected: false },
+        ],
+      });
+      expect(screen.queryByText('Unsaved choice')).not.toBeInTheDocument();
+      expect(screen.getByText('0 of 3 selected', { selector: 'p' })).toBeVisible();
+      expect(screen.getByRole('button', { name: 'Back' })).toBeEnabled();
+    });
+
+    it('Retry save resubmits outstanding references in bounded batches from the latest acknowledged revision', async () => {
+      const many: ReviewFeedbackDraftCommentView[] = Array.from({ length: 600 }, (_, index) =>
+        comment({
+          stableRef: `repo-a:review:${index + 1}`,
+          repo: 'repo-a',
+          id: index + 1,
+          type: 'review',
+        }),
+      );
+      const draft = draftView({ repos: [{ repo: 'repo-a', prUrl: '', comments: many }] });
+      const { mock, user } = await renderWorkspace({ draft });
+      mock.api.updateReviewFeedbackSelection
+        .mockResolvedValueOnce({ revision: 8, repos: draft.repos })
+        .mockRejectedValueOnce(new Error('socket dropped'));
+      await user.click(screen.getByRole('button', { name: 'Clear visible (600)' }));
+      await waitFor(() => expect(mock.api.updateReviewFeedbackSelection).toHaveBeenCalledTimes(2));
+      // Batch one committed: 88 choices of the failed batch stay unsaved.
+      const alert = await screen.findByRole('alert');
+      expect(screen.getAllByText('Unsaved choice')).toHaveLength(88);
+      mock.api.updateReviewFeedbackSelection.mockResolvedValueOnce({
+        revision: 9,
+        repos: draft.repos,
+      });
+      await user.click(within(alert).getByRole('button', { name: 'Retry save' }));
+      await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument());
+      expect(mock.api.updateReviewFeedbackSelection).toHaveBeenCalledTimes(3);
+      const retryCall = mock.api.updateReviewFeedbackSelection.mock.calls[2]![0] as {
+        expectedRevision: number;
+        updates: Array<{ stableRef: string; selected: boolean }>;
+      };
+      expect(retryCall.expectedRevision).toBe(8);
+      expect(retryCall.updates).toHaveLength(88);
+      expect(retryCall.updates[0]).toEqual({ stableRef: 'repo-a:review:513', selected: false });
+      expect(retryCall.updates.every((update) => update.selected === false)).toBe(true);
+      // Everything committed again: controls unfreeze with no unsaved markers.
+      expect(screen.queryByText('Unsaved choice')).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Back' })).toBeEnabled();
+      expect(screen.getByRole('button', { name: /Launch child/ })).toBeEnabled();
+    });
+
+    it('returns to the same recoverable state when a retry fails transiently', async () => {
+      const { mock, user } = await renderWorkspace();
+      mock.api.updateReviewFeedbackSelection.mockRejectedValueOnce(new Error('first drop'));
+      const comment90 = screen.getByLabelText(/Overall looks good/);
+      await user.click(comment90);
+      const firstAlert = await screen.findByRole('alert');
+      mock.api.updateReviewFeedbackSelection.mockRejectedValueOnce(new Error('second drop'));
+      await user.click(within(firstAlert).getByRole('button', { name: 'Retry save' }));
+      // Same state: unsaved marker intact, recovery actions focused and live.
+      const secondAlert = await screen.findByText('Choices not saved');
+      expect(secondAlert).toBeVisible();
+      expect(screen.getByText('Unsaved choice')).toBeVisible();
+      expect(comment90).toBeDisabled();
+      const acked = draftView({ revision: 8 });
+      acked.repos[1]!.comments[0] = { ...acked.repos[1]!.comments[0]!, selected: true };
+      mock.api.updateReviewFeedbackSelection.mockResolvedValueOnce({
+        revision: 8,
+        repos: acked.repos,
+      });
+      await user.click(screen.getByRole('button', { name: 'Retry save' }));
+      await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument());
+      expect(comment90).toBeChecked();
+      expect(screen.queryByText('Unsaved choice')).not.toBeInTheDocument();
+    });
+
+    it('Reload saved selections adopts the authoritative draft, resets the view, and announces politely', async () => {
+      const { mock, user } = await renderWorkspace();
+      mock.api.updateReviewFeedbackSelection.mockRejectedValueOnce(new Error('socket dropped'));
+      await user.click(screen.getByLabelText(/Consider extracting the parser/));
+      await screen.findByRole('alert');
+      // View state the reload must reset: a scope/filters/expansion mix.
+      await user.click(screen.getByRole('checkbox', { name: 'Octocat' }));
+      await user.click(screen.getAllByRole('button', { name: 'Show full feedback' })[0]!);
+      mock.api.fetchReviewFeedback.mockResolvedValue(draftView({ revision: 9 }));
+      await user.click(screen.getByRole('button', { name: 'Reload saved selections' }));
+      await waitFor(() => expect(mock.api.fetchReviewFeedback).toHaveBeenCalledTimes(2));
+      await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument());
+      // Overlay abandoned: the authoritative selection is back, unsaved marks gone.
+      expect(screen.getByLabelText(/Consider extracting the parser/)).toBeChecked();
+      expect(screen.queryByText('Unsaved choice')).not.toBeInTheDocument();
+      expect(screen.getByText('2 of 3 selected', { selector: 'p' })).toBeVisible();
+      // View reset: All feedback, no filters, collapsed cards.
+      expect(screen.getByRole('radio', { name: /All feedback/ })).toBeChecked();
+      expect(screen.queryByRole('list', { name: 'Active filters' })).not.toBeInTheDocument();
+      expect(screen.getAllByRole('button', { name: 'Show full feedback' })[0]).toBeInTheDocument();
+      // Polite, non-focused announcement.
+      expect(screen.getByRole('status')).toHaveTextContent(/Saved selections reloaded/);
+      expect(screen.getByRole('button', { name: 'Back' })).toBeEnabled();
+    });
+
+    it('a failed reload keeps the unsaved choices and both recovery actions intact', async () => {
+      const { mock, user } = await renderWorkspace();
+      mock.api.updateReviewFeedbackSelection.mockRejectedValueOnce(new Error('socket dropped'));
+      await user.click(screen.getByLabelText(/Consider extracting the parser/));
+      await screen.findByRole('alert');
+      mock.api.fetchReviewFeedback.mockRejectedValueOnce(new Error('fetch unavailable'));
+      await user.click(screen.getByRole('button', { name: 'Reload saved selections' }));
+      await waitFor(() => expect(mock.api.fetchReviewFeedback).toHaveBeenCalledTimes(2));
+      expect(await screen.findByRole('alert')).toHaveTextContent('Choices not saved');
+      expect(screen.getByText('Unsaved choice')).toBeVisible();
+      expect(screen.getByLabelText(/Consider extracting the parser/)).not.toBeChecked();
+      expect(screen.getByRole('button', { name: 'Retry save' })).toBeEnabled();
+      expect(screen.getByRole('button', { name: 'Reload saved selections' })).toBeEnabled();
+    });
+
+    it('keeps Back from leaving while unsaved choices are unresolved', async () => {
+      const { mock, onBack, user } = await renderWorkspace();
+      mock.api.updateReviewFeedbackSelection.mockRejectedValueOnce(new Error('socket dropped'));
+      await user.click(screen.getByLabelText(/Consider extracting the parser/));
+      await screen.findByRole('alert');
+      expect(screen.getByRole('button', { name: 'Back' })).toBeDisabled();
+      expect(onBack).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('launch busy state and recovery', () => {
+    it('exposes a single busy state that blocks duplicate dispatch and selection mutation', async () => {
+      const { mock, user } = await renderWorkspace();
+      const inFlight = deferred<{
+        featureId?: string;
+        childId?: string;
+        parentId: string;
+      }>();
+      mock.api.launchReviewFeedbackChild.mockReturnValueOnce(inFlight.promise);
+      await user.click(screen.getByRole('button', { name: /Launch child \(2\)/ }));
+      await waitFor(() => expect(mock.api.launchReviewFeedbackChild).toHaveBeenCalledOnce());
+      expect(screen.getByRole('button', { name: 'Launching…' })).toBeDisabled();
+      expect(screen.getByRole('dialog', { name: 'Address review feedback' })).toHaveAttribute(
+        'aria-busy',
+        'true',
+      );
+      expect(screen.getByLabelText(/Rewrite this to avoid the bearer token/)).toBeDisabled();
+      expect(screen.getByRole('button', { name: 'Back' })).toBeDisabled();
+      inFlight.resolve({ childId: 'child1234ef567890', parentId: PARENT_ID });
+      await waitFor(() => expect(mock.api.launchReviewFeedbackChild).toHaveBeenCalledOnce());
+    });
+
+    it('surfaces a launch failure in a focused plain-language alert and re-enables an explicit retry', async () => {
+      const { mock, onDispatched, user } = await renderWorkspace();
+      mock.api.launchReviewFeedbackChild.mockRejectedValueOnce(new Error('github unavailable'));
+      await user.click(screen.getByRole('button', { name: /Launch child \(2\)/ }));
+      const alert = await screen.findByRole('alert');
+      expect(alert).toHaveTextContent('Launch failed');
+      expect(alert).toHaveTextContent(/github unavailable/);
+      expect(alert).toHaveFocus();
+      const retry = screen.getByRole('button', { name: /Launch child \(2\)/ });
+      expect(retry).toBeEnabled();
+      mock.api.launchReviewFeedbackChild.mockResolvedValueOnce({
+        childId: 'child1234ef567890',
+        parentId: PARENT_ID,
+        changed: 2,
+        omitted: 0,
+        deferred: 1,
+      });
+      await user.click(retry);
+      await waitFor(() =>
+        expect(onDispatched).toHaveBeenCalledWith({
+          childId: 'child1234ef567890',
+          receipt: '2 changed, 1 deferred since review',
+        }),
+      );
+      expect(mock.api.launchReviewFeedbackChild).toHaveBeenCalledTimes(2);
+      // The retry reused the same expected revision and gate.
+      expect(mock.api.launchReviewFeedbackChild.mock.calls[1]![0]).toEqual({
+        parentId: PARENT_ID,
+        expectedRevision: 7,
+        gate: true,
+      });
+    });
+  });
+
+  describe('workspace accessibility contract', () => {
+    it('exposes exactly one page-level heading with labelled navigation and feed regions', async () => {
+      await renderWorkspace();
+      expect(screen.getAllByRole('heading', { level: 2 })).toHaveLength(1);
+      expect(
+        screen.getByRole('heading', { level: 2, name: 'Address review feedback' }),
+      ).toBeVisible();
+      expect(screen.getByRole('navigation', { name: 'Feedback scope' })).toBeInTheDocument();
+      expect(screen.getByRole('main', { name: 'Review feedback' })).toBeInTheDocument();
+      const sections = screen.getAllByRole('region', { name: /^repo-/ });
+      for (const section of sections) {
+        expect(within(section).getByRole('heading', { level: 3 })).toBeInTheDocument();
+      }
+    });
+
+    it('announces background saving politely through the ledger without stealing focus', async () => {
+      const { mock, user } = await renderWorkspace();
+      const pendingSave = deferred<{ revision: number; repos: ReviewFeedbackDraftView['repos'] }>();
+      mock.api.updateReviewFeedbackSelection.mockReturnValueOnce(pendingSave.promise);
+      const comment42 = screen.getByLabelText(/Consider extracting the parser/);
+      await user.click(comment42);
+      // The ledger is the polite announce target…
+      const ledger = screen.getByText(/saving…/);
+      expect(ledger).toHaveAttribute('aria-live', 'polite');
+      // …and focus never leaves the control the user is operating.
+      expect(comment42).toHaveFocus();
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+      pendingSave.resolve(ackWith(8));
+      await waitFor(() => expect(screen.queryByText(/saving…/)).not.toBeInTheDocument());
+    });
+
+    it('expansion is keyboard-operable and never changes selection', async () => {
+      const { mock, user } = await renderWorkspace();
+      const expand = screen.getAllByRole('button', { name: 'Show full feedback' })[0]!;
+      expand.focus();
+      await user.keyboard('{Enter}');
+      expect(expand).toHaveAttribute('aria-expanded', 'true');
+      expect(screen.getByLabelText(/Rewrite this to avoid the bearer token/)).toBeChecked();
+      expect(mock.api.updateReviewFeedbackSelection).not.toHaveBeenCalled();
+    });
+
+    it('Back is the first tab stop and every recovery control stays keyboard-reachable', async () => {
+      const { mock, user } = await renderWorkspace();
+      await user.tab();
+      expect(screen.getByRole('button', { name: 'Back' })).toHaveFocus();
+      mock.api.updateReviewFeedbackSelection.mockRejectedValueOnce(new Error('socket dropped'));
+      await user.click(screen.getByLabelText(/Consider extracting the parser/));
+      await screen.findByRole('alert');
+      // Focus order from the alert: Retry save, then Reload saved selections.
+      await user.tab();
+      expect(screen.getByRole('button', { name: 'Retry save' })).toHaveFocus();
+      await user.tab();
+      expect(screen.getByRole('button', { name: 'Reload saved selections' })).toHaveFocus();
+    });
+  });
+
   describe('narrow layout', () => {
     beforeEach(() => {
       matchMediaState.narrowCockpit = true;
@@ -737,6 +1071,29 @@ describe('ReviewFeedbackWorkspace', () => {
         screen.queryByRole('dialog', { name: 'Repositories and filters' }),
       ).not.toBeInTheDocument();
       expect(screen.getByRole('button', { name: 'Repositories and filters' })).toHaveFocus();
+    });
+
+    it('keeps the drawer mounted through a recovery transition and restores focus to the opener', async () => {
+      const { mock, user } = await renderWorkspace();
+      const opener = screen.getByRole('button', { name: 'Repositories and filters' });
+      await user.click(opener);
+      const drawer = screen.getByRole('dialog', { name: 'Repositories and filters' });
+      expect(within(drawer).getByRole('button', { name: 'Close filters' })).toHaveFocus();
+      // A bulk failure through the drawer moves focus to the recovery alert
+      // without unmounting the drawer.
+      mock.api.updateReviewFeedbackSelection.mockRejectedValueOnce(new Error('socket dropped'));
+      await user.click(within(drawer).getByRole('button', { name: 'Clear visible (2)' }));
+      expect(await screen.findByRole('alert')).toHaveFocus();
+      expect(drawer).toBeInTheDocument();
+      mock.api.updateReviewFeedbackSelection.mockResolvedValueOnce(ackWith(8, draftView()));
+      await user.click(screen.getByRole('button', { name: 'Retry save' }));
+      await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument());
+      // Escape still closes the drawer and returns focus to its opener.
+      await user.keyboard('{Escape}');
+      expect(
+        screen.queryByRole('dialog', { name: 'Repositories and filters' }),
+      ).not.toBeInTheDocument();
+      expect(opener).toHaveFocus();
     });
 
     it('cycles tab focus inside the modal drawer', async () => {

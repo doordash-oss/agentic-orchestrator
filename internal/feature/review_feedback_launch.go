@@ -36,13 +36,63 @@ func (e *ReviewFeedbackZeroLaunchableSelectionError) Error() string {
 	return fmt.Sprintf("review feedback launch for parent %q has no launchable selected comment", e.ParentID)
 }
 
-// ReviewFeedbackLaunchResult reports the created child and the reconciliation
-// counts computed from current GitHub data.
+// ReviewFeedbackLaunchReceipt is the compact durable record pairing one
+// review-feedback child with the committed draft it was launched from: the
+// committed draft revision, the requested gate choice, and the reconciliation
+// counts computed from current GitHub data. It never carries comment
+// content. The receipt is stamped on the durable ChildCreationIntent (so an
+// interrupted creation replays) and on the created child's relationship (so a
+// repeated launch or ordinary refresh against the active child returns the
+// original result without a second GitHub resolution or child creation).
+type ReviewFeedbackLaunchReceipt struct {
+	// DraftRevision is the committed pending-draft revision the launch
+	// consumed.
+	DraftRevision int64 `yaml:"draft_revision" json:"draft_revision"`
+	// Gate is the requested gate override; nil records the inherit choice.
+	Gate *bool `yaml:"gate,omitempty" json:"gate,omitempty"`
+	// Changed counts selected reviewed references still present at launch
+	// whose child-visible content changed since the reviewed snapshot.
+	Changed int `yaml:"changed" json:"changed"`
+	// Omitted counts selected reviewed references deleted before launch.
+	Omitted int `yaml:"omitted" json:"omitted"`
+	// Deferred counts comments first observed after the reviewed snapshot.
+	Deferred int `yaml:"deferred" json:"deferred"`
+}
+
+// copyReviewFeedbackLaunchReceipt deep-copies a receipt for durable stamping.
+func copyReviewFeedbackLaunchReceipt(receipt *ReviewFeedbackLaunchReceipt) *ReviewFeedbackLaunchReceipt {
+	if receipt == nil {
+		return nil
+	}
+	copied := *receipt
+	if receipt.Gate != nil {
+		gate := *receipt.Gate
+		copied.Gate = &gate
+	}
+	return &copied
+}
+
+// reviewFeedbackGateEqual compares gate choices nil-sensitively.
+func reviewFeedbackGateEqual(a, b *bool) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
+}
+
+// ReviewFeedbackLaunchResult reports the created (or replayed) child and the
+// reconciliation counts computed from current GitHub data.
 type ReviewFeedbackLaunchResult struct {
 	Child    *Feature
 	Changed  int
 	Omitted  int
 	Deferred int
+	// Replayed reports that the result came from the durable launch receipt
+	// of an already-pending or already-active review-feedback child instead
+	// of a fresh GitHub resolution and child creation. Callers must not
+	// re-dispatch child-created/setup side effects for a replay: the child
+	// was already announced and its setup intent already queued.
+	Replayed bool
 }
 
 // LaunchReviewFeedbackChildFromDraft commits the pending draft: it validates
@@ -50,6 +100,15 @@ type ReviewFeedbackLaunchResult struct {
 // reviewed references, creates the child from that current content, and only
 // then clears the draft. Every failure before durable child creation leaves
 // the draft intact.
+//
+// Launch is idempotent: the durable creation intent and the created child's
+// relationship carry a ReviewFeedbackLaunchReceipt. Repeating the launch for
+// the same parent, committed revision, and gate choice replays the receipt —
+// the original child ID and counts are returned without a second GitHub
+// resolution or child creation, and any pending draft cleanup from an
+// interrupted first attempt is completed. A different revision, a mismatched
+// gate, or an unrelated active child returns the existing typed
+// conflict/preflight failure without mutating the child or the draft.
 func (m *Manager) LaunchReviewFeedbackChildFromDraft(parentID string, expectedRevision int64, gate *bool) (*ReviewFeedbackLaunchResult, error) {
 	parent, err := m.Store.Load(parentID)
 	if err != nil {
@@ -61,6 +120,18 @@ func (m *Manager) LaunchReviewFeedbackChildFromDraft(parentID string, expectedRe
 	if err := ValidateRefactorParent(parent, nil); err != nil {
 		return nil, err
 	}
+
+	// A durable in-flight creation intent wins over everything else: replay
+	// it when the launch matches, conflict when it does not.
+	if result, handled, err := m.replayPendingReviewFeedbackLaunch(parent, expectedRevision, gate); handled {
+		return result, err
+	}
+	// An active review-feedback child with a matching receipt replays; a
+	// stale or mismatched one conflicts before any GitHub resolution.
+	if result, handled, err := m.replayActiveReviewFeedbackLaunch(parent, expectedRevision, gate); handled {
+		return result, err
+	}
+
 	draft, err := m.Store.LoadReviewFeedbackDraft(parentID)
 	if err != nil {
 		return nil, err
@@ -105,19 +176,113 @@ func (m *Manager) LaunchReviewFeedbackChildFromDraft(parentID string, expectedRe
 		return nil, &ReviewFeedbackZeroLaunchableSelectionError{ParentID: parentID}
 	}
 
+	receipt := &ReviewFeedbackLaunchReceipt{
+		DraftRevision: draft.Revision,
+		Gate:          gate,
+		Changed:       changed,
+		Omitted:       omitted,
+		Deferred:      deferred,
+	}
 	child, err := m.CreateReviewFeedbackChild(parentID, ReviewFeedbackChildSpec{
 		Comments:    launchable,
 		GateEnabled: gate,
+		Receipt:     receipt,
 	})
 	if err != nil {
+		// A concurrent launch may have committed its own receipt after the
+		// pre-creation replay checks: replay that durable receipt instead of
+		// surfacing the active-child conflict, when it matches.
+		var activeChildErr *ActiveChildExistsError
+		if errors.As(err, &activeChildErr) {
+			if result, handled, replayErr := m.replayActiveReviewFeedbackLaunch(parent, expectedRevision, gate); handled {
+				return result, replayErr
+			}
+		}
 		return nil, err
 	}
 	// Durable child creation succeeded; only now may the pending draft be
-	// cleared.
+	// cleared. If the clear fails, the receipt on the child relationship
+	// keeps a repeated launch idempotent (it finishes the cleanup).
 	if err := m.Store.DeleteReviewFeedbackDraft(parentID); err != nil {
 		return nil, err
 	}
 	return &ReviewFeedbackLaunchResult{Child: child, Changed: changed, Omitted: omitted, Deferred: deferred}, nil
+}
+
+// replayPendingReviewFeedbackLaunch handles a parent carrying a durable
+// review-feedback creation intent: a matching launch rolls the interrupted
+// creation forward exactly once and replays the receipt; a mismatched one
+// returns a typed conflict without mutating anything.
+func (m *Manager) replayPendingReviewFeedbackLaunch(parent *Feature, expectedRevision int64, gate *bool) (result *ReviewFeedbackLaunchResult, handled bool, err error) {
+	intent := parent.PendingChild
+	if intent == nil || intent.Kind != ChildKindReviewFeedback || intent.LaunchReceipt == nil {
+		return nil, false, nil
+	}
+	receipt := intent.LaunchReceipt
+	if receipt.DraftRevision != expectedRevision {
+		return nil, true, &ReviewFeedbackRevisionConflictError{ParentID: parent.ID, ExpectedRevision: expectedRevision, CurrentRevision: receipt.DraftRevision}
+	}
+	if !reviewFeedbackGateEqual(receipt.Gate, gate) {
+		return nil, true, &ActiveChildExistsError{ParentID: parent.ID, ChildID: intent.ChildID}
+	}
+	if _, err := m.Store.ReconcilePendingChildCreations(); err != nil {
+		return nil, true, fmt.Errorf("reconciling pending review-feedback child creation: %w", err)
+	}
+	child, err := m.Store.Load(intent.ChildID)
+	if err != nil {
+		return nil, true, fmt.Errorf("loading replayed review-feedback child: %w", err)
+	}
+	if err := m.Store.DeleteReviewFeedbackDraft(parent.ID); err != nil {
+		return nil, true, err
+	}
+	return &ReviewFeedbackLaunchResult{
+		Child: child, Changed: receipt.Changed, Omitted: receipt.Omitted, Deferred: receipt.Deferred, Replayed: true,
+	}, true, nil
+}
+
+// replayActiveReviewFeedbackLaunch handles a parent whose active child is a
+// review-feedback child carrying a launch receipt: a matching launch replays
+// the receipt and idempotently finishes pending draft cleanup; a mismatched
+// one returns a typed conflict without mutating the child or the draft.
+func (m *Manager) replayActiveReviewFeedbackLaunch(parent *Feature, expectedRevision int64, gate *bool) (result *ReviewFeedbackLaunchResult, handled bool, err error) {
+	child, receipt, err := m.Store.ActiveReviewFeedbackLaunchReceipt(parent.ID)
+	if err != nil {
+		return nil, true, fmt.Errorf("scanning active review-feedback child: %w", err)
+	}
+	if receipt == nil {
+		return nil, false, nil
+	}
+	if receipt.DraftRevision != expectedRevision {
+		return nil, true, &ReviewFeedbackRevisionConflictError{ParentID: parent.ID, ExpectedRevision: expectedRevision, CurrentRevision: receipt.DraftRevision}
+	}
+	if !reviewFeedbackGateEqual(receipt.Gate, gate) {
+		return nil, true, &ActiveChildExistsError{ParentID: parent.ID, ChildID: child.ID}
+	}
+	if err := m.Store.DeleteReviewFeedbackDraft(parent.ID); err != nil {
+		return nil, true, err
+	}
+	return &ReviewFeedbackLaunchResult{
+		Child: child, Changed: receipt.Changed, Omitted: receipt.Omitted, Deferred: receipt.Deferred, Replayed: true,
+	}, true, nil
+}
+
+// ActiveReviewFeedbackLaunchReceipt returns the parent's active
+// review-feedback child and its durable launch receipt. Both are nil when no
+// active review-feedback child exists or when the active child predates
+// launch receipts (an unrelated active child never claims a receipt).
+func (s *Store) ActiveReviewFeedbackLaunchReceipt(parentID string) (*Feature, *ReviewFeedbackLaunchReceipt, error) {
+	children, err := s.RelationshipChildren(parentID)
+	if err != nil {
+		return nil, nil, err
+	}
+	active := children.Active
+	if active == nil || active.Parent == nil {
+		return nil, nil, nil
+	}
+	if active.Parent.Kind != ChildKindReviewFeedback || active.Parent.LaunchReceipt == nil {
+		return nil, nil, nil
+	}
+	return active, active.Parent.LaunchReceipt, nil
 }
 
 // resolveCurrentReviewFeedback re-fetches GitHub for every parent repository

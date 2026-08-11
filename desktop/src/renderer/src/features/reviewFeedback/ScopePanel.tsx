@@ -37,6 +37,8 @@ export interface ScopePanelProps {
   onClearVisible(): void;
   /** True while a dispatch is in flight; selection writes stay queued. */
   launching: boolean;
+  /** True while unsaved choices await recovery; bulk mutations stay frozen. */
+  mutationsDisabled?: boolean;
 }
 
 function CoverageMark({ selected, total }: { selected: number; total: number }) {
@@ -99,6 +101,7 @@ export function ScopePanel({
   onSelectVisible,
   onClearVisible,
   launching,
+  mutationsDisabled = false,
 }: ScopePanelProps): React.ReactElement {
   return (
     <div className="review-feedback-rail">
@@ -167,7 +170,7 @@ export function ScopePanel({
         <button
           type="button"
           className="review-feedback-bulk"
-          disabled={launching || selectVisibleCount === 0}
+          disabled={launching || mutationsDisabled || selectVisibleCount === 0}
           onClick={onSelectVisible}
         >
           Select visible ({selectVisibleCount})
@@ -175,7 +178,7 @@ export function ScopePanel({
         <button
           type="button"
           className="review-feedback-bulk"
-          disabled={launching || clearVisibleCount === 0}
+          disabled={launching || mutationsDisabled || clearVisibleCount === 0}
           onClick={onClearVisible}
         >
           Clear visible ({clearVisibleCount})

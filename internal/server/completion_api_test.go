@@ -23,6 +23,16 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 )
 
+type codedPublishConflictTarget struct {
+	*preflightMutationTarget
+	err error
+}
+
+func (t *codedPublishConflictTarget) PublishFeature(featureID string, req PublishFeatureRequest) (PublishFeatureResponse, error) {
+	t.publishReq = req
+	return PublishFeatureResponse{FeatureID: featureID, Result: "conflict"}, t.err
+}
+
 func (t *preflightMutationTarget) CompletionPreflight(featureID string) (CompletionPreflightResponse, error) {
 	t.completionPreflightID = featureID
 	if t.completionPreflightErr != nil {
@@ -203,6 +213,86 @@ func TestCompletionActionsPassThroughSourceRevision(t *testing.T) {
 				t.Fatalf("status = %d body=%s; want 200", w.Code, w.Body.String())
 			}
 			tc.check(t, target)
+		})
+	}
+}
+
+func TestPublishActionReturnsCodedRemoteSafetyConflicts(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name       string
+		code       string
+		message    string
+		target     map[string]any
+		wantTarget map[string]any
+	}{
+		{
+			name:    "remote diverged",
+			code:    ErrorCodePublishRemoteDiverged,
+			message: "pull-request branch contains remote work that is not in this workspace",
+			target: map[string]any{
+				"repo":                "repo-a",
+				"branch":              "feature/remote-diverged",
+				"remote_only_commits": 2,
+			},
+			wantTarget: map[string]any{
+				"repo":                "repo-a",
+				"branch":              "feature/remote-diverged",
+				"remote_only_commits": float64(2),
+			},
+		},
+		{
+			name:    "remote changed",
+			code:    ErrorCodePublishRemoteChanged,
+			message: "pull-request branch changed while Agentico was publishing",
+			target: map[string]any{
+				"repo":   "repo-a",
+				"branch": "feature/remote-changed",
+			},
+			wantTarget: map[string]any{
+				"repo":   "repo-a",
+				"branch": "feature/remote-changed",
+			},
+		},
+	} {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			target := &codedPublishConflictTarget{
+				preflightMutationTarget: &preflightMutationTarget{},
+				err: &ActionConflictError{
+					Code:    tc.code,
+					Message: tc.message,
+					Target:  tc.target,
+				},
+			}
+			handler := NewHandler(HandlerOptions{
+				Mutations:             target,
+				AuthToken:             testAuthToken,
+				DisableHostValidation: true,
+			})
+
+			recorder := postTrustedAuthedJSON(handler, "/api/v1/features/"+fixtureFeatureID+"/actions/"+actionPublish, map[string]any{
+				"repos": []string{"repo-a"},
+			})
+			var body ErrorResponse
+			if err := json.NewDecoder(recorder.Result().Body).Decode(&body); err != nil {
+				t.Fatalf("decode response: %v", err)
+			}
+			if got := body.Error.Code; got != tc.code {
+				t.Fatalf("error code = %q; want %q", got, tc.code)
+			}
+			if got := recorder.Code; got != http.StatusConflict {
+				t.Fatalf("status = %d; want %d", got, http.StatusConflict)
+			}
+			if body.Error.Message != tc.message {
+				t.Fatalf("error message = %q; want %q", body.Error.Message, tc.message)
+			}
+			for key, want := range tc.wantTarget {
+				if got := body.Error.Target[key]; got != want {
+					t.Fatalf("error target[%q] = %#v; want %#v", key, got, want)
+				}
+			}
 		})
 	}
 }

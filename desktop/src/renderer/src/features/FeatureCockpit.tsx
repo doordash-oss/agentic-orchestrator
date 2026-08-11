@@ -64,12 +64,12 @@ import {
   type CompletionVerbModel,
 } from './completion/completionBarModel';
 import { ChangesSurface } from './completion/ChangesSurface';
-import { PublishModalBody } from './completion/PublishModal';
+import { PublishModal } from './completion/PublishModal';
 import { MergeModalBody } from './completion/MergeModal';
 import { MarkDoneModalBody } from './completion/MarkDoneModal';
 import { CleanupConfirm } from './completion/CleanupConfirm';
 import type { CompletionAction } from './completion/completionShared';
-import type { FeatureActionResult } from '../../../shared/ipc';
+import type { FeatureActionResult, PublishFeatureActionRequest } from '../../../shared/ipc';
 import {
   AttentionDetail,
   attentionActionNotice,
@@ -930,6 +930,7 @@ export function FeatureCockpit({
   const [rewindSourceRunNumber, setRewindSourceRunNumber] = useState<number | undefined>();
   const [launcherModal, setLauncherModal] = useState<AftercareModalId | null>(null);
   const [completionModal, setCompletionModal] = useState<CompletionVerb | null>(null);
+  const [publishTimeoutLocked, setPublishTimeoutLocked] = useState(false);
   const [runRecordOpen, setRunRecordOpen] = useState(false);
   const [changesOpen, setChangesOpen] = useState(false);
   const [dismissedGateId, setDismissedGateId] = useState<string | undefined>();
@@ -1103,8 +1104,14 @@ export function FeatureCockpit({
       } as FeatureActionRequest),
     [],
   );
+  const dispatchPublish = useCallback(
+    (request: PublishFeatureActionRequest) => window.agentico.dispatchFeatureAction(request),
+    [],
+  );
   const onCompletionDispatched = useCallback(() => {
-    void refreshFeature({ silent: true });
+    // The scheduler-backed feature refresh also refreshes completion preflight
+    // through completionRefreshRef, so return that single convergence promise.
+    return refreshFeature({ silent: true });
   }, [refreshFeature]);
 
   const onPassChanged = useCallback(() => {
@@ -2356,22 +2363,19 @@ export function FeatureCockpit({
         ) : null}
 
         {completionModal === 'publish' && completion.preflight !== null ? (
-          <CockpitModal
-            title="Publish"
-            ariaLabel="Publish reviewed changes"
+          <PublishModal
+            featureId={featureId}
+            preflight={completion.preflight}
+            dispatchAction={dispatchPublish}
+            generatePublishDescription={(id, repos) =>
+              window.agentico.generatePublishDescription({ featureId: id, repos })
+            }
+            openExternal={(url) => window.agentico.openExternal({ url })}
+            onDispatched={onCompletionDispatched}
             onClose={() => setCompletionModal(null)}
-          >
-            <PublishModalBody
-              featureId={featureId}
-              preflight={completion.preflight}
-              dispatchAction={dispatchCompletion}
-              generatePublishDescription={(id, repos) =>
-                window.agentico.generatePublishDescription({ featureId: id, repos })
-              }
-              openExternal={(url) => window.agentico.openExternal({ url })}
-              onDispatched={onCompletionDispatched}
-            />
-          </CockpitModal>
+            publishTimeoutLocked={publishTimeoutLocked}
+            setPublishTimeoutLocked={setPublishTimeoutLocked}
+          />
         ) : null}
 
         {completionModal === 'merge' && completion.preflight !== null ? (
@@ -2806,22 +2810,19 @@ export function FeatureCockpit({
           ) : null}
 
           {completionModal === 'publish' && completion.preflight !== null ? (
-            <CockpitModal
-              title="Publish"
-              ariaLabel="Publish reviewed changes"
+            <PublishModal
+              featureId={featureId}
+              preflight={completion.preflight}
+              dispatchAction={dispatchPublish}
+              generatePublishDescription={(id, repos) =>
+                window.agentico.generatePublishDescription({ featureId: id, repos })
+              }
+              openExternal={(url) => window.agentico.openExternal({ url })}
+              onDispatched={onCompletionDispatched}
               onClose={() => setCompletionModal(null)}
-            >
-              <PublishModalBody
-                featureId={featureId}
-                preflight={completion.preflight}
-                dispatchAction={dispatchCompletion}
-                generatePublishDescription={(id, repos) =>
-                  window.agentico.generatePublishDescription({ featureId: id, repos })
-                }
-                openExternal={(url) => window.agentico.openExternal({ url })}
-                onDispatched={onCompletionDispatched}
-              />
-            </CockpitModal>
+              publishTimeoutLocked={publishTimeoutLocked}
+              setPublishTimeoutLocked={setPublishTimeoutLocked}
+            />
           ) : null}
 
           {completionModal === 'merge' && completion.preflight !== null ? (

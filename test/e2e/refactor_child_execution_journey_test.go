@@ -270,6 +270,10 @@ func (failingPRRemoteOps) ForcePush(worktreePath, branch string) error {
 	return git.ForcePush(worktreePath, branch)
 }
 
+func (failingPRRemoteOps) PushRewrittenBranch(worktreePath, branch string) error {
+	return git.PushRewrittenBranch(worktreePath, branch)
+}
+
 func (failingPRRemoteOps) PullRebase(worktreePath, branch string) error {
 	res := git.PullRebase(worktreePath, branch)
 	return res.Err

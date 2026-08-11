@@ -102,6 +102,10 @@ const REMEDY_BY_CODE: Record<string, string> = {
   invalid_transition: "The feature's current state doesn't allow this action. Refresh and retry.",
   need_user_input_open: 'Answer the open input request to continue.',
   phase_finalizing: 'The phase is being finalized; wait for it to finish.',
+  publish_remote_diverged:
+    'Review and reconcile the pull-request branch on GitHub, then refresh and retry.',
+  publish_remote_changed:
+    'Refresh the publish state and retry; Agentico did not overwrite the newer branch.',
 };
 
 const PHASE_MODEL_LABELS: ReadonlyArray<readonly [string, string]> = [

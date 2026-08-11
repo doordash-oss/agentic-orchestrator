@@ -2686,6 +2686,58 @@ describe('FeatureCockpit feature-command funnel', () => {
     expect(mock.api.preflightCompletion).toHaveBeenCalledWith({ featureId: FEATURE_ID });
   });
 
+  it('keeps a timed-out publish locked after close and reopen when refreshes fail', async () => {
+    const snapshot = featureSnapshot({
+      status: 'CodeReady',
+      actions: [{ id: 'publish', enabled: true, disabledReasons: [] }],
+    });
+    const preflight = {
+      featureId: FEATURE_ID,
+      sourceRevision: 'rev-complete',
+      canMarkDone: true,
+      repos: [{ repo: 'repo-a', publishable: true, touched: true, status: 'unpublished_changes' }],
+    };
+    const mock = installAgenticoMock({ feature: snapshot });
+    mock.api.preflightCompletion
+      .mockResolvedValueOnce(preflight)
+      .mockResolvedValueOnce(preflight)
+      .mockRejectedValue(new Error('refresh unavailable'));
+    mock.api.getFeature
+      .mockResolvedValueOnce(snapshot)
+      .mockRejectedValue(new Error('refresh unavailable'));
+    mock.api.dispatchFeatureAction.mockRejectedValue(
+      new Error('E_REQUEST_TIMEOUT: publish did not answer before the bound'),
+    );
+    await mounted(mock);
+    const user = userEvent.setup();
+
+    await act(async () => {
+      runFeatureCommand('feature.publish', { featureId: FEATURE_ID });
+    });
+    await user.click(await screen.findByRole('button', { name: 'Publish updates' }));
+    expect(await screen.findByRole('button', { name: 'Reconciling…' })).toBeDisabled();
+
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(
+      screen.queryByRole('dialog', { name: 'Publish reviewed changes' }),
+    ).not.toBeInTheDocument();
+
+    await act(async () => {
+      runFeatureCommand('feature.publish', { featureId: FEATURE_ID });
+    });
+    expect(
+      await screen.findByText(
+        'Publish may still be running. Quit and reopen Agentico before publishing again.',
+      ),
+    ).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Reconciling…' })).toBeDisabled();
+    expect(mock.api.dispatchFeatureAction).toHaveBeenCalledOnce();
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(
+      screen.queryByRole('dialog', { name: 'Publish reviewed changes' }),
+    ).not.toBeInTheDocument();
+  });
+
   it('opens the configuration editor for Configuration, with no server action behind it', async () => {
     await mounted(withFeature(featureSnapshot({ actions: [] })));
 

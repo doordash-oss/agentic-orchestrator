@@ -29,7 +29,9 @@ export function verifyLocalReleaseModel({
   }
   for (const token of [
     'createPublicationSnapshot',
+    'createDesktopReleaseManifest',
     'verifyProvenance(evidence)',
+    "saveResume(evidence, snapshot, 'goreleaser-started')",
     'await reserveTag({ evidence })',
     'publish({ evidence, snapshot, notesFile })',
     'await verifyRemote({ evidence, snapshot })',

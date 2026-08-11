@@ -6,9 +6,13 @@ import {
   existsSync,
   lstatSync,
   mkdirSync,
+  openSync,
   readFileSync,
   realpathSync,
-  rmSync,
+  renameSync,
+  fsyncSync,
+  closeSync,
+  constants,
   writeFileSync,
 } from 'node:fs';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
@@ -40,26 +44,78 @@ export function cleanGoEnvironment(env = process.env) {
   return { ...env, GOWORK: 'off', GOFLAGS: '-mod=readonly' };
 }
 
-const RELEASE_SECRET_NAMES = new Set([
-  'GITHUB_TOKEN',
-  'GH_TOKEN',
-  'GH_ENTERPRISE_TOKEN',
-  'GITHUB_ENTERPRISE_TOKEN',
-  'HOMEBREW_GITHUB_API_TOKEN',
-  'AGENTICO_RELEASE_SIGNING_KEY',
-  'AGENTICO_RELEASE_SIGNING_KEY_FILE',
-  'AGENTICO_RELEASE_NOTES_FILE',
+function selectedEnvironment(env, names) {
+  return Object.fromEntries(
+    names.filter((name) => env[name] !== undefined).map((name) => [name, env[name]]),
+  );
+}
+
+const BUILD_ENVIRONMENT_NAMES = Object.freeze([
+  'PATH',
+  'LANG',
+  'LC_ALL',
+  'LC_CTYPE',
+  'TMPDIR',
+  'TMP',
+  'TEMP',
+  'USER',
+  'LOGNAME',
+  'CI',
+  'NPM_TOKEN',
+  'NODE_AUTH_TOKEN',
 ]);
 
 /** Build subprocesses get dependency auth but never publication/signing credentials. */
-export function secretFreeBuildEnvironment(env, evidencePath) {
-  const clean = cleanGoEnvironment(env);
-  for (const name of RELEASE_SECRET_NAMES) delete clean[name];
-  for (const name of Object.keys(clean)) {
-    if (name.startsWith('GORELEASER_')) delete clean[name];
-  }
+export function secretFreeBuildEnvironment(env, evidencePath, evidenceDigest, isolatedHome) {
+  const clean = selectedEnvironment(env, BUILD_ENVIRONMENT_NAMES);
+  clean.HOME = isolatedHome;
+  clean.NPM_CONFIG_CACHE = join(isolatedHome, '.npm');
+  clean.GOWORK = 'off';
+  clean.GOFLAGS = '-mod=readonly';
   clean.AGENTICO_RELEASE_EVIDENCE_FILE = evidencePath;
+  clean.AGENTICO_RELEASE_EVIDENCE_SHA256 = evidenceDigest;
   return clean;
+}
+
+const DOCKER_ENVIRONMENT_NAMES = Object.freeze([
+  'PATH',
+  'HOME',
+  'USER',
+  'LOGNAME',
+  'TMPDIR',
+  'DOCKER_HOST',
+  'DOCKER_CONTEXT',
+  'DOCKER_CONFIG',
+  'DOCKER_CERT_PATH',
+  'DOCKER_TLS_VERIFY',
+  'HTTP_PROXY',
+  'HTTPS_PROXY',
+  'NO_PROXY',
+  'http_proxy',
+  'https_proxy',
+  'no_proxy',
+]);
+
+/** Docker orchestration retains only operator Docker routing, never native npm overrides. */
+export function dockerReleaseEnvironment(env, evidencePath, evidenceDigest) {
+  return {
+    ...selectedEnvironment(env, DOCKER_ENVIRONMENT_NAMES),
+    AGENTICO_RELEASE_EVIDENCE_FILE: evidencePath,
+    AGENTICO_RELEASE_EVIDENCE_SHA256: evidenceDigest,
+  };
+}
+
+/** Manifest signing receives only key discovery state, never GitHub publication credentials. */
+export function releaseSigningEnvironment(env) {
+  return selectedEnvironment(env, [
+    'PATH',
+    'HOME',
+    'TMPDIR',
+    'TMP',
+    'TEMP',
+    'AGENTICO_RELEASE_SIGNING_KEY',
+    'AGENTICO_RELEASE_SIGNING_KEY_FILE',
+  ]);
 }
 
 /** Publication retains required credentials while rejecting ambient GoReleaser overrides. */
@@ -67,6 +123,7 @@ export function goreleaserEnvironment(env, tag) {
   const clean = cleanGoEnvironment(env);
   for (const name of Object.keys(clean)) {
     if (name.startsWith('GORELEASER_')) delete clean[name];
+    if (name === 'NODE_OPTIONS' || /^npm_config_/i.test(name)) delete clean[name];
   }
   clean.GORELEASER_CURRENT_TAG = tag;
   return clean;
@@ -109,6 +166,23 @@ export function revalidateWorkspaceToken(token) {
 }
 
 function inodeBoundCleanup(workspace) {
+  if (workspace.cleanupHelper !== undefined) {
+    const actual = readArtifactEvidence(workspace.cleanupHelper.path);
+    if (
+      actual.sha256 !== workspace.cleanupHelper.sha256 ||
+      actual.size !== workspace.cleanupHelper.size
+    ) {
+      throw new Error('release cleanup helper changed after preflight evidence');
+    }
+    return execFileSync(
+      workspace.cleanupHelper.path,
+      [workspace.path, String(workspace.token.dev), String(workspace.token.ino)],
+      {
+        env: selectedEnvironment(process.env, ['PATH', 'TMPDIR', 'TMP', 'TEMP']),
+        stdio: ['ignore', 'pipe', 'pipe'],
+      },
+    );
+  }
   return execFileSync(
     'go',
     [
@@ -124,6 +198,56 @@ function inodeBoundCleanup(workspace) {
       stdio: ['ignore', 'pipe', 'pipe'],
     },
   );
+}
+
+function syncDirectory(path) {
+  const fd = openSync(path, constants.O_RDONLY);
+  try {
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/** Compile the committed cleanup helper before any build or publication subprocess receives credentials. */
+export function compileReleaseCleanupHelper({ workspace, execute = execFileSync } = {}) {
+  const commonDir = realpathSync(workspace.commonDir);
+  const directory = contained(
+    commonDir,
+    join(commonDir, 'agentico-release-cleanup-helpers', workspace.runId),
+    'release cleanup helper directory',
+  );
+  mkdirSync(directory, { recursive: true, mode: 0o700 });
+  const path = join(directory, 'release-cleanup');
+  const temporary = join(directory, '.release-cleanup.tmp');
+  if (existsSync(path) || existsSync(temporary)) {
+    throw new Error(`release cleanup helper path already exists: ${directory}`);
+  }
+  execute('go', ['build', '-trimpath', '-o', temporary, './desktop/scripts/release-cleanup'], {
+    cwd: workspace.path,
+    env: {
+      ...selectedEnvironment(process.env, [
+        'PATH',
+        'HOME',
+        'TMPDIR',
+        'TMP',
+        'TEMP',
+        'USER',
+        'LOGNAME',
+        'GOCACHE',
+        'GOMODCACHE',
+        'GOPATH',
+      ]),
+      GOWORK: 'off',
+      GOFLAGS: '-mod=readonly',
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  chmodSync(temporary, 0o500);
+  renameSync(temporary, path);
+  syncDirectory(directory);
+  const evidence = readArtifactEvidence(path);
+  return Object.freeze({ path: evidence.path, sha256: evidence.sha256, size: evidence.size });
 }
 
 /** Create a detached Git worktree whose filesystem starts from only captured committed files. */
@@ -154,7 +278,6 @@ export function createDetachedReleaseWorkspace({
   if (actual !== commit || status !== '') {
     try {
       inodeBoundCleanup({ path: token.path, token });
-      gitCommand(operatorRoot, 'worktree', 'prune', '--expire', 'now');
     } catch {
       // Preserve the primary provenance failure; recovery can prune the validated Git path.
     }
@@ -173,7 +296,7 @@ export function createDetachedReleaseWorkspace({
 /** Remove only a workspace object returned by createDetachedReleaseWorkspace. */
 export function removeDetachedReleaseWorkspace(
   workspace,
-  { gitCommand = git, cleanupCommand = inodeBoundCleanup } = {},
+  { cleanupCommand = inodeBoundCleanup } = {},
 ) {
   if (
     workspace === null ||
@@ -193,7 +316,6 @@ export function removeDetachedReleaseWorkspace(
   }
   revalidateWorkspaceToken(workspace.token);
   cleanupCommand(workspace);
-  gitCommand(workspace.operatorRoot, 'worktree', 'prune', '--expire', 'now');
 }
 
 function copyRegular(source, destination) {
@@ -211,6 +333,7 @@ export function createPublicationSnapshot({
   workspaceRoot,
   sourceDir,
   artifactNames,
+  extraNames = [],
   receiptNames,
   snapshotDir,
 } = {}) {
@@ -234,8 +357,16 @@ export function createPublicationSnapshot({
       if (basename(name) !== name) throw new Error(`unsafe publication artifact name: ${name}`);
       artifacts.push(copyRegular(join(sourceDir, name), join(path, name)));
     }
-    const byName = new Map(artifacts.map((artifact) => [basename(artifact.path), artifact]));
-    const claims = new Map(artifacts.map((artifact) => [basename(artifact.path), 0]));
+    const receiptBoundArtifacts = [...artifacts];
+    for (const name of extraNames) {
+      if (basename(name) !== name) throw new Error(`unsafe publication extra name: ${name}`);
+      if (artifactNames.includes(name)) throw new Error(`duplicate publication file name: ${name}`);
+      artifacts.push(copyRegular(join(sourceDir, name), join(path, name)));
+    }
+    const byName = new Map(
+      receiptBoundArtifacts.map((artifact) => [basename(artifact.path), artifact]),
+    );
+    const claims = new Map(receiptBoundArtifacts.map((artifact) => [basename(artifact.path), 0]));
     for (const name of receiptNames) {
       if (basename(name) !== name) throw new Error(`unsafe publication receipt name: ${name}`);
       const receipt = JSON.parse(readFileSync(join(sourceDir, name), 'utf8'));
@@ -277,12 +408,7 @@ export function createPublicationSnapshot({
     chmodSync(path, 0o500);
     return Object.freeze(snapshot);
   } catch (error) {
-    try {
-      chmodSync(path, 0o700);
-      rmSync(path, { recursive: true, force: true });
-    } catch {
-      // Preserve the primary staging failure.
-    }
+    // Preserve the failed snapshot as forensic evidence. Final inode-bound root cleanup owns it.
     throw error;
   }
 }

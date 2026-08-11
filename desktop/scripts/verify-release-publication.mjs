@@ -13,6 +13,8 @@ export const REQUIRED_RELEASE_ASSETS = Object.freeze([
   'Agentico-arm64.AppImage',
   'agentico_{{VERSION}}_amd64.deb',
   'agentico_{{VERSION}}_arm64.deb',
+  'desktop-release.json',
+  'desktop-release.json.sig',
   'checksums.txt',
   'checksums.txt.sig',
 ]);

@@ -1,6 +1,6 @@
 // Capture and recheck the local release provenance before anything is published.
 import { execFileSync } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import {
   closeSync,
   constants,
@@ -34,7 +34,9 @@ import {
 import { isMainModule } from './lib/main-entry.mjs';
 import {
   createDetachedReleaseWorkspace,
+  compileReleaseCleanupHelper,
   removeDetachedReleaseWorkspace,
+  revalidateWorkspaceToken,
 } from './release-workspace.mjs';
 
 const desktopDir = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -98,7 +100,7 @@ export function validateReleaseEvidence(evidence) {
   if (evidence === null || typeof evidence !== 'object' || Array.isArray(evidence)) {
     throw new Error('release provenance evidence is not an object');
   }
-  if (evidence.schema_version !== 3 || evidence.platform !== 'darwin') {
+  if (evidence.schema_version !== 4 || evidence.platform !== 'darwin') {
     throw new Error('release provenance evidence has an unsupported schema or platform');
   }
   releaseVersionFromTag(evidence.tag);
@@ -113,6 +115,15 @@ export function validateReleaseEvidence(evidence) {
     JSON.stringify([LINUX_BUILDER_IMAGE, LINUX_ARM64_VERIFIER_IMAGE])
   ) {
     throw new Error('release provenance evidence does not contain the pinned release images');
+  }
+  if (
+    typeof evidence.cleanup_helper?.path !== 'string' ||
+    !evidence.cleanup_helper.path.startsWith('/') ||
+    !/^[0-9a-f]{64}$/.test(evidence.cleanup_helper.sha256 ?? '') ||
+    !Number.isSafeInteger(evidence.cleanup_helper.size) ||
+    evidence.cleanup_helper.size <= 0
+  ) {
+    throw new Error('release provenance evidence has invalid cleanup helper evidence');
   }
   if (!/^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(evidence.run_id ?? '')) {
     throw new Error('release provenance evidence has an invalid run_id');
@@ -137,21 +148,38 @@ export function validateReleaseEvidence(evidence) {
   ) {
     throw new Error('release provenance evidence has invalid workspace token');
   }
+  if (evidence.evidence_sha256 !== undefined && !/^[0-9a-f]{64}$/.test(evidence.evidence_sha256)) {
+    throw new Error('release provenance evidence has an invalid byte digest');
+  }
   return evidence;
 }
 
-function readEvidenceFile(path) {
+function readEvidenceFile(path, expectedDigest) {
   const stat = lstatSync(path);
   if (!stat.isFile() || stat.isSymbolicLink()) {
     throw new Error('release provenance evidence is not a regular file');
   }
-  return JSON.parse(readFileSync(path, 'utf8'));
+  const bytes = readFileSync(path);
+  const digest = createHash('sha256').update(bytes).digest('hex');
+  if (expectedDigest !== undefined && digest !== expectedDigest) {
+    throw new Error('release provenance evidence digest changed during handoff');
+  }
+  return { ...JSON.parse(bytes.toString('utf8')), evidence_sha256: digest };
+}
+
+function fsyncDirectory(path) {
+  const fd = openSync(path, constants.O_RDONLY);
+  try {
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
 }
 
 export function writeReleaseEvidence(
   path,
   evidence,
-  { randomId = randomUUID, renameFile = renameSync } = {},
+  { randomId = randomUUID, renameFile = renameSync, syncDirectory = fsyncDirectory } = {},
 ) {
   const directory = dirname(path);
   mkdirSync(directory, { recursive: true });
@@ -165,7 +193,8 @@ export function writeReleaseEvidence(
       0o600,
     );
     created = true;
-    writeFileSync(fd, `${JSON.stringify(evidence, null, 2)}\n`);
+    const bytes = Buffer.from(`${JSON.stringify(evidence, null, 2)}\n`, 'utf8');
+    writeFileSync(fd, bytes);
     fchmodSync(fd, 0o600);
     fsyncSync(fd);
     const owned = fstatSync(fd);
@@ -181,6 +210,8 @@ export function writeReleaseEvidence(
     ) {
       throw new Error('release evidence temporary file changed before atomic publication');
     }
+    syncDirectory(directory);
+    return createHash('sha256').update(bytes).digest('hex');
   } catch (error) {
     if (fd !== undefined) closeSync(fd);
     if (created) rmSync(temporary, { force: true });
@@ -201,6 +232,7 @@ export function runReleasePreflight({
   env = process.env,
   evidencePath = evidencePathFor(cwd, gitCommand),
   createWorkspace = (options) => createDetachedReleaseWorkspace(options),
+  compileCleanupHelper = (options) => compileReleaseCleanupHelper(options),
 } = {}) {
   if (platform !== 'darwin') throw new Error('release preflight: releases must run on macOS');
   const provenance = capture({ cwd, gitCommand });
@@ -232,30 +264,35 @@ export function runReleasePreflight({
 
   const runId = randomUUID();
   const workspace = createWorkspace({ operatorRoot: cwd, commit: provenance.commit, runId });
-  const evidence = Object.freeze({
-    schema_version: 3,
-    tag: provenance.tag,
-    commit: provenance.commit,
-    platform,
-    captured_at: new Date().toISOString(),
-    run_id: runId,
-    images: [LINUX_BUILDER_IMAGE, LINUX_ARM64_VERIFIER_IMAGE],
-    operator_root: resolve(cwd),
-    workspace_root: workspace.path,
-    workspace_token: workspace.token,
-    evidence_path: resolve(evidencePath),
-  });
+  let cleanupHelper;
   try {
-    writeReleaseEvidence(evidencePath, evidence);
+    cleanupHelper = compileCleanupHelper({ workspace });
+    const coreEvidence = Object.freeze({
+      schema_version: 4,
+      tag: provenance.tag,
+      commit: provenance.commit,
+      platform,
+      captured_at: new Date().toISOString(),
+      run_id: runId,
+      images: [LINUX_BUILDER_IMAGE, LINUX_ARM64_VERIFIER_IMAGE],
+      operator_root: resolve(cwd),
+      workspace_root: workspace.path,
+      workspace_token: workspace.token,
+      evidence_path: resolve(evidencePath),
+      cleanup_helper: cleanupHelper,
+    });
+    const evidenceSha256 = writeReleaseEvidence(evidencePath, coreEvidence);
+    return Object.freeze({ ...coreEvidence, evidence_sha256: evidenceSha256 });
   } catch (error) {
-    try {
-      removeDetachedReleaseWorkspace(workspace);
-    } catch {
-      // Preserve the evidence-write failure.
+    if (cleanupHelper !== undefined) {
+      try {
+        removeDetachedReleaseWorkspace({ ...workspace, cleanupHelper });
+      } catch {
+        // Preserve the primary preflight failure and leave only captured evidence for inspection.
+      }
     }
     throw error;
   }
-  return evidence;
 }
 
 /** Fail before publication if the source no longer matches the preflight evidence. */
@@ -266,6 +303,15 @@ export function verifyReleaseProvenance({
   evidencePath = evidencePathFor(cwd, gitCommand),
 } = {}) {
   const expected = validateReleaseEvidence(evidence ?? readEvidenceFile(evidencePath));
+  revalidateWorkspaceToken(expected.workspace_token);
+  if (expected.evidence_sha256 !== undefined) {
+    const persisted = validateReleaseEvidence(
+      readEvidenceFile(expected.evidence_path, expected.evidence_sha256),
+    );
+    if (JSON.stringify(persisted) !== JSON.stringify(expected)) {
+      throw new Error('release provenance evidence changed after preflight handoff');
+    }
+  }
   let actual;
   try {
     actual = capture({ cwd: expected.workspace_root, gitCommand });
@@ -296,8 +342,9 @@ export function readReleaseEvidence({
   cwd = rootDir,
   git: gitCommand = git,
   evidencePath = evidencePathFor(cwd, gitCommand),
+  expectedDigest,
 } = {}) {
-  return validateReleaseEvidence(readEvidenceFile(evidencePath));
+  return validateReleaseEvidence(readEvidenceFile(evidencePath, expectedDigest));
 }
 
 export function cleanupReleaseWorkspace({
@@ -309,16 +356,35 @@ export function cleanupReleaseWorkspace({
   removeEvidence = true,
 } = {}) {
   const trusted = validateReleaseEvidence(evidence ?? readEvidenceFile(evidencePath));
+  if (trusted.evidence_sha256 !== undefined) {
+    const persisted = validateReleaseEvidence(
+      readEvidenceFile(trusted.evidence_path, trusted.evidence_sha256),
+    );
+    if (JSON.stringify(persisted) !== JSON.stringify(trusted)) {
+      throw new Error('refusing cleanup because release evidence changed after handoff');
+    }
+  }
+  const commonDir = resolve(
+    trusted.operator_root,
+    gitCommand(trusted.operator_root, 'rev-parse', '--path-format=absolute', '--git-common-dir'),
+  );
+  const expectedHelper = join(
+    commonDir,
+    'agentico-release-cleanup-helpers',
+    trusted.run_id,
+    'release-cleanup',
+  );
+  if (resolve(trusted.cleanup_helper.path) !== resolve(expectedHelper)) {
+    throw new Error('refusing cleanup with an unexpected cleanup helper path');
+  }
   removeWorkspace({
     operatorRoot: trusted.operator_root,
-    commonDir: resolve(
-      trusted.operator_root,
-      gitCommand(trusted.operator_root, 'rev-parse', '--path-format=absolute', '--git-common-dir'),
-    ),
+    commonDir,
     path: trusted.workspace_root,
     commit: trusted.commit,
     runId: trusted.run_id,
     token: trusted.workspace_token,
+    cleanupHelper: trusted.cleanup_helper,
   });
   if (removeEvidence) {
     const path = resolve(trusted.evidence_path);

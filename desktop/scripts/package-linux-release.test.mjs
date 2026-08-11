@@ -164,7 +164,7 @@ describe('runLinuxRelease', () => {
     ).toBe(true);
   });
 
-  it('cleans its three per-run executable volumes and staging tree after success', () => {
+  it('cleans its four per-run executable volumes and staging tree after success', () => {
     const options = validFixtureOptions({ volumePrefix: 'agentico-release-run-123' });
     const calls = [];
     options.execute = (_command, args) => {
@@ -176,6 +176,7 @@ describe('runLinuxRelease', () => {
 
     expect(calls.filter((args) => args[0] === 'volume')).toEqual([
       ['volume', 'rm', '--force', 'agentico-release-run-123-node-modules'],
+      ['volume', 'rm', '--force', 'agentico-release-run-123-verifier-node-modules'],
       ['volume', 'rm', '--force', 'agentico-release-run-123-electron'],
       ['volume', 'rm', '--force', 'agentico-release-run-123-electron-builder'],
     ]);
@@ -195,6 +196,7 @@ describe('runLinuxRelease', () => {
     expect(() => runLinuxRelease(options)).toThrow(/x64 failed/);
     expect(calls.filter((args) => args[0] === 'volume')).toEqual([
       ['volume', 'rm', '--force', 'agentico-release-run-123-node-modules'],
+      ['volume', 'rm', '--force', 'agentico-release-run-123-verifier-node-modules'],
       ['volume', 'rm', '--force', 'agentico-release-run-123-electron'],
       ['volume', 'rm', '--force', 'agentico-release-run-123-electron-builder'],
     ]);
@@ -223,7 +225,18 @@ describe('runLinuxRelease', () => {
     );
     expect(
       observed.errors.filter(({ message }) => message === 'volume cleanup failure'),
-    ).toHaveLength(3);
+    ).toHaveLength(4);
+  });
+
+  it('treats an uncreated verifier volume as already cleaned after an early x64 failure', () => {
+    const options = validFixtureOptions({ volumePrefix: 'agentico-release-run-123' });
+    options.execute = (_command, args) => {
+      if (args.includes('AGENTICO_PACKAGE_ARCH=x64')) throw new Error('primary x64 failure');
+      if (args.at(-1) === 'agentico-release-run-123-verifier-node-modules') {
+        throw new Error('no such volume: agentico-release-run-123-verifier-node-modules');
+      }
+    };
+    expect(() => runLinuxRelease(options)).toThrow(/^primary x64 failure$/);
   });
 
   it('surfaces cleanup failure after successful packaging', () => {
@@ -687,15 +700,20 @@ describe('detached release evidence boundary', () => {
   it('requires the explicit absolute evidence file and binds its path, run, tag, and commit', () => {
     const evidence = {
       evidence_path: '/git/agentico-release-preflight.json',
+      evidence_sha256: 'f'.repeat(64),
       run_id: '11111111-1111-4111-8111-111111111111',
       tag: 'v0.150.0',
       commit: 'a'.repeat(40),
     };
     expect(
       resolveLinuxReleaseEvidence({
-        env: { AGENTICO_RELEASE_EVIDENCE_FILE: evidence.evidence_path },
-        readEvidence: (path) => {
+        env: {
+          AGENTICO_RELEASE_EVIDENCE_FILE: evidence.evidence_path,
+          AGENTICO_RELEASE_EVIDENCE_SHA256: evidence.evidence_sha256,
+        },
+        readEvidence: (path, digest) => {
           expect(path).toBe(evidence.evidence_path);
+          expect(digest).toBe(evidence.evidence_sha256);
           return evidence;
         },
         verifyEvidence: (value) => value,
@@ -706,11 +724,20 @@ describe('detached release evidence boundary', () => {
     );
     expect(() =>
       resolveLinuxReleaseEvidence({
-        env: { AGENTICO_RELEASE_EVIDENCE_FILE: '/different/evidence.json' },
+        env: {
+          AGENTICO_RELEASE_EVIDENCE_FILE: '/different/evidence.json',
+          AGENTICO_RELEASE_EVIDENCE_SHA256: evidence.evidence_sha256,
+        },
         readEvidence: () => evidence,
         verifyEvidence: (value) => value,
       }),
     ).toThrow(/does not match captured/);
+    expect(() =>
+      resolveLinuxReleaseEvidence({
+        env: { AGENTICO_RELEASE_EVIDENCE_FILE: evidence.evidence_path },
+        readEvidence: () => evidence,
+      }),
+    ).toThrow(/EVIDENCE_SHA256/);
   });
 
   it.each(['normal checkout', 'linked worktree'])(
@@ -745,7 +772,7 @@ describe('detached release evidence boundary', () => {
       const workspace = createDetachedReleaseWorkspace({ operatorRoot, commit, runId });
       const evidencePath = evidencePathFor(operatorRoot);
       const evidence = {
-        schema_version: 3,
+        schema_version: 4,
         tag: 'v0.150.0',
         commit,
         platform: 'darwin',
@@ -756,12 +783,22 @@ describe('detached release evidence boundary', () => {
         workspace_root: workspace.path,
         workspace_token: workspace.token,
         evidence_path: evidencePath,
+        cleanup_helper: {
+          path: join(main, 'release-cleanup'),
+          sha256: 'c'.repeat(64),
+          size: 123,
+        },
       };
-      writeFileSync(evidencePath, `${JSON.stringify(evidence, null, 2)}\n`);
+      const evidenceBytes = `${JSON.stringify(evidence, null, 2)}\n`;
+      writeFileSync(evidencePath, evidenceBytes);
+      const evidenceSha256 = createHash('sha256').update(evidenceBytes).digest('hex');
       try {
         expect(
           resolveLinuxReleaseEvidence({
-            env: { AGENTICO_RELEASE_EVIDENCE_FILE: evidencePath },
+            env: {
+              AGENTICO_RELEASE_EVIDENCE_FILE: evidencePath,
+              AGENTICO_RELEASE_EVIDENCE_SHA256: evidenceSha256,
+            },
           }),
         ).toMatchObject({ run_id: runId, tag: 'v0.150.0', commit });
       } finally {

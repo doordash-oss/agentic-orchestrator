@@ -34,6 +34,7 @@ export function verifyReleaseArtifacts({
   desktopDist = DESKTOP_DIST,
   checksumsPath = join(repoRoot, 'dist', 'checksums.txt'),
   evidenceDir = desktopDist,
+  additionalExpectedDigests = {},
   runSignatureVerification = verifySignature,
 }) {
   const errors = [];
@@ -52,7 +53,10 @@ export function verifyReleaseArtifacts({
   } else if (mode === 'manifest') {
     let expected = [];
     try {
-      expected = expectedDesktopArtifacts(tag).map(({ name }) => name);
+      expected = [
+        ...expectedDesktopArtifacts(tag).map(({ name }) => name),
+        ...Object.keys(additionalExpectedDigests),
+      ];
     } catch (error) {
       errors.push(errorMessage(error));
     }
@@ -64,11 +68,10 @@ export function verifyReleaseArtifacts({
       errors.push(...receiptEvidence.errors);
       try {
         errors.push(
-          ...validateChecksumManifest(
-            readFileSync(checksumsPath, 'utf8'),
-            expected,
-            receiptEvidence.digests,
-          ),
+          ...validateChecksumManifest(readFileSync(checksumsPath, 'utf8'), expected, {
+            ...receiptEvidence.digests,
+            ...additionalExpectedDigests,
+          }),
         );
       } catch (error) {
         errors.push(`could not read checksum manifest ${checksumsPath}: ${errorMessage(error)}`);

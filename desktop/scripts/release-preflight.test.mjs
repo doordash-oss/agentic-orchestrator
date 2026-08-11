@@ -7,6 +7,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   renameSync,
   rmSync,
   statSync,
@@ -55,16 +56,28 @@ function fixture(overrides = {}) {
     createWorkspace: ({ commit, runId }) => {
       const path = join(root, `workspace-${runId}`);
       mkdirSync(path);
-      const stat = statSync(path);
+      const canonicalPath = realpathSync(path);
+      const stat = statSync(canonicalPath);
       return {
         operatorRoot: root,
         commonDir: join(root, '.git'),
-        path,
+        path: canonicalPath,
         commit,
         runId,
-        token: { path, kind: 'directory', dev: stat.dev, ino: stat.ino },
+        token: { path: canonicalPath, kind: 'directory', dev: stat.dev, ino: stat.ino },
       };
     },
+    compileCleanupHelper: ({ workspace }) => ({
+      path: join(
+        root,
+        '.git',
+        'agentico-release-cleanup-helpers',
+        workspace.runId,
+        'release-cleanup',
+      ),
+      sha256: 'c'.repeat(64),
+      size: 123,
+    }),
     state,
     ...overrides,
   };
@@ -101,9 +114,16 @@ describe('release preflight', () => {
       operator_root: options.cwd,
       workspace_root: expect.stringContaining('workspace-'),
       evidence_path: options.evidencePath,
+      cleanup_helper: {
+        path: expect.stringContaining('agentico-release-cleanup-helpers/'),
+        sha256: 'c'.repeat(64),
+        size: 123,
+      },
     });
     expect(options.state.docker).toHaveLength(2);
-    expect(JSON.parse(readFileSync(options.evidencePath, 'utf8'))).toMatchObject(evidence);
+    const persistedEvidence = { ...evidence };
+    delete persistedEvidence.evidence_sha256;
+    expect(JSON.parse(readFileSync(options.evidencePath, 'utf8'))).toMatchObject(persistedEvidence);
   });
 
   it('rejects a Docker daemon that reports unavailable before inspecting images', () => {
@@ -156,6 +176,36 @@ describe('release preflight', () => {
     ).toThrow(/rename failed/);
     expect(existsSync(temporary)).toBe(false);
     expect(existsSync(options.evidencePath)).toBe(false);
+  });
+
+  it('fsyncs the parent directory after atomically publishing durable evidence', () => {
+    const options = fixture();
+    const synced = [];
+    writeReleaseEvidence(
+      options.evidencePath,
+      { ok: true },
+      { syncDirectory: (path) => synced.push(path) },
+    );
+    expect(synced).toEqual([join(options.cwd, 'desktop', 'dist')]);
+  });
+
+  it('binds detached evidence consumers to the exact evidence-file bytes', () => {
+    const options = fixture();
+    const evidence = runReleasePreflight(options);
+    expect(evidence.evidence_sha256).toMatch(/^[0-9a-f]{64}$/);
+    expect(
+      readReleaseEvidence({
+        evidencePath: options.evidencePath,
+        expectedDigest: evidence.evidence_sha256,
+      }).evidence_sha256,
+    ).toBe(evidence.evidence_sha256);
+    writeFileSync(options.evidencePath, `${readFileSync(options.evidencePath, 'utf8')} `);
+    expect(() =>
+      readReleaseEvidence({
+        evidencePath: options.evidencePath,
+        expectedDigest: evidence.evidence_sha256,
+      }),
+    ).toThrow(/digest changed/);
   });
 
   it('fails closed when its owned temporary inode is replaced by a victim symlink before rename', () => {

@@ -112,11 +112,16 @@ export function runLinuxRelease({
 
   const cleanupErrors = [];
   if (runVolumesMayExist) {
-    for (const suffix of ['node-modules', 'electron', 'electron-builder']) {
+    for (const suffix of [
+      'node-modules',
+      'verifier-node-modules',
+      'electron',
+      'electron-builder',
+    ]) {
       try {
         execute('docker', ['volume', 'rm', '--force', `${volumePrefix}-${suffix}`]);
       } catch (error) {
-        cleanupErrors.push(error);
+        if (!isVolumeNotFound(error)) cleanupErrors.push(error);
       }
     }
   }
@@ -188,6 +193,10 @@ function isImageNotFound(error) {
     .map((value) => String(value))
     .join('\n');
   return /(?:no such image|no such object|image .* not found)/i.test(detail);
+}
+
+function isVolumeNotFound(error) {
+  return /no such volume/i.test(errorMessage(error));
 }
 
 function errorMessage(error) {
@@ -519,14 +528,22 @@ export function runLocalLinuxRelease({
 
 export function resolveLinuxReleaseEvidence({
   env = process.env,
-  readEvidence = (path) => readReleaseEvidence({ evidencePath: path }),
+  readEvidence = (path, digest) =>
+    readReleaseEvidence({ evidencePath: path, expectedDigest: digest }),
   verifyEvidence = (evidence) => verifyReleaseProvenance({ evidence }),
 } = {}) {
   const path = env.AGENTICO_RELEASE_EVIDENCE_FILE;
   if (typeof path !== 'string' || !isAbsolute(path)) {
     throw new Error('AGENTICO_RELEASE_EVIDENCE_FILE must be an absolute validated path');
   }
-  const evidence = readEvidence(path);
+  const digest = env.AGENTICO_RELEASE_EVIDENCE_SHA256;
+  if (typeof digest !== 'string' || !/^[0-9a-f]{64}$/.test(digest)) {
+    throw new Error('AGENTICO_RELEASE_EVIDENCE_SHA256 must bind the exact evidence bytes');
+  }
+  const evidence = readEvidence(path, digest);
+  if (evidence.evidence_sha256 !== digest) {
+    throw new Error('Linux release evidence digest does not match the parent handoff');
+  }
   if (evidence.evidence_path !== path) {
     throw new Error('Linux release evidence path does not match captured preflight evidence');
   }

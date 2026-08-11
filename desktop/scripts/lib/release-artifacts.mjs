@@ -374,6 +374,12 @@ export function createLinuxDockerPlan({
         ]),
       };
       if (arch === 'arm64') {
+        const verifierMounts = mounts.map((value) =>
+          value.replace(
+            `type=volume,src=${volumePrefix}-node-modules,`,
+            `type=volume,src=${volumePrefix}-verifier-node-modules,`,
+          ),
+        );
         invocation.verificationArgs = Object.freeze([
           'run',
           '--rm',
@@ -381,7 +387,7 @@ export function createLinuxDockerPlan({
           'linux/arm64',
           '-e',
           'AGENTICO_PACKAGE_ARCH=arm64',
-          ...mounts,
+          ...verifierMounts,
           LINUX_ARM64_VERIFIER_IMAGE,
           'bash',
           '-lc',
@@ -389,6 +395,7 @@ export function createLinuxDockerPlan({
             ...copySourceCommand(sourceMount, buildRoot),
             ...importTargetCommands({ arch, version, buildRoot, exportMount }),
             ...goBootstrapCommand('arm64'),
+            'npm ci --ignore-scripts --fetch-retries=5 --fetch-retry-mintimeout=1000 --fetch-retry-maxtimeout=30000 --fetch-timeout=300000',
             'AGENTICO_VERIFY_ARTIFACTS_ONLY=1 node desktop/scripts/verify-package.mjs',
             ...exportReceiptCommands({ arch, buildRoot, exportMount }),
           ].join(' && '),

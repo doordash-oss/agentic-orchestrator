@@ -3,19 +3,21 @@ import { describe, expect, it } from 'vitest';
 import { RELEASE_SEQUENCE, runRelease, validateResumeEvidenceBoundary } from './release-run.mjs';
 
 const evidence = {
-  schema_version: 3,
+  schema_version: 4,
   tag: 'v0.150.0',
   commit: 'a'.repeat(40),
   run_id: '11111111-1111-4111-8111-111111111111',
   workspace_root: '/release/workspace',
   operator_root: '/operator/checkout',
   evidence_path: '/operator/.git/agentico-release-preflight.json',
+  evidence_sha256: 'd'.repeat(64),
   workspace_token: {
     path: '/release/workspace',
     kind: 'directory',
     dev: 1,
     ino: 2,
   },
+  cleanup_helper: { path: '/git/cleanup-helper', sha256: 'c'.repeat(64), size: 123 },
 };
 
 function fixture(overrides = {}) {
@@ -32,6 +34,8 @@ function fixture(overrides = {}) {
         calls.push({ label: 'packages' });
         return { ok: true };
       },
+      prepareDesktopManifest: () => calls.push({ label: 'desktop-manifest-create' }),
+      verifyDesktopManifest: () => calls.push({ label: 'desktop-manifest-verify' }),
       reserveTag: async () => calls.push({ label: 'reserve' }),
       publish: () => calls.push({ label: 'goreleaser' }),
       verifyManifest: () => {
@@ -45,6 +49,8 @@ function fixture(overrides = {}) {
       loadResume: () => null,
       saveResume: (_evidence, _snapshot, stage) => calls.push({ label: `save-${stage}` }),
       removeResume: () => calls.push({ label: 'remove-resume' }),
+      revalidateWorkspace: () => {},
+      prepareBuildHome: () => {},
       ...overrides,
     },
   };
@@ -76,9 +82,12 @@ describe('release runner', () => {
       'mac-package',
       'linux-packages',
       'package-gate',
+      'desktop-manifest-sign',
+      'desktop-manifest-gate',
       'publication-snapshot',
       'snapshot-gate',
       'provenance-recheck',
+      'goreleaser-start-record',
       'remote-tag-reservation',
       'goreleaser',
       'goreleaser-resume-record',
@@ -103,8 +112,12 @@ describe('release runner', () => {
       'mac-package',
       'linux-packages',
       'packages',
+      'desktop-manifest-create',
+      'desktop-manifest-verify',
       'packages',
+      'desktop-manifest-verify',
       'provenance',
+      'save-goreleaser-started',
       'reserve',
       'goreleaser',
       'save-goreleaser-published',
@@ -129,18 +142,21 @@ describe('release runner', () => {
       },
       command: (label, _command, _args, commandOptions) => {
         if (['npm-ci', 'mac-package', 'linux-packages'].includes(label)) {
-          observed.push(commandOptions.env);
+          observed.push({ label, env: commandOptions.env });
         }
       },
     });
     await runRelease(options);
-    for (const env of observed) {
-      expect(env).toMatchObject({ NPM_TOKEN: 'registry-required', GOWORK: 'off' });
+    for (const { label, env } of observed) {
+      if (label !== 'linux-packages') {
+        expect(env).toMatchObject({ NPM_TOKEN: 'registry-required', GOWORK: 'off' });
+      }
       expect(env).not.toHaveProperty('GITHUB_TOKEN');
       expect(env).not.toHaveProperty('GH_TOKEN');
       expect(env).not.toHaveProperty('AGENTICO_RELEASE_SIGNING_KEY');
       expect(env).not.toHaveProperty('AGENTICO_RELEASE_SIGNING_KEY_FILE');
       expect(env.AGENTICO_RELEASE_EVIDENCE_FILE).toMatch(/^\//);
+      expect(env.AGENTICO_RELEASE_EVIDENCE_SHA256).toBe(evidence.evidence_sha256);
     }
   });
 
@@ -203,6 +219,73 @@ describe('release runner', () => {
     await runRelease(second.options);
     expect(resumedCalls).toEqual(['remote', 'cask', 'cleanup', 'remove-resume']);
     expect(remoteAttempts).toBe(2);
+  });
+
+  it('checkpoints before the first remote mutation and preserves evidence when publication throws', async () => {
+    let resumeState;
+    const { calls, options } = fixture({
+      publish: () => {
+        calls.push({ label: 'goreleaser' });
+        throw new Error('publication outcome unknown');
+      },
+      saveResume: (savedEvidence, savedSnapshot, stage) => {
+        resumeState = { evidence: savedEvidence, snapshot: savedSnapshot, stage };
+        calls.push({ label: `save-${stage}` });
+      },
+    });
+    await expect(runRelease(options)).rejects.toThrow(/outcome unknown/);
+    expect(resumeState.stage).toBe('goreleaser-started');
+    expect(calls.map(({ label }) => label)).toContain('save-goreleaser-started');
+    expect(calls.findIndex(({ label }) => label === 'save-goreleaser-started')).toBeLessThan(
+      calls.findIndex(({ label }) => label === 'reserve'),
+    );
+    expect(calls.some(({ label }) => label === 'cleanup')).toBe(false);
+  });
+
+  it('revalidates the workspace inode immediately before every build and remote boundary', async () => {
+    const events = [];
+    const { options } = fixture({
+      revalidateWorkspace: () => events.push('revalidate'),
+      command: (label) => events.push(label),
+      createSnapshot: () => {
+        events.push('snapshot');
+        return { path: '/snapshot' };
+      },
+      reserveTag: async () => events.push('reserve'),
+      publish: () => events.push('publish'),
+      publishCask: () => events.push('cask'),
+    });
+    await runRelease(options);
+    for (const boundary of [
+      'npm-ci',
+      'mac-package',
+      'linux-packages',
+      'snapshot',
+      'reserve',
+      'publish',
+    ]) {
+      const index = events.indexOf(boundary);
+      expect(events[index - 1], boundary).toBe('revalidate');
+    }
+  });
+
+  it('fails closed instead of blindly republishing when a started publication is not complete', async () => {
+    const { options } = fixture({
+      loadResume: () => ({
+        evidence,
+        snapshot: { path: '/snapshot' },
+        stage: 'goreleaser-started',
+      }),
+      validateResume: (state) => state,
+      verifyRemote: async () => {
+        throw new Error('remote release is absent');
+      },
+      publish: () => {
+        throw new Error('must not republish');
+      },
+    });
+    await expect(runRelease(options)).rejects.toThrow(/publication outcome is uncertain.*absent/);
+    expect(options.loadResume().stage).toBe('goreleaser-started');
   });
 
   it('resumes a failed final cask without rebuilding or republishing and rechecks remote bytes', async () => {

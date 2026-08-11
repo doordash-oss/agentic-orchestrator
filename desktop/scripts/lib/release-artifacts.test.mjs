@@ -322,6 +322,13 @@ describe('createLinuxDockerPlan', () => {
     expect(plan[0].args).toContain(
       'type=volume,src=agentico-release-run123-node-modules,dst=/agentico-release-build/node_modules',
     );
+    expect(plan[1].verificationArgs).toContain(
+      'type=volume,src=agentico-release-run123-verifier-node-modules,dst=/agentico-release-build/node_modules',
+    );
+    expect(plan[1].verificationArgs).not.toContain(
+      'type=volume,src=agentico-release-run123-node-modules,dst=/agentico-release-build/node_modules',
+    );
+    expect(plan[1].verificationArgs.at(-1)).toContain('npm ci --ignore-scripts');
     expect(plan[0].args).toContain('type=volume,src=agentico-release-npm-cache,dst=/root/.npm');
     expect(plan[0].args).toContain(
       'type=volume,src=agentico-release-run123-electron,dst=/root/.cache/electron',

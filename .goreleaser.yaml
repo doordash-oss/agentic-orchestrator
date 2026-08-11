@@ -34,6 +34,8 @@ checksum:
     - glob: desktop/dist/publication/Agentico-arm64.AppImage
     - glob: desktop/dist/publication/agentico_{{ .Version }}_amd64.deb
     - glob: desktop/dist/publication/agentico_{{ .Version }}_arm64.deb
+    - glob: desktop/dist/publication/desktop-release.json
+    - glob: desktop/dist/publication/desktop-release.json.sig
 
 # Detached Ed25519 signature over checksums.txt in the exact format the
 # desktop updater verifies (agentico-ed25519:<base64>). The signer refuses to
@@ -62,6 +64,8 @@ release:
     - glob: desktop/dist/publication/Agentico-arm64.AppImage
     - glob: desktop/dist/publication/agentico_{{ .Version }}_amd64.deb
     - glob: desktop/dist/publication/agentico_{{ .Version }}_arm64.deb
+    - glob: desktop/dist/publication/desktop-release.json
+    - glob: desktop/dist/publication/desktop-release.json.sig
 
 # Homebrew distribution of the CLI. Casks replaced formulas for pre-compiled
 # binaries (brews is deprecated since goreleaser v2.10); the desktop app cask

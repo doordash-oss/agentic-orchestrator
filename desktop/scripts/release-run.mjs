@@ -1,9 +1,16 @@
 // Execute the complete local release from a detached committed-source workspace.
 import { execFileSync } from 'node:child_process';
-import { existsSync, lstatSync, readFileSync, rmSync } from 'node:fs';
-import { isAbsolute, join, resolve } from 'node:path';
+import { existsSync, lstatSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
 
 import { expectedDesktopArtifacts, readArtifactEvidence } from './lib/release-artifacts.mjs';
+import {
+  createDesktopReleaseManifest,
+  DESKTOP_RELEASE_MANIFEST,
+  DESKTOP_RELEASE_SIGNATURE,
+  verifyDesktopReleaseManifest,
+} from './lib/desktop-release-manifest.mjs';
+import { extractEmbeddedReleasePublicKey } from './lib/release-signing.mjs';
 import { isMainModule } from './lib/main-entry.mjs';
 import {
   cleanupReleaseWorkspace,
@@ -18,8 +25,10 @@ import {
 import { runGoreleaserRelease } from './release-goreleaser.mjs';
 import {
   createPublicationSnapshot,
+  dockerReleaseEnvironment,
   goreleaserEnvironment,
   readPublicationSnapshot,
+  releaseSigningEnvironment,
   revalidateWorkspaceToken,
   secretFreeBuildEnvironment,
   verifyPublicationSnapshot,
@@ -37,9 +46,12 @@ export const RELEASE_SEQUENCE = Object.freeze([
   'mac-package',
   'linux-packages',
   'package-gate',
+  'desktop-manifest-sign',
+  'desktop-manifest-gate',
   'publication-snapshot',
   'snapshot-gate',
   'provenance-recheck',
+  'goreleaser-start-record',
   'remote-tag-reservation',
   'goreleaser',
   'goreleaser-resume-record',
@@ -94,7 +106,7 @@ export function loadReleaseResumeState(operatorRoot, { gitCommand = git } = {}) 
 }
 
 export function saveReleaseResumeState(evidence, snapshot, stage, { gitCommand = git } = {}) {
-  if (!['goreleaser-published', 'remote-verified'].includes(stage)) {
+  if (!['goreleaser-started', 'goreleaser-published', 'remote-verified'].includes(stage)) {
     throw new Error(`invalid release resume stage: ${stage}`);
   }
   const path = resumePath(evidence.operator_root, gitCommand);
@@ -131,7 +143,7 @@ export function validateResumeEvidenceBoundary(evidence, { expectedPath, readEvi
 export function validateReleaseResumeState(state) {
   if (
     state?.schema_version !== 1 ||
-    !['goreleaser-published', 'remote-verified'].includes(state.stage)
+    !['goreleaser-started', 'goreleaser-published', 'remote-verified'].includes(state.stage)
   ) {
     throw new Error('release resume state is invalid; inspect it before manual cleanup');
   }
@@ -164,11 +176,36 @@ export async function runRelease({
       desktopDist,
       evidenceDir: join(evidence.workspace_root, 'desktop', 'dist'),
     }),
+  prepareDesktopManifest = ({ evidence, desktopDist }) => {
+    const manifestPath = join(desktopDist, DESKTOP_RELEASE_MANIFEST);
+    createDesktopReleaseManifest({
+      tag: evidence.tag,
+      commit: evidence.commit,
+      artifactDir: desktopDist,
+      manifestPath,
+    });
+    command(
+      'desktop-manifest-sign',
+      process.execPath,
+      ['desktop/scripts/release-sign.mjs', 'sign', manifestPath],
+      { cwd: evidence.workspace_root, env: releaseSigningEnvironment(ambientEnv) },
+    );
+  },
+  verifyDesktopManifest = ({ evidence, desktopDist }) =>
+    verifyDesktopReleaseManifest({
+      tag: evidence.tag,
+      commit: evidence.commit,
+      artifactDir: desktopDist,
+      manifestPath: join(desktopDist, DESKTOP_RELEASE_MANIFEST),
+      publicKey: extractEmbeddedReleasePublicKey(
+        readFileSync(join(evidence.workspace_root, 'desktop', 'src', 'main', 'updates.ts'), 'utf8'),
+      ),
+    }),
   reserveTag = ({ evidence }) =>
     reserveRemoteTag({ tag: evidence.tag, commit: evidence.commit, request: githubRequest }),
   publish = ({ evidence, notesFile }) =>
     runGoreleaserRelease({ evidence, env: ambientEnv, notesFile }),
-  verifyManifest = ({ evidence }) =>
+  verifyManifest = ({ evidence, snapshot }) =>
     verifyReleaseArtifacts({
       mode: 'manifest',
       tag: evidence.tag,
@@ -176,6 +213,13 @@ export async function runRelease({
       desktopDist: join(evidence.workspace_root, 'desktop', 'dist', 'publication'),
       checksumsPath: join(evidence.workspace_root, 'dist', 'checksums.txt'),
       evidenceDir: join(evidence.workspace_root, 'desktop', 'dist'),
+      additionalExpectedDigests: Object.fromEntries(
+        snapshot.artifacts
+          .filter(({ path }) =>
+            [DESKTOP_RELEASE_MANIFEST, DESKTOP_RELEASE_SIGNATURE].includes(path.split('/').at(-1)),
+          )
+          .map(({ path, sha256 }) => [path.split('/').at(-1), sha256]),
+      ),
     }),
   verifyRemote = ({ evidence, snapshot }) =>
     verifyReleasePublication({
@@ -203,6 +247,8 @@ export async function runRelease({
   saveResume = (evidence, snapshot, stage) => saveReleaseResumeState(evidence, snapshot, stage),
   removeResume = (root) => removeReleaseResumeState(root),
   validateResume = validateReleaseResumeState,
+  revalidateWorkspace = revalidateWorkspaceToken,
+  prepareBuildHome = (path) => mkdirSync(path, { recursive: true, mode: 0o700 }),
 } = {}) {
   let evidence;
   let snapshot;
@@ -221,11 +267,27 @@ export async function runRelease({
       evidence = resumed.evidence;
       snapshot = resumed.snapshot;
       preserveWorkspace = true;
+      revalidateWorkspace(evidence.workspace_token);
       assertGate(verifyManifest({ evidence, snapshot }), 'resumed manifest gate');
-      await verifyRemote({ evidence, snapshot });
-      if (resumed.stage === 'goreleaser-published') {
+      verifyDesktopManifest({ evidence, desktopDist: snapshot.path });
+      try {
+        await verifyRemote({ evidence, snapshot });
+      } catch (error) {
+        if (resumed.stage === 'goreleaser-started') {
+          throw new Error(
+            `release publication outcome is uncertain; do not republish. Inspect and clean up the partial remote publication before an explicit recovery: ${error instanceof Error ? error.message : String(error)}`,
+            { cause: error },
+          );
+        }
+        throw error;
+      }
+      if (resumed.stage === 'goreleaser-started') {
+        saveResume(evidence, snapshot, 'goreleaser-published');
+      }
+      if (resumed.stage !== 'remote-verified') {
         saveResume(evidence, snapshot, 'remote-verified');
       }
+      revalidateWorkspace(evidence.workspace_token);
       publishCask({ evidence, snapshot });
       preserveWorkspace = false;
       clearResumeAfterCleanup = true;
@@ -234,39 +296,65 @@ export async function runRelease({
 
     evidence = preflight();
     const cwd = evidence.workspace_root;
-    const env = secretFreeBuildEnvironment(ambientEnv, evidence.evidence_path);
+    const isolatedHome = join(dirname(evidence.cleanup_helper.path), 'build-home');
+    prepareBuildHome(isolatedHome);
+    const env = secretFreeBuildEnvironment(
+      ambientEnv,
+      evidence.evidence_path,
+      evidence.evidence_sha256,
+      isolatedHome,
+    );
+    const dockerEnv = dockerReleaseEnvironment(
+      ambientEnv,
+      evidence.evidence_path,
+      evidence.evidence_sha256,
+    );
     requireCleanIgnoredInputs(cwd);
+    revalidateWorkspace(evidence.workspace_token);
     command('npm-ci', 'npm', ['ci'], { cwd, env });
     requireCleanIgnoredInputs(cwd);
+    revalidateWorkspace(evidence.workspace_token);
     command('mac-package', 'npm', ['run', 'package:verify', '--workspace', 'desktop'], {
       cwd,
       env,
     });
+    revalidateWorkspace(evidence.workspace_token);
     command('linux-packages', 'npm', ['run', 'package:linux:release', '--workspace', 'desktop'], {
       cwd,
-      env,
+      env: dockerEnv,
     });
     assertGate(
       verifyPackages({ evidence, desktopDist: join(cwd, 'desktop', 'dist') }),
       'package gate',
     );
+    const desktopDist = join(cwd, 'desktop', 'dist');
+    revalidateWorkspace(evidence.workspace_token);
+    prepareDesktopManifest({ evidence, desktopDist });
+    verifyDesktopManifest({ evidence, desktopDist });
 
+    revalidateWorkspace(evidence.workspace_token);
     snapshot = createSnapshot({
       workspaceRoot: cwd,
       sourceDir: join(cwd, 'desktop', 'dist'),
       artifactNames: expectedDesktopArtifacts(evidence.tag).map(({ name }) => name),
+      extraNames: [DESKTOP_RELEASE_MANIFEST, DESKTOP_RELEASE_SIGNATURE],
       receiptNames: RECEIPTS,
     });
     verifySnapshot(snapshot);
     assertGate(verifyPackages({ evidence, desktopDist: snapshot.path }), 'snapshot gate');
+    verifyDesktopManifest({ evidence, desktopDist: snapshot.path });
     verifyProvenance(evidence);
-    await reserveTag({ evidence });
-    publish({ evidence, snapshot, notesFile });
     preserveWorkspace = true;
+    saveResume(evidence, snapshot, 'goreleaser-started');
+    revalidateWorkspace(evidence.workspace_token);
+    await reserveTag({ evidence });
+    revalidateWorkspace(evidence.workspace_token);
+    publish({ evidence, snapshot, notesFile });
     saveResume(evidence, snapshot, 'goreleaser-published');
     assertGate(verifyManifest({ evidence, snapshot }), 'manifest gate');
     await verifyRemote({ evidence, snapshot });
     saveResume(evidence, snapshot, 'remote-verified');
+    revalidateWorkspace(evidence.workspace_token);
     publishCask({ evidence, snapshot });
     preserveWorkspace = false;
     clearResumeAfterCleanup = true;

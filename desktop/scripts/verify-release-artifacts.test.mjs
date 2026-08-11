@@ -422,6 +422,57 @@ describe('verifyReleaseArtifacts', () => {
     }
   });
 
+  it('requires signed desktop-envelope checksum entries bound to snapshot digests', () => {
+    const root = mkdtempSync(join(tmpdir(), 'agentico-release-envelope-checksums-'));
+    fixtureRoots.push(root);
+    const desktopDist = join(root, 'desktop', 'dist');
+    const fixture = completeV0150Fixture(desktopDist);
+    for (const [name, value] of Object.entries(fixture.receipts)) {
+      writeFileSync(join(desktopDist, name), `${JSON.stringify(value)}\n`);
+    }
+    const additionalExpectedDigests = {
+      'desktop-release.json': 'd'.repeat(64),
+      'desktop-release.json.sig': 'e'.repeat(64),
+    };
+    const checksumsPath = join(root, 'dist', 'checksums.txt');
+    mkdirSync(join(root, 'dist'), { recursive: true });
+    writeFileSync(
+      checksumsPath,
+      [
+        ...fixture.files.map(
+          (name) => `${readArtifactEvidence(join(desktopDist, name)).sha256}  ${name}`,
+        ),
+        ...Object.entries(additionalExpectedDigests).map(([name, digest]) => `${digest}  ${name}`),
+      ].join('\n'),
+    );
+    expect(
+      verifyReleaseArtifacts({
+        mode: 'manifest',
+        tag: TAG,
+        revision: REVISION,
+        desktopDist,
+        checksumsPath,
+        additionalExpectedDigests,
+        runSignatureVerification: () => {},
+      }).errors,
+    ).toEqual([]);
+    writeFileSync(
+      checksumsPath,
+      readFileSync(checksumsPath, 'utf8').replace(/^.*desktop-release\.json\.sig.*$/m, ''),
+    );
+    expect(
+      verifyReleaseArtifacts({
+        mode: 'manifest',
+        tag: TAG,
+        revision: REVISION,
+        desktopDist,
+        checksumsPath,
+        additionalExpectedDigests,
+        runSignatureVerification: () => {},
+      }).errors,
+    ).toContain('checksums.txt has no entry for desktop-release.json.sig');
+  });
+
   it('preserves package failures when writing evidence itself fails', () => {
     const root = mkdtempSync(join(tmpdir(), 'agentico-release-artifacts-'));
     const invalidDesktopDist = join(root, 'not-a-directory');

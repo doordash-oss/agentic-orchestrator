@@ -115,6 +115,8 @@ release:
         'Agentico-arm64.AppImage',
         'agentico_0.150.0_amd64.deb',
         'agentico_0.150.0_arm64.deb',
+        'desktop-release.json',
+        'desktop-release.json.sig',
       ]),
     ).toEqual([]);
   });
@@ -158,8 +160,8 @@ release:
     expect(
       auditReleaseRunner(
         runner.replace(
-          'await reserveTag({ evidence });\n    publish({ evidence, snapshot, notesFile });',
-          'publish({ evidence, snapshot, notesFile });\n    await reserveTag({ evidence });',
+          'await reserveTag({ evidence });\n    revalidateWorkspace(evidence.workspace_token);\n    publish({ evidence, snapshot, notesFile });',
+          'publish({ evidence, snapshot, notesFile });\n    revalidateWorkspace(evidence.workspace_token);\n    await reserveTag({ evidence });',
         ),
       ),
     ).toContain(
@@ -168,8 +170,8 @@ release:
     expect(
       auditReleaseRunner(
         runner.replace(
-          "saveResume(evidence, snapshot, 'goreleaser-published');",
-          "saveResume(evidence, snapshot, 'remote-verified');",
+          "publish({ evidence, snapshot, notesFile });\n    saveResume(evidence, snapshot, 'goreleaser-published');",
+          "publish({ evidence, snapshot, notesFile });\n    saveResume(evidence, snapshot, 'remote-verified');",
         ),
       ),
     ).toContain(
@@ -186,8 +188,8 @@ release:
     expect(
       auditReleaseRunner(
         runner.replace(
-          'await verifyRemote({ evidence, snapshot });\n      if (resumed.stage',
-          '// remote verification omitted\n      if (resumed.stage',
+          'await verifyRemote({ evidence, snapshot });\n      } catch',
+          '// remote verification omitted\n      } catch',
         ),
       ),
     ).toContain('release runner must reverify remote publication before every resumed cask');

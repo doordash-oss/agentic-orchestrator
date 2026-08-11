@@ -20,9 +20,13 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import {
   cleanGoEnvironment,
+  compileReleaseCleanupHelper,
   createDetachedReleaseWorkspace,
   createPublicationSnapshot,
+  dockerReleaseEnvironment,
+  goreleaserEnvironment,
   removeDetachedReleaseWorkspace,
+  secretFreeBuildEnvironment,
   verifyPublicationSnapshot,
 } from './release-workspace.mjs';
 
@@ -54,6 +58,25 @@ function repositoryFixture() {
 }
 
 describe('detached release workspace', () => {
+  it('compiles and hashes the cleanup helper into per-run Git metadata', () => {
+    const commonDir = mkdtempSync(join(tmpdir(), 'agentico-cleanup-helper-test-'));
+    roots.push(commonDir);
+    const helper = compileReleaseCleanupHelper({
+      workspace: {
+        commonDir,
+        path: projectRoot,
+        runId: '99999999-9999-4999-8999-999999999999',
+      },
+    });
+    expect(helper.path).toContain(
+      'agentico-release-cleanup-helpers/99999999-9999-4999-8999-999999999999/release-cleanup',
+    );
+    expect(helper.sha256).toBe(
+      createHash('sha256').update(readFileSync(helper.path)).digest('hex'),
+    );
+    expect(helper.size).toBeGreaterThan(0);
+  }, 20_000);
+
   it('contains only the captured committed source and excludes ambient ignored inputs', () => {
     const fixture = repositoryFixture();
     const workspace = createDetachedReleaseWorkspace({
@@ -75,7 +98,7 @@ describe('detached release workspace', () => {
       removeDetachedReleaseWorkspace(workspace);
     }
     expect(existsSync(workspace.path)).toBe(false);
-    expect(git(fixture.root, 'worktree', 'list', '--porcelain')).not.toContain(workspace.path);
+    expect(git(fixture.root, 'worktree', 'list', '--porcelain')).toContain('prunable');
   }, 20_000);
 
   it('clears ambient Go workspace and flags while forcing readonly modules', () => {
@@ -86,6 +109,79 @@ describe('detached release workspace', () => {
         X: 'ok',
       }),
     ).toMatchObject({ GOWORK: 'off', GOFLAGS: '-mod=readonly', X: 'ok' });
+  });
+
+  it('uses a minimal native build environment with isolated npm state and no ambient overrides', () => {
+    const env = secretFreeBuildEnvironment(
+      {
+        PATH: '/tools',
+        HOME: '/operator',
+        LANG: 'en_US.UTF-8',
+        NPM_TOKEN: 'registry',
+        NODE_OPTIONS: '--require=/tmp/injected.js',
+        npm_config_script_shell: '/tmp/attacker',
+        GITHUB_TOKEN: 'publish',
+        RANDOM_AMBIENT: 'drop-me',
+      },
+      '/git/evidence.json',
+      'a'.repeat(64),
+      '/release/workspace/desktop/dist/.release-home',
+    );
+    expect(env).toMatchObject({
+      PATH: '/tools',
+      HOME: '/release/workspace/desktop/dist/.release-home',
+      LANG: 'en_US.UTF-8',
+      NPM_TOKEN: 'registry',
+      NPM_CONFIG_CACHE: '/release/workspace/desktop/dist/.release-home/.npm',
+      GOWORK: 'off',
+      GOFLAGS: '-mod=readonly',
+      AGENTICO_RELEASE_EVIDENCE_SHA256: 'a'.repeat(64),
+    });
+    expect(env).not.toHaveProperty('NODE_OPTIONS');
+    expect(env).not.toHaveProperty('npm_config_script_shell');
+    expect(env).not.toHaveProperty('GITHUB_TOKEN');
+    expect(env).not.toHaveProperty('RANDOM_AMBIENT');
+  });
+
+  it('gives Docker orchestration only its operator Docker context and evidence binding', () => {
+    expect(
+      dockerReleaseEnvironment(
+        {
+          PATH: '/tools',
+          HOME: '/operator',
+          DOCKER_HOST: 'unix:///docker.sock',
+          DOCKER_CONFIG: '/docker/config',
+          NODE_OPTIONS: '--inspect',
+          GITHUB_TOKEN: 'drop',
+        },
+        '/git/evidence.json',
+        'b'.repeat(64),
+      ),
+    ).toEqual({
+      PATH: '/tools',
+      HOME: '/operator',
+      DOCKER_HOST: 'unix:///docker.sock',
+      DOCKER_CONFIG: '/docker/config',
+      AGENTICO_RELEASE_EVIDENCE_FILE: '/git/evidence.json',
+      AGENTICO_RELEASE_EVIDENCE_SHA256: 'b'.repeat(64),
+    });
+  });
+
+  it('drops Node and npm injection overrides from the GoReleaser signer environment', () => {
+    const env = goreleaserEnvironment(
+      {
+        PATH: '/tools',
+        GITHUB_TOKEN: 'publish',
+        NODE_OPTIONS: '--require=/tmp/injected.js',
+        NPM_CONFIG_USERCONFIG: '/tmp/injected-npmrc',
+        npm_config_script_shell: '/tmp/attacker',
+      },
+      'v0.150.0',
+    );
+    expect(env).toMatchObject({ GITHUB_TOKEN: 'publish', GORELEASER_CURRENT_TAG: 'v0.150.0' });
+    expect(env).not.toHaveProperty('NODE_OPTIONS');
+    expect(env).not.toHaveProperty('NPM_CONFIG_USERCONFIG');
+    expect(env).not.toHaveProperty('npm_config_script_shell');
   });
 
   it('refuses cleanup after workspace replacement without touching a symlink victim', () => {
@@ -153,7 +249,7 @@ describe('detached release workspace', () => {
     },
   );
 
-  it('uses Git only for non-destructive administrative pruning after inode-bound cleanup', () => {
+  it('leaves only safe stale Git administration for explicit targeted operator cleanup', () => {
     const fixture = repositoryFixture();
     const workspace = createDetachedReleaseWorkspace({
       operatorRoot: fixture.root,
@@ -172,7 +268,7 @@ describe('detached release workspace', () => {
       },
     });
     expect(cleaned.token).toEqual(workspace.token);
-    expect(gitCalls).toEqual([['worktree', 'prune', '--expire', 'now']]);
+    expect(gitCalls).toEqual([]);
     expect(gitCalls.flat()).not.toContain(workspace.path);
   });
 
@@ -240,6 +336,8 @@ describe('publication snapshot', () => {
     mkdirSync(workspace);
     const names = ['Agentico-mac-universal.dmg'];
     writeFileSync(join(source, names[0]), 'dmg bytes');
+    writeFileSync(join(source, 'desktop-release.json'), '{}\n');
+    writeFileSync(join(source, 'desktop-release.json.sig'), 'signature\n');
     writeFileSync(
       join(source, 'package-verification-darwin-universal.json'),
       `${JSON.stringify({
@@ -262,8 +360,14 @@ describe('publication snapshot', () => {
       workspaceRoot: workspace,
       sourceDir: source,
       artifactNames: names,
+      extraNames: ['desktop-release.json', 'desktop-release.json.sig'],
       receiptNames: ['package-verification-darwin-universal.json'],
     });
+    expect(snapshot.artifacts.map(({ path }) => path.split('/').at(-1))).toEqual([
+      'Agentico-mac-universal.dmg',
+      'desktop-release.json',
+      'desktop-release.json.sig',
+    ]);
     expect(snapshot.artifacts[0].path).toBe(join(snapshot.path, names[0]));
     const receipt = JSON.parse(
       readFileSync(join(snapshot.path, 'package-verification-darwin-universal.json'), 'utf8'),

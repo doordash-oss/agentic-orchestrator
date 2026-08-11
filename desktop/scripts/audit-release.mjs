@@ -21,9 +21,11 @@ const distDir = join(desktopDir, 'dist');
 const exceptionsPath = join(desktopDir, 'release-audit-exceptions.json');
 const inventoryPath = join(distDir, 'third-party-license-inventory.json');
 const MiB = 1024 * 1024;
-const RELEASE_AUDIT_DESKTOP_ARTIFACTS = Object.freeze(
-  expectedDesktopArtifacts('v0.0.0').map(({ name }) => name),
-);
+const RELEASE_AUDIT_DESKTOP_ARTIFACTS = Object.freeze([
+  ...expectedDesktopArtifacts('v0.0.0').map(({ name }) => name),
+  'desktop-release.json',
+  'desktop-release.json.sig',
+]);
 
 const SEVERITY_RANK = Object.freeze({
   info: 0,
@@ -126,10 +128,14 @@ export function auditReleaseRunner(runnerText) {
     "command('mac-package'",
     "command('linux-packages'",
     'verifyPackages({ evidence, desktopDist:',
+    'prepareDesktopManifest({ evidence, desktopDist })',
+    'verifyDesktopManifest({ evidence, desktopDist })',
     'snapshot = createSnapshot({',
     'verifySnapshot(snapshot)',
     'verifyPackages({ evidence, desktopDist: snapshot.path })',
+    'verifyDesktopManifest({ evidence, desktopDist: snapshot.path })',
     'verifyProvenance(evidence)',
+    "saveResume(evidence, snapshot, 'goreleaser-started')",
     'await reserveTag({ evidence })',
     'publish({ evidence, snapshot, notesFile })',
     "saveResume(evidence, snapshot, 'goreleaser-published')",

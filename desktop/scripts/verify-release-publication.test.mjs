@@ -192,6 +192,15 @@ describe('remote release publication verification', () => {
         },
         /checksums\.txt\.sig/,
       ],
+      [
+        {
+          draft: false,
+          prerelease: false,
+          published_at: '2026-08-10T00:00:00Z',
+          assets: releasedAssets().filter(({ name }) => name !== 'desktop-release.json'),
+        },
+        /desktop-release\.json/,
+      ],
     ];
     for (const [release, expected] of releases) {
       const responses = {

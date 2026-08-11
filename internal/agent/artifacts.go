@@ -95,7 +95,22 @@ type IterationMeta struct {
 	MadeProgress bool          `yaml:"made_progress"`
 	CostUSD      float64       `yaml:"cost_usd,omitempty"`
 	Context      *ContextMeta  `yaml:"context,omitempty"`
+	Anchors      RepoAnchors   `yaml:"anchors,omitempty"`
 }
+
+// RepoAnchor records the base (HEAD before the iteration's commit step) and
+// head (HEAD after it) SHAs for a single managed repo in a Final Review
+// iteration. Both fields are full (non-abbreviated) SHAs. The map key in
+// RepoAnchors is the repo name as staged by the FR loop.
+type RepoAnchor struct {
+	Base string `yaml:"base,omitempty"`
+	Head string `yaml:"head,omitempty"`
+}
+
+// RepoAnchors is a per-repo anchor map keyed by repo name. The omitempty
+// tag ensures pre-existing meta.yaml files (and loops that never set
+// anchors) serialise and deserialise identically to today.
+type RepoAnchors map[string]RepoAnchor
 
 type ContextMeta struct {
 	Provider           string `yaml:"provider,omitempty"`

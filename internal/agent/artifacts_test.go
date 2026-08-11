@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -364,6 +365,88 @@ func TestArtifactManagerReadMeta(t *testing.T) {
 	_, err = am.ReadMeta(filepath.Join(dir, "no-such-dir"))
 	if err == nil {
 		t.Error("expected error for non-existent dir")
+	}
+}
+
+func TestIterationMetaAnchorsRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	am := NewArtifactManager(dir)
+
+	iterDir, _ := am.CreateIterationDir(1)
+	meta := IterationMeta{
+		Iteration:    1,
+		ReviewStatus: "approved",
+		Anchors: RepoAnchors{
+			"api": {Base: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Head: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
+			"web": {Base: "cccccccccccccccccccccccccccccccccccccccc", Head: "dddddddddddddddddddddddddddddddddddddddd"},
+		},
+	}
+	if err := am.WriteMeta(iterDir, meta); err != nil {
+		t.Fatalf("write meta: %v", err)
+	}
+
+	got, err := am.ReadMeta(iterDir)
+	if err != nil {
+		t.Fatalf("read meta: %v", err)
+	}
+	if len(got.Anchors) != 2 {
+		t.Fatalf("expected 2 anchors, got %d", len(got.Anchors))
+	}
+	api, ok := got.Anchors["api"]
+	if !ok {
+		t.Fatal("missing api anchor")
+	}
+	if api.Base != meta.Anchors["api"].Base || api.Head != meta.Anchors["api"].Head {
+		t.Errorf("api anchor mismatch: got %+v", api)
+	}
+	web, ok := got.Anchors["web"]
+	if !ok {
+		t.Fatal("missing web anchor")
+	}
+	if web.Base != meta.Anchors["web"].Base || web.Head != meta.Anchors["web"].Head {
+		t.Errorf("web anchor mismatch: got %+v", web)
+	}
+}
+
+func TestIterationMetaOldFileParsesWithoutAnchors(t *testing.T) {
+	dir := t.TempDir()
+	iterDir := filepath.Join(dir, "iteration-01")
+	if err := os.MkdirAll(iterDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Write a meta.yaml without anchors — mimics pre-existing files.
+	oldYAML := []byte("iteration: 1\nagent_status: SUCCESS\nreview_status: approved\nmade_progress: true\n")
+	if err := os.WriteFile(filepath.Join(iterDir, "meta.yaml"), oldYAML, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	am := NewArtifactManager(dir)
+	got, err := am.ReadMeta(iterDir)
+	if err != nil {
+		t.Fatalf("read meta: %v", err)
+	}
+	if got.Iteration != 1 || got.AgentStatus != "SUCCESS" || got.ReviewStatus != "approved" {
+		t.Errorf("unexpected meta: %+v", got)
+	}
+	if len(got.Anchors) != 0 {
+		t.Errorf("expected 0 anchors for old file, got %d", len(got.Anchors))
+	}
+}
+
+func TestIterationMetaAbsenceSerializesAsAbsent(t *testing.T) {
+	dir := t.TempDir()
+	am := NewArtifactManager(dir)
+	iterDir, _ := am.CreateIterationDir(1)
+	meta := IterationMeta{
+		Iteration:    1,
+		ReviewStatus: "approved",
+		// Anchors intentionally nil
+	}
+	if err := am.WriteMeta(iterDir, meta); err != nil {
+		t.Fatalf("write meta: %v", err)
+	}
+	data, _ := os.ReadFile(filepath.Join(iterDir, "meta.yaml"))
+	if strings.Contains(string(data), "anchors") {
+		t.Errorf("anchors should be absent in serialized output, got:\n%s", string(data))
 	}
 }
 

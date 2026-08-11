@@ -346,8 +346,8 @@ func (s *featureFinalReviewLoopState) run() (*FeatureFinalReviewResult, error) {
 
 		switch reviewStatus {
 		case ReviewApproved:
-			s.commitReviewLeftovers(i, "Final review leftover sweep")
-			s.writeIterationMeta(iterDir, i, "approved")
+			anchors := s.anchorIteration(i, "approved")
+			s.writeIterationMeta(iterDir, i, "approved", anchors)
 			return &FeatureFinalReviewResult{FinalStatus: finalStatusReviewPassed, Iterations: i}, nil
 
 		case ReviewChangesRequested:
@@ -390,13 +390,13 @@ func (s *featureFinalReviewLoopState) run() (*FeatureFinalReviewResult, error) {
 				continue
 			}
 
-			s.commitReviewLeftovers(i, "Final review fix sweep")
+			anchors := s.anchorIteration(i, "changes requested")
 			consecutiveFailures = 0
-			s.writeIterationMeta(iterDir, i, "changes_requested")
+			s.writeIterationMeta(iterDir, i, "changes_requested", anchors)
 			continue
 
 		default:
-			s.writeIterationMeta(iterDir, i, "unclear")
+			s.writeIterationMeta(iterDir, i, "unclear", nil)
 			continue
 		}
 	}
@@ -622,25 +622,49 @@ func (s *featureFinalReviewLoopState) previousAggregateFeedback(iteration int) s
 	return strings.TrimSpace(string(data))
 }
 
-// commitReviewLeftovers commits any repo-worktree changes a final-review
-// session left uncommitted. The completion protocol validates run artifacts,
-// not git state, so a fixer (or any FR session) that edits files and ends its
-// turn without committing would otherwise strand the feature at CodeReady
-// with a dirty worktree — blocking every aftercare follow-up that demands a
-// clean tree (rebase and refactor passes). Swept after each fix session and
-// again at approval so review-approved code is always committed code. A clean
-// worktree is a no-op; a commit failure is logged, never fatal, because the
-// publish path can still sweep the same changes.
-func (s *featureFinalReviewLoopState) commitReviewLeftovers(iteration int, reason string) {
-	for name, path := range s.workspace.RepoPaths {
-		if path == "" || !git.HasUncommittedChanges(path) {
+// anchorIteration is the uniform per-iteration commit step that runs once
+// per completed Final Review iteration, after the review verdict (and, on
+// CHANGES_REQUESTED, after the fix session and its validation) and before
+// the meta write. For each FR-staged (touched) repo it captures the base
+// HEAD, commits any worktree changes with a deterministic harness message
+// derived from the iteration number and outcome, and captures the head
+// SHA. On a clean tree it records the existing HEAD without creating a
+// commit (CommitAllAndGetHead semantics). Both approved and changes-
+// requested iterations anchor identically, so the terminal iteration's
+// meta also carries SHAs. Commit failures keep today's non-fatal log-and-
+// continue behavior but the repo's anchors are omitted from the returned
+// map so meta never records SHAs the harness failed to anchor.
+//
+// Restart/resume is crash-agnostic: stranded uncommitted changes from a
+// crashed iteration remain in the worktree and are captured as part of the
+// re-run iteration's anchor commit (base equals the previous recorded
+// head); a crash after the anchor commit but before the meta write simply
+// yields a possibly-empty second anchor on re-run — no git reset, no
+// recovery commit. Because iteration anchors live in per-run iteration
+// dirs, a seal-and-fork rewind starts a fresh run whose round-1 delta uses
+// the branch-name base fallback — no carry-forward of iteration anchors
+// across runs.
+func (s *featureFinalReviewLoopState) anchorIteration(iteration int, outcome string) RepoAnchors {
+	anchors := make(RepoAnchors)
+	message := fmt.Sprintf("Final review iteration %d: %s", iteration, outcome)
+	for _, name := range s.stagedRepos {
+		path := s.workspace.RepoPaths[name]
+		if path == "" {
 			continue
 		}
-		message := fmt.Sprintf("%s (final review iteration %d)", reason, iteration)
-		if err := git.CommitAll(path, message); err != nil {
-			log.Printf("feature %s: final review leftover commit in repo %s: %v", s.cfg.Feature.ID, name, err)
+		base, err := git.CurrentHeadSHA(path)
+		if err != nil {
+			log.Printf("feature %s: final review anchor base capture for repo %s: %v", s.cfg.Feature.ID, name, err)
+			continue
 		}
+		head, err := git.CommitAllAndGetHead(path, message)
+		if err != nil {
+			log.Printf("feature %s: final review anchor commit for repo %s: %v", s.cfg.Feature.ID, name, err)
+			continue
+		}
+		anchors[name] = RepoAnchor{Base: base, Head: head}
 	}
+	return anchors
 }
 
 // runFix launches one feature-level fix session for iteration i. Same
@@ -795,11 +819,12 @@ func (s *featureFinalReviewLoopState) featureFinalReviewSessionID(role string, i
 	return fmt.Sprintf("%s-%s-%02d", s.cfg.Feature.ID, role, iteration)
 }
 
-func (s *featureFinalReviewLoopState) writeIterationMeta(iterDir string, iteration int, reviewStatus string) {
+func (s *featureFinalReviewLoopState) writeIterationMeta(iterDir string, iteration int, reviewStatus string, anchors RepoAnchors) {
 	meta := IterationMeta{
 		Iteration:    iteration,
 		ReviewStatus: reviewStatus,
 		StartedAt:    time.Now(),
+		Anchors:      anchors,
 	}
 	am := &ArtifactManager{}
 	_ = am.WriteMeta(iterDir, meta)

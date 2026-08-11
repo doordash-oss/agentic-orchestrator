@@ -87,8 +87,9 @@ describe('release runner', () => {
       'publication-snapshot',
       'snapshot-gate',
       'provenance-recheck',
-      'goreleaser-start-record',
+      'tag-reservation-start-record',
       'remote-tag-reservation',
+      'goreleaser-start-record',
       'goreleaser',
       'goreleaser-resume-record',
       'manifest-gate',
@@ -117,8 +118,9 @@ describe('release runner', () => {
       'packages',
       'desktop-manifest-verify',
       'provenance',
-      'save-goreleaser-started',
+      'save-tag-reservation-started',
       'reserve',
+      'save-goreleaser-started',
       'goreleaser',
       'save-goreleaser-published',
       'manifest',
@@ -221,7 +223,94 @@ describe('release runner', () => {
     expect(remoteAttempts).toBe(2);
   });
 
-  it('checkpoints before the first remote mutation and preserves evidence when publication throws', async () => {
+  it('resumes a transient tag-reservation failure without rebuilding and invokes GoReleaser once', async () => {
+    let resumeState;
+    let reservationAttempts = 0;
+    let publications = 0;
+    const first = fixture({
+      reserveTag: async () => {
+        reservationAttempts += 1;
+        throw new Error('temporary reservation network failure');
+      },
+      saveResume: (savedEvidence, savedSnapshot, stage) => {
+        resumeState = { evidence: savedEvidence, snapshot: savedSnapshot, stage };
+      },
+    });
+    await expect(runRelease(first.options)).rejects.toThrow(/reservation network failure/);
+    expect(resumeState.stage).toBe('tag-reservation-started');
+    expect(first.calls.some(({ label }) => label === 'cleanup')).toBe(false);
+
+    const resumedEvents = [];
+    const second = fixture({
+      loadResume: () => resumeState,
+      validateResume: (state) => state,
+      preflight: () => {
+        throw new Error('must not preflight or rebuild');
+      },
+      command: () => {
+        throw new Error('must not rebuild');
+      },
+      reserveTag: async () => {
+        reservationAttempts += 1;
+        resumedEvents.push('reserve');
+      },
+      publish: () => {
+        publications += 1;
+        resumedEvents.push('goreleaser');
+      },
+      saveResume: (savedEvidence, savedSnapshot, stage) => {
+        resumeState = { evidence: savedEvidence, snapshot: savedSnapshot, stage };
+        resumedEvents.push(`save-${stage}`);
+      },
+      verifyManifest: () => {
+        resumedEvents.push('manifest');
+        return { ok: true };
+      },
+      verifyRemote: async () => resumedEvents.push('remote'),
+      publishCask: () => resumedEvents.push('cask'),
+      cleanup: () => resumedEvents.push('cleanup'),
+      removeResume: () => resumedEvents.push('remove-resume'),
+    });
+    await runRelease(second.options);
+    expect(reservationAttempts).toBe(2);
+    expect(publications).toBe(1);
+    expect(resumedEvents).toEqual([
+      'reserve',
+      'save-goreleaser-started',
+      'goreleaser',
+      'save-goreleaser-published',
+      'manifest',
+      'remote',
+      'save-remote-verified',
+      'cask',
+      'cleanup',
+      'remove-resume',
+    ]);
+  });
+
+  it('fails a resumed tag reservation when the remote tag belongs to another commit', async () => {
+    const resumeState = {
+      evidence,
+      snapshot: { path: '/snapshot' },
+      stage: 'tag-reservation-started',
+    };
+    let published = false;
+    const { options } = fixture({
+      loadResume: () => resumeState,
+      validateResume: (state) => state,
+      reserveTag: async () => {
+        throw new Error(`remote tag belongs to ${'b'.repeat(40)}`);
+      },
+      publish: () => {
+        published = true;
+      },
+    });
+    await expect(runRelease(options)).rejects.toThrow(/remote tag belongs/);
+    expect(published).toBe(false);
+    expect(resumeState.stage).toBe('tag-reservation-started');
+  });
+
+  it('checkpoints each remote boundary and preserves evidence when publication throws', async () => {
     let resumeState;
     const { calls, options } = fixture({
       publish: () => {
@@ -235,9 +324,16 @@ describe('release runner', () => {
     });
     await expect(runRelease(options)).rejects.toThrow(/outcome unknown/);
     expect(resumeState.stage).toBe('goreleaser-started');
+    expect(calls.map(({ label }) => label)).toContain('save-tag-reservation-started');
     expect(calls.map(({ label }) => label)).toContain('save-goreleaser-started');
-    expect(calls.findIndex(({ label }) => label === 'save-goreleaser-started')).toBeLessThan(
+    expect(calls.findIndex(({ label }) => label === 'save-tag-reservation-started')).toBeLessThan(
       calls.findIndex(({ label }) => label === 'reserve'),
+    );
+    expect(calls.findIndex(({ label }) => label === 'reserve')).toBeLessThan(
+      calls.findIndex(({ label }) => label === 'save-goreleaser-started'),
+    );
+    expect(calls.findIndex(({ label }) => label === 'save-goreleaser-started')).toBeLessThan(
+      calls.findIndex(({ label }) => label === 'goreleaser'),
     );
     expect(calls.some(({ label }) => label === 'cleanup')).toBe(false);
   });

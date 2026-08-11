@@ -117,10 +117,21 @@ export function auditReleaseRunner(runnerText) {
   if (start === -1) return ['release runner does not begin with captured preflight evidence'];
   const resumeStart = runnerText.indexOf('if (pending !== null)');
   const resumeBody = resumeStart === -1 ? '' : runnerText.slice(resumeStart, start);
-  const resumeRemote = resumeBody.indexOf('await verifyRemote({ evidence, snapshot })');
-  const resumeCask = resumeBody.indexOf('publishCask({ evidence, snapshot })');
-  if (resumeRemote === -1 || resumeCask === -1 || resumeRemote > resumeCask) {
+  const resumedRemoteChecks = [
+    ...resumeBody.matchAll(/await verifyRemote\(\{ evidence, snapshot \}\)/g),
+  ].map((match) => match.index);
+  const resumedCasks = [...resumeBody.matchAll(/publishCask\(\{ evidence, snapshot \}\)/g)].map(
+    (match) => match.index,
+  );
+  if (resumedCasks.length === 0) {
     return ['release runner must reverify remote publication before every resumed cask'];
+  }
+  let previousCask = -1;
+  for (const resumedCask of resumedCasks) {
+    if (!resumedRemoteChecks.some((remote) => remote > previousCask && remote < resumedCask)) {
+      return ['release runner must reverify remote publication before every resumed cask'];
+    }
+    previousCask = resumedCask;
   }
   const body = runnerText.slice(start);
   const ordered = [
@@ -135,8 +146,9 @@ export function auditReleaseRunner(runnerText) {
     'verifyPackages({ evidence, desktopDist: snapshot.path })',
     'verifyDesktopManifest({ evidence, desktopDist: snapshot.path })',
     'verifyProvenance(evidence)',
-    "saveResume(evidence, snapshot, 'goreleaser-started')",
+    "saveResume(evidence, snapshot, 'tag-reservation-started')",
     'await reserveTag({ evidence })',
+    "saveResume(evidence, snapshot, 'goreleaser-started')",
     'publish({ evidence, snapshot, notesFile })',
     "saveResume(evidence, snapshot, 'goreleaser-published')",
     'verifyManifest({ evidence, snapshot })',
@@ -155,6 +167,18 @@ export function auditReleaseRunner(runnerText) {
   const removeResume = body.indexOf('removeResume(operatorRoot)', cleanup + 1);
   if (removeResume === -1) {
     return ['release runner must remove resume state only after detached-workspace cleanup'];
+  }
+  return [];
+}
+
+/** Prohibit cleanup from compiling or running source from the operator checkout. */
+export function auditReleaseWorkspace(workspaceText) {
+  if (
+    /execFileSync\(\s*['"]go['"]\s*,\s*\[[\s\S]*?['"]run['"][\s\S]*?release-cleanup/.test(
+      workspaceText,
+    )
+  ) {
+    return ['release workspace cleanup must never execute ambient source with go run'];
   }
   return [];
 }
@@ -1001,6 +1025,11 @@ export function runReleaseAudit() {
   failures.push(...auditReleaseMakefile(readFileSync(join(rootDir, 'Makefile'), 'utf8')));
   failures.push(
     ...auditReleaseRunner(readFileSync(join(desktopDir, 'scripts', 'release-run.mjs'), 'utf8')),
+  );
+  failures.push(
+    ...auditReleaseWorkspace(
+      readFileSync(join(desktopDir, 'scripts', 'release-workspace.mjs'), 'utf8'),
+    ),
   );
 
   const goMod = readFileSync(join(rootDir, 'go.mod'), 'utf8');

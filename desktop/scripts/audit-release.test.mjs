@@ -7,6 +7,7 @@ import {
   auditGoReleaserReleaseTarget,
   auditReleaseMakefile,
   auditReleaseRunner,
+  auditReleaseWorkspace,
   auditNpmLockfile,
   collectNpmRuntimeInventory,
   hasElectronBuilderProtocolScheme,
@@ -160,12 +161,12 @@ release:
     expect(
       auditReleaseRunner(
         runner.replace(
-          'await reserveTag({ evidence });\n    revalidateWorkspace(evidence.workspace_token);\n    publish({ evidence, snapshot, notesFile });',
-          'publish({ evidence, snapshot, notesFile });\n    revalidateWorkspace(evidence.workspace_token);\n    await reserveTag({ evidence });',
+          "await reserveTag({ evidence });\n    revalidateWorkspace(evidence.workspace_token);\n    saveResume(evidence, snapshot, 'goreleaser-started');\n    publish({ evidence, snapshot, notesFile });",
+          "publish({ evidence, snapshot, notesFile });\n    revalidateWorkspace(evidence.workspace_token);\n    saveResume(evidence, snapshot, 'goreleaser-started');\n    await reserveTag({ evidence });",
         ),
       ),
     ).toContain(
-      'release runner omits or reorders audited step: publish({ evidence, snapshot, notesFile })',
+      "release runner omits or reorders audited step: saveResume(evidence, snapshot, 'goreleaser-started')",
     );
     expect(
       auditReleaseRunner(
@@ -193,6 +194,19 @@ release:
         ),
       ),
     ).toContain('release runner must reverify remote publication before every resumed cask');
+  });
+
+  it('forbids cleanup from executing ambient operator source', () => {
+    expect(
+      auditReleaseWorkspace(
+        "execFileSync('go', ['run', './desktop/scripts/release-cleanup', workspace.path])",
+      ),
+    ).toContain('release workspace cleanup must never execute ambient source with go run');
+    expect(
+      auditReleaseWorkspace(
+        'execFileSync(workspace.cleanupHelper.path, [workspace.path]); preserved for manual cleanup',
+      ),
+    ).toEqual([]);
   });
 
   it('collects production npm packages plus explicitly shipped renderer dev assets', () => {

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
 
 import { verifyLocalReleaseModel } from './release-verify.mjs';
 
@@ -16,5 +17,19 @@ describe('local release verification', () => {
 
   it('accepts the actual local-operator release model without protected-CI warnings', () => {
     expect(verifyLocalReleaseModel()).toEqual([]);
+  });
+
+  it('requires a durable checkpoint before remote tag reservation', () => {
+    const runner = readFileSync(new URL('./release-run.mjs', import.meta.url), 'utf8');
+    expect(
+      verifyLocalReleaseModel({
+        releaseRunner: runner.replace(
+          "saveResume(evidence, snapshot, 'tag-reservation-started')",
+          '// reservation checkpoint omitted',
+        ),
+      }),
+    ).toContain(
+      "release runner is missing audited step: saveResume(evidence, snapshot, 'tag-reservation-started')",
+    );
   });
 });

@@ -31,6 +31,7 @@ export function verifyLocalReleaseModel({
     'createPublicationSnapshot',
     'createDesktopReleaseManifest',
     'verifyProvenance(evidence)',
+    "saveResume(evidence, snapshot, 'tag-reservation-started')",
     "saveResume(evidence, snapshot, 'goreleaser-started')",
     'await reserveTag({ evidence })',
     'publish({ evidence, snapshot, notesFile })',

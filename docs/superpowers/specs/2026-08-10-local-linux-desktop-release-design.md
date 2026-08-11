@@ -52,11 +52,15 @@ affect inputs.
 4. Build Linux arm64 AppImage and DEB packages in a second, sequential Linux
    container invocation.
 5. Verify the complete desktop artifact inventory and embedded identities.
-6. Copy the five receipt-bound artifacts into a read-only publication snapshot,
-   rewrite receipt paths to that canonical snapshot, and rehash the snapshot.
-7. Atomically reserve the remote lightweight tag at the captured commit. An
+6. Create and verify a signed `desktop-release.json` envelope, then copy it,
+   its signature, the five receipt-bound artifacts, and rewritten receipts into
+   a read-only publication snapshot. Fsync each file and the snapshot directory
+   before recording any durable resume checkpoint.
+7. Durably record `tag-reservation-started`, then atomically reserve the remote
+   lightweight tag at the captured commit. An
    existing tag is accepted only when it dereferences to that same commit.
-8. Run GoReleaser from the detached workspace, which builds CLI archives, creates one checksum manifest over
+8. Durably record `goreleaser-started` immediately before running GoReleaser
+   from the detached workspace. GoReleaser builds CLI archives, creates one checksum manifest over
    the CLI archives and all desktop packages, signs that manifest, and uploads
    the complete release.
 9. Require GitHub SHA-256 asset digests to match the five receipts and the local
@@ -83,9 +87,13 @@ container runs `npm ci` against `package-lock.json`, avoiding host/container
 binary contamination. Electron and electron-builder caches use named volumes.
 
 The orchestrator passes `AGENTICO_PACKAGE_ARCH=x64` and `arm64` respectively to
-the existing `package-build.mjs`. That script already binds the chosen Electron
+the existing `package-build.mjs`. That script binds the chosen Electron
 architecture to the corresponding `GOARCH` with `CGO_ENABLED=0`, and stamps the
-exact tag version into Electron metadata and `build-identity.json`.
+exact tag version into Electron metadata and `build-identity.json`. Both package
+assemblies use the pinned amd64 builder image. The arm64 output is then verified
+natively in the separately pinned `node:22.22.2-bookworm` arm64 image, using a
+distinct `node_modules` volume and `npm ci --ignore-scripts` against the captured
+lockfile so verification never trusts the builder's dependency tree.
 
 The script must reject an unavailable Docker daemon, an image digest mismatch,
 a dirty checkout, a non-release tag, unsupported host OS, or a failed container
@@ -120,8 +128,10 @@ the AppImage.
 ## Signed Manifest and Publication
 
 GoReleaser's `checksum.extra_files` and `release.extra_files` list all five
-desktop artifacts. The existing Ed25519 signer continues signing GoReleaser's
-single `checksums.txt`; no additional signing key or signature format is added.
+desktop artifacts plus `desktop-release.json` and its detached signature. The
+desktop envelope is signed and verified before snapshot creation. The existing
+Ed25519 signer also continues signing GoReleaser's single `checksums.txt`; both
+signatures use the updater's embedded trust root.
 
 A post-GoReleaser local manifest check confirms that every required desktop
 artifact has exactly one checksum line and that `checksums.txt.sig` verifies
@@ -144,13 +154,16 @@ step or command.
 
 ## Failure and Recovery
 
-- A macOS or Linux build/verification failure aborts before GoReleaser and
-  creates no GitHub release. If failure occurs after remote-tag reservation,
-  retain a matching reservation while fixing the cause; a reservation pointing
-  at any other commit is a remote-state defect. The detached release worktree is
-  removed on success or failure, while captured evidence remains under Git
-  metadata.
-- A GoReleaser failure uses the existing partial-release cleanup procedure.
+- A macOS or Linux build/verification failure before
+  `tag-reservation-started` aborts without remote mutation and removes the
+  detached workspace.
+- At `tag-reservation-started`, rerunning the unchanged `make release`
+  revalidates the durable snapshot and reconciles tag reservation idempotently:
+  absent reserves the captured commit, the same commit proceeds, and a mismatch
+  fails closed without rebuilding.
+- At `goreleaser-started`, publication may have begun. Preserve the workspace,
+  snapshot, evidence, and resume record; an incomplete or unverifiable release
+  requires explicit inspection and recovery rather than an automatic rerun.
 - A missing checksum entry or invalid signature after GoReleaser is treated as
   a partial release: remove the GitHub release and remote tag, fix the release
   configuration, and rerun while retaining the local tag.
@@ -167,8 +180,8 @@ step or command.
 - Script tests exercise preflight failures without starting containers and use
   a plan/dry-run interface to inspect exact Docker invocations.
 - Existing CI continues native x64 and arm64 package verification and packaged
-  journeys, providing native-platform coverage for the same package script used
-  by the local containers.
+  journeys, while the local arm64 release verifier uses its own native arm64
+  image and clean dependency installation.
 - Before handoff, run the repository fast suite, desktop static/unit/security
   gates, release audit/verification, and a local Docker packaging rehearsal for
   both Linux architectures without publishing.

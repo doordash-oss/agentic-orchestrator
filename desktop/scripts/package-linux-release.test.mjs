@@ -27,12 +27,14 @@ import { LINUX_ARM64_VERIFIER_IMAGE } from './lib/release-artifacts.mjs';
 import { LINUX_BUILDER_IMAGE } from './lib/release-artifacts.mjs';
 import { evidencePathFor } from './release-preflight.mjs';
 import {
+  compileReleaseCleanupHelper,
   createDetachedReleaseWorkspace,
   removeDetachedReleaseWorkspace,
 } from './release-workspace.mjs';
 
 const GiB = 1024 ** 3;
 const scriptPath = fileURLToPath(new URL('./package-linux-release.mjs', import.meta.url));
+const projectRoot = fileURLToPath(new URL('../..', import.meta.url));
 const tempRoots = [];
 
 afterEach(() => {
@@ -769,7 +771,13 @@ describe('detached release evidence boundary', () => {
         kind === 'linked worktree'
           ? '22222222-2222-4222-8222-222222222222'
           : '11111111-1111-4111-8111-111111111111';
-      const workspace = createDetachedReleaseWorkspace({ operatorRoot, commit, runId });
+      const detachedWorkspace = createDetachedReleaseWorkspace({ operatorRoot, commit, runId });
+      const workspace = {
+        ...detachedWorkspace,
+        cleanupHelper: compileReleaseCleanupHelper({
+          workspace: { ...detachedWorkspace, path: projectRoot },
+        }),
+      };
       const evidencePath = evidencePathFor(operatorRoot);
       const evidence = {
         schema_version: 4,

@@ -12,7 +12,11 @@ Native npm packaging, Docker assembly, and GoReleaser use that workspace;
 release Go builds disable ambient workspaces/overlays and require readonly
 module resolution. Verified artifacts are copied into a canonical read-only
 publication snapshot and rehashed before/after GoReleaser. The runner atomically
-reserves the remote tag immediately before publication, and the final GitHub
+creates and verifies the signed desktop release envelope, fsyncs every snapshot
+file and the snapshot directory, records `tag-reservation-started`, and reserves
+the remote tag immediately before publication. It records
+`goreleaser-started` only after reservation and immediately before GoReleaser.
+The final GitHub
 gate compares every required asset digest—including `checksums.txt` and its
 signature—to local receipt-bound bytes before cask publication.
 
@@ -125,14 +129,19 @@ Expected: FAIL because `release-artifacts.mjs` does not exist.
 Implement strict tag parsing, a frozen literal artifact list, exact target selectors, and Docker arguments. The plan's container command is:
 
 ```js
-const command = [
-  "bash",
-  "-lc",
-  "npm ci && npm run package:verify --workspace desktop",
-];
+const x64Command = "npm ci && npm run package:verify --workspace desktop";
+const arm64BuildCommand = "npm ci && npm run package:build --workspace desktop";
+const arm64VerifyCommand =
+  "npm ci --ignore-scripts && AGENTICO_VERIFY_ARTIFACTS_ONLY=1 node desktop/scripts/verify-package.mjs";
 ```
 
-The two invocations use the same x64 official builder image, with target architecture supplied through `AGENTICO_PACKAGE_ARCH`; Docker Desktop's binfmt support executes the target AppImage during verification. Named volumes shadow `/repo/node_modules` and back Electron/electron-builder caches. Reject tags outside `^v\d+\.\d+\.\d+$`, unknown package architectures, and zero/multiple artifact matches.
+Both package assemblies use the same pinned amd64 builder image, with target
+architecture supplied through `AGENTICO_PACKAGE_ARCH`. The arm64 package is
+then verified in a distinct pinned native arm64 Node image with its own
+`node_modules` volume and clean lockfile install. Named volumes shadow
+`/repo/node_modules` and back Electron/electron-builder caches. Reject tags
+outside `^v\d+\.\d+\.\d+$`, unknown package architectures, and zero/multiple
+artifact matches.
 
 - [ ] **Step 4: Run the focused test and verify GREEN**
 
@@ -462,15 +471,12 @@ Expected: FAIL because GoReleaser artifact auditing does not exist.
 
 - [ ] **Step 3: Expand GoReleaser and `make release`**
 
-Set both `checksum.extra_files` and `release.extra_files` to the five exact artifact paths. Change `make release` to:
+Set both `checksum.extra_files` and `release.extra_files` to the five exact
+artifact paths plus the signed desktop envelope. Keep `make release` as the one
+audited command:
 
 ```make
-npm run package:verify --workspace desktop
-npm run package:linux:release --workspace desktop
-npm run release:artifacts:verify --workspace desktop -- packages
-goreleaser release --clean $(GORELEASER_FLAGS)
-npm run release:artifacts:verify --workspace desktop -- manifest
-node desktop/scripts/publish-desktop-cask.mjs
+node desktop/scripts/release-run.mjs
 ```
 
 The macOS verification step writes/copies `package-verification-darwin-universal.json`; add that receipt behavior in `verify-package.mjs` if Task 2 does not already cover it.
@@ -513,7 +519,7 @@ Document:
 
 - Docker/buildx and at least 12 GiB free as local prerequisites;
 - the native DMG plus sequential x64/arm64 Linux container builds;
-- five signed desktop artifacts;
+- five desktop packages plus the signed desktop release envelope;
 - unchanged `git tag ... && make release` command;
 - failure boundaries before GoReleaser and after partial publication;
 - AppImage self-update versus DEB package-manager guidance.
@@ -526,7 +532,7 @@ Add Docker daemon/image/disk checks to Preflight. Keep the confirmation and comm
 
 ```bash
 git tag vX.Y.Z
-make release GORELEASER_FLAGS='--release-notes <notes-file>'
+AGENTICO_RELEASE_NOTES_FILE=/absolute/path/to/notes.md make release
 ```
 
 Update Verify to require both AppImages, both DEBs, and one checksum line per desktop artifact. Update timing guidance to note the two sequential Linux builds. Do not add any new maintainer command.

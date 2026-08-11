@@ -89,11 +89,15 @@ cannot bypass the release checks.
    root and live artifact bytes, then copies those two files, the exact five
    packages, and rewritten canonical receipts
    into a read-only publication snapshot and rehashes it before and after
-   GoReleaser. Before any reservation or publication call, it durably records
-   `goreleaser-started`; only then does it atomically create the remote
-   lightweight tag at the captured commit. If the tag already exists, it may
-   continue only when dereferencing lightweight or annotated tag objects yields
-   that exact commit. GoReleaser then builds CLI archives and creates the
+   GoReleaser. Every copied artifact, rewritten receipt, signed-envelope file,
+   and the snapshot manifest is fsynced before the snapshot directory itself is
+   fsynced. Only after that durability boundary does the runner record and
+   fsync `tag-reservation-started`, then atomically create the remote lightweight
+   tag at the captured commit. If the tag already exists, it may continue only
+   when dereferencing lightweight or annotated tag objects yields that exact
+   commit. Immediately after successful reservation and immediately before
+   GoReleaser, the runner records and fsyncs `goreleaser-started`. GoReleaser
+   then builds CLI archives and creates the
    GitHub release with `target_commitish: "{{ .Commit }}"`, so the tag is
    pinned to the local HEAD captured when `make release` began. It uploads
    every desktop package and both signed envelope files, folds every published
@@ -132,19 +136,25 @@ updates requiring an explicit restart action. DEB installations are
 package-manager-managed: the app presents verified package-manager guidance
 and the trusted release page, rather than replacing a DEB installation itself.
 
-Before the publication checkpoint, failures remove the detached workspace and
-temporary evidence. At `goreleaser-started`, the runner durably retains that
-workspace, byte-bound evidence, immutable publication snapshot, and resume
+Before the reservation checkpoint, failures remove the detached workspace and
+temporary evidence. At `tag-reservation-started`, the runner durably retains
+that workspace, byte-bound evidence, immutable publication snapshot, and resume
 record under Git metadata until the remote-byte and desktop-cask gates succeed.
 Recovery depends on where the failure occurred:
 
-- **Before the durable `goreleaser-started` checkpoint.** No remote mutation was
+- **Before the durable `tag-reservation-started` checkpoint.** No remote mutation was
   attempted. Fix the local Docker, credential, package, receipt, inventory, or
   signing condition and rerun the same `make release` while retaining the local
   tag.
+- **At `tag-reservation-started`.** Rerun the same `make release` from the
+  unchanged local tag. The runner revalidates the evidence-bound snapshot and
+  reconciles the remote tag idempotently: an absent tag is reserved at the exact
+  captured commit, an existing tag at that commit proceeds, and any other target
+  fails closed. A transient reservation failure therefore does not rebuild and
+  does not invoke GoReleaser until reservation succeeds.
 - **At `goreleaser-started` without a complete digest-correct release.** The
-  process may have crossed a remote mutation boundary even when GitHub now
-  appears absent or only the reserved tag exists. Preserve the snapshot and
+  process may have invoked GoReleaser even when GitHub now appears absent or
+  only the reserved tag exists. Preserve the snapshot and
   evidence, and do not blindly rerun GoReleaser. Inspect GitHub and both tap
   casks, explicitly clean up a confirmed partial publication, then choose a new
   patch tag or perform documented manual recovery. The runner fails closed
@@ -184,6 +194,11 @@ isolated build-home directory are left as safe stale Git metadata instead of
 running a repository-global prune. A maintainer may inspect them with
 `git worktree list --porcelain` and remove only confirmed stale entries and the
 matching `.git/agentico-release-cleanup-helpers/<run-id>` directory afterward.
+If detached-workspace provenance validation itself fails, the invalid workspace
+and its Git administration are deliberately preserved at the path printed in
+the error for forensic inspection and manual cleanup. Cleanup never compiles or
+runs `release-cleanup` from the ambient operator checkout; automated cleanup is
+allowed only through the previously compiled, evidence-bound helper.
 
 The release isolation model assumes the committed lockfiles, pinned container
 images, package scripts, and release operator account are trusted. It prevents

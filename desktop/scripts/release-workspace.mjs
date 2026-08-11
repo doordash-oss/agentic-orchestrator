@@ -15,15 +15,12 @@ import {
   constants,
   writeFileSync,
 } from 'node:fs';
-import { basename, dirname, join, relative, resolve, sep } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { basename, join, relative, resolve, sep } from 'node:path';
 
 import { readArtifactEvidence } from './lib/release-artifacts.mjs';
 
 const RUN_ID = /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/;
 const FULL_SHA = /^[0-9a-f]{40}$/i;
-const desktopDir = dirname(dirname(fileURLToPath(import.meta.url)));
-const projectRoot = dirname(desktopDir);
 
 function git(cwd, ...args) {
   return execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
@@ -166,35 +163,21 @@ export function revalidateWorkspaceToken(token) {
 }
 
 function inodeBoundCleanup(workspace) {
-  if (workspace.cleanupHelper !== undefined) {
-    const actual = readArtifactEvidence(workspace.cleanupHelper.path);
-    if (
-      actual.sha256 !== workspace.cleanupHelper.sha256 ||
-      actual.size !== workspace.cleanupHelper.size
-    ) {
-      throw new Error('release cleanup helper changed after preflight evidence');
-    }
-    return execFileSync(
-      workspace.cleanupHelper.path,
-      [workspace.path, String(workspace.token.dev), String(workspace.token.ino)],
-      {
-        env: selectedEnvironment(process.env, ['PATH', 'TMPDIR', 'TMP', 'TEMP']),
-        stdio: ['ignore', 'pipe', 'pipe'],
-      },
-    );
+  if (workspace.cleanupHelper === undefined) {
+    throw new Error('release cleanup requires the precompiled evidence-bound helper');
+  }
+  const actual = readArtifactEvidence(workspace.cleanupHelper.path);
+  if (
+    actual.sha256 !== workspace.cleanupHelper.sha256 ||
+    actual.size !== workspace.cleanupHelper.size
+  ) {
+    throw new Error('release cleanup helper changed after preflight evidence');
   }
   return execFileSync(
-    'go',
-    [
-      'run',
-      './desktop/scripts/release-cleanup',
-      workspace.path,
-      String(workspace.token.dev),
-      String(workspace.token.ino),
-    ],
+    workspace.cleanupHelper.path,
+    [workspace.path, String(workspace.token.dev), String(workspace.token.ino)],
     {
-      cwd: projectRoot,
-      env: cleanGoEnvironment(process.env),
+      env: selectedEnvironment(process.env, ['PATH', 'TMPDIR', 'TMP', 'TEMP']),
       stdio: ['ignore', 'pipe', 'pipe'],
     },
   );
@@ -202,6 +185,15 @@ function inodeBoundCleanup(workspace) {
 
 function syncDirectory(path) {
   const fd = openSync(path, constants.O_RDONLY);
+  try {
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+}
+
+function syncRegularFile(path) {
+  const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
   try {
     fsyncSync(fd);
   } finally {
@@ -273,15 +265,21 @@ export function createDetachedReleaseWorkspace({
   if (existsSync(path)) throw new Error(`release workspace already exists: ${path}`);
   gitCommand(operatorRoot, 'worktree', 'add', '--detach', path, commit);
   const token = captureWorkspaceToken(path);
-  const actual = gitCommand(path, 'rev-parse', 'HEAD');
-  const status = gitCommand(path, 'status', '--porcelain', '--untracked-files=all');
+  const preservedWorkspace = `preserved at ${token.path} with Git administration for forensic inspection and manual cleanup`;
+  let actual;
+  let status;
+  try {
+    actual = gitCommand(path, 'rev-parse', 'HEAD');
+    status = gitCommand(path, 'status', '--porcelain', '--untracked-files=all');
+  } catch (error) {
+    throw new Error(`could not validate detached release workspace; ${preservedWorkspace}`, {
+      cause: error,
+    });
+  }
   if (actual !== commit || status !== '') {
-    try {
-      inodeBoundCleanup({ path: token.path, token });
-    } catch {
-      // Preserve the primary provenance failure; recovery can prune the validated Git path.
-    }
-    throw new Error('detached release workspace does not exactly match captured committed source');
+    throw new Error(
+      `detached release workspace does not exactly match captured committed source; ${preservedWorkspace}`,
+    );
   }
   return Object.freeze({
     operatorRoot: realpathSync(operatorRoot),
@@ -318,9 +316,11 @@ export function removeDetachedReleaseWorkspace(
   cleanupCommand(workspace);
 }
 
-function copyRegular(source, destination) {
+function copyRegular(source, destination, syncFile) {
   const evidence = readArtifactEvidence(source);
   copyFileSync(evidence.path, destination);
+  chmodSync(destination, 0o400);
+  syncFile(destination);
   const copied = readArtifactEvidence(destination);
   if (copied.sha256 !== evidence.sha256 || copied.size !== evidence.size) {
     throw new Error(`publication copy digest mismatch for ${basename(source)}`);
@@ -336,6 +336,8 @@ export function createPublicationSnapshot({
   extraNames = [],
   receiptNames,
   snapshotDir,
+  syncFile = syncRegularFile,
+  syncDirectory: syncSnapshotDirectory = syncDirectory,
 } = {}) {
   const root = realpathSync(workspaceRoot);
   const requestedRoot = resolve(workspaceRoot);
@@ -355,13 +357,13 @@ export function createPublicationSnapshot({
   try {
     for (const name of artifactNames) {
       if (basename(name) !== name) throw new Error(`unsafe publication artifact name: ${name}`);
-      artifacts.push(copyRegular(join(sourceDir, name), join(path, name)));
+      artifacts.push(copyRegular(join(sourceDir, name), join(path, name), syncFile));
     }
     const receiptBoundArtifacts = [...artifacts];
     for (const name of extraNames) {
       if (basename(name) !== name) throw new Error(`unsafe publication extra name: ${name}`);
       if (artifactNames.includes(name)) throw new Error(`duplicate publication file name: ${name}`);
-      artifacts.push(copyRegular(join(sourceDir, name), join(path, name)));
+      artifacts.push(copyRegular(join(sourceDir, name), join(path, name), syncFile));
     }
     const byName = new Map(
       receiptBoundArtifacts.map((artifact) => [basename(artifact.path), artifact]),
@@ -382,6 +384,7 @@ export function createPublicationSnapshot({
         return { ...entry, path: artifact.path, sha256: artifact.sha256, size: artifact.size };
       });
       writeFileSync(join(path, name), `${JSON.stringify(receipt, null, 2)}\n`, { mode: 0o400 });
+      syncFile(join(path, name));
     }
     for (const [name, count] of claims) {
       if (count !== 1) {
@@ -397,15 +400,13 @@ export function createPublicationSnapshot({
       receipts: [...receiptNames],
       receipt_evidence: receiptNames.map((name) => readArtifactEvidence(join(path, name))),
     };
-    writeFileSync(
-      join(path, 'publication-snapshot.json'),
-      `${JSON.stringify(snapshot, null, 2)}\n`,
-      {
-        mode: 0o400,
-      },
-    );
-    for (const artifact of artifacts) chmodSync(artifact.path, 0o400);
+    const snapshotEvidencePath = join(path, 'publication-snapshot.json');
+    writeFileSync(snapshotEvidencePath, `${JSON.stringify(snapshot, null, 2)}\n`, {
+      mode: 0o400,
+    });
+    syncFile(snapshotEvidencePath);
     chmodSync(path, 0o500);
+    syncSnapshotDirectory(path);
     return Object.freeze(snapshot);
   } catch (error) {
     // Preserve the failed snapshot as forensic evidence. Final inode-bound root cleanup owns it.

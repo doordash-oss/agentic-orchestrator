@@ -51,8 +51,9 @@ export const RELEASE_SEQUENCE = Object.freeze([
   'publication-snapshot',
   'snapshot-gate',
   'provenance-recheck',
-  'goreleaser-start-record',
+  'tag-reservation-start-record',
   'remote-tag-reservation',
+  'goreleaser-start-record',
   'goreleaser',
   'goreleaser-resume-record',
   'manifest-gate',
@@ -106,7 +107,14 @@ export function loadReleaseResumeState(operatorRoot, { gitCommand = git } = {}) 
 }
 
 export function saveReleaseResumeState(evidence, snapshot, stage, { gitCommand = git } = {}) {
-  if (!['goreleaser-started', 'goreleaser-published', 'remote-verified'].includes(stage)) {
+  if (
+    ![
+      'tag-reservation-started',
+      'goreleaser-started',
+      'goreleaser-published',
+      'remote-verified',
+    ].includes(stage)
+  ) {
     throw new Error(`invalid release resume stage: ${stage}`);
   }
   const path = resumePath(evidence.operator_root, gitCommand);
@@ -143,7 +151,12 @@ export function validateResumeEvidenceBoundary(evidence, { expectedPath, readEvi
 export function validateReleaseResumeState(state) {
   if (
     state?.schema_version !== 1 ||
-    !['goreleaser-started', 'goreleaser-published', 'remote-verified'].includes(state.stage)
+    ![
+      'tag-reservation-started',
+      'goreleaser-started',
+      'goreleaser-published',
+      'remote-verified',
+    ].includes(state.stage)
   ) {
     throw new Error('release resume state is invalid; inspect it before manual cleanup');
   }
@@ -268,8 +281,23 @@ export async function runRelease({
       snapshot = resumed.snapshot;
       preserveWorkspace = true;
       revalidateWorkspace(evidence.workspace_token);
-      assertGate(verifyManifest({ evidence, snapshot }), 'resumed manifest gate');
       verifyDesktopManifest({ evidence, desktopDist: snapshot.path });
+      if (resumed.stage === 'tag-reservation-started') {
+        await reserveTag({ evidence });
+        revalidateWorkspace(evidence.workspace_token);
+        saveResume(evidence, snapshot, 'goreleaser-started');
+        publish({ evidence, snapshot, notesFile });
+        saveResume(evidence, snapshot, 'goreleaser-published');
+        assertGate(verifyManifest({ evidence, snapshot }), 'resumed manifest gate');
+        await verifyRemote({ evidence, snapshot });
+        saveResume(evidence, snapshot, 'remote-verified');
+        revalidateWorkspace(evidence.workspace_token);
+        publishCask({ evidence, snapshot });
+        preserveWorkspace = false;
+        clearResumeAfterCleanup = true;
+        return { tag: evidence.tag, commit: evidence.commit, resumed: true };
+      }
+      assertGate(verifyManifest({ evidence, snapshot }), 'resumed manifest gate');
       try {
         await verifyRemote({ evidence, snapshot });
       } catch (error) {
@@ -345,10 +373,11 @@ export async function runRelease({
     verifyDesktopManifest({ evidence, desktopDist: snapshot.path });
     verifyProvenance(evidence);
     preserveWorkspace = true;
-    saveResume(evidence, snapshot, 'goreleaser-started');
+    saveResume(evidence, snapshot, 'tag-reservation-started');
     revalidateWorkspace(evidence.workspace_token);
     await reserveTag({ evidence });
     revalidateWorkspace(evidence.workspace_token);
+    saveResume(evidence, snapshot, 'goreleaser-started');
     publish({ evidence, snapshot, notesFile });
     saveResume(evidence, snapshot, 'goreleaser-published');
     assertGate(verifyManifest({ evidence, snapshot }), 'manifest gate');

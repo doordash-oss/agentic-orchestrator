@@ -29,6 +29,8 @@ import { COMMENT_TYPE_LABEL } from '../refactor/refactorPassModel';
 import { bucketElapsedSince } from '../phaseRail';
 import { ScopeDrawer } from './ScopeDrawer';
 import { ScopePanel, type ScopeLedgerEntry } from './ScopePanel';
+import { ReviewFeedbackDiff, needsExpansion } from './ReviewFeedbackDiff';
+import { ReviewFeedbackMarkdown } from './ReviewFeedbackMarkdown';
 import {
   EMPTY_FILTERS,
   chunkSelectionUpdates,
@@ -97,6 +99,10 @@ export function ReviewFeedbackWorkspace({
   const [launching, setLaunching] = useState(false);
   const [leaving, setLeaving] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
+  // Expanded feedback cards, keyed by stable comment reference for the
+  // current entry: survives scope/filter hiding and showing, resets with the
+  // rest of the ephemeral card state whenever a fresh server view arrives.
+  const [expandedRefs, setExpandedRefs] = useState<ReadonlySet<string>>(new Set());
   const feedRef = useRef<HTMLElement | null>(null);
   const openerRef = useRef<HTMLButtonElement | null>(null);
 
@@ -128,9 +134,22 @@ export function ReviewFeedbackWorkspace({
       setScope('all');
       setFilters(EMPTY_FILTERS);
       setDrawerOpen(false);
+      setExpandedRefs(new Set());
     },
     [],
   );
+
+  const toggleExpanded = useCallback((stableRef: string): void => {
+    setExpandedRefs((prev) => {
+      const next = new Set(prev);
+      if (next.has(stableRef)) {
+        next.delete(stableRef);
+      } else {
+        next.add(stableRef);
+      }
+      return next;
+    });
+  }, []);
 
   const load = useCallback(() => {
     epochRef.current += 1;
@@ -528,52 +547,82 @@ export function ReviewFeedbackWorkspace({
             {comments.map((comment) => {
               const checked = selectedOf(comment);
               const created = formatCreatedAgo(comment.createdAt);
+              const expanded = expandedRefs.has(comment.stableRef);
+              const collapsible = needsExpansion(comment);
+              const contentId = `review-feedback-content-${comment.stableRef.replace(/[^\w-]/g, '-')}`;
+              // The selection checkbox is a sibling of — never an ancestor of
+              // — rich content, so links, image actions, task items, and the
+              // expansion control can never toggle selection.
+              const selectLabel =
+                comment.body !== undefined && comment.body.trim() !== ''
+                  ? `Select feedback: ${comment.body.length > 160 ? `${comment.body.slice(0, 160)}…` : comment.body}`
+                  : `Select feedback: ${COMMENT_TYPE_LABEL[comment.type]}${comment.author !== undefined ? ` by ${comment.author}` : ''}`;
               return (
                 <article
                   key={comment.stableRef}
                   className="review-feedback-card"
                   data-selected={checked}
                 >
-                  <label className="review-feedback-card__label">
-                    <input
-                      type="checkbox"
-                      checked={checked}
-                      disabled={launching}
-                      onChange={() => toggleComment(comment, checked)}
-                    />
-                    <span className="review-feedback-card__body">
-                      <span className="review-feedback-modal__comment-meta">
-                        <b className="review-feedback-modal__comment-type">
-                          {COMMENT_TYPE_LABEL[comment.type]}
-                        </b>
-                        {comment.author !== undefined ? (
-                          <span className="review-feedback-modal__comment-author">
-                            {comment.author}
-                          </span>
-                        ) : null}
-                        {created !== null ? (
-                          <span className="review-feedback-card__created">{created}</span>
-                        ) : null}
-                        {comment.path !== undefined ? (
-                          <code className="review-feedback-modal__comment-path">
-                            {comment.path}
-                            {comment.line !== undefined ? `:${comment.line}` : ''}
-                          </code>
-                        ) : null}
-                      </span>
-                      {comment.body !== undefined ? (
-                        <p className="review-feedback-modal__comment-text">{comment.body}</p>
+                  <input
+                    type="checkbox"
+                    className="review-feedback-card__select"
+                    aria-label={selectLabel}
+                    checked={checked}
+                    disabled={launching}
+                    onChange={() => toggleComment(comment, checked)}
+                  />
+                  <div className="review-feedback-card__body">
+                    <span className="review-feedback-modal__comment-meta">
+                      <b className="review-feedback-modal__comment-type">
+                        {COMMENT_TYPE_LABEL[comment.type]}
+                      </b>
+                      {comment.author !== undefined ? (
+                        <span className="review-feedback-modal__comment-author">
+                          {comment.author}
+                        </span>
                       ) : null}
-                      {comment.diffHunk !== undefined ? (
-                        <pre className="review-feedback-card__diff">{comment.diffHunk}</pre>
+                      {created !== null ? (
+                        <span className="review-feedback-card__created">{created}</span>
                       ) : null}
-                      {comment.inReplyToId !== undefined ? (
-                        <p className="review-feedback-modal__comment-reply">
-                          Reply to comment {comment.inReplyToId}
-                        </p>
+                      {comment.path !== undefined ? (
+                        <code className="review-feedback-modal__comment-path">
+                          {comment.path}
+                          {comment.line !== undefined ? `:${comment.line}` : ''}
+                        </code>
                       ) : null}
                     </span>
-                  </label>
+                    <div
+                      id={contentId}
+                      className="review-feedback-card__content"
+                      data-collapsed={collapsible && !expanded}
+                    >
+                      {comment.body !== undefined ? (
+                        <ReviewFeedbackMarkdown text={comment.body} />
+                      ) : null}
+                      {comment.diffHunk !== undefined ? (
+                        <ReviewFeedbackDiff text={comment.diffHunk} />
+                      ) : null}
+                    </div>
+                    {collapsible ? (
+                      <button
+                        type="button"
+                        className="review-feedback-card__expand"
+                        aria-expanded={expanded}
+                        aria-controls={contentId}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          toggleExpanded(comment.stableRef);
+                        }}
+                      >
+                        {expanded ? 'Show less' : 'Show full feedback'}
+                      </button>
+                    ) : null}
+                    {comment.inReplyToId !== undefined ? (
+                      <p className="review-feedback-modal__comment-reply">
+                        Reply to comment {comment.inReplyToId}
+                      </p>
+                    ) : null}
+                  </div>
                 </article>
               );
             })}

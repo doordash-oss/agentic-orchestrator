@@ -46,7 +46,23 @@ function draftView(overrides: Partial<ReviewFeedbackDraftView> = {}): ReviewFeed
             path: 'src/query.ts',
             line: 12,
             author: 'Octocat',
-            body: 'Rewrite this to avoid the bearer token.',
+            body: [
+              '# Security fix',
+              '',
+              'Rewrite this to avoid the bearer token.',
+              '',
+              '- [ ] follow up on caching',
+              '- [x] confirm token rotation',
+              '',
+              '```go',
+              'return newQueryCodec()',
+              '```',
+              '',
+              'See [hardening guide](https://docs.example.com/harden), never',
+              '[this mirror](https://user:pass@mirror.example.com/x). Inline',
+              'HTML like <script> stays inert.',
+            ].join('\n'),
+            diffHunk: '@@ -1 +1,2 @@\n-oldCodec()\n+newQueryCodec()',
             inReplyToId: 39,
             createdAt: '2026-07-20T10:00:00Z',
           }),
@@ -56,7 +72,19 @@ function draftView(overrides: Partial<ReviewFeedbackDraftView> = {}): ReviewFeed
             id: 42,
             type: 'issue',
             author: 'hubot',
-            body: 'Consider extracting the parser.',
+            body: [
+              'Consider extracting the parser.',
+              '',
+              '| path | note |',
+              '| --- | --- |',
+              '| a.go | hot |',
+              '',
+              '- keep the visible instruction',
+              '',
+              '![Screen Recording](https://attachments.example.com/icon.svg)',
+              '![failing screenshot](https://attachments.example.com/shot.png)',
+            ].join('\n'),
+            diffHunk: '@@ -5,2 +5,3 @@\n keep\n-drop\n+add',
           }),
         ],
       },
@@ -130,6 +158,171 @@ function summary(text: string | RegExp): HTMLElement {
     selector: '.review-feedback-feedbar__summary',
   });
 }
+
+describe('rich review feedback cards', () => {
+  /** Expand one card's collapsible content if its control exists. */
+  async function expandAll(user: ReturnType<typeof userEvent.setup>) {
+    for (const control of screen.queryAllByRole('button', { name: 'Show full feedback' })) {
+      await user.click(control);
+    }
+  }
+
+  it('renders approved GFM as a bounded rich body without page-level headings', async () => {
+    const { mock, user } = await renderWorkspace();
+    await expandAll(user);
+    const cards = screen.getAllByRole('article');
+    expect(
+      within(cards[0]!).getByRole('heading', { level: 4, name: 'Security fix' }),
+    ).toBeVisible();
+    expect(
+      within(cards[0]!).getByRole('checkbox', { name: 'Task completed (read-only)' }),
+    ).toBeDisabled();
+    expect(within(cards[1]!).getByRole('table')).toBeInTheDocument();
+    expect(within(cards[1]!).getByText('keep the visible instruction')).toBeInTheDocument();
+    expect(screen.getByText(/<script>/)).toBeInTheDocument();
+    expect(document.querySelector('script')).toBeNull();
+    expect(screen.queryByRole('heading', { level: 1 })).not.toBeInTheDocument();
+    expect(screen.queryAllByRole('heading', { level: 3 })).toHaveLength(2);
+    const link = within(cards[0]!).getByRole('button', {
+      name: 'Open link externally: hardening guide (docs.example.com)',
+    });
+    expect(link).toHaveTextContent('docs.example.com');
+    await user.click(link);
+    expect(mock.api.openExternal).toHaveBeenCalledWith({ url: 'https://docs.example.com/harden' });
+    expect(
+      within(cards[1]!).getByRole('checkbox', { name: /Consider extracting the parser/ }),
+    ).toBeChecked();
+    // The selection checkbox is standalone: rich content is never its descendant.
+    for (const card of cards) {
+      for (const checkbox of within(card).getAllByRole('checkbox', { name: /Select feedback/ })) {
+        expect(checkbox.closest('label')).toBeNull();
+        expect(checkbox.contains(link)).toBe(false);
+      }
+    }
+  });
+
+  it('blocks authored links that carry credentials', async () => {
+    const { user } = await renderWorkspace();
+    await expandAll(user);
+    expect(screen.getByText('Link blocked')).toBeInTheDocument();
+    expect(screen.getByText('this mirror')).toBeInTheDocument();
+    expect(screen.queryByText(/user:pass/)).not.toBeInTheDocument();
+  });
+
+  it('renders remote images as inert placeholders — blocked, or an external action that never navigates selection', async () => {
+    const { mock, user } = await renderWorkspace();
+    await expandAll(user);
+    const cards = screen.getAllByRole('article');
+    expect(document.querySelector('img')).toBeNull();
+    expect(within(cards[1]!).getByText('Image blocked')).toBeInTheDocument();
+    expect(within(cards[1]!).getByText('Screen Recording')).toBeInTheDocument();
+    expect(within(cards[1]!).getByText('attachments.example.com')).toBeInTheDocument();
+    const action = within(cards[1]!).getByRole('button', {
+      name: 'Open image externally: failing screenshot (attachments.example.com)',
+    });
+    await user.click(action);
+    expect(mock.api.openExternal).toHaveBeenCalledWith({
+      url: 'https://attachments.example.com/shot.png',
+    });
+    expect(
+      within(cards[1]!).getByRole('checkbox', { name: /Consider extracting the parser/ }),
+    ).toBeChecked();
+    expect(mock.api.updateReviewFeedbackSelection).not.toHaveBeenCalled();
+  });
+
+  it('renders raw diff hunks as labelled, semantically classified text lines', async () => {
+    const { user } = await renderWorkspace();
+    await expandAll(user);
+    const cards = screen.getAllByRole('article');
+    const regions = cards.flatMap((card) => within(card).queryAllByRole('group', { name: 'Diff' }));
+    expect(regions).toHaveLength(2);
+    for (const region of regions) {
+      expect(region.querySelector('[data-kind="hunk"]')?.textContent).toMatch(/@@ /);
+      expect(region.querySelector('[data-kind="add"]')).toHaveTextContent('Added line:');
+      expect(region.querySelector('[data-kind="remove"]')).toHaveTextContent('Removed line:');
+    }
+    // Context lines keep their own label and intact text.
+    expect(regions[1]!.querySelector('[data-kind="context"]')).toHaveTextContent('Context line:');
+    expect(regions[1]!.querySelector('[data-kind="context"]')).toHaveTextContent('keep');
+    expect(document.querySelector('pre code.hljs')).toHaveTextContent('newQueryCodec()');
+  });
+
+  it('collapses long feedback deterministically and expands it for the rest of the entry', async () => {
+    const { user } = await renderWorkspace();
+    const cards = screen.getAllByRole('article');
+    const control = within(cards[0]!).getByRole('button', { name: 'Show full feedback' });
+    const content = document.querySelector('#review-feedback-content-repo-a-review-41');
+    expect(control).toHaveAttribute('aria-expanded', 'false');
+    expect(control).toHaveAttribute('aria-controls', 'review-feedback-content-repo-a-review-41');
+    expect(content).toHaveAttribute('data-collapsed', 'true');
+    await user.click(control);
+    expect(within(cards[0]!).getByRole('button', { name: 'Show less' })).toHaveAttribute(
+      'aria-expanded',
+      'true',
+    );
+    expect(content).toHaveAttribute('data-collapsed', 'false');
+    // Hiding the card behind a scope change, then showing it again, keeps the
+    // expansion for this entry.
+    await user.click(screen.getByRole('radio', { name: /^repo-b/ }));
+    expect(
+      screen.queryByLabelText(/Rewrite this to avoid the bearer token/),
+    ).not.toBeInTheDocument();
+    await user.click(screen.getByRole('radio', { name: /All feedback/ }));
+    expect(
+      within(screen.getAllByRole('article')[0]!).getByRole('button', { name: 'Show less' }),
+    ).toBeInTheDocument();
+  });
+
+  it('omits the expansion control for short feedback and keeps its content expanded', async () => {
+    await renderWorkspace({
+      draft: draftView({
+        repos: [
+          {
+            repo: 'repo-a',
+            prUrl: '',
+            comments: [
+              comment({
+                stableRef: 'a:issue:1',
+                repo: 'a',
+                id: 1,
+                type: 'issue',
+                body: 'Short note.',
+              }),
+            ],
+          },
+        ],
+      }),
+    });
+    expect(screen.queryByRole('button', { name: 'Show full feedback' })).not.toBeInTheDocument();
+    expect(
+      screen.getByText('Short note.').closest('[data-collapsed]')?.getAttribute('data-collapsed'),
+    ).toBe('false');
+  });
+
+  it('collapses purely on diff length when the body is short', async () => {
+    await renderWorkspace({
+      draft: draftView({
+        repos: [
+          {
+            repo: 'repo-a',
+            prUrl: '',
+            comments: [
+              comment({
+                stableRef: 'a:review:2',
+                repo: 'a',
+                id: 2,
+                type: 'review',
+                body: 'Brief.',
+                diffHunk: Array.from({ length: 21 }, (_, i) => ` line ${i}`).join('\n'),
+              }),
+            ],
+          },
+        ],
+      }),
+    });
+    expect(screen.getByRole('button', { name: 'Show full feedback' })).toBeInTheDocument();
+  });
+});
 
 describe('ReviewFeedbackWorkspace', () => {
   it('renders repository sections in server order with ledgers, PR links, and the scope rail', async () => {
@@ -213,7 +406,9 @@ describe('ReviewFeedbackWorkspace', () => {
     // Path query is a case-insensitive substring over the displayed path.
     await user.type(screen.getByRole('searchbox', { name: 'File path' }), 'QUERY.TS');
     expect(summary('1 of 3 comments visible')).toBeVisible();
-    expect(screen.getByLabelText(/Rewrite this to avoid the bearer token/)).toBeInTheDocument();
+    expect(
+      await screen.findByLabelText(/Rewrite this to avoid the bearer token/),
+    ).toBeInTheDocument();
     // The pathless comment 42 is in the selected author facet but has no path,
     // so it never matches a non-empty path query.
     expect(screen.queryByLabelText(/Consider extracting the parser/)).not.toBeInTheDocument();

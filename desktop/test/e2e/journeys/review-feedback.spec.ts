@@ -156,7 +156,26 @@ test('multi-repo review-feedback triage: sections → filtered bulk clear → re
             id: 101,
             path: 'src/main.go',
             line: 42,
-            body: 'Consider using context.WithCancel for cleanup.',
+            // Rich, deliberately adversarial body: approved GFM should render
+            // richly while HTML stays inert text, dangerous links are blocked
+            // in place, SVG images are rejected, and valid https destinations
+            // surface only as external-browser actions.
+            body: [
+              '**Critical:** `cleanup()` never cancels the derived context.',
+              '',
+              '- [x] reproduces in e2e',
+              '',
+              '```go',
+              'ctx, cancel := context.WithCancel(ctx)',
+              '```',
+              '',
+              'Beware <script>alert(1)</script> payloads, avoid',
+              '[bad link](javascript:alert(1)), and note the brand asset',
+              '![logo](https://files.example.com/logo.svg). Full notes at',
+              '[the Go docs](https://go.dev/doc). Trace:',
+              '![trace](https://files.example.com/trace.png)',
+            ].join('\n'),
+            diff_hunk: '@@ -40,3 +40,4 @@ main()\n defer close(quit)\n-cancel()\n+cancel()',
             user: { login: 'alice' },
             created_at: '2026-08-02T09:00:00Z',
           },
@@ -250,21 +269,73 @@ test('multi-repo review-feedback triage: sections → filtered bulk clear → re
       .evaluateAll((regions) => regions.map((region) => region.getAttribute('aria-label')));
     expect(sectionNames).toEqual(['alpha', 'beta']);
     // Oldest-first within a section, with the server's repo ledger.
-    await expect(
-      alphaSection.getByText('Consider using context.WithCancel for cleanup.'),
-    ).toBeVisible();
+    await expect(alphaSection.getByText('never cancels the derived context.')).toBeVisible();
     await expect(alphaSection.getByText('This function could be simplified.')).toBeVisible();
     await expect(betaSection.getByText('Has this been tested with large inputs?')).toBeVisible();
     await expect(betaSection.getByText('Overall looks good, just a few nits.')).toBeVisible();
     await expect(alphaSection.getByText('2 of 2 selected')).toBeVisible();
     await expect(betaSection.getByText('2 of 2 selected')).toBeVisible();
     // First fetch pre-selects everything; the ledger starts full.
-    const boxes = feed.getByRole('checkbox');
+    const boxes = feed.getByRole('checkbox', { name: /^Select feedback/ });
     await expect(boxes).toHaveCount(4);
     for (let i = 0; i < 4; i++) {
       await expect(boxes.nth(i)).toBeChecked();
     }
     transcript.step('stable per-repo sections, ledger ratios, all four comments pre-selected');
+
+    transcript.section('Rich feedback cards: safe GFM, trust-boundary actions, diff context');
+    // Approved GFM renders richly; author HTML never becomes DOM.
+    await expect(alphaSection.getByText(/<script>alert\(1\)<\/script>/)).toBeVisible();
+    await expect(feed.locator('script')).toHaveCount(0);
+    await expect(feed.locator('img')).toHaveCount(0);
+    // Curated-language fenced code is class-highlighted and scrollable.
+    await expect(alphaSection.locator('pre code.hljs.language-go')).toBeVisible();
+    // Task items are disabled/read-only and distinct from selection controls.
+    const taskItem = alphaSection.getByRole('checkbox', { name: 'Task completed (read-only)' });
+    await expect(taskItem).toBeChecked();
+    await expect(taskItem).toBeDisabled();
+    // Links and images are explicit external actions disclosing the hostname.
+    await expect(
+      alphaSection.getByRole('button', { name: 'Open link externally: the Go docs (go.dev)' }),
+    ).toBeVisible();
+    await expect(alphaSection.getByText('Link blocked')).toBeVisible();
+    await expect(alphaSection.getByText('Image blocked')).toBeVisible();
+    await expect(
+      alphaSection.getByRole('button', {
+        name: 'Open image externally: trace (files.example.com)',
+      }),
+    ).toBeVisible();
+    // Diff context is a labelled, raw-text region with line semantics.
+    const diff = alphaSection.getByRole('group', { name: 'Diff' }).first();
+    await expect(diff).toBeVisible();
+    await expect(diff.locator('[data-kind="hunk"]')).toHaveCount(1);
+    await expect(diff.locator('[data-kind="add"]')).toHaveCount(1);
+    await expect(diff.locator('[data-kind="remove"]')).toHaveCount(1);
+    transcript.step('adversarial Markdown stayed inert; links/images are boundary actions only');
+
+    transcript.section('Deterministic expansion on the oversized card');
+    // The 80 KiB comment starts collapsed; short cards have no control.
+    const hugeCard = alphaSection.locator('article', {
+      hasText: 'This function could be simplified',
+    });
+    const hugeCardToggle = hugeCard.getByRole('button', { name: 'Show full feedback' });
+    await expect(hugeCardToggle).toHaveCount(1);
+    await expect(hugeCardToggle).toHaveAttribute('aria-expanded', 'false');
+    await expect(betaSection.getByRole('button', { name: 'Show full feedback' })).toHaveCount(0);
+    await hugeCardToggle.click();
+    await expect(hugeCard.getByRole('button', { name: 'Show less' })).toHaveAttribute(
+      'aria-expanded',
+      'true',
+    );
+    // Expanding never touches selection state or focus of other controls.
+    await expect(feed.getByLabel(/This function could be simplified/)).toBeChecked();
+    await expect(alphaSection.getByText('2 of 2 selected')).toBeVisible();
+    await hugeCard.getByRole('button', { name: 'Show less' }).click();
+    await expect(hugeCard.getByRole('button', { name: 'Show full feedback' })).toHaveAttribute(
+      'aria-expanded',
+      'false',
+    );
+    transcript.step('expansion is per-card, deterministic, and selection-invariant');
 
     transcript.section('Filter by author, clear the visible set, preserve hidden selections');
     // Facets derive from the active scope: four authors across both repos.
@@ -279,7 +350,7 @@ test('multi-repo review-feedback triage: sections → filtered bulk clear → re
     await expect(feed.getByText('4 of 4 comments visible').first()).toBeVisible();
     // The hidden selections survived the filtered bulk action untouched.
     await expect(feed.getByLabel(/Has this been tested with large inputs?/)).toBeChecked();
-    await expect(feed.getByLabel(/Consider using context.WithCancel/)).not.toBeChecked();
+    await expect(feed.getByLabel(/never cancels the derived context/)).not.toBeChecked();
     transcript.step('author-filtered Clear visible touched only the visible reference');
 
     transcript.section('Repository scope narrows the feed and retains the path query');
@@ -304,10 +375,12 @@ test('multi-repo review-feedback triage: sections → filtered bulk clear → re
     await expect(workspace).toHaveCount(0);
     await addressReviewFeedback.click();
     await expect(workspace).toBeVisible({ timeout: 15_000 });
-    const restoredBoxes = workspace.getByLabel('Review feedback').getByRole('checkbox');
+    const restoredBoxes = workspace
+      .getByLabel('Review feedback')
+      .getByRole('checkbox', { name: /^Select feedback/ });
     await expect(restoredBoxes).toHaveCount(4);
     await expect(workspace.getByText('3 of 4 selected').first()).toBeVisible();
-    await expect(feed.getByLabel(/Consider using context.WithCancel/)).not.toBeChecked();
+    await expect(feed.getByLabel(/never cancels the derived context/)).not.toBeChecked();
     // Scope and filters restarted from their defaults: All, unconstrained.
     await expect(rail.getByRole('radio', { name: /All feedback/ })).toBeChecked();
     await expect(rail.getByRole('searchbox', { name: 'File path' })).toHaveValue('');

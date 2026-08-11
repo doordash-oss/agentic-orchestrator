@@ -5,7 +5,7 @@
  *
  * Posture: sandboxed, context-isolated renderer with no node integration;
  * navigation, window creation, webviews, and permissions denied; strict CSP;
- * external links only through an https allowlist.
+ * external links only through the credential-free https policy below.
  */
 import path from 'node:path';
 
@@ -110,12 +110,14 @@ export function permissionRequestPolicy(_permission: string): false {
   return false;
 }
 
-/** Hosts the app may hand to shell.openExternal. */
-export const EXTERNAL_URL_ALLOWLIST: ReadonlySet<string> = new Set([
-  'github.com',
-  'www.github.com',
-]);
-
+/**
+ * The external-browser trust boundary: only well-formed, absolute https URLs
+ * without embedded credentials may be handed to the OS opener. Review
+ * feedback links to any host travel this boundary, so the policy is host
+ * agnostic; scheme and credential hygiene remain the hard constraints, and
+ * every other surface protection (navigation, windows, CSP, permissions)
+ * stays unchanged and separate.
+ */
 export function isSafeExternalUrl(url: string): boolean {
   let parsed: URL;
   try {
@@ -127,12 +129,12 @@ export function isSafeExternalUrl(url: string): boolean {
     parsed.protocol === 'https:' &&
     parsed.username === '' &&
     parsed.password === '' &&
-    EXTERNAL_URL_ALLOWLIST.has(parsed.hostname)
+    parsed.hostname !== ''
   );
 }
 
 /**
- * Opens a URL in the system browser only if it passes the allowlist.
+ * Opens a URL in the system browser only if it passes the policy.
  * Resolves to whether the URL was accepted; rejects if the opener fails so
  * callers can surface the error instead of silently dropping it.
  */

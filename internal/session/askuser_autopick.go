@@ -357,9 +357,6 @@ func inferAutoPickOptionsFromQuestionText(question string) (string, []autoPickOp
 	if len(trailingStem) > 0 {
 		cleaned = strings.TrimSpace(strings.Join(trailingStem, "\n"))
 	}
-	if cleaned == "" {
-		cleaned = question
-	}
 	return cleaned, options, true
 }
 

@@ -792,6 +792,11 @@ export function detectCanInstallInApp(
 ): boolean {
   const forced = env.AGENTICO_UPDATE_INSTALL_MODE;
   if (forced === 'guidance') return false;
+  // Packaged journeys launch the linux-unpacked binary (or a mounted DMG
+  // copy), which is not a replaceable install location; 'in-app' is the
+  // explicit test override that skips the location checks below. DEB and
+  // unknown formats are package-manager owned and stay guidance-only.
+  if (forced === 'in-app' && (format === 'macos' || format === 'appimage')) return true;
   if (format === 'macos') {
     const resolved = path.resolve(execPath);
     const marker = `${path.sep}Contents${path.sep}MacOS${path.sep}`;

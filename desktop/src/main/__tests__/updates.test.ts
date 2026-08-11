@@ -767,6 +767,33 @@ describe('detectCanInstallInApp', () => {
       ),
     ).toBe(true);
   });
+
+  it('honors the explicit install-mode overrides for packaged journeys', () => {
+    // 'in-app' skips the replaceable-location checks, which point at the
+    // installed bundle, not the linux-unpacked binary the journeys launch.
+    expect(
+      detectCanInstallInApp('appimage', { AGENTICO_UPDATE_INSTALL_MODE: 'in-app' }, '/tmp/AppRun'),
+    ).toBe(true);
+    expect(
+      detectCanInstallInApp('macos', { AGENTICO_UPDATE_INSTALL_MODE: 'in-app' }, '/tmp/Electron'),
+    ).toBe(true);
+    // Package-manager-owned formats stay guidance-only even under 'in-app'.
+    expect(
+      detectCanInstallInApp('deb', { AGENTICO_UPDATE_INSTALL_MODE: 'in-app' }, '/tmp/agentico'),
+    ).toBe(false);
+    expect(
+      detectCanInstallInApp('unknown', { AGENTICO_UPDATE_INSTALL_MODE: 'in-app' }, '/tmp/agentico'),
+    ).toBe(false);
+    // 'guidance' wins over replaceable locations.
+    expect(
+      detectCanInstallInApp(
+        'appimage',
+        { AGENTICO_UPDATE_INSTALL_MODE: 'guidance', APPIMAGE: '/tmp/Agentico.AppImage' },
+        '/tmp/AppRun',
+        () => undefined,
+      ),
+    ).toBe(false);
+  });
 });
 
 describe('createUpdateFixtureFetch', () => {

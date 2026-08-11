@@ -34,9 +34,21 @@ function scan(...candidates: ReturnType<typeof candidate>[]): RegistryScan {
 function known(serverKey: string, name: string, baseUrl: string) {
   return {
     serverKey,
+    kind: 'local' as const,
     name,
     baseUrl,
     runtimeDir: `/rt/${name}`,
+    lastSeenAt: '2026-07-14T00:00:00Z',
+  };
+}
+
+function remoteKnown(serverKey: string, name: string, baseUrl: string, nickname?: string) {
+  return {
+    serverKey,
+    kind: 'remote' as const,
+    name,
+    ...(nickname === undefined ? {} : { nickname }),
+    baseUrl,
     lastSeenAt: '2026-07-14T00:00:00Z',
   };
 }
@@ -50,6 +62,8 @@ interface Harness {
   intervalFns: Array<() => void>;
   intervalCount(): number;
   prefs: ServersPrefs;
+  /** Settings writes the locked name rule caused, in order. */
+  probeRecords: Array<{ serverKey: string; patch: { name?: string; lastSeenAt?: string } }>;
 }
 
 function makeHarness(overrides: Partial<ServerListServiceDeps> = {}): Harness {
@@ -61,11 +75,22 @@ function makeHarness(overrides: Partial<ServerListServiceDeps> = {}): Harness {
   const harness = {} as Harness;
   harness.healthAnswers = new Map();
   harness.prefs = { known: [], lastUsed: null };
+  harness.probeRecords = [];
 
   const deps: ServerListServiceDeps = {
     scanRegistry: () => scan(),
     knownServers: () => harness.prefs,
     currentServerKey: () => null,
+    recordProbedServer: (serverKey, patch) => {
+      harness.probeRecords.push({ serverKey, patch });
+      // Mirror the real wiring: the patch lands in the persisted entry.
+      harness.prefs = {
+        known: harness.prefs.known.map((entry) =>
+          entry.serverKey === serverKey ? { ...entry, ...patch } : entry,
+        ),
+        lastUsed: harness.prefs.lastUsed,
+      };
+    },
     fetchJson: async (url) => {
       fetchCalls.push(url);
       const answer = harness.healthAnswers.get(url);
@@ -120,6 +145,31 @@ describe('ServerListService list building', () => {
     expect(rows.map((row) => row.serverKey)).toEqual([ALPHA_KEY, BETA_KEY]);
     // The live registry record supplies name/dir; the persisted duplicate is dropped.
     expect(rows[0]).toMatchObject({ name: 'alpha-live', runtimeDir: '/rt/alpha-live' });
+  });
+
+  it('threads the persisted nickname onto both registry and known rows', () => {
+    const harness = makeHarness({
+      scanRegistry: () => scan(candidate(ALPHA_KEY, 'alpha-live', 'http://127.0.0.1:51001')),
+    });
+    harness.prefs = {
+      known: [
+        { ...known(ALPHA_KEY, 'alpha-persisted', 'http://127.0.0.1:59999'), nickname: 'preferred' },
+        { ...known(BETA_KEY, 'beta', 'http://127.0.0.1:51002'), nickname: 'the other box' },
+      ],
+      lastUsed: null,
+    };
+
+    const { rows } = harness.service.list();
+    expect(rows[0]).toMatchObject({
+      serverKey: ALPHA_KEY,
+      name: 'alpha-live',
+      nickname: 'preferred',
+    });
+    expect(rows[1]).toMatchObject({
+      serverKey: BETA_KEY,
+      name: 'beta',
+      nickname: 'the other box',
+    });
   });
 
   it('flags exactly the connected server as current', () => {
@@ -234,6 +284,110 @@ describe('ServerListService probing', () => {
     expect(harness.intervalCount()).toBe(0);
   });
 
+  it('probes remote entries through their persisted base URL and marks their rows', async () => {
+    const harness = makeHarness({});
+    harness.prefs = {
+      known: [
+        remoteKnown(ALPHA_KEY, 'far-box', 'http://10.9.8.7:8080'),
+        remoteKnown(BETA_KEY, 'dead-box', 'http://10.9.8.8:8080'),
+      ],
+      lastUsed: null,
+    };
+    harness.healthAnswers.set(HEALTH('http://10.9.8.7:8080'), {
+      status: 200,
+      body: { status: 'ok', name: 'far-box' },
+    });
+
+    harness.service.setOpen(true);
+    await vi.waitFor(() => {
+      const rows = harness.pushed[harness.pushed.length - 1]!.rows;
+      expect(rows.find((row) => row.serverKey === ALPHA_KEY)?.health).toBe('healthy');
+      expect(rows.find((row) => row.serverKey === BETA_KEY)?.health).toBe('unreachable');
+    });
+
+    const { rows } = harness.service.list();
+    const alpha = rows.find((row) => row.serverKey === ALPHA_KEY);
+    expect(alpha).toMatchObject({ kind: 'remote', name: 'far-box' });
+    expect(alpha?.runtimeDir).toBeUndefined();
+    // No local runtime dir and no URL ever crossed into a row.
+    expect(JSON.stringify(rows)).not.toContain('http://');
+  });
+
+  it('refreshes the stored base name on probe success only when it changed', async () => {
+    const harness = makeHarness({});
+    harness.prefs = {
+      known: [remoteKnown(ALPHA_KEY, 'far-box', 'http://10.9.8.7:8080')],
+      lastUsed: null,
+    };
+    harness.healthAnswers.set(HEALTH('http://10.9.8.7:8080'), {
+      status: 200,
+      body: { status: 'ok', name: 'renamed-box' },
+    });
+
+    harness.service.setOpen(true);
+    await vi.waitFor(() => expect(harness.probeRecords).toHaveLength(1));
+    expect(harness.probeRecords[0]).toEqual({
+      serverKey: ALPHA_KEY,
+      patch: { name: 'renamed-box', lastSeenAt: expect.any(String) },
+    });
+    expect(harness.probeRecords[0]!.patch.lastSeenAt).not.toBe('2026-07-14T00:00:00Z');
+    expect(harness.prefs.known[0]!.name).toBe('renamed-box');
+
+    // A second round with the same name carries only the last-seen move —
+    // the name write never storms.
+    harness.probeRecords.length = 0;
+    harness.intervalFns[0]!();
+    await vi.waitFor(() => expect(harness.probeRecords).toHaveLength(1));
+    expect(harness.probeRecords[0]!.patch.name).toBeUndefined();
+    expect(harness.probeRecords[0]!.patch.lastSeenAt).toEqual(expect.any(String));
+  });
+
+  it('never clobbers a nickname and refreshes nothing when the name already matches', async () => {
+    const harness = makeHarness({});
+    harness.prefs = {
+      known: [remoteKnown(ALPHA_KEY, 'original', 'http://10.9.8.7:8080', 'my box')],
+      lastUsed: null,
+    };
+    harness.healthAnswers.set(HEALTH('http://10.9.8.7:8080'), {
+      status: 200,
+      body: { status: 'ok', name: 'probe-name' },
+    });
+
+    harness.service.setOpen(true);
+    await vi.waitFor(() => expect(harness.probeRecords).toHaveLength(1));
+    // The nickname locks the name write out; last-seen still moves.
+    expect(harness.probeRecords[0]!.patch.name).toBeUndefined();
+    expect(harness.probeRecords[0]!.patch.lastSeenAt).toEqual(expect.any(String));
+    expect(harness.prefs.known[0]!.name).toBe('original');
+    expect(harness.prefs.known[0]!.nickname).toBe('my box');
+  });
+
+  it('writes nothing for local entries on a matching probe and nothing on failure', async () => {
+    const harness = makeHarness({});
+    harness.prefs = {
+      known: [
+        known(ALPHA_KEY, 'alpha', 'http://127.0.0.1:51001'),
+        remoteKnown(BETA_KEY, 'dead-box', 'http://10.9.8.8:8080'),
+      ],
+      lastUsed: null,
+    };
+    harness.healthAnswers.set(HEALTH('http://127.0.0.1:51001'), {
+      status: 200,
+      body: { status: 'ok', name: 'alpha' },
+    });
+
+    harness.service.setOpen(true);
+    await vi.waitFor(() => expect(harness.fetchCalls).toHaveLength(2));
+    await vi.waitFor(() => {
+      const rows = harness.pushed[harness.pushed.length - 1]!.rows;
+      expect(rows.find((row) => row.serverKey === ALPHA_KEY)?.health).toBe('healthy');
+      expect(rows.find((row) => row.serverKey === BETA_KEY)?.health).toBe('unreachable');
+    });
+    // Locals don't move last-seen from liveness probes (attach does), and a
+    // dead remote yields no write at all.
+    expect(harness.probeRecords).toEqual([]);
+  });
+
   it('never leaks tokens or base URLs into rows or logs', async () => {
     const lines: string[] = [];
     const harness = makeHarness({
@@ -249,6 +403,7 @@ describe('ServerListService probing', () => {
         expect(Object.keys(row).sort()).toEqual([
           'current',
           'health',
+          'kind',
           'name',
           'runtimeDir',
           'serverKey',

@@ -15,6 +15,7 @@ import {
   nativeTheme,
   net,
   protocol,
+  safeStorage,
   session,
   shell,
   systemPreferences,
@@ -23,6 +24,8 @@ import {
 } from 'electron';
 import { createRuntimeGateway, fetchJson, MAX_PROBE_RESPONSE_BYTES } from './gateway/wiring';
 import { ServerListService } from './gateway/serverListService';
+import { addRemoteServer } from './gateway/addRemoteServer';
+import { removeKnownServer, serverTokenStatus } from './gateway/removeServer';
 import { AccentController, type AccentColorSource } from './accent';
 import {
   resolveTestOutputFile,
@@ -68,6 +71,7 @@ import {
   type AppEvent,
   type AppRouteEvent,
   type FeatureSnapshot,
+  type SettingsFocus,
   type SettingsSection,
   type WindowPurpose,
 } from '../shared/ipc';
@@ -396,7 +400,7 @@ if (!hasSingleInstanceLock) {
 
     const settings = new SettingsStore(app.getPath('userData'));
     const localDrafts = new LocalDraftStore(app.getPath('userData'));
-    const { gateway, logBuffer, scanRegistry } = createRuntimeGateway({
+    const { gateway, logBuffer, scanRegistry, remoteTokens } = createRuntimeGateway({
       getRuntimeSelection: () => settings.get().runtime.selection,
       getServersPrefs: () => settings.get().servers,
       recordAttachedServer: (entry) => {
@@ -406,6 +410,8 @@ if (!hasSingleInstanceLock) {
       resourcesPath: runtimeResourcesPath,
       // out/main → out → desktop → repository root (development layout).
       appRoot: path.resolve(import.meta.dirname, '../../..'),
+      safeStorage,
+      userDataDir: app.getPath('userData'),
     });
     const diagnostics = new DiagnosticsService({
       userDataDir: app.getPath('userData'),
@@ -578,7 +584,24 @@ if (!hasSingleInstanceLock) {
       currentServerKey: () => gateway.getState().serverKey ?? null,
       fetchJson: (url, options) =>
         fetchJson(url, { ...options, maxResponseBytes: MAX_PROBE_RESPONSE_BYTES }),
+      // Locked name rule after successful liveness probes: the service only
+      // ever asks for a real change, so a no-op patch is dropped here too.
+      recordProbedServer: (serverKey, patch) => {
+        const entry = settings.get().servers.known.find((item) => item.serverKey === serverKey);
+        if (entry === undefined) {
+          return;
+        }
+        const name = patch.name ?? entry.name;
+        const lastSeenAt = patch.lastSeenAt ?? entry.lastSeenAt;
+        if (name === entry.name && lastSeenAt === entry.lastSeenAt) {
+          return;
+        }
+        settings.update({ servers: { upsertKnown: { ...entry, name, lastSeenAt } } });
+      },
       log: (line) => console.warn(`[agentico-servers] ${redactText(line)}`),
+      // Server-controlled probe names ride the same secret registry as the
+      // log buffer, so a replayed bearer cannot be persisted into settings.
+      scrubProbeText: (text) => logBuffer.scrub(text),
     });
 
     // Connection state is fanned out to every open window rather than wired
@@ -615,17 +638,27 @@ if (!hasSingleInstanceLock) {
      * every settings route is a no-op. A drop after the window is open leaves
      * it open — the panes' own degraded states handle it.
      *
-     * The pane is persisted before the window is raised so a cold open reads
-     * it back as its initial pane, and pushed as a route event so an already
-     * open window switches; both paths land on the same pane.
+     * The pane (and any within-pane focus intent) is persisted before the
+     * window is raised so a cold open reads them back, and pushed as a
+     * route event so an already open window switches; both paths land on
+     * the same pane and intent. The window clears a consumed focus intent.
      */
-    const openSettingsWindow = (pane: SettingsSection | null): boolean => {
+    const openSettingsWindow = (
+      pane: SettingsSection | null,
+      focus: SettingsFocus | null = null,
+    ): boolean => {
       if (gateway.getState().status !== 'ready') {
         return false;
       }
       if (pane !== null) {
         try {
-          settings.update({ settingsWindow: { ...settings.get().settingsWindow, pane } });
+          settings.update({
+            settingsWindow: {
+              ...settings.get().settingsWindow,
+              pane,
+              ...(focus === null ? {} : { focus }),
+            },
+          });
         } catch {
           // A pane preference is never worth failing the open for.
         }
@@ -636,6 +669,7 @@ if (!hasSingleInstanceLock) {
         window.webContents.send(IPC_EVENTS.routeRequested, {
           target: 'settings',
           settingsSection: pane,
+          ...(focus === null ? {} : { settingsFocus: focus }),
         });
       }
       return true;
@@ -648,7 +682,7 @@ if (!hasSingleInstanceLock) {
      */
     const route = (event: AppRouteEvent): void => {
       if (routeWindowPurpose(event) === 'settings') {
-        openSettingsWindow(routeSettingsPane(event));
+        openSettingsWindow(routeSettingsPane(event), event.settingsFocus ?? null);
         return;
       }
       const window = showMainWindow();
@@ -1121,6 +1155,44 @@ if (!hasSingleInstanceLock) {
       switchConnectionServer: (request) => gateway.switchServer(request),
       listServers: () => serverList.list(),
       probeServers: (request) => serverList.setOpen(request.open),
+      addRemoteServer: (request) =>
+        addRemoteServer(request, {
+          fetchJson: (url, options) =>
+            fetchJson(url, { ...options, maxResponseBytes: MAX_PROBE_RESPONSE_BYTES }),
+          scanRegistry,
+          knownServers: () => settings.get().servers,
+          upsertRemoteEntry: (entry) => {
+            settings.update({ servers: { upsertKnown: entry } });
+            void refreshBackgroundState();
+          },
+          remoteTokens,
+          registerSecret: (secret) => logBuffer.addSecret(secret),
+          log: (line) => console.warn(`[agentico-servers] ${redactText(line)}`),
+        }),
+      removeServer: (request) =>
+        removeKnownServer(request, {
+          knownServers: () => settings.get().servers,
+          removeRemoteToken: (serverKey) => remoteTokens.remove(serverKey),
+          removeKnownEntry: (serverKey) => {
+            const lastUsed = settings.get().servers.lastUsed;
+            settings.update({
+              servers: {
+                removeKnown: serverKey,
+                // A last-used pointer at the removed server must die with it
+                // before the teardown re-runs the startup selection flow.
+                ...(lastUsed === serverKey ? { lastUsed: null } : {}),
+              },
+            });
+            void refreshBackgroundState();
+          },
+          disconnectServer: (disconnectRequest) => gateway.disconnectServer(disconnectRequest),
+          log: (line) => console.warn(`[agentico-servers] ${redactText(line)}`),
+        }),
+      getServerTokenStatus: (request) =>
+        serverTokenStatus(request, {
+          knownServers: () => settings.get().servers,
+          loadRemoteToken: (serverKey) => remoteTokens.load(serverKey),
+        }),
       getSettings: () => settings.get(),
       updateSettings: (patch) => {
         const next = settings.update(patch);
@@ -1128,7 +1200,7 @@ if (!hasSingleInstanceLock) {
         return next;
       },
       openSettingsWindow: (request) => ({
-        opened: openSettingsWindow(request.section ?? null),
+        opened: openSettingsWindow(request.section ?? null, request.focus ?? null),
       }),
       getTheme: () => theme.getInfo(),
       setTheme: (preference) => {
@@ -1341,6 +1413,20 @@ function routeFromUrl(raw: string): AppRouteEvent | null {
   }
   if (parsed.hostname === 'diagnostics' || parsed.pathname === '/diagnostics') {
     return { target: 'settings', settingsSection: 'diagnostics' };
+  }
+  // agentico://servers and agentico://servers/add — the latter carries the
+  // within-pane intent to focus the Servers pane's add-server form.
+  const isServers =
+    parsed.hostname === 'servers' ||
+    parsed.pathname === '/servers' ||
+    parsed.pathname === '/servers/add';
+  if (isServers) {
+    const addIntent = parsed.pathname === '/add' || parsed.pathname === '/servers/add';
+    return {
+      target: 'settings',
+      settingsSection: 'servers',
+      ...(addIntent ? { settingsFocus: 'add-server' as const } : {}),
+    };
   }
   return { target: 'settings' };
 }

@@ -1296,6 +1296,7 @@ describe('RuntimeGateway registry-first startup selection', () => {
         known: [
           {
             serverKey: beta.serverKey,
+            kind: 'local',
             name: 'beta',
             baseUrl: BETA_BASE,
             runtimeDir: BETA_RUNTIME_DIR,
@@ -1341,8 +1342,13 @@ describe('RuntimeGateway registry-first startup selection', () => {
       throw new Error('unreachable');
     }
     expect(state.candidates).toEqual([
-      { serverKey: alpha.serverKey, name: 'alpha', runtimeDir: ALPHA_RUNTIME_DIR },
-      { serverKey: beta.serverKey, name: 'beta', runtimeDir: BETA_RUNTIME_DIR },
+      {
+        serverKey: alpha.serverKey,
+        kind: 'local',
+        name: 'alpha',
+        runtimeDir: ALPHA_RUNTIME_DIR,
+      },
+      { serverKey: beta.serverKey, kind: 'local', name: 'beta', runtimeDir: BETA_RUNTIME_DIR },
     ]);
     // Snapshot-based: nothing was probed or spawned before the choice.
     expect(env.fetchCalls).toHaveLength(0);

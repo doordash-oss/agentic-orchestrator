@@ -100,6 +100,9 @@ const api: AgenticoApi = {
   switchConnectionServer: (request) => call(IPC_CHANNELS.connectionSwitchServer, request),
   listServers: () => call(IPC_CHANNELS.serversList),
   probeServers: (request) => call(IPC_CHANNELS.serversProbe, request),
+  addRemoteServer: (request) => call(IPC_CHANNELS.remoteServerAdd, request),
+  removeServer: (request) => call(IPC_CHANNELS.serverRemove, request),
+  getServerTokenStatus: (request) => call(IPC_CHANNELS.serverTokenStatus, request),
   onServersChanged: (listener: (snapshot: ServerListSnapshot) => void) => {
     const wrapped = (_event: unknown, payload: unknown): void => {
       try {

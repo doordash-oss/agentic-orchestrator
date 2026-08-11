@@ -20,20 +20,22 @@ import { assertNoPrototypePollution, assertWithinByteSize } from '../shared/sani
 import {
   AmaPrefsSchema,
   FeatureIdSchema,
+  MAX_KNOWN_SERVERS,
   NotificationPrefsSchema,
   SettingsPatchSchema,
   SettingsSchema,
   SettingsWindowPrefsSchema,
-  ServersPrefsSchema,
+  ShellPrefsSchema,
   ThemePreferenceSchema,
   WindowBoundsSchema,
   WizardPrefsSchema,
   defaultAmaPrefs,
   defaultNotificationPrefs,
-  defaultServersPrefs,
   defaultSettings,
   defaultSettingsWindowPrefs,
+  defaultShellPrefs,
   defaultWizardPrefs,
+  isPlainHttpBaseUrl,
   applyServersPatch,
   applyShellPatch,
   type Settings,
@@ -125,6 +127,39 @@ function migrateSettingsV1ToV2(v1: SettingsV1): SettingsV2 {
 }
 
 /**
+ * Shape of a v3/v4 known-server entry, kept ONLY so `load()` can validate and
+ * migrate files written before the local/remote known-servers split: those
+ * versions have no `kind`/`nickname` and their `runtimeDir` was
+ * unconditionally required (every pre-v5 entry is by definition a local
+ * runtime attachment, so the v4→v5 migration tags them `kind: 'local'`).
+ */
+const KnownServerSchemaV4 = z.strictObject({
+  serverKey: z.string().min(1).max(64),
+  name: z.string().max(64),
+  baseUrl: z.string().max(256).refine(isPlainHttpBaseUrl, {
+    message: 'baseUrl must be a plain http URL',
+  }),
+  runtimeDir: z.string().max(4096),
+  lastSeenAt: z
+    .string()
+    .max(64)
+    .refine((value) => !Number.isNaN(Date.parse(value)), {
+      message: 'lastSeenAt must be an ISO 8601 timestamp',
+    }),
+});
+
+const ServersPrefsSchemaV4 = z.strictObject({
+  known: z.array(KnownServerSchemaV4).max(MAX_KNOWN_SERVERS),
+  lastUsed: z.string().max(64).nullable(),
+});
+
+type ServersPrefsV4 = z.output<typeof ServersPrefsSchemaV4>;
+
+function defaultServersPrefsV4(): ServersPrefsV4 {
+  return { known: [], lastUsed: null };
+}
+
+/**
  * Shape of a schema-version-3 settings document, kept ONLY so `load()` can
  * validate and migrate files written before settings were scoped per server.
  * Not exported: new code must only ever see the current SettingsSchema.
@@ -139,7 +174,7 @@ const SettingsSchemaV3 = z.strictObject({
   notifications: NotificationPrefsSchema.default(defaultNotificationPrefs()),
   shell: ShellPrefsSchemaV3.default(defaultShellPrefsV3()),
   settingsWindow: SettingsWindowPrefsSchema.default(defaultSettingsWindowPrefs()),
-  servers: ServersPrefsSchema.default(defaultServersPrefs()),
+  servers: ServersPrefsSchemaV4.default(defaultServersPrefsV4()),
 });
 
 type SettingsV3 = z.output<typeof SettingsSchemaV3>;
@@ -150,7 +185,7 @@ type SettingsV3 = z.output<typeof SettingsSchemaV3>;
  * `featureByServer` entry for the last-used server when both exist, and is
  * dropped otherwise (there is no server identity to scope it to).
  */
-function migrateSettingsV3ToV4(v3: SettingsV3): Settings {
+function migrateSettingsV3ToV4(v3: SettingsV3): SettingsV4 {
   const lastUsed = v3.servers.lastUsed;
   const activeFeatureId = v3.shell.activeFeatureId;
   return {
@@ -168,6 +203,51 @@ function migrateSettingsV3ToV4(v3: SettingsV3): Settings {
     },
     settingsWindow: v3.settingsWindow,
     servers: v3.servers,
+  };
+}
+
+/**
+ * Shape of a schema-version-4 settings document, kept ONLY so `load()` can
+ * validate and migrate files written before the local/remote known-servers
+ * split. Not exported: new code must only ever see the current
+ * SettingsSchema.
+ */
+const SettingsSchemaV4 = z.strictObject({
+  schemaVersion: z.literal(4),
+  runtime: z.strictObject({ selection: z.string().max(200).nullable() }),
+  window: z.strictObject({ bounds: WindowBoundsSchema.optional() }),
+  theme: ThemePreferenceSchema,
+  wizard: WizardPrefsSchema.default(defaultWizardPrefs()),
+  ama: AmaPrefsSchema.default(defaultAmaPrefs()),
+  notifications: NotificationPrefsSchema.default(defaultNotificationPrefs()),
+  shell: ShellPrefsSchema.default(defaultShellPrefs()),
+  settingsWindow: SettingsWindowPrefsSchema.default(defaultSettingsWindowPrefs()),
+  servers: ServersPrefsSchemaV4.default(defaultServersPrefsV4()),
+});
+
+type SettingsV4 = z.output<typeof SettingsSchemaV4>;
+
+/**
+ * Upgrades a validated v4 document to v5: every known-server entry gains
+ * `kind: 'local'` (v4 predates the local/remote split — every persisted
+ * entry was a local runtime attachment) and every other field, including
+ * ordering and the last-used pointer, is carried over byte-for-byte.
+ */
+function migrateSettingsV4ToV5(v4: SettingsV4): Settings {
+  return {
+    schemaVersion: 5,
+    runtime: v4.runtime,
+    window: v4.window,
+    theme: v4.theme,
+    wizard: v4.wizard,
+    ama: v4.ama,
+    notifications: v4.notifications,
+    shell: v4.shell,
+    settingsWindow: v4.settingsWindow,
+    servers: {
+      known: v4.servers.known.map((entry) => ({ ...entry, kind: 'local' as const })),
+      lastUsed: v4.servers.lastUsed,
+    },
   };
 }
 
@@ -206,7 +286,7 @@ function migrateSettingsV2ToV3(v2: SettingsV2): SettingsV3 {
     notifications: v2.notifications,
     shell: v2.shell,
     settingsWindow: v2.settingsWindow,
-    servers: defaultServersPrefs(),
+    servers: defaultServersPrefsV4(),
   };
 }
 
@@ -300,8 +380,8 @@ export class SettingsStore {
       if (schemaVersion === 1) {
         const legacy = SettingsSchemaV1.safeParse(data);
         if (legacy.success) {
-          const migrated = migrateSettingsV3ToV4(
-            migrateSettingsV2ToV3(migrateSettingsV1ToV2(legacy.data)),
+          const migrated = migrateSettingsV4ToV5(
+            migrateSettingsV3ToV4(migrateSettingsV2ToV3(migrateSettingsV1ToV2(legacy.data))),
           );
           this.persist(migrated);
           return migrated;
@@ -310,7 +390,9 @@ export class SettingsStore {
       if (schemaVersion === 2) {
         const legacy = SettingsSchemaV2.safeParse(data);
         if (legacy.success) {
-          const migrated = migrateSettingsV3ToV4(migrateSettingsV2ToV3(legacy.data));
+          const migrated = migrateSettingsV4ToV5(
+            migrateSettingsV3ToV4(migrateSettingsV2ToV3(legacy.data)),
+          );
           this.persist(migrated);
           return migrated;
         }
@@ -318,7 +400,15 @@ export class SettingsStore {
       if (schemaVersion === 3) {
         const legacy = SettingsSchemaV3.safeParse(data);
         if (legacy.success) {
-          const migrated = migrateSettingsV3ToV4(legacy.data);
+          const migrated = migrateSettingsV4ToV5(migrateSettingsV3ToV4(legacy.data));
+          this.persist(migrated);
+          return migrated;
+        }
+      }
+      if (schemaVersion === 4) {
+        const legacy = SettingsSchemaV4.safeParse(data);
+        if (legacy.success) {
+          const migrated = migrateSettingsV4ToV5(legacy.data);
           this.persist(migrated);
           return migrated;
         }

@@ -512,8 +512,9 @@ Server flags (use with 'agentico server'):
   --providers <list>               Comma-separated provider list (default: all)
                                    Available: claude, codex, opencode
   --refresh-models                 Refresh provider model catalogs before starting the server
-  --listen [host:]port             Bind address (loopback hosts only: 127.0.0.1, localhost,
-                                   [::1]; default: ephemeral 127.0.0.1 port)
+  --listen [host:]port             Bind address (default: ephemeral 127.0.0.1 port).
+                                   Wildcards (0.0.0.0, ::) expose the server on the
+                                   network and print a bearer-token connection string;
   --name <name>                    Server display name (default: generated, persisted per
                                    runtime directory)
   --dangerously-skip-permissions   Skip all permission prompts (use with caution)

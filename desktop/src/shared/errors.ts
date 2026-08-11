@@ -87,6 +87,23 @@ export function redactText(text: string): string {
 }
 
 /**
+ * Removes exact secret occurrences from free-form text (split/join, never
+ * regex). Used at the server-boundary: an untrusted server can echo a
+ * presented bearer back in free-text fields like its display name, so every
+ * server-controlled string that lands in IPC state or persisted settings
+ * passes through this with the credential in scope.
+ */
+export function stripSecrets(text: string, secrets: readonly string[]): string {
+  let out = text;
+  for (const secret of secrets) {
+    if (secret.length > 0) {
+      out = out.split(secret).join('[redacted]');
+    }
+  }
+  return out;
+}
+
+/**
  * Converts an arbitrary thrown value into a SafeError. SafeErrorExceptions
  * pass through untouched; Error messages are redacted; anything else (which
  * could hold raw payload data) is replaced with a generic message.

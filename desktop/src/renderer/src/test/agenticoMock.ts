@@ -220,6 +220,9 @@ export interface AgenticoMock {
     switchConnectionServer: ReturnType<typeof vi.fn>;
     listServers: ReturnType<typeof vi.fn>;
     probeServers: ReturnType<typeof vi.fn>;
+    addRemoteServer: ReturnType<typeof vi.fn>;
+    removeServer: ReturnType<typeof vi.fn>;
+    getServerTokenStatus: ReturnType<typeof vi.fn>;
     onRouteRequest: ReturnType<typeof vi.fn>;
     getSettings: ReturnType<typeof vi.fn>;
     updateSettings: ReturnType<typeof vi.fn>;
@@ -362,6 +365,9 @@ export function installAgenticoMock(
     switchConnectionServer: vi.fn(() => Promise.resolve(connection)),
     listServers: vi.fn(() => Promise.resolve({ rows: [] })),
     probeServers: vi.fn(() => Promise.resolve({ rows: [] })),
+    addRemoteServer: vi.fn(() => Promise.reject(new Error('addRemoteServer not mocked'))),
+    removeServer: vi.fn(() => Promise.resolve(connection)),
+    getServerTokenStatus: vi.fn(() => Promise.resolve({ status: 'local' as const })),
     onServersChanged: vi.fn((listener: (snapshot: ServerListSnapshot) => void) => {
       serversChangedListeners.add(listener);
       return () => serversChangedListeners.delete(listener);

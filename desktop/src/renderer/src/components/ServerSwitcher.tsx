@@ -7,7 +7,9 @@
  * shell's ready→attaching→ready transition.
  *
  * The popover is the single switcher surface: the menu and palette command
- * only route here. There is deliberately no "Add Server…" row.
+ * only route here. A fixed "Add Server…" footer row deep-links to
+ * Settings → Servers with the paste field focused (the only add
+ * affordance).
  */
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import type { ServerListRow } from '../../../shared/ipc';
@@ -109,6 +111,18 @@ export function ServerSwitcher({
     });
   }, []);
 
+  // The only way to teach the app a new server from the switcher: close and
+  // deep-link to Settings → Servers with the paste field focused.
+  const addServer = useCallback(() => {
+    setOpen(false);
+    anchorRef.current?.focus();
+    void window.agentico
+      .openSettingsWindow({ section: 'servers', focus: 'add-server' })
+      .catch(() => {
+        // Opening settings is best-effort; the popover is closed either way.
+      });
+  }, []);
+
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
     const count = rows?.length ?? 0;
     if (count === 0) return;
@@ -168,6 +182,9 @@ export function ServerSwitcher({
             {rows.map((row, index) => {
               const selected = index === highlight;
               const reachable = !row.current && row.health === 'healthy';
+              const displayName = row.nickname ?? row.name ?? 'Unnamed server';
+              // Remote rows have no local runtime dir to disambiguate by.
+              const location = row.runtimeDir === undefined ? '' : ` at ${row.runtimeDir}`;
               return (
                 <button
                   key={row.serverKey}
@@ -176,7 +193,7 @@ export function ServerSwitcher({
                   aria-selected={selected}
                   aria-disabled={!reachable}
                   tabIndex={selected ? 0 : -1}
-                  aria-label={`${row.name ?? 'Unnamed server'} at ${row.runtimeDir} — ${statusLabel(row)}`}
+                  aria-label={`${displayName}${location} — ${statusLabel(row)}`}
                   className="server-switcher__row"
                   data-selected={selected}
                   data-health={row.health}
@@ -189,10 +206,15 @@ export function ServerSwitcher({
                     {row.current ? '✓' : ''}
                   </span>
                   <span className="server-switcher__primary" aria-hidden="true">
-                    {row.name ?? 'Unnamed server'}
+                    {displayName}
+                    {row.kind === 'remote' ? (
+                      <span className="settings-panel__server-kind" data-kind="remote">
+                        Remote
+                      </span>
+                    ) : null}
                   </span>
                   <span className="server-switcher__runtime" aria-hidden="true">
-                    {row.runtimeDir}
+                    {row.runtimeDir ?? ''}
                   </span>
                   <span className="server-switcher__status" aria-hidden="true">
                     {statusLabel(row)}
@@ -202,6 +224,15 @@ export function ServerSwitcher({
             })}
           </div>
         )}
+        <div className="server-switcher__footer">
+          <button
+            type="button"
+            className="server-switcher__row server-switcher__add"
+            onClick={addServer}
+          >
+            <span className="server-switcher__primary">Add Server…</span>
+          </button>
+        </div>
       </ToolbarPopover>
     </ToolbarPopoverAnchor>
   );

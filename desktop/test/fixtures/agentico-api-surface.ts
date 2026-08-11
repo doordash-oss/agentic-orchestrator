@@ -8,6 +8,7 @@
  * fails immediately instead of the drift surfacing only in packaged CI.
  */
 export const EXPECTED_API_SURFACE: readonly string[] = [
+  'addRemoteServer',
   'addWorkspaceRoot',
   'answerPermission',
   'answerQuestions',
@@ -43,6 +44,7 @@ export const EXPECTED_API_SURFACE: readonly string[] = [
   'getRun',
   'getRunArtifactContent',
   'getRunLogContent',
+  'getServerTokenStatus',
   'getSession',
   'getSessionTranscript',
   'getSettings',
@@ -85,6 +87,7 @@ export const EXPECTED_API_SURFACE: readonly string[] = [
   'readReview',
   'refreshProviderModels',
   'refreshReadiness',
+  'removeServer',
   'removeWorkspaceRoot',
   'reorderWorkspaceRoots',
   'resolveGate',

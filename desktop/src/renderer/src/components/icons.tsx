@@ -104,6 +104,17 @@ export function FolderIcon(props: SVGProps<SVGSVGElement>) {
   );
 }
 
+/** Servers, shaped after SF Symbols' `server.rack`. */
+export function ServersIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Icon {...props}>
+      <rect x="3.5" y="4.5" width="17" height="6.5" rx="1.5" />
+      <rect x="3.5" y="13" width="17" height="6.5" rx="1.5" />
+      <path d="M7 7.75h.01M7 16.25h.01" />
+    </Icon>
+  );
+}
+
 /** Providers, shaped after SF Symbols' `cpu`. */
 export function ProvidersIcon(props: SVGProps<SVGSVGElement>) {
   return (

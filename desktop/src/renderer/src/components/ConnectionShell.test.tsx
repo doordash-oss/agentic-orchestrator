@@ -308,9 +308,14 @@ describe('ConnectionShell', () => {
 
 describe('ConnectionShell server picker', () => {
   const candidates = [
-    { serverKey: 'key-alpha', name: 'alpha', runtimeDir: '/home/u/.agentic-orchestrator' },
-    { serverKey: 'key-beta', name: 'beta', runtimeDir: '/srv/runtimes/beta' },
-    { serverKey: 'key-gamma', name: null, runtimeDir: '/srv/runtimes/gamma' },
+    {
+      serverKey: 'key-alpha',
+      kind: 'local',
+      name: 'alpha',
+      runtimeDir: '/home/u/.agentic-orchestrator',
+    },
+    { serverKey: 'key-beta', kind: 'local', name: 'beta', runtimeDir: '/srv/runtimes/beta' },
+    { serverKey: 'key-gamma', kind: 'local', name: null, runtimeDir: '/srv/runtimes/gamma' },
   ] as const;
 
   function awaiting(): ConnectionState {
@@ -373,6 +378,44 @@ describe('ConnectionShell server picker', () => {
     expect(options[2]).toHaveAttribute('aria-selected', 'true');
   });
 
+  it('renders a remote candidate with its kind badge, probe health, and no runtime dir', async () => {
+    installAgenticoMock({
+      connection: state({
+        status: 'awaiting-server-choice',
+        stage: 'connect',
+        candidates: [
+          {
+            serverKey: 'key-alpha',
+            kind: 'local',
+            name: 'alpha',
+            runtimeDir: '/home/u/.agentic-orchestrator',
+          },
+          { serverKey: 'key-remote', kind: 'remote', name: 'far-box', health: 'unreachable' },
+        ],
+      }),
+    });
+    render(<ConnectionShell />);
+
+    await screen.findByRole('listbox', { name: /running agentico servers/i });
+    const remote = screen.getByRole('option', { name: /far-box/ });
+    expect(remote).toHaveAccessibleName(/on a remote host/);
+    const badge = remote.querySelector('.settings-panel__server-kind');
+    expect(badge).not.toBeNull();
+    expect(badge).toHaveAttribute('data-kind', 'remote');
+    expect(badge).toHaveTextContent('Remote');
+    expect(remote).toHaveTextContent('Unreachable');
+    expect(remote.querySelector('.shell-card__picker-runtime')).toHaveTextContent('');
+    // The local row keeps its established "Running" state.
+    expect(screen.getByRole('option', { name: /alpha/ })).toHaveTextContent(/running/i);
+  });
+
+  it('offers no add-server affordance in the picker', async () => {
+    installAgenticoMock({ connection: awaiting() });
+    render(<ConnectionShell />);
+    await screen.findByRole('listbox', { name: /running agentico servers/i });
+    expect(screen.queryByRole('button', { name: /add server/i })).not.toBeInTheDocument();
+  });
+
   it('keyboard selection attaches the highlighted server and no spawn affordance exists', async () => {
     const user = userEvent.setup();
     const mock = installAgenticoMock({ connection: awaiting() });
@@ -398,8 +441,8 @@ describe('ConnectionShell failed switch', () => {
         message: 'The selected Agentico server is no longer running.',
       },
       switchContext: {
-        attempted: { serverKey: 'key-beta', name: 'beta', runtimeDir: '/rt/beta' },
-        previous: { serverKey: 'key-alpha', name: 'alpha', runtimeDir: '/rt/alpha' },
+        attempted: { serverKey: 'key-beta', kind: 'local', name: 'beta', runtimeDir: '/rt/beta' },
+        previous: { serverKey: 'key-alpha', kind: 'local', name: 'alpha', runtimeDir: '/rt/alpha' },
       },
     });
   }

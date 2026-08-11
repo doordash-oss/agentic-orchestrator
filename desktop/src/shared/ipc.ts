@@ -17,6 +17,9 @@ export const IPC_CHANNELS = {
   connectionSwitchServer: 'agentico:connection:switch-server',
   serversList: 'agentico:servers:list',
   serversProbe: 'agentico:servers:probe',
+  remoteServerAdd: 'agentico:servers:remote-add',
+  serverRemove: 'agentico:servers:remove',
+  serverTokenStatus: 'agentico:servers:token-status',
   settingsGet: 'agentico:settings:get',
   settingsUpdate: 'agentico:settings:update',
   windowOpenSettings: 'agentico:window:open-settings',
@@ -338,14 +341,34 @@ export const ConnectionReadyStateSchema = z.strictObject({
 });
 
 /**
+ * Whether a known/pickable server is a locally spawned or registry-discovered
+ * runtime (`local`, identified by its runtime dir) or a remotely reachable
+ * plain-http endpoint (`remote`, identified by URL). Persisted local entries
+ * must carry `runtimeDir`; remote entries must not.
+ */
+export const ServerKindSchema = z.enum(['local', 'remote']);
+export type ServerKind = z.output<typeof ServerKindSchema>;
+
+export const SERVER_ROW_HEALTH = ['healthy', 'unreachable', 'probing'] as const;
+export const ServerRowHealthSchema = z.enum(SERVER_ROW_HEALTH);
+export type ServerRowHealth = z.output<typeof ServerRowHealthSchema>;
+
+/**
  * A registry candidate offered in the picker. Strictly renderer-safe: the
  * opaque identity key, the display name, and the runtime dir that
- * disambiguates duplicate names — never a token.
+ * disambiguates duplicate names — never a token. Remote candidates resolve
+ * from the persisted known-servers list instead of the registry: they have
+ * no runtime dir, and they carry the health verdict of the bounded
+ * auth-exempt probe run while the picker snapshot was assembled.
  */
 export const ServerChoiceCandidateSchema = z.strictObject({
   serverKey: z.string().min(1).max(64),
+  kind: ServerKindSchema,
   name: z.string().max(64).nullable(),
-  runtimeDir: z.string().max(4096),
+  /** Absent on remote candidates (no co-located runtime exists). */
+  runtimeDir: z.string().max(4096).optional(),
+  /** Present on remote candidates: the one-shot verdict of the picker's probe. */
+  health: ServerRowHealthSchema.optional(),
 });
 export type ServerChoiceCandidate = z.output<typeof ServerChoiceCandidateSchema>;
 
@@ -478,14 +501,13 @@ export type SwitchServerRequest = z.output<typeof SwitchServerRequestSchema>;
 // probed for liveness while the switcher popover is open. Rows NEVER carry
 // tokens or other credential material; base URLs stay in the main process.
 
-export const SERVER_ROW_HEALTH = ['healthy', 'unreachable', 'probing'] as const;
-export const ServerRowHealthSchema = z.enum(SERVER_ROW_HEALTH);
-export type ServerRowHealth = z.output<typeof ServerRowHealthSchema>;
-
 export const ServerListRowSchema = z.strictObject({
   serverKey: z.string().min(1).max(64),
+  kind: ServerKindSchema,
   name: z.string().max(64).nullable(),
-  runtimeDir: z.string().max(4096),
+  /** User-assigned label from the persisted entry; wins over `name` for display. */
+  nickname: z.string().max(64).optional(),
+  runtimeDir: z.string().max(4096).optional(),
   current: z.boolean(),
   health: ServerRowHealthSchema,
 });
@@ -506,6 +528,67 @@ export const ServersProbeRequestSchema = z.strictObject({
   open: z.boolean(),
 });
 export type ServersProbeRequest = z.output<typeof ServersProbeRequestSchema>;
+
+// --- Add-remote-server flow --------------------------------------------------
+// The connection string (which embeds the bearer token) crosses renderer →
+// main exactly once, inside the request arguments; it is never persisted,
+// logged, or echoed. The response is deliberately strict: only a status and
+// a serverKey are representable, so token-shaped fields can never leak.
+
+export const RemoteServerAddRequestSchema = z.strictObject({
+  connectionString: z.string().min(1).max(2048),
+});
+export type RemoteServerAddRequest = z.output<typeof RemoteServerAddRequestSchema>;
+
+const RemoteServerAddKeySchema = z.string().regex(/^[0-9a-f]{32}$/);
+
+/**
+ * Success outcomes of the add-server flow. All failures travel the standard
+ * { ok: false, error: SafeError } envelope instead, so no failure variant
+ * exists here. `duplicate-local` means the probed server IS a known local
+ * server (matched on runtime identity); the UI can offer to switch to
+ * `serverKey`. `session-only` means the OS keystore was unavailable: the
+ * server connected but nothing was persisted and it will require a re-paste
+ * next launch.
+ */
+export const RemoteServerAddResultSchema = z.discriminatedUnion('status', [
+  z.strictObject({ status: z.literal('added'), serverKey: RemoteServerAddKeySchema }),
+  z.strictObject({ status: z.literal('duplicate-local'), serverKey: RemoteServerAddKeySchema }),
+  z.strictObject({ status: z.literal('session-only'), serverKey: RemoteServerAddKeySchema }),
+]);
+export type RemoteServerAddResult = z.output<typeof RemoteServerAddResultSchema>;
+
+// --- Remove-server flow / stored-token status --------------------------------
+// Removal is main-side orchestrated: the dedicated channel deletes the token
+// blob (remote only), drops the settings entry via removeKnown, and tears
+// down the connection back into the startup selection flow when the removed
+// server was the active one. The response is the resulting ConnectionState.
+
+export const ServerRemoveRequestSchema = z.strictObject({
+  serverKey: z.string().min(1).max(64),
+});
+export type ServerRemoveRequest = z.output<typeof ServerRemoveRequestSchema>;
+
+export const ServerTokenStatusRequestSchema = z.strictObject({
+  serverKey: z.string().min(1).max(64),
+});
+export type ServerTokenStatusRequest = z.output<typeof ServerTokenStatusRequestSchema>;
+
+/**
+ * Stored-credential status for the Servers pane's details affordance. `local`
+ * is the answer for any non-remote entry (locals carry no remote token);
+ * `session-only` means no readable blob exists so the entry works only while
+ * credentials are re-pasted; `re-paste-required` means a blob exists but
+ * cannot be decrypted on this machine.
+ */
+export const SERVER_TOKEN_STATUS = ['local', 'saved', 'session-only', 're-paste-required'] as const;
+export const ServerTokenStatusSchema = z.enum(SERVER_TOKEN_STATUS);
+export type ServerTokenStatus = z.output<typeof ServerTokenStatusSchema>;
+
+export const ServerTokenStatusResultSchema = z.strictObject({
+  status: ServerTokenStatusSchema,
+});
+export type ServerTokenStatusResult = z.output<typeof ServerTokenStatusResultSchema>;
 
 /** Narrows to the failure variant, which always carries error detail. */
 export function isConnectionErrorState(state: ConnectionState): state is ConnectionErrorState {
@@ -664,8 +747,18 @@ export type AppEvent = z.output<typeof AppEventSchema>;
  * The deep-linkable Settings destinations. Every value is also a Settings
  * pane id (`SETTINGS_PANES`), so a section name selects a pane directly.
  */
-export const SettingsSectionSchema = z.enum(['updates', 'diagnostics']);
+export const SettingsSectionSchema = z.enum(['updates', 'diagnostics', 'servers']);
 export type SettingsSection = z.output<typeof SettingsSectionSchema>;
+
+/**
+ * A within-pane intent a settings deep link can carry: which affordance to
+ * focus once the pane is up. Only the Servers pane's add form consumes one
+ * today. Kept separate from `settingsSection` so a pane switch and a focus
+ * intent ride one atomic route event.
+ */
+export const SETTINGS_FOCUS = ['add-server'] as const;
+export const SettingsFocusSchema = z.enum(SETTINGS_FOCUS);
+export type SettingsFocus = z.output<typeof SettingsFocusSchema>;
 
 export const AppRouteEventSchema = z.strictObject({
   target: z.enum([
@@ -690,6 +783,8 @@ export const AppRouteEventSchema = z.strictObject({
   attentionId: z.string().min(1).max(500).optional(),
   featureId: z.string().min(1).max(200).optional(),
   settingsSection: SettingsSectionSchema.optional(),
+  /** Within-pane focus intent (e.g. the Servers pane's add-server form). */
+  settingsFocus: SettingsFocusSchema.optional(),
   /** The `feature.*` command id a 'feature-command' route asks the renderer to run. */
   command: z.string().min(1).max(64).optional(),
 });
@@ -2271,15 +2366,20 @@ export type CreationFileSearchResult = z.output<typeof CreationFileSearchResultS
 // attachment metadata only (identity key, name, base URL, runtime
 // dir, last-seen) — never a token.
 
-export const SETTINGS_SCHEMA_VERSION = 4;
+export const SETTINGS_SCHEMA_VERSION = 5;
 
 /**
  * Hard bound on the persisted known-servers list. The list is ordered
  * most-recent-first; upserts move the touched entry to the front and entries
  * beyond the cap evict from the tail, so an attacker/script can never grow
- * settings.json without bound.
+ * settings.json without bound. This cap applies to LOCAL entries only;
+ * remote entries have their own cap (MAX_KNOWN_REMOTE_SERVERS) and are
+ * exempt from auto-eviction under local pressure (explicit removal only).
  */
 export const MAX_KNOWN_SERVERS = 16;
+
+/** Hard bound on persisted REMOTE known-server entries (explicit removal only). */
+export const MAX_KNOWN_REMOTE_SERVERS = 16;
 
 /**
  * Plain-http base-URL check for persisted known-server entries. A URL
@@ -2301,35 +2401,77 @@ export function isPlainHttpBaseUrl(value: string): boolean {
 /**
  * A server the desktop app successfully attached to. Persisted entries never
  * carry a token; the `serverKey` is an opaque identity (a sha256 prefix of the
- * canonical runtime dir) treated only as a match key.
+ * canonical runtime dir) treated only as a match key. `kind` splits the model:
+ * local entries identify a runtime dir and REQUIRE `runtimeDir`; remote
+ * entries identify a remote endpoint and MUST NOT carry `runtimeDir`. The
+ * optional `nickname` is a user-facing label that never affects identity.
  */
-export const KnownServerSchema = z.strictObject({
-  serverKey: z.string().min(1).max(64),
-  name: z.string().max(64),
-  baseUrl: z.string().max(256).refine(isPlainHttpBaseUrl, {
-    message: 'baseUrl must be a plain http URL',
-  }),
-  runtimeDir: z.string().max(4096),
-  lastSeenAt: z
-    .string()
-    .max(64)
-    .refine((value) => !Number.isNaN(Date.parse(value)), {
-      message: 'lastSeenAt must be an ISO 8601 timestamp',
+export const KnownServerSchema = z
+  .strictObject({
+    serverKey: z.string().min(1).max(64),
+    kind: ServerKindSchema,
+    name: z.string().max(64),
+    nickname: z.string().max(64).optional(),
+    baseUrl: z.string().max(256).refine(isPlainHttpBaseUrl, {
+      message: 'baseUrl must be a plain http URL',
     }),
-});
+    runtimeDir: z.string().max(4096).optional(),
+    lastSeenAt: z
+      .string()
+      .max(64)
+      .refine((value) => !Number.isNaN(Date.parse(value)), {
+        message: 'lastSeenAt must be an ISO 8601 timestamp',
+      }),
+  })
+  .superRefine((entry, ctx) => {
+    if (entry.kind === 'local' && entry.runtimeDir === undefined) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['runtimeDir'],
+        message: 'local known-server entries require runtimeDir',
+      });
+    }
+    if (entry.kind === 'remote' && entry.runtimeDir !== undefined) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['runtimeDir'],
+        message: 'remote known-server entries must not carry runtimeDir',
+      });
+    }
+  });
 
 export type KnownServer = z.output<typeof KnownServerSchema>;
 
 /**
  * Multi-server persistence: the bounded known-servers list (most-recent-first,
- * capped at MAX_KNOWN_SERVERS) and the identity key of the last successfully
- * attached server. `lastUsed` is only a pointer — it may name a serverKey that
- * is not (or no longer) in `known`.
+ * capped per kind at MAX_KNOWN_SERVERS local + MAX_KNOWN_REMOTE_SERVERS
+ * remote entries) and the identity key of the last successfully attached
+ * server. `lastUsed` is only a pointer — it may name a serverKey that is not
+ * (or no longer) in `known`.
  */
-export const ServersPrefsSchema = z.strictObject({
-  known: z.array(KnownServerSchema).max(MAX_KNOWN_SERVERS),
-  lastUsed: z.string().max(64).nullable(),
-});
+export const ServersPrefsSchema = z
+  .strictObject({
+    known: z.array(KnownServerSchema).max(MAX_KNOWN_SERVERS + MAX_KNOWN_REMOTE_SERVERS),
+    lastUsed: z.string().max(64).nullable(),
+  })
+  .superRefine((prefs, ctx) => {
+    const locals = prefs.known.filter((entry) => entry.kind === 'local').length;
+    const remotes = prefs.known.length - locals;
+    if (locals > MAX_KNOWN_SERVERS) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['known'],
+        message: `known must not exceed ${String(MAX_KNOWN_SERVERS)} local entries`,
+      });
+    }
+    if (remotes > MAX_KNOWN_REMOTE_SERVERS) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['known'],
+        message: `known must not exceed ${String(MAX_KNOWN_REMOTE_SERVERS)} remote entries`,
+      });
+    }
+  });
 
 export type ServersPrefs = z.output<typeof ServersPrefsSchema>;
 
@@ -2347,31 +2489,61 @@ export const ServersPatchSchema = z
   .strictObject({
     lastUsed: z.string().max(64).nullable().optional(),
     upsertKnown: KnownServerSchema.optional(),
+    removeKnown: z.string().min(1).max(64).optional(),
   })
-  .refine((patch) => patch.lastUsed !== undefined || patch.upsertKnown !== undefined, {
-    message: 'servers patch must carry lastUsed and/or upsertKnown',
-  });
+  .refine(
+    (patch) =>
+      patch.lastUsed !== undefined ||
+      patch.upsertKnown !== undefined ||
+      patch.removeKnown !== undefined,
+    {
+      message: 'servers patch must carry lastUsed, upsertKnown, and/or removeKnown',
+    },
+  );
 
 export type ServersPatch = z.output<typeof ServersPatchSchema>;
 
 /**
  * Applies a servers patch to the persisted section. An `upsertKnown` entry is
  * matched by `serverKey`: it replaces the stored fields in place, moves to the
- * front (most-recent-first order), and entries beyond MAX_KNOWN_SERVERS evict
- * from the tail. `lastUsed` is set when the patch carries it (including null
- * to clear); it is a bare pointer and is not validated against `known`.
- * Shared between the real SettingsStore and test doubles so the LRU upsert
- * semantics never drift.
+ * front (most-recent-first order), and entries evict from the tail within
+ * their own kind — locals beyond MAX_KNOWN_SERVERS and remotes beyond
+ * MAX_KNOWN_REMOTE_SERVERS. Remote entries are exempt from eviction by LOCAL
+ * pressure (they leave only via `removeKnown`). `removeKnown` drops the entry
+ * with the matching serverKey, for either kind. `lastUsed` is set when the
+ * patch carries it (including null to clear); it is a bare pointer and is not
+ * validated against `known`. Shared between the real SettingsStore and test
+ * doubles so the LRU upsert semantics never drift.
  */
 export function applyServersPatch(current: ServersPrefs, patch: ServersPatch): ServersPrefs {
+  let known = current.known;
+  if (patch.removeKnown !== undefined) {
+    known = known.filter((entry) => entry.serverKey !== patch.removeKnown);
+  }
+  if (patch.upsertKnown !== undefined) {
+    const merged = [
+      patch.upsertKnown,
+      ...known.filter((entry) => entry.serverKey !== patch.upsertKnown?.serverKey),
+    ];
+    // Per-kind caps, most-recent-first: entries beyond their kind's cap fall
+    // off the tail. A local upsert can never evict a remote entry.
+    const kept: KnownServer[] = [];
+    let locals = 0;
+    let remotes = 0;
+    for (const entry of merged) {
+      if (entry.kind === 'remote') {
+        remotes += 1;
+        if (remotes > MAX_KNOWN_REMOTE_SERVERS) continue;
+      } else {
+        locals += 1;
+        if (locals > MAX_KNOWN_SERVERS) continue;
+      }
+      kept.push(entry);
+    }
+    known = kept;
+  }
   return {
-    known:
-      patch.upsertKnown === undefined
-        ? current.known
-        : [
-            patch.upsertKnown,
-            ...current.known.filter((entry) => entry.serverKey !== patch.upsertKnown?.serverKey),
-          ].slice(0, MAX_KNOWN_SERVERS),
+    known,
     lastUsed: patch.lastUsed !== undefined ? patch.lastUsed : current.lastUsed,
   };
 }
@@ -2602,12 +2774,13 @@ export function disabledMainWindowUiState(): MainWindowUiState {
 }
 
 /**
- * The Settings window's own pane order — today's eight sections, unchanged.
- * The ids are stable storage values (`settingsWindow.pane`), so renaming a
- * pane's label never invalidates a persisted preference.
+ * The Settings window's own pane order. The ids are stable storage values
+ * (`settingsWindow.pane`), so renaming a pane's label never invalidates a
+ * persisted preference.
  */
 export const SETTINGS_PANES = [
   'workspace-roots',
+  'servers',
   'providers',
   'appearance',
   'updates',
@@ -2635,6 +2808,13 @@ export const SETTINGS_WINDOW_MIN_HEIGHT = 460;
 export const SettingsWindowPrefsSchema = z.strictObject({
   bounds: WindowBoundsSchema.optional(),
   pane: SettingsPaneIdSchema,
+  /**
+   * Transient one-shot focus intent for a cold open (e.g. the deep link
+   * `agentico://servers/add`): the main process writes it before raising
+   * the window and the window clears it as soon as it is consumed. It is
+   * absent in the steady state.
+   */
+  focus: SettingsFocusSchema.optional(),
 });
 
 export type SettingsWindowPrefs = z.output<typeof SettingsWindowPrefsSchema>;
@@ -2648,10 +2828,13 @@ export function defaultSettingsWindowPrefs(): SettingsWindowPrefs {
  * two renderer-origin entry points need this (the command palette's Settings
  * entry and the update popover's Updates action); the menu, tray, deep-link,
  * and second-instance paths already dispatch inside the main process.
- * Omitting `section` opens whichever pane was last viewed.
+ * Omitting `section` opens whichever pane was last viewed. `focus` carries
+ * the same within-pane intent as a settings deep link (e.g. the footer
+ * switcher's "Add Server…" row focuses the Servers pane's paste field).
  */
 export const SettingsOpenRequestSchema = z.strictObject({
   section: SettingsSectionSchema.optional(),
+  focus: SettingsFocusSchema.optional(),
 });
 
 export type SettingsOpenRequest = z.output<typeof SettingsOpenRequestSchema>;
@@ -2999,6 +3182,18 @@ export const ipcContracts: Record<IpcChannel, IpcContract> = {
   [IPC_CHANNELS.serversProbe]: {
     request: z.tuple([ServersProbeRequestSchema]),
     response: ServerListSnapshotSchema,
+  },
+  [IPC_CHANNELS.remoteServerAdd]: {
+    request: z.tuple([RemoteServerAddRequestSchema]),
+    response: RemoteServerAddResultSchema,
+  },
+  [IPC_CHANNELS.serverRemove]: {
+    request: z.tuple([ServerRemoveRequestSchema]),
+    response: ConnectionStateSchema,
+  },
+  [IPC_CHANNELS.serverTokenStatus]: {
+    request: z.tuple([ServerTokenStatusRequestSchema]),
+    response: ServerTokenStatusResultSchema,
   },
   [IPC_CHANNELS.settingsGet]: {
     request: z.tuple([]),
@@ -3370,6 +3565,22 @@ export interface AgenticoApi {
   listServers(): Promise<ServerListSnapshot>;
   /** Bounds health probing to the switcher popover's open lifetime. */
   probeServers(request: ServersProbeRequest): Promise<ServerListSnapshot>;
+  /**
+   * Adds a remote server from a pasted connection string: parses, probes,
+   * guards against local duplicates, verifies the token, and persists. All
+   * failures arrive as thrown SafeError envelopes; the pasted string is never
+   * echoed back.
+   */
+  addRemoteServer(request: RemoteServerAddRequest): Promise<RemoteServerAddResult>;
+  /**
+   * Removes a known server: the token blob (remote only), the settings
+   * entry, and — when the removed server was the active connection — tears
+   * down the connection back into the startup selection flow. The response
+   * is the resulting connection state.
+   */
+  removeServer(request: ServerRemoveRequest): Promise<ConnectionState>;
+  /** Stored-credential status for the Servers pane's details affordance. */
+  getServerTokenStatus(request: ServerTokenStatusRequest): Promise<ServerTokenStatusResult>;
   onServersChanged(listener: (snapshot: ServerListSnapshot) => void): () => void;
   onConnectionChanged(listener: (state: ConnectionState) => void): () => void;
   onRouteRequest(listener: (event: AppRouteEvent) => void): () => void;

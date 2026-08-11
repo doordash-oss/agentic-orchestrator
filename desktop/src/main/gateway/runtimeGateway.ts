@@ -13,16 +13,24 @@
  *  - Every failure lands in a renderer-visible connection-shell state with
  *    redacted diagnostics and a manual retry path.
  */
-import { SafeErrorException, safeError, toSafeError, redactText } from '../../shared/errors';
+import {
+  SafeErrorException,
+  safeError,
+  toSafeError,
+  redactText,
+  stripSecrets,
+} from '../../shared/errors';
 import {
   isConnectionErrorState,
   MAX_RUN_CONTENT_BYTES,
+  MAX_SERVER_CHOICE_CANDIDATES,
   SESSION_ID_SEGMENT_PATTERN,
   type ConnectionDiagnostics,
   type ConnectionState,
   type ChooseServerRequest,
   type KnownServer,
   type ServerChoiceCandidate,
+  type ServerRemoveRequest,
   type ServersPrefs,
   type SwitchContext,
   type SwitchServerRequest,
@@ -32,6 +40,7 @@ import { evaluateCompatibility } from './compatibility';
 import { evaluateDiscoveryFile, type DiscoveryDeps, type DiscoveryRecord } from './discovery';
 import type { SseStream } from './events';
 import { registryEntryKey, type RegistryCandidate, type RegistryScan } from './registry';
+import type { LoadResult as RemoteTokenLoadResult } from './remoteTokenStore';
 import type { ResolveResult } from './resources';
 import { DEFAULT_STOP_TIMEOUT_MS, type ChildExit } from './serverProcess';
 
@@ -135,6 +144,15 @@ export interface GatewayDeps {
    * known-server entry and moves the last-used pointer.
    */
   recordAttachedServer(entry: KnownServer): void;
+  /**
+   * Loads an encrypted remote-server bearer token keyed by serverKey. The
+   * store performs secret registration itself; the gateway never calls
+   * registerSecret for remote tokens. Absent means remote targets land in
+   * the re-paste error state.
+   */
+  remoteTokens?: {
+    load(serverKey: string): RemoteTokenLoadResult;
+  };
   timeouts?: Partial<GatewayTimeouts>;
   /** Injectable monotonic-enough wall clock for deterministic supervision tests. */
   now?(): number;
@@ -155,6 +173,21 @@ const ProbeHealthSchema = z.object({
   // treated as an attach blocker.
   name: z.string().max(64).optional().catch(undefined),
 });
+
+/**
+ * Background re-probe of a lost remote server: first probe after 1s, doubling
+ * per missed probe and capped at 15s. The whole loop is bounded by
+ * REMOTE_REPROBE_BUDGET_MS of wall-clock probing (~3 minutes), after which the
+ * gateway stops and leaves the manual Retry surface. The loop is
+ * generation-fenced like all other background work, so a server switch or
+ * shutdown quiesces it.
+ */
+const REMOTE_REPROBE_INITIAL_MS = 1000;
+const REMOTE_REPROBE_MAX_MS = 15000;
+const REMOTE_REPROBE_BUDGET_MS = 180000;
+
+const REMOTE_REPASTE_REMEDIATION =
+  'Re-enter the remote server token in Settings (paste its connection string again), then use Retry.';
 
 const INCOMPATIBLE_REMEDIATION =
   'Update the Agentico desktop app and the agentico runtime to matching releases, then retry. ' +
@@ -223,6 +256,25 @@ export class RuntimeGateway {
    * cycle and once a choice is consumed.
    */
   private pendingCandidates: RegistryCandidate[] = [];
+  /**
+   * Whether the currently connected server is a registry/discovery local
+   * runtime or a persisted remote endpoint. Drives switch candidates and the
+   * lost-server surface: only remote connections get a background re-probe.
+   */
+  private connectedKind: 'local' | 'remote' | null = null;
+  /**
+   * The persisted known-server entry behind the connected (or most recently
+   * lost) remote target. Kept after a remote loss so the background re-probe
+   * can re-attach with stored credentials; cleared by every fresh connect
+   * cycle, switch, restart, and shutdown. Never carries a token.
+   */
+  private remoteEntry: KnownServer | null = null;
+  /**
+   * Generation key of the in-flight remote re-probe loop. Gating on the
+   * generation (not a bare boolean) lets a new cycle schedule its own loop
+   * even while an older, already-fenced iteration is still unwinding.
+   */
+  private remoteReprobeGeneration: number | null = null;
 
   constructor(private readonly deps: GatewayDeps) {
     this.timeouts = { ...DEFAULT_TIMEOUTS, ...deps.timeouts };
@@ -392,6 +444,8 @@ export class RuntimeGateway {
     this.baseUrl = null;
     this.readySince = null;
     this.serverKey = null;
+    this.connectedKind = null;
+    this.remoteEntry = null;
     this.setState({
       status: 'idle',
       stage: 'resolve-runtime',
@@ -415,8 +469,33 @@ export class RuntimeGateway {
     const candidate = this.pendingCandidates.find((entry) => entry.serverKey === request.serverKey);
     this.pendingCandidates = [];
     if (candidate === undefined) {
-      this.deps.log('server choice named an unknown candidate; rescanning');
-      await this.retry();
+      // A remote target never appears in the registry snapshot: resolve it
+      // from the persisted known-servers entry instead of rescanning.
+      const known = this.deps
+        .knownServers()
+        .known.find((entry) => entry.serverKey === request.serverKey && entry.kind === 'remote');
+      if (known === undefined) {
+        this.deps.log('server choice named an unknown candidate; rescanning');
+        await this.retry();
+        return this.state;
+      }
+      this.busy = true;
+      const generation = ++this.generation;
+      try {
+        await this.attachRemote(generation, known);
+      } catch (err) {
+        const safe = toSafeError(err, 'E_GATEWAY');
+        this.deps.log(`gateway cycle failed: ${safe.code}: ${safe.message}`);
+        this.setState({
+          status: 'error',
+          stage: 'resolve-runtime',
+          detail: 'The connection attempt failed unexpectedly.',
+          ownership: 'none',
+          error: safe,
+        });
+      } finally {
+        this.busy = false;
+      }
       return this.state;
     }
     this.busy = true;
@@ -479,10 +558,27 @@ export class RuntimeGateway {
       this.readySince = null;
       this.crashAttempts = [];
       this.serverKey = null;
+      this.connectedKind = null;
+      this.remoteEntry = null;
+      if (known !== undefined && known.kind === 'remote') {
+        // Remote targets resolve from the persisted known-servers entry only
+        // — never the registry, never discovery, never spawn. The generation
+        // bump above already fenced any remote re-probe against the previous
+        // connection, so switching away leaves no supervision residue.
+        const attempted: ServerChoiceCandidate = {
+          serverKey: request.serverKey,
+          kind: 'remote',
+          name: known.nickname ?? known.name,
+          runtimeDir: '',
+        };
+        await this.attachRemote(generation, known, { attempted, previous });
+        return this.state;
+      }
       const scan = this.deps.scanRegistry();
       const candidate = scan.candidates.find((entry) => entry.serverKey === request.serverKey);
       const attempted: ServerChoiceCandidate = {
         serverKey: request.serverKey,
+        kind: 'local',
         name: candidate?.record.name ?? known?.name ?? null,
         runtimeDir: candidate?.runtimeDir ?? known?.runtimeDir ?? '',
       };
@@ -512,6 +608,7 @@ export class RuntimeGateway {
       this.deps.log(`gateway cycle failed: ${safe.code}: ${safe.message}`);
       const attempted: ServerChoiceCandidate = {
         serverKey: request.serverKey,
+        kind: known?.kind ?? 'local',
         name: known?.name ?? null,
         runtimeDir: known?.runtimeDir ?? '',
       };
@@ -530,21 +627,85 @@ export class RuntimeGateway {
   }
 
   /**
+   * Tears down the connection when the user's Servers pane removed the
+   * server it points at, then re-enters the standard startup selection
+   * flow (registry scan → picker when multiple servers live → local spawn
+   * otherwise) — exactly what Phase 2/3 do at launch. Settings must already
+   * be updated: the removed entry and any last-used pointer to it are gone
+   * by the time this runs, so the fresh connect cycle cannot reattach to
+   * the removed server.
+   *
+   * Callers: the `serverRemove` IPC handler. A no-op when the named server
+   * is not the active connection.
+   *
+   * Deliberately does NOT stop the app-owned child: supervision is
+   * decoupled from connection state (same rule as switchServer), and the
+   * child may be the very server the new connect cycle attaches to.
+   */
+  async disconnectServer(request: ServerRemoveRequest): Promise<ConnectionState> {
+    if (this.shuttingDown || this.busy) {
+      return this.state;
+    }
+    if (this.serverKey !== request.serverKey) {
+      return this.state;
+    }
+    this.busy = true;
+    // The generation bump fences any in-flight attach and any background
+    // remote re-probe for the removed connection.
+    const generation = ++this.generation;
+    try {
+      this.token = null;
+      this.baseUrl = null;
+      this.readySince = null;
+      this.serverKey = null;
+      this.connectedKind = null;
+      this.remoteEntry = null;
+      this.setState({
+        status: 'idle',
+        stage: 'resolve-runtime',
+        detail: 'Reconnecting after the server was removed.',
+        ownership: 'none',
+      });
+      await this.connect(generation);
+    } catch (err) {
+      const safe = toSafeError(err, 'E_GATEWAY');
+      this.deps.log(`gateway cycle failed: ${safe.code}: ${safe.message}`);
+      this.setState({
+        status: 'error',
+        stage: 'resolve-runtime',
+        detail: 'The connection attempt failed unexpectedly.',
+        ownership: 'none',
+        error: safe,
+      });
+    } finally {
+      this.busy = false;
+    }
+    return this.state;
+  }
+
+  /**
    * The "Back to <name>" identity for a failed switch: the currently
    * connected server when there is one, else the previous entry from the
    * failed switch's own context (never the target itself).
    */
   private switchPrevious(targetKey: string): ServerChoiceCandidate | null {
-    if (
-      this.serverKey !== null &&
-      this.serverKey !== targetKey &&
-      this.connectedRuntimeDir !== null
-    ) {
-      return {
-        serverKey: this.serverKey,
-        name: this.state.serverName ?? null,
-        runtimeDir: this.connectedRuntimeDir,
-      };
+    if (this.serverKey !== null && this.serverKey !== targetKey) {
+      if (this.connectedKind === 'remote') {
+        return {
+          serverKey: this.serverKey,
+          kind: 'remote',
+          name: this.state.serverName ?? null,
+          runtimeDir: '',
+        };
+      }
+      if (this.connectedRuntimeDir !== null) {
+        return {
+          serverKey: this.serverKey,
+          kind: 'local',
+          name: this.state.serverName ?? null,
+          runtimeDir: this.connectedRuntimeDir,
+        };
+      }
     }
     if (this.state.status === 'error') {
       const context = this.state.switchContext;
@@ -595,6 +756,29 @@ export class RuntimeGateway {
     this.baseUrl = null;
     this.readySince = null;
     this.serverKey = null;
+    if (this.connectedKind === 'remote' && this.remoteEntry !== null) {
+      // Lost remote: never spawn, never consume the crash budget. Surface a
+      // retry-level error and probe in the background so a server that comes
+      // back reconnects itself with the stored credentials.
+      const entry = this.remoteEntry;
+      this.connectedKind = null;
+      this.setState({
+        status: 'error',
+        stage: 'connect',
+        detail: 'The remote Agentico server is no longer reachable.',
+        ownership: 'external',
+        error: {
+          code: 'E_EXTERNAL_SERVER_LOST',
+          message: 'The remote Agentico server stopped responding.',
+          remediation:
+            'Check that the remote server is running and reachable. The app keeps ' +
+            'probing in the background for a few minutes and reconnects automatically; ' +
+            'you can also use Retry.',
+        },
+      });
+      this.scheduleRemoteReprobe(this.generation, entry);
+      return;
+    }
     this.setState({
       status: 'error',
       stage: 'connect',
@@ -622,6 +806,8 @@ export class RuntimeGateway {
     this.baseUrl = null;
     this.connectedRuntimeDir = null;
     this.serverKey = null;
+    this.connectedKind = null;
+    this.remoteEntry = null;
     this.pendingCandidates = [];
   }
 
@@ -632,8 +818,27 @@ export class RuntimeGateway {
     this.token = null;
     this.baseUrl = null;
     this.serverKey = null;
+    this.connectedKind = null;
+    this.remoteEntry = null;
     this.launchCommandContext = null;
     this.pendingCandidates = [];
+
+    // Remote last-used intent: when the last successfully attached server is
+    // a persisted remote entry, the cycle attaches to it directly — never the
+    // registry, never legacy discovery, never spawn. An unreachable remote
+    // lands in the picker when other servers are live, and on its own error
+    // surface (never spawn) when nothing else could replace it.
+    const lastUsedKey = this.deps.knownServers().lastUsed;
+    if (lastUsedKey !== null) {
+      const remote = this.deps
+        .knownServers()
+        .known.find((entry) => entry.serverKey === lastUsedKey && entry.kind === 'remote');
+      if (remote !== undefined) {
+        this.connectedRuntimeDir = null;
+        await this.attachRemote(generation, remote, undefined, { unreachableToChoice: true });
+        return;
+      }
+    }
 
     this.setState({
       status: 'resolving-runtime',
@@ -675,16 +880,18 @@ export class RuntimeGateway {
         // Multiple live servers without a last-used match: park in the
         // user-decision state; chooseServer() or retry() continues.
         this.pendingCandidates = scan.candidates;
+        // The picker lists remote entries alongside the live locals, each
+        // probed once so an unreachable remote is visibly marked.
+        const candidates = await this.buildChoiceCandidates(scan);
+        if (this.cancelled(generation)) {
+          return;
+        }
         this.setState({
           status: 'awaiting-server-choice',
           stage: 'connect',
           detail: 'Choose which Agentico server to connect to.',
           ownership: 'none',
-          candidates: scan.candidates.map((candidate) => ({
-            serverKey: candidate.serverKey,
-            name: candidate.record.name ?? null,
-            runtimeDir: candidate.runtimeDir,
-          })),
+          candidates,
         });
         return;
       }
@@ -737,6 +944,94 @@ export class RuntimeGateway {
       return scan.candidates[0] ?? null;
     }
     return null;
+  }
+
+  /**
+   * The picker's candidate set: registry-located locals (the scan just proved
+   * liveness, so no health verdict is carried) union the persisted remote
+   * entries, each probed once through the auth-exempt health endpoint with
+   * the usual probe bound. A remote known to be dead already (the last-used
+   * entry whose probe just failed) skips its probe and is carried as
+   * unreachable. Nicknames win over record and stored names. Never a token
+   * or a base URL in the result.
+   */
+  private async buildChoiceCandidates(
+    scan: RegistryScan,
+    unreachableRemoteKey?: string,
+  ): Promise<ServerChoiceCandidate[]> {
+    const known = this.deps.knownServers().known;
+    const nicknameByKey = new Map(
+      known
+        .filter((entry) => entry.nickname !== undefined)
+        .map((entry) => [entry.serverKey, entry.nickname as string]),
+    );
+    const candidates: ServerChoiceCandidate[] = scan.candidates.map((candidate) => ({
+      kind: 'local' as const,
+      serverKey: candidate.serverKey,
+      name: nicknameByKey.get(candidate.serverKey) ?? candidate.record.name ?? null,
+      runtimeDir: candidate.runtimeDir,
+    }));
+    const seen = new Set(candidates.map((candidate) => candidate.serverKey));
+    const remotes = await Promise.all(
+      known
+        .filter((entry) => entry.kind === 'remote' && !seen.has(entry.serverKey))
+        .map(async (entry): Promise<ServerChoiceCandidate> => {
+          const healthy =
+            entry.serverKey === unreachableRemoteKey
+              ? false
+              : await this.probeRemoteLiveness(entry.baseUrl);
+          return {
+            kind: 'remote' as const,
+            serverKey: entry.serverKey,
+            name: entry.nickname ?? (entry.name === '' ? null : entry.name),
+            health: healthy ? 'healthy' : 'unreachable',
+          };
+        }),
+    );
+    return [...candidates, ...remotes].slice(0, MAX_SERVER_CHOICE_CANDIDATES);
+  }
+
+  /** One bounded auth-exempt liveness probe; a throw is simply unreachable. */
+  private async probeRemoteLiveness(baseUrl: string): Promise<boolean> {
+    try {
+      const result = await this.deps.fetchJson(`${trimBase(baseUrl)}/api/v1/health`, {
+        timeoutMs: this.timeouts.healthProbeMs,
+      });
+      const probe = result.status === 200 ? ProbeHealthSchema.safeParse(result.body) : null;
+      return probe !== null && probe.success && probe.data.status === 'ok';
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Startup-only fallback for a dead last-used remote: park in the picker
+   * when at least one other server (local or remote) can be listed beside
+   * it, so the user picks a working server instead of staring at the error
+   * surface. Returns false when nothing else is live — the caller then
+   * emits the regular E_EXTERNAL_SERVER_LOST error.
+   */
+  private async parkChoiceForDeadRemote(generation: number, dead: KnownServer): Promise<boolean> {
+    if (this.cancelled(generation)) {
+      return true;
+    }
+    const scan = this.deps.scanRegistry();
+    this.pendingCandidates = scan.candidates;
+    const candidates = await this.buildChoiceCandidates(scan, dead.serverKey);
+    if (this.cancelled(generation)) {
+      return true;
+    }
+    if (candidates.length < 2) {
+      return false;
+    }
+    this.setState({
+      status: 'awaiting-server-choice',
+      stage: 'connect',
+      detail: 'Choose which Agentico server to connect to.',
+      ownership: 'none',
+      candidates,
+    });
+    return true;
   }
 
   /**
@@ -851,10 +1146,15 @@ export class RuntimeGateway {
       return 'blocked';
     }
 
-    const serverName = probe.data.name ?? null;
-    // Re-owning: switching back to the server this app spawned (still our
-    // supervised child, same pid) makes the attach app-owned again so its
-    // supervision drives ConnectionState as before the switch.
+    // A user-assigned nickname wins over the server-reported name for the
+    // displayed identity (footer, connection shell); identity itself is
+    // never affected. The raw name is only used before the token is known;
+    // once the record's token is in scope, the scrubbed form wins.
+    const knownEntry =
+      serverKey === undefined
+        ? undefined
+        : this.deps.knownServers().known.find((entry) => entry.serverKey === serverKey);
+    const rawServerName = knownEntry?.nickname ?? probe.data.name ?? null;
     const reOwn = this.child !== null && !this.child.exited && record.pid === this.child.pid;
     const attachOwnership: 'external' | 'app-owned' = reOwn ? 'app-owned' : 'external';
 
@@ -866,7 +1166,7 @@ export class RuntimeGateway {
         detail: 'The running runtime published no credentials to attach with.',
         ownership: 'external',
         serverBuild: verdict.serverBuild,
-        serverName,
+        serverName: rawServerName,
         error: {
           code: 'E_ATTACH_NO_TOKEN',
           message: 'The discovery record for the running runtime carries no auth token.',
@@ -877,6 +1177,11 @@ export class RuntimeGateway {
     }
     this.token = token;
     this.deps.registerSecret(token);
+    // Server-controlled display text: scrub the credential itself out before
+    // it can ride a state or a persisted entry (hostile server echoing the
+    // token back in its probed name). The token is only in scope after the
+    // presence check above, so the scrub lives past it.
+    const serverName = this.scrubServerText(rawServerName, token);
 
     this.setState({
       status: 'connecting',
@@ -909,6 +1214,8 @@ export class RuntimeGateway {
     }
     this.baseUrl = trimBase(record.base_url);
     this.serverKey = serverKey ?? registryEntryKey(selected.runtimeDir);
+    this.connectedKind = 'local';
+    this.remoteEntry = null;
     this.setState({
       status: 'ready',
       stage: 'ready',
@@ -924,12 +1231,257 @@ export class RuntimeGateway {
     // known-servers entry and the last-used pointer.
     this.deps.recordAttachedServer({
       serverKey: this.serverKey,
+      kind: 'local',
       name: serverName ?? '',
       baseUrl: trimBase(record.base_url),
       runtimeDir: selected.runtimeDir,
       lastSeenAt: new Date(this.now()).toISOString(),
     });
     return 'attached';
+  }
+
+  // --- remote attach path ----------------------------------------------------
+  //
+  // Remote targets come from the persisted known-servers list (kind 'remote',
+  // keyed by serverKey) and their encrypted tokens from the RemoteTokenStore.
+  // This path never touches the registry, discovery files, PID liveness, or
+  // spawn, and never consumes the crash-restart budget. The local
+  // runtime-dir/state-dir consistency check does not apply to a process the
+  // app does not co-locate with. On the startup last-used path only
+  // (`unreachableToChoice`), a dead remote parks in the picker instead of
+  // the error surface when other servers are live.
+
+  private async attachRemote(
+    generation: number,
+    entry: KnownServer,
+    switchContext?: SwitchContext,
+    options?: { unreachableToChoice?: boolean },
+  ): Promise<void> {
+    const baseUrl = trimBase(entry.baseUrl);
+    this.setState({
+      status: 'attaching',
+      stage: 'connect',
+      detail: 'Connecting to the remote Agentico server.',
+      ownership: 'none',
+    });
+
+    // The token store registers the loaded secret for log redaction itself.
+    const loaded = this.deps.remoteTokens?.load(entry.serverKey) ?? { status: 'absent' as const };
+    if (loaded.status !== 'ok') {
+      this.setState({
+        status: 'error',
+        stage: 'authenticate',
+        detail: 'The stored credentials for the remote server must be re-entered.',
+        ownership: 'none',
+        error: {
+          code: 'E_REMOTE_TOKEN_REPASTE',
+          message:
+            loaded.status === 're-paste-required'
+              ? 'The stored token for this remote server could not be decrypted.'
+              : 'There is no stored token for this remote server.',
+          remediation: REMOTE_REPASTE_REMEDIATION,
+        },
+        ...(switchContext !== undefined ? { switchContext } : {}),
+      });
+      return;
+    }
+
+    // Health is auth-exempt by design: compatibility is evaluated before any
+    // credential is presented.
+    let health: HttpResult;
+    try {
+      health = await this.deps.fetchJson(`${baseUrl}/api/v1/health`, {
+        timeoutMs: this.timeouts.healthProbeMs,
+      });
+    } catch {
+      if (options?.unreachableToChoice === true) {
+        if (await this.parkChoiceForDeadRemote(generation, entry)) {
+          return;
+        }
+      }
+      this.setState({
+        status: 'error',
+        stage: 'connect',
+        detail: 'The remote Agentico server is not reachable.',
+        ownership: 'none',
+        error: {
+          code: 'E_EXTERNAL_SERVER_LOST',
+          message: 'The remote Agentico server did not answer its health probe.',
+          remediation: 'Check that the remote server is running and reachable, then use Retry.',
+        },
+        ...(switchContext !== undefined ? { switchContext } : {}),
+      });
+      return;
+    }
+    if (this.cancelled(generation)) {
+      return;
+    }
+    const probe = health.status === 200 ? ProbeHealthSchema.safeParse(health.body) : null;
+    if (probe === null || !probe.success || probe.data.status !== 'ok') {
+      if (options?.unreachableToChoice === true) {
+        if (await this.parkChoiceForDeadRemote(generation, entry)) {
+          return;
+        }
+      }
+      this.setState({
+        status: 'error',
+        stage: 'connect',
+        detail: 'The remote Agentico server is not healthy.',
+        ownership: 'none',
+        error: {
+          code: 'E_EXTERNAL_SERVER_LOST',
+          message: 'The remote Agentico server answered with an unhealthy status.',
+          remediation: 'Check that the remote server is running and reachable, then use Retry.',
+        },
+        ...(switchContext !== undefined ? { switchContext } : {}),
+      });
+      return;
+    }
+
+    const verdict = evaluateCompatibility(probe.data.compatibility);
+    if (!verdict.compatible) {
+      this.deps.log(`remote server is incompatible: ${verdict.reason}`);
+      this.setState({
+        status: 'incompatible',
+        stage: 'connect',
+        detail: 'The remote Agentico server is not compatible with this app.',
+        ownership: 'external',
+        error: {
+          code: 'E_INCOMPATIBLE_SERVER',
+          message: verdict.reason,
+          remediation: INCOMPATIBLE_REMEDIATION,
+        },
+      });
+      return;
+    }
+    if (this.cancelled(generation)) {
+      return;
+    }
+
+    // `probeName` is the server-reported name (also the base-name refresh
+    // source); the displayed name prefers the user's nickname. Server
+    // controlled, so the stored credential itself is scrubbed out before the
+    // name can ride a state or a persisted entry (a hostile server echoing
+    // the presented token back in its health name must not leak it).
+    const probeName = this.scrubServerText(probe.data.name ?? null, loaded.token);
+    const serverName = entry.nickname ?? probeName;
+    this.token = loaded.token;
+    this.setState({
+      status: 'connecting',
+      stage: 'authenticate',
+      detail: 'Authenticating with the remote Agentico server.',
+      ownership: 'external',
+      serverBuild: verdict.serverBuild,
+      serverName,
+    });
+    const authenticated = await this.fetchReadiness(baseUrl);
+    if (this.cancelled(generation)) {
+      return;
+    }
+    if (!authenticated) {
+      this.token = null;
+      this.setState({
+        status: 'error',
+        stage: 'authenticate',
+        detail: 'The remote Agentico server rejected the stored credentials.',
+        ownership: 'external',
+        serverBuild: verdict.serverBuild,
+        serverName,
+        error: {
+          code: 'E_REMOTE_TOKEN_REPASTE',
+          message: 'The remote Agentico server rejected the stored token.',
+          remediation: REMOTE_REPASTE_REMEDIATION,
+        },
+        ...(switchContext !== undefined ? { switchContext } : {}),
+      });
+      return;
+    }
+
+    this.baseUrl = baseUrl;
+    this.serverKey = entry.serverKey;
+    this.connectedKind = 'remote';
+    this.connectedRuntimeDir = null;
+    this.setState({
+      status: 'ready',
+      stage: 'ready',
+      detail: 'Connected to the remote Agentico server.',
+      ownership: 'external',
+      serverBuild: verdict.serverBuild,
+      serverName,
+    });
+    this.readySince = this.now();
+    // A successful remote attach refreshes lastSeenAt and the last-used
+    // pointer. The stored base name auto-refreshes from the health probe
+    // only while no user nickname is set — a nickname locks the rule out.
+    const refreshed: KnownServer = {
+      serverKey: entry.serverKey,
+      kind: 'remote',
+      name:
+        entry.nickname === undefined && probeName !== null && probeName !== ''
+          ? probeName
+          : entry.name,
+      ...(entry.nickname === undefined ? {} : { nickname: entry.nickname }),
+      baseUrl,
+      lastSeenAt: new Date(this.now()).toISOString(),
+    };
+    this.remoteEntry = refreshed;
+    this.deps.recordAttachedServer(refreshed);
+  }
+
+  /**
+   * Bounded background re-probe of a lost remote server: 1s initial delay,
+   * exponential doubling capped at 15s, bounded to REMOTE_REPROBE_BUDGET_MS
+   * (~3 minutes) of total probing, then the loop gives up and the manual
+   * Retry surface remains. Generation-fenced exactly like the crash-recovery
+   * paths: a switch, restart, or shutdown quiesces the loop. When the server
+   * answers healthy again the loop hands off to a full fresh attach, which
+   * re-loads the stored credentials and re-evaluates compatibility.
+   */
+  private scheduleRemoteReprobe(generation: number, entry: KnownServer): void {
+    if (this.remoteReprobeGeneration === generation || this.shuttingDown) {
+      return;
+    }
+    this.remoteReprobeGeneration = generation;
+    const startedAt = this.now();
+    const step = async (attempt: number): Promise<void> => {
+      const delay = Math.min(REMOTE_REPROBE_INITIAL_MS * 2 ** attempt, REMOTE_REPROBE_MAX_MS);
+      await this.deps.sleep(delay);
+      if (this.remoteReprobeGeneration !== generation || this.cancelled(generation)) {
+        return;
+      }
+      if (this.now() - startedAt >= REMOTE_REPROBE_BUDGET_MS) {
+        this.deps.log('remote re-probe budget exhausted; leaving the manual retry surface');
+        this.remoteReprobeGeneration = null;
+        return;
+      }
+      let healthy = false;
+      try {
+        const health = await this.deps.fetchJson(`${trimBase(entry.baseUrl)}/api/v1/health`, {
+          timeoutMs: this.timeouts.healthProbeMs,
+        });
+        const probe = ProbeHealthSchema.safeParse(health.body);
+        healthy = health.status === 200 && probe.success && probe.data.status === 'ok';
+      } catch {
+        healthy = false;
+      }
+      if (this.remoteReprobeGeneration !== generation || this.cancelled(generation)) {
+        return;
+      }
+      if (healthy) {
+        this.deps.log('remote server is healthy again; re-attaching');
+        this.remoteReprobeGeneration = null;
+        await this.attachRemote(generation, entry);
+        return;
+      }
+      await step(attempt + 1);
+    };
+    void step(0).catch((err: unknown) => {
+      if (this.remoteReprobeGeneration === generation) {
+        this.remoteReprobeGeneration = null;
+      }
+      const safe = toSafeError(err, 'E_RECOVERY_DELAY');
+      this.deps.log(`remote re-probe failed: ${safe.message}`);
+    });
   }
 
   // --- launch path -----------------------------------------------------------
@@ -1071,6 +1623,8 @@ export class RuntimeGateway {
     }
     this.baseUrl = trimBase(ready.record.base_url);
     this.serverKey = registryEntryKey(selected.runtimeDir);
+    this.connectedKind = 'local';
+    this.remoteEntry = null;
     this.setState({
       status: 'ready',
       stage: 'ready',
@@ -1424,13 +1978,8 @@ export class RuntimeGateway {
 
   /** Defense in depth: no emitted text ever carries bearer material. */
   private sanitizeState(state: ConnectionState): ConnectionState {
-    const scrub = (text: string): string => {
-      let out = redactText(text);
-      if (this.token !== null && this.token.length > 0) {
-        out = out.split(this.token).join('[redacted]');
-      }
-      return out;
-    };
+    const scrub = (text: string): string =>
+      this.token === null ? redactText(text) : stripSecrets(redactText(text), [this.token]);
     if (!isConnectionErrorState(state)) {
       return { ...state, detail: scrub(state.detail) };
     }
@@ -1455,6 +2004,18 @@ export class RuntimeGateway {
           : { remediation: scrub(state.error.remediation) }),
       },
     };
+  }
+
+  /**
+   * Scrubs the presented credential out of server-controlled display text
+   * (the health payload's `name`). Nicknames and candidate names are
+   * user-controlled and never carry the secret through this seam.
+   */
+  private scrubServerText(text: string | null, secret: string): string | null {
+    if (text === null) {
+      return null;
+    }
+    return stripSecrets(text, [secret]).slice(0, 64);
   }
 
   private ownedDiagnosticsField(): { diagnostics?: ConnectionDiagnostics } {

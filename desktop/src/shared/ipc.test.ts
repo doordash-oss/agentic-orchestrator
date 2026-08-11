@@ -36,6 +36,10 @@ import {
   LocalReviewDraftSaveRequestSchema,
   LocalReviewDraftStoreSchema,
   PublishDescriptionRequestSchema,
+  AppRouteEventSchema,
+  ServerRemoveRequestSchema,
+  ServerTokenStatusRequestSchema,
+  ServerTokenStatusResultSchema,
 } from './ipc';
 import { assertNoPrototypePollution } from './sanitize';
 
@@ -483,14 +487,17 @@ describe('SettingsSchema', () => {
     expect(SettingsSchema.safeParse({ ...defaultSettings(), schemaVersion: 3 }).success).toBe(
       false,
     );
-    expect(SettingsSchema.safeParse({ ...defaultSettings(), schemaVersion: 5 }).success).toBe(
+    expect(SettingsSchema.safeParse({ ...defaultSettings(), schemaVersion: 4 }).success).toBe(
+      false,
+    );
+    expect(SettingsSchema.safeParse({ ...defaultSettings(), schemaVersion: 6 }).success).toBe(
       false,
     );
   });
 
   it('accepts a full settings document with window bounds and theme', () => {
     const doc = {
-      schemaVersion: 4,
+      schemaVersion: 5,
       runtime: { selection: 'claude' },
       window: { bounds: { x: 10, y: 20, width: 800, height: 600 } },
       theme: 'dark',
@@ -509,6 +516,7 @@ describe('SettingsSchema', () => {
         known: [
           {
             serverKey: 'a'.repeat(64),
+            kind: 'local',
             name: 'frothy-macchiato',
             baseUrl: 'http://127.0.0.1:9001',
             runtimeDir: '/home/user/.agentic-orchestrator',
@@ -523,7 +531,7 @@ describe('SettingsSchema', () => {
 
   it('fills wizard presentation prefs with defaults for pre-wizard documents', () => {
     const doc = {
-      schemaVersion: 4,
+      schemaVersion: 5,
       runtime: { selection: null },
       window: {},
       theme: 'system',
@@ -541,7 +549,7 @@ describe('SettingsSchema', () => {
 
   it('fills the Settings window prefs with defaults for pre-Settings-window documents', () => {
     const doc = {
-      schemaVersion: 4,
+      schemaVersion: 5,
       runtime: { selection: 'claude' },
       window: {},
       theme: 'dark',
@@ -610,6 +618,7 @@ describe('SettingsPatchSchema', () => {
   it('accepts a servers patch that upserts an entry and/or sets last-used', () => {
     const entry = {
       serverKey: 'b'.repeat(64),
+      kind: 'local',
       name: '',
       baseUrl: 'http://localhost:9001',
       runtimeDir: '/rt',
@@ -635,9 +644,70 @@ describe('SettingsPatchSchema', () => {
   });
 });
 
+describe('Servers pane IPC contracts', () => {
+  it('AppRouteEvent: settings focus rides the settings section, stays optional', () => {
+    expect(
+      AppRouteEventSchema.parse({
+        target: 'settings',
+        settingsSection: 'servers',
+        settingsFocus: 'add-server',
+      }),
+    ).toEqual({
+      target: 'settings',
+      settingsSection: 'servers',
+      settingsFocus: 'add-server',
+    });
+    expect(AppRouteEventSchema.parse({ target: 'settings' })).toEqual({ target: 'settings' });
+    // Unknown focus intents and smuggled fields are rejected.
+    expect(
+      AppRouteEventSchema.safeParse({
+        target: 'settings',
+        settingsSection: 'servers',
+        settingsFocus: 'nuke',
+      }).success,
+    ).toBe(false);
+    expect(
+      AppRouteEventSchema.safeParse({
+        target: 'settings',
+        settingsSection: 'servers',
+        token: 'x',
+      }).success,
+    ).toBe(false);
+  });
+
+  it('ServerRemoveRequest: strict shape, non-empty key', () => {
+    expect(ServerRemoveRequestSchema.parse({ serverKey: 'a'.repeat(32) })).toEqual({
+      serverKey: 'a'.repeat(32),
+    });
+    for (const bad of [
+      { serverKey: '' },
+      { serverKey: 'a'.repeat(65) },
+      { serverKey: 'a'.repeat(32), token: 'smuggled' },
+      {},
+    ]) {
+      expect(ServerRemoveRequestSchema.safeParse(bad).success).toBe(false);
+    }
+  });
+
+  it('ServerTokenStatus: request is strict; the result is one of four statuses, nothing else', () => {
+    expect(ServerTokenStatusRequestSchema.safeParse({ serverKey: 'x' }).success).toBe(true);
+    expect(ServerTokenStatusRequestSchema.safeParse({ serverKey: 'x', extra: 1 }).success).toBe(
+      false,
+    );
+    for (const status of ['local', 'saved', 'session-only', 're-paste-required']) {
+      expect(ServerTokenStatusResultSchema.parse({ status })).toEqual({ status });
+    }
+    expect(ServerTokenStatusResultSchema.safeParse({ status: 'ok' }).success).toBe(false);
+    expect(
+      ServerTokenStatusResultSchema.safeParse({ status: 'saved', token: 'leak' }).success,
+    ).toBe(false);
+  });
+});
+
 describe('KnownServerSchema', () => {
   const entry = {
     serverKey: 'c'.repeat(64),
+    kind: 'local' as const,
     name: 'frothy-macchiato',
     baseUrl: 'http://127.0.0.1:9001',
     runtimeDir: '/home/user/.agentic-orchestrator',
@@ -680,6 +750,27 @@ describe('KnownServerSchema', () => {
     );
   });
 
+  it('splits local and remote entries: runtimeDir required locally, forbidden remotely', () => {
+    // A local entry without runtimeDir is rejected.
+    const localNoDir: Record<string, unknown> = { ...entry };
+    delete localNoDir.runtimeDir;
+    expect(KnownServerSchema.safeParse(localNoDir).success).toBe(false);
+    // A remote entry must not carry runtimeDir.
+    expect(
+      KnownServerSchema.safeParse({ ...entry, kind: 'remote', runtimeDir: '/rt/no' }).success,
+    ).toBe(false);
+    // A remote entry without runtimeDir (with or without a nickname) is valid.
+    const remote: Record<string, unknown> = { ...entry, kind: 'remote' };
+    delete remote.runtimeDir;
+    expect(KnownServerSchema.safeParse(remote).success).toBe(true);
+    expect(KnownServerSchema.safeParse({ ...remote, nickname: 'the far box' }).success).toBe(true);
+    // kind itself is constrained and required.
+    expect(KnownServerSchema.safeParse({ ...entry, kind: 'tunnel' }).success).toBe(false);
+    const noKind: Record<string, unknown> = { ...entry };
+    delete noKind.kind;
+    expect(KnownServerSchema.safeParse(noKind).success).toBe(false);
+  });
+
   it('refuses a settings document whose known list exceeds the bound', () => {
     const doc = defaultSettings();
     for (let index = 0; index <= MAX_KNOWN_SERVERS; index += 1) {
@@ -714,6 +805,14 @@ describe('window purposes', () => {
     // Not every pane is deep-linkable, and nothing else rides along.
     expect(SettingsOpenRequestSchema.safeParse({ section: 'advanced' }).success).toBe(false);
     expect(SettingsOpenRequestSchema.safeParse({ section: 'updates', pane: 'x' }).success).toBe(
+      false,
+    );
+    // A within-pane focus intent matches the deep-link vocabulary exactly.
+    expect(SettingsOpenRequestSchema.parse({ section: 'servers', focus: 'add-server' })).toEqual({
+      section: 'servers',
+      focus: 'add-server',
+    });
+    expect(SettingsOpenRequestSchema.safeParse({ section: 'servers', focus: 'nuke' }).success).toBe(
       false,
     );
   });

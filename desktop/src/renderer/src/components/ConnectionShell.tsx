@@ -28,6 +28,23 @@ const STAGE_LABELS: Record<ConnectionStage, string> = {
 
 const SPINE_STAGES = CONNECTION_STAGES.map((id) => ({ id, label: STAGE_LABELS[id] }));
 
+/**
+ * Picker rows for registry-located locals just proved liveness in the scan,
+ * so they omit a health verdict and read "Running" as they always have;
+ * remote candidates carry the verdict of the probe run while the snapshot
+ * was assembled.
+ */
+function candidateStateLabel(candidate: ServerChoiceCandidate): string {
+  if (candidate.health === undefined) {
+    return 'Running';
+  }
+  return candidate.health === 'healthy'
+    ? 'Running'
+    : candidate.health === 'unreachable'
+      ? 'Unreachable'
+      : 'Checking…';
+}
+
 /** Every status pairs a text label with a shape cue — never color alone. */
 const STATUS_META: Record<ConnectionState['status'], { label: string; icon: string }> = {
   idle: { label: 'Idle', icon: '○' },
@@ -130,6 +147,9 @@ function ServerChoiceList({
     >
       {candidates.map((candidate, index) => {
         const selected = index === highlight;
+        // Remote candidates have no local runtime dir to disambiguate by.
+        const location =
+          candidate.runtimeDir === undefined ? ' on a remote host' : ` at ${candidate.runtimeDir}`;
         return (
           <button
             key={candidate.serverKey}
@@ -137,7 +157,7 @@ function ServerChoiceList({
             role="option"
             aria-selected={selected}
             tabIndex={selected ? 0 : -1}
-            aria-label={`Connect to ${candidate.name ?? 'unnamed server'} at ${candidate.runtimeDir}`}
+            aria-label={`Connect to ${candidate.name ?? 'unnamed server'}${location}`}
             className="shell-card__picker-row"
             data-selected={selected}
             onMouseEnter={() => setHighlight(index)}
@@ -146,12 +166,21 @@ function ServerChoiceList({
           >
             <span className="shell-card__picker-primary" aria-hidden="true">
               {candidate.name ?? 'Unnamed server'}
+              {candidate.kind === 'remote' ? (
+                <span className="settings-panel__server-kind" data-kind="remote">
+                  Remote
+                </span>
+              ) : null}
             </span>
             <span className="shell-card__picker-runtime" aria-hidden="true">
-              {candidate.runtimeDir}
+              {candidate.runtimeDir ?? ''}
             </span>
-            <span className="shell-card__picker-state" aria-hidden="true">
-              Running
+            <span
+              className="shell-card__picker-state"
+              data-health={candidate.health ?? 'healthy'}
+              aria-hidden="true"
+            >
+              {candidateStateLabel(candidate)}
             </span>
           </button>
         );

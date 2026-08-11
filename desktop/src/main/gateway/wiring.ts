@@ -17,6 +17,7 @@ import {
 import type { DiscoveryDeps } from './discovery';
 import type { SseStream } from './events';
 import { RedactedLogBuffer } from './logBuffer';
+import { RemoteTokenStore, type SafeStorageLike } from './remoteTokenStore';
 import { scanRegistry, type RegistryDeps, type RegistryScan } from './registry';
 import { fileIsExecutable, resolveServerBinary } from './resources';
 import { RuntimeGateway, type GatewayDeps, type SelectedRuntime } from './runtimeGateway';
@@ -46,6 +47,10 @@ export interface RuntimeGatewayWiringOptions {
   resourcesPath: string;
   /** Repository root in development (…/desktop/out/main → repo). */
   appRoot: string;
+  /** Electron safeStorage primitive backing the encrypted remote token store. */
+  safeStorage: SafeStorageLike;
+  /** App userData directory; the token store file lives directly inside it. */
+  userDataDir: string;
   /** Redacted warning sink (defaults to console.warn). */
   warn?: (line: string) => void;
 }
@@ -56,11 +61,19 @@ export interface WiredRuntimeGateway {
   logBuffer: RedactedLogBuffer;
   /** Fresh central-registry scan against the same deps the gateway uses. */
   scanRegistry(): RegistryScan;
+  /** Encrypted remote-server token store shared with the gateway. */
+  remoteTokens: RemoteTokenStore;
 }
 
 export function createRuntimeGateway(options: RuntimeGatewayWiringOptions): WiredRuntimeGateway {
   const logBuffer = new RedactedLogBuffer(400);
   const warn = options.warn ?? ((line: string) => console.warn(line));
+
+  // Mirrors the settings-store placement: one file directly in userData.
+  const remoteTokens = new RemoteTokenStore(path.join(options.userDataDir, 'remote-tokens.json'), {
+    safeStorage: options.safeStorage,
+    registerSecret: (secret) => logBuffer.addSecret(secret),
+  });
 
   const discovery: DiscoveryDeps = {
     readFile: (filePath) => fs.readFileSync(filePath, 'utf8'),
@@ -144,12 +157,14 @@ export function createRuntimeGateway(options: RuntimeGatewayWiringOptions): Wire
     scanRegistry: () => scanRegistry(registry),
     knownServers: () => options.getServersPrefs(),
     recordAttachedServer: (entry) => options.recordAttachedServer(entry),
+    remoteTokens,
   };
 
   return {
     gateway: new RuntimeGateway(deps),
     logBuffer,
     scanRegistry: () => scanRegistry(registry),
+    remoteTokens,
   };
 }
 

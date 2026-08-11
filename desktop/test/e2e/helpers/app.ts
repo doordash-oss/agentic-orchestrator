@@ -465,9 +465,10 @@ export async function setTheme(handle: AppHandle, theme: 'light' | 'dark'): Prom
 
 // --- the Settings window --------------------------------------------------------
 
-/** The eight pane labels, in source-list order (see features/settingsPanes). */
+/** The pane labels, in source-list order (see features/settingsPanes). */
 export type SettingsPaneLabel =
   | 'Workspace roots'
+  | 'Servers'
   | 'Providers'
   | 'Appearance'
   | 'Updates'

@@ -1447,6 +1447,10 @@ function makeMockApi(
     switchConnectionServer: () => Promise.resolve(CONNECTION_STATE),
     listServers: () => Promise.resolve({ rows: [] }),
     probeServers: () => Promise.resolve({ rows: [] }),
+    addRemoteServer: () => Promise.reject(new Error('addRemoteServer not available in capture')),
+    removeServer: () => Promise.reject(new Error('removeServer not available in capture')),
+    getServerTokenStatus: () =>
+      Promise.reject(new Error('getServerTokenStatus not available in capture')),
     onServersChanged: () => () => {},
     onConnectionChanged: (listener) => {
       connectionListeners.add(listener);

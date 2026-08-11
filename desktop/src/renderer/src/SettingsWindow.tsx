@@ -16,7 +16,11 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { SettingsPaneId } from '../../shared/ipc';
 import { defaultSettingsWindowPrefs } from '../../shared/ipc';
 import { SettingsPanel } from './features/SettingsPanel';
-import { SETTINGS_PANE_CATALOGUE, settingsPaneLabel } from './features/settingsPanes';
+import {
+  SETTINGS_PANE_CATALOGUE,
+  settingsPaneLabel,
+  type PaneFocusIntent,
+} from './features/settingsPanes';
 import { useSystemAccentMirror, useTheme } from './hooks';
 
 export default function SettingsWindow() {
@@ -29,6 +33,8 @@ export default function SettingsWindow() {
   // null until the persisted pane is restored, so the window never paints one
   // pane and then jumps to another.
   const [pane, setPane] = useState<SettingsPaneId | null>(null);
+  const [focusIntent, setFocusIntent] = useState<PaneFocusIntent | null>(null);
+  const focusSeq = useRef(0);
   const persistence = useRef<Promise<void>>(Promise.resolve());
 
   useEffect(() => {
@@ -36,7 +42,21 @@ export default function SettingsWindow() {
     window.agentico
       .getSettings()
       .then((settings) => {
-        if (alive) setPane(settings.settingsWindow.pane);
+        if (!alive) return;
+        setPane(settings.settingsWindow.pane);
+        // A cold-open focus intent rides the persisted prefs one way; the
+        // window consumes it (fires it at the pane) and clears it so a later
+        // plain open does not re-fire it.
+        const intent = settings.settingsWindow.focus;
+        if (intent !== undefined) {
+          focusSeq.current += 1;
+          setFocusIntent({ intent, seq: focusSeq.current });
+          void window.agentico
+            .updateSettings({
+              settingsWindow: { ...settings.settingsWindow, focus: undefined },
+            })
+            .catch(() => undefined);
+        }
       })
       .catch(() => {
         if (alive) setPane(defaultSettingsWindowPrefs().pane);
@@ -46,14 +66,18 @@ export default function SettingsWindow() {
     };
   }, []);
 
-  // A deep link arriving while the window is already open switches the pane;
-  // arriving with it closed lands there because the main process wrote the
-  // pane before raising the window.
+  // A deep link arriving while the window is already open switches the pane
+  // (and refreshes its focus intent); arriving with it closed lands there
+  // because the main process wrote the pane before raising the window.
   useEffect(
     () =>
       window.agentico.onRouteRequest((event) => {
         if (event.target === 'settings' && event.settingsSection !== undefined) {
           setPane(event.settingsSection);
+        }
+        if (event.settingsFocus !== undefined) {
+          focusSeq.current += 1;
+          setFocusIntent({ intent: event.settingsFocus, seq: focusSeq.current });
         }
       }),
     [],
@@ -152,7 +176,7 @@ export default function SettingsWindow() {
         </div>
       </nav>
       <div className="settings-window__pane">
-        <SettingsPanel pane={pane} />
+        <SettingsPanel pane={pane} focusIntent={focusIntent} />
       </div>
     </div>
   );

@@ -11,12 +11,20 @@ const GAMMA_KEY = 'c'.repeat(64);
 
 function row(overrides: Partial<ServerListRow> & { serverKey: string }): ServerListRow {
   return {
+    kind: 'local',
     name: null,
     runtimeDir: '/rt/server',
     current: false,
     health: 'healthy',
     ...overrides,
   };
+}
+
+/** Remote rows carry no runtimeDir — build them without the local default. */
+function remoteRow(overrides: Partial<ServerListRow> & { serverKey: string }): ServerListRow {
+  const { runtimeDir, ...rest } = row({ kind: 'remote', ...overrides });
+  void runtimeDir;
+  return rest;
 }
 
 function renderSwitcher(openRequest: { id: number } | null = null) {
@@ -131,6 +139,61 @@ describe('ServerSwitcher', () => {
     expect(document.activeElement).toBe(
       screen.getByRole('button', { name: 'alpha — switch server' }),
     );
+  });
+
+  it('marks remote rows with the kind badge and no runtime dir', async () => {
+    const mock = installAgenticoMock();
+    const snapshot = {
+      rows: [
+        row({ serverKey: ALPHA_KEY, name: 'alpha', runtimeDir: '/rt/alpha', current: true }),
+        remoteRow({ serverKey: BETA_KEY, name: 'far-box' }),
+      ],
+    };
+    mock.api.listServers.mockResolvedValue(snapshot);
+    mock.api.probeServers.mockResolvedValue(snapshot);
+    render(<ServerSwitcher currentLabel="alpha" tone="ready" enabled />);
+    await userEvent.click(screen.getByRole('button', { name: 'alpha — switch server' }));
+
+    const remote = await screen.findByRole('option', { name: 'far-box — Available' });
+    const badge = remote.querySelector('.settings-panel__server-kind');
+    expect(badge).not.toBeNull();
+    expect(badge).toHaveAttribute('data-kind', 'remote');
+    expect(badge).toHaveTextContent('Remote');
+    // No runtime-dir slot is rendered for a remote row.
+    expect(remote.querySelector('.server-switcher__runtime')).toHaveTextContent('');
+
+    await userEvent.click(remote);
+    expect(mock.api.switchConnectionServer).toHaveBeenCalledWith({ serverKey: BETA_KEY });
+  });
+
+  it('offers a fixed "Add Server…" row that deep-links to Settings → Servers', async () => {
+    const mock = renderSwitcher();
+    await userEvent.click(screen.getByRole('button', { name: 'alpha — switch server' }));
+    await screen.findByRole('listbox', { name: 'Servers' });
+
+    await userEvent.click(screen.getByRole('button', { name: 'Add Server…' }));
+    expect(mock.api.openSettingsWindow).toHaveBeenCalledWith({
+      section: 'servers',
+      focus: 'add-server',
+    });
+    await waitFor(() =>
+      expect(screen.queryByRole('listbox', { name: 'Servers' })).not.toBeInTheDocument(),
+    );
+    expect(screen.getByRole('button', { name: 'alpha — switch server' })).toHaveAttribute(
+      'aria-expanded',
+      'false',
+    );
+  });
+
+  it('keeps the "Add Server…" row while the list is still loading', async () => {
+    const mock = installAgenticoMock();
+    mock.api.listServers.mockReturnValue(new Promise(() => {}));
+    mock.api.probeServers.mockReturnValue(new Promise(() => {}));
+    render(<ServerSwitcher currentLabel="alpha" tone="ready" enabled />);
+    await userEvent.click(screen.getByRole('button', { name: 'alpha — switch server' }));
+    expect(screen.getByRole('button', { name: 'Add Server…' })).toBeInTheDocument();
+    // The add row is not a pickable option.
+    expect(screen.queryByRole('option', { name: /add server/i })).not.toBeInTheDocument();
   });
 
   it('stays closed and disabled while not connected', async () => {

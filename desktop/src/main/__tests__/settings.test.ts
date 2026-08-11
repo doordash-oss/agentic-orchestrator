@@ -4,6 +4,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { SettingsStore } from '../settings';
 import {
+  MAX_KNOWN_REMOTE_SERVERS,
   MAX_KNOWN_SERVERS,
   defaultAmaGeometry,
   defaultAmaPrefs,
@@ -123,7 +124,7 @@ describe('SettingsStore', () => {
     store.update({ window: { bounds: { x: 1, y: 2, width: 800, height: 600 } } });
     const reloaded = makeStore();
     expect(reloaded.get()).toEqual({
-      schemaVersion: 4,
+      schemaVersion: 5,
       runtime: { selection: null },
       window: { bounds: { x: 1, y: 2, width: 800, height: 600 } },
       theme: 'dark',
@@ -195,7 +196,7 @@ describe('SettingsStore', () => {
     expect(store.get().settingsWindow.pane).toBe('workspace-roots');
     // No other preference is reset by the additive field.
     expect(store.get()).toEqual({
-      schemaVersion: 4,
+      schemaVersion: 5,
       runtime: { selection: 'claude' },
       window: { bounds: { x: 10, y: 20, width: 1024, height: 768 } },
       theme: 'dark',
@@ -208,8 +209,8 @@ describe('SettingsStore', () => {
     });
     expect(warnings).toEqual([]);
     expect(fs.existsSync(`${settingsPath()}.bak-1`)).toBe(false);
-    // The v2 document is migrated through and rewritten on disk as v4.
-    expect(JSON.parse(fs.readFileSync(settingsPath(), 'utf8')).schemaVersion).toBe(4);
+    // The v2 document is migrated through and rewritten on disk as v5.
+    expect(JSON.parse(fs.readFileSync(settingsPath(), 'utf8')).schemaVersion).toBe(5);
   });
 
   it('persists the Settings window bounds and pane across a reload', () => {
@@ -411,7 +412,7 @@ describe('SettingsStore', () => {
       const store = makeStore();
 
       expect(store.get()).toEqual({
-        schemaVersion: 4,
+        schemaVersion: 5,
         runtime: { selection: 'claude' },
         window: { bounds: { x: 10, y: 20, width: 1024, height: 768 } },
         theme: 'dark',
@@ -427,7 +428,7 @@ describe('SettingsStore', () => {
       expect(fs.existsSync(`${settingsPath()}.bak-1`)).toBe(false);
 
       const onDisk = JSON.parse(fs.readFileSync(settingsPath(), 'utf8'));
-      expect(onDisk.schemaVersion).toBe(4);
+      expect(onDisk.schemaVersion).toBe(5);
       expect(onDisk.shell).toEqual({
         featureByServer: {},
         sidebarCollapsed: false,
@@ -518,14 +519,14 @@ describe('SettingsStore', () => {
       };
     }
 
-    it('rewrites a v2 file as v4 and preserves every pre-existing field exactly', () => {
+    it('rewrites a v2 file as v5 and preserves every pre-existing field exactly', () => {
       fs.writeFileSync(settingsPath(), JSON.stringify(v2Fixture()));
       const store = makeStore();
       // The v2 global active id has no last-used pointer to scope to: the
       // v3→v4 step drops it while carrying everything else byte-for-byte.
       const migrated = {
         ...v2Fixture(),
-        schemaVersion: 4,
+        schemaVersion: 5,
         shell: { featureByServer: {}, sidebarCollapsed: true },
         servers: defaultServersPrefs(),
       };
@@ -588,7 +589,7 @@ describe('SettingsStore', () => {
       expect(warnings).toEqual([]);
       expect(fs.existsSync(`${settingsPath()}.bak-1`)).toBe(false);
       const onDisk = JSON.parse(fs.readFileSync(settingsPath(), 'utf8'));
-      expect(onDisk.schemaVersion).toBe(4);
+      expect(onDisk.schemaVersion).toBe(5);
       expect(onDisk.shell).toEqual({
         featureByServer: { [lastUsed]: 'abcd1234ef567890' },
         sidebarCollapsed: true,
@@ -628,10 +629,105 @@ describe('SettingsStore', () => {
     });
   });
 
+  describe('schema v4 -> v5 migration', () => {
+    function v4KnownServer(seed: number) {
+      return {
+        serverKey: seed.toString(16).padStart(64, '0'),
+        name: `server-${seed}`,
+        baseUrl: `http://127.0.0.1:${9000 + seed}`,
+        runtimeDir: `/rt/server-${seed}`,
+        lastSeenAt: new Date(1_700_000_000_000 + seed * 1000).toISOString(),
+      };
+    }
+
+    function v4Fixture(overrides: Record<string, unknown> = {}) {
+      return {
+        schemaVersion: 4,
+        runtime: { selection: 'claude' },
+        window: { bounds: { x: 10, y: 20, width: 1024, height: 768 } },
+        theme: 'dark',
+        wizard: { collapsedHelp: true },
+        ama: { drawer: 'expanded', geometry: { right: 96, bottom: 48, width: 520, height: 400 } },
+        notifications: { previewEnabled: true },
+        shell: {
+          featureByServer: { ['a'.repeat(64)]: 'abcd1234ef567890' },
+          sidebarCollapsed: true,
+        },
+        settingsWindow: {
+          bounds: { x: 40, y: 60, width: 900, height: 640 },
+          pane: 'diagnostics',
+        },
+        servers: {
+          known: [v4KnownServer(2), v4KnownServer(1)],
+          lastUsed: v4KnownServer(2).serverKey,
+        },
+        ...overrides,
+      };
+    }
+
+    it('tags every v4 known server as local and persists as v5, order and lastUsed intact', () => {
+      fs.writeFileSync(settingsPath(), JSON.stringify(v4Fixture()));
+      const store = makeStore();
+
+      const servers = store.get().servers;
+      expect(servers.known.map((entry) => entry.serverKey)).toEqual([
+        v4KnownServer(2).serverKey,
+        v4KnownServer(1).serverKey,
+      ]);
+      expect(servers.known.every((entry) => entry.kind === 'local')).toBe(true);
+      expect(servers.known[0]).toEqual({ ...v4KnownServer(2), kind: 'local' });
+      expect(servers.lastUsed).toBe(v4KnownServer(2).serverKey);
+      // Every other field is carried over byte-for-byte.
+      expect(store.get().shell).toEqual({
+        featureByServer: { ['a'.repeat(64)]: 'abcd1234ef567890' },
+        sidebarCollapsed: true,
+      });
+      expect(store.get().theme).toBe('dark');
+      expect(store.get().settingsWindow.pane).toBe('diagnostics');
+      expect(warnings).toEqual([]);
+      expect(fs.existsSync(`${settingsPath()}.bak-1`)).toBe(false);
+
+      const onDisk = JSON.parse(fs.readFileSync(settingsPath(), 'utf8'));
+      expect(onDisk.schemaVersion).toBe(5);
+      expect(onDisk.servers).toEqual({
+        known: [
+          { ...v4KnownServer(2), kind: 'local' },
+          { ...v4KnownServer(1), kind: 'local' },
+        ],
+        lastUsed: v4KnownServer(2).serverKey,
+      });
+      // A fresh load reads the persisted v5 document directly (no re-migration).
+      expect(makeStore().get().servers).toEqual(servers);
+    });
+
+    it('migrates a v4 file whose settings.json lacks defaulted sections', () => {
+      const partial = v4Fixture();
+      delete (partial as Record<string, unknown>).wizard;
+      delete (partial as Record<string, unknown>).ama;
+      fs.writeFileSync(settingsPath(), JSON.stringify(partial));
+      const store = makeStore();
+      expect(store.get().wizard).toEqual({ collapsedHelp: false });
+      expect(store.get().ama).toEqual(defaultAmaPrefs());
+      expect(store.get().servers.known.every((entry) => entry.kind === 'local')).toBe(true);
+      expect(fs.existsSync(`${settingsPath()}.bak-1`)).toBe(false);
+    });
+
+    it('still resets to defaults for a v4-shaped but invalid document', () => {
+      fs.writeFileSync(
+        settingsPath(),
+        JSON.stringify(v4Fixture({ servers: { known: [{ serverKey: 'x' }], rogue: true } })),
+      );
+      const store = makeStore();
+      expect(store.get()).toEqual(defaultSettings());
+      expect(fs.existsSync(`${settingsPath()}.bak-1`)).toBe(true);
+    });
+  });
+
   describe('known servers', () => {
     function knownServer(seed: number, patch: Partial<KnownServer> = {}): KnownServer {
       return {
         serverKey: seed.toString(16).padStart(64, '0'),
+        kind: 'local',
         name: `server-${seed}`,
         baseUrl: `http://127.0.0.1:${9000 + seed}`,
         runtimeDir: `/rt/server-${seed}`,
@@ -745,6 +841,101 @@ describe('SettingsStore', () => {
       }
       const onDisk = JSON.parse(fs.readFileSync(settingsPath(), 'utf8'));
       onDisk.servers.known.push(knownServer(MAX_KNOWN_SERVERS + 1));
+      fs.writeFileSync(settingsPath(), JSON.stringify(onDisk));
+      expect(makeStore().get()).toEqual(defaultSettings());
+      expect(fs.existsSync(`${settingsPath()}.bak-1`)).toBe(true);
+    });
+
+    function remoteServer(seed: number, patch: Partial<KnownServer> = {}): KnownServer {
+      return {
+        serverKey: seed.toString(16).padStart(64, 'f'),
+        kind: 'remote',
+        name: `remote-${seed}`,
+        baseUrl: `http://10.9.8.7:${7000 + seed}`,
+        lastSeenAt: new Date(1_700_000_000_000 + seed * 1000).toISOString(),
+        ...patch,
+      };
+    }
+
+    it('accepts remote entries with an optional nickname and no runtimeDir', () => {
+      const store = makeStore();
+      const remote = remoteServer(1, { nickname: 'the far box' });
+      store.update({ servers: { upsertKnown: remote } });
+      expect(store.get().servers.known).toEqual([remote]);
+      expect(makeStore().get().servers.known).toEqual([remote]);
+    });
+
+    it('rejects a remote entry carrying runtimeDir and a local entry missing one', () => {
+      const store = makeStore();
+      expect(() =>
+        store.update({
+          servers: {
+            upsertKnown: { ...remoteServer(1), runtimeDir: '/rt/nope' } as never,
+          },
+        }),
+      ).toThrow(SafeErrorException);
+      expect(() =>
+        store.update({
+          servers: { upsertKnown: { ...knownServer(1), runtimeDir: undefined } as never },
+        }),
+      ).toThrow(SafeErrorException);
+      expect(fs.existsSync(settingsPath())).toBe(false);
+    });
+
+    it('keeps remote entries when local pressure evicts the local tail', () => {
+      const store = makeStore();
+      store.update({ servers: { upsertKnown: remoteServer(1) } });
+      store.update({ servers: { upsertKnown: remoteServer(2) } });
+      for (let seed = 1; seed <= MAX_KNOWN_SERVERS + 1; seed += 1) {
+        store.update({ servers: { upsertKnown: knownServer(seed) } });
+      }
+      const known = store.get().servers.known;
+      const remotes = known.filter((entry) => entry.kind === 'remote');
+      const locals = known.filter((entry) => entry.kind === 'local');
+      // Both remotes survive; only the local tail (oldest local) evicted.
+      expect(remotes.map((entry) => entry.serverKey).sort()).toEqual(
+        [remoteServer(1).serverKey, remoteServer(2).serverKey].sort(),
+      );
+      expect(locals).toHaveLength(MAX_KNOWN_SERVERS);
+      expect(known.map((entry) => entry.serverKey)).not.toContain(knownServer(1).serverKey);
+      expect(makeStore().get().servers.known).toEqual(known);
+    });
+
+    it('evicts the oldest remote only when the remote cap itself is exceeded', () => {
+      const store = makeStore();
+      for (let seed = 1; seed <= MAX_KNOWN_REMOTE_SERVERS; seed += 1) {
+        store.update({ servers: { upsertKnown: remoteServer(seed) } });
+      }
+      expect(store.get().servers.known).toHaveLength(MAX_KNOWN_REMOTE_SERVERS);
+      store.update({ servers: { upsertKnown: remoteServer(MAX_KNOWN_REMOTE_SERVERS + 1) } });
+      const keys = store.get().servers.known.map((entry) => entry.serverKey);
+      expect(keys).toHaveLength(MAX_KNOWN_REMOTE_SERVERS);
+      expect(keys[0]).toBe(remoteServer(MAX_KNOWN_REMOTE_SERVERS + 1).serverKey);
+      expect(keys).not.toContain(remoteServer(1).serverKey);
+      expect(keys).toContain(remoteServer(2).serverKey);
+    });
+
+    it('explicitly removes entries of either kind via removeKnown', () => {
+      const store = makeStore();
+      store.update({ servers: { upsertKnown: knownServer(1) } });
+      store.update({ servers: { upsertKnown: remoteServer(1) } });
+      store.update({ servers: { removeKnown: knownServer(1).serverKey } });
+      expect(store.get().servers.known).toEqual([remoteServer(1)]);
+      store.update({ servers: { removeKnown: remoteServer(1).serverKey } });
+      expect(store.get().servers.known).toEqual([]);
+      expect(makeStore().get().servers.known).toEqual([]);
+      // Removing a key that was never stored is a no-op, not an error.
+      store.update({ servers: { removeKnown: 'e'.repeat(64) } });
+      expect(store.get().servers.known).toEqual([]);
+    });
+
+    it('refuses to load a file whose remote entries exceed the remote bound', () => {
+      const store = makeStore();
+      for (let seed = 1; seed <= MAX_KNOWN_REMOTE_SERVERS; seed += 1) {
+        store.update({ servers: { upsertKnown: remoteServer(seed) } });
+      }
+      const onDisk = JSON.parse(fs.readFileSync(settingsPath(), 'utf8'));
+      onDisk.servers.known.push(remoteServer(MAX_KNOWN_REMOTE_SERVERS + 1));
       fs.writeFileSync(settingsPath(), JSON.stringify(onDisk));
       expect(makeStore().get()).toEqual(defaultSettings());
       expect(fs.existsSync(`${settingsPath()}.bak-1`)).toBe(true);

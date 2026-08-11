@@ -18,6 +18,11 @@ import {
   type ConnectionState,
   type ServerListSnapshot,
   type ServersProbeRequest,
+  type RemoteServerAddRequest,
+  type RemoteServerAddResult,
+  type ServerRemoveRequest,
+  type ServerTokenStatusRequest,
+  type ServerTokenStatusResult,
   type SwitchServerRequest,
   type CreateFeatureInput,
   type CreateFeatureResult,
@@ -132,6 +137,11 @@ export interface IpcServices {
   switchConnectionServer(request: SwitchServerRequest): Promise<ConnectionState> | ConnectionState;
   listServers(): ServerListSnapshot;
   probeServers(request: ServersProbeRequest): ServerListSnapshot;
+  addRemoteServer(request: RemoteServerAddRequest): Promise<RemoteServerAddResult>;
+  removeServer(request: ServerRemoveRequest): Promise<ConnectionState> | ConnectionState;
+  getServerTokenStatus(
+    request: ServerTokenStatusRequest,
+  ): Promise<ServerTokenStatusResult> | ServerTokenStatusResult;
   getSettings(): Settings;
   updateSettings(patch: SettingsPatch): Settings;
   openSettingsWindow(request: SettingsOpenRequest): SettingsOpenResult;
@@ -280,6 +290,12 @@ export function registerIpcHandlers(
     [IPC_CHANNELS.serversList]: () => services.listServers(),
     [IPC_CHANNELS.serversProbe]: (_event, request: ServersProbeRequest) =>
       services.probeServers(request),
+    [IPC_CHANNELS.remoteServerAdd]: (_event, request: RemoteServerAddRequest) =>
+      services.addRemoteServer(request),
+    [IPC_CHANNELS.serverRemove]: (_event, request: ServerRemoveRequest) =>
+      services.removeServer(request),
+    [IPC_CHANNELS.serverTokenStatus]: (_event, request: ServerTokenStatusRequest) =>
+      services.getServerTokenStatus(request),
     [IPC_CHANNELS.settingsGet]: () => services.getSettings(),
     [IPC_CHANNELS.settingsUpdate]: (_event, patch: SettingsPatch) => services.updateSettings(patch),
     [IPC_CHANNELS.windowOpenSettings]: (_event, request: SettingsOpenRequest) =>

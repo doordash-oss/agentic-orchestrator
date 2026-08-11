@@ -117,7 +117,11 @@ func NewLaunchPolicy(enabledProviders []string, dangerouslySkipPerms bool) Launc
 	}
 }
 
-func PrepareDiscovery(ctx context.Context, runtimeDir string, identity RuntimeIdentity, policy LaunchPolicy, client *http.Client) (DiscoveryDecision, error) {
+// networkBind must be true when the server binds a non-loopback address: a
+// pre-existing discovery record then carries the advertised network base
+// URL rather than a loopback one, so the loopback-only rejection is skipped.
+// The owner-only permissions and atomic-write mechanics are unchanged.
+func PrepareDiscovery(ctx context.Context, runtimeDir string, identity RuntimeIdentity, policy LaunchPolicy, client *http.Client, networkBind bool) (DiscoveryDecision, error) {
 	path := DiscoveryPath(runtimeDir)
 	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
 		return DiscoveryDecision{}, nil
@@ -131,8 +135,11 @@ func PrepareDiscovery(ctx context.Context, runtimeDir string, identity RuntimeId
 	if err != nil {
 		return DiscoveryDecision{Replace: true, Reason: "unreadable discovery"}, nil //nolint:nilerr // self-heal: replace the unreadable record instead of failing
 	}
-	if !isLoopbackBaseURL(rec.BaseURL) {
+	if !networkBind && !isLoopbackBaseURL(rec.BaseURL) {
 		return DiscoveryDecision{Replace: true, Reason: "non-loopback discovery base_url", Record: rec}, nil
+	}
+	if networkBind && !isPlainHTTPBaseURL(rec.BaseURL) {
+		return DiscoveryDecision{Replace: true, Reason: "unusable discovery base_url", Record: rec}, nil
 	}
 	if rec.APIVersion != APIVersion || rec.Runtime != identity {
 		return DiscoveryDecision{Replace: true, Reason: "mismatched discovery runtime", Record: rec}, nil
@@ -189,6 +196,14 @@ func isLoopbackBaseURL(raw string) bool {
 		return false
 	}
 	return isLoopbackHost(u)
+}
+
+// isPlainHTTPBaseURL accepts any parseable plain-http base URL with a host —
+// the network-policy counterpart to isLoopbackBaseURL for a pre-existing
+// discovery record written by a network-bound server.
+func isPlainHTTPBaseURL(raw string) bool {
+	u, err := url.Parse(raw)
+	return err == nil && u.Scheme == "http" && u.Host != ""
 }
 
 func isLoopbackOrigin(raw string) bool {

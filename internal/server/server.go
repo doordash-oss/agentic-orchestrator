@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -28,6 +29,8 @@ import (
 
 type RuntimeServer struct {
 	baseURL   string
+	policy    string
+	wildcard  bool
 	startedAt time.Time
 	srv       *http.Server
 	broker    *eventBroker
@@ -39,15 +42,29 @@ func Start(ctx context.Context, opts Options) (*RuntimeServer, error) {
 		return nil, errors.New("server auth token is required")
 	}
 	startedAt := time.Now().UTC()
-	listenAddr, err := ResolveListenAddr(opts.ListenAddr)
+	res, err := ResolveListen(opts.ListenAddr)
 	if err != nil {
 		return nil, err
 	}
-	ln, err := net.Listen("tcp", listenAddr)
+	policy := res.Policy
+	if opts.RuntimePolicy != "" {
+		policy = opts.RuntimePolicy
+	}
+	ln, err := net.Listen("tcp", res.BindAddr)
 	if err != nil {
-		return nil, fmt.Errorf("listen on %s: %w", listenAddr, err)
+		return nil, fmt.Errorf("listen on %s: %w", res.BindAddr, err)
 	}
 	baseURL := "http://" + ln.Addr().String()
+	if policy == CompatibilityNetworkRuntimePolicy {
+		// Advertise the resolved host (the primary interface address for
+		// wildcard binds), never the wildcard bind address itself.
+		tcpAddr, ok := ln.Addr().(*net.TCPAddr)
+		if !ok {
+			_ = ln.Close()
+			return nil, fmt.Errorf("listen on %s: unexpected address type %T", res.BindAddr, ln.Addr())
+		}
+		baseURL = "http://" + net.JoinHostPort(res.AdvertiseHost, strconv.Itoa(tcpAddr.Port))
+	}
 	handler := newAPIHandler(HandlerOptions{
 		Runtime:                     opts.Runtime,
 		LaunchPolicy:                opts.LaunchPolicy,
@@ -67,6 +84,7 @@ func Start(ctx context.Context, opts Options) (*RuntimeServer, error) {
 		PersistProviderModelCatalog: opts.PersistProviderModelCatalog,
 		InitGitRepository:           opts.InitGitRepository,
 		Worktrees:                   opts.Worktrees,
+		RuntimePolicy:               policy,
 	})
 	httpServer := &http.Server{
 		Handler: handler.routes(),
@@ -82,6 +100,8 @@ func Start(ctx context.Context, opts Options) (*RuntimeServer, error) {
 	}
 	s := &RuntimeServer{
 		baseURL:   baseURL,
+		policy:    policy,
+		wildcard:  res.Wildcard,
 		startedAt: startedAt,
 		srv:       httpServer,
 		broker:    handler.broker,
@@ -94,7 +114,15 @@ func Start(ctx context.Context, opts Options) (*RuntimeServer, error) {
 		}
 		s.done <- err
 	}()
-	if err := waitForHealth(ctx, baseURL, opts.AuthToken); err != nil {
+	healthURL := baseURL
+	if res.Wildcard {
+		// Wait via loopback: the wildcard bind answers there regardless of
+		// which interface address is advertised.
+		if tcpAddr, ok := ln.Addr().(*net.TCPAddr); ok {
+			healthURL = "http://" + net.JoinHostPort("127.0.0.1", strconv.Itoa(tcpAddr.Port))
+		}
+	}
+	if err := waitForHealth(ctx, healthURL, opts.AuthToken); err != nil {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
 		_ = s.Close(shutdownCtx)
@@ -108,6 +136,24 @@ func (s *RuntimeServer) BaseURL() string {
 		return ""
 	}
 	return s.baseURL
+}
+
+// RuntimePolicy reports the declared runtime policy selected from the
+// resolved listen address (loopback or network).
+func (s *RuntimeServer) RuntimePolicy() string {
+	if s == nil {
+		return ""
+	}
+	return s.policy
+}
+
+// WildcardBind reports whether the server binds all local interfaces, in
+// which case BaseURL advertises the resolved primary interface address.
+func (s *RuntimeServer) WildcardBind() bool {
+	if s == nil {
+		return false
+	}
+	return s.wildcard
 }
 
 func (s *RuntimeServer) StartedAt() time.Time {

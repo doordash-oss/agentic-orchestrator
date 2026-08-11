@@ -312,6 +312,24 @@ describe('RuntimeGateway attach', () => {
     expectNoTokenLeak(env);
   });
 
+  it('attaches to a network-bound server declaring the network runtime policy', async () => {
+    const env = makeEnv({
+      discovery: JSON.stringify(discoveryRecord()),
+      health: {
+        [EXTERNAL_BASE]: healthBody({
+          compatibility: { ...compatibleDeclaration(), runtime_policy: 'network-bearer-v1' },
+        }),
+      },
+    });
+    await env.gateway.start();
+
+    const state = env.gateway.getState();
+    expect(state.status).toBe('ready');
+    expect(state.ownership).toBe('external');
+    expect(env.spawnCalls).toHaveLength(0);
+    expectNoTokenLeak(env);
+  });
+
   it('threads a health-reported server name into the ready state without gating attach', async () => {
     const env = makeEnv({
       discovery: JSON.stringify(discoveryRecord({ name: 'frothy-macchiato' })),
@@ -1219,6 +1237,35 @@ describe('RuntimeGateway registry-first startup selection', () => {
     expect(env.attachRecords[0]!.serverKey).toBe(serverKeyFor(ALPHA_RUNTIME_DIR));
     expect(env.attachRecords[0]!.name).toBe('alpha');
     expect(env.servers().lastUsed).toBe(serverKeyFor(ALPHA_RUNTIME_DIR));
+    expectNoTokenLeak(env);
+  });
+
+  it('attaches to a non-loopback registry candidate declaring the network policy', async () => {
+    const NETWORK_BASE = 'http://10.1.2.3:8080';
+    const alpha = registryCandidate({
+      runtimeDir: ALPHA_RUNTIME_DIR,
+      baseUrl: NETWORK_BASE,
+      token: ALPHA_TOKEN,
+      name: 'alpha',
+    });
+    const env = makeMultiServerEnv({
+      registryScans: [{ candidates: [alpha], pruned: 0, rejected: [] }],
+      health: {
+        [NETWORK_BASE]: {
+          ...healthFor(ALPHA_RUNTIME_DIR, 'alpha'),
+          compatibility: { ...compatibleDeclaration(), runtime_policy: 'network-bearer-v1' },
+        },
+      },
+      readinessTokens: { [NETWORK_BASE]: ALPHA_TOKEN },
+    });
+    await env.gateway.start();
+
+    const state = env.gateway.getState();
+    expect(state.status).toBe('ready');
+    expect(state.ownership).toBe('external');
+    expect(state.serverName).toBe('alpha');
+    expect(state.serverKey).toBe(alpha.serverKey);
+    expect(env.spawnCalls).toHaveLength(0);
     expectNoTokenLeak(env);
   });
 

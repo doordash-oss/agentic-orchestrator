@@ -2701,9 +2701,16 @@ func runServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledPr
 		}
 	}
 
+	listen, err := serverruntime.ResolveListen(listenAddr)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		return 1
+	}
+	networkBind := listen.Policy == serverruntime.CompatibilityNetworkRuntimePolicy
+
 	policy := runtimeLaunchPolicy(boot.registry, dangerouslySkipPerms)
 	discoveryClient := &http.Client{Timeout: time.Second}
-	decision, err := serverruntime.PrepareDiscovery(ctx, boot.runtime.RuntimeDir, boot.runtime, policy, discoveryClient)
+	decision, err := serverruntime.PrepareDiscovery(ctx, boot.runtime.RuntimeDir, boot.runtime, policy, discoveryClient, networkBind)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: validating discovery metadata: %v\n", err)
 		return 1
@@ -2796,9 +2803,35 @@ func runServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledPr
 	}
 
 	fmt.Fprintf(os.Stderr, "Agentic server %q listening at %s\n", resolvedName, runtimeServer.BaseURL())
+	if err := writeNetworkAccessNotice(os.Stderr, runtimeServer.RuntimePolicy(), runtimeServer.BaseURL(), runtimeServer.WildcardBind(), authToken, resolvedName); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: %v\n", err)
+	}
 	<-runtimeCtx.Done()
 	shutdownFeatures(boot.orchestrator, boot.sessionManager)
 	return 0
+}
+
+// writeNetworkAccessNotice prints the network-bind security notice and the
+// one-line connection string after the "listening at" line. Loopback servers
+// print nothing — their startup output is byte-for-byte unchanged.
+func writeNetworkAccessNotice(w io.Writer, runtimePolicy, baseURL string, wildcard bool, authToken, resolvedName string) error {
+	if runtimePolicy != serverruntime.CompatibilityNetworkRuntimePolicy {
+		return nil
+	}
+	connStr, err := serverruntime.ConnectionStringFromBaseURL(baseURL, authToken, resolvedName)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintln(w, "")
+	fmt.Fprintln(w, "SECURITY NOTICE: this server is reachable over the network with plain HTTP plus a bearer token.")
+	fmt.Fprintln(w, "Anyone with the connection string below has full access to this machine's agentic runtime.")
+	fmt.Fprintln(w, "Expose it only on a trusted network (prefer a VPN or Tailscale); use SSH tunneling across")
+	fmt.Fprintln(w, "untrusted links.")
+	if wildcard {
+		fmt.Fprintf(w, "Listening on all interfaces; advertising the primary interface address %s.\n", baseURL)
+	}
+	fmt.Fprintf(w, "Connection string: %s\n", connStr)
+	return nil
 }
 
 // registryRecord builds the shared publish record: the same value is written

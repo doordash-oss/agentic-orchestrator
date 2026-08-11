@@ -16,6 +16,7 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"strconv"
 	"strings"
@@ -49,23 +50,104 @@ func TestResolveListenAddrAcceptedForms(t *testing.T) {
 	}
 }
 
-func TestResolveListenAddrRejectsNonLoopbackHosts(t *testing.T) {
-	t.Parallel()
-	for _, value := range []string{
-		"127.0.0.2:8080",
-		"0.0.0.0:8080",
-		"192.168.1.10:8080",
-		"example.com:8080",
-		"[fe80::1]:8080",
-	} {
-		_, err := ResolveListenAddr(value)
-		if err == nil {
-			t.Errorf("ResolveListenAddr(%q) succeeded; want loopback-only rejection", value)
+// TestResolveListenPolicyMatrix pins the bind-mode policy selection: loopback
+// forms keep the loopback policy; concrete non-loopback IPs, non-loopback
+// hostnames, and wildcards select the network policy.
+func TestResolveListenPolicyMatrix(t *testing.T) {
+	tests := []struct {
+		value       string
+		wantBind    string
+		wantAdvert  string
+		wantPolicy  string
+		wantWilcard bool
+	}{
+		{"", DefaultListenAddr, "127.0.0.1", CompatibilityRuntimePolicy, false},
+		{"8080", "127.0.0.1:8080", "127.0.0.1", CompatibilityRuntimePolicy, false},
+		{":8080", "127.0.0.1:8080", "127.0.0.1", CompatibilityRuntimePolicy, false},
+		{"127.0.0.1:8080", "127.0.0.1:8080", "127.0.0.1", CompatibilityRuntimePolicy, false},
+		{"127.0.0.2:8080", "127.0.0.2:8080", "127.0.0.2", CompatibilityRuntimePolicy, false},
+		{"localhost:9000", "localhost:9000", "localhost", CompatibilityRuntimePolicy, false},
+		{"[::1]:8080", "[::1]:8080", "::1", CompatibilityRuntimePolicy, false},
+		{"192.168.1.10:8080", "192.168.1.10:8080", "192.168.1.10", CompatibilityNetworkRuntimePolicy, false},
+		{"[fe80::1]:8080", "[fe80::1]:8080", "fe80::1", CompatibilityNetworkRuntimePolicy, false},
+		{"0.0.0.0:8080", "0.0.0.0:8080", "10.9.8.7", CompatibilityNetworkRuntimePolicy, true},
+		{"[::]:8080", "[::]:8080", "10.9.8.7", CompatibilityNetworkRuntimePolicy, true},
+	}
+	restoreProbe := probePrimaryIPv4
+	probePrimaryIPv4 = func() (string, error) { return "10.9.8.7", nil }
+	t.Cleanup(func() { probePrimaryIPv4 = restoreProbe })
+	for _, tc := range tests {
+		res, err := ResolveListen(tc.value)
+		if err != nil {
+			t.Errorf("ResolveListen(%q) error = %v", tc.value, err)
 			continue
 		}
-		if !strings.Contains(err.Error(), "loopback") || !strings.Contains(err.Error(), "network policy") {
-			t.Errorf("ResolveListenAddr(%q) error = %q; want actionable loopback-only steering", value, err)
+		if res.BindAddr != tc.wantBind {
+			t.Errorf("ResolveListen(%q).BindAddr = %q; want %q", tc.value, res.BindAddr, tc.wantBind)
 		}
+		if res.Policy != tc.wantPolicy {
+			t.Errorf("ResolveListen(%q).Policy = %q; want %q", tc.value, res.Policy, tc.wantPolicy)
+		}
+		if res.Wildcard != tc.wantWilcard {
+			t.Errorf("ResolveListen(%q).Wildcard = %v; want %v", tc.value, res.Wildcard, tc.wantWilcard)
+		}
+		if res.AdvertiseHost != tc.wantAdvert {
+			t.Errorf("ResolveListen(%q).AdvertiseHost = %q; want %q", tc.value, res.AdvertiseHost, tc.wantAdvert)
+		}
+	}
+}
+
+// TestResolveListenHostnameClassification pins hostname classification: a
+// hostname is loopback only when it resolves exclusively to loopback
+// addresses.
+func TestResolveListenHostnameClassification(t *testing.T) {
+	restoreLookup := lookupListenHostIPs
+	lookupListenHostIPs = func(host string) ([]net.IP, error) {
+		switch host {
+		case "loop-only":
+			return []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("::1")}, nil
+		case "net-host":
+			return []net.IP{net.ParseIP("93.184.216.34")}, nil
+		case "mixed-host":
+			return []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("10.1.2.3")}, nil
+		}
+		return nil, fmt.Errorf("no such host")
+	}
+	t.Cleanup(func() { lookupListenHostIPs = restoreLookup })
+
+	cases := []struct {
+		value      string
+		wantPolicy string
+	}{
+		{"loop-only:8080", CompatibilityRuntimePolicy},
+		{"net-host:8080", CompatibilityNetworkRuntimePolicy},
+		{"mixed-host:8080", CompatibilityNetworkRuntimePolicy},
+	}
+	for _, tc := range cases {
+		res, err := ResolveListen(tc.value)
+		if err != nil {
+			t.Errorf("ResolveListen(%q) error = %v", tc.value, err)
+			continue
+		}
+		if res.Policy != tc.wantPolicy {
+			t.Errorf("ResolveListen(%q).Policy = %q; want %q", tc.value, res.Policy, tc.wantPolicy)
+		}
+	}
+	if _, err := ResolveListen("unknown-host:8080"); err == nil || !strings.Contains(err.Error(), "resolve hostname") {
+		t.Fatalf("ResolveListen(unknown-host:8080) error = %v; want a resolve error", err)
+	}
+}
+
+// TestResolveListenWildcardRequiresInterface pins fail-fast wildcard
+// resolution when no non-loopback interface is available.
+func TestResolveListenWildcardRequiresInterface(t *testing.T) {
+	restoreProbe := probePrimaryIPv4
+	probePrimaryIPv4 = func() (string, error) { return "", fmt.Errorf("no non-loopback interface found") }
+	t.Cleanup(func() { probePrimaryIPv4 = restoreProbe })
+	if _, err := ResolveListen("0.0.0.0:8080"); err == nil ||
+		!strings.Contains(err.Error(), "non-loopback network interface") ||
+		!strings.Contains(err.Error(), "loopback bind") {
+		t.Fatalf("ResolveListen(0.0.0.0:8080) error = %v; want actionable no-interface error", err)
 	}
 }
 
@@ -157,5 +239,50 @@ func TestStartHonorsExplicitLoopbackPin(t *testing.T) {
 	})
 	if !strings.HasSuffix(srv.BaseURL(), ":"+strconv.Itoa(port)) {
 		t.Fatalf("BaseURL() = %q; want port %d", srv.BaseURL(), port)
+	}
+	if srv.RuntimePolicy() != CompatibilityRuntimePolicy {
+		t.Fatalf("RuntimePolicy() = %q; want %q", srv.RuntimePolicy(), CompatibilityRuntimePolicy)
+	}
+	if srv.WildcardBind() {
+		t.Fatal("WildcardBind() = true for a loopback bind; want false")
+	}
+}
+
+// TestStartWildcardAdvertisesPrimaryAddress pins wildcard-bind advertising:
+// the base URL carries the resolved primary interface address (never
+// 0.0.0.0), and the runtime policy is the network policy.
+func TestStartWildcardAdvertisesPrimaryAddress(t *testing.T) {
+	restoreProbe := probePrimaryIPv4
+	probePrimaryIPv4 = func() (string, error) { return "10.9.8.7", nil }
+	t.Cleanup(func() { probePrimaryIPv4 = restoreProbe })
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("net.Listen() error = %v", err)
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+	_ = ln.Close()
+
+	srv, err := Start(context.Background(), Options{
+		AllowUnauthenticated: true,
+		AuthToken:            "token",
+		ListenAddr:           "0.0.0.0:" + strconv.Itoa(port),
+	})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_ = srv.Close(ctx)
+	})
+	want := "http://10.9.8.7:" + strconv.Itoa(port)
+	if srv.BaseURL() != want {
+		t.Fatalf("BaseURL() = %q; want advertised primary address %q", srv.BaseURL(), want)
+	}
+	if srv.RuntimePolicy() != CompatibilityNetworkRuntimePolicy {
+		t.Fatalf("RuntimePolicy() = %q; want %q", srv.RuntimePolicy(), CompatibilityNetworkRuntimePolicy)
+	}
+	if !srv.WildcardBind() {
+		t.Fatal("WildcardBind() = false for a wildcard bind; want true")
 	}
 }

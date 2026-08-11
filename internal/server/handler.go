@@ -61,6 +61,7 @@ type apiHandler struct {
 	mutations             MutationTarget
 	persistProviderModels func(llm.LLMProvider, []llm.ModelInfo) error
 	disableHostValidation bool
+	runtimePolicy         string
 	initGitRepository     func(path string) error
 
 	recoveryMu         sync.Mutex
@@ -97,7 +98,12 @@ func newAPIHandler(opts HandlerOptions) *apiHandler {
 	if features == nil && store != nil {
 		features = store
 	}
+	runtimePolicy := opts.RuntimePolicy
+	if runtimePolicy == "" {
+		runtimePolicy = CompatibilityRuntimePolicy
+	}
 	handler := &apiHandler{
+		runtimePolicy:         runtimePolicy,
 		runtime:               opts.Runtime,
 		policy:                opts.LaunchPolicy,
 		startedAt:             startedAt,
@@ -232,7 +238,7 @@ func (h *apiHandler) handleHealth(w http.ResponseWriter, _ *http.Request) {
 		StartedAt:     h.startedAt,
 		Owner:         OwnerFromInstanceOwner(h.owner),
 		ServerTime:    time.Now().UTC(),
-		Compatibility: NewCompatibilityDeclaration(h.owner.Version),
+		Compatibility: NewCompatibilityDeclaration(h.owner.Version, h.runtimePolicy),
 		Name:          h.name,
 	})
 }
@@ -615,6 +621,12 @@ func (h *apiHandler) rejectUnauthorized(w http.ResponseWriter, r *http.Request) 
 
 func (h *apiHandler) rejectInvalidHost(w http.ResponseWriter, r *http.Request) bool {
 	if h == nil || h.disableHostValidation {
+		return false
+	}
+	// The network policy accepts any Host header: the bearer token is the
+	// real authentication. The Origin rule stays loopback-only in both
+	// policies, so browser CSRF/DNS-rebinding vectors remain closed.
+	if h.runtimePolicy == CompatibilityNetworkRuntimePolicy {
 		return false
 	}
 	if isAllowedLoopbackHost(r.Host) {

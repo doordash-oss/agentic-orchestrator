@@ -644,27 +644,21 @@ describe('KnownServerSchema', () => {
     lastSeenAt: '2026-08-10T00:00:00.000Z',
   };
 
-  it('accepts loopback http base URLs', () => {
+  it('accepts loopback and network plain-http base URLs', () => {
     for (const baseUrl of [
       'http://127.0.0.1:9001',
       'http://127.42.0.9',
       'http://localhost:9001',
       'http://[::1]:9001/ui',
+      'http://10.1.2.3:8080',
+      'http://example.com:9001',
     ]) {
       expect(KnownServerSchema.safeParse({ ...entry, baseUrl }).success, baseUrl).toBe(true);
     }
   });
 
-  it('rejects non-loopback, non-http, and unparseable base URLs', () => {
-    for (const baseUrl of [
-      'https://127.0.0.1:9001',
-      'http://example.com',
-      'http://10.0.0.5:9001',
-      'http://[fe80::1]:9001',
-      'ftp://localhost:9001',
-      'not a url',
-      '',
-    ]) {
+  it('rejects non-http and unparseable base URLs', () => {
+    for (const baseUrl of ['https://127.0.0.1:9001', 'ftp://localhost:9001', 'not a url', '']) {
       expect(KnownServerSchema.safeParse({ ...entry, baseUrl }).success, baseUrl).toBe(false);
     }
   });

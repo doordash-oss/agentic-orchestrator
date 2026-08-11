@@ -59,15 +59,19 @@ stderr '--listen is available only with the headless server'
 stderr '--name is available only with the headless server'
 ! stdout .
 
-# Non-loopback --listen values fail fast before any socket is opened, with
-# steering toward the loopback-only contract.
-! exec agentico server --listen 0.0.0.0:8080
-stderr 'only loopback binds'
-stderr 'network policy'
+# Non-loopback --listen values are accepted by parse-time validation: the
+# network policy binds them (concrete IPs and wildcards alike), so only
+# genuinely invalid values fail fast now.
+! exec agentico server --listen 0.0.0.0:0
+stderr 'between 1 and 65535'
 ! stdout .
 
-! exec agentico server --listen 127.0.0.2:8080
-stderr 'only loopback binds'
+! exec agentico server --listen 10.0.0.5:notaport
+stderr 'invalid --listen value'
+! stdout .
+
+! exec agentico server --listen 127.0.0.2:notaport
+stderr 'between 1 and 65535'
 ! stdout .
 
 # Invalid ports are clear parse errors.

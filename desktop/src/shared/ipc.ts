@@ -2268,7 +2268,7 @@ export type CreationFileSearchResult = z.output<typeof CreationFileSearchResultS
 // --- Settings (app-local presentation/runtime-selection data) ---------------
 // Never store features, runs, configuration, credentials, or server-domain
 // snapshots here. The `servers` section is the narrow multi-server exception:
-// attachment metadata only (identity key, name, loopback base URL, runtime
+// attachment metadata only (identity key, name, base URL, runtime
 // dir, last-seen) — never a token.
 
 export const SETTINGS_SCHEMA_VERSION = 4;
@@ -2282,27 +2282,20 @@ export const SETTINGS_SCHEMA_VERSION = 4;
 export const MAX_KNOWN_SERVERS = 16;
 
 /**
- * Conservative loopback-http base-URL check for persisted known-server
- * entries. A URL qualifies only when it parses, uses plain `http:`, and its
- * hostname is loopback (`localhost`, any 127.0.0.0/8 address — WHATWG URL
- * parsing normalizes all IPv4 spellings to dotted-quad — or `[::1]`). This is
- * deliberately narrower than "reachable": no unvalidated URL can ever be
- * persisted.
+ * Plain-http base-URL check for persisted known-server entries. A URL
+ * qualifies when it parses, uses plain `http:`, and has a non-empty hostname;
+ * loopback and network-bound servers (which advertise their primary
+ * interface address) are both persistable. This is deliberately narrower
+ * than "reachable": no unvalidated URL can ever be persisted.
  */
-export function isLoopbackHttpBaseUrl(value: string): boolean {
+export function isPlainHttpBaseUrl(value: string): boolean {
   let url: URL;
   try {
     url = new URL(value);
   } catch {
     return false;
   }
-  if (url.protocol !== 'http:') {
-    return false;
-  }
-  const hostname = url.hostname.toLowerCase();
-  // WHATWG URL parsing normalizes every valid IPv4 spelling to dotted-quad, so
-  // a four-octet match starting with 127 covers the whole 127.0.0.0/8 range.
-  return hostname === 'localhost' || hostname === '[::1]' || /^127(\.\d{1,3}){3}$/.test(hostname);
+  return url.protocol === 'http:' && url.hostname !== '';
 }
 
 /**
@@ -2313,8 +2306,8 @@ export function isLoopbackHttpBaseUrl(value: string): boolean {
 export const KnownServerSchema = z.strictObject({
   serverKey: z.string().min(1).max(64),
   name: z.string().max(64),
-  baseUrl: z.string().max(256).refine(isLoopbackHttpBaseUrl, {
-    message: 'baseUrl must be a loopback http URL',
+  baseUrl: z.string().max(256).refine(isPlainHttpBaseUrl, {
+    message: 'baseUrl must be a plain http URL',
   }),
   runtimeDir: z.string().max(4096),
   lastSeenAt: z

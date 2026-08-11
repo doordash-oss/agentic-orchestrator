@@ -78,7 +78,7 @@ func TestHealthDeclaresExplicitCompatibility(t *testing.T) {
 // build version is reported as "dev" rather than an empty identity.
 func TestCompatibilityDeclarationFallbackBuildVersion(t *testing.T) {
 	t.Parallel()
-	decl := NewCompatibilityDeclaration("")
+	decl := NewCompatibilityDeclaration("", "")
 	if decl.ServerBuild.Version != "dev" {
 		t.Fatalf("fallback build version = %q; want dev", decl.ServerBuild.Version)
 	}

@@ -66,18 +66,24 @@ export function discoveryPath(runtimeDir: string): string {
   return path.join(runtimeDir, DISCOVERY_FILENAME);
 }
 
-/** Accepts only plain http URLs whose host is loopback. */
-export function isLoopbackHttpUrl(raw: string): boolean {
+/** Accepts only plain http URLs with a non-empty host. */
+export function isPlainHttpUrl(raw: string): boolean {
   let url: URL;
   try {
     url = new URL(raw);
   } catch {
     return false;
   }
-  if (url.protocol !== 'http:' || url.hostname === '') {
+  return url.protocol === 'http:' && url.hostname !== '';
+}
+
+/** Accepts only plain http URLs whose host is loopback. */
+export function isLoopbackHttpUrl(raw: string): boolean {
+  if (!isPlainHttpUrl(raw)) {
     return false;
   }
-  return isLoopbackHostname(url.hostname);
+  // Safe: isPlainHttpUrl already proved the URL parses.
+  return isLoopbackHostname(new URL(raw).hostname);
 }
 
 function isLoopbackHostname(hostname: string): boolean {

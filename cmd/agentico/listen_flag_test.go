@@ -28,8 +28,12 @@ func TestParseLaunchArgsListenAcceptedForms(t *testing.T) {
 	}{
 		{"8080", "127.0.0.1:8080"},
 		{"127.0.0.1:8080", "127.0.0.1:8080"},
+		{"127.0.0.2:8080", "127.0.0.2:8080"},
 		{"localhost:8080", "localhost:8080"},
 		{"[::1]:8080", "[::1]:8080"},
+		{"192.168.0.5:8080", "192.168.0.5:8080"},
+		{"0.0.0.0:8080", "0.0.0.0:8080"},
+		{"[::]:8080", "[::]:8080"},
 	}
 	for _, tc := range tests {
 		opts, err := parseLaunchArgs([]string{cliSubcommandServer, "--listen", tc.value})
@@ -49,13 +53,12 @@ func TestParseLaunchArgsListenRejectsBadValues(t *testing.T) {
 		value   string
 		wantErr string
 	}{
-		{"127.0.0.2:8080", "loopback"},
-		{"0.0.0.0:8080", "network policy"},
-		{"192.168.0.5:8080", "loopback"},
 		{"abc", "--listen"},
 		{"0", "65535"},
 		{"65536", "65535"},
 		{"127.0.0.1:", "--listen"},
+		{"10.0.0.1:", "--listen"},
+		{"10.0.0.1:abc", "65535"},
 	}
 	for _, tc := range tests {
 		_, err := parseLaunchArgs([]string{cliSubcommandServer, "--listen", tc.value})

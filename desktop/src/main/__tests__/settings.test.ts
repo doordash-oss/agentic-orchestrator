@@ -689,17 +689,11 @@ describe('SettingsStore', () => {
       expect(store.get().servers.known).toEqual([]);
     });
 
-    it('rejects an upsert whose baseUrl is not a loopback http URL and corrupts nothing', () => {
+    it('rejects an upsert whose baseUrl is not a plain http URL and corrupts nothing', () => {
       const store = makeStore();
       store.update({ servers: { upsertKnown: knownServer(1) } });
       const before = store.get();
-      for (const baseUrl of [
-        'https://127.0.0.1:9001',
-        'http://example.com:9001',
-        'http://192.168.1.10:9001',
-        'not a url',
-        '',
-      ]) {
+      for (const baseUrl of ['https://127.0.0.1:9001', 'ftp://localhost:9001', 'not a url', '']) {
         expect(() =>
           store.update({ servers: { upsertKnown: knownServer(1, { baseUrl }) } }),
         ).toThrow(SafeErrorException);
@@ -710,17 +704,19 @@ describe('SettingsStore', () => {
       ]);
     });
 
-    it('accepts every loopback spelling for baseUrl', () => {
+    it('accepts loopback and network plain-http base URLs', () => {
       const store = makeStore();
       for (const [seed, baseUrl] of [
         [1, 'http://localhost:9001'],
         [2, 'http://127.0.0.1:9002'],
         [3, 'http://127.34.56.78:9003'],
         [4, 'http://[::1]:9004/ui'],
+        [5, 'http://10.1.2.3:8080'],
+        [6, 'http://example.com:9001'],
       ] as const) {
         store.update({ servers: { upsertKnown: knownServer(seed, { baseUrl }) } });
       }
-      expect(store.get().servers.known).toHaveLength(4);
+      expect(store.get().servers.known).toHaveLength(6);
     });
 
     it('rejects token-shaped and otherwise unknown fields on an upsert, fail closed', () => {

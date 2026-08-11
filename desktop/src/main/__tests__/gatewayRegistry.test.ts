@@ -113,8 +113,9 @@ describe('scanRegistry', () => {
 
   it('returns token-free rejection diagnostics', () => {
     const key = '1234abcd';
+    // https is not a plain-http scheme: the entry stays prunable.
     const scan = scanRegistry(
-      deps({}, { [key]: JSON.stringify(record({ base_url: 'http://evil.example.com:1' })) }),
+      deps({}, { [key]: JSON.stringify(record({ base_url: 'https://127.0.0.1:1' })) }),
     );
     expect(JSON.stringify(scan.rejected)).not.toContain('tok-abc123');
     expect(JSON.stringify(scan)).not.toContain('tok-abc123'.replace('tok-', ''));
@@ -188,13 +189,28 @@ describe('scanRegistry', () => {
     expect(scan.candidates[0]!.record).not.toHaveProperty('future_field');
   });
 
-  it('prunes non-loopback base URLs', () => {
-    const key = 'noloop0000000000000000000000000001';
+  it('accepts an entry whose base URL is a non-loopback plain-http address', () => {
+    const key = 'network000000000000000000000000001';
     const scan = scanRegistry(
-      deps({}, { [key]: JSON.stringify(record({ base_url: 'http://192.168.7.7:8080' })) }),
+      deps({}, { [key]: JSON.stringify(record({ base_url: 'http://10.1.2.3:8080' })) }),
     );
-    expect(scan.pruned).toBe(1);
-    expect(scan.candidates).toEqual([]);
+    expect(scan.pruned).toBe(0);
+    expect(scan.candidates).toHaveLength(1);
+    expect(scan.candidates[0]!.record.base_url).toBe('http://10.1.2.3:8080');
+  });
+
+  it('prunes base URLs that are not plain http', () => {
+    for (const [index, baseUrl] of [
+      'https://127.0.0.1:8080',
+      'ftp://127.0.0.1:21',
+      'not a url',
+      '',
+    ].entries()) {
+      const key = `badurl${String(index).padStart(25, '0')}`;
+      const scan = scanRegistry(deps({}, { [key]: JSON.stringify(record({ base_url: baseUrl })) }));
+      expect(scan.pruned, baseUrl).toBe(1);
+      expect(scan.candidates, baseUrl).toEqual([]);
+    }
   });
 
   it('prunes dead-PID records', () => {

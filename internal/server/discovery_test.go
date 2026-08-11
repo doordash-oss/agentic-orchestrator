@@ -275,7 +275,7 @@ func TestPrepareDiscoveryRejectsNonLoopbackWithoutProbe(t *testing.T) {
 		return nil, errors.New("unreachable")
 	})}
 
-	decision, err := PrepareDiscovery(context.Background(), runtimeDir, identity, policy, client)
+	decision, err := PrepareDiscovery(context.Background(), runtimeDir, identity, policy, client, false)
 	if err != nil {
 		t.Fatalf("PrepareDiscovery() error = %v", err)
 	}
@@ -284,6 +284,58 @@ func TestPrepareDiscoveryRejectsNonLoopbackWithoutProbe(t *testing.T) {
 	}
 	if !strings.Contains(decision.Reason, "non-loopback") {
 		t.Fatalf("decision reason = %q; want non-loopback", decision.Reason)
+	}
+}
+
+// TestPrepareDiscoveryNetworkBindAcceptsAdvertisedBaseURL pins the
+// policy-aware base-URL gate: a network-bound server accepts a pre-existing
+// discovery record whose base_url is its advertised (non-loopback) address
+// and classifies a healthy match as already running, while the loopback
+// policy keeps rejecting it.
+func TestPrepareDiscoveryNetworkBindAcceptsAdvertisedBaseURL(t *testing.T) {
+	t.Parallel()
+	runtimeDir := t.TempDir()
+	identity := RuntimeIdentity{
+		RuntimeDir: runtimeDir,
+		StateDir:   filepath.Join(runtimeDir, "features"),
+		Config:     filepath.Join(runtimeDir, "config.yaml"),
+	}
+	policy := NewLaunchPolicy(nil, false)
+	rec := newDiscoveryRecord(identity, policy)
+	rec.BaseURL = "http://10.9.8.7:4567"
+	rec.AuthToken = testAuthToken
+	if err := PublishDiscovery(runtimeDir, rec); err != nil {
+		t.Fatalf("PublishDiscovery() error = %v", err)
+	}
+	probed := false
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		probed = true
+		return jsonResponse(HealthResponse{
+			APIVersion:   APIVersion,
+			Status:       "ok",
+			Runtime:      identity,
+			LaunchPolicy: policy,
+		})
+	})}
+
+	decision, err := PrepareDiscovery(context.Background(), runtimeDir, identity, policy, client, true)
+	if err != nil {
+		t.Fatalf("PrepareDiscovery(network) error = %v", err)
+	}
+	if !decision.AlreadyRunning || decision.Replace {
+		t.Fatalf("network decision = %+v; want already running", decision)
+	}
+	if !probed {
+		t.Fatal("network-bind PrepareDiscovery skipped the health probe on its advertised URL")
+	}
+
+	// The same record stays rejected under the loopback policy.
+	decision, err = PrepareDiscovery(context.Background(), runtimeDir, identity, policy, client, false)
+	if err != nil {
+		t.Fatalf("PrepareDiscovery(loopback) error = %v", err)
+	}
+	if !decision.Replace || !strings.Contains(decision.Reason, "non-loopback") {
+		t.Fatalf("loopback decision = %+v; want non-loopback replacement", decision)
 	}
 }
 
@@ -307,7 +359,7 @@ func TestPrepareDiscoveryRejectsUnsafePermissionsWithoutProbe(t *testing.T) {
 		return nil, errors.New("unreachable")
 	})}
 
-	decision, err := PrepareDiscovery(context.Background(), runtimeDir, identity, policy, client)
+	decision, err := PrepareDiscovery(context.Background(), runtimeDir, identity, policy, client, false)
 	if err != nil {
 		t.Fatalf("PrepareDiscovery() error = %v", err)
 	}
@@ -345,7 +397,7 @@ func TestPrepareDiscoveryClassifiesHealthyMatchingServer(t *testing.T) {
 		})
 	})}
 
-	decision, err := PrepareDiscovery(context.Background(), runtimeDir, identity, policy, client)
+	decision, err := PrepareDiscovery(context.Background(), runtimeDir, identity, policy, client, false)
 	if err != nil {
 		t.Fatalf("PrepareDiscovery() error = %v", err)
 	}
@@ -380,7 +432,7 @@ func TestPrepareDiscoveryRequiresHealthStartedAtToMatchRecord(t *testing.T) {
 		})
 	})}
 
-	decision, err := PrepareDiscovery(context.Background(), runtimeDir, identity, policy, client)
+	decision, err := PrepareDiscovery(context.Background(), runtimeDir, identity, policy, client, false)
 	if err != nil {
 		t.Fatalf("PrepareDiscovery() error = %v", err)
 	}
@@ -437,7 +489,7 @@ func TestPrepareDiscoveryRequiresHealthOwnerToMatchRecord(t *testing.T) {
 		})
 	})}
 
-	decision, err := PrepareDiscovery(context.Background(), runtimeDir, identity, policy, client)
+	decision, err := PrepareDiscovery(context.Background(), runtimeDir, identity, policy, client, false)
 	if err != nil {
 		t.Fatalf("PrepareDiscovery() error = %v", err)
 	}
@@ -517,7 +569,7 @@ func TestPrepareDiscoveryRequiresPolicyEquivalentHealthyServer(t *testing.T) {
 				})
 			})}
 
-			decision, err := PrepareDiscovery(context.Background(), runtimeDir, identity, policy, client)
+			decision, err := PrepareDiscovery(context.Background(), runtimeDir, identity, policy, client, false)
 			if err != nil {
 				t.Fatalf("PrepareDiscovery() error = %v", err)
 			}
@@ -555,7 +607,7 @@ func TestPrepareDiscoveryReplacesHealthyWrongRuntime(t *testing.T) {
 		})
 	})}
 
-	decision, err := PrepareDiscovery(context.Background(), runtimeDir, identity, policy, client)
+	decision, err := PrepareDiscovery(context.Background(), runtimeDir, identity, policy, client, false)
 	if err != nil {
 		t.Fatalf("PrepareDiscovery() error = %v", err)
 	}
@@ -580,7 +632,7 @@ func TestPrepareDiscoveryReportsDeadPortDiagnostic(t *testing.T) {
 		return nil, errors.New("connect: connection refused")
 	})}
 
-	decision, err := PrepareDiscovery(context.Background(), runtimeDir, identity, policy, client)
+	decision, err := PrepareDiscovery(context.Background(), runtimeDir, identity, policy, client, false)
 	if err != nil {
 		t.Fatalf("PrepareDiscovery() error = %v", err)
 	}
@@ -608,7 +660,7 @@ func TestPrepareDiscoveryReplacesStaleAndMismatchedRecords(t *testing.T) {
 	if err := PublishDiscovery(runtimeDir, newDiscoveryRecord(identity, policy)); err != nil {
 		t.Fatalf("PublishDiscovery(stale) error = %v", err)
 	}
-	decision, err := PrepareDiscovery(context.Background(), runtimeDir, identity, policy, client)
+	decision, err := PrepareDiscovery(context.Background(), runtimeDir, identity, policy, client, false)
 	if err != nil {
 		t.Fatalf("PrepareDiscovery(stale) error = %v", err)
 	}
@@ -621,7 +673,7 @@ func TestPrepareDiscoveryReplacesStaleAndMismatchedRecords(t *testing.T) {
 	if err := PublishDiscovery(runtimeDir, newDiscoveryRecord(otherRuntime, policy)); err != nil {
 		t.Fatalf("PublishDiscovery(mismatch) error = %v", err)
 	}
-	decision, err = PrepareDiscovery(context.Background(), runtimeDir, identity, policy, client)
+	decision, err = PrepareDiscovery(context.Background(), runtimeDir, identity, policy, client, false)
 	if err != nil {
 		t.Fatalf("PrepareDiscovery(mismatch) error = %v", err)
 	}

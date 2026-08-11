@@ -19,7 +19,7 @@ import path from 'node:path';
 import { assertNoPrototypePollution } from '../../shared/sanitize';
 import {
   DiscoveryRecordSchema,
-  isLoopbackHttpUrl,
+  isPlainHttpUrl,
   type DiscoveryDeps,
   type DiscoveryRecord,
 } from './discovery';
@@ -140,8 +140,10 @@ function classifyEntry(serverKey: string, filePath: string, deps: RegistryDeps):
   if (!record.success) {
     return { kind: 'prunable', reason: 'schema mismatch' };
   }
-  if (!isLoopbackHttpUrl(record.data.base_url)) {
-    return { kind: 'prunable', reason: 'non-loopback base URL' };
+  // Any plain-http host is attachable: a network-bound server publishes its
+  // primary interface address, not a loopback one.
+  if (!isPlainHttpUrl(record.data.base_url)) {
+    return { kind: 'prunable', reason: 'unusable base URL' };
   }
   if (!deps.isProcessAlive(record.data.pid)) {
     return { kind: 'prunable', reason: 'dead PID' };

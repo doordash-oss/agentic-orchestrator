@@ -144,6 +144,18 @@ describe('release runner', () => {
     }
   });
 
+  it('resolves release notes from the operator root and passes the path explicitly to publication', async () => {
+    let publication;
+    const { options } = fixture({
+      ambientEnv: { AGENTICO_RELEASE_NOTES_FILE: 'notes/release.md' },
+      publish: (input) => {
+        publication = input;
+      },
+    });
+    await runRelease(options);
+    expect(publication.notesFile).toBe('/operator/checkout/notes/release.md');
+  });
+
   it('preserves post-GoReleaser state and resumes remote verification without rebuilding', async () => {
     let resumeState = null;
     let remoteAttempts = 0;
@@ -193,7 +205,7 @@ describe('release runner', () => {
     expect(remoteAttempts).toBe(2);
   });
 
-  it('resumes a failed final cask without rebuilding, republishing, or rechecking remote bytes', async () => {
+  it('resumes a failed final cask without rebuilding or republishing and rechecks remote bytes', async () => {
     let resumeState = null;
     const first = fixture({
       publishCask: () => {
@@ -220,9 +232,7 @@ describe('release runner', () => {
       publish: () => {
         throw new Error('must not republish');
       },
-      verifyRemote: async () => {
-        throw new Error('must not recheck remote');
-      },
+      verifyRemote: async () => calls.push('remote'),
       publishCask: () => calls.push('cask'),
       removeResume: () => {
         resumeState = null;
@@ -231,7 +241,7 @@ describe('release runner', () => {
       cleanup: () => calls.push('cleanup'),
     });
     await runRelease(options);
-    expect(calls).toEqual(['cask', 'cleanup', 'remove-resume']);
+    expect(calls).toEqual(['remote', 'cask', 'cleanup', 'remove-resume']);
   });
 
   it('fails closed on tampered resume state without touching the workspace', async () => {

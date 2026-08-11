@@ -158,11 +158,13 @@ release:
     expect(
       auditReleaseRunner(
         runner.replace(
-          'await reserveTag({ evidence });\n    publish({ evidence, snapshot });',
-          'publish({ evidence, snapshot });\n    await reserveTag({ evidence });',
+          'await reserveTag({ evidence });\n    publish({ evidence, snapshot, notesFile });',
+          'publish({ evidence, snapshot, notesFile });\n    await reserveTag({ evidence });',
         ),
       ),
-    ).toContain('release runner omits or reorders audited step: publish({ evidence, snapshot })');
+    ).toContain(
+      'release runner omits or reorders audited step: publish({ evidence, snapshot, notesFile })',
+    );
     expect(
       auditReleaseRunner(
         runner.replace(
@@ -181,6 +183,14 @@ release:
         ),
       ),
     ).toContain('release runner must remove resume state only after detached-workspace cleanup');
+    expect(
+      auditReleaseRunner(
+        runner.replace(
+          'await verifyRemote({ evidence, snapshot });\n      if (resumed.stage',
+          '// remote verification omitted\n      if (resumed.stage',
+        ),
+      ),
+    ).toContain('release runner must reverify remote publication before every resumed cask');
   });
 
   it('collects production npm packages plus explicitly shipped renderer dev assets', () => {

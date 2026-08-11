@@ -1,10 +1,19 @@
 // Capture and recheck the local release provenance before anything is published.
 import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { existsSync, lstatSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { homedir } from 'node:os';
 import { statfsSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
@@ -134,6 +143,29 @@ function readEvidenceFile(path) {
   return JSON.parse(readFileSync(path, 'utf8'));
 }
 
+export function writeReleaseEvidence(
+  path,
+  evidence,
+  { randomId = randomUUID, renameFile = renameSync } = {},
+) {
+  const directory = dirname(path);
+  mkdirSync(directory, { recursive: true });
+  const temporary = join(directory, `.${basename(path)}.${randomId()}.tmp`);
+  let created = false;
+  try {
+    writeFileSync(temporary, `${JSON.stringify(evidence, null, 2)}\n`, {
+      flag: 'wx',
+      mode: 0o600,
+    });
+    created = true;
+    chmodSync(temporary, 0o600);
+    renameFile(temporary, path);
+  } catch (error) {
+    if (created) rmSync(temporary, { force: true });
+    throw error;
+  }
+}
+
 /** Validate local release prerequisites and preserve the exact source provenance for later gates. */
 export function runReleasePreflight({
   cwd = rootDir,
@@ -192,8 +224,7 @@ export function runReleasePreflight({
     evidence_path: resolve(evidencePath),
   });
   try {
-    mkdirSync(dirname(evidencePath), { recursive: true });
-    writeFileSync(evidencePath, `${JSON.stringify(evidence, null, 2)}\n`);
+    writeReleaseEvidence(evidencePath, evidence);
   } catch (error) {
     try {
       removeDetachedReleaseWorkspace(workspace);

@@ -31,7 +31,7 @@ export function verifyLocalReleaseModel({
     'createPublicationSnapshot',
     'verifyProvenance(evidence)',
     'await reserveTag({ evidence })',
-    'publish({ evidence, snapshot })',
+    'publish({ evidence, snapshot, notesFile })',
     'await verifyRemote({ evidence, snapshot })',
   ]) {
     if (!releaseRunner.includes(token))

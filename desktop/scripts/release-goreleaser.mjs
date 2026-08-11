@@ -1,6 +1,7 @@
 // Run the fixed GoReleaser publication command with an optional release-notes file.
 import { execFileSync } from 'node:child_process';
 import { statSync } from 'node:fs';
+import { isAbsolute, resolve } from 'node:path';
 import { isMainModule } from './lib/main-entry.mjs';
 import { verifyReleaseProvenance } from './release-preflight.mjs';
 import { goreleaserEnvironment, readPublicationSnapshot } from './release-workspace.mjs';
@@ -21,7 +22,7 @@ function regularFile(path) {
 
 /** Execute only the fixed release command; the optional file is the sole supported input. */
 export function runGoreleaserRelease({
-  notesFile = process.env.AGENTICO_RELEASE_NOTES_FILE,
+  notesFile,
   isFile = regularFile,
   evidence,
   verifyEvidence = (value) => verifyReleaseProvenance({ evidence: value }),
@@ -49,7 +50,13 @@ export function runGoreleaserRelease({
 
 function main() {
   try {
-    runGoreleaserRelease();
+    const configuredNotes = process.env.AGENTICO_RELEASE_NOTES_FILE;
+    const notesFile = configuredNotes
+      ? isAbsolute(configuredNotes)
+        ? configuredNotes
+        : resolve(process.cwd(), configuredNotes)
+      : undefined;
+    runGoreleaserRelease({ notesFile });
   } catch (error) {
     console.error(`release-goreleaser: ${error instanceof Error ? error.message : String(error)}`);
     process.exitCode = 1;

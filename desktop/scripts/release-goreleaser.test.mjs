@@ -122,4 +122,33 @@ describe('GoReleaser release wrapper', () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  it('does not infer release notes from ambient process state in a real subprocess', () => {
+    const root = mkdtempSync(join(tmpdir(), 'agentico-goreleaser-notes-probe-'));
+    const probe = join(root, 'probe.mjs');
+    const output = join(root, 'arguments.json');
+    const moduleUrl = new URL('./release-goreleaser.mjs', import.meta.url).href;
+    writeFileSync(
+      probe,
+      `import { writeFileSync } from 'node:fs';
+import { runGoreleaserRelease } from ${JSON.stringify(moduleUrl)};
+const args = runGoreleaserRelease({
+  evidence: { workspace_root: process.cwd(), tag: 'v0.150.0' },
+  verifyEvidence: (value) => value,
+  verifySnapshot: () => {},
+  execute: () => {},
+});
+writeFileSync(process.argv[2], JSON.stringify(args));
+`,
+    );
+    try {
+      execFileSync(process.execPath, [probe, output], {
+        cwd: root,
+        env: { ...process.env, AGENTICO_RELEASE_NOTES_FILE: '/ambient/poison.md' },
+      });
+      expect(JSON.parse(readFileSync(output, 'utf8'))).toEqual(['release', '--clean']);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });

@@ -2,10 +2,15 @@
 import { execFileSync } from 'node:child_process';
 import {
   chmodSync,
+  closeSync,
+  constants,
   copyFileSync,
   existsSync,
+  fchmodSync,
+  fstatSync,
   lstatSync,
   mkdirSync,
+  openSync,
   readFileSync,
   realpathSync,
   rmSync,
@@ -105,6 +110,80 @@ export function revalidateWorkspaceToken(token) {
   return token;
 }
 
+function existingDirectoryWithoutSymlinks(root, components) {
+  let path = root;
+  for (const component of components) {
+    path = join(path, component);
+    let stat;
+    try {
+      stat = lstatSync(path);
+    } catch (error) {
+      if (error?.code === 'ENOENT') return null;
+      throw error;
+    }
+    if (stat.isSymbolicLink()) {
+      throw new Error(`release workspace cleanup encountered a symlink: ${path}`);
+    }
+    if (!stat.isDirectory()) {
+      throw new Error(`release workspace cleanup expected a directory: ${path}`);
+    }
+  }
+  return path;
+}
+
+function openValidatedDirectory(path, token) {
+  const fd = openSync(path, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+  const stat = fstatSync(fd);
+  if (!stat.isDirectory() || stat.dev !== token.dev || stat.ino !== token.ino) {
+    closeSync(fd);
+    throw new Error('release workspace changed after validation');
+  }
+  return fd;
+}
+
+function revalidateOpenWorkspace(fd, token) {
+  const stat = fstatSync(fd);
+  if (!stat.isDirectory() || stat.dev !== token.dev || stat.ino !== token.ino) {
+    throw new Error('release workspace changed after validation');
+  }
+  revalidateWorkspaceToken(token);
+}
+
+function makePublicationDirectoryWritable(workspaceFd, token) {
+  const components = ['desktop', 'dist', 'publication'];
+  const path = existingDirectoryWithoutSymlinks(token.path, components);
+  if (path === null) return;
+  revalidateOpenWorkspace(workspaceFd, token);
+  const fd = openSync(path, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+  try {
+    revalidateOpenWorkspace(workspaceFd, token);
+    const confirmed = existingDirectoryWithoutSymlinks(token.path, components);
+    const pathStat = lstatSync(confirmed);
+    const openStat = fstatSync(fd);
+    if (
+      realpathSync(confirmed) !== confirmed ||
+      pathStat.dev !== openStat.dev ||
+      pathStat.ino !== openStat.ino
+    ) {
+      throw new Error('release publication directory changed during cleanup');
+    }
+    fchmodSync(fd, 0o700);
+  } finally {
+    closeSync(fd);
+  }
+}
+
+function assertWorkspaceRemovedOrUnchanged(token) {
+  try {
+    lstatSync(token.path);
+  } catch (error) {
+    if (error?.code === 'ENOENT') return;
+    throw error;
+  }
+  revalidateWorkspaceToken(token);
+  throw new Error('release workspace still exists after removal');
+}
+
 /** Create a detached Git worktree whose filesystem starts from only captured committed files. */
 export function createDetachedReleaseWorkspace({
   operatorRoot,
@@ -167,13 +246,14 @@ export function removeDetachedReleaseWorkspace(workspace, { gitCommand = git } =
     throw new Error('refusing to remove a release workspace at an unexpected path');
   }
   revalidateWorkspaceToken(workspace.token);
-  if (existsSync(workspace.path)) {
-    const snapshot = join(workspace.path, 'desktop', 'dist', 'publication');
-    if (existsSync(snapshot)) {
-      const stat = lstatSync(snapshot);
-      if (stat.isDirectory() && !stat.isSymbolicLink()) chmodSync(snapshot, 0o700);
-    }
+  const workspaceFd = openValidatedDirectory(workspace.path, workspace.token);
+  try {
+    makePublicationDirectoryWritable(workspaceFd, workspace.token);
+    revalidateOpenWorkspace(workspaceFd, workspace.token);
     gitCommand(workspace.operatorRoot, 'worktree', 'remove', '--force', workspace.path);
+    assertWorkspaceRemovedOrUnchanged(workspace.token);
+  } finally {
+    closeSync(workspaceFd);
   }
 }
 

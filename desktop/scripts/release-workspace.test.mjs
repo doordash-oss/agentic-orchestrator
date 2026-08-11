@@ -6,6 +6,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  renameSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -113,7 +114,63 @@ describe('detached release workspace', () => {
     chmodSync(victim, 0o755);
     mkdirSync(join(workspace.path, 'desktop', 'dist'), { recursive: true });
     symlinkSync(victim, join(workspace.path, 'desktop', 'dist', 'publication'));
-    removeDetachedReleaseWorkspace(workspace);
+    expect(() => removeDetachedReleaseWorkspace(workspace)).toThrow(/symlink/);
+    expect(statSync(victim).mode & 0o777).toBe(0o755);
+  });
+
+  it.each(['desktop', 'dist'])(
+    'does not follow a symlink at the %s component while preparing publication cleanup',
+    (component) => {
+      const fixture = repositoryFixture();
+      const workspace = createDetachedReleaseWorkspace({
+        operatorRoot: fixture.root,
+        commit: fixture.commit,
+        runId:
+          component === 'desktop'
+            ? '44444444-4444-4444-8444-444444444444'
+            : '66666666-6666-4666-8666-666666666666',
+      });
+      const victim = join(fixture.root, `${component}-victim`);
+      const victimPublication =
+        component === 'desktop' ? join(victim, 'dist', 'publication') : join(victim, 'publication');
+      mkdirSync(victimPublication, { recursive: true });
+      chmodSync(victimPublication, 0o755);
+      if (component === 'desktop') {
+        symlinkSync(victim, join(workspace.path, 'desktop'));
+      } else {
+        mkdirSync(join(workspace.path, 'desktop'));
+        symlinkSync(victim, join(workspace.path, 'desktop', 'dist'));
+      }
+      expect(() => removeDetachedReleaseWorkspace(workspace)).toThrow(/symlink/);
+      expect(statSync(victimPublication).mode & 0o777).toBe(0o755);
+      expect(existsSync(victim)).toBe(true);
+    },
+  );
+
+  it('detects a workspace root swapped concurrently at the removal boundary', () => {
+    const fixture = repositoryFixture();
+    const workspace = createDetachedReleaseWorkspace({
+      operatorRoot: fixture.root,
+      commit: fixture.commit,
+      runId: '55555555-5555-4555-8555-555555555555',
+    });
+    const victim = join(fixture.root, 'root-swap-victim');
+    mkdirSync(victim);
+    writeFileSync(join(victim, 'keep'), 'unchanged');
+    chmodSync(victim, 0o755);
+    expect(() =>
+      removeDetachedReleaseWorkspace(workspace, {
+        gitCommand: (cwd, ...args) => {
+          if (args.slice(0, 3).join(' ') === 'worktree remove --force') {
+            renameSync(workspace.path, `${workspace.path}.swapped`);
+            symlinkSync(victim, workspace.path);
+            return '';
+          }
+          return git(cwd, ...args);
+        },
+      }),
+    ).toThrow(/changed after validation/);
+    expect(readFileSync(join(victim, 'keep'), 'utf8')).toBe('unchanged');
     expect(statSync(victim).mode & 0o777).toBe(0o755);
   });
 });

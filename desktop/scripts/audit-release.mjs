@@ -113,6 +113,13 @@ export function auditReleaseMakefile(makefileText) {
 export function auditReleaseRunner(runnerText) {
   const start = runnerText.indexOf('evidence = preflight();');
   if (start === -1) return ['release runner does not begin with captured preflight evidence'];
+  const resumeStart = runnerText.indexOf('if (pending !== null)');
+  const resumeBody = resumeStart === -1 ? '' : runnerText.slice(resumeStart, start);
+  const resumeRemote = resumeBody.indexOf('await verifyRemote({ evidence, snapshot })');
+  const resumeCask = resumeBody.indexOf('publishCask({ evidence, snapshot })');
+  if (resumeRemote === -1 || resumeCask === -1 || resumeRemote > resumeCask) {
+    return ['release runner must reverify remote publication before every resumed cask'];
+  }
   const body = runnerText.slice(start);
   const ordered = [
     "command('npm-ci'",
@@ -124,7 +131,7 @@ export function auditReleaseRunner(runnerText) {
     'verifyPackages({ evidence, desktopDist: snapshot.path })',
     'verifyProvenance(evidence)',
     'await reserveTag({ evidence })',
-    'publish({ evidence, snapshot })',
+    'publish({ evidence, snapshot, notesFile })',
     "saveResume(evidence, snapshot, 'goreleaser-published')",
     'verifyManifest({ evidence, snapshot })',
     'await verifyRemote({ evidence, snapshot })',

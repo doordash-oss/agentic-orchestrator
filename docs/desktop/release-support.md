@@ -15,6 +15,9 @@ git tag vX.Y.Z
 AGENTICO_RELEASE_NOTES_FILE=/absolute/path/to/notes.md make release
 ```
 
+A relative notes path is resolved from the operator checkout where `make
+release` is invoked, before the detached workspace is created.
+
 Before running it, make sure the local machine has:
 
 - macOS, a running Docker daemon, and at least 12 GiB free on the checkout's
@@ -153,9 +156,10 @@ manifest and remote publication verification passed and only
 `node desktop/scripts/publish-desktop-cask.mjs` fails, do not remove the
 already-complete release or CLI cask. Inspect the tap failure and rerun the
 same `make release` from the unchanged tag. The retained, validated resume
-record skips builds, GoReleaser, and the already-complete remote-byte gate and
-retries only the desktop cask. Successful cleanup removes the detached
-workspace, its evidence, and the resume record.
+record skips builds and GoReleaser, rechecks the current remote tag, release
+state, and every published digest immediately before the cask, then retries the
+desktop cask. Successful cleanup removes the detached workspace, its evidence,
+and the resume record.
 
 ### Release signing key
 

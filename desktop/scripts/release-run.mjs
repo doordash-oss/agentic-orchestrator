@@ -1,6 +1,6 @@
 // Execute the complete local release from a detached committed-source workspace.
 import { execFileSync } from 'node:child_process';
-import { existsSync, lstatSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync, rmSync } from 'node:fs';
 import { isAbsolute, join, resolve } from 'node:path';
 
 import { expectedDesktopArtifacts, readArtifactEvidence } from './lib/release-artifacts.mjs';
@@ -13,6 +13,7 @@ import {
   runReleasePreflight,
   verifyOperatorReleaseSubject,
   verifyReleaseProvenance,
+  writeReleaseEvidence,
 } from './release-preflight.mjs';
 import { runGoreleaserRelease } from './release-goreleaser.mjs';
 import {
@@ -97,18 +98,12 @@ export function saveReleaseResumeState(evidence, snapshot, stage, { gitCommand =
     throw new Error(`invalid release resume stage: ${stage}`);
   }
   const path = resumePath(evidence.operator_root, gitCommand);
-  const temporary = `${path}.${process.pid}.tmp`;
   if (existsSync(path)) {
     const stat = lstatSync(path);
     if (!stat.isFile() || stat.isSymbolicLink())
       throw new Error('release resume state was replaced');
   }
-  writeFileSync(
-    temporary,
-    `${JSON.stringify({ schema_version: 1, stage, evidence, snapshot }, null, 2)}\n`,
-    { flag: 'wx', mode: 0o600 },
-  );
-  renameSync(temporary, path);
+  writeReleaseEvidence(path, { schema_version: 1, stage, evidence, snapshot });
 }
 
 export function removeReleaseResumeState(operatorRoot, { gitCommand = git } = {}) {
@@ -171,7 +166,8 @@ export async function runRelease({
     }),
   reserveTag = ({ evidence }) =>
     reserveRemoteTag({ tag: evidence.tag, commit: evidence.commit, request: githubRequest }),
-  publish = ({ evidence }) => runGoreleaserRelease({ evidence, env: ambientEnv }),
+  publish = ({ evidence, notesFile }) =>
+    runGoreleaserRelease({ evidence, env: ambientEnv, notesFile }),
   verifyManifest = ({ evidence }) =>
     verifyReleaseArtifacts({
       mode: 'manifest',
@@ -212,6 +208,12 @@ export async function runRelease({
   let snapshot;
   let preserveWorkspace = false;
   let clearResumeAfterCleanup = false;
+  const configuredNotes = ambientEnv.AGENTICO_RELEASE_NOTES_FILE;
+  const notesFile = configuredNotes
+    ? isAbsolute(configuredNotes)
+      ? configuredNotes
+      : resolve(operatorRoot, configuredNotes)
+    : undefined;
   try {
     const pending = loadResume(operatorRoot);
     if (pending !== null) {
@@ -220,8 +222,8 @@ export async function runRelease({
       snapshot = resumed.snapshot;
       preserveWorkspace = true;
       assertGate(verifyManifest({ evidence, snapshot }), 'resumed manifest gate');
+      await verifyRemote({ evidence, snapshot });
       if (resumed.stage === 'goreleaser-published') {
-        await verifyRemote({ evidence, snapshot });
         saveResume(evidence, snapshot, 'remote-verified');
       }
       publishCask({ evidence, snapshot });
@@ -234,14 +236,6 @@ export async function runRelease({
     const cwd = evidence.workspace_root;
     const env = secretFreeBuildEnvironment(ambientEnv, evidence.evidence_path);
     requireCleanIgnoredInputs(cwd);
-    const notes = ambientEnv.AGENTICO_RELEASE_NOTES_FILE;
-    if (notes) {
-      ambientEnv = {
-        ...ambientEnv,
-        AGENTICO_RELEASE_NOTES_FILE: isAbsolute(notes) ? notes : resolve(operatorRoot, notes),
-      };
-    }
-
     command('npm-ci', 'npm', ['ci'], { cwd, env });
     requireCleanIgnoredInputs(cwd);
     command('mac-package', 'npm', ['run', 'package:verify', '--workspace', 'desktop'], {
@@ -267,7 +261,7 @@ export async function runRelease({
     assertGate(verifyPackages({ evidence, desktopDist: snapshot.path }), 'snapshot gate');
     verifyProvenance(evidence);
     await reserveTag({ evidence });
-    publish({ evidence, snapshot });
+    publish({ evidence, snapshot, notesFile });
     preserveWorkspace = true;
     saveResume(evidence, snapshot, 'goreleaser-published');
     assertGate(verifyManifest({ evidence, snapshot }), 'manifest gate');

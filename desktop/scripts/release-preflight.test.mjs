@@ -2,12 +2,14 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import {
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
   statSync,
   symlinkSync,
+  writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -17,6 +19,7 @@ import {
   cleanupReleaseWorkspace,
   runReleasePreflight,
   verifyReleaseProvenance,
+  writeReleaseEvidence,
 } from './release-preflight.mjs';
 
 const GiB = 1024 ** 3;
@@ -119,6 +122,37 @@ describe('release preflight', () => {
     options.state.head = 'b'.repeat(40);
     expect(runReleasePreflight(options)).toMatchObject({ commit: 'b'.repeat(40) });
     expect(existsSync(options.evidencePath)).toBe(true);
+  });
+
+  it('atomically replaces an existing evidence symlink without writing through it', () => {
+    const options = fixture();
+    const victim = join(options.cwd, 'evidence-victim');
+    writeFileSync(victim, 'unchanged');
+    mkdirSync(join(options.cwd, 'desktop', 'dist'), { recursive: true });
+    symlinkSync(victim, options.evidencePath);
+    runReleasePreflight(options);
+    expect(lstatSync(options.evidencePath).isSymbolicLink()).toBe(false);
+    expect(readFileSync(victim, 'utf8')).toBe('unchanged');
+    expect(statSync(options.evidencePath).mode & 0o777).toBe(0o600);
+  });
+
+  it('removes its same-directory temporary evidence file when atomic rename fails', () => {
+    const options = fixture();
+    const temporary = join(options.cwd, 'desktop', 'dist', '.release-preflight.json.fixed.tmp');
+    expect(() =>
+      writeReleaseEvidence(
+        options.evidencePath,
+        { ok: true },
+        {
+          randomId: () => 'fixed',
+          renameFile: () => {
+            throw new Error('rename failed');
+          },
+        },
+      ),
+    ).toThrow(/rename failed/);
+    expect(existsSync(temporary)).toBe(false);
+    expect(existsSync(options.evidencePath)).toBe(false);
   });
 
   it('rejects forged incomplete evidence before comparing provenance', () => {

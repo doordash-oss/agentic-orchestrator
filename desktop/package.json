@@ -24,6 +24,8 @@
     "package:build": "node scripts/package-build.mjs",
     "package:verify": "node scripts/package-build.mjs && node scripts/verify-package.mjs",
     "package:verify:e2e": "node scripts/package-build.mjs --unpacked && node scripts/verify-package.mjs --unpacked",
+    "package:linux:release": "node scripts/package-linux-release.mjs",
+    "release:artifacts:verify": "node scripts/verify-release-artifacts.mjs",
     "audit:release": "node scripts/audit-release.mjs",
     "test:performance": "node scripts/performance-check.mjs",
     "release:credentials:check": "node scripts/release-credentials-check.mjs",

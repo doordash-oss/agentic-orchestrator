@@ -305,3 +305,85 @@ describe('ConnectionShell', () => {
     expect(screen.getByText(/E_IPC_PROTOCOL/)).toBeInTheDocument();
   });
 });
+
+describe('ConnectionShell server picker', () => {
+  const candidates = [
+    { serverKey: 'key-alpha', name: 'alpha', runtimeDir: '/home/u/.agentic-orchestrator' },
+    { serverKey: 'key-beta', name: 'beta', runtimeDir: '/srv/runtimes/beta' },
+    { serverKey: 'key-gamma', name: null, runtimeDir: '/srv/runtimes/gamma' },
+  ] as const;
+
+  function awaiting(): ConnectionState {
+    return state({
+      status: 'awaiting-server-choice',
+      stage: 'connect',
+      detail: 'Choose which Agentico server to connect to.',
+      candidates: [...candidates],
+    });
+  }
+
+  it('renders every candidate with its name (or fallback) and runtime dir, marked running', async () => {
+    installAgenticoMock({ connection: awaiting() });
+    render(<ConnectionShell />);
+
+    await screen.findByRole('listbox', { name: /running agentico servers/i });
+    expect(screen.getByRole('status')).toHaveTextContent(/choose a server/i);
+    const options = screen.getAllByRole('option');
+    expect(options).toHaveLength(3);
+    expect(options[0]).toHaveAccessibleName(/alpha/);
+    expect(options[0]).toHaveAccessibleName(/\.agentic-orchestrator/);
+    expect(options[0]).toHaveTextContent(/running/i);
+    expect(options[2]).toHaveTextContent(/unnamed server/i);
+    expect(options[2]).toHaveTextContent('/srv/runtimes/gamma');
+  });
+
+  it('choosing a candidate sends its identity key over IPC', async () => {
+    const user = userEvent.setup();
+    const mock = installAgenticoMock({ connection: awaiting() });
+    render(<ConnectionShell />);
+
+    await screen.findByRole('listbox');
+    await user.click(screen.getByRole('option', { name: /beta/ }));
+    expect(mock.api.chooseConnectionServer).toHaveBeenCalledWith({ serverKey: 'key-beta' });
+  });
+
+  it('arrow keys move the highlighted option with wrap-around and roving tabindex', async () => {
+    const user = userEvent.setup();
+    installAgenticoMock({ connection: awaiting() });
+    render(<ConnectionShell />);
+
+    const options = await screen.findAllByRole('option');
+    expect(options[0]).toHaveAttribute('aria-selected', 'true');
+    expect(options[0]).toHaveAttribute('tabindex', '0');
+    expect(options[1]).toHaveAttribute('aria-selected', 'false');
+    expect(options[1]).toHaveAttribute('tabindex', '-1');
+
+    (options[0] as HTMLElement).focus();
+    await user.keyboard('{ArrowDown}');
+    expect(options[1]).toHaveAttribute('aria-selected', 'true');
+    expect(options[1]).toHaveFocus();
+
+    await user.keyboard('{ArrowDown}');
+    expect(options[2]).toHaveAttribute('aria-selected', 'true');
+
+    // Wraps around at both ends.
+    await user.keyboard('{ArrowDown}');
+    expect(options[0]).toHaveAttribute('aria-selected', 'true');
+    await user.keyboard('{ArrowUp}');
+    expect(options[2]).toHaveAttribute('aria-selected', 'true');
+  });
+
+  it('keyboard selection attaches the highlighted server and no spawn affordance exists', async () => {
+    const user = userEvent.setup();
+    const mock = installAgenticoMock({ connection: awaiting() });
+    render(<ConnectionShell />);
+
+    const options = await screen.findAllByRole('option');
+    (options[0] as HTMLElement).focus();
+    await user.keyboard('{ArrowDown}{Enter}');
+    expect(mock.api.chooseConnectionServer).toHaveBeenCalledWith({ serverKey: 'key-beta' });
+
+    // Attach-only: nothing in the picker offers starting a new server.
+    expect(screen.queryByRole('button', { name: /start|launch|spawn/i })).not.toBeInTheDocument();
+  });
+});

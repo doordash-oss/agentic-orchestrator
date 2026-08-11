@@ -19,12 +19,16 @@ import {
   isTerminalChatStatus,
   defaultAmaGeometry,
   defaultAmaPrefs,
+  defaultServersPrefs,
   defaultSettings,
   defaultSettingsWindowPrefs,
   defaultShellPrefs,
   defaultWizardPrefs,
   ipcContracts,
   AppEventSchema,
+  KnownServerSchema,
+  MAX_KNOWN_SERVERS,
+  ServersPatchSchema,
   SETTINGS_PANES,
   SettingsOpenRequestSchema,
   WINDOW_PURPOSE_ARGUMENT_PREFIX,
@@ -473,14 +477,17 @@ describe('SettingsSchema', () => {
   });
 
   it('rejects unsupported schema versions', () => {
-    expect(SettingsSchema.safeParse({ ...defaultSettings(), schemaVersion: 3 }).success).toBe(
+    expect(SettingsSchema.safeParse({ ...defaultSettings(), schemaVersion: 2 }).success).toBe(
+      false,
+    );
+    expect(SettingsSchema.safeParse({ ...defaultSettings(), schemaVersion: 4 }).success).toBe(
       false,
     );
   });
 
   it('accepts a full settings document with window bounds and theme', () => {
     const doc = {
-      schemaVersion: 2,
+      schemaVersion: 3,
       runtime: { selection: 'claude' },
       window: { bounds: { x: 10, y: 20, width: 800, height: 600 } },
       theme: 'dark',
@@ -492,13 +499,25 @@ describe('SettingsSchema', () => {
         bounds: { x: 40, y: 60, width: 900, height: 640 },
         pane: 'diagnostics',
       },
+      servers: {
+        known: [
+          {
+            serverKey: 'a'.repeat(64),
+            name: 'frothy-macchiato',
+            baseUrl: 'http://127.0.0.1:9001',
+            runtimeDir: '/home/user/.agentic-orchestrator',
+            lastSeenAt: '2026-08-10T00:00:00.000Z',
+          },
+        ],
+        lastUsed: 'a'.repeat(64),
+      },
     };
     expect(SettingsSchema.parse(doc)).toEqual(doc);
   });
 
   it('fills wizard presentation prefs with defaults for pre-wizard documents', () => {
     const doc = {
-      schemaVersion: 2,
+      schemaVersion: 3,
       runtime: { selection: null },
       window: {},
       theme: 'system',
@@ -510,12 +529,13 @@ describe('SettingsSchema', () => {
       notifications: { previewEnabled: false },
       shell: defaultShellPrefs(),
       settingsWindow: defaultSettingsWindowPrefs(),
+      servers: defaultServersPrefs(),
     });
   });
 
   it('fills the Settings window prefs with defaults for pre-Settings-window documents', () => {
     const doc = {
-      schemaVersion: 2,
+      schemaVersion: 3,
       runtime: { selection: 'claude' },
       window: {},
       theme: 'dark',
@@ -527,6 +547,7 @@ describe('SettingsSchema', () => {
     expect(SettingsSchema.parse(doc)).toEqual({
       ...doc,
       settingsWindow: { pane: 'workspace-roots' },
+      servers: defaultServersPrefs(),
     });
   });
 
@@ -578,6 +599,98 @@ describe('SettingsPatchSchema', () => {
   it('rejects schemaVersion tampering and unknown keys', () => {
     expect(SettingsPatchSchema.safeParse({ schemaVersion: 9 }).success).toBe(false);
     expect(SettingsPatchSchema.safeParse({ apiToken: 'x' }).success).toBe(false);
+  });
+
+  it('accepts a servers patch that upserts an entry and/or sets last-used', () => {
+    const entry = {
+      serverKey: 'b'.repeat(64),
+      name: '',
+      baseUrl: 'http://localhost:9001',
+      runtimeDir: '/rt',
+      lastSeenAt: '2026-08-10T00:00:00.000Z',
+    };
+    expect(SettingsPatchSchema.parse({ servers: { upsertKnown: entry } })).toEqual({
+      servers: { upsertKnown: entry },
+    });
+    expect(SettingsPatchSchema.parse({ servers: { lastUsed: null } })).toEqual({
+      servers: { lastUsed: null },
+    });
+    expect(SettingsPatchSchema.parse({ servers: { upsertKnown: entry, lastUsed: 'x' } })).toEqual({
+      servers: { upsertKnown: entry, lastUsed: 'x' },
+    });
+  });
+
+  it('rejects an empty servers patch section and wholesale known-list patching', () => {
+    expect(SettingsPatchSchema.safeParse({ servers: {} }).success).toBe(false);
+    expect(SettingsPatchSchema.safeParse({ servers: { known: [] } }).success).toBe(false);
+    expect(SettingsPatchSchema.safeParse({ servers: { lastUsed: 'x', known: [] } }).success).toBe(
+      false,
+    );
+  });
+});
+
+describe('KnownServerSchema', () => {
+  const entry = {
+    serverKey: 'c'.repeat(64),
+    name: 'frothy-macchiato',
+    baseUrl: 'http://127.0.0.1:9001',
+    runtimeDir: '/home/user/.agentic-orchestrator',
+    lastSeenAt: '2026-08-10T00:00:00.000Z',
+  };
+
+  it('accepts loopback http base URLs', () => {
+    for (const baseUrl of [
+      'http://127.0.0.1:9001',
+      'http://127.42.0.9',
+      'http://localhost:9001',
+      'http://[::1]:9001/ui',
+    ]) {
+      expect(KnownServerSchema.safeParse({ ...entry, baseUrl }).success, baseUrl).toBe(true);
+    }
+  });
+
+  it('rejects non-loopback, non-http, and unparseable base URLs', () => {
+    for (const baseUrl of [
+      'https://127.0.0.1:9001',
+      'http://example.com',
+      'http://10.0.0.5:9001',
+      'http://[fe80::1]:9001',
+      'ftp://localhost:9001',
+      'not a url',
+      '',
+    ]) {
+      expect(KnownServerSchema.safeParse({ ...entry, baseUrl }).success, baseUrl).toBe(false);
+    }
+  });
+
+  it('rejects token-shaped and other unknown fields, fail closed', () => {
+    for (const rogue of [{ token: 'x' }, { authToken: 'x' }, { apiToken: 'x' }, { pid: 1234 }]) {
+      expect(KnownServerSchema.safeParse({ ...entry, ...rogue }).success).toBe(false);
+    }
+  });
+
+  it('rejects an empty serverKey, an unparseable lastSeenAt, and oversized fields', () => {
+    expect(KnownServerSchema.safeParse({ ...entry, serverKey: '' }).success).toBe(false);
+    expect(KnownServerSchema.safeParse({ ...entry, serverKey: 'd'.repeat(65) }).success).toBe(
+      false,
+    );
+    expect(KnownServerSchema.safeParse({ ...entry, name: 'n'.repeat(65) }).success).toBe(false);
+    expect(KnownServerSchema.safeParse({ ...entry, lastSeenAt: 'next tuesday-ish' }).success).toBe(
+      false,
+    );
+  });
+
+  it('refuses a settings document whose known list exceeds the bound', () => {
+    const doc = defaultSettings();
+    for (let index = 0; index <= MAX_KNOWN_SERVERS; index += 1) {
+      doc.servers.known.push({ ...entry, serverKey: index.toString(16).padStart(64, '0') });
+    }
+    expect(SettingsSchema.safeParse(doc).success).toBe(false);
+  });
+
+  it('accepts a servers patch with a last-used pointer only', () => {
+    expect(ServersPatchSchema.safeParse({ lastUsed: 'e'.repeat(64) }).success).toBe(true);
+    expect(ServersPatchSchema.safeParse({ lastUsed: 'f'.repeat(65) }).success).toBe(false);
   });
 });
 

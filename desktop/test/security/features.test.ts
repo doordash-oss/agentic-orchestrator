@@ -99,6 +99,12 @@ function makeServices(overrides: Partial<IpcServices> = {}): IpcServices {
       detail: 'ok',
       ownership: 'external' as const,
     })),
+    chooseConnectionServer: vi.fn(() => ({
+      status: 'ready' as const,
+      stage: 'ready' as const,
+      detail: 'ok',
+      ownership: 'external' as const,
+    })),
     getSettings: vi.fn(() => defaultSettings()),
     updateSettings: vi.fn(() => defaultSettings()),
     openSettingsWindow: vi.fn(() => ({ opened: true })),

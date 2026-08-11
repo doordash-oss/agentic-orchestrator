@@ -4,10 +4,13 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { SettingsStore } from '../settings';
 import {
+  MAX_KNOWN_SERVERS,
   defaultAmaGeometry,
   defaultAmaPrefs,
+  defaultServersPrefs,
   defaultSettings,
   defaultSettingsWindowPrefs,
+  type KnownServer,
 } from '../../shared/ipc';
 import { SafeErrorException } from '../../shared/errors';
 
@@ -120,7 +123,7 @@ describe('SettingsStore', () => {
     store.update({ window: { bounds: { x: 1, y: 2, width: 800, height: 600 } } });
     const reloaded = makeStore();
     expect(reloaded.get()).toEqual({
-      schemaVersion: 2,
+      schemaVersion: 3,
       runtime: { selection: null },
       window: { bounds: { x: 1, y: 2, width: 800, height: 600 } },
       theme: 'dark',
@@ -129,6 +132,7 @@ describe('SettingsStore', () => {
       notifications: { previewEnabled: false },
       shell: { activeFeatureId: null, sidebarCollapsed: false },
       settingsWindow: defaultSettingsWindowPrefs(),
+      servers: defaultServersPrefs(),
     });
   });
 
@@ -189,7 +193,7 @@ describe('SettingsStore', () => {
     expect(store.get().settingsWindow.pane).toBe('workspace-roots');
     // No other preference is reset by the additive field.
     expect(store.get()).toEqual({
-      schemaVersion: 2,
+      schemaVersion: 3,
       runtime: { selection: 'claude' },
       window: { bounds: { x: 10, y: 20, width: 1024, height: 768 } },
       theme: 'dark',
@@ -198,9 +202,12 @@ describe('SettingsStore', () => {
       notifications: { previewEnabled: true },
       shell: { activeFeatureId: 'abcd1234ef567890', sidebarCollapsed: true },
       settingsWindow: defaultSettingsWindowPrefs(),
+      servers: defaultServersPrefs(),
     });
     expect(warnings).toEqual([]);
     expect(fs.existsSync(`${settingsPath()}.bak-1`)).toBe(false);
+    // The v2 document is migrated through and rewritten on disk as v3.
+    expect(JSON.parse(fs.readFileSync(settingsPath(), 'utf8')).schemaVersion).toBe(3);
   });
 
   it('persists the Settings window bounds and pane across a reload', () => {
@@ -312,7 +319,7 @@ describe('SettingsStore', () => {
     expect(() => makeStore().get()).not.toThrow();
   });
 
-  describe('schema v1 -> v2 migration', () => {
+  describe('schema v1 -> v3 migration', () => {
     function v1Fixture(overrides: Record<string, unknown> = {}) {
       return {
         schemaVersion: 1,
@@ -342,7 +349,7 @@ describe('SettingsStore', () => {
       const store = makeStore();
 
       expect(store.get()).toEqual({
-        schemaVersion: 2,
+        schemaVersion: 3,
         runtime: { selection: 'claude' },
         window: { bounds: { x: 10, y: 20, width: 1024, height: 768 } },
         theme: 'dark',
@@ -351,12 +358,13 @@ describe('SettingsStore', () => {
         notifications: { previewEnabled: true },
         shell: { activeFeatureId: 'ffee0011aa223344', sidebarCollapsed: false },
         settingsWindow: defaultSettingsWindowPrefs(),
+        servers: defaultServersPrefs(),
       });
       expect(warnings).toEqual([]);
       expect(fs.existsSync(`${settingsPath()}.bak-1`)).toBe(false);
 
       const onDisk = JSON.parse(fs.readFileSync(settingsPath(), 'utf8'));
-      expect(onDisk.schemaVersion).toBe(2);
+      expect(onDisk.schemaVersion).toBe(3);
       expect(onDisk.shell).toEqual({
         activeFeatureId: 'ffee0011aa223344',
         sidebarCollapsed: false,
@@ -417,6 +425,185 @@ describe('SettingsStore', () => {
       store.update({ shell: { sidebarCollapsed: true, activeFeatureId: 'some-id' } });
       const reloaded = makeStore();
       expect(reloaded.get().shell).toEqual({ sidebarCollapsed: true, activeFeatureId: 'some-id' });
+    });
+  });
+
+  describe('schema v2 -> v3 migration', () => {
+    function v2Fixture(overrides: Record<string, unknown> = {}) {
+      return {
+        schemaVersion: 2,
+        runtime: { selection: 'claude' },
+        window: { bounds: { x: 10, y: 20, width: 1024, height: 768 } },
+        theme: 'dark',
+        wizard: { collapsedHelp: true },
+        ama: { drawer: 'expanded', geometry: { right: 96, bottom: 48, width: 520, height: 400 } },
+        notifications: { previewEnabled: true },
+        shell: { activeFeatureId: 'abcd1234ef567890', sidebarCollapsed: true },
+        settingsWindow: {
+          bounds: { x: 40, y: 60, width: 900, height: 640 },
+          pane: 'diagnostics',
+        },
+        ...overrides,
+      };
+    }
+
+    it('rewrites a v2 file as v3 and preserves every pre-existing field exactly', () => {
+      fs.writeFileSync(settingsPath(), JSON.stringify(v2Fixture()));
+      const store = makeStore();
+
+      expect(store.get()).toEqual({
+        ...v2Fixture(),
+        schemaVersion: 3,
+        servers: defaultServersPrefs(),
+      });
+      expect(warnings).toEqual([]);
+      expect(fs.existsSync(`${settingsPath()}.bak-1`)).toBe(false);
+
+      const onDisk = JSON.parse(fs.readFileSync(settingsPath(), 'utf8'));
+      expect(onDisk).toEqual({
+        ...v2Fixture(),
+        schemaVersion: 3,
+        servers: defaultServersPrefs(),
+      });
+    });
+
+    it('migrates a v2 file that already carries a servers object as an unknown field to defaults', () => {
+      fs.writeFileSync(
+        settingsPath(),
+        JSON.stringify(v2Fixture({ servers: { known: [], rogue: true } })),
+      );
+      const store = makeStore();
+      // The v2 shape is strict: any foreign field makes the document
+      // unrecoverable, exactly like a corrupt file.
+      expect(store.get()).toEqual(defaultSettings());
+      expect(fs.existsSync(`${settingsPath()}.bak-1`)).toBe(true);
+    });
+  });
+
+  describe('known servers', () => {
+    function knownServer(seed: number, patch: Partial<KnownServer> = {}): KnownServer {
+      return {
+        serverKey: seed.toString(16).padStart(64, '0'),
+        name: `server-${seed}`,
+        baseUrl: `http://127.0.0.1:${9000 + seed}`,
+        runtimeDir: `/rt/server-${seed}`,
+        lastSeenAt: new Date(1_700_000_000_000 + seed * 1000).toISOString(),
+        ...patch,
+      };
+    }
+
+    it('upserts a known server to the front, most-recent-first', () => {
+      const store = makeStore();
+      store.update({ servers: { upsertKnown: knownServer(1) } });
+      store.update({ servers: { upsertKnown: knownServer(2) } });
+      expect(store.get().servers.known).toEqual([knownServer(2), knownServer(1)]);
+    });
+
+    it('updates an existing serverKey in place, moves it to the front, and never grows the list', () => {
+      const store = makeStore();
+      store.update({ servers: { upsertKnown: knownServer(1) } });
+      store.update({ servers: { upsertKnown: knownServer(2) } });
+      const touched = knownServer(2, { name: 'renamed', lastSeenAt: '2026-08-10T00:00:00.000Z' });
+      store.update({ servers: { upsertKnown: touched } });
+      expect(store.get().servers.known).toEqual([touched, knownServer(1)]);
+      expect(makeStore().get().servers.known).toEqual([touched, knownServer(1)]);
+    });
+
+    it('evicts the tail entry once the list exceeds MAX_KNOWN_SERVERS', () => {
+      const store = makeStore();
+      for (let seed = 1; seed <= MAX_KNOWN_SERVERS; seed += 1) {
+        store.update({ servers: { upsertKnown: knownServer(seed) } });
+      }
+      expect(store.get().servers.known).toHaveLength(MAX_KNOWN_SERVERS);
+      const newest = knownServer(MAX_KNOWN_SERVERS + 1);
+      store.update({ servers: { upsertKnown: newest } });
+      const keys = store.get().servers.known.map((entry) => entry.serverKey);
+      expect(keys).toHaveLength(MAX_KNOWN_SERVERS);
+      expect(keys[0]).toBe(newest.serverKey);
+      expect(keys).not.toContain(knownServer(1).serverKey);
+      expect(keys).toContain(knownServer(2).serverKey);
+    });
+
+    it('sets and clears the last-used pointer through the patch path', () => {
+      const store = makeStore();
+      const entry = knownServer(1);
+      store.update({ servers: { upsertKnown: entry, lastUsed: entry.serverKey } });
+      expect(store.get().servers.lastUsed).toBe(entry.serverKey);
+      store.update({ servers: { lastUsed: null } });
+      expect(store.get().servers.lastUsed).toBeNull();
+      expect(makeStore().get().servers.lastUsed).toBeNull();
+    });
+
+    it('allows the last-used pointer to name a serverKey not present in known', () => {
+      const store = makeStore();
+      store.update({ servers: { lastUsed: 'f'.repeat(64) } });
+      expect(store.get().servers.lastUsed).toBe('f'.repeat(64));
+      expect(store.get().servers.known).toEqual([]);
+    });
+
+    it('rejects an upsert whose baseUrl is not a loopback http URL and corrupts nothing', () => {
+      const store = makeStore();
+      store.update({ servers: { upsertKnown: knownServer(1) } });
+      const before = store.get();
+      for (const baseUrl of [
+        'https://127.0.0.1:9001',
+        'http://example.com:9001',
+        'http://192.168.1.10:9001',
+        'not a url',
+        '',
+      ]) {
+        expect(() =>
+          store.update({ servers: { upsertKnown: knownServer(1, { baseUrl }) } }),
+        ).toThrow(SafeErrorException);
+      }
+      expect(store.get()).toEqual(before);
+      expect(JSON.parse(fs.readFileSync(settingsPath(), 'utf8')).servers.known).toEqual([
+        knownServer(1),
+      ]);
+    });
+
+    it('accepts every loopback spelling for baseUrl', () => {
+      const store = makeStore();
+      for (const [seed, baseUrl] of [
+        [1, 'http://localhost:9001'],
+        [2, 'http://127.0.0.1:9002'],
+        [3, 'http://127.34.56.78:9003'],
+        [4, 'http://[::1]:9004/ui'],
+      ] as const) {
+        store.update({ servers: { upsertKnown: knownServer(seed, { baseUrl }) } });
+      }
+      expect(store.get().servers.known).toHaveLength(4);
+    });
+
+    it('rejects token-shaped and otherwise unknown fields on an upsert, fail closed', () => {
+      const store = makeStore();
+      for (const rogue of [{ token: 'x' }, { authToken: 'x' }, { secret: 'x' }, { port: 9001 }]) {
+        expect(() =>
+          store.update({
+            servers: { upsertKnown: { ...knownServer(1), ...rogue } as never },
+          }),
+        ).toThrow(SafeErrorException);
+      }
+      expect(store.get().servers).toEqual(defaultServersPrefs());
+      expect(fs.existsSync(settingsPath())).toBe(false);
+    });
+
+    it('rejects an empty servers patch section', () => {
+      const store = makeStore();
+      expect(() => store.update({ servers: {} as never })).toThrow(SafeErrorException);
+      expect(fs.existsSync(settingsPath())).toBe(false);
+    });
+
+    it('refuses to load a file whose known list exceeds the bound', () => {
+      const store = makeStore();
+      for (let seed = 1; seed <= MAX_KNOWN_SERVERS; seed += 1) {
+        store.update({ servers: { upsertKnown: knownServer(seed) } });
+      }
+      const onDisk = JSON.parse(fs.readFileSync(settingsPath(), 'utf8'));
+      onDisk.servers.known.push(knownServer(MAX_KNOWN_SERVERS + 1));
+      fs.writeFileSync(settingsPath(), JSON.stringify(onDisk));
+      expect(makeStore().get()).toEqual(defaultSettings());
+      expect(fs.existsSync(`${settingsPath()}.bak-1`)).toBe(true);
     });
   });
 });

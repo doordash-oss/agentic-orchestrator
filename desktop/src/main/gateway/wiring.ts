@@ -8,6 +8,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { redactText, requestTimeoutError, SafeErrorException } from '../../shared/errors';
+import type { KnownServer, ServersPrefs } from '../../shared/ipc';
 import {
   assertNoPrototypePollution,
   assertWithinByteSize,
@@ -16,6 +17,7 @@ import {
 import type { DiscoveryDeps } from './discovery';
 import type { SseStream } from './events';
 import { RedactedLogBuffer } from './logBuffer';
+import { scanRegistry, type RegistryDeps } from './registry';
 import { fileIsExecutable, resolveServerBinary } from './resources';
 import { RuntimeGateway, type GatewayDeps, type SelectedRuntime } from './runtimeGateway';
 import { ManagedServerProcess } from './serverProcess';
@@ -36,6 +38,10 @@ export const MAX_PROBE_RESPONSE_BYTES = 1024 * 1024;
 export interface RuntimeGatewayWiringOptions {
   /** Reads the persisted runtime selection (a runtime parent directory). */
   getRuntimeSelection(): string | null;
+  /** Reads the persisted known-servers prefs (bounded list + last-used pointer). */
+  getServersPrefs(): ServersPrefs;
+  /** Persists a successful attach (upsert + last-used pointer). */
+  recordAttachedServer(entry: KnownServer): void;
   isPackaged: boolean;
   resourcesPath: string;
   /** Repository root in development (…/desktop/out/main → repo). */
@@ -79,6 +85,29 @@ export function createRuntimeGateway(options: RuntimeGatewayWiringOptions): Wire
     },
   };
 
+  const registry: RegistryDeps = {
+    ...discovery,
+    listDir: (dirPath) => {
+      try {
+        return fs.readdirSync(dirPath);
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+          return null;
+        }
+        throw err;
+      }
+    },
+    removeFile: (filePath) => fs.unlinkSync(filePath),
+    homeDir: os.homedir(),
+    dirExists: (dirPath) => {
+      try {
+        return fs.statSync(dirPath).isDirectory();
+      } catch {
+        return false;
+      }
+    },
+  };
+
   const deps: GatewayDeps = {
     selectRuntime: () => selectRuntime(options.getRuntimeSelection()),
     discovery,
@@ -110,6 +139,9 @@ export function createRuntimeGateway(options: RuntimeGatewayWiringOptions): Wire
       warn(`[agentico-gateway] ${redacted}`);
     },
     readDiagnosticLines: () => logBuffer.snapshot(),
+    scanRegistry: () => scanRegistry(registry),
+    knownServers: () => options.getServersPrefs(),
+    recordAttachedServer: (entry) => options.recordAttachedServer(entry),
   };
 
   return { gateway: new RuntimeGateway(deps), logBuffer };

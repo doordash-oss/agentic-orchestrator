@@ -184,6 +184,29 @@ func pickRuntimeParent() string {
 	return config.ExpandHome(defaultRuntimeParent)
 }
 
+// legacyRuntimeParent is the pre-rename runtime parent. The server registry
+// publishes into it only when the fresh parent does not exist but the legacy
+// one does, so servers installed under a legacy tree register where legacy
+// desktop builds look. The desktop main process mirrors this rule.
+const legacyRuntimeParent = "~/.agentic-workflow"
+
+// resolveRegistryParent resolves the runtime parent that owns the central
+// server registry: the fresh parent when it exists (or nothing exists, so
+// new installs always land there), the legacy parent only when it alone
+// exists. Never fails — the registry publish itself warns and continues on
+// any filesystem error.
+func resolveRegistryParent() string {
+	fresh := pickRuntimeParent()
+	if _, err := os.Stat(fresh); err == nil {
+		return fresh
+	}
+	legacy := config.ExpandHome(legacyRuntimeParent)
+	if _, err := os.Stat(legacy); err == nil {
+		return legacy
+	}
+	return fresh
+}
+
 func run() {
 	os.Exit(runArgs(os.Args[1:], os.Stdout, os.Stderr, runServer, runUpdate))
 }
@@ -2751,7 +2774,38 @@ func runServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledPr
 	}()
 
 	now := time.Now().UTC()
-	if err := serverruntime.PublishDiscovery(boot.runtime.RuntimeDir, serverruntime.DiscoveryRecord{
+	record := registryRecord(boot, runtimeServer, authToken, resolvedName, policy, now)
+	if err := serverruntime.PublishDiscovery(boot.runtime.RuntimeDir, record); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: publishing discovery metadata: %v\n", err)
+		return 1
+	}
+
+	// The central registry entry is a verbatim copy of the published
+	// discovery record under the resolved runtime parent's servers/ dir.
+	// Publication failure never affects serving: the server stays fully
+	// attachable via its per-runtime discovery file.
+	registryDir := serverruntime.RegistryDir(resolveRegistryParent())
+	if err := serverruntime.PublishRegistryEntry(registryDir, record); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: publishing server registry entry: %v\n", err)
+	} else {
+		defer func() {
+			if err := serverruntime.RemoveRegistryEntry(registryDir, boot.runtime.RuntimeDir); err != nil {
+				log.Printf("Warning: removing server registry entry: %v", err)
+			}
+		}()
+	}
+
+	fmt.Fprintf(os.Stderr, "Agentic server %q listening at %s\n", resolvedName, runtimeServer.BaseURL())
+	<-runtimeCtx.Done()
+	shutdownFeatures(boot.orchestrator, boot.sessionManager)
+	return 0
+}
+
+// registryRecord builds the shared publish record: the same value is written
+// to the per-runtime discovery file and (verbatim, token included) to the
+// central server registry.
+func registryRecord(boot *runtimeBootstrap, runtimeServer *serverruntime.RuntimeServer, authToken, resolvedName string, policy serverruntime.LaunchPolicy, now time.Time) serverruntime.DiscoveryRecord {
+	return serverruntime.DiscoveryRecord{
 		SchemaVersion: 1,
 		APIVersion:    serverruntime.APIVersion,
 		BaseURL:       runtimeServer.BaseURL(),
@@ -2766,15 +2820,7 @@ func runServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledPr
 		StartedAt:     runtimeServer.StartedAt(),
 		PublishedAt:   now,
 		Owner:         serverruntime.OwnerFromInstanceOwner(boot.owner),
-	}); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: publishing discovery metadata: %v\n", err)
-		return 1
 	}
-
-	fmt.Fprintf(os.Stderr, "Agentic server %q listening at %s\n", resolvedName, runtimeServer.BaseURL())
-	<-runtimeCtx.Done()
-	shutdownFeatures(boot.orchestrator, boot.sessionManager)
-	return 0
 }
 
 func shouldInterruptRunningOnStartup(recoveryScanOK bool, recoveryItemCount, activeSessionCount int) bool {

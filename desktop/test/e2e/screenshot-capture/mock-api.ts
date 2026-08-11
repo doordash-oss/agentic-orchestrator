@@ -32,6 +32,7 @@ import type {
   DiagnosticsSnapshot,
 } from '../../../src/shared/ipc';
 import {
+  applyServersPatch,
   CHAT_SESSION_ID,
   defaultAmaPrefs,
   defaultSettings,
@@ -1437,6 +1438,7 @@ function makeMockApi(
       ),
     retryConnection: () => Promise.resolve(CONNECTION_STATE),
     restartConnection: () => Promise.resolve(CONNECTION_STATE),
+    chooseConnectionServer: () => Promise.resolve(CONNECTION_STATE),
     onConnectionChanged: (listener) => {
       connectionListeners.add(listener);
       return () => connectionListeners.delete(listener);
@@ -1447,7 +1449,14 @@ function makeMockApi(
     },
     getSettings: () => Promise.resolve(currentSettings),
     updateSettings: (patch) => {
-      currentSettings = { ...currentSettings, ...patch };
+      const { servers, ...rest } = patch;
+      currentSettings = { ...currentSettings, ...rest };
+      if (servers !== undefined) {
+        currentSettings = {
+          ...currentSettings,
+          servers: applyServersPatch(currentSettings.servers, servers),
+        };
+      }
       return Promise.resolve(currentSettings);
     },
     openSettingsWindow: () => Promise.resolve({ opened: true }),

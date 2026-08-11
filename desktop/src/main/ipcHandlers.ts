@@ -14,6 +14,7 @@ import { assertNoPrototypePollution, assertWithinByteSize } from '../shared/sani
 import {
   IPC_CHANNELS,
   IPC_EVENTS,
+  type ChooseServerRequest,
   type ConnectionState,
   type CreateFeatureInput,
   type CreateFeatureResult,
@@ -124,6 +125,7 @@ export interface IpcServices {
   getConnectionStatus(): ConnectionState;
   retryConnection(): Promise<ConnectionState> | ConnectionState;
   restartConnection(): Promise<ConnectionState> | ConnectionState;
+  chooseConnectionServer(request: ChooseServerRequest): Promise<ConnectionState> | ConnectionState;
   getSettings(): Settings;
   updateSettings(patch: SettingsPatch): Settings;
   openSettingsWindow(request: SettingsOpenRequest): SettingsOpenResult;
@@ -265,6 +267,8 @@ export function registerIpcHandlers(
     [IPC_CHANNELS.connectionGetStatus]: () => services.getConnectionStatus(),
     [IPC_CHANNELS.connectionRetry]: () => services.retryConnection(),
     [IPC_CHANNELS.connectionRestart]: () => services.restartConnection(),
+    [IPC_CHANNELS.connectionChooseServer]: (_event, request: ChooseServerRequest) =>
+      services.chooseConnectionServer(request),
     [IPC_CHANNELS.settingsGet]: () => services.getSettings(),
     [IPC_CHANNELS.settingsUpdate]: (_event, patch: SettingsPatch) => services.updateSettings(patch),
     [IPC_CHANNELS.windowOpenSettings]: (_event, request: SettingsOpenRequest) =>

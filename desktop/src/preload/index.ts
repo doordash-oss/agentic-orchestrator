@@ -94,6 +94,7 @@ const api: AgenticoApi = {
   getConnectionStatus: () => call(IPC_CHANNELS.connectionGetStatus),
   retryConnection: () => call(IPC_CHANNELS.connectionRetry),
   restartConnection: () => call(IPC_CHANNELS.connectionRestart),
+  chooseConnectionServer: (request) => call(IPC_CHANNELS.connectionChooseServer, request),
   onConnectionChanged: (listener: (state: ConnectionState) => void) => {
     const wrapped = (_event: unknown, payload: unknown): void => {
       try {

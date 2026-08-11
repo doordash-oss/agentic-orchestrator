@@ -215,6 +215,7 @@ export interface AgenticoMock {
     getConnectionStatus: ReturnType<typeof vi.fn>;
     retryConnection: ReturnType<typeof vi.fn>;
     restartConnection: ReturnType<typeof vi.fn>;
+    chooseConnectionServer: ReturnType<typeof vi.fn>;
     onRouteRequest: ReturnType<typeof vi.fn>;
     getSettings: ReturnType<typeof vi.fn>;
     updateSettings: ReturnType<typeof vi.fn>;
@@ -350,6 +351,7 @@ export function installAgenticoMock(
     getConnectionStatus: vi.fn(() => Promise.resolve(connection)),
     retryConnection: vi.fn(() => Promise.resolve(connection)),
     restartConnection: vi.fn(() => Promise.resolve(connection)),
+    chooseConnectionServer: vi.fn(() => Promise.resolve(connection)),
     onConnectionChanged: vi.fn((listener: (state: ConnectionState) => void) => {
       listeners.add(listener);
       return () => listeners.delete(listener);

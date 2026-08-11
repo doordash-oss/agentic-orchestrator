@@ -20,11 +20,15 @@ import {
   SESSION_ID_SEGMENT_PATTERN,
   type ConnectionDiagnostics,
   type ConnectionState,
+  type ChooseServerRequest,
+  type KnownServer,
+  type ServersPrefs,
 } from '../../shared/ipc';
 import { z } from 'zod';
 import { evaluateCompatibility } from './compatibility';
 import { evaluateDiscoveryFile, type DiscoveryDeps, type DiscoveryRecord } from './discovery';
 import type { SseStream } from './events';
+import { registryEntryKey, type RegistryCandidate, type RegistryScan } from './registry';
 import type { ResolveResult } from './resources';
 import { DEFAULT_STOP_TIMEOUT_MS, type ChildExit } from './serverProcess';
 
@@ -115,6 +119,19 @@ export interface GatewayDeps {
   log(line: string): void;
   /** Redacted child-output snapshot. A second IPC-safe scrub is applied before display. */
   readDiagnosticLines?(): readonly string[];
+  /**
+   * Scans the central server registry before legacy discovery. Registry
+   * candidates win over the per-runtime discovery fallback; an empty scan
+   * keeps today's behavior byte-identical.
+   */
+  scanRegistry(): RegistryScan;
+  /** Reads the persisted known-servers view (bounded list + last-used pointer). */
+  knownServers(): ServersPrefs;
+  /**
+   * Persists a successful attach (registry or legacy): upserts the
+   * known-server entry and moves the last-used pointer.
+   */
+  recordAttachedServer(entry: KnownServer): void;
   timeouts?: Partial<GatewayTimeouts>;
   /** Injectable monotonic-enough wall clock for deterministic supervision tests. */
   now?(): number;
@@ -142,6 +159,14 @@ const INCOMPATIBLE_REMEDIATION =
   'was started if you want this app to manage its own.';
 
 type AttachResult = 'attached' | 'blocked' | 'launch';
+
+/**
+ * What tryAttach does when the candidate server turns out unreachable or
+ * stale before compatibility is decided: `launch` falls through to the
+ * legacy/spawn paths (startup scan race), `error` lands in the visible
+ * error/retry state (a server the user explicitly picked died mid-pick).
+ */
+type StaleHandling = 'launch' | 'error';
 
 export class RuntimeGateway {
   private state: ConnectionState = {
@@ -173,6 +198,13 @@ export class RuntimeGateway {
    * restart-pending state by comparing it against settings.runtime.selection.
    */
   private connectedRuntimeDir: string | null = null;
+  /**
+   * The registry snapshot behind an awaiting-server-choice state. Records
+   * stay in the main process (tokens included); only the renderer-safe
+   * candidate projection crosses IPC. Cleared at the start of every connect
+   * cycle and once a choice is consumed.
+   */
+  private pendingCandidates: RegistryCandidate[] = [];
 
   constructor(private readonly deps: GatewayDeps) {
     this.timeouts = { ...DEFAULT_TIMEOUTS, ...deps.timeouts };
@@ -352,6 +384,43 @@ export class RuntimeGateway {
   }
 
   /**
+   * Picks one candidate from the awaiting-server-choice snapshot and attaches
+   * through the existing record-consuming tryAttach path. An unknown key (a
+   * stale snapshot) rescans from scratch like a retry; a server that dies
+   * mid-pick lands in the visible error state, whose retry rescans.
+   */
+  async chooseServer(request: ChooseServerRequest): Promise<ConnectionState> {
+    if (this.shuttingDown || this.busy || this.state.status !== 'awaiting-server-choice') {
+      return this.state;
+    }
+    const candidate = this.pendingCandidates.find((entry) => entry.serverKey === request.serverKey);
+    this.pendingCandidates = [];
+    if (candidate === undefined) {
+      this.deps.log('server choice named an unknown candidate; rescanning');
+      await this.retry();
+      return this.state;
+    }
+    this.busy = true;
+    const generation = ++this.generation;
+    try {
+      await this.attachCandidate(generation, candidate, 'error');
+    } catch (err) {
+      const safe = toSafeError(err, 'E_GATEWAY');
+      this.deps.log(`gateway cycle failed: ${safe.code}: ${safe.message}`);
+      this.setState({
+        status: 'error',
+        stage: this.state.stage,
+        detail: 'The connection attempt failed unexpectedly.',
+        ownership: 'none',
+        error: safe,
+      });
+    } finally {
+      this.busy = false;
+    }
+    return this.state;
+  }
+
+  /**
    * Verifies a stale global stream before dropping an externally owned
    * connection. This never signals, restarts, or adopts the external process.
    */
@@ -412,6 +481,7 @@ export class RuntimeGateway {
     this.token = null;
     this.baseUrl = null;
     this.connectedRuntimeDir = null;
+    this.pendingCandidates = [];
   }
 
   // --- connect cycle ---------------------------------------------------------
@@ -421,6 +491,7 @@ export class RuntimeGateway {
     this.token = null;
     this.baseUrl = null;
     this.launchCommandContext = null;
+    this.pendingCandidates = [];
 
     this.setState({
       status: 'resolving-runtime',
@@ -437,6 +508,55 @@ export class RuntimeGateway {
       detail: 'Looking for a running Agentico runtime.',
       ownership: 'none',
     });
+
+    // Registry-first startup selection: live registry candidates win over
+    // the legacy per-runtime discovery fallback. Zero live candidates keeps
+    // today's behavior byte-identical (old binaries only publish the
+    // per-runtime file). The scan prunes dead/insecure/corrupt entries.
+    const scan = this.deps.scanRegistry();
+    if (scan.pruned > 0) {
+      this.deps.log(
+        `registry scan pruned ${scan.pruned} dead or invalid entr${scan.pruned === 1 ? 'y' : 'ies'}`,
+      );
+    }
+    if (scan.rejected.length > 0) {
+      this.deps.log(
+        `registry scan skipped ${scan.rejected.length} entr${scan.rejected.length === 1 ? 'y' : 'ies'} (left on disk)`,
+      );
+    }
+    if (scan.candidates.length > 0) {
+      if (this.cancelled(generation)) {
+        return;
+      }
+      const decided = this.decideRegistryAttach(scan);
+      if (decided === null) {
+        // Multiple live servers without a last-used match: park in the
+        // user-decision state; chooseServer() or retry() continues.
+        this.pendingCandidates = scan.candidates;
+        this.setState({
+          status: 'awaiting-server-choice',
+          stage: 'connect',
+          detail: 'Choose which Agentico server to connect to.',
+          ownership: 'none',
+          candidates: scan.candidates.map((candidate) => ({
+            serverKey: candidate.serverKey,
+            name: candidate.record.name ?? null,
+            runtimeDir: candidate.runtimeDir,
+          })),
+        });
+        return;
+      }
+      const attached = await this.attachCandidate(generation, decided, 'launch');
+      if (attached) {
+        return;
+      }
+      // The chosen candidate died between scan and probe; fall through to
+      // the legacy discovery/spawn path exactly as a stale discovery would.
+      if (this.cancelled(generation)) {
+        return;
+      }
+    }
+
     const outcome = evaluateDiscoveryFile(
       selected.runtimeDir,
       selected.stateDir,
@@ -457,11 +577,80 @@ export class RuntimeGateway {
     await this.launch(generation, selected);
   }
 
+  /**
+   * Picks the candidate for a silent attach from a non-empty registry scan:
+   * a live candidate matching the last-used pointer when there is one,
+   * otherwise the single candidate when exactly one is live. Returns null
+   * when the user must pick (multiple live, no usable last-used).
+   */
+  private decideRegistryAttach(scan: RegistryScan): RegistryCandidate | null {
+    const lastUsed = this.deps.knownServers().lastUsed;
+    if (lastUsed !== null) {
+      const remembered = scan.candidates.find((candidate) => candidate.serverKey === lastUsed);
+      if (remembered !== undefined) {
+        return remembered;
+      }
+    }
+    if (scan.candidates.length === 1) {
+      return scan.candidates[0] ?? null;
+    }
+    return null;
+  }
+
+  /**
+   * Attaches to one registry candidate through the existing record-consuming
+   * tryAttach path. Returns whether the cycle reached a terminal attach
+   * decision (attached or its own terminal state); false means the candidate
+   * was stale at probe time and the caller decides the fallback.
+   */
+  private async attachCandidate(
+    generation: number,
+    candidate: RegistryCandidate,
+    stale: StaleHandling,
+  ): Promise<boolean> {
+    const record = candidate.record;
+    const selected: SelectedRuntime = {
+      runtimeDir: record.runtime.runtime_dir,
+      stateDir: record.runtime.state_dir,
+      configPath: record.runtime.config_path,
+    };
+    // Attaching elsewhere re-aims connectedRuntimeDir but never rewrites
+    // settings.runtime.selection — the last-used pointer is the reconnection
+    // authority.
+    this.connectedRuntimeDir = selected.runtimeDir;
+    const result = await this.tryAttach(generation, selected, record, stale, candidate.serverKey);
+    if (result === 'launch') {
+      return false;
+    }
+    return true;
+  }
+
   private async tryAttach(
     generation: number,
     selected: SelectedRuntime,
     record: DiscoveryRecord,
+    stale: StaleHandling = 'launch',
+    serverKey?: string,
   ): Promise<AttachResult> {
+    const staleResult = (note: string): AttachResult => {
+      this.deps.log(note);
+      if (stale === 'error') {
+        this.setState({
+          status: 'error',
+          stage: 'connect',
+          detail: 'The selected server stopped responding.',
+          ownership: 'none',
+          error: {
+            code: 'E_ATTACH_UNREACHABLE',
+            message: 'The selected Agentico server is no longer reachable.',
+            remediation: 'Use Retry to rescan the running servers.',
+          },
+        });
+        return 'blocked';
+      }
+      return 'launch';
+    };
+
     this.setState({
       status: 'attaching',
       stage: 'connect',
@@ -477,24 +666,20 @@ export class RuntimeGateway {
         timeoutMs: this.timeouts.healthProbeMs,
       });
     } catch {
-      this.deps.log('discovery candidate did not answer its health probe; treating as stale');
-      return 'launch';
+      return staleResult('discovery candidate did not answer its health probe; treating as stale');
     }
     if (this.cancelled(generation)) {
       return 'blocked';
     }
     if (health.status !== 200) {
-      this.deps.log('discovery candidate returned an unhealthy status; treating as stale');
-      return 'launch';
+      return staleResult('discovery candidate returned an unhealthy status; treating as stale');
     }
     const probe = ProbeHealthSchema.safeParse(health.body);
     if (!probe.success || probe.data.status !== 'ok') {
-      this.deps.log('discovery candidate health payload was unusable; treating as stale');
-      return 'launch';
+      return staleResult('discovery candidate health payload was unusable; treating as stale');
     }
     if (probe.data.runtime !== undefined && probe.data.runtime.state_dir !== selected.stateDir) {
-      this.deps.log('running server reports a different runtime identity; not a match');
-      return 'launch';
+      return staleResult('running server reports a different runtime identity; not a match');
     }
 
     const verdict = evaluateCompatibility(probe.data.compatibility);
@@ -575,6 +760,15 @@ export class RuntimeGateway {
       serverName,
     });
     this.readySince = this.now();
+    // Every successful attach (registry or legacy discovery) refreshes the
+    // known-servers entry and the last-used pointer.
+    this.deps.recordAttachedServer({
+      serverKey: serverKey ?? registryEntryKey(selected.runtimeDir),
+      name: serverName ?? '',
+      baseUrl: trimBase(record.base_url),
+      runtimeDir: selected.runtimeDir,
+      lastSeenAt: new Date(this.now()).toISOString(),
+    });
     return 'attached';
   }
 

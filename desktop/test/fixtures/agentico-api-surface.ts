@@ -15,6 +15,7 @@ export const EXPECTED_API_SURFACE: readonly string[] = [
   'cancelCreationFileSearch',
   'cancelSessionOutput',
   'checkForUpdates',
+  'chooseConnectionServer',
   'clearDiagnostics',
   'createFeature',
   'decideReview',

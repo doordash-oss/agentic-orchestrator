@@ -396,6 +396,10 @@ if (!hasSingleInstanceLock) {
     const localDrafts = new LocalDraftStore(app.getPath('userData'));
     const { gateway, logBuffer } = createRuntimeGateway({
       getRuntimeSelection: () => settings.get().runtime.selection,
+      getServersPrefs: () => settings.get().servers,
+      recordAttachedServer: (entry) => {
+        settings.update({ servers: { upsertKnown: entry, lastUsed: entry.serverKey } });
+      },
       isPackaged: isPackagedRuntime,
       resourcesPath: runtimeResourcesPath,
       // out/main → out → desktop → repository root (development layout).
@@ -1065,6 +1069,7 @@ if (!hasSingleInstanceLock) {
       getConnectionStatus: () => gateway.getState(),
       retryConnection: () => gateway.retry(),
       restartConnection: () => gateway.restart(),
+      chooseConnectionServer: (request) => gateway.chooseServer(request),
       getSettings: () => settings.get(),
       updateSettings: (patch) => {
         const next = settings.update(patch);

@@ -1685,6 +1685,39 @@ func TestPickRuntimeParent(t *testing.T) {
 	}
 }
 
+func TestResolveRegistryParent(t *testing.T) {
+	t.Run("fresh parent wins when it exists", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		if err := os.MkdirAll(filepath.Join(home, ".agentic-orchestrator"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(filepath.Join(home, ".agentic-workflow"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if got, want := resolveRegistryParent(), filepath.Join(home, ".agentic-orchestrator"); got != want {
+			t.Errorf("resolveRegistryParent() = %q, want %q", got, want)
+		}
+	})
+	t.Run("legacy parent used when it alone exists", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		if err := os.MkdirAll(filepath.Join(home, ".agentic-workflow"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if got, want := resolveRegistryParent(), filepath.Join(home, ".agentic-workflow"); got != want {
+			t.Errorf("resolveRegistryParent() = %q, want %q", got, want)
+		}
+	})
+	t.Run("fresh parent default when neither exists", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		if got, want := resolveRegistryParent(), filepath.Join(home, ".agentic-orchestrator"); got != want {
+			t.Errorf("resolveRegistryParent() = %q, want %q", got, want)
+		}
+	})
+}
+
 func TestPrintUsageAdvertisesRenamedDefaults(t *testing.T) {
 	var b bytes.Buffer
 	printUsage(&b)

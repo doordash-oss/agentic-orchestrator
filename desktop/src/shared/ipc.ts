@@ -13,6 +13,7 @@ export const IPC_CHANNELS = {
   connectionGetStatus: 'agentico:connection:get-status',
   connectionRetry: 'agentico:connection:retry',
   connectionRestart: 'agentico:connection:restart',
+  connectionChooseServer: 'agentico:connection:choose-server',
   settingsGet: 'agentico:settings:get',
   settingsUpdate: 'agentico:settings:update',
   windowOpenSettings: 'agentico:window:open-settings',
@@ -206,6 +207,7 @@ export const CONNECTION_STATUSES = [
   ...CONNECTION_PENDING_STATUSES,
   'waiting-health',
   'connecting',
+  'awaiting-server-choice',
   'ready',
   ...CONNECTION_ERROR_STATUSES,
 ] as const;
@@ -324,6 +326,34 @@ export const ConnectionReadyStateSchema = z.strictObject({
   ownership: z.enum(['external', 'app-owned']),
 });
 
+/**
+ * A registry candidate offered in the picker. Strictly renderer-safe: the
+ * opaque identity key, the display name, and the runtime dir that
+ * disambiguates duplicate names — never a token.
+ */
+export const ServerChoiceCandidateSchema = z.strictObject({
+  serverKey: z.string().min(1).max(64),
+  name: z.string().max(64).nullable(),
+  runtimeDir: z.string().max(4096),
+});
+export type ServerChoiceCandidate = z.output<typeof ServerChoiceCandidateSchema>;
+
+/** Hard bound on the picker snapshot; the registry scanner already sorts. */
+export const MAX_SERVER_CHOICE_CANDIDATES = 32;
+
+/**
+ * A user-decision state: several live servers compete and nothing else can
+ * proceed until the user picks one (attach-only snapshot — retry rescans).
+ * It is neither pending nor an error: connecting waits on a human choice.
+ */
+export const ConnectionAwaitingServerChoiceStateSchema = z.strictObject({
+  status: z.literal('awaiting-server-choice'),
+  stage: connectionStage('connect'),
+  ...connectionStateBase,
+  ownership: z.literal('none'),
+  candidates: z.array(ServerChoiceCandidateSchema).min(2).max(MAX_SERVER_CHOICE_CANDIDATES),
+});
+
 /** Terminal failures always carry redacted diagnostics for the shell. */
 const ConnectionIncompatibleStateSchema = z.strictObject({
   status: z.literal('incompatible'),
@@ -385,6 +415,7 @@ export const ConnectionStateSchema = z.discriminatedUnion('status', [
   ConnectionLaunchingStateSchema,
   ConnectionSupervisingStateSchema,
   ConnectionAuthenticatingStateSchema,
+  ConnectionAwaitingServerChoiceStateSchema,
   ConnectionReadyStateSchema,
   ConnectionIncompatibleStateSchema,
   ConnectionResourcesMissingStateSchema,
@@ -396,6 +427,15 @@ export const ConnectionStateSchema = z.discriminatedUnion('status', [
 export type ConnectionState = z.output<typeof ConnectionStateSchema>;
 export type ConnectionReadyState = z.output<typeof ConnectionReadyStateSchema>;
 export type ConnectionErrorState = z.output<typeof ConnectionErrorStateSchema>;
+
+/**
+ * The picker choice: the opaque identity key of one candidate from the
+ * awaiting-server-choice snapshot. Never a URL or token.
+ */
+export const ChooseServerRequestSchema = z.strictObject({
+  serverKey: z.string().min(1).max(64),
+});
+export type ChooseServerRequest = z.output<typeof ChooseServerRequestSchema>;
 
 /** Narrows to the failure variant, which always carries error detail. */
 export function isConnectionErrorState(state: ConnectionState): state is ConnectionErrorState {
@@ -2153,11 +2193,123 @@ export const CreationFileSearchResultSchema = z.strictObject({
 });
 export type CreationFileSearchResult = z.output<typeof CreationFileSearchResultSchema>;
 
-// --- Settings (app-local presentation/runtime-selection data ONLY) ---------
-// Never store features, runs, configuration, credentials, or any
-// server-domain snapshot here.
+// --- Settings (app-local presentation/runtime-selection data) ---------------
+// Never store features, runs, configuration, credentials, or server-domain
+// snapshots here. The `servers` section is the narrow multi-server exception:
+// attachment metadata only (identity key, name, loopback base URL, runtime
+// dir, last-seen) — never a token.
 
-export const SETTINGS_SCHEMA_VERSION = 2;
+export const SETTINGS_SCHEMA_VERSION = 3;
+
+/**
+ * Hard bound on the persisted known-servers list. The list is ordered
+ * most-recent-first; upserts move the touched entry to the front and entries
+ * beyond the cap evict from the tail, so an attacker/script can never grow
+ * settings.json without bound.
+ */
+export const MAX_KNOWN_SERVERS = 16;
+
+/**
+ * Conservative loopback-http base-URL check for persisted known-server
+ * entries. A URL qualifies only when it parses, uses plain `http:`, and its
+ * hostname is loopback (`localhost`, any 127.0.0.0/8 address — WHATWG URL
+ * parsing normalizes all IPv4 spellings to dotted-quad — or `[::1]`). This is
+ * deliberately narrower than "reachable": no unvalidated URL can ever be
+ * persisted.
+ */
+export function isLoopbackHttpBaseUrl(value: string): boolean {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return false;
+  }
+  if (url.protocol !== 'http:') {
+    return false;
+  }
+  const hostname = url.hostname.toLowerCase();
+  // WHATWG URL parsing normalizes every valid IPv4 spelling to dotted-quad, so
+  // a four-octet match starting with 127 covers the whole 127.0.0.0/8 range.
+  return hostname === 'localhost' || hostname === '[::1]' || /^127(\.\d{1,3}){3}$/.test(hostname);
+}
+
+/**
+ * A server the desktop app successfully attached to. Persisted entries never
+ * carry a token; the `serverKey` is an opaque identity (a sha256 prefix of the
+ * canonical runtime dir) treated only as a match key.
+ */
+export const KnownServerSchema = z.strictObject({
+  serverKey: z.string().min(1).max(64),
+  name: z.string().max(64),
+  baseUrl: z.string().max(256).refine(isLoopbackHttpBaseUrl, {
+    message: 'baseUrl must be a loopback http URL',
+  }),
+  runtimeDir: z.string().max(4096),
+  lastSeenAt: z
+    .string()
+    .max(64)
+    .refine((value) => !Number.isNaN(Date.parse(value)), {
+      message: 'lastSeenAt must be an ISO 8601 timestamp',
+    }),
+});
+
+export type KnownServer = z.output<typeof KnownServerSchema>;
+
+/**
+ * Multi-server persistence: the bounded known-servers list (most-recent-first,
+ * capped at MAX_KNOWN_SERVERS) and the identity key of the last successfully
+ * attached server. `lastUsed` is only a pointer — it may name a serverKey that
+ * is not (or no longer) in `known`.
+ */
+export const ServersPrefsSchema = z.strictObject({
+  known: z.array(KnownServerSchema).max(MAX_KNOWN_SERVERS),
+  lastUsed: z.string().max(64).nullable(),
+});
+
+export type ServersPrefs = z.output<typeof ServersPrefsSchema>;
+
+export function defaultServersPrefs(): ServersPrefs {
+  return { known: [], lastUsed: null };
+}
+
+/**
+ * The only servers section the patch surface accepts: upsert one known-server
+ * entry and/or move the last-used pointer. Neither field is ever merged
+ * wholesale over the persisted list — SettingsStore.update applies the LRU
+ * upsert and eviction itself.
+ */
+export const ServersPatchSchema = z
+  .strictObject({
+    lastUsed: z.string().max(64).nullable().optional(),
+    upsertKnown: KnownServerSchema.optional(),
+  })
+  .refine((patch) => patch.lastUsed !== undefined || patch.upsertKnown !== undefined, {
+    message: 'servers patch must carry lastUsed and/or upsertKnown',
+  });
+
+export type ServersPatch = z.output<typeof ServersPatchSchema>;
+
+/**
+ * Applies a servers patch to the persisted section. An `upsertKnown` entry is
+ * matched by `serverKey`: it replaces the stored fields in place, moves to the
+ * front (most-recent-first order), and entries beyond MAX_KNOWN_SERVERS evict
+ * from the tail. `lastUsed` is set when the patch carries it (including null
+ * to clear); it is a bare pointer and is not validated against `known`.
+ * Shared between the real SettingsStore and test doubles so the LRU upsert
+ * semantics never drift.
+ */
+export function applyServersPatch(current: ServersPrefs, patch: ServersPatch): ServersPrefs {
+  return {
+    known:
+      patch.upsertKnown === undefined
+        ? current.known
+        : [
+            patch.upsertKnown,
+            ...current.known.filter((entry) => entry.serverKey !== patch.upsertKnown?.serverKey),
+          ].slice(0, MAX_KNOWN_SERVERS),
+    lastUsed: patch.lastUsed !== undefined ? patch.lastUsed : current.lastUsed,
+  };
+}
 
 export const WindowBoundsSchema = z.strictObject({
   x: z.number().int(),
@@ -2404,6 +2556,7 @@ export const SettingsSchema = z.strictObject({
   notifications: NotificationPrefsSchema.default(defaultNotificationPrefs()),
   shell: ShellPrefsSchema.default(defaultShellPrefs()),
   settingsWindow: SettingsWindowPrefsSchema.default(defaultSettingsWindowPrefs()),
+  servers: ServersPrefsSchema.default(defaultServersPrefs()),
 });
 
 export type Settings = z.output<typeof SettingsSchema>;
@@ -2417,6 +2570,7 @@ export const SettingsPatchSchema = z.strictObject({
   notifications: NotificationPrefsSchema.optional(),
   shell: ShellPrefsSchema.optional(),
   settingsWindow: SettingsWindowPrefsSchema.optional(),
+  servers: ServersPatchSchema.optional(),
 });
 
 export type SettingsPatch = z.output<typeof SettingsPatchSchema>;
@@ -2432,6 +2586,7 @@ export function defaultSettings(): Settings {
     notifications: defaultNotificationPrefs(),
     shell: defaultShellPrefs(),
     settingsWindow: defaultSettingsWindowPrefs(),
+    servers: defaultServersPrefs(),
   };
 }
 
@@ -2707,6 +2862,10 @@ export const ipcContracts: Record<IpcChannel, IpcContract> = {
   },
   [IPC_CHANNELS.connectionRestart]: {
     request: z.tuple([]),
+    response: ConnectionStateSchema,
+  },
+  [IPC_CHANNELS.connectionChooseServer]: {
+    request: z.tuple([ChooseServerRequestSchema]),
     response: ConnectionStateSchema,
   },
   [IPC_CHANNELS.settingsGet]: {
@@ -3063,6 +3222,12 @@ export interface AgenticoApi {
   getConnectionStatus(): Promise<ConnectionState>;
   retryConnection(): Promise<ConnectionState>;
   restartConnection(): Promise<ConnectionState>;
+  /**
+   * Picks one candidate from the awaiting-server-choice snapshot; attaching
+   * runs through the existing attach path and failures surface via the
+   * existing error states (retry rescans).
+   */
+  chooseConnectionServer(request: ChooseServerRequest): Promise<ConnectionState>;
   onConnectionChanged(listener: (state: ConnectionState) => void): () => void;
   onRouteRequest(listener: (event: AppRouteEvent) => void): () => void;
   getSettings(): Promise<Settings>;

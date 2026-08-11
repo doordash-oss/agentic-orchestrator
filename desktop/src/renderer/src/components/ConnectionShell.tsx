@@ -1,9 +1,17 @@
-import { useCallback, useEffect, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type ReactElement,
+} from 'react';
 import {
   CONNECTION_STAGES,
   isConnectionErrorState,
   type ConnectionStage,
   type ConnectionState,
+  type ServerChoiceCandidate,
 } from '../../../shared/ipc';
 import { PhaseRailTrack } from '../features/PhaseRailRow';
 import { stepSegments } from '../features/phaseRail';
@@ -28,6 +36,9 @@ const STATUS_META: Record<ConnectionState['status'], { label: string; icon: stri
   launching: { label: 'Launching', icon: '◐' },
   'waiting-health': { label: 'Waiting for health', icon: '◐' },
   connecting: { label: 'Authenticating', icon: '◐' },
+  // User-decision state (not progress, not failure): the ring pauses on a
+  // choice the app cannot make for you.
+  'awaiting-server-choice': { label: 'Choose a server', icon: '◉' },
   ready: { label: 'Ready', icon: '●' },
   incompatible: { label: 'Incompatible', icon: '⊘' },
   'resources-missing': { label: 'Resources missing', icon: '✕' },
@@ -69,6 +80,85 @@ function ipcFailureState(err: unknown): ConnectionState {
   };
 }
 
+/**
+ * Attach-only, snapshot-based server picker (CommandPalette-style rows: a
+ * listbox of option buttons, wrap-around arrow navigation on a roving
+ * tabindex). No spawn affordance and no live refresh — Retry rescans.
+ */
+function ServerChoiceList({
+  candidates,
+  onChoose,
+}: {
+  candidates: readonly ServerChoiceCandidate[];
+  onChoose: (serverKey: string) => void;
+}): ReactElement {
+  const [highlight, setHighlight] = useState(0);
+  const listRef = useRef<HTMLDivElement>(null);
+
+  // Follow keyboard navigation into focus; hover-only highlight never steals it.
+  useEffect(() => {
+    const list = listRef.current;
+    if (list?.contains(document.activeElement)) {
+      list.querySelectorAll('button')[highlight]?.focus();
+    }
+  }, [highlight]);
+
+  const onKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
+    if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      setHighlight((index) => (index + 1) % candidates.length);
+    } else if (event.key === 'ArrowUp') {
+      event.preventDefault();
+      setHighlight((index) => (index + candidates.length - 1) % candidates.length);
+    } else if (event.key === 'Home') {
+      event.preventDefault();
+      setHighlight(0);
+    } else if (event.key === 'End') {
+      event.preventDefault();
+      setHighlight(candidates.length - 1);
+    }
+  };
+
+  return (
+    <div
+      className="shell-card__picker"
+      role="listbox"
+      aria-label="Running Agentico servers"
+      onKeyDown={onKeyDown}
+      ref={listRef}
+    >
+      {candidates.map((candidate, index) => {
+        const selected = index === highlight;
+        return (
+          <button
+            key={candidate.serverKey}
+            type="button"
+            role="option"
+            aria-selected={selected}
+            tabIndex={selected ? 0 : -1}
+            aria-label={`Connect to ${candidate.name ?? 'unnamed server'} at ${candidate.runtimeDir}`}
+            className="shell-card__picker-row"
+            data-selected={selected}
+            onMouseEnter={() => setHighlight(index)}
+            onFocus={() => setHighlight(index)}
+            onClick={() => onChoose(candidate.serverKey)}
+          >
+            <span className="shell-card__picker-primary" aria-hidden="true">
+              {candidate.name ?? 'Unnamed server'}
+            </span>
+            <span className="shell-card__picker-runtime" aria-hidden="true">
+              {candidate.runtimeDir}
+            </span>
+            <span className="shell-card__picker-state" aria-hidden="true">
+              Running
+            </span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 export function ConnectionShell() {
   const [state, setState] = useState<ConnectionState>(INITIAL_STATE);
 
@@ -82,6 +172,13 @@ export function ConnectionShell() {
   const retry = useCallback(() => {
     window.agentico
       .retryConnection()
+      .then(setState)
+      .catch((err: unknown) => setState(ipcFailureState(err)));
+  }, []);
+
+  const chooseServer = useCallback((serverKey: string) => {
+    window.agentico
+      .chooseConnectionServer({ serverKey })
       .then(setState)
       .catch((err: unknown) => setState(ipcFailureState(err)));
   }, []);
@@ -139,6 +236,10 @@ export function ConnectionShell() {
         ) : null}
         <span className="shell-card__status-detail">{state.detail}</span>
       </p>
+
+      {state.status === 'awaiting-server-choice' ? (
+        <ServerChoiceList candidates={state.candidates} onChoose={chooseServer} />
+      ) : null}
 
       {failure !== null ? (
         <div className="shell-card__error">

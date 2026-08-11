@@ -4372,6 +4372,79 @@ body {
   border-color: var(--accent);
 }
 
+/* --- Server picker (awaiting-server-choice) ------------------------------------
+   One quiet registry list: hairline rows, the selected row lifts with the
+   accent edge — never color alone, the row carries the "Running" word too. */
+
+.shell-card__picker {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.shell-card__picker-row {
+  display: grid;
+  grid-template-columns: minmax(0, auto) minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: var(--space-2);
+  width: 100%;
+  text-align: left;
+  font-family: var(--bench-font-text);
+  color: var(--text);
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--hairline);
+  padding: var(--space-2) var(--space-3);
+  cursor: pointer;
+}
+
+.shell-card__picker-row:last-child {
+  border-bottom: none;
+}
+
+.shell-card__picker-row[data-selected='true'] {
+  background: var(--content);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.shell-card__picker-row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.shell-card__picker-primary {
+  font-weight: 700;
+  font-size: 13px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.shell-card__picker-runtime {
+  font-family: var(--bench-font-mono);
+  font-size: 11px;
+  color: var(--muted);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.shell-card__picker-state {
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  color: var(--ok);
+  white-space: nowrap;
+}
+
+.shell-card__picker-state::before {
+  content: '● ';
+  font-size: 9px;
+}
+
 .sr-only {
   position: absolute;
   width: 1px;

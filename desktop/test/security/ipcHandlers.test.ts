@@ -93,6 +93,12 @@ function makeServices(): IpcServices {
       detail: 'Restarting to apply the pending runtime change.',
       ownership: 'none' as const,
     })),
+    chooseConnectionServer: vi.fn(() => ({
+      status: 'resolving-runtime' as const,
+      stage: 'resolve-runtime' as const,
+      detail: 'Resolving the selected runtime.',
+      ownership: 'none' as const,
+    })),
     getSettings: vi.fn(() => defaultSettings()),
     updateSettings: vi.fn((patch) => ({ ...defaultSettings(), ...patch })),
     openSettingsWindow: vi.fn(() => ({ opened: true })),

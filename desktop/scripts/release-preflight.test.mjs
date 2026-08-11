@@ -50,7 +50,9 @@ function fixture(overrides = {}) {
       if (command === 'describe --tags --exact-match') return state.tag;
       throw new Error(`unexpected Git command: ${command}`);
     },
+    dockerInfo: () => true,
     ensureImage: (image) => state.docker.push(image),
+    goreleaserVersion: () => 'goreleaser version 2.10.2',
     verifySigningKey: () => true,
     evidencePath: join(root, 'desktop', 'dist', 'release-preflight.json'),
     createWorkspace: ({ commit, runId }) => {
@@ -129,6 +131,24 @@ describe('release preflight', () => {
   it('rejects a Docker daemon that reports unavailable before inspecting images', () => {
     const options = fixture({ dockerInfo: () => false });
     expect(() => runReleasePreflight(options)).toThrow(/Docker daemon is unavailable/);
+    expect(options.state.docker).toEqual([]);
+  });
+
+  it('requires a supported GoReleaser version before contacting Docker', () => {
+    const options = fixture({ goreleaserVersion: () => 'goreleaser version 2.9.0' });
+    expect(() => runReleasePreflight(options)).toThrow(/GoReleaser v2.10 or later/);
+    expect(options.state.docker).toEqual([]);
+  });
+
+  it('surfaces a missing GoReleaser binary before contacting Docker', () => {
+    const options = fixture({
+      goreleaserVersion: () => {
+        const error = new Error('spawnSync goreleaser ENOENT');
+        error.code = 'ENOENT';
+        throw error;
+      },
+    });
+    expect(() => runReleasePreflight(options)).toThrow(/goreleaser ENOENT/);
     expect(options.state.docker).toEqual([]);
   });
 

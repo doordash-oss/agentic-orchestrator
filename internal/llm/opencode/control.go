@@ -458,6 +458,12 @@ func (p *Protocol) maybeSynthesizeQuestion(lastText string) (msg llm.SDKMessage,
 	// must not be forced through the question-reformat pipeline just because it
 	// enumerates items.
 	if stem, options, ok := parseNumberedOptions(lastText); ok && (stemLooksLikeQuestion(stem) || optionsCarryQuestionContract(options)) {
+		if strings.TrimSpace(stem) == "" {
+			if p.sendQuestionFormatReminder(lastText) {
+				return llm.SDKMessage{}, false, true
+			}
+			stem = "Which option should Agentico use?"
+		}
 		if !parsedOptionsHaveConfidence(options) {
 			if p.sendQuestionFormatReminder(lastText) {
 				return llm.SDKMessage{}, false, true
@@ -696,9 +702,6 @@ func parseNumberedOptions(text string) (string, []parsedOption, bool) {
 	cleaned := strings.TrimSpace(strings.Join(stem, "\n"))
 	if len(trailingStem) > 0 {
 		cleaned = strings.TrimSpace(strings.Join(trailingStem, "\n"))
-	}
-	if cleaned == "" {
-		cleaned = text
 	}
 	return cleaned, options, true
 }

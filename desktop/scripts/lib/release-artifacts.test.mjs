@@ -317,12 +317,18 @@ describe('createLinuxDockerPlan', () => {
     expect(plan[0].args.at(-1)).not.toContain('`tick`');
   });
 
-  it('scopes executable node_modules per run while keeping download caches global', () => {
+  it('scopes executable volumes per run while keeping only the npm content cache global', () => {
     const plan = createLinuxDockerPlan(planOptions({ volumePrefix: 'agentico-release-run123' }));
     expect(plan[0].args).toContain(
       'type=volume,src=agentico-release-run123-node-modules,dst=/agentico-release-build/node_modules',
     );
     expect(plan[0].args).toContain('type=volume,src=agentico-release-npm-cache,dst=/root/.npm');
+    expect(plan[0].args).toContain(
+      'type=volume,src=agentico-release-run123-electron,dst=/root/.cache/electron',
+    );
+    expect(plan[0].args).toContain(
+      'type=volume,src=agentico-release-run123-electron-builder,dst=/root/.cache/electron-builder',
+    );
     expect(plan[0].args.join('\n')).not.toContain('agentico-release-run123-npm-cache');
   });
 
@@ -340,9 +346,14 @@ describe('createLinuxDockerPlan', () => {
         }),
       )[0].args,
     ).toContain(`type=bind,src=${colonRoot},dst=/agentico-release-source,readonly`);
-    for (const invalid of ['/repo/comma,path', '/repo/new\nline']) {
+    for (const invalid of [
+      '/repo/comma,path',
+      '/repo/double"quote',
+      '/repo/carriage\rreturn',
+      '/repo/new\nline',
+    ]) {
       expect(() => createLinuxDockerPlan(planOptions({ repoRoot: invalid }))).toThrow(
-        /cannot contain comma or newline/,
+        /cannot contain comma, double quote, or newline/,
       );
     }
   });

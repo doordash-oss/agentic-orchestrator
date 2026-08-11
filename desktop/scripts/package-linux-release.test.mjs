@@ -157,7 +157,7 @@ describe('runLinuxRelease', () => {
     ).toBe(true);
   });
 
-  it('cleans only its per-run node_modules volume and staging tree after success', () => {
+  it('cleans its three per-run executable volumes and staging tree after success', () => {
     const options = validFixtureOptions({ volumePrefix: 'agentico-release-run-123' });
     const calls = [];
     options.execute = (_command, args) => {
@@ -167,14 +167,10 @@ describe('runLinuxRelease', () => {
 
     runLinuxRelease(options);
 
-    expect(calls).toContainEqual([
-      'volume',
-      'rm',
-      '--force',
-      'agentico-release-run-123-node-modules',
-    ]);
     expect(calls.filter((args) => args[0] === 'volume')).toEqual([
       ['volume', 'rm', '--force', 'agentico-release-run-123-node-modules'],
+      ['volume', 'rm', '--force', 'agentico-release-run-123-electron'],
+      ['volume', 'rm', '--force', 'agentico-release-run-123-electron-builder'],
     ]);
     expect(existsSync(join(options.repoRoot, '.git', 'agentico-release-staging', 'run-123'))).toBe(
       false,
@@ -190,11 +186,10 @@ describe('runLinuxRelease', () => {
     };
 
     expect(() => runLinuxRelease(options)).toThrow(/x64 failed/);
-    expect(calls).toContainEqual([
-      'volume',
-      'rm',
-      '--force',
-      'agentico-release-run-123-node-modules',
+    expect(calls.filter((args) => args[0] === 'volume')).toEqual([
+      ['volume', 'rm', '--force', 'agentico-release-run-123-node-modules'],
+      ['volume', 'rm', '--force', 'agentico-release-run-123-electron'],
+      ['volume', 'rm', '--force', 'agentico-release-run-123-electron-builder'],
     ]);
     expect(existsSync(join(options.repoRoot, '.git', 'agentico-release-staging', 'run-123'))).toBe(
       false,
@@ -219,6 +214,9 @@ describe('runLinuxRelease', () => {
     expect(observed.errors.map(({ message }) => message)).toEqual(
       expect.arrayContaining(['primary x64 failure', 'volume cleanup failure']),
     );
+    expect(
+      observed.errors.filter(({ message }) => message === 'volume cleanup failure'),
+    ).toHaveLength(3);
   });
 
   it('surfaces cleanup failure after successful packaging', () => {
@@ -352,7 +350,7 @@ describe('runLinuxRelease', () => {
     ).toThrow(/invalid release run id/);
   });
 
-  it.each(['comma,path', 'new\nline'])(
+  it.each(['comma,path', 'double"quote', 'carriage\rreturn', 'new\nline'])(
     'rejects Docker --mount delimiter path %j before contacting Docker',
     (name) => {
       const repoRoot = makeTempRoot(name);
@@ -364,7 +362,9 @@ describe('runLinuxRelease', () => {
           return true;
         },
       });
-      expect(() => runLinuxRelease(options)).toThrow(/cannot contain comma or newline/);
+      expect(() => runLinuxRelease(options)).toThrow(
+        /cannot contain comma, double quote, or newline/,
+      );
       expect(dockerContacted).toBe(false);
     },
   );

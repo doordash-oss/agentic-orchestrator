@@ -341,11 +341,8 @@ export function createLinuxDockerPlan({
         ...dockerBindMount(targetStage, exportMount, false),
         ...dockerVolumeMount(`${volumePrefix}-node-modules`, `${buildRoot}/node_modules`),
         ...dockerVolumeMount(`${cacheVolumePrefix}-npm-cache`, '/root/.npm'),
-        ...dockerVolumeMount(`${cacheVolumePrefix}-electron`, '/root/.cache/electron'),
-        ...dockerVolumeMount(
-          `${cacheVolumePrefix}-electron-builder`,
-          '/root/.cache/electron-builder',
-        ),
+        ...dockerVolumeMount(`${volumePrefix}-electron`, '/root/.cache/electron'),
+        ...dockerVolumeMount(`${volumePrefix}-electron-builder`, '/root/.cache/electron-builder'),
         '--workdir',
         '/',
       ];
@@ -429,8 +426,10 @@ function dockerVolumeMount(source, destination) {
 
 function validateDockerMountValue(value, label) {
   if (typeof value !== 'string' || value === '') throw new Error(`${label} must not be empty`);
-  if (/[,\r\n]/.test(value)) {
-    throw new Error(`${label} cannot contain comma or newline: ${JSON.stringify(value)}`);
+  if (/[,"\r\n]/.test(value)) {
+    throw new Error(
+      `${label} cannot contain comma, double quote, or newline: ${JSON.stringify(value)}`,
+    );
   }
 }
 

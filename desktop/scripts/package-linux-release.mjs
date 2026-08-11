@@ -53,7 +53,7 @@ export function runLinuxRelease({
     throw new Error('at least 12 GiB of free disk space is required for Linux release packaging');
   }
   let directories;
-  let nodeModulesVolumeMayExist = false;
+  let runVolumesMayExist = false;
   let primaryError;
   let result;
   try {
@@ -84,7 +84,7 @@ export function runLinuxRelease({
     const receipts = [];
     for (const invocation of plan) {
       const receipt = `package-verification-linux-${invocation.arch}.json`;
-      nodeModulesVolumeMayExist = true;
+      runVolumesMayExist = true;
       executeBoundDocker({ directories, arch: invocation.arch, execute, args: invocation.args });
       verifyProvenance();
       if (invocation.verificationArgs !== undefined) {
@@ -111,11 +111,13 @@ export function runLinuxRelease({
   }
 
   const cleanupErrors = [];
-  if (nodeModulesVolumeMayExist) {
-    try {
-      execute('docker', ['volume', 'rm', '--force', `${volumePrefix}-node-modules`]);
-    } catch (error) {
-      cleanupErrors.push(error);
+  if (runVolumesMayExist) {
+    for (const suffix of ['node-modules', 'electron', 'electron-builder']) {
+      try {
+        execute('docker', ['volume', 'rm', '--force', `${volumePrefix}-${suffix}`]);
+      } catch (error) {
+        cleanupErrors.push(error);
+      }
     }
   }
   if (directories !== undefined) {

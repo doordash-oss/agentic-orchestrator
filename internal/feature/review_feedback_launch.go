@@ -202,14 +202,9 @@ func (m *Manager) LaunchReviewFeedbackChildFromDraft(parentID string, expectedRe
 		}
 		return nil, err
 	}
-	// Durable child creation committed: consume the exact draft revision the
-	// receipt pinned. The revision-checked sweep is idempotent — replay,
-	// startup reconciliation, and the reconverging refresh path all perform
-	// the same pin-checked cleanup, and a draft committed after the receipt's
-	// revision is never deleted.
-	if err := m.Store.DeleteReviewFeedbackDraftIfRevision(parentID, receipt.DraftRevision); err != nil {
-		return nil, err
-	}
+	// Durable child creation committed; Store.CreateChildLocked already
+	// consumed the pinned draft revision atomically with the intent clearing,
+	// so no separate cleanup window exists here.
 	return &ReviewFeedbackLaunchResult{Child: child, Changed: changed, Omitted: omitted, Deferred: deferred}, nil
 }
 

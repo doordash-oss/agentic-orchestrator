@@ -325,6 +325,60 @@ func TestSelectionCommitRejectsDurableConsumedMarker(t *testing.T) {
 	}
 }
 
+// TestChildCreationConsumesPinnedDraftWithinLockedTransition covers the
+// post-intent-clear window: the pinned draft must already be consumed when
+// CreateChildLocked returns with the intent cleared, not in a later second
+// lock acquisition. A selection commit submitted after child creation must
+// fail instead of advancing a stranded draft behind the active child.
+func TestChildCreationConsumesPinnedDraftWithinLockedTransition(t *testing.T) {
+	mgr, parent, draft := launchReceiptManager(t)
+	installLaunchFetchStub(t, launchReceiptFetch())
+
+	gate := true
+	result, err := mgr.LaunchReviewFeedbackChildFromDraft(parent.ID, draft.Revision, &gate)
+	if err != nil {
+		t.Fatalf("launch error = %v", err)
+	}
+
+	// The intent is cleared on the parent...
+	settled, err := mgr.Store.Load(parent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settled.PendingChild != nil {
+		t.Fatalf("settled parent PendingChild = %+v, want nil", settled.PendingChild)
+	}
+	// ...and the pinned draft is already gone at the same transition: no
+	// interval exists where neither the intent nor the draft marks the
+	// revision as consumed.
+	if kept, err := mgr.Store.LoadReviewFeedbackDraft(parent.ID); err != nil || kept != nil {
+		t.Fatalf("draft after committed creation = %+v (err %v), want consumed within the locked transition", kept, err)
+	}
+
+	// The deterministic save-vs-cleanup interleaving: a selection commit
+	// that observed the pre-launch revision and lands after the child exists
+	// is rejected and must not strand a newer draft behind the active child.
+	bumped := feature.ReconcileReviewFeedbackDraft(parent, draft, reviewedComments())
+	bumped.Revision = draft.Revision + 1
+	var conflict *feature.ReviewFeedbackRevisionConflictError
+	if err := mgr.Store.SaveReviewFeedbackDraft(parent.ID, bumped, draft.Revision); !errors.As(err, &conflict) {
+		t.Fatalf("post-intent-clear selection commit error = %v, want revision-conflict rejection", err)
+	}
+	if kept, err := mgr.Store.LoadReviewFeedbackDraft(parent.ID); err != nil || kept != nil {
+		t.Fatalf("draft after rejected commit = %+v (err %v), want none — the active child owns revision %d", kept, err, draft.Revision)
+	}
+
+	// The created child carries the consumed revision on its durable
+	// receipt, so a repeated launch replays without a second creation.
+	reloaded, err := mgr.Store.Load(result.Child.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.Parent == nil || reloaded.Parent.LaunchReceipt == nil || reloaded.Parent.LaunchReceipt.DraftRevision != draft.Revision {
+		t.Fatalf("child launch receipt = %+v, want draft revision %d", reloaded.Parent.LaunchReceipt, draft.Revision)
+	}
+}
+
 func TestStartupReconciliationClearsDraftConsumedByLaunchReceipt(t *testing.T) {
 	mgr, parent, draft := launchReceiptManager(t)
 	installLaunchFetchStub(t, launchReceiptFetch())

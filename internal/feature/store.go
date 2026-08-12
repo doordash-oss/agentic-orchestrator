@@ -941,9 +941,13 @@ func (s *Store) CleanupOrphanRuns(id string) ([]int, error) {
 //     creation intent. Error aborts without writing anything.
 //  3. Persist the parent WITH the pending intent stamped (durable intent).
 //  4. Persist the child (feature.yaml + first run.yaml, atomically).
-//  5. Clear the intent and persist the parent again.
+//  5. For a review-feedback intent carrying a launch receipt, delete the
+//     pinned draft revision the receipt consumed — still under this lock,
+//     so the consumption marker never lapses between the intent clearing
+//     and the draft cleanup.
+//  6. Clear the intent and persist the parent again.
 //
-// A crash between steps 3 and 5 leaves the intent on the parent;
+// A crash between steps 3 and 6 leaves the intent on the parent;
 // ReconcilePendingChildCreations rolls the creation forward exactly once.
 // Concurrent launches under the same parent serialize on Store.mu, so
 // exactly one winner observes activeChild == nil.
@@ -982,6 +986,19 @@ func (s *Store) CreateChildLocked(
 	}
 	if err := s.saveUnlocked(child); err != nil {
 		return nil, fmt.Errorf("saving child: %w", err)
+	}
+	// Consume the draft revision a review-feedback launch receipt pinned
+	// before clearing the durable intent: the pinned deletion rides the same
+	// lock acquisition as the intent clearing, so no selection save can
+	// commit in a window where neither the pending intent nor the pinned
+	// draft marks the revision as consumed. The delete is pinned to the
+	// receipt's revision so a newer committed draft is never removed. A
+	// failure here leaves the durable intent in place so reconciliation
+	// rolls both the child and the cleanup forward.
+	if intent.Kind == ChildKindReviewFeedback && intent.LaunchReceipt != nil {
+		if err := s.deleteReviewFeedbackDraftIfRevisionUnlocked(parentID, intent.LaunchReceipt.DraftRevision); err != nil {
+			return nil, fmt.Errorf("consuming review feedback draft for parent %q: %w", parentID, err)
+		}
 	}
 	parent.PendingChild = nil
 	if err := s.saveUnlocked(parent); err != nil {

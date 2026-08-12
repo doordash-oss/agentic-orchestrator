@@ -293,6 +293,17 @@ test('multi-repo review-feedback triage: sections → filtered bulk clear → re
     for (let i = 0; i < 4; i++) {
       await expect(boxes.nth(i)).toBeChecked();
     }
+    // The feed, not a clipped repository card, owns vertical scrolling. A
+    // wheel gesture anywhere over the right-hand column reaches later cards.
+    expect(await feed.evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(
+      true,
+    );
+    await feed.hover();
+    await handle.page.mouse.wheel(0, 600);
+    await expect.poll(() => feed.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+    await boxes.last().scrollIntoViewIfNeeded();
+    await expect(boxes.last()).toBeVisible();
+    await feed.evaluate((element) => element.scrollTo(0, 0));
     await contractEvidenceShot(
       handle,
       'review-feedback-native-cockpit-wide-light',

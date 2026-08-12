@@ -6,6 +6,7 @@
  * body, and the expansion control.
  */
 import { COMMENT_TYPE_LABEL } from '../refactor/refactorPassModel';
+import { MaximizeIcon } from '../../components/icons';
 import { bucketElapsedSince } from '../phaseRail';
 import { ReviewFeedbackDiff, needsExpansion } from './ReviewFeedbackDiff';
 import { ReviewFeedbackMarkdown } from './ReviewFeedbackMarkdown';
@@ -87,12 +88,14 @@ export function ReviewFeedbackCard({
         <button
           type="button"
           className="review-feedback-card__expand"
+          aria-label="View full comment"
+          data-hint="Full comment"
           onClick={(event) => {
             event.stopPropagation();
             onOpen(comment);
           }}
         >
-          View full comment
+          <MaximizeIcon />
         </button>
         {comment.inReplyToId !== undefined ? (
           <p className="review-feedback-card__reply">Reply to comment {comment.inReplyToId}</p>

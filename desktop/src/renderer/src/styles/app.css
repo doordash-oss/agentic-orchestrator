@@ -10811,16 +10811,13 @@ body {
 
 .review-feedback-card {
   position: relative;
-  border-top: var(--bench-hairline-width) solid var(--hairline);
-  background: transparent;
+  border: var(--bench-hairline-width) solid var(--hairline);
+  border-radius: var(--bench-radius-card);
+  background: var(--raised);
   padding: var(--space-4);
   display: flex;
   gap: var(--space-3);
   align-items: flex-start;
-}
-
-.review-feedback-section > .review-feedback-card:first-of-type {
-  border-top: 0;
 }
 
 .review-feedback-card[data-selected='false'] .review-feedback-card__body {
@@ -10849,18 +10846,25 @@ body {
 }
 
 .review-feedback-card__expand {
-  align-self: flex-start;
+  position: absolute;
+  top: var(--space-3);
+  right: var(--space-3);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
   border: 1px solid var(--hairline);
   border-radius: var(--bench-radius-control);
-  background: transparent;
-  color: var(--text);
-  font-size: 12px;
-  padding: 1px var(--space-2);
+  background: var(--raised);
+  color: var(--muted);
+  padding: 0;
   cursor: pointer;
 }
 
 .review-feedback-card__expand:hover {
-  background: var(--hover);
+  color: var(--accent);
+  border-color: var(--accent);
 }
 
 .review-feedback-card__expand:focus-visible {
@@ -10894,6 +10898,7 @@ body {
   flex-wrap: wrap;
   color: var(--muted);
   font: 12px var(--bench-font-text);
+  padding-right: calc(30px + var(--space-3));
 }
 
 .review-feedback-card__type {
@@ -11477,10 +11482,11 @@ body {
 .review-feedback-section {
   display: flex;
   flex-direction: column;
-  border: var(--bench-hairline-width) solid var(--hairline);
-  border-radius: var(--bench-radius-card);
-  background: var(--raised);
-  overflow: hidden;
+  flex: 0 0 auto;
+  gap: var(--space-2);
+  border: 0;
+  background: transparent;
+  overflow: visible;
 }
 
 .review-feedback-section__header {
@@ -11489,7 +11495,8 @@ body {
   gap: var(--space-3);
   min-height: 44px;
   padding: var(--space-2) var(--space-4);
-  border-bottom: var(--bench-hairline-width) solid var(--hairline);
+  border: var(--bench-hairline-width) solid var(--hairline);
+  border-radius: var(--bench-radius-card);
   background: color-mix(in srgb, var(--content) 55%, var(--raised));
 }
 

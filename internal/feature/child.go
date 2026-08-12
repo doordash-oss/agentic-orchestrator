@@ -513,6 +513,10 @@ func (m *Manager) CreateReviewFeedbackChild(parentID string, spec ReviewFeedback
 	}
 
 	now := time.Now()
+	// consumedDraft captures the exact draft consumed inside the creation
+	// callback so a failure before the durable intent commits can restore the
+	// user's last acknowledged selections instead of orphaning them.
+	var consumedDraft *ReviewFeedbackDraft
 	child, err := m.Store.CreateChildLocked(parentID, func(lockedParent *Feature, activeChild *Feature) (*Feature, *ChildCreationIntent, error) {
 		if err := ValidateRefactorParent(lockedParent, activeChild); err != nil {
 			return nil, nil, err
@@ -535,11 +539,15 @@ func (m *Manager) CreateReviewFeedbackChild(parentID string, spec ReviewFeedback
 			if draft == nil || currentRevision != spec.Receipt.DraftRevision {
 				return nil, nil, &ReviewFeedbackRevisionConflictError{ParentID: lockedParent.ID, ExpectedRevision: spec.Receipt.DraftRevision, CurrentRevision: currentRevision}
 			}
-			// Consume the draft under the same lock that persists the child
-			// and its receipt: a selection compare-and-save can never
-			// acknowledge an edit against a draft this launch is consuming,
-			// and an interrupted creation leaves the durable intent whose
-			// reconcile/replay completes the cleanup idempotently.
+			// Consume the draft under the same lock that serializes selection
+			// compare-and-save against this launch, so an edit can never be
+			// acknowledged against a draft this launch is consuming. Because
+			// the durable intent is not stamped until the callback returns,
+			// any failure before that commit must restore this exact draft
+			// (handled below, outside the callback); once the intent is
+			// durable, reconcile/replay owns the roll-forward and consumes
+			// the draft by revision.
+			consumedDraft = draft
 			if err := m.Store.deleteReviewFeedbackDraftUnlocked(lockedParent.ID); err != nil {
 				return nil, nil, err
 			}
@@ -579,9 +587,43 @@ func (m *Manager) CreateReviewFeedbackChild(parentID string, spec ReviewFeedback
 		return child, intent, nil
 	})
 	if err != nil {
+		if consumedDraft != nil {
+			if restoreErr := m.restoreConsumedReviewFeedbackDraft(parentID, consumedDraft, spec.Receipt); restoreErr != nil {
+				return nil, fmt.Errorf("%w (restoring consumed review-feedback draft: %v)", err, restoreErr)
+			}
+		}
 		return nil, err
 	}
 	return child, nil
+}
+
+// restoreConsumedReviewFeedbackDraft rolls back the exact draft a failed
+// review-feedback creation consumed inside the creation callback. The
+// rollback is skipped when the launch's durable creation intent survived on
+// the parent — reconcile/replay then owns the roll-forward and consumes the
+// draft by revision, so restoring would resurrect selections the launch
+// durably committed. When a newer draft was acknowledged after the failed
+// attempt, it is kept untouched rather than clobbered by the older revision.
+func (m *Manager) restoreConsumedReviewFeedbackDraft(parentID string, draft *ReviewFeedbackDraft, receipt *ReviewFeedbackLaunchReceipt) error {
+	parent, err := m.Store.Load(parentID)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil // the feature is gone; nothing to restore into
+		}
+		return err
+	}
+	if intent := parent.PendingChild; receipt != nil && intent != nil && intent.Kind == ChildKindReviewFeedback &&
+		intent.LaunchReceipt != nil && intent.LaunchReceipt.DraftRevision == receipt.DraftRevision {
+		return nil
+	}
+	if err := m.Store.SaveReviewFeedbackDraft(parentID, draft, 0); err != nil {
+		var conflict *ReviewFeedbackRevisionConflictError
+		if errors.As(err, &conflict) {
+			return nil // a newer acknowledged draft exists; never clobber it
+		}
+		return err
+	}
+	return nil
 }
 
 // CreateRebaseChild atomically launches a fixed-Medium child that

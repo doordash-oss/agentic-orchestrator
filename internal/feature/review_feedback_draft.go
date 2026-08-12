@@ -55,17 +55,6 @@ func (e *ReviewFeedbackRevisionConflictError) Error() string {
 	return fmt.Sprintf("review feedback draft revision conflict for parent %q: expected %d, current %d", e.ParentID, e.ExpectedRevision, e.CurrentRevision)
 }
 
-// ReviewFeedbackUnknownReferenceError reports a stable reference that is not
-// part of the pending draft.
-type ReviewFeedbackUnknownReferenceError struct {
-	ParentID  string
-	StableRef string
-}
-
-func (e *ReviewFeedbackUnknownReferenceError) Error() string {
-	return fmt.Sprintf("review feedback draft for parent %q has no reference %q", e.ParentID, e.StableRef)
-}
-
 // StableReviewFeedbackRef identifies one review-feedback comment durably:
 // repository identity plus supported comment type plus GitHub database
 // comment ID. The serialized form is "<repo>:<type>:<id>".

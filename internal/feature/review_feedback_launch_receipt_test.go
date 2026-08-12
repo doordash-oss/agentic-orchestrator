@@ -218,6 +218,58 @@ func TestLaunchReplayRollsForwardPendingCreationIntent(t *testing.T) {
 	}
 }
 
+func TestLaunchParentIntentSaveFailureRestoresConsumedDraft(t *testing.T) {
+	mgr, parent, draft := launchReceiptManager(t)
+	installLaunchFetchStub(t, launchReceiptFetch())
+
+	gate := true
+	// Fail the first saveUnlocked call: the durable parent intent never
+	// commits, so the launch must roll back the exact draft it consumed
+	// under the creation lock instead of orphaning the acknowledged
+	// selections.
+	mgr.Store.SetSaveHook(&feature.StoreSaveHook{FailOnCall: 1})
+	defer mgr.Store.ResetSaveHook()
+	if _, err := mgr.LaunchReviewFeedbackChildFromDraft(parent.ID, draft.Revision, &gate); err == nil || !strings.Contains(err.Error(), "saving parent with child intent") {
+		t.Fatalf("interrupted launch error = %v, want injected intent-save failure", err)
+	}
+
+	restored, err := mgr.Store.LoadReviewFeedbackDraft(parent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if restored == nil || restored.Revision != draft.Revision || restored.SnapshotID != draft.SnapshotID {
+		t.Fatalf("restored draft = %+v, want revision %d snapshot %q", restored, draft.Revision, draft.SnapshotID)
+	}
+	if len(restored.Items) != len(draft.Items) {
+		t.Fatalf("restored draft items = %d, want %d", len(restored.Items), len(draft.Items))
+	}
+	for i, item := range draft.Items {
+		if restored.Items[i] != item {
+			t.Fatalf("restored item %d = %+v, want %+v", i, restored.Items[i], item)
+		}
+	}
+
+	reloaded, err := mgr.Store.Load(parent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.PendingChild != nil {
+		t.Fatalf("parent after intent-save failure = pending %+v, want none", reloaded.PendingChild)
+	}
+	children, err := mgr.Store.RelationshipChildren(parent.ID)
+	if err != nil || children.Active != nil || len(children.Closed) != 0 {
+		t.Fatalf("relationship children = %+v (err %v), want no child after rollback", children, err)
+	}
+
+	// The restored draft is launchable: a retry commits normally.
+	mgr.Store.ResetSaveHook()
+	result, err := mgr.LaunchReviewFeedbackChildFromDraft(parent.ID, draft.Revision, &gate)
+	if err != nil {
+		t.Fatalf("retry launch error = %v", err)
+	}
+	assertReceiptCounts(t, result, 1, 1, 1)
+}
+
 func TestStartupReconciliationClearsDraftConsumedByLaunchReceipt(t *testing.T) {
 	mgr, parent, draft := launchReceiptManager(t)
 	installLaunchFetchStub(t, launchReceiptFetch())

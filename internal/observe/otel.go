@@ -18,6 +18,8 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
+	"errors"
 	"log"
 	"strings"
 	"sync"
@@ -28,8 +30,10 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
+	"go.opentelemetry.io/otel/sdk/instrumentation"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 	"go.opentelemetry.io/otel/trace"
 )
@@ -130,9 +134,13 @@ func (h *otelErrorHandler) Handle(err error) {
 // real OTel spans using an in-memory store, without requiring context.Context
 // propagation through the application.
 type otelBridge struct {
-	enabled bool
-	tracer  trace.Tracer
-	tp      *sdktrace.TracerProvider
+	enabled      bool
+	tracer       trace.Tracer
+	tp           *sdktrace.TracerProvider
+	wideExporter sdktrace.SpanExporter
+	serviceName  string
+	wideMu       sync.Mutex
+	wideOptions  []otlptracegrpc.Option
 
 	mu    sync.Mutex
 	spans map[string]activeSpan // keyed by roadmap SpanID
@@ -144,33 +152,20 @@ type activeSpan struct {
 	ctx  context.Context
 }
 
-// wantSpanIDKey is a context key for passing a desired OTel SpanID to the
-// custom IDGenerator. Each call to StartSpan injects the roadmap SpanID into
-// the context so that the generator returns it instead of a random value.
-type otelCtxKey int
-
-const wantSpanIDKey otelCtxKey = iota
-
-// roadmapIDGen implements sdktrace.IDGenerator. When the start context carries
-// a desired SpanID (set by StartSpan), it returns that value; otherwise it
-// falls back to cryptographically random generation.
+// roadmapIDGen implements sdktrace.IDGenerator with fresh runtime IDs. The
+// persisted logical IDs remain attributes, so a restart cannot reuse a real
+// OTel span ID.
 type roadmapIDGen struct{}
 
-func (roadmapIDGen) NewIDs(ctx context.Context) (trace.TraceID, trace.SpanID) {
+func (roadmapIDGen) NewIDs(context.Context) (trace.TraceID, trace.SpanID) {
 	var tid trace.TraceID
 	_, _ = rand.Read(tid[:])
-	if sid, ok := ctx.Value(wantSpanIDKey).(trace.SpanID); ok && sid.IsValid() {
-		return tid, sid
-	}
 	var sid trace.SpanID
 	_, _ = rand.Read(sid[:])
 	return tid, sid
 }
 
-func (roadmapIDGen) NewSpanID(ctx context.Context, _ trace.TraceID) trace.SpanID {
-	if sid, ok := ctx.Value(wantSpanIDKey).(trace.SpanID); ok && sid.IsValid() {
-		return sid
-	}
+func (roadmapIDGen) NewSpanID(context.Context, trace.TraceID) trace.SpanID {
 	var sid trace.SpanID
 	_, _ = rand.Read(sid[:])
 	return sid
@@ -183,6 +178,14 @@ func (roadmapIDGen) NewSpanID(ctx context.Context, _ trace.TraceID) trace.SpanID
 // callers to override endpoint/TLS settings. If exporter creation fails, it degrades
 // gracefully to a bare provider.
 func newOtelBridge(enabled bool, endpoint string, insecure bool, serviceName string, grpcOpts ...otlptracegrpc.Option) *otelBridge {
+	if serviceName == "" {
+		serviceName = "agentico"
+	}
+	res := resource.NewSchemaless(semconv.ServiceNameKey.String(serviceName))
+	return newOtelBridgeWithResource(enabled, endpoint, insecure, serviceName, res, grpcOpts...)
+}
+
+func newOtelBridgeWithResource(enabled bool, endpoint string, insecure bool, serviceName string, res *resource.Resource, grpcOpts ...otlptracegrpc.Option) *otelBridge {
 	if !enabled {
 		return &otelBridge{
 			enabled: false,
@@ -205,22 +208,25 @@ func newOtelBridge(enabled bool, endpoint string, insecure bool, serviceName str
 	exporter, err := otlptracegrpc.New(ctx, grpcOpts...)
 	if err != nil {
 		// Graceful degradation: create bridge with bare provider.
-		tp := sdktrace.NewTracerProvider(sdktrace.WithIDGenerator(roadmapIDGen{}))
+		tp := sdktrace.NewTracerProvider(sdktrace.WithResource(res), sdktrace.WithIDGenerator(roadmapIDGen{}))
 		return &otelBridge{
-			enabled: true,
-			tracer:  tp.Tracer(serviceName),
-			tp:      tp,
-			spans:   make(map[string]activeSpan),
+			enabled:     true,
+			tracer:      tp.Tracer(serviceName),
+			tp:          tp,
+			spans:       make(map[string]activeSpan),
+			serviceName: serviceName,
+			wideOptions: append([]otlptracegrpc.Option(nil), grpcOpts...),
 		}
 	}
 
-	res, err := resource.New(ctx,
-		resource.WithAttributes(semconv.ServiceNameKey.String(serviceName)),
-		resource.WithFromEnv(),
-		resource.WithTelemetrySDK(),
-	)
-	if err != nil {
-		res = resource.NewSchemaless(semconv.ServiceNameKey.String(serviceName))
+	if res == nil {
+		res, err = resource.New(ctx,
+			resource.WithFromEnv(), resource.WithTelemetrySDK(),
+			resource.WithAttributes(semconv.ServiceNameKey.String(serviceName)),
+		)
+		if err != nil {
+			res = resource.NewSchemaless(semconv.ServiceNameKey.String(serviceName))
+		}
 	}
 
 	// Wrap the exporter so we can track whether a first successful export
@@ -236,11 +242,15 @@ func newOtelBridge(enabled bool, endpoint string, insecure bool, serviceName str
 		sdktrace.WithResource(res),
 		sdktrace.WithIDGenerator(roadmapIDGen{}),
 	)
+	wideExporter, _ := otlptracegrpc.New(ctx, grpcOpts...)
 	return &otelBridge{
-		enabled: true,
-		tracer:  tp.Tracer(serviceName),
-		tp:      tp,
-		spans:   make(map[string]activeSpan),
+		enabled:      true,
+		tracer:       tp.Tracer(serviceName),
+		tp:           tp,
+		spans:        make(map[string]activeSpan),
+		wideExporter: wideExporter,
+		serviceName:  serviceName,
+		wideOptions:  append([]otlptracegrpc.Option(nil), grpcOpts...),
 	}
 }
 
@@ -283,6 +293,9 @@ func (b *otelBridge) StartSpan(sc SpanContext, operationName string, attrs map[s
 
 	// Build span options with standard attributes.
 	spanAttrs := []attribute.KeyValue{
+		attribute.String("agentico.feature.id", sc.FeatureID),
+		attribute.String("agentico.logical.span.id", sc.SpanID),
+		attribute.String("agentico.feature.trace.id", sc.TraceID),
 		attribute.String("agentic.feature_id", sc.FeatureID),
 		attribute.String("agentic.span_id", sc.SpanID),
 		attribute.String("agentic.trace_id", sc.TraceID),
@@ -306,16 +319,102 @@ func (b *otelBridge) StartSpan(sc SpanContext, operationName string, attrs map[s
 	}
 	remoteCtx := seedTraceContext(sc, parentCtx)
 
-	// Inject roadmap SpanID so the custom IDGenerator returns it
-	// instead of a random value.
-	if spanBytes, err := hex.DecodeString(sc.SpanID); err == nil && len(spanBytes) == 8 {
-		var otelSID trace.SpanID
-		copy(otelSID[:], spanBytes)
-		remoteCtx = context.WithValue(remoteCtx, wantSpanIDKey, otelSID)
-	}
-
 	ctx, span := b.tracer.Start(remoteCtx, operationName, opts...)
 	b.spans[sc.SpanID] = activeSpan{span: span, ctx: ctx}
+}
+
+// ExportEventBatch materializes durable records as short, analytics-marked
+// spans. Its successful collector response is the acknowledgement boundary
+// used by the outbox.
+func (b *otelBridge) ExportEventBatch(ctx context.Context, records []wideRecord) error {
+	if !b.enabled || len(records) == 0 {
+		return nil
+	}
+	b.wideMu.Lock()
+	if b.wideExporter == nil {
+		if exporter, err := otlptracegrpc.New(ctx, b.wideOptions...); err == nil {
+			b.wideExporter = exporter
+		}
+	}
+	exporter := b.wideExporter
+	b.wideMu.Unlock()
+	if exporter == nil {
+		return errors.New("OTLP wide-event exporter unavailable")
+	}
+	spans := make([]sdktrace.ReadOnlySpan, 0, len(records))
+	for _, record := range records {
+		evt := record.Event
+		traceID, _ := trace.TraceIDFromHex(evt.TraceID)
+		var spanID trace.SpanID
+		if spanBytes, err := hex.DecodeString(record.SpanID); err == nil && len(spanBytes) == 8 {
+			copy(spanID[:], spanBytes)
+		}
+		attrs := []attribute.KeyValue{
+			attribute.Bool("agentico.analytics", true),
+			attribute.String("agentico.event.id", record.EventID),
+			attribute.Int("agentico.telemetry.schema.version", telemetrySchemaVersion),
+			attribute.String("agentico.event.type", evt.EventType),
+			attribute.String("agentico.feature.id", evt.FeatureID),
+			attribute.String("agentico.logical.span.id", evt.SpanID),
+			attribute.String("agentico.logical.parent_span.id", evt.ParentSpanID),
+			attribute.Int("agentico.run.number", evt.RunNumber),
+		}
+		if evt.Phase != "" {
+			attrs = append(attrs, attribute.String("agentico.phase", evt.Phase))
+		}
+		if evt.Status != "" {
+			attrs = append(attrs, attribute.String("agentico.status", evt.Status))
+		}
+		if evt.SessionID != "" {
+			attrs = append(attrs, attribute.String("agentico.session.id", evt.SessionID))
+		}
+		if evt.RepoName != "" {
+			attrs = append(attrs, attribute.String("agentico.repository.name", evt.RepoName))
+		}
+		if evt.DurationMs != 0 {
+			attrs = append(attrs, attribute.Int64("agentico.duration.ms", evt.DurationMs))
+		}
+		if evt.Error != "" {
+			attrs = append(attrs, attribute.String("agentico.error", evt.Error))
+		}
+		for key, value := range evt.Data {
+			attrs = append(attrs, wideAttribute("agentico."+strings.ReplaceAll(key, "_", "."), value))
+		}
+		started := evt.Timestamp
+		if started.IsZero() {
+			started = time.Now()
+		}
+		resourceAttrs := make([]attribute.KeyValue, 0, len(record.Resource))
+		for key, value := range record.Resource {
+			resourceAttrs = append(resourceAttrs, attribute.String(key, value))
+		}
+		stub := tracetest.SpanStub{Name: "agentico.event." + evt.EventType,
+			SpanContext: trace.NewSpanContext(trace.SpanContextConfig{TraceID: traceID, SpanID: spanID, TraceFlags: trace.FlagsSampled}),
+			StartTime:   started, EndTime: started.Add(time.Nanosecond), Attributes: attrs, Resource: resource.NewSchemaless(resourceAttrs...),
+			InstrumentationScope: instrumentation.Scope{Name: b.serviceName}}
+		spans = append(spans, stub.Snapshot())
+	}
+	return exporter.ExportSpans(ctx, spans)
+}
+
+func wideAttribute(key string, value any) attribute.KeyValue {
+	switch v := value.(type) {
+	case string:
+		return attribute.String(key, v)
+	case bool:
+		return attribute.Bool(key, v)
+	case int:
+		return attribute.Int(key, v)
+	case int64:
+		return attribute.Int64(key, v)
+	case float64:
+		return attribute.Float64(key, v)
+	case []string:
+		return attribute.StringSlice(key, v)
+	default:
+		data, _ := json.Marshal(v)
+		return attribute.String(key, string(data))
+	}
 }
 
 // EndSpan ends the span matching the given roadmap SpanID, applying final
@@ -383,7 +482,17 @@ func (b *otelBridge) Shutdown() error {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	return b.tp.Shutdown(ctx)
+	err := b.tp.Shutdown(ctx)
+	b.wideMu.Lock()
+	wideExporter := b.wideExporter
+	b.wideExporter = nil
+	b.wideMu.Unlock()
+	if wideExporter != nil {
+		if wideErr := wideExporter.Shutdown(ctx); err == nil {
+			err = wideErr
+		}
+	}
+	return err
 }
 
 // seedTraceContext creates a span context seeded with the roadmap TraceID

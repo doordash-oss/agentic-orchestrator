@@ -642,8 +642,6 @@ func (s *boundedBgTaskSession) LastStdoutAt() time.Time      { return time.Unix(
 // re-invokes the agent when they complete. Nudge capability is unarmed,
 // matching providers where the yield-for-tasks pattern showed up.
 func TestRunBoundedHelper_DefersOnLiveBackgroundTasks(t *testing.T) {
-	withBackgroundTaskPollInterval(t, 5*time.Millisecond)
-
 	phaseDir := t.TempDir()
 	sess := newBoundedBgTaskSession(&llm.ResultMessage{Type: testResultMessageType, Subtype: testResultSuccessValue, StopReason: testStopReasonEndTurn})
 	sess.liveTasks.Store(3)
@@ -657,11 +655,12 @@ func TestRunBoundedHelper_DefersOnLiveBackgroundTasks(t *testing.T) {
 	resultCh := make(chan *BoundedHelperResult, 1)
 	go func() {
 		result, _ := pr.runBoundedHelperSession(context.Background(), boundedHelperRunConfig{
-			sessionID:     "helper-bg-defer",
-			workDir:       t.TempDir(),
-			completionDir: phaseDir,
-			contractPhase: feature.PhaseReview,
-			contractRole:  RoleImplementationReviewCraft,
+			taskPollInterval: 5 * time.Millisecond,
+			sessionID:        "helper-bg-defer",
+			workDir:          t.TempDir(),
+			completionDir:    phaseDir,
+			contractPhase:    feature.PhaseReview,
+			contractRole:     RoleImplementationReviewCraft,
 		})
 		resultCh <- result
 	}()
@@ -706,8 +705,6 @@ func TestRunBoundedHelper_DefersOnLiveBackgroundTasks(t *testing.T) {
 // agent, the waiter sends the auto-resume continuation instead of hanging or
 // violating.
 func TestRunBoundedHelper_BackgroundTasksFinishQuietlyAutoResumes(t *testing.T) {
-	withBackgroundTaskPollInterval(t, 5*time.Millisecond)
-
 	phaseDir := t.TempDir()
 	sess := newBoundedBgTaskSession(&llm.ResultMessage{Type: testResultMessageType, Subtype: testResultSuccessValue, StopReason: testStopReasonEndTurn})
 	sess.liveTasks.Store(1)
@@ -721,11 +718,12 @@ func TestRunBoundedHelper_BackgroundTasksFinishQuietlyAutoResumes(t *testing.T) 
 	resultCh := make(chan *BoundedHelperResult, 1)
 	go func() {
 		result, _ := pr.runBoundedHelperSession(context.Background(), boundedHelperRunConfig{
-			sessionID:     "helper-bg-resume",
-			workDir:       t.TempDir(),
-			completionDir: phaseDir,
-			contractPhase: feature.PhaseReview,
-			contractRole:  RoleImplementationReviewCraft,
+			taskPollInterval: 5 * time.Millisecond,
+			sessionID:        "helper-bg-resume",
+			workDir:          t.TempDir(),
+			completionDir:    phaseDir,
+			contractPhase:    feature.PhaseReview,
+			contractRole:     RoleImplementationReviewCraft,
 		})
 		resultCh <- result
 	}()
@@ -1022,8 +1020,6 @@ func TestRunBoundedHelper_TruncatedTurnResumeCapThenFails(t *testing.T) {
 // TestRunBoundedHelper_SilentLiveTaskWaitsUntilTerminal proves provider task
 // lifecycle is authoritative even when the parent stream remains silent.
 func TestRunBoundedHelper_SilentLiveTaskWaitsUntilTerminal(t *testing.T) {
-	withBackgroundTaskPollInterval(t, 5*time.Millisecond)
-
 	phaseDir := t.TempDir()
 	sess := newBoundedBgTaskSession(&llm.ResultMessage{Type: testResultMessageType, Subtype: testResultSuccessValue, StopReason: testStopReasonEndTurn})
 	sess.liveTasks.Store(1)
@@ -1038,11 +1034,12 @@ func TestRunBoundedHelper_SilentLiveTaskWaitsUntilTerminal(t *testing.T) {
 	resultCh := make(chan *BoundedHelperResult, 1)
 	go func() {
 		result, _ := pr.runBoundedHelperSession(context.Background(), boundedHelperRunConfig{
-			sessionID:     "helper-bg-stall",
-			workDir:       t.TempDir(),
-			completionDir: phaseDir,
-			contractPhase: feature.PhaseReview,
-			contractRole:  RoleImplementationReviewCraft,
+			taskPollInterval: 5 * time.Millisecond,
+			sessionID:        "helper-bg-stall",
+			workDir:          t.TempDir(),
+			completionDir:    phaseDir,
+			contractPhase:    feature.PhaseReview,
+			contractRole:     RoleImplementationReviewCraft,
 		})
 		resultCh <- result
 	}()

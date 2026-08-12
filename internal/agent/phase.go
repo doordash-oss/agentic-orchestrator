@@ -336,7 +336,7 @@ func (pr *PhaseRunner) runInteractivePhase(f *feature.Feature, cfg interactivePh
 	sessionStart := time.Now()
 	sess.AddCleanupFunc(func() {
 		cost := ExtractSessionCost(sess)
-		usage := toSessionUsage(cost)
+		usage := toSessionUsage(cost, sess)
 		duration := time.Since(sessionStart)
 		_ = accumulateSessionCostToFeatureKey(pr.FeatureStore, f.ID, cfg.Phase.DirName(), cost, SessionCostMetadata{
 			SessionID:     sessionID,
@@ -672,7 +672,7 @@ func (pr *PhaseRunner) runKBSession(f *feature.Feature, repo feature.FeatureRepo
 			ObserverPhase: feature.PhaseKnowledgeBase.String(),
 			RepoName:      repo.Name,
 		})
-		pr.Observer.SessionEnded(sessionCtx, feature.PhaseKnowledgeBase.String(), sessionID, repo.Name, toSessionUsage(cost), time.Since(sessionStart), sessionErrFromStatus(sess))
+		pr.Observer.SessionEnded(sessionCtx, feature.PhaseKnowledgeBase.String(), sessionID, repo.Name, toSessionUsage(cost, sess), time.Since(sessionStart), sessionErrFromStatus(sess))
 	})
 
 	// Register cleanup to release lock when session ends.

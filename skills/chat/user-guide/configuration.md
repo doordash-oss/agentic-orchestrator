@@ -335,10 +335,16 @@ observability:
 | Field               | Default      | Description                              |
 | ------------------- | ------------ | ---------------------------------------- |
 | `events`            | `true`       | Enable JSONL event recording per feature |
-| `otel_enabled`      | `false`      | Enable OpenTelemetry trace export        |
-| `otel_endpoint`     | `""`         | OTLP endpoint URL                        |
+| `otel_enabled`      | `false`      | Enable OTel traces, durable wide events, and fleet metrics |
+| `otel_endpoint`     | `""`         | OTLP endpoint for traces and metrics; does not enable telemetry |
 | `otel_insecure`     | `false`      | Allow insecure OTLP connections          |
-| `otel_service_name` | `"agentico"` | Service name for OTel traces             |
+| `otel_service_name` | `"agentico"` | Service name for every OTel signal       |
+
+When `otel_endpoint` is empty, standard common and per-signal OTel environment
+settings are honored. `OTEL_METRIC_EXPORT_INTERVAL` controls the metric export
+interval in milliseconds. Local JSONL and OTel may be enabled independently.
+See `docs/observability.md` for metric schemas, privacy constraints, and the
+durable outbox contract.
 
 ## Server (`server`)
 

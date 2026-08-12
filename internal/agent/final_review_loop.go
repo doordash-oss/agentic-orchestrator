@@ -733,7 +733,7 @@ func (s *featureFinalReviewLoopState) runFix(iteration int, iterDir, feedback st
 			ObserverPhase: feature.PhaseFinalReview.String(),
 		})
 		if observed {
-			cfg.Observer.SessionEnded(sessionCtx, feature.PhaseFinalReview.String(), sessionID, "", toSessionUsage(cost), time.Since(sessionStart), sessionErrFromStatus(sess))
+			cfg.Observer.SessionEnded(sessionCtx, feature.PhaseFinalReview.String(), sessionID, "", toSessionUsage(cost, sess), time.Since(sessionStart), sessionErrFromStatus(sess))
 		}
 	}()
 

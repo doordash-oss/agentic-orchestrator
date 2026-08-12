@@ -625,7 +625,7 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 				if resumeID := providerSessionID(sess); resumeID != "" {
 					// Account the dead session before replacing it.
 					deadCost := ExtractSessionCost(sess)
-					cfg.Observer.SessionEnded(implSessionCtx, "implement", sessionID, cfg.RepoName, toSessionUsage(deadCost), time.Since(iterStart), sessionErrFromLogicalAgentStatus(agentStatus, sess))
+					cfg.Observer.SessionEnded(implSessionCtx, "implement", sessionID, cfg.RepoName, toSessionUsage(deadCost, sess), time.Since(iterStart), sessionErrFromLogicalAgentStatus(agentStatus, sess))
 					_ = accumulateSessionCostToFeature(cfg.FeatureStore, cfg.Feature.ID, "implement", deadCost, SessionCostMetadata{
 						SessionID:     sessionID,
 						ObserverPhase: "implement",
@@ -658,7 +658,7 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 
 			// Read cost from session's ResultMessage
 			cost = ExtractSessionCost(sess)
-			cfg.Observer.SessionEnded(implSessionCtx, "implement", sessionID, cfg.RepoName, toSessionUsage(cost), time.Since(iterStart), sessionErrFromLogicalAgentStatus(agentStatus, sess))
+			cfg.Observer.SessionEnded(implSessionCtx, "implement", sessionID, cfg.RepoName, toSessionUsage(cost, sess), time.Since(iterStart), sessionErrFromLogicalAgentStatus(agentStatus, sess))
 			emitLargeCodexCommandOutputEvents(cfg.Observer, implSessionCtx, "implement", sessionID, cfg.RepoName, sess.ProviderName(), i, logPath)
 
 			// Read output from message log
@@ -1561,33 +1561,32 @@ const maxAutoResumeAttempts = 3
 const autoResumeMessage = `Continue where you left off. If the task is complete, validate the required artifacts and finish with exactly one <agentico-outcome>{"status":"success"}</agentico-outcome> or <agentico-outcome>{"status":"retry"}</agentico-outcome> tag.`
 
 // backgroundTaskPollInterval is how often the waiter re-checks a session that
-// ended its turn while background subagents were still running. Declared as
-// var (not const) so tests can override it.
-var backgroundTaskPollInterval = 2 * time.Second
+// ended its turn while background subagents were still running.
+const backgroundTaskPollInterval = 2 * time.Second
 
 // backgroundTaskQuietGrace is how long a session whose background tasks have
 // all finished may stay quiet (no stdout) before the waiter concludes the CLI
 // did not re-invoke the agent on its own and sends the auto-resume
 // continuation.
-var backgroundTaskQuietGrace = 15 * time.Second
+const backgroundTaskQuietGrace = 15 * time.Second
 
 // backgroundTaskStallGrace is how long live background tasks may stay silent
 // (no stdout, which carries all task activity) after the root outcome is
 // already present before the waiter stops the session — killing runaway
 // monitors with the process group — and commits the outcome. Var for tests.
-var backgroundTaskStallGrace = 10 * time.Minute
+const backgroundTaskStallGrace = 10 * time.Minute
 
 // backgroundTaskDeferralCeiling bounds how long a turn may be deferred for live
 // background tasks, however chatty they are. Past it the tasks are killed with
 // the session and any present outcome is committed, so a never-true poll loop
 // cannot hold a finished phase open indefinitely. Var for tests.
-var backgroundTaskDeferralCeiling = 25 * time.Minute
+const backgroundTaskDeferralCeiling = 25 * time.Minute
 
 // phaseOutcomeReclassifyInterval paces the fallback re-classification tick:
 // a session whose terminal Result status was coalesced away or mis-delivered
 // would otherwise wait forever, since Done never fires for multi-turn
 // keep-alive sessions. Var for tests.
-var phaseOutcomeReclassifyInterval = 45 * time.Second
+const phaseOutcomeReclassifyInterval = 45 * time.Second
 
 // liveBackgroundTaskCounter is the optional session capability that reports
 // running background subagents. Provider sessions that do not track them
@@ -1897,6 +1896,12 @@ type PhaseOutcomeWaitOptions struct {
 	// committed and anything else fails the turn instead of waiting forever.
 	// Nil leaves the wait unbounded.
 	Ctx context.Context
+	// Per-call timing overrides keep tests isolated from package-level state.
+	backgroundTaskPollInterval     time.Duration
+	backgroundTaskQuietGrace       time.Duration
+	backgroundTaskStallGrace       time.Duration
+	backgroundTaskDeferralCeiling  time.Duration
+	phaseOutcomeReclassifyInterval time.Duration
 }
 
 // PhaseOutcomeWaitResult reports the semantic result of an autonomous root
@@ -1965,6 +1970,13 @@ func iterationContextMeta(sess ports.SessionView, handoff contextSnapshot) *Cont
 	return meta
 }
 
+func durationOrDefault(value, fallback time.Duration) time.Duration {
+	if value > 0 {
+		return value
+	}
+	return fallback
+}
+
 func enableTurnContinuation(sessOpts *ports.SessionOpts) *ports.SessionOpts {
 	if sessOpts == nil {
 		sessOpts = &ports.SessionOpts{}
@@ -1978,6 +1990,11 @@ func enableTurnContinuation(sessOpts *ports.SessionOpts) *ports.SessionOpts {
 // completion, AskUserQuestion, delegated-task liveness, and phase completion are
 // deliberately independent signals.
 func WaitForPhaseOutcome(sess ports.SessionView, opts PhaseOutcomeWaitOptions) PhaseOutcomeWaitResult {
+	taskPollInterval := durationOrDefault(opts.backgroundTaskPollInterval, backgroundTaskPollInterval)
+	taskQuietGrace := durationOrDefault(opts.backgroundTaskQuietGrace, backgroundTaskQuietGrace)
+	taskStallGrace := durationOrDefault(opts.backgroundTaskStallGrace, backgroundTaskStallGrace)
+	taskDeferralCeiling := durationOrDefault(opts.backgroundTaskDeferralCeiling, backgroundTaskDeferralCeiling)
+	reclassifyInterval := durationOrDefault(opts.phaseOutcomeReclassifyInterval, phaseOutcomeReclassifyInterval)
 	// Counts consecutive auto-resumes triggered by CLI truncation. Resets
 	// whenever we observe a non-truncated result, so each fresh stall has
 	// its own retry budget.
@@ -2013,10 +2030,11 @@ func WaitForPhaseOutcome(sess ports.SessionView, opts PhaseOutcomeWaitOptions) P
 	// re-invokes the agent when the tasks complete, so no nudge is sent and no
 	// budget is consumed. The bgTicker below provides the fallback paths.
 	awaitingBackgroundTasks := false
+	var deferredTaskIntent llm.CompletionIntent
 	// awaitingSince stamps when the deferral started so the absolute ceiling is
 	// measured from the yield, not from the last (possibly repeated) output.
 	var awaitingSince time.Time
-	bgTicker := time.NewTicker(backgroundTaskPollInterval)
+	bgTicker := time.NewTicker(taskPollInterval)
 	defer bgTicker.Stop()
 
 	// Novel-output tracking: LastStdoutAt is refreshed by any line, so a task
@@ -2037,8 +2055,9 @@ func WaitForPhaseOutcome(sess ports.SessionView, opts PhaseOutcomeWaitOptions) P
 	// terminal Result. classifiedSeq keeps the tick idempotent with the
 	// normal paths — a result handleStatus already saw is never re-classified,
 	// so no commit or nudge is ever duplicated.
-	reclassifyTicker := time.NewTicker(phaseOutcomeReclassifyInterval)
+	reclassifyTicker := time.NewTicker(reclassifyInterval)
 	defer reclassifyTicker.Stop()
+	outcomeC := rootOutcomeSignal(sess)
 	var classifiedResult *llm.ResultMessage
 	var classifiedSeq uint64
 
@@ -2162,10 +2181,20 @@ func WaitForPhaseOutcome(sess ports.SessionView, opts PhaseOutcomeWaitOptions) P
 				awaitingSince = time.Now()
 			}
 			awaitingBackgroundTasks = true
+			deferredTaskIntent = intent
+			clearRootCompletionIntent(sess)
+			// The root outcome observed alongside live delegated work is stale
+			// by construction. Consume its signal now so it cannot commit merely
+			// because the scheduler delivers it after the tasks finish.
+			select {
+			case <-outcomeC:
+			default:
+			}
 			return PhaseOutcomeWaitResult{}, false
 
 		case llm.TurnTruncated:
 			awaitingBackgroundTasks = false
+			deferredTaskIntent = llm.CompletionIntent{}
 			if autoResumeAttempts < maxAutoResumeAttempts {
 				autoResumeAttempts++
 				if err := sess.SendUserMessage(autoResumeMessage); err == nil {
@@ -2185,11 +2214,13 @@ func WaitForPhaseOutcome(sess ports.SessionView, opts PhaseOutcomeWaitOptions) P
 
 		case llm.TurnCommitSuccess, llm.TurnCommitRetry:
 			awaitingBackgroundTasks = false
+			deferredTaskIntent = llm.CompletionIntent{}
 			autoResumeAttempts = 0
 			return commitIntent(intent, sessionDone)
 
 		case llm.TurnProtocolViolation:
 			awaitingBackgroundTasks = false
+			deferredTaskIntent = llm.CompletionIntent{}
 			autoResumeAttempts = 0
 			violations := completionIntentViolations(intent, opts.MissingArtifacts)
 			if !sessionDone && decideFinishOrViolate(sess, disposition, &finishOrViolateNudges, protocolViolationArtifacts(violations)) {
@@ -2230,7 +2261,6 @@ func WaitForPhaseOutcome(sess ports.SessionView, opts PhaseOutcomeWaitOptions) P
 	}
 
 	doneCh := sess.Done()
-	outcomeC := rootOutcomeSignal(sess)
 	var ctxDone <-chan struct{}
 	if opts.Ctx != nil {
 		ctxDone = opts.Ctx.Done()
@@ -2282,10 +2312,14 @@ func WaitForPhaseOutcome(sess ports.SessionView, opts PhaseOutcomeWaitOptions) P
 				// new. Stop kills the process group, taking the monitors
 				// with it; the outcome is committed as normal.
 				ceilingExpired := !awaitingSince.IsZero() &&
-					time.Since(awaitingSince) >= backgroundTaskDeferralCeiling
+					time.Since(awaitingSince) >= taskDeferralCeiling
 				intent := rootCompletionIntent(sess)
+				if !intent.Valid() {
+					intent = deferredTaskIntent
+				}
 				if intent.Found && !hasPendingRootQuestion(sess) &&
-					(ceilingExpired || silence() >= backgroundTaskStallGrace) {
+					(ceilingExpired || silence() >= taskStallGrace) &&
+					liveBackgroundTasks(sess) > 0 {
 					_ = sess.Stop()
 					if result, done := commitIntent(intent, true); done {
 						return result
@@ -2310,10 +2344,11 @@ func WaitForPhaseOutcome(sess ports.SessionView, opts PhaseOutcomeWaitOptions) P
 			// re-invoke the agent on its own. Resume it explicitly, reusing
 			// the truncation budget so a session that keeps yielding without
 			// finishing still converges to a violation.
-			if quiet < backgroundTaskQuietGrace {
+			if quiet < taskQuietGrace {
 				continue
 			}
 			awaitingBackgroundTasks = false
+			deferredTaskIntent = llm.CompletionIntent{}
 			if autoResumeAttempts < maxAutoResumeAttempts {
 				autoResumeAttempts++
 				if err := sess.SendUserMessage(autoResumeMessage); err == nil {
@@ -2336,6 +2371,9 @@ func WaitForPhaseOutcome(sess ports.SessionView, opts PhaseOutcomeWaitOptions) P
 			// the outcome itself, but leave any unclassified Result to the
 			// Result-driven paths so truncation and error dispositions keep
 			// precedence.
+			if awaitingBackgroundTasks {
+				continue
+			}
 			if cost := sess.Cost(); cost != nil && cost != classifiedResult {
 				continue
 			}

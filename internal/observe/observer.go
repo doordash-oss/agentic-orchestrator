@@ -15,14 +15,19 @@
 package observe
 
 import (
+	"bufio"
+	"context"
 	"fmt"
+	"os/exec"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/autoreview"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/permission"
+	"go.opentelemetry.io/otel/sdk/resource"
 )
 
 // Observer is the central observability facade. It coordinates JSONL event
@@ -31,8 +36,20 @@ import (
 type Observer struct {
 	emitter          *Emitter
 	otel             *otelBridge
+	metrics          *telemetryMetrics
+	outbox           *eventOutbox
 	enabled          bool
+	localEnabled     bool
 	activePhaseSpans sync.Map
+	interactions     sync.Map
+	producerWG       sync.WaitGroup
+	shutdownOnce     sync.Once
+	shutdownErr      error
+}
+
+type pendingInteraction struct {
+	id      string
+	started time.Time
 }
 
 // RewindEventInput carries the durable context for a successful rewind audit
@@ -88,16 +105,266 @@ type AutomaticReviewUnavailableEventInput struct {
 	Reason    string
 }
 
+// FeatureMutated receives authoritative post-persistence notifications from
+// the feature store. The store invokes this callback after releasing its lock.
+func (o *Observer) FeatureMutated(m feature.Mutation) {
+	if o == nil || !o.enabled {
+		return
+	}
+	current := m.After
+	if current == nil {
+		current = m.Before
+	}
+	if current == nil {
+		return
+	}
+	sc := SpanContextForFeature(current.ID, current.TraceID, current.Name, current.FeatureSpanID).WithRun(current.ActiveRun)
+	base := map[string]any{
+		"pipeline":         string(current.Pipeline),
+		"risk":             string(current.Risk),
+		"feature_kind":     current.FeatureKind,
+		"repository_count": len(current.RepositoryNames),
+		"repository_names": append([]string(nil), current.RepositoryNames...),
+	}
+	if current.FailureType != "" {
+		base["failure_type"] = current.FailureType
+	}
+	emit := func(kind, status string, extra map[string]any) {
+		data := copyAnyMap(base)
+		var durationMs int64
+		eventPhase := current.Phase.DirName()
+		for key, value := range extra {
+			if key == "_duration_ms" {
+				if n, ok := value.(int64); ok {
+					durationMs = n
+				}
+				continue
+			}
+			if key == "phase" {
+				if phase, ok := value.(string); ok && phase != "" {
+					eventPhase = phase
+				}
+			}
+			data[key] = value
+		}
+		_ = o.emit(sc, Event{Timestamp: m.At, TraceID: sc.TraceID, SpanID: NewSpanID(), EventType: kind,
+			Status: status, FeatureID: current.ID, Phase: eventPhase, DurationMs: durationMs, Data: data})
+	}
+	if m.Before == nil && m.After != nil {
+		if !telemetryTerminal(m.After.Status) {
+			o.metrics.addActive(1)
+		}
+		emit("feature.created", current.Status.String(), map[string]any{"created_at": current.Created.UTC().Format(time.RFC3339Nano)})
+		emit("feature.run_started", "started", map[string]any{"run_number": current.ActiveRun})
+		return
+	}
+	if m.Kind == feature.MutationDeleted {
+		if !telemetryTerminal(m.Before.Status) {
+			o.metrics.addActive(-1)
+		}
+		emit("feature.deleted", "deleted", nil)
+		return
+	}
+	if m.Before == nil || m.After == nil {
+		return
+	}
+	if m.Before.ActiveRun != m.After.ActiveRun {
+		emit("feature.run_sealed", m.Before.Status.String(), map[string]any{"run_number": m.Before.ActiveRun, "_duration_ms": sinceMillis(m.Before.StartedAt, m.At)})
+		emit("feature.run_started", "started", map[string]any{"run_number": m.After.ActiveRun})
+	}
+	if m.Before.Status != m.After.Status {
+		if telemetryTerminal(m.Before.Status) != telemetryTerminal(m.After.Status) {
+			if telemetryTerminal(m.After.Status) {
+				o.metrics.addActive(-1)
+			} else {
+				o.metrics.addActive(1)
+			}
+		}
+		emit("feature.state_changed", m.After.Status.String(), map[string]any{"previous_status": m.Before.Status.String()})
+		gateKey := current.ID + "\x00review_gate"
+		if !reviewGateStatus(m.Before.Status) && reviewGateStatus(m.After.Status) {
+			pending := pendingInteraction{id: randomHex(16), started: m.At}
+			o.interactions.Store(gateKey, pending)
+			emit("review_gate.requested", "requested", map[string]any{"correlation_id": pending.id, "interaction_kind": "review_gate"})
+		} else if reviewGateStatus(m.Before.Status) && !reviewGateStatus(m.After.Status) {
+			extra := map[string]any{"interaction_kind": "review_gate", "decision": m.After.Status.String()}
+			if value, ok := o.interactions.LoadAndDelete(gateKey); ok {
+				pending := value.(pendingInteraction)
+				extra["correlation_id"] = pending.id
+				extra["wait_duration_ms"] = m.At.Sub(pending.started).Milliseconds()
+				extra["_duration_ms"] = m.At.Sub(pending.started).Milliseconds()
+			}
+			emit("review_gate.resolved", "resolved", extra)
+		}
+		if !telemetryTerminal(m.Before.Status) && telemetryTerminal(m.After.Status) {
+			emit("feature.run_sealed", m.After.Status.String(), map[string]any{"run_number": m.After.ActiveRun, "_duration_ms": sinceMillis(m.After.StartedAt, m.At)})
+		}
+		switch m.After.Status {
+		case feature.StatusCodeReady:
+			emit("feature.output_ready", "ready", map[string]any{"_duration_ms": m.At.Sub(m.After.Created).Milliseconds()})
+			o.collectOutputStatsAsync(sc, m.After.OutputRepos, "output_ready")
+		case feature.StatusPublished, feature.StatusDone:
+			if !telemetryDelivered(m.Before.Status) {
+				emit("feature.delivered", "delivered", map[string]any{"_duration_ms": m.At.Sub(m.After.Created).Milliseconds()})
+				o.collectOutputStatsAsync(sc, m.After.OutputRepos, "delivered")
+			}
+			if m.After.Status == feature.StatusPublished {
+				emit("publish.completed", "published", map[string]any{"publish_mode": "published"})
+			}
+		case feature.StatusFailed:
+			if m.After.Phase == feature.PhasePublish {
+				emit("publish.failed", "failed", map[string]any{"failure_type": m.After.FailureType})
+			}
+		}
+	}
+	beforeItems := make(map[string]string, len(m.Before.VerificationItems))
+	for _, item := range m.Before.VerificationItems {
+		beforeItems[item.Name] = item.State
+	}
+	for _, item := range m.After.VerificationItems {
+		if beforeItems[item.Name] == item.State || item.State == "" || item.State == "pending" || item.State == "running" {
+			continue
+		}
+		emit("verification.item_completed", item.State, map[string]any{"verification_type": "testing_contract", "item_name": item.Name})
+	}
+	for phase, total := range m.After.PhaseTimings {
+		if delta := total - m.Before.PhaseTimings[phase]; delta > 0 {
+			emit("phase.duration_recorded", "recorded", map[string]any{"phase": phase, "_duration_ms": delta.Milliseconds()})
+		}
+	}
+}
+
+func sinceMillis(start *time.Time, end time.Time) int64 {
+	if start == nil || end.Before(*start) {
+		return 0
+	}
+	return end.Sub(*start).Milliseconds()
+}
+
+func (o *Observer) collectOutputStatsAsync(sc SpanContext, repos []feature.MutationOutputRepo, milestone string) {
+	if len(repos) == 0 {
+		return
+	}
+	o.producerWG.Add(1)
+	go func() {
+		defer o.producerWG.Done()
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		files, added, deleted, commits := 0, 0, 0, 0
+		failures := 0
+		for _, repo := range repos {
+			dir := repo.WorktreePath
+			if dir == "" {
+				dir = repo.Path
+			}
+			if dir == "" {
+				failures++
+				continue
+			}
+			base := repo.BaseBranch
+			if base == "" {
+				base = "HEAD~1"
+			}
+			output, err := exec.CommandContext(ctx, "git", "-C", dir, "diff", "--numstat", base+"...HEAD").Output()
+			if err != nil {
+				failures++
+				continue
+			}
+			scanner := bufio.NewScanner(strings.NewReader(string(output)))
+			for scanner.Scan() {
+				parts := strings.Fields(scanner.Text())
+				if len(parts) < 3 {
+					continue
+				}
+				files++
+				if n, e := strconv.Atoi(parts[0]); e == nil {
+					added += n
+				}
+				if n, e := strconv.Atoi(parts[1]); e == nil {
+					deleted += n
+				}
+			}
+			if output, err := exec.CommandContext(ctx, "git", "-C", dir, "rev-list", "--count", base+"..HEAD").Output(); err == nil {
+				if n, e := strconv.Atoi(strings.TrimSpace(string(output))); e == nil {
+					commits += n
+				}
+			}
+		}
+		status := "collected"
+		if failures == len(repos) {
+			status = "unavailable"
+		}
+		_ = o.emit(sc, Event{Timestamp: time.Now(), TraceID: sc.TraceID, SpanID: NewSpanID(), EventType: "feature.output_stats_collected", FeatureID: sc.FeatureID, Status: status, Data: map[string]any{"milestone": milestone, "files_changed": files, "lines_added": added, "lines_deleted": deleted, "commit_count": commits, "repository_failures": failures}})
+	}()
+}
+
+func telemetryTerminal(status feature.Status) bool {
+	switch status {
+	case feature.StatusPublished, feature.StatusDone, feature.StatusFailed, feature.StatusInterrupted:
+		return true
+	}
+	return false
+}
+
+func telemetryDelivered(status feature.Status) bool {
+	return status == feature.StatusPublished || status == feature.StatusDone
+}
+
+func reviewGateStatus(status feature.Status) bool {
+	switch status {
+	case feature.StatusPlanNeedsReview, feature.StatusPromptNeedsReview, feature.StatusInquiryNeedsReview, feature.StatusResearchNeedsReview, feature.StatusDesignNeedsReview:
+		return true
+	}
+	return false
+}
+
+func (o *Observer) initializeActive(features []*feature.Feature) {
+	var count int64
+	for _, f := range features {
+		if f != nil && !telemetryTerminal(f.Status) {
+			count++
+		}
+	}
+	o.metrics.setActive(count)
+}
+
+func (o *Observer) ObserveHTTPRequest(route, method string, status int, duration time.Duration, requestBytes, responseBytes int64) {
+	if o != nil {
+		o.metrics.recordHTTP(route, method, status, duration, requestBytes, responseBytes)
+	}
+}
+
+func copyAnyMap(in map[string]any) map[string]any {
+	out := make(map[string]any, len(in))
+	for key, value := range in {
+		out[key] = value
+	}
+	return out
+}
+
 // New creates an Observer. When enabled is false, all methods return immediately.
 func New(enabled bool, stateDir string, otelEnabled bool, otelEndpoint string, otelInsecure bool, otelServiceName string) *Observer {
-	if !enabled {
+	if !enabled && !otelEnabled {
 		return &Observer{enabled: false}
 	}
-	return &Observer{
-		emitter: NewEmitter(stateDir),
-		otel:    newOtelBridge(otelEnabled, otelEndpoint, otelInsecure, otelServiceName),
-		enabled: true,
+	var res *resource.Resource
+	if otelEnabled {
+		res, _ = telemetryResource(stateDir, otelServiceName)
 	}
+	bridge := newOtelBridgeWithResource(otelEnabled, otelEndpoint, otelInsecure, otelServiceName, res)
+	metrics := newTelemetryMetrics(otelEnabled, otelEndpoint, otelInsecure, res, stateDir)
+	o := &Observer{
+		otel: bridge, metrics: metrics,
+		enabled: true, localEnabled: enabled,
+	}
+	if enabled {
+		o.emitter = NewEmitter(stateDir)
+	}
+	if otelEnabled {
+		o.outbox = newEventOutbox(stateDir, bridge, metrics, res)
+		o.outbox.Enqueue(Event{Timestamp: time.Now(), EventType: "runtime.started", Status: "started"})
+	}
+	return o
 }
 
 // ensureFeatureSpan re-materializes the feature-level OTel span in the bridge
@@ -129,7 +396,16 @@ func (o *Observer) ensureFeatureSpan(sc SpanContext) {
 // when o == nil || !o.enabled before reaching this helper).
 func (o *Observer) emit(sc SpanContext, evt Event) error {
 	evt.RunNumber = sc.RunNumber
-	return o.emitter.Emit(evt)
+	if o.metrics != nil {
+		o.metrics.record(evt)
+	}
+	if o.outbox != nil {
+		o.outbox.Enqueue(evt)
+	}
+	if o.localEnabled && o.emitter != nil {
+		return o.emitter.Emit(evt)
+	}
+	return nil
 }
 
 // addRunNumber inserts the current run number into an attrs map when nonzero.
@@ -247,6 +523,19 @@ type SessionUsage struct {
 	OutputTokens             int
 	CacheReadInputTokens     int
 	CacheCreationInputTokens int
+	ContextWindow            int
+	ContextTotalTokens       int
+	Provider                 string
+	Model                    string
+	Effort                   string
+	ResultSubtype            string
+	Outcome                  string
+	StopReason               string
+	APIDurationMS            float64
+	Turns                    int
+	PerModelContextWindows   map[string]int
+	RetryCount               int
+	Truncated                bool
 }
 
 // SessionEnded emits a session.ended event.
@@ -272,11 +561,41 @@ func (o *Observer) SessionEnded(sc SpanContext, phase, sessionID, repoName strin
 			"output_tokens":               usage.OutputTokens,
 			"cache_read_input_tokens":     usage.CacheReadInputTokens,
 			"cache_creation_input_tokens": usage.CacheCreationInputTokens,
+			"context_window":              usage.ContextWindow,
+			"context_total_tokens":        usage.ContextTotalTokens,
 		},
 	}
 	if err != nil {
 		evt.Status = "error"
 		evt.Error = err.Error()
+	}
+	for key, value := range map[string]any{"provider": usage.Provider, "model": usage.Model, "effort": usage.Effort,
+		"result_subtype": usage.ResultSubtype, "outcome": usage.Outcome, "stop_reason": usage.StopReason,
+		"api_duration_ms": usage.APIDurationMS, "turns": usage.Turns, "per_model_context_windows": usage.PerModelContextWindows} {
+		switch v := value.(type) {
+		case string:
+			if v != "" {
+				evt.Data[key] = v
+			}
+		case int:
+			if v != 0 {
+				evt.Data[key] = v
+			}
+		case float64:
+			if v != 0 {
+				evt.Data[key] = v
+			}
+		case map[string]int:
+			if len(v) > 0 {
+				evt.Data[key] = v
+			}
+		}
+	}
+	if usage.RetryCount > 0 {
+		evt.Data["retry_count"] = usage.RetryCount
+	}
+	if usage.Truncated {
+		evt.Data["truncated"] = true
 	}
 	o.emit(sc, evt)
 	o.otel.EndSpan(sc.SpanID, evt.Status, map[string]string{
@@ -606,8 +925,11 @@ func (o *Observer) PermissionRequested(sc SpanContext, sessionID string, repoNam
 	if len(toolInput) > 200 {
 		toolInput = toolInput[:200]
 	}
+	now := time.Now()
+	pending := pendingInteraction{id: randomHex(16), started: now}
+	o.interactions.Store(sessionID+"\x00permission\x00"+toolName, pending)
 	o.emit(sc, Event{
-		Timestamp:    time.Now(),
+		Timestamp:    now,
 		TraceID:      sc.TraceID,
 		SpanID:       sc.SpanID,
 		ParentSpanID: sc.ParentSpanID,
@@ -617,8 +939,10 @@ func (o *Observer) PermissionRequested(sc SpanContext, sessionID string, repoNam
 		RepoName:     repoName,
 		Iteration:    iteration,
 		Data: map[string]any{
-			"tool_name":  toolName,
-			"tool_input": toolInput,
+			"tool_name":        toolName,
+			"tool_input":       toolInput,
+			"correlation_id":   pending.id,
+			"interaction_kind": "permission",
 		},
 	})
 	o.otel.AddSpanEvent(sc.ParentSpanID, "permission.requested", addRunNumber(sc, map[string]string{
@@ -631,8 +955,17 @@ func (o *Observer) PermissionResolved(sc SpanContext, sessionID string, repoName
 	if o == nil || !o.enabled {
 		return
 	}
+	now := time.Now()
+	data := map[string]any{"tool_name": toolName, "decision": decision, "interaction_kind": "permission"}
+	duration := int64(0)
+	if value, ok := o.interactions.LoadAndDelete(sessionID + "\x00permission\x00" + toolName); ok {
+		pending := value.(pendingInteraction)
+		data["correlation_id"] = pending.id
+		duration = now.Sub(pending.started).Milliseconds()
+		data["wait_duration_ms"] = duration
+	}
 	o.emit(sc, Event{
-		Timestamp:    time.Now(),
+		Timestamp:    now,
 		TraceID:      sc.TraceID,
 		SpanID:       sc.SpanID,
 		ParentSpanID: sc.ParentSpanID,
@@ -641,10 +974,8 @@ func (o *Observer) PermissionResolved(sc SpanContext, sessionID string, repoName
 		SessionID:    sessionID,
 		RepoName:     repoName,
 		Iteration:    iteration,
-		Data: map[string]any{
-			"tool_name": toolName,
-			"decision":  decision,
-		},
+		DurationMs:   duration,
+		Data:         data,
 	})
 	o.otel.AddSpanEvent(sc.ParentSpanID, "permission.resolved", addRunNumber(sc, map[string]string{
 		"tool_name": toolName,
@@ -752,8 +1083,11 @@ func (o *Observer) QuestionAsked(sc SpanContext, sessionID string, repoName stri
 	if o == nil || !o.enabled {
 		return
 	}
+	now := time.Now()
+	pending := pendingInteraction{id: randomHex(16), started: now}
+	o.interactions.Store(sessionID+"\x00question\x00"+question, pending)
 	o.emit(sc, Event{
-		Timestamp:    time.Now(),
+		Timestamp:    now,
 		TraceID:      sc.TraceID,
 		SpanID:       sc.SpanID,
 		ParentSpanID: sc.ParentSpanID,
@@ -763,7 +1097,9 @@ func (o *Observer) QuestionAsked(sc SpanContext, sessionID string, repoName stri
 		RepoName:     repoName,
 		Iteration:    iteration,
 		Data: map[string]any{
-			"question": question,
+			"question":         question,
+			"correlation_id":   pending.id,
+			"interaction_kind": "question",
 		},
 	})
 	o.otel.AddSpanEvent(sc.ParentSpanID, "question.asked", addRunNumber(sc, map[string]string{
@@ -785,8 +1121,9 @@ func (o *Observer) QuestionAnswered(sc SpanContext, sessionID string, repoName s
 		return
 	}
 	data := map[string]any{
-		"question": question,
-		"answer":   answer,
+		"question":         question,
+		"answer":           answer,
+		"interaction_kind": "question",
 	}
 	attrs := map[string]string{
 		"question": question,
@@ -798,8 +1135,16 @@ func (o *Observer) QuestionAnswered(sc SpanContext, sessionID string, repoName s
 		attrs["auto_picked"] = "true"
 		attrs["confidence"] = fmt.Sprintf("%.2f", metadata[0].Confidence)
 	}
+	now := time.Now()
+	duration := int64(0)
+	if value, ok := o.interactions.LoadAndDelete(sessionID + "\x00question\x00" + question); ok {
+		pending := value.(pendingInteraction)
+		data["correlation_id"] = pending.id
+		duration = now.Sub(pending.started).Milliseconds()
+		data["wait_duration_ms"] = duration
+	}
 	o.emit(sc, Event{
-		Timestamp:    time.Now(),
+		Timestamp:    now,
 		TraceID:      sc.TraceID,
 		SpanID:       sc.SpanID,
 		ParentSpanID: sc.ParentSpanID,
@@ -808,6 +1153,7 @@ func (o *Observer) QuestionAnswered(sc SpanContext, sessionID string, repoName s
 		SessionID:    sessionID,
 		RepoName:     repoName,
 		Iteration:    iteration,
+		DurationMs:   duration,
 		Data:         data,
 	})
 	o.otel.AddSpanEvent(sc.ParentSpanID, "question.answered", addRunNumber(sc, attrs))
@@ -1100,7 +1446,7 @@ func (o *Observer) AgentTaskEnded(sc SpanContext, phase, sessionID, taskID, tool
 
 // WriteFeatureSummary produces observe-summary.yaml from feature metadata and events.
 func (o *Observer) WriteFeatureSummary(input FeatureSummaryInput) error {
-	if o == nil || !o.enabled {
+	if o == nil || !o.localEnabled {
 		return nil
 	}
 	return writeFeatureSummaryImpl(input)
@@ -1171,7 +1517,35 @@ func (o *Observer) Shutdown() error {
 	if o == nil || !o.enabled {
 		return nil
 	}
-	return o.otel.Shutdown()
+	o.shutdownOnce.Do(func() {
+		if o.outbox != nil {
+			waitDone := make(chan struct{})
+			go func() { o.producerWG.Wait(); close(waitDone) }()
+			select {
+			case <-waitDone:
+			case <-time.After(4 * time.Second):
+			}
+			o.outbox.Enqueue(Event{Timestamp: time.Now(), EventType: "runtime.stopped", Status: "stopped"})
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if o.outbox != nil {
+			if err := o.outbox.Shutdown(ctx); err != nil {
+				o.shutdownErr = err
+			}
+		}
+		if o.metrics != nil {
+			if err := o.metrics.Shutdown(ctx); err != nil && o.shutdownErr == nil {
+				o.shutdownErr = err
+			}
+		}
+		if o.otel != nil {
+			if err := o.otel.Shutdown(); err != nil && o.shutdownErr == nil {
+				o.shutdownErr = err
+			}
+		}
+	})
+	return o.shutdownErr
 }
 
 // Emit is the generic escape hatch for ad-hoc events that do not have a
@@ -1195,7 +1569,16 @@ func (o *Observer) Emit(evt Event) error {
 	if evt.Timestamp.IsZero() {
 		evt.Timestamp = time.Now()
 	}
-	return o.emitter.Emit(evt)
+	if o.metrics != nil {
+		o.metrics.record(evt)
+	}
+	if o.outbox != nil {
+		o.outbox.Enqueue(evt)
+	}
+	if o.localEnabled && o.emitter != nil {
+		return o.emitter.Emit(evt)
+	}
+	return nil
 }
 
 // ActivePhaseSpanContext returns the SpanContext stored when PhaseStarted was

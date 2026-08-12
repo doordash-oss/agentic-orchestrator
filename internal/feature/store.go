@@ -76,6 +76,7 @@ type Store struct {
 	// testSaveInterceptor is a test-only hook consulted by saveUnlocked to
 	// inject failures. The concrete wiring lives in export_test.go.
 	testSaveInterceptor func(f *Feature) error
+	mutationObserver    MutationObserver
 }
 
 // RelationshipChildren is the complete child-owned relationship view for a
@@ -112,9 +113,17 @@ func NewStore(baseDir string) *Store {
 
 func (s *Store) Save(f *Feature) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	return s.saveUnlocked(f)
+	var before *MutationSnapshot
+	if existing, err := s.loadUnlocked(f.ID); err == nil {
+		before = mutationSnapshot(existing)
+	}
+	err := s.saveUnlocked(f)
+	after := mutationSnapshot(f)
+	s.mu.Unlock()
+	if err == nil && (before == nil || !mutationSnapshotsEqual(before, after)) {
+		s.notifyMutation(Mutation{Kind: MutationSaved, Before: before, After: after, At: time.Now()})
+	}
+	return err
 }
 
 func (s *Store) Load(id string) (*Feature, error) {
@@ -126,16 +135,23 @@ func (s *Store) Load(id string) (*Feature, error) {
 // concurrent writes from corrupting the YAML file.
 func (s *Store) Modify(id string, fn func(f *Feature) error) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	f, err := s.loadUnlocked(id)
 	if err != nil {
+		s.mu.Unlock()
 		return err
 	}
+	before := mutationSnapshot(f)
 	if err := fn(f); err != nil {
+		s.mu.Unlock()
 		return err
 	}
-	return s.saveUnlocked(f)
+	err = s.saveUnlocked(f)
+	after := mutationSnapshot(f)
+	s.mu.Unlock()
+	if err == nil && !mutationSnapshotsEqual(before, after) {
+		s.notifyMutation(Mutation{Kind: MutationSaved, Before: before, After: after, At: time.Now()})
+	}
+	return err
 }
 
 // RelationshipGuardFunc evaluates whether a mutation is allowed given the
@@ -158,13 +174,15 @@ func (s *Store) ModifyGuarded(
 	fn func(f *Feature) error,
 ) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	f, err := s.loadUnlocked(id)
 	if err != nil {
+		s.mu.Unlock()
 		return err
 	}
+	before := mutationSnapshot(f)
 	if f.IsChild() && !f.IsActiveChild() {
+		s.mu.Unlock()
 		return ErrChildRelationshipClosed
 	}
 
@@ -172,20 +190,29 @@ func (s *Store) ModifyGuarded(
 	if !f.IsChild() {
 		activeChild, err = s.activeChildOfUnlocked(id)
 		if err != nil {
+			s.mu.Unlock()
 			return fmt.Errorf("checking active child during guarded modify: %w", err)
 		}
 	}
 
 	if guard != nil {
 		if err := guard(f, activeChild); err != nil {
+			s.mu.Unlock()
 			return err
 		}
 	}
 
 	if err := fn(f); err != nil {
+		s.mu.Unlock()
 		return err
 	}
-	return s.saveUnlocked(f)
+	err = s.saveUnlocked(f)
+	after := mutationSnapshot(f)
+	s.mu.Unlock()
+	if err == nil && !mutationSnapshotsEqual(before, after) {
+		s.notifyMutation(Mutation{Kind: MutationSaved, Before: before, After: after, At: time.Now()})
+	}
+	return err
 }
 
 // RelationshipChildren returns the unique active child and complete closed
@@ -611,11 +638,18 @@ func (s *Store) List() ([]*Feature, error) {
 
 func (s *Store) Delete(id string) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
+	var before *MutationSnapshot
+	if f, err := s.loadUnlocked(id); err == nil {
+		before = mutationSnapshot(f)
+	}
 	dir := filepath.Join(s.BaseDir, id)
 	if err := os.RemoveAll(dir); err != nil {
+		s.mu.Unlock()
 		return fmt.Errorf("deleting feature directory: %w", err)
+	}
+	s.mu.Unlock()
+	if before != nil {
+		s.notifyMutation(Mutation{Kind: MutationDeleted, Before: before, At: time.Now()})
 	}
 	return nil
 }
@@ -725,14 +759,21 @@ func (s *Store) SealAndForkRun(
 	seal func(oldRun *Run) error,
 	fork func(oldRun *Run) (*Run, error),
 	populate func(oldRun, newRun *Run) error,
-) (*Feature, error) {
+) (result *Feature, retErr error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	var before, after *MutationSnapshot
+	defer func() {
+		s.mu.Unlock()
+		if retErr == nil && after != nil {
+			s.notifyMutation(Mutation{Kind: MutationRewound, Before: before, After: after, At: time.Now()})
+		}
+	}()
 
 	f, err := s.loadUnlocked(featureID)
 	if err != nil {
 		return nil, fmt.Errorf("loading feature for seal+fork: %w", err)
 	}
+	before = mutationSnapshot(f)
 	oldRun := f.run
 	if oldRun == nil {
 		return nil, fmt.Errorf("feature %s has no active run loaded", featureID)
@@ -807,6 +848,7 @@ func (s *Store) SealAndForkRun(
 	if err := s.saveUnlocked(f); err != nil {
 		return nil, fmt.Errorf("saving feature after seal+fork: %w", err)
 	}
+	after = mutationSnapshot(f)
 	return f, nil
 }
 
@@ -956,12 +998,19 @@ func (s *Store) CreateChildLocked(
 	fn func(parent *Feature, activeChild *Feature) (child *Feature, intent *ChildCreationIntent, err error),
 ) (*Feature, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	var notifications []Mutation
+	defer func() {
+		s.mu.Unlock()
+		for _, notification := range notifications {
+			s.notifyMutation(notification)
+		}
+	}()
 
 	parent, err := s.loadUnlocked(parentID)
 	if err != nil {
 		return nil, err
 	}
+	parentBefore := mutationSnapshot(parent)
 	activeChild, err := s.activeChildOfUnlocked(parentID)
 	if err != nil {
 		return nil, err
@@ -987,6 +1036,10 @@ func (s *Store) CreateChildLocked(
 	parent.PendingChild = nil
 	if err := s.saveUnlocked(parent); err != nil {
 		return nil, fmt.Errorf("clearing child intent on parent: %w", err)
+	}
+	notifications = append(notifications, Mutation{Kind: MutationSaved, After: mutationSnapshot(child), At: time.Now()})
+	if parentAfter := mutationSnapshot(parent); !mutationSnapshotsEqual(parentBefore, parentAfter) {
+		notifications = append(notifications, Mutation{Kind: MutationSaved, Before: parentBefore, After: parentAfter, At: time.Now()})
 	}
 	return child, nil
 }
@@ -1023,7 +1076,13 @@ func (s *Store) activeChildOfUnlocked(parentID string) (*Feature, error) {
 // correct order.
 func (s *Store) ReconcilePendingChildCreations() ([]string, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	var notifications []Mutation
+	defer func() {
+		s.mu.Unlock()
+		for _, notification := range notifications {
+			s.notifyMutation(notification)
+		}
+	}()
 
 	entries, err := os.ReadDir(s.BaseDir)
 	if err != nil {
@@ -1055,7 +1114,10 @@ func (s *Store) ReconcilePendingChildCreations() ([]string, error) {
 			continue
 		}
 		intent := parent.PendingChild
-		if _, err := s.loadUnlocked(intent.ChildID); err != nil {
+		var childSnapshot *MutationSnapshot
+		if existingChild, err := s.loadUnlocked(intent.ChildID); err == nil {
+			childSnapshot = mutationSnapshot(existingChild)
+		} else {
 			child := intent.Child
 			if child.ID == "" || child.ID != intent.ChildID {
 				errs = append(errs, fmt.Errorf("parent %s: child intent %q is incomplete; cannot roll forward", parent.ID, intent.ChildID))
@@ -1075,11 +1137,15 @@ func (s *Store) ReconcilePendingChildCreations() ([]string, error) {
 				errs = append(errs, fmt.Errorf("parent %s: rebuilding child %s: %w", parent.ID, intent.ChildID, err))
 				continue
 			}
+			childSnapshot = mutationSnapshot(&child)
 		}
 		parent.PendingChild = nil
 		if err := s.writeFeatureYAMLUnlocked(parent.ID, &parent); err != nil {
 			errs = append(errs, fmt.Errorf("clearing child intent on parent %s: %w", parent.ID, err))
 			continue
+		}
+		if childSnapshot != nil {
+			notifications = append(notifications, Mutation{Kind: MutationSaved, After: childSnapshot, At: time.Now()})
 		}
 		reconciled = append(reconciled, parent.ID)
 	}

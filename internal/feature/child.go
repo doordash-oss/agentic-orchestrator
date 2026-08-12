@@ -467,7 +467,10 @@ type ReviewFeedbackChildSpec struct {
 	// creation intent and the child relationship, and under the creation
 	// lock the pending draft's revision must still match Receipt's draft
 	// revision — serializing a concurrent selection commit as a typed
-	// revision conflict instead of launching from a consumed snapshot.
+	// revision conflict instead of launching from a consumed snapshot. The
+	// matched draft is consumed under that same creation lock, so child
+	// creation, receipt persistence, and draft consumption are one store
+	// transaction.
 	Receipt *ReviewFeedbackLaunchReceipt
 }
 
@@ -531,6 +534,14 @@ func (m *Manager) CreateReviewFeedbackChild(parentID string, spec ReviewFeedback
 			}
 			if draft == nil || currentRevision != spec.Receipt.DraftRevision {
 				return nil, nil, &ReviewFeedbackRevisionConflictError{ParentID: lockedParent.ID, ExpectedRevision: spec.Receipt.DraftRevision, CurrentRevision: currentRevision}
+			}
+			// Consume the draft under the same lock that persists the child
+			// and its receipt: a selection compare-and-save can never
+			// acknowledge an edit against a draft this launch is consuming,
+			// and an interrupted creation leaves the durable intent whose
+			// reconcile/replay completes the cleanup idempotently.
+			if err := m.Store.deleteReviewFeedbackDraftUnlocked(lockedParent.ID); err != nil {
+				return nil, nil, err
 			}
 		}
 		gate := lockedParent.Checkpoints.RoadmapReview

@@ -97,9 +97,10 @@ type ReviewFeedbackLaunchResult struct {
 
 // LaunchReviewFeedbackChildFromDraft commits the pending draft: it validates
 // the expected revision, re-resolves current GitHub content for the selected
-// reviewed references, creates the child from that current content, and only
-// then clears the draft. Every failure before durable child creation leaves
-// the draft intact.
+// reviewed references, and creates the child from that current content. Child
+// creation, receipt persistence, and draft consumption commit as one store
+// transaction under the creation lock; every failure before that transaction
+// leaves the draft intact.
 //
 // Launch is idempotent: the durable creation intent and the created child's
 // relationship carry a ReviewFeedbackLaunchReceipt. Repeating the launch for
@@ -200,10 +201,12 @@ func (m *Manager) LaunchReviewFeedbackChildFromDraft(parentID string, expectedRe
 		}
 		return nil, err
 	}
-	// Durable child creation succeeded; only now may the pending draft be
-	// cleared. If the clear fails, the receipt on the child relationship
-	// keeps a repeated launch idempotent (it finishes the cleanup).
-	if err := m.Store.DeleteReviewFeedbackDraft(parentID); err != nil {
+	// Durable child creation succeeded and already consumed the draft under
+	// the creation lock. This revision-checked sweep is a defensive idempotent
+	// finish for legacy state (a draft committed after the receipt's revision
+	// is never deleted): the receipt on the child relationship keeps a
+	// repeated launch idempotent even when this pass finds nothing to remove.
+	if err := m.Store.DeleteReviewFeedbackDraftIfRevision(parentID, receipt.DraftRevision); err != nil {
 		return nil, err
 	}
 	return &ReviewFeedbackLaunchResult{Child: child, Changed: changed, Omitted: omitted, Deferred: deferred}, nil
@@ -232,7 +235,9 @@ func (m *Manager) replayPendingReviewFeedbackLaunch(parent *Feature, expectedRev
 	if err != nil {
 		return nil, true, fmt.Errorf("loading replayed review-feedback child: %w", err)
 	}
-	if err := m.Store.DeleteReviewFeedbackDraft(parent.ID); err != nil {
+	// Finish the draft cleanup the interrupted launch could not: only the
+	// draft the receipt consumed may be deleted, never a newer revision.
+	if err := m.Store.DeleteReviewFeedbackDraftIfRevision(parent.ID, receipt.DraftRevision); err != nil {
 		return nil, true, err
 	}
 	return &ReviewFeedbackLaunchResult{
@@ -258,7 +263,10 @@ func (m *Manager) replayActiveReviewFeedbackLaunch(parent *Feature, expectedRevi
 	if !reviewFeedbackGateEqual(receipt.Gate, gate) {
 		return nil, true, &ActiveChildExistsError{ParentID: parent.ID, ChildID: child.ID}
 	}
-	if err := m.Store.DeleteReviewFeedbackDraft(parent.ID); err != nil {
+	// Idempotently finish the draft cleanup of the original launch: only the
+	// revision the receipt consumed may be deleted; a newer draft belongs to
+	// a later editing session and must survive.
+	if err := m.Store.DeleteReviewFeedbackDraftIfRevision(parent.ID, receipt.DraftRevision); err != nil {
 		return nil, true, err
 	}
 	return &ReviewFeedbackLaunchResult{

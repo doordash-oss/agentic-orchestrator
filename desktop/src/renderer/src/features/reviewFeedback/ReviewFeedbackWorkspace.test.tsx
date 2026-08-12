@@ -728,7 +728,7 @@ describe('ReviewFeedbackWorkspace', () => {
     expect(onBack).toHaveBeenCalledOnce();
   });
 
-  it('surfaces a zero-launchable-selection rejection without discarding the draft', async () => {
+  it('recovers a zero-launchable rejection by adopting the latest feedback, then focuses the notice', async () => {
     const { mock, user } = await renderWorkspace();
     mock.api.launchReviewFeedbackChild.mockRejectedValue(
       Object.assign(new Error('review_feedback_zero_launchable_selection: nothing launchable'), {
@@ -736,8 +736,39 @@ describe('ReviewFeedbackWorkspace', () => {
       }),
     );
     await user.click(screen.getByRole('button', { name: /Launch child \(2\)/ }));
-    expect(await screen.findByRole('alert')).toHaveTextContent(/nothing launchable/);
+    // The draft is preserved and the latest authoritative feedback is
+    // adopted before the explanatory notice takes focus — never a repeat of
+    // the same launch against the unchanged stale view.
+    await waitFor(() => expect(mock.api.fetchReviewFeedback).toHaveBeenCalledTimes(2));
+    const notice = await screen.findByRole('alert');
+    expect(notice).toHaveTextContent('Selected feedback is gone');
+    expect(notice).toHaveTextContent(/nothing launchable/);
+    expect(notice).toHaveFocus();
+    // The adopted view (not the stale launch view) is live again.
     expect(screen.getByLabelText(/Consider extracting the parser/)).toBeChecked();
+    expect(screen.getByRole('button', { name: /Launch child \(2\)/ })).toBeEnabled();
+  });
+
+  it('keeps a focused retry when the zero-launchable refresh itself fails', async () => {
+    const { mock, user } = await renderWorkspace();
+    mock.api.launchReviewFeedbackChild.mockRejectedValue(
+      Object.assign(new Error('review_feedback_zero_launchable_selection: nothing launchable'), {
+        code: 'review_feedback_zero_launchable_selection',
+      }),
+    );
+    mock.api.fetchReviewFeedback.mockRejectedValueOnce(new Error('fetch unavailable'));
+    await user.click(screen.getByRole('button', { name: /Launch child \(2\)/ }));
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('Selections could not be reloaded');
+    expect(alert).toHaveTextContent(/still launchable/);
+    expect(alert).toHaveFocus();
+    // The generic launch path never returns; the focused retry reconciles.
+    expect(screen.queryByText(/fix the issue and choose Launch again/)).not.toBeInTheDocument();
+    mock.api.fetchReviewFeedback.mockResolvedValueOnce(draftView({ revision: 9 }));
+    await user.click(screen.getByRole('button', { name: 'Retry reload' }));
+    const notice = await screen.findByRole('alert');
+    expect(notice).toHaveTextContent('Selected feedback is gone');
+    expect(screen.getByRole('button', { name: /Launch child \(2\)/ })).toBeEnabled();
   });
 
   describe('unsaved-choice recovery', () => {

@@ -169,7 +169,8 @@ func TestLaunchReplayRollsForwardPendingCreationIntent(t *testing.T) {
 	gate := true
 	// Inject a crash at the child-save boundary: the durable intent (with
 	// the launch receipt) is committed, the child is not materialized, and
-	// the draft is not yet consumed.
+	// the draft was already consumed under the creation lock, so replay only
+	// has to finish the roll-forward.
 	mgr.Store.SetSaveHook(&feature.StoreSaveHook{FailOnCall: 2})
 	if _, err := mgr.LaunchReviewFeedbackChildFromDraft(parent.ID, draft.Revision, &gate); err == nil || !strings.Contains(err.Error(), "saving child") {
 		t.Fatalf("interrupted launch error = %v, want injected child-save failure", err)
@@ -282,6 +283,49 @@ func TestLaunchReplayRejectsStaleReceiptWithoutMutation(t *testing.T) {
 	}
 	if children.Active == nil || children.Active.ID != first.Child.ID || len(children.Closed) != 0 {
 		t.Fatalf("relationship children = %+v, want only the original child", children)
+	}
+}
+
+func TestLaunchReplayCleanupNeverDeletesNewerDraftRevision(t *testing.T) {
+	mgr, parent, draft := launchReceiptManager(t)
+	installLaunchFetchStub(t, launchReceiptFetch())
+
+	gate := true
+	if _, err := mgr.LaunchReviewFeedbackChildFromDraft(parent.ID, draft.Revision, &gate); err != nil {
+		t.Fatalf("first launch error = %v", err)
+	}
+	// The completed launch consumed the draft inside the creation
+	// transaction: nothing remains for the post-create sweep to remove.
+	if kept, err := mgr.Store.LoadReviewFeedbackDraft(parent.ID); err != nil || kept != nil {
+		t.Fatalf("draft after launch = %+v (err %v), want consumed under the creation lock", kept, err)
+	}
+
+	// A new editing session commits its own acknowledged selection after the
+	// launch (a revision the receipt never pinned). Replaying the launch
+	// receipt must never delete it.
+	newer := feature.ReconcileReviewFeedbackDraft(parent, nil, reviewedComments())
+	if err := mgr.Store.SaveReviewFeedbackDraft(parent.ID, newer, 0); err != nil {
+		t.Fatal(err)
+	}
+	selection := map[feature.StableReviewFeedbackRef]bool{newer.Items[0].StableRef: false}
+	if err := feature.ApplyReviewFeedbackSelection(newer, selection); err != nil {
+		t.Fatal(err)
+	}
+	newer.Revision++
+	if err := mgr.Store.SaveReviewFeedbackDraft(parent.ID, newer, 1); err != nil {
+		t.Fatal(err)
+	}
+
+	replayed, err := mgr.LaunchReviewFeedbackChildFromDraft(parent.ID, draft.Revision, &gate)
+	if err != nil {
+		t.Fatalf("replay launch error = %v", err)
+	}
+	if !replayed.Replayed {
+		t.Fatalf("replay = %+v, want replayed original launch", replayed)
+	}
+	kept, err := mgr.Store.LoadReviewFeedbackDraft(parent.ID)
+	if err != nil || kept == nil || kept.Revision != newer.Revision {
+		t.Fatalf("draft after replay = %+v (err %v), want newer revision %d preserved", kept, err, newer.Revision)
 	}
 }
 

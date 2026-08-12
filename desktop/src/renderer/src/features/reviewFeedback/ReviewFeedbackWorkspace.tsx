@@ -61,6 +61,15 @@ import {
   type ReviewFeedbackDraftCommentView,
 } from './reviewFeedbackDraftApi';
 
+/**
+ * The launch was structurally sound but every selected comment disappeared
+ * since the workspace loaded (addressed or deleted upstream). This is its own
+ * recovery transition — never the generic launch-failure path: the draft is
+ * preserved server-side, so the workspace fetches and adopts the latest
+ * authoritative feedback and only then focuses the explanatory notice.
+ */
+const ZERO_LAUNCHABLE_CODE = 'review_feedback_zero_launchable_selection';
+
 export interface ReviewFeedbackWorkspaceProps {
   featureId: string;
   snapshot: FeatureSnapshot;
@@ -299,10 +308,14 @@ export function ReviewFeedbackWorkspace({
         const parsed = parseIpcError(err);
         // A launch conflict means this draft view was stale; the draft itself
         // (and the committed selection) is preserved — reconcile through the
-        // same conflict-reload transition as a conflicting save.
+        // same conflict-reload transition as a conflicting save. A
+        // zero-launchable rejection recovers through the same adoption
+        // pipeline: repeat launches against the unchanged stale view would
+        // only repeat the error.
         if (
           parsed.code === 'review_feedback_revision_conflict' ||
-          parsed.code === 'review_feedback_draft_not_found'
+          parsed.code === 'review_feedback_draft_not_found' ||
+          parsed.code === ZERO_LAUNCHABLE_CODE
         ) {
           draft.recoverFromConflict(parsed);
           return;
@@ -469,9 +482,9 @@ export function ReviewFeedbackWorkspace({
         >
           <b className="create-form__error-code">Selections could not be reloaded</b>
           <p className="create-form__error-message">
-            Another writer committed changes to this draft first, but reloading their committed view
-            failed. Your screen may be stale; nothing else can change until the saved selections
-            load successfully.
+            {recovery.conflict.code === ZERO_LAUNCHABLE_CODE
+              ? 'None of the comments you kept selected are still launchable, but reloading the latest feedback failed. Your screen may be stale; nothing else can change until the reload succeeds.'
+              : 'Another writer committed changes to this draft first, but reloading their committed view failed. Your screen may be stale; nothing else can change until the saved selections load successfully.'}
           </p>
           <p className="review-feedback-recovery__detail">
             Error detail: {recovery.error.code}
@@ -487,12 +500,25 @@ export function ReviewFeedbackWorkspace({
 
       {draft.conflictNotice !== null ? (
         <div role="alert" className="create-form__error" ref={conflictAlertRef} tabIndex={-1}>
-          <b className="create-form__error-code">Selections reloaded</b>
-          <p className="create-form__error-message">
-            Another writer committed changes to this draft first. Your selections were reloaded from
-            their committed view; any unsent edits were discarded and the workspace is ready for new
-            choices.
-          </p>
+          {draft.conflictNotice.code === ZERO_LAUNCHABLE_CODE ? (
+            <>
+              <b className="create-form__error-code">Selected feedback is gone</b>
+              <p className="create-form__error-message">
+                None of the comments you kept selected are still launchable — they were addressed or
+                removed since this workspace loaded. The latest feedback was reloaded below; choose
+                what to address and launch again.
+              </p>
+            </>
+          ) : (
+            <>
+              <b className="create-form__error-code">Selections reloaded</b>
+              <p className="create-form__error-message">
+                Another writer committed changes to this draft first. Your selections were reloaded
+                from their committed view; any unsent edits were discarded and the workspace is
+                ready for new choices.
+              </p>
+            </>
+          )}
           <p className="review-feedback-recovery__detail">
             Error detail: {draft.conflictNotice.code}
             {draft.conflictNotice.message !== '' ? ` — ${draft.conflictNotice.message}` : ''}

@@ -56,10 +56,10 @@ type reviewFeedbackLaunchReceiptReader interface {
 	ActiveReviewFeedbackLaunchReceipt(parentID string) (*feature.Feature, *feature.ReviewFeedbackLaunchReceipt, error)
 }
 
-// reviewFeedbackDraftCleaner deletes a pending draft consumed by a durable
-// launch receipt.
+// reviewFeedbackDraftCleaner atomically deletes a pending draft consumed by a
+// durable launch receipt, never a newer committed revision.
 type reviewFeedbackDraftCleaner interface {
-	DeleteReviewFeedbackDraft(parentID string) error
+	DeleteReviewFeedbackDraftIfRevision(parentID string, revision int64) error
 }
 
 func reviewFeedbackFetchPath(featureID string) string {
@@ -160,8 +160,10 @@ func (h *apiHandler) handleReviewFeedbackFetchTrusted(w http.ResponseWriter, r *
 					writeAPIError(w, http.StatusInternalServerError, "internal_error", "read review-feedback launch receipt", nil)
 					return
 				}
-				if receipt != nil && receipt.DraftRevision == existing.Revision {
-					if delErr := deleter.DeleteReviewFeedbackDraft(parent.ID); delErr != nil {
+			if receipt != nil && receipt.DraftRevision == existing.Revision {
+				// Compare-and-delete under the store lock: a revision
+				// committed after the receipt is never treated as consumed.
+				if delErr := deleter.DeleteReviewFeedbackDraftIfRevision(parent.ID, receipt.DraftRevision); delErr != nil {
 						writeAPIError(w, http.StatusInternalServerError, "internal_error", "delete review feedback draft consumed by launch", nil)
 						return
 					}

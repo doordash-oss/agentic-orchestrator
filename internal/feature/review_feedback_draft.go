@@ -204,6 +204,30 @@ func (s *Store) DeleteReviewFeedbackDraft(parentID string) error {
 	return s.deleteReviewFeedbackDraftUnlocked(parentID)
 }
 
+// DeleteReviewFeedbackDraftIfRevision removes the pending draft only when
+// its committed revision still equals revision, so launch replay and
+// recovery cleanup consume exactly the draft a launch receipt recorded and
+// never delete a newer draft acknowledged afterward. It is a no-op when no
+// draft exists or the stored revision differs.
+func (s *Store) DeleteReviewFeedbackDraftIfRevision(parentID string, revision int64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.deleteReviewFeedbackDraftIfRevisionUnlocked(parentID, revision)
+}
+
+// deleteReviewFeedbackDraftIfRevisionUnlocked is the caller-holds-the-lock
+// variant of DeleteReviewFeedbackDraftIfRevision.
+func (s *Store) deleteReviewFeedbackDraftIfRevisionUnlocked(parentID string, revision int64) error {
+	existing, err := s.LoadReviewFeedbackDraft(parentID)
+	if err != nil {
+		return err
+	}
+	if existing == nil || existing.Revision != revision {
+		return nil
+	}
+	return s.deleteReviewFeedbackDraftUnlocked(parentID)
+}
+
 // deleteReviewFeedbackDraftUnlocked removes the pending draft while the
 // caller already holds the store lock. It is a no-op when no draft exists.
 func (s *Store) deleteReviewFeedbackDraftUnlocked(parentID string) error {

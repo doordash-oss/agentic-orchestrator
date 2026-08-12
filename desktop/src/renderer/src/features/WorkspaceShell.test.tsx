@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
@@ -39,7 +39,10 @@ const SECOND_FEATURE_ID = '1234abcd5678ef90';
 function settingsWithActive(featureId: string | null = FEATURE_ID): Settings {
   return {
     ...defaultSettings(),
-    shell: { activeFeatureId: featureId, sidebarCollapsed: false },
+    shell: {
+      featureByServer: featureId === null ? {} : { 'default-runtime': featureId },
+      sidebarCollapsed: false,
+    },
   };
 }
 
@@ -339,7 +342,7 @@ describe('WorkspaceShell sidebar', () => {
     expect(selected).toHaveLength(1);
   });
 
-  it('restores the previously active feature from shell.activeFeatureId and persists a new selection', async () => {
+  it("restores the previously active feature from the shell's per-server map and persists a new selection", async () => {
     const mock = installAgenticoMock({
       settings: settingsWithActive(FEATURE_ID),
       features: [summaryOf(featureSnapshot({ id: FEATURE_ID, name: 'Search revamp' }))],
@@ -358,7 +361,7 @@ describe('WorkspaceShell sidebar', () => {
     await userEvent.click(screen.getByRole('option', { name: 'Overview' }));
     await waitFor(() =>
       expect(mock.api.updateSettings).toHaveBeenCalledWith({
-        shell: { activeFeatureId: null, sidebarCollapsed: false },
+        shell: { setActiveFeature: { serverKey: 'default-runtime', featureId: null } },
       }),
     );
   });
@@ -465,7 +468,7 @@ describe('WorkspaceShell sidebar', () => {
     ).toBeInTheDocument();
     await waitFor(() =>
       expect(mock.api.updateSettings).toHaveBeenCalledWith({
-        shell: { activeFeatureId: FEATURE_ID, sidebarCollapsed: false },
+        shell: { setActiveFeature: { serverKey: 'default-runtime', featureId: FEATURE_ID } },
       }),
     );
     expect(mock.api.getFeature).toHaveBeenCalledWith(FEATURE_ID);
@@ -596,7 +599,7 @@ describe('WorkspaceShell sidebar', () => {
     expect(screen.queryByRole('region', { name: 'Feature Search revamp' })).not.toBeInTheDocument();
     await waitFor(() =>
       expect(mock.api.updateSettings).toHaveBeenCalledWith({
-        shell: { activeFeatureId: null, sidebarCollapsed: false },
+        shell: { setActiveFeature: { serverKey: 'default-runtime', featureId: null } },
       }),
     );
   });
@@ -632,7 +635,7 @@ describe('WorkspaceShell sidebar', () => {
     );
     await waitFor(() =>
       expect(mock.api.updateSettings).toHaveBeenCalledWith({
-        shell: { activeFeatureId: SECOND_FEATURE_ID, sidebarCollapsed: false },
+        shell: { setActiveFeature: { serverKey: 'default-runtime', featureId: SECOND_FEATURE_ID } },
       }),
     );
   });
@@ -797,7 +800,7 @@ describe('WorkspaceShell toolbar', () => {
     await userEvent.click(toggle);
     await waitFor(() =>
       expect(mock.api.updateSettings).toHaveBeenCalledWith({
-        shell: { activeFeatureId: null, sidebarCollapsed: true },
+        shell: { sidebarCollapsed: true },
       }),
     );
     // Collapsing hides the sidebar header with the sidebar, so the same
@@ -835,6 +838,7 @@ describe('WorkspaceShell toolbar', () => {
         stage: 'ready',
         detail: 'Connected to the app-owned runtime.',
         ownership: 'app-owned',
+        kind: 'local',
       },
     });
     const { rerender } = render(<WorkspaceShell amaSessionActive />);
@@ -862,6 +866,86 @@ describe('WorkspaceShell toolbar', () => {
 
     expect(await screen.findByText('Runtime needs attention')).toBeVisible();
     expect(screen.queryByText('Ask Agentico is active')).not.toBeInTheDocument();
+  });
+
+  it('shows the named server in the footer instead of the generic ready label', async () => {
+    installAgenticoMock({
+      settings: settingsWithActive(null),
+      features: [],
+      connection: {
+        status: 'ready',
+        stage: 'ready',
+        detail: 'Connected to an externally managed Agentico runtime.',
+        ownership: 'external',
+        kind: 'remote',
+        serverName: 'frothy-macchiato',
+      },
+    });
+    render(<WorkspaceShell />);
+
+    // The footer pill is now the server control: the name rides its button.
+    expect(
+      await screen.findByRole('button', { name: 'frothy-macchiato — switch server' }),
+    ).toBeVisible();
+    const footer = document.querySelector('.sidebar__footer')!;
+    expect(footer).toHaveTextContent('frothy-macchiato');
+    expect(screen.queryByText('Runtime ready')).toBeNull();
+    // Two controls: the server switcher and the Ask affordance.
+    expect(footer.getElementsByTagName('button')).toHaveLength(2);
+  });
+
+  it('falls back to "Runtime ready" for a ready but name-less server', async () => {
+    installAgenticoMock({
+      settings: settingsWithActive(null),
+      features: [],
+      connection: {
+        status: 'ready',
+        stage: 'ready',
+        detail: 'Connected to an externally managed Agentico runtime.',
+        ownership: 'external',
+        kind: 'remote',
+      },
+    });
+    render(<WorkspaceShell />);
+
+    expect(await screen.findByText('Runtime ready')).toBeVisible();
+  });
+
+  it('never shows the server name while connecting or needing attention', async () => {
+    installAgenticoMock({
+      settings: settingsWithActive(null),
+      features: [],
+      connection: {
+        status: 'discovering',
+        stage: 'discover',
+        detail: 'Looking for a running Agentico runtime.',
+        ownership: 'none',
+        serverName: 'frothy-macchiato',
+      },
+    });
+    render(<WorkspaceShell />);
+
+    expect(await screen.findByText('Connecting')).toBeVisible();
+    expect(screen.queryByText('frothy-macchiato')).toBeNull();
+  });
+
+  it('keeps the active-session label over a named server', async () => {
+    installAgenticoMock({
+      settings: settingsWithActive(null),
+      features: [],
+      connection: {
+        status: 'ready',
+        stage: 'ready',
+        detail: 'Connected to an externally managed Agentico runtime.',
+        ownership: 'external',
+        kind: 'remote',
+        serverName: 'frothy-macchiato',
+      },
+    });
+    render(<WorkspaceShell amaSessionActive />);
+
+    expect(await screen.findByText('Ask Agentico is active')).toBeVisible();
+    expect(screen.queryByText('frothy-macchiato')).toBeNull();
   });
 
   it('routes the sidebar footer AMA hint through onOpenAma', async () => {
@@ -1121,7 +1205,7 @@ describe('WorkspaceShell keyboard shortcuts', () => {
     fireEvent.keyDown(window, { key: 's', metaKey: true, ctrlKey: true });
     await waitFor(() =>
       expect(mock.api.updateSettings).toHaveBeenCalledWith({
-        shell: { activeFeatureId: null, sidebarCollapsed: true },
+        shell: { sidebarCollapsed: true },
       }),
     );
     expect(screen.getByRole('navigation', { name: 'Feature sidebar' })).toHaveAttribute(
@@ -1165,7 +1249,10 @@ describe('WorkspaceShell auto-collapse at narrow viewports', () => {
 
   it('stays collapsed at any width once the user has explicitly collapsed the sidebar', async () => {
     installAgenticoMock({
-      settings: { ...defaultSettings(), shell: { activeFeatureId: null, sidebarCollapsed: true } },
+      settings: {
+        ...defaultSettings(),
+        shell: { featureByServer: {}, sidebarCollapsed: true },
+      },
       features: [],
     });
     render(<WorkspaceShell />);
@@ -1327,6 +1414,7 @@ describe('WorkspaceShell native-menu UI state', () => {
     stage: 'ready',
     detail: 'Runtime ready.',
     ownership: 'app-owned',
+    kind: 'local',
   };
 
   function lastPush(mock: ReturnType<typeof installAgenticoMock>): MainWindowUiState {
@@ -1437,7 +1525,7 @@ describe('WorkspaceShell native-menu UI state', () => {
     rerender(<WorkspaceShell routeRequest={{ id: 12, event: { target: 'toggle-sidebar' } }} />);
     await waitFor(() =>
       expect(mock.api.updateSettings).toHaveBeenCalledWith({
-        shell: { activeFeatureId: null, sidebarCollapsed: true },
+        shell: { sidebarCollapsed: true },
       }),
     );
     expect(screen.getByRole('navigation', { name: 'Feature sidebar' })).toHaveAttribute(
@@ -1474,7 +1562,7 @@ describe('WorkspaceShell native-menu UI state', () => {
       await screen.findByRole('region', { name: 'Feature Search revamp' }),
     ).toBeInTheDocument();
     expect(mock.api.updateSettings).toHaveBeenCalledWith({
-      shell: { activeFeatureId: FEATURE_ID, sidebarCollapsed: false },
+      shell: { setActiveFeature: { serverKey: 'default-runtime', featureId: FEATURE_ID } },
     });
   });
 
@@ -1541,5 +1629,201 @@ describe('WorkspaceShell native-menu UI state', () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(screen.queryByRole('dialog')).toBeNull();
     expect(mock.api.dispatchFeatureAction).not.toHaveBeenCalled();
+  });
+});
+
+describe('WorkspaceShell per-server scoping', () => {
+  function readyAt(serverKey: string): ConnectionState {
+    return {
+      status: 'ready',
+      stage: 'ready',
+      detail: 'Connected.',
+      ownership: 'external',
+      kind: 'remote',
+      serverKey,
+      serverName: serverKey,
+    };
+  }
+
+  it("restores each server's active feature across a switch A→B→A", async () => {
+    const feature = featureSnapshot({ id: FEATURE_ID, name: 'Search revamp', status: 'Created' });
+    const mock = installAgenticoMock({
+      features: [summaryOf(feature)],
+      settings: {
+        ...defaultSettings(),
+        shell: {
+          featureByServer: { 'key-alpha': FEATURE_ID },
+          sidebarCollapsed: false,
+        },
+      },
+      connection: readyAt('key-alpha'),
+    });
+    render(<WorkspaceShell />);
+
+    // alpha's recorded selection is restored.
+    expect(await screen.findByRole('option', { name: /Search revamp/ })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
+
+    // server B has no recorded selection: the shell lands on Overview.
+    act(() => mock.emitConnection(readyAt('key-beta')));
+    await waitFor(() =>
+      expect(screen.getByRole('option', { name: 'Overview' })).toHaveAttribute(
+        'aria-selected',
+        'true',
+      ),
+    );
+    expect(screen.getByRole('option', { name: /Search revamp/ })).toHaveAttribute(
+      'aria-selected',
+      'false',
+    );
+
+    // Selecting on B persists under B's key, never A's.
+    await userEvent.click(screen.getByRole('option', { name: /Search revamp/ }));
+    await waitFor(() =>
+      expect(mock.api.updateSettings).toHaveBeenCalledWith({
+        shell: { setActiveFeature: { serverKey: 'key-beta', featureId: FEATURE_ID } },
+      }),
+    );
+
+    // Back on A the recorded selection is restored exactly.
+    act(() => mock.emitConnection(readyAt('key-alpha')));
+    await waitFor(() =>
+      expect(screen.getByRole('option', { name: /Search revamp/ })).toHaveAttribute(
+        'aria-selected',
+        'true',
+      ),
+    );
+  });
+});
+
+/**
+ * The "Switch Server…" route (menu item and palette command) must always
+ * land on a visible switcher: below the ~700px auto-collapse breakpoint the
+ * sidebar footer is display:none, so the control moves into the narrow dock.
+ */
+describe('WorkspaceShell routed server switcher', () => {
+  const READY: ConnectionState = {
+    status: 'ready',
+    stage: 'ready',
+    detail: 'Runtime ready.',
+    ownership: 'app-owned',
+    kind: 'local',
+    serverName: 'alpha',
+  };
+
+  function installReadySwitcherMock() {
+    const mock = installAgenticoMock({
+      settings: settingsWithActive(null),
+      features: [],
+      connection: READY,
+    });
+    const snapshot = {
+      rows: [
+        {
+          kind: 'local' as const,
+          serverKey: 'a'.repeat(64),
+          name: 'alpha',
+          runtimeDir: '/rt/alpha',
+          current: true,
+          health: 'healthy' as const,
+        },
+        {
+          kind: 'local' as const,
+          serverKey: 'b'.repeat(64),
+          name: 'beta',
+          runtimeDir: '/rt/beta',
+          current: false,
+          health: 'healthy' as const,
+        },
+      ],
+    };
+    mock.api.listServers.mockResolvedValue(snapshot);
+    mock.api.probeServers.mockResolvedValue(snapshot);
+    return mock;
+  }
+
+  it('opens a usable Servers listbox from the route while the shell is narrow', async () => {
+    matchMediaState.narrowShell = true;
+    const mock = installReadySwitcherMock();
+    const { rerender } = render(<WorkspaceShell />);
+    await screen.findByRole('option', { name: 'Overview' });
+    expect(screen.getByRole('navigation', { name: 'Feature sidebar' })).toHaveAttribute(
+      'data-collapsed',
+      'true',
+    );
+
+    rerender(<WorkspaceShell routeRequest={{ id: 31, event: { target: 'switch-server' } }} />);
+
+    const listbox = await screen.findByRole('listbox', { name: 'Servers' });
+    // Exactly one switcher surface exists, and it lives in the visible narrow
+    // dock — not the collapsed sidebar footer.
+    expect(screen.getAllByRole('listbox', { name: 'Servers' })).toHaveLength(1);
+    const dock = document.querySelector('.server-switcher-dock')!;
+    expect(dock).not.toBeNull();
+    expect(dock.contains(listbox)).toBe(true);
+    expect(document.querySelector('.sidebar__footer .sidebar__server-control')).toBeNull();
+    // Focus lands on the control the route is meant to focus.
+    expect(document.activeElement).toBe(dock.querySelector('.sidebar__server-control'));
+
+    // A listed server row can be picked — the switcher is fully usable here.
+    await userEvent.click(await screen.findByRole('option', { name: /beta at .+ — Available/ }));
+    expect(mock.api.switchConnectionServer).toHaveBeenCalledWith({
+      serverKey: 'b'.repeat(64),
+    });
+    await waitFor(() =>
+      expect(screen.queryByRole('listbox', { name: 'Servers' })).not.toBeInTheDocument(),
+    );
+  });
+
+  it('keeps the routed switcher in the sidebar footer at wide widths', async () => {
+    installReadySwitcherMock();
+    const { rerender } = render(<WorkspaceShell />);
+    await screen.findByRole('option', { name: 'Overview' });
+    expect(screen.getByRole('navigation', { name: 'Feature sidebar' })).toHaveAttribute(
+      'data-collapsed',
+      'false',
+    );
+
+    rerender(<WorkspaceShell routeRequest={{ id: 32, event: { target: 'switch-server' } }} />);
+
+    const listbox = await screen.findByRole('listbox', { name: 'Servers' });
+    expect(document.querySelector('.server-switcher-dock')).toBeNull();
+    expect(document.querySelector('.sidebar__footer')!.contains(listbox)).toBe(true);
+    expect(document.activeElement).toBe(
+      screen.getByRole('button', { name: 'alpha — switch server' }),
+    );
+    // Escape closes it, same as the direct-click open.
+    await userEvent.keyboard('{Escape}');
+    await waitFor(() =>
+      expect(screen.queryByRole('listbox', { name: 'Servers' })).not.toBeInTheDocument(),
+    );
+  });
+
+  it('does not reopen the switcher when the breakpoint is crossed after a route', async () => {
+    installReadySwitcherMock();
+    const { rerender } = render(<WorkspaceShell />);
+    await screen.findByRole('option', { name: 'Overview' });
+
+    rerender(<WorkspaceShell routeRequest={{ id: 33, event: { target: 'switch-server' } }} />);
+    await screen.findByRole('listbox', { name: 'Servers' });
+    await userEvent.keyboard('{Escape}');
+    await waitFor(() =>
+      expect(screen.queryByRole('listbox', { name: 'Servers' })).not.toBeInTheDocument(),
+    );
+
+    // Crossing into the narrow layout remounts the control in the dock; the
+    // consumed route must not replay there.
+    matchMediaState.narrowShell = true;
+    dispatchMediaChange('(max-width: 700px)', true);
+    await waitFor(() =>
+      expect(screen.getByRole('navigation', { name: 'Feature sidebar' })).toHaveAttribute(
+        'data-collapsed',
+        'true',
+      ),
+    );
+    expect(document.querySelector('.server-switcher-dock')).not.toBeNull();
+    expect(screen.queryByRole('listbox', { name: 'Servers' })).not.toBeInTheDocument();
   });
 });

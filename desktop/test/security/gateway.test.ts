@@ -76,6 +76,9 @@ function attachDeps(record: {
     registerSecret: () => undefined,
     sleep: () => Promise.resolve(),
     log: (line) => record.logs.push(line),
+    scanRegistry: () => ({ candidates: [], pruned: 0, rejected: [] }),
+    knownServers: () => ({ known: [], lastUsed: null }),
+    recordAttachedServer: () => undefined,
     timeouts: { pollIntervalMs: 1, launchReadyMs: 5 },
   };
 }

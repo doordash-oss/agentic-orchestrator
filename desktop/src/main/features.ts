@@ -8,7 +8,12 @@
  * separate, explicitly allowlisted operations dispatched through
  * `dispatchAction`.
  */
-import { isRequestTimeout, redactText } from '../shared/errors';
+import {
+  isRequestTimeout,
+  redactText,
+  requiresLocalServerError,
+  SafeErrorException,
+} from '../shared/errors';
 import {
   FeatureActionResponseSchema,
   ServerFeatureOperationalActionResponseSchema,
@@ -75,6 +80,7 @@ import {
   type SetupTaskView,
 } from '../shared/ipc';
 import type { ApiRequestInit } from './gateway/runtimeGateway';
+import { alwaysLocal, type LocalitySource } from './locality';
 import { serverRequest, type ServerTransport } from './serverClient';
 
 /** The authenticated transport surface the gateway provides. */
@@ -85,6 +91,13 @@ export interface FeatureServiceDeps {
   /** Fresh authoritative readiness (repository eligibility for creation). */
   readReadiness(): Promise<ReadinessSnapshot>;
   resolveRepositoryFiles(refs: readonly RepositoryFileRef[]): Promise<string[]>;
+  /**
+   * Gateway-owned locality of the active connection. While remote, submit
+   * boundaries refuse any locally staged image/attachment/repository-file
+   * path with E_REQUIRES_LOCAL_SERVER (a stale renderer draft must fail,
+   * never leak a local path) and forward staged upload references instead.
+   */
+  locality?: LocalitySource;
 }
 
 /** Concrete, safe next steps per structured server error code. */
@@ -114,6 +127,21 @@ const PHASE_MODEL_LABELS: ReadonlyArray<readonly [string, string]> = [
 
 const EFFORT_LEVELS = new Set<EffortLevel>(['auto', 'low', 'medium', 'high', 'xhigh', 'max']);
 
+/**
+ * Remote submit guard: while remotely connected, a locally shaped path
+ * payload (images/attachments/repository-file refs) fails with the locality
+ * error rather than leaking a path the server cannot read. Local payloads
+ * and staged upload references pass through untouched.
+ */
+function assertNoLocalPathsRemotely(remote: boolean, ...groups: readonly string[][]): void {
+  if (!remote) return;
+  for (const group of groups) {
+    if (group.length > 0) {
+      throw new SafeErrorException(requiresLocalServerError());
+    }
+  }
+}
+
 // Description generation is a synchronous utility LLM session. Its session
 // idle bounds are five minutes, so leave transport cleanup time beyond that
 // without weakening the 30-second default for ordinary API calls.
@@ -128,8 +156,11 @@ const LONG_MUTATION_ACTIONS: ReadonlySet<string> = new Set(['publish', 'merge'])
 
 export class FeatureService {
   private readonly actionFlights = new Map<string, Promise<FeatureActionResult>>();
+  private readonly locality: LocalitySource;
 
-  constructor(private readonly deps: FeatureServiceDeps) {}
+  constructor(private readonly deps: FeatureServiceDeps) {
+    this.locality = deps.locality ?? alwaysLocal;
+  }
 
   /**
    * Fresh creation context in one main-process composition: repository
@@ -180,7 +211,20 @@ export class FeatureService {
   async createFeature(input: CreateFeatureInput): Promise<CreateFeatureResult> {
     // Defense in depth: the IPC layer already validated this shape.
     const validated = validateWithSchema(input, CreateFeatureInputSchema);
-    const repositoryAttachments = await this.deps.resolveRepositoryFiles(validated.repositoryFiles);
+    const remote = this.locality() === 'remote';
+    // Remote submit boundary: refuse locally staged paths outright (a
+    // pre-switch draft must fail, not leak a path the server cannot read);
+    // staged upload references travel as image_uploads/attachment_uploads.
+    assertNoLocalPathsRemotely(
+      remote,
+      validated.images,
+      validated.attachments,
+      // Repository-file references resolve to local paths; refuse remotely.
+      validated.repositoryFiles.map((ref) => `${ref.repoKey}:${ref.path}`),
+    );
+    const repositoryAttachments = remote
+      ? []
+      : await this.deps.resolveRepositoryFiles(validated.repositoryFiles);
     const body = await this.api('/api/v1/features', {
       method: 'POST',
       body: {
@@ -190,6 +234,12 @@ export class FeatureService {
         ...(validated.useCurrentBranch ? { use_current_branch: true } : {}),
         images: validated.images,
         attachments: [...validated.attachments, ...repositoryAttachments],
+        ...(remote
+          ? {
+              image_uploads: validated.imageUploads,
+              attachment_uploads: validated.attachmentUploads,
+            }
+          : {}),
         pipeline: validated.pipeline,
         risk_level: validated.riskLevel,
         inquireness: validated.inquireness,
@@ -334,18 +384,35 @@ export class FeatureService {
     request: LaunchRefactorChildRequest,
   ): Promise<LaunchRefactorChildResult> {
     const input = validateWithSchema(request, LaunchRefactorChildRequestSchema);
-    // Referenced repository files travel as attachments, as in creation.
-    const repositoryAttachments = await this.deps.resolveRepositoryFiles(
-      input.repositoryFiles ?? [],
+    const remote = this.locality() === 'remote';
+    // Remote submit boundary: refuse locally staged paths outright; staged
+    // upload references travel as image_uploads/attachment_uploads.
+    assertNoLocalPathsRemotely(
+      remote,
+      input.images ?? [],
+      input.attachments ?? [],
+      (input.repositoryFiles ?? []).map((ref) => `${ref.repoKey}:${ref.path}`),
     );
-    const attachments = [...(input.attachments ?? []), ...repositoryAttachments];
+    // Referenced repository files travel as attachments, as in creation.
+    const repositoryAttachments = remote
+      ? []
+      : await this.deps.resolveRepositoryFiles(input.repositoryFiles ?? []);
+    const attachments = remote ? [] : [...(input.attachments ?? []), ...repositoryAttachments];
     const body = await this.api(`/api/v1/features/${input.parentId}/actions/refactor`, {
       method: 'POST',
       body: {
         name: input.name,
         ...(input.description === undefined ? {} : { description: input.description }),
-        ...(input.images === undefined ? {} : { images: input.images }),
+        ...(remote || input.images === undefined ? {} : { images: input.images }),
         ...(attachments.length === 0 ? {} : { attachments }),
+        ...(remote
+          ? {
+              ...(input.imageUploads === undefined ? {} : { image_uploads: input.imageUploads }),
+              ...(input.attachmentUploads === undefined
+                ? {}
+                : { attachment_uploads: input.attachmentUploads }),
+            }
+          : {}),
         ...(input.pipeline === undefined ? {} : { pipeline: input.pipeline }),
         ...(input.checkpoints === undefined
           ? {}

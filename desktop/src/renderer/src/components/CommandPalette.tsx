@@ -14,7 +14,9 @@ import {
 } from '../../../shared/commands';
 import { activeFeatureCommandTarget, runFeatureCommand } from '../features/featureCommands';
 import { displayPhaseLabel, displayStatusLabel } from '../features/featureView';
+import { DEFAULT_RUNTIME_ID } from '../../../shared/ipc';
 import type { AppRouteEvent, FeatureSummaryView, RoutedRequest } from '../../../shared/ipc';
+import { useConnectionState } from '../hooks';
 
 /**
  * The palette lists two kinds of row: the command catalogue, grouped by its own
@@ -57,6 +59,7 @@ export function CommandPalette({
   onRoute(event: AppRouteEvent): void;
 }) {
   const [open, setOpen] = useState(false);
+  const connection = useConnectionState();
   const [query, setQuery] = useState('');
   const [busy, setBusy] = useState(false);
   const [activeFeatureId, setActiveFeatureId] = useState<string | null>(null);
@@ -122,7 +125,9 @@ export function CommandPalette({
     window.agentico
       .getSettings()
       .then((settings) => {
-        const activeId = selectedFeatureId ?? settings.shell.activeFeatureId;
+        // The selection is scoped to the connected server's identity key.
+        const scoped = settings.shell.featureByServer[connection.serverKey ?? DEFAULT_RUNTIME_ID];
+        const activeId = selectedFeatureId ?? scoped ?? null;
         if (alive) setActiveFeatureId(activeId);
         if (activeId === null) return null;
         return window.agentico.getFeature(activeId);
@@ -146,7 +151,7 @@ export function CommandPalette({
     return () => {
       alive = false;
     };
-  }, [open]);
+  }, [open, connection.serverKey]);
 
   const entries = useMemo(
     () => buildEntries({ ready, activeFeatureId, activeActions, onRoute, close }),

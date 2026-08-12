@@ -1,10 +1,12 @@
 /**
  * Owner-only, schema-versioned, atomically-replaced local settings.
  *
- * Contents are strictly app-local presentation/runtime-selection data
- * (runtime selection, window bounds, theme). No features, runs, server
- * configuration, credentials, or server-domain snapshots are ever stored
- * here, and the strict schema fails closed on any foreign field.
+ * Contents are app-local presentation/runtime-selection data (runtime
+ * selection, window bounds, theme) plus the multi-server attachment memory
+ * (the bounded known-servers list and the last-used pointer). No features,
+ * runs, server configuration, credentials, tokens, or server-domain snapshots
+ * are ever stored here, and the strict schema fails closed on any foreign
+ * field.
  *
  * On unreadable, truncated, or version-incompatible documents the store
  * backs the file up to `settings.json.bak-<n>` (deterministic counter),
@@ -18,9 +20,12 @@ import { assertNoPrototypePollution, assertWithinByteSize } from '../shared/sani
 import {
   AmaPrefsSchema,
   FeatureIdSchema,
+  MAX_KNOWN_SERVERS,
   NotificationPrefsSchema,
   SettingsPatchSchema,
   SettingsSchema,
+  SettingsWindowPrefsSchema,
+  ShellPrefsSchema,
   ThemePreferenceSchema,
   WindowBoundsSchema,
   WizardPrefsSchema,
@@ -28,7 +33,11 @@ import {
   defaultNotificationPrefs,
   defaultSettings,
   defaultSettingsWindowPrefs,
+  defaultShellPrefs,
   defaultWizardPrefs,
+  isPlainHttpBaseUrl,
+  applyServersPatch,
+  applyShellPatch,
   type Settings,
   type SettingsPatch,
   type ThemePreference,
@@ -78,14 +87,30 @@ const SettingsSchemaV1 = z.strictObject({
 type SettingsV1 = z.output<typeof SettingsSchemaV1>;
 
 /**
- * Upgrades a validated v1 document to v2 in place: `tabs.open` (and any
- * per-tab `selectedRunNumber`) is dropped entirely, and `tabs.activeFeatureId`
- * becomes `shell.activeFeatureId` — mapped to `null` when it was the
- * Settings-tab sentinel. Every other field is carried over byte-for-byte;
- * fields introduced after v2 (the Settings window's own bounds and pane) take
- * their defaults, exactly as they do for an untouched v2 document.
+ * Shape of the pre-v4 shell section (a single global active feature id), kept
+ * ONLY so `load()` can validate and migrate v2/v3 files still on disk. v4
+ * replaces it with the per-server `featureByServer` map; new code must only
+ * ever see the current ShellPrefsSchema.
  */
-function migrateSettingsV1ToV2(v1: SettingsV1): Settings {
+const ShellPrefsSchemaV3 = z.strictObject({
+  activeFeatureId: FeatureIdSchema.nullable(),
+  sidebarCollapsed: z.boolean(),
+});
+
+type ShellPrefsV3 = z.output<typeof ShellPrefsSchemaV3>;
+
+function defaultShellPrefsV3(): ShellPrefsV3 {
+  return { activeFeatureId: null, sidebarCollapsed: false };
+}
+
+/**
+ * Upgrades a validated v1 document to v2: `tabs.open` (and any per-tab
+ * `selectedRunNumber`) is dropped entirely, and `tabs.activeFeatureId` becomes
+ * `shell.activeFeatureId` — mapped to `null` when it was the Settings-tab
+ * sentinel. Every other field is carried over byte-for-byte; fields introduced
+ * in v2 (the Settings window's own bounds and pane) take their defaults.
+ */
+function migrateSettingsV1ToV2(v1: SettingsV1): SettingsV2 {
   const activeFeatureId =
     v1.tabs.activeFeatureId === SETTINGS_TAB_SENTINEL ? null : v1.tabs.activeFeatureId;
   return {
@@ -98,6 +123,170 @@ function migrateSettingsV1ToV2(v1: SettingsV1): Settings {
     notifications: v1.notifications,
     shell: { activeFeatureId, sidebarCollapsed: false },
     settingsWindow: defaultSettingsWindowPrefs(),
+  };
+}
+
+/**
+ * Shape of a v3/v4 known-server entry, kept ONLY so `load()` can validate and
+ * migrate files written before the local/remote known-servers split: those
+ * versions have no `kind`/`nickname` and their `runtimeDir` was
+ * unconditionally required (every pre-v5 entry is by definition a local
+ * runtime attachment, so the v4→v5 migration tags them `kind: 'local'`).
+ */
+const KnownServerSchemaV4 = z.strictObject({
+  serverKey: z.string().min(1).max(64),
+  name: z.string().max(64),
+  baseUrl: z.string().max(256).refine(isPlainHttpBaseUrl, {
+    message: 'baseUrl must be a plain http URL',
+  }),
+  runtimeDir: z.string().max(4096),
+  lastSeenAt: z
+    .string()
+    .max(64)
+    .refine((value) => !Number.isNaN(Date.parse(value)), {
+      message: 'lastSeenAt must be an ISO 8601 timestamp',
+    }),
+});
+
+const ServersPrefsSchemaV4 = z.strictObject({
+  known: z.array(KnownServerSchemaV4).max(MAX_KNOWN_SERVERS),
+  lastUsed: z.string().max(64).nullable(),
+});
+
+type ServersPrefsV4 = z.output<typeof ServersPrefsSchemaV4>;
+
+function defaultServersPrefsV4(): ServersPrefsV4 {
+  return { known: [], lastUsed: null };
+}
+
+/**
+ * Shape of a schema-version-3 settings document, kept ONLY so `load()` can
+ * validate and migrate files written before settings were scoped per server.
+ * Not exported: new code must only ever see the current SettingsSchema.
+ */
+const SettingsSchemaV3 = z.strictObject({
+  schemaVersion: z.literal(3),
+  runtime: z.strictObject({ selection: z.string().max(200).nullable() }),
+  window: z.strictObject({ bounds: WindowBoundsSchema.optional() }),
+  theme: ThemePreferenceSchema,
+  wizard: WizardPrefsSchema.default(defaultWizardPrefs()),
+  ama: AmaPrefsSchema.default(defaultAmaPrefs()),
+  notifications: NotificationPrefsSchema.default(defaultNotificationPrefs()),
+  shell: ShellPrefsSchemaV3.default(defaultShellPrefsV3()),
+  settingsWindow: SettingsWindowPrefsSchema.default(defaultSettingsWindowPrefs()),
+  servers: ServersPrefsSchemaV4.default(defaultServersPrefsV4()),
+});
+
+type SettingsV3 = z.output<typeof SettingsSchemaV3>;
+
+/**
+ * Upgrades a validated v3 document to v4: every field is carried over
+ * byte-for-byte except `shell.activeFeatureId`, which becomes the
+ * `featureByServer` entry for the last-used server when both exist, and is
+ * dropped otherwise (there is no server identity to scope it to).
+ */
+function migrateSettingsV3ToV4(v3: SettingsV3): SettingsV4 {
+  const lastUsed = v3.servers.lastUsed;
+  const activeFeatureId = v3.shell.activeFeatureId;
+  return {
+    schemaVersion: 4,
+    runtime: v3.runtime,
+    window: v3.window,
+    theme: v3.theme,
+    wizard: v3.wizard,
+    ama: v3.ama,
+    notifications: v3.notifications,
+    shell: {
+      featureByServer:
+        lastUsed !== null && activeFeatureId !== null ? { [lastUsed]: activeFeatureId } : {},
+      sidebarCollapsed: v3.shell.sidebarCollapsed,
+    },
+    settingsWindow: v3.settingsWindow,
+    servers: v3.servers,
+  };
+}
+
+/**
+ * Shape of a schema-version-4 settings document, kept ONLY so `load()` can
+ * validate and migrate files written before the local/remote known-servers
+ * split. Not exported: new code must only ever see the current
+ * SettingsSchema.
+ */
+const SettingsSchemaV4 = z.strictObject({
+  schemaVersion: z.literal(4),
+  runtime: z.strictObject({ selection: z.string().max(200).nullable() }),
+  window: z.strictObject({ bounds: WindowBoundsSchema.optional() }),
+  theme: ThemePreferenceSchema,
+  wizard: WizardPrefsSchema.default(defaultWizardPrefs()),
+  ama: AmaPrefsSchema.default(defaultAmaPrefs()),
+  notifications: NotificationPrefsSchema.default(defaultNotificationPrefs()),
+  shell: ShellPrefsSchema.default(defaultShellPrefs()),
+  settingsWindow: SettingsWindowPrefsSchema.default(defaultSettingsWindowPrefs()),
+  servers: ServersPrefsSchemaV4.default(defaultServersPrefsV4()),
+});
+
+type SettingsV4 = z.output<typeof SettingsSchemaV4>;
+
+/**
+ * Upgrades a validated v4 document to v5: every known-server entry gains
+ * `kind: 'local'` (v4 predates the local/remote split — every persisted
+ * entry was a local runtime attachment) and every other field, including
+ * ordering and the last-used pointer, is carried over byte-for-byte.
+ */
+function migrateSettingsV4ToV5(v4: SettingsV4): Settings {
+  return {
+    schemaVersion: 5,
+    runtime: v4.runtime,
+    window: v4.window,
+    theme: v4.theme,
+    wizard: v4.wizard,
+    ama: v4.ama,
+    notifications: v4.notifications,
+    shell: v4.shell,
+    settingsWindow: v4.settingsWindow,
+    servers: {
+      known: v4.servers.known.map((entry) => ({ ...entry, kind: 'local' as const })),
+      lastUsed: v4.servers.lastUsed,
+    },
+  };
+}
+
+/**
+ * Shape of a schema-version-2 settings document, kept ONLY so `load()` can
+ * validate and migrate files written before the multi-server fields existed.
+ * Not exported: new code must only ever see the current SettingsSchema.
+ */
+const SettingsSchemaV2 = z.strictObject({
+  schemaVersion: z.literal(2),
+  runtime: z.strictObject({ selection: z.string().max(200).nullable() }),
+  window: z.strictObject({ bounds: WindowBoundsSchema.optional() }),
+  theme: ThemePreferenceSchema,
+  wizard: WizardPrefsSchema.default(defaultWizardPrefs()),
+  ama: AmaPrefsSchema.default(defaultAmaPrefs()),
+  notifications: NotificationPrefsSchema.default(defaultNotificationPrefs()),
+  shell: ShellPrefsSchemaV3.default(defaultShellPrefsV3()),
+  settingsWindow: SettingsWindowPrefsSchema.default(defaultSettingsWindowPrefs()),
+});
+
+type SettingsV2 = z.output<typeof SettingsSchemaV2>;
+
+/**
+ * Upgrades a validated v2 document to v3: every existing field is carried over
+ * byte-for-byte and the new `servers` section (known-servers list plus
+ * last-used pointer) starts empty.
+ */
+function migrateSettingsV2ToV3(v2: SettingsV2): SettingsV3 {
+  return {
+    schemaVersion: 3,
+    runtime: v2.runtime,
+    window: v2.window,
+    theme: v2.theme,
+    wizard: v2.wizard,
+    ama: v2.ama,
+    notifications: v2.notifications,
+    shell: v2.shell,
+    settingsWindow: v2.settingsWindow,
+    servers: defaultServersPrefsV4(),
   };
 }
 
@@ -143,9 +332,14 @@ export class SettingsStore {
       ...(parsed.data.notifications !== undefined
         ? { notifications: parsed.data.notifications }
         : {}),
-      ...(parsed.data.shell !== undefined ? { shell: parsed.data.shell } : {}),
+      ...(parsed.data.shell !== undefined
+        ? { shell: applyShellPatch(this.settings.shell, parsed.data.shell) }
+        : {}),
       ...(parsed.data.settingsWindow !== undefined
         ? { settingsWindow: parsed.data.settingsWindow }
+        : {}),
+      ...(parsed.data.servers !== undefined
+        ? { servers: applyServersPatch(this.settings.servers, parsed.data.servers) }
         : {}),
       schemaVersion: this.settings.schemaVersion,
     };
@@ -182,14 +376,39 @@ export class SettingsStore {
         return parsed.data;
       }
 
-      const isSchemaVersionOne =
-        typeof data === 'object' &&
-        data !== null &&
-        (data as { schemaVersion?: unknown }).schemaVersion === 1;
-      if (isSchemaVersionOne) {
+      const schemaVersion = (data as { schemaVersion?: unknown }).schemaVersion;
+      if (schemaVersion === 1) {
         const legacy = SettingsSchemaV1.safeParse(data);
         if (legacy.success) {
-          const migrated = migrateSettingsV1ToV2(legacy.data);
+          const migrated = migrateSettingsV4ToV5(
+            migrateSettingsV3ToV4(migrateSettingsV2ToV3(migrateSettingsV1ToV2(legacy.data))),
+          );
+          this.persist(migrated);
+          return migrated;
+        }
+      }
+      if (schemaVersion === 2) {
+        const legacy = SettingsSchemaV2.safeParse(data);
+        if (legacy.success) {
+          const migrated = migrateSettingsV4ToV5(
+            migrateSettingsV3ToV4(migrateSettingsV2ToV3(legacy.data)),
+          );
+          this.persist(migrated);
+          return migrated;
+        }
+      }
+      if (schemaVersion === 3) {
+        const legacy = SettingsSchemaV3.safeParse(data);
+        if (legacy.success) {
+          const migrated = migrateSettingsV4ToV5(migrateSettingsV3ToV4(legacy.data));
+          this.persist(migrated);
+          return migrated;
+        }
+      }
+      if (schemaVersion === 4) {
+        const legacy = SettingsSchemaV4.safeParse(data);
+        if (legacy.success) {
+          const migrated = migrateSettingsV4ToV5(legacy.data);
           this.persist(migrated);
           return migrated;
         }

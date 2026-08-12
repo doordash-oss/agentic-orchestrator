@@ -108,6 +108,12 @@ export type CompatibilityDeclaration = z.output<typeof CompatibilityDeclarationS
 export const HealthResponseSchema = z.object({
   api_version: z.string(),
   status: z.string(),
+  /**
+   * Optional operator-assigned server display name (server cap:
+   * MaxServerNameLength = 64). Informational only — never gates
+   * compatibility; an oversized or malformed name is dropped, not fatal.
+   */
+  name: z.string().max(64).optional().catch(undefined),
   runtime: RuntimeIdentitySchema,
   launch_policy: LaunchPolicySchema,
   started_at: z.string(),

@@ -32,10 +32,13 @@ import type {
   UpdateState,
 } from '../../../shared/ipc';
 import {
+  applyShellPatch,
   attentionOwnerFeatureId,
+  DEFAULT_RUNTIME_ID,
   defaultShellPrefs,
   isConnectionErrorState,
   sameMainWindowUiState,
+  type ShellPatch,
 } from '../../../shared/ipc';
 import { featureCommandEnablement, isFeatureCommandId } from '../../../shared/commands';
 import { runFeatureCommand, toggleActiveInspector } from './featureCommands';
@@ -48,6 +51,7 @@ import { HouseIcon } from '../components/icons';
 import { updateNoticePending } from '../components/UpdatePopover';
 import { emptyAttentionDrafts, type AttentionDrafts } from './AttentionInbox';
 import { SidebarChromeControls } from './SidebarChromeControls';
+import { ServerSwitcher } from '../components/ServerSwitcher';
 import { Toolbar } from './Toolbar';
 import {
   childStatusSpineIndex,
@@ -205,8 +209,18 @@ export function WorkspaceShell({
   const isNarrowForSidebar = useMediaQuery('(max-width: 700px)');
   const connection = useConnectionState();
   const runtimeReady = connection.status === 'ready';
+  // Per-server scoping: the active-feature selection is keyed on the
+  // connected server's identity, so switching servers restores each server's
+  // own selection. The default scope only covers a ready state older than
+  // the serverKey field.
+  const scopeKey = connection.serverKey ?? DEFAULT_RUNTIME_ID;
+  const scopeKeyRef = useRef(scopeKey);
+  scopeKeyRef.current = scopeKey;
+  // A named server introduces itself by name; a name-less (older) server
+  // keeps the generic ready label. Display-only — the footer row still owns
+  // exactly one interactive element.
   const runtimeLabel = runtimeReady
-    ? 'Runtime ready'
+    ? (connection.serverName ?? 'Runtime ready')
     : isConnectionErrorState(connection)
       ? 'Runtime needs attention'
       : 'Connecting';
@@ -244,6 +258,13 @@ export function WorkspaceShell({
     attentionId?: string;
   } | null>(null);
   const handledRouteRequest = useRef<number | null>(null);
+  // Route-and-focus signal for the footer's server switcher (the menu and
+  // palette "Switch Server…" command lands here).
+  const [switcherRoute, setSwitcherRoute] = useState<{ id: number } | null>(null);
+  // Cleared when the switcher has consumed a route: the control moves
+  // between two homes across the collapse breakpoint, and a kept id would
+  // reopen the popover on the remount.
+  const clearSwitcherRoute = useCallback(() => setSwitcherRoute(null), []);
   const listRequestRef = useRef(0);
   const overviewActiveRef = useRef(false);
   const [creationOpen, setCreationOpen] = useState(false);
@@ -346,7 +367,10 @@ export function WorkspaceShell({
    */
   const refineDetails = useCallback(
     async (rows: readonly FeatureSnapshot[], isCurrent: () => boolean) => {
-      const ids = detailFetchIds(rows, shellStateRef.current?.activeFeatureId ?? null);
+      const ids = detailFetchIds(
+        rows,
+        shellStateRef.current?.featureByServer[scopeKeyRef.current] ?? null,
+      );
       if (ids.length === 0) return;
       const settled = await Promise.allSettled(ids.map((id) => window.agentico.getFeature(id)));
       if (!isCurrent()) return;
@@ -437,12 +461,14 @@ export function WorkspaceShell({
   }, [loadList]);
 
   /** Persist failures never block the UI — the shell selection is presentation only. */
-  const persist = useCallback((next: ShellPrefs) => {
+  const persistPatch = useCallback((patch: ShellPatch) => {
+    const base = shellStateRef.current ?? defaultShellPrefs();
+    const next = applyShellPatch(base, patch);
     shellStateRef.current = next;
     setShell(next);
     const write = () =>
       window.agentico
-        .updateSettings({ shell: next })
+        .updateSettings({ shell: patch })
         .then(() => undefined)
         .catch(() => {
           // The server-side feature state is unaffected; keep later writes moving.
@@ -452,10 +478,9 @@ export function WorkspaceShell({
 
   const selectFeature = useCallback(
     (featureId: string) => {
-      const base = shellStateRef.current ?? defaultShellPrefs();
-      persist({ ...base, activeFeatureId: featureId });
+      persistPatch({ setActiveFeature: { serverKey: scopeKey, featureId } });
     },
-    [persist],
+    [persistPatch, scopeKey],
   );
 
   /**
@@ -467,14 +492,13 @@ export function WorkspaceShell({
    */
   const toggleSidebar = useCallback(() => {
     const base = shellStateRef.current ?? shell ?? defaultShellPrefs();
-    persist({ ...base, sidebarCollapsed: !base.sidebarCollapsed });
-  }, [persist, shell]);
+    persistPatch({ sidebarCollapsed: !base.sidebarCollapsed });
+  }, [persistPatch, shell]);
 
   const selectOverview = useCallback(() => {
-    const base = shellStateRef.current ?? defaultShellPrefs();
-    persist({ ...base, activeFeatureId: null });
+    persistPatch({ setActiveFeature: { serverKey: scopeKey, featureId: null } });
     loadList();
-  }, [loadList, persist]);
+  }, [loadList, persistPatch, scopeKey]);
 
   const handleFeatureDeleted = useCallback(
     (featureId: string) => {
@@ -539,7 +563,7 @@ export function WorkspaceShell({
     if (shell === null || handledAttentionJump.current === attentionJump.requestId) return;
     handledAttentionJump.current = attentionJump.requestId;
     if (attentionJump.featureId === '__recovery__') {
-      persist({ ...(shellStateRef.current ?? shell), activeFeatureId: null });
+      persistPatch({ setActiveFeature: { serverKey: scopeKey, featureId: null } });
     } else {
       selectFeature(attentionJump.featureId);
       setAttentionPreviewRequest({
@@ -551,7 +575,7 @@ export function WorkspaceShell({
       });
     }
     onAttentionJumpHandled();
-  }, [attentionJump, onAttentionJumpHandled, persist, selectFeature, shell]);
+  }, [attentionJump, onAttentionJumpHandled, persistPatch, scopeKey, selectFeature, shell]);
 
   const closeAttentionPreview = useCallback(() => setAttentionPreviewRequest(null), []);
 
@@ -570,7 +594,7 @@ export function WorkspaceShell({
    */
   const uiStateSummary: MainWindowUiState | null = useMemo(() => {
     if (shell === null) return null;
-    const activeFeatureId = shell.activeFeatureId;
+    const activeFeatureId = shell.featureByServer[scopeKey] ?? null;
     const cockpitMatches = cockpitUi !== null && cockpitUi.featureId === activeFeatureId;
     return {
       activeFeatureId,
@@ -583,7 +607,7 @@ export function WorkspaceShell({
         hasSelection: activeFeatureId !== null,
       }),
     };
-  }, [cockpitUi, effectiveSidebarCollapsed, runtimeReady, shell]);
+  }, [cockpitUi, effectiveSidebarCollapsed, runtimeReady, scopeKey, shell]);
 
   // Push on change only: an identical summary — an unchanged snapshot refresh,
   // a re-render, a repeated readiness event — never reaches the main process.
@@ -620,6 +644,8 @@ export function WorkspaceShell({
       if (featureId !== undefined) {
         selectFeature(featureId);
       }
+    } else if (routeRequest.event.target === 'switch-server') {
+      setSwitcherRoute({ id: routeRequest.id });
     } else if (routeRequest.event.target === 'feature-command') {
       // The route carries only the command's identity; the funnel resolves the
       // target from the live selection and re-checks its live enablement, so a
@@ -641,7 +667,7 @@ export function WorkspaceShell({
     );
   }
 
-  const activeFeatureId = shell.activeFeatureId;
+  const activeFeatureId = shell.featureByServer[scopeKey] ?? null;
   // The cockpit always reloads its own snapshot directly by id, so a
   // persisted selection is trusted even if the summary list hasn't returned
   // it yet (or ever) — the cockpit itself renders the "no longer exists"
@@ -745,6 +771,24 @@ export function WorkspaceShell({
     />
   );
 
+  /**
+   * One ServerSwitcher instance, homed where it stays visible: the sidebar
+   * footer while the sidebar shows, a dock under the toolbar once the
+   * sidebar is collapsed (a narrow window's auto-collapse or the user's
+   * explicit choice hides the whole footer — and with it the only landing
+   * spot for the routed "Switch Server…" command — otherwise).
+   */
+  const serverSwitcher =
+    runtimeReady && !showAmaActive ? (
+      <ServerSwitcher
+        currentLabel={runtimeLabel}
+        tone={runtimeTone}
+        enabled
+        openRequest={switcherRoute}
+        onRouteHandled={clearSwitcherRoute}
+      />
+    ) : null;
+
   return (
     <section
       className="workspace"
@@ -803,9 +847,15 @@ export function WorkspaceShell({
           })}
         </div>
         <div className="sidebar__footer" data-tone={footerTone}>
-          <span className="sidebar__runtime" role="status">
-            <span aria-hidden="true">●</span> {footerLabel}
-          </span>
+          {/* The runtime pill is the server control while connected; the
+           * AMA-active label and every non-ready state keep the passive pill. */}
+          {!effectiveSidebarCollapsed && serverSwitcher !== null ? (
+            serverSwitcher
+          ) : (
+            <span className="sidebar__runtime" role="status">
+              <span aria-hidden="true">●</span> {footerLabel}
+            </span>
+          )}
           {/* Indicator only, never a target: the toolbar button stays the one
            * way into the update popover, and the footer keeps exactly one
            * interactive element. */}
@@ -819,6 +869,11 @@ export function WorkspaceShell({
       </nav>
 
       <div className="content-column">
+        {/* The collapsed-sidebar home of the switcher above: out of flow so
+         * the column's toolbar/content-pane layout never shifts. */}
+        {effectiveSidebarCollapsed && serverSwitcher !== null ? (
+          <div className="server-switcher-dock">{serverSwitcher}</div>
+        ) : null}
         <Toolbar
           leading={effectiveSidebarCollapsed ? chromeControls : undefined}
           title={toolbarTitle}

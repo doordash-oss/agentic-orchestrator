@@ -18,6 +18,9 @@ function connection(overrides: Record<string, unknown>): ConnectionState {
     stage: 'discover',
     detail: 'Looking for a running Agentico runtime.',
     ownership: 'none',
+    // Ready states carry main-owned locality; default it so tests that do not
+    // pin locality still emit a schema-valid ready state.
+    ...(overrides.status === 'ready' ? { kind: 'local' } : {}),
     ...overrides,
   });
 }
@@ -126,7 +129,7 @@ describe('App readiness gating', () => {
         // The bell is only shown in the toolbar once a feature is selected
         // (it is hidden entirely on Overview), so this test starts on
         // the feature it wants to jump from.
-        shell: { activeFeatureId: featureId, sidebarCollapsed: false },
+        shell: { featureByServer: { 'default-runtime': featureId }, sidebarCollapsed: false },
       },
       features: [
         {
@@ -397,5 +400,70 @@ describe('App settings-window routing', () => {
 
     await waitFor(() => expect(mock.api.openSettingsWindow).toHaveBeenCalledWith({}));
     expect(screen.queryByRole('dialog', { name: 'Command palette' })).not.toBeInTheDocument();
+  });
+});
+
+describe('App per-server attention drafts', () => {
+  const helpItem: AttentionItem = {
+    kind: 'help',
+    id: 'feature-1:kb1234567890abcdef',
+    featureId: 'abcd1234ef567890',
+    sessionId: 'kb1234567890abcdef',
+    phase: 'Knowledge Base',
+    waitingSince: '2026-07-15T10:00:00.000Z',
+    prompt: 'Where should the config live?',
+    waitingKind: 'question',
+  };
+
+  function readyAt(serverKey: string, name: string): ConnectionState {
+    return connection({
+      status: 'ready',
+      stage: 'ready',
+      ownership: 'external',
+      serverKey,
+      serverName: name,
+    });
+  }
+
+  it("restores each server's in-progress draft across A→B→A and never bleeds across", async () => {
+    const user = userEvent.setup();
+    const mock = installAgenticoMock({
+      connection: readyAt('key-alpha', 'alpha'),
+      readiness: readySnapshot(),
+      attention: { items: [helpItem] },
+    });
+    render(<App />);
+    await screen.findByRole('option', { name: 'Overview' });
+
+    const draftOnCurrentServer = async (text: string) => {
+      await user.click(await screen.findByRole('button', { name: /Attention inbox, 1 pending/ }));
+      await user.click(screen.getByRole('button', { name: /Help request/ }));
+      const reply = await screen.findByLabelText('Help reply');
+      if (text !== '') await user.type(reply, text);
+      return reply;
+    };
+
+    const alphaDraft = await draftOnCurrentServer('alpha says hi');
+    expect(alphaDraft).toHaveValue('alpha says hi');
+
+    // Ride the real connection-shell transition to server B.
+    act(() => mock.emitConnection(connection({ status: 'attaching', stage: 'connect' })));
+    act(() => mock.emitConnection(readyAt('key-beta', 'beta')));
+    await screen.findByRole('option', { name: 'Overview' });
+
+    const betaDraft = await draftOnCurrentServer('beta says hi');
+    expect(betaDraft).toHaveValue('beta says hi');
+
+    // Back to A: its draft is restored exactly; B's is nowhere visible.
+    act(() => mock.emitConnection(connection({ status: 'attaching', stage: 'connect' })));
+    act(() => mock.emitConnection(readyAt('key-alpha', 'alpha')));
+    await screen.findByRole('option', { name: 'Overview' });
+    expect(await draftOnCurrentServer('')).toHaveValue('alpha says hi');
+
+    // And B still has its own.
+    act(() => mock.emitConnection(connection({ status: 'attaching', stage: 'connect' })));
+    act(() => mock.emitConnection(readyAt('key-beta', 'beta')));
+    await screen.findByRole('option', { name: 'Overview' });
+    expect(await draftOnCurrentServer('')).toHaveValue('beta says hi');
   });
 });

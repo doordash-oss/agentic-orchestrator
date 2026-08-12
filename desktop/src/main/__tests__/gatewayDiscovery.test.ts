@@ -95,6 +95,18 @@ describe('evaluateDiscoveryFile', () => {
     }
   });
 
+  it('tolerates the optional bounded server name published by newer servers', () => {
+    const outcome = evaluateDiscoveryFile(
+      '/rt',
+      SELECTED_STATE_DIR,
+      deps({}, JSON.stringify(record({ name: 'frothy-macchiato' }))),
+    );
+    expect(outcome.kind).toBe('candidate');
+    if (outcome.kind === 'candidate') {
+      expect(outcome.record.name).toBe('frothy-macchiato');
+    }
+  });
+
   it('rejects group- or world-readable discovery files', () => {
     const outcome = evaluateDiscoveryFile(
       '/rt',

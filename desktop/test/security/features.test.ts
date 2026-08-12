@@ -86,19 +86,41 @@ function makeServices(overrides: Partial<IpcServices> = {}): IpcServices {
       stage: 'ready' as const,
       detail: 'ok',
       ownership: 'external' as const,
+      kind: 'remote' as const,
     })),
     retryConnection: vi.fn(() => ({
       status: 'ready' as const,
       stage: 'ready' as const,
       detail: 'ok',
       ownership: 'external' as const,
+      kind: 'remote' as const,
     })),
     restartConnection: vi.fn(() => ({
       status: 'ready' as const,
       stage: 'ready' as const,
       detail: 'ok',
       ownership: 'external' as const,
+      kind: 'remote' as const,
     })),
+    chooseConnectionServer: vi.fn(() => ({
+      status: 'ready' as const,
+      stage: 'ready' as const,
+      detail: 'ok',
+      ownership: 'external' as const,
+      kind: 'remote' as const,
+    })),
+    switchConnectionServer: vi.fn(() => ({
+      status: 'ready' as const,
+      stage: 'ready' as const,
+      detail: 'ok',
+      ownership: 'external' as const,
+      kind: 'remote' as const,
+    })),
+    listServers: vi.fn(() => ({ rows: [] })),
+    probeServers: vi.fn(() => ({ rows: [] })),
+    addRemoteServer: vi.fn(() => Promise.reject(new Error('unused'))),
+    removeServer: vi.fn(() => Promise.reject(new Error('unused'))),
+    getServerTokenStatus: vi.fn(() => Promise.reject(new Error('unused'))),
     getSettings: vi.fn(() => defaultSettings()),
     updateSettings: vi.fn(() => defaultSettings()),
     openSettingsWindow: vi.fn(() => ({ opened: true })),
@@ -184,10 +206,13 @@ function makeServices(overrides: Partial<IpcServices> = {}): IpcServices {
     generatePublishDescription: vi.fn(() => Promise.reject(new Error('unused'))),
     openExternal: vi.fn(() => Promise.reject(new Error('unused'))),
     revealPath: vi.fn(() => Promise.reject(new Error('unused'))),
+    writeClipboardText: vi.fn(() => Promise.reject(new Error('unused'))),
     publishUiState: vi.fn(() => ({ accepted: true })),
     ...overrides,
     pickCreationFiles: overrides.pickCreationFiles ?? vi.fn(() => Promise.resolve({ paths: [] })),
     readClipboardImage: overrides.readClipboardImage ?? vi.fn(() => Promise.resolve({ paths: [] })),
+    uploadCreationFiles:
+      overrides.uploadCreationFiles ?? vi.fn(() => Promise.resolve({ results: [] })),
     searchCreationFiles:
       overrides.searchCreationFiles ??
       vi.fn((request) =>
@@ -396,7 +421,7 @@ describe('feature IPC security', () => {
     const { handlers } = register();
     const result = (await handlers.get(IPC_CHANNELS.settingsUpdate)!(goodEvent, {
       shell: {
-        activeFeatureId: 'abcd1234ef567890',
+        setActiveFeature: { serverKey: 'a'.repeat(64), featureId: 'abcd1234ef567890' },
         sidebarCollapsed: false,
       },
     })) as Envelope;

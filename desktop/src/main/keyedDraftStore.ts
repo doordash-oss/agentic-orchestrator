@@ -132,6 +132,26 @@ export class KeyedDraftStore<
     return true;
   }
 
+  /**
+   * Renames every draft matching `match` through `transform` and persists.
+   * Idempotent when the match predicate no longer holds for the transformed
+   * drafts; returns how many entries were re-keyed.
+   */
+  rekey(match: (draft: Draft) => boolean, transform: (draft: Draft) => Draft): number {
+    let changed = 0;
+    this.drafts = this.drafts.map((draft) => {
+      if (!match(draft)) {
+        return draft;
+      }
+      changed += 1;
+      return transform(draft);
+    });
+    if (changed > 0) {
+      this.persist();
+    }
+    return changed;
+  }
+
   private loadStore(): Draft[] {
     let raw: string;
     try {

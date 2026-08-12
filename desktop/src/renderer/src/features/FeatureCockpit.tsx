@@ -2280,6 +2280,7 @@ export function FeatureCockpit({
               }
               openExternal={(url) => window.agentico.openExternal({ url })}
               revealPath={(id, repo) => window.agentico.revealPath({ featureId: id, repo })}
+              copyText={(text) => window.agentico.writeClipboardText(text)}
             />
           </CockpitModal>
         ) : null}
@@ -2617,6 +2618,7 @@ export function FeatureCockpit({
                       }
                       openExternal={(url) => window.agentico.openExternal({ url })}
                       revealPath={(id, repo) => window.agentico.revealPath({ featureId: id, repo })}
+                      copyText={(text) => window.agentico.writeClipboardText(text)}
                     />
                   </div>
                 ) : null}

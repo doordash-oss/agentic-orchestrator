@@ -88,7 +88,8 @@ type RelationshipChildren struct {
 
 // isLegacyProviderBookkeepingDir identifies runtime-owned directories written
 // beneath the feature store: provider bookkeeping from older Agentico
-// versions plus the server-owned AMA chat session state. They are not feature
+// versions plus the server-owned AMA chat session state and upload staging.
+// They are not feature
 // records and must not participate in feature or relationship scans.
 // ErrLegacySchemaVersion marks a record persisted by an older release with an
 // explicit lower schema version. Legacy records predate child relationships,
@@ -98,7 +99,7 @@ var ErrLegacySchemaVersion = errors.New("legacy feature schema version")
 
 func isLegacyProviderBookkeepingDir(name string) bool {
 	switch name {
-	case "opencode", "codex-home", "chat":
+	case "opencode", "codex-home", "chat", "uploads":
 		return true
 	default:
 		return false

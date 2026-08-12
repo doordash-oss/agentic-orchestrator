@@ -1,11 +1,17 @@
 /**
- * The Settings window's pane catalogue: today's eight sections, in today's
- * order, each with the label the source list and the window title both show
- * and the glyph its row carries. Pane ids are the persisted values, so a
- * label can be reworded without invalidating a stored preference.
+ * The Settings window's pane catalogue: today's sections, in today's order,
+ * each with the label the source list and the window title both show and
+ * the glyph its row carries. Pane ids are the persisted values, so a label
+ * can be reworded without invalidating a stored preference.
  */
 import type { SVGProps } from 'react';
-import { SETTINGS_PANES, type SettingsPaneId } from '../../../shared/ipc';
+import { SETTINGS_PANES, type SettingsFocus, type SettingsPaneId } from '../../../shared/ipc';
+
+/** A within-pane focus intent plus a sequence number, so a repeat route re-fires. */
+export interface PaneFocusIntent {
+  intent: SettingsFocus;
+  seq: number;
+}
 import {
   AdvancedIcon,
   AppearanceIcon,
@@ -14,6 +20,7 @@ import {
   DiagnosticsIcon,
   FolderIcon,
   ProvidersIcon,
+  ServersIcon,
   UpdateIcon,
 } from '../components/icons';
 
@@ -25,6 +32,7 @@ export interface SettingsPaneDescriptor {
 
 export const SETTINGS_PANE_CATALOGUE: readonly SettingsPaneDescriptor[] = [
   { id: 'workspace-roots', label: 'Workspace roots', Icon: FolderIcon },
+  { id: 'servers', label: 'Servers', Icon: ServersIcon },
   { id: 'providers', label: 'Providers', Icon: ProvidersIcon },
   { id: 'appearance', label: 'Appearance', Icon: AppearanceIcon },
   { id: 'updates', label: 'Updates', Icon: UpdateIcon },

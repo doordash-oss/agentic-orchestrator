@@ -9,6 +9,7 @@ import {
   AppEventSchema,
   AppRouteEventSchema,
   SessionOutputEventSchema,
+  ServerListSnapshotSchema,
   ConnectionStateSchema,
   CREATION_ATTACHMENT_LIMIT,
   CREATION_IMAGE_FORMATS,
@@ -20,6 +21,7 @@ import {
   type AppEvent,
   type AppRouteEvent,
   type ConnectionState,
+  type ServerListSnapshot,
   type ChatStartRequest,
   type CreateFeatureInput,
   type CreationFileKind,
@@ -95,6 +97,30 @@ const api: AgenticoApi = {
   getConnectionStatus: () => call(IPC_CHANNELS.connectionGetStatus),
   retryConnection: () => call(IPC_CHANNELS.connectionRetry),
   restartConnection: () => call(IPC_CHANNELS.connectionRestart),
+  chooseConnectionServer: (request) => call(IPC_CHANNELS.connectionChooseServer, request),
+  switchConnectionServer: (request) => call(IPC_CHANNELS.connectionSwitchServer, request),
+  listServers: () => call(IPC_CHANNELS.serversList),
+  probeServers: (request) => call(IPC_CHANNELS.serversProbe, request),
+  addRemoteServer: (request) => call(IPC_CHANNELS.remoteServerAdd, request),
+  removeServer: (request) => call(IPC_CHANNELS.serverRemove, request),
+  getServerTokenStatus: (request) => call(IPC_CHANNELS.serverTokenStatus, request),
+  onServersChanged: (listener: (snapshot: ServerListSnapshot) => void) => {
+    const wrapped = (_event: unknown, payload: unknown): void => {
+      try {
+        assertNoPrototypePollution(payload);
+      } catch {
+        return; // drop unsafe events silently — fail closed
+      }
+      const snapshot = ServerListSnapshotSchema.safeParse(payload);
+      if (snapshot.success) {
+        listener(snapshot.data);
+      }
+    };
+    ipcRenderer.on(IPC_EVENTS.serversChanged, wrapped);
+    return () => {
+      ipcRenderer.removeListener(IPC_EVENTS.serversChanged, wrapped);
+    };
+  },
   onConnectionChanged: (listener: (state: ConnectionState) => void) => {
     const wrapped = (_event: unknown, payload: unknown): void => {
       try {
@@ -184,6 +210,8 @@ const api: AgenticoApi = {
   },
   getCreationDefaults: () => call(IPC_CHANNELS.creationDefaults),
   pickCreationFiles: (kind: CreationFileKind) => call(IPC_CHANNELS.creationPickFiles, kind),
+  uploadCreationFiles: (kind: CreationFileKind, paths: readonly string[]) =>
+    call(IPC_CHANNELS.creationUploadFiles, kind, paths),
   readClipboardImage: () => call(IPC_CHANNELS.clipboardReadImage),
   importDroppedCreationFiles: (kind: CreationFileKind, files: readonly File[]) => {
     const limit = kind === 'image' ? CREATION_IMAGE_LIMIT : CREATION_ATTACHMENT_LIMIT;
@@ -246,6 +274,7 @@ const api: AgenticoApi = {
     call(IPC_CHANNELS.publishDescription, request),
   openExternal: (request: OpenExternalRequest) => call(IPC_CHANNELS.openExternal, request),
   revealPath: (request: RevealPathRequest) => call(IPC_CHANNELS.revealPath, request),
+  writeClipboardText: (text: string) => call(IPC_CHANNELS.clipboardWriteText, text),
   publishUiState: (state: MainWindowUiState) => call(IPC_CHANNELS.uiStatePublish, state),
   launchRebaseChild: (request: LaunchRebaseChildRequest) =>
     call(IPC_CHANNELS.featuresRebase, request),

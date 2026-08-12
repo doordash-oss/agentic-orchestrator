@@ -16,7 +16,8 @@ export type GlobalCommandId =
   | 'global.new-feature'
   | 'global.close-window'
   | 'global.toggle-sidebar'
-  | 'global.toggle-inspector';
+  | 'global.toggle-inspector'
+  | 'global.switch-server';
 
 /**
  * The per-feature action catalogue, in the order the Feature menu and the
@@ -125,6 +126,15 @@ export const COMMAND_CATALOGUE: readonly CommandDescriptor[] = [
     group: 'navigation',
     accelerator: 'CommandOrControl+,',
     target: 'settings',
+    paletteVisible: true,
+  },
+  {
+    // Pure route-and-focus: the footer switcher stays the single switcher
+    // UI — the menu and palette never enumerate servers themselves.
+    id: 'global.switch-server',
+    label: 'Switch Server…',
+    group: 'navigation',
+    target: 'switch-server',
     paletteVisible: true,
   },
   {

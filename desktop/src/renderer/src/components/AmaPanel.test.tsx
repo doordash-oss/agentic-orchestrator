@@ -1,7 +1,12 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { defaultSettings, type AttentionItem, type Settings } from '../../../shared/ipc';
+import {
+  defaultSettings,
+  type AttentionItem,
+  type ConnectionState,
+  type Settings,
+} from '../../../shared/ipc';
 import { installAgenticoMock } from '../test/agenticoMock';
 import { AmaPanel } from './AmaPanel';
 
@@ -441,6 +446,110 @@ describe('AmaPanel expanded presentation', () => {
     );
     expect(mock.api.updateSettings).not.toHaveBeenCalled();
     expect(screen.getByRole('complementary', { name: 'Ask Agentico' })).toBeVisible();
+  });
+});
+
+describe('AmaPanel on a remote server', () => {
+  const remoteConnection: ConnectionState = {
+    status: 'ready',
+    stage: 'ready',
+    detail: 'Connected.',
+    ownership: 'external',
+    kind: 'remote',
+    serverKey: 'server-key-1',
+  };
+
+  it('stages pasted images as uploads and sends their references', async () => {
+    const mock = installAgenticoMock({
+      connection: remoteConnection,
+      settings: settingsWithAma({ drawer: 'expanded' }),
+    });
+    mock.api.importDroppedCreationFiles.mockImplementation(() => ({ paths: [] }));
+    mock.api.readClipboardImage.mockResolvedValue({ paths: ['/tmp/clipboard-image.png'] });
+    mock.api.startChat.mockResolvedValue({ sessionId: '__chat__', result: 'started' });
+    renderPanel();
+    const input = await screen.findByRole('textbox', { name: 'Ask Agentico' });
+
+    fireEvent.paste(input, {
+      clipboardData: {
+        files: [new File(['image'], 'image.png', { type: 'image/png' })],
+        items: [{ type: 'image/png' }],
+      },
+    });
+
+    expect(await screen.findByText('clipboard-image.png')).toBeVisible();
+    expect(mock.api.uploadCreationFiles).toHaveBeenCalledWith('image', [
+      '/tmp/clipboard-image.png',
+    ]);
+
+    await userEvent.type(input, 'What is shown?{enter}');
+    await waitFor(() =>
+      expect(mock.api.startChat).toHaveBeenCalledWith({
+        message: 'What is shown?',
+        images: [],
+        imageUploads: ['ref-clipboardimagepng'],
+      }),
+    );
+  });
+
+  it('blocks sending while an upload is in flight and re-enables after it fails+removes', async () => {
+    const mock = installAgenticoMock({
+      connection: remoteConnection,
+      settings: settingsWithAma({ drawer: 'expanded' }),
+    });
+    mock.api.importDroppedCreationFiles.mockImplementation(() => ({ paths: [] }));
+    mock.api.readClipboardImage.mockResolvedValue({ paths: ['/tmp/clipboard-image.png'] });
+    mock.api.uploadCreationFiles.mockResolvedValue({
+      results: [
+        {
+          ok: false,
+          name: 'clipboard-image.png',
+          error: { code: 'request_too_large', message: 'File exceeds limit.' },
+        },
+      ],
+    });
+    renderPanel();
+    const input = await screen.findByRole('textbox', { name: 'Ask Agentico' });
+    fireEvent.paste(input, {
+      clipboardData: {
+        files: [new File(['image'], 'image.png', { type: 'image/png' })],
+        items: [{ type: 'image/png' }],
+      },
+    });
+    expect(await screen.findByText('File exceeds limit.')).toBeVisible();
+    await userEvent.type(input, 'hello');
+    expect(screen.getByRole('button', { name: /Send/ })).toBeDisabled();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Remove clipboard-image.png' }));
+    expect(screen.getByRole('button', { name: /Send/ })).toBeEnabled();
+  });
+
+  it('leaves plain-text pastes alone and re-routes image import after switching back to local', async () => {
+    const mock = installAgenticoMock({
+      connection: remoteConnection,
+      settings: settingsWithAma({ drawer: 'expanded' }),
+    });
+    mock.api.readClipboardImage.mockResolvedValue({ paths: ['/tmp/clipboard-image.png'] });
+    renderPanel();
+    const input = await screen.findByRole('textbox', { name: 'Ask Agentico' });
+
+    fireEvent.paste(input, {
+      clipboardData: { files: [], items: [{ type: 'text/plain' }] },
+    });
+    expect(screen.queryByLabelText('Attached images')).not.toBeInTheDocument();
+    expect(mock.api.importDroppedCreationFiles).not.toHaveBeenCalled();
+
+    act(() => {
+      mock.emitConnection({ ...remoteConnection, kind: 'local', ownership: 'app-owned' });
+    });
+
+    fireEvent.paste(input, {
+      clipboardData: {
+        files: [new File(['image'], 'image.png', { type: 'image/png' })],
+        items: [{ type: 'image/png' }],
+      },
+    });
+    expect(await screen.findByText('clipboard-image.png')).toBeVisible();
   });
 });
 

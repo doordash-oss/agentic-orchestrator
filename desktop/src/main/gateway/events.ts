@@ -196,6 +196,16 @@ export class EventCursorTracker {
     return { ...this.cursor };
   }
 
+  /**
+   * Drops the tracked cursor: the next subscription starts fresh. Called when
+   * the attached server identity changes — replaying another server's
+   * (seq, epoch) space would resync or drop events incorrectly. Same-server
+   * reconnects never reset, keeping replay-only-missed semantics.
+   */
+  reset(): void {
+    this.cursor = { seq: 0, epoch: '' };
+  }
+
   ingest(event: SseEventEnvelope): IngestDecision {
     // Broker-issued full-resync signals: adopt the cursor they carry.
     if (RESYNC_KINDS.has(event.kind)) {
@@ -313,6 +323,14 @@ export class EventStreamSupervisor {
     this.generation += 1;
     this.current?.close();
     this.current = null;
+  }
+
+  /**
+   * Resets the replay cursor for a new server identity. Safe while running:
+   * the next loop iteration re-opens the stream from the cleared cursor.
+   */
+  resetCursor(): void {
+    this.tracker.reset();
   }
 
   private async loop(generation: number): Promise<void> {

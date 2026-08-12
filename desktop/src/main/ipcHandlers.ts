@@ -14,7 +14,16 @@ import { assertNoPrototypePollution, assertWithinByteSize } from '../shared/sani
 import {
   IPC_CHANNELS,
   IPC_EVENTS,
+  type ChooseServerRequest,
   type ConnectionState,
+  type ServerListSnapshot,
+  type ServersProbeRequest,
+  type RemoteServerAddRequest,
+  type RemoteServerAddResult,
+  type ServerRemoveRequest,
+  type ServerTokenStatusRequest,
+  type ServerTokenStatusResult,
+  type SwitchServerRequest,
   type CreateFeatureInput,
   type CreateFeatureResult,
   type CreationDefaults,
@@ -22,6 +31,7 @@ import {
   type CreationFileSearchRequest,
   type CreationFileSearchResult,
   type PickedCreationFiles,
+  type UploadCreationFilesResult,
   type FeatureSnapshot,
   type FeatureSummaryView,
   type FeatureActionRequest,
@@ -114,6 +124,7 @@ import {
   type RepositoryDiffResult,
   type OpenExternalRequest,
   type RevealPathRequest,
+  type RevealPathResult,
   type MainWindowUiState,
   type UpdateInstallNowRequest,
   type UpdateState,
@@ -126,6 +137,15 @@ export interface IpcServices {
   getConnectionStatus(): ConnectionState;
   retryConnection(): Promise<ConnectionState> | ConnectionState;
   restartConnection(): Promise<ConnectionState> | ConnectionState;
+  chooseConnectionServer(request: ChooseServerRequest): Promise<ConnectionState> | ConnectionState;
+  switchConnectionServer(request: SwitchServerRequest): Promise<ConnectionState> | ConnectionState;
+  listServers(): ServerListSnapshot;
+  probeServers(request: ServersProbeRequest): ServerListSnapshot;
+  addRemoteServer(request: RemoteServerAddRequest): Promise<RemoteServerAddResult>;
+  removeServer(request: ServerRemoveRequest): Promise<ConnectionState> | ConnectionState;
+  getServerTokenStatus(
+    request: ServerTokenStatusRequest,
+  ): Promise<ServerTokenStatusResult> | ServerTokenStatusResult;
   getSettings(): Settings;
   updateSettings(patch: SettingsPatch): Settings;
   openSettingsWindow(request: SettingsOpenRequest): SettingsOpenResult;
@@ -154,6 +174,10 @@ export interface IpcServices {
   cancelSessionOutput(subscriptionId: string): boolean;
   getCreationDefaults(): Promise<CreationDefaults>;
   pickCreationFiles(kind: CreationFileKind): Promise<PickedCreationFiles>;
+  uploadCreationFiles(
+    kind: CreationFileKind,
+    paths: readonly string[],
+  ): Promise<UploadCreationFilesResult>;
   readClipboardImage(): Promise<PickedCreationFiles>;
   searchCreationFiles(request: CreationFileSearchRequest): Promise<CreationFileSearchResult>;
   cancelCreationFileSearch(requestId: string): Promise<boolean> | boolean;
@@ -208,7 +232,8 @@ export interface IpcServices {
   getRepositoryDiff(request: RepositoryDiffRequest): Promise<RepositoryDiffResult>;
   generatePublishDescription(request: PublishDescriptionRequest): Promise<PublishDescriptionResult>;
   openExternal(request: OpenExternalRequest): Promise<{ ok: boolean }>;
-  revealPath(request: RevealPathRequest): Promise<{ ok: boolean }>;
+  revealPath(request: RevealPathRequest): Promise<RevealPathResult>;
+  writeClipboardText(text: string): Promise<{ ok: boolean }>;
   getUpdates(): Promise<UpdateState> | UpdateState;
   checkForUpdates(): Promise<UpdateState>;
   installUpdateWhenIdle(): Promise<UpdateState>;
@@ -270,6 +295,19 @@ export function registerIpcHandlers(
     [IPC_CHANNELS.connectionGetStatus]: () => services.getConnectionStatus(),
     [IPC_CHANNELS.connectionRetry]: () => services.retryConnection(),
     [IPC_CHANNELS.connectionRestart]: () => services.restartConnection(),
+    [IPC_CHANNELS.connectionChooseServer]: (_event, request: ChooseServerRequest) =>
+      services.chooseConnectionServer(request),
+    [IPC_CHANNELS.connectionSwitchServer]: (_event, request: SwitchServerRequest) =>
+      services.switchConnectionServer(request),
+    [IPC_CHANNELS.serversList]: () => services.listServers(),
+    [IPC_CHANNELS.serversProbe]: (_event, request: ServersProbeRequest) =>
+      services.probeServers(request),
+    [IPC_CHANNELS.remoteServerAdd]: (_event, request: RemoteServerAddRequest) =>
+      services.addRemoteServer(request),
+    [IPC_CHANNELS.serverRemove]: (_event, request: ServerRemoveRequest) =>
+      services.removeServer(request),
+    [IPC_CHANNELS.serverTokenStatus]: (_event, request: ServerTokenStatusRequest) =>
+      services.getServerTokenStatus(request),
     [IPC_CHANNELS.settingsGet]: () => services.getSettings(),
     [IPC_CHANNELS.settingsUpdate]: (_event, patch: SettingsPatch) => services.updateSettings(patch),
     [IPC_CHANNELS.windowOpenSettings]: (_event, request: SettingsOpenRequest) =>
@@ -326,6 +364,11 @@ export function registerIpcHandlers(
     [IPC_CHANNELS.creationDefaults]: () => services.getCreationDefaults(),
     [IPC_CHANNELS.creationPickFiles]: (_event, kind: CreationFileKind) =>
       services.pickCreationFiles(kind),
+    [IPC_CHANNELS.creationUploadFiles]: (
+      _event,
+      kind: CreationFileKind,
+      paths: readonly string[],
+    ) => services.uploadCreationFiles(kind, paths),
     [IPC_CHANNELS.clipboardReadImage]: () => services.readClipboardImage(),
     [IPC_CHANNELS.creationSearchFiles]: (_event, request: CreationFileSearchRequest) =>
       services.searchCreationFiles(request),
@@ -420,6 +463,7 @@ export function registerIpcHandlers(
     [IPC_CHANNELS.openExternal]: (_event, request: OpenExternalRequest) =>
       services.openExternal(request),
     [IPC_CHANNELS.revealPath]: (_event, request: RevealPathRequest) => services.revealPath(request),
+    [IPC_CHANNELS.clipboardWriteText]: (_event, text: string) => services.writeClipboardText(text),
     [IPC_CHANNELS.uiStatePublish]: (_event, state: MainWindowUiState) =>
       services.publishUiState(state),
   };

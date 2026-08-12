@@ -15,6 +15,13 @@ import {
 } from '../../../shared/ipc';
 import { ConsentDialog } from '../components/wizard/ConsentDialog';
 import { useModalDismiss } from '../components/useModalDismiss';
+import { useConnectionState } from '../hooks';
+import {
+  isBlockingStagedItem,
+  STAGED_ITEMS_BLOCK_SUBMIT,
+  submittableReferences,
+  type ComposerUploadItem,
+} from './stagedItems';
 import { parseIpcError, type WizardError } from '../wizard/ipcError';
 import {
   GATE_FIELDS,
@@ -128,6 +135,8 @@ export function CreateFeatureForm({ onCreated, onClose }: CreateFeatureFormProps
   const [exitCriteria, setExitCriteria] = useState('');
   const [images, setImages] = useState<readonly string[]>([]);
   const [attachments, setAttachments] = useState<readonly string[]>([]);
+  const [imageUploads, setImageUploads] = useState<readonly ComposerUploadItem[]>([]);
+  const [attachmentUploads, setAttachmentUploads] = useState<readonly ComposerUploadItem[]>([]);
   const [repositoryFiles, setRepositoryFiles] = useState<readonly RepositoryFileRef[]>([]);
   const [autoStart, setAutoStart] = useState(true);
   const [folderCandidate, setFolderCandidate] = useState<string | null>(null);
@@ -138,6 +147,9 @@ export function CreateFeatureForm({ onCreated, onClose }: CreateFeatureFormProps
   const [consentOpen, setConsentOpen] = useState(false);
   const [discardOpen, setDiscardOpen] = useState(false);
   const [folderPending, setFolderPending] = useState(false);
+  /** Typed path + its inline rejection, only ever used on remote servers. */
+  const [folderDraft, setFolderDraft] = useState('');
+  const [folderError, setFolderError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   const [nameError, setNameError] = useState<string | null>(null);
   const [repoError, setRepoError] = useState<string | null>(null);
@@ -149,13 +161,29 @@ export function CreateFeatureForm({ onCreated, onClose }: CreateFeatureFormProps
   const repoGroupRef = useRef<HTMLFieldSetElement | null>(null);
   const formErrorRef = useRef<HTMLDivElement | null>(null);
 
+  // Locality decides how a folder reaches the form: the native directory
+  // dialog on a local server (the picker resolves real paths on this
+  // machine), typed entry on a remote one (the folder lives on the server
+  // host, so only the server can validate it). Follows the live connection
+  // state so a server switch swaps the affordance without remounting.
+  const connection = useConnectionState();
+  const remoteServer = connection.status === 'ready' && connection.kind === 'remote';
+  const serverKey = connection.status === 'ready' ? (connection.serverKey ?? null) : null;
+  // In-progress, failed, or foreign-server uploads block creation until
+  // they are removed (or the user switches back to the server that holds them).
+  const uploadsBlocking = [...imageUploads, ...attachmentUploads].some((item) =>
+    isBlockingStagedItem(item, serverKey),
+  );
+
   /** Unsaved work worth confirming before it is thrown away. */
   const dirty =
     name.trim() !== '' ||
     description !== '' ||
     repoKeys.length > 0 ||
     images.length > 0 ||
-    attachments.length > 0;
+    attachments.length > 0 ||
+    imageUploads.length > 0 ||
+    attachmentUploads.length > 0;
 
   const requestCancel = useCallback(() => {
     if (dirty) {
@@ -212,6 +240,24 @@ export function CreateFeatureForm({ onCreated, onClose }: CreateFeatureFormProps
     }
   };
 
+  /**
+   * Remote-only candidate entry: the folder lives on the server host, so the
+   * typed path is adopted as-is and the server's own filesystem check (the
+   * tightened PATCH on workspace roots) is the validation gate.
+   */
+  const checkTypedFolder = (): void => {
+    const folder = folderDraft.trim();
+    if (folder === '') return;
+    if (!folder.startsWith('/')) {
+      setFolderError('Enter the path exactly as the server sees it, starting with /.');
+      return;
+    }
+    setFolderCandidate(folder);
+    setFolderHoldsNoRepository(false);
+    setFolderError(null);
+    setFolderNotice('');
+  };
+
   /** Adopts a snapshot's workspace view and selects whatever it discovered. */
   const adoptSnapshot = (snapshot: {
     repositories: readonly RepositoryState[];
@@ -256,20 +302,25 @@ export function CreateFeatureForm({ onCreated, onClose }: CreateFeatureFormProps
       if (discovered.length === 0) {
         setFolderHoldsNoRepository(true);
         setFolderNotice(
-          'Added as a workspace root, but it holds no git repository yet. ' +
-            'Initialize it, or browse for a different folder.',
+          'Added as a workspace root, but it holds no git repository yet. Initialize it, ' +
+            (remoteServer ? 'or type a different folder.' : 'or browse for a different folder.'),
         );
         return;
       }
       selectDiscovered(discovered);
       setFolderCandidate(null);
+      setFolderDraft('');
       setFolderNotice(
         discovered.length === 1
           ? `Added ${discovered[0]?.name} and selected it.`
           : `Added a workspace root holding ${discovered.length} repositories.`,
       );
     } catch (err) {
-      setFormError(parseIpcError(err));
+      // On a remote server the typed path's fate is the form's own affair:
+      // the server's rejection stays next to the field, not in the sheet's
+      // global alert.
+      if (remoteServer) setFolderError(parseIpcError(err).message);
+      else setFormError(parseIpcError(err));
     } finally {
       setFolderPending(false);
     }
@@ -305,6 +356,7 @@ export function CreateFeatureForm({ onCreated, onClose }: CreateFeatureFormProps
       const initialized = repositoriesWithin(adoptSnapshot(snapshot), folder);
       selectDiscovered(initialized);
       setFolderCandidate(null);
+      setFolderDraft('');
       setFolderHoldsNoRepository(false);
       setFolderNotice(
         initialized.length === 0
@@ -312,7 +364,8 @@ export function CreateFeatureForm({ onCreated, onClose }: CreateFeatureFormProps
           : `Initialized ${initialized[0]?.name} and selected it.`,
       );
     } catch (err) {
-      setFormError(parseIpcError(err));
+      if (remoteServer) setFolderError(parseIpcError(err).message);
+      else setFormError(parseIpcError(err));
       if (!parentAlreadyRoot) {
         await window.agentico
           .removeWorkspaceRoot(parent)
@@ -345,7 +398,7 @@ export function CreateFeatureForm({ onCreated, onClose }: CreateFeatureFormProps
 
   const submit = (event: FormEvent): void => {
     event.preventDefault();
-    if (pending || state.phase !== 'loaded') return;
+    if (pending || uploadsBlocking || state.phase !== 'loaded') return;
     if (!validateStep(0)) {
       setStepIndex(0);
       return;
@@ -367,6 +420,12 @@ export function CreateFeatureForm({ onCreated, onClose }: CreateFeatureFormProps
     const submittedGates = applicableGates(pipeline);
     void (async () => {
       try {
+        const createdImageRefs = submittableReferences(imageUploads, 'image', serverKey);
+        const createdAttachmentRefs = submittableReferences(
+          attachmentUploads,
+          'attachment',
+          serverKey,
+        );
         const created = await window.agentico.createFeature({
           name: name.trim(),
           description,
@@ -374,6 +433,10 @@ export function CreateFeatureForm({ onCreated, onClose }: CreateFeatureFormProps
           useCurrentBranch,
           images: [...images],
           attachments: [...attachments],
+          ...(createdImageRefs.length === 0 ? {} : { imageUploads: createdImageRefs }),
+          ...(createdAttachmentRefs.length === 0
+            ? {}
+            : { attachmentUploads: createdAttachmentRefs }),
           repositoryFiles: [...repositoryFiles],
           pipeline,
           riskLevel,
@@ -640,15 +703,61 @@ export function CreateFeatureForm({ onCreated, onClose }: CreateFeatureFormProps
                             ? 'Add your first repository'
                             : 'Bring in another folder'}
                         </h3>
-                        <button
-                          type="button"
-                          className="creation-sheet__button"
-                          disabled={folderPending}
-                          onClick={() => void browseDirectory()}
-                        >
-                          Browse for folder
-                        </button>
+                        {!remoteServer ? (
+                          <button
+                            type="button"
+                            className="creation-sheet__button"
+                            disabled={folderPending}
+                            onClick={() => void browseDirectory()}
+                          >
+                            Browse for folder
+                          </button>
+                        ) : null}
                       </div>
+                      {remoteServer ? (
+                        <div className="creation-sheet__path-entry">
+                          <label className="creation-sheet__field">
+                            <span className="creation-sheet__field-label">
+                              Folder path on the server
+                            </span>
+                            <input
+                              className="creation-sheet__input"
+                              type="text"
+                              value={folderDraft}
+                              placeholder="/srv/work/my-repo"
+                              spellCheck={false}
+                              autoComplete="off"
+                              disabled={folderPending}
+                              aria-invalid={folderError !== null}
+                              onChange={(event) => {
+                                setFolderDraft(event.target.value);
+                                setFolderError(null);
+                              }}
+                              onKeyDown={(event) => {
+                                if (event.key === 'Enter') {
+                                  event.preventDefault();
+                                  checkTypedFolder();
+                                }
+                              }}
+                            />
+                          </label>
+                          <div className="creation-sheet__browser-actions">
+                            <button
+                              type="button"
+                              className="creation-sheet__button"
+                              disabled={folderPending || folderDraft.trim() === ''}
+                              onClick={checkTypedFolder}
+                            >
+                              Use this path
+                            </button>
+                          </div>
+                          {folderError !== null ? (
+                            <p className="creation-sheet__field-error" role="alert">
+                              {folderError}
+                            </p>
+                          ) : null}
+                        </div>
+                      ) : null}
                       <p
                         className="creation-sheet__browser-notice"
                         role="status"
@@ -683,7 +792,9 @@ export function CreateFeatureForm({ onCreated, onClose }: CreateFeatureFormProps
                         </>
                       ) : (
                         <p className="creation-sheet__browser-hint">
-                          Choose deliberately; no folder is changed until you confirm an action.
+                          {remoteServer
+                            ? 'The path is validated on the server host; nothing is changed until you confirm an action.'
+                            : 'Choose deliberately; no folder is changed until you confirm an action.'}
                         </p>
                       )}
                     </section>
@@ -726,10 +837,14 @@ export function CreateFeatureForm({ onCreated, onClose }: CreateFeatureFormProps
                       repoKeys={repoKeys}
                       images={images}
                       attachments={attachments}
+                      imageUploads={imageUploads}
+                      attachmentUploads={attachmentUploads}
                       repositoryFiles={repositoryFiles}
                       onValueChange={setDescription}
                       onImagesChange={setImages}
                       onAttachmentsChange={setAttachments}
+                      onImageUploadsChange={setImageUploads}
+                      onAttachmentUploadsChange={setAttachmentUploads}
                       onRepositoryFilesChange={setRepositoryFiles}
                       onError={setFormError}
                     />
@@ -961,14 +1076,21 @@ export function CreateFeatureForm({ onCreated, onClose }: CreateFeatureFormProps
                     Next: {STEPS[stepIndex + 1]}
                   </button>
                 ) : (
-                  <button
-                    key="create-feature"
-                    type="submit"
-                    className="sheet__footer-primary"
-                    disabled={pending}
-                  >
-                    {pending ? 'Creating…' : autoStart ? 'Create and start' : 'Create'}
-                  </button>
+                  <>
+                    {uploadsBlocking ? (
+                      <span className="sheet__footer-note" role="status">
+                        {STAGED_ITEMS_BLOCK_SUBMIT}
+                      </span>
+                    ) : null}
+                    <button
+                      key="create-feature"
+                      type="submit"
+                      className="sheet__footer-primary"
+                      disabled={pending || uploadsBlocking}
+                    >
+                      {pending ? 'Creating…' : autoStart ? 'Create and start' : 'Create'}
+                    </button>
+                  </>
                 )}
               </div>
             )}

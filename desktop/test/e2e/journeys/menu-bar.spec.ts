@@ -226,7 +226,11 @@ test('the application menu bar drives New Feature, the View toggles, and the Fea
     const catalogue = await probe('the authoritative action catalogue', () =>
       handle!.page.evaluate(async () => {
         const settings = await window.agentico.getSettings();
-        const id = settings.shell.activeFeatureId;
+        const state = await window.agentico.getConnectionStatus();
+        const id =
+          state.serverKey == null
+            ? null
+            : (settings.shell.featureByServer[state.serverKey] ?? null);
         if (id === null) throw new Error('no feature is selected');
         return (await window.agentico.getFeature(id)).actions;
       }),
@@ -315,7 +319,11 @@ test('the application menu bar drives New Feature, the View toggles, and the Fea
         const snapshot = await probe('the authoritative feature snapshot', () =>
           handle!.page.evaluate(async () => {
             const settings = await window.agentico.getSettings();
-            const id = settings.shell.activeFeatureId;
+            const state = await window.agentico.getConnectionStatus();
+            const id =
+              state.serverKey == null
+                ? null
+                : (settings.shell.featureByServer[state.serverKey] ?? null);
             return id === null ? null : await window.agentico.getFeature(id);
           }),
         );

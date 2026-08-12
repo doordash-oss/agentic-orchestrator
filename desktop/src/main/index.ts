@@ -15,13 +15,17 @@ import {
   nativeTheme,
   net,
   protocol,
+  safeStorage,
   session,
   shell,
   systemPreferences,
   type Event as ElectronEvent,
   type MessageBoxReturnValue,
 } from 'electron';
-import { createRuntimeGateway } from './gateway/wiring';
+import { createRuntimeGateway, fetchJson, MAX_PROBE_RESPONSE_BYTES } from './gateway/wiring';
+import { ServerListService } from './gateway/serverListService';
+import { addRemoteServer } from './gateway/addRemoteServer';
+import { removeKnownServer, serverTokenStatus } from './gateway/removeServer';
 import { AccentController, type AccentColorSource } from './accent';
 import {
   resolveTestOutputFile,
@@ -36,6 +40,8 @@ import { RecoveryService } from './recovery';
 import { BulkService } from './bulk';
 import { AttentionService } from './attention';
 import { SessionService } from './serverClient';
+import { UploadService } from './uploads';
+import { randomUUID } from 'node:crypto';
 import { registerIpcHandlers, type IpcServices } from './ipcHandlers';
 import {
   installSecurityPolicies,
@@ -54,6 +60,7 @@ import { ThemeController } from './theme';
 import {
   actionableAttentionCount,
   CHAT_SESSION_ID,
+  DEFAULT_RUNTIME_ID,
   disabledMainWindowUiState,
   CREATION_IMAGE_FORMATS,
   IPC_EVENTS,
@@ -66,6 +73,7 @@ import {
   type AppEvent,
   type AppRouteEvent,
   type FeatureSnapshot,
+  type SettingsFocus,
   type SettingsSection,
   type WindowPurpose,
 } from '../shared/ipc';
@@ -75,7 +83,7 @@ import {
   routeSettingsPane,
   routeWindowPurpose,
 } from './windowRegistry';
-import { toSafeError } from '../shared/errors';
+import { redactText, toSafeError } from '../shared/errors';
 import {
   RENDERER_ENTRY_URL,
   RENDERER_ORIGIN,
@@ -394,12 +402,18 @@ if (!hasSingleInstanceLock) {
 
     const settings = new SettingsStore(app.getPath('userData'));
     const localDrafts = new LocalDraftStore(app.getPath('userData'));
-    const { gateway, logBuffer } = createRuntimeGateway({
+    const { gateway, logBuffer, scanRegistry, remoteTokens } = createRuntimeGateway({
       getRuntimeSelection: () => settings.get().runtime.selection,
+      getServersPrefs: () => settings.get().servers,
+      recordAttachedServer: (entry) => {
+        settings.update({ servers: { upsertKnown: entry, lastUsed: entry.serverKey } });
+      },
       isPackaged: isPackagedRuntime,
       resourcesPath: runtimeResourcesPath,
       // out/main → out → desktop → repository root (development layout).
       appRoot: path.resolve(import.meta.dirname, '../../..'),
+      safeStorage,
+      userDataDir: app.getPath('userData'),
     });
     const diagnostics = new DiagnosticsService({
       userDataDir: app.getPath('userData'),
@@ -472,6 +486,9 @@ if (!hasSingleInstanceLock) {
       return result.canceled ? [] : result.filePaths;
     };
     const readClipboardImage = async (): Promise<{ paths: string[] }> => {
+      // Clipboard capture writes the same local temp file under every
+      // connection kind: locally the path is submitted as-is; remotely the
+      // renderer stages it through the upload channel.
       const image = clipboard.readImage();
       if (image.isEmpty()) return { paths: [] };
       const directory = path.join(app.getPath('temp'), 'agentico-clipboard');
@@ -503,19 +520,34 @@ if (!hasSingleInstanceLock) {
     const creationFiles = new CreationFilesService({
       pickFiles: pickCreationFiles,
       readReadiness: () => setup.getReadiness(),
+      locality: () => gateway.connectedLocality,
+    });
+
+    // Upload staging for remote connections: the bearer and server identity
+    // are gateway-owned; this service only reads local files and posts bytes.
+    const uploads = new UploadService({
+      transport: gateway,
+      readFile: (filePath) => fs.promises.readFile(filePath),
+      statFile: (filePath) => fs.promises.stat(filePath),
+      serverKey: () => {
+        const state = gateway.getState();
+        return state.status === 'ready' ? (state.serverKey ?? null) : null;
+      },
     });
 
     const features = new FeatureService({
       transport: gateway,
       readReadiness: () => setup.getReadiness(),
       resolveRepositoryFiles: (refs) => creationFiles.resolve(refs),
+      locality: () => gateway.connectedLocality,
     });
     const completion = new CompletionService({
       transport: gateway,
+      locality: () => gateway.connectedLocality,
     });
     const recovery = new RecoveryService(gateway);
     const bulk = new BulkService(features);
-    const sessions = new SessionService(gateway);
+    const sessions = new SessionService(gateway, randomUUID, () => gateway.connectedLocality);
     const reviews = new ReviewService(gateway);
     const configService = new ConfigService(gateway);
     const attention = new AttentionService(gateway);
@@ -563,6 +595,35 @@ if (!hasSingleInstanceLock) {
       return window !== null && !window.isDestroyed() ? window : null;
     };
 
+    // The switcher popover's server list: union of registry scan and
+    // persisted known-servers, health probed only while the popover signals
+    // open. Rows are renderer-safe — no token or base URL crosses.
+    const serverList = new ServerListService({
+      scanRegistry,
+      knownServers: () => settings.get().servers,
+      currentServerKey: () => gateway.getState().serverKey ?? null,
+      fetchJson: (url, options) =>
+        fetchJson(url, { ...options, maxResponseBytes: MAX_PROBE_RESPONSE_BYTES }),
+      // Locked name rule after successful liveness probes: the service only
+      // ever asks for a real change, so a no-op patch is dropped here too.
+      recordProbedServer: (serverKey, patch) => {
+        const entry = settings.get().servers.known.find((item) => item.serverKey === serverKey);
+        if (entry === undefined) {
+          return;
+        }
+        const name = patch.name ?? entry.name;
+        const lastSeenAt = patch.lastSeenAt ?? entry.lastSeenAt;
+        if (name === entry.name && lastSeenAt === entry.lastSeenAt) {
+          return;
+        }
+        settings.update({ servers: { upsertKnown: { ...entry, name, lastSeenAt } } });
+      },
+      log: (line) => console.warn(`[agentico-servers] ${redactText(line)}`),
+      // Server-controlled probe names ride the same secret registry as the
+      // log buffer, so a replayed bearer cannot be persisted into settings.
+      scrubProbeText: (text) => logBuffer.scrub(text),
+    });
+
     // Connection state is fanned out to every open window rather than wired
     // per-window at creation, so the Settings window's panes see the same
     // runtime state the main window does.
@@ -570,6 +631,15 @@ if (!hasSingleInstanceLock) {
       for (const window of windows.all()) {
         if (!window.isDestroyed()) {
           window.webContents.send(IPC_EVENTS.connectionChanged, state);
+        }
+      }
+      serverList.notifyConnectionChanged();
+    });
+
+    serverList.subscribe((snapshot) => {
+      for (const window of windows.all()) {
+        if (!window.isDestroyed()) {
+          window.webContents.send(IPC_EVENTS.serversChanged, snapshot);
         }
       }
     });
@@ -588,17 +658,27 @@ if (!hasSingleInstanceLock) {
      * every settings route is a no-op. A drop after the window is open leaves
      * it open — the panes' own degraded states handle it.
      *
-     * The pane is persisted before the window is raised so a cold open reads
-     * it back as its initial pane, and pushed as a route event so an already
-     * open window switches; both paths land on the same pane.
+     * The pane (and any within-pane focus intent) is persisted before the
+     * window is raised so a cold open reads them back, and pushed as a
+     * route event so an already open window switches; both paths land on
+     * the same pane and intent. The window clears a consumed focus intent.
      */
-    const openSettingsWindow = (pane: SettingsSection | null): boolean => {
+    const openSettingsWindow = (
+      pane: SettingsSection | null,
+      focus: SettingsFocus | null = null,
+    ): boolean => {
       if (gateway.getState().status !== 'ready') {
         return false;
       }
       if (pane !== null) {
         try {
-          settings.update({ settingsWindow: { ...settings.get().settingsWindow, pane } });
+          settings.update({
+            settingsWindow: {
+              ...settings.get().settingsWindow,
+              pane,
+              ...(focus === null ? {} : { focus }),
+            },
+          });
         } catch {
           // A pane preference is never worth failing the open for.
         }
@@ -609,6 +689,7 @@ if (!hasSingleInstanceLock) {
         window.webContents.send(IPC_EVENTS.routeRequested, {
           target: 'settings',
           settingsSection: pane,
+          ...(focus === null ? {} : { settingsFocus: focus }),
         });
       }
       return true;
@@ -621,7 +702,7 @@ if (!hasSingleInstanceLock) {
      */
     const route = (event: AppRouteEvent): void => {
       if (routeWindowPurpose(event) === 'settings') {
-        openSettingsWindow(routeSettingsPane(event));
+        openSettingsWindow(routeSettingsPane(event), event.settingsFocus ?? null);
         return;
       }
       const window = showMainWindow();
@@ -1030,9 +1111,34 @@ if (!hasSingleInstanceLock) {
     stopStreams = () => {
       eventSupervisor.stop();
       sessions.cancelAll();
+      serverList.dispose();
     };
+    // The stream cursor is scoped to the attached server's identity: a server
+    // switch starts a fresh (seq, epoch) space, while same-server reconnects
+    // keep replaying only missed events.
+    let streamServerKey: string | null = null;
+    // Review drafts saved before the serverKey identity existed carry the
+    // global runtime.selection as their runtimeId; the first ready connection
+    // re-keys them to the connecting server's identity. Drafts belonging to a
+    // different identity are never touched.
+    let legacyDraftsRekeyed = false;
     gateway.subscribe((state) => {
       if (state.status === 'ready') {
+        const key = state.serverKey ?? null;
+        if (key !== streamServerKey) {
+          eventSupervisor.resetCursor();
+          streamServerKey = key;
+        }
+        if (!legacyDraftsRekeyed && key !== null) {
+          legacyDraftsRekeyed = true;
+          const selection = settings.get().runtime.selection;
+          const legacyIds = [
+            ...new Set([selection ?? DEFAULT_RUNTIME_ID, DEFAULT_RUNTIME_ID]),
+          ].filter((id) => id !== key);
+          if (legacyIds.length > 0) {
+            localDrafts.rekeyRuntimeIds(key, legacyIds);
+          }
+        }
         eventSupervisor.start();
         updates.startAutomaticChecks();
         void refreshBackgroundState();
@@ -1065,6 +1171,48 @@ if (!hasSingleInstanceLock) {
       getConnectionStatus: () => gateway.getState(),
       retryConnection: () => gateway.retry(),
       restartConnection: () => gateway.restart(),
+      chooseConnectionServer: (request) => gateway.chooseServer(request),
+      switchConnectionServer: (request) => gateway.switchServer(request),
+      listServers: () => serverList.list(),
+      probeServers: (request) => serverList.setOpen(request.open),
+      addRemoteServer: (request) =>
+        addRemoteServer(request, {
+          fetchJson: (url, options) =>
+            fetchJson(url, { ...options, maxResponseBytes: MAX_PROBE_RESPONSE_BYTES }),
+          scanRegistry,
+          knownServers: () => settings.get().servers,
+          upsertRemoteEntry: (entry) => {
+            settings.update({ servers: { upsertKnown: entry } });
+            void refreshBackgroundState();
+          },
+          remoteTokens,
+          registerSecret: (secret) => logBuffer.addSecret(secret),
+          log: (line) => console.warn(`[agentico-servers] ${redactText(line)}`),
+        }),
+      removeServer: (request) =>
+        removeKnownServer(request, {
+          knownServers: () => settings.get().servers,
+          removeRemoteToken: (serverKey) => remoteTokens.remove(serverKey),
+          removeKnownEntry: (serverKey) => {
+            const lastUsed = settings.get().servers.lastUsed;
+            settings.update({
+              servers: {
+                removeKnown: serverKey,
+                // A last-used pointer at the removed server must die with it
+                // before the teardown re-runs the startup selection flow.
+                ...(lastUsed === serverKey ? { lastUsed: null } : {}),
+              },
+            });
+            void refreshBackgroundState();
+          },
+          disconnectServer: (disconnectRequest) => gateway.disconnectServer(disconnectRequest),
+          log: (line) => console.warn(`[agentico-servers] ${redactText(line)}`),
+        }),
+      getServerTokenStatus: (request) =>
+        serverTokenStatus(request, {
+          knownServers: () => settings.get().servers,
+          loadRemoteToken: (serverKey) => remoteTokens.load(serverKey),
+        }),
       getSettings: () => settings.get(),
       updateSettings: (patch) => {
         const next = settings.update(patch);
@@ -1072,7 +1220,7 @@ if (!hasSingleInstanceLock) {
         return next;
       },
       openSettingsWindow: (request) => ({
-        opened: openSettingsWindow(request.section ?? null),
+        opened: openSettingsWindow(request.section ?? null, request.focus ?? null),
       }),
       getTheme: () => theme.getInfo(),
       setTheme: (preference) => {
@@ -1123,6 +1271,7 @@ if (!hasSingleInstanceLock) {
       cancelSessionOutput: (subscriptionId) => sessions.cancel(subscriptionId),
       getCreationDefaults: () => features.creationDefaults(),
       pickCreationFiles: (kind) => creationFiles.pickFiles(kind),
+      uploadCreationFiles: (kind, paths) => uploads.stageFiles(kind, paths),
       readClipboardImage,
       searchCreationFiles: (request) => creationFiles.search(request),
       cancelCreationFileSearch: (requestId) => creationFiles.cancelSearch(requestId),
@@ -1201,6 +1350,7 @@ if (!hasSingleInstanceLock) {
         features.generatePublishDescription(request.featureId, request.repos ?? []),
       openExternal: (request) => completion.openExternal(request),
       revealPath: (request) => completion.revealPath(request),
+      writeClipboardText: (text) => completion.writeClipboardText(text),
       // The native menu bar's only source of renderer-owned state. Coarse and
       // push-on-change: the controller itself drops an unchanged summary.
       publishUiState: (state) => {
@@ -1286,6 +1436,20 @@ function routeFromUrl(raw: string): AppRouteEvent | null {
   }
   if (parsed.hostname === 'diagnostics' || parsed.pathname === '/diagnostics') {
     return { target: 'settings', settingsSection: 'diagnostics' };
+  }
+  // agentico://servers and agentico://servers/add — the latter carries the
+  // within-pane intent to focus the Servers pane's add-server form.
+  const isServers =
+    parsed.hostname === 'servers' ||
+    parsed.pathname === '/servers' ||
+    parsed.pathname === '/servers/add';
+  if (isServers) {
+    const addIntent = parsed.pathname === '/add' || parsed.pathname === '/servers/add';
+    return {
+      target: 'settings',
+      settingsSection: 'servers',
+      ...(addIntent ? { settingsFocus: 'add-server' as const } : {}),
+    };
   }
   return { target: 'settings' };
 }

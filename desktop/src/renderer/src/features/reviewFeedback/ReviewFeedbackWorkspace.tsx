@@ -569,8 +569,35 @@ export function ReviewFeedbackWorkspace({
 
       {lifecycle.phase === 'ready' ? (
         counts.total === 0 ? (
-          <div className="review-feedback-modal__empty" role="status">
-            <p>No unaddressed comments. Every repository is up to date.</p>
+          <div className="review-feedback-empty">
+            <p className="review-feedback-empty__title" role="status">
+              No unaddressed comments. Every repository is up to date.
+            </p>
+            <p className="review-feedback-empty__hint">
+              Feedback can arrive at any time — refresh to check the pull requests again, or go back
+              to the feature.
+            </p>
+            <div className="review-feedback-empty__actions">
+              <button
+                type="button"
+                className="launcher-modal__primary"
+                disabled={launching}
+                onClick={() => {
+                  setLaunchError(null);
+                  draft.reload();
+                }}
+              >
+                Refresh feedback
+              </button>
+              <button
+                type="button"
+                className="review-feedback-empty__back"
+                disabled={launching || leaving}
+                onClick={requestBack}
+              >
+                {leaving ? 'Saving…' : 'Back'}
+              </button>
+            </div>
           </div>
         ) : (
           <>

@@ -97,10 +97,11 @@ type ReviewFeedbackLaunchResult struct {
 
 // LaunchReviewFeedbackChildFromDraft commits the pending draft: it validates
 // the expected revision, re-resolves current GitHub content for the selected
-// reviewed references, and creates the child from that current content. Child
-// creation, receipt persistence, and draft consumption commit as one store
-// transaction under the creation lock; every failure before that transaction
-// leaves the draft intact.
+// reviewed references, and creates the child from that current content. The
+// draft stays durable until the creation intent commits; the stamped intent
+// is the consumption marker, and the pinned draft revision is deleted only
+// afterward, so every failure or interruption before that commit leaves the
+// acknowledged draft fully intact.
 //
 // Launch is idempotent: the durable creation intent and the created child's
 // relationship carry a ReviewFeedbackLaunchReceipt. Repeating the launch for
@@ -201,11 +202,11 @@ func (m *Manager) LaunchReviewFeedbackChildFromDraft(parentID string, expectedRe
 		}
 		return nil, err
 	}
-	// Durable child creation succeeded and already consumed the draft under
-	// the creation lock. This revision-checked sweep is a defensive idempotent
-	// finish for legacy state (a draft committed after the receipt's revision
-	// is never deleted): the receipt on the child relationship keeps a
-	// repeated launch idempotent even when this pass finds nothing to remove.
+	// Durable child creation committed: consume the exact draft revision the
+	// receipt pinned. The revision-checked sweep is idempotent — replay,
+	// startup reconciliation, and the reconverging refresh path all perform
+	// the same pin-checked cleanup, and a draft committed after the receipt's
+	// revision is never deleted.
 	if err := m.Store.DeleteReviewFeedbackDraftIfRevision(parentID, receipt.DraftRevision); err != nil {
 		return nil, err
 	}

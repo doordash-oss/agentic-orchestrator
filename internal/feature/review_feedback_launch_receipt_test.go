@@ -19,8 +19,8 @@ import (
 	"strings"
 	"testing"
 
-	gitadapter "github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	gitadapter "github.com/doordash-oss/agentic-orchestrator/internal/git"
 )
 
 // launchReceiptManager builds the two-repo launch fixture: a published parent
@@ -169,8 +169,8 @@ func TestLaunchReplayRollsForwardPendingCreationIntent(t *testing.T) {
 	gate := true
 	// Inject a crash at the child-save boundary: the durable intent (with
 	// the launch receipt) is committed, the child is not materialized, and
-	// the draft was already consumed under the creation lock, so replay only
-	// has to finish the roll-forward.
+	// the draft is still on disk pinned at the consumed revision, so replay
+	// finishes both the roll-forward and the pinned draft cleanup.
 	mgr.Store.SetSaveHook(&feature.StoreSaveHook{FailOnCall: 2})
 	if _, err := mgr.LaunchReviewFeedbackChildFromDraft(parent.ID, draft.Revision, &gate); err == nil || !strings.Contains(err.Error(), "saving child") {
 		t.Fatalf("interrupted launch error = %v, want injected child-save failure", err)
@@ -189,6 +189,16 @@ func TestLaunchReplayRollsForwardPendingCreationIntent(t *testing.T) {
 	pendingReceipt := interrupted.PendingChild.LaunchReceipt
 	if pendingReceipt.DraftRevision != draft.Revision {
 		t.Fatalf("intent receipt revision = %d, want %d", pendingReceipt.DraftRevision, draft.Revision)
+	}
+	// The consumed draft is still durable at the pinned revision: deletion
+	// happens only after the intent commits, never inside the pre-commit
+	// callback.
+	pinned, err := mgr.Store.LoadReviewFeedbackDraft(parent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pinned == nil || pinned.Revision != draft.Revision || pinned.SnapshotID != draft.SnapshotID {
+		t.Fatalf("draft after interrupted launch = %+v, want pinned revision %d snapshot %q", pinned, draft.Revision, draft.SnapshotID)
 	}
 
 	replayed, err := mgr.LaunchReviewFeedbackChildFromDraft(parent.ID, draft.Revision, &gate)
@@ -218,15 +228,16 @@ func TestLaunchReplayRollsForwardPendingCreationIntent(t *testing.T) {
 	}
 }
 
-func TestLaunchParentIntentSaveFailureRestoresConsumedDraft(t *testing.T) {
+func TestLaunchInterruptionBeforeFirstIntentSavePreservesAcknowledgedDraft(t *testing.T) {
 	mgr, parent, draft := launchReceiptManager(t)
 	installLaunchFetchStub(t, launchReceiptFetch())
 
 	gate := true
-	// Fail the first saveUnlocked call: the durable parent intent never
-	// commits, so the launch must roll back the exact draft it consumed
-	// under the creation lock instead of orphaning the acknowledged
-	// selections.
+	// Fail the first saveUnlocked call — the durable parent intent never
+	// commits. Every pre-commit exit (this storage fault or a process
+	// interruption at the same boundary) must leave the acknowledged draft
+	// fully intact on disk: the draft is never deleted before the intent is
+	// durable, so nothing has to be rolled back.
 	mgr.Store.SetSaveHook(&feature.StoreSaveHook{FailOnCall: 1})
 	defer mgr.Store.ResetSaveHook()
 	if _, err := mgr.LaunchReviewFeedbackChildFromDraft(parent.ID, draft.Revision, &gate); err == nil || !strings.Contains(err.Error(), "saving parent with child intent") {
@@ -261,13 +272,57 @@ func TestLaunchParentIntentSaveFailureRestoresConsumedDraft(t *testing.T) {
 		t.Fatalf("relationship children = %+v (err %v), want no child after rollback", children, err)
 	}
 
-	// The restored draft is launchable: a retry commits normally.
+	// The preserved draft is launchable: a retry commits normally and
+	// creates exactly one child.
 	mgr.Store.ResetSaveHook()
 	result, err := mgr.LaunchReviewFeedbackChildFromDraft(parent.ID, draft.Revision, &gate)
 	if err != nil {
 		t.Fatalf("retry launch error = %v", err)
 	}
 	assertReceiptCounts(t, result, 1, 1, 1)
+}
+
+func TestSelectionCommitRejectsDurableConsumedMarker(t *testing.T) {
+	mgr, parent, draft := launchReceiptManager(t)
+	installLaunchFetchStub(t, launchReceiptFetch())
+
+	gate := true
+	// Interrupt after the durable intent commits: the pending intent is the
+	// consumption marker pinned to the draft's revision.
+	mgr.Store.SetSaveHook(&feature.StoreSaveHook{FailOnCall: 2})
+	if _, err := mgr.LaunchReviewFeedbackChildFromDraft(parent.ID, draft.Revision, &gate); err == nil {
+		t.Fatal("want injected child-save failure")
+	}
+	mgr.Store.ResetSaveHook()
+
+	// A selection commit against the consumed revision is rejected with the
+	// typed consumed error instead of mutating the draft the launch owns.
+	bumped := feature.ReconcileReviewFeedbackDraft(parent, draft, reviewedComments())
+	bumped.Revision = draft.Revision + 1
+	var consumed *feature.ReviewFeedbackDraftConsumedError
+	if err := mgr.Store.SaveReviewFeedbackDraft(parent.ID, bumped, draft.Revision); !errors.As(err, &consumed) {
+		t.Fatalf("selection commit error = %v, want draft-consumed rejection", err)
+	}
+	kept, err := mgr.Store.LoadReviewFeedbackDraft(parent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if kept == nil || kept.Revision != draft.Revision || kept.SnapshotID != draft.SnapshotID {
+		t.Fatalf("draft after rejected commit = %+v, want untouched pinned revision %d", kept, draft.Revision)
+	}
+
+	// Roll-forward consumes the pinned revision; a fresh editing session can
+	// then commit normally against the empty draft.
+	if _, err := mgr.Store.ReconcilePendingChildCreations(); err != nil {
+		t.Fatal(err)
+	}
+	if kept, err := mgr.Store.LoadReviewFeedbackDraft(parent.ID); err != nil || kept != nil {
+		t.Fatalf("draft after reconcile = %+v (err %v), want consumed", kept, err)
+	}
+	fresh := feature.ReconcileReviewFeedbackDraft(parent, nil, reviewedComments())
+	if err := mgr.Store.SaveReviewFeedbackDraft(parent.ID, fresh, 0); err != nil {
+		t.Fatalf("fresh draft commit after roll-forward error = %v", err)
+	}
 }
 
 func TestStartupReconciliationClearsDraftConsumedByLaunchReceipt(t *testing.T) {
@@ -346,10 +401,10 @@ func TestLaunchReplayCleanupNeverDeletesNewerDraftRevision(t *testing.T) {
 	if _, err := mgr.LaunchReviewFeedbackChildFromDraft(parent.ID, draft.Revision, &gate); err != nil {
 		t.Fatalf("first launch error = %v", err)
 	}
-	// The completed launch consumed the draft inside the creation
-	// transaction: nothing remains for the post-create sweep to remove.
+	// The completed launch consumed the draft: nothing remains after the
+	// post-commit pinned-revision sweep.
 	if kept, err := mgr.Store.LoadReviewFeedbackDraft(parent.ID); err != nil || kept != nil {
-		t.Fatalf("draft after launch = %+v (err %v), want consumed under the creation lock", kept, err)
+		t.Fatalf("draft after launch = %+v (err %v), want consumed after durable creation", kept, err)
 	}
 
 	// A new editing session commits its own acknowledged selection after the

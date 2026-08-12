@@ -44,6 +44,20 @@ const reviewFeedbackDraftFilename = "draft.json"
 // pending draft and none exists for the parent.
 var ErrReviewFeedbackDraftNotFound = errors.New("review feedback draft not found")
 
+// ReviewFeedbackDraftConsumedError rejects a commit against a draft revision
+// already consumed by a durable review-feedback creation intent. The intent
+// stamped on the parent is the consumption marker: the launch owns that
+// revision now, and reconcile/replay removes it, so a selection commit can
+// never mutate (or resurrect edits over) a consumed draft.
+type ReviewFeedbackDraftConsumedError struct {
+	ParentID string
+	Revision int64
+}
+
+func (e *ReviewFeedbackDraftConsumedError) Error() string {
+	return fmt.Sprintf("review feedback draft revision %d for parent %q was consumed by a launch in flight", e.Revision, e.ParentID)
+}
+
 // ReviewFeedbackRevisionConflictError reports a stale expected revision.
 type ReviewFeedbackRevisionConflictError struct {
 	ParentID         string
@@ -150,6 +164,15 @@ func (s *Store) SaveReviewFeedbackDraft(parentID string, draft *ReviewFeedbackDr
 	if existing != nil {
 		current = existing.Revision
 	}
+	// Reject commits against a draft the durable creation intent already
+	// consumed. The check lives here — under the same store lock that
+	// serializes CreateChildLocked — so a selection commit can never slip
+	// between the intent commit and the pinned-revision cleanup. An
+	// unreadable parent record skips the guard: the draft write must not
+	// fail for a feature file the draft layer cannot parse.
+	if consumed, err := s.reviewFeedbackRevisionConsumedUnlocked(parentID, current); err == nil && consumed {
+		return &ReviewFeedbackDraftConsumedError{ParentID: parentID, Revision: current}
+	}
 	if expectedRevision > 0 && current != expectedRevision {
 		return &ReviewFeedbackRevisionConflictError{ParentID: parentID, ExpectedRevision: expectedRevision, CurrentRevision: current}
 	}
@@ -215,6 +238,20 @@ func (s *Store) deleteReviewFeedbackDraftIfRevisionUnlocked(parentID string, rev
 		return nil
 	}
 	return s.deleteReviewFeedbackDraftUnlocked(parentID)
+}
+
+// reviewFeedbackRevisionConsumedUnlocked reports whether the parent's durable
+// review-feedback creation intent carries a launch receipt pinned to
+// revision, marking that exact draft revision as consumed. Callers hold
+// s.mu.
+func (s *Store) reviewFeedbackRevisionConsumedUnlocked(parentID string, revision int64) (bool, error) {
+	parent, err := s.loadUnlocked(parentID)
+	if err != nil {
+		return false, err
+	}
+	intent := parent.PendingChild
+	return intent != nil && intent.Kind == ChildKindReviewFeedback &&
+		intent.LaunchReceipt != nil && intent.LaunchReceipt.DraftRevision == revision, nil
 }
 
 // deleteReviewFeedbackDraftUnlocked removes the pending draft while the

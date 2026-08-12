@@ -10115,6 +10115,63 @@ body {
   margin: 0;
 }
 
+/* True-empty workspace state: a deliberate compact group centered in the
+   available body area, pairing the explanatory message with the actions the
+   state invites (refresh for new feedback, back to the feature). */
+.review-feedback-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  padding: var(--space-6);
+  text-align: center;
+}
+
+.review-feedback-empty__title {
+  margin: 0;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.review-feedback-empty__hint {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  max-width: 42ch;
+}
+
+.review-feedback-empty__actions {
+  display: flex;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+.review-feedback-empty__back {
+  font-family: var(--bench-font-text);
+  font-weight: 700;
+  font-size: 13px;
+  color: var(--text);
+  background: transparent;
+  border: 1px solid var(--hairline);
+  border-radius: var(--bench-radius-control);
+  padding: var(--space-2) var(--space-4);
+  cursor: pointer;
+}
+
+.review-feedback-empty__back:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.review-feedback-empty__back:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
 .review-feedback-modal__groups {
   display: flex;
   flex-direction: column;

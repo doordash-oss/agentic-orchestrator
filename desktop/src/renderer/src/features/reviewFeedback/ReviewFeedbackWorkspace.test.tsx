@@ -159,6 +159,48 @@ function summary(text: string | RegExp): HTMLElement {
   });
 }
 
+describe('true-empty workspace', () => {
+  it('explains the state and offers Refresh feedback plus Back as the directed actions', async () => {
+    const mock = installAgenticoMock();
+    mock.api.getFeatureConfig.mockResolvedValue(featureConfigSnapshot({}));
+    mock.api.fetchReviewFeedback.mockResolvedValue(draftView({ repos: [] }));
+    const onBack = vi.fn();
+    const onDispatched = vi.fn();
+    render(
+      <ReviewFeedbackWorkspace
+        featureId={PARENT_ID}
+        snapshot={featureSnapshot({ repos: ['repo-a', 'repo-b'] })}
+        onBack={onBack}
+        onDispatched={onDispatched}
+      />,
+    );
+    const user = userEvent.setup();
+
+    await waitFor(() =>
+      expect(
+        screen
+          .getAllByRole('status')
+          .some((el) => /No unaddressed comments/.test(el.textContent ?? '')),
+      ).toBe(true),
+    );
+    // No launch control exists without comments, and Refresh feedback is the
+    // visible recovery action wired to the reload path.
+    expect(screen.queryByRole('button', { name: /Launch/ })).not.toBeInTheDocument();
+    const refresh = screen.getByRole('button', { name: 'Refresh feedback' });
+    expect(refresh).toBeEnabled();
+    await user.click(refresh);
+    await waitFor(() => expect(mock.api.fetchReviewFeedback).toHaveBeenCalledTimes(2));
+
+    // Back remains the secondary exit: both the header and the empty-state
+    // control leave the workspace.
+    for (const back of screen.getAllByRole('button', { name: 'Back' })) {
+      expect(back).toBeEnabled();
+      await user.click(back);
+    }
+    expect(onBack).toHaveBeenCalledTimes(2);
+  });
+});
+
 describe('rich review feedback cards', () => {
   /** Expand one card's collapsible content if its control exists. */
   async function expandAll(user: ReturnType<typeof userEvent.setup>) {

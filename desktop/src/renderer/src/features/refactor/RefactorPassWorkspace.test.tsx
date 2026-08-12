@@ -377,6 +377,21 @@ describe('RefactorPassWorkspace', () => {
     expect(mock.api.dispatchFeatureAction).toHaveBeenCalledTimes(1);
   });
 
+  it('dispatches auto-start when replay arms an already-startable child', async () => {
+    const mock = installAgenticoMock({ feature: readyChild() });
+    const { result } = renderHook(() => useRefactorPass(parentWith(), vi.fn()));
+
+    await waitFor(() => expect(result.current.child?.id).toBe(CHILD_ID));
+    act(() => result.current.armAutoStart(CHILD_ID));
+
+    await waitFor(() =>
+      expect(mock.api.dispatchFeatureAction).toHaveBeenCalledWith({
+        featureId: CHILD_ID,
+        action: 'start',
+      }),
+    );
+  });
+
   it('holds an armed auto-start while the server still blocks start', async () => {
     const mock = installAgenticoMock({
       feature: readyChild({

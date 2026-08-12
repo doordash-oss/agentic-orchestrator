@@ -167,21 +167,25 @@ export function useRefactorPass(
   // The server refuses start while child setup is queued or running, so a
   // launch-time auto-start arms here and fires on the snapshot that first
   // enables the verb (setup completion arrives through the event stream).
-  const autoStartChildIdRef = useRef<string | null>(null);
-  const armAutoStart = useCallback((id: string) => {
-    autoStartChildIdRef.current = id;
-  }, []);
+  const [autoStartChildId, setAutoStartChildId] = useState<string | null>(null);
+  const armAutoStart = useCallback((id: string) => setAutoStartChildId(id), []);
   useEffect(() => {
-    const armed = autoStartChildIdRef.current;
-    if (!active || armed === null || busy || child === null || child.id !== armed) return;
+    if (
+      !active ||
+      autoStartChildId === null ||
+      busy ||
+      child === null ||
+      child.id !== autoStartChildId
+    )
+      return;
     if (child.closeOutcome !== undefined && child.closeOutcome !== '') {
-      autoStartChildIdRef.current = null;
+      setAutoStartChildId(null);
       return;
     }
     if (!child.actions.some((action) => action.id === 'start' && action.enabled)) return;
-    autoStartChildIdRef.current = null;
+    setAutoStartChildId(null);
     void dispatch('start');
-  }, [active, busy, child, dispatch]);
+  }, [active, autoStartChildId, busy, child, dispatch]);
 
   const discard = useCallback(async () => {
     if (child === null || discardAction?.impactPreview === undefined || busy) return;

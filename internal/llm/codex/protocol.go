@@ -2268,6 +2268,18 @@ func splitOptionLabelDesc(raw string) (string, string) {
 	if raw == "" {
 		return "", ""
 	}
+	if strings.HasPrefix(raw, "**") {
+		if closing := strings.Index(raw[2:], "**"); closing >= 0 {
+			closing += 2
+			label := strings.TrimSpace(raw[2:closing])
+			desc := strings.TrimSpace(raw[closing+2:])
+			if desc != "" {
+				label = strings.TrimSpace(strings.TrimRight(label, ".:"))
+				desc = strings.TrimSpace(strings.TrimLeft(desc, "—–-: "))
+			}
+			return label, desc
+		}
+	}
 	label := raw
 	desc := ""
 	if idx := strings.Index(raw, ":"); idx >= 0 {

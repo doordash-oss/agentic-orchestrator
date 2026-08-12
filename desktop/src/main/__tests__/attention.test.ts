@@ -445,6 +445,8 @@ describe('AttentionService review items', () => {
   });
 
   it("routes a refactor pass's prompts to the parent instead of dropping them", async () => {
+    const longOptionLabel =
+      '**Service-level row and byte caps — Recommended (High confidence).** Configure global maximum rows and decoded bytes, stop scanning as soon as either limit is exceeded, and expose classified overflow telemetry. This protects memory predictably without expanding table metadata or cross-repo configuration contracts.';
     const service = new AttentionService({
       apiRequest: (path) => {
         const body =
@@ -458,7 +460,12 @@ describe('AttentionService review items', () => {
                     session_id: 'child-1-fix-01',
                     tool_name: 'ask-user',
                     status: 'pending',
-                    questions: [{ question: 'Which language should the body keep?' }],
+                    questions: [
+                      {
+                        question: 'What scope should control the maximum snapshot size?',
+                        options: [{ label: longOptionLabel }],
+                      },
+                    ],
                   },
                 ],
                 help_queue: [
@@ -521,6 +528,10 @@ describe('AttentionService review items', () => {
     for (const item of snapshot.items) {
       expect(item).toMatchObject({ featureId: 'child-1', parentFeatureId: 'parent-1' });
     }
+    expect(snapshot.items.find((item) => item.id === 'ask-pass')).toMatchObject({
+      kind: 'questions',
+      questions: [{ options: [{ label: longOptionLabel }] }],
+    });
   });
 
   it('returns the stale-resolution response for a missing pending request', async () => {

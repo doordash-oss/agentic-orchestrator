@@ -1830,7 +1830,8 @@ export type RewindExecuteRequest = z.output<typeof RewindExecuteRequestSchema>;
 const AttentionIDSchema = z.string().min(1).max(200);
 const AttentionTextSchema = z.string().max(64 * 1024);
 export const AttentionOptionSchema = z.strictObject({
-  label: z.string().max(200),
+  // The server preserves provider-visible option labels up to 1,000 chars.
+  label: z.string().max(1000),
   description: AttentionTextSchema.optional(),
   confidence: z.number().min(0).max(1).optional(),
 });

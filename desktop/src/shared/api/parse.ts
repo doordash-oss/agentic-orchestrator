@@ -192,7 +192,8 @@ const AttentionTextSchema = z.string().max(64 * 1024);
 const AttentionIDSchema = z.string().min(1).max(200);
 
 export const ServerAskUserOptionSchema = z.object({
-  label: z.string().max(200).optional(),
+  // Matches the server's SafeDisplayText budget for AskUser option labels.
+  label: z.string().max(1000).optional(),
   description: AttentionTextSchema.optional(),
   confidence: z.number().min(0).max(1).optional(),
 });

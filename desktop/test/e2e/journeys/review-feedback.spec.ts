@@ -19,7 +19,13 @@ import { expect, test, type TestInfo } from '@playwright/test';
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
-import { closeApp, createFeatureViaForm, launchApp, type AppHandle } from '../helpers/app';
+import {
+  closeApp,
+  contractEvidenceShot,
+  createFeatureViaForm,
+  launchApp,
+  type AppHandle,
+} from '../helpers/app';
 import { Transcript } from '../helpers/transcript';
 import {
   addBareRemote,
@@ -287,6 +293,20 @@ test('multi-repo review-feedback triage: sections → filtered bulk clear → re
     for (let i = 0; i < 4; i++) {
       await expect(boxes.nth(i)).toBeChecked();
     }
+    await contractEvidenceShot(
+      handle,
+      'review-feedback-native-cockpit-wide-light',
+      1440,
+      900,
+      'light',
+    );
+    await contractEvidenceShot(
+      handle,
+      'review-feedback-native-cockpit-wide-dark',
+      1440,
+      900,
+      'dark',
+    );
     transcript.step('stable per-repo sections, ledger ratios, all four comments pre-selected');
 
     transcript.section('Rich feedback cards: safe GFM, trust-boundary actions, diff context');
@@ -411,6 +431,20 @@ test('multi-repo review-feedback triage: sections → filtered bulk clear → re
     await drawer.getByRole('checkbox', { name: 'alice' }).check();
     await expect(drawer).toBeVisible();
     await expect(feed.getByText('1 of 4 comments visible').first()).toBeVisible();
+    await contractEvidenceShot(
+      handle,
+      'review-feedback-native-cockpit-narrow-drawer-light',
+      800,
+      900,
+      'light',
+    );
+    await contractEvidenceShot(
+      handle,
+      'review-feedback-native-cockpit-narrow-drawer-dark',
+      800,
+      900,
+      'dark',
+    );
     await handle.page.keyboard.press('Escape');
     await expect(drawer).toHaveCount(0);
     await expect(drawerOpener).toBeFocused();

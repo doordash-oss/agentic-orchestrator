@@ -237,6 +237,38 @@ func TestReviewFeedbackFetchConvergesDraftConsumedByLaunchReceipt(t *testing.T) 
 	}
 }
 
+func TestReviewFeedbackFetchRejectsConsumedAbsenceWhileIntentIsPending(t *testing.T) {
+	store, f := seedReviewFeedbackFetchFeature(t)
+	f.PendingChild = &feature.ChildCreationIntent{
+		Kind:    feature.ChildKindReviewFeedback,
+		ChildID: "child-review-active",
+		LaunchReceipt: &feature.ReviewFeedbackLaunchReceipt{
+			DraftRevision: 1,
+		},
+	}
+	if err := store.Save(f); err != nil {
+		t.Fatalf("Save(parent with pending intent): %v", err)
+	}
+	seedActiveReviewFeedbackChild(t, store, f.ID, f.PendingChild.LaunchReceipt)
+	installReviewFeedbackFetchFakeAPI(t, false)
+
+	handler := NewHandler(HandlerOptions{Features: store, FeatureStore: store, Mutations: &refactorMutationTarget{}, DisableHostValidation: true})
+	w := postTrustedJSON(handler, reviewFeedbackFetchPath(f.ID), map[string]any{})
+	if w.Code != http.StatusConflict {
+		t.Fatalf("fetch status = %d, want 409: %s", w.Code, w.Body.String())
+	}
+	var response ErrorResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode fetch response: %v", err)
+	}
+	if response.Error.Code != errCodeReviewFeedbackRevisionConflict {
+		t.Fatalf("error code = %q, want %q", response.Error.Code, errCodeReviewFeedbackRevisionConflict)
+	}
+	if kept, err := store.LoadReviewFeedbackDraft(f.ID); err != nil || kept != nil {
+		t.Fatalf("draft after rejected fetch = %+v (err %v), want absent", kept, err)
+	}
+}
+
 // A receipt that does not match the pending draft's revision does not claim
 // it: ordinary reconciliation retains the committed selections.
 func TestReviewFeedbackFetchIgnoresNonMatchingReceipt(t *testing.T) {

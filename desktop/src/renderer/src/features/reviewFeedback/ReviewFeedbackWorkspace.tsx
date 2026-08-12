@@ -468,7 +468,7 @@ export function ReviewFeedbackWorkspace({
       ) : null}
 
       {recovery?.kind === 'conflictReloading' ? (
-        <p role="status" className="review-feedback-modal__status">
+        <p role="status" className="review-feedback-workspace__status">
           Reloading selections…
         </p>
       ) : null}
@@ -537,25 +537,25 @@ export function ReviewFeedbackWorkspace({
       ) : null}
 
       {draft.reloaded ? (
-        <p role="status" className="review-feedback-workspace__ledger">
+        <p role="status" className="review-feedback-workspace__status">
           Saved selections reloaded; view reset to All feedback.
         </p>
       ) : null}
 
       {lifecycle.phase === 'loading' ? (
-        <p role="status" className="review-feedback-modal__status">
+        <p role="status" className="review-feedback-workspace__status">
           Fetching review feedback…
         </p>
       ) : null}
 
       {lifecycle.phase === 'error' ? (
-        <div className="review-feedback-modal__error">
+        <div className="review-feedback-workspace__error">
           <p className="form-field__error" role="alert">
             {lifecycle.error.message}
           </p>
           <button
             type="button"
-            className="review-feedback-modal__retry"
+            className="review-feedback-workspace__retry"
             disabled={launching}
             onClick={() => {
               setLaunchError(null);
@@ -631,7 +631,7 @@ export function ReviewFeedbackWorkspace({
               )}
             </div>
             <footer className="review-feedback-workspace__footer">
-              <label className="config-editor__gate review-feedback-modal__gate">
+              <label className="config-editor__gate review-feedback-workspace__gate">
                 <input
                   type="checkbox"
                   checked={gate}

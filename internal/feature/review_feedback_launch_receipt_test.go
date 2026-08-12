@@ -327,6 +327,46 @@ func TestSelectionCommitRejectsDurableConsumedMarker(t *testing.T) {
 	}
 }
 
+func TestDraftCreationRejectsConsumedAbsenceWhileIntentClearIsPending(t *testing.T) {
+	mgr, parent, draft := launchReceiptManager(t)
+	installLaunchFetchStub(t, launchReceiptFetch())
+
+	gate := true
+	// The third save is the final parent write that clears PendingChild. At
+	// this point the child and intent are durable and the receipt-pinned draft
+	// has already been deleted.
+	mgr.Store.SetSaveHook(&feature.StoreSaveHook{FailOnCall: 3})
+	if _, err := mgr.LaunchReviewFeedbackChildFromDraft(parent.ID, draft.Revision, &gate); err == nil ||
+		!strings.Contains(err.Error(), "clearing child intent") {
+		t.Fatalf("launch error = %v, want injected final intent-clear failure", err)
+	}
+	mgr.Store.ResetSaveHook()
+
+	if kept, err := mgr.Store.LoadReviewFeedbackDraft(parent.ID); err != nil || kept != nil {
+		t.Fatalf("draft after interrupted intent clear = %+v (err %v), want consumed absence", kept, err)
+	}
+	interrupted, err := mgr.Store.Load(parent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if interrupted.PendingChild == nil || interrupted.PendingChild.Kind != feature.ChildKindReviewFeedback {
+		t.Fatalf("PendingChild = %+v, want live review-feedback intent", interrupted.PendingChild)
+	}
+	children, err := mgr.Store.RelationshipChildren(parent.ID)
+	if err != nil || children.Active == nil || children.Active.ID != interrupted.PendingChild.ChildID {
+		t.Fatalf("relationship children = %+v (err %v), want the intent-owned child active", children, err)
+	}
+
+	fresh := feature.ReconcileReviewFeedbackDraft(parent, nil, reviewedComments())
+	var consumed *feature.ReviewFeedbackDraftConsumedError
+	if err := mgr.Store.SaveReviewFeedbackDraft(parent.ID, fresh, 0); !errors.As(err, &consumed) {
+		t.Fatalf("initial save after consumed absence error = %v, want draft-consumed rejection", err)
+	}
+	if kept, err := mgr.Store.LoadReviewFeedbackDraft(parent.ID); err != nil || kept != nil {
+		t.Fatalf("draft after rejected recreation = %+v (err %v), want absent", kept, err)
+	}
+}
+
 // TestChildCreationConsumesPinnedDraftWithinLockedTransition covers the
 // post-intent-clear window: the pinned draft must already be consumed when
 // CreateChildLocked returns with the intent cleared, not in a later second

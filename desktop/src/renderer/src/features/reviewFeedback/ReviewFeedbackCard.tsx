@@ -68,16 +68,16 @@ export function ReviewFeedbackCard({
       />
       {unsaved ? <span className="review-feedback-card__unsaved">Unsaved choice</span> : null}
       <div className="review-feedback-card__body">
-        <span className="review-feedback-modal__comment-meta">
-          <b className="review-feedback-modal__comment-type">{COMMENT_TYPE_LABEL[comment.type]}</b>
+        <span className="review-feedback-card__meta">
+          <b className="review-feedback-card__type">{COMMENT_TYPE_LABEL[comment.type]}</b>
           {comment.author !== undefined ? (
-            <span className="review-feedback-modal__comment-author">{comment.author}</span>
+            <span className="review-feedback-card__author">{comment.author}</span>
           ) : null}
           {created !== null ? (
             <span className="review-feedback-card__created">{created}</span>
           ) : null}
           {comment.path !== undefined ? (
-            <code className="review-feedback-modal__comment-path">
+            <code className="review-feedback-card__path">
               {comment.path}
               {comment.line !== undefined ? `:${comment.line}` : ''}
             </code>
@@ -106,9 +106,7 @@ export function ReviewFeedbackCard({
           </button>
         ) : null}
         {comment.inReplyToId !== undefined ? (
-          <p className="review-feedback-modal__comment-reply">
-            Reply to comment {comment.inReplyToId}
-          </p>
+          <p className="review-feedback-card__reply">Reply to comment {comment.inReplyToId}</p>
         ) : null}
       </div>
     </article>

@@ -164,13 +164,15 @@ func (s *Store) SaveReviewFeedbackDraft(parentID string, draft *ReviewFeedbackDr
 	if existing != nil {
 		current = existing.Revision
 	}
-	// Reject commits against a draft the durable creation intent already
-	// consumed. The check lives here — under the same store lock that
-	// serializes CreateChildLocked — so a selection commit can never slip
-	// between the intent commit and the pinned-revision cleanup. An
-	// unreadable parent record skips the guard: the draft write must not
-	// fail for a feature file the draft layer cannot parse.
-	if consumed, err := s.reviewFeedbackRevisionConsumedUnlocked(parentID, current); err == nil && consumed {
+	// A live review-feedback creation intent owns the entire draft mutation
+	// lane, including the consumed-absence state after its pinned draft was
+	// deleted but before the intent was durably cleared. The check lives here
+	// under the same store lock that serializes CreateChildLocked, so neither
+	// an initial save nor a revision update can be acknowledged behind the
+	// child already being created. An unreadable parent record skips the guard:
+	// the draft write must not fail for a feature file the draft layer cannot
+	// parse.
+	if consumed, err := s.reviewFeedbackCreationPendingUnlocked(parentID); err == nil && consumed {
 		return &ReviewFeedbackDraftConsumedError{ParentID: parentID, Revision: current}
 	}
 	if expectedRevision > 0 && current != expectedRevision {
@@ -240,18 +242,18 @@ func (s *Store) deleteReviewFeedbackDraftIfRevisionUnlocked(parentID string, rev
 	return s.deleteReviewFeedbackDraftUnlocked(parentID)
 }
 
-// reviewFeedbackRevisionConsumedUnlocked reports whether the parent's durable
-// review-feedback creation intent carries a launch receipt pinned to
-// revision, marking that exact draft revision as consumed. Callers hold
-// s.mu.
-func (s *Store) reviewFeedbackRevisionConsumedUnlocked(parentID string, revision int64) (bool, error) {
+// reviewFeedbackCreationPendingUnlocked reports whether the parent has any
+// live review-feedback creation intent. The intent is an exclusive mutation
+// barrier until it is durably cleared: its receipt may already have consumed
+// the on-disk draft, so the barrier cannot depend on draft presence or on the
+// current revision matching the receipt. Callers hold s.mu.
+func (s *Store) reviewFeedbackCreationPendingUnlocked(parentID string) (bool, error) {
 	parent, err := s.loadUnlocked(parentID)
 	if err != nil {
 		return false, err
 	}
 	intent := parent.PendingChild
-	return intent != nil && intent.Kind == ChildKindReviewFeedback &&
-		intent.LaunchReceipt != nil && intent.LaunchReceipt.DraftRevision == revision, nil
+	return intent != nil && intent.Kind == ChildKindReviewFeedback, nil
 }
 
 // deleteReviewFeedbackDraftUnlocked removes the pending draft while the

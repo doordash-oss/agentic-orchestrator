@@ -31,11 +31,10 @@ export interface ReviewFeedbackFeedProps {
   /** Unacknowledged overlay, for the unsaved badge while a save failure is frozen. */
   pending: ReadonlyMap<string, PendingSelection>;
   saveFailed: boolean;
-  expandedRefs: ReadonlySet<string>;
   /** Freezes every selection checkbox (launch in flight or unresolved recovery). */
   selectionDisabled: boolean;
   onToggle(comment: ReviewFeedbackDraftCommentView, checked: boolean): void;
-  onToggleExpanded(stableRef: string): void;
+  onOpen(comment: ReviewFeedbackDraftCommentView): void;
   onToggleAuthor(author: string): void;
   onToggleType(type: ReviewFeedbackDraftCommentView['type']): void;
   onPathChange(path: string): void;
@@ -52,10 +51,9 @@ export function ReviewFeedbackFeed({
   selectedOf,
   pending,
   saveFailed,
-  expandedRefs,
   selectionDisabled,
   onToggle,
-  onToggleExpanded,
+  onOpen,
   onToggleAuthor,
   onToggleType,
   onPathChange,
@@ -151,10 +149,9 @@ export function ReviewFeedbackFeed({
                 comment={comment}
                 checked={selectedOf(comment)}
                 unsaved={saveFailed && pending.has(comment.stableRef)}
-                expanded={expandedRefs.has(comment.stableRef)}
                 disabled={selectionDisabled}
                 onToggle={onToggle}
-                onToggleExpanded={onToggleExpanded}
+                onOpen={onOpen}
               />
             ))}
           </section>

@@ -204,8 +204,9 @@ describe('true-empty workspace', () => {
 describe('rich review feedback cards', () => {
   /** Expand one card's collapsible content if its control exists. */
   async function expandAll(user: ReturnType<typeof userEvent.setup>) {
-    for (const control of screen.queryAllByRole('button', { name: 'Show full feedback' })) {
+    for (const control of screen.queryAllByRole('button', { name: 'View full comment' })) {
       await user.click(control);
+      await user.click(screen.getByRole('button', { name: 'Close comment' }));
     }
   }
 
@@ -289,33 +290,25 @@ describe('rich review feedback cards', () => {
     expect(document.querySelector('pre code.hljs')).toHaveTextContent('newQueryCodec()');
   });
 
-  it('collapses long feedback deterministically and expands it for the rest of the entry', async () => {
+  it('keeps long feedback compact and opens the complete comment in a modal', async () => {
     const { user } = await renderWorkspace();
     const cards = screen.getAllByRole('article');
-    const control = within(cards[0]!).getByRole('button', { name: 'Show full feedback' });
-    const content = document.querySelector('#review-feedback-content-repo-a-review-41');
-    expect(control).toHaveAttribute('aria-expanded', 'false');
-    expect(control).toHaveAttribute('aria-controls', 'review-feedback-content-repo-a-review-41');
+    const control = within(cards[0]!).getByRole('button', { name: 'View full comment' });
+    const content = within(cards[0]!)
+      .getByText('Rewrite this to avoid the bearer token.')
+      .closest('[data-collapsed]');
     expect(content).toHaveAttribute('data-collapsed', 'true');
     await user.click(control);
-    expect(within(cards[0]!).getByRole('button', { name: 'Show less' })).toHaveAttribute(
-      'aria-expanded',
-      'true',
-    );
-    expect(content).toHaveAttribute('data-collapsed', 'false');
-    // Hiding the card behind a scope change, then showing it again, keeps the
-    // expansion for this entry.
-    await user.click(screen.getByRole('radio', { name: /^repo-b/ }));
-    expect(
-      screen.queryByLabelText(/Rewrite this to avoid the bearer token/),
-    ).not.toBeInTheDocument();
-    await user.click(screen.getByRole('radio', { name: /All feedback/ }));
-    expect(
-      within(screen.getAllByRole('article')[0]!).getByRole('button', { name: 'Show less' }),
-    ).toBeInTheDocument();
+    const dialog = screen.getByRole('dialog', { name: 'Review comment from Octocat' });
+    expect(within(dialog).getByText('Rewrite this to avoid the bearer token.')).toBeVisible();
+    expect(within(dialog).getByRole('group', { name: 'Diff' })).toBeVisible();
+    expect(within(dialog).getByRole('button', { name: 'Close comment' })).toHaveFocus();
+    await user.keyboard('{Escape}');
+    expect(dialog).not.toBeInTheDocument();
+    expect(control).toHaveFocus();
   });
 
-  it('omits the expansion control for short feedback and keeps its content expanded', async () => {
+  it('offers the full-comment reader for short feedback without truncating its preview', async () => {
     await renderWorkspace({
       draft: draftView({
         repos: [
@@ -335,7 +328,7 @@ describe('rich review feedback cards', () => {
         ],
       }),
     });
-    expect(screen.queryByRole('button', { name: 'Show full feedback' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'View full comment' })).toBeInTheDocument();
     expect(
       screen.getByText('Short note.').closest('[data-collapsed]')?.getAttribute('data-collapsed'),
     ).toBe('false');
@@ -362,7 +355,7 @@ describe('rich review feedback cards', () => {
         ],
       }),
     });
-    expect(screen.getByRole('button', { name: 'Show full feedback' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'View full comment' })).toBeInTheDocument();
   });
 });
 
@@ -492,7 +485,7 @@ describe('ReviewFeedbackWorkspace', () => {
     const empty = screen.getByRole('status');
     expect(empty).toHaveTextContent(/No comments match the active filters/);
     // Launch stays based on the full committed draft, not the empty feed.
-    expect(screen.getByRole('button', { name: 'Launch child (2)' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Address comments (2)' })).toBeEnabled();
     await user.click(within(empty).getByRole('button', { name: 'Clear all filters' }));
     expect(summary('3 of 3 comments visible')).toBeVisible();
   });
@@ -671,7 +664,7 @@ describe('ReviewFeedbackWorkspace', () => {
       expect(screen.queryByText(/Selections reloaded/)).not.toBeInTheDocument();
       // Mutations stay frozen while the draft is unreconciled.
       expect(comment90).toBeDisabled();
-      expect(screen.getByRole('button', { name: /Launch child/ })).toBeDisabled();
+      expect(screen.getByRole('button', { name: /Address comments/ })).toBeDisabled();
     });
 
     it('retrying a failed conflict reload recovers and then shows the focused conflict notice', async () => {
@@ -692,7 +685,7 @@ describe('ReviewFeedbackWorkspace', () => {
       expect(notice).toHaveFocus();
       // Reconciled: mutations are live again off the adopted revision.
       expect(screen.getByLabelText(/Overall looks good/)).toBeEnabled();
-      expect(screen.getByRole('button', { name: /Launch child \(2\)/ })).toBeEnabled();
+      expect(screen.getByRole('button', { name: /Address comments \(2\)/ })).toBeEnabled();
     });
   });
 
@@ -701,7 +694,7 @@ describe('ReviewFeedbackWorkspace', () => {
     const pending = deferred<{ revision: number; repos: ReviewFeedbackDraftView['repos'] }>();
     mock.api.updateReviewFeedbackSelection.mockReturnValueOnce(pending.promise);
     await user.click(screen.getByLabelText(/Consider extracting the parser/));
-    const launch = screen.getByRole('button', { name: /^Launch child/ });
+    const launch = screen.getByRole('button', { name: /^Address comments/ });
     expect(launch).toBeDisabled();
     pending.resolve(ackWith(8));
     await waitFor(() => expect(launch).toBeEnabled());
@@ -754,7 +747,7 @@ describe('ReviewFeedbackWorkspace', () => {
       omitted: 1,
       deferred: 3,
     });
-    await user.click(screen.getByRole('button', { name: /Launch child \(2\)/ }));
+    await user.click(screen.getByRole('button', { name: /Address comments \(2\)/ }));
     await waitFor(() => expect(mock.api.launchReviewFeedbackChild).toHaveBeenCalledOnce());
     expect(mock.api.launchReviewFeedbackChild).toHaveBeenCalledWith({
       parentId: PARENT_ID,
@@ -777,7 +770,7 @@ describe('ReviewFeedbackWorkspace', () => {
         code: 'review_feedback_zero_launchable_selection',
       }),
     );
-    await user.click(screen.getByRole('button', { name: /Launch child \(2\)/ }));
+    await user.click(screen.getByRole('button', { name: /Address comments \(2\)/ }));
     // The draft is preserved and the latest authoritative feedback is
     // adopted before the explanatory notice takes focus — never a repeat of
     // the same launch against the unchanged stale view.
@@ -788,7 +781,7 @@ describe('ReviewFeedbackWorkspace', () => {
     expect(notice).toHaveFocus();
     // The adopted view (not the stale launch view) is live again.
     expect(screen.getByLabelText(/Consider extracting the parser/)).toBeChecked();
-    expect(screen.getByRole('button', { name: /Launch child \(2\)/ })).toBeEnabled();
+    expect(screen.getByRole('button', { name: /Address comments \(2\)/ })).toBeEnabled();
   });
 
   it('keeps a focused retry when the zero-launchable refresh itself fails', async () => {
@@ -799,18 +792,20 @@ describe('ReviewFeedbackWorkspace', () => {
       }),
     );
     mock.api.fetchReviewFeedback.mockRejectedValueOnce(new Error('fetch unavailable'));
-    await user.click(screen.getByRole('button', { name: /Launch child \(2\)/ }));
+    await user.click(screen.getByRole('button', { name: /Address comments \(2\)/ }));
     const alert = await screen.findByRole('alert');
     expect(alert).toHaveTextContent('Selections could not be reloaded');
     expect(alert).toHaveTextContent(/still launchable/);
     expect(alert).toHaveFocus();
     // The generic launch path never returns; the focused retry reconciles.
-    expect(screen.queryByText(/fix the issue and choose Launch again/)).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(/fix the issue and choose Address comments again/),
+    ).not.toBeInTheDocument();
     mock.api.fetchReviewFeedback.mockResolvedValueOnce(draftView({ revision: 9 }));
     await user.click(screen.getByRole('button', { name: 'Retry reload' }));
     const notice = await screen.findByRole('alert');
     expect(notice).toHaveTextContent('Selected feedback is gone');
-    expect(screen.getByRole('button', { name: /Launch child \(2\)/ })).toBeEnabled();
+    expect(screen.getByRole('button', { name: /Address comments \(2\)/ })).toBeEnabled();
   });
 
   describe('unsaved-choice recovery', () => {
@@ -843,10 +838,10 @@ describe('ReviewFeedbackWorkspace', () => {
         screen.getByRole('button', { name: 'Unsaved choices — retry or reload' }),
       ).toBeDisabled();
       expect(screen.getByRole('button', { name: 'Back' })).toBeDisabled();
-      // …while scope, filters, expansion, and PR actions stay operable.
+      // …while scope, filters, comment reading, and PR actions stay operable.
       expect(screen.getByRole('radio', { name: /All feedback/ })).toBeEnabled();
       expect(screen.getByRole('searchbox', { name: 'File path' })).toBeEnabled();
-      expect(screen.getAllByRole('button', { name: 'Show full feedback' })[0]).toBeEnabled();
+      expect(screen.getAllByRole('button', { name: 'View full comment' })[0]).toBeEnabled();
       expect(screen.getAllByRole('button', { name: 'Open pull request' })[0]).toBeEnabled();
       expect(screen.getByRole('button', { name: 'Retry save' })).toBeEnabled();
       expect(screen.getByRole('button', { name: 'Reload saved selections' })).toBeEnabled();
@@ -951,7 +946,7 @@ describe('ReviewFeedbackWorkspace', () => {
       // Everything committed again: controls unfreeze with no unsaved markers.
       expect(screen.queryByText('Unsaved choice')).not.toBeInTheDocument();
       expect(screen.getByRole('button', { name: 'Back' })).toBeEnabled();
-      expect(screen.getByRole('button', { name: /Launch child/ })).toBeEnabled();
+      expect(screen.getByRole('button', { name: /Address comments/ })).toBeEnabled();
     });
 
     it('returns to the same recoverable state when a retry fails transiently', async () => {
@@ -984,9 +979,8 @@ describe('ReviewFeedbackWorkspace', () => {
       mock.api.updateReviewFeedbackSelection.mockRejectedValueOnce(new Error('socket dropped'));
       await user.click(screen.getByLabelText(/Consider extracting the parser/));
       await screen.findByRole('alert');
-      // View state the reload must reset: a scope/filters/expansion mix.
+      // View state the reload must reset: a scope/filter mix.
       await user.click(screen.getByRole('checkbox', { name: 'Octocat' }));
-      await user.click(screen.getAllByRole('button', { name: 'Show full feedback' })[0]!);
       mock.api.fetchReviewFeedback.mockResolvedValue(draftView({ revision: 9 }));
       await user.click(screen.getByRole('button', { name: 'Reload saved selections' }));
       await waitFor(() => expect(mock.api.fetchReviewFeedback).toHaveBeenCalledTimes(2));
@@ -995,10 +989,10 @@ describe('ReviewFeedbackWorkspace', () => {
       expect(screen.getByLabelText(/Consider extracting the parser/)).toBeChecked();
       expect(screen.queryByText('Unsaved choice')).not.toBeInTheDocument();
       expect(screen.getByText('2 of 3 selected', { selector: 'p' })).toBeVisible();
-      // View reset: All feedback, no filters, collapsed cards.
+      // View reset: All feedback, no filters, compact cards.
       expect(screen.getByRole('radio', { name: /All feedback/ })).toBeChecked();
       expect(screen.queryByRole('list', { name: 'Active filters' })).not.toBeInTheDocument();
-      expect(screen.getAllByRole('button', { name: 'Show full feedback' })[0]).toBeInTheDocument();
+      expect(screen.getAllByRole('button', { name: 'View full comment' })[0]).toBeInTheDocument();
       // Polite, non-focused announcement.
       expect(screen.getByRole('status')).toHaveTextContent(/Saved selections reloaded/);
       expect(screen.getByRole('button', { name: 'Back' })).toBeEnabled();
@@ -1038,9 +1032,9 @@ describe('ReviewFeedbackWorkspace', () => {
         parentId: string;
       }>();
       mock.api.launchReviewFeedbackChild.mockReturnValueOnce(inFlight.promise);
-      await user.click(screen.getByRole('button', { name: /Launch child \(2\)/ }));
+      await user.click(screen.getByRole('button', { name: /Address comments \(2\)/ }));
       await waitFor(() => expect(mock.api.launchReviewFeedbackChild).toHaveBeenCalledOnce());
-      expect(screen.getByRole('button', { name: 'Launching…' })).toBeDisabled();
+      expect(screen.getByRole('button', { name: 'Addressing…' })).toBeDisabled();
       expect(screen.getByRole('dialog', { name: 'Address review feedback' })).toHaveAttribute(
         'aria-busy',
         'true',
@@ -1054,12 +1048,12 @@ describe('ReviewFeedbackWorkspace', () => {
     it('surfaces a launch failure in a focused plain-language alert and re-enables an explicit retry', async () => {
       const { mock, onDispatched, user } = await renderWorkspace();
       mock.api.launchReviewFeedbackChild.mockRejectedValueOnce(new Error('github unavailable'));
-      await user.click(screen.getByRole('button', { name: /Launch child \(2\)/ }));
+      await user.click(screen.getByRole('button', { name: /Address comments \(2\)/ }));
       const alert = await screen.findByRole('alert');
-      expect(alert).toHaveTextContent('Launch failed');
+      expect(alert).toHaveTextContent('Comments could not be addressed');
       expect(alert).toHaveTextContent(/github unavailable/);
       expect(alert).toHaveFocus();
-      const retry = screen.getByRole('button', { name: /Launch child \(2\)/ });
+      const retry = screen.getByRole('button', { name: /Address comments \(2\)/ });
       expect(retry).toBeEnabled();
       mock.api.launchReviewFeedbackChild.mockResolvedValueOnce({
         childId: 'child1234ef567890',
@@ -1116,12 +1110,12 @@ describe('ReviewFeedbackWorkspace', () => {
       await waitFor(() => expect(screen.queryByText(/saving…/)).not.toBeInTheDocument());
     });
 
-    it('expansion is keyboard-operable and never changes selection', async () => {
+    it('the full-comment modal is keyboard-operable and never changes selection', async () => {
       const { mock, user } = await renderWorkspace();
-      const expand = screen.getAllByRole('button', { name: 'Show full feedback' })[0]!;
-      expand.focus();
+      const open = screen.getAllByRole('button', { name: 'View full comment' })[0]!;
+      open.focus();
       await user.keyboard('{Enter}');
-      expect(expand).toHaveAttribute('aria-expanded', 'true');
+      expect(screen.getByRole('dialog', { name: 'Review comment from Octocat' })).toBeVisible();
       expect(screen.getByLabelText(/Rewrite this to avoid the bearer token/)).toBeChecked();
       expect(mock.api.updateReviewFeedbackSelection).not.toHaveBeenCalled();
     });

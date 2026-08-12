@@ -339,29 +339,26 @@ test('multi-repo review-feedback triage: sections → filtered bulk clear → re
     await expect(diff.locator('[data-kind="remove"]')).toHaveCount(1);
     transcript.step('adversarial Markdown stayed inert; links/images are boundary actions only');
 
-    transcript.section('Deterministic expansion on the oversized card');
-    // The 80 KiB comment starts collapsed; short cards have no control.
+    transcript.section('Scrollable full-comment reader on the oversized card');
+    // The 80 KiB comment starts as a compact preview and opens in a modal.
     const hugeCard = alphaSection.locator('article', {
       hasText: 'This function could be simplified',
     });
-    const hugeCardToggle = hugeCard.getByRole('button', { name: 'Show full feedback' });
+    const hugeCardToggle = hugeCard.getByRole('button', { name: 'View full comment' });
     await expect(hugeCardToggle).toHaveCount(1);
-    await expect(hugeCardToggle).toHaveAttribute('aria-expanded', 'false');
-    await expect(betaSection.getByRole('button', { name: 'Show full feedback' })).toHaveCount(0);
+    await expect(betaSection.getByRole('button', { name: 'View full comment' })).toHaveCount(2);
     await hugeCardToggle.click();
-    await expect(hugeCard.getByRole('button', { name: 'Show less' })).toHaveAttribute(
-      'aria-expanded',
-      'true',
-    );
-    // Expanding never touches selection state or focus of other controls.
+    const commentDialog = handle.page.getByRole('dialog', { name: /Review comment from bob/ });
+    await expect(commentDialog).toBeVisible();
+    await expect(commentDialog.getByText('This function could be simplified.')).toBeVisible();
+    await expect(commentDialog.getByRole('button', { name: 'Close comment' })).toBeFocused();
+    // Reading the complete comment never touches selection state.
     await expect(feed.getByLabel(/This function could be simplified/)).toBeChecked();
     await expect(alphaSection.getByText('2 of 2 selected')).toBeVisible();
-    await hugeCard.getByRole('button', { name: 'Show less' }).click();
-    await expect(hugeCard.getByRole('button', { name: 'Show full feedback' })).toHaveAttribute(
-      'aria-expanded',
-      'false',
-    );
-    transcript.step('expansion is per-card, deterministic, and selection-invariant');
+    await handle.page.keyboard.press('Escape');
+    await expect(commentDialog).toHaveCount(0);
+    await expect(hugeCardToggle).toBeFocused();
+    transcript.step('full comment opened in a focused modal and selection stayed invariant');
 
     transcript.section('Filter by author, clear the visible set, preserve hidden selections');
     // Facets derive from the active scope: four authors across both repos.
@@ -467,7 +464,7 @@ test('multi-repo review-feedback triage: sections → filtered bulk clear → re
     await gateToggle.check();
     transcript.step('toggled the Roadmap/Plan gate');
 
-    const launchButton = workspace.getByRole('button', { name: /Launch child \(3\)/ });
+    const launchButton = workspace.getByRole('button', { name: /Address comments \(3\)/ });
     await expect(launchButton).toBeEnabled();
     await launchButton.click();
     transcript.step('launched the review-feedback child pass from the committed draft');
@@ -744,7 +741,7 @@ test('review-feedback recovery: failed-save Retry/Reload → conflict convergenc
     expect(replayLaunch.changed).toBe(originalLaunch.changed);
     transcript.step('transport-level replay returned the same child and counts');
 
-    const replayClick = workspace.getByRole('button', { name: /Launch child \(2\)/ });
+    const replayClick = workspace.getByRole('button', { name: /Address comments \(2\)/ });
     await expect(replayClick).toBeEnabled();
     await replayClick.click();
     // Replay transitions like the original dispatch: the workspace leaves,

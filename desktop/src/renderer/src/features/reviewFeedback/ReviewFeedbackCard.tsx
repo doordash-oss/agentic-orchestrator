@@ -17,11 +17,10 @@ export interface ReviewFeedbackCardProps {
   checked: boolean;
   /** True while an unsaved-choice freeze keeps this edit unacknowledged. */
   unsaved: boolean;
-  expanded: boolean;
   /** Frozen while launching or while a recovery overlay is unresolved. */
   disabled: boolean;
   onToggle(comment: ReviewFeedbackDraftCommentView, checked: boolean): void;
-  onToggleExpanded(stableRef: string): void;
+  onOpen(comment: ReviewFeedbackDraftCommentView): void;
 }
 
 /** Humanized creation time, agreeing with the attention surfaces' wording. */
@@ -44,14 +43,12 @@ export function ReviewFeedbackCard({
   comment,
   checked,
   unsaved,
-  expanded,
   disabled,
   onToggle,
-  onToggleExpanded,
+  onOpen,
 }: ReviewFeedbackCardProps): React.ReactElement {
   const created = formatCreatedAgo(comment.createdAt);
   const collapsible = needsExpansion(comment);
-  const contentId = `review-feedback-content-${comment.stableRef.replace(/[^\w-]/g, '-')}`;
   const selectLabel =
     comment.body !== undefined && comment.body.trim() !== ''
       ? `Select feedback: ${comment.body.length > 160 ? `${comment.body.slice(0, 160)}…` : comment.body}`
@@ -83,28 +80,20 @@ export function ReviewFeedbackCard({
             </code>
           ) : null}
         </span>
-        <div
-          id={contentId}
-          className="review-feedback-card__content"
-          data-collapsed={collapsible && !expanded}
-        >
+        <div className="review-feedback-card__content" data-collapsed={collapsible}>
           {comment.body !== undefined ? <ReviewFeedbackMarkdown text={comment.body} /> : null}
           {comment.diffHunk !== undefined ? <ReviewFeedbackDiff text={comment.diffHunk} /> : null}
         </div>
-        {collapsible ? (
-          <button
-            type="button"
-            className="review-feedback-card__expand"
-            aria-expanded={expanded}
-            aria-controls={contentId}
-            onClick={(event) => {
-              event.stopPropagation();
-              onToggleExpanded(comment.stableRef);
-            }}
-          >
-            {expanded ? 'Show less' : 'Show full feedback'}
-          </button>
-        ) : null}
+        <button
+          type="button"
+          className="review-feedback-card__expand"
+          onClick={(event) => {
+            event.stopPropagation();
+            onOpen(comment);
+          }}
+        >
+          View full comment
+        </button>
         {comment.inReplyToId !== undefined ? (
           <p className="review-feedback-card__reply">Reply to comment {comment.inReplyToId}</p>
         ) : null}

@@ -2507,7 +2507,7 @@ describe('FeatureCockpit review-feedback aftercare', () => {
     const aftercare = await screen.findByRole('region', { name: 'Feature aftercare' });
     await user.click(within(aftercare).getByRole('button', { name: /Address review feedback/ }));
     expect(await screen.findByRole('dialog', { name: 'Address review feedback' })).toBeVisible();
-    await user.click(await screen.findByRole('button', { name: /Launch child \(1\)/ }));
+    await user.click(await screen.findByRole('button', { name: /Address comments \(1\)/ }));
     await waitFor(() => expect(mock.api.launchReviewFeedbackChild).toHaveBeenCalledOnce());
     // Constant-size launch: revision + gate only, never comment payloads.
     expect(mock.api.launchReviewFeedbackChild).toHaveBeenCalledWith({

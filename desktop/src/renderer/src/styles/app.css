@@ -10667,6 +10667,7 @@ body {
   gap: var(--space-4);
   min-width: 0;
   min-height: 0;
+  overflow: hidden;
   padding: clamp(20px, 2.5vw, 32px) clamp(20px, 3vw, 40px);
   background: var(--content);
 }
@@ -10676,7 +10677,7 @@ body {
   margin: 0 auto;
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
-  align-items: start;
+  align-items: center;
   gap: var(--space-4);
 }
 
@@ -10724,9 +10725,8 @@ body {
 
 .review-feedback-workspace__ledger {
   grid-column: 3;
-  grid-row: 1 / span 2;
   margin: 0;
-  align-self: center;
+  justify-self: end;
   padding: var(--space-2) var(--space-3);
   border-radius: var(--bench-radius-control);
   background: color-mix(in srgb, var(--accent) 12%, var(--raised));
@@ -10743,6 +10743,7 @@ body {
   display: grid;
   grid-template-columns: 260px minmax(0, 1fr);
   gap: clamp(24px, 3vw, 40px);
+  overflow: hidden;
 }
 
 .review-feedback-workspace__rail {
@@ -10750,6 +10751,8 @@ body {
   flex-direction: column;
   gap: var(--space-2);
   overflow-y: auto;
+  min-height: 0;
+  overscroll-behavior: contain;
   padding: var(--space-2);
   border: var(--bench-hairline-width) solid var(--hairline);
   border-radius: var(--bench-radius-card);
@@ -10801,6 +10804,9 @@ body {
   gap: var(--space-4);
   min-width: 0;
   padding-right: var(--space-2);
+  min-height: 0;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
 }
 
 .review-feedback-card {
@@ -10855,6 +10861,11 @@ body {
 
 .review-feedback-card__expand:hover {
   background: var(--hover);
+}
+
+.review-feedback-card__expand:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 2px;
 }
 
 /* Unsaved choices: a structural edge mark plus an explicit text marker, so
@@ -11173,6 +11184,7 @@ body {
   border-radius: var(--bench-radius-card);
   padding: var(--space-3) var(--space-4);
   background: var(--raised);
+  flex-shrink: 0;
 }
 
 /* The gate copy keeps a readable measure and may shrink, while the primary
@@ -11200,7 +11212,7 @@ body {
   }
 
   .review-feedback-workspace__header {
-    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-columns: auto minmax(0, 1fr) auto;
     gap: var(--space-3);
   }
 
@@ -11213,9 +11225,8 @@ body {
   }
 
   .review-feedback-workspace__ledger {
-    grid-column: 2;
-    grid-row: 2;
-    justify-self: start;
+    grid-column: 3;
+    justify-self: end;
     padding: var(--space-1) var(--space-3);
   }
 
@@ -11507,6 +11518,112 @@ body {
 
 .review-feedback-section__pr:hover {
   text-decoration: underline;
+}
+
+/* Full comment reader: long Markdown and diffs scroll inside a focused modal,
+   while the compact feed remains in place behind it. */
+.review-feedback-detail__backdrop {
+  position: fixed;
+  z-index: 60;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: clamp(16px, 4vw, 48px);
+  background: var(--color-scrim);
+}
+
+.review-feedback-detail {
+  width: min(880px, 100%);
+  max-height: min(820px, 100%);
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--hairline);
+  border-radius: var(--bench-radius-card);
+  background: var(--raised);
+  box-shadow: 0 24px 80px rgb(5 7 10 / 32%);
+}
+
+.review-feedback-detail__header {
+  flex-shrink: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-5);
+  border-bottom: 1px solid var(--hairline);
+}
+
+.review-feedback-detail__eyebrow {
+  display: block;
+  margin-bottom: var(--space-1);
+  color: var(--muted);
+  font: 600 11px var(--bench-font-text);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.review-feedback-detail__title {
+  margin: 0;
+  color: var(--text);
+  font: 600 18px/1.3 var(--bench-font-text);
+}
+
+.review-feedback-detail__path {
+  display: block;
+  margin-top: var(--space-1);
+  color: var(--muted);
+  font: 11px var(--bench-font-mono);
+  overflow-wrap: anywhere;
+}
+
+.review-feedback-detail__close {
+  flex-shrink: 0;
+  border: 1px solid var(--hairline);
+  border-radius: var(--bench-radius-control);
+  padding: var(--space-2) var(--space-3);
+  background: transparent;
+  color: var(--text);
+  font: 600 12px var(--bench-font-text);
+  cursor: pointer;
+}
+
+.review-feedback-detail__close:hover {
+  border-color: var(--accent);
+}
+
+.review-feedback-detail__close:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.review-feedback-detail__content {
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  padding: var(--space-5);
+}
+
+.review-feedback-detail__content .review-feedback-md {
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.review-feedback-detail__content .review-feedback-diff {
+  margin-top: var(--space-4);
+}
+
+@media (max-width: 900px) {
+  .review-feedback-detail__backdrop {
+    padding: var(--space-3);
+  }
+
+  .review-feedback-detail__header,
+  .review-feedback-detail__content {
+    padding: var(--space-4);
+  }
 }
 
 .review-feedback-drawer__backdrop {

@@ -45,6 +45,7 @@ import { parseIpcError, type WizardError } from '../../wizard/ipcError';
 import { ScopeDrawer } from './ScopeDrawer';
 import { ScopePanel, type ScopeLedgerEntry } from './ScopePanel';
 import { ReviewFeedbackFeed, type FeedSection } from './ReviewFeedbackFeed';
+import { ReviewFeedbackDetailDialog } from './ReviewFeedbackDetailDialog';
 import { useReviewFeedbackDraft } from './useReviewFeedbackDraft';
 import {
   EMPTY_FILTERS,
@@ -91,10 +92,7 @@ export function ReviewFeedbackWorkspace({
   const [launching, setLaunching] = useState(false);
   const [leaving, setLeaving] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
-  // Expanded feedback cards, keyed by stable comment reference for the
-  // current entry: survives scope/filter hiding and showing, resets with the
-  // rest of the ephemeral card state whenever a fresh server view arrives.
-  const [expandedRefs, setExpandedRefs] = useState<ReadonlySet<string>>(new Set());
+  const [detailComment, setDetailComment] = useState<ReviewFeedbackDraftCommentView | null>(null);
   const feedRef = useRef<HTMLElement | null>(null);
   const openerRef = useRef<HTMLButtonElement | null>(null);
   const saveFailureAlertRef = useRef<HTMLDivElement | null>(null);
@@ -109,7 +107,7 @@ export function ReviewFeedbackWorkspace({
     setScope('all');
     setFilters(EMPTY_FILTERS);
     setDrawerOpen(false);
-    setExpandedRefs(new Set());
+    setDetailComment(null);
     feedRef.current?.scrollTo?.(0, 0);
   }, []);
 
@@ -151,18 +149,6 @@ export function ReviewFeedbackWorkspace({
   useEffect(() => {
     if (!isNarrow) setDrawerOpen(false);
   }, [isNarrow]);
-
-  const toggleExpanded = useCallback((stableRef: string): void => {
-    setExpandedRefs((prev) => {
-      const next = new Set(prev);
-      if (next.has(stableRef)) {
-        next.delete(stableRef);
-      } else {
-        next.add(stableRef);
-      }
-      return next;
-    });
-  }, []);
 
   const selectedOf = draft.selectedOf;
 
@@ -329,10 +315,10 @@ export function ReviewFeedbackWorkspace({
     saveFailure !== null
       ? 'Unsaved choices — retry or reload'
       : launching
-        ? 'Launching…'
+        ? 'Addressing…'
         : counts.selected === 0
-          ? 'Select comments to launch'
-          : `Launch child (${counts.selected})`;
+          ? 'Select comments to address'
+          : `Address comments (${counts.selected})`;
 
   const activeFilters = filtersActive(filters);
 
@@ -383,10 +369,9 @@ export function ReviewFeedbackWorkspace({
       selectedOf={selectedOf}
       pending={pending}
       saveFailed={saveFailure !== null}
-      expandedRefs={expandedRefs}
       selectionDisabled={launching || frozen}
       onToggle={draft.toggle}
-      onToggleExpanded={toggleExpanded}
+      onOpen={setDetailComment}
       onToggleAuthor={toggleAuthor}
       onToggleType={toggleType}
       onPathChange={onPathChange}
@@ -416,19 +401,19 @@ export function ReviewFeedbackWorkspace({
           <h2 className="review-feedback-workspace__title">Address review feedback</h2>
           <p className="review-feedback-workspace__subtitle">
             Review unaddressed pull-request feedback across {snapshot.name}&rsquo;s repositories and
-            launch a child pass with the comments you keep selected.
-          </p>
-          <p className="review-feedback-workspace__ledger" aria-live="polite">
-            {counts.selected} of {counts.total} selected
-            {saving && saveFailure === null ? ' · saving…' : ''}
-            {saveFailure !== null ? ' · includes unsaved choices' : ''}
+            address the comments you keep selected in a new child pass.
           </p>
         </div>
+        <p className="review-feedback-workspace__ledger" aria-live="polite">
+          {counts.selected} of {counts.total} selected
+          {saving && saveFailure === null ? ' · saving…' : ''}
+          {saveFailure !== null ? ' · includes unsaved choices' : ''}
+        </p>
       </header>
 
       {launching ? (
         <p className="sr-only" role="status">
-          Launching child pass…
+          Addressing selected comments…
         </p>
       ) : null}
 
@@ -506,7 +491,7 @@ export function ReviewFeedbackWorkspace({
               <p className="create-form__error-message">
                 None of the comments you kept selected are still launchable — they were addressed or
                 removed since this workspace loaded. The latest feedback was reloaded below; choose
-                what to address and launch again.
+                what to address and try again.
               </p>
             </>
           ) : (
@@ -528,10 +513,10 @@ export function ReviewFeedbackWorkspace({
 
       {launchError !== null ? (
         <div role="alert" className="create-form__error" ref={launchAlertRef} tabIndex={-1}>
-          <b className="create-form__error-code">Launch failed</b>
+          <b className="create-form__error-code">Comments could not be addressed</b>
           <p className="create-form__error-message">
             The child pass could not be launched. Your saved selections are unchanged; fix the issue
-            and choose Launch again. {launchError.message}
+            and choose Address comments again. {launchError.message}
           </p>
         </div>
       ) : null}
@@ -657,6 +642,12 @@ export function ReviewFeedbackWorkspace({
             </footer>
           </>
         )
+      ) : null}
+      {detailComment !== null ? (
+        <ReviewFeedbackDetailDialog
+          comment={detailComment}
+          onClose={() => setDetailComment(null)}
+        />
       ) : null}
     </div>
   );

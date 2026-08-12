@@ -174,23 +174,25 @@ func (pr *PhaseRunner) RunBoundedHelper(ctx context.Context, cfg BoundedHelperCo
 }
 
 type boundedHelperRunConfig struct {
-	sessionID     string
-	featureID     string
-	phase         feature.Phase
-	label         string
-	observerPhase string
-	model         string
-	responsePath  string
-	repoName      string
-	workDir       string
-	command       []string
-	env           []string
-	sessOpts      *ports.SessionOpts
-	requireOutput bool
-	completionDir string
-	contractPhase feature.Phase
-	contractRole  Role
-	parentSpanCtx observe.SpanContext
+	sessionID        string
+	featureID        string
+	phase            feature.Phase
+	label            string
+	observerPhase    string
+	model            string
+	responsePath     string
+	repoName         string
+	workDir          string
+	command          []string
+	env              []string
+	sessOpts         *ports.SessionOpts
+	requireOutput    bool
+	completionDir    string
+	contractPhase    feature.Phase
+	contractRole     Role
+	parentSpanCtx    observe.SpanContext
+	taskPollInterval time.Duration
+	taskQuietGrace   time.Duration
 }
 
 func (pr *PhaseRunner) runBoundedHelperSession(ctx context.Context, cfg boundedHelperRunConfig) (*BoundedHelperResult, error) {
@@ -271,7 +273,7 @@ func (pr *PhaseRunner) runBoundedHelperSessionOnce(ctx context.Context, cfg boun
 			RepoName:      cfg.repoName,
 		})
 		if pr.Observer != nil {
-			pr.Observer.SessionEnded(sessionCtx, observerPhase, cfg.sessionID, cfg.repoName, toSessionUsage(cost), time.Since(sessionStart), sessionErrFromStatus(sess))
+			pr.Observer.SessionEnded(sessionCtx, observerPhase, cfg.sessionID, cfg.repoName, toSessionUsage(cost, sess), time.Since(sessionStart), sessionErrFromStatus(sess))
 		}
 		_ = sess.Stop()
 		sess.Wait()
@@ -312,7 +314,7 @@ func (pr *PhaseRunner) runBoundedHelperSessionOnce(ctx context.Context, cfg boun
 	// budget is consumed. The bgTicker below provides the fallback paths.
 	awaitingBackgroundTasks := false
 	autoResumeAttempts := 0
-	bgTicker := time.NewTicker(backgroundTaskPollInterval)
+	bgTicker := time.NewTicker(durationOrDefault(cfg.taskPollInterval, backgroundTaskPollInterval))
 	defer bgTicker.Stop()
 
 	for {
@@ -332,7 +334,7 @@ func (pr *PhaseRunner) runBoundedHelperSessionOnce(ctx context.Context, cfg boun
 			// All tasks finished but no new result arrived: the CLI did not
 			// re-invoke the agent on its own. Resume it explicitly, bounded so
 			// a session that keeps yielding without finishing still converges.
-			if quiet < backgroundTaskQuietGrace {
+			if quiet < durationOrDefault(cfg.taskQuietGrace, backgroundTaskQuietGrace) {
 				continue
 			}
 			awaitingBackgroundTasks = false

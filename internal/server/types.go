@@ -73,7 +73,8 @@ type Options struct {
 	// attach the same structured diagnostics the launch-time error carries.
 	// Nil is tolerated: the dirty_parent disabled reason then ships without
 	// a diagnostics target.
-	Worktrees feature.WorktreeOps
+	Worktrees   feature.WorktreeOps
+	HTTPMetrics HTTPMetrics
 }
 
 type HandlerOptions struct {
@@ -98,6 +99,7 @@ type HandlerOptions struct {
 	Config                      *config.Config
 	Registry                    *llm.Registry
 	Sessions                    ports.SessionManager
+	HTTPMetrics                 HTTPMetrics
 	Events                      <-chan interface{}
 	DomainEvents                <-chan ports.Event
 	Mutations                   MutationTarget

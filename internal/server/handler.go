@@ -53,12 +53,13 @@ type apiHandler struct {
 	// deduplicated background cache. worktrees stays the uncached authority
 	// for mutations and launch preflights, which must see the worktree as it
 	// is at the instant they act.
-	cleanliness           git.CleanlinessInspector
-	cfg                   *config.Config
-	registry              *llm.Registry
-	sessions              ports.SessionManager
-	broker                *eventBroker
-	mutations             MutationTarget
+	cleanliness git.CleanlinessInspector
+	cfg         *config.Config
+	registry    *llm.Registry
+	sessions    ports.SessionManager
+	httpMetrics HTTPMetrics
+	broker      *eventBroker
+	mutations   MutationTarget
 	// uploads owns the octet-stream upload staging area under the runtime
 	// state dir; nil when the runtime identity has no state dir (tests that
 	// never stage uploads).
@@ -121,6 +122,7 @@ func newAPIHandler(opts HandlerOptions) *apiHandler {
 		cfg:                   opts.Config,
 		registry:              opts.Registry,
 		sessions:              opts.Sessions,
+		httpMetrics:           opts.HTTPMetrics,
 		broker:                newEventBroker(opts.Events, opts.DomainEvents),
 		mutations:             opts.Mutations,
 		uploads:               newUploadStore(opts.Runtime.StateDir),

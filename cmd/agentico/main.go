@@ -2792,7 +2792,8 @@ func runServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledPr
 		PersistProviderModelCatalog: func(provider llm.LLMProvider, models []llm.ModelInfo) error {
 			return persistRefreshedProviderModelCatalog(boot.runtime.RuntimeDir, provider, models)
 		},
-		Worktrees: boot.worktrees,
+		Worktrees:   boot.worktrees,
+		HTTPMetrics: boot.observer,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: starting server: %v\n", err)

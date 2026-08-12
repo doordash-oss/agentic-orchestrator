@@ -3080,39 +3080,40 @@ type bgTaskSession struct {
 	lastStdoutNs atomic.Int64
 	userMessages chan string
 	stopped      atomic.Bool
+	liveObserved chan struct{}
+	observeOnce  sync.Once
 }
 
 func newBgTaskSession() *bgTaskSession {
 	s := &bgTaskSession{
 		utilityTestSession: newUtilityTestSession(),
 		userMessages:       make(chan string, 4),
+		liveObserved:       make(chan struct{}),
 	}
 	s.lastStdoutNs.Store(time.Now().UnixNano())
 	return s
 }
 
-func (s *bgTaskSession) LiveBackgroundTaskCount() int { return int(s.liveTasks.Load()) }
-func (s *bgTaskSession) LastStdoutAt() time.Time      { return time.Unix(0, s.lastStdoutNs.Load()) }
+func (s *bgTaskSession) LiveBackgroundTaskCount() int {
+	count := int(s.liveTasks.Load())
+	if count > 0 {
+		s.observeOnce.Do(func() { close(s.liveObserved) })
+	}
+	return count
+}
+func (s *bgTaskSession) LastStdoutAt() time.Time { return time.Unix(0, s.lastStdoutNs.Load()) }
 func (s *bgTaskSession) SendUserMessage(text string) error {
 	s.setRootIntent(llm.CompletionIntent{})
 	s.userMessages <- text
 	return nil
 }
+func (s *bgTaskSession) ClearRootCompletionIntent() { s.setRootIntent(llm.CompletionIntent{}) }
 func (s *bgTaskSession) Stop() error {
 	s.stopped.Store(true)
 	return nil
 }
 
-func withBackgroundTaskPollInterval(t *testing.T, d time.Duration) {
-	t.Helper()
-	prev := backgroundTaskPollInterval
-	backgroundTaskPollInterval = d
-	t.Cleanup(func() { backgroundTaskPollInterval = prev })
-}
-
 func TestWaitForPhaseOutcome_DefersCommitUntilDelegatedTasksFinish(t *testing.T) {
-	withBackgroundTaskPollInterval(t, 5*time.Millisecond)
-
 	sess := newBgTaskSession()
 	sess.liveTasks.Store(1)
 	sess.result = newEndedAfterTextResult()
@@ -3123,12 +3124,18 @@ func TestWaitForPhaseOutcome_DefersCommitUntilDelegatedTasksFinish(t *testing.T)
 	resultCh := make(chan PhaseOutcomeWaitResult, 1)
 	go func() {
 		resultCh <- WaitForPhaseOutcome(sess, PhaseOutcomeWaitOptions{
+			backgroundTaskPollInterval: 5 * time.Millisecond,
 			CommitOutcome: func(llm.CompletionIntent) ([]ProtocolViolation, error) {
 				commits.Add(1)
 				return nil, nil
 			},
 		})
 	}()
+	select {
+	case <-sess.liveObserved:
+	case <-time.After(time.Second):
+		t.Fatal("waiter did not observe the live delegated task")
+	}
 
 	select {
 	case result := <-resultCh:
@@ -3143,7 +3150,9 @@ func TestWaitForPhaseOutcome_DefersCommitUntilDelegatedTasksFinish(t *testing.T)
 	sess.lastStdoutNs.Store(time.Now().Add(-time.Hour).UnixNano())
 	select {
 	case <-sess.userMessages:
-	case <-time.After(time.Second):
+	case result := <-resultCh:
+		t.Fatalf("WaitForPhaseOutcome() returned before resuming the root session: %+v", result)
+	case <-time.After(5 * time.Second):
 		t.Fatal("root session was not resumed after delegated tasks finished")
 	}
 	sess.setRootIntent(validSuccessCompletionIntent())
@@ -3154,7 +3163,7 @@ func TestWaitForPhaseOutcome_DefersCommitUntilDelegatedTasksFinish(t *testing.T)
 		if result.Status != agentStatusSuccess || result.Err != nil || len(result.ProtocolViolations) != 0 {
 			t.Fatalf("WaitForPhaseOutcome() = %+v, want success", result)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatal("WaitForPhaseOutcome() did not finish after root outcome")
 	}
 	if got := commits.Load(); got != 1 {
@@ -3187,27 +3196,11 @@ func TestWaitForPhaseOutcome_RejectsProviderExitWithLiveDelegatedTasks(t *testin
 	}
 }
 
-func withPhaseOutcomeReclassifyInterval(t *testing.T, d time.Duration) {
-	t.Helper()
-	prev := phaseOutcomeReclassifyInterval
-	phaseOutcomeReclassifyInterval = d
-	t.Cleanup(func() { phaseOutcomeReclassifyInterval = prev })
-}
-
-func withBackgroundTaskStallGrace(t *testing.T, d time.Duration) {
-	t.Helper()
-	prev := backgroundTaskStallGrace
-	backgroundTaskStallGrace = d
-	t.Cleanup(func() { backgroundTaskStallGrace = prev })
-}
-
 // TestWaitForPhaseOutcome_ReclassifyTickRecoversDroppedSuccessStatus proves the
 // fallback tick classifies a terminal success Result whose SUCCESS status was
 // never delivered on StatusCh (and whose Done never fires), instead of parking
 // the phase in WaitingHelp forever.
 func TestWaitForPhaseOutcome_ReclassifyTickRecoversDroppedSuccessStatus(t *testing.T) {
-	withPhaseOutcomeReclassifyInterval(t, 5*time.Millisecond)
-
 	sess := newBgTaskSession()
 	sess.result = newEndedAfterTextResult()
 	sess.setRootIntent(validSuccessCompletionIntent())
@@ -3217,6 +3210,7 @@ func TestWaitForPhaseOutcome_ReclassifyTickRecoversDroppedSuccessStatus(t *testi
 	resultCh := make(chan PhaseOutcomeWaitResult, 1)
 	go func() {
 		resultCh <- WaitForPhaseOutcome(sess, PhaseOutcomeWaitOptions{
+			phaseOutcomeReclassifyInterval: 5 * time.Millisecond,
 			CommitOutcome: func(llm.CompletionIntent) ([]ProtocolViolation, error) {
 				commits.Add(1)
 				return nil, nil
@@ -3242,9 +3236,6 @@ func TestWaitForPhaseOutcome_ReclassifyTickRecoversDroppedSuccessStatus(t *testi
 // tasks keep the waiter alive past the stall grace, the waiter stops the
 // session and commits the outcome instead of deferring forever.
 func TestWaitForPhaseOutcome_StopsRunawayTasksAndCommitsPresentOutcome(t *testing.T) {
-	withBackgroundTaskPollInterval(t, 5*time.Millisecond)
-	withBackgroundTaskStallGrace(t, 20*time.Millisecond)
-
 	sess := newBgTaskSession()
 	sess.liveTasks.Store(1)
 	sess.result = newEndedAfterTextResult()
@@ -3256,6 +3247,8 @@ func TestWaitForPhaseOutcome_StopsRunawayTasksAndCommitsPresentOutcome(t *testin
 	resultCh := make(chan PhaseOutcomeWaitResult, 1)
 	go func() {
 		resultCh <- WaitForPhaseOutcome(sess, PhaseOutcomeWaitOptions{
+			backgroundTaskPollInterval: 5 * time.Millisecond,
+			backgroundTaskStallGrace:   20 * time.Millisecond,
 			CommitOutcome: func(llm.CompletionIntent) ([]ProtocolViolation, error) {
 				commits.Add(1)
 				return nil, nil
@@ -3380,13 +3373,6 @@ func (s *outcomeSignalSession) emitOutcome(intent llm.CompletionIntent) {
 func (s *outcomeSignalSession) emitResult(result *llm.ResultMessage) {
 	s.costPtr.Store(result)
 	s.seq.Add(1)
-}
-
-func withBackgroundTaskDeferralCeiling(t *testing.T, d time.Duration) {
-	t.Helper()
-	prev := backgroundTaskDeferralCeiling
-	backgroundTaskDeferralCeiling = d
-	t.Cleanup(func() { backgroundTaskDeferralCeiling = prev })
 }
 
 // chatterUntil keeps the session's stdout timestamp fresh, appending either
@@ -3518,10 +3504,6 @@ func TestWaitForPhaseOutcome_LaterResultDoesNotReadjudicateOutcome(t *testing.T)
 // that keeps printing the same line does not hold the stall grace open: only
 // novel output counts as activity.
 func TestWaitForPhaseOutcome_RepeatedTaskOutputCountsAsSilent(t *testing.T) {
-	withBackgroundTaskPollInterval(t, 5*time.Millisecond)
-	withBackgroundTaskStallGrace(t, 30*time.Millisecond)
-	withBackgroundTaskDeferralCeiling(t, time.Hour)
-
 	sess := newOutcomeSignalSession()
 	sess.liveTasks.Store(1)
 	sess.emitResult(newEndedAfterTextResult())
@@ -3534,6 +3516,9 @@ func TestWaitForPhaseOutcome_RepeatedTaskOutputCountsAsSilent(t *testing.T) {
 	resultCh := make(chan PhaseOutcomeWaitResult, 1)
 	go func() {
 		resultCh <- WaitForPhaseOutcome(sess, PhaseOutcomeWaitOptions{
+			backgroundTaskPollInterval:    5 * time.Millisecond,
+			backgroundTaskStallGrace:      30 * time.Millisecond,
+			backgroundTaskDeferralCeiling: time.Hour,
 			CommitOutcome: func(llm.CompletionIntent) ([]ProtocolViolation, error) {
 				commits.Add(1)
 				return nil, nil
@@ -3561,10 +3546,6 @@ func TestWaitForPhaseOutcome_RepeatedTaskOutputCountsAsSilent(t *testing.T) {
 // absolute ceiling ends the deferral even when the tasks keep producing novel
 // output forever.
 func TestWaitForPhaseOutcome_DeferralCeilingCommitsChattyPollLoop(t *testing.T) {
-	withBackgroundTaskPollInterval(t, 5*time.Millisecond)
-	withBackgroundTaskStallGrace(t, time.Hour)
-	withBackgroundTaskDeferralCeiling(t, 40*time.Millisecond)
-
 	sess := newOutcomeSignalSession()
 	sess.liveTasks.Store(1)
 	sess.emitResult(newEndedAfterTextResult())
@@ -3577,6 +3558,9 @@ func TestWaitForPhaseOutcome_DeferralCeilingCommitsChattyPollLoop(t *testing.T) 
 	resultCh := make(chan PhaseOutcomeWaitResult, 1)
 	go func() {
 		resultCh <- WaitForPhaseOutcome(sess, PhaseOutcomeWaitOptions{
+			backgroundTaskPollInterval:    5 * time.Millisecond,
+			backgroundTaskStallGrace:      time.Hour,
+			backgroundTaskDeferralCeiling: 40 * time.Millisecond,
 			CommitOutcome: func(llm.CompletionIntent) ([]ProtocolViolation, error) {
 				commits.Add(1)
 				return nil, nil
@@ -3603,10 +3587,6 @@ func TestWaitForPhaseOutcome_DeferralCeilingCommitsChattyPollLoop(t *testing.T) 
 // TestWaitForPhaseOutcome_DeferralCeilingViolatesWithoutOutcome proves an
 // expired ceiling with no outcome to commit records a protocol violation.
 func TestWaitForPhaseOutcome_DeferralCeilingViolatesWithoutOutcome(t *testing.T) {
-	withBackgroundTaskPollInterval(t, 5*time.Millisecond)
-	withBackgroundTaskStallGrace(t, time.Hour)
-	withBackgroundTaskDeferralCeiling(t, 40*time.Millisecond)
-
 	sess := newOutcomeSignalSession()
 	sess.liveTasks.Store(1)
 	sess.emitResult(newEndedAfterTextResult())
@@ -3617,6 +3597,9 @@ func TestWaitForPhaseOutcome_DeferralCeilingViolatesWithoutOutcome(t *testing.T)
 	resultCh := make(chan PhaseOutcomeWaitResult, 1)
 	go func() {
 		resultCh <- WaitForPhaseOutcome(sess, PhaseOutcomeWaitOptions{
+			backgroundTaskPollInterval:    5 * time.Millisecond,
+			backgroundTaskStallGrace:      time.Hour,
+			backgroundTaskDeferralCeiling: 40 * time.Millisecond,
 			CommitOutcome: func(llm.CompletionIntent) ([]ProtocolViolation, error) {
 				return nil, nil
 			},

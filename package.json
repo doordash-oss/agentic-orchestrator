@@ -11,6 +11,7 @@
   ],
   "scripts": {
     "check": "npm run check --workspace desktop",
+    "install:electron-runtime": "npm run install:electron-runtime --workspace desktop",
     "test": "npm run test --workspace desktop",
     "test:security": "npm run test:security --workspace desktop",
     "test:e2e:packaged": "npm run test:e2e:packaged --workspace desktop",

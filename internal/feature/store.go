@@ -1092,22 +1092,27 @@ func (s *Store) ReconcilePendingChildCreations() ([]string, error) {
 				continue
 			}
 		}
-		parent.PendingChild = nil
-		if err := s.writeFeatureYAMLUnlocked(parent.ID, &parent); err != nil {
-			errs = append(errs, fmt.Errorf("clearing child intent on parent %s: %w", parent.ID, err))
-			continue
-		}
 		// A review-feedback launch that reached the durable intent already
 		// consumed the pending draft: converge the draft cleanup an
-		// interrupted launch could not finish so the consumed draft is never
-		// edited or relaunched against the replayed child. The cleanup is
-		// pinned to the receipt's draft revision so a newer committed draft
-		// is never deleted.
+		// interrupted launch could not finish before durably clearing the
+		// intent, matching the CreateChildLocked ordering. Clearing the
+		// intent first would leave neither the pending intent nor the pinned
+		// draft marking the revision as consumed after a cleanup failure or
+		// crash, letting a later SaveReviewFeedbackDraft acknowledge edits
+		// to a stranded consumed draft behind the active child. The cleanup
+		// is pinned to the receipt's draft revision so a newer committed
+		// draft is never deleted, and it is idempotent so a crash between
+		// the deletion and the intent clearing retries safely.
 		if intent.Kind == ChildKindReviewFeedback && intent.LaunchReceipt != nil {
 			if err := s.deleteReviewFeedbackDraftIfRevisionUnlocked(parent.ID, intent.LaunchReceipt.DraftRevision); err != nil {
 				errs = append(errs, fmt.Errorf("parent %s: deleting review-feedback draft consumed by launch: %w", parent.ID, err))
 				continue
 			}
+		}
+		parent.PendingChild = nil
+		if err := s.writeFeatureYAMLUnlocked(parent.ID, &parent); err != nil {
+			errs = append(errs, fmt.Errorf("clearing child intent on parent %s: %w", parent.ID, err))
+			continue
 		}
 		reconciled = append(reconciled, parent.ID)
 	}

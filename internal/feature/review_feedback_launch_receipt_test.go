@@ -16,6 +16,8 @@ package feature_test
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -409,6 +411,83 @@ func TestStartupReconciliationClearsDraftConsumedByLaunchReceipt(t *testing.T) {
 	receipt := children.Active.Parent.LaunchReceipt
 	if receipt == nil || receipt.Changed != 1 || receipt.Omitted != 1 || receipt.Deferred != 1 {
 		t.Fatalf("rebuilt child receipt = %+v, want 1/1/1 counts", receipt)
+	}
+}
+
+// TestStartupReconciliationRetainsIntentWhenDraftCleanupFails covers the
+// durability boundary where draft cleanup fails (or the process crashes)
+// after the child is rolled forward: reconciliation must keep the durable
+// pending intent, which is the only remaining marker that the receipt-pinned
+// revision is consumed, and retry cleanup on the next scan. Clearing the
+// intent first (the pre-fix ordering) stranded the consumed draft on disk
+// behind the active child, letting SaveReviewFeedbackDraft acknowledge edits
+// to it. The cleanup failure is injected by making the draft directory
+// read-only so the pinned os.Remove fails deterministically.
+func TestStartupReconciliationRetainsIntentWhenDraftCleanupFails(t *testing.T) {
+	mgr, parent, draft := launchReceiptManager(t)
+	installLaunchFetchStub(t, launchReceiptFetch())
+
+	gate := true
+	mgr.Store.SetSaveHook(&feature.StoreSaveHook{FailOnCall: 2})
+	if _, err := mgr.LaunchReviewFeedbackChildFromDraft(parent.ID, draft.Revision, &gate); err == nil {
+		t.Fatal("want injected child-save failure")
+	}
+	mgr.Store.ResetSaveHook()
+
+	// Make the pinned-revision deletion fail: the draft file still loads (so
+	// the failure lands at the remove step), but the read-only directory
+	// rejects its removal.
+	draftDir := filepath.Join(mgr.Store.BaseDir, parent.ID, "review-feedback")
+	if err := os.Chmod(draftDir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(draftDir, 0o755) })
+
+	if _, err := mgr.Store.ReconcilePendingChildCreations(); err == nil {
+		t.Fatal("want reconciliation error from the failed draft cleanup")
+	}
+	// The durable intent must survive the failed cleanup: it is the only
+	// marker that the receipt-pinned revision is consumed.
+	settled, err := mgr.Store.Load(parent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settled.PendingChild == nil || settled.PendingChild.LaunchReceipt == nil ||
+		settled.PendingChild.LaunchReceipt.DraftRevision != draft.Revision {
+		t.Fatalf("PendingChild after failed cleanup = %+v, want retained intent pinned to revision %d",
+			settled.PendingChild, draft.Revision)
+	}
+	// The child was still rolled forward and owns the consumed revision.
+	children, err := mgr.Store.RelationshipChildren(parent.ID)
+	if err != nil || children.Active == nil {
+		t.Fatalf("relationship children = %+v (err %v), want the rebuilt child active", children, err)
+	}
+	// A selection commit against the consumed revision is rejected by the
+	// retained intent, never acknowledged against the stranded draft.
+	bumped := feature.ReconcileReviewFeedbackDraft(parent, draft, reviewedComments())
+	bumped.Revision = draft.Revision + 1
+	var consumed *feature.ReviewFeedbackDraftConsumedError
+	if err := mgr.Store.SaveReviewFeedbackDraft(parent.ID, bumped, draft.Revision); !errors.As(err, &consumed) {
+		t.Fatalf("selection commit after failed cleanup error = %v, want draft-consumed rejection", err)
+	}
+
+	// Once the deletion can succeed, the next reconciliation pass completes
+	// the roll-forward: intent cleared, pinned draft gone.
+	if err := os.Chmod(draftDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	reconciled, err := mgr.Store.ReconcilePendingChildCreations()
+	if err != nil {
+		t.Fatalf("retry ReconcilePendingChildCreations() error = %v", err)
+	}
+	if len(reconciled) != 1 || reconciled[0] != parent.ID {
+		t.Fatalf("reconciled = %v, want [%s]", reconciled, parent.ID)
+	}
+	if settled, err := mgr.Store.Load(parent.ID); err != nil || settled.PendingChild != nil {
+		t.Fatalf("PendingChild after retry = %+v (err %v), want cleared", settled.PendingChild, err)
+	}
+	if kept, err := mgr.Store.LoadReviewFeedbackDraft(parent.ID); err != nil || kept != nil {
+		t.Fatalf("draft after retry = %+v (err %v), want consumed", kept, err)
 	}
 }
 

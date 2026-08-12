@@ -610,6 +610,50 @@ describe('ReviewFeedbackWorkspace', () => {
     expect(alert).toHaveFocus();
   });
 
+  describe('conflict reload failure recovery', () => {
+    it('a failed conflict refetch surfaces a focused actionable retry alert and never claims the workspace is reloaded', async () => {
+      const { mock, user } = await renderWorkspace();
+      mock.api.updateReviewFeedbackSelection.mockRejectedValueOnce(
+        Object.assign(new Error('stale'), { code: 'review_feedback_revision_conflict' }),
+      );
+      mock.api.fetchReviewFeedback.mockRejectedValueOnce(new Error('fetch unavailable'));
+      const comment90 = screen.getByLabelText(/Overall looks good/);
+      await user.click(comment90);
+      await waitFor(() => expect(mock.api.fetchReviewFeedback).toHaveBeenCalledTimes(2));
+      const alert = await screen.findByRole('alert');
+      expect(alert).toHaveTextContent('Selections could not be reloaded');
+      expect(alert).toHaveTextContent(/fetch unavailable/);
+      expect(alert).toHaveFocus();
+      expect(screen.getByRole('button', { name: 'Retry reload' })).toBeEnabled();
+      // The premature conflict notice is never published without the adopted view.
+      expect(screen.queryByText(/Selections reloaded/)).not.toBeInTheDocument();
+      // Mutations stay frozen while the draft is unreconciled.
+      expect(comment90).toBeDisabled();
+      expect(screen.getByRole('button', { name: /Launch child/ })).toBeDisabled();
+    });
+
+    it('retrying a failed conflict reload recovers and then shows the focused conflict notice', async () => {
+      const { mock, user } = await renderWorkspace();
+      mock.api.updateReviewFeedbackSelection.mockRejectedValueOnce(
+        Object.assign(new Error('stale'), { code: 'review_feedback_revision_conflict' }),
+      );
+      mock.api.fetchReviewFeedback.mockRejectedValueOnce(new Error('fetch unavailable'));
+      await user.click(screen.getByLabelText(/Overall looks good/));
+      const failedAlert = await screen.findByRole('alert');
+      expect(failedAlert).toHaveTextContent('Selections could not be reloaded');
+      mock.api.fetchReviewFeedback.mockResolvedValueOnce(draftView({ revision: 9 }));
+      await user.click(screen.getByRole('button', { name: 'Retry reload' }));
+      await waitFor(() => expect(mock.api.fetchReviewFeedback).toHaveBeenCalledTimes(3));
+      const notice = await screen.findByRole('alert');
+      expect(notice).toHaveTextContent('Selections reloaded');
+      expect(notice).toHaveTextContent(/stale/);
+      expect(notice).toHaveFocus();
+      // Reconciled: mutations are live again off the adopted revision.
+      expect(screen.getByLabelText(/Overall looks good/)).toBeEnabled();
+      expect(screen.getByRole('button', { name: /Launch child \(2\)/ })).toBeEnabled();
+    });
+  });
+
   it('disables launch while a selection save is pending and re-enables after the ack', async () => {
     const { mock, user } = await renderWorkspace();
     const pending = deferred<{ revision: number; repos: ReviewFeedbackDraftView['repos'] }>();

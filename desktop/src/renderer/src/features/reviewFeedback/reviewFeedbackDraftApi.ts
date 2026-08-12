@@ -1,12 +1,9 @@
 /**
- * Renderer bridge to the server-owned review-feedback pending draft. The
- * shared IPC contract (`desktop/src/shared/ipc.ts`, preload, main) lands on a
- * parallel track; until it does, this module pins the agreed wire surface in
- * one place: the fetch returns the revisioned draft view (`revision`, grouped
+ * Renderer bridge to the server-owned review-feedback pending draft. This
+ * module anchors the feature's wire surface to `window.agentico` in one
+ * place: the fetch returns the revisioned draft view (`revision`, grouped
  * comments with `stableRef`/`selected`/`createdAt`), selection writes carry
  * only references plus the expected revision, and launch is constant size.
- * Once the shared types land, this bridge is the single place to re-anchor to
- * the generated `AgenticoApi` signatures.
  */
 import type { ReviewFeedbackCommentView } from '../../../../shared/ipc';
 

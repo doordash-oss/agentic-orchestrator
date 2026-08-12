@@ -10736,14 +10736,47 @@ body {
   padding-top: var(--space-3);
 }
 
+/* The gate copy keeps a readable measure and may shrink, while the primary
+   action never shrinks and never wraps its label. */
+.review-feedback-workspace__footer .review-feedback-modal__gate {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.review-feedback-workspace__footer .config-editor__gate-text {
+  max-width: 64ch;
+}
+
+.review-feedback-workspace__footer .launcher-modal__primary {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+/* Narrow layouts stack the footer so gate copy and the primary action each
+   keep a natural full-width measure. */
+@media (max-width: 900px) {
+  .review-feedback-workspace__footer {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .review-feedback-workspace__footer .launcher-modal__primary {
+    align-self: flex-end;
+  }
+}
+
 /* ─── Review-feedback inbox: rail, facets, chips, sections, drawer ─── */
 
 .review-feedback-workspace__body[data-narrow='true'] {
   grid-template-columns: 1fr;
+  /* Compact opener row over a flexible feed: the drawer trigger never
+     stretches into a tile, and the feed owns the remaining height. */
+  grid-template-rows: auto minmax(0, 1fr);
 }
 
 .review-feedback-workspace__opener {
   justify-self: start;
+  align-self: start;
   font-family: var(--bench-font-text);
   font-weight: 700;
   font-size: 13px;
@@ -10772,7 +10805,7 @@ body {
   gap: var(--space-1);
 }
 
-/* The scope rows stay radios, styled like the phase-1 scope buttons. */
+/* Scope rows are radios, styled as the rail's quiet toggle buttons. */
 .review-feedback-workspace__scope input[type='radio'] {
   flex-shrink: 0;
   accent-color: var(--accent);

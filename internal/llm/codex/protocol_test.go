@@ -1623,6 +1623,44 @@ func TestTurnCompleted_MultiSentenceStemQuestionSurfacesOptions(t *testing.T) {
 	}
 }
 
+func TestTurnCompleted_MarkdownOptionsSeparateLabelsFromDescriptions(t *testing.T) {
+	p := NewProtocol(llm.ProtocolOpts{WorkDir: "/tmp/test", Model: "codex"})
+	p.SetThreadIDForTest("thread-1")
+
+	p.mu.Lock()
+	p.lastAssistantText = "What scope should control the maximum linearized snapshot size?\n" +
+		"1. **Service-level row and byte caps — Recommended (High confidence).** Configure global maximum rows and decoded bytes, stop scanning as soon as either limit is exceeded.\n" +
+		"2. **Per-table metadata cap (Medium confidence).** Add a table-specific limit to the control plane.\n" +
+		"3. **Fixed code constant (Low confidence).** Enforce one compiled limit with no runtime configuration."
+	p.mu.Unlock()
+
+	msg, ok := p.parseNotification("turn/completed", completedTurnParams(t, "thread-1"))
+	if !ok || msg.ControlRequest == nil {
+		t.Fatalf("got ok=%v message=%+v, want AskUserQuestion control request", ok, msg)
+	}
+	var parsed struct {
+		Questions []struct {
+			Options []struct {
+				Label       string `json:"label"`
+				Description string `json:"description"`
+			} `json:"options"`
+		} `json:"questions"`
+	}
+	if err := json.Unmarshal(msg.ControlRequest.Request.Input, &parsed); err != nil {
+		t.Fatalf("unmarshal control request input: %v", err)
+	}
+	if len(parsed.Questions) != 1 || len(parsed.Questions[0].Options) != 3 {
+		t.Fatalf("questions = %+v, want one question with three options", parsed.Questions)
+	}
+	first := parsed.Questions[0].Options[0]
+	if first.Label != "Service-level row and byte caps — Recommended (High confidence)" {
+		t.Errorf("first label = %q, want concise Markdown label", first.Label)
+	}
+	if first.Description != "Configure global maximum rows and decoded bytes, stop scanning as soon as either limit is exceeded." {
+		t.Errorf("first description = %q, want trailing option explanation", first.Description)
+	}
+}
+
 func TestTurnCompleted_NonQuestionStemWithContractMarkersSurfacesOptions(t *testing.T) {
 	p := NewProtocol(llm.ProtocolOpts{WorkDir: "/tmp/test", Model: "codex"})
 	p.SetThreadIDForTest("thread-1")

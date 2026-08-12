@@ -4465,8 +4465,10 @@ components:
       properties:
         label:
           type: string
+          maxLength: 1000
         description:
           type: string
+          maxLength: 4000
         confidence:
           type: number
           format: double

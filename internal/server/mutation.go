@@ -540,6 +540,8 @@ func writeRelationshipGuardError(w http.ResponseWriter, err error) bool {
 func writeChildLaunchError(w http.ResponseWriter, err error) bool {
 	var activeChild *feature.ActiveChildExistsError
 	var dirty *feature.ParentWorktreesDirtyError
+	var revisionConflict *feature.ReviewFeedbackRevisionConflictError
+	var zeroLaunchable *feature.ReviewFeedbackZeroLaunchableSelectionError
 	switch {
 	case errors.Is(err, feature.ErrRefactorParentNotFound):
 		writeAPIError(w, http.StatusNotFound, errCodeRefactorParentNotFound, err.Error(), nil)
@@ -555,6 +557,14 @@ func writeChildLaunchError(w http.ResponseWriter, err error) bool {
 		writeAPIError(w, http.StatusBadRequest, errCodeReviewFeedbackUnknownRepo, err.Error(), nil)
 	case errors.Is(err, feature.ErrReviewFeedbackRepoHasNoPR):
 		writeAPIError(w, http.StatusBadRequest, errCodeReviewFeedbackRepoHasNoPR, err.Error(), nil)
+	case errors.Is(err, feature.ErrReviewFeedbackDraftNotFound):
+		writeAPIError(w, http.StatusBadRequest, errCodeReviewFeedbackDraftNotFound, err.Error(), nil)
+	case errors.Is(err, feature.ErrReviewFeedbackUnknownReference):
+		writeAPIError(w, http.StatusBadRequest, errCodeReviewFeedbackUnknownReference, err.Error(), nil)
+	case errors.As(err, &revisionConflict):
+		writeAPIError(w, http.StatusConflict, errCodeReviewFeedbackRevisionConflict, revisionConflict.Error(), nil)
+	case errors.As(err, &zeroLaunchable):
+		writeAPIError(w, http.StatusBadRequest, errCodeReviewFeedbackZeroLaunchableSelection, zeroLaunchable.Error(), nil)
 	case errors.As(err, &activeChild):
 		writeAPIError(w, http.StatusConflict, errCodeActiveChildExists, err.Error(), map[string]any{
 			"parent_id": activeChild.ParentID,
@@ -731,9 +741,9 @@ func mutationRouteMethods(path string) ([]string, bool) {
 			if parts[2] == actionPublish && parts[3] == phaseNameDescription {
 				return []string{http.MethodPost}, true
 			}
-			if parts[2] == actionReviewFeedback && parts[3] == reviewFeedbackSubactionFetch {
-				return []string{http.MethodPost}, true
-			}
+		if parts[2] == actionReviewFeedback && (parts[3] == reviewFeedbackSubactionFetch || parts[3] == reviewFeedbackSubactionSelection) {
+			return []string{http.MethodPost}, true
+		}
 		}
 	default:
 		return nil, false
@@ -1136,6 +1146,8 @@ func (h *apiHandler) handleFeatureActionRoute(w http.ResponseWriter, r *http.Req
 			h.handleReviewFeedbackFeatureMutationTrusted(w, r, featureID)
 		case reviewFeedbackSubactionFetch:
 			h.handleReviewFeedbackFetchTrusted(w, r, featureID)
+		case reviewFeedbackSubactionSelection:
+			h.handleReviewFeedbackSelectionTrusted(w, r, featureID)
 		default:
 			return false
 		}
@@ -1555,15 +1567,12 @@ func RefactorChildSpecFromRequest(req RefactorFeatureRequest) (feature.RefactorC
 	return spec, nil
 }
 
-// ReviewFeedbackChildSpecFromRequest preserves the fetched comment payloads
-// verbatim and maps the optional gate presence onto the domain launch spec.
-// Repository and supported-type validation remains authoritative in the
-// feature manager under the child-creation path.
-func ReviewFeedbackChildSpecFromRequest(req ReviewFeedbackFeatureRequest) feature.ReviewFeedbackChildSpec {
-	return feature.ReviewFeedbackChildSpec{
-		Comments:    append([]feature.ReviewFeedbackComment(nil), req.Comments...),
-		GateEnabled: req.Gate,
-	}
+// ReviewFeedbackGateFromRequest maps the optional gate presence of the
+// constant-size launch request onto the pointer the domain launch expects.
+// The comment payloads no longer travel with the request: launch reconciles
+// the committed pending draft against current server-resolved GitHub data.
+func ReviewFeedbackGateFromRequest(req ReviewFeedbackFeatureRequest) *bool {
+	return req.Gate
 }
 
 // RebaseChildSpecFromRequest is the zero-input mapper for rebase child

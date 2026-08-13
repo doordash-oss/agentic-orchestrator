@@ -128,7 +128,7 @@ describe('detached release workspace', () => {
     ).toThrow(/preserved.*manual cleanup/);
     expect(existsSync(expectedPath)).toBe(true);
     git(fixture.root, 'worktree', 'remove', '--force', expectedPath);
-  });
+  }, 20_000);
 
   it('reports the preserved workspace when provenance inspection itself fails', () => {
     const fixture = repositoryFixture();

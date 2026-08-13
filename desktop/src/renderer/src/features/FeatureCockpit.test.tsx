@@ -2317,7 +2317,7 @@ describe('FeatureCockpit review-feedback aftercare', () => {
     expect(screen.queryByRole('menuitem', { name: 'Address review feedback' })).toBeNull();
   });
 
-  it('opens the review-feedback modal from the regular cockpit overflow (second render site)', async () => {
+  it('opens the review-feedback workspace from the regular cockpit overflow (second render site)', async () => {
     const mock = installAgenticoMock({
       feature: featureSnapshot({
         status: 'Implementing',
@@ -2326,12 +2326,22 @@ describe('FeatureCockpit review-feedback aftercare', () => {
     });
     mock.api.getFeatureConfig.mockResolvedValue(featureConfigSnapshot({}));
     mock.api.fetchReviewFeedback.mockResolvedValue({
-      featureId: FEATURE_ID,
+      revision: 4,
+      snapshotId: 'snap-1',
       repos: [
         {
           repo: 'repo-a',
           prUrl: 'https://github.com/org/repo-a/pull/1',
-          comments: [{ repo: 'repo-a', id: 1, type: 'review', body: 'fix' }],
+          comments: [
+            {
+              stableRef: 'repo-a:review:1',
+              selected: true,
+              repo: 'repo-a',
+              id: 1,
+              type: 'review',
+              body: 'fix',
+            },
+          ],
         },
       ],
     });
@@ -2340,7 +2350,7 @@ describe('FeatureCockpit review-feedback aftercare', () => {
     await user.click(await screen.findByLabelText('More actions'));
     await user.click(screen.getByRole('menuitem', { name: 'Address review feedback' }));
     expect(await screen.findByRole('dialog', { name: 'Address review feedback' })).toBeVisible();
-    expect(screen.getByText('repo-a')).toBeVisible();
+    expect(screen.getAllByText('repo-a').length).toBeGreaterThan(0);
   });
 
   it('loads a preserved diff from the detail route when only the flag arrived', async () => {
@@ -2462,18 +2472,34 @@ describe('FeatureCockpit review-feedback aftercare', () => {
     );
     mock.api.getFeatureConfig.mockResolvedValue(featureConfigSnapshot({}));
     mock.api.fetchReviewFeedback.mockResolvedValue({
-      featureId: FEATURE_ID,
+      revision: 5,
+      snapshotId: 'snap-1',
       repos: [
         {
           repo: 'repo-a',
           prUrl: 'https://github.com/org/repo-a/pull/1',
-          comments: [{ repo: 'repo-a', id: 1, type: 'review', body: 'fix the query' }],
+          comments: [
+            {
+              stableRef: 'repo-a:review:1',
+              selected: true,
+              repo: 'repo-a',
+              id: 1,
+              type: 'review',
+              body: 'fix the query',
+            },
+          ],
         },
       ],
     });
     mock.api.launchReviewFeedbackChild.mockImplementation(async () => {
       currentParent = parentWithChild;
-      return { childId, parentId: FEATURE_ID, result: 'created' };
+      return {
+        featureId: childId,
+        parentId: FEATURE_ID,
+        result: 'created',
+        changed: 2,
+        omitted: 1,
+      };
     });
     renderCockpit(mock);
     const user = userEvent.setup();
@@ -2481,11 +2507,12 @@ describe('FeatureCockpit review-feedback aftercare', () => {
     const aftercare = await screen.findByRole('region', { name: 'Feature aftercare' });
     await user.click(within(aftercare).getByRole('button', { name: /Address review feedback/ }));
     expect(await screen.findByRole('dialog', { name: 'Address review feedback' })).toBeVisible();
-    await user.click(await screen.findByRole('button', { name: /^Launch child/ }));
+    await user.click(await screen.findByRole('button', { name: /Address comments \(1\)/ }));
     await waitFor(() => expect(mock.api.launchReviewFeedbackChild).toHaveBeenCalledOnce());
+    // Constant-size launch: revision + gate only, never comment payloads.
     expect(mock.api.launchReviewFeedbackChild).toHaveBeenCalledWith({
       parentId: FEATURE_ID,
-      comments: [{ repo: 'repo-a', id: 1, type: 'review', body: 'fix the query' }],
+      expectedRevision: 5,
       gate: true,
     });
     // The returned child arms auto-start: start fires on the child without a manual click.
@@ -2497,6 +2524,8 @@ describe('FeatureCockpit review-feedback aftercare', () => {
     );
     // The cockpit routes the active child to the pass workspace.
     expect(await screen.findByRole('region', { name: 'Review feedback pass' })).toBeVisible();
+    // The launch receipt counts surface in the child-pass banner.
+    expect(await screen.findByText('2 changed, 1 omitted since review')).toBeVisible();
   });
 });
 

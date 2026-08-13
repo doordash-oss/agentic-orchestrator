@@ -291,6 +291,11 @@ type ChildRelationship struct {
 	// bounded at DiffSummaryBudget (oversized diffs are truncated with a
 	// marker) and empty when no diff was preserved.
 	DiffSummary string `yaml:"diff_summary,omitempty" json:"diff_summary,omitempty"`
+	// LaunchReceipt is the durable review-feedback launch receipt pairing
+	// this child with the committed draft revision, gate choice, and
+	// reconciliation counts it was launched from. Only set for
+	// review-feedback children launched from a pending draft.
+	LaunchReceipt *ReviewFeedbackLaunchReceipt `yaml:"launch_receipt,omitempty" json:"launch_receipt,omitempty"`
 	// Bases captures the exact parent tip per repository at launch time.
 	Bases []ChildRepoBase `yaml:"bases,omitempty"`
 	// RebaseTargets captures the resolved per-repo merge targets at rebase
@@ -400,6 +405,12 @@ type ChildCreationIntent struct {
 	// Setup is the queued durable setup intent (worktrees at exact captured
 	// tips plus copied child inputs) for the child's first run.
 	Setup *SetupState `yaml:"setup,omitempty"`
+	// LaunchReceipt is the durable review-feedback launch receipt captured
+	// before materialization, so an interrupted draft-based launch replays
+	// the original child and counts instead of creating a second child.
+	// Only set for ChildKindReviewFeedback intents launched from a pending
+	// draft. Never carries renderer-authored comment content.
+	LaunchReceipt *ReviewFeedbackLaunchReceipt `yaml:"launch_receipt,omitempty"`
 }
 
 // RefactorChildSpec is the complete refactor launch brief submitted through
@@ -442,6 +453,7 @@ type ReviewFeedbackComment struct {
 	Body      string `yaml:"body,omitempty" json:"body,omitempty"`
 	DiffHunk  string `yaml:"diff_hunk,omitempty" json:"diff_hunk,omitempty"`
 	InReplyTo int    `yaml:"in_reply_to_id,omitempty" json:"in_reply_to_id,omitempty"`
+	CreatedAt string `yaml:"created_at,omitempty" json:"created_at,omitempty"`
 }
 
 // ReviewFeedbackChildSpec carries the only launch-time choices supported by
@@ -450,6 +462,19 @@ type ReviewFeedbackComment struct {
 type ReviewFeedbackChildSpec struct {
 	Comments    []ReviewFeedbackComment
 	GateEnabled *bool
+	// Receipt, when set, pins creation to the launch receipt computed from
+	// the committed pending draft: creation durably stamps it on both the
+	// creation intent and the child relationship, and under the creation
+	// lock the pending draft's revision must still match Receipt's draft
+	// revision — serializing a concurrent selection commit as a typed
+	// revision conflict instead of launching from a consumed snapshot. The
+	// matched draft stays in place until the creation intent is durably
+	// committed: the stamped intent is the consumption marker, and the
+	// exact pinned revision is deleted only afterward — by the caller's
+	// post-creation sweep, by reconcile/replay roll-forward, or by the
+	// reconverging refresh path — so every pre-commit exit retains the
+	// acknowledged draft on disk.
+	Receipt *ReviewFeedbackLaunchReceipt
 }
 
 // RebaseChildSpec carries the creation-time resolved per-repo targets and
@@ -498,6 +523,31 @@ func (m *Manager) CreateReviewFeedbackChild(parentID string, spec ReviewFeedback
 		if err := validateReviewFeedbackCommentRepos(lockedParent, spec.Comments); err != nil {
 			return nil, nil, err
 		}
+		if spec.Receipt != nil {
+			// Re-verify the committed draft revision under the creation lock:
+			// a selection that committed since the launch validated the draft
+			// must conflict here rather than launch from a consumed snapshot.
+			draft, err := m.Store.LoadReviewFeedbackDraft(lockedParent.ID)
+			if err != nil {
+				return nil, nil, err
+			}
+			currentRevision := int64(0)
+			if draft != nil {
+				currentRevision = draft.Revision
+			}
+			if draft == nil || currentRevision != spec.Receipt.DraftRevision {
+				return nil, nil, &ReviewFeedbackRevisionConflictError{ParentID: lockedParent.ID, ExpectedRevision: spec.Receipt.DraftRevision, CurrentRevision: currentRevision}
+			}
+			// The draft is deliberately NOT deleted here: the durable
+			// creation intent stamped when this callback returns is the
+			// consumption marker. Deleting before that commit would orphan
+			// the acknowledged selections on any interruption between the
+			// delete and the first parent save. Once the intent is durable,
+			// SaveReviewFeedbackDraft rejects commits against the consumed
+			// revision under the same store lock, and the exact pinned
+			// revision is removed by the post-creation sweep, reconcile/
+			// replay roll-forward, or the reconverging refresh path.
+		}
 		gate := lockedParent.Checkpoints.RoadmapReview
 		if spec.GateEnabled != nil {
 			gate = *spec.GateEnabled
@@ -513,6 +563,7 @@ func (m *Manager) CreateReviewFeedbackChild(parentID string, spec ReviewFeedback
 			ExitCriteria: reviewFeedbackExitCriteria(spec.Comments),
 		}, bases, now)
 		child.Parent.Kind = ChildKindReviewFeedback
+		child.Parent.LaunchReceipt = copyReviewFeedbackLaunchReceipt(spec.Receipt)
 		child.ReviewFeedback = append([]ReviewFeedbackComment(nil), spec.Comments...)
 
 		// Exit criteria is machine-generated per review-feedback pass from the
@@ -522,11 +573,12 @@ func (m *Manager) CreateReviewFeedbackChild(parentID string, spec ReviewFeedback
 		applyResolvedReviewConfig(lockedParent, child)
 		lockedParent.ExitCriteria = savedExitCriteria
 		intent := &ChildCreationIntent{
-			ChildID:   child.ID,
-			Kind:      ChildKindReviewFeedback,
-			CreatedAt: now,
-			Child:     *child,
-			Setup:     child.Run().Setup,
+			ChildID:       child.ID,
+			Kind:          ChildKindReviewFeedback,
+			CreatedAt:     now,
+			Child:         *child,
+			Setup:         child.Run().Setup,
+			LaunchReceipt: copyReviewFeedbackLaunchReceipt(spec.Receipt),
 		}
 		return child, intent, nil
 	})

@@ -118,32 +118,37 @@ describe('permissionRequestPolicy', () => {
 });
 
 describe('isSafeExternalUrl', () => {
-  it('allows only https URLs on allowlisted hosts', () => {
+  it('allows credential-free absolute https URLs, including review-feedback destinations on any host', () => {
     expect(isSafeExternalUrl('https://github.com/doordash-oss/agentic-orchestrator')).toBe(true);
+    expect(isSafeExternalUrl('https://docs.example.com/some/page?x=1#frag')).toBe(true);
+    expect(isSafeExternalUrl('https://evil.example.com/x')).toBe(true);
   });
 
-  it('rejects http, unknown hosts, credentials, and dangerous schemes', () => {
+  it('rejects non-https schemes, credentials, and malformed URLs', () => {
     expect(isSafeExternalUrl('http://github.com/x')).toBe(false);
-    expect(isSafeExternalUrl('https://evil.example.com/x')).toBe(false);
     expect(isSafeExternalUrl('https://user:pass@github.com/x')).toBe(false);
+    expect(isSafeExternalUrl('https://user@github.com/x')).toBe(false);
     expect(isSafeExternalUrl('javascript:alert(1)')).toBe(false);
+    expect(isSafeExternalUrl('data:text/html,<script>alert(1)</script>')).toBe(false);
     expect(isSafeExternalUrl('file:///etc/passwd')).toBe(false);
-    expect(isSafeExternalUrl('https://github.com.evil.example.com/x')).toBe(false);
+    expect(isSafeExternalUrl('custom-scheme://host/x')).toBe(false);
+    expect(isSafeExternalUrl('//github.com/protocol-relative')).toBe(false);
+    expect(isSafeExternalUrl('relative/path')).toBe(false);
     expect(isSafeExternalUrl('garbage')).toBe(false);
   });
 });
 
 describe('openExternalSafely', () => {
-  it('opens allowlisted URLs and reports acceptance', async () => {
+  it('opens policy-compliant URLs and reports acceptance', async () => {
     const openExternal = vi.fn(() => Promise.resolve());
     await expect(openExternalSafely('https://github.com/x', openExternal)).resolves.toBe(true);
     expect(openExternal).toHaveBeenCalledOnce();
     expect(openExternal).toHaveBeenCalledWith('https://github.com/x');
   });
 
-  it('rejects non-allowlisted URLs without invoking the opener', async () => {
+  it('rejects disallowed URLs without invoking the opener', async () => {
     const openExternal = vi.fn(() => Promise.resolve());
-    await expect(openExternalSafely('https://evil.example.com/x', openExternal)).resolves.toBe(
+    await expect(openExternalSafely('https://user:pass@github.com/x', openExternal)).resolves.toBe(
       false,
     );
     expect(openExternal).not.toHaveBeenCalled();

@@ -167,21 +167,25 @@ export function useRefactorPass(
   // The server refuses start while child setup is queued or running, so a
   // launch-time auto-start arms here and fires on the snapshot that first
   // enables the verb (setup completion arrives through the event stream).
-  const autoStartChildIdRef = useRef<string | null>(null);
-  const armAutoStart = useCallback((id: string) => {
-    autoStartChildIdRef.current = id;
-  }, []);
+  const [autoStartChildId, setAutoStartChildId] = useState<string | null>(null);
+  const armAutoStart = useCallback((id: string) => setAutoStartChildId(id), []);
   useEffect(() => {
-    const armed = autoStartChildIdRef.current;
-    if (!active || armed === null || busy || child === null || child.id !== armed) return;
+    if (
+      !active ||
+      autoStartChildId === null ||
+      busy ||
+      child === null ||
+      child.id !== autoStartChildId
+    )
+      return;
     if (child.closeOutcome !== undefined && child.closeOutcome !== '') {
-      autoStartChildIdRef.current = null;
+      setAutoStartChildId(null);
       return;
     }
     if (!child.actions.some((action) => action.id === 'start' && action.enabled)) return;
-    autoStartChildIdRef.current = null;
+    setAutoStartChildId(null);
     void dispatch('start');
-  }, [active, busy, child, dispatch]);
+  }, [active, autoStartChildId, busy, child, dispatch]);
 
   const discard = useCallback(async () => {
     if (child === null || discardAction?.impactPreview === undefined || busy) return;
@@ -222,6 +226,11 @@ export interface RefactorPassWorkspaceProps {
   pass: RefactorPassController;
   /** Whether retained live pass effects may fetch or subscribe. */
   active?: boolean;
+  /**
+   * Launch receipt from a review-feedback pass (e.g. "2 changed, 1 omitted,
+   * 3 deferred since review"); informational only, never blocks the pass.
+   */
+  launchReceipt?: string | null;
   /** Inbox jump into an attention item; reopens a dismissed gate. */
   attentionPreviewRequest?: { requestId: number; attentionId?: string } | null;
   attentionItems: AttentionItem[];
@@ -251,6 +260,7 @@ export function RefactorPassWorkspace({
   parent,
   pass,
   active = true,
+  launchReceipt = null,
   attentionPreviewRequest = null,
   attentionItems,
   refreshAttention,
@@ -428,6 +438,12 @@ export function RefactorPassWorkspace({
           </li>
         ))}
       </ol>
+
+      {launchReceipt !== null ? (
+        <p className="refactor-pass__state" role="status" data-tone="quiet">
+          {launchReceipt}
+        </p>
+      ) : null}
 
       {child?.reviewFeedback !== undefined && child.reviewFeedback.length > 0 ? (
         <SelectedCommentSummary comments={child.reviewFeedback} />

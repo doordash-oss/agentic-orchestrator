@@ -993,6 +993,10 @@ type featureRefactorChildCreator interface {
 
 type featureReviewFeedbackChildCreator interface {
 	CreateReviewFeedbackChild(parentID string, spec feature.ReviewFeedbackChildSpec) (*feature.Feature, error)
+	// LaunchReviewFeedbackChildFromDraft commits the durable pending draft:
+	// validates the expected revision, re-resolves GitHub content, creates
+	// the child from current selected comments, and clears the draft.
+	LaunchReviewFeedbackChildFromDraft(parentID string, expectedRevision int64, gate *bool) (*feature.ReviewFeedbackLaunchResult, error)
 }
 
 type featureRebaseChildCreator interface {
@@ -1984,28 +1988,34 @@ func (t *serverMutationTarget) ReviewFeedbackFeature(featureID string, req serve
 	if creator == nil {
 		return resp, errors.New("feature manager is not available")
 	}
-	spec := serverruntime.ReviewFeedbackChildSpecFromRequest(req)
-	var child *feature.Feature
+	gate := serverruntime.ReviewFeedbackGateFromRequest(req)
+	var launch *feature.ReviewFeedbackLaunchResult
 	if t.orch != nil {
 		if lockErr := t.orch.WithRelationshipWriteLock(func() error {
-			var createErr error
-			child, createErr = creator.CreateReviewFeedbackChild(featureID, spec)
-			return createErr
+			var launchErr error
+			launch, launchErr = creator.LaunchReviewFeedbackChildFromDraft(featureID, int64(req.ExpectedRevision), gate)
+			return launchErr
 		}); lockErr != nil {
 			return resp, lockErr
 		}
 	} else {
-		var createErr error
-		child, createErr = creator.CreateReviewFeedbackChild(featureID, spec)
-		if createErr != nil {
-			return resp, createErr
+		var launchErr error
+		launch, launchErr = creator.LaunchReviewFeedbackChildFromDraft(featureID, int64(req.ExpectedRevision), gate)
+		if launchErr != nil {
+			return resp, launchErr
 		}
 	}
-	if t.orch != nil {
-		t.orch.ChildCreated(child)
-		t.orch.RunSetupAsync(child.ID)
+	if t.orch != nil && !launch.Replayed {
+		// A replayed launch re-announces nothing: the child was already
+		// reported created and its durable setup intent already dispatched.
+		t.orch.ChildCreated(launch.Child)
+		t.orch.RunSetupAsync(launch.Child.ID)
 	}
-	resp.FeatureID = child.ID
+	resp.FeatureID = launch.Child.ID
+	resp.ChildID = launch.Child.ID
+	resp.Changed = launch.Changed
+	resp.Omitted = launch.Omitted
+	resp.Deferred = launch.Deferred
 	resp.Result = resultCreated
 	return resp, nil
 }

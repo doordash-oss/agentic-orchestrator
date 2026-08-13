@@ -104,13 +104,15 @@ describe('pullRequestRows', () => {
       ]),
       {
         featureId: 'abcd1234ef567890',
+        revision: 1,
+        snapshotId: 'snap-1',
         repos: [
           {
             repo: 'api',
             prUrl: 'https://github.com/x/api/pull/412',
             comments: [
-              { repo: 'api', id: 1, type: 'review' },
-              { repo: 'api', id: 2, type: 'issue' },
+              { stableRef: 'api:review:1', selected: true, repo: 'api', id: 1, type: 'review' },
+              { stableRef: 'api:issue:2', selected: true, repo: 'api', id: 2, type: 'issue' },
             ],
           },
         ],

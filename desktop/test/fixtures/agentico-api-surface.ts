@@ -106,6 +106,7 @@ export const EXPECTED_API_SURFACE: readonly string[] = [
   'startChat',
   'switchConnectionServer',
   'updateFeatureConfig',
+  'updateReviewFeedbackSelection',
   'updateSettings',
   'updateWorkspaceDefaults',
   'uploadCreationFiles',

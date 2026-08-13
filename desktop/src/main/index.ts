@@ -1324,6 +1324,7 @@ if (!hasSingleInstanceLock) {
       launchRefactorChild: (request) => features.launchRefactorChild(request),
       discardRefactorChild: (request) => features.discardRefactorChild(request),
       fetchReviewFeedback: (request) => features.fetchReviewFeedback(request),
+      updateReviewFeedbackSelection: (request) => features.updateReviewFeedbackSelection(request),
       launchReviewFeedbackChild: (request) => features.launchReviewFeedbackChild(request),
       deleteFeatureCascade: (request) => features.deleteFeatureCascade(request),
       scanRecovery: () => recovery.scan(),

@@ -663,7 +663,7 @@ func TestReviewFeedbackActionLaunchesFromSubmittedPayload(t *testing.T) {
 		Result:    resultCreated,
 	}}
 	handler := NewHandler(HandlerOptions{Mutations: target, DisableHostValidation: true})
-	body := `{"comments":[{"repo":"api","id":17,"type":"review","path":"handler.go","line":42,"author":"alice","body":"handle this","diff_hunk":"@@ -41 +41,2 @@","in_reply_to_id":9}],"gate":false}`
+	body := `{"expected_revision":3,"gate":false}`
 	req := httptest.NewRequest(http.MethodPost, apiPathReviewFeedbackAction, bytes.NewBufferString(body))
 	req.URL.Path = "/api/v1/features/parent-1/actions/review-feedback"
 	req.Header.Set("Content-Type", contentTypeJSON)
@@ -681,15 +681,36 @@ func TestReviewFeedbackActionLaunchesFromSubmittedPayload(t *testing.T) {
 		t.Fatalf("received requests = %d; want 1", len(target.received))
 	}
 	got := target.received[0]
-	if got.Gate == nil || *got.Gate || len(got.Comments) != 1 {
-		t.Fatalf("request = %+v; want one comment and explicit false gate", got)
+	if got.Gate == nil || *got.Gate || got.ExpectedRevision != 3 {
+		t.Fatalf("request = %+v; want expected revision 3 and explicit false gate", got)
 	}
-	want := feature.ReviewFeedbackComment{
-		Repo: "api", ID: 17, Type: "review", Path: "handler.go", Line: 42,
-		Author: "alice", Body: "handle this", DiffHunk: "@@ -41 +41,2 @@", InReplyTo: 9,
+}
+
+// The constant-size launch request rejects renderer-supplied comment
+// payloads instead of silently ignoring them.
+func TestReviewFeedbackActionRejectsCommentPayloadFields(t *testing.T) {
+	t.Parallel()
+
+	target := &reviewFeedbackMutationTarget{resp: ReviewFeedbackFeatureResponse{
+		ParentID:  "parent-1",
+		FeatureID: "child-1",
+		Result:    resultCreated,
+	}}
+	handler := NewHandler(HandlerOptions{Mutations: target, DisableHostValidation: true})
+	body := `{"expected_revision":3,"comments":[{"repo":"api","id":17,"type":"review","body":"handle this"}]}`
+	req := httptest.NewRequest(http.MethodPost, apiPathReviewFeedbackAction, bytes.NewBufferString(body))
+	req.URL.Path = "/api/v1/features/parent-1/actions/review-feedback"
+	req.Header.Set("Content-Type", contentTypeJSON)
+	req.Header.Set("X-Agentico-Client", trustedClientHeaderValue)
+	w := httptest.NewRecorder()
+
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d; want 400", w.Code)
 	}
-	if got.Comments[0] != want {
-		t.Fatalf("comment = %+v; want %+v", got.Comments[0], want)
+	if len(target.received) != 0 {
+		t.Fatalf("received requests = %d; want 0", len(target.received))
 	}
 }
 
@@ -711,7 +732,7 @@ func TestReviewFeedbackActionTypedValidationErrorCodes(t *testing.T) {
 			t.Parallel()
 			target := &reviewFeedbackMutationTarget{err: tt.err}
 			handler := NewHandler(HandlerOptions{Mutations: target, DisableHostValidation: true})
-			req := httptest.NewRequest(http.MethodPost, "/api/v1/features/parent-1/actions/review-feedback", bytes.NewBufferString(`{"comments":[{"repo":"api","id":17,"type":"review"}]}`))
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/features/parent-1/actions/review-feedback", bytes.NewBufferString(`{"expected_revision":1}`))
 			req.Header.Set("Content-Type", contentTypeJSON)
 			req.Header.Set("X-Agentico-Client", trustedClientHeaderValue)
 			w := httptest.NewRecorder()

@@ -45,13 +45,15 @@ test('packaged AMA panel floats, toggles, drags, persists, and ends the session'
     await expect(panel).toBeVisible();
 
     // ⌥Space toggles from a focused composer and types no character.
-    await composer.fill('Draft that survives the toggle');
+    const toggleDraft = 'Draft that survives the toggle';
+    await composer.pressSequentially(toggleDraft);
+    await expect(composer).toHaveValue(toggleDraft);
     await composer.click();
     await handle.page.keyboard.press('Alt+Space');
     await expect(panel).toHaveCount(0);
     await handle.page.keyboard.press('Alt+Space');
     await expect(panel).toBeVisible();
-    await expect(composer).toHaveValue('Draft that survives the toggle');
+    await expect(composer).toHaveValue(toggleDraft);
 
     await composer.fill('Summarize the current workspace state.');
     await panel.getByRole('button', { name: 'Send' }).click();

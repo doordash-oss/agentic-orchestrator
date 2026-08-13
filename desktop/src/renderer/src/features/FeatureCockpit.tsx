@@ -53,7 +53,7 @@ import {
   type AftercareModalId,
 } from './postImplementationModel';
 import { RefactorLauncher } from './refactor/RefactorLauncher';
-import { ReviewFeedbackLauncher } from './reviewFeedback/ReviewFeedbackLauncher';
+import { ReviewFeedbackWorkspace } from './reviewFeedback/ReviewFeedbackWorkspace';
 import { RefactorPassWorkspace, useRefactorPass } from './refactor/RefactorPassWorkspace';
 import { refactoringStatusChip } from './refactor/refactorPassModel';
 import { useCompletionPreflight } from './completion/useCompletionPreflight';
@@ -929,6 +929,14 @@ export function FeatureCockpit({
   const [rewindDialog, setRewindDialog] = useState(false);
   const [rewindSourceRunNumber, setRewindSourceRunNumber] = useState<number | undefined>();
   const [launcherModal, setLauncherModal] = useState<AftercareModalId | null>(null);
+  /**
+   * Receipt counts from a review-feedback launch ("2 changed, 1 omitted …"),
+   * surfaced in the child-pass banner once the workspace flips to the pass.
+   */
+  const [passLaunchReceipt, setPassLaunchReceipt] = useState<{
+    childId: string;
+    text: string;
+  } | null>(null);
   const [completionModal, setCompletionModal] = useState<CompletionVerb | null>(null);
   const [publishTimeoutLocked, setPublishTimeoutLocked] = useState(false);
   const [runRecordOpen, setRunRecordOpen] = useState(false);
@@ -2099,6 +2107,12 @@ export function FeatureCockpit({
                 parent={snapshot}
                 pass={refactorPass}
                 active={retainedEffectsActive}
+                launchReceipt={
+                  passLaunchReceipt !== null &&
+                  passLaunchReceipt.childId === snapshot.activeChild.id
+                    ? passLaunchReceipt.text
+                    : null
+                }
                 attentionPreviewRequest={attentionPreviewRequest}
                 attentionItems={attentionItems}
                 refreshAttention={refreshAttention}
@@ -2345,21 +2359,20 @@ export function FeatureCockpit({
         ) : null}
 
         {launcherModal === 'review-feedback' ? (
-          <CockpitModal
-            title="Address review feedback"
-            ariaLabel="Address review feedback"
-            onClose={() => setLauncherModal(null)}
-          >
-            <ReviewFeedbackLauncher
-              featureId={featureId}
-              snapshot={snapshot}
-              onDispatched={(launch) => {
-                refactorPass.armAutoStart(launch.childId);
-                void refreshFeature({ silent: true });
-              }}
-              onCancel={() => setLauncherModal(null)}
-            />
-          </CockpitModal>
+          <ReviewFeedbackWorkspace
+            featureId={featureId}
+            snapshot={snapshot}
+            onBack={() => setLauncherModal(null)}
+            onDispatched={(launch) => {
+              refactorPass.armAutoStart(launch.childId);
+              setPassLaunchReceipt(
+                launch.receipt === undefined
+                  ? null
+                  : { childId: launch.childId, text: launch.receipt },
+              );
+              void refreshFeature({ silent: true });
+            }}
+          />
         ) : null}
 
         {completionModal === 'publish' && completion.preflight !== null ? (
@@ -2792,21 +2805,20 @@ export function FeatureCockpit({
           ) : null}
 
           {launcherModal === 'review-feedback' ? (
-            <CockpitModal
-              title="Address review feedback"
-              ariaLabel="Address review feedback"
-              onClose={() => setLauncherModal(null)}
-            >
-              <ReviewFeedbackLauncher
-                featureId={featureId}
-                snapshot={snapshot}
-                onDispatched={(launch) => {
-                  refactorPass.armAutoStart(launch.childId);
-                  void refreshFeature({ silent: true });
-                }}
-                onCancel={() => setLauncherModal(null)}
-              />
-            </CockpitModal>
+            <ReviewFeedbackWorkspace
+              featureId={featureId}
+              snapshot={snapshot}
+              onBack={() => setLauncherModal(null)}
+              onDispatched={(launch) => {
+                refactorPass.armAutoStart(launch.childId);
+                setPassLaunchReceipt(
+                  launch.receipt === undefined
+                    ? null
+                    : { childId: launch.childId, text: launch.receipt },
+                );
+                void refreshFeature({ silent: true });
+              }}
+            />
           ) : null}
 
           {completionModal === 'publish' && completion.preflight !== null ? (

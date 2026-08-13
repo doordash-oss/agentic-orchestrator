@@ -45,6 +45,7 @@ func TestClientExportsOnlyJourneyUsedMethods(t *testing.T) {
 		"SubscribeSessionOutput",
 		"Transcript",
 		"UpdateFeatureConfig",
+		"UpdateReviewFeedbackSelection",
 	}
 	typeOfClient := reflect.TypeOf((*Client)(nil))
 	got := make([]string, 0, typeOfClient.NumMethod())
@@ -72,11 +73,14 @@ func TestClientFetchReviewFeedbackReturnsTypedGroups(t *testing.T) {
 		}
 		writeJSON(w, http.StatusOK, ReviewFeedbackFetchResponse{
 			APIVersion: APIVersion,
+			Revision:   1,
+			SnapshotID: "snapshot-1",
 			Repos: []ReviewFeedbackRepoComments{{
 				Repo:  "api",
 				PrURL: "https://github.com/example/api/pull/1",
-				Comments: []feature.ReviewFeedbackComment{{
-					Repo: "api", ID: 11, Type: "issue", Body: "please adjust",
+				Comments: []ReviewFeedbackDraftComment{{
+					StableRef: "api:issue:11", Selected: true,
+					Repo: "api", ID: 11, Type: ReviewFeedbackDraftCommentType("issue"), Body: "please adjust",
 				}},
 			}},
 		})
@@ -238,7 +242,6 @@ func TestClientReviewFeedbackFeatureReturnsTypedResult(t *testing.T) {
 	t.Parallel()
 
 	gate := false
-	comments := []feature.ReviewFeedbackComment{{Repo: "api", ID: 17, Type: "review", Body: "handle this"}}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost || r.URL.Path != "/api/v1/features/feat-1/actions/review-feedback" {
 			t.Fatalf("unexpected request %s %s", r.Method, r.URL.String())
@@ -247,8 +250,8 @@ func TestClientReviewFeedbackFeatureReturnsTypedResult(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			t.Fatalf("decode review-feedback request: %v", err)
 		}
-		if req.Gate == nil || *req.Gate || !reflect.DeepEqual(req.Comments, comments) {
-			t.Fatalf("ReviewFeedbackFeature() request = %+v, want full comments and explicit false gate", req)
+		if req.Gate == nil || *req.Gate || req.ExpectedRevision != 7 {
+			t.Fatalf("ReviewFeedbackFeature() request = %+v, want expected revision 7 and explicit false gate", req)
 		}
 		writeJSON(w, http.StatusCreated, ReviewFeedbackFeatureResponse{
 			APIVersion: APIVersion,
@@ -264,8 +267,8 @@ func TestClientReviewFeedbackFeatureReturnsTypedResult(t *testing.T) {
 	}
 
 	result, err := client.ReviewFeedbackFeature(context.Background(), fixtureFeatureID, ReviewFeedbackFeatureRequest{
-		Comments: comments,
-		Gate:     &gate,
+		ExpectedRevision: 7,
+		Gate:             &gate,
 	})
 	if err != nil {
 		t.Fatalf("ReviewFeedbackFeature() error = %v", err)

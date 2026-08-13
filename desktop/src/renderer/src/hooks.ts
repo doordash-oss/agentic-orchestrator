@@ -41,17 +41,19 @@ export function useConnectionState(): ConnectionState {
   const [state, setState] = useState<ConnectionState>(INITIAL_CONNECTION);
   useEffect(() => {
     let alive = true;
+    let receivedLiveUpdate = false;
+    const unsubscribe = window.agentico.onConnectionChanged((next) => {
+      receivedLiveUpdate = true;
+      setState(next);
+    });
     void window.agentico
       .getConnectionStatus()
       .then((loaded) => {
-        if (alive) setState(loaded);
+        if (alive && !receivedLiveUpdate) setState(loaded);
       })
       .catch(() => {
         // The shell surfaces IPC failures; the gate simply stays non-ready.
       });
-    const unsubscribe = window.agentico.onConnectionChanged((next) => {
-      setState(next);
-    });
     return () => {
       alive = false;
       unsubscribe();

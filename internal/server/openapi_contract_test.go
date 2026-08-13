@@ -194,6 +194,7 @@ func TestRefactorRequestSchemaOmitsRepoSelection(t *testing.T) {
 const apiPathRefactorAction = "/api/v1/features/{feature_id}/actions/refactor"
 
 const apiPathReviewFeedbackFetch = "/api/v1/features/{feature_id}/actions/review-feedback/fetch"
+const apiPathReviewFeedbackSelection = "/api/v1/features/{feature_id}/actions/review-feedback/selection"
 
 const apiPathReviewFeedbackAction = "/api/v1/features/{feature_id}/actions/review-feedback"
 
@@ -264,16 +265,51 @@ func TestReviewFeedbackLaunchOperationBindsTypedSchemas(t *testing.T) {
 		t.Fatal("components.schemas.ReviewFeedbackFeatureRequest missing")
 	}
 	props := schemaProperties(schema)
-	for _, required := range []string{"comments", "gate"} {
+	for _, required := range []string{"expected_revision", "gate"} {
 		if !props[required] {
 			t.Fatalf("ReviewFeedbackFeatureRequest missing property %q", required)
 		}
 	}
-	for _, forbidden := range []string{"repo", "mode"} {
+	// The launch request stays constant-size: only the expected draft
+	// revision and gate travel; comment bodies and hunks are resolved
+	// server-side from the durable draft.
+	for _, forbidden := range []string{"repo", "mode", "comments", "body", "diff_hunk"} {
 		if props[forbidden] {
-			t.Fatalf("ReviewFeedbackFeatureRequest must carry fetched comments without %q", forbidden)
+			t.Fatalf("ReviewFeedbackFeatureRequest must stay constant-size without %q", forbidden)
 		}
 	}
+
+	selSchema, ok := spec.Components.Schemas["ReviewFeedbackSelectionRequest"]
+	if !ok {
+		t.Fatal("components.schemas.ReviewFeedbackSelectionRequest missing")
+	}
+	selProps := schemaProperties(selSchema)
+	for _, required := range []string{"expected_revision", "updates"} {
+		if !selProps[required] {
+			t.Fatalf("ReviewFeedbackSelectionRequest missing property %q", required)
+		}
+	}
+	selUpdate, ok := spec.Components.Schemas["ReviewFeedbackSelectionUpdate"]
+	if !ok {
+		t.Fatal("components.schemas.ReviewFeedbackSelectionUpdate missing")
+	}
+	updateProps := schemaProperties(selUpdate)
+	for _, required := range []string{"stable_ref", "selected"} {
+		if !updateProps[required] {
+			t.Fatalf("ReviewFeedbackSelectionUpdate missing property %q", required)
+		}
+	}
+	for _, forbidden := range []string{"repo", "id", "type", "path", "body", "diff_hunk", "author", "created_at"} {
+		if updateProps[forbidden] {
+			t.Fatalf("ReviewFeedbackSelectionUpdate is reference-only and must not carry %q", forbidden)
+		}
+	}
+	selOp := lookupOpenAPIOperation(t, spec, http.MethodPost, apiPathReviewFeedbackSelection)
+	if selOp.OperationID != "updateReviewFeedbackSelection" {
+		t.Fatalf("selection operationId = %q, want updateReviewFeedbackSelection", selOp.OperationID)
+	}
+	declaredOpenAPIResponse(t, selOp, "200")
+	declaredOpenAPIResponse(t, selOp, "409")
 }
 
 // TestGeneratedRefactorSurfaceIsTyped pins the generated Go surface: the
@@ -518,6 +554,7 @@ func documentedServerRoutes() []documentedRoute {
 		{method: httpMethodPost, path: "/api/v1/features/{feature_id}/actions/rebase", mutation: true},
 		{method: httpMethodPost, path: apiPathReviewFeedbackAction, mutation: true},
 		{method: httpMethodPost, path: apiPathReviewFeedbackFetch, mutation: true},
+		{method: httpMethodPost, path: apiPathReviewFeedbackSelection, mutation: true},
 		{method: httpMethodPost, path: "/api/v1/features/{feature_id}/actions/{action}/{subaction}", mutation: true},
 		{method: httpMethodGet, path: "/api/v1/features/{feature_id}/rewind/preview"},
 		{method: httpMethodGet, path: "/api/v1/features/{feature_id}/completion/preflight"},

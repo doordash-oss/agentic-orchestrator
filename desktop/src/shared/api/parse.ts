@@ -495,8 +495,24 @@ export const ServerReviewFeedbackCommentSchema = z.object({
   body: z.string().optional(),
   diff_hunk: z.string().optional(),
   in_reply_to_id: z.number().int().optional(),
+  created_at: z.string().optional(),
 });
 export type ServerReviewFeedbackComment = z.output<typeof ServerReviewFeedbackCommentSchema>;
+
+/** One comment inside the server-owned, revisioned review-feedback pending draft. */
+export const ServerReviewFeedbackDraftCommentSchema = ServerReviewFeedbackCommentSchema.extend({
+  stable_ref: z.string(),
+  selected: z.boolean(),
+});
+export type ServerReviewFeedbackDraftComment = z.output<
+  typeof ServerReviewFeedbackDraftCommentSchema
+>;
+
+const ServerReviewFeedbackRepoCommentsSchema = z.object({
+  repo: z.string(),
+  pr_url: z.string(),
+  comments: z.array(ServerReviewFeedbackDraftCommentSchema),
+});
 
 export const ServerFeatureDetailSchema = ServerFeatureSummarySchema.extend({
   description: z.string().optional(),
@@ -1045,21 +1061,30 @@ export type RefactorFeatureResponse = z.output<typeof RefactorFeatureResponseSch
 
 export const ReviewFeedbackFetchResponseSchema = z.object({
   api_version: z.string(),
-  repos: z.array(
-    z.object({
-      repo: z.string(),
-      pr_url: z.string(),
-      comments: z.array(ServerReviewFeedbackCommentSchema),
-    }),
-  ),
+  revision: z.number().int().nonnegative(),
+  snapshot_id: z.string(),
+  repos: z.array(ServerReviewFeedbackRepoCommentsSchema),
 });
 export type ReviewFeedbackFetchResponse = z.output<typeof ReviewFeedbackFetchResponseSchema>;
+
+export const ReviewFeedbackSelectionResponseSchema = z.object({
+  api_version: z.string(),
+  revision: z.number().int().nonnegative(),
+  repos: z.array(ServerReviewFeedbackRepoCommentsSchema),
+});
+export type ReviewFeedbackSelectionResponse = z.output<
+  typeof ReviewFeedbackSelectionResponseSchema
+>;
 
 export const ReviewFeedbackFeatureResponseSchema = z.object({
   api_version: z.string(),
   feature_id: z.string(),
   parent_id: z.string(),
   result: z.string(),
+  child_id: z.string().optional(),
+  changed: z.number().int().nonnegative().optional(),
+  omitted: z.number().int().nonnegative().optional(),
+  deferred: z.number().int().nonnegative().optional(),
 });
 export type ReviewFeedbackFeatureResponse = z.output<typeof ReviewFeedbackFeatureResponseSchema>;
 
@@ -1250,6 +1275,16 @@ const _reviewFeedbackCommentSubset = (
   value: ReviewFeedbackCommentDTO,
 ): ServerReviewFeedbackComment => value;
 void _reviewFeedbackCommentSubset;
+type ReviewFeedbackDraftCommentDTO = components['schemas']['ReviewFeedbackDraftComment'];
+const _reviewFeedbackDraftCommentSubset = (
+  value: ReviewFeedbackDraftCommentDTO,
+): ServerReviewFeedbackDraftComment => value;
+void _reviewFeedbackDraftCommentSubset;
+type ReviewFeedbackSelectionDTO = components['schemas']['ReviewFeedbackSelectionResponse'];
+const _reviewFeedbackSelectionSubset = (
+  value: ReviewFeedbackSelectionDTO,
+): ReviewFeedbackSelectionResponse => value;
+void _reviewFeedbackSelectionSubset;
 type ReviewFeedbackFeatureDTO = components['schemas']['ReviewFeedbackFeatureResponse'];
 const _reviewFeedbackFeatureSubset = (
   value: ReviewFeedbackFeatureDTO,

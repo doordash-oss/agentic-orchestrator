@@ -16,8 +16,9 @@
     "format:check": "prettier --check .",
     "generate:api": "openapi-typescript ../api/openapi.yaml -o src/shared/api/schema.gen.ts",
     "check:api-drift": "node scripts/check-api-drift.mjs",
+    "install:electron-runtime": "node scripts/install-electron-runtime.mjs",
     "check": "npm run typecheck && npm run lint && npm run format:check && npm run check:api-drift",
-    "test": "vitest run",
+    "test": "npm run install:electron-runtime && vitest run",
     "test:security": "vitest run --project security",
     "test:e2e:packaged": "AGENTICO_E2E_NO_SANDBOX=1 playwright test --config test/e2e/playwright.config.ts",
     "test:e2e:screenshots": "playwright test --config test/e2e/screenshot-capture/playwright.config.ts",
@@ -56,6 +57,10 @@
     "zod": "^4.4.3"
   },
   "dependencies": {
-    "monaco-editor": "^0.55.1"
+    "monaco-editor": "^0.55.1",
+    "react-markdown": "^10.1.0",
+    "rehype-highlight": "^7.0.2",
+    "rehype-sanitize": "^6.0.0",
+    "remark-gfm": "^4.0.1"
   }
 }

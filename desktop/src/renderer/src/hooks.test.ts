@@ -1,7 +1,43 @@
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
+import type { ConnectionState } from '../../shared/ipc';
 import { installAgenticoMock } from './test/agenticoMock';
-import { useSystemAccentMirror, useTheme } from './hooks';
+import { useConnectionState, useSystemAccentMirror, useTheme } from './hooks';
+
+describe('useConnectionState', () => {
+  it('does not let a stale initial snapshot overwrite a pushed state', async () => {
+    const mock = installAgenticoMock();
+    let resolveInitial!: (state: ConnectionState) => void;
+    mock.api.getConnectionStatus.mockImplementationOnce(
+      () => new Promise<ConnectionState>((resolve) => (resolveInitial = resolve)),
+    );
+    const { result } = renderHook(() => useConnectionState());
+    const ready: ConnectionState = {
+      status: 'ready',
+      stage: 'ready',
+      detail: 'Connected.',
+      ownership: 'external',
+      kind: 'local',
+      serverKey: 'local:runtime',
+      serverName: 'frothy-macchiato',
+    };
+
+    act(() => mock.emitConnection(ready));
+    expect(result.current).toEqual(ready);
+
+    await act(async () => {
+      resolveInitial({
+        status: 'connecting',
+        stage: 'authenticate',
+        detail: 'Authenticating.',
+        ownership: 'external',
+      });
+      await Promise.resolve();
+    });
+
+    expect(result.current).toEqual(ready);
+  });
+});
 
 describe('useSystemAccentMirror', () => {
   afterEach(() => {

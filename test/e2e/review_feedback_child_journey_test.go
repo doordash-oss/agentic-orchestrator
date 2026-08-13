@@ -165,18 +165,36 @@ func TestReviewFeedbackChildJourney(t *testing.T) {
 		t.Fatalf("repoB comments = %+v, want tagged inline comment 21", got)
 	}
 
-	selected := []feature.ReviewFeedbackComment{fetched.Repos[0].Comments[0], fetched.Repos[1].Comments[0]}
 	gate := true
 	tailMark := len(fakeAPI.Requests())
+	// First fetch selects every visible unaddressed reference; deselect the
+	// issue comment and review body through the reference-only selection
+	// mutation so the launch commits only comments 11 and 21.
+	selected, err := client.UpdateReviewFeedbackSelection(t.Context(), parent.ID, server.ReviewFeedbackSelectionRequest{
+		ExpectedRevision: fetched.Revision,
+		Updates: []server.ReviewFeedbackSelectionUpdate{
+			{StableRef: "repoA:issue:12", Selected: false},
+			{StableRef: "repoA:review_body:13", Selected: false},
+		},
+	})
+	if err != nil {
+		t.Fatalf("UpdateReviewFeedbackSelection() error = %v", err)
+	}
 	launched, err := client.ReviewFeedbackFeature(t.Context(), parent.ID, server.ReviewFeedbackFeatureRequest{
-		Comments: selected,
-		Gate:     &gate,
+		ExpectedRevision: selected.Revision,
+		Gate:             &gate,
 	})
 	if err != nil {
 		t.Fatalf("ReviewFeedbackFeature() error = %v", err)
 	}
 	if launched.FeatureID == "" || launched.ParentID != parent.ID {
 		t.Fatalf("ReviewFeedbackFeature() = %+v, want child reference for parent %s", launched, parent.ID)
+	}
+	if launched.Changed != 0 || launched.Omitted != 0 || launched.Deferred != 0 {
+		t.Fatalf("launch reconciliation counts = changed:%d omitted:%d deferred:%d, want all zero", launched.Changed, launched.Omitted, launched.Deferred)
+	}
+	if draft, err := store.LoadReviewFeedbackDraft(parent.ID); err != nil || draft != nil {
+		t.Fatalf("pending draft after launch = %+v (err %v), want cleared", draft, err)
 	}
 	childID := launched.FeatureID
 	child, err := store.Load(childID)
@@ -407,15 +425,17 @@ func reviewFeedbackJourneyBareRemote(t *testing.T, repoPath, branch string) stri
 // setup ownership while keeping the e2e server wired to its isolated manager.
 func (t *journeyMutationTarget) ReviewFeedbackFeature(featureID string, req server.ReviewFeedbackFeatureRequest) (server.ReviewFeedbackFeatureResponse, error) {
 	resp := server.ReviewFeedbackFeatureResponse{ParentID: featureID, Result: "failed"}
-	spec := server.ReviewFeedbackChildSpecFromRequest(req)
-	var child *feature.Feature
+	var launch *feature.ReviewFeedbackLaunchResult
 	if err := t.orch.WithRelationshipWriteLock(func() error {
-		var createErr error
-		child, createErr = t.mgr.CreateReviewFeedbackChild(featureID, spec)
-		return createErr
+		var launchErr error
+		launch, launchErr = t.mgr.LaunchReviewFeedbackChildFromDraft(featureID, int64(req.ExpectedRevision), req.Gate)
+		return launchErr
 	}); err != nil {
 		return resp, err
 	}
+	child := launch.Child
+	resp.Changed, resp.Omitted, resp.Deferred = launch.Changed, launch.Omitted, launch.Deferred
+	resp.ChildID = child.ID
 	t.orch.ChildCreated(child)
 	t.orch.RunSetupAsync(child.ID)
 	resp.FeatureID = child.ID

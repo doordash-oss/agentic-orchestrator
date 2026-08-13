@@ -143,6 +143,14 @@ func (c *Client) FetchReviewFeedback(ctx context.Context, featureID string) (Rev
 	return out, err
 }
 
+// UpdateReviewFeedbackSelection commits a bounded, reference-only selection
+// change against the pending draft and returns the acknowledged draft view.
+func (c *Client) UpdateReviewFeedbackSelection(ctx context.Context, featureID string, req ReviewFeedbackSelectionRequest) (ReviewFeedbackSelectionResponse, error) {
+	var out ReviewFeedbackSelectionResponse
+	err := c.doJSON(ctx, http.MethodPost, reviewFeedbackSelectionPath(featureID), nil, req, &out, true)
+	return out, err
+}
+
 func (c *Client) getJSON(ctx context.Context, path string, query url.Values, out any) error {
 	return c.doJSON(ctx, http.MethodGet, path, query, nil, out, false)
 }

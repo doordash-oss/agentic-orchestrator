@@ -302,6 +302,27 @@ func (e RelationshipChildOutcome) Valid() bool {
 	}
 }
 
+// Defines values for ReviewFeedbackDraftCommentType.
+const (
+	Issue      ReviewFeedbackDraftCommentType = "issue"
+	Review     ReviewFeedbackDraftCommentType = "review"
+	ReviewBody ReviewFeedbackDraftCommentType = "review_body"
+)
+
+// Valid indicates whether the value is a known member of the ReviewFeedbackDraftCommentType enum.
+func (e ReviewFeedbackDraftCommentType) Valid() bool {
+	switch e {
+	case Issue:
+		return true
+	case Review:
+		return true
+	case ReviewBody:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for RewindWorktreeConsequenceResetKind.
 const (
 	Anchor    RewindWorktreeConsequenceResetKind = "anchor"
@@ -563,6 +584,21 @@ const (
 func (e FetchReviewFeedbackParamsXAgenticoClient) Valid() bool {
 	switch e {
 	case FetchReviewFeedbackParamsXAgenticoClientLocal:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for UpdateReviewFeedbackSelectionParamsXAgenticoClient.
+const (
+	UpdateReviewFeedbackSelectionParamsXAgenticoClientLocal UpdateReviewFeedbackSelectionParamsXAgenticoClient = "local"
+)
+
+// Valid indicates whether the value is a known member of the UpdateReviewFeedbackSelectionParamsXAgenticoClient enum.
+func (e UpdateReviewFeedbackSelectionParamsXAgenticoClient) Valid() bool {
+	switch e {
+	case UpdateReviewFeedbackSelectionParamsXAgenticoClientLocal:
 		return true
 	default:
 		return false
@@ -946,13 +982,13 @@ func (e StageUploadParamsXAgenticoClient) Valid() bool {
 
 // Defines values for InitWorkspaceRepositoryParamsXAgenticoClient.
 const (
-	Local InitWorkspaceRepositoryParamsXAgenticoClient = "local"
+	InitWorkspaceRepositoryParamsXAgenticoClientLocal InitWorkspaceRepositoryParamsXAgenticoClient = "local"
 )
 
 // Valid indicates whether the value is a known member of the InitWorkspaceRepositoryParamsXAgenticoClient enum.
 func (e InitWorkspaceRepositoryParamsXAgenticoClient) Valid() bool {
 	switch e {
-	case Local:
+	case InitWorkspaceRepositoryParamsXAgenticoClientLocal:
 		return true
 	default:
 		return false
@@ -2288,9 +2324,29 @@ type ReviewDraftValidationResponse struct {
 // ReviewFeedbackComment defines model for ReviewFeedbackComment.
 type ReviewFeedbackComment = feature.ReviewFeedbackComment
 
+// ReviewFeedbackDraftComment One review-feedback comment inside the revisioned pending-draft view. `stable_ref` is the repository identity plus supported comment type plus GitHub database comment ID; `selected` is the committed draft selection. The remaining fields snapshot the reviewed child-visible content used to reconcile launch-time changes.
+type ReviewFeedbackDraftComment struct {
+	Author      string                         `json:"author,omitempty"`
+	Body        string                         `json:"body,omitempty"`
+	CreatedAt   string                         `json:"created_at,omitempty"`
+	DiffHunk    string                         `json:"diff_hunk,omitempty"`
+	ID          int                            `json:"id"`
+	InReplyToID int                            `json:"in_reply_to_id,omitempty"`
+	Line        int                            `json:"line,omitempty"`
+	Path        string                         `json:"path,omitempty"`
+	Repo        string                         `json:"repo"`
+	Selected    bool                           `json:"selected"`
+	StableRef   string                         `json:"stable_ref"`
+	Type        ReviewFeedbackDraftCommentType `json:"type"`
+}
+
+// ReviewFeedbackDraftCommentType defines model for ReviewFeedbackDraftComment.Type.
+type ReviewFeedbackDraftCommentType string
+
 // ReviewFeedbackFeatureRequest defines model for ReviewFeedbackFeatureRequest.
 type ReviewFeedbackFeatureRequest struct {
-	Comments []ReviewFeedbackComment `json:"comments"`
+	// ExpectedRevision Pending-draft revision the launch commits. The child is built only from the draft's committed selections at this revision.
+	ExpectedRevision int `json:"expected_revision"`
 
 	// Gate When present, sets both Roadmap review and Phase plan review on the parent and child. When omitted, inherits the parent's Roadmap review value.
 	Gate *bool `json:"gate,omitempty"`
@@ -2298,11 +2354,23 @@ type ReviewFeedbackFeatureRequest struct {
 
 // ReviewFeedbackFeatureResponse defines model for ReviewFeedbackFeatureResponse.
 type ReviewFeedbackFeatureResponse struct {
-	APIVersion string       `json:"api_version"`
-	FeatureID  string       `json:"feature_id"`
-	Meta       ResponseMeta `json:"meta,omitempty"`
-	ParentID   string       `json:"parent_id"`
-	Result     string       `json:"result"`
+	APIVersion string `json:"api_version"`
+
+	// Changed Selected reviewed references still present at launch whose child-visible content changed since the reviewed snapshot.
+	Changed int `json:"changed,omitempty"`
+
+	// ChildID Identity of the created review-feedback child.
+	ChildID string `json:"child_id,omitempty"`
+
+	// Deferred Comments first observed after the reviewed snapshot, deferred to a future pass.
+	Deferred  int          `json:"deferred,omitempty"`
+	FeatureID string       `json:"feature_id"`
+	Meta      ResponseMeta `json:"meta,omitempty"`
+
+	// Omitted Selected reviewed references deleted before launch and thus omitted from the child.
+	Omitted  int    `json:"omitted,omitempty"`
+	ParentID string `json:"parent_id"`
+	Result   string `json:"result"`
 }
 
 // ReviewFeedbackFetchRequest Intentionally empty: review feedback is always fetched across every parent repository with a PR URL and has no mode selector.
@@ -2313,13 +2381,40 @@ type ReviewFeedbackFetchResponse struct {
 	APIVersion string                       `json:"api_version"`
 	Meta       ResponseMeta                 `json:"meta,omitempty"`
 	Repos      []ReviewFeedbackRepoComments `json:"repos"`
+
+	// Revision Authoritative pending-draft revision.
+	Revision int `json:"revision"`
+
+	// SnapshotID Identity of the reviewed snapshot the draft was last reconciled from.
+	SnapshotID string `json:"snapshot_id"`
 }
 
 // ReviewFeedbackRepoComments defines model for ReviewFeedbackRepoComments.
 type ReviewFeedbackRepoComments struct {
-	Comments []ReviewFeedbackComment `json:"comments"`
-	PrURL    string                  `json:"pr_url"`
-	Repo     string                  `json:"repo"`
+	Comments []ReviewFeedbackDraftComment `json:"comments"`
+	PrURL    string                       `json:"pr_url"`
+	Repo     string                       `json:"repo"`
+}
+
+// ReviewFeedbackSelectionRequest defines model for ReviewFeedbackSelectionRequest.
+type ReviewFeedbackSelectionRequest struct {
+	// ExpectedRevision Draft revision the caller based these updates on.
+	ExpectedRevision int                             `json:"expected_revision"`
+	Updates          []ReviewFeedbackSelectionUpdate `json:"updates"`
+}
+
+// ReviewFeedbackSelectionResponse defines model for ReviewFeedbackSelectionResponse.
+type ReviewFeedbackSelectionResponse struct {
+	APIVersion string                       `json:"api_version"`
+	Meta       ResponseMeta                 `json:"meta,omitempty"`
+	Repos      []ReviewFeedbackRepoComments `json:"repos"`
+	Revision   int                          `json:"revision"`
+}
+
+// ReviewFeedbackSelectionUpdate One bounded selection change. Carries only a stable reference and a selection value; comment content is never accepted.
+type ReviewFeedbackSelectionUpdate struct {
+	Selected  bool   `json:"selected"`
+	StableRef string `json:"stable_ref"`
 }
 
 // ReviewGate defines model for ReviewGate.
@@ -2996,6 +3091,15 @@ type FetchReviewFeedbackParams struct {
 // FetchReviewFeedbackParamsXAgenticoClient defines parameters for FetchReviewFeedback.
 type FetchReviewFeedbackParamsXAgenticoClient string
 
+// UpdateReviewFeedbackSelectionParams defines parameters for UpdateReviewFeedbackSelection.
+type UpdateReviewFeedbackSelectionParams struct {
+	// XAgenticoClient CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required.
+	XAgenticoClient UpdateReviewFeedbackSelectionParamsXAgenticoClient `json:"X-Agentico-Client"`
+}
+
+// UpdateReviewFeedbackSelectionParamsXAgenticoClient defines parameters for UpdateReviewFeedbackSelection.
+type UpdateReviewFeedbackSelectionParamsXAgenticoClient string
+
 // RunFeatureActionJSONBody defines parameters for RunFeatureAction.
 type RunFeatureActionJSONBody map[string]interface{}
 
@@ -3270,6 +3374,9 @@ type ReviewFeedbackFeatureJSONRequestBody = ReviewFeedbackFeatureRequest
 
 // FetchReviewFeedbackJSONRequestBody defines body for FetchReviewFeedback for application/json ContentType.
 type FetchReviewFeedbackJSONRequestBody = ReviewFeedbackFetchRequest
+
+// UpdateReviewFeedbackSelectionJSONRequestBody defines body for UpdateReviewFeedbackSelection for application/json ContentType.
+type UpdateReviewFeedbackSelectionJSONRequestBody = ReviewFeedbackSelectionRequest
 
 // RunFeatureActionJSONRequestBody defines body for RunFeatureAction for application/json ContentType.
 type RunFeatureActionJSONRequestBody RunFeatureActionJSONBody

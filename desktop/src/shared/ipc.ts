@@ -42,6 +42,7 @@ export const IPC_CHANNELS = {
   featuresRefactor: 'agentico:features:refactor',
   featuresRefactorDiscard: 'agentico:features:refactor:discard',
   featuresReviewFeedbackFetch: 'agentico:features:review-feedback:fetch',
+  featuresReviewFeedbackSelection: 'agentico:features:review-feedback:selection',
   featuresReviewFeedbackLaunch: 'agentico:features:review-feedback:launch',
   featuresDeleteCascade: 'agentico:features:delete:cascade',
   recoveryScan: 'agentico:recovery:scan',
@@ -1140,15 +1141,18 @@ export const ReviewFeedbackCommentViewSchema = z.strictObject({
   path: z.string().max(500).optional(),
   line: z.number().int().optional(),
   author: z.string().max(200).optional(),
+  // Comments travel server-side via the durable draft; the view only caps
+  // at a generous ceiling, not the old request-payload budget.
   body: z
     .string()
-    .max(64 * 1024)
+    .max(1024 * 1024)
     .optional(),
   diffHunk: z
     .string()
-    .max(64 * 1024)
+    .max(1024 * 1024)
     .optional(),
   inReplyToId: z.number().int().optional(),
+  createdAt: z.string().max(64).optional(),
 });
 export type ReviewFeedbackCommentView = z.output<typeof ReviewFeedbackCommentViewSchema>;
 
@@ -1451,16 +1455,41 @@ export const DiscardRefactorChildResultSchema = z.strictObject({
 export type DiscardRefactorChildResult = z.output<typeof DiscardRefactorChildResultSchema>;
 
 /**
- * Review-feedback fetch/launch contract. The server returns comments
- * pre-grouped by repository; the main process redacts free text at the
- * boundary before this shape reaches the renderer. The launch request
- * echoes the fetched comment payloads (already redacted) plus the
- * explicit gate value the modal collected.
+ * Review-feedback fetch/selection/launch contract. The comment payloads live
+ * in a server-owned, revisioned pending draft; the fetch and selection
+ * responses are views over it, and selection updates and the launch carry
+ * only stable references plus the draft revision — never comment bodies,
+ * hunks, paths, or authors. Free text is redacted at the boundary before
+ * any view shape reaches the renderer.
  */
+export const ReviewFeedbackDraftCommentViewSchema = z.strictObject({
+  stableRef: z.string().min(1).max(512),
+  selected: z.boolean(),
+  repo: z.string().min(1).max(200),
+  id: z.number().int(),
+  type: z.enum(['review', 'issue', 'review_body']),
+  path: z.string().max(500).optional(),
+  line: z.number().int().optional(),
+  author: z.string().max(200).optional(),
+  // Comments travel server-side via the durable draft; the view only caps
+  // at a generous ceiling, not the old request-payload budget.
+  body: z
+    .string()
+    .max(1024 * 1024)
+    .optional(),
+  diffHunk: z
+    .string()
+    .max(1024 * 1024)
+    .optional(),
+  inReplyToId: z.number().int().optional(),
+  createdAt: z.string().max(64).optional(),
+});
+export type ReviewFeedbackDraftCommentView = z.output<typeof ReviewFeedbackDraftCommentViewSchema>;
+
 export const ReviewFeedbackRepoGroupSchema = z.strictObject({
   repo: z.string().min(1).max(200),
   prUrl: z.string().max(2048),
-  comments: z.array(ReviewFeedbackCommentViewSchema).max(2000),
+  comments: z.array(ReviewFeedbackDraftCommentViewSchema).max(2000),
 });
 export type ReviewFeedbackRepoGroup = z.output<typeof ReviewFeedbackRepoGroupSchema>;
 
@@ -1468,13 +1497,44 @@ export const FetchReviewFeedbackRequestSchema = z.strictObject({ featureId: Feat
 export type FetchReviewFeedbackRequest = z.output<typeof FetchReviewFeedbackRequestSchema>;
 export const FetchReviewFeedbackResultSchema = z.strictObject({
   featureId: FeatureIdSchema,
+  revision: z.number().int().nonnegative(),
+  snapshotId: z.string().min(1).max(200),
   repos: z.array(ReviewFeedbackRepoGroupSchema).max(200),
 });
 export type FetchReviewFeedbackResult = z.output<typeof FetchReviewFeedbackResultSchema>;
 
+/**
+ * One committed selection change against the pending draft: reference-only,
+ * bounded, and guarded by the revision the renderer based its edit on.
+ */
+export const UpdateReviewFeedbackSelectionRequestSchema = z.strictObject({
+  featureId: FeatureIdSchema,
+  expectedRevision: z.number().int().nonnegative(),
+  updates: z
+    .array(
+      z.strictObject({
+        stableRef: z.string().min(1).max(512),
+        selected: z.boolean(),
+      }),
+    )
+    .min(1)
+    .max(2000),
+});
+export type UpdateReviewFeedbackSelectionRequest = z.output<
+  typeof UpdateReviewFeedbackSelectionRequestSchema
+>;
+export const UpdateReviewFeedbackSelectionResultSchema = z.strictObject({
+  featureId: FeatureIdSchema,
+  revision: z.number().int().nonnegative(),
+  repos: z.array(ReviewFeedbackRepoGroupSchema).max(200),
+});
+export type UpdateReviewFeedbackSelectionResult = z.output<
+  typeof UpdateReviewFeedbackSelectionResultSchema
+>;
+
 export const LaunchReviewFeedbackChildRequestSchema = z.strictObject({
   parentId: FeatureIdSchema,
-  comments: z.array(ReviewFeedbackCommentViewSchema).min(1).max(2000),
+  expectedRevision: z.number().int().nonnegative(),
   gate: z.boolean().optional(),
 });
 export type LaunchReviewFeedbackChildRequest = z.output<
@@ -1484,6 +1544,9 @@ export const LaunchReviewFeedbackChildResultSchema = z.strictObject({
   childId: FeatureIdSchema,
   parentId: FeatureIdSchema,
   result: z.string().max(500),
+  changed: z.number().int().nonnegative().optional(),
+  omitted: z.number().int().nonnegative().optional(),
+  deferred: z.number().int().nonnegative().optional(),
 });
 export type LaunchReviewFeedbackChildResult = z.output<
   typeof LaunchReviewFeedbackChildResultSchema
@@ -3567,6 +3630,10 @@ export const ipcContracts: Record<IpcChannel, IpcContract> = {
     request: z.tuple([FetchReviewFeedbackRequestSchema]),
     response: FetchReviewFeedbackResultSchema,
   },
+  [IPC_CHANNELS.featuresReviewFeedbackSelection]: {
+    request: z.tuple([UpdateReviewFeedbackSelectionRequestSchema]),
+    response: UpdateReviewFeedbackSelectionResultSchema,
+  },
   [IPC_CHANNELS.featuresReviewFeedbackLaunch]: {
     request: z.tuple([LaunchReviewFeedbackChildRequestSchema]),
     response: LaunchReviewFeedbackChildResultSchema,
@@ -3771,6 +3838,9 @@ export interface AgenticoApi {
   launchRefactorChild(request: LaunchRefactorChildRequest): Promise<LaunchRefactorChildResult>;
   discardRefactorChild(request: DiscardRefactorChildRequest): Promise<DiscardRefactorChildResult>;
   fetchReviewFeedback(request: FetchReviewFeedbackRequest): Promise<FetchReviewFeedbackResult>;
+  updateReviewFeedbackSelection(
+    request: UpdateReviewFeedbackSelectionRequest,
+  ): Promise<UpdateReviewFeedbackSelectionResult>;
   launchReviewFeedbackChild(
     request: LaunchReviewFeedbackChildRequest,
   ): Promise<LaunchReviewFeedbackChildResult>;

@@ -300,7 +300,7 @@ func (s *Store) AllRelationshipChildren() (map[string]*RelationshipChildren, err
 		if !entry.IsDir() || isLegacyProviderBookkeepingDir(entry.Name()) {
 			continue
 		}
-		child, err := s.loadUnlocked(entry.Name())
+		child, exists, err := s.loadFeatureForScan(entry.Name())
 		if err != nil {
 			if errors.Is(err, ErrLegacySchemaVersion) {
 				// Legacy records predate child relationships; one stale
@@ -309,6 +309,9 @@ func (s *Store) AllRelationshipChildren() (map[string]*RelationshipChildren, err
 				continue
 			}
 			return nil, fmt.Errorf("classifying feature record %q during relationship scan: %w", entry.Name(), err)
+		}
+		if !exists {
+			continue
 		}
 		if child.Parent == nil || child.Parent.ParentID == child.ID {
 			continue
@@ -356,7 +359,7 @@ func (s *Store) validatedRelationshipChildrenUnlocked(parentID string) (*Relatio
 		if !entry.IsDir() || entry.Name() == parentID || isLegacyProviderBookkeepingDir(entry.Name()) {
 			continue
 		}
-		child, err := s.loadUnlocked(entry.Name())
+		child, exists, err := s.loadFeatureForScan(entry.Name())
 		if err != nil {
 			if errors.Is(err, ErrLegacySchemaVersion) {
 				// Legacy records predate child relationships; one stale
@@ -365,6 +368,9 @@ func (s *Store) validatedRelationshipChildrenUnlocked(parentID string) (*Relatio
 				continue
 			}
 			return nil, fmt.Errorf("classifying feature record %q during relationship scan: %w", entry.Name(), err)
+		}
+		if !exists {
+			continue
 		}
 		if child.Parent == nil || child.Parent.ParentID != parentID {
 			continue
@@ -567,6 +573,28 @@ func (s *Store) loadUnlocked(id string) (*Feature, error) {
 	return &f, nil
 }
 
+// loadFeatureForScan loads one directory entry while treating a missing
+// feature.yaml as an absent record. Delete removes the complete feature
+// directory, but a concurrent scan or a late artifact from an older runtime
+// can still expose a directory after the authoritative record is gone.
+//
+// The second existence check deliberately distinguishes that case from a
+// present feature.yaml whose active run is missing: the latter is a corrupt
+// record and must continue to fail closed.
+func (s *Store) loadFeatureForScan(id string) (*Feature, bool, error) {
+	f, err := s.loadUnlocked(id)
+	if err == nil {
+		return f, true, nil
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return nil, false, err
+	}
+	if _, statErr := os.Stat(filepath.Join(s.BaseDir, id, "feature.yaml")); errors.Is(statErr, os.ErrNotExist) {
+		return nil, false, nil
+	}
+	return nil, false, err
+}
+
 // loadRunUnlocked reads the run.yaml for a specific run number. It does not
 // acquire s.mu; run writes are committed by atomic rename.
 func (s *Store) loadRunUnlocked(featureID string, runNumber int) (*Run, error) {
@@ -596,9 +624,12 @@ func (s *Store) List() ([]*Feature, error) {
 		if !e.IsDir() || isLegacyProviderBookkeepingDir(e.Name()) {
 			continue
 		}
-		f, err := s.loadUnlocked(e.Name())
+		f, exists, err := s.loadFeatureForScan(e.Name())
 		if err != nil {
 			warnings = append(warnings, LoadWarning{ID: e.Name(), Err: err})
+			continue
+		}
+		if !exists {
 			continue
 		}
 		features = append(features, f)
@@ -614,10 +645,31 @@ func (s *Store) Delete(id string) error {
 	defer s.mu.Unlock()
 
 	dir := filepath.Join(s.BaseDir, id)
-	if err := os.RemoveAll(dir); err != nil {
+	if err := removeAllResilient(dir); err != nil {
 		return fmt.Errorf("deleting feature directory: %w", err)
 	}
 	return nil
+}
+
+// removeAllResilient removes dir even when it contains read-only directories
+// such as module caches captured in run artifacts. os.RemoveAll can delete
+// feature.yaml before encountering one of those directories, leaving a path
+// that looks like a corrupt feature on the next scan. Restore owner access to
+// directories after the first failure, then retry the complete removal.
+func removeAllResilient(dir string) error {
+	if err := os.RemoveAll(dir); err == nil {
+		return nil
+	}
+	_ = filepath.WalkDir(dir, func(path string, entry os.DirEntry, err error) error {
+		if err != nil || !entry.IsDir() {
+			return nil
+		}
+		if info, infoErr := entry.Info(); infoErr == nil && info.Mode().Perm()&0o700 != 0o700 {
+			_ = os.Chmod(path, info.Mode().Perm()|0o700)
+		}
+		return nil
+	})
+	return os.RemoveAll(dir)
 }
 
 // CreateRun writes a fresh run.yaml for a new run. RunNumber must be set.
@@ -900,7 +952,7 @@ func (s *Store) CleanupOrphanRuns(id string) ([]int, error) {
 			continue
 		}
 		runPath := filepath.Join(runsDir, e.Name())
-		if err := os.RemoveAll(runPath); err != nil {
+		if err := removeAllResilient(runPath); err != nil {
 			// Preserve in max-on-disk — the directory is still on disk.
 			if n > maxOnDisk {
 				maxOnDisk = n

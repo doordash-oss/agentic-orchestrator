@@ -324,6 +324,98 @@ func TestStoreScansSkipRuntimeBookkeepingDirs(t *testing.T) {
 	}
 }
 
+// TestStoreScansSkipDirectoriesWithoutFeatureRecord pins that directories
+// left behind after a feature is deleted do not poison feature listing or
+// relationship reads. A directory is a feature record only while its
+// feature.yaml exists; malformed records that do exist must still fail closed.
+func TestStoreScansSkipDirectoriesWithoutFeatureRecord(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
+	dir := t.TempDir()
+	store := NewStore(dir)
+
+	parent := &Feature{ID: "parent-001", Name: "Parent", Slug: "parent", Status: StatusCreated, SchemaVersion: SchemaVersionCurrent}
+	if err := store.Save(parent); err != nil {
+		t.Fatalf("save parent: %v", err)
+	}
+	deletedDir := filepath.Join(dir, "deleted-002")
+	if err := os.MkdirAll(deletedDir, 0o755); err != nil {
+		t.Fatalf("mkdir deleted feature residue: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(deletedDir, "events.jsonl"), []byte("{}\n"), 0o644); err != nil {
+		t.Fatalf("write deleted feature residue: %v", err)
+	}
+
+	features, err := store.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(features) != 1 || features[0].ID != parent.ID {
+		t.Fatalf("features = %+v, want only %s", features, parent.ID)
+	}
+	if _, err := store.AllRelationshipChildren(); err != nil {
+		t.Fatalf("AllRelationshipChildren: %v", err)
+	}
+	if _, err := store.RelationshipChildren(parent.ID); err != nil {
+		t.Fatalf("RelationshipChildren: %v", err)
+	}
+}
+
+func TestStoreScansDoNotIgnoreFeatureWithMissingActiveRun(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
+	dir := t.TempDir()
+	store := NewStore(dir)
+
+	broken := &Feature{ID: "broken-001", Name: "Broken", Slug: "broken", Status: StatusCreated, SchemaVersion: SchemaVersionCurrent}
+	if err := store.Save(broken); err != nil {
+		t.Fatalf("save broken feature: %v", err)
+	}
+	if err := os.Remove(filepath.Join(store.RunDir(broken.ID, broken.ActiveRun), "run.yaml")); err != nil {
+		t.Fatalf("remove active run: %v", err)
+	}
+
+	if _, err := store.List(); err == nil || !IsPartialLoadError(err) {
+		t.Fatalf("List error = %v, want partial load error", err)
+	}
+	if _, err := store.AllRelationshipChildren(); err == nil {
+		t.Fatal("AllRelationshipChildren error = nil, want missing active run failure")
+	}
+}
+
+// TestStoreDeleteRemovesReadOnlyArtifacts locks in that Delete succeeds even
+// when run artifacts include read-only directories, which can otherwise leave
+// feature debris after feature.yaml has already been removed.
+func TestStoreDeleteRemovesReadOnlyArtifacts(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
+	dir := t.TempDir()
+	store := NewStore(dir)
+
+	f := &Feature{ID: "to-delete", Name: "Delete Me", Slug: "delete-me", SchemaVersion: SchemaVersionCurrent}
+	if err := store.Save(f); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	cache := filepath.Join(dir, f.ID, "runs", "run-001", "build-cache", "mod")
+	if err := os.MkdirAll(cache, 0o755); err != nil {
+		t.Fatalf("mkdir cache: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(cache, "cached.go"), []byte("x"), 0o444); err != nil {
+		t.Fatalf("write cached artifact: %v", err)
+	}
+	if err := os.Chmod(cache, 0o555); err != nil {
+		t.Fatalf("chmod cache: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(cache, 0o755) })
+
+	if err := store.Delete(f.ID); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, f.ID)); !os.IsNotExist(err) {
+		t.Fatalf("Stat after delete = %v, want not-exist", err)
+	}
+}
+
 func TestStoreReadPathsDoNotWaitForInFlightModify(t *testing.T) {
 	const featureNameOriginal = "Original"
 

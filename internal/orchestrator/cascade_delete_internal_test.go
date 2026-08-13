@@ -181,6 +181,21 @@ func TestReconcileCascadeDeletesEmitsChangedNonTerminalRelationshipState(t *test
 	}
 }
 
+func TestReconcileCascadeDeletesIgnoresDeletedFeatureResidue(t *testing.T) {
+	t.Parallel()
+
+	store, _, _ := saveCascadeTestRelationship(t)
+	residue := filepath.Join(store.BaseDir, "deleted-feature", "runs", "run-001")
+	if err := os.MkdirAll(residue, 0o755); err != nil {
+		t.Fatalf("mkdir deleted feature residue: %v", err)
+	}
+	o := New(Deps{Store: store, Worktrees: &cascadeTestWorktrees{store: store}}, Hooks{})
+
+	if err := o.ReconcileCascadeDeletes(); err != nil {
+		t.Fatalf("ReconcileCascadeDeletes() error = %v, want deleted residue ignored", err)
+	}
+}
+
 func TestDeleteCascadeCleansChildrenThenParentAndConverges(t *testing.T) {
 	t.Parallel()
 

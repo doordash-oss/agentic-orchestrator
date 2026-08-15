@@ -20,10 +20,43 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	gitpkg "github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
 )
+
+func TestUpdateRefCASRetriesTransientRefLock(t *testing.T) {
+	repo := testutil.InitGitRepo(t)
+	oldSHA := runGitRefTest(t, repo, "rev-parse", "refs/heads/main")
+	newSHA := testutil.CommitFile(t, repo, "next.txt", "next\n", "next")
+	runGitRefTest(t, repo, "reset", "--hard", oldSHA)
+
+	gitDir := runGitRefTest(t, repo, "rev-parse", "--git-dir")
+	if !filepath.IsAbs(gitDir) {
+		gitDir = filepath.Join(repo, gitDir)
+	}
+	lockPath := filepath.Join(gitDir, "refs", "heads", "main.lock")
+	if err := os.WriteFile(lockPath, nil, 0o644); err != nil {
+		t.Fatalf("create ref lock: %v", err)
+	}
+	released := make(chan struct{})
+	go func() {
+		defer close(released)
+		timer := time.NewTimer(75 * time.Millisecond)
+		defer timer.Stop()
+		<-timer.C
+		_ = os.Remove(lockPath)
+	}()
+	t.Cleanup(func() { <-released })
+
+	if err := gitpkg.UpdateRefCAS(repo, "refs/heads/main", oldSHA, newSHA); err != nil {
+		t.Fatalf("UpdateRefCAS() error = %v, want transient ref lock retried", err)
+	}
+	if got := runGitRefTest(t, repo, "rev-parse", "refs/heads/main"); got != newSHA {
+		t.Fatalf("main = %s, want %s", got, newSHA)
+	}
+}
 
 func runGitRefTest(t *testing.T, dir string, args ...string) string {
 	t.Helper()

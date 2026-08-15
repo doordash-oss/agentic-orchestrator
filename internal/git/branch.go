@@ -29,7 +29,7 @@ func BranchName(featureSlug string) string {
 // BranchExistsOnRemote checks whether a branch exists on the origin remote.
 // Returns false if the remote is unreachable or not configured.
 func BranchExistsOnRemote(repoPath, branch string) bool {
-	cmd := exec.Command("git", "-C", repoPath, "ls-remote", "--heads", "origin", "refs/heads/"+branch)
+	cmd := readGitCmd(repoPath, "ls-remote", "--heads", "origin", "refs/heads/"+branch)
 	out, err := cmd.Output()
 	if err != nil {
 		return false
@@ -39,7 +39,7 @@ func BranchExistsOnRemote(repoPath, branch string) bool {
 
 // HasOriginRemote returns true if the repo at repoPath has an "origin" remote configured.
 func HasOriginRemote(repoPath string) bool {
-	cmd := exec.Command("git", "-C", repoPath, "remote")
+	cmd := readGitCmd(repoPath, "remote")
 	out, err := cmd.Output()
 	if err != nil {
 		return false

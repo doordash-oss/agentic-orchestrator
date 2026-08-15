@@ -16,6 +16,7 @@ package git
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -28,6 +29,104 @@ import (
 
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
 )
+
+func TestLockContentionRecognizesGitLockDiagnostics(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		msg  string
+		path string
+		ok   bool
+	}{
+		{name: "index file exists", msg: "fatal: Unable to create '/repo/.git/index.lock': File exists.", path: "/repo/.git/index.lock", ok: true},
+		{name: "ref cannot lock", msg: "fatal: cannot lock ref 'refs/heads/main': Unable to create '/repo/.git/refs/heads/main.lock': File exists.", path: "/repo/.git/refs/heads/main.lock", ok: true},
+		{name: "packed refs could not lock", msg: "error: could not lock config file '/repo/.git/packed-refs.lock': File exists", path: "/repo/.git/packed-refs.lock", ok: true},
+		{name: "case insensitive", msg: "FATAL: UNABLE TO CREATE '/repo/.git/HEAD.LOCK': FILE EXISTS", path: "/repo/.git/HEAD.LOCK", ok: true},
+		{name: "unquoted retry only", msg: "cannot lock shallow.lock: file exists", ok: true},
+		{name: "unrelated failure", msg: "fatal: not a git repository", ok: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			path, ok := lockContention([]byte(tt.msg))
+			if ok != tt.ok || path != tt.path {
+				t.Fatalf("lockContention(%q) = (%q, %v), want (%q, %v)", tt.msg, path, ok, tt.path, tt.ok)
+			}
+		})
+	}
+}
+
+func TestResetToCommitClearsStaleIndexLock(t *testing.T) {
+	repo := testutil.InitGitRepo(t)
+	anchor := testutil.CommitFile(t, repo, "anchor.txt", "anchor\n", "anchor")
+	testutil.CommitFile(t, repo, "later.txt", "later\n", "later")
+	lockPath := strings.TrimSpace(string(mustGitOutput(t, repo, "rev-parse", "--git-path", "index.lock")))
+	if !filepath.IsAbs(lockPath) {
+		lockPath = filepath.Join(repo, lockPath)
+	}
+	if err := os.WriteFile(lockPath, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-time.Hour)
+	if err := os.Chtimes(lockPath, old, old); err != nil {
+		t.Fatal(err)
+	}
+
+	mgr := NewWorktreeManager(t.TempDir())
+	if err := mgr.ResetToCommit(repo, anchor); err != nil {
+		t.Fatalf("ResetToCommit() error = %v, want stale lock recovered", err)
+	}
+	if _, err := os.Stat(lockPath); !os.IsNotExist(err) {
+		t.Fatalf("stale lock still exists, stat error = %v", err)
+	}
+}
+
+func TestResetToCommitPreservesFreshIndexLockAndReturnsTypedError(t *testing.T) {
+	repo := testutil.InitGitRepo(t)
+	anchor := testutil.CommitFile(t, repo, "anchor.txt", "anchor\n", "anchor")
+	testutil.CommitFile(t, repo, "later.txt", "later\n", "later")
+	lockPath := strings.TrimSpace(string(mustGitOutput(t, repo, "rev-parse", "--git-path", "index.lock")))
+	if !filepath.IsAbs(lockPath) {
+		lockPath = filepath.Join(repo, lockPath)
+	}
+	if err := os.WriteFile(lockPath, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	previousWindow, previousInitial, previousMax := indexLockRetryWindow, indexLockRetryInitialDelay, indexLockRetryMaxDelay
+	indexLockRetryWindow = 30 * time.Millisecond
+	indexLockRetryInitialDelay = time.Millisecond
+	indexLockRetryMaxDelay = 5 * time.Millisecond
+	t.Cleanup(func() {
+		indexLockRetryWindow = previousWindow
+		indexLockRetryInitialDelay = previousInitial
+		indexLockRetryMaxDelay = previousMax
+	})
+
+	err := NewWorktreeManager(t.TempDir()).ResetToCommit(repo, anchor)
+	var lockErr *GitLockContentionError
+	if !errors.As(err, &lockErr) {
+		t.Fatalf("ResetToCommit() error = %v, want *GitLockContentionError", err)
+	}
+	wantInfo, wantErr := os.Stat(lockPath)
+	gotInfo, gotErr := os.Stat(lockErr.LockPath)
+	if wantErr != nil || gotErr != nil || !os.SameFile(wantInfo, gotInfo) {
+		t.Fatalf("lock path = %q, want same file as %q (stat errors %v, %v)", lockErr.LockPath, lockPath, gotErr, wantErr)
+	}
+	if _, err := os.Stat(lockPath); err != nil {
+		t.Fatalf("fresh lock was removed: %v", err)
+	}
+}
+
+func mustGitOutput(t *testing.T, dir string, args ...string) []byte {
+	t.Helper()
+	out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
+	}
+	return out
+}
 
 func TestDiffSummary_MixedChanges(t *testing.T) {
 	t.Parallel()

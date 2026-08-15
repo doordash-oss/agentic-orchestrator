@@ -30,7 +30,10 @@ func RepoFreshness(worktreePath string) string {
 	if worktreePath == "" {
 		return FreshnessUnknown
 	}
-	if out, _, err := runProbe("--no-optional-locks", "-C", worktreePath, "status", "--porcelain"); err != nil {
+	if worktreeMutationInProgress(worktreePath) {
+		return FreshnessUnknown
+	}
+	if out, _, err := runProbe("-C", worktreePath, "status", "--porcelain"); err != nil {
 		return FreshnessUnknown
 	} else if strings.TrimSpace(string(out)) != "" {
 		return FreshnessLocalChanges

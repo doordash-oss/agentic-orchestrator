@@ -239,6 +239,8 @@ func (o *Orchestrator) applyTransactionCandidates(child, parent *feature.Feature
 		return fmt.Errorf("recording applying phase: %w", err)
 	}
 
+	pendingWorktreeSync := false
+
 	// Apply each candidate in order. Compare-and-swap: update the parent
 	// branch ref to the candidate SHA only if it still equals the expected
 	// old SHA.
@@ -335,9 +337,9 @@ func (o *Orchestrator) applyTransactionCandidates(child, parent *feature.Feature
 			return o.parkApplyAttention(child, journal, entry, entry.Diagnostics)
 		}
 
-		// Mark the entry as applied immediately after the CAS succeeds so
-		// a crash or worktree-sync failure can recognize and roll back
-		// the ref that was just updated.
+		// Mark the entry as applied immediately after the CAS succeeds so a
+		// crash or worktree-sync failure preserves the durable ref update and
+		// closure can finish syncing it idempotently.
 		entry.ApplyState = feature.RepoApplyApplied
 		entry.MergeHEAD = entry.CandidateSHA
 		entry.ObservedSHA = entry.CandidateSHA
@@ -348,15 +350,19 @@ func (o *Orchestrator) applyTransactionCandidates(child, parent *feature.Feature
 		// Sync the parent worktree to the new ref so the merge commit is
 		// visible in the working directory. The worktree was verified clean
 		// during preparation, so a hard reset is safe. If this fails, the
-		// ref is already at the candidate and must be rolled back —
-		// including this entry, whose CAS succeeded.
+		// ref is already durably at the candidate: preserve the successful
+		// CAS and let the idempotent closure sync retry the worktree.
 		parentWorktree = parentRepo.WorktreePath
 		if parentWorktree == "" {
 			parentWorktree = parentRepo.Path
 		}
 		if err := o.deps.Worktrees.ResetToCommit(parentWorktree, entry.CandidateSHA); err != nil {
-			entry.Diagnostics = fmt.Sprintf("syncing parent worktree after apply for repo %s: %v", entry.Repo, err)
-			return o.rollbackTransaction(child, parent, journal, -1)
+			entry.Diagnostics = fmt.Sprintf("worktree sync pending after apply for repo %s: %v", entry.Repo, err)
+			pendingWorktreeSync = true
+			if err := o.persistTransaction(child.ID, journal); err != nil {
+				return fmt.Errorf("recording pending worktree sync for repo %s: %w", entry.Repo, err)
+			}
+			continue
 		}
 	}
 
@@ -364,6 +370,15 @@ func (o *Orchestrator) applyTransactionCandidates(child, parent *feature.Feature
 	journal.Phase = feature.TransactionPhaseApplied
 	if err := o.persistTransaction(child.ID, journal); err != nil {
 		return fmt.Errorf("recording applied transaction: %w", err)
+	}
+	if pendingWorktreeSync {
+		o.emitEvent(ports.Event{
+			Type:      ports.RelationshipIntegrationChanged,
+			FeatureID: child.ID,
+			ParentID:  child.Parent.ParentID,
+			ChildID:   child.ID,
+			Message:   "worktree sync pending; will retry at closure",
+		})
 	}
 	return nil
 }

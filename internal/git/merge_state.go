@@ -64,7 +64,7 @@ func ConflictMarkerFiles(worktreePath string) ([]string, error) {
 	patterns := []string{start, mid, end}
 	matches := make(map[string]int)
 	for _, pattern := range patterns {
-		cmd := exec.Command("git", "-C", worktreePath, "grep", "-l",
+		cmd := readGitCmd(worktreePath, "grep", "-l",
 			"-e", pattern, "--", ".")
 		out, err := cmd.CombinedOutput()
 		if err != nil {

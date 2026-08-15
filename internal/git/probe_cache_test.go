@@ -258,6 +258,34 @@ func TestFreshnessCacheServesEntryWithoutProbing(t *testing.T) {
 	}
 }
 
+func TestCachedProbesYieldToWorktreeMutation(t *testing.T) {
+	path := t.TempDir()
+	mu := worktreeMutationLock(path)
+	mu.Lock()
+
+	inspector := &stubCleanlinessInspector{report: &CleanlinessReport{}}
+	cache := NewCleanlinessCache(inspector)
+	report, err := cache.InspectCleanliness(path, 0)
+	if report != nil || !errors.Is(err, ErrWorktreeBusy) {
+		t.Fatalf("busy cleanliness = (%+v, %v), want nil ErrWorktreeBusy", report, err)
+	}
+	if got := inspector.calls.Load(); got != 0 {
+		t.Fatalf("inspector ran %d times while mutation lock held, want 0", got)
+	}
+	if got := RepoFreshness(path); got != FreshnessUnknown {
+		t.Fatalf("busy RepoFreshness() = %q, want unknown", got)
+	}
+
+	mu.Unlock()
+	cache = NewCleanlinessCache(inspector)
+	if _, err := cache.InspectCleanliness(path, 0); err != nil {
+		t.Fatalf("InspectCleanliness() after release error = %v", err)
+	}
+	if got := inspector.calls.Load(); got != 1 {
+		t.Fatalf("inspector ran %d times after release, want 1", got)
+	}
+}
+
 type stubCleanlinessInspector struct {
 	report  *CleanlinessReport
 	err     error

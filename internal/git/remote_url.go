@@ -17,7 +17,6 @@ package git
 import (
 	"fmt"
 	"net/url"
-	"os/exec"
 	"strings"
 )
 
@@ -51,7 +50,7 @@ func ParseRemoteURL(remote string) (host, owner, repo string, err error) {
 // originRepo resolves the origin remote of the repo at repoPath into
 // host, owner, and repository name.
 func originRepo(repoPath string) (host, owner, repo string, err error) {
-	cmd := exec.Command("git", "-C", repoPath, "remote", "get-url", "origin")
+	cmd := readGitCmd(repoPath, "remote", "get-url", "origin")
 	out, err := cmd.Output()
 	if err != nil {
 		return "", "", "", fmt.Errorf("reading origin remote: %w", err)

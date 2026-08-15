@@ -16,7 +16,6 @@ package git
 
 import (
 	"fmt"
-	"os/exec"
 	"strings"
 )
 
@@ -35,7 +34,7 @@ func (e *RefCASMismatchError) Error() string {
 // ReadRefSHA returns the full SHA of the named ref (e.g. "refs/heads/main"
 // or "main") in the given repo path, or an error if the ref does not resolve.
 func ReadRefSHA(repoPath, ref string) (string, error) {
-	cmd := exec.Command("git", "-C", repoPath, "rev-parse", "--verify", "--quiet", ref)
+	cmd := readGitCmd(repoPath, "rev-parse", "--verify", "--quiet", ref)
 	out, err := cmd.Output()
 	if err != nil {
 		return "", fmt.Errorf("rev-parse %s in %s: %w", ref, repoPath, err)
@@ -69,9 +68,7 @@ func UpdateRefCAS(repoPath, ref, oldSHA, newSHA string) error {
 	// process moves the ref between our read and the update, git itself
 	// will reject the update.
 	stdin := fmt.Sprintf("update %s %s %s\n", ref, newSHA, oldSHA)
-	cmd := exec.Command("git", "-C", repoPath, "update-ref", "--stdin")
-	cmd.Stdin = strings.NewReader(stdin)
-	out, err := cmd.CombinedOutput()
+	out, err := runGitMutationWithLockRetryStdin(repoPath, stdin, "update-ref", "--stdin")
 	if err != nil {
 		// Re-read to capture the observed SHA for diagnostics.
 		observed, _ := ReadRefSHA(repoPath, ref)

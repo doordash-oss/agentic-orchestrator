@@ -15,7 +15,6 @@
 package git
 
 import (
-	"os/exec"
 	"strconv"
 	"strings"
 )
@@ -39,11 +38,11 @@ func PendingAgainst(worktreePath, dest string) (PendingWork, bool) {
 	if worktreePath == "" || dest == "" {
 		return PendingWork{}, false
 	}
-	verify := exec.Command("git", "-C", worktreePath, "rev-parse", "--verify", "--quiet", dest+"^{commit}")
+	verify := readGitCmd(worktreePath, "rev-parse", "--verify", "--quiet", dest+"^{commit}")
 	if err := verify.Run(); err != nil {
 		return PendingWork{}, false
 	}
-	out, err := exec.Command("git", "--no-optional-locks", "-C", worktreePath,
+	out, err := readGitCmd(worktreePath,
 		"rev-list", "--left-right", "--count", "HEAD..."+dest).Output()
 	if err != nil {
 		return PendingWork{}, false

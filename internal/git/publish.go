@@ -19,6 +19,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -30,11 +31,29 @@ import (
 // git-push operations (e.g. when corporate hooks block pushes to local repos).
 var PushFunc = defaultPush
 
-const (
+var (
 	indexLockRetryWindow       = 5 * time.Second
 	indexLockRetryInitialDelay = 25 * time.Millisecond
 	indexLockRetryMaxDelay     = 250 * time.Millisecond
+	gitLockStaleAfter          = 10 * time.Minute
 )
+
+var gitLockPathPattern = regexp.MustCompile(`(?i)'([^']+\.lock)'`)
+
+// GitLockContentionError reports a Git mutation that exhausted its retry
+// window while a known lock remained in place.
+type GitLockContentionError struct {
+	LockPath string
+	Age      time.Duration
+}
+
+func (e *GitLockContentionError) Error() string {
+	age := e.Age.Round(time.Second)
+	if e.Age > gitLockStaleAfter {
+		return fmt.Sprintf("stale git lock (%s old) at %s", age, e.LockPath)
+	}
+	return fmt.Sprintf("git lock contention (%s old) at %s", age, e.LockPath)
+}
 
 var worktreeMutationLocks sync.Map
 
@@ -95,7 +114,7 @@ func DiffSummary(worktreePath string, baseBranch ...string) (string, error) {
 	}
 
 	// Uncommitted diff: working tree changes not yet committed (tracked files)
-	cmd := exec.Command("git", "-C", worktreePath, "diff", "HEAD")
+	cmd := readGitCmd(worktreePath, "diff", "HEAD")
 	out, err := cmd.CombinedOutput()
 	if err == nil && len(strings.TrimSpace(string(out))) > 0 {
 		parts = append(parts, string(out))
@@ -116,7 +135,7 @@ func DiffSummary(worktreePath string, baseBranch ...string) (string, error) {
 }
 
 func diffRange(worktreePath, rangeSpec string) (string, error) {
-	cmd := exec.Command("git", "-C", worktreePath, "diff", rangeSpec)
+	cmd := readGitCmd(worktreePath, "diff", rangeSpec)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", err
@@ -129,7 +148,7 @@ func diffRange(worktreePath, rangeSpec string) (string, error) {
 
 // untrackedFilesDiff generates a unified diff representation for untracked files.
 func untrackedFilesDiff(worktreePath string) (string, error) {
-	cmd := exec.Command("git", "-C", worktreePath, "ls-files", "--others", "--exclude-standard")
+	cmd := readGitCmd(worktreePath, "ls-files", "--others", "--exclude-standard")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", err
@@ -168,7 +187,7 @@ func untrackedFilesDiff(worktreePath string) (string, error) {
 // HasUncommittedChanges returns true if the worktree has staged, unstaged,
 // or untracked changes.
 func HasUncommittedChanges(worktreePath string) bool {
-	cmd := exec.Command("git", "-C", worktreePath, "status", "--porcelain")
+	cmd := readGitCmd(worktreePath, "status", "--porcelain")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return false
@@ -183,12 +202,12 @@ func CommitAll(worktreePath, message string) error {
 	mu.Lock()
 	defer mu.Unlock()
 
-	if out, err := runGitMutationWithIndexLockRetry(worktreePath, "add", "-A"); err != nil {
+	if out, err := runGitMutationWithLockRetry(worktreePath, "add", "-A"); err != nil {
 		return fmt.Errorf("staging changes: %s: %w", strings.TrimSpace(string(out)), err)
 	}
 	// Append Agentic signature trailer
 	message = message + "\n\n" + CommitSignatureTrailer
-	if out, err := runGitMutationWithIndexLockRetry(worktreePath, "commit", "-m", message); err != nil {
+	if out, err := runGitMutationWithLockRetry(worktreePath, "commit", "-m", message); err != nil {
 		return fmt.Errorf("creating commit: %s: %w", strings.TrimSpace(string(out)), err)
 	}
 	return nil
@@ -202,10 +221,10 @@ func CommitAllAndGetHead(worktreePath, message string) (string, error) {
 	mu.Lock()
 	defer mu.Unlock()
 
-	if out, err := runGitMutationWithIndexLockRetry(worktreePath, "add", "-A"); err != nil {
+	if out, err := runGitMutationWithLockRetry(worktreePath, "add", "-A"); err != nil {
 		return "", fmt.Errorf("staging changes: %s: %w", strings.TrimSpace(string(out)), err)
 	}
-	status := exec.Command("git", "-C", worktreePath, "status", "--porcelain")
+	status := readGitCmd(worktreePath, "status", "--porcelain")
 	out, err := status.CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("checking staged changes: %s: %w", strings.TrimSpace(string(out)), err)
@@ -214,7 +233,7 @@ func CommitAllAndGetHead(worktreePath, message string) (string, error) {
 		return CurrentHeadSHA(worktreePath)
 	}
 	message = message + "\n\n" + CommitSignatureTrailer
-	if out, err := runGitMutationWithIndexLockRetry(worktreePath, "commit", "-m", message); err != nil {
+	if out, err := runGitMutationWithLockRetry(worktreePath, "commit", "-m", message); err != nil {
 		return "", fmt.Errorf("creating commit: %s: %w", strings.TrimSpace(string(out)), err)
 	}
 	return CurrentHeadSHA(worktreePath)
@@ -226,16 +245,53 @@ func worktreeMutationLock(worktreePath string) *sync.Mutex {
 	return actual.(*sync.Mutex)
 }
 
-// runGitMutationWithIndexLockRetry tolerates a short-lived lock held by
-// another Git process. It never removes the lock: a lock that remains beyond
-// the retry window is reported with Git's original diagnostic.
-func runGitMutationWithIndexLockRetry(worktreePath string, args ...string) ([]byte, error) {
+func worktreeMutationInProgress(worktreePath string) bool {
+	mu := worktreeMutationLock(worktreePath)
+	if mu.TryLock() {
+		mu.Unlock()
+		return false
+	}
+	return true
+}
+
+// runGitMutationWithLockRetry tolerates short-lived Git locks and removes one
+// stale lock per invocation when Git reports its concrete path. Fresh locks
+// remain untouched and are retried only within the bounded window.
+func runGitMutationWithLockRetry(worktreePath string, args ...string) ([]byte, error) {
+	return runGitMutationWithLockRetryStdin(worktreePath, "", args...)
+}
+
+func runGitMutationWithLockRetryStdin(worktreePath, stdin string, args ...string) ([]byte, error) {
 	deadline := time.Now().Add(indexLockRetryWindow)
 	delay := indexLockRetryInitialDelay
+	removedStaleLock := false
 	for {
 		cmdArgs := append([]string{"-C", worktreePath}, args...)
-		out, err := exec.Command("git", cmdArgs...).CombinedOutput()
-		if err == nil || !isIndexLockContention(out) || !time.Now().Before(deadline) {
+		cmd := exec.Command("git", cmdArgs...)
+		if stdin != "" {
+			cmd.Stdin = strings.NewReader(stdin)
+		}
+		out, err := cmd.CombinedOutput()
+		lockPath, contention := lockContention(out)
+		if err == nil || !contention {
+			return out, err
+		}
+		lockAge := time.Duration(0)
+		if lockPath != "" && strings.HasSuffix(filepath.Base(lockPath), ".lock") {
+			if info, statErr := os.Stat(lockPath); statErr == nil {
+				lockAge = time.Since(info.ModTime())
+				if !removedStaleLock && lockAge > gitLockStaleAfter {
+					removedStaleLock = true
+					if removeErr := os.Remove(lockPath); removeErr == nil || os.IsNotExist(removeErr) {
+						continue
+					}
+				}
+			}
+		}
+		if !time.Now().Before(deadline) {
+			if lockPath != "" {
+				return out, &GitLockContentionError{LockPath: lockPath, Age: lockAge}
+			}
 			return out, err
 		}
 
@@ -253,15 +309,23 @@ func runGitMutationWithIndexLockRetry(worktreePath string, args ...string) ([]by
 	}
 }
 
-func isIndexLockContention(out []byte) bool {
+func lockContention(out []byte) (string, bool) {
 	msg := strings.ToLower(string(out))
-	return strings.Contains(msg, "index.lock") &&
-		(strings.Contains(msg, "file exists") || strings.Contains(msg, "unable to create"))
+	if !strings.Contains(msg, ".lock") ||
+		!(strings.Contains(msg, "file exists") || strings.Contains(msg, "unable to create") ||
+			strings.Contains(msg, "cannot lock") || strings.Contains(msg, "could not lock")) {
+		return "", false
+	}
+	match := gitLockPathPattern.FindSubmatch(out)
+	if len(match) == 2 {
+		return string(match[1]), true
+	}
+	return "", true
 }
 
 // CurrentHeadSHA returns the full SHA of HEAD in the given worktree.
 func CurrentHeadSHA(worktreePath string) (string, error) {
-	cmd := exec.Command("git", "-C", worktreePath, "rev-parse", "HEAD")
+	cmd := readGitCmd(worktreePath, "rev-parse", "HEAD")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("getting HEAD SHA: %s: %w", strings.TrimSpace(string(out)), err)
@@ -291,7 +355,7 @@ func ClosePR(prURL string) error {
 // description generation where the short oneline log is not descriptive enough.
 func CommitBodies(worktreePath string, baseBranch ...string) (string, error) {
 	base := resolveBase(worktreePath, baseBranch...)
-	cmd := exec.Command("git", "-C", worktreePath, "log", "--format=%B%n---commit---", base+"..HEAD")
+	cmd := readGitCmd(worktreePath, "log", "--format=%B%n---commit---", base+"..HEAD")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("getting commit bodies: %s: %w", strings.TrimSpace(string(out)), err)
@@ -304,7 +368,7 @@ func CommitBodies(worktreePath string, baseBranch ...string) (string, error) {
 // when the full diff is too large to prompt with.
 func DiffStat(worktreePath string, baseBranch ...string) (string, error) {
 	base := resolveBase(worktreePath, baseBranch...)
-	cmd := exec.Command("git", "-C", worktreePath, "diff", "--stat", base+"...HEAD")
+	cmd := readGitCmd(worktreePath, "diff", "--stat", base+"...HEAD")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("getting diff stat: %s: %w", strings.TrimSpace(string(out)), err)
@@ -324,7 +388,7 @@ func resolveBase(worktreePath string, baseBranch ...string) string {
 		base = DefaultBranch(worktreePath)
 	}
 	remoteRef := "refs/remotes/origin/" + base
-	if exec.Command("git", "-C", worktreePath, "show-ref", "--verify", "--quiet", remoteRef).Run() == nil {
+	if readGitCmd(worktreePath, "show-ref", "--verify", "--quiet", remoteRef).Run() == nil {
 		return "origin/" + base
 	}
 	return base

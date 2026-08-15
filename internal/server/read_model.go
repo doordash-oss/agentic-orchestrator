@@ -370,12 +370,11 @@ func (h *apiHandler) dirtyRepoDiagnostics(repos []feature.FeatureRepo) ([]map[st
 			defer wg.Done()
 			report, err := h.cleanliness.InspectCleanliness(path, feature.DefaultDirtyPathLimit)
 			if err != nil || report == nil {
-				// A probe that merely ran out of time says nothing about the
-				// worktree — a repo slower than the bound would be blocked on
-				// every attempt, with retrying futile. Only an unreadable
-				// worktree is treated as unverifiable; launch-time inspection
-				// re-checks against the uncached authority either way.
-				if !errors.Is(err, git.ErrProbeTimeout) {
+				// A probe that timed out or yielded to a mutation says nothing
+				// about the worktree. Only an unreadable worktree is treated as
+				// unverifiable; launch-time inspection re-checks against the
+				// uncached authority either way.
+				if !errors.Is(err, git.ErrProbeTimeout) && !errors.Is(err, git.ErrWorktreeBusy) {
 					unknown[i] = name
 				}
 				return

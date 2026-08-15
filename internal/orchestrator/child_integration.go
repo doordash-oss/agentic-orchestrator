@@ -167,7 +167,9 @@ func (o *Orchestrator) runTransactionIntegration(childID string, child, parent *
 	// vector, check whether the parent tips have moved. If they moved
 	// cleanly and child code did not change, rebuild the candidate vector.
 	// If child code changed, invalidate final review.
-	if journal != nil && journal.AllCandidatesPrepared() && !journal.AllApplied() {
+	if journal != nil &&
+		(journal.Phase == feature.TransactionPhasePrepared || journal.Phase == feature.TransactionPhaseAttention) &&
+		journal.AllCandidatesPrepared() && !journal.AllApplied() {
 		currentTips, err := o.transactionParentTipVector(parent, journal)
 		if err != nil {
 			return err
@@ -378,7 +380,27 @@ func (o *Orchestrator) closeTransactionAfterApply(childID, parentID string) erro
 			parentWorktree = parentRepo.Path
 		}
 		if err := o.deps.Worktrees.ResetToCommit(parentWorktree, entry.CandidateSHA); err != nil {
-			return fmt.Errorf("syncing parent worktree for repo %s during closure: %w", entry.Repo, err)
+			syncErr := fmt.Errorf("syncing parent worktree for repo %s: %w", entry.Repo, err)
+			if modifyErr := o.deps.Store.Modify(childID, func(f *feature.Feature) error {
+				f.LastError = syncErr.Error()
+				return nil
+			}); modifyErr != nil {
+				return fmt.Errorf("persisting parent worktree sync error: %v (original error: %w)", modifyErr, syncErr)
+			}
+			o.emitEvent(ports.Event{
+				Type:      ports.RelationshipIntegrationChanged,
+				FeatureID: childID,
+				ParentID:  parentID,
+				ChildID:   childID,
+				Message:   "child integration needs attention: " + syncErr.Error(),
+			})
+			return syncErr
+		}
+		if strings.HasPrefix(entry.Diagnostics, "worktree sync pending after apply for repo ") {
+			entry.Diagnostics = ""
+			if err := o.persistTransaction(childID, journal); err != nil {
+				return fmt.Errorf("clearing pending worktree sync for repo %s: %w", entry.Repo, err)
+			}
 		}
 	}
 

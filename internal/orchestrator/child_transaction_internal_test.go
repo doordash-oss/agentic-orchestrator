@@ -661,10 +661,11 @@ type failingResetWorktrees struct {
 	*git.WorktreeManager
 	failRepoDir string
 	failed      bool
+	failAlways  bool
 }
 
 func (w *failingResetWorktrees) ResetToCommit(worktreePath, commitSHA string) error {
-	if !w.failed && worktreePath == w.failRepoDir {
+	if worktreePath == w.failRepoDir && (w.failAlways || !w.failed) {
 		w.failed = true
 		return fmt.Errorf("simulated worktree sync failure")
 	}
@@ -711,12 +712,10 @@ func TestTransactionFirstApplyFailureRollsBack(t *testing.T) {
 	}
 }
 
-// TestTransactionApplySyncFailureRollsBackAll proves a worktree-sync failure
-// after a successful apply CAS compensates ALL applied refs — including the
-// one whose worktree sync failed — so the all-or-nothing transaction invariant
-// holds. Without the fix, the failed repo's ref remains at the candidate while
-// its worktree is stale, violating recoverable compensation.
-func TestTransactionApplySyncFailureRollsBackAll(t *testing.T) {
+// TestTransactionApplySyncFailureContinuesForward proves an environmental
+// worktree-sync failure after a successful CAS preserves the applied ref,
+// finishes the candidate vector, surfaces closure attention, and resumes.
+func TestTransactionApplySyncFailureContinuesForward(t *testing.T) {
 	if testing.Short() {
 		t.Skip("real-git integration test")
 	}
@@ -735,18 +734,13 @@ func TestTransactionApplySyncFailureRollsBackAll(t *testing.T) {
 		t.Fatal("journal is nil")
 	}
 
-	// Record old SHAs for rollback verification.
-	oldSHAs := make([]string, len(journal.Entries))
-	for i := range journal.Entries {
-		oldSHAs[i] = journal.Entries[i].ParentAnchorSHA
-	}
-
 	// Apply with a worktree manager that fails ResetToCommit for repo 1
-	// (the second repo). Repo 0 applies fully (CAS + worktree sync); repo
-	// 1's CAS succeeds but the worktree sync fails; repo 2 is never reached.
+	// (the second repo). The failure persists through the immediate closure
+	// attempt so its durable LastError can be asserted.
 	resetWT := &failingResetWorktrees{
 		WorktreeManager: fx.wm,
 		failRepoDir:     fx.repoDirs[1],
+		failAlways:      true,
 	}
 	applyO := New(Deps{
 		Lifecycle: fx.mgr,
@@ -758,21 +752,78 @@ func TestTransactionApplySyncFailureRollsBackAll(t *testing.T) {
 		t.Fatalf("applyTransactionCandidates() error = %v, want nil with attention", err)
 	}
 
-	// All refs should be rolled back to their old SHAs, including repo 1
-	// whose CAS succeeded but whose worktree sync failed.
+	// Every ref advances despite the environmental sync failure.
 	for i := range fx.repoDirs {
 		got := fx.refSHA(i, "refs/heads/feature/parent")
-		if got != oldSHAs[i] {
-			t.Fatalf("repo %d: ref = %s after rollback, want old SHA %s (worktree sync failure must be compensated)", i, got, oldSHAs[i])
+		if got != journal.Entries[i].CandidateSHA {
+			t.Fatalf("repo %d: ref = %s, want candidate %s", i, got, journal.Entries[i].CandidateSHA)
 		}
 	}
+	stored, _ := fx.store.Load(fx.child.ID)
+	if stored.Parent.Transaction.Phase != feature.TransactionPhaseApplied {
+		t.Fatalf("phase = %s, want applied", stored.Parent.Transaction.Phase)
+	}
+	failedEntry := stored.Parent.Transaction.EntryByRepo(journal.Entries[1].Repo)
+	if failedEntry.ApplyState != feature.RepoApplyApplied || !strings.Contains(failedEntry.Diagnostics, "worktree sync pending after apply") {
+		t.Fatalf("failed entry = %+v, want applied with pending-sync diagnostics", failedEntry)
+	}
 
-	// Worktrees for repos 0 and 1 should be reset to the old SHA.
-	for i := 0; i < 2; i++ {
-		wtHead := txGit(t, fx.repoDirs[i], "rev-parse", "HEAD")
-		if wtHead != oldSHAs[i] {
-			t.Fatalf("repo %d: worktree HEAD = %s, want old SHA %s after rollback", i, wtHead, oldSHAs[i])
+	if err := applyO.closeTransactionAfterApply(fx.child.ID, fx.parent.ID); err == nil {
+		t.Fatal("closeTransactionAfterApply() error = nil, want persistent sync failure")
+	}
+	stored, _ = fx.store.Load(fx.child.ID)
+	if !strings.Contains(stored.LastError, "syncing parent worktree for repo") {
+		t.Fatalf("LastError = %q, want closure sync diagnostic", stored.LastError)
+	}
+
+	// Swap in the healthy manager and re-enter through the public integration
+	// path. Applied journals go directly to idempotent closure.
+	if err := o.RunChildIntegration(fx.child.ID); err != nil {
+		t.Fatalf("RunChildIntegration() resume error = %v", err)
+	}
+	_, stored = fx.reload()
+	if stored.Parent.Transaction.Phase != feature.TransactionPhaseMerged {
+		t.Fatalf("phase after resume = %s, want merged", stored.Parent.Transaction.Phase)
+	}
+	if stored.LastError != "" {
+		t.Fatalf("LastError after resume = %q, want cleared", stored.LastError)
+	}
+	for i := range fx.repoDirs {
+		if got := txGit(t, fx.repoDirs[i], "rev-parse", "HEAD"); got != journal.Entries[i].CandidateSHA {
+			t.Fatalf("repo %d worktree HEAD = %s, want candidate %s", i, got, journal.Entries[i].CandidateSHA)
 		}
+	}
+}
+
+func TestTransactionApplyingJournalSkipsParentTipRebuild(t *testing.T) {
+	if testing.Short() {
+		t.Skip("real-git integration test")
+	}
+	fx := newMultiRepoTransactionFixture(t, 2)
+	o := fx.orchestrator()
+	child, _ := fx.store.Load(fx.child.ID)
+	parent, _ := fx.store.Load(fx.parent.ID)
+	journal, err := o.prepareTransactionCandidates(child, parent)
+	if err != nil {
+		t.Fatalf("prepareTransactionCandidates() error = %v", err)
+	}
+	originalCandidate := journal.Entries[0].CandidateSHA
+	journal.Phase = feature.TransactionPhaseApplying
+	if err := o.persistTransaction(child.ID, journal); err != nil {
+		t.Fatalf("persist applying journal: %v", err)
+	}
+
+	// Move the first parent tip after the interrupted apply journal is durable.
+	testutil.CommitFile(t, fx.repoDirs[0], "external.txt", "external\n", "external parent move")
+	if err := o.RunChildIntegration(child.ID); err != nil {
+		t.Fatalf("RunChildIntegration() error = %v, want retryable attention", err)
+	}
+	stored, _ := fx.store.Load(child.ID)
+	if stored.Parent.Transaction.Entries[0].CandidateSHA != originalCandidate {
+		t.Fatalf("applying journal candidate was rebuilt from %s to %s", originalCandidate, stored.Parent.Transaction.Entries[0].CandidateSHA)
+	}
+	if stored.Parent.Transaction.Phase != feature.TransactionPhaseAttention {
+		t.Fatalf("phase = %s, want attention after CAS detects moved ref", stored.Parent.Transaction.Phase)
 	}
 }
 

@@ -89,7 +89,7 @@ func (w *WorktreeManager) Create(repoPath, featureSlug, repoName, startPoint str
 // hasCommits reports whether the repository has at least one commit (a born
 // HEAD). A freshly initialized repo returns false.
 func hasCommits(repoPath string) bool {
-	cmd := exec.Command("git", "-C", repoPath, "rev-parse", "--verify", "--quiet", "HEAD")
+	cmd := readGitCmd(repoPath, "rev-parse", "--verify", "--quiet", "HEAD")
 	return cmd.Run() == nil
 }
 
@@ -98,7 +98,7 @@ func hasCommits(repoPath string) bool {
 // (main, master).
 func DefaultBranch(repoPath string) string {
 	// Try remote HEAD symref (most reliable for repos with a remote)
-	cmd := exec.Command("git", "-C", repoPath, "symbolic-ref", "refs/remotes/origin/HEAD")
+	cmd := readGitCmd(repoPath, "symbolic-ref", "refs/remotes/origin/HEAD")
 	if out, err := cmd.Output(); err == nil {
 		ref := strings.TrimSpace(string(out))
 		// refs/remotes/origin/main → main
@@ -108,7 +108,7 @@ func DefaultBranch(repoPath string) string {
 	}
 
 	// Check local HEAD symref — works for any repo regardless of remote
-	cmd = exec.Command("git", "-C", repoPath, "symbolic-ref", "HEAD")
+	cmd = readGitCmd(repoPath, "symbolic-ref", "HEAD")
 	if out, err := cmd.Output(); err == nil {
 		ref := strings.TrimSpace(string(out))
 		// refs/heads/trunk → trunk
@@ -119,7 +119,7 @@ func DefaultBranch(repoPath string) string {
 
 	// Fallback: check if main or master branches exist locally
 	for _, name := range []string{"main", "master"} {
-		cmd = exec.Command("git", "-C", repoPath, "rev-parse", "--verify", name)
+		cmd = readGitCmd(repoPath, "rev-parse", "--verify", name)
 		if err := cmd.Run(); err == nil {
 			return name
 		}
@@ -130,7 +130,7 @@ func DefaultBranch(repoPath string) string {
 
 // CurrentBranch returns the branch currently checked out in the given repo.
 func CurrentBranch(repoPath string) string {
-	cmd := exec.Command("git", "-C", repoPath, "rev-parse", "--abbrev-ref", "HEAD")
+	cmd := readGitCmd(repoPath, "rev-parse", "--abbrev-ref", "HEAD")
 	out, err := cmd.Output()
 	if err != nil {
 		return ""
@@ -151,7 +151,7 @@ func CurrentBranch(repoPath string) string {
 // recorded identity instead.
 func (w *WorktreeManager) Remove(worktreePath string, deleteBranch bool) error {
 	// Find the main repo for this worktree
-	cmd := exec.Command("git", "-C", worktreePath, "rev-parse", "--git-common-dir")
+	cmd := readGitCmd(worktreePath, "rev-parse", "--git-common-dir")
 	out, err := cmd.Output()
 	if err != nil {
 		// Worktree may already be gone; just remove the directory. Removing
@@ -167,7 +167,7 @@ func (w *WorktreeManager) Remove(worktreePath string, deleteBranch bool) error {
 	// Get branch name before removing
 	var branch string
 	if deleteBranch {
-		branchCmd := exec.Command("git", "-C", worktreePath, "rev-parse", "--abbrev-ref", "HEAD")
+		branchCmd := readGitCmd(worktreePath, "rev-parse", "--abbrev-ref", "HEAD")
 		branchOut, err := branchCmd.Output()
 		if err == nil {
 			branch = strings.TrimSpace(string(branchOut))
@@ -205,7 +205,7 @@ func (w *WorktreeManager) RemoveRef(worktreePath, mainRepo, branch string) error
 
 	// Delete branch if requested; an already-absent branch is success.
 	if branch != "" && branch != "main" && branch != "master" {
-		verify := exec.Command("git", "-C", mainRepo, "rev-parse", "--verify", "--quiet", "refs/heads/"+branch)
+		verify := readGitCmd(mainRepo, "rev-parse", "--verify", "--quiet", "refs/heads/"+branch)
 		if verify.Run() == nil {
 			delCmd := exec.Command("git", "-C", mainRepo, "branch", "-D", branch)
 			if out, err := delCmd.CombinedOutput(); err != nil {
@@ -229,10 +229,10 @@ func (w *WorktreeManager) ResetToBase(worktreePath, baseBranch string) error {
 	if out, err := fetchCmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("fetching origin/%s: %s: %w", baseBranch, strings.TrimSpace(string(out)), err)
 	}
-	if out, err := runGitMutationWithIndexLockRetry(worktreePath, "reset", "--hard", "origin/"+baseBranch); err != nil {
+	if out, err := runGitMutationWithLockRetry(worktreePath, "reset", "--hard", "origin/"+baseBranch); err != nil {
 		return fmt.Errorf("resetting worktree to %s: %s: %w", baseBranch, strings.TrimSpace(string(out)), err)
 	}
-	if out, err := runGitMutationWithIndexLockRetry(worktreePath, "clean", "-fd"); err != nil {
+	if out, err := runGitMutationWithLockRetry(worktreePath, "clean", "-fd"); err != nil {
 		return fmt.Errorf("cleaning worktree after reset to %s: %s: %w", baseBranch, strings.TrimSpace(string(out)), err)
 	}
 	return nil
@@ -245,10 +245,10 @@ func (w *WorktreeManager) ResetToBaseLocal(worktreePath, baseBranch string) erro
 	mu.Lock()
 	defer mu.Unlock()
 
-	if out, err := runGitMutationWithIndexLockRetry(worktreePath, "reset", "--hard", baseBranch); err != nil {
+	if out, err := runGitMutationWithLockRetry(worktreePath, "reset", "--hard", baseBranch); err != nil {
 		return fmt.Errorf("resetting to local %s: %s: %w", baseBranch, strings.TrimSpace(string(out)), err)
 	}
-	if out, err := runGitMutationWithIndexLockRetry(worktreePath, "clean", "-fd"); err != nil {
+	if out, err := runGitMutationWithLockRetry(worktreePath, "clean", "-fd"); err != nil {
 		return fmt.Errorf("cleaning worktree after reset to local %s: %s: %w", baseBranch, strings.TrimSpace(string(out)), err)
 	}
 	return nil
@@ -261,10 +261,10 @@ func (w *WorktreeManager) ResetToCommit(worktreePath, commitSHA string) error {
 	mu.Lock()
 	defer mu.Unlock()
 
-	if out, err := runGitMutationWithIndexLockRetry(worktreePath, "reset", "--hard", commitSHA); err != nil {
+	if out, err := runGitMutationWithLockRetry(worktreePath, "reset", "--hard", commitSHA); err != nil {
 		return fmt.Errorf("resetting to commit %s: %s: %w", commitSHA, strings.TrimSpace(string(out)), err)
 	}
-	if out, err := runGitMutationWithIndexLockRetry(worktreePath, "clean", "-fd"); err != nil {
+	if out, err := runGitMutationWithLockRetry(worktreePath, "clean", "-fd"); err != nil {
 		return fmt.Errorf("cleaning worktree after reset to commit %s: %s: %w", commitSHA, strings.TrimSpace(string(out)), err)
 	}
 	return nil

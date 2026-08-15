@@ -15,6 +15,7 @@
 package git
 
 import (
+	"context"
 	"errors"
 	"os"
 	"os/exec"
@@ -75,6 +76,24 @@ func TestRepoFreshnessStatusTimeoutIsUnknown(t *testing.T) {
 	}
 	if elapsed > 5*time.Second {
 		t.Errorf("RepoFreshness() took %v; want bounded by ProbeTimeout", elapsed)
+	}
+}
+
+func TestReadOnlyGitCommandsDisableOptionalLocks(t *testing.T) {
+	for name, cmd := range map[string]*exec.Cmd{
+		"bounded probe": probeGitCmd(context.Background(), "status"),
+		"read command":  readGitCmd(t.TempDir(), "status"),
+	} {
+		found := false
+		for _, env := range cmd.Env {
+			if env == "GIT_OPTIONAL_LOCKS=0" {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("%s environment does not disable optional locks", name)
+		}
 	}
 }
 

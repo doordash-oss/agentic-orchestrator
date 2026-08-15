@@ -51,7 +51,7 @@ func runProbe(args ...string) (out []byte, timedOut bool, err error) {
 func runProbeBounded(timeout time.Duration, args ...string) (out []byte, timedOut bool, err error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd := probeGitCmd(ctx, args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error {
 		if killErr := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL); !errors.Is(killErr, syscall.ESRCH) {
@@ -63,4 +63,18 @@ func runProbeBounded(timeout time.Duration, args ...string) (out []byte, timedOu
 	cmd.WaitDelay = time.Second
 	out, err = cmd.Output()
 	return out, errors.Is(ctx.Err(), context.DeadlineExceeded), err
+}
+
+func probeGitCmd(ctx context.Context, args ...string) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.Env = append(cmd.Environ(), "GIT_OPTIONAL_LOCKS=0")
+	return cmd
+}
+
+// readGitCmd constructs a read-only Git command that cannot take optional
+// locks, including the index refresh lock used by commands such as status.
+func readGitCmd(dir string, args ...string) *exec.Cmd {
+	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+	cmd.Env = append(cmd.Environ(), "GIT_OPTIONAL_LOCKS=0")
+	return cmd
 }

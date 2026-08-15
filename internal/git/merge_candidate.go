@@ -84,7 +84,7 @@ func CreateMergeCandidate(mainRepo, parentTip, childHead, message string) (*Merg
 	}
 
 	// Capture the resulting merge commit SHA.
-	headCmd := exec.Command("git", "-C", tmpWorktree, "rev-parse", "HEAD")
+	headCmd := readGitCmd(tmpWorktree, "rev-parse", "HEAD")
 	headOut, err := headCmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("capturing merge candidate HEAD: %w", err)
@@ -95,7 +95,7 @@ func CreateMergeCandidate(mainRepo, parentTip, childHead, message string) (*Merg
 	}
 
 	// Verify the merge commit has exactly two parents.
-	parentsCmd := exec.Command("git", "-C", tmpWorktree, "rev-list", "--parents", "-n", "1", "HEAD")
+	parentsCmd := readGitCmd(tmpWorktree, "rev-list", "--parents", "-n", "1", "HEAD")
 	parentsOut, err := parentsCmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("verifying merge parents: %w", err)
@@ -123,7 +123,7 @@ func (e *MergeCandidateConflictError) Error() string {
 // extractConflictFiles reads the conflict file list from a worktree with an
 // in-progress merge.
 func extractConflictFiles(worktreePath string) []string {
-	cmd := exec.Command("git", "-C", worktreePath, "diff", "--name-only", "--diff-filter=U")
+	cmd := readGitCmd(worktreePath, "diff", "--name-only", "--diff-filter=U")
 	out, err := cmd.Output()
 	if err != nil {
 		return nil

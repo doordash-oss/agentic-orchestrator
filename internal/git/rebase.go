@@ -61,7 +61,7 @@ func PullRebase(worktreePath, branch string) PullRebaseResult {
 	}
 
 	// 2. Check if origin/<branch> exists
-	verifyCmd := exec.Command("git", "-C", worktreePath, "rev-parse", "--verify", "origin/"+branch)
+	verifyCmd := readGitCmd(worktreePath, "rev-parse", "--verify", "origin/"+branch)
 	if err := verifyCmd.Run(); err != nil {
 		// Remote branch doesn't exist (first publish) — no-op
 		return PullRebaseResult{Outcome: PullRebaseSuccess}
@@ -103,7 +103,7 @@ func PullRebase(worktreePath, branch string) PullRebaseResult {
 // resolveGitDir returns the .git directory for a worktree path.
 // For worktrees, .git is a file pointing to the actual git dir.
 func resolveGitDir(worktreePath string) string {
-	cmd := exec.Command("git", "-C", worktreePath, "rev-parse", "--git-dir")
+	cmd := readGitCmd(worktreePath, "rev-parse", "--git-dir")
 	out, err := cmd.Output()
 	if err != nil {
 		return filepath.Join(worktreePath, ".git")
@@ -186,7 +186,7 @@ func RebaseOnto(worktreePath, target string) RebaseResult {
 
 // listConflictFiles returns the list of files with unmerged conflicts.
 func listConflictFiles(worktreePath string) []string {
-	cmd := exec.Command("git", "-C", worktreePath, "diff", "--name-only", "--diff-filter=U")
+	cmd := readGitCmd(worktreePath, "diff", "--name-only", "--diff-filter=U")
 	out, err := cmd.Output()
 	if err != nil {
 		return nil
@@ -264,7 +264,7 @@ func PRBaseBranch(_ string, prURL string) string {
 // Returns true if there are commits on origin/<baseBranch> not in the local branch.
 func IsBehindRemote(worktreePath, baseBranch string) bool {
 	target := "origin/" + baseBranch
-	cmd := exec.Command("git", "-C", worktreePath, "rev-list", "--count", "HEAD.."+target)
+	cmd := readGitCmd(worktreePath, "rev-list", "--count", "HEAD.."+target)
 	out, err := cmd.Output()
 	if err != nil {
 		return false
@@ -276,7 +276,7 @@ func IsBehindRemote(worktreePath, baseBranch string) bool {
 // identityFallbackArgs returns -c committer-identity fallbacks when neither
 // the repo nor the environment configures one; an explicit identity wins.
 func identityFallbackArgs(repoPath string) []string {
-	out, err := exec.Command("git", "-C", repoPath, "config", "user.email").Output()
+	out, err := readGitCmd(repoPath, "config", "user.email").Output()
 	if err == nil && strings.TrimSpace(string(out)) != "" {
 		return nil
 	}
@@ -347,7 +347,7 @@ func RebaseInProgress(worktreePath string) bool {
 // IsBehindLocal checks if the current branch is behind a local base branch.
 // Returns true if there are commits on baseBranch not in the current branch.
 func IsBehindLocal(worktreePath, baseBranch string) bool {
-	cmd := exec.Command("git", "-C", worktreePath, "rev-list", "--count", "HEAD.."+baseBranch)
+	cmd := readGitCmd(worktreePath, "rev-list", "--count", "HEAD.."+baseBranch)
 	out, err := cmd.Output()
 	if err != nil {
 		return false

@@ -18,7 +18,6 @@ import (
 	"crypto/sha1"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -92,7 +91,7 @@ func BranchDiffPreviews(worktreePath, baseBranch string) ([]DiffPreview, error) 
 // base branch (committed + uncommitted tracked changes), plus untracked
 // files which git diff does not see.
 func branchDiffEntries(worktreePath, base string) ([]statusEntry, error) {
-	out, err := exec.Command("git", "-C", worktreePath, "diff", "--find-renames", "--no-ext-diff", "--name-status", base).CombinedOutput()
+	out, err := readGitCmd(worktreePath, "diff", "--find-renames", "--no-ext-diff", "--name-status", base).CombinedOutput()
 	if err != nil {
 		return nil, fmt.Errorf("git diff --name-status %s: %s: %w", base, strings.TrimSpace(string(out)), err)
 	}
@@ -138,7 +137,7 @@ func parseNameStatus(out string) []statusEntry {
 }
 
 func untrackedEntries(worktreePath string) ([]statusEntry, error) {
-	out, err := exec.Command("git", "-C", worktreePath, "status", "--porcelain").CombinedOutput()
+	out, err := readGitCmd(worktreePath, "status", "--porcelain").CombinedOutput()
 	if err != nil {
 		return nil, fmt.Errorf("git status --porcelain: %s: %w", strings.TrimSpace(string(out)), err)
 	}
@@ -167,12 +166,12 @@ func branchEntryPatch(worktreePath, base string, entry statusEntry) (string, err
 			return untracked, nil
 		}
 	}
-	args := []string{"-C", worktreePath, "diff", "--find-renames", "--no-ext-diff", "--unified=3", base, "--"}
+	args := []string{"diff", "--find-renames", "--no-ext-diff", "--unified=3", base, "--"}
 	if entry.oldPath != "" {
 		args = append(args, entry.oldPath)
 	}
 	args = append(args, entry.path)
-	cmd := exec.Command("git", args...)
+	cmd := readGitCmd(worktreePath, args...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("git diff preview %s: %s: %w", entry.path, strings.TrimSpace(string(out)), err)
@@ -253,7 +252,7 @@ func SingleFileDiffPreview(worktreePath, baseBranch, relPath string) (*DiffPrevi
 // singleFileBranchStatus checks whether a specific file differs from the base
 // branch (tracked) or is untracked. Returns nil if the file has no changes.
 func singleFileBranchStatus(worktreePath, base, relPath string) (*statusEntry, error) {
-	out, err := exec.Command("git", "-C", worktreePath, "diff", "--find-renames", "--no-ext-diff", "--name-status", base, "--", relPath).CombinedOutput()
+	out, err := readGitCmd(worktreePath, "diff", "--find-renames", "--no-ext-diff", "--name-status", base, "--", relPath).CombinedOutput()
 	if err != nil {
 		return nil, fmt.Errorf("git diff --name-status %s -- %s: %s: %w", base, relPath, strings.TrimSpace(string(out)), err)
 	}
@@ -261,7 +260,7 @@ func singleFileBranchStatus(worktreePath, base, relPath string) (*statusEntry, e
 	if len(entries) > 0 {
 		return &entries[0], nil
 	}
-	statusOut, err := exec.Command("git", "-C", worktreePath, "status", "--porcelain", "--", relPath).CombinedOutput()
+	statusOut, err := readGitCmd(worktreePath, "status", "--porcelain", "--", relPath).CombinedOutput()
 	if err != nil {
 		return nil, fmt.Errorf("git status %s: %s: %w", relPath, strings.TrimSpace(string(statusOut)), err)
 	}

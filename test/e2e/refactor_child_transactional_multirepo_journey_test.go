@@ -912,16 +912,10 @@ func TestRefactorChildTransactionalMultiRepoCrashCutPointConvergence(t *testing.
 	})
 
 	// Cut point: apply worktree-sync failure — the CAS succeeds for repo 1
-	// but the worktree sync fails. Rollback must compensate ALL applied
-	// refs including repo 1 (whose CAS succeeded), proving the
-	// all-or-nothing transaction invariant.
+	// but its first worktree sync fails. The ref vector continues forward and
+	// idempotent closure retries the sync before completing.
 	t.Run("apply_sync_failure", func(t *testing.T) {
 		fx := newMultiRepoE2EFixture(t, 3)
-
-		oldSHAs := make([]string, len(fx.repoDirs))
-		for i := range fx.repoDirs {
-			oldSHAs[i] = fx.refSHA(i, "refs/heads/feature/parent")
-		}
 
 		resetWT := &resetFailingWorktrees{
 			WorktreeManager: fx.wm,
@@ -930,22 +924,28 @@ func TestRefactorChildTransactionalMultiRepoCrashCutPointConvergence(t *testing.
 		o := fx.orchestratorWithWorktrees(resetWT)
 
 		if err := o.RunChildIntegration(fx.child.ID); err != nil {
-			t.Fatalf("RunChildIntegration() error = %v, want nil with attention", err)
+			t.Fatalf("RunChildIntegration() error = %v, want closure retry to converge", err)
 		}
 
-		// All refs should be rolled back to their old SHAs, including
-		// repo 1 whose CAS succeeded but whose worktree sync failed.
-		for i := range fx.repoDirs {
-			got := fx.refSHA(i, "refs/heads/feature/parent")
-			if got != oldSHAs[i] {
-				t.Fatalf("repo %d: ref = %s after rollback, want old SHA %s (worktree sync failure must be compensated)", i, got, oldSHAs[i])
-			}
+		_, child := fx.reload()
+		if child.Parent.CloseOutcome != feature.ChildCloseOutcomeCompleted {
+			t.Fatalf("close outcome = %q, want completed", child.Parent.CloseOutcome)
 		}
-		// Worktrees for repos 0 and 1 should be reset to the old SHA.
-		for i := 0; i < 2; i++ {
+		if child.Parent.Transaction.Phase != feature.TransactionPhaseMerged {
+			t.Fatalf("phase = %s, want merged", child.Parent.Transaction.Phase)
+		}
+
+		// All refs and parent worktrees converge to their candidates; none
+		// are compensated merely because the post-CAS sync was transient.
+		for i := range fx.repoDirs {
+			candidate := child.Parent.Transaction.Entries[i].CandidateSHA
+			got := fx.refSHA(i, "refs/heads/feature/parent")
+			if got != candidate {
+				t.Fatalf("repo %d: ref = %s, want candidate %s", i, got, candidate)
+			}
 			wtHead := multiRepoGit(t, fx.repoDirs[i], "rev-parse", "HEAD")
-			if wtHead != oldSHAs[i] {
-				t.Fatalf("repo %d: worktree HEAD = %s, want old SHA %s after rollback", i, wtHead, oldSHAs[i])
+			if wtHead != candidate {
+				t.Fatalf("repo %d: worktree HEAD = %s, want candidate %s", i, wtHead, candidate)
 			}
 		}
 	})
@@ -1054,31 +1054,30 @@ func TestRefactorChildTransactionalMultiRepoCrashCutPointConvergence(t *testing.
 	}
 
 	// Rollback persistence-failure crash matrix: inject a Store.Modify
-	// failure at each rollback boundary in a 3-repo transaction where the
-	// third repo's worktree-sync failure triggers conditional rollback.
+	// failure at each rollback boundary in a 3-repo transaction where an
+	// external ref race on the third repo triggers semantic rollback.
 	// This proves convergence at every crash cut point during rollback,
-	// including the aggregate rolled_back phase write whose failure
-	// previously stranded the transaction.
+	// including the aggregate attention-phase write after compensation.
 	//
 	// The 3-repo rollback scenario issues these Store.Modify calls:
 	//   1-3. persist preparing (candidates 0, 1, 2)
 	//   4. persist prepared phase
 	//   5. persist applying phase
-	//   6-8. persist apply progress (repos 0, 1, 2 applied)
-	// (repo 2 worktree sync fails → rollbackTransaction)
-	//   9. persist rolling_back phase
-	//  10-12. persist rollback progress (repos 0, 1, 2 rolled back)
-	//  13. persist rolled_back phase
+	//   6-7. persist apply progress (repos 0, 1 applied)
+	// (repo 2 ref moves externally → rollbackTransaction)
+	//   8. persist rolling_back phase
+	//   9-10. persist rollback progress (repos 0, 1 rolled back)
+	//  11. persist attention phase preserving repo 2's external ref
 	const (
-		numRollbackRepos             = 3
-		rbWriteThirdCandidate        = numRollbackRepos
-		rbWritePreparedPhase         = rbWriteThirdCandidate + 1
-		rbWriteApplyingPhase         = rbWritePreparedPhase + 1
-		rbWriteThirdApplyProgress    = rbWriteApplyingPhase + numRollbackRepos
-		rbWriteRollingBackPhase      = rbWriteThirdApplyProgress + 1
-		rbWriteFirstRollbackProgress = rbWriteRollingBackPhase + 1
-		rbWriteThirdRollbackProgress = rbWriteFirstRollbackProgress + numRollbackRepos - 1
-		rbWriteRolledBackPhase       = rbWriteThirdRollbackProgress + 1
+		numRollbackRepos              = 3
+		rbWriteThirdCandidate         = numRollbackRepos
+		rbWritePreparedPhase          = rbWriteThirdCandidate + 1
+		rbWriteApplyingPhase          = rbWritePreparedPhase + 1
+		rbWriteSecondApplyProgress    = rbWriteApplyingPhase + 2
+		rbWriteRollingBackPhase       = rbWriteSecondApplyProgress + 1
+		rbWriteFirstRollbackProgress  = rbWriteRollingBackPhase + 1
+		rbWriteSecondRollbackProgress = rbWriteFirstRollbackProgress + 1
+		rbWriteAttentionPhase         = rbWriteSecondRollbackProgress + 1
 	)
 	rollbackCrashCases := []struct {
 		name   string
@@ -1086,27 +1085,22 @@ func TestRefactorChildTransactionalMultiRepoCrashCutPointConvergence(t *testing.
 	}{
 		{"fail_at_rolling_back_phase", rbWriteRollingBackPhase},
 		{"fail_after_first_rollback_progress", rbWriteFirstRollbackProgress},
-		{"fail_after_second_rollback_progress", rbWriteFirstRollbackProgress + 1},
-		{"fail_after_third_rollback_progress", rbWriteThirdRollbackProgress},
-		{"fail_before_rolled_back_phase", rbWriteRolledBackPhase},
+		{"fail_after_second_rollback_progress", rbWriteSecondRollbackProgress},
+		{"fail_before_attention_phase", rbWriteAttentionPhase},
 	}
 	for _, tc := range rollbackCrashCases {
 		t.Run(tc.name, func(t *testing.T) {
 			fx := newMultiRepoE2EFixture(t, 3)
 
-			oldSHAs := make([]string, len(fx.repoDirs))
-			for i := range fx.repoDirs {
-				oldSHAs[i] = fx.refSHA(i, "refs/heads/feature/parent")
-			}
-
-			// Use a worktree manager that fails the first ResetToCommit
-			// for repo 2 to trigger rollback after all three refs are
-			// applied.
-			resetWT := &resetFailingWorktrees{
+			// Inject an external ref movement when repo 2 is inspected,
+			// after the first two refs have been applied.
+			raceWT := &raceInjectingWorktrees{
 				WorktreeManager: fx.wm,
-				failRepoDir:     fx.repoDirs[2],
+				t:               t,
+				raceRepoDir:     fx.repoDirs[2],
+				raceBranch:      "feature/parent",
 			}
-			failO := fx.orchestratorWithFailingStoreAndWorktree(tc.failAt, resetWT)
+			failO := fx.orchestratorWithFailingStoreAndWorktree(tc.failAt, raceWT)
 
 			// Run the transaction — it should fail at the injected
 			// rollback persistence boundary.

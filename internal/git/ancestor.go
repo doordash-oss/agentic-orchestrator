@@ -14,10 +14,6 @@
 
 package git
 
-import (
-	"os/exec"
-)
-
 // IsAncestor reports whether ancestor is an ancestor of descendant in the
 // repository at repoPath. It shells out to
 // `git merge-base --is-ancestor <ancestor> <descendant>`, which exits 0 when
@@ -32,7 +28,7 @@ func IsAncestor(repoPath, ancestor, descendant string) bool {
 	if ancestor == "" || descendant == "" {
 		return false
 	}
-	cmd := exec.Command("git", "-C", repoPath, "merge-base", "--is-ancestor", ancestor, descendant)
+	cmd := readGitCmd(repoPath, "merge-base", "--is-ancestor", ancestor, descendant)
 	if err := cmd.Run(); err != nil {
 		return false
 	}

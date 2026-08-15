@@ -113,6 +113,10 @@ func (w *WorktreeManager) InspectCleanliness(worktreePath string, maxPerCategory
 // never as a clean worktree.
 var ErrCleanlinessUnknown = errors.New("git worktree cleanliness is unknown")
 
+// ErrWorktreeBusy reports that a cached read probe yielded to an in-flight
+// worktree mutation. It provides no evidence about repository cleanliness.
+var ErrWorktreeBusy = errors.New("git worktree mutation is in progress")
+
 // CleanlinessInspector is the InspectCleanliness surface CleanlinessCache
 // decorates.
 type CleanlinessInspector interface {
@@ -141,6 +145,9 @@ func NewCleanlinessCache(inspector CleanlinessInspector) *CleanlinessCache {
 	c := &CleanlinessCache{}
 	c.cache = NewProbeCache(0, 0, func(key string) cleanlinessResult {
 		path, maxPerCategory := splitCleanlinessKey(key)
+		if worktreeMutationInProgress(path) {
+			return cleanlinessResult{err: ErrWorktreeBusy}
+		}
 		report, err := inspector.InspectCleanliness(path, maxPerCategory)
 		if err == nil && report == nil {
 			err = ErrCleanlinessUnknown

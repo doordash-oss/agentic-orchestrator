@@ -190,33 +190,6 @@ func (o *Orchestrator) MarkPublished(featureID, prURL string) error {
 	return nil
 }
 
-// CommitRoadmapPhase commits the completed roadmap phase across every repo in
-// the feature.
-// Errors on individual repos are swallowed — this is a best-effort pipeline
-// step whose failure should not block the lifecycle.
-func (o *Orchestrator) CommitRoadmapPhase(featureID string, phase int) error {
-	f, err := o.deps.Lifecycle.Get(featureID)
-	if err != nil {
-		return fmt.Errorf("load feature: %w", err)
-	}
-	if len(f.Repos) == 0 {
-		return nil
-	}
-	phaseName := o.lookupRoadmapPhaseName(f, phase)
-	commitMsg := fmt.Sprintf("Phase %d/%d (%s)", phase, f.TotalRoadmapPhases, f.RoadmapPhaseType)
-	if phaseName != "" {
-		commitMsg += ": " + phaseName
-	}
-	commitMsg += "\n\nFeature: " + f.Slug
-	for _, repo := range f.Repos {
-		if repo.WorktreePath == "" {
-			continue
-		}
-		_ = git.CommitAll(repo.WorktreePath, commitMsg)
-	}
-	return nil
-}
-
 // TransitionTo transitions a feature to a caller-selected status while keeping
 // lifecycle mutations behind the orchestrator boundary.
 func (o *Orchestrator) TransitionTo(featureID string, status feature.Status) error {

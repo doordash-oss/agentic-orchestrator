@@ -195,6 +195,34 @@ func HasUncommittedChanges(worktreePath string) bool {
 	return strings.TrimSpace(string(out)) != ""
 }
 
+// HasUncommittedChangesExcludingUntracked reports whether the worktree has
+// staged, unstaged, or untracked changes, disregarding untracked entries
+// whose relative path is in names. Tracked changes to those paths still
+// count — only never-committed files matching the known-artifact names are
+// ignored.
+func HasUncommittedChangesExcludingUntracked(worktreePath string, names ...string) bool {
+	ignore := make(map[string]bool, len(names))
+	for _, n := range names {
+		ignore[n] = true
+	}
+	cmd := readGitCmd(worktreePath, "status", "--porcelain")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return false
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		if len(line) < 4 {
+			continue
+		}
+		path := strings.TrimSpace(line[3:])
+		if line[:2] == "??" && ignore[path] {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
 // CommitAll stages all changes (including untracked files) and creates a commit.
 // The Agentic signature trailer is automatically appended to the commit message.
 func CommitAll(worktreePath, message string) error {

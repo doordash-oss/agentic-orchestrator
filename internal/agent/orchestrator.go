@@ -129,6 +129,12 @@ type OrchestratorConfig struct {
 	// OnVerificationProgress is called after each persisted harness
 	// verification status transition so API clients can refresh live state.
 	OnVerificationProgress func(featureID string)
+
+	// RoundCommitHook, when non-nil, is invoked by the phase-implement and
+	// final-review loops once per implementation/fix round, right after the
+	// round's session ends and before the review gate. The orchestrator
+	// layer owns the git commit; nil disables per-round commits.
+	RoundCommitHook RoundCommitHook
 }
 
 func resolveOrchestratorSessionConfig(cfg OrchestratorConfig, role llm.PhaseRole) (SessionRuntimeConfig, error) {

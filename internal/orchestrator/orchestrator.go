@@ -311,6 +311,19 @@ func New(deps Deps, hooks Hooks) *Orchestrator {
 			}
 			o.emitEvent(ports.Event{Type: ports.VerificationProgress, FeatureID: featureID})
 		}
+		// Per-round commits: the implementation and final-review loops emit
+		// a round completion event; this layer owns the git commit. Chained
+		// behind any pre-existing hook exactly once (the PhaseRunner is
+		// shared state and New is the single production wiring site).
+		existingRoundCommitHook := o.deps.PhaseRunner.RoundCommitHook
+		o.deps.PhaseRunner.RoundCommitHook = func(input agent.RoundCommitInput) error {
+			if existingRoundCommitHook != nil {
+				if err := existingRoundCommitHook(input); err != nil {
+					return err
+				}
+			}
+			return o.commitRound(input)
+		}
 	}
 	o.runMultiRepoImplFn = func(
 		f *feature.Feature,

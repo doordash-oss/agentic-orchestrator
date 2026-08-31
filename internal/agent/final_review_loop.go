@@ -29,9 +29,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -297,6 +297,11 @@ func (s *featureFinalReviewLoopState) run() (*FeatureFinalReviewResult, error) {
 		}
 	}
 
+	// Fix-round counter recovered from persisted iteration metas so a
+	// crash-resumed loop numbers fix rounds identically to the interrupted
+	// run: the fix following the Nth changes-requested review is "fix N".
+	roundCommits := newFRRoundCommitTracker(am, s.artifactDir, startIter)
+
 	maxConsecFails := cfg.MaxConsecFails
 	if maxConsecFails == 0 {
 		maxConsecFails = 3
@@ -346,11 +351,18 @@ func (s *featureFinalReviewLoopState) run() (*FeatureFinalReviewResult, error) {
 
 		switch reviewStatus {
 		case ReviewApproved:
-			s.commitReviewLeftovers(i, "Final review leftover sweep")
+			// Review-approved code must already be committed code: every fix
+			// round commits through RoundCommitHook, so a dirty worktree at
+			// approval is a fixer bug, not a sweep condition. Fail loudly
+			// instead of silently stranding changes past CodeReady.
+			if err := s.rejectDirtyWorktreesAtApproval(); err != nil {
+				return &FeatureFinalReviewResult{FinalStatus: "failed", Iterations: i, LastError: err.Error()}, nil
+			}
 			s.writeIterationMeta(iterDir, i, "approved")
 			return &FeatureFinalReviewResult{FinalStatus: finalStatusReviewPassed, Iterations: i}, nil
 
 		case ReviewChangesRequested:
+			roundCommits.changesRequested++
 			s.setReviewFixing(true)
 			fixStatus, fixErr := s.runFix(i, iterDir, feedback)
 
@@ -390,7 +402,24 @@ func (s *featureFinalReviewLoopState) run() (*FeatureFinalReviewResult, error) {
 				continue
 			}
 
-			s.commitReviewLeftovers(i, "Final review fix sweep")
+			// The fix round's work commits immediately — the next review
+			// must read committed state, and a crash between fix and review
+			// must leave a clean commit boundary.
+			if s.cfg.RoundCommitHook != nil {
+				if err := s.cfg.RoundCommitHook(RoundCommitInput{
+					FeatureID: cfg.Feature.ID,
+					Iteration: i,
+					Kind:      RoundCommitFinalReviewFix,
+					FixNumber: roundCommits.changesRequested,
+					Repos:     s.workspace.RepoPaths,
+				}); err != nil {
+					return &FeatureFinalReviewResult{
+						FinalStatus: "failed",
+						Iterations:  i,
+						LastError:   fmt.Sprintf("committing final review fix round %d: %v", roundCommits.changesRequested, err),
+					}, nil
+				}
+			}
 			consecutiveFailures = 0
 			s.writeIterationMeta(iterDir, i, "changes_requested")
 			continue
@@ -622,25 +651,34 @@ func (s *featureFinalReviewLoopState) previousAggregateFeedback(iteration int) s
 	return strings.TrimSpace(string(data))
 }
 
-// commitReviewLeftovers commits any repo-worktree changes a final-review
-// session left uncommitted. The completion protocol validates run artifacts,
-// not git state, so a fixer (or any FR session) that edits files and ends its
-// turn without committing would otherwise strand the feature at CodeReady
-// with a dirty worktree — blocking every aftercare follow-up that demands a
-// clean tree (rebase and refactor passes). Swept after each fix session and
-// again at approval so review-approved code is always committed code. A clean
-// worktree is a no-op; a commit failure is logged, never fatal, because the
-// publish path can still sweep the same changes.
-func (s *featureFinalReviewLoopState) commitReviewLeftovers(iteration int, reason string) {
+// rejectDirtyWorktreesAtApproval enforces the invariant that a Final Review
+// approval is only emitted over committed code. Every fix round commits
+// through RoundCommitHook; a fixer that edits files and ends its turn without
+// the round commit landing would strand the feature at CodeReady with a
+// dirty worktree, blocking every aftercare follow-up that demands a clean
+// tree (rebase and refactor passes). Known untracked root orchestration
+// artifacts (scrubbed by the publish path) are tolerated. No-op when no
+// RoundCommitHook is wired (per-round commits disabled).
+func (s *featureFinalReviewLoopState) rejectDirtyWorktreesAtApproval() error {
+	if s.cfg.RoundCommitHook == nil {
+		return nil
+	}
+	var dirty []string
 	for name, path := range s.workspace.RepoPaths {
-		if path == "" || !git.HasUncommittedChanges(path) {
+		if path == "" {
 			continue
 		}
-		message := fmt.Sprintf("%s (final review iteration %d)", reason, iteration)
-		if err := git.CommitAll(path, message); err != nil {
-			log.Printf("feature %s: final review leftover commit in repo %s: %v", s.cfg.Feature.ID, name, err)
+		if git.HasUncommittedChangesExcludingUntracked(path, FinalReviewRootOrchestrationArtifacts...) {
+			dirty = append(dirty, name)
 		}
 	}
+	if len(dirty) == 0 {
+		return nil
+	}
+	sort.Strings(dirty)
+	return fmt.Errorf(
+		"final review approved but repo(s) still have uncommitted changes — the fix round failed to commit its work: %s",
+		strings.Join(dirty, ", "))
 }
 
 // runFix launches one feature-level fix session for iteration i. Same

@@ -26,6 +26,7 @@ import (
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/internal/orchestrator"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
@@ -65,8 +66,8 @@ func untrackedFinalReviewArtifactsRunner(t *testing.T, candidates []string) *moc
 
 // TestOrchestrator_StartFeature_InterruptedFinalReview_ReDispatchesFR is the
 // regression for: pressing [r] on a feature stuck at StatusInterrupted with
-// CurrentPhase=PhaseFinalReview was a silent no-op. The TUI's restart path
-// asks RestartPhase for the dispatch action and forwards via StartFeature.
+// CurrentPhase=PhaseFinalReview was a silent no-op. RestartPhase returns the
+// dispatch action and StartFeature executes it.
 // Before the fix, startPhase had no case for PhaseFinalReview and returned
 // "unknown phase 8" — the error was swallowed. Now startFinalReview re-runs
 // the deferred FR pass and advances through MarkCodeReady on success.
@@ -102,9 +103,72 @@ func TestOrchestrator_StartFeature_InterruptedFinalReview_ReDispatchesFR(t *test
 	if err := o.StartFeature("feat-fr-resume"); err != nil {
 		t.Fatalf("StartFeature: %v", err)
 	}
+	o.WaitForCycles()
 
 	assertLifecycleCall(t, lc, "MarkFinalReviewReady")
 	assertLifecycleCall(t, lc, "MarkCodeReady")
+}
+
+func TestOrchestrator_StartFeature_FinalReviewDispatchIsAsyncAndIdempotent(t *testing.T) {
+	unpub := false
+	f := &feature.Feature{
+		ID:           "feat-fr-async",
+		Status:       feature.StatusInterrupted,
+		CurrentPhase: feature.PhaseFinalReview,
+		Repos:        []feature.FeatureRepo{{Name: "r1", Path: "/tmp/r1", Publishable: &unpub}},
+		RepoStates: map[string]*feature.RepoState{
+			"r1": {Touched: true},
+		},
+		Pipeline:  feature.PipelineLarge,
+		StartedAt: ptrTime(),
+	}
+	lc := lifecycleForFeature(f)
+	lc.MarkFinalReviewReadyFn = func(id string) error {
+		f.Status = feature.StatusFinalReviewing
+		return nil
+	}
+	lc.MarkCodeReadyFn = func(id string) error {
+		f.Status = feature.StatusCodeReady
+		return nil
+	}
+	fs := newFeatureStore(f)
+	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{})
+
+	resultCh := make(chan *agent.OrchestratorResult, 1)
+	dispatches := 0
+	o.SetRunMultiRepoFinalReviewFn(func(
+		ff *feature.Feature,
+		_ ...agent.KBInfo,
+	) (chan *agent.OrchestratorResult, error) {
+		dispatches++
+		return resultCh, nil
+	})
+
+	returned := make(chan error, 1)
+	go func() {
+		returned <- o.StartFeature(f.ID)
+	}()
+	select {
+	case err := <-returned:
+		if err != nil {
+			t.Fatalf("StartFeature() error = %v", err)
+		}
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("StartFeature() blocked on the final-review result")
+	}
+
+	if err := o.StartFeature(f.ID); err != nil {
+		t.Fatalf("duplicate StartFeature() error = %v, want idempotent success", err)
+	}
+	if dispatches != 1 {
+		t.Fatalf("final-review dispatches = %d, want exactly 1", dispatches)
+	}
+
+	resultCh <- &agent.OrchestratorResult{FinalStatus: "all_passed"}
+	o.WaitForCycles()
+	if f.Status != feature.StatusCodeReady {
+		t.Fatalf("feature status = %v, want CodeReady after background final review", f.Status)
+	}
 }
 
 // TestOrchestrator_OnMultiReposPassed_N1_NoLegacySingleRepoFRRouting verifies
@@ -538,7 +602,8 @@ func TestOrchestrator_FeatureFinalReview_3Repo_Approves_AllReposAdvanceAndPublis
 func TestAdvanceAfterFinalReviewScrubsRootArtifactsBeforeCommitAll(t *testing.T) {
 	pub := true
 	candidates := []string{"phase_complete", "progress.md", "verification-report.yaml", "review-feedback.md", "meta.yaml"}
-	repo := t.TempDir()
+	repo, _ := testutil.InitPublishReadyGitRepo(t)
+	testutil.CreateBranch(t, repo, "feature/fr-scrub")
 	for _, name := range candidates {
 		if err := os.WriteFile(filepath.Join(repo, name), []byte("stray\n"), 0o644); err != nil {
 			t.Fatalf("write %s: %v", name, err)
@@ -579,21 +644,7 @@ func TestAdvanceAfterFinalReviewScrubsRootArtifactsBeforeCommitAll(t *testing.T)
 	lc.TryCompletePublishFn = func(id string) (bool, error) { return true, nil }
 	fs := newFeatureStore(f)
 
-	publisher := mocks.NewMockPublisher()
-	publisher.HasUncommittedChangesFn = func(worktreePath string) (bool, error) { return true, nil }
-	publisher.CommitAllFn = func(worktreePath, message string) error {
-		for _, name := range candidates {
-			if _, err := os.Stat(filepath.Join(worktreePath, name)); !errors.Is(err, os.ErrNotExist) {
-				t.Fatalf("%s still exists before CommitAll: %v", name, err)
-			}
-		}
-		if _, err := os.Stat(filepath.Join(worktreePath, "sub", "phase_complete")); err != nil {
-			t.Fatalf("nested phase_complete removed, want preserved: %v", err)
-		}
-		return nil
-	}
-	publisher.DiffStatFn = func(string, string) (string, error) { return "", nil }
-	publisher.CommitBodiesFn = func(string, string) (string, error) { return "", nil }
+	publisher := mocks.NewMockRemoteOps()
 	publisher.PushFn = func(string, string) error { return nil }
 	publisher.CreatePRFn = func(string, string, string, string, string, bool) (string, error) {
 		return "https://github.com/org/api/pull/1", nil
@@ -602,8 +653,13 @@ func TestAdvanceAfterFinalReviewScrubsRootArtifactsBeforeCommitAll(t *testing.T)
 	o := orchestrator.New(orchestrator.Deps{
 		Lifecycle: lc,
 		Store:     fs,
-		Publisher: publisher,
+		Remote:    publisher,
 		CmdRunner: untrackedFinalReviewArtifactsRunner(t, candidates),
+		PhaseRunner: newPublishDescriptionPhaseRunner(
+			t,
+			"TITLE: Final review complete\nBODY:\n## Summary\n\nVerified changes",
+			false,
+		),
 	}, orchestrator.Hooks{})
 	o.SetRunMultiRepoFinalReviewFn(func(
 		ff *feature.Feature,
@@ -620,16 +676,27 @@ func TestAdvanceAfterFinalReviewScrubsRootArtifactsBeforeCommitAll(t *testing.T)
 	}); err != nil {
 		t.Fatalf("HandlePhaseCompletion() error = %v", err)
 	}
-	if got := countPublisherCalls(publisher, "CommitAll"); got != 1 {
-		t.Fatalf("CommitAll calls = %d, want 1", got)
+	for _, name := range candidates {
+		if _, err := os.Stat(filepath.Join(repo, name)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("%s still exists after publish: %v", name, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(repo, "sub", "phase_complete")); err != nil {
+		t.Fatalf("nested phase_complete removed, want preserved: %v", err)
+	}
+	if git.HasUncommittedChanges(repo) {
+		t.Fatal("publish left repository changes uncommitted")
 	}
 }
 
 func TestAdvanceAfterFinalReviewRoadmapFinalScrubsRootArtifactsBeforeCommitAll(t *testing.T) {
+	installFakeGitHubAPI(t)
 	pub := true
 	candidates := []string{"phase_complete", "progress.md", "verification-report.yaml", "review-feedback.md", "meta.yaml"}
-	repoA := t.TempDir()
-	repoB := t.TempDir()
+	repoA, _ := testutil.InitPublishReadyGitRepo(t)
+	repoB, _ := testutil.InitPublishReadyGitRepo(t)
+	testutil.CreateBranch(t, repoA, "feature/fr-roadmap-scrub-api")
+	testutil.CreateBranch(t, repoB, "feature/fr-roadmap-scrub-web")
 	writeCandidates := func() {
 		t.Helper()
 		for _, repo := range []string{repoA, repoB} {
@@ -693,21 +760,7 @@ func TestAdvanceAfterFinalReviewRoadmapFinalScrubsRootArtifactsBeforeCommitAll(t
 	lc.TryCompletePublishFn = func(id string) (bool, error) { f.Status = feature.StatusPublished; return true, nil }
 	fs := newFeatureStore(f)
 
-	publisher := mocks.NewMockPublisher()
-	publisher.HasUncommittedChangesFn = func(worktreePath string) (bool, error) { return true, nil }
-	committed := map[string]bool{}
-	phaseCommitCalls := 0
-	publisher.CommitAllFn = func(worktreePath, message string) error {
-		if strings.HasPrefix(message, "Phase 2/2") {
-			phaseCommitCalls++
-			return nil
-		}
-		committed[worktreePath] = true
-		assertCandidatesRemoved(worktreePath)
-		return nil
-	}
-	publisher.DiffStatFn = func(string, string) (string, error) { return "", nil }
-	publisher.CommitBodiesFn = func(string, string) (string, error) { return "", nil }
+	publisher := mocks.NewMockRemoteOps()
 	publisher.PushFn = func(string, string) error { return nil }
 	publisher.CreatePRFn = func(repoPath, branch, title, body, baseBranch string, draft bool) (string, error) {
 		return "https://github.com/org/" + filepath.Base(repoPath) + "/pull/1", nil
@@ -716,8 +769,13 @@ func TestAdvanceAfterFinalReviewRoadmapFinalScrubsRootArtifactsBeforeCommitAll(t
 	o := orchestrator.New(orchestrator.Deps{
 		Lifecycle: lc,
 		Store:     fs,
-		Publisher: publisher,
+		Remote:    publisher,
 		CmdRunner: untrackedFinalReviewArtifactsRunner(t, candidates),
+		PhaseRunner: newPublishDescriptionPhaseRunner(
+			t,
+			"TITLE: Final review complete\nBODY:\n## Summary\n\nVerified changes",
+			false,
+		),
 	}, orchestrator.Hooks{})
 	o.SetRunMultiRepoFinalReviewFn(func(
 		ff *feature.Feature,
@@ -735,12 +793,10 @@ func TestAdvanceAfterFinalReviewRoadmapFinalScrubsRootArtifactsBeforeCommitAll(t
 	}); err != nil {
 		t.Fatalf("HandlePhaseCompletion() error = %v", err)
 	}
-	if phaseCommitCalls != 2 {
-		t.Fatalf("phase CommitAll calls = %d, want 2", phaseCommitCalls)
-	}
 	for _, repo := range []string{repoA, repoB} {
-		if !committed[repo] {
-			t.Fatalf("publish CommitAll did not run for %s", repo)
+		assertCandidatesRemoved(repo)
+		if git.HasUncommittedChanges(repo) {
+			t.Fatalf("publish left repository changes uncommitted in %s", repo)
 		}
 	}
 }

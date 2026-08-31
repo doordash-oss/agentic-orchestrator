@@ -24,16 +24,17 @@ import (
 	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
+	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
-func waitForSessionStatus(t testing.TB, sess SessionHandle, want SessionStatus, timeout time.Duration) {
+func waitForSessionStatus(t testing.TB, sess ports.SessionHandle, want SessionStatus, timeout time.Duration) {
 	t.Helper()
 	waitForCondition(t, timeout, func() bool {
 		return sess.Status() == want
 	}, "session status %v", want)
 }
 
-func waitForAssistantText(t testing.TB, sess SessionHandle, want string, timeout time.Duration) {
+func waitForAssistantText(t testing.TB, sess ports.SessionHandle, want string, timeout time.Duration) {
 	t.Helper()
 	waitForCondition(t, timeout, func() bool {
 		return strings.Contains(sess.MessageLog().AssistantText(), want)

@@ -23,6 +23,7 @@ import (
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
+	"github.com/doordash-oss/agentic-orchestrator/internal/permission"
 )
 
 // codexAvailable returns true if the codex CLI is installed and reachable.
@@ -52,7 +53,7 @@ func TestCodexSessionExecLeavesStderrOutOfAssistantLog(t *testing.T) {
 	command := []string{"codex", "exec", "--ephemeral", "--skip-git-repo-check", "-o", responsePath, "Reply with exactly: HELLO_CODEX_TEST"}
 
 	s := NewSession("codex-stderr-test", "feat-1", feature.PhaseReview)
-	s.permHandler = &AutoApproveHandler{}
+	s.permHandler = &permission.AutoApproveHandler{}
 
 	// Collect attach channel messages in a goroutine
 	var attachMsgs []llm.SDKMessage
@@ -120,7 +121,7 @@ func TestCodexSessionExecCanLogStderrToFile(t *testing.T) {
 	command := []string{"codex", "exec", "--ephemeral", "--skip-git-repo-check", "-o", responsePath, "Count from 1 to 5, one number per line."}
 
 	s := NewSession("codex-attach-test", "feat-1", feature.PhaseReview)
-	s.permHandler = &AutoApproveHandler{}
+	s.permHandler = &permission.AutoApproveHandler{}
 	s.stderrPath = stderrPath
 
 	err := s.Start(command, dir, nil, nil)
@@ -173,7 +174,7 @@ func TestCodexSessionManagerIntegration(t *testing.T) {
 		dir,
 		nil,
 		&SessionOpts{
-			PermHandler: &AutoApproveHandler{},
+			PermHandler: &permission.AutoApproveHandler{},
 			LogPath:     logPath,
 		},
 	)
@@ -259,7 +260,7 @@ func TestCodexSessionANSIStripping(t *testing.T) {
 	command := []string{"codex", "exec", "--ephemeral", "--skip-git-repo-check", "-o", responsePath, prompt}
 
 	s := NewSession("codex-ansi-test", "feat-1", feature.PhaseReview)
-	s.permHandler = &AutoApproveHandler{}
+	s.permHandler = &permission.AutoApproveHandler{}
 
 	err := s.Start(command, dir, nil, nil)
 	if err != nil {

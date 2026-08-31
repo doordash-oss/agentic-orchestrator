@@ -77,6 +77,17 @@ func TestEffortDriftWarnings(t *testing.T) {
 			wantLen: 0,
 		},
 		{
+			name: "provider-qualified drifted effort yields warning",
+			f: &feature.Feature{
+				ID:     "test",
+				Models: config.ModelConfig{Implementation: "mock:sonnet"},
+				Effort: config.EffortConfig{Implementation: "max"},
+			},
+			reg:      testRegistryWithCaps("sonnet", []llm.EffortLevel{llm.EffortLow, llm.EffortMedium, llm.EffortHigh}),
+			wantLen:  1,
+			wantCode: effortDriftWarningCode,
+		},
+		{
 			name: "drifted effort yields warning",
 			f: &feature.Feature{
 				ID:     "test",

@@ -23,124 +23,146 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
-func TestResolveEffortForRoleWithPipelineOverride(t *testing.T) {
-	// These cases test the pipeline-override behavior of the resolver. When
-	// the PhaseRunner has no Registry (as in this unit test), capabilities
-	// are nil and explicit values fall back to Auto — that is the correct
-	// "Auto-only" behavior for models without effort control. The
-	// capability-aware path is covered by llm.ResolveEffortFromString tests.
+func TestEffortCapabilitiesForProviderQualifiedModel(t *testing.T) {
+	reg := llm.NewRegistry()
+	reg.Register(&effortCatalogProvider{
+		models: []llm.ModelInfo{{
+			ID:                 "sonnet",
+			EffortCapabilities: []llm.EffortLevel{llm.EffortLow, llm.EffortMedium, llm.EffortHigh},
+		}},
+	})
+
+	got := (&PhaseRunner{Registry: reg}).EffortCapabilitiesForModel("mock:sonnet")
+	if len(got) != 3 || got[0] != llm.EffortLow || got[1] != llm.EffortMedium || got[2] != llm.EffortHigh {
+		t.Fatalf("capabilities = %v, want [low medium high]", got)
+	}
+}
+
+type effortCatalogProvider struct {
+	models []llm.ModelInfo
+}
+
+func (p *effortCatalogProvider) Name() string                   { return "mock" }
+func (p *effortCatalogProvider) MatchesModel(model string) bool { return true }
+func (p *effortCatalogProvider) DetectCLI() bool                { return true }
+func (p *effortCatalogProvider) AvailableModels() []string      { return nil }
+func (p *effortCatalogProvider) BuildCommand(opts llm.CommandBuildOpts) ([]string, []string, error) {
+	return nil, nil, nil
+}
+func (p *effortCatalogProvider) NewProtocol(opts llm.ProtocolOpts) llm.Protocol { return nil }
+func (p *effortCatalogProvider) InstallHint() string                            { return "" }
+func (p *effortCatalogProvider) VersionInfo() (string, error)                   { return "1.0.0", nil }
+func (p *effortCatalogProvider) MinVersion() [3]int                             { return [3]int{} }
+func (p *effortCatalogProvider) EnvVarsToExclude() []string                     { return nil }
+func (p *effortCatalogProvider) ModelCatalog() []llm.ModelInfo                  { return p.models }
+
+func TestResolveEffortForRole(t *testing.T) {
+	// When the PhaseRunner has no Registry (as in this unit test),
+	// capabilities are nil and explicit values fall back to Auto — that is
+	// the correct "Auto-only" behavior for models without effort control.
+	// The capability-aware path is covered by llm.ResolveEffortFromString
+	// tests.
 	cases := []struct {
-		name             string
-		effort           config.EffortConfig
-		role             llm.PhaseRole
-		model            string
-		pipelineOverride feature.PipelineProfile
-		wantEffort       llm.EffortLevel
-		wantSource       llm.EffortSource
+		name       string
+		pipeline   feature.PipelineProfile
+		effort     config.EffortConfig
+		role       llm.PhaseRole
+		model      string
+		wantEffort llm.EffortLevel
+		wantSource llm.EffortSource
 	}{
 		{
-			name:             "auto uses pipeline override medium",
-			effort:           config.EffortConfig{},
-			role:             llm.PhasePlanning,
-			model:            "claude-sonnet",
-			pipelineOverride: feature.PipelineMedium,
-			wantEffort:       llm.EffortMedium,
-			wantSource:       llm.EffortSourceAuto,
+			name:       "auto uses feature pipeline medium",
+			pipeline:   feature.PipelineMedium,
+			effort:     config.EffortConfig{},
+			role:       llm.PhasePlanning,
+			model:      "claude-sonnet",
+			wantEffort: llm.EffortMedium,
+			wantSource: llm.EffortSourceAuto,
 		},
 		{
-			name: "auto uses pipeline override large",
+			name:     "auto uses feature pipeline large",
+			pipeline: feature.PipelineLarge,
 			effort: config.EffortConfig{
 				Planning: "auto",
 			},
-			role:             llm.PhasePlanning,
-			model:            "claude-sonnet",
-			pipelineOverride: feature.PipelineLarge,
-			wantEffort:       llm.EffortHigh,
-			wantSource:       llm.EffortSourceAuto,
+			role:       llm.PhasePlanning,
+			model:      "claude-sonnet",
+			wantEffort: llm.EffortHigh,
+			wantSource: llm.EffortSourceAuto,
 		},
 		{
-			name: "explicit drift falls back to override pipeline when no caps",
+			name:     "explicit drift falls back to pipeline when no caps",
+			pipeline: feature.PipelineLarge,
 			effort: config.EffortConfig{
 				Planning: "max",
 			},
-			role:             llm.PhasePlanning,
-			model:            "claude-sonnet",
-			pipelineOverride: feature.PipelineLarge,
-			wantEffort:       llm.EffortHigh,
-			wantSource:       llm.EffortSourceAuto,
+			role:       llm.PhasePlanning,
+			model:      "claude-sonnet",
+			wantEffort: llm.EffortHigh,
+			wantSource: llm.EffortSourceAuto,
 		},
 		{
-			name:             "empty override uses feature pipeline moonshot",
-			effort:           config.EffortConfig{},
-			role:             llm.PhaseImplementation,
-			model:            "claude-sonnet",
-			pipelineOverride: "",
-			wantEffort:       llm.EffortHigh,
-			wantSource:       llm.EffortSourceAuto,
+			name:       "auto uses feature pipeline moonshot",
+			pipeline:   feature.PipelineMoonshot,
+			effort:     config.EffortConfig{},
+			role:       llm.PhaseImplementation,
+			model:      "claude-sonnet",
+			wantEffort: llm.EffortHigh,
+			wantSource: llm.EffortSourceAuto,
 		},
 		{
-			name: "utilities auto always low regardless of override",
+			name:     "utilities auto always low",
+			pipeline: feature.PipelineMoonshot,
 			effort: config.EffortConfig{
 				Utilities: "auto",
 			},
-			role:             llm.PhaseChat,
-			model:            "claude-haiku",
-			pipelineOverride: feature.PipelineMoonshot,
-			wantEffort:       llm.EffortLow,
-			wantSource:       llm.EffortSourceAuto,
+			role:       llm.PhaseChat,
+			model:      "claude-haiku",
+			wantEffort: llm.EffortLow,
+			wantSource: llm.EffortSourceAuto,
 		},
 		{
-			name: "utilities explicit falls to pipeline when no caps",
+			name:     "utilities explicit falls to pipeline when no caps",
+			pipeline: feature.PipelineMoonshot,
 			effort: config.EffortConfig{
 				Utilities: "medium",
 			},
-			role:             llm.PhaseChat,
-			model:            "claude-haiku",
-			pipelineOverride: "",
-			wantEffort:       llm.EffortHigh,
-			wantSource:       llm.EffortSourceAuto,
+			role:       llm.PhaseChat,
+			model:      "claude-haiku",
+			wantEffort: llm.EffortHigh,
+			wantSource: llm.EffortSourceAuto,
 		},
 		{
-			name: "review explicit falls to pipeline when no caps",
+			name:     "review explicit falls to pipeline when no caps",
+			pipeline: feature.PipelineMoonshot,
 			effort: config.EffortConfig{
 				Review: "max",
 			},
-			role:             llm.PhaseReview,
-			model:            "claude-opus",
-			pipelineOverride: "",
-			wantEffort:       llm.EffortHigh,
-			wantSource:       llm.EffortSourceAuto,
+			role:       llm.PhaseReview,
+			model:      "claude-opus",
+			wantEffort: llm.EffortHigh,
+			wantSource: llm.EffortSourceAuto,
 		},
 		{
-			name: "implementation drift falls to pipeline",
+			name:     "implementation drift falls to pipeline",
+			pipeline: feature.PipelineMoonshot,
 			effort: config.EffortConfig{
 				Implementation: "max",
 			},
-			role:             llm.PhaseImplementation,
-			model:            "claude-sonnet",
-			pipelineOverride: "",
-			wantEffort:       llm.EffortHigh,
-			wantSource:       llm.EffortSourceAuto,
+			role:       llm.PhaseImplementation,
+			model:      "claude-sonnet",
+			wantEffort: llm.EffortHigh,
+			wantSource: llm.EffortSourceAuto,
 		},
 		{
-			name:             "unknown model no caps falls to pipeline",
-			effort:           config.EffortConfig{},
-			role:             llm.PhaseImplementation,
-			model:            "unknown-model",
-			pipelineOverride: "",
-			wantEffort:       llm.EffortHigh,
-			wantSource:       llm.EffortSourceAuto,
-		},
-		{
-			name: "auto with medium pipeline override on moonshot feature",
-			effort: config.EffortConfig{
-				Implementation: "auto",
-			},
-			role:             llm.PhaseImplementation,
-			model:            "claude-sonnet",
-			pipelineOverride: feature.PipelineMedium,
-			wantEffort:       llm.EffortMedium,
-			wantSource:       llm.EffortSourceAuto,
+			name:       "unknown model no caps falls to pipeline",
+			pipeline:   feature.PipelineMoonshot,
+			effort:     config.EffortConfig{},
+			role:       llm.PhaseImplementation,
+			model:      "unknown-model",
+			wantEffort: llm.EffortHigh,
+			wantSource: llm.EffortSourceAuto,
 		},
 	}
 	for _, tc := range cases {
@@ -152,10 +174,10 @@ func TestResolveEffortForRoleWithPipelineOverride(t *testing.T) {
 			}
 			f := &feature.Feature{
 				ID:       "test-feature",
-				Pipeline: feature.PipelineMoonshot,
+				Pipeline: tc.pipeline,
 				Effort:   tc.effort,
 			}
-			gotEffort, gotSource := pr.resolveEffortForRoleWithPipeline(f, tc.role, tc.model, tc.pipelineOverride)
+			gotEffort, gotSource := pr.resolveEffortForRole(f, tc.role, tc.model)
 			if gotEffort != tc.wantEffort {
 				t.Errorf("effort = %q, want %q", gotEffort, tc.wantEffort)
 			}

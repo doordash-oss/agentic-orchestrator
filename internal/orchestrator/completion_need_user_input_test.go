@@ -36,11 +36,11 @@ import (
 //     "need_user_input" branch.
 //  2. Verify the orchestrator persisted f.PendingNeedUserInputPath and
 //     transitioned f.Status to StatusNeedUserInput. Without this, the
-//     decision dispatcher refuses with "feature is not paused on a
+//     resume dispatcher refuses with "feature is not paused on a
 //     need-user-input gate (status=Implementing)".
 //  3. Verify NeedUserInputRequired fires; PhaseCompleted does NOT (the
 //     phase is paused, not done).
-//  4. Drive HandleNeedUserInputDecision and verify it does NOT return the
+//  4. Drive ResumeNeedUserInput and verify it does NOT return the
 //     "is not paused" sentinel — i.e. the dispatcher recognises the
 //     feature as paused. (We don't drive the dispatcher all the way
 //     through startPhase here; the bug under test was upstream of that.)
@@ -84,13 +84,13 @@ func TestOrchestrator_HandlePhaseCompletion_MultiRepo_NeedUserInput_PausesFeatur
 	}
 
 	// 2. Feature must be persisted as paused: gate path written + status
-	// transitioned. This is the slice-2 fix — without it the decision
+	// transitioned. This is the slice-2 fix — without it the resume
 	// dispatcher rejects with "is not paused".
 	if f.PendingNeedUserInputPath != gatePath {
 		t.Errorf("Feature.PendingNeedUserInputPath = %q, want %q", f.PendingNeedUserInputPath, gatePath)
 	}
 	if f.Status != feature.StatusNeedUserInput {
-		t.Errorf("Feature.Status = %q, want StatusNeedUserInput (decision dispatcher gates on this)", f.Status)
+		t.Errorf("Feature.Status = %q, want StatusNeedUserInput (resume dispatcher gates on this)", f.Status)
 	}
 	// Per-repo state untouched: gate is feature-scoped.
 	for _, name := range []string{repoName, repoNameB, repoNameC} {
@@ -111,12 +111,11 @@ func TestOrchestrator_HandlePhaseCompletion_MultiRepo_NeedUserInput_PausesFeatur
 		t.Error("FeatureFailed MUST NOT fire on a paused phase")
 	}
 
-	// --- 4. Decision dispatcher recognises the feature as paused. ---
+	// --- 4. Resume dispatcher recognises the feature as paused. ---
 	// The user attempts to resume without answering — the gate's own
 	// AllAnswered guard rejects, but crucially NOT with the
 	// "is not paused" sentinel that fired before the fix.
-	err := o.HandleNeedUserInputDecision("feat-mr-nui",
-		orchestrator.NeedUserInputDecision{Decision: "resume"})
+	err := o.ResumeNeedUserInput("feat-mr-nui", orchestrator.NeedUserInputResume{})
 	if err == nil {
 		t.Fatal("expected resume to error on unanswered question")
 	}

@@ -33,7 +33,6 @@ var designerRoleSpec = RoleSpec{
 	OutputRoots: []OutputRootSpec{
 		singleShotPhaseDirOutputRoot("Design phase artifact directory."),
 	},
-	MarkerRoot: "phase_dir",
 	Artifacts: []RoleArtifactSpec{
 		phaseMarkdownRoleArtifact("design markdown artifact"),
 	},
@@ -49,11 +48,16 @@ func DesignerRoleSpec() RoleSpec {
 // DesignUserInput so callers can migrate without churn; the legacy
 // builder delegates here.
 type DesignUserInput struct {
-	Name        string
-	Description string
-	Images      []string
-	Attachments []string
-	Repos       []prompts.RepoView
+	Name         string
+	Description  string
+	ExitCriteria string
+	Images       []string
+	Attachments  []string
+	Repos        []prompts.RepoView
+
+	// RefactorPassForkPoint names a refactor child's fork-point commits
+	// ("repo @ sha"). Empty for top-level features.
+	RefactorPassForkPoint string
 
 	MultiRepo            bool
 	ResearchArtifactPath string

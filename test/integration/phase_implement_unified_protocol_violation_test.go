@@ -30,9 +30,10 @@ import (
 
 // TestPhaseImplementUnified_ProtocolViolation_EndToEnd drives the real unified
 // phase-implement loop with a mock agent process that reports SDK success but
-// only writes phase_complete. The observable contract is that the loop never
-// invokes review, trips the protocol-violation rail, and atomically stamps the
-// phase-declared repos failed with the contract reason.
+// omits its required artifacts. The observable contract is that the loop never
+// invokes review, never commits a receipt, trips the protocol-violation rail,
+// and atomically stamps the phase-declared repos failed with the contract
+// reason.
 func TestPhaseImplementUnified_ProtocolViolation_EndToEnd(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
@@ -56,7 +57,7 @@ func TestPhaseImplementUnified_ProtocolViolation_EndToEnd(t *testing.T) {
 		ID:            "phase-protocol-violation",
 		Name:          "Phase protocol violation",
 		Slug:          "phase-protocol-violation",
-		Description:   "Agent writes phase_complete without required artifacts",
+		Description:   "Agent reports success without required artifacts",
 		Status:        feature.StatusImplementing,
 		CurrentPhase:  feature.PhaseImplement,
 		ActiveRun:     1,
@@ -103,12 +104,12 @@ func TestPhaseImplementUnified_ProtocolViolation_EndToEnd(t *testing.T) {
 	}
 
 	agentScript := testutil.WriteScript(t, scriptsDir, "agent.sh",
-		testutil.JSONLInit+"\n"+testutil.WriteImplementProtocolViolation(artifactDir)+"\n"+testutil.JSONLSuccess+"\n")
+		testutil.JSONLInit+"\n"+testutil.JSONLSuccess+"\n")
 	reviewMarker := filepath.Join(tmp, "review-ran")
 	reviewScript := testutil.WriteScript(t, scriptsDir, "review.sh",
 		`touch "`+reviewMarker+`"`+"\n"+
 			testutil.JSONLInit+"\n"+testutil.WriteReviewApproved(artifactDir)+"\n"+testutil.JSONLSuccess+"\n")
-	t.Logf("behavior input: mock implement agent writes only phase_complete under %s and reports SDK success; review marker path is %s", artifactDir, reviewMarker)
+	t.Logf("behavior input: mock implement agent omits required artifacts under %s and reports semantic success; review marker path is %s", artifactDir, reviewMarker)
 
 	eventCh := make(chan interface{}, 100)
 	sm := session.NewManager(eventCh)
@@ -170,8 +171,8 @@ func TestPhaseImplementUnified_ProtocolViolation_EndToEnd(t *testing.T) {
 	}
 	for _, iter := range []string{"iteration-01", "iteration-02"} {
 		iterDir := filepath.Join(artifactDir, iter)
-		if _, err := os.Stat(filepath.Join(iterDir, "phase_complete")); err != nil {
-			t.Errorf("%s phase_complete missing: %v", iter, err)
+		if _, err := os.Stat(filepath.Join(iterDir, agent.PhaseCompleteFile)); !os.IsNotExist(err) {
+			t.Errorf("%s completion receipt exists after contract violation: %v", iter, err)
 		}
 		feedback, err := os.ReadFile(filepath.Join(iterDir, "review-feedback.md"))
 		if err != nil {
@@ -181,7 +182,7 @@ func TestPhaseImplementUnified_ProtocolViolation_EndToEnd(t *testing.T) {
 		if !strings.Contains(string(feedback), "## Verdict\nCHANGES_REQUESTED") {
 			t.Errorf("%s review-feedback.md missing CHANGES_REQUESTED verdict:\n%s", iter, feedback)
 		}
-		t.Logf("behavior observed iteration artifact: iter=%s phase_complete=true synthesized_feedback_changes_requested=true", iter)
+		t.Logf("behavior observed iteration artifact: iter=%s completion_receipt=false synthesized_feedback_changes_requested=true", iter)
 	}
 }
 

@@ -33,7 +33,7 @@ var ansiPattern = regexp.MustCompile(
 )
 
 // stripANSI removes all ANSI escape sequences from a string, returning
-// only the visible text content. This is used to clean Ink TUI rendering
+// only the visible text content. This is used to clean terminal-renderer output
 // output from codex's stderr.
 func stripANSI(s string) string {
 	cleaned := ansiPattern.ReplaceAllString(s, "")

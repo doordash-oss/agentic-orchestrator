@@ -17,7 +17,7 @@
 // model catalog discovered from the local CLI through the same catalog,
 // discovery, context-window, and cost interfaces the other providers use, so
 // its backend models participate in routing, provider-grouped model lists, and
-// (from Phase 6) co-equal default selection. When live discovery has not yet
+// as a co-equal default selection. When live discovery has not yet
 // run, fails, or returns nothing, the provider degrades to a curated built-in
 // fallback catalog (the CatalogProvider/default-catalog path the shared startup
 // discovery relies on), so a ready OpenCode never advertises an empty model
@@ -123,12 +123,6 @@ func (p *Provider) EnablesPendingToolWatchdog() bool { return true }
 // sandboxing so helper shell probes fail as process errors rather than provider
 // permission denials.
 func (p *Provider) UsesBoundedHelperSandbox() bool { return true }
-
-// SupportsFinishOrViolateNudge opts this adapter into the shared
-// finish-or-violate auto-continuation retry: when a session ends its turn
-// without writing its required completion artifacts, the harness keeps the same
-// live session and nudges it to finish before declaring a protocol violation.
-func (p *Provider) SupportsFinishOrViolateNudge() bool { return true }
 
 // SupportsSessionResume reports that a prior ACP session can be resumed via
 // ProtocolOpts.ResumeSessionID (session/load). Agents that do not advertise

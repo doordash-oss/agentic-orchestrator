@@ -82,7 +82,6 @@ type itemSpec struct {
 	RepoName     string
 	ProcessAlive bool
 	CurrentPhase feature.Phase
-	CycleType    feature.RepoCycleType
 	Status       feature.Status
 	NoFeature    bool // when true, Feature field is left nil
 	Pipeline     feature.PipelineProfile
@@ -99,7 +98,6 @@ func fakeRecoveryItems(specs ...itemSpec) []ports.RecoveryItem {
 				Status:       s.Status,
 				Pipeline:     s.Pipeline,
 			}
-			f.SetActiveCycleType(s.CycleType)
 		}
 		items = append(items, ports.RecoveryItem{
 			PIDFile:      session.PIDFile{PID: 12345, FeatureID: s.FeatureID, RepoName: s.RepoName},

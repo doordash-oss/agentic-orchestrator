@@ -28,7 +28,7 @@ import (
 // feature.Store.BaseDir. Falls back to feature.Store.BaseDir when
 // PhaseRunner is unset (tests that don't use context assembly), so
 // path-resolution helpers (RecordRoadmapRejection, artifact resolution)
-// continue to work in TUI unit tests that inject a real feature.Store
+// continue to work in unit tests that inject a real feature.Store
 // but no PhaseRunner.
 func (o *Orchestrator) stateDir() string {
 	if o.deps.PhaseRunner != nil && o.deps.PhaseRunner.StateDir != "" {
@@ -41,7 +41,8 @@ func (o *Orchestrator) stateDir() string {
 }
 
 // computeKBInfos builds KB info metadata for all feature repos.
-// Mirrors app.go:5278-5289.
+// For child features, the KB info points at the disposable workspace
+// instead of the canonical KB.
 func (o *Orchestrator) computeKBInfos(f *feature.Feature) []agent.KBInfo {
 	baseDir := o.stateDir()
 	if baseDir == "" {
@@ -49,7 +50,12 @@ func (o *Orchestrator) computeKBInfos(f *feature.Feature) []agent.KBInfo {
 	}
 	var infos []agent.KBInfo
 	for _, repo := range f.Repos {
-		kbDir := agent.KBStateDir(baseDir, repo.Name)
+		var kbDir string
+		if f.IsChild() {
+			kbDir = feature.ChildKBWorkspaceDir(baseDir, f.ID, repo.Name)
+		} else {
+			kbDir = agent.KBStateDir(baseDir, repo.Name)
+		}
 		indexPath := agent.KBPath(kbDir)
 		if _, err := os.Stat(indexPath); err == nil {
 			infos = append(infos, agent.KBInfo{Name: repo.Name, IndexPath: indexPath, RootDir: kbDir})
@@ -59,16 +65,9 @@ func (o *Orchestrator) computeKBInfos(f *feature.Feature) []agent.KBInfo {
 }
 
 // resolveArtifactPath returns the absolute filesystem path to a phase
-// artifact without reading its content. Mirrors app.go:9695-9742 but reads
-// the state dir from PhaseRunner rather than TUI state.
+// artifact without reading its content. It reads state from PhaseRunner.
 func (o *Orchestrator) resolveArtifactPath(f *feature.Feature, phase string) string {
-	if path := o.resolveArtifactPathForKey(f, phase); path != "" {
-		return path
-	}
-	if phase == "design" {
-		return o.resolveArtifactPathForKey(f, "brainstorm")
-	}
-	return ""
+	return o.resolveArtifactPathForKey(f, phase)
 }
 
 func (o *Orchestrator) resolveArtifactPathForKey(f *feature.Feature, phase string) string {
@@ -106,9 +105,8 @@ func (o *Orchestrator) resolveArtifactPathForKey(f *feature.Feature, phase strin
 
 			// Legacy basename form: values are relative to the phase's output
 			// directory. Use resolvePhaseDirForKey so phase-N-plan keys are
-			// resolved against the canonical phase-NN/plan dir
-			// (refactor-scoped when applicable), not the literal
-			// "phase-N-plan" dir which does not exist on disk.
+			// resolved against the canonical phase-NN/plan dir, not the
+			// literal "phase-N-plan" dir which does not exist on disk.
 			phaseDir := o.resolvePhaseDirForKey(f, phase)
 			if phaseDir == "" {
 				phaseDir = filepath.Join(activeRunDir, phase)
@@ -142,8 +140,7 @@ func (o *Orchestrator) resolveArtifactPathForKey(f *feature.Feature, phase strin
 
 // resolvePhaseDirForKey maps an artifact key to the correct filesystem
 // directory. Phase plan keys (e.g. "phase-2-plan") map to phase-NN/plan/
-// directories, scoped to the feature's active refactor cycle when applicable.
-// Mirrors app.go:9811-9817.
+// directories.
 func (o *Orchestrator) resolvePhaseDirForKey(f *feature.Feature, key string) string {
 	baseDir := o.stateDir()
 	if baseDir == "" {
@@ -156,22 +153,18 @@ func (o *Orchestrator) resolvePhaseDirForKey(f *feature.Feature, key string) str
 	return filepath.Join(agent.ActiveRunDir(baseDir, f), key)
 }
 
-// phasePlanDirForFeature returns the plan subdirectory for a roadmap phase,
-// scoped to the feature's active refactor cycle when applicable. Mirrors the
-// directory choice RunPhasePlanningLoop makes at plan_validation.go:1441 —
-// when the feature has a RefactorPrefix, the phase-plan artifacts live under
-// <stateDir>/<featureID>/refactor-N/phase-NN/plan. Returns "" when the state
+// phasePlanDirForFeature returns the plan subdirectory for a roadmap phase.
+// Mirrors the directory choice RunPhasePlanningLoop makes at
+// plan_validation.go — the phase-plan artifacts live under
+// <stateDir>/<featureID>/runs/run-N/phase-NN/plan. Returns "" when the state
 // dir is unset. Callers that reach into phase-plan directories (iterate
 // invalidation, reviewProceed per-phase dispatch, auto-approved per-phase
-// dispatch) must use this helper so refactor-scoped phase plans are resolved
-// to the same directory the planner writes to.
+// dispatch) must use this helper so phase plans are resolved to the same
+// directory the planner writes to.
 func (o *Orchestrator) phasePlanDirForFeature(f *feature.Feature, phase int) string {
 	baseDir := o.stateDir()
 	if baseDir == "" {
 		return ""
-	}
-	if prefix := f.RefactorPrefix(); prefix != "" {
-		return filepath.Join(agent.ActiveRunDir(baseDir, f), prefix, fmt.Sprintf("phase-%02d", phase), "plan")
 	}
 	return agent.PhasePlanDir(baseDir, f, phase)
 }
@@ -184,8 +177,8 @@ func (o *Orchestrator) phasePlanDirForFeature(f *feature.Feature, phase int) str
 
 // collectQAFilePaths gathers Q&A answer files from earlier phases (inquire,
 // research, design, roadmap) so they can be passed to planning prompts.
-// Mirrors app.go:5761-5773. Missing files are gracefully skipped via os.Stat.
-func (o *Orchestrator) collectQAFilePaths(f *feature.Feature, refPrefix string) []string {
+// Missing files are gracefully skipped via os.Stat.
+func (o *Orchestrator) collectQAFilePaths(f *feature.Feature) []string {
 	baseDir := o.stateDir()
 	if baseDir == "" || f == nil {
 		return nil
@@ -193,7 +186,7 @@ func (o *Orchestrator) collectQAFilePaths(f *feature.Feature, refPrefix string) 
 	runDir := agent.ActiveRunDir(baseDir, f)
 	var paths []string
 	for _, phase := range []string{"inquire", "research", "design", "roadmap"} {
-		qaPath := filepath.Join(runDir, refPrefix, phase, "qa-answers.md")
+		qaPath := filepath.Join(runDir, phase, "qa-answers.md")
 		if _, err := os.Stat(qaPath); err == nil {
 			paths = append(paths, qaPath)
 		}
@@ -203,20 +196,9 @@ func (o *Orchestrator) collectQAFilePaths(f *feature.Feature, refPrefix string) 
 
 // resolvePlanPath resolves the plan artifact for implementation.
 // Follows the cascade: cycle plan → stored artifact → roadmap phase plan →
-// globbed plan. Returns "" if no plan is found. Mirrors app.go:5791-5825.
+// globbed plan. Returns "" if no plan is found.
 func (o *Orchestrator) resolvePlanPath(f *feature.Feature) string {
 	baseDir := o.stateDir()
-
-	// Cycle plan — when a post-publish cycle is active, look in the cycle dir
-	// only; do NOT fall through to roadmap/stored artifacts which belong to
-	// normal implementation.
-	if cyclePrefix := f.CyclePrefix(); cyclePrefix != "" {
-		if baseDir == "" {
-			return ""
-		}
-		cycleDir := filepath.Join(agent.ActiveRunDir(baseDir, f), cyclePrefix)
-		return globCyclePlan(cycleDir)
-	}
 
 	// Stored artifact: absolute first, then run-relative fallback. Carried
 	// values are normalized to run-relative form such as `phase-01/plan/plan.md`
@@ -251,19 +233,9 @@ func (o *Orchestrator) resolvePlanPath(f *feature.Feature) string {
 	return o.resolveArtifactPath(f, "plan")
 }
 
-// globCyclePlan finds the cycle plan file in a cycle directory.
-// Mirrors app.go:9666-9672.
-func globCyclePlan(cycleDir string) string {
-	matches, _ := filepath.Glob(filepath.Join(cycleDir, "*-plan.md"))
-	if len(matches) > 0 {
-		return matches[0]
-	}
-	return ""
-}
-
 // writeQAFile extracts the session's QALog and writes it into phaseDir as
 // qa-answers.md. Returns silently if the session view is missing or its QALog
-// is empty. Mirrors app.go:2868-2888 / 2797-2818 (per-phase Q&A persistence).
+// is empty.
 func (o *Orchestrator) writeQAFile(sessionID, phaseDir string) error {
 	if sessionID == "" || phaseDir == "" {
 		return nil
@@ -289,7 +261,6 @@ func (o *Orchestrator) writeQAFile(sessionID, phaseDir string) error {
 }
 
 // globPhaseArtifact finds the most recent non-excluded artifact in a phase dir.
-// Mirrors app.go:9674-9693.
 func globPhaseArtifact(phaseDir string) string {
 	var bestPath string
 	var bestModTime int64

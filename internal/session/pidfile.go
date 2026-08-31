@@ -70,8 +70,7 @@ func RemovePIDFile(dir string, repoName string) error {
 }
 
 // FindPIDFiles scans the bounded set of directories where sessions persist PID
-// files: the state directory itself, each immediate feature directory, and the
-// feature's immediate child directories used by the legacy phase layout.
+// files: the state directory itself and each immediate feature directory.
 //
 // Feature trees also contain arbitrary run artifacts, work products, and copied
 // fixtures. Recursing into those trees is both unbounded and incorrect: a copied
@@ -99,17 +98,6 @@ func FindPIDFiles(featuresDir string) ([]PIDFile, error) {
 			continue
 		}
 		results = appendPIDFilesInDir(results, featureDir, featureEntries)
-		for _, featureEntry := range featureEntries {
-			if !featureEntry.IsDir() || !isLegacyPhaseDir(featureEntry.Name()) {
-				continue
-			}
-			legacySessionDir := filepath.Join(featureDir, featureEntry.Name())
-			legacyEntries, err := os.ReadDir(legacySessionDir)
-			if err != nil {
-				continue
-			}
-			results = appendPIDFilesInDir(results, legacySessionDir, legacyEntries)
-		}
 	}
 
 	return results, nil
@@ -132,15 +120,6 @@ func appendPIDFilesInDir(results []PIDFile, dir string, entries []os.DirEntry) [
 		results = append(results, *pf)
 	}
 	return results
-}
-
-func isLegacyPhaseDir(name string) bool {
-	switch name {
-	case "knowledgebase", "inquire", "research", "design", "plan", "implement", "review", "publish":
-		return true
-	default:
-		return false
-	}
 }
 
 // isProcessRunning checks if a process with the given PID is still running.

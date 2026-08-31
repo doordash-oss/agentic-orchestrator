@@ -95,7 +95,7 @@ func TestInferThenMatch_JSONPayload_Integration(t *testing.T) {
 		RepoName: testMyRepo,
 	}
 
-	// Simulate: TUI "r" keybinding passes raw JSON from pendingPermToolInput
+	// Simulate a client passing raw JSON from a pending permission request.
 	jsonInput := testJSONNpmTestCoverage
 	cache.RememberAllow(toolNameBash, jsonInput, testMyRepo)
 
@@ -360,7 +360,7 @@ func TestImport_AvailableToFirstSession(t *testing.T) {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	// Synchronous import + load (mirrors creation + TUI handler flow)
+	// Synchronous import + load (mirrors creation + desktop app handler flow)
 	if err := ImportRepoSettings(repoDir, testMyRepo, s); err != nil {
 		t.Fatalf("ImportRepoSettings: %v", err)
 	}

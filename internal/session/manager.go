@@ -15,12 +15,16 @@
 package session
 
 import (
+	"bufio"
 	"context"
+	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -32,12 +36,12 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
-// SDKEventMsg carries a structured SDK message from a session to the TUI.
+// SDKEventMsg carries a structured SDK message from a session to the desktop app.
 //
 // Consumers SHOULD read FeatureID and Phase directly. Never re-derive
 // identity from SessionID — the session manager captures both values at
 // emission time, and string-parsing the SessionID is brittle (every new
-// session role would otherwise need an extra case in the TUI's parser,
+// session role would otherwise need an extra case in the desktop app's parser,
 // and an omitted case silently routes the event to the default phase
 // and a bogus feature directory).
 type SDKEventMsg struct {
@@ -51,6 +55,19 @@ type SDKEventMsg struct {
 	// emitted — the same index space session_model.go's /output/stream and
 	// /transcript endpoints use.
 	RecordCount int
+}
+
+// SessionStartedMsg signals that a session has been registered and is visible
+// through the session list/read APIs.
+//
+// Consumers SHOULD read FeatureID and Phase directly. Never re-derive
+// identity from SessionID — see SDKEventMsg for rationale.
+type SessionStartedMsg struct {
+	SessionID string
+	FeatureID string
+	Phase     feature.Phase
+	StartedAt time.Time
+	Status    SessionStatus
 }
 
 // SessionDoneMsg signals that a session has ended.
@@ -102,6 +119,18 @@ func NewManager(eventCh chan interface{}) *Manager {
 	}
 }
 
+// NewRecoveringManager constructs a manager and restores live sessions whose
+// durable process and transcript metadata survived an abrupt server exit.
+func NewRecoveringManager(eventCh chan interface{}, stateDir string) *Manager {
+	m := NewManager(eventCh)
+	if stateDir != "" {
+		if err := m.restoreLiveSessions(stateDir); err != nil {
+			log.Printf("session-manager: restore live sessions: %v", err)
+		}
+	}
+	return m
+}
+
 // SetAttachDropReporter installs an AttachDropReporter on the Manager.
 // Subsequent sessions started via StartSession will forward attachCh
 // drop events (critical-message timeouts) to this reporter. Safe to
@@ -125,7 +154,7 @@ func (m *Manager) SetAttachDropReporter(r AttachDropReporter) {
 // existing callers can construct options via session.SessionOpts{...}.
 type SessionOpts = ports.SessionOpts
 
-func (m *Manager) StartSession(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*SessionOpts) (SessionHandle, error) {
+func (m *Manager) StartSession(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*SessionOpts) (ports.SessionHandle, error) {
 	// Refuse new sessions after Shutdown has been called. stoppingCh is set at
 	// construction, so this read needs no lock; it is re-checked under the
 	// registration lock below to close the race with a Shutdown that fires
@@ -139,12 +168,13 @@ func (m *Manager) StartSession(id, featureID string, phase feature.Phase, comman
 	// The subprocess spawn and protocol handshake below can take many seconds
 	// (up to codexHandshakeTimeout). They run WITHOUT the manager lock so they
 	// never block readers — ActiveSessions feeds live-preview/prompts/sessions,
-	// and stalling those during a resume is what makes the TUI's refresh time
+	// and stalling those during a resume is what makes the desktop app's refresh time
 	// out. The session is registered (made visible to readers) only once it is
 	// fully started below.
 	s := NewSession(id, featureID, phase)
 	if len(opts) > 0 && opts[0] != nil {
 		s.pidDir = opts[0].PIDDir
+		s.runNumber = opts[0].RunNumber
 		s.iteration = opts[0].Iteration
 		if opts[0].PermHandler != nil {
 			s.permHandler = opts[0].PermHandler
@@ -154,7 +184,12 @@ func (m *Manager) StartSession(id, featureID string, phase feature.Phase, comman
 		s.repoName = opts[0].RepoName
 		s.permCacheScope = opts[0].PermCacheScope
 		s.providerName = opts[0].ProviderName
-		s.model = opts[0].ResolvedModel
+		s.model = opts[0].Model
+		// PHASE2(resolved model): feature's ResolvedModel/OnProviderInit wiring
+		// kept alongside main's Model field; both sides' call sites compile.
+		if opts[0].ResolvedModel != "" {
+			s.model = opts[0].ResolvedModel
+		}
 		s.onProviderInit = opts[0].OnProviderInit
 		if opts[0].Protocol != nil {
 			s.protocol = opts[0].Protocol
@@ -166,7 +201,7 @@ func (m *Manager) StartSession(id, featureID string, phase feature.Phase, comman
 			s.resultShutdownGrace = opts[0].ResultShutdownGrace
 		}
 		s.stderrPath = opts[0].StderrPath
-		s.keepAliveOnTruncatedResult = opts[0].KeepAliveOnTruncatedResult
+		s.keepAliveOnTurnResult = opts[0].KeepAliveOnTurnResult
 		s.kind = opts[0].Kind
 		s.turnMode = opts[0].TurnMode
 		s.label = opts[0].Label
@@ -174,6 +209,16 @@ func (m *Manager) StartSession(id, featureID string, phase feature.Phase, comman
 		s.effortSource = opts[0].EffortSource
 		s.askUserAutoPick = opts[0].AskUserAutoPick
 		s.watchdog = newSessionWatchdog(s, opts[0].Watchdog)
+		if s.pidDir != "" {
+			sum := sha256.Sum256([]byte(id))
+			s.transcriptPath = filepath.Join(s.pidDir, fmt.Sprintf("session-transcript-%x.jsonl", sum[:8]))
+			if err := os.MkdirAll(s.pidDir, 0o755); err != nil {
+				return nil, fmt.Errorf("creating transcript directory: %w", err)
+			}
+			if err := os.Remove(s.transcriptPath); err != nil && !os.IsNotExist(err) {
+				return nil, fmt.Errorf("resetting transcript: %w", err)
+			}
+		}
 		// Set log file before Start() so the read goroutine can write from
 		// the first line. This avoids a race with fast sessions (codex)
 		// where readMessages exits before SetLogFile is called.
@@ -265,6 +310,25 @@ func (m *Manager) StartSession(id, featureID string, phase feature.Phase, comman
 	m.sessions[id] = s
 	m.mu.Unlock()
 
+	if m.eventCh != nil {
+		assertEmissionIdentity(id, featureID, phase)
+		startedMsg := SessionStartedMsg{
+			SessionID: id,
+			FeatureID: featureID,
+			Phase:     phase,
+			StartedAt: s.StartedAt(),
+			Status:    s.Status(),
+		}
+		select {
+		case m.eventCh <- startedMsg:
+		default:
+			// SessionStartedMsg is an invalidation hint for UI discovery.
+			// Dropping it under backpressure is acceptable: output/done events
+			// and manual snapshots still converge, while StartSession remains
+			// independent of dashboard consumers.
+		}
+	}
+
 	// Monitor for completion
 	go func() {
 		s.Wait()
@@ -286,6 +350,115 @@ func (m *Manager) StartSession(id, featureID string, phase feature.Phase, comman
 	return s, nil
 }
 
+func (m *Manager) restoreLiveSessions(stateDir string) error {
+	pidFiles, err := FindPIDFiles(stateDir)
+	if err != nil {
+		return err
+	}
+	for _, pf := range pidFiles {
+		if pf.ManagerID == "" || pf.FeatureID == "" || pf.Transcript == "" || !isProcessRunning(pf.PID) {
+			continue
+		}
+		transcriptPath, ok := pathWithin(stateDir, pf.Transcript)
+		if !ok {
+			log.Printf("session-manager: skip session %q with transcript outside state directory", pf.ManagerID)
+			continue
+		}
+		phase, ok := persistedPhase(pf.Phase)
+		if !ok {
+			log.Printf("session-manager: skip session %q with unknown phase %q", pf.ManagerID, pf.Phase)
+			continue
+		}
+		messages, err := readPersistedTranscript(transcriptPath)
+		if err != nil {
+			log.Printf("session-manager: skip session %q: %v", pf.ManagerID, err)
+			continue
+		}
+		s := NewSession(pf.ManagerID, pf.FeatureID, phase)
+		s.runNumber = pf.RunNumber
+		s.iteration = pf.Iteration
+		s.repoName = pf.RepoName
+		s.workDir = pf.WorkDir
+		s.startedAt = pf.StartedAt
+		s.providerName = pf.Provider
+		s.model = pf.Model
+		s.kind = pf.Kind
+		s.label = pf.Label
+		s.pidDir = pf.Dir
+		s.transcriptPath = transcriptPath
+		s.recoveredPID = pf.PID
+		for _, msg := range messages {
+			if msg.Init != nil && strings.TrimSpace(msg.Init.Model) != "" {
+				s.model = msg.Init.Model
+			}
+			s.messageLog.Append(msg)
+		}
+		m.sessions[s.id] = s
+	}
+	return nil
+}
+
+func pathWithin(root, candidate string) (string, bool) {
+	rootAbs, err := filepath.Abs(root)
+	if err != nil {
+		return "", false
+	}
+	candidateAbs, err := filepath.Abs(candidate)
+	if err != nil {
+		return "", false
+	}
+	rel, err := filepath.Rel(rootAbs, candidateAbs)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", false
+	}
+	return candidateAbs, true
+}
+
+func persistedPhase(name string) (feature.Phase, bool) {
+	for _, phase := range []feature.Phase{
+		feature.PhaseResearch, feature.PhasePlan, feature.PhaseImplement,
+		feature.PhasePublish, feature.PhaseReview, feature.PhaseKnowledgeBase,
+		feature.PhaseInquire, feature.PhaseDesign, feature.PhaseFinalReview,
+	} {
+		if phase.String() == name {
+			return phase, true
+		}
+	}
+	return 0, false
+}
+
+func readPersistedTranscript(path string) ([]llm.SDKMessage, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("opening transcript: %w", err)
+	}
+	defer f.Close()
+
+	var messages []llm.SDKMessage
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 64*1024), 16*1024*1024)
+	for scanner.Scan() {
+		var record persistedTranscriptRecord
+		if err := json.Unmarshal(scanner.Bytes(), &record); err != nil {
+			log.Printf("session-manager: skip malformed transcript row in %s: %v", path, err)
+			continue
+		}
+		msg := record.Message.sdkMessage()
+		switch {
+		case record.Index == len(messages):
+			messages = append(messages, msg)
+		case record.Index >= 0 && record.Index < len(messages):
+			messages[record.Index] = msg
+		default:
+			log.Printf("session-manager: skip out-of-order transcript row %d in %s", record.Index, path)
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("reading transcript: %w", err)
+	}
+	return messages, nil
+}
+
 // isChildExitedWriteError reports whether a stdin write failed because the
 // child process already closed its end of the pipe (it exited). Both EPIPE and
 // io.ErrClosedPipe surface this race.
@@ -303,11 +476,11 @@ func (m *Manager) handleSessionMessage(s *Session, id, featureID string, phase f
 		if msg.ControlRequest.Request.Subtype == "hook_callback" {
 			// no status change
 		} else if msg.ControlRequest.Request.ToolName == "AskUserQuestion" {
-			s.status = SessionWaitingHelp
+			s.setStatusLocked(SessionWaitingHelp)
 			s.hasUnansweredQuestion = true
 		} else {
 			// Other tool permissions (Bash, etc.)
-			s.status = SessionWaitingPermission
+			s.setStatusLocked(SessionWaitingPermission)
 		}
 	case msg.Result != nil:
 		interactive := s.turnMode == ports.TurnModeInteractive
@@ -322,18 +495,18 @@ func (m *Manager) handleSessionMessage(s *Session, id, featureID string, phase f
 				break
 			}
 			if interactive {
-				s.status = SessionWaitingHelp
+				s.setStatusLocked(SessionWaitingHelp)
 			} else {
-				s.status = SessionRunning
+				s.setStatusLocked(SessionRunning)
 			}
 		} else if s.status == SessionWaitingPermission && len(s.pendingControlRequests) == 0 {
 			if interactive {
-				s.status = SessionWaitingHelp
+				s.setStatusLocked(SessionWaitingHelp)
 			} else {
-				s.status = SessionRunning
+				s.setStatusLocked(SessionRunning)
 			}
 		} else if interactive {
-			s.status = SessionWaitingHelp
+			s.setStatusLocked(SessionWaitingHelp)
 		}
 	case msg.Assistant != nil:
 		// An assistant message means the agent moved past the permission
@@ -343,12 +516,12 @@ func (m *Manager) handleSessionMessage(s *Session, id, featureID string, phase f
 		// incorrectly clobber SessionWaitingPermission before the user can
 		// respond.
 		if s.status == SessionWaitingPermission && len(s.pendingControlRequests) == 0 {
-			s.status = SessionRunning
+			s.setStatusLocked(SessionRunning)
 		}
 	}
 	s.mu.Unlock()
 
-	// Forward to TUI event channel (non-blocking to avoid goroutine accumulation).
+	// Forward to desktop app event channel (non-blocking to avoid goroutine accumulation).
 	if m.eventCh != nil {
 		assertEmissionIdentity(id, featureID, phase)
 		sdkEvt := SDKEventMsg{
@@ -362,7 +535,7 @@ func (m *Manager) handleSessionMessage(s *Session, id, featureID string, phase f
 		select {
 		case m.eventCh <- sdkEvt:
 		default:
-			// Channel full — drop the event. The TUI will catch up on the
+			// Channel full — drop the event. The desktop app will catch up on the
 			// next message. This prevents unbounded goroutine accumulation
 			// under high-volume partial-message streaming.
 		}
@@ -379,7 +552,7 @@ func (m *Manager) StopSession(id string) error {
 	return s.Stop()
 }
 
-func (m *Manager) GetSession(id string) SessionView {
+func (m *Manager) GetSession(id string) ports.SessionView {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	s := m.sessions[id]
@@ -389,10 +562,10 @@ func (m *Manager) GetSession(id string) SessionView {
 	return s
 }
 
-func (m *Manager) ActiveSessions() []SessionView {
+func (m *Manager) ActiveSessions() []ports.SessionView {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	var result []SessionView
+	var result []ports.SessionView
 	for _, s := range m.sessions {
 		if s.IsActive() {
 			result = append(result, s)
@@ -403,13 +576,13 @@ func (m *Manager) ActiveSessions() []SessionView {
 
 // RecentSessions returns the most recently started sessions across features,
 // bounded by limit.
-func (m *Manager) RecentSessions(limit int) []SessionView {
+func (m *Manager) RecentSessions(limit int) []ports.SessionView {
 	if limit <= 0 {
 		return nil
 	}
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	result := make([]SessionView, 0, min(limit, len(m.sessions)))
+	result := make([]ports.SessionView, 0, min(limit, len(m.sessions)))
 	for _, s := range m.sessions {
 		result = append(result, s)
 	}
@@ -427,10 +600,10 @@ func (m *Manager) RecentSessions(limit int) []SessionView {
 
 // FeatureSessions returns all sessions (including completed ones) for a feature,
 // sorted with the most recently started session first.
-func (m *Manager) FeatureSessions(featureID string) []SessionView {
+func (m *Manager) FeatureSessions(featureID string) []ports.SessionView {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	var result []SessionView
+	var result []ports.SessionView
 	for _, s := range m.sessions {
 		if s.featureID == featureID {
 			result = append(result, s)
@@ -453,7 +626,7 @@ func (m *Manager) SendInput(sessionID string, data []byte) error {
 	return s.SendInput(data)
 }
 
-func (m *Manager) Attach(sessionID string) (SessionView, error) {
+func (m *Manager) Attach(sessionID string) (ports.SessionView, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	s, ok := m.sessions[sessionID]

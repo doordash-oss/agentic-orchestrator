@@ -19,6 +19,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
 )
@@ -60,6 +61,139 @@ func TestWorktreeCreateAndRemove(t *testing.T) {
 	}
 }
 
+// TestWorktreeRemoveMaterialFailureReturned pins the cleanup contract the
+// child-integration warning path relies on: when neither `git worktree
+// remove` nor the manual directory fallback can clear the worktree, Remove
+// must surface the failure instead of silently returning nil.
+func TestWorktreeRemoveMaterialFailureReturned(t *testing.T) {
+	if testing.Short() {
+		t.Skip("covered by TestFastWorktreeRepresentative in short mode")
+	}
+	t.Parallel()
+
+	repoDir := testutil.InitGitRepo(t)
+	parentDir := t.TempDir()
+	mgr := NewWorktreeManager(parentDir)
+
+	wtPath, err := mgr.Create(repoDir, "stuck-feature", "test-repo", "")
+	if err != nil {
+		t.Fatalf("create worktree: %v", err)
+	}
+	testutil.CommitFile(t, wtPath, "stuck.txt", "stuck\n", "work")
+
+	// Make the worktree directory unremovable: both git worktree remove and
+	// the os.RemoveAll fallback fail while its parent directory is read-only.
+	wtParent := filepath.Dir(wtPath)
+	if err := os.Chmod(wtParent, 0o555); err != nil {
+		t.Fatalf("chmod worktree parent dir: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chmod(wtParent, 0o755); err != nil {
+			t.Fatalf("restore worktree parent dir permissions: %v", err)
+		}
+	})
+
+	if err := mgr.RemoveRef(wtPath, repoDir, "feature/stuck-feature"); err == nil {
+		t.Fatal("RemoveRef() error = nil, want the material cleanup failure surfaced")
+	}
+
+	// Once the blocker clears, the retry succeeds idempotently and the
+	// ephemeral branch is actually deleted (not silently leaked).
+	if err := os.Chmod(wtParent, 0o755); err != nil {
+		t.Fatalf("restore worktree parent dir permissions: %v", err)
+	}
+	if err := mgr.RemoveRef(wtPath, repoDir, "feature/stuck-feature"); err != nil {
+		t.Fatalf("RemoveRef() retry error = %v, want nil after the blocker cleared", err)
+	}
+	if _, err := os.Stat(wtPath); !os.IsNotExist(err) {
+		t.Fatalf("worktree directory still present after successful retry: %v", err)
+	}
+	if got := gitOutput(t, repoDir, "branch", "--list", "feature/stuck-feature"); got != "" {
+		t.Fatalf("ephemeral branch feature/stuck-feature still present after successful retry")
+	}
+}
+
+// TestWorktreeRemoveRefDeletesBranchAfterDeregistration pins the partial-
+// removal sequence the reviewer flagged: a first attempt can deregister the
+// worktree while leaving the directory behind, after which the branch can no
+// longer be rediscovered from the path. RemoveRef (and the plain Remove
+// discovery wrapper while the worktree is still resolvable) must still reach
+// the recorded branch so cleanup never reports success over a leaked branch.
+func TestWorktreeRemoveRefDeletesBranchAfterDeregistration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("covered by TestFastWorktreeRepresentative in short mode")
+	}
+	t.Parallel()
+
+	repoDir := testutil.InitGitRepo(t)
+	mgr := NewWorktreeManager(t.TempDir())
+
+	wtPath, err := mgr.Create(repoDir, "partial-feature", "test-repo", "")
+	if err != nil {
+		t.Fatalf("create worktree: %v", err)
+	}
+	testutil.CommitFile(t, wtPath, "work.txt", "work\n", "work")
+
+	// Reproduce the partial-removal state: git deregisters the worktree (so
+	// rev-parse from the path no longer resolves the main repo) while the
+	// directory with leftover content stays behind.
+	runGit(t, repoDir, "worktree", "remove", wtPath, "--force")
+	if err := os.MkdirAll(wtPath, 0o755); err != nil {
+		t.Fatalf("recreate stuck worktree dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(wtPath, "stuck.txt"), []byte("stuck\n"), 0o644); err != nil {
+		t.Fatalf("write stuck file: %v", err)
+	}
+	if got := gitOutput(t, repoDir, "branch", "--list", "feature/partial-feature"); got == "" {
+		t.Fatal("test setup expects the ephemeral branch to survive deregistration")
+	}
+
+	// Plain Remove can only clear the directory here; the identity-carrying
+	// RemoveRef is what production retries use to reach the branch.
+	if err := mgr.Remove(wtPath, true); err != nil {
+		t.Fatalf("Remove() on deregistered worktree error = %v", err)
+	}
+	if _, err := os.Stat(wtPath); !os.IsNotExist(err) {
+		t.Fatalf("stuck worktree directory not cleared: %v", err)
+	}
+	if err := mgr.RemoveRef(wtPath, repoDir, "feature/partial-feature"); err != nil {
+		t.Fatalf("RemoveRef() error = %v", err)
+	}
+	if got := gitOutput(t, repoDir, "branch", "--list", "feature/partial-feature"); got != "" {
+		t.Fatal("ephemeral branch feature/partial-feature still present after RemoveRef")
+	}
+
+	// A further retry over fully-absent resources stays idempotent success.
+	if err := mgr.RemoveRef(wtPath, repoDir, "feature/partial-feature"); err != nil {
+		t.Fatalf("RemoveRef() idempotent retry error = %v", err)
+	}
+}
+
+// TestWorktreeRemoveIdempotentOnAbsentResources pins the retry tail of the
+// cleanup contract: removing an already-removed worktree (and its
+// already-deleted branch) is success, so cleanup retries converge instead of
+// re-recording warnings for resources that no longer exist.
+func TestWorktreeRemoveIdempotentOnAbsentResources(t *testing.T) {
+	if testing.Short() {
+		t.Skip("covered by TestFastWorktreeRepresentative in short mode")
+	}
+	t.Parallel()
+
+	repoDir := testutil.InitGitRepo(t)
+	mgr := NewWorktreeManager(t.TempDir())
+
+	wtPath, err := mgr.Create(repoDir, "gone-feature", "test-repo", "")
+	if err != nil {
+		t.Fatalf("create worktree: %v", err)
+	}
+	if err := mgr.Remove(wtPath, true); err != nil {
+		t.Fatalf("first remove: %v", err)
+	}
+	if err := mgr.Remove(wtPath, true); err != nil {
+		t.Fatalf("second remove: %v, want idempotent success on absent resources", err)
+	}
+}
+
 func TestWorktreeCreateRejectsEmptyRepoPath(t *testing.T) {
 	repoDir := testutil.InitGitRepo(t)
 	oldWd, err := os.Getwd()
@@ -78,74 +212,6 @@ func TestWorktreeCreateRejectsEmptyRepoPath(t *testing.T) {
 	mgr := NewWorktreeManager(t.TempDir())
 	if _, err := mgr.Create("", "empty-repo-path", "test-repo", ""); err == nil {
 		t.Fatal("Create() error = nil, want empty repo path rejected")
-	}
-}
-
-func TestWorktreeList(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping worktree list extended regression in short mode")
-	}
-	t.Parallel()
-
-	repoDir := testutil.InitGitRepo(t)
-	wtBaseDir := t.TempDir()
-
-	mgr := NewWorktreeManager(wtBaseDir)
-
-	// Empty list
-	wts, err := mgr.List()
-	if err != nil {
-		t.Fatalf("list: %v", err)
-	}
-	if len(wts) != 0 {
-		t.Errorf("expected 0 worktrees, got %d", len(wts))
-	}
-
-	// Create one
-	_, err = mgr.Create(repoDir, "feat-1", "repo-a", "")
-	if err != nil {
-		t.Fatalf("create: %v", err)
-	}
-
-	wts, err = mgr.List()
-	if err != nil {
-		t.Fatalf("list: %v", err)
-	}
-	if len(wts) != 1 {
-		t.Errorf("expected 1 worktree, got %d", len(wts))
-	}
-}
-
-func TestDetectStale(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping stale worktree detection extended regression in short mode")
-	}
-	t.Parallel()
-
-	repoDir := testutil.InitGitRepo(t)
-	wtBaseDir := t.TempDir()
-	mgr := NewWorktreeManager(wtBaseDir)
-
-	// Create two worktrees for different features
-	_, err := mgr.Create(repoDir, "active-feat", "repo", "")
-	if err != nil {
-		t.Fatalf("create active: %v", err)
-	}
-	_, err = mgr.Create(repoDir, "stale-feat", "repo", "")
-	if err != nil {
-		t.Fatalf("create stale: %v", err)
-	}
-
-	// Only "active-feat" is active
-	stale, err := mgr.DetectStale([]string{"active-feat"})
-	if err != nil {
-		t.Fatalf("DetectStale: %v", err)
-	}
-	if len(stale) != 1 {
-		t.Fatalf("expected 1 stale worktree, got %d", len(stale))
-	}
-	if stale[0].FeatureID != "stale-feat" {
-		t.Errorf("expected stale-feat, got %s", stale[0].FeatureID)
 	}
 }
 
@@ -181,32 +247,6 @@ func TestWorktreeThinStateQueries(t *testing.T) {
 				testutil.CreateBranch(t, repo, "feature/xyz")
 				if got := CurrentBranch(repo); got != "feature/xyz" {
 					t.Errorf("CurrentBranch() = %q, want feature/xyz", got)
-				}
-			},
-		},
-		{
-			name: "uncommitted changes",
-			run: func(t *testing.T) {
-				t.Parallel()
-
-				repo := testutil.InitGitRepo(t)
-				mgr := NewWorktreeManager(t.TempDir())
-				has, err := mgr.HasUncommittedChanges(repo)
-				if err != nil {
-					t.Fatalf("HasUncommittedChanges() error = %v", err)
-				}
-				if has {
-					t.Error("HasUncommittedChanges() = true, want false for clean repo")
-				}
-				if err := os.WriteFile(filepath.Join(repo, "dirty.txt"), []byte("dirty"), 0o644); err != nil {
-					t.Fatal(err)
-				}
-				has, err = mgr.HasUncommittedChanges(repo)
-				if err != nil {
-					t.Fatalf("HasUncommittedChanges() error = %v", err)
-				}
-				if !has {
-					t.Error("HasUncommittedChanges() = false, want true for dirty repo")
 				}
 			},
 		},
@@ -371,6 +411,44 @@ func TestResetToCommit_NoOriginNeeded(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(wtPath, "untracked.txt")); !os.IsNotExist(err) {
 		t.Errorf("untracked.txt should be cleaned, err=%v", err)
+	}
+}
+
+func TestResetToCommitRetriesTransientIndexLock(t *testing.T) {
+	t.Parallel()
+
+	repoDir := testutil.InitGitRepo(t)
+	anchor := testutil.CommitFile(t, repoDir, "anchor.txt", "anchor\n", "anchor commit")
+	testutil.CommitFile(t, repoDir, "later.txt", "later\n", "later commit")
+
+	mgr := NewWorktreeManager(t.TempDir())
+	wtPath, err := mgr.Create(repoDir, "reset-lock-retry", "test-repo", "main")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	lockPath := gitOutput(t, wtPath, "rev-parse", "--git-path", "index.lock")
+	if !filepath.IsAbs(lockPath) {
+		lockPath = filepath.Join(wtPath, lockPath)
+	}
+	if err := os.WriteFile(lockPath, []byte("transient test lock\n"), 0o644); err != nil {
+		t.Fatalf("create transient index lock: %v", err)
+	}
+
+	lockReleased := make(chan struct{})
+	go func() {
+		defer close(lockReleased)
+		timer := time.NewTimer(75 * time.Millisecond)
+		defer timer.Stop()
+		<-timer.C
+		_ = os.Remove(lockPath)
+	}()
+	t.Cleanup(func() { <-lockReleased })
+
+	if err := mgr.ResetToCommit(wtPath, anchor); err != nil {
+		t.Fatalf("ResetToCommit() error = %v, want transient index lock retried", err)
+	}
+	if got := gitOutput(t, wtPath, "rev-parse", "HEAD"); got != anchor {
+		t.Fatalf("HEAD = %s, want anchor %s", got, anchor)
 	}
 }
 

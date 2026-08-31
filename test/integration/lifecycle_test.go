@@ -175,7 +175,7 @@ func TestFeatureLifecycleStateMachine(t *testing.T) {
 		t.Errorf("expected CurrentIteration=1, got %d", f.CurrentIteration)
 	}
 
-	// Step 7: Complete implementation → ReviewPassed → PRReady
+	// Step 7: Complete implementation → ReviewPassed → CodeReady.
 	if err := fm.CompleteImplementation(f.ID); err != nil {
 		t.Fatalf("CompleteImplementation: %v", err)
 	}

@@ -8,10 +8,6 @@ Agentic Orchestrator is configured via a YAML file that controls model selection
 - **State directory**: `~/.agentic-orchestrator/features/` (override: `--state-dir <path>`)
 - **Worktrees**: `~/.agentic-orchestrator/worktrees/`
 
-If a legacy `~/.agentic-workflow/` directory already exists, it is reused in
-place as the runtime parent so existing installs keep working. Fresh installs
-default to the new `~/.agentic-orchestrator/` namespace.
-
 The config file is auto-created on first launch with sensible defaults.
 
 ## Model Configuration
@@ -29,14 +25,14 @@ defaults:
     kb_build: "sonnet[200K]"
 ```
 
-| Role | Default | Used For |
-|------|---------|----------|
-| `research` | `sonnet[200K]` | Research, inquiry, design phases |
-| `planning` | `opus[1M]` | Plan creation and roadmap generation |
-| `implementation` | `opus[1M]` | Code implementation |
-| `review` | `gpt-5.4[272K]` | Final Review loop |
-| `utilities` | `sonnet[200K]` | Chat (AMA), utility skills |
-| `kb_build` | `sonnet[200K]` | Knowledge base construction |
+| Role             | Default         | Used For                             |
+| ---------------- | --------------- | ------------------------------------ |
+| `research`       | `sonnet[200K]`  | Research, inquiry, design phases     |
+| `planning`       | `opus[1M]`      | Plan creation and roadmap generation |
+| `implementation` | `opus[1M]`      | Code implementation                  |
+| `review`         | `gpt-5.4[272K]` | Final Review loop                    |
+| `utilities`      | `sonnet[200K]`  | Chat (AMA), utility skills           |
+| `kb_build`       | `sonnet[200K]`  | Knowledge base construction          |
 
 ## Automatic Bash Review
 
@@ -167,9 +163,9 @@ An OpenCode selection can take three forms, and they resolve differently:
 - **bare slash-form backend id** — a value such as `anthropic/claude-sonnet-4-5` with no `opencode:` prefix resolves to OpenCode when it matches OpenCode's catalog, because OpenCode's ids are the only slash-form ids in the registry. This is the form Agentico persists for the provider-neutral per-phase defaults when OpenCode is the only ready provider, so an OpenCode model **can** become a default without an explicit prefix.
 - **plain alias** — a bare alias such as `opus`, `sonnet`, or `gpt-5.4` (no slash) resolves to its owning native provider (Claude or Codex) and never to OpenCode; OpenCode contributes only slash-form ids to the registry.
 
-When a ready OpenCode CLI is detected, Agentico discovers its live model catalog with `opencode models --verbose` and contributes those entries to the per-phase pickers; if discovery fails it falls back to a small built-in OpenCode catalog. Context-window suffixes such as `[200K]` are Agentico selection metadata and are stripped before the native backend id is handed to OpenCode. When OpenCode does not report pricing for a model (for example a local Ollama model), Agentico records that session at zero cost rather than guessing — the run still completes; only the cost roll-up shows `$0.00`.
+When a ready OpenCode CLI is detected, Agentico discovers its live model catalog with `opencode models --verbose` and contributes those entries to the runtime model catalogue; if discovery fails it falls back to a small built-in OpenCode catalog. Context-window suffixes such as `[200K]` are Agentico selection metadata and are stripped before the native backend id is handed to OpenCode. When OpenCode does not report pricing for a model (for example a local Ollama model), Agentico records that session at zero cost rather than guessing — the run still completes; only the cost roll-up shows `$0.00`.
 
-Use `agentico --refresh-models` when a provider CLI shows new models but Agentico still shows an older catalog. Refresh runs live discovery for all ready providers, updates the version-keyed cache on success, and falls back to the previous cache with a warning if discovery fails.
+Use `agentico server --refresh-models` when a provider CLI shows new models but Agentico still shows an older catalog. Refresh runs live discovery for all ready providers, updates the version-keyed cache on success, and falls back to the previous cache with a warning if discovery fails.
 
 See [Provider Selection](#provider-selection) for installing, authenticating, and troubleshooting OpenCode.
 
@@ -177,11 +173,11 @@ See [Provider Selection](#provider-selection) for installing, authenticating, an
 
 Agentic Orchestrator needs at least one authenticated provider CLI. Claude, Codex, and OpenCode are co-equal: each phase's default is the best available model for that role across every detected provider, and you can override any phase per the table above.
 
-| Provider | CLI | Minimum version | Authenticate | Readiness check |
-|----------|-----|-----------------|--------------|-----------------|
-| Claude | `claude` | 2.1.81 | `claude auth login` or `ANTHROPIC_API_KEY` | `claude auth status` |
-| Codex | `codex` | 0.116.0 | `codex login` | `codex login status` |
-| OpenCode | `opencode` | 1.17.9 | `opencode auth login` | `opencode models` |
+| Provider | CLI        | Minimum version | Authenticate                               | Readiness check      |
+| -------- | ---------- | --------------- | ------------------------------------------ | -------------------- |
+| Claude   | `claude`   | 2.1.81          | `claude auth login` or `ANTHROPIC_API_KEY` | `claude auth status` |
+| Codex    | `codex`    | 0.116.0         | `codex login`                              | `codex login status` |
+| OpenCode | `opencode` | 1.17.9          | `opencode auth login`                      | `opencode models`    |
 
 Restrict the orchestrator to the CLIs you actually have with `--providers <list>` (e.g. `--providers claude,codex,opencode` or `--providers opencode`). With no flag, every installed and ready provider is registered.
 
@@ -209,13 +205,13 @@ Startup gates OpenCode on three checks before it can route a session: the `openc
 
 ### Troubleshooting providers
 
-| Symptom | Cause | Fix |
-|---------|-------|-----|
-| `Provider opencode CLI was not found` | OpenCode is not installed | `curl -fsSL https://opencode.ai/install \| bash`, then relaunch |
-| `opencode … below the minimum supported version` | Installed OpenCode is older than `1.17.9` | Upgrade OpenCode, then relaunch |
-| `Provider opencode is not configured` | No backend provider authenticated | `opencode auth login`, confirm with `opencode models` |
-| OpenCode models missing from the picker | Live catalog discovery failed | Agentico falls back to a small built-in OpenCode catalog; rerun `opencode models --verbose` to debug, or select with the explicit `opencode:<backend/model>` form |
-| OpenCode session cost shows `$0.00` | OpenCode reported no pricing for that model (e.g. a local model) | Expected — the run still completes; only the cost roll-up is zero |
+| Symptom                                          | Cause                                                            | Fix                                                                                                                                                             |
+| ------------------------------------------------ | ---------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Provider opencode CLI was not found`            | OpenCode is not installed                                        | `curl -fsSL https://opencode.ai/install \| bash`, then relaunch                                                                                                 |
+| `opencode … below the minimum supported version` | Installed OpenCode is older than `1.17.9`                        | Upgrade OpenCode, then relaunch                                                                                                                                 |
+| `Provider opencode is not configured`            | No backend provider authenticated                                | `opencode auth login`, confirm with `opencode models`                                                                                                           |
+| OpenCode models missing from runtime defaults    | Live catalog discovery failed                                    | Agentico falls back to a small built-in OpenCode catalog; rerun `opencode models --verbose` to debug, or configure the explicit `opencode:<backend/model>` form |
+| OpenCode session cost shows `$0.00`              | OpenCode reported no pricing for that model (e.g. a local model) | Expected — the run still completes; only the cost roll-up is zero                                                                                               |
 
 ## Pipeline Configuration
 
@@ -236,29 +232,29 @@ defaults:
     manual_publish: true
 ```
 
-| Checkpoint | Gates Before | Default |
-|------------|-------------|---------|
-| `inquiry_review` | Research phase | `true` |
-| `research_review` | Design phase | `true` |
-| `design_review` | Plan phase | `true` |
-| `roadmap_review` | Phase planning | `true` |
-| `phase_plan_review` | Implementation phase | `true` |
-| `manual_publish` | Publish step | `true` |
+| Checkpoint          | Gates Before         | Default |
+| ------------------- | -------------------- | ------- |
+| `inquiry_review`    | Research phase       | `true`  |
+| `research_review`   | Design phase         | `true`  |
+| `design_review`     | Plan phase           | `true`  |
+| `roadmap_review`    | Phase planning       | `true`  |
+| `phase_plan_review` | Implementation phase | `true`  |
+| `manual_publish`    | Publish step         | `true`  |
 
-When a feature is created, these defaults are projected through the selected pipeline profile (see [Feature Lifecycle — Checkpoints](feature-lifecycle.md#checkpoints-review-gates)). Individual checkpoints can be toggled per-feature in the creation wizard.
+When a feature is created, these defaults are projected through the selected pipeline profile (see [Feature Lifecycle — Checkpoints](feature-lifecycle.md#checkpoints)). The Electron creation wizard's Review step edits individual checkpoints per feature before creation; change `config.yaml` only when you want different persistent defaults.
 
-Omitted checkpoint fields in `defaults.checkpoints` or repo `pipeline_gates` default to `true` when the checkpoint is compatible with the selected pipeline. Config saves write all checkpoint fields explicitly. The legacy `plan_review` key is ignored by new config handling; replace it with `roadmap_review` and `phase_plan_review`.
+Omitted checkpoint fields in `defaults.checkpoints` or repo `pipeline_gates` default to `true` when the checkpoint is compatible with the selected pipeline. Config saves write all checkpoint fields explicitly.
 
-In the TUI, Roadmap Review controls the planning review group and Phase Plan Review appears beneath it. Turning Roadmap Review off also turns Phase Plan Review off; turning it back on enables Phase Plan Review by default. Advanced YAML can still set `phase_plan_review: true` with `roadmap_review: false`, and that runtime combination is honored.
+The runtime honors `phase_plan_review: true` with `roadmap_review: false`, although the usual configuration keeps Phase Plan Review subordinate to Roadmap Review.
 
 ## Iteration Limits
 
-| Field | Default | Description |
-|-------|---------|-------------|
-| `max_iterations` | `10` | Maximum iterations per phase before failing |
-| `max_consecutive_failures` | `3` | Consecutive failures before aborting a phase |
-| `max_consecutive_no_progress` | `3` | Consecutive no-progress signals before aborting |
-| `max_phase_plan_iterations` | `10` | Maximum iterations for plan creation/validation |
+| Field                         | Default | Description                                     |
+| ----------------------------- | ------- | ----------------------------------------------- |
+| `max_iterations`              | `10`    | Maximum iterations per phase before failing     |
+| `max_consecutive_failures`    | `3`     | Consecutive failures before aborting a phase    |
+| `max_consecutive_no_progress` | `3`     | Consecutive no-progress signals before aborting |
+| `max_phase_plan_iterations`   | `10`    | Maximum iterations for plan creation/validation |
 
 ## Inquireness
 
@@ -279,7 +275,7 @@ defaults:
     - No linting errors
 ```
 
-A markdown checklist included in implementation prompts as success criteria. Customize this to match your project's quality standards.
+A markdown checklist seeding the intent-shaping stages: Inquire probes it, and the design distills it into its `## Acceptance Criteria` section (on the Medium pipeline, the roadmap distills it into `## Overall Exit Criteria`). Downstream implementers, validators, and reviewers judge against the distilled section — raw exit criteria are inlined in implementation prompts only while no distilled artifact exists. Customize this to match your project's quality standards.
 
 ## Workspace Roots
 
@@ -289,7 +285,7 @@ workspace_roots:
   - /Users/you/Work
 ```
 
-Directories scanned for git repositories at startup. Discovered repos appear in the feature creation wizard's repo picker. Workspace roots are configured during first launch and can be managed via `Shift+W` from the dashboard.
+Directories scanned for git repositories at startup. Discovered repositories appear in the Electron **New feature** form. A workspace root is selected during first launch; you can add and remove workspace roots later from the desktop Settings panel, which refreshes discovery immediately.
 
 ## Repository Configuration
 
@@ -307,29 +303,23 @@ repos:
         manual_publish: true
 ```
 
-Named repositories with optional per-pipeline checkpoint overrides. Repos are auto-registered when selected in the feature creation wizard.
+Named repositories with optional per-pipeline checkpoint overrides. Repositories are registered when selected during feature creation.
 
 The `pipeline_gates` map is keyed by pipeline profile name and overrides the default checkpoints for that profile when creating features in this repo.
 
 ## Pipeline Preferences
 
-`defaults.pipeline_preferences` stores last-used settings per pipeline profile (models, inquireness). When you customize these in the wizard, they are saved here and pre-filled the next time you use the same profile.
+`defaults.pipeline_preferences` stores model and inquireness preferences by pipeline profile. The Electron creation wizard's Review step overrides these preferences per feature before creation; edit `config.yaml` only when you want different persistent defaults.
 
 ## Notifications
 
-The workspace input-alert default can be changed from the TUI with `Shift+E` → Behavior → Input Alerts. A specific feature can override that default with `e` → Behavior → Input Alerts (`default`, `enabled`, or `muted`).
+The runtime configuration retains one notification preference:
 
-| Field | Description |
-|-------|-------------|
-| `notifications.terminal_bundle_id` | Overrides auto-detected terminal app bundle ID for macOS notifications |
+| Field                              | Description                                                        |
+| ---------------------------------- | ------------------------------------------------------------------ |
 | `notifications.mute_feature_input` | Suppresses notifications when an agent is waiting for manual input |
 
-## UI Settings
-
-| Field | Description |
-|-------|-------------|
-| `ui.keyboard_layout` | Keyboard layout for alternative keybindings. Supported: `""` (US default), `"nordic"` |
-| `ui.collapsed_sections` | Dashboard sections collapsed by default (e.g., `["published", "completed"]`) |
+Electron notification controls and OS attention notifications are delivered. The desktop Settings panel toggles a notification preview that includes feature name, attention type, and detail when enabled, and the app fires native OS notifications for attention events honoring the runtime mute setting. Edit `config.yaml` directly only for headless server installs.
 
 ## Observability
 
@@ -342,27 +332,38 @@ observability:
   otel_service_name: agentico
 ```
 
-| Field | Default | Description |
-|-------|---------|-------------|
-| `events` | `true` | Enable JSONL event recording per feature |
-| `otel_enabled` | `false` | Enable OpenTelemetry trace export |
-| `otel_endpoint` | `""` | OTLP endpoint URL |
-| `otel_insecure` | `false` | Allow insecure OTLP connections |
-| `otel_service_name` | `"agentico"` | Service name for OTel traces |
+| Field               | Default      | Description                              |
+| ------------------- | ------------ | ---------------------------------------- |
+| `events`            | `true`       | Enable JSONL event recording per feature |
+| `otel_enabled`      | `false`      | Enable OpenTelemetry trace export        |
+| `otel_endpoint`     | `""`         | OTLP endpoint URL                        |
+| `otel_insecure`     | `false`      | Allow insecure OTLP connections          |
+| `otel_service_name` | `"agentico"` | Service name for OTel traces             |
+
+## Server (`server`)
+
+Startup-only settings for the headless server. They are read once at launch
+and are not part of the runtime-config REST surface.
+
+| Field  | Default | Description                                                                                      |
+| ------ | ------- | ------------------------------------------------------------------------------------------------ |
+| `name` | `""`    | Server display name. Precedence: `--name` flag > `server.name` > generated name persisted in the runtime directory (max 64 chars). |
 
 ## Launch Flags
 
-Launch flags configure how the terminal UI or foreground server starts. `agentico [flags]` starts a local loopback REST runtime and connects the terminal UI through the API-backed client. `agentico server [flags]` starts the foreground loopback HTTP server. Feature name, description, repos, checkpoint selection, and publish gating are selected inside the feature creation wizard.
+Plain `agentico` starts or focuses the installed Electron desktop app. Launch flags configure the explicit `agentico server [flags]` foreground loopback REST runtime for headless automation. The packaged desktop app launches and supervises its matched bundled runtime automatically.
 
-| Flag | Description | Default |
-|------|-------------|---------|
-| `--config <path>` | Config file path | `~/.agentic-orchestrator/config.yaml` |
-| `--state-dir <path>` | State directory path | `~/.agentic-orchestrator/features` |
-| `--providers <list>` | Comma-separated provider list (e.g., `claude,codex,opencode`) | all detected |
-| `--refresh-models` | Refresh provider model catalogs before opening the TUI | `false` |
-| `--dangerously-skip-permissions` | Skip all permission prompts | `false` |
-| `--help`, `-h` | Print usage | - |
-| `--version`, `-v` | Print version | - |
+| Flag                             | Description                                                     | Default                               |
+| -------------------------------- | --------------------------------------------------------------- | ------------------------------------- |
+| `--config <path>`                | Config file path                                                | `~/.agentic-orchestrator/config.yaml` |
+| `--state-dir <path>`             | State directory path                                            | `~/.agentic-orchestrator/features`    |
+| `--providers <list>`             | Comma-separated provider list (e.g., `claude,codex,opencode`)   | all detected                          |
+| `--refresh-models`               | Refresh provider model catalogs before the server becomes ready | `false`                               |
+| `--listen [host:]port`           | Bind address (loopback hosts only: `127.0.0.1`, `localhost`, `[::1]`) | ephemeral `127.0.0.1` port      |
+| `--name <name>`                  | Server display name (max 64 chars; overrides `server.name` config and the persisted generated name) | generated, persisted per runtime dir |
+| `--dangerously-skip-permissions` | Skip all permission prompts                                     | `false`                               |
+| `--help`, `-h`                   | Print usage                                                     | -                                     |
+| `--version`, `-v`                | Print version                                                   | -                                     |
 
 The same launch flags are accepted by `agentico server`.
 
@@ -370,9 +371,9 @@ The same launch flags are accepted by `agentico server`.
 
 Run `agentico update` to upgrade to the latest stable release, or `agentico update [--check|-n]` to report the current and latest available versions without installing. The `--check` form (alias `-n`) exits `0` and prints an already-up-to-date message when you are already on the newest release.
 
-| Invocation | Description |
-|------------|-------------|
-| `agentico update` | Upgrade to the latest stable release |
+| Invocation                                       | Description                                  |
+| ------------------------------------------------ | -------------------------------------------- |
+| `agentico update`                                | Upgrade to the latest stable release         |
 | `agentico update --check` / `agentico update -n` | Check for a newer release without installing |
 
 ## State Directory Layout
@@ -385,9 +386,5 @@ Run `agentico update` to upgrade to the latest stable release, or `agentico upda
   skills/                  # Reconciled skill definitions
   guidelines/              # Reconciled guideline definitions
   permissions/             # Permission cache (global.json, per-repo JSON)
-  agentico.log             # Redirected stderr/log output while the TUI is running
+  agentico.log             # Runtime log output
 ```
-
-Legacy installs that already have `~/.agentic-workflow/` keep using that
-directory in place; the layout above is identical, only the parent name
-differs.

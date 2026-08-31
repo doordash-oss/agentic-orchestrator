@@ -128,6 +128,29 @@ func TestClaudeProtocol_UpdatesContextWindowFromResultModelUsage(t *testing.T) {
 	}
 }
 
+func TestClaudeProtocol_AssignsRootAndTaskOrigins(t *testing.T) {
+	p := NewProtocol(llm.ProtocolOpts{})
+
+	root, err := p.ParseLine([]byte(`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"working"}]}}`))
+	if err != nil {
+		t.Fatalf("ParseLine(root): %v", err)
+	}
+	if len(root) != 1 || !root[0].Origin.IsRoot() {
+		t.Fatalf("root origin = %+v", root)
+	}
+
+	task, err := p.ParseLine([]byte(`{"type":"system","subtype":"task_progress","task_id":"task-1","session_id":"child-1","description":"checking tests","last_tool_name":"Bash"}`))
+	if err != nil {
+		t.Fatalf("ParseLine(task): %v", err)
+	}
+	if len(task) != 1 ||
+		task[0].Origin.Kind != llm.EventOriginTask ||
+		task[0].Origin.TaskID != "task-1" ||
+		task[0].Origin.ChildSessionID != "child-1" {
+		t.Fatalf("task origin = %+v", task)
+	}
+}
+
 func TestClaudeProtocol_Interrupt_WritesControlRequest(t *testing.T) {
 	p := NewProtocol(llm.ProtocolOpts{})
 	var buf bytes.Buffer
@@ -168,6 +191,131 @@ func TestClaudeProtocol_Interrupt_WithoutStdin_ReturnsError(t *testing.T) {
 	// No SetStdin call — writer is nil.
 	if err := p.Interrupt(); err == nil {
 		t.Fatal("Interrupt() with nil stdin should return error, got nil")
+	}
+}
+
+const askUserQuestionsInput = `{"questions":[{"question":"Which approach?","header":"Scope","multiSelect":false,"options":[{"label":"Option A (Recommended)","description":"a","confidence":0.8},{"label":"Option B","description":"b","confidence":0.2}]}]}`
+
+type askUserControlResponse struct {
+	Type     string `json:"type"`
+	Response struct {
+		Subtype   string `json:"subtype"`
+		RequestID string `json:"request_id"`
+		Response  struct {
+			Behavior     string `json:"behavior"`
+			UpdatedInput struct {
+				Questions []struct {
+					Question string `json:"question"`
+					Options  []struct {
+						Label       string `json:"label"`
+						Description string `json:"description"`
+					} `json:"options"`
+				} `json:"questions"`
+				Answers map[string]string `json:"answers"`
+			} `json:"updatedInput"`
+		} `json:"response"`
+	} `json:"response"`
+}
+
+func respondToAskUser(t *testing.T, answers map[string]string) askUserControlResponse {
+	return respondToAskUserInput(t, json.RawMessage(askUserQuestionsInput), answers)
+}
+
+func respondToAskUserInput(t *testing.T, questions json.RawMessage, answers map[string]string) askUserControlResponse {
+	t.Helper()
+	p := NewProtocol(llm.ProtocolOpts{})
+	var buf bytes.Buffer
+	p.SetStdin(&buf)
+	if err := p.RespondToAskUser("req-1", questions, answers, nil); err != nil {
+		t.Fatalf("RespondToAskUser: %v", err)
+	}
+	var out askUserControlResponse
+	if err := json.Unmarshal([]byte(strings.TrimSpace(buf.String())), &out); err != nil {
+		t.Fatalf("unmarshal control response: %v (raw=%q)", err, buf.String())
+	}
+	if out.Response.Response.Behavior != "allow" {
+		t.Fatalf("behavior = %q, want allow", out.Response.Response.Behavior)
+	}
+	return out
+}
+
+func TestClaudeProtocol_RespondToAskUser_ExactLabelPassesThrough(t *testing.T) {
+	out := respondToAskUser(t, map[string]string{"Which approach?": "Option B"})
+	if got := out.Response.Response.UpdatedInput.Answers["Which approach?"]; got != "Option B" {
+		t.Errorf("answer = %q, want Option B", got)
+	}
+	if got := len(out.Response.Response.UpdatedInput.Questions[0].Options); got != 2 {
+		t.Errorf("options len = %d, want 2 (no injection for a matched answer)", got)
+	}
+}
+
+func TestClaudeProtocol_RespondToAskUser_RecommendedSuffixNormalized(t *testing.T) {
+	out := respondToAskUser(t, map[string]string{"Which approach?": "Option A"})
+	if got := out.Response.Response.UpdatedInput.Answers["Which approach?"]; got != "Option A (Recommended)" {
+		t.Errorf("answer = %q, want normalized to the full label", got)
+	}
+	if got := len(out.Response.Response.UpdatedInput.Questions[0].Options); got != 2 {
+		t.Errorf("options len = %d, want 2", got)
+	}
+}
+
+func TestClaudeProtocol_RespondToAskUser_TruncatedAnswerMatchesLabel(t *testing.T) {
+	out := respondToAskUser(t, map[string]string{"Which approach?": "Option A (Recomm..."})
+	if got := out.Response.Response.UpdatedInput.Answers["Which approach?"]; got != "Option A (Recommended)" {
+		t.Errorf("answer = %q, want the untruncated label", got)
+	}
+}
+
+func TestClaudeProtocol_RespondToAskUser_FreeTextInjectedAsOption(t *testing.T) {
+	const customAnswer = "use a third custom approach"
+	out := respondToAskUser(t, map[string]string{"Which approach?": customAnswer})
+	updated := out.Response.Response.UpdatedInput
+	if got := updated.Answers["Which approach?"]; got != customAnswer {
+		t.Errorf("answer = %q, want the free text verbatim", got)
+	}
+	opts := updated.Questions[0].Options
+	if len(opts) != 3 {
+		t.Fatalf("options len = %d, want 3", len(opts))
+	}
+	if opts[2].Label != customAnswer || opts[2].Description != "User-provided custom answer." {
+		t.Errorf("injected option = %+v, want schema-valid custom option", opts[2])
+	}
+}
+
+func TestClaudeProtocol_RespondToAskUser_FreeTextForOptionlessQuestion(t *testing.T) {
+	questions := json.RawMessage(`{"questions":[{"question":"What version?","header":"Version","multiSelect":false,"options":[]}]}`)
+	out := respondToAskUserInput(t, questions, map[string]string{"What version?": "1.2.3"})
+	opts := out.Response.Response.UpdatedInput.Questions[0].Options
+	if len(opts) != 2 {
+		t.Fatalf("options = %+v, want two schema-valid options", opts)
+	}
+	if opts[0].Label != "Other" || opts[0].Description != "Provide a different custom answer." {
+		t.Errorf("padding option = %+v, want stable schema-valid placeholder", opts[0])
+	}
+	if opts[1].Label != "1.2.3" || opts[1].Description != "User-provided custom answer." {
+		t.Errorf("custom option = %+v, want schema-valid free-text selection", opts[1])
+	}
+}
+
+func TestClaudeProtocol_RespondToAskUser_FreeTextForFourOptionQuestion(t *testing.T) {
+	questions := json.RawMessage(`{"questions":[{"question":"Which approach?","header":"Scope","multiSelect":false,"options":[{"label":"A","description":"first"},{"label":"B","description":"second"},{"label":"C","description":"third"},{"label":"D","description":"fourth"}]}]}`)
+	const customAnswer = "Use a custom fifth approach"
+	out := respondToAskUserInput(t, questions, map[string]string{"Which approach?": customAnswer})
+	updated := out.Response.Response.UpdatedInput
+	if got := updated.Answers["Which approach?"]; got != customAnswer {
+		t.Errorf("answer = %q, want the free text verbatim", got)
+	}
+	opts := updated.Questions[0].Options
+	if len(opts) != 4 {
+		t.Fatalf("options = %+v, want four schema-valid options", opts)
+	}
+	for i, want := range []string{"A", "B", "C"} {
+		if opts[i].Label != want {
+			t.Errorf("option %d label = %q, want preserved %q", i, opts[i].Label, want)
+		}
+	}
+	if opts[3].Label != customAnswer || opts[3].Description != "User-provided custom answer." {
+		t.Errorf("final option = %+v, want schema-valid custom answer replacing D", opts[3])
 	}
 }
 

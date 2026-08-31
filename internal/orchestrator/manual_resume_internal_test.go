@@ -138,8 +138,8 @@ func TestResumeFeatureClaimsInterruptedSequentialProviderSession(t *testing.T) {
 	registry := llm.NewRegistry()
 	registry.Register(&codex.Provider{})
 	sm := mocks.NewMockSessionManager()
-	var activeSessions []session.SessionView
-	sm.FeatureSessionsFn = func(string) []session.SessionView {
+	var activeSessions []ports.SessionView
+	sm.FeatureSessionsFn = func(string) []ports.SessionView {
 		return activeSessions
 	}
 	sm.StartSessionFn = func(
@@ -504,8 +504,8 @@ func TestResumeFeatureClaimsInterruptedKnowledgeBaseRepositories(t *testing.T) {
 	registry := llm.NewRegistry()
 	registry.Register(&codex.Provider{})
 	sm := mocks.NewMockSessionManager()
-	var activeSessions []session.SessionView
-	sm.FeatureSessionsFn = func(string) []session.SessionView {
+	var activeSessions []ports.SessionView
+	sm.FeatureSessionsFn = func(string) []ports.SessionView {
 		return activeSessions
 	}
 	sm.StartSessionFn = func(

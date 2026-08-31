@@ -20,12 +20,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-
-	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
-
-// WorktreeInfo aliases the canonical port type.
-type WorktreeInfo = ports.WorktreeInfo
 
 type WorktreeManager struct {
 	BaseDir string
@@ -33,6 +28,13 @@ type WorktreeManager struct {
 
 func NewWorktreeManager(baseDir string) *WorktreeManager {
 	return &WorktreeManager{BaseDir: baseDir}
+}
+
+// CurrentHeadSHA reports the full SHA of HEAD in the given worktree,
+// exposing the package-level helper through the manager so refactor-child
+// exact-base capture works through the feature.WorktreeOps wiring.
+func (w *WorktreeManager) CurrentHeadSHA(worktreePath string) (string, error) {
+	return CurrentHeadSHA(worktreePath)
 }
 
 func (w *WorktreeManager) ExpectedPath(featureSlug, repoName string) string {
@@ -87,7 +89,7 @@ func (w *WorktreeManager) Create(repoPath, featureSlug, repoName, startPoint str
 // hasCommits reports whether the repository has at least one commit (a born
 // HEAD). A freshly initialized repo returns false.
 func hasCommits(repoPath string) bool {
-	cmd := exec.Command("git", "-C", repoPath, "rev-parse", "--verify", "--quiet", "HEAD")
+	cmd := readGitCmd(repoPath, "rev-parse", "--verify", "--quiet", "HEAD")
 	return cmd.Run() == nil
 }
 
@@ -96,7 +98,7 @@ func hasCommits(repoPath string) bool {
 // (main, master).
 func DefaultBranch(repoPath string) string {
 	// Try remote HEAD symref (most reliable for repos with a remote)
-	cmd := exec.Command("git", "-C", repoPath, "symbolic-ref", "refs/remotes/origin/HEAD")
+	cmd := readGitCmd(repoPath, "symbolic-ref", "refs/remotes/origin/HEAD")
 	if out, err := cmd.Output(); err == nil {
 		ref := strings.TrimSpace(string(out))
 		// refs/remotes/origin/main → main
@@ -106,7 +108,7 @@ func DefaultBranch(repoPath string) string {
 	}
 
 	// Check local HEAD symref — works for any repo regardless of remote
-	cmd = exec.Command("git", "-C", repoPath, "symbolic-ref", "HEAD")
+	cmd = readGitCmd(repoPath, "symbolic-ref", "HEAD")
 	if out, err := cmd.Output(); err == nil {
 		ref := strings.TrimSpace(string(out))
 		// refs/heads/trunk → trunk
@@ -117,7 +119,7 @@ func DefaultBranch(repoPath string) string {
 
 	// Fallback: check if main or master branches exist locally
 	for _, name := range []string{"main", "master"} {
-		cmd = exec.Command("git", "-C", repoPath, "rev-parse", "--verify", name)
+		cmd = readGitCmd(repoPath, "rev-parse", "--verify", name)
 		if err := cmd.Run(); err == nil {
 			return name
 		}
@@ -128,7 +130,7 @@ func DefaultBranch(repoPath string) string {
 
 // CurrentBranch returns the branch currently checked out in the given repo.
 func CurrentBranch(repoPath string) string {
-	cmd := exec.Command("git", "-C", repoPath, "rev-parse", "--abbrev-ref", "HEAD")
+	cmd := readGitCmd(repoPath, "rev-parse", "--abbrev-ref", "HEAD")
 	out, err := cmd.Output()
 	if err != nil {
 		return ""
@@ -136,13 +138,28 @@ func CurrentBranch(repoPath string) string {
 	return strings.TrimSpace(string(out))
 }
 
+// Remove deletes a worktree and, when requested, its ephemeral branch,
+// discovering the main repository and branch from the live worktree.
+// Material cleanup failures (unremovable worktree, failed prune after a
+// manual fallback, failed branch deletion) are returned so callers can
+// record and retry them; genuinely absent resources (missing worktree
+// directory, already-deleted branch) are idempotent success.
+//
+// Once a worktree is deregistered its identity can no longer be discovered
+// from the path, so callers that must guarantee branch deletion across
+// retries (e.g. child integration cleanup) should use RemoveRef with the
+// recorded identity instead.
 func (w *WorktreeManager) Remove(worktreePath string, deleteBranch bool) error {
 	// Find the main repo for this worktree
-	cmd := exec.Command("git", "-C", worktreePath, "rev-parse", "--git-common-dir")
+	cmd := readGitCmd(worktreePath, "rev-parse", "--git-common-dir")
 	out, err := cmd.Output()
 	if err != nil {
-		// Worktree may already be gone; just remove directory
-		return os.RemoveAll(worktreePath)
+		// Worktree may already be gone; just remove the directory. Removing
+		// an absent path is idempotent success.
+		if rmErr := os.RemoveAll(worktreePath); rmErr != nil {
+			return fmt.Errorf("removing worktree directory %s: %w", worktreePath, rmErr)
+		}
+		return nil
 	}
 	commonDir := strings.TrimSpace(string(out))
 	mainRepo := filepath.Dir(commonDir)
@@ -150,134 +167,105 @@ func (w *WorktreeManager) Remove(worktreePath string, deleteBranch bool) error {
 	// Get branch name before removing
 	var branch string
 	if deleteBranch {
-		branchCmd := exec.Command("git", "-C", worktreePath, "rev-parse", "--abbrev-ref", "HEAD")
+		branchCmd := readGitCmd(worktreePath, "rev-parse", "--abbrev-ref", "HEAD")
 		branchOut, err := branchCmd.Output()
 		if err == nil {
 			branch = strings.TrimSpace(string(branchOut))
 		}
 	}
 
-	// Remove worktree
-	removeCmd := exec.Command("git", "-C", mainRepo, "worktree", "remove", worktreePath, "--force")
-	if out, err := removeCmd.CombinedOutput(); err != nil {
-		// Try manual removal
-		_ = os.RemoveAll(worktreePath)
-		pruneCmd := exec.Command("git", "-C", mainRepo, "worktree", "prune")
-		_ = pruneCmd.Run()
-		_ = out // suppress unused
+	return w.RemoveRef(worktreePath, mainRepo, branch)
+}
+
+// RemoveRef deletes a worktree and its ephemeral branch using the recorded
+// main-repository and branch identity, so a retried cleanup still reaches
+// the branch even after an earlier partial removal deregistered the
+// worktree. An empty branch skips branch deletion; an already-absent branch
+// is success.
+func (w *WorktreeManager) RemoveRef(worktreePath, mainRepo, branch string) error {
+	if mainRepo == "" {
+		return fmt.Errorf("main repository is required to remove worktree %s and branch %q", worktreePath, branch)
 	}
 
-	// Delete branch if requested
-	if deleteBranch && branch != "" && branch != "main" && branch != "master" {
-		delCmd := exec.Command("git", "-C", mainRepo, "branch", "-D", branch)
-		_ = delCmd.Run()
+	// Remove worktree
+	removeCmd := exec.Command("git", "-C", mainRepo, "worktree", "remove", worktreePath, "--force")
+	out, removeErr := removeCmd.CombinedOutput()
+	// git can report success while leaving the directory behind (it logs
+	// "failed to delete" but still deregisters the worktree), so the absence
+	// of the directory is the real success signal. Fall back to manual
+	// removal plus a prune; both must succeed for cleanup to count as done.
+	if _, statErr := os.Stat(worktreePath); removeErr != nil || !os.IsNotExist(statErr) {
+		if rmErr := os.RemoveAll(worktreePath); rmErr != nil {
+			return fmt.Errorf("removing worktree %s: %s (manual removal failed: %v)", worktreePath, strings.TrimSpace(string(out)), rmErr)
+		}
+		if pruneErr := exec.Command("git", "-C", mainRepo, "worktree", "prune").Run(); pruneErr != nil {
+			return fmt.Errorf("pruning worktree registry for %s after manual removal: %w", worktreePath, pruneErr)
+		}
+	}
+
+	// Delete branch if requested; an already-absent branch is success.
+	if branch != "" && branch != "main" && branch != "master" {
+		verify := readGitCmd(mainRepo, "rev-parse", "--verify", "--quiet", "refs/heads/"+branch)
+		if verify.Run() == nil {
+			delCmd := exec.Command("git", "-C", mainRepo, "branch", "-D", branch)
+			if out, err := delCmd.CombinedOutput(); err != nil {
+				return fmt.Errorf("deleting branch %s: %s: %w", branch, strings.TrimSpace(string(out)), err)
+			}
+		}
 	}
 
 	return nil
 }
 
-func (w *WorktreeManager) List() ([]WorktreeInfo, error) {
-	var result []WorktreeInfo
-
-	entries, err := os.ReadDir(w.BaseDir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("listing worktree directory: %w", err)
-	}
-
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		featureDir := filepath.Join(w.BaseDir, entry.Name())
-		repoEntries, err := os.ReadDir(featureDir)
-		if err != nil {
-			continue
-		}
-		for _, re := range repoEntries {
-			if !re.IsDir() {
-				continue
-			}
-			wtPath := filepath.Join(featureDir, re.Name())
-			branch := CurrentBranch(wtPath)
-			result = append(result, WorktreeInfo{
-				Path:      wtPath,
-				Branch:    branch,
-				RepoName:  re.Name(),
-				FeatureID: entry.Name(),
-			})
-		}
-	}
-
-	return result, nil
-}
-
-func (w *WorktreeManager) DetectStale(activeFeatureIDs []string) ([]WorktreeInfo, error) {
-	all, err := w.List()
-	if err != nil {
-		return nil, err
-	}
-	active := make(map[string]bool)
-	for _, id := range activeFeatureIDs {
-		active[id] = true
-	}
-	var stale []WorktreeInfo
-	for _, wt := range all {
-		if !active[wt.FeatureID] {
-			stale = append(stale, wt)
-		}
-	}
-	return stale, nil
-}
-
 // ResetToBase hard-resets a worktree back to its base branch, discarding all
 // local commits and changes on the feature branch.
 func (w *WorktreeManager) ResetToBase(worktreePath, baseBranch string) error {
+	mu := worktreeMutationLock(worktreePath)
+	mu.Lock()
+	defer mu.Unlock()
+
 	// Fetch the latest base branch so origin/<baseBranch> is up-to-date
 	fetchCmd := exec.Command("git", "-C", worktreePath, "fetch", "origin", baseBranch)
 	if out, err := fetchCmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("fetching origin/%s: %s: %w", baseBranch, strings.TrimSpace(string(out)), err)
 	}
-	cmd := exec.Command("git", "-C", worktreePath, "reset", "--hard", "origin/"+baseBranch)
-	if out, err := cmd.CombinedOutput(); err != nil {
+	if out, err := runGitMutationWithLockRetry(worktreePath, "reset", "--hard", "origin/"+baseBranch); err != nil {
 		return fmt.Errorf("resetting worktree to %s: %s: %w", baseBranch, strings.TrimSpace(string(out)), err)
 	}
-	cmd = exec.Command("git", "-C", worktreePath, "clean", "-fd")
-	_ = cmd.Run()
+	if out, err := runGitMutationWithLockRetry(worktreePath, "clean", "-fd"); err != nil {
+		return fmt.Errorf("cleaning worktree after reset to %s: %s: %w", baseBranch, strings.TrimSpace(string(out)), err)
+	}
 	return nil
 }
 
 // ResetToBaseLocal hard-resets a worktree back to its local base branch ref,
 // without fetching from any remote. Used for repos without an origin remote.
 func (w *WorktreeManager) ResetToBaseLocal(worktreePath, baseBranch string) error {
-	cmd := exec.Command("git", "-C", worktreePath, "reset", "--hard", baseBranch)
-	if out, err := cmd.CombinedOutput(); err != nil {
+	mu := worktreeMutationLock(worktreePath)
+	mu.Lock()
+	defer mu.Unlock()
+
+	if out, err := runGitMutationWithLockRetry(worktreePath, "reset", "--hard", baseBranch); err != nil {
 		return fmt.Errorf("resetting to local %s: %s: %w", baseBranch, strings.TrimSpace(string(out)), err)
 	}
-	cmd = exec.Command("git", "-C", worktreePath, "clean", "-fd")
-	_ = cmd.Run()
+	if out, err := runGitMutationWithLockRetry(worktreePath, "clean", "-fd"); err != nil {
+		return fmt.Errorf("cleaning worktree after reset to local %s: %s: %w", baseBranch, strings.TrimSpace(string(out)), err)
+	}
 	return nil
 }
 
 // ResetToCommit hard-resets a worktree to a local commit SHA without fetching
 // from any remote, then cleans untracked files.
 func (w *WorktreeManager) ResetToCommit(worktreePath, commitSHA string) error {
-	cmd := exec.Command("git", "-C", worktreePath, "reset", "--hard", commitSHA)
-	if out, err := cmd.CombinedOutput(); err != nil {
+	mu := worktreeMutationLock(worktreePath)
+	mu.Lock()
+	defer mu.Unlock()
+
+	if out, err := runGitMutationWithLockRetry(worktreePath, "reset", "--hard", commitSHA); err != nil {
 		return fmt.Errorf("resetting to commit %s: %s: %w", commitSHA, strings.TrimSpace(string(out)), err)
 	}
-	cmd = exec.Command("git", "-C", worktreePath, "clean", "-fd")
-	_ = cmd.Run()
-	return nil
-}
-
-func (w *WorktreeManager) HasUncommittedChanges(repoPath string) (bool, error) {
-	cmd := exec.Command("git", "-C", repoPath, "status", "--porcelain")
-	out, err := cmd.Output()
-	if err != nil {
-		return false, fmt.Errorf("checking git status: %w", err)
+	if out, err := runGitMutationWithLockRetry(worktreePath, "clean", "-fd"); err != nil {
+		return fmt.Errorf("cleaning worktree after reset to commit %s: %s: %w", commitSHA, strings.TrimSpace(string(out)), err)
 	}
-	return len(strings.TrimSpace(string(out))) > 0, nil
+	return nil
 }

@@ -13,13 +13,10 @@
 // limitations under the License.
 
 // Package agent — final_review_helpers.go owns the shared helpers used by
-// the unified feature-level Final Review loop (final_review_loop.go) and
-// the post-cycle Final Review entry (also in final_review_loop.go for
-// post-publish rebase/review-comments cycles).
+// the unified feature-level Final Review loop (final_review_loop.go).
 //
 // The prompt builders and prior-implementation-evidence resolver stay here
-// because both the feature-level Final Review and the feature-level
-// post-cycle Final Review share them.
+// because the feature-level Final Review loop is the single consumer.
 package agent
 
 import (
@@ -37,10 +34,14 @@ type FinalFixPromptOpts struct {
 	Feedback           string
 	FeedbackPath       string
 	ExitCriteria       string
+	AcceptanceClause   string
 	Iteration          int
 	Publishable        bool
 	DesignArtifactPath string   // retained for caller compatibility; no longer re-injected
 	Images             []string // user-attached visual references, re-injected per iteration
+	// RefactorPassForkPoint resolves the spec's "fork point" references for a
+	// refactor child ("repo @ sha"). Empty for top-level features.
+	RefactorPassForkPoint string
 }
 
 // BuildFinalFixPrompt constructs the prompt for the fix agent session.
@@ -56,10 +57,12 @@ func BuildFinalFixPrompt(opts FinalFixPromptOpts) string {
 		},
 		Iteration:                         opts.Iteration,
 		ExitCriteria:                      opts.ExitCriteria,
+		AcceptanceClause:                  opts.AcceptanceClause,
 		Feedback:                          opts.Feedback,
 		FeedbackPath:                      opts.FeedbackPath,
 		IncludeManualVerificationOutcomes: feedbackMentionsManualVerification(opts.Feedback),
 		Publishable:                       opts.Publishable,
+		RefactorPassForkPoint:             opts.RefactorPassForkPoint,
 	})
 }
 

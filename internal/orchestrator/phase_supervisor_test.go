@@ -17,6 +17,8 @@ package orchestrator
 import (
 	"errors"
 	"fmt"
+	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -25,7 +27,6 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
-	"github.com/doordash-oss/agentic-orchestrator/internal/session"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
 )
 
@@ -42,7 +43,8 @@ func TestPhaseSupervisorSingleShotCompletesOnSessionResultBeforeProcessExit(t *t
 	sm := mocks.NewMockSessionManager()
 	sess := mocks.NewMockSessionView(inquireSessionID, "feat")
 	sess.PhaseVal = feature.PhaseInquire
-	sm.GetSessionFn = func(id string) session.SessionView {
+	configureSuccessfulRootTurn(sess)
+	sm.GetSessionFn = func(id string) ports.SessionView {
 		if id != inquireSessionID {
 			t.Fatalf("GetSession(%q), want feat-inquire", id)
 		}
@@ -50,8 +52,9 @@ func TestPhaseSupervisorSingleShotCompletesOnSessionResultBeforeProcessExit(t *t
 	}
 
 	supervisor := newPhaseSupervisor(phaseSupervisorConfig{
-		Completion: sink,
-		Sessions:   sm,
+		Completion:    sink,
+		Sessions:      sm,
+		CommitOutcome: commitAllOutcomes,
 	})
 	supervisor.superviseSingleShotSession("feat", inquireSessionID, feature.PhaseInquire)
 
@@ -74,11 +77,13 @@ func TestPhaseSupervisorSingleShotDedupe(t *testing.T) {
 	sm := mocks.NewMockSessionManager()
 	sess := mocks.NewMockSessionView(inquireSessionID, "feat")
 	sess.PhaseVal = feature.PhaseInquire
-	sm.GetSessionFn = func(string) session.SessionView { return sess }
+	configureSuccessfulRootTurn(sess)
+	sm.GetSessionFn = func(string) ports.SessionView { return sess }
 
 	supervisor := newPhaseSupervisor(phaseSupervisorConfig{
-		Completion: sink,
-		Sessions:   sm,
+		Completion:    sink,
+		Sessions:      sm,
+		CommitOutcome: commitAllOutcomes,
 	})
 	supervisor.superviseSingleShotSession("feat", inquireSessionID, feature.PhaseInquire)
 	supervisor.superviseSingleShotSession("feat", inquireSessionID, feature.PhaseInquire)
@@ -99,11 +104,13 @@ func TestPhaseSupervisorSingleShotAllowsReentrantRetryForSameSessionID(t *testin
 	sm := mocks.NewMockSessionManager()
 	first := mocks.NewMockSessionView(inquireSessionID, "feat")
 	first.PhaseVal = feature.PhaseInquire
+	configureSuccessfulRootTurn(first)
 	retry := mocks.NewMockSessionView(inquireSessionID, "feat")
 	retry.PhaseVal = feature.PhaseInquire
+	configureSuccessfulRootTurn(retry)
 
 	var getCount atomic.Int32
-	sm.GetSessionFn = func(id string) session.SessionView {
+	sm.GetSessionFn = func(id string) ports.SessionView {
 		if id != inquireSessionID {
 			t.Fatalf("GetSession(%q), want feat-inquire", id)
 		}
@@ -119,8 +126,9 @@ func TestPhaseSupervisorSingleShotAllowsReentrantRetryForSameSessionID(t *testin
 		retry.StatusChVal <- "SUCCESS"
 	})
 	supervisor = newPhaseSupervisor(phaseSupervisorConfig{
-		Completion: sink,
-		Sessions:   sm,
+		Completion:    sink,
+		Sessions:      sm,
+		CommitOutcome: commitAllOutcomes,
 	})
 	supervisor.superviseSingleShotSession("feat", inquireSessionID, feature.PhaseInquire)
 
@@ -148,7 +156,7 @@ func TestPhaseSupervisorSingleShotFailsWhenSessionExitsWithoutResult(t *testing.
 	sess := mocks.NewMockSessionView("feat-research", "feat")
 	sess.PhaseVal = feature.PhaseResearch
 	sess.ErrorDetailVal = "process exited unexpectedly"
-	sm.GetSessionFn = func(string) session.SessionView { return sess }
+	sm.GetSessionFn = func(string) ports.SessionView { return sess }
 
 	supervisor := newPhaseSupervisor(phaseSupervisorConfig{
 		Completion: sink,
@@ -164,6 +172,45 @@ func TestPhaseSupervisorSingleShotFailsWhenSessionExitsWithoutResult(t *testing.
 	}
 	if call.input.ErrorDetail != "process exited unexpectedly" {
 		t.Fatalf("ErrorDetail = %q, want session detail", call.input.ErrorDetail)
+	}
+}
+
+func TestPhaseSupervisorSingleShotReportsTerminalOutcomeViolation(t *testing.T) {
+	sink := newRecordingPhaseCompletionSink()
+	sm := mocks.NewMockSessionManager()
+	sess := mocks.NewMockSessionView("feat-kbv2-my-service-0123456789ab", "feat")
+	sess.PhaseVal = feature.PhaseKnowledgeBase
+	sess.LogFilePathVal = filepath.Join(t.TempDir(), "output.txt")
+	sess.CostVal = &llm.ResultMessage{Subtype: "success", StopReason: "end_turn"}
+	sm.GetSessionFn = func(string) ports.SessionView { return sess }
+
+	supervisor := newPhaseSupervisor(phaseSupervisorConfig{
+		Completion: sink,
+		Sessions:   sm,
+	})
+	supervisor.superviseSingleShotSession("feat", sess.ID(), feature.PhaseKnowledgeBase)
+
+	// The first two clean turns receive bounded correction nudges. The third
+	// missing outcome is terminal and must be reported as a protocol failure.
+	for range 3 {
+		sess.StatusChVal <- phaseSupervisorStatusSuccess
+	}
+
+	call := sink.wait(t)
+	if call.input.FailureType != feature.FailureProtocolViolation {
+		t.Errorf("FailureType = %q, want %q", call.input.FailureType, feature.FailureProtocolViolation)
+	}
+	if !strings.Contains(call.input.ErrorDetail, string(agent.RoleKnowledgeBaseBuilder)) {
+		t.Errorf("ErrorDetail = %q, want knowledge base role", call.input.ErrorDetail)
+	}
+	if want := filepath.Dir(sess.LogFilePathVal); !strings.Contains(call.input.ErrorDetail, want) {
+		t.Errorf("ErrorDetail = %q, want artifact dir %q", call.input.ErrorDetail, want)
+	}
+	if strings.Contains(call.input.ErrorDetail, "<unresolved>") {
+		t.Errorf("ErrorDetail = %q, want resolved artifact dir", call.input.ErrorDetail)
+	}
+	if got := len(sess.SentMessages); got != 2 {
+		t.Errorf("completion correction nudges = %d, want 2", got)
 	}
 }
 
@@ -290,12 +337,13 @@ func TestPhaseSupervisorSingleShotClassifiesDoneResultCost(t *testing.T) {
 	sm := mocks.NewMockSessionManager()
 	sess := mocks.NewMockSessionView("feat-design", "feat")
 	sess.PhaseVal = feature.PhaseDesign
-	sess.CostVal = &llm.ResultMessage{Subtype: "success"}
-	sm.GetSessionFn = func(string) session.SessionView { return sess }
+	configureSuccessfulRootTurn(sess)
+	sm.GetSessionFn = func(string) ports.SessionView { return sess }
 
 	supervisor := newPhaseSupervisor(phaseSupervisorConfig{
-		Completion: sink,
-		Sessions:   sm,
+		Completion:    sink,
+		Sessions:      sm,
+		CommitOutcome: commitAllOutcomes,
 	})
 	supervisor.superviseSingleShotSession("feat", "feat-design", feature.PhaseDesign)
 
@@ -310,6 +358,8 @@ func TestPhaseSupervisorSingleShotClassifiesDoneResultCost(t *testing.T) {
 	}
 }
 
+// PHASE2(session-view alias): main dropped the session.SessionView alias;
+// feature resume tests rewire onto ports.SessionView.
 func TestPhaseSupervisorSingleShotTransientFailureResumesThenCompletes(t *testing.T) {
 	sink := newRecordingPhaseCompletionSink()
 	sm := mocks.NewMockSessionManager()
@@ -327,7 +377,7 @@ func TestPhaseSupervisorSingleShotTransientFailureResumesThenCompletes(t *testin
 			return &agent.SingleShotResumeResult{SessionID: resumed.ID(), Session: resumed}, nil
 		},
 	}
-	sm.GetSessionFn = func(string) session.SessionView { return failed }
+	sm.GetSessionFn = func(string) ports.SessionView { return failed }
 	var waits []time.Duration
 	supervisor := newPhaseSupervisor(phaseSupervisorConfig{
 		Completion:        sink,
@@ -365,7 +415,7 @@ func TestPhaseSupervisorSingleShotTransientCapCompletesFailure(t *testing.T) {
 		close(next.DoneChVal)
 		return &agent.SingleShotResumeResult{SessionID: next.ID(), Session: next}, nil
 	}
-	sm.GetSessionFn = func(string) session.SessionView { return initial }
+	sm.GetSessionFn = func(string) ports.SessionView { return initial }
 	supervisor := newPhaseSupervisor(phaseSupervisorConfig{
 		Completion: sink, Sessions: sm, SingleShotResumer: driver,
 		AutoResumeWait: func(time.Duration) bool { return true },
@@ -395,7 +445,7 @@ func TestPhaseSupervisorSingleShotProgressResetsConsecutiveUntilAbsoluteCap(t *t
 		close(next.DoneChVal)
 		return &agent.SingleShotResumeResult{SessionID: next.ID(), Session: next}, nil
 	}
-	sm.GetSessionFn = func(string) session.SessionView { return initial }
+	sm.GetSessionFn = func(string) ports.SessionView { return initial }
 	supervisor := newPhaseSupervisor(phaseSupervisorConfig{
 		Completion: sink, Sessions: sm, SingleShotResumer: driver,
 		AutoResumeWait: func(time.Duration) bool { return true },
@@ -426,7 +476,7 @@ func TestPhaseSupervisorSingleShotRetryHintRaisesBackoffFloor(t *testing.T) {
 			return &agent.SingleShotResumeResult{SessionID: resumed.ID(), Session: resumed}, nil
 		},
 	}
-	sm.GetSessionFn = func(string) session.SessionView { return initial }
+	sm.GetSessionFn = func(string) ports.SessionView { return initial }
 	var gotWait time.Duration
 	supervisor := newPhaseSupervisor(phaseSupervisorConfig{
 		Completion: sink, Sessions: sm, SingleShotResumer: driver,
@@ -475,7 +525,7 @@ func TestPhaseSupervisorSingleShotRejectedEstablishmentFallsBackFresh(t *testing
 		driver.pending = false
 		return &agent.SingleShotResumeResult{SessionID: fresh.ID(), Session: fresh}, nil
 	}
-	sm.GetSessionFn = func(string) session.SessionView { return rejected }
+	sm.GetSessionFn = func(string) ports.SessionView { return rejected }
 	supervisor := newPhaseSupervisor(phaseSupervisorConfig{
 		Completion: sink, Sessions: sm, SingleShotResumer: driver,
 		AutoResumeWait: func(time.Duration) bool { t.Fatal("rejection must not consume transient retry"); return false },
@@ -539,3 +589,15 @@ func (d *fakeSingleShotResumeDriver) MarkSingleShotCompleted(string) error {
 	return nil
 }
 func (d *fakeSingleShotResumeDriver) RetireSingleShotResume(string) { d.retired++ }
+
+func configureSuccessfulRootTurn(sess *mocks.MockSessionView) {
+	sess.RootCompletionIntentVal = llm.CompletionIntent{
+		Found:  true,
+		Status: llm.CompletionIntentSuccess,
+	}
+	sess.CostVal = &llm.ResultMessage{Subtype: "success", StopReason: "end_turn"}
+}
+
+func commitAllOutcomes(string, string, feature.Phase, llm.CompletionIntent) ([]agent.ProtocolViolation, error) {
+	return nil, nil
+}

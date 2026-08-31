@@ -22,18 +22,31 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
 // isTerminalForCompletion returns true when the feature is in a terminal
-// state that completion handlers must short-circuit on. Mirrors the stale
-// completion guard present in every TUI completion handler (app.go:2927,
-// 3560, 3688, 3806).
+// state that completion handlers must short-circuit on. Every completion path
+// uses this guard so late session results cannot overwrite a terminal state.
+// A child whose relationship is closed (discarded or completed) or whose
+// discard intent is in flight is also terminal so late completion callbacks
+// cannot overwrite discard or closure state.
 func isTerminalForCompletion(f *feature.Feature) bool {
-	return f != nil && (f.Status == feature.StatusInterrupted || f.Status == feature.StatusFailed)
+	if f == nil {
+		return false
+	}
+	if f.Status == feature.StatusInterrupted || f.Status == feature.StatusFailed {
+		return true
+	}
+	if f.IsChild() && f.Parent != nil && (f.Parent.CloseOutcome != "" || f.IsDiscarding()) {
+		return true
+	}
+	return false
 }
 
 // errFinalReviewInterrupted signals that the deferred Final Review pass
@@ -50,33 +63,12 @@ func isTerminalForCompletion(f *feature.Feature) bool {
 // to give that caller an unambiguous short-circuit signal.
 var errFinalReviewInterrupted = errors.New("final review interrupted")
 
-var validateAgentContract = agent.Validate
-
 var finalReviewRootOrchestrationArtifacts = []string{
 	agent.PhaseCompleteFile,
 	"progress.md",
 	"verification-report.yaml",
 	"review-feedback.md",
 	"meta.yaml",
-}
-
-// resolveActiveCycleType replicates app.go:9744-9767. It consults the
-// explicit ActiveCycleType field first, then falls back to legacy signals.
-// Only used by completion handlers that route through cycle-aware paths.
-func resolveActiveCycleType(f *feature.Feature) feature.RepoCycleType {
-	if f == nil {
-		return ""
-	}
-	if f.ActiveCycleType() != "" {
-		return f.ActiveCycleType()
-	}
-	switch {
-	case f.AddressingReviews():
-		return feature.CycleReviewComments
-	case f.IsRefactoring():
-		return feature.CycleRefactor
-	}
-	return ""
 }
 
 // emitPhaseCompleted emits a PhaseCompleted event and fires the hook. This
@@ -97,9 +89,16 @@ func formatSingleShotProtocolViolationError(role agent.Role, dir string, violati
 	return agent.FormatSingleShotProtocolViolationError(role, dir, violations)
 }
 
+func singleShotFailureType(input PhaseCompletionInput) string {
+	if input.FailureType != "" {
+		return input.FailureType
+	}
+	return feature.FailureSessionCrash
+}
+
 // markFailedWithEvent transitions the feature to StatusFailed via lifecycle
-// and emits FeatureFailed. Mirrors app.go:markFailedObserved, minus the
-// external observer concerns (those are upstream of the orchestrator port).
+// and emits FeatureFailed. External observer concerns remain upstream of the
+// orchestrator port.
 //
 // Fires OnFeatureSummaryNeeded at the tail (after OnFeatureFailed) so
 // downstream observers can persist observe-summary.yaml for the terminal
@@ -128,7 +127,7 @@ func (o *Orchestrator) markFailedWithEvent(featureID, failureType, errMsg string
 	return nil
 }
 
-// MarkFailed is the public wrapper for markFailedWithEvent. TUI and other
+// MarkFailed is the public wrapper for markFailedWithEvent. API callers and other
 // callers route terminal-failure transitions through this method so the
 // FeatureFailed event / OnFeatureFailed / OnFeatureSummaryNeeded hooks fire
 // from a single orchestrator-owned emission site.
@@ -140,12 +139,12 @@ func (o *Orchestrator) MarkFailed(featureID, failureType, errMsg string) error {
 // KB completion
 // ---------------------------------------------------------------------------
 
-// onKBCompleted handles a per-repo KB completion signal. Mirrors
-// app.go:2816-2860 for success and app.go:2748-2806 for failure.
+// onKBCompleted handles a per-repo KB completion signal.
 //
 // Success path:
 //  1. Stale-completion guard on feature status != StatusBuildingKB.
-//  2. Validate phase_complete and the KnowledgeBase role contract.
+//  2. Consume the supervisor-committed outcome and validate the KnowledgeBase
+//     artifact contract.
 //  3. MarkKBFresh (best-effort).
 //  4. MarkRepoKBCompleted(featureID, repoName).
 //  5. When AllKBsCompleted → clear ForceKBRebuild, CompleteKnowledgeBase,
@@ -155,11 +154,14 @@ func (o *Orchestrator) MarkFailed(featureID, failureType, errMsg string) error {
 //  1. MarkRepoKBFailed(featureID, repoName, errMsg).
 //  2. Stop sibling KB sessions for this feature.
 //  3. emit PhaseCompleted with err.
-//  4. markFailedWithEvent(FailureSessionCrash).
+//  4. markFailedWithEvent(reported failure type, defaulting to session crash).
 func (o *Orchestrator) onKBCompleted(featureID string, input PhaseCompletionInput) error {
+	// PHASE2(kb repo resolution): feature resume completions carry RepoName
+	// on the input; main resolves via the live session manager. Prefer the
+	// feature-supplied RepoName, then main's resolver.
 	repoName := input.RepoName
 	if repoName == "" {
-		repoName = agent.RepoNameFromKBSession(input.SessionID)
+		repoName = o.repoNameForKBSession(input.SessionID)
 	}
 
 	if !input.Success {
@@ -191,7 +193,7 @@ func (o *Orchestrator) onKBCompleted(featureID string, input PhaseCompletionInpu
 			}
 		}
 		o.emitPhaseCompleted(featureID, feature.PhaseKnowledgeBase, errors.New(errMsg))
-		err := o.markFailedWithEvent(featureID, feature.FailureSessionCrash, errMsg)
+		err := o.markFailedWithEvent(featureID, singleShotFailureType(input), errMsg)
 		// The session-cleanup func released this feature's kb.lock before
 		// onKBCompleted was dispatched. Wake any waiters parked on that lock
 		// regardless of whether the failure-mark itself succeeded.
@@ -208,17 +210,11 @@ func (o *Orchestrator) onKBCompleted(featureID string, input PhaseCompletionInpu
 		return nil
 	}
 
-	_, kbDir, violations, err := o.validateKBCompletionContract(repoName)
+	_, kbDir, violations, err := o.validateKBCompletionContract(f, repoName)
 	if err != nil {
 		return err
 	}
-	repoMutationViolations, err := agent.EnforceReadOnlyRepoMutations(context.Background(), o.deps.CmdRunner, f, feature.PhaseKnowledgeBase, kbDir, repoName)
-	if err != nil {
-		return fmt.Errorf("enforce knowledge base read-only repo guard: %w", err)
-	}
-	violations = append(violations, repoMutationViolations...)
-
-	if kbDir == "" && len(violations) > 0 {
+	if len(violations) > 0 {
 		errMsg := formatSingleShotProtocolViolationError(agent.RoleKnowledgeBaseBuilder, kbDir, violations)
 		if repoName != "" {
 			_ = o.deps.Lifecycle.MarkRepoKBFailed(featureID, repoName, errMsg)
@@ -234,68 +230,23 @@ func (o *Orchestrator) onKBCompleted(featureID string, input PhaseCompletionInpu
 		return err
 	}
 
-	sidecarFilename := agent.KBProtocolRetrySidecarFilename(featureID)
-	sidecar, err := agent.ReadProtocolRetrySidecarAt(kbDir, sidecarFilename)
-	if err != nil {
-		return fmt.Errorf("read knowledge base retry sidecar: %w", err)
-	}
-	decision := agent.DecideProtocolRetry(
-		agent.RoleKnowledgeBaseBuilder,
-		kbDir,
-		f.ActiveRun,
-		sidecar,
-		violations,
-		agent.DefaultMaxConsecutiveProtocolViolations,
-	)
-	switch decision.Action {
-	case agent.ProtocolRetryActionSucceed:
-		if err := agent.DeleteProtocolRetrySidecarAt(kbDir, sidecarFilename); err != nil {
-			return fmt.Errorf("delete knowledge base retry sidecar: %w", err)
-		}
-	case agent.ProtocolRetryActionRetry:
-		if decision.NewSidecar != nil {
-			if err := agent.WriteProtocolRetrySidecarAt(kbDir, sidecarFilename, *decision.NewSidecar); err != nil {
-				return fmt.Errorf("write knowledge base retry sidecar: %w", err)
-			}
-		}
-		if err := agent.RemovePhaseCompleteMarker(kbDir); err != nil {
-			return fmt.Errorf("remove knowledge base phase_complete marker: %w", err)
-		}
-		if _, err := o.startKB(featureID); err != nil {
-			return fmt.Errorf("retry knowledge base: %w", err)
-		}
-		return nil
-	case agent.ProtocolRetryActionTerminal:
-		if decision.NewSidecar != nil {
-			if err := agent.WriteProtocolRetrySidecarAt(kbDir, sidecarFilename, *decision.NewSidecar); err != nil {
-				return fmt.Errorf("write terminal knowledge base retry sidecar: %w", err)
-			}
-		}
-		if repoName != "" {
-			_ = o.deps.Lifecycle.MarkRepoKBFailed(featureID, repoName, decision.FormattedError)
-		}
-		if o.deps.Sessions != nil {
-			for _, s := range o.deps.Sessions.FeatureSessions(featureID) {
-				_ = o.deps.Sessions.StopSession(s.ID())
-			}
-		}
-		o.emitPhaseCompleted(featureID, feature.PhaseKnowledgeBase, errors.New(decision.FormattedError))
-		err := o.markFailedWithEvent(featureID, feature.FailureProtocolViolation, decision.FormattedError)
-		o.wakeKBWaiters(featureID)
-		return err
-	default:
-		return fmt.Errorf("unknown knowledge base protocol retry action %d", decision.Action)
-	}
-
 	// Mark KB fresh on disk — best-effort, failures don't block the phase.
-	// Skipped when stateDir is unresolved (tests without a PhaseRunner/Store):
-	// without a base dir, agent.KBStateDir would resolve relative to CWD and
-	// scribble a state.json into the test's working directory.
+	// For child features, mark the disposable workspace fresh instead of the
+	// canonical KB.
 	if repoName != "" {
 		if repo, ok := findRepo(f, repoName); ok {
 			if baseDir := o.stateDir(); baseDir != "" {
-				kbDir := agent.KBStateDir(baseDir, repo.Name)
-				_ = agent.MarkKBFresh(context.Background(), o.deps.CmdRunner, kbDir, repo.Path)
+				repoPath := repo.Path
+				if repo.WorktreePath != "" {
+					repoPath = repo.WorktreePath
+				}
+				if f.IsChild() {
+					workspaceDir := feature.ChildKBWorkspaceDir(baseDir, featureID, repo.Name)
+					_ = agent.MarkWorkspaceFresh(context.Background(), o.deps.CmdRunner, workspaceDir, repoPath)
+				} else {
+					kbDir := agent.KBStateDir(baseDir, repo.Name)
+					_ = agent.MarkKBFresh(context.Background(), o.deps.CmdRunner, kbDir, repoPath)
+				}
 			}
 		}
 		if err := o.deps.Lifecycle.MarkRepoKBCompleted(featureID, repoName); err != nil {
@@ -328,7 +279,7 @@ func (o *Orchestrator) onKBCompleted(featureID string, input PhaseCompletionInpu
 	return o.advanceToNextPhase(featureID, feature.PhaseKnowledgeBase)
 }
 
-func (o *Orchestrator) validateKBCompletionContract(repoName string) (agent.Outcome, string, []agent.ProtocolViolation, error) {
+func (o *Orchestrator) validateKBCompletionContract(f *feature.Feature, repoName string) (agent.Outcome, string, []agent.ProtocolViolation, error) {
 	var violations []agent.ProtocolViolation
 	var outcome agent.Outcome
 	kbDir := ""
@@ -346,17 +297,14 @@ func (o *Orchestrator) validateKBCompletionContract(repoName string) (agent.Outc
 			Reason:   "state directory is empty",
 		})
 	default:
-		kbDir = agent.KBStateDir(baseDir, repoName)
-		if !agent.HasPhaseComplete(kbDir) {
-			violations = append(violations, agent.ProtocolViolation{
-				Artifact: agent.PhaseCompleteFile,
-				Reason:   "SDK reported success but phase_complete was not present",
-			})
+		if f.IsChild() {
+			kbDir = feature.ChildKBWorkspaceDir(baseDir, f.ID, repoName)
+		} else {
+			kbDir = agent.KBStateDir(baseDir, repoName)
 		}
-
 		var contractViolations []agent.ProtocolViolation
 		var err error
-		outcome, contractViolations, err = validateAgentContract(
+		outcome, contractViolations, err = agent.Validate(
 			feature.PhaseKnowledgeBase,
 			agent.RoleKnowledgeBaseBuilder,
 			kbDir,
@@ -385,11 +333,10 @@ func findRepo(f *feature.Feature, name string) (feature.FeatureRepo, bool) {
 // ---------------------------------------------------------------------------
 
 // onArtifactPhaseCompleted handles completion for the three interactive
-// artifact phases (inquire, research, design). Mirrors
-// app.go:2861-2913.
+// artifact phases (inquire, research, design).
 //
-//  1. Validate phase_complete and the registry-owned markdown artifact
-//     contract for the phase output dir.
+//  1. Consume the supervisor-committed outcome and validate the
+//     registry-owned markdown artifact contract for the phase output dir.
 //  2. Persist the registry-selected artifact path to f.Artifacts[phase].
 //  3. For Q&A-bearing planning phases, write qa-answers.md from the
 //     session's QALog (best-effort).
@@ -428,7 +375,7 @@ func (o *Orchestrator) onArtifactPhaseCompletedWithKey(
 			errMsg = fmt.Sprintf("%s phase failed: %s", input.Phase, input.ErrorDetail)
 		}
 		o.emitPhaseCompleted(featureID, input.Phase, errors.New(errMsg))
-		return o.markFailedWithEvent(featureID, feature.FailureSessionCrash, errMsg)
+		return o.markFailedWithEvent(featureID, singleShotFailureType(input), errMsg)
 	}
 
 	f, err := o.deps.Lifecycle.Get(featureID)
@@ -443,54 +390,10 @@ func (o *Orchestrator) onArtifactPhaseCompletedWithKey(
 	if err != nil {
 		return err
 	}
-	repoMutationViolations, err := agent.EnforceReadOnlyRepoMutations(context.Background(), o.deps.CmdRunner, f, input.Phase, phaseDir)
-	if err != nil {
-		return fmt.Errorf("enforce %s read-only repo guard: %w", phaseKey, err)
-	}
-	violations = append(violations, repoMutationViolations...)
-	if phaseDir == "" && len(violations) > 0 {
+	if len(violations) > 0 {
 		errMsg := formatSingleShotProtocolViolationError(artifactPhaseRoleMust(input.Phase), phaseDir, violations)
 		o.emitPhaseCompleted(featureID, input.Phase, errors.New(errMsg))
 		return o.markFailedWithEvent(featureID, feature.FailureProtocolViolation, errMsg)
-	}
-
-	sidecar, err := agent.ReadProtocolRetrySidecar(phaseDir)
-	if err != nil {
-		return fmt.Errorf("read %s retry sidecar: %w", phaseKey, err)
-	}
-	decision := agent.DecideProtocolRetry(
-		artifactPhaseRoleMust(input.Phase),
-		phaseDir,
-		f.ActiveRun,
-		sidecar,
-		violations,
-		agent.DefaultMaxConsecutiveProtocolViolations,
-	)
-	switch decision.Action {
-	case agent.ProtocolRetryActionSucceed:
-		if err := agent.DeleteProtocolRetrySidecar(phaseDir); err != nil {
-			return fmt.Errorf("delete %s retry sidecar: %w", phaseKey, err)
-		}
-	case agent.ProtocolRetryActionRetry:
-		if decision.NewSidecar != nil {
-			if err := agent.WriteProtocolRetrySidecar(phaseDir, *decision.NewSidecar); err != nil {
-				return fmt.Errorf("write %s retry sidecar: %w", phaseKey, err)
-			}
-		}
-		if err := agent.RemovePhaseCompleteMarker(phaseDir); err != nil {
-			return fmt.Errorf("remove %s phase_complete marker: %w", phaseKey, err)
-		}
-		return o.retryArtifactPhase(featureID, input.Phase)
-	case agent.ProtocolRetryActionTerminal:
-		if decision.NewSidecar != nil {
-			if err := agent.WriteProtocolRetrySidecar(phaseDir, *decision.NewSidecar); err != nil {
-				return fmt.Errorf("write terminal %s retry sidecar: %w", phaseKey, err)
-			}
-		}
-		o.emitPhaseCompleted(featureID, input.Phase, errors.New(decision.FormattedError))
-		return o.markFailedWithEvent(featureID, feature.FailureProtocolViolation, decision.FormattedError)
-	default:
-		return fmt.Errorf("unknown protocol retry action %d", decision.Action)
 	}
 
 	if err := o.deps.Store.Modify(featureID, func(ff *feature.Feature) error {
@@ -519,24 +422,6 @@ func (o *Orchestrator) onArtifactPhaseCompletedWithKey(
 func artifactPhaseRoleMust(phase feature.Phase) agent.Role {
 	role, _ := artifactPhaseRole(phase)
 	return role
-}
-
-func (o *Orchestrator) retryArtifactPhase(featureID string, phase feature.Phase) error {
-	var err error
-	switch phase {
-	case feature.PhaseInquire:
-		_, err = o.startInquire(featureID)
-	case feature.PhaseResearch:
-		_, err = o.startResearch(featureID)
-	case feature.PhaseDesign:
-		_, err = o.startDesign(featureID)
-	default:
-		return fmt.Errorf("no artifact phase starter for %s", phase)
-	}
-	if err != nil {
-		return fmt.Errorf("restart %s: %w", phase, err)
-	}
-	return nil
 }
 
 func artifactPhasePersistsQALog(phaseKey string) bool {
@@ -572,10 +457,9 @@ func (o *Orchestrator) validateArtifactPhaseCompletionContract(
 	}
 
 	baseDir := o.stateDir()
-	refPrefix := f.RefactorPrefix()
 	phaseDir := ""
 	if baseDir != "" {
-		phaseDir = filepath.Join(agent.ActiveRunDir(baseDir, f), refPrefix, phaseKey)
+		phaseDir = filepath.Join(agent.ActiveRunDir(baseDir, f), phaseKey)
 	}
 	var violations []agent.ProtocolViolation
 	if baseDir == "" {
@@ -585,14 +469,7 @@ func (o *Orchestrator) validateArtifactPhaseCompletionContract(
 		})
 		return agent.Outcome{}, phaseDir, violations, nil
 	}
-	if !agent.HasPhaseComplete(phaseDir) {
-		violations = append(violations, agent.ProtocolViolation{
-			Artifact: agent.PhaseCompleteFile,
-			Reason:   "SDK reported success but phase_complete was not present",
-		})
-	}
-
-	outcome, contractViolations, err := validateAgentContract(input.Phase, role, phaseDir)
+	outcome, contractViolations, err := agent.Validate(input.Phase, role, phaseDir)
 	if err != nil {
 		return agent.Outcome{}, phaseDir, nil, fmt.Errorf("validating %s contract: %w", phaseKey, err)
 	}
@@ -610,8 +487,7 @@ func (o *Orchestrator) validateArtifactPhaseCompletionContract(
 // Plan loop completion
 // ---------------------------------------------------------------------------
 
-// onPlanLoopDone handles the result of a plan loop (including per-phase
-// plan loops). Mirrors app.go:2922-3002.
+// onPlanLoopDone handles the result of a plan loop, including per-phase loops.
 func (o *Orchestrator) onPlanLoopDone(featureID string, result *agent.PlanLoopResult) error {
 	f, err := o.deps.Lifecycle.Get(featureID)
 	if err != nil {
@@ -677,10 +553,9 @@ func (o *Orchestrator) onPlanApproved(featureID string, f *feature.Feature) erro
 	//
 	// All pipelines (Medium, Large, Moonshot) produce a roadmap as their
 	// top-level plan artifact and advance to phase 1 from here. Even if the
-	// roadmap file is missing or fails to parse, we still take the roadmap-
-	// advance path so the feature lands in Planning with CurrentRoadmapPhase=1
-	// (mirroring the original TUI handlePlanLoopDone which always called
-	// AdvanceRoadmapPhase on CurrentRoadmapPhase==0).
+	// roadmap file is missing or fails to parse, we still advance the newly
+	// approved top-level roadmap so the feature lands in Planning with
+	// CurrentRoadmapPhase=1.
 	if f.CurrentRoadmapPhase == 0 {
 		if roadmapPath := o.resolveArtifactPath(f, "roadmap"); roadmapPath != "" {
 			if data, readErr := os.ReadFile(roadmapPath); readErr == nil {
@@ -722,11 +597,9 @@ func (o *Orchestrator) onPlanApproved(featureID string, f *feature.Feature) erro
 		o.emitPhaseCompleted(featureID, feature.PhasePlan, nil)
 		startedPhase, started, err := o.startPhase(featureID, feature.PhasePlan)
 		if err != nil {
-			// Swallow the "no roadmap artifact found" error: the caller observes
-			// AdvanceRoadmapPhase's state mutation, and the TUI re-dispatches
-			// PhasePlan via startPhasePlanCmd. This mirrors the original TUI
-			// handlePlanLoopDone which did not propagate a startPhase failure up
-			// to the caller. Other dispatch errors still propagate.
+			// If the roadmap artifact is absent after state advancement, preserve
+			// the advanced state so the next start attempt can recover. Other
+			// dispatch errors still propagate.
 			if strings.Contains(err.Error(), "no roadmap artifact") {
 				return nil
 			}
@@ -810,8 +683,8 @@ func (o *Orchestrator) onPlanNeedsReview(featureID string) error {
 // Multi-repo aggregate results flow through MultiRepoResult; the single-repo
 // NEED_USER_INPUT pause flow still arrives as a single-repo LoopResult so the
 // orchestrator can transition the feature into StatusNeedUserInput before the
-// multi-repo aggregator collapses the cycle. Single-repo cycle completions
-// arrive via per-repo cycle FR result channels, never through HandlePhaseCompletion.
+// multi-repo aggregator collapses the result. Single-repo completions arrive
+// via per-repo Final Review result channels, never through HandlePhaseCompletion.
 func (o *Orchestrator) onImplementCompleted(featureID string, input PhaseCompletionInput) error {
 	if input.MultiRepoResult != nil {
 		return o.onMultiRepoImplementDone(featureID, input.MultiRepoResult)
@@ -825,7 +698,6 @@ func (o *Orchestrator) onImplementCompleted(featureID string, input PhaseComplet
 }
 
 // onMultiRepoImplementDone handles an agent.OrchestratorResult completion.
-// Mirrors app.go:3683-3802.
 func (o *Orchestrator) onMultiRepoImplementDone(featureID string, result *agent.OrchestratorResult) error {
 	f, err := o.deps.Lifecycle.Get(featureID)
 	if err != nil {
@@ -851,10 +723,10 @@ func (o *Orchestrator) onMultiRepoImplementDone(featureID string, result *agent.
 		// Under SchemaVersionCurrent = 4 the NEED_USER_INPUT gate is
 		// feature-scoped (Feature.PendingNeedUserInputPath). Persist the
 		// gate path and transition the feature into StatusNeedUserInput so
-		// the decision dispatcher (handleFeatureNeedUserInputDecision)
+		// the resume dispatcher (resumeFeatureNeedUserInput)
 		// finds it paused. Do NOT emit PhaseCompleted — the phase is
-		// paused, not done — and surface NeedUserInputRequired so the TUI
-		// opens the questionnaire.
+		// paused, not done — and surface NeedUserInputRequired so clients can
+		// open the questionnaire.
 		if result.NeedUserInputPath != "" {
 			if err := o.deps.Store.Modify(featureID, func(ff *feature.Feature) error {
 				ff.PendingNeedUserInputPath = result.NeedUserInputPath
@@ -888,7 +760,6 @@ func (o *Orchestrator) onMultiRepoImplementDone(featureID string, result *agent.
 				summary = "implementation is waiting for user input"
 			}
 		}
-		_ = o.deps.Lifecycle.ClearAddressingReviews(featureID)
 		o.emitEventBlocking(ports.Event{
 			Type:      ports.NeedUserInputRequired,
 			FeatureID: featureID,
@@ -926,7 +797,6 @@ func (o *Orchestrator) onMultiRepoImplementDone(featureID string, result *agent.
 			}
 		}
 		o.emitPhaseCompleted(featureID, feature.PhaseImplement, errors.New(errMsg))
-		_ = o.deps.Lifecycle.ClearAddressingReviews(featureID)
 		return o.markFailedWithEvent(featureID, failureType, errMsg)
 	default:
 		errMsg := fmt.Sprintf("unknown multi-repo FinalStatus %q", result.FinalStatus)
@@ -976,7 +846,7 @@ func (o *Orchestrator) writePlanRevisionFeedback(f *feature.Feature, feedback st
 	if roadmapPhase > 0 {
 		planDir = o.phasePlanDirForFeature(f, roadmapPhase)
 	} else {
-		planDir = filepath.Join(agent.ActiveRunDir(baseDir, f), f.RefactorPrefix(), "plan")
+		planDir = filepath.Join(agent.ActiveRunDir(baseDir, f), "plan")
 	}
 	latestAttempt := agent.LatestCompletedPlanAttempt(planDir)
 	if latestAttempt <= 0 {
@@ -1062,6 +932,13 @@ func (o *Orchestrator) onMultiReposPassed(featureID string, f *feature.Feature) 
 	if f.Status != feature.StatusImplementing {
 		return nil
 	}
+	// A roadmap phase crosses a synchronous per-repo git boundary below. Flag
+	// it before StatusReviewPassed becomes observable, so no reader sees a
+	// startable steady state while the commit loop is still running.
+	if f.CurrentRoadmapPhase > 0 {
+		o.setFinalizingPhaseStatus(featureID, true)
+		defer o.setFinalizingPhaseStatus(featureID, false)
+	}
 	if err := o.deps.Lifecycle.CompleteImplementation(featureID); err != nil {
 		return fmt.Errorf("complete implementation: %w", err)
 	}
@@ -1070,6 +947,7 @@ func (o *Orchestrator) onMultiReposPassed(featureID string, f *feature.Feature) 
 	// Roadmap mid-flight: commit + advance.
 	if f.CurrentRoadmapPhase > 0 && f.CurrentRoadmapPhase < f.TotalRoadmapPhases {
 		anchors := o.commitRoadmapPhase(f)
+		o.setFinalizingPhaseStatus(featureID, false)
 		if err := o.recordRoadmapPhaseCommitAnchors(featureID, f.CurrentRoadmapPhase, anchors); err != nil {
 			return err
 		}
@@ -1089,6 +967,7 @@ func (o *Orchestrator) onMultiReposPassed(featureID string, f *feature.Feature) 
 	// Roadmap final phase: commit + fall through to review / publish.
 	if f.CurrentRoadmapPhase > 0 && f.CurrentRoadmapPhase == f.TotalRoadmapPhases {
 		anchors := o.commitRoadmapPhase(f)
+		o.setFinalizingPhaseStatus(featureID, false)
 		if err := o.recordRoadmapPhaseCommitAnchors(featureID, f.CurrentRoadmapPhase, anchors); err != nil {
 			return err
 		}
@@ -1131,6 +1010,13 @@ func (o *Orchestrator) advanceAfterFinalReview(featureID string) error {
 		return fmt.Errorf("final review did not complete successfully: %s", errMsg)
 	}
 
+	// Child features never deliver: a successful final review enters the
+	// explicit local-integration stage instead of CodeReady, publication, or
+	// any child delivery path.
+	if f.IsChild() {
+		return o.RunChildIntegration(featureID)
+	}
+
 	if !f.IsPublishable() || !f.Checkpoints.AutoPublish() {
 		if err := o.deps.Lifecycle.MarkCodeReady(featureID); err != nil {
 			return fmt.Errorf("mark code ready: %w", err)
@@ -1141,8 +1027,8 @@ func (o *Orchestrator) advanceAfterFinalReview(featureID string) error {
 	// Non-roadmap, multi-repo auto-publish: now that every touched repo is
 	// past review, try to complete the feature-level publish. If the feature
 	// is not yet fully published (e.g. a repo publish failed or is still
-	// pending), fall back to MarkCodeReady so Init() and StartPhaseMsg
-	// resume paths can recover partially-published features.
+	// pending), fall back to MarkCodeReady so startup and resume paths can
+	// recover partially published features.
 	//
 	// When tryCompleteAndEmit reports published==true, the feature-level
 	// publish has just completed as a direct consequence of this handler
@@ -1273,7 +1159,7 @@ func (o *Orchestrator) scrubFinalReviewRootArtifacts(ctx context.Context, workDi
 // succeeded. Commit failures remain advisory for pipeline progress, but failed
 // repos are omitted from the returned anchor map.
 func (o *Orchestrator) commitRoadmapPhase(f *feature.Feature) map[string]string {
-	if len(f.Repos) == 0 || o.deps.Publisher == nil {
+	if len(f.Repos) == 0 {
 		return nil
 	}
 	phaseName := ""
@@ -1295,20 +1181,73 @@ func (o *Orchestrator) commitRoadmapPhase(f *feature.Feature) map[string]string 
 	}
 	msg += "\n\nFeature: " + f.Slug
 	anchors := make(map[string]string)
-	for _, repo := range f.Repos {
+	for _, repo := range roadmapPhaseCommitRepos(f) {
 		if repo.WorktreePath == "" {
 			continue
 		}
-		sha, err := o.deps.Publisher.CommitAllAndGetHead(repo.WorktreePath, msg)
+		sha, err := git.CommitAllAndGetHead(repo.WorktreePath, msg)
 		if err != nil || sha == "" {
+			o.emitEvent(ports.Event{
+				Type:      ports.RepoStatusChanged,
+				FeatureID: f.ID,
+				RepoName:  repo.Name,
+				Error:     err,
+				Message:   fmt.Sprintf("roadmap phase %d commit did not produce an anchor", f.CurrentRoadmapPhase),
+			})
 			continue
 		}
 		anchors[repo.Name] = sha
+		o.emitEvent(ports.Event{
+			Type:      ports.RepoStatusChanged,
+			FeatureID: f.ID,
+			RepoName:  repo.Name,
+			Message:   fmt.Sprintf("committed roadmap phase %d", f.CurrentRoadmapPhase),
+		})
 	}
 	if len(anchors) == 0 {
 		return nil
 	}
 	return anchors
+}
+
+// roadmapPhaseCommitRepos returns the repos the phase commit must visit. Only
+// touched repos carry phase work, and `git add -A` over an untouched
+// multi-gigabyte worktree costs seconds for nothing. When no repo state exists
+// at all the touched set carries no information, so fall back to every
+// configured repo rather than silently skipping the whole phase.
+func roadmapPhaseCommitRepos(f *feature.Feature) []feature.FeatureRepo {
+	touched := f.TouchedRepos()
+	if len(touched) == 0 {
+		if len(f.RepoStates) == 0 {
+			return f.Repos
+		}
+		return nil
+	}
+	repos := make([]feature.FeatureRepo, 0, len(touched))
+	for _, name := range touched {
+		if repo, ok := findRepo(f, name); ok {
+			repos = append(repos, repo)
+		}
+	}
+	return repos
+}
+
+// setFinalizingPhaseStatus flags or clears the end-of-phase git boundary.
+// Clearing only touches the finalizing token so a status written by a later
+// phase step is never clobbered.
+func (o *Orchestrator) setFinalizingPhaseStatus(featureID string, finalizing bool) {
+	if o.deps.Store == nil {
+		return
+	}
+	_ = o.deps.Store.Modify(featureID, func(f *feature.Feature) error {
+		switch {
+		case finalizing:
+			f.CurrentPhaseStatus = feature.PhaseStatusFinalizing
+		case f.IsFinalizingPhase():
+			f.CurrentPhaseStatus = ""
+		}
+		return nil
+	})
 }
 
 func (o *Orchestrator) recordRoadmapPhaseCommitAnchors(featureID string, phase int, anchors map[string]string) error {
@@ -1319,18 +1258,6 @@ func (o *Orchestrator) recordRoadmapPhaseCommitAnchors(featureID string, phase i
 		return fmt.Errorf("record roadmap phase commit anchors: %w", err)
 	}
 	return nil
-}
-
-// hasActiveRepoCycle returns true when any per-repo cycle state has a
-// non-empty cycle Type. Per-repo cycles are driven by f.RepoCycles and must
-// route through their own completion handlers.
-func hasActiveRepoCycle(f *feature.Feature) bool {
-	for _, c := range f.RepoCycles {
-		if c != nil && c.Type != "" {
-			return true
-		}
-	}
-	return false
 }
 
 // reposNeedFinalReview returns true when at least one repo was touched by
@@ -1384,6 +1311,11 @@ func (o *Orchestrator) startDeferredFinalReview(featureID string) (chan *agent.O
 	resultCh, err := runFn(f, o.computeKBInfos(f)...)
 	if err != nil {
 		errMsg := fmt.Sprintf("dispatch final review: %v", err)
+		o.emitPhaseCompleted(featureID, feature.PhaseFinalReview, errors.New(errMsg))
+		return nil, o.markFinalReviewFailedWithEvent(featureID, feature.FailureInfrastructure, errMsg)
+	}
+	if resultCh == nil {
+		errMsg := "dispatch final review returned no result channel"
 		o.emitPhaseCompleted(featureID, feature.PhaseFinalReview, errors.New(errMsg))
 		return nil, o.markFinalReviewFailedWithEvent(featureID, feature.FailureInfrastructure, errMsg)
 	}
@@ -1457,4 +1389,307 @@ func (o *Orchestrator) markFinalReviewFailedWithEvent(featureID, failureType, er
 		return err
 	}
 	return errors.New(errMsg)
+}
+
+// Completion repo status values enumerate the server-authored completion
+// status per repo.
+const (
+	completionStatusEligible           = "eligible"
+	completionStatusAlreadyPublished   = "already_published"
+	completionStatusCompleted          = "completed"
+	completionStatusIneligible         = "ineligible"
+	completionStatusUntouched          = "untouched"
+	completionStatusBlocked            = "blocked"
+	completionStatusUnpublishedChanges = "unpublished_changes"
+	completionStatusUnmergedChanges    = "unmerged_changes"
+)
+
+// Push modes describe how a republish reaches an existing pull-request branch.
+const (
+	completionPushModeFastForward = "fast_forward"
+	completionPushModeRewrite     = "rewrite"
+)
+
+// CompletionRepoResult is the per-repository slice of a completion preflight.
+type CompletionRepoResult struct {
+	Repo           string
+	Publishable    bool
+	Touched        bool
+	Status         string
+	PRURL          string
+	Blocker        string
+	Freshness      string
+	LastError      string
+	BaseBranch     string
+	Branch         string
+	PendingCommits int
+	PendingDirty   bool
+	PushMode       string
+	// PendingDirtyFiles is a bounded sample of the uncommitted paths a
+	// publish would commit; PendingDirtyFileTotal is the true count, which
+	// can exceed the sample length.
+	PendingDirtyFiles     []string
+	PendingDirtyFileTotal int
+}
+
+// repoPublishable reports whether repo is publishable. A nil Publishable
+// pointer is treated as publishable for backward compatibility with older
+// feature manifests that predate the explicit flag.
+func repoPublishable(repo feature.FeatureRepo) bool {
+	return repo.Publishable == nil || *repo.Publishable
+}
+
+// CompletionPreflightResult is the feature-wide, side-effect-free completion
+// preview. SourceRevision captures the worktree state of every repository;
+// a publish/merge/mark-done mutation carrying a mismatched SourceRevision is
+// rejected as stale.
+type CompletionPreflightResult struct {
+	FeatureID       string
+	SourceRevision  string
+	CanMarkDone     bool
+	MarkDoneBlocker string
+	Repos           []CompletionRepoResult
+}
+
+// CompletionPreflight computes a side-effect-free preview of a feature's
+// completion readiness. It enumerates every repository with its completion
+// status, PR URL, blockers, and freshness, and returns a source revision
+// that mutations check for staleness. The worktree is never mutated.
+func (o *Orchestrator) CompletionPreflight(featureID string) (CompletionPreflightResult, error) {
+	f, err := o.deps.Lifecycle.Get(featureID)
+	if err != nil {
+		return CompletionPreflightResult{}, fmt.Errorf("load feature: %w", err)
+	}
+	result := CompletionPreflightResult{FeatureID: featureID}
+	prURLs := f.PRURLs()
+	for _, repo := range f.Repos {
+		state := f.RepoStates[repo.Name]
+		publishable := repoPublishable(repo)
+		repoResult := CompletionRepoResult{
+			Repo:        repo.Name,
+			Publishable: publishable,
+			BaseBranch:  repo.BaseBranch,
+			Branch:      repo.Branch,
+		}
+		if state != nil {
+			repoResult.Touched = state.Touched
+			repoResult.PRURL = state.PRURL
+			repoResult.LastError = safeCompletionTruncate(state.LastError, 200)
+		}
+		if prURLs[repo.Name] != "" {
+			repoResult.PRURL = prURLs[repo.Name]
+		}
+		repoResult.Status = completionRepoStatus(f, repo, state, publishable, repoResult.PRURL)
+		repoResult = o.applyPendingDelivery(f, repo, repoResult)
+		freshness, blocker, _ := o.repoFreshnessAndBlocker(o.rebaseFreshnessInputForRepo(f, repo))
+		repoResult.Freshness = freshness
+		repoResult.Blocker = blocker
+		if repoResult.Blocker != "" {
+			repoResult.Status = completionStatusBlocked
+		}
+		result.Repos = append(result.Repos, repoResult)
+	}
+	result.CanMarkDone, result.MarkDoneBlocker = completionCanMarkDone(f)
+	result.SourceRevision = preflightRevision(o.collectPreflightFingerprints(f))
+	return result, nil
+}
+
+// CompletionPreflightSourceRevision recomputes the current completion preview
+// revision so mutation adapters can reject stale renderer snapshots before any
+// side effect.
+func (o *Orchestrator) CompletionPreflightSourceRevision(featureID string) (string, error) {
+	f, err := o.deps.Lifecycle.Get(featureID)
+	if err != nil {
+		return "", fmt.Errorf("load feature: %w", err)
+	}
+	return preflightRevision(o.collectPreflightFingerprints(f)), nil
+}
+
+func completionRepoStatus(f *feature.Feature, repo feature.FeatureRepo, state *feature.RepoState, publishable bool, prURL string) string {
+	if state != nil && state.Touched {
+		if !publishable {
+			if f.Status == feature.StatusDone {
+				return completionStatusCompleted
+			}
+			return completionStatusEligible
+		}
+		if prURL != "" {
+			if f.Status == feature.StatusDone {
+				return completionStatusCompleted
+			}
+			return completionStatusAlreadyPublished
+		}
+		return completionStatusEligible
+	}
+	if !publishable {
+		return completionStatusIneligible
+	}
+	return completionStatusUntouched
+}
+
+func completionCanMarkDone(f *feature.Feature) (bool, string) {
+	if f.Status == feature.StatusDone {
+		return false, "feature is already done"
+	}
+	if f.Status == feature.StatusImplementing || f.Status == feature.StatusPlanning || f.Status == feature.StatusInquiring {
+		return false, "feature is not ready for completion"
+	}
+	if f.Status == feature.StatusCodeReady || f.Status == feature.StatusReviewPassed || f.Status == feature.StatusPublished {
+		return true, ""
+	}
+	if f.Status == feature.StatusFailed {
+		return false, "feature is in a failed state"
+	}
+	return false, "feature status does not allow mark-done"
+}
+
+// RepositoryDiffResult is the bounded, lazy diff inspection for one repository.
+type RepositoryDiffResult struct {
+	FeatureID       string
+	Repo            string
+	SourceRevision  string
+	Files           []RepositoryDiffFileResult
+	Truncated       bool
+	FileDiff        string
+	FileTruncated   bool
+	FileBinary      bool
+	FileUnavailable bool
+	PartialFailure  string
+}
+
+// RepositoryDiffFileResult is one changed file in a repository diff.
+type RepositoryDiffFileResult struct {
+	Path         string
+	OldPath      string
+	Operation    string
+	AddedLines   int
+	RemovedLines int
+	Binary       bool
+	Fingerprint  string
+}
+
+// MaxDiffFiles is the aggregate limit on changed files returned.
+const MaxDiffFiles = 500
+
+// MaxDiffContent is the per-request limit on single-file diff content.
+const MaxDiffContent = 64 * 1024
+
+// RepositoryDiff inspects one repository's working-tree diff. Without a
+// filePath, it lists all changed files with summaries. With a filePath, it
+// returns bounded diff content for that single file. It never exposes raw
+// host paths, credentials, or unbounded content.
+func (o *Orchestrator) RepositoryDiff(featureID, repoName, filePath string) (RepositoryDiffResult, error) {
+	f, err := o.deps.Lifecycle.Get(featureID)
+	if err != nil {
+		return RepositoryDiffResult{}, fmt.Errorf("load feature: %w", err)
+	}
+	repo, ok := findRepo(f, repoName)
+	if !ok {
+		return RepositoryDiffResult{FeatureID: featureID, Repo: repoName, PartialFailure: "repository not found"}, nil
+	}
+	workDir := repoWorkDir(repo)
+	if workDir == "" {
+		return RepositoryDiffResult{FeatureID: featureID, Repo: repoName, PartialFailure: "worktree not available"}, nil
+	}
+	result := RepositoryDiffResult{
+		FeatureID:      featureID,
+		Repo:           repoName,
+		SourceRevision: preflightRevision(o.collectPreflightFingerprints(f)),
+	}
+	if filePath != "" {
+		return o.repositorySingleFileDiff(result, workDir, repo.BaseBranch, filePath)
+	}
+	return o.repositoryFileListDiff(result, workDir, repo.BaseBranch)
+}
+
+// RepositoryWorktreePath resolves the server-owned worktree target for a
+// feature repository and canonicalizes it for the desktop main process. The
+// renderer never receives this value.
+func (o *Orchestrator) RepositoryWorktreePath(featureID, repoName string) (string, error) {
+	f, err := o.deps.Lifecycle.Get(featureID)
+	if err != nil {
+		return "", fmt.Errorf("load feature: %w", err)
+	}
+	repo, ok := findRepo(f, repoName)
+	if !ok {
+		return "", fmt.Errorf("repository %q not found", repoName)
+	}
+	workDir := repoWorkDir(repo)
+	if workDir == "" {
+		return "", errors.New("worktree not available")
+	}
+	real, err := filepath.EvalSymlinks(workDir)
+	if err != nil {
+		return "", fmt.Errorf("resolve worktree: %w", err)
+	}
+	info, err := os.Stat(real)
+	if err != nil {
+		return "", fmt.Errorf("stat worktree: %w", err)
+	}
+	if !info.IsDir() {
+		return "", errors.New("worktree target is not a directory")
+	}
+	return real, nil
+}
+
+func (o *Orchestrator) repositoryFileListDiff(result RepositoryDiffResult, workDir, baseBranch string) (RepositoryDiffResult, error) {
+	previews, err := git.BranchDiffPreviews(workDir, baseBranch)
+	if err != nil {
+		result.PartialFailure = safeCompletionTruncate(err.Error(), 200)
+		return result, nil
+	}
+	for i, p := range previews {
+		if i >= MaxDiffFiles {
+			result.Truncated = true
+			break
+		}
+		result.Files = append(result.Files, RepositoryDiffFileResult{
+			Path:         p.Path,
+			OldPath:      p.OldPath,
+			Operation:    p.Operation,
+			AddedLines:   p.AddedLines,
+			RemovedLines: p.RemovedLines,
+			Binary:       isBinaryPatch(p.Patch),
+			Fingerprint:  p.Fingerprint,
+		})
+	}
+	return result, nil
+}
+
+func (o *Orchestrator) repositorySingleFileDiff(result RepositoryDiffResult, workDir, baseBranch, filePath string) (RepositoryDiffResult, error) {
+	preview, err := git.SingleFileDiffPreview(workDir, baseBranch, filePath)
+	if err != nil {
+		result.PartialFailure = safeCompletionTruncate(err.Error(), 200)
+		return result, nil
+	}
+	if preview == nil {
+		result.FileUnavailable = true
+		return result, nil
+	}
+	if isBinaryPatch(preview.Patch) {
+		result.FileBinary = true
+		return result, nil
+	}
+	diff := preview.Patch
+	if len(diff) > MaxDiffContent {
+		diff = safeCompletionTruncate(diff, MaxDiffContent)
+		result.FileTruncated = true
+	}
+	result.FileDiff = diff
+	return result, nil
+}
+
+func isBinaryPatch(patch string) bool {
+	return strings.Contains(patch, "Binary files") || strings.Contains(patch, "GIT binary patch")
+}
+
+func safeCompletionTruncate(s string, max int) string {
+	s = strings.TrimSpace(s)
+	if len(s) <= max {
+		return s
+	}
+	for max > 0 && !utf8.ValidString(s[:max]) {
+		max--
+	}
+	return s[:max]
 }

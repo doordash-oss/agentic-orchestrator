@@ -16,12 +16,15 @@ package agent
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent/roles"
@@ -49,16 +52,35 @@ func KBResumeDir(stateDir string, f *feature.Feature, repoName string) string {
 	return filepath.Join(ActiveRunDir(stateDir, f), feature.PhaseKnowledgeBase.DirName(), repoName)
 }
 
-// BuildKBSessionID returns the canonical session ID for a per-repo KB build.
-// Format: "<featureID>-kb-<repoName>". Mirrors the literal in
-// PhaseRunner.RunKnowledgeBaseForRepo.
+var validKBSessionIDPattern = regexp.MustCompile(`^[A-Za-z0-9._-]{1,200}$`)
+
+// BuildKBSessionID returns a desktop- and URL-safe session ID for a per-repo
+// KB build. It preserves the legacy "<featureID>-kb-<repoName>" form when the
+// repository name is already safe. Qualified discovery keys and other names
+// containing unsafe characters use a readable slug plus a collision-resistant
+// hash; callers must use the session's RepoName metadata as canonical identity.
 func BuildKBSessionID(featureID, repoName string) string {
-	return fmt.Sprintf("%s-kb-%s", featureID, repoName)
+	legacyID := fmt.Sprintf("%s-kb-%s", featureID, repoName)
+	if validKBSessionIDPattern.MatchString(legacyID) {
+		return legacyID
+	}
+
+	safeFeatureID := feature.Slugify(featureID)
+	if safeFeatureID == "" {
+		safeFeatureID = "feature"
+	}
+	safeRepoName := feature.Slugify(repoName)
+	if safeRepoName == "" {
+		safeRepoName = "repo"
+	}
+	digest := sha256.Sum256([]byte(repoName))
+	return fmt.Sprintf("%s-kbv2-%s-%x", safeFeatureID, safeRepoName, digest[:6])
 }
 
 // RepoNameFromKBSession extracts the repo name from a per-repo KB session ID.
 // Format: "<featureID>-kb-<repoName>" → "<repoName>". Returns "" when the
-// session ID does not contain the "-kb-" separator (legacy "<featureID>-kb").
+// session ID does not use that legacy, reversible format. New encoded IDs keep
+// the canonical repository name in session metadata instead.
 func RepoNameFromKBSession(sessionID string) string {
 	idx := strings.Index(sessionID, "-kb-")
 	if idx < 0 {
@@ -145,15 +167,43 @@ type KBLockInfo struct {
 
 var ErrKBLocked = errors.New("knowledge base is already being built")
 
+var kbLockCoordinator sync.Map // map[string]*sync.Mutex
+
+func kbLockMutex(kbDir string) *sync.Mutex {
+	key, err := filepath.Abs(kbDir)
+	if err != nil {
+		key = kbDir
+	}
+	mu, _ := kbLockCoordinator.LoadOrStore(key, &sync.Mutex{})
+	return mu.(*sync.Mutex)
+}
+
 // AcquireKBLock attempts to create a lock file for the KB directory.
 // Returns true if the lock was acquired, false if another feature holds it.
 // The lock is reentrant: if the same featureID already holds it, the
 // timestamp is refreshed and the call succeeds.
 func AcquireKBLock(kbDir, featureID string) (bool, error) {
+	return AcquireKBLockWithStatus(kbDir, featureID, nil)
+}
+
+// AcquireKBLockWithStatus attempts to create a lock file, reclaiming an
+// existing lock only when the owner can be proven stale by statusFn, when the
+// lock is corrupt, or when no statusFn is available and the timestamp exceeds
+// the age fallback. Reclamation and acquisition are serialized per KB path so
+// concurrent contenders cannot both steal the same lock.
+func AcquireKBLockWithStatus(kbDir, featureID string, statusFn FeatureStatusFunc) (bool, error) {
+	mu := kbLockMutex(kbDir)
+	mu.Lock()
+	defer mu.Unlock()
+
 	if err := os.MkdirAll(kbDir, 0o755); err != nil {
 		return false, fmt.Errorf("creating KB dir: %w", err)
 	}
 	lockPath := KBLockPath(kbDir)
+	return acquireKBLockLocked(lockPath, featureID, statusFn)
+}
+
+func acquireKBLockLocked(lockPath, featureID string, statusFn FeatureStatusFunc) (bool, error) {
 	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
 	if err != nil {
 		if os.IsExist(err) {
@@ -167,6 +217,23 @@ func AcquireKBLock(kbDir, featureID string) (bool, error) {
 					_ = os.WriteFile(lockPath, refreshed, 0o644)
 					return true, nil
 				}
+			}
+			if isKBLockStaleData(data, readErr, statusFn) {
+				if removeErr := os.Remove(lockPath); removeErr != nil && !os.IsNotExist(removeErr) {
+					return false, fmt.Errorf("removing stale lock file: %w", removeErr)
+				}
+				f, err = os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+				if err != nil {
+					if os.IsExist(err) {
+						return false, nil
+					}
+					return false, fmt.Errorf("creating lock file after stale cleanup: %w", err)
+				}
+				defer func() { _ = f.Close() }()
+				info := KBLockInfo{FeatureID: featureID, Timestamp: time.Now()}
+				refreshed, _ := json.Marshal(info)
+				_, _ = f.Write(refreshed)
+				return true, nil
 			}
 			return false, nil
 		}
@@ -198,26 +265,53 @@ func ReadKBLockOwner(kbDir string) string {
 // ReleaseKBLock removes the lock file only if it belongs to the given featureID.
 // If featureID is empty, the lock is forcibly removed (for stale lock cleanup).
 func ReleaseKBLock(kbDir, featureID string) error {
+	_, err := ReleaseKBLockIfOwned(kbDir, featureID)
+	return err
+}
+
+// ReleaseKBLockIfOwned removes the lock file only if it belongs to featureID
+// and reports whether a lock was actually removed. The owner check and remove
+// are serialized with acquisition so cleanup cannot remove a replacement lock.
+func ReleaseKBLockIfOwned(kbDir, featureID string) (bool, error) {
+	mu := kbLockMutex(kbDir)
+	mu.Lock()
+	defer mu.Unlock()
+
 	lockPath := KBLockPath(kbDir)
 	if featureID == "" {
-		return os.Remove(lockPath)
+		if err := os.Remove(lockPath); err != nil {
+			if os.IsNotExist(err) {
+				return false, nil
+			}
+			return false, err
+		}
+		return true, nil
 	}
 	data, err := os.ReadFile(lockPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil
+			return false, nil
 		}
-		return fmt.Errorf("reading lock file: %w", err)
+		return false, fmt.Errorf("reading lock file: %w", err)
 	}
 	var info KBLockInfo
 	if err := json.Unmarshal(data, &info); err != nil {
 		// Corrupt lock — remove it
-		return os.Remove(lockPath)
+		if err := os.Remove(lockPath); err != nil && !os.IsNotExist(err) {
+			return false, err
+		}
+		return true, nil
 	}
 	if info.FeatureID != featureID {
-		return nil // not our lock
+		return false, nil // not our lock
 	}
-	return os.Remove(lockPath)
+	if err := os.Remove(lockPath); err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
 }
 
 // FeatureStatusFunc is a callback that returns a feature's current status.
@@ -226,25 +320,33 @@ type FeatureStatusFunc func(featureID string) (int, bool)
 
 // IsKBLockStale checks if the lock file is stale. A lock is stale if:
 // - The lock file is corrupt
-// - The lock is older than 30 minutes
 // - The lock owner feature no longer exists or is not in StatusBuildingKB
-// The statusFn parameter looks up a feature's status; if nil, only time-based staleness is checked.
+// - The lock is older than 30 minutes and no statusFn is available
+// The statusFn parameter looks up a feature's status; if nil, only time-based
+// staleness is checked. A confirmed BuildingKB owner is authoritative even
+// when the timestamp is old because the timestamp is not a heartbeat.
 func IsKBLockStale(kbDir string, statusFn FeatureStatusFunc) bool {
+	mu := kbLockMutex(kbDir)
+	mu.Lock()
+	defer mu.Unlock()
+
 	lockPath := KBLockPath(kbDir)
 	data, err := os.ReadFile(lockPath)
-	if err != nil {
+	return isKBLockStaleData(data, err, statusFn)
+}
+
+func isKBLockStaleData(data []byte, readErr error, statusFn FeatureStatusFunc) bool {
+	if readErr != nil {
 		return false
 	}
 	var info KBLockInfo
 	if err := json.Unmarshal(data, &info); err != nil {
 		return true // corrupt lock is stale
 	}
-	// Time-based staleness
-	if time.Since(info.Timestamp) > 30*time.Minute {
-		return true
-	}
-	// Owner-based staleness: if we can look up the owner, check it's still building
-	if statusFn != nil && info.FeatureID != "" {
+	if statusFn != nil {
+		if info.FeatureID == "" {
+			return true
+		}
 		status, found := statusFn(info.FeatureID)
 		if !found {
 			return true // owner feature doesn't exist
@@ -252,8 +354,9 @@ func IsKBLockStale(kbDir string, statusFn FeatureStatusFunc) bool {
 		if status != int(feature.StatusBuildingKB) {
 			return true // owner is no longer building KB
 		}
+		return false
 	}
-	return false
+	return time.Since(info.Timestamp) > 30*time.Minute
 }
 
 // IsKBFresh checks if the KB is up-to-date with the repo's current HEAD.

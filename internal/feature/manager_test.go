@@ -34,9 +34,6 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// apiRepoName is the fixture repo name shared by rebase/cycle tests below.
-const apiRepoName = "api"
-
 func newTestManager(t *testing.T) *feature.Manager {
 	t.Helper()
 	dir := t.TempDir()
@@ -46,23 +43,8 @@ func newTestManager(t *testing.T) *feature.Manager {
 		Path: "/tmp/test-repo",
 	}
 	mgr := feature.NewManager(store, cfg)
-	mgr.Branches = newMockBranches(false)
-	mgr.PRs = mocks.NewMockPublisher()
+	mgr.PRs = mocks.NewMockPRCloser()
 	return mgr
-}
-
-func newMockBranches(hasRemote bool) *mocks.MockBranchOperator {
-	branches := mocks.NewMockBranchOperator()
-	branches.DefaultBranchFn = func(repoPath string) (string, error) {
-		return "main", nil
-	}
-	branches.HasOriginRemoteFn = func(repoPath string) (bool, error) {
-		return hasRemote, nil
-	}
-	branches.BranchNameFn = func(featureSlug string) string {
-		return git.BranchName(featureSlug)
-	}
-	return branches
 }
 
 func skipShortFeatureRegression(t *testing.T, reason string) {
@@ -126,8 +108,7 @@ func TestManagerCreateStampsSchemaVersionAndPrePopulatesRun(t *testing.T) {
 		cfg.Repos["repo-a"] = config.RepoConfig{Path: "/tmp/repo-a"}
 		cfg.Repos["repo-b"] = config.RepoConfig{Path: "/tmp/repo-b"}
 		mgr := feature.NewManager(store, cfg)
-		mgr.Branches = newMockBranches(false)
-		mgr.PRs = mocks.NewMockPublisher()
+		mgr.PRs = mocks.NewMockPRCloser()
 
 		f, err := mgr.Create("Multi", "desc", []string{"repo-a", "repo-b"}, mgr.Config.Defaults.Models, "", "", nil)
 		if err != nil {
@@ -226,28 +207,6 @@ func TestManagerLifecycleTransitions(t *testing.T) {
 	}
 }
 
-func TestManagerUpdateIteration(t *testing.T) {
-	t.Parallel()
-	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
-	mgr := newTestManager(t)
-	f, _ := mgr.Create("Iter Test", "test", []string{"test-repo"}, mgr.Config.Defaults.Models, "", "", nil)
-	_ = mgr.StartResearch(f.ID)
-	_ = mgr.CompleteResearch(f.ID)
-	_ = mgr.StartDesign(f.ID)
-	_ = mgr.CompleteDesign(f.ID)
-	_ = mgr.StartPlanning(f.ID)
-	_ = mgr.CompletePlanning(f.ID)
-	_ = mgr.StartImplementation(f.ID)
-
-	if err := mgr.UpdateIteration(f.ID, 5); err != nil {
-		t.Fatalf("update iteration: %v", err)
-	}
-	f, _ = mgr.Get(f.ID)
-	if f.CurrentIteration != 5 {
-		t.Errorf("iteration = %d, want 5", f.CurrentIteration)
-	}
-}
-
 func TestManagerCreateWithWorktree(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
@@ -260,13 +219,12 @@ func TestManagerCreateWithWorktree(t *testing.T) {
 	}
 
 	mgr := feature.NewManager(store, cfg)
-	mgr.Worktrees = &mocks.MockWorktreeOperator{
+	mgr.Worktrees = &mocks.MockWorktreeOps{
 		CreateFn: func(repoPath, featureSlug, repoName, startPoint string) (string, error) {
 			return filepath.Join(wtDir, featureSlug, repoName), nil
 		},
 	}
-	mgr.Branches = newMockBranches(false)
-	mgr.PRs = mocks.NewMockPublisher()
+	mgr.PRs = mocks.NewMockPRCloser()
 
 	f, err := mgr.Create("Worktree Feature", "test worktree", []string{"test-repo"}, cfg.Defaults.Models, "", "", nil)
 	if err != nil {
@@ -303,13 +261,12 @@ func TestManagerCreateQueuesActiveSetupWithoutWorktreeSideEffects(t *testing.T) 
 	cfg.Repos["test-repo"] = config.RepoConfig{Path: "/repos/test-repo"}
 
 	mgr := feature.NewManager(store, cfg)
-	mgr.Branches = newMockBranches(false)
-	worktrees := mocks.NewMockWorktreeOperator()
+	worktrees := mocks.NewMockWorktreeOps()
 	worktrees.CreateFn = func(repoPath, featureSlug, repoName, startPoint string) (string, error) {
 		return "", fmt.Errorf("worktree side effect should not run while setup is only queued")
 	}
 	mgr.Worktrees = worktrees
-	mgr.PRs = mocks.NewMockPublisher()
+	mgr.PRs = mocks.NewMockPRCloser()
 
 	f, err := mgr.Create("Worktree Feature", "test worktree", []string{"test-repo"}, cfg.Defaults.Models, "", "", nil, feature.CreateOptions{QueueSetup: true})
 	if err != nil {
@@ -353,60 +310,6 @@ func TestManagerCreateQueuesActiveSetupWithoutWorktreeSideEffects(t *testing.T) 
 	}
 }
 
-func TestManagerCreateQueuedSetupDeduplicatesUpstreamBranchBeforeSave(t *testing.T) {
-	t.Parallel()
-	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
-	storeDir := t.TempDir()
-	store := feature.NewStore(storeDir)
-	cfg := config.NewDefault()
-	cfg.Repos["test-repo"] = config.RepoConfig{Path: "/repos/test-repo"}
-
-	mgr := feature.NewManager(store, cfg)
-	branches := newMockBranches(true)
-	conflicted := false
-	branches.BranchExistsOnRemoteFn = func(repoPath, branch string) (bool, error) {
-		if !conflicted && strings.HasPrefix(branch, "feature/upstream-conflict-") {
-			conflicted = true
-			return true, nil
-		}
-		return false, nil
-	}
-	mgr.Branches = branches
-	worktrees := mocks.NewMockWorktreeOperator()
-	worktrees.CreateFn = func(repoPath, featureSlug, repoName, startPoint string) (string, error) {
-		return "", fmt.Errorf("worktree side effect should not run while setup is only queued")
-	}
-	mgr.Worktrees = worktrees
-	mgr.PRs = mocks.NewMockPublisher()
-
-	f, err := mgr.Create("Upstream Conflict", "test", []string{"test-repo"}, cfg.Defaults.Models, "", "", nil, feature.CreateOptions{QueueSetup: true})
-	if err != nil {
-		t.Fatalf("create: %v", err)
-	}
-	if f.Slug == "upstream-conflict" {
-		t.Fatal("slug should have been modified to avoid upstream conflict")
-	}
-	if !strings.HasPrefix(f.Slug, "upstream-conflict-") {
-		t.Fatalf("slug = %q, want upstream-conflict-*", f.Slug)
-	}
-	if len(worktrees.Calls) != 0 {
-		t.Fatalf("worktree create calls = %d, want 0", len(worktrees.Calls))
-	}
-
-	persisted, err := store.Load(f.ID)
-	if err != nil {
-		t.Fatalf("load persisted feature: %v", err)
-	}
-	wantBranch := git.BranchName(f.WorkspaceSlug())
-	if persisted.Repos[0].Branch != wantBranch {
-		t.Fatalf("persisted branch = %q, want %q", persisted.Repos[0].Branch, wantBranch)
-	}
-	task := persisted.Run().Setup.Tasks["worktree:test-repo"]
-	if task.Branch != wantBranch {
-		t.Fatalf("setup task branch = %q, want %q", task.Branch, wantBranch)
-	}
-}
-
 func TestManagerRunSetupUsesFeatureIDQualifiedBranchWhenPlainSlugBranchIsCheckedOut(t *testing.T) {
 	repoDir := testutil.InitGitRepo(t)
 	occupiedBranch := "feature/setup-local-conflict"
@@ -421,9 +324,8 @@ func TestManagerRunSetupUsesFeatureIDQualifiedBranchWhenPlainSlugBranchIsChecked
 	cfg := config.NewDefault()
 	cfg.Repos["test-repo"] = config.RepoConfig{Path: repoDir}
 	mgr := feature.NewManager(store, cfg)
-	mgr.Branches = &git.BranchAdapter{}
 	mgr.Worktrees = git.NewWorktreeManager(t.TempDir())
-	mgr.PRs = mocks.NewMockPublisher()
+	mgr.PRs = mocks.NewMockPRCloser()
 
 	f, err := mgr.Create("Setup Local Conflict", "test", []string{"test-repo"}, cfg.Defaults.Models, "", "", nil, feature.CreateOptions{QueueSetup: true})
 	if err != nil {
@@ -458,13 +360,12 @@ func TestManagerRunSetupCompletesQueuedSetupAndCopiesAssets(t *testing.T) {
 	cfg.Repos["repo-a"] = config.RepoConfig{Path: "/repos/repo-a"}
 	cfg.Repos["repo-b"] = config.RepoConfig{Path: "/repos/repo-b"}
 	mgr := feature.NewManager(store, cfg)
-	mgr.Branches = newMockBranches(false)
-	worktrees := mocks.NewMockWorktreeOperator()
+	worktrees := mocks.NewMockWorktreeOps()
 	worktrees.CreateFn = func(repoPath, featureSlug, repoName, startPoint string) (string, error) {
 		return filepath.Join(wtDir, featureSlug, repoName), nil
 	}
 	mgr.Worktrees = worktrees
-	mgr.PRs = mocks.NewMockPublisher()
+	mgr.PRs = mocks.NewMockPRCloser()
 
 	tmpDir := t.TempDir()
 	imagePath := filepath.Join(tmpDir, "screenshot.png")
@@ -564,7 +465,7 @@ func TestManagerRunSetupCompletesQueuedSetupAndCopiesAssets(t *testing.T) {
 
 func TestManagerRunSetupFailurePersistsDiagnosticsAndLog(t *testing.T) {
 	mgr := newTestManager(t)
-	worktrees := mocks.NewMockWorktreeOperator()
+	worktrees := mocks.NewMockWorktreeOps()
 	worktrees.CreateFn = func(repoPath, featureSlug, repoName, startPoint string) (string, error) {
 		return "", errors.New("git worktree add failed: branch exists")
 	}
@@ -612,7 +513,7 @@ func TestManagerRunSetupFailurePersistsDiagnosticsAndLog(t *testing.T) {
 func TestManagerRunSetupImageFailurePreservesCompletedWorktree(t *testing.T) {
 	wtDir := t.TempDir()
 	mgr := newTestManager(t)
-	mgr.Worktrees = &mocks.MockWorktreeOperator{
+	mgr.Worktrees = &mocks.MockWorktreeOps{
 		CreateFn: func(repoPath, featureSlug, repoName, startPoint string) (string, error) {
 			return filepath.Join(wtDir, featureSlug, repoName), nil
 		},
@@ -654,8 +555,7 @@ func TestManagerRetrySetupSkipsDoneTasksAndCompletesOriginalRun(t *testing.T) {
 	cfg.Repos["repo-a"] = config.RepoConfig{Path: "/repos/repo-a"}
 	cfg.Repos["repo-b"] = config.RepoConfig{Path: "/repos/repo-b"}
 	mgr := feature.NewManager(store, cfg)
-	mgr.Branches = newMockBranches(false)
-	worktrees := mocks.NewMockWorktreeOperator()
+	worktrees := mocks.NewMockWorktreeOps()
 	failRepoB := true
 	worktrees.CreateFn = func(repoPath, featureSlug, repoName, startPoint string) (string, error) {
 		if repoName == "repo-b" && failRepoB {
@@ -664,7 +564,7 @@ func TestManagerRetrySetupSkipsDoneTasksAndCompletesOriginalRun(t *testing.T) {
 		return filepath.Join(wtDir, featureSlug, repoName), nil
 	}
 	mgr.Worktrees = worktrees
-	mgr.PRs = mocks.NewMockPublisher()
+	mgr.PRs = mocks.NewMockPRCloser()
 
 	f, err := mgr.Create("Setup Retry", "retry missing repo", []string{"repo-a", "repo-b"}, cfg.Defaults.Models, "", "", nil, feature.CreateOptions{QueueSetup: true})
 	if err != nil {
@@ -725,7 +625,7 @@ func TestManagerRetrySetupRefusesDuplicateActiveRunner(t *testing.T) {
 	wtDir := t.TempDir()
 	started := make(chan struct{})
 	release := make(chan struct{})
-	mgr.Worktrees = &mocks.MockWorktreeOperator{
+	mgr.Worktrees = &mocks.MockWorktreeOps{
 		CreateFn: func(repoPath, featureSlug, repoName, startPoint string) (string, error) {
 			close(started)
 			<-release
@@ -753,21 +653,14 @@ func TestManagerRetrySetupRefusesDuplicateActiveRunner(t *testing.T) {
 
 func TestManagerRetrySetupFailsOnExpectedWorktreeBranchMismatch(t *testing.T) {
 	mgr := newTestManager(t)
-	conflictPath := filepath.Join(t.TempDir(), "setup-feature", "test-repo")
-	if err := os.MkdirAll(conflictPath, 0o755); err != nil {
-		t.Fatalf("mkdir conflict path: %v", err)
-	}
-	worktrees := mocks.NewMockWorktreeOperator()
+	conflictPath := testutil.InitGitRepo(t)
+	testutil.CreateBranch(t, conflictPath, "feature/someone-else")
+	worktrees := mocks.NewMockWorktreeOps()
 	worktrees.CreateFn = func(repoPath, featureSlug, repoName, startPoint string) (string, error) {
 		t.Fatalf("Create called despite persisted path conflict")
 		return "", nil
 	}
 	mgr.Worktrees = worktrees
-	branches := newMockBranches(false)
-	branches.CurrentBranchFn = func(repoPath string) (string, error) {
-		return "feature/someone-else", nil
-	}
-	mgr.Branches = branches
 	f, err := mgr.Create("Setup Branch Mismatch", "conflict", []string{"test-repo"}, mgr.Config.Defaults.Models, "", "", nil, feature.CreateOptions{QueueSetup: true})
 	if err != nil {
 		t.Fatalf("create: %v", err)
@@ -807,10 +700,7 @@ func TestManagerRetrySetupReusesExpectedWorktreeWhenTaskPathWasNotPersisted(t *t
 	mgr := newTestManager(t)
 	expectedBase := t.TempDir()
 	expectedPath := filepath.Join(expectedBase, "setup-crash-window", "test-repo")
-	if err := os.MkdirAll(expectedPath, 0o755); err != nil {
-		t.Fatalf("mkdir expected path: %v", err)
-	}
-	worktrees := mocks.NewMockWorktreeOperator()
+	worktrees := mocks.NewMockWorktreeOps()
 	worktrees.ExpectedPathFn = func(featureSlug, repoName string) string {
 		return expectedPath
 	}
@@ -820,21 +710,27 @@ func TestManagerRetrySetupReusesExpectedWorktreeWhenTaskPathWasNotPersisted(t *t
 	}
 	mgr.Worktrees = worktrees
 
-	var expectedBranch string
-	branches := newMockBranches(false)
-	branches.CurrentBranchFn = func(repoPath string) (string, error) {
-		if repoPath != expectedPath {
-			t.Fatalf("CurrentBranch path = %q, want %q", repoPath, expectedPath)
-		}
-		return expectedBranch, nil
-	}
-	mgr.Branches = branches
-
 	f, err := mgr.Create("Setup Crash Window", "reattach expected path", []string{"test-repo"}, mgr.Config.Defaults.Models, "", "", nil, feature.CreateOptions{QueueSetup: true})
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	expectedBranch = git.BranchName(f.WorkspaceSlug())
+	expectedBranch := git.BranchName(f.WorkspaceSlug())
+	if err := os.MkdirAll(expectedPath, 0o755); err != nil {
+		t.Fatalf("mkdir expected path: %v", err)
+	}
+	for _, args := range [][]string{
+		{"init", "--initial-branch=" + expectedBranch},
+		{"config", "user.email", "test@example.com"},
+		{"config", "user.name", "Test"},
+		{"commit", "--allow-empty", "-m", "initial"},
+	} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = expectedPath
+		cmd.Env = testutil.GitTestEnv()
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %s: %v: %s", strings.Join(args, " "), err, out)
+		}
+	}
 	if err := mgr.Store.Modify(f.ID, func(ff *feature.Feature) error {
 		setup := ff.Run().Setup
 		setup.Status = feature.SetupStatusFailed
@@ -878,7 +774,7 @@ func TestManagerRetrySetupReusesExpectedWorktreeWhenTaskPathWasNotPersisted(t *t
 func TestManagerDeleteRemovesSetupTaskWorktreePaths(t *testing.T) {
 	mgr := newTestManager(t)
 	removed := make(map[string]bool)
-	mgr.Worktrees = &mocks.MockWorktreeOperator{
+	mgr.Worktrees = &mocks.MockWorktreeOps{
 		RemoveFn: func(worktreePath string, deleteBranch bool) error {
 			if !deleteBranch {
 				t.Fatalf("deleteBranch = false for %s, want true", worktreePath)
@@ -1128,7 +1024,7 @@ func TestManagerMarkPublished(t *testing.T) {
 	// non-publishable. Force publishable=true to exercise the empty-URL guard.
 	makePublishable(t, mgr, f.ID)
 
-	// Advance through full lifecycle to PRReady
+	// Advance through full lifecycle to CodeReady.
 	_ = mgr.Transition(f.ID, feature.StatusResearching)
 	_ = mgr.Transition(f.ID, feature.StatusPlanReady)
 	_ = mgr.Transition(f.ID, feature.StatusPlanning)
@@ -1277,50 +1173,6 @@ func TestManagerCreateWithImages(t *testing.T) {
 	}
 }
 
-// TestManagerStartRebaseFromReviewPassed verifies that StartRebase works when the
-// feature is in ReviewPassed status (e.g., pull-rebase conflict during review-comments
-// after CompleteImplementation has already marked the feature ReviewPassed).
-func TestManagerReturnToPublished(t *testing.T) {
-	t.Parallel()
-	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
-	mgr := newTestManager(t)
-	f, _ := mgr.Create("Return Published Test", "test", []string{"test-repo"}, mgr.Config.Defaults.Models, "", "", nil)
-
-	// Advance to PRReady
-	_ = mgr.Transition(f.ID, feature.StatusResearching)
-	_ = mgr.Transition(f.ID, feature.StatusPlanReady)
-	_ = mgr.Transition(f.ID, feature.StatusPlanning)
-	_ = mgr.Transition(f.ID, feature.StatusImplementReady)
-	_ = mgr.Transition(f.ID, feature.StatusImplementing)
-	_ = mgr.Transition(f.ID, feature.StatusReviewPassed)
-	_ = mgr.Transition(f.ID, feature.StatusCodeReady)
-
-	// First publish
-	_ = mgr.MarkPublished(f.ID, "https://github.com/test/pr/1")
-
-	// Start a rebase-like cycle by direct transition (StartRebase is no longer available).
-	_ = mgr.Transition(f.ID, feature.StatusImplementReady)
-	_ = mgr.Transition(f.ID, feature.StatusImplementing)
-	_ = mgr.Transition(f.ID, feature.StatusReviewPassed)
-	_ = mgr.Transition(f.ID, feature.StatusCodeReady)
-
-	// Return to published
-	if err := mgr.ReturnToPublished(f.ID); err != nil {
-		t.Fatalf("return to published: %v", err)
-	}
-	f, _ = mgr.Get(f.ID)
-	if f.Status != feature.StatusPublished {
-		t.Errorf("status = %v, want Published", f.Status)
-	}
-	if f.CurrentPhase != feature.PhasePublish {
-		t.Errorf("phase = %v, want Publish", f.CurrentPhase)
-	}
-	// PR URL should still be preserved
-	if f.PRURL() != "https://github.com/test/pr/1" {
-		t.Errorf("PR URL = %q, want preserved", f.PRURL())
-	}
-}
-
 // TestMarkPublished_NonPublishableEmptyURLAccepted confirms the guard
 // only applies to publishable features; non-publishable features may
 // legitimately Transition to StatusPublished with no PR URL.
@@ -1357,216 +1209,6 @@ func TestMarkPublished_NonPublishableEmptyURLAccepted(t *testing.T) {
 	}
 	if got.PRURL() != "" {
 		t.Errorf("PRURL = %q, want empty", got.PRURL())
-	}
-}
-
-// TestReturnToPublished_PublishableNoURLRejected ensures the guard blocks the
-// transition when a publishable feature has no PR URL anywhere. Without the
-// guard, a rebase-cycle completion on a first-publish-conflict path could land
-// the feature at StatusPublished with no PR.
-func TestReturnToPublished_PublishableNoURLRejected(t *testing.T) {
-	t.Parallel()
-	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
-	mgr := newTestManager(t)
-	f, _ := mgr.Create("Return Published No URL", "test", []string{"test-repo"}, mgr.Config.Defaults.Models, "", "", nil)
-	makePublishable(t, mgr, f.ID)
-
-	// Walk into StatusCodeReady without ever calling MarkPublished, so PRURL
-	// stays empty at both feature and per-repo level.
-	_ = mgr.Transition(f.ID, feature.StatusResearching)
-	_ = mgr.Transition(f.ID, feature.StatusPlanReady)
-	_ = mgr.Transition(f.ID, feature.StatusPlanning)
-	_ = mgr.Transition(f.ID, feature.StatusImplementReady)
-	_ = mgr.Transition(f.ID, feature.StatusImplementing)
-	_ = mgr.Transition(f.ID, feature.StatusReviewPassed)
-	_ = mgr.Transition(f.ID, feature.StatusCodeReady)
-
-	if err := mgr.ReturnToPublished(f.ID); err == nil {
-		t.Fatal("ReturnToPublished on publishable feature with no PR URL must fail")
-	}
-	got, _ := mgr.Get(f.ID)
-	if got.Status == feature.StatusPublished {
-		t.Errorf("feature transitioned to Published without a PR URL: status = %v", got.Status)
-	}
-}
-
-// TestReturnToPublished_RepoLevelURLAccepted confirms a per-repo PR URL
-// satisfies the guard even when the top-level f.PRURL is empty (the normal
-// state after MarkPublished because FirstRepoPRURL is the per-repo slot).
-func TestReturnToPublished_RepoLevelURLAccepted(t *testing.T) {
-	t.Parallel()
-	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
-	mgr := newTestManager(t)
-	f, _ := mgr.Create("Return Published Repo URL", "test", []string{"test-repo"}, mgr.Config.Defaults.Models, "", "", nil)
-	makePublishable(t, mgr, f.ID)
-
-	_ = mgr.Transition(f.ID, feature.StatusResearching)
-	_ = mgr.Transition(f.ID, feature.StatusPlanReady)
-	_ = mgr.Transition(f.ID, feature.StatusPlanning)
-	_ = mgr.Transition(f.ID, feature.StatusImplementReady)
-	_ = mgr.Transition(f.ID, feature.StatusImplementing)
-	_ = mgr.Transition(f.ID, feature.StatusReviewPassed)
-	_ = mgr.Transition(f.ID, feature.StatusCodeReady)
-
-	// Seed a per-repo PR URL (simulates publishRepo's SetRepoPublished) but
-	// leave f.PRURL empty.
-	_ = mgr.Store.Modify(f.ID, func(ff *feature.Feature) error {
-		if ff.RepoStates == nil {
-			ff.RepoStates = map[string]*feature.RepoState{}
-		}
-		ff.RepoStates["test-repo"] = &feature.RepoState{
-			Touched: true, PRURL: "https://github.com/test/pr/42",
-		}
-		return nil
-	})
-	_ = mgr.Transition(f.ID, feature.StatusImplementReady)
-	_ = mgr.Transition(f.ID, feature.StatusImplementing)
-	_ = mgr.Transition(f.ID, feature.StatusReviewPassed)
-	_ = mgr.Transition(f.ID, feature.StatusCodeReady)
-
-	if err := mgr.ReturnToPublished(f.ID); err != nil {
-		t.Fatalf("ReturnToPublished with per-repo PR URL must succeed: %v", err)
-	}
-	got, _ := mgr.Get(f.ID)
-	if got.Status != feature.StatusPublished {
-		t.Errorf("status = %v, want Published", got.Status)
-	}
-}
-
-// TestReturnToPublished_NonPublishableNoURL preserves the non-publishable
-// branch: no PR is ever expected, so the guard does not fire.
-func TestReturnToPublished_NonPublishableNoURL(t *testing.T) {
-	t.Parallel()
-	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
-	mgr := newTestManager(t)
-	f, _ := mgr.Create("NoRemote Return", "test", []string{"test-repo"}, mgr.Config.Defaults.Models, "", "", nil)
-
-	_ = mgr.Store.Modify(f.ID, func(ff *feature.Feature) error {
-		no := false
-		for i := range ff.Repos {
-			ff.Repos[i].Publishable = &no
-		}
-		return nil
-	})
-
-	_ = mgr.Transition(f.ID, feature.StatusResearching)
-	_ = mgr.Transition(f.ID, feature.StatusPlanReady)
-	_ = mgr.Transition(f.ID, feature.StatusPlanning)
-	_ = mgr.Transition(f.ID, feature.StatusImplementReady)
-	_ = mgr.Transition(f.ID, feature.StatusImplementing)
-	_ = mgr.Transition(f.ID, feature.StatusReviewPassed)
-	_ = mgr.Transition(f.ID, feature.StatusCodeReady)
-
-	if err := mgr.ReturnToPublished(f.ID); err != nil {
-		t.Fatalf("non-publishable ReturnToPublished must succeed with no URL: %v", err)
-	}
-}
-
-func TestManagerRecreateWorktree(t *testing.T) {
-	t.Parallel()
-	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
-	storeDir := t.TempDir()
-	wtDir := t.TempDir()
-	store := feature.NewStore(storeDir)
-	cfg := config.NewDefault()
-	cfg.Repos["test-repo"] = config.RepoConfig{
-		Path: "/repos/test-repo",
-	}
-	mgr := feature.NewManager(store, cfg)
-	mgr.Worktrees = &mocks.MockWorktreeOperator{
-		CreateFn: func(repoPath, featureSlug, repoName, startPoint string) (string, error) {
-			return filepath.Join(wtDir, featureSlug, repoName), nil
-		},
-	}
-	mgr.Branches = newMockBranches(false)
-	mgr.PRs = mocks.NewMockPublisher()
-
-	// Create feature with worktree
-	f, err := mgr.Create("Recreate WT Test", "test", []string{"test-repo"}, cfg.Defaults.Models, "", "", nil)
-	if err != nil {
-		t.Fatalf("create: %v", err)
-	}
-	if f.Repos[0].WorktreePath == "" {
-		t.Fatal("expected worktree path after create")
-	}
-
-	originalWT := f.Repos[0].WorktreePath
-
-	// Clean the worktree
-	if err := mgr.CleanWorktree(f.ID); err != nil {
-		t.Fatalf("clean worktree: %v", err)
-	}
-	f, _ = mgr.Get(f.ID)
-	if f.Repos[0].WorktreePath != "" {
-		t.Errorf("expected empty worktree path after clean, got %q", f.Repos[0].WorktreePath)
-	}
-
-	// Recreate
-	if err := mgr.RecreateWorktree(f.ID); err != nil {
-		t.Fatalf("recreate worktree: %v", err)
-	}
-	f, _ = mgr.Get(f.ID)
-	if f.Repos[0].WorktreePath == "" {
-		t.Error("expected worktree path after recreate")
-	}
-	if f.Repos[0].WorktreePath != originalWT {
-		t.Errorf("recreated path = %q, want %q", f.Repos[0].WorktreePath, originalWT)
-	}
-}
-
-func TestManagerFullRebaseCycle(t *testing.T) {
-	t.Parallel()
-	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
-	mgr := newTestManager(t)
-	f, _ := mgr.Create("Full Rebase Cycle", "test", []string{"test-repo"}, mgr.Config.Defaults.Models, "", "", nil)
-
-	// Full lifecycle to Published
-	_ = mgr.Transition(f.ID, feature.StatusResearching)
-	_ = mgr.Transition(f.ID, feature.StatusPlanReady)
-	_ = mgr.Transition(f.ID, feature.StatusPlanning)
-	_ = mgr.Transition(f.ID, feature.StatusImplementReady)
-	_ = mgr.Transition(f.ID, feature.StatusImplementing)
-	_ = mgr.Transition(f.ID, feature.StatusReviewPassed)
-	_ = mgr.Transition(f.ID, feature.StatusCodeReady)
-	_ = mgr.MarkPublished(f.ID, "https://github.com/test/pr/1")
-
-	// Rebase cycle: Published -> ImplementReady -> Implementing -> ReviewPassed -> PRReady -> Published.
-	// Manager.StartRebase is no longer available; emulate the transition directly.
-	_ = mgr.Store.Modify(f.ID, func(ff *feature.Feature) error {
-		if err := ff.Transition(feature.StatusImplementReady); err != nil {
-			return err
-		}
-		ff.SetRebaseCount(ff.RebaseCount() + 1)
-		ff.SetActiveCycleType(feature.CycleRebase)
-		ff.CurrentPhase = feature.PhaseImplement
-		return nil
-	})
-	_ = mgr.StartImplementation(f.ID)
-
-	f, _ = mgr.Get(f.ID)
-	if f.Status != feature.StatusImplementing {
-		t.Fatalf("status = %v, want Implementing", f.Status)
-	}
-
-	_ = mgr.CompleteImplementation(f.ID)
-	_ = mgr.MarkCodeReady(f.ID)
-	_ = mgr.ReturnToPublished(f.ID)
-
-	f, _ = mgr.Get(f.ID)
-	if f.Status != feature.StatusPublished {
-		t.Errorf("status = %v, want Published", f.Status)
-	}
-	if f.RebaseCount() != 1 {
-		t.Errorf("rebase count = %d, want 1", f.RebaseCount())
-	}
-
-	// Can still go to Done
-	if err := mgr.Transition(f.ID, feature.StatusDone); err != nil {
-		t.Fatalf("transition to done: %v", err)
-	}
-	f, _ = mgr.Get(f.ID)
-	if f.Status != feature.StatusDone {
-		t.Errorf("status = %v, want Done", f.Status)
 	}
 }
 
@@ -1692,55 +1334,6 @@ func TestManagerCreateNoAttachments(t *testing.T) {
 	}
 }
 
-func TestManagerCreateDeduplicatesUpstreamBranch(t *testing.T) {
-	t.Parallel()
-	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
-	storeDir := t.TempDir()
-	wtDir := t.TempDir()
-	store := feature.NewStore(storeDir)
-	cfg := config.NewDefault()
-	cfg.Repos["test-repo"] = config.RepoConfig{Path: "/repos/test-repo"}
-
-	mgr := feature.NewManager(store, cfg)
-	mgr.Worktrees = &mocks.MockWorktreeOperator{
-		CreateFn: func(repoPath, featureSlug, repoName, startPoint string) (string, error) {
-			return filepath.Join(wtDir, featureSlug, repoName), nil
-		},
-	}
-	branches := newMockBranches(true)
-	conflicted := false
-	branches.BranchExistsOnRemoteFn = func(repoPath, branch string) (bool, error) {
-		if !conflicted && strings.HasPrefix(branch, "feature/upstream-conflict-") {
-			conflicted = true
-			return true, nil
-		}
-		return false, nil
-	}
-	mgr.Branches = branches
-	mgr.PRs = mocks.NewMockPublisher()
-
-	f, err := mgr.Create("Upstream Conflict", "test", []string{"test-repo"}, cfg.Defaults.Models, "", "", nil)
-	if err != nil {
-		t.Fatalf("create: %v", err)
-	}
-
-	if f.Slug == "upstream-conflict" {
-		t.Error("slug should have been modified to avoid upstream conflict")
-	}
-	if !strings.HasPrefix(f.Slug, "upstream-conflict-") {
-		t.Errorf("slug should start with 'upstream-conflict-', got %q", f.Slug)
-	}
-	suffix := strings.TrimPrefix(f.Slug, "upstream-conflict-")
-	if len(suffix) != 4 {
-		t.Errorf("suffix length = %d, want 4 hex chars", len(suffix))
-	}
-
-	expectedBranch := git.BranchName(f.WorkspaceSlug())
-	if f.Repos[0].Branch != expectedBranch {
-		t.Errorf("branch = %q, want %q", f.Repos[0].Branch, expectedBranch)
-	}
-}
-
 func TestManagerCreateNoSuffixWhenNoUpstreamConflict(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
@@ -1751,13 +1344,12 @@ func TestManagerCreateNoSuffixWhenNoUpstreamConflict(t *testing.T) {
 	cfg.Repos["test-repo"] = config.RepoConfig{Path: "/repos/test-repo"}
 
 	mgr := feature.NewManager(store, cfg)
-	mgr.Worktrees = &mocks.MockWorktreeOperator{
+	mgr.Worktrees = &mocks.MockWorktreeOps{
 		CreateFn: func(repoPath, featureSlug, repoName, startPoint string) (string, error) {
 			return filepath.Join(wtDir, featureSlug, repoName), nil
 		},
 	}
-	mgr.Branches = newMockBranches(true)
-	mgr.PRs = mocks.NewMockPublisher()
+	mgr.PRs = mocks.NewMockPRCloser()
 
 	f, err := mgr.Create("No Conflict Feature", "test", []string{"test-repo"}, cfg.Defaults.Models, "", "", nil)
 	if err != nil {
@@ -2081,7 +1673,7 @@ func TestRewindToPhase_PRURLCleared(t *testing.T) {
 	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
 	skipShortFeatureRegression(t, "extended rewind PR-close regression; lower-level PR URL clearing remains covered elsewhere")
 	mgr := newTestManager(t)
-	prs := mocks.NewMockPublisher()
+	prs := mocks.NewMockPRCloser()
 	prs.ClosePRFn = func(prURL string) error {
 		return errors.New("close failed")
 	}
@@ -2093,7 +1685,7 @@ func TestRewindToPhase_PRURLCleared(t *testing.T) {
 	_ = mgr.Store.Modify(f.ID, func(f *feature.Feature) error {
 		f.Status = feature.StatusPublished
 		f.CurrentPhase = feature.PhasePublish
-		// Per-repo PR URL is the only source of truth post-cutover.
+		// Per-repo PR URL is the only source of truth.
 		if f.RepoStates == nil {
 			f.RepoStates = map[string]*feature.RepoState{}
 		}
@@ -2133,11 +1725,6 @@ func TestRewindToPhase_BackupBranchWarning(t *testing.T) {
 	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
 	skipShortFeatureRegression(t, "extended rewind backup-branch warning regression")
 	mgr := newTestManager(t)
-	branches := newMockBranches(false)
-	branches.CreateBackupBranchFn = func(worktreePath, slug string) (string, error) {
-		return "", errors.New("backup failed")
-	}
-	mgr.Branches = branches
 	f, err := mgr.Create("Backup Warn", "desc", []string{"test-repo"}, mgr.Config.Defaults.Models, "", "", nil)
 	if err != nil {
 		t.Fatalf("create: %v", err)
@@ -2269,12 +1856,10 @@ func TestRewindToPhase_FieldsZeroed(t *testing.T) {
 		f.MaxPlanIterations = 10
 		f.ValidatingPlan = true
 		f.ReviewingGate = true
-		f.SetRebaseCount(2)
 		f.LastError = "some error"
 		f.FailureType = "test"
 		f.ActivePhaseStart = &now
 		f.ActiveTimingKey = "implement"
-		f.SetAddressingReviews(true)
 		return nil
 	})
 
@@ -2294,9 +1879,6 @@ func TestRewindToPhase_FieldsZeroed(t *testing.T) {
 	if got.ReviewingGate {
 		t.Error("ReviewingGate should be false")
 	}
-	if got.RebaseCount() != 0 {
-		t.Errorf("RebaseCount = %d, want 0", got.RebaseCount())
-	}
 	if got.LastError != "" {
 		t.Errorf("LastError = %q, want empty", got.LastError)
 	}
@@ -2308,9 +1890,6 @@ func TestRewindToPhase_FieldsZeroed(t *testing.T) {
 	}
 	if got.ActiveTimingKey != "" {
 		t.Errorf("ActiveTimingKey = %q, want empty", got.ActiveTimingKey)
-	}
-	if got.AddressingReviews() {
-		t.Error("AddressingReviews should be false")
 	}
 }
 
@@ -2531,80 +2110,6 @@ func TestStartRoadmapPhaseImplementation(t *testing.T) {
 	}
 }
 
-func TestCompleteRoadmap(t *testing.T) {
-	t.Parallel()
-	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
-	mgr := newTestManager(t)
-	f, err := mgr.Create("Complete Roadmap", "desc", []string{"test-repo"}, mgr.Config.Defaults.Models, "", "", nil)
-	if err != nil {
-		t.Fatalf("create: %v", err)
-	}
-
-	_ = mgr.Transition(f.ID, feature.StatusResearching)
-	_ = mgr.Transition(f.ID, feature.StatusPlanReady)
-	_ = mgr.Transition(f.ID, feature.StatusPlanning)
-	_ = mgr.Transition(f.ID, feature.StatusImplementReady)
-	_ = mgr.Transition(f.ID, feature.StatusImplementing)
-	_ = mgr.Transition(f.ID, feature.StatusReviewPassed)
-
-	if err := mgr.CompleteRoadmap(f.ID); err != nil {
-		t.Fatalf("CompleteRoadmap: %v", err)
-	}
-	f, _ = mgr.Get(f.ID)
-	if f.Status != feature.StatusCodeReady {
-		t.Errorf("status = %v, want PRReady", f.Status)
-	}
-	if f.CurrentPhase != feature.PhasePublish {
-		t.Errorf("CurrentPhase = %v, want Publish", f.CurrentPhase)
-	}
-}
-
-func TestRestartFromBeginningClearsRoadmapFields(t *testing.T) {
-	t.Parallel()
-	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
-	skipShortFeatureRegression(t, "extended restart rewind field-reset regression")
-	mgr := newTestManager(t)
-	f, err := mgr.Create("Reset Roadmap", "desc", []string{"test-repo"}, mgr.Config.Defaults.Models, "", "", nil)
-	if err != nil {
-		t.Fatalf("create: %v", err)
-	}
-
-	// Under the new seal+fork restart path, the feature must be in a
-	// rewindable state (not StatusCreated) for RewindToPhase to accept it.
-	// Parallel the legacy test's intent by placing it at StatusImplementing
-	// with roadmap fields populated.
-	_ = mgr.Store.Modify(f.ID, func(f *feature.Feature) error {
-		f.Status = feature.StatusImplementing
-		f.CurrentPhase = feature.PhaseImplement
-		f.CurrentRoadmapPhase = 3
-		f.TotalRoadmapPhases = 5
-		f.RoadmapPhaseType = "tdd-fill-in"
-		return nil
-	})
-
-	if err := mgr.RestartFromBeginning(f.ID); err != nil {
-		t.Fatalf("RestartFromBeginning: %v", err)
-	}
-
-	f, _ = mgr.Get(f.ID)
-	// New active run starts fresh — roadmap fields are cleared.
-	if f.CurrentRoadmapPhase != 0 {
-		t.Errorf("CurrentRoadmapPhase = %d, want 0", f.CurrentRoadmapPhase)
-	}
-	if f.TotalRoadmapPhases != 0 {
-		t.Errorf("TotalRoadmapPhases = %d, want 0", f.TotalRoadmapPhases)
-	}
-	if f.RoadmapPhaseType != "" {
-		t.Errorf("RoadmapPhaseType = %q, want empty", f.RoadmapPhaseType)
-	}
-	if !f.ForceKBRebuild {
-		t.Error("ForceKBRebuild should be set after RestartFromBeginning")
-	}
-	if f.ActiveRun != 2 || f.RunCount != 2 {
-		t.Errorf("ActiveRun/RunCount = %d/%d, want 2/2", f.ActiveRun, f.RunCount)
-	}
-}
-
 // TestRoadmapPhaseTimingKeyTransitions verifies that timing keys transition correctly
 // through AdvanceRoadmapPhase → StartRoadmapPhaseImplementation → StartImplementation.
 func TestRoadmapPhaseTimingKeyTransitions(t *testing.T) {
@@ -2674,8 +2179,8 @@ func TestRoadmapPhaseTimingKeyTransitions(t *testing.T) {
 // roadmap-phase plan is interrupted and the user restarts it, the resumed
 // plan time accumulates into phase-N-plan rather than collapsing into the
 // strategic "plan" bucket. Regression for a stopwatch bug where
-// StartPlanning's guard only protected refactor-N keys, so phase-2-plan
-// was silently overwritten with "plan" on restart.
+// StartPlanning's timing-key guard failed to protect phase-2-plan keys, so
+// phase-2-plan was silently overwritten with "plan" on restart.
 func TestRoadmapPhasePlanTimingSurvivesInterruptRestart(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
@@ -3260,7 +2765,7 @@ func TestTryCompletePublish_NotAllReady(t *testing.T) {
 	}
 }
 
-func TestTryCompletePublish_FeatureAtPRReady(t *testing.T) {
+func TestTryCompletePublish_FeatureAtCodeReady(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
 	dir := t.TempDir()
@@ -3285,7 +2790,7 @@ func TestTryCompletePublish_FeatureAtPRReady(t *testing.T) {
 		t.Fatalf("TryCompletePublish: %v", err)
 	}
 	if !published {
-		t.Fatal("expected published = true for feature at PRReady")
+		t.Fatal("expected published = true for feature at CodeReady")
 	}
 
 	loaded, _ := store.Load(f.ID)
@@ -3366,7 +2871,7 @@ func TestRewindToPhase_ClearsRepoImpl(t *testing.T) {
 // the Medium-rewind-to-Plan fix. Medium pipelines have no inquire /
 // research / design phases, so rewinding to Plan (the first phase of
 // the Medium pipeline) previously left the feature with no artifact the
-// rewind-review session could display — the TUI aborted with "no artifact
+// rewind-review session could display — the desktop app aborted with "no artifact
 // found for the previous phase" and the user could not attach to review.
 //
 // Treating PhasePlan as "first phase of the pipeline" for Medium mirrors
@@ -3447,15 +2952,14 @@ func TestRewindToPhase_ClosesPerRepoPRs(t *testing.T) {
 	skipShortFeatureRegression(t, "extended rewind per-repo PR close warning regression")
 	dir := t.TempDir()
 	store := feature.NewStore(dir)
-	prs := mocks.NewMockPublisher()
+	prs := mocks.NewMockPRCloser()
 	prs.ClosePRFn = func(prURL string) error {
 		return errors.New("close failed")
 	}
 	mgr := &feature.Manager{
-		Store:    store,
-		Config:   &config.Config{},
-		Branches: newMockBranches(false),
-		PRs:      prs,
+		Store:  store,
+		Config: &config.Config{},
+		PRs:    prs,
 	}
 
 	f := newMultiRepoFeature(t, mgr, []feature.FeatureRepo{
@@ -3533,607 +3037,7 @@ func TestRewindToPhase_ImplementResetsMultiRepoState(t *testing.T) {
 	}
 }
 
-func TestRepoCycleMethods(t *testing.T) {
-	t.Parallel()
-	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
-	mgr := newTestManager(t)
-	mgr.Config.Repos["repo-b"] = config.RepoConfig{Path: "/tmp/repo-b"}
-	f, err := mgr.Create("Multi-Repo Feature", "desc", []string{"test-repo", "repo-b"}, mgr.Config.Defaults.Models, "", "", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// Advance to Published
-	for _, s := range []feature.Status{feature.StatusBuildingKB, feature.StatusCreated, feature.StatusResearching, feature.StatusPlanReady, feature.StatusPlanning, feature.StatusImplementReady, feature.StatusImplementing, feature.StatusReviewPassed, feature.StatusCodeReady, feature.StatusPublished} {
-		if err := mgr.Transition(f.ID, s); err != nil {
-			t.Fatalf("transition to %v: %v", s, err)
-		}
-	}
-
-	t.Run("StartRepoCycle", func(t *testing.T) {
-		if err := mgr.StartRepoCycle(f.ID, "test-repo", feature.CycleReviewComments); err != nil {
-			t.Fatal(err)
-		}
-		got, _ := mgr.Get(f.ID)
-		if got.Status != feature.StatusPublished {
-			t.Errorf("status = %v, want Published", got.Status)
-		}
-		rc := got.RepoCycles["test-repo"]
-		if rc == nil || rc.Type != feature.CycleReviewComments || rc.Status != "running" {
-			t.Errorf("repo cycle = %+v, want running review-comments", rc)
-		}
-	})
-
-	t.Run("StartRepoCycle_DuplicateBlocked", func(t *testing.T) {
-		err := mgr.StartRepoCycle(f.ID, "test-repo", feature.CycleReviewComments)
-		if err == nil {
-			t.Error("expected error for duplicate cycle start")
-		}
-	})
-
-	t.Run("StartRepoCycle_BlockedWhileReviewing", func(t *testing.T) {
-		// Mark the existing running cycle as reviewing
-		if err := mgr.MarkRepoCycleReviewing(f.ID, "test-repo"); err != nil {
-			t.Fatalf("MarkRepoCycleReviewing: %v", err)
-		}
-		// Starting a new cycle on the same repo should be blocked
-		err := mgr.StartRepoCycle(f.ID, "test-repo", feature.CycleReviewComments)
-		if err == nil {
-			t.Error("expected error for cycle start while reviewing")
-		}
-		// Verify the existing cycle still has status "reviewing"
-		got, _ := mgr.Get(f.ID)
-		rc := got.RepoCycles["test-repo"]
-		if rc == nil {
-			t.Fatal("expected repo cycle for test-repo, got nil")
-		}
-		if rc.Status != "reviewing" {
-			t.Errorf("RepoCycle status = %q, want %q", rc.Status, "reviewing")
-		}
-		// Restore to running for subsequent subtests
-		_ = mgr.CompleteRepoCycle(f.ID, "test-repo")
-		_ = mgr.StartRepoCycle(f.ID, "test-repo", feature.CycleReviewComments)
-	})
-
-	t.Run("StartRepoCycle_DifferentRepo", func(t *testing.T) {
-		if err := mgr.StartRepoCycle(f.ID, "repo-b", feature.CycleReviewComments); err != nil {
-			t.Fatal(err)
-		}
-		got, _ := mgr.Get(f.ID)
-		if len(got.RepoCycles) != 2 {
-			t.Errorf("len(RepoCycles) = %d, want 2", len(got.RepoCycles))
-		}
-		if got.RepoCycles["repo-b"].Type != feature.CycleReviewComments {
-			t.Errorf("repo-b cycle type = %v, want review-comments", got.RepoCycles["repo-b"].Type)
-		}
-	})
-
-	t.Run("HasActiveRepoCycles", func(t *testing.T) {
-		active, err := mgr.HasActiveRepoCycles(f.ID)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !active {
-			t.Error("expected active cycles")
-		}
-	})
-
-	t.Run("CompleteRepoCycle", func(t *testing.T) {
-		if err := mgr.CompleteRepoCycle(f.ID, "test-repo"); err != nil {
-			t.Fatal(err)
-		}
-		got, _ := mgr.Get(f.ID)
-		if _, ok := got.RepoCycles["test-repo"]; ok {
-			t.Error("test-repo cycle should be removed after completion")
-		}
-		if got.RepoCycles["repo-b"] == nil {
-			t.Error("repo-b cycle should still exist")
-		}
-	})
-
-	t.Run("FailRepoCycle", func(t *testing.T) {
-		if err := mgr.FailRepoCycle(f.ID, "repo-b", "merge conflict"); err != nil {
-			t.Fatal(err)
-		}
-		got, _ := mgr.Get(f.ID)
-		rc := got.RepoCycles["repo-b"]
-		if rc.LastError == "" || rc.LastError != "merge conflict" {
-			t.Errorf("repo-b cycle = %+v, want failed with error", rc)
-		}
-	})
-
-	t.Run("HasActiveRepoCycles_NoneRunning", func(t *testing.T) {
-		active, err := mgr.HasActiveRepoCycles(f.ID)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if active {
-			t.Error("no running cycles, but HasActiveRepoCycles returned true")
-		}
-	})
-
-	t.Run("ClearRepoCycles", func(t *testing.T) {
-		if err := mgr.ClearRepoCycles(f.ID); err != nil {
-			t.Fatal(err)
-		}
-		got, _ := mgr.Get(f.ID)
-		if got.RepoCycles != nil {
-			t.Errorf("RepoCycles should be nil, got %v", got.RepoCycles)
-		}
-	})
-}
-
-func TestManagerFeatureRebaseOperationLifecycle(t *testing.T) {
-	store := feature.NewStore(t.TempDir())
-	m := feature.NewManager(store, config.NewDefault())
-	f := &feature.Feature{
-		ID:            "feat-rebase-op",
-		Name:          "Rebase Operation",
-		Slug:          "rebase-operation",
-		Status:        feature.StatusCodeReady,
-		SchemaVersion: feature.SchemaVersionCurrent,
-		Repos: []feature.FeatureRepo{
-			{Name: apiRepoName},
-			{Name: "web"},
-		},
-	}
-	if err := store.Save(f); err != nil {
-		t.Fatalf("save feature: %v", err)
-	}
-
-	if err := m.StartFeatureRebaseOperation(f.ID); err != nil {
-		t.Fatalf("StartFeatureRebaseOperation: %v", err)
-	}
-	if err := m.UpdateFeatureRebaseRepo(f.ID, apiRepoName, feature.RebaseRepoStatusChecking, feature.RebaseRepoProgress{}); err != nil {
-		t.Fatalf("UpdateFeatureRebaseRepo checking: %v", err)
-	}
-	if err := m.UpdateFeatureRebaseRepo(f.ID, apiRepoName, feature.RebaseRepoStatusChanged, feature.RebaseRepoProgress{RebaseTarget: "main", Changed: true}); err != nil {
-		t.Fatalf("UpdateFeatureRebaseRepo changed: %v", err)
-	}
-	if err := m.UpdateFeatureRebaseRepo(f.ID, "web", feature.RebaseRepoStatusUpToDate, feature.RebaseRepoProgress{RebaseTarget: "main"}); err != nil {
-		t.Fatalf("UpdateFeatureRebaseRepo up to date: %v", err)
-	}
-
-	got, err := store.Load(f.ID)
-	if err != nil {
-		t.Fatalf("load feature: %v", err)
-	}
-	if got.ActiveCycle == nil || got.ActiveCycle.Type != feature.CycleRebase || got.ActiveCycle.Status != feature.RepoCycleRunning {
-		t.Fatalf("ActiveCycle = %+v, want running rebase", got.ActiveCycle)
-	}
-	if got.RebaseOperation == nil || got.RebaseOperation.Stage != feature.RebaseStageHarness {
-		t.Fatalf("RebaseOperation = %+v, want harness stage", got.RebaseOperation)
-	}
-	if got.RebaseOperation.Repos[apiRepoName].Status != feature.RebaseRepoStatusChanged {
-		t.Fatalf("api status = %q, want changed", got.RebaseOperation.Repos[apiRepoName].Status)
-	}
-
-	if err := m.ClearFeatureRebaseOperation(f.ID); err != nil {
-		t.Fatalf("ClearFeatureRebaseOperation: %v", err)
-	}
-	got, err = store.Load(f.ID)
-	if err != nil {
-		t.Fatalf("reload feature: %v", err)
-	}
-	if got.ActiveCycle != nil || got.ActiveCycleType() != "" || got.RebaseOperation != nil {
-		t.Fatalf("cycle not cleared: ActiveCycle=%+v ActiveCycleType=%q RebaseOperation=%+v", got.ActiveCycle, got.ActiveCycleType(), got.RebaseOperation)
-	}
-}
-
-func TestManagerFeatureRebaseOperationDoesNotClobberOtherCycles(t *testing.T) {
-	store := feature.NewStore(t.TempDir())
-	m := feature.NewManager(store, config.NewDefault())
-	f := &feature.Feature{
-		ID:            "feat-rebase-op-guard",
-		Name:          "Rebase Operation Guard",
-		Slug:          "rebase-operation-guard",
-		Status:        feature.StatusPublished,
-		SchemaVersion: feature.SchemaVersionCurrent,
-		ActiveRun:     1,
-		RunCount:      1,
-		Repos: []feature.FeatureRepo{
-			{Name: apiRepoName},
-		},
-		ActiveCycle: &feature.CycleState{
-			Type:   feature.CycleReviewComments,
-			Status: feature.RepoCycleRunning,
-			Count:  2,
-		},
-		RebaseOperation: &feature.RebaseOperationState{
-			Stage: feature.RebaseStageHarness,
-			Repos: map[string]*feature.RebaseRepoProgress{
-				apiRepoName: {Status: feature.RebaseRepoStatusChecking},
-			},
-		},
-	}
-	f.SetActiveCycleType(feature.CycleReviewComments)
-	if err := store.Save(f); err != nil {
-		t.Fatalf("save feature: %v", err)
-	}
-
-	if err := m.StartFeatureRebaseOperation(f.ID); err == nil {
-		t.Fatal("StartFeatureRebaseOperation error = nil, want non-rebase cycle guard")
-	}
-	assertReviewCommentsCycleIntact(t, store, f.ID)
-
-	if err := m.MarkFeatureRebaseStage(f.ID, feature.RebaseStageFinalReview); err == nil {
-		t.Fatal("MarkFeatureRebaseStage error = nil, want non-rebase cycle guard")
-	}
-	assertReviewCommentsCycleIntact(t, store, f.ID)
-
-	if err := m.ClearFeatureRebaseOperation(f.ID); err != nil {
-		t.Fatalf("ClearFeatureRebaseOperation: %v", err)
-	}
-	got, err := store.Load(f.ID)
-	if err != nil {
-		t.Fatalf("reload feature: %v", err)
-	}
-	if got.RebaseOperation != nil {
-		t.Fatalf("RebaseOperation = %+v, want nil", got.RebaseOperation)
-	}
-	if got.ActiveCycle == nil || got.ActiveCycle.Type != feature.CycleReviewComments || got.ActiveCycle.Status != feature.RepoCycleRunning || got.ActiveCycle.Count != 2 {
-		t.Fatalf("ActiveCycle = %+v, want original review-comments cycle", got.ActiveCycle)
-	}
-	if got.ActiveCycleType() != feature.CycleReviewComments {
-		t.Fatalf("ActiveCycleType = %q, want %q", got.ActiveCycleType(), feature.CycleReviewComments)
-	}
-}
-
-func TestManagerFeatureRebaseOperationRejectsDuplicateStart(t *testing.T) {
-	store := feature.NewStore(t.TempDir())
-	m := feature.NewManager(store, config.NewDefault())
-	f := &feature.Feature{
-		ID:            "feat-rebase-op-duplicate",
-		Name:          "Rebase Operation Duplicate",
-		Slug:          "rebase-operation-duplicate",
-		Status:        feature.StatusCodeReady,
-		SchemaVersion: feature.SchemaVersionCurrent,
-		Repos: []feature.FeatureRepo{
-			{Name: apiRepoName},
-		},
-	}
-	if err := store.Save(f); err != nil {
-		t.Fatalf("save feature: %v", err)
-	}
-	if err := m.StartFeatureRebaseOperation(f.ID); err != nil {
-		t.Fatalf("StartFeatureRebaseOperation: %v", err)
-	}
-	if err := m.UpdateFeatureRebaseRepo(f.ID, apiRepoName, feature.RebaseRepoStatusChanged, feature.RebaseRepoProgress{RebaseTarget: "main", Changed: true}); err != nil {
-		t.Fatalf("UpdateFeatureRebaseRepo changed: %v", err)
-	}
-	if err := m.MarkFeatureRebaseStage(f.ID, feature.RebaseStageSmartRebase); err != nil {
-		t.Fatalf("MarkFeatureRebaseStage smart rebase: %v", err)
-	}
-
-	if err := m.StartFeatureRebaseOperation(f.ID); err == nil {
-		t.Fatal("duplicate StartFeatureRebaseOperation error = nil, want active rebase guard")
-	}
-	got, err := store.Load(f.ID)
-	if err != nil {
-		t.Fatalf("load feature: %v", err)
-	}
-	if got.RebaseOperation == nil {
-		t.Fatal("RebaseOperation = nil, want existing operation preserved")
-	}
-	if got.RebaseOperation.Stage != feature.RebaseStageSmartRebase {
-		t.Fatalf("RebaseOperation.Stage = %q, want %q", got.RebaseOperation.Stage, feature.RebaseStageSmartRebase)
-	}
-	if got.RebaseOperation.Repos[apiRepoName].Status != feature.RebaseRepoStatusChanged {
-		t.Fatalf("api status = %q, want changed", got.RebaseOperation.Repos[apiRepoName].Status)
-	}
-	if !got.RebaseOperation.Repos[apiRepoName].Changed {
-		t.Fatalf("api Changed = false, want true")
-	}
-}
-
-func TestManagerFeatureRebaseOperationStageRequiresOwnership(t *testing.T) {
-	t.Run("no active ownership", func(t *testing.T) {
-		store := feature.NewStore(t.TempDir())
-		m := feature.NewManager(store, config.NewDefault())
-		f := &feature.Feature{
-			ID:            "feat-rebase-op-stage-no-owner",
-			Name:          "Rebase Operation Stage No Owner",
-			Slug:          "rebase-operation-stage-no-owner",
-			Status:        feature.StatusCodeReady,
-			SchemaVersion: feature.SchemaVersionCurrent,
-			Repos: []feature.FeatureRepo{
-				{Name: apiRepoName},
-			},
-		}
-		if err := store.Save(f); err != nil {
-			t.Fatalf("save feature: %v", err)
-		}
-
-		err := m.MarkFeatureRebaseStage(f.ID, feature.RebaseStageFinalReview)
-		if err == nil {
-			t.Fatal("MarkFeatureRebaseStage error = nil, want ownership guard")
-		}
-		got, err := store.Load(f.ID)
-		if err != nil {
-			t.Fatalf("load feature: %v", err)
-		}
-		if got.RebaseOperation != nil {
-			t.Fatalf("RebaseOperation = %+v, want nil", got.RebaseOperation)
-		}
-		if got.ActiveCycle != nil || got.ActiveCycleType() != "" {
-			t.Fatalf("cycle state changed: ActiveCycle=%+v ActiveCycleType=%q", got.ActiveCycle, got.ActiveCycleType())
-		}
-	})
-
-	t.Run("cycle type ownership recovers operation", func(t *testing.T) {
-		store := feature.NewStore(t.TempDir())
-		m := feature.NewManager(store, config.NewDefault())
-		f := &feature.Feature{
-			ID:            "feat-rebase-op-stage-cycle-type",
-			Name:          "Rebase Operation Stage Cycle Type",
-			Slug:          "rebase-operation-stage-cycle-type",
-			Status:        feature.StatusCodeReady,
-			SchemaVersion: feature.SchemaVersionCurrent,
-			Repos: []feature.FeatureRepo{
-				{Name: apiRepoName},
-			},
-		}
-		f.SetActiveCycleType(feature.CycleRebase)
-		if err := store.Save(f); err != nil {
-			t.Fatalf("save feature: %v", err)
-		}
-
-		if err := m.MarkFeatureRebaseStage(f.ID, feature.RebaseStageFinalReview); err != nil {
-			t.Fatalf("MarkFeatureRebaseStage: %v", err)
-		}
-		got, err := store.Load(f.ID)
-		if err != nil {
-			t.Fatalf("load feature: %v", err)
-		}
-		if got.RebaseOperation == nil || got.RebaseOperation.Stage != feature.RebaseStageFinalReview {
-			t.Fatalf("RebaseOperation = %+v, want final review stage", got.RebaseOperation)
-		}
-		if got.ActiveCycle == nil || got.ActiveCycle.Type != feature.CycleRebase || got.ActiveCycle.Status != feature.RepoCycleReviewing {
-			t.Fatalf("ActiveCycle = %+v, want reviewing rebase", got.ActiveCycle)
-		}
-		if got.ActiveCycleType() != feature.CycleRebase {
-			t.Fatalf("ActiveCycleType = %q, want %q", got.ActiveCycleType(), feature.CycleRebase)
-		}
-	})
-
-	t.Run("active cycle ownership recovers operation", func(t *testing.T) {
-		store := feature.NewStore(t.TempDir())
-		m := feature.NewManager(store, config.NewDefault())
-		f := &feature.Feature{
-			ID:            "feat-rebase-op-stage-active-cycle",
-			Name:          "Rebase Operation Stage Active Cycle",
-			Slug:          "rebase-operation-stage-active-cycle",
-			Status:        feature.StatusCodeReady,
-			SchemaVersion: feature.SchemaVersionCurrent,
-			Repos: []feature.FeatureRepo{
-				{Name: apiRepoName},
-			},
-			ActiveCycle: &feature.CycleState{
-				Type:   feature.CycleRebase,
-				Status: feature.RepoCycleRunning,
-				Count:  1,
-			},
-		}
-		if err := store.Save(f); err != nil {
-			t.Fatalf("save feature: %v", err)
-		}
-
-		if err := m.MarkFeatureRebaseStage(f.ID, feature.RebaseStageSmartRebase); err != nil {
-			t.Fatalf("MarkFeatureRebaseStage: %v", err)
-		}
-		got, err := store.Load(f.ID)
-		if err != nil {
-			t.Fatalf("load feature: %v", err)
-		}
-		if got.RebaseOperation == nil || got.RebaseOperation.Stage != feature.RebaseStageSmartRebase {
-			t.Fatalf("RebaseOperation = %+v, want smart rebase stage", got.RebaseOperation)
-		}
-		if got.ActiveCycle == nil || got.ActiveCycle.Type != feature.CycleRebase || got.ActiveCycle.Status != feature.RepoCycleRunning {
-			t.Fatalf("ActiveCycle = %+v, want running rebase", got.ActiveCycle)
-		}
-		if got.ActiveCycleType() != feature.CycleRebase {
-			t.Fatalf("ActiveCycleType = %q, want %q", got.ActiveCycleType(), feature.CycleRebase)
-		}
-	})
-}
-
-func TestManagerFeatureRebaseOperationUpdateRequiresOwnership(t *testing.T) {
-	t.Run("non-rebase cycle with stale rebase operation", func(t *testing.T) {
-		store := feature.NewStore(t.TempDir())
-		m := feature.NewManager(store, config.NewDefault())
-		f := &feature.Feature{
-			ID:            "feat-rebase-op-update-guard",
-			Name:          "Rebase Operation Update Guard",
-			Slug:          "rebase-operation-update-guard",
-			Status:        feature.StatusPublished,
-			SchemaVersion: feature.SchemaVersionCurrent,
-			ActiveRun:     1,
-			RunCount:      1,
-			Repos: []feature.FeatureRepo{
-				{Name: apiRepoName},
-			},
-			ActiveCycle: &feature.CycleState{
-				Type:   feature.CycleReviewComments,
-				Status: feature.RepoCycleRunning,
-				Count:  4,
-			},
-			RebaseOperation: &feature.RebaseOperationState{
-				Stage: feature.RebaseStageHarness,
-				Repos: map[string]*feature.RebaseRepoProgress{
-					apiRepoName: {Status: feature.RebaseRepoStatusChecking},
-				},
-			},
-		}
-		f.SetActiveCycleType(feature.CycleReviewComments)
-		if err := store.Save(f); err != nil {
-			t.Fatalf("save feature: %v", err)
-		}
-
-		err := m.UpdateFeatureRebaseRepo(f.ID, apiRepoName, feature.RebaseRepoStatusChanged, feature.RebaseRepoProgress{RebaseTarget: "main", Changed: true})
-		if err == nil {
-			t.Fatal("UpdateFeatureRebaseRepo error = nil, want non-rebase cycle guard")
-		}
-		got, err := store.Load(f.ID)
-		if err != nil {
-			t.Fatalf("load feature: %v", err)
-		}
-		if got.ActiveCycle == nil || got.ActiveCycle.Type != feature.CycleReviewComments || got.ActiveCycle.Count != 4 {
-			t.Fatalf("ActiveCycle = %+v, want original review-comments cycle", got.ActiveCycle)
-		}
-		if got.ActiveCycleType() != feature.CycleReviewComments {
-			t.Fatalf("ActiveCycleType = %q, want %q", got.ActiveCycleType(), feature.CycleReviewComments)
-		}
-		if got.RebaseOperation == nil || got.RebaseOperation.Stage != feature.RebaseStageHarness {
-			t.Fatalf("RebaseOperation = %+v, want stale operation preserved", got.RebaseOperation)
-		}
-		if got.RebaseOperation.Repos[apiRepoName].Status != feature.RebaseRepoStatusChecking {
-			t.Fatalf("api status = %q, want checking", got.RebaseOperation.Repos[apiRepoName].Status)
-		}
-	})
-
-	t.Run("no active operation", func(t *testing.T) {
-		store := feature.NewStore(t.TempDir())
-		m := feature.NewManager(store, config.NewDefault())
-		f := &feature.Feature{
-			ID:            "feat-rebase-op-update-no-owner",
-			Name:          "Rebase Operation Update No Owner",
-			Slug:          "rebase-operation-update-no-owner",
-			Status:        feature.StatusCodeReady,
-			SchemaVersion: feature.SchemaVersionCurrent,
-			Repos: []feature.FeatureRepo{
-				{Name: apiRepoName},
-			},
-		}
-		if err := store.Save(f); err != nil {
-			t.Fatalf("save feature: %v", err)
-		}
-
-		err := m.UpdateFeatureRebaseRepo(f.ID, apiRepoName, feature.RebaseRepoStatusChanged, feature.RebaseRepoProgress{RebaseTarget: "main", Changed: true})
-		if err == nil {
-			t.Fatal("UpdateFeatureRebaseRepo error = nil, want ownership guard")
-		}
-		got, err := store.Load(f.ID)
-		if err != nil {
-			t.Fatalf("load feature: %v", err)
-		}
-		if got.RebaseOperation != nil {
-			t.Fatalf("RebaseOperation = %+v, want nil", got.RebaseOperation)
-		}
-		if got.ActiveCycle != nil || got.ActiveCycleType() != "" {
-			t.Fatalf("cycle state changed: ActiveCycle=%+v ActiveCycleType=%q", got.ActiveCycle, got.ActiveCycleType())
-		}
-	})
-}
-
-func assertReviewCommentsCycleIntact(t *testing.T, store *feature.Store, featureID string) {
-	t.Helper()
-	got, err := store.Load(featureID)
-	if err != nil {
-		t.Fatalf("load feature: %v", err)
-	}
-	if got.ActiveCycle == nil || got.ActiveCycle.Type != feature.CycleReviewComments || got.ActiveCycle.Status != feature.RepoCycleRunning || got.ActiveCycle.Count != 2 {
-		t.Fatalf("ActiveCycle = %+v, want original review-comments cycle", got.ActiveCycle)
-	}
-	if got.ActiveCycleType() != feature.CycleReviewComments {
-		t.Fatalf("ActiveCycleType = %q, want %q", got.ActiveCycleType(), feature.CycleReviewComments)
-	}
-	if got.RebaseOperation == nil || got.RebaseOperation.Stage != feature.RebaseStageHarness {
-		t.Fatalf("RebaseOperation = %+v, want stale harness state preserved before clear", got.RebaseOperation)
-	}
-}
-
-// advanceToPublished is a test helper that transitions a feature through the full
-// state machine from Created to Published using direct Transition calls via Store.Modify.
-func advanceToPublished(t *testing.T, store *feature.Store, featureID string) {
-	t.Helper()
-	transitions := []feature.Status{
-		feature.StatusInquiring,
-		feature.StatusInquireReady,
-		feature.StatusResearching,
-		feature.StatusDesignReady,
-		feature.StatusDesigning,
-		feature.StatusPlanReady,
-		feature.StatusPlanning,
-		feature.StatusImplementReady,
-		feature.StatusImplementing,
-		feature.StatusReviewPassed,
-		feature.StatusCodeReady,
-		feature.StatusPublished,
-	}
-	for _, next := range transitions {
-		if err := store.Modify(featureID, func(f *feature.Feature) error {
-			return f.Transition(next)
-		}); err != nil {
-			t.Fatalf("transition to %s: %v", next, err)
-		}
-	}
-}
-
-func TestManagerCompleteRefactor(t *testing.T) {
-	t.Parallel()
-	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
-	dir := t.TempDir()
-	store := feature.NewStore(dir)
-	mgr := &feature.Manager{Store: store, Config: &config.Config{}}
-
-	f := &feature.Feature{
-		ID:            feature.GenerateIDForTest(),
-		Name:          "Complete Refactor Test",
-		Slug:          "complete-refactor",
-		Description:   "original description",
-		Status:        feature.StatusCreated,
-		CurrentPhase:  feature.PhaseKnowledgeBase,
-		SchemaVersion: feature.SchemaVersionCurrent,
-	}
-	if err := store.Save(f); err != nil {
-		t.Fatalf("save: %v", err)
-	}
-
-	advanceToPublished(t, store, f.ID)
-
-	// Set up refactor state directly (Manager.StartRefactor is no longer available).
-	if err := store.Modify(f.ID, func(ff *feature.Feature) error {
-		if err := ff.Transition(feature.StatusInquiring); err != nil {
-			return err
-		}
-		ff.SetRefactorCount(ff.RefactorCount() + 1)
-		ff.RefactorPrompt = "refactor the auth module"
-		ff.SetActiveCycleType(feature.CycleRefactor)
-		ff.CurrentPhase = feature.PhaseInquire
-		return nil
-	}); err != nil {
-		t.Fatalf("set refactor state: %v", err)
-	}
-
-	// Verify refactor prompt is set
-	got, _ := store.Load(f.ID)
-	if got.RefactorPrompt == "" {
-		t.Fatal("expected RefactorPrompt to be set after StartRefactor")
-	}
-
-	// Complete the refactor
-	if err := mgr.CompleteRefactor(f.ID); err != nil {
-		t.Fatalf("CompleteRefactor: %v", err)
-	}
-
-	got, err := store.Load(f.ID)
-	if err != nil {
-		t.Fatalf("load after complete: %v", err)
-	}
-	if got.RefactorPrompt != "" {
-		t.Errorf("RefactorPrompt = %q, want empty after CompleteRefactor", got.RefactorPrompt)
-	}
-	// RefactorCount should remain (it tracks the total number of refactors)
-	if got.RefactorCount() != 1 {
-		t.Errorf("RefactorCount = %d, want 1 (should not be cleared)", got.RefactorCount())
-	}
-}
-
-// TestRefactorTimingAccumulatesAcrossPhases verifies that the "refactor-N"
-// timing key is preserved across all phase starters (Inquire → Research →
-// Design → Plan → Implement) and that elapsed time accumulates into
-// PhaseTimings["refactor-1"] rather than leaking into individual phase keys.
-// advanceToPRReady walks a feature through the full pipeline up to (and including) PRReady.
-func advanceToPRReady(t *testing.T, store *feature.Store, featureID string) {
+func advanceToCodeReady(t *testing.T, store *feature.Store, featureID string) {
 	t.Helper()
 	transitions := []feature.Status{
 		feature.StatusInquiring,
@@ -4885,12 +3789,12 @@ func TestManagerCreateSetsPublishable(t *testing.T) {
 	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
 	// Repo WITH remote => publishable = true
 	t.Run("with remote", func(t *testing.T) {
+		repoPath, _ := testutil.InitPublishReadyGitRepo(t)
 		storeDir := t.TempDir()
 		store := feature.NewStore(storeDir)
 		cfg := config.NewDefault()
-		cfg.Repos["pub-repo"] = config.RepoConfig{Path: "/repos/pub-repo"}
+		cfg.Repos["pub-repo"] = config.RepoConfig{Path: repoPath}
 		mgr := feature.NewManager(store, cfg)
-		mgr.Branches = newMockBranches(true)
 
 		f, err := mgr.Create("Pub Feature", "test", []string{"pub-repo"}, cfg.Defaults.Models, "", "", nil)
 		if err != nil {
@@ -4909,12 +3813,12 @@ func TestManagerCreateSetsPublishable(t *testing.T) {
 
 	// Repo WITHOUT remote => publishable = false
 	t.Run("without remote", func(t *testing.T) {
+		repoPath := testutil.InitGitRepo(t)
 		storeDir := t.TempDir()
 		store := feature.NewStore(storeDir)
 		cfg := config.NewDefault()
-		cfg.Repos["nopub-repo"] = config.RepoConfig{Path: "/repos/nopub-repo"}
+		cfg.Repos["nopub-repo"] = config.RepoConfig{Path: repoPath}
 		mgr := feature.NewManager(store, cfg)
-		mgr.Branches = newMockBranches(false)
 
 		f, err := mgr.Create("NoPub Feature", "test", []string{"nopub-repo"}, cfg.Defaults.Models, "", "", nil)
 		if err != nil {
@@ -4972,15 +3876,14 @@ func TestRewindToPhase_ClosePRStillCalledForPublished(t *testing.T) {
 	skipShortFeatureRegression(t, "extended rewind PR-close warning regression")
 	dir := t.TempDir()
 	store := feature.NewStore(dir)
-	prs := mocks.NewMockPublisher()
+	prs := mocks.NewMockPRCloser()
 	prs.ClosePRFn = func(prURL string) error {
 		return errors.New("close failed")
 	}
 	mgr := &feature.Manager{
-		Store:    store,
-		Config:   &config.Config{},
-		Branches: newMockBranches(false),
-		PRs:      prs,
+		Store:  store,
+		Config: &config.Config{},
+		PRs:    prs,
 	}
 
 	publishable := true
@@ -4991,7 +3894,7 @@ func TestRewindToPhase_ClosePRStillCalledForPublished(t *testing.T) {
 	_ = store.Modify(f.ID, func(feat *feature.Feature) error {
 		feat.Status = feature.StatusPublished
 		feat.CurrentPhase = feature.PhasePublish
-		// Per-repo PR URL is the only source of truth post-cutover.
+		// Per-repo PR URL is the only source of truth.
 		if feat.RepoStates == nil {
 			feat.RepoStates = map[string]*feature.RepoState{}
 		}
@@ -5017,64 +3920,6 @@ func TestRewindToPhase_ClosePRStillCalledForPublished(t *testing.T) {
 	}
 }
 
-func TestRestartFromBeginning_UnpublishedUsesLocalReset(t *testing.T) {
-	t.Parallel()
-	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
-	if testing.Short() {
-		t.Skip("requires git")
-	}
-	repoDir := initGitRepo(t, false)
-	storeDir := t.TempDir()
-	store := feature.NewStore(storeDir)
-	cfg := config.NewDefault()
-	cfg.Repos["local-repo"] = config.RepoConfig{Path: repoDir}
-	mgr := feature.NewManager(store, cfg)
-	wtDir := t.TempDir()
-	mgr.Worktrees = git.NewWorktreeManager(wtDir)
-	mgr.Branches = &git.BranchAdapter{}
-	mgr.PRs = &git.PublishAdapter{}
-
-	publishable := false
-	f, err := mgr.Create("Local Restart", "test", []string{"local-repo"}, cfg.Defaults.Models, "", "", nil)
-	if err != nil {
-		t.Fatalf("create: %v", err)
-	}
-
-	// Force Publishable to false (Create may probe the repo)
-	_ = store.Modify(f.ID, func(feat *feature.Feature) error {
-		feat.Repos[0].Publishable = &publishable
-		feat.Status = feature.StatusImplementing
-		feat.CurrentPhase = feature.PhaseImplement
-		return nil
-	})
-
-	// Make a commit in the worktree so HEAD diverges from baseBranch
-	loaded, _ := store.Load(f.ID)
-	wtPath := loaded.Repos[0].WorktreePath
-	if wtPath == "" {
-		t.Fatal("worktree path not set")
-	}
-	commitCmd := exec.Command("git", "-C", wtPath, "commit", "--allow-empty", "-m", "diverge")
-	if out, err := commitCmd.CombinedOutput(); err != nil {
-		t.Fatalf("commit in worktree: %s: %v", out, err)
-	}
-
-	// RestartFromBeginning should succeed (ResetToBase would fail due to no origin)
-	if err := mgr.RestartFromBeginning(f.ID); err != nil {
-		t.Fatalf("RestartFromBeginning: %v", err)
-	}
-
-	// Verify HEAD is back to baseBranch
-	baseBranch := loaded.Repos[0].BaseBranch
-	headCmd := exec.Command("git", "-C", wtPath, "rev-parse", "HEAD")
-	headOut, _ := headCmd.Output()
-	baseCmd := exec.Command("git", "-C", wtPath, "rev-parse", baseBranch)
-	baseOut, _ := baseCmd.Output()
-	if strings.TrimSpace(string(headOut)) != strings.TrimSpace(string(baseOut)) {
-		t.Errorf("HEAD should match %s after local reset", baseBranch)
-	}
-}
-
 func TestRewindToPhase_UnpublishedUsesLocalReset(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
@@ -5089,8 +3934,6 @@ func TestRewindToPhase_UnpublishedUsesLocalReset(t *testing.T) {
 	mgr := feature.NewManager(store, cfg)
 	wtDir := t.TempDir()
 	mgr.Worktrees = git.NewWorktreeManager(wtDir)
-	mgr.Branches = &git.BranchAdapter{}
-	mgr.PRs = &git.PublishAdapter{}
 
 	publishable := false
 	f, err := mgr.Create("Local Rewind", "test", []string{"local-repo"}, cfg.Defaults.Models, "", "", nil)
@@ -5143,18 +3986,12 @@ func TestManagerCreateSkipsBranchCheckForUnpublishedRepos(t *testing.T) {
 	cfg := config.NewDefault()
 	cfg.Repos["local-repo"] = config.RepoConfig{Path: "/repos/local-repo"}
 	mgr := feature.NewManager(store, cfg)
-	mgr.Worktrees = &mocks.MockWorktreeOperator{
+	mgr.Worktrees = &mocks.MockWorktreeOps{
 		CreateFn: func(repoPath, featureSlug, repoName, startPoint string) (string, error) {
 			return filepath.Join(t.TempDir(), featureSlug, repoName), nil
 		},
 	}
-	branches := newMockBranches(false)
-	branches.BranchExistsOnRemoteFn = func(repoPath, branch string) (bool, error) {
-		t.Fatalf("BranchExistsOnRemote(%q, %q) was called for an unpublished repo", repoPath, branch)
-		return false, nil
-	}
-	mgr.Branches = branches
-	mgr.PRs = mocks.NewMockPublisher()
+	mgr.PRs = mocks.NewMockPRCloser()
 
 	f, err := mgr.Create("Local Feature", "test", []string{"local-repo"}, cfg.Defaults.Models, "", "", nil)
 	if err != nil {
@@ -5381,235 +4218,6 @@ func TestRewindToPhase_FromReviewing_InvalidTarget(t *testing.T) {
 	}
 }
 
-func TestMarkRepoCycleReviewing(t *testing.T) {
-	t.Parallel()
-	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
-	mgr := newTestManager(t)
-	mgr.Config.Repos["repo-b"] = config.RepoConfig{Path: "/tmp/repo-b"}
-	f, err := mgr.Create("Review Cycle Feature", "desc", []string{"test-repo", "repo-b"}, mgr.Config.Defaults.Models, "", "", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// Advance to Published so we can start repo cycles
-	for _, s := range []feature.Status{feature.StatusBuildingKB, feature.StatusCreated, feature.StatusResearching, feature.StatusPlanReady, feature.StatusPlanning, feature.StatusImplementReady, feature.StatusImplementing, feature.StatusReviewPassed, feature.StatusCodeReady, feature.StatusPublished} {
-		if err := mgr.Transition(f.ID, s); err != nil {
-			t.Fatalf("transition to %v: %v", s, err)
-		}
-	}
-
-	t.Run("Success", func(t *testing.T) {
-		if err := mgr.StartRepoCycle(f.ID, "test-repo", feature.CycleReviewComments); err != nil {
-			t.Fatal(err)
-		}
-		if err := mgr.MarkRepoCycleReviewing(f.ID, "test-repo"); err != nil {
-			t.Fatalf("MarkRepoCycleReviewing: %v", err)
-		}
-		got, _ := mgr.Get(f.ID)
-		rc := got.RepoCycles["test-repo"]
-		if rc == nil {
-			t.Fatal("expected repo cycle for test-repo, got nil")
-		}
-		if rc.Status != "reviewing" {
-			t.Errorf("RepoCycle status = %q, want %q", rc.Status, "reviewing")
-		}
-		// Clean up: complete the cycle so it does not interfere with other subtests
-		_ = mgr.CompleteRepoCycle(f.ID, "test-repo")
-	})
-
-	t.Run("ErrorNoCycles", func(t *testing.T) {
-		// Ensure no active cycles exist
-		_ = mgr.ClearRepoCycles(f.ID)
-		err := mgr.MarkRepoCycleReviewing(f.ID, "test-repo")
-		if err == nil {
-			t.Fatal("expected error when no active cycles exist, got nil")
-		}
-	})
-
-	t.Run("ErrorWrongRepo", func(t *testing.T) {
-		// Start a cycle only for test-repo, then ask for a non-existent repo
-		if err := mgr.StartRepoCycle(f.ID, "test-repo", feature.CycleReviewComments); err != nil {
-			t.Fatal(err)
-		}
-		err := mgr.MarkRepoCycleReviewing(f.ID, "no-such-repo")
-		if err == nil {
-			t.Fatal("expected error for wrong repo name, got nil")
-		}
-		// Clean up
-		_ = mgr.CompleteRepoCycle(f.ID, "test-repo")
-	})
-}
-
-func TestRemoveRepoCycle(t *testing.T) {
-	t.Parallel()
-	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
-	mgr := newTestManager(t)
-	mgr.Config.Repos["repo-b"] = config.RepoConfig{Path: "/tmp/repo-b"}
-	f, err := mgr.Create("Remove Cycle Feature", "desc", []string{"test-repo", "repo-b"}, mgr.Config.Defaults.Models, "", "", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, s := range []feature.Status{feature.StatusResearching, feature.StatusPlanReady, feature.StatusPlanning, feature.StatusImplementReady, feature.StatusImplementing, feature.StatusReviewPassed, feature.StatusCodeReady, feature.StatusPublished} {
-		if err := mgr.Transition(f.ID, s); err != nil {
-			t.Fatalf("transition to %v: %v", s, err)
-		}
-	}
-
-	// Seed two repo cycle entries via Store.Modify
-	if err := mgr.Store.Modify(f.ID, func(f *feature.Feature) error {
-		f.RepoCycles = map[string]*feature.RepoCycleState{
-			apiRepoName: {Type: feature.CycleReviewComments, Status: "running"},
-			"backend":   {Type: feature.CycleReviewComments, Status: "running"},
-		}
-		return nil
-	}); err != nil {
-		t.Fatal(err)
-	}
-
-	// Remove the "api" repo cycle — "backend" should remain.
-	if err := mgr.RemoveRepoCycle(f.ID, apiRepoName); err != nil {
-		t.Fatal(err)
-	}
-	got, _ := mgr.Get(f.ID)
-	if _, ok := got.RepoCycles[apiRepoName]; ok {
-		t.Error("api cycle should be removed")
-	}
-	if got.RepoCycles["backend"] == nil {
-		t.Error("backend cycle should still exist")
-	}
-
-	// Remove "backend" — RepoCycles should become nil
-	if err := mgr.RemoveRepoCycle(f.ID, "backend"); err != nil {
-		t.Fatal(err)
-	}
-	got, _ = mgr.Get(f.ID)
-	if got.RepoCycles != nil {
-		t.Errorf("RepoCycles should be nil after removing last entry, got %v", got.RepoCycles)
-	}
-}
-
-func TestHasActiveRepoCycles_TreatsNeedUserInputAsActive(t *testing.T) {
-	t.Parallel()
-	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
-	mgr := newTestManager(t)
-	f, err := mgr.Create("Paused Cycle Feature", "desc", []string{"test-repo"}, mgr.Config.Defaults.Models, "", "", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, s := range []feature.Status{feature.StatusBuildingKB, feature.StatusCreated, feature.StatusResearching, feature.StatusPlanReady, feature.StatusPlanning, feature.StatusImplementReady, feature.StatusImplementing, feature.StatusReviewPassed, feature.StatusCodeReady, feature.StatusPublished} {
-		if err := mgr.Transition(f.ID, s); err != nil {
-			t.Fatalf("transition to %v: %v", s, err)
-		}
-	}
-	if err := mgr.Store.Modify(f.ID, func(ff *feature.Feature) error {
-		ff.RepoCycles = map[string]*feature.RepoCycleState{
-			"test-repo": {
-				Type:                     feature.CycleReviewComments,
-				Status:                   feature.RepoCycleNeedUserInput,
-				PendingNeedUserInputPath: "/tmp/review-comments.yaml",
-			},
-		}
-		return nil
-	}); err != nil {
-		t.Fatalf("seed paused cycle: %v", err)
-	}
-
-	active, err := mgr.HasActiveRepoCycles(f.ID)
-	if err != nil {
-		t.Fatalf("HasActiveRepoCycles: %v", err)
-	}
-	if !active {
-		t.Fatal("HasActiveRepoCycles() = false, want true for paused cycle gate")
-	}
-}
-
-func TestFailRepoCycle_ClearsPausedGateAndRefactorPrompt(t *testing.T) {
-	t.Parallel()
-	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
-	mgr := newTestManager(t)
-	f, err := mgr.Create("Refactor Cleanup", "desc", []string{"test-repo"}, mgr.Config.Defaults.Models, "", "", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, s := range []feature.Status{feature.StatusBuildingKB, feature.StatusCreated, feature.StatusResearching, feature.StatusPlanReady, feature.StatusPlanning, feature.StatusImplementReady, feature.StatusImplementing, feature.StatusReviewPassed, feature.StatusCodeReady, feature.StatusPublished} {
-		if err := mgr.Transition(f.ID, s); err != nil {
-			t.Fatalf("transition to %v: %v", s, err)
-		}
-	}
-	if err := mgr.Store.Modify(f.ID, func(ff *feature.Feature) error {
-		ff.RefactorPrompt = "extract validation"
-		ff.RepoCycles = map[string]*feature.RepoCycleState{
-			"test-repo": {
-				Type:                     feature.CycleRefactor,
-				Status:                   feature.RepoCycleNeedUserInput,
-				PendingNeedUserInputPath: "/tmp/refactor.yaml",
-			},
-		}
-		return nil
-	}); err != nil {
-		t.Fatalf("seed paused refactor: %v", err)
-	}
-
-	if err := mgr.FailRepoCycle(f.ID, "test-repo", "user aborted"); err != nil {
-		t.Fatalf("FailRepoCycle: %v", err)
-	}
-	got, err := mgr.Get(f.ID)
-	if err != nil {
-		t.Fatalf("Get: %v", err)
-	}
-	rc := got.RepoCycles["test-repo"]
-	if rc == nil {
-		t.Fatal("repo cycle missing after FailRepoCycle")
-	}
-	if rc.Status != feature.RepoCycleFailed {
-		t.Errorf("Status = %q, want %q", rc.Status, feature.RepoCycleFailed)
-	}
-	if rc.LastError != "user aborted" {
-		t.Errorf("LastError = %q, want %q", rc.LastError, "user aborted")
-	}
-	if rc.PendingNeedUserInputPath != "" {
-		t.Errorf("PendingNeedUserInputPath = %q, want empty", rc.PendingNeedUserInputPath)
-	}
-	if got.RefactorPrompt != "" {
-		t.Errorf("RefactorPrompt = %q, want empty after refactor abort", got.RefactorPrompt)
-	}
-}
-
-func TestHasActiveRepoCycles_ReviewingIsActive(t *testing.T) {
-	t.Parallel()
-	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
-	mgr := newTestManager(t)
-	f, err := mgr.Create("Reviewing Active Feature", "desc", []string{"test-repo"}, mgr.Config.Defaults.Models, "", "", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// Advance to Published so we can start repo cycles
-	for _, s := range []feature.Status{feature.StatusBuildingKB, feature.StatusCreated, feature.StatusResearching, feature.StatusPlanReady, feature.StatusPlanning, feature.StatusImplementReady, feature.StatusImplementing, feature.StatusReviewPassed, feature.StatusCodeReady, feature.StatusPublished} {
-		if err := mgr.Transition(f.ID, s); err != nil {
-			t.Fatalf("transition to %v: %v", s, err)
-		}
-	}
-
-	// Start a repo cycle and mark it as reviewing
-	if err := mgr.StartRepoCycle(f.ID, "test-repo", feature.CycleReviewComments); err != nil {
-		t.Fatal(err)
-	}
-	if err := mgr.MarkRepoCycleReviewing(f.ID, "test-repo"); err != nil {
-		t.Fatalf("MarkRepoCycleReviewing: %v", err)
-	}
-
-	// HasActiveRepoCycles should return true for a reviewing cycle
-	active, err := mgr.HasActiveRepoCycles(f.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !active {
-		t.Error("expected HasActiveRepoCycles to return true when a cycle is in reviewing status")
-	}
-}
-
-// InitRepoImpl must preserve existing non-pending per-repo state. Without
-// this, a restart mid-implement would clobber approved repos back to pending,
-// defeating the engine's resume skip-list and redoing approved work.
 func TestInitRepoImpl_PreservesExistingState(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
@@ -6015,10 +4623,8 @@ func TestRewindWithRequest_RejectsInvalidPartialBeforeSideEffects(t *testing.T) 
 			}); err != nil {
 				t.Fatalf("modify: %v", err)
 			}
-			branches := mocks.NewMockBranchOperator()
-			prs := mocks.NewMockPublisher()
-			worktrees := mocks.NewMockWorktreeOperator()
-			mgr.Branches = branches
+			prs := mocks.NewMockPRCloser()
+			worktrees := mocks.NewMockWorktreeOps()
 			mgr.PRs = prs
 			mgr.Worktrees = worktrees
 
@@ -6035,9 +4641,6 @@ func TestRewindWithRequest_RejectsInvalidPartialBeforeSideEffects(t *testing.T) 
 			}
 			if got.Status == feature.StatusInterrupted {
 				t.Fatal("feature was interrupted before validation completed")
-			}
-			if len(branches.Calls) != 0 {
-				t.Fatalf("backup branch side effects ran before validation: %+v", branches.Calls)
 			}
 			if len(prs.Calls) != 0 {
 				t.Fatalf("PR close side effects ran before validation: %+v", prs.Calls)
@@ -6063,9 +4666,8 @@ func TestRewindWithRequest_Phase1PartialUsesBaseResetWithoutAnchor(t *testing.T)
 	}); err != nil {
 		t.Fatalf("modify: %v", err)
 	}
-	worktrees := mocks.NewMockWorktreeOperator()
+	worktrees := mocks.NewMockWorktreeOps()
 	mgr.Worktrees = worktrees
-	mgr.Branches = nil
 	mgr.PRs = nil
 
 	if _, _, err := mgr.RewindWithRequest(f.ID, feature.RewindRequest{
@@ -6096,8 +4698,7 @@ func TestRewindWithRequest_PartialPersistsPendingReviewRoadmapPhase(t *testing.T
 	}); err != nil {
 		t.Fatalf("modify: %v", err)
 	}
-	mgr.Worktrees = mocks.NewMockWorktreeOperator()
-	mgr.Branches = nil
+	mgr.Worktrees = mocks.NewMockWorktreeOps()
 	mgr.PRs = nil
 
 	if _, _, err := mgr.RewindWithRequest(f.ID, feature.RewindRequest{
@@ -6204,9 +4805,8 @@ func TestRewindWithRequest_Phase2PartialResetsToAnchorAndCarriesSurvivors(t *tes
 		}
 	}
 
-	worktrees := mocks.NewMockWorktreeOperator()
+	worktrees := mocks.NewMockWorktreeOps()
 	mgr.Worktrees = worktrees
-	mgr.Branches = nil
 	mgr.PRs = nil
 
 	if _, _, err := mgr.RewindWithRequest(f.ID, feature.RewindRequest{
@@ -6370,8 +4970,7 @@ func TestRewindWithRequest_PartialRetainsTargetPhaseFrontend(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("modify: %v", err)
 	}
-	mgr.Worktrees = mocks.NewMockWorktreeOperator()
-	mgr.Branches = nil
+	mgr.Worktrees = mocks.NewMockWorktreeOps()
 	mgr.PRs = nil
 
 	if _, _, err := mgr.RewindWithRequest(f.ID, feature.RewindRequest{
@@ -6430,8 +5029,7 @@ func TestRewindWithRequest_PartialRestoresMissingTargetPhaseFrontendFromPlan(t *
 	}); err != nil {
 		t.Fatalf("modify: %v", err)
 	}
-	mgr.Worktrees = mocks.NewMockWorktreeOperator()
-	mgr.Branches = nil
+	mgr.Worktrees = mocks.NewMockWorktreeOps()
 	mgr.PRs = nil
 
 	if _, _, err := mgr.RewindWithRequest(f.ID, feature.RewindRequest{
@@ -6464,8 +5062,7 @@ func TestRewindToPhase_FullImplementOmitsSealedRoadmapPhase(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("modify: %v", err)
 	}
-	mgr.Worktrees = mocks.NewMockWorktreeOperator()
-	mgr.Branches = nil
+	mgr.Worktrees = mocks.NewMockWorktreeOps()
 	mgr.PRs = nil
 
 	if _, _, err := mgr.RewindToPhase(f.ID, feature.PhaseImplement); err != nil {
@@ -6483,9 +5080,11 @@ func TestRewindToPhase_FullImplementOmitsSealedRoadmapPhase(t *testing.T) {
 func TestRewindWithRequest_PartialUnpublishableSkipsPRCloseAndRecordsBackups(t *testing.T) {
 	mgr := newTestManager(t)
 	unpublishable := false
+	repoA := testutil.InitGitRepo(t)
+	repoB := testutil.InitGitRepo(t)
 	f := newMultiRepoFeature(t, mgr, []feature.FeatureRepo{
-		{Name: "repo-a", Path: "/tmp/repo-a", WorktreePath: "/tmp/wt-a", BaseBranch: "main"},
-		{Name: "repo-b", Path: "/tmp/repo-b", WorktreePath: "/tmp/wt-b", BaseBranch: "main", Publishable: &unpublishable},
+		{Name: "repo-a", Path: repoA, WorktreePath: repoA, BaseBranch: "main"},
+		{Name: "repo-b", Path: repoB, WorktreePath: repoB, BaseBranch: "main", Publishable: &unpublishable},
 	})
 	if err := mgr.Store.Modify(f.ID, func(ff *feature.Feature) error {
 		ff.Status = feature.StatusImplementing
@@ -6507,14 +5106,9 @@ func TestRewindWithRequest_PartialUnpublishableSkipsPRCloseAndRecordsBackups(t *
 	}); err != nil {
 		t.Fatalf("modify: %v", err)
 	}
-	worktrees := mocks.NewMockWorktreeOperator()
-	branches := mocks.NewMockBranchOperator()
-	branches.CreateBackupBranchFn = func(worktreePath, slug string) (string, error) {
-		return "feature/" + slug + "-pre-rewind-" + filepath.Base(worktreePath), nil
-	}
-	prs := mocks.NewMockPublisher()
+	worktrees := mocks.NewMockWorktreeOps()
+	prs := mocks.NewMockPRCloser()
 	mgr.Worktrees = worktrees
-	mgr.Branches = branches
 	mgr.PRs = prs
 
 	warns, _, err := mgr.RewindWithRequest(f.ID, feature.RewindRequest{
@@ -6544,9 +5138,11 @@ func TestRewindWithRequest_PartialUnpublishableSkipsPRCloseAndRecordsBackups(t *
 
 func TestRewindWithRequest_PartialPublishableClosesPRs(t *testing.T) {
 	mgr := newTestManager(t)
+	repoA := testutil.InitGitRepo(t)
+	repoB := testutil.InitGitRepo(t)
 	f := newMultiRepoFeature(t, mgr, []feature.FeatureRepo{
-		{Name: "repo-a", Path: "/tmp/repo-a", WorktreePath: "/tmp/wt-a", BaseBranch: "main"},
-		{Name: "repo-b", Path: "/tmp/repo-b", WorktreePath: "/tmp/wt-b", BaseBranch: "main"},
+		{Name: "repo-a", Path: repoA, WorktreePath: repoA, BaseBranch: "main"},
+		{Name: "repo-b", Path: repoB, WorktreePath: repoB, BaseBranch: "main"},
 	})
 	if err := mgr.Store.Modify(f.ID, func(ff *feature.Feature) error {
 		ff.Status = feature.StatusImplementing
@@ -6567,9 +5163,8 @@ func TestRewindWithRequest_PartialPublishableClosesPRs(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("modify: %v", err)
 	}
-	mgr.Worktrees = mocks.NewMockWorktreeOperator()
-	mgr.Branches = nil
-	prs := mocks.NewMockPublisher()
+	mgr.Worktrees = mocks.NewMockWorktreeOps()
+	prs := mocks.NewMockPRCloser()
 	mgr.PRs = prs
 
 	warns, _, err := mgr.RewindWithRequest(f.ID, feature.RewindRequest{
@@ -6589,9 +5184,10 @@ func TestRewindWithRequest_PartialPublishableClosesPRs(t *testing.T) {
 
 func TestRewindWithRequest_PartialBranchFailureStillSeals(t *testing.T) {
 	mgr := newTestManager(t)
+	repoB := testutil.InitGitRepo(t)
 	f := newMultiRepoFeature(t, mgr, []feature.FeatureRepo{
-		{Name: "repo-a", Path: "/tmp/repo-a", WorktreePath: "/tmp/wt-a", BaseBranch: "main"},
-		{Name: "repo-b", Path: "/tmp/repo-b", WorktreePath: "/tmp/wt-b", BaseBranch: "main"},
+		{Name: "repo-a", Path: "/missing/repo-a", WorktreePath: "/missing/repo-a", BaseBranch: "main"},
+		{Name: "repo-b", Path: repoB, WorktreePath: repoB, BaseBranch: "main"},
 	})
 	if err := mgr.Store.Modify(f.ID, func(ff *feature.Feature) error {
 		ff.Status = feature.StatusImplementing
@@ -6609,15 +5205,7 @@ func TestRewindWithRequest_PartialBranchFailureStillSeals(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("modify: %v", err)
 	}
-	mgr.Worktrees = mocks.NewMockWorktreeOperator()
-	branches := mocks.NewMockBranchOperator()
-	branches.CreateBackupBranchFn = func(worktreePath, slug string) (string, error) {
-		if worktreePath == "/tmp/wt-a" {
-			return "", errors.New("boom")
-		}
-		return "feature/" + slug + "-repo-b", nil
-	}
-	mgr.Branches = branches
+	mgr.Worktrees = mocks.NewMockWorktreeOps()
 	mgr.PRs = nil
 
 	warns, _, err := mgr.RewindWithRequest(f.ID, feature.RewindRequest{
@@ -6646,8 +5234,8 @@ func TestRewindWithRequest_PartialBranchFailureStillSeals(t *testing.T) {
 	if len(sealedRun.BackupBranches) != 1 {
 		t.Fatalf("BackupBranches = %#v, want repo-b only", sealedRun.BackupBranches)
 	}
-	if got := sealedRun.BackupBranches["repo-b"]; got != "feature/partial-branch-warning-repo-b" {
-		t.Errorf("BackupBranches[repo-b] = %q, want feature/partial-branch-warning-repo-b", got)
+	if got := sealedRun.BackupBranches["repo-b"]; !strings.HasPrefix(got, "feature/partial-branch-warning-pre-rewind-") {
+		t.Errorf("BackupBranches[repo-b] = %q, want timestamped backup", got)
 	}
 	if _, ok := sealedRun.BackupBranches["repo-a"]; ok {
 		t.Errorf("BackupBranches contains repo-a after failed backup: %#v", sealedRun.BackupBranches)
@@ -6662,9 +5250,11 @@ func TestRewindToPhase_RecordsBackupBranches(t *testing.T) {
 	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
 	skipShortFeatureRegression(t, "extended rewind backup-branch recording regression")
 	mgr := newTestManager(t)
+	repoA := testutil.InitGitRepo(t)
+	repoB := testutil.InitGitRepo(t)
 	f := newMultiRepoFeature(t, mgr, []feature.FeatureRepo{
-		{Name: "repo-a", Path: "/tmp/repo-a", WorktreePath: "/tmp/wt-a", BaseBranch: "main"},
-		{Name: "repo-b", Path: "/tmp/repo-b", WorktreePath: "/tmp/wt-b", BaseBranch: "main"},
+		{Name: "repo-a", Path: repoA, WorktreePath: repoA, BaseBranch: "main"},
+		{Name: "repo-b", Path: repoB, WorktreePath: repoB, BaseBranch: "main"},
 	})
 	if err := mgr.Store.Modify(f.ID, func(ff *feature.Feature) error {
 		ff.Slug = "recording-slug"
@@ -6675,12 +5265,6 @@ func TestRewindToPhase_RecordsBackupBranches(t *testing.T) {
 		t.Fatalf("modify: %v", err)
 	}
 
-	mock := mocks.NewMockBranchOperator()
-	mock.CreateBackupBranchFn = func(worktreePath, slug string) (string, error) {
-		return "feature/" + slug + "-pre-rewind-" + filepath.Base(worktreePath), nil
-	}
-	mgr.Branches = mock
-
 	if _, _, err := mgr.RewindToPhase(f.ID, feature.PhasePlan); err != nil {
 		t.Fatalf("RewindToPhase: %v", err)
 	}
@@ -6689,21 +5273,17 @@ func TestRewindToPhase_RecordsBackupBranches(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadRun(1): %v", err)
 	}
-	want := map[string]string{
-		"repo-a": "feature/recording-slug-pre-rewind-wt-a",
-		"repo-b": "feature/recording-slug-pre-rewind-wt-b",
+	if len(sealedRun.BackupBranches) != 2 {
+		t.Fatalf("BackupBranches len = %d, want 2: %v", len(sealedRun.BackupBranches), sealedRun.BackupBranches)
 	}
-	if len(sealedRun.BackupBranches) != len(want) {
-		t.Fatalf("BackupBranches len = %d, want %d: %v", len(sealedRun.BackupBranches), len(want), sealedRun.BackupBranches)
-	}
-	for k, v := range want {
+	for _, k := range []string{"repo-a", "repo-b"} {
 		got, ok := sealedRun.BackupBranches[k]
 		if !ok {
 			t.Errorf("BackupBranches missing repo %q", k)
 			continue
 		}
-		if got != v {
-			t.Errorf("BackupBranches[%q] = %q, want %q", k, got, v)
+		if !strings.HasPrefix(got, "feature/recording-slug-pre-rewind-") {
+			t.Errorf("BackupBranches[%q] = %q, want timestamped backup", k, got)
 		}
 	}
 }
@@ -6717,9 +5297,10 @@ func TestRewindToPhase_PartialBranchFailureStillSeals(t *testing.T) {
 	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
 	skipShortFeatureRegression(t, "extended rewind partial backup failure regression")
 	mgr := newTestManager(t)
+	repoB := testutil.InitGitRepo(t)
 	f := newMultiRepoFeature(t, mgr, []feature.FeatureRepo{
-		{Name: "repo-a", Path: "/tmp/repo-a", WorktreePath: "/tmp/wt-a", BaseBranch: "main"},
-		{Name: "repo-b", Path: "/tmp/repo-b", WorktreePath: "/tmp/wt-b", BaseBranch: "main"},
+		{Name: "repo-a", Path: "/missing/repo-a", WorktreePath: "/missing/repo-a", BaseBranch: "main"},
+		{Name: "repo-b", Path: repoB, WorktreePath: repoB, BaseBranch: "main"},
 	})
 	if err := mgr.Store.Modify(f.ID, func(ff *feature.Feature) error {
 		ff.Slug = "partial-slug"
@@ -6729,15 +5310,6 @@ func TestRewindToPhase_PartialBranchFailureStillSeals(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("modify: %v", err)
 	}
-
-	mock := mocks.NewMockBranchOperator()
-	mock.CreateBackupBranchFn = func(worktreePath, slug string) (string, error) {
-		if worktreePath == "/tmp/wt-a" {
-			return "", errors.New("boom")
-		}
-		return "feature/" + slug + "-success", nil
-	}
-	mgr.Branches = mock
 
 	warns, _, err := mgr.RewindToPhase(f.ID, feature.PhasePlan)
 	if err != nil {
@@ -6765,8 +5337,8 @@ func TestRewindToPhase_PartialBranchFailureStillSeals(t *testing.T) {
 	if len(sealedRun.BackupBranches) != 1 {
 		t.Fatalf("BackupBranches len = %d, want 1 (repo-b only): %v", len(sealedRun.BackupBranches), sealedRun.BackupBranches)
 	}
-	if got := sealedRun.BackupBranches["repo-b"]; got != "feature/partial-slug-success" {
-		t.Errorf("BackupBranches[repo-b] = %q, want %q", got, "feature/partial-slug-success")
+	if got := sealedRun.BackupBranches["repo-b"]; !strings.HasPrefix(got, "feature/partial-slug-pre-rewind-") {
+		t.Errorf("BackupBranches[repo-b] = %q, want timestamped backup", got)
 	}
 	if _, ok := sealedRun.BackupBranches["repo-a"]; ok {
 		t.Errorf("BackupBranches must NOT contain repo-a (it failed)")
@@ -7127,8 +5699,7 @@ func TestRewindWithRequest_PartialCrashCleanupAllowsRetry(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("modify: %v", err)
 	}
-	mgr.Worktrees = mocks.NewMockWorktreeOperator()
-	mgr.Branches = nil
+	mgr.Worktrees = mocks.NewMockWorktreeOps()
 	mgr.PRs = nil
 
 	request := feature.RewindRequest{TargetPhase: feature.PhaseImplement, RoadmapPhase: 2}

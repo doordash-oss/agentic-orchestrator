@@ -2,25 +2,23 @@
 
 exec agentico --help
 stdout '^Agentic Orchestrator$'
-! stdout 'Agentic Workflow Orchestrator'
-stdout 'Usage: agentico \[flags\]'
+stdout '^Usage: agentico$'
 stdout 'agentico server \[flags\]'
-stdout 'Launches the Bubble Tea TUI dashboard'
+stdout 'Starts or focuses the installed Agentico desktop app'
+stdout 'explicit .server.'
 stdout 'foreground loopback HTTP server'
 stdout '--config <path>'
 stdout '--state-dir <path>'
 stdout '--providers <list>'
 stdout '--refresh-models'
+stdout '--listen \[host:\]port'
+stdout '--name <name>'
 stdout '--dangerously-skip-permissions'
 stdout '--version, -v'
 stdout '~/.agentic-orchestrator/config.yaml'
 stdout '~/.agentic-orchestrator/features'
 stdout 'agentico update \[--check\|-n\]'
 stdout '--check'
-! stdout 'Commands:'
-! stdout 'feature list'
-! stdout 'feature create'
-! stdout 'run             Launch'
 ! stderr .
 
 exec agentico --version
@@ -47,6 +45,46 @@ stderr 'unknown command: feature'
 ! stdout .
 
 ! exec agentico --config $WORK/config.yaml --state-dir $WORK/features --dangerously-skip-permissions --providers not-a-provider
-stderr 'unknown provider "not-a-provider"'
-stderr 'no valid providers specified'
+stderr '--providers is available only with the headless server'
+stderr 'agentico server --providers'
+! stdout .
+
+# --listen and --name are server-only: without the subcommand they hit the
+# existing headless-server guidance.
+! exec agentico --listen 8080
+stderr '--listen is available only with the headless server'
+! stdout .
+
+! exec agentico --name my-server
+stderr '--name is available only with the headless server'
+! stdout .
+
+# Non-loopback --listen values are accepted by parse-time validation: the
+# network policy binds them (concrete IPs and wildcards alike), so only
+# genuinely invalid values fail fast now.
+! exec agentico server --listen 0.0.0.0:0
+stderr 'between 1 and 65535'
+! stdout .
+
+! exec agentico server --listen 10.0.0.5:notaport
+stderr 'invalid --listen value'
+! stdout .
+
+! exec agentico server --listen 127.0.0.2:notaport
+stderr 'between 1 and 65535'
+! stdout .
+
+# Invalid ports are clear parse errors.
+! exec agentico server --listen 65536
+stderr 'between 1 and 65535'
+! stdout .
+
+! exec agentico server --listen notaport
+stderr 'invalid --listen value'
+! stdout .
+
+# Invalid --name values fail fast as well.
+! exec agentico server --name nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn
+stderr 'invalid --name value'
+stderr 'maximum is 64'
 ! stdout .

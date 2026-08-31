@@ -63,7 +63,7 @@ type ReviewHelperConfig struct {
 	// BuildSessionOpts so the provider command receives the resolved level.
 	EffectiveEffort llm.EffortLevel
 	EffortSource    llm.EffortSource
-	// Kind classifies the helper session for TUI/observer purposes. Defaults to
+	// Kind classifies the helper session for desktop app and observer purposes. Defaults to
 	// KindReviewHelper when unset.
 	Kind ports.SessionKind
 	// Label is a short context-specific sub-label (validator domain, review
@@ -85,7 +85,7 @@ type ReviewHelperConfig struct {
 // Feedback holds the canonical body of the structured review-feedback.md
 // (verbatim if the LLM produced a clean file and satisfied completion;
 // deterministic CHANGES_REQUESTED protocol feedback otherwise). Output retains
-// the helper's stdout for log surfaces (TUI, debug) but is not part of the
+// the helper's stdout for log surfaces (desktop app, debug) but is not part of the
 // wire protocol — the file is.
 type ReviewHelperResult struct {
 	Output   string
@@ -277,7 +277,7 @@ func (pr *PhaseRunner) RunReadOnlyReviewHelper(ctx context.Context, cfg ReviewHe
 		AgentNames:                     explorationAgentNames(),
 		Phase:                          cfg.Phase,
 		SystemPromptHasUsefulResources: true,
-		MarkerPath:                     filepath.Join(cfg.HelperIterDir, PhaseCompleteFile),
+		CompletionProtocol:             true,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("running review helper: building session: %w", err)
@@ -290,10 +290,9 @@ func (pr *PhaseRunner) RunReadOnlyReviewHelper(ctx context.Context, cfg ReviewHe
 		}
 		installResumeProviderInitCapture(sessOpts, resumeLaunch.coordinator)
 	}
-	// The provider's bounded-helper capabilities are resolved by BuildSession
-	// (which holds the registry) and surfaced on sessOpts, so they hold even
-	// when this helper runner carries no registry of its own.
-	nudgeSupported := sessOpts != nil && sessOpts.SupportsFinishOrViolateNudge
+	// PHASE2(review-nudge-arming): nudgeSupported dropped — main removed
+	// ports.SessionOpts.SupportsFinishOrViolateNudge; the boundedHelperRunConfig
+	// finishOrViolateNudge field and its setters (Hunks 2–3) are dropped with it.
 	sandboxRequested := sessOpts != nil && sessOpts.UsesBoundedHelperSandbox
 	if sessOpts != nil && cfg.SystemPromptPrefix != "" && cfg.PromptPath != "" {
 		WriteValidatorSystemPrompt(filepath.Dir(cfg.PromptPath), cfg.SystemPromptPrefix, sessOpts.DebugSystemPrompt)
@@ -307,9 +306,6 @@ func (pr *PhaseRunner) RunReadOnlyReviewHelper(ctx context.Context, cfg ReviewHe
 		}
 		if cfg.Label != "" {
 			sessOpts.Label = cfg.Label
-		}
-		if nudgeSupported {
-			sessOpts.TurnMode = ports.TurnModeInteractive
 		}
 	}
 
@@ -343,11 +339,10 @@ func (pr *PhaseRunner) RunReadOnlyReviewHelper(ctx context.Context, cfg ReviewHe
 		env:                  env,
 		sessOpts:             sessOpts,
 		requireOutput:        false,
-		phaseCompleteDir:     cfg.HelperIterDir,
+		completionDir:        cfg.HelperIterDir,
 		contractPhase:        contractPhase,
 		contractRole:         cfg.Role,
 		parentSpanCtx:        cfg.ParentSpanCtx,
-		finishOrViolateNudge: nudgeSupported,
 		resumeCoordinator:    resumeLaunch.coordinator,
 		resumeClaim:          resumeLaunch.claim,
 		resumed:              resumeLaunch.resumed,
@@ -480,7 +475,7 @@ func (pr *PhaseRunner) RunLiveRunReviewHelper(ctx context.Context, cfg ReviewHel
 	liveHandler := &permission.LiveRunReviewHandler{
 		AllowedPaths:  allowedPaths,
 		ScratchRoots:  scratch.roots(),
-		DenyWriteHint: "live-run review may write only review-feedback.md, phase_complete, and files under its scratch roots",
+		DenyWriteHint: "live-run review may write only review-feedback.md and files under its scratch roots",
 	}
 	command, env, sessOpts, err := pr.BuildSession(BuildSessionOpts{
 		Model:                          cfg.Model,
@@ -499,7 +494,7 @@ func (pr *PhaseRunner) RunLiveRunReviewHelper(ctx context.Context, cfg ReviewHel
 		AgentNames:                     explorationAgentNames(),
 		Phase:                          cfg.Phase,
 		SystemPromptHasUsefulResources: true,
-		MarkerPath:                     filepath.Join(cfg.HelperIterDir, PhaseCompleteFile),
+		CompletionProtocol:             true,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("running live-run review helper: building session: %w", err)
@@ -514,7 +509,6 @@ func (pr *PhaseRunner) RunLiveRunReviewHelper(ctx context.Context, cfg ReviewHel
 	}
 	env = mergeSessionEnv(env, scratch.env()...)
 
-	nudgeSupported := sessOpts != nil && sessOpts.SupportsFinishOrViolateNudge
 	sandboxRequested := sessOpts != nil && sessOpts.UsesBoundedHelperSandbox
 	if sessOpts != nil && cfg.SystemPromptPrefix != "" && cfg.PromptPath != "" {
 		WriteValidatorSystemPrompt(filepath.Dir(cfg.PromptPath), cfg.SystemPromptPrefix, sessOpts.DebugSystemPrompt)
@@ -528,9 +522,6 @@ func (pr *PhaseRunner) RunLiveRunReviewHelper(ctx context.Context, cfg ReviewHel
 		}
 		if cfg.Label != "" {
 			sessOpts.Label = cfg.Label
-		}
-		if nudgeSupported {
-			sessOpts.TurnMode = ports.TurnModeInteractive
 		}
 	}
 
@@ -557,11 +548,10 @@ func (pr *PhaseRunner) RunLiveRunReviewHelper(ctx context.Context, cfg ReviewHel
 		env:                  env,
 		sessOpts:             sessOpts,
 		requireOutput:        false,
-		phaseCompleteDir:     cfg.HelperIterDir,
+		completionDir:        cfg.HelperIterDir,
 		contractPhase:        contractPhase,
 		contractRole:         cfg.Role,
 		parentSpanCtx:        cfg.ParentSpanCtx,
-		finishOrViolateNudge: nudgeSupported,
 		resumeCoordinator:    resumeLaunch.coordinator,
 		resumeClaim:          resumeLaunch.claim,
 		resumed:              resumeLaunch.resumed,
@@ -725,10 +715,7 @@ func reviewHelperProtocolViolationFeedback(parsed *ParsedReviewFeedback, runErr 
 }
 
 func boundedReviewHelperAllowedPaths(cfg ReviewHelperConfig) []string {
-	allowed := []string{
-		cfg.FeedbackPath,
-		filepath.Join(cfg.HelperIterDir, "phase_complete"),
-	}
+	allowed := []string{cfg.FeedbackPath}
 	allowed = append(allowed, cfg.AllowedPaths...)
 	return allowed
 }

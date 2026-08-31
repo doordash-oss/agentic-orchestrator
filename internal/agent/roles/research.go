@@ -31,7 +31,6 @@ var researcherRoleSpec = RoleSpec{
 	OutputRoots: []OutputRootSpec{
 		singleShotPhaseDirOutputRoot("Research phase artifact directory."),
 	},
-	MarkerRoot: "phase_dir",
 	Artifacts: []RoleArtifactSpec{
 		phaseMarkdownRoleArtifact("research markdown artifact"),
 	},

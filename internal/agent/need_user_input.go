@@ -21,19 +21,40 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
+	"unicode/utf16"
 
 	"gopkg.in/yaml.v3"
 )
 
-// NeedUserInputRecord is the persisted gate artifact written under an
-// implement iteration directory when an iteration emits
-// `## Iteration State: NEED_USER_INPUT`. Gate scope lives in feature/cycle
-// state; this artifact only stores the user-facing questionnaire.
+// NeedUserInputRecord is the harness-owned persisted gate for a deterministic
+// verification capability blocker. Root-agent questions use the live
+// AskUserQuestion control protocol instead.
 type NeedUserInputRecord struct {
-	Summary              string                        `yaml:"summary"`
-	Questions            []NeedUserInputQuestion       `yaml:"questions"`
-	Iteration            int                           `yaml:"iteration"`
-	VerificationDecision *NeedUserVerificationDecision `yaml:"verification_decision,omitempty"`
+	Summary              string                            `yaml:"summary"`
+	Questions            []NeedUserInputQuestion           `yaml:"questions"`
+	Iteration            int                               `yaml:"iteration"`
+	WaitingSince         time.Time                         `yaml:"waiting_since,omitempty"`
+	VerificationDecision *NeedUserVerificationDecision     `yaml:"verification_decision,omitempty"`
+	Verification         *NeedUserInputVerificationContext `yaml:"verification,omitempty"`
+}
+
+// NeedUserInputVerificationContext is the persisted, sanitized explanation
+// of verification blockers attached to a harness-owned gate artifact.
+type NeedUserInputVerificationContext struct {
+	Blockers []NeedUserInputVerificationBlocker `yaml:"blockers"`
+}
+
+// NeedUserInputVerificationBlocker describes one blocked verification item
+// without exposing executable probes or contract paths.
+type NeedUserInputVerificationBlocker struct {
+	ItemID       string   `yaml:"item_id"`
+	Name         string   `yaml:"name"`
+	RepoName     string   `yaml:"repo_name,omitempty"`
+	Command      string   `yaml:"command"`
+	Reason       string   `yaml:"reason"`
+	Capabilities []string `yaml:"capabilities,omitempty"`
+	Remediation  string   `yaml:"remediation"`
 }
 
 // NeedUserVerificationDecision is harness-authored decision context. It binds
@@ -51,6 +72,22 @@ const (
 	NeedUserVerificationRetryAfterAuth = "RETRY_AFTER_AUTH"
 )
 
+// Verification gate context limits match the public API and desktop IPC
+// contracts. Trusted decision ItemIDs are intentionally not bounded by these
+// display-only limits.
+const (
+	NeedUserInputVerificationMaxBlockers          = 100
+	NeedUserInputVerificationMaxCapabilities      = 20
+	NeedUserInputVerificationItemIDMaxLength      = 200
+	NeedUserInputVerificationRepoNameMaxLength    = 500
+	NeedUserInputVerificationContextTextMaxLength = 64 * 1024
+	NeedUserInputGateMaxQuestions                 = 100
+	NeedUserInputGateDisplayMaxBytes              = 1024 * 1024
+	// NeedUserInputGateCollectionMaxBytes leaves two MiB of the desktop's
+	// five-MiB response limit for response metadata and the other prompt queues.
+	NeedUserInputGateCollectionMaxBytes = 3 * 1024 * 1024
+)
+
 // NeedUserInputQuestion is one prompt-and-answer pair the user fills in
 // before resuming.
 type NeedUserInputQuestion struct {
@@ -63,56 +100,23 @@ type NeedUserInputQuestion struct {
 // inside an iteration directory.
 const NeedUserInputArtifactName = "need-user-input.yaml"
 
-// reconcileNeedUserInputGate returns the gate questionnaire to persist for a
-// paused NEED_USER_INPUT iteration. The implementer-authored agentRec is
-// authoritative, but each empty field falls back to the validated progress.md
-// handoff (state note for the summary, numbered questions for the prompts) so a
-// blank stub never surfaces as an empty gate. Surviving questions are
-// re-indexed 1-based.
-func reconcileNeedUserInputGate(agentRec *NeedUserInputRecord, progress *ParsedProgress, iteration int) NeedUserInputRecord {
-	var rec NeedUserInputRecord
-	if agentRec != nil {
-		rec = *agentRec
-	}
-	// Verification decisions are trusted only when synthesized by the
-	// harness. An implementer-authored gate cannot grant itself waiver power.
-	rec.VerificationDecision = nil
-	rec.Iteration = iteration
-	rec.Summary = strings.TrimSpace(rec.Summary)
+// verificationReportArtifactName is the harness verification report persisted
+// next to the gate artifact in an iteration directory.
+const verificationReportArtifactName = "verification-report.yaml"
 
-	questions := make([]NeedUserInputQuestion, 0, len(rec.Questions))
-	for _, q := range rec.Questions {
-		prompt := strings.TrimSpace(q.Prompt)
-		if prompt == "" {
-			continue
-		}
-		questions = append(questions, NeedUserInputQuestion{
-			Index:  len(questions) + 1,
-			Prompt: prompt,
-			Answer: q.Answer,
-		})
+// verificationReportHasBlockedResults reports whether any result is blocked.
+// Blocked results are environment-derived and never a legitimate resume cache
+// hit — the environment may have changed since the report was written.
+func verificationReportHasBlockedResults(report *VerificationReport) bool {
+	if report == nil {
+		return false
 	}
-
-	if progress != nil {
-		if rec.Summary == "" {
-			rec.Summary = strings.TrimSpace(progress.StateNote)
-		}
-		if len(questions) == 0 {
-			for _, p := range progress.Questions {
-				prompt := strings.TrimSpace(p)
-				if prompt == "" {
-					continue
-				}
-				questions = append(questions, NeedUserInputQuestion{
-					Index:  len(questions) + 1,
-					Prompt: prompt,
-				})
-			}
+	for _, result := range report.Results {
+		if NormalizeStatus(result.Status) == VerificationStatusBlocked {
+			return true
 		}
 	}
-
-	rec.Questions = questions
-	return rec
+	return false
 }
 
 // SynthesizeVerificationNeedUserInputGate creates a same-iteration pause for
@@ -134,19 +138,146 @@ func SynthesizeVerificationNeedUserInputGate(contractPath string, revision int, 
 	}
 }
 
-// ApplyNeedUserVerificationDecision applies a user-authorized waiver, or
-// leaves the contract unchanged for an after-auth retry. The caller must only
-// invoke this for a trusted harness-authored gate artifact.
-func ApplyNeedUserVerificationDecision(rec NeedUserInputRecord) error {
+// SynthesizeVerificationNeedUserInputGateWithContext creates a same-iteration
+// pause with sanitized, user-actionable descriptions of blocked checks.
+func SynthesizeVerificationNeedUserInputGateWithContext(contractPath string, contract *TestingContract, report *VerificationReport, itemIDs []string, iteration int) NeedUserInputRecord {
+	rec := SynthesizeVerificationNeedUserInputGate(contractPath, contract.Revision, itemIDs, iteration)
+	itemsByID := make(map[string]TestingContractItem, len(contract.Items))
+	for _, item := range contract.Items {
+		itemsByID[item.ID] = item
+	}
+	resultsByID := make(map[string]VerificationCheckResult, len(report.Results))
+	for _, result := range report.Results {
+		resultsByID[result.ItemID] = result
+	}
+
+	blockers := make(
+		[]NeedUserInputVerificationBlocker,
+		0,
+		min(len(rec.VerificationDecision.ItemIDs), NeedUserInputVerificationMaxBlockers),
+	)
+	for _, itemID := range rec.VerificationDecision.ItemIDs {
+		if len(blockers) == NeedUserInputVerificationMaxBlockers {
+			break
+		}
+		item := itemsByID[itemID]
+		result := resultsByID[itemID]
+		name := item.Name
+		if name == "" {
+			name = itemID
+		}
+		capabilities := make(
+			[]string,
+			0,
+			min(len(item.Capabilities), NeedUserInputVerificationMaxCapabilities),
+		)
+		for _, capability := range item.Capabilities {
+			if len(capabilities) == NeedUserInputVerificationMaxCapabilities {
+				break
+			}
+			capabilities = append(
+				capabilities,
+				BoundNeedUserInputVerificationString(
+					capability.Name,
+					NeedUserInputVerificationContextTextMaxLength,
+				),
+			)
+		}
+		blockers = append(blockers, NeedUserInputVerificationBlocker{
+			ItemID: BoundNeedUserInputVerificationString(
+				itemID,
+				NeedUserInputVerificationItemIDMaxLength,
+			),
+			Name: BoundNeedUserInputVerificationString(
+				name,
+				NeedUserInputVerificationContextTextMaxLength,
+			),
+			RepoName: BoundNeedUserInputVerificationString(
+				item.Repo,
+				NeedUserInputVerificationRepoNameMaxLength,
+			),
+			Command: BoundNeedUserInputVerificationString(
+				item.Command,
+				NeedUserInputVerificationContextTextMaxLength,
+			),
+			Reason: BoundNeedUserInputVerificationString(
+				result.BlockedReason,
+				NeedUserInputVerificationContextTextMaxLength,
+			),
+			Capabilities: capabilities,
+			Remediation: BoundNeedUserInputVerificationString(
+				verificationBlockerRemediation(result.BlockedReason, capabilities),
+				NeedUserInputVerificationContextTextMaxLength,
+			),
+		})
+	}
+	if len(blockers) > 0 {
+		rec.Verification = &NeedUserInputVerificationContext{Blockers: blockers}
+	}
+	return rec
+}
+
+// BoundNeedUserInputVerificationString returns valid UTF-8 whose UTF-16 code
+// unit count does not exceed maxLength, matching JavaScript string validation.
+// A truncated value includes its ellipsis within that limit.
+func BoundNeedUserInputVerificationString(value string, maxLength int) string {
+	if maxLength <= 0 {
+		return ""
+	}
+	runes := []rune(value)
+	length := 0
+	for _, r := range runes {
+		length += utf16.RuneLen(r)
+	}
+	if length <= maxLength {
+		return string(runes)
+	}
+	if maxLength == 1 {
+		return "…"
+	}
+	limit := maxLength - 1
+	length = 0
+	end := 0
+	for i, r := range runes {
+		runeLength := utf16.RuneLen(r)
+		if length+runeLength > limit {
+			break
+		}
+		length += runeLength
+		end = i + 1
+	}
+	return string(runes[:end]) + "…"
+}
+
+func verificationBlockerRemediation(reason string, capabilities []string) string {
+	if strings.Contains(reason, "missing declared capability") {
+		return fmt.Sprintf("Make %s available, then retry verification.", strings.Join(capabilities, ", "))
+	}
+	return "Resolve the environment limitation described above, then retry verification."
+}
+
+// ApplyNeedUserVerificationDecision applies a user-authorized waiver, or —
+// for an after-auth retry — leaves the contract unchanged and removes the
+// iteration's verification report so resume re-executes the blocked checks
+// instead of replaying them from cache. gatePath is the gate artifact inside
+// the iteration directory. The caller must only invoke this for a trusted
+// harness-authored gate artifact.
+func ApplyNeedUserVerificationDecision(gatePath string, rec NeedUserInputRecord) error {
 	decision := rec.VerificationDecision
 	if decision == nil {
-		return nil
+		return errors.New("need-user-input gate is not a harness verification decision")
 	}
 	action, err := needUserVerificationAction(rec)
 	if err != nil {
 		return err
 	}
 	if action == NeedUserVerificationRetryAfterAuth {
+		if gatePath = strings.TrimSpace(gatePath); gatePath != "" {
+			reportPath := filepath.Join(filepath.Dir(gatePath), verificationReportArtifactName)
+			if err := os.Remove(reportPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+				return fmt.Errorf("invalidating verification report for retry: %w", err)
+			}
+		}
 		return nil
 	}
 	contract, err := ReadTestingContract(decision.ContractPath)
@@ -209,6 +340,13 @@ func NeedUserInputPath(iterDir string) string {
 
 // WriteNeedUserInputRecord serialises rec as YAML and writes it to path.
 func WriteNeedUserInputRecord(path string, rec NeedUserInputRecord) error {
+	if rec.WaitingSince.IsZero() {
+		if info, err := os.Stat(path); err == nil {
+			rec.WaitingSince = info.ModTime().UTC()
+		} else {
+			rec.WaitingSince = time.Now().UTC()
+		}
+	}
 	data, err := yaml.Marshal(rec)
 	if err != nil {
 		return fmt.Errorf("marshal need-user-input: %w", err)
@@ -245,43 +383,4 @@ func (r NeedUserInputRecord) AllAnswered() bool {
 		}
 	}
 	return true
-}
-
-// buildPriorUserInputAnswers walks artifactDir for `iteration-*` directories
-// in deterministic ascending order, loads each iteration's
-// `need-user-input.yaml` (when present), and renders the answered gates as
-// a single prompt-ready section. Unanswered or unreadable artifacts are
-// silently skipped — only fully resolved gates are surfaced to the next
-// iteration so the resumed agent sees what the user committed to, not what
-// is still outstanding. Returns "" when no resolved gates exist.
-func buildPriorUserInputAnswers(artifactDir string) string {
-	entries, err := os.ReadDir(artifactDir)
-	if err != nil {
-		return ""
-	}
-	sort.Slice(entries, func(i, j int) bool {
-		return entries[i].Name() < entries[j].Name()
-	})
-
-	var sections []string
-	for _, entry := range entries {
-		if !entry.IsDir() || !strings.HasPrefix(entry.Name(), "iteration-") {
-			continue
-		}
-		rec, err := ReadNeedUserInputRecord(filepath.Join(artifactDir, entry.Name(), NeedUserInputArtifactName))
-		if err != nil || !rec.AllAnswered() || rec.VerificationDecision != nil {
-			continue
-		}
-
-		var b strings.Builder
-		fmt.Fprintf(&b, "### Iteration %d\nSummary: %s\n", rec.Iteration, strings.TrimSpace(rec.Summary))
-		for _, q := range rec.Questions {
-			fmt.Fprintf(&b, "Q%d: %s\nA%d: %s\n", q.Index, strings.TrimSpace(q.Prompt), q.Index, strings.TrimSpace(q.Answer))
-		}
-		sections = append(sections, strings.TrimRight(b.String(), "\n"))
-	}
-	if len(sections) == 0 {
-		return ""
-	}
-	return strings.Join(sections, "\n\n")
 }

@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -174,6 +175,112 @@ func TestFeatureListDTOShapeAndNoAuthentication(t *testing.T) {
 	}
 }
 
+// relationshipCountingStore counts relationship scans so list-shaped
+// endpoints can prove they resolve every parent's children in one pass
+// instead of rescanning the store per parent.
+type relationshipCountingStore struct {
+	features       []*feature.Feature
+	perParentCalls int
+	bulkCalls      int
+}
+
+func (s *relationshipCountingStore) List() ([]*feature.Feature, error) { return s.features, nil }
+func (s *relationshipCountingStore) Load(id string) (*feature.Feature, error) {
+	for _, f := range s.features {
+		if f.ID == id {
+			return f, nil
+		}
+	}
+	return nil, os.ErrNotExist
+}
+func (s *relationshipCountingStore) LoadRun(string, int) (*feature.Run, error) {
+	return &feature.Run{}, nil
+}
+func (s *relationshipCountingStore) RunDir(string, int) string      { return "" }
+func (s *relationshipCountingStore) ListRuns(string) ([]int, error) { return nil, nil }
+
+func (s *relationshipCountingStore) classify() map[string]*feature.RelationshipChildren {
+	all := map[string]*feature.RelationshipChildren{}
+	for _, f := range s.features {
+		if !f.IsChild() {
+			continue
+		}
+		children := all[f.Parent.ParentID]
+		if children == nil {
+			children = &feature.RelationshipChildren{}
+			all[f.Parent.ParentID] = children
+		}
+		if f.IsActiveChild() {
+			children.Active = f
+		} else {
+			children.Closed = append(children.Closed, f)
+		}
+	}
+	return all
+}
+
+func (s *relationshipCountingStore) RelationshipChildren(parentID string) (*feature.RelationshipChildren, error) {
+	s.perParentCalls++
+	children := s.classify()[parentID]
+	if children == nil {
+		children = &feature.RelationshipChildren{}
+	}
+	return children, nil
+}
+
+func (s *relationshipCountingStore) AllRelationshipChildren() (map[string]*feature.RelationshipChildren, error) {
+	s.bulkCalls++
+	return s.classify(), nil
+}
+
+func TestFeatureListResolvesRelationshipsInOneScan(t *testing.T) {
+	t.Parallel()
+
+	store := &relationshipCountingStore{features: []*feature.Feature{
+		{ID: "parent-1", Name: "Parent One", Status: feature.StatusPublished, CurrentPhase: feature.PhasePublish},
+		{ID: "parent-2", Name: "Parent Two", Status: feature.StatusPublished, CurrentPhase: feature.PhasePublish},
+		{
+			ID:           "child-1",
+			Name:         "Pass",
+			Status:       feature.StatusDesigning,
+			CurrentPhase: feature.PhaseDesign,
+			Parent:       &feature.ChildRelationship{ParentID: "parent-1", Kind: feature.ChildKindRefactor},
+		},
+	}}
+	handler := NewHandler(HandlerOptions{
+		Runtime:               RuntimeIdentity{RuntimeDir: runtimeDirLiteral, StateDir: testRuntimeStateDir, Config: testRuntimeConfigPath},
+		FeatureStore:          store,
+		DisableHostValidation: true,
+	})
+
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/v1/features", nil))
+	resp := w.Result()
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d; want 200", resp.StatusCode)
+	}
+	var body FeatureListResponse
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(body.Features) != 2 {
+		t.Fatalf("features length = %d; want 2 parents", len(body.Features))
+	}
+	var parentOne *FeatureSummary
+	for i := range body.Features {
+		if body.Features[i].ID == "parent-1" {
+			parentOne = &body.Features[i]
+		}
+	}
+	if parentOne == nil || parentOne.ActiveChild == nil || parentOne.ActiveChild.ID != "child-1" {
+		t.Fatalf("parent-1 active child = %+v; want child-1", parentOne)
+	}
+	if store.bulkCalls != 1 || store.perParentCalls != 0 {
+		t.Fatalf("relationship scans: bulk = %d, per-parent = %d; want one bulk scan and no per-parent scans", store.bulkCalls, store.perParentCalls)
+	}
+}
+
 func TestSnapshotResponsesExposeAsOfSequence(t *testing.T) {
 	t.Parallel()
 
@@ -184,7 +291,7 @@ func TestSnapshotResponsesExposeAsOfSequence(t *testing.T) {
 		}),
 		DisableHostValidation: true,
 	})
-	handler.broker.publish(SSEEventDTO{Kind: testEventKindFeatureState, Resource: ResourceDTO{Type: entityFeature, ID: fixtureFeatureID}})
+	handler.broker.publish(SSEEvent{Kind: testEventKindFeatureState, Resource: Resource{Type: entityFeature, ID: fixtureFeatureID}})
 
 	w := httptest.NewRecorder()
 	handler.routes().ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/v1/features", nil))
@@ -346,6 +453,553 @@ func TestPermissionAnswerAcceptsExplicitDecisions(t *testing.T) {
 
 func stringPtr(value string) *string {
 	return &value
+}
+
+// TestRefactorActionIsKnownAndUnknownActionsStayUnknown verifies that the
+// restored refactor action routes to the mutation target while action strings
+// without a handler (including refactor subactions) still hit the generic
+// method-not-allowed response.
+func TestRefactorActionIsKnownAndUnknownActionsStayUnknown(t *testing.T) {
+	t.Parallel()
+
+	t.Run("refactor is a known action", func(t *testing.T) {
+		t.Parallel()
+		target := &refactorMutationTarget{
+			err: fmt.Errorf("%w: feat-1", feature.ErrRefactorParentNotFound),
+		}
+		handler := NewHandler(HandlerOptions{
+			Mutations:             target,
+			DisableHostValidation: true,
+		})
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/features/feat-1/actions/refactor", bytes.NewReader([]byte(`{"name":"Rework auth"}`)))
+		req.Header.Set("Content-Type", contentTypeJSON)
+		req.Header.Set("X-Agentico-Client", trustedClientHeaderValue)
+		w := httptest.NewRecorder()
+
+		handler.ServeHTTP(w, req)
+
+		resp := w.Result()
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusNotFound {
+			t.Fatalf("status = %d; want 404 for a missing refactor parent", resp.StatusCode)
+		}
+		var body ErrorResponse
+		if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+			t.Fatalf("decode response: %v", err)
+		}
+		if body.Error.Code != errCodeRefactorParentNotFound {
+			t.Fatalf("error code = %q; want %q", body.Error.Code, errCodeRefactorParentNotFound)
+		}
+	})
+
+	for _, path := range []string{
+		"/api/v1/features/feat-1/actions/refactor/restart",
+		"/api/v1/features/feat-1/actions/unrecognized-action",
+	} {
+		t.Run(strings.TrimPrefix(path, "/api/v1/features/feat-1/actions/"), func(t *testing.T) {
+			t.Parallel()
+
+			handler := NewHandler(HandlerOptions{
+				Mutations:             &refactorMutationTarget{},
+				DisableHostValidation: true,
+			})
+			req := httptest.NewRequest(http.MethodPost, path, bytes.NewReader([]byte(`{}`)))
+			req.Header.Set("Content-Type", contentTypeJSON)
+			req.Header.Set("X-Agentico-Client", trustedClientHeaderValue)
+			w := httptest.NewRecorder()
+
+			handler.ServeHTTP(w, req)
+
+			resp := w.Result()
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusMethodNotAllowed {
+				t.Fatalf("status = %d; want generic unknown-action response 405", resp.StatusCode)
+			}
+			var body ErrorResponse
+			if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+				t.Fatalf("decode response: %v", err)
+			}
+			if body.Error.Code != "method_not_allowed" {
+				t.Fatalf("error code = %q; want method_not_allowed", body.Error.Code)
+			}
+		})
+	}
+}
+
+// TestRefactorActionReturnsCreated verifies the typed wizard brief reaches
+// the mutation target and that a successful launch returns 201 with the
+// child identifier.
+func TestRefactorActionReturnsCreated(t *testing.T) {
+	t.Parallel()
+
+	target := &refactorMutationTarget{
+		resp: RefactorFeatureResponse{FeatureID: "child-1", ParentID: "feat-1", Result: resultCreated},
+	}
+	handler := NewHandler(HandlerOptions{
+		Mutations:             target,
+		DisableHostValidation: true,
+	})
+	body := `{
+		"name": " Rework auth ",
+		"description": "split the auth package",
+		"images": ["~/shots/login.png"],
+		"attachments": ["~/docs/auth.md"],
+		"pipeline": "large",
+		"checkpoints": {"inquiry_review": true},
+		"effort": {"planning": "high"},
+		"models": {"planning": "opus"},
+		"risk_level": "low",
+		"exit_criteria": "build passes",
+		"inquireness": "medium"
+	}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/features/feat-1/actions/refactor", bytes.NewReader([]byte(body)))
+	req.Header.Set("Content-Type", contentTypeJSON)
+	req.Header.Set("X-Agentico-Client", trustedClientHeaderValue)
+	w := httptest.NewRecorder()
+
+	handler.ServeHTTP(w, req)
+
+	resp := w.Result()
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d; want 201; body = %s", resp.StatusCode, raw)
+	}
+	var out RefactorFeatureResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if out.FeatureID != "child-1" || out.ParentID != "feat-1" || out.Result != resultCreated {
+		t.Fatalf("response = %+v; want feature_id child-1 parent_id feat-1 result created", out)
+	}
+	if len(target.received) != 1 {
+		t.Fatalf("mutation target received %d requests, want 1", len(target.received))
+	}
+	got := target.received[0]
+	if got.Name != "Rework auth" {
+		t.Fatalf("name = %q; want trimmed %q", got.Name, "Rework auth")
+	}
+	if got.Pipeline != feature.PipelineLarge || got.RiskLevel != feature.RiskLow {
+		t.Fatalf("pipeline/risk = %q/%q; want large/low", got.Pipeline, got.RiskLevel)
+	}
+	if got.Description != "split the auth package" || got.ExitCriteria != "build passes" {
+		t.Fatalf("description/exit criteria = %q/%q", got.Description, got.ExitCriteria)
+	}
+	if len(got.Images) != 1 || len(got.Attachments) != 1 {
+		t.Fatalf("images/attachments = %v/%v; want one each", got.Images, got.Attachments)
+	}
+	if !got.Checkpoints.InquiryReview {
+		t.Fatalf("checkpoints = %+v; want inquiry_review", got.Checkpoints)
+	}
+	if got.Effort.Planning != "high" || got.Models.Planning != "opus" {
+		t.Fatalf("effort/models planning = %q/%q; want high/opus", got.Effort.Planning, got.Models.Planning)
+	}
+	if got.Inquireness != feature.InquirenessMedium {
+		t.Fatalf("inquireness = %q; want medium", got.Inquireness)
+	}
+}
+
+// TestRefactorActionRejectsInvalidInquireness verifies the handler validates
+// the inquiry behavior before the mutation target is invoked.
+func TestRefactorActionRejectsInvalidInquireness(t *testing.T) {
+	t.Parallel()
+
+	target := &refactorMutationTarget{}
+	handler := NewHandler(HandlerOptions{
+		Mutations:             target,
+		DisableHostValidation: true,
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/features/feat-1/actions/refactor",
+		bytes.NewReader([]byte(`{"name":"Rework auth","inquireness":"chatty"}`)))
+	req.Header.Set("Content-Type", contentTypeJSON)
+	req.Header.Set("X-Agentico-Client", trustedClientHeaderValue)
+	w := httptest.NewRecorder()
+
+	handler.ServeHTTP(w, req)
+
+	resp := w.Result()
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d; want 400", resp.StatusCode)
+	}
+	if len(target.received) != 0 {
+		t.Fatalf("mutation target invoked with invalid inquireness")
+	}
+}
+
+// TestRefactorActionRequiresName verifies the wizard brief must carry a
+// child name; the mutation target is never invoked without one.
+func TestRefactorActionRequiresName(t *testing.T) {
+	t.Parallel()
+
+	target := &refactorMutationTarget{}
+	handler := NewHandler(HandlerOptions{
+		Mutations:             target,
+		DisableHostValidation: true,
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/features/feat-1/actions/refactor", bytes.NewReader([]byte(`{"description":"no name"}`)))
+	req.Header.Set("Content-Type", contentTypeJSON)
+	req.Header.Set("X-Agentico-Client", trustedClientHeaderValue)
+	w := httptest.NewRecorder()
+
+	handler.ServeHTTP(w, req)
+
+	resp := w.Result()
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d; want 400", resp.StatusCode)
+	}
+	if len(target.received) != 0 {
+		t.Fatalf("mutation target invoked without a name")
+	}
+}
+
+func TestReviewFeedbackActionLaunchesFromSubmittedPayload(t *testing.T) {
+	t.Parallel()
+
+	target := &reviewFeedbackMutationTarget{resp: ReviewFeedbackFeatureResponse{
+		ParentID:  "parent-1",
+		FeatureID: "child-1",
+		Result:    resultCreated,
+	}}
+	handler := NewHandler(HandlerOptions{Mutations: target, DisableHostValidation: true})
+	body := `{"expected_revision":3,"gate":false}`
+	req := httptest.NewRequest(http.MethodPost, apiPathReviewFeedbackAction, bytes.NewBufferString(body))
+	req.URL.Path = "/api/v1/features/parent-1/actions/review-feedback"
+	req.Header.Set("Content-Type", contentTypeJSON)
+	req.Header.Set("X-Agentico-Client", trustedClientHeaderValue)
+	w := httptest.NewRecorder()
+
+	handler.ServeHTTP(w, req)
+
+	resp := w.Result()
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("status = %d; want 201", resp.StatusCode)
+	}
+	if len(target.received) != 1 {
+		t.Fatalf("received requests = %d; want 1", len(target.received))
+	}
+	got := target.received[0]
+	if got.Gate == nil || *got.Gate || got.ExpectedRevision != 3 {
+		t.Fatalf("request = %+v; want expected revision 3 and explicit false gate", got)
+	}
+}
+
+// The constant-size launch request rejects renderer-supplied comment
+// payloads instead of silently ignoring them.
+func TestReviewFeedbackActionRejectsCommentPayloadFields(t *testing.T) {
+	t.Parallel()
+
+	target := &reviewFeedbackMutationTarget{resp: ReviewFeedbackFeatureResponse{
+		ParentID:  "parent-1",
+		FeatureID: "child-1",
+		Result:    resultCreated,
+	}}
+	handler := NewHandler(HandlerOptions{Mutations: target, DisableHostValidation: true})
+	body := `{"expected_revision":3,"comments":[{"repo":"api","id":17,"type":"review","body":"handle this"}]}`
+	req := httptest.NewRequest(http.MethodPost, apiPathReviewFeedbackAction, bytes.NewBufferString(body))
+	req.URL.Path = "/api/v1/features/parent-1/actions/review-feedback"
+	req.Header.Set("Content-Type", contentTypeJSON)
+	req.Header.Set("X-Agentico-Client", trustedClientHeaderValue)
+	w := httptest.NewRecorder()
+
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d; want 400", w.Code)
+	}
+	if len(target.received) != 0 {
+		t.Fatalf("received requests = %d; want 0", len(target.received))
+	}
+}
+
+func TestReviewFeedbackActionTypedValidationErrorCodes(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		err      error
+		wantCode string
+	}{
+		{name: "empty selection", err: feature.ErrReviewFeedbackEmptySelection, wantCode: "review_feedback_empty_selection"},
+		{name: "unsupported comment", err: feature.ErrReviewFeedbackUnsupportedCommentType, wantCode: "review_feedback_unsupported_comment_type"},
+		{name: "unknown repository", err: feature.ErrReviewFeedbackUnknownRepo, wantCode: "review_feedback_unknown_repo"},
+		{name: "repository without pull request", err: feature.ErrReviewFeedbackRepoHasNoPR, wantCode: "review_feedback_repo_has_no_pull_request"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			target := &reviewFeedbackMutationTarget{err: tt.err}
+			handler := NewHandler(HandlerOptions{Mutations: target, DisableHostValidation: true})
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/features/parent-1/actions/review-feedback", bytes.NewBufferString(`{"expected_revision":1}`))
+			req.Header.Set("Content-Type", contentTypeJSON)
+			req.Header.Set("X-Agentico-Client", trustedClientHeaderValue)
+			w := httptest.NewRecorder()
+
+			handler.ServeHTTP(w, req)
+
+			resp := w.Result()
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusBadRequest {
+				t.Fatalf("status = %d; want 400", resp.StatusCode)
+			}
+			var body ErrorResponse
+			if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+				t.Fatalf("decode response: %v", err)
+			}
+			if body.Error.Code != tt.wantCode {
+				t.Fatalf("error code = %q; want %q", body.Error.Code, tt.wantCode)
+			}
+		})
+	}
+}
+
+// TestRefactorActionTypedErrorCodes pins the stable machine codes of every
+// typed child-launch failure and of the child execution gate.
+func TestRefactorActionTypedErrorCodes(t *testing.T) {
+	t.Parallel()
+
+	dirtyErr := &feature.ParentWorktreesDirtyError{Repos: []feature.RepoDirtyDiagnostics{{
+		Repo:           repoNameSelf,
+		Path:           testRepoPath,
+		Staged:         []string{"staged.go"},
+		Unstaged:       []string{"unstaged.go"},
+		Untracked:      []string{"new.go"},
+		StagedTotal:    1,
+		UnstagedTotal:  1,
+		UntrackedTotal: 1,
+	}}}
+	tests := []struct {
+		name       string
+		err        error
+		wantStatus int
+		wantCode   string
+		wantTarget map[string]any
+	}{
+		{
+			name:       "parent not found",
+			err:        fmt.Errorf("%w: feat-1", feature.ErrRefactorParentNotFound),
+			wantStatus: http.StatusNotFound,
+			wantCode:   errCodeRefactorParentNotFound,
+		},
+		{
+			name:       "parent is child",
+			err:        fmt.Errorf("%w: feat-1", feature.ErrRefactorParentIsChild),
+			wantStatus: http.StatusConflict,
+			wantCode:   errCodeRefactorParentIsChild,
+		},
+		{
+			name:       "parent status ineligible",
+			err:        fmt.Errorf("%w: feat-1 is creating", feature.ErrRefactorParentStatusIneligible),
+			wantStatus: http.StatusConflict,
+			wantCode:   errCodeRefactorParentStatusIneligible,
+		},
+		{
+			name:       "active child exists",
+			err:        &feature.ActiveChildExistsError{ParentID: "feat-1", ChildID: "child-9"},
+			wantStatus: http.StatusConflict,
+			wantCode:   errCodeActiveChildExists,
+			wantTarget: map[string]any{"parent_id": "feat-1", "child_id": "child-9"},
+		},
+		{
+			name:       "parent worktrees dirty",
+			err:        dirtyErr,
+			wantStatus: http.StatusConflict,
+			wantCode:   errCodeParentWorktreesDirty,
+		},
+		{
+			name:       "child execution blocked",
+			err:        fmt.Errorf("%w: child-9", feature.ErrChildExecutionBlocked),
+			wantStatus: http.StatusConflict,
+			wantCode:   errCodeChildExecutionBlocked,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			handler := NewHandler(HandlerOptions{
+				Mutations:             &refactorMutationTarget{err: tc.err},
+				DisableHostValidation: true,
+			})
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/features/feat-1/actions/refactor", bytes.NewReader([]byte(`{"name":"Rework auth"}`)))
+			req.Header.Set("Content-Type", contentTypeJSON)
+			req.Header.Set("X-Agentico-Client", trustedClientHeaderValue)
+			w := httptest.NewRecorder()
+
+			handler.ServeHTTP(w, req)
+
+			resp := w.Result()
+			defer resp.Body.Close()
+			if resp.StatusCode != tc.wantStatus {
+				t.Fatalf("status = %d; want %d", resp.StatusCode, tc.wantStatus)
+			}
+			var body ErrorResponse
+			if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+				t.Fatalf("decode response: %v", err)
+			}
+			if body.Error.Code != tc.wantCode {
+				t.Fatalf("error code = %q; want %q", body.Error.Code, tc.wantCode)
+			}
+			if body.Error.Status != tc.wantStatus {
+				t.Fatalf("error status = %d; want %d", body.Error.Status, tc.wantStatus)
+			}
+			for key, want := range tc.wantTarget {
+				if got := body.Error.Target[key]; got != want {
+					t.Fatalf("target[%q] = %v; want %v", key, got, want)
+				}
+			}
+		})
+	}
+}
+
+// TestRefactorActionDirtyErrorCarriesDiagnostics verifies the dirty-worktree
+// rejection serializes the captured per-repository diagnostics into the error
+// target payload.
+func TestRefactorActionDirtyErrorCarriesDiagnostics(t *testing.T) {
+	t.Parallel()
+
+	target := &refactorMutationTarget{
+		err: &feature.ParentWorktreesDirtyError{Repos: []feature.RepoDirtyDiagnostics{{
+			Repo:           repoNameSelf,
+			Path:           testRepoPath,
+			Staged:         []string{"staged.go"},
+			Unstaged:       []string{"unstaged.go"},
+			Untracked:      []string{"new.go"},
+			StagedTotal:    3,
+			UnstagedTotal:  2,
+			UntrackedTotal: 1,
+		}}},
+	}
+	handler := NewHandler(HandlerOptions{
+		Mutations:             target,
+		DisableHostValidation: true,
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/features/feat-1/actions/refactor", bytes.NewReader([]byte(`{"name":"Rework auth"}`)))
+	req.Header.Set("Content-Type", contentTypeJSON)
+	req.Header.Set("X-Agentico-Client", trustedClientHeaderValue)
+	w := httptest.NewRecorder()
+
+	handler.ServeHTTP(w, req)
+
+	resp := w.Result()
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("status = %d; want 409", resp.StatusCode)
+	}
+	var body ErrorResponse
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body.Error.Code != errCodeParentWorktreesDirty {
+		t.Fatalf("error code = %q; want %q", body.Error.Code, errCodeParentWorktreesDirty)
+	}
+	repos, ok := body.Error.Target["repos"].([]any)
+	if !ok || len(repos) != 1 {
+		t.Fatalf("target.repos = %v; want one repository", body.Error.Target["repos"])
+	}
+	repo := repos[0].(map[string]any)
+	if repo["repo"] != repoNameSelf || repo["path"] != testRepoPath {
+		t.Fatalf("repo identity = %v/%v; want %s/%s", repo["repo"], repo["path"], repoNameSelf, testRepoPath)
+	}
+	if got := repo["staged_total"]; got != float64(3) {
+		t.Fatalf("staged_total = %v; want 3", got)
+	}
+	if got := repo["staged"].([]any); len(got) != 1 || got[0] != "staged.go" {
+		t.Fatalf("staged = %v; want [staged.go]", got)
+	}
+	if got := repo["untracked"].([]any); len(got) != 1 || got[0] != "new.go" {
+		t.Fatalf("untracked = %v; want [new.go]", got)
+	}
+}
+
+// TestStartResumeActionChildExecutionBlocked verifies the child
+// execution capability gate surfaces through the start AND resume mutation
+// routes as the stable 409 child_execution_blocked conflict (never a
+// "started" success), regardless of the child's setup state.
+func TestStartResumeActionChildExecutionBlocked(t *testing.T) {
+	t.Parallel()
+
+	for _, action := range []string{actionStart, actionResume} {
+		for _, setupState := range []string{"queued", "setup-complete"} {
+			t.Run(action+"/"+setupState, func(t *testing.T) {
+				t.Parallel()
+				target := &startBlockedMutationTarget{
+					err: fmt.Errorf("%w: child-9", feature.ErrChildExecutionBlocked),
+				}
+				handler := NewHandler(HandlerOptions{
+					Mutations:             target,
+					DisableHostValidation: true,
+				})
+				req := httptest.NewRequest(http.MethodPost, "/api/v1/features/child-9/actions/"+action, bytes.NewReader([]byte(`{}`)))
+				req.Header.Set("Content-Type", contentTypeJSON)
+				req.Header.Set("X-Agentico-Client", trustedClientHeaderValue)
+				w := httptest.NewRecorder()
+
+				handler.ServeHTTP(w, req)
+
+				resp := w.Result()
+				defer resp.Body.Close()
+				if resp.StatusCode != http.StatusConflict {
+					t.Fatalf("status = %d; want 409", resp.StatusCode)
+				}
+				var body ErrorResponse
+				if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+					t.Fatalf("decode response: %v", err)
+				}
+				if body.Error.Code != errCodeChildExecutionBlocked {
+					t.Fatalf("error code = %q; want %q", body.Error.Code, errCodeChildExecutionBlocked)
+				}
+			})
+		}
+	}
+}
+
+type startBlockedMutationTarget struct {
+	MutationTarget
+	err error
+}
+
+func (t *startBlockedMutationTarget) StartFeature(string) (FeatureStartResponse, error) {
+	return FeatureStartResponse{}, t.err
+}
+
+func (t *startBlockedMutationTarget) ResumeFeature(string) (FeatureStartResponse, error) {
+	return FeatureStartResponse{}, t.err
+}
+
+type deleteBlockedMutationTarget struct {
+	MutationTarget
+	err error
+}
+
+func (t *deleteBlockedMutationTarget) DeleteFeature(string, GuardedFeatureActionRequest) (DeleteFeatureResponse, error) {
+	return DeleteFeatureResponse{}, t.err
+}
+
+type refactorMutationTarget struct {
+	MutationTarget
+	received []RefactorFeatureRequest
+	resp     RefactorFeatureResponse
+	err      error
+}
+
+type reviewFeedbackMutationTarget struct {
+	MutationTarget
+	received []ReviewFeedbackFeatureRequest
+	resp     ReviewFeedbackFeatureResponse
+	err      error
+}
+
+func (t *reviewFeedbackMutationTarget) ReviewFeedbackFeature(_ string, req ReviewFeedbackFeatureRequest) (ReviewFeedbackFeatureResponse, error) {
+	t.received = append(t.received, req)
+	return t.resp, t.err
+}
+
+func (t *refactorMutationTarget) RefactorFeature(featureID string, req RefactorFeatureRequest) (RefactorFeatureResponse, error) {
+	t.received = append(t.received, req)
+	return t.resp, t.err
 }
 
 type permissionAnswerMutationTarget struct {
@@ -556,4 +1210,87 @@ func jsonResponse(v any) (*http.Response, error) {
 		Body:       io.NopCloser(bytes.NewReader(body.Bytes())),
 		Header:     make(http.Header),
 	}, nil
+}
+
+// TestStartActionChildCapabilityErrors verifies the typed child
+// capability rejections surface through the action route as distinct
+// stable 409 machine codes carrying the feature/profile/repository
+// context.
+func TestStartActionChildCapabilityErrors(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name     string
+		err      error
+		wantCode string
+	}{
+		{
+			name:     "blocked child",
+			err:      fmt.Errorf("%w: child-9", feature.ErrChildExecutionBlocked),
+			wantCode: errCodeChildExecutionBlocked,
+		},
+		{
+			name:     "settled closed child",
+			err:      fmt.Errorf("%w: child-9", feature.ErrChildExecutionClosed),
+			wantCode: errCodeChildRelationshipClosed,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			target := &startBlockedMutationTarget{err: tc.err}
+			handler := NewHandler(HandlerOptions{
+				Mutations:             target,
+				DisableHostValidation: true,
+			})
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/features/child-9/actions/start", bytes.NewReader([]byte(`{}`)))
+			req.Header.Set("Content-Type", contentTypeJSON)
+			req.Header.Set("X-Agentico-Client", trustedClientHeaderValue)
+			w := httptest.NewRecorder()
+
+			handler.ServeHTTP(w, req)
+
+			resp := w.Result()
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusConflict {
+				t.Fatalf("status = %d; want 409", resp.StatusCode)
+			}
+			var body ErrorResponse
+			if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+				t.Fatalf("decode response: %v", err)
+			}
+			if body.Error.Code != tc.wantCode {
+				t.Fatalf("error code = %q; want %q", body.Error.Code, tc.wantCode)
+			}
+		})
+	}
+}
+
+func TestDeleteActionClosedChildReturnsRelationshipConflict(t *testing.T) {
+	t.Parallel()
+
+	handler := NewHandler(HandlerOptions{
+		Mutations: &deleteBlockedMutationTarget{
+			err: fmt.Errorf("%w: delete is not permitted", feature.ErrChildRelationshipClosed),
+		},
+		DisableHostValidation: true,
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/features/child-9/actions/delete", bytes.NewReader([]byte(`{}`)))
+	req.Header.Set("Content-Type", contentTypeJSON)
+	req.Header.Set("X-Agentico-Client", trustedClientHeaderValue)
+	w := httptest.NewRecorder()
+
+	handler.ServeHTTP(w, req)
+
+	resp := w.Result()
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("status = %d, want 409", resp.StatusCode)
+	}
+	var body ErrorResponse
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body.Error.Code != errCodeChildRelationshipClosed {
+		t.Fatalf("error code = %q, want %q", body.Error.Code, errCodeChildRelationshipClosed)
+	}
 }

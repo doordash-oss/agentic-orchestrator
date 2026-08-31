@@ -138,5 +138,5 @@ Only include this section when this phase retires named stubs from an earlier St
 
 ## Overall Exit Criteria
 
-- [Final feature-level verification after all phases complete.]
+- [Final feature-level verification after all phases complete. When a design document exists, derive these from its `## Acceptance Criteria` section; otherwise distill the feature's exit criteria supplied in the prompt. State outcomes, not activities.]
 ````

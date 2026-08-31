@@ -16,16 +16,18 @@ package git
 
 import (
 	"fmt"
-	"os/exec"
 	"path"
 	"strings"
 
-	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
+	"github.com/doordash-oss/agentic-orchestrator/internal/github"
 )
 
-// CrossRefEntry aliases the canonical port type. Kept for source
-// compatibility with existing git-package callers.
-type CrossRefEntry = ports.CrossRefEntry
+// CrossRefEntry describes one repo's PR status for cross-reference rendering.
+type CrossRefEntry struct {
+	RepoName string
+	Branch   string
+	PRURL    string // empty = pending, "(failed)" = failed repo
+}
 
 // CrossRefSectionHeader is the markdown header for the cross-reference section.
 const CrossRefSectionHeader = "## Related PRs"
@@ -167,24 +169,37 @@ func RemoveCrossReferenceSection(body string) string {
 	return result
 }
 
-// UpdatePRBody updates the body of a GitHub PR by URL using the gh CLI.
+// UpdatePRBody updates the body of a GitHub PR by URL.
 func UpdatePRBody(prURL, newBody string) error {
-	cmd := exec.Command("gh", "pr", "edit", prURL, "--body", newBody)
-	out, err := cmd.CombinedOutput()
+	owner, repo, number, err := ParsePRURL(prURL)
 	if err != nil {
-		return fmt.Errorf("editing PR: %s: %w", strings.TrimSpace(string(out)), err)
+		return err
+	}
+	client, err := github.ForHost(prURLHost(prURL))
+	if err != nil {
+		return err
+	}
+	if err := client.UpdatePRBody(owner, repo, number, newBody); err != nil {
+		return fmt.Errorf("editing PR: %w", err)
 	}
 	return nil
 }
 
-// GetPRBody fetches the body of a GitHub PR by URL using the gh CLI.
+// GetPRBody fetches the body of a GitHub PR by URL.
 func GetPRBody(prURL string) (string, error) {
-	cmd := exec.Command("gh", "pr", "view", prURL, "--json", "body", "--jq", ".body")
-	out, err := cmd.CombinedOutput()
+	owner, repo, number, err := ParsePRURL(prURL)
 	if err != nil {
-		return "", fmt.Errorf("fetching PR body: %s: %w", strings.TrimSpace(string(out)), err)
+		return "", err
 	}
-	return strings.TrimSpace(string(out)), nil
+	client, err := github.ForHost(prURLHost(prURL))
+	if err != nil {
+		return "", err
+	}
+	info, err := client.GetPR(owner, repo, number)
+	if err != nil {
+		return "", fmt.Errorf("fetching PR body: %w", err)
+	}
+	return strings.TrimSpace(info.Body), nil
 }
 
 // RetroactivelyUpdateCrossRefs updates the cross-reference sections in all

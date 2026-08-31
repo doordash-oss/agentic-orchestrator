@@ -47,7 +47,7 @@ type persistedFile struct {
 }
 
 // globalScope is the on-disk filename for the global (repo-independent)
-// permission file: ~/.agentic-workflow/permissions/global.json.
+// permission file: ~/.agentic-orchestrator/permissions/global.json.
 const globalScope = "global"
 
 // repoGlobalScope is the escaped on-disk filename for a repo literally named

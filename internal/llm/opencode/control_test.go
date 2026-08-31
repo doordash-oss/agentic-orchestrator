@@ -16,7 +16,6 @@ package opencode
 
 import (
 	"encoding/json"
-	"os"
 	"strings"
 	"testing"
 
@@ -130,7 +129,7 @@ func permissionRequestLine(t *testing.T, id int, kind, title string, rawInput ma
 	})
 }
 
-// TestParseLine_PermissionRequestsSurfaceAsControl proves each Phase 2 permission
+// TestParseLine_PermissionRequestsSurfaceAsControl proves each permission
 // surface (shell, edit, web fetch/search, external directory) becomes a shared
 // can_use_tool control request carrying a stable request id, a normalized tool
 // name, and raw input detail the existing permission UI/cache can use — instead
@@ -376,16 +375,42 @@ func TestRespondToAskUser_StructuredFreeFormFallsBackToFollowUpTurn(t *testing.T
 	if err := p.RespondToAskUser("92", raw, map[string]string{"Pick one": "Actually do C instead"}, nil); err != nil {
 		t.Fatalf("RespondToAskUser error: %v", err)
 	}
+	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("outbound lines = %d, want cancellation followed by prompt: %q", len(lines), buf.String())
+	}
+	cancelled := decodePermissionResponse(t, []byte(lines[len(lines)-2]))
+	if cancelled.ID != reqID || cancelled.Result.Outcome.Outcome != OutcomeCancelled || cancelled.Result.Outcome.OptionID != "" {
+		t.Fatalf("cancellation = %+v, want request %d cancelled without option", cancelled, reqID)
+	}
+
 	// The last outbound line is the follow-up turn carrying the answer envelope.
 	var followUp Request
-	if err := json.Unmarshal(buf.lastLine(t), &followUp); err != nil {
+	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &followUp); err != nil {
 		t.Fatalf("expected a follow-up session/prompt: %v (%q)", err, buf.String())
 	}
 	if followUp.Method != "session/prompt" {
 		t.Fatalf("follow-up method = %q, want session/prompt", followUp.Method)
 	}
-	if !strings.Contains(buf.String(), `"outcome":"cancelled"`) {
-		t.Fatalf("expected a cancelled outcome to release the native request; got %q", buf.String())
+	var params PromptParams
+	if err := json.Unmarshal(mustMarshal(t, followUp.Params), &params); err != nil {
+		t.Fatalf("decode follow-up params: %v", err)
+	}
+	const wantEnvelope = `[AskUserQuestion answer]
+The user has answered your question.
+
+Question you asked:
+> Pick one
+
+Options you presented:
+  1. A
+  2. B
+
+User's selected answer: Actually do C instead
+
+[Reminder] When you ask your next question, follow the asking-questions format from your system prompt.`
+	if params.SessionID != "ses_x" || len(params.Prompt) != 1 || params.Prompt[0] != (ContentBlock{Type: "text", Text: wantEnvelope}) {
+		t.Fatalf("follow-up params = %+v, want exact custom-answer envelope", params)
 	}
 }
 
@@ -501,6 +526,50 @@ func TestPromptEndTurn_NumberedOptionsToleratesTrailingStemAndRecommendedAfterCo
 	}
 }
 
+// TestPromptEndTurn_NumberedOptionsWithoutStemRemindsBeforeSurfacing proves an
+// options-only response is not surfaced with the raw option list duplicated as
+// its question text.
+func TestPromptEndTurn_NumberedOptionsWithoutStemRemindsBeforeSurfacing(t *testing.T) {
+	p, buf, promptID := newPostHandshakeProtocol(t)
+	optionsOnly := strings.Join([]string{
+		"1. Both loops, all profiles (Recommended): Use the same mechanism everywhere. [confidence: 0.76]",
+		"2. Both loops, Moonshot only: Limit the additional context. [confidence: 0.52]",
+		"3. Final-review fixer only: Preserve the per-phase gate. [confidence: 0.48]",
+	}, "\n")
+	streamAssistantText(t, p, optionsOnly)
+	if msgs := endTurn(t, p, promptID); len(msgs) != 0 {
+		t.Fatalf("options-only question produced %+v, want no message while reminder is sent", msgs)
+	}
+	var reminder Request
+	if err := json.Unmarshal(buf.lastLine(t), &reminder); err != nil || reminder.Method != "session/prompt" {
+		t.Fatalf("expected question-format reminder session/prompt; got %q (err %v)", buf.String(), err)
+	}
+	var pp PromptParams
+	if err := json.Unmarshal(mustMarshal(t, reminder.Params), &pp); err != nil {
+		t.Fatalf("decode reminder params: %v", err)
+	}
+	if !strings.Contains(pp.Prompt[0].Text, "<question stem ending with '?'>") {
+		t.Fatalf("reminder = %q, want question-stem instruction", pp.Prompt[0].Text)
+	}
+
+	var msgs []llm.SDKMessage
+	for i := 0; i < maxQuestionFormatRetries+1 && len(msgs) == 0; i++ {
+		pID := p.promptIDForTest()
+		streamAssistantText(t, p, optionsOnly)
+		msgs = endTurn(t, p, pID)
+	}
+	if len(msgs) != 1 || msgs[0].ControlRequest == nil || msgs[0].Result != nil {
+		t.Fatalf("after retries, produced %+v, want a synthesized AskUserQuestion and no result", msgs)
+	}
+	qs := askUserQuestionsFrom(t, msgs[0].ControlRequest)
+	if len(qs) != 1 || qs[0].Question != "Which option should Agentico use?" {
+		t.Fatalf("fallback questions = %+v, want a neutral question stem", qs)
+	}
+	if len(qs[0].Options) != 3 {
+		t.Fatalf("fallback options = %+v, want all three parsed options", qs[0].Options)
+	}
+}
+
 func TestPromptEndTurn_NumberedOptionsMissingConfidenceRemindsBeforeSurfacing(t *testing.T) {
 	p, buf, promptID := newPostHandshakeProtocol(t)
 	streamAssistantText(t, p, strings.Join([]string{
@@ -562,7 +631,7 @@ func TestPromptEndTurn_InformationalListStaysCompletion(t *testing.T) {
 		"2. Added a regression test for the new limit.",
 	}, "\n"))
 	msgs := endTurn(t, p, promptID)
-	if len(msgs) != 1 || msgs[0].Result == nil || !msgs[0].Result.IsSuccess() {
+	if !terminalResult(t, msgs).IsSuccess() {
 		t.Fatalf("informational list produced %+v, want a success result", msgs)
 	}
 }
@@ -636,7 +705,7 @@ func TestPromptEndTurn_InteractiveNeverSynthesizesQuestion(t *testing.T) {
 			})
 			streamAssistantText(t, p, c.text)
 			msgs := endTurn(t, p, promptID)
-			if len(msgs) != 1 || msgs[0].Result == nil || !msgs[0].Result.IsSuccess() {
+			if !terminalResult(t, msgs).IsSuccess() {
 				t.Fatalf("produced %+v, want a success result", msgs)
 			}
 			if buf.String() != "" {
@@ -653,7 +722,7 @@ func TestPromptEndTurn_NonQuestionIsCleanSuccess(t *testing.T) {
 	p, _, promptID := newPostHandshakeProtocol(t)
 	streamAssistantText(t, p, "All done. I wrote the marker and finished the work.")
 	msgs := endTurn(t, p, promptID)
-	if len(msgs) != 1 || msgs[0].Result == nil || !msgs[0].Result.IsSuccess() {
+	if !terminalResult(t, msgs).IsSuccess() {
 		t.Fatalf("non-question end_turn produced %+v, want a success result", msgs)
 	}
 }
@@ -669,7 +738,7 @@ func TestPromptEndTurn_SecondTurnAlsoEmitsSuccess(t *testing.T) {
 	p, _, promptID1 := newPostHandshakeProtocol(t)
 	streamAssistantText(t, p, "First answer.")
 	msgs1 := endTurn(t, p, promptID1)
-	if len(msgs1) != 1 || msgs1[0].Result == nil || !msgs1[0].Result.IsSuccess() {
+	if !terminalResult(t, msgs1).IsSuccess() {
 		t.Fatalf("first turn produced %+v, want a success result", msgs1)
 	}
 
@@ -679,7 +748,7 @@ func TestPromptEndTurn_SecondTurnAlsoEmitsSuccess(t *testing.T) {
 	promptID2 := p.promptIDForTest()
 	streamAssistantText(t, p, "Second answer.")
 	msgs2 := endTurn(t, p, promptID2)
-	if len(msgs2) != 1 || msgs2[0].Result == nil || !msgs2[0].Result.IsSuccess() {
+	if !terminalResult(t, msgs2).IsSuccess() {
 		t.Fatalf("second turn produced %+v, want a success result", msgs2)
 	}
 }
@@ -700,29 +769,8 @@ func TestPromptEndTurn_InformationalNumberedListIsCleanSuccess(t *testing.T) {
 		"3. Logs are written to /tmp/agentico.log.",
 	}, "\n"))
 	msgs := endTurn(t, p, promptID)
-	if len(msgs) != 1 || msgs[0].Result == nil || !msgs[0].Result.IsSuccess() {
+	if !terminalResult(t, msgs).IsSuccess() {
 		t.Fatalf("informational numbered list produced %+v, want a success result", msgs)
-	}
-}
-
-// TestPromptEndTurn_MarkerPresentTreatsQuestionAsCompletion proves a present
-// phase_complete marker makes end_turn a completion even when the final text
-// reads like a question, so a stray '?' cannot block a finished phase (Task 3).
-func TestPromptEndTurn_MarkerPresentTreatsQuestionAsCompletion(t *testing.T) {
-	marker := t.TempDir() + "/phase_complete"
-	if err := os.WriteFile(marker, []byte("done"), 0o644); err != nil {
-		t.Fatalf("write marker: %v", err)
-	}
-	p := NewProtocol(llm.ProtocolOpts{Model: "opencode:anthropic/claude-sonnet-4-5", MarkerPath: marker})
-	buf := &syncBuffer{}
-	p.SetStdin(buf)
-	p.setRequestIDsForTest(100, 101, 102)
-	p.acpSessionID = "ses_x"
-
-	streamAssistantText(t, p, "Did that cover everything you needed?")
-	msgs := endTurn(t, p, 102)
-	if len(msgs) != 1 || msgs[0].Result == nil || !msgs[0].Result.IsSuccess() {
-		t.Fatalf("question-with-marker produced %+v, want a success completion", msgs)
 	}
 }
 

@@ -18,7 +18,9 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
+	"github.com/doordash-oss/agentic-orchestrator/internal/orchestrator"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
@@ -30,7 +32,7 @@ var _ llm.LLMProvider = (*mocks.MockProvider)(nil)
 var _ llm.PromptAdapter = (*mocks.MockProvider)(nil)
 var _ llm.CostCalculator = (*mocks.MockProvider)(nil)
 var _ llm.CatalogProvider = (*mocks.MockProvider)(nil)
-var _ session.SessionView = (*mocks.MockSessionView)(nil)
+var _ ports.SessionView = (*mocks.MockSessionView)(nil)
 
 // Feature ports
 var _ ports.FeatureStore = (*mocks.MockFeatureStore)(nil)
@@ -39,20 +41,13 @@ var _ ports.FeatureLifecycle = (*mocks.MockFeatureLifecycle)(nil)
 // Session ports
 var _ ports.SessionManager = (*mocks.MockSessionManager)(nil)
 
-// Git ports
-var _ ports.Publisher = (*mocks.MockPublisher)(nil)
-var _ ports.DiffOperator = (*mocks.MockDiffOperator)(nil)
-var _ ports.RebaseOperator = (*mocks.MockRebaseOperator)(nil)
-var _ ports.CrossRefOperator = (*mocks.MockCrossRefOperator)(nil)
-var _ ports.ReviewCommentOperator = (*mocks.MockReviewCommentOperator)(nil)
-var _ ports.WorktreeOperator = (*mocks.MockWorktreeOperator)(nil)
-var _ ports.BranchOperator = (*mocks.MockBranchOperator)(nil)
+// Git seams
+var _ orchestrator.RemoteOps = (*mocks.MockRemoteOps)(nil)
+var _ feature.PRCloser = (*mocks.MockPRCloser)(nil)
+var _ feature.WorktreeOps = (*mocks.MockWorktreeOps)(nil)
 
 // Agent ports
 var _ ports.CommandRunner = (*mocks.MockCommandRunner)(nil)
-
-// Config ports
-var _ ports.ConfigPersistence = (*mocks.MockConfigPersistence)(nil)
 
 // --- MockProtocol tests ---
 

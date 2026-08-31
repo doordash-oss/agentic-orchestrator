@@ -19,6 +19,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
 )
@@ -43,6 +44,33 @@ func TestRepoFreshnessLocalChanges(t *testing.T) {
 
 	if got := RepoFreshness(repo); got != FreshnessLocalChanges {
 		t.Errorf("RepoFreshness() = %q, want %q", got, FreshnessLocalChanges)
+	}
+}
+
+func TestRepoFreshnessDoesNotRefreshGitIndex(t *testing.T) {
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+
+	repo, _ := testutil.InitPublishReadyGitRepo(t)
+	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("# Changed\n"), 0o644); err != nil {
+		t.Fatalf("modify tracked file: %v", err)
+	}
+
+	indexPath := filepath.Join(repo, ".git", "index")
+	oldTime := time.Unix(1_700_000_000, 0)
+	if err := os.Chtimes(indexPath, oldTime, oldTime); err != nil {
+		t.Fatalf("set index timestamp: %v", err)
+	}
+
+	if got := RepoFreshness(repo); got != FreshnessLocalChanges {
+		t.Fatalf("RepoFreshness() = %q, want %q", got, FreshnessLocalChanges)
+	}
+	info, err := os.Stat(indexPath)
+	if err != nil {
+		t.Fatalf("stat index: %v", err)
+	}
+	if !info.ModTime().Equal(oldTime) {
+		t.Fatalf("RepoFreshness() refreshed the git index: modtime = %v, want %v", info.ModTime(), oldTime)
 	}
 }
 

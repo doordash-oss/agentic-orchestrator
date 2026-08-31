@@ -29,7 +29,7 @@ func TestExtractDependencies_GoMod(t *testing.T) {
 go 1.24
 
 require (
-	github.com/charmbracelet/bubbletea v1.3.10
+	github.com/example/terminal-ui v1.3.10
 	github.com/creack/pty v1.1.24
 	gopkg.in/yaml.v3 v3.0.1
 )
@@ -39,8 +39,8 @@ require (
 		t.Errorf("expected module path github.com/example/myproject, got %q", modPath)
 	}
 
-	assertContainsN(t, deps, "charmbracelet/bubbletea", 3)
-	assertContainsN(t, deps, "bubbletea", 3)
+	assertContainsN(t, deps, "example/terminal-ui", 3)
+	assertContainsN(t, deps, "terminal-ui", 3)
 	assertContainsN(t, deps, "creack/pty", 3)
 	assertContainsN(t, deps, "pty", 3)
 	assertContainsN(t, deps, "yaml.v3", 3)

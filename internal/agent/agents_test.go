@@ -23,21 +23,6 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/agentdef"
 )
 
-func TestAgentsJSON(t *testing.T) {
-	aj := AgentsJSON()
-	if aj == "" {
-		t.Fatal("AgentsJSON() returned empty string; expected embedded agents")
-	}
-
-	var parsed map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(aj), &parsed); err != nil {
-		t.Fatalf("AgentsJSON() returned invalid JSON: %v", err)
-	}
-	if len(parsed) == 0 {
-		t.Error("AgentsJSON() returned empty JSON object")
-	}
-}
-
 func TestAgentsJSONForNames(t *testing.T) {
 	defs, err := agentdef.ParseEmbedded()
 	if err != nil {
@@ -79,46 +64,46 @@ func TestAgentsJSONForNames(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := AgentsJSONForNames(tt.input)
+			got, err := agentsJSONForNames(tt.input)
 			if tt.wantErrPart != "" {
 				if err == nil || !strings.Contains(err.Error(), tt.wantErrPart) {
-					t.Fatalf("AgentsJSONForNames() error = %v, want substring %q", err, tt.wantErrPart)
+					t.Fatalf("agentsJSONForNames() error = %v, want substring %q", err, tt.wantErrPart)
 				}
 				return
 			}
 			if err != nil {
-				t.Fatalf("AgentsJSONForNames() error: %v", err)
+				t.Fatalf("agentsJSONForNames() error: %v", err)
 			}
 			if len(tt.wantNames) == 0 {
 				if got != "" {
-					t.Fatalf("AgentsJSONForNames() = %q, want empty string", got)
+					t.Fatalf("agentsJSONForNames() = %q, want empty string", got)
 				}
 				return
 			}
 
 			var parsed map[string]agentdef.AgentDef
 			if err := json.Unmarshal([]byte(got), &parsed); err != nil {
-				t.Fatalf("AgentsJSONForNames() returned invalid JSON: %v", err)
+				t.Fatalf("agentsJSONForNames() returned invalid JSON: %v", err)
 			}
 			if len(parsed) != len(tt.wantNames) {
-				t.Fatalf("AgentsJSONForNames() returned %d agents, want %d", len(parsed), len(tt.wantNames))
+				t.Fatalf("agentsJSONForNames() returned %d agents, want %d", len(parsed), len(tt.wantNames))
 			}
 
 			prevIndex := -1
 			for _, name := range tt.wantNames {
 				gotDef, ok := parsed[name]
 				if !ok {
-					t.Fatalf("AgentsJSONForNames() missing %q", name)
+					t.Fatalf("agentsJSONForNames() missing %q", name)
 				}
 				if !reflect.DeepEqual(gotDef, defs[name]) {
-					t.Fatalf("AgentsJSONForNames()[%q] = %#v, want %#v", name, gotDef, defs[name])
+					t.Fatalf("agentsJSONForNames()[%q] = %#v, want %#v", name, gotDef, defs[name])
 				}
 				idx := strings.Index(got, `"`+name+`"`)
 				if idx < 0 {
-					t.Fatalf("AgentsJSONForNames() payload missing %q in %q", name, got)
+					t.Fatalf("agentsJSONForNames() payload missing %q in %q", name, got)
 				}
 				if idx <= prevIndex {
-					t.Fatalf("AgentsJSONForNames() did not preserve order in %q", got)
+					t.Fatalf("agentsJSONForNames() did not preserve order in %q", got)
 				}
 				prevIndex = idx
 			}

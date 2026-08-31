@@ -89,9 +89,8 @@ func TestRewindCrashAndRetry(t *testing.T) {
 		},
 	}
 	mgr := feature.NewManager(store, cfg)
-	// Integration test does not exercise worktrees / branches / PRs.
+	// Integration test does not exercise worktrees or PRs.
 	mgr.Worktrees = nil
-	mgr.Branches = nil
 	mgr.PRs = nil
 
 	// --- Step 1: Create and advance feature ---------------------------------

@@ -18,9 +18,5 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
-// SessionView is the canonical port type; aliased here so existing
-// session-package callers keep their type references.
-type SessionView = ports.SessionView
-
 // Compile-time check: *Session satisfies the port interface.
-var _ SessionView = (*Session)(nil)
+var _ ports.SessionView = (*Session)(nil)

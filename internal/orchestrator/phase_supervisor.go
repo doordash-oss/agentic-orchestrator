@@ -16,6 +16,7 @@ package orchestrator
 
 import (
 	"fmt"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -25,14 +26,18 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
+const phaseSupervisorStatusSuccess = "SUCCESS"
+
+// PHASE2(single-shot statuses): main dropped the FAILED/API_ERROR supervisor
+// status constants together with its loop-based supervisor removal; the
+// feature resume loop kept below still classifies session statuses with them.
 const (
-	phaseSupervisorStatusSuccess  = "SUCCESS"
 	phaseSupervisorStatusFailed   = "FAILED"
 	phaseSupervisorStatusAPIError = "API_ERROR"
 )
 
-// Shared FinalStatus values reported by agent implementation/rebase/review
-// loops (agent.OrchestratorResult, agent.RebaseLoopResult, etc.).
+// Shared FinalStatus values reported by agent implementation/review
+// loops (agent.OrchestratorResult, agent.LoopResult, etc.).
 const (
 	reviewStatusPassed              = "review_passed"
 	finalStatusAllPassed            = "all_passed"
@@ -52,6 +57,7 @@ type phaseSupervisorConfig struct {
 	Sessions          ports.SessionManager
 	SingleShotResumer singleShotResumeDriver
 	AutoResumeWait    func(time.Duration) bool
+	CommitOutcome     func(featureID, sessionID string, phase feature.Phase, intent llm.CompletionIntent) ([]agent.ProtocolViolation, error)
 	OnCompletionError func(featureID string, err error)
 }
 
@@ -72,6 +78,7 @@ type phaseSupervisor struct {
 	sessions          ports.SessionManager
 	singleShotResumer singleShotResumeDriver
 	autoResumeWait    func(time.Duration) bool
+	commitOutcome     func(featureID, sessionID string, phase feature.Phase, intent llm.CompletionIntent) ([]agent.ProtocolViolation, error)
 	onCompletionError func(featureID string, err error)
 
 	singleShotMu       sync.Mutex
@@ -84,6 +91,7 @@ func newPhaseSupervisor(cfg phaseSupervisorConfig) *phaseSupervisor {
 		sessions:          cfg.Sessions,
 		singleShotResumer: cfg.SingleShotResumer,
 		autoResumeWait:    cfg.AutoResumeWait,
+		commitOutcome:     cfg.CommitOutcome,
 		onCompletionError: cfg.OnCompletionError,
 	}
 }
@@ -104,37 +112,92 @@ func (s *phaseSupervisor) superviseSingleShotSession(featureID, sessionID string
 }
 
 func (s *phaseSupervisor) runSingleShotSession(featureID, sessionID string, phase feature.Phase, sess ports.SessionView) {
-	startedAt := time.Now()
-	establishing := s.singleShotResumer != nil && s.singleShotResumer.SingleShotNeedsEstablishment(sessionID)
-	doneCh := sess.Done()
-	for {
-		select {
-		case <-doneCh:
+	// PHASE2(single-shot completion): the feature resume/retry loop and main's
+	// commit-based WaitForPhaseOutcome redesign overlap here. The resume loop
+	// runs when a single-shot resume driver is configured and completes via
+	// s.complete without commit-time outcome validation; otherwise main's
+	// commit path runs. Reconciling resume with commit validation is deferred.
+	if s.singleShotResumer != nil {
+		startedAt := time.Now()
+		establishing := s.singleShotResumer != nil && s.singleShotResumer.SingleShotNeedsEstablishment(sessionID)
+		doneCh := sess.Done()
+		for {
 			select {
-			case status := <-sess.StatusCh():
-				if s.handleSingleShotStatus(featureID, sessionID, phase, sess, status, true, startedAt, establishing) {
-					return
+			case <-doneCh:
+				select {
+				case status := <-sess.StatusCh():
+					if s.handleSingleShotStatus(featureID, sessionID, phase, sess, status, true, startedAt, establishing) {
+						return
+					}
+					doneCh = nil
+					continue
+				default:
 				}
-				doneCh = nil
-				continue
-			default:
-			}
-			if cost := sess.Cost(); cost != nil {
-				if s.handleSingleShotStatus(featureID, sessionID, phase, sess, singleShotStatusFromResult(cost), true, startedAt, establishing) {
-					return
+				if cost := sess.Cost(); cost != nil {
+					if s.handleSingleShotStatus(featureID, sessionID, phase, sess, singleShotStatusFromResult(cost), true, startedAt, establishing) {
+						return
+					}
+					doneCh = nil
+					continue
 				}
-				doneCh = nil
-				continue
-			}
-			s.handleSingleShotTerminalFailure(featureID, sessionID, phase, sess, startedAt, establishing)
-			return
-
-		case status := <-sess.StatusCh():
-			if s.handleSingleShotStatus(featureID, sessionID, phase, sess, status, false, startedAt, establishing) {
+				s.handleSingleShotTerminalFailure(featureID, sessionID, phase, sess, startedAt, establishing)
 				return
+
+			case status := <-sess.StatusCh():
+				if s.handleSingleShotStatus(featureID, sessionID, phase, sess, status, false, startedAt, establishing) {
+					return
+				}
 			}
 		}
 	}
+	result := agent.WaitForPhaseOutcome(sess, agent.PhaseOutcomeWaitOptions{
+		CommitOutcome: func(intent llm.CompletionIntent) ([]agent.ProtocolViolation, error) {
+			if s.commitOutcome == nil {
+				return []agent.ProtocolViolation{{
+					Artifact: "agentico-outcome",
+					Reason:   "single-shot completion committer is not configured",
+				}}, nil
+			}
+			return s.commitOutcome(featureID, sessionID, phase, intent)
+		},
+	})
+	s.releaseSingleShotSession(sessionID)
+	if result.Status == phaseSupervisorStatusSuccess {
+		s.complete(featureID, PhaseCompletionInput{
+			Phase:     phase,
+			SessionID: sessionID,
+			Success:   true,
+		})
+		return
+	}
+
+	detail := singleShotErrorDetail(phase, sess)
+	failureType := ""
+	if result.Err != nil {
+		detail = result.Err.Error()
+	} else if len(result.ProtocolViolations) > 0 {
+		artifactDir := ""
+		if logPath := sess.LogFilePath(); logPath != "" {
+			artifactDir = filepath.Dir(logPath)
+		}
+		detail = formatSingleShotProtocolViolationError(singleShotPhaseRole(phase), artifactDir, result.ProtocolViolations)
+		failureType = feature.FailureProtocolViolation
+	}
+	s.complete(featureID, PhaseCompletionInput{
+		Phase:       phase,
+		SessionID:   sessionID,
+		Success:     false,
+		ErrorDetail: detail,
+		FailureType: failureType,
+	})
+}
+
+func singleShotPhaseRole(phase feature.Phase) agent.Role {
+	if phase == feature.PhaseKnowledgeBase {
+		return agent.RoleKnowledgeBaseBuilder
+	}
+	role, _ := artifactPhaseRole(phase)
+	return role
 }
 
 func (s *phaseSupervisor) claimSingleShotSession(sessionID string) bool {

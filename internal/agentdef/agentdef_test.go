@@ -176,44 +176,6 @@ func TestEmbeddedUpstreamAssets(t *testing.T) {
 	}
 }
 
-func TestJSON(t *testing.T) {
-	j := JSON()
-	if j == "" {
-		t.Fatal("JSON() returned empty string; expected embedded agents")
-	}
-
-	var parsed map[string]AgentDef
-	if err := json.Unmarshal([]byte(j), &parsed); err != nil {
-		t.Fatalf("JSON() returned invalid JSON: %v", err)
-	}
-
-	expectedAgents := []string{
-		"api-surface-researcher",
-		"architecture-researcher",
-		"codebase-analyzer",
-		"codebase-locator",
-		"codebase-pattern-finder",
-		"conventions-researcher",
-		"dependencies-researcher",
-		"verification-researcher",
-		"web-search-researcher",
-	}
-
-	for _, name := range expectedAgents {
-		def, ok := parsed[name]
-		if !ok {
-			t.Errorf("expected agent %q not found in JSON", name)
-			continue
-		}
-		if def.Description == "" {
-			t.Errorf("agent %q has empty description", name)
-		}
-		if def.Prompt == "" {
-			t.Errorf("agent %q has empty prompt", name)
-		}
-	}
-}
-
 func TestSelectEmbedded(t *testing.T) {
 	defs, err := ParseEmbedded()
 	if err != nil {
@@ -250,22 +212,22 @@ func TestSelectEmbedded(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := SelectEmbedded(tt.input)
+			got, err := selectEmbedded(tt.input)
 			if tt.wantErrPart != "" {
 				if err == nil || !strings.Contains(err.Error(), tt.wantErrPart) {
-					t.Fatalf("SelectEmbedded() error = %v, want substring %q", err, tt.wantErrPart)
+					t.Fatalf("selectEmbedded() error = %v, want substring %q", err, tt.wantErrPart)
 				}
 				return
 			}
 			if err != nil {
-				t.Fatalf("SelectEmbedded() error: %v", err)
+				t.Fatalf("selectEmbedded() error: %v", err)
 			}
 			if len(got) != len(tt.wantNames) {
-				t.Fatalf("SelectEmbedded() returned %d agents, want %d", len(got), len(tt.wantNames))
+				t.Fatalf("selectEmbedded() returned %d agents, want %d", len(got), len(tt.wantNames))
 			}
 			for _, name := range tt.wantNames {
 				if !reflect.DeepEqual(got[name], defs[name]) {
-					t.Fatalf("SelectEmbedded()[%q] = %#v, want %#v", name, got[name], defs[name])
+					t.Fatalf("selectEmbedded()[%q] = %#v, want %#v", name, got[name], defs[name])
 				}
 			}
 		})

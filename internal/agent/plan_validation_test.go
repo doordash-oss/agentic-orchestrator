@@ -27,6 +27,7 @@ import (
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/observe"
 	"github.com/doordash-oss/agentic-orchestrator/internal/permission"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
@@ -221,7 +222,6 @@ func runPhasePlanningLoopWithPlannerArtifacts(t *testing.T, artifacts plannerScr
 	planScript := testutil.WriteScript(t, scriptsDir, "plan.sh",
 		testutil.JSONLInit+"\n"+
 			writePhasePlannerArtifactsSnippet(phasePlanDir, artifacts)+
-			testutil.TouchPhaseCompleteInLatestAttemptDir(phasePlanDir)+"\n"+
 			testutil.JSONLSuccess+"\n")
 	criticScript := testutil.WriteScript(t, scriptsDir, "critic.sh",
 		testutil.JSONLInit+"\n"+testutil.WriteAnyValidatorApproved(tmpDir)+"\n"+testutil.JSONLSuccess+"\n")
@@ -282,7 +282,6 @@ else
 %s
 fi
 %s
-%s
 `,
 		testutil.JSONLInit,
 		counterPath,
@@ -291,7 +290,6 @@ fi
 		writePhasePlannerArtifactsSnippet(phasePlanDir, plannerScriptArtifacts{
 			PlanText: validPhasePlanText(),
 		}),
-		testutil.TouchPhaseCompleteInLatestAttemptDir(phasePlanDir),
 		testutil.JSONLSuccess))
 	criticScript := testutil.WriteScript(t, scriptsDir, "critic.sh",
 		testutil.JSONLInit+"\n"+testutil.WriteAnyValidatorApproved(tmpDir)+"\n"+testutil.JSONLSuccess+"\n")
@@ -329,7 +327,7 @@ fi
 	return result
 }
 
-func TestRoadmapPlanningLoopMissingRoadmapAfterPhaseCompleteTripsProtocolViolation(t *testing.T) {
+func TestRoadmapPlanningLoopMissingRoadmapTripsProtocolViolation(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
@@ -346,7 +344,7 @@ func TestRoadmapPlanningLoopMissingRoadmapAfterPhaseCompleteTripsProtocolViolati
 	}
 
 	planScript := testutil.WriteScript(t, scriptsDir, "plan.sh",
-		testutil.JSONLInit+"\n"+testutil.TouchPhaseCompleteInLatestAttemptDir(planDir)+"\n"+testutil.JSONLSuccess+"\n")
+		testutil.JSONLInit+"\n"+testutil.JSONLSuccess+"\n")
 	criticScript := testutil.WriteScript(t, scriptsDir, "critic.sh",
 		testutil.JSONLInit+"\n"+testutil.WriteAnyValidatorApproved(tmpDir)+"\n"+testutil.JSONLSuccess+"\n")
 
@@ -403,7 +401,6 @@ func TestRoadmapPlanningLoopWritesFirstAttemptQALog(t *testing.T) {
 			`echo '{"type":"control_request","request_id":"ask_1","request":{"subtype":"can_use_tool","tool_name":"AskUserQuestion","input":{"questions":[{"question":"Scope?","options":[{"label":"Roadmap only (Recommended)","confidence":0.91},{"label":"Everything","confidence":0.1}]}]}}}'`+"\n"+
 			`read -r _ask_response`+"\n"+
 			writeRoadmapArtifactSnippet(planDir)+"\n"+
-			testutil.TouchPhaseCompleteInLatestAttemptDir(planDir)+"\n"+
 			testutil.JSONLSuccess+"\n")
 
 	eventCh := make(chan interface{}, 100)
@@ -448,7 +445,7 @@ func TestRoadmapPlanningLoopWritesFirstAttemptQALog(t *testing.T) {
 	}
 }
 
-func TestRoadmapPlanningLoopMissingPhaseCompleteTripsProtocolViolation(t *testing.T) {
+func TestRoadmapPlanningLoopMissingRootOutcomeTripsProtocolViolation(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
@@ -467,10 +464,7 @@ func TestRoadmapPlanningLoopMissingPhaseCompleteTripsProtocolViolation(t *testin
 	planScript := testutil.WriteScript(t, scriptsDir, "plan.sh",
 		testutil.JSONLInit+"\n"+
 			writeRoadmapArtifactSnippet(planDir)+
-			// A stale/shared parent marker must not satisfy an attempt-local
-			// planner completion contract.
-			testutil.TouchPhaseCompleteInDir(planDir)+"\n"+
-			testutil.JSONLSuccess+"\n")
+			testutil.JSONLResult("")+"\n")
 	criticScript := testutil.WriteScript(t, scriptsDir, "critic.sh",
 		testutil.JSONLInit+"\n"+testutil.WriteAnyValidatorApproved(tmpDir)+"\n"+testutil.JSONLSuccess+"\n")
 
@@ -502,8 +496,8 @@ func TestRoadmapPlanningLoopMissingPhaseCompleteTripsProtocolViolation(t *testin
 	if result.Iterations != 2 {
 		t.Fatalf("Iterations = %d, want 2", result.Iterations)
 	}
-	if !strings.Contains(result.LastError, string(RolePlanRoadmapReviser)) || !strings.Contains(result.LastError, "phase_complete") {
-		t.Fatalf("LastError = %q, want roadmap reviser missing-marker violation", result.LastError)
+	if !strings.Contains(result.LastError, string(RolePlanRoadmapReviser)) || !strings.Contains(result.LastError, "agentico-outcome") {
+		t.Fatalf("LastError = %q, want roadmap reviser missing-root-outcome violation", result.LastError)
 	}
 }
 
@@ -531,8 +525,7 @@ else
 %s
 fi
 %s
-%s
-`, testutil.JSONLInit, counterPath, counterPath, writeRoadmapArtifactSnippet(planDir), testutil.TouchPhaseCompleteInLatestAttemptDir(planDir), testutil.JSONLSuccess))
+`, testutil.JSONLInit, counterPath, counterPath, writeRoadmapArtifactSnippet(planDir), testutil.JSONLSuccess))
 	criticScript := testutil.WriteScript(t, scriptsDir, "critic.sh",
 		testutil.JSONLInit+"\n"+testutil.WriteAnyValidatorApproved(tmpDir)+"\n"+testutil.JSONLSuccess+"\n")
 
@@ -566,9 +559,9 @@ fi
 
 // TestRoadmapPlanningLoop_FinishOrViolateNudgeRecoversSameSession proves the
 // roadmap planner recovers within a single attempt via the finish-or-violate
-// nudge: the planner ends its first turn without roadmap.md, the harness nudges
-// the same live session, and the nudged turn writes roadmap.md + phase_complete
-// so the critic approves and the loop ends with one attempt.
+// nudge: the planner ends its first turn without a root outcome, the harness
+// nudges the same live session, and the nudged turn writes roadmap.md plus a
+// structured root outcome so the critic approves in one attempt.
 func TestRoadmapPlanningLoop_FinishOrViolateNudgeRecoversSameSession(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
@@ -592,12 +585,11 @@ while IFS= read -r _line; do
     %s)
       %s
       %s
-      echo '{"type":"result","subtype":"success","session_id":"mock","total_cost_usd":0.001,"stop_reason":"end_turn"}'
       exit 0
       ;;
   esac
 done
-`, testutil.JSONLInit, finishOrViolateNudgeCasePattern, writeRoadmapArtifactSnippet(planDir), testutil.TouchPhaseCompleteInLatestAttemptDir(planDir)))
+`, testutil.JSONLInit, finishOrViolateNudgeCasePattern, writeRoadmapArtifactSnippet(planDir), testutil.JSONLSuccess))
 	criticScript := testutil.WriteScript(t, scriptsDir, "critic.sh",
 		testutil.JSONLInit+"\n"+testutil.WriteAnyValidatorApproved(tmpDir)+"\n"+testutil.JSONLSuccess+"\n")
 
@@ -615,7 +607,6 @@ done
 		WorkDir:                    workDir,
 		MaxAttempts:                1,
 		DangerouslySkipPermissions: true,
-		FinishOrViolateNudge:       true,
 		BuildSession:               mockBuildSession(planScript, criticScript),
 	}, sm)
 	if err != nil {
@@ -629,64 +620,7 @@ done
 	}
 }
 
-// TestRoadmapPlanningLoop_GatesInteractiveTurnMode proves the roadmap planner
-// gates TurnModeInteractive on the finish-or-violate capability: armed only when
-// PlanLoopConfig.FinishOrViolateNudge is set, default one-shot otherwise.
-func TestRoadmapPlanningLoop_GatesInteractiveTurnMode(t *testing.T) {
-	cases := []struct {
-		name     string
-		nudge    bool
-		wantMode ports.SessionTurnMode
-	}{
-		{name: "capability armed uses interactive", nudge: true, wantMode: ports.TurnModeInteractive},
-		{name: "capability off uses one-shot", nudge: false, wantMode: ports.TurnModeOneShot},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			tmpDir := t.TempDir()
-			workDir := filepath.Join(tmpDir, "work")
-			if err := os.MkdirAll(workDir, 0o755); err != nil {
-				t.Fatalf("mkdir: %v", err)
-			}
-			store := feature.NewStore(tmpDir)
-			f := newTestPlanFeature(t, workDir)
-			_ = store.Save(f)
-
-			// session.SessionOpts is a type alias for ports.SessionOpts
-			// (session/manager.go), so this captures the exact concrete value
-			// production sets TurnMode on.
-			var capturedOpts *ports.SessionOpts
-			_, err := RunRoadmapPlanningLoop(PlanLoopConfig{
-				Feature:              f,
-				FeatureStore:         store,
-				StateDir:             tmpDir,
-				WorkDir:              workDir,
-				MaxAttempts:          1,
-				FinishOrViolateNudge: tc.nudge,
-				BuildSession: func(opts BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error) {
-					return []string{"echo", "unused"}, nil, &ports.SessionOpts{PIDDir: opts.PIDDir}, nil
-				},
-				SessionStartFunc: func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*ports.SessionOpts) (ports.SessionHandle, error) {
-					if len(opts) > 0 {
-						capturedOpts = opts[0]
-					}
-					return nil, session.ErrShuttingDown
-				},
-			}, nil)
-			if err != nil {
-				t.Fatalf("RunRoadmapPlanningLoop() error: %v", err)
-			}
-			if capturedOpts == nil {
-				t.Fatal("expected SessionOpts to be captured")
-			}
-			if capturedOpts.TurnMode != tc.wantMode {
-				t.Errorf("TurnMode = %v, want %v", capturedOpts.TurnMode, tc.wantMode)
-			}
-		})
-	}
-}
-
-func TestRoadmapPlanningLoopUsesAttemptDirCompletionMarker(t *testing.T) {
+func TestRoadmapPlanningLoopUsesAttemptDirCompletionReceipt(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
@@ -705,7 +639,6 @@ func TestRoadmapPlanningLoopUsesAttemptDirCompletionMarker(t *testing.T) {
 	planScript := testutil.WriteScript(t, scriptsDir, "plan.sh",
 		testutil.JSONLInit+"\n"+
 			writeRoadmapArtifactSnippet(planDir)+
-			testutil.TouchPhaseCompleteInLatestAttemptDir(planDir)+"\n"+
 			testutil.JSONLSuccess+"\n")
 	criticScript := testutil.WriteScript(t, scriptsDir, "critic.sh",
 		testutil.JSONLInit+"\n"+testutil.WriteAnyValidatorApproved(tmpDir)+"\n"+testutil.JSONLSuccess+"\n")
@@ -748,13 +681,15 @@ func TestRoadmapPlanningLoopUsesAttemptDirCompletionMarker(t *testing.T) {
 	if !reflect.DeepEqual(planOpts.AgentNames, explorationAgentNames()) {
 		t.Fatalf("roadmap planner AgentNames = %v, want exploration set %v", planOpts.AgentNames, explorationAgentNames())
 	}
-	wantMarker := filepath.Join(planDir, "attempt-01", "phase_complete")
-	if !strings.Contains(planOpts.SystemPrompt, wantMarker) {
-		t.Fatalf("SystemPrompt missing attempt marker path %q:\n%s", wantMarker, planOpts.SystemPrompt)
+	wantReceipt := filepath.Join(planDir, "attempt-01", PhaseCompleteFile)
+	if _, err := ReadCompletionReceipt(filepath.Dir(wantReceipt)); err != nil {
+		t.Fatalf("read attempt completion receipt %q: %v", wantReceipt, err)
 	}
-	parentMarker := filepath.Join(planDir, "phase_complete")
-	if strings.Contains(planOpts.SystemPrompt, parentMarker) {
-		t.Fatalf("SystemPrompt contains parent marker path %q:\n%s", parentMarker, planOpts.SystemPrompt)
+	if !strings.Contains(planOpts.SystemPrompt, "Never create, edit, or delete `phase_complete`") {
+		t.Fatalf("SystemPrompt missing harness-owned receipt rule:\n%s", planOpts.SystemPrompt)
+	}
+	if _, err := os.Stat(filepath.Join(planDir, PhaseCompleteFile)); !os.IsNotExist(err) {
+		t.Fatalf("parent completion receipt should not exist, stat error = %v", err)
 	}
 }
 
@@ -855,7 +790,7 @@ func TestPhasePlanningLoopWritesFirstAttemptQALog(t *testing.T) {
 	}
 }
 
-func TestPhasePlanningLoopMissingPhaseCompleteTripsProtocolViolation(t *testing.T) {
+func TestPhasePlanningLoopMissingRootOutcomeTripsProtocolViolation(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
@@ -876,10 +811,7 @@ func TestPhasePlanningLoopMissingPhaseCompleteTripsProtocolViolation(t *testing.
 			writePhasePlannerArtifactsSnippet(phasePlanDir, plannerScriptArtifacts{
 				PlanText: validPhasePlanText(),
 			})+
-			// A stale/shared parent marker must not satisfy an attempt-local
-			// planner completion contract.
-			testutil.TouchPhaseCompleteInDir(phasePlanDir)+"\n"+
-			testutil.JSONLSuccess+"\n")
+			testutil.JSONLResult("")+"\n")
 	criticScript := testutil.WriteScript(t, scriptsDir, "critic.sh",
 		testutil.JSONLInit+"\n"+testutil.WriteAnyValidatorApproved(tmpDir)+"\n"+testutil.JSONLSuccess+"\n")
 
@@ -907,7 +839,7 @@ func TestPhasePlanningLoopMissingPhaseCompleteTripsProtocolViolation(t *testing.
 			Number: 1,
 			Name:   "Test Phase",
 			Type:   "tdd-fill-in",
-			Goal:   "Test phase planner marker",
+			Goal:   "Test phase planner outcome",
 		},
 	}, sm)
 	if err != nil {
@@ -919,8 +851,8 @@ func TestPhasePlanningLoopMissingPhaseCompleteTripsProtocolViolation(t *testing.
 	if result.Iterations != 2 {
 		t.Fatalf("Iterations = %d, want 2", result.Iterations)
 	}
-	if !strings.Contains(result.LastError, string(RolePlanPhaseReviser)) || !strings.Contains(result.LastError, "phase_complete") {
-		t.Fatalf("LastError = %q, want phase-plan reviser missing-marker violation", result.LastError)
+	if !strings.Contains(result.LastError, string(RolePlanPhaseReviser)) || !strings.Contains(result.LastError, "agentico-outcome") {
+		t.Fatalf("LastError = %q, want phase-plan reviser missing-root-outcome violation", result.LastError)
 	}
 }
 
@@ -1231,7 +1163,7 @@ func TestPhasePlanningLoopAllowsAgentEvidenceForMoonshotProfile(t *testing.T) {
 	}
 }
 
-func TestPlanValidatorHelperUsesIsolatedDirAndMarkerContract(t *testing.T) {
+func TestPlanValidatorHelperUsesIsolatedDirAndHarnessReceipt(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
@@ -1250,14 +1182,10 @@ func TestPlanValidatorHelperUsesIsolatedDirAndMarkerContract(t *testing.T) {
 		t.Fatalf("write plan artifact: %v", err)
 	}
 
-	criticScript := testutil.WriteScript(t, scriptsDir, "critic.sh", fmt.Sprintf(`%s
-%s
-for _prompt in $(find %s -name 'validation-*-prompt.md' -type f 2>/dev/null); do
-  _dir=$(dirname "$_prompt")
-  touch "$_dir/phase_complete"
-done
-%s
-`, testutil.JSONLInit, testutil.WriteAnyValidatorApproved(tmpDir), tmpDir, testutil.JSONLSuccess))
+	criticScript := testutil.WriteScript(t, scriptsDir, "critic.sh",
+		testutil.JSONLInit+"\n"+
+			testutil.WriteAnyValidatorApproved(tmpDir)+"\n"+
+			testutil.JSONLSuccess+"\n")
 
 	var got BuildSessionOpts
 	eventCh := make(chan interface{}, 100)
@@ -1319,8 +1247,8 @@ done
 			t.Fatalf("expected artifact %q: %v", path, err)
 		}
 	}
-	if !strings.Contains(got.SystemPrompt, filepath.Join(helperDir, "phase_complete")) {
-		t.Fatalf("SystemPrompt missing helper marker path:\n%s", got.SystemPrompt)
+	if !strings.Contains(got.SystemPrompt, "Never create, edit, or delete `phase_complete`") {
+		t.Fatalf("SystemPrompt missing harness-owned receipt rule:\n%s", got.SystemPrompt)
 	}
 	if !permissionHandlerIncludesBoundedArtifacts(got.PermHandler) {
 		t.Fatalf("PermHandler = %T, want bounded artifact handler", got.PermHandler)
@@ -1350,7 +1278,7 @@ done
 	}
 }
 
-func TestPlanValidatorMissingPhaseCompleteReturnsProtocolViolation(t *testing.T) {
+func TestPlanValidatorMissingRootOutcomeReturnsProtocolViolation(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
@@ -1371,10 +1299,9 @@ func TestPlanValidatorMissingPhaseCompleteReturnsProtocolViolation(t *testing.T)
 			writePhasePlannerArtifactsSnippet(phasePlanDir, plannerScriptArtifacts{
 				PlanText: validPhasePlanText(),
 			})+
-			testutil.TouchPhaseCompleteInLatestAttemptDir(phasePlanDir)+"\n"+
 			testutil.JSONLSuccess+"\n")
-	criticScript := testutil.WriteScript(t, scriptsDir, "critic-no-marker.sh",
-		testutil.JSONLInit+"\n"+testutil.WriteAnyValidatorApprovedWithoutPhaseComplete(tmpDir)+"\n"+testutil.JSONLSuccess+"\n")
+	criticScript := testutil.WriteScript(t, scriptsDir, "critic-no-outcome.sh",
+		testutil.JSONLInit+"\n"+testutil.WriteAnyValidatorApproved(tmpDir)+"\n"+testutil.JSONLResult("")+"\n")
 
 	eventCh := make(chan interface{}, 100)
 	sm := session.NewManager(eventCh)
@@ -1400,7 +1327,7 @@ func TestPlanValidatorMissingPhaseCompleteReturnsProtocolViolation(t *testing.T)
 			Number: 1,
 			Name:   "Test Phase",
 			Type:   "tdd-fill-in",
-			Goal:   "Test phase validator marker",
+			Goal:   "Test phase validator outcome",
 		},
 	}, sm)
 	if err != nil {
@@ -1409,8 +1336,8 @@ func TestPlanValidatorMissingPhaseCompleteReturnsProtocolViolation(t *testing.T)
 	if result.FinalStatus != BoundedHelperStatusProtocolViolation {
 		t.Fatalf("FinalStatus = %q, want protocol_violation (LastError=%q)", result.FinalStatus, result.LastError)
 	}
-	if !strings.Contains(result.LastError, string(RoleValidatePhasePlanStructural)) || !strings.Contains(result.LastError, "phase_complete") {
-		t.Fatalf("LastError = %q, want structural validator phase_complete violation", result.LastError)
+	if !strings.Contains(result.LastError, string(RoleValidatePhasePlanStructural)) || !strings.Contains(result.LastError, "agentico-outcome") {
+		t.Fatalf("LastError = %q, want structural validator root-outcome violation", result.LastError)
 	}
 	if _, err := os.Stat(filepath.Join(phasePlanDir, "attempt-02", "validate-structural", "validation-structural-feedback.md")); err != nil {
 		t.Fatalf("expected helper feedback in child dir: %v", err)
@@ -1422,8 +1349,8 @@ func TestPlanValidatorMissingPhaseCompleteReturnsProtocolViolation(t *testing.T)
 	if err != nil {
 		t.Fatalf("reading mirrored parent feedback: %v", err)
 	}
-	if !strings.Contains(string(parentFeedback), "phase_complete") {
-		t.Fatalf("parent validation feedback missing phase_complete violation:\n%s", parentFeedback)
+	if !strings.Contains(string(parentFeedback), "agentico-outcome") {
+		t.Fatalf("parent validation feedback missing root-outcome violation:\n%s", parentFeedback)
 	}
 	if !strings.Contains(string(parentFeedback), agentStatusChangesRequested) || strings.Contains(string(parentFeedback), "\nAPPROVED") {
 		t.Fatalf("parent validation feedback did not override approved verdict:\n%s", parentFeedback)
@@ -1652,14 +1579,12 @@ func TestRunPhasePlanningLoopRetriesEarlyInfrastructureFailureInProcess(t *testi
 				if len(sessionIDs) == 1 {
 					return newTerminalStatusTestSession(ports.SessionFailed), nil
 				}
-				attemptDir := filepath.Join(phasePlanDir, "attempt-01")
 				if err := os.WriteFile(filepath.Join(phasePlanDir, "plan.md"), []byte(validPhasePlanText()), 0o644); err != nil {
 					t.Fatalf("write plan.md: %v", err)
 				}
-				if err := os.WriteFile(filepath.Join(attemptDir, PhaseCompleteFile), nil, 0o644); err != nil {
-					t.Fatalf("write phase_complete: %v", err)
-				}
 				sess := newUtilityTestSession()
+				sess.setRootIntent(validSuccessCompletionIntent())
+				sess.result = &llm.ResultMessage{Subtype: testResultSuccessValue, StopReason: "end_turn"}
 				sess.statusCh <- agentStatusSuccess
 				return sess, nil
 			},
@@ -2251,7 +2176,6 @@ func TestRoadmapLoopValidatorInfrastructureFailureDoesNotRevisePlan(t *testing.T
 	planScript := testutil.WriteScript(t, scriptsDir, "plan.sh",
 		testutil.JSONLInit+"\n"+
 			writeRoadmapArtifactSnippet(roadmapDir)+
-			testutil.TouchPhaseCompleteInLatestAttemptDir(roadmapDir)+"\n"+
 			testutil.JSONLSuccess+"\n")
 	criticScript := testutil.WriteScript(t, scriptsDir, "critic-error.sh",
 		testutil.JSONLInit+"\n"+testutil.JSONLError("codex rejected turn/start")+"\n")
@@ -3029,13 +2953,13 @@ func TestPhasePlanLoop_SkillReadInstruction(t *testing.T) {
 	if !strings.Contains(planOpts.SystemPrompt, "## Output Roots") || !strings.Contains(planOpts.SystemPrompt, "## Completion") {
 		t.Error("planning session systemPrompt missing RoleSpec output roots or completion protocol")
 	}
-	wantMarker := filepath.Join(phasePlanDir, "attempt-01", "phase_complete")
-	if !strings.Contains(planOpts.SystemPrompt, wantMarker) {
-		t.Fatalf("planning session systemPrompt missing attempt marker path %q:\n%s", wantMarker, planOpts.SystemPrompt)
+	wantReceipt := filepath.Join(phasePlanDir, "attempt-01", PhaseCompleteFile)
+	if strings.Contains(planOpts.SystemPrompt, wantReceipt) {
+		t.Fatalf("planning session systemPrompt exposes harness-owned receipt path %q:\n%s", wantReceipt, planOpts.SystemPrompt)
 	}
-	parentMarker := filepath.Join(phasePlanDir, "phase_complete")
-	if strings.Contains(planOpts.SystemPrompt, parentMarker) {
-		t.Fatalf("planning session systemPrompt contains parent marker path %q:\n%s", parentMarker, planOpts.SystemPrompt)
+	parentReceipt := filepath.Join(phasePlanDir, PhaseCompleteFile)
+	if strings.Contains(planOpts.SystemPrompt, parentReceipt) {
+		t.Fatalf("planning session systemPrompt exposes parent receipt path %q:\n%s", parentReceipt, planOpts.SystemPrompt)
 	}
 	wantOutputRoot := "`artifact_dir`: " + phasePlanDir
 	if !strings.Contains(planOpts.SystemPrompt, wantOutputRoot) {
@@ -3109,7 +3033,7 @@ func TestRoadmapLoopStickyApprovals(t *testing.T) {
 	}
 
 	planScript := testutil.WriteScript(t, scriptsDir, "plan.sh",
-		testutil.JSONLInit+"\n"+testutil.TouchPhaseCompleteInLatestAttemptDir(planDir)+"\n"+testutil.JSONLSuccess+"\n")
+		testutil.JSONLInit+"\n"+testutil.JSONLSuccess+"\n")
 
 	// Architecture validator always approves with a sticky-approval block.
 	archScript := testutil.WriteScript(t, scriptsDir, "critic-arch.sh",
@@ -3454,7 +3378,6 @@ for _prompt in $(find %s -name 'validation-grounding-prompt.md' -type f 2>/dev/n
   cat > "$_dir/validation-grounding-feedback.md" << 'REVIEWEOF'
 %s
 REVIEWEOF
-  touch "$_dir/phase_complete"
 done
 %s
 `, testutil.JSONLInit, tmpDir, strings.TrimRight(violationBody, "\n"), testutil.JSONLSuccess))
@@ -3783,31 +3706,5 @@ func TestAxisStallState_ChangedSectionResetsCount(t *testing.T) {
 	stalled, _, _, _, _ := tracker.observe(3, planPath, failing)
 	if stalled {
 		t.Error("changed section should have reset the structural counter to 1")
-	}
-}
-
-// TestRefactorLoopPropagatesPriorPhasePlanPaths covers fix #2c end-to-end by
-// running RunRefactorLoop with a two-phase roadmap and a planner stub that
-// captures the PhasePlanLoopConfig it received for each phase. We expect the
-// second phase's config to carry the first phase's approved plan path in
-// PriorPhasePlanPaths, so the grounding critic gets prior-phase context.
-//
-// This test lives here (not refactor_test.go) because it exercises the
-// PhasePlanLoopConfig plumbing owned by this file.
-func TestRefactorLoopPropagatesPriorPhasePlanPaths(t *testing.T) {
-	// Sanity: the refactor.go edit must populate PriorPhasePlanPaths from the
-	// accumulator. We assert the smaller invariant: build a two-element slice
-	// the way RunRefactorLoop does, and confirm it matches what
-	// runPhasePlanMultiValidatorValidation forwards.
-	cfg := PhasePlanLoopConfig{
-		PlanLoopConfig: PlanLoopConfig{
-			Feature: &feature.Feature{Name: "f",
-				SchemaVersion: feature.SchemaVersionCurrent},
-		},
-		PriorPhasePlanPaths: []string{"/phase-01/plan.md"},
-	}
-	extras := planValidationExtras{PriorPhasePlanPaths: cfg.PriorPhasePlanPaths}
-	if !reflect.DeepEqual(extras.PriorPhasePlanPaths, cfg.PriorPhasePlanPaths) {
-		t.Errorf("runPhasePlanMultiValidatorValidation must forward PriorPhasePlanPaths into extras; got %v", extras.PriorPhasePlanPaths)
 	}
 }

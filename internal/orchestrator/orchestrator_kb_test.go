@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
+	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/orchestrator"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
@@ -232,6 +233,69 @@ func TestOrchestrator_StartKB_LockHeldByOther_SetsWaitMessage(t *testing.T) {
 	}
 }
 
+func TestOrchestrator_StartKB_OrphanedLockStartsSession(t *testing.T) {
+	cpr := newCapturingPhaseRunner(t)
+
+	kbDir := agent.KBStateDir(cpr.stateDir, "repo-orphaned")
+	if err := os.MkdirAll(kbDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%s): %v", kbDir, err)
+	}
+	owner := agent.KBLockInfo{FeatureID: "feat-missing", Timestamp: time.Now()}
+	ownerData, _ := json.Marshal(owner)
+	if err := os.WriteFile(filepath.Join(kbDir, "kb.lock"), ownerData, 0o644); err != nil {
+		t.Fatalf("write kb.lock: %v", err)
+	}
+
+	waiter := &feature.Feature{
+		ID:           "feat-waiter",
+		Status:       feature.StatusInterrupted,
+		CurrentPhase: feature.PhaseKnowledgeBase,
+		Pipeline:     feature.PipelineLarge,
+		Repos: []feature.FeatureRepo{
+			{Name: "repo-orphaned", Path: "/tmp/repo-orphaned"},
+		},
+	}
+	lc := lifecycleForFeature(waiter)
+	fs := newFeatureStore(waiter)
+	fs.LoadFn = func(id string) (*feature.Feature, error) {
+		if id == "feat-missing" {
+			return nil, os.ErrNotExist
+		}
+		f, ok := fs.features[id]
+		if !ok {
+			return nil, os.ErrNotExist
+		}
+		return f, nil
+	}
+	cpr.pr.FeatureStore = fs
+
+	o := orchestrator.New(orchestrator.Deps{
+		Lifecycle:   lc,
+		Store:       fs,
+		Sessions:    cpr.sm,
+		PhaseRunner: cpr.pr,
+		CmdRunner:   cpr.cmd,
+	}, orchestrator.Hooks{})
+
+	if err := o.StartFeature("feat-waiter"); err != nil {
+		t.Fatalf("StartFeature: %v", err)
+	}
+
+	kbSessions := cpr.startSessionsByPhase(feature.PhaseKnowledgeBase)
+	if len(kbSessions) != 1 {
+		t.Fatalf("KB StartSession calls = %d, want 1", len(kbSessions))
+	}
+	if kbSessions[0].ID != "feat-waiter-kb-repo-orphaned" {
+		t.Errorf("session ID = %q, want feat-waiter-kb-repo-orphaned", kbSessions[0].ID)
+	}
+	if waiter.KBWaitMessage != "" {
+		t.Errorf("KBWaitMessage = %q, want no wait message after orphan recovery", waiter.KBWaitMessage)
+	}
+	if owner := agent.ReadKBLockOwner(kbDir); owner != "feat-waiter" {
+		t.Errorf("KB lock owner = %q, want feat-waiter", owner)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // TestOrchestrator_StartKB_AfterLockReleased_StartsSession
 // ---------------------------------------------------------------------------
@@ -311,6 +375,69 @@ func TestOrchestrator_StartKB_AfterLockReleased_StartsSession(t *testing.T) {
 	}
 }
 
+func TestOrchestrator_StartKB_SessionBuildFailureMarksFeatureFailed(t *testing.T) {
+	cpr := newCapturingPhaseRunner(t)
+	cpr.pr.BuildSessionFn = func(opts agent.BuildSessionOpts) ([]string, []string, *session.SessionOpts, error) {
+		return nil, nil, nil, errors.New(`resolving provider for model "sonnet[200K]": no provider found for model "sonnet[200K]"`)
+	}
+
+	f := &feature.Feature{
+		ID:           "feat-kb-spawn-fail",
+		Status:       feature.StatusInterrupted,
+		CurrentPhase: feature.PhaseKnowledgeBase,
+		Pipeline:     feature.PipelineLarge,
+		Models:       config.ModelConfig{KBBuild: "sonnet[200K]"},
+		Repos:        []feature.FeatureRepo{{Name: "repo-a", Path: "/tmp/repo-a"}},
+	}
+	lc := lifecycleForFeature(f)
+	lc.MarkFailedFn = func(id, failureType, lastError string) error {
+		f.Status = feature.StatusFailed
+		f.FailureType = failureType
+		f.LastError = lastError
+		return nil
+	}
+	fs := newFeatureStore(f)
+	cpr.pr.FeatureStore = fs
+
+	var failureType, failureMessage string
+	o := orchestrator.New(orchestrator.Deps{
+		Lifecycle:   lc,
+		Store:       fs,
+		Sessions:    cpr.sm,
+		PhaseRunner: cpr.pr,
+		CmdRunner:   cpr.cmd,
+	}, orchestrator.Hooks{
+		OnFeatureFailed: func(id string, ft, msg string) {
+			failureType = ft
+			failureMessage = msg
+		},
+	})
+
+	err := o.StartFeature(f.ID)
+	if err == nil {
+		t.Fatal("StartFeature() error = nil; want KB build failure")
+	}
+	if f.Status != feature.StatusFailed {
+		t.Fatalf("feature status = %s; want Failed", f.Status)
+	}
+	if f.FailureType != feature.FailureInfrastructure {
+		t.Fatalf("FailureType = %q; want %q", f.FailureType, feature.FailureInfrastructure)
+	}
+	if !strings.Contains(f.LastError, "run KB for repo repo-a") || !strings.Contains(f.LastError, "sonnet[200K]") {
+		t.Fatalf("LastError = %q; want persisted KB spawn error", f.LastError)
+	}
+	if failureType != feature.FailureInfrastructure || failureMessage != f.LastError {
+		t.Fatalf("OnFeatureFailed = %q/%q; want infrastructure/%q", failureType, failureMessage, f.LastError)
+	}
+	if got := len(cpr.startSessionsByPhase(feature.PhaseKnowledgeBase)); got != 0 {
+		t.Fatalf("KB sessions = %d; want none when session build fails", got)
+	}
+	events := drainEvents(o)
+	if !hasEventType(events, ports.FeatureFailed) {
+		t.Fatalf("events = %+v; want FeatureFailed", events)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // TestOrchestrator_wakeKBWaiters_TolerantOfPartialLoadError
 // ---------------------------------------------------------------------------
@@ -323,7 +450,7 @@ func TestOrchestrator_StartKB_AfterLockReleased_StartsSession(t *testing.T) {
 // did load are still re-dispatched.
 func TestOrchestrator_wakeKBWaiters_TolerantOfPartialLoadError(t *testing.T) {
 	stateDir := t.TempDir()
-	writeKBCompletionArtifacts(t, stateDir, "repo-shared", true, true)
+	writeKBCompletionArtifacts(t, stateDir, "repo-shared", true)
 
 	holder := &feature.Feature{
 		ID:           "feat-holder",
@@ -607,8 +734,8 @@ func TestOrchestrator_InterruptFeature_TransitionBeforeStopSession(t *testing.T)
 	fs := newFeatureStore(f)
 
 	sm := mocks.NewMockSessionManager()
-	sm.FeatureSessionsFn = func(id string) []session.SessionView {
-		return []session.SessionView{mocks.NewMockSessionView("s-1", "feat-order")}
+	sm.FeatureSessionsFn = func(id string) []ports.SessionView {
+		return []ports.SessionView{mocks.NewMockSessionView("s-1", "feat-order")}
 	}
 	var statusAtStop feature.Status
 	sm.StopSessionFn = func(id string) error {

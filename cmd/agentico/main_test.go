@@ -21,19 +21,14 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"net/http"
 	"os"
 	"os/exec"
-	"os/signal"
 	"path/filepath"
-	"runtime"
 	"slices"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
-	"github.com/charmbracelet/colorprofile"
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/instancelock"
@@ -58,14 +53,6 @@ const (
 
 	testAnthropicSonnet45ModelID = "anthropic/claude-sonnet-4-5[200K]"
 )
-
-func failingLauncher(t *testing.T) defaultLauncher {
-	t.Helper()
-	return func(string, string, bool, []string, bool) int {
-		t.Fatal("TUI launcher invoked unexpectedly")
-		return 1
-	}
-}
 
 func writeReviewFeedback(t *testing.T, path, findings, verdict string) {
 	t.Helper()
@@ -323,6 +310,26 @@ func TestDiscoverProviderCatalogsWritesVersionedCacheOnMiss(t *testing.T) {
 	}
 	if len(cached) != 1 || cached[0].ID != "fresh-model" {
 		t.Fatalf("cached models = %+v, want fresh-model", cached)
+	}
+}
+
+func TestPersistRefreshedProviderModelCatalogUsesNormalizedVersion(t *testing.T) {
+	cacheRoot := t.TempDir()
+	provider := &stubCatalogDiscoveryProvider{
+		stubProvider: stubProvider{name: "claude", hasCLI: true},
+		versionInfo:  "Claude Code v2.1.220",
+	}
+	models := []llm.ModelInfo{{ID: "claude-new", Category: "capable"}}
+
+	if err := persistRefreshedProviderModelCatalog(cacheRoot, provider, models); err != nil {
+		t.Fatalf("persistRefreshedProviderModelCatalog() error: %v", err)
+	}
+	cached, err := loadProviderCatalogCache(cacheRoot, "claude", "2.1.220")
+	if err != nil {
+		t.Fatalf("loadProviderCatalogCache() error: %v", err)
+	}
+	if len(cached) != 1 || cached[0].ID != "claude-new" {
+		t.Fatalf("cached models = %+v; want claude-new", cached)
 	}
 }
 
@@ -865,34 +872,57 @@ func TestCanonicalizeStateDir_FallsBackWhenUnresolvable(t *testing.T) {
 	}
 }
 
-func TestRunArgsLaunchesClientServerByDefault(t *testing.T) {
+func TestRunArgsLaunchesDesktopByDefault(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	var launched bool
-	wantParent := pickRuntimeParent(os.Stat)
-	code := runArgs(nil, &stdout, &stderr, func(configPath, stateDir string, dangerouslySkipPerms bool, enabledProviders []string, _ bool) int {
-		launched = true
-		if configPath != filepath.Join(wantParent, defaultConfigBasename) {
-			t.Errorf("configPath = %q, want default", configPath)
-		}
-		if stateDir != filepath.Join(wantParent, defaultStateBasename) {
-			t.Errorf("stateDir = %q, want default", stateDir)
-		}
-		if dangerouslySkipPerms {
-			t.Error("dangerouslySkipPerms = true, want false")
-		}
-		if enabledProviders != nil {
-			t.Errorf("enabledProviders = %v, want nil", enabledProviders)
-		}
-		return 0
-	}, failingServerLauncher(t), failingUpdater(t))
+	var desktopLaunched, serverLaunched bool
+	code := runArgsWithDesktop(
+		nil,
+		&stdout,
+		&stderr,
+		func() error {
+			desktopLaunched = true
+			return nil
+		},
+		func(string, string, bool, []string, bool, string, string) int {
+			serverLaunched = true
+			return 0
+		},
+		failingUpdater(t),
+	)
 	if code != 0 {
 		t.Errorf("runArgs() code = %d, want 0", code)
 	}
-	if !launched {
-		t.Fatal("launcher was not called")
+	if !desktopLaunched {
+		t.Fatal("desktop launcher was not called")
+	}
+	if serverLaunched {
+		t.Fatal("server launcher was called for a bare invocation")
 	}
 	if stdout.Len() != 0 || stderr.Len() != 0 {
 		t.Fatalf("stdout = %q stderr = %q, want both empty", stdout.String(), stderr.String())
+	}
+}
+
+func TestRunArgsDesktopFailurePrintsInstallAndHeadlessGuidance(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := runArgsWithDesktop(
+		nil,
+		&stdout,
+		&stderr,
+		func() error { return errors.New("application is not registered") },
+		failingServerLauncher(t),
+		failingUpdater(t),
+	)
+	if code != 1 {
+		t.Errorf("runArgs() code = %d, want 1", code)
+	}
+	for _, want := range []string{"application is not registered", "signed Agentico desktop package", "agentico server"} {
+		if !strings.Contains(stderr.String(), want) {
+			t.Errorf("stderr = %q, want %q", stderr.String(), want)
+		}
+	}
+	if stdout.Len() != 0 {
+		t.Errorf("stdout = %q, want empty", stdout.String())
 	}
 }
 
@@ -902,17 +932,16 @@ func TestRunArgsPassesRetainedLaunchFlags(t *testing.T) {
 	var gotDangerouslySkipPerms bool
 	var gotProviders []string
 	code := runArgs(
-		[]string{"--config", "/tmp/agentic-config.yaml", "--state-dir", "/tmp/agentic-features", "--providers", "codex, claude", "--dangerously-skip-permissions"},
+		[]string{cliSubcommandServer, "--config", "/tmp/agentic-config.yaml", "--state-dir", "/tmp/agentic-features", "--providers", "codex, claude", "--dangerously-skip-permissions"},
 		&stdout,
 		&stderr,
-		func(configPath, stateDir string, dangerouslySkipPerms bool, enabledProviders []string, _ bool) int {
+		func(configPath, stateDir string, dangerouslySkipPerms bool, enabledProviders []string, _ bool, _ string, _ string) int {
 			gotConfig = configPath
 			gotState = stateDir
 			gotDangerouslySkipPerms = dangerouslySkipPerms
 			gotProviders = enabledProviders
 			return 0
 		},
-		failingServerLauncher(t),
 		failingUpdater(t),
 	)
 	if code != 0 {
@@ -939,14 +968,13 @@ func TestRunArgsPassesRefreshModelsToLauncher(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	var gotRefresh bool
 	code := runArgs(
-		[]string{"--refresh-models"},
+		[]string{cliSubcommandServer, "--refresh-models"},
 		&stdout,
 		&stderr,
-		func(_ string, _ string, _ bool, _ []string, refreshModels bool) int {
+		func(_ string, _ string, _ bool, _ []string, refreshModels bool, _ string, _ string) int {
 			gotRefresh = refreshModels
 			return 0
 		},
-		failingServerLauncher(t),
 		failingUpdater(t),
 	)
 	if code != 0 {
@@ -976,16 +1004,12 @@ func TestRunArgsValidateArtifactsCatchesMalformedReviewFeedback(t *testing.T) {
 	}
 
 	var stdout, stderr bytes.Buffer
-	var launchedTUI, launchedServer, updateCalled bool
+	var launchedServer, updateCalled bool
 	code := runArgs(
 		[]string{cliSubcommandValidateArtifacts, cliFlagPhase, phaseNameReview, cliFlagRole, string(agent.RoleImplementationReviewCraft), cliFlagDir, iterDir},
 		&stdout,
 		&stderr,
-		func(string, string, bool, []string, bool) int {
-			launchedTUI = true
-			return 0
-		},
-		func(string, string, bool, []string, bool) int {
+		func(string, string, bool, []string, bool, string, string) int {
 			launchedServer = true
 			return 0
 		},
@@ -997,8 +1021,8 @@ func TestRunArgsValidateArtifactsCatchesMalformedReviewFeedback(t *testing.T) {
 	if code != 1 {
 		t.Fatalf("runArgs() code = %d, want validation failure 1", code)
 	}
-	if launchedTUI || launchedServer || updateCalled {
-		t.Fatalf("validate-artifacts launched unrelated path: tui=%v server=%v update=%v", launchedTUI, launchedServer, updateCalled)
+	if launchedServer || updateCalled {
+		t.Fatalf("validate-artifacts launched unrelated path: server=%v update=%v", launchedServer, updateCalled)
 	}
 	if got := stderr.String(); !strings.Contains(got, "review-feedback.md") || !strings.Contains(got, "LGTM") {
 		t.Fatalf("stderr = %q, want review-feedback.md malformed verdict violation", got)
@@ -1017,7 +1041,6 @@ func TestRunArgsValidateArtifactsAcceptsValidArtifacts(t *testing.T) {
 		[]string{cliSubcommandValidateArtifacts, cliFlagPhase, phaseNameReview, cliFlagRole, string(agent.RoleImplementationReviewCraft), cliFlagDir, iterDir},
 		&stdout,
 		&stderr,
-		failingLauncher(t),
 		failingServerLauncher(t),
 		failingUpdater(t),
 	)
@@ -1048,7 +1071,7 @@ func TestRunArgsVerifyEvidencePassesAndFails(t *testing.T) {
 		code := runArgs(
 			[]string{cliSubcommandVerifyEvidence, cliFlagContract, contractPath, cliFlagDir, iterDir},
 			&stdout, &stderr,
-			failingLauncher(t), failingServerLauncher(t), failingUpdater(t),
+			failingServerLauncher(t), failingUpdater(t),
 		)
 		return code, stdout.String(), stderr.String()
 	}
@@ -1113,18 +1136,29 @@ func TestParseLaunchArgsServerSurface(t *testing.T) {
 	}
 }
 
+func TestParseLaunchArgsRejectsServerFlagsWithoutServerSubcommand(t *testing.T) {
+	for _, args := range [][]string{
+		{"--config", testServerConfigPath},
+		{"--state-dir", testStateFeaturesDir},
+		{"--providers", providerNameCodex},
+		{"--dangerously-skip-permissions"},
+		{"--refresh-models"},
+	} {
+		_, err := parseLaunchArgs(args)
+		if err == nil || !strings.Contains(err.Error(), "agentico server") {
+			t.Errorf("parseLaunchArgs(%v) error = %v, want server-subcommand guidance", args, err)
+		}
+	}
+}
+
 func TestRunArgsDispatchesServerToSeam(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	var launchedTUI, launchedServer bool
+	var launchedServer bool
 	code := runArgs(
 		[]string{cliSubcommandServer, "--config", testServerConfigPath, "--state-dir", testStateFeaturesDir, "--providers", providerNameCodex},
 		&stdout,
 		&stderr,
-		func(string, string, bool, []string, bool) int {
-			launchedTUI = true
-			return 0
-		},
-		func(configPath, stateDir string, dangerouslySkipPerms bool, enabledProviders []string, refreshModels bool) int {
+		func(configPath, stateDir string, dangerouslySkipPerms bool, enabledProviders []string, refreshModels bool, _ string, _ string) int {
 			launchedServer = true
 			if configPath != testServerConfigPath {
 				t.Errorf("configPath = %q; want server config", configPath)
@@ -1145,9 +1179,6 @@ func TestRunArgsDispatchesServerToSeam(t *testing.T) {
 		},
 		failingUpdater(t),
 	)
-	if launchedTUI {
-		t.Fatal("TUI launcher invoked for server mode")
-	}
 	if !launchedServer {
 		t.Fatal("server launcher was not invoked")
 	}
@@ -1196,579 +1227,6 @@ func canonicalTempDir(t *testing.T) string {
 	return resolved
 }
 
-func TestDefaultLaunchAttachesToHealthyDiscoveredServer(t *testing.T) {
-	runtimeDir := canonicalTempDir(t)
-	stateDir := filepath.Join(runtimeDir, "features")
-	configPath := filepath.Join(runtimeDir, "config.yaml")
-	identity := serverruntime.RuntimeIdentity{RuntimeDir: runtimeDir, StateDir: stateDir, Config: configPath}
-	policy := serverruntime.NewLaunchPolicy([]string{providerNameCodex}, true)
-	baseURL := "http://127.0.0.1:7654"
-	var launched defaultClientLaunch
-
-	err := launchDefaultClientServer(context.Background(), defaultLaunchRequest{
-		ConfigPath:                 configPath,
-		StateDir:                   stateDir,
-		DangerouslySkipPermissions: true,
-		EnabledProviders:           []string{providerNameCodex},
-		WaitForReadyPollInterval:   time.Millisecond,
-		WaitForReadyTimeout:        25 * time.Millisecond,
-	}, defaultLaunchDeps{
-		ResolvePolicy: func(ctx context.Context, req defaultLaunchRequest) (serverruntime.LaunchPolicy, error) {
-			return policy, nil
-		},
-		PrepareDiscovery: func(ctx context.Context, runtimeDir string, gotIdentity serverruntime.RuntimeIdentity, gotPolicy serverruntime.LaunchPolicy, client *http.Client) (serverruntime.DiscoveryDecision, error) {
-			if gotIdentity != identity {
-				t.Fatalf("identity = %+v; want %+v", gotIdentity, identity)
-			}
-			if !slices.Equal(gotPolicy.Providers, policy.Providers) || gotPolicy.DangerouslySkipPermissions != policy.DangerouslySkipPermissions {
-				t.Fatalf("policy = %+v; want %+v", gotPolicy, policy)
-			}
-			return serverruntime.DiscoveryDecision{
-				AlreadyRunning: true,
-				Reason:         testReasonMatchingHealthyServer,
-				Record: serverruntime.DiscoveryRecord{
-					BaseURL:      baseURL,
-					Runtime:      identity,
-					LaunchPolicy: policy,
-				},
-			}, nil
-		},
-		StartServer: func(context.Context, serverStartRequest) (serverProcess, error) {
-			t.Fatal("StartServer called for healthy discovery")
-			return nil, nil
-		},
-		LaunchClient: func(ctx context.Context, launch defaultClientLaunch) error {
-			launched = launch
-			return nil
-		},
-	})
-	if err != nil {
-		t.Fatalf("launchDefaultClientServer() error = %v", err)
-	}
-	if launched.BaseURL != baseURL {
-		t.Fatalf("client BaseURL = %q; want %q", launched.BaseURL, baseURL)
-	}
-	if launched.OwnedServer {
-		t.Fatal("OwnedServer = true; want false for pre-existing server")
-	}
-}
-
-func TestDefaultLaunchStartsChildServerWhenDiscoveryIsStale(t *testing.T) {
-	runtimeDir := canonicalTempDir(t)
-	stateDir := filepath.Join(runtimeDir, "features")
-	configPath := filepath.Join(runtimeDir, "config.yaml")
-	identity := serverruntime.RuntimeIdentity{RuntimeDir: runtimeDir, StateDir: stateDir, Config: configPath}
-	policy := serverruntime.NewLaunchPolicy([]string{providerNameCodex}, false)
-	baseURL := "http://127.0.0.1:7655"
-	var terminal bytes.Buffer
-	var started serverStartRequest
-	var launched defaultClientLaunch
-	prepareCalls := 0
-	process := &fakeServerProcess{}
-
-	err := launchDefaultClientServer(context.Background(), defaultLaunchRequest{
-		ConfigPath:               configPath,
-		StateDir:                 stateDir,
-		EnabledProviders:         []string{providerNameCodex},
-		Stderr:                   &terminal,
-		WaitForReadyPollInterval: time.Millisecond,
-		WaitForReadyTimeout:      50 * time.Millisecond,
-	}, defaultLaunchDeps{
-		ResolvePolicy: func(ctx context.Context, req defaultLaunchRequest) (serverruntime.LaunchPolicy, error) {
-			return policy, nil
-		},
-		PrepareDiscovery: func(ctx context.Context, runtimeDir string, gotIdentity serverruntime.RuntimeIdentity, gotPolicy serverruntime.LaunchPolicy, client *http.Client) (serverruntime.DiscoveryDecision, error) {
-			prepareCalls++
-			if prepareCalls == 1 {
-				return serverruntime.DiscoveryDecision{Replace: true, Reason: testReasonStaleDiscovery}, nil
-			}
-			return serverruntime.DiscoveryDecision{
-				AlreadyRunning: true,
-				Reason:         testReasonMatchingHealthyServer,
-				Record: serverruntime.DiscoveryRecord{
-					BaseURL:      baseURL,
-					Runtime:      identity,
-					LaunchPolicy: policy,
-				},
-			}, nil
-		},
-		StartServer: func(ctx context.Context, req serverStartRequest) (serverProcess, error) {
-			started = req
-			if req.Stderr == nil {
-				t.Fatal("server stderr = nil; want runtime log writer")
-			}
-			if _, err := io.WriteString(req.Stderr, "server log line\n"); err != nil {
-				t.Fatalf("write server stderr: %v", err)
-			}
-			return process, nil
-		},
-		LaunchClient: func(ctx context.Context, launch defaultClientLaunch) error {
-			launched = launch
-			return nil
-		},
-	})
-	if err != nil {
-		t.Fatalf("launchDefaultClientServer() error = %v", err)
-	}
-	if started.ConfigPath != configPath || started.StateDir != stateDir {
-		t.Fatalf("server start request = %+v; want runtime paths", started)
-	}
-	if !slices.Equal(started.EnabledProviders, []string{providerNameCodex}) {
-		t.Fatalf("server providers = %v; want [codex]", started.EnabledProviders)
-	}
-	if strings.Contains(terminal.String(), "server log line") {
-		t.Fatalf("child server stderr leaked to terminal: %q", terminal.String())
-	}
-	logData, err := os.ReadFile(filepath.Join(runtimeDir, defaultLogBasename))
-	if err != nil {
-		t.Fatalf("read runtime log: %v", err)
-	}
-	if !strings.Contains(string(logData), "server log line") {
-		t.Fatalf("runtime log missing child server stderr: %q", string(logData))
-	}
-	if launched.BaseURL != baseURL || !launched.OwnedServer {
-		t.Fatalf("client launch = %+v; want owned child server at %s", launched, baseURL)
-	}
-	if process.stopCalls != 0 {
-		t.Fatalf("server stop calls = %d; want 0 when client exits normally", process.stopCalls)
-	}
-	if prepareCalls < 2 {
-		t.Fatalf("PrepareDiscovery calls = %d; want initial stale plus readiness", prepareCalls)
-	}
-}
-
-func TestDefaultLaunchReportsServerReadinessTimeout(t *testing.T) {
-	runtimeDir := canonicalTempDir(t)
-	stateDir := filepath.Join(runtimeDir, "features")
-	configPath := filepath.Join(runtimeDir, "config.yaml")
-	policy := serverruntime.NewLaunchPolicy([]string{providerNameCodex}, false)
-	process := &fakeServerProcess{}
-
-	err := launchDefaultClientServer(context.Background(), defaultLaunchRequest{
-		ConfigPath:               configPath,
-		StateDir:                 stateDir,
-		EnabledProviders:         []string{providerNameCodex},
-		WaitForReadyPollInterval: time.Millisecond,
-		WaitForReadyTimeout:      time.Millisecond,
-	}, defaultLaunchDeps{
-		ResolvePolicy: func(ctx context.Context, req defaultLaunchRequest) (serverruntime.LaunchPolicy, error) {
-			return policy, nil
-		},
-		PrepareDiscovery: func(context.Context, string, serverruntime.RuntimeIdentity, serverruntime.LaunchPolicy, *http.Client) (serverruntime.DiscoveryDecision, error) {
-			return serverruntime.DiscoveryDecision{Replace: true, Reason: testReasonStaleDiscovery}, nil
-		},
-		StartServer: func(ctx context.Context, req serverStartRequest) (serverProcess, error) {
-			return process, nil
-		},
-		LaunchClient: func(context.Context, defaultClientLaunch) error {
-			t.Fatal("LaunchClient called before readiness")
-			return nil
-		},
-	})
-	if err == nil {
-		t.Fatal("launchDefaultClientServer() error = nil; want readiness timeout")
-	}
-	if !strings.Contains(err.Error(), "server readiness timed out") {
-		t.Fatalf("error = %q; want readiness timeout", err.Error())
-	}
-	if process.stopCalls != 1 {
-		t.Fatalf("server stop calls = %d; want child cleanup on readiness failure", process.stopCalls)
-	}
-}
-
-func TestDefaultLaunchReadinessTimeoutCoversCatalogDiscoveryBudget(t *testing.T) {
-	runtimeDir := canonicalTempDir(t)
-	stateDir := filepath.Join(runtimeDir, "features")
-	configPath := filepath.Join(runtimeDir, "config.yaml")
-	identity := serverruntime.RuntimeIdentity{RuntimeDir: runtimeDir, StateDir: stateDir, Config: configPath}
-	policy := serverruntime.NewLaunchPolicy([]string{providerNameCodex}, false)
-	var observedBudget time.Duration
-
-	_, err := waitForDefaultLaunchServerReady(context.Background(), defaultLaunchRequest{
-		ConfigPath:               configPath,
-		StateDir:                 stateDir,
-		EnabledProviders:         []string{providerNameCodex},
-		WaitForReadyPollInterval: time.Millisecond,
-	}, defaultLaunchDeps{
-		PrepareDiscovery: func(ctx context.Context, runtimeDir string, gotIdentity serverruntime.RuntimeIdentity, gotPolicy serverruntime.LaunchPolicy, client *http.Client) (serverruntime.DiscoveryDecision, error) {
-			deadline, ok := ctx.Deadline()
-			if !ok {
-				t.Fatal("PrepareDiscovery context has no deadline")
-			}
-			observedBudget = time.Until(deadline)
-			return serverruntime.DiscoveryDecision{
-				AlreadyRunning: true,
-				Record: serverruntime.DiscoveryRecord{
-					BaseURL:      "http://127.0.0.1:7777",
-					Runtime:      gotIdentity,
-					LaunchPolicy: gotPolicy,
-				},
-			}, nil
-		},
-	}, runtimeDir, identity, policy, &http.Client{Timeout: time.Second})
-	if err != nil {
-		t.Fatalf("waitForDefaultLaunchServerReady() error = %v", err)
-	}
-	if observedBudget <= providerCatalogDiscoveryTimeout {
-		t.Fatalf("default readiness budget = %v; want greater than catalog discovery budget %v", observedBudget, providerCatalogDiscoveryTimeout)
-	}
-}
-
-func TestDefaultLaunchRetainsOwnershipWhenReadyDiscoveryMatchesChildPID(t *testing.T) {
-	runtimeDir := canonicalTempDir(t)
-	stateDir := filepath.Join(runtimeDir, "features")
-	configPath := filepath.Join(runtimeDir, "config.yaml")
-	identity := serverruntime.RuntimeIdentity{RuntimeDir: runtimeDir, StateDir: stateDir, Config: configPath}
-	policy := serverruntime.NewLaunchPolicy([]string{providerNameCodex}, false)
-	baseURL := "http://127.0.0.1:7656"
-	process := &fakeServerProcess{pid: 4242}
-	prepareCalls := 0
-	var launched defaultClientLaunch
-
-	err := launchDefaultClientServer(context.Background(), defaultLaunchRequest{
-		ConfigPath:               configPath,
-		StateDir:                 stateDir,
-		EnabledProviders:         []string{providerNameCodex},
-		WaitForReadyPollInterval: time.Millisecond,
-		WaitForReadyTimeout:      50 * time.Millisecond,
-	}, defaultLaunchDeps{
-		ResolvePolicy: func(context.Context, defaultLaunchRequest) (serverruntime.LaunchPolicy, error) {
-			return policy, nil
-		},
-		PrepareDiscovery: func(context.Context, string, serverruntime.RuntimeIdentity, serverruntime.LaunchPolicy, *http.Client) (serverruntime.DiscoveryDecision, error) {
-			prepareCalls++
-			if prepareCalls == 1 {
-				return serverruntime.DiscoveryDecision{Replace: true, Reason: "no discovery record"}, nil
-			}
-			return serverruntime.DiscoveryDecision{
-				AlreadyRunning: true,
-				Reason:         testReasonMatchingHealthyServer,
-				Record: serverruntime.DiscoveryRecord{
-					BaseURL:      baseURL,
-					Runtime:      identity,
-					LaunchPolicy: policy,
-					PID:          process.pid,
-				},
-			}, nil
-		},
-		StartServer: func(context.Context, serverStartRequest) (serverProcess, error) {
-			return process, nil
-		},
-		LaunchClient: func(ctx context.Context, launch defaultClientLaunch) error {
-			launched = launch
-			return nil
-		},
-	})
-	if err != nil {
-		t.Fatalf("launchDefaultClientServer() error = %v", err)
-	}
-	if launched.BaseURL != baseURL || !launched.OwnedServer || launched.Server != process {
-		t.Fatalf("client launch = %+v; want owned child server pid %d", launched, process.pid)
-	}
-	if process.stopCalls != 0 {
-		t.Fatalf("server stop calls = %d; want owned child retained for TUI quit authority", process.stopCalls)
-	}
-}
-
-func TestDefaultLaunchTreatsReadinessFromDifferentPIDAsAttached(t *testing.T) {
-	runtimeDir := canonicalTempDir(t)
-	stateDir := filepath.Join(runtimeDir, "features")
-	configPath := filepath.Join(runtimeDir, "config.yaml")
-	identity := serverruntime.RuntimeIdentity{RuntimeDir: runtimeDir, StateDir: stateDir, Config: configPath}
-	policy := serverruntime.NewLaunchPolicy([]string{providerNameCodex}, false)
-	baseURL := "http://127.0.0.1:7657"
-	process := &fakeServerProcess{pid: 1111}
-	prepareCalls := 0
-	var launched defaultClientLaunch
-
-	err := launchDefaultClientServer(context.Background(), defaultLaunchRequest{
-		ConfigPath:               configPath,
-		StateDir:                 stateDir,
-		EnabledProviders:         []string{providerNameCodex},
-		WaitForReadyPollInterval: time.Millisecond,
-		WaitForReadyTimeout:      50 * time.Millisecond,
-	}, defaultLaunchDeps{
-		ResolvePolicy: func(context.Context, defaultLaunchRequest) (serverruntime.LaunchPolicy, error) {
-			return policy, nil
-		},
-		PrepareDiscovery: func(context.Context, string, serverruntime.RuntimeIdentity, serverruntime.LaunchPolicy, *http.Client) (serverruntime.DiscoveryDecision, error) {
-			prepareCalls++
-			if prepareCalls == 1 {
-				return serverruntime.DiscoveryDecision{Replace: true, Reason: testReasonStaleDiscovery}, nil
-			}
-			return serverruntime.DiscoveryDecision{
-				AlreadyRunning: true,
-				Reason:         testReasonMatchingHealthyServer,
-				Record: serverruntime.DiscoveryRecord{
-					BaseURL:      baseURL,
-					Runtime:      identity,
-					LaunchPolicy: policy,
-					PID:          2222,
-				},
-			}, nil
-		},
-		StartServer: func(context.Context, serverStartRequest) (serverProcess, error) {
-			return process, nil
-		},
-		LaunchClient: func(ctx context.Context, launch defaultClientLaunch) error {
-			launched = launch
-			return nil
-		},
-	})
-	if err != nil {
-		t.Fatalf("launchDefaultClientServer() error = %v", err)
-	}
-	if launched.BaseURL != baseURL || launched.OwnedServer || launched.Server != nil {
-		t.Fatalf("client launch = %+v; want attached pre-existing server", launched)
-	}
-	if process.stopCalls != 1 {
-		t.Fatalf("server stop calls = %d; want losing child cleaned up", process.stopCalls)
-	}
-}
-
-func TestDefaultLaunchConvergesAfterLiveOwnerLockContention(t *testing.T) {
-	runtimeDir := canonicalTempDir(t)
-	stateDir := filepath.Join(runtimeDir, "features")
-	configPath := filepath.Join(runtimeDir, "config.yaml")
-	identity := serverruntime.RuntimeIdentity{RuntimeDir: runtimeDir, StateDir: stateDir, Config: configPath}
-	policy := serverruntime.NewLaunchPolicy([]string{providerNameCodex}, false)
-	baseURL := "http://127.0.0.1:7658"
-	owner := instancelock.Owner{PID: 9999, StateDir: stateDir, Config: configPath, Version: "test"}
-	prepareCalls := 0
-	startCalls := 0
-	var launched defaultClientLaunch
-
-	err := launchDefaultClientServer(context.Background(), defaultLaunchRequest{
-		ConfigPath:               configPath,
-		StateDir:                 stateDir,
-		EnabledProviders:         []string{providerNameCodex},
-		WaitForReadyPollInterval: time.Millisecond,
-		WaitForReadyTimeout:      50 * time.Millisecond,
-	}, defaultLaunchDeps{
-		ResolvePolicy: func(context.Context, defaultLaunchRequest) (serverruntime.LaunchPolicy, error) {
-			return policy, nil
-		},
-		PrepareDiscovery: func(context.Context, string, serverruntime.RuntimeIdentity, serverruntime.LaunchPolicy, *http.Client) (serverruntime.DiscoveryDecision, error) {
-			prepareCalls++
-			if prepareCalls == 1 {
-				return serverruntime.DiscoveryDecision{Replace: true, Reason: testReasonStaleDiscovery}, nil
-			}
-			return serverruntime.DiscoveryDecision{
-				AlreadyRunning: true,
-				Reason:         testReasonMatchingHealthyServer,
-				Record: serverruntime.DiscoveryRecord{
-					BaseURL:      baseURL,
-					Runtime:      identity,
-					LaunchPolicy: policy,
-					PID:          owner.PID,
-					Owner:        serverruntime.OwnerDTOFromInstanceOwner(owner),
-				},
-			}, nil
-		},
-		StartServer: func(context.Context, serverStartRequest) (serverProcess, error) {
-			startCalls++
-			return nil, runtimeLockBusyError{stateDir: stateDir, owner: owner}
-		},
-		LaunchClient: func(ctx context.Context, launch defaultClientLaunch) error {
-			launched = launch
-			return nil
-		},
-	})
-	if err != nil {
-		t.Fatalf("launchDefaultClientServer() error = %v", err)
-	}
-	if startCalls != 1 {
-		t.Fatalf("StartServer calls = %d; want one losing start attempt", startCalls)
-	}
-	if launched.BaseURL != baseURL || launched.OwnedServer || launched.Server != nil {
-		t.Fatalf("client launch = %+v; want attached live-owner server", launched)
-	}
-}
-
-func TestDefaultLaunchConcurrentStaleRepairStartsOneOwnedServer(t *testing.T) {
-	testDefaultLaunchConcurrentConvergence(t, testReasonStaleDiscovery, "http://127.0.0.1:7659")
-}
-
-func TestDefaultLaunchConcurrentColdStartStartsOneOwnedServer(t *testing.T) {
-	testDefaultLaunchConcurrentConvergence(t, "no discovery record", "http://127.0.0.1:7660")
-}
-
-func testDefaultLaunchConcurrentConvergence(t *testing.T, initialReason, baseURL string) {
-	t.Helper()
-	runtimeDir := canonicalTempDir(t)
-	stateDir := filepath.Join(runtimeDir, "features")
-	configPath := filepath.Join(runtimeDir, "config.yaml")
-	identity := serverruntime.RuntimeIdentity{RuntimeDir: runtimeDir, StateDir: stateDir, Config: configPath}
-	policy := serverruntime.NewLaunchPolicy([]string{providerNameCodex}, false)
-	owner := instancelock.Owner{PID: 31337, StateDir: stateDir, Config: configPath, Version: "test"}
-	process := &fakeServerProcess{pid: owner.PID}
-
-	var mu sync.Mutex
-	started := false
-	ready := false
-	var launches []defaultClientLaunch
-	runLaunch := func() error {
-		return launchDefaultClientServer(context.Background(), defaultLaunchRequest{
-			ConfigPath:               configPath,
-			StateDir:                 stateDir,
-			EnabledProviders:         []string{providerNameCodex},
-			WaitForReadyPollInterval: time.Millisecond,
-			WaitForReadyTimeout:      100 * time.Millisecond,
-		}, defaultLaunchDeps{
-			ResolvePolicy: func(context.Context, defaultLaunchRequest) (serverruntime.LaunchPolicy, error) {
-				return policy, nil
-			},
-			PrepareDiscovery: func(context.Context, string, serverruntime.RuntimeIdentity, serverruntime.LaunchPolicy, *http.Client) (serverruntime.DiscoveryDecision, error) {
-				mu.Lock()
-				defer mu.Unlock()
-				if !ready {
-					return serverruntime.DiscoveryDecision{Replace: true, Reason: initialReason}, nil
-				}
-				return serverruntime.DiscoveryDecision{
-					AlreadyRunning: true,
-					Reason:         testReasonMatchingHealthyServer,
-					Record: serverruntime.DiscoveryRecord{
-						BaseURL:      baseURL,
-						Runtime:      identity,
-						LaunchPolicy: policy,
-						PID:          owner.PID,
-						Owner:        serverruntime.OwnerDTOFromInstanceOwner(owner),
-					},
-				}, nil
-			},
-			StartServer: func(context.Context, serverStartRequest) (serverProcess, error) {
-				mu.Lock()
-				defer mu.Unlock()
-				if started {
-					return nil, runtimeLockBusyError{stateDir: stateDir, owner: owner}
-				}
-				started = true
-				ready = true
-				return process, nil
-			},
-			LaunchClient: func(ctx context.Context, launch defaultClientLaunch) error {
-				mu.Lock()
-				defer mu.Unlock()
-				launches = append(launches, launch)
-				return nil
-			},
-		})
-	}
-	errCh := make(chan error, 2)
-	go func() { errCh <- runLaunch() }()
-	go func() { errCh <- runLaunch() }()
-	for i := 0; i < 2; i++ {
-		if err := <-errCh; err != nil {
-			t.Fatalf("launch %d error = %v", i+1, err)
-		}
-	}
-	if len(launches) != 2 {
-		t.Fatalf("launches = %d; want 2", len(launches))
-	}
-	owned := 0
-	for _, launch := range launches {
-		if launch.BaseURL != baseURL {
-			t.Fatalf("launch BaseURL = %q; want %q", launch.BaseURL, baseURL)
-		}
-		if launch.OwnedServer {
-			owned++
-		}
-	}
-	if owned != 1 {
-		t.Fatalf("owned launches = %d; want exactly one owner", owned)
-	}
-}
-
-type fakeServerProcess struct {
-	stopCalls int
-	stopErr   error
-	pid       int
-}
-
-func (p *fakeServerProcess) Stop(context.Context) error {
-	p.stopCalls++
-	return p.stopErr
-}
-
-func (p *fakeServerProcess) PID() int {
-	return p.pid
-}
-
-type fakeWaitableServerProcess struct {
-	fakeServerProcess
-	waitCalls int
-	waitErr   error
-}
-
-func (p *fakeWaitableServerProcess) Wait(context.Context) error {
-	p.waitCalls++
-	return p.waitErr
-}
-
-func TestOwnedServerShutdownFallbackWaitsForGracefulExit(t *testing.T) {
-	proc := &fakeWaitableServerProcess{}
-	fallback := waitForOwnedServerShutdownOrStop(proc, time.Second)
-
-	if err := fallback(context.Background()); err != nil {
-		t.Fatalf("waitForOwnedServerShutdownOrStop() error = %v; want nil", err)
-	}
-	if proc.waitCalls != 1 {
-		t.Fatalf("wait calls = %d; want 1", proc.waitCalls)
-	}
-	if proc.stopCalls != 0 {
-		t.Fatalf("stop calls = %d; want 0 after graceful exit", proc.stopCalls)
-	}
-}
-
-func TestOwnedServerShutdownFallbackStopsAfterGraceTimeout(t *testing.T) {
-	proc := &fakeWaitableServerProcess{waitErr: context.DeadlineExceeded}
-	fallback := waitForOwnedServerShutdownOrStop(proc, time.Second)
-
-	if err := fallback(context.Background()); err != nil {
-		t.Fatalf("waitForOwnedServerShutdownOrStop() error = %v; want nil", err)
-	}
-	if proc.waitCalls != 1 {
-		t.Fatalf("wait calls = %d; want 1", proc.waitCalls)
-	}
-	if proc.stopCalls != 1 {
-		t.Fatalf("stop calls = %d; want 1 after grace timeout", proc.stopCalls)
-	}
-}
-
-func TestChildServerProcessStopReturnsNilAfterForcedKill(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("POSIX signal behavior only")
-	}
-
-	cmd := exec.Command(os.Args[0], "-test.run=TestHelperProcessIgnoreInterrupt")
-	cmd.Env = append(os.Environ(), "AGENTICO_TEST_HELPER_IGNORE_INTERRUPT=1")
-	if err := cmd.Start(); err != nil {
-		t.Fatalf("Start() error = %v", err)
-	}
-	proc := &childServerProcess{cmd: cmd, done: make(chan error, 1)}
-	go func() {
-		proc.done <- cmd.Wait()
-	}()
-	t.Cleanup(func() {
-		_ = cmd.Process.Kill()
-	})
-
-	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
-	defer cancel()
-	if err := proc.Stop(ctx); err != nil {
-		t.Fatalf("Stop() error = %v; want nil after forced kill", err)
-	}
-}
-
-//nolint:unparam // t is required by Go's re-exec test-helper-process convention even though it's unused here
-func TestHelperProcessIgnoreInterrupt(t *testing.T) {
-	if os.Getenv("AGENTICO_TEST_HELPER_IGNORE_INTERRUPT") != "1" {
-		return
-	}
-	signal.Ignore(os.Interrupt)
-	select {}
-}
-
 func TestServerBootstrapRejectsHeldInstanceLock(t *testing.T) {
 	runtimeDir := canonicalTempDir(t)
 	stateDir := filepath.Join(runtimeDir, "features")
@@ -1798,6 +1256,37 @@ func TestServerBootstrapRejectsHeldInstanceLock(t *testing.T) {
 	}
 }
 
+func TestServerBootstrapStartsSetupCapableWithoutUsableProvider(t *testing.T) {
+	gitPath, err := exec.LookPath("git")
+	if err != nil {
+		t.Skip("git not available in PATH")
+	}
+	binDir := t.TempDir()
+	if err := os.Symlink(gitPath, filepath.Join(binDir, "git")); err != nil {
+		t.Fatalf("symlink git: %v", err)
+	}
+	// PATH with git only: no provider CLI is installed at all.
+	t.Setenv("PATH", binDir)
+
+	runtimeDir := canonicalTempDir(t)
+	stateDir := filepath.Join(runtimeDir, "features")
+	configPath := filepath.Join(runtimeDir, "config.yaml")
+
+	var stderr bytes.Buffer
+	boot, err := bootstrapRuntime(context.Background(), configPath, stateDir, false, []string{providerNameCodex}, false, &stderr)
+	if err != nil {
+		t.Fatalf("bootstrapRuntime() error = %v; want setup-capable startup without provider CLIs", err)
+	}
+	t.Cleanup(func() { _ = boot.Close(context.Background()) })
+
+	if models := boot.registry.AvailableModels(); len(models) != 0 {
+		t.Fatalf("AvailableModels() = %v; want none while no provider is usable", models)
+	}
+	if !strings.Contains(stderr.String(), "setup-capable") {
+		t.Fatalf("stderr = %q; want setup-capable mode warning", stderr.String())
+	}
+}
+
 func TestParseLaunchArgsRejectsRemovedSurface(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -1807,7 +1296,7 @@ func TestParseLaunchArgsRejectsRemovedSurface(t *testing.T) {
 		{name: "run alias", args: []string{"run"}, wantErr: "unknown command: run"},
 		{name: "feature list", args: []string{"feature", "list"}, wantErr: "unknown command: feature"},
 		{name: "feature create", args: []string{"feature", "create", "--name", "x"}, wantErr: "unknown command: feature"},
-		{name: "feature create flag at top level", args: []string{"--name", "x"}, wantErr: "unknown flag: --name"},
+		{name: "feature create flag at top level", args: []string{"--title", "x"}, wantErr: "unknown flag: --title"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1975,12 +1464,17 @@ func TestRemapUnresolvableModels(t *testing.T) {
 		cfg := config.NewDefault() // has claude models: opus, sonnet, etc.
 		remapUnresolvableModels(cfg, r)
 
-		// All fields should now be testModelGPT54 since codex is the only provider
+		// Unresolvable Claude fields should now be testModelGPT54 since codex is
+		// the only provider. The annotated Codex review default remains because
+		// ResolveModel falls back through its bare alias.
 		m := cfg.Defaults.Models
-		for _, field := range []string{m.Inquiry, m.Research, m.Planning, m.Implementation, m.Review, m.Utilities, m.KBBuild} {
+		for _, field := range []string{m.Inquiry, m.Research, m.Planning, m.Implementation, m.Utilities, m.KBBuild} {
 			if field != testModelGPT54 {
 				t.Errorf("expected gpt-5.4, got %q", field)
 			}
+		}
+		if m.Review != "gpt-5.4[272K]" {
+			t.Errorf("review should remain gpt-5.4[272K], got %q", m.Review)
 		}
 	})
 
@@ -2044,7 +1538,7 @@ func TestShouldPersistCatalogDefaults(t *testing.T) {
 // proves a first launch such as `agentico --providers opencode` rewrites the
 // brand-new config's bootstrap defaults on disk with the discovered
 // provider-neutral defaults, rather than showing OpenCode-only defaults in the
-// running TUI while leaving stale Claude/Codex placeholders persisted.
+// running desktop app while leaving stale Claude/Codex placeholders persisted.
 func TestReconcileModelDefaults_NewConfigProviderFilteredPersistsDiscoveredDefaults(t *testing.T) {
 	reg := llm.NewRegistry()
 	reg.Register(&stubCatalogProvider{
@@ -2185,62 +1679,44 @@ func TestCheckRequiredProviders_OneDetected(t *testing.T) {
 }
 
 func TestPickRuntimeParent(t *testing.T) {
-	newParent := config.ExpandHome(defaultRuntimeParent)
-	legacyParent := config.ExpandHome(legacyRuntimeParent)
-
-	makeStat := func(present map[string]bool) func(string) (os.FileInfo, error) {
-		return func(p string) (os.FileInfo, error) {
-			if present[p] {
-				return fakeDirInfo{}, nil
-			}
-			return nil, &fs.PathError{Op: "stat", Path: p, Err: fs.ErrNotExist}
-		}
-	}
-
-	tests := []struct {
-		name    string
-		present map[string]bool
-		want    string
-	}{
-		{
-			name:    "fresh install — neither parent exists, prefer new namespace",
-			present: map[string]bool{},
-			want:    newParent,
-		},
-		{
-			name:    "new namespace exists, legacy absent",
-			present: map[string]bool{newParent: true},
-			want:    newParent,
-		},
-		{
-			name:    "legacy parent exists, new absent — recover in place",
-			present: map[string]bool{legacyParent: true},
-			want:    legacyParent,
-		},
-		{
-			name:    "both exist — new namespace wins",
-			present: map[string]bool{newParent: true, legacyParent: true},
-			want:    newParent,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := pickRuntimeParent(makeStat(tt.present))
-			if got != tt.want {
-				t.Errorf("pickRuntimeParent = %q, want %q", got, tt.want)
-			}
-		})
+	want := config.ExpandHome(defaultRuntimeParent)
+	if got := pickRuntimeParent(); got != want {
+		t.Errorf("pickRuntimeParent() = %q, want %q", got, want)
 	}
 }
 
-type fakeDirInfo struct{}
-
-func (fakeDirInfo) Name() string       { return "" }
-func (fakeDirInfo) Size() int64        { return 0 }
-func (fakeDirInfo) Mode() fs.FileMode  { return fs.ModeDir | 0o755 }
-func (fakeDirInfo) ModTime() time.Time { return time.Time{} }
-func (fakeDirInfo) IsDir() bool        { return true }
-func (fakeDirInfo) Sys() any           { return nil }
+func TestResolveRegistryParent(t *testing.T) {
+	t.Run("fresh parent wins when it exists", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		if err := os.MkdirAll(filepath.Join(home, ".agentic-orchestrator"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(filepath.Join(home, ".agentic-workflow"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if got, want := resolveRegistryParent(), filepath.Join(home, ".agentic-orchestrator"); got != want {
+			t.Errorf("resolveRegistryParent() = %q, want %q", got, want)
+		}
+	})
+	t.Run("legacy parent used when it alone exists", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		if err := os.MkdirAll(filepath.Join(home, ".agentic-workflow"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if got, want := resolveRegistryParent(), filepath.Join(home, ".agentic-workflow"); got != want {
+			t.Errorf("resolveRegistryParent() = %q, want %q", got, want)
+		}
+	})
+	t.Run("fresh parent default when neither exists", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		if got, want := resolveRegistryParent(), filepath.Join(home, ".agentic-orchestrator"); got != want {
+			t.Errorf("resolveRegistryParent() = %q, want %q", got, want)
+		}
+	})
+}
 
 func TestPrintUsageAdvertisesRenamedDefaults(t *testing.T) {
 	var b bytes.Buffer
@@ -2248,21 +1724,20 @@ func TestPrintUsageAdvertisesRenamedDefaults(t *testing.T) {
 	out := b.String()
 	for _, want := range []string{
 		"Agentic Orchestrator",
-		"agentico [flags]",
+		"Usage: agentico\n",
 		"agentico server [flags]",
 		"~/.agentic-orchestrator/config.yaml",
 		"~/.agentic-orchestrator/features",
-		"~/.agentic-workflow/", // legacy-recovery callout retained
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("printUsage missing %q\nfull:\n%s", want, out)
 		}
 	}
-	if strings.Contains(out, "Agentic Workflow Orchestrator") {
-		t.Errorf("printUsage still advertises legacy product title:\n%s", out)
-	}
 	if strings.Contains(out, "Commands:") {
 		t.Errorf("printUsage must not introduce a Commands section:\n%s", out)
+	}
+	if strings.Contains(out, ".agentic-workflow") {
+		t.Errorf("printUsage must not describe the removed runtime fallback:\n%s", out)
 	}
 }
 
@@ -2357,7 +1832,7 @@ func providerNames(providers []llm.LLMProvider) []string {
 	return names
 }
 
-func TestShowProviderStartupNoticesWritesBeforeTUIWithoutForcedDelayInTests(t *testing.T) {
+func TestShowProviderStartupNoticesWritesWithoutForcedDelayInTests(t *testing.T) {
 	var out bytes.Buffer
 	showProviderStartupNotices(&out, []string{"Provider codex is not configured: not logged in. Starting with claude only."}, 0)
 	if got := out.String(); got != "Provider codex is not configured: not logged in. Starting with claude only.\n" {
@@ -2365,34 +1840,29 @@ func TestShowProviderStartupNoticesWritesBeforeTUIWithoutForcedDelayInTests(t *t
 	}
 }
 
-// TestOverrideColorProfileForcesANSI256InAppleTerminal guards the workaround
-// for macOS Terminal.app: when TERM_PROGRAM=Apple_Terminal we force the
-// bubbletea renderer to ANSI256, overriding the user's COLORTERM env var
-// (commonly set to "truecolor" by Neovim/tmux tutorials). Terminal.app
-// silently drops 24-bit escapes, so without the override the TUI renders as
-// default foreground.
-func TestOverrideColorProfileForcesANSI256InAppleTerminal(t *testing.T) {
-	t.Setenv("TERM_PROGRAM", "Apple_Terminal")
-	t.Setenv("COLORTERM", "truecolor") // user lie that we're overriding
-
-	profile, ok := overrideColorProfile()
-	if !ok {
-		t.Fatal("expected override to be applied for Apple_Terminal")
+func TestShouldInterruptRunningOnStartup(t *testing.T) {
+	tests := []struct {
+		name               string
+		recoveryScanOK     bool
+		recoveryItemCount  int
+		activeSessionCount int
+		want               bool
+	}{
+		{name: "no recovery work", recoveryScanOK: true, want: true},
+		{name: "orphan needs recovery", recoveryScanOK: true, recoveryItemCount: 1},
+		{name: "live session was restored", recoveryScanOK: true, activeSessionCount: 1},
+		{name: "recovery scan failed"},
 	}
-	if profile != colorprofile.ANSI256 {
-		t.Errorf("profile = %v, want ANSI256", profile)
-	}
-}
 
-// TestOverrideColorProfileLeavesOtherTerminalsAlone ensures iTerm2 / WezTerm /
-// Ghostty / etc. continue receiving full 24-bit color via bubbletea's normal
-// auto-detection.
-func TestOverrideColorProfileLeavesOtherTerminalsAlone(t *testing.T) {
-	for _, term := range []string{"iTerm.app", "WezTerm", "ghostty", "vscode", ""} {
-		t.Run(term, func(t *testing.T) {
-			t.Setenv("TERM_PROGRAM", term)
-			if _, ok := overrideColorProfile(); ok {
-				t.Errorf("TERM_PROGRAM=%q should not trigger an override", term)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := shouldInterruptRunningOnStartup(
+				tt.recoveryScanOK,
+				tt.recoveryItemCount,
+				tt.activeSessionCount,
+			)
+			if got != tt.want {
+				t.Fatalf("shouldInterruptRunningOnStartup() = %t, want %t", got, tt.want)
 			}
 		})
 	}

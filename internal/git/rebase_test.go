@@ -139,10 +139,23 @@ func TestRebase_ConflictAborts(t *testing.T) {
 func TestPRBaseBranch_NoGH(t *testing.T) {
 	t.Parallel()
 
-	// PRBaseBranch returns "" when gh is unavailable or URL is invalid
+	// PRBaseBranch returns "" when the URL cannot be parsed as a PR URL.
 	result := PRBaseBranch("/nonexistent", "https://example.com/not-a-pr")
 	if result != "" {
 		t.Errorf("expected empty string, got %q", result)
+	}
+}
+
+func TestPRBaseBranchReturnsBaseRefAndEmptyOnError(t *testing.T) {
+	fake := testutil.InstallFakeGitHubAPI(t)
+	fake.HandleJSON("/repos/acme/widgets/pulls/7", 200, `{"base":{"ref":"develop"}}`)
+	fake.HandleJSON("/repos/acme/widgets/pulls/8", 404, `{"message":"Not Found"}`)
+
+	if got := PRBaseBranch("/nonexistent", "https://github.com/acme/widgets/pull/7"); got != "develop" {
+		t.Errorf("PRBaseBranch() = %q, want %q", got, "develop")
+	}
+	if got := PRBaseBranch("/nonexistent", "https://github.com/acme/widgets/pull/8"); got != "" {
+		t.Errorf("PRBaseBranch() = %q, want empty string on API error", got)
 	}
 }
 

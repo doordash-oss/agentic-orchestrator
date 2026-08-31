@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -28,6 +29,8 @@ import (
 
 type RuntimeServer struct {
 	baseURL   string
+	policy    string
+	wildcard  bool
 	startedAt time.Time
 	srv       *http.Server
 	broker    *eventBroker
@@ -39,27 +42,49 @@ func Start(ctx context.Context, opts Options) (*RuntimeServer, error) {
 		return nil, errors.New("server auth token is required")
 	}
 	startedAt := time.Now().UTC()
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	res, err := ResolveListen(opts.ListenAddr)
 	if err != nil {
-		return nil, fmt.Errorf("listen on loopback: %w", err)
+		return nil, err
+	}
+	policy := res.Policy
+	if opts.RuntimePolicy != "" {
+		policy = opts.RuntimePolicy
+	}
+	ln, err := net.Listen("tcp", res.BindAddr)
+	if err != nil {
+		return nil, fmt.Errorf("listen on %s: %w", res.BindAddr, err)
 	}
 	baseURL := "http://" + ln.Addr().String()
+	if policy == CompatibilityNetworkRuntimePolicy {
+		// Advertise the resolved host (the primary interface address for
+		// wildcard binds), never the wildcard bind address itself.
+		tcpAddr, ok := ln.Addr().(*net.TCPAddr)
+		if !ok {
+			_ = ln.Close()
+			return nil, fmt.Errorf("listen on %s: unexpected address type %T", res.BindAddr, ln.Addr())
+		}
+		baseURL = "http://" + net.JoinHostPort(res.AdvertiseHost, strconv.Itoa(tcpAddr.Port))
+	}
 	handler := newAPIHandler(HandlerOptions{
-		Runtime:         opts.Runtime,
-		LaunchPolicy:    opts.LaunchPolicy,
-		StartedAt:       startedAt,
-		Owner:           opts.Owner,
-		AuthToken:       opts.AuthToken,
-		Features:        opts.Features,
-		FeatureStore:    opts.FeatureStore,
-		Freshness:       opts.Freshness,
-		Config:          opts.Config,
-		Registry:        opts.Registry,
-		Sessions:        opts.Sessions,
-		Events:          opts.Events,
-		DomainEvents:    opts.DomainEvents,
-		Mutations:       opts.Mutations,
-		RequestShutdown: opts.RequestShutdown,
+		Runtime:                     opts.Runtime,
+		LaunchPolicy:                opts.LaunchPolicy,
+		StartedAt:                   startedAt,
+		Owner:                       opts.Owner,
+		AuthToken:                   opts.AuthToken,
+		Name:                        opts.Name,
+		Features:                    opts.Features,
+		FeatureStore:                opts.FeatureStore,
+		Freshness:                   opts.Freshness,
+		Config:                      opts.Config,
+		Registry:                    opts.Registry,
+		Sessions:                    opts.Sessions,
+		Events:                      opts.Events,
+		DomainEvents:                opts.DomainEvents,
+		Mutations:                   opts.Mutations,
+		PersistProviderModelCatalog: opts.PersistProviderModelCatalog,
+		InitGitRepository:           opts.InitGitRepository,
+		Worktrees:                   opts.Worktrees,
+		RuntimePolicy:               policy,
 	})
 	httpServer := &http.Server{
 		Handler: handler.routes(),
@@ -67,14 +92,22 @@ func Start(ctx context.Context, opts Options) (*RuntimeServer, error) {
 		// would cap the whole connection lifetime, killing long-lived SSE
 		// streams (/api/v1/events, /sessions/{id}/output/stream). Mutation
 		// bodies are still bounded — decodeMutationJSON wraps r.Body in
-		// http.MaxBytesReader(MaxMutationBodyBytes) — so an
-		// unbounded-body-read DoS isn't reintroduced by this tradeoff.
+		// http.MaxBytesReader(MaxMutationBodyBytes) and the upload route caps
+		// per kind via http.MaxBytesReader — so an unbounded-body-read DoS
+		// isn't reintroduced by this tradeoff.
 		ReadHeaderTimeout: 5 * time.Second,
 		WriteTimeout:      0,
 		IdleTimeout:       30 * time.Second,
 	}
+	if handler.uploads != nil {
+		// Reap orphaned staged uploads: once at startup, then hourly until the
+		// server lifetime context ends.
+		go handler.uploads.sweepLoop(ctx)
+	}
 	s := &RuntimeServer{
 		baseURL:   baseURL,
+		policy:    policy,
+		wildcard:  res.Wildcard,
 		startedAt: startedAt,
 		srv:       httpServer,
 		broker:    handler.broker,
@@ -87,7 +120,15 @@ func Start(ctx context.Context, opts Options) (*RuntimeServer, error) {
 		}
 		s.done <- err
 	}()
-	if err := waitForHealth(ctx, baseURL, opts.AuthToken); err != nil {
+	healthURL := baseURL
+	if res.Wildcard {
+		// Wait via loopback: the wildcard bind answers there regardless of
+		// which interface address is advertised.
+		if tcpAddr, ok := ln.Addr().(*net.TCPAddr); ok {
+			healthURL = "http://" + net.JoinHostPort("127.0.0.1", strconv.Itoa(tcpAddr.Port))
+		}
+	}
+	if err := waitForHealth(ctx, healthURL, opts.AuthToken); err != nil {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
 		_ = s.Close(shutdownCtx)
@@ -101,6 +142,24 @@ func (s *RuntimeServer) BaseURL() string {
 		return ""
 	}
 	return s.baseURL
+}
+
+// RuntimePolicy reports the declared runtime policy selected from the
+// resolved listen address (loopback or network).
+func (s *RuntimeServer) RuntimePolicy() string {
+	if s == nil {
+		return ""
+	}
+	return s.policy
+}
+
+// WildcardBind reports whether the server binds all local interfaces, in
+// which case BaseURL advertises the resolved primary interface address.
+func (s *RuntimeServer) WildcardBind() bool {
+	if s == nil {
+		return false
+	}
+	return s.wildcard
 }
 
 func (s *RuntimeServer) StartedAt() time.Time {

@@ -184,12 +184,12 @@ func writeFeatureSummaryImpl(input FeatureSummaryInput) error {
 }
 
 // filterEventsByActiveRun returns the subset of events that belong to the
-// active run. Pre-Phase-4 events lack the run_number field and therefore
+// active run. Earlier events may lack the run_number field and therefore
 // unmarshal with RunNumber == 0; those are treated as "run-1 lineage" only
 // when activeRun == 1 (never-rewound feature — the only run that ever
 // existed). Once the feature reaches activeRun >= 2, any RunNumber == 0
 // entry is historically ambiguous and is excluded from the active-run
-// aggregation. activeRun <= 0 is treated as "pre-Phase-1 migration" (no
+// aggregation. activeRun <= 0 is treated as an unversioned fixture (no
 // production code path hits this today because Store.Load fails fast on
 // ActiveRun == 0) and disables filtering entirely so legacy test fixtures
 // that construct inputs without setting ActiveRun keep passing.
@@ -203,7 +203,7 @@ func filterEventsByActiveRun(events []Event, activeRun int) []Event {
 		case e.RunNumber == activeRun:
 			out = append(out, e)
 		case e.RunNumber == 0 && activeRun == 1:
-			out = append(out, e) // pre-Phase-4 tolerance — run-1 lineage
+			out = append(out, e) // Missing run_number belongs to run-1 lineage.
 		}
 	}
 	return out

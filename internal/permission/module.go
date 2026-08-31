@@ -28,7 +28,7 @@ type Params struct {
 
 // Module provides the permission Store and Cache via fx.
 //
-// Both the orchestrator (via Hooks.OnFeatureCreated) and the TUI consume the
+// Both the orchestrator (via Hooks.OnFeatureCreated) and the desktop app consume the
 // Store and Cache built here. Construction ensures the global defaults file
 // exists before anything tries to read it.
 var Module = fx.Module("permission",

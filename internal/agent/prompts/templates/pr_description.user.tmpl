@@ -38,6 +38,9 @@
 Generate a pull request description using the feature, roadmap, commit messages,
 and file-level change stats above. The raw line-level diff is intentionally not
 included — rely on the commit messages and stats to describe the change.
+Use only the context supplied in this prompt. Do not request or invoke tools,
+inspect files, run commands, browse the web, delegate work, or ask for more
+information. Produce the best complete result possible from the available context.
 
 Produce:
 1. A concise title (under 70 characters) that captures the feature intent

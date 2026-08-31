@@ -46,13 +46,12 @@ const (
 	// atomically writes the three editable per-feature config axes
 	// (Models, Inquireness, Checkpoints). Carries only {Type, FeatureID};
 	// the typed before/after diff flows through observe.Observer.ConfigChanged,
-	// which owns events.jsonl emission with run_number tagging. The TUI
-	// consumes this as OrchFeatureConfigChangedMsg and reloads the feature.
+	// which owns events.jsonl emission with run_number tagging. The desktop SSE
+	// consumer treats this event as an invalidation and reloads the feature.
 	FeatureConfigChanged
-	// NeedUserInputRequired fires when an implement iteration emits
-	// `## Iteration State: NEED_USER_INPUT` and the orchestrator persists
-	// the gate artifact. The TUI consumes it to surface a `Needs user input`
-	// banner. Message carries the agent's gate summary.
+	// NeedUserInputRequired fires when deterministic verification creates a
+	// durable capability-decision gate. The desktop app consumes it to surface
+	// a `Needs user input` banner. Message carries the harness-authored summary.
 	NeedUserInputRequired
 	SetupStarted
 	SetupProgress
@@ -67,16 +66,34 @@ const (
 	// graceful shutdown. SSE consumers use it as a metadata-only signal to
 	// refresh authoritative REST snapshots during reconnect.
 	RuntimeShutdownStarted
+	// RelationshipChildCreated fires after a direct child is durably visible.
+	RelationshipChildCreated
+	// RelationshipIntegrationChanged fires after durable integration state changes.
+	RelationshipIntegrationChanged
+	// RelationshipClosed fires after the child outcome and close time are durable.
+	RelationshipClosed
+	// RelationshipDiscardProgress fires after durable discard progress changes.
+	RelationshipDiscardProgress
+	// RelationshipCascadeProgress fires after a cascade durably settles into
+	// cleanup_pending or attention_required while both records remain visible.
+	RelationshipCascadeProgress
+	// RelationshipCascadeDeleted fires after cascade completion removed both records.
+	RelationshipCascadeDeleted
 )
 
 // Event is a typed domain event emitted by the orchestrator.
 type Event struct {
 	Type      EventType
 	FeatureID string
-	Feature   *feature.Feature // non-nil for FeatureCreated
-	Phase     feature.Phase    // set for phase-related events
-	Error     error            // set for failure events
-	Message   string           // human-readable detail
+	// ParentID and ChildID are both required on relationship event types.
+	// They identify one relationship resource whose parent/child read models
+	// must refresh as a single client bundle.
+	ParentID string
+	ChildID  string
+	Feature  *feature.Feature // non-nil for FeatureCreated
+	Phase    feature.Phase    // set for phase-related events
+	Error    error            // set for failure events
+	Message  string           // human-readable detail
 
 	RunNumber   int
 	Attempt     int

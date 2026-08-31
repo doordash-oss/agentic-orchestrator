@@ -12,17 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package orchestrator — lifecycle_delegates.go exposes thin feature-lifecycle
-// pass-throughs that the TUI can call in place of direct featureManager.*
-// method invocations from Update-dispatched handlers. Each method wraps the
-// corresponding ports.FeatureLifecycle call with no additional logic so that
-// the existing TUI tea.Cmd dispatch pattern can continue to route events.
-//
-// Update-dispatched TUI code paths route feature lifecycle mutations through
-// this file rather than calling featureManager.* directly. The lifecycle
-// transitions themselves continue to live in feature.Manager; the orchestrator
-// owns the call site so observer emission and cross-cutting concerns can hook
-// through a single chokepoint.
+// Package orchestrator exposes feature-lifecycle operations through a stable
+// boundary instead of allowing clients to call feature.Manager directly.
+// The orchestrator is the mutation chokepoint: several delegates
+// intentionally enforce relationship guards and other cross-cutting behavior
+// before delegating to the underlying ports.FeatureLifecycle call. The
+// transitions remain in feature.Manager; the orchestrator owns the call sites
+// so observer emission, relationship guards, and cross-cutting concerns share
+// one chokepoint.
 package orchestrator
 
 import (
@@ -35,52 +32,9 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
-
-// AdvanceRoadmapPhase advances the current roadmap phase.
-func (o *Orchestrator) AdvanceRoadmapPhase(featureID string) error {
-	return o.deps.Lifecycle.AdvanceRoadmapPhase(featureID)
-}
-
-// StartRoadmapPhaseImplementation transitions the feature to implementing for
-// the current roadmap phase.
-func (o *Orchestrator) StartRoadmapPhaseImplementation(featureID string) error {
-	return o.deps.Lifecycle.StartRoadmapPhaseImplementation(featureID)
-}
-
-// StartPlanning transitions the feature into StatusPlanning.
-func (o *Orchestrator) StartPlanning(featureID string) error {
-	return o.deps.Lifecycle.StartPlanning(featureID)
-}
-
-// CompletePlanning transitions the feature out of StatusPlanning into
-// StatusImplementReady.
-func (o *Orchestrator) CompletePlanning(featureID string) error {
-	return o.deps.Lifecycle.CompletePlanning(featureID)
-}
-
-// CompleteImplementation transitions the feature out of StatusImplementing
-// into StatusReviewPassed.
-func (o *Orchestrator) CompleteImplementation(featureID string) error {
-	return o.deps.Lifecycle.CompleteImplementation(featureID)
-}
-
-// MarkCodeReady transitions the feature into StatusCodeReady.
-func (o *Orchestrator) MarkCodeReady(featureID string) error {
-	return o.deps.Lifecycle.MarkCodeReady(featureID)
-}
-
-// NeedsPlanReview sets the StatusPlanNeedsReview gate.
-func (o *Orchestrator) NeedsPlanReview(featureID string) error {
-	return o.deps.Lifecycle.NeedsPlanReview(featureID)
-}
-
-// ClearAddressingReviews clears the AddressingReviews flag and resets the
-// Review cycle pipeline.
-func (o *Orchestrator) ClearAddressingReviews(featureID string) error {
-	return o.deps.Lifecycle.ClearAddressingReviews(featureID)
-}
 
 // SetTotalRoadmapPhases persists the phase count after the first planning
 // loop writes the roadmap artifact.
@@ -120,8 +74,8 @@ func (o *Orchestrator) ResetPlanStatusForRoadmap(featureID string, budgetBump in
 
 // RecordRoadmapRejection writes a CHANGES_REQUESTED attempt-meta plus a
 // validation-feedback.md file for the latest planning attempt when the user
-// rejects a roadmap. Best-effort; errors are swallowed to avoid blocking the
-// TUI retry path.
+// rejects a roadmap. Best-effort; errors are swallowed so a retry is not
+// blocked by diagnostic bookkeeping.
 func (o *Orchestrator) RecordRoadmapRejection(featureID, feedback string) {
 	f, err := o.deps.Lifecycle.Get(featureID)
 	if err != nil {
@@ -134,9 +88,6 @@ func (o *Orchestrator) RecordRoadmapRejection(featureID, feedback string) {
 	}
 
 	roadmapDir := agent.RoadmapDir(baseDir, f)
-	if f.RefactorPrefix() != "" {
-		roadmapDir = fmt.Sprintf("%s/%s/roadmap", agent.ActiveRunDir(baseDir, f), f.RefactorPrefix())
-	}
 
 	latestAttempt := agent.LatestCompletedPlanAttempt(roadmapDir)
 	if latestAttempt <= 0 {
@@ -200,7 +151,7 @@ func (o *Orchestrator) TryCompletePublish(featureID string) (bool, error) {
 // terminal transition. Used by explicit mark-done paths where the feature
 // reached a terminal state without the orchestrator's publish pipeline.
 func (o *Orchestrator) MarkDone(featureID string) error {
-	if err := o.deps.Store.Modify(featureID, func(f *feature.Feature) error {
+	if err := o.guardedModify(featureID, MutationMarkDone, func(f *feature.Feature) error {
 		return f.Transition(feature.StatusDone)
 	}); err != nil {
 		return err
@@ -239,8 +190,8 @@ func (o *Orchestrator) MarkPublished(featureID, prURL string) error {
 	return nil
 }
 
-// CommitRoadmapPhase commits the completed roadmap phase via the Publisher
-// port (git.CommitAll under the hood) across every repo in the feature.
+// CommitRoadmapPhase commits the completed roadmap phase across every repo in
+// the feature.
 // Errors on individual repos are swallowed — this is a best-effort pipeline
 // step whose failure should not block the lifecycle.
 func (o *Orchestrator) CommitRoadmapPhase(featureID string, phase int) error {
@@ -261,34 +212,17 @@ func (o *Orchestrator) CommitRoadmapPhase(featureID string, phase int) error {
 		if repo.WorktreePath == "" {
 			continue
 		}
-		_ = o.deps.Publisher.CommitAll(repo.WorktreePath, commitMsg)
+		_ = git.CommitAll(repo.WorktreePath, commitMsg)
 	}
 	return nil
 }
 
-// RemoveRepoCycle removes a repo cycle entry without firing failure events.
-// Used by the TUI's restartRepoCycleMsg flow when the user aborts a cycle
-// restart and wants the stale cycle cleared so the cycle selector re-opens.
-func (o *Orchestrator) RemoveRepoCycle(featureID, repoName string) error {
-	return o.deps.Lifecycle.RemoveRepoCycle(featureID, repoName)
-}
-
-// TransitionTo transitions a feature to the given status. The target status is
-// determined by the caller (the TUI walks the restart/rewind decision tree
-// based on current phase + current status). Exposing the transition here
-// keeps invariant 1 satisfied — app.go never calls featureManager.Transition
-// directly.
+// TransitionTo transitions a feature to a caller-selected status while keeping
+// lifecycle mutations behind the orchestrator boundary.
 func (o *Orchestrator) TransitionTo(featureID string, status feature.Status) error {
 	return o.deps.Store.Modify(featureID, func(f *feature.Feature) error {
 		return f.Transition(status)
 	})
-}
-
-// ClearRepoCycles removes every RepoCycles entry on a feature without firing
-// failure events. Used by stopFeatureCmd's Published-with-cycles path so the
-// TUI never touches featureManager mutators directly.
-func (o *Orchestrator) ClearRepoCycles(featureID string) error {
-	return o.deps.Lifecycle.ClearRepoCycles(featureID)
 }
 
 // RetryPhase clears feature-level error/gate state so the unified
@@ -300,34 +234,16 @@ func (o *Orchestrator) ClearRepoCycles(featureID string) error {
 // the plan can't be read (best-effort recovery — the next orchestrator
 // cycle's PhaseScope call will revalidate before launching the loop).
 func (o *Orchestrator) RetryPhase(featureID string) error {
+	o.relationshipMu.RLock()
+	defer o.relationshipMu.RUnlock()
+	if err := o.RelationshipGuard(featureID, MutationRetry); err != nil {
+		return err
+	}
+	if err := o.checkChildExecution(featureID); err != nil {
+		return err
+	}
 	repoNames := o.phaseDeclaredRepos(featureID)
 	return o.deps.Lifecycle.RetryPhase(featureID, repoNames)
-}
-
-// FailRepoImplementation marks one repo as failed. Phase-atomic failures
-// land via agent.AtomicPhaseStamp(PhaseOutcomeFailed); this delegate
-// survives for cycle-cleanup callers (a single-repo-cycle failure does not
-// fail the whole phase).
-func (o *Orchestrator) FailRepoImplementation(featureID, repoName, errMsg string) error {
-	return o.deps.Lifecycle.FailRepoImplementation(featureID, repoName, errMsg)
-}
-
-func (o *Orchestrator) RecordRebasePreflightFailure(featureID, repoName string, cause error) error {
-	if cause == nil {
-		return nil
-	}
-	msg := "rebase preflight: " + cause.Error()
-	if err := o.deps.Lifecycle.FailRepoImplementation(featureID, repoName, msg); err != nil {
-		return fmt.Errorf("record rebase preflight failure: %w", err)
-	}
-	o.emitEvent(ports.Event{
-		Type:      ports.RepoStatusChanged,
-		FeatureID: featureID,
-		RepoName:  repoName,
-		Message:   msg,
-		Error:     cause,
-	})
-	return nil
 }
 
 // phaseDeclaredRepos returns the phase-declared repo subset by running
@@ -352,8 +268,7 @@ func (o *Orchestrator) phaseDeclaredRepos(featureID string) []string {
 }
 
 // ClearPendingHelpAndPermissions resets pending help messages and permission
-// queue entries on a feature. Used by stopFeatureCmd's test-only fallback so
-// the TUI does not Store.Modify directly.
+// queue entries without exposing Store.Modify to clients.
 func (o *Orchestrator) ClearPendingHelpAndPermissions(featureID string) error {
 	return o.deps.Store.Modify(featureID, func(f *feature.Feature) error {
 		for i := range f.HelpQueue {
@@ -380,14 +295,14 @@ func (o *Orchestrator) SetDesignReady(featureID string) error {
 	})
 }
 
-// UpgradePipeline delegates to Lifecycle.UpgradePipeline for TUI rewind flows.
-func (o *Orchestrator) UpgradePipeline(featureID string, profile feature.PipelineProfile) error {
-	return o.deps.Lifecycle.UpgradePipeline(featureID, profile)
-}
-
 // RewindToPhase delegates to Lifecycle.RewindToPhase. Returns the effective
 // target phase and warnings computed during the rewind.
 func (o *Orchestrator) RewindToPhase(featureID string, targetPhase feature.Phase) ([]string, feature.Phase, error) {
+	o.relationshipMu.RLock()
+	defer o.relationshipMu.RUnlock()
+	if err := o.RelationshipGuard(featureID, MutationRewind); err != nil {
+		return nil, targetPhase, err
+	}
 	sourceRun := o.currentRunNumber(featureID)
 	warnings, effectiveTarget, err := o.deps.Lifecycle.RewindToPhase(featureID, targetPhase)
 	if err != nil {
@@ -401,6 +316,18 @@ func (o *Orchestrator) RewindToPhase(featureID string, targetPhase feature.Phase
 // RewindWithRequest delegates to Lifecycle.RewindWithRequest for rewind
 // flows that carry additional request fields such as a roadmap phase.
 func (o *Orchestrator) RewindWithRequest(featureID string, request feature.RewindRequest) ([]string, feature.Phase, error) {
+	o.relationshipMu.RLock()
+	defer o.relationshipMu.RUnlock()
+	return o.rewindWithRequestLocked(featureID, request)
+}
+
+// rewindWithRequestLocked is the lock-held rewind entry point. Callers must
+// hold the relationship read lock so the guard check and the rewind execute
+// atomically with any preceding mutations (e.g. pipeline upgrade).
+func (o *Orchestrator) rewindWithRequestLocked(featureID string, request feature.RewindRequest) ([]string, feature.Phase, error) {
+	if err := o.RelationshipGuard(featureID, MutationRewind); err != nil {
+		return nil, 0, err
+	}
 	sourceRun := o.currentRunNumber(featureID)
 	warnings, effectiveTarget, err := o.deps.Lifecycle.RewindWithRequest(featureID, request)
 	if err != nil {
@@ -409,6 +336,27 @@ func (o *Orchestrator) RewindWithRequest(featureID string, request feature.Rewin
 	o.fireFeatureRewoundHook(featureID, request, effectiveTarget, sourceRun)
 	o.emitEventBlocking(ports.Event{Type: ports.FeatureRewound, FeatureID: featureID, Phase: effectiveTarget})
 	return warnings, effectiveTarget, nil
+}
+
+// RewindWithUpgrade performs an optional pipeline upgrade, session stop, and
+// rewind as one atomic relationship-guarded operation. The relationship guard
+// check, pipeline upgrade, session stop, and rewind all execute under the
+// same read lock so a concurrent refactor launch cannot interleave a child
+// creation between the guard check and the mutations. Callers that need a
+// plain rewind (no pipeline upgrade) should use RewindWithRequest.
+func (o *Orchestrator) RewindWithUpgrade(featureID string, request feature.RewindRequest, upgradePipeline feature.PipelineProfile) ([]string, feature.Phase, error) {
+	o.relationshipMu.RLock()
+	defer o.relationshipMu.RUnlock()
+	if err := o.RelationshipGuard(featureID, MutationRewind); err != nil {
+		return nil, 0, err
+	}
+	if upgradePipeline != "" {
+		if err := o.deps.Lifecycle.UpgradePipeline(featureID, upgradePipeline); err != nil {
+			return nil, 0, err
+		}
+	}
+	o.StopFeatureSessions(featureID)
+	return o.rewindWithRequestLocked(featureID, request)
 }
 
 func (o *Orchestrator) currentRunNumber(featureID string) int {
@@ -435,14 +383,19 @@ func (o *Orchestrator) fireFeatureRewoundHook(featureID string, request feature.
 	o.hooks.OnFeatureRewound(featureID, request, effectiveTarget, sourceRun, newRun)
 }
 
-// CleanWorktree delegates to Lifecycle.CleanWorktree for TUI clean-worktree
-// actions.
+// CleanWorktree delegates to Lifecycle.CleanWorktree for clean-worktree
+// actions. The relationship guard ensures cleanup is never performed on an
+// active child or while a parent has an active child.
 func (o *Orchestrator) CleanWorktree(featureID string) error {
+	o.relationshipMu.RLock()
+	defer o.relationshipMu.RUnlock()
+	if err := o.RelationshipGuard(featureID, MutationCleanup); err != nil {
+		return err
+	}
 	return o.deps.Lifecycle.CleanWorktree(featureID)
 }
 
-// SaveFeatureSummary persists a feature's summary field through Store.Modify
-// so the TUI never calls Store.Save directly from an Update-dispatched path.
+// SaveFeatureSummary persists a feature summary without exposing Store.Save.
 func (o *Orchestrator) SaveFeatureSummary(featureID, summary string) error {
 	return o.deps.Store.Modify(featureID, func(f *feature.Feature) error {
 		f.Summary = summary
@@ -452,9 +405,14 @@ func (o *Orchestrator) SaveFeatureSummary(featureID, summary string) error {
 
 // MergeFeatureLocal commits any uncommitted changes in each repo's worktree
 // and merges the feature branch into its base branch locally, then marks the
-// feature Done. Used by mergeLocalCmd for non-publishable features. Errors
-// are surfaced per-repo so the TUI can show a diagnostic.
+// feature Done unless it already is. Errors identify the affected repository
+// so clients can present a useful diagnostic.
 func (o *Orchestrator) MergeFeatureLocal(featureID string) error {
+	o.relationshipMu.RLock()
+	defer o.relationshipMu.RUnlock()
+	if err := o.RelationshipGuard(featureID, MutationMerge); err != nil {
+		return err
+	}
 	f, err := o.deps.Lifecycle.Get(featureID)
 	if err != nil {
 		return fmt.Errorf("load feature: %w", err)
@@ -474,82 +432,59 @@ func (o *Orchestrator) MergeFeatureLocal(featureID string) error {
 			branch = "feature/" + f.Slug
 		}
 		baseBranch := repo.BaseBranch
-		if baseBranch == "" && o.deps.Branch != nil {
-			baseBranch, _ = o.deps.Branch.DefaultBranch(repo.Path)
+		if baseBranch == "" {
+			baseBranch = git.DefaultBranch(repo.Path)
 		}
 
 		// Commit any uncommitted changes before merging.
-		if o.deps.Publisher != nil {
-			hasChanges, hcErr := o.deps.Publisher.HasUncommittedChanges(repoPath)
-			if hcErr == nil && hasChanges {
-				if err := o.deps.Publisher.CommitAll(repoPath, "Final changes before merge"); err != nil {
-					return fmt.Errorf("%s: commit failed: %w", repo.Name, err)
-				}
+		if git.HasUncommittedChanges(repoPath) {
+			if err := git.CommitAll(repoPath, "Final changes before merge"); err != nil {
+				return fmt.Errorf("%s: commit failed: %w", repo.Name, err)
 			}
 		}
 
-		if o.deps.Rebaser != nil {
-			if err := o.deps.Rebaser.MergeFeatureBranch(repo.Path, branch, baseBranch); err != nil {
-				return fmt.Errorf("%s: %w", repo.Name, err)
-			}
+		if err := git.MergeFeatureBranch(repo.Path, branch, baseBranch); err != nil {
+			return fmt.Errorf("%s: %w", repo.Name, err)
 		}
 	}
 
+	// A feature merged again after reaching Done has nothing left to transition.
+	if f.Status == feature.StatusDone {
+		return nil
+	}
 	return o.deps.Lifecycle.MarkDone(featureID)
 }
 
-// SetRepoPublished persists a successful per-repo publish. Thin delegate so
-// TUI paths (publishExecuteResultMsg) can stop mutating featureManager
-// directly.
-func (o *Orchestrator) SetRepoPublished(featureID, repoName, prURL string) error {
-	return o.deps.Lifecycle.SetRepoPublished(featureID, repoName, prURL)
-}
-
-// SetRepoPublishError records a per-repo publish failure without changing the
-// repo's status. Thin delegate so TUI paths (publishExecuteResultMsg) can stop
-// mutating featureManager directly.
-func (o *Orchestrator) SetRepoPublishError(featureID, repoName, errMsg string) error {
-	return o.deps.Lifecycle.SetRepoPublishError(featureID, repoName, errMsg)
-}
-
 // RecordPublishUIFailure marks a single-repo feature failed when the publish
-// UI surfaces an error that has already been emitted by the orchestrator's
-// publish pipeline. The TUI has no per-repo fan-out to route through, so this
-// method fires the FeatureFailed hook with FailureInfrastructure. Iteration 11
-// consolidates this path into a typed method so the scan-guard MarkFailed cap
-// of ≤ 2 can be enforced.
+// UI surfaces an error already emitted by the publish pipeline. This typed
+// boundary fires the FeatureFailed hook with FailureInfrastructure when there
+// is no per-repository fan-out path.
 func (o *Orchestrator) RecordPublishUIFailure(featureID, errMsg string) error {
 	return o.markFailedWithEvent(featureID, feature.FailureInfrastructure, errMsg)
 }
 
 // ReportMissingArtifactFailure marks a feature failed when a phase runner
 // signalled success but the expected artifact file is absent. The check lives
-// at the SDK / session bridge so the orchestrator's phase-completion handler
-// cannot see it; this method lets the TUI route the failure through a typed
-// orchestrator call instead of calling MarkFailed directly.
+// at the SDK/session bridge so the phase-completion handler cannot see it; this
+// method routes the failure through a typed boundary instead of MarkFailed.
 func (o *Orchestrator) ReportMissingArtifactFailure(featureID, errMsg string) error {
 	return o.markFailedWithEvent(featureID, feature.FailureMissingArtifact, errMsg)
 }
 
-// ReportProtocolViolation marks a feature failed when a session ended without
-// the universal completion marker or produced artifacts that violate its role
-// contract.
+// ReportProtocolViolation marks a feature failed when a root turn violates the
+// completion protocol or produces artifacts that violate its role contract.
 func (o *Orchestrator) ReportProtocolViolation(featureID, errMsg string) error {
 	return o.markFailedWithEvent(featureID, feature.FailureProtocolViolation, errMsg)
 }
 
-// CommitUncommittedForPublish commits any uncommitted changes in each repo's
-// worktree so the Publish UI can show a complete commit log. Ports the
-// git.CommitAll step that previously lived inline in transitionToPublish.
-// Errors on individual repos are swallowed — this is a best-effort
-// presentation helper whose failure should not block the lifecycle.
+// CommitUncommittedForPublish commits uncommitted changes in each repository
+// so publish views can show a complete commit log. Errors on individual
+// repositories are swallowed because this presentation helper must not block
+// the lifecycle.
 func (o *Orchestrator) CommitUncommittedForPublish(featureID string) error {
 	f, err := o.deps.Lifecycle.Get(featureID)
 	if err != nil {
 		return fmt.Errorf("load feature: %w", err)
-	}
-	if o.deps.Publisher == nil {
-		return nil
 	}
 	for i := range f.Repos {
 		repo := &f.Repos[i]
@@ -560,11 +495,10 @@ func (o *Orchestrator) CommitUncommittedForPublish(featureID string) error {
 		if workDir == "" {
 			continue
 		}
-		hasChanges, hcErr := o.deps.Publisher.HasUncommittedChanges(workDir)
-		if hcErr != nil || !hasChanges {
+		if !git.HasUncommittedChanges(workDir) {
 			continue
 		}
-		_ = o.deps.Publisher.CommitAll(workDir, f.Name)
+		_ = git.CommitAll(workDir, f.Name)
 	}
 	return nil
 }
@@ -583,20 +517,14 @@ type UpdateFeatureConfigInput struct {
 	AutomaticReviewMode feature.AutomaticReviewMode
 }
 
-// ErrFeatureNotQuiescent is kept for compatibility with older callers that
-// matched the former idle-only edit rejection. UpdateFeatureConfig no longer
-// returns it: feature-level config edits are persisted for any feature state,
-// and active sessions pick them up on the next phase or restart.
-var ErrFeatureNotQuiescent = errors.New("feature is not in a quiescent state")
-
-// UpdateFeatureConfig atomically writes the editable config axes. Same
-// idiom as ApplyRefactorPipeline — Store.Modify handles locking + atomic
+// UpdateFeatureConfig atomically writes the editable config axes.
+// Store.Modify handles locking + atomic
 // write. On success, emits ports.Event{Type: FeatureConfigChanged}
 // (non-blocking) and fires hooks.OnFeatureConfigChanged(before, after) so the
 // observer writes a feature.config_changed audit entry.
 //
 // Re-entrancy: A second call with identical inputs against an already-
-// updated feature re-writes the same three fields to the same values, emits a
+// updated feature re-writes the same editable fields to the same values, emits a
 // second audit + event, and returns nil. This is acceptable — the audit trail
 // explicitly records "no semantic change" via before == after.
 // Crash recovery: Store.Modify performs an atomic unique-temp + rename,
@@ -606,6 +534,9 @@ var ErrFeatureNotQuiescent = errors.New("feature is not in a quiescent state")
 func (o *Orchestrator) UpdateFeatureConfig(featureID string, input UpdateFeatureConfigInput) error {
 	var before, after feature.ConfigSnapshot
 	err := o.deps.Store.Modify(featureID, func(f *feature.Feature) error {
+		if f.IsChild() && !f.IsActiveChild() {
+			return feature.ErrChildRelationshipClosed
+		}
 		before = feature.ConfigSnapshot{
 			Models:              f.Models,
 			Effort:              f.Effort,
@@ -641,8 +572,8 @@ func (o *Orchestrator) UpdateFeatureConfig(featureID string, input UpdateFeature
 }
 
 // EnterReviewGate transitions a feature into the review-needs state for the
-// given target phase and records the pending review. Used by triggerReviewGateCmd
-// so the gate bookkeeping lives in the orchestrator rather than the TUI.
+// given target phase and records the pending review so gate bookkeeping remains
+// inside the orchestrator.
 func (o *Orchestrator) EnterReviewGate(featureID string, targetPhase feature.Phase) error {
 	return o.deps.Store.Modify(featureID, func(f *feature.Feature) error {
 		enterReviewGateFeatureState(f, targetPhase)
@@ -676,12 +607,9 @@ func clearPendingFeatureAttention(f *feature.Feature) {
 }
 
 // ExtendFailedPhaseBudget clears failure bookkeeping on a failed feature and
-// bumps iteration budgets by the caller-supplied deltas. The TUI reads the
-// configured defaults from feature.Manager.Config (read-only) and passes them
-// in so the orchestrator port layer stays free of config plumbing. Used by
-// restartPhaseCmd's Failed branch so the TUI never mutates f.MaxIterations /
-// f.MaxPlanIterations directly. Deltas <= 0 are ignored, which matches the
-// legacy behavior where missing config meant no bump.
+// bumps iteration budgets by caller-supplied deltas. The caller reads configured
+// defaults and passes them in so the orchestrator boundary stays free of config
+// plumbing. Deltas <= 0 are ignored.
 func (o *Orchestrator) ExtendFailedPhaseBudget(featureID string, maxIterationsDelta, maxPlanIterationsDelta int) error {
 	return o.deps.Store.Modify(featureID, func(f *feature.Feature) error {
 		if f.Status != feature.StatusFailed {
@@ -699,125 +627,17 @@ func (o *Orchestrator) ExtendFailedPhaseBudget(featureID string, maxIterationsDe
 	})
 }
 
-// RepoCycleRestart describes one review-comments repo cycle that needs to be
-// re-launched after a restart. The TUI consumes these and dispatches a
-// restartRepoCycleMsg for each.
-type RepoCycleRestart struct {
-	RepoName    string
-	CycleType   feature.RepoCycleType
-	PlanContent string
-}
-
-// RefactorRestart describes the single refactor cycle that needs to be
-// re-launched after a restart. Refactor cycles are limited to one per feature
-// so at most one instance is returned.
-type RefactorRestart struct {
-	RepoName string
-	Prompt   string
-}
-
-// CollectAndClearRepoCycleRestarts snapshots the feature's RepoCycles map,
-// reads each review-comments cycle's plan file from disk, clears the cycle
-// state, and returns restart descriptors the TUI must dispatch. At most one
-// refactor cycle is returned (only one refactor runs at a time).
-func (o *Orchestrator) CollectAndClearRepoCycleRestarts(featureID string) ([]RepoCycleRestart, *RefactorRestart, error) {
-	f, err := o.deps.Lifecycle.Get(featureID)
-	if err != nil {
-		return nil, nil, fmt.Errorf("load feature: %w", err)
-	}
-
-	type cycleSnapshot struct {
-		repoName  string
-		cycleType feature.RepoCycleType
-		planPath  string
-	}
-	var cycles []cycleSnapshot
-	for repoName, rc := range f.RepoCycles {
-		cycles = append(cycles, cycleSnapshot{repoName, rc.Type, rc.PlanPath})
-	}
-
-	if err := o.deps.Lifecycle.ClearRepoCycles(featureID); err != nil {
-		return nil, nil, fmt.Errorf("clear repo cycles: %w", err)
-	}
-
-	var restarts []RepoCycleRestart
-	var refactor *RefactorRestart
-	for _, c := range cycles {
-		switch c.cycleType {
-		case feature.CycleRefactor:
-			if refactor != nil {
-				// Only restart one refactor per feature — one at a time.
-				continue
-			}
-			prompt := f.RefactorPrompt
-			if prompt == "" && c.planPath != "" {
-				data, _ := os.ReadFile(c.planPath)
-				prompt = extractRefactorPromptFromPlan(string(data))
-			}
-			refactor = &RefactorRestart{
-				RepoName: c.repoName,
-				Prompt:   prompt,
-			}
-		case feature.CycleReviewComments:
-			data, _ := os.ReadFile(c.planPath)
-			restarts = append(restarts, RepoCycleRestart{
-				RepoName:    c.repoName,
-				CycleType:   c.cycleType,
-				PlanContent: string(data),
-			})
-		}
-	}
-
-	return restarts, refactor, nil
-}
-
-// extractRefactorPromptFromPlan returns the user prompt stored in a
-// refactor plan file. Matches the TUI's extractRefactorPrompt format
-// ("# Refactor: <repoName>\n\n<prompt>\n").
-func extractRefactorPromptFromPlan(content string) string {
-	if content == "" {
-		return ""
-	}
-	if idx := indexDoubleNewline(content); idx >= 0 {
-		return trimSpace(content[idx+2:])
-	}
-	return trimSpace(content)
-}
-
-func indexDoubleNewline(s string) int {
-	for i := 0; i+1 < len(s); i++ {
-		if s[i] == '\n' && s[i+1] == '\n' {
-			return i
-		}
-	}
-	return -1
-}
-
-func trimSpace(s string) string {
-	start := 0
-	for start < len(s) && (s[start] == ' ' || s[start] == '\t' || s[start] == '\n' || s[start] == '\r') {
-		start++
-	}
-	end := len(s)
-	for end > start && (s[end-1] == ' ' || s[end-1] == '\t' || s[end-1] == '\n' || s[end-1] == '\r') {
-		end--
-	}
-	return s[start:end]
-}
-
-// GateReviewContext bundles the artifact path and worktree directory the TUI
-// needs to launch a gate-review session. Returned by ResolveGateReviewContext
-// so gate-review context assembly lives inside the orchestrator and the TUI
-// stays a thin delegate. Artifact == "" signals "no artifact could be
-// resolved"; the TUI then falls back to RefreshFeaturesMsg.
+// GateReviewContext bundles the artifact path and worktree directory needed to
+// launch a gate-review session. An empty ArtifactPath means no artifact could
+// be resolved.
 type GateReviewContext struct {
 	ArtifactPath string
 	WorkDir      string
 }
 
 // RewindReviewContext bundles the artifact path, work directory, and any
-// warnings produced while resolving a rewind review. Warnings are surfaced by
-// the TUI while still allowing the review to continue on a fallback artifact.
+// warnings produced while resolving a rewind review. Callers may surface the
+// warnings while continuing the review with a fallback artifact.
 type RewindReviewContext struct {
 	ArtifactPath string
 	WorkDir      string
@@ -882,11 +702,9 @@ func (o *Orchestrator) ResolveRewindReviewContext(featureID string, targetPhase 
 }
 
 // ResolveGateReviewContext resolves the artifact path + working directory for
-// a gate-review launch. Iteration 13 moved this assembly from the TUI's
-// buildGateReviewMsg into the orchestrator so app.go stops owning the
-// target-phase → artifact-key mapping (which is business logic — it encodes
-// "the review of phase X reads the approved artifact of phase X-1"). The TUI
-// wraps the returned context in ArtifactReviewStartMsg.
+// a gate-review launch. Keeping this assembly in the orchestrator ensures
+// clients do not own the target-phase to artifact-key mapping, which encodes
+// that a phase review reads the preceding phase's approved artifact.
 func (o *Orchestrator) ResolveGateReviewContext(featureID string, targetPhase feature.Phase) (GateReviewContext, error) {
 	f, err := o.deps.Lifecycle.Get(featureID)
 	if err != nil {
@@ -907,9 +725,8 @@ func (o *Orchestrator) ResolveGateReviewContext(featureID string, targetPhase fe
 	case feature.PhaseImplement:
 		// Roadmap features at phase 0 → roadmap artifact (initial roadmap review).
 		// Roadmap features at phase N > 0 → per-phase plan artifact
-		// (phase-N-plan key routes through resolvePhaseDirForKey, which is
-		// refactor-aware via RefactorPrefix() — mirrors the TUI's
-		// startPlanReviewSessionCmd path and the cascade used by resolvePlanPath).
+		// (phase-N-plan key routes through resolvePhaseDirForKey and
+		// matches resolvePlanPath's fallback cascade).
 		// Legacy single-repo non-roadmap → generic "plan" artifact.
 		switch {
 		case f.TotalRoadmapPhases > 0 && f.CurrentRoadmapPhase == 0:
@@ -947,53 +764,46 @@ func reviewWorkDir(f *feature.Feature) string {
 // failed.
 var ErrFeatureBusy = errors.New("feature has active sessions; wait for them to finish before restarting")
 
-// RestartAction enumerates the dispatch outcomes that a successful
-// RestartPhase call returns to the TUI.
+// RestartAction enumerates the follow-up outcomes returned by RestartPhase.
 type RestartAction int
 
 const (
-	// RestartNoOp — the orchestrator transitioned state but there is no
-	// further UI dispatch to do. The TUI refreshes and exits.
+	// RestartNoOp means the orchestrator transitioned state with no follow-up.
 	RestartNoOp RestartAction = iota
 
-	// RestartDispatchPhase — the TUI should send
-	// StartPhaseMsg{FeatureID, Phase: Outcome.Phase} to advance the feature.
+	// RestartDispatchPhase requires the caller to start Outcome.Phase.
 	RestartDispatchPhase
-
-	// RestartDispatchRepoCycles — the TUI should fan out a
-	// restartRepoCycleMsg for each entry in RepoCycleRestarts and a
-	// restartRefactorCycleMsg for RefactorRestart (when non-nil).
-	RestartDispatchRepoCycles
 )
 
-// RestartOutcome describes the dispatch action the TUI should take after
-// orchestrator.RestartPhase has applied state transitions.
+// RestartOutcome describes the follow-up required after RestartPhase applies
+// its state transitions.
 type RestartOutcome struct {
-	Action            RestartAction
-	Phase             feature.Phase // meaningful only for RestartDispatchPhase
-	RepoCycleRestarts []RepoCycleRestart
-	RefactorRestart   *RefactorRestart
+	Action RestartAction
+	Phase  feature.Phase // meaningful only for RestartDispatchPhase
 }
 
 // RestartPhase is the single orchestrator entrypoint for user-initiated phase
-// restarts. Iteration 13 consolidated the decision tree that previously lived
-// in the TUI's restartPhaseCmd:
+// restarts:
 //   - Stops any active sessions (delegates to StopFeatureSessions).
 //   - On Failed features, clears the failure bookkeeping and extends the
-//     iteration budget by the caller-supplied deltas (the orchestrator's port
-//     surface does not carry config so the TUI reads Defaults and passes them).
-//   - On Published features with RepoCycles present, collects and clears the
-//     per-cycle restart descriptors and returns RestartDispatchRepoCycles
-//     (the TUI fans those out as restartRepoCycleMsg / restartRefactorCycleMsg).
+//     iteration budget by caller-supplied deltas.
 //   - Otherwise, walks the phase+status decision tree to transition the
-//     feature back to a startable status and returns RestartDispatchPhase
-//     with the phase the TUI should re-launch via StartPhaseMsg.
+//     feature back to a startable status and returns RestartDispatchPhase with
+//     the phase the caller should relaunch.
 //
 // maxIterationsDelta / maxPlanIterationsDelta are the config-derived bumps
 // used when the feature's FailureType == FailureMaxIterations (or the phase
-// is Plan). Pass 0 to skip the bump. The defaults (10 / 2) live in the TUI so
-// the port surface stays free of config plumbing.
+// is Plan). Pass 0 to skip the bump; callers supply configured defaults so the
+// orchestrator boundary stays free of config plumbing.
 func (o *Orchestrator) RestartPhase(featureID string, maxIterationsDelta, maxPlanIterationsDelta int) (RestartOutcome, error) {
+	// The relationship guard rejects parent restart while a child is active.
+	// For children, checkChildExecution enforces active relationship and
+	// execution capability before any state changes.
+	o.relationshipMu.RLock()
+	defer o.relationshipMu.RUnlock()
+	if err := o.RelationshipGuard(featureID, MutationRestart); err != nil {
+		return RestartOutcome{}, err
+	}
 	// Refuse if any session for this feature is still active. This catches the
 	// "user spammed 'r' during a stop" case: InterruptFeature is mid-loop,
 	// sessions are still draining, but the feature already shows
@@ -1008,6 +818,9 @@ func (o *Orchestrator) RestartPhase(featureID string, maxIterationsDelta, maxPla
 		}
 	}
 
+	if err := o.checkChildExecution(featureID); err != nil {
+		return RestartOutcome{}, err
+	}
 	f, err := o.deps.Lifecycle.Get(featureID)
 	if err != nil {
 		return RestartOutcome{}, fmt.Errorf("load feature: %w", err)
@@ -1017,6 +830,37 @@ func (o *Orchestrator) RestartPhase(featureID string, maxIterationsDelta, maxPla
 	// race subsequent Store.Modify writes.
 	o.StopFeatureSessions(featureID)
 
+	// An active child with resumable integration state replays the integration
+	// boundary — never Plan, Implement, or an already-approved Final Review.
+	// Closed cleanup tails are owned exclusively by automatic reconciliation.
+	// A nil transaction at ReviewPassed@FinalReview means integration was
+	// dispatched but died before its journal became durable; without this
+	// route the status switch below has no arm for it and Restart is a NoOp.
+	integrationCrashedPreJournal := f.IsActiveChild() && f.Parent.Transaction == nil &&
+		f.Status == feature.StatusReviewPassed && f.CurrentPhase == feature.PhaseFinalReview
+	if f.IntegrationResumable() || integrationCrashedPreJournal {
+		if err := o.runChildIntegrationLocked(featureID); err != nil {
+			return RestartOutcome{}, err
+		}
+		// Reload to check whether conflict resolution invalidated the
+		// final-review approval and routed the child back through Final
+		// Review. When the child code changed during resolution,
+		// invalidateFinalReview clears the journal and sets
+		// StatusReviewPassed + CurrentPhase=PhaseFinalReview. RestartPhase
+		// must dispatch Final Review so the pipeline reruns it without
+		// replaying Plan or Implement.
+		f, err = o.deps.Lifecycle.Get(featureID)
+		if err != nil {
+			return RestartOutcome{}, fmt.Errorf("reload after integration: %w", err)
+		}
+		if f.IsChild() && f.Parent.Transaction == nil &&
+			f.Status == feature.StatusReviewPassed &&
+			f.CurrentPhase == feature.PhaseFinalReview {
+			return RestartOutcome{Action: RestartDispatchPhase, Phase: feature.PhaseFinalReview}, nil
+		}
+		return RestartOutcome{Action: RestartNoOp}, nil
+	}
+
 	// Clear failure context on restart; extend iteration caps if exhausted.
 	// ExtendFailedPhaseBudget is a no-op on non-Failed features so this is
 	// safe to call unconditionally, but we retain the explicit gate for clarity.
@@ -1024,28 +868,6 @@ func (o *Orchestrator) RestartPhase(featureID string, maxIterationsDelta, maxPla
 		_ = o.ExtendFailedPhaseBudget(featureID, maxIterationsDelta, maxPlanIterationsDelta)
 	}
 	phase := f.CurrentPhase
-
-	// Published/code-ready features with repo cycles (running, failed, or
-	// interrupted): clear and return per-cycle restart descriptors for the
-	// TUI to dispatch. Interrupted post-publish cycles first restore the
-	// feature to the publishable base state so the relaunched cycle is again
-	// treated as active post-publish work rather than a plain phase restart.
-	if (f.Status == feature.StatusPublished || f.Status == feature.StatusCodeReady || f.Status == feature.StatusInterrupted) && len(f.RepoCycles) > 0 {
-		if f.Status == feature.StatusInterrupted {
-			if err := o.restoreStatusForRepoCycleRestart(featureID); err != nil {
-				return RestartOutcome{}, fmt.Errorf("restore status for cycle restart: %w", err)
-			}
-		}
-		restarts, refactor, collectErr := o.CollectAndClearRepoCycleRestarts(featureID)
-		if collectErr != nil {
-			return RestartOutcome{}, fmt.Errorf("collect cycles: %w", collectErr)
-		}
-		return RestartOutcome{
-			Action:            RestartDispatchRepoCycles,
-			RepoCycleRestarts: restarts,
-			RefactorRestart:   refactor,
-		}, nil
-	}
 
 	if f.Status.IsNeedsReview() {
 		if err := o.deps.Store.Modify(featureID, func(ff *feature.Feature) error {
@@ -1061,8 +883,37 @@ func (o *Orchestrator) RestartPhase(featureID string, maxIterationsDelta, maxPla
 		return RestartOutcome{Action: RestartDispatchPhase, Phase: phase}, nil
 	}
 
+	// Restarting deliberately abandons an open need-user-input request: the
+	// answers are discarded, the gate pointer and its attention are cleared,
+	// and the phase is re-dispatched from Interrupted. (Answering the request
+	// is the other, non-destructive way out.)
+	if f.Status == feature.StatusNeedUserInput {
+		if err := o.deps.Store.Modify(featureID, func(ff *feature.Feature) error {
+			ff.Status = feature.StatusInterrupted
+			ff.PendingNeedUserInputPath = ""
+			clearPendingFeatureAttention(ff)
+			return nil
+		}); err != nil {
+			return RestartOutcome{}, fmt.Errorf("restart need-user-input gate: %w", err)
+		}
+		return RestartOutcome{Action: RestartDispatchPhase, Phase: phase}, nil
+	}
+
+	// A crash inside the end-of-phase git boundary leaves the finalizing marker
+	// persisted; Restart is the user's way out, so clear it before routing.
+	if f.IsFinalizingPhase() {
+		if err := o.deps.Store.Modify(featureID, func(ff *feature.Feature) error {
+			if ff.IsFinalizingPhase() {
+				ff.CurrentPhaseStatus = ""
+			}
+			return nil
+		}); err != nil {
+			return RestartOutcome{}, fmt.Errorf("clear finalizing marker: %w", err)
+		}
+	}
+
 	// Restart the current phase: transition state to a startable status and
-	// return the phase for the TUI to re-launch via StartPhaseMsg.
+	// return the phase for the caller to relaunch.
 	switch f.Status {
 	case feature.StatusInterrupted:
 		// Already in a valid state for start commands — no transition needed.
@@ -1157,22 +1008,6 @@ func isArtifactReviewSession(s ports.SessionView) bool {
 		return false
 	}
 	return strings.HasSuffix(s.ID(), "-artifact-review")
-}
-
-func (o *Orchestrator) restoreStatusForRepoCycleRestart(featureID string) error {
-	return o.deps.Store.Modify(featureID, func(f *feature.Feature) error {
-		if len(f.PRURLs()) > 0 {
-			f.Status = feature.StatusPublished
-		} else {
-			f.Status = feature.StatusCodeReady
-		}
-		f.CurrentPhase = feature.PhasePublish
-		f.ActiveCycle = nil
-		f.SetActiveCycleType("")
-		f.LastError = ""
-		f.FailureType = ""
-		return nil
-	})
 }
 
 // lookupRoadmapPhaseName returns the friendly name of the given roadmap phase

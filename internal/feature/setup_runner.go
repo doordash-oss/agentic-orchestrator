@@ -23,6 +23,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 )
 
 var ErrSetupAlreadyRunning = errors.New("setup already running")
@@ -285,19 +287,15 @@ func (m *Manager) executeWorktreeSetupTask(f *Feature, task SetupTask, logPath s
 	if workspaceSlug == "" {
 		workspaceSlug = f.WorkspaceSlug()
 	}
-	if branch == "" || branch == defaultBranchName(workspaceSlug) {
-		branch = m.branchName(workspaceSlug)
+	if branch == "" || branch == git.BranchName(workspaceSlug) {
+		branch = git.BranchName(workspaceSlug)
 	}
 	task.Branch = branch
 	if task.StartPoint == "" && !task.UseCurrentBranch {
 		task.StartPoint = repo.BaseBranch
 	}
 	if task.Path == "" {
-		if pather, ok := m.Worktrees.(interface {
-			ExpectedPath(featureSlug, repoName string) string
-		}); ok {
-			task.Path = pather.ExpectedPath(workspaceSlug, repo.Name)
-		}
+		task.Path = m.Worktrees.ExpectedPath(workspaceSlug, repo.Name)
 	}
 	if task.Path != "" {
 		if err := m.reuseExpectedWorktree(task); err == nil {
@@ -329,13 +327,20 @@ func (m *Manager) reuseExpectedWorktree(task SetupTask) error {
 	if !info.IsDir() {
 		return fmt.Errorf("expected worktree path %s exists but is not a directory", task.Path)
 	}
-	if m.Branches != nil {
-		branch, err := m.Branches.CurrentBranch(task.Path)
+	branch := git.CurrentBranch(task.Path)
+	if task.Branch != "" && branch != task.Branch {
+		return fmt.Errorf("expected worktree path %s is on branch %q, want %q", task.Path, branch, task.Branch)
+	}
+	// When the task pinned an exact launch tip, only reuse the worktree when
+	// its HEAD still sits at the persisted SHA; any drift fails safely
+	// instead of silently reusing a worktree at the wrong commit.
+	if task.ExactSHA != "" {
+		head, err := m.Worktrees.CurrentHeadSHA(task.Path)
 		if err != nil {
-			return fmt.Errorf("checking branch for expected worktree path %s: %w", task.Path, err)
+			return fmt.Errorf("checking HEAD for expected worktree path %s: %w", task.Path, err)
 		}
-		if task.Branch != "" && branch != task.Branch {
-			return fmt.Errorf("expected worktree path %s is on branch %q, want %q", task.Path, branch, task.Branch)
+		if !strings.EqualFold(head, task.ExactSHA) {
+			return fmt.Errorf("expected worktree path %s is at commit %s, want exact base %s", task.Path, head, task.ExactSHA)
 		}
 	}
 	return nil
@@ -480,11 +485,23 @@ func (m *Manager) ReconcileAbandonedSetups() ([]string, error) {
 }
 
 func (m *Manager) failAbandonedSetup(featureID, msg string) error {
-	return m.Store.Modify(featureID, func(f *Feature) error {
+	_, err := m.FailActiveSetup(featureID, msg)
+	return err
+}
+
+// FailActiveSetup durably fails a still-running setup, parking the feature in
+// Failed/FailureWorktreeSetup so it is retryable through RetrySetup. It is a
+// no-op (marked=false) once setup has reached a terminal state, so callers
+// that clean up after a setup runner error never clobber a failure the
+// runner already recorded — the runner owns task-level diagnostics whenever
+// it got far enough to persist them.
+func (m *Manager) FailActiveSetup(featureID, msg string) (marked bool, err error) {
+	err = m.Store.Modify(featureID, func(f *Feature) error {
 		setup := f.Run().Setup
 		if setup == nil || setup.Status != SetupStatusRunning {
 			return nil
 		}
+		marked = true
 		now := time.Now()
 		setup.Status = SetupStatusFailed
 		setup.CompletedAt = &now
@@ -504,6 +521,7 @@ func (m *Manager) failAbandonedSetup(featureID, msg string) error {
 		f.LastError = msg
 		return nil
 	})
+	return marked, err
 }
 
 func setupAttemptLogPath(store *Store, f *Feature, attempt int) string {

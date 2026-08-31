@@ -23,11 +23,11 @@ import (
 )
 
 // WorkspaceSetup is the bootstrap shape for any unified-flow Claude session
-// (phase implement, phase review, Final Review, rebase, review-comments,
-// refactor). It is the single source of truth for "where should the
+// (phase implement, phase review, Final Review, and rebase).
+// It is the single source of truth for "where should the
 // agent run and which directories should it see?" — replacing the ad-hoc
 // resolveUnifiedWorkDir + per-call AdditionalDirs assembly that the per-repo
-// flow scattered across phase.go / refactor.go / final_review.go.
+// flow scattered across phase.go / final_review.go.
 //
 // Construction is pure: feature → workspace. Callers may further filter the
 // AdditionalDirs slice (e.g. add a guidelines dir) but the canonical
@@ -115,63 +115,6 @@ func BuildWorkspace(feat *feature.Feature, stateDir string) (WorkspaceSetup, err
 
 	return WorkspaceSetup{
 		Cwd:            activeRunDir,
-		AdditionalDirs: dirs,
-		RepoPaths:      paths,
-	}, nil
-}
-
-// WorkspaceForRepos is a filtering helper for cycles that legitimately mount
-// only a subset of Feature.Repos (e.g. a rebase cycle scoped to the behind
-// repos). The base WorkspaceSetup is computed first so the active run dir is
-// always present; the AdditionalDirs slice is then narrowed to the requested
-// repo names plus the active run.
-//
-// Repo names not in feat.Repos are silently dropped. RepoPaths is filtered
-// to match. Returns the unfiltered workspace when repos is empty (treated as
-// "all repos" for a no-arg sentinel).
-func WorkspaceForRepos(feat *feature.Feature, stateDir string, repos []string) (WorkspaceSetup, error) {
-	full, err := BuildWorkspace(feat, stateDir)
-	if err != nil {
-		return WorkspaceSetup{}, err
-	}
-	if len(repos) == 0 {
-		return full, nil
-	}
-	want := make(map[string]bool, len(repos))
-	for _, r := range repos {
-		want[r] = true
-	}
-	dirs := []string{full.Cwd}
-	seen := map[string]bool{full.Cwd: true}
-	paths := make(map[string]string)
-	for name, p := range full.RepoPaths {
-		if !want[name] {
-			continue
-		}
-		paths[name] = p
-		if !seen[p] {
-			seen[p] = true
-			dirs = append(dirs, p)
-		}
-	}
-	// Re-sort the non-Cwd entries by repo path for determinism — paths are
-	// keyed by name, so we can re-derive order from the sorted want set.
-	sortedNames := make([]string, 0, len(paths))
-	for n := range paths {
-		sortedNames = append(sortedNames, n)
-	}
-	sort.Strings(sortedNames)
-	dirs = []string{full.Cwd}
-	seen = map[string]bool{full.Cwd: true}
-	for _, n := range sortedNames {
-		p := paths[n]
-		if !seen[p] {
-			seen[p] = true
-			dirs = append(dirs, p)
-		}
-	}
-	return WorkspaceSetup{
-		Cwd:            full.Cwd,
 		AdditionalDirs: dirs,
 		RepoPaths:      paths,
 	}, nil

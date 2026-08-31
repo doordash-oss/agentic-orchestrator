@@ -316,7 +316,7 @@ func TestRunKnowledgeBaseForRepo_SessionID(t *testing.T) {
 	f := &feature.Feature{
 		ID: "abc123",
 		Repos: []feature.FeatureRepo{
-			{Name: "my-service", Path: repoPath},
+			{Name: "my service", Path: repoPath},
 		},
 		Models: config.ModelConfig{Research: "test"},
 	}
@@ -327,10 +327,15 @@ func TestRunKnowledgeBaseForRepo_SessionID(t *testing.T) {
 		t.Fatalf("RunKnowledgeBaseForRepo error: %v", err)
 	}
 
-	// Verify session ID format: "<featureID>-kb-<repoName>"
-	expectedID := "abc123-kb-my-service"
+	// Repository display names may contain characters that are not valid in an
+	// IPC path segment. The session ID must remain safe for the desktop IPC and
+	// HTTP boundaries while session metadata retains the canonical name.
+	expectedID := BuildKBSessionID("abc123", repo.Name)
 	if sessionID != expectedID {
 		t.Errorf("session ID = %q, want %q", sessionID, expectedID)
+	}
+	if !validKBSessionIDPattern.MatchString(sessionID) {
+		t.Errorf("session ID = %q, want an IPC-safe path segment", sessionID)
 	}
 
 	// Wait for session to complete
@@ -675,7 +680,7 @@ func TestRunCodebaseIndexForRepo_FreshKBStaleIndex(t *testing.T) {
 	}
 
 	// This regression test verifies that RunCodebaseIndexForRepo builds the
-	// codebase index independently of KB freshness. The TUI calls it in every
+	// codebase index independently of KB freshness. The desktop app calls it in every
 	// KB path (including "all KBs fresh" and "no KB changes") to ensure the
 	// structural index is always up-to-date.
 

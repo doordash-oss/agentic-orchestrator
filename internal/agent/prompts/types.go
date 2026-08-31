@@ -72,7 +72,6 @@ type OutputRootView struct {
 // modify source code (e.g. Implement).
 type RoleSystemInput struct {
 	OutputRoots          []OutputRootView
-	MarkerPath           string
 	SkillPath            string
 	RequiredSkills       []SkillView
 	ArtifactPreflight    string
@@ -83,6 +82,12 @@ type RoleSystemInput struct {
 	// configured sub-agents: advertising them makes a model that aborts on a
 	// permission denial attempt a task spawn the handler rejects.
 	SubagentsAvailable bool
+
+	// RetryOutcomeAllowed advertises the "retry" completion outcome. Only
+	// roles whose artifact contract carries a structured iteration state may
+	// see it; offering it to any other role invites a protocol violation the
+	// harness will reject at commit time.
+	RetryOutcomeAllowed bool
 
 	AskingClause string
 }

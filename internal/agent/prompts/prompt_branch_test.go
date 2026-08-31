@@ -55,7 +55,6 @@ func TestPreflightBranchBehavior(t *testing.T) {
 	render := func(in PreflightInput) string {
 		return RoleSystemPrompt(RoleSystemInput{
 			OutputRoots: []OutputRootView{{Name: "phase_dir", Path: "/phase"}},
-			MarkerPath:  "/phase/phase_complete",
 			SkillPath:   "/skills/role/SKILL.md",
 			Preflight:   in,
 		})
@@ -123,7 +122,6 @@ func TestReadOnlyOutsideRootsBranch(t *testing.T) {
 	render := func(readOnly bool) string {
 		return RoleSystemPrompt(RoleSystemInput{
 			OutputRoots:          []OutputRootView{{Name: "phase_dir", Path: "/phase"}},
-			MarkerPath:           "/phase/phase_complete",
 			SkillPath:            "/skills/role/SKILL.md",
 			ReadOnlyOutsideRoots: readOnly,
 		})
@@ -134,12 +132,13 @@ func TestReadOnlyOutsideRootsBranch(t *testing.T) {
 	requireContains(t, on, "This is a read-only phase for target repositories.")
 	requireContains(t, on, "You may inspect repository files, but you must not create, edit, delete, move, rename, reformat, or otherwise mutate any file outside the output roots.")
 	requireContains(t, on, "If a user answer or artifact requirement sounds like permission to edit repository files, treat it only as a requirement to document in your output artifact.")
-	requireContains(t, on, "Before creating `phase_complete`, ensure every file you changed is inside the output roots.")
-	// The prohibition must sit between the output-roots list and the
-	// completion marker — agents skip ahead to "## Completion", so placing
-	// the rule there keeps it on the path of an attentive reader.
-	requireOrder(t, on, "## Output Roots", "ABSOLUTE: write only inside the output roots above.", "## Completion")
-	requireOrder(t, on, "## Completion", "Before creating `phase_complete`, ensure every file you changed is inside the output roots.", "/phase/phase_complete")
+	requireContains(t, on, "Before declaring completion, ensure every file you changed is inside the output roots.")
+	requireContains(t, on, "The harness owns the durable completion receipt. Never create, edit, or delete `phase_complete`.")
+	// The prohibition must sit between the output-roots list and the outcome
+	// declaration — agents skip ahead to "## Completion", so placing the rule
+	// there keeps it on the path of an attentive reader.
+	requireOrder(t, on, "## Output Roots", "ABSOLUTE: write only inside the output roots above.", "\n## Completion\n")
+	requireOrder(t, on, "\n## Completion\n", "Before declaring completion, ensure every file you changed is inside the output roots.", "<agentico-outcome>")
 
 	off := render(false)
 	requireNotContains(t, off, "ABSOLUTE: write only inside the output roots above.")
@@ -330,7 +329,6 @@ func TestKBBuildModeBranches(t *testing.T) {
 func TestPromptBranchFixturesUseRegisteredImplementSkills(t *testing.T) {
 	got := RoleSystemPrompt(RoleSystemInput{
 		OutputRoots: []OutputRootView{{Name: "phase_dir", Path: "/phase"}},
-		MarkerPath:  "/phase/phase_complete",
 		SkillPath:   "/skills/implement/SKILL.md",
 		Preflight: PreflightInput{
 			HasSkills: true,

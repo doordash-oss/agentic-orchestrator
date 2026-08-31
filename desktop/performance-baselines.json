@@ -1,0 +1,60 @@
+{
+  "schemaVersion": 1,
+  "harnessVersion": 1,
+  "description": "Native desktop release performance budgets. Normal checks write observed evidence to dist/performance-report.json and never rewrite this baseline.",
+  "clock": "performance.now",
+  "samplePolicy": {
+    "defaultWarmups": 1,
+    "defaultSamples": 5,
+    "cold-shell-readiness": { "warmups": 0, "samples": 2 },
+    "post-stress-process-memory": { "warmups": 0, "samples": 1 }
+  },
+  "regressionTolerance": 1.2,
+  "platforms": {
+    "default": {
+      "cold-shell-readiness": { "baselineMs": 10000, "ceilingMs": 30000 },
+      "authoritative-dashboard-render": { "baselineMs": 1500, "ceilingMs": 6000 },
+      "maximum-bounded-transcript-append-render": { "baselineMs": 1800, "ceilingMs": 7500 },
+      "repeated-tab-and-session-changes": { "baselineMs": 600, "ceilingMs": 2500 },
+      "reconnect-storms": { "baselineMs": 800, "ceilingMs": 3000 },
+      "first-monaco-lazy-load": { "baselineMs": 2500, "ceilingMs": 10000 },
+      "post-stress-process-memory": { "baselineBytes": 157286400, "ceilingBytes": 314572800 }
+    },
+    "darwin-arm64": {
+      "cold-shell-readiness": { "baselineMs": 700, "ceilingMs": 30000 },
+      "authoritative-dashboard-render": { "baselineMs": 150, "ceilingMs": 6000 },
+      "maximum-bounded-transcript-append-render": { "baselineMs": 150, "ceilingMs": 7500 },
+      "repeated-tab-and-session-changes": { "baselineMs": 50, "ceilingMs": 2500 },
+      "reconnect-storms": { "baselineMs": 15, "ceilingMs": 3000 },
+      "first-monaco-lazy-load": { "baselineMs": 400, "ceilingMs": 10000 },
+      "post-stress-process-memory": { "baselineBytes": 241172480, "ceilingBytes": 314572800 }
+    },
+    "darwin-x64": {
+      "cold-shell-readiness": { "baselineMs": 12000, "ceilingMs": 36000 },
+      "authoritative-dashboard-render": { "baselineMs": 1800, "ceilingMs": 7200 },
+      "maximum-bounded-transcript-append-render": { "baselineMs": 2200, "ceilingMs": 9000 },
+      "repeated-tab-and-session-changes": { "baselineMs": 800, "ceilingMs": 3200 },
+      "reconnect-storms": { "baselineMs": 1000, "ceilingMs": 4000 },
+      "first-monaco-lazy-load": { "baselineMs": 3000, "ceilingMs": 12000 },
+      "post-stress-process-memory": { "baselineBytes": 188743680, "ceilingBytes": 377487360 }
+    },
+    "linux-x64": {
+      "cold-shell-readiness": { "baselineMs": 14000, "ceilingMs": 42000 },
+      "authoritative-dashboard-render": { "baselineMs": 2200, "ceilingMs": 8500 },
+      "maximum-bounded-transcript-append-render": { "baselineMs": 2600, "ceilingMs": 10000 },
+      "repeated-tab-and-session-changes": { "baselineMs": 1000, "ceilingMs": 4000 },
+      "reconnect-storms": { "baselineMs": 1200, "ceilingMs": 4800 },
+      "first-monaco-lazy-load": { "baselineMs": 3600, "ceilingMs": 14000 },
+      "post-stress-process-memory": { "baselineBytes": 209715200, "ceilingBytes": 419430400 }
+    },
+    "linux-arm64": {
+      "cold-shell-readiness": { "baselineMs": 18000, "ceilingMs": 54000 },
+      "authoritative-dashboard-render": { "baselineMs": 3000, "ceilingMs": 11000 },
+      "maximum-bounded-transcript-append-render": { "baselineMs": 3500, "ceilingMs": 13000 },
+      "repeated-tab-and-session-changes": { "baselineMs": 1400, "ceilingMs": 5200 },
+      "reconnect-storms": { "baselineMs": 1700, "ceilingMs": 6500 },
+      "first-monaco-lazy-load": { "baselineMs": 4500, "ceilingMs": 17000 },
+      "post-stress-process-memory": { "baselineBytes": 251658240, "ceilingBytes": 503316480 }
+    }
+  }
+}

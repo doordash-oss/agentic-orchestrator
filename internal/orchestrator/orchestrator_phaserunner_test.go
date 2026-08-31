@@ -34,7 +34,7 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// stubSessionHandle — minimal session.SessionHandle used by PhaseRunner
+// stubSessionHandle — minimal ports.SessionHandle used by PhaseRunner
 // wiring tests. All mutation methods are no-ops; read methods return zero.
 //
 // The PhaseRunner code that runs after MockSessionManager.StartSession
@@ -81,6 +81,7 @@ func (s *stubSessionHandle) Status() session.SessionStatus    { return session.S
 func (s *stubSessionHandle) IsActive() bool                   { return true }
 func (s *stubSessionHandle) Iteration() int                   { return 0 }
 func (s *stubSessionHandle) StartedAt() time.Time             { return time.Time{} }
+func (s *stubSessionHandle) WaitingSince() time.Time          { return time.Time{} }
 func (s *stubSessionHandle) InitialPrompt() string            { return "" }
 func (s *stubSessionHandle) ProviderName() string             { return "" }
 func (s *stubSessionHandle) Model() string                    { return "" }
@@ -109,6 +110,16 @@ func (s *stubSessionHandle) Done() <-chan struct{}           { return s.done }
 
 // SessionView query.
 func (s *stubSessionHandle) HasPendingAskUserQuestion() bool { return false }
+func (s *stubSessionHandle) HasPendingRootAskUserQuestion() bool {
+	return false
+}
+func (s *stubSessionHandle) RootCompletionIntent() llm.CompletionIntent {
+	return llm.CompletionIntent{}
+}
+func (s *stubSessionHandle) LiveBackgroundTaskCount() int { return 0 }
+func (s *stubSessionHandle) TaskActivities() []llm.TaskActivity {
+	return nil
+}
 
 // SessionView interaction (no-ops).
 func (s *stubSessionHandle) SendUserMessage(text string) error { return nil }
@@ -136,7 +147,7 @@ func (s *stubSessionHandle) SetOnFileRead(fn func(read llm.FileReadEvent))  {}
 func (s *stubSessionHandle) SetOnSubagentEvent(fn func(msg llm.SDKMessage)) {}
 
 // Compile-time check that stubSessionHandle satisfies SessionHandle.
-var _ session.SessionHandle = (*stubSessionHandle)(nil)
+var _ ports.SessionHandle = (*stubSessionHandle)(nil)
 
 // ---------------------------------------------------------------------------
 // capturingPhaseRunner — helper that constructs a real *agent.PhaseRunner
@@ -1002,56 +1013,6 @@ func TestOrchestrator_StartPlan_RoadmapPhase_WhenPlanning_SkipsTransition(t *tes
 	captured := waitForCapturedPhase(t, cpr, feature.PhasePlan, 3*time.Second)
 	if len(captured) == 0 {
 		t.Fatalf("no BuildSession captured for Phase=PhasePlan; captures: %v", cpr.capturedOpts)
-	}
-}
-
-func TestOrchestrator_StartPlan_UsesLegacyBrainstormArtifactDir(t *testing.T) {
-	stateDir := t.TempDir()
-	store := feature.NewStore(stateDir)
-	featureID := "feat-legacy-brainstorm-plan"
-	f := &feature.Feature{
-		ID:            featureID,
-		Name:          "Legacy Brainstorm Plan",
-		Slug:          "legacy-brainstorm-plan",
-		Description:   "resume planning from a pre-rename brainstorm artifact",
-		Created:       time.Now().Truncate(time.Second),
-		Status:        feature.StatusPlanReady,
-		CurrentPhase:  feature.PhasePlan,
-		Pipeline:      feature.PipelineLarge,
-		Inquireness:   feature.InquirenessMedium,
-		Repos:         []feature.FeatureRepo{{Name: "repo1", Path: stateDir}},
-		ActiveRun:     1,
-		RunCount:      1,
-		SchemaVersion: feature.SchemaVersionCurrent,
-	}
-	if err := store.Save(f); err != nil {
-		t.Fatalf("save feature: %v", err)
-	}
-
-	brainstormDir := filepath.Join(agent.ActiveRunDir(stateDir, f), "brainstorm")
-	if err := os.MkdirAll(brainstormDir, 0o755); err != nil {
-		t.Fatalf("mkdir brainstorm dir: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(brainstormDir, "brainstorm.md"), []byte("# Legacy Brainstorm\n"), 0o644); err != nil {
-		t.Fatalf("write brainstorm artifact: %v", err)
-	}
-
-	mgr := feature.NewManager(store, nil)
-	o := orchestrator.New(orchestrator.Deps{
-		Lifecycle: mgr,
-		Store:     store,
-	}, orchestrator.Hooks{})
-
-	if err := o.StartFeature(featureID); err != nil {
-		t.Fatalf("StartFeature() error = %v; want nil", err)
-	}
-
-	loaded, err := store.Load(featureID)
-	if err != nil {
-		t.Fatalf("load feature: %v", err)
-	}
-	if loaded.Status != feature.StatusPlanning {
-		t.Errorf("loaded.Status = %v, want %v", loaded.Status, feature.StatusPlanning)
 	}
 }
 

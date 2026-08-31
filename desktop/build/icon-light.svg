@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <clipPath id="sq"><rect x="100" y="100" width="824" height="824" rx="185"/></clipPath>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fdfcf9"/><stop offset="1" stop-color="#e8e4da"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#4f8bff"/><stop offset="1" stop-color="#2f6fed"/>
+    </linearGradient>
+    <linearGradient id="sheen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.5"/>
+      <stop offset="0.45" stop-color="#ffffff" stop-opacity="0.12"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+  <!-- Light appearance of the Glass Monogram: the human stroke flips to ink;
+       the agent's accent stroke never changes between appearances. -->
+  <g clip-path="url(#sq)">
+    <rect x="100" y="100" width="824" height="824" fill="url(#bg)"/>
+    <g transform="translate(100 100) scale(0.8046875)" fill="none" stroke-linecap="round" stroke-width="150">
+      <path d="M 330 810 L 512 250" stroke="#1d2027" stroke-opacity="0.92"/>
+      <path d="M 694 810 L 512 250" stroke="url(#accent)" stroke-opacity="0.95"/>
+    </g>
+    <rect x="100" y="100" width="824" height="412" fill="url(#sheen)"/>
+  </g>
+</svg>

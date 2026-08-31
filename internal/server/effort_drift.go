@@ -55,11 +55,11 @@ func effortDriftWarnings(f *feature.Feature, reg *llm.Registry) []Warning {
 		if !llm.IsValidExplicitEffort(llm.EffortLevel(r.effort)) {
 			continue
 		}
-		prov, _, err := reg.ResolveModel(r.model)
+		prov, resolvedModel, err := reg.ResolveModel(r.model)
 		if err != nil {
 			continue
 		}
-		caps := llm.EffortCapabilitiesForModel(prov, r.model)
+		caps := llm.EffortCapabilitiesForModel(prov, resolvedModel)
 		if llm.EffortDrifted(llm.EffortLevel(r.effort), caps) {
 			warnings = append(warnings, Warning{
 				Code:      effortDriftWarningCode,

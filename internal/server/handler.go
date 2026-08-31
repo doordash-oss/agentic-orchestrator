@@ -28,6 +28,7 @@ import (
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/internal/instancelock"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
@@ -38,25 +39,52 @@ func NewHandler(opts HandlerOptions) http.Handler {
 }
 
 type apiHandler struct {
-	runtime               RuntimeIdentity
-	policy                LaunchPolicy
-	startedAt             time.Time
-	owner                 instancelock.Owner
-	authToken             string
-	features              FeatureLister
-	store                 FeatureReader
-	freshness             RepoFreshnessProvider
+	runtime   RuntimeIdentity
+	policy    LaunchPolicy
+	startedAt time.Time
+	owner     instancelock.Owner
+	authToken string
+	name      string
+	features  FeatureLister
+	store     FeatureReader
+	freshness RepoFreshnessProvider
+	worktrees feature.WorktreeOps
+	// cleanliness serves worktree dirtiness to read projections from a
+	// deduplicated background cache. worktrees stays the uncached authority
+	// for mutations and launch preflights, which must see the worktree as it
+	// is at the instant they act.
+	cleanliness           git.CleanlinessInspector
 	cfg                   *config.Config
 	registry              *llm.Registry
 	sessions              ports.SessionManager
 	broker                *eventBroker
 	mutations             MutationTarget
-	requestShutdown       func()
+	// uploads owns the octet-stream upload staging area under the runtime
+	// state dir; nil when the runtime identity has no state dir (tests that
+	// never stage uploads).
+	uploads               *uploadStore
+	persistProviderModels func(llm.LLMProvider, []llm.ModelInfo) error
 	disableHostValidation bool
+	runtimePolicy         string
+	initGitRepository     func(path string) error
 
 	recoveryMu         sync.Mutex
 	recoverySnapshots  map[string][]ports.RecoveryItem
 	reviewSessionLocks *reviewSessionLockSet
+
+	// readinessMu guards the cached provider readiness probe results served
+	// by /api/v1/readiness and refreshed by /api/v1/readiness/refresh.
+	readinessMu       sync.Mutex
+	providerReadiness []ProviderReadiness
+	readinessProbedAt time.Time
+	providerRefreshMu sync.Mutex
+	creationMu        sync.Mutex
+	creationResults   map[string]creationResult
+}
+
+type creationResult struct {
+	fingerprint string
+	response    CreateFeatureResponse
 }
 
 func newAPIHandler(opts HandlerOptions) *apiHandler {
@@ -74,23 +102,36 @@ func newAPIHandler(opts HandlerOptions) *apiHandler {
 	if features == nil && store != nil {
 		features = store
 	}
+	runtimePolicy := opts.RuntimePolicy
+	if runtimePolicy == "" {
+		runtimePolicy = CompatibilityRuntimePolicy
+	}
 	handler := &apiHandler{
+		runtimePolicy:         runtimePolicy,
 		runtime:               opts.Runtime,
 		policy:                opts.LaunchPolicy,
 		startedAt:             startedAt,
 		owner:                 opts.Owner,
 		authToken:             opts.AuthToken,
+		name:                  opts.Name,
 		features:              features,
 		store:                 store,
 		freshness:             opts.Freshness,
+		worktrees:             opts.Worktrees,
 		cfg:                   opts.Config,
 		registry:              opts.Registry,
 		sessions:              opts.Sessions,
 		broker:                newEventBroker(opts.Events, opts.DomainEvents),
 		mutations:             opts.Mutations,
-		requestShutdown:       opts.RequestShutdown,
+		uploads:               newUploadStore(opts.Runtime.StateDir),
+		persistProviderModels: opts.PersistProviderModelCatalog,
 		disableHostValidation: opts.DisableHostValidation,
+		initGitRepository:     opts.InitGitRepository,
 		reviewSessionLocks:    newReviewSessionLockSet(),
+		creationResults:       make(map[string]creationResult),
+	}
+	if opts.Worktrees != nil {
+		handler.cleanliness = git.NewCleanlinessCache(opts.Worktrees)
 	}
 	return handler
 }
@@ -106,17 +147,21 @@ type topLevelRoute struct {
 }
 
 const (
-	apiPathHealth          = "/api/v1/health"
-	apiPathFeatures        = "/api/v1/features"
-	apiPathConfigRuntime   = "/api/v1/config/runtime"
-	apiPathCatalogModels   = "/api/v1/catalog/models"
-	apiPathPrompts         = "/api/v1/prompts"
-	apiPathPermissions     = "/api/v1/permissions"
-	apiPathSessions        = "/api/v1/sessions"
-	apiPathRecovery        = "/api/v1/recovery"
-	apiPathRecoveryActions = "/api/v1/recovery/actions"
-	apiPathShutdown        = "/api/v1/shutdown"
-	apiPathEvents          = "/api/v1/events"
+	apiPathHealth           = "/api/v1/health"
+	apiPathFeatures         = "/api/v1/features"
+	apiPathConfigRuntime    = "/api/v1/config/runtime"
+	apiPathCatalogModels    = "/api/v1/catalog/models"
+	apiPathCatalogRefresh   = "/api/v1/catalog/models/refresh"
+	apiPathReadiness        = "/api/v1/readiness"
+	apiPathReadinessRefresh = "/api/v1/readiness/refresh"
+	apiPathPrompts          = "/api/v1/prompts"
+	apiPathPermissions      = "/api/v1/permissions"
+	apiPathSessions         = "/api/v1/sessions"
+	apiPathRecovery         = "/api/v1/recovery"
+	apiPathRecoveryActions  = "/api/v1/recovery/actions"
+	apiPathRecoveryLogs     = "/api/v1/recovery/logs"
+	apiPathEvents           = "/api/v1/events"
+	apiPathUploads          = "/api/v1/uploads"
 )
 
 // routeSegmentConfig is the feature sub-route segment for the per-feature
@@ -126,14 +171,14 @@ const routeSegmentConfig = "config"
 
 // entityFeature is the resource/entity-type name for a feature. It's used as
 // a generic-error-message noun and as the DTO discriminator for "feature"
-// scoped resources (ResourceDTO.Type, ActionScopeDTO.Type, etc).
+// scoped resources (Resource.Type, ActionScope.Type, etc).
 const entityFeature = "feature"
 
-// resourceTypeSession and resourceTypeRuntime are the other ResourceDTO.Type
-// discriminator values, alongside entityFeature.
+// Resource type discriminators used by SSE refresh routing.
 const (
-	resourceTypeSession = "session"
-	resourceTypeRuntime = "runtime"
+	resourceTypeSession      = "session"
+	resourceTypeRuntime      = "runtime"
+	resourceTypeRelationship = "relationship"
 )
 
 var topLevelServerRoutes = []topLevelRoute{
@@ -142,6 +187,10 @@ var topLevelServerRoutes = []topLevelRoute{
 	{apiPathFeatures + "/", func(h *apiHandler) http.HandlerFunc { return h.handleFeatureRoutes }},
 	{apiPathConfigRuntime, func(h *apiHandler) http.HandlerFunc { return h.handleRuntimeConfigRoute }},
 	{apiPathCatalogModels, func(h *apiHandler) http.HandlerFunc { return methodHandler(h.handleModelCatalog) }},
+	{apiPathCatalogRefresh, func(h *apiHandler) http.HandlerFunc { return h.handleProviderModelRefreshRoute }},
+	{apiPathReadiness, func(h *apiHandler) http.HandlerFunc { return methodHandler(h.handleReadiness) }},
+	{apiPathReadinessRefresh, func(h *apiHandler) http.HandlerFunc { return h.handleReadinessRefreshRoute }},
+	{apiPathWorkspaceRepositoriesInit, func(h *apiHandler) http.HandlerFunc { return h.handleWorkspaceRepositoryInitRoute }},
 	{apiPathPrompts, func(h *apiHandler) http.HandlerFunc { return methodHandler(h.handlePrompts) }},
 	{apiPathPrompts + "/", func(h *apiHandler) http.HandlerFunc { return h.handlePromptMutationRoutes }},
 	{apiPathPermissions, func(h *apiHandler) http.HandlerFunc { return methodHandler(h.handlePermissions) }},
@@ -150,8 +199,9 @@ var topLevelServerRoutes = []topLevelRoute{
 	{apiPathSessions + "/", func(h *apiHandler) http.HandlerFunc { return methodHandler(h.handleSessionRoutes) }},
 	{apiPathRecovery, func(h *apiHandler) http.HandlerFunc { return h.handleRecoveryRoute }},
 	{apiPathRecoveryActions, func(h *apiHandler) http.HandlerFunc { return h.handleRecoveryActionRoute }},
-	{apiPathShutdown, func(h *apiHandler) http.HandlerFunc { return h.handleShutdownMutationRoute }},
+	{apiPathRecoveryLogs, func(h *apiHandler) http.HandlerFunc { return h.handleRecoveryLogRoute }},
 	{apiPathEvents, func(h *apiHandler) http.HandlerFunc { return methodHandler(h.handleEvents) }},
+	{apiPathUploads, func(h *apiHandler) http.HandlerFunc { return h.handleUploadsRoute }},
 }
 
 func (h *apiHandler) routes() http.Handler {
@@ -188,13 +238,15 @@ func (h *apiHandler) routes() http.Handler {
 
 func (h *apiHandler) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, HealthResponse{
-		APIVersion:   APIVersion,
-		Status:       "ok",
-		Runtime:      h.runtime,
-		LaunchPolicy: h.policy,
-		StartedAt:    h.startedAt,
-		Owner:        OwnerDTOFromInstanceOwner(h.owner),
-		ServerTime:   time.Now().UTC(),
+		APIVersion:    APIVersion,
+		Status:        "ok",
+		Runtime:       h.runtime,
+		LaunchPolicy:  h.policy,
+		StartedAt:     h.startedAt,
+		Owner:         OwnerFromInstanceOwner(h.owner),
+		ServerTime:    time.Now().UTC(),
+		Compatibility: NewCompatibilityDeclaration(h.owner.Version, h.runtimePolicy),
+		Name:          h.name,
 	})
 }
 
@@ -204,15 +256,43 @@ func (h *apiHandler) handleFeatureList(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusInternalServerError, "internal_error", "list features", nil)
 		return
 	}
+	// One relationship pass for the whole list; the per-parent scan re-reads
+	// the entire store and turns the list O(N²) in disk reads.
+	var bulkChildren map[string]*feature.RelationshipChildren
+	if reader, ok := h.store.(BulkRelationshipReader); ok {
+		bulkChildren, err = reader.AllRelationshipChildren()
+		if err != nil {
+			writeAPIError(w, http.StatusInternalServerError, "relationship_read_failed", "read relationship history", nil)
+			return
+		}
+	}
 	summaries := make([]FeatureSummary, 0, len(features))
 	for _, f := range features {
+		if f.IsChild() {
+			continue
+		}
 		summary := h.featureSummaryDTO(f)
+		var children *feature.RelationshipChildren
+		if bulkChildren != nil {
+			if children = bulkChildren[f.ID]; children == nil {
+				children = &feature.RelationshipChildren{}
+			}
+		} else {
+			var relationshipErr error
+			children, relationshipErr = h.relationshipChildrenOf(f.ID, features)
+			if relationshipErr != nil {
+				writeAPIError(w, http.StatusInternalServerError, "relationship_read_failed", "read relationship history", map[string]any{"parent_id": f.ID})
+				return
+			}
+		}
+		summary.ActiveChild = relationshipChildSummaryDTO(children.Active)
+		summary.ChildHistory, summary.ChildHistoryTotal, summary.ChildHistoryTruncated = listChildHistory(children.Closed)
 		summary.Warnings = append(summary.Warnings, effortDriftWarnings(f, h.registry)...)
 		summaries = append(summaries, summary)
 	}
 	revision := revisionForAny(struct {
 		Features []FeatureSummary
-		Warnings []WarningDTO
+		Warnings []Warning
 	}{Features: summaries, Warnings: warnings})
 	h.writeRevisionedJSON(w, r, revision, FeatureListResponse{
 		APIVersion: APIVersion,
@@ -233,6 +313,36 @@ func (h *apiHandler) handleFeatureRoutes(w http.ResponseWriter, r *http.Request)
 		h.handleReviewSessionRoute(w, r, featureID, parts[2:])
 		return
 	}
+	if len(parts) == 3 && parts[2] == "preflight" {
+		switch parts[1] {
+		case "completion":
+			if r.Method != http.MethodGet {
+				w.Header().Set("Allow", "GET")
+				writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed", nil)
+				return
+			}
+			h.handleCompletionPreflight(w, r, featureID)
+			return
+		}
+	}
+	if len(parts) == 4 && parts[1] == "repositories" && parts[3] == "diff" {
+		if r.Method != http.MethodGet {
+			w.Header().Set("Allow", "GET")
+			writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed", nil)
+			return
+		}
+		h.handleRepositoryDiff(w, r, featureID, parts[2])
+		return
+	}
+	if len(parts) == 4 && parts[1] == "repositories" && parts[3] == "path" {
+		if r.Method != http.MethodGet {
+			w.Header().Set("Allow", "GET")
+			writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed", nil)
+			return
+		}
+		h.handleRepositoryPath(w, r, featureID, parts[2])
+		return
+	}
 	if h.handleFeatureMutationRoute(w, r, featureID, parts[1:]) {
 		return
 	}
@@ -248,13 +358,37 @@ func (h *apiHandler) handleFeatureRoutes(w http.ResponseWriter, r *http.Request)
 		h.handleFeatureConfig(w, r, featureID)
 	case len(parts) == 2 && parts[1] == "live-preview":
 		h.handleLivePreview(w, r, featureID)
-	case len(parts) >= 4 && parts[1] == "runs":
-		runNumber, ok := parseRunNumber(parts[2])
+	case len(parts) == 3 && parts[1] == "rewind" && parts[2] == "preview":
+		h.handleRewindPreview(w, r, featureID)
+	case len(parts) >= 2 && parts[1] == "runs":
+		h.handleRunsRoute(w, r, featureID, parts[2:])
+	default:
+		writeAPIError(w, http.StatusNotFound, "not_found", "endpoint not found", nil)
+	}
+}
+
+// handleRunsRoute dispatches the run-scoped history surface under
+// /api/v1/features/{feature_id}/runs. All branches are GET-only: the
+// caller (handleFeatureRoutes) rejects non-GET methods before reaching
+// here, so run history exposes no mutation operation.
+func (h *apiHandler) handleRunsRoute(w http.ResponseWriter, r *http.Request, featureID string, parts []string) {
+	switch {
+	case len(parts) == 0:
+		h.handleRunList(w, r, featureID)
+	case len(parts) == 1:
+		runNumber, ok := parseRunNumber(parts[0])
 		if !ok {
 			writeAPIError(w, http.StatusBadRequest, "bad_request", "invalid run number", map[string]any{"feature_id": featureID})
 			return
 		}
-		h.handleRunRoute(w, r, featureID, runNumber, parts[3:])
+		h.handleRunDetail(w, r, featureID, runNumber)
+	case len(parts) >= 2:
+		runNumber, ok := parseRunNumber(parts[0])
+		if !ok {
+			writeAPIError(w, http.StatusBadRequest, "bad_request", "invalid run number", map[string]any{"feature_id": featureID})
+			return
+		}
+		h.handleRunRoute(w, r, featureID, runNumber, parts[1:])
 	default:
 		writeAPIError(w, http.StatusNotFound, "not_found", "endpoint not found", nil)
 	}
@@ -266,8 +400,12 @@ func (h *apiHandler) handleRunRoute(w http.ResponseWriter, r *http.Request, feat
 		h.handleArtifactList(w, r, featureID, runNumber)
 	case len(parts) == 2 && parts[0] == "artifacts":
 		h.handleArtifactContent(w, r, featureID, runNumber, parts[1])
+	case len(parts) == 1 && parts[0] == "logs":
+		h.handleLogList(w, r, featureID, runNumber)
 	case len(parts) == 2 && parts[0] == "logs":
 		h.handleLogContent(w, r, featureID, runNumber, parts[1])
+	case len(parts) == 1 && parts[0] == "sessions":
+		h.handleRunSessions(w, r, featureID, runNumber)
 	default:
 		writeAPIError(w, http.StatusNotFound, "not_found", "endpoint not found", nil)
 	}
@@ -279,7 +417,11 @@ func (h *apiHandler) handleFeatureDetail(w http.ResponseWriter, r *http.Request,
 		writeStoreError(w, err, featureID)
 		return
 	}
-	detail := h.featureDetailDTO(f)
+	detail, err := h.featureDetailDTO(f)
+	if err != nil {
+		writeAPIError(w, http.StatusInternalServerError, "internal_error", "build feature detail", nil)
+		return
+	}
 	revision := revisionForAny(detail)
 	detail.Revision = revision
 	detail.CacheRevalidate = "etag"
@@ -350,7 +492,7 @@ func requireMethod(w http.ResponseWriter, r *http.Request, method string) bool {
 	return false
 }
 
-func listFeatures(lister FeatureLister) ([]*feature.Feature, []WarningDTO, error) {
+func listFeatures(lister FeatureLister) ([]*feature.Feature, []Warning, error) {
 	if lister == nil {
 		return nil, nil, nil
 	}
@@ -362,9 +504,9 @@ func listFeatures(lister FeatureLister) ([]*feature.Feature, []WarningDTO, error
 	if !errors.As(err, &partial) {
 		return nil, nil, err
 	}
-	warnings := make([]WarningDTO, 0, len(partial.Warnings))
+	warnings := make([]Warning, 0, len(partial.Warnings))
 	for _, w := range partial.Warnings {
-		warnings = append(warnings, WarningDTO{
+		warnings = append(warnings, Warning{
 			Code:      "partial_load",
 			FeatureID: w.ID,
 			Message:   "feature could not be loaded",
@@ -387,7 +529,6 @@ func summarizeFeature(f *feature.Feature) FeatureSummary {
 		Slug:         f.Slug,
 		Status:       f.Status.String(),
 		CurrentPhase: f.CurrentPhase.String(),
-		Cycle:        activeCycleDTO(f),
 		ActiveRun:    f.ActiveRun,
 		RunCount:     f.RunCount,
 		Repos:        repos,
@@ -495,6 +636,12 @@ func (h *apiHandler) rejectInvalidHost(w http.ResponseWriter, r *http.Request) b
 	if h == nil || h.disableHostValidation {
 		return false
 	}
+	// The network policy accepts any Host header: the bearer token is the
+	// real authentication. The Origin rule stays loopback-only in both
+	// policies, so browser CSRF/DNS-rebinding vectors remain closed.
+	if h.runtimePolicy == CompatibilityNetworkRuntimePolicy {
+		return false
+	}
 	if isAllowedLoopbackHost(r.Host) {
 		return false
 	}
@@ -578,7 +725,7 @@ func revisionMatches(r *http.Request, revision string) bool {
 func writeAPIError(w http.ResponseWriter, status int, code, message string, target map[string]any) {
 	writeJSON(w, status, ErrorResponse{
 		APIVersion: APIVersion,
-		Error: ErrorDTO{
+		Error: Error{
 			Code:    code,
 			Message: message,
 			Status:  status,

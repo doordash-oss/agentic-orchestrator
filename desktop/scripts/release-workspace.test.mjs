@@ -1,0 +1,521 @@
+import { execFileSync, spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import {
+  chmodSync,
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { afterEach, describe, expect, it } from 'vitest';
+
+import {
+  cleanGoEnvironment,
+  compileReleaseCleanupHelper,
+  createDetachedReleaseWorkspace,
+  createPublicationSnapshot,
+  dockerReleaseEnvironment,
+  goreleaserEnvironment,
+  removeDetachedReleaseWorkspace,
+  secretFreeBuildEnvironment,
+  verifyPublicationSnapshot,
+} from './release-workspace.mjs';
+
+const roots = [];
+const projectRoot = fileURLToPath(new URL('../..', import.meta.url));
+
+afterEach(() => {
+  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+});
+
+function git(cwd, ...args) {
+  return execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
+}
+
+function repositoryFixture() {
+  const root = mkdtempSync(join(tmpdir(), 'agentico-release-workspace-test-'));
+  roots.push(root);
+  git(root, 'init');
+  git(root, 'config', 'user.email', 'test@example.com');
+  git(root, 'config', 'user.name', 'Test');
+  writeFileSync(join(root, '.gitignore'), 'go.work\nskills/.env\nnode_modules\n');
+  writeFileSync(join(root, 'tracked.txt'), 'committed\n');
+  mkdirSync(join(root, 'skills'));
+  writeFileSync(join(root, 'skills', '.env'), 'SECRET=ambient\n');
+  writeFileSync(join(root, 'go.work'), 'go 1.25\n');
+  git(root, 'add', '.gitignore', 'tracked.txt');
+  git(root, 'commit', '-m', 'fixture');
+  return { root, commit: git(root, 'rev-parse', 'HEAD') };
+}
+
+function testReleaseWorkspace(options) {
+  const workspace = createDetachedReleaseWorkspace(options);
+  const cleanupHelper = compileReleaseCleanupHelper({
+    workspace: { ...workspace, path: projectRoot },
+  });
+  return { ...workspace, cleanupHelper };
+}
+
+describe('detached release workspace', () => {
+  it('compiles and hashes the cleanup helper into per-run Git metadata', () => {
+    const commonDir = mkdtempSync(join(tmpdir(), 'agentico-cleanup-helper-test-'));
+    roots.push(commonDir);
+    const helper = compileReleaseCleanupHelper({
+      workspace: {
+        commonDir,
+        path: projectRoot,
+        runId: '99999999-9999-4999-8999-999999999999',
+      },
+    });
+    expect(helper.path).toContain(
+      'agentico-release-cleanup-helpers/99999999-9999-4999-8999-999999999999/release-cleanup',
+    );
+    expect(helper.sha256).toBe(
+      createHash('sha256').update(readFileSync(helper.path)).digest('hex'),
+    );
+    expect(helper.size).toBeGreaterThan(0);
+  }, 20_000);
+
+  it('contains only the captured committed source and excludes ambient ignored inputs', () => {
+    const fixture = repositoryFixture();
+    const workspace = testReleaseWorkspace({
+      operatorRoot: fixture.root,
+      commit: fixture.commit,
+      runId: '11111111-1111-4111-8111-111111111111',
+    });
+    try {
+      expect(readFileSync(join(workspace.path, 'tracked.txt'), 'utf8')).toBe('committed\n');
+      expect(existsSync(join(workspace.path, 'go.work'))).toBe(false);
+      expect(existsSync(join(workspace.path, 'skills', '.env'))).toBe(false);
+      expect(git(workspace.path, 'rev-parse', 'HEAD')).toBe(fixture.commit);
+      expect(git(workspace.path, 'status', '--porcelain', '--untracked-files=all')).toBe('');
+      const readonlySnapshot = join(workspace.path, 'desktop', 'dist', 'publication');
+      mkdirSync(readonlySnapshot, { recursive: true });
+      writeFileSync(join(readonlySnapshot, 'artifact'), 'bytes');
+      chmodSync(readonlySnapshot, 0o500);
+    } finally {
+      removeDetachedReleaseWorkspace(workspace);
+    }
+    expect(existsSync(workspace.path)).toBe(false);
+    expect(git(fixture.root, 'worktree', 'list', '--porcelain')).toContain('prunable');
+  }, 20_000);
+
+  it('preserves a provenance-invalid detached workspace without executing ambient cleanup source', () => {
+    const fixture = repositoryFixture();
+    const runId = '12121212-1212-4212-8212-121212121212';
+    const expectedPath = join(fixture.root, '.git', 'agentico-release-workspaces', runId);
+    const gitCommand = (cwd, ...args) => {
+      if (args.join(' ') === 'status --porcelain --untracked-files=all') return '?? unexpected';
+      return git(cwd, ...args);
+    };
+    expect(() =>
+      createDetachedReleaseWorkspace({
+        operatorRoot: fixture.root,
+        commit: fixture.commit,
+        runId,
+        gitCommand,
+      }),
+    ).toThrow(/preserved.*manual cleanup/);
+    expect(existsSync(expectedPath)).toBe(true);
+    git(fixture.root, 'worktree', 'remove', '--force', expectedPath);
+  }, 20_000);
+
+  it('reports the preserved workspace when provenance inspection itself fails', () => {
+    const fixture = repositoryFixture();
+    const runId = '13131313-1313-4313-8313-131313131313';
+    const expectedPath = join(fixture.root, '.git', 'agentico-release-workspaces', runId);
+    const gitCommand = (cwd, ...args) => {
+      if (args.join(' ') === 'status --porcelain --untracked-files=all') {
+        throw new Error('status inspection failed');
+      }
+      return git(cwd, ...args);
+    };
+    let failure;
+    try {
+      createDetachedReleaseWorkspace({
+        operatorRoot: fixture.root,
+        commit: fixture.commit,
+        runId,
+        gitCommand,
+      });
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toBeInstanceOf(Error);
+    expect(failure.message).toContain(`preserved at ${realpathSync(expectedPath)}`);
+    expect(failure.message).toContain('manual cleanup');
+    expect(existsSync(expectedPath)).toBe(true);
+    git(fixture.root, 'worktree', 'remove', '--force', expectedPath);
+  });
+
+  it('clears ambient Go workspace and flags while forcing readonly modules', () => {
+    expect(
+      cleanGoEnvironment({
+        GOWORK: '/tmp/poison/go.work',
+        GOFLAGS: '-overlay=/tmp/poison.json',
+        X: 'ok',
+      }),
+    ).toMatchObject({ GOWORK: 'off', GOFLAGS: '-mod=readonly', X: 'ok' });
+  });
+
+  it('uses a minimal native build environment with isolated npm state and no ambient overrides', () => {
+    const env = secretFreeBuildEnvironment(
+      {
+        PATH: '/tools',
+        HOME: '/operator',
+        LANG: 'en_US.UTF-8',
+        NPM_TOKEN: 'registry',
+        NODE_OPTIONS: '--require=/tmp/injected.js',
+        npm_config_script_shell: '/tmp/attacker',
+        GITHUB_TOKEN: 'publish',
+        RANDOM_AMBIENT: 'drop-me',
+      },
+      '/git/evidence.json',
+      'a'.repeat(64),
+      '/release/workspace/desktop/dist/.release-home',
+    );
+    expect(env).toMatchObject({
+      PATH: '/tools',
+      HOME: '/release/workspace/desktop/dist/.release-home',
+      LANG: 'en_US.UTF-8',
+      NPM_TOKEN: 'registry',
+      NPM_CONFIG_CACHE: '/release/workspace/desktop/dist/.release-home/.npm',
+      GOWORK: 'off',
+      GOFLAGS: '-mod=readonly',
+      AGENTICO_RELEASE_EVIDENCE_SHA256: 'a'.repeat(64),
+    });
+    expect(env).not.toHaveProperty('NODE_OPTIONS');
+    expect(env).not.toHaveProperty('npm_config_script_shell');
+    expect(env).not.toHaveProperty('GITHUB_TOKEN');
+    expect(env).not.toHaveProperty('RANDOM_AMBIENT');
+  });
+
+  it('gives Docker orchestration only its operator Docker context and evidence binding', () => {
+    expect(
+      dockerReleaseEnvironment(
+        {
+          PATH: '/tools',
+          HOME: '/operator',
+          DOCKER_HOST: 'unix:///docker.sock',
+          DOCKER_CONFIG: '/docker/config',
+          NODE_OPTIONS: '--inspect',
+          GITHUB_TOKEN: 'drop',
+        },
+        '/git/evidence.json',
+        'b'.repeat(64),
+      ),
+    ).toEqual({
+      PATH: '/tools',
+      HOME: '/operator',
+      DOCKER_HOST: 'unix:///docker.sock',
+      DOCKER_CONFIG: '/docker/config',
+      AGENTICO_RELEASE_EVIDENCE_FILE: '/git/evidence.json',
+      AGENTICO_RELEASE_EVIDENCE_SHA256: 'b'.repeat(64),
+    });
+  });
+
+  it('drops Node and npm injection overrides from the GoReleaser signer environment', () => {
+    const env = goreleaserEnvironment(
+      {
+        PATH: '/tools',
+        GITHUB_TOKEN: 'publish',
+        NODE_OPTIONS: '--require=/tmp/injected.js',
+        NPM_CONFIG_USERCONFIG: '/tmp/injected-npmrc',
+        npm_config_script_shell: '/tmp/attacker',
+      },
+      'v0.150.0',
+    );
+    expect(env).toMatchObject({ GITHUB_TOKEN: 'publish', GORELEASER_CURRENT_TAG: 'v0.150.0' });
+    expect(env).not.toHaveProperty('NODE_OPTIONS');
+    expect(env).not.toHaveProperty('NPM_CONFIG_USERCONFIG');
+    expect(env).not.toHaveProperty('npm_config_script_shell');
+  });
+
+  it('refuses cleanup after workspace replacement without touching a symlink victim', () => {
+    const fixture = repositoryFixture();
+    const workspace = testReleaseWorkspace({
+      operatorRoot: fixture.root,
+      commit: fixture.commit,
+      runId: '22222222-2222-4222-8222-222222222222',
+    });
+    git(fixture.root, 'worktree', 'remove', '--force', workspace.path);
+    const victim = join(fixture.root, 'victim');
+    mkdirSync(victim);
+    writeFileSync(join(victim, 'keep'), 'unchanged');
+    chmodSync(victim, 0o755);
+    symlinkSync(victim, workspace.path);
+    expect(() => removeDetachedReleaseWorkspace(workspace)).toThrow(/changed after validation/);
+    expect(readFileSync(join(victim, 'keep'), 'utf8')).toBe('unchanged');
+    expect(statSync(victim).mode & 0o777).toBe(0o755);
+  });
+
+  it('does not chmod a symlink substituted for the read-only publication directory', () => {
+    const fixture = repositoryFixture();
+    const workspace = testReleaseWorkspace({
+      operatorRoot: fixture.root,
+      commit: fixture.commit,
+      runId: '33333333-3333-4333-8333-333333333333',
+    });
+    const victim = join(fixture.root, 'publication-victim');
+    mkdirSync(victim);
+    chmodSync(victim, 0o755);
+    mkdirSync(join(workspace.path, 'desktop', 'dist'), { recursive: true });
+    symlinkSync(victim, join(workspace.path, 'desktop', 'dist', 'publication'));
+    expect(() => removeDetachedReleaseWorkspace(workspace)).not.toThrow();
+    expect(statSync(victim).mode & 0o777).toBe(0o755);
+    expect(existsSync(workspace.path)).toBe(false);
+  });
+
+  it.each(['desktop', 'dist'])(
+    'does not follow a symlink at the %s component while preparing publication cleanup',
+    (component) => {
+      const fixture = repositoryFixture();
+      const workspace = testReleaseWorkspace({
+        operatorRoot: fixture.root,
+        commit: fixture.commit,
+        runId:
+          component === 'desktop'
+            ? '44444444-4444-4444-8444-444444444444'
+            : '66666666-6666-4666-8666-666666666666',
+      });
+      const victim = join(fixture.root, `${component}-victim`);
+      const victimPublication =
+        component === 'desktop' ? join(victim, 'dist', 'publication') : join(victim, 'publication');
+      mkdirSync(victimPublication, { recursive: true });
+      chmodSync(victimPublication, 0o755);
+      if (component === 'desktop') {
+        symlinkSync(victim, join(workspace.path, 'desktop'));
+      } else {
+        mkdirSync(join(workspace.path, 'desktop'));
+        symlinkSync(victim, join(workspace.path, 'desktop', 'dist'));
+      }
+      expect(() => removeDetachedReleaseWorkspace(workspace)).not.toThrow();
+      expect(statSync(victimPublication).mode & 0o777).toBe(0o755);
+      expect(existsSync(victim)).toBe(true);
+      expect(existsSync(workspace.path)).toBe(false);
+    },
+  );
+
+  it('leaves only safe stale Git administration for explicit targeted operator cleanup', () => {
+    const fixture = repositoryFixture();
+    const workspace = testReleaseWorkspace({
+      operatorRoot: fixture.root,
+      commit: fixture.commit,
+      runId: '55555555-5555-4555-8555-555555555555',
+    });
+    const gitCalls = [];
+    let cleaned;
+    removeDetachedReleaseWorkspace(workspace, {
+      cleanupCommand: (value) => {
+        cleaned = value;
+      },
+      gitCommand: (_cwd, ...args) => {
+        gitCalls.push(args);
+        return '';
+      },
+    });
+    expect(cleaned.token).toEqual(workspace.token);
+    expect(gitCalls).toEqual([]);
+    expect(gitCalls.flat()).not.toContain(workspace.path);
+  });
+
+  it('never traverses a real-directory root replacement carrying the copied worktree pointer', async () => {
+    const fixture = repositoryFixture();
+    const workspace = testReleaseWorkspace({
+      operatorRoot: fixture.root,
+      commit: fixture.commit,
+      runId: '77777777-7777-4777-8777-777777777777',
+    });
+    const child = spawn(
+      'go',
+      [
+        'run',
+        './desktop/scripts/release-cleanup',
+        workspace.path,
+        String(workspace.token.dev),
+        String(workspace.token.ino),
+      ],
+      { cwd: projectRoot, stdio: ['pipe', 'pipe', 'pipe'] },
+    );
+    await new Promise((resolve, reject) => {
+      let output = '';
+      child.stdout.on('data', (chunk) => {
+        output += chunk;
+        if (output.includes('ready\n')) resolve();
+      });
+      child.once('error', reject);
+      child.once('exit', (code) =>
+        reject(new Error(`cleanup helper exited before ready: ${code}`)),
+      );
+    });
+    const original = `${workspace.path}.validated-original`;
+    renameSync(workspace.path, original);
+    mkdirSync(workspace.path);
+    const worktreePointer = readFileSync(join(original, '.git'), 'utf8');
+    copyFileSync(join(original, '.git'), join(workspace.path, '.git'));
+    writeFileSync(join(workspace.path, 'keep'), 'victim bytes');
+    chmodSync(workspace.path, 0o755);
+    const exit = new Promise((resolve) => {
+      let stderr = '';
+      child.stderr.on('data', (chunk) => {
+        stderr += chunk;
+      });
+      child.once('exit', (code) => resolve({ code, stderr }));
+    });
+    child.stdin.end();
+    const { code, stderr } = await exit;
+    expect(code).not.toBe(0);
+    expect(stderr).toMatch(/workspace root changed|not empty/);
+    expect(readFileSync(join(workspace.path, 'keep'), 'utf8')).toBe('victim bytes');
+    expect(readFileSync(join(workspace.path, '.git'), 'utf8')).toBe(worktreePointer);
+    expect(statSync(workspace.path).mode & 0o777).toBe(0o755);
+    expect(existsSync(original)).toBe(false);
+  }, 30_000);
+});
+
+describe('publication snapshot', () => {
+  it('copies receipt-bound artifacts, rewrites canonical paths, and detects later byte changes', () => {
+    const root = mkdtempSync(join(tmpdir(), 'agentico-publication-test-'));
+    roots.push(root);
+    const source = join(root, 'source');
+    const workspace = join(root, 'workspace');
+    mkdirSync(source);
+    mkdirSync(workspace);
+    const names = ['Agentico-mac-universal.dmg'];
+    writeFileSync(join(source, names[0]), 'dmg bytes');
+    writeFileSync(join(source, 'desktop-release.json'), '{}\n');
+    writeFileSync(join(source, 'desktop-release.json.sig'), 'signature\n');
+    writeFileSync(
+      join(source, 'package-verification-darwin-universal.json'),
+      `${JSON.stringify({
+        schema_version: 2,
+        target: { os: 'darwin', arch: 'universal' },
+        artifacts: [
+          {
+            target: { os: 'darwin', arch: 'universal' },
+            format: 'dmg',
+            path: join(source, names[0]),
+            sha256: createHash('sha256').update('dmg bytes').digest('hex'),
+            size: 9,
+            identity: {},
+          },
+        ],
+      })}\n`,
+    );
+
+    const snapshot = createPublicationSnapshot({
+      workspaceRoot: workspace,
+      sourceDir: source,
+      artifactNames: names,
+      extraNames: ['desktop-release.json', 'desktop-release.json.sig'],
+      receiptNames: ['package-verification-darwin-universal.json'],
+    });
+    expect(snapshot.artifacts.map(({ path }) => path.split('/').at(-1))).toEqual([
+      'Agentico-mac-universal.dmg',
+      'desktop-release.json',
+      'desktop-release.json.sig',
+    ]);
+    expect(snapshot.artifacts[0].path).toBe(join(snapshot.path, names[0]));
+    const receipt = JSON.parse(
+      readFileSync(join(snapshot.path, 'package-verification-darwin-universal.json'), 'utf8'),
+    );
+    expect(receipt.artifacts[0].path).toBe(join(snapshot.path, names[0]));
+    expect(receipt.artifacts[0].sha256).toBe(snapshot.artifacts[0].sha256);
+    expect(statSync(join(snapshot.path, names[0])).mode & 0o222).toBe(0);
+    expect(() => verifyPublicationSnapshot(snapshot)).not.toThrow();
+    chmodSync(join(snapshot.path, names[0]), 0o600);
+    writeFileSync(join(snapshot.path, names[0]), 'changed');
+    expect(() => verifyPublicationSnapshot(snapshot)).toThrow(/changed after snapshot/);
+    chmodSync(snapshot.path, 0o700);
+  });
+
+  it('fsyncs every publication file before the snapshot and parent directories', () => {
+    const root = mkdtempSync(join(tmpdir(), 'agentico-publication-fsync-test-'));
+    roots.push(root);
+    const source = join(root, 'source');
+    const workspace = join(root, 'workspace');
+    mkdirSync(source);
+    mkdirSync(workspace);
+    const artifact = 'Agentico-mac-universal.dmg';
+    const receiptName = 'package-verification-darwin-universal.json';
+    writeFileSync(join(source, artifact), 'dmg bytes');
+    writeFileSync(join(source, 'desktop-release.json'), '{}\n');
+    writeFileSync(join(source, 'desktop-release.json.sig'), 'signature\n');
+    writeFileSync(
+      join(source, receiptName),
+      `${JSON.stringify({
+        schema_version: 2,
+        artifacts: [
+          {
+            format: 'dmg',
+            path: join(source, artifact),
+            sha256: createHash('sha256').update('dmg bytes').digest('hex'),
+            size: 9,
+          },
+        ],
+      })}\n`,
+    );
+    const syncs = [];
+    const snapshot = createPublicationSnapshot({
+      workspaceRoot: workspace,
+      sourceDir: source,
+      artifactNames: [artifact],
+      extraNames: ['desktop-release.json', 'desktop-release.json.sig'],
+      receiptNames: [receiptName],
+      syncFile: (path) => syncs.push(`file:${path.split('/').at(-1)}`),
+      syncDirectory: (path) => syncs.push(`directory:${path}`),
+    });
+    expect(syncs).toEqual([
+      `file:${artifact}`,
+      'file:desktop-release.json',
+      'file:desktop-release.json.sig',
+      `file:${receiptName}`,
+      'file:publication-snapshot.json',
+      `directory:${snapshot.path}`,
+      `directory:${dirname(snapshot.path)}`,
+    ]);
+    chmodSync(snapshot.path, 0o700);
+  });
+
+  it('refuses to bless artifact bytes that no longer match the verified receipt', () => {
+    const root = mkdtempSync(join(tmpdir(), 'agentico-publication-stale-test-'));
+    roots.push(root);
+    const source = join(root, 'source');
+    const workspace = join(root, 'workspace');
+    mkdirSync(source);
+    mkdirSync(workspace);
+    writeFileSync(join(source, 'Agentico-mac-universal.dmg'), 'changed bytes');
+    writeFileSync(
+      join(source, 'package-verification-darwin-universal.json'),
+      `${JSON.stringify({
+        schema_version: 2,
+        artifacts: [
+          {
+            format: 'dmg',
+            path: join(source, 'Agentico-mac-universal.dmg'),
+            sha256: createHash('sha256').update('original bytes').digest('hex'),
+            size: 14,
+          },
+        ],
+      })}\n`,
+    );
+    expect(() =>
+      createPublicationSnapshot({
+        workspaceRoot: workspace,
+        sourceDir: source,
+        artifactNames: ['Agentico-mac-universal.dmg'],
+        receiptNames: ['package-verification-darwin-universal.json'],
+      }),
+    ).toThrow(/receipt digest does not match staged artifact/);
+  });
+});

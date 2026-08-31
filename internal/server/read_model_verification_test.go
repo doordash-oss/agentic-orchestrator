@@ -38,7 +38,10 @@ func TestFeatureDetailDTOCarriesVerificationItems(t *testing.T) {
 	}
 	h := &apiHandler{}
 
-	detail := h.featureDetailDTO(f)
+	detail, err := h.featureDetailDTO(f)
+	if err != nil {
+		t.Fatalf("featureDetailDTO() error = %v", err)
+	}
 
 	if len(detail.VerificationItems) != 2 {
 		t.Fatalf("VerificationItems = %+v, want 2 ordered entries", detail.VerificationItems)

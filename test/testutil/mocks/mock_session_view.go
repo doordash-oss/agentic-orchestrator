@@ -24,11 +24,11 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
 )
 
-// MockSessionView implements session.SessionView with configurable fields.
+// MockSessionView implements ports.SessionView with configurable fields.
 // All identity and state fields are set via exported struct fields.
 // Interaction methods record their calls for assertion.
 //
-// Type boundaries follow the post-Phase-5 layout:
+// Type boundaries reflect package ownership:
 //   - llm.*: SDKMessage, ResultMessage, Usage, ControlRequestMessage
 //   - session.*: SessionStatus, MessageLog, QAPair
 type MockSessionView struct {
@@ -46,6 +46,7 @@ type MockSessionView struct {
 	IsActiveVal        bool
 	IterationVal       int
 	StartedAtVal       time.Time
+	WaitingSinceVal    time.Time
 	InitialPromptVal   string
 	ProviderNameVal    string
 	ModelVal           string
@@ -53,7 +54,7 @@ type MockSessionView struct {
 	EffectiveEffortVal llm.EffortLevel
 	EffortSourceVal    llm.EffortSource
 
-	// Data — types from internal/llm (moved in Phase 5)
+	// Data — types from internal/llm
 	CostVal                   *llm.ResultMessage
 	LatestUsageVal            *llm.Usage
 	AccumulatedUsageVal       llm.Usage
@@ -70,7 +71,10 @@ type MockSessionView struct {
 	LastStdoutAtVal      time.Time
 
 	// Query
-	HasPendingAskUserQuestionVal bool
+	HasPendingAskUserQuestionVal     bool
+	HasPendingRootAskUserQuestionVal bool
+	RootCompletionIntentVal          llm.CompletionIntent
+	TaskActivitiesVal                []llm.TaskActivity
 
 	// Channels
 	StatusChVal chan string
@@ -133,10 +137,16 @@ func (m *MockSessionView) Label() string           { return m.LabelVal }
 
 // --- State ---
 
-func (m *MockSessionView) Status() session.SessionStatus    { return m.StatusVal }
-func (m *MockSessionView) IsActive() bool                   { return m.IsActiveVal }
-func (m *MockSessionView) Iteration() int                   { return m.IterationVal }
-func (m *MockSessionView) StartedAt() time.Time             { return m.StartedAtVal }
+func (m *MockSessionView) Status() session.SessionStatus { return m.StatusVal }
+func (m *MockSessionView) IsActive() bool                { return m.IsActiveVal }
+func (m *MockSessionView) Iteration() int                { return m.IterationVal }
+func (m *MockSessionView) StartedAt() time.Time          { return m.StartedAtVal }
+func (m *MockSessionView) WaitingSince() time.Time {
+	if m.WaitingSinceVal.IsZero() {
+		return m.StartedAtVal
+	}
+	return m.WaitingSinceVal
+}
 func (m *MockSessionView) InitialPrompt() string            { return m.InitialPromptVal }
 func (m *MockSessionView) ProviderName() string             { return m.ProviderNameVal }
 func (m *MockSessionView) Model() string                    { return m.ModelVal }
@@ -186,7 +196,27 @@ func (m *MockSessionView) Done() <-chan struct{}           { return m.DoneChVal 
 
 // --- Query ---
 
-func (m *MockSessionView) HasPendingAskUserQuestion() bool { return m.HasPendingAskUserQuestionVal }
+func (m *MockSessionView) HasPendingAskUserQuestion() bool {
+	return m.HasPendingAskUserQuestionVal
+}
+func (m *MockSessionView) HasPendingRootAskUserQuestion() bool {
+	return m.HasPendingRootAskUserQuestionVal
+}
+func (m *MockSessionView) RootCompletionIntent() llm.CompletionIntent {
+	return m.RootCompletionIntentVal
+}
+func (m *MockSessionView) LiveBackgroundTaskCount() int {
+	count := 0
+	for _, activity := range m.TaskActivitiesVal {
+		if activity.IsRunning() {
+			count++
+		}
+	}
+	return count
+}
+func (m *MockSessionView) TaskActivities() []llm.TaskActivity {
+	return append([]llm.TaskActivity(nil), m.TaskActivitiesVal...)
+}
 
 // --- Interaction ---
 

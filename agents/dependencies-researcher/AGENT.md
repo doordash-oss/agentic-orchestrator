@@ -96,8 +96,6 @@ For each direct dependency:
 
 | Dependency | Version | Purpose |
 |------------|---------|---------|
-| `charmbracelet/bubbletea` | v1.2.4 | TUI framework (Elm architecture) |
-| `charmbracelet/lipgloss` | v1.0.0 | Terminal styling |
 | `gopkg.in/yaml.v3` | v3.0.1 | YAML config serialization |
 | `creack/pty` | v1.1.21 | Pseudo-terminal management |
 | ... | ... | ... |

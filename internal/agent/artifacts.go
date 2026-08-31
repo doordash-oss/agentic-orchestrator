@@ -73,10 +73,10 @@ func ActiveImplementDir(stateDir string, f *feature.Feature) string {
 		return ""
 	}
 	runDir := ActiveRunDir(stateDir, f)
-	if prefix := f.CyclePrefix(); prefix != "" {
-		return filepath.Join(runDir, prefix, "implement")
-	}
-	base := filepath.Join(runDir, f.RefactorPrefix())
+	// PHASE2(path prefixes): main deleted the cycle/refactor subsystems, so
+	// CyclePrefix/RefactorPrefix no longer exist; both are treated as empty
+	// (their non-empty values only applied to deleted feature kinds).
+	base := runDir
 	if f.CurrentRoadmapPhase > 0 {
 		return filepath.Join(base, fmt.Sprintf("phase-%02d", f.CurrentRoadmapPhase), "implement")
 	}
@@ -96,41 +96,10 @@ func PhaseTestingContractPath(stateDir string, f *feature.Feature, phase int) st
 	return filepath.Join(PhaseTestingContractDir(stateDir, f, phase), "testing-contract.yaml")
 }
 
-func cycleArtifactRoot(stateDir string, f *feature.Feature, repoName string, cycleType feature.RepoCycleType) string {
-	root := filepath.Join(ActiveRunDir(stateDir, f), cycleArtifactDirName(f, repoName, cycleType))
-	if repoName != "" {
-		root = filepath.Join(root, repoName)
-	}
-	return root
-}
-
-// CycleTestingContractPath returns the absolute path to a cycle-scoped
-// compiled testing contract artifact.
-func CycleTestingContractPath(stateDir string, f *feature.Feature, repoName string, cycleType feature.RepoCycleType) string {
-	return filepath.Join(cycleArtifactRoot(stateDir, f, repoName, cycleType), "testing-contract.yaml")
-}
-
-// LatestCycleImplementationVerificationReportPath returns the most recent
-// implementation verification report under a cycle-scoped implement root.
-func LatestCycleImplementationVerificationReportPath(stateDir string, f *feature.Feature, repoName string, cycleType feature.RepoCycleType) string {
-	implementDir := filepath.Join(cycleArtifactRoot(stateDir, f, repoName, cycleType), "implement")
-	iteration := NewArtifactManager(implementDir).LatestIteration()
-	if iteration == 0 {
-		return ""
-	}
-	return filepath.Join(implementDir, fmt.Sprintf("iteration-%02d", iteration), "verification-report.yaml")
-}
-
 // RoadmapDir returns the roadmap artifacts directory within the active run.
 // e.g., runs/run-001/roadmap/.
 func RoadmapDir(stateDir string, f *feature.Feature) string {
 	return filepath.Join(ActiveRunDir(stateDir, f), "roadmap")
-}
-
-// RefactorBaseDir returns the base directory for a refactor cycle's artifacts
-// within the active run. e.g., runs/run-001/refactor-1/.
-func RefactorBaseDir(stateDir string, f *feature.Feature, n int) string {
-	return filepath.Join(ActiveRunDir(stateDir, f), fmt.Sprintf("refactor-%d", n))
 }
 
 type IterationMeta struct {

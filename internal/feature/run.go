@@ -92,13 +92,6 @@ type Run struct {
 	CurrentIteration int `yaml:"current_iteration,omitempty"`
 	PlanIteration    int `yaml:"plan_iteration,omitempty"`
 	ReviewIteration  int `yaml:"review_iteration,omitempty"`
-	RebaseCount      int `yaml:"rebase_count,omitempty"`
-	RefactorCount    int `yaml:"refactor_count,omitempty"`
-	// ReviewCommentsCount is the run-level review-comments cycle counter.
-	// Incremented per RunReviewCommentsLoop invocation. Each invocation gets a
-	// flat artifact dir at runs/run-N/review-comments-N/iteration-NN/ with no
-	// per-repo subdir.
-	ReviewCommentsCount int `yaml:"review_comments_count,omitempty"`
 
 	// Roadmap progress (moved from Feature).
 	CurrentRoadmapPhase int    `yaml:"current_roadmap_phase,omitempty"`
@@ -113,32 +106,14 @@ type Run struct {
 	// marked as frontend work. Missing phases default to false.
 	RoadmapPhaseFrontendByPhase map[int]bool `yaml:"roadmap_phase_frontend,omitempty"`
 
-	// Cycle state (moved from Feature).
-	// ActiveCycleType is the feature-level cycle type marker. Kept alongside
-	// ActiveCycle for the TUI's per-repo rendering surface (RepoCycles map
-	// below) which still consults the legacy field.
-	ActiveCycleType RepoCycleType `yaml:"active_cycle_type,omitempty"`
-	RefactorPrompt  string        `yaml:"refactor_prompt,omitempty"`
-	// ActiveCycle is the feature-level active post-publish cycle under
-	// SchemaVersionCurrent = 4.
-	ActiveCycle *CycleState `yaml:"active_cycle,omitempty"`
-
 	// Artifacts (moved from Feature) — entries are run-relative paths.
 	Artifacts map[string]string `yaml:"artifacts,omitempty"`
 
 	// Multi-repo state (moved from Feature). Under SchemaVersionCurrent = 5
 	// per-repo orchestration signal lives in RepoStates (Touched, PRURL,
 	// LastError); the unified phase-implement loop owns mid-flight state at
-	// the feature level (Run.CurrentPhaseStatus). RepoCycles is the per-repo
-	// cycle rendering surface read by the TUI; the unified cycle loops mirror
-	// their per-repo entries here so existing TUI badges keep working.
-	RepoCycles map[string]*RepoCycleState `yaml:"repo_cycles,omitempty"`
-	RepoStates map[string]*RepoState      `yaml:"repo_states,omitempty"`
-	// RebaseOperation tracks transient feature-level rebase progress while a
-	// harness, smart rebase, or rebase-triggered Final Review is active. It is
-	// cleared on successful/no-op settlement and retained only when actionable
-	// failure/conflict state remains useful to render.
-	RebaseOperation *RebaseOperationState `yaml:"rebase_operation,omitempty"`
+	// the feature level (Run.CurrentPhaseStatus).
+	RepoStates map[string]*RepoState `yaml:"repo_states,omitempty"`
 
 	// CurrentPhaseStatus is the mid-flight phase-implement status for the
 	// unified flow ("implementing", "reviewing", "verifying", or "" when not
@@ -156,7 +131,6 @@ type Run struct {
 	VerificationItems  []VerificationItemStatus `yaml:"verification_items,omitempty"`
 	ReviewingGate      bool                     `yaml:"reviewing_gate,omitempty"`
 	ReviewFixing       bool                     `yaml:"review_fixing,omitempty"`
-	AddressingReviews  bool                     `yaml:"addressing_reviews,omitempty"`
 	PendingReviewPhase *Phase                   `yaml:"pending_review_phase,omitempty"`
 	// PendingRewindReviewRoadmapPhase is set only while a partial rewind to
 	// Implement is waiting for human review of the selected roadmap phase plan.
@@ -213,8 +187,8 @@ func (r *Run) IsSealed() bool { return r != nil && r.SealedAt != nil }
 
 // AccumulateActiveTime moves elapsed time from ActivePhaseStart into
 // PhaseTimings under the ActiveTimingKey, then clears ActivePhaseStart.
-// ActiveTimingKey is intentionally preserved so cycle keys (rebase-N,
-// review-comments) survive interrupt/fail transitions and are available when
+// ActiveTimingKey is intentionally preserved so rebase cycle keys survive
+// interrupt/fail transitions and are available when
 // the phase is resumed.
 func (r *Run) AccumulateActiveTime() {
 	if r == nil || r.ActivePhaseStart == nil || r.ActiveTimingKey == "" {
@@ -226,11 +200,6 @@ func (r *Run) AccumulateActiveTime() {
 	}
 	r.PhaseTimings[r.ActiveTimingKey] += elapsed
 	r.ActivePhaseStart = nil
-}
-
-// IsRefactoring returns true when the run is in an active refactor cycle.
-func (r *Run) IsRefactoring() bool {
-	return r != nil && r.RefactorPrompt != ""
 }
 
 // SetRoadmapPhaseFrontend records whether a roadmap phase contains frontend
@@ -271,41 +240,6 @@ func (r *Run) AnyRoadmapPhaseFrontend() bool {
 		}
 	}
 	return false
-}
-
-// RefactorPrefix returns the artifact directory prefix for the current
-// refactor cycle. Returns empty string when not refactoring (filepath.Join
-// handles this gracefully).
-func (r *Run) RefactorPrefix() string {
-	if r == nil {
-		return ""
-	}
-	if r.RefactorCount > 0 && r.RefactorPrompt != "" {
-		return fmt.Sprintf("refactor-%d", r.RefactorCount)
-	}
-	return ""
-}
-
-// CyclePrefix returns the artifact directory prefix for the current
-// post-publish cycle (rebase, or review-comments). Returns empty
-// string when no cycle is active.
-func (r *Run) CyclePrefix() string {
-	if r == nil {
-		return ""
-	}
-	switch r.ActiveCycleType {
-	case CycleRebase:
-		if r.RebaseCount > 0 {
-			return fmt.Sprintf("rebase-%d", r.RebaseCount)
-		}
-		return "rebase"
-	case CycleReviewComments:
-		if r.ReviewCommentsCount > 0 {
-			return fmt.Sprintf("review-comments-%d", r.ReviewCommentsCount)
-		}
-		return "review-comments"
-	}
-	return ""
 }
 
 // TotalRuntime returns the total active runtime for the run.

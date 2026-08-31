@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -37,7 +38,7 @@ func (h *apiHandler) handleRecoveryRoute(w http.ResponseWriter, r *http.Request)
 		writeAPIError(w, http.StatusInternalServerError, "internal_error", "scan recovery", nil)
 		return
 	}
-	dtoItems := make([]RecoveryItemDTO, 0, len(items))
+	dtoItems := make([]RecoveryItem, 0, len(items))
 	for _, item := range items {
 		dtoItems = append(dtoItems, recoveryItemDTO(item))
 	}
@@ -92,16 +93,79 @@ func (h *apiHandler) handleRecoveryActionRoute(w http.ResponseWriter, r *http.Re
 	writeActionJSON(w, http.StatusOK, &resp)
 }
 
-// recoveryActionKill and recoveryActionSkip are RecoveryItemDTO action-name
-// strings for ports.RecoveryKill/ports.RecoverySkip, shared between the DTO
-// builder and action decoder.
+// handleRecoveryLogRoute serves GET /api/v1/recovery/logs — a bounded, redacted
+// log slice for one recovery item, resolved through the snapshot identity and
+// item key. The snapshot must be the latest scan (a new scan invalidates every
+// prior snapshot id), the key must match an item in that snapshot, and the log
+// path is never echoed back — only the bounded, sanitized text. Traversal and
+// cross-item access are rejected: the key must equal an item's key exactly and
+// the read target is the item's own log path, not a client-supplied path.
+func (h *apiHandler) handleRecoveryLogRoute(w http.ResponseWriter, r *http.Request) {
+	if !requireMethod(w, r, http.MethodGet) {
+		return
+	}
+	snapshotID := strings.TrimSpace(r.URL.Query().Get("snapshot_id"))
+	itemKey := strings.TrimSpace(r.URL.Query().Get("key"))
+	if snapshotID == "" || itemKey == "" {
+		writeAPIError(w, http.StatusBadRequest, "bad_request", "snapshot_id and key are required", nil)
+		return
+	}
+	if !safeRecoveryKey(itemKey) {
+		writeAPIError(w, http.StatusBadRequest, "bad_request", "invalid recovery key", nil)
+		return
+	}
+	items, ok := h.lookupRecoverySnapshot(snapshotID)
+	if !ok {
+		writeAPIError(w, http.StatusNotFound, "not_found", "recovery snapshot not found or stale", nil)
+		return
+	}
+	var item ports.RecoveryItem
+	found := false
+	for _, candidate := range items {
+		if ports.RecoveryActionKey(candidate.PIDFile.FeatureID, candidate.RepoName) == itemKey {
+			item, found = candidate, true
+			break
+		}
+	}
+	if !found {
+		writeAPIError(w, http.StatusNotFound, "not_found", "recovery item not found in snapshot", nil)
+		return
+	}
+	logPath := strings.TrimSpace(item.PIDFile.LogPath)
+	if logPath == "" {
+		writeAPIError(w, http.StatusNotFound, "not_found", "log is not available for this item", nil)
+		return
+	}
+	// The bounded-read/sanitize invariant is encoded once in writeTextFileSlice;
+	// the item key is a safe, opaque identity (never a host path) and the log
+	// text is sanitized so secrets and oversized content never reach the
+	// client. The raw host path stays server-side.
+	h.writeTextFileSlice(w, r, itemKey, logPath)
+}
+
+// safeRecoveryKey guards the recovery item key against path-traversal and
+// control characters. A valid key is a feature id optionally joined to a repo
+// name by a colon; both segments use the safe-action-token alphabet.
+func safeRecoveryKey(key string) bool {
+	if key == "" || len(key) > 512 || strings.Contains(key, "..") {
+		return false
+	}
+	for _, part := range strings.Split(key, ":") {
+		if !safeActionToken(part, false) {
+			return false
+		}
+	}
+	return true
+}
+
 const (
 	recoveryActionKill = "kill"
+	// recoveryActionSkip preserves the legacy spelling solely for fail-closed rejection tests.
 	recoveryActionSkip = "skip"
 )
 
-func recoveryItemDTO(item ports.RecoveryItem) RecoveryItemDTO {
-	dto := RecoveryItemDTO{
+func recoveryItemDTO(item ports.RecoveryItem) RecoveryItem {
+	dto := RecoveryItem{
 		Key:          ports.RecoveryActionKey(item.PIDFile.FeatureID, item.RepoName),
 		FeatureID:    item.PIDFile.FeatureID,
 		RepoName:     item.RepoName,
@@ -109,20 +173,36 @@ func recoveryItemDTO(item ports.RecoveryItem) RecoveryItemDTO {
 		Iteration:    item.PIDFile.Iteration,
 		PID:          item.PIDFile.PID,
 		ProcessAlive: item.ProcessAlive,
+		LogAvailable: recoveryLogAvailable(item),
 	}
 	if item.Feature != nil {
 		dto.FeatureName = item.Feature.Name
 	}
-	dto.DefaultAction = recoveryActionSkip
-	dto.AllowedActions = []string{actionResume, recoveryActionKill, recoveryActionSkip}
+	dto.DefaultAction = actionResume
+	dto.AllowedActions = []string{actionResume, recoveryActionKill}
 	return dto
 }
 
-func (h *apiHandler) storeRecoverySnapshot(items []ports.RecoveryItem, dtoItems []RecoveryItemDTO) string {
+// recoveryLogAvailable reports whether a bounded log read is available for the
+// item. A live or dead orphan session may carry a log path; the read endpoint
+// revalidates existence at read time, but availability here lets the desktop
+// surface the affordance only when a log exists.
+func recoveryLogAvailable(item ports.RecoveryItem) bool {
+	path := strings.TrimSpace(item.PIDFile.LogPath)
+	if path == "" {
+		return false
+	}
+	if info, err := os.Stat(path); err == nil && !info.IsDir() {
+		return true
+	}
+	return false
+}
+
+func (h *apiHandler) storeRecoverySnapshot(items []ports.RecoveryItem, dtoItems []RecoveryItem) string {
 	rawItems := append([]ports.RecoveryItem(nil), items...)
 	snapshotID := revisionForAny(struct {
 		GeneratedAt time.Time
-		Items       []RecoveryItemDTO
+		Items       []RecoveryItem
 	}{
 		GeneratedAt: time.Now().UTC(),
 		Items:       dtoItems,
@@ -150,7 +230,6 @@ func decodeRecoveryActions(items []ports.RecoveryItem, raw map[string]string) (m
 		itemAllowed := map[string]ports.RecoveryAction{
 			recoveryActionKill: ports.RecoveryKill,
 			actionResume:       ports.RecoveryResume,
-			recoveryActionSkip: ports.RecoverySkip,
 		}
 		allowed[key] = itemAllowed
 	}

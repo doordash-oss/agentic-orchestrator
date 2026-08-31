@@ -19,16 +19,20 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf16"
+	"unicode/utf8"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
@@ -231,100 +235,42 @@ func TestFeatureDetailIncludesDurableSetupFailureState(t *testing.T) {
 	}
 }
 
-func TestFeatureDetailSynthesizesCycleFromRepoCycleState(t *testing.T) {
+func TestFeatureDetailIncludesSanitizedKBWaitReason(t *testing.T) {
 	t.Parallel()
-
-	store, f := seedReadFeature(t)
-	if err := store.Modify(f.ID, func(ff *feature.Feature) error {
-		ff.Status = feature.StatusCodeReady
-		ff.CurrentPhase = feature.PhasePublish
-		ff.SetRefactorCount(1)
-		ff.ActiveCycle = nil
-		ff.SetActiveCycleType("")
-		ff.RepoCycles = map[string]*feature.RepoCycleState{
-			repoNameSelf: {Type: feature.CycleRefactor, Status: feature.RepoCycleRunning},
-		}
-		return nil
-	}); err != nil {
-		t.Fatalf("Modify() error = %v", err)
+	store := feature.NewStore(t.TempDir())
+	f := &feature.Feature{
+		ID:            "feat-kb-wait",
+		Name:          "KB Wait",
+		Slug:          "kb-wait",
+		Status:        feature.StatusBuildingKB,
+		CurrentPhase:  feature.PhaseKnowledgeBase,
+		Created:       time.Date(2026, 7, 22, 10, 0, 0, 0, time.UTC),
+		ActiveRun:     1,
+		RunCount:      1,
+		SchemaVersion: feature.SchemaVersionCurrent,
+		Repos:         []feature.FeatureRepo{{Name: "repo-a"}},
+		KBWaitMessage: `Waiting for KB build on repo "repo-a" by feature "private-token owner"`,
 	}
-	handler := NewHandler(HandlerOptions{
-		Runtime:               RuntimeIdentity{RuntimeDir: filepath.Dir(store.BaseDir), StateDir: store.BaseDir, Config: filepath.Join(filepath.Dir(store.BaseDir), "config.yaml")},
-		Features:              store,
-		DisableHostValidation: true,
+	f.SetRun(&feature.Run{
+		RunNumber:     1,
+		KBWaitMessage: f.KBWaitMessage,
 	})
-
-	list := getJSONMap(t, handler, apiPathFeatures)
-	summaries := list["features"].([]any)
-	if len(summaries) != 1 {
-		t.Fatalf("list features len = %d, want 1", len(summaries))
+	if err := store.Save(f); err != nil {
+		t.Fatalf("Save feature: %v", err)
 	}
-	summaryDTO := summaries[0].(map[string]any)
-	summaryCycle, ok := summaryDTO["cycle"].(map[string]any)
-	if !ok {
-		t.Fatalf("summary feature cycle missing in %+v", summaryDTO)
-	}
-	if summaryCycle["type"] != actionRefactor || summaryCycle["status"] != feature.RepoCycleRunning || summaryCycle["count"].(float64) != 1 {
-		t.Fatalf("summary feature cycle = %+v, want running refactor #1", summaryCycle)
-	}
+	handler := NewHandler(HandlerOptions{Features: store, DisableHostValidation: true})
 
 	detail := getJSONMap(t, handler, "/api/v1/features/"+f.ID)
-	featureDTO := detail[entityFeature].(map[string]any)
-	cycle, ok := featureDTO["cycle"].(map[string]any)
+	featureBody := detail[entityFeature].(map[string]any)
+	waitReason, ok := featureBody["wait_reason"].(string)
 	if !ok {
-		t.Fatalf("detail feature cycle missing in %+v", featureDTO)
+		t.Fatalf("wait_reason missing or non-string: %+v", featureBody["wait_reason"])
 	}
-	if cycle["type"] != actionRefactor || cycle["status"] != feature.RepoCycleRunning || cycle["count"].(float64) != 1 {
-		t.Fatalf("detail feature cycle = %+v, want running refactor #1", cycle)
+	if strings.Contains(waitReason, "private-token") {
+		t.Fatalf("wait_reason was not sanitized: %q", waitReason)
 	}
-}
-
-func TestFeatureDetailProjectsActiveFeatureRebaseOperation(t *testing.T) {
-	store, f := seedReadFeature(t)
-	f.ID = "feat-rebase"
-	f.Status = feature.StatusCodeReady
-	f.Repos = []feature.FeatureRepo{{Name: repoNameAPI}, {Name: repoNameWeb}}
-	f.ActiveCycle = &feature.CycleState{Type: feature.CycleRebase, Status: feature.RepoCycleRunning, Count: 2}
-	f.SetActiveCycleType(feature.CycleRebase)
-	f.RebaseOperation = &feature.RebaseOperationState{
-		Stage: feature.RebaseStageHarness,
-		Repos: map[string]*feature.RebaseRepoProgress{
-			repoNameAPI: {Status: feature.RebaseRepoStatusRebasing, RebaseTarget: "main"},
-			repoNameWeb: {Status: feature.RebaseRepoStatusUpToDate, RebaseTarget: "main"},
-		},
-	}
-	if err := store.Save(f); err != nil {
-		t.Fatalf("save feature: %v", err)
-	}
-	opts := baseReadHandlerOptions(store)
-	opts.FeatureStore = store
-	opts.Freshness = StaticFreshnessProvider(map[string]RepoFreshness{
-		repoNameAPI: RepoFreshnessLocalChanges,
-		repoNameWeb: RepoFreshnessInSync,
-	})
-	handler := NewHandler(opts)
-
-	body := getJSONMap(t, handler, "/api/v1/features/feat-rebase")
-	featureBody := body[entityFeature].(map[string]any)
-	cycle := featureBody["cycle"].(map[string]any)
-	if cycle["type"] != actionRebase || cycle["status"] != feature.RepoCycleRunning {
-		t.Fatalf("cycle = %+v, want active rebase", cycle)
-	}
-	status := map[string]RepoStatusDTO{}
-	for _, raw := range featureBody["repo_status"].([]any) {
-		repo := raw.(map[string]any)
-		name := repo["name"].(string)
-		status[name] = RepoStatusDTO{
-			Name:         name,
-			Freshness:    repo["freshness"].(string),
-			RebaseStatus: repo["rebase_status"].(string),
-		}
-	}
-	if status[repoNameAPI].RebaseStatus != "rebasing" || status[repoNameAPI].Freshness != "local changes" {
-		t.Fatalf("api status = %+v", status[repoNameAPI])
-	}
-	if status[repoNameWeb].RebaseStatus != "up_to_date" || status[repoNameWeb].Freshness != "in sync" {
-		t.Fatalf("web status = %+v", status[repoNameWeb])
+	if !strings.Contains(waitReason, "[redacted] owner") {
+		t.Fatalf("wait_reason = %q, want redacted owner label", waitReason)
 	}
 }
 
@@ -369,7 +315,7 @@ func TestTranscriptDTOsExposeStatusTextInPlace(t *testing.T) {
 		{Type: roleAssistant, Assistant: &llm.AssistantMessage{Message: llm.ConversationMsg{
 			Role: roleAssistant, Content: []llm.ContentBlock{{Type: blockTypeToolUse, Name: toolNameBash}},
 		}}},
-	}, 4)
+	}, 4, "")
 
 	if len(rows) != 3 {
 		t.Fatalf("transcriptDTOs() returned %d rows, want 3: %+v", len(rows), rows)
@@ -380,9 +326,37 @@ func TestTranscriptDTOsExposeStatusTextInPlace(t *testing.T) {
 	}
 }
 
+func TestTranscriptDTOsWriteToolUseMarksEveryLineAdded(t *testing.T) {
+	t.Parallel()
+
+	input, err := json.Marshal(map[string]any{"file_path": "/work/src/app.ts", "content": "line one\nline two\nline three\n"})
+	if err != nil {
+		t.Fatalf("Marshal Write input: %v", err)
+	}
+	rows := transcriptDTOs([]llm.SDKMessage{{
+		Type: roleAssistant,
+		Assistant: &llm.AssistantMessage{Message: llm.ConversationMsg{
+			Role:    roleAssistant,
+			Content: []llm.ContentBlock{{Type: blockTypeToolUse, Name: toolNameWrite, Input: input}},
+		}},
+	}}, 0, "/work")
+
+	if len(rows) != 1 || rows[0].FileChange == nil {
+		t.Fatalf("transcriptDTOs = %+v, want one row with a file change", rows)
+	}
+	change := rows[0].FileChange
+	if change.Path != "src/app.ts" || change.Operation != "write" {
+		t.Fatalf("file change = %+v, want write of src/app.ts", change)
+	}
+	if want := "+ line one\n+ line two\n+ line three"; change.Detail != want {
+		t.Fatalf("Detail = %q, want %q", change.Detail, want)
+	}
+}
+
 func TestConfigCatalogPromptPermissionSnapshots(t *testing.T) {
 	t.Parallel()
 	store, f := seedReadFeature(t)
+	f.Status = feature.StatusNeedUserInput
 	f.PendingNeedUserInputPath = filepath.Join(store.RunDir(f.ID, 1), "phase-02", targetPhaseImplement, "need-user-input.yaml")
 	f.Pipeline = feature.PipelineMedium
 	f.Checkpoints = feature.Checkpoints{InquiryReview: true, RoadmapReview: true, PhasePlanReview: true, ManualPublish: true, DraftPublish: true}
@@ -512,32 +486,33 @@ func TestNeedUserInputGateDTOsIncludeQuestionnaireAndCycleRouting(t *testing.T) 
 		Iteration: 3,
 		Questions: []agent.NeedUserInputQuestion{
 			{Index: 1, Prompt: "Which database should implementation use?", Answer: "Postgres"},
-			{Index: 2, Prompt: "Should we migrate existing data?", Answer: ""},
+			{Prompt: "Should we migrate existing data?", Answer: ""},
+		},
+		Verification: &agent.NeedUserInputVerificationContext{
+			Blockers: []agent.NeedUserInputVerificationBlocker{{
+				ItemID: "deploy", Name: "Deployment smoke test", RepoName: repoNameSelf,
+				Command:      "make deploy-smoke",
+				Reason:       `missing declared capability "Okta session"`,
+				Capabilities: []string{"Okta session"},
+				Remediation:  "Make Okta session available, then retry verification.",
+			}},
+		},
+		VerificationDecision: &agent.NeedUserVerificationDecision{
+			ContractPath:     "/private/must-not-leak/testing-contract.yaml",
+			ContractRevision: 3,
+			ItemIDs:          []string{"deploy"},
+			AllowedActions: []string{
+				agent.NeedUserVerificationWaive,
+				agent.NeedUserVerificationRetryAfterAuth,
+			},
 		},
 	}); err != nil {
 		t.Fatalf("WriteNeedUserInputRecord(feature gate) error = %v", err)
 	}
+	f.Status = feature.StatusNeedUserInput
 	f.PendingNeedUserInputPath = featureGatePath
 	f.CurrentIteration = 3
 
-	cycleGatePath := filepath.Join(store.RunDir(f.ID, 1), "cycles", repoNameSelf, "iteration-02", "need-user-input.yaml")
-	if err := agent.WriteNeedUserInputRecord(cycleGatePath, agent.NeedUserInputRecord{
-		Summary:   "Resolve review comment policy.",
-		Iteration: 2,
-		Questions: []agent.NeedUserInputQuestion{
-			{Index: 1, Prompt: "Reply now or leave unresolved?", Answer: "Reply now"},
-		},
-	}); err != nil {
-		t.Fatalf("WriteNeedUserInputRecord(cycle gate) error = %v", err)
-	}
-	f.RepoCycles = map[string]*feature.RepoCycleState{
-		repoNameSelf: {
-			Type:                     feature.CycleReviewComments,
-			Status:                   feature.RepoCycleNeedUserInput,
-			Iteration:                2,
-			PendingNeedUserInputPath: cycleGatePath,
-		},
-	}
 	if err := store.Save(f); err != nil {
 		t.Fatalf("Save() error = %v", err)
 	}
@@ -558,26 +533,425 @@ func TestNeedUserInputGateDTOsIncludeQuestionnaireAndCycleRouting(t *testing.T) 
 		firstDetailQuestion["answer"] != "Postgres" {
 		t.Fatalf("detail gate first question = %+v", firstDetailQuestion)
 	}
+	secondDetailQuestion := detailQuestions[1].(map[string]any)
+	if secondDetailQuestion["index"] != float64(2) {
+		t.Fatalf("detail gate second question index = %v; want ordinal fallback 2", secondDetailQuestion["index"])
+	}
 
 	prompts := getJSONMap(t, handler, apiPathPrompts)
 	gates := prompts["need_user_inputs"].([]any)
-	if len(gates) != 2 {
-		t.Fatalf("need_user_inputs length = %d; want feature and cycle gates", len(gates))
+	if len(gates) != 1 {
+		t.Fatalf("need_user_inputs length = %d; want feature gate", len(gates))
 	}
-	var cycleGate map[string]any
+	var featureGate map[string]any
 	for _, raw := range gates {
 		gate := raw.(map[string]any)
-		if gate["repo_name"] == repoNameSelf && gate["cycle_type"] == string(feature.CycleReviewComments) {
-			cycleGate = gate
-			break
+		if gate["scope"] == entityFeature && gate["repo_name"] == nil {
+			featureGate = gate
 		}
 	}
-	if cycleGate == nil {
-		t.Fatalf("need_user_inputs = %+v; want gate with repo/cycle routing", gates)
+	if featureGate == nil {
+		t.Fatalf("need_user_inputs = %+v; want feature gate", gates)
 	}
-	cycleQuestions := cycleGate["questions"].([]any)
-	if len(cycleQuestions) != 1 || cycleQuestions[0].(map[string]any)["answer"] != "Reply now" {
-		t.Fatalf("cycle gate questions = %+v", cycleQuestions)
+	for source, gate := range map[string]map[string]any{
+		"detail": detailGate,
+		"prompt": featureGate,
+	} {
+		verification, ok := gate["verification"].(map[string]any)
+		if !ok {
+			t.Fatalf("%s gate verification = %+v", source, gate["verification"])
+		}
+		if !reflect.DeepEqual(verification["allowed_actions"], []any{"WAIVE", "RETRY_AFTER_AUTH"}) {
+			t.Fatalf("allowed actions = %+v", verification["allowed_actions"])
+		}
+		blocker := verification["blockers"].([]any)[0].(map[string]any)
+		if blocker["name"] != "Deployment smoke test" ||
+			blocker["reason"] != `missing declared capability "Okta session"` ||
+			blocker["remediation"] != "Make Okta session available, then retry verification." {
+			t.Fatalf("blocker = %+v", blocker)
+		}
+		encoded, _ := json.Marshal(gate)
+		for _, forbidden := range []string{"contract_path", "probe", "stdout", "/private/must-not-leak"} {
+			if strings.Contains(string(encoded), forbidden) {
+				t.Fatalf("gate leaked %q: %s", forbidden, encoded)
+			}
+		}
+	}
+}
+
+func TestNeedUserInputGateDTOBoundsLegacyVerificationContext(t *testing.T) {
+	t.Parallel()
+	gatePath := filepath.Join(t.TempDir(), "need-user-input.yaml")
+	blockers := make([]agent.NeedUserInputVerificationBlocker, 0, 101)
+	for i := 0; i < 101; i++ {
+		capabilities := make([]string, 21)
+		for capability := range capabilities {
+			capabilities[capability] = "ordinary capability"
+		}
+		blocker := agent.NeedUserInputVerificationBlocker{
+			ItemID:       fmt.Sprintf("item-%03d", i),
+			Name:         "Ordinary check",
+			RepoName:     "repo",
+			Command:      "make verify",
+			Reason:       "missing capability",
+			Capabilities: capabilities,
+			Remediation:  "Grant access and retry.",
+		}
+		if i == 1 {
+			blocker.ItemID = " \t "
+		}
+		if i == 0 {
+			blocker = agent.NeedUserInputVerificationBlocker{
+				ItemID:       strings.Repeat("😀", 201),
+				Name:         strings.Repeat("😀", 64*1024+1),
+				RepoName:     strings.Repeat("😀", 501),
+				Command:      strings.Repeat("😀", 64*1024+1),
+				Reason:       strings.Repeat("😀", 64*1024+1),
+				Capabilities: capabilities,
+				Remediation:  strings.Repeat("😀", 64*1024+1),
+			}
+		}
+		blockers = append(blockers, blocker)
+	}
+	if err := agent.WriteNeedUserInputRecord(gatePath, agent.NeedUserInputRecord{
+		Questions: []agent.NeedUserInputQuestion{{Index: 1, Prompt: "Continue?"}},
+		Verification: &agent.NeedUserInputVerificationContext{
+			Blockers: blockers,
+		},
+		VerificationDecision: &agent.NeedUserVerificationDecision{
+			AllowedActions: []string{
+				agent.NeedUserVerificationWaive,
+				agent.NeedUserVerificationWaive,
+				agent.NeedUserVerificationRetryAfterAuth,
+				"FUTURE_ACTION",
+			},
+		},
+	}); err != nil {
+		t.Fatalf("WriteNeedUserInputRecord() error = %v", err)
+	}
+
+	dto := needUserInputGateDTO("feature-1", entityFeature, "", 1, "", gatePath)
+	if dto.Verification == nil {
+		t.Fatal("verification = nil, want bounded verification context")
+	}
+	if got := len(dto.Verification.Blockers); got != 100 {
+		t.Fatalf("valid blockers = %d, want 100 after omitting whitespace item ID", got)
+	}
+	if got := len(dto.Verification.AllowedActions); got != 2 {
+		t.Fatalf("allowed actions = %d, want two deduplicated supported actions", got)
+	}
+	blocker := dto.Verification.Blockers[0]
+	for i, projected := range dto.Verification.Blockers {
+		if strings.TrimSpace(projected.ItemID) == "" {
+			t.Fatalf("blocker %d has empty projected item ID", i)
+		}
+	}
+	assertBoundedUTF8 := func(name, value string, maxLength int) {
+		t.Helper()
+		if !utf8.ValidString(value) {
+			t.Fatalf("%s is not valid UTF-8", name)
+		}
+		utf16Length := 0
+		for _, r := range value {
+			utf16Length += utf16.RuneLen(r)
+		}
+		if utf16Length > maxLength {
+			t.Fatalf("%s UTF-16 length = %d, want at most %d", name, utf16Length, maxLength)
+		}
+		if !strings.HasSuffix(value, "…") {
+			t.Fatalf("%s = %q, want truncation ellipsis", name, value)
+		}
+	}
+	assertBoundedUTF8("item_id", blocker.ItemID, 200)
+	assertBoundedUTF8("repo_name", blocker.RepoName, 500)
+	assertBoundedUTF8("name", blocker.Name, 64*1024)
+	assertBoundedUTF8("command", blocker.Command, 64*1024)
+	assertBoundedUTF8("reason", blocker.Reason, 64*1024)
+	assertBoundedUTF8("remediation", blocker.Remediation, 64*1024)
+	if got := len(blocker.Capabilities); got != 20 {
+		t.Fatalf("capabilities = %d, want 20", got)
+	}
+	if _, err := json.Marshal(dto); err != nil {
+		t.Fatalf("Marshal(bounded gate DTO) error = %v", err)
+	}
+}
+
+func TestPromptSnapshotBoundsAggregateNeedUserInputGateDisplay(t *testing.T) {
+	t.Parallel()
+	store, f := seedReadFeature(t)
+	gatePath := filepath.Join(store.RunDir(f.ID, 1), "phase-02", targetPhaseImplement, "need-user-input.yaml")
+	largeText := strings.Repeat("\x01", 64*1024)
+	questions := make([]agent.NeedUserInputQuestion, 40)
+	for i := range questions {
+		questions[i] = agent.NeedUserInputQuestion{
+			Index: i + 1, Prompt: largeText, Answer: largeText,
+		}
+	}
+	blockers := make([]agent.NeedUserInputVerificationBlocker, 4)
+	for i := range blockers {
+		capabilities := make([]string, 20)
+		for capability := range capabilities {
+			capabilities[capability] = largeText
+		}
+		blockers[i] = agent.NeedUserInputVerificationBlocker{
+			ItemID:       fmt.Sprintf("oversized-%d", i),
+			Name:         largeText,
+			RepoName:     repoNameSelf,
+			Command:      largeText,
+			Reason:       largeText,
+			Capabilities: capabilities,
+			Remediation:  largeText,
+		}
+	}
+	if err := agent.WriteNeedUserInputRecord(gatePath, agent.NeedUserInputRecord{
+		Summary:   largeText,
+		Iteration: 1,
+		Questions: questions,
+		Verification: &agent.NeedUserInputVerificationContext{
+			Blockers: blockers,
+		},
+		VerificationDecision: &agent.NeedUserVerificationDecision{
+			ItemIDs: []string{"oversized-0", "oversized-1", "oversized-2", "oversized-3"},
+			AllowedActions: []string{
+				agent.NeedUserVerificationWaive,
+				agent.NeedUserVerificationRetryAfterAuth,
+			},
+		},
+	}); err != nil {
+		t.Fatalf("WriteNeedUserInputRecord() error = %v", err)
+	}
+	f.Status = feature.StatusNeedUserInput
+	f.PendingNeedUserInputPath = gatePath
+	f.CurrentIteration = 1
+	if err := store.Save(f); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	handler := NewHandler(baseReadHandlerOptions(store))
+	request := httptest.NewRequest(http.MethodGet, apiPathPrompts, nil)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET %s status = %d, want 200", apiPathPrompts, response.Code)
+	}
+	if got := response.Body.Len(); got >= 2*1024*1024 {
+		t.Fatalf("prompt snapshot bytes = %d, want comfortably below desktop's 5 MiB limit", got)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("Unmarshal(prompt snapshot) error = %v", err)
+	}
+	gates := payload["need_user_inputs"].([]any)
+	if len(gates) != 1 {
+		t.Fatalf("need_user_inputs = %d, want one gate", len(gates))
+	}
+	projectedGate := gates[0].(map[string]any)
+	encodedGate, err := json.Marshal(projectedGate)
+	if err != nil {
+		t.Fatalf("Marshal(projected gate) error = %v", err)
+	}
+	if got := len(encodedGate); got > 1024*1024 {
+		t.Fatalf("projected gate bytes = %d, want at most deterministic 1 MiB budget", got)
+	}
+	projectedQuestions := projectedGate["questions"].([]any)
+	if len(projectedQuestions) != len(questions) {
+		t.Fatalf("projected questions = %d, want all %d resolvable questions", len(projectedQuestions), len(questions))
+	}
+	for i, raw := range projectedQuestions {
+		if strings.TrimSpace(raw.(map[string]any)["prompt"].(string)) == "" {
+			t.Fatalf("projected question %d has empty prompt", i)
+		}
+	}
+}
+
+func TestPromptSnapshotCapabilityFallbackKeepsRequiredArrayShape(t *testing.T) {
+	t.Parallel()
+	store, f := seedReadFeature(t)
+	gatePath := filepath.Join(store.RunDir(f.ID, 1), "phase-02", targetPhaseImplement, "need-user-input.yaml")
+	largeCapability := strings.Repeat("x", 64*1024)
+	capabilities := make([]string, 20)
+	for i := range capabilities {
+		capabilities[i] = largeCapability
+	}
+	if err := agent.WriteNeedUserInputRecord(gatePath, agent.NeedUserInputRecord{
+		Questions: []agent.NeedUserInputQuestion{{Index: 1, Prompt: "Choose an action."}},
+		Verification: &agent.NeedUserInputVerificationContext{
+			Blockers: []agent.NeedUserInputVerificationBlocker{{
+				ItemID: "capability-heavy", Name: "Capability-heavy check",
+				Command: "make verify", Reason: "missing access",
+				Capabilities: capabilities, Remediation: "Grant access and retry.",
+			}},
+		},
+		VerificationDecision: &agent.NeedUserVerificationDecision{
+			ItemIDs: []string{"capability-heavy"},
+			AllowedActions: []string{
+				agent.NeedUserVerificationWaive,
+				agent.NeedUserVerificationRetryAfterAuth,
+			},
+		},
+	}); err != nil {
+		t.Fatalf("WriteNeedUserInputRecord() error = %v", err)
+	}
+	f.Status = feature.StatusNeedUserInput
+	f.PendingNeedUserInputPath = gatePath
+	if err := store.Save(f); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	payload := getJSONMap(t, NewHandler(baseReadHandlerOptions(store)), apiPathPrompts)
+	gate := payload["need_user_inputs"].([]any)[0].(map[string]any)
+	verification := gate["verification"].(map[string]any)
+	blocker := verification["blockers"].([]any)[0].(map[string]any)
+	projected, ok := blocker["capabilities"].([]any)
+	if !ok {
+		t.Fatalf("capabilities JSON = %#v, want required array", blocker["capabilities"])
+	}
+	if len(projected) != 0 {
+		t.Fatalf("capabilities length = %d, want empty aggregate-fallback array", len(projected))
+	}
+}
+
+func TestPromptSnapshotUnknownVerificationActionsKeepRequiredArrayShape(t *testing.T) {
+	t.Parallel()
+	store, f := seedReadFeature(t)
+	gatePath := filepath.Join(store.RunDir(f.ID, 1), "phase-02", targetPhaseImplement, "need-user-input.yaml")
+	if err := agent.WriteNeedUserInputRecord(gatePath, agent.NeedUserInputRecord{
+		Questions: []agent.NeedUserInputQuestion{{Index: 1, Prompt: "Choose an action."}},
+		Verification: &agent.NeedUserInputVerificationContext{
+			Blockers: []agent.NeedUserInputVerificationBlocker{{
+				ItemID: "future-action", Name: "Future verification check",
+				Command: "make verify", Reason: "a legacy server wrote an unknown action",
+				Capabilities: []string{}, Remediation: "Answer the generic prompt.",
+			}},
+		},
+		VerificationDecision: &agent.NeedUserVerificationDecision{
+			ItemIDs:        []string{"future-action"},
+			AllowedActions: []string{"REQUEST_ADMIN_ESCALATION"},
+		},
+	}); err != nil {
+		t.Fatalf("WriteNeedUserInputRecord() error = %v", err)
+	}
+	f.Status = feature.StatusNeedUserInput
+	f.PendingNeedUserInputPath = gatePath
+	if err := store.Save(f); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	payload := getJSONMap(t, NewHandler(baseReadHandlerOptions(store)), apiPathPrompts)
+	gate := payload["need_user_inputs"].([]any)[0].(map[string]any)
+	verification := gate["verification"].(map[string]any)
+	actions, ok := verification["allowed_actions"].([]any)
+	if !ok {
+		t.Fatalf("allowed_actions JSON = %#v, want required array", verification["allowed_actions"])
+	}
+	if len(actions) != 0 {
+		t.Fatalf("allowed_actions = %#v, want empty array for unknown legacy actions", actions)
+	}
+}
+
+func TestPromptSnapshotBoundsNeedUserInputCollectionAcrossManyGates(t *testing.T) {
+	t.Parallel()
+	store, base := seedReadFeature(t)
+	features := []*feature.Feature{base}
+	for i := 1; i < 6; i++ {
+		features = append(features, cloneFeatureForReadTest(
+			t,
+			store,
+			base,
+			fmt.Sprintf("budget-gate-%02d", i),
+			fmt.Sprintf("Budget gate %d", i),
+		))
+	}
+	largeText := strings.Repeat("x", 64*1024)
+	for i, f := range features {
+		gatePath := filepath.Join(store.RunDir(f.ID, 1), "phase-02", targetPhaseImplement, "need-user-input.yaml")
+		blockers := make([]agent.NeedUserInputVerificationBlocker, 3)
+		for blocker := range blockers {
+			blockers[blocker] = agent.NeedUserInputVerificationBlocker{
+				ItemID: fmt.Sprintf("gate-%d-blocker-%d", i, blocker),
+				Name:   largeText, Command: largeText, Reason: largeText,
+				Capabilities: []string{}, Remediation: largeText,
+			}
+		}
+		if err := agent.WriteNeedUserInputRecord(gatePath, agent.NeedUserInputRecord{
+			Summary: largeText,
+			Questions: []agent.NeedUserInputQuestion{{
+				Index: 1, Prompt: largeText, Answer: largeText,
+			}},
+			Verification: &agent.NeedUserInputVerificationContext{Blockers: blockers},
+			VerificationDecision: &agent.NeedUserVerificationDecision{
+				ItemIDs: []string{
+					fmt.Sprintf("gate-%d-blocker-0", i),
+					fmt.Sprintf("gate-%d-blocker-1", i),
+					fmt.Sprintf("gate-%d-blocker-2", i),
+				},
+				AllowedActions: []string{
+					agent.NeedUserVerificationWaive,
+					agent.NeedUserVerificationRetryAfterAuth,
+				},
+			},
+		}); err != nil {
+			t.Fatalf("WriteNeedUserInputRecord(%s) error = %v", f.ID, err)
+		}
+		f.Status = feature.StatusNeedUserInput
+		f.PendingNeedUserInputPath = gatePath
+		if err := store.Save(f); err != nil {
+			t.Fatalf("Save(%s) error = %v", f.ID, err)
+		}
+	}
+
+	handler := NewHandler(baseReadHandlerOptions(store))
+	request := httptest.NewRequest(http.MethodGet, apiPathPrompts, nil)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET %s status = %d, want 200", apiPathPrompts, response.Code)
+	}
+	if got := response.Body.Len(); got >= 4*1024*1024 {
+		t.Fatalf("multi-gate prompt snapshot bytes = %d, want 2 MiB transport headroom", got)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("Unmarshal(prompt snapshot) error = %v", err)
+	}
+	gates := payload["need_user_inputs"].([]any)
+	if len(gates) != len(features) {
+		t.Fatalf("need_user_inputs = %d, want all %d actionable gates", len(gates), len(features))
+	}
+	encodedGates, err := json.Marshal(gates)
+	if err != nil {
+		t.Fatalf("Marshal(need_user_inputs) error = %v", err)
+	}
+	if got := len(encodedGates); got > 3*1024*1024 {
+		t.Fatalf("need_user_inputs bytes = %d, want at most deterministic 3 MiB budget", got)
+	}
+	for i, raw := range gates {
+		questions := raw.(map[string]any)["questions"].([]any)
+		if len(questions) != 1 || strings.TrimSpace(questions[0].(map[string]any)["prompt"].(string)) == "" {
+			t.Fatalf("gate %d questions = %#v, want preserved resolvable questionnaire", i, questions)
+		}
+	}
+}
+
+func TestInterruptedFeatureDoesNotExposeStaleNeedUserInputGate(t *testing.T) {
+	t.Parallel()
+	store, f := seedReadFeature(t)
+	gatePath := filepath.Join(store.RunDir(f.ID, 1), "phase-02", targetPhaseImplement, "need-user-input.yaml")
+	writeFile(t, gatePath, "questions: []\n")
+	f.Status = feature.StatusInterrupted
+	f.PendingNeedUserInputPath = gatePath
+	if err := store.Save(f); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	handler := NewHandler(baseReadHandlerOptions(store))
+
+	prompts := getJSONMap(t, handler, apiPathPrompts)
+	if gates := prompts["need_user_inputs"].([]any); len(gates) != 0 {
+		t.Fatalf("need_user_inputs = %+v; want no stale gate for interrupted feature", gates)
+	}
+	detail := getJSONMap(t, handler, "/api/v1/features/"+f.ID)
+	if gate := detail[entityFeature].(map[string]any)["need_user_input"]; gate != nil {
+		t.Fatalf("detail need_user_input = %+v; want nil for interrupted feature", gate)
 	}
 }
 
@@ -585,9 +959,9 @@ func TestPromptSnapshotPreservesReadableAskUserQuestionText(t *testing.T) {
 	t.Parallel()
 
 	store, f := seedReadFeature(t)
-	longQuestion := "Should TUI/UI label names that match what is displayed on screen, including In Progress, Published, Watch, Answer, Approve, and Publish as PR, be translated into the target language or kept in English so the reader can map the README back to the live interface without losing important workflow context?"
-	longLabel := "Translate visible TUI labels too, including every status badge, button label, and action description that directly corresponds to on-screen text"
-	longDescription := "Translate all prose including TUI labels. The README is a localized document, and describing what the screen says in English breaks immersion even though the reader can still match the workflow by position, status, and surrounding context."
+	longQuestion := "Should desktop app label names that match what is displayed on screen, including In Progress, Published, Watch, Answer, Approve, and Publish as PR, be translated into the target language or kept in English so the reader can map the README back to the live interface without losing important workflow context?"
+	longLabel := "Translate visible desktop app labels too, including every status badge, button label, and action description that directly corresponds to on-screen text"
+	longDescription := "Translate all prose including desktop app labels. The README is a localized document, and describing what the screen says in English breaks immersion even though the reader can still match the workflow by position, status, and surrounding context."
 	input, err := json.Marshal(map[string]any{
 		questionsFieldKey: []map[string]any{{
 			questionFieldKey: longQuestion,
@@ -662,7 +1036,7 @@ func TestPromptSnapshotRecoversAskUserConfidenceFromAssistantToolUse(t *testing.
 		questionsFieldKey: []map[string]any{{
 			questionFieldKey: question,
 			headerFieldKey:   "Orthography",
-			"multiSelect":    false,
+			"multi_select":   true,
 			optionsFieldKey: []map[string]any{
 				{labelFieldKey: "Historical-Literary (Recommended)", descriptionFieldKey: optionDescriptions[0]},
 				{labelFieldKey: "De Blasi & Montuori 2020", descriptionFieldKey: optionDescriptions[1]},
@@ -674,7 +1048,7 @@ func TestPromptSnapshotRecoversAskUserConfidenceFromAssistantToolUse(t *testing.
 		questionsFieldKey: []map[string]any{{
 			questionFieldKey: question,
 			headerFieldKey:   "Orthography",
-			"multiSelect":    false,
+			"multi_select":   true,
 			optionsFieldKey: []map[string]any{
 				{labelFieldKey: "Historical-Literary (Recommended)", descriptionFieldKey: optionDescriptions[0], confidenceFieldKey: 0.72},
 				{labelFieldKey: "De Blasi & Montuori 2020", descriptionFieldKey: optionDescriptions[1], confidenceFieldKey: 0.21},
@@ -725,7 +1099,11 @@ func TestPromptSnapshotRecoversAskUserConfidenceFromAssistantToolUse(t *testing.
 	if len(questions) != 1 {
 		t.Fatalf("ask_user questions length = %d; want 1", len(questions))
 	}
-	options := questions[0].(map[string]any)[optionsFieldKey].([]any)
+	questionDTO := questions[0].(map[string]any)
+	if got := questionDTO["multi_select"]; got != true {
+		t.Fatalf("ask_user multi_select = %v; want true in %+v", got, questionDTO)
+	}
+	options := questionDTO[optionsFieldKey].([]any)
 	want := []float64{0.72, 0.21, 0.07}
 	if len(options) != len(want) {
 		t.Fatalf("ask_user options length = %d; want %d", len(options), len(want))
@@ -807,13 +1185,6 @@ func TestFeatureDetailActionCatalogStableAndRedacted(t *testing.T) {
 	if err := store.Modify(f.ID, func(ff *feature.Feature) error {
 		ff.Status = feature.StatusPublished
 		ff.CurrentPhase = feature.PhasePublish
-		ff.RepoCycles = map[string]*feature.RepoCycleState{
-			repoNameSelf: {
-				Type:      feature.CycleReviewComments,
-				Status:    feature.RepoCycleFailed,
-				LastError: "private-token leaked in raw prompt payload",
-			},
-		}
 		return nil
 	}); err != nil {
 		t.Fatalf("Modify() error = %v", err)
@@ -838,6 +1209,7 @@ func TestFeatureDetailActionCatalogStableAndRedacted(t *testing.T) {
 		}
 	}
 	wantIDs := []string{
+		actionSetup,
 		"start",
 		actionPauseStop,
 		actionResume,
@@ -846,7 +1218,7 @@ func TestFeatureDetailActionCatalogStableAndRedacted(t *testing.T) {
 		actionMerge,
 		actionRewind,
 		actionRebase,
-		actionReviewComments,
+		actionReviewFeedback,
 		actionRefactor,
 		actionRetry,
 		actionMarkDone,
@@ -871,21 +1243,19 @@ func TestFeatureDetailActionCatalogStableAndRedacted(t *testing.T) {
 	assertActionInputRequired(t, actionsByID[actionRewind], "upgrade_pipeline", false)
 	assertActionScope(t, actionsByID[actionRebase], "")
 	assertActionInputNames(t, actionsByID[actionRebase])
-	assertActionScope(t, actionsByID[actionReviewComments], "required")
-	assertActionInputNames(t, actionsByID[actionReviewComments], "repo", "mode")
-	assertActionInputRequired(t, actionsByID[actionReviewComments], "repo", true)
-	assertActionInputRequired(t, actionsByID[actionReviewComments], "mode", true)
-	assertActionScope(t, actionsByID[actionRefactor], "optional")
-	assertActionInputNames(t, actionsByID[actionRefactor], "repo", "prompt", "pipeline")
-	assertActionInputRequired(t, actionsByID[actionRefactor], "repo", false)
-	assertActionInputRequired(t, actionsByID[actionRefactor], "prompt", true)
+	assertActionScope(t, actionsByID[actionReviewFeedback], "")
+	assertActionInputNames(t, actionsByID[actionReviewFeedback])
 	assertActionScope(t, actionsByID[actionCleanup], "")
 	assertActionInputNames(t, actionsByID[actionCleanup], "target")
+	assertActionInputOptions(t, actionsByID[actionCleanup], "target", "worktrees")
 	assertActionScope(t, actionsByID[actionDelete], "")
-	refactorPrompt := actionInputByName(t, actionsByID[actionRefactor], "prompt")
-	if got := int(refactorPrompt["max_length"].(float64)); got != MaxActionTextBytes {
-		t.Fatalf("refactor prompt max_length = %d; want %d", got, MaxActionTextBytes)
+	// The seeded parent is Published, so the refactor child-launch action is
+	// offered with feature scope and no required inputs.
+	if got := actionsByID[actionRefactor]["enabled"]; got != true {
+		t.Fatalf("refactor action enabled = %v; want true for a published parent", got)
 	}
+	assertActionScope(t, actionsByID[actionRefactor], "")
+	assertActionInputNames(t, actionsByID[actionRefactor])
 	raw := mustMarshalJSON(t, rawActions)
 	for _, forbidden := range []string{secretTokenLiteral, "raw prompt", testRepoPath, worktreePathLiteral} {
 		if strings.Contains(raw, forbidden) {
@@ -913,6 +1283,188 @@ func TestFeatureDetailActionCatalogStableAndRedacted(t *testing.T) {
 	}
 }
 
+// TestChildFeatureActionCatalogRestricted pins the execution gate at the API
+// boundary: a child feature's catalog carries only the capability-gated
+// execution entries (start/resume/restart), setup retry, cleanup, and
+// delete — every delivery and post-publish action is omitted — and the
+// disabled reasons distinguish setup state, closed relationship, and
+// unsupported repository count.
+func TestChildFeatureActionCatalogRestricted(t *testing.T) {
+	t.Parallel()
+	publishable := true
+
+	deliveryActions := []string{
+		actionPublish, actionMerge, actionRewind,
+		actionRebase, actionRefactor, actionMarkDone,
+	}
+
+	assertNoDeliveryActions := func(t *testing.T, actions []Action) {
+		t.Helper()
+		ids := make([]string, 0, len(actions))
+		for _, a := range actions {
+			ids = append(ids, a.ID)
+		}
+		for _, blocked := range deliveryActions {
+			for _, id := range ids {
+				if id == blocked {
+					t.Fatalf("child catalog offers blocked action %q in %v", blocked, ids)
+				}
+			}
+		}
+	}
+	assertDisabledCode := func(t *testing.T, a Action, wantCode string) {
+		t.Helper()
+		if a.Enabled {
+			t.Fatalf("action %q enabled; want disabled with code %q", a.ID, wantCode)
+		}
+		if len(a.DisabledReasons) == 0 || a.DisabledReasons[0].Code != wantCode {
+			t.Fatalf("action %q disabled reasons = %+v; want code %q", a.ID, a.DisabledReasons, wantCode)
+		}
+	}
+
+	t.Run("setup complete child", func(t *testing.T) {
+		t.Parallel()
+		f := actionCatalogTestFeature(feature.StatusCreated, feature.Checkpoints{}, &publishable)
+		f.Pipeline = feature.PipelineMedium
+		f.Parent = &feature.ChildRelationship{ParentID: "parent-1", Kind: feature.ChildKindRefactor}
+
+		actions := actionCatalogDTOs(f)
+		assertNoDeliveryActions(t, actions)
+		if start := actionDTOByID(t, actions, actionStart); !start.Enabled {
+			t.Fatalf("start disabled = %+v; want enabled for an eligible child", start.DisabledReasons)
+		}
+		if restart := actionDTOByID(t, actions, actionRestart); !restart.Enabled {
+			t.Fatalf("restart disabled = %+v; want enabled for an eligible child", restart.DisabledReasons)
+		}
+		assertDisabledCode(t, actionDTOByID(t, actions, actionResume), "not_paused")
+		retry := actionDTOByID(t, actions, actionRetry)
+		if retry.Enabled {
+			t.Fatalf("retry enabled = true; want false until setup fails")
+		}
+	})
+
+	t.Run("queued child reports setup_incomplete", func(t *testing.T) {
+		t.Parallel()
+		f := actionCatalogTestFeature(feature.StatusSettingUpWorktrees, feature.Checkpoints{}, &publishable)
+		f.Pipeline = feature.PipelineMedium
+		f.Parent = &feature.ChildRelationship{ParentID: "parent-1", Kind: feature.ChildKindRefactor}
+
+		actions := actionCatalogDTOs(f)
+		assertNoDeliveryActions(t, actions)
+		assertDisabledCode(t, actionDTOByID(t, actions, actionStart), disabledChildSetupIncomplete)
+		assertDisabledCode(t, actionDTOByID(t, actions, actionResume), disabledChildSetupIncomplete)
+		assertDisabledCode(t, actionDTOByID(t, actions, actionRestart), disabledChildSetupIncomplete)
+	})
+
+	t.Run("large child is eligible to execute", func(t *testing.T) {
+		t.Parallel()
+		f := actionCatalogTestFeature(feature.StatusCreated, feature.Checkpoints{}, &publishable)
+		f.Pipeline = feature.PipelineLarge
+		f.Parent = &feature.ChildRelationship{ParentID: "parent-1", Kind: feature.ChildKindRefactor}
+
+		actions := actionCatalogDTOs(f)
+		assertNoDeliveryActions(t, actions)
+		if start := actionDTOByID(t, actions, actionStart); !start.Enabled {
+			t.Fatalf("start disabled = %+v; want enabled for an eligible large child", start.DisabledReasons)
+		}
+		if restart := actionDTOByID(t, actions, actionRestart); !restart.Enabled {
+			t.Fatalf("restart disabled = %+v; want enabled for an eligible large child", restart.DisabledReasons)
+		}
+		assertDisabledCode(t, actionDTOByID(t, actions, actionResume), "not_paused")
+	})
+
+	t.Run("multi-repo child no longer restricted by repo count", func(t *testing.T) {
+		t.Parallel()
+		f := actionCatalogTestFeature(feature.StatusCreated, feature.Checkpoints{}, &publishable)
+		f.Pipeline = feature.PipelineMedium
+		f.Repos = append(f.Repos, feature.FeatureRepo{Name: "repoB", Publishable: &publishable})
+		f.Parent = &feature.ChildRelationship{ParentID: "parent-1", Kind: feature.ChildKindRefactor}
+
+		actions := actionCatalogDTOs(f)
+		assertNoDeliveryActions(t, actions)
+		// Multi-repo children are now supported — start should not be
+		// disabled by repo count.
+		startAction := actionDTOByID(t, actions, actionStart)
+		if !startAction.Enabled {
+			t.Fatalf("start action disabled for multi-repo child; multi-repo restriction should be retired: %+v", startAction.DisabledReasons)
+		}
+	})
+
+	t.Run("settled closed child refuses execution", func(t *testing.T) {
+		t.Parallel()
+		f := actionCatalogTestFeature(feature.StatusReviewPassed, feature.Checkpoints{}, &publishable)
+		f.Pipeline = feature.PipelineMedium
+		closed := time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
+		f.Parent = &feature.ChildRelationship{
+			ParentID:     "parent-1",
+			Kind:         feature.ChildKindRefactor,
+			CloseOutcome: feature.ChildCloseOutcomeCompleted,
+			ClosedAt:     &closed,
+			Transaction: &feature.TransactionJournal{
+				Phase: feature.TransactionPhaseMerged,
+				Entries: []feature.RepoTransactionEntry{{
+					ParentBranch:    "main",
+					ParentAnchorSHA: "aaaa1111",
+					ChildHeadSHA:    "bbbb2222",
+					MergeHEAD:       "cccc3333",
+				}},
+			},
+		}
+
+		actions := actionCatalogDTOs(f)
+		assertNoDeliveryActions(t, actions)
+		assertDisabledCode(t, actionDTOByID(t, actions, actionStart), disabledChildRelationshipClosed)
+		assertDisabledCode(t, actionDTOByID(t, actions, actionResume), disabledChildRelationshipClosed)
+		assertDisabledCode(t, actionDTOByID(t, actions, actionRestart), disabledChildRelationshipClosed)
+	})
+
+	t.Run("closed child cleanup tail remains automatic", func(t *testing.T) {
+		t.Parallel()
+		f := actionCatalogTestFeature(feature.StatusReviewPassed, feature.Checkpoints{}, &publishable)
+		f.Pipeline = feature.PipelineMedium
+		closed := time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
+		f.Parent = &feature.ChildRelationship{
+			ParentID:     "parent-1",
+			Kind:         feature.ChildKindRefactor,
+			CloseOutcome: feature.ChildCloseOutcomeCompleted,
+			ClosedAt:     &closed,
+			Transaction: &feature.TransactionJournal{
+				Phase: feature.TransactionPhaseMerged,
+				Entries: []feature.RepoTransactionEntry{{
+					ParentBranch:    "main",
+					ParentAnchorSHA: "aaaa1111",
+					ChildHeadSHA:    "bbbb2222",
+					MergeHEAD:       "cccc3333",
+					CleanupWarning:  "worktree busy",
+				}},
+			},
+		}
+
+		actions := actionCatalogDTOs(f)
+		assertNoDeliveryActions(t, actions)
+		for _, action := range actions {
+			assertDisabledCode(t, action, disabledChildRelationshipClosed)
+		}
+	})
+
+	t.Run("failed setup child offers retry", func(t *testing.T) {
+		t.Parallel()
+		f := actionCatalogTestFeature(feature.StatusFailed, feature.Checkpoints{}, &publishable)
+		f.Parent = &feature.ChildRelationship{ParentID: "parent-1", Kind: feature.ChildKindRefactor}
+		// SetRun syncs run->shadows, so install the run before stamping
+		// shadow fields like FailureType.
+		f.SetRun(&feature.Run{RunNumber: 1, Setup: &feature.SetupState{Status: feature.SetupStatusFailed}})
+		f.FailureType = feature.FailureWorktreeSetup
+
+		actions := actionCatalogDTOs(f)
+		retry := actionDTOByID(t, actions, actionRetry)
+		if !retry.Enabled {
+			t.Fatalf("retry enabled = false; want true for a failed-setup child")
+		}
+		assertDisabledCode(t, actionDTOByID(t, actions, actionStart), disabledChildSetupIncomplete)
+	})
+}
+
 func TestFeatureDetailActionCatalogStateMatrix(t *testing.T) {
 	t.Parallel()
 	publishable := true
@@ -927,31 +1479,31 @@ func TestFeatureDetailActionCatalogStateMatrix(t *testing.T) {
 	}{
 		{
 			name: "publishable code ready",
-			f:    actionCatalogTestFeature(feature.StatusCodeReady, feature.Checkpoints{}, &publishable, nil),
+			f:    actionCatalogTestFeature(feature.StatusCodeReady, feature.Checkpoints{}, &publishable),
 			want: map[string]struct {
 				enabled      bool
 				disabledCode string
 			}{
-				actionPublish:  {enabled: true},
-				actionMerge:    {disabledCode: disabledNotLocalOnly},
-				actionRefactor: {disabledCode: disabledStatusNotAllowed},
+				actionPublish: {enabled: true},
+				actionMerge:   {disabledCode: disabledNotLocalOnly},
+				actionRebase:  {disabledCode: disabledStatusNotAllowed},
 			},
 		},
 		{
 			name: "manual publish code ready",
-			f:    actionCatalogTestFeature(feature.StatusCodeReady, feature.Checkpoints{ManualPublish: true}, &publishable, nil),
+			f:    actionCatalogTestFeature(feature.StatusCodeReady, feature.Checkpoints{ManualPublish: true}, &publishable),
 			want: map[string]struct {
 				enabled      bool
 				disabledCode string
 			}{
 				actionPublish:  {disabledCode: "manual_publish_required"},
-				actionRefactor: {enabled: true},
+				actionRebase:   {enabled: true},
 				actionMarkDone: {enabled: true},
 			},
 		},
 		{
 			name: "local only code ready",
-			f:    actionCatalogTestFeature(feature.StatusCodeReady, feature.Checkpoints{}, &localOnly, nil),
+			f:    actionCatalogTestFeature(feature.StatusCodeReady, feature.Checkpoints{}, &localOnly),
 			want: map[string]struct {
 				enabled      bool
 				disabledCode string
@@ -962,7 +1514,7 @@ func TestFeatureDetailActionCatalogStateMatrix(t *testing.T) {
 		},
 		{
 			name: "local only created",
-			f:    actionCatalogTestFeature(feature.StatusCreated, feature.Checkpoints{}, &localOnly, nil),
+			f:    actionCatalogTestFeature(feature.StatusCreated, feature.Checkpoints{}, &localOnly),
 			want: map[string]struct {
 				enabled      bool
 				disabledCode string
@@ -973,7 +1525,7 @@ func TestFeatureDetailActionCatalogStateMatrix(t *testing.T) {
 		{
 			name: "medium created cannot rewind just because upgrade targets exist",
 			f: func() *feature.Feature {
-				f := actionCatalogTestFeature(feature.StatusCreated, feature.Checkpoints{}, &publishable, nil)
+				f := actionCatalogTestFeature(feature.StatusCreated, feature.Checkpoints{}, &publishable)
 				f.Pipeline = feature.PipelineMedium
 				return f
 			}(),
@@ -986,46 +1538,47 @@ func TestFeatureDetailActionCatalogStateMatrix(t *testing.T) {
 		},
 		{
 			name: "published",
-			f:    actionCatalogTestFeature(feature.StatusPublished, feature.Checkpoints{}, &publishable, nil),
+			f:    actionCatalogTestFeature(feature.StatusPublished, feature.Checkpoints{}, &publishable),
 			want: map[string]struct {
 				enabled      bool
 				disabledCode string
 			}{
-				actionPublish:  {disabledCode: "already_published"},
-				actionMerge:    {disabledCode: disabledNotLocalOnly},
-				actionRefactor: {enabled: true},
-				actionCleanup:  {enabled: true},
+				actionPublish: {disabledCode: "already_published"},
+				actionMerge:   {disabledCode: disabledNotLocalOnly},
+				actionRebase:  {enabled: true},
+				actionCleanup: {enabled: true},
 			},
 		},
 		{
-			name: "published active cycle",
-			f: actionCatalogTestFeature(feature.StatusPublished, feature.Checkpoints{}, &publishable, map[string]*feature.RepoCycleState{
-				repoNameSelf: {Type: feature.CycleReviewComments, Status: feature.RepoCycleRunning},
-			}),
+			name: "feature gate can stop",
+			f: func() *feature.Feature {
+				f := actionCatalogTestFeature(feature.StatusNeedUserInput, feature.Checkpoints{}, &publishable)
+				f.PendingNeedUserInputPath = "/tmp/need-user-input.yaml"
+				return f
+			}(),
 			want: map[string]struct {
 				enabled      bool
 				disabledCode string
 			}{
-				actionRebase:         {disabledCode: disabledCycleActive},
-				actionReviewComments: {disabledCode: disabledCycleActive},
-				actionRefactor:       {disabledCode: disabledCycleActive},
+				actionPauseStop: {enabled: true},
+				actionResume:    {enabled: true},
 			},
 		},
 		{
 			name: "running cleanup disabled",
-			f:    actionCatalogTestFeature(feature.StatusImplementing, feature.Checkpoints{}, &publishable, nil),
+			f:    actionCatalogTestFeature(feature.StatusImplementing, feature.Checkpoints{}, &publishable),
 			want: map[string]struct {
 				enabled      bool
 				disabledCode string
 			}{
-				actionCleanup: {disabledCode: feature.RepoCycleRunning},
-				actionDelete:  {disabledCode: feature.RepoCycleRunning},
+				actionCleanup: {disabledCode: "running"},
+				actionDelete:  {enabled: true},
 			},
 		},
 		{
 			name: "medium plan review can still open rewind upgrade",
 			f: func() *feature.Feature {
-				f := actionCatalogTestFeature(feature.StatusPlanNeedsReview, feature.Checkpoints{}, &publishable, nil)
+				f := actionCatalogTestFeature(feature.StatusPlanNeedsReview, feature.Checkpoints{}, &publishable)
 				f.Pipeline = feature.PipelineMedium
 				return f
 			}(),
@@ -1063,7 +1616,7 @@ func TestFeatureDetailActionCatalogStateMatrix(t *testing.T) {
 func TestFeatureDetailActionCatalogMediumPlanReviewAdvertisesPlanAndUpgradeTargets(t *testing.T) {
 	t.Parallel()
 	publishable := true
-	f := actionCatalogTestFeature(feature.StatusPlanNeedsReview, feature.Checkpoints{}, &publishable, nil)
+	f := actionCatalogTestFeature(feature.StatusPlanNeedsReview, feature.Checkpoints{}, &publishable)
 	f.Pipeline = feature.PipelineMedium
 
 	rewind := actionDTOByID(t, actionCatalogDTOs(f), actionRewind)
@@ -1083,7 +1636,7 @@ func TestFeatureDetailActionCatalogMediumPlanReviewAdvertisesPlanAndUpgradeTarge
 func TestFeatureDetailActionCatalogDesignReviewExcludesUnstartedPlan(t *testing.T) {
 	t.Parallel()
 	publishable := true
-	f := actionCatalogTestFeature(feature.StatusDesignNeedsReview, feature.Checkpoints{}, &publishable, nil)
+	f := actionCatalogTestFeature(feature.StatusDesignNeedsReview, feature.Checkpoints{}, &publishable)
 	f.CurrentPhase = feature.PhaseDesign
 	f.Pipeline = feature.PipelineMoonshot
 
@@ -1112,6 +1665,8 @@ func TestPromptPermissionSnapshotsPreserveFIFOOrdering(t *testing.T) {
 		Time:     time.Date(2026, 6, 13, 12, 5, 0, 0, time.UTC),
 		Pending:  true,
 	}}
+	oldest.Status = feature.StatusNeedUserInput
+	newest.Status = feature.StatusNeedUserInput
 	oldGatePath := filepath.Join(store.RunDir(oldest.ID, 1), "phase-02", targetPhaseImplement, "need-user-input.yaml")
 	newGatePath := filepath.Join(store.RunDir(newest.ID, 1), "phase-02", targetPhaseImplement, "need-user-input.yaml")
 	writeFile(t, oldGatePath, "questions: []\n")
@@ -1168,18 +1723,108 @@ func TestPromptPermissionSnapshotsPreserveFIFOOrdering(t *testing.T) {
 	if got, want := stringFieldFromJSON(t, permissions["requests"], requestIDKey), []string{"old-perm", "new-perm"}; strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("permissions requests order = %v; want %v", got, want)
 	}
+	assertControlsHaveWaitingSince(t, prompts["ask_user_questions"])
+	assertControlsHaveWaitingSince(t, permissions["requests"])
+	assertGatesHaveWaitingSince(t, prompts["need_user_inputs"])
+}
+
+func TestPromptAndPermissionSnapshotsExposeStableWaitingSince(t *testing.T) {
+	t.Parallel()
+
+	store, f := seedReadFeature(t)
+	f.Status = feature.StatusNeedUserInput
+	legacyGatePath := filepath.Join(store.RunDir(f.ID, 1), "phase-02", targetPhaseImplement, "need-user-input.yaml")
+	writeFile(t, legacyGatePath, "questions: []\n")
+	legacyGateTime := time.Date(2026, 6, 13, 12, 2, 0, 0, time.UTC)
+	if err := os.Chtimes(legacyGatePath, legacyGateTime, legacyGateTime); err != nil {
+		t.Fatalf("Chtimes(%q) error = %v", legacyGatePath, err)
+	}
+	f.PendingNeedUserInputPath = legacyGatePath
+	if err := store.Save(f); err != nil {
+		t.Fatalf("Save(%s) error = %v", f.ID, err)
+	}
+
+	sessions := fakeSessionManager{views: []ports.SessionView{
+		&fakeSessionView{
+			id: "waiting-since-permission", featureID: f.ID, phase: feature.PhaseImplement, status: ports.SessionWaitingPermission,
+			pending: []*llm.ControlRequestMessage{pendingReadControl("permission-waiting-since", toolNameBash, `{}`)},
+		},
+		&fakeSessionView{
+			id: "waiting-since-question", featureID: f.ID, phase: feature.PhasePlan, status: ports.SessionWaitingHelp,
+			pending: []*llm.ControlRequestMessage{pendingReadControl("question-waiting-since", toolNameAskUserQuestion, `{"questions":[{"question":"Which option?"}]}`)},
+		},
+	}}
+	opts := baseReadHandlerOptions(store)
+	opts.Sessions = sessions
+	handler := NewHandler(opts)
+
+	firstPrompts := getJSONMap(t, handler, apiPathPrompts)
+	secondPrompts := getJSONMap(t, handler, apiPathPrompts)
+	firstPermissions := getJSONMap(t, handler, apiPathPermissions)
+	secondPermissions := getJSONMap(t, handler, apiPathPermissions)
+
+	firstGate := firstPrompts["need_user_inputs"].([]any)[0].(map[string]any)
+	gateWaitingSince, err := time.Parse(time.RFC3339Nano, firstGate["waiting_since"].(string))
+	if err != nil {
+		t.Fatalf("Parse(waiting_since) error = %v", err)
+	}
+	if !gateWaitingSince.Equal(legacyGateTime) {
+		t.Fatalf("legacy gate waiting_since = %v; want %v", gateWaitingSince, legacyGateTime)
+	}
+	if got, want := secondPrompts["need_user_inputs"].([]any)[0].(map[string]any)["waiting_since"], firstGate["waiting_since"]; got != want {
+		t.Fatalf("gate waiting_since changed across snapshots: got %v; want %v", got, want)
+	}
+
+	assertStableControlWaitingSince(t, firstPrompts["ask_user_questions"], secondPrompts["ask_user_questions"])
+	assertStableControlWaitingSince(t, firstPermissions["requests"], secondPermissions["requests"])
+}
+
+func assertStableControlWaitingSince(t *testing.T, first, second any) {
+	t.Helper()
+	firstRequests := first.([]any)
+	secondRequests := second.([]any)
+	if len(firstRequests) != 1 || len(secondRequests) != 1 {
+		t.Fatalf("control request lengths = %d and %d; want 1", len(firstRequests), len(secondRequests))
+	}
+	firstWaitingSince := firstRequests[0].(map[string]any)["waiting_since"]
+	if firstWaitingSince == nil || firstWaitingSince == "" {
+		t.Fatalf("control request waiting_since = %v; want timestamp", firstWaitingSince)
+	}
+	if got := secondRequests[0].(map[string]any)["waiting_since"]; got != firstWaitingSince {
+		t.Fatalf("control request waiting_since changed across snapshots: got %v; want %v", got, firstWaitingSince)
+	}
+}
+
+func assertControlsHaveWaitingSince(t *testing.T, requests any) {
+	t.Helper()
+	for _, request := range requests.([]any) {
+		if got := request.(map[string]any)["waiting_since"]; got == nil || got == "" {
+			t.Fatalf("control request waiting_since = %v; want timestamp", got)
+		}
+	}
+}
+
+func assertGatesHaveWaitingSince(t *testing.T, gates any) {
+	t.Helper()
+	for _, gate := range gates.([]any) {
+		if got := gate.(map[string]any)["waiting_since"]; got == nil || got == "" {
+			t.Fatalf("need user input gate waiting_since = %v; want timestamp", got)
+		}
+	}
 }
 
 func TestPromptSnapshotIncludesWaitingHelpSessionWithoutControlRequest(t *testing.T) {
 	t.Parallel()
 	store, f := seedReadFeature(t)
+	waitingSince := time.Date(2026, 6, 13, 12, 30, 0, 0, time.UTC)
 	sessions := fakeSessionManager{views: []ports.SessionView{
 		&fakeSessionView{
-			id:        "sess-waiting-help",
-			featureID: f.ID,
-			phase:     feature.PhaseDesign,
-			status:    ports.SessionWaitingHelp,
-			startedAt: time.Date(2026, 6, 13, 12, 3, 0, 0, time.UTC),
+			id:           "sess-waiting-help",
+			featureID:    f.ID,
+			phase:        feature.PhaseDesign,
+			status:       ports.SessionWaitingHelp,
+			startedAt:    time.Date(2026, 6, 13, 12, 3, 0, 0, time.UTC),
+			waitingSince: waitingSince,
 		},
 	}}
 	opts := baseReadHandlerOptions(store)
@@ -1190,8 +1835,42 @@ func TestPromptSnapshotIncludesWaitingHelpSessionWithoutControlRequest(t *testin
 	if got, want := stringFieldFromJSON(t, prompts["help_queue"], questionFieldKey), []string{agentQuestionPrompt}; strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("prompt help_queue = %v; want %v for WaitingHelp session without control request", got, want)
 	}
+	entry := prompts["help_queue"].([]any)[0].(map[string]any)
+	if got := entry["kind"]; got != helpKindCoordinating {
+		t.Fatalf("synthetic help_queue kind = %v; want %q", got, helpKindCoordinating)
+	}
+	entryTime, err := time.Parse(time.RFC3339Nano, entry["time"].(string))
+	if err != nil {
+		t.Fatalf("Parse(time) error = %v", err)
+	}
+	if !entryTime.Equal(waitingSince) {
+		t.Fatalf("synthetic help_queue time = %v; want WaitingSince %v", entryTime, waitingSince)
+	}
 	if got := stringFieldFromJSON(t, prompts["ask_user_questions"], requestIDKey); len(got) != 0 {
 		t.Fatalf("prompt ask_user_questions = %v; want empty without control request", got)
+	}
+}
+
+func TestPromptSnapshotMarksRealHelpRequestsAsQuestions(t *testing.T) {
+	t.Parallel()
+	store, f := seedReadFeature(t)
+	f.HelpQueue = append(f.HelpQueue, feature.HelpRequest{
+		Question: "real help",
+		Pending:  true,
+		Time:     time.Date(2026, 6, 13, 12, 5, 0, 0, time.UTC),
+	})
+	if err := store.Save(f); err != nil {
+		t.Fatalf("Save(%s) error = %v", f.ID, err)
+	}
+	handler := NewHandler(baseReadHandlerOptions(store))
+
+	prompts := getJSONMap(t, handler, apiPathPrompts)
+	entries := prompts["help_queue"].([]any)
+	if len(entries) != 1 {
+		t.Fatalf("help_queue length = %d; want 1", len(entries))
+	}
+	if got := entries[0].(map[string]any)["kind"]; got != helpKindQuestion {
+		t.Fatalf("real help_queue kind = %v; want %q", got, helpKindQuestion)
 	}
 }
 
@@ -1202,7 +1881,7 @@ func TestPermissionSnapshotIncludesToolInputAndActionableSummary(t *testing.T) {
 		&fakeSessionView{
 			id: fixtureSessionID, featureID: f.ID, phase: feature.PhaseImplement, status: ports.SessionWaitingPermission,
 			pending: []*llm.ControlRequestMessage{
-				pendingReadControl(fixturePermissionRequestID, toolNameBash, `{"command":"go test ./internal/tui"}`),
+				pendingReadControl(fixturePermissionRequestID, toolNameBash, `{"command":"go test ./internal/server"}`),
 			},
 		},
 	}}
@@ -1216,11 +1895,11 @@ func TestPermissionSnapshotIncludesToolInputAndActionableSummary(t *testing.T) {
 		t.Fatalf("permissions requests length = %d; want 1", len(requests))
 	}
 	request := requests[0].(map[string]any)
-	if got, want := request["summary"], "go test ./internal/tui"; got != want {
+	if got, want := request["summary"], "go test ./internal/server"; got != want {
 		t.Fatalf("permission summary = %v; want %q", got, want)
 	}
 	input := request["input"].(map[string]any)
-	if got, want := input["command"], "go test ./internal/tui"; got != want {
+	if got, want := input["command"], "go test ./internal/server"; got != want {
 		t.Fatalf("permission input.command = %v; want %q", got, want)
 	}
 }
@@ -1228,7 +1907,7 @@ func TestPermissionSnapshotIncludesToolInputAndActionableSummary(t *testing.T) {
 func TestPermissionSnapshotIncludesRememberPreview(t *testing.T) {
 	t.Parallel()
 
-	input := json.RawMessage(`{"command":"go test ./internal/tui -run TestAPIApp"}`)
+	input := json.RawMessage(`{"command":"go test ./internal/server -run TestAPIApp"}`)
 	store, f := seedReadFeature(t)
 	sess := &fakeSessionView{
 		id: "sess-remember", featureID: f.ID, phase: feature.PhaseImplement,
@@ -1405,7 +2084,7 @@ func TestSessionListIncludesActiveAndRecentFeatureSessions(t *testing.T) {
 	sessions := fakeSessionManager{views: []ports.SessionView{
 		&fakeSessionView{
 			id: "sess-running", featureID: f.ID, phase: feature.PhaseImplement,
-			kind: ports.KindPhase, status: ports.SessionRunning, startedAt: now.Add(-2 * time.Minute),
+			kind: ports.KindPhase, status: ports.SessionRunning, startedAt: now.Add(-2 * time.Minute), runNumber: 3,
 		},
 		&fakeSessionView{
 			id: "sess-completed", featureID: f.ID, phase: feature.PhasePlan,
@@ -1432,6 +2111,26 @@ func TestSessionListIncludesActiveAndRecentFeatureSessions(t *testing.T) {
 	wantIDs := []string{"sess-completed", "sess-running", "sess-failed"}
 	if strings.Join(gotIDs, ",") != strings.Join(wantIDs, ",") {
 		t.Fatalf("session order = %v; want %v", gotIDs, wantIDs)
+	}
+	if got := rawSessions[1].(map[string]any)["run_number"]; got != float64(3) {
+		t.Fatalf("running session run_number = %v; want 3", got)
+	}
+}
+
+func TestSessionListOmitsUnavailableContextPercentage(t *testing.T) {
+	t.Parallel()
+	store, f := seedReadFeature(t)
+	unavailable := -1
+	opts := baseReadHandlerOptions(store)
+	opts.Sessions = fakeSessionManager{views: []ports.SessionView{&fakeSessionView{
+		id: "sess-restored", featureID: f.ID, phase: feature.PhaseImplement,
+		kind: ports.KindPhase, status: ports.SessionRunning, contextPct: &unavailable,
+	}}}
+
+	body := getJSONMap(t, NewHandler(opts), apiPathSessions)
+	session := body["sessions"].([]any)[0].(map[string]any)
+	if got, present := session["context_percentage"]; present {
+		t.Fatalf("context_percentage = %v; want omitted when usage is unavailable", got)
 	}
 }
 
@@ -1676,6 +2375,75 @@ func TestLivePreviewUsesBoundedRecentSessionsWithoutFeatureScan(t *testing.T) {
 	}
 }
 
+func TestLivePreviewWithoutSessionReturnsEmptyTranscriptArray(t *testing.T) {
+	t.Parallel()
+	store, f := seedReadFeature(t)
+	handler := NewHandler(baseReadHandlerOptions(store))
+
+	body := getJSONMap(t, handler, "/api/v1/features/"+f.ID+"/live-preview")
+	transcript, ok := body["transcript"].([]any)
+	if !ok {
+		t.Fatalf("live preview transcript = %T; want array", body["transcript"])
+	}
+	if len(transcript) != 0 {
+		t.Fatalf("live preview transcript = %+v; want empty array", transcript)
+	}
+}
+
+func TestLivePreviewIncludesActivePhaseTiming(t *testing.T) {
+	t.Parallel()
+	store, f := seedReadFeature(t)
+	activeStart := time.Now().Add(-2 * time.Minute)
+	if err := store.Modify(f.ID, func(current *feature.Feature) error {
+		current.PhaseTimings = map[string]time.Duration{"inquire": 30 * time.Second}
+		current.ActivePhaseStart = &activeStart
+		current.ActiveTimingKey = "research"
+		return nil
+	}); err != nil {
+		t.Fatalf("Modify() error = %v", err)
+	}
+	handler := NewHandler(baseReadHandlerOptions(store))
+
+	body := getJSONMap(t, handler, "/api/v1/features/"+f.ID+"/live-preview")
+	timing := body["timing"].(map[string]any)
+	byPhase := timing["by_phase"].(map[string]any)
+	rawResearch, ok := byPhase["research"]
+	if !ok {
+		t.Fatalf("timing by_phase = %v; want active research entry", byPhase)
+	}
+	researchSeconds := int64(rawResearch.(float64))
+	if researchSeconds < 120 || researchSeconds > 121 {
+		t.Fatalf("active research seconds = %d; want 120..121", researchSeconds)
+	}
+	if totalSeconds := int64(timing["total_seconds"].(float64)); totalSeconds != 30+researchSeconds {
+		t.Fatalf("timing total_seconds = %d; want %d", totalSeconds, 30+researchSeconds)
+	}
+}
+
+func TestLivePreviewSessionIncludesRunningCost(t *testing.T) {
+	t.Parallel()
+	store, f := seedReadFeature(t)
+	sessions := fakeSessionManager{views: []ports.SessionView{&fakeSessionView{
+		id:        "sess-running-cost",
+		featureID: f.ID,
+		runNumber: 1,
+		phase:     feature.PhaseResearch,
+		kind:      ports.KindPhase,
+		status:    ports.SessionRunning,
+		usage:     &llm.Usage{InputTokens: 100, OutputTokens: 20, CostUSD: 0.42},
+	}}}
+	opts := baseReadHandlerOptions(store)
+	opts.Sessions = sessions
+	handler := NewHandler(opts)
+
+	body := getJSONMap(t, handler, "/api/v1/features/"+f.ID+"/live-preview")
+	session := body["session"].(map[string]any)
+	usage := session["usage"].(map[string]any)
+	if got := usage["cost_usd"].(float64); got != 0.42 {
+		t.Fatalf("live session cost_usd = %v; want 0.42", got)
+	}
+}
+
 func TestLivePreviewIncludesExtendedTranscriptTailAndToolProgressRows(t *testing.T) {
 	t.Parallel()
 	store, f := seedReadFeature(t)
@@ -1876,7 +2644,8 @@ func TestArtifactLogLivePreviewAndSessionReadsAreBoundedAndRedacted(t *testing.T
 	store, f := seedReadFeature(t)
 	runDir := store.RunDir(f.ID, 1)
 	writeFile(t, filepath.Join(runDir, targetPhasePlan, "phase-plan.md"), "hello artifact content")
-	writeFile(t, filepath.Join(runDir, "logs", "session.log"), "first\nsecond\nthird\n")
+	largeLog := strings.Repeat("old provider output\n", 70_000) + "first\nsecond\nthird\n"
+	writeFile(t, filepath.Join(runDir, feature.PhaseResearch.DirName(), "output.txt"), largeLog)
 	msgs := []llm.SDKMessage{
 		{Type: roleAssistant, Assistant: &llm.AssistantMessage{Message: llm.ConversationMsg{Role: roleAssistant, Content: []llm.ContentBlock{{Type: blockTypeText, Text: "safe text"}, {Type: blockTypeToolUse, Name: toolNameBash, Input: json.RawMessage(`{"command":"echo private-token"}`)}}}}},
 		{Type: roleUser, User: &llm.UserMessage{Message: llm.ConversationMsg{Role: roleUser, Content: []llm.ContentBlock{{Type: blockTypeText, Text: "raw prompt private-token"}}}}},
@@ -1884,7 +2653,7 @@ func TestArtifactLogLivePreviewAndSessionReadsAreBoundedAndRedacted(t *testing.T
 	sessions := fakeSessionManager{views: []ports.SessionView{&fakeSessionView{
 		id: fixtureSessionID, featureID: f.ID, phase: feature.PhaseImplement, repoName: repoNameSelf,
 		kind: ports.KindPhase, status: ports.SessionRunning, provider: providerCodex, model: modelGPT54,
-		logPath: filepath.Join(runDir, "logs", "session.log"), messages: msgs,
+		logPath: filepath.Join(runDir, feature.PhaseResearch.DirName(), "output.txt"), messages: msgs,
 		initialPrompt: "private-token initial prompt",
 	}}}
 	opts := baseReadHandlerOptions(store)
@@ -1901,7 +2670,18 @@ func TestArtifactLogLivePreviewAndSessionReadsAreBoundedAndRedacted(t *testing.T
 	}
 	requestJSONMap(t, handler, "/api/v1/features/"+f.ID+"/runs/1/artifacts/..%2Ffeature.yaml", http.StatusBadRequest)
 
-	logBody := getJSONMap(t, handler, "/api/v1/features/"+f.ID+"/runs/1/logs/session?offset=6&limit=6")
+	logList := getJSONMap(t, handler, "/api/v1/features/"+f.ID+"/runs/1/logs")
+	logs := logList["logs"].([]any)
+	if len(logs) != 1 {
+		t.Fatalf("logs = %+v; want authentic research output", logs)
+	}
+	log := logs[0].(map[string]any)
+	if log["path"] != "research/output.txt" {
+		t.Fatalf("log path = %v; want research/output.txt", log["path"])
+	}
+	logID := log["id"].(string)
+	offset := int64(len(largeLog) - len("first\nsecond\nthird\n") + len("first\n"))
+	logBody := getJSONMap(t, handler, "/api/v1/features/"+f.ID+"/runs/1/logs/"+logID+"?offset="+strconv.FormatInt(offset, 10)+"&limit=6")
 	if logBody[blockTypeText] != "second" {
 		t.Fatalf("log text slice = %q; want second", logBody[blockTypeText])
 	}
@@ -2176,8 +2956,9 @@ func cloneFeatureForReadTest(t *testing.T, store *feature.Store, base *feature.F
 
 func pendingReadControl(requestID, toolName, input string) *llm.ControlRequestMessage {
 	return &llm.ControlRequestMessage{
-		Type:      transcriptTypeControlRequest,
-		RequestID: requestID,
+		Type:         transcriptTypeControlRequest,
+		RequestID:    requestID,
+		WaitingSince: time.Date(2026, 6, 13, 12, 3, 0, 0, time.UTC),
 		Request: llm.ControlRequest{
 			Subtype:  controlSubtypeCanUseTool,
 			ToolName: toolName,
@@ -2281,7 +3062,7 @@ func actionInputByName(t *testing.T, action map[string]any, name string) map[str
 	return nil
 }
 
-func actionInputDTOByName(t *testing.T, action ActionDTO, name string) ActionInputDTO {
+func actionInputDTOByName(t *testing.T, action Action, name string) ActionInput {
 	t.Helper()
 	for _, input := range action.RequiredInputs {
 		if input.Name == name {
@@ -2289,7 +3070,7 @@ func actionInputDTOByName(t *testing.T, action ActionDTO, name string) ActionInp
 		}
 	}
 	t.Fatalf("action %s missing input %q", action.ID, name)
-	return ActionInputDTO{}
+	return ActionInput{}
 }
 
 func assertActionInputRequired(t *testing.T, action map[string]any, name string, want bool) {
@@ -2300,6 +3081,22 @@ func assertActionInputRequired(t *testing.T, action map[string]any, name string,
 	}
 }
 
+func assertActionInputOptions(t *testing.T, action map[string]any, name string, want ...string) {
+	t.Helper()
+	input := actionInputByName(t, action, name)
+	rawOptions, ok := input["options"].([]any)
+	if !ok {
+		t.Fatalf("action %s input %s options missing or wrong type in %+v", action["id"], name, input)
+	}
+	got := make([]string, 0, len(rawOptions))
+	for _, rawOption := range rawOptions {
+		got = append(got, rawOption.(string))
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("action %s input %s options = %v; want %v", action["id"], name, got, want)
+	}
+}
+
 func stringValue(v any) string {
 	if s, ok := v.(string); ok {
 		return s
@@ -2307,7 +3104,7 @@ func stringValue(v any) string {
 	return ""
 }
 
-func actionCatalogTestFeature(status feature.Status, checkpoints feature.Checkpoints, publishable *bool, cycles map[string]*feature.RepoCycleState) *feature.Feature {
+func actionCatalogTestFeature(status feature.Status, checkpoints feature.Checkpoints, publishable *bool) *feature.Feature {
 	return &feature.Feature{
 		ID:          "feat-actions",
 		Status:      status,
@@ -2316,11 +3113,10 @@ func actionCatalogTestFeature(status feature.Status, checkpoints feature.Checkpo
 			Name:        repoNameSelf,
 			Publishable: publishable,
 		}},
-		RepoCycles: cycles,
 	}
 }
 
-func actionDTOByID(t *testing.T, actions []ActionDTO, id string) ActionDTO {
+func actionDTOByID(t *testing.T, actions []Action, id string) Action {
 	t.Helper()
 	for _, action := range actions {
 		if action.ID == id {
@@ -2328,7 +3124,7 @@ func actionDTOByID(t *testing.T, actions []ActionDTO, id string) ActionDTO {
 		}
 	}
 	t.Fatalf("action catalog missing %q", id)
-	return ActionDTO{}
+	return Action{}
 }
 
 func stringFieldFromJSON(t *testing.T, raw any, key string) []string {
@@ -2435,8 +3231,9 @@ func (p fakeProvider) ModelCatalog() []llm.ModelInfo {
 }
 
 type countingFeatureReader struct {
-	feature        *feature.Feature
-	loadRunNumbers []int
+	feature         *feature.Feature
+	loadRunNumbers  []int
+	listRunsNumbers []int
 }
 
 func (r *countingFeatureReader) List() ([]*feature.Feature, error) {
@@ -2459,6 +3256,13 @@ func (r *countingFeatureReader) LoadRun(_ string, runNumber int) (*feature.Run, 
 }
 
 func (r *countingFeatureReader) RunDir(string, int) string { return "" }
+
+func (r *countingFeatureReader) ListRuns(_ string) ([]int, error) {
+	if r.feature == nil {
+		return nil, nil
+	}
+	return r.listRunsNumbers, nil
+}
 
 type fakeSessionManager struct {
 	views                []ports.SessionView
@@ -2540,12 +3344,14 @@ func (m fakeSessionManager) IsShuttingDown() bool { return false }
 type fakeSessionView struct {
 	id             string
 	featureID      string
+	runNumber      int
 	phase          feature.Phase
 	repoName       string
 	kind           ports.SessionKind
 	label          string
 	status         ports.SessionStatus
 	startedAt      time.Time
+	waitingSince   time.Time
 	iteration      int
 	initialPrompt  string
 	provider       string
@@ -2556,10 +3362,14 @@ type fakeSessionView struct {
 	log            ports.MessageLog
 	pending        []*llm.ControlRequestMessage
 	permCacheScope string
+	contextPct     *int
+	usage          *llm.Usage
+	taskActivities []llm.TaskActivity
 }
 
 func (s *fakeSessionView) ID() string                  { return s.id }
 func (s *fakeSessionView) FeatureID() string           { return s.featureID }
+func (s *fakeSessionView) RunNumber() int              { return s.runNumber }
 func (s *fakeSessionView) Phase() feature.Phase        { return s.phase }
 func (s *fakeSessionView) RepoName() string            { return s.repoName }
 func (s *fakeSessionView) PermCacheScope() string      { return s.permCacheScope }
@@ -2576,6 +3386,12 @@ func (s *fakeSessionView) StartedAt() time.Time {
 	}
 	return s.startedAt
 }
+func (s *fakeSessionView) WaitingSince() time.Time {
+	if s.waitingSince.IsZero() {
+		return s.StartedAt()
+	}
+	return s.waitingSince
+}
 func (s *fakeSessionView) InitialPrompt() string            { return s.initialPrompt }
 func (s *fakeSessionView) ProviderName() string             { return s.provider }
 func (s *fakeSessionView) Model() string                    { return s.model }
@@ -2591,6 +3407,9 @@ func (s *fakeSessionView) MessageLog() ports.MessageLog {
 func (s *fakeSessionView) Cost() *llm.ResultMessage { return nil }
 func (s *fakeSessionView) LatestUsage() *llm.Usage  { return nil }
 func (s *fakeSessionView) AccumulatedUsage() llm.Usage {
+	if s.usage != nil {
+		return *s.usage
+	}
 	return llm.Usage{InputTokens: 10, OutputTokens: 5}
 }
 func (s *fakeSessionView) LastControlRequest() *llm.ControlRequestMessage {
@@ -2602,9 +3421,14 @@ func (s *fakeSessionView) LastControlRequest() *llm.ControlRequestMessage {
 func (s *fakeSessionView) PendingControlRequests() []*llm.ControlRequestMessage {
 	return append([]*llm.ControlRequestMessage(nil), s.pending...)
 }
-func (s *fakeSessionView) QALog() []ports.QAPair           { return nil }
-func (s *fakeSessionView) LogFilePath() string             { return s.logPath }
-func (s *fakeSessionView) ContextPercentage() int          { return 42 }
+func (s *fakeSessionView) QALog() []ports.QAPair { return nil }
+func (s *fakeSessionView) LogFilePath() string   { return s.logPath }
+func (s *fakeSessionView) ContextPercentage() int {
+	if s.contextPct != nil {
+		return *s.contextPct
+	}
+	return 42
+}
 func (s *fakeSessionView) ErrorDetail() string             { return "" }
 func (s *fakeSessionView) ExitCodeDetail() string          { return "" }
 func (s *fakeSessionView) LastStdoutAt() time.Time         { return s.StartedAt() }
@@ -2618,6 +3442,29 @@ func (s *fakeSessionView) HasPendingAskUserQuestion() bool {
 		}
 	}
 	return false
+}
+func (s *fakeSessionView) HasPendingRootAskUserQuestion() bool {
+	for _, req := range s.pending {
+		if req.Request.ToolName == toolNameAskUserQuestion && req.Origin.IsRoot() {
+			return true
+		}
+	}
+	return false
+}
+func (s *fakeSessionView) RootCompletionIntent() llm.CompletionIntent {
+	return llm.CompletionIntent{}
+}
+func (s *fakeSessionView) LiveBackgroundTaskCount() int {
+	count := 0
+	for _, activity := range s.taskActivities {
+		if activity.IsRunning() {
+			count++
+		}
+	}
+	return count
+}
+func (s *fakeSessionView) TaskActivities() []llm.TaskActivity {
+	return append([]llm.TaskActivity(nil), s.taskActivities...)
 }
 func (s *fakeSessionView) SendUserMessage(string) error                { return nil }
 func (s *fakeSessionView) RespondToControl(string, bool, string) error { return nil }
@@ -2664,4 +3511,69 @@ func (l fakeMessageLog) ToolUseBlocks() []llm.ContentBlock {
 		}
 	}
 	return blocks
+}
+
+func TestCompletionPreflightRepoCarriesPendingDeliveryFields(t *testing.T) {
+	repo := CompletionPreflightRepo{
+		Repo:                  "repo-a",
+		Publishable:           true,
+		Touched:               true,
+		Status:                "unpublished_changes",
+		PrURL:                 "https://github.example/repo-a/pull/1",
+		PendingCommits:        3,
+		PendingDirty:          true,
+		PushMode:              "rewrite",
+		PendingDirtyFiles:     []string{"a.go", "b.go"},
+		PendingDirtyFileTotal: 2,
+	}
+	data, err := json.Marshal(repo)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if decoded["pending_commits"] != float64(3) {
+		t.Errorf("pending_commits = %v; want 3", decoded["pending_commits"])
+	}
+	if decoded["pending_dirty"] != true {
+		t.Errorf("pending_dirty = %v; want true", decoded["pending_dirty"])
+	}
+	if decoded["push_mode"] != "rewrite" {
+		t.Errorf("push_mode = %v; want rewrite", decoded["push_mode"])
+	}
+	files, _ := decoded["pending_dirty_files"].([]any)
+	if len(files) != 2 || files[0] != "a.go" || files[1] != "b.go" {
+		t.Errorf("pending_dirty_files = %v; want [a.go b.go]", decoded["pending_dirty_files"])
+	}
+	if decoded["pending_dirty_file_total"] != float64(2) {
+		t.Errorf("pending_dirty_file_total = %v; want 2", decoded["pending_dirty_file_total"])
+	}
+}
+
+// A chat session parked between turns is waiting on the user, and the attention
+// inbox is the only place to answer it — so it must not be marked as the
+// coordinating byproduct that clients filter out.
+func TestPromptSnapshotMarksChatWaitAsAwaitingInput(t *testing.T) {
+	t.Parallel()
+	store, f := seedReadFeature(t)
+	sessions := fakeSessionManager{views: []ports.SessionView{
+		&fakeSessionView{
+			id:        "sess-chat-waiting",
+			featureID: f.ID,
+			kind:      ports.KindChat,
+			status:    ports.SessionWaitingHelp,
+			startedAt: time.Date(2026, 6, 13, 12, 3, 0, 0, time.UTC),
+		},
+	}}
+	opts := baseReadHandlerOptions(store)
+	opts.Sessions = sessions
+	handler := NewHandler(opts)
+
+	prompts := getJSONMap(t, handler, apiPathPrompts)
+	entry := prompts["help_queue"].([]any)[0].(map[string]any)
+	if got := entry["kind"]; got != helpKindInput {
+		t.Fatalf("chat help_queue kind = %v; want %q", got, helpKindInput)
+	}
 }

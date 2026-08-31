@@ -9,6 +9,10 @@
 > Users should be able to sign in with Google.
 > Must support PKCE.
 
+**Exit criteria** (the user's acceptance conditions — probe anything ambiguous, unmeasurable, or contradictory):
+
+> Users can sign in with Google end to end.
+
 Attached Images:
 - [Image #1]: /tmp/login-mock.png
 

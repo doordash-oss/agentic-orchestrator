@@ -41,7 +41,7 @@ const (
 	// DeferralRedeferred — the deferral was punted to a later phase. A
 	// new event is appended to History; DueByPhase is updated to the new
 	// target. Status remains Open logically (carry-forward still applies
-	// at the new phase); Redeferred is a marker used by TUI surfaces
+	// at the new phase); Redeferred is a marker used by desktop app surfaces
 	// and by the phase-plan validator to flag chronic re-deferrals.
 	DeferralRedeferred DeferralStatus = "open_redeferred"
 )

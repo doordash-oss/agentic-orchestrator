@@ -76,10 +76,8 @@ func TestImplementLoopSuccessFirstIteration(t *testing.T) {
 		os.MkdirAll(d, 0o755)
 	}
 
-	// Agent script: writes the iteration handoff (verification-report.yaml +
-	// progress.md + phase_complete) and emits stream-json success. The
-	// handoff files must be written BEFORE the result so that waitForStatus's
-	// readyCheck finds phase_complete when it receives SUCCESS.
+	// Agent script writes the iteration artifacts and emits a structured root
+	// success outcome. The harness validates both before committing its receipt.
 	agentScript := testutil.WriteScript(t, scriptsDir, "agent.sh",
 		testutil.JSONLInit+"\n"+testutil.JSONLAssistant("Working on implementation...")+"\n"+
 			testutil.WriteImplementSuccessArtifacts(artifactDir)+"\n"+testutil.JSONLSuccess+"\n")
@@ -166,7 +164,7 @@ func TestImplementLoopRetryThenSuccess(t *testing.T) {
 
 	// Agent script: checks progress.md to decide RETRY vs SUCCESS.
 	// First call creates/updates progress.md and exits without result (→ FAILED/retry).
-	// Second call writes phase_complete and emits stream-json success.
+	// Second call writes valid artifacts and emits structured success.
 	agentScript := testutil.WriteScript(t, scriptsDir, "agent.sh", `
 read -r -t 5 _ || true
 read -r -t 5 _ || true
@@ -372,7 +370,7 @@ func TestImplementLoopReviewChangesRequestedThenApproved(t *testing.T) {
 
 	progressFile := filepath.Join(workDir, "progress.md")
 
-	// Agent script: always writes phase_complete, emits stream-json success and updates progress
+	// Agent script always writes valid artifacts, emits structured success, and updates progress.
 	agentScript := testutil.WriteScript(t, scriptsDir, "agent.sh", `
 PROGRESS_FILE="`+progressFile+`"
 ITER=$(($(cat "$PROGRESS_FILE" 2>/dev/null | wc -l) + 1))
@@ -440,7 +438,7 @@ fi
 	}
 }
 
-func TestImplementLoopReviewAxisErrorPreservesPooledFeedbackForNextIteration(t *testing.T) {
+func TestImplementLoopReviewAxisProtocolViolationPreservesPooledFeedbackForNextIteration(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
@@ -464,20 +462,27 @@ echo "iteration $ITER" >> "$PROGRESS_FILE"
 `+testutil.JSONLSuccess+`
 `)
 
+	// The parallel axis sessions each run this script and each write feedback
+	// for every axis dir they see, so feedback writes go through tmp+mv (a
+	// plain `cat >` exposes partial files to concurrent writers and the
+	// harness's parser). The prompt wait is a bounded poll for the harness's
+	// review-prompt.md artifacts, sized generously for -race/loaded hosts.
 	reviewScript := testutil.WriteScript(t, scriptsDir, "review.sh", `
 for _d in "`+artifactDir+`"/iteration-*; do :; done
 `+testutil.JSONLInit+`
+for _try in $(seq 1 500); do
+  _count=$(find "$_d/review" -path '*/review-prompt.md' -type f 2>/dev/null | wc -l | tr -d ' ')
+  [ "${_count:-0}" -ge 3 ] && break
+  sleep 0.02
+done
 if [ "$(basename "$_d")" = "iteration-01" ]; then
-  for _try in $(seq 1 50); do
-    _count=$(find "$_d/review" -path '*/review-prompt.md' -type f 2>/dev/null | wc -l | tr -d ' ')
-    [ "${_count:-0}" -ge 3 ] && break
-    sleep 0.02
-  done
   while IFS= read -r _prompt; do
     _dir=$(dirname "$_prompt")
+    _fb="$_dir/review-feedback.md"
+    [ -f "$_fb" ] && continue
     case "$_dir" in
       *craft)
-        cat > "$_dir/review-feedback.md" <<'REVIEWEOF'
+        cat > "$_fb.tmp.$$" <<'REVIEWEOF'
 ## Findings
 - (none)
 
@@ -487,22 +492,13 @@ if [ "$(basename "$_d")" = "iteration-01" ]; then
 ## Verdict
 APPROVED
 REVIEWEOF
-        touch "$_dir/phase_complete"
+        mv "$_fb.tmp.$$" "$_fb"
         ;;
       *functionality-evidence)
-        cat > "$_dir/review-feedback.md" <<'REVIEWEOF'
-## Findings
-- (none)
-
-## Suggestions
-- (none)
-
-## Verdict
-APPROVED
-REVIEWEOF
+        continue
         ;;
       *cleanliness)
-        cat > "$_dir/review-feedback.md" <<'REVIEWEOF'
+        cat > "$_fb.tmp.$$" <<'REVIEWEOF'
 ## Findings
 - (none)
 
@@ -512,12 +508,27 @@ REVIEWEOF
 ## Verdict
 APPROVED
 REVIEWEOF
-        touch "$_dir/phase_complete"
+        mv "$_fb.tmp.$$" "$_fb"
         ;;
     esac
   done < <(find "$_d/review" -path '*/review-prompt.md' -type f | sort)
 else
-  `+testutil.WriteReviewApproved(artifactDir)+`
+  while IFS= read -r _prompt; do
+    _dir=$(dirname "$_prompt")
+    _fb="$_dir/review-feedback.md"
+    [ -f "$_fb" ] && continue
+    cat > "$_fb.tmp.$$" <<'REVIEWEOF'
+## Findings
+- (none)
+
+## Suggestions
+- (none)
+
+## Verdict
+APPROVED
+REVIEWEOF
+    mv "$_fb.tmp.$$" "$_fb"
+  done < <(find "$_d/review" -path '*/review-prompt.md' -type f | sort)
 fi
 `+testutil.JSONLSuccess+`
 `)
@@ -527,6 +538,7 @@ fi
 	defer sm.Shutdown()
 
 	f := newTestFeature(t, workDir)
+	f.Pipeline = feature.PipelineMoonshot
 	planPath := writePlanFile(t, artifactDir, "Implement with error handling")
 
 	baseBuildSession := mockBuildSession(agentScript, reviewScript)
@@ -594,7 +606,7 @@ func TestImplementLoopMaxIterations(t *testing.T) {
 
 	progressFile := filepath.Join(workDir, "progress.md")
 
-	// Agent script: always writes phase_complete, succeeds and updates progress
+	// Agent script always writes valid artifacts, succeeds, and updates progress.
 	agentScript := testutil.WriteScript(t, scriptsDir, "agent.sh", `
 PROGRESS_FILE="`+progressFile+`"
 echo "more progress $(date +%s%N)" >> "$PROGRESS_FILE"
@@ -745,7 +757,7 @@ func TestImplementLoopReviewWithShellSpecialChars(t *testing.T) {
 			// Custom report is written above; pair with a valid progress.md
 			// so the harness handoff parser passes.
 			testutil.WriteImplementProgressMd(artifactDir, agentStatusSuccess)+"\n"+
-			testutil.TouchPhaseComplete(artifactDir)+"\n"+testutil.JSONLSuccess+"\n")
+			testutil.JSONLSuccess+"\n")
 
 	// Review script: emits stream-json APPROVED
 	reviewScript := testutil.WriteScript(t, scriptsDir, "review.sh",
@@ -1421,8 +1433,8 @@ func TestImplementLoop_ShutdownMidIterationDoesNotPersistFailedMeta(t *testing.T
 	}
 }
 
-// When the prior run was interrupted mid-review (phase_complete written,
-// but no meta.yaml), restart must skip the implement session for that
+// When the prior run was interrupted mid-review (a harness receipt exists but
+// meta.yaml does not), restart must skip the implement session for that
 // iteration and jump directly to the review gate.
 func TestImplementLoop_ResumesReviewWhenImplementAlreadyComplete(t *testing.T) {
 	if testing.Short() {
@@ -1438,8 +1450,8 @@ func TestImplementLoop_ResumesReviewWhenImplementAlreadyComplete(t *testing.T) {
 		os.MkdirAll(d, 0o755)
 	}
 
-	// Pre-populate iteration-02 with phase_complete but no meta.yaml —
-	// simulates an interrupt during the review gate.
+	// Pre-populate iteration-02 with a harness receipt but no meta.yaml to
+	// simulate an interrupt during the review gate.
 	am := NewArtifactManager(artifactDir)
 	iter1Dir, _ := am.CreateIterationDir(1)
 	am.WriteMeta(iter1Dir, IterationMeta{
@@ -1449,9 +1461,7 @@ func TestImplementLoop_ResumesReviewWhenImplementAlreadyComplete(t *testing.T) {
 		MadeProgress: true,
 	})
 	iter2Dir, _ := am.CreateIterationDir(2)
-	if err := os.WriteFile(filepath.Join(iter2Dir, PhaseCompleteFile), nil, 0o644); err != nil {
-		t.Fatalf("seeding phase_complete: %v", err)
-	}
+	writeTestCompletionReceipt(t, iter2Dir)
 	// The implement turn is being skipped on resume, so the harness still
 	// needs a parseable progress.md + verification-report.yaml on disk to
 	// route iteration-02 into the review gate. Seed both.
@@ -1524,8 +1534,7 @@ func TestImplementLoop_ReviewViaAssistantText(t *testing.T) {
 		os.MkdirAll(d, 0o755)
 	}
 
-	// Agent script writes the iteration handoff so the harness's
-	// progress.md parser is satisfied and readyCheck finds phase_complete.
+	// Agent script writes the iteration handoff and a structured root outcome.
 	iterDir := filepath.Join(artifactDir, "iteration-01")
 	agentScript := testutil.WriteScript(t, scriptsDir, "agent.sh",
 		testutil.JSONLInit+"\n"+
@@ -1589,6 +1598,7 @@ func TestImplementLoop_CostAccumulation(t *testing.T) {
 		testutil.JSONLInit+"\n"+
 			`mkdir -p "`+iterDir+`"`+"\n"+
 			testutil.WriteImplementSuccessArtifacts(artifactDir)+"\n"+
+			testutil.JSONLAssistant(`<agentico-outcome>{"status":"success"}</agentico-outcome>`)+"\n"+
 			`echo '{"type":"result","subtype":"success","session_id":"mock","total_cost_usd":0.05}'`+"\n")
 
 	reviewScript := testutil.WriteScript(t, scriptsDir, "review.sh",

@@ -61,7 +61,7 @@ func (s SessionStatus) String() string {
 	}
 }
 
-// SessionKind classifies a session by its role so the TUI and observer layer
+// SessionKind classifies a session by its role so the desktop app and observer layer
 // can label, group, and filter sessions uniformly. It is purely informational —
 // lifecycle behavior is unchanged.
 type SessionKind int
@@ -151,7 +151,7 @@ const (
 )
 
 // AskUserAutoPickConfig carries the narrow session-layer policy context for
-// deciding whether an AskUserQuestion bundle can be answered before TUI
+// deciding whether an AskUserQuestion bundle can be answered before desktop app
 // routing. LoadInquireness is called for each incoming bundle so live config
 // edits affect the next decision.
 type AskUserAutoPickConfig struct {
@@ -162,10 +162,14 @@ type AskUserAutoPickConfig struct {
 
 // SessionWatchdogConfig enables provider-specific lifecycle safety rails for a
 // session. PendingToolIdleTimeout bounds silence while a tool is running.
-// TurnCompletionIdleTimeout bounds silence after a tool reaches a terminal
-// state but before the provider completes the enclosing turn.
+// SubagentToolIdleTimeout, when positive, replaces PendingToolIdleTimeout
+// while any pending tool is a subagent task: subagents run in child sessions
+// whose activity is not streamed to the parent, so long silence is expected.
+// TurnCompletionIdleTimeout bounds silence after every pending tool reaches a
+// terminal state but before the provider completes the enclosing turn.
 type SessionWatchdogConfig struct {
 	PendingToolIdleTimeout    time.Duration
+	SubagentToolIdleTimeout   time.Duration
 	TurnCompletionIdleTimeout time.Duration
 	PollInterval              time.Duration
 	SubagentHeartbeatInterval time.Duration
@@ -236,20 +240,28 @@ type ProviderInitInfo struct {
 // ports package so orchestrator / agent code can construct session options
 // without importing internal/session.
 type SessionOpts struct {
-	PIDDir        string
+	PIDDir string
+	// RunNumber identifies the feature run that owns the session. Zero is reserved
+	// for non-feature sessions such as workspace chat.
+	RunNumber     int
 	Iteration     int
 	PermHandler   PermissionHandler
 	InitialPrompt string
 	// ContextWindow is the resolved model window for the session. It lets the
 	// session expose an initial prompt context estimate before provider
 	// telemetry arrives.
-	ContextWindow     int
-	LogPath           string
-	StderrPath        string
-	RepoName          string
-	PermCacheScope    string
-	ProviderName      string
-	ResolvedModel     string
+	ContextWindow  int
+	LogPath        string
+	StderrPath     string
+	RepoName       string
+	PermCacheScope string
+	ProviderName   string
+	// Model is the resolved provider model selected for launch. Provider init
+	// telemetry may refine it later, but sessions expose this value immediately.
+	Model string
+	// PHASE2(model identity): feature's ResolvedModel twin retained alongside
+	// main's Model until resume/retry unification picks the canonical field.
+	ResolvedModel string
 	Protocol          llm.Protocol
 	DebugSystemPrompt string
 	// OnProviderInit runs synchronously after a provider initialization message
@@ -265,12 +277,11 @@ type SessionOpts struct {
 	// ResultShutdownGrace overrides the post-result subprocess shutdown grace.
 	// Zero uses the production default.
 	ResultShutdownGrace time.Duration
-	// KeepAliveOnTruncatedResult leaves stdin open when a Result indicates a
-	// resumable truncated turn. Loop waiters that send an automatic
-	// continuation set this so the continuation is not racing a post-Result
-	// stdin shutdown.
-	KeepAliveOnTruncatedResult bool
-	// Kind classifies the session for TUI/observer purposes. Defaults to
+	// KeepAliveOnTurnResult leaves stdin open after a provider turn. Loop
+	// waiters set this when they may need to send a completion nudge, resume
+	// after delegated tasks, or continue a truncated turn.
+	KeepAliveOnTurnResult bool
+	// Kind classifies the session for desktop app and observer purposes. Defaults to
 	// KindPhase when the zero value is used.
 	Kind SessionKind
 	// TurnMode controls whether Result ends the whole session or just the
@@ -285,12 +296,9 @@ type SessionOpts struct {
 	AskUserAutoPick *AskUserAutoPickConfig
 	// Watchdog enables generic session lifecycle watchdogs. Nil disables them.
 	Watchdog *SessionWatchdogConfig
-	// SupportsFinishOrViolateNudge and UsesBoundedHelperSandbox carry the
-	// resolved provider's bounded-helper capabilities. The session builder sets
-	// them so a bounded helper can read them off its session options without
-	// re-resolving the provider (its own runner may carry no provider registry).
-	SupportsFinishOrViolateNudge bool
-	UsesBoundedHelperSandbox     bool
+	// UsesBoundedHelperSandbox carries the resolved provider's sandbox
+	// capability so helper runners need not resolve the provider again.
+	UsesBoundedHelperSandbox bool
 	// SupportsSessionResume reports that the resolved provider can resume a
 	// prior provider-native session via BuildSessionOpts.ResumeSessionID.
 	// Used by crash-resume: when a provider process dies mid-turn, the loop
@@ -357,7 +365,29 @@ type AttachConsumerRegistrar interface {
 	RegisterAttachConsumer() func()
 }
 
-// SessionView is the read-oriented interface external packages (TUI, agent)
+// RootOutcomeNotifier is an optional session capability: sessions that parse the
+// root agent's structured completion outcome signal a coalescing size-1 channel
+// as soon as a committable one is recorded, so waiters do not have to wait for
+// the provider's terminal Result record to arrive.
+type RootOutcomeNotifier interface {
+	RootOutcomeCh() <-chan struct{}
+}
+
+// RootOutcomeResetter is an optional session capability that discards the
+// recorded root outcome. The harness uses it after rejecting a commit so the
+// correction turn starts from a clean slate.
+type RootOutcomeResetter interface {
+	ClearRootCompletionIntent()
+}
+
+// ResultSequencer is an optional session capability reporting a monotonic count
+// of terminal Result records observed, so waiters can detect a genuinely new
+// result without relying on pointer identity.
+type ResultSequencer interface {
+	ResultSeq() uint64
+}
+
+// SessionView is the read-oriented interface external packages (desktop app, agent)
 // use to observe a session.
 type SessionView interface {
 	ID() string
@@ -372,6 +402,9 @@ type SessionView interface {
 	IsActive() bool
 	Iteration() int
 	StartedAt() time.Time
+	// WaitingSince returns when the session last entered SessionWaitingHelp,
+	// falling back to StartedAt when no transition has been stamped.
+	WaitingSince() time.Time
 	InitialPrompt() string
 	ProviderName() string
 	Model() string
@@ -407,6 +440,10 @@ type SessionView interface {
 	Done() <-chan struct{}
 
 	HasPendingAskUserQuestion() bool
+	HasPendingRootAskUserQuestion() bool
+	RootCompletionIntent() llm.CompletionIntent
+	LiveBackgroundTaskCount() int
+	TaskActivities() []llm.TaskActivity
 
 	SendUserMessage(text string) error
 	RespondToControl(requestID string, allow bool, reason string) error

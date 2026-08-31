@@ -16,7 +16,6 @@ package feature
 
 import (
 	"fmt"
-	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -171,6 +170,16 @@ const (
 	InquirenessHigh   Inquireness = "high"
 )
 
+// IsValid returns true for known inquireness levels. The empty string is
+// treated as valid so callers can apply defaults after the fact.
+func (i Inquireness) IsValid() bool {
+	switch i {
+	case InquirenessNone, InquirenessMedium, InquirenessHigh, "":
+		return true
+	}
+	return false
+}
+
 // RepoState carries the minimal per-repo signal orchestration needs:
 // whether any phase touched the repo, the optional PR URL, and the most
 // recent error message. Persisted on Run.RepoStates.
@@ -182,79 +191,10 @@ type RepoState struct {
 	Freshness string `yaml:"-"`
 }
 
-// RepoCycleType identifies the kind of post-publish per-repo cycle.
-type RepoCycleType string
-
-const (
-	CycleRebase         RepoCycleType = "rebase"
-	CycleReviewComments RepoCycleType = "review-comments"
-	CycleRefactor       RepoCycleType = "refactor"
-)
-
-// Cycle status constants for RepoCycleState.Status.
-const (
-	RepoCycleRunning       = "running"
-	RepoCycleReviewing     = "reviewing"
-	RepoCycleNeedUserInput = "need_user_input"
-	RepoCycleFailed        = "failed"
-	// RepoCycleInterrupted: user quit mid-cycle. Resumable via [r], not failed.
-	RepoCycleInterrupted = "interrupted"
-)
-
-// RepoCycleState tracks a post-publish cycle (rebase/review-comments) for a single repo.
-// The feature stays StatusPublished while per-repo cycles run independently.
-type RepoCycleState struct {
-	Type      RepoCycleType `yaml:"type"`
-	Status    string        `yaml:"status"`          // RepoCycle* constants
-	Count     int           `yaml:"count,omitempty"` // Nth rebase for this repo
-	PlanPath  string        `yaml:"plan_path,omitempty"`
-	LastError string        `yaml:"last_error,omitempty"`
-	// Iteration is the iteration number that emitted the active gate. Set
-	// when a cycle pauses on a need-user-input gate; preserved across resume
-	// so the next iteration is N+1 rather than starting over.
-	Iteration int `yaml:"iteration,omitempty"`
-	// PendingNeedUserInputPath is the absolute path of the persisted
-	// `need-user-input.yaml` artifact when this cycle is paused on a
-	// cycle-scoped NEED_USER_INPUT gate. Empty otherwise.
-	PendingNeedUserInputPath string `yaml:"pending_need_user_input_path,omitempty"`
-}
-
-// PendingUserInputCycle is a flat projection of a paused per-repo cycle gate
-// surfaced for TUI/orchestrator routing. Returned by Feature.PendingUserInputCycles.
-type PendingUserInputCycle struct {
-	RepoName  string
-	CycleType RepoCycleType
-	GatePath  string
-}
-
 // SchemaVersionCurrent is the current durable on-disk schema version stamped
 // onto fresh features at Manager.Create time. Schema 7 added
 // Run.RoadmapPhaseFrontendByPhase.
 const SchemaVersionCurrent = 7
-
-// CycleState tracks the feature-level active post-publish cycle (rebase,
-// review-comments, refactor). One cycle is active at a time per
-// feature regardless of how many repos it touches.
-// Run.RepoCycles persists alongside CycleState as the per-repo TUI rendering
-// surface; the unified cycle loops mirror their per-repo entries there so
-// existing per-repo badges keep working.
-type CycleState struct {
-	Type   RepoCycleType `yaml:"type"`
-	Status string        `yaml:"status"` // RepoCycle* constants
-	Count  int           `yaml:"count,omitempty"`
-	// PlanPath is the cycle's plan artifact (refactor/review-comments) when
-	// applicable. Empty for plan-less cycles (rebase).
-	PlanPath string `yaml:"plan_path,omitempty"`
-	// LastError is populated when Status == RepoCycleFailed.
-	LastError string `yaml:"last_error,omitempty"`
-	// Iteration is the iteration number that emitted the active gate. Set
-	// when a cycle pauses on a need-user-input gate; preserved across resume
-	// so the next iteration is N+1 rather than starting over.
-	Iteration int `yaml:"iteration,omitempty"`
-	// PendingNeedUserInputPath is the absolute path of the persisted
-	// `need-user-input.yaml` artifact when the cycle is paused on a gate.
-	PendingNeedUserInputPath string `yaml:"pending_need_user_input_path,omitempty"`
-}
 
 // RiskLevel classifies the blast radius of a feature change.
 // Autonomy scales inversely with risk: low-risk changes get lightweight
@@ -276,11 +216,6 @@ const (
 	FailureProtocolViolation = "protocol_violation"
 	FailureInfrastructure    = "infrastructure"
 	FailureWorktreeSetup     = "worktree_setup"
-	// FailureNeedUserInput marks a feature failure caused by an
-	// implement iteration emitting `## Iteration State: NEED_USER_INPUT`
-	// in progress.md. The harness treats this as a terminal state today;
-	// richer human-in-the-loop recovery is a follow-up.
-	FailureNeedUserInput = "need_user_input"
 )
 
 type Status int
@@ -312,9 +247,7 @@ const (
 	// StatusNeedUserInput marks a feature paused on a phase-implement
 	// need-user-input gate. The unified flow tracks NEED_USER_INPUT at the
 	// feature level via Feature.PendingNeedUserInputPath; per-repo pauses
-	// are no longer modelled separately. Post-publish cycle-scoped pauses
-	// use RepoCycleNeedUserInput on the affected RepoCycleState and keep
-	// the parent feature in StatusPublished.
+	// are no longer modelled separately.
 	StatusNeedUserInput
 	// StatusFinalReviewing marks a feature in the deferred end-of-feature
 	// final review pass. The orchestrator transitions
@@ -422,9 +355,7 @@ func (s Status) MarshalYAML() (interface{}, error) {
 	return s.String(), nil
 }
 
-// UnmarshalYAML deserializes Status from a string or integer YAML value.
-// String values are the canonical form; integer values provide backward
-// compatibility with older feature.yaml files.
+// UnmarshalYAML deserializes Status from its canonical string value.
 func (s *Status) UnmarshalYAML(unmarshal func(interface{}) error) error {
 	stringMap := map[string]Status{
 		"Created":             StatusCreated,
@@ -435,7 +366,6 @@ func (s *Status) UnmarshalYAML(unmarshal func(interface{}) error) error {
 		"Implementing":        StatusImplementing,
 		"ReviewPassed":        StatusReviewPassed,
 		"CodeReady":           StatusCodeReady,
-		"PRReady":             StatusCodeReady, // backward compat
 		"Published":           StatusPublished,
 		"Failed":              StatusFailed,
 		"Interrupted":         StatusInterrupted,
@@ -444,9 +374,7 @@ func (s *Status) UnmarshalYAML(unmarshal func(interface{}) error) error {
 		"PlanNeedsReview":     StatusPlanNeedsReview,
 		"Inquiring":           StatusInquiring,
 		"InquireReady":        StatusInquireReady,
-		"BrainstormReady":     StatusDesignReady, // legacy pre-design rename
 		"DesignReady":         StatusDesignReady,
-		"Brainstorming":       StatusDesigning, // legacy pre-design rename
 		"Designing":           StatusDesigning,
 		"PromptNeedsReview":   StatusPromptNeedsReview,
 		"InquiryNeedsReview":  StatusInquiryNeedsReview,
@@ -458,36 +386,16 @@ func (s *Status) UnmarshalYAML(unmarshal func(interface{}) error) error {
 		"SettingUpWorktrees":  StatusSettingUpWorktrees,
 	}
 
-	// Legacy integer mapping. Values 0-11 are unchanged from the original iota.
-	legacyIntMap := map[int]Status{
-		0: StatusCreated, 1: StatusResearching, 2: StatusPlanReady,
-		3: StatusPlanning, 4: StatusImplementReady, 5: StatusImplementing,
-		6: StatusReviewPassed, 7: StatusCodeReady, 8: StatusPublished,
-		9: StatusFailed, 10: StatusInterrupted,
-		12: StatusDone,
-	}
-
-	// Try string first (canonical form for new files)
 	var str string
 	if err := unmarshal(&str); err == nil {
-		// Check if it's a named status string
 		if v, ok := stringMap[str]; ok {
 			*s = v
 			return nil
 		}
-		// Could be a numeric string from YAML — try parsing as int
-		var n int
-		if _, err := fmt.Sscanf(str, "%d", &n); err == nil {
-			if v, ok := legacyIntMap[n]; ok {
-				*s = v
-				return nil
-			}
-			return fmt.Errorf("unknown status integer: %d", n)
-		}
 		return fmt.Errorf("unknown status: %q", str)
 	}
 
-	return fmt.Errorf("cannot unmarshal status: expected string or integer")
+	return fmt.Errorf("cannot unmarshal status: expected string")
 }
 
 // Checkpoints controls which phase transitions pause for human review.
@@ -688,6 +596,31 @@ type Feature struct {
 	AutomaticReviewEnabled bool                  `yaml:"-"`
 	AutomaticReviewSource  AutomaticReviewSource `yaml:"-"`
 
+	// Parent links this feature to its launch parent (child-owned
+	// relationship identity). Nil for top-level features. Parent-to-child
+	// lookup and active-child classification are derived by scanning stored
+	// feature records — the parent never persists a child pointer or list.
+	Parent *ChildRelationship `yaml:"parent,omitempty"`
+	// ReviewFeedback preserves the selected GitHub comment payloads for a
+	// review-feedback child. The deterministic description is planning input;
+	// this structured copy is the integration tail's durable routing input.
+	ReviewFeedback []ReviewFeedbackComment `yaml:"review_feedback,omitempty"`
+	// PendingChild is the durable intent for an in-flight child creation on
+	// this (parent) feature. Present only between the atomic intent commit
+	// and child materialization; startup reconciliation rolls an interrupted
+	// creation forward from it.
+	PendingChild *ChildCreationIntent `yaml:"pending_child,omitempty"`
+	// PendingConfigUpdate is the durable intent for an in-flight paired
+	// Review configuration update. Present only between the intent commit
+	// and the completion of both record updates; startup reconciliation
+	// rolls an interrupted update forward exactly once.
+	PendingConfigUpdate *PairedConfigIntent `yaml:"pending_config_update,omitempty"`
+	// DiscardIntent is the durable intent for an in-flight child discard.
+	// Present on the child from the moment discard is requested until safe
+	// closure is durable. Startup reconciliation resumes an interrupted
+	// discard from the durable step.
+	DiscardIntent *DiscardIntent `yaml:"discard_intent,omitempty"`
+
 	TraceID       string `yaml:"trace_id,omitempty"`        // observability correlation; derived from ID if absent
 	FeatureSpanID string `yaml:"feature_span_id,omitempty"` // persisted feature-level span ID so all phases share a common parent
 
@@ -729,36 +662,24 @@ type Feature struct {
 	// in a single FeatureStore.Modify call; orchestration readers consume it
 	// via Feature.AllReposPublished / Feature.TouchedRepos. Persisted on
 	// Run.RepoStates.
-	RepoStates     map[string]*RepoState `yaml:"-"`
-	RefactorPrompt string                `yaml:"-"`
-	// ActiveCycle is the feature-level active post-publish cycle under
-	// SchemaVersionCurrent = 4.
-	ActiveCycle *CycleState `yaml:"-"`
-	// RebaseOperation is the feature-level transient operation display state
-	// for the currently active rebase harness / smart rebase / Final Review.
-	// Persisted on Run.RebaseOperation.
-	RebaseOperation *RebaseOperationState `yaml:"-"`
-	// RepoCycles is the per-repo cycle rendering surface kept for the TUI's
-	// existing per-repo badge/spinner paths; the unified cycle loops mirror
-	// their per-repo entries here so legacy renderers keep working.
-	RepoCycles                      map[string]*RepoCycleState `yaml:"-"`
-	LastError                       string                     `yaml:"-"`
-	FailureType                     string                     `yaml:"-"`
-	KBWaitMessage                   string                     `yaml:"-"`
-	ForceKBRebuild                  bool                       `yaml:"-"`
-	KBStatus                        map[string]string          `yaml:"-"`
-	PhaseTimings                    map[string]time.Duration   `yaml:"-"`
-	ActivePhaseStart                *time.Time                 `yaml:"-"`
-	ActiveTimingKey                 string                     `yaml:"-"`
-	PhaseCosts                      map[string]float64         `yaml:"-"`
-	SessionCosts                    []SessionCostRecord        `yaml:"-"`
-	PendingReviewPhase              *Phase                     `yaml:"-"`
-	PendingRewindReviewRoadmapPhase *int                       `yaml:"-"`
-	IsRewind                        bool                       `yaml:"-"`
+	RepoStates                      map[string]*RepoState    `yaml:"-"`
+	LastError                       string                   `yaml:"-"`
+	FailureType                     string                   `yaml:"-"`
+	KBWaitMessage                   string                   `yaml:"-"`
+	ForceKBRebuild                  bool                     `yaml:"-"`
+	KBStatus                        map[string]string        `yaml:"-"`
+	PhaseTimings                    map[string]time.Duration `yaml:"-"`
+	ActivePhaseStart                *time.Time               `yaml:"-"`
+	ActiveTimingKey                 string                   `yaml:"-"`
+	PhaseCosts                      map[string]float64       `yaml:"-"`
+	SessionCosts                    []SessionCostRecord      `yaml:"-"`
+	PendingReviewPhase              *Phase                   `yaml:"-"`
+	PendingRewindReviewRoadmapPhase *int                     `yaml:"-"`
+	IsRewind                        bool                     `yaml:"-"`
 	// CurrentPhaseStatus tracks the mid-flight phase implement status for the
-	// unified phase-implement loop ("implementing", "reviewing", or "" when
-	// not in a phase). Replaces the per-repo mid-flight presentation tokens
-	// retired in SchemaVersionCurrent = 4.
+	// unified phase-implement loop ("implementing", "reviewing",
+	// PhaseStatusFinalizing, or "" when not in a phase). Replaces the per-repo
+	// mid-flight presentation tokens retired in SchemaVersionCurrent = 4.
 	CurrentPhaseStatus string `yaml:"-"`
 
 	// Roadmap tracking (transient shadows).
@@ -833,7 +754,6 @@ func (f *Feature) syncShadowsToRun() {
 	if f.run == nil {
 		return
 	}
-	normalizeLegacyArtifactAliases(f.Artifacts)
 	r := f.run
 	r.StartedAt = f.StartedAt
 	r.CurrentIteration = f.CurrentIteration
@@ -851,8 +771,6 @@ func (f *Feature) syncShadowsToRun() {
 		f.RoadmapPhaseFrontendByPhase = r.RoadmapPhaseFrontendByPhase
 	}
 	r.RepoStates = f.RepoStates
-	r.RefactorPrompt = f.RefactorPrompt
-	r.RepoCycles = f.RepoCycles
 	r.LastError = f.LastError
 	r.FailureType = f.FailureType
 	r.KBWaitMessage = f.KBWaitMessage
@@ -863,8 +781,6 @@ func (f *Feature) syncShadowsToRun() {
 	r.ActiveTimingKey = f.ActiveTimingKey
 	r.PhaseCosts = f.PhaseCosts
 	r.SessionCosts = f.SessionCosts
-	r.ActiveCycle = f.ActiveCycle
-	r.RebaseOperation = f.RebaseOperation
 	r.PendingReviewPhase = f.PendingReviewPhase
 	r.PendingRewindReviewRoadmapPhase = f.PendingRewindReviewRoadmapPhase
 	r.IsRewind = f.IsRewind
@@ -883,7 +799,6 @@ func (f *Feature) syncRunToShadows() {
 		return
 	}
 	r := f.run
-	normalizeLegacyArtifactAliases(r.Artifacts)
 	f.StartedAt = r.StartedAt
 	f.CurrentIteration = r.CurrentIteration
 	f.ReviewingGate = r.ReviewingGate
@@ -896,8 +811,6 @@ func (f *Feature) syncRunToShadows() {
 	f.Artifacts = r.Artifacts
 	f.RoadmapPhaseFrontendByPhase = r.RoadmapPhaseFrontendByPhase
 	f.RepoStates = r.RepoStates
-	f.RefactorPrompt = r.RefactorPrompt
-	f.RepoCycles = r.RepoCycles
 	f.LastError = r.LastError
 	f.FailureType = r.FailureType
 	f.KBWaitMessage = r.KBWaitMessage
@@ -908,8 +821,6 @@ func (f *Feature) syncRunToShadows() {
 	f.ActiveTimingKey = r.ActiveTimingKey
 	f.PhaseCosts = r.PhaseCosts
 	f.SessionCosts = r.SessionCosts
-	f.ActiveCycle = r.ActiveCycle
-	f.RebaseOperation = r.RebaseOperation
 	f.PendingReviewPhase = r.PendingReviewPhase
 	f.PendingRewindReviewRoadmapPhase = r.PendingRewindReviewRoadmapPhase
 	f.IsRewind = r.IsRewind
@@ -950,27 +861,6 @@ func looksLikeFinalReviewFailure(msg string) bool {
 	return strings.Contains(msg, "final_review") || strings.Contains(msg, "final review")
 }
 
-func normalizeLegacyArtifactAliases(artifacts map[string]string) {
-	if artifacts == nil {
-		return
-	}
-	if strings.TrimSpace(artifacts["design"]) != "" {
-		return
-	}
-	legacy := strings.TrimSpace(artifacts["brainstorm"])
-	if legacy == "" {
-		return
-	}
-	artifacts["design"] = legacyDesignArtifactPath(legacy)
-}
-
-func legacyDesignArtifactPath(path string) string {
-	if filepath.IsAbs(path) || strings.ContainsAny(path, `/\`) {
-		return path
-	}
-	return filepath.Join("brainstorm", path)
-}
-
 // validTransitions maps each status to the set of statuses it can transition to.
 var validTransitions = map[Status][]Status{
 	StatusCreated:             {StatusInquiring, StatusResearching, StatusBuildingKB, StatusPlanReady, StatusFailed},
@@ -989,7 +879,7 @@ var validTransitions = map[Status][]Status{
 	StatusFinalReviewing:      {StatusCodeReady, StatusReviewPassed, StatusFailed, StatusInterrupted},
 	StatusReviewing:           {StatusCodeReady, StatusFailed, StatusInterrupted},
 	StatusCodeReady:           {StatusPublished, StatusDone, StatusFailed, StatusImplementReady, StatusInquiring},
-	StatusPublished:           {StatusDone, StatusFailed, StatusImplementReady, StatusInquiring, StatusPlanReady},
+	StatusPublished:           {StatusDone, StatusFailed, StatusImplementReady, StatusInquiring, StatusPlanReady, StatusCodeReady},
 	StatusDone:                {},
 	StatusFailed:              {StatusCreated, StatusBuildingKB, StatusInquiring, StatusResearching, StatusDesigning, StatusImplementReady, StatusCodeReady},
 	StatusInterrupted:         {StatusBuildingKB, StatusInquiring, StatusResearching, StatusDesigning, StatusPlanning, StatusImplementing, StatusFinalReviewing, StatusFailed},
@@ -1003,8 +893,8 @@ var validTransitions = map[Status][]Status{
 
 // accumulateActiveTime moves elapsed time from ActivePhaseStart into
 // PhaseTimings under the ActiveTimingKey, then clears ActivePhaseStart.
-// ActiveTimingKey is intentionally preserved so cycle keys (rebase-N,
-// review-comments) survive interrupt/fail transitions and are available when
+// ActiveTimingKey is intentionally preserved so rebase cycle keys survive
+// interrupt/fail transitions and are available when
 // the phase is resumed.
 func (f *Feature) accumulateActiveTime() {
 	if f.ActivePhaseStart == nil || f.ActiveTimingKey == "" {
@@ -1042,34 +932,6 @@ func (f *Feature) SetPRURL(url string) {
 	f.Run().PRURL = url
 }
 
-// RebaseCount returns the run-level rebase counter. The design calls
-// for per-repo cycle counts; until RepoCycleState carries historical
-// counts, this delegates to the run.
-func (f *Feature) RebaseCount() int { return f.Run().RebaseCount }
-
-// SetRebaseCount sets the run-level rebase counter.
-func (f *Feature) SetRebaseCount(n int) { f.Run().RebaseCount = n }
-
-// RefactorCount returns the run-level refactor counter.
-func (f *Feature) RefactorCount() int { return f.Run().RefactorCount }
-
-// SetRefactorCount sets the run-level refactor counter.
-func (f *Feature) SetRefactorCount(n int) { f.Run().RefactorCount = n }
-
-// ReviewCommentsCount returns the run-level review-comments cycle counter.
-func (f *Feature) ReviewCommentsCount() int { return f.Run().ReviewCommentsCount }
-
-// SetReviewCommentsCount sets the run-level review-comments cycle counter.
-func (f *Feature) SetReviewCommentsCount(n int) { f.Run().ReviewCommentsCount = n }
-
-// AddressingReviews returns whether the feature is currently addressing PR
-// review comments. Source of truth is the run-level flag; per-repo
-// detection is available via RepoCycles[name].Type == CycleReviewComments.
-func (f *Feature) AddressingReviews() bool { return f.Run().AddressingReviews }
-
-// SetAddressingReviews sets the run-level addressing-reviews flag.
-func (f *Feature) SetAddressingReviews(v bool) { f.Run().AddressingReviews = v }
-
 // SetRoadmapPhaseFrontend records whether a roadmap phase contains frontend
 // work on the active run.
 func (f *Feature) SetRoadmapPhaseFrontend(phase int, frontend bool) {
@@ -1101,69 +963,6 @@ func (f *Feature) AnyRoadmapPhaseFrontend() bool {
 	return f.Run().AnyRoadmapPhaseFrontend()
 }
 
-// ActiveCycleType returns the feature's active post-publish cycle type.
-// For per-repo cycle inspection, callers should consult RepoCycles[name].Type
-// directly; this accessor preserves the feature-level view used by recovery
-// and TUI rendering paths.
-func (f *Feature) ActiveCycleType() RepoCycleType { return f.Run().ActiveCycleType }
-
-// SetActiveCycleType sets the feature-level active cycle type.
-func (f *Feature) SetActiveCycleType(t RepoCycleType) { f.Run().ActiveCycleType = t }
-
-// IsRefactoring returns true when the feature is in an active refactor cycle.
-func (f *Feature) IsRefactoring() bool {
-	return f.RefactorPrompt != ""
-}
-
-// RefactorPrefix returns the artifact directory prefix for the current
-// refactor cycle. Returns empty string when not refactoring.
-func (f *Feature) RefactorPrefix() string {
-	if f.RefactorCount() > 0 && f.RefactorPrompt != "" {
-		return fmt.Sprintf("refactor-%d", f.RefactorCount())
-	}
-	return ""
-}
-
-// CyclePrefix returns the artifact directory prefix for the current
-// post-publish cycle (rebase, or review-comments).
-// Returns empty string when no cycle is active.
-func (f *Feature) CyclePrefix() string {
-	switch f.ActiveCycleType() {
-	case CycleRebase:
-		if f.RebaseCount() > 0 {
-			return fmt.Sprintf("rebase-%d", f.RebaseCount())
-		}
-		return "rebase"
-	case CycleReviewComments:
-		if f.ReviewCommentsCount() > 0 {
-			return fmt.Sprintf("review-comments-%d", f.ReviewCommentsCount())
-		}
-		return "review-comments"
-	}
-	return ""
-}
-
-// RepoCycleDirName returns the enumerated directory name for a per-repo cycle.
-// e.g., "rebase-1", "review-comments-3", or the unenumerated
-// fallback when count <= 0.
-func RepoCycleDirName(cycleType RepoCycleType, count int) string {
-	switch cycleType {
-	case CycleRebase:
-		if count > 0 {
-			return fmt.Sprintf("rebase-%d", count)
-		}
-	case CycleReviewComments:
-		if count > 0 {
-			return fmt.Sprintf("review-comments-%d", count)
-		}
-	case CycleRefactor:
-		if count > 0 {
-			return fmt.Sprintf("refactor-%d", count)
-		}
-	}
-	return string(cycleType)
-}
-
 // EffectivePipeline returns the feature's pipeline profile, defaulting to
 // PipelineMoonshot when the field is empty (backward compatibility with
 // features created before pipeline profiles existed).
@@ -1172,25 +971,6 @@ func (f *Feature) EffectivePipeline() PipelineProfile {
 		return PipelineMoonshot
 	}
 	return f.Pipeline
-}
-
-// HasActiveRepoCycles reports whether any repo has a running, reviewing, or
-// need-user-input-paused cycle. Mirrors the predicate used by
-// tui.hasActiveRepoCycles and by Manager.HasActiveRepoCycles so callers on a
-// loaded *Feature do not need to round-trip through the store. Paused
-// (need_user_input) cycles count as active because the feature still has
-// outstanding post-publish work waiting on the user.
-func (f *Feature) HasActiveRepoCycles() bool {
-	for _, rc := range f.RepoCycles {
-		if rc == nil {
-			continue
-		}
-		switch rc.Status {
-		case RepoCycleRunning, RepoCycleReviewing, RepoCycleNeedUserInput:
-			return true
-		}
-	}
-	return false
 }
 
 // IsPublishable returns true when ALL repos have an origin remote.
@@ -1221,30 +1001,12 @@ func (f *Feature) EffectivePhases() []Phase {
 	return phases
 }
 
-// EffectiveDescription returns the combined description (original + refactor prompt)
-// during an active refactor, or the original description otherwise.
-func (f *Feature) EffectiveDescription() string {
-	if f.RefactorPrompt != "" {
-		return f.Description + "\n\n## Refactor Request\n\n" + f.RefactorPrompt
-	}
-	return f.Description
-}
-
-// isCycleTimingKey returns true if the key is a multi-phase cycle key
-// (e.g. refactor-N) that should not be overwritten by individual phase starters.
-func isCycleTimingKey(key string) bool {
-	return strings.HasPrefix(key, "refactor-")
-}
-
 // isImplementTimingKey returns true if the key belongs to the implement phase
 // (initial implementation or any cycle variant).
 func isImplementTimingKey(key string) bool {
 	return key == "implement" ||
 		strings.HasPrefix(key, "rebase-") ||
-		strings.HasPrefix(key, "refactor-") ||
-		strings.HasSuffix(key, "-impl") ||
-		key == "review-comments" ||
-		strings.HasPrefix(key, "review-comments-")
+		strings.HasSuffix(key, "-impl")
 }
 
 // TotalRuntime returns the total active runtime for the feature.
@@ -1332,30 +1094,7 @@ func (f *Feature) Transition(to Status) error {
 			return nil
 		}
 	}
-	return fmt.Errorf("invalid transition from %s to %s", f.Status, to)
-}
-
-// PendingUserInputCycles returns the post-publish per-repo cycles currently
-// paused on a cycle-scoped NEED_USER_INPUT gate, sorted by repo name. A cycle
-// is reported only when its RepoCycleState carries both the paused status and
-// a non-empty gate artifact path.
-func (f *Feature) PendingUserInputCycles() []PendingUserInputCycle {
-	if f == nil || len(f.RepoCycles) == 0 {
-		return nil
-	}
-	var out []PendingUserInputCycle
-	for repoName, rc := range f.RepoCycles {
-		if rc == nil || rc.Status != RepoCycleNeedUserInput || rc.PendingNeedUserInputPath == "" {
-			continue
-		}
-		out = append(out, PendingUserInputCycle{
-			RepoName:  repoName,
-			CycleType: rc.Type,
-			GatePath:  rc.PendingNeedUserInputPath,
-		})
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].RepoName < out[j].RepoName })
-	return out
+	return fmt.Errorf("%w from %s to %s", ErrInvalidTransition, f.Status, to)
 }
 
 // AllReposPublished returns true when every repo declared on f.Repos has
@@ -1405,6 +1144,18 @@ func (f *Feature) FirstRepoPRURL() string {
 		}
 	}
 	return ""
+}
+
+// PhaseStatusFinalizing marks the synchronous end-of-roadmap-phase git
+// boundary: the feature already transitioned to StatusReviewPassed but the
+// per-repo phase commit is still running, so it is not startable yet.
+const PhaseStatusFinalizing = "finalizing_phase"
+
+// IsFinalizingPhase reports whether the feature is inside the end-of-phase
+// git boundary. Readers use it to present in-progress work and refuse Start
+// while StatusReviewPassed looks like a steady state.
+func (f *Feature) IsFinalizingPhase() bool {
+	return f != nil && f.CurrentPhaseStatus == PhaseStatusFinalizing
 }
 
 // IsReviewing reports whether the feature is in a Final Review state. Under

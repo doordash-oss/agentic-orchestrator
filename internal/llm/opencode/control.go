@@ -17,19 +17,14 @@ package opencode
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 	"regexp"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 )
-
-// statFunc resolves the phase_complete marker on disk. It is a variable so
-// tests can drive marker presence deterministically without touching the
-// filesystem.
-var statFunc = os.Stat
 
 // syntheticAskUserPrefix marks AskUserQuestion request ids the tracer
 // synthesizes from plain assistant text. Such questions have no native ACP
@@ -67,10 +62,33 @@ func (p *Protocol) handleRequestPermission(rawID json.RawMessage, params json.Ra
 	}
 
 	reqID := strconv.Itoa(id)
+	var msg llm.SDKMessage
 	if pp.ToolCall.Kind == ToolKindQuestion {
-		return p.buildQuestionControl(reqID, pp), true
+		msg = p.buildQuestionControl(reqID, pp)
+	} else {
+		msg = p.buildPermissionControl(reqID, pp)
 	}
-	return p.buildPermissionControl(reqID, pp), true
+	origin := p.originForSession(pp.SessionID)
+	msg.Origin = origin
+	msg.OccurredAt = time.Now().UTC()
+	if msg.ControlRequest != nil {
+		msg.ControlRequest.Origin = origin
+	}
+	return msg, true
+}
+
+func (p *Protocol) originForSession(sessionID string) llm.EventOrigin {
+	p.mu.Lock()
+	rootSessionID := p.acpSessionID
+	p.mu.Unlock()
+	if sessionID != "" && rootSessionID != "" && sessionID != rootSessionID {
+		return llm.EventOrigin{
+			Kind:           llm.EventOriginTask,
+			TaskID:         sessionID,
+			ChildSessionID: sessionID,
+		}
+	}
+	return llm.EventOrigin{Kind: llm.EventOriginRoot}
 }
 
 // buildPermissionControl normalizes a tool-permission request into a
@@ -104,7 +122,7 @@ func (p *Protocol) buildPermissionControl(reqID string, pp RequestPermissionPara
 
 // normalizePermissionInput maps an ACP tool call to the normalized tool name and
 // input shape the existing permission UI and cache expect. Known kinds carry the
-// detail field the TUI renders (command for Bash, file_path for Write); unknown
+// detail field clients render (command for Bash, file_path for Write); unknown
 // kinds still surface as a permission prompt with a best-effort detail so the
 // user can decide rather than the tracer failing closed.
 func normalizePermissionInput(tc PermissionToolCall) (string, json.RawMessage) {
@@ -173,6 +191,20 @@ func inputObject(key, value string) json.RawMessage {
 // firstStringField returns the first non-empty string value among the named keys
 // of a JSON object, falling back to fallback when none are present. It tolerates
 // absent or non-object raw input.
+func firstPositiveNumberField(raw json.RawMessage, keys ...string) int64 {
+	if len(raw) > 0 {
+		var obj map[string]any
+		if err := json.Unmarshal(raw, &obj); err == nil {
+			for _, k := range keys {
+				if v, ok := obj[k].(float64); ok && v > 0 {
+					return int64(v)
+				}
+			}
+		}
+	}
+	return 0
+}
+
 func firstStringField(raw json.RawMessage, fallback string, keys ...string) string {
 	if len(raw) > 0 {
 		var obj map[string]any
@@ -355,22 +387,19 @@ func (p *Protocol) RespondToAskUser(requestID string, questions json.RawMessage,
 }
 
 // matchAnswerOption returns the optionId whose label the user's answer selected,
-// or "" when the answer matched no listed option. Exact label match is tried
-// first, then a recommended-suffix-insensitive match.
+// or "" when the answer matched no listed option. Matching is exact first, then
+// recommended-suffix and display-truncation insensitive (llm.MatchAskUserOptionLabel).
 func matchAnswerOption(labelToOption map[string]string, answers map[string]string) string {
 	if len(labelToOption) == 0 {
 		return ""
 	}
+	labels := make([]string, 0, len(labelToOption))
+	for label := range labelToOption {
+		labels = append(labels, label)
+	}
 	for _, ans := range answers {
-		if id, ok := labelToOption[ans]; ok {
-			return id
-		}
-		stripped := strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(ans), "(Recommended)"))
-		for label, id := range labelToOption {
-			base := strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(label), "(Recommended)"))
-			if base != "" && base == stripped {
-				return id
-			}
+		if label, ok := llm.MatchAskUserOptionLabel(labels, ans); ok {
+			return labelToOption[label]
 		}
 	}
 	return ""
@@ -417,14 +446,6 @@ func (p *Protocol) maybeSynthesizeQuestion(lastText string) (msg llm.SDKMessage,
 		return llm.SDKMessage{}, false, false
 	}
 
-	// A present phase_complete marker means the agent finished its work this
-	// turn; treat the turn as a completion even if its text reads like a
-	// question, so a stray '?' can never block a finished phase.
-	if p.markerPresent() {
-		p.resetFormatRetry()
-		return llm.SDKMessage{}, false, false
-	}
-
 	if stripped, ok := trimFreeFormSentinel(lastText); ok {
 		p.resetFormatRetry()
 		return p.synthesizeAskUser(stripped, nil), true, true
@@ -437,6 +458,12 @@ func (p *Protocol) maybeSynthesizeQuestion(lastText string) (msg llm.SDKMessage,
 	// must not be forced through the question-reformat pipeline just because it
 	// enumerates items.
 	if stem, options, ok := parseNumberedOptions(lastText); ok && (stemLooksLikeQuestion(stem) || optionsCarryQuestionContract(options)) {
+		if strings.TrimSpace(stem) == "" {
+			if p.sendQuestionFormatReminder(lastText) {
+				return llm.SDKMessage{}, false, true
+			}
+			stem = "Which option should Agentico use?"
+		}
 		if !parsedOptionsHaveConfidence(options) {
 			if p.sendQuestionFormatReminder(lastText) {
 				return llm.SDKMessage{}, false, true
@@ -482,16 +509,6 @@ func (p *Protocol) resetFormatRetry() {
 	p.mu.Lock()
 	p.formatRetryCount = 0
 	p.mu.Unlock()
-}
-
-// markerPresent reports whether the phase_complete marker exists on disk. A
-// missing marker path is treated as absent.
-func (p *Protocol) markerPresent() bool {
-	if p.opts.MarkerPath == "" {
-		return false
-	}
-	_, err := statFunc(p.opts.MarkerPath)
-	return err == nil
 }
 
 // synthesizeAskUser builds an AskUserQuestion control request from a plain-text
@@ -685,9 +702,6 @@ func parseNumberedOptions(text string) (string, []parsedOption, bool) {
 	cleaned := strings.TrimSpace(strings.Join(stem, "\n"))
 	if len(trailingStem) > 0 {
 		cleaned = strings.TrimSpace(strings.Join(trailingStem, "\n"))
-	}
-	if cleaned == "" {
-		cleaned = text
 	}
 	return cleaned, options, true
 }

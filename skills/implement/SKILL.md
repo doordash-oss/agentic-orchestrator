@@ -13,16 +13,15 @@ Implement the approved phase plan. You own code, development-time testing, expli
 | Artifact | Path | Requirement | Purpose |
 |----------|------|-------------|---------|
 | `progress.md` | `{phase_dir}/progress.md` | required | structured progress markdown with iteration handoff, deferrals, and iteration state |
-| `need-user-input.yaml` | `{iteration_dir}/need-user-input.yaml` | conditional: required when progress.md reports NEED_USER_INPUT | YAML gate file containing the structured user questions needed before the next iteration |
 
 ## Start Here
 
-Never create or edit `verification-report.yaml`. When a testing contract exists, the harness derives it after `phase_complete` from the testing contract, command results, waivers, and agent-owned evidence files.
+Never create or edit `verification-report.yaml` or `phase_complete`. When a testing contract exists, the harness derives the report after it commits your structured root outcome.
 
 1. Read the full phase plan.
 2. If `{phase_dir}/progress.md` exists, read it and resume from `### Where I stopped`. Reviewer feedback and the current plan override stale handoff prose.
-3. Read `testing-contract.yaml` if it exists — at `{phase_dir}/../testing-contract.yaml` for roadmap phases, or `{phase_dir}/testing-contract.yaml` for cycle layouts (rebase/refactor/review-comments, where `{phase_dir}` is the cycle root). Note only items with `owner: agent`; final execution of `owner: harness` items is not your responsibility. If the file does not exist, this feature has no per-iteration machine verification: run every command under the plan's `### Automated Verification` yourself each iteration and record the commands and results in your handoff — SUCCESS asserts they pass.
-4. Confirm every Task `**Repo:** <name>` is mounted. If the plan or repo scope is contradictory, emit `NEED_USER_INPUT`.
+3. Read `testing-contract.yaml` if it exists — at `{phase_dir}/../testing-contract.yaml` for roadmap phases, or `{phase_dir}/testing-contract.yaml` for cycle layouts (rebase/review-comments, where `{phase_dir}` is the cycle root). Note only items with `owner: agent`; final execution of `owner: harness` items is not your responsibility. If the file does not exist, this feature has no per-iteration machine verification: run every command under the plan's `### Automated Verification` yourself each iteration and record the commands and results in your handoff — SUCCESS asserts they pass.
+4. Confirm every Task `**Repo:** <name>` is mounted. If the plan or repo scope is contradictory, call the formal AskUserQuestion control and continue after the answer.
 5. Build a dependency graph from `Blocked by`, shared files, repo tags, and acceptance criteria.
 
 ## Implementation Rules
@@ -49,7 +48,7 @@ For every testing-contract item with `owner: agent`, write the file named by `ex
 - `visual_artifact`: the actual image at the specified `screenshots/` path.
 - `behavioral_artifact`: one actual trace, recording, or interaction log covering the contract's consolidated primary-journey checklist at the specified `behaviors/` path.
 
-Do not write evidence for `owner: harness` items. Do not invent statuses, counts, transcripts, or waiver claims. If required evidence needs unavailable authorization, hardware, a human judgment, or an external environment, emit `NEED_USER_INPUT` and name the missing capability. Never create placeholder evidence.
+Do not write evidence for `owner: harness` items. Do not invent statuses, counts, transcripts, or waiver claims. If required evidence needs unavailable authorization, hardware, a human judgment, or an external environment, call the formal AskUserQuestion control and name the missing capability. Never create placeholder evidence.
 
 ## Handoff
 
@@ -58,9 +57,8 @@ At iteration end:
 1. Write all required agent-owned evidence files.
 2. When a testing contract exists, run `"$AGENTICO_BIN" verify-evidence --contract "{testing_contract_path}" --dir "{iteration_dir}"`; fix every reported gap (missing, malformed, mis-sized, or byte-identical duplicate captures) before continuing. This runs the same file-backed checks the post-handoff integrity gate applies — clearing it here avoids losing a whole iteration to a gap you can fix now.
 3. Write `{phase_dir}/progress.md`.
-4. Write `{iteration_dir}/need-user-input.yaml` only for `NEED_USER_INPUT`.
-5. Run `"$AGENTICO_BIN" validate-artifacts --phase implement --role implementer --dir "{iteration_dir}"`; fix reported handoff defects.
-6. Write `{iteration_dir}/phase_complete` last.
+4. Run `"$AGENTICO_BIN" validate-artifacts --phase implement --role implementer --dir "{iteration_dir}"`; fix reported handoff defects.
+5. Finish the root response with exactly one structured outcome tag from the system prompt. The harness writes `phase_complete` after validation.
 
 Use this `progress.md` shape:
 
@@ -99,8 +97,4 @@ Choose exactly one state:
 
 - `SUCCESS`: implementation, acceptance criteria, development tests, due deferrals, and all `owner: agent` evidence are complete. When a testing contract exists, the harness performs final contract verification next; otherwise your reported automated-verification runs are the record.
 - `RETRY`: useful implementation progress landed and a concrete in-scope next action is possible in the current environment.
-- `NEED_USER_INPUT`: progress requires a human decision, authorization, unavailable external capability, scope/contract change, or resolution of contradictory repository state.
-
-Never emit `RETRY` for a blocker you cannot act on in this environment (missing credentials, absent hardware, a human decision): the harness re-dispatches `RETRY` iterations unchanged, so an externally blocked `RETRY` only burns the iteration budget. Emit `NEED_USER_INPUT` and name the blocker instead.
-
-For `NEED_USER_INPUT`, insert a numbered `## Questions for User` section between `## Deferrals` and `## Iteration State`, then put a concise blocker summary below the `NEED_USER_INPUT` token. Ask only questions whose answers are required to resume safely.
+Never emit `RETRY` for a blocker you cannot act on in this environment (missing credentials, absent hardware, or a human decision): the harness re-dispatches `RETRY` iterations unchanged. Call the formal AskUserQuestion control instead, and resume the same iteration after the answer.

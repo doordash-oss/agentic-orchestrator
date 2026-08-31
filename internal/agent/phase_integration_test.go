@@ -63,9 +63,9 @@ func newResearchFeature(t *testing.T, repoPath string) *feature.Feature {
 }
 
 func TestBuildSession_AgentSelectionSmoke(t *testing.T) {
-	subsetJSON, err := AgentsJSONForNames([]string{"codebase-locator", "web-search-researcher"})
+	subsetJSON, err := agentsJSONForNames([]string{"codebase-locator", "web-search-researcher"})
 	if err != nil {
-		t.Fatalf("AgentsJSONForNames(subset): %v", err)
+		t.Fatalf("agentsJSONForNames(subset): %v", err)
 	}
 	tests := []struct {
 		name           string
@@ -801,7 +801,7 @@ func TestRunResearch_GlobalBashRulesAutoApproveAcrossProviders(t *testing.T) {
 						t.Fatal("expected SUCCESS result event from provider registry path")
 					}
 					if sawBashPrompt {
-						t.Fatal("expected seeded global Bash rule to auto-approve before reaching the TUI")
+						t.Fatal("expected seeded global Bash rule to auto-approve before reaching the desktop app")
 					}
 					return
 				}

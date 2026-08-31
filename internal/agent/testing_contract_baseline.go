@@ -59,10 +59,9 @@ func EnsureTestingContractBaseCommits(contract *TestingContract, repos []feature
 			continue
 		}
 
-		// Post-publish cycles may run after the worktree was cleaned; fall
-		// back to the repository path like the cycle dispatch does. A repo
-		// with neither path stays unanchored: its failures classify as
-		// unclassified instead of aborting the whole loop.
+		// Fall back to the repository path when the worktree path is
+		// empty. A repo with neither path stays unanchored: its failures
+		// classify as unclassified instead of aborting the whole loop.
 		worktreePath := strings.TrimSpace(repo.WorktreePath)
 		if worktreePath == "" {
 			worktreePath = strings.TrimSpace(repo.Path)

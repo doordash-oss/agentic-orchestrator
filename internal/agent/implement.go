@@ -17,12 +17,14 @@ package agent
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -47,9 +49,14 @@ type ImplementConfig struct {
 	ExitCriteria        string
 	Model               string
 	ReviewModel         string
-	ArtifactDir         string // base dir for iteration artifacts
-	StateDir            string // feature state directory for PID files
-	RunDir              string // active run directory granted to the agent; empty derives from Feature.ActiveRun
+	// ResolveSessionConfig reloads the persisted feature configuration when a
+	// new provider session is about to start. The currently running session
+	// keeps its snapshot; later implementation iterations and review batches
+	// receive edits made while the loop is active.
+	ResolveSessionConfig func(llm.PhaseRole) (SessionRuntimeConfig, error)
+	ArtifactDir          string // base dir for iteration artifacts
+	StateDir             string // feature state directory for PID files
+	RunDir               string // active run directory granted to the agent; empty derives from Feature.ActiveRun
 
 	// AdditionalDirs are extra directories to pass as --add-dir flags to the
 	// claude CLI, giving the agent file-system access beyond WorkDir and StateDir.
@@ -164,16 +171,37 @@ type ImplementConfig struct {
 	// the per-iteration review gate on SUCCESS and immediately return
 	// "review_passed". Medium and Large profiles set this to true in the
 	// single-repo path, relying on the Final Review for quality gating.
-	// Moonshot, multi-repo orchestration, repo-scoped cycles, and refactor loops
-	// keep per-iteration review enabled.
+	// Multi-repo orchestration keeps per-iteration review enabled.
 	SkipIterationReview bool
+}
 
-	// FinishOrViolateNudge arms the finish-or-violate auto-continuation retry
-	// for this loop's sessions: the session runs in interactive turn mode and,
-	// on a deliberate end_turn without the completion marker, is nudged to
-	// finish before a protocol violation is recorded. Resolved per-model from
-	// the provider capability, so only capability-positive providers opt in.
-	FinishOrViolateNudge bool
+// SessionRuntimeConfig is the role-specific configuration snapshot used to
+// build one newly-created provider session.
+type SessionRuntimeConfig struct {
+	Model           string
+	EffectiveEffort llm.EffortLevel
+	EffortSource    llm.EffortSource
+	AskingClause    string
+}
+
+func resolveImplementSessionConfig(cfg ImplementConfig, role llm.PhaseRole) (SessionRuntimeConfig, error) {
+	if cfg.ResolveSessionConfig != nil {
+		return cfg.ResolveSessionConfig(role)
+	}
+	if role == llm.PhaseReview {
+		return SessionRuntimeConfig{
+			Model:           cfg.ReviewModel,
+			EffectiveEffort: cfg.ReviewEffectiveEffort,
+			EffortSource:    cfg.ReviewEffortSource,
+			AskingClause:    cfg.AskingClause,
+		}, nil
+	}
+	return SessionRuntimeConfig{
+		Model:           cfg.Model,
+		EffectiveEffort: cfg.EffectiveEffort,
+		EffortSource:    cfg.EffortSource,
+		AskingClause:    cfg.AskingClause,
+	}, nil
 }
 
 // LoopResult represents the outcome of the full implementation loop.
@@ -186,10 +214,9 @@ type ImplementConfig struct {
 //   - "max_iterations":    hit cfg.MaxIterations without a passing review.
 //   - "safety_rail":       no-progress / consecutive-failure rail tripped.
 //   - "interrupted":       shutdown / feature stopped while running.
-//   - "need_user_input":   iteration emitted NEED_USER_INPUT — single-repo
-//     pause gate. NeedUserInputPath points to the persisted gate artifact
-//     and Iterations carries the iteration that emitted the gate so the
-//     orchestrator can resume at iteration N+1.
+//   - "need_user_input":   harness verification found a capability-protected
+//     check that requires a user decision. NeedUserInputPath points to the
+//     harness-owned gate artifact and Iterations identifies its iteration.
 type LoopResult struct {
 	FinalStatus string
 	Iterations  int
@@ -199,9 +226,8 @@ type LoopResult struct {
 	// FinalStatus == "plan_revision_required".
 	PlanRevisionFeedback string
 
-	// NeedUserInputPath is the absolute path of the persisted gate
-	// artifact written when FinalStatus == "need_user_input". Empty for
-	// every other status.
+	// NeedUserInputPath is the absolute path of the harness-owned gate artifact
+	// written when FinalStatus == "need_user_input". Empty otherwise.
 	NeedUserInputPath string
 }
 
@@ -215,8 +241,6 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 	progressPath := filepath.Join(cfg.ArtifactDir, "progress.md")
 	summaryPath := filepath.Join(cfg.ArtifactDir, "summary.log")
 	aggregateLogPath := filepath.Join(cfg.ArtifactDir, "output.txt")
-	// implProtocol is built per-iteration below with the correct iterDir
-	// so the agent writes phase_complete to the iteration directory.
 
 	// Phase-level instrumentation
 	featureCtx := observe.SpanContextForFeature(cfg.Feature.ID, cfg.Feature.TraceID, cfg.Feature.Name, cfg.Feature.FeatureSpanID).WithRun(cfg.Feature.ActiveRun)
@@ -249,15 +273,15 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 	// review-feedback.md (see retryReviewFeedbackReminder).
 	var lastChangesRequestedIter int
 
-	// Mid-iteration restart: if the next iteration's dir already has
-	// phase_complete (but no meta.yaml, otherwise LatestIteration would have
-	// advanced past it), the implement phase finished before the prior run
-	// was interrupted — likely during the review gate. Skip the implement
-	// session and jump straight to the review for that iteration.
+	// Mid-iteration restart: if the next iteration's dir already has a valid
+	// harness completion receipt (but no meta.yaml, otherwise LatestIteration
+	// would have advanced past it), the implement phase finished before the
+	// prior run was interrupted — likely during the review gate. Skip the
+	// implement session and jump straight to the review for that iteration.
 	skipImplement := false
 	if nextIter := startIter + 1; nextIter <= cfg.MaxIterations {
 		nextIterDir := filepath.Join(cfg.ArtifactDir, fmt.Sprintf("iteration-%02d", nextIter))
-		skipImplement = HasPhaseComplete(nextIterDir)
+		skipImplement = HasCommittedPhaseOutcome(nextIterDir, feature.PhaseImplement, RoleImplementer)
 	}
 
 	if startIter > 0 {
@@ -316,7 +340,7 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			return &LoopResult{FinalStatus: "interrupted", Iterations: i - 1}, nil
 		}
 
-		// Update iteration counter so the TUI dashboard reflects progress
+		// Update iteration counter so the desktop app dashboard reflects progress
 		if cfg.FeatureStore != nil {
 			_ = cfg.FeatureStore.Modify(cfg.Feature.ID, func(f *feature.Feature) error {
 				f.CurrentIteration = i
@@ -333,7 +357,7 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			madeProgress        bool
 			exitCode            int
 			sess                ports.SessionHandle
-			waitResult          waitForStatusResult
+			waitResult          PhaseOutcomeWaitResult
 			testingContractPath string
 			contractFingerprint string
 			resumeCoordinator   *ResumeCoordinator
@@ -364,6 +388,11 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 				return nil, prepareErr
 			}
 		} else {
+			sessionConfig, resolveErr := resolveImplementSessionConfig(cfg, llm.PhaseImplementation)
+			if resolveErr != nil {
+				return nil, fmt.Errorf("resolving session configuration for iteration %d: %w", i, resolveErr)
+			}
+
 			// Read help answers from the latest feature state
 			helpAnswers := ""
 			if cfg.FeatureStore != nil {
@@ -386,17 +415,9 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			prompt := BuildImplementPrompt(
 				cfg.PlanPath,
 				cfg.ExitCriteria,
-				progressPath,
-				"",
-				testingContractPath,
 				reviewerFeedback,
 				helpAnswers,
-				buildPriorUserInputAnswers(cfg.ArtifactDir),
-				cfg.SkillsDir,
-				cfg.GuidelinesDir,
-				nil,
 				i,
-				cfg.KBInfos...,
 			)
 			// Re-inject user-attached visual references (mockups, design
 			// comps, desired-state screenshots) on every implement
@@ -419,17 +440,17 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 					}
 				}
 			}
-			// Remove stale phase_complete signal from previous turns
-			RemovePhaseComplete(iterDir)
+			// Remove a stale harness receipt before starting a new root turn.
+			RemoveCompletionReceipt(iterDir)
 
 			// Build the RoleSpec-backed system prompt with the iteration-specific
-			// completion marker and output roots.
+			// completion protocol and output roots.
 			implProtocol := BuildImplementSystemPrompt(BuildImplementSystemPromptInput{
 				IterationDir:  iterDir,
 				SkillsDir:     cfg.SkillsDir,
 				GuidelinesDir: cfg.GuidelinesDir,
 				KBInfos:       cfg.KBInfos,
-				AskingClause:  cfg.AskingClause,
+				AskingClause:  sessionConfig.AskingClause,
 				Frontend:      cfg.Feature != nil && cfg.Feature.RoadmapPhaseFrontend(cfg.Feature.CurrentRoadmapPhase),
 			})
 
@@ -456,7 +477,7 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			}
 			dirs := append([]string{runDir}, cfg.AdditionalDirs...)
 			implBuildOpts := BuildSessionOpts{
-				Model:                          cfg.Model,
+				Model:                          sessionConfig.Model,
 				Prompt:                         prompt,
 				SystemPrompt:                   implProtocol,
 				AdditionalDirs:                 dirs,
@@ -468,10 +489,10 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 				EffortLevel:                    cfg.EffortLevel,
 				Phase:                          feature.PhaseImplement,
 				SystemPromptHasUsefulResources: true,
-				MarkerPath:                     filepath.Join(iterDir, PhaseCompleteFile),
+				CompletionProtocol:             true,
 			}
-			if cfg.EffectiveEffort != "" {
-				implBuildOpts.EffortLevel = cfg.EffectiveEffort
+			if sessionConfig.EffectiveEffort != "" {
+				implBuildOpts.EffortLevel = sessionConfig.EffectiveEffort
 			}
 			resumeCoordinator = NewResumeCoordinator(iterDir)
 			freshBuildOpts := implBuildOpts
@@ -498,17 +519,15 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 				freshBuildOpts.AutoReview = sessOpts.AutoReview
 			}
 
-			sessOpts = enableTruncatedTurnAutoResume(sessOpts)
-			if cfg.EffectiveEffort != "" {
-				sessOpts.EffectiveEffort = cfg.EffectiveEffort
-				sessOpts.EffortSource = cfg.EffortSource
-			}
-			if cfg.FinishOrViolateNudge {
-				sessOpts.TurnMode = ports.TurnModeInteractive
+			sessOpts = enableTurnContinuation(sessOpts)
+			if sessionConfig.EffectiveEffort != "" {
+				sessOpts.EffectiveEffort = sessionConfig.EffectiveEffort
+				sessOpts.EffortSource = sessionConfig.EffortSource
 			}
 			WriteDebugPrompts(iterDir, sessOpts.DebugSystemPrompt, prompt)
 			// Merge iteration-specific fields into session opts
 			sessOpts.Iteration = i
+			sessOpts.RunNumber = cfg.Feature.ActiveRun
 			sessOpts.PermCacheScope = permRepoName
 			// Capture provider stderr so silent process deaths are diagnosable.
 			sessOpts.StderrPath = filepath.Join(iterDir, "stderr.log")
@@ -593,7 +612,7 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			if sessOpts != nil {
 				implProvider = sessOpts.ProviderName
 			}
-			cfg.Observer.SessionStarted(implSessionCtx, "implement", sessionID, implProvider, cfg.Model, cfg.RepoName, string(cfg.EffectiveEffort), string(cfg.EffortSource))
+			cfg.Observer.SessionStarted(implSessionCtx, "implement", sessionID, implProvider, sessionConfig.Model, cfg.RepoName, string(sessionConfig.EffectiveEffort), string(sessionConfig.EffortSource))
 			implTracker := &ContextReadTracker{
 				KBBaseDir:     filepath.Join(filepath.Dir(cfg.StateDir), "knowledge-base"),
 				SkillsDir:     cfg.SkillsDir,
@@ -613,20 +632,23 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			// implWaitOptions builds the wait options for an implement session.
 			// Shared between the initial session and a crash-resume attempt so
 			// both waits apply the same readiness and handoff behavior.
-			implWaitOptions := func(sess ports.SessionHandle, sessionCtx observe.SpanContext, sessionID string) waitForStatusOptions {
-				return waitForStatusOptions{
-					ReadyCheck: func() bool {
-						if HasPhaseComplete(iterDir) {
-							// Agent completed its work — clear any stale question flag
-							// so we don't block on a question the agent already moved past.
+			implWaitOptions := func(sess ports.SessionHandle, sessionCtx observe.SpanContext, sessionID string) PhaseOutcomeWaitOptions {
+				return PhaseOutcomeWaitOptions{
+					CommitOutcome: func(intent llm.CompletionIntent) ([]ProtocolViolation, error) {
+						_, _, violations, err := CommitPhaseOutcome(CompletionCommitInput{
+							Phase:       feature.PhaseImplement,
+							Role:        RoleImplementer,
+							ArtifactDir: iterDir,
+							SessionID:   sessionID,
+							Intent:      intent,
+						})
+						if err == nil && len(violations) == 0 {
 							sess.SetHasUnansweredQuestion(false)
-							return true
 						}
-						// No phase_complete yet — the agent is likely waiting for user input.
-						return false
+						return violations, err
 					},
-					FinishOrViolateNudge: cfg.FinishOrViolateNudge,
 					MissingArtifacts:     []string{"progress.md"},
+					RetryOutcomeAllowed:  true,
 					EnableContextHandoff: true,
 					OnContextHandoff: func(snap contextSnapshot) {
 						cfg.Observer.ContextHandoffTriggered(
@@ -646,10 +668,11 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 				}
 			}
 
-			// Wait for status marker or session exit. If the SDK reports a
-			// non-truncated success without phase_complete, the iteration below
-			// records a protocol violation instead of waiting for user input.
-			waitResult = waitForStatusDetailed(sess, sm, sessionID, implWaitOptions(sess, implSessionCtx, sessionID))
+			// Wait for a semantic root outcome or session exit. If the provider
+			// reports a clean end without an outcome, the iteration records a
+			// protocol violation instead of treating transport completion as
+			// phase completion.
+			waitResult = WaitForPhaseOutcome(sess, implWaitOptions(sess, implSessionCtx, sessionID))
 			agentStatus = waitResult.Status
 			if err := resumeCoordinator.CaptureProviderSnapshot(providerSessionID(sess), sess.ProviderName(), sess.Model()); err != nil {
 				return nil, fmt.Errorf("capturing implementation provider identity: %w", err)
@@ -695,7 +718,7 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 					implSessionCtx = iterCtx.Child()
 					cfg.Observer.SessionStarted(implSessionCtx, "implement", sessionID, sessOpts.ProviderName, cfg.Model, cfg.RepoName, string(cfg.EffectiveEffort), string(cfg.EffortSource))
 					implTracker.Install(sess, implSessionCtx, "implement", sessionID)
-					waitResult = waitForStatusDetailed(sess, sm, sessionID, implWaitOptions(sess, implSessionCtx, sessionID))
+					waitResult = WaitForPhaseOutcome(sess, implWaitOptions(sess, implSessionCtx, sessionID))
 					agentStatus = waitResult.Status
 					if err := resumeCoordinator.CaptureProviderSnapshot(providerSessionID(sess), sess.ProviderName(), sess.Model()); err != nil {
 						return nil, fmt.Errorf("capturing fresh implementation provider identity: %w", err)
@@ -710,8 +733,8 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			// Grace period: a bare `sm.IsShuttingDown()` check races against how
 			// shutdown signals reach us. When the user presses Ctrl+C, SIGINT
 			// propagates through the process group, killing the agent CLI
-			// *before* the TUI unwinds and main.go calls sm.Shutdown(). The
-			// session dies, waitForStatus returns FAILED, and this check would
+			// *before* the desktop app unwinds and main.go calls sm.Shutdown(). The
+			// session dies, WaitForPhaseOutcome returns FAILED, and this check would
 			// run with IsShuttingDown still false — committing a FAILED meta
 			// that makes the next run advance to iteration N+1 instead of
 			// replaying N. Pausing briefly lets the normal shutdown path land.
@@ -723,15 +746,21 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 				return &LoopResult{FinalStatus: "interrupted", Iterations: i}, nil
 			}
 
+			// PHASE2(crash-resume-engine): feature's AutoResumeEngine replaces
+			// the inline crash-resume block; main's inline variant (base/main
+			// sides of this conflict) was dropped — its identifiers
+			// (startCrashResumeSession, sessionConfig) belong to the superseded
+			// structure. Main's API rewires (HasCommittedPhaseOutcome,
+			// WaitForPhaseOutcome) are applied to the engine path.
 			// Auto-resume transient provider failures within this iteration.
-			if agentStatus == agentStatusFailed && sessOpts != nil && sessOpts.SupportsSessionResume && !HasPhaseComplete(iterDir) {
+			if agentStatus == agentStatusFailed && sessOpts != nil && sessOpts.SupportsSessionResume && !HasCommittedPhaseOutcome(iterDir, feature.PhaseImplement, RoleImplementer) {
 				baseSessionID := sessionID
 				launchAndWait := func(nextID string, nextSess ports.SessionHandle, nextOpts *ports.SessionOpts) (AutoResumeProcess, error) {
 					sess, sessOpts, sessionID = nextSess, nextOpts, nextID
 					implSessionCtx = iterCtx.Child()
 					cfg.Observer.SessionStarted(implSessionCtx, "implement", sessionID, sessOpts.ProviderName, cfg.Model, cfg.RepoName, string(cfg.EffectiveEffort), string(cfg.EffortSource))
 					implTracker.Install(sess, implSessionCtx, "implement", sessionID)
-					waitResult = waitForStatusDetailed(sess, sm, sessionID, implWaitOptions(sess, implSessionCtx, sessionID))
+					waitResult = WaitForPhaseOutcome(sess, implWaitOptions(sess, implSessionCtx, sessionID))
 					agentStatus = waitResult.Status
 					if err := resumeCoordinator.CaptureProviderSnapshot(providerSessionID(sess), sess.ProviderName(), sess.Model()); err != nil {
 						return AutoResumeProcess{}, fmt.Errorf("capturing implementation provider identity: %w", err)
@@ -759,7 +788,7 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 						},
 						SupportsResume: func(AutoResumeProcess) bool { return true },
 						HasCompleted: func(AutoResumeProcess) bool {
-							return HasPhaseComplete(iterDir)
+							return HasCommittedPhaseOutcome(iterDir, feature.PhaseImplement, RoleImplementer)
 						},
 						ResumeID: func(process AutoResumeProcess) string {
 							return providerSessionID(process.Session)
@@ -836,7 +865,7 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			// Read output from message log
 			output := sess.MessageLog().Text()
 
-			// Append iteration output to aggregate log so the TUI log viewer works
+			// Append iteration output to aggregate log so the desktop app log viewer works
 			appendIterationLog(aggregateLogPath, i, output)
 
 			// Build iteration metadata from the logical agent result, not
@@ -892,13 +921,16 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 		}
 
 		// Handle based on agent status
-		if agentStatus == agentStatusMissingMarker {
-			violations := []ProtocolViolation{{
-				Artifact: PhaseCompleteFile,
-				Reason:   "SDK reported success but phase_complete was not present",
-			}}
+		if waitResult.Err != nil {
+			return nil, fmt.Errorf("committing implementer outcome: %w", waitResult.Err)
+		}
+		if agentStatus == agentStatusProtocolViolation {
+			violations := waitResult.ProtocolViolations
+			if len(violations) == 0 {
+				violations = completionIntentViolations(rootCompletionIntent(sess), []string{"progress.md"})
+			}
 			lastErr := formatProtocolViolationError(RoleImplementer, iterDir, violations)
-			if done := recordProtocolViolationIteration(am, summaryPath, iterDir, &meta, i, cfg, iterCtx, cost, iterStart, violations, lastErr, &consecutiveFailures, &reviewerFeedback); done != nil {
+			if done := recordProtocolViolationIteration(am, summaryPath, iterDir, aggregateLogPath, &meta, i, cfg, iterCtx, cost, iterStart, violations, lastErr, &consecutiveFailures, &reviewerFeedback); done != nil {
 				return done, nil
 			}
 			continue
@@ -911,17 +943,17 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			if preliminaryProgress != nil && preliminaryProgress.State == StateSuccess && strings.TrimSpace(testingContractPath) != "" {
 				if contractFingerprint != "" {
 					currentFingerprint, fingerprintErr := Fingerprint(testingContractPath)
-					if fingerprintErr != nil || currentFingerprint != contractFingerprint {
-						reason := "testing-contract.yaml was modified by the implementer; the contract is harness-owned"
-						if fingerprintErr != nil {
-							reason = fmt.Sprintf("testing-contract.yaml could not be verified after implementation: %v", fingerprintErr)
-						}
-						violations := []ProtocolViolation{{Artifact: "testing-contract.yaml", Reason: reason}}
-						lastErr := formatProtocolViolationError(RoleImplementer, iterDir, violations)
-						if done := recordProtocolViolationIteration(am, summaryPath, iterDir, &meta, i, cfg, iterCtx, cost, iterStart, violations, lastErr, &consecutiveFailures, &reviewerFeedback); done != nil {
-							return done, nil
-						}
-						continue
+					if fingerprintErr != nil {
+						return nil, fmt.Errorf("verifying testing contract after implementation: %w", fingerprintErr)
+					}
+					if currentFingerprint != contractFingerprint {
+						// Agent writes to the contract are denied at the
+						// permission layer, so a changed fingerprint is an
+						// external amendment: record it and re-anchor instead
+						// of charging the implementer.
+						appendIterationLog(aggregateLogPath, i,
+							"testing-contract.yaml was amended outside the session (external amendment); re-anchoring the harness fingerprint")
+						contractFingerprint = currentFingerprint
 					}
 				}
 				contract, readErr := ReadTestingContract(testingContractPath)
@@ -940,10 +972,13 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 						}
 					}
 				}
-				if cached, cacheErr := ReadVerificationReport(reportPath); cacheErr == nil && cached != nil && cached.ContractRevision == contract.Revision {
+				if cached, cacheErr := ReadVerificationReport(reportPath); cacheErr == nil && cached != nil &&
+					cached.ContractRevision == contract.Revision && !verificationReportHasBlockedResults(cached) {
 					// Stop/restart resume: the harness already executed this
 					// iteration's contract and persisted the report. Reuse
 					// it so resuming mid-review never re-runs the commands.
+					// Blocked results never replay — they are environment-
+					// derived and must be re-probed after the user retries.
 					harnessVerification = ReconstructVerificationOutcome(cached)
 				} else {
 					verifyCtx, cancelVerify := verificationContext(cfg.FeatureStore, cfg.Feature.ID)
@@ -972,7 +1007,7 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			}
 			if !outcome.OK {
 				lastErr := formatProtocolViolationError(RoleImplementer, iterDir, violations)
-				if done := recordProtocolViolationIteration(am, summaryPath, iterDir, &meta, i, cfg, iterCtx, cost, iterStart, violations, lastErr, &consecutiveFailures, &reviewerFeedback); done != nil {
+				if done := recordProtocolViolationIteration(am, summaryPath, iterDir, aggregateLogPath, &meta, i, cfg, iterCtx, cost, iterStart, violations, lastErr, &consecutiveFailures, &reviewerFeedback); done != nil {
 					return done, nil
 				}
 				continue
@@ -995,7 +1030,7 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 				if gate.Rejected {
 					gateViolations := reportGateViolations(gate)
 					lastErr := formatProtocolViolationError(RoleImplementer, iterDir, gateViolations)
-					if done := recordProtocolViolationIteration(am, summaryPath, iterDir, &meta, i, cfg, iterCtx, cost, iterStart, gateViolations, lastErr, &consecutiveFailures, &reviewerFeedback); done != nil {
+					if done := recordProtocolViolationIteration(am, summaryPath, iterDir, aggregateLogPath, &meta, i, cfg, iterCtx, cost, iterStart, gateViolations, lastErr, &consecutiveFailures, &reviewerFeedback); done != nil {
 						return done, nil
 					}
 					continue
@@ -1004,7 +1039,13 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 
 			if harnessVerification != nil && len(harnessVerification.BlockedItems) > 0 {
 				gatePath := NeedUserInputPath(iterDir)
-				rec := SynthesizeVerificationNeedUserInputGate(testingContractPath, harnessVerification.Report.ContractRevision, harnessVerification.BlockedItems, i)
+				rec := SynthesizeVerificationNeedUserInputGateWithContext(
+					testingContractPath,
+					verificationContract,
+					harnessVerification.Report,
+					harnessVerification.BlockedItems,
+					i,
+				)
 				if err := WriteNeedUserInputRecord(gatePath, rec); err != nil {
 					return nil, fmt.Errorf("persisting verification capability gate: %w", err)
 				}
@@ -1043,32 +1084,6 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 				continue
 			}
 
-			// NEED_USER_INPUT: consume the agent-authored gate artifact and return a
-			// non-terminal loop result. The orchestrator transitions the
-			// feature into StatusNeedUserInput; the iteration's meta.yaml
-			// is committed so LatestIteration() advances past it and a
-			// later resume runs iteration N+1.
-			if parsed.State == StateNeedUserInput {
-				gatePath := NeedUserInputPath(iterDir)
-				rec := reconcileNeedUserInputGate(outcome.NeedUserInput, parsed, i)
-				if err := WriteNeedUserInputRecord(gatePath, rec); err != nil {
-					return nil, fmt.Errorf("persisting need-user-input gate: %w", err)
-				}
-				meta.AgentStatus = "NEED_USER_INPUT"
-				meta.ReviewStatus = "skipped_need_user_input"
-				meta.MadeProgress = pt.ObserveUnverifiedOutcome()
-				_ = am.WriteMeta(iterDir, meta)
-				_ = am.WriteSummary(summaryPath, meta)
-				consecutiveFailures = 0
-				cfg.Observer.IterationEnded(iterCtx, i, toSessionUsage(cost), time.Since(iterStart), "need_user_input")
-				return &LoopResult{
-					FinalStatus:       "need_user_input",
-					Iterations:        i,
-					LastError:         strings.TrimSpace(rec.Summary),
-					NeedUserInputPath: gatePath,
-				}, nil
-			}
-
 			// Fall through: SUCCESS — run the review gate.
 			if cfg.SkipIterationReview {
 				// Medium/Large: skip per-iteration review, rely on Final Review.
@@ -1076,7 +1091,7 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 				// the implementer — with no per-iteration reviewer there is
 				// nobody else to act on a red harness report.
 				if harnessVerification != nil && len(harnessVerification.RegressionItems) > 0 {
-					meta.MadeProgress = pt.ObserveVerifiedOutcome(CountOpenVerificationOutcomeBlockers(harnessVerification))
+					meta.MadeProgress = observeVerifiedImplementationOutcome(pt, CountOpenVerificationOutcomeBlockers(harnessVerification), cfg)
 					meta.ReviewStatus = ReviewChangesRequested.String()
 					_ = am.WriteMeta(iterDir, meta)
 					_ = am.WriteSummary(summaryPath, meta)
@@ -1095,7 +1110,7 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 					cfg.Observer.IterationEnded(iterCtx, i, toSessionUsage(cost), time.Since(iterStart), "harness_regression")
 					continue
 				}
-				meta.MadeProgress = pt.ObserveVerifiedOutcome(0)
+				meta.MadeProgress = observeVerifiedImplementationOutcome(pt, 0, cfg)
 				meta.ReviewStatus = reviewStatusSkipped
 				_ = am.WriteMeta(iterDir, meta)
 				_ = am.WriteSummary(summaryPath, meta)
@@ -1114,9 +1129,9 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			// races the shutdown, with the review typically coming back as
 			// FAILED — which used to get serialized into meta.yaml and
 			// advance the restart cursor to N+1. Re-check here and exit
-			// cleanly instead. The phase_complete marker from the implement
-			// phase stays on disk, so restart will route through the
-			// skipImplement branch at line 172 and resume the review for
+			// cleanly instead. The harness receipt from the implement phase
+			// stays on disk, so restart will route through the skipImplement
+			// branch above and resume the review for
 			// iteration N — exactly the expected behavior.
 			if sm != nil && sm.IsShuttingDown() {
 				return &LoopResult{FinalStatus: "interrupted", Iterations: i - 1}, nil
@@ -1134,7 +1149,16 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			reviewCtx := iterCtx.Child()
 			cfg.Observer.ReviewStarted(reviewCtx, i)
 			reviewStart := time.Now()
-			reviewStatus, feedback, reviewErr := runReviewGate(cfg, sm, i, iterDir, parsed, reviewCtx)
+			reviewSessionConfig, resolveErr := resolveImplementSessionConfig(cfg, llm.PhaseReview)
+			if resolveErr != nil {
+				return nil, fmt.Errorf("resolving review session configuration for iteration %d: %w", i, resolveErr)
+			}
+			reviewCfg := cfg
+			reviewCfg.ReviewModel = reviewSessionConfig.Model
+			reviewCfg.ReviewEffectiveEffort = reviewSessionConfig.EffectiveEffort
+			reviewCfg.ReviewEffortSource = reviewSessionConfig.EffortSource
+			reviewCfg.AskingClause = reviewSessionConfig.AskingClause
+			reviewStatus, feedback, reviewErr := runReviewGate(reviewCfg, sm, i, iterDir, parsed, reviewCtx)
 			cfg.Observer.ReviewCompleted(reviewCtx, i, reviewStatus.String(), time.Since(reviewStart))
 
 			// Clear the reviewing flag
@@ -1149,8 +1173,8 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			// iteration-N as "complete with review failed" and advance to
 			// N+1, even though the review never ran to completion. Leaving
 			// meta.yaml unwritten lets LatestIteration stop at N-1 and the
-			// skipImplement check at line 174 find the phase_complete
-			// marker, routing restart back to iteration N for review only.
+			// skipImplement check above find the harness receipt, routing
+			// restart back to iteration N for review only.
 			// Uses the same grace-period detection as the implement path.
 			if (reviewErr != nil || reviewStatus == ReviewFailed) && sm != nil && waitForShutdownIntent(sm, shutdownDetectionGrace) {
 				return &LoopResult{FinalStatus: "interrupted", Iterations: i - 1}, nil
@@ -1184,9 +1208,9 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 				// The review never produced a verdict (helper/API failure) —
 				// that is not reviewer feedback, and dispatching it to the
 				// implementer would burn an iteration on unactionable text.
-				// Leave meta.yaml unwritten: phase_complete stays on disk, so
-				// on resume LatestIteration stops at i-1 and the skipImplement
-				// branch re-runs the review for this same iteration only.
+				// Leave meta.yaml unwritten: the completion receipt stays on
+				// disk, so on resume LatestIteration stops at i-1 and the
+				// skipImplement branch re-runs the review for this iteration.
 				cfg.Observer.IterationEnded(iterCtx, i, toSessionUsage(cost), time.Since(iterStart), "review_error")
 				return &LoopResult{
 					FinalStatus: "review_error",
@@ -1197,7 +1221,7 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 
 			switch reviewStatus {
 			case ReviewApproved:
-				meta.MadeProgress = pt.ObserveVerifiedOutcome(0)
+				meta.MadeProgress = observeVerifiedImplementationOutcome(pt, 0, cfg)
 				meta.ReviewStatus = reviewStatus.String()
 				_ = am.WriteMeta(iterDir, meta)
 				_ = am.WriteSummary(summaryPath, meta)
@@ -1208,7 +1232,7 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 					Iterations:  i,
 				}, nil
 			case ReviewChangesRequested:
-				meta.MadeProgress = pt.ObserveVerifiedOutcome(CountBlockingReviewFindings(feedback) + CountOpenVerificationOutcomeBlockers(harnessVerification))
+				meta.MadeProgress = observeVerifiedImplementationOutcome(pt, CountBlockingReviewFindings(feedback)+CountOpenVerificationOutcomeBlockers(harnessVerification), cfg)
 				meta.ReviewStatus = reviewStatus.String()
 				_ = am.WriteMeta(iterDir, meta)
 				_ = am.WriteSummary(summaryPath, meta)
@@ -1303,6 +1327,17 @@ func waitForAutoResume(cfg ImplementConfig, sm ports.SessionManager, wait time.D
 	}
 }
 
+// PHASE2(crash-resume-message): main's updated crashResumeMessage retained
+// alongside feature's waitForAutoResume; the engine prompts via
+// ResumeCoordinator.Prompt(implementResumeContext) instead.
+// crashResumeMessage is the prompt for a crash-resume session. The resumed
+// conversation already carries the full iteration context; this only explains
+// the process boundary and re-anchors the completion protocol.
+const crashResumeMessage = "Your previous process terminated unexpectedly mid-turn; this session resumes that conversation. " +
+	"Reassess the repository and your artifacts: if the iteration's work is already complete, write any missing " +
+	"required artifacts, run the artifact preflight, and emit the structured root outcome; otherwise update progress " +
+	"and continue from where you left off."
+
 // providerSessionID returns the provider-native session identifier for a
 // session handle, "" when the handle does not expose one. SessionID is not
 // part of ports.SessionView, so it is probed as an optional interface.
@@ -1324,15 +1359,13 @@ func (c *ResumeCoordinator) DispatchCrashResume(cfg ImplementConfig, sm ports.Se
 	if err != nil {
 		return nil, nil, fmt.Errorf("building crash-resume session: %w", err)
 	}
-	sessOpts = enableTruncatedTurnAutoResume(sessOpts)
+	sessOpts = enableTurnContinuation(sessOpts)
 	if cfg.EffectiveEffort != "" {
 		sessOpts.EffectiveEffort = cfg.EffectiveEffort
 		sessOpts.EffortSource = cfg.EffortSource
 	}
-	if cfg.FinishOrViolateNudge {
-		sessOpts.TurnMode = ports.TurnModeInteractive
-	}
 	sessOpts.Iteration = iteration
+	sessOpts.RunNumber = cfg.Feature.ActiveRun
 	sessOpts.PermCacheScope = permScope
 	sessOpts.StderrPath = filepath.Join(c.dir, "stderr-resume.log")
 	installResumeProviderInitCapture(sessOpts, c)
@@ -1362,14 +1395,14 @@ func (c *ResumeCoordinator) DispatchFreshAfterRejection(cfg ImplementConfig, sm 
 	if err != nil {
 		return nil, nil, fmt.Errorf("building fresh session after resume rejection: %w", err)
 	}
-	sessOpts = enableTruncatedTurnAutoResume(sessOpts)
+	sessOpts = enableTurnContinuation(sessOpts)
 	if cfg.EffectiveEffort != "" {
 		sessOpts.EffectiveEffort = cfg.EffectiveEffort
 		sessOpts.EffortSource = cfg.EffortSource
 	}
-	if cfg.FinishOrViolateNudge {
-		sessOpts.TurnMode = ports.TurnModeInteractive
-	}
+	// PHASE2(implement-nudge-arming): feature's FinishOrViolateNudge TurnMode
+	// arming dropped — main removed the ImplementConfig field; BuildSession now
+	// sets TurnMode via CompletionProtocol.
 	sessOpts.Iteration = iteration
 	sessOpts.PermCacheScope = permScope
 	sessOpts.StderrPath = filepath.Join(c.dir, "stderr-fresh.log")
@@ -1505,7 +1538,7 @@ func pendingManualResumeRecord(artifactDir string) *ResumeRecord {
 func formatProtocolViolationError(role Role, iterDir string, violations []ProtocolViolation) string {
 	reason := JoinProtocolViolations(violations)
 	if strings.TrimSpace(reason) == "" {
-		reason = "phase_complete was missing"
+		reason = "root outcome or required artifacts were invalid"
 	}
 	return fmt.Sprintf("protocol violation: %s @ %s: %s", role, iterDir, reason)
 }
@@ -1523,10 +1556,38 @@ func formatContractViolationFeedback(role Role, violations []ProtocolViolation) 
 	)
 }
 
+// harnessVerdictPrefix tags the harness's own verdict for a turn in the
+// transcript. The provider's [result] line carries only its own subtype, so a
+// rejected turn otherwise reads as a success.
+const harnessVerdictPrefix = "[harness] "
+
+// appendHarnessVerdict records the rejection next to the provider transcript,
+// in both the iteration response log and the aggregate log.
+func appendHarnessVerdict(iterDir, aggregateLogPath string, violations []ProtocolViolation) {
+	reason := JoinProtocolViolations(violations)
+	if strings.TrimSpace(reason) == "" {
+		reason = "root outcome or required artifacts were invalid"
+	}
+	line := fmt.Sprintf("%s%s: %s\n", harnessVerdictPrefix, agentStatusProtocolViolation, reason)
+	paths := []string{filepath.Join(iterDir, "response.txt")}
+	if strings.TrimSpace(aggregateLogPath) != "" {
+		paths = append(paths, aggregateLogPath)
+	}
+	for _, path := range paths {
+		f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+		if err != nil {
+			continue
+		}
+		_, _ = f.WriteString(line)
+		_ = f.Close()
+	}
+}
+
 func recordProtocolViolationIteration(
 	am *ArtifactManager,
 	summaryPath string,
 	iterDir string,
+	aggregateLogPath string,
 	meta *IterationMeta,
 	iteration int,
 	cfg ImplementConfig,
@@ -1541,6 +1602,7 @@ func recordProtocolViolationIteration(
 	*consecutiveFailures = *consecutiveFailures + 1
 	feedback := formatContractViolationFeedback(RoleImplementer, violations)
 	_ = os.WriteFile(filepath.Join(iterDir, "review-feedback.md"), []byte(feedback), 0o644)
+	appendHarnessVerdict(iterDir, aggregateLogPath, violations)
 	meta.AgentStatus = "PROTOCOL_VIOLATION"
 	meta.ReviewStatus = agentStatusChangesRequested
 	_ = am.WriteMeta(iterDir, *meta)
@@ -1580,6 +1642,11 @@ func retryProgressFingerprints(progressPath string, cfg ImplementConfig) (string
 	return narrativeFP, WorktreeStateFingerprint(context.Background(), cfg.CommandRunner, implementWorktreePaths(cfg))
 }
 
+func observeVerifiedImplementationOutcome(pt *ProgressTracker, blockers int, cfg ImplementConfig) bool {
+	worktreeFP := WorktreeStateFingerprint(context.Background(), cfg.CommandRunner, implementWorktreePaths(cfg))
+	return pt.ObserveVerifiedOutcomeWithWorktree(blockers, worktreeFP)
+}
+
 // implementWorktreePaths returns the repo paths whose git state evidences
 // implementation progress: each feature repo's worktree (or checkout path),
 // falling back to the session work dir for repo-less configurations.
@@ -1617,7 +1684,7 @@ func sessionErrFromLogicalAgentStatus(status string, sess ports.SessionView) err
 	switch status {
 	case agentStatusSuccess:
 		return nil
-	case agentStatusMissingMarker:
+	case agentStatusProtocolViolation:
 		return sessionErrFromAgentStatus(status)
 	}
 	if err := sessionErrFromStatus(sess); err != nil {
@@ -1738,7 +1805,7 @@ func runReviewGate(cfg ImplementConfig, sm ports.SessionManager, iteration int, 
 	if err := os.MkdirAll(reviewDir, 0o755); err != nil {
 		return ReviewFailed, "", fmt.Errorf("creating review helper directory: %w", err)
 	}
-	RemovePhaseComplete(reviewDir)
+	RemoveCompletionReceipt(reviewDir)
 
 	parentFeedbackPath := filepath.Join(iterDir, "review-feedback.md")
 	reviewStatus, feedback, err := runImplementationReviewAxes(cfg, sm, iteration, iterDir, reviewDir, reviewCtx, implementationReviewInput{
@@ -1764,14 +1831,10 @@ func resolveImplementationContractPath(stateDir string, f *feature.Feature, repo
 	if f == nil {
 		return "", false
 	}
-	cycleType := resolveCycleTypeForRepo(f, repoName)
-	if cycleType == "" {
-		if f.CurrentRoadmapPhase > 0 {
-			return PhaseTestingContractPath(stateDir, f, f.CurrentRoadmapPhase), true
-		}
-		return "", false
+	if f.CurrentRoadmapPhase > 0 {
+		return PhaseTestingContractPath(stateDir, f, f.CurrentRoadmapPhase), true
 	}
-	return CycleTestingContractPath(stateDir, f, repoName, cycleType), true
+	return "", false
 }
 
 func prepareImplementationTestingContract(cfg ImplementConfig, planContent string) (string, string, error) {
@@ -1779,13 +1842,11 @@ func prepareImplementationTestingContract(cfg ImplementConfig, planContent strin
 	if !ok {
 		return "", "", nil
 	}
-	if resolveCycleTypeForRepo(cfg.Feature, cfg.RepoName) == "" &&
-		!cfg.Feature.EffectivePipeline().ShouldRunImplementationHarness() {
+	if !cfg.Feature.EffectivePipeline().ShouldRunImplementationHarness() {
 		// Medium/Large roadmap phases run no per-iteration harness; the
 		// plan's automated verification is the implementer's to run and is
-		// re-exercised live at Final Review. Cycle contracts keep the
-		// harness for every profile. Remove any stale contract left by a
-		// prior run/profile so the implementer's presence check sees none.
+		// re-exercised live at Final Review. Remove any stale contract left
+		// by a prior run/profile so the implementer's presence check sees none.
 		if err := os.Remove(contractPath); err != nil && !os.IsNotExist(err) {
 			return "", "", fmt.Errorf("removing stale testing contract: %w", err)
 		}
@@ -1829,7 +1890,8 @@ func verificationScopePlanRevisionFeedback(violations []ProtocolViolation) strin
 }
 
 func compileImplementationTestingContract(cfg ImplementConfig, planContent string) TestingContract {
-	if cfg.Feature != nil && cfg.Feature.CurrentRoadmapPhase > 0 && cfg.RepoName == "" {
+	if cfg.Feature != nil && cfg.RepoName == "" &&
+		cfg.Feature.CurrentRoadmapPhase > 0 {
 		repos := phaseReposForImplementationContract(cfg.Feature, cfg.PlanPath)
 		return CompileTestingContractMultiRepo(MultiRepoContractInput{
 			Repos:     repos,
@@ -1856,22 +1918,14 @@ func phaseReposForImplementationContract(f *feature.Feature, planPath string) []
 // iteration. Role-internal artifact paths, resource catalogs, and static
 // verification discovery live in the RoleSpec-backed system prompt, the
 // pre-seeded verification report, and skills/implement/SKILL.md.
-func BuildImplementPrompt(planPath, exitCriteria, progressPath, verificationReportPath, testingContractPath, feedback, helpAnswers, priorUserInputAnswers, skillsDir, guidelinesDir string, _ []RequiredVerificationItem, iteration int, kbInfos ...KBInfo) string {
-	_ = progressPath
-	_ = verificationReportPath
-	_ = testingContractPath
-	_ = skillsDir
-	_ = guidelinesDir
-	_ = kbInfos
-
+func BuildImplementPrompt(planPath, exitCriteria, feedback, helpAnswers string, iteration int) string {
 	return roles.BuildImplementPrompt(roles.ImplementUserInput{
-		PlanPath:              planPath,
-		ExitCriteria:          exitCriteria,
-		Feedback:              feedback,
-		PlanRevisionFeedback:  implementationPlanRevisionFeedback(planPath, iteration),
-		HelpAnswers:           helpAnswers,
-		PriorUserInputAnswers: priorUserInputAnswers,
-		Iteration:             iteration,
+		PlanPath:             planPath,
+		ExitCriteria:         exitCriteria,
+		Feedback:             feedback,
+		PlanRevisionFeedback: implementationPlanRevisionFeedback(planPath, iteration),
+		HelpAnswers:          helpAnswers,
+		Iteration:            iteration,
 	})
 }
 
@@ -1905,14 +1959,13 @@ func buildHelpAnswers(queue []feature.HelpRequest) string {
 }
 
 // maxAutoResumeAttempts caps how many consecutive CLI-truncated results
-// we auto-resume before treating a missing completion marker as a protocol
-// violation.
+// we auto-resume before treating the turn as a protocol violation.
 const maxAutoResumeAttempts = 3
 
 // autoResumeMessage is the user-facing continuation sent to the session
 // when the CLI truncated an invocation mid-work. It reminds the agent of
 // the completion protocol so a genuinely-finished agent can exit cleanly.
-const autoResumeMessage = "Continue where you left off. If you have already finished the task, write the phase_complete marker file now."
+const autoResumeMessage = `Continue where you left off. If the task is complete, validate the required artifacts and finish with exactly one <agentico-outcome>{"status":"success"}</agentico-outcome> or <agentico-outcome>{"status":"retry"}</agentico-outcome> tag.`
 
 // backgroundTaskPollInterval is how often the waiter re-checks a session that
 // ended its turn while background subagents were still running. Declared as
@@ -1925,25 +1978,182 @@ var backgroundTaskPollInterval = 2 * time.Second
 // continuation.
 var backgroundTaskQuietGrace = 15 * time.Second
 
+// backgroundTaskStallGrace is how long live background tasks may stay silent
+// (no stdout, which carries all task activity) after the root outcome is
+// already present before the waiter stops the session — killing runaway
+// monitors with the process group — and commits the outcome. Var for tests.
+var backgroundTaskStallGrace = 10 * time.Minute
+
+// backgroundTaskDeferralCeiling bounds how long a turn may be deferred for live
+// background tasks, however chatty they are. Past it the tasks are killed with
+// the session and any present outcome is committed, so a never-true poll loop
+// cannot hold a finished phase open indefinitely. Var for tests.
+var backgroundTaskDeferralCeiling = 25 * time.Minute
+
+// phaseOutcomeReclassifyInterval paces the fallback re-classification tick:
+// a session whose terminal Result status was coalesced away or mis-delivered
+// would otherwise wait forever, since Done never fires for multi-turn
+// keep-alive sessions. Var for tests.
+var phaseOutcomeReclassifyInterval = 45 * time.Second
+
 // liveBackgroundTaskCounter is the optional session capability that reports
 // running background subagents. Provider sessions that do not track them
 // (or test doubles that predate the capability) simply never defer.
-type liveBackgroundTaskCounter interface {
-	LiveBackgroundTaskCount() int
+// liveBackgroundTasks returns the session's running background-subagent count.
+func liveBackgroundTasks(sess ports.SessionView) int {
+	if sess == nil {
+		return 0
+	}
+	return sess.LiveBackgroundTaskCount()
 }
 
-// liveBackgroundTasks returns the session's running background-subagent
-// count, or 0 when the session does not expose the capability.
-func liveBackgroundTasks(sess ports.SessionView) int {
-	if c, ok := sess.(liveBackgroundTaskCounter); ok {
-		return c.LiveBackgroundTaskCount()
+func rootCompletionIntent(sess ports.SessionView) llm.CompletionIntent {
+	if sess == nil {
+		return llm.CompletionIntent{}
 	}
-	return 0
+	return sess.RootCompletionIntent()
+}
+
+func hasPendingRootQuestion(sess ports.SessionView) bool {
+	return sess != nil && sess.HasPendingRootAskUserQuestion()
+}
+
+// rootOutcomeSignal returns the session's semantic-outcome notification
+// channel, or nil for sessions without the capability — a nil channel simply
+// makes the waiter's outcome arm dormant.
+func rootOutcomeSignal(sess ports.SessionView) <-chan struct{} {
+	if notifier, ok := sess.(ports.RootOutcomeNotifier); ok {
+		return notifier.RootOutcomeCh()
+	}
+	return nil
+}
+
+func clearRootCompletionIntent(sess ports.SessionView) {
+	if resetter, ok := sess.(ports.RootOutcomeResetter); ok {
+		resetter.ClearRootCompletionIntent()
+	}
+}
+
+func resultSequence(sess ports.SessionView) (uint64, bool) {
+	if sequencer, ok := sess.(ports.ResultSequencer); ok {
+		return sequencer.ResultSeq(), true
+	}
+	return 0, false
+}
+
+// activityDigestWindow is how many trailing message-log records feed the
+// novelty digest. Comfortably larger than a poll loop's repeat cycle.
+const activityDigestWindow = 8
+
+// sessionActivityDigest fingerprints the distinct content of the session's
+// recent message-log tail. A task loop printing the same output forever leaves
+// it unchanged, so repetition counts as silence even though every line
+// refreshes LastStdoutAt.
+func sessionActivityDigest(sess ports.SessionView) string {
+	if sess == nil {
+		return ""
+	}
+	msgLog := sess.MessageLog()
+	if msgLog == nil {
+		return ""
+	}
+	texts := make([]string, 0, activityDigestWindow)
+	for _, msg := range msgLog.LastN(activityDigestWindow) {
+		if text := strings.TrimSpace(messageContentText(msg)); text != "" {
+			texts = append(texts, text)
+		}
+	}
+	slices.Sort(texts)
+	texts = slices.Compact(texts)
+	sum := sha256.New()
+	for _, text := range texts {
+		sum.Write([]byte(text))
+		sum.Write([]byte{0})
+	}
+	return string(sum.Sum(nil))
+}
+
+// messageContentText renders the content of one log record for the novelty
+// digest: timestamps and counters are deliberately excluded so identical output
+// digests identically.
+func messageContentText(msg llm.SDKMessage) string {
+	var b strings.Builder
+	blocks := [][]llm.ContentBlock{}
+	if msg.Assistant != nil {
+		blocks = append(blocks, msg.Assistant.Message.Content)
+	}
+	if msg.User != nil {
+		blocks = append(blocks, msg.User.Message.Content)
+	}
+	for _, content := range blocks {
+		for _, block := range content {
+			switch {
+			case block.IsText():
+				b.WriteString(block.Text)
+			case block.IsThinking():
+				b.WriteString(block.Thinking)
+			case block.IsToolUse():
+				b.WriteString(block.Name)
+				b.Write(block.Input)
+			case block.IsToolResult():
+				b.Write(block.Content)
+			}
+			b.WriteByte('\n')
+		}
+	}
+	if msg.ToolProgress != nil {
+		b.WriteString(msg.ToolProgress.ToolName)
+		b.WriteString(msg.ToolProgress.Data)
+	}
+	return b.String()
+}
+
+func completionIntentViolations(intent llm.CompletionIntent, expectedArtifacts []string) []ProtocolViolation {
+	if intent.Error != "" {
+		return []ProtocolViolation{{Artifact: "agentico-outcome", Reason: intent.Error}}
+	}
+	if len(expectedArtifacts) == 0 {
+		return []ProtocolViolation{{
+			Artifact: "agentico-outcome",
+			Reason:   "root agent ended the turn without exactly one structured completion outcome",
+		}}
+	}
+	violations := make([]ProtocolViolation, 0, len(expectedArtifacts)+1)
+	for _, artifact := range expectedArtifacts {
+		if strings.TrimSpace(artifact) == "" {
+			continue
+		}
+		violations = append(violations, ProtocolViolation{
+			Artifact: artifact,
+			Reason:   "required artifact was not committed by a valid root outcome",
+		})
+	}
+	return append(violations, ProtocolViolation{
+		Artifact: "agentico-outcome",
+		Reason:   "root agent ended the turn without exactly one structured completion outcome",
+	})
+}
+
+func protocolViolationArtifacts(violations []ProtocolViolation) []string {
+	seen := make(map[string]struct{}, len(violations))
+	artifacts := make([]string, 0, len(violations))
+	for _, violation := range violations {
+		artifact := strings.TrimSpace(violation.Artifact)
+		if artifact == "" {
+			continue
+		}
+		if _, ok := seen[artifact]; ok {
+			continue
+		}
+		seen[artifact] = struct{}{}
+		artifacts = append(artifacts, artifact)
+	}
+	return artifacts
 }
 
 // maxFinishOrViolateNudges caps how many times a session that ended its turn
-// without writing the required completion artifacts is nudged to finish on the
-// same live session before the turn is counted as a protocol violation.
+// without a valid root outcome is nudged to finish on the same live session
+// before the turn is counted as a protocol violation.
 const maxFinishOrViolateNudges = 2
 
 // finishOrViolateNudgeFragment is a stable substring present in every
@@ -1952,44 +2162,68 @@ const maxFinishOrViolateNudges = 2
 const finishOrViolateNudgeFragment = "do not re-investigate"
 
 // formatFinishOrViolateNudge builds the single-purpose continuation sent when a
-// session ended its turn without producing its required completion artifacts. It
-// names the missing artifacts (when known) so the agent finishes exactly that
-// work and nothing else.
+// session ended its turn without a committable root outcome.
 func formatFinishOrViolateNudge(missing []string) string {
 	if len(missing) == 0 {
-		return "You ended your turn but the required completion artifacts and the `phase_complete` marker are missing; write them now and nothing else. Do not start new work, " + finishOrViolateNudgeFragment + ", do not ask a question."
+		return `You ended your turn without a valid completion outcome. Finish the required artifacts, run the artifact preflight, then emit exactly one <agentico-outcome>{"status":"success"}</agentico-outcome> or <agentico-outcome>{"status":"retry"}</agentico-outcome> tag. Do not start new work, ` + finishOrViolateNudgeFragment + ", and use AskUserQuestion only if the task is genuinely blocked on the user."
 	}
-	return fmt.Sprintf("You ended your turn without completing the required outputs. Still missing: %s. Do exactly this now and nothing else: write those artifacts to your output directory, then create the `phase_complete` marker. Do not start new work, %s, do not ask a question.",
+	return fmt.Sprintf(`You ended your turn without a committable completion outcome. Still invalid or missing: %s. Fix only those artifacts, rerun the artifact preflight, then emit exactly one <agentico-outcome>{"status":"success"}</agentico-outcome> or <agentico-outcome>{"status":"retry"}</agentico-outcome> tag. Do not start new work, %s, and use AskUserQuestion only if the task is genuinely blocked on the user.`,
 		strings.Join(missing, ", "), finishOrViolateNudgeFragment)
 }
 
-// decideFinishOrViolate sends one finish-or-violate nudge to the same live
-// session when it ended its turn (TermEndedAfterText) without writing its
-// completion artifacts, up to maxFinishOrViolateNudges times. It returns true
-// only when a nudge was sent and the caller should keep waiting on the session;
-// it returns false for any other termination class, once the budget is
-// exhausted, or when the send fails (stdin closed) so the caller falls through
-// to the protocol-violation path. The caller gates this on the provider
-// capability; the function itself is provider-agnostic.
-func decideFinishOrViolate(sess ports.SessionHandle, class llm.TerminationClass, nudges *int, missing []string) bool {
-	if class != llm.TermEndedAfterText {
+// decideFinishOrViolate sends one bounded completion-protocol nudge to the
+// same live session after a clean provider turn that carried no committable
+// root outcome.
+func decideFinishOrViolate(sess ports.SessionView, disposition llm.TurnDisposition, nudges *int, missing []string) bool {
+	if disposition != llm.TurnProtocolViolation {
 		return false
 	}
+	return sendCompletionNudge(sess, nudges, formatFinishOrViolateNudge(missing))
+}
+
+// sendCompletionNudge delivers one completion-protocol correction to the live
+// session, bounded by the shared finish-or-violate budget.
+func sendCompletionNudge(sess ports.SessionView, nudges *int, message string) bool {
 	if *nudges >= maxFinishOrViolateNudges {
 		return false
 	}
 	*nudges++
-	if err := sess.SendUserMessage(formatFinishOrViolateNudge(missing)); err != nil {
+	if err := sess.SendUserMessage(message); err != nil {
 		return false
 	}
 	return true
+}
+
+// formatCommitViolationNudge builds the correction sent when a parsed root
+// outcome was rejected at commit time. Unlike the missing-outcome nudge it
+// carries the rejection reasons verbatim and offers only the outcome verbs the
+// role may actually use — re-offering "retry" to a role without iteration
+// state would invite the same violation again.
+func formatCommitViolationNudge(violations []ProtocolViolation, retryAllowed bool) string {
+	var reasons strings.Builder
+	for _, violation := range violations {
+		artifact := strings.TrimSpace(violation.Artifact)
+		if artifact == "" {
+			artifact = "agentico-outcome"
+		}
+		fmt.Fprintf(&reasons, "- %s: %s\n", artifact, violation.Reason)
+	}
+	verbs := `<agentico-outcome>{"status":"success"}</agentico-outcome> or <agentico-outcome>{"status":"retry"}</agentico-outcome>`
+	roleNote := ""
+	if !retryAllowed {
+		verbs = `<agentico-outcome>{"status":"success"}</agentico-outcome>`
+		roleNote = ` "retry" is not a valid outcome for your role: record requested changes or findings in your role's artifacts (for reviewers, the feedback verdict), then emit success to complete your assignment.`
+	}
+	return fmt.Sprintf(`Your completion outcome was rejected:
+%s
+Fix only what is listed, rerun the artifact preflight, then emit exactly one %s tag.%s Do not start new work, %s, and use AskUserQuestion only if the task is genuinely blocked on the user.`,
+		strings.TrimRight(reasons.String(), "\n"), verbs, roleNote, finishOrViolateNudgeFragment)
 }
 
 const (
 	agentStatusSuccess           = "SUCCESS"
 	agentStatusFailed            = "FAILED"
 	agentStatusAPIError          = "API_ERROR"
-	agentStatusMissingMarker     = "MISSING_PHASE_COMPLETE"
 	agentStatusProtocolViolation = "PROTOCOL_VIOLATION"
 	agentStatusChangesRequested  = "CHANGES_REQUESTED"
 	agentStatusApproved          = "APPROVED"
@@ -2001,10 +2235,10 @@ const (
 const minContextHandoffWindowTokens = 1_000_000
 
 // defaultContextHandoffThresholdPct is the context-window utilization
-// (percent) at which waitForStatus nudges the agent to wrap up cleanly for
+// (percent) at which WaitForPhaseOutcome nudges the agent to wrap up cleanly for
 // providers without a provider-specific override. The default is chosen well
 // below the Claude CLI's auto-compact trigger (~85%) so the agent has headroom
-// to write a handoff and the phase_complete marker before the CLI would
+// to write a handoff and emit a structured retry outcome before the CLI would
 // otherwise compact and lose working memory.
 const defaultContextHandoffThresholdPct = 60
 
@@ -2030,9 +2264,7 @@ Do this, in order:
    - ` + "`" + `## Iteration Handoff` + "`" + ` (Completed / Remaining / Where I stopped / Gotchas).
    - ` + "`" + `## Deferrals` + "`" + ` (a fenced YAML block; ` + "`" + `deferrals: []` + "`" + ` and ` + "`" + `closed_deferrals: []` + "`" + ` if you have nothing to declare).
    - ` + "`" + `## Iteration State` + "`" + ` set to ` + "`" + `RETRY` + "`" + ` so the harness skips review and starts the next iteration with no reviewer feedback.
-
-   (You are emitting RETRY here, so do NOT include the conditional ` + "`" + `## Questions for User` + "`" + ` section — it is reserved for ` + "`" + `NEED_USER_INPUT` + "`" + ` and must sit between ` + "`" + `## Deferrals` + "`" + ` and ` + "`" + `## Iteration State` + "`" + ` only when used.)
-3. Touch the phase_complete marker (per your system prompt) as your very last action and end your turn.`
+3. End with exactly ` + "`" + `<agentico-outcome>{"status":"retry","summary":"context handoff"}</agentico-outcome>` + "`" + `. Do not create or edit ` + "`" + `phase_complete` + "`" + `; the harness writes the receipt after validation.`
 
 type contextSnapshot struct {
 	Pct            int
@@ -2042,12 +2274,21 @@ type contextSnapshot struct {
 	BaselineTokens int
 }
 
-type waitForStatusOptions struct {
-	ReadyCheck func() bool
+// PhaseOutcomeWaitOptions configures the provider-neutral autonomous-turn
+// completion boundary.
+type PhaseOutcomeWaitOptions struct {
+	// CommitOutcome validates a root intent against the phase contract and
+	// writes the harness-owned completion receipt. A nil callback is a
+	// protocol error for a completed autonomous turn.
+	CommitOutcome func(llm.CompletionIntent) ([]ProtocolViolation, error)
+	// RetryOutcomeAllowed mirrors the role's iteration-state capability so a
+	// commit-rejection nudge offers only the outcome verbs the role may use.
+	// Leave false for every role without a progress artifact.
+	RetryOutcomeAllowed bool
 	// EnableContextHandoff arms the context-utilization wind-down nudge.
 	// The handoff message references the implement progress.md schema, so
 	// only Implementation-phase sessions should set this true. Plan,
-	// roadmap, final-review, and refactor sessions produce different
+	// roadmap, and final-review sessions produce different
 	// artifacts and have heavy required-reading loads that would trip the
 	// threshold before they could write any output.
 	EnableContextHandoff bool
@@ -2055,22 +2296,23 @@ type waitForStatusOptions struct {
 	// ContextHandoffPollHook is a test hook for observing ticker progress
 	// without sleeping. Production callers leave it nil.
 	ContextHandoffPollHook func()
-	// FinishOrViolateNudge arms the finish-or-violate auto-continuation
-	// retry: when a session ends its turn without writing the required
-	// completion artifacts, it is nudged to finish on the same live session
-	// before the turn is counted as a protocol violation. Resolved per-model
-	// from the provider capability, so only capability-positive sessions opt
-	// in.
-	FinishOrViolateNudge bool
-	// MissingArtifacts names the completion artifacts the session must
-	// produce. It is used only to build the nudge text, never for control
-	// flow.
+	// MissingArtifacts names the completion artifacts the session must produce.
+	// It seeds the bounded protocol-nudge text before contract validation can
+	// report more precise violations.
 	MissingArtifacts []string
+	// Ctx bounds the wait. When it ends, a present committable outcome is
+	// committed and anything else fails the turn instead of waiting forever.
+	// Nil leaves the wait unbounded.
+	Ctx context.Context
 }
 
-type waitForStatusResult struct {
-	Status  string
-	Handoff contextSnapshot
+// PhaseOutcomeWaitResult reports the semantic result of an autonomous root
+// turn, including any completion-contract failure.
+type PhaseOutcomeWaitResult struct {
+	Status             string
+	Handoff            contextSnapshot
+	ProtocolViolations []ProtocolViolation
+	Err                error
 }
 
 func contextTotalTokens(usage *llm.Usage) int {
@@ -2130,64 +2372,26 @@ func iterationContextMeta(sess ports.SessionView, handoff contextSnapshot) *Cont
 	return meta
 }
 
-// waitForStatus waits for the session to produce a result via StatusCh or exit.
-// Returns the SDK-derived session status: "SUCCESS", "FAILED", or
-// "API_ERROR". The harness's iteration state (SUCCESS / RETRY /
-// NEED_USER_INPUT) is parsed from progress.md by ParseProgressMd
-// AFTER this function returns, not from this string.
-//
-// If readyCheck is non-nil, it is called when SUCCESS is received. If it
-// returns false, the agent ended its turn without completing the work.
-// The termination is classified via llm.ClassifyTermination:
-//   - TermTurnTruncated (CLI ended mid-tool-use / max_tokens / pause_turn)
-//     triggers an automatic continuation message, up to
-//     maxAutoResumeAttempts consecutive times. This covers the common case
-//     where the claude CLI ends an invocation while the agent is still
-//     working, without the agent having asked anything.
-//   - TermAwaitingBackgroundTasks (turn ended while background subagents
-//     were still running) defers without sending anything: the CLI
-//     re-invokes the agent when its tasks complete. If the tasks finish and
-//     no re-invocation arrives, the waiter falls back to the auto-resume
-//     continuation.
-//   - Anything else (EndedAfterText, Refused, Errored), or an exhausted
-//     truncation retry budget, returns MISSING_PHASE_COMPLETE so the caller
-//     can count the turn as a protocol violation.
-func waitForStatus(sess ports.SessionHandle, sm ports.SessionManager, sessionID string, readyCheck ...func() bool) string {
-	opts := waitForStatusOptions{}
-	if len(readyCheck) > 0 {
-		opts.ReadyCheck = readyCheck[0]
-	}
-	return waitForStatusDetailed(sess, sm, sessionID, opts).Status
-}
-
-func waitForImplementationStatus(sess ports.SessionHandle, sm ports.SessionManager, sessionID string, readyCheck ...func() bool) string {
-	opts := waitForStatusOptions{EnableContextHandoff: true}
-	if len(readyCheck) > 0 {
-		opts.ReadyCheck = readyCheck[0]
-	}
-	return waitForStatusDetailed(sess, sm, sessionID, opts).Status
-}
-
-func enableTruncatedTurnAutoResume(sessOpts *ports.SessionOpts) *ports.SessionOpts {
+func enableTurnContinuation(sessOpts *ports.SessionOpts) *ports.SessionOpts {
 	if sessOpts == nil {
 		sessOpts = &ports.SessionOpts{}
 	}
-	sessOpts.KeepAliveOnTruncatedResult = true
+	sessOpts.KeepAliveOnTurnResult = true
 	return sessOpts
 }
 
-func waitForStatusDetailed(sess ports.SessionHandle, _ ports.SessionManager, _ string, opts waitForStatusOptions) waitForStatusResult {
-	isReady := opts.ReadyCheck
-
+// WaitForPhaseOutcome waits for a provider turn, classifies the root-owned
+// semantic outcome, and invokes the harness commit boundary. Provider process
+// completion, AskUserQuestion, delegated-task liveness, and phase completion are
+// deliberately independent signals.
+func WaitForPhaseOutcome(sess ports.SessionView, opts PhaseOutcomeWaitOptions) PhaseOutcomeWaitResult {
 	// Counts consecutive auto-resumes triggered by CLI truncation. Resets
 	// whenever we observe a non-truncated result, so each fresh stall has
 	// its own retry budget.
 	autoResumeAttempts := 0
 
-	// Counts finish-or-violate nudges sent when the session ended its turn
-	// without writing the completion marker. Bounded by
-	// maxFinishOrViolateNudges; armed only when opts.FinishOrViolateNudge is
-	// set (capability-positive providers).
+	// Counts bounded completion-protocol nudges sent after a clean provider
+	// turn carried no committable root outcome.
 	finishOrViolateNudges := 0
 
 	// Periodically sample the session's context-window utilization and, on
@@ -2197,7 +2401,7 @@ func waitForStatusDetailed(sess ports.SessionHandle, _ ports.SessionManager, _ s
 	//
 	// Gated on EnableContextHandoff: only Implementation-phase sessions
 	// arm the nudge. When disabled, handoffSent starts true so the ticker
-	// case is a no-op for plan, roadmap, final-review, and refactor.
+	// case is a no-op for plan, roadmap, and final-review.
 	var handoffC <-chan time.Time
 	var handoffTicker *time.Ticker
 	if opts.EnableContextHandoff {
@@ -2216,82 +2420,239 @@ func waitForStatusDetailed(sess ports.SessionHandle, _ ports.SessionManager, _ s
 	// re-invokes the agent when the tasks complete, so no nudge is sent and no
 	// budget is consumed. The bgTicker below provides the fallback paths.
 	awaitingBackgroundTasks := false
+	// awaitingSince stamps when the deferral started so the absolute ceiling is
+	// measured from the yield, not from the last (possibly repeated) output.
+	var awaitingSince time.Time
 	bgTicker := time.NewTicker(backgroundTaskPollInterval)
 	defer bgTicker.Stop()
 
-	handleStatus := func(status string, sessionDone bool) (string, bool) {
-		// A session that died or errored after completing its work product is
-		// a logical success: the completion marker is the protocol's "done"
-		// signal, and contract validation plus the review gate still arbitrate
-		// the artifacts. This salvages iterations whose provider process dies
-		// between writing the marker and exiting cleanly.
-		if isReady != nil && (status == agentStatusFailed || (status == agentStatusAPIError && sessionDone)) && isReady() {
+	// Novel-output tracking: LastStdoutAt is refreshed by any line, so a task
+	// that polls forever would reset every grace window. A window counts as
+	// silent unless stdout is recent *and* its content changed.
+	activityDigest := sessionActivityDigest(sess)
+	lastNovelActivity := time.Now()
+	silence := func() time.Duration {
+		if digest := sessionActivityDigest(sess); digest != activityDigest {
+			activityDigest = digest
+			lastNovelActivity = time.Now()
+		}
+		return max(time.Since(sess.LastStdoutAt()), time.Since(lastNovelActivity))
+	}
+
+	// Fallback wake-up: Done never fires for multi-turn keep-alive sessions
+	// and a StatusCh delivery can be lost, so re-derive the status from the
+	// terminal Result. classifiedSeq keeps the tick idempotent with the
+	// normal paths — a result handleStatus already saw is never re-classified,
+	// so no commit or nudge is ever duplicated.
+	reclassifyTicker := time.NewTicker(phaseOutcomeReclassifyInterval)
+	defer reclassifyTicker.Stop()
+	var classifiedResult *llm.ResultMessage
+	var classifiedSeq uint64
+
+	// A commit adjudicated from the outcome signal happens before the
+	// provider's terminal Result for that turn arrives. Remember which Result
+	// that is so it is never adjudicated a second time — re-nudging a session
+	// that is already correcting would burn the nudge budget for nothing.
+	var adjudicatedSeq uint64
+	adjudicatedNextResult := false
+	markAdjudicatedAhead := func() {
+		if seq, ok := resultSequence(sess); ok {
+			adjudicatedSeq = seq + 1
+			return
+		}
+		adjudicatedNextResult = true
+	}
+	alreadyAdjudicated := func() bool {
+		if adjudicatedNextResult {
+			adjudicatedNextResult = false
+			return true
+		}
+		if adjudicatedSeq == 0 {
+			return false
+		}
+		seq, ok := resultSequence(sess)
+		if !ok || seq < adjudicatedSeq {
+			return false
+		}
+		hit := seq == adjudicatedSeq
+		adjudicatedSeq = 0
+		return hit
+	}
+
+	commitIntent := func(intent llm.CompletionIntent, sessionDone bool) (PhaseOutcomeWaitResult, bool) {
+		if opts.CommitOutcome == nil {
+			violations := []ProtocolViolation{{
+				Artifact: "agentico-outcome",
+				Reason:   "harness completion committer is not configured",
+			}}
 			_ = sess.Stop()
-			return agentStatusSuccess, true
+			return PhaseOutcomeWaitResult{
+				Status:             agentStatusProtocolViolation,
+				Handoff:            handoff,
+				ProtocolViolations: violations,
+			}, true
+		}
+		violations, err := opts.CommitOutcome(intent)
+		if err != nil {
+			_ = sess.Stop()
+			return PhaseOutcomeWaitResult{Status: agentStatusFailed, Handoff: handoff, Err: err}, true
+		}
+		if len(violations) == 0 {
+			_ = sess.Stop()
+			return PhaseOutcomeWaitResult{Status: agentStatusSuccess, Handoff: handoff}, true
+		}
+		if !sessionDone &&
+			sendCompletionNudge(sess, &finishOrViolateNudges,
+				formatCommitViolationNudge(violations, opts.RetryOutcomeAllowed)) {
+			// The rejected outcome must not be re-offered by the correction
+			// turn's bookkeeping; only a freshly emitted one may commit.
+			clearRootCompletionIntent(sess)
+			return PhaseOutcomeWaitResult{}, false
+		}
+		_ = sess.Stop()
+		return PhaseOutcomeWaitResult{
+			Status:             agentStatusProtocolViolation,
+			Handoff:            handoff,
+			ProtocolViolations: violations,
+		}, true
+	}
+
+	handleStatus := func(status string, sessionDone bool) (PhaseOutcomeWaitResult, bool) {
+		classifiedResult = sess.Cost()
+		if seq, ok := resultSequence(sess); ok {
+			classifiedSeq = seq
+		}
+		if !sessionDone && status == agentStatusSuccess && alreadyAdjudicated() {
+			return PhaseOutcomeWaitResult{}, false
 		}
 		if status == agentStatusAPIError {
 			if sessionDone {
-				return agentStatusFailed, true
+				return PhaseOutcomeWaitResult{Status: agentStatusFailed, Handoff: handoff}, true
 			}
-			return "", false
+			return PhaseOutcomeWaitResult{}, false
 		}
-		// If a readiness check is provided and fails, the agent
-		// ended its turn without completing the work. Classify why
-		// so CLI-truncated invocations are auto-resumed instead of
-		// escalating to the user.
-		if status == agentStatusSuccess && isReady != nil && !isReady() {
-			inputs := llm.TerminationInputs{
-				Result:                 sess.Cost(),
-				PhaseCompleteExists:    false, // isReady just returned false
-				AskUserQuestionPending: sess.HasPendingAskUserQuestion(),
-				// A dead process cannot deliver task notifications; never
-				// defer to a stale task set.
-				BackgroundTasksRunning: !sessionDone && liveBackgroundTasks(sess) > 0,
-			}
-			class := llm.ClassifyTermination(inputs)
-
-			// The agent yielded while its background subagents are still
-			// running. Keep the session alive and wait: the CLI re-invokes
-			// the agent when the tasks complete. The bgTicker case handles
-			// the CLI failing to do so.
-			if class == llm.TermAwaitingBackgroundTasks {
-				awaitingBackgroundTasks = true
-				return "", false
-			}
-			awaitingBackgroundTasks = false
-
-			if class == llm.TermTurnTruncated && autoResumeAttempts < maxAutoResumeAttempts {
-				autoResumeAttempts++
-				if err := sess.SendUserMessage(autoResumeMessage); err != nil {
-					_ = sess.Stop()
-					return agentStatusMissingMarker, true
-				}
-				return "", false
-			}
-
-			// The session deliberately ended its turn without writing the
-			// completion marker. For capability-positive providers, nudge the
-			// same live session to finish before escalating. On nudge, give the
-			// resumed turn a fresh truncation budget and keep waiting WITHOUT
-			// stopping the session.
-			if opts.FinishOrViolateNudge && decideFinishOrViolate(sess, class, &finishOrViolateNudges, opts.MissingArtifacts) {
-				autoResumeAttempts = 0
-				return "", false
-			}
-
-			// Either not truncated, or the retry cap was reached.
-			autoResumeAttempts = 0
+		if status != agentStatusSuccess {
 			_ = sess.Stop()
-			return agentStatusMissingMarker, true
+			return PhaseOutcomeWaitResult{Status: status, Handoff: handoff}, true
 		}
-		// Got a real status — stop the session.
-		_ = sess.Stop()
-		return status, true
+
+		intent := rootCompletionIntent(sess)
+		disposition := llm.ClassifyTurn(llm.TurnSignals{
+			Result:              sess.Cost(),
+			RootIntent:          intent,
+			RootQuestionPending: hasPendingRootQuestion(sess),
+			TasksRunning:        liveBackgroundTasks(sess) > 0,
+		})
+		switch disposition {
+		case llm.TurnAwaitingUser:
+			if sessionDone {
+				return PhaseOutcomeWaitResult{
+					Status:  agentStatusFailed,
+					Handoff: handoff,
+					Err:     errors.New("root agent requested user input after the provider session exited"),
+				}, true
+			}
+			return PhaseOutcomeWaitResult{}, false
+
+		case llm.TurnAwaitingTasks:
+			if sessionDone {
+				return PhaseOutcomeWaitResult{
+					Status:  agentStatusProtocolViolation,
+					Handoff: handoff,
+					ProtocolViolations: []ProtocolViolation{{
+						Artifact: "agentico-outcome",
+						Reason:   "provider session exited while delegated tasks were still running",
+					}},
+				}, true
+			}
+			if !awaitingBackgroundTasks {
+				awaitingSince = time.Now()
+			}
+			awaitingBackgroundTasks = true
+			return PhaseOutcomeWaitResult{}, false
+
+		case llm.TurnTruncated:
+			awaitingBackgroundTasks = false
+			if autoResumeAttempts < maxAutoResumeAttempts {
+				autoResumeAttempts++
+				if err := sess.SendUserMessage(autoResumeMessage); err == nil {
+					return PhaseOutcomeWaitResult{}, false
+				}
+			}
+			violations := []ProtocolViolation{{
+				Artifact: "agentico-outcome",
+				Reason:   "provider repeatedly truncated the root turn before a completion outcome",
+			}}
+			_ = sess.Stop()
+			return PhaseOutcomeWaitResult{
+				Status:             agentStatusProtocolViolation,
+				Handoff:            handoff,
+				ProtocolViolations: violations,
+			}, true
+
+		case llm.TurnCommitSuccess, llm.TurnCommitRetry:
+			awaitingBackgroundTasks = false
+			autoResumeAttempts = 0
+			return commitIntent(intent, sessionDone)
+
+		case llm.TurnProtocolViolation:
+			awaitingBackgroundTasks = false
+			autoResumeAttempts = 0
+			violations := completionIntentViolations(intent, opts.MissingArtifacts)
+			if !sessionDone && decideFinishOrViolate(sess, disposition, &finishOrViolateNudges, protocolViolationArtifacts(violations)) {
+				clearRootCompletionIntent(sess)
+				return PhaseOutcomeWaitResult{}, false
+			}
+			_ = sess.Stop()
+			return PhaseOutcomeWaitResult{
+				Status:             agentStatusProtocolViolation,
+				Handoff:            handoff,
+				ProtocolViolations: violations,
+			}, true
+
+		case llm.TurnRefused:
+			violations := []ProtocolViolation{{
+				Artifact: "agentico-outcome",
+				Reason:   "root model refused the phase assignment",
+			}}
+			_ = sess.Stop()
+			return PhaseOutcomeWaitResult{
+				Status:             agentStatusProtocolViolation,
+				Handoff:            handoff,
+				ProtocolViolations: violations,
+			}, true
+
+		case llm.TurnErrored:
+			_ = sess.Stop()
+			return PhaseOutcomeWaitResult{Status: agentStatusFailed, Handoff: handoff}, true
+
+		default:
+			_ = sess.Stop()
+			return PhaseOutcomeWaitResult{
+				Status:  agentStatusFailed,
+				Handoff: handoff,
+				Err:     errors.New("provider ended without a classifiable root turn"),
+			}, true
+		}
 	}
 
 	doneCh := sess.Done()
+	outcomeC := rootOutcomeSignal(sess)
+	var ctxDone <-chan struct{}
+	if opts.Ctx != nil {
+		ctxDone = opts.Ctx.Done()
+	}
 	for {
 		select {
+		case <-ctxDone:
+			_ = sess.Stop()
+			if intent := rootCompletionIntent(sess); intent.Valid() && !hasPendingRootQuestion(sess) {
+				if result, done := commitIntent(intent, true); done {
+					return result
+				}
+			}
+			return PhaseOutcomeWaitResult{Status: agentStatusFailed, Handoff: handoff, Err: opts.Ctx.Err()}
+
 		case <-handoffC:
 			if opts.ContextHandoffPollHook != nil {
 				opts.ContextHandoffPollHook()
@@ -2321,9 +2682,37 @@ func waitForStatusDetailed(sess ports.SessionHandle, _ ports.SessionManager, _ s
 				continue
 			}
 			if liveBackgroundTasks(sess) > 0 {
+				// Task ceiling: a present root outcome plus tasks that
+				// produced no novel output for the stall grace is a runaway
+				// monitor, not pending work. The absolute ceiling covers the
+				// chatty case, where output keeps arriving but says nothing
+				// new. Stop kills the process group, taking the monitors
+				// with it; the outcome is committed as normal.
+				ceilingExpired := !awaitingSince.IsZero() &&
+					time.Since(awaitingSince) >= backgroundTaskDeferralCeiling
+				intent := rootCompletionIntent(sess)
+				if intent.Found && !hasPendingRootQuestion(sess) &&
+					(ceilingExpired || silence() >= backgroundTaskStallGrace) {
+					_ = sess.Stop()
+					if result, done := commitIntent(intent, true); done {
+						return result
+					}
+					continue
+				}
+				if ceilingExpired {
+					_ = sess.Stop()
+					return PhaseOutcomeWaitResult{
+						Status:  agentStatusProtocolViolation,
+						Handoff: handoff,
+						ProtocolViolations: []ProtocolViolation{{
+							Artifact: "agentico-outcome",
+							Reason:   "delegated tasks exceeded the deferral ceiling without a completion outcome",
+						}},
+					}
+				}
 				continue
 			}
-			quiet := time.Since(sess.LastStdoutAt())
+			quiet := silence()
 			// All tasks finished but no new result arrived: the CLI did not
 			// re-invoke the agent on its own. Resume it explicitly, reusing
 			// the truncation budget so a session that keeps yielding without
@@ -2339,14 +2728,56 @@ func waitForStatusDetailed(sess ports.SessionHandle, _ ports.SessionManager, _ s
 				}
 			}
 			_ = sess.Stop()
-			return waitForStatusResult{Status: agentStatusMissingMarker, Handoff: handoff}
+			return PhaseOutcomeWaitResult{
+				Status:  agentStatusProtocolViolation,
+				Handoff: handoff,
+				ProtocolViolations: []ProtocolViolation{{
+					Artifact: "agentico-outcome",
+					Reason:   "delegated tasks completed but the root agent did not resume with a completion outcome",
+				}},
+			}
+
+		case <-outcomeC:
+			// A committable outcome is the semantic end of the turn; the
+			// provider's terminal Result can trail it by minutes. Commit on
+			// the outcome itself, but leave any unclassified Result to the
+			// Result-driven paths so truncation and error dispositions keep
+			// precedence.
+			if cost := sess.Cost(); cost != nil && cost != classifiedResult {
+				continue
+			}
+			intent := rootCompletionIntent(sess)
+			if !intent.Valid() || hasPendingRootQuestion(sess) || liveBackgroundTasks(sess) > 0 {
+				continue
+			}
+			awaitingBackgroundTasks = false
+			if result, done := commitIntent(intent, false); done {
+				return result
+			}
+			markAdjudicatedAhead()
+
+		case <-reclassifyTicker.C:
+			cost := sess.Cost()
+			if cost == nil {
+				continue
+			}
+			if seq, ok := resultSequence(sess); ok {
+				if seq <= classifiedSeq {
+					continue
+				}
+			} else if cost == classifiedResult {
+				continue
+			}
+			if result, done := handleStatus(statusFromResult(cost), false); done {
+				return result
+			}
 
 		case <-doneCh:
 			// Session exited — drain StatusCh for any pending status
 			select {
 			case status := <-sess.StatusCh():
 				if result, done := handleStatus(status, true); done {
-					return waitForStatusResult{Status: result, Handoff: handoff}
+					return result
 				}
 				// A truncated SUCCESS drained after Done() still gets the
 				// same auto-resume behavior as the StatusCh branch. The
@@ -2363,23 +2794,18 @@ func waitForStatusDetailed(sess ports.SessionHandle, _ ports.SessionManager, _ s
 			// to a generic failure.
 			if cost := sess.Cost(); cost != nil {
 				if result, done := handleStatus(statusFromResult(cost), true); done {
-					return waitForStatusResult{Status: result, Handoff: handoff}
+					return result
 				}
 				doneCh = nil
 				continue
 			}
-			// Session exited without any status — treat as failure unless the
-			// completion marker landed (same logical-success rule as
-			// handleStatus). A well-behaved agent emits a result message
-			// before exiting; absence of one means something went wrong.
-			if isReady != nil && isReady() {
-				return waitForStatusResult{Status: agentStatusSuccess, Handoff: handoff}
-			}
-			return waitForStatusResult{Status: agentStatusFailed, Handoff: handoff}
+			// A provider process exit is transport state, not a semantic
+			// completion signal. Without a Result there is nothing to commit.
+			return PhaseOutcomeWaitResult{Status: agentStatusFailed, Handoff: handoff}
 
 		case status := <-sess.StatusCh():
 			if result, done := handleStatus(status, false); done {
-				return waitForStatusResult{Status: result, Handoff: handoff}
+				return result
 			}
 			// API error — the agent is stuck but still alive, or a
 			// truncated turn was auto-resumed. Keep waiting for the next
@@ -2401,7 +2827,7 @@ func statusFromResult(result *llm.ResultMessage) string {
 }
 
 // appendIterationLog appends a single iteration's output to the aggregate log
-// at the well-known path that the TUI log viewer reads.
+// at the well-known path that the desktop app log viewer reads.
 func appendIterationLog(path string, iteration int, output string) {
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
@@ -2484,7 +2910,7 @@ func readPlanContent(planPath string) string {
 }
 
 // setReviewingGate persists the ReviewingGate flag on the feature so the
-// TUI dashboard can reflect that the review gate is currently running.
+// desktop app dashboard can reflect that the review gate is currently running.
 func setReviewingGate(cfg ImplementConfig, reviewing bool) {
 	if cfg.FeatureStore == nil {
 		return
@@ -2498,10 +2924,11 @@ func setReviewingGate(cfg ImplementConfig, reviewing bool) {
 // shutdownDetectionGrace bounds how long waitForShutdownIntent will wait for
 // sm.IsShuttingDown() to flip true after a session died. When the user presses
 // Ctrl+C, SIGINT hits the agent CLI child first (via the process group) and
-// the session's Done() channel fires before bubbletea has unwound and main.go
+// the session's Done() channel fires before desktop app has unwound and main.go
 // has called sm.Shutdown(). A short wait here absorbs that race; anything
 // longer would delay real agent failures (API errors, auth expiry, etc.).
-// 500ms is empirically enough for tea.Quit → main.go → sm.Shutdown() to land.
+// 500ms is empirically enough for the desktop/server shutdown path to call
+// sm.Shutdown().
 const shutdownDetectionGrace = 500 * time.Millisecond
 
 // shutdownChecker is the narrow interface waitForShutdownIntent needs; any

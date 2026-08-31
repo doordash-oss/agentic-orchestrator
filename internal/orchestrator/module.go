@@ -16,14 +16,11 @@ package orchestrator
 
 import (
 	"context"
-	"path/filepath"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
-	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/internal/observe"
 	"github.com/doordash-oss/agentic-orchestrator/internal/permission"
-	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
 	"go.uber.org/fx"
 )
@@ -34,50 +31,19 @@ type OrchestratorParams struct {
 	FeatureManager  *feature.Manager
 	FeatureStore    *feature.Store
 	SessionManager  *session.Manager
-	Publisher       *git.PublishAdapter
-	Differ          *git.DiffAdapter
-	Rebaser         *git.RebaseAdapter
-	CrossRef        *git.CrossRefAdapter
-	Reviewer        *git.ReviewCommentAdapter
-	Branch          *git.BranchAdapter
 	PhaseRunner     *agent.PhaseRunner
 	Observer        *observe.Observer
 	PermissionStore *permission.Store
 	Lifecycle       fx.Lifecycle
-	StateDir        string `name:"stateDir"`
-}
-
-// worktreeManagerParams isolates the stateDir dependency so the
-// WorktreeManager provider does not depend on the feature.Manager — avoiding
-// an fx cycle where feature.Manager consumes the worktree ops that depend on
-// it.
-type worktreeManagerParams struct {
-	fx.In
-	StateDir string `name:"stateDir"`
+	Worktrees       feature.WorktreeOps
 }
 
 // Module provides the Orchestrator via fx. It also registers an OnStop hook
 // so fx.Shutdown propagates to Orchestrator.Shutdown — this is the ONLY site
 // where lifecycle shutdown is registered; keeping it co-located with the
-// provider prevents double-registration in TUI/CLI wiring.
+// provider prevents double-registration in API and CLI wiring.
 var Module = fx.Module("orchestrator",
-	// Expose the git.WorktreeManager as the feature.WorktreeOps / ports.WorktreeOperator.
-	// This is wired here (not in feature.Module) so feature does not import git.
-	fx.Provide(
-		func(p worktreeManagerParams) *git.WorktreeManager {
-			// p.StateDir is the features base dir (e.g. ~/.agentic-workflow/features).
-			// Worktrees live alongside it (~/.agentic-workflow/worktrees).
-			wtBaseDir := filepath.Join(filepath.Dir(p.StateDir), "worktrees")
-			return git.NewWorktreeManager(wtBaseDir)
-		},
-		// Adapter-shaped providers so feature.Module gets its injections
-		// without importing internal/git.
-		func(wm *git.WorktreeManager) feature.WorktreeOps { return wm },
-		func(b *git.BranchAdapter) feature.BranchOps { return b },
-		func(p *git.PublishAdapter) feature.PRCloser { return p },
-		func(wm *git.WorktreeManager) ports.WorktreeOperator { return wm },
-	),
-	fx.Provide(func(p OrchestratorParams, wm *git.WorktreeManager) *Orchestrator {
+	fx.Provide(func(p OrchestratorParams) *Orchestrator {
 		// Install the attach-drop metric reporter on the session manager
 		// so any session critical-send timeout emits
 		// session.critical_message_dropped to events.jsonl. Safe on a nil
@@ -94,13 +60,7 @@ var Module = fx.Module("orchestrator",
 			Lifecycle:   p.FeatureManager, // implicit satisfaction
 			Store:       p.FeatureStore,   // implicit satisfaction
 			Sessions:    p.SessionManager, // *session.Manager satisfies ports.SessionManager
-			Publisher:   p.Publisher,      // *git.PublishAdapter satisfies ports.Publisher
-			Differ:      p.Differ,         // *git.DiffAdapter satisfies ports.DiffOperator
-			Rebaser:     p.Rebaser,        // *git.RebaseAdapter satisfies ports.RebaseOperator
-			CrossRef:    p.CrossRef,       // *git.CrossRefAdapter satisfies ports.CrossRefOperator
-			Reviewer:    p.Reviewer,       // *git.ReviewCommentAdapter satisfies ports.ReviewCommentOperator
-			Branch:      p.Branch,         // *git.BranchAdapter satisfies ports.BranchOperator
-			Worktrees:   wm,               // *git.WorktreeManager satisfies ports.WorktreeOperator
+			Worktrees:   p.Worktrees,      // retained feature.WorktreeOps seam
 			PhaseRunner: p.PhaseRunner,    // concrete *agent.PhaseRunner
 			// Reuse PhaseRunner.CommandRunner so KB freshness checks
 			// (agent.IsKBFresh → GetCurrentCommit) have a real runner to

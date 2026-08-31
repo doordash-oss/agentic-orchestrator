@@ -37,14 +37,20 @@ func WriteScript(t *testing.T, dir, name, content string) string {
 // JSONL protocol constants — emit via echo in bash scripts.
 const (
 	JSONLInit    = `echo '{"type":"system","subtype":"init","session_id":"mock","model":"test"}'`
-	JSONLSuccess = `echo '{"type":"result","subtype":"success","session_id":"mock","total_cost_usd":0.001}'`
+	JSONLSuccess = `echo '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"<agentico-outcome>{\"status\":\"success\"}</agentico-outcome>"}]}}'
+echo '{"type":"result","subtype":"success","session_id":"mock","total_cost_usd":0.001,"stop_reason":"end_turn"}'`
+	JSONLRetry = `echo '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"<agentico-outcome>{\"status\":\"retry\"}</agentico-outcome>"}]}}'
+echo '{"type":"result","subtype":"success","session_id":"mock","total_cost_usd":0.001,"stop_reason":"end_turn"}'`
 )
 
 // JSONLAssistant returns a shell echo command emitting an assistant text message.
 func JSONLAssistant(text string) string {
-	// Escape single quotes for shell embedding
+	// Escape single quotes for shell embedding, then JSON string metacharacters
+	// (a raw newline inside a JSON string breaks the whole JSONL line).
 	escaped := strings.ReplaceAll(text, `'`, `'\''`)
-	return fmt.Sprintf(`echo '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"%s"}]}}'`, strings.ReplaceAll(escaped, `"`, `\"`))
+	escaped = strings.ReplaceAll(escaped, `"`, `\"`)
+	escaped = strings.ReplaceAll(escaped, "\n", `\n`)
+	return fmt.Sprintf(`echo '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"%s"}]}}'`, escaped)
 }
 
 // JSONLResult returns a shell echo command emitting a result message with embedded text.
@@ -57,20 +63,6 @@ func JSONLResult(text string) string {
 func JSONLError(errMsg string) string {
 	escaped := strings.ReplaceAll(errMsg, `"`, `\"`)
 	return fmt.Sprintf(`echo '{"type":"result","subtype":"error","error":"%s"}'`, escaped)
-}
-
-// TouchPhaseComplete returns a shell command that writes the phase_complete
-// signal file to the latest iteration-* directory under artifactDir. This must
-// be emitted BEFORE the JSONL success result so that waitForStatus's readyCheck
-// finds the file when it checks HasPhaseComplete.
-//
-// IMPORTANT: After the implement-handoff contract change, the harness rejects
-// any iteration whose progress.md is missing or malformed when phase_complete
-// appears. Callers in the implement loop should therefore prefer
-// WriteImplementSuccessArtifacts (or equivalent) which emits a minimal valid
-// progress.md alongside the marker.
-func TouchPhaseComplete(artifactDir string) string {
-	return fmt.Sprintf(`for _d in "%s"/iteration-*; do :; done; touch "$_d/phase_complete"`, artifactDir)
 }
 
 func rewriteExistingReportRowsPassed(dirExpr, summary string) string {
@@ -106,23 +98,7 @@ func rewriteExistingReportRowsPassed(dirExpr, summary string) string {
   ' "%s/verification-report.yaml" > "%s/verification-report.yaml.tmp" && mv "%s/verification-report.yaml.tmp" "%s/verification-report.yaml"`, dirExpr, summary, dirExpr, dirExpr, dirExpr, dirExpr)
 }
 
-// WriteFinalReviewFixSuccessArtifacts returns a shell snippet that writes the
-// Final Review fix-leg completion artifacts for the latest iteration-* dir
-// under artifactDir. It preserves the seeded verification-report.yaml, marks
-// any not_run rows passed with structured mock evidence, then touches
-// phase_complete last. If no report exists, it writes a minimal empty report.
-func WriteFinalReviewFixSuccessArtifacts(artifactDir string) string {
-	return fmt.Sprintf(`for _d in "%s"/iteration-*; do :; done
-mkdir -p "$_d"
-if [ -f "$_d/verification-report.yaml" ]; then
-  %s
-else
-  printf 'version: 1\nrequired_checks: []\n' > "$_d/verification-report.yaml"
-fi
-touch "$_d/phase_complete"`, artifactDir, rewriteExistingReportRowsPassed("$_d", "mock final review fix reported success for this contract check"))
-}
-
-// WriteImplementSuccessArtifacts returns a shell snippet that writes the three
+// WriteImplementSuccessArtifacts returns a shell snippet that writes the two
 // artifacts a passing implement iteration must produce, in the order the
 // harness expects:
 //
@@ -134,7 +110,6 @@ touch "$_d/phase_complete"`, artifactDir, rewriteExistingReportRowsPassed("$_d",
 //  2. progress.md in artifactDir (the same path the harness configures —
 //     iter-relative wouldn't be picked up by ParseProgressMd) with the four
 //     mandatory sections and `## Iteration State: SUCCESS`.
-//  3. phase_complete marker in the iteration directory.
 //
 // Use this in mock agents that should drive the implement loop to a
 // review_passed outcome. The progress.md is a minimal valid skeleton; tests
@@ -152,49 +127,9 @@ func WriteImplementRetryArtifacts(artifactDir string) string {
 	return writeImplArtifacts(artifactDir, "RETRY", "")
 }
 
-// WriteImplementNeedUserInputArtifactsWithGateSummary returns a shell snippet
-// whose progress.md state note and need-user-input.yaml summary can differ.
-func WriteImplementNeedUserInputArtifactsWithGateSummary(artifactDir, progressNote, gateSummary string, questions ...string) string {
-	gateBody := needUserInputYAML(gateSummary, questions)
-	return writeImplArtifactsWithOptionalGate(artifactDir, "NEED_USER_INPUT", progressNote, &gateBody, questions...)
-}
-
-// WriteImplementNeedUserInputWithoutGate returns a NEED_USER_INPUT handoff
-// that intentionally omits need-user-input.yaml.
-func WriteImplementNeedUserInputWithoutGate(artifactDir, note string, questions ...string) string {
-	return writeImplArtifactsWithOptionalGate(artifactDir, "NEED_USER_INPUT", note, nil, questions...)
-}
-
-// WriteImplementNeedUserInputStubGate returns a NEED_USER_INPUT handoff whose
-// progress.md carries the real note + numbered questions but whose
-// need-user-input.yaml is a parseable blank stub (empty summary, one empty
-// prompt), reproducing the agent behaviour the gate reconciliation backfills.
-func WriteImplementNeedUserInputStubGate(artifactDir, note string, questions ...string) string {
-	gateBody := "summary: \"\"\nquestions:\n  - index: 0\n    prompt: \"\"\n    answer: \"\"\niteration: 1"
-	return writeImplArtifactsWithOptionalGate(artifactDir, "NEED_USER_INPUT", note, &gateBody, questions...)
-}
-
-// WriteImplementNeedUserInputMalformedGate returns a NEED_USER_INPUT handoff
-// with corrupt need-user-input.yaml content.
-func WriteImplementNeedUserInputMalformedGate(artifactDir, note string, questions ...string) string {
-	gateBody := "questions: [\n"
-	return writeImplArtifactsWithOptionalGate(artifactDir, "NEED_USER_INPUT", note, &gateBody, questions...)
-}
-
-// WriteImplementProtocolViolation returns a shell snippet that writes only the
-// phase_complete marker for the latest implement iteration. It intentionally
-// omits progress.md and verification-report.yaml so the implement loop takes
-// the protocol-violation path.
-func WriteImplementProtocolViolation(artifactDir string) string {
-	return fmt.Sprintf(`for _d in "%s"/iteration-*; do :; done
-mkdir -p "$_d"
-touch "$_d/phase_complete"`, artifactDir)
-}
-
-// WriteImplementMalformedProgress returns a shell snippet that writes
-// phase_complete plus a malformed progress.md while keeping
-// verification-report.yaml parseable. Use it to exercise the "artifact present
-// but contract-invalid" branch.
+// WriteImplementMalformedProgress returns a shell snippet that writes a
+// malformed progress.md while keeping verification-report.yaml parseable. Use
+// it to exercise the "artifact present but contract-invalid" branch.
 func WriteImplementMalformedProgress(artifactDir string) string {
 	return fmt.Sprintf(`for _d in "%s"/iteration-*; do :; done
 mkdir -p "$_d"
@@ -213,23 +148,21 @@ cat > "%s/progress.md" <<PROGRESS_EOF
 PROGRESS_EOF
 if [ ! -f "$_d/verification-report.yaml" ]; then
   printf 'version: 1\nrequired_checks: []\n' > "$_d/verification-report.yaml"
-fi
-touch "$_d/phase_complete"`, artifactDir, artifactDir)
+fi`, artifactDir, artifactDir)
 }
 
 // WriteMultiRepoImplementSuccess returns a shell snippet that writes the
-// minimal valid implement-iteration handoff (progress.md +
-// verification-report.yaml + phase_complete) for every fresh
+// minimal valid implement-iteration handoff (progress.md and
+// verification-report.yaml) for every fresh
 // `<repo>/iteration-*` directory under artifactBase. Each repo's progress.md
 // lives at artifactBase/<repo>/progress.md (the harness reads it from the
-// per-repo ArtifactDir); the verification-report and phase_complete live
-// inside each iteration dir.
+// per-repo ArtifactDir); the verification report lives inside each iteration
+// directory.
 //
 // Use this in multi-repo orchestrator tests where one mock agent script
 // services every repo.
 func WriteMultiRepoImplementSuccess(artifactBase string) string {
 	return fmt.Sprintf(`for d in "%s"/*/iteration-*; do
-  if [ -f "$d/phase_complete" ]; then continue; fi
   _repo_dir=$(dirname "$d")
   cat > "$_repo_dir/progress.md" <<PROGRESS_EOF
 # Iteration Progress
@@ -267,20 +200,18 @@ PROGRESS_EOF
   else
     printf 'version: 1\nrequired_checks: []\n' > "$d/verification-report.yaml"
   fi
-  touch "$d/phase_complete"
 done`, artifactBase, "~~~", "~~~", rewriteExistingReportRowsPassed("$d", "mock agent reported success for this contract check"))
 }
 
 // WriteImplementHandoffFiles writes the minimal valid progress.md +
 // verification-report.yaml pair directly via os.WriteFile (no shell). Use
 // from Go test setup paths that don't drive a mock agent script — for
-// example, when seeding a resume scenario where iteration-N's
-// phase_complete is pre-populated but the agent never runs.
+// example, when seeding a resume scenario whose harness receipt already
+// exists but the agent never runs.
 //
 // progressDir is where progress.md lives (typically the implement loop's
 // ArtifactDir). iterDir is the per-iteration dir where
-// verification-report.yaml lives. state must be one of "SUCCESS", "RETRY",
-// "NEED_USER_INPUT".
+// verification-report.yaml lives. state must be "SUCCESS" or "RETRY".
 func WriteImplementHandoffFiles(t *testing.T, progressDir, iterDir, state string) {
 	t.Helper()
 	if err := os.MkdirAll(progressDir, 0o755); err != nil {
@@ -332,8 +263,7 @@ closed_deferrals: []
 // minimal valid progress.md for the latest iteration (alongside whatever
 // verification-report.yaml the test writes itself). Use this for tests
 // that exercise specific verification-report content (e.g. invalid reports,
-// missing checks) but still need a valid handoff so the parser
-// passes. Pair with TouchPhaseComplete to mark the iteration done.
+// missing checks) but still need a valid handoff so the parser passes.
 func WriteImplementProgressMd(artifactDir, state string) string {
 	return fmt.Sprintf(`for _d in "%s"/iteration-*; do :; done
 mkdir -p "$_d"
@@ -368,85 +298,6 @@ closed_deferrals: []
 
 %s
 PROGRESS_EOF`, artifactDir, artifactDir, "~~~", "~~~", state)
-}
-
-func writeImplArtifactsWithOptionalGate(artifactDir, state, stateNote string, gateBody *string, questions ...string) string {
-	verifBody := "version: 1\nrequired_checks: []\n"
-	var qSection string
-	if len(questions) > 0 {
-		var b strings.Builder
-		b.WriteString("\n## Questions for User\n\n")
-		for i, q := range questions {
-			fmt.Fprintf(&b, "%d. %s\n", i+1, q)
-		}
-		qSection = b.String()
-	}
-	gateBlock := writeNeedUserInputGateBlock(gateBody)
-	return fmt.Sprintf(`for _d in "%s"/iteration-*; do :; done
-mkdir -p "$_d"
-cat > "%s/progress.md" <<PROGRESS_EOF
-# Iteration Progress
-
-## Iteration Handoff
-
-### Completed this iteration
-- mock work
-
-### Remaining from the plan
-
-### Where I stopped
-
-
-### Gotchas / blockers / in-flight decisions
-
-## Deferrals
-
-%syaml
-deferrals: []
-closed_deferrals: []
-%s
-
-## Verification Report
-
-- **Path**: $_d/verification-report.yaml
-- **Summary**: 0 passed, 0 failed, 0 blocked, 0 not_run
-- **Notes**: mock agent
-%s
-## Iteration State
-
-%s
-%s
-PROGRESS_EOF
-if [ -f "$_d/verification-report.yaml" ]; then
-  %s
-else
-cat > "$_d/verification-report.yaml" <<'VR_EOF'
-%s
-VR_EOF
-fi
-%s
-touch "$_d/phase_complete"`, artifactDir, artifactDir, "~~~", "~~~", qSection, state, stateNote, rewriteExistingReportRowsPassed("$_d", "mock agent reported success for this contract check"), verifBody, gateBlock)
-}
-
-func writeNeedUserInputGateBlock(gateBody *string) string {
-	if gateBody == nil {
-		return ""
-	}
-	return fmt.Sprintf("cat > \"$_d/need-user-input.yaml\" <<'NUI_EOF'\n%s\nNUI_EOF\n", *gateBody)
-}
-
-func needUserInputYAML(summary string, questions []string) string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "summary: %s\n", yamlSingleQuote(summary))
-	b.WriteString("iteration: 1\nquestions:\n")
-	for i, question := range questions {
-		fmt.Fprintf(&b, "  - index: %d\n    prompt: %s\n    answer: \"\"\n", i+1, yamlSingleQuote(question))
-	}
-	return b.String()
-}
-
-func yamlSingleQuote(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", "''") + "'"
 }
 
 func writeImplArtifacts(artifactDir, state, stateNote string) string {
@@ -503,8 +354,7 @@ else
 cat > "$_d/verification-report.yaml" <<'VR_EOF'
 %s
 VR_EOF
-fi
-touch "$_d/phase_complete"`, artifactDir, artifactDir, "~~~", "~~~", state, stateNote, rewriteExistingReportRowsPassed("$_d", "mock agent reported success for this contract check"), verifBody)
+fi`, artifactDir, artifactDir, "~~~", "~~~", state, stateNote, rewriteExistingReportRowsPassed("$_d", "mock agent reported success for this contract check"), verifBody)
 }
 
 // TouchPhaseCompleteInDir returns a shell command that writes phase_complete
@@ -513,25 +363,14 @@ func TouchPhaseCompleteInDir(dir string) string {
 	return fmt.Sprintf(`touch "%s/phase_complete"`, dir)
 }
 
-// TouchPhaseCompleteInLatestAttemptDir returns a shell command that writes
-// phase_complete directly in the latest attempt-* directory under planDir.
-// Use this for planner sessions whose completion contract is scoped to the
-// per-attempt directory rather than the shared plan artifact directory.
-func TouchPhaseCompleteInLatestAttemptDir(planDir string) string {
-	return fmt.Sprintf(`for _d in "%s"/attempt-*; do :; done; touch "$_d/phase_complete"`, planDir)
-}
-
 // WritePhasePlanSuccessArtifacts returns a shell snippet that writes the
-// completion artifacts required from a successful phase-planning session:
-// plan.md in phasePlanDir, and phase_complete in the latest attempt-*
-// directory as the final action.
+// plan.md artifact required from a successful phase-planning session.
 func WritePhasePlanSuccessArtifacts(phasePlanDir, planText string) string {
 	planPath := filepath.Join(phasePlanDir, "plan.md")
 	return fmt.Sprintf(`mkdir -p %q
 cat > %q <<'PHASE_PLAN_EOF'
 %s
-PHASE_PLAN_EOF
-%s`, phasePlanDir, planPath, planText, TouchPhaseCompleteInLatestAttemptDir(phasePlanDir))
+PHASE_PLAN_EOF`, phasePlanDir, planPath, planText)
 }
 
 // StructuredReviewFeedback returns a structured review-feedback.md body that
@@ -568,33 +407,26 @@ func StructuredReviewFeedback(findings, suggestions, verdict string) string {
 // Must be emitted BEFORE the JSONL success result so the helper's parser
 // sees the file when the turn ends.
 func WriteReviewApproved(artifactDir string) string {
-	return writeIterationReviewFeedbackInLatestIter(artifactDir, StructuredReviewFeedback("", "", "APPROVED"), true)
-}
-
-// WriteReviewApprovedWithoutPhaseComplete writes implementation-review
-// APPROVED feedback but intentionally omits the helper-local phase_complete
-// marker. It falls back to the parent path when no review helper prompt exists.
-func WriteReviewApprovedWithoutPhaseComplete(artifactDir string) string {
-	return writeIterationReviewFeedbackInLatestIter(artifactDir, StructuredReviewFeedback("", "", "APPROVED"), false)
+	return writeIterationReviewFeedbackInLatestIter(artifactDir, StructuredReviewFeedback("", "", "APPROVED"))
 }
 
 // WriteReviewChangesRequested returns a shell snippet that writes a
 // CHANGES_REQUESTED review-feedback.md (with the supplied findings prose)
 // to the latest iteration-* directory under artifactDir.
 func WriteReviewChangesRequested(artifactDir, findings string) string {
-	return writeIterationReviewFeedbackInLatestIter(artifactDir, StructuredReviewFeedback(findings, "", "CHANGES_REQUESTED"), true)
+	return writeIterationReviewFeedbackInLatestIter(artifactDir, StructuredReviewFeedback(findings, "", "CHANGES_REQUESTED"))
 }
 
 // WriteFinalReviewApproved writes APPROVED review feedback for the latest
-// Final Review iteration and then writes phase_complete.
+// Final Review iteration.
 func WriteFinalReviewApproved(artifactDir string) string {
-	return MarkLatestVerificationReportPassed(artifactDir) + "\n" + WriteReviewApproved(artifactDir) + "\n" + TouchPhaseComplete(artifactDir)
+	return MarkLatestVerificationReportPassed(artifactDir) + "\n" + WriteReviewApproved(artifactDir)
 }
 
 // WriteFinalReviewChangesRequested writes CHANGES_REQUESTED review feedback
-// for the latest Final Review iteration and then writes phase_complete.
+// for the latest Final Review iteration.
 func WriteFinalReviewChangesRequested(artifactDir, findings string) string {
-	return WriteReviewChangesRequested(artifactDir, findings) + "\n" + TouchPhaseComplete(artifactDir)
+	return WriteReviewChangesRequested(artifactDir, findings)
 }
 
 // MarkLatestVerificationReportPassed rewrites not_run rows in the latest
@@ -610,7 +442,7 @@ fi`, artifactDir, rewriteExistingReportRowsPassed("$_d", "mock final review repo
 // latest iteration-* dir under artifactDir. Use this when a test needs full
 // control over Findings / Suggestions / Sticky Approval / Verdict.
 func WriteReviewFeedback(artifactDir, body string) string {
-	return writeIterationReviewFeedbackInLatestIter(artifactDir, body, true)
+	return writeIterationReviewFeedbackInLatestIter(artifactDir, body)
 }
 
 // WriteReviewApprovedInDir writes a minimal APPROVED review-feedback.md
@@ -631,42 +463,24 @@ func WriteReviewFeedbackInDir(dir, body string) string {
 	return writeReviewFeedbackInExactDir(dir, body)
 }
 
-// WriteFinalReviewProtocolViolation returns a shell snippet that writes only
-// phase_complete in the exact Final Review iteration directory. It
-// intentionally omits review-feedback.md.
-func WriteFinalReviewProtocolViolation(iterDir string) string {
-	return fmt.Sprintf(`mkdir -p "%s"
-touch "%s/phase_complete"`, iterDir, iterDir)
-}
-
 // WriteFinalReviewMalformedVerdict returns a shell snippet that writes
-// phase_complete plus a review-feedback.md with an unrecognized verdict.
+// a review-feedback.md with an unrecognized verdict.
 func WriteFinalReviewMalformedVerdict(iterDir string) string {
 	body := "## Findings\n- malformed verdict fixture\n\n## Suggestions\n- (none)\n\n## Verdict\nLGTM\n"
 	return fmt.Sprintf(`mkdir -p "%s"
 cat > "%s/review-feedback.md" << 'REVIEWEOF'
 %s
-REVIEWEOF
-touch "%s/phase_complete"`, iterDir, iterDir, strings.TrimRight(body, "\n"), iterDir)
+REVIEWEOF`, iterDir, iterDir, strings.TrimRight(body, "\n"))
 }
 
 // WriteFinalReviewMalformedVerdictLatest writes malformed review feedback for
-// the latest Final Review iteration and then writes phase_complete.
+// the latest Final Review iteration.
 func WriteFinalReviewMalformedVerdictLatest(artifactDir string) string {
 	body := "## Findings\n- malformed verdict fixture\n\n## Suggestions\n- (none)\n\n## Verdict\nLGTM\n"
-	return WriteReviewFeedback(artifactDir, body) + "\n" + TouchPhaseComplete(artifactDir)
+	return WriteReviewFeedback(artifactDir, body)
 }
 
-func writeReviewFeedbackInLatestIter(artifactDir, body string) string {
-	return writeIterationReviewFeedbackInLatestIter(artifactDir, body, true)
-}
-
-func writeIterationReviewFeedbackInLatestIter(artifactDir, body string, touchMarker bool) string {
-	markerSnippet := ""
-	if touchMarker {
-		markerSnippet = `
-  touch "$_d/phase_complete"`
-	}
+func writeIterationReviewFeedbackInLatestIter(artifactDir, body string) string {
 	return fmt.Sprintf(`_wrote_review_feedback=
 for _prompt in $(find "%s" \( -path '*/iteration-*/*/review-prompt.md' -o -path '*/iteration-*/*/*/review-prompt.md' \) -type f 2>/dev/null | sort); do
   [ -f "$_prompt" ] || continue
@@ -675,7 +489,7 @@ for _prompt in $(find "%s" \( -path '*/iteration-*/*/review-prompt.md' -o -path 
   _tmp="$_fb.tmp.$$"
   cat > "$_tmp" << 'REVIEWEOF'
 %s
-REVIEWEOF%s
+REVIEWEOF
   mv "$_tmp" "$_fb"
   _wrote_review_feedback=1
 done
@@ -684,7 +498,7 @@ if [ -z "$_wrote_review_feedback" ]; then
   cat > "$_d/review-feedback.md" << 'REVIEWEOF'
 %s
 REVIEWEOF
-fi`, artifactDir, strings.TrimRight(body, "\n"), markerSnippet, artifactDir, strings.TrimRight(body, "\n"))
+fi`, artifactDir, strings.TrimRight(body, "\n"), artifactDir, strings.TrimRight(body, "\n"))
 }
 
 func writeReviewFeedbackInExactDir(dir, body string) string {
@@ -711,7 +525,6 @@ func WriteMultiRepoReviewApproved(artifactBase string) string {
 %s
 REVIEWEOF
     mv "$_tmp" "$_fb"
-    touch "$_dir/phase_complete"
     _wrote_review_feedback=1
   done
   if [ -n "$_wrote_review_feedback" ]; then continue; fi
@@ -730,8 +543,7 @@ done`, artifactBase, body, body)
 // the harness uses to compute the path (architecture, scope, structural,
 // grounding, security, performance, testing).
 func WriteValidatorApproved(attemptDir, axis string) string {
-	return writeValidatorFeedback(attemptDir, axis, StructuredReviewFeedback("", "", "APPROVED")) + fmt.Sprintf(`
-touch "%s/phase_complete"`, attemptDir)
+	return writeValidatorFeedback(attemptDir, axis, StructuredReviewFeedback("", "", "APPROVED"))
 }
 
 // WriteAnyValidatorApproved returns a shell snippet that auto-discovers which
@@ -747,25 +559,13 @@ touch "%s/phase_complete"`, attemptDir)
 // on Linux, "/private/var/folders" on macOS). Pass at least one prefix; the
 // script falls back to "/tmp /private/var/folders" if none provided.
 func WriteAnyValidatorApproved(rootHints ...string) string {
-	return writeAnyValidatorApproved(true, rootHints...)
+	return writeAnyValidatorApproved(rootHints...)
 }
 
-// WriteAnyValidatorApprovedWithoutPhaseComplete is the negative-test variant:
-// it writes a parseable APPROVED validator feedback file but intentionally
-// omits the helper-local phase_complete marker.
-func WriteAnyValidatorApprovedWithoutPhaseComplete(rootHints ...string) string {
-	return writeAnyValidatorApproved(false, rootHints...)
-}
-
-func writeAnyValidatorApproved(touchMarker bool, rootHints ...string) string {
+func writeAnyValidatorApproved(rootHints ...string) string {
 	body := strings.TrimRight(StructuredReviewFeedback("", "", "APPROVED"), "\n")
 	if len(rootHints) == 0 {
 		rootHints = []string{"/tmp", "/private/var/folders"}
-	}
-	markerSnippet := ""
-	if touchMarker {
-		markerSnippet = `
-  touch "$_dir/phase_complete"`
 	}
 	// Atomic write: cat to a unique tempfile then mv. Multiple validator
 	// goroutines can race on the same `_fb` path because each script's `find`
@@ -776,7 +576,7 @@ func writeAnyValidatorApproved(touchMarker bool, rootHints ...string) string {
   _dir=$(dirname "$_prompt")
   _axis=$(basename "$_prompt" | sed -E 's/^validation-(.+)-prompt\.md$/\1/')
   _fb="$_dir/validation-$_axis-feedback.md"
-  if [ -f "$_fb" ]; then%s
+  if [ -f "$_fb" ]; then
     continue
   fi
   _tmp="$_fb.tmp.$$"
@@ -784,16 +584,14 @@ func writeAnyValidatorApproved(touchMarker bool, rootHints ...string) string {
 %s
 REVIEWEOF
   mv "$_tmp" "$_fb"
-%s
-done`, strings.Join(rootHints, " "), markerSnippet, body, markerSnippet)
+done`, strings.Join(rootHints, " "), body)
 }
 
 // WriteValidatorChangesRequested returns a shell snippet that writes a
 // CHANGES_REQUESTED validation-<axis>-feedback.md (with the supplied findings
 // prose) to attemptDir.
 func WriteValidatorChangesRequested(attemptDir, axis, findings string) string {
-	return writeValidatorFeedback(attemptDir, axis, StructuredReviewFeedback(findings, "", "CHANGES_REQUESTED")) + fmt.Sprintf(`
-touch "%s/phase_complete"`, attemptDir)
+	return writeValidatorFeedback(attemptDir, axis, StructuredReviewFeedback(findings, "", "CHANGES_REQUESTED"))
 }
 
 // WriteSpecificAxisApproved returns a shell snippet that auto-discovers the
@@ -807,16 +605,12 @@ func WriteSpecificAxisApproved(rootHint, axis string, frozenSections []string) s
 	return fmt.Sprintf(`for _prompt in $(find %s -name 'validation-%s-prompt.md' -type f 2>/dev/null); do
   _dir=$(dirname "$_prompt")
   _fb="$_dir/validation-%s-feedback.md"
-  if [ -f "$_fb" ]; then
-    touch "$_dir/phase_complete"
-    continue
-  fi
+  if [ -f "$_fb" ]; then continue; fi
   _tmp="$_fb.tmp.$$"
   cat > "$_tmp" << 'REVIEWEOF'
 %s
 REVIEWEOF
   mv "$_tmp" "$_fb"
-  touch "$_dir/phase_complete"
 done`, rootHint, axis, axis, body)
 }
 
@@ -827,16 +621,12 @@ func WriteSpecificAxisChangesRequested(rootHint, axis, findings string) string {
 	return fmt.Sprintf(`for _prompt in $(find %s -name 'validation-%s-prompt.md' -type f 2>/dev/null); do
   _dir=$(dirname "$_prompt")
   _fb="$_dir/validation-%s-feedback.md"
-  if [ -f "$_fb" ]; then
-    touch "$_dir/phase_complete"
-    continue
-  fi
+  if [ -f "$_fb" ]; then continue; fi
   _tmp="$_fb.tmp.$$"
   cat > "$_tmp" << 'REVIEWEOF'
 %s
 REVIEWEOF
   mv "$_tmp" "$_fb"
-  touch "$_dir/phase_complete"
 done`, rootHint, axis, axis, body)
 }
 
@@ -849,16 +639,12 @@ func WriteAnyValidatorChangesRequested(rootHint, findings string, extraHints ...
   _dir=$(dirname "$_prompt")
   _axis=$(basename "$_prompt" | sed -E 's/^validation-(.+)-prompt\.md$/\1/')
   _fb="$_dir/validation-$_axis-feedback.md"
-  if [ -f "$_fb" ]; then
-    touch "$_dir/phase_complete"
-    continue
-  fi
+  if [ -f "$_fb" ]; then continue; fi
   _tmp="$_fb.tmp.$$"
   cat > "$_tmp" << 'REVIEWEOF'
 %s
 REVIEWEOF
   mv "$_tmp" "$_fb"
-  touch "$_dir/phase_complete"
 done`, strings.Join(hints, " "), body)
 }
 
@@ -868,8 +654,7 @@ done`, strings.Join(hints, " "), body)
 // approval propagation.
 func WriteValidatorApprovedSticky(attemptDir, axis string, frozenSections []string) string {
 	body := StructuredReviewFeedbackWithSticky("", "", "APPROVED", axis, frozenSections)
-	return writeValidatorFeedback(attemptDir, axis, body) + fmt.Sprintf(`
-touch "%s/phase_complete"`, attemptDir)
+	return writeValidatorFeedback(attemptDir, axis, body)
 }
 
 // StructuredReviewFeedbackWithSticky is StructuredReviewFeedback plus an

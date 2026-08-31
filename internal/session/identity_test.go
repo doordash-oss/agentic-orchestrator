@@ -69,7 +69,7 @@ func TestAssertEmissionIdentity_QuietOnFullIdentity(t *testing.T) {
 // FeatureID/Phase on both SDKEventMsg and SessionDoneMsg. This is the
 // forcing function for F4: every new role (fix, rebase, kb,
 // inquire, design, …) the manager emits for must carry identity
-// directly on the struct, so the TUI never has to parse SessionID.
+// directly on the struct, so the desktop app never has to parse SessionID.
 func TestEmittedEventsCarryIdentity_TableDriven(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")

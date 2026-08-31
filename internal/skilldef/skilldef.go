@@ -152,20 +152,6 @@ func parseFrontmatterFields(fm string) map[string]string {
 	return fields
 }
 
-// ReadBody returns the frontmatter-stripped body of the named skill.
-// Returns an error if the skill is not found in the embedded FS.
-func ReadBody(name string) (string, error) {
-	defs, err := ParseEmbedded()
-	if err != nil {
-		return "", fmt.Errorf("parsing embedded skills: %w", err)
-	}
-	def, ok := defs[name]
-	if !ok {
-		return "", fmt.Errorf("skill %q not found in embedded skills", name)
-	}
-	return def.Body, nil
-}
-
 // ReconcileSkills mirrors every embedded skill directory to disk under
 // skillsDir. For each top-level skill directory it walks the full subtree
 // and writes every file (SKILL.md plus any companion assets such as
@@ -338,51 +324,4 @@ func reconcileFile(target string, data []byte) error {
 		return fmt.Errorf("renaming %s to %s: %w", tmpName, target, err)
 	}
 	return nil
-}
-
-// BuildPreamble returns a markdown section listing the given skills as a table.
-// Only skills whose names appear in skillNames are included. If skillNames is
-// empty the function returns "". The result is NOT cached.
-func BuildPreamble(skillsDir string, skillNames []string) string {
-	if len(skillNames) == 0 {
-		return ""
-	}
-
-	defs, err := ParseEmbedded()
-	if err != nil {
-		log.Printf("skilldef: building preamble: %v", err)
-		return ""
-	}
-
-	// Collect only the requested skills that actually exist.
-	sort.Strings(skillNames)
-
-	var sb strings.Builder
-	sb.WriteString("## Available Skills\n\n")
-	sb.WriteString("IMPORTANT: Before starting any task, scan the table below and read the SKILL.md file for every skill whose topics match your task. Skills contain methodology and quality guidelines that significantly improve your output.\n\n")
-	sb.WriteString("| Skill | Description | Topics | Path |\n")
-	sb.WriteString("|-------|-------------|--------|------|\n")
-
-	wrote := 0
-	for _, name := range skillNames {
-		def, ok := defs[name]
-		if !ok {
-			continue
-		}
-		skillPath := filepath.Join(skillsDir, name, "SKILL.md")
-		topics := def.Topics
-		if topics == "" {
-			topics = "—"
-		}
-		fmt.Fprintf(&sb, "| %s | %s | %s | %s |\n", def.Name, def.Description, topics, skillPath)
-		wrote++
-	}
-
-	if wrote == 0 {
-		return ""
-	}
-
-	sb.WriteString("\nTo use a skill, read the SKILL.md file at the listed path for detailed instructions.\n")
-
-	return sb.String()
 }

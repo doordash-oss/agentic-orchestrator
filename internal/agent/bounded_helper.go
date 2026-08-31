@@ -23,6 +23,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/doordash-oss/agentic-orchestrator/internal/agent/roles"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/observe"
@@ -30,7 +31,7 @@ import (
 )
 
 // errHelperReturnedErrorResult is the sentinel behind "helper returned an
-// error result" (llm.TermErrored): the CLI process ran and reported a
+// error result": the CLI process ran and reported a
 // provider/API-level error result rather than a truncated or completed turn.
 // Wrapped with %w so callers can retry on it via errors.Is without matching
 // error text.
@@ -70,12 +71,15 @@ type BoundedHelperConfig struct {
 	EffortSource    llm.EffortSource
 	PermHandler     ports.PermissionHandler
 	RequireOutput   bool
-	// PhaseCompleteDir opts this helper into local phase_complete semantics.
-	// Empty preserves markerless bounded-helper behavior.
-	PhaseCompleteDir               string
-	ContractPhase                  feature.Phase
-	ContractRole                   Role
-	ParentSpanCtx                  observe.SpanContext
+	// CompletionDir opts this helper into root-outcome validation and a
+	// harness-owned completion receipt. Empty preserves ordinary one-shot
+	// bounded-helper behavior.
+	CompletionDir string
+	ContractPhase feature.Phase
+	ContractRole  Role
+	ParentSpanCtx observe.SpanContext
+	// PHASE2(resume-helper-config): feature resume fields retained alongside
+	// main's PhaseCompleteDir→CompletionDir rename; both paths stay live.
 	SystemPromptHasUsefulResources bool
 	ResumeFeature                  *feature.Feature
 	ResumeParent                   ResumeParentContext
@@ -107,7 +111,7 @@ func boundedHelperEffortLevel(cfg BoundedHelperConfig) llm.EffortLevel {
 	return cfg.EffortLevel
 }
 
-// RunBoundedHelper runs a single-turn interactive helper session without phase_complete semantics.
+// RunBoundedHelper runs a single-turn interactive helper session.
 func (pr *PhaseRunner) RunBoundedHelper(ctx context.Context, cfg BoundedHelperConfig) (*BoundedHelperResult, error) {
 	if cfg.SessionID == "" {
 		return nil, fmt.Errorf("running bounded helper: missing session id")
@@ -131,7 +135,7 @@ func (pr *PhaseRunner) RunBoundedHelper(ctx context.Context, cfg BoundedHelperCo
 		SessionID:           cfg.SessionID,
 		Model:               cfg.Model,
 		Prompt:              cfg.Prompt,
-		HelperIterDir:       cfg.PhaseCompleteDir,
+		HelperIterDir:       cfg.CompletionDir,
 		ResumeFeature:       cfg.ResumeFeature,
 		ResumeParent:        cfg.ResumeParent,
 		ResumeChildKey:      cfg.ResumeChildKey,
@@ -151,10 +155,6 @@ func (pr *PhaseRunner) RunBoundedHelper(ctx context.Context, cfg BoundedHelperCo
 		pidDir = filepath.Join(pr.StateDir, cfg.FeatureID)
 	}
 
-	markerPath := ""
-	if cfg.PhaseCompleteDir != "" {
-		markerPath = filepath.Join(cfg.PhaseCompleteDir, PhaseCompleteFile)
-	}
 	cmd, env, sessOpts, err := pr.BuildSession(BuildSessionOpts{
 		Model:                          cfg.Model,
 		Prompt:                         cfg.Prompt,
@@ -171,7 +171,10 @@ func (pr *PhaseRunner) RunBoundedHelper(ctx context.Context, cfg BoundedHelperCo
 		EffortLevel:                    boundedHelperEffortLevel(cfg),
 		AgentNames:                     []string{},
 		Phase:                          cfg.Phase,
-		MarkerPath:                     markerPath,
+		// PHASE2(marker-path-removal): feature's MarkerPath wiring dropped —
+		// main deleted the BuildSessionOpts field; CompletionProtocol replaces
+		// the phase_complete marker handshake.
+		CompletionProtocol:             cfg.CompletionDir != "",
 		SystemPromptHasUsefulResources: cfg.SystemPromptHasUsefulResources,
 	})
 	if err != nil {
@@ -190,7 +193,10 @@ func (pr *PhaseRunner) RunBoundedHelper(ctx context.Context, cfg BoundedHelperCo
 		}
 		installResumeProviderInitCapture(sessOpts, resumeLaunch.coordinator)
 	}
-	if sessOpts != nil && cfg.EffectiveEffort != "" {
+	if cfg.EffectiveEffort != "" {
+		if sessOpts == nil {
+			sessOpts = &ports.SessionOpts{}
+		}
 		sessOpts.EffectiveEffort = cfg.EffectiveEffort
 		sessOpts.EffortSource = cfg.EffortSource
 	}
@@ -209,7 +215,7 @@ func (pr *PhaseRunner) RunBoundedHelper(ctx context.Context, cfg BoundedHelperCo
 		env:               env,
 		sessOpts:          sessOpts,
 		requireOutput:     cfg.RequireOutput,
-		phaseCompleteDir:  cfg.PhaseCompleteDir,
+		completionDir:     cfg.CompletionDir,
 		contractPhase:     cfg.ContractPhase,
 		contractRole:      cfg.ContractRole,
 		parentSpanCtx:     cfg.ParentSpanCtx,
@@ -232,32 +238,30 @@ func (pr *PhaseRunner) RunBoundedHelper(ctx context.Context, cfg BoundedHelperCo
 }
 
 type boundedHelperRunConfig struct {
-	sessionID        string
-	featureID        string
-	phase            feature.Phase
-	label            string
-	observerPhase    string
-	model            string
-	responsePath     string
-	repoName         string
-	workDir          string
-	command          []string
-	env              []string
-	sessOpts         *ports.SessionOpts
-	requireOutput    bool
-	phaseCompleteDir string
-	contractPhase    feature.Phase
-	contractRole     Role
-	parentSpanCtx    observe.SpanContext
-	// finishOrViolateNudge arms the finish-or-violate auto-continuation retry
-	// in the statusCh arm: when the helper ends its turn without its required
-	// completion artifacts, it is nudged on the same live session before the
-	// run is finalized as a protocol violation. Resolved per-model from the
-	// provider capability.
-	finishOrViolateNudge bool
-	resumeCoordinator    *ResumeCoordinator
-	resumeClaim          *ResumeClaim
-	resumed              bool
+	sessionID     string
+	featureID     string
+	phase         feature.Phase
+	label         string
+	observerPhase string
+	model         string
+	responsePath  string
+	repoName      string
+	workDir       string
+	command       []string
+	env           []string
+	sessOpts      *ports.SessionOpts
+	requireOutput bool
+	completionDir string
+	contractPhase feature.Phase
+	contractRole  Role
+	parentSpanCtx observe.SpanContext
+	// PHASE2(finish-or-violate-nudge): feature's per-model nudge arming
+	// (finishOrViolateNudge) dropped — ports.SessionOpts.SupportsFinishOrViolateNudge
+	// was removed by main's completion-protocol redesign; WaitForPhaseOutcome and
+	// the bounded-helper statusCh arm now own nudging.
+	resumeCoordinator *ResumeCoordinator
+	resumeClaim       *ResumeClaim
+	resumed           bool
 }
 
 func (pr *PhaseRunner) runBoundedHelperSession(ctx context.Context, cfg boundedHelperRunConfig) (*BoundedHelperResult, error) {
@@ -265,19 +269,27 @@ func (pr *PhaseRunner) runBoundedHelperSession(ctx context.Context, cfg boundedH
 	if label == "" {
 		label = "bounded helper"
 	}
-	if cfg.phaseCompleteDir != "" {
-		// A helper with phase_complete semantics may end its turn while its
+	// Stamp the run number so helper sessions appear in run-scoped session
+	// lists (the desktop live preview filters on it).
+	if cfg.sessOpts == nil {
+		cfg.sessOpts = &ports.SessionOpts{}
+	}
+	if cfg.sessOpts.RunNumber == 0 {
+		cfg.sessOpts.RunNumber = cfg.parentSpanCtx.RunNumber
+	}
+	if cfg.completionDir != "" {
+		// A helper using semantic completion may end its turn while its
 		// background Task subagents are still running, expecting the CLI to
 		// re-invoke it when they complete. Keep the CLI up after such a
 		// result so the deferral in the statusCh arm has a live session to
 		// wait on (mirrors the implementation loop's waiter).
-		cfg.sessOpts = enableTruncatedTurnAutoResume(cfg.sessOpts)
+		cfg.sessOpts = enableTurnContinuation(cfg.sessOpts)
 	}
 	baseSessionID := cfg.sessionID
 	for sessionAttempt := 1; ; sessionAttempt++ {
 		cfg.sessionID = retrySessionID(baseSessionID, sessionAttempt)
-		if sessionAttempt > 1 && cfg.phaseCompleteDir != "" {
-			RemovePhaseComplete(cfg.phaseCompleteDir)
+		if sessionAttempt > 1 && cfg.completionDir != "" {
+			RemoveCompletionReceipt(cfg.completionDir)
 		}
 		result, err, retryable := pr.runBoundedHelperSessionOnce(ctx, cfg, label)
 		if retryable && sessionAttempt < retryableInfrastructureSessionMaxAttempts {
@@ -372,11 +384,14 @@ func (pr *PhaseRunner) runBoundedHelperSessionOnce(ctx context.Context, cfg boun
 		defer unregister()
 	}
 
-	// Counts finish-or-violate nudges for this invocation; bounded by
-	// maxFinishOrViolateNudges and armed only when cfg.finishOrViolateNudge is
-	// set (capability-positive providers).
+	// Counts semantic-completion nudges for this invocation.
 	finishOrViolateNudges := 0
 	resumeEstablished := false
+	// Commit violations already delivered as a correction nudge. A nudge
+	// clears the session's parsed intent, so if the process dies before it
+	// can answer, the final report must restore these instead of degrading
+	// to a generic missing-outcome violation.
+	var pendingCommitViolations []ProtocolViolation
 	finish := func(result *BoundedHelperResult, err error) (*BoundedHelperResult, error, bool) {
 		if cfg.resumeCoordinator != nil {
 			if persistErr := cfg.resumeCoordinator.CaptureProviderSnapshot(
@@ -398,16 +413,24 @@ func (pr *PhaseRunner) runBoundedHelperSessionOnce(ctx context.Context, cfg boun
 			}
 			pr.emitChildResume(cfg)
 		}
-		if err == nil && result != nil && result.Status == BoundedHelperStatusCompleted && cfg.resumeCoordinator != nil && cfg.phaseCompleteDir != "" {
+		if err == nil && result != nil && result.Status == BoundedHelperStatusCompleted && cfg.resumeCoordinator != nil && cfg.completionDir != "" {
 			if persistErr := cfg.resumeCoordinator.MarkCompleted(time.Now()); persistErr != nil {
 				return result, fmt.Errorf("marking bounded helper resume record completed: %w", persistErr), false
 			}
+		}
+		// PHASE2(bounded-helper-completion): feature resume-completion bookkeeping
+		// kept alongside main's commit-violation restore path below.
+		if err != nil && len(pendingCommitViolations) > 0 &&
+			isMissingOutcomeViolationError(err) {
+			result.Status = BoundedHelperStatusProtocolViolation
+			err = newProtocolViolationError(cfg.contractRole, cfg.completionDir, pendingCommitViolations)
 		}
 		retryable := err != nil &&
 			result != nil &&
 			result.Status == BoundedHelperStatusFailed &&
 			(isRetryableInfrastructureSessionFailure(sess, ExtractSessionCost(sess), time.Since(sessionStart)) ||
-				errors.Is(err, errHelperReturnedErrorResult))
+				errors.Is(err, errHelperReturnedErrorResult) ||
+				isRetryableProviderNetworkFailure(result.Output, err))
 		return result, err, retryable
 	}
 
@@ -447,7 +470,7 @@ func (pr *PhaseRunner) runBoundedHelperSessionOnce(ctx context.Context, cfg boun
 					continue
 				}
 			}
-			result, err := finalizeBoundedHelperResult(cfg.responsePath, sess, label, cfg.requireOutput, cfg.phaseCompleteDir, cfg.contractPhase, cfg.contractRole)
+			result, err := finalizeBoundedHelperResult(cfg.responsePath, sess, label, cfg.requireOutput, cfg.completionDir, cfg.contractPhase, cfg.contractRole)
 			return finish(result, err)
 
 		case msg, ok := <-attachCh:
@@ -466,43 +489,42 @@ func (pr *PhaseRunner) runBoundedHelperSessionOnce(ctx context.Context, cfg boun
 			return finish(result, fmt.Errorf("running %s: helper requested tool permission for %s", label, msg.ControlRequest.Request.ToolName))
 
 		case <-statusCh:
-			// Peek at why the turn ended (mirroring finalizeBoundedHelperResult's
-			// classification). A turn that ended while background subagents are
-			// still running is a yield, not a completion — defer and let the CLI
-			// re-invoke the agent (bgTicker bounds the wait). Otherwise, for
-			// capability-positive providers, nudge the same live session to
-			// finish when it ended its turn without writing the completion
-			// artifacts, before finalizing as a protocol violation.
-			class := boundedHelperTurnClass(sess, cfg.phaseCompleteDir)
-			if class == llm.TermAwaitingBackgroundTasks {
+			disposition := boundedHelperTurnDisposition(sess, cfg.completionDir != "")
+			if disposition == llm.TurnAwaitingTasks {
 				awaitingBackgroundTasks = true
 				continue
 			}
 			awaitingBackgroundTasks = false
-			// The CLI ended the invocation while the helper was mid-work
-			// (stop_reason tool_use / max_tokens / pause_turn): resume the live
-			// session instead of finalizing as a failure, mirroring
-			// waitForStatusDetailed. The budget is shared with the
-			// background-task fallback so a session that keeps yielding
-			// without finishing still converges.
-			if cfg.phaseCompleteDir != "" && class == llm.TermTurnTruncated && autoResumeAttempts < maxAutoResumeAttempts {
+			if cfg.completionDir != "" && disposition == llm.TurnTruncated && autoResumeAttempts < maxAutoResumeAttempts {
 				autoResumeAttempts++
 				if err := sess.SendUserMessage(autoResumeMessage); err == nil {
 					continue
 				}
 			}
-			if cfg.finishOrViolateNudge && class == llm.TermEndedAfterText {
-				if decideFinishOrViolate(sess, llm.TermEndedAfterText, &finishOrViolateNudges, []string{PhaseCompleteFile}) {
+			if cfg.completionDir != "" && disposition == llm.TurnProtocolViolation {
+				if decideFinishOrViolate(sess, llm.TurnProtocolViolation, &finishOrViolateNudges, []string{"agentico-outcome"}) {
 					continue
 				}
 			}
-			result, err := finalizeBoundedHelperResult(cfg.responsePath, sess, label, cfg.requireOutput, cfg.phaseCompleteDir, cfg.contractPhase, cfg.contractRole)
+			result, err := finalizeBoundedHelperResult(cfg.responsePath, sess, label, cfg.requireOutput, cfg.completionDir, cfg.contractPhase, cfg.contractRole)
+			// A parsed outcome the contract rejected (wrong verb for the role,
+			// artifact mismatch) still has a live session to correct: tell it
+			// exactly why the commit was refused instead of failing the phase.
+			if err != nil && isProtocolViolationError(err) &&
+				(disposition == llm.TurnCommitSuccess || disposition == llm.TurnCommitRetry) {
+				violations := protocolViolationsFromError(err)
+				if sendCompletionNudge(sess, &finishOrViolateNudges,
+					formatCommitViolationNudge(violations, boundedHelperRetryAllowed(cfg))) {
+					pendingCommitViolations = violations
+					continue
+				}
+			}
 			return finish(result, err)
 
 		case <-sess.Done():
 			// The process already exited; there is nothing to nudge. Never unify
 			// this arm with the statusCh arm above.
-			result, err := finalizeBoundedHelperResult(cfg.responsePath, sess, label, cfg.requireOutput, cfg.phaseCompleteDir, cfg.contractPhase, cfg.contractRole)
+			result, err := finalizeBoundedHelperResult(cfg.responsePath, sess, label, cfg.requireOutput, cfg.completionDir, cfg.contractPhase, cfg.contractRole)
 			return finish(result, err)
 		}
 	}
@@ -533,36 +555,88 @@ func (pr *PhaseRunner) emitChildResume(cfg boundedHelperRunConfig) {
 	})
 }
 
-// boundedHelperTurnClass classifies why the just-ended turn stopped, for the
-// statusCh arm's defer/nudge routing. TermAwaitingBackgroundTasks means the
-// helper yielded while its background subagents were still running;
-// TermEndedAfterText is a deliberate end_turn without the completion marker —
-// the only case the finish-or-violate nudge fires for. Pending questions or
-// control requests return TermUnknown so the caller falls through to
-// finalizeBoundedHelperResult, which surfaces them first. Deferral to
-// background tasks is scoped to helpers with phase_complete semantics:
-// markerless helpers treat an end_turn as their normal completion signal.
-func boundedHelperTurnClass(sess ports.SessionHandle, phaseCompleteDir string) llm.TerminationClass {
-	if sess.HasPendingAskUserQuestion() || sess.LastControlRequest() != nil {
-		return llm.TermUnknown
+// PHASE2(turn-classification): feature's boundedHelperTurnClass dropped —
+// unreferenced after main replaced it with boundedHelperTurnDisposition, and
+// only its opening lines survived the conflict so it cannot be reconstructed.
+
+// boundedHelperMissingOutcomeReason is the generic no-outcome violation. It
+// also marks the state a correction nudge leaves behind when the session dies
+// before answering: the parsed intent was cleared by the nudge itself.
+const boundedHelperMissingOutcomeReason = "root helper ended without exactly one valid semantic completion outcome"
+
+// isMissingOutcomeViolationError reports whether err is exactly the generic
+// missing-outcome protocol violation (and carries no more specific finding).
+func isMissingOutcomeViolationError(err error) bool {
+	violations := protocolViolationsFromError(err)
+	return len(violations) == 1 && violations[0].Reason == boundedHelperMissingOutcomeReason
+}
+
+// boundedHelperRetryAllowed reports whether the helper's contract role owns a
+// structured iteration state and may therefore emit the retry outcome.
+func boundedHelperRetryAllowed(cfg boundedHelperRunConfig) bool {
+	if cfg.contractRole == "" {
+		return false
 	}
+	spec, ok := lookupRoleSpec(cfg.contractPhase, cfg.contractRole)
+	if !ok {
+		return false
+	}
+	return roles.RoleSpec(spec).SupportsRetryOutcome()
+}
+
+// isRetryableProviderNetworkFailure recognizes transient provider transport
+// failures after a helper has already consumed context. Those sessions do not
+// meet the no-work infrastructure retry rule, but their output cannot produce
+// a valid handoff and a fresh bounded attempt is safe.
+func isRetryableProviderNetworkFailure(output string, err error) bool {
+	if err == nil {
+		return false
+	}
+	text := strings.ToLower(output + " " + err.Error())
+	for _, marker := range []string{
+		"unable to connect to api",
+		"enotfound",
+		"econnreset",
+		"econnrefused",
+		"eai_again",
+		"etimedout",
+	} {
+		if strings.Contains(text, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+// boundedHelperTurnDisposition interprets a provider turn. Helpers using the
+// phase completion protocol require a root-owned semantic outcome; ordinary
+// helpers retain their one-shot text-result behavior.
+func boundedHelperTurnDisposition(sess ports.SessionView, completionProtocol bool) llm.TurnDisposition {
 	result := sess.Cost()
 	if result == nil {
-		return llm.TermUnknown
+		return llm.TurnUnknown
 	}
-	phaseCompleteExists := false
-	if phaseCompleteDir != "" {
-		phaseCompleteExists = HasPhaseComplete(phaseCompleteDir)
+	if !completionProtocol {
+		switch {
+		case result.IsError || result.Subtype == "error":
+			return llm.TurnErrored
+		case result.StopReason == "refusal":
+			return llm.TurnRefused
+		case result.StopReason == "tool_use" || result.StopReason == "max_tokens" || result.StopReason == "pause_turn":
+			return llm.TurnTruncated
+		default:
+			return llm.TurnCommitSuccess
+		}
 	}
-	return llm.ClassifyTermination(llm.TerminationInputs{
-		Result:                 result,
-		PhaseCompleteExists:    phaseCompleteExists,
-		AskUserQuestionPending: false,
-		BackgroundTasksRunning: phaseCompleteDir != "" && liveBackgroundTasks(sess) > 0,
+	return llm.ClassifyTurn(llm.TurnSignals{
+		Result:              result,
+		RootIntent:          rootCompletionIntent(sess),
+		RootQuestionPending: hasPendingRootQuestion(sess),
+		TasksRunning:        liveBackgroundTasks(sess) > 0,
 	})
 }
 
-func finalizeBoundedHelperResult(responsePath string, sess ports.SessionHandle, label string, requireOutput bool, phaseCompleteDir string, contractPhase feature.Phase, contractRole Role) (*BoundedHelperResult, error) {
+func finalizeBoundedHelperResult(responsePath string, sess ports.SessionHandle, label string, requireOutput bool, completionDir string, contractPhase feature.Phase, contractRole Role) (*BoundedHelperResult, error) {
 	if sess.HasPendingAskUserQuestion() {
 		result := boundedHelperSnapshot(responsePath, sess, BoundedHelperStatusAskedUser)
 		return result, fmt.Errorf("running %s: helper asked for user input", label)
@@ -584,59 +658,55 @@ func finalizeBoundedHelperResult(responsePath string, sess ports.SessionHandle, 
 		return result, fmt.Errorf("running %s: helper ended without a result", label)
 	}
 
-	phaseCompleteExists := false
-	if phaseCompleteDir != "" {
-		phaseCompleteExists = HasPhaseComplete(phaseCompleteDir)
-	}
-	class := llm.ClassifyTermination(llm.TerminationInputs{
-		Result:                 result.Result,
-		PhaseCompleteExists:    phaseCompleteExists,
-		AskUserQuestionPending: false,
-	})
-
-	switch class {
-	case llm.TermCompleted:
-		if requireOutput && strings.TrimSpace(result.Output) == "" {
-			result.Status = BoundedHelperStatusEmptyOutput
-			return result, fmt.Errorf("running %s: helper completed without output", label)
-		}
-		if contractRole != "" {
-			outcome, violations, err := Validate(contractPhase, contractRole, phaseCompleteDir)
+	disposition := boundedHelperTurnDisposition(sess, completionDir != "")
+	switch disposition {
+	case llm.TurnCommitSuccess, llm.TurnCommitRetry:
+		if completionDir != "" {
+			_, _, violations, err := CommitPhaseOutcome(CompletionCommitInput{
+				Phase:       contractPhase,
+				Role:        contractRole,
+				ArtifactDir: completionDir,
+				SessionID:   sess.ID(),
+				Intent:      rootCompletionIntent(sess),
+			})
 			if err != nil {
 				result.Status = BoundedHelperStatusFailed
-				return result, fmt.Errorf("running %s: validating helper contract: %w", label, err)
+				return result, fmt.Errorf("running %s: committing helper outcome: %w", label, err)
 			}
-			if !outcome.OK {
+			if len(violations) != 0 {
 				result.Status = BoundedHelperStatusProtocolViolation
-				return result, newProtocolViolationError(contractRole, phaseCompleteDir, violations)
+				return result, newProtocolViolationError(contractRole, completionDir, violations)
 			}
-		}
-		return result, nil
-	case llm.TermEndedAfterText:
-		if phaseCompleteDir != "" {
-			result.Status = BoundedHelperStatusProtocolViolation
-			return result, newProtocolViolationError(contractRole, phaseCompleteDir, []ProtocolViolation{{
-				Artifact: PhaseCompleteFile,
-				Reason:   fmt.Sprintf("%s is missing from helper output directory", PhaseCompleteFile),
-			}})
 		}
 		if requireOutput && strings.TrimSpace(result.Output) == "" {
 			result.Status = BoundedHelperStatusEmptyOutput
 			return result, fmt.Errorf("running %s: helper completed without output", label)
 		}
 		return result, nil
-	case llm.TermAskedFormal:
+	case llm.TurnAwaitingUser:
 		result.Status = BoundedHelperStatusAskedUser
 		return result, fmt.Errorf("running %s: helper asked for user input", label)
-	case llm.TermErrored:
+	case llm.TurnErrored:
 		result.Status = BoundedHelperStatusFailed
 		return result, fmt.Errorf("running %s: %w", label, errHelperReturnedErrorResult)
-	case llm.TermRefused:
+	case llm.TurnRefused:
 		result.Status = BoundedHelperStatusFailed
 		return result, fmt.Errorf("running %s: helper refused the request", label)
-	case llm.TermTurnTruncated:
+	case llm.TurnTruncated:
 		result.Status = BoundedHelperStatusFailed
 		return result, fmt.Errorf("running %s: helper turn ended before completion", label)
+	case llm.TurnProtocolViolation:
+		result.Status = BoundedHelperStatusProtocolViolation
+		return result, newProtocolViolationError(contractRole, completionDir, []ProtocolViolation{{
+			Artifact: "agentico-outcome",
+			Reason:   boundedHelperMissingOutcomeReason,
+		}})
+	case llm.TurnAwaitingTasks:
+		result.Status = BoundedHelperStatusProtocolViolation
+		return result, newProtocolViolationError(contractRole, completionDir, []ProtocolViolation{{
+			Artifact: "task-activity",
+			Reason:   "provider session exited while delegated tasks were still running",
+		}})
 	default:
 		result.Status = BoundedHelperStatusFailed
 		return result, fmt.Errorf("running %s: helper ended in an unknown state", label)

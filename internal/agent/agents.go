@@ -16,14 +16,8 @@ package agent
 
 import "github.com/doordash-oss/agentic-orchestrator/internal/agentdef"
 
-// AgentsJSON returns the JSON string for the --agents CLI flag, built from
-// all embedded agent markdown files. Delegates to agentdef.JSON().
-func AgentsJSON() string {
-	return agentdef.JSON()
-}
-
-// AgentsJSONForNames returns the JSON string for the --agents CLI flag, built
+// agentsJSONForNames returns the JSON string for the --agents CLI flag, built
 // from the selected embedded agent markdown files.
-func AgentsJSONForNames(agentNames []string) (string, error) {
+func agentsJSONForNames(agentNames []string) (string, error) {
 	return agentdef.JSONForNames(agentNames)
 }

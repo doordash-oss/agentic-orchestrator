@@ -24,7 +24,23 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent/prompts"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
+	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
+
+const prDescriptionSystemPrompt = "You must complete using only the context supplied in the prompt. Do not request or invoke tools, inspect files, run commands, browse the web, delegate work, or ask for more information."
+
+type prDescriptionPermissionHandler struct{}
+
+func (*prDescriptionPermissionHandler) ToolFree() bool {
+	return true
+}
+
+func (*prDescriptionPermissionHandler) CanUseTool(_ ports.ToolPermissionRequest) (ports.PermissionDecision, error) {
+	return ports.PermissionDecision{
+		Behavior: "deny",
+		Reason:   "PR narrative generation must complete using only the context supplied in the prompt",
+	}, nil
+}
 
 // PRContext is the lean input for PR description generation. It replaces the
 // raw `master..HEAD` diff with structured, bounded signals that fit comfortably
@@ -92,91 +108,6 @@ func BuildPRDescriptionPrompt(ctx PRContext) string {
 	})
 }
 
-// BuildPRDescriptionFallback synthesizes a readable title and body from the
-// same PRContext when the model call fails or returns unusable output. The
-// fallback is deterministic and never empty.
-func BuildPRDescriptionFallback(ctx PRContext) (title, body string) {
-	title = fallbackTitle(ctx)
-
-	var b strings.Builder
-	b.WriteString("## Summary\n\n")
-	if ctx.FeatureDescription != "" {
-		b.WriteString(ctx.FeatureDescription)
-		b.WriteString("\n\n")
-	} else if ctx.FeatureName != "" {
-		b.WriteString(ctx.FeatureName)
-		b.WriteString("\n\n")
-	} else {
-		b.WriteString("Implementation per plan.\n\n")
-	}
-
-	if subjects := commitSubjects(ctx.CommitBodies, 10); len(subjects) > 0 {
-		b.WriteString("## Commits\n\n")
-		for _, s := range subjects {
-			b.WriteString("- ")
-			b.WriteString(s)
-			b.WriteByte('\n')
-		}
-		b.WriteByte('\n')
-	}
-
-	if ctx.DiffStat != "" {
-		b.WriteString("## Changes\n\n```\n")
-		b.WriteString(strings.TrimSpace(ctx.DiffStat))
-		b.WriteString("\n```\n\n")
-	}
-
-	b.WriteString("## Test plan\n\n- [ ] Manual testing\n")
-	return title, strings.TrimRight(b.String(), "\n")
-}
-
-// fallbackTitle picks a concise title from the available context. Preference
-// order: feature name → first commit subject → generic label. Truncates to 70.
-func fallbackTitle(ctx PRContext) string {
-	candidates := []string{ctx.FeatureName}
-	if subjects := commitSubjects(ctx.CommitBodies, 1); len(subjects) > 0 {
-		candidates = append(candidates, subjects[0])
-	}
-	for _, c := range candidates {
-		c = strings.TrimSpace(c)
-		if c != "" {
-			return truncateTitle(c, 70)
-		}
-	}
-	return "Feature implementation"
-}
-
-// commitSubjects returns the first line of each commit body (up to limit),
-// skipping the "---commit---" separator emitted by CommitBodies. Order is
-// preserved (git log shows newest first by default).
-func commitSubjects(bodies string, limit int) []string {
-	if bodies == "" || limit <= 0 {
-		return nil
-	}
-	var subjects []string
-	var currentStarted bool
-	for _, line := range strings.Split(bodies, "\n") {
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "---commit---" {
-			currentStarted = false
-			continue
-		}
-		if currentStarted || trimmed == "" {
-			continue
-		}
-		// Skip the Agentic signature trailer lines if they surface first.
-		if strings.HasPrefix(trimmed, "Agentic-Signature:") || strings.HasPrefix(trimmed, "Co-authored-by:") {
-			continue
-		}
-		subjects = append(subjects, trimmed)
-		currentStarted = true
-		if len(subjects) >= limit {
-			break
-		}
-	}
-	return subjects
-}
-
 func truncateTitle(s string, n int) string {
 	runes := []rune(s)
 	if len(runes) <= n {
@@ -186,32 +117,27 @@ func truncateTitle(s string, n int) string {
 }
 
 // RunDescriptionGeneration runs the bounded utility helper to generate a PR
-// title/body from a structured PRContext. On any helper error, the
-// deterministic fallback is used and the error is returned for observability.
+// title/body from a structured PRContext. It is tool-free and returns errors
+// without synthesizing replacement content.
 func (pr *PhaseRunner) RunDescriptionGeneration(ctx context.Context, featureID, model string, prCtx PRContext) (title, body string, err error) {
 	result, runErr := pr.RunUtilitySession(ctx, UtilityRunConfig{
-		SessionID:   fmt.Sprintf("publish-description-%d", time.Now().UnixNano()),
-		FeatureID:   featureID,
-		Label:       "description generation",
-		Model:       model,
-		Prompt:      BuildPRDescriptionPrompt(prCtx),
-		Phase:       feature.PhasePublish,
-		RequireText: true,
+		SessionID:    fmt.Sprintf("publish-description-%d", time.Now().UnixNano()),
+		FeatureID:    featureID,
+		Label:        "description generation",
+		Model:        model,
+		Prompt:       BuildPRDescriptionPrompt(prCtx),
+		SystemPrompt: prDescriptionSystemPrompt,
+		Phase:        feature.PhasePublish,
+		PermHandler:  &prDescriptionPermissionHandler{},
+		RequireText:  true,
 	})
 	if runErr != nil {
-		title, body = BuildPRDescriptionFallback(prCtx)
-		return title, body, fmt.Errorf("generating description: %w", runErr)
+		return "", "", fmt.Errorf("generating description: %w", runErr)
 	}
 
 	title, body = ParsePRDescription(result.Text)
 	if title == "" || body == "" {
-		fbTitle, fbBody := BuildPRDescriptionFallback(prCtx)
-		if title == "" {
-			title = fbTitle
-		}
-		if body == "" {
-			body = fbBody
-		}
+		return "", "", fmt.Errorf("generating description: model returned an incomplete title or body")
 	}
 	return title, body, nil
 }

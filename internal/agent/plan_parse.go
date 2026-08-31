@@ -23,7 +23,7 @@ import (
 // PlanTask is one `### Task N:` block parsed out of a phase-plan markdown.
 // Heading is the literal heading line (e.g. "### Task 1: Wire the helper").
 // Repos contains every `**Repo:** <name>` tag in the task. Valid multi-repo
-// phase plans and all refactor plans declare exactly one; retaining every tag
+// phase plans declare exactly one; retaining every tag
 // lets validation reject ambiguous ownership instead of silently choosing one.
 // Body is the slice of source lines that fall under this task — including
 // the Repo tag line, blanks, and trailing content — up to (but not

@@ -28,7 +28,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 )
 
-// Managed OpenCode session configuration (Phase 4).
+// Managed OpenCode session configuration.
 //
 // OpenCode merges config sources (global, project, OPENCODE_CONFIG file, and the
 // inline OPENCODE_CONFIG_CONTENT) rather than replacing them, and its ACP surface

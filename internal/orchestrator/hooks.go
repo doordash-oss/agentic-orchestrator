@@ -146,8 +146,7 @@ func BuildHooks(obs *observe.Observer, permStore *permission.Store, fs ports.Fea
 				return
 			}
 			// Per-feature fan-out: build alive/total counts per feature, then
-			// emit one recovery.scanned event per feature. Mirrors the
-			// pre-Phase-8 TUI helper (app.go:emitRecoveryScanned).
+			// emit one recovery.scanned event per feature.
 			type featureCount struct {
 				total int
 				alive int

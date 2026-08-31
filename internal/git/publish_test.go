@@ -15,51 +15,117 @@
 package git
 
 import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
 )
 
-func TestCreatePR_DraftFlag_IncludesArg(t *testing.T) {
-	args := buildCreatePRArgs("feature/x", "title", "body", true)
-	for _, a := range args {
-		if a == "--draft" {
-			return
-		}
+func TestLockContentionRecognizesGitLockDiagnostics(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		msg  string
+		path string
+		ok   bool
+	}{
+		{name: "index file exists", msg: "fatal: Unable to create '/repo/.git/index.lock': File exists.", path: "/repo/.git/index.lock", ok: true},
+		{name: "ref cannot lock", msg: "fatal: cannot lock ref 'refs/heads/main': Unable to create '/repo/.git/refs/heads/main.lock': File exists.", path: "/repo/.git/refs/heads/main.lock", ok: true},
+		{name: "packed refs could not lock", msg: "error: could not lock config file '/repo/.git/packed-refs.lock': File exists", path: "/repo/.git/packed-refs.lock", ok: true},
+		{name: "case insensitive", msg: "FATAL: UNABLE TO CREATE '/repo/.git/HEAD.LOCK': FILE EXISTS", path: "/repo/.git/HEAD.LOCK", ok: true},
+		{name: "unquoted retry only", msg: "cannot lock shallow.lock: file exists", ok: true},
+		{name: "unrelated failure", msg: "fatal: not a git repository", ok: false},
 	}
-	t.Errorf("expected --draft in args %v", args)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			path, ok := lockContention([]byte(tt.msg))
+			if ok != tt.ok || path != tt.path {
+				t.Fatalf("lockContention(%q) = (%q, %v), want (%q, %v)", tt.msg, path, ok, tt.path, tt.ok)
+			}
+		})
+	}
 }
 
-func TestCreatePR_NoDraftFlag_ExcludesArg(t *testing.T) {
-	args := buildCreatePRArgs("feature/x", "title", "body", false)
-	for _, a := range args {
-		if a == "--draft" {
-			t.Errorf("unexpected --draft in args %v", args)
-		}
+func TestResetToCommitClearsStaleIndexLock(t *testing.T) {
+	repo := testutil.InitGitRepo(t)
+	anchor := testutil.CommitFile(t, repo, "anchor.txt", "anchor\n", "anchor")
+	testutil.CommitFile(t, repo, "later.txt", "later\n", "later")
+	lockPath := strings.TrimSpace(string(mustGitOutput(t, repo, "rev-parse", "--git-path", "index.lock")))
+	if !filepath.IsAbs(lockPath) {
+		lockPath = filepath.Join(repo, lockPath)
+	}
+	if err := os.WriteFile(lockPath, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-time.Hour)
+	if err := os.Chtimes(lockPath, old, old); err != nil {
+		t.Fatal(err)
+	}
+
+	mgr := NewWorktreeManager(t.TempDir())
+	if err := mgr.ResetToCommit(repo, anchor); err != nil {
+		t.Fatalf("ResetToCommit() error = %v, want stale lock recovered", err)
+	}
+	if _, err := os.Stat(lockPath); !os.IsNotExist(err) {
+		t.Fatalf("stale lock still exists, stat error = %v", err)
 	}
 }
 
-func TestCreatePR_DraftFlag_WithBaseBranch(t *testing.T) {
-	args := buildCreatePRArgs("feature/x", "title", "body", true, "main")
-	hasDraft, hasBase := false, false
-	for _, a := range args {
-		if a == "--draft" {
-			hasDraft = true
-		}
-		if a == "--base" {
-			hasBase = true
-		}
+func TestResetToCommitPreservesFreshIndexLockAndReturnsTypedError(t *testing.T) {
+	repo := testutil.InitGitRepo(t)
+	anchor := testutil.CommitFile(t, repo, "anchor.txt", "anchor\n", "anchor")
+	testutil.CommitFile(t, repo, "later.txt", "later\n", "later")
+	lockPath := strings.TrimSpace(string(mustGitOutput(t, repo, "rev-parse", "--git-path", "index.lock")))
+	if !filepath.IsAbs(lockPath) {
+		lockPath = filepath.Join(repo, lockPath)
 	}
-	if !hasDraft {
-		t.Errorf("expected --draft in args %v", args)
+	if err := os.WriteFile(lockPath, nil, 0o644); err != nil {
+		t.Fatal(err)
 	}
-	if !hasBase {
-		t.Errorf("expected --base in args %v", args)
+
+	previousWindow, previousInitial, previousMax := indexLockRetryWindow, indexLockRetryInitialDelay, indexLockRetryMaxDelay
+	indexLockRetryWindow = 30 * time.Millisecond
+	indexLockRetryInitialDelay = time.Millisecond
+	indexLockRetryMaxDelay = 5 * time.Millisecond
+	t.Cleanup(func() {
+		indexLockRetryWindow = previousWindow
+		indexLockRetryInitialDelay = previousInitial
+		indexLockRetryMaxDelay = previousMax
+	})
+
+	err := NewWorktreeManager(t.TempDir()).ResetToCommit(repo, anchor)
+	var lockErr *GitLockContentionError
+	if !errors.As(err, &lockErr) {
+		t.Fatalf("ResetToCommit() error = %v, want *GitLockContentionError", err)
 	}
+	wantInfo, wantErr := os.Stat(lockPath)
+	gotInfo, gotErr := os.Stat(lockErr.LockPath)
+	if wantErr != nil || gotErr != nil || !os.SameFile(wantInfo, gotInfo) {
+		t.Fatalf("lock path = %q, want same file as %q (stat errors %v, %v)", lockErr.LockPath, lockPath, gotErr, wantErr)
+	}
+	if _, err := os.Stat(lockPath); err != nil {
+		t.Fatalf("fresh lock was removed: %v", err)
+	}
+}
+
+func mustGitOutput(t *testing.T, dir string, args ...string) []byte {
+	t.Helper()
+	out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
+	}
+	return out
 }
 
 func TestDiffSummary_MixedChanges(t *testing.T) {
@@ -103,7 +169,7 @@ func TestDiffSummary_NoChanges(t *testing.T) {
 	}
 }
 
-func TestWorkingTreeDiffPreviews_UpdateAndAdd(t *testing.T) {
+func TestBranchDiffPreviews_UpdateAndAdd(t *testing.T) {
 	t.Parallel()
 
 	repo := testutil.InitGitRepo(t)
@@ -116,9 +182,9 @@ func TestWorkingTreeDiffPreviews_UpdateAndAdd(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	previews, err := WorkingTreeDiffPreviews(repo)
+	previews, err := BranchDiffPreviews(repo, "main")
 	if err != nil {
-		t.Fatalf("WorkingTreeDiffPreviews: %v", err)
+		t.Fatalf("BranchDiffPreviews: %v", err)
 	}
 	if len(previews) != 2 {
 		t.Fatalf("len(previews) = %d, want 2", len(previews))
@@ -129,24 +195,82 @@ func TestWorkingTreeDiffPreviews_UpdateAndAdd(t *testing.T) {
 	if previews[1].Path != "new.txt" || previews[1].Operation != "add" {
 		t.Errorf("preview[1] = %+v, want new.txt add", previews[1])
 	}
-	if previews[1].AddedLines == 0 {
-		t.Errorf("new.txt AddedLines = %d, want > 0", previews[1].AddedLines)
+	if previews[1].AddedLines != 2 {
+		t.Errorf("new.txt AddedLines = %d, want 2", previews[1].AddedLines)
 	}
 	if !strings.Contains(previews[1].Patch, "+hello") {
 		t.Errorf("new.txt patch = %q, want added content", previews[1].Patch)
 	}
 }
 
-func TestWorkingTreeDiffPreviews_DeleteAndRename(t *testing.T) {
+func TestBranchDiffPreviews_CommittedFeatureChange(t *testing.T) {
+	t.Parallel()
+
+	repo := testutil.InitGitRepo(t)
+	testutil.CreateBranch(t, repo, "feature/test")
+	testutil.CommitFile(t, repo, "README.md", "# Feature change\n", "feature change on feature branch")
+
+	previews, err := BranchDiffPreviews(repo, "main")
+	if err != nil {
+		t.Fatalf("BranchDiffPreviews: %v", err)
+	}
+	if len(previews) != 1 {
+		t.Fatalf("len(previews) = %d, want 1 (committed feature change vs main)", len(previews))
+	}
+	if previews[0].Path != "README.md" {
+		t.Fatalf("preview[0].Path = %q, want README.md", previews[0].Path)
+	}
+	if previews[0].Operation != "update" {
+		t.Errorf("preview[0].Operation = %q, want update (modified vs main)", previews[0].Operation)
+	}
+	if previews[0].AddedLines == 0 {
+		t.Errorf("README.md AddedLines = %d, want > 0", previews[0].AddedLines)
+	}
+}
+
+func TestBranchDiffPreviews_UsesRemoteTrackingBaseWhenLocalBaseIsStale(t *testing.T) {
+	t.Parallel()
+
+	repo := testutil.InitGitRepo(t)
+	remote := testutil.InitBareRemote(t, repo)
+
+	testutil.CreateBranch(t, repo, "upstream-main")
+	testutil.CommitFile(t, repo, "upstream.txt", "already merged\n", "advance remote main")
+	testutil.SimulatePush(t, repo, remote, "upstream-main", "main")
+
+	runGit(t, repo, "checkout", "-b", "feature/test", "origin/main")
+	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("# Feature\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "feature.txt"), []byte("feature only\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repo, "add", "README.md", "feature.txt")
+
+	previews, err := BranchDiffPreviews(repo, "main")
+	if err != nil {
+		t.Fatalf("BranchDiffPreviews: %v", err)
+	}
+	if len(previews) != 2 {
+		t.Fatalf("len(previews) = %d, want 2 feature changes: %+v", len(previews), previews)
+	}
+	for _, preview := range previews {
+		if preview.Path == "upstream.txt" {
+			t.Fatalf("previews include change already present on origin/main: %+v", previews)
+		}
+	}
+}
+
+func TestBranchDiffPreviews_DeleteAndRename(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping rename/delete diff preview extended regression in short mode")
 	}
 	t.Parallel()
 
 	repo := testutil.InitGitRepo(t)
+	testutil.CommitFile(t, repo, "delete.txt", "gone\n", "add delete target on main")
+	testutil.CommitFile(t, repo, "rename.txt", "same\n", "add rename target on main")
 	testutil.CreateBranch(t, repo, "feature/test")
-	testutil.CommitFile(t, repo, "delete.txt", "gone\n", "add delete target")
-	testutil.CommitFile(t, repo, "rename.txt", "same\n", "add rename target")
 
 	if err := os.Remove(filepath.Join(repo, "delete.txt")); err != nil {
 		t.Fatal(err)
@@ -155,10 +279,11 @@ func TestWorkingTreeDiffPreviews_DeleteAndRename(t *testing.T) {
 	if out, err := mv.CombinedOutput(); err != nil {
 		t.Fatalf("git mv: %s: %v", string(out), err)
 	}
+	runGit(t, repo, "add", "delete.txt", "renamed.txt")
 
-	previews, err := WorkingTreeDiffPreviews(repo)
+	previews, err := BranchDiffPreviews(repo, "main")
 	if err != nil {
-		t.Fatalf("WorkingTreeDiffPreviews: %v", err)
+		t.Fatalf("BranchDiffPreviews: %v", err)
 	}
 
 	var sawDelete, sawRename bool
@@ -228,7 +353,7 @@ func TestSingleFileDiffPreviewVariants(t *testing.T) {
 			repo := testutil.InitGitRepo(t)
 			tt.setup(t, repo)
 
-			preview, err := SingleFileDiffPreview(repo, tt.path)
+			preview, err := SingleFileDiffPreview(repo, "main", tt.path)
 			if err != nil {
 				t.Fatalf("SingleFileDiffPreview(%q) error = %v", tt.path, err)
 			}
@@ -274,14 +399,6 @@ func TestCommitAll(t *testing.T) {
 	message := "test commit"
 	if err := CommitAll(repo, message); err != nil {
 		t.Fatalf("CommitAll() error = %v", err)
-	}
-
-	log, err := CommitLog(repo, "HEAD~1")
-	if err != nil {
-		t.Fatalf("CommitLog() error = %v", err)
-	}
-	if !strings.Contains(log, message) {
-		t.Errorf("CommitLog() = %q, want message %q", log, message)
 	}
 
 	fullMsg := exec.Command("git", "-C", repo, "log", "-1", "--format=%B")
@@ -353,23 +470,41 @@ func TestCommitAllAndGetHead_NoChangesReturnsExistingHead(t *testing.T) {
 	}
 }
 
-func TestCommitLog(t *testing.T) {
+func TestCommitAllAndGetHeadRetriesTransientIndexLock(t *testing.T) {
 	t.Parallel()
 
 	repo := testutil.InitGitRepo(t)
-	testutil.CreateBranch(t, repo, "feature/test")
-	testutil.CommitFile(t, repo, "a.txt", "a\n", "commit A")
-	testutil.CommitFile(t, repo, "b.txt", "b\n", "commit B")
-
-	log, err := CommitLog(repo, "main")
+	if err := os.WriteFile(filepath.Join(repo, "file.txt"), []byte("content\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	lockOutput, err := exec.Command("git", "-C", repo, "rev-parse", "--git-path", "index.lock").CombinedOutput()
 	if err != nil {
-		t.Fatalf("CommitLog: %v", err)
+		t.Fatalf("resolve index lock path: %v\n%s", err, lockOutput)
 	}
-	if !strings.Contains(log, "commit A") {
-		t.Error("expected 'commit A' in log")
+	lockPath := strings.TrimSpace(string(lockOutput))
+	if !filepath.IsAbs(lockPath) {
+		lockPath = filepath.Join(repo, lockPath)
 	}
-	if !strings.Contains(log, "commit B") {
-		t.Error("expected 'commit B' in log")
+	if err := os.WriteFile(lockPath, []byte("transient test lock\n"), 0o644); err != nil {
+		t.Fatalf("create transient index lock: %v", err)
+	}
+
+	lockReleased := make(chan struct{})
+	go func() {
+		defer close(lockReleased)
+		timer := time.NewTimer(75 * time.Millisecond)
+		defer timer.Stop()
+		<-timer.C
+		_ = os.Remove(lockPath)
+	}()
+	t.Cleanup(func() { <-lockReleased })
+
+	sha, err := CommitAllAndGetHead(repo, "commit after transient lock")
+	if err != nil {
+		t.Fatalf("CommitAllAndGetHead() error = %v, want transient index lock retried", err)
+	}
+	if len(sha) != 40 {
+		t.Fatalf("CommitAllAndGetHead() SHA = %q, want full SHA", sha)
 	}
 }
 
@@ -388,66 +523,38 @@ func TestHasUncommittedChanges(t *testing.T) {
 	}
 }
 
-func TestHasLocalCommits(t *testing.T) {
-	t.Parallel()
+func TestCreatePRUsesOriginRemoteAndDraftFlag(t *testing.T) {
+	repo, _ := testutil.InitPublishReadyGitRepo(t)
+	runGit(t, repo, "remote", "set-url", "origin", "https://github.com/acme/widgets.git")
 
-	repo := testutil.InitGitRepo(t)
-	if HasLocalCommits(repo) {
-		t.Error("HasLocalCommits() = true, want false when no upstream is configured")
-	}
-	testutil.InitBareRemote(t, repo)
-	if HasLocalCommits(repo) {
-		t.Error("HasLocalCommits() = true, want false when branch is up to date with upstream")
-	}
-	testutil.CommitFile(t, repo, "local.txt", "local\n", "local only commit")
-	if !HasLocalCommits(repo) {
-		t.Error("HasLocalCommits() = false, want true when local branch is ahead of upstream")
-	}
-}
+	fake := testutil.InstallFakeGitHubAPI(t)
+	var gotHead string
+	var gotDraft bool
+	fake.Mux.HandleFunc("/repos/acme/widgets/pulls", func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var payload struct {
+			Head  string `json:"head"`
+			Draft bool   `json:"draft"`
+		}
+		if err := json.Unmarshal(body, &payload); err != nil {
+			t.Fatalf("decoding request body: %v", err)
+		}
+		gotHead, gotDraft = payload.Head, payload.Draft
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"html_url":"https://github.com/acme/widgets/pull/9"}`)
+	})
 
-func TestExtractExistingPRURL(t *testing.T) {
-	tests := []struct {
-		name   string
-		output string
-		want   string
-	}{
-		{
-			name:   "standard already exists message",
-			output: `a pull request for branch "feature/foo" into branch "master" already exists: https://github.com/org/repo/pull/116`,
-			want:   "https://github.com/org/repo/pull/116",
-		},
-		{
-			name:   "multiline output",
-			output: "some preamble\na pull request for branch \"feature/bar\" into branch \"main\" already exists:\nhttps://github.com/org/repo/pull/42\n",
-			want:   "https://github.com/org/repo/pull/42",
-		},
-		{
-			name:   "no match - different error",
-			output: "could not connect to GitHub",
-			want:   "",
-		},
-		{
-			name:   "already exists but no URL",
-			output: `a pull request already exists but no link`,
-			want:   "",
-		},
-		{
-			name:   "already exists with non-PR URL",
-			output: `something already exists: https://github.com/org/repo/issues/5`,
-			want:   "",
-		},
-		{
-			name:   "empty output",
-			output: "",
-			want:   "",
-		},
+	prURL, err := CreatePR(repo, "feature/x", "title", "body", true, "main")
+	if err != nil {
+		t.Fatalf("CreatePR() error = %v", err)
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := extractExistingPRURL(tt.output)
-			if got != tt.want {
-				t.Errorf("extractExistingPRURL() = %q, want %q", got, tt.want)
-			}
-		})
+	if prURL != "https://github.com/acme/widgets/pull/9" {
+		t.Errorf("CreatePR() = %q, want the created PR URL", prURL)
+	}
+	if gotHead != "feature/x" {
+		t.Errorf("request head = %q, want feature/x", gotHead)
+	}
+	if !gotDraft {
+		t.Error("request draft = false, want true")
 	}
 }

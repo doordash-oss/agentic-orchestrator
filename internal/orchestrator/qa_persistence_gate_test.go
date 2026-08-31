@@ -24,7 +24,6 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
-	"github.com/doordash-oss/agentic-orchestrator/internal/session"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
 )
 
@@ -89,7 +88,7 @@ func newGateLifecycle(f *feature.Feature) *mocks.MockFeatureLifecycle {
 // realistic input.
 func sessionManagerWithQALog(sessionID string) *mocks.MockSessionManager {
 	sm := mocks.NewMockSessionManager()
-	sm.GetSessionFn = func(id string) session.SessionView {
+	sm.GetSessionFn = func(id string) ports.SessionView {
 		if id != sessionID {
 			return nil
 		}
@@ -157,9 +156,6 @@ func TestOrchestrator_OnArtifactPhaseCompleted_QAWritesForInteractivePlanningPha
 			phaseDir := filepath.Join(agent.ActiveRunDir(tmpStateDir, f), tc.phaseKey)
 			if err := os.MkdirAll(phaseDir, 0o755); err != nil {
 				t.Fatalf("mkdir phaseDir: %v", err)
-			}
-			if err := os.WriteFile(filepath.Join(phaseDir, agent.PhaseCompleteFile), nil, 0o644); err != nil {
-				t.Fatalf("write phase_complete: %v", err)
 			}
 			// Drop a stand-in artifact so contract validation doesn't trip the
 			// onArtifactPhaseCompleted control flow.
@@ -253,9 +249,6 @@ func TestInquirePhase_WritesHarnessOwnedQAFile(t *testing.T) {
 	if err := os.WriteFile(artifactPath, []byte("# inquire\n"), 0o644); err != nil {
 		t.Fatalf("write artifact: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(phaseDir, agent.PhaseCompleteFile), nil, 0o644); err != nil {
-		t.Fatalf("write phase_complete: %v", err)
-	}
 	qaPath := filepath.Join(phaseDir, "qa-answers.md")
 	if err := os.WriteFile(qaPath, []byte(sampleAgentAuthoredQA), 0o644); err != nil {
 		t.Fatalf("pre-write qa-answers.md: %v", err)
@@ -284,7 +277,7 @@ func TestInquirePhase_WritesHarnessOwnedQAFile(t *testing.T) {
 		t.Errorf("qa-answers.md was not written from session QALog.\n--- got ---\n%s\n--- want ---\n%s", got, sampleHarnessOwnedQA)
 	}
 
-	paths := o.collectQAFilePaths(f, f.RefactorPrefix())
+	paths := o.collectQAFilePaths(f)
 	found := false
 	for _, p := range paths {
 		if p == qaPath {
@@ -324,9 +317,6 @@ func TestInquirePhase_AutoPickAnnotationPreserved(t *testing.T) {
 	artifactPath := filepath.Join(phaseDir, "inquire.md")
 	if err := os.WriteFile(artifactPath, []byte("# inquire\n"), 0o644); err != nil {
 		t.Fatalf("write artifact: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(phaseDir, agent.PhaseCompleteFile), nil, 0o644); err != nil {
-		t.Fatalf("write phase_complete: %v", err)
 	}
 	qaPath := filepath.Join(phaseDir, "qa-answers.md")
 	if err := os.WriteFile(qaPath, []byte(sampleAgentAuthoredQA), 0o644); err != nil {
@@ -391,10 +381,6 @@ func TestInquirePhase_NoExistingQAFile_WritesHarnessOwnedFile(t *testing.T) {
 	if err := os.WriteFile(artifactPath, []byte("# inquire\n"), 0o644); err != nil {
 		t.Fatalf("write artifact: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(phaseDir, agent.PhaseCompleteFile), nil, 0o644); err != nil {
-		t.Fatalf("write phase_complete: %v", err)
-	}
-
 	lc := newGateLifecycle(f)
 	fs := newGateFeatureStore(f)
 	sm := sessionManagerWithQALog("sess-1")
@@ -417,86 +403,6 @@ func TestInquirePhase_NoExistingQAFile_WritesHarnessOwnedFile(t *testing.T) {
 	}
 	if string(got) != sampleHarnessOwnedQA {
 		t.Errorf("qa-answers.md was not written from session QALog.\n--- got ---\n%s\n--- want ---\n%s", got, sampleHarnessOwnedQA)
-	}
-}
-
-// TestInquirePhase_RefPrefix_WritesQAFile asserts the gate honors the
-// refactor-prefix path layout when writing the harness-owned file.
-func TestInquirePhase_RefPrefix_WritesQAFile(t *testing.T) {
-	tmpStateDir := t.TempDir()
-	featureID := "feat-refprefix"
-	f := &feature.Feature{
-		ID:           featureID,
-		ActiveRun:    1,
-		RunCount:     1,
-		Status:       feature.StatusInquiring,
-		CurrentPhase: feature.PhaseInquire,
-		Pipeline:     feature.PipelineLarge,
-		// RefactorCount + RefactorPrompt together drive RefactorPrefix();
-		// any non-empty prefix exercises the prefixed-path branch.
-		RefactorPrompt: "polish",
-		Checkpoints: feature.Checkpoints{
-			InquiryReview:   true,
-			ResearchReview:  true,
-			DesignReview:    true,
-			RoadmapReview:   true,
-			PhasePlanReview: true,
-		},
-	}
-	f.SetRefactorCount(1)
-	prefix := f.RefactorPrefix()
-	if prefix == "" {
-		t.Fatalf("expected non-empty RefactorPrefix() for refactor count = 1")
-	}
-	phaseDir := filepath.Join(agent.ActiveRunDir(tmpStateDir, f), prefix, "inquire")
-	if err := os.MkdirAll(phaseDir, 0o755); err != nil {
-		t.Fatalf("mkdir refactor phase dir: %v", err)
-	}
-	artifactPath := filepath.Join(phaseDir, "inquire.md")
-	if err := os.WriteFile(artifactPath, []byte("# inquire\n"), 0o644); err != nil {
-		t.Fatalf("write artifact: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(phaseDir, agent.PhaseCompleteFile), nil, 0o644); err != nil {
-		t.Fatalf("write phase_complete: %v", err)
-	}
-	qaPath := filepath.Join(phaseDir, "qa-answers.md")
-	if err := os.WriteFile(qaPath, []byte(sampleAgentAuthoredQA), 0o644); err != nil {
-		t.Fatalf("pre-write qa: %v", err)
-	}
-
-	lc := newGateLifecycle(f)
-	fs := newGateFeatureStore(f)
-	sm := sessionManagerWithQALog("sess-1")
-	pr := &agent.PhaseRunner{StateDir: tmpStateDir}
-
-	o := New(Deps{Lifecycle: lc, Store: fs, Sessions: sm, PhaseRunner: pr}, Hooks{})
-
-	if err := o.HandlePhaseCompletion(featureID, PhaseCompletionInput{
-		Phase:     feature.PhaseInquire,
-		SessionID: "sess-1",
-		Success:   true,
-	}); err != nil {
-		t.Fatalf("HandlePhaseCompletion: %v", err)
-	}
-
-	got, err := os.ReadFile(qaPath)
-	if err != nil {
-		t.Fatalf("read qa file under refactor prefix: %v", err)
-	}
-	if string(got) != sampleHarnessOwnedQA {
-		t.Errorf("refactor-prefixed qa-answers.md was not written from session QALog:\n got:\n%s\n want:\n%s", got, sampleHarnessOwnedQA)
-	}
-
-	paths := o.collectQAFilePaths(f, prefix)
-	found := false
-	for _, p := range paths {
-		if p == qaPath {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Errorf("collectQAFilePaths(prefix=%q) did not include refactor-prefixed inquire path %q; got %v", prefix, qaPath, paths)
 	}
 }
 

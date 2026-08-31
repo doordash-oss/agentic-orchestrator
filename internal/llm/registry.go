@@ -183,6 +183,11 @@ func (r *Registry) ResolveModel(model string) (LLMProvider, string, error) {
 				if canonical, ok := canonicalModelForProvider(p, bareModel); ok {
 					return p, canonical, nil
 				}
+				if stripped := stripContextAnnotation(bareModel); stripped != bareModel {
+					if canonical, ok := canonicalModelForProvider(p, stripped); ok {
+						return p, canonical, nil
+					}
+				}
 				return p, bareModel, nil
 			}
 		}
@@ -200,6 +205,11 @@ func (r *Registry) ResolveModel(model string) (LLMProvider, string, error) {
 	// Bare model name — search providers in registration order via MatchesModel.
 	if p, canonical, ok := r.resolveBareLocked(model); ok {
 		return p, canonical, nil
+	}
+	if stripped := stripContextAnnotation(model); stripped != model {
+		if p, canonical, ok := r.resolveBareLocked(stripped); ok {
+			return p, canonical, nil
+		}
 	}
 	return nil, "", fmt.Errorf("no provider found for model %q", model)
 }
@@ -251,35 +261,27 @@ func canonicalModelForProvider(p LLMProvider, model string) (string, bool) {
 	return "", false
 }
 
-// DefaultModels computes the recommended model for each phase role from the
-// discovered model catalogs. When multiple providers are detected, model names
-// are returned in "provider:model" format; with a single detected provider,
-// bare names are used.
-func (r *Registry) DefaultModels() map[PhaseRole]string {
-	mc := r.CatalogDefaultModels()
-	result := make(map[PhaseRole]string, 7)
-	if mc.Inquiry != "" {
-		result[PhaseInquiry] = mc.Inquiry
+func stripContextAnnotation(model string) string {
+	open := strings.LastIndexByte(model, '[')
+	if open <= 0 || !strings.HasSuffix(model, "]") {
+		return model
 	}
-	if mc.Research != "" {
-		result[PhaseResearch] = mc.Research
+	context := model[open+1 : len(model)-1]
+	if context == "" {
+		return model
 	}
-	if mc.Planning != "" {
-		result[PhasePlanning] = mc.Planning
+	for _, r := range context {
+		if r >= '0' && r <= '9' {
+			continue
+		}
+		switch r {
+		case 'k', 'K', 'm', 'M':
+			continue
+		default:
+			return model
+		}
 	}
-	if mc.Implementation != "" {
-		result[PhaseImplementation] = mc.Implementation
-	}
-	if mc.Review != "" {
-		result[PhaseReview] = mc.Review
-	}
-	if mc.Utilities != "" {
-		result[PhaseChat] = mc.Utilities
-	}
-	if mc.KBBuild != "" {
-		result[PhaseKBBuild] = mc.KBBuild
-	}
-	return result
+	return strings.TrimSpace(model[:open])
 }
 
 // --- Catalog-based methods ---
@@ -302,10 +304,10 @@ func catalogForProvider(p LLMProvider) []ModelInfo {
 	return infos
 }
 
-// AllModels returns all ModelInfo from all detected providers' catalogs.
+// allModels returns all ModelInfo from all detected providers' catalogs.
 // Providers not implementing CatalogProvider or with empty catalogs contribute
 // synthetic ModelInfo entries from AvailableModels() with zero metadata.
-func (r *Registry) AllModels() []ModelInfo {
+func (r *Registry) allModels() []ModelInfo {
 	detected := r.DetectedProviders()
 	var all []ModelInfo
 	for _, p := range detected {
@@ -333,49 +335,15 @@ func (r *Registry) ModelsForProvider(name string) []ModelInfo {
 func (r *Registry) MostCapableModel(providerHint string) string {
 	if providerHint != "" {
 		if models := r.ModelsForProvider(providerHint); len(models) > 0 {
-			if m, ok := MostCapableFrom(models); ok {
+			if m, ok := mostCapableFrom(models); ok {
 				return m.ID
 			}
 		}
 	}
-	if m, ok := MostCapableFrom(r.AllModels()); ok {
+	if m, ok := mostCapableFrom(r.allModels()); ok {
 		return m.ID
 	}
 	// Final fallback: first available model
-	if models := r.AvailableModels(); len(models) > 0 {
-		return models[0]
-	}
-	return ""
-}
-
-// CheapestModel returns the ID of the cheapest model across all detected providers.
-func (r *Registry) CheapestModel() string {
-	if m, ok := CheapestFrom(r.AllModels()); ok {
-		return m.ID
-	}
-	// Fallback: last available model
-	if models := r.AvailableModels(); len(models) > 0 {
-		return models[len(models)-1]
-	}
-	return ""
-}
-
-// BalancedModel returns the ID of a balanced model across all detected providers.
-func (r *Registry) BalancedModel() string {
-	if m, ok := BalancedFrom(r.AllModels()); ok {
-		return m.ID
-	}
-	if models := r.AvailableModels(); len(models) > 0 {
-		return models[0]
-	}
-	return ""
-}
-
-// LargestContextModel returns the ID of the model with the largest context window.
-func (r *Registry) LargestContextModel() string {
-	if m, ok := LargestContextFrom(r.AllModels()); ok {
-		return m.ID
-	}
 	if models := r.AvailableModels(); len(models) > 0 {
 		return models[0]
 	}
@@ -435,9 +403,9 @@ func selectRoleModel(models []ModelInfo, role PhaseRole, provider string) (Model
 	}
 	category := categoryForRole[role]
 	if category == "balanced" {
-		return BalancedFrom(models)
+		return balancedFrom(models)
 	}
-	return MostCapableFrom(models)
+	return mostCapableFrom(models)
 }
 
 func formatCatalogDefault(provider string, model ModelInfo, multi bool) string {

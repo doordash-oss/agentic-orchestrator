@@ -39,6 +39,16 @@ type Options struct {
 	StartMode    string
 	Owner        instancelock.Owner
 	AuthToken    string
+	// ListenAddr overrides the TCP bind address (normalized via
+	// ResolveListenAddr). Empty keeps the default ephemeral 127.0.0.1 bind.
+	ListenAddr string
+	// RuntimePolicy overrides the declared runtime policy selected from the
+	// resolved listen address. Empty keeps the bind-driven selection. Only
+	// tests exercise this; production derives the policy from ListenAddr.
+	RuntimePolicy string
+	// Name is the resolved server display name surfaced in the startup
+	// line, health payload, and discovery record.
+	Name string
 	// AllowUnauthenticated is only for tests that intentionally exercise the
 	// server without discovery bootstrap. Production Start requires AuthToken.
 	AllowUnauthenticated bool
@@ -51,7 +61,19 @@ type Options struct {
 	Events               <-chan interface{}
 	DomainEvents         <-chan ports.Event
 	Mutations            MutationTarget
-	RequestShutdown      func()
+	// PersistProviderModelCatalog writes a successfully discovered provider
+	// catalog before the server installs it in memory. Nil keeps live refreshes
+	// in memory only.
+	PersistProviderModelCatalog func(llm.LLMProvider, []llm.ModelInfo) error
+	// InitGitRepository overrides the git-init implementation used by the
+	// workspace repository-initialization endpoint. Nil means the default
+	// git adapter (internal/git.InitRepository).
+	InitGitRepository func(path string) error
+	// Worktrees inspects parent worktrees so a dirty refactor entry can
+	// attach the same structured diagnostics the launch-time error carries.
+	// Nil is tolerated: the dirty_parent disabled reason then ships without
+	// a diagnostics target.
+	Worktrees feature.WorktreeOps
 }
 
 type HandlerOptions struct {
@@ -60,20 +82,31 @@ type HandlerOptions struct {
 	StartedAt    time.Time
 	Owner        instancelock.Owner
 	AuthToken    string
-	// DisableHostValidation turns off the loopback Host-header check. Host
-	// validation defaults to ON — only tests exercising something other
-	// than host validation itself should set this to true.
+	// Name is the resolved server display name reported by /api/v1/health.
+	Name string
+	// DisableHostValidation turns off the Host-header check. Host validation
+	// defaults to ON — only tests exercising something other than host
+	// validation itself should set this to true.
 	DisableHostValidation bool
-	Features              FeatureLister
-	FeatureStore          FeatureReader
-	Freshness             RepoFreshnessProvider
-	Config                *config.Config
-	Registry              *llm.Registry
-	Sessions              ports.SessionManager
-	Events                <-chan interface{}
-	DomainEvents          <-chan ports.Event
-	Mutations             MutationTarget
-	RequestShutdown       func()
+	// RuntimePolicy is the server's declared runtime policy (loopback or
+	// network). Empty defaults to the loopback policy, which enforces the
+	// loopback-only Host-header rule.
+	RuntimePolicy               string
+	Features                    FeatureLister
+	FeatureStore                FeatureReader
+	Freshness                   RepoFreshnessProvider
+	Config                      *config.Config
+	Registry                    *llm.Registry
+	Sessions                    ports.SessionManager
+	Events                      <-chan interface{}
+	DomainEvents                <-chan ports.Event
+	Mutations                   MutationTarget
+	PersistProviderModelCatalog func(llm.LLMProvider, []llm.ModelInfo) error
+	// InitGitRepository overrides the git-init implementation used by the
+	// workspace repository-initialization endpoint. Nil means the default
+	// git adapter (internal/git.InitRepository).
+	InitGitRepository func(path string) error
+	Worktrees         feature.WorktreeOps
 }
 
 type FeatureLister interface {
@@ -85,18 +118,23 @@ type FeatureReader interface {
 	Load(id string) (*feature.Feature, error)
 	LoadRun(featureID string, runNumber int) (*feature.Run, error)
 	RunDir(featureID string, runNumber int) string
+	ListRuns(featureID string) ([]int, error)
 }
 
-type ErrorDTO = Error
+type RelationshipReader interface {
+	RelationshipChildren(parentID string) (*feature.RelationshipChildren, error)
+}
 
-// OwnerDTO is the public process-owner metadata safe to expose through REST and
-// discovery records.
-type OwnerDTO = Owner
+// BulkRelationshipReader resolves every parent's children in one store pass
+// so list-shaped endpoints avoid a per-parent directory rescan.
+type BulkRelationshipReader interface {
+	AllRelationshipChildren() (map[string]*feature.RelationshipChildren, error)
+}
 
-// OwnerDTOFromInstanceOwner drops local filesystem paths from lock owner
+// OwnerFromInstanceOwner drops local filesystem paths from lock owner
 // metadata before it crosses public API or discovery boundaries.
-func OwnerDTOFromInstanceOwner(owner instancelock.Owner) OwnerDTO {
-	return OwnerDTO{
+func OwnerFromInstanceOwner(owner instancelock.Owner) Owner {
+	return Owner{
 		PID:       owner.PID,
 		PGID:      owner.PGID,
 		StartedAt: owner.StartedAt,
@@ -104,98 +142,10 @@ func OwnerDTOFromInstanceOwner(owner instancelock.Owner) OwnerDTO {
 	}
 }
 
-type WarningDTO = Warning
-
-type FeatureDetailDTO = FeatureDetail
-
-type ActionDTO = Action
-
-type ActionScopeDTO = ActionScope
-
-type ActionInputDTO = ActionInput
-
-type ActionDisabledReasonDTO = ActionDisabledReason
-
-type RunSummaryDTO = RunSummary
-
-type SetupDTO = Setup
-
-type SetupTaskDTO = SetupTask
-
-type RepoStatusDTO = RepoStatus
-
-type CycleDTO = Cycle
-
-type TimingDTO = Timing
-
-type CostDTO = Cost
-
-type ReviewGateDTO = ReviewGate
-
-type FailureDTO = Failure
-
-type NeedInputGateDTO = NeedUserInputGate
-
-type NeedUserInputQuestionDTO = NeedUserInputQuestion
-
-type RecoveryItemDTO = RecoveryItem
-
 type RecoveryActionRequest struct {
 	SnapshotID string            `json:"snapshot_id"`
 	Actions    map[string]string `json:"actions"`
 }
-
-type ConfigRepoDTO = ConfigRepo
-
-type FeatureDefaultsDTO = FeatureDefaults
-
-type NotificationConfigDTO = NotificationConfig
-
-type ObservabilityDTO = Observability
-
-type FeatureConfigDTO = FeatureConfig
-
-type CheckpointsDTO = Checkpoints
-
-type PublishabilityDTO = Publishability
-
-type ModelDTO = Model
-
-type ControlRequestDTO = ControlRequest
-
-type PermissionRememberPreviewDTO = PermissionRememberPreview
-
-type AskUserQuestionDTO = AskUserQuestion
-
-type AskUserOptionDTO = AskUserOption
-
-type HelpQueueDTO = HelpQueue
-
-type ArtifactDTO = Artifact
-
-type ContextDTO = Context
-
-type SessionSummaryDTO = SessionSummary
-
-type SessionDetailDTO = SessionDetail
-
-type CursorDTO = Cursor
-
-type UsageDTO = Usage
-
-type TranscriptMessageDTO = TranscriptMessage
-
-type ToolCallDTO = ToolCall
-
-type TaskDTO = Task
-
-type FileChangeDTO = FileChange
-
-type ReviewCommentDTO = ReviewComment
-
-type SSEEventDTO = SSEEvent
-
-type ResourceDTO = Resource
 
 type DiscoveryRecord struct {
 	SchemaVersion int             `json:"schema_version"`
@@ -203,6 +153,7 @@ type DiscoveryRecord struct {
 	BaseURL       string          `json:"base_url"`
 	Epoch         string          `json:"epoch,omitempty"`
 	AuthToken     string          `json:"auth_token,omitempty"`
+	Name          string          `json:"name,omitempty"`
 	Runtime       RuntimeIdentity `json:"runtime"`
 	LaunchPolicy  LaunchPolicy    `json:"launch_policy"`
 	StartMode     string          `json:"start_mode"`
@@ -210,7 +161,7 @@ type DiscoveryRecord struct {
 	PGID          int             `json:"pgid,omitempty"`
 	StartedAt     time.Time       `json:"started_at"`
 	PublishedAt   time.Time       `json:"published_at"`
-	Owner         OwnerDTO        `json:"owner"`
+	Owner         Owner           `json:"owner"`
 }
 
 type DiscoveryDecision struct {

@@ -30,9 +30,8 @@ var roadmapCreatorRoleSpec = RoleSpec{
 	Required:     []feature.Phase{feature.PhaseDesign},
 	OutputRoots: []OutputRootSpec{
 		artifactDirOutputRoot("Shared roadmap artifact root. The roadmap markdown is written here across attempts."),
-		attemptDirOutputRoot("Active roadmap attempt directory. Debug prompts, attempt metadata, validator output, and phase_complete are written here."),
+		attemptDirOutputRoot("Active roadmap attempt directory. Debug prompts, attempt metadata, and validator output are written here; the harness records its completion receipt here after validation."),
 	},
-	MarkerRoot: "attempt_dir",
 	Artifacts: []RoleArtifactSpec{
 		roadmapMarkdownRoleArtifact(),
 		planAttemptMetaRoleArtifact(),
@@ -47,9 +46,14 @@ func RoadmapCreatorRoleSpec() RoleSpec {
 
 // RoadmapUserInput is the data passed to roadmap.user.tmpl.
 type RoadmapUserInput struct {
-	Name        string
-	Description string
-	Repos       []prompts.RepoView
+	Name         string
+	Description  string
+	ExitCriteria string
+	Repos        []prompts.RepoView
+
+	// RefactorPassForkPoint names a refactor child's fork-point commits
+	// ("repo @ sha"). Empty for top-level features.
+	RefactorPassForkPoint string
 
 	DesignArtifactPath   string
 	ResearchArtifactPath string

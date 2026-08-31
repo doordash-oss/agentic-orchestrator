@@ -1,0 +1,604 @@
+import { describe, expect, it, vi } from 'vitest';
+import { registerIpcHandlers, type IpcServices } from '../../src/main/ipcHandlers';
+import type { TrustedSender } from '../../src/main/security';
+import {
+  IPC_CHANNELS,
+  IPC_EVENTS,
+  defaultSettings,
+  type DiagnosticsSnapshot,
+  type SessionOutputEvent,
+  type UpdateState,
+} from '../../src/shared/ipc';
+
+const trusted: TrustedSender = {
+  webContentsIds: new Set([1]),
+  allowedOrigins: new Set(['file://']),
+};
+
+const goodEvent = {
+  sender: { id: 1 },
+  senderFrame: { url: 'file:///app/out/renderer/index.html' },
+};
+const foreignEvent = {
+  sender: { id: 99 },
+  senderFrame: { url: 'https://evil.example.com/' },
+};
+
+function emptyReadinessSnapshot() {
+  return {
+    ready: false,
+    providers: [],
+    models: { available: false },
+    configuration: { valid: true },
+    workspaceRoots: [],
+    repositories: [],
+    issues: [],
+  };
+}
+
+function updateState(): UpdateState {
+  return {
+    status: 'ready' as const,
+    currentVersion: '0.1.0',
+    targetVersion: '0.2.0',
+    packageFormat: 'macos' as const,
+    signatureStatus: 'verified' as const,
+    checkedAt: '2026-07-20T10:00:00.000Z',
+    nextCheckAt: '2026-07-20T16:00:00.000Z',
+    releaseNotesUrl: 'https://github.com/doordash-oss/agentic-orchestrator/releases/tag/v0.2.0',
+    message: 'A verified update is downloaded and ready to install.',
+  };
+}
+
+function diagnosticsSnapshot(): DiagnosticsSnapshot {
+  return {
+    retention: {
+      maxBytes: 25 * 1024 * 1024,
+      maxAgeDays: 7,
+      maxCrashRecords: 10,
+      currentBytes: 1024,
+      entryCount: 1,
+      crashCount: 0,
+    },
+    entries: [
+      {
+        id: 'evt-1',
+        time: '2026-07-20T10:00:00.000Z',
+        source: 'electron' as const,
+        level: 'info' as const,
+        message: 'Agentico desktop process started.',
+      },
+    ],
+    crashes: [],
+  };
+}
+
+function makeServices(): IpcServices {
+  return {
+    getConnectionStatus: vi.fn(() => ({
+      status: 'discovering' as const,
+      stage: 'discover' as const,
+      detail: 'Looking for a running Agentico runtime.',
+      ownership: 'none' as const,
+    })),
+    retryConnection: vi.fn(() => ({
+      status: 'resolving-runtime' as const,
+      stage: 'resolve-runtime' as const,
+      detail: 'Resolving the selected runtime.',
+      ownership: 'none' as const,
+    })),
+    restartConnection: vi.fn(() => ({
+      status: 'resolving-runtime' as const,
+      stage: 'resolve-runtime' as const,
+      detail: 'Restarting to apply the pending runtime change.',
+      ownership: 'none' as const,
+    })),
+    chooseConnectionServer: vi.fn(() => ({
+      status: 'resolving-runtime' as const,
+      stage: 'resolve-runtime' as const,
+      detail: 'Resolving the selected runtime.',
+      ownership: 'none' as const,
+    })),
+    switchConnectionServer: vi.fn(() => ({
+      status: 'resolving-runtime' as const,
+      stage: 'resolve-runtime' as const,
+      detail: 'Resolving the selected runtime.',
+      ownership: 'none' as const,
+    })),
+    listServers: vi.fn(() => ({ rows: [] })),
+    probeServers: vi.fn(() => ({ rows: [] })),
+    addRemoteServer: vi.fn(() => Promise.reject(new Error('unused'))),
+    removeServer: vi.fn(() => ({
+      status: 'idle' as const,
+      stage: 'resolve-runtime' as const,
+      detail: 'Reconnecting after the server was removed.',
+      ownership: 'none' as const,
+    })),
+    getServerTokenStatus: vi.fn(() => ({ status: 'local' as const })),
+    getSettings: vi.fn(() => defaultSettings()),
+    updateSettings: vi.fn((patch) => ({ ...defaultSettings(), ...patch })),
+    openSettingsWindow: vi.fn(() => ({ opened: true })),
+    getTheme: vi.fn(() => ({ preference: 'system' as const, resolved: 'dark' as const })),
+    setTheme: vi.fn((preference) => ({ preference, resolved: 'light' as const })),
+    getReadiness: vi.fn(() => Promise.resolve(emptyReadinessSnapshot())),
+    refreshReadiness: vi.fn(() => Promise.resolve(emptyReadinessSnapshot())),
+    pickWorkspaceDirectory: vi.fn(() => Promise.resolve({ path: null })),
+    addWorkspaceRoot: vi.fn(() => Promise.resolve(emptyReadinessSnapshot())),
+    removeWorkspaceRoot: vi.fn(() => Promise.resolve(emptyReadinessSnapshot())),
+    reorderWorkspaceRoots: vi.fn(() => Promise.resolve(emptyReadinessSnapshot())),
+    initRepository: vi.fn(() => Promise.resolve(emptyReadinessSnapshot())),
+    listRepositories: vi.fn(() => Promise.resolve([])),
+    listFeatures: vi.fn(() => Promise.resolve([])),
+    getFeature: vi.fn(() =>
+      Promise.resolve({
+        id: 'abcd1234ef567890',
+        name: 'Feature',
+        slug: 'feature',
+        status: 'Created',
+        currentPhase: 'Plan',
+        repos: [],
+        createdAt: '2026-07-14T10:00:00Z',
+        activeRun: 1,
+        automaticReview: {
+          mode: 'default' as const,
+          enabled: true,
+          source: 'global' as const,
+        },
+        reviewGate: {
+          reviewingGate: false,
+          reviewFixing: false,
+          validatingPlan: false,
+          validatorStatuses: {},
+        },
+        actions: [],
+      }),
+    ),
+    createFeature: vi.fn(() => Promise.resolve({ featureId: 'abcd1234ef567890' })),
+    dispatchFeatureSetup: vi.fn(() => Promise.resolve({ result: 'setup_started' })),
+    dispatchFeatureAction: vi.fn(() => Promise.reject(new Error('unused'))),
+    getAttention: vi.fn(() => Promise.resolve({ items: [] })),
+    answerPermission: vi.fn(() => Promise.resolve({ result: 'submitted' })),
+    answerQuestions: vi.fn(() => Promise.resolve({ result: 'submitted' })),
+    sendHelp: vi.fn(() => Promise.resolve({ result: 'submitted' })),
+    saveGateDraft: vi.fn(() => Promise.resolve({ result: 'drafted' })),
+    resolveGate: vi.fn(() => Promise.resolve({ result: 'resolved' })),
+    startChat: vi.fn(() => Promise.resolve({ sessionId: '__chat__', result: 'started' })),
+    endChat: vi.fn(() => Promise.resolve({ sessionId: '__chat__', result: 'ended' })),
+    listSessions: vi.fn(() => Promise.resolve([])),
+    getSession: vi.fn(() => Promise.reject(new Error('unused'))),
+    getSessionTranscript: vi.fn(() => Promise.reject(new Error('unused'))),
+    openSessionOutput: vi.fn(() => 'sub-unused'),
+    cancelSessionOutput: vi.fn(() => false),
+    getCreationDefaults: vi.fn(() =>
+      Promise.resolve({
+        repositories: [],
+        defaults: { models: [], effort: [], useCurrentBranch: false },
+      }),
+    ),
+    pickCreationFiles: vi.fn(() => Promise.resolve({ paths: [] })),
+    uploadCreationFiles: vi.fn(() => Promise.resolve({ results: [] })),
+    readClipboardImage: vi.fn(() => Promise.resolve({ paths: [] })),
+    searchCreationFiles: vi.fn((request) =>
+      Promise.resolve({
+        requestId: request.requestId,
+        files: [],
+        truncated: false,
+        cancelled: false,
+      }),
+    ),
+    cancelCreationFileSearch: vi.fn(() => false),
+    loadLocalReviewDraft: vi.fn(() => null),
+    saveLocalReviewDraft: vi.fn((request) => ({ ...request, savedAt: '2026-07-16T00:00:00.000Z' })),
+    discardLocalReviewDraft: vi.fn(() => false),
+    readReview: vi.fn(() => Promise.reject(new Error('unused'))),
+    openReview: vi.fn(() => Promise.reject(new Error('unused'))),
+    saveReview: vi.fn(() => Promise.reject(new Error('unused'))),
+    validateReview: vi.fn(() => Promise.reject(new Error('unused'))),
+    decideReview: vi.fn(() => Promise.reject(new Error('unused'))),
+    getFeatureConfig: vi.fn(() => Promise.reject(new Error('unused'))),
+    updateFeatureConfig: vi.fn(() => Promise.reject(new Error('unused'))),
+    getWorkspaceDefaults: vi.fn(() => Promise.reject(new Error('unused'))),
+    updateWorkspaceDefaults: vi.fn(() => Promise.reject(new Error('unused'))),
+    getModelCatalogue: vi.fn(() => Promise.reject(new Error('unused'))),
+    refreshProviderModels: vi.fn(() => Promise.reject(new Error('unused'))),
+    listRuns: vi.fn(() => Promise.reject(new Error('unused'))),
+    getRun: vi.fn(() => Promise.reject(new Error('unused'))),
+    listRunSessions: vi.fn(() => Promise.reject(new Error('unused'))),
+    getLivePreview: vi.fn(() => Promise.reject(new Error('unused'))),
+    listRunArtifacts: vi.fn(() => Promise.reject(new Error('unused'))),
+    listRunLogs: vi.fn(() => Promise.reject(new Error('unused'))),
+    getRunArtifactContent: vi.fn(() => Promise.reject(new Error('unused'))),
+    getRunLogContent: vi.fn(() => Promise.reject(new Error('unused'))),
+    getRewindPreview: vi.fn(() => Promise.reject(new Error('unused'))),
+    executeRewind: vi.fn(() => Promise.reject(new Error('unused'))),
+    launchRebaseChild: vi.fn(() => Promise.reject(new Error('unused'))),
+    launchRefactorChild: vi.fn(() => Promise.reject(new Error('unused'))),
+    discardRefactorChild: vi.fn(() => Promise.reject(new Error('unused'))),
+    deleteFeatureCascade: vi.fn(() => Promise.reject(new Error('unused'))),
+    fetchReviewFeedback: vi.fn(() => Promise.reject(new Error('unused'))),
+    updateReviewFeedbackSelection: vi.fn(() => Promise.reject(new Error('unused'))),
+    launchReviewFeedbackChild: vi.fn(() => Promise.reject(new Error('unused'))),
+    scanRecovery: vi.fn(() => Promise.reject(new Error('unused'))),
+    executeRecovery: vi.fn(() => Promise.reject(new Error('unused'))),
+    readRecoveryLog: vi.fn(() => Promise.reject(new Error('unused'))),
+    bulkPreview: vi.fn(() => Promise.reject(new Error('unused'))),
+    getUpdates: vi.fn(() => updateState()),
+    checkForUpdates: vi.fn(() => Promise.resolve(updateState())),
+    installUpdateWhenIdle: vi.fn(() =>
+      Promise.resolve({ ...updateState(), status: 'scheduled' as const }),
+    ),
+    installUpdateNow: vi.fn(() =>
+      Promise.resolve({ ...updateState(), status: 'installing' as const }),
+    ),
+    restartToUpdate: vi.fn(() => ({ ...updateState(), status: 'installing' as const })),
+    getDiagnostics: vi.fn(() => diagnosticsSnapshot()),
+    revealDiagnostics: vi.fn(() => Promise.resolve({ ok: true })),
+    clearDiagnostics: vi.fn(() => diagnosticsSnapshot()),
+    preflightCompletion: vi.fn(() => Promise.reject(new Error('unused'))),
+    getRepositoryDiff: vi.fn(() => Promise.reject(new Error('unused'))),
+    generatePublishDescription: vi.fn(() => Promise.reject(new Error('unused'))),
+    openExternal: vi.fn(() => Promise.reject(new Error('unused'))),
+    revealPath: vi.fn(() => Promise.reject(new Error('unused'))),
+    writeClipboardText: vi.fn(() => Promise.reject(new Error('unused'))),
+    publishUiState: vi.fn(() => ({ accepted: true })),
+  };
+}
+
+function register(services = makeServices()) {
+  const handlers = new Map<string, (event: unknown, ...args: unknown[]) => Promise<unknown>>();
+  const ipcMain = {
+    handle: vi.fn(
+      (channel: string, listener: typeof handlers extends Map<string, infer H> ? H : never) => {
+        handlers.set(channel, listener);
+      },
+    ),
+  };
+  registerIpcHandlers(ipcMain, trusted, services);
+  return { handlers, services };
+}
+
+describe('registerIpcHandlers', () => {
+  it('registers exactly the channels in the registry — no generic passthrough', () => {
+    const { handlers } = register();
+    expect([...handlers.keys()].sort()).toEqual(Object.values(IPC_CHANNELS).sort());
+  });
+
+  it('rejects untrusted senders without invoking the service', async () => {
+    const { handlers, services } = register();
+    const result = (await handlers.get(IPC_CHANNELS.settingsGet)!(foreignEvent)) as {
+      ok: boolean;
+      error?: { code: string };
+    };
+    expect(result.ok).toBe(false);
+    expect(result.error?.code).toBe('E_UNTRUSTED_SENDER');
+    expect(services.getSettings).not.toHaveBeenCalled();
+  });
+
+  it('returns a validated ok envelope for a trusted, valid request', async () => {
+    const { handlers } = register();
+    const result = (await handlers.get(IPC_CHANNELS.connectionGetStatus)!(goodEvent)) as {
+      ok: boolean;
+      value: { status: string };
+    };
+    expect(result.ok).toBe(true);
+    expect(result.value.status).toBe('discovering');
+  });
+
+  it('invokes the required attention service instead of returning a fallback success', async () => {
+    const { handlers, services } = register();
+    const result = (await handlers.get(IPC_CHANNELS.attentionAnswerPermission)!(goodEvent, {
+      requestId: 'perm-1',
+      decision: 'deny',
+    })) as { ok: boolean; value: { result: string } };
+
+    expect(result.ok).toBe(true);
+    expect(result.value.result).toBe('submitted');
+    expect(services.answerPermission).toHaveBeenCalledWith({
+      requestId: 'perm-1',
+      decision: 'deny',
+    });
+  });
+
+  it('guards the UI-state push: trusted senders only, schema-validated, no domain data', async () => {
+    const { handlers, services } = register();
+    const valid = {
+      activeFeatureId: 'abcd1234ef567890',
+      runtimeReady: true,
+      sidebarCollapsed: false,
+      inspectorOpen: true,
+      inspectorAvailable: true,
+      featureCommands: { 'feature.start': true, 'feature.delete': false },
+    };
+
+    const foreign = (await handlers.get(IPC_CHANNELS.uiStatePublish)!(foreignEvent, valid)) as {
+      ok: boolean;
+      error?: { code: string };
+    };
+    expect(foreign.ok).toBe(false);
+    expect(foreign.error?.code).toBe('E_UNTRUSTED_SENDER');
+    expect(services.publishUiState).not.toHaveBeenCalled();
+
+    const accepted = (await handlers.get(IPC_CHANNELS.uiStatePublish)!(goodEvent, valid)) as {
+      ok: boolean;
+      value: { accepted: boolean };
+    };
+    expect(accepted.ok).toBe(true);
+    expect(accepted.value.accepted).toBe(true);
+    expect(services.publishUiState).toHaveBeenCalledWith(valid);
+
+    // Anything beyond the identity-and-presentation summary is rejected — the
+    // menu never becomes a side channel for server-domain state.
+    const acceptedCalls = vi.mocked(services.publishUiState).mock.calls.length;
+    const extra = (await handlers.get(IPC_CHANNELS.uiStatePublish)!(goodEvent, {
+      ...valid,
+      featureName: 'Search revamp',
+    })) as { ok: boolean; error?: { code: string } };
+    expect(extra.ok).toBe(false);
+    expect(extra.error?.code).toBe('E_SCHEMA_MISMATCH');
+
+    const malformed = (await handlers.get(IPC_CHANNELS.uiStatePublish)!(goodEvent, {
+      ...valid,
+      featureCommands: { 'feature.start': 'yes' },
+    })) as { ok: boolean; error?: { code: string } };
+    expect(malformed.ok).toBe(false);
+    expect(malformed.error?.code).toBe('E_SCHEMA_MISMATCH');
+    // Neither rejected payload reached the service.
+    expect(vi.mocked(services.publishUiState).mock.calls.length).toBe(acceptedCalls);
+  });
+
+  it('remoteServerAdd: rejects extra request fields and token-shaped response fields', async () => {
+    const services = makeServices();
+    const { handlers } = register(services);
+
+    const extra = (await handlers.get(IPC_CHANNELS.remoteServerAdd)!(goodEvent, {
+      connectionString: 'agentico://tok@127.0.0.1:8080',
+      token: 'smuggled',
+    })) as { ok: boolean; error?: { code: string } };
+    expect(extra.ok).toBe(false);
+    expect(extra.error?.code).toBe('E_SCHEMA_MISMATCH');
+    expect(services.addRemoteServer).not.toHaveBeenCalled();
+
+    const missing = (await handlers.get(IPC_CHANNELS.remoteServerAdd)!(goodEvent, {})) as {
+      ok: boolean;
+      error?: { code: string };
+    };
+    expect(missing.ok).toBe(false);
+    expect(missing.error?.code).toBe('E_SCHEMA_MISMATCH');
+
+    services.addRemoteServer = vi.fn(() =>
+      Promise.resolve({
+        status: 'added',
+        serverKey: 'a'.repeat(32),
+        token: 'tok-leak-456',
+      } as never),
+    );
+    const leaky = (await handlers.get(IPC_CHANNELS.remoteServerAdd)!(goodEvent, {
+      connectionString: 'agentico://tok@127.0.0.1:8080',
+    })) as { ok: boolean; error?: { code: string } };
+    expect(leaky.ok).toBe(false);
+    expect(leaky.error?.code).toBe('E_SCHEMA_MISMATCH');
+    expect(JSON.stringify(leaky)).not.toContain('tok-leak-456');
+  });
+
+  it('serverRemove: rejects extra fields and empty keys; passes the result state through', async () => {
+    const services = makeServices();
+    const { handlers } = register(services);
+
+    const extra = (await handlers.get(IPC_CHANNELS.serverRemove)!(goodEvent, {
+      serverKey: 'a'.repeat(32),
+      token: 'smuggled',
+    })) as { ok: boolean; error?: { code: string } };
+    expect(extra.ok).toBe(false);
+    expect(extra.error?.code).toBe('E_SCHEMA_MISMATCH');
+    expect(services.removeServer).not.toHaveBeenCalled();
+
+    const empty = (await handlers.get(IPC_CHANNELS.serverRemove)!(goodEvent, {
+      serverKey: '',
+    })) as { ok: boolean; error?: { code: string } };
+    expect(empty.ok).toBe(false);
+    expect(empty.error?.code).toBe('E_SCHEMA_MISMATCH');
+    expect(services.removeServer).not.toHaveBeenCalled();
+
+    const accepted = (await handlers.get(IPC_CHANNELS.serverRemove)!(goodEvent, {
+      serverKey: 'a'.repeat(32),
+    })) as { ok: boolean; value?: { status: string } };
+    expect(accepted.ok).toBe(true);
+    expect(accepted.value?.status).toBe('idle');
+    expect(services.removeServer).toHaveBeenCalledWith({ serverKey: 'a'.repeat(32) });
+  });
+
+  it('serverTokenStatus: rejects unknown statuses and smuggled token fields', async () => {
+    const services = makeServices();
+    const { handlers } = register(services);
+
+    const accepted = (await handlers.get(IPC_CHANNELS.serverTokenStatus)!(goodEvent, {
+      serverKey: 'b'.repeat(32),
+    })) as { ok: boolean; value?: { status: string } };
+    expect(accepted.ok).toBe(true);
+    expect(accepted.value).toEqual({ status: 'local' });
+
+    services.getServerTokenStatus = vi.fn(() => ({ status: 'ok', token: 'tok' }) as never);
+    const rogue = (await handlers.get(IPC_CHANNELS.serverTokenStatus)!(goodEvent, {
+      serverKey: 'b'.repeat(32),
+    })) as { ok: boolean; error?: { code: string } };
+    expect(rogue.ok).toBe(false);
+    expect(rogue.error?.code).toBe('E_SCHEMA_MISMATCH');
+    expect(JSON.stringify(rogue)).not.toContain('tok');
+  });
+
+  it('rejects a connection state carrying token-shaped fields fail-closed', async () => {
+    const services = makeServices();
+    services.getConnectionStatus = vi.fn(
+      () =>
+        ({
+          status: 'ready',
+          stage: 'ready',
+          detail: 'ok',
+          ownership: 'app-owned',
+          authToken: 'tok-leak-123',
+        }) as never,
+    );
+    const { handlers } = register(services);
+    const result = (await handlers.get(IPC_CHANNELS.connectionGetStatus)!(goodEvent)) as {
+      ok: boolean;
+      error?: { code: string };
+    };
+    expect(result.ok).toBe(false);
+    expect(result.error?.code).toBe('E_SCHEMA_MISMATCH');
+    expect(JSON.stringify(result)).not.toContain('tok-leak-123');
+  });
+
+  it('fails closed on schema-invalid payloads without invoking the service', async () => {
+    const { handlers, services } = register();
+    const result = (await handlers.get(IPC_CHANNELS.settingsUpdate)!(goodEvent, {
+      theme: 'neon',
+    })) as { ok: boolean; error?: { code: string } };
+    expect(result.ok).toBe(false);
+    expect(result.error?.code).toBe('E_SCHEMA_MISMATCH');
+    expect(services.updateSettings).not.toHaveBeenCalled();
+  });
+
+  it('rejects unsafe provider names before invoking model refresh', async () => {
+    const { handlers, services } = register();
+    const result = (await handlers.get(IPC_CHANNELS.configProviderModelsRefresh)!(
+      goodEvent,
+      '../claude',
+    )) as { ok: boolean; error?: { code: string } };
+
+    expect(result.ok).toBe(false);
+    expect(result.error?.code).toBe('E_SCHEMA_MISMATCH');
+    expect(services.refreshProviderModels).not.toHaveBeenCalled();
+  });
+
+  it('validates local draft requests before calling the owner-only store', async () => {
+    const { handlers, services } = register();
+    const result = (await handlers.get(IPC_CHANNELS.reviewDraftsSave)!(goodEvent, {
+      runtimeId: 'runtime-a',
+      featureId: 'feature-a',
+      reviewId: 'review-a',
+      baseDraftRevision: 'base-a',
+      text: 'draft',
+      extra: 'rejected',
+    })) as { ok: boolean; error?: { code: string } };
+
+    expect(result.ok).toBe(false);
+    expect(result.error?.code).toBe('E_SCHEMA_MISMATCH');
+    expect(services.saveLocalReviewDraft).not.toHaveBeenCalled();
+  });
+
+  it('fails closed on prototype-polluting payloads', async () => {
+    const { handlers, services } = register();
+    const payload = JSON.parse('{"theme": "dark", "__proto__": {"polluted": true}}');
+    const result = (await handlers.get(IPC_CHANNELS.settingsUpdate)!(goodEvent, payload)) as {
+      ok: boolean;
+      error?: { code: string };
+    };
+    expect(result.ok).toBe(false);
+    expect(result.error?.code).toBe('E_UNSAFE_PAYLOAD');
+    expect(services.updateSettings).not.toHaveBeenCalled();
+  });
+
+  it('fails closed on oversized payloads', async () => {
+    const { handlers, services } = register();
+    const result = (await handlers.get(IPC_CHANNELS.settingsUpdate)!(goodEvent, {
+      runtime: { selection: 'x'.repeat(6 * 1024 * 1024) },
+    })) as { ok: boolean; error?: { code: string } };
+    expect(result.ok).toBe(false);
+    expect(result.error?.code).toBe('E_PAYLOAD_TOO_LARGE');
+    expect(services.updateSettings).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when the service returns a response violating its schema', async () => {
+    const services = makeServices();
+    services.getTheme = vi.fn(() => ({ preference: 'system', resolved: 'sepia' }) as never);
+    const { handlers } = register(services);
+    const result = (await handlers.get(IPC_CHANNELS.themeGet)!(goodEvent)) as {
+      ok: boolean;
+      error?: { code: string };
+    };
+    expect(result.ok).toBe(false);
+    expect(result.error?.code).toBe('E_SCHEMA_MISMATCH');
+  });
+
+  it('validates update install consent before invoking the service', async () => {
+    const { handlers, services } = register();
+    const result = (await handlers.get(IPC_CHANNELS.updatesInstallNow)!(goodEvent, {
+      consent: false,
+      stopActiveWork: true,
+    })) as { ok: boolean; error?: { code: string } };
+
+    expect(result.ok).toBe(false);
+    expect(result.error?.code).toBe('E_SCHEMA_MISMATCH');
+    expect(services.installUpdateNow).not.toHaveBeenCalled();
+  });
+
+  it('rejects diagnostics responses that try to expose local paths', async () => {
+    const services = makeServices();
+    services.getDiagnostics = vi.fn(
+      () =>
+        ({
+          ...diagnosticsSnapshot(),
+          diagnosticsRoot: '/Users/somebody/Library/Application Support/Agentico',
+        }) as never,
+    );
+    const { handlers } = register(services);
+    const result = (await handlers.get(IPC_CHANNELS.diagnosticsGet)!(goodEvent)) as {
+      ok: boolean;
+      error?: { code: string };
+    };
+
+    expect(result.ok).toBe(false);
+    expect(result.error?.code).toBe('E_SCHEMA_MISMATCH');
+  });
+
+  it('converts service exceptions into redacted safe errors', async () => {
+    const services = makeServices();
+    services.getSettings = vi.fn(() => {
+      throw new Error('exploded at /Users/somebody/secret with Bearer tok123');
+    });
+    const { handlers } = register(services);
+    const result = (await handlers.get(IPC_CHANNELS.settingsGet)!(goodEvent)) as {
+      ok: boolean;
+      error?: { code: string; message: string };
+    };
+    expect(result.ok).toBe(false);
+    expect(result.error?.code).toBe('E_INTERNAL');
+    expect(result.error?.message).not.toContain('/Users/somebody');
+    expect(result.error?.message).not.toContain('tok123');
+  });
+
+  it('does not send session output after the renderer is destroyed', async () => {
+    let emit!: (event: SessionOutputEvent) => void;
+    const services = makeServices();
+    services.openSessionOutput = vi.fn((_request, listener) => {
+      emit = listener;
+      return 'sub-fixed';
+    });
+    const send = vi.fn();
+    const sender = {
+      id: 1,
+      send,
+      isDestroyed: vi.fn(() => false),
+    };
+    const event = {
+      sender,
+      senderFrame: { url: 'file:///app/out/renderer/index.html' },
+    };
+    const { handlers } = register(services);
+
+    await expect(
+      handlers.get(IPC_CHANNELS.sessionsOutputOpen)!(event, {
+        sessionId: 'session-1',
+      }),
+    ).resolves.toMatchObject({ ok: true, value: { subscriptionId: 'sub-fixed' } });
+    sender.isDestroyed.mockReturnValue(true);
+    emit({
+      subscriptionId: 'sub-fixed',
+      type: 'done',
+      sessionId: 'session-1',
+      nextIndex: 1,
+    });
+
+    expect(send).not.toHaveBeenCalledWith(IPC_EVENTS.sessionOutput, expect.anything());
+  });
+});

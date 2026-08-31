@@ -50,9 +50,9 @@ func TestFastPublishCommitRepresentative(t *testing.T) {
 		}
 	}
 
-	previews, err := WorkingTreeDiffPreviews(repo)
+	previews, err := BranchDiffPreviews(repo, "main")
 	if err != nil {
-		t.Fatalf("WorkingTreeDiffPreviews() error = %v", err)
+		t.Fatalf("BranchDiffPreviews() error = %v", err)
 	}
 	if len(previews) < 3 {
 		t.Fatalf("len(previews) = %d, want at least 3", len(previews))
@@ -61,14 +61,6 @@ func TestFastPublishCommitRepresentative(t *testing.T) {
 	message := "fast representative commit"
 	if err := CommitAll(repo, message); err != nil {
 		t.Fatalf("CommitAll() error = %v", err)
-	}
-
-	log, err := CommitLog(repo, "main")
-	if err != nil {
-		t.Fatalf("CommitLog() error = %v", err)
-	}
-	if !strings.Contains(log, message) {
-		t.Errorf("CommitLog() = %q, want message %q", log, message)
 	}
 
 	out, err := exec.Command("git", "-C", repo, "log", "-1", "--format=%B").CombinedOutput()

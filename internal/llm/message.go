@@ -17,6 +17,7 @@ package llm
 import (
 	"encoding/json"
 	"fmt"
+	"time"
 )
 
 // SDKMessage is the envelope for all JSON messages from LLM CLI tools.
@@ -24,6 +25,13 @@ import (
 type SDKMessage struct {
 	Type    string `json:"type"`
 	Subtype string `json:"subtype,omitempty"`
+
+	// Origin is assigned by every provider adapter. It prevents child-agent
+	// output from being mistaken for root-agent completion or user input.
+	Origin EventOrigin `json:"-"`
+	// OccurredAt is the provider timestamp when available, otherwise the
+	// session receive time. It drives truthful task activity snapshots.
+	OccurredAt time.Time `json:"-"`
 
 	// Exactly one of these is non-nil after unmarshaling, based on Type.
 	Init           *SystemInitMessage      `json:"-"`
@@ -60,7 +68,7 @@ type SDKMessage struct {
 	// are NOT stored in the message log.
 	StreamDeltaType string `json:"-"`
 
-	// LocallyAppended is true for messages synthetically added by the TUI
+	// LocallyAppended is true for messages synthetically added by the desktop app
 	// (e.g. user-typed chat input in the attach view).
 	LocallyAppended bool `json:"-"`
 	// AutoPicked marks locally appended AskUserQuestion answers selected by
@@ -237,6 +245,10 @@ type Usage struct {
 	CacheReadInputTokens     int `json:"cache_read_input_tokens,omitempty"`
 	CacheCreationInputTokens int `json:"cache_creation_input_tokens,omitempty"`
 	ContextWindow            int `json:"context_window,omitempty"`
+	// CostUSD is the provider's latest cumulative cost snapshot for a running
+	// session. Providers without live cost telemetry leave it zero; their final
+	// ResultMessage remains authoritative.
+	CostUSD float64 `json:"cost_usd,omitempty"`
 
 	// ContextInputTokens is the current context fill (post-compaction)
 	// expressed as input tokens only. Kept for informational purposes;
@@ -324,139 +336,8 @@ func (r *ResultMessage) IsClientSideResult() bool {
 // IsMaxTurns returns true if the session hit the max turns limit.
 func (r *ResultMessage) IsMaxTurns() bool { return r.Subtype == "max_turns" }
 
-// TerminationClass classifies why an agent invocation ended. Downstream code
-// uses this to decide whether the turn naturally completed, the agent is
-// awaiting the user, or the CLI truncated mid-work (in which case resuming
-// the session is the right response).
-type TerminationClass int
-
-const (
-	// TermUnknown is the zero value; callers should treat it as "no
-	// classification yet" rather than a terminal state.
-	TermUnknown TerminationClass = iota
-
-	// TermCompleted means the agent finished its work (caller observed the
-	// phase_complete marker for this invocation).
-	TermCompleted
-
-	// TermAskedFormal means the agent used AskUserQuestion during the
-	// invocation — the question is already surfaced via control_request so
-	// no additional help-queue entry is needed.
-	TermAskedFormal
-
-	// TermEndedAfterText means the agent deliberately ended its turn
-	// (stop_reason=end_turn) without writing phase_complete and without
-	// calling AskUserQuestion. Likely a text-only question; legitimately
-	// requires user attention.
-	TermEndedAfterText
-
-	// TermTurnTruncated means the CLI ended the invocation while the agent
-	// was mid-work (stop_reason=tool_use, max_tokens, pause_turn). The agent
-	// did not choose to stop — the invocation should be resumed.
-	TermTurnTruncated
-
-	// TermRefused means the model refused to answer (stop_reason=refusal).
-	TermRefused
-
-	// TermErrored means the CLI reported an error (subtype=error or
-	// is_error=true).
-	TermErrored
-
-	// TermAwaitingBackgroundTasks means the agent ended its turn while
-	// background subagents (Task tool, run in background) were still running —
-	// it yielded to wait for their notifications, not to stop. The invocation
-	// should be kept alive until the tasks complete, not counted as a
-	// protocol violation.
-	TermAwaitingBackgroundTasks
-)
-
-// String returns the enum name — used in logs and tests.
-func (t TerminationClass) String() string {
-	switch t {
-	case TermCompleted:
-		return "Completed"
-	case TermAskedFormal:
-		return "AskedFormal"
-	case TermEndedAfterText:
-		return "EndedAfterText"
-	case TermTurnTruncated:
-		return "TurnTruncated"
-	case TermRefused:
-		return "Refused"
-	case TermErrored:
-		return "Errored"
-	case TermAwaitingBackgroundTasks:
-		return "AwaitingBackgroundTasks"
-	default:
-		return "Unknown"
-	}
-}
-
-// TerminationInputs bundles the observable signals the classifier needs.
-// Callers populate these from their own state (filesystem marker, session
-// control-request log, most recent ResultMessage).
-type TerminationInputs struct {
-	// Result is the ResultMessage being classified.
-	Result *ResultMessage
-	// PhaseCompleteExists is true when the phase_complete marker file for
-	// the target artifact directory is present on disk.
-	PhaseCompleteExists bool
-	// AskUserQuestionPending is true when an AskUserQuestion control_request
-	// is still awaiting the user's response. If the question was already
-	// answered before the Result arrived, this should be false.
-	AskUserQuestionPending bool
-	// BackgroundTasksRunning is true when background subagents spawned by the
-	// session are still running at the time the Result is classified. Callers
-	// must only set this for live sessions — a dead process cannot deliver
-	// task notifications, so its stale task set must not defer classification.
-	BackgroundTasksRunning bool
-}
-
-// ClassifyTermination returns the TerminationClass for a completed invocation
-// based on the observable signals. The ordering matters: a reported error is
-// terminal and beats everything else — including a phase_complete marker that
-// happens to be on disk — so a failed invocation (for example a fail-closed
-// control event) can never be laundered into a clean completion. After errors,
-// the completion marker wins, then formal questions; truncation is inferred
-// from stop_reason only after the earlier cases are ruled out.
-func ClassifyTermination(in TerminationInputs) TerminationClass {
-	if in.Result == nil {
-		return TermUnknown
-	}
-	r := in.Result
-
-	if r.IsError || r.Subtype == "error" {
-		return TermErrored
-	}
-	if in.PhaseCompleteExists {
-		return TermCompleted
-	}
-	if in.AskUserQuestionPending {
-		return TermAskedFormal
-	}
-	if in.BackgroundTasksRunning {
-		return TermAwaitingBackgroundTasks
-	}
-	switch r.StopReason {
-	case "refusal":
-		return TermRefused
-	case "tool_use", "max_tokens", "pause_turn":
-		return TermTurnTruncated
-	case "end_turn", "stop_sequence", "":
-		// end_turn: agent deliberately stopped. stop_sequence: stop token
-		// matched. Empty: provider didn't emit one — treat as deliberate end
-		// since no truncation signal is present.
-		return TermEndedAfterText
-	default:
-		// Unknown stop_reason — conservatively treat as a deliberate end so
-		// we surface it to the user rather than auto-resuming.
-		return TermEndedAfterText
-	}
-}
-
-// IsTurnTruncated is a convenience that returns true iff the classifier
-// would return TermTurnTruncated for the given signals. Useful for code
-// paths that only care about whether to auto-resume.
+// IsTurnTruncated reports whether the provider ended this turn before a
+// deliberate root outcome could be produced.
 func (r *ResultMessage) IsTurnTruncated() bool {
 	if r == nil || r.IsError || r.Subtype == "error" {
 		return false
@@ -470,9 +351,11 @@ func (r *ResultMessage) IsTurnTruncated() bool {
 
 // ControlRequestMessage is a permission or hook callback request.
 type ControlRequestMessage struct {
-	Type      string         `json:"type"`
-	RequestID string         `json:"request_id"`
-	Request   ControlRequest `json:"request"`
+	Type         string         `json:"type"`
+	RequestID    string         `json:"request_id"`
+	Request      ControlRequest `json:"request"`
+	WaitingSince time.Time      `json:"-"`
+	Origin       EventOrigin    `json:"-"`
 }
 
 // ControlRequest is the inner request payload.
@@ -675,6 +558,9 @@ type ToolProgressMessage struct {
 	ToolName  string `json:"tool_name,omitempty"`
 	Data      string `json:"data,omitempty"`
 	SessionID string `json:"session_id,omitempty"`
+	// TimeoutMS is the tool invocation's declared execution timeout in
+	// milliseconds, when the provider reports one; 0 means unknown.
+	TimeoutMS int64 `json:"timeout_ms,omitempty"`
 }
 
 // FileReadEvent is a provider-neutral signal that the provider reported a
@@ -761,6 +647,7 @@ type TaskProgressMessage struct {
 	ToolUseID    string     `json:"tool_use_id,omitempty"`
 	Description  string     `json:"description,omitempty"`
 	LastToolName string     `json:"last_tool_name,omitempty"`
+	LastPath     string     `json:"last_path,omitempty"`
 	Usage        *TaskUsage `json:"usage,omitempty"`
 	UUID         string     `json:"uuid,omitempty"`
 	SessionID    string     `json:"session_id,omitempty"`

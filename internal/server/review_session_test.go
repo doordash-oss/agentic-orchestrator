@@ -69,6 +69,39 @@ func TestReviewSessionRoutesCommitDraftViaREST(t *testing.T) {
 	}
 }
 
+func TestReviewSessionReadAndValidationAreSideEffectFree(t *testing.T) {
+	store, f, _ := seedReviewSessionFeature(t, feature.StatusPlanNeedsReview, nil, "plan", "# Phase plan\n\n## Tasks\n\n### Task 1: Keep it safe\n")
+	handler := NewHandler(HandlerOptions{
+		Features:              store,
+		FeatureStore:          store,
+		DisableHostValidation: true,
+	})
+
+	created := doReviewSessionJSON[ReviewSessionResponse](t, handler, http.MethodPost, "/api/v1/features/"+f.ID+"/reviews", map[string]any{}, http.StatusOK)
+	read := doReviewSessionJSON[ReviewSessionResponse](t, handler, http.MethodGet, "/api/v1/features/"+f.ID+"/reviews", nil, http.StatusOK)
+	if read.Text != created.Text || read.DraftRevision != created.DraftRevision {
+		t.Fatalf("GET review = %+v, want unchanged session %+v", read, created)
+	}
+
+	invalid := doReviewSessionJSON[ReviewDraftValidationResponse](t, handler, http.MethodPost, "/api/v1/features/"+f.ID+"/reviews/"+created.ReviewID+"/validate", ReviewDraftValidationRequest{Text: "# Phase plan\n"}, http.StatusOK)
+	if invalid.Applicable != true || invalid.Valid || invalid.Revision != textRevision([]byte("# Phase plan\n")) || len(invalid.Findings) == 0 {
+		t.Fatalf("invalid validation = %+v, want applicable failed result with revision and findings", invalid)
+	}
+
+	valid := doReviewSessionJSON[ReviewDraftValidationResponse](t, handler, http.MethodPost, "/api/v1/features/"+f.ID+"/reviews/"+created.ReviewID+"/validate", ReviewDraftValidationRequest{Text: created.Text}, http.StatusOK)
+	if !valid.Applicable || !valid.Valid || valid.Revision != created.DraftRevision || len(valid.Findings) != 0 {
+		t.Fatalf("valid validation = %+v, want passing result for unchanged draft", valid)
+	}
+	if valid.Findings == nil {
+		t.Fatalf("valid validation findings = nil, want empty array for strict clients")
+	}
+
+	readAfter := doReviewSessionJSON[ReviewSessionResponse](t, handler, http.MethodGet, "/api/v1/features/"+f.ID+"/reviews", nil, http.StatusOK)
+	if readAfter.Text != created.Text || readAfter.DraftRevision != created.DraftRevision {
+		t.Fatalf("GET review after validation = %+v, want unchanged session %+v", readAfter, created)
+	}
+}
+
 func TestReviewSessionServiceCreateDoesNotExposeSourcePath(t *testing.T) {
 	store, f, planPath := seedReviewSessionFeature(t, feature.StatusPlanNeedsReview, nil, "plan", "# Plan\n")
 	service := newReviewSessionService(store, nil)
@@ -102,13 +135,14 @@ func TestReviewSessionServiceCreateUsesFeatureRootDescriptionReviewForRewindToIn
 	store := feature.NewStore(t.TempDir())
 	target := feature.PhaseInquire
 	f := &feature.Feature{
-		ID:           "feat-rewind-description-review",
-		Name:         "Rewind description review",
-		Status:       feature.StatusPromptNeedsReview,
-		CurrentPhase: feature.PhaseKnowledgeBase,
-		ActiveRun:    1,
-		RunCount:     1,
-		Pipeline:     feature.PipelineMoonshot,
+		ID:            "feat-rewind-description-review",
+		Name:          "Rewind description review",
+		Status:        feature.StatusPromptNeedsReview,
+		CurrentPhase:  feature.PhaseKnowledgeBase,
+		ActiveRun:     1,
+		RunCount:      1,
+		Pipeline:      feature.PipelineMoonshot,
+		SchemaVersion: feature.SchemaVersionCurrent,
 	}
 	f.SetRun(&feature.Run{
 		RunNumber:          1,
@@ -300,7 +334,7 @@ func TestReviewSessionServiceSaveDraftSerializesRevisionCheckAndWrite(t *testing
 func TestReviewSessionServiceDecisionCommitsDraftBeforeDelegate(t *testing.T) {
 	store, f, planPath := seedReviewSessionFeature(t, feature.StatusPlanNeedsReview, nil, "plan", "# Plan\n")
 	var delegated bool
-	service := newReviewSessionService(store, func(featureID string, req ReviewDecisionRequest) (ReviewDecisionResponse, error) {
+	service := newReviewSessionService(store, func(featureID string, req ReviewDecisionRequest) error {
 		delegated = true
 		if featureID != f.ID {
 			t.Fatalf("delegate featureID = %q, want %q", featureID, f.ID)
@@ -315,7 +349,7 @@ func TestReviewSessionServiceDecisionCommitsDraftBeforeDelegate(t *testing.T) {
 		if string(data) != "# Edited\n" {
 			t.Fatalf("canonical content before delegate = %q, want edited draft", string(data))
 		}
-		return ReviewDecisionResponse{FeatureID: featureID, Decision: req.Decision, Result: "submitted"}, nil
+		return nil
 	})
 	resp, err := service.Create(f.ID)
 	if err != nil {
@@ -356,6 +390,7 @@ func seedReviewSessionFeature(t *testing.T, status feature.Status, pending *feat
 		RunCount:           1,
 		PendingReviewPhase: pending,
 		Artifacts:          map[string]string{},
+		SchemaVersion:      feature.SchemaVersionCurrent,
 	}
 	runDir := store.RunDir(f.ID, 1)
 	artifactPath := filepath.Join(runDir, artifactID, artifactID+".md")

@@ -19,7 +19,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"os"
 	"regexp"
 	"sort"
 	"strconv"
@@ -45,6 +44,7 @@ const codexContextBaselineTokens = 12000
 // codexItemTypeFileChange is the ItemUnion.Type discriminator for a Codex
 // thread item representing a file mutation (item/started, item/completed).
 const codexItemTypeFileChange = "fileChange"
+const codexItemTypeCollabAgentToolCall = "collabAgentToolCall"
 
 // codexFileChangeOperationWrite and codexFileChangeOperationUpdate are the
 // normalized llm.FileChangeEvent.Operation values produced by
@@ -97,8 +97,15 @@ type Protocol struct {
 	nativeReviewTurnID string
 	nativeDecisionSeen bool
 	nativeReviewFailed bool
+	tasksByThread      map[string]codexTaskRef
 
 	logFunc func(string, ...interface{})
+}
+
+type codexTaskRef struct {
+	taskID         string
+	childSessionID string
+	description    string
 }
 
 // NewProtocol creates a new Codex protocol handler.
@@ -206,7 +213,7 @@ func (p *Protocol) ParseLine(line []byte) ([]llm.SDKMessage, error) {
 		}
 		if msg, emit, handled := p.handleResponse(*env.ID, env.Result, env.Error); handled {
 			if emit {
-				return []llm.SDKMessage{msg}, nil
+				return []llm.SDKMessage{p.stampMessage(msg)}, nil
 			}
 			return nil, nil
 		}
@@ -223,7 +230,7 @@ func (p *Protocol) ParseLine(line []byte) ([]llm.SDKMessage, error) {
 		}
 		msg, ok := p.parseServerRequest(env.Method, *env.ID, env.Params)
 		if ok {
-			return []llm.SDKMessage{msg}, nil
+			return []llm.SDKMessage{p.stampMessage(msg)}, nil
 		}
 		return nil, nil
 	}
@@ -232,7 +239,7 @@ func (p *Protocol) ParseLine(line []byte) ([]llm.SDKMessage, error) {
 	if env.Method != "" {
 		msg, ok := p.parseNotification(env.Method, env.Params)
 		if ok {
-			return []llm.SDKMessage{msg}, nil
+			return []llm.SDKMessage{p.stampMessage(msg)}, nil
 		}
 		return nil, nil
 	}
@@ -242,6 +249,16 @@ func (p *Protocol) ParseLine(line []byte) ([]llm.SDKMessage, error) {
 		return []llm.SDKMessage{p.nativeToollessViolation("malformed JSON-RPC envelope")}, nil
 	}
 	return nil, nil
+}
+
+func (p *Protocol) stampMessage(msg llm.SDKMessage) llm.SDKMessage {
+	if msg.Origin.Kind == "" {
+		msg.Origin = llm.EventOrigin{Kind: llm.EventOriginRoot}
+	}
+	if msg.OccurredAt.IsZero() {
+		msg.OccurredAt = time.Now().UTC()
+	}
+	return msg
 }
 
 // SendUserMessage sends a follow-up turn with user text.
@@ -333,7 +350,7 @@ func (p *Protocol) sendInitialize() error {
 		Params: InitializeParams{
 			ClientInfo: ClientInfo{
 				Name:    "agentic",
-				Title:   "Agentic Workflow Orchestrator",
+				Title:   "Agentic Orchestrator",
 				Version: "0.1.0",
 			},
 			Capabilities: Capabilities{
@@ -712,7 +729,7 @@ func (p *Protocol) parseServerRequest(method string, id int, params json.RawMess
 			return llm.SDKMessage{}, false
 		}
 		inputJSON, _ := json.Marshal(map[string]string{"command": approval.Command})
-		return llm.SDKMessage{
+		return p.controlMessageOrigin(llm.SDKMessage{
 			Type:    "control_request",
 			Subtype: "can_use_tool",
 			ControlRequest: &llm.ControlRequestMessage{
@@ -724,7 +741,7 @@ func (p *Protocol) parseServerRequest(method string, id int, params json.RawMess
 					Input:    json.RawMessage(inputJSON),
 				},
 			},
-		}, true
+		}, approval.ThreadID), true
 
 	case "item/fileChange/requestApproval":
 		var approval FileChangeApprovalParams
@@ -740,7 +757,7 @@ func (p *Protocol) parseServerRequest(method string, id int, params json.RawMess
 			inputFields["reason"] = approval.Reason
 		}
 		inputJSON, _ := json.Marshal(inputFields)
-		return llm.SDKMessage{
+		return p.controlMessageOrigin(llm.SDKMessage{
 			Type:    "control_request",
 			Subtype: "can_use_tool",
 			ControlRequest: &llm.ControlRequestMessage{
@@ -752,7 +769,7 @@ func (p *Protocol) parseServerRequest(method string, id int, params json.RawMess
 					Input:    json.RawMessage(inputJSON),
 				},
 			},
-		}, true
+		}, approval.ThreadID), true
 
 	case "tool/requestUserInput":
 		var uiParams UserInputRequestParams
@@ -813,7 +830,7 @@ func (p *Protocol) parseServerRequest(method string, id int, params json.RawMess
 		}
 		inputJSON, _ := json.Marshal(inputMap)
 
-		return llm.SDKMessage{
+		return p.controlMessageOrigin(llm.SDKMessage{
 			Type:    "control_request",
 			Subtype: "can_use_tool",
 			ControlRequest: &llm.ControlRequestMessage{
@@ -825,7 +842,7 @@ func (p *Protocol) parseServerRequest(method string, id int, params json.RawMess
 					Input:    json.RawMessage(inputJSON),
 				},
 			},
-		}, true
+		}, uiParams.ThreadID), true
 
 	default:
 		p.logDebug("[codex] unhandled server request: %s", method)
@@ -833,9 +850,146 @@ func (p *Protocol) parseServerRequest(method string, id int, params json.RawMess
 	}
 }
 
+func (p *Protocol) controlMessageOrigin(msg llm.SDKMessage, threadID string) llm.SDKMessage {
+	origin := llm.EventOrigin{Kind: llm.EventOriginRoot}
+	if !p.isMainThread(threadID) {
+		origin = llm.EventOrigin{
+			Kind:           llm.EventOriginTask,
+			TaskID:         threadID,
+			ChildSessionID: threadID,
+		}
+	}
+	msg.Origin = origin
+	if msg.ControlRequest != nil {
+		msg.ControlRequest.Origin = origin
+	}
+	return msg
+}
+
 func (p *Protocol) isMainThread(threadID string) bool {
 	mainThread := p.threadID
 	return threadID == "" || mainThread == "" || threadID == mainThread
+}
+
+func (p *Protocol) taskStartedForCollab(item ItemUnion) llm.SDKMessage {
+	childSessionID := ""
+	if len(item.ReceiverThreadIDs) > 0 {
+		childSessionID = item.ReceiverThreadIDs[0]
+	}
+	ref := codexTaskRef{
+		taskID:         item.ID,
+		childSessionID: childSessionID,
+		description:    strings.TrimSpace(item.Prompt),
+	}
+	p.mu.Lock()
+	if p.tasksByThread == nil {
+		p.tasksByThread = make(map[string]codexTaskRef)
+	}
+	for _, threadID := range item.ReceiverThreadIDs {
+		if threadID != "" {
+			p.tasksByThread[threadID] = ref
+		}
+	}
+	p.mu.Unlock()
+	return llm.SDKMessage{
+		Type:    "system",
+		Subtype: "task_started",
+		Origin: llm.EventOrigin{
+			Kind:           llm.EventOriginTask,
+			TaskID:         item.ID,
+			ChildSessionID: childSessionID,
+		},
+		TaskStarted: &llm.TaskStartedMessage{
+			Type:        "system",
+			Subtype:     "task_started",
+			TaskID:      item.ID,
+			ToolUseID:   item.ID,
+			Description: strings.TrimSpace(item.Prompt),
+			TaskType:    strings.TrimSpace(item.Tool),
+			Prompt:      item.Prompt,
+			SessionID:   childSessionID,
+		},
+	}
+}
+
+func (p *Protocol) taskNotificationForCollab(item ItemUnion) llm.SDKMessage {
+	status := strings.ToLower(strings.TrimSpace(item.Status))
+	if status == "" || status == "inprogress" || status == "in_progress" {
+		status = "completed"
+	}
+	childSessionID := ""
+	if len(item.ReceiverThreadIDs) > 0 {
+		childSessionID = item.ReceiverThreadIDs[0]
+	}
+	return llm.SDKMessage{
+		Type:    "system",
+		Subtype: "task_notification",
+		Origin: llm.EventOrigin{
+			Kind:           llm.EventOriginTask,
+			TaskID:         item.ID,
+			ChildSessionID: childSessionID,
+		},
+		TaskNotification: &llm.TaskNotificationMessage{
+			Type:      "system",
+			Subtype:   "task_notification",
+			TaskID:    item.ID,
+			ToolUseID: item.ID,
+			Status:    status,
+			SessionID: childSessionID,
+		},
+	}
+}
+
+func (p *Protocol) taskProgressForChildItem(threadID string, item ItemUnion) (llm.SDKMessage, bool) {
+	toolName := item.Type
+	lastPath := ""
+	description := ""
+	switch item.Type {
+	case "commandExecution":
+		toolName = "Bash"
+	case codexItemTypeFileChange:
+		toolName = codexToolNameWrite
+		if len(item.Changes) > 0 {
+			lastPath = item.Changes[0].Path
+		}
+	case "agentMessage":
+		toolName = "assistant"
+		description = strings.TrimSpace(item.Text)
+	}
+	return p.taskProgressForChildThread(threadID, toolName, lastPath, description)
+}
+
+func (p *Protocol) taskProgressForChildThread(threadID, toolName, lastPath, description string) (llm.SDKMessage, bool) {
+	p.mu.Lock()
+	ref, ok := p.tasksByThread[threadID]
+	p.mu.Unlock()
+	if !ok {
+		// A child thread without a preceding root collabAgentToolCall cannot be
+		// assigned to a delegated task safely. Ignore it instead of inventing a
+		// second live task that no parent terminal event could complete.
+		return llm.SDKMessage{}, false
+	}
+	if strings.TrimSpace(description) == "" {
+		description = ref.description
+	}
+	return llm.SDKMessage{
+		Type:    "system",
+		Subtype: "task_progress",
+		Origin: llm.EventOrigin{
+			Kind:           llm.EventOriginTask,
+			TaskID:         ref.taskID,
+			ChildSessionID: ref.childSessionID,
+		},
+		TaskProgress: &llm.TaskProgressMessage{
+			Type:         "system",
+			Subtype:      "task_progress",
+			TaskID:       ref.taskID,
+			Description:  strings.TrimSpace(description),
+			LastToolName: toolName,
+			LastPath:     lastPath,
+			SessionID:    ref.childSessionID,
+		},
+	}, true
 }
 
 func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm.SDKMessage, bool) {
@@ -883,7 +1037,7 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 			if p.opts.NativeToollessReview {
 				return p.nativeToollessViolation("unexpected child-thread agent message activity"), true
 			}
-			return llm.SDKMessage{}, false
+			return p.taskProgressForChildThread(delta.ThreadID, "", "", accumulated)
 		}
 
 		// Hidden review consumes only the completed final item. Codex deltas are
@@ -938,7 +1092,7 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 			if p.opts.NativeToollessReview {
 				return p.nativeToollessViolation("unexpected child-thread turn completion"), true
 			}
-			return llm.SDKMessage{}, false
+			return p.taskProgressForChildThread(completed.ThreadID, "", "", "child turn "+completed.Turn.Status)
 		}
 
 		switch completed.Turn.Status {
@@ -1155,6 +1309,7 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 			p.modelContextWindow = *usage.TokenUsage.ModelContextWindow
 		}
 		ctxWindow := p.modelContextWindow
+		costUSD := p.totalCostUSD
 		p.mu.Unlock()
 
 		// Surface as synthetic SDKMessage so session layer can accumulate.
@@ -1174,6 +1329,7 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 				ContextTotalTokens:   usage.TokenUsage.Last.TotalTokens,
 				ContextBaseline:      codexContextBaselineTokens,
 				ContextWindow:        ctxWindow,
+				CostUSD:              costUSD,
 			},
 		}, true
 
@@ -1314,7 +1470,7 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 			if p.opts.NativeToollessReview {
 				return p.nativeToollessViolation("unexpected child-thread item completion"), true
 			}
-			return llm.SDKMessage{}, false
+			return p.taskProgressForChildItem(completed.ThreadID, completed.Item)
 		}
 
 		switch completed.Item.Type {
@@ -1417,6 +1573,11 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 				},
 				FileChanges: fileChangeEventsForItem(completed.Item),
 			}, true
+		case codexItemTypeCollabAgentToolCall:
+			if p.opts.NativeToollessReview {
+				return p.nativeToollessViolation("unexpected child agent activity"), true
+			}
+			return p.taskNotificationForCollab(completed.Item), true
 		default:
 			if p.opts.NativeToollessReview && completed.Item.Type != "userMessage" && completed.Item.Type != "reasoning" {
 				return p.nativeToollessViolation("unexpected item activity: " + completed.Item.Type), true
@@ -1451,7 +1612,7 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 			if p.opts.NativeToollessReview {
 				return p.nativeToollessViolation("unexpected child-thread item activity"), true
 			}
-			return llm.SDKMessage{}, false
+			return p.taskProgressForChildItem(started.ThreadID, started.Item)
 		}
 		switch started.Item.Type {
 		case "commandExecution":
@@ -1478,6 +1639,14 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 					ToolName:  codexToolNameWrite,
 				},
 			}, true
+		case codexItemTypeCollabAgentToolCall:
+			if p.opts.NativeToollessReview {
+				return p.nativeToollessViolation("unexpected child agent activity"), true
+			}
+			if len(started.Item.ReceiverThreadIDs) == 0 {
+				return llm.SDKMessage{}, false
+			}
+			return p.taskStartedForCollab(started.Item), true
 		default:
 			if p.opts.NativeToollessReview && started.Item.Type != "userMessage" &&
 				started.Item.Type != "agentMessage" && started.Item.Type != "reasoning" {
@@ -2006,11 +2175,7 @@ func parseAskUserQuestions(raw json.RawMessage) []askUserQuestionView {
 const maxQuestionFormatRetries = 2
 
 func (p *Protocol) shouldReformatRetryLoose(hadToolUse bool) bool {
-	if p.opts.MarkerPath == "" {
-		return !hadToolUse
-	}
-	_, err := os.Stat(p.opts.MarkerPath)
-	return err != nil
+	return !hadToolUse
 }
 
 // parsedOption holds one numbered alternative extracted from a Codex question.
@@ -2109,6 +2274,18 @@ func splitOptionLabelDesc(raw string) (string, string) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return "", ""
+	}
+	if strings.HasPrefix(raw, "**") {
+		if closing := strings.Index(raw[2:], "**"); closing >= 0 {
+			closing += 2
+			label := strings.TrimSpace(raw[2:closing])
+			desc := strings.TrimSpace(raw[closing+2:])
+			if desc != "" {
+				label = strings.TrimSpace(strings.TrimRight(label, ".:"))
+				desc = strings.TrimSpace(strings.TrimLeft(desc, "—–-: "))
+			}
+			return label, desc
+		}
 	}
 	label := raw
 	desc := ""

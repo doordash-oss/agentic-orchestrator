@@ -17,9 +17,11 @@ paths:
       summary: Read runtime health and launch metadata.
       description: >-
         Liveness-only endpoint (status, runtime identity, launch policy,
-        start time, owner — no secrets). Intentionally exempt from bearer
-        auth so that a stale discovery token can't make a live, healthy
-        server look dead to PrepareDiscovery.
+        start time, owner, explicit compatibility declaration — no secrets).
+        Intentionally exempt from bearer auth so that a stale discovery
+        token can't make a live, healthy server look dead to
+        PrepareDiscovery, and so clients can evaluate compatibility before
+        presenting credentials.
       security: []
       responses:
         "200":
@@ -41,10 +43,19 @@ paths:
     post:
       operationId: createFeature
       summary: Create a feature.
+      description: >-
+        Queues server-owned durable setup for the new feature. While mandatory
+        readiness is not satisfied (no usable provider, invalid
+        configuration), creation is rejected with a structured `not_ready`
+        error whose target carries the outstanding readiness issues.
       parameters:
         - $ref: "#/components/parameters/TrustedMutationHeader"
       requestBody:
-        $ref: "#/components/requestBodies/JSONMutation"
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateFeatureMutationRequest"
       responses:
         "201":
           $ref: "#/components/responses/ActionResponse"
@@ -52,6 +63,8 @@ paths:
           $ref: "#/components/responses/ErrorResponse"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/ErrorResponse"
 
   /api/v1/features/{feature_id}:
     get:
@@ -109,6 +122,20 @@ paths:
           $ref: "#/components/responses/Unauthorized"
 
   /api/v1/features/{feature_id}/reviews:
+    get:
+      operationId: getReviewSession
+      summary: Read the active artifact review draft session without reopening it.
+      parameters:
+        - $ref: "#/components/parameters/FeatureID"
+      responses:
+        "200":
+          $ref: "#/components/responses/ReviewSessionResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/ErrorResponse"
+        "409":
+          $ref: "#/components/responses/ErrorResponse"
     post:
       operationId: createReviewSession
       summary: Create or reopen the active artifact review draft session.
@@ -120,6 +147,28 @@ paths:
       responses:
         "200":
           $ref: "#/components/responses/ReviewSessionResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/ErrorResponse"
+
+  /api/v1/features/{feature_id}/reviews/{review_id}/validate:
+    post:
+      operationId: validateReviewDraft
+      summary: Validate review draft text without modifying the session.
+      parameters:
+        - $ref: "#/components/parameters/FeatureID"
+        - $ref: "#/components/parameters/ReviewID"
+        - $ref: "#/components/parameters/TrustedMutationHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReviewDraftValidationRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/ReviewDraftValidationResponse"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "409":
@@ -169,10 +218,105 @@ paths:
         "409":
           $ref: "#/components/responses/ErrorResponse"
 
+  /api/v1/features/{feature_id}/rewind/preview:
+    get:
+      operationId: getRewindPreview
+      summary: Read-only, server-authored rewind preview — valid hierarchical targets, effective target, carry-forward set, PR/worktree consequences, backup behavior, and validation findings. No side effects.
+      parameters:
+        - $ref: "#/components/parameters/FeatureID"
+        - name: target_phase
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Proposed rewind target phase dir-name.
+        - name: roadmap_phase
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+          description: Optional partial Implement roadmap phase.
+        - name: upgrade_pipeline
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Optional pipeline upgrade profile.
+      responses:
+        "200":
+          $ref: "#/components/responses/RewindPreviewResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/features/{feature_id}/completion/preflight:
+    get:
+      operationId: getCompletionPreflight
+      summary: Read-only, server-authored completion preflight — the exact eligible repository set, already-published or completed outcomes, blockers, PR URLs, and a source revision mutations can reject as stale before side effects. No staging, commits, or arbitrary Git operations.
+      parameters:
+        - $ref: "#/components/parameters/FeatureID"
+      responses:
+        "200":
+          $ref: "#/components/responses/CompletionPreflightResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/features/{feature_id}/repositories/{repo_name}/diff:
+    get:
+      operationId: getRepositoryDiff
+      summary: Bounded, lazy, read-only diff inspection for one repository — lists changed files with stable identities, safe display paths, status (addition, modification, deletion, rename, binary, truncation, unavailable), and optional bounded diff content. Rejects traversal and symlink escape; imposes per-request and aggregate limits.
+      parameters:
+        - $ref: "#/components/parameters/FeatureID"
+        - name: repo_name
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: file_path
+          in: query
+          schema:
+            type: string
+          description: Optional single-file path to fetch bounded diff content for. Without this parameter, the response lists all changed files with summaries only.
+      responses:
+        "200":
+          $ref: "#/components/responses/RepositoryDiffResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/features/{feature_id}/repositories/{repo_name}/path:
+    get:
+      operationId: getRepositoryPath
+      summary: Resolve a server-approved repository worktree path for native reveal operations.
+      description: >-
+        Intended for trusted local desktop main-process use. The renderer calls
+        only the narrow reveal IPC with feature and repository identifiers; raw
+        host paths remain confined to the authenticated server and Electron main
+        process.
+      parameters:
+        - $ref: "#/components/parameters/FeatureID"
+        - name: repo_name
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          $ref: "#/components/responses/RepositoryPathResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
   /api/v1/features/{feature_id}/actions/{action}:
     post:
       operationId: runFeatureAction
       summary: Run a named feature action.
+      description: >-
+        Executes the named action. Child-feature execution actions (start,
+        resume, retry, restart) enforce the child capability gate: 409
+        `relationship_closed` for a child whose relationship has settled;
+        automatic reconciliation owns any remaining cleanup tail. A 409
+        `child_execution_blocked`
+        while setup is queued, running, or failed. Capability
+        rejections never invalidate or close the child record.
       parameters:
         - $ref: "#/components/parameters/FeatureID"
         - $ref: "#/components/parameters/FeatureAction"
@@ -182,8 +326,238 @@ paths:
       responses:
         "200":
           $ref: "#/components/responses/ActionResponse"
+        "201":
+          description: >-
+            Child launched. The typed contracts are documented by the static
+            refactorFeature and reviewFeedbackFeature operations at their exact
+            action URLs.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChildFeatureResponse"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/ErrorResponse"
+
+  # Statically documented form of the refactor action. The server routes the
+  # refactor launch through the dynamic /actions/{action} dispatch, so the
+  # served URL is exactly /api/v1/features/{feature_id}/actions/refactor;
+  # this operation pins the typed request/response surface to that URL.
+  /api/v1/features/{feature_id}/actions/refactor:
+    post:
+      operationId: refactorFeature
+      summary: Launch a refactor child feature from the typed wizard brief.
+      description: >-
+        Served at the same URL as `runFeatureAction` with action `refactor`.
+        Failure machine codes: 404 `parent_not_found`; 409 `parent_is_child`,
+        `parent_status_ineligible`, `active_child_exists`, and
+        `parent_worktrees_dirty` (which also carries per-repository
+        diagnostics under `error.target.repos`).
+      parameters:
+        - $ref: "#/components/parameters/FeatureID"
+        - $ref: "#/components/parameters/TrustedMutationHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RefactorFeatureRequest"
+      responses:
+        "201":
+          description: Refactor child launched.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RefactorFeatureResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/ErrorResponse"
+        "409":
+          $ref: "#/components/responses/ErrorResponse"
+
+  # Statically documented form of the review-feedback launch action. The
+  # server routes it through the dynamic /actions/{action} dispatcher, so the
+  # served URL is exactly the generic dispatch URL with action review-feedback.
+  /api/v1/features/{feature_id}/actions/review-feedback:
+    post:
+      operationId: reviewFeedbackFeature
+      summary: Launch a child feature from the pending review-feedback draft.
+      description: >-
+        Constant-size request: accepts only the expected pending-draft
+        revision plus an optional coupled roadmap/phase-plan gate. The
+        server re-fetches GitHub at launch, reconciles the draft's selected
+        stable references against current data, and injects the complete
+        current comment content into the child-creation path. Failure
+        machine codes include 400 `review_feedback_empty_selection`,
+        `review_feedback_zero_launchable_selection`,
+        `review_feedback_unsupported_comment_type`,
+        `review_feedback_unknown_repo`, and
+        `review_feedback_repo_has_no_pull_request`; 404 `parent_not_found`;
+        and 409 `review_feedback_revision_conflict`, `parent_is_child`,
+        `parent_status_ineligible`, `active_child_exists`, and
+        `parent_worktrees_dirty`.
+      parameters:
+        - $ref: "#/components/parameters/FeatureID"
+        - $ref: "#/components/parameters/TrustedMutationHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReviewFeedbackFeatureRequest"
+      responses:
+        "201":
+          description: Review-feedback child launched and setup queued.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReviewFeedbackFeatureResponse"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/ErrorResponse"
+        "409":
+          $ref: "#/components/responses/ErrorResponse"
+
+  # Statically documented form of the review-feedback fetch subaction. The
+  # server routes it through the dynamic action/subaction dispatcher, so the
+  # served URL remains exactly the generic dispatch URL below.
+  /api/v1/features/{feature_id}/actions/review-feedback/fetch:
+    post:
+      operationId: fetchReviewFeedback
+      summary: Fetch unaddressed pull-request feedback and establish the pending draft.
+      description: >-
+        Aggregates every repository carrying a PR URL, silently skips parent
+        repositories without one, and reconciles the result with the
+        parent-scoped durable pending draft: first fetch selects every
+        visible unaddressed reference, later fetches retain prior selections
+        for known stable references, select newly observed ones, and prune
+        references that disappeared. Repositories are returned in the
+        parent's stable repository order with comments oldest-first inside
+        each group (stable reference as the deterministic tie-breaker). Any
+        single-repository GitHub failure fails the operation atomically with
+        that repository identified. The response carries the authoritative
+        pending-draft revision.
+      parameters:
+        - $ref: "#/components/parameters/FeatureID"
+        - $ref: "#/components/parameters/TrustedMutationHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReviewFeedbackFetchRequest"
+      responses:
+        "200":
+          description: Authoritative pending-draft view with revision.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReviewFeedbackFetchResponse"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/ErrorResponse"
+        "502":
+          $ref: "#/components/responses/ErrorResponse"
+
+  # Statically documented form of the review-feedback selection subaction.
+  # The server routes it through the dynamic action/subaction dispatcher, so
+  # the served URL remains exactly the generic dispatch URL below.
+  /api/v1/features/{feature_id}/actions/review-feedback/selection:
+    post:
+      operationId: updateReviewFeedbackSelection
+      summary: Commit one review-feedback selection against the pending draft.
+      description: >-
+        Bounded, reference-only mutation: accepts the expected pending-draft
+        revision and a list of stable references with selection values only.
+        Comment bodies, diff hunks, paths, authors, and timestamps are never
+        accepted here. The server validates authentication, parent
+        eligibility, reference membership, request bounds, and the expected
+        revision before atomically saving the next draft revision. Failure
+        machine codes include 400 `review_feedback_unknown_reference` and
+        `review_feedback_selection_update_too_large`; 404 `parent_not_found`;
+        and 409 `review_feedback_revision_conflict`.
+      parameters:
+        - $ref: "#/components/parameters/FeatureID"
+        - $ref: "#/components/parameters/TrustedMutationHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReviewFeedbackSelectionRequest"
+      responses:
+        "200":
+          description: Authoritative pending-draft view at the next revision.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReviewFeedbackSelectionResponse"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/ErrorResponse"
+        "409":
+          $ref: "#/components/responses/ErrorResponse"
+
+
+  # Statically documented form of the rebase child launch action. The server
+  # routes the rebase launch through the dynamic /actions/{action} dispatch,
+  # so the served URL is exactly /api/v1/features/{feature_id}/actions/rebase;
+  # this operation pins the typed request/response surface to that URL. The
+  # request is zero-input: any JSON body (including the legacy
+  # source_revision payload) is accepted and ignored.
+  /api/v1/features/{feature_id}/actions/rebase:
+    post:
+      operationId: rebaseFeature
+      summary: Launch a rebase child feature that merge-reconciles behind repositories.
+      description: >-
+        Zero-input child launch: the handler accepts and ignores any JSON body,
+        including the legacy source_revision payload. The orchestrator resolves
+        each repository's merge target (PR base branch, recorded base branch,
+        or repository default branch), fetches, and computes behind-ness. If
+        every repository is up to date, returns the typed
+        rebase_already_up_to_date error naming each resolved target. If any
+        repository fails target resolution or fetch, the whole action fails
+        atomically with a distinct stable code naming the failing repo; no
+        child and no relationship event are created. On success a rebase child
+        of kind "rebase" is created with a pinned medium pipeline, fork-point-
+        pinned worktrees, and persisted resolved targets and behind set.
+        Failure machine codes: 404 parent_not_found; 409 parent_is_child,
+        parent_status_ineligible, active_child_exists, parent_worktrees_dirty,
+        rebase_target_resolution_failed, rebase_fetch_failed, and
+        rebase_already_up_to_date.
+      parameters:
+        - $ref: "#/components/parameters/FeatureID"
+        - $ref: "#/components/parameters/TrustedMutationHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RebaseFeatureRequest"
+      responses:
+        "201":
+          description: Rebase child launched and setup queued.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RebaseFeatureResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/ErrorResponse"
+        "409":
+          $ref: "#/components/responses/ErrorResponse"
 
   /api/v1/features/{feature_id}/actions/{action}/{subaction}:
     post:
@@ -199,6 +573,46 @@ paths:
       responses:
         "200":
           $ref: "#/components/responses/ActionResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/features/{feature_id}/runs:
+    get:
+      operationId: listRuns
+      summary: List every sealed and active run for a feature, newest first, with bounded pagination.
+      parameters:
+        - $ref: "#/components/parameters/FeatureID"
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+      responses:
+        "200":
+          $ref: "#/components/responses/RunListResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/features/{feature_id}/runs/{run_number}:
+    get:
+      operationId: getRunDetail
+      summary: Read run-authentic detail for one run, including seal, provenance, timing, and cost.
+      parameters:
+        - $ref: "#/components/parameters/FeatureID"
+        - $ref: "#/components/parameters/RunNumber"
+      responses:
+        "200":
+          $ref: "#/components/responses/RunDetailResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/features/{feature_id}/runs/{run_number}/sessions:
+    get:
+      operationId: listRunSessions
+      summary: List sessions belonging to one run, filtered by run number.
+      parameters:
+        - $ref: "#/components/parameters/FeatureID"
+        - $ref: "#/components/parameters/RunNumber"
+      responses:
+        "200":
+          $ref: "#/components/responses/RunSessionListResponse"
         "401":
           $ref: "#/components/responses/Unauthorized"
 
@@ -247,6 +661,19 @@ paths:
         "401":
           $ref: "#/components/responses/Unauthorized"
 
+  /api/v1/features/{feature_id}/runs/{run_number}/logs:
+    get:
+      operationId: listRunLogs
+      summary: List authentic bounded-text logs discovered inside a run.
+      parameters:
+        - $ref: "#/components/parameters/FeatureID"
+        - $ref: "#/components/parameters/RunNumber"
+      responses:
+        "200":
+          $ref: "#/components/responses/RunLogListResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
   /api/v1/config/runtime:
     get:
       operationId: getRuntimeConfig
@@ -259,6 +686,12 @@ paths:
     patch:
       operationId: patchRuntimeConfig
       summary: Patch runtime configuration.
+      description: >-
+        Partially updates the runtime configuration. Submitted workspace_roots
+        are validated against the server's filesystem before persistence: every
+        root must exist and resolve to a directory, otherwise the request fails
+        with a 400 invalid_workspace_root error naming each offending path in
+        error.target.invalid_workspace_roots and nothing is persisted.
       parameters:
         - $ref: "#/components/parameters/TrustedMutationHeader"
       requestBody:
@@ -266,11 +699,18 @@ paths:
       responses:
         "200":
           $ref: "#/components/responses/ActionResponse"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
         "401":
           $ref: "#/components/responses/Unauthorized"
     put:
       operationId: putRuntimeConfig
       summary: Replace runtime configuration.
+      description: >-
+        Replaces the runtime configuration. Submitted workspace_roots are
+        validated the same way as for PATCH: each root must exist and resolve
+        to a directory, otherwise the request fails with a 400
+        invalid_workspace_root error and nothing is persisted.
       parameters:
         - $ref: "#/components/parameters/TrustedMutationHeader"
       requestBody:
@@ -278,6 +718,8 @@ paths:
       responses:
         "200":
           $ref: "#/components/responses/ActionResponse"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
         "401":
           $ref: "#/components/responses/Unauthorized"
 
@@ -291,6 +733,67 @@ paths:
         "401":
           $ref: "#/components/responses/Unauthorized"
 
+  /api/v1/catalog/models/refresh:
+    post:
+      operationId: refreshProviderModels
+      summary: Re-probe one provider and refresh its model catalog.
+      description: >-
+        Re-runs readiness for the named provider and, when ready, discovers and
+        atomically installs only that provider's current model catalog.
+      parameters:
+        - $ref: "#/components/parameters/TrustedMutationHeader"
+      requestBody:
+        $ref: "#/components/requestBodies/ProviderModelRefreshRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/ProviderModelRefreshResponse"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/ErrorResponse"
+        "409":
+          $ref: "#/components/responses/ErrorResponse"
+        "502":
+          $ref: "#/components/responses/ErrorResponse"
+
+  /api/v1/readiness:
+    get:
+      operationId: getReadiness
+      summary: Read consolidated runtime readiness.
+      description: >-
+        Reports provider executable, version and authentication readiness,
+        model availability, configuration validity, workspace-root validity,
+        and discovered-repository validity — each with safe remediation
+        metadata (for example the CLI command to run). Available in
+        setup-capable mode before any provider is usable so first-launch
+        clients never probe provider CLIs themselves.
+      responses:
+        "200":
+          $ref: "#/components/responses/ReadinessResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/readiness/refresh:
+    post:
+      operationId: refreshReadiness
+      summary: Re-probe provider readiness on demand.
+      description: >-
+        Re-runs the provider readiness probes (executable detection, version
+        gate, authentication) without restarting the runtime, updates active
+        model routing, and returns the refreshed readiness snapshot. Call
+        after completing an external provider authentication flow.
+      parameters:
+        - $ref: "#/components/parameters/TrustedMutationHeader"
+      requestBody:
+        $ref: "#/components/requestBodies/JSONMutation"
+      responses:
+        "200":
+          $ref: "#/components/responses/ReadinessResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
   /api/v1/prompts:
     get:
       operationId: listPrompts
@@ -300,6 +803,8 @@ paths:
           $ref: "#/components/responses/PromptSnapshotResponse"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/ErrorResponse"
 
   /api/v1/prompts/ask-user/answer:
     post:
@@ -333,6 +838,20 @@ paths:
     post:
       operationId: startChatPrompt
       summary: Start a chat prompt session.
+      parameters:
+        - $ref: "#/components/parameters/TrustedMutationHeader"
+      requestBody:
+        $ref: "#/components/requestBodies/JSONMutation"
+      responses:
+        "200":
+          $ref: "#/components/responses/ActionResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/prompts/chat/end:
+    post:
+      operationId: endChatPrompt
+      summary: End the active singleton chat prompt session.
       parameters:
         - $ref: "#/components/parameters/TrustedMutationHeader"
       requestBody:
@@ -442,6 +961,37 @@ paths:
         "401":
           $ref: "#/components/responses/Unauthorized"
 
+  /api/v1/workspace/repositories/init:
+    post:
+      operationId: initWorkspaceRepository
+      summary: Initialize a new git repository inside a configured workspace root.
+      description: >-
+        Bounded repository-initialization action for first-launch onboarding.
+        Requires an explicit consent flag and a target path confined to a
+        configured workspace root after symlink resolution. Rejects path
+        traversal, symlink escape, targets that are already git repositories,
+        and non-empty incompatible directories. On success the repository is
+        initialized with an initial empty commit (so HEAD resolves and
+        worktree setup can proceed) and is immediately discoverable through
+        workspace discovery.
+      parameters:
+        - $ref: "#/components/parameters/TrustedMutationHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RepositoryInitRequest"
+      responses:
+        "201":
+          $ref: "#/components/responses/RepositoryInitResponse"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/ErrorResponse"
+
   /api/v1/recovery:
     get:
       operationId: getRecoverySnapshot
@@ -466,17 +1016,18 @@ paths:
         "401":
           $ref: "#/components/responses/Unauthorized"
 
-  /api/v1/shutdown:
-    post:
-      operationId: shutdownRuntime
-      summary: Request runtime shutdown.
+  /api/v1/recovery/logs:
+    get:
+      operationId: getRecoveryLog
+      summary: Read a bounded, redacted log slice for one recovery item, resolved through the snapshot and item key. Rejects traversal, cross-item access, and stale snapshots; never returns raw host paths.
       parameters:
-        - $ref: "#/components/parameters/TrustedMutationHeader"
-      requestBody:
-        $ref: "#/components/requestBodies/JSONMutation"
+        - $ref: "#/components/parameters/RecoverySnapshotID"
+        - $ref: "#/components/parameters/RecoveryItemKey"
+        - $ref: "#/components/parameters/Offset"
+        - $ref: "#/components/parameters/Limit"
       responses:
         "200":
-          $ref: "#/components/responses/ActionResponse"
+          $ref: "#/components/responses/TextContentResponse"
         "401":
           $ref: "#/components/responses/Unauthorized"
 
@@ -513,6 +1064,62 @@ paths:
           $ref: "#/components/responses/EventStream"
         "401":
           $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/uploads:
+    post:
+      operationId: stageUpload
+      summary: Stage one image or attachment upload server-side.
+      description: >-
+        Accepts one file per request as a raw application/octet-stream body
+        with metadata in the query string. Accepted bytes land in a staging
+        directory under the server's state dir, keyed by an opaque,
+        unguessable, single-use reference; the client-supplied name is kept
+        as metadata only and never becomes an on-disk name. Image uploads
+        require a png, jpg, jpeg, gif, or webp file name extension and are
+        capped at 10 MiB; attachment uploads accept any bytes and are capped
+        at 25 MiB. References are consumed by the image_uploads /
+        attachment_uploads fields of the feature-creation, refactor-launch,
+        and chat-start mutations (chat resolves image references only) and
+        expire 24 hours after staging.
+      parameters:
+        - name: kind
+          in: query
+          required: true
+          schema:
+            type: string
+          description: "Staged upload kind: image or attachment."
+        - name: name
+          in: query
+          required: true
+          schema:
+            type: string
+            maxLength: 255
+          description: Original client-side file name, retained as metadata only.
+        - $ref: "#/components/parameters/TrustedMutationHeader"
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        "200":
+          description: Staged upload reference.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StageUploadResponse"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/ErrorResponse"
+        "413":
+          $ref: "#/components/responses/ErrorResponse"
+        "415":
+          $ref: "#/components/responses/ErrorResponse"
 
 components:
   securitySchemes:
@@ -572,6 +1179,7 @@ components:
       schema:
         type: string
         enum:
+          - setup
           - start
           - resume
           - pause-stop
@@ -581,14 +1189,14 @@ components:
           - rewind
           - retry
           - rebase
-          - review-comments
-          - review-decision
-          - refactor
           - need-user-input
           - need-user-input-draft
           - mark-done
           - cleanup
           - delete
+          - refactor
+          - review-feedback
+          - discard
     FeatureSubaction:
       name: subaction
       in: path
@@ -598,8 +1206,6 @@ components:
         enum:
           - description
           - fetch
-          - finish
-          - restart
     Offset:
       name: offset
       in: query
@@ -616,6 +1222,23 @@ components:
         type: integer
         format: int64
         minimum: 1
+    Page:
+      name: page
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+      description: 1-indexed page number for run-history pagination.
+    PageSize:
+      name: page_size
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+      description: Bounded page size for run-history pagination.
     TrustedMutationHeader:
       name: X-Agentico-Client
       in: header
@@ -624,6 +1247,20 @@ components:
         type: string
         enum: ["local"]
       description: CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required.
+    RecoverySnapshotID:
+      name: snapshot_id
+      in: query
+      required: true
+      schema:
+        type: string
+      description: Recovery snapshot identity returned by GET /api/v1/recovery.
+    RecoveryItemKey:
+      name: key
+      in: query
+      required: true
+      schema:
+        type: string
+      description: Recovery item key (feature id, or feature id and repo name joined by a colon).
 
   requestBodies:
     JSONMutation:
@@ -633,6 +1270,12 @@ components:
           schema:
             type: object
             additionalProperties: true
+    ProviderModelRefreshRequest:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ProviderModelRefreshRequest"
 
   responses:
     HealthResponse:
@@ -684,6 +1327,12 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/ModelCatalogResponse"
+    ProviderModelRefreshResponse:
+      description: Refreshed provider readiness and model catalog.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ProviderModelRefreshResponse"
     PromptSnapshotResponse:
       description: Pending prompt snapshot.
       content:
@@ -708,6 +1357,51 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/TextContentResponse"
+    RunLogListResponse:
+      description: Authentic log files available within one run.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/RunLogListResponse"
+    RunListResponse:
+      description: Paginated run history, newest first.
+      headers:
+        X-Agentico-Seq:
+          $ref: "#/components/headers/Sequence"
+        ETag:
+          $ref: "#/components/headers/ETag"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/RunListResponse"
+    RunDetailResponse:
+      description: Run-authentic detail for one run.
+      headers:
+        X-Agentico-Seq:
+          $ref: "#/components/headers/Sequence"
+        ETag:
+          $ref: "#/components/headers/ETag"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/RunDetailResponse"
+    RunSessionListResponse:
+      description: Sessions belonging to one run.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/RunSessionListResponse"
+    RewindPreviewResponse:
+      description: Server-authored, side-effect-free rewind preview.
+      headers:
+        X-Agentico-Seq:
+          $ref: "#/components/headers/Sequence"
+        ETag:
+          $ref: "#/components/headers/ETag"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/RewindPreviewResponse"
     ReviewSessionResponse:
       description: Artifact review draft session.
       content:
@@ -720,6 +1414,12 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/ReviewSessionDecisionResponse"
+    ReviewDraftValidationResponse:
+      description: Advisory validation result for review draft text.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ReviewDraftValidationResponse"
     LivePreviewResponse:
       description: Live preview.
       content:
@@ -750,6 +1450,54 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/RecoverySnapshotResponse"
+    CompletionPreflightResponse:
+      description: Read-only, server-authored completion preflight — eligible repository set, outcomes, blockers, PR URLs, source revision.
+      headers:
+        X-Agentico-Seq:
+          $ref: "#/components/headers/Sequence"
+        ETag:
+          $ref: "#/components/headers/ETag"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/CompletionPreflightResponse"
+    RepositoryDiffResponse:
+      description: Bounded, lazy, read-only diff inspection for one repository.
+      headers:
+        X-Agentico-Seq:
+          $ref: "#/components/headers/Sequence"
+        ETag:
+          $ref: "#/components/headers/ETag"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/RepositoryDiffResponse"
+    RepositoryPathResponse:
+      description: Server-approved repository worktree path for desktop main-process reveal.
+      headers:
+        X-Agentico-Seq:
+          $ref: "#/components/headers/Sequence"
+        ETag:
+          $ref: "#/components/headers/ETag"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/RepositoryPathDTO"
+    ReadinessResponse:
+      description: Consolidated runtime readiness snapshot.
+      headers:
+        X-Agentico-Seq:
+          $ref: "#/components/headers/Sequence"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ReadinessResponse"
+    RepositoryInitResponse:
+      description: Newly initialized workspace repository.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/RepositoryInitResponse"
     ActionResponse:
       description: Mutation result.
       content:
@@ -858,6 +1606,20 @@ components:
           type: string
         feature_id:
           type: string
+        parent_id:
+          type: string
+          description: >-
+            Parent feature id for a relationship lifecycle event.
+        child_id:
+          type: string
+          description: >-
+            Direct child feature id for a relationship lifecycle event.
+        relationship_deleted:
+          type: boolean
+          description: >-
+            True only when a completed cascade removed both relationship
+            records. Clients refresh the top-level list and evict both detail
+            snapshots instead of treating their absence as a stream failure.
         phase:
           type: string
     SSEEvent:
@@ -929,7 +1691,16 @@ components:
       allOf:
         - $ref: "#/components/schemas/JSONResponse"
         - type: object
-          required: [status, runtime, launch_policy, started_at, owner, server_time]
+          required:
+            [
+              status,
+              runtime,
+              launch_policy,
+              started_at,
+              owner,
+              server_time,
+              compatibility,
+            ]
           properties:
             status:
               type: string
@@ -945,6 +1716,242 @@ components:
             server_time:
               type: string
               format: date-time
+            compatibility:
+              $ref: "#/components/schemas/CompatibilityDeclaration"
+            name:
+              type: string
+              maxLength: 64
+    BuildIdentity:
+      type: object
+      description: >-
+        Build provenance for one side of the desktop/server pairing. Purely
+        informational: a differing build identity alone never blocks
+        attachment — compatibility is decided by the explicit declaration
+        fields, not by comparing versions.
+      required: [version]
+      properties:
+        version:
+          type: string
+          description: Human-readable build version (e.g. a git describe string).
+        revision:
+          type: string
+          description: VCS revision the binary was built from, when known.
+    CompatibilityDeclaration:
+      type: object
+      description: >-
+        The server's explicit compatibility contract. Clients (such as the
+        desktop app) must attach only when they support the declared
+        (api_version, schema_version) REST contract AND the declared
+        runtime_policy, and when their own client schema version is at least
+        min_client_schema. A shared API major version alone is never
+        sufficient. Contains no secrets.
+      required:
+        [
+          api_version,
+          schema_version,
+          min_client_schema,
+          runtime_policy,
+          server_build,
+        ]
+      properties:
+        api_version:
+          type: string
+          description: The REST API major version this server serves (e.g. "v1").
+        schema_version:
+          type: integer
+          description: >-
+            Monotonic series number of the REST schema contract within the
+            API major. Bumped whenever the wire schema changes incompatibly.
+        min_client_schema:
+          type: integer
+          description: >-
+            The minimum client schema series a connecting client must
+            implement for this server to consider it compatible.
+        runtime_policy:
+          type: string
+          description: >-
+            Name of the runtime security/ownership policy contract in force
+            (e.g. "loopback-bearer-v1" — loopback-only listener with bearer
+            token auth and single-owner discovery).
+        server_build:
+          $ref: "#/components/schemas/BuildIdentity"
+    ReadinessIssueCode:
+      type: string
+      description: >-
+        Readiness problem taxonomy. missing_executable — a provider CLI binary
+        is not installed; unsupported_version — an installed provider CLI is
+        below the enforced minimum version; unauthenticated — a provider CLI
+        is installed but its authentication flow has not been completed;
+        models_unavailable — no usable provider exposes any model;
+        invalid_configuration — the runtime configuration is unusable;
+        invalid_workspace_root — a configured workspace root does not resolve
+        to a directory; invalid_repository — a configured repository path is
+        not a git repository.
+      enum:
+        - missing_executable
+        - unsupported_version
+        - unauthenticated
+        - models_unavailable
+        - invalid_configuration
+        - invalid_workspace_root
+        - invalid_repository
+    ReadinessIssue:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          $ref: "#/components/schemas/ReadinessIssueCode"
+        message:
+          type: string
+          description: Human-readable problem summary. Never contains credentials.
+        remedy:
+          type: string
+          description: >-
+            Safe remediation metadata, such as the CLI command to run. Never
+            contains credentials or non-configured filesystem paths.
+    ProviderReadiness:
+      type: object
+      required: [name, installed, ready]
+      properties:
+        name:
+          type: string
+        installed:
+          type: boolean
+        version:
+          type: string
+        ready:
+          type: boolean
+        issue:
+          $ref: "#/components/schemas/ReadinessIssue"
+          x-go-type-skip-optional-pointer: false
+    ModelReadiness:
+      type: object
+      required: [available]
+      properties:
+        available:
+          type: boolean
+        models:
+          type: array
+          items:
+            type: string
+        issue:
+          $ref: "#/components/schemas/ReadinessIssue"
+          x-go-type-skip-optional-pointer: false
+    ConfigurationReadiness:
+      type: object
+      required: [valid]
+      properties:
+        valid:
+          type: boolean
+        issue:
+          $ref: "#/components/schemas/ReadinessIssue"
+          x-go-type-skip-optional-pointer: false
+    WorkspaceRootReadiness:
+      type: object
+      required: [path, valid]
+      properties:
+        path:
+          type: string
+        valid:
+          type: boolean
+        issue:
+          $ref: "#/components/schemas/ReadinessIssue"
+          x-go-type-skip-optional-pointer: false
+    RepositoryReadiness:
+      type: object
+      required: [name, path, valid]
+      properties:
+        name:
+          type: string
+        path:
+          type: string
+        valid:
+          type: boolean
+        issue:
+          $ref: "#/components/schemas/ReadinessIssue"
+          x-go-type-skip-optional-pointer: false
+    RepositoryInitRequest:
+      x-go-name: RepositoryInitSchema
+      type: object
+      required: [path, consent]
+      properties:
+        path:
+          type: string
+          description: >-
+            Absolute directory to initialize, confined to a configured
+            workspace root. May not yet exist; an existing directory must be
+            empty and not already a git repository.
+        consent:
+          type: boolean
+          description: >-
+            Explicit user consent to create a git repository at the target
+            path. Must be true.
+    WorkspaceRepository:
+      type: object
+      required: [name, path]
+      properties:
+        name:
+          type: string
+          description: Collision-safe repository key used by workspace discovery.
+        path:
+          type: string
+        root:
+          type: string
+          description: The configured workspace root containing the repository.
+    RepositoryInitResponse:
+      allOf:
+        - $ref: "#/components/schemas/ActionBaseResponse"
+        - type: object
+          required: [result, repository]
+          properties:
+            result:
+              type: string
+            repository:
+              $ref: "#/components/schemas/WorkspaceRepository"
+    WorkspaceReadiness:
+      type: object
+      required: [roots, repositories]
+      properties:
+        roots:
+          type: array
+          items:
+            $ref: "#/components/schemas/WorkspaceRootReadiness"
+        repositories:
+          type: array
+          items:
+            $ref: "#/components/schemas/RepositoryReadiness"
+    ReadinessResponse:
+      allOf:
+        - $ref: "#/components/schemas/JSONResponse"
+        - type: object
+          required: [ready, providers, models, configuration, workspace]
+          properties:
+            ready:
+              type: boolean
+              description: >-
+                Mandatory readiness — true when at least one provider is
+                usable, models are available, and the configuration is valid.
+                Feature creation is gated on this value.
+            probed_at:
+              type: string
+              format: date-time
+              x-go-type-skip-optional-pointer: false
+              description: When provider probes last ran.
+            providers:
+              type: array
+              items:
+                $ref: "#/components/schemas/ProviderReadiness"
+            models:
+              $ref: "#/components/schemas/ModelReadiness"
+            configuration:
+              $ref: "#/components/schemas/ConfigurationReadiness"
+            workspace:
+              $ref: "#/components/schemas/WorkspaceReadiness"
+            issues:
+              type: array
+              description: Flattened outstanding issues across all sections.
+              items:
+                $ref: "#/components/schemas/ReadinessIssue"
     FeatureListResponse:
       allOf:
         - $ref: "#/components/schemas/JSONResponse"
@@ -1013,11 +2020,6 @@ components:
               type: array
               items:
                 type: string
-            ui:
-              x-go-type: config.UIConfig
-              x-go-type-import:
-                path: github.com/doordash-oss/agentic-orchestrator/internal/config
-                name: config
             notifications:
               $ref: "#/components/schemas/NotificationConfig"
             observability:
@@ -1030,7 +2032,13 @@ components:
       allOf:
         - $ref: "#/components/schemas/JSONResponse"
         - type: object
-          required: [provider_order, provider_models, phase_defaults, phase_provider_models]
+          required:
+            [
+              provider_order,
+              provider_models,
+              phase_defaults,
+              phase_provider_models,
+            ]
           properties:
             provider_order:
               type: array
@@ -1052,6 +2060,26 @@ components:
                   type: array
                   items:
                     type: string
+    ProviderModelRefreshRequest:
+      type: object
+      additionalProperties: false
+      required: [provider]
+      properties:
+        provider:
+          type: string
+          minLength: 1
+          maxLength: 100
+          pattern: "^[a-zA-Z0-9._-]+$"
+    ProviderModelRefreshResponse:
+      allOf:
+        - $ref: "#/components/schemas/JSONResponse"
+        - type: object
+          required: [readiness, catalog]
+          properties:
+            readiness:
+              $ref: "#/components/schemas/ReadinessResponse"
+            catalog:
+              $ref: "#/components/schemas/ModelCatalogResponse"
     PromptSnapshotResponse:
       allOf:
         - $ref: "#/components/schemas/JSONResponse"
@@ -1111,6 +2139,31 @@ components:
               type: string
             truncated:
               type: boolean
+    RunLog:
+      type: object
+      required: [id, path, size, modified_at]
+      properties:
+        id:
+          type: string
+        path:
+          type: string
+          description: Safe run-relative display path.
+        size:
+          type: integer
+          format: int64
+        modified_at:
+          type: string
+          format: date-time
+    RunLogListResponse:
+      allOf:
+        - $ref: "#/components/schemas/JSONResponse"
+        - type: object
+          required: [logs]
+          properties:
+            logs:
+              type: array
+              items:
+                $ref: "#/components/schemas/RunLog"
     ReviewSessionResponse:
       allOf:
         - $ref: "#/components/schemas/JSONResponse"
@@ -1177,6 +2230,41 @@ components:
               type: string
             result:
               type: string
+    ReviewDraftValidationRequest:
+      type: object
+      required: [text]
+      properties:
+        text:
+          type: string
+    ReviewDraftValidationResponse:
+      allOf:
+        - $ref: "#/components/schemas/JSONResponse"
+        - type: object
+          required:
+            [feature_id, review_id, applicable, valid, revision, findings]
+          properties:
+            feature_id:
+              type: string
+            review_id:
+              type: string
+            applicable:
+              type: boolean
+            valid:
+              type: boolean
+            revision:
+              type: string
+            findings:
+              type: array
+              items:
+                $ref: "#/components/schemas/ReviewDraftValidationFinding"
+    ReviewDraftValidationFinding:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+        message:
+          type: string
     LivePreviewResponse:
       allOf:
         - $ref: "#/components/schemas/JSONResponse"
@@ -1255,18 +2343,18 @@ components:
           properties:
             create_feature_response:
               $ref: "#/components/schemas/CreateFeatureResponse"
+            feature_setup_response:
+              $ref: "#/components/schemas/FeatureSetupResponse"
             feature_start_response:
               $ref: "#/components/schemas/FeatureStartResponse"
             feature_stop_response:
               $ref: "#/components/schemas/FeatureStopResponse"
             feature_restart_response:
               $ref: "#/components/schemas/FeatureRestartResponse"
-            review_decision_response:
-              $ref: "#/components/schemas/ReviewDecisionResponse"
             feature_config_update_response:
               $ref: "#/components/schemas/FeatureConfigUpdateResponse"
-            need_user_input_decision_response:
-              $ref: "#/components/schemas/NeedUserInputDecisionResponse"
+            need_user_input_resume_response:
+              $ref: "#/components/schemas/NeedUserInputResumeResponse"
             need_user_input_draft_response:
               $ref: "#/components/schemas/NeedUserInputDraftResponse"
             permission_answer_response:
@@ -1277,6 +2365,8 @@ components:
               $ref: "#/components/schemas/HelpSendResponse"
             chat_start_response:
               $ref: "#/components/schemas/ChatStartResponse"
+            chat_end_response:
+              $ref: "#/components/schemas/ChatEndResponse"
             runtime_config_update_response:
               $ref: "#/components/schemas/RuntimeConfigUpdateResponse"
             publish_feature_response:
@@ -1289,27 +2379,86 @@ components:
               $ref: "#/components/schemas/RewindFeatureResponse"
             retry_feature_response:
               $ref: "#/components/schemas/RetryFeatureResponse"
-            rebase_start_response:
-              $ref: "#/components/schemas/RebaseStartResponse"
-            review_comments_fetch_response:
-              $ref: "#/components/schemas/ReviewCommentsFetchResponse"
-            review_comments_start_response:
-              $ref: "#/components/schemas/ReviewCommentsStartResponse"
-            refactor_start_response:
-              $ref: "#/components/schemas/RefactorStartResponse"
-            refactor_restart_response:
-              $ref: "#/components/schemas/RefactorRestartResponse"
             mark_done_response:
               $ref: "#/components/schemas/MarkDoneResponse"
             cleanup_feature_response:
               $ref: "#/components/schemas/CleanupFeatureResponse"
             delete_feature_response:
               $ref: "#/components/schemas/DeleteFeatureResponse"
+            discard_child_response:
+              $ref: "#/components/schemas/DiscardChildResponse"
             recovery_action_response:
               $ref: "#/components/schemas/RecoveryActionResponse"
-            shutdown_response:
-              $ref: "#/components/schemas/ShutdownResponse"
     CreateFeatureResponse:
+      allOf:
+        - $ref: "#/components/schemas/ActionBaseResponse"
+        - $ref: "#/components/schemas/FeatureActionResult"
+    CreateFeatureMutationRequest:
+      type: object
+      additionalProperties: false
+      required: [name]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 200 }
+        description: { type: string, maxLength: 10000 }
+        repos:
+          type: array
+          maxItems: 32
+          items: { type: string }
+        models:
+          $ref: "#/components/schemas/ModelDefaults"
+        exit_criteria: { type: string, maxLength: 4000 }
+        inquireness:
+          type: string
+          enum: [none, medium, high]
+        images:
+          type: array
+          maxItems: 12
+          items: { type: string }
+        image_uploads:
+          type: array
+          maxItems: 12
+          items: { type: string }
+        attachments:
+          type: array
+          maxItems: 24
+          items: { type: string }
+        attachment_uploads:
+          type: array
+          maxItems: 24
+          items: { type: string }
+        use_current_branch: { type: boolean }
+        checkpoints:
+          $ref: "#/components/schemas/Checkpoints"
+        risk_level:
+          type: string
+          enum: [low, medium, high]
+        pipeline:
+          type: string
+          enum: [medium, large, moonshot]
+        idempotency_key: { type: string, maxLength: 128 }
+    StageUploadResponse:
+      type: object
+      additionalProperties: false
+      required: [api_version, reference, kind, name, size]
+      properties:
+        api_version:
+          type: string
+        reference:
+          type: string
+        kind:
+          type: string
+        name:
+          type: string
+        size:
+          type: integer
+          format: int64
+    FeatureSetupResponse:
+      description: >-
+        Result of the setup action: durable server-owned setup (fresh run or
+        retry of unfinished tasks) has been dispatched without starting
+        orchestration. Progress is reported through the feature detail setup
+        state and SSE invalidation events; on success the feature reaches a
+        startable pre-orchestration state.
       allOf:
         - $ref: "#/components/schemas/ActionBaseResponse"
         - $ref: "#/components/schemas/FeatureActionResult"
@@ -1340,37 +2489,19 @@ components:
               type: string
             dispatch:
               type: string
-            repo_cycle_count:
-              type: integer
-            refactor_count:
-              type: integer
             session_ids:
               type: array
               x-go-name: SessionIDs
               items:
                 type: string
-    ReviewDecisionResponse:
-      allOf:
-        - $ref: "#/components/schemas/ActionBaseResponse"
-        - $ref: "#/components/schemas/FeatureActionResult"
-        - type: object
-          required: [decision]
-          properties:
-            decision:
-              type: string
     FeatureConfigUpdateResponse:
       allOf:
         - $ref: "#/components/schemas/ActionBaseResponse"
         - $ref: "#/components/schemas/FeatureActionResult"
-    NeedUserInputDecisionResponse:
+    NeedUserInputResumeResponse:
       allOf:
         - $ref: "#/components/schemas/ActionBaseResponse"
         - $ref: "#/components/schemas/FeatureActionResult"
-        - type: object
-          required: [decision]
-          properties:
-            decision:
-              type: string
     NeedUserInputDraftResponse:
       allOf:
         - $ref: "#/components/schemas/ActionBaseResponse"
@@ -1427,6 +2558,16 @@ components:
               type: string
             result:
               type: string
+    ChatEndResponse:
+      allOf:
+        - $ref: "#/components/schemas/ActionBaseResponse"
+        - type: object
+          required: [session_id, result]
+          properties:
+            session_id:
+              type: string
+            result:
+              type: string
     RuntimeConfigUpdateResponse:
       allOf:
         - $ref: "#/components/schemas/ActionBaseResponse"
@@ -1466,103 +2607,539 @@ components:
               type: integer
             upgrade_pipeline:
               type: string
+            source_run_number:
+              type: integer
+              description: The run that was sealed (rewind source).
+            new_run_number:
+              type: integer
+              description: The new active run forked by the rewind.
+            warnings:
+              type: array
+              items:
+                type: string
+              description: Redacted non-fatal warning details (PR close, backup branch, worktree reset failures).
+    RewindPreviewResponse:
+      allOf:
+        - $ref: "#/components/schemas/JSONResponse"
+        - $ref: "#/components/schemas/RewindPreview"
+    RewindPreview:
+      type: object
+      required:
+        [
+          eligible,
+          source_run_number,
+          source_revision,
+          target_phase,
+          effective_phase,
+        ]
+      properties:
+        eligible:
+          type: boolean
+        source_run_number:
+          type: integer
+          minimum: 0
+        source_revision:
+          type: string
+          description: Hash of rewind-relevant feature state; execution must present the same value or be rejected as stale.
+        target_phase:
+          type: string
+        effective_phase:
+          type: string
+        roadmap_phase:
+          type: integer
+        upgrade_pipeline:
+          type: string
+        valid_phases:
+          type: array
+          items:
+            $ref: "#/components/schemas/RewindChoice"
+        valid_roadmap_phases:
+          type: array
+          items:
+            type: integer
+        upgrade_pipeline_options:
+          type: array
+          items:
+            type: string
+        carried_phases:
+          type: array
+          items:
+            type: string
+        carried_from_run:
+          type: integer
+        pr_consequences:
+          type: array
+          items:
+            $ref: "#/components/schemas/RewindPRConsequence"
+        worktree_consequences:
+          type: array
+          items:
+            $ref: "#/components/schemas/RewindWorktreeConsequence"
+        backup_branch_repos:
+          type: array
+          items:
+            type: string
+        validation_findings:
+          type: array
+          items:
+            type: string
+    RewindChoice:
+      type: object
+      required: [phase]
+      properties:
+        phase:
+          type: string
+        escalates_to:
+          type: string
+        override_phase:
+          type: string
+    RewindPRConsequence:
+      type: object
+      required: [repo, pr_url]
+      properties:
+        repo:
+          type: string
+        pr_url:
+          type: string
+    RewindWorktreeConsequence:
+      type: object
+      required: [repo, reset_kind]
+      properties:
+        repo:
+          type: string
+        reset_kind:
+          type: string
+          enum: [anchor, base, base-local, none]
     RetryFeatureResponse:
       allOf:
         - $ref: "#/components/schemas/ActionBaseResponse"
         - $ref: "#/components/schemas/FeatureActionResult"
-    RebaseStartResponse:
+    RefactorFeatureRequest:
+      # Bound by the refactorFeature operation at
+      # /api/v1/features/{feature_id}/actions/refactor; oapi-codegen emits the
+      # Go binding (internal/server/serverapi.gen.go).
+      type: object
+      required: [name]
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        images:
+          type: array
+          items:
+            type: string
+        image_uploads:
+          type: array
+          items:
+            type: string
+        attachments:
+          type: array
+          items:
+            type: string
+        attachment_uploads:
+          type: array
+          items:
+            type: string
+        pipeline:
+          type: string
+          x-go-type: feature.PipelineProfile
+          x-go-type-import:
+            path: github.com/doordash-oss/agentic-orchestrator/internal/feature
+            name: feature
+        checkpoints:
+          x-go-type: feature.Checkpoints
+          x-go-type-import:
+            path: github.com/doordash-oss/agentic-orchestrator/internal/feature
+            name: feature
+        effort:
+          $ref: "#/components/schemas/EffortConfig"
+        models:
+          $ref: "#/components/schemas/ModelDefaults"
+        risk_level:
+          type: string
+          x-go-type: feature.RiskLevel
+          x-go-type-import:
+            path: github.com/doordash-oss/agentic-orchestrator/internal/feature
+            name: feature
+        exit_criteria:
+          type: string
+        inquireness:
+          type: string
+          enum: [none, medium, high]
+          x-go-type: feature.Inquireness
+          x-go-type-import:
+            path: github.com/doordash-oss/agentic-orchestrator/internal/feature
+            name: feature
+    RefactorFeatureResponse:
       allOf:
         - $ref: "#/components/schemas/ActionBaseResponse"
         - $ref: "#/components/schemas/FeatureActionResult"
         - type: object
-          required: [cycle_type]
+          required: [parent_id]
           properties:
-            cycle_type:
+            parent_id:
               type: string
-            session_id:
+    ChildFeatureResponse:
+      description: Common child reference returned by typed child-launch actions.
+      allOf:
+        - $ref: "#/components/schemas/ActionBaseResponse"
+        - $ref: "#/components/schemas/FeatureActionResult"
+        - type: object
+          required: [parent_id]
+          properties:
+            parent_id:
               type: string
-    ReviewComment:
+    ReviewFeedbackFetchRequest:
       type: object
-      required: [id]
+      additionalProperties: false
+      description: >-
+        Intentionally empty: review feedback is always fetched across every
+        parent repository with a PR URL and has no mode selector.
+    ReviewFeedbackComment:
+      x-go-type: feature.ReviewFeedbackComment
+      x-go-type-import:
+        path: github.com/doordash-oss/agentic-orchestrator/internal/feature
+        name: feature
+      type: object
+      required: [repo, id, type]
       properties:
+        repo:
+          type: string
         id:
           type: integer
         type:
           type: string
-        repo_name:
-          type: string
+          enum: [review, issue, review_body]
         path:
           type: string
         line:
           type: integer
+        author:
+          type: string
         body:
-          type: string
-        user_login:
-          type: string
-        created_at:
           type: string
         diff_hunk:
           type: string
         in_reply_to_id:
           type: integer
-          x-go-name: InReplyTo
-    ReviewCommentsFetchResponse:
+        created_at:
+          type: string
+          description: GitHub creation timestamp of the comment.
+    ReviewFeedbackDraftComment:
+      type: object
+      required: [stable_ref, selected, repo, id, type]
+      additionalProperties: false
+      description: >-
+        One review-feedback comment inside the revisioned pending-draft view.
+        `stable_ref` is the repository identity plus supported comment type
+        plus GitHub database comment ID; `selected` is the committed draft
+        selection. The remaining fields snapshot the reviewed child-visible
+        content used to reconcile launch-time changes.
+      properties:
+        stable_ref:
+          type: string
+        selected:
+          type: boolean
+        repo:
+          type: string
+        id:
+          type: integer
+        type:
+          type: string
+          enum: [review, issue, review_body]
+        path:
+          type: string
+        line:
+          type: integer
+        author:
+          type: string
+        body:
+          type: string
+        diff_hunk:
+          type: string
+        in_reply_to_id:
+          type: integer
+        created_at:
+          type: string
+    ReviewFeedbackRepoComments:
+      type: object
+      required: [repo, pr_url, comments]
+      additionalProperties: false
+      properties:
+        repo:
+          type: string
+        pr_url:
+          type: string
+        comments:
+          type: array
+          items:
+            $ref: "#/components/schemas/ReviewFeedbackDraftComment"
+    ReviewFeedbackFetchResponse:
+      type: object
+      required: [api_version, revision, snapshot_id, repos]
+      properties:
+        api_version:
+          type: string
+        meta:
+          $ref: "#/components/schemas/ResponseMeta"
+        revision:
+          type: integer
+          description: Authoritative pending-draft revision.
+        snapshot_id:
+          type: string
+          description: >-
+            Identity of the reviewed snapshot the draft was last reconciled
+            from.
+        repos:
+          type: array
+          items:
+            $ref: "#/components/schemas/ReviewFeedbackRepoComments"
+    ReviewFeedbackSelectionUpdate:
+      type: object
+      required: [stable_ref, selected]
+      additionalProperties: false
+      description: >-
+        One bounded selection change. Carries only a stable reference and a
+        selection value; comment content is never accepted.
+      properties:
+        stable_ref:
+          type: string
+        selected:
+          type: boolean
+    ReviewFeedbackSelectionRequest:
+      type: object
+      required: [expected_revision, updates]
+      additionalProperties: false
+      properties:
+        expected_revision:
+          type: integer
+          description: Draft revision the caller based these updates on.
+        updates:
+          type: array
+          maxItems: 512
+          items:
+            $ref: "#/components/schemas/ReviewFeedbackSelectionUpdate"
+    ReviewFeedbackSelectionResponse:
+      allOf:
+        - $ref: "#/components/schemas/JSONResponse"
+        - type: object
+          required: [revision, repos]
+          properties:
+            revision:
+              type: integer
+            repos:
+              type: array
+              items:
+                $ref: "#/components/schemas/ReviewFeedbackRepoComments"
+    ReviewFeedbackFeatureRequest:
+      type: object
+      required: [expected_revision]
+      additionalProperties: false
+      properties:
+        expected_revision:
+          type: integer
+          description: >-
+            Pending-draft revision the launch commits. The child is built
+            only from the draft's committed selections at this revision.
+        gate:
+          type: boolean
+          x-go-type-skip-optional-pointer: false
+          description: >-
+            When present, sets both Roadmap review and Phase plan review on
+            the parent and child. When omitted, inherits the parent's Roadmap
+            review value.
+    ReviewFeedbackFeatureResponse:
       allOf:
         - $ref: "#/components/schemas/ActionBaseResponse"
+        - $ref: "#/components/schemas/FeatureActionResult"
         - type: object
-          required: [feature_id, repo, comments]
+          required: [parent_id]
+          properties:
+            parent_id:
+              type: string
+            child_id:
+              type: string
+              description: Identity of the created review-feedback child.
+            changed:
+              type: integer
+              description: >-
+                Selected reviewed references still present at launch whose
+                child-visible content changed since the reviewed snapshot.
+            omitted:
+              type: integer
+              description: >-
+                Selected reviewed references deleted before launch and thus
+                omitted from the child.
+            deferred:
+              type: integer
+              description: >-
+                Comments first observed after the reviewed snapshot, deferred
+                to a future pass.
+    RebaseFeatureRequest:
+      type: object
+      additionalProperties: true
+      description: >-
+        Zero-input request. Any JSON body (including the legacy
+        source_revision payload) is accepted and ignored; the rebase child
+        launch takes no user input.
+    RebaseFeatureResponse:
+      allOf:
+        - $ref: "#/components/schemas/ActionBaseResponse"
+        - $ref: "#/components/schemas/FeatureActionResult"
+        - type: object
+          required: [parent_id]
+          properties:
+            parent_id:
+              type: string
+    MarkDoneResponse:
+      allOf:
+        - $ref: "#/components/schemas/ActionBaseResponse"
+        - $ref: "#/components/schemas/FeatureActionResult"
+    CompletionPreflightResponse:
+      allOf:
+        - $ref: "#/components/schemas/JSONResponse"
+        - type: object
+          required: [feature_id, source_revision, repos]
+          properties:
+            feature_id:
+              type: string
+            source_revision:
+              type: string
+              description: Authoritative revision of the repository state this preflight observed. Publish/merge/mark-done mutations reject a stale preflight before any side effect.
+            can_mark_done:
+              type: boolean
+              description: Whether the server action catalogue currently allows mark-done.
+            mark_done_blocker:
+              type: string
+              description: Safe, server-authored reason mark-done is unavailable, when non-empty.
+            repos:
+              type: array
+              items:
+                $ref: "#/components/schemas/CompletionPreflightRepo"
+    CompletionPreflightRepo:
+      type: object
+      required: [repo, publishable, touched, status]
+      properties:
+        repo:
+          type: string
+        publishable:
+          type: boolean
+        touched:
+          type: boolean
+        status:
+          type: string
+          description: Server-authored completion status — eligible, already_published, unpublished_changes, completed, unmerged_changes, ineligible, untouched, or blocked.
+        pr_url:
+          type: string
+          description: Current PR URL when the repository has been published.
+        blocker:
+          type: string
+          description: Safe, server-authored reason this repository cannot proceed, when non-empty.
+        freshness:
+          type: string
+          description: Server-authored freshness state.
+        last_error:
+          type: string
+          description: Safe, bounded last error text.
+        base_branch:
+          type: string
+          maxLength: 128
+          description: Server-authored base branch for this repository.
+        branch:
+          type: string
+          maxLength: 128
+          description: Server-authored feature branch for this repository.
+        pending_commits:
+          type: integer
+          description: Commits on this repository's branch that have not reached its delivery destination — the remote pull-request branch, or the base branch for a local-only repository.
+        pending_dirty:
+          type: boolean
+          description: Whether the worktree carries uncommitted changes that have not been delivered.
+        push_mode:
+          type: string
+          description: How a republish reaches an existing pull-request branch — fast_forward or rewrite. rewrite means the remote branch carries commits the local branch does not, so the push replaces remote history under a lease.
+        pending_dirty_files:
+          type: array
+          items:
+            type: string
+            maxLength: 512
+          description: Bounded list of uncommitted paths a publish would commit. May be shorter than pending_dirty_file_total.
+        pending_dirty_file_total:
+          type: integer
+          description: True count of uncommitted paths, which can exceed the listed sample.
+    RepositoryDiffResponse:
+      allOf:
+        - $ref: "#/components/schemas/JSONResponse"
+        - type: object
+          required: [feature_id, repo, files]
           properties:
             feature_id:
               type: string
             repo:
               type: string
-            mode:
+            source_revision:
               type: string
-            comments:
+              description: Authoritative revision of the repository state this diff observed.
+            truncated:
+              type: boolean
+              description: Whether the file list was truncated to an aggregate limit.
+            files:
               type: array
               items:
-                $ref: "#/components/schemas/ReviewComment"
-    ReviewCommentsStartResponse:
+                $ref: "#/components/schemas/RepositoryDiffFile"
+            file_diff:
+              type: string
+              description: Bounded diff content for a single-file request, when available.
+            file_truncated:
+              type: boolean
+              description: Whether the single-file diff content was truncated to a per-request limit.
+            file_binary:
+              type: boolean
+              description: Whether the single-file content is binary and cannot be displayed.
+            file_unavailable:
+              type: boolean
+              description: Whether the single-file diff content is unavailable.
+            partial_failure:
+              type: string
+              description: Safe, server-authored reason one repository could not be fully inspected, when non-empty.
+    RepositoryPathDTO:
       allOf:
-        - $ref: "#/components/schemas/ActionBaseResponse"
-        - $ref: "#/components/schemas/FeatureActionResult"
+        - $ref: "#/components/schemas/JSONResponse"
         - type: object
-          required: [repo, mode, cycle_type]
+          required: [feature_id, repo, path]
           properties:
+            feature_id:
+              type: string
             repo:
               type: string
-            mode:
+            path:
               type: string
-            cycle_type:
-              type: string
-            comment_count:
-              type: integer
-            session_id:
-              type: string
-            source:
-              type: string
-    RefactorStartResponse:
-      allOf:
-        - $ref: "#/components/schemas/ActionBaseResponse"
-        - $ref: "#/components/schemas/FeatureActionResult"
-        - type: object
-          required: [cycle_type]
-          properties:
-            repo:
-              type: string
-            cycle_type:
-              type: string
-            pipeline:
-              type: string
-            session_id:
-              type: string
-    RefactorRestartResponse:
-      allOf:
-        - $ref: "#/components/schemas/RefactorStartResponse"
-    MarkDoneResponse:
-      allOf:
-        - $ref: "#/components/schemas/ActionBaseResponse"
-        - $ref: "#/components/schemas/FeatureActionResult"
+              description: Canonical server-approved absolute worktree path for the desktop main process.
+    RepositoryDiffFile:
+      type: object
+      required: [path, operation]
+      properties:
+        path:
+          type: string
+          description: Safe display path relative to the worktree root.
+        old_path:
+          type: string
+          description: Previous path for a rename, when applicable.
+        operation:
+          type: string
+          description: Change kind — add, modify, delete, or rename.
+        added_lines:
+          type: integer
+        removed_lines:
+          type: integer
+        binary:
+          type: boolean
+          description: Whether the file is binary and diff content is unavailable.
+        fingerprint:
+          type: string
+          description: Stable per-file identity for navigation and caching.
     CleanupFeatureResponse:
       allOf:
         - $ref: "#/components/schemas/ActionBaseResponse"
@@ -1574,12 +3151,51 @@ components:
     DeleteFeatureResponse:
       allOf:
         - $ref: "#/components/schemas/ActionBaseResponse"
-        - $ref: "#/components/schemas/FeatureActionResult"
-    RecoveryActionResponse:
+        - type: object
+          required: [feature_id, operation_id, status]
+          properties:
+            feature_id:
+              type: string
+            operation_id:
+              type: string
+            status:
+              type: string
+              enum: [completed, cleanup_pending, attention_required]
+              x-go-type: feature.CascadeDeleteStatus
+              x-go-type-import:
+                path: github.com/doordash-oss/agentic-orchestrator/internal/feature
+                name: feature
+            diagnostics:
+              type: array
+              items:
+                $ref: "#/components/schemas/CascadeDiagnostic"
+    CascadeDiagnostic:
+      x-go-type: feature.CascadeDiagnostic
+      x-go-type-import:
+        path: github.com/doordash-oss/agentic-orchestrator/internal/feature
+        name: feature
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        repo:
+          type: string
+        ref:
+          type: string
+        anchor_sha:
+          type: string
+        candidate_sha:
+          type: string
+        observed_sha:
+          type: string
+    DiscardChildResponse:
       allOf:
         - $ref: "#/components/schemas/ActionBaseResponse"
-        - $ref: "#/components/schemas/ActionResult"
-    ShutdownResponse:
+        - $ref: "#/components/schemas/FeatureActionResult"
+    RecoveryActionResponse:
       allOf:
         - $ref: "#/components/schemas/ActionBaseResponse"
         - $ref: "#/components/schemas/ActionResult"
@@ -1705,6 +3321,7 @@ components:
           $ref: "#/components/schemas/EffortConfig"
         inquireness:
           type: string
+          enum: [none, medium, high]
         checkpoints:
           $ref: "#/components/schemas/Checkpoints"
         pipeline:
@@ -1790,6 +3407,12 @@ components:
           type: string
         pending:
           type: boolean
+        # "question": a real help request awaiting an answer.
+        # "input": a chat session awaiting the user's next message.
+        # "coordinating": synthetic — a phase session idling between turns,
+        # which no human needs to answer.
+        kind:
+          type: string
         time:
           type: string
           format: date-time
@@ -1827,7 +3450,8 @@ components:
           type: integer
     RecoveryItem:
       type: object
-      required: [key, feature_id, process_alive, default_action, allowed_actions]
+      required:
+        [key, feature_id, process_alive, default_action, allowed_actions]
       properties:
         key:
           type: string
@@ -1846,6 +3470,9 @@ components:
           x-go-name: PID
         process_alive:
           type: boolean
+        log_available:
+          type: boolean
+          description: Whether a bounded log read is available for this item.
         default_action:
           type: string
         allowed_actions:
@@ -2015,17 +3642,6 @@ components:
           type: string
         message:
           type: string
-    Cycle:
-      type: object
-      properties:
-        type:
-          type: string
-        status:
-          type: string
-        count:
-          type: integer
-        iteration:
-          type: integer
     Checkpoints:
       type: object
       required:
@@ -2062,6 +3678,128 @@ components:
           type: integer
         current_phase_status:
           type: string
+    ChildRepoBase:
+      type: object
+      required: [repo, sha]
+      properties:
+        repo:
+          type: string
+        sha:
+          type: string
+        parent_branch:
+          type: string
+    RelationshipAttention:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        repo:
+          type: string
+    RelationshipCleanupWarning:
+      type: object
+      required: [message]
+      properties:
+        message:
+          type: string
+        repo:
+          type: string
+    RelationshipChildOutcome:
+      type: string
+      description: Recorded relationship close outcome; absent while the child is open.
+      enum: [completed, discarded]
+    RelationshipChildSummary:
+      type: object
+      description: >-
+        List-safe projection of a relationship child. Carries every
+        relationship field except the preserved diff body, so a parent with
+        many closed children cannot inflate a list response without bound.
+        Fetch RelationshipChild on a detail route for the body itself.
+      required:
+        - id
+        - name
+        - kind
+        - display_token
+        - display_state
+        - pipeline
+        - status
+        - started_at
+        - cost
+        - integration_state
+        - attention
+        - cleanup_warnings
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        kind:
+          type: string
+        pipeline:
+          type: string
+        display_token:
+          type: string
+          description: Stable, non-positional token suitable for compact UI labels.
+        display_state:
+          type: string
+          description: >-
+            Human-readable relationship state. Closed children use exactly
+            "Closed — Completed" or "Closed — Discarded".
+        status:
+          type: string
+          description: Stored child lifecycle status; closure never rewrites it.
+        setup_status:
+          type: string
+          description: Setup status of the child's active run (queued/running/done/failed).
+        relationship_state:
+          type: string
+          description: >-
+            Stable machine state: setting_up, active, completed, or discarded.
+        outcome:
+          $ref: "#/components/schemas/RelationshipChildOutcome"
+        started_at:
+          type: string
+          format: date-time
+        closed_at:
+          type: string
+          format: date-time
+          x-go-type-skip-optional-pointer: false
+        cost:
+          $ref: "#/components/schemas/Cost"
+        integration_state:
+          type: string
+        attention:
+          type: array
+          items:
+            $ref: "#/components/schemas/RelationshipAttention"
+        cleanup_warnings:
+          type: array
+          items:
+            $ref: "#/components/schemas/RelationshipCleanupWarning"
+        last_error:
+          type: string
+          description: Setup failure message when the child's setup failed.
+        has_diff_summary:
+          type: boolean
+          description: >-
+            True when a preserved diff summary exists for this closed child.
+            The body itself is only carried by RelationshipChild on a detail
+            route.
+    RelationshipChild:
+      allOf:
+        - $ref: "#/components/schemas/RelationshipChildSummary"
+        - type: object
+          properties:
+            diff_summary:
+              type: string
+              description: >-
+                Preserved read-only diff summary captured at close time, before
+                the child's disposable worktrees and ephemeral branches were
+                removed. Bounded to 256 KiB: a per-file stat header followed by
+                the diff body, truncated on a line boundary with a marker stating
+                how many bytes were omitted. Empty when no diff was preserved.
     FeatureSummary:
       type: object
       required:
@@ -2089,9 +3827,6 @@ components:
           type: string
         current_phase:
           type: string
-        cycle:
-          $ref: "#/components/schemas/Cycle"
-          x-go-type-skip-optional-pointer: false
         active_run:
           type: integer
         run_count:
@@ -2117,6 +3852,24 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/Warning"
+        active_child:
+          $ref: "#/components/schemas/RelationshipChildSummary"
+          x-go-type-skip-optional-pointer: false
+        child_history:
+          type: array
+          description: >-
+            Newest closed children in authoritative store order, capped at a
+            fixed server-side limit. Consult child_history_total and
+            child_history_truncated for the full extent, and the feature
+            detail route for the complete history.
+          items:
+            $ref: "#/components/schemas/RelationshipChildSummary"
+        child_history_total:
+          type: integer
+          description: Total closed children, regardless of how many are listed.
+        child_history_truncated:
+          type: boolean
+          description: True when child_history omits older closed children.
     ModelDefaults:
       x-go-type: config.ModelConfig
       x-go-type-import:
@@ -2196,7 +3949,7 @@ components:
           type: string
     NeedUserInputGate:
       type: object
-      required: [open]
+      required: [open, waiting_since]
       properties:
         feature_id:
           type: string
@@ -2206,18 +3959,71 @@ components:
           type: string
         repo_name:
           type: string
-        cycle_type:
-          type: string
         input_notifications:
           type: string
         iteration:
           type: integer
         summary:
           type: string
+          maxLength: 65536
+        waiting_since:
+          type: string
+          format: date-time
         questions:
           type: array
+          maxItems: 100
           items:
             $ref: "#/components/schemas/NeedUserInputQuestion"
+        verification:
+          $ref: "#/components/schemas/NeedUserInputVerification"
+          x-go-type-skip-optional-pointer: false
+    NeedUserInputVerification:
+      type: object
+      required: [blockers, allowed_actions]
+      properties:
+        blockers:
+          type: array
+          maxItems: 100
+          items:
+            $ref: "#/components/schemas/NeedUserInputVerificationBlocker"
+        allowed_actions:
+          type: array
+          maxItems: 2
+          items:
+            $ref: "#/components/schemas/NeedUserInputVerificationAction"
+    NeedUserInputVerificationAction:
+      type: string
+      enum: [WAIVE, RETRY_AFTER_AUTH]
+    NeedUserInputVerificationBlocker:
+      type: object
+      required: [item_id, name, command, reason, capabilities, remediation]
+      properties:
+        item_id:
+          type: string
+          minLength: 1
+          maxLength: 200
+          x-go-name: ItemID
+        name:
+          type: string
+          maxLength: 65536
+        repo_name:
+          type: string
+          maxLength: 500
+        command:
+          type: string
+          maxLength: 65536
+        reason:
+          type: string
+          maxLength: 65536
+        capabilities:
+          type: array
+          maxItems: 20
+          items:
+            type: string
+            maxLength: 65536
+        remediation:
+          type: string
+          maxLength: 65536
     NeedUserInputQuestion:
       type: object
       properties:
@@ -2225,8 +4031,10 @@ components:
           type: integer
         prompt:
           type: string
+          maxLength: 65536
         answer:
           type: string
+          maxLength: 65536
     RepoStatus:
       type: object
       required: [name, touched, publishable]
@@ -2252,10 +4060,6 @@ components:
           type: string
         publishable:
           type: boolean
-        cycle_type:
-          type: string
-        cycle_status:
-          type: string
     RunSummary:
       type: object
       required: [run_number, artifact_count]
@@ -2295,6 +4099,76 @@ components:
         setup:
           $ref: "#/components/schemas/Setup"
           x-go-type-skip-optional-pointer: false
+    RunDetail:
+      allOf:
+        - $ref: "#/components/schemas/RunSummary"
+        - type: object
+          required: [timing, cost]
+          properties:
+            rewind_target:
+              type: string
+            rewind_roadmap_phase:
+              type: integer
+            carried_from_run:
+              type: integer
+            carried_phases:
+              type: array
+              items:
+                type: string
+            backup_branch_repos:
+              type: array
+              items:
+                type: string
+            committing:
+              type: boolean
+              description: True while a forked run's carry-forward copy is in flight (crash-recovery signal); a reconnecting client treats this as "requires safe retry" until startup cleanup reconciles.
+            timing:
+              $ref: "#/components/schemas/Timing"
+            cost:
+              $ref: "#/components/schemas/Cost"
+    RunListResponse:
+      allOf:
+        - $ref: "#/components/schemas/JSONResponse"
+        - type: object
+          required: [runs, page, page_size, total, total_pages]
+          properties:
+            runs:
+              type: array
+              items:
+                $ref: "#/components/schemas/RunSummary"
+            page:
+              type: integer
+              minimum: 1
+            page_size:
+              type: integer
+              minimum: 1
+            total:
+              type: integer
+              minimum: 0
+            total_pages:
+              type: integer
+              minimum: 0
+    RunDetailResponse:
+      allOf:
+        - $ref: "#/components/schemas/JSONResponse"
+        - type: object
+          required: [run]
+          properties:
+            run:
+              $ref: "#/components/schemas/RunDetail"
+    RunSessionListResponse:
+      allOf:
+        - $ref: "#/components/schemas/JSONResponse"
+        - type: object
+          required: [run_number, sessions]
+          properties:
+            run_number:
+              type: integer
+              minimum: 1
+            sessions:
+              type: array
+              items:
+                $ref: "#/components/schemas/SessionSummary"
     ActionScope:
       type: object
       required: [type]
@@ -2302,8 +4176,6 @@ components:
         type:
           type: string
         repo_selection:
-          type: string
-        cycle_type:
           type: string
     ActionInput:
       type: object
@@ -2329,6 +4201,67 @@ components:
           type: string
         message:
           type: string
+        target:
+          description: >-
+            Optional machine-readable context for the disable reason. The
+            `dirty_parent` reason on the Refactor action carries per-repository
+            dirty-worktree diagnostics under `target.repos` using the same
+            shape as the `parent_worktrees_dirty` mutation error target.
+          type: object
+          additionalProperties: true
+    ActionImpactSubject:
+      type: object
+      required: [id, name]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+    ActionImpactCategory:
+      type: object
+      required: [key, label, items]
+      properties:
+        key:
+          type: string
+        label:
+          type: string
+        items:
+          description: >-
+            Human-readable entries in this impact category; empty when the
+            category has no projected impact (clients render None). Absent
+            impact is an explicitly empty items array rather than an omitted
+            category.
+          type: array
+          items:
+            type: string
+    ActionImpactPreview:
+      type: object
+      required: [kind, subject, categories, retained]
+      properties:
+        kind:
+          type: string
+          enum: [child_discard, parent_cascade_delete]
+        subject:
+          $ref: "#/components/schemas/ActionImpactSubject"
+        categories:
+          description: >-
+            Fixed, always-complete impact breakdown for the kind. Absent
+            categories are explicitly empty entries (an entry with an empty
+            items array) rather than omitted, so the confirmation never
+            implies hidden impact. child_discard uses sessions, worktrees,
+            branches, knowledge; parent_cascade_delete uses children,
+            sessions, worktrees, branches, history, knowledge.
+          type: array
+          items:
+            $ref: "#/components/schemas/ActionImpactCategory"
+        retained:
+          description: >-
+            Statements of what the action deliberately keeps (the paired
+            Review configuration and the immutable closed-child history
+            record for child_discard). Empty for parent_cascade_delete.
+          type: array
+          items:
+            type: string
     Action:
       type: object
       required: [id, enabled, scope, required_inputs]
@@ -2347,6 +4280,9 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/ActionDisabledReason"
+        impact_preview:
+          $ref: "#/components/schemas/ActionImpactPreview"
+          x-go-type-skip-optional-pointer: false
     FeatureDetail:
       allOf:
         - $ref: "#/components/schemas/FeatureSummary"
@@ -2363,14 +4299,41 @@ components:
             - revision
             - cache_revalidate
           properties:
+            active_child:
+              $ref: "#/components/schemas/RelationshipChild"
+              x-go-type-skip-optional-pointer: false
+            child_history:
+              type: array
+              description: Complete closed-child history in authoritative store order.
+              items:
+                $ref: "#/components/schemas/RelationshipChild"
             description:
               type: string
             summary:
+              type: string
+            wait_reason:
               type: string
             pipeline:
               type: string
             models:
               $ref: "#/components/schemas/ModelDefaults"
+            effort:
+              $ref: "#/components/schemas/EffortConfig"
+            inquireness:
+              type: string
+              enum: [none, medium, high]
+              x-go-type: feature.Inquireness
+              x-go-type-import:
+                path: github.com/doordash-oss/agentic-orchestrator/internal/feature
+                name: feature
+            risk_level:
+              type: string
+              x-go-type: feature.RiskLevel
+              x-go-type-import:
+                path: github.com/doordash-oss/agentic-orchestrator/internal/feature
+                name: feature
+            exit_criteria:
+              type: string
             automatic_review:
               $ref: "#/components/schemas/AutomaticReviewState"
             active_run_detail:
@@ -2384,9 +4347,6 @@ components:
               type: array
               items:
                 $ref: "#/components/schemas/RepoStatus"
-            cycle:
-              $ref: "#/components/schemas/Cycle"
-              x-go-type-skip-optional-pointer: false
             timing:
               $ref: "#/components/schemas/Timing"
             cost:
@@ -2411,6 +4371,130 @@ components:
               type: string
             cache_revalidate:
               type: string
+            parent_id:
+              type: string
+              description: Launch parent id; only set on child features.
+            parent_kind:
+              type: string
+              description: Child relationship kind (e.g. refactor); only set on child features.
+            active:
+              type: boolean
+              description: >-
+                True while a child feature's relationship is open (no close
+                outcome recorded). Only set on child features.
+            bases:
+              type: array
+              description: Exact per-repository parent tips captured at child launch.
+              items:
+                $ref: "#/components/schemas/ChildRepoBase"
+            setup_complete:
+              type: boolean
+              description: >-
+                True when the child's active run setup finished; only set on
+                child features.
+            close_outcome:
+              type: string
+              description: >-
+                Recorded relationship close outcome (e.g. completed); only
+                set on closed child features.
+            closed_at:
+              type: string
+              format: date-time
+              description: Relationship close timestamp; only set on closed child features.
+              x-go-type-skip-optional-pointer: false
+            transaction:
+              $ref: "#/components/schemas/TransactionJournal"
+            relationship:
+              $ref: "#/components/schemas/RelationshipChild"
+              x-go-type-skip-optional-pointer: false
+            review_feedback:
+              type: array
+              description: >-
+                Persisted selected comments captured at launch for a
+                review-feedback child; absent for refactor children and
+                parents.
+              items:
+                $ref: "#/components/schemas/ReviewFeedbackComment"
+    ChildDirtyDiagnostics:
+      type: object
+      properties:
+        repo:
+          type: string
+        path:
+          type: string
+        staged:
+          type: array
+          items:
+            type: string
+        unstaged:
+          type: array
+          items:
+            type: string
+        untracked:
+          type: array
+          items:
+            type: string
+        staged_total:
+          type: integer
+        unstaged_total:
+          type: integer
+        untracked_total:
+          type: integer
+    TransactionJournal:
+      type: object
+      description: >-
+        Ordered per-repository transaction journal for multi-repository
+        child-to-parent integration.
+      properties:
+        phase:
+          type: string
+          description: >-
+            Aggregate transaction phase: preparing, prepared, applying,
+            applied, rolling_back, rolled_back, attention, or merged.
+        attention:
+          type: string
+        entries:
+          type: array
+          items:
+            $ref: "#/components/schemas/RepoTransactionEntry"
+    RepoTransactionEntry:
+      type: object
+      properties:
+        repo:
+          type: string
+        parent_branch:
+          type: string
+        parent_anchor_sha:
+          type: string
+        expected_ref_sha:
+          type: string
+        child_head_sha:
+          type: string
+        candidate_sha:
+          type: string
+        merge_head:
+          type: string
+        prep_state:
+          type: string
+        apply_state:
+          type: string
+        observed_sha:
+          type: string
+        conflict_files:
+          type: array
+          items:
+            type: string
+        dirty:
+          type: array
+          description: >-
+            Categorized parent-worktree diagnostics recorded when a dirty
+            preflight blocked preparation for this repository.
+          items:
+            $ref: "#/components/schemas/ChildDirtyDiagnostics"
+        cleanup_warning:
+          type: string
+        diagnostics:
+          type: string
     Usage:
       type: object
       properties:
@@ -2422,21 +4506,79 @@ components:
           type: number
           format: double
           x-go-name: CostUSD
+    TaskActivityUsage:
+      type: object
+      properties:
+        total_tokens:
+          type: integer
+        tool_uses:
+          type: integer
+        duration_ms:
+          type: integer
+          format: int64
+    TaskActivity:
+      type: object
+      required:
+        - task_id
+        - state
+        - started_at
+        - updated_at
+      properties:
+        task_id:
+          type: string
+        tool_use_id:
+          type: string
+        child_session_id:
+          type: string
+        description:
+          type: string
+        state:
+          type: string
+          enum: [running, completed, failed, cancelled]
+        last_tool_name:
+          type: string
+        last_path:
+          type: string
+        status:
+          type: string
+        summary:
+          type: string
+        output_file:
+          type: string
+        usage:
+          $ref: "#/components/schemas/TaskActivityUsage"
+          x-go-type-skip-optional-pointer: false
+        started_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        finished_at:
+          type: string
+          format: date-time
+          x-go-type-skip-optional-pointer: false
     SessionSummary:
       type: object
       required:
         - id
         - feature_id
+        - run_number
         - phase
         - kind
         - status
         - started_at
+        - task_activities
+        - running_task_count
         - usage
       properties:
         id:
           type: string
         feature_id:
           type: string
+        run_number:
+          type: integer
+          minimum: 0
         phase:
           type: string
         repo:
@@ -2465,6 +4607,13 @@ components:
           type: string
         effort_source:
           type: string
+        task_activities:
+          type: array
+          items:
+            $ref: "#/components/schemas/TaskActivity"
+        running_task_count:
+          type: integer
+          minimum: 0
         usage:
           $ref: "#/components/schemas/Usage"
     Cursor:
@@ -2482,8 +4631,10 @@ components:
       properties:
         label:
           type: string
+          maxLength: 1000
         description:
           type: string
+          maxLength: 4000
         confidence:
           type: number
           format: double
@@ -2514,7 +4665,7 @@ components:
           type: string
     ControlRequest:
       type: object
-      required: [request_id, tool_name, status]
+      required: [request_id, tool_name, status, waiting_since]
       properties:
         request_id:
           type: string
@@ -2528,6 +4679,9 @@ components:
           type: string
         status:
           type: string
+        waiting_since:
+          type: string
+          format: date-time
         summary:
           type: string
         input:

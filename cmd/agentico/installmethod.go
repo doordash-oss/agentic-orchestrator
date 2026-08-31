@@ -22,11 +22,11 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/doordash-oss/agentic-orchestrator/internal/tui"
+	"github.com/doordash-oss/agentic-orchestrator/internal/buildinfo"
 )
 
 // installMethod is how the running binary was installed, which decides the
-// update action the command would take.
+// package-manager guidance the read-only update bridge prints.
 type installMethod int
 
 const (
@@ -36,8 +36,8 @@ const (
 	// installMethodTarball: a released binary distributed as a tarball, carrying
 	// a clean injected release version.
 	installMethodTarball
-	// installMethodHomebrew: installed via the Homebrew tap; updates delegate to
-	// `brew upgrade` rather than swapping the brew-managed binary in place.
+	// installMethodHomebrew: installed via the Homebrew tap; guidance points to
+	// Homebrew rather than swapping the brew-managed binary in place.
 	installMethodHomebrew
 	// installMethodDevBuild: built from source; not safe to auto-update, so the
 	// command refuses and points the user back at their build.
@@ -179,15 +179,18 @@ func sameDir(binaryDir, goBinDir string) bool {
 }
 
 // isHomebrewBinary reports whether the symlink-resolved binary path sits inside a
-// Homebrew Cellar (<prefix>/Cellar/...). The "/Cellar/" segment is prefix-agnostic,
-// covering /opt/homebrew, /usr/local, and Linuxbrew. Symlink resolution happens in
-// the caller, so this stays pure and table-testable.
+// Homebrew Cellar (<prefix>/Cellar/..., formula pours) or Caskroom
+// (<prefix>/Caskroom/..., cask binary stanzas — how the tap ships the CLI since
+// the formula→cask migration). Both segments are prefix-agnostic, covering
+// /opt/homebrew, /usr/local, and Linuxbrew. Symlink resolution happens in the
+// caller, so this stays pure and table-testable.
 func isHomebrewBinary(resolvedBinaryPath string) bool {
 	if resolvedBinaryPath == "" {
 		return false
 	}
 	sep := string(os.PathSeparator)
-	return strings.Contains(resolvedBinaryPath, sep+"Cellar"+sep)
+	return strings.Contains(resolvedBinaryPath, sep+"Cellar"+sep) ||
+		strings.Contains(resolvedBinaryPath, sep+"Caskroom"+sep)
 }
 
 // installInputs are the five signals classifyInstallMethod consumes for the
@@ -209,7 +212,7 @@ type installInputs struct {
 func gatherInstallInputs() installInputs {
 	return installInputs{
 		buildInfoVersion: buildInfoMainVersion(),
-		injectedVersion:  tui.InjectedVersion(),
+		injectedVersion:  buildinfo.InjectedVersion(),
 		binaryDir:        normalizeDir(resolveBinaryDir()),
 		goBinDir:         normalizeDir(resolveGoBinDir(os.Getenv, os.UserHomeDir)),
 		homebrew:         isHomebrewBinary(resolveBinaryPath()),
@@ -293,8 +296,7 @@ func normalizeDir(dir string) string {
 	return filepath.Clean(dir)
 }
 
-// label returns the human-facing name of the install method for --check output
-// and the bare-update "not yet implemented" message.
+// label returns the human-facing name of the install method for update output.
 func (m installMethod) label() string {
 	switch m {
 	case installMethodGoInstall:
@@ -310,18 +312,18 @@ func (m installMethod) label() string {
 	}
 }
 
-// wouldDoAction returns the action `agentico update --check` reports it would
-// take for this install method.
+// wouldDoAction returns the package-manager or desktop guidance the read-only
+// update bridge reports for this install method.
 func (m installMethod) wouldDoAction() string {
 	switch m {
 	case installMethodGoInstall:
-		return "Would update by re-running the Go install of the latest version."
+		return "Run `go install github.com/doordash-oss/agentic-orchestrator/cmd/agentico@latest` for a standalone headless CLI, or install the signed desktop package from GitHub Releases."
 	case installMethodTarball:
-		return "Would update by downloading the latest release and replacing the binary in place."
+		return "Download the signed artifact for your OS and architecture from GitHub Releases, then verify its checksum and signature before replacing this standalone CLI."
 	case installMethodHomebrew:
-		return "Would update via Homebrew by running `brew update && brew upgrade agentico`."
+		return "Update with your package manager: `brew update && brew upgrade agentico`."
 	case installMethodDevBuild:
-		return "Would update from source (development builds are not updated automatically)."
+		return "Development builds are not changed by this command. Pull the source checkout and rebuild, or install the signed desktop package from GitHub Releases."
 	default:
 		return ""
 	}

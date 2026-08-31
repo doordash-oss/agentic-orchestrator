@@ -832,7 +832,9 @@ func ResumeUnitDir(stateDir string, current *feature.Feature) (string, bool) {
 	}
 
 	runDir := ActiveRunDir(stateDir, current)
-	baseDir := filepath.Join(runDir, current.RefactorPrefix())
+	// PHASE2(path prefixes): main deleted the cycle/refactor subsystems;
+	// RefactorPrefix/CyclePrefix are treated as empty.
+	baseDir := runDir
 	switch current.CurrentPhase {
 	case feature.PhaseInquire, feature.PhaseResearch, feature.PhaseDesign:
 		return filepath.Join(baseDir, current.CurrentPhase.DirName()), true
@@ -861,10 +863,7 @@ func ResumeUnitDir(stateDir string, current *feature.Feature) (string, bool) {
 		if current.ReviewIteration <= 0 {
 			return "", false
 		}
-		reviewDir := filepath.Join(runDir, current.RefactorPrefix(), feature.PhaseFinalReview.DirName())
-		if prefix := current.CyclePrefix(); prefix != "" {
-			reviewDir = filepath.Join(runDir, prefix, feature.PhaseFinalReview.DirName())
-		}
+		reviewDir := filepath.Join(runDir, feature.PhaseFinalReview.DirName())
 		return filepath.Join(
 			reviewDir,
 			fmt.Sprintf("iteration-%02d", current.ReviewIteration),

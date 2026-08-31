@@ -346,7 +346,7 @@ func runPlanAttempt(
 		if resumeLaunch {
 			sessionPrompt = resumeCoordinator.Prompt(planAttemptResumeContext(attempt, variant.phaseNumber))
 		}
-		RemovePhaseComplete(attemptDir)
+		RemoveCompletionReceipt(attemptDir)
 		buildOpts := BuildSessionOpts{
 			Model:                          cfg.Feature.Models.Planning,
 			Prompt:                         sessionPrompt,
@@ -359,7 +359,9 @@ func runPlanAttempt(
 			EffortLevel:                    planEffortLevel(cfg),
 			Phase:                          feature.PhasePlan,
 			SystemPromptHasUsefulResources: true,
-			MarkerPath:                     filepath.Join(attemptDir, PhaseCompleteFile),
+			// PHASE2(marker-path-removal): MarkerPath dropped — main deleted the
+			// BuildSessionOpts field; CompletionProtocol replaces it.
+			CompletionProtocol: true,
 		}
 		if resumeLaunch {
 			buildOpts.ResumeSessionID = resumeRecord.ProviderSessionID
@@ -368,16 +370,17 @@ func runPlanAttempt(
 		if err != nil {
 			return planAttemptExecution{}, fmt.Errorf("building %s session (attempt %d): %w", variant.label, attempt, err)
 		}
-		sessOpts = enableTruncatedTurnAutoResume(sessOpts)
+		sessOpts = enableTurnContinuation(sessOpts)
 		if cfg.EffectiveEffort != "" {
 			sessOpts.EffectiveEffort = cfg.EffectiveEffort
 			sessOpts.EffortSource = cfg.EffortSource
 		}
-		if cfg.FinishOrViolateNudge {
-			sessOpts.TurnMode = ports.TurnModeInteractive
-		}
+		// PHASE2(plan-nudge-arming): feature's FinishOrViolateNudge TurnMode
+		// arming dropped — BuildSession sets TurnMode via CompletionProtocol;
+		// main's RunNumber stamping ported in below.
 		WriteDebugPrompts(attemptDir, sessOpts.DebugSystemPrompt, sessionPrompt)
 		sessOpts.PermCacheScope = cfg.RepoName
+		sessOpts.RunNumber = cfg.Feature.ActiveRun
 
 		sessionID := planAttemptSessionID(variant.sessionBase, sessionAttempt)
 		if !resumeLaunch {
@@ -433,17 +436,26 @@ func runPlanAttempt(
 			sess.SetLogFile(logFile)
 		}
 
-		agentStatus := waitForStatusDetailed(sess, sm, sessionID, waitForStatusOptions{
-			ReadyCheck: func() bool {
-				if HasPhaseComplete(attemptDir) {
+		// PHASE2(plan-outcome-wait): feature's waitForStatusDetailed/ReadyCheck
+		// waiter rewired onto main's WaitForPhaseOutcome commit boundary (the
+		// old waiter and waitForStatusOptions no longer exist anywhere).
+		waitResult := WaitForPhaseOutcome(sess, PhaseOutcomeWaitOptions{
+			CommitOutcome: func(intent llm.CompletionIntent) ([]ProtocolViolation, error) {
+				_, _, violations, err := CommitPhaseOutcome(CompletionCommitInput{
+					Phase:       plannerSpec.Phase,
+					Role:        plannerSpec.Role,
+					ArtifactDir: attemptDir,
+					SessionID:   sessionID,
+					Intent:      intent,
+				})
+				if err == nil && len(violations) == 0 {
 					sess.SetHasUnansweredQuestion(false)
-					return true
 				}
-				return false
+				return violations, err
 			},
-			FinishOrViolateNudge: cfg.FinishOrViolateNudge,
-			MissingArtifacts:     []string{variant.missingArtifact},
-		}).Status
+			MissingArtifacts: []string{variant.missingArtifact},
+		})
+		agentStatus := waitResult.Status
 		if err := resumeCoordinator.CaptureProviderSnapshot(providerSessionID(sess), sess.ProviderName(), sess.Model()); err != nil {
 			return planAttemptExecution{}, fmt.Errorf("capturing %s provider identity: %w", variant.label, err)
 		}
@@ -478,7 +490,7 @@ func runPlanAttempt(
 				return nil
 			})
 		}
-		if agentStatus == agentStatusFailed && !HasPhaseComplete(attemptDir) {
+		if agentStatus == agentStatusFailed && !HasCommittedPhaseOutcome(attemptDir, plannerSpec.Phase, plannerSpec.Role) {
 			resumeRunner.observeFailure(sess, resumeLaunch)
 			if retry, governed := resumeRunner.shouldRetry(cfg, sm, sess, sessOpts, &sessionAttempt); governed {
 				if retry {
@@ -489,10 +501,15 @@ func runPlanAttempt(
 		}
 
 		outcome, result, feedback, nextSessionAttempt := handleCompletedPlanSession(
-			cfg, planSessionCtx, sessionID, sess, cost, sessionStart, agentStatus, sm,
+			cfg, planSessionCtx, sessionID, sess, cost, sessionStart, waitResult, sm,
 			attempt, maxAttempts, sessionAttempt, plannerSpec, attemptDir, artifactDir, logPath,
 		)
 		if outcome == planOutcomeRetrySession {
+			// PHASE2(plan-retry-interrupt): main's interruptiblePlanRetry check
+			// ported into feature's attempt runner.
+			if result, interrupted := interruptiblePlanRetry(cfg.FeatureStore, cfg.Feature.ID, attempt); interrupted {
+				return planAttemptExecution{outcome: planOutcomeReturn, result: result}, nil
+			}
 			sessionAttempt = nextSessionAttempt
 			continue
 		}
@@ -756,7 +773,7 @@ const (
 	maxValidatorInfrastructureSessionAttempts = 2
 )
 
-// DefaultMaxPlanAttempts is the exported default for TUI use (e.g. extending iterations).
+// DefaultMaxPlanAttempts is the exported default for desktop app use (e.g. extending iterations).
 const DefaultMaxPlanAttempts = maxPlanValidationAttempts
 
 // PlanLoopConfig holds configuration for the planning loop with validation.
@@ -792,8 +809,7 @@ type PlanLoopConfig struct {
 	PermissionCache *permission.Cache
 
 	// RepoName is the repo scope for permission caching. Empty means global
-	// scope. When set (e.g. from a refactor loop), planning sessions will
-	// scope permission rules to this repo.
+	// scope. When set, planning sessions will scope permission rules to this repo.
 	RepoName string
 
 	// BuildSession creates CLI command args, env vars, and session opts
@@ -804,7 +820,6 @@ type PlanLoopConfig struct {
 	// When set, RunRoadmapPlanningLoop uses filepath.Join(ArtifactBaseDir, "roadmap")
 	// and RunPhasePlanningLoop uses filepath.Join(ArtifactBaseDir, "phase-NN", "plan")
 	// instead of deriving paths from StateDir + Feature.ID.
-	// Used by RunRefactorLoop to scope artifacts to the per-repo refactor directory.
 	ArtifactBaseDir string
 
 	// SessionStartFunc overrides session.Manager.StartSession in tests.
@@ -862,6 +877,9 @@ type PlanLoopConfig struct {
 	// deliberate end_turn without the completion marker, is nudged to finish
 	// before a protocol violation is recorded. Resolved per-model from the
 	// provider capability, so only capability-positive providers opt in.
+	// PHASE2(plan-nudge-config): main deleted this field; retained because
+	// feature's plan-attempt runner still references it — nothing currently
+	// sets it, so a caller must be wired if nudging is wanted again.
 	FinishOrViolateNudge bool
 
 	// AutoResumeWait overrides transient provider backoff in tests.
@@ -1075,7 +1093,7 @@ func runSpecializedPlanValidationForArtifact(cfg PlanLoopConfig, sm ports.Sessio
 		// Infrastructure retries stay inside the same plan attempt. Clear any
 		// synthetic artifacts from the failed session and use a distinct session
 		// ID so lifecycle bookkeeping cannot alias the completed process.
-		RemovePhaseComplete(helperIterDir)
+		RemoveCompletionReceipt(helperIterDir)
 		_ = os.Remove(feedbackPath)
 		helperResult, err = helper.RunReadOnlyReviewHelper(context.Background(), ReviewHelperConfig{
 			SessionID:              retrySessionID(reviewID, sessionAttempt),
@@ -1184,7 +1202,7 @@ func runGroundingPreCheck(cfg PlanLoopConfig, attempt int, attemptDir, planArtif
 	}
 	// resolveUnifiedWorkDir sets cfg.WorkDir to the parent of every repo's
 	// worktree (so the Claude session's cwd can see siblings via --add-dir).
-	// Plan-row references like `docs/keybindings.md` are repo-relative, so
+	// Plan-row references like `docs/testing-baseline.md` are repo-relative, so
 	// resolving them against the worktree-parent would mis-locate every row
 	// by one directory. Pass each repo's worktree path explicitly along with
 	// its name; the gate accepts a bare-path row when the file exists under
@@ -1205,7 +1223,7 @@ func runGroundingPreCheck(cfg PlanLoopConfig, attempt int, attemptDir, planArtif
 	feedbackPath := filepath.Join(attemptDir, "validation-grounding-feedback.md")
 	_ = os.WriteFile(feedbackPath, []byte(feedback), 0o644)
 	// Also write the same text to validation-grounding-output.txt so the
-	// review log readers / TUI surface a coherent transcript even though no
+	// review log readers / desktop app surface a coherent transcript even though no
 	// LLM session ran. Including the attempt number keeps grep-friendly with
 	// the LLM-written outputs.
 	outputPath := filepath.Join(attemptDir, "validation-grounding-output.txt")
@@ -1487,10 +1505,13 @@ func buildSpecializedValidationPromptForArtifact(f *feature.Feature, planPath, r
 	_ = skillsDir
 	includePriorPhase := domain.Template == "validate-phase-plan-grounding" && len(extras.PriorPhasePlanPaths) > 0
 
+	intent := resolvePromptIntent(f)
+
 	return roles.BuildValidateSpecializedPrompt(roles.ValidateSpecializedUserInput{
 		Name:                      f.Name,
-		Description:               f.EffectiveDescription(),
-		ExitCriteria:              f.ExitCriteria,
+		Description:               intent.Description,
+		ExitCriteria:              intent.ExitCriteria,
+		AcceptanceClause:          intent.AcceptanceClause,
 		RiskLevel:                 string(f.RiskLevel),
 		DomainName:                domain.Name,
 		PlanPath:                  planPath,
@@ -1556,7 +1577,7 @@ func runValidatorSet(cfg PlanLoopConfig, sm ports.SessionManager, attempt int, a
 
 	results := make([]ValidatorResult, len(validators))
 
-	// Initialize validator statuses for TUI display
+	// Initialize validator statuses for desktop app display
 	setValidatorStatuses(cfg, validators, nil)
 
 	// Sticky-approval short-circuit: for each validator whose axis already
@@ -1661,7 +1682,7 @@ func runValidatorSet(cfg PlanLoopConfig, sm ports.SessionManager, attempt int, a
 	return results, aggStatus, aggFeedback, aggErr
 }
 
-// setValidatorStatuses initializes the validator status map for TUI display.
+// setValidatorStatuses initializes the validator status map for desktop app display.
 func setValidatorStatuses(cfg PlanLoopConfig, validators []validatorDomain, results []ValidatorResult) {
 	if cfg.Feature == nil {
 		return
@@ -1673,7 +1694,7 @@ func setValidatorStatuses(cfg PlanLoopConfig, validators []validatorDomain, resu
 	setMultiAxisValidatorStatuses(cfg.FeatureStore, cfg.Feature.ID, names)
 }
 
-// updateValidatorStatus updates a single validator's status for TUI display.
+// updateValidatorStatus updates a single validator's status for desktop app display.
 func updateValidatorStatus(cfg PlanLoopConfig, domain string, status ReviewStatus, err error) {
 	if cfg.Feature == nil {
 		return
@@ -1803,7 +1824,7 @@ func RunRoadmapPlanningLoop(cfg PlanLoopConfig, sm ports.SessionManager) (result
 	if cfg.ArtifactBaseDir != "" {
 		artifactDir = filepath.Join(cfg.ArtifactBaseDir, "roadmap")
 	} else {
-		baseDir := filepath.Join(ActiveRunDir(cfg.StateDir, cfg.Feature), cfg.Feature.RefactorPrefix())
+		baseDir := ActiveRunDir(cfg.StateDir, cfg.Feature)
 		artifactDir = filepath.Join(baseDir, "roadmap")
 	}
 	_ = os.MkdirAll(artifactDir, 0o755)
@@ -1904,6 +1925,10 @@ roadmapAttemptLoop:
 			if err != nil {
 				return nil, err
 			}
+			// PHASE2(plan-attempt-loop): feature's runPlanAttempt dispatcher
+			// replaces the inline roadmap attempt loop; main's inline variant
+			// dropped (superseded structure) with its API rewires ported into
+			// runPlanAttempt (adjacent edits below).
 			switch execution.outcome {
 			case planOutcomeReturn:
 				return execution.result, nil
@@ -2072,7 +2097,7 @@ func RunPhasePlanningLoop(cfg PhasePlanLoopConfig, sm ports.SessionManager) (res
 	if cfg.ArtifactBaseDir != "" {
 		artifactDir = filepath.Join(cfg.ArtifactBaseDir, fmt.Sprintf("phase-%02d", cfg.Phase.Number), "plan")
 	} else {
-		baseDir := filepath.Join(ActiveRunDir(cfg.StateDir, cfg.Feature), cfg.Feature.RefactorPrefix())
+		baseDir := ActiveRunDir(cfg.StateDir, cfg.Feature)
 		artifactDir = filepath.Join(baseDir, fmt.Sprintf("phase-%02d", cfg.Phase.Number), "plan")
 	}
 	_ = os.MkdirAll(artifactDir, 0o755)
@@ -2180,6 +2205,10 @@ phasePlanAttemptLoop:
 			if err != nil {
 				return nil, err
 			}
+			// PHASE2(plan-attempt-loop): feature's runPlanAttempt dispatcher
+			// replaces the inline phase-plan attempt loop; main's inline variant
+			// dropped (superseded structure) with its API rewires ported into
+			// runPlanAttempt (adjacent edits below).
 			switch execution.outcome {
 			case planOutcomeReturn:
 				return execution.result, nil
@@ -2380,6 +2409,18 @@ phasePlanAttemptLoop:
 	}, nil
 }
 
+// interruptiblePlanRetry guards the infrastructure-failure session retry: a
+// user-initiated stop kills the session with the same footprint as a
+// retryable infrastructure failure (fast exit, zero cost, empty log), so
+// without this check the loop would silently relaunch a session the user
+// just interrupted.
+func interruptiblePlanRetry(store ports.FeatureStore, featureID string, attempt int) (*PlanLoopResult, bool) {
+	if isFeatureInterrupted(store, featureID) {
+		return &PlanLoopResult{FinalStatus: "interrupted", Iterations: attempt - 1}, true
+	}
+	return nil, false
+}
+
 // planSessionOutcome tells a planning attempt loop what control-flow action
 // to take after handleCompletedPlanSession processes a just-finished session.
 // Go can't `continue` a caller's labeled loop from inside a called function,
@@ -2415,18 +2456,26 @@ func handleCompletedPlanSession(
 	sess ports.SessionHandle,
 	cost SessionCost,
 	sessionStart time.Time,
-	agentStatus string,
+	waitResult PhaseOutcomeWaitResult,
 	sm ports.SessionManager,
 	attempt, maxAttempts, sessionAttempt int,
 	plannerSpec RoleSpec,
 	attemptDir, artifactDir, logPath string,
 ) (outcome planSessionOutcome, result *PlanLoopResult, newCriticFeedback string, newSessionAttempt int) {
+	agentStatus := waitResult.Status
 	cfg.Observer.SessionEnded(planSessionCtx, "plan", sessionID, cfg.RepoName,
 		toSessionUsage(cost), time.Since(sessionStart), sessionErrFromAgentStatus(agentStatus))
 
 	output := sess.MessageLog().Text()
 	_ = os.WriteFile(logPath, []byte(output), 0o644)
 
+	if waitResult.Err != nil {
+		return planOutcomeReturn, &PlanLoopResult{
+			FinalStatus: "failed",
+			Iterations:  attempt,
+			LastError:   fmt.Sprintf("committing planner outcome: %v", waitResult.Err),
+		}, "", sessionAttempt
+	}
 	if agentStatus == agentStatusSuccess {
 		return planOutcomeProceed, nil, "", sessionAttempt
 	}
@@ -2435,8 +2484,11 @@ func handleCompletedPlanSession(
 	if agentStatus == "FAILED" && sm != nil && sm.IsShuttingDown() {
 		return planOutcomeReturn, &PlanLoopResult{FinalStatus: "interrupted", Iterations: attempt - 1}, "", sessionAttempt
 	}
-	if agentStatus == agentStatusMissingMarker {
-		violations := missingPhaseCompleteViolations()
+	if agentStatus == agentStatusProtocolViolation {
+		violations := waitResult.ProtocolViolations
+		if len(violations) == 0 {
+			violations = completionIntentViolations(rootCompletionIntent(sess), nil)
+		}
 		lastErr := formatProtocolViolationError(plannerSpec.Role, attemptDir, violations)
 		criticFeedback := formatPlanContractViolationFeedback(plannerSpec.Role, violations)
 		_ = os.WriteFile(filepath.Join(attemptDir, "validation-feedback.md"), []byte(criticFeedback), 0o644)
@@ -2501,13 +2553,6 @@ func formatPlanContractViolationFeedback(role Role, violations []ProtocolViolati
 	return strings.TrimSpace(b.String()) + "\n"
 }
 
-func missingPhaseCompleteViolations() []ProtocolViolation {
-	return []ProtocolViolation{{
-		Artifact: PhaseCompleteFile,
-		Reason:   "agent completed successfully but did not write phase_complete",
-	}}
-}
-
 // resolvePlanArtifactPath reads the plan artifact path from the feature store.
 // Falls back to globbing the artifact directory for common plan filenames.
 func resolvePlanArtifactPath(store ports.FeatureStore, featureID, artifactDir string) string {
@@ -2551,22 +2596,14 @@ func resolvePlanArtifactPath(store ports.FeatureStore, featureID, artifactDir st
 	return bestPath
 }
 
-// PhaseCompleteFile is the signal file the agent writes to indicate it has
-// finished its work. The presence of this file is the universal completion
-// signal across all phases. If the agent ends its turn without writing it,
-// the session stays alive (the agent likely has a question or hit an issue).
-const PhaseCompleteFile = "phase_complete"
-
-// HasPhaseComplete returns true if the phase_complete signal file exists in dir.
+// HasPhaseComplete reports whether the harness-owned phase_complete receipt
+// exists in dir.
+// PHASE2(completion receipt): the feature resume path treats the presence of
+// this file as phase completion; main's single-shot completion moved receipt
+// authority to commit-time validation.
 func HasPhaseComplete(dir string) bool {
 	_, err := os.Stat(filepath.Join(dir, PhaseCompleteFile))
 	return err == nil
-}
-
-// RemovePhaseComplete removes the phase_complete signal file if it exists.
-// Called at the start of each phase/iteration to avoid stale signals.
-func RemovePhaseComplete(dir string) {
-	_ = os.Remove(filepath.Join(dir, PhaseCompleteFile))
 }
 
 // IsArtifactExcluded returns true if the filename should be excluded from

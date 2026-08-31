@@ -19,12 +19,43 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
+	"sync"
+	"time"
+
+	"github.com/doordash-oss/agentic-orchestrator/internal/github"
 )
 
 // PushFunc is the function used by Push. Tests can replace it to avoid real
 // git-push operations (e.g. when corporate hooks block pushes to local repos).
 var PushFunc = defaultPush
+
+var (
+	indexLockRetryWindow       = 5 * time.Second
+	indexLockRetryInitialDelay = 25 * time.Millisecond
+	indexLockRetryMaxDelay     = 250 * time.Millisecond
+	gitLockStaleAfter          = 10 * time.Minute
+)
+
+var gitLockPathPattern = regexp.MustCompile(`(?i)'([^']+\.lock)'`)
+
+// GitLockContentionError reports a Git mutation that exhausted its retry
+// window while a known lock remained in place.
+type GitLockContentionError struct {
+	LockPath string
+	Age      time.Duration
+}
+
+func (e *GitLockContentionError) Error() string {
+	age := e.Age.Round(time.Second)
+	if e.Age > gitLockStaleAfter {
+		return fmt.Sprintf("stale git lock (%s old) at %s", age, e.LockPath)
+	}
+	return fmt.Sprintf("git lock contention (%s old) at %s", age, e.LockPath)
+}
+
+var worktreeMutationLocks sync.Map
 
 // Push pushes a worktree's branch to origin.
 func Push(worktreePath, branch string) error {
@@ -40,67 +71,34 @@ func defaultPush(worktreePath, branch string) error {
 	return nil
 }
 
-// buildCreatePRArgs assembles the gh CLI argument slice for pr create.
-// Separated from CreatePR so tests can verify argument construction without
-// invoking the gh binary.
-func buildCreatePRArgs(branch, title, body string, draft bool, baseBranch ...string) []string {
-	args := []string{"pr", "create",
-		"--title", title,
-		"--body", body,
-		"--head", branch,
-	}
-	if len(baseBranch) > 0 && baseBranch[0] != "" {
-		args = append(args, "--base", baseBranch[0])
-	}
-	if draft {
-		args = append(args, "--draft")
-	}
-	return args
-}
-
-// CreatePR creates a GitHub PR using the gh CLI.
+// CreatePR creates a GitHub PR for the branch pushed from repoPath.
 // If baseBranch is provided and non-empty, the PR targets that branch
-// instead of the repository's default branch (for stacked PRs).
-// When draft is true, --draft is appended so the PR is created as a draft.
-//
-// If a PR already exists for the branch, the existing PR URL is returned
-// instead of an error (the push already updated the remote branch).
+// instead of the repository's default branch (for stacked PRs). When
+// draft is true the PR is created as a draft. If a PR already exists
+// for the branch, the existing PR URL is returned instead of an error
+// (the push already updated the remote branch).
 func CreatePR(repoPath, branch, title, body string, draft bool, baseBranch ...string) (string, error) {
 	body = InjectPRSignature(body)
-	args := buildCreatePRArgs(branch, title, body, draft, baseBranch...)
-	cmd := exec.Command("gh", args...)
-	cmd.Dir = repoPath
-	out, err := cmd.CombinedOutput()
+	host, owner, repo, err := originRepo(repoPath)
 	if err != nil {
-		output := strings.TrimSpace(string(out))
-		if url := extractExistingPRURL(output); url != "" {
-			return url, nil
-		}
-		return "", fmt.Errorf("creating PR: %s: %w", output, err)
+		return "", fmt.Errorf("creating PR: %w", err)
 	}
-	return strings.TrimSpace(string(out)), nil
-}
-
-// extractExistingPRURL extracts a GitHub PR URL from gh's "already exists"
-// error output. Returns empty string if the output doesn't match.
-//
-// Example gh output:
-//
-//	a pull request for branch "feature/foo" into branch "main" already exists:
-//	https://github.com/org/repo/pull/123
-func extractExistingPRURL(output string) string {
-	if !strings.Contains(output, "already exists") {
-		return ""
+	client, err := github.ForHost(host)
+	if err != nil {
+		return "", fmt.Errorf("creating PR: %w", err)
 	}
-	idx := strings.LastIndex(output, "https://")
-	if idx < 0 {
-		return ""
+	base := ""
+	if len(baseBranch) > 0 {
+		base = baseBranch[0]
 	}
-	url := strings.Fields(output[idx:])[0]
-	if strings.Contains(url, "/pull/") {
-		return url
+	prURL, err := client.CreatePR(github.CreatePRParams{
+		Owner: owner, Repo: repo, Head: branch, Base: base,
+		Title: title, Body: body, Draft: draft,
+	})
+	if err != nil {
+		return "", err
 	}
-	return ""
+	return prURL, nil
 }
 
 // DiffSummary returns the diff between the worktree branch and its base branch,
@@ -116,7 +114,7 @@ func DiffSummary(worktreePath string, baseBranch ...string) (string, error) {
 	}
 
 	// Uncommitted diff: working tree changes not yet committed (tracked files)
-	cmd := exec.Command("git", "-C", worktreePath, "diff", "HEAD")
+	cmd := readGitCmd(worktreePath, "diff", "HEAD")
 	out, err := cmd.CombinedOutput()
 	if err == nil && len(strings.TrimSpace(string(out))) > 0 {
 		parts = append(parts, string(out))
@@ -137,7 +135,7 @@ func DiffSummary(worktreePath string, baseBranch ...string) (string, error) {
 }
 
 func diffRange(worktreePath, rangeSpec string) (string, error) {
-	cmd := exec.Command("git", "-C", worktreePath, "diff", rangeSpec)
+	cmd := readGitCmd(worktreePath, "diff", rangeSpec)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", err
@@ -150,7 +148,7 @@ func diffRange(worktreePath, rangeSpec string) (string, error) {
 
 // untrackedFilesDiff generates a unified diff representation for untracked files.
 func untrackedFilesDiff(worktreePath string) (string, error) {
-	cmd := exec.Command("git", "-C", worktreePath, "ls-files", "--others", "--exclude-standard")
+	cmd := readGitCmd(worktreePath, "ls-files", "--others", "--exclude-standard")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", err
@@ -189,7 +187,7 @@ func untrackedFilesDiff(worktreePath string) (string, error) {
 // HasUncommittedChanges returns true if the worktree has staged, unstaged,
 // or untracked changes.
 func HasUncommittedChanges(worktreePath string) bool {
-	cmd := exec.Command("git", "-C", worktreePath, "status", "--porcelain")
+	cmd := readGitCmd(worktreePath, "status", "--porcelain")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return false
@@ -197,29 +195,19 @@ func HasUncommittedChanges(worktreePath string) bool {
 	return strings.TrimSpace(string(out)) != ""
 }
 
-// HasLocalCommits returns true if the current branch has commits not yet
-// pushed to its upstream tracking branch. Returns false when no upstream
-// is configured (e.g. branch hasn't been pushed yet).
-func HasLocalCommits(worktreePath string) bool {
-	cmd := exec.Command("git", "-C", worktreePath, "rev-list", "--count", "@{u}..HEAD")
-	out, err := cmd.Output()
-	if err != nil {
-		return false
-	}
-	return strings.TrimSpace(string(out)) != "0"
-}
-
 // CommitAll stages all changes (including untracked files) and creates a commit.
 // The Agentic signature trailer is automatically appended to the commit message.
 func CommitAll(worktreePath, message string) error {
-	add := exec.Command("git", "-C", worktreePath, "add", "-A")
-	if out, err := add.CombinedOutput(); err != nil {
+	mu := worktreeMutationLock(worktreePath)
+	mu.Lock()
+	defer mu.Unlock()
+
+	if out, err := runGitMutationWithLockRetry(worktreePath, "add", "-A"); err != nil {
 		return fmt.Errorf("staging changes: %s: %w", strings.TrimSpace(string(out)), err)
 	}
 	// Append Agentic signature trailer
 	message = message + "\n\n" + CommitSignatureTrailer
-	commit := exec.Command("git", "-C", worktreePath, "commit", "-m", message)
-	if out, err := commit.CombinedOutput(); err != nil {
+	if out, err := runGitMutationWithLockRetry(worktreePath, "commit", "-m", message); err != nil {
 		return fmt.Errorf("creating commit: %s: %w", strings.TrimSpace(string(out)), err)
 	}
 	return nil
@@ -229,11 +217,14 @@ func CommitAll(worktreePath, message string) error {
 // returns the full HEAD SHA after the operation. A clean worktree is not an
 // error; the existing HEAD SHA is returned.
 func CommitAllAndGetHead(worktreePath, message string) (string, error) {
-	add := exec.Command("git", "-C", worktreePath, "add", "-A")
-	if out, err := add.CombinedOutput(); err != nil {
+	mu := worktreeMutationLock(worktreePath)
+	mu.Lock()
+	defer mu.Unlock()
+
+	if out, err := runGitMutationWithLockRetry(worktreePath, "add", "-A"); err != nil {
 		return "", fmt.Errorf("staging changes: %s: %w", strings.TrimSpace(string(out)), err)
 	}
-	status := exec.Command("git", "-C", worktreePath, "status", "--porcelain")
+	status := readGitCmd(worktreePath, "status", "--porcelain")
 	out, err := status.CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("checking staged changes: %s: %w", strings.TrimSpace(string(out)), err)
@@ -242,16 +233,99 @@ func CommitAllAndGetHead(worktreePath, message string) (string, error) {
 		return CurrentHeadSHA(worktreePath)
 	}
 	message = message + "\n\n" + CommitSignatureTrailer
-	commit := exec.Command("git", "-C", worktreePath, "commit", "-m", message)
-	if out, err := commit.CombinedOutput(); err != nil {
+	if out, err := runGitMutationWithLockRetry(worktreePath, "commit", "-m", message); err != nil {
 		return "", fmt.Errorf("creating commit: %s: %w", strings.TrimSpace(string(out)), err)
 	}
 	return CurrentHeadSHA(worktreePath)
 }
 
+func worktreeMutationLock(worktreePath string) *sync.Mutex {
+	key := filepath.Clean(worktreePath)
+	actual, _ := worktreeMutationLocks.LoadOrStore(key, &sync.Mutex{})
+	return actual.(*sync.Mutex)
+}
+
+func worktreeMutationInProgress(worktreePath string) bool {
+	mu := worktreeMutationLock(worktreePath)
+	if mu.TryLock() {
+		mu.Unlock()
+		return false
+	}
+	return true
+}
+
+// runGitMutationWithLockRetry tolerates short-lived Git locks and removes one
+// stale lock per invocation when Git reports its concrete path. Fresh locks
+// remain untouched and are retried only within the bounded window.
+func runGitMutationWithLockRetry(worktreePath string, args ...string) ([]byte, error) {
+	return runGitMutationWithLockRetryStdin(worktreePath, "", args...)
+}
+
+func runGitMutationWithLockRetryStdin(worktreePath, stdin string, args ...string) ([]byte, error) {
+	deadline := time.Now().Add(indexLockRetryWindow)
+	delay := indexLockRetryInitialDelay
+	removedStaleLock := false
+	for {
+		cmdArgs := append([]string{"-C", worktreePath}, args...)
+		cmd := exec.Command("git", cmdArgs...)
+		if stdin != "" {
+			cmd.Stdin = strings.NewReader(stdin)
+		}
+		out, err := cmd.CombinedOutput()
+		lockPath, contention := lockContention(out)
+		if err == nil || !contention {
+			return out, err
+		}
+		lockAge := time.Duration(0)
+		if lockPath != "" && strings.HasSuffix(filepath.Base(lockPath), ".lock") {
+			if info, statErr := os.Stat(lockPath); statErr == nil {
+				lockAge = time.Since(info.ModTime())
+				if !removedStaleLock && lockAge > gitLockStaleAfter {
+					removedStaleLock = true
+					if removeErr := os.Remove(lockPath); removeErr == nil || os.IsNotExist(removeErr) {
+						continue
+					}
+				}
+			}
+		}
+		if !time.Now().Before(deadline) {
+			if lockPath != "" {
+				return out, &GitLockContentionError{LockPath: lockPath, Age: lockAge}
+			}
+			return out, err
+		}
+
+		remaining := time.Until(deadline)
+		if delay > remaining {
+			delay = remaining
+		}
+		time.Sleep(delay)
+		if delay < indexLockRetryMaxDelay {
+			delay *= 2
+			if delay > indexLockRetryMaxDelay {
+				delay = indexLockRetryMaxDelay
+			}
+		}
+	}
+}
+
+func lockContention(out []byte) (string, bool) {
+	msg := strings.ToLower(string(out))
+	if !strings.Contains(msg, ".lock") ||
+		!(strings.Contains(msg, "file exists") || strings.Contains(msg, "unable to create") ||
+			strings.Contains(msg, "cannot lock") || strings.Contains(msg, "could not lock")) {
+		return "", false
+	}
+	match := gitLockPathPattern.FindSubmatch(out)
+	if len(match) == 2 {
+		return string(match[1]), true
+	}
+	return "", true
+}
+
 // CurrentHeadSHA returns the full SHA of HEAD in the given worktree.
 func CurrentHeadSHA(worktreePath string) (string, error) {
-	cmd := exec.Command("git", "-C", worktreePath, "rev-parse", "HEAD")
+	cmd := readGitCmd(worktreePath, "rev-parse", "HEAD")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("getting HEAD SHA: %s: %w", strings.TrimSpace(string(out)), err)
@@ -259,26 +333,21 @@ func CurrentHeadSHA(worktreePath string) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
-// ClosePR closes a GitHub PR by URL using the gh CLI.
+// ClosePR closes a GitHub PR by URL.
 // Errors are returned but callers should treat them as non-fatal.
 func ClosePR(prURL string) error {
-	cmd := exec.Command("gh", "pr", "close", prURL)
-	out, err := cmd.CombinedOutput()
+	owner, repo, number, err := ParsePRURL(prURL)
 	if err != nil {
-		return fmt.Errorf("closing PR: %s: %w", strings.TrimSpace(string(out)), err)
+		return err
+	}
+	client, err := github.ForHost(prURLHost(prURL))
+	if err != nil {
+		return err
+	}
+	if err := client.ClosePR(owner, repo, number); err != nil {
+		return fmt.Errorf("closing PR: %w", err)
 	}
 	return nil
-}
-
-// CommitLog returns the commit log between the worktree branch and its base branch.
-func CommitLog(worktreePath string, baseBranch ...string) (string, error) {
-	base := resolveBase(worktreePath, baseBranch...)
-	cmd := exec.Command("git", "-C", worktreePath, "log", "--oneline", base+"..HEAD")
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return "", fmt.Errorf("getting commit log: %s: %w", strings.TrimSpace(string(out)), err)
-	}
-	return string(out), nil
 }
 
 // CommitBodies returns the full commit messages (subject + body) between the
@@ -286,7 +355,7 @@ func CommitLog(worktreePath string, baseBranch ...string) (string, error) {
 // description generation where the short oneline log is not descriptive enough.
 func CommitBodies(worktreePath string, baseBranch ...string) (string, error) {
 	base := resolveBase(worktreePath, baseBranch...)
-	cmd := exec.Command("git", "-C", worktreePath, "log", "--format=%B%n---commit---", base+"..HEAD")
+	cmd := readGitCmd(worktreePath, "log", "--format=%B%n---commit---", base+"..HEAD")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("getting commit bodies: %s: %w", strings.TrimSpace(string(out)), err)
@@ -299,7 +368,7 @@ func CommitBodies(worktreePath string, baseBranch ...string) (string, error) {
 // when the full diff is too large to prompt with.
 func DiffStat(worktreePath string, baseBranch ...string) (string, error) {
 	base := resolveBase(worktreePath, baseBranch...)
-	cmd := exec.Command("git", "-C", worktreePath, "diff", "--stat", base+"...HEAD")
+	cmd := readGitCmd(worktreePath, "diff", "--stat", base+"...HEAD")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("getting diff stat: %s: %w", strings.TrimSpace(string(out)), err)
@@ -307,11 +376,20 @@ func DiffStat(worktreePath string, baseBranch ...string) (string, error) {
 	return string(out), nil
 }
 
-// resolveBase returns the base branch to diff against. If an explicit base is
-// provided, it's used directly. Otherwise falls back to detecting main/master.
+// resolveBase returns the base ref to diff against. A matching origin
+// remote-tracking branch takes precedence over the local branch because
+// publish and completion diffs describe what a PR against the remote base
+// would contain. Otherwise the supplied or detected local ref is used.
 func resolveBase(worktreePath string, baseBranch ...string) string {
+	base := ""
 	if len(baseBranch) > 0 && baseBranch[0] != "" {
-		return baseBranch[0]
+		base = baseBranch[0]
+	} else {
+		base = DefaultBranch(worktreePath)
 	}
-	return DefaultBranch(worktreePath)
+	remoteRef := "refs/remotes/origin/" + base
+	if readGitCmd(worktreePath, "show-ref", "--verify", "--quiet", remoteRef).Run() == nil {
+		return "origin/" + base
+	}
+	return base
 }

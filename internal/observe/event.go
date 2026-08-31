@@ -33,7 +33,7 @@ type Event struct {
 	Error        string         `json:"error,omitempty"`
 	Data         map[string]any `json:"data,omitempty"`
 	// RunNumber is the 1-indexed attempt number of the feature's active run at
-	// emit time. Zero (via omitempty-missing) means the event predates Phase 4
+	// emit time. Zero (via omitempty-missing) means the event lacks run context
 	// or was emitted from a code path that has no run context.
 	RunNumber int `json:"run_number,omitempty"`
 }

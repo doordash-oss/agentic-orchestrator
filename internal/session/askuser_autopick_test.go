@@ -184,7 +184,7 @@ func TestDecideAskUserAutoPick(t *testing.T) {
 			),
 		},
 		{
-			name:        "numbered options use current TUI label parsing",
+			name:        "numbered options use current desktop app label parsing",
 			purpose:     ports.AskUserAutoPickPurposeInquire,
 			inquireness: feature.InquirenessNone,
 			input:       askInput(`{"question":"Which scope?\n1. Repository-first (Recommended): cover repo code. [confidence: 0.81]\n2. Everything: include adjacent state. [confidence: 0.34]\nReply with 1 or 2.","options":[]}`),
@@ -200,6 +200,12 @@ func TestDecideAskUserAutoPick(t *testing.T) {
 			wantPick:    true,
 			wantAnswer:  "Italian tech terms where established (Recommended)",
 			wantConf:    0.85,
+		},
+		{
+			name:        "numbered options without a question stem decline",
+			purpose:     ports.AskUserAutoPickPurposeInquire,
+			inquireness: feature.InquirenessNone,
+			input:       askInput(`{"question":"1. Both loops, all profiles (Recommended): Use the same mechanism everywhere. [confidence: 0.76]\n2. Both loops, Moonshot only: Limit the additional context. [confidence: 0.52]\n3. Final-review fixer only: Preserve the per-phase gate. [confidence: 0.48]","options":[]}`),
 		},
 	}
 

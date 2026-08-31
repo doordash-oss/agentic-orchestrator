@@ -77,7 +77,6 @@ func implementationReviewAxisRoleSpec(role Role, skillName string) RoleSpec {
 				},
 			},
 		},
-		MarkerRoot:           "helper_dir",
 		Artifact:             reviewFeedbackRoleArtifact("helper_dir"),
 		ReadOnlyOutsideRoots: true,
 	})

@@ -86,7 +86,6 @@ func TestOrchestrator_AdvanceToNextPhase_Gate_EmitsReviewRequired(t *testing.T) 
 	lc.CompleteInquireFn = func(id string) error { return nil }
 	fs := newFeatureStore(f)
 	stateDir := t.TempDir()
-	writePhaseComplete(t, stateDir, f, "inquire")
 	writePhaseMarkdown(t, stateDir, f, "inquire", "inquire.md")
 
 	var gotPhase feature.Phase
@@ -307,7 +306,7 @@ func TestOrchestrator_HandleReviewDecision_Iterate_BumpsIterations(t *testing.T)
 // Otherwise the roadmap/phase-plan retry budget drops from 13 to 3 (and
 // phase-plan's RunPhasePlanning would ignore the override entirely because
 // it only honors the override when it exceeds the default — phase.go:803).
-// Mirrors the TUI promotion at app.go:3149-3155.
+// The promotion preserves the default iteration budget.
 func TestOrchestrator_HandleReviewDecision_Iterate_ZeroDefault_PromotesToDefault(t *testing.T) {
 	planGate := feature.PhasePlan
 	f := &feature.Feature{
@@ -379,8 +378,7 @@ func TestOrchestrator_HandleReviewDecision_Iterate_ZeroDefault_PhasePlan_Promote
 // LatestCompletedPlanAttempt + APPROVED short-circuit in
 // plan_validation.go:254. Proof: after iterate, the attempt must no longer
 // register as the latest completed (AgentStatus overwritten to empty — so
-// the attempt is skipped by LatestCompletedPlanAttempt). Mirrors the TUI
-// roadmap-reject behavior at app.go:3289-3294.
+// the attempt is skipped by LatestCompletedPlanAttempt).
 func TestOrchestrator_HandleReviewDecision_Iterate_Roadmap_InvalidatesApprovedAttempt(t *testing.T) {
 	tmpStateDir := t.TempDir()
 	featureID := "feat-rd-iter-rm-approved"
@@ -527,8 +525,7 @@ func TestOrchestrator_HandleReviewDecision_Iterate_Legacy_InvalidatesApprovedAtt
 		ActiveRun:          1,
 		RunCount:           1,
 		// CurrentRoadmapPhase stays 0 and Artifacts["roadmap"] stays unset,
-		// which is the exact state the TUI classifies as "legacy" at
-		// app.go:3140 (isRoadmap = CurrentRoadmapPhase==0 && roadmap artifact set).
+		// which classifies this as a non-roadmap plan because no roadmap artifact exists.
 	}
 	lc := lifecycleForFeature(f)
 	lc.StartPlanningFn = func(id string) error { f.Status = feature.StatusPlanning; return nil }
@@ -554,180 +551,10 @@ func TestOrchestrator_HandleReviewDecision_Iterate_Legacy_InvalidatesApprovedAtt
 	}
 }
 
-// Iterate on a roadmap phase-plan where the feature is in an active refactor
-// cycle (RefactorCount>0, RefactorPrompt!="", so RefactorPrefix()="refactor-N"):
-// RunPhasePlanningLoop writes the APPROVED attempt meta under the refactor
-// cycle's phase-plan dir at <stateDir>/<featureID>/refactor-N/phase-NN/plan
-// (plan_validation.go:1441). Targeting the non-refactor dir
-// (<stateDir>/<featureID>/phase-NN/plan) leaves the real APPROVED attempt
-// in place, and the next plan run short-circuits via plan_validation.go:1056.
-// Without the refactor-aware path, iterate is silently dropped for every
-// per-phase plan review during a refactor roadmap.
-func TestOrchestrator_HandleReviewDecision_Iterate_PhasePlan_Refactor_InvalidatesApprovedAttempt(t *testing.T) {
-	tmpStateDir := t.TempDir()
-	featureID := "feat-rd-iter-pp-refactor-approved"
-	refactorPrefix := "refactor-1"
-	refactorPhasePlanDir := filepath.Join(tmpStateDir, featureID, "runs", "run-001", refactorPrefix, "phase-02", "plan")
-
-	if err := agent.WritePlanAttemptMeta(refactorPhasePlanDir, agent.PlanAttemptMeta{
-		Attempt:      1,
-		AgentStatus:  "SUCCESS",
-		ReviewStatus: "APPROVED",
-	}); err != nil {
-		t.Fatalf("seed approved meta: %v", err)
-	}
-	if got := agent.LatestCompletedPlanAttempt(refactorPhasePlanDir); got != 1 {
-		t.Fatalf("precondition: LatestCompletedPlanAttempt(refactor) = %d, want 1", got)
-	}
-	// Also seed the non-refactor phase-plan dir so that a buggy implementation
-	// targeting the wrong dir would appear to succeed. The refactor dir is the
-	// real one — we assert it is the one invalidated.
-	nonRefactorPhasePlanDir := agent.PhasePlanDir(tmpStateDir, &feature.Feature{ID: featureID, ActiveRun: 1}, 2)
-	if err := agent.WritePlanAttemptMeta(nonRefactorPhasePlanDir, agent.PlanAttemptMeta{
-		Attempt:      1,
-		AgentStatus:  "SUCCESS",
-		ReviewStatus: "CHANGES_REQUESTED",
-	}); err != nil {
-		t.Fatalf("seed non-refactor meta: %v", err)
-	}
-
-	planGate := feature.PhasePlan
-	f := &feature.Feature{
-		ID:                  featureID,
-		Status:              feature.StatusPlanNeedsReview,
-		Pipeline:            feature.PipelineLarge,
-		PendingReviewPhase:  &planGate,
-		MaxPlanIterations:   5,
-		CurrentRoadmapPhase: 2,
-		TotalRoadmapPhases:  3,
-		ActiveRun:           1,
-		RunCount:            1,
-		// Refactor cycle state: RefactorPrefix() returns "refactor-1" when both
-		// fields are set (feature/feature.go:535).
-		RefactorPrompt: "clean up architecture",
-	}
-	f.SetRefactorCount(1)
-	lc := lifecycleForFeature(f)
-	lc.StartPlanningFn = func(id string) error { f.Status = feature.StatusPlanning; return nil }
-	fs := newFeatureStore(f)
-
-	pr := &agent.PhaseRunner{StateDir: tmpStateDir}
-
-	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs, PhaseRunner: pr}, orchestrator.Hooks{})
-	// Swallow dispatch error — the meta write happens before startPhase.
-	_ = o.HandleReviewDecision(featureID, orchestrator.ReviewDecision{
-		Decision:  "iterate",
-		PhasePlan: true,
-	})
-
-	// The refactor-scoped attempt must be invalidated so the planner re-runs
-	// instead of short-circuiting on APPROVED.
-	if got := agent.LatestCompletedPlanAttempt(refactorPhasePlanDir); got != 0 {
-		t.Errorf("LatestCompletedPlanAttempt(refactor phase-plan dir) = %d after iterate; want 0 (refactor-scoped approved attempt should be invalidated)",
-			got)
-	}
-}
-
 // Removed in SchemaVersionCurrent = 3: the silent-fallback regression these
-// three tests guarded against
-// (Proceed/Plan_Approved/Rewind_ToImplement * Refactor_LoadsExecutionPlan)
-// is structurally impossible now: the orchestrator hard-fails when
-// execution-order.yaml is missing/malformed and there is no
+// tests guarded against is structurally impossible now: the orchestrator
+// hard-fails when execution-order.yaml is missing/malformed and there is no
 // SequentialFallbackPlan synthesis path.
-
-// Generic resolver fallback is refactor-aware: when a refactor feature drives
-// through startImplement with NO Artifacts entries (so resolvePlanPath must
-// rely on the directory fallback in context.go:168-185 via
-// resolveArtifactPath→resolvePhaseDirForKey→phasePlanDirForFeature, and the
-// redundant globPhaseArtifact at context.go:180), the refactor-scoped plan
-// artifact must be discovered rather than a decoy living in the non-refactor
-// phase-plan dir. Mirrors the iteration-8 reviewer concern that the resolver
-// cascade itself must be consistent with the explicit phasePlanDirForFeature
-// call sites (orchestrator.go:849, orchestrator.go:1087, completion.go:362).
-//
-// Discriminator: a file named `phase-2-plan.md` lives in BOTH the
-// refactor-scoped dir (<state>/<featureID>/refactor-1/phase-02/plan) and the
-// non-refactor dir (<state>/<featureID>/phase-02/plan). Only the refactor path
-// should be resolved. startImplement persists the resolved path into
-// f.Artifacts["plan"] before RunMultiRepoImplementation is invoked
-// (orchestrator.go:581), so we can assert against Artifacts.
-func TestOrchestrator_StartImplement_PhasePlan_Refactor_FallbackResolvesRefactorScopedPlan(t *testing.T) {
-	tmpStateDir := t.TempDir()
-	featureID := "feat-start-impl-refactor-fallback"
-	refactorPrefix := "refactor-1"
-
-	// Refactor-scoped phase-plan dir (the correct location).
-	refactorPhasePlanDir := filepath.Join(tmpStateDir, featureID, "runs", "run-001", refactorPrefix, "phase-02", "plan")
-	if err := os.MkdirAll(refactorPhasePlanDir, 0o755); err != nil {
-		t.Fatalf("mkdir refactor: %v", err)
-	}
-	refactorPlanPath := filepath.Join(refactorPhasePlanDir, "phase-2-plan.md")
-	if err := os.WriteFile(refactorPlanPath, []byte("# refactor-scoped plan"), 0o644); err != nil {
-		t.Fatalf("write refactor plan: %v", err)
-	}
-
-	// Non-refactor phase-plan dir (decoy). If the resolver is NOT refactor-aware,
-	// it will find and resolve this path instead, making the test fail.
-	nonRefactorPhasePlanDir := agent.PhasePlanDir(tmpStateDir, &feature.Feature{ID: featureID, ActiveRun: 1}, 2)
-	if err := os.MkdirAll(nonRefactorPhasePlanDir, 0o755); err != nil {
-		t.Fatalf("mkdir non-refactor: %v", err)
-	}
-	decoyPlanPath := filepath.Join(nonRefactorPhasePlanDir, "phase-2-plan.md")
-	if err := os.WriteFile(decoyPlanPath, []byte("# decoy plan"), 0o644); err != nil {
-		t.Fatalf("write decoy plan: %v", err)
-	}
-
-	implementGate := feature.PhaseImplement
-	f := &feature.Feature{
-		ID:                  featureID,
-		Status:              feature.StatusPlanNeedsReview,
-		Pipeline:            feature.PipelineLarge,
-		PendingReviewPhase:  &implementGate,
-		CurrentRoadmapPhase: 2,
-		TotalRoadmapPhases:  3,
-		ActiveRun:           1,
-		RunCount:            1,
-		RefactorPrompt:      "modularize internals",
-		// No Artifacts entries — forces resolvePlanPath to use the
-		// resolver fallback cascade rather than a stored absolute path.
-		Repos: []feature.FeatureRepo{
-			{Name: repoName, Path: repoAPath},
-		},
-	}
-	f.SetRefactorCount(1)
-	lc := lifecycleForFeature(f)
-	lc.StartRoadmapPhaseImplementationFn = func(id string) error {
-		f.Status = feature.StatusImplementing
-		return nil
-	}
-	lc.StartImplementationFn = func(id string) error { return nil }
-	// Abort startImplement BEFORE RunMultiRepoImplementation spawns its
-	// goroutine (which would panic without a real session manager). The
-	// Artifacts["plan"] persistence at orchestrator.go:577-585 happens BEFORE
-	// the InitRepoImpl call at line 602, so we still observe the resolved path.
-	sentinelErr := errors.New("test: abort at InitRepoImpl to keep goroutines out")
-	lc.InitRepoImplFn = func(id string) error { return sentinelErr }
-	fs := newFeatureStore(f)
-
-	pr := &agent.PhaseRunner{StateDir: tmpStateDir}
-
-	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs, PhaseRunner: pr}, orchestrator.Hooks{})
-	// The outer HandleReviewDecision returns a wrapped sentinelErr — fine.
-	_ = o.HandleReviewDecision(featureID, orchestrator.ReviewDecision{
-		Decision:  "proceed",
-		PhasePlan: true,
-	})
-
-	got, ok := f.Artifacts["plan"]
-	if !ok {
-		t.Fatalf("f.Artifacts[plan] was not persisted — resolvePlanPath returned empty; the refactor-scoped plan at %q was not discovered",
-			refactorPlanPath)
-	}
-	if got != refactorPlanPath {
-		t.Errorf("f.Artifacts[plan] = %q, want %q (refactor-scoped plan must win over non-refactor decoy %q)",
-			got, refactorPlanPath, decoyPlanPath)
-	}
-}
 
 // Phase 2 carry-forward produces run-relative values on the new run's
 // Artifacts map (carryForwardArtifactsMap strips sealedRunDir from absolute
@@ -741,7 +568,7 @@ func TestOrchestrator_Proceed_PhasePlan_RunRelativeArtifact_RoadmapPipeline_Reso
 	featureID := "feat-run-rel-plan"
 
 	// Seed the carried phase-plan on disk under run-001/phase-02/plan/plan.md.
-	// This mirrors what Phase 2's copyRunArtifactsForward produces on the new
+	// This mirrors what copyRunArtifactsForward produces on the new
 	// run after rewind-to-Implement on a Large pipeline at phase 2.
 	run1PhasePlanDir := filepath.Join(tmpStateDir, featureID, "runs", "run-001", "phase-02", "plan")
 	if err := os.MkdirAll(run1PhasePlanDir, 0o755); err != nil {
@@ -780,8 +607,7 @@ func TestOrchestrator_Proceed_PhasePlan_RunRelativeArtifact_RoadmapPipeline_Reso
 		return nil
 	}
 	lc.StartImplementationFn = func(id string) error { return nil }
-	// Abort before goroutines spawn (mirrors
-	// TestOrchestrator_StartImplement_PhasePlan_Refactor_FallbackResolvesRefactorScopedPlan).
+	// Abort before goroutines spawn.
 	sentinelErr := errors.New("test: abort at InitRepoImpl to keep goroutines out")
 	lc.InitRepoImplFn = func(id string) error { return sentinelErr }
 	fs := newFeatureStore(f)
@@ -808,9 +634,8 @@ func TestOrchestrator_Proceed_PhasePlan_RunRelativeArtifact_RoadmapPipeline_Reso
 // ProceedFromRewindReview to PhaseInquire: reads description-review.md and
 // overwrites f.Description. The file lives at the feature root (mirrors where
 // rewind writes it — feature/manager.go:1200 uses
-// baseDir/featureID/description-review.md). The actual rewind has already
-// been performed by Lifecycle.RewindToPhase in the TUI's rewindCmd path; this
-// entry point only confirms it.
+// baseDir/featureID/description-review.md). Lifecycle.RewindToPhase has already
+// performed the rewind; this entry point only confirms it.
 func TestOrchestrator_ProceedFromRewindReview_ToInquire_OverwritesDescription(t *testing.T) {
 	tmpStateDir := t.TempDir()
 	featureID := "feat-rd-rewind"
@@ -848,8 +673,8 @@ func TestOrchestrator_ProceedFromRewindReview_ToInquire_OverwritesDescription(t 
 	if f.Description != "new desc" {
 		t.Errorf("Description = %q, want 'new desc' (should be overwritten from description-review.md)", f.Description)
 	}
-	// RewindToPhase must NOT be invoked from this path — the TUI's rewindCmd
-	// already performed the actual rewind. Calling it again would seal the
+	// RewindToPhase must NOT be invoked from this path because the actual rewind
+	// already happened. Calling it again would seal the
 	// freshly forked run and produce a phantom extra run on every confirm.
 	refuteLifecycleCall(t, lc, "RewindToPhase")
 }
@@ -902,12 +727,9 @@ func TestOrchestrator_ProceedFromRewindReview_MediumToPlan_OverwritesDescription
 }
 
 // ProceedFromRewindReview on an Medium-upgraded feature, given the
-// already-escalated effective target. Lifecycle.RewindToPhase is called from
-// the TUI's rewindCmd BEFORE the rewind-artifact-review opens; that earlier
-// call resolves the escalation (pre-plan targets on Medium-upgraded features
-// return PhaseKnowledgeBase — see feature/manager.go:1115-1121) and the TUI
-// propagates the effective target through RewindDoneMsg and into the artifact
-// review's RewindReviewDecisionMsg. The orchestrator therefore receives the
+// already-escalated effective target. Lifecycle.RewindToPhase runs before the
+// artifact review opens and resolves the escalation (pre-plan targets on
+// Medium-upgraded features return PhaseKnowledgeBase). The orchestrator receives the
 // escalated target directly. This test verifies that ProceedFromRewindReview
 // dispatches PhaseKnowledgeBase rather than treating the input as a pre-plan
 // phase.
@@ -932,7 +754,7 @@ func TestOrchestrator_ProceedFromRewindReview_DispatchesEscalatedKBTarget(t *tes
 	// InitKBStatus and returns PhaseStarted cleanly.
 	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{})
 
-	// Effective target propagated from TUI rewindCmd's RewindToPhase result.
+	// Effective target propagated from the earlier RewindToPhase result.
 	if err := o.ProceedFromRewindReview("feat-rd-rewind-kb", feature.PhaseKnowledgeBase); err != nil {
 		t.Fatalf("ProceedFromRewindReview: %v", err)
 	}
@@ -942,8 +764,8 @@ func TestOrchestrator_ProceedFromRewindReview_DispatchesEscalatedKBTarget(t *tes
 	// Inquire dispatch must NOT have happened (would indicate the escalated
 	// target was ignored).
 	refuteLifecycleCall(t, lc, "StartInquire")
-	// And RewindToPhase must NOT be called — the rewind already happened via
-	// the TUI's rewindCmd path before this entry point ran.
+	// RewindToPhase must NOT be called because the rewind already happened
+	// before this entry point ran.
 	refuteLifecycleCall(t, lc, "RewindToPhase")
 
 	events := drainEvents(o)
@@ -967,7 +789,7 @@ func TestOrchestrator_ProceedFromRewindReview_DispatchesEscalatedKBTarget(t *tes
 // the reviewer hits "proceed" on the roadmap gate, the orchestrator must parse
 // the approved roadmap and persist TotalRoadmapPhases BEFORE AdvanceRoadmapPhase
 // runs, otherwise roadmap sequencing (CurrentRoadmapPhase vs TotalRoadmapPhases
-// comparisons) is wrong. Mirrors the TUI helper at app.go:3167-3191.
+// comparisons) is wrong.
 func TestOrchestrator_HandleReviewDecision_Proceed_Roadmap_PersistsPhaseCount(t *testing.T) {
 	tmpDir := t.TempDir()
 	roadmapPath := filepath.Join(tmpDir, "roadmap.md")
@@ -1358,7 +1180,6 @@ func TestOrchestrator_AdvanceToNextPhase_StartPhaseFailure_EmitsFeatureFailed(t 
 	}
 	fs := newFeatureStore(f)
 	stateDir := t.TempDir()
-	writePhaseComplete(t, stateDir, f, "inquire")
 	writePhaseMarkdown(t, stateDir, f, "inquire", "inquire.md")
 
 	var failedCalls []struct{ id, ft, msg string }
@@ -1429,7 +1250,6 @@ func TestOrchestrator_AdvanceToNextPhase_StartPhaseFailure_MarkFailedAlsoFails_B
 	lc.MarkFailedFn = func(id, ft, msg string) error { return markErr }
 	fs := newFeatureStore(f)
 	stateDir := t.TempDir()
-	writePhaseComplete(t, stateDir, f, "inquire")
 	writePhaseMarkdown(t, stateDir, f, "inquire", "inquire.md")
 
 	o := orchestrator.New(orchestrator.Deps{
@@ -1457,7 +1277,7 @@ func TestOrchestrator_AdvanceToNextPhase_StartPhaseFailure_MarkFailedAlsoFails_B
 // PhaseInquire. FeatureAdvanced MUST carry the actually started phase
 // (Inquire), not the requested target (KnowledgeBase). Emitting the
 // requested-but-skipped phase breaks the same phase-sequencing contract
-// Phase 5 treats as blocking when FeatureAdvanced is missing — wrong phase
+// The completion contract treats a missing FeatureAdvanced event as blocking — wrong phase
 // is the same class of defect for downstream subscribers.
 //
 // Pre-fix behavior (hardcoded `Phase: target`) emitted
@@ -1485,8 +1305,8 @@ func TestOrchestrator_ProceedFromRewindReview_ToKB_Skipped_EmitsAdvancedForActua
 	// transition and returns PhaseStarted cleanly.
 	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{})
 
-	// Effective target after escalation (the TUI's rewindCmd already resolved
-	// the Medium-upgraded escalation and propagated PhaseKnowledgeBase).
+	// Effective target after the earlier rewind resolved the Medium-upgraded
+	// escalation and propagated PhaseKnowledgeBase.
 	if err := o.ProceedFromRewindReview("feat-rd-rewind-kb-skip", feature.PhaseKnowledgeBase); err != nil {
 		t.Fatalf("ProceedFromRewindReview: %v", err)
 	}

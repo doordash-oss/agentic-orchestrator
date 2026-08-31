@@ -21,23 +21,26 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
+	"github.com/doordash-oss/agentic-orchestrator/internal/github"
 )
 
-// PullRebaseOutcome / PullRebaseResult alias the port-native types so the
-// canonical definition lives in ports; git keeps these aliases for source
-// compatibility with existing callers.
-type (
-	PullRebaseOutcome = ports.PullRebaseOutcome
-	PullRebaseResult  = ports.PullRebaseResult
-)
+// PullRebaseOutcome categorises the result of a PullRebase operation.
+type PullRebaseOutcome int
 
-// Re-exported PullRebase outcomes. Canonical constants live in ports.
 const (
-	PullRebaseSuccess  = ports.PullRebaseSuccess
-	PullRebaseConflict = ports.PullRebaseConflict
-	PullRebaseFailure  = ports.PullRebaseFailure
+	// PullRebaseSuccess means the rebase succeeded or was a no-op.
+	PullRebaseSuccess PullRebaseOutcome = iota
+	// PullRebaseConflict means the rebase encountered merge conflicts and was aborted.
+	PullRebaseConflict
+	// PullRebaseFailure means a non-conflict failure occurred.
+	PullRebaseFailure
 )
+
+// PullRebaseResult is the outcome and error from a PullRebase operation.
+type PullRebaseResult struct {
+	Outcome PullRebaseOutcome
+	Err     error
+}
 
 // PullRebase fetches from origin and rebases the current branch onto the
 // remote tracking branch. This syncs local commits on top of any remote
@@ -58,7 +61,7 @@ func PullRebase(worktreePath, branch string) PullRebaseResult {
 	}
 
 	// 2. Check if origin/<branch> exists
-	verifyCmd := exec.Command("git", "-C", worktreePath, "rev-parse", "--verify", "origin/"+branch)
+	verifyCmd := readGitCmd(worktreePath, "rev-parse", "--verify", "origin/"+branch)
 	if err := verifyCmd.Run(); err != nil {
 		// Remote branch doesn't exist (first publish) — no-op
 		return PullRebaseResult{Outcome: PullRebaseSuccess}
@@ -100,7 +103,7 @@ func PullRebase(worktreePath, branch string) PullRebaseResult {
 // resolveGitDir returns the .git directory for a worktree path.
 // For worktrees, .git is a file pointing to the actual git dir.
 func resolveGitDir(worktreePath string) string {
-	cmd := exec.Command("git", "-C", worktreePath, "rev-parse", "--git-dir")
+	cmd := readGitCmd(worktreePath, "rev-parse", "--git-dir")
 	out, err := cmd.Output()
 	if err != nil {
 		return filepath.Join(worktreePath, ".git")
@@ -122,18 +125,24 @@ func Fetch(worktreePath string) error {
 	return nil
 }
 
-// RebaseOutcome / RebaseResult alias the port-native types.
-type (
-	RebaseOutcome = ports.RebaseOutcome
-	RebaseResult  = ports.RebaseResult
+// RebaseOutcome categorises the result of a RebaseOnto operation.
+type RebaseOutcome int
+
+const (
+	// RebaseSuccess means the rebase completed without conflicts.
+	RebaseSuccess RebaseOutcome = iota
+	// RebaseConflict means conflicts remain in the worktree.
+	RebaseConflict
+	// RebaseFailed means a non-conflict failure occurred and the rebase was aborted.
+	RebaseFailed
 )
 
-// Re-exported rebase outcomes. Canonical constants live in ports.
-const (
-	RebaseSuccess  = ports.RebaseSuccess
-	RebaseConflict = ports.RebaseConflict
-	RebaseFailed   = ports.RebaseFailed
-)
+// RebaseResult is the outcome, conflict files, and error from RebaseOnto.
+type RebaseResult struct {
+	Outcome       RebaseOutcome
+	ConflictFiles []string
+	Err           error
+}
 
 // RebaseOnto rebases the current branch onto the given target ref (e.g.
 // "origin/master"). Unlike Rebase, on conflict the rebase is NOT aborted —
@@ -177,7 +186,7 @@ func RebaseOnto(worktreePath, target string) RebaseResult {
 
 // listConflictFiles returns the list of files with unmerged conflicts.
 func listConflictFiles(worktreePath string) []string {
-	cmd := exec.Command("git", "-C", worktreePath, "diff", "--name-only", "--diff-filter=U")
+	cmd := readGitCmd(worktreePath, "diff", "--name-only", "--diff-filter=U")
 	out, err := cmd.Output()
 	if err != nil {
 		return nil
@@ -216,8 +225,16 @@ func ForcePush(worktreePath, branch string) error {
 	return ForcePushFunc(worktreePath, branch)
 }
 
+// defaultForcePush needs both guards and neither is redundant.
+// --force-with-lease alone derives its expectation from the remote-tracking
+// ref, so any unrelated `git fetch origin` refreshes that ref and makes the
+// lease compare the remote against itself. --force-if-includes additionally
+// requires the remote-tracking tip to be reachable from the local branch's
+// reflog, which only holds when this clone actually had that commit — so it
+// rejects exactly the case where the remote carries work we never saw.
 func defaultForcePush(worktreePath, branch string) error {
-	cmd := exec.Command("git", "-C", worktreePath, "push", "--force-with-lease", "-u", "origin", branch)
+	cmd := exec.Command("git", "-C", worktreePath,
+		"push", "--force-with-lease", "--force-if-includes", "-u", "origin", branch)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("force pushing branch: %s: %w", strings.TrimSpace(string(out)), err)
@@ -225,30 +242,45 @@ func defaultForcePush(worktreePath, branch string) error {
 	return nil
 }
 
-// PRBaseBranch returns the base branch of an open PR using the gh CLI.
-// prURL should be a full GitHub PR URL (e.g. https://github.com/owner/repo/pull/42).
-// Returns empty string on any error.
-func PRBaseBranch(repoPath, prURL string) string {
-	cmd := exec.Command("gh", "pr", "view", prURL, "--json", "baseRefName", "--jq", ".baseRefName")
-	cmd.Dir = repoPath
-	out, err := cmd.Output()
+// PRBaseBranch returns the base branch of an open PR via the GitHub API.
+// prURL should be a full GitHub PR URL. Returns empty string on any error.
+func PRBaseBranch(_ string, prURL string) string {
+	owner, repo, number, err := ParsePRURL(prURL)
 	if err != nil {
 		return ""
 	}
-	return strings.TrimSpace(string(out))
+	client, err := github.ForHost(prURLHost(prURL))
+	if err != nil {
+		return ""
+	}
+	info, err := client.GetPR(owner, repo, number)
+	if err != nil {
+		return ""
+	}
+	return info.BaseRef
 }
 
 // IsBehindRemote checks if the local branch is behind the remote base branch.
 // Returns true if there are commits on origin/<baseBranch> not in the local branch.
 func IsBehindRemote(worktreePath, baseBranch string) bool {
 	target := "origin/" + baseBranch
-	cmd := exec.Command("git", "-C", worktreePath, "rev-list", "--count", "HEAD.."+target)
+	cmd := readGitCmd(worktreePath, "rev-list", "--count", "HEAD.."+target)
 	out, err := cmd.Output()
 	if err != nil {
 		return false
 	}
 	count := strings.TrimSpace(string(out))
 	return count != "0"
+}
+
+// identityFallbackArgs returns -c committer-identity fallbacks when neither
+// the repo nor the environment configures one; an explicit identity wins.
+func identityFallbackArgs(repoPath string) []string {
+	out, err := readGitCmd(repoPath, "config", "user.email").Output()
+	if err == nil && strings.TrimSpace(string(out)) != "" {
+		return nil
+	}
+	return []string{"-c", "user.name=Agentico", "-c", "user.email=agentico@localhost"}
 }
 
 // MergeFeatureBranch merges the given feature branch into baseBranch in the repo at repoPath.
@@ -261,9 +293,12 @@ func MergeFeatureBranch(repoPath, featureBranch, baseBranch string) error {
 		return fmt.Errorf("checkout %s: %s: %w", baseBranch, strings.TrimSpace(string(out)), err)
 	}
 
-	// Merge with --no-ff
-	mergeCmd := exec.Command("git", "-C", repoPath, "merge", "--no-ff", featureBranch, "-m",
+	// Merge with --no-ff. The merge commit needs a committer identity; fall
+	// back to the Agentico identity when the environment has none configured.
+	mergeArgs := append([]string{"-C", repoPath}, identityFallbackArgs(repoPath)...)
+	mergeArgs = append(mergeArgs, "merge", "--no-ff", featureBranch, "-m",
 		fmt.Sprintf("Merge branch '%s'", featureBranch))
+	mergeCmd := exec.Command("git", mergeArgs...)
 	if out, err := mergeCmd.CombinedOutput(); err != nil {
 		// Abort the failed merge
 		abortCmd := exec.Command("git", "-C", repoPath, "merge", "--abort")
@@ -312,7 +347,7 @@ func RebaseInProgress(worktreePath string) bool {
 // IsBehindLocal checks if the current branch is behind a local base branch.
 // Returns true if there are commits on baseBranch not in the current branch.
 func IsBehindLocal(worktreePath, baseBranch string) bool {
-	cmd := exec.Command("git", "-C", worktreePath, "rev-list", "--count", "HEAD.."+baseBranch)
+	cmd := readGitCmd(worktreePath, "rev-list", "--count", "HEAD.."+baseBranch)
 	out, err := cmd.Output()
 	if err != nil {
 		return false

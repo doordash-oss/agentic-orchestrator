@@ -86,6 +86,8 @@ jobs:
       # above with the real bundled server. Full journey suite on ubuntu-latest
       # x64; @smoke subset on macOS and arm. Electron needs a display on Linux,
       # so both Linux legs run under xvfb.
+      # Invoked directly on the desktop workspace: forwarding --grep through
+      # the root passthrough script adds a second npm layer that eats it.
       - name: Packaged E2E journeys
         run: |
           if [ "${{ matrix.os }}" = "ubuntu-latest" ]; then
@@ -94,9 +96,9 @@ jobs:
             GREP_ARGS='--grep @smoke'
           fi
           if [ "$RUNNER_OS" = "Linux" ]; then
-            xvfb-run -a --server-args="-screen 0 1600x1000x24" npm run test:e2e:packaged -- $GREP_ARGS
+            xvfb-run -a --server-args="-screen 0 1600x1000x24" npm run test:e2e:packaged --workspace desktop -- $GREP_ARGS
           else
-            npm run test:e2e:packaged -- $GREP_ARGS
+            npm run test:e2e:packaged --workspace desktop -- $GREP_ARGS
           fi
 
       - name: Preserve packaging evidence on failure

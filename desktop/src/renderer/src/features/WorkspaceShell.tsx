@@ -172,7 +172,6 @@ export function WorkspaceShell({
   onInstallUpdateWhenIdle = async () => {},
   onOpenAma = () => {},
   onOpenPalette = () => {},
-  amaSessionActive = false,
   amaUnread = false,
 }: {
   attentionItems?: AttentionItem[];
@@ -198,8 +197,6 @@ export function WorkspaceShell({
   onOpenAma?(): void;
   /** Owned by App: dispatches the same 'palette' routeRequest ⌘K resolves to. */
   onOpenPalette?(): void;
-  /** True while the singleton AMA chat session is running. */
-  amaSessionActive?: boolean;
   /** True when an AMA reply landed while the panel was closed. */
   amaUnread?: boolean;
 }) {
@@ -232,11 +229,6 @@ export function WorkspaceShell({
     : isConnectionErrorState(connection)
       ? 'error'
       : 'progress';
-  // A connection problem always wins the footer row: an active assistant must
-  // never mask a runtime that needs attention.
-  const showAmaActive = runtimeReady && amaSessionActive;
-  const footerLabel = showAmaActive ? 'Ask Agentico is active' : runtimeLabel;
-  const footerTone = showAmaActive ? 'ama' : runtimeTone;
   // The footer dot and the toolbar update button share one predicate, so they
   // appear and disappear together.
   const updatePending = updateNoticePending(updateState, updateDismissedVersion);
@@ -781,16 +773,15 @@ export function WorkspaceShell({
    * explicit choice hides the whole footer — and with it the only landing
    * spot for the routed "Switch Server…" command — otherwise).
    */
-  const serverSwitcher =
-    runtimeReady && !showAmaActive ? (
-      <ServerSwitcher
-        currentLabel={runtimeLabel}
-        tone={runtimeTone}
-        enabled
-        openRequest={switcherRoute}
-        onRouteHandled={clearSwitcherRoute}
-      />
-    ) : null;
+  const serverSwitcher = runtimeReady ? (
+    <ServerSwitcher
+      currentLabel={runtimeLabel}
+      tone={runtimeTone}
+      enabled
+      openRequest={switcherRoute}
+      onRouteHandled={clearSwitcherRoute}
+    />
+  ) : null;
 
   return (
     <section
@@ -849,14 +840,14 @@ export function WorkspaceShell({
             );
           })}
         </div>
-        <div className="sidebar__footer" data-tone={footerTone}>
-          {/* The runtime pill is the server control while connected; the
-           * AMA-active label and every non-ready state keep the passive pill. */}
+        <div className="sidebar__footer" data-tone={runtimeTone}>
+          {/* The runtime pill is the server control while connected; every
+           * non-ready state keeps the passive pill. */}
           {!effectiveSidebarCollapsed && serverSwitcher !== null ? (
             serverSwitcher
           ) : (
             <span className="sidebar__runtime" role="status">
-              <span aria-hidden="true">●</span> {footerLabel}
+              <span aria-hidden="true">●</span> {runtimeLabel}
             </span>
           )}
           {/* Indicator only, never a target: the toolbar button stays the one

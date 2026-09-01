@@ -63,9 +63,6 @@ export default function App() {
   } | null>(null);
   const [routeRequest, setRouteRequest] = useState<RoutedRequest | null>(null);
   const [updateState, setUpdateState] = useState<UpdateState | null>(null);
-  // Owned here so the sidebar footer can show the mock's active-session state
-  // while the panel itself owns the singleton chat session.
-  const [amaSessionActive, setAmaSessionActive] = useState(false);
   // A reply that landed while the panel was closed, echoed on the Ask chip.
   const [amaUnread, setAmaUnread] = useState(false);
   const [updateDismissedVersion, setUpdateDismissedVersion] = useState<string | null>(null);
@@ -215,7 +212,6 @@ export default function App() {
             }
             onOpenAma={() => requestRoute({ target: 'ama' })}
             onOpenPalette={() => requestRoute({ target: 'palette' })}
-            amaSessionActive={amaSessionActive}
             amaUnread={amaUnread}
             onInstallUpdateWhenIdle={async () => {
               try {
@@ -232,7 +228,6 @@ export default function App() {
             attentionDrafts={attentionDrafts}
             setAttentionDrafts={setAttentionDrafts}
             routeRequest={routeRequest}
-            onSessionActiveChange={setAmaSessionActive}
             onUnreadChange={setAmaUnread}
           />
         </>

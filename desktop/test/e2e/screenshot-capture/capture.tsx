@@ -1527,15 +1527,14 @@ function CreationSheetScene(): React.ReactElement {
 
 /**
  * The floating AMA panel inside the real shell: the same WorkspaceShell the app
- * mounts (so the panel floats over a live cockpit and the sidebar footer shows
- * its own active-session state) plus the real AmaPanel, opened from the
- * persisted preference exactly as the app opens it. The evidence spec drives
- * the attachment, confirmation, drag, resize, and expand states from here.
+ * mounts (so the panel floats over a live cockpit and the sidebar footer keeps
+ * its server identity) plus the real AmaPanel, opened from the persisted
+ * preference exactly as the app opens it. The evidence spec drives the
+ * attachment, confirmation, drag, resize, and expand states from here.
  */
 function AmaPanelScene(): React.ReactElement {
   const [drafts, setDrafts] = React.useState(emptyAttentionDrafts());
   const [attentionItems, setAttentionItems] = React.useState<AttentionItem[]>([]);
-  const [amaSessionActive, setAmaSessionActive] = React.useState(false);
 
   React.useEffect(() => {
     void window.agentico.getAttention().then((snapshot) => setAttentionItems(snapshot.items));
@@ -1554,7 +1553,6 @@ function AmaPanelScene(): React.ReactElement {
         refreshAttention={refreshAttention}
         attentionDrafts={drafts}
         setAttentionDrafts={setDrafts}
-        amaSessionActive={amaSessionActive}
       />
       <AmaPanel
         attentionItems={attentionItems}
@@ -1562,7 +1560,6 @@ function AmaPanelScene(): React.ReactElement {
         attentionDrafts={drafts}
         setAttentionDrafts={setDrafts}
         routeRequest={null}
-        onSessionActiveChange={setAmaSessionActive}
       />
     </div>
   );

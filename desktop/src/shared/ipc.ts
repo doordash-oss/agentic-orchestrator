@@ -568,6 +568,18 @@ export const RemoteServerAddResultSchema = z.discriminatedUnion('status', [
 ]);
 export type RemoteServerAddResult = z.output<typeof RemoteServerAddResultSchema>;
 
+/**
+ * Distinct lead-ins per failure class of the add-server flow, shared by the
+ * Servers pane's inline error and the deep-link add's notification.
+ */
+export function addServerErrorTitle(code: string): string {
+  if (code.startsWith('E_CONNECTION_STRING_')) return 'The connection string could not be parsed.';
+  if (code === 'E_REMOTE_UNREACHABLE') return 'The server could not be reached.';
+  if (code === 'E_REMOTE_INCOMPATIBLE') return 'The server is not compatible with this app.';
+  if (code === 'E_REMOTE_AUTH_REJECTED') return 'The token was rejected.';
+  return 'The server could not be added.';
+}
+
 // --- Remove-server flow / stored-token status --------------------------------
 // Removal is main-side orchestrated: the dedicated channel deletes the token
 // blob (remote only), drops the settings entry via removeKnown, and tears

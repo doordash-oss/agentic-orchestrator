@@ -65,6 +65,14 @@ describe('AttentionNotificationCoordinator', () => {
         },
         {
           kind: 'help',
+          id: '__chat__:',
+          sessionId: '__chat__',
+          waitingSince: '2026-07-22T12:00:30.000Z',
+          prompt: 'Agent has a question',
+          waitingKind: 'input',
+        },
+        {
+          kind: 'help',
           id: 'feature-2:sess-2',
           featureId: 'feature-2',
           waitingSince: '2026-07-22T12:01:00.000Z',

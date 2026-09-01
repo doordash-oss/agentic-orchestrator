@@ -34,6 +34,11 @@ const (
 	SetupTaskWorktree   SetupTaskKind = "worktree"
 	SetupTaskImage      SetupTaskKind = "image"
 	SetupTaskAttachment SetupTaskKind = "attachment"
+	// SetupTaskMerge mechanically merges the repo's resolved target ref
+	// (carried in StartPoint) into the freshly created worktree. A conflicted
+	// merge is an intended outcome: the task completes and the worktree keeps
+	// the in-progress merge for the pass to resolve.
+	SetupTaskMerge SetupTaskKind = "merge"
 )
 
 type SetupTask struct {
@@ -76,6 +81,10 @@ type SetupInitOptions struct {
 	// worktree is created at the exact captured parent tip even when base or
 	// parent branches later move.
 	ExactStartPointPerRepo map[string]string
+	// MergeTargetPerRepo queues a merge task (ordered after the repo's
+	// worktree task) that merges the given resolved target ref into the new
+	// worktree. Only rebase children set it, for their behind repos.
+	MergeTargetPerRepo map[string]string
 }
 
 func NewActiveSetupState(repos []FeatureRepo, images, attachments []string, now time.Time, opts ...SetupInitOptions) *SetupState {
@@ -113,6 +122,19 @@ func NewActiveSetupState(repos []FeatureRepo, images, attachments []string, now 
 			Attempt:          1,
 		}
 		order = append(order, key)
+		if ref := opt.MergeTargetPerRepo[repo.Name]; ref != "" {
+			mergeKey := "merge:" + repo.Name
+			tasks[mergeKey] = SetupTask{
+				Key:        mergeKey,
+				Kind:       SetupTaskMerge,
+				Label:      "Merge: " + repo.Name,
+				Repo:       repo.Name,
+				Status:     SetupStatusQueued,
+				StartPoint: ref,
+				Attempt:    1,
+			}
+			order = append(order, mergeKey)
+		}
 	}
 	for i := range images {
 		n := strconv.Itoa(i + 1)

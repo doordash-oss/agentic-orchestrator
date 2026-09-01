@@ -20,8 +20,19 @@ const (
 	// AgenticURL is the public repository URL for attribution.
 	AgenticURL = "https://github.com/doordash-oss/agentic-orchestrator"
 
-	// CommitSignatureTrailer is appended to programmatic commit messages as a git trailer.
-	CommitSignatureTrailer = "Generated-by: Agentic (" + AgenticURL + ")"
+	// AgenticoCommitEmail is the noreply address Agentico co-authors
+	// programmatic commits under. GitHub matches co-author trailers to
+	// profiles by email; a noreply address keeps attribution without
+	// implying a human mailbox.
+	AgenticoCommitEmail = "noreply@doordash-oss.github.com"
+
+	// AgenticoName is the display name for Agentico's commit attribution.
+	AgenticoName = "Agentico"
+
+	// CommitSignatureTrailer is appended to programmatic commit messages as
+	// a git trailer. Uses the Co-authored-by convention so GitHub renders
+	// Agentico as a co-author on commits and pull requests.
+	CommitSignatureTrailer = "Co-authored-by: " + AgenticoName + " <" + AgenticoCommitEmail + ">"
 
 	// PRSignature is the markdown signature appended to PR bodies and comments.
 	PRSignature = "\n\n---\n\n*Generated with [agentic orchestrator](" + AgenticURL + ")*"

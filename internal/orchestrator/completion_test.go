@@ -1929,6 +1929,10 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_RoadmapMidflight_Emi
 	}
 }
 
+// Per-round commits replaced the end-of-phase squash commit: phase
+// completion records each touched repo's HEAD as the anchor without
+// mutating git. Dirty worktrees at this boundary would indicate a round
+// commit that never fired; the anchors must match the pre-boundary HEADs.
 func TestOrchestrator_HandlePhaseCompletion_Implement_RoadmapRecordsCommitAnchors(t *testing.T) {
 	changedRepo := testutil.InitGitRepo(t)
 	unchangedRepo := testutil.InitGitRepo(t)
@@ -1937,6 +1941,8 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_RoadmapRecordsCommitAnchor
 			t.Fatalf("write phase change: %v", err)
 		}
 	}
+	changedHeadBefore, _ := git.CurrentHeadSHA(changedRepo)
+	unchangedHeadBefore, _ := git.CurrentHeadSHA(unchangedRepo)
 	roadmapPath := writeTempFile(t, "roadmap.md",
 		"# Roadmap\n\n## Phase 1: Tracer\n### Goal\nFirst phase.\n\n## Phase 2: Fill\n### Goal\nSecond phase.\n")
 	f := &feature.Feature{
@@ -1982,16 +1988,24 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_RoadmapRecordsCommitAnchor
 	if recordedPhase != 1 {
 		t.Fatalf("recorded phase = %d, want 1", recordedPhase)
 	}
-	changedSHA, _ := git.CurrentHeadSHA(changedRepo)
-	unchangedSHA, _ := git.CurrentHeadSHA(unchangedRepo)
-	want := map[string]string{"changed": changedSHA, "unchanged": unchangedSHA}
+	want := map[string]string{"changed": changedHeadBefore, "unchanged": unchangedHeadBefore}
 	for repo, wantSHA := range want {
 		if got := recordedAnchors[repo]; got != wantSHA {
 			t.Errorf("anchor[%s] = %q, want %q", repo, got, wantSHA)
 		}
 	}
+	// Phase completion must not mutate git: per-round commits own that.
+	changedHeadAfter, _ := git.CurrentHeadSHA(changedRepo)
+	if changedHeadAfter != changedHeadBefore {
+		t.Errorf("changed repo HEAD moved at phase boundary: %q -> %q", changedHeadBefore, changedHeadAfter)
+	}
+	if !git.HasUncommittedChanges(changedRepo) {
+		t.Error("changed repo worktree unexpectedly clean; the stray phase.txt should remain uncommitted")
+	}
 }
 
+// A repo whose HEAD cannot be read gets no anchor: the phase still advances,
+// but rewind tooling must not pretend an anchor exists.
 func TestOrchestrator_HandlePhaseCompletion_Implement_SkipsAnchorOnCommitFailure(t *testing.T) {
 	okRepo := testutil.InitGitRepo(t)
 	if err := os.WriteFile(filepath.Join(okRepo, "phase.txt"), []byte("complete\n"), 0o644); err != nil {
@@ -2228,10 +2242,9 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_AllPassed_Idempotent
 	}
 }
 
-// Bug 5B: the roadmap phase commit must only visit repos the phase actually
-// touched. `git add -A` over an untouched worktree costs seconds per repo for
-// no anchor, and the hidden scan happens while the UI already shows
-// "Review passed".
+// Bug 5B: the phase boundary must only visit repos the phase actually
+// touched. Reading HEAD over an untouched multi-gigabyte worktree is cheap,
+// but the anchor set must not lie about which repos carry phase work.
 func TestOrchestrator_HandlePhaseCompletion_Implement_RoadmapSkipsUntouchedRepos(t *testing.T) {
 	touchedRepo := testutil.InitGitRepo(t)
 	untouchedRepo := testutil.InitGitRepo(t)
@@ -2286,10 +2299,10 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_RoadmapSkipsUntouchedRepos
 	}
 
 	if _, ok := recordedAnchors["touched"]; !ok {
-		t.Errorf("touched repo must be committed; anchors = %v", recordedAnchors)
+		t.Errorf("touched repo must be anchored; anchors = %v", recordedAnchors)
 	}
 	if _, ok := recordedAnchors["untouched"]; ok {
-		t.Errorf("untouched repo must not be committed; anchors = %v", recordedAnchors)
+		t.Errorf("untouched repo must not be anchored; anchors = %v", recordedAnchors)
 	}
 	untouchedHeadAfter, err := git.CurrentHeadSHA(untouchedRepo)
 	if err != nil {
@@ -2308,8 +2321,8 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_RoadmapSkipsUntouchedRepos
 }
 
 // With no repo state at all the touched set carries no information, so the
-// phase commit must fall back to every configured repo rather than skipping
-// the phase silently.
+// phase boundary must fall back to every configured repo rather than
+// skipping anchor recording silently.
 func TestOrchestrator_HandlePhaseCompletion_Implement_RoadmapCommitsAllReposWithoutRepoStates(t *testing.T) {
 	repo := testutil.InitGitRepo(t)
 	if err := os.WriteFile(filepath.Join(repo, "phase.txt"), []byte("complete\n"), 0o644); err != nil {
@@ -2349,13 +2362,14 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_RoadmapCommitsAllReposWith
 		t.Fatalf("HandlePhaseCompletion: %v", err)
 	}
 	if _, ok := recordedAnchors["solo"]; !ok {
-		t.Errorf("repo must be committed when no touched state exists; anchors = %v", recordedAnchors)
+		t.Errorf("repo must be anchored when no touched state exists; anchors = %v", recordedAnchors)
 	}
 }
 
 // Bug 5B: StatusReviewPassed becomes observable before the synchronous
-// per-repo git boundary finishes. The finalizing phase status must already be
-// set at that transition, and cleared before the phase advances.
+// per-repo boundary finishes (anchor recording + phase advance). The
+// finalizing phase status must already be set at that transition, and
+// cleared before the phase advances.
 func TestOrchestrator_HandlePhaseCompletion_Implement_RoadmapMarksFinalizingAcrossCommitBoundary(t *testing.T) {
 	repo := testutil.InitGitRepo(t)
 	if err := os.WriteFile(filepath.Join(repo, "phase.txt"), []byte("complete\n"), 0o644); err != nil {
@@ -2411,17 +2425,6 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_RoadmapMarksFinalizingAcro
 	}
 	if f.IsFinalizingPhase() {
 		t.Error("feature must not remain finalizing after the commit boundary")
-	}
-
-	events := drainEvents(o)
-	sawRepoCommit := false
-	for _, ev := range events {
-		if ev.Type == ports.RepoStatusChanged && ev.RepoName == "solo" {
-			sawRepoCommit = true
-		}
-	}
-	if !sawRepoCommit {
-		t.Errorf("expected a per-repo RepoStatusChanged event for the phase commit; got %+v", events)
 	}
 }
 

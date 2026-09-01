@@ -114,9 +114,14 @@ test('the creation sheet covers scoped files, initialization, the contract, setu
     await setTheme(app, 'light');
     await evidenceShot(app, SHOTS.depth);
     await app.page.getByRole('button', { name: 'Next: Contract' }).click();
-    await app.page.getByLabel('Risk').selectOption('high');
-    await app.page.getByLabel('Inquireness').selectOption('high');
-    await app.page
+    // Scope the contract knobs to the creation sheet: getByLabel matches by
+    // substring, and a randomly generated server name (e.g. "frisky-lungo")
+    // can otherwise collide with the sidebar server control's aria-label and
+    // trip strict mode.
+    const creationSheet = app.page.getByRole('dialog', { name: 'New feature' });
+    await creationSheet.getByLabel('Risk').selectOption('high');
+    await creationSheet.getByLabel('Inquireness').selectOption('high');
+    await creationSheet
       .getByText('Exit criteria')
       .locator('..')
       .getByRole('textbox')

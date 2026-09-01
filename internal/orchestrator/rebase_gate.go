@@ -75,6 +75,54 @@ func (o *Orchestrator) rebaseIntegrationGate(child *feature.Feature) *feature.Tr
 	}
 }
 
+// rebaseGateFeedback runs the same per-repo mechanical checks as
+// rebaseIntegrationGate and formats any violations as fix-round feedback for
+// the implement loop, so a violation surfaces the moment the loop is about to
+// declare success instead of at integration. Empty string = every behind
+// repo satisfies the gate. Non-rebase features are never gated.
+func (o *Orchestrator) rebaseGateFeedback(child *feature.Feature) string {
+	if child == nil || child.Parent == nil || child.Parent.Kind != feature.ChildKindRebase {
+		return ""
+	}
+	var b strings.Builder
+	for _, repoName := range child.Parent.RebaseBehind {
+		entry, violation := o.evalRebaseGateRepo(child, repoName)
+		if !violation {
+			continue
+		}
+		fmt.Fprintf(&b, "- **Critical**: repo %s: %s\n", repoName, entry.Diagnostics)
+		if len(entry.ConflictFiles) > 0 {
+			fmt.Fprintf(&b, "  Conflicted files: %s\n", strings.Join(entry.ConflictFiles, ", "))
+		}
+		if fix := rebaseGateRemediation(entry.GateCode); fix != "" {
+			fmt.Fprintf(&b, "  Fix: %s\n", fix)
+		}
+	}
+	if b.Len() == 0 {
+		return ""
+	}
+	return "Mechanical rebase exit checks failed. Each finding below is a deterministic git-level fact " +
+		"verified against the targets persisted at creation time; resolve every violation in the named " +
+		"repo's own worktree before declaring this phase complete.\n\n" + b.String()
+}
+
+// rebaseGateRemediation states what to do about a gate violation as a general
+// principle, keyed by the stable gate code.
+func rebaseGateRemediation(code string) string {
+	switch code {
+	case feature.GateCodeNotAncestor:
+		return "merge the persisted creation-time target commit into the child branch and commit the " +
+			"result; do not substitute a newer or re-resolved target."
+	case feature.GateCodeMergeInProgress:
+		return "finish or abort the in-progress merge/rebase sequencer so the worktree ends on a " +
+			"committed, conflict-free state."
+	case feature.GateCodeConflictMarkers:
+		return "resolve every conflict hunk, remove the literal markers, and commit the resolution."
+	default:
+		return ""
+	}
+}
+
 // evalRebaseGateRepo evaluates the gate for a single behind repo. It returns
 // the journal entry recording any violation and a bool reporting whether the
 // repo violated the gate. The entry's GateCode and Diagnostics classify the

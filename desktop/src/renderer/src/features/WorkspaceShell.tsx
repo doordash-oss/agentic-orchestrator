@@ -173,6 +173,7 @@ export function WorkspaceShell({
   onOpenAma = () => {},
   onOpenPalette = () => {},
   amaSessionActive = false,
+  amaUnread = false,
 }: {
   attentionItems?: AttentionItem[];
   refreshAttention?: () => Promise<AttentionItem[]>;
@@ -199,6 +200,8 @@ export function WorkspaceShell({
   onOpenPalette?(): void;
   /** True while the singleton AMA chat session is running. */
   amaSessionActive?: boolean;
+  /** True when an AMA reply landed while the panel was closed. */
+  amaUnread?: boolean;
 }) {
   // null while the local shell prefs are being restored.
   const [shell, setShell] = useState<ShellPrefs | null>(null);
@@ -864,6 +867,10 @@ export function WorkspaceShell({
           ) : null}
           <button type="button" className="sidebar__ama" onClick={onOpenAma}>
             Ask ⌥Space
+            {/* Ambient unread marker: opening the panel is what clears it. */}
+            {amaUnread ? (
+              <span className="sidebar__ama-dot" role="img" aria-label="Unread AMA reply" />
+            ) : null}
           </button>
         </div>
       </nav>

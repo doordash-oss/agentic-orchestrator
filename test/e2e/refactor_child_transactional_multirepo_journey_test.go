@@ -421,9 +421,19 @@ func TestRefactorChildTransactionalMultiRepoStagedConflictRestartAndReviewRenewa
 		preRefs[i] = fx.refSHA(i, "refs/heads/feature/parent")
 	}
 
-	// Initial integration attempt: hits a conflict on repo 1.
+	// Initial integration attempt: parks once on parent-ref drift (the
+	// conflicting parent commit moved the tip); the retry acknowledges it.
 	if err := o.RunChildIntegration(fx.child.ID); err != nil {
-		t.Fatalf("RunChildIntegration() error = %v, want nil with attention", err)
+		t.Fatalf("RunChildIntegration() error = %v, want nil with drift attention", err)
+	}
+	_, child := fx.reload()
+	if entry := child.Parent.Transaction.EntryByRepo(child.Repos[1].Name); entry == nil || entry.GateCode != feature.GateCodeParentDrift {
+		t.Fatalf("repo 1: gate code = %+v, want %s", entry, feature.GateCodeParentDrift)
+	}
+
+	// Acknowledged retry: hits the staged conflict on repo 1.
+	if err := o.RunChildIntegration(fx.child.ID); err != nil {
+		t.Fatalf("RunChildIntegration() retry error = %v, want nil with attention", err)
 	}
 
 	// All parent refs unchanged.
@@ -433,7 +443,7 @@ func TestRefactorChildTransactionalMultiRepoStagedConflictRestartAndReviewRenewa
 		}
 	}
 
-	_, child := fx.reload()
+	_, child = fx.reload()
 	tx := child.Parent.Transaction
 	if tx == nil || tx.Phase != feature.TransactionPhaseAttention {
 		t.Fatalf("transaction phase = %+v, want attention", tx)
@@ -513,6 +523,16 @@ func TestRefactorChildTransactionalMultiRepoStagedConflictRestartAndReviewRenewa
 	// background cycle goroutine; wait for it before asserting the terminal
 	// integration outcome.
 	o.WaitForCycles()
+
+	// Review invalidation wiped the journal, so the moved parent tips are
+	// re-observed as drift and park once more; the retry acknowledges them.
+	_, child = fx.reload()
+	if tx := child.Parent.Transaction; tx == nil || tx.Phase != feature.TransactionPhaseAttention {
+		t.Fatalf("transaction phase = %+v, want drift attention after review renewal", tx)
+	}
+	if err := o.RunChildIntegration(fx.child.ID); err != nil {
+		t.Fatalf("RunChildIntegration() acknowledging retry error = %v", err)
+	}
 
 	// The transaction should complete: child is Completed, parent is
 	// CodeReady, and every repo has an explicit merge boundary.
@@ -1118,10 +1138,24 @@ func TestRefactorChildTransactionalMultiRepoCrashCutPointConvergence(t *testing.
 				t.Fatalf("ReconcileIntegrationTransactions after rollback fail at %d: %v", tc.failAt, err)
 			}
 
-			// Re-enter the integration boundary to complete any
-			// remaining work.
+			// Re-enter the integration boundary. The externally raced
+			// ref is re-observed as parent drift and parks once; the
+			// retry acknowledges it and completes the remaining work.
 			if err := freshO.RunChildIntegration(fx.child.ID); err != nil {
 				t.Fatalf("RunChildIntegration after rollback reconcile (fail at %d): %v", tc.failAt, err)
+			}
+			if _, c := fx.reload(); c.Parent.Transaction != nil &&
+				c.Parent.Transaction.Phase == feature.TransactionPhaseAttention {
+				drifted := false
+				for _, entry := range c.Parent.Transaction.Entries {
+					drifted = drifted || entry.GateCode == feature.GateCodeParentDrift
+				}
+				if !drifted {
+					t.Fatalf("rollback fail at %d: attention without drift entries: %+v", tc.failAt, c.Parent.Transaction)
+				}
+				if err := freshO.RunChildIntegration(fx.child.ID); err != nil {
+					t.Fatalf("RunChildIntegration acknowledging drift (fail at %d): %v", tc.failAt, err)
+				}
 			}
 
 			// Verify convergence: child is Completed, parent is

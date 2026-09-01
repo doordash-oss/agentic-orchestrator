@@ -850,6 +850,26 @@ describe('WorkspaceShell toolbar', () => {
     expect(await screen.findByText('Runtime ready')).toBeVisible();
   });
 
+  it('marks the Ask chip with an unread dot only while a reply is unseen', async () => {
+    installAgenticoMock({
+      settings: settingsWithActive(null),
+      features: [],
+      connection: {
+        status: 'ready',
+        stage: 'ready',
+        detail: 'Connected to the app-owned runtime.',
+        ownership: 'app-owned',
+        kind: 'local',
+      },
+    });
+    const { rerender } = render(<WorkspaceShell amaUnread />);
+
+    expect(await screen.findByRole('img', { name: 'Unread AMA reply' })).toBeVisible();
+
+    rerender(<WorkspaceShell amaUnread={false} />);
+    expect(screen.queryByRole('img', { name: 'Unread AMA reply' })).not.toBeInTheDocument();
+  });
+
   it('lets a runtime problem win the footer row over an active session', async () => {
     installAgenticoMock({
       settings: settingsWithActive(null),

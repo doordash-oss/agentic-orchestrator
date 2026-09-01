@@ -135,6 +135,10 @@ type OrchestratorConfig struct {
 	// round's session ends and before the review gate. The orchestrator
 	// layer owns the git commit; nil disables per-round commits.
 	RoundCommitHook RoundCommitHook
+
+	// PhaseExitGate, when non-nil, is forwarded into the phase-implement
+	// loop's ImplementConfig (see ImplementConfig.PhaseExitGate).
+	PhaseExitGate PhaseExitGate
 }
 
 func resolveOrchestratorSessionConfig(cfg OrchestratorConfig, role llm.PhaseRole) (SessionRuntimeConfig, error) {

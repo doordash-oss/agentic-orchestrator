@@ -1193,3 +1193,90 @@ func TestIntegrationResumable(t *testing.T) {
 		})
 	}
 }
+
+// rebaseTextFixture builds a parent with one behind and one up-to-date repo
+// plus the resolved targets, for asserting the machine-generated child text.
+func rebaseTextFixture() (*feature.Feature, []feature.RebaseRepoTarget, []string) {
+	parent := &feature.Feature{
+		ID:     "p-text",
+		Slug:   "p-text",
+		Status: feature.StatusPublished,
+		Repos: []feature.FeatureRepo{
+			{Name: "repo-behind", Path: "/src/repo-behind", Branch: "feature/secret-branch-name", BaseBranch: "main"},
+			{Name: "repo-current", Path: "/src/repo-current", Branch: "feature/secret-branch-name", BaseBranch: "main"},
+		},
+	}
+	targets := []feature.RebaseRepoTarget{
+		{Repo: "repo-behind", Target: "main", Ref: "origin/main", Publishable: true, TargetSHA: "1111111111111111111111111111111111111111"},
+		{Repo: "repo-current", Target: "main", Ref: "origin/main", Publishable: true, TargetSHA: "2222222222222222222222222222222222222222"},
+	}
+	return parent, targets, []string{"repo-behind"}
+}
+
+func TestRebaseDescriptionIsWorktreeAnchored(t *testing.T) {
+	t.Parallel()
+	parent, targets, behind := rebaseTextFixture()
+	desc := feature.RebaseDescriptionForTest(parent, targets, behind)
+
+	if strings.Contains(desc, "feature/secret-branch-name") {
+		t.Errorf("description names the working branch:\n%s", desc)
+	}
+	if strings.Contains(desc, "working branch") {
+		t.Errorf("description still uses branch-anchored phrasing:\n%s", desc)
+	}
+	for _, want := range []string{
+		"already been merged",
+		"this repository's worktree",
+		"in-progress merge",
+		"resolve every conflict",
+		"complete the merge commit",
+		"never squash or rewrite history",
+		"Leave up-to-date repositories completely untouched",
+		"Never push to any remote",
+		"Do not fetch from any remote",
+		"worktrees provisioned for this pass",
+		"never enter, inspect state from, or modify any other checkout",
+	} {
+		if !strings.Contains(desc, want) {
+			t.Errorf("description missing %q:\n%s", want, desc)
+		}
+	}
+	if !strings.Contains(desc, "repo-behind") {
+		t.Errorf("description missing behind repo section:\n%s", desc)
+	}
+	if strings.Contains(desc, "## Repository: repo-current") {
+		t.Errorf("description has a section for the up-to-date repo:\n%s", desc)
+	}
+	if !strings.Contains(desc, "origin/main") {
+		t.Errorf("description missing resolved target ref:\n%s", desc)
+	}
+}
+
+func TestRebaseExitCriteriaIsWorktreeAnchored(t *testing.T) {
+	t.Parallel()
+	_, targets, behind := rebaseTextFixture()
+	criteria := feature.RebaseExitCriteriaForTest(targets, behind)
+
+	if strings.Contains(criteria, "feature/secret-branch-name") {
+		t.Errorf("exit criteria name a branch:\n%s", criteria)
+	}
+	if strings.Contains(criteria, "working branch") || strings.Contains(criteria, "working-branch") {
+		t.Errorf("exit criteria still use branch-anchored phrasing:\n%s", criteria)
+	}
+	for _, want := range []string{
+		"this repository's worktree",
+		"git merge-base --is-ancestor origin/main HEAD",
+		"No merge is in progress",
+		"No conflict markers remain",
+		"git status --porcelain",
+		"No other checkout of any repository was modified",
+		"Nothing was pushed to any remote",
+	} {
+		if !strings.Contains(criteria, want) {
+			t.Errorf("exit criteria missing %q:\n%s", want, criteria)
+		}
+	}
+	if strings.Contains(criteria, "repo-current") {
+		t.Errorf("exit criteria mention the up-to-date repo by section:\n%s", criteria)
+	}
+}

@@ -389,6 +389,20 @@ func TestGoldenSnapshots(t *testing.T) {
 			},
 		},
 		{
+			// Refactor pass: the fork-point context block renders, including
+			// the worktree-confinement invariant.
+			name: "roadmap_user_refactor_pass",
+			render: func() string {
+				return RoadmapUserPrompt(RoadmapUserInput{
+					Name:                  "Rebase on latest main",
+					Description:           "Reconcile the feature with its base targets.",
+					Repos:                 []RepoView{{Name: "web", Path: "/state/wt/child/web"}},
+					RefactorPassForkPoint: "web @ 1111111111111111111111111111111111111111",
+					Inquireness:           GrillMeInquirenessInput{Level: "medium"},
+				})
+			},
+		},
+		{
 			// No design artifact (Medium mode): the raw Feature block
 			// renders, including its Exit criteria distillation guidance.
 			name: "roadmap_user_no_design",

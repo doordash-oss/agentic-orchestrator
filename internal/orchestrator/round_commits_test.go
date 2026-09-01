@@ -140,11 +140,11 @@ func TestOrchestrator_RoundCommitHook_MessageSequence(t *testing.T) {
 	bodies := repoCommitBodies(t, repo)
 	// One body is the repo's initial commit.
 	want := []string{
-		"Phase 1/2 (tracer-bullet): Tracer\n\nFeature: round-commit-messages\n\nGenerated-by: Agentic (https://github.com/doordash-oss/agentic-orchestrator)",
-		"Phase 1/2 (tracer-bullet): Tracer - implementation round 3\n\nFeature: round-commit-messages\n\nGenerated-by: Agentic (https://github.com/doordash-oss/agentic-orchestrator)",
-		"Phase 1/2 (tracer-bullet): Tracer - fix round 1 (address review feedback)\n\nFeature: round-commit-messages\n\nGenerated-by: Agentic (https://github.com/doordash-oss/agentic-orchestrator)",
-		"Phase 1/2 (tracer-bullet): Tracer - fix round 2 (address review feedback)\n\nFeature: round-commit-messages\n\nGenerated-by: Agentic (https://github.com/doordash-oss/agentic-orchestrator)",
-		"Final review fix 1 (address review feedback)\n\nFeature: round-commit-messages\n\nGenerated-by: Agentic (https://github.com/doordash-oss/agentic-orchestrator)",
+		"Phase 1/2 (tracer-bullet): Tracer\n\nFeature: round-commit-messages\n\nCo-authored-by: Agentico <noreply@doordash-oss.github.com>",
+		"Phase 1/2 (tracer-bullet): Tracer - implementation round 3\n\nFeature: round-commit-messages\n\nCo-authored-by: Agentico <noreply@doordash-oss.github.com>",
+		"Phase 1/2 (tracer-bullet): Tracer - fix round 1 (address review feedback)\n\nFeature: round-commit-messages\n\nCo-authored-by: Agentico <noreply@doordash-oss.github.com>",
+		"Phase 1/2 (tracer-bullet): Tracer - fix round 2 (address review feedback)\n\nFeature: round-commit-messages\n\nCo-authored-by: Agentico <noreply@doordash-oss.github.com>",
+		"Final review fix 1 (address review feedback)\n\nFeature: round-commit-messages\n\nCo-authored-by: Agentico <noreply@doordash-oss.github.com>",
 	}
 	if len(bodies) != len(want)+1 {
 		t.Fatalf("commit count = %d, want %d (rounds + initial); bodies:\n%s", len(bodies), len(want)+1, strings.Join(bodies, "\n---\n"))
@@ -182,8 +182,8 @@ func TestOrchestrator_RoundCommitHook_NonRoadmapMessages(t *testing.T) {
 
 	bodies := repoCommitBodies(t, repo)
 	want := []string{
-		"Implementation round 1\n\nFeature: nonroadmap-rounds\n\nGenerated-by: Agentic (https://github.com/doordash-oss/agentic-orchestrator)",
-		"Fix round 1 (address review feedback)\n\nFeature: nonroadmap-rounds\n\nGenerated-by: Agentic (https://github.com/doordash-oss/agentic-orchestrator)",
+		"Implementation round 1\n\nFeature: nonroadmap-rounds\n\nCo-authored-by: Agentico <noreply@doordash-oss.github.com>",
+		"Fix round 1 (address review feedback)\n\nFeature: nonroadmap-rounds\n\nCo-authored-by: Agentico <noreply@doordash-oss.github.com>",
 	}
 	if len(bodies) != len(want)+1 {
 		t.Fatalf("commit count = %d, want %d; bodies:\n%s", len(bodies), len(want)+1, strings.Join(bodies, "\n---\n"))

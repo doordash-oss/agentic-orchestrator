@@ -71,12 +71,15 @@ func journeyChildPhaseRunner(t *testing.T, sm *session.Manager, store *feature.S
 
 // journeyPhaseRunnerOptions configures the scripted phase runner.
 type journeyPhaseRunnerOptions struct {
-	// mergeRebaseTarget, when true, makes the implement stub merge the
-	// persisted creation-time target ref into each behind repo's child
-	// worktree so the rebase child satisfies the mechanical integration
-	// gate's ancestor check. False leaves the child branch without the
-	// target commit (used to exercise the gate's not-ancestor failure).
-	mergeRebaseTarget bool
+	// resetRebaseWorktree makes the implement stub rewrite each behind repo's
+	// child branch back to its captured fork point, discarding the merge
+	// setup performed — a violation setup cannot prevent, exercising the
+	// gate's not-ancestor failure.
+	resetRebaseWorktree bool
+	// resolveRebaseConflicts makes the implement stub resolve the in-progress
+	// merge setup left in each behind repo's child worktree (conflicting
+	// target fixture) and complete the merge commit.
+	resolveRebaseConflicts bool
 }
 
 // journeyChildPhaseRunnerWithOpts is the configurable core of
@@ -126,6 +129,34 @@ func journeyChildPhaseRunnerWithOpts(t *testing.T, sm *session.Manager, store *f
 		}, nil
 	}
 	pr.RunImplementFn = func(c agent.ImplementConfig, _ ports.SessionManager) (*agent.LoopResult, error) {
+		// Setup already merged each behind repo's rebase target, so the stub
+		// only manipulates the worktree when a journey needs a violation
+		// (reset to the fork point) or a conflict resolution.
+		if c.Feature.Parent != nil && c.Feature.Parent.Kind == feature.ChildKindRebase {
+			for _, repo := range c.Feature.Repos {
+				if !c.Feature.IsRebaseBehindRepo(repo.Name) {
+					continue
+				}
+				wt := repo.WorktreePath
+				if wt == "" {
+					wt = repo.Path
+				}
+				if opts.resetRebaseWorktree {
+					base := c.Feature.BaseSHA(repo.Name)
+					if base == "" {
+						return nil, fmt.Errorf("rebase journey stub: no captured base for %s", repo.Name)
+					}
+					if _, err := journeyGitIn(wt, "reset", "--hard", base); err != nil {
+						return nil, fmt.Errorf("rebase journey stub reset %s: %w", repo.Name, err)
+					}
+				}
+				if opts.resolveRebaseConflicts {
+					if err := journeyResolveRebaseConflicts(wt); err != nil {
+						return nil, fmt.Errorf("rebase journey stub resolve %s: %w", repo.Name, err)
+					}
+				}
+			}
+		}
 		// Stand in for the implement kernel: leave one real change in the
 		// child worktree for the integration boundary to commit and merge.
 		for _, repo := range c.Feature.Repos {
@@ -140,35 +171,6 @@ func journeyChildPhaseRunnerWithOpts(t *testing.T, sm *session.Manager, store *f
 			}
 			if err := os.WriteFile(filepath.Join(wt, "child-output.txt"), []byte("child work\n"), 0o644); err != nil {
 				return nil, fmt.Errorf("write child output: %w", err)
-			}
-		}
-		// For a rebase child, the implement kernel is expected to merge the
-		// creation-time target into each behind repo's working branch. The
-		// mechanical integration gate re-verifies the result, so the stub
-		// must actually land the merge (cleanly, against a non-conflicting
-		// target) for the happy path to pass the gate. When
-		// mergeRebaseTarget is false the stub leaves the branch without the
-		// target, exercising the gate's not-ancestor failure.
-		if opts.mergeRebaseTarget && c.Feature.Parent != nil && c.Feature.Parent.Kind == feature.ChildKindRebase {
-			behind := make(map[string]bool, len(c.Feature.Parent.RebaseBehind))
-			for _, r := range c.Feature.Parent.RebaseBehind {
-				behind[r] = true
-			}
-			for _, repo := range c.Feature.Repos {
-				if !behind[repo.Name] {
-					continue
-				}
-				wt := repo.WorktreePath
-				if wt == "" {
-					wt = repo.Path
-				}
-				tgt, ok := c.Feature.RebaseTargetForRepo(repo.Name)
-				if !ok || tgt.Ref == "" {
-					return nil, fmt.Errorf("rebase journey stub: no persisted target for %s", repo.Name)
-				}
-				if err := journeyMergeRebaseTarget(t, wt, tgt.Ref); err != nil {
-					return nil, fmt.Errorf("rebase journey stub merge %s: %w", repo.Name, err)
-				}
 			}
 		}
 		return &agent.LoopResult{FinalStatus: "review_passed", Iterations: 1}, nil
@@ -191,20 +193,43 @@ func journeyChildPhaseRunnerWithOpts(t *testing.T, sm *session.Manager, store *f
 	return pr
 }
 
-// journeyMergeRebaseTarget merges the persisted target ref into the child
-// worktree's current branch with a no-ff merge commit, using the test git
-// identity. It assumes a non-conflicting target (the journey repos diverge on
-// disjoint files).
-func journeyMergeRebaseTarget(t *testing.T, worktreePath, ref string) error {
-	t.Helper()
-	cmd := exec.Command("git", "-C", worktreePath, "merge", "--no-ff", "-m",
-		"journey stub: merge rebase target "+ref, ref)
+// journeyGitIn runs one git command in a worktree with the test identity,
+// returning trimmed combined output.
+func journeyGitIn(worktreePath string, args ...string) (string, error) {
+	cmd := exec.Command("git", append([]string{"-C", worktreePath}, args...)...)
 	cmd.Env = append(testutil.GitTestEnv(),
 		"GIT_AUTHOR_NAME=Test", "GIT_AUTHOR_EMAIL=test@test.com",
 		"GIT_COMMITTER_NAME=Test", "GIT_COMMITTER_EMAIL=test@test.com",
 	)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("git merge %s: %v\n%s", ref, err, out)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("git %s: %v\n%s", strings.Join(args, " "), err, out)
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+// journeyResolveRebaseConflicts completes the in-progress merge setup left in
+// the worktree: every conflicted file is rewritten with resolved content and
+// the merge commit is completed.
+func journeyResolveRebaseConflicts(worktreePath string) error {
+	conflicted, err := journeyGitIn(worktreePath, "diff", "--name-only", "--diff-filter=U")
+	if err != nil {
+		return err
+	}
+	files := strings.Fields(conflicted)
+	if len(files) == 0 {
+		return fmt.Errorf("no in-progress merge conflicts in %s", worktreePath)
+	}
+	for _, f := range files {
+		if err := os.WriteFile(filepath.Join(worktreePath, f), []byte("resolved by journey stub\n"), 0o644); err != nil {
+			return fmt.Errorf("resolve %s: %w", f, err)
+		}
+	}
+	if _, err := journeyGitIn(worktreePath, "add", "-A"); err != nil {
+		return err
+	}
+	if _, err := journeyGitIn(worktreePath, "commit", "--no-edit"); err != nil {
+		return err
 	}
 	return nil
 }

@@ -1,0 +1,26 @@
+# Planning Context
+
+## Refactor Pass Context
+
+This feature is a refactor pass forked from its parent feature's delivered state at web @ 1111111111111111111111111111111111111111. The workspace already reflects everything the parent delivered, and that state is what the feature description refers to: resolve any language about prior, current, or existing state against the fork point, not the repository base branch or any earlier state. The description decides the delta — it may change anything the fork point contains. All work is confined to the worktrees listed for this pass: other checkouts of the same repositories exist and are off-limits.
+
+Because reviewers later judge the assembled result as a whole, the roadmap you produce must resolve any such relative language into absolute statements of the intended end state (what each affected artifact must look like when this pass completes), so no downstream reader has to guess which baseline a phrase refers to. If the description is genuinely ambiguous about the intended end state, ask rather than guess.
+
+## Feature
+
+**Name**: Rebase on latest main
+
+**Description**:
+> Reconcile the feature with its base targets.
+
+## Target Repositories
+
+This feature targets the repositories below. Treat this list as authoritative; ignore sibling directories that are not listed here.
+- **web** (/state/wt/child/web)
+
+## Ambiguity Resolution [grill-me]
+Interview me relentlessly about every aspect of this plan until we reach a shared understanding. Walk down each branch of the design tree, resolving dependencies between decisions one-by-one. For each question, provide your recommended answer.
+
+Ask the questions one at a time, waiting for feedback on each question before continuing.
+
+If a question can be answered by exploring the codebase, explore the codebase instead.

@@ -325,6 +325,29 @@ func New(deps Deps, hooks Hooks) *Orchestrator {
 			}
 			o.featureResumed(input)
 		}
+		// Per-round commits: the implementation and final-review loops emit
+		// a round completion event; this layer owns the git commit. Chained
+		// behind any pre-existing hook exactly once (the PhaseRunner is
+		// shared state and New is the single production wiring site).
+		existingRoundCommitHook := o.deps.PhaseRunner.RoundCommitHook
+		o.deps.PhaseRunner.RoundCommitHook = func(input agent.RoundCommitInput) error {
+			if existingRoundCommitHook != nil {
+				if err := existingRoundCommitHook(input); err != nil {
+					return err
+				}
+			}
+			return o.commitRound(input)
+		}
+		// Phase-exit gate: rebase children re-verify the mechanical rebase
+		// exit facts before the implement loop declares success, surfacing
+		// violations as fix-round feedback instead of failing later at the
+		// integration gate. Non-rebase features get no gate (nil = no-op).
+		o.deps.PhaseRunner.PhaseExitGateFor = func(f *feature.Feature) agent.PhaseExitGate {
+			if f == nil || f.Parent == nil || f.Parent.Kind != feature.ChildKindRebase {
+				return nil
+			}
+			return func() string { return o.rebaseGateFeedback(f) }
+		}
 	}
 	o.runMultiRepoImplFn = func(
 		f *feature.Feature,

@@ -15,6 +15,7 @@ import {
   CHAT_SESSION_ID,
   CREATION_IMAGE_LIMIT,
   defaultAmaGeometry,
+  isSyntheticHelpItem,
   isTerminalChatStatus,
   type AmaGeometry,
   type AttentionItem,
@@ -94,6 +95,7 @@ export function AmaPanel({
   setAttentionDrafts,
   routeRequest,
   onSessionActiveChange,
+  onUnreadChange,
 }: {
   attentionItems: AttentionItem[];
   refreshAttention(): Promise<AttentionItem[]>;
@@ -102,6 +104,8 @@ export function AmaPanel({
   routeRequest: RoutedRequest | null;
   /** Lets the shell's sidebar footer show the active-session state. */
   onSessionActiveChange?(active: boolean): void;
+  /** Lets the shell's Ask chip mark a reply that landed while the panel was closed. */
+  onUnreadChange?(unread: boolean): void;
 }) {
   const [open, setOpen] = useState(false);
   const [geometry, setGeometry] = useState<AmaGeometry>(defaultAmaGeometry());
@@ -147,11 +151,25 @@ export function AmaPanel({
   // block sending until removed (or switched back to).
   const uploadsBlocking = imageUploads.some((item) => isBlockingStagedItem(item, serverKey));
 
+  // Real asks only (questions, permissions): the chat's idle wait between
+  // turns is its resting state, and the composer below is how it continues.
   const amaAttentionItems = useMemo(
     () =>
-      attentionItems.filter((item) => 'sessionId' in item && item.sessionId === CHAT_SESSION_ID),
+      attentionItems.filter(
+        (item) =>
+          'sessionId' in item && item.sessionId === CHAT_SESSION_ID && !isSyntheticHelpItem(item),
+      ),
     [attentionItems],
   );
+  // The chat's idle wait doubles as the reply-delivered signal: it appears
+  // exactly when a turn ends, with a fresh waitingSince per turn.
+  const idleWaitingSince = useMemo(() => {
+    const wait = attentionItems.find(
+      (item) =>
+        item.kind === 'help' && item.sessionId === CHAT_SESSION_ID && item.waitingKind === 'input',
+    );
+    return wait?.waitingSince ?? null;
+  }, [attentionItems]);
   const sessionActive = session !== null && !isTerminalChatStatus(session.status);
   const conversation = useMemo(
     () =>
@@ -176,6 +194,22 @@ export function AmaPanel({
   useEffect(() => {
     onSessionActiveChange?.(sessionActive);
   }, [onSessionActiveChange, sessionActive]);
+
+  // Unread means a reply landed while the panel was closed: an open panel
+  // marks the current turn's wait as seen, so only a wait the user hasn't had
+  // in front of them raises the chip dot. Session-local by design — a restart
+  // starts unseen.
+  const seenIdleWaitingSince = useRef<string | null>(null);
+  useEffect(() => {
+    if (open) {
+      if (idleWaitingSince !== null) seenIdleWaitingSince.current = idleWaitingSince;
+      onUnreadChange?.(false);
+      return;
+    }
+    onUnreadChange?.(
+      idleWaitingSince !== null && idleWaitingSince !== seenIdleWaitingSince.current,
+    );
+  }, [idleWaitingSince, onUnreadChange, open]);
 
   const persistPrefs = useCallback((next: { open?: boolean; geometry?: AmaGeometry }): void => {
     const nextOpen = next.open ?? openRef.current;

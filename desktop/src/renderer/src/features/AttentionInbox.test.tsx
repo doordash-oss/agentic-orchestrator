@@ -598,14 +598,15 @@ describe('AttentionInbox help detail', () => {
     expect(screen.getByText('No blocking input is waiting.')).toBeVisible();
   });
 
-  // A chat session's wait is the user's turn and the inbox is the only place to
-  // answer it — only phase coordination is filtered out.
-  it('keeps a chat session waiting on the user in the rows and the badge', async () => {
+  // A chat resting after a reply is its normal state, not blocking input: the
+  // AMA panel is its reply surface, so the inbox and the badge stay quiet.
+  it('keeps a chat session waiting on the user out of the rows and the badge', async () => {
     render(<Harness items={[{ ...helpWaitingItem, waitingKind: 'input' }]} onJump={vi.fn()} />);
     const user = userEvent.setup();
 
-    await user.click(screen.getByRole('button', { name: /Attention inbox, 1 pending/ }));
-    expect(screen.getByRole('button', { name: /Agent waiting/ })).toBeVisible();
+    await user.click(screen.getByRole('button', { name: /Attention inbox, 0 pending/ }));
+    expect(screen.queryByRole('button', { name: /Agent waiting/ })).not.toBeInTheDocument();
+    expect(screen.getByText('No blocking input is waiting.')).toBeVisible();
   });
 });
 

@@ -35,134 +35,138 @@ import { Transcript } from '../helpers/transcript';
 import { createRepo, createWorld, destroyWorld, waitFor } from '../helpers/world';
 import type { SettingsPaneId } from '../../../src/shared/ipc';
 
-test('Settings is its own window: single instance, panes, deep links, restore, and ⌘W', async ({}, testInfo) => {
-  // Two full packaged launches (the relaunch proves the pane restore), so this
-  // journey needs more than the suite's single-launch default budget.
-  test.setTimeout(360_000);
-  const transcript = new Transcript(
-    'settings-window',
-    'Settings window — ownership, panes, deep links, restore, close',
-  );
-  const world = createWorld('settings-window', {
-    auth: { loggedIn: true, authMethod: 'oauth', email: 'e2e@example.invalid' },
-    presetWorkspaceRoot: true,
-  });
-  createRepo(world, 'alpha', { commit: true });
-  let handle: AppHandle | null = null;
-
-  try {
-    transcript.section('Launch: one window, no settings surface in it');
-    handle = await launchApp(world, testInfo, { traceName: 'settings-window' });
-    await expect(handle.page.getByRole('button', { name: 'New feature' })).toBeVisible({
-      timeout: 60_000,
+test(
+  'Settings is its own window: single instance, panes, deep links, restore, and ⌘W',
+  { tag: '@smoke' },
+  async ({}, testInfo) => {
+    // Two full packaged launches (the relaunch proves the pane restore), so this
+    // journey needs more than the suite's single-launch default budget.
+    test.setTimeout(360_000);
+    const transcript = new Transcript(
+      'settings-window',
+      'Settings window — ownership, panes, deep links, restore, close',
+    );
+    const world = createWorld('settings-window', {
+      auth: { loggedIn: true, authMethod: 'oauth', email: 'e2e@example.invalid' },
+      presetWorkspaceRoot: true,
     });
-    expect(handle.app.windows()).toHaveLength(1);
-    await expect(handle.page.locator('.settings-window')).toHaveCount(0);
-    transcript.step('app launched with exactly one window and no in-shell settings surface');
+    createRepo(world, 'alpha', { commit: true });
+    let handle: AppHandle | null = null;
 
-    transcript.section('The native Settings menu item opens the Settings window');
-    const settings = await openSettings(handle);
-    expect(await settings.evaluate(() => window.agentico.windowPurpose)).toBe('settings');
-    expect(handle.app.windows()).toHaveLength(2);
-    // First-ever open lands on Workspace roots, and the main window is
-    // untouched behind it.
-    await expectPane(handle, settings, 'Workspace roots');
-    await expect(handle.page.getByRole('button', { name: 'New feature' })).toBeVisible();
-    await expect(handle.page.locator('.settings-window')).toHaveCount(0);
-    await evidenceShot(handle, 'settings-window-workspace-roots', settings);
-    transcript.step(
-      'Settings opened as a second window (purpose "settings") on the Workspace roots pane',
-    );
+    try {
+      transcript.section('Launch: one window, no settings surface in it');
+      handle = await launchApp(world, testInfo, { traceName: 'settings-window' });
+      await expect(handle.page.getByRole('button', { name: 'New feature' })).toBeVisible({
+        timeout: 60_000,
+      });
+      expect(handle.app.windows()).toHaveLength(1);
+      await expect(handle.page.locator('.settings-window')).toHaveCount(0);
+      transcript.step('app launched with exactly one window and no in-shell settings surface');
 
-    transcript.section('A second open focuses the existing window; it never duplicates');
-    const reopened = await openSettings(handle);
-    expect(reopened).toBe(settings);
-    expect(handle.app.windows()).toHaveLength(2);
-    expect(await browserWindowCount(handle)).toBe(2);
-    transcript.step('the second Settings open focused the one window — still two windows total');
+      transcript.section('The native Settings menu item opens the Settings window');
+      const settings = await openSettings(handle);
+      expect(await settings.evaluate(() => window.agentico.windowPurpose)).toBe('settings');
+      expect(handle.app.windows()).toHaveLength(2);
+      // First-ever open lands on Workspace roots, and the main window is
+      // untouched behind it.
+      await expectPane(handle, settings, 'Workspace roots');
+      await expect(handle.page.getByRole('button', { name: 'New feature' })).toBeVisible();
+      await expect(handle.page.locator('.settings-window')).toHaveCount(0);
+      await evidenceShot(handle, 'settings-window-workspace-roots', settings);
+      transcript.step(
+        'Settings opened as a second window (purpose "settings") on the Workspace roots pane',
+      );
 
-    transcript.section('Switching panes moves the title and the rendered pane together');
-    await selectSettingsPane(settings, 'Notifications');
-    await expectPane(handle, settings, 'Notifications');
-    await expect(settings.locator('section[aria-label="Workspace roots"]')).toHaveCount(0);
-    await selectSettingsPane(settings, 'Appearance');
-    await expectPane(handle, settings, 'Appearance');
-    await expect(settings.getByRole('radiogroup', { name: 'Appearance theme' })).toBeVisible();
-    transcript.step('pane switches carried the window title and the rendered pane with them');
+      transcript.section('A second open focuses the existing window; it never duplicates');
+      const reopened = await openSettings(handle);
+      expect(reopened).toBe(settings);
+      expect(handle.app.windows()).toHaveLength(2);
+      expect(await browserWindowCount(handle)).toBe(2);
+      transcript.step('the second Settings open focused the one window — still two windows total');
 
-    transcript.section('Deep links land on their pane while the window is open');
-    await deepLink(handle, 'agentico://diagnostics');
-    await expectPane(handle, settings, 'Diagnostics');
-    await deepLink(handle, 'agentico://updates');
-    await expectPane(handle, settings, 'Updates');
-    expect(handle.app.windows()).toHaveLength(2);
-    transcript.step(
-      'agentico://diagnostics and agentico://updates switched the open window to their panes',
-    );
+      transcript.section('Switching panes moves the title and the rendered pane together');
+      await selectSettingsPane(settings, 'Notifications');
+      await expectPane(handle, settings, 'Notifications');
+      await expect(settings.locator('section[aria-label="Workspace roots"]')).toHaveCount(0);
+      await selectSettingsPane(settings, 'Appearance');
+      await expectPane(handle, settings, 'Appearance');
+      await expect(settings.getByRole('radiogroup', { name: 'Appearance theme' })).toBeVisible();
+      transcript.step('pane switches carried the window title and the rendered pane with them');
 
-    transcript.section('Deep links open the window on their pane from the closed state');
-    await closeSettings(handle);
-    expect(handle.app.windows()).toHaveLength(1);
-    await deepLink(handle, 'agentico://diagnostics');
-    const fromDiagnostics = await awaitSettingsWindow(handle);
-    await expectPane(handle, fromDiagnostics, 'Diagnostics');
-    await evidenceShot(handle, 'settings-window-diagnostics-deep-link', fromDiagnostics);
-    await closeSettings(handle);
-    await deepLink(handle, 'agentico://updates');
-    const fromUpdates = await awaitSettingsWindow(handle);
-    await expectPane(handle, fromUpdates, 'Updates');
-    expect(handle.app.windows()).toHaveLength(2);
-    transcript.step(
-      'from the closed state both deep links opened exactly one Settings window on their pane',
-    );
+      transcript.section('Deep links land on their pane while the window is open');
+      await deepLink(handle, 'agentico://diagnostics');
+      await expectPane(handle, settings, 'Diagnostics');
+      await deepLink(handle, 'agentico://updates');
+      await expectPane(handle, settings, 'Updates');
+      expect(handle.app.windows()).toHaveLength(2);
+      transcript.step(
+        'agentico://diagnostics and agentico://updates switched the open window to their panes',
+      );
 
-    transcript.section('Closing saves the pane and the geometry');
-    // A pane no deep link can produce, so the restore below can only come
-    // from what was persisted.
-    await selectSettingsPane(fromUpdates, 'Notifications');
-    await expectStoredPane(world.userData, 'notifications');
-    await closeSettings(handle);
-    const stored = readSettings(world.userData);
-    expect(stored.settingsWindow.bounds?.width).toBeGreaterThan(0);
-    expect(stored.settingsWindow.bounds?.height).toBeGreaterThan(0);
-    transcript.json('persisted settingsWindow preferences', stored.settingsWindow);
+      transcript.section('Deep links open the window on their pane from the closed state');
+      await closeSettings(handle);
+      expect(handle.app.windows()).toHaveLength(1);
+      await deepLink(handle, 'agentico://diagnostics');
+      const fromDiagnostics = await awaitSettingsWindow(handle);
+      await expectPane(handle, fromDiagnostics, 'Diagnostics');
+      await evidenceShot(handle, 'settings-window-diagnostics-deep-link', fromDiagnostics);
+      await closeSettings(handle);
+      await deepLink(handle, 'agentico://updates');
+      const fromUpdates = await awaitSettingsWindow(handle);
+      await expectPane(handle, fromUpdates, 'Updates');
+      expect(handle.app.windows()).toHaveLength(2);
+      transcript.step(
+        'from the closed state both deep links opened exactly one Settings window on their pane',
+      );
 
-    transcript.section('The last-viewed pane is restored across a relaunch');
-    persistAppLogs(handle, 'settings-window-first-launch');
-    await closeApp(handle);
-    handle = await launchApp(world, testInfo, { traceName: 'settings-window-relaunch' });
-    await expect(handle.page.getByRole('button', { name: 'New feature' })).toBeVisible({
-      timeout: 60_000,
-    });
-    // Nothing reopens Settings at launch; it comes back only when asked for.
-    expect(handle.app.windows()).toHaveLength(1);
-    const restored = await openSettings(handle);
-    await expectPane(handle, restored, 'Notifications');
-    transcript.step('after relaunch the Settings window reopened on the last-viewed pane');
+      transcript.section('Closing saves the pane and the geometry');
+      // A pane no deep link can produce, so the restore below can only come
+      // from what was persisted.
+      await selectSettingsPane(fromUpdates, 'Notifications');
+      await expectStoredPane(world.userData, 'notifications');
+      await closeSettings(handle);
+      const stored = readSettings(world.userData);
+      expect(stored.settingsWindow.bounds?.width).toBeGreaterThan(0);
+      expect(stored.settingsWindow.bounds?.height).toBeGreaterThan(0);
+      transcript.json('persisted settingsWindow preferences', stored.settingsWindow);
 
-    transcript.section('⌘W closes Settings without quitting the app');
-    await closeSettings(handle);
-    expect(settingsPageOrNull(handle)).toBeNull();
-    expect(handle.app.windows()).toHaveLength(1);
-    expect(handle.appProcess.exitCode).toBeNull();
-    expect(handle.appProcess.signalCode).toBeNull();
-    expect(await mainWindowVisible(handle)).toBe(true);
-    await expect(handle.page.getByRole('button', { name: 'New feature' })).toBeVisible();
-    const connection = await handle.page.evaluate(() => window.agentico.getConnectionStatus());
-    expect(connection.status).toBe('ready');
-    transcript.step(
-      'File ▸ Close Window closed Settings only: the main window is still visible and ready, ' +
-        'and the app process never entered the quit-decision flow',
-    );
+      transcript.section('The last-viewed pane is restored across a relaunch');
+      persistAppLogs(handle, 'settings-window-first-launch');
+      await closeApp(handle);
+      handle = await launchApp(world, testInfo, { traceName: 'settings-window-relaunch' });
+      await expect(handle.page.getByRole('button', { name: 'New feature' })).toBeVisible({
+        timeout: 60_000,
+      });
+      // Nothing reopens Settings at launch; it comes back only when asked for.
+      expect(handle.app.windows()).toHaveLength(1);
+      const restored = await openSettings(handle);
+      await expectPane(handle, restored, 'Notifications');
+      transcript.step('after relaunch the Settings window reopened on the last-viewed pane');
 
-    persistAppLogs(handle, 'settings-window-relaunch');
-    transcript.write(testInfo);
-  } finally {
-    if (handle !== null) await closeApp(handle).catch(() => {});
-    assertNoLeakedProcesses(world);
-    destroyWorld(world);
-  }
-});
+      transcript.section('⌘W closes Settings without quitting the app');
+      await closeSettings(handle);
+      expect(settingsPageOrNull(handle)).toBeNull();
+      expect(handle.app.windows()).toHaveLength(1);
+      expect(handle.appProcess.exitCode).toBeNull();
+      expect(handle.appProcess.signalCode).toBeNull();
+      expect(await mainWindowVisible(handle)).toBe(true);
+      await expect(handle.page.getByRole('button', { name: 'New feature' })).toBeVisible();
+      const connection = await handle.page.evaluate(() => window.agentico.getConnectionStatus());
+      expect(connection.status).toBe('ready');
+      transcript.step(
+        'File ▸ Close Window closed Settings only: the main window is still visible and ready, ' +
+          'and the app process never entered the quit-decision flow',
+      );
+
+      persistAppLogs(handle, 'settings-window-relaunch');
+      transcript.write(testInfo);
+    } finally {
+      if (handle !== null) await closeApp(handle).catch(() => {});
+      assertNoLeakedProcesses(world);
+      destroyWorld(world);
+    }
+  },
+);
 
 /** The pane is selected, rendered, and named by the window title. */
 async function expectPane(

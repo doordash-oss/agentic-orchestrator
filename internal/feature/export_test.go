@@ -55,6 +55,14 @@ func (s *Store) ResetSaveHook() {
 	s.testSaveInterceptor = nil
 }
 
+// RebaseDescriptionForTest exposes the machine-generated rebase child
+// description generator to the external feature_test package.
+var RebaseDescriptionForTest = rebaseDescription
+
+// RebaseExitCriteriaForTest exposes the machine-generated rebase child exit
+// criteria generator to the external feature_test package.
+var RebaseExitCriteriaForTest = rebaseExitCriteria
+
 // SwapFetchPRCommentsForTest replaces the GitHub comment resolver used by
 // draft-based review-feedback launch and returns a restore function.
 func SwapFetchPRCommentsForTest(fn func(repoPath, prURL string) ([]gitadapter.ReviewComment, error)) func() {

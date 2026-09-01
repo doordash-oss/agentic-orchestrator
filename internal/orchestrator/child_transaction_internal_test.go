@@ -336,8 +336,15 @@ func TestTransactionPreparationFailureLeavesRefsUnchanged(t *testing.T) {
 	fx := newMultiRepoTransactionFixture(t, 2)
 	o := fx.orchestrator()
 
-	// Create a conflicting change on the second repo's parent branch.
+	// Create a conflicting change on the second repo's parent branch and pin
+	// the persisted base to the new tip so the drift gate does not fire and
+	// the merge-conflict path is exercised.
 	testutil.CommitFile(t, fx.repoDirs[1], "child.txt", "parent-side conflict\n", "conflicting parent commit")
+	child, _ := fx.store.Load(fx.child.ID)
+	child.Parent.Bases[1].SHA = fx.refSHA(1, "refs/heads/feature/parent")
+	if err := fx.store.Save(child); err != nil {
+		t.Fatalf("save child with pinned base: %v", err)
+	}
 
 	preRefs := make([]string, len(fx.repoDirs))
 	for i := range fx.repoDirs {
@@ -355,7 +362,7 @@ func TestTransactionPreparationFailureLeavesRefsUnchanged(t *testing.T) {
 		}
 	}
 
-	_, child := fx.reload()
+	_, child = fx.reload()
 	tx := child.Parent.Transaction
 	if tx == nil || tx.Phase != feature.TransactionPhaseAttention {
 		t.Fatalf("transaction phase = %+v, want attention", tx)
@@ -367,33 +374,234 @@ func TestTransactionPreparationFailureLeavesRefsUnchanged(t *testing.T) {
 	}
 }
 
-// TestTransactionCleanParentAdvancementRebuilds proves a clean parent
-// advancement before application is harmless: candidates are rebuilt from
-// the latest clean parent-tip vector.
-func TestTransactionCleanParentAdvancementRebuilds(t *testing.T) {
+// TestTransactionExternalParentAdvancementParksDrift proves an external
+// commit that moves a parent branch tip away from its creation-time base is
+// no longer silently absorbed: preparation parks the transaction at attention
+// with the typed parent-drift gate code, stages no candidates, and leaves
+// every parent ref byte-identical.
+func TestTransactionExternalParentAdvancementParksDrift(t *testing.T) {
 	if testing.Short() {
 		t.Skip("real-git integration test")
 	}
 	fx := newMultiRepoTransactionFixture(t, 2)
 	o := fx.orchestrator()
 
-	// Advance the first repo's parent branch cleanly.
-	testutil.CommitFile(t, fx.repoDirs[0], "parent-advance.txt", "clean advance\n", "parent advanced")
+	// Advance the first repo's parent branch outside the transaction.
+	testutil.CommitFile(t, fx.repoDirs[0], "parent-advance.txt", "external advance\n", "parent advanced")
+
+	preRefs := make([]string, len(fx.repoDirs))
+	for i := range fx.repoDirs {
+		preRefs[i] = fx.refSHA(i, "refs/heads/feature/parent")
+	}
 
 	if err := o.RunChildIntegration(fx.child.ID); err != nil {
-		t.Fatalf("runChildIntegration() error = %v", err)
+		t.Fatalf("runChildIntegration() error = %v, want nil with attention", err)
+	}
+
+	// All parent refs unchanged.
+	for i := range fx.repoDirs {
+		if got := fx.refSHA(i, "refs/heads/feature/parent"); got != preRefs[i] {
+			t.Fatalf("repo %d: parent ref moved from %s to %s on drift", i, preRefs[i], got)
+		}
 	}
 
 	_, child := fx.reload()
-	if child.Parent.CloseOutcome != feature.ChildCloseOutcomeCompleted {
-		t.Fatalf("child close outcome = %q, want completed after clean advancement", child.Parent.CloseOutcome)
+	if child.Parent.CloseOutcome != "" {
+		t.Fatalf("child close outcome = %q, want open relationship", child.Parent.CloseOutcome)
 	}
-	// The first repo's merge should include the parent advancement.
-	for i, dir := range fx.repoDirs {
-		parents := txGit(t, dir, "rev-list", "--parents", "-n", "1", "HEAD")
-		if fields := len(strings.Fields(parents)); fields != 3 {
-			t.Fatalf("repo %d: merge parents = %q, want two-parent merge commit", i, parents)
+	tx := child.Parent.Transaction
+	if tx == nil || tx.Phase != feature.TransactionPhaseAttention {
+		t.Fatalf("transaction phase = %+v, want attention", tx)
+	}
+	entry := tx.EntryByRepo(child.Repos[0].Name)
+	if entry == nil || entry.GateCode != feature.GateCodeParentDrift {
+		t.Fatalf("repo 0: gate code = %+v, want %s", entry, feature.GateCodeParentDrift)
+	}
+	if entry.PrepState != feature.RepoPrepFailed {
+		t.Fatalf("repo 0: prep state = %s, want failed", entry.PrepState)
+	}
+	for i := range tx.Entries {
+		if tx.Entries[i].CandidateSHA != "" {
+			t.Fatalf("repo %d: candidate %s staged despite drift", i, tx.Entries[i].CandidateSHA)
 		}
+	}
+}
+
+// TestTransactionParentDriftRetryAcknowledges proves drift parks integration
+// exactly once: retrying at the unchanged tip is the operator's acknowledgment
+// and the integration absorbs the moved tip and completes, while any further
+// movement parks again.
+func TestTransactionParentDriftRetryAcknowledges(t *testing.T) {
+	if testing.Short() {
+		t.Skip("real-git integration test")
+	}
+	fx := newMultiRepoTransactionFixture(t, 2)
+	o := fx.orchestrator()
+
+	testutil.CommitFile(t, fx.repoDirs[0], "parent-advance.txt", "external advance\n", "parent advanced")
+
+	if err := o.RunChildIntegration(fx.child.ID); err != nil {
+		t.Fatalf("first runChildIntegration() error = %v, want nil with attention", err)
+	}
+	_, child := fx.reload()
+	if tx := child.Parent.Transaction; tx == nil || tx.Phase != feature.TransactionPhaseAttention {
+		t.Fatalf("transaction phase = %+v, want attention after drift", tx)
+	}
+
+	// Further movement after the drift attention parks again.
+	testutil.CommitFile(t, fx.repoDirs[0], "parent-advance-2.txt", "more external\n", "parent advanced again")
+	if err := o.RunChildIntegration(fx.child.ID); err != nil {
+		t.Fatalf("second runChildIntegration() error = %v, want nil with attention", err)
+	}
+	_, child = fx.reload()
+	tx := child.Parent.Transaction
+	if tx == nil || tx.Phase != feature.TransactionPhaseAttention {
+		t.Fatalf("transaction phase = %+v, want attention after renewed drift", tx)
+	}
+	if entry := tx.EntryByRepo(child.Repos[0].Name); entry == nil || entry.GateCode != feature.GateCodeParentDrift {
+		t.Fatalf("repo 0: gate code = %+v, want %s", entry, feature.GateCodeParentDrift)
+	}
+
+	// Retry at the unchanged tip acknowledges the drift and completes.
+	if err := o.RunChildIntegration(fx.child.ID); err != nil {
+		t.Fatalf("acknowledging runChildIntegration() error = %v", err)
+	}
+	_, child = fx.reload()
+	if child.Parent.CloseOutcome != feature.ChildCloseOutcomeCompleted {
+		t.Fatalf("child close outcome = %q, want completed after acknowledgment", child.Parent.CloseOutcome)
+	}
+}
+
+// TestTransactionParentDriftMultiRepoAggregation proves drift is evaluated
+// for every repository in one preflight: drifted repos carry the typed gate
+// code, clean repos do not, and no candidate is staged for either.
+func TestTransactionParentDriftMultiRepoAggregation(t *testing.T) {
+	if testing.Short() {
+		t.Skip("real-git integration test")
+	}
+	fx := newMultiRepoTransactionFixture(t, 3)
+	o := fx.orchestrator()
+
+	// Advance the first and third parent branches; the second stays clean.
+	testutil.CommitFile(t, fx.repoDirs[0], "drift-a.txt", "external\n", "external parent commit A")
+	testutil.CommitFile(t, fx.repoDirs[2], "drift-c.txt", "external\n", "external parent commit C")
+
+	preRefs := make([]string, len(fx.repoDirs))
+	for i := range fx.repoDirs {
+		preRefs[i] = fx.refSHA(i, "refs/heads/feature/parent")
+	}
+
+	if err := o.RunChildIntegration(fx.child.ID); err != nil {
+		t.Fatalf("runChildIntegration() error = %v, want nil with attention", err)
+	}
+
+	for i := range fx.repoDirs {
+		if got := fx.refSHA(i, "refs/heads/feature/parent"); got != preRefs[i] {
+			t.Fatalf("repo %d: parent ref moved from %s to %s on drift", i, preRefs[i], got)
+		}
+	}
+
+	_, child := fx.reload()
+	tx := child.Parent.Transaction
+	if tx == nil || tx.Phase != feature.TransactionPhaseAttention {
+		t.Fatalf("transaction phase = %+v, want attention", tx)
+	}
+	for i := range tx.Entries {
+		entry := &tx.Entries[i]
+		drifted := i == 0 || i == 2
+		if drifted && entry.GateCode != feature.GateCodeParentDrift {
+			t.Fatalf("repo %d: gate code = %q, want %s", i, entry.GateCode, feature.GateCodeParentDrift)
+		}
+		if !drifted && entry.GateCode != "" {
+			t.Fatalf("repo %d: gate code = %q, want empty for clean repo", i, entry.GateCode)
+		}
+		if entry.CandidateSHA != "" {
+			t.Fatalf("repo %d: candidate %s staged despite drift", i, entry.CandidateSHA)
+		}
+	}
+}
+
+// TestTransactionParentDriftExemptsPriorCandidate proves a resumed rebuild
+// after a partial apply — where a parent tip equals a candidate the
+// transaction itself produced — is not mistaken for external drift and the
+// integration completes.
+func TestTransactionParentDriftExemptsPriorCandidate(t *testing.T) {
+	if testing.Short() {
+		t.Skip("real-git integration test")
+	}
+	fx := newMultiRepoTransactionFixture(t, 2)
+
+	child, _ := fx.store.Load(fx.child.ID)
+	parent, _ := fx.store.Load(fx.parent.ID)
+	o := fx.orchestrator()
+	journal, err := o.prepareTransactionCandidates(child, parent)
+	if err != nil {
+		t.Fatalf("prepareTransactionCandidates() error = %v", err)
+	}
+	if journal == nil {
+		t.Fatal("journal is nil")
+	}
+
+	// Manually apply only the first repo (simulating a crash after its ref
+	// CAS and worktree sync but before durable apply progress).
+	entry := &journal.Entries[0]
+	ref := "refs/heads/" + entry.ParentBranch
+	if err := git.UpdateRefCAS(fx.repoDirs[0], ref, entry.ExpectedRefSHA, entry.CandidateSHA); err != nil {
+		t.Fatalf("manual apply repo 0: %v", err)
+	}
+	txGit(t, fx.repoDirs[0], "reset", "--hard", entry.CandidateSHA)
+
+	if err := o.RunChildIntegration(fx.child.ID); err != nil {
+		t.Fatalf("RunChildIntegration() resume error = %v", err)
+	}
+
+	_, child = fx.reload()
+	if child.Parent.CloseOutcome != feature.ChildCloseOutcomeCompleted {
+		t.Fatalf("child close outcome = %q, want completed on resume", child.Parent.CloseOutcome)
+	}
+	if child.Parent.Transaction.Phase != feature.TransactionPhaseMerged {
+		t.Fatalf("transaction phase = %s, want merged", child.Parent.Transaction.Phase)
+	}
+	for i := range child.Parent.Transaction.Entries {
+		if got := child.Parent.Transaction.Entries[i].GateCode; got == feature.GateCodeParentDrift {
+			t.Fatalf("repo %d: resume tripped the drift gate", i)
+		}
+	}
+}
+
+// TestTransactionParentDriftRecheckAfterReset proves drift attention is
+// re-checkable: once the parent branch is reset back to its creation-time
+// base, re-running integration proceeds to completion.
+func TestTransactionParentDriftRecheckAfterReset(t *testing.T) {
+	if testing.Short() {
+		t.Skip("real-git integration test")
+	}
+	fx := newMultiRepoTransactionFixture(t, 2)
+	o := fx.orchestrator()
+
+	testutil.CommitFile(t, fx.repoDirs[0], "drift.txt", "external\n", "external parent commit")
+
+	if err := o.RunChildIntegration(fx.child.ID); err != nil {
+		t.Fatalf("runChildIntegration() error = %v, want nil with attention", err)
+	}
+	_, child := fx.reload()
+	tx := child.Parent.Transaction
+	if tx == nil || tx.Phase != feature.TransactionPhaseAttention {
+		t.Fatalf("transaction phase = %+v, want attention", tx)
+	}
+
+	// Restore the parent branch to its creation-time base and retry.
+	txGit(t, fx.repoDirs[0], "reset", "--hard", fx.parentSHA[0])
+
+	if err := o.RunChildIntegration(fx.child.ID); err != nil {
+		t.Fatalf("runChildIntegration() retry error = %v", err)
+	}
+	_, child = fx.reload()
+	if child.Parent.CloseOutcome != feature.ChildCloseOutcomeCompleted {
+		t.Fatalf("child close outcome = %q, want completed after reset", child.Parent.CloseOutcome)
+	}
+	if child.Parent.Transaction.Phase != feature.TransactionPhaseMerged {
+		t.Fatalf("transaction phase = %s, want merged", child.Parent.Transaction.Phase)
 	}
 }
 

@@ -41,6 +41,7 @@ export function ReadinessGate({
   onOpenAma = () => {},
   onOpenPalette = () => {},
   amaSessionActive = false,
+  amaUnread = false,
 }: {
   attentionDrafts?: AttentionDrafts;
   setAttentionDrafts?: Dispatch<SetStateAction<AttentionDrafts>>;
@@ -65,6 +66,7 @@ export function ReadinessGate({
   /** Owned by App: dispatches the same 'palette' routeRequest ⌘K resolves to. */
   onOpenPalette?(): void;
   amaSessionActive?: boolean;
+  amaUnread?: boolean;
 }) {
   const [state, setState] = useState<GateState>({ phase: 'loading' });
 
@@ -130,6 +132,7 @@ export function ReadinessGate({
         onOpenAma={onOpenAma}
         onOpenPalette={onOpenPalette}
         amaSessionActive={amaSessionActive}
+        amaUnread={amaUnread}
       />
     );
   }

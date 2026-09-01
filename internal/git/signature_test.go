@@ -89,14 +89,12 @@ func TestInjectPRSignature_Idempotent(t *testing.T) {
 }
 
 func TestConstants(t *testing.T) {
-	if !strings.Contains(CommitSignatureTrailer, AgenticURL) {
-		t.Errorf("CommitSignatureTrailer should contain AgenticURL")
+	wantTrailer := "Co-authored-by: Agentico <noreply@doordash-oss.github.com>"
+	if CommitSignatureTrailer != wantTrailer {
+		t.Errorf("CommitSignatureTrailer = %q, want %q (Co-authored-by convention so GitHub renders Agentico as a co-author)", CommitSignatureTrailer, wantTrailer)
 	}
 	if !strings.Contains(PRSignature, AgenticURL) {
 		t.Errorf("PRSignature should contain AgenticURL")
-	}
-	if !strings.Contains(CommitSignatureTrailer, "Generated-by: Agentic") {
-		t.Errorf("CommitSignatureTrailer should contain 'Generated-by: Agentic'")
 	}
 	if !strings.Contains(PRSignature, "Generated with [agentic orchestrator]") {
 		t.Errorf("PRSignature should contain 'Generated with [agentic orchestrator]'")

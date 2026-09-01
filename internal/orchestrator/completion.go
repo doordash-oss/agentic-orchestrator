@@ -63,13 +63,10 @@ func isTerminalForCompletion(f *feature.Feature) bool {
 // to give that caller an unambiguous short-circuit signal.
 var errFinalReviewInterrupted = errors.New("final review interrupted")
 
-var finalReviewRootOrchestrationArtifacts = []string{
-	agent.PhaseCompleteFile,
-	"progress.md",
-	"verification-report.yaml",
-	"review-feedback.md",
-	"meta.yaml",
-}
+// finalReviewRootOrchestrationArtifacts are the repo-root files the publish
+// path scrubs and the Final Review approval dirty-check tolerates; the
+// canonical list lives with the agent-side round-commit contract.
+var finalReviewRootOrchestrationArtifacts = agent.FinalReviewRootOrchestrationArtifacts
 
 // emitPhaseCompleted emits a PhaseCompleted event and fires the hook. This
 // is the sole emission site for phase completion in completion handlers.
@@ -931,9 +928,10 @@ func (o *Orchestrator) onMultiReposPassed(featureID string, f *feature.Feature) 
 	if f.Status != feature.StatusImplementing {
 		return nil
 	}
-	// A roadmap phase crosses a synchronous per-repo git boundary below. Flag
-	// it before StatusReviewPassed becomes observable, so no reader sees a
-	// startable steady state while the commit loop is still running.
+	// A roadmap phase crosses a synchronous per-repo boundary below (anchor
+	// recording + phase advance). Flag it before StatusReviewPassed becomes
+	// observable, so no reader sees a startable steady state while that
+	// boundary is still running.
 	if f.CurrentRoadmapPhase > 0 {
 		o.setFinalizingPhaseStatus(featureID, true)
 		defer o.setFinalizingPhaseStatus(featureID, false)
@@ -943,9 +941,9 @@ func (o *Orchestrator) onMultiReposPassed(featureID string, f *feature.Feature) 
 	}
 	o.emitPhaseCompleted(featureID, feature.PhaseImplement, nil)
 
-	// Roadmap mid-flight: commit + advance.
+	// Roadmap mid-flight: record anchors + advance.
 	if f.CurrentRoadmapPhase > 0 && f.CurrentRoadmapPhase < f.TotalRoadmapPhases {
-		anchors := o.commitRoadmapPhase(f)
+		anchors := o.roadmapPhaseAnchors(f)
 		o.setFinalizingPhaseStatus(featureID, false)
 		if err := o.recordRoadmapPhaseCommitAnchors(featureID, f.CurrentRoadmapPhase, anchors); err != nil {
 			return err
@@ -963,9 +961,9 @@ func (o *Orchestrator) onMultiReposPassed(featureID string, f *feature.Feature) 
 		return nil
 	}
 
-	// Roadmap final phase: commit + fall through to review / publish.
+	// Roadmap final phase: record anchors + fall through to review / publish.
 	if f.CurrentRoadmapPhase > 0 && f.CurrentRoadmapPhase == f.TotalRoadmapPhases {
-		anchors := o.commitRoadmapPhase(f)
+		anchors := o.roadmapPhaseAnchors(f)
 		o.setFinalizingPhaseStatus(featureID, false)
 		if err := o.recordRoadmapPhaseCommitAnchors(featureID, f.CurrentRoadmapPhase, anchors); err != nil {
 			return err
@@ -1153,55 +1151,48 @@ func (o *Orchestrator) scrubFinalReviewRootArtifacts(ctx context.Context, workDi
 	return nil
 }
 
-// commitRoadmapPhase creates per-repo commits for a completed roadmap phase
-// and returns the full HEAD SHA for each repo whose commit-or-anchor operation
-// succeeded. Commit failures remain advisory for pipeline progress, but failed
-// repos are omitted from the returned anchor map.
-func (o *Orchestrator) commitRoadmapPhase(f *feature.Feature) map[string]string {
+// roadmapPhaseAnchors records the per-repo HEAD SHA that the phase's last
+// round commit produced. Per-round commits replaced the former end-of-phase
+// squash commit, so phase completion no longer mutates git: each round
+// already committed through the RoundCommitHook, and a repo no round dirtied
+// anchors at its existing HEAD. Known untracked root orchestration artifacts
+// stranded by the post-commit review sessions are scrubbed here so they
+// cannot leak across the phase boundary into the next phase's first round
+// commit. Repos whose HEAD cannot be read are omitted from the anchor map
+// (advisory, matching the old phase-commit failure handling: the phase still
+// advances, but rewind tooling will not pretend an anchor exists).
+func (o *Orchestrator) roadmapPhaseAnchors(f *feature.Feature) map[string]string {
 	if len(f.Repos) == 0 {
 		return nil
 	}
-	phaseName := ""
-	if roadmapPath := o.resolveArtifactPath(f, "roadmap"); roadmapPath != "" {
-		if data, err := os.ReadFile(roadmapPath); err == nil {
-			if phases, err := agent.ParseRoadmap(string(data)); err == nil {
-				for _, p := range phases {
-					if p.Number == f.CurrentRoadmapPhase {
-						phaseName = p.Name
-						break
-					}
-				}
-			}
-		}
-	}
-	msg := fmt.Sprintf("Phase %d/%d (%s)", f.CurrentRoadmapPhase, f.TotalRoadmapPhases, f.RoadmapPhaseType)
-	if phaseName != "" {
-		msg += ": " + phaseName
-	}
-	msg += "\n\nFeature: " + f.Slug
 	anchors := make(map[string]string)
 	for _, repo := range roadmapPhaseCommitRepos(f) {
 		if repo.WorktreePath == "" {
 			continue
 		}
-		sha, err := git.CommitAllAndGetHead(repo.WorktreePath, msg)
+		if err := o.scrubFinalReviewRootArtifacts(context.Background(), repo.WorktreePath); err != nil {
+			// Best-effort hygiene: the anchor is still recorded, but the
+			// leak risk is surfaced on the event bus.
+			o.emitEvent(ports.Event{
+				Type:      ports.RepoStatusChanged,
+				FeatureID: f.ID,
+				RepoName:  repo.Name,
+				Error:     err,
+				Message:   fmt.Sprintf("roadmap phase %d artifact scrub failed", f.CurrentRoadmapPhase),
+			})
+		}
+		sha, err := git.CurrentHeadSHA(repo.WorktreePath)
 		if err != nil || sha == "" {
 			o.emitEvent(ports.Event{
 				Type:      ports.RepoStatusChanged,
 				FeatureID: f.ID,
 				RepoName:  repo.Name,
 				Error:     err,
-				Message:   fmt.Sprintf("roadmap phase %d commit did not produce an anchor", f.CurrentRoadmapPhase),
+				Message:   fmt.Sprintf("roadmap phase %d anchor unavailable", f.CurrentRoadmapPhase),
 			})
 			continue
 		}
 		anchors[repo.Name] = sha
-		o.emitEvent(ports.Event{
-			Type:      ports.RepoStatusChanged,
-			FeatureID: f.ID,
-			RepoName:  repo.Name,
-			Message:   fmt.Sprintf("committed roadmap phase %d", f.CurrentRoadmapPhase),
-		})
 	}
 	if len(anchors) == 0 {
 		return nil
@@ -1231,9 +1222,10 @@ func roadmapPhaseCommitRepos(f *feature.Feature) []feature.FeatureRepo {
 	return repos
 }
 
-// setFinalizingPhaseStatus flags or clears the end-of-phase git boundary.
-// Clearing only touches the finalizing token so a status written by a later
-// phase step is never clobbered.
+// setFinalizingPhaseStatus flags or clears the end-of-phase boundary (anchor
+// recording + phase advance; per-round commits happen earlier, inside the
+// implementation loops). Clearing only touches the finalizing token so a
+// status written by a later phase step is never clobbered.
 func (o *Orchestrator) setFinalizingPhaseStatus(featureID string, finalizing bool) {
 	if o.deps.Store == nil {
 		return

@@ -216,6 +216,12 @@ test('packaged attention notifications are private, deduplicated, bounded, passi
     expect(await capturedNotifications(handle)).toHaveLength(1);
 
     await activateNotification(handle, 0);
+    // The notification click only shows the window. On Linux CI the focus
+    // event does not reliably follow show(), and an unfocused-but-visible
+    // window still satisfies shouldNotify — every later pending item would
+    // notify before the preview-enabled setting below is enabled. Pin the
+    // focus state through the published test hook instead of assuming it.
+    await ensureMainWindowFocus(handle);
     const inbox = handle.page.getByRole('complementary', { name: 'Attention inbox' });
     await expect(inbox).not.toBeVisible();
     // Notification click only focuses the window (main/notifications.ts just
@@ -243,6 +249,9 @@ test('packaged attention notifications are private, deduplicated, bounded, passi
     await expect(palette.getByLabel('Search features and commands')).toBeFocused();
     await handle.page.keyboard.press('Escape');
     await expect(palette).not.toBeVisible();
+    // ask-bundle is pending from here on: keep the window deterministically
+    // focused so it cannot notify before the preview setting lands.
+    await ensureMainWindowFocus(handle);
 
     await handle.page.evaluate(() =>
       window.agentico.updateSettings({ notifications: { previewEnabled: true } }),
@@ -250,6 +259,10 @@ test('packaged attention notifications are private, deduplicated, bounded, passi
     await hideMainWindow(handle);
     await waitForNotificationCount(handle, 2);
     notifications = await capturedNotifications(handle);
+    // Exactly the two intended notifications: the hidden-window permission
+    // notice and the previewed question. A focus leak would surface here as
+    // extra no-preview notifications.
+    expect(notifications).toHaveLength(2);
     const askNotification = notifications[1];
     expect(askNotification?.body).toContain('Questions');
     expect(askNotification?.body).toContain('Background Notification Questions');

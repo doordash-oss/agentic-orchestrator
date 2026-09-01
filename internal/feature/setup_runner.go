@@ -265,6 +265,8 @@ func (m *Manager) executeSetupTask(f *Feature, task SetupTask, logPath string) (
 	switch task.Kind {
 	case SetupTaskWorktree:
 		return m.executeWorktreeSetupTask(f, task, logPath)
+	case SetupTaskMerge:
+		return m.executeMergeSetupTask(f, task, logPath)
 	case SetupTaskImage:
 		return m.executeImageSetupTask(f, task, logPath)
 	case SetupTaskAttachment:
@@ -344,6 +346,36 @@ func (m *Manager) reuseExpectedWorktree(task SetupTask) error {
 		}
 	}
 	return nil
+}
+
+// executeMergeSetupTask merges the resolved target ref (task.StartPoint) into
+// the repo's freshly created child worktree. Conflicts complete the task: the
+// worktree keeps the in-progress merge for the pass to resolve. MergeInto is
+// idempotent, so re-execution after a lost completion never re-merges.
+func (m *Manager) executeMergeSetupTask(f *Feature, task SetupTask, logPath string) (SetupTask, error) {
+	idx := repoIndexByName(f, task.Repo)
+	if idx < 0 {
+		return task, fmt.Errorf("repo %q no longer exists on feature", task.Repo)
+	}
+	worktree := f.Repos[idx].WorktreePath
+	if worktree == "" {
+		return task, fmt.Errorf("repo %q has no worktree to merge into", task.Repo)
+	}
+	if task.StartPoint == "" {
+		return task, fmt.Errorf("merge setup task %s is missing a target ref", task.Key)
+	}
+	result := git.MergeInto(worktree, task.StartPoint, "Merge "+task.StartPoint)
+	switch result.Outcome {
+	case git.MergeIntoSuccess:
+		appendSetupLog(logPath, "merged %s into worktree %s", task.StartPoint, worktree)
+	case git.MergeIntoConflict:
+		appendSetupLog(logPath, "merge of %s stopped on conflicts; the worktree %s holds an in-progress merge for the pass to resolve (conflicts: %s)",
+			task.StartPoint, worktree, strings.Join(result.ConflictFiles, ", "))
+	default:
+		return task, fmt.Errorf("merging %s into worktree %s: %w", task.StartPoint, worktree, result.Err)
+	}
+	task.Path = worktree
+	return task, nil
 }
 
 func (m *Manager) executeImageSetupTask(f *Feature, task SetupTask, logPath string) (SetupTask, error) {

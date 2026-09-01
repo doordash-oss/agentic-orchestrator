@@ -428,6 +428,13 @@ func TestChildIntegrationConflictAttentionAndRetry(t *testing.T) {
 	// file with the same name.
 	testutil.CommitFile(t, fx.repoDir, "child.txt", "parent-side conflict\n", "conflicting parent commit")
 	preHEAD := childIntegrationGit(t, fx.repoDir, "rev-parse", "HEAD")
+	// Pin the persisted base to the new tip so the parent-drift gate does not
+	// fire and the merge-conflict path is exercised.
+	pinned, _ := fx.store.Load(fx.child.ID)
+	pinned.Parent.Bases[0].SHA = preHEAD
+	if err := fx.store.Save(pinned); err != nil {
+		t.Fatalf("save child with pinned base: %v", err)
+	}
 
 	if err := o.RunChildIntegration(fx.child.ID); err != nil {
 		t.Fatalf("runChildIntegration() error = %v, want nil with recorded attention", err)
@@ -455,8 +462,14 @@ func TestChildIntegrationConflictAttentionAndRetry(t *testing.T) {
 		t.Fatal("child branch was deleted on conflicted integration")
 	}
 
-	// Resolve the divergence on the parent side and retry via Restart.
+	// Resolve the divergence on the parent side and retry via Restart,
+	// re-pinning the base to the restored tip.
 	childIntegrationGit(t, fx.repoDir, "reset", "--hard", preHEAD+"^")
+	pinned, _ = fx.store.Load(fx.child.ID)
+	pinned.Parent.Bases[0].SHA = childIntegrationGit(t, fx.repoDir, "rev-parse", "HEAD")
+	if err := fx.store.Save(pinned); err != nil {
+		t.Fatalf("re-pin child base: %v", err)
+	}
 	outcome, err := fx.orchestrator().RestartPhase(fx.child.ID, 0, 0)
 	if err != nil {
 		t.Fatalf("RestartPhase() error = %v", err)

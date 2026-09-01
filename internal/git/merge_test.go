@@ -121,6 +121,164 @@ func TestMergeNoFFConflictAbortsCleanly(t *testing.T) {
 	}
 }
 
+// TestMergeIntoCleanMergeCreatesTwoParentCommit pins the happy path: a clean
+// MergeInto produces an explicit two-parent merge commit with the given
+// message and leaves the worktree clean.
+func TestMergeIntoCleanMergeCreatesTwoParentCommit(t *testing.T) {
+	repo := testutil.InitGitRepo(t)
+	testutil.CommitFile(t, repo, "base.txt", "base\n", "parent base")
+
+	runGitMergeTest(t, repo, "checkout", "-b", "child-branch")
+	testutil.CommitFile(t, repo, "child.txt", "child work\n", "child commit")
+	runGitMergeTest(t, repo, "checkout", "main")
+	testutil.CommitFile(t, repo, "other.txt", "parent moved\n", "parent advanced")
+
+	res := gitpkg.MergeInto(repo, "child-branch", "merge child into parent")
+	if res.Outcome != gitpkg.MergeIntoSuccess {
+		t.Fatalf("MergeInto() outcome = %v, err = %v, want success", res.Outcome, res.Err)
+	}
+
+	parents := runGitMergeTest(t, repo, "rev-list", "--parents", "-n", "1", "HEAD")
+	if fields := len(strings.Fields(parents)); fields != 3 {
+		t.Fatalf("merge HEAD parents = %q, want two-parent merge commit", parents)
+	}
+	if got := runGitMergeTest(t, repo, "log", "-n", "1", "--format=%s"); got != "merge child into parent" {
+		t.Fatalf("merge commit subject = %q, want %q", got, "merge child into parent")
+	}
+	if status := runGitMergeTest(t, repo, "status", "--porcelain"); status != "" {
+		t.Fatalf("worktree status = %q after clean merge, want clean", status)
+	}
+}
+
+// TestMergeIntoConflictLeavesMergeInProgress pins the core contract: a
+// conflicting merge is NOT aborted — MERGE_HEAD stays, conflict files are
+// reported, and the files contain literal conflict markers for resolution.
+func TestMergeIntoConflictLeavesMergeInProgress(t *testing.T) {
+	repo := testutil.InitGitRepo(t)
+	testutil.CommitFile(t, repo, "shared.txt", "base\n", "parent base")
+
+	runGitMergeTest(t, repo, "checkout", "-b", "child-branch")
+	testutil.CommitFile(t, repo, "shared.txt", "child edit\n", "child commit")
+	runGitMergeTest(t, repo, "checkout", "main")
+	testutil.CommitFile(t, repo, "shared.txt", "parent edit\n", "conflicting parent commit")
+
+	res := gitpkg.MergeInto(repo, "child-branch", "merge child")
+	if res.Outcome != gitpkg.MergeIntoConflict {
+		t.Fatalf("MergeInto() outcome = %v, err = %v, want conflict", res.Outcome, res.Err)
+	}
+	if !gitpkg.MergeInProgress(repo) {
+		t.Fatal("MergeInProgress() = false after conflict, want merge left in progress")
+	}
+	if len(res.ConflictFiles) != 1 || res.ConflictFiles[0] != "shared.txt" {
+		t.Fatalf("ConflictFiles = %v, want [shared.txt]", res.ConflictFiles)
+	}
+	content, err := os.ReadFile(filepath.Join(repo, "shared.txt"))
+	if err != nil {
+		t.Fatalf("reading conflicted file: %v", err)
+	}
+	// Markers built from split strings so this file does not match marker scans.
+	start := "<" + "<<<<" + "<<"
+	end := ">" + ">>>>" + ">>"
+	if !strings.Contains(string(content), start) || !strings.Contains(string(content), end) {
+		t.Fatalf("conflicted file content = %q, want literal conflict markers", content)
+	}
+}
+
+// TestMergeIntoIdempotentWhileConflicted pins re-entry: calling MergeInto
+// while a conflicted merge is in progress returns Conflict again without
+// aborting or corrupting the sequencer state.
+func TestMergeIntoIdempotentWhileConflicted(t *testing.T) {
+	repo := testutil.InitGitRepo(t)
+	testutil.CommitFile(t, repo, "shared.txt", "base\n", "parent base")
+
+	runGitMergeTest(t, repo, "checkout", "-b", "child-branch")
+	testutil.CommitFile(t, repo, "shared.txt", "child edit\n", "child commit")
+	runGitMergeTest(t, repo, "checkout", "main")
+	testutil.CommitFile(t, repo, "shared.txt", "parent edit\n", "conflicting parent commit")
+
+	first := gitpkg.MergeInto(repo, "child-branch", "merge child")
+	if first.Outcome != gitpkg.MergeIntoConflict {
+		t.Fatalf("first MergeInto() outcome = %v, want conflict", first.Outcome)
+	}
+
+	second := gitpkg.MergeInto(repo, "child-branch", "merge child")
+	if second.Outcome != gitpkg.MergeIntoConflict {
+		t.Fatalf("second MergeInto() outcome = %v, err = %v, want conflict", second.Outcome, second.Err)
+	}
+	if !gitpkg.MergeInProgress(repo) {
+		t.Fatal("MergeInProgress() = false after re-entry, want merge still in progress")
+	}
+	if len(second.ConflictFiles) != 1 || second.ConflictFiles[0] != "shared.txt" {
+		t.Fatalf("re-entry ConflictFiles = %v, want [shared.txt]", second.ConflictFiles)
+	}
+}
+
+// TestMergeIntoAncestorIsNoOp pins the no-op path: a ref already reachable
+// from HEAD returns Success without moving HEAD.
+func TestMergeIntoAncestorIsNoOp(t *testing.T) {
+	repo := testutil.InitGitRepo(t)
+	testutil.CommitFile(t, repo, "base.txt", "base\n", "parent base")
+
+	runGitMergeTest(t, repo, "checkout", "-b", "child-branch")
+	runGitMergeTest(t, repo, "checkout", "main")
+	testutil.CommitFile(t, repo, "other.txt", "parent moved\n", "parent advanced")
+	preMerge := runGitMergeTest(t, repo, "rev-parse", "HEAD")
+
+	res := gitpkg.MergeInto(repo, "child-branch", "merge child")
+	if res.Outcome != gitpkg.MergeIntoSuccess {
+		t.Fatalf("MergeInto() outcome = %v, err = %v, want success no-op", res.Outcome, res.Err)
+	}
+	if got := runGitMergeTest(t, repo, "rev-parse", "HEAD"); got != preMerge {
+		t.Fatalf("HEAD = %s after ancestor no-op, want unchanged %s", got, preMerge)
+	}
+}
+
+// TestMergeIntoWithoutConfiguredIdentity pins the CI contract: the merge
+// commit succeeds with the Agentico fallback identity when neither the repo
+// nor any git config supplies one (fresh CI runners).
+func TestMergeIntoWithoutConfiguredIdentity(t *testing.T) {
+	repo := testutil.InitGitRepo(t)
+	testutil.CommitFile(t, repo, "base.txt", "base\n", "parent base")
+
+	runGitMergeTest(t, repo, "checkout", "-b", "child-branch")
+	testutil.CommitFile(t, repo, "child.txt", "child work\n", "child commit")
+	runGitMergeTest(t, repo, "checkout", "main")
+	testutil.CommitFile(t, repo, "other.txt", "parent moved\n", "parent advanced")
+	runGitMergeTest(t, repo, "config", "--unset", "user.email")
+	runGitMergeTest(t, repo, "config", "--unset", "user.name")
+
+	res := gitpkg.MergeInto(repo, "child-branch", "merge child")
+	if res.Outcome != gitpkg.MergeIntoSuccess {
+		t.Fatalf("MergeInto() outcome = %v, err = %v, want success via identity fallback", res.Outcome, res.Err)
+	}
+	parents := runGitMergeTest(t, repo, "rev-list", "--parents", "-n", "1", "HEAD")
+	if fields := len(strings.Fields(parents)); fields != 3 {
+		t.Fatalf("merge HEAD parents = %q, want two-parent merge commit", parents)
+	}
+}
+
+// TestMergeIntoBogusRefFailsClean pins the non-conflict failure path: a ref
+// that does not exist returns Failed with a clean worktree and no merge left
+// in progress.
+func TestMergeIntoBogusRefFailsClean(t *testing.T) {
+	repo := testutil.InitGitRepo(t)
+	testutil.CommitFile(t, repo, "base.txt", "base\n", "parent base")
+
+	res := gitpkg.MergeInto(repo, "no-such-ref", "merge nothing")
+	if res.Outcome != gitpkg.MergeIntoFailed {
+		t.Fatalf("MergeInto() outcome = %v, err = %v, want failed", res.Outcome, res.Err)
+	}
+	if res.Err == nil {
+		t.Fatal("MergeInto() Err = nil, want failure error")
+	}
+	if gitpkg.MergeInProgress(repo) {
+		t.Fatal("MergeInProgress() = true after non-conflict failure, want clean")
+	}
+	if status := runGitMergeTest(t, repo, "status", "--porcelain"); status != "" {
+		t.Fatalf("worktree status = %q after failure, want clean", status)
+	}
+}
+
 // TestMergeFeatureBranchWithoutConfiguredIdentity pins the CI contract: the
 // no-ff merge commit succeeds with the Agentico fallback identity when
 // neither the repo nor any git config supplies one (fresh CI runners).

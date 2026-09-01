@@ -439,6 +439,10 @@ type RefactorChildSpec struct {
 	// Inquireness is the submitted inquiry behavior; empty inherits the
 	// parent's setting.
 	Inquireness Inquireness
+	// RebaseMergeTargets maps behind repo name to the resolved target ref the
+	// setup runner must merge into that repo's worktree. Only set for rebase
+	// children.
+	RebaseMergeTargets map[string]string
 }
 
 // ReviewFeedbackComment is the complete selected GitHub comment payload that
@@ -624,11 +628,12 @@ func (m *Manager) CreateRebaseChild(parentID string, spec RebaseChildSpec) (*Fea
 			return nil, nil, err
 		}
 		child := m.buildRefactorChild(lockedParent, RefactorChildSpec{
-			Name:         RebaseChildName,
-			Description:  rebaseDescription(lockedParent, spec.Targets, spec.Behind),
-			Pipeline:     PipelineMedium,
-			Checkpoints:  lockedParent.Checkpoints,
-			ExitCriteria: rebaseExitCriteria(spec.Targets, spec.Behind),
+			Name:               RebaseChildName,
+			Description:        rebaseDescription(lockedParent, spec.Targets, spec.Behind),
+			Pipeline:           PipelineMedium,
+			Checkpoints:        lockedParent.Checkpoints,
+			ExitCriteria:       rebaseExitCriteria(spec.Targets, spec.Behind),
+			RebaseMergeTargets: rebaseMergeTargets(spec.Targets, spec.Behind),
 		}, bases, now)
 		child.Parent.Kind = ChildKindRebase
 		child.Parent.RebaseTargets = append([]RebaseRepoTarget(nil), spec.Targets...)
@@ -652,12 +657,35 @@ func (m *Manager) CreateRebaseChild(parentID string, spec RebaseChildSpec) (*Fea
 	return child, nil
 }
 
+// rebaseMergeTargets maps each behind repo to the ref its setup merge task
+// must apply: the creation-time pinned target SHA when captured (matching
+// exactly what the integration gate later checks), else the resolved ref.
+func rebaseMergeTargets(targets []RebaseRepoTarget, behind []string) map[string]string {
+	behindSet := make(map[string]bool, len(behind))
+	for _, r := range behind {
+		behindSet[r] = true
+	}
+	refs := make(map[string]string, len(behind))
+	for _, t := range targets {
+		if !behindSet[t.Repo] {
+			continue
+		}
+		ref := t.TargetSHA
+		if ref == "" {
+			ref = t.Ref
+		}
+		if ref != "" {
+			refs[t.Repo] = ref
+		}
+	}
+	return refs
+}
+
 // rebaseDescription generates the deterministic, machine-authored description
-// for a rebase child. It names each behind repo with its exact persisted
-// resolved target ref, instructs the pipeline to merge (never rebase) the
-// target into the working branch, adapt the feature's code to the base's new
-// APIs where they collide, keep trivial clean merges minimal, leave
-// up-to-date repos untouched, and never push to any remote.
+// for a rebase child. The mechanical merge already happened during setup, so
+// the text anchors every instruction to the pass's own worktrees and never
+// names any branch: the pass verifies or completes the merge in place,
+// adapting the feature's code to the base's new APIs.
 func rebaseDescription(parent *Feature, targets []RebaseRepoTarget, behind []string) string {
 	behindSet := make(map[string]bool, len(behind))
 	for _, r := range behind {
@@ -669,14 +697,15 @@ func rebaseDescription(parent *Feature, targets []RebaseRepoTarget, behind []str
 	}
 
 	var sb strings.Builder
-	sb.WriteString("This pass merge-reconciles the feature's branches against their resolved base targets.\n")
+	sb.WriteString("This pass reconciles the feature with its resolved base targets. For each behind repository listed below, the resolved target has already been merged into the branch checked out in this repository's worktree before this pass started.\n")
 	sb.WriteString("\n## Instructions\n\n")
-	sb.WriteString("- For each behind repository listed below, merge the resolved target into the repository's working branch using `git merge` (never rebase, no history rewrite).\n")
-	sb.WriteString("- Adapt the feature's code to the base's new APIs where they collide with the feature's changes.\n")
-	sb.WriteString("- Keep trivial clean merges minimal: do not opportunistically refactor or reformat code that merges cleanly.\n")
+	sb.WriteString("- If the merge completed cleanly, verify the feature still works against the base's changes and adapt the feature's code where the base's new APIs collide with it.\n")
+	sb.WriteString("- If the merge stopped on conflicts, the worktree contains an in-progress merge: resolve every conflict by adapting the feature's code to the base's new APIs, then complete the merge commit. Keep the merge commit — never squash or rewrite history.\n")
+	sb.WriteString("- Keep clean merges minimal: do not opportunistically refactor or reformat code that merged cleanly.\n")
 	sb.WriteString("- Leave up-to-date repositories completely untouched. Do not merge, rebase, or modify them in any way.\n")
 	sb.WriteString("- Never push to any remote. All work is local; integration lands through the parent merge transaction.\n")
 	sb.WriteString("- Do not fetch from any remote. The target refs were fetched at creation time and are already available in the shared object store.\n")
+	sb.WriteString("- All work happens inside the worktrees provisioned for this pass — never enter, inspect state from, or modify any other checkout of these repositories.\n")
 
 	for _, repo := range parent.Repos {
 		if !behindSet[repo.Name] {
@@ -687,14 +716,9 @@ func rebaseDescription(parent *Feature, targets []RebaseRepoTarget, behind []str
 		sb.WriteString(repo.Name)
 		sb.WriteString("\n\nResolved target ref: ")
 		sb.WriteString(t.Ref)
-		sb.WriteString(" (branch: ")
-		sb.WriteString(t.Target)
-		sb.WriteString(")\n\n")
-		sb.WriteString("Merge `")
+		sb.WriteString("\n\nThe target `")
 		sb.WriteString(t.Ref)
-		sb.WriteString("` into the working branch `")
-		sb.WriteString(repo.Branch)
-		sb.WriteString("`. Resolve any conflicts by adapting the feature's code to the base's new APIs. Keep the merge commit (do not squash).\n")
+		sb.WriteString("` has already been merged into the branch checked out in this repository's worktree. If that merge stopped on conflicts, resolve every conflict there by adapting the feature's code to the base's new APIs and complete the merge commit.\n")
 	}
 	return sb.String()
 }
@@ -714,22 +738,23 @@ func rebaseExitCriteria(targets []RebaseRepoTarget, behind []string) string {
 	}
 
 	var sb strings.Builder
-	sb.WriteString("This pass is complete when all of the following git-level completion facts hold for every behind repository:\n")
+	sb.WriteString("This pass is complete when all of the following git-level completion facts hold in this repository's worktree — the worktree provisioned for this pass — for every behind repository:\n")
 	for _, r := range behind {
 		t := targetByRepo[r]
 		sb.WriteString("\n### Repository: ")
 		sb.WriteString(r)
-		sb.WriteString("\n\n- The resolved target commit (`")
+		sb.WriteString("\n\n- In this repository's worktree, the resolved target commit (`")
 		sb.WriteString(t.Ref)
-		sb.WriteString("`) is an ancestor of the working-branch head (`git merge-base --is-ancestor ")
+		sb.WriteString("`) is an ancestor of HEAD (`git merge-base --is-ancestor ")
 		sb.WriteString(t.Ref)
-		sb.WriteString(" HEAD` succeeds).\n")
-		sb.WriteString("- No merge is in progress (no `rebase-merge` or `rebase-apply` directory, no `MERGE_HEAD`).\n")
-		sb.WriteString("- No conflict markers remain in any tracked file (content scan for literal `<<<<<<<`, `=======`, `>>>>>>>` sequences is empty).\n")
-		sb.WriteString("- The worktree is clean (`git status --porcelain` is empty).\n")
+		sb.WriteString(" HEAD` run in this repository's worktree succeeds).\n")
+		sb.WriteString("- No merge is in progress in this repository's worktree (no `rebase-merge` or `rebase-apply` directory, no `MERGE_HEAD`).\n")
+		sb.WriteString("- No conflict markers remain in any tracked file in this repository's worktree (content scan for literal `<<<<<<<`, `=======`, `>>>>>>>` sequences is empty).\n")
+		sb.WriteString("- This repository's worktree is clean (`git status --porcelain` is empty).\n")
 	}
 	sb.WriteString("\n## Invariants\n\n")
-	sb.WriteString("- Up-to-date repositories (not listed above) are completely unchanged: their worktree HEAD, branch, and content are byte-identical to the creation-time fork point.\n")
+	sb.WriteString("- Up-to-date repositories (not listed above) are completely unchanged: their worktree HEAD and content are byte-identical to the creation-time fork point.\n")
+	sb.WriteString("- No other checkout of any repository was modified at any stage; all work happened inside the worktrees provisioned for this pass.\n")
 	sb.WriteString("- Nothing was pushed to any remote at any stage. All work is local.\n")
 	return sb.String()
 }
@@ -1075,6 +1100,7 @@ func (m *Manager) buildRefactorChild(parent *Feature, spec RefactorChildSpec, ba
 	}
 	run.Setup = NewActiveSetupState(childRepos, spec.Images, spec.Attachments, now, SetupInitOptions{
 		ExactStartPointPerRepo: exactStart,
+		MergeTargetPerRepo:     spec.RebaseMergeTargets,
 	})
 	child.SetRun(run)
 	return child

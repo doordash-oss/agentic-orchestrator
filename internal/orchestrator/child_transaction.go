@@ -38,10 +38,12 @@ import (
 // initial parent anchor, latest expected target ref, candidate commit, and
 // preparation outcome is persisted before application.
 //
-// A clean parent advancement before application is harmless: the complete
-// candidate set is rebuilt from the latest clean parent-tip vector. A dirty
-// repository, conflict, or preparation failure leaves every parent ref
-// unchanged and records all affected repositories as attention.
+// The parent is locked while a pass runs, so a parent tip that moved away
+// from its creation-time base — other than to a commit this transaction
+// itself produced — is external drift: preparation parks at attention with
+// GateCodeParentDrift before any staging. A dirty repository, conflict, or
+// preparation failure likewise leaves every parent ref unchanged and records
+// all affected repositories as attention.
 func (o *Orchestrator) prepareTransactionCandidates(child, parent *feature.Feature) (*feature.TransactionJournal, error) {
 	if o.deps.Worktrees == nil {
 		return nil, fmt.Errorf("transaction: worktree operations are not configured")
@@ -69,6 +71,7 @@ func (o *Orchestrator) prepareTransactionCandidates(child, parent *feature.Featu
 
 	// Validate every parent repo and capture per-repo entries.
 	var allDirty []feature.RepoDirtyDiagnostics
+	var driftedRepos []string
 	for _, childRepo := range child.Repos {
 		parentRepo := featureRepoByName(parent, childRepo.Name)
 		if parentRepo == nil {
@@ -114,6 +117,20 @@ func (o *Orchestrator) prepareTransactionCandidates(child, parent *feature.Featu
 			PrepState:       feature.RepoPrepPending,
 		}
 
+		// A tip away from the creation-time base is external drift unless it
+		// is a candidate this child's transaction produced (a resumed or
+		// partially applied transaction being rebuilt) or a tip a prior drift
+		// attention already reported — retrying integration at the same tip
+		// is the operator's explicit acknowledgment to absorb it.
+		if base := child.BaseSHA(childRepo.Name); base != "" && parentTip != base &&
+			!transactionProducedSHA(child.Parent.Transaction, parentTip) &&
+			!transactionAcknowledgedDrift(child.Parent.Transaction, childRepo.Name, parentTip) {
+			entry.PrepState = feature.RepoPrepFailed
+			entry.GateCode = feature.GateCodeParentDrift
+			entry.Diagnostics = fmt.Sprintf("parent branch tip moved from %s to %s while the pass was running; the parent is locked during a pass, so this usually means something wrote to the parent's checkout outside the integration transaction; parent refs were left untouched — retry integration to accept the moved tip, or reset the parent branch before retrying", base, parentTip)
+			driftedRepos = append(driftedRepos, childRepo.Name)
+		}
+
 		if report.Dirty() {
 			entry.PrepState = feature.RepoPrepFailed
 			entry.Dirty = []feature.RepoDirtyDiagnostics{{
@@ -130,6 +147,28 @@ func (o *Orchestrator) prepareTransactionCandidates(child, parent *feature.Featu
 		}
 
 		journal.Entries = append(journal.Entries, entry)
+	}
+
+	// If any parent tip drifted, park the transaction with aggregated drift
+	// diagnostics before any staging. All parent refs are unchanged. Carry
+	// candidate provenance from the prior journal across the overwrite so a
+	// ref this transaction already moved is not reclassified as drift on
+	// retry.
+	if len(driftedRepos) > 0 {
+		if prior := child.Parent.Transaction; prior != nil {
+			for i := range journal.Entries {
+				if pe := prior.EntryByRepo(journal.Entries[i].Repo); pe != nil && journal.Entries[i].CandidateSHA == "" {
+					journal.Entries[i].CandidateSHA = pe.CandidateSHA
+					journal.Entries[i].ApplyState = pe.ApplyState
+				}
+			}
+		}
+		journal.Phase = feature.TransactionPhaseAttention
+		journal.Attention = "parent branch tips moved outside the integration transaction: " + strings.Join(driftedRepos, ", ")
+		if err := o.persistTransaction(child.ID, journal); err != nil {
+			return nil, fmt.Errorf("recording parent drift attention: %w", err)
+		}
+		return nil, o.emitTransactionAttention(child, journal.Attention)
 	}
 
 	// If any parent is dirty, park the transaction with aggregated dirty
@@ -641,6 +680,33 @@ func (o *Orchestrator) transactionParentTipVector(parent *feature.Feature, journ
 		tips = append(tips, sha)
 	}
 	return tips, nil
+}
+
+// transactionProducedSHA reports whether the prior persisted journal staged
+// sha as a candidate, so a resumed or partially applied transaction is not
+// mistaken for external parent drift.
+func transactionProducedSHA(journal *feature.TransactionJournal, sha string) bool {
+	if journal == nil || sha == "" {
+		return false
+	}
+	for i := range journal.Entries {
+		if journal.Entries[i].CandidateSHA == sha {
+			return true
+		}
+	}
+	return false
+}
+
+// transactionAcknowledgedDrift reports whether a prior drift attention
+// already recorded sha as the repo's moved tip: drift parks integration
+// exactly once, and a retry at the unchanged tip absorbs it. Any further
+// movement parks again.
+func transactionAcknowledgedDrift(journal *feature.TransactionJournal, repo, sha string) bool {
+	if journal == nil || sha == "" {
+		return false
+	}
+	entry := journal.EntryByRepo(repo)
+	return entry != nil && entry.GateCode == feature.GateCodeParentDrift && entry.ParentAnchorSHA == sha
 }
 
 // transactionNeedsRebuild checks whether the parent-tip vector has changed

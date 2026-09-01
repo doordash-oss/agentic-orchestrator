@@ -454,10 +454,10 @@ test('packaged inbox and cockpit resolve real attention classes from the bundled
   }
 });
 
-test('packaged inbox resolves an interactive help request from chat', async ({}, testInfo) => {
+test('packaged chat idle wait stays out of the inbox and resolves through the AMA panel', async ({}, testInfo) => {
   const transcript = new Transcript(
     'attention-help',
-    'Interactive help attention resolution via packaged inbox',
+    'Chat idle wait attention contract via the packaged AMA panel',
   );
   const world = createWorld('attention-help', {
     auth: { loggedIn: true, authMethod: 'oauth', email: 'e2e@example.invalid' },
@@ -473,6 +473,9 @@ test('packaged inbox resolves an interactive help request from chat', async ({},
       timeout: 60_000,
     });
 
+    // A chat started with the panel closed delivers its reply in the
+    // background: the turn ends and the session rests between turns.
+    await expect(handle.page.getByRole('img', { name: 'Unread AMA reply' })).toHaveCount(0);
     const chatStart = await serverPost(world, '/api/v1/prompts/chat/start', {
       message: 'attention chat help',
     });
@@ -491,20 +494,39 @@ test('packaged inbox resolves an interactive help request from chat', async ({},
     await expect(handle.page.getByRole('navigation', { name: 'Feature sidebar' })).toBeVisible({
       timeout: 60_000,
     });
-    await expect(attentionBell(handle.page)).toHaveAccessibleName(/Attention inbox, 1 pending/);
 
+    // The resting wait never badges or rows: the inbox is for blocking input,
+    // and an idle chat is the chat's own normal state, not a request.
+    await expect(attentionBell(handle.page)).toHaveAccessibleName(/Attention inbox, 0 pending/);
     const inbox = await openInbox(handle);
-    const helpDetail = await expandInboxItem(handle, inbox, /Agent waiting/);
-    await helpDetail
-      .getByLabel('Message to the agent')
-      .fill('Continue with the compact packaged evidence path.');
-    await evidenceShot(handle, 'attention-help-reply');
-    await helpDetail.getByRole('button', { name: 'Send message' }).click();
-    await waitForProviderLog(world, 'help-response:');
+    await expect(inbox.getByText('No blocking input is waiting.')).toBeVisible();
+    await expect(inbox.getByRole('button', { name: /Agent waiting/ })).toHaveCount(0);
+    await evidenceShot(handle, 'attention-help-inbox-quiet');
     await closeInbox(handle.page);
 
+    // The reply-delivered signal is the Ask chip's unread dot, and opening
+    // the panel is what marks the reply as seen.
+    await expect(handle.page.getByRole('img', { name: 'Unread AMA reply' })).toBeVisible();
+    await handle.page.getByRole('button', { name: /Ask ⌥Space/ }).click();
+    const panel = handle.page.getByRole('complementary', { name: 'Ask Agentico' });
+    await expect(panel).toBeVisible();
+    await expect(handle.page.getByRole('img', { name: 'Unread AMA reply' })).toHaveCount(0);
+    await expect(panel).toContainText('Active', { timeout: 30_000 });
+    await expect(panel).not.toContainText('pending');
+    const composer = panel.getByRole('textbox', { name: 'Ask Agentico' });
+    await expect(composer).toBeFocused();
+    await composer.fill('Continue with the compact packaged evidence path.');
+    await evidenceShot(handle, 'attention-help-reply');
+    await panel.getByRole('button', { name: 'Send', exact: true }).click();
+    await waitForProviderLog(world, 'help-response:');
+    expect(readProviderLog(world)).toContain('Continue with the compact packaged evidence path.');
+    await expect(panel.getByLabel('AMA transcript')).toContainText(
+      'Continue with the compact packaged evidence path.',
+      { timeout: 30_000 },
+    );
+
     persistAppLogs(handle, 'attention-help-app-server');
-    transcript.step('chat help item accepted a reply and delivered it to the interactive session');
+    transcript.step('chat reply surfaced through the Ask chip and the panel composer continued the session');
     transcript.codeBlock('provider help-response log', readProviderLog(world), 120);
     transcript.write(testInfo);
   } finally {

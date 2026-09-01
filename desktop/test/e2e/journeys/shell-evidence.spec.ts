@@ -35,6 +35,10 @@ import {
 } from '../helpers/world';
 
 test.skip(process.platform !== 'darwin', 'macOS-only chrome evidence');
+test.skip(
+  process.env['AGENTICO_EVIDENCE_DIR'] === undefined || process.env['AGENTICO_EVIDENCE_DIR'] === '',
+  'evidence-only journey: contractEvidenceShot writes nothing without AGENTICO_EVIDENCE_DIR',
+);
 
 test('Bench shell evidence: five-lane sidebar, themes, inspector, collapse, minimum size', async ({}, testInfo) => {
   const world = createWorld('shell-evidence', {

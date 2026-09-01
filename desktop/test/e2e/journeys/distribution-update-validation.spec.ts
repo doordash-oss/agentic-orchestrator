@@ -10,37 +10,41 @@ import { Transcript } from '../helpers/transcript';
 import { createRepo, createWorld, destroyWorld, type JourneyWorld } from '../helpers/world';
 import { writeSignedUpdateFixture } from '../helpers/update-fixtures';
 
-test('update validation rejects malformed metadata, signature tamper, downgrades, and prereleases', async ({}, testInfo) => {
-  test.setTimeout(180_000);
-  const transcript = new Transcript(
-    'distribution-update-validation',
-    'Packaged update metadata validation',
-  );
+test(
+  'update validation rejects malformed metadata, signature tamper, downgrades, and prereleases',
+  { tag: '@smoke' },
+  async ({}, testInfo) => {
+    test.setTimeout(180_000);
+    const transcript = new Transcript(
+      'distribution-update-validation',
+      'Packaged update metadata validation',
+    );
 
-  await runValidationCase(testInfo, transcript, 'malformed schema', (world) =>
-    writeSignedUpdateFixture(world.root, { malformedFeed: true }),
-  );
-  await runValidationCase(testInfo, transcript, 'altered signed release envelope', (world) =>
-    writeSignedUpdateFixture(world.root, {
-      servedEnvelopeBytes: Buffer.from('{"tampered":true}\n'),
-      packageText: 'package bytes',
-    }),
-  );
-  await runValidationCase(testInfo, transcript, 'downgrade with prerelease ignored', (world) =>
-    writeSignedUpdateFixture(world.root, {
-      tag: 'v0.0.9',
-      includePrerelease: true,
-      packageText: 'old package bytes',
-    }),
-  );
-  await runValidationCase(testInfo, transcript, 'prerelease-only feed', (world) =>
-    writeSignedUpdateFixture(world.root, {
-      onlyPrerelease: true,
-      packageText: 'prerelease package bytes',
-    }),
-  );
-  transcript.write(testInfo);
-});
+    await runValidationCase(testInfo, transcript, 'malformed schema', (world) =>
+      writeSignedUpdateFixture(world.root, { malformedFeed: true }),
+    );
+    await runValidationCase(testInfo, transcript, 'altered signed release envelope', (world) =>
+      writeSignedUpdateFixture(world.root, {
+        servedEnvelopeBytes: Buffer.from('{"tampered":true}\n'),
+        packageText: 'package bytes',
+      }),
+    );
+    await runValidationCase(testInfo, transcript, 'downgrade with prerelease ignored', (world) =>
+      writeSignedUpdateFixture(world.root, {
+        tag: 'v0.0.9',
+        includePrerelease: true,
+        packageText: 'old package bytes',
+      }),
+    );
+    await runValidationCase(testInfo, transcript, 'prerelease-only feed', (world) =>
+      writeSignedUpdateFixture(world.root, {
+        onlyPrerelease: true,
+        packageText: 'prerelease package bytes',
+      }),
+    );
+    transcript.write(testInfo);
+  },
+);
 
 async function runValidationCase(
   testInfo: TestInfo,

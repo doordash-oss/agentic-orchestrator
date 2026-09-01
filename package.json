@@ -18,6 +18,7 @@
     "build": "npm run build --workspace desktop",
     "package:build": "npm run package:build --workspace desktop",
     "package:verify": "npm run package:verify --workspace desktop",
+    "package:verify:e2e": "npm run package:verify:e2e --workspace desktop",
     "generate:api": "npm run generate:api --workspace desktop",
     "audit:release": "npm run audit:release --workspace desktop",
     "test:performance": "npm run test:performance --workspace desktop",

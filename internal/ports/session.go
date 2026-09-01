@@ -258,10 +258,7 @@ type SessionOpts struct {
 	ProviderName   string
 	// Model is the resolved provider model selected for launch. Provider init
 	// telemetry may refine it later, but sessions expose this value immediately.
-	Model string
-	// PHASE2(model identity): feature's ResolvedModel twin retained alongside
-	// main's Model until resume/retry unification picks the canonical field.
-	ResolvedModel string
+	Model             string
 	Protocol          llm.Protocol
 	DebugSystemPrompt string
 	// OnProviderInit runs synchronously after a provider initialization message

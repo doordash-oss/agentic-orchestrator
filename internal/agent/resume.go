@@ -38,7 +38,7 @@ const ResumeSidecarFile = "resume.yaml"
 
 const (
 	resumePromptTemplateText = "Your previous process terminated unexpectedly mid-turn; this session resumes that conversation. {{.PhaseContext}}"
-	implementResumeContext   = "Reassess the repository and your artifacts: if the iteration's work is already complete, write any missing required artifacts and the completion marker per your instructions; otherwise update progress and continue from where you left off."
+	implementResumeContext   = "Reassess the repository and your artifacts: if the iteration's work is already complete, write any missing required artifacts, run the artifact preflight, and emit the structured root outcome; otherwise update progress and continue from where you left off."
 	autoResumeConsecutiveCap = 3
 	autoResumeAbsoluteCap    = 10
 )
@@ -832,8 +832,8 @@ func ResumeUnitDir(stateDir string, current *feature.Feature) (string, bool) {
 	}
 
 	runDir := ActiveRunDir(stateDir, current)
-	// PHASE2(path prefixes): main deleted the cycle/refactor subsystems;
-	// RefactorPrefix/CyclePrefix are treated as empty.
+	// No cycle/refactor path prefix applies: those subsystems were deleted and
+	// their prefixes are treated as empty.
 	baseDir := runDir
 	switch current.CurrentPhase {
 	case feature.PhaseInquire, feature.PhaseResearch, feature.PhaseDesign:

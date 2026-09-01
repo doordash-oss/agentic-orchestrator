@@ -545,7 +545,7 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 				now := time.Now()
 				if err := resumeCoordinator.Initialize(ResumeRecord{
 					Provider:              sessOpts.ProviderName,
-					ResolvedModel:         sessOpts.ResolvedModel,
+					ResolvedModel:         sessOpts.Model,
 					PhaseKey:              implementResumePhaseKey(cfg),
 					Iteration:             i,
 					RunNumber:             activeRunNumber(cfg.Feature),
@@ -746,12 +746,9 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 				return &LoopResult{FinalStatus: "interrupted", Iterations: i}, nil
 			}
 
-			// PHASE2(crash-resume-engine): feature's AutoResumeEngine replaces
-			// the inline crash-resume block; main's inline variant (base/main
-			// sides of this conflict) was dropped — its identifiers
-			// (startCrashResumeSession, sessionConfig) belong to the superseded
-			// structure. Main's API rewires (HasCommittedPhaseOutcome,
-			// WaitForPhaseOutcome) are applied to the engine path.
+			// Crash resume runs through the AutoResumeEngine, which supersedes the old
+			// inline crash-resume block; the engine path applies the commit-boundary
+			// APIs (HasCommittedPhaseOutcome, WaitForPhaseOutcome).
 			// Auto-resume transient provider failures within this iteration.
 			if agentStatus == agentStatusFailed && sessOpts != nil && sessOpts.SupportsSessionResume && !HasCommittedPhaseOutcome(iterDir, feature.PhaseImplement, RoleImplementer) {
 				baseSessionID := sessionID
@@ -1327,17 +1324,6 @@ func waitForAutoResume(cfg ImplementConfig, sm ports.SessionManager, wait time.D
 	}
 }
 
-// PHASE2(crash-resume-message): main's updated crashResumeMessage retained
-// alongside feature's waitForAutoResume; the engine prompts via
-// ResumeCoordinator.Prompt(implementResumeContext) instead.
-// crashResumeMessage is the prompt for a crash-resume session. The resumed
-// conversation already carries the full iteration context; this only explains
-// the process boundary and re-anchors the completion protocol.
-const crashResumeMessage = "Your previous process terminated unexpectedly mid-turn; this session resumes that conversation. " +
-	"Reassess the repository and your artifacts: if the iteration's work is already complete, write any missing " +
-	"required artifacts, run the artifact preflight, and emit the structured root outcome; otherwise update progress " +
-	"and continue from where you left off."
-
 // providerSessionID returns the provider-native session identifier for a
 // session handle, "" when the handle does not expose one. SessionID is not
 // part of ports.SessionView, so it is probed as an optional interface.
@@ -1400,9 +1386,6 @@ func (c *ResumeCoordinator) DispatchFreshAfterRejection(cfg ImplementConfig, sm 
 		sessOpts.EffectiveEffort = cfg.EffectiveEffort
 		sessOpts.EffortSource = cfg.EffortSource
 	}
-	// PHASE2(implement-nudge-arming): feature's FinishOrViolateNudge TurnMode
-	// arming dropped — main removed the ImplementConfig field; BuildSession now
-	// sets TurnMode via CompletionProtocol.
 	sessOpts.Iteration = iteration
 	sessOpts.PermCacheScope = permScope
 	sessOpts.StderrPath = filepath.Join(c.dir, "stderr-fresh.log")
@@ -1417,7 +1400,7 @@ func (c *ResumeCoordinator) DispatchFreshAfterRejection(cfg ImplementConfig, sm 
 	}
 	if err := c.Initialize(ResumeRecord{
 		Provider:              sessOpts.ProviderName,
-		ResolvedModel:         sessOpts.ResolvedModel,
+		ResolvedModel:         sessOpts.Model,
 		PhaseKey:              implementResumePhaseKey(cfg),
 		Iteration:             iteration,
 		RunNumber:             activeRunNumber(cfg.Feature),

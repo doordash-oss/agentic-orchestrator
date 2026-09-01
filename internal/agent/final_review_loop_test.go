@@ -1662,9 +1662,7 @@ func TestRunFinalReviewAxis_ReusesCompletedCleanVerdict(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(axisDir, "review-feedback.md"), []byte(feedback), 0o644); err != nil {
 		t.Fatalf("writing cached feedback: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(axisDir, PhaseCompleteFile), nil, 0o644); err != nil {
-		t.Fatalf("writing phase_complete: %v", err)
-	}
+	writeTestCompletionReceiptFor(t, axisDir, feature.PhaseReview, axis.Role)
 
 	state := &featureFinalReviewLoopState{
 		cfg: OrchestratorConfig{
@@ -1692,9 +1690,7 @@ func TestRunFinalReviewFixer_ReusesCompletedChild(t *testing.T) {
 	if err := os.MkdirAll(fixDir, 0o755); err != nil {
 		t.Fatalf("creating fix dir: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(fixDir, PhaseCompleteFile), nil, 0o644); err != nil {
-		t.Fatalf("writing child phase_complete: %v", err)
-	}
+	writeTestCompletionReceiptFor(t, fixDir, feature.PhaseReview, RoleFinalReviewFixer)
 	state := &featureFinalReviewLoopState{
 		cfg: OrchestratorConfig{
 			BuildSession: func(BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error) {
@@ -1710,8 +1706,8 @@ func TestRunFinalReviewFixer_ReusesCompletedChild(t *testing.T) {
 	if status != agentStatusSuccess {
 		t.Errorf("runFix() status = %q, want %q", status, agentStatusSuccess)
 	}
-	if !HasPhaseComplete(iterDir) {
-		t.Fatal("runFix() did not restore parent iteration phase_complete")
+	if _, err := ReadCompletionReceipt(iterDir); err != nil {
+		t.Fatalf("runFix() did not republish the parent iteration completion receipt: %v", err)
 	}
 }
 

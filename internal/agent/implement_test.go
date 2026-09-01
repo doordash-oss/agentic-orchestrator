@@ -1414,7 +1414,7 @@ func TestImplementLoop_CrashResumeRecoversDeadSession(t *testing.T) {
 		return []string{"mock-agent"}, nil, &session.SessionOpts{
 			SupportsSessionResume: true,
 			ProviderName:          "codex",
-			ResolvedModel:         "gpt-5.6-codex",
+			Model:                 "gpt-5.6-codex",
 		}, nil
 	}
 	var resumedEvents []ports.FeatureResumedData
@@ -1573,7 +1573,7 @@ func TestImplementLoop_ManualResumeConsumesPendingIntent(t *testing.T) {
 		return []string{"mock-agent"}, nil, &session.SessionOpts{
 			SupportsSessionResume: true,
 			ProviderName:          "codex",
-			ResolvedModel:         "gpt-5.6-codex",
+			Model:                 "gpt-5.6-codex",
 		}, nil
 	}
 	var resumedEvents []ports.FeatureResumedData
@@ -1582,13 +1582,12 @@ func TestImplementLoop_ManualResumeConsumesPendingIntent(t *testing.T) {
 	}
 	cfg.SessionStartFunc = func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*session.SessionOpts) (ports.SessionHandle, error) {
 		testutil.WriteImplementHandoffFiles(t, artifactDir, iterDir, agentStatusSuccess)
-		if err := os.WriteFile(filepath.Join(iterDir, PhaseCompleteFile), []byte("complete\n"), 0o644); err != nil {
-			t.Fatalf("write phase_complete: %v", err)
-		}
 		resumed := &crashResumeTestSession{
 			utilityTestSession: newUtilityTestSession(),
 			providerSessionID:  "native-manual-123",
 		}
+		resumed.setRootIntent(validSuccessCompletionIntent())
+		resumed.result = &llm.ResultMessage{Subtype: testResultSuccessValue, StopReason: "end_turn"}
 		resumed.statusCh <- agentStatusSuccess
 		return resumed, nil
 	}
@@ -1666,7 +1665,7 @@ func TestImplementLoop_ManualResumeRejectsExpiredProviderSession(t *testing.T) {
 				return []string{"mock-agent"}, nil, &session.SessionOpts{
 					SupportsSessionResume: true,
 					ProviderName:          test.provider,
-					ResolvedModel:         "model",
+					Model:                 "model",
 				}, nil
 			}
 			startCalls := 0
@@ -1686,14 +1685,13 @@ func TestImplementLoop_ManualResumeRejectsExpiredProviderSession(t *testing.T) {
 					return nil, errors.New(test.detail)
 				}
 				testutil.WriteImplementHandoffFiles(t, artifactDir, iterDir, agentStatusSuccess)
-				if err := os.WriteFile(filepath.Join(iterDir, PhaseCompleteFile), []byte("complete\n"), 0o644); err != nil {
-					t.Fatalf("write phase_complete: %v", err)
-				}
 				fresh := &crashResumeTestSession{
 					utilityTestSession: newUtilityTestSession(),
 					providerSessionID:  "fresh-provider-session",
 					providerName:       test.provider,
 				}
+				fresh.setRootIntent(validSuccessCompletionIntent())
+				fresh.result = &llm.ResultMessage{Subtype: testResultSuccessValue, StopReason: "end_turn"}
 				fresh.statusCh <- agentStatusSuccess
 				return fresh, nil
 			}
@@ -2042,7 +2040,7 @@ func TestImplementLoop_AutoResumeRejectionFallsBackFreshThenResumesNewSession(t 
 		return []string{"mock-agent"}, nil, &session.SessionOpts{
 			SupportsSessionResume: true,
 			ProviderName:          "codex",
-			ResolvedModel:         "gpt-5.6-codex",
+			Model:                 "gpt-5.6-codex",
 		}, nil
 	}
 	startCalls := 0
@@ -2070,14 +2068,13 @@ func TestImplementLoop_AutoResumeRejectionFallsBackFreshThenResumesNewSession(t 
 		default:
 			iterDir := filepath.Join(artifactDir, "iteration-01")
 			testutil.WriteImplementHandoffFiles(t, artifactDir, iterDir, agentStatusSuccess)
-			if err := os.WriteFile(filepath.Join(iterDir, PhaseCompleteFile), []byte("complete\n"), 0o644); err != nil {
-				t.Fatalf("write phase_complete: %v", err)
-			}
 			resumed := &crashResumeTestSession{
 				utilityTestSession: newUtilityTestSession(),
 				providerSessionID:  "native-new",
 				providerName:       "codex",
 			}
+			resumed.setRootIntent(validSuccessCompletionIntent())
+			resumed.result = &llm.ResultMessage{Subtype: testResultSuccessValue, StopReason: "end_turn"}
 			resumed.statusCh <- agentStatusSuccess
 			return resumed, nil
 		}
@@ -2136,7 +2133,7 @@ func TestImplementLoop_CrashResumeNotAttemptedWithoutProviderSessionID(t *testin
 		return []string{"mock-agent"}, nil, &session.SessionOpts{
 			SupportsSessionResume: true,
 			ProviderName:          "codex",
-			ResolvedModel:         "gpt-5.6-codex",
+			Model:                 "gpt-5.6-codex",
 		}, nil
 	}
 	cfg.OnFeatureResumed = func(ports.FeatureResumedData) {
@@ -2183,16 +2180,17 @@ func TestImplementLoop_CrashResumeNotAttemptedWithPhaseComplete(t *testing.T) {
 	cfg.OnFeatureResumed = func(ports.FeatureResumedData) {
 		resumedEvents++
 	}
-	cfg.SessionStartFunc = func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*session.SessionOpts) (ports.SessionHandle, error) {
-		iterDir := filepath.Join(artifactDir, "iteration-01")
-		testutil.WriteImplementHandoffFiles(t, artifactDir, iterDir, agentStatusSuccess)
-		if err := os.WriteFile(filepath.Join(iterDir, PhaseCompleteFile), []byte("complete\n"), 0o644); err != nil {
-			t.Fatalf("write phase_complete: %v", err)
-		}
-		dead := &crashResumeTestSession{utilityTestSession: newUtilityTestSession(), providerSessionID: "native-123"}
-		dead.statusCh <- agentStatusFailed
-		return dead, nil
+
+	// A committed implementer outcome receipt for the next iteration means
+	// the implement phase already finished before the process died; the loop
+	// must skip the session entirely (no crash-resume attempt) and go
+	// straight to the review gate.
+	iterDir := filepath.Join(artifactDir, "iteration-01")
+	if err := os.MkdirAll(iterDir, 0o755); err != nil {
+		t.Fatalf("mkdir iteration: %v", err)
 	}
+	testutil.WriteImplementHandoffFiles(t, artifactDir, iterDir, agentStatusSuccess)
+	writeTestCompletionReceipt(t, iterDir)
 
 	result, err := RunImplementationLoop(cfg, nil)
 	if err != nil {
@@ -2201,8 +2199,8 @@ func TestImplementLoop_CrashResumeNotAttemptedWithPhaseComplete(t *testing.T) {
 	if result.FinalStatus != finalStatusReviewPassed {
 		t.Fatalf("FinalStatus = %q, want %q", result.FinalStatus, finalStatusReviewPassed)
 	}
-	if buildCalls != 1 {
-		t.Fatalf("BuildSession calls = %d, want 1", buildCalls)
+	if buildCalls != 0 {
+		t.Fatalf("BuildSession calls = %d, want 0 (phase already complete)", buildCalls)
 	}
 	if resumedEvents != 0 {
 		t.Errorf("FeatureResumed callbacks = %d, want 0", resumedEvents)

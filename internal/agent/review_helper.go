@@ -170,7 +170,7 @@ func initializeFreshReviewChild(cfg ReviewHelperConfig, launch reviewChildResume
 	}
 	if sessOpts != nil {
 		record.Provider = sessOpts.ProviderName
-		record.ResolvedModel = sessOpts.ResolvedModel
+		record.ResolvedModel = sessOpts.Model
 	}
 	if err := launch.coordinator.Initialize(record); err != nil {
 		return fmt.Errorf("initializing %s child resume record: %w", cfg.ResumeChildKey, err)
@@ -290,9 +290,6 @@ func (pr *PhaseRunner) RunReadOnlyReviewHelper(ctx context.Context, cfg ReviewHe
 		}
 		installResumeProviderInitCapture(sessOpts, resumeLaunch.coordinator)
 	}
-	// PHASE2(review-nudge-arming): nudgeSupported dropped — main removed
-	// ports.SessionOpts.SupportsFinishOrViolateNudge; the boundedHelperRunConfig
-	// finishOrViolateNudge field and its setters (Hunks 2–3) are dropped with it.
 	sandboxRequested := sessOpts != nil && sessOpts.UsesBoundedHelperSandbox
 	if sessOpts != nil && cfg.SystemPromptPrefix != "" && cfg.PromptPath != "" {
 		WriteValidatorSystemPrompt(filepath.Dir(cfg.PromptPath), cfg.SystemPromptPrefix, sessOpts.DebugSystemPrompt)
@@ -326,26 +323,26 @@ func (pr *PhaseRunner) RunReadOnlyReviewHelper(ctx context.Context, cfg ReviewHe
 	// chat output, so an empty stdout body is a perfectly valid run.
 	claimTransferred = true
 	boundedResult, runErr := pr.runBoundedHelperSession(ctx, boundedHelperRunConfig{
-		sessionID:            cfg.SessionID,
-		featureID:            cfg.FeatureID,
-		phase:                cfg.Phase,
-		label:                "review helper",
-		observerPhase:        "review",
-		model:                cfg.Model,
-		responsePath:         cfg.ResponsePath,
-		repoName:             cfg.RepoName,
-		workDir:              cfg.WorkDir,
-		command:              command,
-		env:                  env,
-		sessOpts:             sessOpts,
-		requireOutput:        false,
-		completionDir:        cfg.HelperIterDir,
-		contractPhase:        contractPhase,
-		contractRole:         cfg.Role,
-		parentSpanCtx:        cfg.ParentSpanCtx,
-		resumeCoordinator:    resumeLaunch.coordinator,
-		resumeClaim:          resumeLaunch.claim,
-		resumed:              resumeLaunch.resumed,
+		sessionID:         cfg.SessionID,
+		featureID:         cfg.FeatureID,
+		phase:             cfg.Phase,
+		label:             "review helper",
+		observerPhase:     "review",
+		model:             cfg.Model,
+		responsePath:      cfg.ResponsePath,
+		repoName:          cfg.RepoName,
+		workDir:           cfg.WorkDir,
+		command:           command,
+		env:               env,
+		sessOpts:          sessOpts,
+		requireOutput:     false,
+		completionDir:     cfg.HelperIterDir,
+		contractPhase:     contractPhase,
+		contractRole:      cfg.Role,
+		parentSpanCtx:     cfg.ParentSpanCtx,
+		resumeCoordinator: resumeLaunch.coordinator,
+		resumeClaim:       resumeLaunch.claim,
+		resumed:           resumeLaunch.resumed,
 	})
 	var rejection *resumeRejectionError
 	if errors.As(runErr, &rejection) && resumeLaunch.resumed && cfg.freshFallbackNumber == 0 {
@@ -535,26 +532,26 @@ func (pr *PhaseRunner) RunLiveRunReviewHelper(ctx context.Context, cfg ReviewHel
 
 	claimTransferred = true
 	boundedResult, runErr := pr.runBoundedHelperSession(ctx, boundedHelperRunConfig{
-		sessionID:            cfg.SessionID,
-		featureID:            cfg.FeatureID,
-		phase:                cfg.Phase,
-		label:                "live-run review helper",
-		observerPhase:        "review",
-		model:                cfg.Model,
-		responsePath:         cfg.ResponsePath,
-		repoName:             cfg.RepoName,
-		workDir:              cfg.WorkDir,
-		command:              command,
-		env:                  env,
-		sessOpts:             sessOpts,
-		requireOutput:        false,
-		completionDir:        cfg.HelperIterDir,
-		contractPhase:        contractPhase,
-		contractRole:         cfg.Role,
-		parentSpanCtx:        cfg.ParentSpanCtx,
-		resumeCoordinator:    resumeLaunch.coordinator,
-		resumeClaim:          resumeLaunch.claim,
-		resumed:              resumeLaunch.resumed,
+		sessionID:         cfg.SessionID,
+		featureID:         cfg.FeatureID,
+		phase:             cfg.Phase,
+		label:             "live-run review helper",
+		observerPhase:     "review",
+		model:             cfg.Model,
+		responsePath:      cfg.ResponsePath,
+		repoName:          cfg.RepoName,
+		workDir:           cfg.WorkDir,
+		command:           command,
+		env:               env,
+		sessOpts:          sessOpts,
+		requireOutput:     false,
+		completionDir:     cfg.HelperIterDir,
+		contractPhase:     contractPhase,
+		contractRole:      cfg.Role,
+		parentSpanCtx:     cfg.ParentSpanCtx,
+		resumeCoordinator: resumeLaunch.coordinator,
+		resumeClaim:       resumeLaunch.claim,
+		resumed:           resumeLaunch.resumed,
 	})
 	var rejection *resumeRejectionError
 	if errors.As(runErr, &rejection) && resumeLaunch.resumed && cfg.freshFallbackNumber == 0 {

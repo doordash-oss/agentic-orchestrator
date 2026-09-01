@@ -131,7 +131,7 @@ touch "`+filepath.Join(helperDir, PhaseCompleteFile)+`"
 				PermHandler:       opts.PermHandler,
 				DebugSystemPrompt: opts.SystemPrompt,
 				ProviderName:      "codex",
-				ResolvedModel:     "model-a",
+				Model:             "model-a",
 			}, nil
 		},
 	}
@@ -194,6 +194,7 @@ func TestRunReadOnlyReviewHelper_RejectedChildFallsBackFresh(t *testing.T) {
 
 	sess := newUtilityTestSession()
 	sess.result = &llm.ResultMessage{Type: "result", Subtype: "success", StopReason: "end_turn"}
+	sess.setRootIntent(validSuccessCompletionIntent())
 	sm := mocks.NewMockSessionManager()
 	sm.StartSessionFn = func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*session.SessionOpts) (ports.SessionHandle, error) {
 		if strings.Contains(id, "-resume-") {
@@ -201,9 +202,6 @@ func TestRunReadOnlyReviewHelper_RejectedChildFallsBackFresh(t *testing.T) {
 		}
 		if err := os.WriteFile(filepath.Join(helperDir, "review-feedback.md"), []byte(testutil.StructuredReviewFeedback("", "", "APPROVED")), 0o644); err != nil {
 			t.Errorf("write feedback: %v", err)
-		}
-		if err := os.WriteFile(filepath.Join(helperDir, PhaseCompleteFile), nil, 0o644); err != nil {
-			t.Errorf("write marker: %v", err)
 		}
 		sess.statusCh <- "SUCCESS"
 		return sess, nil
@@ -217,8 +215,8 @@ func TestRunReadOnlyReviewHelper_RejectedChildFallsBackFresh(t *testing.T) {
 		BuildSessionFn: func(opts BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error) {
 			builds = append(builds, opts)
 			return []string{"mock-reviewer"}, nil, &ports.SessionOpts{
-				ProviderName:  "codex",
-				ResolvedModel: "model-a",
+				ProviderName: "codex",
+				Model:        "model-a",
 			}, nil
 		},
 	}

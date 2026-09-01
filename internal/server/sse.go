@@ -540,8 +540,8 @@ func eventDTOFromDomain(ev ports.Event) SSEEvent {
 	if ev.PhaseKey != "" {
 		phase = ev.PhaseKey
 	}
-	// PHASE2(sse resource): feature's PhaseKey override retained alongside
-	// main's Resource/SSEEvent renames.
+	// A PhaseKey on the event overrides the derived phase name so roadmap phase
+	// keys survive the DTO mapping.
 	resource := Resource{Type: resourceType, FeatureID: ev.FeatureID, Phase: phase}
 	var dto SSEEvent
 	if kind == sseEventSessionOutputActivity {

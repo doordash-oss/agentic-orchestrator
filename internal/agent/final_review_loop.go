@@ -506,14 +506,13 @@ func (s *featureFinalReviewLoopState) runFinalReviewAxis(iteration int, iterDir 
 	if err := os.MkdirAll(axisDir, 0o755); err != nil {
 		return ReviewFailed, "", fmt.Errorf("creating %s final review helper directory: %w", axis.Name, err)
 	}
-	// PHASE2(axis-receipt-reset): main's unconditional RemoveCompletionReceipt
-	// superseded by feature's conditional remove-and-preserve logic below, which
-	// must see any prior receipt to short-circuit a completed axis.
 	feedbackPath := filepath.Join(axisDir, "review-feedback.md")
 	// Stop/restart resume: preserve a completed clean verdict and only
 	// redispatch axes whose local handoff is incomplete or invalid.
-	// PHASE2(axis-stop-restart): marker check rewired onto main's committed
-	// outcome receipts (axis helpers commit Phase=PhaseReview, Role=axis.Role).
+	// Axis completion is decided by committed outcome receipts (axis helpers
+	// commit Phase=PhaseReview, Role=axis.Role): a prior receipt survives to
+	// short-circuit a completed axis, and any stale or invalid receipt is
+	// removed before redispatch.
 	if HasCommittedPhaseOutcome(axisDir, feature.PhaseReview, axis.Role) {
 		if cached, err := ParseReviewFeedback(feedbackPath); err == nil && len(cached.ProtocolViolations) == 0 {
 			return cached.Verdict, cached.Body, nil
@@ -671,13 +670,14 @@ func (s *featureFinalReviewLoopState) runFix(iteration int, iterDir, feedback st
 	if err := os.MkdirAll(fixDir, 0o755); err != nil {
 		return "", fmt.Errorf("creating final-review fix helper directory: %w", err)
 	}
-	// PHASE2(fix-stop-restart): feature's completed-fix short-circuit retained;
-	// marker check rewired onto main's committed-outcome receipts (the helper
-	// commits Phase=PhaseReview, Role=RoleFinalReviewFixer into fixDir).
+	// Stop/restart resume: a completed fix session committed its receipt into
+	// fixDir (Phase=PhaseReview, Role=RoleFinalReviewFixer). Reuse it and
+	// republish the receipt into the parent iteration directory so
+	// receipt-based consumers see the completed unit.
 	if HasCommittedPhaseOutcome(fixDir, feature.PhaseReview, RoleFinalReviewFixer) {
 		if outcome, _, err := Validate(feature.PhaseReview, RoleFinalReviewFixer, fixDir); err == nil && outcome.OK {
-			if err := os.WriteFile(filepath.Join(iterDir, PhaseCompleteFile), nil, 0o644); err != nil {
-				return "", fmt.Errorf("restoring final-review iteration completion marker: %w", err)
+			if err := republishCompletionReceipt(fixDir, iterDir); err != nil {
+				return "", fmt.Errorf("restoring final-review iteration completion receipt: %w", err)
 			}
 			return agentStatusSuccess, nil
 		}
@@ -760,15 +760,12 @@ func (s *featureFinalReviewLoopState) runFix(iteration int, iterDir, feedback st
 		ResumeChildKey:     string(RoleFinalReviewFixer),
 		ResumePhaseContext: fmt.Sprintf("You were mid the final-review fixer for iteration %d.", iteration),
 	})
-	// PHASE2(runfix-waiter): main's manual-session WaitForPhaseOutcome tail
-	// dropped — the auto-merged RunBoundedHelper call above supersedes it and
-	// its identifiers (command/env/sessOpts/buildErr) do not exist on the
-	// feature path; RunBoundedHelper performs the equivalent commit validation.
-	// Feature's agentStatusMissingMarker (deleted by main) maps to
-	// agentStatusProtocolViolation.
+	// RunBoundedHelper owns the fix session's commit validation; a protocol
+	// violation error carries the structured violations the loop needs to
+	// report, so it is returned alongside the status instead of swallowed.
 	if err != nil {
 		if isProtocolViolationError(err) {
-			return agentStatusProtocolViolation, nil
+			return agentStatusProtocolViolation, err
 		}
 		return "", err
 	}
@@ -778,11 +775,11 @@ func (s *featureFinalReviewLoopState) runFix(iteration int, iterDir, feedback st
 		}
 		return result.Status, nil
 	}
-	// PHASE2(fix-iteration-marker): feature's plain phase_complete marker write
-	// retained verbatim; main's ReadCompletionReceipt rejects agent-authored
-	// plain files, so receipt-based consumers will not see this marker.
-	if err := os.WriteFile(filepath.Join(iterDir, PhaseCompleteFile), nil, 0o644); err != nil {
-		return "", fmt.Errorf("writing final-review iteration completion marker: %w", err)
+	// The helper committed its receipt into fixDir; republish it into the
+	// parent iteration directory so receipt-based consumers see the completed
+	// fix without re-running preflight against iterDir.
+	if err := republishCompletionReceipt(fixDir, iterDir); err != nil {
+		return "", fmt.Errorf("writing final-review iteration completion receipt: %w", err)
 	}
 	return agentStatusSuccess, nil
 }

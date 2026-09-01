@@ -227,7 +227,7 @@ func TestRecoveryResumeAcrossOrchestratorRestart(t *testing.T) {
 					PIDDir:                opts.PIDDir,
 					InitialPrompt:         opts.Prompt,
 					ProviderName:          "codex",
-					ResolvedModel:         "model-a",
+					Model:                 "model-a",
 					SupportsSessionResume: true,
 					Protocol: claude.NewProtocol(llm.ProtocolOpts{
 						InitialPrompt: opts.Prompt,
@@ -250,6 +250,7 @@ func TestRecoveryResumeAcrossOrchestratorRestart(t *testing.T) {
 				Recovery:    recovery,
 				PhaseRunner: phaseRunner,
 			}, orchestrator.Hooks{})
+			t.Cleanup(restarted.WaitForCycles)
 			restarted.SetRunMultiRepoImplFn(func(
 				current *feature.Feature,
 				currentPlan string,
@@ -509,7 +510,7 @@ func TestRecoveryResumeDesignAcrossOrchestratorRestart(t *testing.T) {
 						PIDDir:                opts.PIDDir,
 						InitialPrompt:         opts.Prompt,
 						ProviderName:          "codex",
-						ResolvedModel:         "model-a",
+						Model:                 "model-a",
 						SupportsSessionResume: true,
 						Protocol: claude.NewProtocol(llm.ProtocolOpts{
 							InitialPrompt: opts.Prompt,
@@ -531,6 +532,7 @@ func TestRecoveryResumeDesignAcrossOrchestratorRestart(t *testing.T) {
 				Recovery:    recovery,
 				PhaseRunner: phaseRunner,
 			}, orchestrator.Hooks{})
+			t.Cleanup(restarted.WaitForCycles)
 
 			items, err := restarted.ScanRecovery(context.Background())
 			if err != nil {
@@ -711,7 +713,7 @@ func TestRecoveryResumeKnowledgeBaseRepositoriesAcrossOrchestratorRestart(t *tes
 				PIDDir:                opts.PIDDir,
 				InitialPrompt:         opts.Prompt,
 				ProviderName:          "codex",
-				ResolvedModel:         "model-a",
+				Model:                 "model-a",
 				RepoName:              opts.RepoName,
 				SupportsSessionResume: true,
 				Protocol: claude.NewProtocol(llm.ProtocolOpts{
@@ -735,6 +737,7 @@ func TestRecoveryResumeKnowledgeBaseRepositoriesAcrossOrchestratorRestart(t *tes
 		PhaseRunner: phaseRunner,
 		CmdRunner:   commandRunner,
 	}, orchestrator.Hooks{})
+	t.Cleanup(restarted.WaitForCycles)
 
 	items, err := restarted.ScanRecovery(context.Background())
 	if err != nil {
@@ -907,7 +910,7 @@ func TestRecoveryResumeRoadmapAttemptAcrossOrchestratorRestart(t *testing.T) {
 				PIDDir:                opts.PIDDir,
 				InitialPrompt:         opts.Prompt,
 				ProviderName:          "codex",
-				ResolvedModel:         "model-a",
+				Model:                 "model-a",
 				SupportsSessionResume: true,
 				Protocol: claude.NewProtocol(llm.ProtocolOpts{
 					InitialPrompt: opts.Prompt,
@@ -929,6 +932,7 @@ func TestRecoveryResumeRoadmapAttemptAcrossOrchestratorRestart(t *testing.T) {
 		Recovery:    recovery,
 		PhaseRunner: phaseRunner,
 	}, orchestrator.Hooks{})
+	t.Cleanup(restarted.WaitForCycles)
 
 	items, err := restarted.ScanRecovery(context.Background())
 	if err != nil {

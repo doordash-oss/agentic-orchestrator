@@ -308,7 +308,7 @@ func (o *Orchestrator) restartFailedSequentialPhase(featureID string, phase feat
 	if outcome.Action != RestartDispatchPhase || outcome.Phase != phase {
 		return fmt.Errorf("prepare failed phase for restart: unexpected outcome action=%d phase=%s", outcome.Action, outcome.Phase)
 	}
-	if _, _, err := o.startPhase(featureID, phase); err != nil {
+	if _, _, err := o.startPhaseGuarded(featureID, phase); err != nil {
 		return fmt.Errorf("restart failed phase: %w", err)
 	}
 	return nil

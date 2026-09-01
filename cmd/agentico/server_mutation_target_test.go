@@ -2804,3 +2804,40 @@ func jsonEqual(a, b json.RawMessage) bool {
 	}
 	return reflect.DeepEqual(av, bv)
 }
+
+// TestServerMutationTargetResumeConflictSurfacesAs409 pins the CLI boundary
+// contract: an orchestrator ErrResumeConflict (a resume already dispatched)
+// must surface as an ActionConflictError whose message the API maps to a
+// 409 with "resume already in progress".
+func TestServerMutationTargetResumeConflictSurfacesAs409(t *testing.T) {
+	runtimeDir := t.TempDir()
+	cfg := config.NewDefault()
+	cfg.Repos[testRepoAName] = config.RepoConfig{Path: filepath.Join(runtimeDir, testRepoAName)}
+	store := feature.NewStore(filepath.Join(runtimeDir, "features"))
+	manager := feature.NewManager(store, cfg)
+	f := &feature.Feature{
+		ID:            "feat-resume-conflict",
+		Slug:          "feat-resume-conflict",
+		Status:        feature.StatusImplementing,
+		CurrentPhase:  feature.PhaseImplement,
+		ActiveRun:     1,
+		RunCount:      1,
+		Pipeline:      feature.PipelineMedium,
+		SchemaVersion: feature.SchemaVersionCurrent,
+		Repos:         []feature.FeatureRepo{{Name: testRepoAName, Path: filepath.Join(runtimeDir, testRepoAName)}},
+	}
+	if err := store.Save(f); err != nil {
+		t.Fatalf("save feature: %v", err)
+	}
+	orch := orchestrator.New(orchestrator.Deps{Lifecycle: manager, Store: store}, orchestrator.Hooks{})
+	target := serverMutationTarget{orch: orch, store: store}
+
+	_, err := target.ResumeFeature(f.ID)
+	var conflict *serverruntime.ActionConflictError
+	if !errors.As(err, &conflict) {
+		t.Fatalf("ResumeFeature() error = %v, want ActionConflictError", err)
+	}
+	if conflict.Message != "resume already in progress" {
+		t.Fatalf("conflict message = %q, want %q", conflict.Message, "resume already in progress")
+	}
+}

@@ -1132,8 +1132,9 @@ func (t *serverMutationTarget) ResumeFeature(featureID string) (serverruntime.Fe
 	if t.orch == nil {
 		return serverruntime.FeatureStartResponse{}, errors.New("orchestrator is not available")
 	}
-	// PHASE2(resume start): feature's orchestrator-level resume path retained;
-	// main had delegated resume to StartFeature.
+	// The orchestrator-level ResumeFeature entry is retained (main had delegated
+	// resume into StartFeature); a concurrent resume surfaces ErrResumeConflict,
+	// which this boundary maps to a 409.
 	if err := t.orch.ResumeFeature(featureID); err != nil {
 		if errors.Is(err, orchestrator.ErrResumeConflict) {
 			return serverruntime.FeatureStartResponse{}, &serverruntime.ActionConflictError{

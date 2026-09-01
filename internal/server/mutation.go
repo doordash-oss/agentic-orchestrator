@@ -279,7 +279,7 @@ type HelpAnswerRequest struct {
 }
 
 type ChatStartRequest struct {
-	Message string `json:"message"`
+	Message string   `json:"message"`
 	Images  []string `json:"images,omitempty"`
 	// ImageUploads carries staged upload references (see POST
 	// /api/v1/uploads); chat resolves image references only — attachments
@@ -745,9 +745,9 @@ func mutationRouteMethods(path string) ([]string, bool) {
 			if parts[2] == actionPublish && parts[3] == phaseNameDescription {
 				return []string{http.MethodPost}, true
 			}
-		if parts[2] == actionReviewFeedback && (parts[3] == reviewFeedbackSubactionFetch || parts[3] == reviewFeedbackSubactionSelection) {
-			return []string{http.MethodPost}, true
-		}
+			if parts[2] == actionReviewFeedback && (parts[3] == reviewFeedbackSubactionFetch || parts[3] == reviewFeedbackSubactionSelection) {
+				return []string{http.MethodPost}, true
+			}
 		}
 	default:
 		return nil, false

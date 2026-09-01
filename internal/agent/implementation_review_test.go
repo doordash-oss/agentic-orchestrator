@@ -599,9 +599,7 @@ func TestImplementationReviewCompositeResumeReusesResumesAndFallsBackFresh(t *te
 	if err := os.WriteFile(filepath.Join(craftDir, "review-feedback.md"), []byte(testutil.StructuredReviewFeedback("", "", "APPROVED")), 0o644); err != nil {
 		t.Fatalf("WriteFile(craft feedback) error = %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(craftDir, PhaseCompleteFile), nil, 0o644); err != nil {
-		t.Fatalf("WriteFile(craft marker) error = %v", err)
-	}
+	writeTestCompletionReceiptFor(t, craftDir, feature.PhaseReview, RoleImplementationReviewCraft)
 	for _, child := range []string{"craft", "functionality-evidence", "cleanliness"} {
 		record := resumeTestRecord()
 		record.ChildKey = child
@@ -627,11 +625,9 @@ func TestImplementationReviewCompositeResumeReusesResumesAndFallsBackFresh(t *te
 		if err := os.WriteFile(filepath.Join(childDir, "review-feedback.md"), []byte(testutil.StructuredReviewFeedback("", "", "APPROVED")), 0o644); err != nil {
 			return nil, err
 		}
-		if err := os.WriteFile(filepath.Join(childDir, PhaseCompleteFile), nil, 0o644); err != nil {
-			return nil, err
-		}
 		sess := newUtilityTestSession()
 		sess.result = &llm.ResultMessage{Type: "result", Subtype: "success", StopReason: "end_turn"}
+		sess.setRootIntent(validSuccessCompletionIntent())
 		sess.statusCh <- agentStatusSuccess
 		return sess, nil
 	}
@@ -649,7 +645,7 @@ func TestImplementationReviewCompositeResumeReusesResumesAndFallsBackFresh(t *te
 				env = []string{"TEST_RESUME=1"}
 			}
 			return []string{"mock-reviewer"}, env, &ports.SessionOpts{
-				ProviderName: "codex", ResolvedModel: "model-a",
+				ProviderName: "codex", Model: "model-a",
 			}, nil
 		},
 		Observer: observe.New(false, "", false, "", false, "test"),

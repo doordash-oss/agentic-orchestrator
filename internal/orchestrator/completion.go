@@ -156,9 +156,8 @@ func (o *Orchestrator) MarkFailed(featureID, failureType, errMsg string) error {
 //  3. emit PhaseCompleted with err.
 //  4. markFailedWithEvent(reported failure type, defaulting to session crash).
 func (o *Orchestrator) onKBCompleted(featureID string, input PhaseCompletionInput) error {
-	// PHASE2(kb repo resolution): feature resume completions carry RepoName
-	// on the input; main resolves via the live session manager. Prefer the
-	// feature-supplied RepoName, then main's resolver.
+	// Resolve the repo name input-first (resume completions carry RepoName),
+	// then via the live session manager for sessions that do not.
 	repoName := input.RepoName
 	if repoName == "" {
 		repoName = o.repoNameForKBSession(input.SessionID)

@@ -149,6 +149,93 @@ func (e CreateFeatureMutationRequestRiskLevel) Valid() bool {
 	}
 }
 
+// Defines values for ErrorClass.
+const (
+	ErrorClassBlocking    ErrorClass = "blocking"
+	ErrorClassNeedsAction ErrorClass = "needs_action"
+	ErrorClassWarning     ErrorClass = "warning"
+)
+
+// Valid indicates whether the value is a known member of the ErrorClass enum.
+func (e ErrorClass) Valid() bool {
+	switch e {
+	case ErrorClassBlocking:
+		return true
+	case ErrorClassNeedsAction:
+		return true
+	case ErrorClassWarning:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for FeatureAction.
+const (
+	FeatureActionCleanup            FeatureAction = "cleanup"
+	FeatureActionDelete             FeatureAction = "delete"
+	FeatureActionDiscard            FeatureAction = "discard"
+	FeatureActionMarkDone           FeatureAction = "mark-done"
+	FeatureActionMerge              FeatureAction = "merge"
+	FeatureActionNeedUserInput      FeatureAction = "need-user-input"
+	FeatureActionNeedUserInputDraft FeatureAction = "need-user-input-draft"
+	FeatureActionPauseStop          FeatureAction = "pause-stop"
+	FeatureActionPublish            FeatureAction = "publish"
+	FeatureActionRebase             FeatureAction = "rebase"
+	FeatureActionRefactor           FeatureAction = "refactor"
+	FeatureActionRestart            FeatureAction = "restart"
+	FeatureActionResume             FeatureAction = "resume"
+	FeatureActionRetry              FeatureAction = "retry"
+	FeatureActionReviewFeedback     FeatureAction = "review-feedback"
+	FeatureActionRewind             FeatureAction = "rewind"
+	FeatureActionSetup              FeatureAction = "setup"
+	FeatureActionStart              FeatureAction = "start"
+)
+
+// Valid indicates whether the value is a known member of the FeatureAction enum.
+func (e FeatureAction) Valid() bool {
+	switch e {
+	case FeatureActionCleanup:
+		return true
+	case FeatureActionDelete:
+		return true
+	case FeatureActionDiscard:
+		return true
+	case FeatureActionMarkDone:
+		return true
+	case FeatureActionMerge:
+		return true
+	case FeatureActionNeedUserInput:
+		return true
+	case FeatureActionNeedUserInputDraft:
+		return true
+	case FeatureActionPauseStop:
+		return true
+	case FeatureActionPublish:
+		return true
+	case FeatureActionRebase:
+		return true
+	case FeatureActionRefactor:
+		return true
+	case FeatureActionRestart:
+		return true
+	case FeatureActionResume:
+		return true
+	case FeatureActionRetry:
+		return true
+	case FeatureActionReviewFeedback:
+		return true
+	case FeatureActionRewind:
+		return true
+	case FeatureActionSetup:
+		return true
+	case FeatureActionStart:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for FeatureConfigAutomaticReviewMode.
 const (
 	FeatureConfigAutomaticReviewModeDefault  FeatureConfigAutomaticReviewMode = "default"
@@ -389,72 +476,6 @@ func (e TaskActivityState) Valid() bool {
 	}
 }
 
-// Defines values for FeatureAction.
-const (
-	FeatureActionCleanup            FeatureAction = "cleanup"
-	FeatureActionDelete             FeatureAction = "delete"
-	FeatureActionDiscard            FeatureAction = "discard"
-	FeatureActionMarkDone           FeatureAction = "mark-done"
-	FeatureActionMerge              FeatureAction = "merge"
-	FeatureActionNeedUserInput      FeatureAction = "need-user-input"
-	FeatureActionNeedUserInputDraft FeatureAction = "need-user-input-draft"
-	FeatureActionPauseStop          FeatureAction = "pause-stop"
-	FeatureActionPublish            FeatureAction = "publish"
-	FeatureActionRebase             FeatureAction = "rebase"
-	FeatureActionRefactor           FeatureAction = "refactor"
-	FeatureActionRestart            FeatureAction = "restart"
-	FeatureActionResume             FeatureAction = "resume"
-	FeatureActionRetry              FeatureAction = "retry"
-	FeatureActionReviewFeedback     FeatureAction = "review-feedback"
-	FeatureActionRewind             FeatureAction = "rewind"
-	FeatureActionSetup              FeatureAction = "setup"
-	FeatureActionStart              FeatureAction = "start"
-)
-
-// Valid indicates whether the value is a known member of the FeatureAction enum.
-func (e FeatureAction) Valid() bool {
-	switch e {
-	case FeatureActionCleanup:
-		return true
-	case FeatureActionDelete:
-		return true
-	case FeatureActionDiscard:
-		return true
-	case FeatureActionMarkDone:
-		return true
-	case FeatureActionMerge:
-		return true
-	case FeatureActionNeedUserInput:
-		return true
-	case FeatureActionNeedUserInputDraft:
-		return true
-	case FeatureActionPauseStop:
-		return true
-	case FeatureActionPublish:
-		return true
-	case FeatureActionRebase:
-		return true
-	case FeatureActionRefactor:
-		return true
-	case FeatureActionRestart:
-		return true
-	case FeatureActionResume:
-		return true
-	case FeatureActionRetry:
-		return true
-	case FeatureActionReviewFeedback:
-		return true
-	case FeatureActionRewind:
-		return true
-	case FeatureActionSetup:
-		return true
-	case FeatureActionStart:
-		return true
-	default:
-		return false
-	}
-}
-
 // Defines values for FeatureSubaction.
 const (
 	FeatureSubactionDescription FeatureSubaction = "description"
@@ -638,72 +659,6 @@ func (e RunFeatureActionParamsXAgenticoClient) Valid() bool {
 	}
 }
 
-// Defines values for RunFeatureActionParamsAction.
-const (
-	RunFeatureActionParamsActionCleanup            RunFeatureActionParamsAction = "cleanup"
-	RunFeatureActionParamsActionDelete             RunFeatureActionParamsAction = "delete"
-	RunFeatureActionParamsActionDiscard            RunFeatureActionParamsAction = "discard"
-	RunFeatureActionParamsActionMarkDone           RunFeatureActionParamsAction = "mark-done"
-	RunFeatureActionParamsActionMerge              RunFeatureActionParamsAction = "merge"
-	RunFeatureActionParamsActionNeedUserInput      RunFeatureActionParamsAction = "need-user-input"
-	RunFeatureActionParamsActionNeedUserInputDraft RunFeatureActionParamsAction = "need-user-input-draft"
-	RunFeatureActionParamsActionPauseStop          RunFeatureActionParamsAction = "pause-stop"
-	RunFeatureActionParamsActionPublish            RunFeatureActionParamsAction = "publish"
-	RunFeatureActionParamsActionRebase             RunFeatureActionParamsAction = "rebase"
-	RunFeatureActionParamsActionRefactor           RunFeatureActionParamsAction = "refactor"
-	RunFeatureActionParamsActionRestart            RunFeatureActionParamsAction = "restart"
-	RunFeatureActionParamsActionResume             RunFeatureActionParamsAction = "resume"
-	RunFeatureActionParamsActionRetry              RunFeatureActionParamsAction = "retry"
-	RunFeatureActionParamsActionReviewFeedback     RunFeatureActionParamsAction = "review-feedback"
-	RunFeatureActionParamsActionRewind             RunFeatureActionParamsAction = "rewind"
-	RunFeatureActionParamsActionSetup              RunFeatureActionParamsAction = "setup"
-	RunFeatureActionParamsActionStart              RunFeatureActionParamsAction = "start"
-)
-
-// Valid indicates whether the value is a known member of the RunFeatureActionParamsAction enum.
-func (e RunFeatureActionParamsAction) Valid() bool {
-	switch e {
-	case RunFeatureActionParamsActionCleanup:
-		return true
-	case RunFeatureActionParamsActionDelete:
-		return true
-	case RunFeatureActionParamsActionDiscard:
-		return true
-	case RunFeatureActionParamsActionMarkDone:
-		return true
-	case RunFeatureActionParamsActionMerge:
-		return true
-	case RunFeatureActionParamsActionNeedUserInput:
-		return true
-	case RunFeatureActionParamsActionNeedUserInputDraft:
-		return true
-	case RunFeatureActionParamsActionPauseStop:
-		return true
-	case RunFeatureActionParamsActionPublish:
-		return true
-	case RunFeatureActionParamsActionRebase:
-		return true
-	case RunFeatureActionParamsActionRefactor:
-		return true
-	case RunFeatureActionParamsActionRestart:
-		return true
-	case RunFeatureActionParamsActionResume:
-		return true
-	case RunFeatureActionParamsActionRetry:
-		return true
-	case RunFeatureActionParamsActionReviewFeedback:
-		return true
-	case RunFeatureActionParamsActionRewind:
-		return true
-	case RunFeatureActionParamsActionSetup:
-		return true
-	case RunFeatureActionParamsActionStart:
-		return true
-	default:
-		return false
-	}
-}
-
 // Defines values for RunFeatureSubactionParamsXAgenticoClient.
 const (
 	RunFeatureSubactionParamsXAgenticoClientLocal RunFeatureSubactionParamsXAgenticoClient = "local"
@@ -713,72 +668,6 @@ const (
 func (e RunFeatureSubactionParamsXAgenticoClient) Valid() bool {
 	switch e {
 	case RunFeatureSubactionParamsXAgenticoClientLocal:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for RunFeatureSubactionParamsAction.
-const (
-	RunFeatureSubactionParamsActionCleanup            RunFeatureSubactionParamsAction = "cleanup"
-	RunFeatureSubactionParamsActionDelete             RunFeatureSubactionParamsAction = "delete"
-	RunFeatureSubactionParamsActionDiscard            RunFeatureSubactionParamsAction = "discard"
-	RunFeatureSubactionParamsActionMarkDone           RunFeatureSubactionParamsAction = "mark-done"
-	RunFeatureSubactionParamsActionMerge              RunFeatureSubactionParamsAction = "merge"
-	RunFeatureSubactionParamsActionNeedUserInput      RunFeatureSubactionParamsAction = "need-user-input"
-	RunFeatureSubactionParamsActionNeedUserInputDraft RunFeatureSubactionParamsAction = "need-user-input-draft"
-	RunFeatureSubactionParamsActionPauseStop          RunFeatureSubactionParamsAction = "pause-stop"
-	RunFeatureSubactionParamsActionPublish            RunFeatureSubactionParamsAction = "publish"
-	RunFeatureSubactionParamsActionRebase             RunFeatureSubactionParamsAction = "rebase"
-	RunFeatureSubactionParamsActionRefactor           RunFeatureSubactionParamsAction = "refactor"
-	RunFeatureSubactionParamsActionRestart            RunFeatureSubactionParamsAction = "restart"
-	RunFeatureSubactionParamsActionResume             RunFeatureSubactionParamsAction = "resume"
-	RunFeatureSubactionParamsActionRetry              RunFeatureSubactionParamsAction = "retry"
-	RunFeatureSubactionParamsActionReviewFeedback     RunFeatureSubactionParamsAction = "review-feedback"
-	RunFeatureSubactionParamsActionRewind             RunFeatureSubactionParamsAction = "rewind"
-	RunFeatureSubactionParamsActionSetup              RunFeatureSubactionParamsAction = "setup"
-	RunFeatureSubactionParamsActionStart              RunFeatureSubactionParamsAction = "start"
-)
-
-// Valid indicates whether the value is a known member of the RunFeatureSubactionParamsAction enum.
-func (e RunFeatureSubactionParamsAction) Valid() bool {
-	switch e {
-	case RunFeatureSubactionParamsActionCleanup:
-		return true
-	case RunFeatureSubactionParamsActionDelete:
-		return true
-	case RunFeatureSubactionParamsActionDiscard:
-		return true
-	case RunFeatureSubactionParamsActionMarkDone:
-		return true
-	case RunFeatureSubactionParamsActionMerge:
-		return true
-	case RunFeatureSubactionParamsActionNeedUserInput:
-		return true
-	case RunFeatureSubactionParamsActionNeedUserInputDraft:
-		return true
-	case RunFeatureSubactionParamsActionPauseStop:
-		return true
-	case RunFeatureSubactionParamsActionPublish:
-		return true
-	case RunFeatureSubactionParamsActionRebase:
-		return true
-	case RunFeatureSubactionParamsActionRefactor:
-		return true
-	case RunFeatureSubactionParamsActionRestart:
-		return true
-	case RunFeatureSubactionParamsActionResume:
-		return true
-	case RunFeatureSubactionParamsActionRetry:
-		return true
-	case RunFeatureSubactionParamsActionReviewFeedback:
-		return true
-	case RunFeatureSubactionParamsActionRewind:
-		return true
-	case RunFeatureSubactionParamsActionSetup:
-		return true
-	case RunFeatureSubactionParamsActionStart:
 		return true
 	default:
 		return false
@@ -1431,18 +1320,82 @@ type DiscardChildResponse struct {
 // EffortConfig defines model for EffortConfig.
 type EffortConfig = config.EffortConfig
 
-// Error defines model for Error.
+// Error Canonical catalog-rendered error.
 type Error struct {
-	Code    string                 `json:"code"`
-	Message string                 `json:"message"`
-	Status  int                    `json:"status"`
-	Target  map[string]interface{} `json:"target,omitempty"`
+	// Class Severity treatment class.
+	Class ErrorClass `json:"class"`
+
+	// Code Stable snake_case catalog code.
+	Code string `json:"code"`
+
+	// Context Typed context blocks the error code declared.
+	Context *ErrorContext `json:"context,omitempty"`
+
+	// Diagnostics Raw detail text, deepest disclosure only.
+	Diagnostics string `json:"diagnostics,omitempty"`
+
+	// Remediation Catalog-authored next step for an error code.
+	Remediation *ErrorRemediation `json:"remediation,omitempty"`
+
+	// Summary Catalog-authored summary, with request-scoped facts interpolated as human text; never empty.
+	Summary string `json:"summary"`
+
+	// Title Catalog-authored title; never empty.
+	Title string `json:"title"`
+}
+
+// ErrorClass Severity treatment class.
+type ErrorClass string
+
+// ErrorCommandContext Failed command a code references.
+type ErrorCommandContext struct {
+	ExitCode int      `json:"exit_code,omitempty"`
+	LogPaths []string `json:"log_paths,omitempty"`
+}
+
+// ErrorContext Typed context blocks the error code declared.
+type ErrorContext struct {
+	// Command Failed command a code references.
+	Command *ErrorCommandContext `json:"command,omitempty"`
+
+	// Phase Phase a code references.
+	Phase        *ErrorPhaseContext       `json:"phase,omitempty"`
+	Repositories []ErrorRepositoryContext `json:"repositories,omitempty"`
+}
+
+// ErrorPhaseContext Phase a code references.
+type ErrorPhaseContext struct {
+	Iteration int    `json:"iteration,omitempty"`
+	Name      string `json:"name"`
+}
+
+// ErrorRemediation Catalog-authored next step for an error code.
+type ErrorRemediation struct {
+	// Actions Referenced feature actions the user can run next.
+	Actions []FeatureAction `json:"actions,omitempty"`
+	Hint    string          `json:"hint,omitempty"`
+}
+
+// ErrorRepositoryContext Repository a code references.
+type ErrorRepositoryContext struct {
+	Branch          string   `json:"branch,omitempty"`
+	CandidateSha    string   `json:"candidate_sha,omitempty"`
+	ChildHeadSha    string   `json:"child_head_sha,omitempty"`
+	ConflictFiles   []string `json:"conflict_files,omitempty"`
+	DirtyFiles      []string `json:"dirty_files,omitempty"`
+	ExpectedRefSha  string   `json:"expected_ref_sha,omitempty"`
+	MergeHead       string   `json:"merge_head,omitempty"`
+	Name            string   `json:"name"`
+	ObservedSha     string   `json:"observed_sha,omitempty"`
+	ParentAnchorSha string   `json:"parent_anchor_sha,omitempty"`
 }
 
 // ErrorResponse defines model for ErrorResponse.
 type ErrorResponse struct {
 	APIVersion string `json:"api_version"`
-	Error      Error  `json:"error"`
+
+	// Error Canonical catalog-rendered error.
+	Error Error `json:"error"`
 }
 
 // Failure defines model for Failure.
@@ -1450,6 +1403,9 @@ type Failure struct {
 	Message string `json:"message,omitempty"`
 	Type    string `json:"type,omitempty"`
 }
+
+// FeatureAction Feature lifecycle action identifier.
+type FeatureAction string
 
 // FeatureActionResult defines model for FeatureActionResult.
 type FeatureActionResult struct {
@@ -2980,9 +2936,6 @@ type WorkspaceRootReadiness struct {
 // ArtifactID defines model for ArtifactID.
 type ArtifactID = string
 
-// FeatureAction defines model for FeatureAction.
-type FeatureAction string
-
 // FeatureID defines model for FeatureID.
 type FeatureID = string
 
@@ -3143,9 +3096,6 @@ type RunFeatureActionParams struct {
 // RunFeatureActionParamsXAgenticoClient defines parameters for RunFeatureAction.
 type RunFeatureActionParamsXAgenticoClient string
 
-// RunFeatureActionParamsAction defines parameters for RunFeatureAction.
-type RunFeatureActionParamsAction string
-
 // RunFeatureSubactionJSONBody defines parameters for RunFeatureSubaction.
 type RunFeatureSubactionJSONBody map[string]interface{}
 
@@ -3157,9 +3107,6 @@ type RunFeatureSubactionParams struct {
 
 // RunFeatureSubactionParamsXAgenticoClient defines parameters for RunFeatureSubaction.
 type RunFeatureSubactionParamsXAgenticoClient string
-
-// RunFeatureSubactionParamsAction defines parameters for RunFeatureSubaction.
-type RunFeatureSubactionParamsAction string
 
 // RunFeatureSubactionParamsSubaction defines parameters for RunFeatureSubaction.
 type RunFeatureSubactionParamsSubaction string

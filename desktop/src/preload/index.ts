@@ -21,6 +21,7 @@ limitations under the License.
  * or process material in scope.
  */
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
+import { CANONICAL_ERROR_MESSAGE_PREFIX } from '../shared/errors';
 import {
   AppEventSchema,
   AppRouteEventSchema,
@@ -94,9 +95,23 @@ async function call<T>(channel: string, ...args: unknown[]): Promise<T> {
     throw new Error('E_IPC_PROTOCOL: The main process returned an unrecognized response.');
   }
   if (!parsed.data.ok) {
-    const { code, message, remediation, details } = parsed.data.error;
+    const envelopeError = parsed.data.error;
+    if ('title' in envelopeError) {
+      // A server-emitted canonical error: the catalog owns the text, so the
+      // object crosses untouched. Custom Error properties do not survive the
+      // context bridge, so the canonical object also rides in the message
+      // behind a sentinel prefix; the renderer's parser recovers it there.
+      const error = new Error(CANONICAL_ERROR_MESSAGE_PREFIX + JSON.stringify(envelopeError));
+      Object.assign(error, {
+        code: envelopeError.code,
+        remediation: envelopeError.remediation?.hint,
+        canonical: envelopeError,
+      });
+      throw error;
+    }
+    const { code, message, remediation } = envelopeError;
     const error = new Error(`${code}: ${message}${remediation ? ` ${remediation}` : ''}`);
-    Object.assign(error, { code, remediation, details });
+    Object.assign(error, { code, remediation });
     throw error;
   }
   return parsed.data.value as T;

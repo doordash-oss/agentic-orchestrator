@@ -29,6 +29,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 )
@@ -318,29 +319,29 @@ func TestPermissionAnswerRejectsLegacyAndMissingRememberScope(t *testing.T) {
 		DisableHostValidation: true,
 	})
 	tests := []struct {
-		name        string
-		body        map[string]string
-		wantMessage string
+		name            string
+		body            map[string]string
+		wantDiagnostics string
 	}{
 		{
-			name:        "legacy allow decision",
-			body:        map[string]string{requestIDKey: fixturePermissionRequestID, decisionKey: "allow"},
-			wantMessage: errMessageInvalidDecision,
+			name:            "legacy allow decision",
+			body:            map[string]string{requestIDKey: fixturePermissionRequestID, decisionKey: "allow"},
+			wantDiagnostics: errMessageInvalidDecision,
 		},
 		{
-			name:        "uppercase allow once decision",
-			body:        map[string]string{requestIDKey: fixturePermissionRequestID, decisionKey: "ALLOW_ONCE"},
-			wantMessage: errMessageInvalidDecision,
+			name:            "uppercase allow once decision",
+			body:            map[string]string{requestIDKey: fixturePermissionRequestID, decisionKey: "ALLOW_ONCE"},
+			wantDiagnostics: errMessageInvalidDecision,
 		},
 		{
-			name:        "whitespace allow once decision",
-			body:        map[string]string{requestIDKey: fixturePermissionRequestID, decisionKey: " allow_once "},
-			wantMessage: errMessageInvalidDecision,
+			name:            "whitespace allow once decision",
+			body:            map[string]string{requestIDKey: fixturePermissionRequestID, decisionKey: " allow_once "},
+			wantDiagnostics: errMessageInvalidDecision,
 		},
 		{
-			name:        "allow remember without scope",
-			body:        map[string]string{requestIDKey: fixturePermissionRequestID, decisionKey: decisionAllowRemember, rememberPatternKey: testRememberPattern},
-			wantMessage: "remember_scope is required for allow_remember",
+			name:            "allow remember without scope",
+			body:            map[string]string{requestIDKey: fixturePermissionRequestID, decisionKey: decisionAllowRemember, rememberPatternKey: testRememberPattern},
+			wantDiagnostics: "remember_scope is required for allow_remember",
 		},
 		{
 			name:        "unknown auto approve scope",
@@ -377,8 +378,8 @@ func TestPermissionAnswerRejectsLegacyAndMissingRememberScope(t *testing.T) {
 			if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 				t.Fatalf("decode response: %v", err)
 			}
-			if body.Error.Code != errCodeBadRequest || body.Error.Message != tc.wantMessage {
-				t.Fatalf("error = %+v, want bad_request %q", body.Error, tc.wantMessage)
+			if body.Error.Code != string(errcat.BadRequest) || body.Error.Diagnostics != tc.wantDiagnostics {
+				t.Fatalf("error = %+v, want bad_request with diagnostics %q", body.Error, tc.wantDiagnostics)
 			}
 		})
 	}
@@ -497,8 +498,14 @@ func TestRefactorActionIsKnownAndUnknownActionsStayUnknown(t *testing.T) {
 		if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 			t.Fatalf("decode response: %v", err)
 		}
-		if body.Error.Code != errCodeRefactorParentNotFound {
-			t.Fatalf("error code = %q; want %q", body.Error.Code, errCodeRefactorParentNotFound)
+		if body.Error.Code != string(errcat.ParentNotFound) {
+			t.Fatalf("error code = %q; want %q", body.Error.Code, errcat.ParentNotFound)
+		}
+		if body.Error.Title != "Parent feature not found" || body.Error.Summary != "The parent feature was not found." {
+			t.Fatalf("error = %+v; want the parent-not-found catalog text", body.Error)
+		}
+		if !strings.Contains(body.Error.Diagnostics, "feat-1") {
+			t.Fatalf("diagnostics = %q; want it to name the missing parent feat-1", body.Error.Diagnostics)
 		}
 	})
 
@@ -781,48 +788,67 @@ func TestRefactorActionTypedErrorCodes(t *testing.T) {
 		UntrackedTotal: 1,
 	}}}
 	tests := []struct {
-		name       string
-		err        error
-		wantStatus int
-		wantCode   string
-		wantTarget map[string]any
+		name        string
+		err         error
+		wantStatus  int
+		wantCode    string
+		wantClass   ErrorClass
+		wantTitle   string
+		wantSummary string
 	}{
 		{
-			name:       "parent not found",
-			err:        fmt.Errorf("%w: feat-1", feature.ErrRefactorParentNotFound),
-			wantStatus: http.StatusNotFound,
-			wantCode:   errCodeRefactorParentNotFound,
+			name:        "parent not found",
+			err:         fmt.Errorf("%w: feat-1", feature.ErrRefactorParentNotFound),
+			wantStatus:  http.StatusNotFound,
+			wantCode:    string(errcat.ParentNotFound),
+			wantClass:   ErrorClass(errcat.ClassBlocking),
+			wantTitle:   "Parent feature not found",
+			wantSummary: "The parent feature was not found.",
 		},
 		{
-			name:       "parent is child",
-			err:        fmt.Errorf("%w: feat-1", feature.ErrRefactorParentIsChild),
-			wantStatus: http.StatusConflict,
-			wantCode:   errCodeRefactorParentIsChild,
+			name:        "parent is child",
+			err:         fmt.Errorf("%w: feat-1", feature.ErrRefactorParentIsChild),
+			wantStatus:  http.StatusConflict,
+			wantCode:    string(errcat.ParentIsChild),
+			wantClass:   ErrorClass(errcat.ClassBlocking),
+			wantTitle:   "Parent is a child pass",
+			wantSummary: "A child pass cannot be the parent of another pass.",
 		},
 		{
-			name:       "parent status ineligible",
-			err:        fmt.Errorf("%w: feat-1 is creating", feature.ErrRefactorParentStatusIneligible),
-			wantStatus: http.StatusConflict,
-			wantCode:   errCodeRefactorParentStatusIneligible,
+			name:        "parent status ineligible",
+			err:         fmt.Errorf("%w: feat-1 is creating", feature.ErrRefactorParentStatusIneligible),
+			wantStatus:  http.StatusConflict,
+			wantCode:    string(errcat.ParentStatusIneligible),
+			wantClass:   ErrorClass(errcat.ClassBlocking),
+			wantTitle:   "Parent status not eligible",
+			wantSummary: "The parent feature's status does not allow launching a pass right now.",
 		},
 		{
-			name:       "active child exists",
-			err:        &feature.ActiveChildExistsError{ParentID: "feat-1", ChildID: "child-9"},
-			wantStatus: http.StatusConflict,
-			wantCode:   errCodeActiveChildExists,
-			wantTarget: map[string]any{"parent_id": "feat-1", "child_id": "child-9"},
+			name:        "active child exists",
+			err:         &feature.ActiveChildExistsError{ParentID: "feat-1", ChildID: "child-9"},
+			wantStatus:  http.StatusConflict,
+			wantCode:    string(errcat.ActiveChildExists),
+			wantClass:   ErrorClass(errcat.ClassNeedsAction),
+			wantTitle:   "Active child pass exists",
+			wantSummary: `The parent feature "feat-1" already has an active child pass "child-9".`,
 		},
 		{
-			name:       "parent worktrees dirty",
-			err:        dirtyErr,
-			wantStatus: http.StatusConflict,
-			wantCode:   errCodeParentWorktreesDirty,
+			name:        "parent worktrees dirty",
+			err:         dirtyErr,
+			wantStatus:  http.StatusConflict,
+			wantCode:    string(errcat.ParentWorktreesDirty),
+			wantClass:   ErrorClass(errcat.ClassNeedsAction),
+			wantTitle:   "Parent worktrees are dirty",
+			wantSummary: "The parent feature's worktrees have uncommitted changes.",
 		},
 		{
-			name:       "child execution blocked",
-			err:        fmt.Errorf("%w: child-9", feature.ErrChildExecutionBlocked),
-			wantStatus: http.StatusConflict,
-			wantCode:   errCodeChildExecutionBlocked,
+			name:        "child execution blocked",
+			err:         fmt.Errorf("%w: child-9", feature.ErrChildExecutionBlocked),
+			wantStatus:  http.StatusConflict,
+			wantCode:    string(errcat.ChildExecutionBlocked),
+			wantClass:   ErrorClass(errcat.ClassBlocking),
+			wantTitle:   "Child passes are not runnable",
+			wantSummary: "Child passes are driven by their parent; they cannot be started directly.",
 		},
 	}
 	for _, tc := range tests {
@@ -852,22 +878,21 @@ func TestRefactorActionTypedErrorCodes(t *testing.T) {
 			if body.Error.Code != tc.wantCode {
 				t.Fatalf("error code = %q; want %q", body.Error.Code, tc.wantCode)
 			}
-			if body.Error.Status != tc.wantStatus {
-				t.Fatalf("error status = %d; want %d", body.Error.Status, tc.wantStatus)
+			if body.Error.Class != tc.wantClass {
+				t.Fatalf("error class = %q; want %q", body.Error.Class, tc.wantClass)
 			}
-			for key, want := range tc.wantTarget {
-				if got := body.Error.Target[key]; got != want {
-					t.Fatalf("target[%q] = %v; want %v", key, got, want)
-				}
+			if body.Error.Title != tc.wantTitle || body.Error.Summary != tc.wantSummary {
+				t.Fatalf("error = %+v; want title %q and summary %q", body.Error, tc.wantTitle, tc.wantSummary)
 			}
 		})
 	}
 }
 
-// TestRefactorActionDirtyErrorCarriesDiagnostics verifies the dirty-worktree
-// rejection serializes the captured per-repository diagnostics into the error
-// target payload.
-func TestRefactorActionDirtyErrorCarriesDiagnostics(t *testing.T) {
+// TestRefactorActionDirtyErrorCarriesRepositoryContext verifies the
+// dirty-worktree rejection serializes the captured per-repository file lists
+// into the typed repositories context block; titles and summaries never carry
+// the dirty data.
+func TestRefactorActionDirtyErrorCarriesRepositoryContext(t *testing.T) {
 	t.Parallel()
 
 	target := &refactorMutationTarget{
@@ -902,25 +927,26 @@ func TestRefactorActionDirtyErrorCarriesDiagnostics(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if body.Error.Code != errCodeParentWorktreesDirty {
-		t.Fatalf("error code = %q; want %q", body.Error.Code, errCodeParentWorktreesDirty)
+	if body.Error.Code != string(errcat.ParentWorktreesDirty) {
+		t.Fatalf("error code = %q; want %q", body.Error.Code, errcat.ParentWorktreesDirty)
 	}
-	repos, ok := body.Error.Target["repos"].([]any)
-	if !ok || len(repos) != 1 {
-		t.Fatalf("target.repos = %v; want one repository", body.Error.Target["repos"])
+	if body.Error.Class != ErrorClass(errcat.ClassNeedsAction) {
+		t.Fatalf("error class = %q; want %q", body.Error.Class, errcat.ClassNeedsAction)
 	}
-	repo := repos[0].(map[string]any)
-	if repo["repo"] != repoNameSelf || repo["path"] != testRepoPath {
-		t.Fatalf("repo identity = %v/%v; want %s/%s", repo["repo"], repo["path"], repoNameSelf, testRepoPath)
+	if body.Error.Title != "Parent worktrees are dirty" || body.Error.Summary != "The parent feature's worktrees have uncommitted changes." {
+		t.Fatalf("error = %+v; want the dirty-worktree catalog text without file lists", body.Error)
 	}
-	if got := repo["staged_total"]; got != float64(3) {
-		t.Fatalf("staged_total = %v; want 3", got)
+	if body.Error.Context == nil || len(body.Error.Context.Repositories) != 1 {
+		t.Fatalf("error context = %+v; want one repository", body.Error.Context)
 	}
-	if got := repo["staged"].([]any); len(got) != 1 || got[0] != "staged.go" {
-		t.Fatalf("staged = %v; want [staged.go]", got)
+	repo := body.Error.Context.Repositories[0]
+	if repo.Name != repoNameSelf {
+		t.Fatalf("repo name = %q; want %q", repo.Name, repoNameSelf)
 	}
-	if got := repo["untracked"].([]any); len(got) != 1 || got[0] != "new.go" {
-		t.Fatalf("untracked = %v; want [new.go]", got)
+	// Dirty files are staged, unstaged, and untracked concatenated in order.
+	wantDirty := []string{"staged.go", "unstaged.go", "new.go"}
+	if !slices.Equal(repo.DirtyFiles, wantDirty) {
+		t.Fatalf("dirty files = %v; want %v", repo.DirtyFiles, wantDirty)
 	}
 }
 
@@ -958,8 +984,8 @@ func TestStartResumeActionChildExecutionBlocked(t *testing.T) {
 				if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 					t.Fatalf("decode response: %v", err)
 				}
-				if body.Error.Code != errCodeChildExecutionBlocked {
-					t.Fatalf("error code = %q; want %q", body.Error.Code, errCodeChildExecutionBlocked)
+				if body.Error.Code != string(errcat.ChildExecutionBlocked) {
+					t.Fatalf("error code = %q; want %q", body.Error.Code, errcat.ChildExecutionBlocked)
 				}
 			})
 		}
@@ -1224,8 +1250,7 @@ func jsonResponse(v any) (*http.Response, error) {
 
 // TestStartActionChildCapabilityErrors verifies the typed child
 // capability rejections surface through the action route as distinct
-// stable 409 machine codes carrying the feature/profile/repository
-// context.
+// stable 409 machine codes.
 func TestStartActionChildCapabilityErrors(t *testing.T) {
 	t.Parallel()
 
@@ -1237,12 +1262,12 @@ func TestStartActionChildCapabilityErrors(t *testing.T) {
 		{
 			name:     "blocked child",
 			err:      fmt.Errorf("%w: child-9", feature.ErrChildExecutionBlocked),
-			wantCode: errCodeChildExecutionBlocked,
+			wantCode: string(errcat.ChildExecutionBlocked),
 		},
 		{
 			name:     "settled closed child",
 			err:      fmt.Errorf("%w: child-9", feature.ErrChildExecutionClosed),
-			wantCode: errCodeChildRelationshipClosed,
+			wantCode: string(errcat.RelationshipClosed),
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1300,7 +1325,7 @@ func TestDeleteActionClosedChildReturnsRelationshipConflict(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if body.Error.Code != errCodeChildRelationshipClosed {
-		t.Fatalf("error code = %q, want %q", body.Error.Code, errCodeChildRelationshipClosed)
+	if body.Error.Code != string(errcat.RelationshipClosed) {
+		t.Fatalf("error code = %q, want %q", body.Error.Code, errcat.RelationshipClosed)
 	}
 }

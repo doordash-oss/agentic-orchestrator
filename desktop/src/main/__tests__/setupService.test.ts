@@ -17,7 +17,7 @@ limitations under the License.
 import { describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { SafeErrorException } from '../../shared/errors';
+import { CanonicalErrorException, SafeErrorException } from '../../shared/errors';
 import { ReadinessSnapshotSchema } from '../../shared/ipc';
 import type { ApiRequestInit, HttpResult } from '../gateway/runtimeGateway';
 import { SetupService, type SetupServiceDeps } from '../setup';
@@ -248,51 +248,108 @@ describe('SetupService.initRepository', () => {
     const { service, calls } = makeService(() => ({ status: 200, body: serverReadiness() }));
     await expect(
       service.initRepository({ path: '/work/space/x', consent: false as never }),
-    ).rejects.toMatchObject({ safe: { code: 'consent_required' } });
+    ).rejects.toMatchObject({
+      safe: { code: 'consent_required', remediation: expect.stringContaining('consent') },
+    });
     expect(calls).toHaveLength(0);
   });
 
-  it('maps structured server rejections to safe errors with concrete remediation', async () => {
-    const { service } = makeService(() => ({
+  it.each([
+    {
+      code: 'consent_required',
+      status: 400,
+      errorClass: 'needs_action',
+      title: 'Consent required',
+      summary: 'Explicit consent is required to initialize a repository.',
+      hint: 'Confirm the initialization consent, then retry.',
+    },
+    {
+      code: 'invalid_repository_path',
+      status: 400,
+      errorClass: 'blocking',
+      title: 'Invalid repository path',
+      summary: 'The repository path "/work/space/x" is not valid.',
+      hint: 'Choose an absolute folder inside a configured workspace root.',
+    },
+    {
+      code: 'path_outside_workspace_root',
+      status: 400,
+      errorClass: 'blocking',
+      title: 'Path outside workspace root',
+      summary: 'The path "/work/space/x" is not strictly inside a configured workspace root.',
+      hint: 'Choose a folder inside a workspace root, or add its parent as a root first.',
+    },
+    {
+      code: 'already_repository',
       status: 409,
-      body: {
-        api_version: 'v1',
-        error: {
-          code: 'already_repository',
-          message: 'the target is already a git repository',
-          status: 409,
+      errorClass: 'blocking',
+      title: 'Already a repository',
+      summary: 'The selected path is already a git repository.',
+      hint: 'Select the existing repository instead of initializing it.',
+    },
+    {
+      code: 'directory_not_empty',
+      status: 409,
+      errorClass: 'blocking',
+      title: 'Directory not empty',
+      summary: 'The directory is not empty and is not a git repository.',
+      hint: 'Choose an empty folder or an existing repository.',
+    },
+    {
+      code: 'not_ready',
+      status: 409,
+      errorClass: 'needs_action',
+      title: 'Runtime not ready',
+      summary: 'The runtime is not ready to create features: Unauthenticated; Missing executable.',
+      hint: 'Complete the outstanding setup steps, then try again.',
+    },
+  ])(
+    'maps the canonical $code rejection with its catalog remedy',
+    async ({ code, status, errorClass, title, summary, hint }) => {
+      const { service } = makeService(() => ({
+        status,
+        body: {
+          api_version: 'v1',
+          error: { code, class: errorClass, title, summary, remediation: { hint } },
         },
-      },
-    }));
-    await expect(
-      service.initRepository({ path: '/work/space/existing', consent: true }),
-    ).rejects.toMatchObject({
-      safe: {
-        code: 'already_repository',
-        remediation: expect.stringMatching(/select it directly/i),
-      },
-    });
-  });
+      }));
+      const failure = await service
+        .initRepository({ path: '/work/space/x', consent: true })
+        .catch((e: unknown) => e);
+      expect(failure).toBeInstanceOf(CanonicalErrorException);
+      const canonical = (failure as CanonicalErrorException).canonical;
+      expect(canonical.code).toBe(code);
+      expect(canonical.class).toBe(errorClass);
+      expect(canonical.title).toBe(title);
+      expect(canonical.summary).toBe(summary);
+      expect(canonical.remediation?.hint).toBe(hint);
+    },
+  );
 
-  it('redacts token or home-path material in server error messages', async () => {
+  it('redacts token or home-path material in canonical diagnostics', async () => {
     const { service } = makeService(() => ({
       status: 400,
       body: {
         api_version: 'v1',
         error: {
           code: 'invalid_repository_path',
-          message: 'bad path /Users/somebody/secret with Bearer tok-123',
-          status: 400,
+          class: 'blocking',
+          title: 'Invalid repository path',
+          summary: 'The repository path "/work/space/x" is not valid.',
+          remediation: { hint: 'Choose an absolute folder inside a configured workspace root.' },
+          diagnostics: 'bad path /Users/somebody/secret with Bearer tok-123',
         },
       },
     }));
     const failure = await service
       .initRepository({ path: '/work/space/x', consent: true })
-      .catch((err: unknown) => err as SafeErrorException);
-    expect(failure).toBeInstanceOf(SafeErrorException);
-    const raw = JSON.stringify((failure as SafeErrorException).safe);
-    expect(raw).not.toContain('/Users/somebody');
-    expect(raw).not.toContain('tok-123');
+      .catch((e: unknown) => e);
+    expect(failure).toBeInstanceOf(CanonicalErrorException);
+    const diagnostics = (failure as CanonicalErrorException).canonical.diagnostics ?? '';
+    expect(diagnostics).toContain('[path]');
+    expect(diagnostics).toContain('[redacted]');
+    expect(diagnostics).not.toContain('/Users/somebody');
+    expect(diagnostics).not.toContain('tok-123');
   });
 
   it('degrades to a generic safe error when the error body is unstructured', async () => {

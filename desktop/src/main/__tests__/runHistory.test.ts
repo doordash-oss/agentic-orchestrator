@@ -18,7 +18,7 @@ import { describe, expect, it } from 'vitest';
 import { RunHistoryService } from '../runHistory';
 
 describe('RunHistoryService', () => {
-  it('lists authentic run logs and maps a vanished file without claiming the run disappeared', async () => {
+  it('lists authentic run logs and maps a vanished file to canonical not_found', async () => {
     const service = new RunHistoryService({
       apiRequest: (path) => {
         if (path.endsWith('/logs')) {
@@ -39,7 +39,16 @@ describe('RunHistoryService', () => {
         }
         return Promise.resolve({
           status: 404,
-          body: { api_version: 'v1', error: { code: 'not_found', message: 'log not found' } },
+          body: {
+            api_version: 'v1',
+            error: {
+              code: 'not_found',
+              class: 'blocking',
+              title: 'Not found',
+              summary: 'The requested resource was not found.',
+              remediation: { hint: 'Refresh the view to see the current state, then try again.' },
+            },
+          },
         });
       },
     });
@@ -62,9 +71,7 @@ describe('RunHistoryService', () => {
         runNumber: 2,
         logId: 'log-vanished',
       }),
-    ).rejects.toMatchObject({
-      safe: { remediation: expect.stringContaining('This log is no longer available') },
-    });
+    ).rejects.toMatchObject({ canonical: { code: 'not_found', title: 'Not found' } });
   });
 
   it('maps the bounded authoritative live preview without exposing raw server fields', async () => {

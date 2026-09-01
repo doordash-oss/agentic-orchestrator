@@ -15,8 +15,9 @@ limitations under the License.
 */
 
 import { describe, expect, it, vi } from 'vitest';
-import { safeError, SafeErrorException } from '../../shared/errors';
+import { CanonicalErrorException, safeError, SafeErrorException } from '../../shared/errors';
 import type { HttpResult } from '../gateway/runtimeGateway';
+import { mapServerError } from '../serverClient';
 import { UploadService, UPLOAD_BYTE_LIMITS, type UploadServiceDeps } from '../uploads';
 
 function stageBody(reference: string, name: string): Record<string, unknown> {
@@ -107,25 +108,38 @@ describe('UploadService.stageFiles', () => {
   });
 
   it('maps a 413 request_too_large response to an actionable surface', async () => {
-    const apiUpload = vi.fn((): Promise<HttpResult> =>
-      Promise.resolve({
-        status: 413,
-        body: { error: { code: 'request_too_large', message: 'File exceeds limit.' } },
-      }),
-    );
+    const body = {
+      api_version: 'v1',
+      error: {
+        code: 'request_too_large',
+        class: 'blocking',
+        title: 'Request too large',
+        summary: 'The request body exceeds the size limit.',
+        remediation: { hint: 'Choose a smaller payload and retry.' },
+      },
+    };
+    const apiUpload = vi.fn((): Promise<HttpResult> => Promise.resolve({ status: 413, body }));
     const { service } = makeService(
       { apiUpload },
       { statFile: () => Promise.resolve({ size: UPLOAD_BYTE_LIMITS.image }) },
+    );
+
+    // The catalog-rendered rejection crosses as the canonical error with its
+    // own remediation; the per-file result carries its code and title text.
+    const mapped = mapServerError({ status: 413, body });
+    expect(mapped).toBeInstanceOf(CanonicalErrorException);
+    expect((mapped as CanonicalErrorException).canonical.code).toBe('request_too_large');
+    expect((mapped as CanonicalErrorException).canonical.remediation?.hint).toBe(
+      'Choose a smaller payload and retry.',
     );
 
     const result = await service.stageFiles('image', ['/shots/big.png']);
 
     expect(result.results[0]).toMatchObject({
       ok: false,
-      error: { code: 'request_too_large' },
+      name: 'big.png',
+      error: { code: 'E_UPLOAD', message: expect.stringContaining('request_too_large') },
     });
-    const failed = result.results[0];
-    expect(failed?.ok === false && failed.error.remediation).toContain('10 MiB');
   });
 
   it('refuses oversized files before any network work', async () => {

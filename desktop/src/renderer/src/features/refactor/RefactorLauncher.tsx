@@ -29,8 +29,9 @@ import type {
   FeatureSnapshot,
   RepositoryFileRef,
 } from '../../../../shared/ipc';
-import { parseIpcError, type WizardError } from '../../wizard/ipcError';
+import { ErrorSurface } from '../../components/ErrorSurface';
 import { useConnectionState } from '../../hooks';
+import { canonicalFromWizardError, parseIpcError, type WizardError } from '../../wizard/ipcError';
 import {
   isBlockingStagedItem,
   STAGED_ITEMS_BLOCK_SUBMIT,
@@ -231,10 +232,7 @@ export function RefactorLauncher({
   if (seed.phase === 'error')
     return (
       <section className="refactor-wizard" aria-label="Start refactor">
-        <div role="alert" className="create-form__error">
-          <b>{seed.error.code}</b>
-          <p>{seed.error.message}</p>
-        </div>
+        <ErrorSurface error={canonicalFromWizardError(seed.error)} variant="compact" />
         <button type="button" onClick={loadSeed}>
           Try again
         </button>
@@ -285,21 +283,12 @@ export function RefactorLauncher({
         })}
       </nav>
       {formError !== null ? (
-        <div ref={formErrorRef} tabIndex={-1} role="alert" className="create-form__error">
-          <b>{formError.code}</b>
-          <p>{formError.message}</p>
-          {formError.dirtyWorktrees?.map((repo, index) => (
-            <div key={`${repo.repo ?? 'repo'}:${index}`} className="create-form__error-detail">
-              <strong>{repo.repo ?? 'Repository'}</strong>
-              {repo.path === undefined ? null : <span> · {repo.path}</span>}
-              <p>
-                Staged {repo.stagedTotal ?? repo.staged?.length ?? 0} · Unstaged{' '}
-                {repo.unstagedTotal ?? repo.unstaged?.length ?? 0} · Untracked{' '}
-                {repo.untrackedTotal ?? repo.untracked?.length ?? 0}
-              </p>
-            </div>
-          ))}
-        </div>
+        <ErrorSurface
+          error={canonicalFromWizardError(formError)}
+          variant="compact"
+          rootRef={formErrorRef}
+          rootTabIndex={-1}
+        />
       ) : null}
 
       {currentStep === 'What' ? (

@@ -1177,26 +1177,7 @@ components:
       in: path
       required: true
       schema:
-        type: string
-        enum:
-          - setup
-          - start
-          - resume
-          - pause-stop
-          - restart
-          - publish
-          - merge
-          - rewind
-          - retry
-          - rebase
-          - need-user-input
-          - need-user-input-draft
-          - mark-done
-          - cleanup
-          - delete
-          - refactor
-          - review-feedback
-          - discard
+        $ref: "#/components/schemas/FeatureAction"
     FeatureSubaction:
       name: subaction
       in: path
@@ -1565,19 +1546,129 @@ components:
           type: string
         error:
           $ref: "#/components/schemas/Error"
+    FeatureAction:
+      type: string
+      description: Feature lifecycle action identifier.
+      enum:
+        - setup
+        - start
+        - resume
+        - pause-stop
+        - restart
+        - publish
+        - merge
+        - rewind
+        - retry
+        - rebase
+        - need-user-input
+        - need-user-input-draft
+        - mark-done
+        - cleanup
+        - delete
+        - refactor
+        - review-feedback
+        - discard
     Error:
       type: object
-      required: [code, message, status]
+      description: Canonical catalog-rendered error.
+      required: [code, class, title, summary]
       properties:
         code:
           type: string
-        message:
+          description: Stable snake_case catalog code.
+        class:
           type: string
-        status:
+          description: Severity treatment class.
+          enum: [blocking, needs_action, warning]
+        title:
+          type: string
+          description: Catalog-authored title; never empty.
+        summary:
+          type: string
+          description: Catalog-authored summary, with request-scoped facts interpolated as human text; never empty.
+        remediation:
+          x-go-type-skip-optional-pointer: false
+          $ref: "#/components/schemas/ErrorRemediation"
+        context:
+          x-go-type-skip-optional-pointer: false
+          $ref: "#/components/schemas/ErrorContext"
+        diagnostics:
+          type: string
+          description: Raw detail text, deepest disclosure only.
+    ErrorRemediation:
+      type: object
+      description: Catalog-authored next step for an error code.
+      properties:
+        hint:
+          type: string
+        actions:
+          type: array
+          description: Referenced feature actions the user can run next.
+          items:
+            $ref: "#/components/schemas/FeatureAction"
+    ErrorContext:
+      type: object
+      description: Typed context blocks the error code declared.
+      properties:
+        repositories:
+          type: array
+          items:
+            $ref: "#/components/schemas/ErrorRepositoryContext"
+        phase:
+          x-go-type-skip-optional-pointer: false
+          $ref: "#/components/schemas/ErrorPhaseContext"
+        command:
+          x-go-type-skip-optional-pointer: false
+          $ref: "#/components/schemas/ErrorCommandContext"
+    ErrorRepositoryContext:
+      type: object
+      description: Repository a code references.
+      required: [name]
+      properties:
+        name:
+          type: string
+        branch:
+          type: string
+        conflict_files:
+          type: array
+          items:
+            type: string
+        dirty_files:
+          type: array
+          items:
+            type: string
+        parent_anchor_sha:
+          type: string
+        expected_ref_sha:
+          type: string
+        child_head_sha:
+          type: string
+        candidate_sha:
+          type: string
+        merge_head:
+          type: string
+        observed_sha:
+          type: string
+    ErrorPhaseContext:
+      type: object
+      description: Phase a code references.
+      required: [name]
+      properties:
+        name:
+          type: string
+        iteration:
           type: integer
-        target:
-          type: object
-          additionalProperties: true
+          minimum: 0
+    ErrorCommandContext:
+      type: object
+      description: Failed command a code references.
+      properties:
+        exit_code:
+          type: integer
+        log_paths:
+          type: array
+          items:
+            type: string
     PermissionAnswerRequest:
       x-go-name: PermissionAnswerSchema
       type: object

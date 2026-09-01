@@ -76,15 +76,9 @@ const IMAGE_EXTENSIONS: ReadonlySet<string> = new Set(
   CREATION_IMAGE_FORMATS.map((format) => format.extension),
 );
 
-/** Concrete, safe next steps per structured server error code. */
-const UPLOAD_REMEDIES: Readonly<Record<string, string>> = {
-  request_too_large:
-    'Choose a smaller file: images are limited to 10 MiB and attachments to 25 MiB.',
-  bad_request:
-    'The server rejected this file. Images must be PNG, JPEG, GIF, or WebP; check the file and retry.',
-  unauthenticated: 'Reconnect to the server in Settings, then retry.',
-  unavailable: 'The server cannot stage uploads right now. Wait a moment, then retry.',
-};
+/** Client-side size pre-flight hint; server rejections carry catalog hints. */
+const UPLOAD_SIZE_HINT =
+  'Choose a smaller file: images are limited to 10 MiB and attachments to 25 MiB.';
 
 export class UploadService {
   constructor(private readonly deps: UploadServiceDeps) {}
@@ -143,7 +137,7 @@ export class UploadService {
         safeError(
           'request_too_large',
           `The file is larger than the ${kind === 'image' ? '10 MiB image' : '25 MiB attachment'} upload limit.`,
-          UPLOAD_REMEDIES.request_too_large,
+          UPLOAD_SIZE_HINT,
         ),
       );
     }
@@ -161,7 +155,7 @@ export class UploadService {
       body,
     );
     if (result.status < 200 || result.status >= 300) {
-      throw mapServerError(result, { remedyByCode: UPLOAD_REMEDIES });
+      throw mapServerError(result);
     }
     const staged = validateWithSchema(result.body, StageUploadResponseSchema);
     const serverKey = this.deps.serverKey();

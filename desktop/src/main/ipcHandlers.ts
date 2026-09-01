@@ -24,7 +24,7 @@ limitations under the License.
  * and always resolves to a typed { ok } envelope — exceptions never cross
  * the boundary unredacted.
  */
-import { toSafeError } from '../shared/errors';
+import { toEnvelopeError } from '../shared/errors';
 import { validateWithSchema } from '../shared/api/parse';
 import { assertNoPrototypePollution, assertWithinByteSize } from '../shared/sanitize';
 import {
@@ -297,7 +297,7 @@ function makeHandler(
       );
       return { ok: true, value: validateWithSchema(value, contract.response) };
     } catch (err) {
-      return { ok: false, error: toSafeError(err, 'E_INTERNAL') };
+      return { ok: false, error: toEnvelopeError(err, 'E_INTERNAL') };
     }
   };
 }

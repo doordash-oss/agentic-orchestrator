@@ -110,8 +110,12 @@ test('lifecycle passes: resume, retry, restart, rebase, refactor child', async (
     await expect(handle.page.getByRole('dialog', { name: 'Rebase' })).not.toBeVisible({
       timeout: 5_000,
     });
-    const rebaseError = seededCockpit.getByRole('alert').filter({ hasText: /rebase/ });
-    await expect(rebaseError).toBeVisible({ timeout: 30_000 });
+    // The up-to-date rejection renders as a catalog warning surface: a
+    // status, scoped past the cockpit's other live statuses by the code tag.
+    const rebaseNotice = seededCockpit
+      .getByRole('status')
+      .filter({ hasText: 'rebase_already_up_to_date' });
+    await expect(rebaseNotice).toBeVisible({ timeout: 30_000 });
     await expect(aftercare).toBeVisible({ timeout: 5_000 });
     transcript.step(
       'rebase card dispatched a direct launch with no modal; up-to-date notice rendered inline',

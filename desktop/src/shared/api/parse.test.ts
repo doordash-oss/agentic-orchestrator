@@ -17,6 +17,7 @@ limitations under the License.
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import {
+  CanonicalErrorResponseSchema,
   DIFF_SUMMARY_MAX_BYTES,
   HealthResponseSchema,
   parseServerJson,
@@ -309,5 +310,86 @@ describe('ServerFeatureSummarySchema bounded child history', () => {
     expect(parsed.success).toBe(true);
     expect(parsed.data?.child_history_total).toBe(12);
     expect(parsed.data?.child_history_truncated).toBe(true);
+  });
+});
+
+describe('CanonicalErrorResponseSchema', () => {
+  const canonicalError = {
+    code: 'parent_worktrees_dirty',
+    class: 'needs_action',
+    title: 'Parent worktrees are dirty',
+    summary: "The parent feature's worktrees have uncommitted changes.",
+    remediation: { hint: 'Commit or stash the listed changes in each repository, then retry.' },
+    context: {
+      repositories: [{ name: 'repo-a', branch: 'main', dirty_files: ['src/query.ts'] }],
+      phase: { name: 'implement', iteration: 2 },
+      command: { exit_code: 1, log_paths: ['logs/repo-a.log'] },
+    },
+    diagnostics: 'git status reported uncommitted changes',
+  };
+
+  it('accepts exactly the canonical shape and returns its fields', () => {
+    const parsed = CanonicalErrorResponseSchema.safeParse({
+      api_version: 'v1',
+      error: canonicalError,
+    });
+    expect(parsed.success).toBe(true);
+    expect(parsed.data?.api_version).toBe('v1');
+    expect(parsed.data?.error.code).toBe('parent_worktrees_dirty');
+    expect(parsed.data?.error.class).toBe('needs_action');
+    expect(parsed.data?.error.title).toBe('Parent worktrees are dirty');
+    expect(parsed.data?.error.summary).toBe(
+      "The parent feature's worktrees have uncommitted changes.",
+    );
+    expect(parsed.data?.error.remediation?.hint).toBe(
+      'Commit or stash the listed changes in each repository, then retry.',
+    );
+    expect(parsed.data?.error.context?.repositories?.[0]).toEqual({
+      name: 'repo-a',
+      branch: 'main',
+      dirty_files: ['src/query.ts'],
+    });
+    expect(parsed.data?.error.context?.phase).toEqual({ name: 'implement', iteration: 2 });
+    expect(parsed.data?.error.context?.command).toEqual({
+      exit_code: 1,
+      log_paths: ['logs/repo-a.log'],
+    });
+    expect(parsed.data?.error.diagnostics).toBe('git status reported uncommitted changes');
+  });
+
+  it('rejects the pre-canonical {code,message,status} error body', () => {
+    const parsed = CanonicalErrorResponseSchema.safeParse({
+      api_version: 'v1',
+      error: { code: 'conflict', message: 'review draft revision is stale', status: 409 },
+    });
+    expect(parsed.success).toBe(false);
+  });
+
+  it('rejects an unknown class value', () => {
+    const parsed = CanonicalErrorResponseSchema.safeParse({
+      api_version: 'v1',
+      error: { ...canonicalError, class: 'critical' },
+    });
+    expect(parsed.success).toBe(false);
+  });
+
+  it('rejects unknown extra properties on the error object', () => {
+    const parsed = CanonicalErrorResponseSchema.safeParse({
+      api_version: 'v1',
+      error: { ...canonicalError, target: 'feature-1' },
+    });
+    expect(parsed.success).toBe(false);
+  });
+
+  it('rejects a repositories entry missing name', () => {
+    const parsed = CanonicalErrorResponseSchema.safeParse({
+      api_version: 'v1',
+      error: {
+        ...canonicalError,
+        context: { repositories: [{ branch: 'main', dirty_files: ['src/query.ts'] }] },
+      },
+    });
+    expect(parsed.success).toBe(false);
+    expect(parsed.error?.issues[0]?.path).toEqual(['error', 'context', 'repositories', 0, 'name']);
   });
 });

@@ -223,15 +223,36 @@ describe('AftercareWorkspace runway', () => {
     expect(row).toHaveTextContent('Starting rebase pass…');
   });
 
-  it('keeps the action-error alert and the empty state', () => {
+  it('renders the action-error mirror as a warning surface and the empty state', () => {
     renderWorkspace({
       snapshot: featureSnapshot({ status: 'Published', actions: [] }),
       actionError: {
         action: 'Rebase',
-        error: { code: 'rebase_already_up_to_date', message: 'Nothing to merge.' },
+        error: {
+          code: 'rebase_already_up_to_date',
+          message: 'Every repository is already up to date with its target branch.',
+          canonical: {
+            code: 'rebase_already_up_to_date',
+            class: 'warning',
+            title: 'Already up to date',
+            summary: 'Every repository is already up to date with its target branch.',
+          },
+        },
       },
     });
-    expect(screen.getByRole('alert')).toHaveTextContent('Already up to date: Nothing to merge.');
+    // The catalog's own warning title/summary replace the hand-rolled prefix,
+    // and the warning class reads as a status, not an alert.
+    expect(document.querySelectorAll('.error-surface')).toHaveLength(1);
+    const surface = document.querySelector('.error-surface');
+    expect(surface).not.toBeNull();
+    expect(surface).toHaveAttribute('role', 'status');
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.getByText('Rebase was rejected')).toBeVisible();
+    expect(screen.getByText('Already up to date')).toBeVisible();
+    expect(
+      screen.getByText('Every repository is already up to date with its target branch.'),
+    ).toBeVisible();
+    expect(screen.getByText('rebase_already_up_to_date')).toHaveClass('error-surface__code');
     expect(screen.getByText('No action is needed right now.')).toBeVisible();
   });
 

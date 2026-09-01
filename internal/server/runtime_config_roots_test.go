@@ -17,6 +17,7 @@ package server
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -26,6 +27,7 @@ import (
 	"testing"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 )
 
 // runtimeConfigRecorder records RuntimeConfig mutation calls so tests can
@@ -89,28 +91,28 @@ func TestPatchRuntimeConfigRejectsInvalidWorkspaceRoots(t *testing.T) {
 	nonexistent := filepath.Join(root, "does-not-exist")
 
 	tests := []struct {
-		name       string
-		roots      []string
-		wantPaths  []string
-		wantDetail []string
+		name        string
+		roots       []string
+		wantPaths   []string
+		wantReasons []string
 	}{
 		{
-			name:       "nonexistent root",
-			roots:      []string{nonexistent},
-			wantPaths:  []string{nonexistent},
-			wantDetail: []string{"does not exist"},
+			name:        "nonexistent root",
+			roots:       []string{nonexistent},
+			wantPaths:   []string{nonexistent},
+			wantReasons: []string{"path does not exist"},
 		},
 		{
-			name:       "file is not a directory",
-			roots:      []string{fileRoot},
-			wantPaths:  []string{fileRoot},
-			wantDetail: []string{"not a directory"},
+			name:        "file is not a directory",
+			roots:       []string{fileRoot},
+			wantPaths:   []string{fileRoot},
+			wantReasons: []string{"path is not a directory"},
 		},
 		{
-			name:       "mixed valid and invalid roots",
-			roots:      []string{root, nonexistent, fileRoot},
-			wantPaths:  []string{nonexistent, fileRoot},
-			wantDetail: []string{"does not exist", "not a directory"},
+			name:        "mixed valid and invalid roots",
+			roots:       []string{root, nonexistent, fileRoot},
+			wantPaths:   []string{nonexistent, fileRoot},
+			wantReasons: []string{"path does not exist", "path is not a directory"},
 		},
 	}
 	for _, tc := range tests {
@@ -125,20 +127,21 @@ func TestPatchRuntimeConfigRejectsInvalidWorkspaceRoots(t *testing.T) {
 				t.Fatalf("status = %d body=%s; want 400", w.Code, w.Body.String())
 			}
 			body := decodeErrorBody(t, w)
-			if body.Error.Code != errCodeInvalidWorkspaceRoot {
-				t.Fatalf("error code = %q; want %q", body.Error.Code, errCodeInvalidWorkspaceRoot)
+			if body.Error.Code != string(errcat.InvalidWorkspaceRoot) {
+				t.Fatalf("error code = %q; want %q", body.Error.Code, errcat.InvalidWorkspaceRoot)
 			}
+			// The summary names every rejected path; the raw reasons travel
+			// as diagnostics.
+			wantSummary := "Some workspace roots do not resolve to existing directories: " + strings.Join(tc.wantPaths, "; ") + "."
+			if body.Error.Summary != wantSummary {
+				t.Fatalf("summary = %q; want %q", body.Error.Summary, wantSummary)
+			}
+			rejected := make([]string, len(tc.wantPaths))
 			for i, path := range tc.wantPaths {
-				if !strings.Contains(body.Error.Message, path) || !strings.Contains(body.Error.Message, tc.wantDetail[i]) {
-					t.Fatalf("message %q; want it to name %q (%s)", body.Error.Message, path, tc.wantDetail[i])
-				}
+				rejected[i] = fmt.Sprintf("%s (%s)", path, tc.wantReasons[i])
 			}
-			rejected, ok := body.Error.Target["invalid_workspace_roots"].([]any)
-			if !ok {
-				t.Fatalf("error target = %+v; want invalid_workspace_roots list", body.Error.Target)
-			}
-			if len(rejected) != len(tc.wantPaths) {
-				t.Fatalf("rejected roots = %+v; want %d entries", rejected, len(tc.wantPaths))
+			if wantDiagnostics := "rejected workspace roots: " + strings.Join(rejected, "; "); body.Error.Diagnostics != wantDiagnostics {
+				t.Fatalf("diagnostics = %q; want %q", body.Error.Diagnostics, wantDiagnostics)
 			}
 			// Rejection happens before the mutation target, so nothing is
 			// persisted.
@@ -165,8 +168,8 @@ func TestPutRuntimeConfigRejectsInvalidWorkspaceRoots(t *testing.T) {
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("PUT status = %d body=%s; want 400", w.Code, w.Body.String())
 	}
-	if body := decodeErrorBody(t, w); body.Error.Code != errCodeInvalidWorkspaceRoot {
-		t.Fatalf("error code = %q; want %q", body.Error.Code, errCodeInvalidWorkspaceRoot)
+	if body := decodeErrorBody(t, w); body.Error.Code != string(errcat.InvalidWorkspaceRoot) {
+		t.Fatalf("error code = %q; want %q", body.Error.Code, errcat.InvalidWorkspaceRoot)
 	}
 	if got := recorder.calls.Load(); got != 0 {
 		t.Fatalf("RuntimeConfig calls = %d; want none for invalid roots", got)

@@ -307,9 +307,14 @@ test('rebase pass up-to-date: card click renders inline notice, stays in afterca
     transcript.step('clicked "Start rebase pass" on an up-to-date feature');
 
     transcript.section('Assert inline already-up-to-date notice, cockpit stays in aftercare');
-    const errorAlert = seededCockpit.getByRole('alert');
-    await expect(errorAlert).toBeVisible({ timeout: 30_000 });
-    await expect(errorAlert).toContainText('rebase_already_up_to_date');
+    // The catalog renders the already-up-to-date rejection as a warning
+    // surface, so it reads as a status — not an alert. Scope past the
+    // cockpit's other live statuses by the stable code tag.
+    const errorStatus = seededCockpit
+      .getByRole('status')
+      .filter({ hasText: 'rebase_already_up_to_date' });
+    await expect(errorStatus).toBeVisible({ timeout: 30_000 });
+    await expect(errorStatus).toContainText('rebase_already_up_to_date');
     transcript.step('inline already-up-to-date notice rendered near the aftercare surface');
 
     await expect(aftercare).toBeVisible({ timeout: 5_000 });

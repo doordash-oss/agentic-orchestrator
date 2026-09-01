@@ -26,6 +26,7 @@ import (
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/workspace"
@@ -38,10 +39,6 @@ const providerReadinessProbeTimeout = 5 * time.Second
 // maxReadinessTextLen bounds provider-supplied detail/remedy strings before
 // they cross the API boundary.
 const maxReadinessTextLen = 240
-
-// errCodeNotReady is the structured API error code returned when a mutation
-// is rejected because mandatory runtime readiness is not satisfied.
-const errCodeNotReady = "not_ready"
 
 // handleReadiness serves GET /api/v1/readiness. It reuses the cached provider
 // probe results (probing lazily only on the very first request) so polling
@@ -77,9 +74,10 @@ func (h *apiHandler) handleReadinessRefreshRoute(w http.ResponseWriter, r *http.
 
 // rejectNotReadyForCreation gates feature creation on mandatory readiness.
 // While no provider is usable (or the configuration is invalid) it writes a
-// structured 409 not_ready error carrying the outstanding readiness issues
-// and reports true. Handlers constructed without a provider registry (tests,
-// embedded uses) are not gated.
+// structured 409 not_ready error whose summary lists the readiness issue
+// titles and whose diagnostics carry their raw messages, and reports true.
+// Handlers constructed without a provider registry (tests, embedded uses)
+// are not gated.
 func (h *apiHandler) rejectNotReadyForCreation(w http.ResponseWriter, r *http.Request) bool {
 	if h.registry == nil {
 		return false
@@ -88,8 +86,21 @@ func (h *apiHandler) rejectNotReadyForCreation(w http.ResponseWriter, r *http.Re
 	if snapshot.Ready {
 		return false
 	}
-	writeAPIError(w, http.StatusConflict, errCodeNotReady,
-		"runtime is not ready to create features", map[string]any{"issues": snapshot.Issues})
+	titles := make([]string, 0, len(snapshot.Issues))
+	messages := make([]string, 0, len(snapshot.Issues))
+	for _, issue := range snapshot.Issues {
+		if entry, ok := errcat.Lookup(errcat.Code(issue.Code)); ok && entry.Title != "" {
+			titles = append(titles, entry.Title)
+		} else {
+			titles = append(titles, issue.Message)
+		}
+		if issue.Message != "" {
+			messages = append(messages, issue.Message)
+		}
+	}
+	writeAPIError(w, http.StatusConflict, errcat.NotReady,
+		errcat.WithParams(errcat.ReadinessParams{Titles: titles}),
+		errcat.WithDiagnostics(strings.Join(messages, "; ")))
 	return true
 }
 

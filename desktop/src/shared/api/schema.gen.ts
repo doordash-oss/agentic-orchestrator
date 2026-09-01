@@ -927,13 +927,63 @@ export interface components {
             api_version: string;
             error: components["schemas"]["Error"];
         };
+        /**
+         * @description Feature lifecycle action identifier.
+         * @enum {string}
+         */
+        FeatureAction: "setup" | "start" | "resume" | "pause-stop" | "restart" | "publish" | "merge" | "rewind" | "retry" | "rebase" | "need-user-input" | "need-user-input-draft" | "mark-done" | "cleanup" | "delete" | "refactor" | "review-feedback" | "discard";
+        /** @description Canonical catalog-rendered error. */
         Error: {
+            /** @description Stable snake_case catalog code. */
             code: string;
-            message: string;
-            status: number;
-            target?: {
-                [key: string]: unknown;
-            };
+            /**
+             * @description Severity treatment class.
+             * @enum {string}
+             */
+            class: "blocking" | "needs_action" | "warning";
+            /** @description Catalog-authored title; never empty. */
+            title: string;
+            /** @description Catalog-authored summary, with request-scoped facts interpolated as human text; never empty. */
+            summary: string;
+            remediation?: components["schemas"]["ErrorRemediation"];
+            context?: components["schemas"]["ErrorContext"];
+            /** @description Raw detail text, deepest disclosure only. */
+            diagnostics?: string;
+        };
+        /** @description Catalog-authored next step for an error code. */
+        ErrorRemediation: {
+            hint?: string;
+            /** @description Referenced feature actions the user can run next. */
+            actions?: components["schemas"]["FeatureAction"][];
+        };
+        /** @description Typed context blocks the error code declared. */
+        ErrorContext: {
+            repositories?: components["schemas"]["ErrorRepositoryContext"][];
+            phase?: components["schemas"]["ErrorPhaseContext"];
+            command?: components["schemas"]["ErrorCommandContext"];
+        };
+        /** @description Repository a code references. */
+        ErrorRepositoryContext: {
+            name: string;
+            branch?: string;
+            conflict_files?: string[];
+            dirty_files?: string[];
+            parent_anchor_sha?: string;
+            expected_ref_sha?: string;
+            child_head_sha?: string;
+            candidate_sha?: string;
+            merge_head?: string;
+            observed_sha?: string;
+        };
+        /** @description Phase a code references. */
+        ErrorPhaseContext: {
+            name: string;
+            iteration?: number;
+        };
+        /** @description Failed command a code references. */
+        ErrorCommandContext: {
+            exit_code?: number;
+            log_paths?: string[];
         };
         PermissionAnswerRequest: {
             request_id: string;
@@ -2603,7 +2653,7 @@ export interface components {
         ReviewID: string;
         LogID: string;
         SessionID: string;
-        FeatureAction: "setup" | "start" | "resume" | "pause-stop" | "restart" | "publish" | "merge" | "rewind" | "retry" | "rebase" | "need-user-input" | "need-user-input-draft" | "mark-done" | "cleanup" | "delete" | "refactor" | "review-feedback" | "discard";
+        FeatureAction: components["schemas"]["FeatureAction"];
         FeatureSubaction: "description" | "fetch";
         Offset: number;
         Limit: number;

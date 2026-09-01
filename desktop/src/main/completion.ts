@@ -49,12 +49,6 @@ import {
 } from '../shared/ipc';
 import { alwaysLocal, type LocalitySource } from './locality';
 
-const COMPLETION_REMEDIES: Readonly<Record<string, string>> = {
-  not_found: 'The feature no longer exists on the server. Close its tab.',
-  bad_request: 'The server rejected the request. Refresh and retry.',
-  conflict: 'The server state has changed. Refresh the completion preview.',
-};
-
 export interface RevealPathOutcome {
   ok: boolean;
   /** Server-reported absolute path; present when it can be copied (remote). */
@@ -86,7 +80,6 @@ export class CompletionService {
       this.deps.transport,
       `/api/v1/features/${input.featureId}/completion/preflight`,
       undefined,
-      { remedyByCode: COMPLETION_REMEDIES },
     );
     const response = validateWithSchema(body, CompletionPreflightResponseSchema);
     return {
@@ -127,7 +120,6 @@ export class CompletionService {
       this.deps.transport,
       `/api/v1/features/${input.featureId}/repositories/${encodeURIComponent(input.repo)}/diff${query}`,
       undefined,
-      { remedyByCode: COMPLETION_REMEDIES },
     );
     const response = validateWithSchema(body, RepositoryDiffResponseSchema);
     return {
@@ -191,7 +183,6 @@ export class CompletionService {
       this.deps.transport,
       `/api/v1/features/${id}/repositories/${encodeURIComponent(repo)}/path`,
       undefined,
-      { remedyByCode: COMPLETION_REMEDIES },
     );
     const response = validateWithSchema(body, RepositoryPathResponseSchema);
     if (response.feature_id !== id || response.repo !== repo) {

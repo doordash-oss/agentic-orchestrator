@@ -22,6 +22,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
@@ -30,12 +31,12 @@ func (h *apiHandler) handleRecoveryRoute(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if h.mutations == nil {
-		writeAPIError(w, http.StatusServiceUnavailable, "unavailable", "mutation service unavailable", nil)
+		writeAPIError(w, http.StatusServiceUnavailable, errcat.Unavailable)
 		return
 	}
 	items, err := h.mutations.ScanRecovery(r.Context())
 	if err != nil {
-		writeAPIError(w, http.StatusInternalServerError, "internal_error", "scan recovery", nil)
+		writeAPIError(w, http.StatusInternalServerError, errcat.InternalError, errcat.WithDiagnostics("scan recovery"))
 		return
 	}
 	dtoItems := make([]RecoveryItem, 0, len(items))
@@ -65,21 +66,21 @@ func (h *apiHandler) handleRecoveryActionRoute(w http.ResponseWriter, r *http.Re
 	}
 	req.SnapshotID = strings.TrimSpace(req.SnapshotID)
 	if req.SnapshotID == "" {
-		writeAPIError(w, http.StatusBadRequest, "bad_request", "snapshot_id is required", nil)
+		writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics("snapshot_id is required"))
 		return
 	}
 	if len(req.Actions) == 0 {
-		writeAPIError(w, http.StatusBadRequest, "bad_request", "actions are required", nil)
+		writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics("actions are required"))
 		return
 	}
 	items, ok := h.lookupRecoverySnapshot(req.SnapshotID)
 	if !ok {
-		writeAPIError(w, http.StatusNotFound, "not_found", "recovery snapshot not found", nil)
+		writeAPIError(w, http.StatusNotFound, errcat.NotFound, errcat.WithParams(errcat.SubjectParams{Subject: "Recovery snapshot"}))
 		return
 	}
 	actions, err := decodeRecoveryActions(items, req.Actions)
 	if err != nil {
-		writeAPIError(w, http.StatusBadRequest, "bad_request", err.Error(), nil)
+		writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics(err.Error()))
 		return
 	}
 	resp, err := h.mutations.ExecuteRecovery(context.Background(), items, actions)
@@ -107,16 +108,18 @@ func (h *apiHandler) handleRecoveryLogRoute(w http.ResponseWriter, r *http.Reque
 	snapshotID := strings.TrimSpace(r.URL.Query().Get("snapshot_id"))
 	itemKey := strings.TrimSpace(r.URL.Query().Get("key"))
 	if snapshotID == "" || itemKey == "" {
-		writeAPIError(w, http.StatusBadRequest, "bad_request", "snapshot_id and key are required", nil)
+		writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics("snapshot_id and key are required"))
 		return
 	}
 	if !safeRecoveryKey(itemKey) {
-		writeAPIError(w, http.StatusBadRequest, "bad_request", "invalid recovery key", nil)
+		writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics("invalid recovery key"))
 		return
 	}
 	items, ok := h.lookupRecoverySnapshot(snapshotID)
 	if !ok {
-		writeAPIError(w, http.StatusNotFound, "not_found", "recovery snapshot not found or stale", nil)
+		writeAPIError(w, http.StatusNotFound, errcat.NotFound,
+			errcat.WithParams(errcat.SubjectParams{Subject: "Recovery snapshot"}),
+			errcat.WithDiagnostics("recovery snapshot not found or stale"))
 		return
 	}
 	var item ports.RecoveryItem
@@ -128,12 +131,12 @@ func (h *apiHandler) handleRecoveryLogRoute(w http.ResponseWriter, r *http.Reque
 		}
 	}
 	if !found {
-		writeAPIError(w, http.StatusNotFound, "not_found", "recovery item not found in snapshot", nil)
+		writeAPIError(w, http.StatusNotFound, errcat.NotFound, errcat.WithParams(errcat.SubjectParams{Subject: "Recovery item"}))
 		return
 	}
 	logPath := strings.TrimSpace(item.PIDFile.LogPath)
 	if logPath == "" {
-		writeAPIError(w, http.StatusNotFound, "not_found", "log is not available for this item", nil)
+		writeAPIError(w, http.StatusNotFound, errcat.NotFound, errcat.WithDiagnostics("log is not available for this item"))
 		return
 	}
 	// The bounded-read/sanitize invariant is encoded once in writeTextFileSlice;

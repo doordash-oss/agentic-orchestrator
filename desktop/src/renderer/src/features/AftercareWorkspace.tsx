@@ -20,6 +20,8 @@ import type {
   RelationshipChildView,
   RunDetailView,
 } from '../../../shared/ipc';
+import { ErrorSurface } from '../components/ErrorSurface';
+import { canonicalFromWizardError, type WizardError } from '../wizard/ipcError';
 import { formatDuration } from './featureView';
 import { AftercareShipped } from './AftercareShipped';
 import { AftercareSymbol } from './AftercareSymbol';
@@ -47,12 +49,9 @@ export interface AftercareWorkspaceProps {
   onOpenPullRequest(url: string): void;
 }
 
-interface AftercareActionError {
+export interface AftercareActionError {
   action: string;
-  error: {
-    code: string;
-    message: string;
-  };
+  error: WizardError;
 }
 
 export function AftercareWorkspace({
@@ -84,12 +83,11 @@ export function AftercareWorkspace({
 
         <section className="aftercare-workspace__runway" aria-label="Follow-up actions">
           {actionError === null ? null : (
-            <div role="alert" className="create-form__error aftercare-workspace__action-error">
-              <span className="create-form__error-code">{actionError.error.code}</span>
-              <p className="create-form__error-message">
-                {aftercareActionErrorMessage(actionError)}
-              </p>
-            </div>
+            <ErrorSurface
+              error={canonicalFromWizardError(actionError.error)}
+              variant="compact"
+              caption={`${actionError.action} was rejected`}
+            />
           )}
           {actions.length === 0 ? (
             <p className="aftercare-workspace__empty">No action is needed right now.</p>
@@ -160,13 +158,6 @@ export function AftercareWorkspace({
       </div>
     </section>
   );
-}
-
-function aftercareActionErrorMessage(actionError: AftercareActionError): string {
-  if (actionError.error.code === 'rebase_already_up_to_date') {
-    return `Already up to date: ${actionError.error.message}`;
-  }
-  return `${actionError.action} was rejected — ${actionError.error.message}`;
 }
 
 /**

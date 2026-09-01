@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -30,6 +31,7 @@ import (
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/orchestrator"
@@ -1995,20 +1997,30 @@ func TestServerMutationTargetPublishActionPreservesConflictRoutingMetadata(t *te
 	if result.FeatureID != f.ID || result.Result != resultConflict {
 		t.Fatalf("PublishFeature() result = %+v; want conflict feature", result)
 	}
-	assertTarget(t, actionConflict.Target, map[string]any{
-		resultConflict:  phaseNamePublish,
-		repoConflictKey: testRepoAName,
-		"branch":        "feature/publish-conflict",
-		"rebase_target": "main",
-	})
+	if actionConflict.Code != "" {
+		t.Fatalf("ActionConflictError.Code = %q; want empty code rendering as generic conflict", actionConflict.Code)
+	}
+	rendered := errcat.New(errcat.Conflict, actionConflict.Options...)
+	if rendered.Context == nil || len(rendered.Context.Repositories) != 1 {
+		t.Fatalf("rendered context = %+v; want one repository", rendered.Context)
+	}
+	repo := rendered.Context.Repositories[0]
+	if repo.Name != testRepoAName || repo.Branch != "feature/publish-conflict" {
+		t.Fatalf("rendered repository = %+v; want %s on feature/publish-conflict", repo, testRepoAName)
+	}
+	if !strings.Contains(rendered.Diagnostics, "pull-rebase conflict") {
+		t.Fatalf("rendered diagnostics = %q; want raw publish conflict detail", rendered.Diagnostics)
+	}
 }
 
 func TestServerMutationTargetPublishActionMapsRemoteSafetyConflicts(t *testing.T) {
 	for _, tc := range []struct {
-		name       string
-		publishErr error
-		wantCode   string
-		wantTarget map[string]any
+		name        string
+		publishErr  error
+		wantCode    errcat.Code
+		wantSummary string
+		wantRepo    string
+		wantBranch  string
 	}{
 		{
 			name: "remote diverged",
@@ -2017,12 +2029,10 @@ func TestServerMutationTargetPublishActionMapsRemoteSafetyConflicts(t *testing.T
 				Branch:            "feature/remote-diverged",
 				RemoteOnlyCommits: 2,
 			},
-			wantCode: serverruntime.ErrorCodePublishRemoteDiverged,
-			wantTarget: map[string]any{
-				"repo":                testRepoAName,
-				"branch":              "feature/remote-diverged",
-				"remote_only_commits": 2,
-			},
+			wantCode:    errcat.PublishRemoteDiverged,
+			wantSummary: fmt.Sprintf("The pull-request branch for %q contains 2 remote commits that are not in this workspace.", testRepoAName),
+			wantRepo:    testRepoAName,
+			wantBranch:  "feature/remote-diverged",
 		},
 		{
 			name: "remote changed",
@@ -2030,11 +2040,10 @@ func TestServerMutationTargetPublishActionMapsRemoteSafetyConflicts(t *testing.T
 				RepoName: testRepoAName,
 				Branch:   "feature/remote-changed",
 			},
-			wantCode: serverruntime.ErrorCodePublishRemoteChanged,
-			wantTarget: map[string]any{
-				"repo":   testRepoAName,
-				"branch": "feature/remote-changed",
-			},
+			wantCode:    errcat.PublishRemoteChanged,
+			wantSummary: fmt.Sprintf("The pull-request branch for %q changed while Agentico was publishing.", testRepoAName),
+			wantRepo:    testRepoAName,
+			wantBranch:  "feature/remote-changed",
 		},
 	} {
 		tc := tc
@@ -2058,7 +2067,17 @@ func TestServerMutationTargetPublishActionMapsRemoteSafetyConflicts(t *testing.T
 			if result.Result != resultConflict {
 				t.Fatalf("PublishFeature() result = %q; want %q", result.Result, resultConflict)
 			}
-			assertTarget(t, conflict.Target, tc.wantTarget)
+			rendered := errcat.New(tc.wantCode, conflict.Options...)
+			if rendered.Summary != tc.wantSummary {
+				t.Fatalf("rendered summary = %q; want %q", rendered.Summary, tc.wantSummary)
+			}
+			if rendered.Context == nil || len(rendered.Context.Repositories) != 1 {
+				t.Fatalf("rendered context = %+v; want one repository", rendered.Context)
+			}
+			repo := rendered.Context.Repositories[0]
+			if repo.Name != tc.wantRepo || repo.Branch != tc.wantBranch {
+				t.Fatalf("rendered repository = %+v; want %s@%s", repo, tc.wantRepo, tc.wantBranch)
+			}
 		})
 	}
 }
@@ -2139,8 +2158,11 @@ func TestServerMutationTargetCompletionActionsRejectStaleSourceRevision(t *testi
 			if result != resultFailed {
 				t.Fatalf("result = %q; want %q", result, resultFailed)
 			}
-			if conflict.Target["reason"] != "stale_preflight" {
-				t.Fatalf("conflict target = %+v; want stale_preflight reason", conflict.Target)
+			if !errors.Is(conflict.Err, orchestrator.ErrStalePreflight) {
+				t.Fatalf("conflict err = %v; want stale preflight sentinel", conflict.Err)
+			}
+			if !strings.Contains(conflict.Detail, "stale completion preflight") {
+				t.Fatalf("conflict detail = %q; want stale completion preflight diagnostics", conflict.Detail)
 			}
 			if _, err := store.Load(f.ID); err != nil {
 				t.Fatalf("feature was mutated or deleted despite stale preflight: %v", err)
@@ -2780,15 +2802,6 @@ func assertJSONDoesNotContain(t *testing.T, value any, banned ...string) {
 	for _, b := range banned {
 		if b != "" && strings.Contains(string(raw), b) {
 			t.Fatalf("response leaked %q in %s", b, raw)
-		}
-	}
-}
-
-func assertTarget(t *testing.T, got map[string]any, want map[string]any) {
-	t.Helper()
-	for k, wantValue := range want {
-		if got[k] != wantValue {
-			t.Fatalf("target[%q] = %#v, want %#v; target = %#v", k, got[k], wantValue, got)
 		}
 	}
 }

@@ -17,27 +17,39 @@ limitations under the License.
 import { describe, expect, it } from 'vitest';
 import { AttentionService } from '../attention';
 import type { ServerTransport } from '../serverClient';
-import { ATTENTION_ALREADY_RESOLVED_NOTICE, CHAT_SESSION_ID } from '../../shared/ipc';
+import { CanonicalErrorException } from '../../shared/errors';
+import { CHAT_SESSION_ID } from '../../shared/ipc';
+
+/** One canonical catalog-rendered rejection body, as the server now emits. */
+function canonicalBody(code: string): Record<string, unknown> {
+  const catalog: Record<string, { title: string; summary: string }> = {
+    conflict: {
+      title: 'Conflict',
+      summary: 'The request conflicts with the current state of the feature.',
+    },
+    not_found: { title: 'Not found', summary: 'The requested resource was not found.' },
+    bad_request: { title: 'Bad request', summary: 'The request was not valid.' },
+  };
+  const { title, summary } = catalog[code] ?? { title: 'Error', summary: 'The request failed.' };
+  return { api_version: 'v1', error: { code, class: 'blocking', title, summary } };
+}
 
 describe('AttentionService mutations', () => {
-  it.each(['conflict', 'not_found'])(
-    'returns the stale-resolution response for typed %s server errors',
-    async (code) => {
+  it.each([
+    { code: 'conflict', status: 409 },
+    { code: 'not_found', status: 404 },
+  ])(
+    'propagates the canonical $code server error instead of masking it as resolved',
+    async ({ code, status }) => {
       const service = new AttentionService({
-        apiRequest: () =>
-          Promise.resolve({
-            status: 409,
-            body: { api_version: 'v1', error: { code, message: 'already answered' } },
-          }),
+        apiRequest: () => Promise.resolve({ status, body: canonicalBody(code) }),
       } satisfies ServerTransport);
 
-      await expect(
-        service.answerQuestions({ requestId: 'ask-1', answers: { prompt: 'answer' } }),
-      ).resolves.toEqual({
-        result: 'Already resolved.',
-        alreadyResolved: true,
-        notice: ATTENTION_ALREADY_RESOLVED_NOTICE,
-      });
+      const err = await service
+        .answerQuestions({ requestId: 'ask-1', answers: { prompt: 'answer' } })
+        .catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(CanonicalErrorException);
+      expect((err as CanonicalErrorException).canonical.code).toBe(code);
     },
   );
 
@@ -550,25 +562,33 @@ describe('AttentionService review items', () => {
     });
   });
 
-  it('returns the stale-resolution response for a missing pending request', async () => {
+  it('propagates the canonical bad_request for a missing pending request', async () => {
     const service = new AttentionService({
       apiRequest: () =>
         Promise.resolve({
           status: 400,
           body: {
             api_version: 'v1',
-            error: { code: 'bad_request', message: 'pending request perm-stale not found' },
+            error: {
+              code: 'bad_request',
+              class: 'blocking',
+              title: 'Bad request',
+              summary: 'The request was not valid.',
+              remediation: { hint: 'Check the request details and try again.' },
+              diagnostics: 'pending request perm-stale not found',
+            },
           },
         }),
     } satisfies ServerTransport);
 
-    await expect(
-      service.answerPermission({ requestId: 'perm-stale', decision: 'allow_once' }),
-    ).resolves.toEqual({
-      result: 'Already resolved.',
-      alreadyResolved: true,
-      notice: ATTENTION_ALREADY_RESOLVED_NOTICE,
-    });
+    const err = await service
+      .answerPermission({ requestId: 'perm-stale', decision: 'allow_once' })
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(CanonicalErrorException);
+    expect((err as CanonicalErrorException).canonical.code).toBe('bad_request');
+    expect((err as CanonicalErrorException).canonical.diagnostics).toBe(
+      'pending request perm-stale not found',
+    );
   });
 
   it('derives one stable inbox item from each authoritative pending review', async () => {

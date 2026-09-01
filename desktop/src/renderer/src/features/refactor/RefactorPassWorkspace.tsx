@@ -31,7 +31,8 @@ import {
   type RelationshipChildView,
   type ReviewFeedbackCommentView,
 } from '../../../../shared/ipc';
-import { parseIpcError } from '../../wizard/ipcError';
+import { ErrorSurface } from '../../components/ErrorSurface';
+import { parseIpcError, canonicalFromWizardError, type WizardError } from '../../wizard/ipcError';
 import {
   AttentionDetail,
   attentionActionNotice,
@@ -69,6 +70,13 @@ type ChildState =
   | { phase: 'error'; message: string }
   | { phase: 'loaded'; child: FeatureSnapshot };
 
+/**
+ * The pass's post-action notice: an informational receipt (discard outcome,
+ * attention result) or a rejected server action carried as the parsed error
+ * for the canonical error surface.
+ */
+export type PassNotice = { kind: 'info'; text: string } | { kind: 'error'; error: WizardError };
+
 export interface RefactorPassController {
   view: RelationshipChildView | undefined;
   childState: ChildState;
@@ -77,7 +85,7 @@ export interface RefactorPassController {
   actions: PassAction[];
   discardAction: FeatureActionView | undefined;
   busy: boolean;
-  notice: string | null;
+  notice: PassNotice | null;
   discardOpen: boolean;
   dispatch(action: PassAction['id']): Promise<void>;
   /** Launch-time auto-start: dispatch start once this child becomes startable. */
@@ -104,7 +112,7 @@ export function useRefactorPass(
   const childId = view?.id;
   const [childState, setChildState] = useState<ChildState>({ phase: 'loading' });
   const [busy, setBusy] = useState(false);
-  const [notice, setNotice] = useState<string | null>(null);
+  const [notice, setNotice] = useState<PassNotice | null>(null);
   const [discardOpen, setDiscardOpen] = useState(false);
   const loadRequestRef = useRef(0);
   const childIdRef = useRef<string | undefined>(undefined);
@@ -172,7 +180,7 @@ export function useRefactorPass(
         await window.agentico.dispatchFeatureAction({ featureId: child.id, action });
         refreshBoth();
       } catch (err) {
-        setNotice(parseIpcError(err).message);
+        setNotice({ kind: 'error', error: parseIpcError(err) });
       } finally {
         setBusy(false);
       }
@@ -209,11 +217,11 @@ export function useRefactorPass(
     setNotice(null);
     try {
       const result = await window.agentico.discardRefactorChild({ childId: child.id });
-      setNotice(result.result);
+      setNotice({ kind: 'info', text: result.result });
       if (result.status === 'completed' || result.status === 'draining') setDiscardOpen(false);
       refreshBoth();
     } catch (err) {
-      setNotice(parseIpcError(err).message);
+      setNotice({ kind: 'error', error: parseIpcError(err) });
     } finally {
       setBusy(false);
     }
@@ -377,7 +385,13 @@ export function RefactorPassWorkspace({
     }
   };
 
-  const notice = pass.notice ?? attentionNotice;
+  // A rejected server action renders through the canonical error surface;
+  // informational receipts (discard outcome, attention result) stay quiet text.
+  const actionErrorNotice =
+    pass.notice !== null && pass.notice.kind === 'error' ? pass.notice.error : null;
+  const infoNotice =
+    (pass.notice !== null && pass.notice.kind === 'info' ? pass.notice.text : null) ??
+    attentionNotice;
 
   const submitQuestionAnswers = () => {
     if (questionsAttention === undefined) return;
@@ -517,9 +531,15 @@ export function RefactorPassWorkspace({
             </>
           ) : null}
 
-          {notice !== null ? (
-            <p className="refactor-pass__notice" role="status">
-              {notice}
+          {actionErrorNotice !== null ? (
+            <ErrorSurface
+              error={canonicalFromWizardError(actionErrorNotice)}
+              variant="compact"
+              caption="The pass action was rejected"
+            />
+          ) : infoNotice !== null ? (
+            <p className="refactor-pass__state" role="status" data-tone="quiet">
+              {infoNotice}
             </p>
           ) : null}
 

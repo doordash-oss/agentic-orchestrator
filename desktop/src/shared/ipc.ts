@@ -20,6 +20,9 @@ limitations under the License.
  * deliberately no generic invoke passthrough anywhere in the app.
  */
 import { z } from 'zod';
+import { CanonicalErrorSchema } from './api/parse';
+
+export type { CanonicalError, CanonicalErrorResponse } from './api/parse';
 
 export const ATTENTION_ALREADY_RESOLVED_NOTICE =
   'This item was already resolved. The inbox has been refreshed.';
@@ -162,37 +165,23 @@ export const IPC_EVENTS = {
   routeRequested: 'agentico:route:requested',
 } as const;
 
-// --- Safe error shape crossing the boundary --------------------------------
+// --- Error shapes crossing the boundary -------------------------------------
 
 export const SafeErrorSchema = z.strictObject({
   code: z.string(),
   message: z.string(),
   remediation: z.string().optional(),
-  details: z
-    .strictObject({
-      dirtyWorktrees: z
-        .array(
-          z.strictObject({
-            repo: z.string().optional(),
-            path: z.string().optional(),
-            staged: z.array(z.string()).max(200).optional(),
-            unstaged: z.array(z.string()).max(200).optional(),
-            untracked: z.array(z.string()).max(200).optional(),
-            stagedTotal: z.number().int().nonnegative().optional(),
-            unstagedTotal: z.number().int().nonnegative().optional(),
-            untrackedTotal: z.number().int().nonnegative().optional(),
-          }),
-        )
-        .max(100)
-        .optional(),
-    })
-    .optional(),
 });
 
-/** Every invoke resolves to this envelope so failures stay typed. */
+/**
+ * Every invoke resolves to this envelope so failures stay typed. The error
+ * branch is a union: a server-emitted canonical error crosses unchanged (the
+ * catalog owns its human text), and every main-process transport failure
+ * degrades to the redacted safe-error shape.
+ */
 export const IpcEnvelopeSchema = z.discriminatedUnion('ok', [
   z.strictObject({ ok: z.literal(true), value: z.unknown() }),
-  z.strictObject({ ok: z.literal(false), error: SafeErrorSchema }),
+  z.strictObject({ ok: z.literal(false), error: z.union([CanonicalErrorSchema, SafeErrorSchema]) }),
 ]);
 
 export type IpcEnvelope = z.output<typeof IpcEnvelopeSchema>;
@@ -3197,8 +3186,6 @@ export const ReviewValidationSchema = z.strictObject({
 export type ReviewValidation = z.output<typeof ReviewValidationSchema>;
 export const ReviewConflictSchema = z.strictObject({
   type: z.literal('conflict'),
-  expectedRevision: DraftRevisionSchema,
-  currentRevision: DraftRevisionSchema,
 });
 export const ReviewSaveResultSchema = z.discriminatedUnion('type', [
   z.strictObject({ type: z.literal('saved'), session: ReviewSessionSchema }),

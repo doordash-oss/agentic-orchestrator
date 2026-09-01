@@ -128,8 +128,8 @@ func TestReadAPISnapshotsRevisionAndStructuredErrors(t *testing.T) {
 
 	errResp := requestJSONMap(t, handler, "/api/v1/features/../bad", http.StatusBadRequest)
 	errDTO := errResp["error"].(map[string]any)
-	if errDTO["code"] != "bad_request" || errDTO["status"].(float64) != http.StatusBadRequest {
-		t.Fatalf("error DTO = %+v; want stable bad_request", errDTO)
+	if errDTO["code"] != "bad_request" || errDTO["class"] != "blocking" {
+		t.Fatalf("error DTO = %+v, want stable blocking bad_request", errDTO)
 	}
 }
 

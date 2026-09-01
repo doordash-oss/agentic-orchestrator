@@ -15,7 +15,11 @@ limitations under the License.
 */
 
 import { describe, expect, it, vi } from 'vitest';
-import { SafeErrorException, requestTimeoutError } from '../../shared/errors';
+import {
+  CanonicalErrorException,
+  SafeErrorException,
+  requestTimeoutError,
+} from '../../shared/errors';
 import { FeatureSnapshotSchema, type ReadinessSnapshot } from '../../shared/ipc';
 import { FeatureService, type FeatureServiceDeps } from '../features';
 import type { ApiRequestInit, HttpResult } from '../gateway/runtimeGateway';
@@ -403,30 +407,47 @@ describe('FeatureService.createFeature', () => {
         api_version: 'v1',
         error: {
           code: 'not_ready',
-          message: 'runtime is not ready to create features',
-          status: 409,
-          target: {
-            issues: [
-              { code: 'unauthenticated', message: 'claude is not signed in at /Users/x/secret' },
-            ],
-          },
+          class: 'needs_action',
+          title: 'Runtime not ready',
+          summary:
+            'The runtime is not ready to create features: Unauthenticated; Missing executable.',
+          remediation: { hint: 'Complete the outstanding setup steps, then try again.' },
+          diagnostics: 'claude is not signed in at /Users/x/secret; claude CLI was not found',
         },
       },
     }));
     const err = await service.createFeature(input).catch((e: unknown) => e);
-    expect(err).toMatchObject({ safe: { code: 'not_ready' } });
-    const safe = (err as { safe: { message: string; remediation?: string } }).safe;
-    expect(safe.remediation).toContain('claude is not signed in');
-    expect(safe.remediation).not.toContain('/Users/x');
+    expect(err).toBeInstanceOf(CanonicalErrorException);
+    const canonical = (err as CanonicalErrorException).canonical;
+    expect(canonical.code).toBe('not_ready');
+    expect(canonical.class).toBe('needs_action');
+    expect(canonical.summary).toBe(
+      'The runtime is not ready to create features: Unauthenticated; Missing executable.',
+    );
+    expect(canonical.remediation?.hint).toBe(
+      'Complete the outstanding setup steps, then try again.',
+    );
+    expect(canonical.diagnostics).toContain('[path]');
+    expect(canonical.diagnostics).not.toContain('/Users/x');
   });
 
   it('maps plain 400 validation errors to their server code', async () => {
     const { service } = makeService(() => ({
       status: 400,
-      body: { api_version: 'v1', error: { code: 'bad_request', message: 'name is required' } },
+      body: {
+        api_version: 'v1',
+        error: {
+          code: 'bad_request',
+          class: 'blocking',
+          title: 'Bad request',
+          summary: 'The request was not valid.',
+          remediation: { hint: 'Check the request details and try again.' },
+          diagnostics: 'name is required',
+        },
+      },
     }));
     await expect(service.createFeature({ ...input, name: 'x' })).rejects.toMatchObject({
-      safe: { code: 'bad_request' },
+      canonical: { code: 'bad_request', diagnostics: 'name is required' },
     });
   });
 
@@ -577,27 +598,49 @@ describe('FeatureService.dispatchAction', () => {
   });
 
   it.each([
-    [
-      'publish_remote_diverged',
-      'Review and reconcile the pull-request branch on GitHub, then refresh and retry.',
-    ],
-    [
-      'publish_remote_changed',
-      'Refresh the publish state and retry; Agentico did not overwrite the newer branch.',
-    ],
-  ])('provides a publish remedy for %s', async (code, remediation) => {
+    {
+      code: 'publish_remote_diverged',
+      title: 'Pull-request branch diverged',
+      summary: 'The pull-request branch contains remote work that is not in this workspace.',
+      hint: 'Review and reconcile the pull-request branch on the remote, then refresh and retry.',
+    },
+    {
+      code: 'publish_remote_changed',
+      title: 'Pull-request branch changed',
+      summary: 'The pull-request branch for "repo-a" changed while Agentico was publishing.',
+      hint: 'Refresh the publish state and retry; nothing was overwritten.',
+    },
+  ])('provides the catalog publish remedy for $code', async ({ code, title, summary, hint }) => {
     const { service } = makeService(() => ({
       status: 409,
-      body: { error: { code, message: 'publish rejected' } },
+      body: {
+        api_version: 'v1',
+        error: {
+          code,
+          class: 'blocking',
+          title,
+          summary,
+          remediation: { hint },
+          context: { repositories: [{ name: 'repo-a', branch: 'agentico/publish-rev-1' }] },
+        },
+      },
     }));
 
-    await expect(
-      service.dispatchAction({
+    const err = await service
+      .dispatchAction({
         featureId: 'abcd1234ef567890',
         action: 'publish',
         body: { source_revision: 'rev-1', repos: ['repo-a'] },
-      }),
-    ).rejects.toMatchObject({ safe: { code, remediation } });
+      })
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(CanonicalErrorException);
+    const canonical = (err as CanonicalErrorException).canonical;
+    expect(canonical.code).toBe(code);
+    expect(canonical.remediation?.hint).toBe(hint);
+    expect(canonical.context?.repositories?.[0]).toEqual({
+      name: 'repo-a',
+      branch: 'agentico/publish-rev-1',
+    });
   });
 
   it('gives merge the same long request bound publish gets', async () => {
@@ -656,7 +699,18 @@ describe('FeatureService.dispatchAction', () => {
   it('drops the single-flight entry after an ordinary rejection so a retry is possible', async () => {
     const request = vi.fn((path: string) =>
       path.endsWith('/actions/publish')
-        ? Promise.resolve({ status: 409, body: { error: { code: 'conflict', message: 'no' } } })
+        ? Promise.resolve({
+            status: 409,
+            body: {
+              api_version: 'v1',
+              error: {
+                code: 'conflict',
+                class: 'blocking',
+                title: 'Conflict',
+                summary: 'The request conflicts with the current state of the feature.',
+              },
+            },
+          })
         : Promise.resolve({ status: 200, body: detailBody() }),
     );
     const { service } = makeService(request as never);
@@ -912,10 +966,19 @@ describe('FeatureService.getFeature', () => {
   it('maps a 404 to the stable not_found code', async () => {
     const { service } = makeService(() => ({
       status: 404,
-      body: { api_version: 'v1', error: { code: 'not_found', message: 'feature not found' } },
+      body: {
+        api_version: 'v1',
+        error: {
+          code: 'not_found',
+          class: 'blocking',
+          title: 'Not found',
+          summary: 'Feature "abcd1234ef567890" was not found.',
+          remediation: { hint: 'Refresh the view to see the current state, then try again.' },
+        },
+      },
     }));
     await expect(service.getFeature('abcd1234ef567890')).rejects.toMatchObject({
-      safe: { code: 'not_found' },
+      canonical: { code: 'not_found' },
     });
   });
 });

@@ -44,10 +44,11 @@ import {
   type FeatureActionRequest,
   type FeatureActionView,
 } from '../../../shared/ipc';
+import { ErrorSurface } from '../components/ErrorSurface';
 import { useDetailsDismiss } from '../components/useDetailsDismiss';
 import { useModalDismiss } from '../components/useModalDismiss';
 import { useMediaQuery } from '../hooks';
-import { parseIpcError, type WizardError } from '../wizard/ipcError';
+import { canonicalFromWizardError, parseIpcError, type WizardError } from '../wizard/ipcError';
 import { CurrentRunInspection, type RunMetrics } from './CurrentRunInspection';
 import { classifyHold, railSegments, railTrio } from './phaseRail';
 import { PhaseRail } from './PhaseRailRow';
@@ -2203,12 +2204,11 @@ export function FeatureCockpit({
         ) : null}
 
         {actionError === null || snapshot.activeChild === undefined ? null : (
-          <div role="alert" className="create-form__error">
-            <span className="create-form__error-code">{actionError.error.code}</span>
-            <p className="create-form__error-message">
-              {actionError.action} was rejected — {actionError.error.message}
-            </p>
-          </div>
+          <ErrorSurface
+            error={canonicalFromWizardError(actionError.error)}
+            variant="compact"
+            caption={`${actionError.action} was rejected`}
+          />
         )}
         <p className="cockpit__announcement" role="status" aria-live="polite">
           {announcement}
@@ -2678,12 +2678,11 @@ export function FeatureCockpit({
                   ) : null}
 
                   {actionError !== null ? (
-                    <div role="alert" className="create-form__error">
-                      <span className="create-form__error-code">{actionError.error.code}</span>
-                      <p className="create-form__error-message">
-                        {actionError.action} was rejected — {actionError.error.message}
-                      </p>
-                    </div>
+                    <ErrorSurface
+                      error={canonicalFromWizardError(actionError.error)}
+                      variant="compact"
+                      caption={`${actionError.action} was rejected`}
+                    />
                   ) : null}
 
                   <p className="cockpit__announcement" role="status" aria-live="polite">

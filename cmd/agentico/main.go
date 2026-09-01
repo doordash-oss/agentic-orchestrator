@@ -36,6 +36,7 @@ import (
 	agentprompts "github.com/doordash-oss/agentic-orchestrator/internal/agent/prompts"
 	"github.com/doordash-oss/agentic-orchestrator/internal/buildinfo"
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/internal/guidelinedef"
@@ -112,11 +113,6 @@ const (
 	cliFlagPhase                   = "--phase"
 	cliFlagRole                    = "--role"
 	cliFlagContract                = "--contract"
-
-	// repoConflictKey is the Target map key used to report the repo name on
-	// a publish conflict. Coincidentally shares its value with an unrelated
-	// "repo" fixture in update_test.go's slug-parsing table.
-	repoConflictKey = "repo"
 )
 
 func main() {
@@ -1088,8 +1084,7 @@ func (t *serverMutationTarget) SetupFeature(featureID string) (serverruntime.Fea
 	retry := isFailedSetupFeature(f)
 	if !retry && !isPendingSetupFeature(f) {
 		return resp, &serverruntime.ActionConflictError{
-			Message: "feature has no pending or failed setup work",
-			Target:  map[string]any{"feature_id": featureID},
+			Detail: fmt.Sprintf("feature %q has no pending or failed setup work", featureID),
 		}
 	}
 	dispatch := t.dispatchAsync
@@ -2180,9 +2175,8 @@ func (t *serverMutationTarget) rejectStaleCompletionPreflight(featureID, sourceR
 		return nil
 	}
 	return &serverruntime.ActionConflictError{
-		Err:     orchestrator.ErrStalePreflight,
-		Message: "stale completion preflight",
-		Target:  map[string]any{"reason": "stale_preflight"},
+		Err:    orchestrator.ErrStalePreflight,
+		Detail: fmt.Sprintf("stale completion preflight: source revision %q is not current (%q)", sourceRevision, current),
 	}
 }
 
@@ -2193,39 +2187,35 @@ func actionConflictError(err error) error {
 	var diverged *orchestrator.PublishRemoteDivergedError
 	if errors.As(err, &diverged) {
 		return &serverruntime.ActionConflictError{
-			Err:     err,
-			Code:    serverruntime.ErrorCodePublishRemoteDiverged,
-			Message: diverged.Error(),
-			Target: map[string]any{
-				"repo":                diverged.RepoName,
-				"branch":              diverged.Branch,
-				"remote_only_commits": diverged.RemoteOnlyCommits,
+			Err:  err,
+			Code: errcat.PublishRemoteDiverged,
+			Options: []errcat.Option{
+				errcat.WithParams(errcat.PublishRepoParams{Repo: diverged.RepoName, Branch: diverged.Branch, RemoteOnlyCommits: diverged.RemoteOnlyCommits}),
+				errcat.WithRepositories(errcat.CodeRepository{Name: diverged.RepoName, Branch: diverged.Branch}),
 			},
 		}
 	}
 	var changed *orchestrator.PublishRemoteChangedError
 	if errors.As(err, &changed) {
 		return &serverruntime.ActionConflictError{
-			Err:     err,
-			Code:    serverruntime.ErrorCodePublishRemoteChanged,
-			Message: changed.Error(),
-			Target: map[string]any{
-				"repo":   changed.RepoName,
-				"branch": changed.Branch,
+			Err:  err,
+			Code: errcat.PublishRemoteChanged,
+			Options: []errcat.Option{
+				errcat.WithParams(errcat.PublishRepoParams{Repo: changed.RepoName, Branch: changed.Branch}),
+				errcat.WithRepositories(errcat.CodeRepository{Name: changed.RepoName, Branch: changed.Branch}),
 			},
 		}
 	}
 	var publishConflict *orchestrator.PublishConflictError
 	if errors.As(err, &publishConflict) {
 		return &serverruntime.ActionConflictError{
-			Err:     err,
-			Message: "publish conflict — resolve using the Rebase aftercare action",
-			Target: map[string]any{
-				resultConflict:   phaseNamePublish,
-				repoConflictKey:  publishConflict.RepoName,
-				"branch":         publishConflict.Branch,
-				"rebase_target":  publishConflict.RebaseTarget,
-				"conflict_files": []string{},
+			Err: err,
+			Options: []errcat.Option{
+				errcat.WithRepositories(errcat.CodeRepository{
+					Name:   publishConflict.RepoName,
+					Branch: publishConflict.Branch,
+				}),
+				errcat.WithDiagnostics(err.Error()),
 			},
 		}
 	}

@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 )
 
 // uploadMutationRecorder captures the mutation requests upload references
@@ -212,7 +213,7 @@ func TestUploadImageKindRequiresImageExtension(t *testing.T) {
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d; want 400", w.Code)
 	}
-	if body := decodeErrorBody(t, w); body.Error.Code != errCodeBadRequest {
+	if body := decodeErrorBody(t, w); body.Error.Code != string(errcat.BadRequest) {
 		t.Fatalf("error code = %q; want bad_request", body.Error.Code)
 	}
 }
@@ -482,7 +483,7 @@ func TestCreateFeatureEnforcesCombinedUploadCounts(t *testing.T) {
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d; want 400", w.Code)
 	}
-	if body := decodeErrorBody(t, w); body.Error.Code != errCodeBadRequest || !strings.Contains(body.Error.Message, "12") {
+	if body := decodeErrorBody(t, w); body.Error.Code != string(errcat.BadRequest) || !strings.Contains(body.Error.Diagnostics, "12") {
 		t.Fatalf("error = %+v; want bad_request naming the 12-image limit", body.Error)
 	}
 	if target.createReq != nil {
@@ -506,7 +507,7 @@ func TestCreateFeatureEnforcesCombinedUploadCounts(t *testing.T) {
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d; want 400", w.Code)
 	}
-	if body := decodeErrorBody(t, w); body.Error.Code != errCodeBadRequest || !strings.Contains(body.Error.Message, "24") {
+	if body := decodeErrorBody(t, w); body.Error.Code != string(errcat.BadRequest) || !strings.Contains(body.Error.Diagnostics, "24") {
 		t.Fatalf("error = %+v; want bad_request naming the 24-attachment limit", body.Error)
 	}
 }

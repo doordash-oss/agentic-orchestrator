@@ -41,15 +41,6 @@ import {
 import { serverRequest, type ServerTransport } from './serverClient';
 import { toReadinessSnapshot } from './setup';
 
-const REMEDIES = {
-  remedyByCode: {
-    not_found: 'The item no longer exists on the server. Refresh and retry.',
-    bad_request: 'Correct the highlighted input, then try again.',
-    validation_failed: 'Fix the reported issues, then try again.',
-    conflict: 'The configuration changed on the server. Refresh and retry.',
-  },
-} as const;
-
 const ServerModelsSchema = z.object({
   inquiry: z.string().optional(),
   research: z.string().optional(),
@@ -268,7 +259,6 @@ export class ConfigService {
       this.transport,
       `/api/v1/features/${encodeURIComponent(id)}/config`,
       undefined,
-      REMEDIES,
     );
     const parsed = FeatureConfigResponseSchema.safeParse(body);
     if (!parsed.success) throw new Error('E_FEATURE_CONFIG: invalid server response');
@@ -298,7 +288,6 @@ export class ConfigService {
           automatic_review_mode: req.config.automaticReviewMode,
         },
       },
-      REMEDIES,
     );
     const parsed = ActionResponseSchema.safeParse(body);
     if (!parsed.success) throw new Error('E_FEATURE_CONFIG_SAVE: invalid server response');
@@ -307,7 +296,7 @@ export class ConfigService {
   }
 
   async getWorkspaceDefaults(): Promise<WorkspaceDefaults> {
-    const body = await serverRequest(this.transport, '/api/v1/config/runtime', undefined, REMEDIES);
+    const body = await serverRequest(this.transport, '/api/v1/config/runtime', undefined);
     const parsed = RuntimeConfigResponseSchema.safeParse(body);
     if (!parsed.success) throw new Error('E_WORKSPACE_DEFAULTS: invalid server response');
     assertCompatibleApiVersion(parsed.data.api_version);
@@ -324,25 +313,20 @@ export class ConfigService {
   }
 
   async updateWorkspaceDefaults(defaults: WorkspaceDefaults): Promise<WorkspaceDefaults> {
-    const body = await serverRequest(
-      this.transport,
-      '/api/v1/config/runtime',
-      {
-        method: 'PATCH',
-        body: {
-          defaults: {
-            models: toServerModels(defaults.models),
-            effort: toServerEffort(defaults.effort),
-            inquireness: defaults.inquireness,
-            checkpoints: toServerCheckpoints(defaults.checkpoints),
-            ...(defaults.pipeline === '' ? {} : { pipeline: defaults.pipeline }),
-            automatic_review_enabled: defaults.automaticReviewEnabled,
-          },
-          notifications: { mute_feature_input: defaults.muteFeatureInput },
+    const body = await serverRequest(this.transport, '/api/v1/config/runtime', {
+      method: 'PATCH',
+      body: {
+        defaults: {
+          models: toServerModels(defaults.models),
+          effort: toServerEffort(defaults.effort),
+          inquireness: defaults.inquireness,
+          checkpoints: toServerCheckpoints(defaults.checkpoints),
+          ...(defaults.pipeline === '' ? {} : { pipeline: defaults.pipeline }),
+          automatic_review_enabled: defaults.automaticReviewEnabled,
         },
+        notifications: { mute_feature_input: defaults.muteFeatureInput },
       },
-      REMEDIES,
-    );
+    });
     const parsed = ActionResponseSchema.safeParse(body);
     if (!parsed.success) throw new Error('E_WORKSPACE_DEFAULTS_SAVE: invalid server response');
     assertCompatibleApiVersion(parsed.data.api_version);
@@ -350,19 +334,17 @@ export class ConfigService {
   }
 
   async getModelCatalogue(): Promise<ModelCatalogue> {
-    const body = await serverRequest(this.transport, '/api/v1/catalog/models', undefined, REMEDIES);
+    const body = await serverRequest(this.transport, '/api/v1/catalog/models', undefined);
     const parsed = ModelCatalogResponseSchema.safeParse(body);
     if (!parsed.success) throw new Error('E_MODEL_CATALOGUE: invalid server response');
     return toModelCatalogue(parsed.data);
   }
 
   async refreshProviderModels(provider: string): Promise<ProviderModelRefreshResult> {
-    const body = await serverRequest(
-      this.transport,
-      '/api/v1/catalog/models/refresh',
-      { method: 'POST', body: { provider } },
-      REMEDIES,
-    );
+    const body = await serverRequest(this.transport, '/api/v1/catalog/models/refresh', {
+      method: 'POST',
+      body: { provider },
+    });
     const parsed = ProviderModelRefreshResponseSchema.safeParse(body);
     if (!parsed.success) throw new Error('E_PROVIDER_MODEL_REFRESH: invalid server response');
     assertCompatibleApiVersion(parsed.data.api_version);

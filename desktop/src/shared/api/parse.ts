@@ -332,19 +332,6 @@ export const ReviewDecisionResponseSchema = z.object({
 });
 export type ServerReviewDecision = z.output<typeof ReviewDecisionResponseSchema>;
 
-export const ReviewConflictResponseSchema = z.object({
-  api_version: z.string(),
-  error: z.object({
-    code: z.literal('conflict'),
-    message: z.string(),
-    target: z.object({
-      review_id: z.string().min(1),
-      current_revision: z.string().min(1),
-      expected_revision: z.string().min(1),
-    }),
-  }),
-});
-
 // --- Runtime config (GET /api/v1/config/runtime) — workspace-roots subset ---
 // Only the fields the desktop setup flow consumes; the full response has
 // many more, which z.object tolerates and strips.
@@ -988,47 +975,68 @@ export const RuntimeConfigCreationSchema = z.object({
 
 export type RuntimeConfigCreation = z.output<typeof RuntimeConfigCreationSchema>;
 
-// --- Structured server error bodies (ErrorResponse) -------------------------
-// Lenient on purpose: error paths must degrade gracefully, never fail open.
+// --- Canonical server error body (ErrorResponse) -----------------------------
+// Strict on purpose: the canonical shape is a real contract, so unknown
+// properties, an unknown class, or the pre-canonical `{code,message,status}`
+// body all fail parsing and degrade to the main-process transport error.
 
-export const ServerErrorResponseSchema = z.object({
-  error: z.object({
-    code: z.string(),
-    message: z.string(),
-  }),
+/** Canonical catalog-rendered error, mirroring the generated Error component. */
+export const CanonicalErrorSchema = z.strictObject({
+  code: z.string().min(1),
+  class: z.enum(['blocking', 'needs_action', 'warning']),
+  title: z.string().min(1),
+  summary: z.string().min(1),
+  remediation: z
+    .strictObject({
+      hint: z.string().optional(),
+      actions: z.array(z.string().min(1)).max(16).optional(),
+    })
+    .optional(),
+  context: z
+    .strictObject({
+      repositories: z
+        .array(
+          z.strictObject({
+            name: z.string().min(1),
+            branch: z.string().optional(),
+            conflict_files: z.array(z.string()).max(500).optional(),
+            dirty_files: z.array(z.string()).max(500).optional(),
+            parent_anchor_sha: z.string().optional(),
+            expected_ref_sha: z.string().optional(),
+            child_head_sha: z.string().optional(),
+            candidate_sha: z.string().optional(),
+            merge_head: z.string().optional(),
+            observed_sha: z.string().optional(),
+          }),
+        )
+        .max(100)
+        .optional(),
+      phase: z
+        .strictObject({
+          name: z.string().min(1),
+          iteration: z.number().int().nonnegative().optional(),
+        })
+        .optional(),
+      command: z
+        .strictObject({
+          exit_code: z.number().int().optional(),
+          log_paths: z.array(z.string()).max(50).optional(),
+        })
+        .optional(),
+    })
+    .optional(),
+  diagnostics: z.string().optional(),
 });
 
-/**
- * Error body including the structured `target` payload the server attaches
- * to 409 `not_ready` creation rejections (outstanding readiness issues).
- */
-export const ServerErrorWithIssuesSchema = z.object({
-  error: z.object({
-    code: z.string(),
-    message: z.string(),
-    target: z
-      .object({
-        issues: z
-          .array(z.object({ code: z.string(), message: z.string(), remedy: z.string().optional() }))
-          .optional(),
-        repos: z
-          .array(
-            z.object({
-              repo: z.string().optional(),
-              path: z.string().optional(),
-              staged: z.array(z.string()).optional(),
-              unstaged: z.array(z.string()).optional(),
-              untracked: z.array(z.string()).optional(),
-              staged_total: z.number().int().nonnegative().optional(),
-              unstaged_total: z.number().int().nonnegative().optional(),
-              untracked_total: z.number().int().nonnegative().optional(),
-            }),
-          )
-          .optional(),
-      })
-      .optional(),
-  }),
+export type CanonicalError = z.output<typeof CanonicalErrorSchema>;
+
+/** The full non-2xx response envelope carrying one canonical error. */
+export const CanonicalErrorResponseSchema = z.strictObject({
+  api_version: z.string(),
+  error: CanonicalErrorSchema,
 });
+
+export type CanonicalErrorResponse = z.output<typeof CanonicalErrorResponseSchema>;
 
 // --- Recovery, cycle actions, preflight, and bulk preview -------------------
 
@@ -1194,6 +1202,17 @@ export type PublishDescriptionResponse = z.output<typeof PublishDescriptionRespo
 
 // Compile-time drift guards: zod outputs must stay assignable to the
 // generated OpenAPI component types.
+// The canonical error schema is a strict superset check: the generated
+// component must remain assignable to the parsed output (remediation action
+// IDs parse as plain strings; the generated type narrows them to the
+// feature-action enum, which is what the server-side catalog test pins).
+type CanonicalErrorDTO = components['schemas']['Error'];
+const _canonicalErrorSubset = (value: CanonicalErrorDTO): CanonicalError => value;
+void _canonicalErrorSubset;
+type CanonicalErrorResponseDTO = components['schemas']['ErrorResponse'];
+const _canonicalErrorResponseSubset = (value: CanonicalErrorResponseDTO): CanonicalErrorResponse =>
+  value;
+void _canonicalErrorResponseSubset;
 type HealthDTO = components['schemas']['HealthResponse'];
 const _healthAssignable = (value: HealthResponse): HealthDTO => value;
 void _healthAssignable;

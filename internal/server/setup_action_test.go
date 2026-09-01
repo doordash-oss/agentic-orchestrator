@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"testing"
 
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 )
 
@@ -75,7 +76,7 @@ func TestFeatureSetupActionDispatchesServerOwnedSetup(t *testing.T) {
 func TestFeatureSetupActionRejectsConflicts(t *testing.T) {
 	t.Parallel()
 	target := &setupActionMutationTarget{
-		setupErr: &ActionConflictError{Message: "feature has no pending setup"},
+		setupErr: &ActionConflictError{Code: errcat.Conflict, Detail: "feature has no pending setup"},
 	}
 	handler := NewHandler(HandlerOptions{
 		Mutations:             target,
@@ -86,8 +87,12 @@ func TestFeatureSetupActionRejectsConflicts(t *testing.T) {
 	if w.Code != http.StatusConflict {
 		t.Fatalf("status = %d; want 409", w.Code)
 	}
-	if body := decodeErrorBody(t, w); body.Error.Code != errCodeConflict {
-		t.Fatalf("error code = %q; want %q", body.Error.Code, errCodeConflict)
+	body := decodeErrorBody(t, w)
+	if body.Error.Code != string(errcat.Conflict) {
+		t.Fatalf("error code = %q; want %q", body.Error.Code, errcat.Conflict)
+	}
+	if body.Error.Diagnostics != "feature has no pending setup" {
+		t.Fatalf("diagnostics = %q; want the setup conflict detail", body.Error.Diagnostics)
 	}
 }
 

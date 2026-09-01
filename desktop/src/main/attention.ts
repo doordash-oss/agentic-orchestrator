@@ -48,13 +48,6 @@ import { SafeErrorException } from '../shared/errors';
 import type { ApiRequestInit } from './gateway/runtimeGateway';
 import { serverRequest, type ServerTransport } from './serverClient';
 
-const REMEDIES = {
-  remedyByCode: {
-    bad_request: 'Refresh the item and correct the response.',
-    conflict: ATTENTION_ALREADY_RESOLVED_NOTICE,
-    not_found: ATTENTION_ALREADY_RESOLVED_NOTICE,
-  },
-};
 const fallbackTime = '1970-01-01T00:00:00.000Z';
 
 // Fallback for servers that predate HelpQueue.kind: mirrors the synthetic
@@ -341,7 +334,7 @@ export class AttentionService {
     path: string,
     schema: { parse: (value: unknown) => T },
   ): Promise<T> {
-    const body = await serverRequest(this.transport, path, undefined, REMEDIES);
+    const body = await serverRequest(this.transport, path, undefined);
     return schema.parse(body);
   }
   private async mutate(
@@ -349,12 +342,10 @@ export class AttentionService {
     body: Record<string, unknown>,
   ): Promise<AttentionActionResult> {
     try {
-      const response = await serverRequest(
-        this.transport,
-        path,
-        { method: 'POST', body } as ApiRequestInit,
-        REMEDIES,
-      );
+      const response = await serverRequest(this.transport, path, {
+        method: 'POST',
+        body,
+      } as ApiRequestInit);
       const value = response as {
         result?: unknown;
         permission_answer_response?: { audit_warning?: unknown; already_existed?: unknown };

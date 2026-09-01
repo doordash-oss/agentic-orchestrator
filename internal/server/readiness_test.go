@@ -29,6 +29,7 @@ import (
 	"testing"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
 )
@@ -397,11 +398,11 @@ func TestCreateFeatureRejectsUnresolvableModelOverrides(t *testing.T) {
 		t.Fatalf("create status = %d body=%s; want 400", w.Code, w.Body.String())
 	}
 	body := decodeErrorBody(t, w)
-	if body.Error.Code != errCodeBadRequest {
-		t.Fatalf("error code = %q; want %q", body.Error.Code, errCodeBadRequest)
+	if body.Error.Code != string(errcat.BadRequest) {
+		t.Fatalf("error code = %q; want %q", body.Error.Code, errcat.BadRequest)
 	}
-	if !strings.Contains(body.Error.Message, "model for planning is unavailable") {
-		t.Fatalf("message = %q; want unavailable planning model", body.Error.Message)
+	if !strings.Contains(body.Error.Diagnostics, "model for planning is unavailable") {
+		t.Fatalf("diagnostics = %q; want unavailable planning model", body.Error.Diagnostics)
 	}
 	if got := target.created.Load(); got != 0 {
 		t.Fatalf("CreateFeature called %d times; want 0 for invalid model", got)
@@ -476,26 +477,28 @@ func TestCreateFeatureReturnsStructuredReadinessErrorWhenNoProviderUsable(t *tes
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 		t.Fatalf("decode error response: %v", err)
 	}
-	if body.Error.Code != "not_ready" {
-		t.Fatalf("error code = %q; want not_ready", body.Error.Code)
+	if body.Error.Code != string(errcat.NotReady) {
+		t.Fatalf("error code = %q; want %q", body.Error.Code, errcat.NotReady)
 	}
-	rawIssues, ok := body.Error.Target["issues"]
-	if !ok {
-		t.Fatalf("error target = %+v; want structured issues", body.Error.Target)
+	if body.Error.Class != ErrorClass(errcat.ClassNeedsAction) {
+		t.Fatalf("error class = %q; want %q", body.Error.Class, errcat.ClassNeedsAction)
 	}
-	issuesJSON, _ := json.Marshal(rawIssues)
-	var issues []ReadinessIssue
-	if err := json.Unmarshal(issuesJSON, &issues); err != nil || len(issues) == 0 {
-		t.Fatalf("issues = %s (err=%v); want non-empty readiness issues", issuesJSON, err)
+	if !strings.Contains(body.Error.Summary, "Unauthenticated") {
+		t.Fatalf("error summary = %q; want catalog issue title Unauthenticated", body.Error.Summary)
 	}
+	if !strings.Contains(body.Error.Diagnostics, "not authenticated") {
+		t.Fatalf("error diagnostics = %q; want raw unauthenticated issue message", body.Error.Diagnostics)
+	}
+	// The 200 readiness endpoint still carries the structured issue payloads.
+	snapshot := getReadinessSnapshot(t, handler)
 	sawUnauthenticated := false
-	for _, issue := range issues {
+	for _, issue := range snapshot.Issues {
 		if issue.Code == Unauthenticated {
 			sawUnauthenticated = true
 		}
 	}
 	if !sawUnauthenticated {
-		t.Fatalf("issues = %+v; want unauthenticated issue", issues)
+		t.Fatalf("readiness issues = %+v; want unauthenticated issue", snapshot.Issues)
 	}
 	if got := target.created.Load(); got != 0 {
 		t.Fatalf("CreateFeature called %d times; want 0 while not ready", got)

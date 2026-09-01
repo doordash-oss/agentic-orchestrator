@@ -19,6 +19,7 @@ limitations under the License.
  * renderer. Messages must never contain raw payloads, tokens, or absolute
  * user paths — anything crossing the IPC boundary goes through these helpers.
  */
+import type { CanonicalError } from './api/parse';
 
 export interface SafeError {
   /** Stable machine-readable code, e.g. `E_PAYLOAD_TOO_LARGE`. */
@@ -27,18 +28,6 @@ export interface SafeError {
   message: string;
   /** Optional actionable next step for the user. */
   remediation?: string;
-  details?: {
-    dirtyWorktrees?: Array<{
-      repo?: string;
-      path?: string;
-      staged?: string[];
-      unstaged?: string[];
-      untracked?: string[];
-      stagedTotal?: number;
-      unstagedTotal?: number;
-      untrackedTotal?: number;
-    }>;
-  };
 }
 
 export class SafeErrorException extends Error {
@@ -51,18 +40,38 @@ export class SafeErrorException extends Error {
   }
 }
 
-export function safeError(
-  code: string,
-  message: string,
-  remediation?: string,
-  details?: SafeError['details'],
-): SafeError {
+/**
+ * A server-emitted canonical error. The parsed catalog-rendered object
+ * crosses IPC unchanged: the catalog owns the human text, so the main
+ * process never re-wraps or re-redacts it.
+ */
+export class CanonicalErrorException extends Error {
+  readonly canonical: CanonicalError;
+
+  constructor(canonical: CanonicalError) {
+    super(`${canonical.code}: ${canonical.title} — ${canonical.summary}`);
+    this.name = 'CanonicalErrorException';
+    this.canonical = canonical;
+  }
+}
+
+export function safeError(code: string, message: string, remediation?: string): SafeError {
   return {
     code,
     message,
     ...(remediation === undefined ? {} : { remediation }),
-    ...(details === undefined ? {} : { details }),
   };
+}
+
+/**
+ * The IPC envelope's error branch: a canonical server error passes through
+ * unchanged; anything else degrades to the redacted safe-error shape.
+ */
+export function toEnvelopeError(err: unknown, fallbackCode: string): SafeError | CanonicalError {
+  if (err instanceof CanonicalErrorException) {
+    return err.canonical;
+  }
+  return toSafeError(err, fallbackCode);
 }
 
 /** A request outran its client-side bound; the server operation may still be running. */
@@ -88,6 +97,14 @@ export function requiresLocalServerError(): SafeError {
 export function isRequiresLocalServerError(err: unknown): boolean {
   return err instanceof SafeErrorException && err.safe.code === E_REQUIRES_LOCAL_SERVER;
 }
+
+/**
+ * Prefix marking an Error message that carries a full canonical error as
+ * JSON. Custom Error properties do not survive the context bridge, so the
+ * message itself is the only channel that reliably carries the canonical
+ * object from preload to the renderer.
+ */
+export const CANONICAL_ERROR_MESSAGE_PREFIX = 'E_CANONICAL_ERROR ';
 
 /**
  * The typed timeout error. Distinct from a failure: the mutation was accepted

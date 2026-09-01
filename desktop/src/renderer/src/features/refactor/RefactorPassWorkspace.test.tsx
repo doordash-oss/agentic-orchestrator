@@ -627,4 +627,61 @@ describe('RefactorPassWorkspace', () => {
     renderWorkspace(parent, controllerFor(parent, readyChild()));
     expect(screen.queryByText(/comments across/)).not.toBeInTheDocument();
   });
+
+  it('renders a rejected child dispatch as one compact error surface', async () => {
+    const mock = installAgenticoMock({ feature: readyChild() });
+    mock.api.dispatchFeatureAction.mockRejectedValue(
+      Object.assign(new Error('conflict: Start is stale.'), {
+        canonical: {
+          code: 'conflict',
+          class: 'blocking',
+          title: 'Conflict',
+          summary: 'The request conflicts with the current state of the feature.',
+        },
+      }),
+    );
+    const { result } = renderHook(() => useRefactorPass(parentWith(), vi.fn()));
+    await waitFor(() => expect(result.current.child?.id).toBe(CHILD_ID));
+    await act(async () => {
+      await result.current.dispatch('start');
+    });
+    renderWorkspace(parentWith(), result.current);
+
+    expect(document.querySelectorAll('.error-surface')).toHaveLength(1);
+    expect(screen.getByText('Conflict')).toBeVisible();
+    expect(screen.getByText('conflict')).toHaveClass('error-surface__code');
+    expect(screen.getByText('The pass action was rejected')).toBeVisible();
+    expect(
+      screen.getByText('The request conflicts with the current state of the feature.'),
+    ).toBeVisible();
+    // The plain-text notice markup is gone.
+    expect(document.querySelector('.refactor-pass__notice')).toBeNull();
+  });
+
+  it('renders a rejected discard as one compact error surface', async () => {
+    const mock = installAgenticoMock({ feature: readyChild() });
+    mock.api.discardRefactorChild.mockRejectedValue(
+      Object.assign(new Error('conflict: The pass is still running.'), {
+        canonical: {
+          code: 'conflict',
+          class: 'blocking',
+          title: 'Conflict',
+          summary: 'The request conflicts with the current state of the feature.',
+        },
+      }),
+    );
+    const { result } = renderHook(() => useRefactorPass(parentWith(), vi.fn()));
+    await waitFor(() => expect(result.current.child?.id).toBe(CHILD_ID));
+    act(() => result.current.openDiscard());
+    await act(async () => {
+      await result.current.discard();
+    });
+    renderWorkspace(parentWith(), result.current);
+
+    expect(document.querySelectorAll('.error-surface')).toHaveLength(1);
+    expect(screen.getByText('Conflict')).toBeVisible();
+    expect(screen.getByText('conflict')).toHaveClass('error-surface__code');
+    expect(screen.getByText('The pass action was rejected')).toBeVisible();
+    expect(document.querySelector('.refactor-pass__notice')).toBeNull();
+  });
 });

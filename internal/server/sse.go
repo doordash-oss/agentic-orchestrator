@@ -25,6 +25,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
@@ -342,7 +343,7 @@ func (b *eventBroker) streamResetEventLocked() SSEEvent {
 func (h *apiHandler) handleEvents(w http.ResponseWriter, r *http.Request) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
-		writeAPIError(w, http.StatusInternalServerError, "internal_error", "streaming unavailable", nil)
+		writeAPIError(w, http.StatusInternalServerError, errcat.InternalError, errcat.WithDiagnostics("streaming unavailable"))
 		return
 	}
 	w.Header().Set("Content-Type", "text/event-stream")

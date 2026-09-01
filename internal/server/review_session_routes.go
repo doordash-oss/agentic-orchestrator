@@ -16,9 +16,12 @@ package server
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"strings"
+
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 )
 
 func (h *apiHandler) handleReviewSessionRoute(w http.ResponseWriter, r *http.Request, featureID string, parts []string) {
@@ -31,7 +34,7 @@ func (h *apiHandler) handleReviewSessionRoute(w http.ResponseWriter, r *http.Req
 		h.handleCreateReviewSession(w, r, featureID)
 	case len(parts) == 2:
 		if !validEntityID(parts[0]) {
-			writeAPIError(w, http.StatusBadRequest, errCodeBadRequest, "invalid review id", map[string]any{"feature_id": featureID})
+			writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics(fmt.Sprintf("invalid review id for feature %q", featureID)))
 			return
 		}
 		switch parts[1] {
@@ -42,10 +45,10 @@ func (h *apiHandler) handleReviewSessionRoute(w http.ResponseWriter, r *http.Req
 		case "decision":
 			h.handleSubmitReviewSessionDecision(w, r, featureID, parts[0])
 		default:
-			writeAPIError(w, http.StatusNotFound, "not_found", "endpoint not found", nil)
+			writeAPIError(w, http.StatusNotFound, errcat.NotFound, errcat.WithParams(errcat.SubjectParams{Subject: "Endpoint"}))
 		}
 	default:
-		writeAPIError(w, http.StatusNotFound, "not_found", "endpoint not found", nil)
+		writeAPIError(w, http.StatusNotFound, errcat.NotFound, errcat.WithParams(errcat.SubjectParams{Subject: "Endpoint"}))
 	}
 }
 
@@ -61,7 +64,7 @@ func (h *apiHandler) handleReadReviewSession(w http.ResponseWriter, r *http.Requ
 func (h *apiHandler) handleCreateReviewSession(w http.ResponseWriter, r *http.Request, featureID string) {
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", http.MethodPost)
-		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed", nil)
+		writeAPIError(w, http.StatusMethodNotAllowed, errcat.MethodNotAllowed)
 		return
 	}
 	if !h.requireTrustedJSONMutation(w, r) {
@@ -82,7 +85,7 @@ func (h *apiHandler) handleCreateReviewSession(w http.ResponseWriter, r *http.Re
 func (h *apiHandler) handleSaveReviewDraft(w http.ResponseWriter, r *http.Request, featureID, reviewID string) {
 	if r.Method != http.MethodPut {
 		w.Header().Set("Allow", http.MethodPut)
-		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed", nil)
+		writeAPIError(w, http.StatusMethodNotAllowed, errcat.MethodNotAllowed)
 		return
 	}
 	if !h.requireTrustedJSONMutation(w, r) {
@@ -103,7 +106,7 @@ func (h *apiHandler) handleSaveReviewDraft(w http.ResponseWriter, r *http.Reques
 func (h *apiHandler) handleValidateReviewDraft(w http.ResponseWriter, r *http.Request, featureID, reviewID string) {
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", http.MethodPost)
-		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed", nil)
+		writeAPIError(w, http.StatusMethodNotAllowed, errcat.MethodNotAllowed)
 		return
 	}
 	if !h.requireTrustedJSONMutation(w, r) {
@@ -124,7 +127,7 @@ func (h *apiHandler) handleValidateReviewDraft(w http.ResponseWriter, r *http.Re
 func (h *apiHandler) handleSubmitReviewSessionDecision(w http.ResponseWriter, r *http.Request, featureID, reviewID string) {
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", http.MethodPost)
-		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed", nil)
+		writeAPIError(w, http.StatusMethodNotAllowed, errcat.MethodNotAllowed)
 		return
 	}
 	if !h.requireTrustedJSONMutation(w, r) {
@@ -155,20 +158,20 @@ func (h *apiHandler) reviewSessionService() *reviewSessionService {
 
 func (h *apiHandler) requireTrustedJSONMutation(w http.ResponseWriter, r *http.Request) bool {
 	if r.Header.Get("X-Agentico-Client") != trustedClientHeaderValue {
-		writeAPIError(w, http.StatusForbidden, "forbidden", "trusted local client header is required", nil)
+		writeAPIError(w, http.StatusForbidden, errcat.Forbidden, errcat.WithDiagnostics("trusted local client header is required"))
 		return false
 	}
 	if origin := r.Header.Get("Origin"); origin != "" && !isLoopbackOrigin(origin) {
-		writeAPIError(w, http.StatusForbidden, "forbidden", "browser origin is not trusted", nil)
+		writeAPIError(w, http.StatusForbidden, errcat.Forbidden, errcat.WithDiagnostics("browser origin is not trusted"))
 		return false
 	}
 	ct := strings.ToLower(r.Header.Get("Content-Type"))
 	if !strings.HasPrefix(ct, "application/json") {
-		writeAPIError(w, http.StatusUnsupportedMediaType, "unsupported_media_type", "JSON body is required", nil)
+		writeAPIError(w, http.StatusUnsupportedMediaType, errcat.UnsupportedMediaType, errcat.WithDiagnostics("JSON body is required"))
 		return false
 	}
 	if r.ContentLength > MaxMutationBodyBytes {
-		writeAPIError(w, http.StatusRequestEntityTooLarge, "request_too_large", "mutation body is too large", nil)
+		writeAPIError(w, http.StatusRequestEntityTooLarge, errcat.RequestTooLarge, errcat.WithDiagnostics("mutation body is too large"))
 		return false
 	}
 	return true
@@ -176,7 +179,7 @@ func (h *apiHandler) requireTrustedJSONMutation(w http.ResponseWriter, r *http.R
 
 func writeReviewSessionError(w http.ResponseWriter, err error, featureID, reviewID string) {
 	if err == nil {
-		writeAPIError(w, http.StatusInternalServerError, "internal_error", "review session failed", nil)
+		writeAPIError(w, http.StatusInternalServerError, errcat.InternalError, errcat.WithDiagnostics("review session failed"))
 		return
 	}
 	var conflict *ActionConflictError
@@ -185,11 +188,11 @@ func writeReviewSessionError(w http.ResponseWriter, err error, featureID, review
 		return
 	}
 	if errors.Is(err, os.ErrNotExist) {
-		target := map[string]any{"feature_id": featureID}
+		params := errcat.SubjectParams{Subject: "Review session"}
 		if reviewID != "" {
-			target["review_id"] = reviewID
+			params.Name = reviewID
 		}
-		writeAPIError(w, http.StatusNotFound, "not_found", "review session not found", target)
+		writeAPIError(w, http.StatusNotFound, errcat.NotFound, errcat.WithParams(params))
 		return
 	}
 	writeMutationError(w, err)

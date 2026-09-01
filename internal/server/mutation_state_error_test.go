@@ -17,9 +17,9 @@ package server
 import (
 	"fmt"
 	"net/http"
-	"strings"
 	"testing"
 
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 )
 
@@ -52,39 +52,44 @@ func TestLifecycleActionsClassifyStateRejections(t *testing.T) {
 		Transition(feature.StatusImplementReady)
 
 	tests := []struct {
-		name     string
-		action   string
-		err      error
-		wantCode string
-		wantMsg  string
+		name        string
+		action      string
+		err         error
+		wantCode    string
+		wantTitle   string
+		wantSummary string
 	}{
 		{
-			name:     "resume with open gate",
-			action:   "resume",
-			err:      fmt.Errorf("%w: %s", feature.ErrNeedUserInputGateOpen, gatePath),
-			wantCode: errCodeNeedUserInputOpen,
-			wantMsg:  gatePath,
+			name:        "resume with open gate",
+			action:      "resume",
+			err:         fmt.Errorf("%w: %s", feature.ErrNeedUserInputGateOpen, gatePath),
+			wantCode:    string(errcat.NeedUserInputOpen),
+			wantTitle:   "Waiting on user input",
+			wantSummary: "The feature is waiting on an open user input request.",
 		},
 		{
-			name:     "start with open gate",
-			action:   "start",
-			err:      fmt.Errorf("%w: %s", feature.ErrNeedUserInputGateOpen, gatePath),
-			wantCode: errCodeNeedUserInputOpen,
-			wantMsg:  gatePath,
+			name:        "start with open gate",
+			action:      "start",
+			err:         fmt.Errorf("%w: %s", feature.ErrNeedUserInputGateOpen, gatePath),
+			wantCode:    string(errcat.NeedUserInputOpen),
+			wantTitle:   "Waiting on user input",
+			wantSummary: "The feature is waiting on an open user input request.",
 		},
 		{
-			name:     "start while finalizing",
-			action:   "start",
-			err:      feature.ErrPhaseFinalizing,
-			wantCode: errCodePhaseFinalizing,
-			wantMsg:  "finalizing",
+			name:        "start while finalizing",
+			action:      "start",
+			err:         feature.ErrPhaseFinalizing,
+			wantCode:    string(errcat.PhaseFinalizing),
+			wantTitle:   "Phase finalizing",
+			wantSummary: "The feature is finalizing the current phase.",
 		},
 		{
-			name:     "restart rejected transition",
-			action:   "restart",
-			err:      fmt.Errorf("restart phase: %w", transitionErr),
-			wantCode: errCodeInvalidTransition,
-			wantMsg:  "invalid transition from NeedUserInput",
+			name:        "restart rejected transition",
+			action:      "restart",
+			err:         fmt.Errorf("restart phase: %w", transitionErr),
+			wantCode:    string(errcat.InvalidTransition),
+			wantTitle:   "Invalid transition",
+			wantSummary: "The action is not valid in the feature's current state.",
 		},
 	}
 	for _, tc := range tests {
@@ -104,8 +109,11 @@ func TestLifecycleActionsClassifyStateRejections(t *testing.T) {
 			if body.Error.Code != tc.wantCode {
 				t.Fatalf("error code = %q; want %q", body.Error.Code, tc.wantCode)
 			}
-			if !strings.Contains(body.Error.Message, tc.wantMsg) {
-				t.Fatalf("error message = %q; want it to name %q", body.Error.Message, tc.wantMsg)
+			if body.Error.Class != ErrorClass(errcat.ClassBlocking) {
+				t.Fatalf("error class = %q; want %q", body.Error.Class, errcat.ClassBlocking)
+			}
+			if body.Error.Title != tc.wantTitle || body.Error.Summary != tc.wantSummary {
+				t.Fatalf("error = %+v; want title %q and summary %q", body.Error, tc.wantTitle, tc.wantSummary)
 			}
 		})
 	}

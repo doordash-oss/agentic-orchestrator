@@ -16,6 +16,7 @@ limitations under the License.
 
 import { describe, expect, it } from 'vitest';
 import { ReviewService } from '../reviews';
+import { CanonicalErrorException } from '../../shared/errors';
 import type { ServerTransport } from '../serverClient';
 
 const session = {
@@ -76,12 +77,11 @@ describe('ReviewService', () => {
         api_version: 'v1',
         error: {
           code: 'conflict',
-          message: 'review draft revision is stale',
-          target: {
-            review_id: 'phase-plan',
-            current_revision: 'draft-server',
-            expected_revision: 'draft-server',
-          },
+          class: 'blocking',
+          title: 'Conflict',
+          summary: 'The request conflicts with the current state of the feature.',
+          diagnostics:
+            'review draft revision is stale (review "r1", current revision "draft-server")',
         },
       },
       409,
@@ -93,11 +93,35 @@ describe('ReviewService', () => {
         baseRevision: 'draft-mine',
         text: '# Mine',
       }),
-    ).resolves.toEqual({
-      type: 'conflict',
-      expectedRevision: 'draft-mine',
-      currentRevision: 'draft-server',
-    });
+    ).resolves.toEqual({ type: 'conflict' });
+  });
+
+  it('throws the canonical error for a non-conflict 409 instead of masking it', async () => {
+    const client = transport(
+      {
+        api_version: 'v1',
+        error: {
+          code: 'need_user_input_open',
+          class: 'blocking',
+          title: 'Waiting on user input',
+          summary: 'The feature is waiting on an open user input request.',
+          remediation: { hint: 'Answer the open input request to continue.' },
+        },
+      },
+      409,
+    );
+    const err = await new ReviewService(client)
+      .save({
+        featureId: 'feature-1',
+        reviewId: 'phase-plan',
+        baseRevision: 'draft-a',
+        text: '# Mine',
+      })
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(CanonicalErrorException);
+    expect((err as CanonicalErrorException).canonical.code).toBe('need_user_input_open');
+    // Only one network call — the mutation must not be replayed for error mapping.
+    expect(client.calls).toHaveLength(1);
   });
 
   it('returns a validation result bound to the submitted text revision', async () => {
@@ -123,7 +147,13 @@ describe('ReviewService', () => {
     const client = transport(
       {
         api_version: 'v1',
-        error: { code: 'not_found', message: 'review session gone' },
+        error: {
+          code: 'not_found',
+          class: 'blocking',
+          title: 'Not found',
+          summary: 'The requested resource was not found.',
+          remediation: { hint: 'Refresh the view to see the current state, then try again.' },
+        },
       },
       404,
     );
@@ -134,7 +164,7 @@ describe('ReviewService', () => {
         baseRevision: 'draft-a',
         text: '# Mine',
       }),
-    ).rejects.toThrow();
+    ).rejects.toMatchObject({ canonical: { code: 'not_found' } });
     // Only one network call — the mutation must not be replayed for error mapping.
     expect(client.calls).toHaveLength(1);
   });

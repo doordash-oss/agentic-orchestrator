@@ -29,6 +29,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 )
 
 // The apiPathUploads route lives outside the JSON mutation pipeline
@@ -67,10 +69,10 @@ const (
 // allowlist (desktop/src/shared/ipc.ts); a desktop change there must be
 // mirrored here.
 var allowedUploadImageExtensions = map[string]bool{
-	"png": true,
-	"jpg": true,
+	"png":  true,
+	"jpg":  true,
 	"jpeg": true,
-	"gif": true,
+	"gif":  true,
 	"webp": true,
 }
 
@@ -510,7 +512,7 @@ func (c *consumedUploads) commit() {
 func (h *apiHandler) handleUploadsRoute(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", "POST")
-		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed", nil)
+		writeAPIError(w, http.StatusMethodNotAllowed, errcat.MethodNotAllowed)
 		return
 	}
 	if !h.requireTrustedUpload(w, r) {
@@ -525,32 +527,32 @@ func (h *apiHandler) handleUploadsRoute(w http.ResponseWriter, r *http.Request) 
 	case uploadKindAttachment:
 		limit = maxUploadAttachmentBytes
 	default:
-		writeAPIError(w, http.StatusBadRequest, errCodeBadRequest, "kind must be image or attachment", nil)
+		writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics("kind must be image or attachment"))
 		return
 	}
 	if name == "" {
-		writeAPIError(w, http.StatusBadRequest, errCodeBadRequest, "name is required", nil)
+		writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics("name is required"))
 		return
 	}
 	if len(name) > maxUploadNameLength {
-		writeAPIError(w, http.StatusBadRequest, errCodeBadRequest, fmt.Sprintf("name exceeds the %d character limit", maxUploadNameLength), nil)
+		writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics(fmt.Sprintf("name exceeds the %d character limit", maxUploadNameLength)))
 		return
 	}
 	if kind == uploadKindImage && !allowedUploadImageExtensions[strings.ToLower(strings.TrimPrefix(filepath.Ext(name), "."))] {
-		writeAPIError(w, http.StatusBadRequest, errCodeBadRequest, "image uploads require a png, jpg, jpeg, gif, or webp file name extension", nil)
+		writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics("image uploads require a png, jpg, jpeg, gif, or webp file name extension"))
 		return
 	}
 	if r.ContentLength > limit {
-		writeAPIError(w, http.StatusRequestEntityTooLarge, "request_too_large", "upload body is too large", nil)
+		writeAPIError(w, http.StatusRequestEntityTooLarge, errcat.RequestTooLarge, errcat.WithDiagnostics("upload body is too large"))
 		return
 	}
 	staged, err := h.uploads.stage(kind, name, limit, w, r)
 	if errors.Is(err, errUploadTooLarge) {
-		writeAPIError(w, http.StatusRequestEntityTooLarge, "request_too_large", "upload body is too large", nil)
+		writeAPIError(w, http.StatusRequestEntityTooLarge, errcat.RequestTooLarge, errcat.WithDiagnostics("upload body is too large"))
 		return
 	}
 	if err != nil {
-		writeAPIError(w, http.StatusInternalServerError, "internal_error", "stage upload", nil)
+		writeAPIError(w, http.StatusInternalServerError, errcat.InternalError, errcat.WithDiagnostics("stage upload"))
 		return
 	}
 	writeJSON(w, http.StatusOK, StageUploadResponse{
@@ -568,20 +570,20 @@ func (h *apiHandler) handleUploadsRoute(w http.ResponseWriter, r *http.Request) 
 // content type instead of a JSON body bound by MaxMutationBodyBytes.
 func (h *apiHandler) requireTrustedUpload(w http.ResponseWriter, r *http.Request) bool {
 	if h.uploads == nil {
-		writeAPIError(w, http.StatusServiceUnavailable, "unavailable", "upload service unavailable", nil)
+		writeAPIError(w, http.StatusServiceUnavailable, errcat.Unavailable)
 		return false
 	}
 	if r.Header.Get("X-Agentico-Client") != trustedClientHeaderValue {
-		writeAPIError(w, http.StatusForbidden, "forbidden", "trusted local client header is required", nil)
+		writeAPIError(w, http.StatusForbidden, errcat.Forbidden, errcat.WithDiagnostics("trusted local client header is required"))
 		return false
 	}
 	if origin := r.Header.Get("Origin"); origin != "" && !isLoopbackOrigin(origin) {
-		writeAPIError(w, http.StatusForbidden, "forbidden", "browser origin is not trusted", nil)
+		writeAPIError(w, http.StatusForbidden, errcat.Forbidden, errcat.WithDiagnostics("browser origin is not trusted"))
 		return false
 	}
 	ct := strings.ToLower(r.Header.Get("Content-Type"))
 	if !strings.HasPrefix(ct, contentTypeOctetStream) {
-		writeAPIError(w, http.StatusUnsupportedMediaType, "unsupported_media_type", "octet-stream body is required", nil)
+		writeAPIError(w, http.StatusUnsupportedMediaType, errcat.UnsupportedMediaType, errcat.WithDiagnostics("octet-stream body is required"))
 		return false
 	}
 	return true
@@ -592,13 +594,13 @@ func (h *apiHandler) requireTrustedUpload(w http.ResponseWriter, r *http.Request
 // the per-array limits by splitting across the two forms.
 func validateCombinedUploadCounts(w http.ResponseWriter, images, imageUploads, attachments, attachmentUploads int) bool {
 	if images+imageUploads > maxFeatureImagesTotal {
-		writeAPIError(w, http.StatusBadRequest, errCodeBadRequest,
-			fmt.Sprintf("too many images: images + image_uploads must be at most %d total", maxFeatureImagesTotal), nil)
+		writeAPIError(w, http.StatusBadRequest, errcat.BadRequest,
+			errcat.WithDiagnostics(fmt.Sprintf("too many images: images + image_uploads must be at most %d total", maxFeatureImagesTotal)))
 		return false
 	}
 	if attachments+attachmentUploads > maxFeatureAttachmentsTotal {
-		writeAPIError(w, http.StatusBadRequest, errCodeBadRequest,
-			fmt.Sprintf("too many attachments: attachments + attachment_uploads must be at most %d total", maxFeatureAttachmentsTotal), nil)
+		writeAPIError(w, http.StatusBadRequest, errcat.BadRequest,
+			errcat.WithDiagnostics(fmt.Sprintf("too many attachments: attachments + attachment_uploads must be at most %d total", maxFeatureAttachmentsTotal)))
 		return false
 	}
 	return true

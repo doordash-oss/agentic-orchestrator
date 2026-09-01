@@ -166,6 +166,25 @@ func TestOpenAPIDeclaresHardeningSchemas(t *testing.T) {
 		t, spec, "NeedUserInputVerificationBlocker",
 		"item_id", "name", "repo_name", "command", "reason", "capabilities", "remediation",
 	)
+	// The canonical error envelope: ErrorResponse wraps the catalog-rendered
+	// Error, which carries the stable code, severity class, and authored
+	// title/summary plus optional typed context and raw diagnostics.
+	assertSchemaProperties(t, spec, "ErrorResponse", "api_version", "error")
+	assertSchemaProperties(
+		t, spec, "Error",
+		"code", "class", "title", "summary", "diagnostics", "context", "remediation",
+	)
+	assertSchemaProperties(
+		t, spec, "ErrorRepositoryContext",
+		"name", "branch", "conflict_files", "dirty_files", "parent_anchor_sha",
+		"expected_ref_sha", "child_head_sha", "candidate_sha", "merge_head", "observed_sha",
+	)
+	errorProps := schemaProperties(spec.Components.Schemas["Error"])
+	for _, forbidden := range []string{"message", "status", "target"} {
+		if errorProps[forbidden] {
+			t.Fatalf("Error schema must not carry legacy property %q", forbidden)
+		}
+	}
 }
 
 // TestRefactorRequestSchemaOmitsRepoSelection pins the refactor contract:
@@ -317,7 +336,7 @@ func TestReviewFeedbackLaunchOperationBindsTypedSchemas(t *testing.T) {
 // time), the generated action enum includes refactor, and no hand-maintained
 // duplicate redefines the type.
 func TestGeneratedRefactorSurfaceIsTyped(t *testing.T) {
-	if RunFeatureActionParamsActionRefactor != RunFeatureActionParamsAction(actionRefactor) || !RunFeatureActionParamsActionRefactor.Valid() {
+	if FeatureActionRefactor != FeatureAction(actionRefactor) || !FeatureActionRefactor.Valid() {
 		t.Fatalf("generated action enum must include %q", actionRefactor)
 	}
 	req := RefactorFeatureRequest{

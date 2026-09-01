@@ -30,6 +30,7 @@ import (
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
@@ -37,10 +38,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
-const (
-	maxFeatureDetailHistoricalRuns = 5
-	promptSnapshotTooLargeCode     = "prompt_snapshot_too_large"
-)
+const maxFeatureDetailHistoricalRuns = 5
 
 var errNeedUserInputGateCollectionTooLarge = errors.New("pending prompt snapshot exceeds the safe response limit")
 
@@ -411,6 +409,27 @@ func (h *apiHandler) dirtyRepoDiagnostics(repos []feature.FeatureRepo) ([]map[st
 		return nil, indeterminate
 	}
 	return dirtyDiagnosticsPayload(dirty), indeterminate
+}
+
+// dirtyDiagnosticsPayload projects the bounded dirty-worktree findings onto
+// the read-model disabled-reason payload. The 2xx disabled-reason surface
+// keeps this shape; the canonical error envelope carries the typed
+// repositories context block instead (dirtyRepoContext).
+func dirtyDiagnosticsPayload(repos []feature.RepoDirtyDiagnostics) []map[string]any {
+	payload := make([]map[string]any, 0, len(repos))
+	for _, repo := range repos {
+		payload = append(payload, map[string]any{
+			"repo":            repo.Repo,
+			"path":            repo.Path,
+			"staged":          repo.Staged,
+			"unstaged":        repo.Unstaged,
+			"untracked":       repo.Untracked,
+			"staged_total":    repo.StagedTotal,
+			"unstaged_total":  repo.UnstagedTotal,
+			"untracked_total": repo.UntrackedTotal,
+		})
+	}
+	return payload
 }
 
 func disableAction(actions []Action, actionID string, reason ActionDisabledReason) {
@@ -1299,11 +1318,11 @@ func (h *apiHandler) handleProviderModelRefreshRoute(w http.ResponseWriter, r *h
 		return
 	}
 	if len(req.Provider) > 100 || !validEntityID(req.Provider) {
-		writeAPIError(w, http.StatusBadRequest, "bad_request", "invalid provider name", nil)
+		writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics("invalid provider name"))
 		return
 	}
 	if h.registry == nil || h.registry.ByName(req.Provider) == nil {
-		writeAPIError(w, http.StatusNotFound, "provider_not_found", "provider is not registered", nil)
+		writeAPIError(w, http.StatusNotFound, errcat.ProviderNotFound)
 		return
 	}
 
@@ -1318,23 +1337,23 @@ func (h *apiHandler) handleProviderModelRefreshRoute(w http.ResponseWriter, r *h
 		discoverer, canDiscover := provider.(llm.CatalogDiscoverer)
 		enricher, canEnrich := provider.(llm.CatalogEnricher)
 		if !canDiscover || !canEnrich {
-			writeAPIError(w, http.StatusConflict, "provider_model_refresh_unsupported", "provider does not support model refresh", nil)
+			writeAPIError(w, http.StatusConflict, errcat.ProviderModelRefreshUnsupported)
 			return
 		}
 		discoveryCtx, cancel := context.WithTimeout(r.Context(), 45*time.Second)
 		models, err := discoverer.DiscoverModelCatalog(discoveryCtx)
 		cancel()
 		if err != nil {
-			writeAPIError(w, http.StatusBadGateway, "provider_model_refresh_failed", "provider model refresh failed", nil)
+			writeAPIError(w, http.StatusBadGateway, errcat.ProviderModelRefreshFailed, errcat.WithDiagnostics("provider model refresh failed"))
 			return
 		}
 		if len(models) == 0 {
-			writeAPIError(w, http.StatusBadGateway, "provider_model_refresh_failed", "provider returned no models", nil)
+			writeAPIError(w, http.StatusBadGateway, errcat.ProviderModelRefreshFailed, errcat.WithDiagnostics("provider returned no models"))
 			return
 		}
 		if h.persistProviderModels != nil {
 			if err := h.persistProviderModels(provider, models); err != nil {
-				writeAPIError(w, http.StatusBadGateway, "provider_model_refresh_failed", "provider model catalog could not be persisted", nil)
+				writeAPIError(w, http.StatusBadGateway, errcat.ProviderModelRefreshFailed, errcat.WithDiagnostics("provider model catalog could not be persisted"))
 				return
 			}
 		}
@@ -1365,9 +1384,8 @@ func (h *apiHandler) handlePrompts(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(
 			w,
 			http.StatusInternalServerError,
-			promptSnapshotTooLargeCode,
-			errNeedUserInputGateCollectionTooLarge.Error(),
-			nil,
+			errcat.PromptSnapshotTooLarge,
+			errcat.WithDiagnostics(errNeedUserInputGateCollectionTooLarge.Error()),
 		)
 		return
 	}

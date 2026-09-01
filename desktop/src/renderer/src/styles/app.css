@@ -13841,3 +13841,280 @@ body {
     gap: var(--space-1);
   }
 }
+
+/* --- Error surface --------------------------------------------------------- */
+/* The canonical error presentation: one component, two densities (full for
+ * reading, compact for inline notices). Class drives the whole treatment at
+ * once — left rule, tint, icon, label word — so the surface never signals by
+ * color alone; the label word carries the meaning, the hue only tunes it. */
+
+.error-surface {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+  border: var(--bench-hairline-width) solid var(--hairline);
+  /* Blocking is the catalog default, so the base carries its accent and the
+   * other two classes override it. */
+  border-left: 2px solid var(--bad);
+  border-radius: var(--bench-radius-card);
+  padding: var(--space-3);
+  background: color-mix(in srgb, var(--bad) 6%, var(--content));
+  font-family: var(--bench-font-text);
+}
+
+.error-surface--needs-action {
+  border-left-color: var(--attention);
+  background: color-mix(in srgb, var(--attention) 6%, var(--content));
+}
+
+.error-surface--warning {
+  border-left-color: var(--muted);
+  background: color-mix(in srgb, var(--muted) 6%, var(--content));
+}
+
+.error-surface__header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.error-surface__icon {
+  display: inline-flex;
+  color: var(--bad);
+}
+
+.error-surface--needs-action .error-surface__icon {
+  color: var(--attention);
+}
+
+.error-surface--warning .error-surface__icon {
+  color: var(--muted);
+}
+
+.error-surface__label {
+  color: var(--bad);
+  font: 600 11px var(--bench-font-text);
+  letter-spacing: 0.02em;
+}
+
+.error-surface--needs-action .error-surface__label {
+  color: var(--attention);
+}
+
+.error-surface--warning .error-surface__label {
+  color: var(--muted);
+}
+
+/* The stable catalog code rides the header's trailing edge as a quiet mono
+ * tag — support conversations can name it in both variants. */
+.error-surface__code {
+  margin-left: auto;
+  padding: 1px var(--space-2);
+  border: var(--bench-hairline-width) solid var(--hairline);
+  border-radius: var(--bench-radius-control);
+  background: var(--raised);
+  color: var(--faint);
+  font: 11px var(--bench-font-mono);
+}
+
+.error-surface__caption {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11.5px;
+}
+
+.error-surface__title {
+  margin: 0;
+  color: var(--text);
+  font: 600 13px var(--bench-font-text);
+}
+
+.error-surface__summary {
+  margin: 0;
+  color: var(--text);
+  font-size: 12.5px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.error-surface__remediation {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+}
+
+.error-surface__remediation-hint {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.error-surface__action {
+  border: var(--bench-hairline-width) solid transparent;
+  border-radius: var(--bench-radius-control);
+  padding: 4px var(--space-3);
+  background: var(--accent);
+  color: var(--content);
+  font: 600 11.5px var(--bench-font-text);
+  cursor: pointer;
+}
+
+.error-surface__action:hover {
+  filter: brightness(1.1);
+}
+
+.error-surface__action:focus-visible {
+  outline: var(--focus-ring);
+}
+
+.error-surface__action-reason {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.error-surface__details,
+.error-surface__diagnostics {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  border-top: var(--bench-hairline-width) solid color-mix(in srgb, var(--hairline) 60%, transparent);
+  padding-top: var(--space-2);
+}
+
+.error-surface__details > summary,
+.error-surface__diagnostics > summary {
+  cursor: pointer;
+  color: var(--muted);
+  font: 600 11px var(--bench-font-text);
+  letter-spacing: 0.02em;
+}
+
+.error-surface__details > summary:focus-visible,
+.error-surface__diagnostics > summary:focus-visible {
+  outline: var(--focus-ring);
+}
+
+.error-surface__diagnostics-pre {
+  margin: 0;
+  padding: var(--space-2);
+  max-height: 180px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--text);
+  background: var(--raised);
+  border: var(--bench-hairline-width) solid var(--hairline);
+  border-radius: var(--bench-radius-control);
+  font: 11px var(--bench-font-mono);
+}
+
+.error-surface__details-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.error-surface__repos {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.error-surface__repo {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.error-surface__repo-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+
+.error-surface__repo-name {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.error-surface__repo-branch {
+  color: var(--muted);
+  font: 11px var(--bench-font-mono);
+}
+
+.error-surface__file-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.error-surface__file-list-label {
+  color: var(--faint);
+  font: 600 11px var(--bench-font-text);
+}
+
+.error-surface__file-list {
+  margin: 0;
+  padding-left: var(--space-3);
+  font: 11px var(--bench-font-mono);
+  overflow-wrap: anywhere;
+}
+
+.error-surface__sha {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  margin: 0;
+}
+
+.error-surface__sha-label {
+  color: var(--faint);
+}
+
+.error-surface__sha-value {
+  color: var(--muted);
+  font: 11px var(--bench-font-mono);
+  overflow-wrap: anywhere;
+}
+
+.error-surface__phase,
+.error-surface__command {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.error-surface__phase-name,
+.error-surface__phase-iteration,
+.error-surface__command-exit {
+  margin: 0;
+}
+
+/* Compact is the inline density: tighter rhythm for cockpit banners and
+ * launcher notices, one folded disclosure instead of two. */
+.error-surface--compact {
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-3);
+}
+
+.error-surface--compact .error-surface__title {
+  font-size: 12.5px;
+}
+
+.error-surface--compact .error-surface__summary {
+  font-size: 12px;
+}
+
+.error-surface--compact .error-surface__remediation,
+.error-surface--compact .error-surface__details,
+.error-surface--compact .error-surface__diagnostics {
+  gap: var(--space-1);
+  padding-top: var(--space-1);
+}

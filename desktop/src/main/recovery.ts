@@ -42,12 +42,6 @@ import { serverRequest, type ServerTransport } from './serverClient';
 
 export type RecoveryTransport = ServerTransport;
 
-const REMEDY_BY_CODE: Record<string, string> = {
-  not_found: 'The recovery snapshot is stale. Refresh the scan and try again.',
-  bad_request: 'The recovery action was rejected. Refresh and retry.',
-  conflict: 'The recovery item state changed. Refresh the scan and try again.',
-};
-
 export class RecoveryService {
   constructor(private readonly transport: RecoveryTransport) {}
 
@@ -111,8 +105,6 @@ export class RecoveryService {
   }
 
   private api(path: string, init?: ApiRequestInit): Promise<unknown> {
-    return serverRequest(this.transport, path, init, {
-      remedyByCode: REMEDY_BY_CODE,
-    });
+    return serverRequest(this.transport, path, init);
   }
 }

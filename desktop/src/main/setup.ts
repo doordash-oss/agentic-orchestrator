@@ -49,18 +49,8 @@ export interface SetupServiceDeps {
   dialogs: SetupDialogs;
 }
 
-/** Concrete, safe next steps per structured server error code. */
-const REMEDY_BY_CODE: Record<string, string> = {
-  consent_required: 'Confirm the initialization consent in the dialog, then try again.',
-  invalid_repository_path: 'Choose an absolute folder located inside a configured workspace root.',
-  path_outside_workspace_root:
-    'Choose a folder inside one of the configured workspace roots, or add its parent as a root first.',
-  already_repository:
-    'This folder is already a git repository — select it directly instead of initializing.',
-  directory_not_empty:
-    'Choose an empty folder, a new folder name, or an existing git repository instead.',
-  not_ready: 'Complete the outstanding setup steps shown in the wizard, then retry.',
-};
+/** Client-side consent pre-flight hint; server rejections carry catalog hints. */
+const CONSENT_HINT = 'Confirm the initialization consent in the dialog, then try again.';
 
 export class SetupService {
   constructor(private readonly deps: SetupServiceDeps) {}
@@ -170,7 +160,7 @@ export class SetupService {
         safeError(
           'consent_required',
           'Repository initialization requires explicit consent.',
-          REMEDY_BY_CODE['consent_required'] ?? '',
+          CONSENT_HINT,
         ),
       );
     }
@@ -191,7 +181,7 @@ export class SetupService {
   // --- transport helpers -----------------------------------------------------
 
   private api(path: string, init?: ApiRequestInit): Promise<unknown> {
-    return serverRequest(this.deps.transport, path, init, { remedyByCode: REMEDY_BY_CODE });
+    return serverRequest(this.deps.transport, path, init);
   }
 }
 

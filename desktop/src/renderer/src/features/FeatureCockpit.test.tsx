@@ -520,8 +520,19 @@ describe('FeatureCockpit snapshot rendering', () => {
       }),
     });
     mock.api.launchRebaseChild.mockRejectedValue(
-      new Error(
-        'rebase_already_up_to_date: Every repository is already up to date with its target branch. Nothing to merge.',
+      Object.assign(
+        new Error(
+          'rebase_already_up_to_date: Every repository is already up to date with its target branch. Nothing to merge.',
+        ),
+        {
+          canonical: {
+            code: 'rebase_already_up_to_date',
+            class: 'warning',
+            title: 'Already up to date',
+            summary:
+              'Every repository is already up to date with its target branch. Nothing to merge.',
+          },
+        },
       ),
     );
     renderCockpit(mock);
@@ -530,11 +541,24 @@ describe('FeatureCockpit snapshot rendering', () => {
     const aftercare = await screen.findByRole('region', { name: 'Feature aftercare' });
     await user.click(within(aftercare).getByRole('button', { name: /Start rebase pass/ }));
 
-    // The typed failure renders inline near the aftercare cards with code + message.
-    const alert = await within(aftercare).findByRole('alert');
-    expect(alert).toHaveTextContent('rebase_already_up_to_date');
-    expect(alert).toHaveTextContent('Already up to date');
-    expect(alert).toHaveTextContent(/already up to date with its target branch/);
+    // The catalog warning renders inline near the aftercare cards as one
+    // compact error surface: title, summary, and the code tag.
+    await waitFor(() => {
+      expect(within(aftercare).getAllByText('Already up to date')).toHaveLength(1);
+    });
+    const surface = within(aftercare).getByText('Already up to date').closest('.error-surface');
+    expect(surface).not.toBeNull();
+    expect(surface).toHaveAttribute('role', 'status');
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(within(aftercare).getByText('Rebase was rejected')).toBeVisible();
+    expect(
+      within(aftercare).getByText(
+        'Every repository is already up to date with its target branch. Nothing to merge.',
+      ),
+    ).toBeVisible();
+    expect(within(aftercare).getByText('rebase_already_up_to_date')).toHaveClass(
+      'error-surface__code',
+    );
     // No pass workspace is mounted; the cockpit stays in aftercare.
     expect(screen.queryByRole('region', { name: 'Rebase pass' })).not.toBeInTheDocument();
     // The card remains available for another attempt.
@@ -569,6 +593,13 @@ describe('FeatureCockpit snapshot rendering', () => {
     const alert = await within(aftercare).findByRole('alert');
     expect(alert).toHaveTextContent('rebase_target_resolution_failed');
     expect(alert).toHaveTextContent(/Could not resolve a target branch/);
+    // A legacy transport rejection (no attached canonical) still renders
+    // through the adapter: blocking, with the safe message as the summary.
+    expect(alert).toHaveClass('error-surface', 'error-surface--blocking');
+    expect(within(alert).getByText('Request failed')).toBeVisible();
+    expect(within(alert).getByText('rebase_target_resolution_failed')).toHaveClass(
+      'error-surface__code',
+    );
 
     // A new launch attempt clears the previous error.
     await user.click(within(aftercare).getByRole('button', { name: /Start rebase pass/ }));
@@ -1109,7 +1140,16 @@ describe('FeatureCockpit ready-to-start', () => {
     (
       mock.api as unknown as { dispatchFeatureAction: ReturnType<typeof vi.fn> }
     ).dispatchFeatureAction = vi.fn(() =>
-      Promise.reject(new Error('conflict: Start is no longer available. Refresh and try again.')),
+      Promise.reject(
+        Object.assign(new Error('conflict: Start is no longer available. Refresh and try again.'), {
+          canonical: {
+            code: 'conflict',
+            class: 'blocking',
+            title: 'Conflict',
+            summary: 'The request conflicts with the current state of the feature.',
+          },
+        }),
+      ),
     );
     renderCockpit(mock);
     const user = userEvent.setup();
@@ -1118,9 +1158,16 @@ describe('FeatureCockpit ready-to-start', () => {
 
     await user.click(screen.getByRole('button', { name: 'Start' }));
 
-    expect(await screen.findByRole('alert')).toHaveTextContent(
-      'Start was rejected — Start is no longer available. Refresh and try again.',
-    );
+    // Exactly one canonical error surface: caption, catalog title, summary,
+    // and the code tag — the rejection renders through the catalog.
+    expect(await screen.findByRole('alert')).toHaveClass('error-surface');
+    expect(document.querySelectorAll('.error-surface')).toHaveLength(1);
+    expect(screen.getByText('Start was rejected')).toBeVisible();
+    expect(screen.getByText('Conflict')).toBeVisible();
+    expect(
+      screen.getByText('The request conflicts with the current state of the feature.'),
+    ).toBeVisible();
+    expect(screen.getByText('conflict')).toHaveClass('error-surface__code');
     await waitFor(() => expect(mock.api.getFeature.mock.calls.length).toBeGreaterThan(callsBefore));
   });
 
@@ -2164,7 +2211,14 @@ describe('FeatureCockpit Stop', () => {
   it('refreshes a rejected Stop and presents the structured safe error', async () => {
     const mock = installAgenticoMock({ feature: activeSnapshot() });
     mock.api.dispatchFeatureAction.mockRejectedValue(
-      new Error('conflict: The Stop action is stale. Refresh and try again.'),
+      Object.assign(new Error('conflict: The Stop action is stale. Refresh and try again.'), {
+        canonical: {
+          code: 'conflict',
+          class: 'blocking',
+          title: 'Conflict',
+          summary: 'The request conflicts with the current state of the feature.',
+        },
+      }),
     );
     renderCockpit(mock);
     const user = userEvent.setup();
@@ -2173,9 +2227,14 @@ describe('FeatureCockpit Stop', () => {
     await user.click(await screen.findByRole('button', { name: 'Stop' }));
     await user.click(screen.getByRole('button', { name: 'Confirm stop' }));
 
-    expect(await screen.findByRole('alert')).toHaveTextContent(
-      'Stop was rejected — The Stop action is stale. Refresh and try again.',
-    );
+    expect(await screen.findByRole('alert')).toHaveClass('error-surface');
+    expect(document.querySelectorAll('.error-surface')).toHaveLength(1);
+    expect(screen.getByText('Stop was rejected')).toBeVisible();
+    expect(screen.getByText('Conflict')).toBeVisible();
+    expect(
+      screen.getByText('The request conflicts with the current state of the feature.'),
+    ).toBeVisible();
+    expect(screen.getByText('conflict')).toHaveClass('error-surface__code');
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     await waitFor(() => expect(mock.api.getFeature.mock.calls.length).toBeGreaterThan(callsBefore));
   });

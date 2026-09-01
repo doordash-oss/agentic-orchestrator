@@ -23,6 +23,7 @@ import (
 	"strings"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/internal/workspace"
 )
@@ -30,16 +31,6 @@ import (
 // apiPathWorkspaceRepositoriesInit is the bounded repository-initialization
 // mutation route used by first-launch onboarding.
 const apiPathWorkspaceRepositoriesInit = "/api/v1/workspace/repositories/init"
-
-// Repository-initialization error codes. All are structured API error codes
-// so the desktop wizard can branch on them without parsing messages.
-const (
-	errCodeConsentRequired          = "consent_required"
-	errCodeInvalidRepositoryPath    = "invalid_repository_path"
-	errCodePathOutsideWorkspaceRoot = "path_outside_workspace_root"
-	errCodeAlreadyRepository        = "already_repository"
-	errCodeDirectoryNotEmpty        = "directory_not_empty"
-)
 
 // handleWorkspaceRepositoryInitRoute serves POST
 // /api/v1/workspace/repositories/init. The desktop app supplies the native
@@ -64,8 +55,7 @@ func (h *apiHandler) handleWorkspaceRepositoryInitRoute(w http.ResponseWriter, r
 		return
 	}
 	if !req.Consent {
-		writeAPIError(w, http.StatusBadRequest, errCodeConsentRequired,
-			"explicit consent is required to initialize a repository", nil)
+		writeAPIError(w, http.StatusBadRequest, errcat.ConsentRequired)
 		return
 	}
 	target, root, ok := h.validateRepoInitTarget(w, req.Path)
@@ -73,7 +63,7 @@ func (h *apiHandler) handleWorkspaceRepositoryInitRoute(w http.ResponseWriter, r
 		return
 	}
 	if err := os.MkdirAll(target, 0o755); err != nil {
-		writeAPIError(w, http.StatusInternalServerError, "internal_error", "create repository directory", nil)
+		writeAPIError(w, http.StatusInternalServerError, errcat.InternalError, errcat.WithDiagnostics("create repository directory"))
 		return
 	}
 	initRepo := h.initGitRepository
@@ -81,7 +71,7 @@ func (h *apiHandler) handleWorkspaceRepositoryInitRoute(w http.ResponseWriter, r
 		initRepo = git.InitRepository
 	}
 	if err := initRepo(target); err != nil {
-		writeAPIError(w, http.StatusInternalServerError, "internal_error", "initialize repository", nil)
+		writeAPIError(w, http.StatusInternalServerError, errcat.InternalError, errcat.WithDiagnostics("initialize repository"))
 		return
 	}
 	repo := h.discoveredWorkspaceRepository(target)
@@ -99,53 +89,56 @@ func (h *apiHandler) handleWorkspaceRepositoryInitRoute(w http.ResponseWriter, r
 func (h *apiHandler) validateRepoInitTarget(w http.ResponseWriter, raw string) (target, root string, ok bool) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
-		writeAPIError(w, http.StatusBadRequest, errCodeInvalidRepositoryPath, "path is required", nil)
+		writeAPIError(w, http.StatusBadRequest, errcat.InvalidRepositoryPath,
+			errcat.WithParams(errcat.PathParams{Path: raw}), errcat.WithDiagnostics("path is required"))
 		return "", "", false
 	}
 	if containsTraversalSegment(raw) {
-		writeAPIError(w, http.StatusBadRequest, errCodeInvalidRepositoryPath,
-			"path may not contain traversal segments", nil)
+		writeAPIError(w, http.StatusBadRequest, errcat.InvalidRepositoryPath,
+			errcat.WithParams(errcat.PathParams{Path: raw}), errcat.WithDiagnostics("path may not contain traversal segments"))
 		return "", "", false
 	}
 	expanded := workspace.ExpandHome(raw)
 	if !filepath.IsAbs(expanded) {
-		writeAPIError(w, http.StatusBadRequest, errCodeInvalidRepositoryPath, "path must be absolute", nil)
+		writeAPIError(w, http.StatusBadRequest, errcat.InvalidRepositoryPath,
+			errcat.WithParams(errcat.PathParams{Path: raw}), errcat.WithDiagnostics("path must be absolute"))
 		return "", "", false
 	}
 	resolved, err := resolveSymlinkedPrefix(filepath.Clean(expanded))
 	if err != nil {
-		writeAPIError(w, http.StatusBadRequest, errCodeInvalidRepositoryPath, "path could not be resolved", nil)
+		writeAPIError(w, http.StatusBadRequest, errcat.InvalidRepositoryPath,
+			errcat.WithParams(errcat.PathParams{Path: raw}), errcat.WithDiagnostics("path could not be resolved"))
 		return "", "", false
 	}
 	root, ok = h.containingWorkspaceRoot(resolved)
 	if !ok {
-		writeAPIError(w, http.StatusBadRequest, errCodePathOutsideWorkspaceRoot,
-			"path must be strictly inside a configured workspace root", nil)
+		writeAPIError(w, http.StatusBadRequest, errcat.PathOutsideWorkspaceRoot,
+			errcat.WithParams(errcat.PathParams{Path: raw}))
 		return "", "", false
 	}
 	info, err := os.Stat(resolved)
 	switch {
 	case err == nil && !info.IsDir():
-		writeAPIError(w, http.StatusConflict, errCodeInvalidRepositoryPath,
-			"path exists and is not a directory", nil)
+		writeAPIError(w, http.StatusConflict, errcat.InvalidRepositoryPath,
+			errcat.WithParams(errcat.PathParams{Path: raw}), errcat.WithDiagnostics("path exists and is not a directory"))
 		return "", "", false
 	case err == nil && workspace.IsGitRepo(resolved):
-		writeAPIError(w, http.StatusConflict, errCodeAlreadyRepository,
-			"path is already a git repository", nil)
+		writeAPIError(w, http.StatusConflict, errcat.AlreadyRepository,
+			errcat.WithParams(errcat.PathParams{Path: raw}))
 		return "", "", false
 	case err == nil:
 		entries, readErr := os.ReadDir(resolved)
 		if readErr != nil {
-			writeAPIError(w, http.StatusInternalServerError, "internal_error", "inspect repository directory", nil)
+			writeAPIError(w, http.StatusInternalServerError, errcat.InternalError, errcat.WithDiagnostics("inspect repository directory"))
 			return "", "", false
 		}
 		if len(entries) > 0 {
-			writeAPIError(w, http.StatusConflict, errCodeDirectoryNotEmpty,
-				"directory is not empty and is not a git repository", nil)
+			writeAPIError(w, http.StatusConflict, errcat.DirectoryNotEmpty,
+				errcat.WithParams(errcat.PathParams{Path: raw}))
 			return "", "", false
 		}
 	case !errors.Is(err, fs.ErrNotExist):
-		writeAPIError(w, http.StatusInternalServerError, "internal_error", "inspect repository directory", nil)
+		writeAPIError(w, http.StatusInternalServerError, errcat.InternalError, errcat.WithDiagnostics("inspect repository directory"))
 		return "", "", false
 	}
 	return resolved, root, true

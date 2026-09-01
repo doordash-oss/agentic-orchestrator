@@ -116,21 +116,6 @@ export interface FeatureServiceDeps {
   locality?: LocalitySource;
 }
 
-/** Concrete, safe next steps per structured server error code. */
-const REMEDY_BY_CODE: Record<string, string> = {
-  not_ready: 'Complete the outstanding runtime setup steps, then try again.',
-  bad_request: 'Correct the highlighted input, then try again.',
-  not_found: 'The feature no longer exists on the server. Close its tab.',
-  conflict: 'The server rejected the action in its current state. Refresh and retry.',
-  invalid_transition: "The feature's current state doesn't allow this action. Refresh and retry.",
-  need_user_input_open: 'Answer the open input request to continue.',
-  phase_finalizing: 'The phase is being finalized; wait for it to finish.',
-  publish_remote_diverged:
-    'Review and reconcile the pull-request branch on GitHub, then refresh and retry.',
-  publish_remote_changed:
-    'Refresh the publish state and retry; Agentico did not overwrite the newer branch.',
-};
-
 const PHASE_MODEL_LABELS: ReadonlyArray<readonly [string, string]> = [
   ['inquiry', 'Inquiry'],
   ['research', 'Research'],
@@ -572,15 +557,12 @@ export class FeatureService {
   // --- transport helpers -----------------------------------------------------
 
   /**
-   * One authenticated request through the shared server client. The 409
-   * `not_ready` rejection carries its outstanding readiness issues; their
-   * safe messages are folded into the remediation so the form can show why.
+   * One authenticated request through the shared server client. Canonical
+   * server rejections (including 409 `not_ready` with its readiness titles)
+   * cross unchanged; the catalog owns their text.
    */
   private api(path: string, init?: ApiRequestInit): Promise<unknown> {
-    return serverRequest(this.deps.transport, path, init, {
-      remedyByCode: REMEDY_BY_CODE,
-      foldTargetIssues: true,
-    });
+    return serverRequest(this.deps.transport, path, init);
   }
 
   private async runOperationalAction(input: FeatureActionRequest): Promise<FeatureActionResult> {

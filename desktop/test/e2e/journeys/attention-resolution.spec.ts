@@ -526,7 +526,9 @@ test('packaged chat idle wait stays out of the inbox and resolves through the AM
     );
 
     persistAppLogs(handle, 'attention-help-app-server');
-    transcript.step('chat reply surfaced through the Ask chip and the panel composer continued the session');
+    transcript.step(
+      'chat reply surfaced through the Ask chip and the panel composer continued the session',
+    );
     transcript.codeBlock('provider help-response log', readProviderLog(world), 120);
     transcript.write(testInfo);
   } finally {

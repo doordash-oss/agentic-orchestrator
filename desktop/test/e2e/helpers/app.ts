@@ -117,16 +117,21 @@ export async function launchApp(
     args.push('--no-sandbox');
   }
   args.unshift(packagedAppAsar(installExecutablePath));
-  const app = await electron.launch({
-    args,
-    env: {
-      ...minimalEnv(world),
-      AGENTICO_E2E_RESOURCES_PATH: resourcesPath,
-      AGENTICO_E2E_INSTALL_EXECUTABLE: installExecutablePath,
-      ...(options.env ?? {}),
-    },
-    timeout: 60_000,
-  });
+  // Concurrent workers exec the same binary; Linux can transiently report
+  // ETXTBSY when a spawn races a fork that briefly inherits a write fd
+  // (nodejs/node#22811-style), so that one error is retried briefly.
+  const app = await retryingEtxtbsy(() =>
+    electron.launch({
+      args,
+      env: {
+        ...minimalEnv(world),
+        AGENTICO_E2E_RESOURCES_PATH: resourcesPath,
+        AGENTICO_E2E_INSTALL_EXECUTABLE: installExecutablePath,
+        ...(options.env ?? {}),
+      },
+      timeout: 60_000,
+    }),
+  );
   const logs: string[] = [];
   const appProcess = app.process();
   appProcess.stdout?.on('data', (chunk: Buffer) => logs.push(chunk.toString()));
@@ -301,6 +306,19 @@ function testLooksFailed(testInfo: TestInfo): boolean {
   const hasError = (list: Step[]): boolean =>
     list.some((step) => step.error !== undefined || hasError(step.steps));
   return hasError(steps);
+}
+
+async function retryingEtxtbsy<T>(launch: () => Promise<T>): Promise<T> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await launch();
+    } catch (error) {
+      if (attempt >= 3 || !(error instanceof Error) || !error.message.includes('ETXTBSY')) {
+        throw error;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 250 * attempt));
+    }
+  }
 }
 
 /** Rejects if `work` has not settled within `ms`, naming the step that stuck. */

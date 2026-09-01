@@ -17,6 +17,7 @@ import { useConnectionState, useTheme } from '../hooks';
 import { parseIpcError } from '../wizard/ipcError';
 import { WorkspaceDefaultsPanel } from './ConfigEditor';
 import type { PaneFocusIntent } from './settingsPanes';
+import { addServerErrorTitle } from '../../../shared/ipc';
 import type {
   KnownServer,
   ReadinessSnapshot,
@@ -983,15 +984,6 @@ const SERVERS_PANE_HEALTH_LABEL: Record<ServerListRow['health'], string> = {
   unreachable: 'Unreachable',
   probing: 'Checking…',
 };
-
-/** Distinct lead-ins per failure class of the add-server flow. */
-function addServerErrorTitle(code: string): string {
-  if (code.startsWith('E_CONNECTION_STRING_')) return 'The connection string could not be parsed.';
-  if (code === 'E_REMOTE_UNREACHABLE') return 'The server could not be reached.';
-  if (code === 'E_REMOTE_INCOMPATIBLE') return 'The server is not compatible with this app.';
-  if (code === 'E_REMOTE_AUTH_REJECTED') return 'The token was rejected.';
-  return 'The server could not be added.';
-}
 
 function serverDisplayName(entry: KnownServer): string {
   return entry.nickname ?? (entry.name === '' ? 'Unnamed server' : entry.name);

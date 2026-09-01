@@ -26,6 +26,12 @@ import { createRuntimeGateway, fetchJson, MAX_PROBE_RESPONSE_BYTES } from './gat
 import { ServerListService } from './gateway/serverListService';
 import { addRemoteServer } from './gateway/addRemoteServer';
 import { removeKnownServer, serverTokenStatus } from './gateway/removeServer';
+import {
+  addServerFromLink,
+  routeFromArgv,
+  routeFromUrl,
+  type ExternalRoute,
+} from './externalRoutes';
 import { AccentController, type AccentColorSource } from './accent';
 import {
   resolveTestOutputFile,
@@ -73,6 +79,8 @@ import {
   type AppEvent,
   type AppRouteEvent,
   type FeatureSnapshot,
+  type RemoteServerAddRequest,
+  type RemoteServerAddResult,
   type SettingsFocus,
   type SettingsSection,
   type WindowPurpose,
@@ -838,15 +846,53 @@ if (!hasSingleInstanceLock) {
     nativeCommands.install();
     publishNativeCommandTestState(nativeCommands);
 
+    // The single add pipeline (probe → compat gate → token verify → persist),
+    // shared verbatim by the Settings add-server IPC and connection-string
+    // deep links.
+    const performRemoteServerAdd = (
+      request: RemoteServerAddRequest,
+    ): Promise<RemoteServerAddResult> =>
+      addRemoteServer(request, {
+        fetchJson: (url, options) =>
+          fetchJson(url, { ...options, maxResponseBytes: MAX_PROBE_RESPONSE_BYTES }),
+        scanRegistry,
+        knownServers: () => settings.get().servers,
+        upsertRemoteEntry: (entry) => {
+          settings.update({ servers: { upsertKnown: entry } });
+          void refreshBackgroundState();
+        },
+        remoteTokens,
+        registerSecret: (secret) => logBuffer.addSecret(secret),
+        log: (line) => console.warn(`[agentico-servers] ${redactText(line)}`),
+      });
+
     // A settings-targeted relaunch or deep link raises only the Settings
     // window — a hidden main window stays hidden. Anything else (including an
-    // argv with no route at all) shows the main window as before.
-    const dispatchExternalRoute = (requestedRoute: AppRouteEvent | null): void => {
+    // argv with no route at all) shows the main window as before. A
+    // connection-string link carries the server's bearer token: it is consumed
+    // here by the add pipeline and never logged or forwarded as a route event.
+    const dispatchExternalRoute = (requestedRoute: ExternalRoute | null): void => {
       if (requestedRoute === null) {
         showMainWindow();
         return;
       }
-      route(requestedRoute);
+      if (requestedRoute.kind === 'add-server') {
+        void addServerFromLink(requestedRoute.connectionString, {
+          addServer: performRemoteServerAdd,
+          switchServer: (request) => gateway.switchServer(request),
+          route,
+          notify: (body) => {
+            if (electronNotificationSink.isSupported()) {
+              electronNotificationSink
+                .create({ title: 'Agentico', body: redactText(body).slice(0, 180) })
+                .show();
+            }
+          },
+          log: (line) => console.warn(`[agentico-servers] ${redactText(line)}`),
+        });
+        return;
+      }
+      route(requestedRoute.event);
     };
 
     app.on('second-instance', (_event, argv) => {
@@ -1175,20 +1221,7 @@ if (!hasSingleInstanceLock) {
       switchConnectionServer: (request) => gateway.switchServer(request),
       listServers: () => serverList.list(),
       probeServers: (request) => serverList.setOpen(request.open),
-      addRemoteServer: (request) =>
-        addRemoteServer(request, {
-          fetchJson: (url, options) =>
-            fetchJson(url, { ...options, maxResponseBytes: MAX_PROBE_RESPONSE_BYTES }),
-          scanRegistry,
-          knownServers: () => settings.get().servers,
-          upsertRemoteEntry: (entry) => {
-            settings.update({ servers: { upsertKnown: entry } });
-            void refreshBackgroundState();
-          },
-          remoteTokens,
-          registerSecret: (secret) => logBuffer.addSecret(secret),
-          log: (line) => console.warn(`[agentico-servers] ${redactText(line)}`),
-        }),
+      addRemoteServer: performRemoteServerAdd,
       removeServer: (request) =>
         removeKnownServer(request, {
           knownServers: () => settings.get().servers,
@@ -1366,7 +1399,7 @@ if (!hasSingleInstanceLock) {
     showMainWindow();
     const initialRoute = routeFromArgv(process.argv);
     if (initialRoute !== null) {
-      route(initialRoute);
+      dispatchExternalRoute(initialRoute);
     }
 
     app.on('activate', () => {
@@ -1411,47 +1444,6 @@ function publishMainWindowFocusTestState(focused: boolean): void {
     __agenticoMainWindowFocusState?: { focused: boolean };
   };
   global.__agenticoMainWindowFocusState = { focused };
-}
-
-function routeFromArgv(argv: readonly string[]): AppRouteEvent | null {
-  if (argv.some((arg) => arg === '--agentico-route=updates')) {
-    return { target: 'settings', settingsSection: 'updates' };
-  }
-  const url = argv.find((arg) => arg.startsWith('agentico://'));
-  return url === undefined ? null : routeFromUrl(url);
-}
-
-function routeFromUrl(raw: string): AppRouteEvent | null {
-  let parsed: URL;
-  try {
-    parsed = new URL(raw);
-  } catch {
-    return null;
-  }
-  if (parsed.protocol !== 'agentico:') {
-    return null;
-  }
-  if (parsed.hostname === 'updates' || parsed.pathname === '/updates') {
-    return { target: 'settings', settingsSection: 'updates' };
-  }
-  if (parsed.hostname === 'diagnostics' || parsed.pathname === '/diagnostics') {
-    return { target: 'settings', settingsSection: 'diagnostics' };
-  }
-  // agentico://servers and agentico://servers/add — the latter carries the
-  // within-pane intent to focus the Servers pane's add-server form.
-  const isServers =
-    parsed.hostname === 'servers' ||
-    parsed.pathname === '/servers' ||
-    parsed.pathname === '/servers/add';
-  if (isServers) {
-    const addIntent = parsed.pathname === '/add' || parsed.pathname === '/servers/add';
-    return {
-      target: 'settings',
-      settingsSection: 'servers',
-      ...(addIntent ? { settingsFocus: 'add-server' as const } : {}),
-    };
-  }
-  return { target: 'settings' };
 }
 
 function consumeForcedStopFailure(

@@ -1868,6 +1868,10 @@ export interface components {
             created_at: string;
             checkpoints: components["schemas"]["Checkpoints"];
             progress: components["schemas"]["FeatureProgress"];
+            /** @description Whether the active phase unit has resumed a persisted provider session. */
+            resumed: boolean;
+            /** @description Number of persisted provider-session resumptions for the active phase unit. */
+            resume_count: number;
             warnings?: components["schemas"]["Warning"][];
             active_child?: components["schemas"]["RelationshipChildSummary"];
             /** @description Newest closed children in authoritative store order, capped at a fixed server-side limit. Consult child_history_total and child_history_truncated for the full extent, and the feature detail route for the complete history. */

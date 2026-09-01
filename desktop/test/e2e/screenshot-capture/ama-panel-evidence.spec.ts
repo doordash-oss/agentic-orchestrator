@@ -6,7 +6,7 @@ async function openPanel(page: Page, theme: 'light' | 'dark'): Promise<void> {
   await openScene(page, 'ama-panel', theme, 1440, 900, '.ama-panel', { platform: 'darwin' });
   await expect(page.getByRole('complementary', { name: 'Ask Agentico' })).toBeVisible();
   await expect(page.getByText('Which features still touch the old polled preview?')).toBeVisible();
-  await expect(page.getByText('Ask Agentico is active')).toBeVisible();
+  await expect(page.getByRole('button', { name: / — switch server$/ })).toBeVisible();
 }
 
 /** Pastes the fixture image into the composer, producing the chip. */
@@ -37,7 +37,7 @@ test('ama panel visual evidence', async ({ page }) => {
   skipWithoutEvidenceDir();
 
   // The default bottom-trailing placement over a running cockpit, with the
-  // accent-ruled "You" turn and the active-session sidebar footer.
+  // accent-ruled "You" turn and the server-identity sidebar footer.
   await openPanel(page, 'dark');
   await page.mouse.move(700, 300);
   await page.waitForTimeout(400);

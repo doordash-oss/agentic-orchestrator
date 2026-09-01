@@ -197,30 +197,40 @@ func HasUncommittedChanges(worktreePath string) bool {
 
 // HasUncommittedChangesExcludingUntracked reports whether the worktree has
 // staged, unstaged, or untracked changes, disregarding untracked entries
-// whose relative path is in names. Tracked changes to those paths still
-// count — only never-committed files matching the known-artifact names are
-// ignored.
-func HasUncommittedChangesExcludingUntracked(worktreePath string, names ...string) bool {
+// whose path is in names. Tracked changes to those paths still count — only
+// never-committed files matching the known-artifact names are ignored. A
+// probe failure is surfaced as an error so an indeterminate worktree never
+// reads as clean.
+func HasUncommittedChangesExcludingUntracked(worktreePath string, names ...string) (bool, error) {
+	wm := &WorktreeManager{}
+	report, err := wm.InspectCleanliness(worktreePath, 0)
+	if err != nil {
+		return false, fmt.Errorf("checking uncommitted changes in %s: %w", worktreePath, err)
+	}
+	if report.StagedTotal > 0 || report.UnstagedTotal > 0 {
+		return true, nil
+	}
+	if report.UntrackedTotal == 0 {
+		return false, nil
+	}
+	// The bounded untracked list may have truncated; re-probe unbounded so
+	// every untracked path is classified against the ignore set.
+	if report.UntrackedTotal > len(report.Untracked) {
+		report, err = wm.InspectCleanliness(worktreePath, report.UntrackedTotal)
+		if err != nil {
+			return false, fmt.Errorf("checking untracked files in %s: %w", worktreePath, err)
+		}
+	}
 	ignore := make(map[string]bool, len(names))
 	for _, n := range names {
 		ignore[n] = true
 	}
-	cmd := readGitCmd(worktreePath, "status", "--porcelain")
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return false
-	}
-	for _, line := range strings.Split(string(out), "\n") {
-		if len(line) < 4 {
-			continue
+	for _, p := range report.Untracked {
+		if !ignore[p] {
+			return true, nil
 		}
-		path := strings.TrimSpace(line[3:])
-		if line[:2] == "??" && ignore[path] {
-			continue
-		}
-		return true
 	}
-	return false
+	return false, nil
 }
 
 // CommitAll stages all changes (including untracked files) and creates a commit.

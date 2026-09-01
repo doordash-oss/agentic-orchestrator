@@ -15,6 +15,7 @@
 package orchestrator
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"strings"
@@ -29,18 +30,15 @@ import (
 // installs on the PhaseRunner (see New). The implementation and final-review
 // loops report each completed round here; this layer owns the git commit:
 // only repos the round actually dirtied are committed, each with the
-// round-specific message. A clean worktree is a no-op. Commit failures fail
-// the round loudly — the loops surface the error and fail their phase —
-// rather than silently stranding a dirty worktree mid-phase.
+// round-specific message. A clean worktree is a no-op (and costs no feature
+// load or message render). Known untracked root orchestration artifacts are
+// scrubbed before staging so `git add -A` can never track them. Commit
+// failures fail the round loudly — the loops surface the error and fail
+// their phase — rather than silently stranding a dirty worktree mid-phase.
 func (o *Orchestrator) commitRound(input agent.RoundCommitInput) error {
 	if len(input.Repos) == 0 {
 		return nil
 	}
-	f, err := o.deps.Lifecycle.Get(input.FeatureID)
-	if err != nil {
-		return fmt.Errorf("load feature %s for round commit: %w", input.FeatureID, err)
-	}
-	msg := o.roundCommitMessage(f, input)
 
 	names := make([]string, 0, len(input.Repos))
 	for name := range input.Repos {
@@ -48,18 +46,44 @@ func (o *Orchestrator) commitRound(input agent.RoundCommitInput) error {
 	}
 	sort.Strings(names)
 
-	var failed []string
+	// Pass 1: resolve which repos still carry uncommitted round work after
+	// scrubbing known orchestration artifacts. Typically empty — a clean
+	// round pays only the status probe, no feature load or roadmap parse.
+	type pendingCommit struct {
+		name string
+		path string
+	}
+	var pending []pendingCommit
 	for _, name := range names {
 		path := input.Repos[name]
 		if path == "" || !git.HasUncommittedChanges(path) {
 			continue
 		}
-		if _, err := git.CommitAllAndGetHead(path, msg); err != nil {
-			failed = append(failed, name)
+		if err := o.scrubFinalReviewRootArtifacts(context.Background(), path); err != nil {
+			return fmt.Errorf("scrubbing round-commit artifacts in repo %s: %w", name, err)
+		}
+		if git.HasUncommittedChanges(path) {
+			pending = append(pending, pendingCommit{name: name, path: path})
+		}
+	}
+	if len(pending) == 0 {
+		return nil
+	}
+
+	f, err := o.deps.Lifecycle.Get(input.FeatureID)
+	if err != nil {
+		return fmt.Errorf("load feature %s for round commit: %w", input.FeatureID, err)
+	}
+	msg := o.roundCommitMessage(f, input)
+
+	var failed []string
+	for _, pc := range pending {
+		if _, err := git.CommitAllAndGetHead(pc.path, msg); err != nil {
+			failed = append(failed, pc.name)
 			o.emitEvent(ports.Event{
 				Type:      ports.RepoStatusChanged,
 				FeatureID: input.FeatureID,
-				RepoName:  name,
+				RepoName:  pc.name,
 				Error:     err,
 				Message:   fmt.Sprintf("round commit failed (%s): %v", roundCommitEventLabel(input), err),
 			})
@@ -68,7 +92,7 @@ func (o *Orchestrator) commitRound(input agent.RoundCommitInput) error {
 		o.emitEvent(ports.Event{
 			Type:      ports.RepoStatusChanged,
 			FeatureID: input.FeatureID,
-			RepoName:  name,
+			RepoName:  pc.name,
 			Message:   "committed " + roundCommitEventLabel(input),
 		})
 	}

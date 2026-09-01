@@ -17,7 +17,8 @@ package agent
 import (
 	"fmt"
 	"path/filepath"
-	"strings"
+
+	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 )
 
 // RoundCommitKind classifies a completed loop round for commit messaging.
@@ -87,6 +88,20 @@ var FinalReviewRootOrchestrationArtifacts = []string{
 	"meta.yaml",
 }
 
+// scanIterationMetas walks the persisted iteration metas 1..startIter in
+// order, skipping missing or unreadable entries. Both round-commit trackers
+// rebuild their accounting through it so a crash-resumed loop labels rounds
+// identically to the interrupted run.
+func scanIterationMetas(am *ArtifactManager, artifactDir string, startIter int, visit func(IterationMeta)) {
+	for j := 1; j <= startIter; j++ {
+		meta, err := am.ReadMeta(filepath.Join(artifactDir, fmt.Sprintf("iteration-%02d", j)))
+		if err != nil {
+			continue
+		}
+		visit(meta)
+	}
+}
+
 // implementRoundCommitTracker carries the per-phase round-commit accounting
 // for the implementation loop. Both counters are recovered from durable
 // iteration metas so a crash-resumed loop labels rounds identically to the
@@ -106,45 +121,49 @@ type implementRoundCommitTracker struct {
 // (1..startIter) to rebuild the round-commit accounting after a restart.
 func newImplementRoundCommitTracker(am *ArtifactManager, artifactDir string, startIter int) *implementRoundCommitTracker {
 	t := &implementRoundCommitTracker{}
-	for j := 1; j <= startIter; j++ {
-		meta, err := am.ReadMeta(filepath.Join(artifactDir, fmt.Sprintf("iteration-%02d", j)))
-		if err != nil {
-			continue
-		}
+	scanIterationMetas(am, artifactDir, startIter, func(meta IterationMeta) {
 		if meta.ReviewStatus == agentStatusChangesRequested {
 			t.changesRequested++
 		}
 		if meta.AgentStatus == agentStatusSuccess || meta.AgentStatus == "RETRY" {
 			t.semanticSessions = true
 		}
-	}
+	})
 	return t
 }
 
+// repoEditPath returns the path a feature repo's edits land in: the worktree
+// when set, falling back to the checkout path — the same resolution
+// BuildWorkspace uses to mount repos into agent sessions.
+func repoEditPath(r feature.FeatureRepo) string {
+	if r.WorktreePath != "" {
+		return r.WorktreePath
+	}
+	return r.Path
+}
+
 // implementRoundCommitRepos resolves the repo name -> worktree path map a
-// round commit should consider. Explicit RoundCommitRepos (unified flow)
-// wins; otherwise derive from Feature.Repos, falling back to WorkDir.
+// round commit should consider, mirroring the session's actual edit surface
+// (repoEditPath per repo). The repo-less fallback is the session WorkDir.
 func implementRoundCommitRepos(cfg ImplementConfig) map[string]string {
 	if len(cfg.RoundCommitRepos) > 0 {
 		return cfg.RoundCommitRepos
 	}
-	if cfg.Feature == nil || len(cfg.Feature.Repos) == 0 {
-		if cfg.WorkDir == "" {
-			return nil
+	if cfg.Feature != nil && len(cfg.Feature.Repos) > 0 {
+		repos := make(map[string]string, len(cfg.Feature.Repos))
+		for _, r := range cfg.Feature.Repos {
+			if path := repoEditPath(r); path != "" {
+				repos[r.Name] = path
+			}
 		}
-		return map[string]string{"": cfg.WorkDir}
-	}
-	repos := make(map[string]string, len(cfg.Feature.Repos))
-	for _, r := range cfg.Feature.Repos {
-		path := r.WorktreePath
-		if path == "" {
-			path = r.Path
-		}
-		if path != "" {
-			repos[r.Name] = path
+		if len(repos) > 0 {
+			return repos
 		}
 	}
-	return repos
+	if cfg.WorkDir == "" {
+		return nil
+	}
+	return map[string]string{"": cfg.WorkDir}
 }
 
 // frMetaChangesRequested is the review status the Final Review loop writes
@@ -161,14 +180,10 @@ type frRoundCommitTracker struct {
 
 func newFRRoundCommitTracker(am *ArtifactManager, artifactDir string, startIter int) *frRoundCommitTracker {
 	t := &frRoundCommitTracker{}
-	for j := 1; j <= startIter; j++ {
-		meta, err := am.ReadMeta(filepath.Join(artifactDir, fmt.Sprintf("iteration-%02d", j)))
-		if err != nil {
-			continue
-		}
-		if strings.EqualFold(meta.ReviewStatus, frMetaChangesRequested) {
+	scanIterationMetas(am, artifactDir, startIter, func(meta IterationMeta) {
+		if meta.ReviewStatus == frMetaChangesRequested {
 			t.changesRequested++
 		}
-	}
+	})
 	return t
 }

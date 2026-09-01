@@ -1150,10 +1150,12 @@ func (o *Orchestrator) scrubFinalReviewRootArtifacts(ctx context.Context, workDi
 // round commit produced. Per-round commits replaced the former end-of-phase
 // squash commit, so phase completion no longer mutates git: each round
 // already committed through the RoundCommitHook, and a repo no round dirtied
-// anchors at its existing HEAD. Repos whose HEAD cannot be read are omitted
-// from the anchor map (advisory, matching the old phase-commit failure
-// handling: the phase still advances, but rewind tooling will not pretend an
-// anchor exists).
+// anchors at its existing HEAD. Known untracked root orchestration artifacts
+// stranded by the post-commit review sessions are scrubbed here so they
+// cannot leak across the phase boundary into the next phase's first round
+// commit. Repos whose HEAD cannot be read are omitted from the anchor map
+// (advisory, matching the old phase-commit failure handling: the phase still
+// advances, but rewind tooling will not pretend an anchor exists).
 func (o *Orchestrator) roadmapPhaseAnchors(f *feature.Feature) map[string]string {
 	if len(f.Repos) == 0 {
 		return nil
@@ -1162,6 +1164,17 @@ func (o *Orchestrator) roadmapPhaseAnchors(f *feature.Feature) map[string]string
 	for _, repo := range roadmapPhaseCommitRepos(f) {
 		if repo.WorktreePath == "" {
 			continue
+		}
+		if err := o.scrubFinalReviewRootArtifacts(context.Background(), repo.WorktreePath); err != nil {
+			// Best-effort hygiene: the anchor is still recorded, but the
+			// leak risk is surfaced on the event bus.
+			o.emitEvent(ports.Event{
+				Type:      ports.RepoStatusChanged,
+				FeatureID: f.ID,
+				RepoName:  repo.Name,
+				Error:     err,
+				Message:   fmt.Sprintf("roadmap phase %d artifact scrub failed", f.CurrentRoadmapPhase),
+			})
 		}
 		sha, err := git.CurrentHeadSHA(repo.WorktreePath)
 		if err != nil || sha == "" {

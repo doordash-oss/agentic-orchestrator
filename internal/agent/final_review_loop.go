@@ -366,6 +366,29 @@ func (s *featureFinalReviewLoopState) run() (*FeatureFinalReviewResult, error) {
 			s.setReviewFixing(true)
 			fixStatus, fixErr := s.runFix(i, iterDir, feedback)
 
+			// The fix round's work commits immediately, whatever the
+			// session's outcome. FR has no later absorbing round before the
+			// next review, so a FAILED or protocol-violating fixer's partial
+			// edits must not strand the worktree dirty: the next review
+			// reads that state, and an approval over dirt fails the feature.
+			// A fix session that never started (dispatch error) left the
+			// tree untouched, so the hook no-ops on the clean worktree.
+			if s.cfg.RoundCommitHook != nil {
+				if err := s.cfg.RoundCommitHook(RoundCommitInput{
+					FeatureID: cfg.Feature.ID,
+					Iteration: i,
+					Kind:      RoundCommitFinalReviewFix,
+					FixNumber: roundCommits.changesRequested,
+					Repos:     s.workspace.RepoPaths,
+				}); err != nil {
+					return &FeatureFinalReviewResult{
+						FinalStatus: "failed",
+						Iterations:  i,
+						LastError:   fmt.Sprintf("committing final review fix round %d: %v", roundCommits.changesRequested, err),
+					}, nil
+				}
+			}
+
 			if fixStatus == agentStatusProtocolViolation {
 				violations := protocolViolationsFromError(fixErr)
 				if done := s.recordFixProtocolViolation(iterDir, i, violations, &consecutiveFailures); done != nil {
@@ -380,7 +403,7 @@ func (s *featureFinalReviewLoopState) run() (*FeatureFinalReviewResult, error) {
 				if fixErr == nil {
 					agentStatus = fixStatus
 				}
-				s.writeIterationMetaWithAgent(iterDir, i, agentStatus, "changes_requested")
+				s.writeIterationMetaWithAgent(iterDir, i, agentStatus, frMetaChangesRequested)
 				if consecutiveFailures >= maxConsecFails {
 					return &FeatureFinalReviewResult{
 						FinalStatus: "safety_rail",
@@ -402,26 +425,8 @@ func (s *featureFinalReviewLoopState) run() (*FeatureFinalReviewResult, error) {
 				continue
 			}
 
-			// The fix round's work commits immediately — the next review
-			// must read committed state, and a crash between fix and review
-			// must leave a clean commit boundary.
-			if s.cfg.RoundCommitHook != nil {
-				if err := s.cfg.RoundCommitHook(RoundCommitInput{
-					FeatureID: cfg.Feature.ID,
-					Iteration: i,
-					Kind:      RoundCommitFinalReviewFix,
-					FixNumber: roundCommits.changesRequested,
-					Repos:     s.workspace.RepoPaths,
-				}); err != nil {
-					return &FeatureFinalReviewResult{
-						FinalStatus: "failed",
-						Iterations:  i,
-						LastError:   fmt.Sprintf("committing final review fix round %d: %v", roundCommits.changesRequested, err),
-					}, nil
-				}
-			}
 			consecutiveFailures = 0
-			s.writeIterationMeta(iterDir, i, "changes_requested")
+			s.writeIterationMeta(iterDir, i, frMetaChangesRequested)
 			continue
 
 		default:
@@ -668,7 +673,13 @@ func (s *featureFinalReviewLoopState) rejectDirtyWorktreesAtApproval() error {
 		if path == "" {
 			continue
 		}
-		if git.HasUncommittedChangesExcludingUntracked(path, FinalReviewRootOrchestrationArtifacts...) {
+		dirtyNow, err := git.HasUncommittedChangesExcludingUntracked(path, FinalReviewRootOrchestrationArtifacts...)
+		if err != nil {
+			// An indeterminate worktree must never read as clean at an
+			// approval gate.
+			return fmt.Errorf("final review approval cleanliness check failed for repo %s: %w", name, err)
+		}
+		if dirtyNow {
 			dirty = append(dirty, name)
 		}
 	}
@@ -808,7 +819,7 @@ func (s *featureFinalReviewLoopState) runFix(iteration int, iterDir, feedback st
 func (s *featureFinalReviewLoopState) recordFixProtocolViolation(iterDir string, iteration int, violations []ProtocolViolation, consecutiveFailures *int) *FeatureFinalReviewResult {
 	*consecutiveFailures = *consecutiveFailures + 1
 	lastErr := formatProtocolViolationError(RoleFinalReviewFixer, iterDir, violations)
-	s.writeIterationMetaWithAgent(iterDir, iteration, agentStatusProtocolViolation, "changes_requested")
+	s.writeIterationMetaWithAgent(iterDir, iteration, agentStatusProtocolViolation, frMetaChangesRequested)
 	if *consecutiveFailures >= s.maxConsecFails() {
 		return &FeatureFinalReviewResult{
 			FinalStatus: BoundedHelperStatusProtocolViolation,

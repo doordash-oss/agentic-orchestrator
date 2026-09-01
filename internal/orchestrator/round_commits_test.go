@@ -35,9 +35,14 @@ import (
 // plus the orchestrator whose event bus the hook emits onto.
 func newRoundCommitHarness(t *testing.T, f *feature.Feature) (agent.RoundCommitHook, *orchestrator.Orchestrator) {
 	t.Helper()
-	pr := &agent.PhaseRunner{}
+	pr := &agent.PhaseRunner{CommandRunner: agent.NewExecCommandRunner()}
 	lc := lifecycleForFeature(f)
-	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: newFeatureStore(f), PhaseRunner: pr}, orchestrator.Hooks{})
+	o := orchestrator.New(orchestrator.Deps{
+		Lifecycle:   lc,
+		Store:       newFeatureStore(f),
+		PhaseRunner: pr,
+		CmdRunner:   pr.CommandRunner,
+	}, orchestrator.Hooks{})
 	if pr.RoundCommitHook == nil {
 		t.Fatal("orchestrator.New must install the round commit hook on the PhaseRunner")
 	}
@@ -270,5 +275,89 @@ func TestOrchestrator_RoundCommitHook_FailsWhenFeatureMissing(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "feature not found") {
 		t.Errorf("error = %v, want load failure surfaced", err)
+	}
+}
+
+// A clean round must cost neither a feature load nor a commit: the hook
+// resolves dirtiness first and short-circuits before any store access.
+func TestOrchestrator_RoundCommitHook_CleanRoundSkipsFeatureLoad(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	repo := testutil.InitGitRepo(t)
+	headBefore, err := git.CurrentHeadSHA(repo)
+	if err != nil {
+		t.Fatalf("repo head: %v", err)
+	}
+
+	f := roadmapFeature(t, repo)
+	pr := &agent.PhaseRunner{CommandRunner: agent.NewExecCommandRunner()}
+	lc := lifecycleForFeature(f)
+	getCalls := 0
+	lc.GetFn = func(id string) (*feature.Feature, error) {
+		getCalls++
+		return f, nil
+	}
+	orchestrator.New(orchestrator.Deps{
+		Lifecycle:   lc,
+		Store:       newFeatureStore(f),
+		PhaseRunner: pr,
+		CmdRunner:   pr.CommandRunner,
+	}, orchestrator.Hooks{})
+
+	if err := pr.RoundCommitHook(agent.RoundCommitInput{
+		FeatureID: f.ID,
+		Iteration: 1,
+		Kind:      agent.RoundCommitImplement,
+		Repos:     map[string]string{"solo": repo},
+	}); err != nil {
+		t.Fatalf("clean round commit: %v", err)
+	}
+
+	if getCalls != 0 {
+		t.Errorf("lifecycle Get called %d times on a clean round, want 0", getCalls)
+	}
+	headAfter, _ := git.CurrentHeadSHA(repo)
+	if headAfter != headBefore {
+		t.Errorf("clean round created a commit: %q -> %q", headBefore, headAfter)
+	}
+}
+
+// A repo dirtied only by a known untracked root orchestration artifact must
+// not have that artifact committed by `git add -A`: the round commit scrubs
+// it (publish-path behavior) and creates no commit at all.
+func TestOrchestrator_RoundCommitHook_ScrubsStrayArtifactsInsteadOfCommitting(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	repo := testutil.InitGitRepo(t)
+	headBefore, err := git.CurrentHeadSHA(repo)
+	if err != nil {
+		t.Fatalf("repo head: %v", err)
+	}
+	dirtyRepo(t, repo, "progress.md", "stray orchestration artifact\n")
+
+	f := roadmapFeature(t, repo)
+	hook, _ := newRoundCommitHarness(t, f)
+
+	if err := hook(agent.RoundCommitInput{
+		FeatureID:            f.ID,
+		PhaseNumber:          1,
+		TotalPhases:          2,
+		PhaseType:            "tracer-bullet",
+		Iteration:            1,
+		Kind:                 agent.RoundCommitImplement,
+		FirstImplementCommit: true,
+		Repos:                map[string]string{"solo": repo},
+	}); err != nil {
+		t.Fatalf("round commit over stray artifact: %v", err)
+	}
+
+	headAfter, _ := git.CurrentHeadSHA(repo)
+	if headAfter != headBefore {
+		t.Errorf("stray artifact was committed: HEAD moved %q -> %q", headBefore, headAfter)
+	}
+	if _, err := os.Stat(filepath.Join(repo, "progress.md")); !os.IsNotExist(err) {
+		t.Errorf("stray artifact still present (stat err = %v); the scrub must remove it", err)
 	}
 }

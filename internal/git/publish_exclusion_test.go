@@ -26,7 +26,11 @@ import (
 func TestHasUncommittedChangesExcludingUntracked(t *testing.T) {
 	repo := testutil.InitGitRepo(t)
 
-	if git.HasUncommittedChangesExcludingUntracked(repo, "progress.md") {
+	dirty, err := git.HasUncommittedChangesExcludingUntracked(repo, "progress.md")
+	if err != nil {
+		t.Fatalf("clean repo probe: %v", err)
+	}
+	if dirty {
 		t.Fatal("clean repo reported dirty")
 	}
 
@@ -34,7 +38,11 @@ func TestHasUncommittedChangesExcludingUntracked(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(repo, "progress.md"), []byte("stray\n"), 0o644); err != nil {
 		t.Fatalf("write stray artifact: %v", err)
 	}
-	if git.HasUncommittedChangesExcludingUntracked(repo, "progress.md", "meta.yaml") {
+	dirty, err = git.HasUncommittedChangesExcludingUntracked(repo, "progress.md", "meta.yaml")
+	if err != nil {
+		t.Fatalf("stray artifact probe: %v", err)
+	}
+	if dirty {
 		t.Fatal("untracked known artifact must be ignored")
 	}
 	if !git.HasUncommittedChanges(repo) {
@@ -45,7 +53,11 @@ func TestHasUncommittedChangesExcludingUntracked(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(repo, "notes.md"), []byte("x\n"), 0o644); err != nil {
 		t.Fatalf("write unrelated file: %v", err)
 	}
-	if !git.HasUncommittedChangesExcludingUntracked(repo, "progress.md") {
+	dirty, err = git.HasUncommittedChangesExcludingUntracked(repo, "progress.md")
+	if err != nil {
+		t.Fatalf("unrelated file probe: %v", err)
+	}
+	if !dirty {
 		t.Fatal("untracked unknown file must count as dirty")
 	}
 
@@ -53,7 +65,20 @@ func TestHasUncommittedChangesExcludingUntracked(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("# changed\n"), 0o644); err != nil {
 		t.Fatalf("modify tracked file: %v", err)
 	}
-	if !git.HasUncommittedChangesExcludingUntracked(repo, "README.md") {
+	dirty, err = git.HasUncommittedChangesExcludingUntracked(repo, "README.md")
+	if err != nil {
+		t.Fatalf("tracked change probe: %v", err)
+	}
+	if !dirty {
 		t.Fatal("tracked change to an excluded-name path must count as dirty")
+	}
+}
+
+// An indeterminate probe (broken git state) must surface as an error, never
+// as a clean worktree — the approval gate treats errors as failures.
+func TestHasUncommittedChangesExcludingUntracked_ProbeFailureIsError(t *testing.T) {
+	_, err := git.HasUncommittedChangesExcludingUntracked("/nonexistent/repo/path", "progress.md")
+	if err == nil {
+		t.Fatal("probe over a missing worktree must return an error, not clean")
 	}
 }

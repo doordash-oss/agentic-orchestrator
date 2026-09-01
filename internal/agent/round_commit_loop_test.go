@@ -21,6 +21,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
 )
@@ -302,6 +303,18 @@ echo "iteration 1" >> "`+progressFile+`"
 	if !strings.Contains(err.Error(), "committing implementation round 1") {
 		t.Errorf("error = %v, want round commit failure surfaced", err)
 	}
+
+	// The session reached semantic completion before the commit failed; its
+	// iteration record must be persisted so crash recovery and the
+	// meta-scan round trackers see the same history the live run produced.
+	metaPath := filepath.Join(artifactDir, "iteration-01", "meta.yaml")
+	data, readErr := os.ReadFile(metaPath)
+	if readErr != nil {
+		t.Fatalf("read iteration meta after round commit failure: %v", readErr)
+	}
+	if !strings.Contains(string(data), "agent_status: SUCCESS") {
+		t.Errorf("iteration meta = %s, want agent_status SUCCESS (semantic completion recorded)", data)
+	}
 }
 
 // TestRunFeatureFinalReviewLoop_RoundCommitHook_FiresPerFixRound drives the
@@ -525,6 +538,204 @@ func TestRunFeatureFinalReviewLoop_DirtyWorktreeAtApprovalToleratesRootArtifacts
 	}
 	if result.FinalStatus != finalStatusReviewPassed {
 		t.Fatalf("FinalStatus = %q, want review_passed (LastError=%q)", result.FinalStatus, result.LastError)
+	}
+}
+
+// TestRunImplementationLoop_RoundCommitHook_ProtocolViolationsCountFixRounds
+// pins the live-counter/meta-scan invariant: implementer protocol violations
+// write meta.ReviewStatus=CHANGES_REQUESTED and arm reviewer feedback, so
+// each one must advance the live fix-round counter exactly like a
+// crash-resume meta scan would. Two violations make the following round fix
+// round 2, not a repeated fix round 1.
+func TestRunImplementationLoop_RoundCommitHook_ProtocolViolationsCountFixRounds(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	tmpDir := t.TempDir()
+	workDir := filepath.Join(tmpDir, "work")
+	artifactDir := filepath.Join(tmpDir, "artifacts")
+	stateDir := filepath.Join(tmpDir, "state", "test-feat-001")
+	scriptsDir := filepath.Join(tmpDir, "scripts")
+	for _, d := range []string{workDir, artifactDir, stateDir, scriptsDir} {
+		os.MkdirAll(d, 0o755)
+	}
+
+	// Iterations 1-2 emit success without writing the required artifacts
+	// (implementer contract violation); iteration 3 writes them.
+	agentScript := testutil.WriteScript(t, scriptsDir, "agent.sh", `
+if [ -d "`+artifactDir+`/iteration-03" ]; then
+`+testutil.JSONLInit+`
+`+testutil.WriteImplementSuccessArtifacts(artifactDir)+`
+`+testutil.JSONLSuccess+`
+else
+`+testutil.JSONLInit+`
+`+testutil.JSONLSuccess+`
+fi
+`)
+
+	reviewScript := testutil.WriteScript(t, scriptsDir, "review.sh", `
+for _d in "`+artifactDir+`"/iteration-*; do :; done
+`+testutil.JSONLInit+`
+if [ "$(basename "$_d")" = "iteration-03" ]; then
+    `+testutil.WriteReviewApproved(artifactDir)+`
+else
+    `+testutil.WriteReviewChangesRequested(artifactDir, "- **High**: missing artifacts")+`
+fi
+`+testutil.JSONLSuccess+`
+`)
+
+	eventCh := make(chan interface{}, 100)
+	sm := session.NewManager(eventCh)
+	defer sm.Shutdown()
+
+	f := newTestFeature(t, workDir)
+	hook, inputs := recordingRoundCommitHook(t)
+
+	planPath := writePlanFile(t, artifactDir, "Violate twice then fix")
+
+	cfg := ImplementConfig{
+		Feature:             f,
+		WorkDir:             workDir,
+		PlanPath:            planPath,
+		MaxIterations:       5,
+		MaxConsecFails:      3,
+		MaxConsecNoProgress: 3,
+		ExitCriteria:        "Tests pass",
+		Model:               "agent",
+		ReviewModel:         "reviewer",
+		ArtifactDir:         artifactDir,
+		StateDir:            stateDir,
+		BuildSession:        mockBuildSession(agentScript, reviewScript),
+		RoundCommitHook:     hook,
+	}
+
+	result, err := RunImplementationLoop(cfg, sm)
+	if err != nil {
+		t.Fatalf("RunImplementationLoop error: %v", err)
+	}
+	if result.FinalStatus != finalStatusReviewPassed {
+		t.Fatalf("FinalStatus = %q, want review_passed (LastError=%q)", result.FinalStatus, result.LastError)
+	}
+
+	// Protocol-violation rounds do not commit; only iteration 3's fix round
+	// fires the hook, and it must be fix round 2 (two CHANGES_REQUESTED
+	// metas precede it).
+	if len(*inputs) != 1 {
+		t.Fatalf("round commit hook fired %d times, want 1; inputs: %+v", len(*inputs), *inputs)
+	}
+	got := (*inputs)[0]
+	if got.Kind != RoundCommitFix {
+		t.Errorf("Kind = %q, want fix", got.Kind)
+	}
+	if got.FixNumber != 2 {
+		t.Errorf("FixNumber = %d, want 2 (two protocol-violation CHANGES_REQUESTED iterations precede it)", got.FixNumber)
+	}
+
+	// The persisted metas must agree with the live counter: a crash resume
+	// scanning them seeds the same fix number.
+	am := NewArtifactManager(artifactDir)
+	tr := newImplementRoundCommitTracker(am, artifactDir, 3)
+	if tr.changesRequested != 2 {
+		t.Errorf("meta-scan changesRequested = %d, want 2 (live/meta divergence)", tr.changesRequested)
+	}
+}
+
+// TestRunFeatureFinalReviewLoop_RoundCommitHook_FailedFixRoundStillCommits:
+// a FAILED fix round's partial edits must not strand the worktree dirty —
+// FR has no later absorbing round, so the fix-round commit fires whatever
+// the session outcome. The follow-up review approves over the committed
+// state instead of tripping the approval dirty-check.
+func TestRunFeatureFinalReviewLoop_RoundCommitHook_FailedFixRoundStillCommits(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	env := newFRLoopEnv(t)
+	store, f, _ := newFRTestFeature(t, env.stateDir, "fr-failed-fix-commit", []string{testRepoNameAPI})
+	repo := testutil.InitGitRepo(t)
+	f.Repos[0].Path = repo
+	f.Repos[0].WorktreePath = repo
+	if err := store.Save(f); err != nil {
+		t.Fatalf("save feature with git repo: %v", err)
+	}
+
+	artDir := frArtifactDir(env.stateDir, f)
+	if err := os.MkdirAll(artDir, 0o755); err != nil {
+		t.Fatalf("mkdir artifact: %v", err)
+	}
+
+	// Iteration 1's fixer applies a real edit but dies before completing
+	// (FAILED); iteration 2's review approves the (committed) partial fix.
+	reviewScript := testutil.WriteScript(t, env.scriptsDir, "review.sh",
+		fmt.Sprintf(`if [ -d "%s/iteration-02" ]; then
+%s
+%s
+%s
+else
+%s
+%s
+%s
+fi`,
+			artDir,
+			testutil.JSONLInit,
+			testutil.WriteFinalReviewApproved(artDir),
+			testutil.JSONLSuccess,
+			testutil.JSONLInit,
+			testutil.WriteFinalReviewChangesRequested(artDir, "- **High**: needs a fix"),
+			testutil.JSONLSuccess))
+
+	fixScript := testutil.WriteScript(t, env.scriptsDir, "fix.sh",
+		fmt.Sprintf(`%s
+cat > %s <<'EOF'
+partial fix
+EOF
+exit 1
+`,
+			testutil.JSONLInit,
+			filepath.Join(repo, "fix.txt")))
+
+	eventCh := make(chan any, 100)
+	sm := session.NewManager(eventCh)
+	defer sm.Shutdown()
+
+	// The hook commits the failed fixer's partial work, mirroring the
+	// orchestrator's behavior.
+	hook := func(input RoundCommitInput) error {
+		for _, path := range input.Repos {
+			if path == "" {
+				continue
+			}
+			if _, err := git.CommitAllAndGetHead(path, "Final review fix 1 (address review feedback)"); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	cfg := OrchestratorConfig{
+		Feature:        f,
+		FeatureStore:   store,
+		StateDir:       env.stateDir,
+		Model:          "agent",
+		ReviewModel:    "reviewer",
+		MaxIterations:  5,
+		MaxConsecFails: 3,
+		BuildSession: mockBuildSessionByModel(map[string]string{
+			"reviewer": reviewScript,
+			"agent":    fixScript,
+		}),
+		RoundCommitHook: hook,
+	}
+
+	result, err := RunFeatureFinalReviewLoop(cfg, sm)
+	if err != nil {
+		t.Fatalf("loop: %v", err)
+	}
+	if result.FinalStatus != finalStatusReviewPassed {
+		t.Fatalf("FinalStatus = %q, want review_passed (LastError=%q)", result.FinalStatus, result.LastError)
+	}
+	if _, err := os.Stat(filepath.Join(repo, "fix.txt")); err != nil {
+		t.Errorf("partial fix edit missing; the failed fix round's work disappeared: %v", err)
 	}
 }
 

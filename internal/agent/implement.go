@@ -703,6 +703,17 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			exitCode = exitCodeFromAgentStatus(agentStatus)
 		}
 
+		meta := IterationMeta{
+			Iteration:    i,
+			StartedAt:    iterStart,
+			Duration:     duration,
+			ExitCode:     exitCode,
+			AgentStatus:  agentStatus,
+			MadeProgress: madeProgress,
+			CostUSD:      cost.TotalCostUSD,
+			Context:      iterationContextMeta(sess, waitResult.Handoff),
+		}
+
 		// Per-round commit: fire as soon as the round's session has fully
 		// ended (including any crash-resume replacement session) and ended
 		// with a semantic outcome. The skipImplement resume branch also
@@ -729,20 +740,17 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 					input.FirstImplementCommit = false
 				}
 				if err := cfg.RoundCommitHook(input); err != nil {
+					// The session reached semantic completion; persist its
+					// iteration record before failing the phase so the
+					// durable history (and the meta-scan round trackers on
+					// resume) matches what the live run produced. The review
+					// gate never runs, so ReviewStatus stays empty.
+					_ = am.WriteMeta(iterDir, meta)
+					_ = am.WriteSummary(summaryPath, meta)
 					cfg.Observer.IterationEnded(iterCtx, i, toSessionUsage(cost), time.Since(iterStart), "round_commit_error")
 					return nil, fmt.Errorf("committing implementation round %d: %w", i, err)
 				}
 			}
-		}
-		meta := IterationMeta{
-			Iteration:    i,
-			StartedAt:    iterStart,
-			Duration:     duration,
-			ExitCode:     exitCode,
-			AgentStatus:  agentStatus,
-			MadeProgress: madeProgress,
-			CostUSD:      cost.TotalCostUSD,
-			Context:      iterationContextMeta(sess, waitResult.Handoff),
 		}
 
 		// Accumulate iteration cost into the latest active timing key rather
@@ -764,7 +772,7 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 				violations = completionIntentViolations(rootCompletionIntent(sess), []string{"progress.md"})
 			}
 			lastErr := formatProtocolViolationError(RoleImplementer, iterDir, violations)
-			if done := recordProtocolViolationIteration(am, summaryPath, iterDir, aggregateLogPath, &meta, i, cfg, iterCtx, cost, iterStart, violations, lastErr, &consecutiveFailures, &reviewerFeedback); done != nil {
+			if done := recordProtocolViolationIteration(am, summaryPath, iterDir, aggregateLogPath, &meta, i, cfg, iterCtx, cost, iterStart, violations, lastErr, &consecutiveFailures, &reviewerFeedback, roundCommits); done != nil {
 				return done, nil
 			}
 			continue
@@ -841,7 +849,7 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			}
 			if !outcome.OK {
 				lastErr := formatProtocolViolationError(RoleImplementer, iterDir, violations)
-				if done := recordProtocolViolationIteration(am, summaryPath, iterDir, aggregateLogPath, &meta, i, cfg, iterCtx, cost, iterStart, violations, lastErr, &consecutiveFailures, &reviewerFeedback); done != nil {
+				if done := recordProtocolViolationIteration(am, summaryPath, iterDir, aggregateLogPath, &meta, i, cfg, iterCtx, cost, iterStart, violations, lastErr, &consecutiveFailures, &reviewerFeedback, roundCommits); done != nil {
 					return done, nil
 				}
 				continue
@@ -864,7 +872,7 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 				if gate.Rejected {
 					gateViolations := reportGateViolations(gate)
 					lastErr := formatProtocolViolationError(RoleImplementer, iterDir, gateViolations)
-					if done := recordProtocolViolationIteration(am, summaryPath, iterDir, aggregateLogPath, &meta, i, cfg, iterCtx, cost, iterStart, gateViolations, lastErr, &consecutiveFailures, &reviewerFeedback); done != nil {
+					if done := recordProtocolViolationIteration(am, summaryPath, iterDir, aggregateLogPath, &meta, i, cfg, iterCtx, cost, iterStart, gateViolations, lastErr, &consecutiveFailures, &reviewerFeedback, roundCommits); done != nil {
 						return done, nil
 					}
 					continue
@@ -1255,6 +1263,7 @@ func recordProtocolViolationIteration(
 	lastErr string,
 	consecutiveFailures *int,
 	reviewerFeedback *string,
+	roundCommits *implementRoundCommitTracker,
 ) *LoopResult {
 	*consecutiveFailures = *consecutiveFailures + 1
 	feedback := formatContractViolationFeedback(RoleImplementer, violations)
@@ -1265,6 +1274,10 @@ func recordProtocolViolationIteration(
 	_ = am.WriteMeta(iterDir, *meta)
 	_ = am.WriteSummary(summaryPath, *meta)
 	*reviewerFeedback = feedback
+	// The persisted CHANGES_REQUESTED review status drives the next round's
+	// fix-round labeling; keep the live counter in lockstep so a crash
+	// resume (which counts metas) labels rounds identically.
+	roundCommits.changesRequested++
 	cfg.Observer.IterationEnded(iterCtx, iteration, toSessionUsage(cost), time.Since(iterStart), BoundedHelperStatusProtocolViolation)
 	if *consecutiveFailures >= cfg.MaxConsecFails {
 		return &LoopResult{FinalStatus: BoundedHelperStatusProtocolViolation, Iterations: iteration, LastError: lastErr}
@@ -1305,17 +1318,14 @@ func observeVerifiedImplementationOutcome(pt *ProgressTracker, blockers int, cfg
 }
 
 // implementWorktreePaths returns the repo paths whose git state evidences
-// implementation progress: each feature repo's worktree (or checkout path),
+// implementation progress: each feature repo's edit surface (repoEditPath),
 // falling back to the session work dir for repo-less configurations.
 func implementWorktreePaths(cfg ImplementConfig) []string {
 	if cfg.Feature != nil && len(cfg.Feature.Repos) > 0 {
 		paths := make([]string, 0, len(cfg.Feature.Repos))
 		for _, r := range cfg.Feature.Repos {
-			switch {
-			case r.WorktreePath != "":
-				paths = append(paths, r.WorktreePath)
-			case r.Path != "":
-				paths = append(paths, r.Path)
+			if p := repoEditPath(r); p != "" {
+				paths = append(paths, p)
 			}
 		}
 		return paths

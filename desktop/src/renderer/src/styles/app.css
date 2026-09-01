@@ -5064,6 +5064,17 @@ body {
   color: var(--text);
 }
 
+/* Ambient only, like the update dot: an AMA reply landed while the panel was
+ * closed. The Ask button itself is the target that clears it. */
+.sidebar__ama-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-left: 6px;
+  border-radius: 999px;
+  background: var(--accent);
+}
+
 /* The footer's server control: the connected server's name and status dot
  * acting as the switcher trigger. Same metrics as the passive runtime pill. */
 .sidebar__server {

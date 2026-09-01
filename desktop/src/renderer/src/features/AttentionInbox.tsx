@@ -114,9 +114,9 @@ export function AttentionInbox({
   open: controlledOpen,
   onOpenChange,
 }: AttentionInboxProps) {
-  // Synthetic help items (an interactive session idling between turns) are
-  // inline run-view status, never inbox rows. Memoized: effects key on the
-  // list's identity, so a fresh array every render would loop them.
+  // Synthetic help items (a session idling between turns — phase coordination
+  // or the chat resting after a reply) are never inbox rows. Memoized: effects
+  // key on the list's identity, so a fresh array every render would loop them.
   const items = useMemo(() => allItems.filter((item) => !isSyntheticHelpItem(item)), [allItems]);
   const [uncontrolledOpen, setUncontrolledOpen] = useState(false);
   const open = controlledOpen ?? uncontrolledOpen;

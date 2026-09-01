@@ -1573,8 +1573,9 @@ func (h *apiHandler) featureQueues() ([]HelpQueue, []NeedUserInputGate, error) {
 			if sess == nil || sess.Status() != ports.SessionWaitingHelp || sessionHasPendingAskUserControl(sess) {
 				continue
 			}
-			// A chat session waiting between turns is waiting on the user —
-			// the inbox is its only reply surface. A phase session in the same
+			// A chat session waiting between turns has delivered its reply and
+			// rests until the next message — clients surface that in the chat
+			// panel, not as blocking attention. A phase session in the same
 			// state is mid-coordination and needs no human.
 			kind := helpKindCoordinating
 			if sess.Kind() == ports.KindChat {

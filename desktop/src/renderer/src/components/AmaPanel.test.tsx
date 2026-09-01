@@ -241,6 +241,51 @@ describe('AmaPanel capabilities', () => {
     ).toBeInTheDocument();
   });
 
+  it('keeps the idle between-turn wait out of the pending strip and the suffix', async () => {
+    installAgenticoMock({
+      settings: settingsWithAma({ drawer: 'expanded' }),
+      session: activeChatSession(),
+    });
+    render(panelElement({ attentionItems: [chatIdleWaitItem()] }));
+
+    expect(await screen.findByText('Active')).toBeVisible();
+    expect(screen.queryByText(/pending/)).not.toBeInTheDocument();
+    expect(screen.queryByText('Agent is waiting')).not.toBeInTheDocument();
+  });
+
+  it('reports unread only for a reply that lands while the panel is closed', async () => {
+    const mock = installAgenticoMock();
+    const onUnreadChange = vi.fn();
+    const { rerender } = render(panelElement({ onUnreadChange }));
+    await waitFor(() => expect(mock.api.getSettings).toHaveBeenCalled());
+    expect(onUnreadChange).toHaveBeenLastCalledWith(false);
+
+    // A turn ends while closed: the wait appears with a fresh timestamp.
+    rerender(panelElement({ onUnreadChange, attentionItems: [chatIdleWaitItem()] }));
+    expect(onUnreadChange).toHaveBeenLastCalledWith(true);
+
+    // Opening the panel is what marks the reply as seen.
+    pressOptionSpace();
+    await screen.findByRole('complementary', { name: 'Ask Agentico' });
+    expect(onUnreadChange).toHaveBeenLastCalledWith(false);
+
+    // Closing again over the same wait stays read…
+    pressOptionSpace();
+    await waitFor(() =>
+      expect(screen.queryByRole('complementary', { name: 'Ask Agentico' })).not.toBeInTheDocument(),
+    );
+    expect(onUnreadChange).toHaveBeenLastCalledWith(false);
+
+    // …until the next turn ends while closed.
+    rerender(
+      panelElement({
+        onUnreadChange,
+        attentionItems: [chatIdleWaitItem('2026-07-21T00:10:00Z')],
+      }),
+    );
+    expect(onUnreadChange).toHaveBeenLastCalledWith(true);
+  });
+
   it('reads Read-only transcript once an ended session still has messages', async () => {
     installAgenticoMock({
       settings: settingsWithAma({ drawer: 'expanded' }),
@@ -557,6 +602,7 @@ function panelElement(
   overrides: {
     attentionItems?: AttentionItem[];
     routeRequest?: Parameters<typeof AmaPanel>[0]['routeRequest'];
+    onUnreadChange?: (unread: boolean) => void;
   } = {},
 ) {
   return (
@@ -565,6 +611,9 @@ function panelElement(
       refreshAttention={() => Promise.resolve(overrides.attentionItems ?? [])}
       setAttentionDrafts={vi.fn()}
       routeRequest={overrides.routeRequest ?? null}
+      {...(overrides.onUnreadChange === undefined
+        ? {}
+        : { onUnreadChange: overrides.onUnreadChange })}
     />
   );
 }
@@ -607,6 +656,18 @@ const chatQuestionItem: AttentionItem = {
     },
   ],
 };
+
+/** The chat's idle between-turn wait: a delivered reply, not a pending ask. */
+function chatIdleWaitItem(waitingSince = '2026-07-21T00:05:00Z'): AttentionItem {
+  return {
+    kind: 'help',
+    id: '__chat__:',
+    sessionId: '__chat__',
+    waitingSince,
+    prompt: 'Agent has a question',
+    waitingKind: 'input',
+  };
+}
 
 function activeChatSession(overrides: Record<string, unknown> = {}) {
   return {

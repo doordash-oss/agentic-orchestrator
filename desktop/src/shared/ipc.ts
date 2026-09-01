@@ -1971,13 +1971,16 @@ export function attentionOwnerFeatureId(item: AttentionItem): string | undefined
   return item.featureId;
 }
 /**
- * A synthetic help item: a phase session idling between turns
- * (waitingKind 'coordinating'). Inline run-view status, not blocking input — it
- * never badges, notifies, or holds the phase rail. A chat session's wait
- * ('input') is excluded: the inbox is the only place to answer it.
+ * A synthetic help item: a session idling between turns. 'coordinating' is a
+ * phase session parked mid-coordination; 'input' is the chat session resting
+ * after a reply, which the AMA panel surfaces (an idle chat is its normal
+ * state, not a request). Neither is blocking input — synthetic items never
+ * badge, notify, appear as inbox rows, or hold the phase rail.
  */
 export function isSyntheticHelpItem(item: AttentionItem): boolean {
-  return item.kind === 'help' && item.waitingKind === 'coordinating';
+  return (
+    item.kind === 'help' && (item.waitingKind === 'coordinating' || item.waitingKind === 'input')
+  );
 }
 
 /**

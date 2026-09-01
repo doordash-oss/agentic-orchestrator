@@ -15,10 +15,12 @@
 package agent
 
 import (
+	"os/exec"
 	"strings"
 	"testing"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 )
 
@@ -146,57 +148,38 @@ func TestApplyStartupDefaults_PreservesUserValues(t *testing.T) {
 
 func TestCheckRequiredTools_GitPresent(t *testing.T) {
 	// On any dev machine, git should be available.
-	errors, _ := CheckRequiredTools()
-	for _, e := range errors {
-		if strings.Contains(e, "git") {
+	hard, _ := CheckRequiredTools()
+	for _, issue := range hard {
+		if issue.Code == errcat.MissingExecutable {
 			t.Skip("git not in PATH on this machine")
 		}
 	}
-	// No error about git means the check passed.
-	for _, e := range errors {
-		if strings.Contains(e, "git") {
-			t.Errorf("unexpected git error: %s", e)
-		}
-	}
 }
 
-func TestCheckRequiredTools_ErrorFormat(t *testing.T) {
-	errors, warnings := CheckRequiredTools()
-	for _, e := range errors {
-		if !strings.HasPrefix(e, "Error: ") {
-			t.Errorf("error should start with 'Error: ', got: %s", e)
-		}
-	}
-	for _, w := range warnings {
-		if !strings.HasPrefix(w, "Warning: ") {
-			t.Errorf("warning should start with 'Warning: ', got: %s", w)
-		}
-	}
-}
-
-func TestCheckRequiredTools_ContainsInstallHints(t *testing.T) {
-	// Isolate GitHub auth so the credentials warning is deterministic
-	// rather than depending on the machine's ambient gh/env state.
+func TestCheckRequiredToolsMissingGitIsStructured(t *testing.T) {
 	isolateGitHubAuth(t)
-	errors, warnings := CheckRequiredTools()
-	all := append(errors, warnings...)
-	sawCredentialsWarning := false
-	for _, msg := range all {
-		// "git not found" pins this to the git-tool message; a bare "git"
-		// substring also matches "github.com" inside the credentials warning.
-		if strings.Contains(msg, "git not found") && !strings.Contains(msg, "git-scm.com") {
-			t.Error("git message should contain install hint URL")
-		}
-		if strings.Contains(msg, "no GitHub credentials found") {
-			sawCredentialsWarning = true
-			want := "Set GH_TOKEN or install GitHub CLI (https://cli.github.com/) and run 'gh auth login'."
-			if !strings.Contains(msg, want) {
-				t.Errorf("credentials warning = %q; want it to contain %q", msg, want)
+	hard, soft := checkRequiredTools(func(name string) (string, error) {
+		return "", &exec.Error{Name: name, Err: exec.ErrNotFound}
+	})
+	if len(hard) != 1 {
+		t.Fatalf("hard = %#v; want exactly the missing git issue", hard)
+	}
+	if hard[0].Code != errcat.MissingExecutable {
+		t.Errorf("missing git code = %q; want missing_executable", hard[0].Code)
+	}
+	if !strings.Contains(hard[0].Diagnostics, "git not found in PATH") ||
+		!strings.Contains(hard[0].Diagnostics, "https://git-scm.com/downloads") {
+		t.Errorf("missing git diagnostics = %q; want the install hint", hard[0].Diagnostics)
+	}
+	if len(soft) != 1 || soft[0].Code != errcat.GithubCredentialsMissing {
+		t.Fatalf("soft = %#v; want the credentials warning issue", soft)
+	}
+	for _, issue := range append(append([]ToolIssue(nil), hard...), soft...) {
+		for _, text := range []string{issue.Diagnostics} {
+			if strings.HasPrefix(text, "Error: ") || strings.HasPrefix(text, "Warning: ") {
+				t.Errorf("issue %q carries a pre-formatted prefix: %q", issue.Code, text)
 			}
 		}
-	}
-	if !sawCredentialsWarning {
-		t.Error("expected a no-GitHub-credentials warning with isolated auth env")
 	}
 }
 

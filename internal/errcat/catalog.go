@@ -115,6 +115,29 @@ const (
 	UnsupportedVersion   Code = "unsupported_version"
 )
 
+// CLI error codes. Blocking failures of the agentico binary itself.
+const (
+	InvalidUsage            Code = "invalid_usage"
+	DesktopLaunchFailed     Code = "desktop_launch_failed"
+	UpdateCheckFailed       Code = "update_check_failed"
+	ContractInputUnreadable Code = "contract_input_unreadable"
+	RuntimeAlreadyRunning   Code = "runtime_already_running"
+	RuntimeInitFailed       Code = "runtime_init_failed"
+	ServerStartFailed       Code = "server_start_failed"
+	ProtocolViolation       Code = "protocol_violation"
+)
+
+// CLI degradation warning codes, one per startup degradation family.
+const (
+	ProviderUnavailable        Code = "provider_unavailable"
+	ProviderVersionCheckFailed Code = "provider_version_check_failed"
+	ModelCatalogDegraded       Code = "model_catalog_degraded"
+	AssetsReconcileFailed      Code = "assets_reconcile_failed"
+	GithubCredentialsMissing   Code = "github_credentials_missing"
+	StartupMaintenanceFailed   Code = "startup_maintenance_failed"
+	ShutdownIncomplete         Code = "shutdown_incomplete"
+)
+
 // WorkspaceRootParams carries the rejected workspace-root paths for
 // InvalidWorkspaceRoot.
 type WorkspaceRootParams struct {
@@ -170,6 +193,54 @@ type PathParams struct {
 }
 
 func (PathParams) params() {}
+
+// UsageParams carries the raw parser message for InvalidUsage so the
+// terminal summary keeps the exact argument-parsing text.
+type UsageParams struct {
+	Reason string
+}
+
+func (UsageParams) params() {}
+
+// UpdateCheckParams carries the release-lookup failure reason for
+// UpdateCheckFailed.
+type UpdateCheckParams struct {
+	Reason string
+}
+
+func (UpdateCheckParams) params() {}
+
+// AlreadyRunningParams names the state directory or running base URL for
+// RuntimeAlreadyRunning.
+type AlreadyRunningParams struct {
+	Detail string
+}
+
+func (AlreadyRunningParams) params() {}
+
+// ViolationParams names the check and violation count for ProtocolViolation.
+type ViolationParams struct {
+	Check string
+	Count int
+}
+
+func (ViolationParams) params() {}
+
+// ProviderUnavailableParams carries the provider and setup-capable mode for
+// ProviderUnavailable.
+type ProviderUnavailableParams struct {
+	Provider     string
+	SetupCapable bool
+}
+
+func (ProviderUnavailableParams) params() {}
+
+// ProviderIssueParams names the provider a degradation refers to.
+type ProviderIssueParams struct {
+	Provider string
+}
+
+func (ProviderIssueParams) params() {}
 
 func joinQuoted(values []string) string {
 	quoted := make([]string, len(values))
@@ -634,4 +705,160 @@ var catalog = map[Code]Entry{
 		Summary:     "An installed provider CLI is below the enforced minimum version.",
 		Remediation: "Update the provider CLI, then retry.",
 	},
+
+	// --- CLI blocking codes -----------------------------------------------------
+	InvalidUsage: {
+		Class:   ClassBlocking,
+		Title:   "Invalid usage",
+		Summary: "The command-line arguments were not valid.",
+		summaryParams: func(p Params) string {
+			params, ok := p.(UsageParams)
+			if !ok || strings.TrimSpace(params.Reason) == "" {
+				return ""
+			}
+			return params.Reason
+		},
+		Remediation: "Run 'agentico --help' to see the available commands and flags.",
+	},
+	DesktopLaunchFailed: {
+		Class:       ClassBlocking,
+		Title:       "Desktop launch failed",
+		Summary:     "The Agentico desktop app could not be opened.",
+		Remediation: "Install the signed Agentico desktop package from GitHub Releases, or run 'agentico server' for headless automation.",
+	},
+	UpdateCheckFailed: {
+		Class:   ClassBlocking,
+		Title:   "Update check failed",
+		Summary: "The latest stable release could not be determined.",
+		summaryParams: func(p Params) string {
+			params, ok := p.(UpdateCheckParams)
+			if !ok || strings.TrimSpace(params.Reason) == "" {
+				return ""
+			}
+			return params.Reason
+		},
+		Remediation: "Check network access to the GitHub API, or update through your package manager.",
+	},
+	ContractInputUnreadable: {
+		Class:       ClassBlocking,
+		Title:       "Contract input unreadable",
+		Summary:     "The validation input could not be read.",
+		Remediation: "Check the --dir and --contract paths, then rerun the check.",
+	},
+	RuntimeAlreadyRunning: {
+		Class:   ClassBlocking,
+		Title:   "Runtime already running",
+		Summary: "Another Agentic runtime is already running.",
+		summaryParams: func(p Params) string {
+			params, ok := p.(AlreadyRunningParams)
+			if !ok || strings.TrimSpace(params.Detail) == "" {
+				return ""
+			}
+			return "Another Agentic runtime is already running: " + params.Detail + "."
+		},
+		Remediation: "Use the existing runtime, or start an isolated one with both --config and --state-dir.",
+	},
+	RuntimeInitFailed: {
+		Class:       ClassBlocking,
+		Title:       "Runtime initialization failed",
+		Summary:     "The headless runtime could not initialize.",
+		Remediation: "Check the configuration and provider setup, then retry.",
+	},
+	ServerStartFailed: {
+		Class:       ClassBlocking,
+		Title:       "Server start failed",
+		Summary:     "The headless server could not start.",
+		Remediation: "Free the address or choose another --listen address, then retry.",
+	},
+	ProtocolViolation: {
+		Class:   ClassBlocking,
+		Title:   "Protocol violation",
+		Summary: "The phase's output artifacts violate the agentico contract.",
+		summaryParams: func(p Params) string {
+			params, ok := p.(ViolationParams)
+			if !ok || strings.TrimSpace(params.Check) == "" {
+				return ""
+			}
+			return fmt.Sprintf("The %s check found %d %s.", params.Check, params.Count, violationWord(params.Count))
+		},
+		Remediation: "Fix the listed artifacts and rerun the check before emitting the completion tag.",
+	},
+
+	// --- CLI degradation warning codes -------------------------------------------
+	ProviderUnavailable: {
+		Class:   ClassWarning,
+		Title:   "Provider unavailable",
+		Summary: "A provider is unavailable; Agentico is starting without it.",
+		summaryParams: func(p Params) string {
+			params, ok := p.(ProviderUnavailableParams)
+			if !ok {
+				return ""
+			}
+			if params.SetupCapable {
+				return "No usable LLM provider is available; starting in setup-capable mode."
+			}
+			if strings.TrimSpace(params.Provider) == "" {
+				return ""
+			}
+			return fmt.Sprintf("Provider %q is unavailable; starting with the ready providers.", params.Provider)
+		},
+		Remediation: "Install and authenticate a provider CLI, then restart the runtime or refresh readiness.",
+	},
+	ProviderVersionCheckFailed: {
+		Class:   ClassWarning,
+		Title:   "Provider version check failed",
+		Summary: "A provider CLI version could not be verified.",
+		summaryParams: func(p Params) string {
+			params, ok := p.(ProviderIssueParams)
+			if !ok || strings.TrimSpace(params.Provider) == "" {
+				return ""
+			}
+			return fmt.Sprintf("The %s CLI version could not be verified.", params.Provider)
+		},
+		Remediation: "Reinstall or update the provider CLI if the check keeps failing.",
+	},
+	ModelCatalogDegraded: {
+		Class:   ClassWarning,
+		Title:   "Model catalog degraded",
+		Summary: "A provider model catalog could not be refreshed; a fallback is in use.",
+		summaryParams: func(p Params) string {
+			params, ok := p.(ProviderIssueParams)
+			if !ok || strings.TrimSpace(params.Provider) == "" {
+				return ""
+			}
+			return fmt.Sprintf("The %s model catalog could not be refreshed; a fallback is in use.", params.Provider)
+		},
+		Remediation: "Check the provider CLI and network, then restart or run with --refresh-models.",
+	},
+	AssetsReconcileFailed: {
+		Class:       ClassWarning,
+		Title:       "Asset reconcile failed",
+		Summary:     "Embedded skills or guidelines could not be reconciled to the runtime directory.",
+		Remediation: "Check permissions under the runtime directory and restart.",
+	},
+	GithubCredentialsMissing: {
+		Class:       ClassWarning,
+		Title:       "GitHub credentials missing",
+		Summary:     "No GitHub credentials were found; PR publishing and review-comment sync need them.",
+		Remediation: "Set GH_TOKEN or install GitHub CLI (https://cli.github.com/) and run 'gh auth login'.",
+	},
+	StartupMaintenanceFailed: {
+		Class:       ClassWarning,
+		Title:       "Startup maintenance failed",
+		Summary:     "A background startup task failed; the runtime continues.",
+		Remediation: "Retry the launch if attachment or registry behavior looks wrong.",
+	},
+	ShutdownIncomplete: {
+		Class:       ClassWarning,
+		Title:       "Shutdown incomplete",
+		Summary:     "The runtime shut down with pending close errors.",
+		Remediation: "The exit status is unaffected; check the runtime directory before restarting.",
+	},
+}
+
+func violationWord(count int) string {
+	if count == 1 {
+		return "violation"
+	}
+	return "violations"
 }

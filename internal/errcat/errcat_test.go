@@ -31,6 +31,13 @@ var zeroParams = []Params{
 	RelatedFeatureParams{},
 	PublishRepoParams{},
 	SubjectParams{},
+	PathParams{},
+	UsageParams{},
+	UpdateCheckParams{},
+	AlreadyRunningParams{},
+	ViolationParams{},
+	ProviderUnavailableParams{},
+	ProviderIssueParams{},
 }
 
 func TestCatalogEntriesAreValid(t *testing.T) {

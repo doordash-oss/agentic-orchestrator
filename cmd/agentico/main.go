@@ -20,7 +20,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"os"
 	"os/signal"
@@ -216,7 +215,7 @@ type desktopLauncher func() error
 func runArgsWithDesktop(args []string, stdout, stderr io.Writer, launchDesktop desktopLauncher, launchServer serverLauncher, update updater) int {
 	opts, err := parseLaunchArgs(args)
 	if err != nil {
-		fmt.Fprintln(stderr, err)
+		renderError(stderr, errcat.InvalidUsage, errcat.WithParams(errcat.UsageParams{Reason: err.Error()}))
 		return 1
 	}
 	switch opts.mode {
@@ -237,15 +236,47 @@ func runArgsWithDesktop(args []string, stdout, stderr io.Writer, launchDesktop d
 	case launchModeVerifyEvidence:
 		return runVerifyEvidence(opts.verifyEvidence, stdout, stderr)
 	case launchModeServer:
-		return launchServer(opts.configPath, opts.stateDir, opts.dangerouslySkipPerms, opts.enabledProviders, opts.refreshModels, opts.listenAddr, opts.serverName)
+		providers, ok := validateProviderSelection(stderr, opts.enabledProviders)
+		if !ok {
+			return 1
+		}
+		return launchServer(opts.configPath, opts.stateDir, opts.dangerouslySkipPerms, providers, opts.refreshModels, opts.listenAddr, opts.serverName)
 	default:
 		if err := launchDesktop(); err != nil {
-			fmt.Fprintf(stderr, "Could not open the Agentico desktop app: %v\n", err)
-			fmt.Fprintln(stderr, "Install the signed Agentico desktop package from GitHub Releases, or run 'agentico server' for headless automation.")
+			renderError(stderr, errcat.DesktopLaunchFailed, errcat.WithDiagnostics(err.Error()))
 			return 1
 		}
 		return 0
 	}
+}
+
+// validateProviderSelection validates the --providers list ahead of runtime
+// construction: unknown names render provider-family warnings on stderr, and
+// an empty valid set is an invalid-usage failure returned through the normal
+// exit-code path instead of a direct process exit. It returns the valid
+// (trimmed) names and whether the launch may continue; a nil enabled list
+// means "all defaults" and passes through untouched.
+func validateProviderSelection(stderr io.Writer, enabled []string) ([]string, bool) {
+	if enabled == nil {
+		return nil, true
+	}
+	var unknown []string
+	valid := normalizeProviderNames(enabled, true, func(name string) {
+		unknown = append(unknown, name)
+	})
+	if len(valid) == 0 {
+		renderError(stderr, errcat.InvalidUsage, errcat.WithParams(errcat.UsageParams{
+			Reason: fmt.Sprintf("no valid providers specified in --providers flag (unknown: %s)", strings.Join(unknown, ", ")),
+		}))
+		return nil, false
+	}
+	for _, name := range unknown {
+		renderError(stderr, errcat.ProviderUnavailable,
+			errcat.WithParams(errcat.ProviderUnavailableParams{Provider: name}),
+			errcat.WithDiagnostics(fmt.Sprintf("unknown provider %q, skipping", name)),
+		)
+	}
+	return valid, true
 }
 
 // canonicalizeStateDir resolves stateDir to its real, symlink-free path,
@@ -470,12 +501,13 @@ func parseVerifyEvidenceArgs(opts launchOptions, args []string) (launchOptions, 
 func runVerifyEvidence(opts verifyEvidenceOptions, stdout, stderr io.Writer) int {
 	contract, err := agent.ReadTestingContract(opts.contract)
 	if err != nil {
-		fmt.Fprintf(stderr, "reading testing contract: %v\n", err)
+		renderError(stderr, errcat.ContractInputUnreadable,
+			errcat.WithDiagnostics(fmt.Sprintf("reading testing contract: %v", err)))
 		return 1
 	}
 	violations := agent.PreflightAgentEvidence(contract, opts.dir)
 	if len(violations) > 0 {
-		fmt.Fprintln(stderr, agent.JoinProtocolViolations(violations))
+		renderProtocolViolations(stderr, "evidence contract", violations)
 		return 1
 	}
 	fmt.Fprintln(stdout, "evidence OK")
@@ -523,20 +555,17 @@ Global flags:
 func runValidateArtifacts(opts validateArtifactsOptions, stdout, stderr io.Writer) int {
 	phase, err := parseServerPhaseStrict(opts.phase)
 	if err != nil {
-		fmt.Fprintln(stderr, err)
+		renderError(stderr, errcat.InvalidUsage, errcat.WithParams(errcat.UsageParams{Reason: err.Error()}))
 		return 1
 	}
 	out, violations, err := agent.ValidateArtifactsPreflight(phase, agent.Role(strings.TrimSpace(opts.role)), opts.dir)
 	if err != nil {
-		fmt.Fprintf(stderr, "validating artifacts: %v\n", err)
+		renderError(stderr, errcat.ContractInputUnreadable,
+			errcat.WithDiagnostics(fmt.Sprintf("validating artifacts: %v", err)))
 		return 1
 	}
 	if !out.OK || len(violations) > 0 {
-		reason := agent.JoinProtocolViolations(violations)
-		if reason == "" {
-			reason = "artifact validation failed"
-		}
-		fmt.Fprintln(stderr, reason)
+		renderProtocolViolations(stderr, "artifact contract", violations)
 		return 1
 	}
 	fmt.Fprintln(stdout, "artifacts OK")
@@ -555,9 +584,9 @@ type providerReadinessIssue struct {
 // checkRequiredProviders uses the registry to verify provider CLIs are
 // available and ready. Returns (ready providers, warnings, startup notices,
 // availabilityFiltered, error): errors when no provider is ready.
-func checkRequiredProviders(ctx context.Context, registry *llm.Registry) ([]llm.LLMProvider, []string, []string, bool, error) {
+func checkRequiredProviders(ctx context.Context, registry *llm.Registry) ([]llm.LLMProvider, []startupWarning, []startupWarning, bool, error) {
 	all := registry.All()
-	var warnings []string
+	var warnings []startupWarning
 	var missing []llm.LLMProvider
 	var detected []llm.LLMProvider
 	for _, p := range all {
@@ -646,27 +675,29 @@ func formatReadinessProblem(status llm.ProviderReadiness) string {
 	return detail + ". " + remedy + "."
 }
 
-func formatProviderStartupNotices(ready []llm.LLMProvider, missing []llm.LLMProvider, unready []providerReadinessIssue) []string {
+// formatProviderStartupNotices builds the delayed startup notices about
+// missing or unready providers as structured warnings: the catalog authors
+// the summary for the provider, and the original notice text rides along as
+// diagnostics.
+func formatProviderStartupNotices(ready []llm.LLMProvider, missing []llm.LLMProvider, unready []providerReadinessIssue) []startupWarning {
 	if len(ready) == 0 || (len(missing) == 0 && len(unready) == 0) {
 		return nil
 	}
 	readyText := formatProviderNameList(ready)
-	var notices []string
+	var notices []startupWarning
 	for _, p := range missing {
-		notices = append(notices, fmt.Sprintf(
-			"Provider %s CLI was not found. Install with: %s. Starting with %s only.",
-			p.Name(),
-			p.InstallHint(),
-			readyText,
-		))
+		notices = append(notices, startupWarning{
+			code:        errcat.ProviderUnavailable,
+			params:      errcat.ProviderUnavailableParams{Provider: p.Name()},
+			diagnostics: fmt.Sprintf("Provider %s CLI was not found. Install with: %s. Starting with %s only.", p.Name(), p.InstallHint(), readyText),
+		})
 	}
 	for _, issue := range unready {
-		notices = append(notices, fmt.Sprintf(
-			"Provider %s is not configured: %s Starting with %s only.",
-			issue.provider.Name(),
-			formatReadinessProblem(issue.status),
-			readyText,
-		))
+		notices = append(notices, startupWarning{
+			code:        errcat.ProviderUnavailable,
+			params:      errcat.ProviderUnavailableParams{Provider: issue.provider.Name()},
+			diagnostics: fmt.Sprintf("Provider %s is not configured: %s Starting with %s only.", issue.provider.Name(), formatReadinessProblem(issue.status), readyText),
+		})
 	}
 	return notices
 }
@@ -688,7 +719,7 @@ type providerCatalogDiscoveryJob struct {
 	enricher   llm.CatalogEnricher
 }
 
-func discoverProviderCatalogs(ctx context.Context, providers []llm.LLMProvider, cacheRoot string, report providerCatalogDiscoveryProgress, refreshModels bool) []string {
+func discoverProviderCatalogs(ctx context.Context, providers []llm.LLMProvider, cacheRoot string, report providerCatalogDiscoveryProgress, refreshModels bool) []startupWarning {
 	var jobs []providerCatalogDiscoveryJob
 	for i, p := range providers {
 		discoverer, ok := p.(llm.CatalogDiscoverer)
@@ -710,7 +741,7 @@ func discoverProviderCatalogs(ctx context.Context, providers []llm.LLMProvider, 
 		return nil
 	}
 
-	warningsByProvider := make([][]string, len(providers))
+	warningsByProvider := make([][]startupWarning, len(providers))
 	var wg sync.WaitGroup
 	var reportMu sync.Mutex
 	reportProgress := func(provider string, model llm.ModelInfo) {
@@ -730,15 +761,26 @@ func discoverProviderCatalogs(ctx context.Context, providers []llm.LLMProvider, 
 	}
 	wg.Wait()
 
-	var warnings []string
+	var warnings []startupWarning
 	for _, providerWarnings := range warningsByProvider {
 		warnings = append(warnings, providerWarnings...)
 	}
 	return warnings
 }
 
-func discoverOneProviderCatalog(ctx context.Context, p llm.LLMProvider, discoverer llm.CatalogDiscoverer, enricher llm.CatalogEnricher, cacheRoot string, report providerCatalogDiscoveryProgress, refreshModels bool) []string {
-	var warnings []string
+// catalogWarning builds one model-catalog degradation warning: the catalog
+// authors the summary naming the provider, and the original condition text
+// rides along as diagnostics.
+func catalogWarning(providerName, diagnostics string) startupWarning {
+	return startupWarning{
+		code:        errcat.ModelCatalogDegraded,
+		params:      errcat.ProviderIssueParams{Provider: providerName},
+		diagnostics: diagnostics,
+	}
+}
+
+func discoverOneProviderCatalog(ctx context.Context, p llm.LLMProvider, discoverer llm.CatalogDiscoverer, enricher llm.CatalogEnricher, cacheRoot string, report providerCatalogDiscoveryProgress, refreshModels bool) []startupWarning {
+	var warnings []startupWarning
 	providerName := p.Name()
 	reportModel := func(model llm.ModelInfo) {
 		if report != nil {
@@ -763,9 +805,8 @@ func discoverOneProviderCatalog(ctx context.Context, p llm.LLMProvider, discover
 				// Non-empty output with no recognizable semver: never echo it (it
 				// may carry credential-like content). Warn generically and run
 				// discovery without caching this startup.
-				warnings = append(warnings, fmt.Sprintf(
-					"Warning: %s reported an unrecognized CLI version; running model discovery without caching",
-					providerName,
+				warnings = append(warnings, catalogWarning(providerName,
+					"reported an unrecognized CLI version; running model discovery without caching",
 				))
 			}
 		}
@@ -777,10 +818,8 @@ func discoverOneProviderCatalog(ctx context.Context, p llm.LLMProvider, discover
 			return nil
 		}
 		if !os.IsNotExist(err) {
-			warnings = append(warnings, fmt.Sprintf(
-				"Warning: ignoring cached %s model catalog; refreshing: %v",
-				providerName,
-				err,
+			warnings = append(warnings, catalogWarning(providerName,
+				fmt.Sprintf("ignoring cached model catalog; refreshing: %v", err),
 			))
 		}
 	}
@@ -796,10 +835,8 @@ func discoverOneProviderCatalog(ctx context.Context, p llm.LLMProvider, discover
 		if fallback, ok := tryStaleCacheFallback(enricher, cacheRoot, providerName, version, refreshModels, err.Error()); ok {
 			return append(warnings, fallback...)
 		}
-		warnings = append(warnings, fmt.Sprintf(
-			"Warning: could not discover %s model catalog; using built-in fallback: %v",
-			providerName,
-			err,
+		warnings = append(warnings, catalogWarning(providerName,
+			fmt.Sprintf("could not discover model catalog; using built-in fallback: %v", err),
 		))
 		return warnings
 	}
@@ -807,19 +844,16 @@ func discoverOneProviderCatalog(ctx context.Context, p llm.LLMProvider, discover
 		if fallback, ok := tryStaleCacheFallback(enricher, cacheRoot, providerName, version, refreshModels, "discovered empty catalog"); ok {
 			return append(warnings, fallback...)
 		}
-		warnings = append(warnings, fmt.Sprintf(
-			"Warning: discovered empty %s model catalog; using built-in fallback",
-			providerName,
+		warnings = append(warnings, catalogWarning(providerName,
+			"discovered empty model catalog; using built-in fallback",
 		))
 		return warnings
 	}
 	enricher.SetModelCatalog(models)
 	if version != "" {
 		if err := saveProviderCatalogCache(cacheRoot, providerName, version, models); err != nil {
-			warnings = append(warnings, fmt.Sprintf(
-				"Warning: could not cache %s model catalog: %v",
-				providerName,
-				err,
+			warnings = append(warnings, catalogWarning(providerName,
+				fmt.Sprintf("could not cache model catalog: %v", err),
 			))
 		}
 	}
@@ -828,7 +862,7 @@ func discoverOneProviderCatalog(ctx context.Context, p llm.LLMProvider, discover
 
 // tryStaleCacheFallback serves a previously cached catalog when a refresh
 // failed (reason); ok is false if no cache fallback applies.
-func tryStaleCacheFallback(enricher llm.CatalogEnricher, cacheRoot, providerName, version string, refreshModels bool, reason string) ([]string, bool) {
+func tryStaleCacheFallback(enricher llm.CatalogEnricher, cacheRoot, providerName, version string, refreshModels bool, reason string) ([]startupWarning, bool) {
 	if !refreshModels || cacheRoot == "" || version == "" {
 		return nil, false
 	}
@@ -837,13 +871,12 @@ func tryStaleCacheFallback(enricher llm.CatalogEnricher, cacheRoot, providerName
 		return nil, false
 	}
 	enricher.SetModelCatalog(cached.Models)
-	warning := fmt.Sprintf(
-		"Warning: could not refresh %s model catalog; %s; using stale cache from %s",
-		providerName,
+	warning := catalogWarning(providerName, fmt.Sprintf(
+		"could not refresh model catalog; %s; using stale cache from %s",
 		reason,
 		cached.DiscoveredAt.Format(time.RFC3339),
-	)
-	return []string{warning}, true
+	))
+	return []startupWarning{warning}, true
 }
 
 func discoverModelCatalog(ctx context.Context, discoverer llm.CatalogDiscoverer, report llm.ModelDiscoveryReporter) ([]llm.ModelInfo, error) {
@@ -877,13 +910,11 @@ func persistRefreshedProviderModelCatalog(cacheRoot string, provider llm.LLMProv
 	return saveProviderCatalogCache(cacheRoot, provider.Name(), version, models)
 }
 
-func showProviderStartupNotices(w io.Writer, notices []string, delay time.Duration) {
+func showProviderStartupNotices(w io.Writer, notices []startupWarning, delay time.Duration) {
 	if len(notices) == 0 {
 		return
 	}
-	for _, notice := range notices {
-		fmt.Fprintln(w, notice)
-	}
+	renderStartupWarnings(w, notices)
 	if delay > 0 {
 		time.Sleep(delay)
 	}
@@ -2540,7 +2571,7 @@ func bootstrapRuntime(ctx context.Context, configPath, stateDir string, dangerou
 	runtimeDir := filepath.Dir(stateDir)
 	lock, acquired, owner, err := instancelock.Acquire(runtimeDir, stateDir, configPath, buildinfo.Version())
 	if err != nil {
-		return nil, fmt.Errorf("acquiring instance lock: %w", err)
+		return nil, &runtimeInitError{fmt.Errorf("acquiring instance lock: %w", err)}
 	}
 	if !acquired {
 		return nil, runtimeLockBusyError{stateDir: stateDir, owner: owner}
@@ -2574,6 +2605,10 @@ func bootstrapRuntime(ctx context.Context, configPath, stateDir string, dangerou
 	var observer *observe.Observer
 	var permissionCache *permission.Cache
 	var worktrees feature.WorktreeOps
+	providerModules, err := providerFxModules(enabledProviders)
+	if err != nil {
+		return nil, &runtimeInitError{err}
+	}
 	fxApp := fx.New(
 		fx.Supply(
 			fx.Annotate(configPath, fx.ResultTags(`name:"configPath"`)),
@@ -2588,7 +2623,7 @@ func bootstrapRuntime(ctx context.Context, configPath, stateDir string, dangerou
 		observe.Module,
 		permission.Module,
 		llm.Module,
-		fx.Options(providerFxModules(enabledProviders)...),
+		fx.Options(providerModules...),
 		agent.Module,
 		orchestrator.Module,
 		fx.Populate(&fm, &sm, &orch, &registry, &cfg, &phaseRunner, &observer, &permissionCache, &worktrees),
@@ -2596,7 +2631,7 @@ func bootstrapRuntime(ctx context.Context, configPath, stateDir string, dangerou
 	)
 	boot.fxApp = fxApp
 	if err := fxApp.Start(ctx); err != nil {
-		return nil, fmt.Errorf("initializing: %w", err)
+		return nil, &runtimeInitError{fmt.Errorf("initializing: %w", err)}
 	}
 
 	detected, warnings, startupNotices, availabilityFiltered, err := checkRequiredProviders(ctx, registry)
@@ -2607,20 +2642,21 @@ func bootstrapRuntime(ctx context.Context, configPath, stateDir string, dangerou
 		// /api/v1/readiness/refresh instead of requiring a new runtime. Model
 		// routing is restricted to nothing until a readiness refresh finds a
 		// usable provider; feature creation is gated server-side meanwhile.
-		fmt.Fprintf(stderr, "Warning: no usable LLM provider; starting in setup-capable mode.\n%v\n", err)
+		renderError(stderr, errcat.ProviderUnavailable,
+			errcat.WithParams(errcat.ProviderUnavailableParams{SetupCapable: true}),
+			errcat.WithDiagnostics(err.Error()),
+		)
 		registry.RestrictToProviders(nil)
 		detected, warnings, startupNotices, availabilityFiltered = nil, nil, nil, true
 	}
-	for _, w := range warnings {
-		fmt.Fprintln(stderr, w)
-	}
+	renderStartupWarnings(stderr, warnings)
 
-	toolErrors, toolWarnings := agent.CheckRequiredTools()
-	for _, w := range toolWarnings {
-		fmt.Fprintln(stderr, w)
+	toolHard, toolSoft := agent.CheckRequiredTools()
+	for _, issue := range toolSoft {
+		startupWarning{code: issue.Code, params: issue.Params, diagnostics: issue.Diagnostics}.render(stderr)
 	}
-	if len(toolErrors) > 0 {
-		return nil, fmt.Errorf("%s", strings.Join(toolErrors, "\n"))
+	if len(toolHard) > 0 {
+		return nil, &toolStartupError{issues: toolHard}
 	}
 
 	skillsDir := filepath.Join(runtimeDir, "skills")
@@ -2632,14 +2668,16 @@ func bootstrapRuntime(ctx context.Context, configPath, stateDir string, dangerou
 	if err := skilldef.ReconcileSkills(skillsDir); err != nil {
 		stop()
 		stop = func() {}
-		fmt.Fprintf(stderr, "Warning: could not reconcile skills: %v\n", err)
+		renderError(stderr, errcat.AssetsReconcileFailed,
+			errcat.WithDiagnostics(fmt.Sprintf("could not reconcile skills: %v", err)))
 	} else {
 		phaseRunner.SkillsDir = skillsDir
 	}
 	if err := guidelinedef.ReconcileGuidelines(guidelinesDir); err != nil {
 		stop()
 		stop = func() {}
-		fmt.Fprintf(stderr, "Warning: could not reconcile guidelines: %v\n", err)
+		renderError(stderr, errcat.AssetsReconcileFailed,
+			errcat.WithDiagnostics(fmt.Sprintf("could not reconcile guidelines: %v", err)))
 	} else {
 		phaseRunner.GuidelinesDir = guidelinesDir
 	}
@@ -2648,9 +2686,13 @@ func bootstrapRuntime(ctx context.Context, configPath, stateDir string, dangerou
 	for _, vr := range agent.CheckProviderVersions(detected) {
 		switch {
 		case vr.Err != nil:
-			fmt.Fprintf(stderr, "Warning: could not check %s CLI version: %v\n", vr.Provider, vr.Err)
+			renderError(stderr, errcat.ProviderVersionCheckFailed,
+				errcat.WithParams(errcat.ProviderIssueParams{Provider: vr.Provider}),
+				errcat.WithDiagnostics(fmt.Sprintf("could not check %s CLI version: %v", vr.Provider, vr.Err)))
 		case vr.Warning != "":
-			fmt.Fprintf(stderr, "Warning: %s\n", vr.Warning)
+			renderError(stderr, errcat.ProviderVersionCheckFailed,
+				errcat.WithParams(errcat.ProviderIssueParams{Provider: vr.Provider}),
+				errcat.WithDiagnostics(vr.Warning))
 		default:
 			fmt.Fprintf(stderr, "%s CLI version: %s\n", vr.Provider, vr.Version)
 		}
@@ -2659,9 +2701,7 @@ func bootstrapRuntime(ctx context.Context, configPath, stateDir string, dangerou
 	modelDiscovery := newModelDiscoveryProgressPrinter(stderr)
 	catalogWarnings := discoverProviderCatalogs(ctx, detected, runtimeDir, modelDiscovery.Report, refreshModels)
 	modelDiscovery.Done()
-	for _, w := range catalogWarnings {
-		fmt.Fprintln(stderr, w)
-	}
+	renderStartupWarnings(stderr, catalogWarnings)
 
 	// Apply catalog-driven defaults after discovery. For a brand-new config,
 	// replace the bootstrap defaults entirely so persisted config reflects the
@@ -2702,7 +2742,8 @@ func scanStartupRecovery(ctx context.Context, orch *orchestrator.Orchestrator, s
 	}
 	items, err := orch.ScanRecovery(ctx)
 	if err != nil {
-		fmt.Fprintf(stderr, "Warning: startup recovery scan: %v\n", err)
+		renderError(stderr, errcat.StartupMaintenanceFailed,
+			errcat.WithDiagnostics(fmt.Sprintf("startup recovery scan: %v", err)))
 		return nil, false
 	}
 	recoveryItems := make([]ports.RecoveryItem, len(items))
@@ -2751,12 +2792,12 @@ func runServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledPr
 
 	boot, err := bootstrapRuntime(ctx, configPath, stateDir, dangerouslySkipPerms, enabledProviders, refreshModels, os.Stderr)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		renderStartupFailure(os.Stderr, err)
 		return 1
 	}
 	defer func() {
 		if err := boot.Close(context.Background()); err != nil {
-			log.Printf("close runtime: %v", err)
+			reportDeferredClose(os.Stderr, "close runtime", err)
 		}
 	}()
 
@@ -2766,13 +2807,14 @@ func runServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledPr
 		len(boot.sessionManager.ActiveSessions()),
 	) {
 		if err := boot.orchestrator.InterruptAllRunning(); err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: startup sweep: %v\n", err)
+			renderError(os.Stderr, errcat.StartupMaintenanceFailed,
+				errcat.WithDiagnostics(fmt.Sprintf("startup sweep: %v", err)))
 		}
 	}
 
 	listen, err := serverruntime.ResolveListen(listenAddr)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		renderStartupFailure(os.Stderr, &serverStartError{err})
 		return 1
 	}
 	networkBind := listen.Policy == serverruntime.CompatibilityNetworkRuntimePolicy
@@ -2781,16 +2823,16 @@ func runServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledPr
 	discoveryClient := &http.Client{Timeout: time.Second}
 	decision, err := serverruntime.PrepareDiscovery(ctx, boot.runtime.RuntimeDir, boot.runtime, policy, discoveryClient, networkBind)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: validating discovery metadata: %v\n", err)
+		renderStartupFailure(os.Stderr, &runtimeInitError{fmt.Errorf("validating discovery metadata: %w", err)})
 		return 1
 	}
 	if decision.AlreadyRunning {
-		fmt.Fprintf(os.Stderr, "Error: Agentic server is already running at %s\n", decision.Record.BaseURL)
+		renderStartupFailure(os.Stderr, alreadyRunningError{baseURL: decision.Record.BaseURL})
 		return 1
 	}
 	authToken, err := serverruntime.EnsureAuthToken(boot.runtime.RuntimeDir)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: preparing server auth token: %v\n", err)
+		renderStartupFailure(os.Stderr, &runtimeInitError{fmt.Errorf("preparing server auth token: %w", err)})
 		return 1
 	}
 	var configName string
@@ -2799,7 +2841,7 @@ func runServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledPr
 	}
 	resolvedName, err := serverruntime.ResolveServerName(serverName, configName, boot.runtime.RuntimeDir)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: resolving server name: %v\n", err)
+		renderStartupFailure(os.Stderr, &runtimeInitError{fmt.Errorf("resolving server name: %w", err)})
 		return 1
 	}
 
@@ -2838,21 +2880,21 @@ func runServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledPr
 		Worktrees: boot.worktrees,
 	})
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: starting server: %v\n", err)
+		renderStartupFailure(os.Stderr, &serverStartError{fmt.Errorf("starting server: %w", err)})
 		return 1
 	}
 	defer func() {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		if err := runtimeServer.Close(shutdownCtx); err != nil {
-			log.Printf("close server: %v", err)
+			reportDeferredClose(os.Stderr, "close server", err)
 		}
 	}()
 
 	now := time.Now().UTC()
 	record := registryRecord(boot, runtimeServer, authToken, resolvedName, policy, now)
 	if err := serverruntime.PublishDiscovery(boot.runtime.RuntimeDir, record); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: publishing discovery metadata: %v\n", err)
+		renderStartupFailure(os.Stderr, &serverStartError{fmt.Errorf("publishing discovery metadata: %w", err)})
 		return 1
 	}
 
@@ -2862,18 +2904,21 @@ func runServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledPr
 	// attachable via its per-runtime discovery file.
 	registryDir := serverruntime.RegistryDir(resolveRegistryParent())
 	if err := serverruntime.PublishRegistryEntry(registryDir, record); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: publishing server registry entry: %v\n", err)
+		renderError(os.Stderr, errcat.StartupMaintenanceFailed,
+			errcat.WithDiagnostics(fmt.Sprintf("publishing server registry entry: %v", err)))
 	} else {
 		defer func() {
 			if err := serverruntime.RemoveRegistryEntry(registryDir, boot.runtime.RuntimeDir); err != nil {
-				log.Printf("Warning: removing server registry entry: %v", err)
+				renderError(os.Stderr, errcat.StartupMaintenanceFailed,
+					errcat.WithDiagnostics(fmt.Sprintf("removing server registry entry: %v", err)))
 			}
 		}()
 	}
 
 	fmt.Fprintf(os.Stderr, "Agentic server %q listening at %s\n", resolvedName, runtimeServer.BaseURL())
 	if err := writeNetworkAccessNotice(os.Stderr, runtimeServer.RuntimePolicy(), runtimeServer.BaseURL(), runtimeServer.WildcardBind(), authToken, resolvedName); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: %v\n", err)
+		renderError(os.Stderr, errcat.StartupMaintenanceFailed,
+			errcat.WithDiagnostics(fmt.Sprintf("writing network access notice: %v", err)))
 	}
 	<-runtimeCtx.Done()
 	shutdownFeatures(boot.orchestrator, boot.sessionManager)
@@ -3142,20 +3187,21 @@ func reconcileModelDefaults(cfg *config.Config, registry *llm.Registry, configPa
 // catalog discovery, provider-neutral defaults, and the setup UI exactly like
 // the others. A missing, unready, or too-old OpenCode is filtered out downstream
 // by the same readiness path as any other provider.
-func providerFxModules(enabled []string) []fx.Option {
+//
+// The CLI path validates the provider list ahead of runtime construction, so
+// this function never exits the process; a caller that reaches it with no
+// valid names gets an error to render through the normal exit-code path.
+func providerFxModules(enabled []string) ([]fx.Option, error) {
 	all := map[string]fx.Option{
 		providerNameClaude:   claude.Module,
 		providerNameCodex:    codex.Module,
 		providerNameOpencode: opencode.Module,
 	}
 
-	names := normalizeProviderNames(enabled, true, func(name string) {
-		fmt.Fprintf(os.Stderr, "Warning: unknown provider %q, skipping\n", name)
-	})
+	names := normalizeProviderNames(enabled, true, nil)
 
 	if len(names) == 0 {
-		fmt.Fprintln(os.Stderr, "Error: no valid providers specified in --providers flag")
-		os.Exit(1)
+		return nil, fmt.Errorf("no valid providers specified in --providers flag")
 	}
 
 	modules := make([]fx.Option, 0, len(names))
@@ -3163,7 +3209,7 @@ func providerFxModules(enabled []string) []fx.Option {
 		modules = append(modules, all[name])
 	}
 
-	return modules
+	return modules, nil
 }
 
 func hasAnyModelConfig(m config.ModelConfig) bool {

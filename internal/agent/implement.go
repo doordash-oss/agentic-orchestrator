@@ -152,6 +152,17 @@ type ImplementConfig struct {
 	// ports.ErrSessionShuttingDown to exit the loop cleanly.
 	SessionStartFunc func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*ports.SessionOpts) (ports.SessionHandle, error)
 
+	// RoundCommitHook, when non-nil, is invoked once per implementation or
+	// fix round right after the round's agent session ends (before the
+	// review gate). The orchestrator layer owns the actual git commit; the
+	// loop only reports the round identity and candidate worktrees. Nil
+	// disables per-round commits.
+	RoundCommitHook RoundCommitHook
+
+	// RoundCommitRepos maps repo name -> worktree path for the repos a
+	// round may have dirtied. Empty derives from Feature.Repos / WorkDir.
+	RoundCommitRepos map[string]string
+
 	// AskingClause is the pre-resolved "Asking Questions" prompt section
 	// from the PromptAdapter for the implementation model. Set by PhaseRunner
 	// before launching the loop.
@@ -316,6 +327,10 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 		}
 	}
 
+	// Per-round commit accounting recovered from durable iteration metas so
+	// a crash-resumed loop labels rounds identically to the interrupted run.
+	roundCommits := newImplementRoundCommitTracker(am, cfg.ArtifactDir, startIter)
+
 	for i := startIter + 1; i <= cfg.MaxIterations; i++ {
 		iterStart := time.Now()
 		iterCtx := phaseCtx.Child()
@@ -325,6 +340,20 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			cfg.Observer.IterationEnded(iterCtx, i, observe.SessionUsage{}, time.Since(iterStart), "interrupted")
 			return &LoopResult{FinalStatus: "interrupted", Iterations: i - 1}, nil
 		}
+
+		// Round identity for the per-round commit: a round that starts with
+		// pending reviewer feedback is a fix round; the first round of the
+		// phase whose session ends semantically is the unlabeled
+		// implementation commit. The driving CHANGES_REQUESTED review has
+		// already incremented the counter by the time the fix round starts,
+		// so the fix number is the counter itself (clamped to 1 for the
+		// rare pending-feedback-without-changes-requested-review case).
+		roundIsFix := strings.TrimSpace(reviewerFeedback) != ""
+		roundFixNumber := roundCommits.changesRequested
+		if roundIsFix && roundFixNumber < 1 {
+			roundFixNumber = 1
+		}
+		roundFirstImplement := !roundIsFix && !roundCommits.semanticSessions
 
 		// Update iteration counter so the desktop app dashboard reflects progress
 		if cfg.FeatureStore != nil {
@@ -673,6 +702,7 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			// intentional cleanup.
 			exitCode = exitCodeFromAgentStatus(agentStatus)
 		}
+
 		meta := IterationMeta{
 			Iteration:    i,
 			StartedAt:    iterStart,
@@ -682,6 +712,45 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			MadeProgress: madeProgress,
 			CostUSD:      cost.TotalCostUSD,
 			Context:      iterationContextMeta(sess, waitResult.Handoff),
+		}
+
+		// Per-round commit: fire as soon as the round's session has fully
+		// ended (including any crash-resume replacement session) and ended
+		// with a semantic outcome. The skipImplement resume branch also
+		// lands here with agentStatus=SUCCESS, absorbing a crashed round's
+		// uncommitted changes into its own commit. FAILED and
+		// protocol-violation rounds do not commit; their partial work is
+		// absorbed by the next round, mirroring the crash-recovery policy.
+		if agentStatus == agentStatusSuccess {
+			roundCommits.semanticSessions = true
+			if cfg.RoundCommitHook != nil {
+				input := RoundCommitInput{
+					FeatureID:            cfg.Feature.ID,
+					PhaseNumber:          cfg.Feature.CurrentRoadmapPhase,
+					TotalPhases:          cfg.Feature.TotalRoadmapPhases,
+					PhaseType:            cfg.Feature.RoadmapPhaseType,
+					Iteration:            i,
+					Kind:                 RoundCommitImplement,
+					FixNumber:            roundFixNumber,
+					FirstImplementCommit: roundFirstImplement,
+					Repos:                implementRoundCommitRepos(cfg),
+				}
+				if roundIsFix {
+					input.Kind = RoundCommitFix
+					input.FirstImplementCommit = false
+				}
+				if err := cfg.RoundCommitHook(input); err != nil {
+					// The session reached semantic completion; persist its
+					// iteration record before failing the phase so the
+					// durable history (and the meta-scan round trackers on
+					// resume) matches what the live run produced. The review
+					// gate never runs, so ReviewStatus stays empty.
+					_ = am.WriteMeta(iterDir, meta)
+					_ = am.WriteSummary(summaryPath, meta)
+					cfg.Observer.IterationEnded(iterCtx, i, toSessionUsage(cost), time.Since(iterStart), "round_commit_error")
+					return nil, fmt.Errorf("committing implementation round %d: %w", i, err)
+				}
+			}
 		}
 
 		// Accumulate iteration cost into the latest active timing key rather
@@ -703,7 +772,7 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 				violations = completionIntentViolations(rootCompletionIntent(sess), []string{"progress.md"})
 			}
 			lastErr := formatProtocolViolationError(RoleImplementer, iterDir, violations)
-			if done := recordProtocolViolationIteration(am, summaryPath, iterDir, aggregateLogPath, &meta, i, cfg, iterCtx, cost, iterStart, violations, lastErr, &consecutiveFailures, &reviewerFeedback); done != nil {
+			if done := recordProtocolViolationIteration(am, summaryPath, iterDir, aggregateLogPath, &meta, i, cfg, iterCtx, cost, iterStart, violations, lastErr, &consecutiveFailures, &reviewerFeedback, roundCommits); done != nil {
 				return done, nil
 			}
 			continue
@@ -780,7 +849,7 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			}
 			if !outcome.OK {
 				lastErr := formatProtocolViolationError(RoleImplementer, iterDir, violations)
-				if done := recordProtocolViolationIteration(am, summaryPath, iterDir, aggregateLogPath, &meta, i, cfg, iterCtx, cost, iterStart, violations, lastErr, &consecutiveFailures, &reviewerFeedback); done != nil {
+				if done := recordProtocolViolationIteration(am, summaryPath, iterDir, aggregateLogPath, &meta, i, cfg, iterCtx, cost, iterStart, violations, lastErr, &consecutiveFailures, &reviewerFeedback, roundCommits); done != nil {
 					return done, nil
 				}
 				continue
@@ -803,7 +872,7 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 				if gate.Rejected {
 					gateViolations := reportGateViolations(gate)
 					lastErr := formatProtocolViolationError(RoleImplementer, iterDir, gateViolations)
-					if done := recordProtocolViolationIteration(am, summaryPath, iterDir, aggregateLogPath, &meta, i, cfg, iterCtx, cost, iterStart, gateViolations, lastErr, &consecutiveFailures, &reviewerFeedback); done != nil {
+					if done := recordProtocolViolationIteration(am, summaryPath, iterDir, aggregateLogPath, &meta, i, cfg, iterCtx, cost, iterStart, gateViolations, lastErr, &consecutiveFailures, &reviewerFeedback, roundCommits); done != nil {
 						return done, nil
 					}
 					continue
@@ -872,6 +941,7 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 					reviewerFeedback = fmt.Sprintf(
 						"Harness verification detected regressions: %s. These commands pass at the contract base commit but fail with your changes. See verification-report.yaml in the iteration directory for evidence; fix the regressions before declaring SUCCESS.",
 						strings.Join(harnessVerification.RegressionItems, ", "))
+					roundCommits.changesRequested++
 					if pt.NoProgressCount() >= cfg.MaxConsecNoProgress {
 						cfg.Observer.IterationEnded(iterCtx, i, toSessionUsage(cost), time.Since(iterStart), "harness_regression")
 						return &LoopResult{
@@ -964,6 +1034,7 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 					}
 					reviewerFeedback = feedback
 					lastChangesRequestedIter = i
+					roundCommits.changesRequested++
 					meta.AgentStatus = agentStatusProtocolViolation
 					meta.ReviewStatus = ReviewChangesRequested.String()
 					_ = am.WriteMeta(iterDir, meta)
@@ -1023,6 +1094,7 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 				consecutiveFailures = 0
 				reviewerFeedback = feedback
 				lastChangesRequestedIter = i
+				roundCommits.changesRequested++
 				// Check no-progress safety rail
 				if pt.NoProgressCount() >= cfg.MaxConsecNoProgress {
 					cfg.Observer.IterationEnded(iterCtx, i, toSessionUsage(cost), time.Since(iterStart), "changes_requested")
@@ -1191,6 +1263,7 @@ func recordProtocolViolationIteration(
 	lastErr string,
 	consecutiveFailures *int,
 	reviewerFeedback *string,
+	roundCommits *implementRoundCommitTracker,
 ) *LoopResult {
 	*consecutiveFailures = *consecutiveFailures + 1
 	feedback := formatContractViolationFeedback(RoleImplementer, violations)
@@ -1201,6 +1274,10 @@ func recordProtocolViolationIteration(
 	_ = am.WriteMeta(iterDir, *meta)
 	_ = am.WriteSummary(summaryPath, *meta)
 	*reviewerFeedback = feedback
+	// The persisted CHANGES_REQUESTED review status drives the next round's
+	// fix-round labeling; keep the live counter in lockstep so a crash
+	// resume (which counts metas) labels rounds identically.
+	roundCommits.changesRequested++
 	cfg.Observer.IterationEnded(iterCtx, iteration, toSessionUsage(cost), time.Since(iterStart), BoundedHelperStatusProtocolViolation)
 	if *consecutiveFailures >= cfg.MaxConsecFails {
 		return &LoopResult{FinalStatus: BoundedHelperStatusProtocolViolation, Iterations: iteration, LastError: lastErr}
@@ -1241,17 +1318,14 @@ func observeVerifiedImplementationOutcome(pt *ProgressTracker, blockers int, cfg
 }
 
 // implementWorktreePaths returns the repo paths whose git state evidences
-// implementation progress: each feature repo's worktree (or checkout path),
+// implementation progress: each feature repo's edit surface (repoEditPath),
 // falling back to the session work dir for repo-less configurations.
 func implementWorktreePaths(cfg ImplementConfig) []string {
 	if cfg.Feature != nil && len(cfg.Feature.Repos) > 0 {
 		paths := make([]string, 0, len(cfg.Feature.Repos))
 		for _, r := range cfg.Feature.Repos {
-			switch {
-			case r.WorktreePath != "":
-				paths = append(paths, r.WorktreePath)
-			case r.Path != "":
-				paths = append(paths, r.Path)
+			if p := repoEditPath(r); p != "" {
+				paths = append(paths, p)
 			}
 		}
 		return paths

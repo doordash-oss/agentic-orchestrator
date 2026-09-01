@@ -57,6 +57,12 @@ type PhaseRunner struct {
 	// clients while verification runs without an active agent session.
 	OnVerificationProgress func(featureID string)
 
+	// RoundCommitHook, when non-nil, is forwarded into the phase-implement
+	// and final-review loop configs so every implementation/fix round
+	// commits as soon as its session ends. The orchestrator layer installs
+	// its commit implementation here (see orchestrator.New).
+	RoundCommitHook RoundCommitHook
+
 	// BuildSessionFn, if non-nil, overrides the production BuildSession logic.
 	// Used exclusively for test injection.
 	BuildSessionFn func(BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error)
@@ -943,6 +949,7 @@ func (pr *PhaseRunner) RunImplementation(f *feature.Feature, planPath string, kb
 		SkipIterationReview:        f.EffectivePipeline().ShouldSkipIterationReview(),
 		Observer:                   pr.Observer,
 		OnVerificationProgress:     pr.OnVerificationProgress,
+		RoundCommitHook:            pr.RoundCommitHook,
 	}
 
 	resultCh := make(chan *LoopResult, 1)
@@ -1007,6 +1014,7 @@ func (pr *PhaseRunner) RunMultiRepoImplementation(
 		GuidelinesDir:              pr.GuidelinesDir,
 		Observer:                   pr.Observer,
 		OnVerificationProgress:     pr.OnVerificationProgress,
+		RoundCommitHook:            pr.RoundCommitHook,
 		RunImplementFn:             pr.RunImplementFn,
 		RunFinalReviewFn:           pr.RunFinalReviewFn,
 	}
@@ -1069,6 +1077,7 @@ func (pr *PhaseRunner) RunMultiRepoFinalReview(
 		GuidelinesDir:              pr.GuidelinesDir,
 		Observer:                   pr.Observer,
 		OnVerificationProgress:     pr.OnVerificationProgress,
+		RoundCommitHook:            pr.RoundCommitHook,
 		RunFinalReviewFn:           pr.RunFinalReviewFn,
 	}
 

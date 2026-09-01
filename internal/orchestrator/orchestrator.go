@@ -324,6 +324,16 @@ func New(deps Deps, hooks Hooks) *Orchestrator {
 			}
 			return o.commitRound(input)
 		}
+		// Phase-exit gate: rebase children re-verify the mechanical rebase
+		// exit facts before the implement loop declares success, surfacing
+		// violations as fix-round feedback instead of failing later at the
+		// integration gate. Non-rebase features get no gate (nil = no-op).
+		o.deps.PhaseRunner.PhaseExitGateFor = func(f *feature.Feature) agent.PhaseExitGate {
+			if f == nil || f.Parent == nil || f.Parent.Kind != feature.ChildKindRebase {
+				return nil
+			}
+			return func() string { return o.rebaseGateFeedback(f) }
+		}
 	}
 	o.runMultiRepoImplFn = func(
 		f *feature.Feature,

@@ -174,6 +174,36 @@ type ImplementConfig struct {
 	// single-repo path, relying on the Final Review for quality gating.
 	// Multi-repo orchestration keeps per-iteration review enabled.
 	SkipIterationReview bool
+
+	// PhaseExitGate, when non-nil, re-verifies mechanical exit facts at every
+	// success exit before the loop returns review_passed. Non-empty feedback
+	// routes into a fix round like a deterministic regression and counts
+	// toward the no-progress and iteration rails. Nil disables the gate.
+	PhaseExitGate PhaseExitGate
+}
+
+// PhaseExitGate reports mechanical phase-exit violations as fix-round
+// feedback; "" means all checks passed. The implementation loop invokes it at
+// every success exit.
+type PhaseExitGate func() string
+
+// phaseExitGateFeedback invokes the config's phase-exit gate, returning the
+// trimmed violation feedback ("" when the gate is nil or satisfied).
+func phaseExitGateFeedback(cfg ImplementConfig) string {
+	if cfg.PhaseExitGate == nil {
+		return ""
+	}
+	return strings.TrimSpace(cfg.PhaseExitGate())
+}
+
+// phaseExitGateBlockers derives the open-blocker count fed to the progress
+// tracker from gate feedback: the structured finding count, floored at one so
+// a violated gate is never mistaken for a clean outcome.
+func phaseExitGateBlockers(feedback string) int {
+	if n := CountBlockingReviewFindings(feedback); n > 0 {
+		return n
+	}
+	return 1
 }
 
 // SessionRuntimeConfig is the role-specific configuration snapshot used to
@@ -953,6 +983,27 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 					cfg.Observer.IterationEnded(iterCtx, i, toSessionUsage(cost), time.Since(iterStart), "harness_regression")
 					continue
 				}
+				// Phase-exit gate: mechanical exit facts re-verified before
+				// declaring success. Violations route back to the implementer
+				// exactly like a deterministic harness regression.
+				if gateFeedback := phaseExitGateFeedback(cfg); gateFeedback != "" {
+					meta.MadeProgress = observeVerifiedImplementationOutcome(pt, phaseExitGateBlockers(gateFeedback), cfg)
+					meta.ReviewStatus = ReviewChangesRequested.String()
+					_ = am.WriteMeta(iterDir, meta)
+					_ = am.WriteSummary(summaryPath, meta)
+					consecutiveFailures = 0
+					reviewerFeedback = gateFeedback
+					roundCommits.changesRequested++
+					cfg.Observer.IterationEnded(iterCtx, i, toSessionUsage(cost), time.Since(iterStart), "phase_exit_gate")
+					if pt.NoProgressCount() >= cfg.MaxConsecNoProgress {
+						return &LoopResult{
+							FinalStatus: "safety_rail",
+							Iterations:  i,
+							LastError:   fmt.Sprintf("no progress for %d consecutive iterations", pt.NoProgressCount()),
+						}, nil
+					}
+					continue
+				}
 				meta.MadeProgress = observeVerifiedImplementationOutcome(pt, 0, cfg)
 				meta.ReviewStatus = reviewStatusSkipped
 				_ = am.WriteMeta(iterDir, meta)
@@ -1065,6 +1116,26 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 
 			switch reviewStatus {
 			case ReviewApproved:
+				// Phase-exit gate: an approving review does not override
+				// violated mechanical exit facts.
+				if gateFeedback := phaseExitGateFeedback(cfg); gateFeedback != "" {
+					meta.MadeProgress = observeVerifiedImplementationOutcome(pt, phaseExitGateBlockers(gateFeedback), cfg)
+					meta.ReviewStatus = ReviewChangesRequested.String()
+					_ = am.WriteMeta(iterDir, meta)
+					_ = am.WriteSummary(summaryPath, meta)
+					consecutiveFailures = 0
+					reviewerFeedback = gateFeedback
+					roundCommits.changesRequested++
+					cfg.Observer.IterationEnded(iterCtx, i, toSessionUsage(cost), time.Since(iterStart), "phase_exit_gate")
+					if pt.NoProgressCount() >= cfg.MaxConsecNoProgress {
+						return &LoopResult{
+							FinalStatus: "safety_rail",
+							Iterations:  i,
+							LastError:   fmt.Sprintf("no progress for %d consecutive iterations", pt.NoProgressCount()),
+						}, nil
+					}
+					continue
+				}
 				meta.MadeProgress = observeVerifiedImplementationOutcome(pt, 0, cfg)
 				meta.ReviewStatus = reviewStatus.String()
 				_ = am.WriteMeta(iterDir, meta)

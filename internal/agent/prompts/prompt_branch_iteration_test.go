@@ -288,6 +288,7 @@ func TestGoldenSnapshotsNoOrphanFiles(t *testing.T) {
 		"roadmap_revision_user":                                true,
 		"roadmap_user_multi_repo":                              true,
 		"roadmap_user_no_design":                               true,
+		"roadmap_user_refactor_pass":                           true,
 		"scout_user":                                           true,
 		"summary_user":                                         true,
 		"validate_specialized_grounding":                       true,

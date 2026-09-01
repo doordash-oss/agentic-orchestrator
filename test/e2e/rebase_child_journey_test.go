@@ -49,21 +49,21 @@ type rebaseJourneyFixture struct {
 
 // setupRebaseJourneyFixture creates the shared infrastructure for a rebase
 // child journey test with the given number of repos. Each repo is a real git
-// repo with a bare remote. The parent feature is Published with the repos. The
-// scripted implement kernel merges the persisted rebase target into each
-// behind repo's child worktree so the happy path satisfies the mechanical
-// integration gate.
+// repo with a bare remote. The parent feature is Published with the repos.
+// Setup itself merges the persisted rebase target into each behind repo's
+// child worktree, so the happy path needs no rebase-specific stub behavior.
 func setupRebaseJourneyFixture(t *testing.T, parentID string, repos ...rebaseJourneyRepo) *rebaseJourneyFixture {
-	return setupRebaseJourneyFixtureWithOpts(t, parentID, rebaseJourneyFixtureOptions{mergeRebaseTarget: true}, repos...)
+	return setupRebaseJourneyFixtureWithOpts(t, parentID, rebaseJourneyFixtureOptions{}, repos...)
 }
 
 // rebaseJourneyFixtureOptions configures the rebase journey fixture.
 type rebaseJourneyFixtureOptions struct {
-	// mergeRebaseTarget controls the scripted implement kernel. When true the
-	// stub merges the persisted target so the gate passes (happy path). When
-	// false the child branch is left without the target, exercising the gate's
-	// not-ancestor failure.
-	mergeRebaseTarget bool
+	// resetRebaseWorktree makes the implement stub rewrite the child branch
+	// back to its fork point, discarding the setup merge (gate violation).
+	resetRebaseWorktree bool
+	// resolveRebaseConflicts makes the implement stub resolve the in-progress
+	// setup merge and complete the merge commit (conflicting target fixture).
+	resolveRebaseConflicts bool
 	// remote overrides the default failingPRRemoteOps. When nil,
 	// failingPRRemoteOps{} is used.
 	remote orchestrator.RemoteOps
@@ -131,7 +131,10 @@ func setupRebaseJourneyFixtureWithOpts(t *testing.T, parentID string, opts rebas
 
 	sm := session.NewManager(serverEvents)
 	t.Cleanup(sm.Shutdown)
-	pr := journeyChildPhaseRunnerWithOpts(t, sm, store, stateDir, journeyPhaseRunnerOptions{mergeRebaseTarget: opts.mergeRebaseTarget})
+	pr := journeyChildPhaseRunnerWithOpts(t, sm, store, stateDir, journeyPhaseRunnerOptions{
+		resetRebaseWorktree:    opts.resetRebaseWorktree,
+		resolveRebaseConflicts: opts.resolveRebaseConflicts,
+	})
 
 	var remote orchestrator.RemoteOps = failingPRRemoteOps{}
 	if opts.remote != nil {
@@ -235,6 +238,37 @@ func rebaseJourneyRepoSetup(t *testing.T, name, branch string, advanceBase bool)
 	}
 }
 
+// rebaseJourneyRepoSetupConflicting creates a real git repo with a bare
+// remote and a feature branch, then advances main on the remote with a change
+// to the same file the feature branch owns — so merging the resolved target
+// genuinely conflicts.
+func rebaseJourneyRepoSetupConflicting(t *testing.T, name, branch string) rebaseJourneyRepo {
+	t.Helper()
+	repoDir := testutil.InitGitRepo(t)
+	bareRemote := testutil.InitBareRemote(t, repoDir)
+	journeyGit(t, repoDir, "checkout", "-b", branch)
+	writeJourneyFile(t, repoDir, "base.txt", "feature v1\n")
+	journeyGit(t, repoDir, "add", "base.txt")
+	journeyGit(t, repoDir, "commit", "-m", "feature base commit")
+	journeyGit(t, repoDir, "push", "-u", "origin", branch)
+
+	journeyGit(t, repoDir, "checkout", "main")
+	writeJourneyFile(t, repoDir, "base.txt", "upstream conflicting v2\n")
+	journeyGit(t, repoDir, "add", "base.txt")
+	journeyGit(t, repoDir, "commit", "-m", "upstream conflicting change")
+	testutil.SimulatePush(t, repoDir, bareRemote, "main", "main")
+	journeyGit(t, repoDir, "checkout", branch)
+
+	return rebaseJourneyRepo{
+		name:        name,
+		repoDir:     repoDir,
+		branch:      branch,
+		baseBranch:  "main",
+		publishable: true,
+		touched:     true,
+	}
+}
+
 // TestRebaseChildHappyPathJourney verifies the complete rebase child flow:
 // behind feature → rebase action → child of kind "rebase" with medium
 // pipeline, generated content, persisted targets/behind set, fork-point-
@@ -313,16 +347,35 @@ func TestRebaseChildHappyPathJourney(t *testing.T) {
 		t.Fatalf("child base SHA = %v, want captured parent tip %s", baseEntry["sha"], capturedHEAD)
 	}
 
+	// Setup performed the merge mechanically: the merge task is Done and the
+	// child worktree already contains the persisted target.
+	child, err = fx.store.Load(childID)
+	if err != nil {
+		t.Fatalf("Load(child after setup) error = %v", err)
+	}
+	if task := child.Run().Setup.Tasks["merge:repoA"]; task.Status != feature.SetupStatusDone {
+		t.Fatalf("merge setup task = %+v, want done", task)
+	}
+	childWorktree := child.Repos[0].WorktreePath
+	if childWorktree == "" {
+		t.Fatalf("child worktree path missing after setup: %+v", child.Repos[0])
+	}
+	journeyGit(t, childWorktree, "merge-base", "--is-ancestor", target.TargetSHA, "HEAD")
+
 	// Assert generated content: description names the behind repo and target,
-	// contains merge instructions, forbids pushing and fetching.
+	// is worktree-anchored (never naming a branch), states the merge already
+	// happened, and forbids pushing and fetching.
 	if !strings.Contains(child.Description, "repoA") {
 		t.Fatalf("description missing repoA: %q", child.Description)
 	}
 	if !strings.Contains(child.Description, "main") {
 		t.Fatalf("description missing target 'main': %q", child.Description)
 	}
-	if !strings.Contains(child.Description, "merge") {
-		t.Fatalf("description missing merge instruction: %q", child.Description)
+	if !strings.Contains(child.Description, "already been merged into the branch checked out in this repository's worktree") {
+		t.Fatalf("description missing worktree-anchored merged-in-setup statement: %q", child.Description)
+	}
+	if strings.Contains(child.Description, branch) {
+		t.Fatalf("description names the parent branch %q: %q", branch, child.Description)
 	}
 	if !strings.Contains(child.Description, "Never push") {
 		t.Fatalf("description missing no-push instruction: %q", child.Description)
@@ -330,13 +383,25 @@ func TestRebaseChildHappyPathJourney(t *testing.T) {
 	if !strings.Contains(child.Description, "Do not fetch") {
 		t.Fatalf("description missing no-fetch instruction: %q", child.Description)
 	}
+	if !strings.Contains(child.Description, "worktrees provisioned for this pass") {
+		t.Fatalf("description missing worktree confinement invariant: %q", child.Description)
+	}
 
-	// Assert exit criteria contain the git-level completion facts.
-	if !strings.Contains(child.ExitCriteria, "ancestor") {
+	// Assert exit criteria contain the worktree-anchored git-level completion facts.
+	if !strings.Contains(child.ExitCriteria, "git merge-base --is-ancestor") {
 		t.Fatalf("exit criteria missing ancestor check: %q", child.ExitCriteria)
+	}
+	if !strings.Contains(child.ExitCriteria, "this repository's worktree") {
+		t.Fatalf("exit criteria missing worktree anchoring: %q", child.ExitCriteria)
+	}
+	if strings.Contains(child.ExitCriteria, branch) {
+		t.Fatalf("exit criteria name the parent branch %q: %q", branch, child.ExitCriteria)
 	}
 	if !strings.Contains(child.ExitCriteria, "conflict markers") {
 		t.Fatalf("exit criteria missing conflict markers check: %q", child.ExitCriteria)
+	}
+	if !strings.Contains(child.ExitCriteria, "No other checkout of any repository was modified") {
+		t.Fatalf("exit criteria missing other-checkout invariant: %q", child.ExitCriteria)
 	}
 	if !strings.Contains(child.ExitCriteria, "Nothing was pushed") {
 		t.Fatalf("exit criteria missing no-push invariant: %q", child.ExitCriteria)
@@ -720,9 +785,10 @@ func TestRebaseChildTargetPrecedenceDefaultBranch(t *testing.T) {
 // TestRebaseChildGateAncestorFailureJourney verifies the e2e gate failure: a
 // rebase child whose branch does not contain its persisted target commit
 // fails integration with the typed gate attention record, and every parent
-// ref is byte-identical before and after. The scripted implement kernel is
-// configured to NOT merge the target, so the child branch remains behind the
-// creation-time target and the gate's ancestor check fails.
+// ref is byte-identical before and after. Setup merges the target
+// mechanically, so the scripted implement kernel produces a violation setup
+// cannot prevent: it rewrites the child branch back to its fork point,
+// discarding the merge, and the gate's ancestor check fails.
 func TestRebaseChildGateAncestorFailureJourney(t *testing.T) {
 	if testing.Short() {
 		t.Skip("journey boots real-git setup and scripted provider subprocesses")
@@ -731,7 +797,7 @@ func TestRebaseChildGateAncestorFailureJourney(t *testing.T) {
 	const parentID = "rebase-gate-fail-parent"
 	const branch = "feature/rebase-gate-fail"
 	repo := rebaseJourneyRepoSetup(t, "repoA", branch, true)
-	fx := setupRebaseJourneyFixtureWithOpts(t, parentID, rebaseJourneyFixtureOptions{mergeRebaseTarget: false}, repo)
+	fx := setupRebaseJourneyFixtureWithOpts(t, parentID, rebaseJourneyFixtureOptions{resetRebaseWorktree: true}, repo)
 
 	// Capture the parent branch ref before the child runs integration.
 	parentRefBefore := journeyGit(t, repo.repoDir, "rev-parse", branch)
@@ -803,6 +869,80 @@ func TestRebaseChildGateAncestorFailureJourney(t *testing.T) {
 	}
 }
 
+// TestRebaseChildConflictResolutionJourney is the end-to-end proof of the
+// setup-merge design on the conflict path: a genuinely conflicting target
+// leaves an in-progress merge in the child worktree after setup (with the
+// merge task still Done and the child startable), the implement stub resolves
+// the conflicts and completes the merge commit, and the journey lands through
+// the integration gate.
+func TestRebaseChildConflictResolutionJourney(t *testing.T) {
+	if testing.Short() {
+		t.Skip("journey boots real-git setup and scripted provider subprocesses")
+	}
+
+	const parentID = "rebase-conflict-parent"
+	const branch = "feature/rebase-conflict"
+	repo := rebaseJourneyRepoSetupConflicting(t, "repoA", branch)
+	fx := setupRebaseJourneyFixtureWithOpts(t, parentID, rebaseJourneyFixtureOptions{resolveRebaseConflicts: true}, repo)
+
+	resp, err := fx.client.RebaseFeature(t.Context(), parentID)
+	if err != nil {
+		t.Fatalf("RebaseFeature() error = %v", err)
+	}
+	childID := resp.FeatureID
+
+	// Setup completes despite the conflicted merge and parks the child ready
+	// to start, with the in-progress merge left in the child worktree.
+	waitForJourneySetupComplete(t, fx.srv.URL, childID)
+	child, err := fx.store.Load(childID)
+	if err != nil {
+		t.Fatalf("Load(child) error = %v", err)
+	}
+	if task := child.Run().Setup.Tasks["merge:repoA"]; task.Status != feature.SetupStatusDone {
+		t.Fatalf("merge setup task = %+v, want done despite conflicts", task)
+	}
+	childWorktree := child.Repos[0].WorktreePath
+	if _, err := journeyGitIn(childWorktree, "rev-parse", "--verify", "MERGE_HEAD"); err != nil {
+		t.Fatalf("no in-progress merge (MERGE_HEAD) in child worktree after setup: %v", err)
+	}
+	conflicted, err := os.ReadFile(filepath.Join(childWorktree, "base.txt"))
+	if err != nil {
+		t.Fatalf("read conflicted file: %v", err)
+	}
+	if !strings.Contains(string(conflicted), "<<<<<<<") {
+		t.Fatalf("conflicted file has no conflict markers after setup:\n%s", conflicted)
+	}
+
+	// Drive the child to completion: the stub resolves the conflicts and
+	// completes the merge commit, so the gate passes.
+	postAction(t, fx.srv.URL, childID, "start", `{}`)
+	waitForJourneyGate(t, fx.srv.URL, childID, 0)
+	postReviewSessionProceed(t, fx.srv.URL, childID)
+	waitForJourneyGate(t, fx.srv.URL, childID, 1)
+	postReviewSessionProceed(t, fx.srv.URL, childID)
+	waitForJourneyChildClosed(t, fx.srv.URL, fx.store, childID)
+
+	// The parent branch contains the creation-time target and the resolved
+	// content, with no conflict markers or in-progress merge.
+	target := child.Parent.RebaseTargets[0]
+	journeyGit(t, repo.repoDir, "merge-base", "--is-ancestor", target.TargetSHA, "HEAD")
+	resolved, err := os.ReadFile(filepath.Join(repo.repoDir, "base.txt"))
+	if err != nil {
+		t.Fatalf("read resolved file in parent: %v", err)
+	}
+	if strings.Contains(string(resolved), "<<<<<<<") {
+		t.Fatalf("parent still has conflict markers:\n%s", resolved)
+	}
+	if _, err := os.Stat(filepath.Join(repo.repoDir, "child-output.txt")); err != nil {
+		t.Fatalf("child work missing from parent after integration: %v", err)
+	}
+
+	childDetail := getJourneyJSON(t, fx.srv.URL+"/api/v1/features/"+childID)["feature"].(map[string]any)
+	if childDetail["close_outcome"] != feature.ChildCloseOutcomeCompleted {
+		t.Fatalf("child close_outcome = %v, want completed", childDetail["close_outcome"])
+	}
+}
+
 // prBaseBranchRemoteOps wraps failingPRRemoteOps but returns a fixed PR base
 // branch, simulating a GitHub PR whose base is a non-default branch.
 type prBaseBranchRemoteOps struct {
@@ -845,8 +985,7 @@ func TestRebaseChildPRBaseBranchPrecedenceJourney(t *testing.T) {
 	repo.prURL = "https://github.com/example/repoA/pull/1"
 
 	fx := setupRebaseJourneyFixtureWithOpts(t, parentID, rebaseJourneyFixtureOptions{
-		mergeRebaseTarget: true,
-		remote:            prBaseBranchRemoteOps{baseBranch: prBase},
+		remote: prBaseBranchRemoteOps{baseBranch: prBase},
 	}, repo)
 
 	// Launch the rebase action.

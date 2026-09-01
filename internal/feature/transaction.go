@@ -130,7 +130,8 @@ type RepoTransactionEntry struct {
 const (
 	// GateCodeParentDrift: a parent branch tip moved from its creation-time
 	// base — parent refs must not move while a pass runs, except through the
-	// transaction itself.
+	// transaction itself. Drift parks integration once; retrying at the
+	// unchanged tip is the operator's acknowledgment to absorb it.
 	GateCodeParentDrift = "parent_ref_drift"
 	// GateCodeNotAncestor: the persisted creation-time target commit is not
 	// an ancestor of the child branch head — the child did not merge the

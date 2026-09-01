@@ -427,6 +427,51 @@ func TestTransactionExternalParentAdvancementParksDrift(t *testing.T) {
 	}
 }
 
+// TestTransactionParentDriftRetryAcknowledges proves drift parks integration
+// exactly once: retrying at the unchanged tip is the operator's acknowledgment
+// and the integration absorbs the moved tip and completes, while any further
+// movement parks again.
+func TestTransactionParentDriftRetryAcknowledges(t *testing.T) {
+	if testing.Short() {
+		t.Skip("real-git integration test")
+	}
+	fx := newMultiRepoTransactionFixture(t, 2)
+	o := fx.orchestrator()
+
+	testutil.CommitFile(t, fx.repoDirs[0], "parent-advance.txt", "external advance\n", "parent advanced")
+
+	if err := o.RunChildIntegration(fx.child.ID); err != nil {
+		t.Fatalf("first runChildIntegration() error = %v, want nil with attention", err)
+	}
+	_, child := fx.reload()
+	if tx := child.Parent.Transaction; tx == nil || tx.Phase != feature.TransactionPhaseAttention {
+		t.Fatalf("transaction phase = %+v, want attention after drift", tx)
+	}
+
+	// Further movement after the drift attention parks again.
+	testutil.CommitFile(t, fx.repoDirs[0], "parent-advance-2.txt", "more external\n", "parent advanced again")
+	if err := o.RunChildIntegration(fx.child.ID); err != nil {
+		t.Fatalf("second runChildIntegration() error = %v, want nil with attention", err)
+	}
+	_, child = fx.reload()
+	tx := child.Parent.Transaction
+	if tx == nil || tx.Phase != feature.TransactionPhaseAttention {
+		t.Fatalf("transaction phase = %+v, want attention after renewed drift", tx)
+	}
+	if entry := tx.EntryByRepo(child.Repos[0].Name); entry == nil || entry.GateCode != feature.GateCodeParentDrift {
+		t.Fatalf("repo 0: gate code = %+v, want %s", entry, feature.GateCodeParentDrift)
+	}
+
+	// Retry at the unchanged tip acknowledges the drift and completes.
+	if err := o.RunChildIntegration(fx.child.ID); err != nil {
+		t.Fatalf("acknowledging runChildIntegration() error = %v", err)
+	}
+	_, child = fx.reload()
+	if child.Parent.CloseOutcome != feature.ChildCloseOutcomeCompleted {
+		t.Fatalf("child close outcome = %q, want completed after acknowledgment", child.Parent.CloseOutcome)
+	}
+}
+
 // TestTransactionParentDriftMultiRepoAggregation proves drift is evaluated
 // for every repository in one preflight: drifted repos carry the typed gate
 // code, clean repos do not, and no candidate is staged for either.

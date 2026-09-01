@@ -956,6 +956,29 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 				continue
 			}
 
+			// Phase-exit gate: mechanical exit facts re-verified at every
+			// success exit before the loop returns review_passed. Violations
+			// route back to the implementer exactly like a deterministic
+			// harness regression; nil result means the gate passed.
+			gateFixRound := func(gateFeedback string) *LoopResult {
+				meta.MadeProgress = observeVerifiedImplementationOutcome(pt, phaseExitGateBlockers(gateFeedback), cfg)
+				meta.ReviewStatus = ReviewChangesRequested.String()
+				_ = am.WriteMeta(iterDir, meta)
+				_ = am.WriteSummary(summaryPath, meta)
+				consecutiveFailures = 0
+				reviewerFeedback = gateFeedback
+				roundCommits.changesRequested++
+				cfg.Observer.IterationEnded(iterCtx, i, toSessionUsage(cost), time.Since(iterStart), "phase_exit_gate")
+				if pt.NoProgressCount() >= cfg.MaxConsecNoProgress {
+					return &LoopResult{
+						FinalStatus: "safety_rail",
+						Iterations:  i,
+						LastError:   fmt.Sprintf("no progress for %d consecutive iterations", pt.NoProgressCount()),
+					}
+				}
+				return nil
+			}
+
 			// Fall through: SUCCESS — run the review gate.
 			if cfg.SkipIterationReview {
 				// Medium/Large: skip per-iteration review, rely on Final Review.
@@ -983,24 +1006,9 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 					cfg.Observer.IterationEnded(iterCtx, i, toSessionUsage(cost), time.Since(iterStart), "harness_regression")
 					continue
 				}
-				// Phase-exit gate: mechanical exit facts re-verified before
-				// declaring success. Violations route back to the implementer
-				// exactly like a deterministic harness regression.
 				if gateFeedback := phaseExitGateFeedback(cfg); gateFeedback != "" {
-					meta.MadeProgress = observeVerifiedImplementationOutcome(pt, phaseExitGateBlockers(gateFeedback), cfg)
-					meta.ReviewStatus = ReviewChangesRequested.String()
-					_ = am.WriteMeta(iterDir, meta)
-					_ = am.WriteSummary(summaryPath, meta)
-					consecutiveFailures = 0
-					reviewerFeedback = gateFeedback
-					roundCommits.changesRequested++
-					cfg.Observer.IterationEnded(iterCtx, i, toSessionUsage(cost), time.Since(iterStart), "phase_exit_gate")
-					if pt.NoProgressCount() >= cfg.MaxConsecNoProgress {
-						return &LoopResult{
-							FinalStatus: "safety_rail",
-							Iterations:  i,
-							LastError:   fmt.Sprintf("no progress for %d consecutive iterations", pt.NoProgressCount()),
-						}, nil
+					if rail := gateFixRound(gateFeedback); rail != nil {
+						return rail, nil
 					}
 					continue
 				}
@@ -1118,21 +1126,11 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			case ReviewApproved:
 				// Phase-exit gate: an approving review does not override
 				// violated mechanical exit facts.
+				// An approving review does not override violated mechanical
+				// exit facts.
 				if gateFeedback := phaseExitGateFeedback(cfg); gateFeedback != "" {
-					meta.MadeProgress = observeVerifiedImplementationOutcome(pt, phaseExitGateBlockers(gateFeedback), cfg)
-					meta.ReviewStatus = ReviewChangesRequested.String()
-					_ = am.WriteMeta(iterDir, meta)
-					_ = am.WriteSummary(summaryPath, meta)
-					consecutiveFailures = 0
-					reviewerFeedback = gateFeedback
-					roundCommits.changesRequested++
-					cfg.Observer.IterationEnded(iterCtx, i, toSessionUsage(cost), time.Since(iterStart), "phase_exit_gate")
-					if pt.NoProgressCount() >= cfg.MaxConsecNoProgress {
-						return &LoopResult{
-							FinalStatus: "safety_rail",
-							Iterations:  i,
-							LastError:   fmt.Sprintf("no progress for %d consecutive iterations", pt.NoProgressCount()),
-						}, nil
+					if rail := gateFixRound(gateFeedback); rail != nil {
+						return rail, nil
 					}
 					continue
 				}

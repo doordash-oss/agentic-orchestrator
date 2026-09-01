@@ -1,10 +1,11 @@
 /**
  * Launch/teardown plumbing for the packaged app under Playwright. Every
- * launch records a full trace (screenshots + DOM snapshots); teardown stops
- * the trace, closes the app through the normal quit path, and asserts the
- * app process actually exited. Evidence artifacts (named screenshots and
- * trace zips) are additionally copied to AGENTICO_E2E_EVIDENCE_DIR when the
- * run is an evidence run.
+ * launch records a trace; teardown stops the trace, closes the app through
+ * the normal quit path, and asserts the app process actually exited. On
+ * evidence runs (AGENTICO_E2E_EVIDENCE_DIR set) the trace is full
+ * (screenshots + DOM snapshots), always saved, and copied to the evidence
+ * directory; otherwise it is snapshot-only and saved only when the test
+ * failed.
  */
 import type { ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
@@ -116,21 +117,28 @@ export async function launchApp(
     args.push('--no-sandbox');
   }
   args.unshift(packagedAppAsar(installExecutablePath));
-  const app = await electron.launch({
-    args,
-    env: {
-      ...minimalEnv(world),
-      AGENTICO_E2E_RESOURCES_PATH: resourcesPath,
-      AGENTICO_E2E_INSTALL_EXECUTABLE: installExecutablePath,
-      ...(options.env ?? {}),
-    },
-    timeout: 60_000,
-  });
+  // Concurrent workers exec the same binary; Linux can transiently report
+  // ETXTBSY when a spawn races a fork that briefly inherits a write fd
+  // (nodejs/node#22811-style), so that one error is retried briefly.
+  const app = await retryingEtxtbsy(() =>
+    electron.launch({
+      args,
+      env: {
+        ...minimalEnv(world),
+        AGENTICO_E2E_RESOURCES_PATH: resourcesPath,
+        AGENTICO_E2E_INSTALL_EXECUTABLE: installExecutablePath,
+        ...(options.env ?? {}),
+      },
+      timeout: 60_000,
+    }),
+  );
   const logs: string[] = [];
   const appProcess = app.process();
   appProcess.stdout?.on('data', (chunk: Buffer) => logs.push(chunk.toString()));
   appProcess.stderr?.on('data', (chunk: Buffer) => logs.push(chunk.toString()));
-  await app.context().tracing.start({ screenshots: true, snapshots: true });
+  // Screenshots multiply the trace's cost and are only consumed by evidence
+  // runs; snapshots stay on so a saved failure trace still explains itself.
+  await app.context().tracing.start({ screenshots: evidenceDir() !== null, snapshots: true });
   const page = await app.firstWindow({ timeout: 30_000 });
   // Actions (click/check/fill) otherwise inherit the whole test budget, so a
   // control that never becomes actionable — disabled while work is in flight,
@@ -164,22 +172,27 @@ export async function launchApp(
 }
 
 /**
- * Stops tracing (saving the zip, plus an evidence copy) and quits the app
- * through the regular quit path, asserting the process really exited so a
- * hung shutdown can never pass silently.
+ * Stops tracing (saving the zip when it will be consumed: evidence runs
+ * always, other runs only on failure) and quits the app through the regular
+ * quit path, asserting the process really exited so a hung shutdown can
+ * never pass silently.
  */
 export async function closeApp(handle: AppHandle): Promise<void> {
   if (handle.closed) {
     return;
   }
   handle.closed = true;
-  const tracePath = handle.testInfo.outputPath(`${handle.traceName}-trace.zip`);
   try {
     // Bounded: against a wedged app these calls never settle, and an unbounded
     // await here costs the worker its whole teardown budget and loses the trace
     // — the one artifact that would explain the wedge.
-    await bounded(handle.app.context().tracing.stop({ path: tracePath }), 60_000, 'tracing.stop');
-    copyTraceToEvidence(tracePath, `${handle.traceName}-trace.zip`);
+    if (evidenceDir() !== null || testLooksFailed(handle.testInfo)) {
+      const tracePath = handle.testInfo.outputPath(`${handle.traceName}-trace.zip`);
+      await bounded(handle.app.context().tracing.stop({ path: tracePath }), 60_000, 'tracing.stop');
+      copyTraceToEvidence(tracePath, `${handle.traceName}-trace.zip`);
+    } else {
+      await bounded(handle.app.context().tracing.stop(), 60_000, 'tracing.stop');
+    }
   } catch {
     // Tracing is evidence, not correctness — never fail teardown on it.
   }
@@ -277,6 +290,35 @@ async function installTeardownQuitDialogAnswer(handle: AppHandle): Promise<void>
       return { response: 0, checkboxChecked: false };
     }) as typeof dialog.showMessageBox;
   });
+}
+
+/**
+ * Whether the test has already failed by teardown time. closeApp runs inside
+ * the journey's own finally block, before the runner records the in-flight
+ * error onto testInfo — a hard expect failure still reads status "passed"
+ * here. Its error is already on the failed step, though, so the (private)
+ * step tree is scanned as the in-flight failure signal.
+ */
+function testLooksFailed(testInfo: TestInfo): boolean {
+  if (testInfo.status !== testInfo.expectedStatus || testInfo.errors.length > 0) return true;
+  type Step = { error?: unknown; steps: Step[] };
+  const steps = (testInfo as unknown as { _steps?: Step[] })._steps ?? [];
+  const hasError = (list: Step[]): boolean =>
+    list.some((step) => step.error !== undefined || hasError(step.steps));
+  return hasError(steps);
+}
+
+async function retryingEtxtbsy<T>(launch: () => Promise<T>): Promise<T> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await launch();
+    } catch (error) {
+      if (attempt >= 3 || !(error instanceof Error) || !error.message.includes('ETXTBSY')) {
+        throw error;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 250 * attempt));
+    }
+  }
 }
 
 /** Rejects if `work` has not settled within `ms`, naming the step that stuck. */

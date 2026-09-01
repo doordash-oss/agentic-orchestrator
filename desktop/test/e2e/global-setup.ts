@@ -18,6 +18,13 @@ import { collectProcessTree } from './helpers/processes';
 
 export default function globalSetup(): void {
   sweepOrphanedE2eProcesses();
+  // Electron 43 installs its runtime lazily on first import; workers launch
+  // in parallel and must never race that extraction (idempotent when done).
+  execFileSync('npm', ['run', 'install:electron-runtime'], {
+    cwd: desktopDir,
+    stdio: 'inherit',
+    timeout: 5 * 60_000,
+  });
   const reason = stalenessReason();
   if (reason === null) {
     console.log('e2e global-setup: reusing the verified package in dist/');

@@ -28,13 +28,13 @@ jobs:
       - name: go test
         run: go test ./... -short -count=1
 
-  # Native package gate per platform: strict checks (typecheck, lint, format,
-  # OpenAPI->TypeScript drift), unit/component/security suites, production
-  # build, then construct and inspect the unsigned package for this host
-  # (universal DMG on macOS; x64 AppImage + deb on ubuntu-latest x64; arm64
-  # AppImage + deb on ubuntu-24.04-arm). Every supported Linux architecture
-  # is built and inspected on a native runner so delivered package coverage
-  # spans Linux x64 and arm64 without gaps.
+  # Native package gate per platform. Platform-independent checks (typecheck,
+  # lint, format, API drift, unit/component/security suites) run once on
+  # ubuntu-latest. Each leg then packages and inspects the unsigned app for
+  # its host: PRs build the unpacked variant, pushes to main build the full
+  # installers (universal DMG on macOS; x64 AppImage + deb on ubuntu-latest;
+  # arm64 AppImage + deb on ubuntu-24.04-arm). Packaged E2E runs the full
+  # journey suite on ubuntu-latest x64 and the @smoke subset on macOS/arm.
   desktop:
     strategy:
       fail-fast: false
@@ -63,29 +63,42 @@ jobs:
         run: npm ci
 
       - name: Check (typecheck, lint, format, API drift)
+        if: matrix.os == 'ubuntu-latest'
         run: npm run check
 
       - name: Unit and component tests
+        if: matrix.os == 'ubuntu-latest'
         run: npm test
 
       - name: Security tests
+        if: matrix.os == 'ubuntu-latest'
         run: npm run test:security
 
-      - name: Build
-        run: npm run build
+      - name: Package and verify (unpacked, PRs)
+        if: github.event_name == 'pull_request'
+        run: npm run package:verify:e2e
 
-      - name: Package and verify (native target)
+      - name: Package and verify (full installers, main)
+        if: github.event_name != 'pull_request'
         run: npm run package:verify
 
-      # Packaged E2E journeys (Task 6b): Playwright drives the unpacked app
-      # verified above with the real bundled server. Electron needs a display
-      # on Linux, so the ubuntu leg runs under xvfb.
+      # Packaged E2E journeys: Playwright drives the unpacked app verified
+      # above with the real bundled server. Full journey suite on ubuntu-latest
+      # x64; @smoke subset on macOS and arm. Electron needs a display on Linux,
+      # so both Linux legs run under xvfb.
+      # Invoked directly on the desktop workspace: forwarding --grep through
+      # the root passthrough script adds a second npm layer that eats it.
       - name: Packaged E2E journeys
         run: |
-          if [ "$RUNNER_OS" = "Linux" ]; then
-            xvfb-run -a --server-args="-screen 0 1600x1000x24" npm run test:e2e:packaged
+          if [ "${{ matrix.os }}" = "ubuntu-latest" ]; then
+            GREP_ARGS=""
           else
-            npm run test:e2e:packaged
+            GREP_ARGS='--grep @smoke'
+          fi
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            xvfb-run -a --server-args="-screen 0 1600x1000x24" npm run test:e2e:packaged --workspace desktop -- $GREP_ARGS
+          else
+            npm run test:e2e:packaged --workspace desktop -- $GREP_ARGS
           fi
 
       - name: Preserve packaging evidence on failure

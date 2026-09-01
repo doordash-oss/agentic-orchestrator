@@ -5029,17 +5029,6 @@ body {
   color: var(--bad);
 }
 
-/* The assistant's own footer state, per the mock: an accent dot beside
-   "Ask Agentico is active". Any non-ready runtime tone replaces it, so a
-   connection problem is never masked by a running chat. */
-.sidebar__footer[data-tone='ama'] .sidebar__runtime span {
-  color: var(--accent);
-}
-
-.sidebar__footer[data-tone='ama'] .sidebar__runtime {
-  color: var(--text);
-}
-
 /* Ambient only: the update popover's presence, echoed on the status row. It is
  * deliberately not a control — the toolbar button is the single trigger. */
 .sidebar__update-dot {

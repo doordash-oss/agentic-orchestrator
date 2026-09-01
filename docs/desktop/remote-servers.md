@@ -72,6 +72,35 @@ Details of the paste flow:
   runtime identity, not its address), the app doesn't add a duplicate — it
   steers you to the existing local entry.
 
+## Adding by deep link
+
+The connection string is itself an `agentico://` URL, so opening it as a
+link (for example `open 'agentico://<token>@10.9.8.7:8080?name=my+server'`
+on macOS, or clicking it wherever your OS treats it as a link) hands it to a
+running Agentico app, which runs the exact same add flow as the paste form:
+
+- On success the server is added (or, if the address turns out to be an
+  already-known server, the existing entry is used), the app switches to it,
+  and **Settings → Servers** opens showing the entry.
+- On failure (unreachable, incompatible, rejected token) nothing is saved;
+  the app shows a notification with the same error copy as the add form and
+  opens **Settings → Servers** with the form focused so you can re-paste.
+- When the OS keychain is unavailable the app still connects for this
+  session only and a notification says nothing was saved, matching the
+  paste flow.
+
+The link is treated with the same care as a paste: the embedded token is
+never logged or echoed anywhere. Only links that parse as a full connection
+string (token before the `@`, explicit port) take this path; the app's other
+`agentico://` deep links are unaffected.
+
+Deep-link add is reliable while the app is already running (warm start). A
+link that has to launch the app first is delivered best-effort: on macOS the
+launching URL can be dropped before the app is ready, and on any platform
+the result surface may not appear until the app has finished starting up. If
+nothing happens on a cold start, open the running app and click the link
+again — or paste the string into **Settings → Servers**.
+
 ## Network expectations
 
 - Hold connection strings to **trusted networks** — your LAN, a VPN, or

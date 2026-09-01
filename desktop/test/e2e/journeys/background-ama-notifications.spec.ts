@@ -71,6 +71,11 @@ test('packaged AMA panel floats, toggles, drags, persists, and ends the session'
       window.agentico.startChat({ message: 'Follow up in the active AMA session.' }),
     );
     expect(followUp).toMatchObject({ sessionId: '__chat__', result: 'sent' });
+    // AMA activity never displaces the footer's connection identity or its
+    // switcher; the Ask control remains the session's single entry point.
+    await expect(handle.page.getByRole('button', { name: / — switch server$/ })).toBeVisible();
+    await expect(handle.page.getByRole('button', { name: 'Ask ⌥Space' })).toBeVisible();
+    await expect(handle.page.getByText('Ask Agentico is active')).toHaveCount(0);
     const chatSessions = await handle.page.evaluate(() =>
       window.agentico
         .listSessions()

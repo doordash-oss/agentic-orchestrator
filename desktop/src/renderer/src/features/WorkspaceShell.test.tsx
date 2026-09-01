@@ -829,7 +829,7 @@ describe('WorkspaceShell toolbar', () => {
     expect(onOpenPalette).toHaveBeenCalledTimes(1);
   });
 
-  it('shows the active-session footer state only while the runtime is healthy', async () => {
+  it('keeps runtime identity and the Ask action distinct in the footer', async () => {
     installAgenticoMock({
       settings: settingsWithActive(null),
       features: [],
@@ -841,13 +841,12 @@ describe('WorkspaceShell toolbar', () => {
         kind: 'local',
       },
     });
-    const { rerender } = render(<WorkspaceShell amaSessionActive />);
+    render(<WorkspaceShell />);
 
-    expect(await screen.findByText('Ask Agentico is active')).toBeVisible();
+    expect(
+      await screen.findByRole('button', { name: 'Runtime ready — switch server' }),
+    ).toBeVisible();
     expect(screen.getByRole('button', { name: 'Ask ⌥Space' })).toBeVisible();
-
-    rerender(<WorkspaceShell amaSessionActive={false} />);
-    expect(await screen.findByText('Runtime ready')).toBeVisible();
   });
 
   it('marks the Ask chip with an unread dot only while a reply is unseen', async () => {
@@ -870,7 +869,7 @@ describe('WorkspaceShell toolbar', () => {
     expect(screen.queryByRole('img', { name: 'Unread AMA reply' })).not.toBeInTheDocument();
   });
 
-  it('lets a runtime problem win the footer row over an active session', async () => {
+  it('shows runtime problems as passive status instead of a server picker', async () => {
     installAgenticoMock({
       settings: settingsWithActive(null),
       features: [],
@@ -882,10 +881,10 @@ describe('WorkspaceShell toolbar', () => {
         error: { code: 'E_CONNECT', message: 'The runtime is unreachable.' },
       },
     });
-    render(<WorkspaceShell amaSessionActive />);
+    render(<WorkspaceShell />);
 
     expect(await screen.findByText('Runtime needs attention')).toBeVisible();
-    expect(screen.queryByText('Ask Agentico is active')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /switch server/ })).not.toBeInTheDocument();
   });
 
   it('shows the named server in the footer instead of the generic ready label', async () => {
@@ -946,25 +945,6 @@ describe('WorkspaceShell toolbar', () => {
     render(<WorkspaceShell />);
 
     expect(await screen.findByText('Connecting')).toBeVisible();
-    expect(screen.queryByText('frothy-macchiato')).toBeNull();
-  });
-
-  it('keeps the active-session label over a named server', async () => {
-    installAgenticoMock({
-      settings: settingsWithActive(null),
-      features: [],
-      connection: {
-        status: 'ready',
-        stage: 'ready',
-        detail: 'Connected to an externally managed Agentico runtime.',
-        ownership: 'external',
-        kind: 'remote',
-        serverName: 'frothy-macchiato',
-      },
-    });
-    render(<WorkspaceShell amaSessionActive />);
-
-    expect(await screen.findByText('Ask Agentico is active')).toBeVisible();
     expect(screen.queryByText('frothy-macchiato')).toBeNull();
   });
 

@@ -308,6 +308,7 @@ func New(deps Deps, hooks Hooks) *Orchestrator {
 		SingleShotResumer: o.deps.PhaseRunner,
 		CommitOutcome:     o.commitSingleShotOutcome,
 		OnCompletionError: o.surfaceDispatchCompletionError,
+		Track:             o.cycleWG.Go,
 	})
 	if o.deps.PhaseRunner != nil {
 		existingProgressHook := o.deps.PhaseRunner.OnVerificationProgress
@@ -596,6 +597,43 @@ func (o *Orchestrator) StartFeature(featureID string) error {
 
 	_, _, err = o.startPhase(featureID, phase)
 	return err
+}
+
+// startPhaseGuarded applies the same launch guards as StartFeature around a
+// direct phase dispatch: serialize per-feature starts, re-check the
+// relationship and child-execution gates after any pre-dispatch state
+// changes, refuse an open need-user-input gate or a finalizing feature, and
+// emit the FeatureStarted signal observers rely on. Resume and recovery
+// entry points that bypass StartFeature must dispatch through here so a
+// resumed feature cannot sidestep the launch workflow's hardening.
+func (o *Orchestrator) startPhaseGuarded(featureID string, phase feature.Phase) (feature.Phase, bool, error) {
+	startMu := o.featureStartControl(featureID)
+	startMu.Lock()
+	defer startMu.Unlock()
+
+	o.relationshipMu.RLock()
+	defer o.relationshipMu.RUnlock()
+	if err := o.RelationshipGuard(featureID, MutationStart); err != nil {
+		return phase, false, err
+	}
+	if err := o.checkChildExecution(featureID); err != nil {
+		return phase, false, err
+	}
+	f, err := o.deps.Lifecycle.Get(featureID)
+	if err != nil {
+		return phase, false, fmt.Errorf("loading feature: %w", err)
+	}
+	if f.PendingNeedUserInputPath != "" {
+		return phase, false, fmt.Errorf("%w: %s", feature.ErrNeedUserInputGateOpen, f.PendingNeedUserInputPath)
+	}
+	if f.IsFinalizingPhase() {
+		return phase, false, feature.ErrPhaseFinalizing
+	}
+	if o.hooks.OnFeatureStarted != nil {
+		o.hooks.OnFeatureStarted(featureID)
+	}
+	o.emitEvent(ports.Event{Type: ports.FeatureStarted, FeatureID: featureID})
+	return o.startPhase(featureID, phase)
 }
 
 // startPhase dispatches to the phase-specific starter. On PhaseStarted it
@@ -2139,6 +2177,10 @@ func (o *Orchestrator) Shutdown() error {
 		if o.deps.Sessions != nil {
 			o.deps.Sessions.Shutdown()
 		}
+		// Join tracked supervisor goroutines so their completion writes land
+		// before callers observe Shutdown returning (and before test TempDir
+		// teardown reclaims the state directory).
+		o.cycleWG.Wait()
 	})
 	return nil
 }

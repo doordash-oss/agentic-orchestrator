@@ -304,7 +304,7 @@ func (o *Orchestrator) ExecuteRecovery(
 				claims = append(claims, claim)
 			}
 		}
-		_, started, err := o.startPhase(fid, phase)
+		_, started, err := o.startPhaseGuarded(fid, phase)
 		if err != nil {
 			if relErr := releaseResumeClaims(claims, time.Now()); relErr != nil {
 				relaunchErrs = append(relaunchErrs, fmt.Errorf("releasing resume claims for %s: %w", fid, relErr))

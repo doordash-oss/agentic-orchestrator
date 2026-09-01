@@ -78,8 +78,9 @@ type BoundedHelperConfig struct {
 	ContractPhase feature.Phase
 	ContractRole  Role
 	ParentSpanCtx observe.SpanContext
-	// PHASE2(resume-helper-config): feature resume fields retained alongside
-	// main's PhaseCompleteDir→CompletionDir rename; both paths stay live.
+	// Child-resume fields pair with the completion-receipt commit path: a
+	// bounded helper can resume a child session and still commit its outcome
+	// receipt through CompletionDir.
 	SystemPromptHasUsefulResources bool
 	ResumeFeature                  *feature.Feature
 	ResumeParent                   ResumeParentContext
@@ -156,24 +157,23 @@ func (pr *PhaseRunner) RunBoundedHelper(ctx context.Context, cfg BoundedHelperCo
 	}
 
 	cmd, env, sessOpts, err := pr.BuildSession(BuildSessionOpts{
-		Model:                          cfg.Model,
-		Prompt:                         cfg.Prompt,
-		ResumeSessionID:                resumeLaunch.resumeSessionID,
-		SystemPrompt:                   cfg.SystemPrompt,
-		DisallowedTools:                boundedHelperDisallowedTools,
-		AdditionalDirs:                 cfg.AdditionalDirs,
-		WritableRoots:                  cfg.WritableRoots,
-		PIDDir:                         pidDir,
-		PermHandler:                    cfg.PermHandler,
-		RepoName:                       cfg.RepoName,
-		WorkDir:                        cfg.WorkDir,
-		LogPath:                        cfg.LogPath,
-		EffortLevel:                    boundedHelperEffortLevel(cfg),
-		AgentNames:                     []string{},
-		Phase:                          cfg.Phase,
-		// PHASE2(marker-path-removal): feature's MarkerPath wiring dropped —
-		// main deleted the BuildSessionOpts field; CompletionProtocol replaces
-		// the phase_complete marker handshake.
+		Model:           cfg.Model,
+		Prompt:          cfg.Prompt,
+		ResumeSessionID: resumeLaunch.resumeSessionID,
+		SystemPrompt:    cfg.SystemPrompt,
+		DisallowedTools: boundedHelperDisallowedTools,
+		AdditionalDirs:  cfg.AdditionalDirs,
+		WritableRoots:   cfg.WritableRoots,
+		PIDDir:          pidDir,
+		PermHandler:     cfg.PermHandler,
+		RepoName:        cfg.RepoName,
+		WorkDir:         cfg.WorkDir,
+		LogPath:         cfg.LogPath,
+		EffortLevel:     boundedHelperEffortLevel(cfg),
+		AgentNames:      []string{},
+		Phase:           cfg.Phase,
+		// The completion protocol replaces the former phase_complete marker
+		// handshake and is armed exactly when a receipt target is configured.
 		CompletionProtocol:             cfg.CompletionDir != "",
 		SystemPromptHasUsefulResources: cfg.SystemPromptHasUsefulResources,
 	})
@@ -255,10 +255,7 @@ type boundedHelperRunConfig struct {
 	contractPhase feature.Phase
 	contractRole  Role
 	parentSpanCtx observe.SpanContext
-	// PHASE2(finish-or-violate-nudge): feature's per-model nudge arming
-	// (finishOrViolateNudge) dropped — ports.SessionOpts.SupportsFinishOrViolateNudge
-	// was removed by main's completion-protocol redesign; WaitForPhaseOutcome and
-	// the bounded-helper statusCh arm now own nudging.
+	// Nudging is owned by WaitForPhaseOutcome and the statusCh arm below.
 	resumeCoordinator *ResumeCoordinator
 	resumeClaim       *ResumeClaim
 	resumed           bool
@@ -418,8 +415,8 @@ func (pr *PhaseRunner) runBoundedHelperSessionOnce(ctx context.Context, cfg boun
 				return result, fmt.Errorf("marking bounded helper resume record completed: %w", persistErr), false
 			}
 		}
-		// PHASE2(bounded-helper-completion): feature resume-completion bookkeeping
-		// kept alongside main's commit-violation restore path below.
+		// Resume-completion bookkeeping above pairs with the commit-violation
+		// restore path below.
 		if err != nil && len(pendingCommitViolations) > 0 &&
 			isMissingOutcomeViolationError(err) {
 			result.Status = BoundedHelperStatusProtocolViolation
@@ -554,10 +551,6 @@ func (pr *PhaseRunner) emitChildResume(cfg boundedHelperRunConfig) {
 		ResumeCount: record.ResumeCount,
 	})
 }
-
-// PHASE2(turn-classification): feature's boundedHelperTurnClass dropped —
-// unreferenced after main replaced it with boundedHelperTurnDisposition, and
-// only its opening lines survived the conflict so it cannot be reconstructed.
 
 // boundedHelperMissingOutcomeReason is the generic no-outcome violation. It
 // also marks the state a correction nudge leaves behind when the session dies

@@ -67,10 +67,10 @@ const (
 // allowlist (desktop/src/shared/ipc.ts); a desktop change there must be
 // mirrored here.
 var allowedUploadImageExtensions = map[string]bool{
-	"png": true,
-	"jpg": true,
+	"png":  true,
+	"jpg":  true,
 	"jpeg": true,
-	"gif": true,
+	"gif":  true,
 	"webp": true,
 }
 

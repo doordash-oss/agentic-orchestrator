@@ -73,9 +73,8 @@ func ActiveImplementDir(stateDir string, f *feature.Feature) string {
 		return ""
 	}
 	runDir := ActiveRunDir(stateDir, f)
-	// PHASE2(path prefixes): main deleted the cycle/refactor subsystems, so
-	// CyclePrefix/RefactorPrefix no longer exist; both are treated as empty
-	// (their non-empty values only applied to deleted feature kinds).
+	// No cycle/refactor path prefix applies: those subsystems were deleted, and
+	// their non-empty values only ever applied to the deleted feature kinds.
 	base := runDir
 	if f.CurrentRoadmapPhase > 0 {
 		return filepath.Join(base, fmt.Sprintf("phase-%02d", f.CurrentRoadmapPhase), "implement")

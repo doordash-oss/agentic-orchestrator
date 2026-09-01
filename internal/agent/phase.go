@@ -340,9 +340,9 @@ func (pr *PhaseRunner) runInteractivePhase(f *feature.Feature, cfg interactivePh
 		EffortLevel:                    effortLevel,
 		Phase:                          cfg.Phase,
 		SystemPromptHasUsefulResources: true,
-		// PHASE2(marker-path-removal): feature's MarkerPath wiring dropped —
-		// main deleted the BuildSessionOpts field; CompletionProtocol replaces it.
-		CompletionProtocol:             true,
+		// The completion protocol replaces the former phase_complete marker
+		// handshake for single-shot sessions.
+		CompletionProtocol: true,
 	}
 	freshBuildOpts := buildOpts
 	pendingResume := resumeCoordinator.Snapshot()
@@ -377,7 +377,7 @@ func (pr *PhaseRunner) runInteractivePhase(f *feature.Feature, cfg interactivePh
 		now := time.Now()
 		if err := resumeCoordinator.Initialize(ResumeRecord{
 			Provider:              sessOpts.ProviderName,
-			ResolvedModel:         sessOpts.ResolvedModel,
+			ResolvedModel:         sessOpts.Model,
 			PhaseKey:              ResumePhaseKey(f),
 			RunNumber:             activeRunNumber(f),
 			OrchestratorSessionID: sessionID,
@@ -481,7 +481,7 @@ func singleShotResumeContext(phase feature.Phase) string {
 		artifact = "questions.md and any qa-answers.md"
 	}
 	return fmt.Sprintf(
-		"You were interrupted while producing the %s phase artifact contract (%s). Reconcile any partial artifacts already present in this directory, complete the contract, and write the completion marker required by your instructions.",
+		"You were interrupted while producing the %s phase artifact contract (%s). Reconcile any partial artifacts already present in this directory, complete the contract, run the artifact preflight, and emit the structured root outcome required by your instructions.",
 		phase.String(),
 		artifact,
 	)
@@ -525,9 +525,9 @@ func (pr *PhaseRunner) singleShotResume(sessionID string) *singleShotResumeLaunc
 // for the session's phase directory.
 func (pr *PhaseRunner) SingleShotPhaseComplete(sessionID string) bool {
 	launch := pr.singleShotResume(sessionID)
-	// PHASE2(single-shot-completion): feature's HasPhaseComplete marker check
-	// rewired onto main's completion receipts (role-agnostic receipt presence;
-	// no role is recoverable from the launch record).
+	// Completion is decided by receipt presence rather than a marker file; the
+	// check is role-agnostic because no role is recoverable from the launch
+	// record.
 	if launch == nil {
 		return false
 	}
@@ -634,7 +634,7 @@ func (pr *PhaseRunner) DispatchSingleShotContinuation(previousSessionID, resumeI
 		now := time.Now()
 		if err := coordinator.Initialize(ResumeRecord{
 			Provider:              sessOpts.ProviderName,
-			ResolvedModel:         sessOpts.ResolvedModel,
+			ResolvedModel:         sessOpts.Model,
 			PhaseKey:              ResumePhaseKey(launch.feature),
 			RunNumber:             activeRunNumber(launch.feature),
 			OrchestratorSessionID: sessionID,
@@ -676,7 +676,7 @@ func (pr *PhaseRunner) DispatchSingleShotContinuation(previousSessionID, resumeI
 		launch.phase.String(),
 		sessionID,
 		sessOpts.ProviderName,
-		sessOpts.ResolvedModel,
+		sessOpts.Model,
 		launch.repoName,
 		string(sessOpts.EffectiveEffort),
 		string(sessOpts.EffortSource),
@@ -1101,7 +1101,7 @@ func (pr *PhaseRunner) runKBSession(f *feature.Feature, repo feature.FeatureRepo
 		now := time.Now()
 		if err := resumeCoordinator.Initialize(ResumeRecord{
 			Provider:              sessOpts.ProviderName,
-			ResolvedModel:         sessOpts.ResolvedModel,
+			ResolvedModel:         sessOpts.Model,
 			PhaseKey:              feature.PhaseKnowledgeBase.DirName(),
 			ChildKey:              repo.Name,
 			RunNumber:             activeRunNumber(f),
@@ -1454,10 +1454,6 @@ func (pr *PhaseRunner) RunImplementation(f *feature.Feature, planPath string, kb
 	return resultCh, nil
 }
 
-// PHASE2(cycle-final-review): feature's RunFeatureCycleFinalReview dropped —
-// main deleted the post-publish cycle subsystem, and the function body
-// references (RunFeatureCycleFinalReviewLoop, pr.finishOrViolateNudgeForModel)
-// no longer exist anywhere in the merged tree, so it cannot compile.
 // RunMultiRepoImplementation starts the unified phase-implement loop for a
 // feature. Returns a channel that receives the aggregate result.
 //
@@ -1761,9 +1757,9 @@ func installAutoReviewObserver(handler ports.PermissionHandler, observer *observ
 // within the feature's active run. When in a roadmap phase, uses phase-scoped
 // directories.
 func (pr *PhaseRunner) resolveImplementArtifactDir(f *feature.Feature) string {
-	// PHASE2(implement-artifact-dir): main dropped cycle/refactor prefix scoping
-	// here; feature delegates to ActiveImplementDir (artifacts.go), which still
-	// honors CyclePrefix/RefactorPrefix — both behaviors retained via the helper.
+	// Artifact-dir resolution delegates to ActiveImplementDir so this path and
+	// the read model agree; the deleted cycle/refactor prefixes are treated as
+	// empty there, matching main's unscoped behavior.
 	return ActiveImplementDir(pr.StateDir, f)
 }
 
@@ -2115,11 +2111,7 @@ func (pr *PhaseRunner) BuildSession(opts BuildSessionOpts) (cmd []string, env []
 		RepoName:            opts.RepoName,
 		LogPath:             opts.LogPath,
 		ProviderName:        prov.Name(),
-		// PHASE2(session-model-field): ports.SessionOpts gained both feature's
-		// ResolvedModel and main's Model in its own merge; stamp both until the
-		// field set is deduped.
-		ResolvedModel:      bareModel,
-		Model:              bareModel,
+		Model:               bareModel,
 		Protocol:            protocol,
 		DebugSystemPrompt:   opts.SystemPrompt,
 		TurnMode:            opts.TurnMode,

@@ -888,7 +888,7 @@ func TestRunInteractivePhaseInitializesResumeRecordAndCapturesProviderInit(t *te
 				SessionManager: sm,
 				StateDir:       stateDir,
 				BuildSessionFn: func(BuildSessionOpts) ([]string, []string, *session.SessionOpts, error) {
-					return []string{"true"}, nil, &session.SessionOpts{ProviderName: "codex", ResolvedModel: "model", SupportsSessionResume: true}, nil
+					return []string{"true"}, nil, &session.SessionOpts{ProviderName: "codex", Model: "model", SupportsSessionResume: true}, nil
 				},
 			}
 
@@ -932,7 +932,7 @@ func TestRunKnowledgeBaseForRepoInitializesResumeRecordAndCapturesProviderInit(t
 		BuildSessionFn: func(BuildSessionOpts) ([]string, []string, *session.SessionOpts, error) {
 			return []string{"true"}, nil, &session.SessionOpts{
 				ProviderName:          "codex",
-				ResolvedModel:         "model",
+				Model:                 "model",
 				SupportsSessionResume: true,
 			}, nil
 		},
@@ -1434,7 +1434,7 @@ func TestRunKnowledgeBaseForRepo_ResumesPendingProviderSession(t *testing.T) {
 			return command, nil, &session.SessionOpts{
 				PIDDir:                opts.PIDDir,
 				ProviderName:          provider.name,
-				ResolvedModel:         provider.model,
+				Model:                 provider.model,
 				RepoName:              opts.RepoName,
 				SupportsSessionResume: true,
 			}, nil

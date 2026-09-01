@@ -318,8 +318,8 @@ func TestWriteResumeSidecarAtomicallyReplacesAndCleansTempFile(t *testing.T) {
 func TestCrashResumePromptTemplateMatchesLegacyContent(t *testing.T) {
 	want := "Your previous process terminated unexpectedly mid-turn; this session resumes that conversation. " +
 		"Reassess the repository and your artifacts: if the iteration's work is already complete, write any missing " +
-		"required artifacts and the completion marker per your instructions; otherwise update progress and continue " +
-		"from where you left off."
+		"required artifacts, run the artifact preflight, and emit the structured root outcome; otherwise update " +
+		"progress and continue from where you left off."
 	if got := renderResumePrompt(implementResumeContext); got != want {
 		t.Errorf("renderResumePrompt() = %q, want %q", got, want)
 	}

@@ -231,8 +231,7 @@ func (h *apiHandler) featureDetailDTO(f *feature.Feature) (FeatureDetail, error)
 	for _, item := range f.VerificationItems {
 		detail.VerificationItems = append(detail.VerificationItems, VerificationItem{Name: item.Name, State: item.State})
 	}
-	// PHASE2(cycle read-model): main removed FeatureDetail.Cycle and
-	// activeCycleDTO; the assignment is dropped against main's API.
+	// FeatureDetail carries no cycle field: the cycle subsystem is deleted.
 	detail.Actions = h.actionCatalogDTOs(f, detail.ActiveChild != nil)
 	// Destructive actions carry a server-authoritative impact preview so
 	// confirmations enumerate the exact relationship and resources at stake.
@@ -318,8 +317,8 @@ func activeImplementIterationDirForRead(runDir string, f *feature.Feature) strin
 	if f == nil {
 		return ""
 	}
-	// PHASE2(path prefixes): main deleted the cycle/refactor subsystems, so
-	// CyclePrefix/RefactorPrefix no longer exist; both are treated as empty.
+	// No cycle/refactor path prefix applies: those subsystems were deleted and
+	// their prefixes are treated as empty.
 	var implementDir string
 	if f.CurrentRoadmapPhase > 0 {
 		implementDir = filepath.Join(runDir, fmt.Sprintf("phase-%02d", f.CurrentRoadmapPhase), "implement")
@@ -695,9 +694,8 @@ func actionCatalogDTOs(f *feature.Feature) []Action {
 	return actionCatalogDTOsWithChildGuard(f, false)
 }
 
-// PHASE2(action-catalog union): the feature's resume-eligibility gating and
-// main's active-child guard both apply; this method keeps the feature's
-// failed-feature resume path and now carries main's child-guard flag.
+// Both guards apply: main's active-child flag, plus the resume-eligibility
+// gating that decides whether a failed feature is offered resume.
 func (h *apiHandler) actionCatalogDTOs(f *feature.Feature, hasActiveChild bool) []Action {
 	if f == nil || f.Status != feature.StatusFailed {
 		return actionCatalogDTOsWithChildGuard(f, hasActiveChild)
@@ -838,10 +836,9 @@ var disabledParentHasActiveChild = ActionDisabledReason{
 	Message: "parent mutations are locked while a child is active; only paired config editing and cascade delete are available",
 }
 
-// PHASE2(action-catalog union): this 2-arg entry point preserves main's
-// callers; the union body below carries both main's active-child guard and
-// the feature's resume-eligibility gating (subsumes the feature's
-// actionCatalogDTOsWithResumeEligibility).
+// Entry point for callers without resume-eligibility context; the guards
+// body below carries the active-child guard and optional resume-eligibility
+// gating.
 func actionCatalogDTOsWithChildGuard(f *feature.Feature, hasActiveChild bool) []Action {
 	return actionCatalogDTOsWithGuards(f, hasActiveChild, nil)
 }
@@ -890,9 +887,8 @@ func actionCatalogDTOsWithGuards(f *feature.Feature, hasActiveChild bool, resume
 	canResume := status == feature.StatusInterrupted ||
 		status == feature.StatusNeedUserInput ||
 		f.PendingNeedUserInputPath != ""
-	// PHASE2(resume gating): main dropped the base PendingUserInputCycles()
-	// clause (feature.PendingUserInputCycles no longer exists on main); the
-	// feature's resume-eligibility gating below is retained.
+	// Paused non-failed features resume on paused-session/input-gate presence;
+	// failed features are gated by resume eligibility below.
 	resumeDisabledReason := ActionDisabledReason{
 		Code:    "not_paused",
 		Message: "feature has no paused session or input gate",

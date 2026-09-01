@@ -219,3 +219,18 @@ func RemoveCompletionReceipt(dir string) error {
 	}
 	return fmt.Errorf("removing completion receipt: %w", err)
 }
+
+// republishCompletionReceipt copies a child session's committed receipt into
+// its parent iteration directory. The parent-level receipt records that the
+// iteration's child unit completed commit validation; consumers read it with
+// ReadCompletionReceipt without re-running preflight against the parent dir.
+func republishCompletionReceipt(childDir, parentDir string) error {
+	receipt, err := ReadCompletionReceipt(childDir)
+	if err != nil {
+		return fmt.Errorf("reading completion receipt from %s: %w", childDir, err)
+	}
+	if err := writeCompletionReceipt(filepath.Join(parentDir, PhaseCompleteFile), receipt); err != nil {
+		return fmt.Errorf("republishing completion receipt into %s: %w", parentDir, err)
+	}
+	return nil
+}

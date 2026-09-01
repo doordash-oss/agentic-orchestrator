@@ -697,7 +697,7 @@ func TestExecuteRecovery_ClaimsKnowledgeBaseRepositorySessions(t *testing.T) {
 			PIDDir:                opts.PIDDir,
 			InitialPrompt:         opts.Prompt,
 			ProviderName:          "codex",
-			ResolvedModel:         "model-a",
+			Model:                 "model-a",
 			RepoName:              opts.RepoName,
 			SupportsSessionResume: true,
 		}, nil
@@ -1440,5 +1440,85 @@ func TestExecuteRecovery_Resume_NoCycle_FallsThroughToPhase(t *testing.T) {
 	}
 	if spy.numCalls() != 1 {
 		t.Errorf("runMultiRepoImplFn calls = %d, want 1 (phase resume should dispatch)", spy.numCalls())
+	}
+}
+
+func TestExecuteRecovery_ResumeRefusesOpenNeedUserInputGate(t *testing.T) {
+	planPath := writeTempFile(t, "plan.md", "# plan")
+	f := &feature.Feature{
+		ID:                       "feat-gated",
+		CurrentPhase:             feature.PhaseImplement,
+		Status:                   feature.StatusImplementing,
+		Repos:                    []feature.FeatureRepo{{Name: repoName, Path: repoAPath}},
+		Artifacts:                map[string]string{"plan": planPath},
+		PendingNeedUserInputPath: filepath.Join(t.TempDir(), "need-input.md"),
+	}
+	writeExecOrderNextToPlan(t, planPath, f.Repos)
+	items := fakeRecoveryItems(itemSpec{
+		FeatureID:    "feat-gated",
+		CurrentPhase: feature.PhaseImplement,
+		Status:       feature.StatusImplementing,
+	})
+	items[0].Feature = f
+	actions := map[string]ports.RecoveryAction{
+		ports.RecoveryActionKey("feat-gated", ""): ports.RecoveryResume,
+	}
+
+	spy := &fakeRunMultiRepoImpl{}
+	o := orchestrator.New(orchestrator.Deps{
+		Recovery:  &fakeRecoveryOp{},
+		Lifecycle: lifecycleForFeature(f),
+		Store:     newFeatureStore(f),
+	}, orchestrator.Hooks{})
+	o.SetRunMultiRepoImplFn(spy.Fn())
+
+	err := o.ExecuteRecovery(context.Background(), items, actions)
+	if !errors.Is(err, feature.ErrNeedUserInputGateOpen) {
+		t.Fatalf("ExecuteRecovery() error = %v, want ErrNeedUserInputGateOpen", err)
+	}
+	if spy.numCalls() != 0 {
+		t.Fatalf("runMultiRepoImplFn calls = %d, want 0 (input gate must block relaunch)", spy.numCalls())
+	}
+}
+
+func TestExecuteRecovery_ResumeEmitsFeatureStarted(t *testing.T) {
+	planPath := writeTempFile(t, "plan.md", "# plan")
+	f := &feature.Feature{
+		ID:           "feat-started",
+		CurrentPhase: feature.PhaseImplement,
+		Status:       feature.StatusImplementing,
+		Repos:        []feature.FeatureRepo{{Name: repoName, Path: repoAPath}},
+		Artifacts:    map[string]string{"plan": planPath},
+	}
+	writeExecOrderNextToPlan(t, planPath, f.Repos)
+	items := fakeRecoveryItems(itemSpec{
+		FeatureID:    "feat-started",
+		CurrentPhase: feature.PhaseImplement,
+		Status:       feature.StatusImplementing,
+	})
+	items[0].Feature = f
+	actions := map[string]ports.RecoveryAction{
+		ports.RecoveryActionKey("feat-started", ""): ports.RecoveryResume,
+	}
+
+	spy := &fakeRunMultiRepoImpl{}
+	o := orchestrator.New(orchestrator.Deps{
+		Recovery:  &fakeRecoveryOp{},
+		Lifecycle: lifecycleForFeature(f),
+		Store:     newFeatureStore(f),
+	}, orchestrator.Hooks{})
+	o.SetRunMultiRepoImplFn(spy.Fn())
+
+	if err := o.ExecuteRecovery(context.Background(), items, actions); err != nil {
+		t.Fatalf("ExecuteRecovery: %v", err)
+	}
+	started := 0
+	for _, ev := range drainEvents(o) {
+		if ev.Type == ports.FeatureStarted && ev.FeatureID == "feat-started" {
+			started++
+		}
+	}
+	if started != 1 {
+		t.Fatalf("FeatureStarted events = %d, want 1", started)
 	}
 }

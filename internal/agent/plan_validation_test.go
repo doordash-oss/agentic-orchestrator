@@ -1508,7 +1508,7 @@ func TestRunPhasePlanningLoopRetriesFailedAttemptWithFreshSessionID(t *testing.T
 			MaxAttempts:  3,
 			BuildSession: func(opts BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error) {
 				gotBuildOpts = opts
-				return []string{"echo", "unused"}, nil, &ports.SessionOpts{PIDDir: opts.PIDDir, ProviderName: "codex", ResolvedModel: "planner"}, nil
+				return []string{"echo", "unused"}, nil, &ports.SessionOpts{PIDDir: opts.PIDDir, ProviderName: "codex", Model: "planner"}, nil
 			},
 			SessionStartFunc: func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*ports.SessionOpts) (ports.SessionHandle, error) {
 				gotSessionID = id
@@ -1645,7 +1645,7 @@ func TestRunPhasePlanningLoopAutoResumesKilledAttemptInPlace(t *testing.T) {
 				builds = append(builds, opts)
 				return []string{"echo", "unused"}, nil, &ports.SessionOpts{
 					ProviderName:          "codex",
-					ResolvedModel:         "planner",
+					Model:                 "planner",
 					SupportsSessionResume: true,
 				}, nil
 			},
@@ -1666,14 +1666,12 @@ func TestRunPhasePlanningLoopAutoResumesKilledAttemptInPlace(t *testing.T) {
 						model:                     "planner",
 					}, nil
 				}
-				attemptDir := filepath.Join(phasePlanDir, "attempt-01")
 				if err := os.WriteFile(filepath.Join(phasePlanDir, "plan.md"), []byte(validPhasePlanText()), 0o644); err != nil {
 					t.Fatal(err)
 				}
-				if err := os.WriteFile(filepath.Join(attemptDir, PhaseCompleteFile), nil, 0o644); err != nil {
-					t.Fatal(err)
-				}
 				sess := newUtilityTestSession()
+				sess.setRootIntent(validSuccessCompletionIntent())
+				sess.result = &llm.ResultMessage{Subtype: testResultSuccessValue, StopReason: "end_turn"}
 				sess.statusCh <- agentStatusSuccess
 				return sess, nil
 			},
@@ -1724,7 +1722,7 @@ func TestRunPhasePlanningLoopAutoResumeStopsAfterThreeIdleContinuations(t *testi
 			Feature: f, FeatureStore: store, StateDir: tmpDir, WorkDir: workDir, MaxAttempts: 1,
 			BuildSession: func(opts BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error) {
 				return []string{"echo", "unused"}, nil, &ports.SessionOpts{
-					ProviderName: "codex", ResolvedModel: "planner", SupportsSessionResume: true,
+					ProviderName: "codex", Model: "planner", SupportsSessionResume: true,
 				}, nil
 			},
 			AutoResumeWait: func(wait time.Duration) bool {
@@ -1789,7 +1787,7 @@ func TestRunRoadmapPlanningLoopAutoResumesKilledAttemptInPlace(t *testing.T) {
 			builds = append(builds, opts)
 			return []string{"echo", "unused"}, nil, &ports.SessionOpts{
 				ProviderName:          "codex",
-				ResolvedModel:         "planner",
+				Model:                 "planner",
 				SupportsSessionResume: true,
 			}, nil
 		},
@@ -1804,14 +1802,12 @@ func TestRunRoadmapPlanningLoopAutoResumesKilledAttemptInPlace(t *testing.T) {
 					model:                     "planner",
 				}, nil
 			}
-			attemptDir := filepath.Join(roadmapDir, "attempt-01")
 			if err := os.WriteFile(filepath.Join(roadmapDir, "roadmap.md"), []byte(validRoadmapText()), 0o644); err != nil {
 				t.Fatal(err)
 			}
-			if err := os.WriteFile(filepath.Join(attemptDir, PhaseCompleteFile), nil, 0o644); err != nil {
-				t.Fatal(err)
-			}
 			sess := newUtilityTestSession()
+			sess.setRootIntent(validSuccessCompletionIntent())
+			sess.result = &llm.ResultMessage{Subtype: testResultSuccessValue, StopReason: "end_turn"}
 			sess.statusCh <- agentStatusSuccess
 			return sess, nil
 		},
@@ -1863,7 +1859,7 @@ func TestRunPhasePlanningLoopResumeRejectionFallsBackFreshInSameAttempt(t *testi
 			Feature: f, FeatureStore: store, StateDir: tmpDir, WorkDir: workDir, MaxAttempts: 1,
 			BuildSession: func(opts BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error) {
 				builds = append(builds, opts)
-				return []string{"echo", "unused"}, nil, &ports.SessionOpts{ProviderName: "codex", ResolvedModel: "planner"}, nil
+				return []string{"echo", "unused"}, nil, &ports.SessionOpts{ProviderName: "codex", Model: "planner"}, nil
 			},
 			SessionStartFunc: func(_ string, _ string, _ feature.Phase, _ []string, _ string, _ []string, _ ...*ports.SessionOpts) (ports.SessionHandle, error) {
 				starts++
@@ -1873,10 +1869,9 @@ func TestRunPhasePlanningLoopResumeRejectionFallsBackFreshInSameAttempt(t *testi
 				if err := os.WriteFile(filepath.Join(phasePlanDir, "plan.md"), []byte(validPhasePlanText()), 0o644); err != nil {
 					t.Fatal(err)
 				}
-				if err := os.WriteFile(filepath.Join(attemptDir, PhaseCompleteFile), nil, 0o644); err != nil {
-					t.Fatal(err)
-				}
 				sess := newUtilityTestSession()
+				sess.setRootIntent(validSuccessCompletionIntent())
+				sess.result = &llm.ResultMessage{Subtype: testResultSuccessValue, StopReason: "end_turn"}
 				sess.statusCh <- agentStatusSuccess
 				return sess, nil
 			},

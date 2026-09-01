@@ -744,8 +744,8 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) []ll
 	if su.SessionID != "" && rootSessionID != "" && su.SessionID != rootSessionID {
 		return p.childSessionUpdate(su)
 	}
-	// PHASE2(protocol errors): feature's error→FailureMetadata mapping retained
-	// alongside main's child-session routing.
+	// Terminal provider errors map onto FailureMetadata so retry classification
+	// sees structured failure data; child-session routing happens above.
 	if su.Update.Error != nil {
 		msg, ok := p.terminalError(su.Update.Error.Data.Message)
 		if !ok {

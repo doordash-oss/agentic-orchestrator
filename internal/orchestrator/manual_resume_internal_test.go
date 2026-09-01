@@ -168,7 +168,7 @@ func TestResumeFeatureClaimsInterruptedSequentialProviderSession(t *testing.T) {
 			return []string{"true"}, nil, &session.SessionOpts{
 				PIDDir:                opts.PIDDir,
 				ProviderName:          "codex",
-				ResolvedModel:         "model-a",
+				Model:                 "model-a",
 				SupportsSessionResume: true,
 			}, nil
 		},
@@ -539,7 +539,7 @@ func TestResumeFeatureClaimsInterruptedKnowledgeBaseRepositories(t *testing.T) {
 			return []string{"true"}, nil, &session.SessionOpts{
 				PIDDir:                opts.PIDDir,
 				ProviderName:          "codex",
-				ResolvedModel:         "model-a",
+				Model:                 "model-a",
 				RepoName:              opts.RepoName,
 				SupportsSessionResume: true,
 			}, nil
@@ -884,6 +884,7 @@ func TestResumeFeatureDispatchesFailedFinalReviewFromEligibleChild(t *testing.T)
 		Store:       store,
 		PhaseRunner: &agent.PhaseRunner{StateDir: stateDir, Registry: registry},
 	}, Hooks{})
+	t.Cleanup(o.WaitForCycles)
 	dispatches := 0
 	o.SetRunMultiRepoFinalReviewFn(func(*feature.Feature, ...agent.KBInfo) (chan *agent.OrchestratorResult, error) {
 		dispatches++
@@ -950,10 +951,13 @@ func TestResumeFeatureDispatchesFailedImplementationReviewFromEligibleChild(t *t
 		Lifecycle: manager, Store: store,
 		PhaseRunner: &agent.PhaseRunner{StateDir: stateDir, Registry: registry},
 	}, Hooks{})
+	t.Cleanup(o.WaitForCycles)
 	dispatches := 0
 	o.SetRunMultiRepoImplFn(func(*feature.Feature, string, ...agent.KBInfo) (chan *agent.OrchestratorResult, error) {
 		dispatches++
-		return make(chan *agent.OrchestratorResult, 1), nil
+		ch := make(chan *agent.OrchestratorResult, 1)
+		close(ch)
+		return ch, nil
 	})
 
 	if err := o.ResumeFeature(f.ID); err != nil {
@@ -968,5 +972,61 @@ func TestResumeFeatureDispatchesFailedImplementationReviewFromEligibleChild(t *t
 	}
 	if got.CurrentIteration != 2 || got.ActiveTimingKey != "phase-1-impl" {
 		t.Fatalf("resume position = iteration %d timing %q, want preserved implementation artifacts", got.CurrentIteration, got.ActiveTimingKey)
+	}
+}
+
+func TestResumeFeatureFailedSequentialPhaseRefusesOpenNeedUserInputGate(t *testing.T) {
+	stateDir := t.TempDir()
+	store := feature.NewStore(stateDir)
+	manager := feature.NewManager(store, config.NewDefault())
+	publishable := false
+	f := &feature.Feature{
+		ID:              "manual-resume-input-gate",
+		Name:            "Manual resume input gate",
+		Slug:            "manual-resume-input-gate",
+		Status:          feature.StatusFailed,
+		CurrentPhase:    feature.PhaseFinalReview,
+		ReviewIteration: 1,
+		ActiveRun:       1,
+		RunCount:        1,
+		SchemaVersion:   feature.SchemaVersionCurrent,
+		Pipeline:        feature.PipelineLarge,
+		Models: config.ModelConfig{
+			Implementation: "codex:model-a",
+			Review:         "codex:model-a",
+		},
+		Repos: []feature.FeatureRepo{{Name: "repo", Path: stateDir, Publishable: &publishable}},
+		RepoStates: map[string]*feature.RepoState{
+			"repo": {Touched: true, LastError: "review failed"},
+		},
+		LastError:                "review failed",
+		FailureType:              feature.FailureInfrastructure,
+		PendingNeedUserInputPath: filepath.Join(stateDir, "need-input.md"),
+	}
+	if err := store.Save(f); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	registry := llm.NewRegistry()
+	registry.Register(&codex.Provider{})
+	o := New(Deps{
+		Lifecycle:   manager,
+		Store:       store,
+		PhaseRunner: &agent.PhaseRunner{StateDir: stateDir, Registry: registry},
+	}, Hooks{})
+	t.Cleanup(o.WaitForCycles)
+	dispatches := 0
+	o.SetRunMultiRepoFinalReviewFn(func(*feature.Feature, ...agent.KBInfo) (chan *agent.OrchestratorResult, error) {
+		dispatches++
+		ch := make(chan *agent.OrchestratorResult, 1)
+		ch <- &agent.OrchestratorResult{FinalStatus: "all_passed"}
+		return ch, nil
+	})
+
+	err := o.ResumeFeature(f.ID)
+	if !errors.Is(err, feature.ErrNeedUserInputGateOpen) {
+		t.Fatalf("ResumeFeature() error = %v, want ErrNeedUserInputGateOpen", err)
+	}
+	if dispatches != 0 {
+		t.Fatalf("final-review dispatches = %d, want 0 (input gate must block dispatch)", dispatches)
 	}
 }

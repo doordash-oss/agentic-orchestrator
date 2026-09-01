@@ -125,8 +125,8 @@ func TestReconcileLaterFetchRetainsSelectsNewPrunesGone(t *testing.T) {
 		t.Fatalf("revision = %d, want %d", draft.Revision, existing.Revision+1)
 	}
 	want := map[StableReviewFeedbackRef]bool{
-		"api:review:11":     false, // retained choice
-		"api:review:13":     true,  // newly observed selects on
+		"api:review:11":      false, // retained choice
+		"api:review:13":      true,  // newly observed selects on
 		"web:review_body:21": true,
 	}
 	if len(draft.Items) != len(want) {

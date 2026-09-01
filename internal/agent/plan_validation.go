@@ -251,7 +251,7 @@ func initializeFreshPlanAttemptResume(coordinator *ResumeCoordinator, opts *port
 	}
 	if opts != nil {
 		record.Provider = opts.ProviderName
-		record.ResolvedModel = opts.ResolvedModel
+		record.ResolvedModel = opts.Model
 	}
 	return coordinator.Initialize(record)
 }
@@ -359,8 +359,8 @@ func runPlanAttempt(
 			EffortLevel:                    planEffortLevel(cfg),
 			Phase:                          feature.PhasePlan,
 			SystemPromptHasUsefulResources: true,
-			// PHASE2(marker-path-removal): MarkerPath dropped — main deleted the
-			// BuildSessionOpts field; CompletionProtocol replaces it.
+			// The completion protocol replaces the former phase_complete marker
+			// handshake for plan sessions.
 			CompletionProtocol: true,
 		}
 		if resumeLaunch {
@@ -375,9 +375,8 @@ func runPlanAttempt(
 			sessOpts.EffectiveEffort = cfg.EffectiveEffort
 			sessOpts.EffortSource = cfg.EffortSource
 		}
-		// PHASE2(plan-nudge-arming): feature's FinishOrViolateNudge TurnMode
-		// arming dropped — BuildSession sets TurnMode via CompletionProtocol;
-		// main's RunNumber stamping ported in below.
+		// BuildSession arms the completion protocol's turn mode; finish-or-
+		// violate nudging is owned by WaitForPhaseOutcome.
 		WriteDebugPrompts(attemptDir, sessOpts.DebugSystemPrompt, sessionPrompt)
 		sessOpts.PermCacheScope = cfg.RepoName
 		sessOpts.RunNumber = cfg.Feature.ActiveRun
@@ -436,9 +435,8 @@ func runPlanAttempt(
 			sess.SetLogFile(logFile)
 		}
 
-		// PHASE2(plan-outcome-wait): feature's waitForStatusDetailed/ReadyCheck
-		// waiter rewired onto main's WaitForPhaseOutcome commit boundary (the
-		// old waiter and waitForStatusOptions no longer exist anywhere).
+		// Plan sessions wait on the WaitForPhaseOutcome commit boundary so a
+		// completed attempt always validates and commits its outcome receipt.
 		waitResult := WaitForPhaseOutcome(sess, PhaseOutcomeWaitOptions{
 			CommitOutcome: func(intent llm.CompletionIntent) ([]ProtocolViolation, error) {
 				_, _, violations, err := CommitPhaseOutcome(CompletionCommitInput{
@@ -505,8 +503,7 @@ func runPlanAttempt(
 			attempt, maxAttempts, sessionAttempt, plannerSpec, attemptDir, artifactDir, logPath,
 		)
 		if outcome == planOutcomeRetrySession {
-			// PHASE2(plan-retry-interrupt): main's interruptiblePlanRetry check
-			// ported into feature's attempt runner.
+			// Re-check for user interrupts before retrying the session attempt.
 			if result, interrupted := interruptiblePlanRetry(cfg.FeatureStore, cfg.Feature.ID, attempt); interrupted {
 				return planAttemptExecution{outcome: planOutcomeReturn, result: result}, nil
 			}
@@ -871,16 +868,6 @@ type PlanLoopConfig struct {
 	// all child spans (sessions, validation, validators) derive from this parent.
 	// Do not set externally — the loop function manages this.
 	PhaseSpanCtx observe.SpanContext
-
-	// FinishOrViolateNudge arms the finish-or-violate auto-continuation retry
-	// for planner sessions: the session runs in interactive turn mode and, on a
-	// deliberate end_turn without the completion marker, is nudged to finish
-	// before a protocol violation is recorded. Resolved per-model from the
-	// provider capability, so only capability-positive providers opt in.
-	// PHASE2(plan-nudge-config): main deleted this field; retained because
-	// feature's plan-attempt runner still references it — nothing currently
-	// sets it, so a caller must be wired if nudging is wanted again.
-	FinishOrViolateNudge bool
 
 	// AutoResumeWait overrides transient provider backoff in tests.
 	AutoResumeWait func(time.Duration) bool
@@ -1925,10 +1912,8 @@ roadmapAttemptLoop:
 			if err != nil {
 				return nil, err
 			}
-			// PHASE2(plan-attempt-loop): feature's runPlanAttempt dispatcher
-			// replaces the inline roadmap attempt loop; main's inline variant
-			// dropped (superseded structure) with its API rewires ported into
-			// runPlanAttempt (adjacent edits below).
+			// Attempts execute through the shared runPlanAttempt dispatcher, which owns
+			// session retry, resume, and outcome committing.
 			switch execution.outcome {
 			case planOutcomeReturn:
 				return execution.result, nil
@@ -2205,10 +2190,8 @@ phasePlanAttemptLoop:
 			if err != nil {
 				return nil, err
 			}
-			// PHASE2(plan-attempt-loop): feature's runPlanAttempt dispatcher
-			// replaces the inline phase-plan attempt loop; main's inline variant
-			// dropped (superseded structure) with its API rewires ported into
-			// runPlanAttempt (adjacent edits below).
+			// Attempts execute through the shared runPlanAttempt dispatcher, which owns
+			// session retry, resume, and outcome committing.
 			switch execution.outcome {
 			case planOutcomeReturn:
 				return execution.result, nil
@@ -2594,16 +2577,6 @@ func resolvePlanArtifactPath(store ports.FeatureStore, featureID, artifactDir st
 		}
 	}
 	return bestPath
-}
-
-// HasPhaseComplete reports whether the harness-owned phase_complete receipt
-// exists in dir.
-// PHASE2(completion receipt): the feature resume path treats the presence of
-// this file as phase completion; main's single-shot completion moved receipt
-// authority to commit-time validation.
-func HasPhaseComplete(dir string) bool {
-	_, err := os.Stat(filepath.Join(dir, PhaseCompleteFile))
-	return err == nil
 }
 
 // IsArtifactExcluded returns true if the filename should be excluded from

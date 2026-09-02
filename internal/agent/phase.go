@@ -1183,24 +1183,39 @@ func permHandlerFor(skip bool, cache *permission.Cache, repoName string) ports.P
 }
 
 // decorateHandlerWithAutoReview wraps the fully composed permission handler
-// with the automatic Bash-review decorator when enabled and the handler is the
-// general-phase policy. Disabled sessions get the composed handler unchanged
-// (byte-identical to the pre-feature path). The reviewer is already resolved
-// by the caller, so the enabled flag and reviewer identity are snapshotted as
-// values and a running session is unaffected by later workspace edits or
-// provider/catalog changes.
-func decorateHandlerWithAutoReview(composed, original ports.PermissionHandler, enabled bool, reviewer autoreview.Reviewer, workDir string, writableRoots []string) ports.PermissionHandler {
-	if !enabled {
-		return composed
-	}
+// with the automatic Bash-review decorator when the handler is the
+// general-phase policy. The enabled setting is consulted live on every
+// deferred Bash request, so turning auto-approve on mid-session (for example
+// from a permission prompt) applies to the running session. The reviewer
+// identity stays snapshotted at build time.
+func decorateHandlerWithAutoReview(composed, original ports.PermissionHandler, enabled func() bool, reviewer autoreview.Reviewer, workDir string, writableRoots []string) ports.PermissionHandler {
 	if !permission.IsAutomaticReviewHandler(original) {
 		return composed
 	}
 	return &autoReviewPermissionDecorator{
 		inner:         composed,
+		enabled:       enabled,
 		reviewer:      reviewer,
 		workDir:       workDir,
 		writableRoots: append([]string(nil), writableRoots...),
+	}
+}
+
+// liveAutomaticReviewEnabled resolves the effective automatic-review setting
+// from the feature's current mode and the current workspace default. The
+// feature record is re-read on each call; fallbackMode applies when it cannot
+// be loaded.
+func (pr *PhaseRunner) liveAutomaticReviewEnabled(featureID string, fallbackMode feature.AutomaticReviewMode) func() bool {
+	return func() bool {
+		mode := fallbackMode
+		if pr != nil && pr.FeatureStore != nil && featureID != "" {
+			if f, err := pr.FeatureStore.Load(featureID); err == nil && f != nil {
+				mode = f.AutomaticReviewMode
+			}
+		}
+		globalEnabled := pr != nil && pr.Config != nil && pr.Config.Defaults.AutomaticReviewEnabled
+		enabled, _ := feature.ResolveAutomaticReview(mode, globalEnabled)
+		return enabled
 	}
 }
 
@@ -1211,21 +1226,22 @@ func decorateHandlerWithAutoReview(composed, original ports.PermissionHandler, e
 // retains the original session's reviewer even if the provider/catalog state
 // changed. Otherwise the current workspace defaults are read, the reviewer is
 // resolved, and the full snapshot is returned for the caller to store. The
-// hidden reviewer itself is launched via autoreview.Classify (never
-// BuildSession), so it is never decorated and cannot recurse.
+// enabled flag itself is read live by the decorator. The hidden reviewer is
+// launched via autoreview.Classify (never BuildSession), so it is never
+// decorated and cannot recurse.
 func (pr *PhaseRunner) decorateWithAutoReview(composed, original ports.PermissionHandler, opts *BuildSessionOpts, workDir string, writableRoots []string) (ports.PermissionHandler, ports.AutoReviewSnapshot) {
+	enabledFn := pr.liveAutomaticReviewEnabled(opts.FeatureID, opts.AutomaticReviewMode)
 	if opts.AutoReview.Enabled != nil {
 		reviewer := autoreview.RestoreReviewer(pr.Registry, opts.AutoReview.ReviewerProvider, opts.AutoReview.ReviewerModel)
 		snap := opts.AutoReview
 		if *snap.Enabled && reviewer.Provider == nil && strings.TrimSpace(snap.UnavailableReason) == "" {
 			snap.UnavailableReason = "snapshotted reviewer provider is no longer available"
 		}
-		handler := decorateHandlerWithAutoReview(composed, original, *snap.Enabled, reviewer, workDir, writableRoots)
+		handler := decorateHandlerWithAutoReview(composed, original, enabledFn, reviewer, workDir, writableRoots)
 		installAutoReviewObserver(handler, pr.Observer)
 		return handler, snap
 	}
-	globalEnabled := pr != nil && pr.Config != nil && pr.Config.Defaults.AutomaticReviewEnabled
-	enabled, _ := feature.ResolveAutomaticReview(opts.AutomaticReviewMode, globalEnabled)
+	enabled := enabledFn()
 	model := ""
 	if pr != nil && pr.Config != nil {
 		model = pr.Config.Defaults.Models.AutomaticReview
@@ -1239,7 +1255,7 @@ func (pr *PhaseRunner) decorateWithAutoReview(composed, original ports.Permissio
 		ReviewerModel:     revModel,
 		UnavailableReason: unavailableReason,
 	}
-	handler := decorateHandlerWithAutoReview(composed, original, enabled, reviewer, workDir, writableRoots)
+	handler := decorateHandlerWithAutoReview(composed, original, enabledFn, reviewer, workDir, writableRoots)
 	installAutoReviewObserver(handler, pr.Observer)
 	return handler, snap
 }
@@ -1252,7 +1268,7 @@ func automaticReviewSessionBuildNotices(observer *observe.Observer, snap ports.A
 	if reason == "" {
 		reason = "reviewer resolution failed"
 	}
-	status := "Automatic review enabled but no reviewer available: " + reason
+	status := "Auto-approve commands enabled but no reviewer available: " + reason
 	return []ports.SessionBuildNotice{{
 		Status: status,
 		Emit: func(ctx ports.SessionBuildNoticeContext) {

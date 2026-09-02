@@ -2804,3 +2804,141 @@ func jsonEqual(a, b json.RawMessage) bool {
 	}
 	return reflect.DeepEqual(av, bv)
 }
+
+func TestServerMutationTargetAnswerPermissionAutoApproveScopeEnablesBeforeAnswering(t *testing.T) {
+	newPending := func() *mutationTargetSessionView {
+		return &mutationTargetSessionView{
+			id:        testSessionPermissionID,
+			featureID: testFeaturePermissionID,
+			phase:     feature.PhaseImplement,
+			status:    ports.SessionWaitingPermission,
+			active:    true,
+			pending: []*llm.ControlRequestMessage{{
+				Type:      wireTypeControlRequest,
+				RequestID: testPermRequestID,
+				Request: llm.ControlRequest{
+					Subtype:  wireSubtypeCanUseTool,
+					ToolName: toolNameBash,
+					Input:    json.RawMessage(`{"command":"go test ./cmd/agentico"}`),
+				},
+			}},
+		}
+	}
+
+	t.Run("workspace", func(t *testing.T) {
+		runtimeDir := t.TempDir()
+		configPath := filepath.Join(runtimeDir, "config.yaml")
+		cfg := config.NewDefault()
+		if err := config.Save(configPath, cfg); err != nil {
+			t.Fatalf("Save config error = %v", err)
+		}
+		sess := newPending()
+		sessions := &mutationTargetSessionManager{sessions: []ports.SessionView{sess}}
+		target := serverMutationTarget{
+			orch:       mutationTargetOrchestrator(sessions),
+			sessions:   sessions,
+			cfg:        cfg,
+			configPath: configPath,
+		}
+
+		result, err := target.AnswerPermission(serverruntime.PermissionAnswerRequest{
+			RequestID:        testPermRequestID,
+			SessionID:        testSessionPermissionID,
+			Decision:         "allow_once",
+			AutoApproveScope: serverruntime.AutoApproveScopeWorkspace,
+		})
+		if err != nil {
+			t.Fatalf("AnswerPermission() error = %v", err)
+		}
+		if result.Decision != "allow_once" || len(sess.controlCalls) != 1 || !sess.controlCalls[0].allow {
+			t.Fatalf("AnswerPermission() = %+v, calls %+v; want allow", result, sess.controlCalls)
+		}
+		if !cfg.Defaults.AutomaticReviewEnabled {
+			t.Fatal("in-memory workspace default not enabled")
+		}
+		saved, err := config.Load(configPath)
+		if err != nil {
+			t.Fatalf("Load saved config: %v", err)
+		}
+		if !saved.Defaults.AutomaticReviewEnabled {
+			t.Fatal("saved workspace default not enabled")
+		}
+	})
+
+	t.Run("feature", func(t *testing.T) {
+		runtimeDir := t.TempDir()
+		configPath := filepath.Join(runtimeDir, "config.yaml")
+		cfg := config.NewDefault()
+		cfg.Repos[testRepoAName] = config.RepoConfig{Path: filepath.Join(runtimeDir, testRepoAName)}
+		if err := config.Save(configPath, cfg); err != nil {
+			t.Fatalf("Save config error = %v", err)
+		}
+		store := feature.NewStore(filepath.Join(runtimeDir, "features"))
+		manager := feature.NewManager(store, cfg)
+		f, err := manager.Create("auto-approve via prompt", "desc", []string{testRepoAName}, config.ModelConfig{Implementation: testModelClaudeSonnet}, "", "", nil, feature.CreateOptions{
+			Pipeline: feature.PipelineMedium,
+		})
+		if err != nil {
+			t.Fatalf("Create feature: %v", err)
+		}
+		if err := store.Modify(f.ID, func(f *feature.Feature) error {
+			f.Inquireness = feature.InquirenessHigh
+			return nil
+		}); err != nil {
+			t.Fatalf("set inquireness: %v", err)
+		}
+		sess := newPending()
+		sess.featureID = f.ID
+		sessions := &mutationTargetSessionManager{sessions: []ports.SessionView{sess}}
+		target := serverMutationTarget{
+			orch:       orchestrator.New(orchestrator.Deps{Lifecycle: manager, Store: store, Sessions: sessions}, orchestrator.Hooks{}),
+			sessions:   sessions,
+			cfg:        cfg,
+			configPath: configPath,
+			store:      store,
+		}
+
+		if _, err := target.AnswerPermission(serverruntime.PermissionAnswerRequest{
+			RequestID:        testPermRequestID,
+			SessionID:        testSessionPermissionID,
+			Decision:         "allow_once",
+			AutoApproveScope: serverruntime.AutoApproveScopeFeature,
+		}); err != nil {
+			t.Fatalf("AnswerPermission() error = %v", err)
+		}
+		if len(sess.controlCalls) != 1 || !sess.controlCalls[0].allow {
+			t.Fatalf("RespondToControl calls = %+v; want one allow", sess.controlCalls)
+		}
+		updated, err := store.Load(f.ID)
+		if err != nil {
+			t.Fatalf("Load feature: %v", err)
+		}
+		if feature.NormalizeAutomaticReviewMode(updated.AutomaticReviewMode) != feature.AutomaticReviewEnabled {
+			t.Fatalf("feature automatic review mode = %q, want enabled", updated.AutomaticReviewMode)
+		}
+		if updated.Models.Implementation != testModelClaudeSonnet || updated.Inquireness != feature.InquirenessHigh {
+			t.Fatalf("feature config changed beyond auto-approve: models %+v inquireness %q", updated.Models, updated.Inquireness)
+		}
+		if cfg.Defaults.AutomaticReviewEnabled {
+			t.Fatal("feature scope must not change the workspace default")
+		}
+	})
+
+	t.Run("feature scope without feature fails before answering", func(t *testing.T) {
+		sess := newPending()
+		sess.featureID = ""
+		sessions := &mutationTargetSessionManager{sessions: []ports.SessionView{sess}}
+		target := serverMutationTarget{orch: mutationTargetOrchestrator(sessions), sessions: sessions}
+		if _, err := target.AnswerPermission(serverruntime.PermissionAnswerRequest{
+			RequestID:        testPermRequestID,
+			SessionID:        testSessionPermissionID,
+			Decision:         "allow_once",
+			AutoApproveScope: serverruntime.AutoApproveScopeFeature,
+		}); err == nil {
+			t.Fatal("AnswerPermission() error = nil, want failure")
+		}
+		if len(sess.controlCalls) != 0 {
+			t.Fatalf("RespondToControl calls = %+v; want none", sess.controlCalls)
+		}
+	})
+}

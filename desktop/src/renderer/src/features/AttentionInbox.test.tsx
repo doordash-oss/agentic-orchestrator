@@ -176,6 +176,81 @@ function popover(): HTMLElement | null {
   return screen.queryByRole('complementary', { name: 'Attention inbox' });
 }
 
+function PermissionDetailHarness({
+  item,
+}: {
+  item: Extract<AttentionItem, { kind: 'permission' }>;
+}): React.ReactElement {
+  const [drafts, setDrafts] = useState<AttentionDrafts>(emptyAttentionDrafts);
+  return (
+    <AttentionDetail
+      item={item}
+      busy={false}
+      submit={(action) => void action()}
+      drafts={drafts}
+      setDrafts={setDrafts}
+    />
+  );
+}
+
+describe('permission auto-approve offer', () => {
+  it('stays hidden when the server made no offer', () => {
+    installAgenticoMock();
+    render(<PermissionDetailHarness item={permissionItem} />);
+    expect(screen.queryByRole('group', { name: 'Auto-approve commands' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Allow once' })).toBeVisible();
+  });
+
+  it('allows and turns auto-approve on for the feature or the workspace', async () => {
+    const mock = installAgenticoMock();
+    const user = userEvent.setup();
+    render(
+      <PermissionDetailHarness item={{ ...permissionItem, autoApprove: { wouldFastPath: true } }} />,
+    );
+    const offer = screen.getByRole('group', { name: 'Auto-approve commands' });
+    expect(within(offer).getByText(/would have run without asking/)).toBeVisible();
+
+    await user.click(
+      within(offer).getByRole('button', { name: 'Allow and auto-approve in this feature' }),
+    );
+    expect(mock.api.answerPermission).toHaveBeenLastCalledWith({
+      requestId: 'perm-1',
+      sessionId: 'session-1',
+      decision: 'allow_once',
+      autoApproveScope: 'feature',
+    });
+
+    await user.click(
+      within(offer).getByRole('button', { name: 'Allow and auto-approve everywhere' }),
+    );
+    expect(mock.api.answerPermission).toHaveBeenLastCalledWith({
+      requestId: 'perm-1',
+      sessionId: 'session-1',
+      decision: 'allow_once',
+      autoApproveScope: 'workspace',
+    });
+  });
+
+  it('omits the feature choice for a request without a feature', () => {
+    installAgenticoMock();
+    const { featureId: _omit, ...ownerless } = permissionItem as Extract<
+      AttentionItem,
+      { kind: 'permission' }
+    >;
+    render(
+      <PermissionDetailHarness item={{ ...ownerless, autoApprove: { wouldFastPath: false } }} />,
+    );
+    const offer = screen.getByRole('group', { name: 'Auto-approve commands' });
+    expect(within(offer).getByText(/reviewer model would have decided/)).toBeVisible();
+    expect(
+      within(offer).queryByRole('button', { name: 'Allow and auto-approve in this feature' }),
+    ).toBeNull();
+    expect(
+      within(offer).getByRole('button', { name: 'Allow and auto-approve everywhere' }),
+    ).toBeVisible();
+  });
+});
+
 describe('AttentionInbox popover presentation', () => {
   it('toggles from the bell, dismisses on Escape and outside pointer, and never offers a close control', async () => {
     render(<Harness items={[permissionItem]} onJump={vi.fn()} />);

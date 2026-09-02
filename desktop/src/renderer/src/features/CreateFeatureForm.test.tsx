@@ -388,7 +388,7 @@ describe('the creation sheet across its four steps', () => {
     expect(screen.queryByLabelText('Clarify model')).toBeNull();
     expect(screen.queryByLabelText('KB Build model')).toBeNull();
     expect(screen.queryByLabelText('Utilities model')).toBeNull();
-    expect(screen.queryByLabelText('Automatic review model')).toBeNull();
+    expect(screen.queryByLabelText('Auto-approve reviewer model')).toBeNull();
 
     await user.click(screen.getByRole('button', { name: 'Back' }));
     await user.click(screen.getByRole('radio', { name: /Large/ }));
@@ -397,7 +397,7 @@ describe('the creation sheet across its four steps', () => {
     expect(screen.getByLabelText('KB Build model')).toBeVisible();
     // Utilities and the automatic reviewer stay workspace-scoped.
     expect(screen.queryByLabelText('Utilities model')).toBeNull();
-    expect(screen.queryByLabelText('Automatic review model')).toBeNull();
+    expect(screen.queryByLabelText('Auto-approve reviewer model')).toBeNull();
   });
 
   it('submits the contract without untouched model defaults, auto-starts the feature, and keeps one idempotency identity', async () => {

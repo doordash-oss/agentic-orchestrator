@@ -342,6 +342,16 @@ func TestPermissionAnswerRejectsLegacyAndMissingRememberScope(t *testing.T) {
 			body:        map[string]string{requestIDKey: fixturePermissionRequestID, decisionKey: decisionAllowRemember, rememberPatternKey: testRememberPattern},
 			wantMessage: "remember_scope is required for allow_remember",
 		},
+		{
+			name:        "unknown auto approve scope",
+			body:        map[string]string{requestIDKey: fixturePermissionRequestID, decisionKey: decisionAllowOnce, "auto_approve_scope": "repo"},
+			wantMessage: "auto_approve_scope must be feature or workspace",
+		},
+		{
+			name:        "auto approve scope with deny",
+			body:        map[string]string{requestIDKey: fixturePermissionRequestID, decisionKey: decisionDeny, "auto_approve_scope": AutoApproveScopeFeature},
+			wantMessage: "auto_approve_scope cannot be combined with deny",
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

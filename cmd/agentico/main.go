@@ -1312,6 +1312,11 @@ func (t *serverMutationTarget) AnswerPermission(req serverruntime.PermissionAnsw
 	if err != nil {
 		return serverruntime.PermissionAnswerResponse{}, err
 	}
+	if req.AutoApproveScope != "" {
+		if err := t.enableAutomaticReview(req.AutoApproveScope, sess.FeatureID()); err != nil {
+			return serverruntime.PermissionAnswerResponse{}, err
+		}
+	}
 	rememberScope := ""
 	if req.RememberScope != nil {
 		rememberScope = *req.RememberScope
@@ -1340,6 +1345,44 @@ func (t *serverMutationTarget) AnswerPermission(req serverruntime.PermissionAnsw
 		AlreadyExisted: result.AlreadyExisted,
 		AuditWarning:   result.AuditWarning,
 	}, nil
+}
+
+// enableAutomaticReview turns automatic Bash review on for one feature or for
+// the workspace default. Running sessions read the setting live, so the change
+// applies to the next Bash request.
+func (t *serverMutationTarget) enableAutomaticReview(scope, featureID string) error {
+	switch scope {
+	case serverruntime.AutoApproveScopeWorkspace:
+		enabled := true
+		_, err := t.RuntimeConfig(serverruntime.RuntimeConfigMutationRequest{
+			Defaults: serverruntime.RuntimeDefaultsMutation{AutomaticReviewEnabled: &enabled},
+		})
+		return err
+	case serverruntime.AutoApproveScopeFeature:
+		if featureID == "" {
+			return errors.New("this request has no feature; enable auto-approve for the workspace instead")
+		}
+		if t.store == nil {
+			return errors.New("feature store is not available")
+		}
+		f, err := t.store.Load(featureID)
+		if err != nil {
+			return err
+		}
+		mode := string(feature.AutomaticReviewEnabled)
+		_, err = t.UpdateFeatureConfig(featureID, serverruntime.FeatureConfigMutationRequest{
+			Models:              f.Models,
+			Effort:              f.Effort,
+			Inquireness:         string(f.Inquireness),
+			Checkpoints:         f.Pipeline.NormalizeCheckpoints(f.Checkpoints, f.IsPublishable()),
+			Pipeline:            f.Pipeline,
+			InputNotifications:  string(feature.NormalizeInputNotificationsMode(f.InputNotifications)),
+			AutomaticReviewMode: &mode,
+		})
+		return err
+	default:
+		return fmt.Errorf("unknown auto_approve_scope %q", scope)
+	}
 }
 
 func (t *serverMutationTarget) permissionAnswerService() *permission.AnswerService {

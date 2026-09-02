@@ -1945,6 +1945,62 @@ func TestPermissionSnapshotIncludesRememberPreview(t *testing.T) {
 	}
 }
 
+func TestPermissionSnapshotIncludesAutoApproveOffer(t *testing.T) {
+	t.Parallel()
+
+	store, f := seedReadFeature(t)
+	sess := &fakeSessionView{
+		id: "sess-auto-approve", featureID: f.ID, phase: feature.PhaseImplement,
+		status:         ports.SessionWaitingPermission,
+		permCacheScope: repoNameSelf,
+		pending: []*llm.ControlRequestMessage{
+			{
+				Type:      transcriptTypeControlRequest,
+				RequestID: "perm-offer",
+				Request: llm.ControlRequest{
+					Subtype:  controlSubtypeCanUseTool,
+					ToolName: "Bash",
+					Input:    json.RawMessage(`{"command":"go test ./..."}`),
+				},
+				AutoApproveOffer: &llm.AutoApproveOffer{WouldFastPath: true},
+			},
+			{
+				Type:      transcriptTypeControlRequest,
+				RequestID: "perm-no-offer",
+				Request: llm.ControlRequest{
+					Subtype:  controlSubtypeCanUseTool,
+					ToolName: "Bash",
+					Input:    json.RawMessage(`{"command":"go vet ./..."}`),
+				},
+			},
+		},
+	}
+	opts := baseReadHandlerOptions(store)
+	opts.Sessions = fakeSessionManager{views: []ports.SessionView{sess}}
+	handler := NewHandler(opts)
+
+	permissions := getJSONMap(t, handler, "/api/v1/permissions")
+	requests := permissions["requests"].([]any)
+	if len(requests) != 2 {
+		t.Fatalf("permissions requests length = %d, want 2", len(requests))
+	}
+	byID := map[string]map[string]any{}
+	for _, raw := range requests {
+		req := raw.(map[string]any)
+		byID[req["request_id"].(string)] = req
+	}
+	offer, ok := byID["perm-offer"]["auto_approve"].(map[string]any)
+	if !ok {
+		t.Fatalf("perm-offer auto_approve = %v, want object", byID["perm-offer"]["auto_approve"])
+	}
+	if got := offer["would_fast_path"]; got != true {
+		t.Fatalf("auto_approve.would_fast_path = %v, want true", got)
+	}
+	if _, present := byID["perm-no-offer"]["auto_approve"]; present {
+		t.Fatalf("perm-no-offer should omit auto_approve, got %v", byID["perm-no-offer"]["auto_approve"])
+	}
+}
+
 func TestPermissionSnapshotRememberPreviewDoesNotLeakSensitiveInput(t *testing.T) {
 	t.Parallel()
 

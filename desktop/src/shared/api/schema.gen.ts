@@ -925,6 +925,11 @@ export interface components {
             /** @enum {string} */
             decision: "allow_once" | "allow_remember" | "deny";
             remember_pattern?: string;
+            /**
+             * @description Turn automatic Bash review on for the request's feature or for the whole workspace before answering. Not allowed with deny.
+             * @enum {string}
+             */
+            auto_approve_scope?: "feature" | "workspace";
             /** @description Existing permission cache scope. Empty string means global. */
             remember_scope?: string;
         };
@@ -2226,6 +2231,12 @@ export interface components {
             };
             questions?: components["schemas"]["AskUserQuestion"][];
             remember?: components["schemas"]["PermissionRememberPreview"];
+            auto_approve?: components["schemas"]["PermissionAutoApproveOffer"];
+        };
+        /** @description Present when automatic Bash review is off for the session but would have handled this request had it been on. */
+        PermissionAutoApproveOffer: {
+            /** @description The deterministic guardrail alone would have approved the command. */
+            would_fast_path: boolean;
         };
         SessionDetail: components["schemas"]["SessionSummary"] & {
             transcript_cursor: components["schemas"]["Cursor"];

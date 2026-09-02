@@ -4,7 +4,9 @@ Agentic Orchestrator mediates provider tool use through session handlers and cac
 
 ## Desktop Availability
 
-Permission request cards with **Approve**, **Approve and remember**, and **Deny** controls are delivered in the Electron app. They surface in the global attention inbox and in the feature cockpit. The live **Signal trace** can show validated tool activity, but resolving a permission request uses the dedicated prompt cards.
+Permission request cards with **Allow once**, **Allow and remember**, and **Deny** controls are delivered in the Electron app. They surface in the global attention inbox and in the feature cockpit. The live **Signal trace** can show validated tool activity, but resolving a permission request uses the dedicated prompt cards.
+
+When **Auto-approve commands** is off and the pending Bash command is one that automatic review would have handled, the card also offers **Allow and auto-approve in this feature** and **Allow and auto-approve everywhere**. Both allow the pending command once and turn automatic review on for the chosen scope; the running session applies the change from its next Bash request. The card says whether the command would have run through the deterministic fast path or gone to the reviewer model.
 
 Do not use superseded single-key permission shortcuts. When a workflow is blocked on a permission request, use the inbox or cockpit card to answer it, or start workflows with permission rules appropriate for the provider and repository, or use the server launch option described below in a trusted environment.
 
@@ -19,8 +21,9 @@ Session policy can approve categories such as:
 - delegated agent work; and
 - read-only git commands such as `git status`, `git diff`, `git log`, and `git show`.
 
-When the optional Automatic Bash review feature is enabled, an unresolved
-canonical Bash request first checks a deterministic fast path. Curated
+When the optional Automatic Bash review feature (**Auto-approve commands** in
+the app) is enabled, an unresolved canonical Bash request first checks a
+deterministic fast path. Curated
 build/test commands auto-approve without a model. Every other reviewable
 command reaches one model review—including dangerous commands such as
 `rm -rf`, `sudo`, and `curl | sh`—and an exact `ALLOW` continues
@@ -123,7 +126,9 @@ For each tool request, the runtime evaluates:
 5. a user decision through a compatible permission client if no earlier step allows the request.
 
 Automatic review never overrides earlier decisions, stores no durable
-permission rule, and is not command sandboxing. Valid commands receive up to
+permission rule, and is not command sandboxing. Its enabled state is resolved
+live from the feature override and the workspace default on every deferred
+Bash request. Valid commands receive up to
 two model attempts sharing one overall one-minute timeout. Only transient
 launch, handshake, transport, rate-limit, and server failures receive the
 single retry. Two consecutive timeouts start a 30-second cooldown with a

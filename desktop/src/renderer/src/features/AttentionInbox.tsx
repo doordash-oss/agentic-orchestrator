@@ -17,6 +17,7 @@ import {
   isSyntheticHelpItem,
   type AttentionActionResult,
   type AttentionItem,
+  type AutoApproveScope,
   type VerificationGateAction,
 } from '../../../shared/ipc';
 import { BellIcon } from '../components/icons';
@@ -351,6 +352,64 @@ export function AttentionInbox({
   );
 }
 
+/**
+ * Offered on a Bash prompt when auto-approve commands is off but would have
+ * handled the request. Each choice allows the current request and turns the
+ * setting on for the feature or the whole workspace; running sessions pick
+ * the change up on their next command.
+ */
+function AutoApproveOffer({
+  item,
+  busy,
+  submit,
+}: {
+  item: Extract<AttentionItem, { kind: 'permission' }>;
+  busy: boolean;
+  submit(action: AttentionAction, options?: AttentionSubmitOptions): void;
+}) {
+  const offer = item.autoApprove;
+  if (offer === undefined) return null;
+  const answer = (scope: AutoApproveScope, successNotice: string) =>
+    submit(
+      () =>
+        window.agentico.answerPermission({
+          requestId: item.id,
+          ...(item.sessionId === undefined ? {} : { sessionId: item.sessionId }),
+          decision: 'allow_once',
+          autoApproveScope: scope,
+        }),
+      { successNotice },
+    );
+  return (
+    <div className="attention-detail__auto-approve" role="group" aria-label="Auto-approve commands">
+      <p className="attention-detail__hint">
+        {offer.wouldFastPath
+          ? 'Auto-approve commands is off. With it on, this command would have run without asking.'
+          : 'Auto-approve commands is off. With it on, a reviewer model would have decided this without asking.'}{' '}
+        You can change it later in the feature configuration or in Settings › Workspace defaults.
+      </p>
+      <div className="attention-detail__actions">
+        {item.featureId !== undefined ? (
+          <button
+            className="attention-button"
+            disabled={busy}
+            onClick={() => answer('feature', 'Allowed. Auto-approve commands is on for this feature.')}
+          >
+            Allow and auto-approve in this feature
+          </button>
+        ) : null}
+        <button
+          className="attention-button"
+          disabled={busy}
+          onClick={() => answer('workspace', 'Allowed. Auto-approve commands is on for the workspace.')}
+        >
+          Allow and auto-approve everywhere
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export function AttentionDetail({
   item,
   busy,
@@ -439,6 +498,9 @@ export function AttentionDetail({
           ) : null}
           <AttentionJumpAction item={item} onJump={onJump} />
         </div>
+        {item.autoApprove !== undefined ? (
+          <AutoApproveOffer item={item} busy={busy} submit={submit} />
+        ) : null}
       </div>
     );
 

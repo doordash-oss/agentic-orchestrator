@@ -309,7 +309,7 @@ func assertAutomaticReviewUnavailableSessionNotice(t *testing.T) {
 	}
 	waitForAutomaticReviewSession(t, sess)
 
-	const noticePrefix = "Automatic review enabled but no reviewer available:"
+	const noticePrefix = "Auto-approve commands enabled but no reviewer available:"
 	notices := 0
 	for _, msg := range sess.MessageLog().Messages() {
 		if msg.Status != nil && strings.HasPrefix(msg.Status.Message, noticePrefix) {

@@ -1100,10 +1100,11 @@ func TestChildIntegrationCleanupWarningPersistenceFailure(t *testing.T) {
 	fx := newChildIntegrationFixture(t, feature.StatusPublished, true)
 	o := fx.orchestrator()
 	// Transaction path Modify calls on child: 1=prep progress, 2=prepared,
-	// 3=applying, 4=apply progress, 5=applied, 6=close write,
-	// 7=clear closure error, 8=merged, 9=cleanup warning record.
+	// 3=applying, 4=apply progress, 5=applied, 6=close write, 7=merged,
+	// 8=cleanup warning record. (The closure-error clear that used to sit
+	// between close and merged was removed with the child last-error mirror.)
 	o.deps.Worktrees = failingRemoveWorktrees{WorktreeManager: fx.wm, removeErr: errors.New("simulated worktree removal failure")}
-	store := &failNthModifyStore{FeatureStore: fx.store, target: fx.child.ID, n: 9, err: errors.New("simulated warning-write failure")}
+	store := &failNthModifyStore{FeatureStore: fx.store, target: fx.child.ID, n: 8, err: errors.New("simulated warning-write failure")}
 	o.deps.Store = store
 
 	err := o.RunChildIntegration(fx.child.ID)

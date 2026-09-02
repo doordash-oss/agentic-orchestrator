@@ -131,8 +131,12 @@ func TestActionCatalogSetupAndStartLifecycle(t *testing.T) {
 	}
 
 	failedSetup := actionCatalogTestFeature(feature.StatusFailed, feature.Checkpoints{}, &publishable)
-	failedSetup.FailureType = feature.FailureWorktreeSetup
-	failedSetup.Run().Setup = &feature.SetupState{Status: feature.SetupStatusFailed}
+	failedSetup.SetRun(&feature.Run{RunNumber: 1, Setup: &feature.SetupState{Status: feature.SetupStatusFailed}})
+	failedSetup.Run().Failure = &errcat.FailureRecord{
+		Code:        errcat.WorktreeSetupFailed,
+		Context:     &errcat.RecordContext{Repositories: []errcat.CodeRepository{{Name: repoNameSelf}}},
+		Diagnostics: "git worktree add failed",
+	}
 	actions = actionCatalogDTOs(failedSetup)
 	if got := actionDTOByID(t, actions, actionSetup); !got.Enabled {
 		t.Fatalf("setup action = %+v; want enabled for failed setup (retry)", got)

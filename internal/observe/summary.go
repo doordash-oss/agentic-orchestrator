@@ -35,8 +35,8 @@ type FeatureSummaryInput struct {
 	FeatureDir          string
 	Name                string
 	Status              string
-	FailureType         string
-	LastError           string
+	ErrorCode           string
+	ErrorClass          string
 	CurrentRoadmapPhase int
 	TotalRoadmapPhases  int
 	ActiveRun           int
@@ -54,9 +54,11 @@ type RepoSummaryInput struct {
 }
 
 // BuildFeatureSummaryInput is a convenience adapter that populates a
-// FeatureSummaryInput from individual parameters.
+// FeatureSummaryInput from individual parameters. errorCode and errorClass
+// are the run's canonical failure code and class; both are empty for a
+// healthy feature.
 func BuildFeatureSummaryInput(
-	featureID, featureDir, name, status, failureType, lastError string,
+	featureID, featureDir, name, status, errorCode, errorClass string,
 	currentRoadmapPhase, totalRoadmapPhases int,
 	phaseTimings map[string]time.Duration,
 	phaseCosts map[string]float64,
@@ -68,8 +70,8 @@ func BuildFeatureSummaryInput(
 		FeatureDir:          featureDir,
 		Name:                name,
 		Status:              status,
-		FailureType:         failureType,
-		LastError:           lastError,
+		ErrorCode:           errorCode,
+		ErrorClass:          errorClass,
 		CurrentRoadmapPhase: currentRoadmapPhase,
 		TotalRoadmapPhases:  totalRoadmapPhases,
 		ActiveRun:           activeRun,
@@ -91,11 +93,11 @@ func writeFeatureSummaryImpl(input FeatureSummaryInput) error {
 	// 1. Build fallback skeleton from FeatureSummaryInput.
 	summary := SummaryArtifact{
 		Feature: FeatureSummaryBlock{
-			ID:          input.FeatureID,
-			Name:        input.Name,
-			Status:      input.Status,
-			FailureType: input.FailureType,
-			LastError:   input.LastError,
+			ID:         input.FeatureID,
+			Name:       input.Name,
+			Status:     input.Status,
+			ErrorCode:  input.ErrorCode,
+			ErrorClass: input.ErrorClass,
 		},
 		ActiveRun: input.ActiveRun,
 	}

@@ -944,7 +944,7 @@ func TestTransactionApplySyncFailureContinuesForward(t *testing.T) {
 
 	// Apply with a worktree manager that fails ResetToCommit for repo 1
 	// (the second repo). The failure persists through the immediate closure
-	// attempt so its durable LastError can be asserted.
+	// attempt so the journal's pending-sync diagnostic can be asserted.
 	resetWT := &failingResetWorktrees{
 		WorktreeManager: fx.wm,
 		failRepoDir:     fx.repoDirs[1],
@@ -980,8 +980,18 @@ func TestTransactionApplySyncFailureContinuesForward(t *testing.T) {
 		t.Fatal("closeTransactionAfterApply() error = nil, want persistent sync failure")
 	}
 	stored, _ = fx.store.Load(fx.child.ID)
-	if !strings.Contains(stored.LastError, "syncing parent worktree for repo") {
-		t.Fatalf("LastError = %q, want closure sync diagnostic", stored.LastError)
+	// The transaction journal and the relationship event own the closure
+	// worktree-sync failure: the child's run carries no failure record, and
+	// the journal stays in the applied phase with its pending-sync entry.
+	if rec := stored.FailureRecord(); rec != nil {
+		t.Fatalf("child failure record = %+v, want none (journal owns the closure sync failure)", rec)
+	}
+	if stored.Parent.Transaction.Phase != feature.TransactionPhaseApplied {
+		t.Fatalf("phase after failed closure = %s, want applied", stored.Parent.Transaction.Phase)
+	}
+	if pending := stored.Parent.Transaction.EntryByRepo(journal.Entries[1].Repo); pending == nil ||
+		!strings.Contains(pending.Diagnostics, "worktree sync pending after apply") {
+		t.Fatalf("pending entry after failed closure = %+v, want applied with pending-sync diagnostics", pending)
 	}
 
 	// Swap in the healthy manager and re-enter through the public integration
@@ -993,8 +1003,8 @@ func TestTransactionApplySyncFailureContinuesForward(t *testing.T) {
 	if stored.Parent.Transaction.Phase != feature.TransactionPhaseMerged {
 		t.Fatalf("phase after resume = %s, want merged", stored.Parent.Transaction.Phase)
 	}
-	if stored.LastError != "" {
-		t.Fatalf("LastError after resume = %q, want cleared", stored.LastError)
+	if rec := stored.FailureRecord(); rec != nil {
+		t.Fatalf("child failure record after resume = %+v, want none", rec)
 	}
 	for i := range fx.repoDirs {
 		if got := txGit(t, fx.repoDirs[i], "rev-parse", "HEAD"); got != journal.Entries[i].CandidateSHA {

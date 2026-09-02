@@ -156,8 +156,7 @@ func (o *Orchestrator) resumeDiscard(childID string) error {
 		if err := o.deps.Store.Modify(childID, func(f *feature.Feature) error {
 			f.DiscardIntent.ClosedAt = &now
 			f.DiscardIntent.Step = feature.DiscardStepClosed
-			f.LastError = ""
-			f.FailureType = ""
+			f.Run().Failure = nil
 			return nil
 		}); err != nil {
 			return fmt.Errorf("closing child as discarded: %w", err)

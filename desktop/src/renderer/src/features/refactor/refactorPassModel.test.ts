@@ -66,6 +66,34 @@ describe('passState', () => {
     expect(state).toMatchObject({ id: 'setup-failed', tone: 'danger' });
   });
 
+  it('renders the canonical summary for a failed pass and the fallback without a failure record', () => {
+    const failed = passState(
+      featureSnapshot({
+        status: 'Failed',
+        failure: {
+          code: 'iteration_budget_exhausted',
+          class: 'blocking',
+          title: 'Iteration budget exhausted',
+          summary: 'The Implement phase exhausted its iteration budget at iteration 3.',
+          remediation: {
+            hint: 'Restart the phase with an extended iteration budget, or revise the plan so the work converges.',
+            actions: ['restart'],
+          },
+          context: { phase: { name: 'implement', iteration: 3 } },
+          diagnostics: 'reached maximum iteration count',
+        },
+      }),
+    );
+    expect(failed.id).toBe('failed');
+    expect(failed.sentence).toBe(
+      'The Implement phase exhausted its iteration budget at iteration 3.',
+    );
+
+    const noRecord = passState(featureSnapshot({ status: 'Failed' }));
+    expect(noRecord.id).toBe('failed');
+    expect(noRecord.sentence).toBe('The pass stopped on a failure.');
+  });
+
   it('reports ready when the catalogue enables start', () => {
     const state = passState(
       featureSnapshot({

@@ -255,8 +255,10 @@ func TestRebaseGate_AncestorFailure(t *testing.T) {
 	if e.PrepState != feature.RepoPrepFailed {
 		t.Errorf("prep state = %q, want %q", e.PrepState, feature.RepoPrepFailed)
 	}
-	if child.LastError == "" {
-		t.Errorf("LastError mirror = empty; want attention summary mirrored")
+	// The transaction-attention mirror into the child's run failure state is
+	// gone: the journal owns the attention diagnostics.
+	if rec := child.FailureRecord(); rec != nil {
+		t.Errorf("child failure record = %+v, want none (journal owns attention diagnostics)", rec)
 	}
 
 	// Parent ref byte-identical before and after.

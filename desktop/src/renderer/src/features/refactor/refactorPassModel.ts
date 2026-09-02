@@ -136,7 +136,7 @@ export function passState(child: FeatureSnapshot): PassState {
   if (child.status === 'Failed') {
     return {
       id: 'failed',
-      sentence: child.failure?.message ?? 'The pass stopped on a failure.',
+      sentence: child.failure?.summary ?? 'The pass stopped on a failure.',
       tone: 'danger',
     };
   }

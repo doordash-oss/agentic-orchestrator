@@ -1758,6 +1758,9 @@ components:
             Session's current transcript record count at emission time — the
             same index space /transcript and /output/stream use. Only set on
             session.output.activity events.
+        error:
+          $ref: "#/components/schemas/SSEEventError"
+          x-go-type-skip-optional-pointer: false
     SessionOutputChunk:
       type: object
       required: [api_version, index]
@@ -1776,6 +1779,20 @@ components:
           description: A TranscriptMessageDTO row (see the /transcript response).
         done:
           type: boolean
+    SSEEventError:
+      type: object
+      description: >-
+        Canonical failure identity for failure-carrying lifecycle events
+        (feature lifecycle failed). Absent on every other event kind.
+      required: [code, class]
+      properties:
+        code:
+          type: string
+          description: Stable snake_case catalog code.
+        class:
+          type: string
+          description: Severity treatment class.
+          enum: [blocking, needs_action, warning]
     JSONResponse:
       type: object
       required: [api_version]
@@ -4029,13 +4046,6 @@ components:
           type: object
           additionalProperties:
             type: string
-    Failure:
-      type: object
-      properties:
-        type:
-          type: string
-        message:
-          type: string
     NeedUserInputGate:
       type: object
       required: [open, waiting_since]
@@ -4447,7 +4457,7 @@ components:
               items:
                 $ref: "#/components/schemas/VerificationItem"
             failure:
-              $ref: "#/components/schemas/Failure"
+              $ref: "#/components/schemas/Error"
               x-go-type-skip-optional-pointer: false
             need_user_input:
               $ref: "#/components/schemas/NeedUserInputGate"

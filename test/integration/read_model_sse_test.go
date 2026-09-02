@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	serverruntime "github.com/doordash-oss/agentic-orchestrator/internal/server"
@@ -233,8 +234,15 @@ func TestAPIChildFeatureNeverLeaksIntoTopLevelList(t *testing.T) {
 			}
 			child.SetRun(&feature.Run{RunNumber: 1, Setup: &feature.SetupState{Status: tc.setup, LastError: tc.setupErr}})
 			if tc.setup == feature.SetupStatusFailed {
-				child.FailureType = feature.FailureWorktreeSetup
-				child.LastError = tc.setupErr
+				// Mirror the setup runner's canonical worktree_setup_failed
+				// record: repository (with branch) block, raw error diagnostics.
+				child.Run().Failure = &errcat.FailureRecord{
+					Code: errcat.WorktreeSetupFailed,
+					Context: &errcat.RecordContext{
+						Repositories: []errcat.CodeRepository{{Name: "agentic-orchestrator", Branch: "feature/rework-auth"}},
+					},
+					Diagnostics: tc.setupErr,
+				}
 			}
 			if err := store.Save(child); err != nil {
 				t.Fatalf("Save(child) error = %v", err)

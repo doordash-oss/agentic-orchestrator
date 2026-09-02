@@ -343,6 +343,69 @@ export const RuntimeConfigWorkspaceSchema = z.object({
 
 export type RuntimeConfigWorkspace = z.output<typeof RuntimeConfigWorkspaceSchema>;
 
+// --- Canonical server error body (ErrorResponse) -----------------------------
+// Strict on purpose: the canonical shape is a real contract, so unknown
+// properties, an unknown class, or the pre-canonical `{code,message,status}`
+// body all fail parsing and degrade to the main-process transport error.
+
+/** Canonical catalog-rendered error, mirroring the generated Error component. */
+export const CanonicalErrorSchema = z.strictObject({
+  code: z.string().min(1),
+  class: z.enum(['blocking', 'needs_action', 'warning']),
+  title: z.string().min(1),
+  summary: z.string().min(1),
+  remediation: z
+    .strictObject({
+      hint: z.string().optional(),
+      actions: z.array(z.string().min(1)).max(16).optional(),
+    })
+    .optional(),
+  context: z
+    .strictObject({
+      repositories: z
+        .array(
+          z.strictObject({
+            name: z.string().min(1),
+            branch: z.string().optional(),
+            conflict_files: z.array(z.string()).max(500).optional(),
+            dirty_files: z.array(z.string()).max(500).optional(),
+            parent_anchor_sha: z.string().optional(),
+            expected_ref_sha: z.string().optional(),
+            child_head_sha: z.string().optional(),
+            candidate_sha: z.string().optional(),
+            merge_head: z.string().optional(),
+            observed_sha: z.string().optional(),
+          }),
+        )
+        .max(100)
+        .optional(),
+      phase: z
+        .strictObject({
+          name: z.string().min(1),
+          iteration: z.number().int().nonnegative().optional(),
+        })
+        .optional(),
+      command: z
+        .strictObject({
+          exit_code: z.number().int().optional(),
+          log_paths: z.array(z.string()).max(50).optional(),
+        })
+        .optional(),
+    })
+    .optional(),
+  diagnostics: z.string().optional(),
+});
+
+export type CanonicalError = z.output<typeof CanonicalErrorSchema>;
+
+/** The full non-2xx response envelope carrying one canonical error. */
+export const CanonicalErrorResponseSchema = z.strictObject({
+  api_version: z.string(),
+  error: CanonicalErrorSchema,
+});
+
+export type CanonicalErrorResponse = z.output<typeof CanonicalErrorResponseSchema>;
+
 // --- Features (GET/POST /api/v1/features, GET /api/v1/features/{id}) --------
 // Lenient subsets: z.object tolerates and strips fields this view does not
 // consume yet.
@@ -547,7 +610,9 @@ export const ServerFeatureDetailSchema = ServerFeatureSummarySchema.extend({
     validator_statuses: z.record(z.string(), z.string()).optional(),
   }),
   need_user_input: ServerNeedUserInputGateDetailSchema.optional(),
-  failure: z.object({ type: z.string().optional(), message: z.string().optional() }).optional(),
+  // The durable run failure, rendered by the server through the error
+  // catalog at read time; strict canonical contract, same as ErrorResponse.
+  failure: CanonicalErrorSchema.optional(),
   verification_items: z.array(z.object({ name: z.string(), state: z.string() })).optional(),
   timing: z.object({ total_seconds: z.number().int().nonnegative() }).optional(),
   parent_id: z.string().optional(),
@@ -974,69 +1039,6 @@ export const RuntimeConfigCreationSchema = z.object({
 });
 
 export type RuntimeConfigCreation = z.output<typeof RuntimeConfigCreationSchema>;
-
-// --- Canonical server error body (ErrorResponse) -----------------------------
-// Strict on purpose: the canonical shape is a real contract, so unknown
-// properties, an unknown class, or the pre-canonical `{code,message,status}`
-// body all fail parsing and degrade to the main-process transport error.
-
-/** Canonical catalog-rendered error, mirroring the generated Error component. */
-export const CanonicalErrorSchema = z.strictObject({
-  code: z.string().min(1),
-  class: z.enum(['blocking', 'needs_action', 'warning']),
-  title: z.string().min(1),
-  summary: z.string().min(1),
-  remediation: z
-    .strictObject({
-      hint: z.string().optional(),
-      actions: z.array(z.string().min(1)).max(16).optional(),
-    })
-    .optional(),
-  context: z
-    .strictObject({
-      repositories: z
-        .array(
-          z.strictObject({
-            name: z.string().min(1),
-            branch: z.string().optional(),
-            conflict_files: z.array(z.string()).max(500).optional(),
-            dirty_files: z.array(z.string()).max(500).optional(),
-            parent_anchor_sha: z.string().optional(),
-            expected_ref_sha: z.string().optional(),
-            child_head_sha: z.string().optional(),
-            candidate_sha: z.string().optional(),
-            merge_head: z.string().optional(),
-            observed_sha: z.string().optional(),
-          }),
-        )
-        .max(100)
-        .optional(),
-      phase: z
-        .strictObject({
-          name: z.string().min(1),
-          iteration: z.number().int().nonnegative().optional(),
-        })
-        .optional(),
-      command: z
-        .strictObject({
-          exit_code: z.number().int().optional(),
-          log_paths: z.array(z.string()).max(50).optional(),
-        })
-        .optional(),
-    })
-    .optional(),
-  diagnostics: z.string().optional(),
-});
-
-export type CanonicalError = z.output<typeof CanonicalErrorSchema>;
-
-/** The full non-2xx response envelope carrying one canonical error. */
-export const CanonicalErrorResponseSchema = z.strictObject({
-  api_version: z.string(),
-  error: CanonicalErrorSchema,
-});
-
-export type CanonicalErrorResponse = z.output<typeof CanonicalErrorResponseSchema>;
 
 // --- Recovery, cycle actions, preflight, and bulk preview -------------------
 

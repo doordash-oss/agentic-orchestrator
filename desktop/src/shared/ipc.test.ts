@@ -26,6 +26,7 @@ import {
   SettingsPatchSchema,
   SettingsSchema,
   FeatureActionRequestSchema,
+  FeatureSnapshotSchema,
   GateResumeRequestSchema,
   ChatStartRequestSchema,
   SessionIdSchema,
@@ -58,6 +59,35 @@ import {
   ServerTokenStatusResultSchema,
 } from './ipc';
 import { assertNoPrototypePollution } from './sanitize';
+
+describe('FeatureSnapshot failure schema', () => {
+  const failureSchema = FeatureSnapshotSchema.shape.failure;
+  const canonicalFailure = {
+    code: 'worktree_setup_failed',
+    class: 'blocking' as const,
+    title: 'Worktree setup failed',
+    summary: 'Setting up the worktree for repository "repo-a" failed.',
+    remediation: {
+      hint: 'Resolve the reported problem in the repository, then retry setup.',
+      actions: ['setup'],
+    },
+    context: { repositories: [{ name: 'repo-a', branch: 'feature/search-revamp' }] },
+    diagnostics: 'git worktree add failed: no commits yet',
+  };
+
+  it('accepts the canonical failure crossing IPC', () => {
+    const parsed = failureSchema?.safeParse(canonicalFailure);
+    expect(parsed?.success).toBe(true);
+  });
+
+  it('rejects a failure missing any required canonical field', () => {
+    for (const field of ['code', 'class', 'title', 'summary'] as const) {
+      const incomplete = { ...canonicalFailure } as Record<string, unknown>;
+      delete incomplete[field];
+      expect(failureSchema?.safeParse(incomplete).success).toBe(false);
+    }
+  });
+});
 
 describe('IPC channel registry', () => {
   it('defines a zod request/response contract for every invokable channel', () => {

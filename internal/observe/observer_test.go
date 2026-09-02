@@ -1180,7 +1180,7 @@ func TestFeatureFailedEmitsEvent(t *testing.T) {
 	obs := New(true, stateDir, false, "", false, "agentic")
 
 	sc := SpanContextForFeature(featureID, "", "", "")
-	obs.FeatureFailed(sc, "timeout", "session timed out after 30m")
+	obs.FeatureFailed(sc, "infrastructure_failure", "blocking", "session timed out after 30m")
 
 	events := readEvents(t, stateDir, featureID)
 	if len(events) != 1 {
@@ -1193,8 +1193,14 @@ func TestFeatureFailedEmitsEvent(t *testing.T) {
 	if evt.Error != "session timed out after 30m" {
 		t.Errorf("Error = %q, want %q", evt.Error, "session timed out after 30m")
 	}
-	if ft, ok := evt.Data["failure_type"].(string); !ok || ft != "timeout" {
-		t.Errorf("Data[failure_type] = %v, want %q", evt.Data["failure_type"], "timeout")
+	if code, ok := evt.Data["error_code"].(string); !ok || code != "infrastructure_failure" {
+		t.Errorf("Data[error_code] = %v, want %q", evt.Data["error_code"], "infrastructure_failure")
+	}
+	if class, ok := evt.Data["error_class"].(string); !ok || class != "blocking" {
+		t.Errorf("Data[error_class] = %v, want %q", evt.Data["error_class"], "blocking")
+	}
+	if _, ok := evt.Data["failure_type"]; ok {
+		t.Errorf("Data[failure_type] = %v, want no failure_type key", evt.Data["failure_type"])
 	}
 }
 
@@ -1556,7 +1562,7 @@ func TestNilObserverPermissionMethodsAreNoOps(t *testing.T) {
 	// None of these should panic
 	obs.FeatureStarted(sc, "feat", []string{"repo"}, "full")
 	obs.FeatureCompleted(sc, 1.0, time.Minute)
-	obs.FeatureFailed(sc, "timeout", "error msg")
+	obs.FeatureFailed(sc, "session_crashed", "blocking", "error msg")
 	obs.FeatureInterrupted(sc, "implement")
 	obs.PermissionRequested(sc, "sess1", "repo", 1, "Bash", "input")
 	obs.PermissionResolved(sc, "sess1", "repo", 1, "Bash", "allow")
@@ -1574,7 +1580,7 @@ func TestDisabledObserverPermissionMethodsAreNoOps(t *testing.T) {
 
 	obs.FeatureStarted(sc, "feat", []string{"repo"}, "full")
 	obs.FeatureCompleted(sc, 1.0, time.Minute)
-	obs.FeatureFailed(sc, "timeout", "error msg")
+	obs.FeatureFailed(sc, "session_crashed", "blocking", "error msg")
 	obs.FeatureInterrupted(sc, "implement")
 	obs.PermissionRequested(sc, "sess1", "repo", 1, "Bash", "input")
 	obs.PermissionResolved(sc, "sess1", "repo", 1, "Bash", "allow")
@@ -1769,7 +1775,7 @@ func TestFeatureFailedEndsOTelSpan(t *testing.T) {
 
 	sc := SpanContextForFeature(featureID, "", "", "")
 	obs.FeatureStarted(sc, "failing feature", []string{"repo-a"}, "large")
-	obs.FeatureFailed(sc, "infrastructure", "something broke")
+	obs.FeatureFailed(sc, "infrastructure_failure", "blocking", "something broke")
 
 	obs.otel.mu.Lock()
 	spanCount := len(obs.otel.spans)
@@ -1870,7 +1876,7 @@ func TestEmit_IncludesRunNumber(t *testing.T) {
 	obs.ValidatorCompleted(sc, "critic-architecture", "APPROVED", time.Second)
 	obs.FeatureStarted(sc, "my-feature", []string{"repo-a"}, "large")
 	obs.FeatureCompleted(sc, 0.5, time.Second)
-	obs.FeatureFailed(sc, "infrastructure", "boom")
+	obs.FeatureFailed(sc, "infrastructure_failure", "blocking", "boom")
 	obs.SetupLifecycle(sc, feature.SetupEvent{Kind: feature.SetupEventStarted, FeatureID: featureID, Attempt: 1})
 	obs.FeatureInterrupted(sc, "implement")
 	obs.PermissionRequested(sc, "s1", "repo-a", 1, "Edit", "preview")

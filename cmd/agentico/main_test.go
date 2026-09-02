@@ -1065,7 +1065,7 @@ func TestRunArgsValidateArtifactsCatchesMalformedReviewFeedback(t *testing.T) {
 	if !strings.Contains(got, "  - review-feedback.md:") || !strings.Contains(got, "LGTM") {
 		t.Fatalf("stderr = %q, want a review-feedback.md violation line with the offending content", got)
 	}
-	if !strings.Contains(got, "  hint: Fix the listed artifacts and rerun the check") {
+	if !strings.Contains(got, "  hint: Review the listed violations, fix the affected artifacts, and restart the phase.") {
 		t.Fatalf("stderr = %q, want the remediation hint", got)
 	}
 	if stdout.Len() != 0 {

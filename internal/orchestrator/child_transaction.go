@@ -608,12 +608,6 @@ func (o *Orchestrator) persistTransaction(childID string, journal *feature.Trans
 		parentID = f.Parent.ParentID
 		changed = !reflect.DeepEqual(f.Parent.Transaction, journal)
 		f.Parent.Transaction = journal
-		if f.LastError != "" && journal.Phase != feature.TransactionPhaseAttention {
-			f.LastError = ""
-		}
-		if journal.Phase == feature.TransactionPhaseAttention && journal.Attention != "" {
-			f.LastError = journal.Attention
-		}
 		return nil
 	})
 	if err != nil || !changed {

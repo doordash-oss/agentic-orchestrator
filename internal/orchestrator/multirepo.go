@@ -19,6 +19,7 @@ import (
 	"fmt"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
@@ -124,7 +125,7 @@ func (o *Orchestrator) surfaceDispatchCompletionError(featureID string, cause er
 		return
 	}
 	errMsg := fmt.Sprintf("handle phase completion: %v", cause)
-	if markErr := o.markFailedWithEvent(featureID, feature.FailureInfrastructure, errMsg); markErr != nil {
+	if markErr := o.markFailedWithEvent(featureID, o.delegateFailureRecord(featureID, errcat.InfrastructureFailure, errMsg)); markErr != nil {
 		o.emitEventBlocking(ports.Event{
 			Type:      ports.FeatureFailed,
 			FeatureID: featureID,

@@ -938,9 +938,20 @@ describe('FeatureService.getFeature', () => {
     expect(snapshot.setup?.tasks[1]).toMatchObject({ label: 'kb:repo-a', attempt: 0 });
   });
 
-  it('redacts failure and task error text before it crosses the boundary', async () => {
+  it('passes the canonical failure across IPC with only diagnostics redacted', async () => {
     const body = detailBody({
-      failure: { type: 'worktree_setup', message: 'Bearer tok-x failed' },
+      failure: {
+        code: 'worktree_setup_failed',
+        class: 'blocking',
+        title: 'Worktree setup failed',
+        summary: 'Setting up the worktree for repository "repo-a" failed.',
+        remediation: {
+          hint: 'Resolve the reported problem in the repository, then retry setup.',
+          actions: ['setup'],
+        },
+        context: { repositories: [{ name: 'repo-a', branch: 'feature/search-revamp' }] },
+        diagnostics: 'Bearer tok-x failed',
+      },
     });
     const feature = (body['feature'] ?? {}) as Record<string, unknown>;
     const run = (feature['active_run_detail'] ?? {}) as Record<string, unknown>;
@@ -949,7 +960,19 @@ describe('FeatureService.getFeature', () => {
     setup['last_error'] = 'clone failed at /Users/someone/repo';
     const { service } = makeService(() => ({ status: 200, body }));
     const snapshot = await service.getFeature('abcd1234ef567890');
-    expect(snapshot.failure?.message).not.toContain('tok-x');
+    expect(snapshot.failure).toMatchObject({
+      code: 'worktree_setup_failed',
+      class: 'blocking',
+      title: 'Worktree setup failed',
+      summary: 'Setting up the worktree for repository "repo-a" failed.',
+      remediation: {
+        hint: 'Resolve the reported problem in the repository, then retry setup.',
+        actions: ['setup'],
+      },
+      context: { repositories: [{ name: 'repo-a', branch: 'feature/search-revamp' }] },
+    });
+    expect(snapshot.failure?.diagnostics).toBeDefined();
+    expect(snapshot.failure?.diagnostics).not.toContain('tok-x');
     expect(snapshot.setup?.lastError).not.toContain('/Users/someone');
   });
 

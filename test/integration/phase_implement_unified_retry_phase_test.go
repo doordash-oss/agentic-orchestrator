@@ -21,6 +21,7 @@ import (
 	"testing"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
@@ -45,7 +46,7 @@ import (
 //
 //   - Failed → Pending → AwaitingFinalReview transition for every declared
 //     repo (phase atomicity holds across the failure recovery boundary).
-//   - feature.Manager.RetryPhase clears LastError, FailureType, and
+//   - feature.Manager.RetryPhase clears the run's failure record and
 //     PendingNeedUserInputPath alongside the per-repo reset.
 //   - Repos outside repoNames are NOT touched (preservation guarantee).
 func TestPhaseImplementUnified_RetryPhaseRecovery(t *testing.T) {
@@ -168,11 +169,16 @@ func TestPhaseImplementUnified_RetryPhaseRecovery(t *testing.T) {
 		t.Errorf("repo-c after first run = %+v, want pr_ready (preserved — outside phase)", st)
 	}
 
-	// Set a few feature-level error fields to verify RetryPhase clears
-	// them as documented.
+	// Seed a run-level failure record to verify RetryPhase clears it as
+	// documented.
 	if err := store.Modify(f.ID, func(ff *feature.Feature) error {
-		ff.LastError = "something went wrong"
-		ff.FailureType = feature.FailureInfrastructure
+		ff.Run().Failure = &errcat.FailureRecord{
+			Code: errcat.InfrastructureFailure,
+			Context: &errcat.RecordContext{
+				Phase: &errcat.CodePhase{Name: "implement"},
+			},
+			Diagnostics: "something went wrong",
+		}
 		ff.PendingNeedUserInputPath = "/some/leftover/path.yaml"
 		return nil
 	}); err != nil {
@@ -203,12 +209,12 @@ func TestPhaseImplementUnified_RetryPhaseRecovery(t *testing.T) {
 	if st := got.RepoStates["repo-c"]; st == nil || st.PRURL == "" {
 		t.Errorf("repo-c after RetryPhase = %+v, want PRURL preserved", st)
 	}
-	// Feature-level error fields cleared.
-	if got.LastError != "" {
-		t.Errorf("LastError = %q, want cleared", got.LastError)
+	// Run-level failure record cleared.
+	if got.FailureCode() != "" {
+		t.Errorf("FailureCode() = %q, want empty (record cleared)", got.FailureCode())
 	}
-	if got.FailureType != "" {
-		t.Errorf("FailureType = %q, want cleared", got.FailureType)
+	if rec := got.FailureRecord(); rec != nil {
+		t.Errorf("failure record = %+v, want cleared by RetryPhase", rec)
 	}
 	if got.PendingNeedUserInputPath != "" {
 		t.Errorf("PendingNeedUserInputPath = %q, want cleared", got.PendingNeedUserInputPath)

@@ -138,6 +138,64 @@ const (
 	ShutdownIncomplete         Code = "shutdown_incomplete"
 )
 
+// Terminal run-failure codes. Blocking failures that end a feature's active
+// run; a stored failure record carries one of these plus context blocks and
+// raw diagnostics.
+const (
+	IterationBudgetExhausted Code = "iteration_budget_exhausted"
+	SafetyRailTripped        Code = "safety_rail_tripped"
+	SessionCrashed           Code = "session_crashed"
+	ArtifactMissing          Code = "artifact_missing"
+	InfrastructureFailure    Code = "infrastructure_failure"
+	WorktreeSetupFailed      Code = "worktree_setup_failed"
+)
+
+// RunFailureParams carries the phase name, iteration, and repository names a
+// terminal run-failure summary interpolates. RenderRecord derives them from
+// a stored record's context blocks; the static summary applies when the
+// record carries none of them.
+type RunFailureParams struct {
+	Phase        string
+	Iteration    int
+	Repositories []string
+}
+
+func (RunFailureParams) params() {}
+
+// displayPhaseName turns a stored phase name ("implement", "final_review")
+// into summary text ("Implement", "Final review").
+func displayPhaseName(name string) string {
+	name = strings.ReplaceAll(strings.TrimSpace(name), "_", " ")
+	if name == "" {
+		return ""
+	}
+	return strings.ToUpper(name[:1]) + name[1:]
+}
+
+// runPhaseSummary renders the shared terminal run-failure summary shape:
+// "The <Phase> phase <verb phrase> at iteration <n> in repositories: a, b."
+// With neither phase nor repositories known it returns "" so the entry's
+// static summary applies.
+func runPhaseSummary(params RunFailureParams, verbPhrase string) string {
+	var prefix string
+	switch {
+	case params.Phase != "":
+		prefix = fmt.Sprintf("The %s phase %s", displayPhaseName(params.Phase), verbPhrase)
+	case len(params.Repositories) > 0:
+		prefix = fmt.Sprintf("The run %s", verbPhrase)
+	default:
+		return ""
+	}
+	parts := []string{prefix}
+	if params.Iteration > 0 {
+		parts = append(parts, fmt.Sprintf("at iteration %d", params.Iteration))
+	}
+	if len(params.Repositories) > 0 {
+		parts = append(parts, "in repositories: "+strings.Join(params.Repositories, ", "))
+	}
+	return strings.Join(parts, " ") + "."
+}
+
 // WorkspaceRootParams carries the rejected workspace-root paths for
 // InvalidWorkspaceRoot.
 type WorkspaceRootParams struct {
@@ -774,14 +832,119 @@ var catalog = map[Code]Entry{
 		Class:   ClassBlocking,
 		Title:   "Protocol violation",
 		Summary: "The phase's output artifacts violate the agentico contract.",
+		Blocks:  []Block{BlockPhase, BlockRepositories},
 		summaryParams: func(p Params) string {
-			params, ok := p.(ViolationParams)
-			if !ok || strings.TrimSpace(params.Check) == "" {
+			switch params := p.(type) {
+			case ViolationParams:
+				if strings.TrimSpace(params.Check) == "" {
+					return ""
+				}
+				return fmt.Sprintf("The %s check found %d %s.", params.Check, params.Count, violationWord(params.Count))
+			case RunFailureParams:
+				if params.Phase == "" {
+					return ""
+				}
+				return fmt.Sprintf("The %s phase's output artifacts violate the agentico contract.", displayPhaseName(params.Phase))
+			}
+			return ""
+		},
+		Remediation: "Review the listed violations, fix the affected artifacts, and restart the phase.",
+		Actions:     []string{"restart"},
+	},
+
+	// --- Terminal run-failure codes ---------------------------------------------
+	IterationBudgetExhausted: {
+		Class:   ClassBlocking,
+		Title:   "Iteration budget exhausted",
+		Summary: "The phase exhausted its iteration budget without converging.",
+		Blocks:  []Block{BlockPhase, BlockRepositories},
+		summaryParams: func(p Params) string {
+			params, ok := p.(RunFailureParams)
+			if !ok {
 				return ""
 			}
-			return fmt.Sprintf("The %s check found %d %s.", params.Check, params.Count, violationWord(params.Count))
+			return runPhaseSummary(params, "exhausted its iteration budget")
 		},
-		Remediation: "Fix the listed artifacts and rerun the check before emitting the completion tag.",
+		Remediation: "Restart the phase with an extended iteration budget, or revise the plan so the work converges.",
+		Actions:     []string{"restart"},
+	},
+	SafetyRailTripped: {
+		Class:   ClassBlocking,
+		Title:   "Safety rail tripped",
+		Summary: "The phase was stopped by a safety rail.",
+		Blocks:  []Block{BlockPhase, BlockRepositories},
+		summaryParams: func(p Params) string {
+			params, ok := p.(RunFailureParams)
+			if !ok {
+				return ""
+			}
+			return runPhaseSummary(params, "was stopped by a safety rail")
+		},
+		Remediation: "Review what the rail blocked, adjust the approach, and restart the phase.",
+		Actions:     []string{"restart"},
+	},
+	SessionCrashed: {
+		Class:   ClassBlocking,
+		Title:   "Session crashed",
+		Summary: "The phase lost its agent session.",
+		Blocks:  []Block{BlockPhase, BlockRepositories, BlockCommand},
+		summaryParams: func(p Params) string {
+			params, ok := p.(RunFailureParams)
+			if !ok {
+				return ""
+			}
+			return runPhaseSummary(params, "lost its agent session")
+		},
+		Remediation: "Restart the phase; the session log has the crash details.",
+		Actions:     []string{"restart"},
+	},
+	ArtifactMissing: {
+		Class:   ClassBlocking,
+		Title:   "Artifact missing",
+		Summary: "The phase did not produce a required artifact.",
+		Blocks:  []Block{BlockPhase, BlockRepositories},
+		summaryParams: func(p Params) string {
+			params, ok := p.(RunFailureParams)
+			if !ok {
+				return ""
+			}
+			return runPhaseSummary(params, "did not produce a required artifact")
+		},
+		Remediation: "Restart the phase so the agent can produce the required artifacts.",
+		Actions:     []string{"restart"},
+	},
+	InfrastructureFailure: {
+		Class:   ClassBlocking,
+		Title:   "Infrastructure failure",
+		Summary: "The phase failed on an infrastructure error.",
+		Blocks:  []Block{BlockPhase, BlockRepositories, BlockCommand},
+		summaryParams: func(p Params) string {
+			params, ok := p.(RunFailureParams)
+			if !ok {
+				return ""
+			}
+			return runPhaseSummary(params, "failed on an infrastructure error")
+		},
+		Remediation: "Check the runtime environment and provider tooling, then restart the phase.",
+		Actions:     []string{"restart"},
+	},
+	WorktreeSetupFailed: {
+		Class:   ClassBlocking,
+		Title:   "Worktree setup failed",
+		Summary: "Setting up the feature's worktrees failed.",
+		Blocks:  []Block{BlockRepositories, BlockCommand},
+		summaryParams: func(p Params) string {
+			params, ok := p.(RunFailureParams)
+			if !ok || len(params.Repositories) == 0 {
+				return ""
+			}
+			if len(params.Repositories) == 1 {
+				return fmt.Sprintf("Setting up the worktree for repository %q failed.", params.Repositories[0])
+			}
+			return fmt.Sprintf("Setting up worktrees for repositories %s failed.", joinQuoted(params.Repositories))
+		},
+		Remediation: "Resolve the reported problem in the repository, then retry setup.",
+		Actions:     []string{"setup"},
 	},
 
 	// --- CLI degradation warning codes -------------------------------------------

@@ -38,6 +38,7 @@ var zeroParams = []Params{
 	ViolationParams{},
 	ProviderUnavailableParams{},
 	ProviderIssueParams{},
+	RunFailureParams{},
 }
 
 func TestCatalogEntriesAreValid(t *testing.T) {
@@ -135,6 +136,52 @@ func TestNewUnknownCodeFallsBackToInternalError(t *testing.T) {
 	}
 	if rendered.Diagnostics != "raw detail" {
 		t.Fatalf("diagnostics not preserved on fallback: %q", rendered.Diagnostics)
+	}
+}
+
+// terminalRunFailureCodes are the seven catalog codes a terminal run failure
+// can carry. All are blocking and reference a remediation action: setup for
+// worktree-setup failures, restart for every other terminal outcome.
+var terminalRunFailureCodes = []Code{
+	IterationBudgetExhausted,
+	SafetyRailTripped,
+	SessionCrashed,
+	ArtifactMissing,
+	InfrastructureFailure,
+	WorktreeSetupFailed,
+	ProtocolViolation,
+}
+
+func TestTerminalRunFailureCodesAreBlocking(t *testing.T) {
+	for _, code := range terminalRunFailureCodes {
+		entry, ok := Lookup(code)
+		if !ok {
+			t.Fatalf("%s: missing from catalog", code)
+		}
+		if entry.Class != ClassBlocking {
+			t.Errorf("%s: class is %q; want blocking", code, entry.Class)
+		}
+	}
+}
+
+func TestTerminalRunFailureActionReferences(t *testing.T) {
+	for _, code := range terminalRunFailureCodes {
+		entry, ok := Lookup(code)
+		if !ok {
+			t.Fatalf("%s: missing from catalog", code)
+		}
+		want := []string{"restart"}
+		if code == WorktreeSetupFailed {
+			want = []string{"setup"}
+		}
+		if len(entry.Actions) != len(want) {
+			t.Fatalf("%s: actions = %#v; want %#v", code, entry.Actions, want)
+		}
+		for i, action := range want {
+			if entry.Actions[i] != action {
+				t.Errorf("%s: action[%d] = %q; want %q", code, i, entry.Actions[i], action)
+			}
+		}
 	}
 }
 

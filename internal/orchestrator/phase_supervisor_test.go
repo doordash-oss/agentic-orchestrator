@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
@@ -196,8 +197,8 @@ func TestPhaseSupervisorSingleShotReportsTerminalOutcomeViolation(t *testing.T) 
 	}
 
 	call := sink.wait(t)
-	if call.input.FailureType != feature.FailureProtocolViolation {
-		t.Errorf("FailureType = %q, want %q", call.input.FailureType, feature.FailureProtocolViolation)
+	if call.input.FailureCode != errcat.ProtocolViolation {
+		t.Errorf("FailureCode = %q, want %q", call.input.FailureCode, errcat.ProtocolViolation)
 	}
 	if !strings.Contains(call.input.ErrorDetail, string(agent.RoleKnowledgeBaseBuilder)) {
 		t.Errorf("ErrorDetail = %q, want knowledge base role", call.input.ErrorDetail)

@@ -22,6 +22,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/orchestrator"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
@@ -142,20 +143,23 @@ func TestOrchestrator_RewindWithRequest_FiresAuditHookAfterSuccess(t *testing.T)
 
 // TestOrchestrator_ExtendFailedPhaseBudget_BumpsAndClears
 // ---------------------------------------------------------------------------
-// ExtendFailedPhaseBudget extends MaxIterations when the failure type is
-// FailureMaxIterations and MaxPlanIterations when the current phase is Plan.
-// It always clears LastError / FailureType so restart can proceed.
+// ExtendFailedPhaseBudget extends MaxIterations when the run's failure record
+// code is iteration_budget_exhausted and MaxPlanIterations when the current phase is Plan.
+// It always clears the stored failure record so restart can proceed.
 // ---------------------------------------------------------------------------
 
 func TestOrchestrator_ExtendFailedPhaseBudget_BumpsAndClears(t *testing.T) {
 	f := &feature.Feature{
 		ID:                "feat-1",
 		Status:            feature.StatusFailed,
-		FailureType:       feature.FailureMaxIterations,
 		CurrentPhase:      feature.PhasePlan,
 		MaxIterations:     20,
 		MaxPlanIterations: 3,
-		LastError:         "iteration cap",
+	}
+	f.Run().Failure = &errcat.FailureRecord{
+		Code:        errcat.IterationBudgetExhausted,
+		Context:     &errcat.RecordContext{Phase: &errcat.CodePhase{Name: feature.PhasePlan.FailureName()}},
+		Diagnostics: "iteration cap",
 	}
 	lc := lifecycleForFeature(f)
 	fs := newFeatureStore(f)
@@ -175,8 +179,8 @@ func TestOrchestrator_ExtendFailedPhaseBudget_BumpsAndClears(t *testing.T) {
 	if f.MaxPlanIterations != 5 {
 		t.Errorf("MaxPlanIterations = %d, want 5", f.MaxPlanIterations)
 	}
-	if f.LastError != "" || f.FailureType != "" {
-		t.Errorf("failure fields not cleared: LastError=%q FailureType=%q", f.LastError, f.FailureType)
+	if rec := f.FailureRecord(); rec != nil {
+		t.Errorf("failure record not cleared: %+v", rec)
 	}
 }
 
@@ -208,10 +212,13 @@ func TestOrchestrator_RestartPhase_FailedPlan_ExtendsBudgetAndDispatches(t *test
 		ID:                "feat-1",
 		Status:            feature.StatusFailed,
 		CurrentPhase:      feature.PhasePlan,
-		FailureType:       feature.FailureMaxIterations,
 		MaxIterations:     20,
 		MaxPlanIterations: 3,
-		LastError:         "iteration cap",
+	}
+	f.Run().Failure = &errcat.FailureRecord{
+		Code:        errcat.IterationBudgetExhausted,
+		Context:     &errcat.RecordContext{Phase: &errcat.CodePhase{Name: feature.PhasePlan.FailureName()}},
+		Diagnostics: "iteration cap",
 	}
 	lc := lifecycleForFeature(f)
 	fs := newFeatureStore(f)
@@ -240,8 +247,8 @@ func TestOrchestrator_RestartPhase_FailedPlan_ExtendsBudgetAndDispatches(t *test
 	if f.MaxPlanIterations != 5 {
 		t.Errorf("MaxPlanIterations = %d, want 5 (bumped by delta=2)", f.MaxPlanIterations)
 	}
-	if f.LastError != "" || f.FailureType != "" {
-		t.Errorf("failure fields should be cleared: LastError=%q FailureType=%q", f.LastError, f.FailureType)
+	if rec := f.FailureRecord(); rec != nil {
+		t.Errorf("failure record should be cleared: %+v", rec)
 	}
 }
 
@@ -250,8 +257,6 @@ func TestOrchestrator_RestartPhase_FailedFinalReview_DispatchesFinalReview(t *te
 		ID:           "feat-fr",
 		Status:       feature.StatusFailed,
 		CurrentPhase: feature.PhaseFinalReview,
-		FailureType:  feature.FailureProtocolViolation,
-		LastError:    "protocol violation: final_review_reviewer @ /tmp/iter: invalid report",
 		Repos:        []feature.FeatureRepo{{Name: agenticRepoName}},
 		RepoStates: map[string]*feature.RepoState{
 			agenticRepoName: {
@@ -259,6 +264,11 @@ func TestOrchestrator_RestartPhase_FailedFinalReview_DispatchesFinalReview(t *te
 				LastError: "protocol violation: final_review_reviewer @ /tmp/iter: invalid report",
 			},
 		},
+	}
+	f.Run().Failure = &errcat.FailureRecord{
+		Code:        errcat.ProtocolViolation,
+		Context:     &errcat.RecordContext{Phase: &errcat.CodePhase{Name: feature.PhaseFinalReview.FailureName()}},
+		Diagnostics: "protocol violation: final_review_reviewer @ /tmp/iter: invalid report",
 	}
 	lc := lifecycleForFeature(f)
 	fs := newFeatureStore(f)
@@ -284,8 +294,8 @@ func TestOrchestrator_RestartPhase_FailedFinalReview_DispatchesFinalReview(t *te
 	if f.CurrentPhase != feature.PhaseFinalReview {
 		t.Fatalf("CurrentPhase = %v, want PhaseFinalReview", f.CurrentPhase)
 	}
-	if f.LastError != "" || f.FailureType != "" {
-		t.Fatalf("failure fields should be cleared: LastError=%q FailureType=%q", f.LastError, f.FailureType)
+	if rec := f.FailureRecord(); rec != nil {
+		t.Fatalf("failure record should be cleared: %+v", rec)
 	}
 	if st := f.RepoStates[agenticRepoName]; st == nil || st.LastError != "" {
 		t.Fatalf("RepoStates[agentic] = %+v, want LastError cleared", st)

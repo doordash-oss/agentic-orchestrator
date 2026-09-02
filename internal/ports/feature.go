@@ -16,6 +16,7 @@ package ports
 
 import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 )
 
@@ -105,7 +106,7 @@ type FeatureLifecycle interface {
 	CleanWorktree(featureID string) error
 
 	// Failure / restart
-	MarkFailed(featureID, failureType, lastError string) error
+	MarkFailed(featureID string, failure errcat.FailureRecord) error
 
 	// Rewind / pipeline
 	RewindToPhase(featureID string, targetPhase feature.Phase) ([]string, feature.Phase, error)

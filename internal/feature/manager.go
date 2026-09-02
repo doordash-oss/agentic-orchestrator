@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 )
 
@@ -792,14 +793,14 @@ func (m *Manager) CleanWorktree(featureID string) error {
 	})
 }
 
-// MarkFailed transitions a feature to Failed with error context.
-func (m *Manager) MarkFailed(featureID, failureType, lastError string) error {
+// MarkFailed transitions a feature to Failed and stores the canonical
+// failure record on the active run.
+func (m *Manager) MarkFailed(featureID string, failure errcat.FailureRecord) error {
 	return m.Store.Modify(featureID, func(f *Feature) error {
 		if err := f.Transition(StatusFailed); err != nil {
 			return err
 		}
-		f.FailureType = failureType
-		f.LastError = lastError
+		f.Run().Failure = &failure
 		return nil
 	})
 }
@@ -1452,8 +1453,7 @@ func (m *Manager) TryCompletePublish(featureID string) (bool, error) {
 			if err := current.Transition(StatusCodeReady); err != nil {
 				return err
 			}
-			current.LastError = ""
-			current.FailureType = ""
+			current.Run().Failure = nil
 			return nil
 		}); err != nil {
 			return false, err
@@ -1502,8 +1502,7 @@ func (m *Manager) RetryPhase(featureID string, repoNames []string) error {
 			}
 			state.LastError = ""
 		}
-		f.LastError = ""
-		f.FailureType = ""
+		f.Run().Failure = nil
 		f.PendingNeedUserInputPath = ""
 		f.CurrentPhaseStatus = ""
 		return nil

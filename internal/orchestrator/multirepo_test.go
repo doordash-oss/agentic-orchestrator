@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/orchestrator"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
@@ -231,7 +232,7 @@ func TestStartMultiRepoImplementation_HandlePhaseCompletionError_MarksFeatureFai
 	lc.CompleteImplementationFn = func(id string) error { return completeErr }
 
 	markFailedCalled := make(chan struct{}, 1)
-	lc.MarkFailedFn = func(id, failureType, errMsg string) error {
+	lc.MarkFailedFn = func(id string, failure errcat.FailureRecord) error {
 		f.Status = feature.StatusFailed
 		select {
 		case markFailedCalled <- struct{}{}:
@@ -255,7 +256,7 @@ func TestStartMultiRepoImplementation_HandlePhaseCompletionError_MarksFeatureFai
 	o := orchestrator.New(
 		orchestrator.Deps{Lifecycle: lc, Store: store},
 		orchestrator.Hooks{
-			OnFeatureFailed: func(featureID, failureType, errorMsg string) {
+			OnFeatureFailed: func(featureID string, code errcat.Code, class errcat.Class, errorMsg string) {
 				select {
 				case hookCh <- errorMsg:
 				default:
@@ -338,7 +339,7 @@ func TestStartMultiRepoImplementation_PublishConflictDoesNotMarkFeatureFailed(t 
 		return nil
 	}
 	markFailedCalled := make(chan struct{}, 1)
-	lc.MarkFailedFn = func(id, failureType, errMsg string) error {
+	lc.MarkFailedFn = func(id string, failure errcat.FailureRecord) error {
 		f.Status = feature.StatusFailed
 		select {
 		case markFailedCalled <- struct{}{}:
@@ -426,7 +427,7 @@ func TestDispatchMultiRepoResults_NeedUserInputRoutesPausedTerminalState(t *test
 	store := newFeatureStore(f)
 
 	var markFailedCalled bool
-	lc.MarkFailedFn = func(id, failureType, errMsg string) error {
+	lc.MarkFailedFn = func(id string, failure errcat.FailureRecord) error {
 		markFailedCalled = true
 		f.Status = feature.StatusFailed
 		return nil

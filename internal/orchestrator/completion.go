@@ -25,6 +25,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
@@ -86,31 +87,34 @@ func formatSingleShotProtocolViolationError(role agent.Role, dir string, violati
 	return agent.FormatSingleShotProtocolViolationError(role, dir, violations)
 }
 
-func singleShotFailureType(input PhaseCompletionInput) string {
-	if input.FailureType != "" {
-		return input.FailureType
+func singleShotFailureCode(input PhaseCompletionInput) errcat.Code {
+	if input.FailureCode != "" {
+		return input.FailureCode
 	}
-	return feature.FailureSessionCrash
+	return errcat.SessionCrashed
 }
 
-// markFailedWithEvent transitions the feature to StatusFailed via lifecycle
-// and emits FeatureFailed. External observer concerns remain upstream of the
-// orchestrator port.
+// markFailedWithEvent transitions the feature to StatusFailed via lifecycle,
+// persists the canonical failure record, and emits FeatureFailed carrying the
+// rendered canonical error object. External observer concerns remain upstream
+// of the orchestrator port.
 //
 // Fires OnFeatureSummaryNeeded at the tail (after OnFeatureFailed) so
 // downstream observers can persist observe-summary.yaml for the terminal
 // failure state.
-func (o *Orchestrator) markFailedWithEvent(featureID, failureType, errMsg string) error {
-	if err := o.deps.Lifecycle.MarkFailed(featureID, failureType, errMsg); err != nil {
+func (o *Orchestrator) markFailedWithEvent(featureID string, failure errcat.FailureRecord) error {
+	rendered := errcat.RenderRecord(failure)
+	if err := o.deps.Lifecycle.MarkFailed(featureID, failure); err != nil {
 		return fmt.Errorf("mark failed: %w", err)
 	}
 	o.emitEventBlocking(ports.Event{
-		Type:      ports.FeatureFailed,
-		FeatureID: featureID,
-		Message:   errMsg,
+		Type:           ports.FeatureFailed,
+		FeatureID:      featureID,
+		Message:        failure.Diagnostics,
+		CanonicalError: &rendered,
 	})
 	if o.hooks.OnFeatureFailed != nil {
-		o.hooks.OnFeatureFailed(featureID, failureType, errMsg)
+		o.hooks.OnFeatureFailed(featureID, rendered.Code, rendered.Class, failure.Diagnostics)
 	}
 	if o.hooks.OnFeatureSummaryNeeded != nil {
 		// Best-effort reload for the summary payload. A nil feature triggers
@@ -128,8 +132,8 @@ func (o *Orchestrator) markFailedWithEvent(featureID, failureType, errMsg string
 // callers route terminal-failure transitions through this method so the
 // FeatureFailed event / OnFeatureFailed / OnFeatureSummaryNeeded hooks fire
 // from a single orchestrator-owned emission site.
-func (o *Orchestrator) MarkFailed(featureID, failureType, errMsg string) error {
-	return o.markFailedWithEvent(featureID, failureType, errMsg)
+func (o *Orchestrator) MarkFailed(featureID string, failure errcat.FailureRecord) error {
+	return o.markFailedWithEvent(featureID, failure)
 }
 
 // ---------------------------------------------------------------------------
@@ -184,7 +188,7 @@ func (o *Orchestrator) onKBCompleted(featureID string, input PhaseCompletionInpu
 			}
 		}
 		o.emitPhaseCompleted(featureID, feature.PhaseKnowledgeBase, errors.New(errMsg))
-		err := o.markFailedWithEvent(featureID, singleShotFailureType(input), errMsg)
+		err := o.markFailedWithEvent(featureID, failureRecordWithRepos(singleShotFailureCode(input), feature.PhaseKnowledgeBase, []string{repoName}, errMsg))
 		// The session-cleanup func released this feature's kb.lock before
 		// onKBCompleted was dispatched. Wake any waiters parked on that lock
 		// regardless of whether the failure-mark itself succeeded.
@@ -216,7 +220,7 @@ func (o *Orchestrator) onKBCompleted(featureID string, input PhaseCompletionInpu
 			}
 		}
 		o.emitPhaseCompleted(featureID, feature.PhaseKnowledgeBase, errors.New(errMsg))
-		err := o.markFailedWithEvent(featureID, feature.FailureProtocolViolation, errMsg)
+		err := o.markFailedWithEvent(featureID, failureRecordWithRepos(errcat.ProtocolViolation, feature.PhaseKnowledgeBase, []string{repoName}, errMsg))
 		o.wakeKBWaiters(featureID)
 		return err
 	}
@@ -366,7 +370,7 @@ func (o *Orchestrator) onArtifactPhaseCompletedWithKey(
 			errMsg = fmt.Sprintf("%s phase failed: %s", input.Phase, input.ErrorDetail)
 		}
 		o.emitPhaseCompleted(featureID, input.Phase, errors.New(errMsg))
-		return o.markFailedWithEvent(featureID, singleShotFailureType(input), errMsg)
+		return o.markFailedWithEvent(featureID, failureRecord(singleShotFailureCode(input), input.Phase, errMsg))
 	}
 
 	f, err := o.deps.Lifecycle.Get(featureID)
@@ -384,7 +388,7 @@ func (o *Orchestrator) onArtifactPhaseCompletedWithKey(
 	if len(violations) > 0 {
 		errMsg := formatSingleShotProtocolViolationError(artifactPhaseRoleMust(input.Phase), phaseDir, violations)
 		o.emitPhaseCompleted(featureID, input.Phase, errors.New(errMsg))
-		return o.markFailedWithEvent(featureID, feature.FailureProtocolViolation, errMsg)
+		return o.markFailedWithEvent(featureID, failureRecord(errcat.ProtocolViolation, input.Phase, errMsg))
 	}
 
 	if err := o.deps.Store.Modify(featureID, func(ff *feature.Feature) error {
@@ -490,7 +494,7 @@ func (o *Orchestrator) onPlanLoopDone(featureID string, result *agent.PlanLoopRe
 	if result == nil {
 		errMsg := "plan loop returned no result"
 		o.emitPhaseCompleted(featureID, feature.PhasePlan, errors.New(errMsg))
-		return o.markFailedWithEvent(featureID, feature.FailureInfrastructure, errMsg)
+		return o.markFailedWithEvent(featureID, failureRecord(errcat.InfrastructureFailure, feature.PhasePlan, errMsg))
 	}
 	planDir := o.planReadOnlyGuardDir(f)
 	repoMutationViolations, err := agent.EnforceReadOnlyRepoMutations(context.Background(), o.deps.CmdRunner, f, feature.PhasePlan, planDir)
@@ -504,7 +508,7 @@ func (o *Orchestrator) onPlanLoopDone(featureID string, result *agent.PlanLoopRe
 		}
 		errMsg := formatSingleShotProtocolViolationError(role, planDir, repoMutationViolations)
 		o.emitPhaseCompleted(featureID, feature.PhasePlan, errors.New(errMsg))
-		return o.markFailedWithEvent(featureID, feature.FailureProtocolViolation, errMsg)
+		return o.markFailedWithEvent(featureID, failureRecord(errcat.ProtocolViolation, feature.PhasePlan, errMsg))
 	}
 
 	switch result.FinalStatus {
@@ -518,21 +522,21 @@ func (o *Orchestrator) onPlanLoopDone(featureID string, result *agent.PlanLoopRe
 			errMsg = "plan loop failed"
 		}
 		o.emitPhaseCompleted(featureID, feature.PhasePlan, errors.New(errMsg))
-		return o.markFailedWithEvent(featureID, feature.FailureInfrastructure, errMsg)
+		return o.markFailedWithEvent(featureID, failureRecordWithIteration(failureRecord(errcat.InfrastructureFailure, feature.PhasePlan, errMsg), result.Iterations))
 	case "protocol_violation":
 		errMsg := result.LastError
 		if errMsg == "" {
 			errMsg = "plan loop protocol violation"
 		}
 		o.emitPhaseCompleted(featureID, feature.PhasePlan, errors.New(errMsg))
-		return o.markFailedWithEvent(featureID, feature.FailureProtocolViolation, errMsg)
+		return o.markFailedWithEvent(featureID, failureRecordWithIteration(failureRecord(errcat.ProtocolViolation, feature.PhasePlan, errMsg), result.Iterations))
 	case finalStatusInterrupted:
 		// Interrupted runs are driven by InterruptFeature; nothing to do.
 		return nil
 	default:
 		errMsg := fmt.Sprintf("unknown plan FinalStatus %q", result.FinalStatus)
 		o.emitPhaseCompleted(featureID, feature.PhasePlan, errors.New(errMsg))
-		return o.markFailedWithEvent(featureID, feature.FailureInfrastructure, errMsg)
+		return o.markFailedWithEvent(featureID, failureRecord(errcat.InfrastructureFailure, feature.PhasePlan, errMsg))
 	}
 }
 
@@ -685,7 +689,7 @@ func (o *Orchestrator) onImplementCompleted(featureID string, input PhaseComplet
 	}
 	errMsg := "implement completion missing multi-repo result"
 	o.emitPhaseCompleted(featureID, feature.PhaseImplement, errors.New(errMsg))
-	return o.markFailedWithEvent(featureID, feature.FailureInfrastructure, errMsg)
+	return o.markFailedWithEvent(featureID, failureRecord(errcat.InfrastructureFailure, feature.PhaseImplement, errMsg))
 }
 
 // onMultiRepoImplementDone handles an agent.OrchestratorResult completion.
@@ -771,28 +775,15 @@ func (o *Orchestrator) onMultiRepoImplementDone(featureID string, result *agent.
 		}
 		// Preserve per-repo typed failures so retry/recovery paths can
 		// distinguish iteration caps from hard completion-protocol defects.
-		failureType := feature.FailureInfrastructure
-		for _, status := range result.RepoStatuses {
-			switch status {
-			case "protocol_violation":
-				failureType = feature.FailureProtocolViolation
-			case "safety_rail":
-				if failureType == feature.FailureInfrastructure {
-					failureType = feature.FailureSafetyRail
-				}
-			case "max_iterations":
-				failureType = feature.FailureMaxIterations
-			}
-			if failureType == feature.FailureProtocolViolation {
-				break
-			}
-		}
 		o.emitPhaseCompleted(featureID, feature.PhaseImplement, errors.New(errMsg))
-		return o.markFailedWithEvent(featureID, failureType, errMsg)
+		return o.markFailedWithEvent(featureID, failureRecordWithIteration(
+			failureRecordWithRepos(repoFailureCode(result), feature.PhaseImplement, result.FailedRepos, errMsg),
+			o.currentIteration(featureID),
+		))
 	default:
 		errMsg := fmt.Sprintf("unknown multi-repo FinalStatus %q", result.FinalStatus)
 		o.emitPhaseCompleted(featureID, feature.PhaseImplement, errors.New(errMsg))
-		return o.markFailedWithEvent(featureID, feature.FailureInfrastructure, errMsg)
+		return o.markFailedWithEvent(featureID, failureRecord(errcat.InfrastructureFailure, feature.PhaseImplement, errMsg))
 	}
 }
 
@@ -995,9 +986,9 @@ func (o *Orchestrator) advanceAfterFinalReview(featureID string) error {
 		return fmt.Errorf("reload after final review: %w", err)
 	}
 	if f.Status == feature.StatusFailed || f.HasTerminalFailure() {
-		errMsg := strings.TrimSpace(f.LastError)
-		if errMsg == "" {
-			errMsg = "final review did not complete successfully"
+		errMsg := "final review did not complete successfully"
+		if rec := f.FailureRecord(); rec != nil && strings.TrimSpace(rec.Diagnostics) != "" {
+			errMsg = strings.TrimSpace(rec.Diagnostics)
 		}
 		return fmt.Errorf("final review did not complete successfully: %s", errMsg)
 	}
@@ -1292,18 +1283,18 @@ func (o *Orchestrator) startDeferredFinalReview(featureID string) (chan *agent.O
 	if runFn == nil {
 		errMsg := "runMultiRepoFinalReviewFn not configured"
 		o.emitPhaseCompleted(featureID, feature.PhaseFinalReview, errors.New(errMsg))
-		return nil, o.markFinalReviewFailedWithEvent(featureID, feature.FailureInfrastructure, errMsg)
+		return nil, o.markFinalReviewFailedWithEvent(featureID, failureRecord(errcat.InfrastructureFailure, feature.PhaseFinalReview, errMsg))
 	}
 	resultCh, err := runFn(f, o.computeKBInfos(f)...)
 	if err != nil {
 		errMsg := fmt.Sprintf("dispatch final review: %v", err)
 		o.emitPhaseCompleted(featureID, feature.PhaseFinalReview, errors.New(errMsg))
-		return nil, o.markFinalReviewFailedWithEvent(featureID, feature.FailureInfrastructure, errMsg)
+		return nil, o.markFinalReviewFailedWithEvent(featureID, failureRecord(errcat.InfrastructureFailure, feature.PhaseFinalReview, errMsg))
 	}
 	if resultCh == nil {
 		errMsg := "dispatch final review returned no result channel"
 		o.emitPhaseCompleted(featureID, feature.PhaseFinalReview, errors.New(errMsg))
-		return nil, o.markFinalReviewFailedWithEvent(featureID, feature.FailureInfrastructure, errMsg)
+		return nil, o.markFinalReviewFailedWithEvent(featureID, failureRecord(errcat.InfrastructureFailure, feature.PhaseFinalReview, errMsg))
 	}
 	return resultCh, nil
 }
@@ -1312,7 +1303,7 @@ func (o *Orchestrator) finishDeferredFinalReviewResult(featureID string, res *ag
 	if !ok || res == nil {
 		errMsg := "final review returned no result"
 		o.emitPhaseCompleted(featureID, feature.PhaseFinalReview, errors.New(errMsg))
-		return o.markFinalReviewFailedWithEvent(featureID, feature.FailureInfrastructure, errMsg)
+		return o.markFinalReviewFailedWithEvent(featureID, failureRecord(errcat.InfrastructureFailure, feature.PhaseFinalReview, errMsg))
 	}
 	switch res.FinalStatus {
 	case finalStatusAllPassed:
@@ -1339,7 +1330,7 @@ func (o *Orchestrator) finishDeferredFinalReviewResult(featureID string, res *ag
 	case finalStatusPlanRevisionRequired:
 		errMsg := "final review requested unsupported phase-plan revision"
 		o.emitPhaseCompleted(featureID, feature.PhaseFinalReview, errors.New(errMsg))
-		return o.markFinalReviewFailedWithEvent(featureID, feature.FailureInfrastructure, errMsg)
+		return o.markFinalReviewFailedWithEvent(featureID, failureRecord(errcat.InfrastructureFailure, feature.PhaseFinalReview, errMsg))
 	case "failed":
 		errMsg := res.LastError
 		if errMsg == "" {
@@ -1349,32 +1340,23 @@ func (o *Orchestrator) finishDeferredFinalReviewResult(featureID string, res *ag
 				errMsg = "final review failed"
 			}
 		}
-		failureType := feature.FailureInfrastructure
-		for _, status := range res.RepoStatuses {
-			switch status {
-			case "protocol_violation":
-				failureType = feature.FailureProtocolViolation
-			case "max_iterations":
-				failureType = feature.FailureMaxIterations
-			}
-			if failureType == feature.FailureProtocolViolation {
-				break
-			}
-		}
 		o.emitPhaseCompleted(featureID, feature.PhaseFinalReview, errors.New(errMsg))
-		return o.markFinalReviewFailedWithEvent(featureID, failureType, errMsg)
+		return o.markFinalReviewFailedWithEvent(featureID, failureRecordWithIteration(
+			failureRecordWithRepos(repoFailureCode(res), feature.PhaseFinalReview, res.FailedRepos, errMsg),
+			o.currentIteration(featureID),
+		))
 	default:
 		errMsg := fmt.Sprintf("unknown final review FinalStatus %q", res.FinalStatus)
 		o.emitPhaseCompleted(featureID, feature.PhaseFinalReview, errors.New(errMsg))
-		return o.markFinalReviewFailedWithEvent(featureID, feature.FailureInfrastructure, errMsg)
+		return o.markFinalReviewFailedWithEvent(featureID, failureRecord(errcat.InfrastructureFailure, feature.PhaseFinalReview, errMsg))
 	}
 }
 
-func (o *Orchestrator) markFinalReviewFailedWithEvent(featureID, failureType, errMsg string) error {
-	if err := o.markFailedWithEvent(featureID, failureType, errMsg); err != nil {
+func (o *Orchestrator) markFinalReviewFailedWithEvent(featureID string, failure errcat.FailureRecord) error {
+	if err := o.markFailedWithEvent(featureID, failure); err != nil {
 		return err
 	}
-	return errors.New(errMsg)
+	return errors.New(failure.Diagnostics)
 }
 
 // Completion repo status values enumerate the server-authored completion

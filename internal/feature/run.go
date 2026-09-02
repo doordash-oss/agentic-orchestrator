@@ -17,6 +17,8 @@ package feature
 import (
 	"fmt"
 	"time"
+
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 )
 
 // SealReason identifies why a run was sealed. Only rewind seals runs today;
@@ -145,9 +147,12 @@ type Run struct {
 	// tracks the reset-on-phase-boundary limit that the plan loop consults.
 	MaxPlanIterations int `yaml:"max_plan_iterations,omitempty"`
 
-	// Error state (moved from Feature).
-	LastError   string `yaml:"last_error,omitempty"`
-	FailureType string `yaml:"failure_type,omitempty"`
+	// Failure is the durable canonical failure record for this run: a
+	// catalog code, typed context blocks, and raw diagnostics. No rendered
+	// text is persisted; read models render it through the catalog at
+	// projection time. Legacy `last_error`/`failure_type` YAML keys from
+	// older schemas are ignored on load and never written.
+	Failure *errcat.FailureRecord `yaml:"failure,omitempty"`
 
 	// KB transient flags (moved from Feature — actual KB data lives in a
 	// sibling knowledge-base/ directory outside the feature dir, untouched).

@@ -452,6 +452,27 @@ func (e RewindWorktreeConsequenceResetKind) Valid() bool {
 	}
 }
 
+// Defines values for SSEEventErrorClass.
+const (
+	SSEEventErrorClassBlocking    SSEEventErrorClass = "blocking"
+	SSEEventErrorClassNeedsAction SSEEventErrorClass = "needs_action"
+	SSEEventErrorClassWarning     SSEEventErrorClass = "warning"
+)
+
+// Valid indicates whether the value is a known member of the SSEEventErrorClass enum.
+func (e SSEEventErrorClass) Valid() bool {
+	switch e {
+	case SSEEventErrorClassBlocking:
+		return true
+	case SSEEventErrorClassNeedsAction:
+		return true
+	case SSEEventErrorClassWarning:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for TaskActivityState.
 const (
 	TaskActivityStateCancelled TaskActivityState = "cancelled"
@@ -1398,12 +1419,6 @@ type ErrorResponse struct {
 	Error Error `json:"error"`
 }
 
-// Failure defines model for Failure.
-type Failure struct {
-	Message string `json:"message,omitempty"`
-	Type    string `json:"type,omitempty"`
-}
-
 // FeatureAction Feature lifecycle action identifier.
 type FeatureAction string
 
@@ -1492,14 +1507,16 @@ type FeatureDetail struct {
 	CloseOutcome string `json:"close_outcome,omitempty"`
 
 	// ClosedAt Relationship close timestamp; only set on closed child features.
-	ClosedAt       *time.Time          `json:"closed_at,omitempty"`
-	Cost           Cost                `json:"cost"`
-	CreatedAt      time.Time           `json:"created_at"`
-	CurrentPhase   string              `json:"current_phase"`
-	Description    string              `json:"description,omitempty"`
-	Effort         EffortConfig        `json:"effort,omitempty"`
-	ExitCriteria   string              `json:"exit_criteria,omitempty"`
-	Failure        *Failure            `json:"failure,omitempty"`
+	ClosedAt     *time.Time   `json:"closed_at,omitempty"`
+	Cost         Cost         `json:"cost"`
+	CreatedAt    time.Time    `json:"created_at"`
+	CurrentPhase string       `json:"current_phase"`
+	Description  string       `json:"description,omitempty"`
+	Effort       EffortConfig `json:"effort,omitempty"`
+	ExitCriteria string       `json:"exit_criteria,omitempty"`
+
+	// Failure Canonical catalog-rendered error.
+	Failure        *Error              `json:"failure,omitempty"`
 	HistoricalRuns []RunSummary        `json:"historical_runs"`
 	ID             string              `json:"id"`
 	Inquireness    feature.Inquireness `json:"inquireness,omitempty"`
@@ -2658,8 +2675,11 @@ type SSEEvent struct {
 	APIVersion string    `json:"api_version"`
 	At         time.Time `json:"at"`
 	Epoch      string    `json:"epoch,omitempty"`
-	ID         string    `json:"id"`
-	Kind       string    `json:"kind"`
+
+	// Error Canonical failure identity for failure-carrying lifecycle events (feature lifecycle failed). Absent on every other event kind.
+	Error *SSEEventError `json:"error,omitempty"`
+	ID    string         `json:"id"`
+	Kind  string         `json:"kind"`
 
 	// RecordCount Session's current transcript record count at emission time — the same index space /transcript and /output/stream use. Only set on session.output.activity events.
 	RecordCount      int      `json:"record_count,omitempty"`
@@ -2670,6 +2690,18 @@ type SSEEvent struct {
 	SnapshotRequired bool     `json:"snapshot_required"`
 	Summary          string   `json:"summary,omitempty"`
 }
+
+// SSEEventError Canonical failure identity for failure-carrying lifecycle events (feature lifecycle failed). Absent on every other event kind.
+type SSEEventError struct {
+	// Class Severity treatment class.
+	Class SSEEventErrorClass `json:"class"`
+
+	// Code Stable snake_case catalog code.
+	Code string `json:"code"`
+}
+
+// SSEEventErrorClass Severity treatment class.
+type SSEEventErrorClass string
 
 // SessionDetail defines model for SessionDetail.
 type SessionDetail struct {

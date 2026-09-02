@@ -16,6 +16,7 @@ package mocks
 
 import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 )
 
@@ -78,7 +79,7 @@ type MockFeatureLifecycle struct {
 	MarkCodeReadyFn        func(featureID string) error
 	MarkFinalReviewReadyFn func(featureID string) error
 	MarkPublishedFn        func(featureID, prURL string) error
-	MarkFailedFn           func(featureID, failureType, lastError string) error
+	MarkFailedFn           func(featureID string, failure errcat.FailureRecord) error
 	SetRepoPublishedFn     func(featureID, repoName, prURL string) error
 	SetRepoPublishErrorFn  func(featureID, repoName, errMsg string) error
 	TryCompletePublishFn   func(featureID string) (bool, error)
@@ -423,10 +424,10 @@ func (m *MockFeatureLifecycle) CleanWorktree(featureID string) error {
 // Failure / restart
 // ---------------------------------------------------------------------------
 
-func (m *MockFeatureLifecycle) MarkFailed(featureID, failureType, lastError string) error {
-	m.record("MarkFailed", featureID, failureType, lastError)
+func (m *MockFeatureLifecycle) MarkFailed(featureID string, failure errcat.FailureRecord) error {
+	m.record("MarkFailed", featureID, failure)
 	if m.MarkFailedFn != nil {
-		return m.MarkFailedFn(featureID, failureType, lastError)
+		return m.MarkFailedFn(featureID, failure)
 	}
 	return m.DefaultError
 }

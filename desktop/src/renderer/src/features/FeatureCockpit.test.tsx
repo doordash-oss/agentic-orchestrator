@@ -986,10 +986,25 @@ describe('FeatureCockpit wide-layout inspector', () => {
 });
 
 describe('FeatureCockpit failure and retry', () => {
+  function worktreeSetupFailure() {
+    return {
+      code: 'worktree_setup_failed',
+      class: 'blocking' as const,
+      title: 'Worktree setup failed',
+      summary: 'Setting up the worktree for repository "repo-a" failed.',
+      remediation: {
+        hint: 'Resolve the reported problem in the repository, then retry setup.',
+        actions: ['setup'],
+      },
+      context: { repositories: [{ name: 'repo-a', branch: 'feature/search-revamp' }] },
+      diagnostics: 'clone failed',
+    };
+  }
+
   function failedSnapshot() {
     return featureSnapshot({
       status: 'Failed',
-      failure: { type: 'worktree_setup', message: 'Setup failed in repo-a.' },
+      failure: worktreeSetupFailure(),
       setup: {
         status: 'failed',
         attempt: 1,
@@ -1028,25 +1043,44 @@ describe('FeatureCockpit failure and retry', () => {
     });
   }
 
-  it('keeps the feature failure visible without the durable setup block', async () => {
+  it('renders the durable failure once through the full ErrorSurface', async () => {
     const mock = installAgenticoMock();
     mock.api.getFeature.mockResolvedValue(failedSnapshot());
     renderCockpit(mock);
     await openInspector();
     await screen.findByRole('region', { name: 'Feature Search revamp' });
 
-    expect(screen.getByText('Setup failed in repo-a.')).toBeInTheDocument();
-    expect(screen.queryByRole('region', { name: 'Durable setup' })).not.toBeInTheDocument();
+    // Exactly one durable failure surface, keyed by the alert role the
+    // blocking class assigns.
+    const alert = screen.getByRole('alert');
+    expect(within(alert).getByText('Failed')).toBeInTheDocument();
+    expect(within(alert).getByText('worktree_setup_failed')).toBeInTheDocument();
+    expect(within(alert).getByText('Worktree setup failed')).toBeInTheDocument();
+    expect(
+      within(alert).getByText('Setting up the worktree for repository "repo-a" failed.'),
+    ).toBeInTheDocument();
+    expect(within(alert).getByText('repo-a')).toBeInTheDocument();
+
+    // Diagnostics sit behind the second disclosure and stay raw.
+    const diagnostics = alert.querySelector('details.error-surface__diagnostics');
+    expect(diagnostics).not.toBeNull();
+    expect(diagnostics?.textContent).toContain('clone failed');
+
+    // No element with the old form-error classes remains in the stage status.
+    expect(document.querySelector('.cockpit__stage-status .create-form__error')).toBeNull();
   });
 
-  it('retries via the server-authorized setup action on the SAME feature', async () => {
+  it('retries via the card action on the SAME feature', async () => {
     const mock = installAgenticoMock();
     mock.api.getFeature.mockResolvedValue(failedSnapshot());
     renderCockpit(mock);
     const user = userEvent.setup();
     await screen.findByRole('region', { name: 'Feature Search revamp' });
 
-    const retry = screen.getByRole('button', { name: 'Retry setup' });
+    // The card's own Retry setup button drives the setup bridge; the toolbar
+    // keeps its primary Retry setup button too, so scope to the alert.
+    const alert = screen.getByRole('alert');
+    const retry = within(alert).getByRole('button', { name: 'Retry setup' });
     expect(retry).toBeEnabled();
     const callsBefore = mock.api.getFeature.mock.calls.length;
     await user.click(retry);
@@ -1055,6 +1089,25 @@ describe('FeatureCockpit failure and retry', () => {
     expect(mock.api.createFeature).not.toHaveBeenCalled();
     // The same feature is refreshed rather than duplicated.
     await waitFor(() => expect(mock.api.getFeature.mock.calls.length).toBeGreaterThan(callsBefore));
+  });
+
+  it('renders the disabled reason in the card action slot instead of a button', async () => {
+    const snapshot = failedSnapshot();
+    snapshot.actions = [
+      {
+        id: 'setup',
+        enabled: false,
+        disabledReasons: [{ code: 'setup_in_progress', message: 'setup is already running' }],
+      },
+    ];
+    const mock = installAgenticoMock();
+    mock.api.getFeature.mockResolvedValue(snapshot);
+    renderCockpit(mock);
+    await screen.findByRole('region', { name: 'Feature Search revamp' });
+
+    const alert = screen.getByRole('alert');
+    expect(within(alert).getByText('setup is already running')).toBeInTheDocument();
+    expect(within(alert).queryByRole('button', { name: 'Retry setup' })).not.toBeInTheDocument();
   });
 
   it('attributes the server-provided reason to Start when the action is unavailable', async () => {
@@ -2049,12 +2102,27 @@ describe('FeatureCockpit convergence', () => {
 });
 
 describe('FeatureCockpit Restart', () => {
-  it('extends the budget when restarting a max-iteration failure', async () => {
+  function iterationBudgetFailure() {
+    return {
+      code: 'iteration_budget_exhausted',
+      class: 'blocking' as const,
+      title: 'Iteration budget exhausted',
+      summary: 'The Implement phase exhausted its iteration budget at iteration 3.',
+      remediation: {
+        hint: 'Restart the phase with an extended iteration budget, or revise the plan so the work converges.',
+        actions: ['restart'],
+      },
+      context: { phase: { name: 'implement', iteration: 3 } },
+      diagnostics: 'reached maximum iteration count',
+    };
+  }
+
+  it('extends the budget when restarting an iteration-budget failure', async () => {
     const mock = installAgenticoMock({
       feature: featureSnapshot({
         status: 'Failed',
         currentPhase: 'Implement',
-        failure: { type: 'max_iterations', message: 'reached maximum iteration count' },
+        failure: iterationBudgetFailure(),
         actions: [{ id: 'restart', enabled: true, disabledReasons: [] }],
       }),
     });
@@ -2077,6 +2145,90 @@ describe('FeatureCockpit Restart', () => {
         },
       }),
     );
+  });
+
+  it('restarts an iteration-budget failure from the card with the budget-extension dialog', async () => {
+    const mock = installAgenticoMock({
+      feature: featureSnapshot({
+        status: 'Failed',
+        currentPhase: 'Implement',
+        failure: iterationBudgetFailure(),
+        actions: [{ id: 'restart', enabled: true, disabledReasons: [] }],
+      }),
+    });
+    renderCockpit(mock);
+    const user = userEvent.setup();
+    await screen.findByRole('region', { name: 'Feature Search revamp' });
+
+    // The card's own Restart button is the primary action for this code.
+    const alert = screen.getByRole('alert');
+    await user.click(within(alert).getByRole('button', { name: 'Restart' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Restart Search revamp?' });
+    expect(dialog).toHaveTextContent('maximum-iteration restart');
+    await user.click(within(dialog).getByRole('button', { name: 'Confirm restart' }));
+
+    await waitFor(() =>
+      expect(mock.api.dispatchFeatureAction).toHaveBeenCalledWith({
+        featureId: FEATURE_ID,
+        action: 'restart',
+        body: {
+          max_iterations_delta: 10,
+          max_plan_iterations_delta: 2,
+        },
+      }),
+    );
+  });
+
+  it('restarts a session crash from the card with no request body', async () => {
+    const mock = installAgenticoMock({
+      feature: featureSnapshot({
+        status: 'Failed',
+        currentPhase: 'Implement',
+        failure: {
+          code: 'session_crashed',
+          class: 'blocking' as const,
+          title: 'Session crashed',
+          summary: 'The Implement phase lost its agent session.',
+          remediation: {
+            hint: 'Restart the phase; the session log has the crash details.',
+            actions: ['restart'],
+          },
+          context: { phase: { name: 'implement' } },
+          diagnostics: 'agent exited with status 1',
+        },
+        actions: [{ id: 'restart', enabled: true, disabledReasons: [] }],
+      }),
+    });
+    renderCockpit(mock);
+    const user = userEvent.setup();
+    await screen.findByRole('region', { name: 'Feature Search revamp' });
+
+    const alert = screen.getByRole('alert');
+    await user.click(within(alert).getByRole('button', { name: 'Restart' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Restart Search revamp?' });
+    expect(dialog).not.toHaveTextContent('maximum-iteration restart');
+    await user.click(within(dialog).getByRole('button', { name: 'Confirm restart' }));
+
+    await waitFor(() =>
+      expect(mock.api.dispatchFeatureAction).toHaveBeenCalledWith({
+        featureId: FEATURE_ID,
+        action: 'restart',
+      }),
+    );
+  });
+
+  it('renders no durable failure surface without a failure record', async () => {
+    const mock = installAgenticoMock({
+      feature: featureSnapshot({
+        status: 'Interrupted',
+        currentPhase: 'Implement',
+        actions: [{ id: 'restart', enabled: true, disabledReasons: [] }],
+      }),
+    });
+    renderCockpit(mock);
+    await screen.findByRole('region', { name: 'Feature Search revamp' });
+
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 
   it('keeps ordinary restarts bodyless and does not claim a budget extension', async () => {

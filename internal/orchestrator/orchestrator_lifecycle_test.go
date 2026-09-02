@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/orchestrator"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
@@ -147,11 +148,14 @@ func TestOrchestrator_StartFeaturePersistsSetupFailureWithoutPhaseStart(t *testi
 	lc := lifecycleForFeature(f)
 	lc.RunSetupFn = func(featureID string, opts ...feature.SetupRunnerOptions) error {
 		f.Status = feature.StatusFailed
-		f.FailureType = feature.FailureWorktreeSetup
-		f.LastError = "git worktree add failed"
+		f.Run().Failure = &errcat.FailureRecord{
+			Code:        errcat.WorktreeSetupFailed,
+			Context:     &errcat.RecordContext{Repositories: []errcat.CodeRepository{{Name: repoName}}},
+			Diagnostics: "git worktree add failed",
+		}
 		f.Run().Setup.Status = feature.SetupStatusFailed
-		f.Run().Setup.LastError = f.LastError
-		return errors.New(f.LastError)
+		f.Run().Setup.LastError = "git worktree add failed"
+		return errors.New("git worktree add failed")
 	}
 	fs := newFeatureStore(f)
 	o := orchestrator.New(orchestrator.Deps{
@@ -166,8 +170,10 @@ func TestOrchestrator_StartFeaturePersistsSetupFailureWithoutPhaseStart(t *testi
 
 	assertLifecycleCall(t, lc, "RunSetup")
 	refuteLifecycleCall(t, lc, "StartPlanning")
-	if f.Status != feature.StatusFailed || f.FailureType != feature.FailureWorktreeSetup || !strings.Contains(f.LastError, "git worktree add failed") {
-		t.Fatalf("feature status/failure/error = %s/%s/%q, want persisted setup failure", f.Status, f.FailureType, f.LastError)
+	setupRec := f.FailureRecord()
+	if f.Status != feature.StatusFailed || setupRec == nil || setupRec.Code != errcat.WorktreeSetupFailed ||
+		!strings.Contains(setupRec.Diagnostics, "git worktree add failed") {
+		t.Fatalf("feature status/failure = %s/%+v, want persisted setup failure", f.Status, setupRec)
 	}
 	if f.Run().Setup == nil || f.Run().Setup.Status != feature.SetupStatusFailed || !strings.Contains(f.Run().Setup.LastError, "git worktree add failed") {
 		t.Fatalf("setup = %+v, want failed setup diagnostic", f.Run().Setup)

@@ -502,9 +502,13 @@ func TestServerMutationTargetStartFeatureBlocksChildren(t *testing.T) {
 	t.Run("failed-setup child", func(t *testing.T) {
 		target, childID := newChildTarget(t, func(f *feature.Feature) {
 			f.Status = feature.StatusFailed
-			// SetRun syncs run->shadows, so stamp shadow fields after it.
+			// SetRun syncs run->shadows, so stamp run-scoped state after it.
 			f.SetRun(&feature.Run{RunNumber: 1, Setup: &feature.SetupState{Status: feature.SetupStatusFailed}})
-			f.FailureType = feature.FailureWorktreeSetup
+			f.Run().Failure = &errcat.FailureRecord{
+				Code:        errcat.WorktreeSetupFailed,
+				Context:     &errcat.RecordContext{Repositories: []errcat.CodeRepository{{Name: testRepoAName}}},
+				Diagnostics: "git worktree add failed",
+			}
 		})
 		resp, err := target.StartFeature(childID)
 		if !errors.Is(err, feature.ErrChildExecutionBlocked) {
@@ -1458,8 +1462,8 @@ func TestServerMutationTargetSetupFeatureRetriesOnlyUnfinishedWorkWithoutStartin
 	if err != nil {
 		t.Fatalf("Load failed feature: %v", err)
 	}
-	if failed.Status != feature.StatusFailed || failed.FailureType != feature.FailureWorktreeSetup {
-		t.Fatalf("failed feature = %s/%s; want Failed/worktree_setup with preserved state", failed.Status, failed.FailureType)
+	if failed.Status != feature.StatusFailed || failed.FailureCode() != errcat.WorktreeSetupFailed {
+		t.Fatalf("failed feature = %s/%s; want Failed/worktree_setup_failed with preserved state", failed.Status, failed.FailureCode())
 	}
 	if failedSetup := failed.Run().Setup; failedSetup == nil || failedSetup.LastError == "" {
 		t.Fatalf("failed setup = %+v; want durable last_error", failedSetup)
@@ -1563,10 +1567,16 @@ func TestServerMutationTargetRetryFeatureDispatchesFailedPhase(t *testing.T) {
 	if err := store.Modify(f.ID, func(ff *feature.Feature) error {
 		ff.Status = feature.StatusFailed
 		ff.CurrentPhase = feature.PhaseImplement
-		ff.FailureType = feature.FailureMaxIterations
 		ff.MaxIterations = 10
 		ff.MaxPlanIterations = 3
-		ff.LastError = "no progress for 3 consecutive iterations"
+		ff.Run().Failure = &errcat.FailureRecord{
+			Code: errcat.IterationBudgetExhausted,
+			Context: &errcat.RecordContext{
+				Phase:        &errcat.CodePhase{Name: "implement"},
+				Repositories: []errcat.CodeRepository{{Name: testRepoAName}},
+			},
+			Diagnostics: "no progress for 3 consecutive iterations",
+		}
 		ff.Artifacts = map[string]string{"plan": planPath}
 		return nil
 	}); err != nil {
@@ -1614,6 +1624,12 @@ func TestServerMutationTargetRetryFeatureDispatchesFailedPhase(t *testing.T) {
 func TestRetryFeatureIterationDeltas(t *testing.T) {
 	t.Parallel()
 
+	failedWithRecord := func(code errcat.Code) *feature.Feature {
+		f := &feature.Feature{Status: feature.StatusFailed, CurrentPhase: feature.PhasePlan}
+		f.Run().Failure = &errcat.FailureRecord{Code: code}
+		return f
+	}
+
 	tests := []struct {
 		name     string
 		feature  *feature.Feature
@@ -1621,30 +1637,26 @@ func TestRetryFeatureIterationDeltas(t *testing.T) {
 		wantPlan int
 	}{
 		{
-			name: "max iterations",
-			feature: &feature.Feature{
-				Status:       feature.StatusFailed,
-				FailureType:  feature.FailureMaxIterations,
-				CurrentPhase: feature.PhasePlan,
-			},
+			name:     "iteration budget exhausted",
+			feature:  failedWithRecord(errcat.IterationBudgetExhausted),
 			wantMax:  10,
 			wantPlan: 2,
 		},
 		{
-			name: "other failure",
-			feature: &feature.Feature{
-				Status:       feature.StatusFailed,
-				FailureType:  feature.FailureInfrastructure,
-				CurrentPhase: feature.PhasePlan,
-			},
+			name:    "worktree setup failure routes to setup retry without deltas",
+			feature: failedWithRecord(errcat.WorktreeSetupFailed),
 		},
 		{
-			name: "stale failure type on active feature",
-			feature: &feature.Feature{
-				Status:       feature.StatusImplementing,
-				FailureType:  feature.FailureMaxIterations,
-				CurrentPhase: feature.PhaseImplement,
-			},
+			name:    "other failure",
+			feature: failedWithRecord(errcat.InfrastructureFailure),
+		},
+		{
+			name: "failure record on active feature",
+			feature: func() *feature.Feature {
+				f := &feature.Feature{Status: feature.StatusImplementing, CurrentPhase: feature.PhaseImplement}
+				f.Run().Failure = &errcat.FailureRecord{Code: errcat.IterationBudgetExhausted}
+				return f
+			}(),
 		},
 		{name: "missing feature"},
 	}
@@ -1938,8 +1950,10 @@ func TestServerMutationTargetPublishActionRecoversFailedPublish(t *testing.T) {
 	target, manager, store, f := newPublishActionTarget(t)
 	if err := store.Modify(f.ID, func(ff *feature.Feature) error {
 		ff.Status = feature.StatusFailed
-		ff.LastError = "commit failed: index.lock already exists"
-		ff.FailureType = feature.FailureInfrastructure
+		ff.Run().Failure = &errcat.FailureRecord{
+			Code:        errcat.InfrastructureFailure,
+			Diagnostics: "commit failed: index.lock already exists",
+		}
 		return nil
 	}); err != nil {
 		t.Fatalf("mark feature failed: %v", err)
@@ -1964,8 +1978,8 @@ func TestServerMutationTargetPublishActionRecoversFailedPublish(t *testing.T) {
 	if updated.Status != feature.StatusPublished {
 		t.Fatalf("feature status = %s, want Published", updated.Status)
 	}
-	if updated.LastError != "" || updated.FailureType != "" {
-		t.Fatalf("terminal failure = (%q, %q), want cleared", updated.LastError, updated.FailureType)
+	if updated.FailureRecord() != nil {
+		t.Fatalf("terminal failure record = %+v, want cleared", updated.FailureRecord())
 	}
 	if result.FeatureID != f.ID || result.Result != "published" {
 		t.Fatalf("PublishFeature() result = %+v; want published feature", result)
@@ -2340,7 +2354,10 @@ func TestServerMutationTargetRestartFeatureDispatchesPhaseWork(t *testing.T) {
 	if err := store.Modify(f.ID, func(ff *feature.Feature) error {
 		ff.Status = feature.StatusFailed
 		ff.CurrentPhase = feature.PhaseImplement
-		ff.LastError = "previous worker died with secret=do-not-leak"
+		ff.Run().Failure = &errcat.FailureRecord{
+			Code:        errcat.SessionCrashed,
+			Diagnostics: "previous worker died with secret=do-not-leak",
+		}
 		ff.Artifacts = map[string]string{"plan": planPath}
 		return nil
 	}); err != nil {

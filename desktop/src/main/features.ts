@@ -846,11 +846,15 @@ function toSnapshot(feature: ServerFeatureDetail): FeatureSnapshot {
     ...(feature.failure === undefined
       ? {}
       : {
+          // The canonical object crosses IPC intact except diagnostics,
+          // which pass through the same redaction as every other raw text
+          // the renderer receives.
           failure: {
-            ...(feature.failure.type === undefined ? {} : { type: feature.failure.type }),
-            ...(feature.failure.message === undefined
-              ? {}
-              : { message: redactText(feature.failure.message) }),
+            ...feature.failure,
+            diagnostics:
+              feature.failure.diagnostics === undefined
+                ? undefined
+                : redactText(feature.failure.diagnostics),
           },
         }),
   };

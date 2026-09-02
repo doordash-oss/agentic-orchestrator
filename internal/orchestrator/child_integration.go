@@ -311,8 +311,7 @@ func (o *Orchestrator) invalidateFinalReview(childID string, journal *feature.Tr
 		f.Parent.Transaction = nil
 		f.Status = feature.StatusReviewPassed
 		f.CurrentPhase = feature.PhaseFinalReview
-		f.LastError = ""
-		f.FailureType = ""
+		f.Run().Failure = nil
 		return nil
 	}); err != nil {
 		return fmt.Errorf("invalidating final review: %w", err)
@@ -381,12 +380,9 @@ func (o *Orchestrator) closeTransactionAfterApply(childID, parentID string) erro
 		}
 		if err := o.deps.Worktrees.ResetToCommit(parentWorktree, entry.CandidateSHA); err != nil {
 			syncErr := fmt.Errorf("syncing parent worktree for repo %s: %w", entry.Repo, err)
-			if modifyErr := o.deps.Store.Modify(childID, func(f *feature.Feature) error {
-				f.LastError = syncErr.Error()
-				return nil
-			}); modifyErr != nil {
-				return fmt.Errorf("persisting parent worktree sync error: %v (original error: %w)", modifyErr, syncErr)
-			}
+			// The transaction journal's pending-sync diagnostic and the
+			// relationship event own this failure; the child's run carries
+			// no failure record until a later phase classifies it.
 			o.emitEvent(ports.Event{
 				Type:      ports.RelationshipIntegrationChanged,
 				FeatureID: childID,
@@ -415,12 +411,6 @@ func (o *Orchestrator) closeTransactionAfterApply(childID, parentID string) erro
 	now := time.Now()
 	if err := o.closeChildRelationship(childID, feature.ChildCloseOutcomeCompleted, now); err != nil {
 		return fmt.Errorf("close child relationship: %w", err)
-	}
-	if err := o.deps.Store.Modify(childID, func(f *feature.Feature) error {
-		f.LastError = ""
-		return nil
-	}); err != nil {
-		return fmt.Errorf("clear child relationship error: %w", err)
 	}
 
 	// Persist the merged phase AFTER both transitions are durable.

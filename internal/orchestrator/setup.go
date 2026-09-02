@@ -17,6 +17,7 @@ package orchestrator
 import (
 	"fmt"
 
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
@@ -151,7 +152,7 @@ func (o *Orchestrator) setupFailureAlreadyRecorded(featureID string) bool {
 		return false
 	}
 	setup := f.Run().Setup
-	return f.FailureType == feature.FailureWorktreeSetup && setup != nil && setup.Status == feature.SetupStatusFailed
+	return f.FailureCode() == errcat.WorktreeSetupFailed && setup != nil && setup.Status == feature.SetupStatusFailed
 }
 
 func (o *Orchestrator) emitSetupEvent(ev feature.SetupEvent) {

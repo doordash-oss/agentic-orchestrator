@@ -24,6 +24,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 )
 
@@ -113,8 +114,8 @@ func (m *Manager) runSetup(featureID string, retry bool, opts ...SetupRunnerOpti
 		return nil
 	}
 	if retry {
-		if f.Status != StatusFailed || f.FailureType != FailureWorktreeSetup || setup.Status != SetupStatusFailed {
-			return fmt.Errorf("setup retry requires Failed (%s) feature with failed setup state", FailureWorktreeSetup)
+		if f.Status != StatusFailed || f.FailureCode() != errcat.WorktreeSetupFailed || setup.Status != SetupStatusFailed {
+			return fmt.Errorf("setup retry requires Failed (%s) feature with failed setup state", errcat.WorktreeSetupFailed)
 		}
 	} else if f.Status != StatusSettingUpWorktrees || setup.Status != SetupStatusRunning {
 		return fmt.Errorf("setup can only run from active setup state")
@@ -157,8 +158,7 @@ func (m *Manager) runSetup(featureID string, retry bool, opts ...SetupRunnerOpti
 		s.LatestLogPath = logPath
 		s.LastError = ""
 		ff.Status = StatusSettingUpWorktrees
-		ff.FailureType = ""
-		ff.LastError = ""
+		ff.Run().Failure = nil
 		return nil
 	}); err != nil {
 		return err
@@ -237,8 +237,7 @@ func (m *Manager) prepareSetupRetry(featureID string, attempt int) error {
 			setup.Tasks[key] = task
 		}
 		f.Status = StatusSettingUpWorktrees
-		f.FailureType = ""
-		f.LastError = ""
+		f.Run().Failure = nil
 		return nil
 	})
 }
@@ -448,6 +447,29 @@ func (m *Manager) completeSetupTask(featureID string, task SetupTask) error {
 	})
 }
 
+// worktreeSetupFailureRecord builds the canonical worktree_setup_failed
+// record for a setup failure: the repository (with branch) from the failing
+// task when one exists, the setup log path as command context when one
+// exists, and the raw error text as diagnostics. The setup aggregate and
+// task keep their own last-error strings exactly as before.
+func worktreeSetupFailureRecord(setup *SetupState, task SetupTask, errMsg string) errcat.FailureRecord {
+	record := errcat.FailureRecord{
+		Code:        errcat.WorktreeSetupFailed,
+		Diagnostics: errMsg,
+	}
+	var ctx errcat.RecordContext
+	if task.Repo != "" {
+		ctx.Repositories = []errcat.CodeRepository{{Name: task.Repo, Branch: task.Branch}}
+	}
+	if setup != nil && setup.LatestLogPath != "" {
+		ctx.Command = &errcat.CodeCommand{LogPaths: []string{setup.LatestLogPath}}
+	}
+	if ctx.Repositories != nil || ctx.Command != nil {
+		record.Context = &ctx
+	}
+	return record
+}
+
 func (m *Manager) failSetupTask(featureID, taskKey, errMsg string) error {
 	return m.Store.Modify(featureID, func(f *Feature) error {
 		setup := f.Run().Setup
@@ -458,15 +480,16 @@ func (m *Manager) failSetupTask(featureID, taskKey, errMsg string) error {
 		setup.Status = SetupStatusFailed
 		setup.CompletedAt = &now
 		setup.LastError = errMsg
-		if task, ok := setup.Tasks[taskKey]; ok {
+		task := setup.Tasks[taskKey]
+		if _, ok := setup.Tasks[taskKey]; ok {
 			task.Status = SetupStatusFailed
 			task.EndedAt = &now
 			task.LastError = errMsg
 			setup.Tasks[taskKey] = task
 		}
 		f.Status = StatusFailed
-		f.FailureType = FailureWorktreeSetup
-		f.LastError = errMsg
+		record := worktreeSetupFailureRecord(setup, task, errMsg)
+		f.Run().Failure = &record
 		return nil
 	})
 }
@@ -490,8 +513,7 @@ func (m *Manager) completeSetup(featureID string) error {
 		if err := f.Transition(StatusCreated); err != nil {
 			return err
 		}
-		f.FailureType = ""
-		f.LastError = ""
+		f.Run().Failure = nil
 		return nil
 	})
 }
@@ -538,6 +560,7 @@ func (m *Manager) FailActiveSetup(featureID, msg string) (marked bool, err error
 		setup.Status = SetupStatusFailed
 		setup.CompletedAt = &now
 		setup.LastError = msg
+		var failedTask SetupTask
 		for _, key := range setupTaskOrder(setup) {
 			task := setup.Tasks[key]
 			if task.Status == SetupStatusRunning {
@@ -545,12 +568,13 @@ func (m *Manager) FailActiveSetup(featureID, msg string) (marked bool, err error
 				task.EndedAt = &now
 				task.LastError = msg
 				setup.Tasks[key] = task
+				failedTask = task
 				break
 			}
 		}
 		f.Status = StatusFailed
-		f.FailureType = FailureWorktreeSetup
-		f.LastError = msg
+		record := worktreeSetupFailureRecord(setup, failedTask, msg)
+		f.Run().Failure = &record
 		return nil
 	})
 	return marked, err

@@ -22,6 +22,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
@@ -56,8 +57,13 @@ func seedReadChildFeature(t *testing.T, store *feature.Store, parentID string, s
 	}
 	child.SetRun(&feature.Run{RunNumber: 1, Setup: &feature.SetupState{Status: setupStatus, LastError: setupErr}})
 	if setupStatus == feature.SetupStatusFailed {
-		child.FailureType = feature.FailureWorktreeSetup
-		child.LastError = setupErr
+		child.Run().Failure = &errcat.FailureRecord{
+			Code: errcat.WorktreeSetupFailed,
+			Context: &errcat.RecordContext{
+				Repositories: []errcat.CodeRepository{{Name: repoNameSelf, Branch: "feature/rework-auth"}},
+			},
+			Diagnostics: setupErr,
+		}
 	}
 	if err := store.Save(child); err != nil {
 		t.Fatalf("Save(child) error = %v", err)
@@ -215,6 +221,47 @@ func TestParentProjectionsCarryActiveChildDerivedState(t *testing.T) {
 		detail := getJSONMap(t, handler, "/api/v1/features/"+parent.ID)
 		if _, ok := detail[entityFeature].(map[string]any)["active_child"]; ok {
 			t.Fatalf("parent detail carries active_child without a child: %+v", detail[entityFeature])
+		}
+	})
+}
+
+// TestRelationshipChildSummaryProjectsOnlySetupText pins that the parent's
+// active_child summary projects the setup aggregate's failure text and never
+// falls back to the child run's stored failure record.
+func TestRelationshipChildSummaryProjectsOnlySetupText(t *testing.T) {
+	t.Parallel()
+
+	t.Run("failed setup projects the setup aggregate text", func(t *testing.T) {
+		t.Parallel()
+		store, parent := seedReadFeature(t)
+		seedReadChildFeature(t, store, parent.ID, feature.StatusFailed, feature.SetupStatusFailed, gitWorktreeAddFailedMsg)
+		handler := NewHandler(baseReadHandlerOptions(store))
+
+		detail := getJSONMap(t, handler, "/api/v1/features/"+parent.ID)
+		activeChild := detail[entityFeature].(map[string]any)["active_child"].(map[string]any)
+		if activeChild["last_error"] != gitWorktreeAddFailedMsg {
+			t.Fatalf("active_child last_error = %v, want the setup aggregate text", activeChild["last_error"])
+		}
+	})
+
+	t.Run("run failure record alone projects nothing", func(t *testing.T) {
+		t.Parallel()
+		store, parent := seedReadFeature(t)
+		child := seedReadChildFeature(t, store, parent.ID, feature.StatusFailed, feature.SetupStatusDone, "")
+		child.Run().Failure = &errcat.FailureRecord{
+			Code:        errcat.SessionCrashed,
+			Context:     &errcat.RecordContext{Phase: &errcat.CodePhase{Name: "implement"}},
+			Diagnostics: "agent session crashed",
+		}
+		if err := store.Save(child); err != nil {
+			t.Fatalf("Save(child) error = %v", err)
+		}
+		handler := NewHandler(baseReadHandlerOptions(store))
+
+		detail := getJSONMap(t, handler, "/api/v1/features/"+parent.ID)
+		activeChild := detail[entityFeature].(map[string]any)["active_child"].(map[string]any)
+		if _, ok := activeChild["last_error"]; ok {
+			t.Fatalf("active_child = %+v, want no last_error for a run-only failure record", activeChild)
 		}
 	})
 }

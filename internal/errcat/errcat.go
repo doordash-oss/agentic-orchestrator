@@ -52,28 +52,28 @@ type Code string
 // CodeRepository is the typed context block for git repositories a code may
 // reference. Name is required; every other field is optional.
 type CodeRepository struct {
-	Name            string   `json:"name"`
-	Branch          string   `json:"branch,omitempty"`
-	ConflictFiles   []string `json:"conflict_files,omitempty"`
-	DirtyFiles      []string `json:"dirty_files,omitempty"`
-	ParentAnchorSHA string   `json:"parent_anchor_sha,omitempty"`
-	ExpectedRefSHA  string   `json:"expected_ref_sha,omitempty"`
-	ChildHeadSHA    string   `json:"child_head_sha,omitempty"`
-	CandidateSHA    string   `json:"candidate_sha,omitempty"`
-	MergeHEAD       string   `json:"merge_head,omitempty"`
-	ObservedSHA     string   `json:"observed_sha,omitempty"`
+	Name            string   `json:"name" yaml:"name"`
+	Branch          string   `json:"branch,omitempty" yaml:"branch,omitempty"`
+	ConflictFiles   []string `json:"conflict_files,omitempty" yaml:"conflict_files,omitempty"`
+	DirtyFiles      []string `json:"dirty_files,omitempty" yaml:"dirty_files,omitempty"`
+	ParentAnchorSHA string   `json:"parent_anchor_sha,omitempty" yaml:"parent_anchor_sha,omitempty"`
+	ExpectedRefSHA  string   `json:"expected_ref_sha,omitempty" yaml:"expected_ref_sha,omitempty"`
+	ChildHeadSHA    string   `json:"child_head_sha,omitempty" yaml:"child_head_sha,omitempty"`
+	CandidateSHA    string   `json:"candidate_sha,omitempty" yaml:"candidate_sha,omitempty"`
+	MergeHEAD       string   `json:"merge_head,omitempty" yaml:"merge_head,omitempty"`
+	ObservedSHA     string   `json:"observed_sha,omitempty" yaml:"observed_sha,omitempty"`
 }
 
 // CodePhase is the typed context block for the phase a code references.
 type CodePhase struct {
-	Name      string `json:"name"`
-	Iteration int    `json:"iteration,omitempty"`
+	Name      string `json:"name" yaml:"name"`
+	Iteration int    `json:"iteration,omitempty" yaml:"iteration,omitempty"`
 }
 
 // CodeCommand is the typed context block for a failed command.
 type CodeCommand struct {
-	ExitCode int      `json:"exit_code,omitempty"`
-	LogPaths []string `json:"log_paths,omitempty"`
+	ExitCode int      `json:"exit_code,omitempty" yaml:"exit_code,omitempty"`
+	LogPaths []string `json:"log_paths,omitempty" yaml:"log_paths,omitempty"`
 }
 
 // Remediation is the catalog-authored next step for an error code.

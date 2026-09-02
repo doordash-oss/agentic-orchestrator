@@ -1923,7 +1923,7 @@ func (t *serverMutationTarget) RetryFeature(featureID string) (serverruntime.Ret
 }
 
 func retryFeatureIterationDeltas(f *feature.Feature) (int, int) {
-	if f == nil || f.Status != feature.StatusFailed || f.FailureType != feature.FailureMaxIterations {
+	if f == nil || f.Status != feature.StatusFailed || f.FailureCode() != errcat.IterationBudgetExhausted {
 		return 0, 0
 	}
 	return maxIterationsRetryDelta, maxPlanIterationsRetryDelta
@@ -1935,7 +1935,7 @@ func isFailedSetupFeature(f *feature.Feature) bool {
 	}
 	setup := f.Run().Setup
 	return f.Status == feature.StatusFailed &&
-		f.FailureType == feature.FailureWorktreeSetup &&
+		f.FailureCode() == errcat.WorktreeSetupFailed &&
 		setup != nil &&
 		setup.Status == feature.SetupStatusFailed
 }

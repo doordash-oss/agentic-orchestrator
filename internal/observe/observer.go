@@ -500,8 +500,10 @@ func (o *Observer) FeatureCompleted(sc SpanContext, totalCost float64, totalDura
 	})
 }
 
-// FeatureFailed emits a feature.failed event.
-func (o *Observer) FeatureFailed(sc SpanContext, failureType, errorMsg string) {
+// FeatureFailed emits a feature.failed event. errorCode and errorClass are
+// the run's canonical failure code and class; diagnostics stay in the event's
+// error field.
+func (o *Observer) FeatureFailed(sc SpanContext, errorCode, errorClass, diagnostics string) {
 	if o == nil || !o.enabled {
 		return
 	}
@@ -512,14 +514,16 @@ func (o *Observer) FeatureFailed(sc SpanContext, failureType, errorMsg string) {
 		ParentSpanID: sc.ParentSpanID,
 		EventType:    "feature.failed",
 		FeatureID:    sc.FeatureID,
-		Error:        errorMsg,
+		Error:        diagnostics,
 		Data: map[string]any{
-			"failure_type": failureType,
+			"error_code":  errorCode,
+			"error_class": errorClass,
 		},
 	})
 	o.otel.EndSpan(sc.SpanID, "failed", map[string]string{
-		"failure_type": failureType,
-		"error":        errorMsg,
+		"error_code":  errorCode,
+		"error_class": errorClass,
+		"error":       diagnostics,
 	})
 }
 

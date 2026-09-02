@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
@@ -487,11 +488,11 @@ func TestManagerRunSetupFailurePersistsDiagnosticsAndLog(t *testing.T) {
 	if loaded.ID != f.ID || loaded.Slug != f.Slug || loaded.ActiveRun != 1 || loaded.RunCount != 1 {
 		t.Fatalf("feature identity changed after failure: id=%q slug=%q active=%d count=%d", loaded.ID, loaded.Slug, loaded.ActiveRun, loaded.RunCount)
 	}
-	if loaded.Status != feature.StatusFailed || loaded.FailureType != feature.FailureWorktreeSetup {
-		t.Fatalf("status/failure = %s/%s, want Failed/%s", loaded.Status, loaded.FailureType, feature.FailureWorktreeSetup)
+	if loaded.Status != feature.StatusFailed || loaded.FailureCode() != errcat.WorktreeSetupFailed {
+		t.Fatalf("status/failure = %s/%s, want Failed/%s", loaded.Status, loaded.FailureCode(), errcat.WorktreeSetupFailed)
 	}
-	if !strings.Contains(loaded.LastError, "git worktree add failed") {
-		t.Fatalf("LastError = %q, want worktree diagnostic", loaded.LastError)
+	if loaded.FailureRecord() == nil || !strings.Contains(loaded.FailureRecord().Diagnostics, "git worktree add failed") {
+		t.Fatalf("failure diagnostics = %v, want worktree diagnostic", loaded.FailureRecord())
 	}
 	setup := loaded.Run().Setup
 	if setup == nil || setup.Status != feature.SetupStatusFailed || setup.LatestLogPath == "" {
@@ -532,8 +533,8 @@ func TestManagerRunSetupImageFailurePreservesCompletedWorktree(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}
-	if loaded.Status != feature.StatusFailed || loaded.FailureType != feature.FailureWorktreeSetup {
-		t.Fatalf("status/failure = %s/%s, want Failed/%s", loaded.Status, loaded.FailureType, feature.FailureWorktreeSetup)
+	if loaded.Status != feature.StatusFailed || loaded.FailureCode() != errcat.WorktreeSetupFailed {
+		t.Fatalf("status/failure = %s/%s, want Failed/%s", loaded.Status, loaded.FailureCode(), errcat.WorktreeSetupFailed)
 	}
 	setup := loaded.Run().Setup
 	if setup.Tasks["worktree:test-repo"].Status != feature.SetupStatusDone {
@@ -673,7 +674,7 @@ func TestManagerRetrySetupFailsOnExpectedWorktreeBranchMismatch(t *testing.T) {
 		task.Path = conflictPath
 		setup.Tasks[task.Key] = task
 		ff.Status = feature.StatusFailed
-		ff.FailureType = feature.FailureWorktreeSetup
+		ff.Run().Failure = &errcat.FailureRecord{Code: errcat.WorktreeSetupFailed}
 		return nil
 	}); err != nil {
 		t.Fatalf("seed failed setup: %v", err)
@@ -740,8 +741,7 @@ func TestManagerRetrySetupReusesExpectedWorktreeWhenTaskPathWasNotPersisted(t *t
 		task.LastError = "process exited before setup state saved"
 		setup.Tasks[task.Key] = task
 		ff.Status = feature.StatusFailed
-		ff.FailureType = feature.FailureWorktreeSetup
-		ff.LastError = task.LastError
+		ff.Run().Failure = &errcat.FailureRecord{Code: errcat.WorktreeSetupFailed, Diagnostics: task.LastError}
 		return nil
 	}); err != nil {
 		t.Fatalf("seed failed setup: %v", err)
@@ -795,7 +795,7 @@ func TestManagerDeleteRemovesSetupTaskWorktreePaths(t *testing.T) {
 		ff.Run().Setup.Tasks[task.Key] = task
 		ff.Run().Setup.Status = feature.SetupStatusFailed
 		ff.Status = feature.StatusFailed
-		ff.FailureType = feature.FailureWorktreeSetup
+		ff.Run().Failure = &errcat.FailureRecord{Code: errcat.WorktreeSetupFailed}
 		return nil
 	}); err != nil {
 		t.Fatalf("seed setup task path: %v", err)
@@ -845,8 +845,8 @@ func TestManagerReconcileAbandonedSetupsMarksFailed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}
-	if loaded.Status != feature.StatusFailed || loaded.FailureType != feature.FailureWorktreeSetup {
-		t.Fatalf("status/failure = %s/%s, want Failed/%s", loaded.Status, loaded.FailureType, feature.FailureWorktreeSetup)
+	if loaded.Status != feature.StatusFailed || loaded.FailureCode() != errcat.WorktreeSetupFailed {
+		t.Fatalf("status/failure = %s/%s, want Failed/%s", loaded.Status, loaded.FailureCode(), errcat.WorktreeSetupFailed)
 	}
 	setup := loaded.Run().Setup
 	if setup.Status != feature.SetupStatusFailed || !strings.Contains(setup.LastError, "interrupted by shutdown or crash") {
@@ -1074,18 +1074,18 @@ func TestManagerMarkFailed(t *testing.T) {
 	mgr := newTestManager(t)
 	f, _ := mgr.Create("Fail Test", "test", []string{"test-repo"}, mgr.Config.Defaults.Models, "", "", nil)
 
-	if err := mgr.MarkFailed(f.ID, feature.FailureSafetyRail, "test error"); err != nil {
+	if err := mgr.MarkFailed(f.ID, errcat.FailureRecord{Code: errcat.SafetyRailTripped, Diagnostics: "test error"}); err != nil {
 		t.Fatalf("mark failed: %v", err)
 	}
 	f, _ = mgr.Get(f.ID)
 	if f.Status != feature.StatusFailed {
 		t.Errorf("status = %v, want Failed", f.Status)
 	}
-	if f.FailureType != feature.FailureSafetyRail {
-		t.Errorf("failure type = %q, want %q", f.FailureType, feature.FailureSafetyRail)
+	if f.FailureCode() != errcat.SafetyRailTripped {
+		t.Errorf("failure code = %q, want %q", f.FailureCode(), errcat.SafetyRailTripped)
 	}
-	if f.LastError != "test error" {
-		t.Errorf("last error = %q, want %q", f.LastError, "test error")
+	if f.FailureRecord() == nil || f.FailureRecord().Diagnostics != "test error" {
+		t.Errorf("failure diagnostics = %v, want %q", f.FailureRecord(), "test error")
 	}
 }
 
@@ -1101,8 +1101,13 @@ func TestManagerMarkCodeReadyRefusesTerminalFailure(t *testing.T) {
 	if err := mgr.Store.Modify(f.ID, func(ff *feature.Feature) error {
 		ff.Status = feature.StatusFailed
 		ff.CurrentPhase = feature.PhaseFinalReview
-		ff.LastError = "protocol violation: final_review_reviewer @ /tmp/iter: invalid report"
-		ff.FailureType = feature.FailureProtocolViolation
+		ff.Run().Failure = &errcat.FailureRecord{
+			Code: errcat.ProtocolViolation,
+			Context: &errcat.RecordContext{
+				Phase: &errcat.CodePhase{Name: feature.PhaseFinalReview.FailureName()},
+			},
+			Diagnostics: "invalid final review report",
+		}
 		return nil
 	}); err != nil {
 		t.Fatalf("seed failed final review: %v", err)
@@ -1121,8 +1126,8 @@ func TestManagerMarkCodeReadyRefusesTerminalFailure(t *testing.T) {
 	if got.CurrentPhase != feature.PhaseFinalReview {
 		t.Fatalf("CurrentPhase = %s, want FinalReview", got.CurrentPhase)
 	}
-	if got.FailureType != feature.FailureProtocolViolation {
-		t.Fatalf("FailureType = %q, want %q", got.FailureType, feature.FailureProtocolViolation)
+	if got.FailureCode() != errcat.ProtocolViolation {
+		t.Fatalf("FailureCode = %q, want %q", got.FailureCode(), errcat.ProtocolViolation)
 	}
 }
 
@@ -1856,8 +1861,7 @@ func TestRewindToPhase_FieldsZeroed(t *testing.T) {
 		f.MaxPlanIterations = 10
 		f.ValidatingPlan = true
 		f.ReviewingGate = true
-		f.LastError = "some error"
-		f.FailureType = "test"
+		f.Run().Failure = &errcat.FailureRecord{Code: errcat.SessionCrashed, Diagnostics: "some error"}
 		f.ActivePhaseStart = &now
 		f.ActiveTimingKey = "implement"
 		return nil
@@ -1879,11 +1883,8 @@ func TestRewindToPhase_FieldsZeroed(t *testing.T) {
 	if got.ReviewingGate {
 		t.Error("ReviewingGate should be false")
 	}
-	if got.LastError != "" {
-		t.Errorf("LastError = %q, want empty", got.LastError)
-	}
-	if got.FailureType != "" {
-		t.Errorf("FailureType = %q, want empty", got.FailureType)
+	if got.FailureRecord() != nil {
+		t.Errorf("FailureRecord = %+v, want nil on the fresh run", got.FailureRecord())
 	}
 	if got.ActivePhaseStart != nil {
 		t.Error("ActivePhaseStart should be nil")

@@ -21,6 +21,7 @@ import (
 	"testing"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/orchestrator"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
@@ -970,7 +971,7 @@ func TestOrchestrator_Hooks_NilSafe(t *testing.T) {
 	}
 	lc := lifecycleForFeature(f)
 	lc.TryCompletePublishFn = func(id string) (bool, error) { return true, nil }
-	lc.MarkFailedFn = func(id, ft, msg string) error { return nil }
+	lc.MarkFailedFn = func(id string, failure errcat.FailureRecord) error { return nil }
 	fs := newFeatureStore(f)
 
 	// All hook pointers are nil — must not panic through any emission site.
@@ -993,7 +994,7 @@ func TestOrchestrator_Hooks_NilSafe(t *testing.T) {
 		CurrentPhase: feature.PhasePlan,
 	}
 	lcFail := lifecycleForFeature(fFail)
-	lcFail.MarkFailedFn = func(id, ft, msg string) error { return nil }
+	lcFail.MarkFailedFn = func(id string, failure errcat.FailureRecord) error { return nil }
 	fsFail := newFeatureStore(fFail)
 	oFail := orchestrator.New(orchestrator.Deps{Lifecycle: lcFail, Store: fsFail}, orchestrator.Hooks{})
 	if err := oFail.HandlePhaseCompletion("feat-fail-nil", orchestrator.PhaseCompletionInput{
@@ -1151,8 +1152,8 @@ func TestOrchestrator_ProceedFromRewindReview_ToImplement_NonRoadmap_CompletesPl
 }
 
 // When advanceToNextPhase's startPhase call returns an error, the orchestrator
-// must route the failure through markFailedWithEvent: MarkFailed with
-// FailureInfrastructure + emit FeatureFailed. Before the fix, the raw error
+// must route the failure through markFailedWithEvent: MarkFailed with an
+// infrastructure_failure record + emit FeatureFailed. Before the fix, the raw error
 // was returned while the feature was left stranded in a partially-transitioned
 // state, with no FeatureFailed event for UIs/hooks to observe.
 func TestOrchestrator_AdvanceToNextPhase_StartPhaseFailure_EmitsFeatureFailed(t *testing.T) {
@@ -1173,19 +1174,33 @@ func TestOrchestrator_AdvanceToNextPhase_StartPhaseFailure_EmitsFeatureFailed(t 
 	wantErr := errors.New("start research explodes")
 	lc.StartResearchFn = func(id string) error { return wantErr }
 
-	var markFailedCalls []struct{ id, ft, msg string }
-	lc.MarkFailedFn = func(id, ft, msg string) error {
-		markFailedCalls = append(markFailedCalls, struct{ id, ft, msg string }{id, ft, msg})
+	var markFailedCalls []struct {
+		id  string
+		rec errcat.FailureRecord
+	}
+	lc.MarkFailedFn = func(id string, failure errcat.FailureRecord) error {
+		markFailedCalls = append(markFailedCalls, struct {
+			id  string
+			rec errcat.FailureRecord
+		}{id, failure})
 		return nil
 	}
 	fs := newFeatureStore(f)
 	stateDir := t.TempDir()
 	writePhaseMarkdown(t, stateDir, f, "inquire", "inquire.md")
 
-	var failedCalls []struct{ id, ft, msg string }
+	var failedCalls []struct {
+		id          string
+		code        errcat.Code
+		diagnostics string
+	}
 	hooks := orchestrator.Hooks{
-		OnFeatureFailed: func(id, ft, msg string) {
-			failedCalls = append(failedCalls, struct{ id, ft, msg string }{id, ft, msg})
+		OnFeatureFailed: func(id string, code errcat.Code, class errcat.Class, msg string) {
+			failedCalls = append(failedCalls, struct {
+				id          string
+				code        errcat.Code
+				diagnostics string
+			}{id, code, msg})
 		},
 	}
 	o := orchestrator.New(orchestrator.Deps{
@@ -1205,12 +1220,12 @@ func TestOrchestrator_AdvanceToNextPhase_StartPhaseFailure_EmitsFeatureFailed(t 
 		t.Errorf("returned error should wrap the starter error; got %v", err)
 	}
 
-	// MarkFailed must have fired with FailureInfrastructure.
+	// MarkFailed must have fired with infrastructure_failure.
 	if len(markFailedCalls) != 1 {
 		t.Fatalf("expected 1 MarkFailed call; got %d (%v)", len(markFailedCalls), markFailedCalls)
 	}
-	if markFailedCalls[0].ft != feature.FailureInfrastructure {
-		t.Errorf("MarkFailed failureType = %q, want %q", markFailedCalls[0].ft, feature.FailureInfrastructure)
+	if markFailedCalls[0].rec.Code != errcat.InfrastructureFailure {
+		t.Errorf("MarkFailed failure code = %q, want %q", markFailedCalls[0].rec.Code, errcat.InfrastructureFailure)
 	}
 
 	// FeatureFailed event must have been emitted (blocking emit guarantees
@@ -1224,8 +1239,8 @@ func TestOrchestrator_AdvanceToNextPhase_StartPhaseFailure_EmitsFeatureFailed(t 
 	if len(failedCalls) != 1 {
 		t.Fatalf("OnFeatureFailed hook fired %d times, want 1", len(failedCalls))
 	}
-	if failedCalls[0].ft != feature.FailureInfrastructure {
-		t.Errorf("OnFeatureFailed failureType = %q, want %q", failedCalls[0].ft, feature.FailureInfrastructure)
+	if failedCalls[0].code != errcat.InfrastructureFailure {
+		t.Errorf("OnFeatureFailed failure code = %q, want %q", failedCalls[0].code, errcat.InfrastructureFailure)
 	}
 }
 
@@ -1247,7 +1262,7 @@ func TestOrchestrator_AdvanceToNextPhase_StartPhaseFailure_MarkFailedAlsoFails_B
 	starterErr := errors.New("starter failed")
 	markErr := errors.New("mark failed failed too")
 	lc.StartResearchFn = func(id string) error { return starterErr }
-	lc.MarkFailedFn = func(id, ft, msg string) error { return markErr }
+	lc.MarkFailedFn = func(id string, failure errcat.FailureRecord) error { return markErr }
 	fs := newFeatureStore(f)
 	stateDir := t.TempDir()
 	writePhaseMarkdown(t, stateDir, f, "inquire", "inquire.md")

@@ -38,6 +38,8 @@ import {
   persistAppLogs,
   type AppHandle,
 } from '../helpers/app';
+import { setFeatureStatus } from '../helpers/seed';
+import { replaceTopLevelBlock, upsertYamlScalar } from '../helpers/yaml';
 import { Transcript } from '../helpers/transcript';
 import {
   createRepo,
@@ -90,10 +92,23 @@ test('partial setup failure, retry on the same feature, restart persistence', as
         transcript.step(`deleted \`${mainRef}\` (and packed-refs): beta now has an unborn HEAD`);
       },
     });
-    await expect(cockpit.getByRole('alert')).toContainText('repository "beta" has no commits yet', {
-      timeout: 60_000,
-    });
-    const retryButton = handle.page.getByRole('button', { name: 'Retry setup' });
+    // The durable failure renders once through the full error surface: the
+    // alert role, the "Failed" class label, the canonical code tag, and the
+    // catalog title.
+    const failureCard = cockpit.getByRole('alert');
+    await expect(failureCard).toBeVisible({ timeout: 60_000 });
+    await expect(failureCard.locator('.error-surface__label')).toHaveText('Failed');
+    await expect(failureCard.locator('.error-surface__code')).toHaveText('worktree_setup_failed');
+    await expect(failureCard.locator('.error-surface__title')).toHaveText('Worktree setup failed');
+    // Raw diagnostics sit behind the Diagnostics disclosure.
+    const diagnostics = failureCard.locator('details.error-surface__diagnostics');
+    await expect(diagnostics).toBeVisible();
+    await diagnostics.locator('summary').click();
+    await expect(diagnostics.getByText('no commits yet')).toBeVisible();
+    transcript.step(
+      'the failed card renders the canonical worktree_setup_failed surface with raw diagnostics behind the Diagnostics disclosure',
+    );
+    const retryButton = failureCard.getByRole('button', { name: 'Retry setup' });
     await expect(retryButton).toBeEnabled();
     await evidenceShotBothThemes(handle, 'setup-failure-retry');
 
@@ -187,6 +202,118 @@ test('partial setup failure, retry on the same feature, restart persistence', as
     }
     assertNoLeakedProcesses(world);
     transcript.step('second app instance quit cleanly; no leaked processes');
+    transcript.write(testInfo);
+  } finally {
+    if (handle !== null) {
+      await closeApp(handle).catch(() => {});
+    }
+    assertNoLeakedProcesses(world);
+    destroyWorld(world);
+  }
+});
+
+test('iteration-budget failure restart extends the budget and clears the card', async ({}, testInfo) => {
+  const transcript = new Transcript(
+    'failure-retry-restart-budget',
+    'Iteration-budget failure → card Restart → budget-extension dialog → extended restart',
+  );
+  const world = createWorld('failure-budget', {
+    auth: { loggedIn: true, authMethod: 'oauth', email: 'e2e@example.invalid' },
+    presetWorkspaceRoot: true,
+  });
+  const alpha = createRepo(world, 'alpha', { commit: true });
+  transcript.section('World');
+  transcript.step(`isolated world at \`${world.root}\``);
+  transcript.step(`committed repository discovered from the preset workspace root: \`${alpha}\``);
+
+  let handle: AppHandle | null = null;
+  try {
+    transcript.section('Create the feature; setup completes');
+    handle = await launchApp(world, testInfo, { traceName: 'failure-budget-create' });
+    await expect(handle.page.getByRole('button', { name: 'New feature' })).toBeVisible({
+      timeout: 60_000,
+    });
+    const featureName = 'IterBudget Feature';
+    await createFeatureViaForm(handle, {
+      name: featureName,
+      repoPatterns: [/alpha/],
+    });
+    const features = await handle.page.evaluate(() => window.agentico.listFeatures());
+    expect(features).toHaveLength(1);
+    const featureId = features[0]!.id;
+    await expect(handle.page.getByLabel(`Feature ${featureName}`)).toBeVisible();
+    persistAppLogs(handle, 'failure-budget-first-run');
+    await closeApp(handle);
+    handle = null;
+
+    transcript.section('Seed a Failed feature with an iteration_budget_exhausted record');
+    setFeatureStatus(world.stateDir, featureId, 'Failed');
+    const featurePath = path.join(world.stateDir, featureId, 'feature.yaml');
+    let featureYaml = fs.readFileSync(featurePath, 'utf8');
+    featureYaml = upsertYamlScalar(featureYaml, 'current_phase', '2');
+    featureYaml = upsertYamlScalar(featureYaml, 'max_iterations', '5');
+    fs.writeFileSync(featurePath, featureYaml);
+    const runPath = path.join(world.stateDir, featureId, 'runs', 'run-001', 'run.yaml');
+    const runYaml = replaceTopLevelBlock(fs.readFileSync(runPath, 'utf8'), 'failure', [
+      'failure:',
+      '  code: iteration_budget_exhausted',
+      '  context:',
+      '    phase:',
+      '      name: implement',
+      '      iteration: 3',
+      '  diagnostics: phase hit the configured iteration ceiling',
+    ]);
+    fs.writeFileSync(runPath, runYaml);
+    transcript.step(
+      'seeded Failed@implement with an iteration_budget_exhausted record and max_iterations 5',
+    );
+
+    transcript.section('Relaunch; the card offers Restart with the budget-extension dialog');
+    handle = await launchApp(world, testInfo, { traceName: 'failure-budget-relaunch' });
+    const cockpit = handle.page.getByLabel(`Feature ${featureName}`);
+    await expect(cockpit).toBeVisible({ timeout: 60_000 });
+
+    const failureCard = cockpit.getByRole('alert');
+    await expect(failureCard).toBeVisible({ timeout: 60_000 });
+    await expect(failureCard.locator('.error-surface__code')).toHaveText(
+      'iteration_budget_exhausted',
+    );
+    await expect(failureCard.locator('.error-surface__title')).toHaveText(
+      'Iteration budget exhausted',
+    );
+    const restartButton = failureCard.getByRole('button', { name: 'Restart' });
+    await expect(restartButton).toBeEnabled();
+    await evidenceShotBothThemes(handle, 'iteration-budget-failure');
+
+    await restartButton.click();
+    const dialog = handle.page.getByRole('dialog', { name: `Restart ${featureName}?` });
+    await expect(dialog).toBeVisible();
+    await expect(dialog).toContainText('maximum-iteration restart');
+    transcript.step(
+      'the card Restart opened the confirmation dialog with the budget-extension copy',
+    );
+
+    await dialog.getByRole('button', { name: 'Confirm restart' }).click();
+    const afterRestart = await handle.page.evaluate(
+      (id) => window.agentico.getFeature(id),
+      featureId,
+    );
+    expect(afterRestart.status).not.toBe('Failed');
+    expect(afterRestart.failure).toBeUndefined();
+    // The durable card is gone; an ephemeral action rejection may remain as
+    // the pre-existing compact surface, so scope to the full variant.
+    await expect(cockpit.locator('.error-surface--full')).toHaveCount(0);
+    transcript.json('authoritative snapshot after the budget-extension restart', afterRestart);
+    transcript.step('the feature left Failed with the failure card gone');
+
+    const seededBudget = fs.readFileSync(featurePath, 'utf8');
+    expect(seededBudget).toContain('max_iterations: 15');
+    transcript.step('the restart extended max_iterations from 5 to 15');
+
+    persistAppLogs(handle, 'failure-budget-second-run');
+    await closeApp(handle);
+    handle = null;
+    assertNoLeakedProcesses(world);
     transcript.write(testInfo);
   } finally {
     if (handle !== null) {

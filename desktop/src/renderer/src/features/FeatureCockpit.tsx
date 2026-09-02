@@ -44,7 +44,7 @@ import {
   type FeatureActionRequest,
   type FeatureActionView,
 } from '../../../shared/ipc';
-import { ErrorSurface } from '../components/ErrorSurface';
+import { ErrorSurface, type ErrorSurfaceAction } from '../components/ErrorSurface';
 import { useDetailsDismiss } from '../components/useDetailsDismiss';
 import { useModalDismiss } from '../components/useModalDismiss';
 import { useMediaQuery } from '../hooks';
@@ -741,7 +741,7 @@ function RestartConfirmDialog({
   }, [busy, onClose]);
 
   const repos = snapshot.repos.join(', ');
-  const extendsIterationBudget = snapshot.failure?.type === 'max_iterations';
+  const extendsIterationBudget = snapshot.failure?.code === 'iteration_budget_exhausted';
 
   return (
     <div className="impact-dialog__backdrop">
@@ -1376,7 +1376,7 @@ export function FeatureCockpit({
   );
 
   const restartExtendsIterationBudget =
-    state.phase === 'loaded' && state.snapshot.failure?.type === 'max_iterations';
+    state.phase === 'loaded' && state.snapshot.failure?.code === 'iteration_budget_exhausted';
   const confirmRestart = useCallback(() => {
     setRestartDialog(false);
     const request: FeatureActionRequest = restartExtendsIterationBudget
@@ -1760,6 +1760,30 @@ export function FeatureCockpit({
   const reasonsOf = (action: ReturnType<typeof actionById>): string[] =>
     action?.disabledReasons.map((reason) => displayFeatureMessage(disabledReasonCopy(reason))) ??
     [];
+
+  // The durable failure surface resolves the error's referenced action
+  // against the feature's action catalog: the card's own primary button and
+  // its disabled-reason text come from the server's enabled state.
+  const resolveFailureAction = (actionId: string): ErrorSurfaceAction | undefined => {
+    const action = actionById(snapshot, actionId);
+    if (action === undefined) return undefined;
+    const label = actionId === 'setup' ? 'Retry setup' : 'Restart';
+    return {
+      enabled: action.enabled,
+      label,
+      disabledReason: action.enabled ? undefined : reasonsOf(action).join(' '),
+    };
+  };
+
+  const handleFailureAction = (actionId: string): void => {
+    if (actionId === 'setup') {
+      retrySetup();
+      return;
+    }
+    if (actionId === 'restart') {
+      restart();
+    }
+  };
   const primaryActions: CockpitPrimaryAction[] = [];
   if (setupAction?.enabled === true) {
     primaryActions.push({
@@ -2668,13 +2692,13 @@ export function FeatureCockpit({
                 ) : null}
 
                 <div className="cockpit__stage-status">
-                  {snapshot.failure?.message !== undefined ? (
-                    <div role="alert" className="create-form__error">
-                      <span className="create-form__error-code">
-                        {snapshot.failure.type ?? 'failure'}
-                      </span>
-                      <p className="create-form__error-message">{snapshot.failure.message}</p>
-                    </div>
+                  {snapshot.failure !== undefined ? (
+                    <ErrorSurface
+                      error={snapshot.failure}
+                      variant="full"
+                      resolveAction={resolveFailureAction}
+                      onAction={handleFailureAction}
+                    />
                   ) : null}
 
                   {actionError !== null ? (

@@ -24,6 +24,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
@@ -591,5 +592,57 @@ func TestSessionStartedPublishesSnapshotRequiredSessionUpdate(t *testing.T) {
 	}
 	if evt.Resource.Phase != feature.PhaseKnowledgeBase.String() {
 		t.Fatalf("event phase = %q, want %q", evt.Resource.Phase, feature.PhaseKnowledgeBase.String())
+	}
+}
+
+// TestFeatureFailedDomainEventCarriesCanonicalError pins the SSE mapping for
+// failure-carrying lifecycle events: a feature-failed domain event becomes a
+// lifecycle.updated whose summary is the catalog title for its code, whose
+// error object carries the canonical code and class, and which requires a
+// snapshot; other lifecycle events carry no error object.
+func TestFeatureFailedDomainEventCarriesCanonicalError(t *testing.T) {
+	t.Parallel()
+
+	rendered := errcat.RenderRecord(errcat.FailureRecord{
+		Code: errcat.IterationBudgetExhausted,
+		Context: &errcat.RecordContext{
+			Phase:        &errcat.CodePhase{Name: "implement", Iteration: 12},
+			Repositories: []errcat.CodeRepository{{Name: "repo-a"}},
+		},
+		Diagnostics: "implement failed for repo-a",
+	})
+	failed := eventDTOFromDomain(ports.Event{
+		Type:           ports.FeatureFailed,
+		FeatureID:      testFeatureID,
+		CanonicalError: &rendered,
+	})
+	if failed.Kind != sseEventLifecycleUpdated {
+		t.Fatalf("feature-failed event kind = %q, want %q", failed.Kind, sseEventLifecycleUpdated)
+	}
+	if failed.Summary != "Iteration budget exhausted" {
+		t.Fatalf("feature-failed event summary = %q, want the catalog title %q", failed.Summary, "Iteration budget exhausted")
+	}
+	if failed.Error == nil {
+		t.Fatal("feature-failed event error = nil, want canonical error object")
+	}
+	if failed.Error.Code != string(errcat.IterationBudgetExhausted) {
+		t.Fatalf("feature-failed event error.code = %q, want %q", failed.Error.Code, errcat.IterationBudgetExhausted)
+	}
+	if failed.Error.Class != SSEEventErrorClassBlocking {
+		t.Fatalf("feature-failed event error.class = %q, want %q", failed.Error.Class, SSEEventErrorClassBlocking)
+	}
+	if !failed.SnapshotRequired {
+		t.Fatal("feature-failed lifecycle event must require a snapshot")
+	}
+
+	started := eventDTOFromDomain(ports.Event{Type: ports.FeatureStarted, FeatureID: testFeatureID})
+	if started.Kind != sseEventLifecycleUpdated {
+		t.Fatalf("feature-started event kind = %q, want %q", started.Kind, sseEventLifecycleUpdated)
+	}
+	if started.Error != nil {
+		t.Fatalf("feature-started event error = %+v, want none", *started.Error)
+	}
+	if !started.SnapshotRequired {
+		t.Fatal("feature-started lifecycle event must require a snapshot")
 	}
 }

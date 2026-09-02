@@ -249,11 +249,11 @@ func (h *apiHandler) featureDetailDTO(f *feature.Feature) (FeatureDetail, error)
 			disableAction(detail.Actions, actionRebase, reason)
 		}
 	}
-	if f.HasTerminalFailure() {
-		detail.Failure = &Failure{
-			Type:    f.FailureType,
-			Message: SafeDisplayText(f.LastError, 240),
-		}
+	if rec := f.FailureRecord(); rec != nil {
+		rendered := errcat.RenderRecord(*rec)
+		wire := wireError(rendered)
+		wire.Diagnostics = SafeDisplayText(rendered.Diagnostics, 240)
+		detail.Failure = &wire
 	}
 	if f.Status == feature.StatusNeedUserInput && f.PendingNeedUserInputPath != "" {
 		gate := needUserInputGateDTO(f.ID, entityFeature, "", f.CurrentIteration, f.InputNotifications, f.PendingNeedUserInputPath)
@@ -566,9 +566,6 @@ func relationshipChildSummaryDTO(child *feature.Feature) *RelationshipChildSumma
 		dto.SetupStatus = string(setup.Status)
 		if setup.Status == feature.SetupStatusFailed {
 			dto.LastError = SafeDisplayText(setup.LastError, 240)
-			if dto.LastError == "" {
-				dto.LastError = SafeDisplayText(child.LastError, 240)
-			}
 		}
 	}
 	if childSetupComplete(child) {
@@ -822,7 +819,7 @@ func childSetupFailed(f *feature.Feature) bool {
 	}
 	setup := f.Run().Setup
 	return f.Status == feature.StatusFailed &&
-		f.FailureType == feature.FailureWorktreeSetup &&
+		f.FailureCode() == errcat.WorktreeSetupFailed &&
 		setup != nil &&
 		setup.Status == feature.SetupStatusFailed
 }
@@ -946,7 +943,7 @@ func setupActionEligible(f *feature.Feature) bool {
 		return setup.Status == feature.SetupStatusQueued || setup.Status == feature.SetupStatusRunning
 	}
 	return f.Status == feature.StatusFailed &&
-		f.FailureType == feature.FailureWorktreeSetup &&
+		f.FailureCode() == errcat.WorktreeSetupFailed &&
 		setup.Status == feature.SetupStatusFailed
 }
 

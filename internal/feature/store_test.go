@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"gopkg.in/yaml.v3"
 )
 
@@ -836,8 +837,6 @@ func TestStoreCloseChildIsIdempotentAndPreservesInspectionState(t *testing.T) {
 		Name:          "inspectable child",
 		Created:       created,
 		Status:        StatusFailed,
-		LastError:     "integration needs attention",
-		FailureType:   FailureInfrastructure,
 		Pipeline:      PipelineMedium,
 		Artifacts:     map[string]string{"plan": "phase-01/plan.md"},
 		PhaseCosts:    map[string]float64{"implement": 12.5},
@@ -853,6 +852,10 @@ func TestStoreCloseChildIsIdempotentAndPreservesInspectionState(t *testing.T) {
 				}},
 			},
 		},
+	}
+	child.Run().Failure = &errcat.FailureRecord{
+		Code:        errcat.InfrastructureFailure,
+		Diagnostics: "integration needs attention",
 	}
 	if err := store.Save(child); err != nil {
 		t.Fatalf("Save(%q): %v", child.ID, err)
@@ -878,8 +881,8 @@ func TestStoreCloseChildIsIdempotentAndPreservesInspectionState(t *testing.T) {
 	if got.Parent.ClosedAt == nil || !got.Parent.ClosedAt.Equal(firstClose) {
 		t.Fatalf("ClosedAt = %v, want original %v", got.Parent.ClosedAt, firstClose)
 	}
-	if got.LastError != child.LastError || got.FailureType != child.FailureType {
-		t.Fatalf("failure context = (%q, %q), want (%q, %q)", got.LastError, got.FailureType, child.LastError, child.FailureType)
+	if got.FailureCode() != errcat.InfrastructureFailure || got.FailureRecord() == nil || got.FailureRecord().Diagnostics != "integration needs attention" {
+		t.Fatalf("failure record = %v, want infrastructure failure with recorded diagnostics", got.FailureRecord())
 	}
 	if got.Artifacts["plan"] != child.Artifacts["plan"] || got.TotalCost() != child.TotalCost() {
 		t.Fatalf("inspection state artifacts/cost = (%v, %v), want (%v, %v)", got.Artifacts, got.TotalCost(), child.Artifacts, child.TotalCost())
@@ -1121,9 +1124,11 @@ func TestStoreFailureFieldsPersistence(t *testing.T) {
 		Name:          "Failing Feature",
 		Slug:          "failing-feature",
 		Status:        StatusFailed,
-		LastError:     "no progress for 3 consecutive iterations",
-		FailureType:   FailureSafetyRail,
 		SchemaVersion: SchemaVersionCurrent,
+	}
+	f.Run().Failure = &errcat.FailureRecord{
+		Code:        errcat.SafetyRailTripped,
+		Diagnostics: "no progress for 3 consecutive iterations",
 	}
 	if err := store.Save(f); err != nil {
 		t.Fatalf("save: %v", err)
@@ -1133,11 +1138,135 @@ func TestStoreFailureFieldsPersistence(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	if loaded.LastError != f.LastError {
-		t.Errorf("LastError: got %q, want %q", loaded.LastError, f.LastError)
+	if loaded.FailureCode() != errcat.SafetyRailTripped {
+		t.Errorf("FailureCode = %q, want %q", loaded.FailureCode(), errcat.SafetyRailTripped)
 	}
-	if loaded.FailureType != f.FailureType {
-		t.Errorf("FailureType: got %q, want %q", loaded.FailureType, f.FailureType)
+	if got := loaded.FailureRecord(); got == nil || got.Diagnostics != "no progress for 3 consecutive iterations" {
+		t.Errorf("Diagnostics = %v, want %q", got, "no progress for 3 consecutive iterations")
+	}
+}
+
+// TestStoreFailureRecordRoundTripWithBlocks pins the durable shape of the
+// run's canonical failure record: code, phase and repositories context
+// blocks, and raw diagnostics all survive a save/load cycle untouched.
+func TestStoreFailureRecordRoundTripWithBlocks(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: per-test temp dirs isolate filesystem state.
+	store := NewStore(t.TempDir())
+
+	f := &Feature{
+		ID:            "fail-blocks-001",
+		Name:          "Failure Blocks",
+		Slug:          "failure-blocks",
+		Status:        StatusFailed,
+		CurrentPhase:  PhaseImplement,
+		SchemaVersion: SchemaVersionCurrent,
+	}
+	f.Run().Failure = &errcat.FailureRecord{
+		Code: errcat.IterationBudgetExhausted,
+		Context: &errcat.RecordContext{
+			Phase:        &errcat.CodePhase{Name: PhaseImplement.FailureName(), Iteration: 12},
+			Repositories: []errcat.CodeRepository{{Name: "repo-a", Branch: "feature/repo-a"}},
+		},
+		Diagnostics: "multi-repo implementation failed for repos: repo-a",
+	}
+	if err := store.Save(f); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	loaded, err := store.Load(f.ID)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	got := loaded.FailureRecord()
+	if got == nil {
+		t.Fatal("FailureRecord = nil, want stored record")
+	}
+	if !reflect.DeepEqual(*got, *f.Run().Failure) {
+		t.Fatalf("failure record = %+v, want %+v", *got, *f.Run().Failure)
+	}
+}
+
+// TestStoreLoadIgnoresLegacyFailureKeys pins the no-backward-compatibility
+// contract for the removed run-level failure strings: stale last_error and
+// failure_type keys in a hand-written run.yaml are silently ignored and load
+// as no failure at all.
+func TestStoreLoadIgnoresLegacyFailureKeys(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: per-test temp dirs isolate filesystem state.
+	store := NewStore(t.TempDir())
+
+	f := &Feature{
+		ID:            "legacy-keys-001",
+		Name:          "Legacy Keys",
+		Slug:          "legacy-keys",
+		Status:        StatusFailed,
+		CurrentPhase:  PhaseImplement,
+		SchemaVersion: SchemaVersionCurrent,
+	}
+	if err := store.Save(f); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	runPath := filepath.Join(store.BaseDir, f.ID, "runs", RunDirName(1), "run.yaml")
+	raw, err := os.ReadFile(runPath)
+	if err != nil {
+		t.Fatalf("read run.yaml: %v", err)
+	}
+	stale := append([]byte(nil), raw...)
+	stale = append(stale, "last_error: no progress for 3 consecutive iterations\nfailure_type: safety_rail\n"...)
+	if err := os.WriteFile(runPath, stale, 0o644); err != nil {
+		t.Fatalf("rewrite run.yaml with stale keys: %v", err)
+	}
+
+	loaded, err := store.Load(f.ID)
+	if err != nil {
+		t.Fatalf("load with stale legacy keys: %v", err)
+	}
+	if loaded.FailureRecord() != nil || loaded.FailureCode() != "" {
+		t.Fatalf("failure record = %+v, want none from legacy last_error/failure_type keys", loaded.FailureRecord())
+	}
+	if loaded.Status != StatusFailed {
+		t.Fatalf("Status = %s, want unchanged Failed", loaded.Status)
+	}
+}
+
+// TestStoreSaveRunOmitsLegacyFailureKeys reads the written run.yaml bytes and
+// asserts the store never persists the removed last_error/failure_type keys.
+func TestStoreSaveRunOmitsLegacyFailureKeys(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: per-test temp dirs isolate filesystem state.
+	store := NewStore(t.TempDir())
+
+	f := &Feature{
+		ID:            "no-legacy-keys-001",
+		Name:          "No Legacy Keys",
+		Slug:          "no-legacy-keys",
+		Status:        StatusFailed,
+		CurrentPhase:  PhaseImplement,
+		SchemaVersion: SchemaVersionCurrent,
+	}
+	f.Run().Failure = &errcat.FailureRecord{
+		Code:        errcat.SafetyRailTripped,
+		Diagnostics: "no progress for 3 consecutive iterations",
+	}
+	if err := store.Save(f); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	runPath := filepath.Join(store.BaseDir, f.ID, "runs", RunDirName(1), "run.yaml")
+	raw, err := os.ReadFile(runPath)
+	if err != nil {
+		t.Fatalf("read run.yaml: %v", err)
+	}
+	if bytes.Contains(raw, []byte("last_error")) {
+		t.Errorf("run.yaml contains legacy last_error key:\n%s", raw)
+	}
+	if bytes.Contains(raw, []byte("failure_type")) {
+		t.Errorf("run.yaml contains legacy failure_type key:\n%s", raw)
+	}
+	if !bytes.Contains(raw, []byte("failure:")) {
+		t.Errorf("run.yaml missing failure record block:\n%s", raw)
 	}
 }
 
@@ -1151,11 +1280,16 @@ func TestStoreLoadReconcilesSuccessfulStatusWithTerminalFinalReviewFailure(t *te
 		ID:            "corrupt-fr-001",
 		Name:          "Corrupt Final Review",
 		Slug:          "corrupt-final-review",
-		Status:        StatusCodeReady,
+		Status:        StatusPublished,
 		CurrentPhase:  PhasePublish,
-		LastError:     "protocol violation: final_review_reviewer @ /tmp/iter: verification-report.yaml is malformed",
-		FailureType:   FailureProtocolViolation,
 		SchemaVersion: SchemaVersionCurrent,
+	}
+	f.Run().Failure = &errcat.FailureRecord{
+		Code: errcat.ProtocolViolation,
+		Context: &errcat.RecordContext{
+			Phase: &errcat.CodePhase{Name: PhaseFinalReview.FailureName()},
+		},
+		Diagnostics: "final review verification report is malformed",
 	}
 	if err := store.Save(f); err != nil {
 		t.Fatalf("save: %v", err)
@@ -1171,8 +1305,8 @@ func TestStoreLoadReconcilesSuccessfulStatusWithTerminalFinalReviewFailure(t *te
 	if loaded.CurrentPhase != PhaseFinalReview {
 		t.Fatalf("CurrentPhase = %s, want FinalReview", loaded.CurrentPhase)
 	}
-	if loaded.FailureType != FailureProtocolViolation {
-		t.Fatalf("FailureType = %q, want %q", loaded.FailureType, FailureProtocolViolation)
+	if loaded.FailureCode() != errcat.ProtocolViolation {
+		t.Fatalf("FailureCode = %q, want %q", loaded.FailureCode(), errcat.ProtocolViolation)
 	}
 }
 

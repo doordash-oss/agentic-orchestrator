@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
@@ -980,8 +981,8 @@ func TestFailActiveSetupParksRunningSetupRetryable(t *testing.T) {
 		t.Fatal(err)
 	}
 	setup := parked.Run().Setup
-	if parked.Status != feature.StatusFailed || parked.FailureType != feature.FailureWorktreeSetup {
-		t.Fatalf("status=%v failureType=%q, want Failed/%s", parked.Status, parked.FailureType, feature.FailureWorktreeSetup)
+	if parked.Status != feature.StatusFailed || parked.FailureCode() != errcat.WorktreeSetupFailed {
+		t.Fatalf("status=%v failureCode=%q, want Failed/%s", parked.Status, parked.FailureCode(), errcat.WorktreeSetupFailed)
 	}
 	if setup == nil || setup.Status != feature.SetupStatusFailed || setup.LastError != cause {
 		t.Fatalf("setup = %+v, want failed state with the recorded cause", setup)
@@ -1071,9 +1072,13 @@ func TestChildExecutionCapability(t *testing.T) {
 
 // TestChildSetupCompleteMatrix pins the setup-state half of the gate.
 func TestChildSetupCompleteMatrix(t *testing.T) {
-	mk := func(status feature.Status, failureType string) *feature.Feature {
-		return &feature.Feature{ID: "c", Status: status, FailureType: failureType,
+	mk := func(status feature.Status, code errcat.Code) *feature.Feature {
+		f := &feature.Feature{ID: "c", Status: status,
 			Parent: &feature.ChildRelationship{ParentID: "p", Kind: feature.ChildKindRefactor}}
+		if code != "" {
+			f.Run().Failure = &errcat.FailureRecord{Code: code}
+		}
+		return f
 	}
 	for _, tc := range []struct {
 		name string
@@ -1081,10 +1086,10 @@ func TestChildSetupCompleteMatrix(t *testing.T) {
 		want bool
 	}{
 		{"queued/setting-up", mk(feature.StatusSettingUpWorktrees, ""), false},
-		{"failed setup", mk(feature.StatusFailed, feature.FailureWorktreeSetup), false},
+		{"failed setup", mk(feature.StatusFailed, errcat.WorktreeSetupFailed), false},
 		{"setup-complete Created", mk(feature.StatusCreated, ""), true},
 		{"executing child", mk(feature.StatusImplementing, ""), true},
-		{"pipeline-failed child", mk(feature.StatusFailed, feature.FailureSessionCrash), true},
+		{"pipeline-failed child", mk(feature.StatusFailed, errcat.SessionCrashed), true},
 		{"non-child", &feature.Feature{ID: "t", Status: feature.StatusCreated}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

@@ -1222,9 +1222,8 @@ export const FeatureSnapshotSchema = z.strictObject({
   verificationItems: z.array(VerificationItemViewSchema).optional(),
   /** Aggregate run time across the feature's runs, for the queue readout. */
   timing: z.strictObject({ totalSeconds: z.number().int().nonnegative() }).optional(),
-  failure: z
-    .strictObject({ type: z.string().optional(), message: z.string().optional() })
-    .optional(),
+  /** The durable run failure: the canonical catalog-rendered error object, diagnostics redacted. */
+  failure: CanonicalErrorSchema.optional(),
 });
 
 export type FeatureSnapshot = z.output<typeof FeatureSnapshotSchema>;

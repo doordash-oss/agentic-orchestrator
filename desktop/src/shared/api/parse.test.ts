@@ -22,6 +22,7 @@ import {
   HealthResponseSchema,
   parseServerJson,
   PromptSnapshotResponseSchema,
+  ServerFeatureDetailSchema,
   ServerFeatureSummarySchema,
   ServerRelationshipChildSchema,
 } from './parse';
@@ -310,6 +311,37 @@ describe('ServerFeatureSummarySchema bounded child history', () => {
     expect(parsed.success).toBe(true);
     expect(parsed.data?.child_history_total).toBe(12);
     expect(parsed.data?.child_history_truncated).toBe(true);
+  });
+});
+
+describe('ServerFeatureDetailSchema failure', () => {
+  const failureField = ServerFeatureDetailSchema.pick({ failure: true });
+
+  it('accepts a canonical catalog-rendered failure', () => {
+    const parsed = failureField.safeParse({
+      failure: {
+        code: 'worktree_setup_failed',
+        class: 'blocking',
+        title: 'Worktree setup failed',
+        summary: 'Setting up the worktree for repository "repo-a" failed.',
+        remediation: {
+          hint: 'Resolve the reported problem in the repository, then retry setup.',
+          actions: ['setup'],
+        },
+        context: { repositories: [{ name: 'repo-a', branch: 'feature/search-revamp' }] },
+        diagnostics: 'git worktree add failed: no commits yet',
+      },
+    });
+    expect(parsed.success).toBe(true);
+    expect(parsed.data?.failure?.code).toBe('worktree_setup_failed');
+    expect(parsed.data?.failure?.remediation?.actions).toEqual(['setup']);
+  });
+
+  it('rejects the pre-canonical {type,message} failure shape', () => {
+    const parsed = failureField.safeParse({
+      failure: { type: 'worktree_setup', message: 'git worktree add failed: no commits yet' },
+    });
+    expect(parsed.success).toBe(false);
   });
 });
 

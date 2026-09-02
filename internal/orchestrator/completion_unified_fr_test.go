@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/internal/orchestrator"
@@ -309,16 +310,16 @@ func TestOrchestrator_OnMultiReposPassed_FinalReviewPlanRevisionResultFailsWitho
 				t.Fatalf("MarkCodeReady called after unsupported final-review plan revision")
 				return nil
 			}
-			lc.MarkFailedFn = func(id, failureType, lastError string) error {
-				if failureType != feature.FailureInfrastructure {
-					t.Fatalf("failureType = %q, want %q", failureType, feature.FailureInfrastructure)
+			lc.MarkFailedFn = func(id string, failure errcat.FailureRecord) error {
+				if failure.Code != errcat.InfrastructureFailure {
+					t.Fatalf("failure code = %q, want %q", failure.Code, errcat.InfrastructureFailure)
 				}
-				if !strings.Contains(lastError, "final review requested unsupported phase-plan revision") {
-					t.Fatalf("lastError = %q, want unsupported phase-plan revision", lastError)
+				if !strings.Contains(failure.Diagnostics, "final review requested unsupported phase-plan revision") {
+					t.Fatalf("diagnostics = %q, want unsupported phase-plan revision", failure.Diagnostics)
 				}
 				f.Status = feature.StatusFailed
-				f.FailureType = failureType
-				f.LastError = lastError
+				rec := failure
+				f.Run().Failure = &rec
 				return nil
 			}
 			fs := newFeatureStore(f)
@@ -996,7 +997,7 @@ func TestOrchestrator_FeatureFinalReview_Interrupted_DoesNotMarkFailed(t *testin
 	markCodeReadyCalled := 0
 	markFailedCalled := 0
 	lc.MarkCodeReadyFn = func(id string) error { markCodeReadyCalled++; return nil }
-	lc.MarkFailedFn = func(id, failureType, lastError string) error { markFailedCalled++; return nil }
+	lc.MarkFailedFn = func(id string, failure errcat.FailureRecord) error { markFailedCalled++; return nil }
 	fs := newFeatureStore(f)
 
 	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{})
@@ -1076,12 +1077,14 @@ func TestOrchestrator_FeatureFinalReview_FailedProtocolViolationPreserved(t *tes
 		f.CurrentPhase = feature.PhasePublish
 		return nil
 	}
-	var gotFailureType string
-	var gotLastError string
-	lc.MarkFailedFn = func(id, failureType, lastError string) error {
-		gotFailureType = failureType
-		gotLastError = lastError
+	var gotFailureCode errcat.Code
+	var gotDiagnostics string
+	lc.MarkFailedFn = func(id string, failure errcat.FailureRecord) error {
+		gotFailureCode = failure.Code
+		gotDiagnostics = failure.Diagnostics
 		f.Status = feature.StatusFailed
+		rec := failure
+		f.Run().Failure = &rec
 		return nil
 	}
 	fs := newFeatureStore(f)
@@ -1112,11 +1115,11 @@ func TestOrchestrator_FeatureFinalReview_FailedProtocolViolationPreserved(t *tes
 		t.Fatalf("HandlePhaseCompletion() error = %v, want final_review_fixer context", err)
 	}
 
-	if gotFailureType != feature.FailureProtocolViolation {
-		t.Fatalf("failure type = %q, want %q", gotFailureType, feature.FailureProtocolViolation)
+	if gotFailureCode != errcat.ProtocolViolation {
+		t.Fatalf("failure code = %q, want %q", gotFailureCode, errcat.ProtocolViolation)
 	}
-	if !strings.Contains(gotLastError, "final_review_fixer") {
-		t.Fatalf("last error = %q, want final_review_fixer context", gotLastError)
+	if !strings.Contains(gotDiagnostics, "final_review_fixer") {
+		t.Fatalf("diagnostics = %q, want final_review_fixer context", gotDiagnostics)
 	}
 	if markCodeReadyCalled != 0 {
 		t.Fatalf("MarkCodeReady called %d times, want 0 after final review failure", markCodeReadyCalled)

@@ -1028,6 +1028,7 @@ export interface components {
             summary?: string;
             /** @description Session's current transcript record count at emission time — the same index space /transcript and /output/stream use. Only set on session.output.activity events. */
             record_count?: number;
+            error?: components["schemas"]["SSEEventError"];
         };
         SessionOutputChunk: {
             api_version: string;
@@ -1037,6 +1038,16 @@ export interface components {
             /** @description A TranscriptMessageDTO row (see the /transcript response). */
             message?: components["schemas"]["TranscriptMessage"];
             done?: boolean;
+        };
+        /** @description Canonical failure identity for failure-carrying lifecycle events (feature lifecycle failed). Absent on every other event kind. */
+        SSEEventError: {
+            /** @description Stable snake_case catalog code. */
+            code: string;
+            /**
+             * @description Severity treatment class.
+             * @enum {string}
+             */
+            class: "blocking" | "needs_action" | "warning";
         };
         JSONResponse: {
             api_version: string;
@@ -1984,10 +1995,6 @@ export interface components {
                 [key: string]: string;
             };
         };
-        Failure: {
-            type?: string;
-            message?: string;
-        };
         NeedUserInputGate: {
             feature_id?: string;
             open: boolean;
@@ -2144,7 +2151,7 @@ export interface components {
             cost: components["schemas"]["Cost"];
             review_gate: components["schemas"]["ReviewGate"];
             verification_items?: components["schemas"]["VerificationItem"][];
-            failure?: components["schemas"]["Failure"];
+            failure?: components["schemas"]["Error"];
             need_user_input?: components["schemas"]["NeedUserInputGate"];
             actions: components["schemas"]["Action"][];
             revision: string;

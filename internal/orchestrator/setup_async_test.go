@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/orchestrator"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
@@ -42,7 +43,7 @@ func childWithSetup(setupStatus feature.SetupStatus) *feature.Feature {
 	}
 	if setupStatus == feature.SetupStatusFailed {
 		f.Status = feature.StatusFailed
-		f.FailureType = feature.FailureWorktreeSetup
+		f.Run().Failure = &errcat.FailureRecord{Code: errcat.WorktreeSetupFailed}
 	}
 	return f
 }

@@ -231,7 +231,7 @@ describe('permission auto mode split button', () => {
     expect(menu?.open).toBe(false);
     await user.click(within(split).getByLabelText('More auto mode options'));
     expect(menu?.open).toBe(true);
-    const all = within(split).getByRole('menuitem', { name: 'Enable auto mode (all features)' });
+    const all = within(split).getByRole('menuitem', { name: /Enable auto mode \(all features\)/ });
     await user.click(all);
     expect(mock.api.answerPermission).toHaveBeenLastCalledWith({
       requestId: 'perm-1',

@@ -20,7 +20,7 @@ import {
   type AutoApproveScope,
   type VerificationGateAction,
 } from '../../../shared/ipc';
-import { BellIcon } from '../components/icons';
+import { BellIcon, ChevronDownIcon } from '../components/icons';
 import { ToolbarPopover, ToolbarPopoverAnchor } from '../components/ToolbarPopover';
 import { useDetailsDismiss } from '../components/useDetailsDismiss';
 import {
@@ -411,7 +411,7 @@ function AutoModeSplitButton({
             aria-label="More auto mode options"
             aria-disabled={busy}
           >
-            <span aria-hidden="true">▾</span>
+            <ChevronDownIcon className="attention-split__chevron" aria-hidden="true" />
           </summary>
           <div className="attention-split__menu" role="menu" aria-label="Auto mode scope">
             <button
@@ -423,6 +423,7 @@ function AutoModeSplitButton({
               onClick={() => answer('workspace')}
             >
               Enable auto mode (all features)
+              <small>Stops asking for shell commands in every feature</small>
             </button>
           </div>
         </details>

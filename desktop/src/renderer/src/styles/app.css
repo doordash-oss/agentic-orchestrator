@@ -3681,11 +3681,23 @@ body {
   list-style: none;
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   height: 100%;
-  padding-inline: var(--space-2);
+  min-width: 30px;
+  padding: 0 var(--space-2);
   border-left: 0;
   border-top-left-radius: 0;
   border-bottom-left-radius: 0;
+  color: var(--muted);
+  transition:
+    background 120ms ease,
+    color 120ms ease;
+}
+
+.attention-split__toggle:hover,
+.attention-split__more[open] > .attention-split__toggle {
+  color: var(--text);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
 }
 
 .attention-split__toggle::-webkit-details-marker {
@@ -3696,30 +3708,65 @@ body {
   outline: var(--focus-ring);
 }
 
-/* Opens upward: the actions row is pinned to the bottom of its pane. */
+.attention-split__chevron {
+  width: 14px;
+  height: 14px;
+  transition: transform 140ms ease;
+}
+
+.attention-split__more[open] .attention-split__chevron {
+  transform: rotate(180deg);
+}
+
+/* Opens upward, spanning the whole control: the actions row is pinned to the
+   bottom of its pane. */
 .attention-split__menu {
   position: absolute;
   left: 0;
+  min-width: 100%;
   bottom: calc(100% + var(--space-1));
   z-index: 30;
-  min-width: 240px;
   padding: var(--space-1);
   border: 1px solid var(--hairline);
   border-radius: var(--radius);
   background: var(--raised);
-  box-shadow: 0 10px 30px color-mix(in srgb, var(--content) 60%, transparent);
+  box-shadow:
+    0 1px 2px color-mix(in srgb, var(--content) 40%, transparent),
+    0 12px 32px color-mix(in srgb, var(--content) 55%, transparent);
+  animation: attention-split-reveal 140ms ease-out;
+}
+
+@keyframes attention-split-reveal {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
 }
 
 .attention-split__item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
   width: 100%;
   text-align: left;
   border: 0;
   background: transparent;
-  padding: var(--space-2);
-  border-radius: var(--radius);
+  padding: var(--space-2) var(--space-3);
+  border-radius: calc(var(--radius) - 2px);
   color: var(--text);
   font: 700 13px var(--bench-font-text);
   cursor: pointer;
+}
+
+.attention-split__item > small {
+  color: var(--muted);
+  font-weight: 500;
+  font-size: 12px;
+  white-space: nowrap;
 }
 
 .attention-split__item:hover:not(:disabled) {

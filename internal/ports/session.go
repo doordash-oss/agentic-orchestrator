@@ -444,6 +444,15 @@ type SessionView interface {
 	Wait()
 }
 
+// HiddenContextSender is the optional capability a session view implements
+// when its user turns can carry hidden context: the provider receives the
+// hidden text, a blank line, then the visible message, while the transcript
+// echo records only the visible message. Turns without hidden context keep
+// using SendUserMessage.
+type HiddenContextSender interface {
+	SendUserMessageWithHiddenContext(visible, hiddenContext string) error
+}
+
 // SessionHandle extends SessionView with the mutable lifecycle methods that
 // the orchestrator and agent packages need to install logs, cleanup funcs,
 // and tool-allowed callbacks.

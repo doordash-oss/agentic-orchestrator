@@ -13890,6 +13890,28 @@ body {
   outline: var(--focus-ring);
 }
 
+/* The explain-in-chat follow-up: the same type treatment as the primary
+ * action but ghosted — transparent ground, hairline frame, muted word — so
+ * the remediation verb stays the card's loudest affordance. */
+.error-surface__explain {
+  border: var(--bench-hairline-width) solid var(--hairline);
+  border-radius: var(--bench-radius-control);
+  padding: 4px var(--space-3);
+  background: transparent;
+  color: var(--muted);
+  font: 600 11.5px var(--bench-font-text);
+  cursor: pointer;
+}
+
+.error-surface__explain:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.error-surface__explain:focus-visible {
+  outline: var(--focus-ring);
+}
+
 .error-surface__action-reason {
   color: var(--muted);
   font-size: 12px;

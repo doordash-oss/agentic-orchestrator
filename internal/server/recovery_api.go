@@ -194,6 +194,13 @@ func recoveryItemDTO(item ports.RecoveryItem) RecoveryItem {
 // diagnostics and no filesystem paths; the bounded recovery log endpoint
 // stays the only log channel.
 func wireOrphanSessionError(item ports.RecoveryItem) Error {
+	return wireError(orphanSessionRenderedError(item))
+}
+
+// orphanSessionRenderedError classifies one orphan session exactly as the
+// recovery projection does, returning the rendered catalog error the chat
+// context resolver reuses for recovery-scope bundles.
+func orphanSessionRenderedError(item ports.RecoveryItem) errcat.Error {
 	code := errcat.OrphanSessionStale
 	if item.ProcessAlive {
 		code = errcat.OrphanSessionLive
@@ -211,7 +218,7 @@ func wireOrphanSessionError(item ports.RecoveryItem) Error {
 		opts = append(opts, errcat.WithRepositories(errcat.CodeRepository{Name: repo}))
 	}
 	opts = append(opts, errcat.WithParams(params))
-	return wireError(errcat.New(code, opts...))
+	return errcat.New(code, opts...)
 }
 
 // recoveryLogAvailable reports whether a bounded log read is available for the

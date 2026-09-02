@@ -86,6 +86,33 @@ func (e AutomaticReviewStateSource) Valid() bool {
 	}
 }
 
+// Defines values for ChatContextScope.
+const (
+	ChatContextScopeRecovery    ChatContextScope = "recovery"
+	ChatContextScopeRepository  ChatContextScope = "repository"
+	ChatContextScopeRun         ChatContextScope = "run"
+	ChatContextScopeSetup       ChatContextScope = "setup"
+	ChatContextScopeTransaction ChatContextScope = "transaction"
+)
+
+// Valid indicates whether the value is a known member of the ChatContextScope enum.
+func (e ChatContextScope) Valid() bool {
+	switch e {
+	case ChatContextScopeRecovery:
+		return true
+	case ChatContextScopeRepository:
+		return true
+	case ChatContextScopeRun:
+		return true
+	case ChatContextScopeSetup:
+		return true
+	case ChatContextScopeTransaction:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for CreateFeatureMutationRequestInquireness.
 const (
 	CreateFeatureMutationRequestInquirenessHigh   CreateFeatureMutationRequestInquireness = "high"
@@ -1095,12 +1122,34 @@ type BuildIdentity struct {
 // CascadeDiagnostic defines model for CascadeDiagnostic.
 type CascadeDiagnostic = feature.CascadeDiagnostic
 
+// ChatContextReference defines model for ChatContextReference.
+type ChatContextReference struct {
+	Code       string           `json:"code"`
+	FeatureID  string           `json:"feature_id,omitempty"`
+	Key        string           `json:"key,omitempty"`
+	Repository string           `json:"repository,omitempty"`
+	Scope      ChatContextScope `json:"scope"`
+	SnapshotID string           `json:"snapshot_id,omitempty"`
+	TaskKey    string           `json:"task_key,omitempty"`
+}
+
+// ChatContextScope defines model for ChatContextScope.
+type ChatContextScope string
+
 // ChatEndResponse defines model for ChatEndResponse.
 type ChatEndResponse struct {
 	APIVersion string       `json:"api_version"`
 	Meta       ResponseMeta `json:"meta,omitempty"`
 	Result     string       `json:"result"`
 	SessionID  string       `json:"session_id"`
+}
+
+// ChatStartRequest defines model for ChatStartRequest.
+type ChatStartRequest struct {
+	Context      ChatContextReference `json:"context,omitempty"`
+	ImageUploads []string             `json:"image_uploads,omitempty"`
+	Images       []string             `json:"images,omitempty"`
+	Message      string               `json:"message"`
 }
 
 // ChatStartResponse defines model for ChatStartResponse.
@@ -3259,9 +3308,6 @@ type EndChatPromptParams struct {
 // EndChatPromptParamsXAgenticoClient defines parameters for EndChatPrompt.
 type EndChatPromptParamsXAgenticoClient string
 
-// StartChatPromptJSONBody defines parameters for StartChatPrompt.
-type StartChatPromptJSONBody map[string]interface{}
-
 // StartChatPromptParams defines parameters for StartChatPrompt.
 type StartChatPromptParams struct {
 	// XAgenticoClient CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required.
@@ -3412,7 +3458,7 @@ type AnswerAskUserPromptJSONRequestBody AnswerAskUserPromptJSONBody
 type EndChatPromptJSONRequestBody EndChatPromptJSONBody
 
 // StartChatPromptJSONRequestBody defines body for StartChatPrompt for application/json ContentType.
-type StartChatPromptJSONRequestBody StartChatPromptJSONBody
+type StartChatPromptJSONRequestBody = ChatStartRequest
 
 // SendHelpPromptJSONRequestBody defines body for SendHelpPrompt for application/json ContentType.
 type SendHelpPromptJSONRequestBody SendHelpPromptJSONBody

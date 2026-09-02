@@ -22,10 +22,12 @@ limitations under the License.
  */
 import {
   isPendingReviewStatus,
+  type ChatContextReference,
   type FeatureSnapshot,
   type RelationshipChildView,
   type ReviewFeedbackCommentView,
 } from '../../../../shared/ipc';
+import type { CanonicalError } from '../../../../shared/api/parse';
 import { actionById, displayStatusLabel, isReadyToStart } from '../featureView';
 
 export type PassStateId =
@@ -372,4 +374,26 @@ export const COMMENT_TYPE_LABEL: Record<ReviewFeedbackCommentView['type'], strin
 /** Stable identity key for a review-feedback comment, including type to avoid same-ID collisions across inline-review and issue-comment sequences. */
 export function commentKey(comment: ReviewFeedbackCommentView): string {
   return `${comment.repo}:${comment.type}:${comment.id}`;
+}
+
+/**
+ * The explain-in-chat context a child's relationship warning carries: a
+ * transaction-scoped reference naming the child and, when the warning's
+ * context names one, the repository whose journal entry owns the record, so
+ * the server resolves the entry rather than the attention record.
+ */
+export function relationshipWarningExplain(
+  child: Pick<RelationshipChildView, 'id' | 'name'>,
+  warning: CanonicalError,
+): { reference: ChatContextReference; featureName: string } {
+  const repository = warning.context?.repositories?.[0]?.name;
+  return {
+    reference: {
+      scope: 'transaction',
+      code: warning.code,
+      featureId: child.id,
+      ...(repository !== undefined ? { repository } : {}),
+    },
+    featureName: child.name,
+  };
 }

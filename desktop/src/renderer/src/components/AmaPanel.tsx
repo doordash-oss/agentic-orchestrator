@@ -35,6 +35,7 @@ import {
   isTerminalChatStatus,
   type AmaGeometry,
   type AttentionItem,
+  type ChatContextReference,
   type RoutedRequest,
   type SessionDetail,
   type TranscriptMessage,
@@ -89,6 +90,12 @@ interface Gesture {
   startX: number;
   startY: number;
   start: AmaGeometry;
+}
+
+/** A routed auto-submit draft waiting for the in-flight turn to end. */
+interface PendingRoutedDraft {
+  draft: string;
+  context: ChatContextReference | undefined;
 }
 
 const EMPTY_CURSOR: TranscriptCursor = { total: 0, start: 0, end: 0 };
@@ -150,6 +157,12 @@ export function AmaPanel({
   const maximizeRef = useRef<HTMLButtonElement>(null);
   const subscriptionId = useRef<string | null>(null);
   const subscriptionGeneration = useRef(0);
+  // Each routed request is handled once by its ID: a re-render carrying the
+  // same request never replays its draft.
+  const handledRouteRequest = useRef<number | null>(null);
+  // A routed auto-submit that arrived while a turn was in flight, sent once
+  // the turn ends. A queue of one: a newer routed draft replaces it.
+  const pendingDraft = useRef<PendingRoutedDraft | null>(null);
   // The panel always persists both AMA fields together: the settings patch
   // replaces the whole `ama` object, so sending one field would reset the other.
   const openRef = useRef(open);
@@ -312,6 +325,50 @@ export function AmaPanel({
     }
   }, []);
 
+  /**
+   * Submits a routed auto-submit draft as its own turn, bypassing the
+   * composer entirely: the draft gets its own optimistic bubble while
+   * unsent composer text and staged attachments stay exactly as they are,
+   * and the routed reference rides the turn as hidden chat context. The
+   * post-send chain mirrors a typed submission.
+   */
+  const submitRoutedDraft = useCallback(
+    async (draft: string, context: ChatContextReference | undefined): Promise<void> => {
+      setOptimisticMessage(draft);
+      setPinToBottom((value) => value + 1);
+      setBusy(true);
+      setNotice('');
+      setOpenPersisted(true);
+      try {
+        await window.agentico.startChat({
+          message: draft,
+          ...(context === undefined ? {} : { context }),
+        });
+        await refreshSession();
+        const from = await loadTranscript();
+        if (from !== null) {
+          try {
+            await replaceOutputSubscription(from);
+            await loadTranscript();
+          } catch {
+            setNotice('Message sent, but live updates could not reconnect. Reopen AMA to retry.');
+          }
+        }
+        setOptimisticMessage(null);
+      } catch (error) {
+        setOptimisticMessage(null);
+        // The catalog owns the text: a canonical rejection is named by its
+        // title; anything else falls back to the recovered message. The
+        // composer is never touched — nothing was taken from it.
+        const parsed = parseIpcError(error);
+        setNotice(parsed.canonical?.title ?? parsed.message);
+      } finally {
+        setBusy(false);
+      }
+    },
+    [loadTranscript, refreshSession, replaceOutputSubscription, setOpenPersisted],
+  );
+
   useEffect(() => {
     let alive = true;
     window.agentico
@@ -353,12 +410,47 @@ export function AmaPanel({
 
   // Every routed `ama` request opens, expands, and focuses the composer; a
   // route never closes an open panel. The composer only exists once the panel
-  // is open, so the focus is a separate effect gated on both.
+  // is open, so the focus is a separate effect gated on both. Each request is
+  // handled once by its ID, so a re-render carrying the same id never
+  // replays its draft.
   useEffect(() => {
-    if (routeRequest?.event.target !== 'ama') return;
+    if (routeRequest === null || routeRequest.event.target !== 'ama') return;
+    if (handledRouteRequest.current === routeRequest.id) return;
+    handledRouteRequest.current = routeRequest.id;
     setOpenPersisted(true);
     setFocusToken((token) => token + 1);
-  }, [routeRequest, setOpenPersisted]);
+    const { draft, autoSubmit, chatContext } = routeRequest.event;
+    if (draft === undefined) return;
+    if (autoSubmit === true) {
+      if (busy) {
+        // While a turn is in flight the draft waits as the queue-of-one
+        // pending draft; a newer routed draft replaces it.
+        pendingDraft.current = { draft, context: chatContext };
+        return;
+      }
+      // Sending now also supersedes any draft queued against the turn that
+      // just ended: the newest routed draft is the one the user meant.
+      pendingDraft.current = null;
+      void submitRoutedDraft(draft, chatContext);
+      return;
+    }
+    // Without autoSubmit the draft only seeds an empty composer: typed text
+    // always wins, and the focus bump above has already focused it either
+    // way.
+    setMessage((current) => (current.trim() === '' ? draft : current));
+  }, [busy, routeRequest, setOpenPersisted, submitRoutedDraft]);
+
+  // A routed draft that arrived mid-turn sends once the turn settles: after
+  // busy drops, exactly once, because the ref is cleared before sending.
+  // Declared after the route effect so a draft routed in the same commit
+  // supersedes the queued one instead of racing it.
+  useEffect(() => {
+    if (busy) return;
+    const pending = pendingDraft.current;
+    if (pending === null) return;
+    pendingDraft.current = null;
+    void submitRoutedDraft(pending.draft, pending.context);
+  }, [busy, submitRoutedDraft]);
 
   useEffect(() => {
     if (focusToken === 0 || !open) return;

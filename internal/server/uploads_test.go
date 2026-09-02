@@ -40,8 +40,9 @@ type uploadMutationRecorder struct {
 	createErr   error
 	refactorReq *RefactorFeatureRequest
 	refactorErr error
-	chatReq     *ChatStartRequest
-	chatErr     error
+	chatReq           *ChatStartRequest
+	chatHiddenContext string
+	chatErr           error
 }
 
 func (r *uploadMutationRecorder) CreateFeature(req CreateFeatureRequest) (CreateFeatureResponse, error) {
@@ -66,10 +67,11 @@ func (r *uploadMutationRecorder) RefactorFeature(_ string, req RefactorFeatureRe
 	return RefactorFeatureResponse{APIVersion: APIVersion, FeatureID: "refactor-child", ParentID: fixtureFeatureID, Result: "created"}, nil
 }
 
-func (r *uploadMutationRecorder) StartChat(req ChatStartRequest) (ChatStartResponse, error) {
+func (r *uploadMutationRecorder) StartChat(req ChatStartRequest, hiddenContext string) (ChatStartResponse, error) {
 	copied := req
 	r.mu.Lock()
 	r.chatReq = &copied
+	r.chatHiddenContext = hiddenContext
 	r.mu.Unlock()
 	if r.chatErr != nil {
 		return ChatStartResponse{Result: "failed"}, r.chatErr

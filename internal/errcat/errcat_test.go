@@ -45,6 +45,7 @@ var zeroParams = []Params{
 	FeatureLoadFailedParams{},
 	WarningRepoParams{},
 	OrphanSessionParams{},
+	ChatContextParams{},
 }
 
 func TestCatalogEntriesAreValid(t *testing.T) {
@@ -210,6 +211,8 @@ func TestAuthoredClasses(t *testing.T) {
 		{UnsupportedMediaType, ClassBlocking},
 		{RequestTooLarge, ClassBlocking},
 		{Unavailable, ClassBlocking},
+		{ChatContextInvalid, ClassBlocking},
+		{ChatContextNotFound, ClassWarning},
 	}
 	for _, tc := range cases {
 		entry, ok := Lookup(tc.code)

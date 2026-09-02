@@ -1595,6 +1595,14 @@ func (s *Session) writeJSON(v interface{}) error {
 
 // SendUserMessage sends a user message to the session via JSON stdin.
 func (s *Session) SendUserMessage(text string) error {
+	return s.SendUserMessageWithHiddenContext(text, "")
+}
+
+// SendUserMessageWithHiddenContext sends a user turn whose provider-bound
+// text is the hidden context, a blank line, then the visible message, while
+// the locally appended chat transcript record carries only the visible
+// message. Empty hidden context behaves exactly like SendUserMessage.
+func (s *Session) SendUserMessageWithHiddenContext(visible, hiddenContext string) error {
 	s.mu.Lock()
 	s.hasUnansweredQuestion = false
 	// A committable outcome outlives an unrelated user message — a chat nudge
@@ -1609,23 +1617,28 @@ func (s *Session) SendUserMessage(text string) error {
 	}
 	s.mu.Unlock()
 
+	// The wire text carries the hidden context; the echo below never does.
+	wireText := visible
+	if hiddenContext = strings.TrimSpace(hiddenContext); hiddenContext != "" {
+		wireText = hiddenContext + "\n\n" + visible
+	}
 	var err error
 	if s.protocol != nil {
-		err = s.protocol.SendUserMessage(text)
+		err = s.protocol.SendUserMessage(wireText)
 	} else {
-		err = s.writeJSON(llm.NewUserInput(text))
+		err = s.writeJSON(llm.NewUserInput(wireText))
 	}
 	if err != nil {
 		return err
 	}
 
-	if s.Kind() == ports.KindChat && strings.TrimSpace(text) != "" {
+	if s.Kind() == ports.KindChat && strings.TrimSpace(visible) != "" {
 		s.messageLog.Append(llm.SDKMessage{
 			Type:            "user",
 			LocallyAppended: true,
 			User: &llm.UserMessage{Message: llm.ConversationMsg{
 				Role:    "user",
-				Content: []llm.ContentBlock{{Type: "text", Text: text}},
+				Content: []llm.ContentBlock{{Type: "text", Text: visible}},
 			}},
 		})
 		if err := s.persistTranscriptTail(); err != nil {

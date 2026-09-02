@@ -26,6 +26,7 @@ import {
   installAgenticoMock,
 } from '../test/agenticoMock';
 import { dispatchMediaChange, matchMediaState } from '../test/setup';
+import { ExplainChatProvider } from '../explainChat';
 import { emptyAttentionDrafts } from './AttentionInbox';
 import { FeatureCockpit } from './FeatureCockpit';
 import { runFeatureCommand, toggleActiveInspector } from './featureCommands';
@@ -1307,6 +1308,168 @@ describe('FeatureCockpit failure and retry', () => {
     expect(screen.getByRole('menuitem', { name: 'Start' })).toBeDisabled();
     expect(screen.getByText('setup must succeed first')).toBeInTheDocument();
     expect(screen.getByText('refresh the current run')).toBeInTheDocument();
+  });
+});
+
+describe('FeatureCockpit explain-in-chat', () => {
+  /** Renders the cockpit inside a mounted provider with a spy requester. */
+  function renderCockpitWithChat(mock = installAgenticoMock()) {
+    const requestRoute = vi.fn();
+    render(
+      <ExplainChatProvider requestRoute={requestRoute}>
+        <FeatureCockpit
+          featureId={FEATURE_ID}
+          titleHint="Search revamp"
+          onClose={vi.fn()}
+          onLoadedName={vi.fn()}
+          attentionItems={[]}
+          refreshAttention={() => Promise.resolve([])}
+          attentionDrafts={emptyAttentionDrafts()}
+          setAttentionDrafts={vi.fn()}
+          active
+        />
+      </ExplainChatProvider>,
+    );
+    return { mock, requestRoute };
+  }
+
+  function runFailureSnapshot() {
+    return featureSnapshot({
+      status: 'Failed',
+      failure: {
+        code: 'iteration_budget_exhausted',
+        class: 'blocking' as const,
+        title: 'Iteration budget exhausted',
+        summary: 'The Implement phase exhausted its iteration budget at iteration 3.',
+        remediation: {
+          hint: 'Restart the phase with an extended iteration budget, or revise the plan so the work converges.',
+          actions: ['restart'],
+        },
+        context: { phase: { name: 'implement', iteration: 3 } },
+      },
+      actions: [{ id: 'restart', enabled: true, disabledReasons: [] }],
+    });
+  }
+
+  function setupOwnedFailureSnapshot() {
+    const worktreeSetupFailure = {
+      code: 'worktree_setup_failed',
+      class: 'blocking' as const,
+      title: 'Worktree setup failed',
+      summary: 'Setting up the worktree for repository "repo-a" failed.',
+      remediation: {
+        hint: 'Resolve the reported problem in the repository or branch, then retry setup.',
+        actions: ['setup'],
+      },
+      context: { repositories: [{ name: 'repo-a', branch: 'feature/search-revamp' }] },
+    };
+    return featureSnapshot({
+      status: 'Failed',
+      failure: {
+        code: 'worktree_setup_failed',
+        class: 'blocking' as const,
+        title: 'Worktree setup failed',
+        summary: 'Setup task "Worktree: repo-a" failed.',
+        context: {
+          setup_task: { key: 'worktree:repo-a', kind: 'worktree', label: 'Worktree: repo-a' },
+        },
+      },
+      setup: {
+        status: 'failed',
+        attempt: 1,
+        tasks: [
+          {
+            key: 'worktree:repo-a',
+            kind: 'worktree',
+            label: 'Worktree: repo-a',
+            repo: 'repo-a',
+            status: 'failed',
+            attempt: 1,
+            error: worktreeSetupFailure,
+          },
+        ],
+      },
+      actions: [{ id: 'setup', enabled: true, disabledReasons: [] }],
+    });
+  }
+
+  it('routes the run failure card as a run-scoped reference with the feature and code', async () => {
+    const mock = installAgenticoMock();
+    mock.api.getFeature.mockResolvedValue(runFailureSnapshot());
+    const { requestRoute } = renderCockpitWithChat(mock);
+    const user = userEvent.setup();
+    await screen.findByRole('region', { name: 'Feature Search revamp' });
+
+    const alert = screen.getByRole('alert');
+    await user.click(within(alert).getByRole('button', { name: 'Explain in chat' }));
+    expect(requestRoute).toHaveBeenCalledTimes(1);
+    expect(requestRoute).toHaveBeenCalledWith({
+      target: 'ama',
+      draft:
+        'Explain the "Iteration budget exhausted" error (iteration_budget_exhausted) on Search revamp and what I should do next.',
+      autoSubmit: true,
+      chatContext: {
+        scope: 'run',
+        code: 'iteration_budget_exhausted',
+        featureId: FEATURE_ID,
+      },
+    });
+  });
+
+  it('routes the task-fed setup card as a setup reference with the owning task key', async () => {
+    const mock = installAgenticoMock();
+    mock.api.getFeature.mockResolvedValue(setupOwnedFailureSnapshot());
+    const { requestRoute } = renderCockpitWithChat(mock);
+    const user = userEvent.setup();
+    await screen.findByRole('region', { name: 'Feature Search revamp' });
+
+    const alert = screen.getByRole('alert');
+    await user.click(within(alert).getByRole('button', { name: 'Explain in chat' }));
+    expect(requestRoute).toHaveBeenCalledWith({
+      target: 'ama',
+      draft:
+        'Explain the "Worktree setup failed" error (worktree_setup_failed) on Search revamp and what I should do next.',
+      autoSubmit: true,
+      chatContext: {
+        scope: 'setup',
+        code: 'worktree_setup_failed',
+        featureId: FEATURE_ID,
+        taskKey: 'worktree:repo-a',
+      },
+    });
+  });
+
+  it('routes the action-rejection card with no chat context reference', async () => {
+    const mock = installAgenticoMock();
+    mock.api.getFeature.mockResolvedValue(
+      featureSnapshot({
+        status: 'Created',
+        setup: { status: 'done', attempt: 1, tasks: [] },
+        actions: [{ id: 'start', enabled: true, disabledReasons: [] }],
+      }),
+    );
+    mock.api.dispatchFeatureAction.mockRejectedValue(
+      Object.assign(new Error('conflict: Start is no longer available.'), {
+        canonical: {
+          code: 'conflict',
+          class: 'blocking',
+          title: 'Conflict',
+          summary: 'The request conflicts with the current state of the feature.',
+        },
+      }),
+    );
+    const { requestRoute } = renderCockpitWithChat(mock);
+    const user = userEvent.setup();
+    await screen.findByRole('region', { name: 'Feature Search revamp' });
+
+    await user.click(screen.getByRole('button', { name: 'Start' }));
+    const alert = await screen.findByRole('alert');
+    await user.click(within(alert).getByRole('button', { name: 'Explain in chat' }));
+    expect(requestRoute).toHaveBeenCalledWith({
+      target: 'ama',
+      draft: 'Explain the "Conflict" error (conflict) on Search revamp and what I should do next.',
+      autoSubmit: true,
+    });
   });
 });
 

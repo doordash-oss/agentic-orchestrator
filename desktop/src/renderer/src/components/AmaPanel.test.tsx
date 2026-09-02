@@ -17,9 +17,11 @@ limitations under the License.
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { CANONICAL_ERROR_MESSAGE_PREFIX } from '../../../shared/errors';
 import {
   defaultSettings,
   type AttentionItem,
+  type ChatContextReference,
   type ConnectionState,
   type Settings,
 } from '../../../shared/ipc';
@@ -611,6 +613,244 @@ describe('AmaPanel on a remote server', () => {
       },
     });
     expect(await screen.findByText('clipboard-image.png')).toBeVisible();
+  });
+});
+
+describe('AmaPanel routed drafts', () => {
+  const reference: ChatContextReference = {
+    scope: 'run',
+    code: 'iteration_budget_exhausted',
+    featureId: 'abcd1234ef567890',
+  };
+
+  it('auto-submits a routed draft with its reference, leaving the composer untouched', async () => {
+    const mock = installAgenticoMock({ settings: settingsWithAma({ drawer: 'expanded' }) });
+    mock.api.readClipboardImage.mockResolvedValue({ paths: ['/tmp/clipboard-image.png'] });
+    // The transcript starts empty and shows the user turn only once the chat
+    // start has happened, so the routed draft's bubble proves the flow.
+    mock.api.getSessionTranscript.mockImplementation(() =>
+      Promise.resolve(
+        mock.api.startChat.mock.calls.length > 0
+          ? {
+              sessionId: '__chat__',
+              cursor: { total: 1, start: 0, end: 1 },
+              messages: [{ index: 0, role: 'user', type: 'text', text: 'Explain the failure' }],
+            }
+          : { sessionId: '__chat__', cursor: { total: 0, start: 0, end: 0 }, messages: [] },
+      ),
+    );
+    const { rerender } = render(panelElement());
+    const input = await screen.findByRole('textbox', { name: 'Ask Agentico' });
+    await userEvent.type(input, 'Unsent thought');
+    fireEvent.paste(input, {
+      clipboardData: {
+        files: [new File(['image'], 'image.png', { type: 'image/png' })],
+        items: [{ type: 'image/png' }],
+      },
+    });
+    expect(await screen.findByText('clipboard-image.png')).toBeVisible();
+
+    rerender(
+      panelElement({
+        routeRequest: {
+          id: 1,
+          event: {
+            target: 'ama',
+            draft: 'Explain the failure',
+            autoSubmit: true,
+            chatContext: reference,
+          },
+        },
+      }),
+    );
+
+    await waitFor(() =>
+      expect(mock.api.startChat).toHaveBeenCalledWith({
+        message: 'Explain the failure',
+        context: reference,
+      }),
+    );
+    expect(mock.api.startChat).toHaveBeenCalledTimes(1);
+    // The transcript reload carries the draft as the user's turn.
+    expect(await screen.findByText('Explain the failure')).toBeVisible();
+    expect(input).toHaveValue('Unsent thought');
+    expect(screen.getByText('clipboard-image.png')).toBeVisible();
+
+    // The same request id re-rendered must not submit twice.
+    rerender(
+      panelElement({
+        routeRequest: {
+          id: 1,
+          event: {
+            target: 'ama',
+            draft: 'Explain the failure',
+            autoSubmit: true,
+            chatContext: reference,
+          },
+        },
+      }),
+    );
+    expect(mock.api.startChat).toHaveBeenCalledTimes(1);
+  });
+
+  it('holds a routed draft that arrives mid-turn and sends it once the turn ends', async () => {
+    const mock = installAgenticoMock({ settings: settingsWithAma({ drawer: 'expanded' }) });
+    let resolveFirst!: (value: { sessionId: string; result: string }) => void;
+    mock.api.startChat.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveFirst = resolve;
+        }),
+    );
+    const { rerender } = render(panelElement());
+    await screen.findByRole('textbox', { name: 'Ask Agentico' });
+
+    rerender(
+      panelElement({
+        routeRequest: {
+          id: 1,
+          event: { target: 'ama', draft: 'Draft A', autoSubmit: true, chatContext: reference },
+        },
+      }),
+    );
+    await waitFor(() => expect(mock.api.startChat).toHaveBeenCalledTimes(1));
+    expect(mock.api.startChat).toHaveBeenCalledWith({ message: 'Draft A', context: reference });
+    // The routed draft has its own optimistic bubble while in flight.
+    const bubble = screen.getByText('Draft A').closest('.conversation__message');
+    expect(bubble).toHaveAttribute('data-role', 'user');
+
+    rerender(
+      panelElement({
+        routeRequest: { id: 2, event: { target: 'ama', draft: 'Draft B', autoSubmit: true } },
+      }),
+    );
+    expect(mock.api.startChat).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      resolveFirst({ sessionId: '__chat__', result: 'started' });
+    });
+    await waitFor(() => expect(mock.api.startChat).toHaveBeenCalledTimes(2));
+    expect(mock.api.startChat).toHaveBeenLastCalledWith({ message: 'Draft B' });
+    expect(mock.api.startChat).toHaveBeenCalledTimes(2);
+  });
+
+  it('sends only the later of two routed drafts that arrive during one turn', async () => {
+    const mock = installAgenticoMock({ settings: settingsWithAma({ drawer: 'expanded' }) });
+    let resolveFirst!: (value: { sessionId: string; result: string }) => void;
+    mock.api.startChat.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveFirst = resolve;
+        }),
+    );
+    const { rerender } = render(panelElement());
+    await screen.findByRole('textbox', { name: 'Ask Agentico' });
+
+    rerender(
+      panelElement({
+        routeRequest: {
+          id: 1,
+          event: { target: 'ama', draft: 'First question', autoSubmit: true },
+        },
+      }),
+    );
+    await waitFor(() => expect(mock.api.startChat).toHaveBeenCalledTimes(1));
+
+    rerender(
+      panelElement({
+        routeRequest: {
+          id: 2,
+          event: { target: 'ama', draft: 'Second question', autoSubmit: true },
+        },
+      }),
+    );
+    rerender(
+      panelElement({
+        routeRequest: {
+          id: 3,
+          event: { target: 'ama', draft: 'Third question', autoSubmit: true },
+        },
+      }),
+    );
+    expect(mock.api.startChat).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      resolveFirst({ sessionId: '__chat__', result: 'started' });
+    });
+    await waitFor(() => expect(mock.api.startChat).toHaveBeenCalledTimes(2));
+    expect(mock.api.startChat).toHaveBeenLastCalledWith({ message: 'Third question' });
+    expect(
+      mock.api.startChat.mock.calls.some(([request]) => request.message === 'Second question'),
+    ).toBe(false);
+  });
+
+  it('fills only an empty composer from a routed draft without autoSubmit', async () => {
+    const mock = installAgenticoMock({ settings: settingsWithAma({ drawer: 'expanded' }) });
+    const { rerender } = render(panelElement());
+    const input = await screen.findByRole('textbox', { name: 'Ask Agentico' });
+
+    rerender(
+      panelElement({
+        routeRequest: { id: 1, event: { target: 'ama', draft: 'Prefilled question' } },
+      }),
+    );
+    await waitFor(() => {
+      expect(input).toHaveValue('Prefilled question');
+      expect(input).toHaveFocus();
+    });
+    expect(mock.api.startChat).not.toHaveBeenCalled();
+
+    await userEvent.clear(input);
+    await userEvent.type(input, 'My own text');
+    rerender(
+      panelElement({
+        routeRequest: { id: 2, event: { target: 'ama', draft: 'Routed replacement' } },
+      }),
+    );
+    expect(input).toHaveValue('My own text');
+    expect(input).toHaveFocus();
+  });
+
+  it('shows the cataloged title and keeps the composer when an auto-submit is rejected', async () => {
+    const mock = installAgenticoMock({ settings: settingsWithAma({ drawer: 'expanded' }) });
+    // A canonical server rejection as preload carries it across the bridge:
+    // the sentinel-prefixed message is the only channel that survives.
+    mock.api.startChat.mockRejectedValueOnce(
+      new Error(
+        CANONICAL_ERROR_MESSAGE_PREFIX +
+          JSON.stringify({
+            code: 'chat_context_not_found',
+            class: 'warning',
+            title: 'Referenced error no longer present',
+            summary: 'The referenced error is no longer present; refresh the view.',
+          }),
+      ),
+    );
+    const { rerender } = render(panelElement());
+    const input = await screen.findByRole('textbox', { name: 'Ask Agentico' });
+    await userEvent.type(input, 'Keep mine');
+
+    rerender(
+      panelElement({
+        routeRequest: {
+          id: 1,
+          event: {
+            target: 'ama',
+            draft: 'Explain the failure',
+            autoSubmit: true,
+            chatContext: reference,
+          },
+        },
+      }),
+    );
+
+    expect(await screen.findByText('Referenced error no longer present')).toBeVisible();
+    await waitFor(() => expect(screen.queryByText('Explain the failure')).not.toBeInTheDocument());
+    expect(input).toHaveValue('Keep mine');
+    expect(mock.api.startChat).toHaveBeenCalledWith({
+      message: 'Explain the failure',
+      context: reference,
+    });
   });
 });
 

@@ -238,9 +238,30 @@ describe('preload surface', () => {
     expect(cb).toHaveBeenCalledWith({ target: 'settings', settingsSection: 'updates' });
 
     cb.mockClear();
+    // The routed chat draft rides the ama target only and crosses intact.
+    const amaRoute = {
+      target: 'ama',
+      draft: 'Explain the "Run failed" error (run_failed) on add-login.',
+      autoSubmit: true,
+      chatContext: { scope: 'run', code: 'run_failed', featureId: 'abcd1234' },
+    };
+    listener({}, amaRoute);
+    expect(cb).toHaveBeenCalledWith(amaRoute);
+
+    cb.mockClear();
     listener({}, { target: 'shell' });
     listener({}, { target: 'settings', settingsSection: 'secrets' });
     listener({}, { target: 'attention', token: 'tok-leak' });
+    // A non-ama route cannot smuggle any of the chat draft fields through.
+    listener({}, { target: 'home', draft: 'smuggled draft' });
+    listener({}, { target: 'home', autoSubmit: true });
+    listener(
+      {},
+      {
+        target: 'settings',
+        chatContext: { scope: 'run', code: 'run_failed', featureId: 'abcd1234' },
+      },
+    );
     listener({}, JSON.parse('{"__proto__": {}, "target": "home"}'));
     expect(cb).not.toHaveBeenCalled();
 

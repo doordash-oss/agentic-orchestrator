@@ -838,10 +838,23 @@ paths:
     post:
       operationId: startChatPrompt
       summary: Start a chat prompt session.
+      description: >-
+        Sends one user turn to the singleton AMA chat session, starting the
+        session when none is live. An optional `context` reference points at
+        the durable home of an error the question is about; the server
+        resolves it into a hidden context bundle the provider sees but the
+        transcript never echoes. Failure machine codes: 400
+        `chat_context_invalid` (malformed reference) and 404
+        `chat_context_not_found` (referenced error no longer present); both
+        are rejected before any chat turn is sent.
       parameters:
         - $ref: "#/components/parameters/TrustedMutationHeader"
       requestBody:
-        $ref: "#/components/requestBodies/JSONMutation"
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChatStartRequest"
       responses:
         "200":
           $ref: "#/components/responses/ActionResponse"
@@ -2686,6 +2699,51 @@ components:
               type: string
             result:
               type: string
+    ChatContextScope:
+      type: string
+      enum: [run, transaction, repository, setup, recovery]
+    ChatContextReference:
+      # Points at the durable home of an error an explain-in-chat question is
+      # about. `scope` picks the home; the keys each scope requires are
+      # validated server-side: run needs feature_id; transaction needs
+      # feature_id (the child) and optionally repository to address a journal
+      # entry's warning instead of the attention record; repository needs
+      # feature_id and repository; setup needs feature_id and task_key;
+      # recovery needs snapshot_id and key.
+      type: object
+      additionalProperties: false
+      required: [scope, code]
+      properties:
+        scope:
+          $ref: "#/components/schemas/ChatContextScope"
+        code:
+          type: string
+          minLength: 1
+          maxLength: 128
+        feature_id: { type: string, minLength: 1, maxLength: 200 }
+        repository: { type: string, minLength: 1, maxLength: 200 }
+        task_key: { type: string, minLength: 1, maxLength: 200 }
+        snapshot_id: { type: string, minLength: 1, maxLength: 128 }
+        key: { type: string, minLength: 1, maxLength: 500 }
+    ChatStartRequest:
+      # Bound by the startChatPrompt operation at
+      # /api/v1/prompts/chat/start; oapi-codegen emits the Go binding
+      # (internal/server/serverapi.gen.go).
+      type: object
+      additionalProperties: false
+      required: [message]
+      properties:
+        message: { type: string, minLength: 1 }
+        images:
+          type: array
+          maxItems: 12
+          items: { type: string }
+        image_uploads:
+          type: array
+          maxItems: 12
+          items: { type: string }
+        context:
+          $ref: "#/components/schemas/ChatContextReference"
     ChatStartResponse:
       allOf:
         - $ref: "#/components/schemas/ActionBaseResponse"

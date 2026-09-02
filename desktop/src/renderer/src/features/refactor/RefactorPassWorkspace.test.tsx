@@ -28,6 +28,7 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AttentionItem, FeatureSnapshot, RelationshipChildView } from '../../../../shared/ipc';
 import { featureSnapshot, installAgenticoMock } from '../../test/agenticoMock';
+import { ExplainChatProvider } from '../../explainChat';
 import { emptyAttentionDrafts } from '../AttentionInbox';
 import {
   RefactorPassWorkspace,
@@ -962,5 +963,116 @@ describe('RefactorPassWorkspace', () => {
     expect(screen.getByText('conflict')).toHaveClass('error-surface__code');
     expect(screen.getByText('The pass action was rejected')).toBeVisible();
     expect(document.querySelector('.refactor-pass__notice')).toBeNull();
+  });
+});
+
+describe('RefactorPassWorkspace explain-in-chat', () => {
+  /** Renders the workspace inside a mounted provider with a spy requester. */
+  function renderWorkspaceWithChat(
+    parent: FeatureSnapshot,
+    pass: RefactorPassController,
+    attentionItems: AttentionItem[] = [],
+  ) {
+    const requestRoute = vi.fn();
+    render(
+      <ExplainChatProvider requestRoute={requestRoute}>
+        <RefactorPassWorkspace
+          parent={parent}
+          pass={pass}
+          attentionPreviewRequest={null}
+          attentionItems={attentionItems}
+          refreshAttention={() => Promise.resolve([])}
+          attentionDrafts={emptyAttentionDrafts()}
+          setAttentionDrafts={vi.fn()}
+          isNarrow={false}
+          inspectorOpen={true}
+          onCloseInspector={vi.fn()}
+        />
+      </ExplainChatProvider>,
+    );
+    return requestRoute;
+  }
+
+  it('routes the integration attention card as a transaction reference with the child ID', async () => {
+    installAgenticoMock({ feature: parkedChild() });
+    const parent = featureSnapshot({
+      id: 'parent1234ef5678',
+      name: 'Electron app',
+      status: 'Published',
+      activeChild: childView({ integrationState: 'attention', attention: parkedAttention }),
+    });
+    const requestRoute = renderWorkspaceWithChat(parent, controllerFor(parent, parkedChild()));
+    const user = userEvent.setup();
+
+    const alert = screen.getByRole('alert');
+    await user.click(within(alert).getByRole('button', { name: 'Explain in chat' }));
+    expect(requestRoute).toHaveBeenCalledTimes(1);
+    expect(requestRoute).toHaveBeenCalledWith({
+      target: 'ama',
+      draft:
+        'Explain the "Integration merge conflict" error (integration_merge_conflict) on Slop removal pass and what I should do next.',
+      autoSubmit: true,
+      chatContext: {
+        scope: 'transaction',
+        code: 'integration_merge_conflict',
+        featureId: CHILD_ID,
+      },
+    });
+  });
+
+  it('routes the setup card as a setup reference with the owning task key', async () => {
+    installAgenticoMock({ feature: setupFailedChild() });
+    const parent = parentWith();
+    const requestRoute = renderWorkspaceWithChat(parent, controllerFor(parent, setupFailedChild()));
+    const user = userEvent.setup();
+
+    const alert = screen.getByRole('alert');
+    await user.click(within(alert).getByRole('button', { name: 'Explain in chat' }));
+    expect(requestRoute).toHaveBeenCalledWith({
+      target: 'ama',
+      draft:
+        'Explain the "Worktree setup failed" error (worktree_setup_failed) on Slop removal pass and what I should do next.',
+      autoSubmit: true,
+      chatContext: {
+        scope: 'setup',
+        code: 'worktree_setup_failed',
+        featureId: CHILD_ID,
+        taskKey: 'worktree:repo-a',
+      },
+    });
+  });
+
+  it('routes a relationship warning as a transaction reference with its repository', async () => {
+    installAgenticoMock({ feature: readyChild() });
+    const parent = parentWith({
+      warnings: [
+        {
+          code: 'child_cleanup_incomplete',
+          class: 'warning' as const,
+          title: 'Cleanup incomplete',
+          summary: 'The worktree for repository "repo-a" could not be removed.',
+          context: { repositories: [{ name: 'repo-a', branch: 'agentico/pass-3' }] },
+          diagnostics: 'remove worktree: directory busy',
+        },
+      ],
+    });
+    const requestRoute = renderWorkspaceWithChat(parent, controllerFor(parent, readyChild()));
+    const user = userEvent.setup();
+
+    const surface = document.querySelector('.refactor-pass .error-surface') as HTMLElement;
+    expect(surface).not.toBeNull();
+    await user.click(within(surface).getByRole('button', { name: 'Explain in chat' }));
+    expect(requestRoute).toHaveBeenCalledWith({
+      target: 'ama',
+      draft:
+        'Explain the "Cleanup incomplete" error (child_cleanup_incomplete) on Slop removal pass and what I should do next.',
+      autoSubmit: true,
+      chatContext: {
+        scope: 'transaction',
+        code: 'child_cleanup_incomplete',
+        featureId: CHILD_ID,
+        repository: 'repo-a',
+      },
+    });
   });
 });

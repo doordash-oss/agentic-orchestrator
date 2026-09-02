@@ -269,7 +269,7 @@ export function RecoveryWorkspace({ onNavigateToFeature }: RecoveryWorkspaceProp
         </p>
       ) : null}
 
-      {items.length > 0 ? (
+      {snapshot !== null && items.length > 0 ? (
         <ul className="recovery-workspace__queue" aria-label="Recovery items">
           {items.map((item) => {
             const outcome = outcomes.get(item.key);
@@ -341,6 +341,18 @@ export function RecoveryWorkspace({ onNavigateToFeature }: RecoveryWorkspaceProp
                     if (actionId === 'resume' && executingKey === null) {
                       void executeSingle(item, 'resume');
                     }
+                  }}
+                  explain={{
+                    // The recovery snapshot in state is the durable home:
+                    // the same snapshot-id/item-key pair the recovery log
+                    // endpoint addresses.
+                    reference: {
+                      scope: 'recovery',
+                      code: item.error.code,
+                      snapshotId: snapshot.snapshotId,
+                      key: item.key,
+                    },
+                    featureName: item.featureName ?? item.featureId,
                   }}
                 />
                 {item.logAvailable === true ? (

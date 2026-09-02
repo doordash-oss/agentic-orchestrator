@@ -239,6 +239,89 @@ describe('SessionService singleton chat mutations', () => {
       body: { message: 'no images', images: [] },
     });
   });
+
+  it('forwards a chat context reference as snake_case context, present fields only', async () => {
+    const apiRequest = vi.fn(() =>
+      Promise.resolve({
+        status: 200,
+        body: { api_version: 'v1', session_id: '__chat__', result: 'started' },
+      }),
+    );
+    const service = new SessionService(transport({ apiRequest }));
+
+    await service.startChat({
+      message: 'Explain this error',
+      context: {
+        scope: 'transaction',
+        code: 'integration_attention',
+        featureId: 'abcd1234',
+        repository: 'main',
+      },
+    });
+    await service.startChat({
+      message: 'And this one',
+      context: { scope: 'recovery', code: 'orphan_process', snapshotId: 'snap-1', key: 'item-2' },
+    });
+    expect(apiRequest).toHaveBeenNthCalledWith(1, '/api/v1/prompts/chat/start', {
+      method: 'POST',
+      body: {
+        message: 'Explain this error',
+        images: [],
+        context: {
+          scope: 'transaction',
+          code: 'integration_attention',
+          feature_id: 'abcd1234',
+          repository: 'main',
+        },
+      },
+    });
+    expect(apiRequest).toHaveBeenNthCalledWith(2, '/api/v1/prompts/chat/start', {
+      method: 'POST',
+      body: {
+        message: 'And this one',
+        images: [],
+        context: {
+          scope: 'recovery',
+          code: 'orphan_process',
+          snapshot_id: 'snap-1',
+          key: 'item-2',
+        },
+      },
+    });
+  });
+
+  it('surfaces a chat_context_not_found rejection as the cataloged canonical error', async () => {
+    const service = new SessionService(
+      transport({
+        apiRequest: () =>
+          Promise.resolve({
+            status: 404,
+            body: {
+              api_version: 'v1',
+              error: {
+                class: 'warning',
+                code: 'chat_context_not_found',
+                title: 'Referenced error no longer present',
+                summary: 'The error referenced by this question is no longer present.',
+                remediation: { hint: 'Refresh the view to see the current errors.' },
+              },
+            },
+          }),
+      }),
+    );
+
+    await expect(
+      service.startChat({
+        message: 'Explain this error',
+        context: { scope: 'run', code: 'run_failed', featureId: 'abcd1234' },
+      }),
+    ).rejects.toMatchObject({
+      canonical: {
+        code: 'chat_context_not_found',
+        title: 'Referenced error no longer present',
+      },
+    });
+  });
 });
 
 describe('SessionService output subscriptions', () => {

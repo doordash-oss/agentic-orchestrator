@@ -61,6 +61,7 @@ import {
   passActions,
   passKindLabel,
   passState,
+  relationshipWarningExplain,
   COMMENT_TYPE_LABEL,
   commentKey,
   type PassAction,
@@ -434,7 +435,7 @@ export function RefactorPassWorkspace({
   // the task, and the task carries the full canonical object. The card's
   // setup action resolves against the child's action catalog and dispatches
   // through the pass dispatch.
-  const failedSetupTaskError = (() => {
+  const failedSetupTask = (() => {
     if (child?.setup?.status !== 'failed') return null;
     const tasks = child.setup?.tasks ?? [];
     const owningKey = child.failure?.context?.setup_task?.key;
@@ -442,8 +443,9 @@ export function RefactorPassWorkspace({
       owningKey === undefined
         ? tasks.find((candidate) => candidate.error !== undefined)
         : tasks.find((candidate) => candidate.key === owningKey && candidate.error !== undefined);
-    return task?.error ?? null;
+    return task ?? null;
   })();
+  const failedSetupTaskError = failedSetupTask?.error ?? null;
   const resolveSetupAction = (actionId: string): ErrorSurfaceAction | undefined => {
     if (child === null) return undefined;
     const action = actionById(child, actionId);
@@ -586,13 +588,22 @@ export function RefactorPassWorkspace({
             </p>
           ) : null}
 
-          {failedSetupTaskError !== null ? (
+          {failedSetupTaskError !== null && failedSetupTask !== null ? (
             <ErrorSurface
               error={failedSetupTaskError}
               variant="full"
               resolveAction={resolveSetupAction}
               onAction={(actionId) => {
                 if (actionId === 'setup') void pass.dispatch('setup');
+              }}
+              explain={{
+                reference: {
+                  scope: 'setup',
+                  code: failedSetupTaskError.code,
+                  featureId: view.id,
+                  taskKey: failedSetupTask.key,
+                },
+                featureName: view.name,
               }}
             />
           ) : null}
@@ -607,6 +618,14 @@ export function RefactorPassWorkspace({
               resolveAction={resolveIntegrationAction}
               onAction={(actionId) => {
                 if (actionId === 'retry') void pass.dispatch('retry');
+              }}
+              explain={{
+                reference: {
+                  scope: 'transaction',
+                  code: integrationAttention.code,
+                  featureId: view.id,
+                },
+                featureName: view.name,
               }}
             />
           ) : null}
@@ -728,7 +747,12 @@ export function RefactorPassWorkspace({
           ) : null}
 
           {view.warnings.map((warning, index) => (
-            <ErrorSurface key={`${warning.code}:${index}`} error={warning} variant="compact" />
+            <ErrorSurface
+              key={`${warning.code}:${index}`}
+              error={warning}
+              variant="compact"
+              explain={relationshipWarningExplain(view, warning)}
+            />
           ))}
         </main>
 

@@ -393,6 +393,30 @@ describe('operational IPC schemas', () => {
     );
   });
 
+  it('accepts a run chat context reference and rejects undisciplined ones', () => {
+    const request = {
+      message: 'Explain this error',
+      context: { scope: 'run', code: 'iteration_budget_exhausted', featureId: 'abcd1234' },
+    };
+    expect(ChatStartRequestSchema.parse(request)).toStrictEqual(request);
+    // Unknown scopes, extra keys, and keys missing for or foreign to the
+    // scope never reach the wire.
+    for (const context of [
+      { scope: 'session', code: 'x', featureId: 'abcd1234' },
+      { scope: 'run', code: 'x', featureId: 'abcd1234', extra: 'x' },
+      { scope: 'run', code: 'x', featureId: 'abcd1234', taskKey: 'setup-worktrees' },
+      { scope: 'run', code: 'x', repository: 'main' },
+      { scope: 'run', code: 'x' },
+      { scope: 'setup', code: 'x', featureId: 'abcd1234' },
+      { scope: 'recovery', code: 'x' },
+    ]) {
+      expect(
+        ChatStartRequestSchema.safeParse({ message: 'Explain this error', context }).success,
+        JSON.stringify(context),
+      ).toBe(false);
+    }
+  });
+
   it('rejects foreign and prototype-polluting output records', () => {
     const valid = {
       subscriptionId: 'sub-1',
@@ -921,6 +945,31 @@ describe('Servers pane IPC contracts', () => {
         token: 'x',
       }).success,
     ).toBe(false);
+  });
+
+  it('AppRouteEvent: draft, autoSubmit, and chatContext ride the ama target only', () => {
+    const amaRoute = {
+      target: 'ama',
+      draft: 'Explain the "Run failed" error (run_failed) on add-login.',
+      autoSubmit: true,
+      chatContext: { scope: 'run', code: 'run_failed', featureId: 'abcd1234' },
+    };
+    expect(AppRouteEventSchema.parse(amaRoute)).toEqual(amaRoute);
+    expect(AppRouteEventSchema.parse({ target: 'ama' })).toEqual({ target: 'ama' });
+    // A non-ama route carrying any chat field — or an undisciplined
+    // reference — fails closed.
+    for (const bad of [
+      { target: 'home', draft: 'hello' },
+      { target: 'home', autoSubmit: true },
+      { target: 'settings', chatContext: { scope: 'run', code: 'x', featureId: 'abcd1234' } },
+      {
+        target: 'ama',
+        draft: 'hello',
+        chatContext: { scope: 'run', code: 'x', featureId: 'abcd1234', taskKey: 't' },
+      },
+    ]) {
+      expect(AppRouteEventSchema.safeParse(bad).success, JSON.stringify(bad)).toBe(false);
+    }
   });
 
   it('ServerRemoveRequest: strict shape, non-empty key', () => {

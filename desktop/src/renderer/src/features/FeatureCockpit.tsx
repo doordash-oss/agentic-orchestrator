@@ -2278,6 +2278,7 @@ export function FeatureCockpit({
             error={canonicalFromWizardError(actionError.error)}
             variant="compact"
             caption={`${actionError.action} was rejected`}
+            explain={{ featureName: snapshot.name }}
           />
         )}
         <p className="cockpit__announcement" role="status" aria-live="polite">
@@ -2747,6 +2748,21 @@ export function FeatureCockpit({
                       caption={durableErrorCaption}
                       resolveAction={resolveFailureAction}
                       onAction={handleFailureAction}
+                      explain={{
+                        // The reference names the durable home the server
+                        // resolves: the owning setup task when the card is
+                        // fed by it, otherwise the run's failure record.
+                        reference:
+                          owningSetupTask !== undefined
+                            ? {
+                                scope: 'setup',
+                                code: durableError.code,
+                                featureId,
+                                taskKey: owningSetupTask.key,
+                              }
+                            : { scope: 'run', code: durableError.code, featureId },
+                        featureName: snapshot.name,
+                      }}
                     />
                   ) : null}
 
@@ -2755,6 +2771,7 @@ export function FeatureCockpit({
                       error={canonicalFromWizardError(actionError.error)}
                       variant="compact"
                       caption={`${actionError.action} was rejected`}
+                      explain={{ featureName: snapshot.name }}
                     />
                   ) : null}
 

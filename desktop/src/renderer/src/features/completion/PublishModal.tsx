@@ -369,6 +369,7 @@ export function PublishModal({
                 <PublishRepoRow
                   key={repo.repo}
                   repo={repo}
+                  featureId={featureId}
                   checked={publishRepos.has(repo.repo)}
                   onToggle={togglePublishRepo}
                   openExternal={openExternal}
@@ -383,6 +384,7 @@ export function PublishModal({
                     <PublishRepoRow
                       key={repo.repo}
                       repo={repo}
+                      featureId={featureId}
                       checked={publishRepos.has(repo.repo)}
                       onToggle={togglePublishRepo}
                       openExternal={openExternal}
@@ -536,6 +538,7 @@ type PublishRepo = CompletionPreflightResult['repos'][number];
 
 function PublishRepoRow({
   repo,
+  featureId,
   checked,
   onToggle,
   openExternal,
@@ -543,6 +546,7 @@ function PublishRepoRow({
   onRetryPublish,
 }: {
   repo: PublishRepo;
+  featureId: string;
   checked: boolean;
   onToggle(repo: string): void;
   openExternal(url: string): Promise<{ ok: boolean }>;
@@ -579,7 +583,22 @@ function PublishRepoRow({
         </p>
       ) : null}
       {repo.error !== undefined ? (
-        <ErrorSurface error={repo.error} resolveAction={resolveAction} onAction={onRetryPublish} />
+        <ErrorSurface
+          error={repo.error}
+          resolveAction={resolveAction}
+          onAction={onRetryPublish}
+          explain={{
+            // The stored publish-failure record lives on the repository's
+            // own state; the modal has no feature name in scope, so the
+            // question names only the card's title and code.
+            reference: {
+              scope: 'repository',
+              code: repo.error.code,
+              featureId,
+              repository: repo.repo,
+            },
+          }}
+        />
       ) : null}
     </div>
   );

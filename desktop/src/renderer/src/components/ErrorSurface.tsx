@@ -12,6 +12,8 @@
  */
 import type { Ref } from 'react';
 import type { CanonicalError } from '../../../shared/api/parse';
+import type { ChatContextReference } from '../../../shared/ipc';
+import { useExplainChat } from '../explainChat';
 import { CircleAlertIcon, TriangleAlertIcon, WrenchIcon } from './icons';
 
 export interface ErrorSurfaceAction {
@@ -39,6 +41,16 @@ export interface ErrorSurfaceProps {
   rootRef?: Ref<HTMLDivElement>;
   /** Forwarded to the root div when a host focuses it programmatically. */
   rootTabIndex?: number;
+  /**
+   * Explain-in-chat wiring: the durable home of the error (as a chat context
+   * reference the server resolves) and the feature name the question names.
+   * Both are optional — response-only cards pass neither and the question
+   * stands on the card's own title and code.
+   */
+  explain?: {
+    reference?: ChatContextReference;
+    featureName?: string;
+  };
 }
 
 type ErrorClass = CanonicalError['class'];
@@ -189,8 +201,10 @@ export function ErrorSurface({
   onAction,
   rootRef,
   rootTabIndex,
+  explain,
 }: ErrorSurfaceProps) {
   const compact = variant === 'compact';
+  const explainRequest = useExplainChat();
   const ClassIcon = CLASS_ICON[error.class];
   const remediation = error.remediation;
   const remediationHint = remediation?.hint;
@@ -241,7 +255,26 @@ export function ErrorSurface({
           {actionSlot}
         </div>
       )}
-      {/* Explain-in-chat slot: a future in-panel action will render here. */}
+      {/* The explain-in-chat follow-up rides after the remediation block so
+       * the primary action stays first when one renders. Without a mounted
+       * provider (isolated renders) the slot stays empty. */}
+      {explainRequest != null ? (
+        <button
+          type="button"
+          className="error-surface__explain"
+          onClick={() => {
+            const featureClause = explain?.featureName != null ? ` on ${explain.featureName}` : '';
+            explainRequest({
+              target: 'ama',
+              draft: `Explain the "${error.title}" error (${error.code})${featureClause} and what I should do next.`,
+              autoSubmit: true,
+              ...(explain?.reference != null ? { chatContext: explain.reference } : {}),
+            });
+          }}
+        >
+          Explain in chat
+        </button>
+      ) : null}
       {compact ? (
         (detailsBody != null || diagnostics != null) && (
           <details className="error-surface__details error-surface__details--compact">

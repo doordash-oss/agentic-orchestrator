@@ -1,9 +1,10 @@
 import { cleanup, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { createRef } from 'react';
+import { createRef, type ReactElement } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { CanonicalError } from '../../../shared/api/parse';
 import { ErrorSurface, type ErrorSurfaceAction } from './ErrorSurface';
+import { ExplainChatProvider } from '../explainChat';
 
 afterEach(cleanup);
 
@@ -256,7 +257,17 @@ describe('ErrorSurface primary-action slot', () => {
 });
 
 describe('ErrorSurface explain-in-chat slot', () => {
-  it('renders no chat control in any variant — only the primary action, if any', () => {
+  const FEATURE_NAME = 'Search revamp';
+  const RUN_REFERENCE = { scope: 'run' as const, code: BASE_ERROR.code, featureId: 'abcd1234' };
+
+  /** Renders inside a mounted provider whose requester is a spy. */
+  function renderWithChat(ui: ReactElement) {
+    const requestRoute = vi.fn();
+    render(<ExplainChatProvider requestRoute={requestRoute}>{ui}</ExplainChatProvider>);
+    return requestRoute;
+  }
+
+  it('renders no chat control in any variant without a provider', () => {
     for (const variant of ['full', 'compact'] as const) {
       render(
         <ErrorSurface
@@ -273,5 +284,81 @@ describe('ErrorSurface explain-in-chat slot', () => {
       expect(screen.queryByRole('button')).toBeNull();
       cleanup();
     }
+  });
+
+  it('renders the button in both variants for every error class', () => {
+    for (const { errorClass } of CLASS_CASES) {
+      for (const variant of ['full', 'compact'] as const) {
+        renderWithChat(
+          <ErrorSurface
+            error={{ ...BASE_ERROR, class: errorClass }}
+            variant={variant}
+            explain={{ reference: RUN_REFERENCE, featureName: FEATURE_NAME }}
+          />,
+        );
+        expect(screen.getByRole('button', { name: 'Explain in chat' })).toBeVisible();
+        cleanup();
+      }
+    }
+  });
+
+  it('issues the routed request with autoSubmit, the reference, and the templated draft', async () => {
+    const requestRoute = renderWithChat(
+      <ErrorSurface
+        error={FULL_ERROR}
+        explain={{ reference: RUN_REFERENCE, featureName: FEATURE_NAME }}
+      />,
+    );
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'Explain in chat' }));
+    expect(requestRoute).toHaveBeenCalledTimes(1);
+    expect(requestRoute).toHaveBeenCalledWith({
+      target: 'ama',
+      draft: `Explain the "${FULL_ERROR.title}" error (${FULL_ERROR.code}) on ${FEATURE_NAME} and what I should do next.`,
+      autoSubmit: true,
+      chatContext: RUN_REFERENCE,
+    });
+  });
+
+  it('omits the feature clause when no feature name is known', async () => {
+    const requestRoute = renderWithChat(
+      <ErrorSurface error={FULL_ERROR} explain={{ reference: RUN_REFERENCE }} />,
+    );
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'Explain in chat' }));
+    expect(requestRoute).toHaveBeenCalledWith({
+      target: 'ama',
+      draft: `Explain the "${FULL_ERROR.title}" error (${FULL_ERROR.code}) and what I should do next.`,
+      autoSubmit: true,
+      chatContext: RUN_REFERENCE,
+    });
+  });
+
+  it('carries no chatContext when the explain prop passes no reference', async () => {
+    const requestRoute = renderWithChat(
+      <ErrorSurface error={FULL_ERROR} explain={{ featureName: FEATURE_NAME }} />,
+    );
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'Explain in chat' }));
+    expect(requestRoute).toHaveBeenCalledWith({
+      target: 'ama',
+      draft: `Explain the "${FULL_ERROR.title}" error (${FULL_ERROR.code}) on ${FEATURE_NAME} and what I should do next.`,
+      autoSubmit: true,
+    });
+  });
+
+  it('keeps the primary action first in the DOM when one renders', () => {
+    renderWithChat(
+      <ErrorSurface
+        error={FULL_ERROR}
+        resolveAction={vi.fn(() => ENABLED_ACTION)}
+        explain={{ reference: RUN_REFERENCE, featureName: FEATURE_NAME }}
+      />,
+    );
+    const buttons = screen.getAllByRole('button');
+    expect(buttons).toHaveLength(2);
+    expect(buttons[0]).toHaveAccessibleName('Retry rebase');
+    expect(buttons[1]).toHaveAccessibleName('Explain in chat');
+    expectBefore(buttons[0]!, buttons[1]!);
   });
 });

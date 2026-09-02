@@ -808,7 +808,7 @@ func TestServerMutationTargetStartChatStartsInteractiveUtilitySessionWithoutSuba
 		workspaceDir: testWorkspaceDir,
 	}
 
-	result, err := target.StartChat(serverruntime.ChatStartRequest{Message: "What is running?"})
+	result, err := target.StartChat(serverruntime.ChatStartRequest{Message: "What is running?"}, "")
 	if err != nil {
 		t.Fatalf("StartChat() error = %v", err)
 	}
@@ -866,6 +866,95 @@ func TestServerMutationTargetStartChatStartsInteractiveUtilitySessionWithoutSuba
 		t.Fatalf("StartSession StderrPath = %q, want chat stderr capture", start.opts.StderrPath)
 	}
 	assertJSONDoesNotContain(t, result, "What is running?")
+}
+
+// TestServerMutationTargetStartChatFreshSessionCarriesHiddenContext pins
+// the fresh-session split: the wire prompt is skill instruction, hidden
+// bundle, then visible message, while the stored initial prompt stays the
+// visible message alone and the response never carries bundle text.
+func TestServerMutationTargetStartChatFreshSessionCarriesHiddenContext(t *testing.T) {
+	runtimeRoot := t.TempDir()
+	stateDir := filepath.Join(runtimeRoot, "features")
+	skillsDir := filepath.Join(runtimeRoot, "skills")
+	var captured []agent.BuildSessionOpts
+	phaseRunner := &agent.PhaseRunner{
+		StateDir:  stateDir,
+		SkillsDir: skillsDir,
+		BuildSessionFn: func(opts agent.BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error) {
+			captured = append(captured, opts)
+			return []string{"agent"}, []string{"AGENT_TEST=1"}, &ports.SessionOpts{}, nil
+		},
+	}
+	sessions := &mutationTargetSessionManager{}
+	target := serverMutationTarget{
+		cfg:         config.NewDefault(),
+		sessions:    sessions,
+		phaseRunner: phaseRunner,
+	}
+
+	const bundle = "Chat context — run error on feature \"Fix login\" (abcd1234)"
+	result, err := target.StartChat(serverruntime.ChatStartRequest{Message: "Explain this failure"}, bundle)
+	if err != nil {
+		t.Fatalf("StartChat() error = %v", err)
+	}
+	if result.Result != resultStarted {
+		t.Fatalf("StartChat() result = %+v, want chat session started", result)
+	}
+	if len(captured) != 1 || len(sessions.startCalls) != 1 {
+		t.Fatalf("BuildSession/StartSession calls = %d/%d, want 1/1", len(captured), len(sessions.startCalls))
+	}
+	prompt := captured[0].Prompt
+	skillIdx := strings.Index(prompt, filepath.Join(skillsDir, chatName, "SKILL.md"))
+	bundleIdx := strings.Index(prompt, bundle)
+	messageIdx := strings.Index(prompt, "Explain this failure")
+	if skillIdx < 0 || bundleIdx < 0 || messageIdx < 0 {
+		t.Fatalf("BuildSession prompt missing pieces:\n%s", prompt)
+	}
+	if !(skillIdx < bundleIdx && bundleIdx < messageIdx) {
+		t.Fatalf("BuildSession prompt order = skill %d, bundle %d, message %d; want skill, bundle, message", skillIdx, bundleIdx, messageIdx)
+	}
+	start := sessions.startCalls[0]
+	if start.opts == nil || start.opts.InitialPrompt != "Explain this failure" {
+		t.Fatalf("StartSession opts.InitialPrompt = %+v, want the visible message only", start.opts)
+	}
+	assertJSONDoesNotContain(t, result, bundle)
+}
+
+// TestServerMutationTargetStartChatLiveSessionSendsBundleAsHiddenContext
+// pins the live-session split: the visible message is the echo and the
+// bundle rides as hidden context, while a turn without a bundle keeps the
+// plain send path.
+func TestServerMutationTargetStartChatLiveSessionSendsBundleAsHiddenContext(t *testing.T) {
+	sess := &mutationTargetSessionView{id: serverChatSessionID, status: ports.SessionRunning, active: true}
+	sessions := &mutationTargetSessionManager{sessions: []ports.SessionView{sess}}
+	target := serverMutationTarget{cfg: config.NewDefault(), sessions: sessions}
+
+	const bundle = "Chat context — run error on feature \"Fix login\" (abcd1234)"
+	result, err := target.StartChat(serverruntime.ChatStartRequest{Message: "Explain this failure"}, bundle)
+	if err != nil {
+		t.Fatalf("StartChat() error = %v", err)
+	}
+	if result.Result != resultSent || result.SessionID != serverChatSessionID {
+		t.Fatalf("StartChat() result = %+v, want sent to the live chat session", result)
+	}
+	if !reflect.DeepEqual(sess.sentMessages, []string{"Explain this failure"}) {
+		t.Fatalf("SendUserMessage echoes = %v, want only the visible message", sess.sentMessages)
+	}
+	if len(sess.hiddenContextTurns) != 1 || sess.hiddenContextTurns[0].hidden != bundle || sess.hiddenContextTurns[0].visible != "Explain this failure" {
+		t.Fatalf("hidden-context turns = %+v, want the bundle as hidden context", sess.hiddenContextTurns)
+	}
+
+	result, err = target.StartChat(serverruntime.ChatStartRequest{Message: "Follow up"}, "")
+	if err != nil {
+		t.Fatalf("StartChat() follow-up error = %v", err)
+	}
+	if !reflect.DeepEqual(sess.sentMessages, []string{"Explain this failure", "Follow up"}) {
+		t.Fatalf("SendUserMessage echoes = %v, want plain sends without a bundle", sess.sentMessages)
+	}
+	if len(sess.hiddenContextTurns) != 1 {
+		t.Fatalf("hidden-context turns = %d after a plain turn, want unchanged", len(sess.hiddenContextTurns))
+	}
+	assertJSONDoesNotContain(t, result, bundle)
 }
 
 func TestChatMessageWithImagesAddsInspectableLocalPaths(t *testing.T) {
@@ -2740,11 +2829,18 @@ type mutationTargetSessionView struct {
 	status           ports.SessionStatus
 	active           bool
 	permCacheScope   string
-	pending          []*llm.ControlRequestMessage
-	sentMessages     []string
-	controlCalls     []mutationTargetControlCall
-	askCalls         []mutationTargetAskUserCall
-	onRespondControl func() error
+	pending            []*llm.ControlRequestMessage
+	sentMessages       []string
+	hiddenContextTurns []mutationTargetHiddenTurn
+	controlCalls       []mutationTargetControlCall
+	askCalls           []mutationTargetAskUserCall
+	onRespondControl   func() error
+}
+
+// mutationTargetHiddenTurn records one hidden-context user turn.
+type mutationTargetHiddenTurn struct {
+	visible string
+	hidden  string
 }
 
 type mutationTargetControlCall struct {
@@ -2820,6 +2916,11 @@ func (s *mutationTargetSessionView) LiveBackgroundTaskCount() int       { return
 func (s *mutationTargetSessionView) TaskActivities() []llm.TaskActivity { return nil }
 func (s *mutationTargetSessionView) SendUserMessage(text string) error {
 	s.sentMessages = append(s.sentMessages, text)
+	return nil
+}
+func (s *mutationTargetSessionView) SendUserMessageWithHiddenContext(visible, hiddenContext string) error {
+	s.sentMessages = append(s.sentMessages, visible)
+	s.hiddenContextTurns = append(s.hiddenContextTurns, mutationTargetHiddenTurn{visible: visible, hidden: hiddenContext})
 	return nil
 }
 func (s *mutationTargetSessionView) RespondToControl(requestID string, allow bool, reason string) error {

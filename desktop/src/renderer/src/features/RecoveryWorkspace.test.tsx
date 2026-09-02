@@ -16,8 +16,9 @@ limitations under the License.
 
 import { cleanup, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { installAgenticoMock, orphanSessionError } from '../test/agenticoMock';
+import { ExplainChatProvider } from '../explainChat';
 import { RecoveryWorkspace } from './RecoveryWorkspace';
 
 afterEach(cleanup);
@@ -194,5 +195,51 @@ describe('RecoveryWorkspace', () => {
       'data-attention',
       'false',
     );
+  });
+
+  it('routes the recovery card as a recovery reference with the snapshot ID and item key', async () => {
+    const mock = installAgenticoMock();
+    mock.api.scanRecovery.mockResolvedValue({
+      snapshotId: 'recovery-1',
+      items: [
+        {
+          key: 'feature-a:repo-a',
+          featureId: 'abcd1234ef567890',
+          featureName: 'Recovery target',
+          repoName: 'repo-a',
+          phase: 'Implement',
+          iteration: 2,
+          pid: 4242,
+          processAlive: true,
+          error: orphanSessionError(),
+          allowedActions: ['resume', 'kill', 'skip'],
+          defaultAction: 'resume',
+        },
+      ],
+    });
+    const requestRoute = vi.fn();
+    render(
+      <ExplainChatProvider requestRoute={requestRoute}>
+        <RecoveryWorkspace />
+      </ExplainChatProvider>,
+    );
+    const user = userEvent.setup();
+
+    const queue = await screen.findByRole('list', { name: 'Recovery items' });
+    const card = within(queue).getByRole('alert');
+    await user.click(within(card).getByRole('button', { name: 'Explain in chat' }));
+    expect(requestRoute).toHaveBeenCalledTimes(1);
+    expect(requestRoute).toHaveBeenCalledWith({
+      target: 'ama',
+      draft:
+        'Explain the "Orphaned session running" error (orphan_session_live) on Recovery target and what I should do next.',
+      autoSubmit: true,
+      chatContext: {
+        scope: 'recovery',
+        code: 'orphan_session_live',
+        snapshotId: 'recovery-1',
+        key: 'feature-a:repo-a',
+      },
+    });
   });
 });

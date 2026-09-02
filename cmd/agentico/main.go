@@ -1527,7 +1527,7 @@ func (t *serverMutationTarget) SendHelp(req serverruntime.HelpAnswerRequest) (se
 
 const serverChatSessionID = serverruntime.ChatSessionID
 
-func (t *serverMutationTarget) StartChat(req serverruntime.ChatStartRequest) (serverruntime.ChatStartResponse, error) {
+func (t *serverMutationTarget) StartChat(req serverruntime.ChatStartRequest, hiddenContext string) (serverruntime.ChatStartResponse, error) {
 	message := strings.TrimSpace(req.Message)
 	if message == "" {
 		return serverruntime.ChatStartResponse{}, errors.New("message is required")
@@ -1536,8 +1536,21 @@ func (t *serverMutationTarget) StartChat(req serverruntime.ChatStartRequest) (se
 		return serverruntime.ChatStartResponse{}, errors.New("session manager is not available")
 	}
 	deliveryMessage := chatMessageWithImages(message, req.Images)
+	hiddenContext = strings.TrimSpace(hiddenContext)
 	if sess := t.sessions.GetSession(serverChatSessionID); sess != nil && sess.IsActive() {
-		if err := sess.SendUserMessage(deliveryMessage); err != nil {
+		if hiddenContext != "" {
+			// Hidden context splits wire text from echoed text: the provider
+			// sees the bundle followed by the visible message, the transcript
+			// records only the visible message. A session that cannot carry
+			// hidden context fails the turn rather than dropping the bundle.
+			sender, ok := sess.(ports.HiddenContextSender)
+			if !ok {
+				return serverruntime.ChatStartResponse{}, errors.New("chat session cannot carry hidden context")
+			}
+			if err := sender.SendUserMessageWithHiddenContext(deliveryMessage, hiddenContext); err != nil {
+				return serverruntime.ChatStartResponse{}, fmt.Errorf("send chat message: %w", err)
+			}
+		} else if err := sess.SendUserMessage(deliveryMessage); err != nil {
 			return serverruntime.ChatStartResponse{}, fmt.Errorf("send chat message: %w", err)
 		}
 		return serverruntime.ChatStartResponse{SessionID: sess.ID(), Result: resultSent}, nil
@@ -1547,7 +1560,12 @@ func (t *serverMutationTarget) StartChat(req serverruntime.ChatStartRequest) (se
 	}
 
 	chatSkillPath := serverChatSkillPath(t.phaseRunner.SkillsDir)
+	// Wire prompt order: skill instruction, hidden context, visible message.
+	// The stored initial prompt below stays the visible message alone.
 	prompt := deliveryMessage
+	if hiddenContext != "" {
+		prompt = hiddenContext + "\n\n" + prompt
+	}
 	if instruction := serverChatSkillInstruction(t.phaseRunner.SkillsDir); instruction != "" {
 		prompt = instruction + "\n\n" + prompt
 	}

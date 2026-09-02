@@ -17,7 +17,7 @@ limitations under the License.
 import { useCallback, useState } from 'react';
 import type { RelationshipChildView } from '../../../../shared/ipc';
 import { ErrorSurface } from '../../components/ErrorSurface';
-import { CHILD_KIND_LABEL } from './refactorPassModel';
+import { CHILD_KIND_LABEL, relationshipWarningExplain } from './refactorPassModel';
 
 /**
  * Settled passes are immutable history: newest first, inspection
@@ -123,7 +123,12 @@ export function RefactorHistory({
               </dl>
             </div>
             {entry.warnings.map((warning, index) => (
-              <ErrorSurface key={`${warning.code}:${index}`} error={warning} variant="compact" />
+              <ErrorSurface
+                key={`${warning.code}:${index}`}
+                error={warning}
+                variant="compact"
+                explain={relationshipWarningExplain(entry, warning)}
+              />
             ))}
             {entry.diffSummary !== undefined && entry.diffSummary !== '' ? (
               <details className="refactor-history__diff">

@@ -24,6 +24,7 @@ import type {
   FeatureActionView,
 } from '../../../../shared/ipc';
 import type { CanonicalError } from '../../../../shared/api/parse';
+import { ExplainChatProvider } from '../../explainChat';
 import { PublishModal } from './PublishModal';
 
 const featureId = 'abcd1234ef567890';
@@ -532,6 +533,47 @@ describe('PublishModal', () => {
     expect(document.querySelector('.completion-workspace__repo-outcome-detail')).toBeNull();
     expect(document.querySelector('.completion-publish-sheet__failure')).toBeNull();
     expect(screen.queryByText("Agentico couldn't prepare this publish.")).not.toBeInTheDocument();
+  });
+
+  it('routes the failed repository card as a repository reference with no feature clause', async () => {
+    const user = userEvent.setup();
+    const requestRoute = vi.fn();
+    render(
+      <ExplainChatProvider requestRoute={requestRoute}>
+        <PublishModal
+          {...props({
+            preflight: preflightWith({
+              repos: [
+                {
+                  repo: 'web',
+                  publishable: true,
+                  touched: true,
+                  status: 'eligible',
+                  error: prFailedError,
+                },
+              ],
+            }),
+          })}
+        />
+      </ExplainChatProvider>,
+    );
+
+    const row = failedRepoRow();
+    const card = within(row).getByRole('alert');
+    await user.click(within(card).getByRole('button', { name: 'Explain in chat' }));
+    expect(requestRoute).toHaveBeenCalledTimes(1);
+    expect(requestRoute).toHaveBeenCalledWith({
+      target: 'ama',
+      draft:
+        'Explain the "Pull-request creation failed" error (publish_pull_request_failed) and what I should do next.',
+      autoSubmit: true,
+      chatContext: {
+        scope: 'repository',
+        code: 'publish_pull_request_failed',
+        featureId,
+        repository: 'web',
+      },
+    });
   });
 
   it('renders no rejection surface when the refreshed preflight shows a repository record', async () => {

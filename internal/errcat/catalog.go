@@ -1202,6 +1202,30 @@ var catalog = map[Code]Entry{
 		Actions:     []string{"resume"},
 	},
 
+	// --- Chat-context codes ---------------------------------------------------
+	// An explain-in-chat turn can attach a structured reference to the
+	// durable home of the error it asks about; these two codes report the
+	// ways that reference fails before any chat turn is sent. Neither
+	// references an action or declares context blocks.
+	ChatContextInvalid: {
+		Class:   ClassBlocking,
+		Title:   "Chat context could not be understood",
+		Summary: "The chat context reference attached to this question could not be understood.",
+		summaryParams: func(p Params) string {
+			return chatContextInvalidSummary(p)
+		},
+		Remediation: "Reopen the card and try again.",
+	},
+	ChatContextNotFound: {
+		Class:   ClassWarning,
+		Title:   "Referenced error no longer present",
+		Summary: "The error referenced by this question is no longer present.",
+		summaryParams: func(p Params) string {
+			return chatContextNotFoundSummary(p)
+		},
+		Remediation: "Refresh the view to see the current errors.",
+	},
+
 	// --- Integration attention codes ---------------------------------------------
 	// Every condition that parks a child pass's integration transaction
 	// classifies into one of these at the transaction boundary. All are

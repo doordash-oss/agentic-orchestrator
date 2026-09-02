@@ -167,6 +167,7 @@ export class SessionService {
       // A locally shaped path remotely is a stale draft: fail, never leak.
       throw new SafeErrorException(requiresLocalServerError());
     }
+    const { context } = input;
     const response = await serverRequest(this.transport, '/api/v1/prompts/chat/start', {
       method: 'POST',
       body: {
@@ -175,6 +176,21 @@ export class SessionService {
         ...(remote && (input.imageUploads?.length ?? 0) > 0
           ? { image_uploads: input.imageUploads }
           : {}),
+        // The server rejects unknown fields and empty-string keys, so only
+        // the fields the reference actually carries cross the wire.
+        ...(context === undefined
+          ? {}
+          : {
+              context: {
+                scope: context.scope,
+                code: context.code,
+                ...(context.featureId === undefined ? {} : { feature_id: context.featureId }),
+                ...(context.repository === undefined ? {} : { repository: context.repository }),
+                ...(context.taskKey === undefined ? {} : { task_key: context.taskKey }),
+                ...(context.snapshotId === undefined ? {} : { snapshot_id: context.snapshotId }),
+                ...(context.key === undefined ? {} : { key: context.key }),
+              },
+            }),
       },
     } as ApiRequestInit);
     const raw = response as { session_id?: unknown; result?: unknown };

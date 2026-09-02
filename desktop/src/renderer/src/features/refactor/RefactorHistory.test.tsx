@@ -14,11 +14,12 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { RelationshipChildView } from '../../../../shared/ipc';
 import { canonicalWarning } from '../../test/agenticoMock';
+import { ExplainChatProvider } from '../../explainChat';
 import { RefactorHistory } from './RefactorHistory';
 
 afterEach(cleanup);
@@ -159,6 +160,47 @@ describe('RefactorHistory relationship warnings', () => {
     // The bespoke cleanup-warning list is gone.
     expect(document.querySelector('.refactor-history__warnings')).toBeNull();
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('routes a warning as a transaction reference with its repository and the pass name', async () => {
+    const user = userEvent.setup();
+    const requestRoute = vi.fn();
+    render(
+      <ExplainChatProvider requestRoute={requestRoute}>
+        <RefactorHistory
+          entries={[
+            historyEntry({
+              warnings: [
+                canonicalWarning({
+                  code: 'child_cleanup_incomplete',
+                  title: 'Cleanup incomplete',
+                  summary: 'The worktree for repository "repo-a" could not be removed.',
+                  context: { repositories: [{ name: 'repo-a', branch: 'agentico/pass-3' }] },
+                }),
+              ],
+            }),
+          ]}
+        />
+      </ExplainChatProvider>,
+    );
+
+    await user.click(screen.getByText('Pass history'));
+    const surface = document.querySelector('.refactor-history .error-surface') as HTMLElement;
+    expect(surface).not.toBeNull();
+    await user.click(within(surface).getByRole('button', { name: 'Explain in chat' }));
+    expect(requestRoute).toHaveBeenCalledTimes(1);
+    expect(requestRoute).toHaveBeenCalledWith({
+      target: 'ama',
+      draft:
+        'Explain the "Cleanup incomplete" error (child_cleanup_incomplete) on Settled pass and what I should do next.',
+      autoSubmit: true,
+      chatContext: {
+        scope: 'transaction',
+        code: 'child_cleanup_incomplete',
+        featureId: 'child1234ef567890',
+        repository: 'repo-a',
+      },
+    });
   });
 });
 

@@ -787,34 +787,113 @@ export const SETTINGS_FOCUS = ['add-server'] as const;
 export const SettingsFocusSchema = z.enum(SETTINGS_FOCUS);
 export type SettingsFocus = z.output<typeof SettingsFocusSchema>;
 
-export const AppRouteEventSchema = z.strictObject({
-  target: z.enum([
-    'palette',
-    'help',
-    'home',
-    'settings',
-    'attention',
-    'ama',
-    'bulk',
-    'new-feature',
-    'toggle-sidebar',
-    'toggle-inspector',
-    // Carries a feature command's identity — never a feature id, so a menu
-    // click that raced a selection change cannot act on a stale target.
-    'feature-command',
-    // Selects the feature named by `featureId` in the sidebar.
-    'select-feature',
-    // Focuses and opens the footer server switcher (the single switcher UI).
-    'switch-server',
-  ]),
-  attentionId: z.string().min(1).max(500).optional(),
-  featureId: z.string().min(1).max(200).optional(),
-  settingsSection: SettingsSectionSchema.optional(),
-  /** Within-pane focus intent (e.g. the Servers pane's add-server form). */
-  settingsFocus: SettingsFocusSchema.optional(),
-  /** The `feature.*` command id a 'feature-command' route asks the renderer to run. */
-  command: z.string().min(1).max(64).optional(),
-});
+// --- Chat context references -------------------------------------------------
+// Mirrors the server's ChatContextReference wire schema (camelCase here;
+// the main-process client re-serializes to snake_case): the durable home of
+// an error an explain-in-chat question is about, picked by `scope`. The
+// refine enforces the same scope-key discipline the server handler enforces,
+// so a reference whose keys are missing for or foreign to its scope never
+// reaches the wire.
+
+/** The keys each scope requires; `transaction` additionally allows repository. */
+const CHAT_CONTEXT_REQUIRED_KEYS = {
+  run: ['featureId'],
+  transaction: ['featureId'],
+  repository: ['featureId', 'repository'],
+  setup: ['featureId', 'taskKey'],
+  recovery: ['snapshotId', 'key'],
+} as const;
+
+/** The keys each scope rejects even when present and well-formed. */
+const CHAT_CONTEXT_FORBIDDEN_KEYS = {
+  run: ['repository', 'taskKey', 'snapshotId', 'key'],
+  transaction: ['taskKey', 'snapshotId', 'key'],
+  repository: ['taskKey', 'snapshotId', 'key'],
+  setup: ['repository', 'snapshotId', 'key'],
+  recovery: ['featureId', 'repository', 'taskKey'],
+} as const;
+
+export const ChatContextReferenceSchema = z
+  .strictObject({
+    scope: z.enum(['run', 'transaction', 'repository', 'setup', 'recovery']),
+    code: z.string().min(1).max(128),
+    featureId: z.string().min(1).max(200).optional(),
+    repository: z.string().min(1).max(200).optional(),
+    taskKey: z.string().min(1).max(200).optional(),
+    snapshotId: z.string().min(1).max(128).optional(),
+    key: z.string().min(1).max(500).optional(),
+  })
+  .superRefine((reference, ctx) => {
+    for (const field of CHAT_CONTEXT_REQUIRED_KEYS[reference.scope]) {
+      if (reference[field] === undefined) {
+        ctx.addIssue({
+          code: 'custom',
+          path: [field],
+          message: `A "${reference.scope}" chat context reference requires "${field}".`,
+        });
+      }
+    }
+    for (const field of CHAT_CONTEXT_FORBIDDEN_KEYS[reference.scope]) {
+      if (reference[field] !== undefined) {
+        ctx.addIssue({
+          code: 'custom',
+          path: [field],
+          message: `"${field}" does not belong to a "${reference.scope}" chat context reference.`,
+        });
+      }
+    }
+  });
+export type ChatContextReference = z.output<typeof ChatContextReferenceSchema>;
+
+export const AppRouteEventSchema = z
+  .strictObject({
+    target: z.enum([
+      'palette',
+      'help',
+      'home',
+      'settings',
+      'attention',
+      'ama',
+      'bulk',
+      'new-feature',
+      'toggle-sidebar',
+      'toggle-inspector',
+      // Carries a feature command's identity — never a feature id, so a menu
+      // click that raced a selection change cannot act on a stale target.
+      'feature-command',
+      // Selects the feature named by `featureId` in the sidebar.
+      'select-feature',
+      // Focuses and opens the footer server switcher (the single switcher UI).
+      'switch-server',
+    ]),
+    attentionId: z.string().min(1).max(500).optional(),
+    featureId: z.string().min(1).max(200).optional(),
+    settingsSection: SettingsSectionSchema.optional(),
+    /** Within-pane focus intent (e.g. the Servers pane's add-server form). */
+    settingsFocus: SettingsFocusSchema.optional(),
+    /** The `feature.*` command id a 'feature-command' route asks the renderer to run. */
+    command: z.string().min(1).max(64).optional(),
+    /** Pre-filled AMA composer text; accepted only on an 'ama' route. */
+    draft: z.string().min(1).max(2000).optional(),
+    /** Submits `draft` directly with its own optimistic bubble; 'ama' routes only. */
+    autoSubmit: z.boolean().optional(),
+    /** Error-home reference the routed draft's turn carries; 'ama' routes only. */
+    chatContext: ChatContextReferenceSchema.optional(),
+  })
+  .superRefine((event, ctx) => {
+    // The chat-draft fields are ama-target-only: any other route smuggling one
+    // fails closed at the preload boundary, exactly like a foreign field.
+    if (event.target === 'ama') return;
+    for (const field of ['draft', 'autoSubmit', 'chatContext'] as const) {
+      if (event[field] !== undefined) {
+        ctx.addIssue({
+          code: 'custom',
+          path: [field],
+          message: 'Chat draft fields are only valid on an ama route.',
+        });
+      }
+    }
+  });
 
 export type AppRouteEvent = z.output<typeof AppRouteEventSchema>;
 
@@ -2084,6 +2163,8 @@ export const ChatStartRequestSchema = z.strictObject({
   images: z.array(AbsolutePathSchema).max(12).optional(),
   /** Server-staged image upload references (remote connections; images only). */
   imageUploads: z.array(UploadReferenceSchema).max(12).optional(),
+  /** Error-home reference the server resolves into hidden turn context. */
+  context: ChatContextReferenceSchema.optional(),
 });
 export type ChatStartRequest = z.output<typeof ChatStartRequestSchema>;
 

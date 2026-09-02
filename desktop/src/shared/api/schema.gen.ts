@@ -671,7 +671,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Start a chat prompt session. */
+        /**
+         * Start a chat prompt session.
+         * @description Sends one user turn to the singleton AMA chat session, starting the session when none is live. An optional `context` reference points at the durable home of an error the question is about; the server resolves it into a hidden context bundle the provider sees but the transcript never echoes. Failure machine codes: 400 `chat_context_invalid` (malformed reference) and 404 `chat_context_not_found` (referenced error no longer present); both are rejected before any chat turn is sent.
+         */
         post: operations["startChatPrompt"];
         delete?: never;
         options?: never;
@@ -1401,6 +1404,23 @@ export interface components {
             feature_id: string;
             session_id: string;
             result: string;
+        };
+        /** @enum {string} */
+        ChatContextScope: "run" | "transaction" | "repository" | "setup" | "recovery";
+        ChatContextReference: {
+            scope: components["schemas"]["ChatContextScope"];
+            code: string;
+            feature_id?: string;
+            repository?: string;
+            task_key?: string;
+            snapshot_id?: string;
+            key?: string;
+        };
+        ChatStartRequest: {
+            message: string;
+            images?: string[];
+            image_uploads?: string[];
+            context?: components["schemas"]["ChatContextReference"];
         };
         ChatStartResponse: components["schemas"]["ActionBaseResponse"] & {
             session_id: string;
@@ -3484,7 +3504,11 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody: components["requestBodies"]["JSONMutation"];
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChatStartRequest"];
+            };
+        };
         responses: {
             200: components["responses"]["ActionResponse"];
             401: components["responses"]["Unauthorized"];

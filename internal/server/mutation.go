@@ -112,7 +112,12 @@ type MutationTarget interface {
 	AnswerPermission(req PermissionAnswerRequest) (PermissionAnswerResponse, error)
 	AnswerAskUser(req AskUserAnswerRequest) (AskUserAnswerResponse, error)
 	SendHelp(req HelpAnswerRequest) (HelpSendResponse, error)
-	StartChat(req ChatStartRequest) (ChatStartResponse, error)
+	// StartChat sends one user turn to the singleton chat session, starting
+	// it when none is live. hiddenContext is the server-resolved bundle for
+	// the request's context reference: it reaches the provider but never
+	// the transcript echo, and is empty when the request carries no
+	// reference.
+	StartChat(req ChatStartRequest, hiddenContext string) (ChatStartResponse, error)
 	EndChat() (ChatEndResponse, error)
 	RuntimeConfig(req RuntimeConfigMutationRequest) (RuntimeConfigUpdateResponse, error)
 	GeneratePublishDescription(featureID string, req PublishDescriptionRequest) (PublishDescriptionResponse, error)
@@ -241,15 +246,6 @@ type HelpAnswerRequest struct {
 	FeatureID string `json:"feature_id,omitempty"`
 	SessionID string `json:"session_id,omitempty"`
 	Message   string `json:"message"`
-}
-
-type ChatStartRequest struct {
-	Message string   `json:"message"`
-	Images  []string `json:"images,omitempty"`
-	// ImageUploads carries staged upload references (see POST
-	// /api/v1/uploads); chat resolves image references only — attachments
-	// remain unsupported there.
-	ImageUploads []string `json:"image_uploads,omitempty"`
 }
 
 type RuntimeConfigMutationRequest struct {
@@ -1339,6 +1335,25 @@ func (h *apiHandler) handlePromptMutationRoutes(w http.ResponseWriter, r *http.R
 			writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics("message is required"))
 			return
 		}
+		// A malformed context reference is rejected before uploads are
+		// consumed, so nothing is staged for a turn that never starts.
+		if field := validateChatContextReference(req.Context); field != "" {
+			writeChatContextInvalid(w, req.Context, field)
+			return
+		}
+		// The reference resolves against durable state before the mutation
+		// target runs; a stale or mismatched home rejects the turn the same
+		// way. The bundle crosses to the target separately from the visible
+		// message and never enters the response body.
+		hiddenContext := ""
+		if !chatContextAbsent(req.Context) {
+			bundle, rejection := h.resolveChatContext(req.Context)
+			if rejection != nil {
+				rejection.write(w, req.Context)
+				return
+			}
+			hiddenContext = bundle
+		}
 		if !validateCombinedUploadCounts(w, len(req.Images), len(req.ImageUploads), 0, 0) {
 			return
 		}
@@ -1356,7 +1371,7 @@ func (h *apiHandler) handlePromptMutationRoutes(w http.ResponseWriter, r *http.R
 		if consumed != nil {
 			req.Images = append(req.Images, consumed.imagePaths...)
 		}
-		resp, err := h.mutations.StartChat(req)
+		resp, err := h.mutations.StartChat(req, hiddenContext)
 		if err != nil {
 			consumed.rollback() // nil-safe: nothing to roll back without refs
 			writeMutationError(w, err)

@@ -41,14 +41,29 @@ type RecordContext struct {
 // so their summaries can name conflict-file and dirty-file counts and moved
 // refs. Setup failure codes receive the setup-task label and repository
 // names, so a run-level record names the owning task and a task-level
-// record names the repositories.
+// record names the repositories. Publish failure codes receive the
+// repository, branch, rebase target, and remote-only commit count of the
+// failing repository, so a stored record renders the same text the
+// mutation rejection renders.
 func RenderRecord(record FailureRecord) Error {
-	opts := []Option{WithDiagnostics(record.Diagnostics)}
+	opts := RecordOptions(record)
+	opts = append(opts, WithDiagnostics(record.Diagnostics))
+	return New(record.Code, opts...)
+}
+
+// RecordOptions builds the New options for a stored record's context blocks
+// and summary params, without diagnostics. Callers that render a stored
+// record through New — the mutation envelope's conflict mapping — share it
+// with RenderRecord so both renderings agree.
+func RecordOptions(record FailureRecord) []Option {
+	opts := []Option{}
 	params := RunFailureParams{}
 	integration := IsIntegrationAttention(record.Code)
 	integrationRepos := []CodeRepository{}
 	setup := IsSetupFailure(record.Code)
 	setupParams := SetupFailureParams{}
+	publish := IsPublishFailure(record.Code)
+	publishParams := PublishRepoParams{}
 	if record.Context != nil {
 		if record.Context.Phase != nil {
 			opts = append(opts, WithPhase(*record.Context.Phase))
@@ -60,6 +75,7 @@ func RenderRecord(record FailureRecord) Error {
 			copy(repos, record.Context.Repositories)
 			opts = append(opts, WithRepositories(repos...))
 			integrationRepos = repos
+			publishParams = publishRepoSummaryParams(repos)
 			for _, repo := range record.Context.Repositories {
 				if repo.Name != "" {
 					params.Repositories = append(params.Repositories, repo.Name)
@@ -80,8 +96,10 @@ func RenderRecord(record FailureRecord) Error {
 		opts = append(opts, WithParams(setupParams))
 	case integration:
 		opts = append(opts, WithParams(IntegrationRepoParams{Repositories: integrationRepos}))
+	case publish:
+		opts = append(opts, WithParams(publishParams))
 	default:
 		opts = append(opts, WithParams(params))
 	}
-	return New(record.Code, opts...)
+	return opts
 }

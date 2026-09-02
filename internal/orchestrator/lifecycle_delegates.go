@@ -967,7 +967,7 @@ func (o *Orchestrator) resetFailedFinalReviewForRestart(featureID string) error 
 		f.ReviewingGate = false
 		for _, r := range f.Repos {
 			if st := f.RepoStates[r.Name]; st != nil {
-				st.LastError = ""
+				st.Error = nil
 			}
 		}
 		clearPendingFeatureAttention(f)

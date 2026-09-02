@@ -1103,7 +1103,8 @@ export const RepoStatusViewSchema = z.strictObject({
   touched: z.boolean().optional(),
   prUrl: z.string().optional(),
   freshness: z.string().optional(),
-  lastError: z.string().optional(),
+  /** Canonical error rendering the repository's stored publish-failure record; absent when it has not failed. */
+  error: CanonicalErrorSchema.optional(),
   rebaseStatus: z.string().optional(),
   rebaseTarget: z.string().optional(),
   conflictFiles: z.array(z.string()).max(200).optional(),
@@ -1348,7 +1349,8 @@ export const CompletionPreflightRepoSchema = z.strictObject({
   prUrl: z.string().max(2000).optional(),
   blocker: z.string().max(500).optional(),
   freshness: z.string().max(50).optional(),
-  lastError: z.string().max(500).optional(),
+  /** Canonical error rendering the repository's stored publish-failure record; absent when it has not failed. */
+  error: CanonicalErrorSchema.optional(),
   baseBranch: z.string().max(128).optional(),
   branch: z.string().max(128).optional(),
   pendingCommits: z.number().int().min(0).max(100000).optional(),

@@ -8490,21 +8490,6 @@ body {
   font-style: normal;
 }
 
-.completion-publish-sheet__failure {
-  border-left: 2px solid var(--bad);
-  padding-left: var(--space-2);
-  color: var(--text);
-  font: 12px var(--bench-font-text);
-}
-
-.completion-publish-sheet__failure p {
-  margin: var(--space-1) 0 0;
-}
-
-.completion-publish-sheet__failure details {
-  margin-top: var(--space-2);
-}
-
 .completion-publish-sheet__status {
   border-left: 2px solid var(--ok);
   padding-left: var(--space-2);
@@ -8648,12 +8633,6 @@ body {
 .completion-workspace__repo-outcome--failure .completion-workspace__repo-outcome-label {
   border-color: var(--bad);
   color: var(--bad);
-}
-
-.completion-workspace__repo-outcome-detail {
-  color: var(--bad);
-  font: 11px var(--bench-font-text);
-  overflow-wrap: anywhere;
 }
 
 .completion-workspace__publish-empty {
@@ -10651,8 +10630,43 @@ body {
   color: var(--bad);
 }
 
-.repo-instrument__error dd {
+/* Publish failure indication: the catalog title plus the link into the
+   publish modal, whose repository row owns the full card. */
+.repo-instrument__publish-attention {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin-top: var(--space-1);
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--bad);
+  border-radius: var(--radius);
+  font-size: 12px;
+}
+
+.repo-instrument__publish-attention-title {
   color: var(--bad);
+  font-weight: 600;
+}
+
+.repo-instrument__open-publish {
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--accent);
+  padding: var(--space-1) var(--space-2);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.repo-instrument__open-publish:hover {
+  background: var(--accent);
+  color: #fff;
+}
+
+/* The row card sits below the repository's own meta row. */
+.completion-workspace__publish-repo .error-surface {
+  margin-top: var(--space-2);
 }
 
 /* ─── Launcher modal footer (shared by refactor and review-feedback launchers) ─── */
@@ -14048,6 +14062,11 @@ body {
 }
 
 .error-surface__repo-branch {
+  color: var(--muted);
+  font: 11px var(--bench-font-mono);
+}
+
+.error-surface__repo-rebase-target {
   color: var(--muted);
   font: 11px var(--bench-font-mono);
 }

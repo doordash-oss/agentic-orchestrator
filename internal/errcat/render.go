@@ -183,6 +183,7 @@ func writeRepositoryFields(w io.Writer, repo CodeRepository) error {
 		key   string
 		value string
 	}{
+		{"rebase_target", repo.RebaseTarget},
 		{"parent_anchor_sha", repo.ParentAnchorSHA},
 		{"expected_ref_sha", repo.ExpectedRefSHA},
 		{"child_head_sha", repo.ChildHeadSHA},
@@ -195,6 +196,11 @@ func writeRepositoryFields(w io.Writer, repo CodeRepository) error {
 			continue
 		}
 		if err := writeLine(w, "    "+scalar.key+": "+scalar.value); err != nil {
+			return err
+		}
+	}
+	if repo.RemoteOnlyCommits != 0 {
+		if err := writeLine(w, fmt.Sprintf("    remote_only_commits: %d", repo.RemoteOnlyCommits)); err != nil {
 			return err
 		}
 	}

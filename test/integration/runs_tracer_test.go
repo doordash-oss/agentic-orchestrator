@@ -30,7 +30,7 @@ import (
 //
 //  1. Create feature → run-001 exists with run.yaml.
 //  2. Simulate inquire/research/design: lifecycle transitions plus real
-//     artifact writes from the agent package (agent.LogPhaseError, the
+//     artifact writes from the agent package (the per-phase error.log fixture, the
 //     run-aware path helpers PhaseDir / RunDir). These are the same writers
 //     production PhaseRunner code goes through — NOT hand-seeded markers —
 //     so the test genuinely exercises the routing layer.
@@ -102,8 +102,8 @@ func TestRunsLayout_CreateInquireDesignRewindInquireAgain(t *testing.T) {
 
 	// --- Step 2: Simulate inquire → research → design ------------------
 	// Drive lifecycle transitions and exercise REAL agent-package path
-	// writers against the feature. agent.LogPhaseError is the canonical
-	// per-phase writer; if it still targeted the feature root, markers
+	// writers against the feature. The per-phase error.log fixture is the
+	// canonical per-phase writer stand-in; if it still targeted the feature root, markers
 	// would land outside runs/run-001/ and step 4's writes would overwrite
 	// step 2's fixtures after rewind.
 	run1Dir := filepath.Join(stateDir, f.ID, "runs", "run-001")
@@ -117,7 +117,7 @@ func TestRunsLayout_CreateInquireDesignRewindInquireAgain(t *testing.T) {
 	if f, err = mgr.Get(f.ID); err != nil {
 		t.Fatalf("Get after inquire: %v", err)
 	}
-	agent.LogPhaseError(stateDir, f, "inquire", "r1-inquire-error")
+	writePhaseErrorLog(t, stateDir, f, "inquire", "r1-inquire-error")
 	assertUnderActiveRun(t, stateDir, f, "inquire", "error.log")
 
 	if err := mgr.StartResearch(f.ID); err != nil {
@@ -129,7 +129,7 @@ func TestRunsLayout_CreateInquireDesignRewindInquireAgain(t *testing.T) {
 	if f, err = mgr.Get(f.ID); err != nil {
 		t.Fatalf("Get after research: %v", err)
 	}
-	agent.LogPhaseError(stateDir, f, "research", "r1-research-error")
+	writePhaseErrorLog(t, stateDir, f, "research", "r1-research-error")
 	assertUnderActiveRun(t, stateDir, f, "research", "error.log")
 
 	if err := mgr.StartDesign(f.ID); err != nil {
@@ -141,7 +141,7 @@ func TestRunsLayout_CreateInquireDesignRewindInquireAgain(t *testing.T) {
 	if f, err = mgr.Get(f.ID); err != nil {
 		t.Fatalf("Get after design: %v", err)
 	}
-	agent.LogPhaseError(stateDir, f, "design", "r1-design-error")
+	writePhaseErrorLog(t, stateDir, f, "design", "r1-design-error")
 	assertUnderActiveRun(t, stateDir, f, "design", "error.log")
 
 	// Also verify the exported path helpers all root inside run-001.
@@ -281,7 +281,7 @@ func TestRunsLayout_CreateInquireDesignRewindInquireAgain(t *testing.T) {
 	}
 	// Real writer again — this one must land inside run-002/, not run-001/,
 	// because ActiveRun is now 2.
-	agent.LogPhaseError(stateDir, reloaded, "inquire", "r2-inquire-error")
+	writePhaseErrorLog(t, stateDir, reloaded, "inquire", "r2-inquire-error")
 	assertUnderActiveRun(t, stateDir, reloaded, "inquire", "error.log")
 
 	// run-001 untouched — its error.log still contains the r1 marker.
@@ -311,6 +311,23 @@ func TestRunsLayout_CreateInquireDesignRewindInquireAgain(t *testing.T) {
 // assertUnderActiveRun verifies that the given `<phase>/<file>` path exists
 // inside the feature's active run directory. The feature must be reloaded
 // from disk before this call so ActiveRun is current.
+
+// writePhaseErrorLog writes the legacy per-phase error.log marker under the
+// feature's active run dir. The production writer was deleted with the
+// publish-scoped error log; this fixture reproduces its on-disk layout so
+// the run-dir placement and rewind carry-forward contracts stay pinned.
+func writePhaseErrorLog(t *testing.T, stateDir string, f *feature.Feature, phase, msg string) {
+	t.Helper()
+	dir := filepath.Join(agent.ActiveRunDir(stateDir, f), phase)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir %s: %v", dir, err)
+	}
+	path := filepath.Join(dir, "error.log")
+	if err := os.WriteFile(path, []byte(msg+"\n"), 0o644); err != nil {
+		t.Fatalf("write %s: %v", path, err)
+	}
+}
+
 func assertUnderActiveRun(t *testing.T, stateDir string, f *feature.Feature, phase, file string) {
 	t.Helper()
 	runDir := agent.ActiveRunDir(stateDir, f)

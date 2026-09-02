@@ -215,7 +215,6 @@ func RunFeatureFinalReviewLoop(cfg OrchestratorConfig, sm ports.SessionManager) 
 			FeatureID: cfg.Feature.ID,
 			Repos:     stagedRepos,
 			Outcome:   PhaseOutcomeFailed,
-			LastError: runErr.Error(),
 		})
 		return &FeatureFinalReviewResult{
 			FinalStatus: "failed",
@@ -251,7 +250,6 @@ func RunFeatureFinalReviewLoop(cfg OrchestratorConfig, sm ports.SessionManager) 
 			FeatureID: cfg.Feature.ID,
 			Repos:     stagedRepos,
 			Outcome:   PhaseOutcomeFailed,
-			LastError: result.LastError,
 		})
 		result.Repos = stagedRepos
 		return result, nil

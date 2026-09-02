@@ -2083,11 +2083,22 @@ func (o *Orchestrator) publishWithOptionsLocked(featureID string, opts PublishOp
 		finalErr = firstErr
 	}
 
-	o.emitEventBlocking(ports.Event{
+	publishCompleted := ports.Event{
 		Type:      ports.PublishCompleted,
 		FeatureID: featureID,
 		Error:     finalErr,
-	})
+	}
+	// A repository failure owns the condition through its stored record; the
+	// event carries the first failed repository's rendered canonical error
+	// so its SSE projection matches the feature-failure shape.
+	if finalErr != nil {
+		if freshF, getErr := o.deps.Lifecycle.Get(featureID); getErr == nil {
+			if rendered, ok := firstFailedRepoError(freshF); ok {
+				publishCompleted.CanonicalError = &rendered
+			}
+		}
+	}
+	o.emitEventBlocking(publishCompleted)
 	if o.hooks.OnPublishCompleted != nil {
 		o.hooks.OnPublishCompleted(featureID, prURLs, finalErr)
 	}

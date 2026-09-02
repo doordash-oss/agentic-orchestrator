@@ -60,6 +60,7 @@ import { AftercareWorkspace } from './AftercareWorkspace';
 import { AftercareFacts } from './AftercareFacts';
 import { useAftercareEvidence } from './useAftercareEvidence';
 import { InspectorContent } from './CockpitInspector';
+import { RepositoryInstrument } from './RepositoryInstrument';
 import { InspectorDrawer } from './InspectorDrawer';
 import { ImpactPreviewList } from './ImpactPreviewList';
 import { NeedUserInputModal, type AttentionGate } from './NeedUserInputModal';
@@ -2096,16 +2097,30 @@ export function FeatureCockpit({
   // One facts element for both aftercare inspector presentations: the trailing
   // pane when wide, the drawer when narrow.
   const aftercarePendingFact = pendingDeliveryFact(pendingDelivery);
+  // The aftercare inspector keeps the repository instrument beside the
+  // feature facts: a publish failure leaves the feature in aftercare, and the
+  // instrument's indication is the cockpit's link into the publish modal.
   const aftercareFactsFor = (presentation: 'pane' | 'drawer') => (
-    <AftercareFacts
-      snapshot={snapshot}
-      run={aftercareRun}
-      {...(aftercarePendingFact === null ? {} : { pendingFact: aftercarePendingFact })}
-      {...(presentation === 'pane' ? { title: 'Feature' } : {})}
-      onOpenPullRequest={(url) => {
-        void window.agentico.openExternal({ url });
-      }}
-    />
+    <>
+      <AftercareFacts
+        snapshot={snapshot}
+        run={aftercareRun}
+        {...(aftercarePendingFact === null ? {} : { pendingFact: aftercarePendingFact })}
+        {...(presentation === 'pane' ? { title: 'Feature' } : {})}
+        onOpenPullRequest={(url) => {
+          void window.agentico.openExternal({ url });
+        }}
+      />
+      {snapshot.repoStatus !== undefined && snapshot.repoStatus.length > 0 ? (
+        <RepositoryInstrument
+          repos={snapshot.repoStatus}
+          onOpenPullRequest={(url) => {
+            void window.agentico.openExternal({ url });
+          }}
+          onOpenPublish={() => openCompletionModal('publish')}
+        />
+      ) : null}
+    </>
   );
   const standaloneAttention =
     activeAttentionItem === undefined ? null : (
@@ -2458,6 +2473,7 @@ export function FeatureCockpit({
           <PublishModal
             featureId={featureId}
             preflight={completion.preflight}
+            actions={snapshot.actions}
             dispatchAction={dispatchPublish}
             generatePublishDescription={(id, repos) =>
               window.agentico.generatePublishDescription({ featureId: id, repos })
@@ -2586,6 +2602,7 @@ export function FeatureCockpit({
                 onOpenPullRequest={(url) => {
                   void window.agentico.openExternal({ url });
                 }}
+                onOpenPublish={() => openCompletionModal('publish')}
               />
             </InspectorDrawer>
           ) : null}
@@ -2765,6 +2782,7 @@ export function FeatureCockpit({
                   onOpenPullRequest={(url) => {
                     void window.agentico.openExternal({ url });
                   }}
+                  onOpenPublish={() => openCompletionModal('publish')}
                 />
               </aside>
             ) : null}
@@ -2904,6 +2922,7 @@ export function FeatureCockpit({
             <PublishModal
               featureId={featureId}
               preflight={completion.preflight}
+              actions={snapshot.actions}
               dispatchAction={dispatchPublish}
               generatePublishDescription={(id, repos) =>
                 window.agentico.generatePublishDescription({ featureId: id, repos })

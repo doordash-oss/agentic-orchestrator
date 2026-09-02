@@ -103,10 +103,10 @@ func TestNoNonTestSourceReferencesRemovedFailureAPIs(t *testing.T) {
 // TestTypecheckBansRemovedRunFailureFields loads every repository package
 // with full type information (non-test sources only) and fails when a
 // selector x.LastError or x.FailureType resolves to a field of feature.Feature,
-// feature.Run, feature.SetupState, or feature.SetupTask, or when any
-// identifier resolves to one of the removed failure constants declared in
-// this package. This is the precise, receiver-aware guard for .LastError:
-// the per-repo RepoState and result-holder LastError fields remain legal.
+// feature.Run, feature.SetupState, feature.SetupTask, or feature.RepoState,
+// or when any identifier resolves to one of the removed failure constants
+// declared in this package. This is the precise, receiver-aware guard for
+// .LastError: result-holder LastError fields in other packages remain legal.
 func TestTypecheckBansRemovedRunFailureFields(t *testing.T) {
 	repoRoot := filepath.Join("..", "..")
 	pkgs := loadRepoPackages(t, repoRoot, "./...", nil)
@@ -116,6 +116,63 @@ func TestTypecheckBansRemovedRunFailureFields(t *testing.T) {
 	}
 	for _, v := range violations {
 		t.Errorf("removed run failure field still referenced: %s", v)
+	}
+}
+
+// TestTypecheckGuardFlagsRepoStateLastErrorFixture pins the receiver-aware
+// guard itself: with the removed field synthetically reintroduced (via source
+// overlays that never touch disk), a non-test source selecting .LastError on
+// the repository state must be flagged, so the guard cannot silently stop
+// covering the removed repository field.
+func TestTypecheckGuardFlagsRepoStateLastErrorFixture(t *testing.T) {
+	repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	featurePath := filepath.Join(repoRoot, "internal", "feature", "feature.go")
+	featureSrcBytes, err := os.ReadFile(featurePath)
+	if err != nil {
+		t.Fatalf("read feature.go: %v", err)
+	}
+	pkgIdx := strings.Index(string(featureSrcBytes), "package feature\n")
+	if pkgIdx < 0 {
+		t.Fatal("feature.go does not carry the expected package clause")
+	}
+	featureSrc := string(featureSrcBytes[pkgIdx:])
+	stateAnchor := "Error   *errcat.FailureRecord `yaml:\"error,omitempty\"`\n\n\tFreshness string `yaml:\"-\"`\n}"
+	if !strings.Contains(featureSrc, stateAnchor) {
+		t.Fatal("feature.go no longer carries the RepoState Error field anchor")
+	}
+	featureSrc = strings.Replace(featureSrc, stateAnchor,
+		"Error   *errcat.FailureRecord `yaml:\"error,omitempty\"`\n\tLastError string `yaml:\"last_error,omitempty\"`\n\n\tFreshness string `yaml:\"-\"`\n}", 1)
+
+	fixture := `package feature
+
+func repoStateLastErrorFixtureProbe(s *RepoState) string {
+	return s.LastError
+}
+`
+	overlayPath := filepath.Join(repoRoot, "internal", "feature", "zzz_repostate_lasterror_fixture_probe.go")
+	pkgs := loadRepoPackages(t, repoRoot, "./internal/feature", map[string][]byte{
+		featurePath: []byte(featureSrc),
+		overlayPath: []byte(fixture),
+	})
+	violations, typechecked := scanPackagesForRemovedFailureRefs(pkgs, reflect.TypeOf(Feature{}).PkgPath())
+	if typechecked == 0 {
+		t.Fatal("fixture package carried no syntax and type info; guard could not run")
+	}
+	repoStateFlagged := false
+	for _, v := range violations {
+		if !strings.Contains(v, "zzz_repostate_lasterror_fixture_probe.go") {
+			t.Errorf("unexpected violation outside the fixture: %s", v)
+			continue
+		}
+		if strings.Contains(v, "feature.RepoState") {
+			repoStateFlagged = true
+		}
+	}
+	if !repoStateFlagged {
+		t.Fatalf("fixture violations = %v; want .LastError flagged on RepoState", violations)
 	}
 }
 
@@ -269,7 +326,7 @@ func removedFailureConstantObject(obj types.Object, featurePkgPath string) bool 
 
 // featureRunRecvName reports whether recv (after pointer dereference) is
 // one of the feature types whose LastError field was removed — Feature, Run,
-// SetupState, or SetupTask — returning the type name when it is.
+// SetupState, SetupTask, or RepoState — returning the type name when it is.
 func featureRunRecvName(recv types.Type, featurePkgPath string) (string, bool) {
 	if ptr, ok := recv.(*types.Pointer); ok {
 		recv = ptr.Elem()
@@ -283,7 +340,7 @@ func featureRunRecvName(recv types.Type, featurePkgPath string) (string, bool) {
 		return "", false
 	}
 	switch obj.Name() {
-	case "Feature", "Run", "SetupState", "SetupTask":
+	case "Feature", "Run", "SetupState", "SetupTask", "RepoState":
 		return obj.Name(), true
 	default:
 		return "", false

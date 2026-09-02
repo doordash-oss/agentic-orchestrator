@@ -755,3 +755,75 @@ func TestRelationshipIntegrationChangedCarriesCanonicalError(t *testing.T) {
 		t.Fatal("error-free relationship integration event must require a snapshot")
 	}
 }
+
+// TestPublishFailureDomainEventsCarryCanonicalError pins the SSE mapping for
+// repository publish failures: publish-completed and repository-status-
+// changed domain events carrying a canonical error (the first failed
+// repository's rendered record) become lifecycle.updated events whose summary
+// is the catalog title for the code and whose error object carries the
+// canonical code and class, with snapshot-required semantics unchanged; the
+// same event kinds without a canonical error carry no error object.
+func TestPublishFailureDomainEventsCarryCanonicalError(t *testing.T) {
+	t.Parallel()
+
+	rendered := errcat.RenderRecord(errcat.FailureRecord{
+		Code: errcat.PublishPullRequestFailed,
+		Context: &errcat.RecordContext{
+			Repositories: []errcat.CodeRepository{{Name: "repo-a", Branch: "agentico/my-feature"}},
+		},
+		Diagnostics: "creating pull request: POST /repos/org/repo-a/pulls: 502 Bad Gateway",
+	})
+	for _, tc := range []struct {
+		name string
+		ev   ports.Event
+	}{
+		{
+			name: "publish completed",
+			ev: ports.Event{
+				Type:           ports.PublishCompleted,
+				FeatureID:      testFeatureID,
+				CanonicalError: &rendered,
+			},
+		},
+		{
+			name: "repository status changed",
+			ev: ports.Event{
+				Type:           ports.RepoStatusChanged,
+				FeatureID:      testFeatureID,
+				RepoName:       "repo-a",
+				CanonicalError: &rendered,
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			dto := eventDTOFromDomain(tc.ev)
+			if dto.Kind != sseEventLifecycleUpdated {
+				t.Fatalf("event kind = %q, want %q", dto.Kind, sseEventLifecycleUpdated)
+			}
+			if dto.Summary != "Pull-request creation failed" {
+				t.Fatalf("event summary = %q, want the catalog title %q", dto.Summary, "Pull-request creation failed")
+			}
+			if dto.Error == nil {
+				t.Fatal("event error = nil, want canonical error object")
+			}
+			if dto.Error.Code != string(errcat.PublishPullRequestFailed) {
+				t.Fatalf("event error.code = %q, want %q", dto.Error.Code, errcat.PublishPullRequestFailed)
+			}
+			if dto.Error.Class != SSEEventErrorClassNeedsAction {
+				t.Fatalf("event error.class = %q, want %q", dto.Error.Class, SSEEventErrorClassNeedsAction)
+			}
+			if !dto.SnapshotRequired {
+				t.Fatal("publish-failure lifecycle event must require a snapshot")
+			}
+		})
+	}
+
+	plain := eventDTOFromDomain(ports.Event{Type: ports.PublishCompleted, FeatureID: testFeatureID})
+	if plain.Error != nil {
+		t.Fatalf("error-free publish-completed event error = %+v, want none", *plain.Error)
+	}
+	if !plain.SnapshotRequired {
+		t.Fatal("error-free publish-completed event must require a snapshot")
+	}
+}

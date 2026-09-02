@@ -1132,11 +1132,11 @@ func TestChildIntegrationRecordPersists(t *testing.T) {
 					Code: errcat.IntegrationMergeConflict,
 					Context: &errcat.RecordContext{
 						Repositories: []errcat.CodeRepository{{
-							Name:          "repoA",
-							Branch:        "feature/parent",
-							ConflictFiles: []string{"internal/api.go"},
+							Name:            "repoA",
+							Branch:          "feature/parent",
+							ConflictFiles:   []string{"internal/api.go"},
 							ParentAnchorSHA: "aaaa1111",
-							ChildHeadSHA:  "bbbb2222",
+							ChildHeadSHA:    "bbbb2222",
 						}},
 					},
 					Diagnostics: "repoA: merge conflict: [internal/api.go]",

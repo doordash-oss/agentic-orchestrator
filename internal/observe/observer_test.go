@@ -205,6 +205,54 @@ func TestObserverPhaseLifecycle(t *testing.T) {
 		if events[1].Error != "build failed" {
 			t.Errorf("event[1] error = %q, want 'build failed'", events[1].Error)
 		}
+		if events[1].Data != nil {
+			t.Errorf("event[1] data = %#v, want none without canonical identity", events[1].Data)
+		}
+	})
+
+	t.Run("phase_failed_carries_canonical_identity", func(t *testing.T) {
+		stateDir := t.TempDir()
+		featureID := "fail_publish_feature"
+		os.MkdirAll(filepath.Join(stateDir, featureID), 0755)
+
+		obs := New(true, stateDir, false, "", false, "agentic")
+		sc := SpanContextForFeature(featureID, "", "", "").Child()
+
+		obs.PhaseStarted(sc, "publish")
+		obs.PhaseCompleted(sc, "publish", 0, errors.New("PR creation failed: 502 Bad Gateway"),
+			"publish_pull_request_failed", "needs_action")
+
+		eventsPath := filepath.Join(stateDir, featureID, "events.jsonl")
+		f, err := os.Open(eventsPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer f.Close()
+
+		var events []Event
+		scanner := bufio.NewScanner(f)
+		for scanner.Scan() {
+			var evt Event
+			json.Unmarshal(scanner.Bytes(), &evt)
+			events = append(events, evt)
+		}
+
+		if len(events) != 2 {
+			t.Fatalf("expected 2 events, got %d", len(events))
+		}
+		failed := events[1]
+		if failed.EventType != "phase.failed" {
+			t.Fatalf("event[1] type = %q, want phase.failed", failed.EventType)
+		}
+		if failed.Error != "PR creation failed: 502 Bad Gateway" {
+			t.Errorf("event[1] error = %q, want the raw failure text", failed.Error)
+		}
+		if code, ok := failed.Data["error_code"].(string); !ok || code != "publish_pull_request_failed" {
+			t.Errorf("event[1] data[error_code] = %#v, want publish_pull_request_failed", failed.Data["error_code"])
+		}
+		if class, ok := failed.Data["error_class"].(string); !ok || class != "needs_action" {
+			t.Errorf("event[1] data[error_class] = %#v, want needs_action", failed.Data["error_class"])
+		}
 	})
 }
 

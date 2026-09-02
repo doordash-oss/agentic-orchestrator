@@ -122,7 +122,18 @@ function StructuredDetails({ context }: { context: ErrorContext }) {
                 {repo.branch != null && (
                   <span className="error-surface__repo-branch">{repo.branch}</span>
                 )}
+                {repo.rebase_target != null && (
+                  <span className="error-surface__repo-rebase-target">
+                    onto {repo.rebase_target}
+                  </span>
+                )}
               </div>
+              {repo.remote_only_commits != null && (
+                <p className="error-surface__sha">
+                  <span className="error-surface__sha-label">Remote-only commits</span>
+                  <code className="error-surface__sha-value">{repo.remote_only_commits}</code>
+                </p>
+              )}
               {repo.dirty_files != null && repo.dirty_files.length > 0 && (
                 <FileGroup label="Dirty files" paths={repo.dirty_files} />
               )}

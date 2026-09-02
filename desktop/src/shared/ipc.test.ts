@@ -16,6 +16,7 @@ limitations under the License.
 
 import { describe, expect, it } from 'vitest';
 import {
+  CompletionPreflightRepoSchema,
   ConnectionStateSchema,
   FeatureSetupViewSchema,
   IPC_CHANNELS,
@@ -56,6 +57,7 @@ import {
   LocalReviewDraftSaveRequestSchema,
   LocalReviewDraftStoreSchema,
   PublishDescriptionRequestSchema,
+  RepoStatusViewSchema,
   AppRouteEventSchema,
   ServerRemoveRequestSchema,
   ServerTokenStatusRequestSchema,
@@ -1111,5 +1113,57 @@ describe('recoverable local review draft schemas', () => {
     expect(LocalReviewDraftStoreSchema.safeParse({ schemaVersion: 2, drafts: [] }).success).toBe(
       false,
     );
+  });
+});
+
+describe('repository publish-failure error views', () => {
+  const repoError = {
+    code: 'publish_pull_request_failed',
+    class: 'needs_action',
+    title: 'Pull-request creation failed',
+    summary: 'Creating the pull request for repository "repo-a" failed.',
+    remediation: { hint: 'Check GitHub access, then retry.', actions: ['publish'] },
+    context: { repositories: [{ name: 'repo-a', branch: 'feature/f', remote_only_commits: 3 }] },
+    diagnostics: 'POST /repos/org/repo-a/pulls: 502 Bad Gateway',
+  };
+  const repoStatusView = {
+    name: 'repo-a',
+    publishable: true,
+    touched: true,
+    error: repoError,
+  };
+  const preflightRepoView = {
+    repo: 'repo-a',
+    publishable: true,
+    touched: true,
+    status: 'unpublished_changes',
+    error: repoError,
+  };
+
+  it('accepts both views carrying the canonical error', () => {
+    expect(RepoStatusViewSchema.safeParse(repoStatusView).success).toBe(true);
+    expect(CompletionPreflightRepoSchema.safeParse(preflightRepoView).success).toBe(true);
+  });
+
+  it('rejects an error lacking code, class, title, or summary on both views', () => {
+    for (const dropped of ['code', 'class', 'title', 'summary'] as const) {
+      const degraded = { ...repoError };
+      delete degraded[dropped];
+      expect(RepoStatusViewSchema.safeParse({ ...repoStatusView, error: degraded }).success).toBe(
+        false,
+      );
+      expect(
+        CompletionPreflightRepoSchema.safeParse({ ...preflightRepoView, error: degraded }).success,
+      ).toBe(false);
+    }
+  });
+
+  it('rejects stale lastError keys on both views', () => {
+    expect(RepoStatusViewSchema.safeParse({ ...repoStatusView, lastError: 'boom' }).success).toBe(
+      false,
+    );
+    expect(
+      CompletionPreflightRepoSchema.safeParse({ ...preflightRepoView, lastError: 'boom' }).success,
+    ).toBe(false);
   });
 });

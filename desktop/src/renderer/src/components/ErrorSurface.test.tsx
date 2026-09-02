@@ -168,13 +168,43 @@ describe('ErrorSurface structured details', () => {
       title: 'Worktree setup failed',
       summary: 'Setup task "Worktree: repo-a" failed.',
       remediation: { hint: 'Resolve the reported problem, then retry setup.', actions: ['setup'] },
-      context: { setup_task: { key: 'worktree:repo-a', kind: 'worktree', label: 'Worktree: repo-a' } },
+      context: {
+        setup_task: { key: 'worktree:repo-a', kind: 'worktree', label: 'Worktree: repo-a' },
+      },
     };
     const { container } = render(<ErrorSurface error={error} variant="full" />);
     const details = container.querySelector('details.error-surface__details');
     expect(details).not.toBeNull();
     expect(screen.getByText('Task: Worktree: repo-a')).toBeInTheDocument();
     expect(screen.getByText('worktree')).toBeInTheDocument();
+  });
+
+  it('renders a repository entry with a rebase target and remote-only commit count under Details', () => {
+    // Publish failure records name the repository with its branch, the
+    // rebase target of a conflicted pull-rebase, and the remote-only commit
+    // count of a diverged branch; all three render under Details.
+    const error: CanonicalError = {
+      code: 'publish_rebase_conflict',
+      class: 'needs_action',
+      title: 'Pull-rebase conflict',
+      summary: 'The pull rebase for repository "web" (branch "agentico/f") onto "main" conflicted.',
+      context: {
+        repositories: [
+          {
+            name: 'web',
+            branch: 'agentico/f',
+            rebase_target: 'main',
+            remote_only_commits: 3,
+          },
+        ],
+      },
+    };
+    render(<ErrorSurface error={error} variant="full" />);
+    expect(screen.getByText('web')).toBeInTheDocument();
+    expect(screen.getByText('agentico/f')).toBeInTheDocument();
+    expect(screen.getByText('onto main')).toBeInTheDocument();
+    expect(screen.getByText('Remote-only commits')).toBeInTheDocument();
+    expect(screen.getByText('3')).toBeInTheDocument();
   });
 });
 

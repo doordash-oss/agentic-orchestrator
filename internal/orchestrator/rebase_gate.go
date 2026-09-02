@@ -88,7 +88,7 @@ func (o *Orchestrator) rebaseIntegrationGate(child *feature.Feature) *feature.Tr
 				Name:          finding.entry.Repo,
 				ConflictFiles: finding.conflictFiles,
 			},
-			code:       finding.code,
+			code:        finding.code,
 			diagnostics: finding.diagnostics,
 		})
 	}
@@ -159,7 +159,7 @@ func (o *Orchestrator) evalRebaseGateRepo(child *feature.Feature, repoName strin
 				Repo:      repoName,
 				PrepState: feature.RepoPrepFailed,
 			},
-			code:       errcat.RebaseGateTargetMissing,
+			code:        errcat.RebaseGateTargetMissing,
 			diagnostics: "rebase gate: child no longer has behind repo " + repoName,
 		}, true
 	}
@@ -207,7 +207,7 @@ func (o *Orchestrator) evalRebaseGateRepo(child *feature.Feature, repoName strin
 				Repo:      repoName,
 				PrepState: feature.RepoPrepFailed,
 			},
-			code: errcat.RebaseGateConflictMarkers,
+			code:        errcat.RebaseGateConflictMarkers,
 			diagnostics: fmt.Sprintf("rebase gate: conflict marker scan failed (failing closed): %v", err),
 		}, true
 	}

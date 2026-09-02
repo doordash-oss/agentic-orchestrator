@@ -114,6 +114,14 @@ func (o *Orchestrator) surfaceDispatchCompletionError(featureID string, cause er
 	if errors.Is(cause, errFinalReviewInterrupted) {
 		return
 	}
+	var publishDispatch *PublishDispatchError
+	if errors.As(cause, &publishDispatch) {
+		// A publish failure is owned by the failing repository's stored
+		// record and is never terminal: the feature stays at CodeReady with
+		// no run-level failure, and Publish already emitted PublishCompleted
+		// with the first failed repository's canonical error.
+		return
+	}
 	var publishConflict *PublishConflictError
 	if errors.As(cause, &publishConflict) {
 		// Publish already emitted PublishCompleted with the structured conflict;

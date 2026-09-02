@@ -19,6 +19,7 @@ import { z } from 'zod';
 import {
   CanonicalErrorResponseSchema,
   CanonicalErrorSchema,
+  CompletionPreflightRepoSchema,
   DIFF_SUMMARY_MAX_BYTES,
   HealthResponseSchema,
   parseServerJson,
@@ -26,6 +27,7 @@ import {
   ServerFeatureDetailSchema,
   ServerFeatureSummarySchema,
   ServerRelationshipChildSchema,
+  ServerRepoStatusSchema,
   ServerSetupSchema,
   ServerSetupTaskSchema,
 } from './parse';
@@ -511,9 +513,9 @@ describe('ServerFeatureDetailSchema failure', () => {
     // The removed last_error strings fail parsing everywhere they could
     // reappear: on the task, on the aggregate, and on a relationship child.
     expect(ServerSetupTaskSchema.safeParse({ ...task, last_error: 'boom' }).success).toBe(false);
-    expect(
-      ServerSetupSchema.safeParse({ status: 'failed', last_error: 'boom' }).success,
-    ).toBe(false);
+    expect(ServerSetupSchema.safeParse({ status: 'failed', last_error: 'boom' }).success).toBe(
+      false,
+    );
     expect(
       ServerRelationshipChildSchema.safeParse({ ...relationshipChildFixture, last_error: 'boom' })
         .success,
@@ -599,5 +601,62 @@ describe('CanonicalErrorResponseSchema', () => {
     });
     expect(parsed.success).toBe(false);
     expect(parsed.error?.issues[0]?.path).toEqual(['error', 'context', 'repositories', 0, 'name']);
+  });
+});
+
+describe('Repository publish-failure error contract', () => {
+  const repoError = {
+    code: 'publish_pull_request_failed',
+    class: 'needs_action',
+    title: 'Pull-request creation failed',
+    summary: 'Creating the pull request for repository "repo-a" failed.',
+    remediation: { hint: 'Check GitHub access, then retry.', actions: ['publish'] },
+    context: {
+      repositories: [
+        { name: 'repo-a', branch: 'feature/f', rebase_target: 'main', remote_only_commits: 3 },
+      ],
+    },
+    diagnostics: 'POST /repos/org/repo-a/pulls: 502 Bad Gateway',
+  };
+  const repoStatus = {
+    name: 'repo-a',
+    publishable: true,
+    touched: true,
+    error: repoError,
+  };
+  const preflightRepo = {
+    repo: 'repo-a',
+    publishable: true,
+    touched: true,
+    status: 'unpublished_changes',
+    error: repoError,
+  };
+
+  it('accepts a repository status and a preflight repository carrying the canonical error', () => {
+    expect(ServerRepoStatusSchema.safeParse(repoStatus).success).toBe(true);
+    expect(CompletionPreflightRepoSchema.safeParse(preflightRepo).success).toBe(true);
+    const parsed = ServerRepoStatusSchema.parse(repoStatus);
+    expect(parsed.error?.context?.repositories?.[0]).toEqual({
+      name: 'repo-a',
+      branch: 'feature/f',
+      rebase_target: 'main',
+      remote_only_commits: 3,
+    });
+  });
+
+  it('accepts the two new publish fields on a canonical error repository entry', () => {
+    const parsed = CanonicalErrorSchema.safeParse(repoError);
+    expect(parsed.success).toBe(true);
+    expect(parsed.data?.context?.repositories?.[0]?.rebase_target).toBe('main');
+    expect(parsed.data?.context?.repositories?.[0]?.remote_only_commits).toBe(3);
+  });
+
+  it('rejects stale last_error keys on the repository status and preflight repository', () => {
+    expect(ServerRepoStatusSchema.safeParse({ ...repoStatus, last_error: 'boom' }).success).toBe(
+      false,
+    );
+    expect(
+      CompletionPreflightRepoSchema.safeParse({ ...preflightRepo, last_error: 'boom' }).success,
+    ).toBe(false);
   });
 });

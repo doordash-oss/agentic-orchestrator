@@ -415,7 +415,7 @@ func (o *Orchestrator) ensureDiscardRefSafety(childID string) (bool, error) {
 			// Externally moved — cannot overwrite.
 			allSafe = false
 			findings = append(findings, integrationFinding{
-				ctx: repoContextFromEntry(entry),
+				ctx:  repoContextFromEntry(entry),
 				code: errcat.IntegrationRefRace,
 				diagnostics: fmt.Sprintf("repo %s ref %s externally moved: anchor %s candidate %s observed %s",
 					entry.Repo, ref, entry.ParentAnchorSHA, entry.CandidateSHA, current),

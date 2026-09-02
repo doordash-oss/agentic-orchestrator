@@ -2642,23 +2642,36 @@ func TestSetRepoPublishError(t *testing.T) {
 		return nil
 	})
 
-	err := mgr.SetRepoPublishError(f.ID, "repo-a", "push failed")
+	err := mgr.SetRepoPublishError(f.ID, "repo-a", errcat.FailureRecord{
+		Code: errcat.PublishPushFailed,
+		Context: &errcat.RecordContext{
+			Repositories: []errcat.CodeRepository{{Name: "repo-a", Branch: "agentico/my-feature"}},
+		},
+		Diagnostics: "git push: 502 Bad Gateway",
+	})
 	if err != nil {
 		t.Fatalf("SetRepoPublishError: %v", err)
 	}
 
 	loaded, _ := store.Load(f.ID)
-	if loaded.RepoStates["repo-a"].LastError != "push failed" {
-		t.Errorf("LastError = %q, want %q", loaded.RepoStates["repo-a"].LastError, "push failed")
+	stored := loaded.RepoStates["repo-a"].Error
+	if stored == nil || stored.Code != errcat.PublishPushFailed {
+		t.Fatalf("Error = %+v, want a publish_push_failed record", stored)
+	}
+	if stored.Context == nil || len(stored.Context.Repositories) != 1 || stored.Context.Repositories[0].Name != "repo-a" {
+		t.Fatalf("record repositories block = %+v, want repo-a", stored.Context)
+	}
+	if stored.Diagnostics != "git push: 502 Bad Gateway" {
+		t.Errorf("record diagnostics = %q, want the raw failure text", stored.Diagnostics)
 	}
 	if !loaded.RepoStates["repo-a"].Touched {
 		t.Errorf("Touched changed to false, should stay true (publish error must not regress Touched)")
 	}
 }
 
-// TestSetRepoPublished_ClearsLastError verifies that calling SetRepoPublished
-// after a SetRepoPublishError clears the LastError field.
-func TestSetRepoPublished_ClearsLastError(t *testing.T) {
+// TestSetRepoPublished_ClearsErrorRecord verifies that calling SetRepoPublished
+// after a SetRepoPublishError clears the stored failure record.
+func TestSetRepoPublished_ClearsErrorRecord(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
 	dir := t.TempDir()
@@ -2678,32 +2691,74 @@ func TestSetRepoPublished_ClearsLastError(t *testing.T) {
 	})
 
 	// Set a publish error first
-	err := mgr.SetRepoPublishError(f.ID, "repo-a", "push failed")
+	err := mgr.SetRepoPublishError(f.ID, "repo-a", errcat.FailureRecord{
+		Code:        errcat.PublishPushFailed,
+		Diagnostics: "git push: 502 Bad Gateway",
+	})
 	if err != nil {
 		t.Fatalf("SetRepoPublishError: %v", err)
 	}
 
-	// Verify error is set
+	// Verify the record is stored
 	loaded, _ := store.Load(f.ID)
-	if loaded.RepoStates["repo-a"].LastError != "push failed" {
-		t.Fatalf("LastError = %q, want %q", loaded.RepoStates["repo-a"].LastError, "push failed")
+	if loaded.RepoStates["repo-a"].Error == nil {
+		t.Fatalf("Error = nil, want the stored publish failure record")
 	}
 
-	// Now publish successfully — should clear LastError
+	// Now publish successfully — should clear the record
 	err = mgr.SetRepoPublished(f.ID, "repo-a", "https://github.com/org/repo/pull/1")
 	if err != nil {
 		t.Fatalf("SetRepoPublished: %v", err)
 	}
 
 	loaded, _ = store.Load(f.ID)
-	if loaded.RepoStates["repo-a"].LastError != "" {
-		t.Errorf("LastError = %q, want empty string (should be cleared after successful publish)", loaded.RepoStates["repo-a"].LastError)
+	if loaded.RepoStates["repo-a"].Error != nil {
+		t.Errorf("Error = %+v, want nil (cleared after successful publish)", loaded.RepoStates["repo-a"].Error)
 	}
 	if loaded.RepoStates["repo-a"].PRURL != "https://github.com/org/repo/pull/1" {
 		t.Errorf("PRURL = %q, want %q", loaded.RepoStates["repo-a"].PRURL, "https://github.com/org/repo/pull/1")
 	}
 	if !loaded.RepoStates["repo-a"].Touched {
 		t.Errorf("Touched = false, want true after publish")
+	}
+}
+
+// TestRetryPhaseClearsRepoErrorRecords pins the phase-retry contract: the
+// records of the phase-declared repositories clear where the last-error
+// strings cleared before, while Touched stays monotonic.
+func TestRetryPhaseClearsRepoErrorRecords(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
+	dir := t.TempDir()
+	store := feature.NewStore(dir)
+	mgr := &feature.Manager{Store: store, Config: &config.Config{}}
+
+	f := newMultiRepoFeature(t, mgr, []feature.FeatureRepo{
+		{Name: "repo-a", Path: "/tmp/a"},
+		{Name: "repo-b", Path: "/tmp/b"},
+	})
+
+	_ = store.Modify(f.ID, func(feat *feature.Feature) error {
+		feat.RepoStates = map[string]*feature.RepoState{
+			"repo-a": {Touched: true, Error: &errcat.FailureRecord{Code: errcat.PublishPushFailed, Diagnostics: "push failed"}},
+			"repo-b": {Touched: true, Error: &errcat.FailureRecord{Code: errcat.PublishRebaseConflict, Diagnostics: "conflict"}},
+		}
+		return nil
+	})
+
+	if err := mgr.RetryPhase(f.ID, []string{"repo-a"}); err != nil {
+		t.Fatalf("RetryPhase: %v", err)
+	}
+
+	loaded, _ := store.Load(f.ID)
+	if loaded.RepoStates["repo-a"].Error != nil {
+		t.Errorf("repo-a Error = %+v, want cleared by phase retry", loaded.RepoStates["repo-a"].Error)
+	}
+	if !loaded.RepoStates["repo-a"].Touched {
+		t.Errorf("repo-a Touched = false, want preserved (monotonic)")
+	}
+	if loaded.RepoStates["repo-b"].Error == nil {
+		t.Errorf("repo-b Error = nil, want preserved (outside the retried subset)")
 	}
 }
 
@@ -4304,7 +4359,7 @@ func TestInitRepoImpl_PrunesRemovedRepos(t *testing.T) {
 		RepoStates: map[string]*feature.RepoState{
 			"repo-a":   {},
 			"removed":  {Touched: true},
-			"removed2": {LastError: "boom"},
+			"removed2": {Error: &errcat.FailureRecord{Code: errcat.PublishPushFailed}},
 		},
 	}
 	if err := store.Save(f); err != nil {

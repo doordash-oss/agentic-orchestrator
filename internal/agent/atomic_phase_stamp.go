@@ -30,11 +30,11 @@ type PhaseOutcome int
 
 const (
 	// PhaseOutcomeReviewPassed marks the phase as passing review. Every
-	// declared repo is stamped Touched=true with LastError cleared.
+	// declared repo is stamped Touched=true.
 	PhaseOutcomeReviewPassed PhaseOutcome = iota
 	// PhaseOutcomeFailed marks the phase as failed (safety-rail trip,
 	// reviewer rejection after MaxIterations, etc.). Every declared repo
-	// is stamped Touched=true with LastError populated.
+	// is stamped Touched=true; the failure itself lives on the run record.
 	PhaseOutcomeFailed
 	// PhaseOutcomeNeedUserInput marks the phase as paused on a need-user-input
 	// gate. Per-repo state is NOT mutated (the gate lives at the feature
@@ -50,13 +50,12 @@ const (
 
 // AtomicPhaseStampInput is the input to AtomicPhaseStamp. Repos is the
 // phase-declared subset (typically PhaseScopeResult.Repos). Outcome
-// determines how the per-repo state transitions. LastError is populated
-// only on PhaseOutcomeFailed; GatePath only on PhaseOutcomeNeedUserInput.
+// determines how the per-repo state transitions. GatePath is populated
+// only on PhaseOutcomeNeedUserInput.
 type AtomicPhaseStampInput struct {
 	FeatureID string
 	Repos     []string
 	Outcome   PhaseOutcome
-	LastError string
 	GatePath  string
 	// PRURLs is an optional per-repo PR URL map applied alongside the
 	// state transition. May be nil.
@@ -71,6 +70,10 @@ type AtomicPhaseStampInput struct {
 //   - Repos NOT in the declared subset are untouched.
 //   - On NEED_USER_INPUT, no per-repo state mutation happens. The gate path
 //     is recorded on the feature for the harness to surface.
+//
+// The per-repo stored failure record is publish-scoped: it is written at the
+// publish boundary and cleared by the published setter or phase retry, never
+// by a phase outcome stamp.
 //
 // Ordering: repos are sorted before iteration so the on-disk YAML is stable
 // for tests; the resulting state is order-independent.
@@ -90,7 +93,7 @@ func AtomicPhaseStamp(store ports.FeatureStore, in AtomicPhaseStampInput) error 
 			f.RepoStates = make(map[string]*feature.RepoState)
 		}
 		switch in.Outcome {
-		case PhaseOutcomeReviewPassed:
+		case PhaseOutcomeReviewPassed, PhaseOutcomeFailed:
 			for _, name := range repos {
 				ns := f.RepoStates[name]
 				if ns == nil {
@@ -98,20 +101,9 @@ func AtomicPhaseStamp(store ports.FeatureStore, in AtomicPhaseStampInput) error 
 					f.RepoStates[name] = ns
 				}
 				ns.Touched = true
-				ns.LastError = ""
 				if pr, ok := in.PRURLs[name]; ok && pr != "" {
 					ns.PRURL = pr
 				}
-			}
-		case PhaseOutcomeFailed:
-			for _, name := range repos {
-				ns := f.RepoStates[name]
-				if ns == nil {
-					ns = &feature.RepoState{}
-					f.RepoStates[name] = ns
-				}
-				ns.Touched = true
-				ns.LastError = in.LastError
 			}
 		case PhaseOutcomeNeedUserInput:
 			// Per-repo state is intentionally NOT mutated. The unified-flow
@@ -119,14 +111,10 @@ func AtomicPhaseStamp(store ports.FeatureStore, in AtomicPhaseStampInput) error 
 			// feature for the harness to surface.
 			f.PendingNeedUserInputPath = in.GatePath
 		case PhaseOutcomeFinalReviewPassed:
-			// FR pass is feature-level, but stale per-repo errors from an
-			// earlier failed FR attempt must not keep rendering as repo
-			// failures after the feature has advanced.
+			// FR pass is feature-level; only the optional PR URL mirror
+			// writes per-repo state.
 			for _, name := range repos {
 				ns := f.RepoStates[name]
-				if ns != nil {
-					ns.LastError = ""
-				}
 				if pr, ok := in.PRURLs[name]; ok && pr != "" {
 					if ns == nil {
 						ns = &feature.RepoState{}

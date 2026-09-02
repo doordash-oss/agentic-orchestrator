@@ -1643,6 +1643,13 @@ components:
           type: string
         branch:
           type: string
+        rebase_target:
+          type: string
+          description: Rebase target branch of a conflicted publish pull-rebase, when known.
+        remote_only_commits:
+          type: integer
+          minimum: 0
+          description: Commits on the remote pull-request branch that are not in this workspace, when known.
         conflict_files:
           type: array
           items:
@@ -3168,9 +3175,10 @@ components:
         freshness:
           type: string
           description: Server-authored freshness state.
-        last_error:
-          type: string
-          description: Safe, bounded last error text.
+        error:
+          $ref: "#/components/schemas/Error"
+          x-go-type-skip-optional-pointer: false
+          description: Canonical catalog-rendered publish failure record this repository owns, when any.
         base_branch:
           type: string
           maxLength: 128
@@ -4159,8 +4167,10 @@ components:
         pr_url:
           type: string
           x-go-name: PRURL
-        last_error:
-          type: string
+        error:
+          $ref: "#/components/schemas/Error"
+          x-go-type-skip-optional-pointer: false
+          description: Canonical catalog-rendered publish failure record this repository owns, when any.
         publishable:
           type: boolean
     RunSummary:

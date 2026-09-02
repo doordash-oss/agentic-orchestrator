@@ -2242,7 +2242,20 @@ function makeMockApi(
               publishable: true,
               touched: true,
               status: 'eligible',
-              lastError: 'push denied by completion fixture; retry only this repository',
+              error: {
+                code: 'publish_push_failed',
+                class: 'needs_action',
+                title: 'Repository publish failed',
+                summary: 'Publishing repository "publish-web" failed.',
+                remediation: {
+                  hint: 'Check the repository and remote, then retry.',
+                  actions: ['publish'],
+                },
+                context: {
+                  repositories: [{ name: 'publish-web', branch: 'feature/electron-app' }],
+                },
+                diagnostics: 'push denied by completion fixture; retry only this repository',
+              },
               baseBranch: 'main',
               branch: 'feature/electron-app',
               freshness: 'behind',

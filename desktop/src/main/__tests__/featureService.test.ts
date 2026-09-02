@@ -829,6 +829,54 @@ describe('FeatureService.getFeature', () => {
     ]);
   });
 
+  it('crosses a repository publish-failure record as the canonical error with redacted diagnostics', async () => {
+    const body = detailBody({
+      repo_status: [
+        {
+          name: 'repo-a',
+          publishable: true,
+          touched: true,
+          error: {
+            code: 'publish_pull_request_failed',
+            class: 'needs_action',
+            title: 'Pull-request creation failed',
+            summary: 'Creating the pull request for repository "repo-a" failed.',
+            remediation: { hint: 'Check GitHub access, then retry.', actions: ['publish'] },
+            context: {
+              repositories: [
+                { name: 'repo-a', branch: 'feature/search-revamp', remote_only_commits: 3 },
+              ],
+            },
+            diagnostics: 'POST /repos/org/repo-a/pulls: 502 (token=abc123) at /Users/dev/tmp',
+          },
+        },
+      ],
+    });
+    const { service } = makeService(() => ({ status: 200, body }));
+    const snapshot = await service.getFeature('abcd1234ef567890');
+    expect(FeatureSnapshotSchema.parse(snapshot)).toEqual(snapshot);
+    const repo = snapshot.repoStatus?.[0];
+    expect(repo).toBeDefined();
+    if (repo == null) return;
+    expect(Reflect.get(repo, 'lastError')).toBeUndefined();
+    expect(repo.error).toMatchObject({
+      code: 'publish_pull_request_failed',
+      class: 'needs_action',
+      title: 'Pull-request creation failed',
+      summary: 'Creating the pull request for repository "repo-a" failed.',
+      remediation: { hint: 'Check GitHub access, then retry.', actions: ['publish'] },
+    });
+    expect(repo.error?.context?.repositories?.[0]).toEqual({
+      name: 'repo-a',
+      branch: 'feature/search-revamp',
+      remote_only_commits: 3,
+    });
+    // Raw diagnostics cross IPC only through the same redaction as every
+    // other raw text the renderer receives.
+    expect(repo.error?.diagnostics).not.toContain('/Users/dev/tmp');
+    expect(repo.error?.diagnostics).toContain('[path]');
+  });
+
   it('maps roadmap phase, total, iteration, and phase status from the active run detail', async () => {
     const body = detailBody({
       status: 'Implementing',

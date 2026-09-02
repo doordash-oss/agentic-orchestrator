@@ -81,14 +81,9 @@ type MockFeatureLifecycle struct {
 	MarkPublishedFn        func(featureID, prURL string) error
 	MarkFailedFn           func(featureID string, failure errcat.FailureRecord) error
 	SetRepoPublishedFn     func(featureID, repoName, prURL string) error
-	SetRepoPublishErrorFn  func(featureID, repoName, errMsg string) error
+	SetRepoPublishErrorFn  func(featureID, repoName string, record errcat.FailureRecord) error
 	TryCompletePublishFn   func(featureID string) (bool, error)
 	InitRepoImplFn         func(featureID string) error
-
-	// FailRepoImplementationFn lets tests intercept the per-repo
-	// implementation failure path. The plan parameter was dropped in
-	// SchemaVersionCurrent = 4.
-	FailRepoImplementationFn func(featureID, repoName, errMsg string) error
 
 	// RetryPhaseFn lets tests intercept the unified phase-retry path that
 	// replaces the old per-repo RetryRepo (deleted in SchemaVersionCurrent = 4).
@@ -375,15 +370,6 @@ func (m *MockFeatureLifecycle) MarkDone(featureID string) error {
 }
 
 // ---------------------------------------------------------------------------
-func (m *MockFeatureLifecycle) FailRepoImplementation(featureID, repoName, errMsg string) error {
-	m.record("FailRepoImplementation", featureID, repoName, errMsg)
-	if m.FailRepoImplementationFn != nil {
-		return m.FailRepoImplementationFn(featureID, repoName, errMsg)
-	}
-	return m.DefaultError
-}
-
-// ---------------------------------------------------------------------------
 // Roadmap phases
 // ---------------------------------------------------------------------------
 
@@ -477,10 +463,10 @@ func (m *MockFeatureLifecycle) SetRepoPublished(featureID, repoName, prURL strin
 	return m.DefaultError
 }
 
-func (m *MockFeatureLifecycle) SetRepoPublishError(featureID, repoName, errMsg string) error {
-	m.record("SetRepoPublishError", featureID, repoName, errMsg)
+func (m *MockFeatureLifecycle) SetRepoPublishError(featureID, repoName string, record errcat.FailureRecord) error {
+	m.record("SetRepoPublishError", featureID, repoName, record)
 	if m.SetRepoPublishErrorFn != nil {
-		return m.SetRepoPublishErrorFn(featureID, repoName, errMsg)
+		return m.SetRepoPublishErrorFn(featureID, repoName, record)
 	}
 	return m.DefaultError
 }

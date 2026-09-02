@@ -798,9 +798,20 @@ function toSnapshot(feature: ServerFeatureDetail): FeatureSnapshot {
             ...(repo.freshness === undefined || repo.freshness === ''
               ? {}
               : { freshness: repo.freshness }),
-            ...(repo.last_error === undefined || repo.last_error === ''
+            // The canonical object crosses IPC intact except diagnostics,
+            // which pass through the same redaction as every other raw
+            // text the renderer receives.
+            ...(repo.error === undefined
               ? {}
-              : { lastError: redactText(repo.last_error) }),
+              : {
+                  error: {
+                    ...repo.error,
+                    diagnostics:
+                      repo.error.diagnostics === undefined
+                        ? undefined
+                        : redactText(repo.error.diagnostics),
+                  },
+                }),
             ...(repo.rebase_status === undefined || repo.rebase_status === ''
               ? {}
               : { rebaseStatus: repo.rebase_status }),

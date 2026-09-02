@@ -286,8 +286,8 @@ func TestPublishActionReturnsCodedRemoteSafetyConflicts(t *testing.T) {
 			if got := recorder.Code; got != http.StatusConflict {
 				t.Fatalf("status = %d; want %d", got, http.StatusConflict)
 			}
-			if body.Error.Class != ErrorClass(errcat.ClassBlocking) {
-				t.Fatalf("error class = %q; want %q", body.Error.Class, errcat.ClassBlocking)
+			if body.Error.Class != ErrorClass(errcat.ClassNeedsAction) {
+				t.Fatalf("error class = %q; want %q", body.Error.Class, errcat.ClassNeedsAction)
 			}
 			if body.Error.Summary != tc.wantSummary {
 				t.Fatalf("error summary = %q; want %q", body.Error.Summary, tc.wantSummary)

@@ -1176,11 +1176,11 @@ type CompletionPreflightRepo struct {
 	// Branch Server-authored feature branch for this repository.
 	Branch string `json:"branch,omitempty"`
 
+	// Error Canonical catalog-rendered publish failure record this repository owns, when any.
+	Error *Error `json:"error,omitempty"`
+
 	// Freshness Server-authored freshness state.
 	Freshness string `json:"freshness,omitempty"`
-
-	// LastError Safe, bounded last error text.
-	LastError string `json:"last_error,omitempty"`
 
 	// PendingCommits Commits on this repository's branch that have not reached its delivery destination — the remote pull-request branch, or the base branch for a local-only repository.
 	PendingCommits int `json:"pending_commits,omitempty"`
@@ -1400,6 +1400,12 @@ type ErrorRepositoryContext struct {
 	Name            string   `json:"name"`
 	ObservedSha     string   `json:"observed_sha,omitempty"`
 	ParentAnchorSha string   `json:"parent_anchor_sha,omitempty"`
+
+	// RebaseTarget Rebase target branch of a conflicted publish pull-rebase, when known.
+	RebaseTarget string `json:"rebase_target,omitempty"`
+
+	// RemoteOnlyCommits Commits on the remote pull-request branch that are not in this workspace, when known.
+	RemoteOnlyCommits int `json:"remote_only_commits,omitempty"`
 }
 
 // ErrorResponse defines model for ErrorResponse.
@@ -2135,14 +2141,16 @@ type RelationshipCleanupWarning struct {
 // RepoStatus defines model for RepoStatus.
 type RepoStatus struct {
 	ConflictFiles []string `json:"conflict_files,omitempty"`
-	Freshness     string   `json:"freshness,omitempty"`
-	LastError     string   `json:"last_error,omitempty"`
-	Name          string   `json:"name"`
-	PRURL         string   `json:"pr_url,omitempty"`
-	Publishable   bool     `json:"publishable"`
-	RebaseStatus  string   `json:"rebase_status,omitempty"`
-	RebaseTarget  string   `json:"rebase_target,omitempty"`
-	Touched       bool     `json:"touched"`
+
+	// Error Canonical catalog-rendered publish failure record this repository owns, when any.
+	Error        *Error `json:"error,omitempty"`
+	Freshness    string `json:"freshness,omitempty"`
+	Name         string `json:"name"`
+	PRURL        string `json:"pr_url,omitempty"`
+	Publishable  bool   `json:"publishable"`
+	RebaseStatus string `json:"rebase_status,omitempty"`
+	RebaseTarget string `json:"rebase_target,omitempty"`
+	Touched      bool   `json:"touched"`
 }
 
 // RepoTransactionEntry defines model for RepoTransactionEntry.

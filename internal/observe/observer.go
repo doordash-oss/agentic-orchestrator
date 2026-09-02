@@ -171,16 +171,27 @@ func (o *Observer) PhaseStarted(sc SpanContext, phase string) {
 	o.otel.StartSpan(sc, "phase."+phase, addRunNumber(sc, map[string]string{"phase": phase}))
 }
 
-// PhaseCompleted emits a phase.completed event.
-func (o *Observer) PhaseCompleted(sc SpanContext, phase string, duration time.Duration, err error) {
+// PhaseCompleted emits a phase.completed event, or a phase.failed event
+// when err is non-nil. errorCode and errorClass optionally carry the failing
+// phase's canonical identity as plain strings in the event's data map,
+// alongside the raw error text.
+func (o *Observer) PhaseCompleted(sc SpanContext, phase string, duration time.Duration, err error, errorIdentity ...string) {
 	if o == nil || !o.enabled {
 		return
 	}
 	status := "completed"
 	errStr := ""
+	var data map[string]any
 	if err != nil {
 		status = "failed"
 		errStr = err.Error()
+		data = map[string]any{}
+		if len(errorIdentity) > 0 && errorIdentity[0] != "" {
+			data["error_code"] = errorIdentity[0]
+		}
+		if len(errorIdentity) > 1 && errorIdentity[1] != "" {
+			data["error_class"] = errorIdentity[1]
+		}
 	}
 	evt := Event{
 		Timestamp:    time.Now(),
@@ -193,6 +204,7 @@ func (o *Observer) PhaseCompleted(sc SpanContext, phase string, duration time.Du
 		FeatureID:    sc.FeatureID,
 		DurationMs:   duration.Milliseconds(),
 		Error:        errStr,
+		Data:         data,
 	}
 	o.emit(sc, evt)
 	o.activePhaseSpans.Delete(sc.FeatureID)

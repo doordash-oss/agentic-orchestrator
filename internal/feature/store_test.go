@@ -1401,8 +1401,8 @@ func TestStoreSaveRunOmitsSetupLastError(t *testing.T) {
 		SchemaVersion: SchemaVersionCurrent,
 	}
 	f.Run().Setup = &SetupState{
-		Status:    SetupStatusFailed,
-		Attempt:   1,
+		Status:  SetupStatusFailed,
+		Attempt: 1,
 		Tasks: map[string]SetupTask{"worktree:repo-a": {Key: "worktree:repo-a", Kind: SetupTaskWorktree, Label: "Worktree: repo-a", Repo: "repo-a", Status: SetupStatusFailed,
 			Error: &errcat.FailureRecord{Code: errcat.WorktreeSetupFailed, Diagnostics: "git worktree add failed"}}},
 		TaskOrder: []string{"worktree:repo-a"},
@@ -1425,6 +1425,115 @@ func TestStoreSaveRunOmitsSetupLastError(t *testing.T) {
 	}
 	if !bytes.Contains(raw, []byte("error:")) {
 		t.Errorf("run.yaml missing the task error record block:\n%s", raw)
+	}
+}
+
+// TestStoreLoadIgnoresLegacyRepoLastErrorKeys pins the no-backward-
+// compatibility contract for the removed repository last-error strings: a
+// stale last_error key under repo_states in a hand-written run.yaml loads
+// as no record.
+func TestStoreLoadIgnoresLegacyRepoLastErrorKeys(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: per-test temp dirs isolate filesystem state.
+	store := NewStore(t.TempDir())
+
+	f := &Feature{
+		ID:            "legacy-repo-001",
+		Name:          "Legacy Repo Error",
+		Slug:          "legacy-repo-error",
+		Status:        StatusCodeReady,
+		CurrentPhase:  PhasePublish,
+		SchemaVersion: SchemaVersionCurrent,
+		Repos:         []FeatureRepo{{Name: "repo-a", Path: "/tmp/a"}},
+	}
+	f.RepoStates = map[string]*RepoState{
+		"repo-a": {Touched: true},
+	}
+	if err := store.Save(f); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	runPath := filepath.Join(store.BaseDir, f.ID, "runs", RunDirName(1), "run.yaml")
+	raw, err := os.ReadFile(runPath)
+	if err != nil {
+		t.Fatalf("read run.yaml: %v", err)
+	}
+	stale := strings.Replace(string(raw), "repo-a:\n",
+		"repo-a:\n        last_error: push failed\n", 1)
+	if stale == string(raw) {
+		t.Fatal("run.yaml does not carry the expected repo_states entry header")
+	}
+	if err := os.WriteFile(runPath, []byte(stale), 0o644); err != nil {
+		t.Fatalf("rewrite run.yaml with stale repo key: %v", err)
+	}
+
+	loaded, err := store.Load(f.ID)
+	if err != nil {
+		t.Fatalf("load with stale repo key: %v", err)
+	}
+	state := loaded.RepoStates["repo-a"]
+	if state == nil || !state.Touched {
+		t.Fatalf("repo state = %+v, want the touched entry preserved", state)
+	}
+	if state.Error != nil {
+		t.Fatalf("repo record = %+v, want none from a stale last_error key", state.Error)
+	}
+}
+
+// TestStoreSaveRunOmitsRepoLastError reads the written run.yaml bytes and
+// asserts the store never persists a last_error key under repo_states, and
+// that a stored publish failure record round-trips under the error key.
+func TestStoreSaveRunOmitsRepoLastError(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: per-test temp dirs isolate filesystem state.
+	store := NewStore(t.TempDir())
+
+	f := &Feature{
+		ID:            "repo-record-001",
+		Name:          "Repo Record",
+		Slug:          "repo-record",
+		Status:        StatusCodeReady,
+		CurrentPhase:  PhasePublish,
+		SchemaVersion: SchemaVersionCurrent,
+		Repos:         []FeatureRepo{{Name: "repo-a", Path: "/tmp/a"}},
+	}
+	f.RepoStates = map[string]*RepoState{
+		"repo-a": {Touched: true, Error: &errcat.FailureRecord{
+			Code: errcat.PublishPullRequestFailed,
+			Context: &errcat.RecordContext{
+				Repositories: []errcat.CodeRepository{{Name: "repo-a", Branch: "agentico/my-feature"}},
+			},
+			Diagnostics: "creating pull request: POST /repos/org/repo-a/pulls: 502 Bad Gateway",
+		}},
+	}
+	if err := store.Save(f); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	runPath := filepath.Join(store.BaseDir, f.ID, "runs", RunDirName(1), "run.yaml")
+	raw, err := os.ReadFile(runPath)
+	if err != nil {
+		t.Fatalf("read run.yaml: %v", err)
+	}
+	if bytes.Contains(raw, []byte("last_error")) {
+		t.Errorf("run.yaml contains a last_error key under repo_states:\n%s", raw)
+	}
+	if !bytes.Contains(raw, []byte("publish_pull_request_failed")) {
+		t.Errorf("run.yaml missing the repository error record block:\n%s", raw)
+	}
+
+	loaded, err := store.Load(f.ID)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	stored := loaded.RepoStates["repo-a"].Error
+	if stored == nil || stored.Code != errcat.PublishPullRequestFailed {
+		t.Fatalf("repo record = %+v, want the stored publish failure record", stored)
+	}
+	if stored.Context == nil || len(stored.Context.Repositories) != 1 ||
+		stored.Context.Repositories[0].Name != "repo-a" ||
+		stored.Context.Repositories[0].Branch != "agentico/my-feature" {
+		t.Fatalf("repo record repositories block = %+v, want repo-a on its branch", stored.Context)
 	}
 }
 

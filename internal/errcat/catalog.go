@@ -225,16 +225,6 @@ type RelatedFeatureParams struct {
 
 func (RelatedFeatureParams) params() {}
 
-// PublishRepoParams carries the repository and branch a publish conflict
-// refers to.
-type PublishRepoParams struct {
-	Repo              string
-	Branch            string
-	RemoteOnlyCommits int
-}
-
-func (PublishRepoParams) params() {}
-
 // SubjectParams carries the missing subject for NotFound.
 type SubjectParams struct {
 	// Subject names the kind of resource, e.g. "Feature".
@@ -389,35 +379,26 @@ var catalog = map[Code]Entry{
 		Remediation: "Refresh the feature and retry.",
 	},
 	PublishRemoteDiverged: {
-		Class:  ClassBlocking,
+		Class:  ClassNeedsAction,
 		Title:  "Pull-request branch diverged",
 		Blocks: []Block{BlockRepositories},
 		summaryParams: func(p Params) string {
-			params, ok := p.(PublishRepoParams)
-			if !ok || params.Repo == "" {
-				return ""
-			}
-			return fmt.Sprintf(
-				"The pull-request branch for %q contains %d remote %s that are not in this workspace.",
-				params.Repo, params.RemoteOnlyCommits, commitWord(params.RemoteOnlyCommits),
-			)
+			return publishDivergedSummary(p)
 		},
 		Summary:     "The pull-request branch contains remote work that is not in this workspace.",
 		Remediation: "Review and reconcile the pull-request branch on the remote, then refresh and retry.",
+		Actions:     []string{"publish"},
 	},
 	PublishRemoteChanged: {
-		Class:  ClassBlocking,
+		Class:  ClassNeedsAction,
 		Title:  "Pull-request branch changed",
 		Blocks: []Block{BlockRepositories},
 		summaryParams: func(p Params) string {
-			params, ok := p.(PublishRepoParams)
-			if !ok || params.Repo == "" {
-				return ""
-			}
-			return fmt.Sprintf("The pull-request branch for %q changed while Agentico was publishing.", params.Repo)
+			return publishChangedSummary(p)
 		},
 		Summary:     "The pull-request branch changed while Agentico was publishing.",
 		Remediation: "Refresh the publish state and retry; nothing was overwritten.",
+		Actions:     []string{"publish"},
 	},
 	PipelineMismatch: {
 		Class:       ClassBlocking,
@@ -461,6 +442,66 @@ var catalog = map[Code]Entry{
 			return "Some workspace roots do not resolve to existing directories: " + strings.Join(paths, "; ") + "."
 		},
 		Remediation: "Check the workspace roots in settings and try again.",
+	},
+
+	// --- Publish failure codes -------------------------------------------------
+	// Every condition that fails a repository publish classifies into one of
+	// these at the publish boundary; the repository's stored record is the
+	// sole owner of the condition and never marks the run Failed.
+	PublishRebaseConflict: {
+		Class:   ClassNeedsAction,
+		Title:   "Pull-rebase conflict",
+		Blocks:  []Block{BlockRepositories},
+		Summary: "The pull rebase onto the target branch conflicted.",
+		summaryParams: func(p Params) string {
+			return publishRebaseConflictSummary(p)
+		},
+		Remediation: "Resolve the conflict in the worktree or run a rebase pass, then retry.",
+		Actions:     []string{"publish"},
+	},
+	PublishPullRequestClosed: {
+		Class:   ClassNeedsAction,
+		Title:   "Pull request closed",
+		Blocks:  []Block{BlockRepositories},
+		Summary: "The pull request is closed or merged and cannot receive new commits.",
+		summaryParams: func(p Params) string {
+			return publishPullRequestClosedSummary(p)
+		},
+		Remediation: "Reopen the pull request on the remote, then retry.",
+		Actions:     []string{"publish"},
+	},
+	PublishPullRequestFailed: {
+		Class:   ClassNeedsAction,
+		Title:   "Pull-request creation failed",
+		Blocks:  []Block{BlockRepositories},
+		Summary: "Creating the pull request failed.",
+		summaryParams: func(p Params) string {
+			return publishPullRequestFailedSummary(p)
+		},
+		Remediation: "Check GitHub access, then retry.",
+		Actions:     []string{"publish"},
+	},
+	PublishDescriptionFailed: {
+		Class:   ClassNeedsAction,
+		Title:   "Description generation failed",
+		Blocks:  []Block{BlockRepositories},
+		Summary: "Generating the pull-request description failed.",
+		summaryParams: func(p Params) string {
+			return publishDescriptionFailedSummary(p)
+		},
+		Remediation: "Retry, or enter the pull-request title and body yourself.",
+		Actions:     []string{"publish"},
+	},
+	PublishPushFailed: {
+		Class:   ClassNeedsAction,
+		Title:   "Repository publish failed",
+		Blocks:  []Block{BlockRepositories},
+		Summary: "Publishing the repository failed.",
+		summaryParams: func(p Params) string {
+			return publishPushFailedSummary(p)
+		},
+		Remediation: "Check the repository and remote, then retry.",
+		Actions:     []string{"publish"},
 	},
 
 	// --- Relationship-guard codes -------------------------------------------

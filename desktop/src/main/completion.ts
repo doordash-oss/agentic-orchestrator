@@ -95,7 +95,20 @@ export class CompletionService {
         ...(repo.pr_url ? { prUrl: repo.pr_url } : {}),
         ...(repo.blocker ? { blocker: repo.blocker } : {}),
         ...(repo.freshness ? { freshness: repo.freshness } : {}),
-        ...(repo.last_error ? { lastError: repo.last_error } : {}),
+        // The canonical object crosses IPC intact except diagnostics, which
+        // pass through the same redaction as every other raw text the
+        // renderer receives.
+        ...(repo.error === undefined
+          ? {}
+          : {
+              error: {
+                ...repo.error,
+                diagnostics:
+                  repo.error.diagnostics === undefined
+                    ? undefined
+                    : redactText(repo.error.diagnostics),
+              },
+            }),
         ...(repo.base_branch ? { baseBranch: repo.base_branch } : {}),
         ...(repo.branch ? { branch: repo.branch } : {}),
         ...(repo.pending_commits === undefined ? {} : { pendingCommits: repo.pending_commits }),

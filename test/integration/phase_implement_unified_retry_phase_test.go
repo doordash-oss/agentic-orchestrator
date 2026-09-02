@@ -160,8 +160,8 @@ func TestPhaseImplementUnified_RetryPhaseRecovery(t *testing.T) {
 	}
 	for _, name := range wantPhaseRepos {
 		st := got.RepoStates[name]
-		if st == nil || st.LastError == "" {
-			t.Errorf("after first run, repo %q = %+v, want failed", name, st)
+		if st == nil || !st.Touched {
+			t.Errorf("after first run, repo %q = %+v, want the failed stamp (Touched)", name, st)
 		}
 	}
 	// repo-c outside the phase plan: status preserved.
@@ -180,6 +180,11 @@ func TestPhaseImplementUnified_RetryPhaseRecovery(t *testing.T) {
 			Diagnostics: "something went wrong",
 		}
 		ff.PendingNeedUserInputPath = "/some/leftover/path.yaml"
+		for _, name := range wantPhaseRepos {
+			if st := ff.RepoStates[name]; st != nil {
+				st.Error = &errcat.FailureRecord{Code: errcat.InfrastructureFailure, Diagnostics: "stale record"}
+			}
+		}
 		return nil
 	}); err != nil {
 		t.Fatalf("seed error fields: %v", err)
@@ -201,8 +206,8 @@ func TestPhaseImplementUnified_RetryPhaseRecovery(t *testing.T) {
 	}
 	for _, name := range wantPhaseRepos {
 		st := got.RepoStates[name]
-		if st != nil && st.LastError != "" {
-			t.Errorf("after RetryPhase, repo %q LastError = %q, want cleared", name, st.LastError)
+		if st != nil && st.Error != nil {
+			t.Errorf("after RetryPhase, repo %q record = %+v, want cleared", name, st.Error)
 		}
 	}
 	// Outside-the-phase preservation: repo-c PRURL retained.

@@ -973,6 +973,10 @@ export interface components {
         ErrorRepositoryContext: {
             name: string;
             branch?: string;
+            /** @description Rebase target branch of a conflicted publish pull-rebase, when known. */
+            rebase_target?: string;
+            /** @description Commits on the remote pull-request branch that are not in this workspace, when known. */
+            remote_only_commits?: number;
             conflict_files?: string[];
             dirty_files?: string[];
             parent_anchor_sha?: string;
@@ -1590,8 +1594,8 @@ export interface components {
             blocker?: string;
             /** @description Server-authored freshness state. */
             freshness?: string;
-            /** @description Safe, bounded last error text. */
-            last_error?: string;
+            /** @description Canonical catalog-rendered publish failure record this repository owns, when any. */
+            error?: components["schemas"]["Error"];
             /** @description Server-authored base branch for this repository. */
             base_branch?: string;
             /** @description Server-authored feature branch for this repository. */
@@ -2037,7 +2041,8 @@ export interface components {
             conflict_files?: string[];
             touched: boolean;
             pr_url?: string;
-            last_error?: string;
+            /** @description Canonical catalog-rendered publish failure record this repository owns, when any. */
+            error?: components["schemas"]["Error"];
             publishable: boolean;
         };
         RunSummary: {

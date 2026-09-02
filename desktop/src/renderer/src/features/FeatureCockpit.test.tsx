@@ -872,14 +872,70 @@ describe('FeatureCockpit snapshot rendering', () => {
     expect(toggle).toHaveAttribute('aria-pressed', 'true');
     const facts = screen.getByRole('complementary', { name: 'Feature inspector' });
     expect(within(facts).getByRole('region', { name: 'Feature facts' })).toBeVisible();
+    // The repository instrument now shares the aftercare inspector pane.
+    expect(within(facts).getByRole('region', { name: 'Repository status' })).toBeVisible();
 
-    await user.click(within(facts).getByRole('button', { name: 'Open pull request' }));
+    const featureFacts = within(facts).getByRole('region', { name: 'Feature facts' });
+    await user.click(within(featureFacts).getByRole('button', { name: 'Open pull request' }));
     expect(mock.api.openExternal).toHaveBeenCalledWith({
       url: 'https://github.com/doordash-oss/agentic-orchestrator/pull/107',
     });
 
     await user.click(toggle);
     expect(screen.queryByRole('region', { name: 'Feature facts' })).not.toBeInTheDocument();
+  });
+
+  it('links the repository instrument publish indication into the publish modal', async () => {
+    const mock = installAgenticoMock({
+      feature: featureSnapshot({
+        status: 'Published',
+        activeRun: 8,
+        actions: [{ id: 'publish', enabled: true, disabledReasons: [] }],
+        repoStatus: [
+          {
+            name: 'repo-a',
+            publishable: true,
+            prUrl: 'https://github.com/doordash-oss/agentic-orchestrator/pull/107',
+          },
+          {
+            name: 'repo-b',
+            publishable: true,
+            touched: true,
+            error: {
+              code: 'publish_pull_request_failed',
+              class: 'needs_action',
+              title: 'Pull-request creation failed',
+              summary: 'Creating the pull request for repository "repo-b" failed.',
+              remediation: { hint: 'Check GitHub access, then retry.', actions: ['publish'] },
+              context: { repositories: [{ name: 'repo-b', branch: 'feature/search-revamp' }] },
+            },
+          },
+        ],
+      }),
+    });
+    mock.api.openExternal.mockResolvedValue({ ok: true });
+    mock.api.preflightCompletion.mockResolvedValue({
+      featureId: FEATURE_ID,
+      sourceRevision: 'rev-publish',
+      canMarkDone: false,
+      repos: [{ repo: 'repo-b', publishable: true, touched: true, status: 'eligible' }],
+    });
+    renderCockpit(mock);
+    const user = userEvent.setup();
+
+    await screen.findByRole('region', { name: 'Feature aftercare' });
+    await user.click(screen.getByRole('button', { name: 'Toggle inspector' }));
+    const facts = screen.getByRole('complementary', { name: 'Feature inspector' });
+    const instrument = within(facts).getByRole('region', { name: 'Repository status' });
+    // Indication, not a card: the title and the link, no alert role.
+    expect(within(instrument).getByText('Pull-request creation failed')).toBeVisible();
+    expect(within(instrument).queryByRole('alert')).not.toBeInTheDocument();
+
+    await user.click(within(instrument).getByRole('button', { name: 'Open publish' }));
+    expect(
+      await screen.findByRole('dialog', { name: 'Publish reviewed changes' }),
+    ).toBeInTheDocument();
+    expect(mock.api.preflightCompletion).toHaveBeenCalledWith({ featureId: FEATURE_ID });
   });
 
   it('presents the aftercare facts as a drawer at narrow widths', async () => {

@@ -193,12 +193,12 @@ func (i Inquireness) IsValid() bool {
 }
 
 // RepoState carries the minimal per-repo signal orchestration needs:
-// whether any phase touched the repo, the optional PR URL, and the most
-// recent error message. Persisted on Run.RepoStates.
+// whether any phase touched the repo, the optional PR URL, and the optional
+// stored publish-failure record. Persisted on Run.RepoStates.
 type RepoState struct {
-	Touched   bool   `yaml:"touched,omitempty"`
-	PRURL     string `yaml:"pr_url,omitempty"`
-	LastError string `yaml:"last_error,omitempty"`
+	Touched bool                  `yaml:"touched,omitempty"`
+	PRURL   string                `yaml:"pr_url,omitempty"`
+	Error   *errcat.FailureRecord `yaml:"error,omitempty"`
 
 	Freshness string `yaml:"-"`
 }

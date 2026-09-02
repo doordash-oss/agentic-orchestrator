@@ -1223,6 +1223,11 @@ function CompletionScene({ scene }: { scene: string }): React.ReactElement {
           <PublishModal
             featureId="feat-electron-app"
             preflight={completion.preflight}
+            actions={[
+              { id: 'publish', enabled: true, disabledReasons: [] },
+              { id: 'merge', enabled: true, disabledReasons: [] },
+              { id: 'mark-done', enabled: true, disabledReasons: [] },
+            ]}
             dispatchAction={dispatchPublish}
             generatePublishDescription={(id, repos) =>
               api.generatePublishDescription({ featureId: id, repos })

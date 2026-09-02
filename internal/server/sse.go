@@ -562,9 +562,14 @@ func eventDTOFromDomain(ev ports.Event) SSEEvent {
 		dto = snapshotRequiredEventDTO(kind, resource)
 	}
 	dto.Summary = safeEventSummary(ev)
-	if (ev.Type == ports.FeatureFailed || ev.Type == ports.SetupFailed) && ev.CanonicalError != nil {
+	if (ev.Type == ports.FeatureFailed || ev.Type == ports.SetupFailed ||
+		ev.Type == ports.PublishCompleted || ev.Type == ports.RepoStatusChanged) &&
+		ev.CanonicalError != nil {
 		// Failure-carrying lifecycle events carry the catalog title as the
 		// summary and the canonical code/class identity as the error object.
+		// A repository publish failure rides the publish-completed and
+		// repository-status-changed kinds the same way, snapshot-required
+		// semantics unchanged.
 		dto.Summary = ev.CanonicalError.Title
 		dto.Error = &SSEEventError{
 			Code:  string(ev.CanonicalError.Code),

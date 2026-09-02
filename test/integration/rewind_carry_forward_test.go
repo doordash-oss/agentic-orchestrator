@@ -116,9 +116,9 @@ func TestRewindToPlan_EndToEnd_CarriesForwardContent(t *testing.T) {
 		if err := os.WriteFile(markerPath, []byte(content), 0o644); err != nil {
 			t.Fatalf("write %s: %v", markerPath, err)
 		}
-		// Also exercise agent.LogPhaseError so the real path writer runs and
-		// lands inside runs/run-001/<phase>/.
-		agent.LogPhaseError(stateDir, f, step.name, "r1-"+step.name+"-error")
+		// Also write the legacy per-phase error.log fixture so the real path
+		// layout runs and lands inside runs/run-001/<phase>/.
+		writePhaseErrorLog(t, stateDir, f, step.name, "r1-"+step.name+"-error")
 	}
 
 	// Populate Artifacts with absolute paths pointing under run-001/.

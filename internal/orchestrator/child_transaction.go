@@ -134,7 +134,7 @@ func (o *Orchestrator) prepareTransactionCandidates(child, parent *feature.Featu
 					ChildHeadSHA:    childHead,
 					ObservedSHA:     parentTip,
 				},
-				code: errcat.IntegrationParentRefDrift,
+				code:        errcat.IntegrationParentRefDrift,
 				diagnostics: fmt.Sprintf("parent branch tip moved from %s to %s while the pass was running; the parent is locked during a pass, so this usually means something wrote to the parent's checkout outside the integration transaction; parent refs were left untouched — retry integration to accept the moved tip, or reset the parent branch before retrying", base, parentTip),
 			})
 		}
@@ -148,7 +148,7 @@ func (o *Orchestrator) prepareTransactionCandidates(child, parent *feature.Featu
 					Branch:     parentRepo.Branch,
 					DirtyFiles: files,
 				},
-				code:       errcat.IntegrationParentDirty,
+				code:        errcat.IntegrationParentDirty,
 				diagnostics: fmt.Sprintf("parent worktree has uncommitted changes: %s", joinFileList(files)),
 			})
 		}

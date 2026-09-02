@@ -764,16 +764,18 @@ func wireError(rendered errcat.Error) Error {
 		context := ErrorContext{}
 		for _, repo := range rendered.Context.Repositories {
 			context.Repositories = append(context.Repositories, ErrorRepositoryContext{
-				Name:            repo.Name,
-				Branch:          repo.Branch,
-				ConflictFiles:   repo.ConflictFiles,
-				DirtyFiles:      repo.DirtyFiles,
-				ParentAnchorSha: repo.ParentAnchorSHA,
-				ExpectedRefSha:  repo.ExpectedRefSHA,
-				ChildHeadSha:    repo.ChildHeadSHA,
-				CandidateSha:    repo.CandidateSHA,
-				MergeHead:       repo.MergeHEAD,
-				ObservedSha:     repo.ObservedSHA,
+				Name:              repo.Name,
+				Branch:            repo.Branch,
+				RebaseTarget:      repo.RebaseTarget,
+				RemoteOnlyCommits: repo.RemoteOnlyCommits,
+				ConflictFiles:     repo.ConflictFiles,
+				DirtyFiles:        repo.DirtyFiles,
+				ParentAnchorSha:   repo.ParentAnchorSHA,
+				ExpectedRefSha:    repo.ExpectedRefSHA,
+				ChildHeadSha:      repo.ChildHeadSHA,
+				CandidateSha:      repo.CandidateSHA,
+				MergeHead:         repo.MergeHEAD,
+				ObservedSha:       repo.ObservedSHA,
 			})
 		}
 		if rendered.Context.Phase != nil {

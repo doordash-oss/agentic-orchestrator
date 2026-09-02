@@ -1964,7 +1964,7 @@ func (t *serverMutationTarget) CompletionPreflight(featureID string) (serverrunt
 			PrURL:                 r.PRURL,
 			Blocker:               r.Blocker,
 			Freshness:             r.Freshness,
-			LastError:             r.LastError,
+			Error:                 serverruntime.WireRepoError(r.Error),
 			BaseBranch:            r.BaseBranch,
 			Branch:                r.Branch,
 			PendingCommits:        r.PendingCommits,
@@ -2215,39 +2215,16 @@ func actionConflictError(err error) error {
 	if err == nil {
 		return nil
 	}
-	var diverged *orchestrator.PublishRemoteDivergedError
-	if errors.As(err, &diverged) {
+	// The envelope's code and context derive from the same classification
+	// that stores the repository's record, so the HTTP rejection and the
+	// stored record agree.
+	if record, ok := orchestrator.PublishConflictRecord(err); ok {
+		options := errcat.RecordOptions(record)
+		options = append(options, errcat.WithDiagnostics(err.Error()))
 		return &serverruntime.ActionConflictError{
-			Err:  err,
-			Code: errcat.PublishRemoteDiverged,
-			Options: []errcat.Option{
-				errcat.WithParams(errcat.PublishRepoParams{Repo: diverged.RepoName, Branch: diverged.Branch, RemoteOnlyCommits: diverged.RemoteOnlyCommits}),
-				errcat.WithRepositories(errcat.CodeRepository{Name: diverged.RepoName, Branch: diverged.Branch}),
-			},
-		}
-	}
-	var changed *orchestrator.PublishRemoteChangedError
-	if errors.As(err, &changed) {
-		return &serverruntime.ActionConflictError{
-			Err:  err,
-			Code: errcat.PublishRemoteChanged,
-			Options: []errcat.Option{
-				errcat.WithParams(errcat.PublishRepoParams{Repo: changed.RepoName, Branch: changed.Branch}),
-				errcat.WithRepositories(errcat.CodeRepository{Name: changed.RepoName, Branch: changed.Branch}),
-			},
-		}
-	}
-	var publishConflict *orchestrator.PublishConflictError
-	if errors.As(err, &publishConflict) {
-		return &serverruntime.ActionConflictError{
-			Err: err,
-			Options: []errcat.Option{
-				errcat.WithRepositories(errcat.CodeRepository{
-					Name:   publishConflict.RepoName,
-					Branch: publishConflict.Branch,
-				}),
-				errcat.WithDiagnostics(err.Error()),
-			},
+			Err:     err,
+			Code:    record.Code,
+			Options: options,
 		}
 	}
 	return nil

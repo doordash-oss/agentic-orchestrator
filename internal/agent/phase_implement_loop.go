@@ -185,13 +185,12 @@ func RunPhaseImplementLoop(cfg OrchestratorConfig, sm ports.SessionManager) (*Ph
 	loopResult, runErr := runImpl(implCfg, sm)
 	if runErr != nil {
 		// Atomic failure stamp: every phase-declared repo transitions to
-		// failed (LastError set) in one write. This preserves "phase atomicity":
-		// no partial-phase shipment.
+		// failed in one write. This preserves "phase atomicity": no partial-
+		// phase shipment; the failure itself lands on the run record.
 		_ = AtomicPhaseStamp(cfg.FeatureStore, AtomicPhaseStampInput{
 			FeatureID: cfg.Feature.ID,
 			Repos:     phaseRepos,
 			Outcome:   PhaseOutcomeFailed,
-			LastError: runErr.Error(),
 		})
 		return &PhaseImplementLoopResult{
 			FinalStatus: "failed",
@@ -252,7 +251,6 @@ func RunPhaseImplementLoop(cfg OrchestratorConfig, sm ports.SessionManager) (*Ph
 			FeatureID: cfg.Feature.ID,
 			Repos:     phaseRepos,
 			Outcome:   PhaseOutcomeFailed,
-			LastError: loopResult.LastError,
 		})
 		return &PhaseImplementLoopResult{
 			FinalStatus: loopResult.FinalStatus,

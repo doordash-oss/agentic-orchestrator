@@ -246,7 +246,23 @@ func BuildHooks(obs *observe.Observer, permStore *permission.Store, fs ports.Fea
 			if !ok {
 				return
 			}
-			obs.PhaseCompleted(sc, feature.PhasePublish.String(), 0, err)
+			if err == nil {
+				obs.PhaseCompleted(sc, feature.PhasePublish.String(), 0, nil)
+				return
+			}
+			// A repository publish failure carries its canonical identity: the
+			// first failed repository's stored record renders through the catalog
+			// and its code and class travel as plain strings in the event data.
+			errorCode, errorClass := "", ""
+			if fs != nil {
+				if f, loadErr := fs.Load(featureID); loadErr == nil {
+					if rendered, failed := firstFailedRepoError(f); failed {
+						errorCode = string(rendered.Code)
+						errorClass = string(rendered.Class)
+					}
+				}
+			}
+			obs.PhaseCompleted(sc, feature.PhasePublish.String(), 0, err, errorCode, errorClass)
 		},
 		OnFeatureSummaryNeeded: func(featureID string, f *feature.Feature) {
 			if obs == nil || summaryBaseDir == "" {
@@ -271,9 +287,11 @@ func BuildHooks(obs *observe.Observer, permStore *permission.Store, fs ports.Fea
 				// Iteration counters live on the run / feature under the
 				// unified flow, not per-repo.
 				status := "untouched"
+				repoError := ""
 				switch {
-				case rs.LastError != "":
+				case rs.Error != nil:
 					status = "failed"
+					repoError = errcat.RenderRecord(*rs.Error).Summary
 				case rs.PRURL != "":
 					status = "published"
 				case rs.Touched:
@@ -283,7 +301,7 @@ func BuildHooks(obs *observe.Observer, permStore *permission.Store, fs ports.Fea
 					Status:    status,
 					Iteration: 0,
 					PRURL:     rs.PRURL,
-					LastError: rs.LastError,
+					LastError: repoError,
 				}
 			}
 			errorCode, errorClass := "", ""

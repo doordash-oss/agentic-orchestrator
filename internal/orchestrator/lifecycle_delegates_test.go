@@ -260,8 +260,8 @@ func TestOrchestrator_RestartPhase_FailedFinalReview_DispatchesFinalReview(t *te
 		Repos:        []feature.FeatureRepo{{Name: agenticRepoName}},
 		RepoStates: map[string]*feature.RepoState{
 			agenticRepoName: {
-				Touched:   true,
-				LastError: "protocol violation: final_review_reviewer @ /tmp/iter: invalid report",
+				Touched: true,
+				Error:   &errcat.FailureRecord{Code: errcat.ProtocolViolation, Diagnostics: "final_review_reviewer @ /tmp/iter: invalid report"},
 			},
 		},
 	}
@@ -297,8 +297,8 @@ func TestOrchestrator_RestartPhase_FailedFinalReview_DispatchesFinalReview(t *te
 	if rec := f.FailureRecord(); rec != nil {
 		t.Fatalf("failure record should be cleared: %+v", rec)
 	}
-	if st := f.RepoStates[agenticRepoName]; st == nil || st.LastError != "" {
-		t.Fatalf("RepoStates[agentic] = %+v, want LastError cleared", st)
+	if st := f.RepoStates[agenticRepoName]; st == nil || st.Error != nil {
+		t.Fatalf("RepoStates[agentic] = %+v, want its failure record cleared", st)
 	}
 }
 

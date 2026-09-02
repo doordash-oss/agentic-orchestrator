@@ -21,6 +21,8 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 )
 
 func TestTransitionValid(t *testing.T) {
@@ -1288,7 +1290,13 @@ func TestRepoStateYAMLRoundTrip(t *testing.T) {
 		SchemaVersion: SchemaVersionCurrent,
 		RepoStates: map[string]*RepoState{
 			"repo-a": {},
-			"repo-b": {Touched: true, LastError: "some error"},
+			"repo-b": {Touched: true, Error: &errcat.FailureRecord{
+				Code: errcat.PublishPullRequestFailed,
+				Context: &errcat.RecordContext{
+					Repositories: []errcat.CodeRepository{{Name: "repo-b", Branch: "agentico/my-feature"}},
+				},
+				Diagnostics: "creating pull request: POST /repos/org/repo-b/pulls: 502 Bad Gateway",
+			}},
 		},
 	}
 
@@ -1306,8 +1314,20 @@ func TestRepoStateYAMLRoundTrip(t *testing.T) {
 	if got.RepoStates["repo-a"].Touched {
 		t.Errorf("repo-a Touched = true, want false")
 	}
-	if got.RepoStates["repo-b"].LastError != "some error" {
-		t.Errorf("repo-b last_error = %q, want %q", got.RepoStates["repo-b"].LastError, "some error")
+	if got.RepoStates["repo-a"].Error != nil {
+		t.Errorf("repo-a Error = %+v, want nil", got.RepoStates["repo-a"].Error)
+	}
+	stored := got.RepoStates["repo-b"].Error
+	if stored == nil || stored.Code != errcat.PublishPullRequestFailed {
+		t.Fatalf("repo-b error record = %+v, want a publish_pull_request_failed record", stored)
+	}
+	if stored.Context == nil || len(stored.Context.Repositories) != 1 ||
+		stored.Context.Repositories[0].Name != "repo-b" ||
+		stored.Context.Repositories[0].Branch != "agentico/my-feature" {
+		t.Fatalf("repo-b error repositories block = %+v, want repo-b on its feature branch", stored.Context)
+	}
+	if !strings.Contains(stored.Diagnostics, "502 Bad Gateway") {
+		t.Errorf("repo-b error diagnostics = %q, want the raw failure text", stored.Diagnostics)
 	}
 	if !got.RepoStates["repo-b"].Touched {
 		t.Errorf("repo-b Touched = false, want true")

@@ -16,13 +16,14 @@ limitations under the License.
 
 /**
  * Packaged publish partial retry journey: exercises the real publish mutation
- * against hermetic fixture repositories, pushes to a local bare origin,
- * deterministically fails PR creation for one repository to produce a
- * structured per-repository partial outcome, and verifies retry defaults only
- * to failed or still-unpublished repositories without republishing confirmed
- * successes.
+ * against hermetic fixture repositories, pushes to local bare origins while a
+ * journey-owned fake GitHub API rejects the first pull-request creation, and
+ * verifies the repository-owned failure card, the inspector's indication and
+ * link into the publish modal, and a repo-scoped retry that publishes the
+ * failed repository without republishing confirmed successes.
  */
 import fs from 'node:fs';
+import http from 'node:http';
 import path from 'node:path';
 import { expect, test, type Locator } from '@playwright/test';
 import {
@@ -62,7 +63,62 @@ interface PublishFixture extends CompletionWorktrees {
   origins: Record<string, string>;
 }
 
-test('packaged publish partial retry: push succeeds, PR creation fails, retry scope defaults to failed', async ({}, testInfo) => {
+/**
+ * Starts the journey-owned fake GitHub API the publish flow talks to through
+ * AGENTICO_GITHUB_API_BASE. It answers each repository's default-branch
+ * lookup, rejects the first pull-request creation with a 502 and accepts every
+ * later one with a fixture URL. No git traffic reaches it: each repository's
+ * remote is split per worktree (see seedPublishFixture) so pushes and remote
+ * inspection stay on the local bare origin.
+ */
+function startFakePublishGitHubApi(): Promise<http.Server> {
+  let pullRequestsCreated = 0;
+  const server = http.createServer((req, res) => {
+    const url = (req.url ?? '').split('?')[0]!;
+    const create = /^\/repos\/([^/]+)\/([^/]+)\/pulls$/.exec(url);
+    if (req.method === 'POST' && create !== null) {
+      pullRequestsCreated += 1;
+      if (pullRequestsCreated === 1) {
+        res.writeHead(502, { 'Content-Type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            message: 'fake GitHub API rejected the first pull-request creation',
+          }),
+        );
+        return;
+      }
+      res.writeHead(201, { 'Content-Type': 'application/json' });
+      res.end(
+        JSON.stringify({
+          html_url: `https://github.example/${create[1]}/${create[2]}/pull/9`,
+          number: 9,
+        }),
+      );
+      return;
+    }
+    const repoInfo = /^\/repos\/([^/]+)\/([^/]+)$/.exec(url);
+    if (req.method === 'GET' && repoInfo !== null) {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ default_branch: 'main' }));
+      return;
+    }
+    res.writeHead(404, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ message: `unexpected path: ${url}` }));
+  });
+  return new Promise((resolve) => {
+    server.listen(0, '127.0.0.1', () => resolve(server));
+  });
+}
+
+function serverBaseUrl(server: http.Server): string {
+  const addr = server.address();
+  if (addr === null || typeof addr === 'string') {
+    throw new Error('fake GitHub API server is not listening on an inet addr');
+  }
+  return `http://127.0.0.1:${addr.port}`;
+}
+
+test('packaged publish partial retry: repository-owned failure card, inspector link, and repo-scoped retry', async ({}, testInfo) => {
   test.setTimeout(300_000);
   const transcript = new Transcript('publish-partial-retry', 'Publish partial retry journey');
   const world = createWorld('publish-partial-retry', {
@@ -76,6 +132,7 @@ test('packaged publish partial retry: push succeeds, PR creation fails, retry sc
   const featureName = `PublishRetry ${Math.random().toString(16).slice(2, 8)}`;
   let handle: AppHandle | null = null;
   let seeded: PublishFixture | null = null;
+  let fakeGitHub: http.Server | null = null;
 
   try {
     transcript.section('Create feature through packaged UI');
@@ -103,12 +160,18 @@ test('packaged publish partial retry: push succeeds, PR creation fails, retry sc
       );
     }
 
-    transcript.section('Seed publish fixture with local bare origins while server is stopped');
-    seeded = seedPublishFixture(world, featureId);
+    transcript.section('Seed publish fixture, start the fake GitHub API, and relaunch against it');
+    fakeGitHub = await startFakePublishGitHubApi();
+    const apiBase = serverBaseUrl(fakeGitHub);
+    transcript.step(`fake GitHub API listening at \`${apiBase}\``);
+    seeded = seedPublishFixture(world, featureId, apiBase);
     transcript.json('seeded worktrees', seeded.worktrees);
 
     transcript.section('Relaunch and open feature cockpit');
-    handle = await launchApp(world, testInfo, { traceName: 'publish-partial-retry' });
+    handle = await launchApp(world, testInfo, {
+      traceName: 'publish-partial-retry',
+      env: { AGENTICO_GITHUB_API_BASE: apiBase },
+    });
     const cockpit = await openCompletion(handle, featureName);
     // Publish is offered only from the aftercare runway; the toolbar no longer carries delivery verbs.
     const aftercareRunway = handle.page.getByRole('region', { name: 'Feature aftercare' });
@@ -160,28 +223,65 @@ test('packaged publish partial retry: push succeeds, PR creation fails, retry sc
       'publish modal preselected only the eligible unpublished repo and generated PR text',
     );
 
-    transcript.section('Execute publish and observe partial outcome');
+    transcript.section('Execute publish and observe the repository-owned failure card');
     const publishButton = publishModal.getByRole('button', { name: 'Publish', exact: true });
     await expect(publishButton).toBeEnabled();
     await publishButton.click();
-    const publishFailure = publishModal.locator('.completion-publish-sheet__failure');
-    await expect(publishFailure).toContainText("Agentico couldn't prepare this publish.", {
-      timeout: 60_000,
+    const webRow = publishModal.locator('.completion-workspace__publish-repo').filter({
+      hasText: 'publish-web',
     });
-    await expect(publishFailure).toContainText('Review the details, then refresh and retry.');
+    const card = webRow.locator('.error-surface');
+    await expect(card).toBeVisible({ timeout: 60_000 });
+    await expect(card).toHaveClass(/error-surface--needs-action/);
+    await expect(card.getByText('Needs your action')).toBeVisible();
+    await expect(card.locator('.error-surface__code')).toHaveText('publish_pull_request_failed');
+    await expect(card.getByText('Pull-request creation failed')).toBeVisible();
+    await expect(
+      card.getByText('Creating the pull request for repository "publish-web" failed.'),
+    ).toBeVisible();
+    await expect(card.getByText('Check GitHub access, then retry.')).toBeVisible();
+    // The repository rides under the Details disclosure; the raw server error
+    // stays behind the card's second disclosure.
+    await card.getByText('Details').click();
+    await expect(card.locator('.error-surface__repo-name')).toHaveText('publish-web');
+    await card.getByText('Diagnostics').click();
+    await expect(card.locator('.error-surface__diagnostics-pre')).toContainText('502');
+    // The card's title appears exactly once, and no bespoke failure notice or
+    // whole-sheet rejection remains: the row card owns the condition.
+    await expect(
+      handle.page.getByText('Pull-request creation failed', { exact: true }),
+    ).toHaveCount(1);
+    await expect(publishModal.locator('.completion-publish-sheet__failure')).toHaveCount(0);
+    await expect(publishModal.getByText('Publish was rejected')).toHaveCount(0);
     assertPublishedBranch(seeded, 'publish-web');
-    transcript.step(
-      'publish action completed with partial outcome (push succeeded, PR creation failed)',
-    );
+    transcript.step('publish failed on pull-request creation; the repository row owns the card');
 
-    transcript.section('Verify retry scope defaults to failed/unpublished repositories');
-    // Reopen the publish modal so it re-derives scope from the post-publish preflight.
+    transcript.section('The IPC snapshot carries the repository record, not a run failure');
+    const failedSnapshot = await handle.page.evaluate(
+      (id) => window.agentico.getFeature(id),
+      featureId,
+    );
+    transcript.json('getFeature response after failed publish', failedSnapshot);
+    const failedRepo = failedSnapshot.repoStatus?.find((repo) => repo.name === 'publish-web');
+    expect(failedRepo?.error?.code).toBe('publish_pull_request_failed');
+    expect(failedRepo?.error?.class).toBe('needs_action');
+    expect(failedSnapshot.status).not.toBe('Failed');
+
+    transcript.section('Repository instrument indicates the failure and links to the modal');
     await publishModal.getByRole('button', { name: 'Cancel' }).click();
     await expect(publishModal).toHaveCount(0);
-    await aftercareRunway
-      .getByRole('button', { name: /Publish (this feature|new commits)/ })
-      .click();
+    await handle.page.getByRole('button', { name: 'Toggle inspector' }).click();
+    const instrument = handle.page.getByRole('region', { name: 'Repository status' });
+    await expect(instrument).toBeVisible();
+    await expect(instrument.getByText('Pull-request creation failed')).toBeVisible();
+    await expect(instrument.getByRole('alert')).toHaveCount(0);
+    const openPublish = instrument.getByRole('button', { name: 'Open publish' });
+    await expect(openPublish).toBeVisible();
+    await openPublish.click();
     await expect(publishModal.locator('.completion-workspace__publish')).toBeVisible();
+    transcript.step('the repository instrument linked back into the publish modal');
+
+    transcript.section('Verify retry scope defaults to failed/unpublished repositories');
     // publish-api was pre-seeded as already published — it must NOT appear in the retry checkbox set.
     await expect(publishModal.getByRole('checkbox', { name: 'publish-api' })).toHaveCount(0);
     // publish-web failed PR creation — it remains eligible and must be preselected for retry.
@@ -194,10 +294,43 @@ test('packaged publish partial retry: push succeeds, PR creation fails, retry sc
     await expect(publishModal.getByText('Already published')).toBeVisible({ timeout: 10_000 });
     transcript.step('retry scope defaults only to failed or still-unpublished repositories');
 
+    transcript.section('Retry the failed repository from its owned card');
+    await publishModal.getByPlaceholder('Enter PR title').fill('Publish retry journey');
+    await publishModal
+      .getByPlaceholder('Enter PR description')
+      .fill('Repo-scoped retry after the owned failure card.');
+    const retryButton = webRow.getByRole('button', { name: 'Retry publish' });
+    await expect(retryButton).toBeEnabled();
+    await retryButton.click();
+    await expect(publishModal.getByRole('status')).toContainText(/published/i, {
+      timeout: 60_000,
+    });
+    // The pull-request link appears on the published row, the card is gone,
+    // and the repository carries no stored record any more.
+    await expect(publishModal.getByRole('checkbox', { name: 'publish-web' })).toHaveCount(0);
+    const publishedGroup = publishModal.locator('.completion-workspace__published-repos');
+    await expect(publishedGroup.getByText('publish-web')).toBeVisible();
+    const webPublishedRow = publishedGroup
+      .locator('.completion-workspace__published-repo-row')
+      .filter({ hasText: 'publish-web' });
+    await expect(webPublishedRow.getByRole('button', { name: 'PR ↗' })).toBeVisible();
+    await expect(publishModal.locator('.error-surface')).toHaveCount(0);
+    assertPublishedBranch(seeded, 'publish-web');
+    const retrySnapshot = await handle.page.evaluate(
+      (id) => window.agentico.getFeature(id),
+      featureId,
+    );
+    transcript.json('getFeature response after repo-scoped retry', retrySnapshot);
+    const retryRepo = retrySnapshot.repoStatus?.find((repo) => repo.name === 'publish-web');
+    expect(retryRepo?.error).toBeUndefined();
+    expect(retryRepo?.prUrl).toBe('https://github.example/e2e/publish-web/pull/9');
+    transcript.step('the repo-scoped retry published the failed repository');
+
     persistAppLogs(handle, 'publish-partial-retry-app-server');
     transcript.write(testInfo);
   } finally {
     if (handle !== null) await closeApp(handle).catch(() => {});
+    fakeGitHub?.close();
     assertNoLeakedProcesses(world);
     destroyWorld(world);
   }
@@ -291,7 +424,11 @@ async function openCompletion(handle: AppHandle, featureName: string): Promise<L
   return cockpit;
 }
 
-function seedPublishFixture(world: JourneyWorld, featureId: string): PublishFixture {
+function seedPublishFixture(
+  world: JourneyWorld,
+  featureId: string,
+  apiBase: string,
+): PublishFixture {
   const featurePath = featureYamlPath(world, featureId);
   let featureYaml = fs.readFileSync(featurePath, 'utf8');
   const repos = parseFeatureRepos(featureYaml);
@@ -332,11 +469,25 @@ function seedPublishFixture(world: JourneyWorld, featureId: string): PublishFixt
 
   for (const repoName of ['publish-api', 'publish-web', 'local-only']) {
     const repoPath = sources[repoName]!;
+    const worktree = repos[repoName]!;
     const barePath = path.join(world.root, `${repoName}-origin.git`);
     origins[repoName] = barePath;
     git(world.root, 'init', '--bare', barePath, '--initial-branch=main');
-    git(repoPath, 'remote', 'add', 'origin', barePath);
-    git(repoPath, 'push', '-u', 'origin', 'main');
+    // Split the remote per worktree: the linked feature worktree resolves
+    // origin to the dead-end bare repo (pushes and remote inspection stay
+    // local), while the source checkout resolves origin to a github.com URL
+    // whose owner/repository the fake GitHub API serves — a github.com host
+    // keeps go-gh's REST paths unprefixed, so the fake server sees the same
+    // paths it serves.
+    git(repoPath, 'config', 'extensions.worktreeConfig', 'true');
+    git(
+      repoPath,
+      'config',
+      '--worktree',
+      'remote.origin.url',
+      `https://github.com/e2e/${repoName}.git`,
+    );
+    git(worktree, 'config', '--worktree', 'remote.origin.url', barePath);
   }
 
   for (const repoName of ['publish-api', 'publish-web']) {

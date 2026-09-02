@@ -1659,7 +1659,9 @@ func TestFeatureDetailActionCatalogStateMatrix(t *testing.T) {
 				enabled      bool
 				disabledCode string
 			}{
-				actionPublish:  {disabledCode: "manual_publish_required"},
+				// The manual-publish checkpoint no longer gates the action:
+				// a repository publish failure is retried through publish.
+				actionPublish:  {enabled: true},
 				actionRebase:   {enabled: true},
 				actionMarkDone: {enabled: true},
 			},
@@ -1706,10 +1708,22 @@ func TestFeatureDetailActionCatalogStateMatrix(t *testing.T) {
 				enabled      bool
 				disabledCode string
 			}{
-				actionPublish: {disabledCode: "already_published"},
+				// Published features keep publish enabled: a repository
+				// publish failure is retried through it.
+				actionPublish: {enabled: true},
 				actionMerge:   {disabledCode: disabledNotLocalOnly},
 				actionRebase:  {enabled: true},
 				actionCleanup: {enabled: true},
+			},
+		},
+		{
+			name: "done",
+			f:    actionCatalogTestFeature(feature.StatusDone, feature.Checkpoints{}, &publishable),
+			want: map[string]struct {
+				enabled      bool
+				disabledCode string
+			}{
+				actionPublish: {disabledCode: disabledStatusNotAllowed},
 			},
 		},
 		{

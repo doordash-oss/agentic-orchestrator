@@ -2045,47 +2045,7 @@ func TestServerMutationTargetPublishActionPublishesFeatureAndReturnsSafeMetadata
 	assertJSONDoesNotContain(t, result, "https://github.com/acme/repo-a/pull/12")
 }
 
-func TestServerMutationTargetPublishActionRecoversFailedPublish(t *testing.T) {
-	target, manager, store, f := newPublishActionTarget(t)
-	if err := store.Modify(f.ID, func(ff *feature.Feature) error {
-		ff.Status = feature.StatusFailed
-		ff.Run().Failure = &errcat.FailureRecord{
-			Code:        errcat.InfrastructureFailure,
-			Diagnostics: "commit failed: index.lock already exists",
-		}
-		return nil
-	}); err != nil {
-		t.Fatalf("mark feature failed: %v", err)
-	}
-	target.orch.SetPublishRepoFn(func(featureID, repoName string) (string, error) {
-		prURL := "https://github.com/acme/repo-a/pull/13"
-		if err := manager.SetRepoPublished(featureID, repoName, prURL); err != nil {
-			return "", err
-		}
-		return prURL, nil
-	})
-
-	result, err := target.PublishFeature(f.ID, serverruntime.PublishFeatureRequest{Repos: []string{testRepoAName}})
-	if err != nil {
-		t.Fatalf("PublishFeature() error = %v", err)
-	}
-
-	updated, err := store.Load(f.ID)
-	if err != nil {
-		t.Fatalf("Load feature: %v", err)
-	}
-	if updated.Status != feature.StatusPublished {
-		t.Fatalf("feature status = %s, want Published", updated.Status)
-	}
-	if updated.FailureRecord() != nil {
-		t.Fatalf("terminal failure record = %+v, want cleared", updated.FailureRecord())
-	}
-	if result.FeatureID != f.ID || result.Result != "published" {
-		t.Fatalf("PublishFeature() result = %+v; want published feature", result)
-	}
-}
-
-func TestServerMutationTargetPublishActionPreservesConflictRoutingMetadata(t *testing.T) {
+func TestServerMutationTargetPublishActionMapsConflictToRebaseConflictCode(t *testing.T) {
 	target, _, _, f := newPublishActionTarget(t)
 	target.orch.SetPublishRepoFn(func(featureID, repoName string) (string, error) {
 		return "", &orchestrator.PublishConflictError{
@@ -2110,16 +2070,25 @@ func TestServerMutationTargetPublishActionPreservesConflictRoutingMetadata(t *te
 	if result.FeatureID != f.ID || result.Result != resultConflict {
 		t.Fatalf("PublishFeature() result = %+v; want conflict feature", result)
 	}
-	if actionConflict.Code != "" {
-		t.Fatalf("ActionConflictError.Code = %q; want empty code rendering as generic conflict", actionConflict.Code)
+	if actionConflict.Code != errcat.PublishRebaseConflict {
+		t.Fatalf("ActionConflictError.Code = %q; want %q", actionConflict.Code, errcat.PublishRebaseConflict)
 	}
-	rendered := errcat.New(errcat.Conflict, actionConflict.Options...)
+	rendered := errcat.New(errcat.PublishRebaseConflict, actionConflict.Options...)
+	if rendered.Class != errcat.ClassNeedsAction {
+		t.Fatalf("rendered class = %q, want needs_action", rendered.Class)
+	}
 	if rendered.Context == nil || len(rendered.Context.Repositories) != 1 {
 		t.Fatalf("rendered context = %+v; want one repository", rendered.Context)
 	}
 	repo := rendered.Context.Repositories[0]
 	if repo.Name != testRepoAName || repo.Branch != "feature/publish-conflict" {
 		t.Fatalf("rendered repository = %+v; want %s on feature/publish-conflict", repo, testRepoAName)
+	}
+	if repo.RebaseTarget != "main" {
+		t.Fatalf("rendered repository rebase target = %q, want main", repo.RebaseTarget)
+	}
+	if !strings.Contains(rendered.Summary, `"main"`) || !strings.Contains(rendered.Summary, testRepoAName) {
+		t.Fatalf("rendered summary = %q, want repo and rebase target named", rendered.Summary)
 	}
 	if !strings.Contains(rendered.Diagnostics, "pull-rebase conflict") {
 		t.Fatalf("rendered diagnostics = %q; want raw publish conflict detail", rendered.Diagnostics)
@@ -3070,4 +3039,76 @@ func TestServerMutationTargetAnswerPermissionAutoApproveScopeEnablesBeforeAnswer
 			t.Fatalf("RespondToControl calls = %+v; want none", sess.controlCalls)
 		}
 	})
+}
+
+// TestServerMutationTargetCompletionPreflightCarriesRepoError pins the
+// completion-preflight adapter: a repository carrying a stored publish
+// failure record renders through the catalog at projection time as the
+// canonical error object on that repository's preflight entry, with the
+// publish action reference and bounded diagnostics.
+func TestServerMutationTargetCompletionPreflightCarriesRepoError(t *testing.T) {
+	target, _, store, f := newPublishActionTarget(t)
+	diagnostics := "creating pull request: POST /repos/org/repo-a/pulls: 502 Bad Gateway " +
+		"with a diagnostics tail well past the safe-display bound so the adapter must bound it " +
+		"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	if err := store.Modify(f.ID, func(ff *feature.Feature) error {
+		ff.RepoStates[testRepoAName].Error = &errcat.FailureRecord{
+			Code: errcat.PublishPullRequestFailed,
+			Context: &errcat.RecordContext{
+				Repositories: []errcat.CodeRepository{{Name: testRepoAName, Branch: "feature/publish-via-rest"}},
+			},
+			Diagnostics: diagnostics,
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("store repo record: %v", err)
+	}
+
+	resp, err := target.CompletionPreflight(f.ID)
+	if err != nil {
+		t.Fatalf("CompletionPreflight: %v", err)
+	}
+	if len(resp.Repos) != 1 {
+		t.Fatalf("preflight repos = %+v, want one repository", resp.Repos)
+	}
+	repo := resp.Repos[0]
+	if repo.Repo != testRepoAName {
+		t.Fatalf("preflight repo = %q, want %q", repo.Repo, testRepoAName)
+	}
+	if repo.Error == nil {
+		t.Fatalf("preflight repo error = nil, want the canonical object")
+	}
+	if repo.Error.Code != string(errcat.PublishPullRequestFailed) {
+		t.Fatalf("preflight repo error code = %q, want %q", repo.Error.Code, errcat.PublishPullRequestFailed)
+	}
+	if repo.Error.Class != serverruntime.ErrorClassNeedsAction {
+		t.Fatalf("preflight repo error class = %q, want needs_action", repo.Error.Class)
+	}
+	if repo.Error.Title != "Pull-request creation failed" {
+		t.Fatalf("preflight repo error title = %q, want the catalog title", repo.Error.Title)
+	}
+	if repo.Error.Summary != fmt.Sprintf("Creating the pull request for repository %q failed.", testRepoAName) {
+		t.Fatalf("preflight repo error summary = %q, want the catalog summary naming the repository", repo.Error.Summary)
+	}
+	if repo.Error.Context == nil || len(repo.Error.Context.Repositories) != 1 ||
+		repo.Error.Context.Repositories[0].Name != testRepoAName ||
+		repo.Error.Context.Repositories[0].Branch != "feature/publish-via-rest" {
+		t.Fatalf("preflight repo error repositories = %+v, want the repository block", repo.Error.Context)
+	}
+	if repo.Error.Remediation == nil || len(repo.Error.Remediation.Actions) != 1 ||
+		repo.Error.Remediation.Actions[0] != serverruntime.FeatureActionPublish {
+		t.Fatalf("preflight repo error remediation = %+v, want [publish]", repo.Error.Remediation)
+	}
+	if len(repo.Error.Diagnostics) == 0 || len(repo.Error.Diagnostics) >= len(diagnostics) {
+		t.Fatalf("preflight repo error diagnostics = %q (len %d), want the bounded raw text", repo.Error.Diagnostics, len(repo.Error.Diagnostics))
+	}
+
+	// The wire carries no repository last_error key anymore.
+	raw, err := json.Marshal(resp)
+	if err != nil {
+		t.Fatalf("Marshal response: %v", err)
+	}
+	if strings.Contains(string(raw), "last_error") {
+		t.Fatalf("preflight response carries a last_error key: %s", raw)
+	}
 }

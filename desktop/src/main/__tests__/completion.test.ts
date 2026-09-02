@@ -123,4 +123,70 @@ describe('CompletionService.preflightCompletion', () => {
       pendingDirtyFileTotal: 5,
     });
   });
+
+  it('crosses a repository publish-failure record as the canonical error with redacted diagnostics', async () => {
+    const service = new CompletionService({
+      transport: {
+        apiRequest: () =>
+          Promise.resolve({
+            status: 200,
+            body: {
+              api_version: 'v1',
+              feature_id: 'abcd1234ef567890',
+              source_revision: 'rev-1',
+              repos: [
+                {
+                  repo: 'repo-a',
+                  publishable: true,
+                  touched: true,
+                  status: 'unpublished_changes',
+                  error: {
+                    code: 'publish_rebase_conflict',
+                    class: 'needs_action',
+                    title: 'Pull-rebase conflict',
+                    summary:
+                      'The pull rebase for repository "repo-a" (branch "feature/f") onto "main" conflicted.',
+                    remediation: {
+                      hint: 'Resolve the conflict in the worktree or run a rebase pass, then retry.',
+                      actions: ['publish'],
+                    },
+                    context: {
+                      repositories: [
+                        {
+                          name: 'repo-a',
+                          branch: 'feature/f',
+                          rebase_target: 'main',
+                        },
+                      ],
+                    },
+                    diagnostics: 'git rebase: CONFLICT at /Users/dev/worktrees/repo-a',
+                  },
+                },
+              ],
+            },
+          }),
+      },
+    });
+
+    const result = await service.preflightCompletion({ featureId: 'abcd1234ef567890' });
+
+    const repo = result.repos[0];
+    expect(repo).toBeDefined();
+    if (repo == null) return;
+    expect(repo.error).toMatchObject({
+      code: 'publish_rebase_conflict',
+      class: 'needs_action',
+      title: 'Pull-rebase conflict',
+    });
+    expect(repo.error?.context?.repositories?.[0]).toEqual({
+      name: 'repo-a',
+      branch: 'feature/f',
+      rebase_target: 'main',
+    });
+    // Raw diagnostics cross IPC only through the same redaction as every
+    // other raw text the renderer receives.
+    expect(repo.error?.diagnostics).not.toContain('/Users/dev/worktrees/repo-a');
+    expect(repo.error?.diagnostics).toContain('[path]');
+    expect(Reflect.get(repo, 'lastError')).toBeUndefined();
+  });
 });

@@ -1034,7 +1034,7 @@ func (o *Orchestrator) advanceAfterFinalReview(featureID string) error {
 					workDir = repo.Path
 				}
 				if err := o.scrubFinalReviewRootArtifacts(context.Background(), workDir); err != nil {
-					_ = o.deps.Lifecycle.SetRepoPublishError(featureID, name, err.Error())
+					o.storePublishFailure(f, name, err)
 					continue
 				}
 			}
@@ -1070,24 +1070,11 @@ func (o *Orchestrator) advanceAfterFinalReview(featureID string) error {
 
 	// Roadmap final multi-repo auto-publish: mark code ready, then route
 	// through the full Publish pipeline so PublishStarted/PublishCompleted
-	// events + hooks fire and per-repo errors / conflicts propagate to
-	// callers rather than being silently swallowed.
+	// events + hooks fire. Every publish failure is owned by the failing
+	// repository's stored record — never terminal, no run-level failure —
+	// so the dispatch error is wrapped for the completion surface to skip.
 	if err := o.deps.Lifecycle.MarkCodeReady(featureID); err != nil {
 		return fmt.Errorf("mark code ready: %w", err)
-	}
-	if err := o.scrubFinalReviewRootArtifactsForFeature(context.Background(), f); err != nil {
-		return err
-	}
-	publishFn := o.publishFn
-	if publishFn == nil {
-		publishFn = o.Publish
-	}
-	return publishFn(featureID)
-}
-
-func (o *Orchestrator) scrubFinalReviewRootArtifactsForFeature(ctx context.Context, f *feature.Feature) error {
-	if f == nil {
-		return nil
 	}
 	for _, name := range f.TouchedRepos() {
 		repo, ok := findRepo(f, name)
@@ -1098,9 +1085,17 @@ func (o *Orchestrator) scrubFinalReviewRootArtifactsForFeature(ctx context.Conte
 		if workDir == "" {
 			workDir = repo.Path
 		}
-		if err := o.scrubFinalReviewRootArtifacts(ctx, workDir); err != nil {
-			return fmt.Errorf("scrub final review artifacts for repo %s: %w", name, err)
+		if err := o.scrubFinalReviewRootArtifacts(context.Background(), workDir); err != nil {
+			o.storePublishFailure(f, name, err)
+			return &PublishDispatchError{Err: err}
 		}
+	}
+	publishFn := o.publishFn
+	if publishFn == nil {
+		publishFn = o.Publish
+	}
+	if err := publishFn(featureID); err != nil {
+		return &PublishDispatchError{Err: err}
 	}
 	return nil
 }
@@ -1380,14 +1375,16 @@ const (
 
 // CompletionRepoResult is the per-repository slice of a completion preflight.
 type CompletionRepoResult struct {
-	Repo           string
-	Publishable    bool
-	Touched        bool
-	Status         string
-	PRURL          string
-	Blocker        string
-	Freshness      string
-	LastError      string
+	Repo        string
+	Publishable bool
+	Touched     bool
+	Status      string
+	PRURL       string
+	Blocker     string
+	Freshness   string
+	// Error is the repository's stored publish-failure record, when any.
+	// Adapters render it through the catalog at projection time.
+	Error          *errcat.FailureRecord
 	BaseBranch     string
 	Branch         string
 	PendingCommits int
@@ -1442,7 +1439,7 @@ func (o *Orchestrator) CompletionPreflight(featureID string) (CompletionPrefligh
 		if state != nil {
 			repoResult.Touched = state.Touched
 			repoResult.PRURL = state.PRURL
-			repoResult.LastError = safeCompletionTruncate(state.LastError, 200)
+			repoResult.Error = state.Error
 		}
 		if prURLs[repo.Name] != "" {
 			repoResult.PRURL = prURLs[repo.Name]

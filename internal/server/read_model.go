@@ -606,6 +606,14 @@ func wireIntegrationAttention(record *errcat.FailureRecord) *Error {
 	return &wire
 }
 
+// WireRepoError renders a stored repository publish-failure record through
+// the catalog onto the canonical wire error, bounding raw diagnostics with
+// the safe-display helper. A nil record yields nil; adapters that project a
+// repository's stored record share this single rendering.
+func WireRepoError(record *errcat.FailureRecord) *Error {
+	return wireIntegrationAttention(record)
+}
+
 // relationshipChildDTO builds the detail projection: the summary plus the
 // preserved diff body.
 func relationshipChildDTO(child *feature.Feature) *RelationshipChild {
@@ -716,7 +724,11 @@ func actionCatalogDTOsWithChildGuard(f *feature.Feature, hasActiveChild bool) []
 		status == feature.StatusNeedUserInput ||
 		f.PendingNeedUserInputPath != ""
 	canRestart := !running
-	canPublish := f.IsPublishable() && status == feature.StatusCodeReady && f.Checkpoints.AutoPublish()
+	// The publish action is enabled whenever the completion preflight would
+	// allow a publish: a publishable feature at CodeReady or Published,
+	// regardless of the manual-publish checkpoint — a repository publish
+	// failure never ends the flow, so retry stays available.
+	canPublish := f.IsPublishable() && (status == feature.StatusCodeReady || status == feature.StatusPublished)
 	canMerge := !f.IsPublishable() && (status == feature.StatusCodeReady || status == feature.StatusPublished)
 	canRewind := !running && (len(feature.RewindChoicesForFeature(f)) > 0 || hasRewindUpgradeTarget(f))
 	canPostPublishPass := publishedOrManualReady
@@ -942,12 +954,9 @@ func publishDisabledReason(f *feature.Feature) ActionDisabledReason {
 	if !f.IsPublishable() {
 		return ActionDisabledReason{Code: "local_only", Message: "feature has at least one local-only repo"}
 	}
-	if f.Status == feature.StatusPublished || f.Status == feature.StatusDone {
-		return ActionDisabledReason{Code: "already_published", Message: "feature already has a published terminal state"}
-	}
-	if f.Checkpoints.ManualPublish && f.Status == feature.StatusCodeReady {
-		return ActionDisabledReason{Code: "manual_publish_required", Message: "feature is waiting for manual publish confirmation"}
-	}
+	// CodeReady and Published features keep the publish action enabled (a
+	// repository publish failure is retried through it); every other status
+	// carries the status-based reason, including Done.
 	return disabledStatusReason(f.Status)
 }
 
@@ -1165,7 +1174,7 @@ func (h *apiHandler) repoStatusDTOs(f *feature.Feature) []RepoStatus {
 		if state != nil {
 			dto.Touched = state.Touched
 			dto.PRURL = state.PRURL
-			dto.LastError = SafeDisplayText(state.LastError, 200)
+			dto.Error = WireRepoError(state.Error)
 		}
 		if freshness != nil {
 			dto.Freshness = string(freshness[repo.Name])

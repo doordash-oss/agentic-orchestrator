@@ -440,7 +440,7 @@ func (o *Orchestrator) reconcileOneIntegration(f *feature.Feature) error {
 		if passThroughCandidate(entry) {
 			if current != entry.ParentAnchorSHA {
 				findings = append(findings, integrationFinding{
-					ctx: repoContextFromEntry(entry),
+					ctx:  repoContextFromEntry(entry),
 					code: errcat.IntegrationRefRace,
 					diagnostics: fmt.Sprintf("ref %s externally moved: pass-through anchor %s observed %s",
 						ref, entry.ParentAnchorSHA, current),
@@ -481,7 +481,7 @@ func (o *Orchestrator) reconcileOneIntegration(f *feature.Feature) error {
 			}
 		default:
 			findings = append(findings, integrationFinding{
-				ctx: repoContextFromEntry(entry),
+				ctx:  repoContextFromEntry(entry),
 				code: errcat.IntegrationRefRace,
 				diagnostics: fmt.Sprintf("ref %s externally moved: old %s candidate %s observed %s",
 					ref, entry.ParentAnchorSHA, entry.CandidateSHA, current),

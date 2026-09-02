@@ -531,11 +531,21 @@ func (o *Orchestrator) settleChildClosureTail(childID, parentID string) error {
 	}
 	if parent.IsPublishable() && parent.Checkpoints.AutoPublish() {
 		if err := o.publishWithOptionsLocked(parentID, PublishOptions{}); err != nil {
-			o.emitEvent(ports.Event{
+			event := ports.Event{
 				Type:      ports.RepoStatusChanged,
 				FeatureID: parentID,
 				Message:   "parent auto-publish after child integration failed: " + err.Error(),
-			})
+				Error:     err,
+			}
+			// The failing repository's stored record owns the condition; the
+			// event carries its rendered canonical error so the SSE
+			// projection matches the feature-failure shape.
+			if freshParent, getErr := o.deps.Lifecycle.Get(parentID); getErr == nil {
+				if rendered, ok := firstFailedRepoError(freshParent); ok {
+					event.CanonicalError = &rendered
+				}
+			}
+			o.emitEvent(event)
 		}
 	}
 	// Parent-scoped event after the tail's last mutation: clients that reload

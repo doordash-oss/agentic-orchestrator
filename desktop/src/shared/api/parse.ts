@@ -367,6 +367,8 @@ export const CanonicalErrorSchema = z.strictObject({
           z.strictObject({
             name: z.string().min(1),
             branch: z.string().optional(),
+            rebase_target: z.string().optional(),
+            remote_only_commits: z.number().int().nonnegative().optional(),
             conflict_files: z.array(z.string()).max(500).optional(),
             dirty_files: z.array(z.string()).max(500).optional(),
             parent_anchor_sha: z.string().optional(),
@@ -539,7 +541,11 @@ export const ServerRepoStatusSchema = z.object({
   touched: z.boolean().optional(),
   pr_url: z.string().optional(),
   freshness: z.string().optional(),
-  last_error: z.string().optional(),
+  // Canonical error rendering the repository's stored publish-failure
+  // record; absent when the repository has not failed.
+  error: CanonicalErrorSchema.optional(),
+  // The removed last-error string must never reappear on the wire.
+  last_error: z.never().optional(),
   rebase_status: z.string().optional(),
   rebase_target: z.string().optional(),
   conflict_files: z.array(z.string()).optional(),
@@ -1150,7 +1156,11 @@ export const CompletionPreflightRepoSchema = z.object({
   pr_url: z.string().optional(),
   blocker: z.string().optional(),
   freshness: z.string().optional(),
-  last_error: z.string().optional(),
+  // Canonical error rendering the repository's stored publish-failure
+  // record; absent when the repository has not failed.
+  error: CanonicalErrorSchema.optional(),
+  // The removed last-error string must never reappear on the wire.
+  last_error: z.never().optional(),
   base_branch: z.string().optional(),
   branch: z.string().optional(),
   pending_commits: z.number().optional(),

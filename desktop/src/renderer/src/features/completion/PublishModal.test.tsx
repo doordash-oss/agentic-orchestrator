@@ -18,7 +18,12 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import userEvent from '@testing-library/user-event';
 import { useState } from 'react';
 import { describe, expect, it, vi } from 'vitest';
-import type { CompletionPreflightResult, FeatureActionResult } from '../../../../shared/ipc';
+import type {
+  CompletionPreflightResult,
+  FeatureActionResult,
+  FeatureActionView,
+} from '../../../../shared/ipc';
+import type { CanonicalError } from '../../../../shared/api/parse';
 import { PublishModal } from './PublishModal';
 
 const featureId = 'abcd1234ef567890';
@@ -29,6 +34,8 @@ const result: FeatureActionResult = {
   sessionIds: [],
 };
 
+const publishAction: FeatureActionView = { id: 'publish', enabled: true, disabledReasons: [] };
+
 const newPrPreflight: CompletionPreflightResult = {
   featureId,
   sourceRevision: 'rev-1',
@@ -36,10 +43,22 @@ const newPrPreflight: CompletionPreflightResult = {
   repos: [{ repo: 'web', publishable: true, touched: true, status: 'eligible' }],
 };
 
+/** The canonical object the server renders for a stored publish-failure record. */
+const prFailedError: CanonicalError = {
+  code: 'publish_pull_request_failed',
+  class: 'needs_action',
+  title: 'Pull-request creation failed',
+  summary: 'Creating the pull request for repository "web" failed.',
+  remediation: { hint: 'Check GitHub access, then retry.', actions: ['publish'] },
+  context: { repositories: [{ name: 'web', branch: 'agentico/search-revamp' }] },
+  diagnostics: 'creating pull request: POST /repos/e2e/web/pulls: 502 Bad Gateway',
+};
+
 function props(over: Partial<React.ComponentProps<typeof PublishModal>> = {}) {
   return {
     featureId,
     preflight: newPrPreflight,
+    actions: [publishAction] as readonly FeatureActionView[],
     dispatchAction: vi.fn().mockResolvedValue(result),
     generatePublishDescription: vi
       .fn()
@@ -53,15 +72,22 @@ function props(over: Partial<React.ComponentProps<typeof PublishModal>> = {}) {
   };
 }
 
+function preflightWith(over: Partial<CompletionPreflightResult>): CompletionPreflightResult {
+  return { ...newPrPreflight, ...over };
+}
+
+function failedRepoRow(): HTMLElement {
+  return screen
+    .getByRole('checkbox', { name: 'web' })
+    .closest('.completion-workspace__publish-repo') as HTMLElement;
+}
+
 describe('PublishModal', () => {
   it('keeps an existing pull-request update focused on work users can control', () => {
     render(
       <PublishModal
         {...props({
-          preflight: {
-            featureId,
-            sourceRevision: 'rev-1',
-            canMarkDone: true,
+          preflight: preflightWith({
             repos: [
               {
                 repo: 'api',
@@ -72,7 +98,7 @@ describe('PublishModal', () => {
                 pushMode: 'rewrite',
               },
             ],
-          },
+          }),
         })}
       />,
     );
@@ -87,7 +113,7 @@ describe('PublishModal', () => {
   });
 
   it('uses the sheet family and a cancel-first footer', () => {
-    render(<PublishModal {...props({ preflight: { ...newPrPreflight, repos: [] } })} />);
+    render(<PublishModal {...props({ preflight: preflightWith({ repos: [] }) })} />);
 
     const dialog = screen.getByRole('dialog', { name: 'Publish reviewed changes' });
     expect(dialog).toHaveClass('sheet', 'completion-publish-sheet');
@@ -106,10 +132,7 @@ describe('PublishModal', () => {
       <PublishModal
         {...props({
           dispatchAction,
-          preflight: {
-            featureId,
-            sourceRevision: 'rev-1',
-            canMarkDone: true,
+          preflight: preflightWith({
             repos: [
               {
                 repo: 'api',
@@ -119,7 +142,7 @@ describe('PublishModal', () => {
                 pendingCommits: 1,
               },
             ],
-          },
+          }),
         })}
       />,
     );
@@ -137,10 +160,7 @@ describe('PublishModal', () => {
     render(
       <PublishModal
         {...props({
-          preflight: {
-            featureId,
-            sourceRevision: 'rev-1',
-            canMarkDone: true,
+          preflight: preflightWith({
             repos: [
               { repo: 'web', publishable: true, touched: true, status: 'eligible' },
               {
@@ -151,7 +171,7 @@ describe('PublishModal', () => {
                 pendingCommits: 1,
               },
             ],
-          },
+          }),
         })}
       />,
     );
@@ -168,10 +188,7 @@ describe('PublishModal', () => {
     render(
       <PublishModal
         {...props({
-          preflight: {
-            featureId,
-            sourceRevision: 'rev-1',
-            canMarkDone: true,
+          preflight: preflightWith({
             repos: [
               {
                 repo: 'api',
@@ -183,7 +200,7 @@ describe('PublishModal', () => {
                 pendingDirtyFileTotal: 1,
               },
             ],
-          },
+          }),
         })}
       />,
     );
@@ -194,23 +211,34 @@ describe('PublishModal', () => {
     expect(publish).toBeEnabled();
   });
 
-  it('renders concise branch-divergence recovery without a raw push command', async () => {
+  it('renders the diverged rejection through the catalog text without a raw push command', async () => {
     const user = userEvent.setup();
-    const dispatchAction = vi
-      .fn()
-      .mockRejectedValue(
-        new Error(
-          'publish_remote_diverged: pull-request branch contains remote work that is not in this workspace Review and reconcile the pull-request branch on GitHub, then refresh and retry.',
-        ),
-      );
+    const dispatchAction = vi.fn().mockRejectedValue(
+      Object.assign(
+        new Error('publish_remote_diverged: pull-request branch contains remote work'),
+        {
+          canonical: {
+            code: 'publish_remote_diverged',
+            class: 'needs_action',
+            title: 'Pull-request branch diverged',
+            summary:
+              'The pull-request branch for "api" contains 2 remote commits that are not in this workspace.',
+            remediation: {
+              hint: 'Review and reconcile the branch on GitHub, then refresh and retry.',
+              actions: ['publish'],
+            },
+            context: {
+              repositories: [{ name: 'api', branch: 'feature/x', remote_only_commits: 2 }],
+            },
+          } satisfies CanonicalError,
+        },
+      ),
+    );
     render(
       <PublishModal
         {...props({
           dispatchAction,
-          preflight: {
-            featureId,
-            sourceRevision: 'rev-1',
-            canMarkDone: true,
+          preflight: preflightWith({
             repos: [
               {
                 repo: 'api',
@@ -220,22 +248,22 @@ describe('PublishModal', () => {
                 pendingCommits: 1,
               },
             ],
-          },
+          }),
         })}
       />,
     );
 
     await user.click(screen.getByRole('button', { name: 'Publish updates' }));
-    expect(await screen.findByRole('alert')).toHaveTextContent(
-      "The pull-request branch contains changes that aren't in this workspace.",
-    );
-    expect(screen.getByRole('alert')).not.toHaveTextContent('git push');
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveClass('error-surface--compact');
+    expect(alert).toHaveTextContent('The pull-request branch for "api" contains 2 remote commits');
+    expect(alert).not.toHaveTextContent('git push');
   });
 
   it('closes through Escape, the scrim, and Cancel while idle', async () => {
     const user = userEvent.setup();
     const onClose = vi.fn();
-    render(<PublishModal {...props({ onClose, preflight: { ...newPrPreflight, repos: [] } })} />);
+    render(<PublishModal {...props({ onClose, preflight: preflightWith({ repos: [] }) })} />);
 
     await user.click(screen.getByRole('button', { name: 'Cancel' }));
     fireEvent.mouseDown(screen.getByRole('dialog').parentElement as HTMLElement);
@@ -252,10 +280,7 @@ describe('PublishModal', () => {
         {...props({
           onClose,
           dispatchAction,
-          preflight: {
-            featureId,
-            sourceRevision: 'rev-1',
-            canMarkDone: true,
+          preflight: preflightWith({
             repos: [
               {
                 repo: 'api',
@@ -265,7 +290,7 @@ describe('PublishModal', () => {
                 pendingCommits: 1,
               },
             ],
-          },
+          }),
         })}
       />,
     );
@@ -317,7 +342,7 @@ describe('PublishModal', () => {
     expect(publish).toBeEnabled();
   });
 
-  it('moves focus to a narrative-generation failure notice', async () => {
+  it('moves focus to a narrative-generation failure surface', async () => {
     const user = userEvent.setup();
     render(
       <PublishModal
@@ -328,7 +353,10 @@ describe('PublishModal', () => {
     );
 
     await user.click(screen.getByRole('button', { name: 'Generate narrative' }));
-    expect(await screen.findByRole('alert')).toHaveFocus();
+    const surface = await screen.findByRole('alert');
+    expect(surface).toHaveClass('error-surface--compact');
+    expect(screen.getByText('Narrative generation was rejected')).toBeVisible();
+    await waitFor(() => expect(surface).toHaveFocus());
   });
 
   it('keeps the publish mutation locked after a swallowed refresh following a timeout', async () => {
@@ -347,14 +375,11 @@ describe('PublishModal', () => {
           // Completion refresh swallows an IPC fetch failure and resolves, just
           // as the production preflight hook does.
           onDispatched: vi.fn().mockResolvedValue(undefined),
-          preflight: {
-            featureId,
-            sourceRevision: 'rev-1',
-            canMarkDone: true,
+          preflight: preflightWith({
             repos: [
               { repo: 'api', publishable: true, touched: true, status: 'unpublished_changes' },
             ],
-          },
+          }),
         })}
       />,
     );
@@ -380,17 +405,14 @@ describe('PublishModal', () => {
     expect(screen.getByText('Add a title to create the pull request.')).toBeVisible();
   });
 
-  it('moves focus to an asynchronous publish failure notice', async () => {
+  it('moves focus to a rejected publish surface', async () => {
     const user = userEvent.setup();
     const dispatchAction = vi.fn().mockRejectedValue(new Error('publish failed safely'));
     render(
       <PublishModal
         {...props({
           dispatchAction,
-          preflight: {
-            featureId,
-            sourceRevision: 'rev-1',
-            canMarkDone: true,
+          preflight: preflightWith({
             repos: [
               {
                 repo: 'api',
@@ -399,63 +421,266 @@ describe('PublishModal', () => {
                 status: 'unpublished_changes',
               },
             ],
-          },
+          }),
         })}
       />,
     );
 
     await user.click(screen.getByRole('button', { name: 'Publish updates' }));
-    expect(await screen.findByRole('alert')).toHaveFocus();
+    const surface = await screen.findByRole('alert');
+    expect(surface).toHaveClass('error-surface--compact');
+    await waitFor(() => expect(surface).toHaveFocus());
   });
 
-  it('keeps sanitized unexpected details collapsed until requested', async () => {
+  it('renders one full ErrorSurface card in the failed repository row with a repo-scoped retry', async () => {
     const user = userEvent.setup();
-    const dispatchAction = vi.fn().mockRejectedValue(new Error('safe diagnostic detail'));
+    const dispatchAction = vi.fn().mockResolvedValue(result);
     render(
       <PublishModal
         {...props({
           dispatchAction,
-          preflight: {
-            featureId,
-            sourceRevision: 'rev-1',
-            canMarkDone: true,
+          preflight: preflightWith({
             repos: [
-              { repo: 'api', publishable: true, touched: true, status: 'unpublished_changes' },
+              {
+                repo: 'web',
+                publishable: true,
+                touched: true,
+                status: 'eligible',
+                error: prFailedError,
+              },
             ],
-          },
+          }),
+        })}
+      />,
+    );
+
+    const row = failedRepoRow();
+    // Exactly one alert-role ErrorSurface, and it lives in the repository row.
+    expect(screen.getAllByRole('alert')).toHaveLength(1);
+    const card = within(row).getByRole('alert');
+    expect(card).toHaveClass('error-surface', 'error-surface--full', 'error-surface--needs-action');
+    expect(within(card).getByText('Needs your action')).toBeVisible();
+    expect(within(card).getByText('publish_pull_request_failed')).toBeVisible();
+    expect(within(card).getByText('Pull-request creation failed')).toBeVisible();
+    expect(
+      within(card).getByText('Creating the pull request for repository "web" failed.'),
+    ).toBeVisible();
+    expect(within(card).getByText('Check GitHub access, then retry.')).toBeVisible();
+
+    // The repository rides under the Details disclosure.
+    const details = within(card).getByText('Details').closest('details');
+    expect(details).not.toBeNull();
+    expect(details).not.toHaveAttribute('open');
+    await user.click(within(card).getByText('Details'));
+    expect(within(details as HTMLElement).getByText('web')).toBeVisible();
+    expect(within(details as HTMLElement).getByText('agentico/search-revamp')).toBeVisible();
+
+    // Raw diagnostics stay behind the second disclosure.
+    const diagnostics = within(card).getByText('Diagnostics').closest('details');
+    expect(diagnostics).not.toBeNull();
+    expect(diagnostics).not.toHaveAttribute('open');
+    await user.click(within(card).getByText('Diagnostics'));
+    expect(within(diagnostics as HTMLElement).getByText(/502 Bad Gateway/)).toBeVisible();
+
+    // With the required title in place, the card's button retries only this
+    // repository with the form's current title and body.
+    await user.type(screen.getByLabelText('PR title'), 'Ship reviewed work');
+    await user.type(screen.getByLabelText('PR body'), 'A compact description.');
+    const retry = within(card).getByRole('button', { name: 'Retry publish' });
+    expect(retry).toBeEnabled();
+    await user.click(retry);
+    expect(dispatchAction).toHaveBeenCalledWith({
+      featureId,
+      action: 'publish',
+      body: {
+        source_revision: 'rev-1',
+        repos: ['web'],
+        title: 'Ship reviewed work',
+        body: 'A compact description.',
+      },
+    });
+  });
+
+  it('replaces the row card retry with its disabled reason while the required title is empty', () => {
+    render(
+      <PublishModal
+        {...props({
+          preflight: preflightWith({
+            repos: [
+              {
+                repo: 'web',
+                publishable: true,
+                touched: true,
+                status: 'eligible',
+                error: prFailedError,
+              },
+            ],
+          }),
+        })}
+      />,
+    );
+
+    const row = failedRepoRow();
+    expect(within(row).queryByRole('button', { name: 'Retry publish' })).not.toBeInTheDocument();
+    expect(within(row).getByText('Add a PR title to retry this publish.')).toBeVisible();
+  });
+
+  it('renders no card for a repository without a stored record and no legacy outcome detail', () => {
+    render(<PublishModal {...props()} />);
+
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(document.querySelector('.completion-workspace__repo-outcome-detail')).toBeNull();
+    expect(document.querySelector('.completion-publish-sheet__failure')).toBeNull();
+    expect(screen.queryByText("Agentico couldn't prepare this publish.")).not.toBeInTheDocument();
+  });
+
+  it('renders no rejection surface when the refreshed preflight shows a repository record', async () => {
+    const user = userEvent.setup();
+    const dispatchAction = vi
+      .fn()
+      .mockRejectedValue(new Error('publish_partial_failure: web pull request failed'));
+    const initial = preflightWith({
+      repos: [{ repo: 'web', publishable: true, touched: true, status: 'eligible' }],
+    });
+    const refreshed = preflightWith({
+      repos: [
+        {
+          repo: 'web',
+          publishable: true,
+          touched: true,
+          status: 'eligible',
+          error: prFailedError,
+        },
+      ],
+    });
+    function PartialPublishHarness() {
+      const [preflight, setPreflight] = useState(initial);
+      return (
+        <PublishModal
+          {...props({
+            dispatchAction,
+            preflight,
+            onDispatched: () => setPreflight(refreshed),
+          })}
+        />
+      );
+    }
+    render(<PartialPublishHarness />);
+
+    // The repository needs a new pull request, so the publish requires a
+    // title before it can be dispatched and rejected.
+    await user.type(screen.getByLabelText('PR title'), 'Ship reviewed work');
+    await user.click(screen.getByRole('button', { name: 'Publish' }));
+    // The refreshed row card owns the condition: no rejection surface, and
+    // the row card is the only alert on the page.
+    const card = await screen.findByRole('alert');
+    expect(card).toHaveClass('error-surface--full');
+    expect(screen.getAllByRole('alert')).toHaveLength(1);
+    expect(screen.queryByText('Publish was rejected')).not.toBeInTheDocument();
+    expect(within(failedRepoRow()).getByRole('button', { name: 'Retry publish' })).toBeEnabled();
+  });
+
+  it('renders a stale-preflight rejection through one compact ErrorSurface and focuses it', async () => {
+    const user = userEvent.setup();
+    const dispatchAction = vi.fn().mockRejectedValue(
+      Object.assign(new Error('conflict: stale completion preflight'), {
+        canonical: {
+          code: 'conflict',
+          class: 'blocking',
+          title: 'Conflict',
+          summary: 'The request conflicts with the current state of the feature.',
+          remediation: { hint: 'Refresh the feature and retry.' },
+        } satisfies CanonicalError,
+      }),
+    );
+    render(
+      <PublishModal
+        {...props({
+          dispatchAction,
+          preflight: preflightWith({
+            repos: [
+              {
+                repo: 'api',
+                publishable: true,
+                touched: true,
+                status: 'unpublished_changes',
+                pendingCommits: 1,
+              },
+            ],
+          }),
         })}
       />,
     );
 
     await user.click(screen.getByRole('button', { name: 'Publish updates' }));
-    const details = screen.getByText('Show details').closest('details');
-    expect(details).not.toBeNull();
-    expect(details).not.toHaveAttribute('open');
-    expect(screen.getByRole('alert')).toHaveTextContent(
-      'Review the details, then refresh and retry.',
+    const surface = await screen.findByRole('alert');
+    expect(surface).toHaveClass('error-surface--compact');
+    expect(within(surface).getByText('conflict')).toBeVisible();
+    expect(within(surface).getByText('Publish was rejected')).toBeVisible();
+    await waitFor(() => expect(surface).toHaveFocus());
+  });
+
+  it('keeps raw diagnostics collapsed until requested', async () => {
+    const user = userEvent.setup();
+    const dispatchAction = vi.fn().mockRejectedValue(
+      Object.assign(new Error('safe diagnostic detail'), {
+        canonical: {
+          code: 'publish_push_failed',
+          class: 'needs_action',
+          title: 'Repository publish failed',
+          summary: 'Publishing repository "api" failed.',
+          diagnostics: 'safe diagnostic detail',
+        } satisfies CanonicalError,
+      }),
     );
-    await user.click(screen.getByText('Show details'));
-    expect(screen.getByText('safe diagnostic detail')).toBeVisible();
+    render(
+      <PublishModal
+        {...props({
+          dispatchAction,
+          preflight: preflightWith({
+            repos: [
+              {
+                repo: 'api',
+                publishable: true,
+                touched: true,
+                status: 'unpublished_changes',
+              },
+            ],
+          }),
+        })}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Publish updates' }));
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('Publishing repository "api" failed.');
+    expect(screen.queryByText('Show details')).not.toBeInTheDocument();
+    const more = within(alert).getByText('More detail').closest('details');
+    expect(more).not.toBeNull();
+    expect(more).not.toHaveAttribute('open');
+    await user.click(within(alert).getByText('More detail'));
+    expect(within(more as HTMLElement).getByText('safe diagnostic detail')).toBeVisible();
   });
 
   it('renders structured remediation for an unknown publish failure', async () => {
     const user = userEvent.setup();
     const failure = Object.assign(new Error('publish_partial_failure: one repository failed'), {
-      code: 'publish_partial_failure',
       remediation: 'Resolve the repository failure, then retry the remaining work.',
     });
     render(
       <PublishModal
         {...props({
           dispatchAction: vi.fn().mockRejectedValue(failure),
-          preflight: {
-            featureId,
-            sourceRevision: 'rev-1',
-            canMarkDone: true,
+          preflight: preflightWith({
             repos: [
-              { repo: 'api', publishable: true, touched: true, status: 'unpublished_changes' },
+              {
+                repo: 'api',
+                publishable: true,
+                touched: true,
+                status: 'unpublished_changes',
+              },
             ],
-          },
+          }),
         })}
       />,
     );
@@ -465,7 +690,8 @@ describe('PublishModal', () => {
     expect(alert).toHaveTextContent(
       'Resolve the repository failure, then retry the remaining work.',
     );
-    expect(screen.getByText('Show details').closest('details')).not.toHaveAttribute('open');
+    expect(screen.queryByText('More detail')).not.toBeInTheDocument();
+    expect(screen.queryByText('Show details')).not.toBeInTheDocument();
   });
 
   it('refreshes partial progress before retrying only the repository that still failed', async () => {
@@ -505,9 +731,7 @@ describe('PublishModal', () => {
     render(<PartialPublishHarness />);
 
     await user.click(screen.getByRole('button', { name: 'Publish updates' }));
-    expect(await screen.findByRole('alert')).toHaveTextContent(
-      "Agentico couldn't prepare this publish.",
-    );
+    expect(await screen.findByRole('alert')).toHaveTextContent('web push failed');
     await user.click(screen.getByRole('button', { name: 'Publish updates' }));
 
     expect(dispatchAction).toHaveBeenLastCalledWith({
@@ -531,14 +755,16 @@ describe('PublishModal', () => {
         {...props({
           dispatchAction: vi.fn().mockRejectedValue(new Error('publish failed safely')),
           onDispatched,
-          preflight: {
-            featureId,
-            sourceRevision: 'rev-1',
-            canMarkDone: true,
+          preflight: preflightWith({
             repos: [
-              { repo: 'api', publishable: true, touched: true, status: 'unpublished_changes' },
+              {
+                repo: 'api',
+                publishable: true,
+                touched: true,
+                status: 'unpublished_changes',
+              },
             ],
-          },
+          }),
         })}
       />,
     );
@@ -609,14 +835,16 @@ describe('PublishModal', () => {
           dispatchAction,
           onDispatched,
           onClose,
-          preflight: {
-            featureId,
-            sourceRevision: 'rev-1',
-            canMarkDone: true,
+          preflight: preflightWith({
             repos: [
-              { repo: 'api', publishable: true, touched: true, status: 'unpublished_changes' },
+              {
+                repo: 'api',
+                publishable: true,
+                touched: true,
+                status: 'unpublished_changes',
+              },
             ],
-          },
+          }),
         })}
       />,
     );
@@ -646,14 +874,16 @@ describe('PublishModal', () => {
         {...props({
           dispatchAction,
           onDispatched: vi.fn().mockRejectedValue(new Error('refresh unavailable')),
-          preflight: {
-            featureId,
-            sourceRevision: 'rev-1',
-            canMarkDone: true,
+          preflight: preflightWith({
             repos: [
-              { repo: 'api', publishable: true, touched: true, status: 'unpublished_changes' },
+              {
+                repo: 'api',
+                publishable: true,
+                touched: true,
+                status: 'unpublished_changes',
+              },
             ],
-          },
+          }),
         })}
       />,
     );
@@ -670,10 +900,7 @@ describe('PublishModal', () => {
     render(
       <PublishModal
         {...props({
-          preflight: {
-            featureId,
-            sourceRevision: 'rev-1',
-            canMarkDone: true,
+          preflight: preflightWith({
             repos: [
               {
                 repo: 'api',
@@ -684,7 +911,7 @@ describe('PublishModal', () => {
                 prUrl: 'https://example.test/pr/1',
               },
             ],
-          },
+          }),
         })}
       />,
     );

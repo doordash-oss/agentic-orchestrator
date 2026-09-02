@@ -1268,7 +1268,7 @@ func automaticReviewSessionBuildNotices(observer *observe.Observer, snap ports.A
 	if reason == "" {
 		reason = "reviewer resolution failed"
 	}
-	status := "Auto-approve commands enabled but no reviewer available: " + reason
+	status := "Auto mode enabled but no reviewer available: " + reason
 	return []ports.SessionBuildNotice{{
 		Status: status,
 		Emit: func(ctx ports.SessionBuildNoticeContext) {

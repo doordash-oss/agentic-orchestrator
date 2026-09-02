@@ -36,8 +36,8 @@ defaults:
 
 ## Automatic Bash Review
 
-The desktop app labels this feature **Auto-approve commands**; the reviewer
-model row is **Auto-approve reviewer**. It uses two workspace keys:
+The desktop app labels this feature **Auto mode**; the reviewer model row is
+**Auto mode reviewer**. It uses two workspace keys:
 
 ```yaml
 defaults:
@@ -55,12 +55,12 @@ disabled. The enabled flag is read live: turning it on or off applies to
 running sessions from their next Bash request. Each session snapshots its
 resolved reviewer, so reviewer-model changes apply only to new sessions.
 
-Each feature can override the workspace setting with **Auto-approve
-commands** in its configuration (`automatic_review_mode`: `default`,
-`enabled`, or `disabled`). A Bash permission prompt that automatic review
-would have handled also offers **Allow and auto-approve in this feature** and
-**Allow and auto-approve everywhere**; either choice allows the pending
-command and enables the corresponding scope.
+Each feature can override the workspace setting with **Auto mode** in its
+configuration (`automatic_review_mode`: `default`, `enabled`, or `disabled`).
+A Bash permission prompt that automatic review would have handled also offers
+**Enable auto mode (this feature only)**, with **Enable auto mode (all
+features)** behind its chevron; either choice allows the pending command and
+enables the corresponding scope.
 
 Automatic selection uses the fixed provider order Claude → OpenCode → Codex
 and chooses the first eligible provider's preferred cheap model. A

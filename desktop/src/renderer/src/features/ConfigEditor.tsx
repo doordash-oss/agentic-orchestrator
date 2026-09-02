@@ -63,9 +63,9 @@ export const PHASE_FIELDS: ReadonlyArray<PhaseField> = [
   { key: 'kbBuild', label: 'KB Build', role: 'kb_build', hint: 'Knowledge base construction' },
   {
     key: 'automaticReview',
-    label: 'Auto-approve reviewer',
+    label: 'Auto mode reviewer',
     role: 'automatic_review',
-    hint: 'Model that reviews shell commands when auto-approve is on',
+    hint: 'Model that reviews shell commands when auto mode is on',
     workspaceOnly: true,
     supportsEffort: false,
   },
@@ -569,11 +569,11 @@ function ConfigForm({
           </select>
         </label>
         <label className="config-editor__row">
-          <span className="config-editor__row-label">Auto-approve commands</span>
+          <span className="config-editor__row-label">Auto mode</span>
           <span className="config-editor__row-hint">{automaticReview.hint}</span>
           <select
             className="config-editor__select"
-            aria-label="Auto-approve commands"
+            aria-label="Auto mode"
             value={automaticReview.value}
             onChange={(event) => onAutomaticReviewChange(event.target.value)}
           >
@@ -921,7 +921,7 @@ export function WorkspaceDefaultsPanel({
         }}
         automaticReview={{
           value: draft.automaticReviewEnabled ? 'enabled' : 'disabled',
-          hint: 'Let a reviewer model approve shell commands instead of asking you',
+          hint: 'Approve shell commands automatically instead of asking you',
           options: WORKSPACE_AUTOMATIC_REVIEW_OPTIONS,
         }}
         onChange={(next) => setDraft({ ...draft, ...next })}

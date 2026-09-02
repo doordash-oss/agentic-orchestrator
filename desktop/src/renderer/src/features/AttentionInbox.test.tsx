@@ -193,15 +193,15 @@ function PermissionDetailHarness({
   );
 }
 
-describe('permission auto-approve offer', () => {
+describe('permission auto mode split button', () => {
   it('stays hidden when the server made no offer', () => {
     installAgenticoMock();
     render(<PermissionDetailHarness item={permissionItem} />);
-    expect(screen.queryByRole('group', { name: 'Auto-approve commands' })).toBeNull();
+    expect(screen.queryByRole('group', { name: 'Enable auto mode' })).toBeNull();
     expect(screen.getByRole('button', { name: 'Allow once' })).toBeVisible();
   });
 
-  it('allows and turns auto-approve on for the feature or the workspace', async () => {
+  it('allows and turns auto mode on for this feature, with all features behind the chevron', async () => {
     const mock = installAgenticoMock();
     const user = userEvent.setup();
     render(
@@ -209,12 +209,17 @@ describe('permission auto-approve offer', () => {
         item={{ ...permissionItem, autoApprove: { wouldFastPath: true } }}
       />,
     );
-    const offer = screen.getByRole('group', { name: 'Auto-approve commands' });
-    expect(within(offer).getByText(/would have run without asking/)).toBeVisible();
-
-    await user.click(
-      within(offer).getByRole('button', { name: 'Allow and auto-approve in this feature' }),
+    const split = screen.getByRole('group', { name: 'Enable auto mode' });
+    const main = within(split).getByRole('button', {
+      name: 'Enable auto mode (this feature only)',
+    });
+    expect(main).toHaveAttribute('title', expect.stringContaining('would have run without asking'));
+    // The split button sits in the same row as the other decisions.
+    expect(main.closest('.attention-detail__actions')).toBe(
+      screen.getByRole('button', { name: 'Deny' }).closest('.attention-detail__actions'),
     );
+
+    await user.click(main);
     expect(mock.api.answerPermission).toHaveBeenLastCalledWith({
       requestId: 'perm-1',
       sessionId: 'session-1',
@@ -222,9 +227,12 @@ describe('permission auto-approve offer', () => {
       autoApproveScope: 'feature',
     });
 
-    await user.click(
-      within(offer).getByRole('button', { name: 'Allow and auto-approve everywhere' }),
-    );
+    const menu = split.querySelector('details');
+    expect(menu?.open).toBe(false);
+    await user.click(within(split).getByLabelText('More auto mode options'));
+    expect(menu?.open).toBe(true);
+    const all = within(split).getByRole('menuitem', { name: 'Enable auto mode (all features)' });
+    await user.click(all);
     expect(mock.api.answerPermission).toHaveBeenLastCalledWith({
       requestId: 'perm-1',
       sessionId: 'session-1',
@@ -233,7 +241,7 @@ describe('permission auto-approve offer', () => {
     });
   });
 
-  it('omits the feature choice for a request without a feature', () => {
+  it('offers only the all-features choice for a request without a feature', () => {
     installAgenticoMock();
     const { featureId: _omit, ...ownerless } = permissionItem as Extract<
       AttentionItem,
@@ -242,14 +250,13 @@ describe('permission auto-approve offer', () => {
     render(
       <PermissionDetailHarness item={{ ...ownerless, autoApprove: { wouldFastPath: false } }} />,
     );
-    const offer = screen.getByRole('group', { name: 'Auto-approve commands' });
-    expect(within(offer).getByText(/reviewer model would have decided/)).toBeVisible();
-    expect(
-      within(offer).queryByRole('button', { name: 'Allow and auto-approve in this feature' }),
-    ).toBeNull();
-    expect(
-      within(offer).getByRole('button', { name: 'Allow and auto-approve everywhere' }),
-    ).toBeVisible();
+    const split = screen.getByRole('group', { name: 'Enable auto mode' });
+    const main = within(split).getByRole('button', { name: 'Enable auto mode (all features)' });
+    expect(main).toHaveAttribute(
+      'title',
+      expect.stringContaining('reviewer model would have decided'),
+    );
+    expect(within(split).queryByLabelText('More auto mode options')).toBeNull();
   });
 });
 

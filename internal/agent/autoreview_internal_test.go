@@ -1514,7 +1514,7 @@ func TestBuildSessionSurfacesEnabledWithoutReviewer(t *testing.T) {
 		t.Fatalf("SessionBuildNotices = %d, want one unavailable notice", len(sessOpts.SessionBuildNotices))
 	}
 	notice := sessOpts.SessionBuildNotices[0]
-	if !strings.Contains(notice.Status, "Auto-approve commands enabled but no reviewer available:") ||
+	if !strings.Contains(notice.Status, "Auto mode enabled but no reviewer available:") ||
 		!strings.Contains(notice.Status, "isolated tool-less review") {
 		t.Fatalf("notice status = %q", notice.Status)
 	}

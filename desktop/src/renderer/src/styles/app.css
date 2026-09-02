@@ -3667,23 +3667,68 @@ body {
   color: var(--muted);
 }
 
-.attention-detail__auto-approve {
-  display: grid;
-  gap: var(--space-2);
-  padding: var(--space-3);
-  border: 1px dashed var(--hairline);
+.attention-split {
+  position: relative;
+  display: inline-flex;
+}
+
+.attention-split__main {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.attention-split__toggle {
+  list-style: none;
+  display: inline-flex;
+  align-items: center;
+  height: 100%;
+  padding-inline: var(--space-2);
+  border-left: 0;
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+}
+
+.attention-split__toggle::-webkit-details-marker {
+  display: none;
+}
+
+.attention-split__toggle:focus-visible {
+  outline: var(--focus-ring);
+}
+
+/* Opens upward: the actions row is pinned to the bottom of its pane. */
+.attention-split__menu {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + var(--space-1));
+  z-index: 30;
+  min-width: 240px;
+  padding: var(--space-1);
+  border: 1px solid var(--hairline);
   border-radius: var(--radius);
+  background: var(--raised);
+  box-shadow: 0 10px 30px color-mix(in srgb, var(--content) 60%, transparent);
 }
 
-.attention-detail__auto-approve > p {
-  margin: 0;
-  font-size: 13px;
+.attention-split__item {
+  width: 100%;
+  text-align: left;
+  border: 0;
+  background: transparent;
+  padding: var(--space-2);
+  border-radius: var(--radius);
+  color: var(--text);
+  font: 700 13px var(--bench-font-text);
+  cursor: pointer;
 }
 
-.attention-detail__auto-approve-actions {
-  display: flex;
-  gap: var(--space-2);
-  flex-wrap: wrap;
+.attention-split__item:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.attention-split__item:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: -2px;
 }
 
 .attention-detail__tasks {

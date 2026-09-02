@@ -22,6 +22,7 @@ import {
 } from '../../../shared/ipc';
 import { BellIcon } from '../components/icons';
 import { ToolbarPopover, ToolbarPopoverAnchor } from '../components/ToolbarPopover';
+import { useDetailsDismiss } from '../components/useDetailsDismiss';
 import {
   hasStructuredVerificationDecision,
   NeedUserInputVerificationDecision,
@@ -353,12 +354,12 @@ export function AttentionInbox({
 }
 
 /**
- * Offered on a Bash prompt when auto-approve commands is off but would have
- * handled the request. Each choice allows the current request and turns the
- * setting on for the feature or the whole workspace; running sessions pick
- * the change up on their next command.
+ * Split button offered on a Bash prompt when auto mode is off but would have
+ * handled the request. The main action allows the command and turns auto mode
+ * on for this feature; the chevron menu offers the workspace-wide choice.
+ * Running sessions pick the change up on their next command.
  */
-function AutoApproveOffer({
+function AutoModeSplitButton({
   item,
   busy,
   submit,
@@ -367,9 +368,12 @@ function AutoApproveOffer({
   busy: boolean;
   submit(action: AttentionAction, options?: AttentionSubmitOptions): void;
 }) {
+  const menuRef = useRef<HTMLDetailsElement>(null);
+  useDetailsDismiss(menuRef, '.attention-split__toggle');
   const offer = item.autoApprove;
   if (offer === undefined) return null;
-  const answer = (scope: AutoApproveScope, successNotice: string) =>
+  const answer = (scope: AutoApproveScope) => {
+    if (menuRef.current !== null) menuRef.current.open = false;
     submit(
       () =>
         window.agentico.answerPermission({
@@ -378,38 +382,51 @@ function AutoApproveOffer({
           decision: 'allow_once',
           autoApproveScope: scope,
         }),
-      { successNotice },
+      {
+        successNotice:
+          scope === 'feature'
+            ? 'Allowed. Auto mode is on for this feature.'
+            : 'Allowed. Auto mode is on for all features.',
+      },
     );
+  };
+  const why = offer.wouldFastPath
+    ? 'With auto mode on, this command would have run without asking.'
+    : 'With auto mode on, a reviewer model would have decided this without asking.';
+  const featureScoped = item.featureId !== undefined;
   return (
-    <div className="attention-detail__auto-approve" role="group" aria-label="Auto-approve commands">
-      <p className="attention-detail__hint">
-        {offer.wouldFastPath
-          ? 'Auto-approve commands is off. With it on, this command would have run without asking.'
-          : 'Auto-approve commands is off. With it on, a reviewer model would have decided this without asking.'}{' '}
-        You can change it later in the feature configuration or in Settings › Workspace defaults.
-      </p>
-      <div className="attention-detail__auto-approve-actions">
-        {item.featureId !== undefined ? (
-          <button
-            className="attention-button"
-            disabled={busy}
-            onClick={() =>
-              answer('feature', 'Allowed. Auto-approve commands is on for this feature.')
-            }
+    <div className="attention-split" role="group" aria-label="Enable auto mode">
+      <button
+        className="attention-button attention-split__main"
+        disabled={busy}
+        title={`${why} Allows this command and stops asking for shell commands${featureScoped ? ' in this feature' : ''}.`}
+        onClick={() => answer(featureScoped ? 'feature' : 'workspace')}
+      >
+        {featureScoped ? 'Enable auto mode (this feature only)' : 'Enable auto mode (all features)'}
+      </button>
+      {featureScoped ? (
+        <details ref={menuRef} className="attention-split__more">
+          <summary
+            className="attention-button attention-split__toggle"
+            aria-label="More auto mode options"
+            aria-disabled={busy}
           >
-            Allow and auto-approve in this feature
-          </button>
-        ) : null}
-        <button
-          className="attention-button"
-          disabled={busy}
-          onClick={() =>
-            answer('workspace', 'Allowed. Auto-approve commands is on for the workspace.')
-          }
-        >
-          Allow and auto-approve everywhere
-        </button>
-      </div>
+            <span aria-hidden="true">▾</span>
+          </summary>
+          <div className="attention-split__menu" role="menu" aria-label="Auto mode scope">
+            <button
+              type="button"
+              role="menuitem"
+              className="attention-split__item"
+              disabled={busy}
+              title={`${why} Allows this command and stops asking for shell commands in every feature.`}
+              onClick={() => answer('workspace')}
+            >
+              Enable auto mode (all features)
+            </button>
+          </div>
+        </details>
+      ) : null}
     </div>
   );
 }
@@ -481,6 +498,9 @@ export function AttentionDetail({
           >
             Deny
           </button>
+          {item.autoApprove !== undefined ? (
+            <AutoModeSplitButton item={item} busy={busy} submit={submit} />
+          ) : null}
           {item.remember !== undefined ? (
             <button
               className="attention-button"
@@ -502,9 +522,6 @@ export function AttentionDetail({
           ) : null}
           <AttentionJumpAction item={item} onJump={onJump} />
         </div>
-        {item.autoApprove !== undefined ? (
-          <AutoApproveOffer item={item} busy={busy} submit={submit} />
-        ) : null}
       </div>
     );
 

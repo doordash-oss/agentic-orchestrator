@@ -391,15 +391,15 @@ function AutoModeSplitButton({
     );
   };
   const why = offer.wouldFastPath
-    ? 'With auto mode on, this command would have run without asking.'
-    : 'With auto mode on, a reviewer model would have decided this without asking.';
+    ? 'Auto mode would have approved this command on its own: it matches the safe build and test fast path.'
+    : 'Auto mode would have sent this command to a reviewer model, which approves it or hands it back to you.';
   const featureScoped = item.featureId !== undefined;
   return (
     <div className="attention-split" role="group" aria-label="Enable auto mode">
       <button
         className="attention-button attention-split__main"
         disabled={busy}
-        title={`${why} Allows this command and stops asking for shell commands${featureScoped ? ' in this feature' : ''}.`}
+        title={`${why} Allows this command now and turns auto mode on${featureScoped ? ' for this feature' : ' for all features'}.`}
         onClick={() => answer(featureScoped ? 'feature' : 'workspace')}
       >
         {featureScoped ? 'Enable auto mode (this feature only)' : 'Enable auto mode (all features)'}
@@ -419,11 +419,11 @@ function AutoModeSplitButton({
               role="menuitem"
               className="attention-split__item"
               disabled={busy}
-              title={`${why} Allows this command and stops asking for shell commands in every feature.`}
+              title={`${why} Allows this command now and turns auto mode on for all features.`}
               onClick={() => answer('workspace')}
             >
               Enable auto mode (all features)
-              <small>Stops asking for shell commands in every feature</small>
+              <small>Safe commands run; a reviewer model screens the rest</small>
             </button>
           </div>
         </details>

@@ -213,7 +213,7 @@ describe('permission auto mode split button', () => {
     const main = within(split).getByRole('button', {
       name: 'Enable auto mode (this feature only)',
     });
-    expect(main).toHaveAttribute('title', expect.stringContaining('would have run without asking'));
+    expect(main).toHaveAttribute('title', expect.stringContaining('safe build and test fast path'));
     // The split button sits in the same row as the other decisions.
     expect(main.closest('.attention-detail__actions')).toBe(
       screen.getByRole('button', { name: 'Deny' }).closest('.attention-detail__actions'),
@@ -254,7 +254,7 @@ describe('permission auto mode split button', () => {
     const main = within(split).getByRole('button', { name: 'Enable auto mode (all features)' });
     expect(main).toHaveAttribute(
       'title',
-      expect.stringContaining('reviewer model would have decided'),
+      expect.stringContaining('sent this command to a reviewer model'),
     );
     expect(within(split).queryByLabelText('More auto mode options')).toBeNull();
   });
